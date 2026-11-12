@@ -91,11 +91,18 @@ addressed by the names they showed, without the network. Two proxied pages
 in different browsers are each behind the wisp server as behind a symmetric
 NAT, and connect when the page names a TURN server.
 
-**The browser's own connection** is still constructed by the inject, as a
-validator: the errors of a bad configuration and of a bad remote
-description are the browser's own. Such a connection never gets a local
-description, so it gathers nothing and sends nothing, and is closed at
-once. A page cannot reach it.
+**The browser's own connection is never constructed.** The errors of a bad
+configuration, a bad remote description, a bad candidate and a bad channel
+dictionary are STomp's own reading of them (`src/inject/rtcValidation.ts`),
+in Chrome's words: the suite runs some 600 such calls natively and proxied
+and compares them case by case, and counts the connections the browser
+itself makes for a proxied page (none). The same tables hold what Chrome
+does with the offers it takes although it would not write them (no
+section at all, a section without a name, no BUNDLE group, a data section
+over TCP/DTLS/SCTP, an offer over the connection's own offer): the answer,
+the states and events on the way, and the next offer. A document holds 500
+connections as in Chrome, the closed ones counted until they are
+collected; the next is refused with Chrome's `UnknownError`.
 
 **Realms.** The module runs in every document the inject covers:
 about:blank frames (reached by `contentWindow` or `frames[i]`), srcdoc,
@@ -104,7 +111,7 @@ another document's realm is that realm's stand-in.
 
 ## Measured through the proxy
 
-`npm test -- webrtc` (59 checks): each probe runs natively (the control: the
+`npm test -- webrtc` (77 checks): each probe runs natively (the control: the
 fixtures hear the browser's own sockets) and through the demo in same-origin
 and isolated mode, in a browser that shows mDNS names and in one with media
 access (`--use-fake-ui-for-media-stream`, real addresses natively). The
@@ -168,6 +175,21 @@ those packets are gone too.
   quickly natively; here the wisp server resolves it and the request times
   out at 40 s when it does not. TCP TURN fails at once here; natively it
   waits for the connection to fail, which depends on the network.
+- **An offer with a section Chrome rejects.** Chrome answers an offer
+  whose section names a protocol it does not know, or that has a second
+  data section, with that section rejected (port 0) and keeps the rejected
+  section in its later offers. The stack refuses such an offer whole:
+  `setRemoteDescription()` rejects with `InvalidAccessError`, "Failed to
+  set remote offer sdp: " and the stack's reason.
+- **A remote description reads back as it was set.** Chrome writes it out
+  again in its own form (a name for a section without one, `t=0 0`, no
+  group but BUNDLE); `remoteDescription.sdp` here is the page's text with
+  the candidates added since.
+- **After a rollback.** Chrome drops the transport of a first offer that is
+  rolled back, by `setLocalDescription({type: 'rollback'})` or by a remote
+  offer over it: `iceGatheringState` returns to `new` and the next
+  description has new ICE credentials. Here the transport, its candidates
+  and its credentials stay.
 - **The real-address case.** With media access the page sees a name where
   the browser would show addresses: what a browser without access shows.
 - **libcurl.** That transport has no datagram streams: a connection gathers

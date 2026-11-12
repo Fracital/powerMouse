@@ -741,12 +741,40 @@ TURN server.
   handed to the stack. str0m's crypto backend makes one with rcgen on
   aws-lc-rs, which has no wasm build: `rust/vendor/str0m-rust-crypto` is
   the published crate without that feature.
-- **The browser's `RTCPeerConnection` is still constructed, as a
-  validator.** The errors of a bad configuration and of a bad remote
-  description are the browser's own: the stand-in asks a native connection
-  that never gets a local description (so it gathers nothing and sends
-  nothing) and is closed at once. A pool is never given to it (a pool
-  gathers at construction).
+- **The browser's `RTCPeerConnection` is never constructed.** What Chrome
+  says to a bad configuration, a bad remote description, a bad candidate
+  and a bad channel dictionary is produced by `src/inject/rtcValidation.ts`:
+  the WebIDL conversions (members read in name order), Blink's checks of
+  the ICE servers, WebRTC's parser of an ICE server URL, its parser of a
+  session description and of a candidate line (the line and the words of
+  "Failed to parse SessionDescription."), and its checks of a remote
+  description (fingerprint, ICE credentials, BUNDLE, the order of the
+  sections). All of it runs in the page's realm, synchronously where the
+  browser's does (the old callback form of `setRemoteDescription` hears a
+  parse error before the call returns). Chrome 152 reads `iceTransports`
+  and wraps `maxRetransmits` and `maxPacketLifeTime`, and lets
+  `setConfiguration()` change `alwaysNegotiateDataChannels`; 156 does none
+  of the three.
+  The stand-in asks the browser's constructor which it is with a
+  configuration whose last member throws (no connection is made), and
+  takes the answer for all three, since nothing but a connection could
+  tell the others: Chrome 153 to 155 are unmeasured. A document holds 500
+  connections, closed ones included until they are collected (weak
+  references shared by the documents that share the tables), and the next
+  is refused as Chrome refuses it ("Cannot create so many
+  PeerConnections").
+- **Offers Chrome takes and would not write.** An offer of no section is
+  not the stack's to answer: the worker answers it with the session's
+  lines alone, gathers nothing for it, and the next offer is the stack's
+  first. A section without a name is named by its position, an offer
+  without a BUNDLE group gets one for the stack and the answer shows none,
+  a data section over `TCP/DTLS/SCTP` is read as UDP and answered as it
+  was offered (`offerForStack` in `src/rtc/sdp.ts`). A remote offer over
+  the connection's own offer rolls that one back first. Every offer says
+  `a=setup:actpass`, a later one too. `negotiationneeded` waits for the
+  operations under way and is dropped when an answer brought the data
+  section it was for, and `canTrickleIceCandidates` reads the remote
+  description (null without a section).
 - **The same-browser bridge** carries the datagrams on the `$stomp$webrtc`
   BroadcastChannel itself, addressed by the `.local` names, without a
   brokered MessagePort and without a wait: a name no document of this
@@ -782,7 +810,7 @@ TURN server.
   TURN fixture's relay socket), never one of the browser's, and natively
   the browser's own. The TURN fixture hears only the wisp server.
 - `npm test -- webrtc`: the leak checks with their new meaning (section 12),
-  59 checks.
+  77 checks.
 - Nothing is fetched before a document makes a connection; the first one
   fetches `rtcWorker.js` and `rtc.wasm`. `createOffer()` on a document's
   first connection resolves in 50 to 70 ms (the worker, the module, the

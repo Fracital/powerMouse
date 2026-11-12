@@ -50,6 +50,7 @@ import {
 	first,
 	isAddress,
 	MidNames,
+	offerForStack,
 	parseSdp,
 	renderChrome,
 	stripCandidates,
@@ -1191,6 +1192,10 @@ export class Connection {
 					if (result.error) throw result.error;
 					this.#lastLocal = parseSdp(this.#mids.toShown(result.sdp ?? ''));
 					this.#takeMids(result.mids);
+					// an offer leaves the DTLS role to the answer, a later one too
+					for (const media of this.#lastLocal.medias)
+						for (const attribute of media.attributes)
+							if (attribute[0] === 'setup') attribute[1] = 'actpass';
 					this.#takeCredentials();
 					this.#version++;
 					reply(this.#render(this.#lastLocal));
@@ -1211,6 +1216,8 @@ export class Connection {
 						break;
 					}
 					reply(this.#sections());
+					// a description of no section has no transport to gather for
+					if (!this.#lastLocal?.medias.length) break;
 					this.#localSet = true;
 					for (const candidate of this.#heldRemotes.splice(0))
 						try {
@@ -1227,10 +1234,25 @@ export class Connection {
 						reply(null);
 						break;
 					}
+					const shaped =
+						request.type === 'offer' ? offerForStack(request.sdp) : null;
+					if (!shaped && !/^m=/m.test(request.sdp)) {
+						// no section: nothing for the stack, and the answer is as bare
+						if (request.type === 'offer')
+							this.#pendingAnswer = {
+								origin: null,
+								session: [],
+								medias: [],
+								bare: true,
+							};
+						reply(this.#sections());
+						break;
+					}
 					const { sdp, candidates } = stripCandidates(
-						this.#mids.toStack(request.sdp),
+						this.#mids.toStack(shaped?.sdp ?? request.sdp),
 					);
-					const described = parseSdp(request.sdp);
+					// with the names the stack was shown for sections of none
+					const described = parseSdp(shaped?.sdp ?? request.sdp);
 					const before = this.#remote;
 					this.#remote = described;
 					let result: Record<string, string>;
@@ -1259,10 +1281,15 @@ export class Connection {
 					// what the peer asks of a section it already had may have
 					// changed with this description
 					for (const index of this.#medias.keys()) this.#negotiated(index);
-					if (request.type === 'offer') {
+					if (shaped) {
 						this.#pendingAnswer = parseSdp(
 							this.#mids.toShown(result.sdp ?? ''),
 						);
+						// the answer mirrors what the stack was not shown
+						this.#pendingAnswer.ungrouped = !shaped.grouped;
+						this.#pendingAnswer.medias.forEach((media, index) => {
+							media.protocol = shaped.protocols[index] ?? media.protocol;
+						});
 						this.#takeMids(result.mids, described);
 					}
 					// the description's candidates, as if each had been added

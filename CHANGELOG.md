@@ -581,6 +581,18 @@ The first release after a four-year gap. Everything below is breaking.
   classes' shapes, and a document that never makes a connection costs what
   it did (`frame-cost`). Needs epoxy and a
   wisp server that relays UDP (wisp-js does; holyWisp with `allow-udp`).
+- A proxied page's bad WebRTC calls fail as Chrome's do, and no connection
+  of the browser's is made to find out how: a bad configuration, remote
+  description, candidate or channel dictionary gets Chrome's error name and
+  message from STomp's own reading of it (`src/inject/rtcValidation.ts`,
+  some 700 cases compared with the browser's in the webrtc suite, under
+  Chrome 152 and 156 where the two differ). The offers Chrome takes and
+  would not write are taken (no section, a section without a name, no
+  BUNDLE group, a remote offer over the connection's own), every offer says
+  `a=setup:actpass`, `negotiationneeded` waits for the operations under
+  way, `getConfiguration()` gives certificates of its own each time,
+  `getStats()` answers on a closed connection, and a document's 501st
+  connection is refused as Chrome refuses it.
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,
@@ -2366,7 +2378,7 @@ sinkId })` and made in a track's settings, capabilities and constraints
   all: its `RTCPeerConnection` is STomp's stack over wisp (above), in every
   realm the inject covers, so what a server or a peer hears is the wisp
   server and what the page reads is a `.local` name or the wisp server's
-  address (webrtc suite, 59 checks against the same pages loaded natively,
+  address (webrtc suite, 77 checks against the same pages loaded natively,
   both modes, with and without media access: each packet a fixture gets is
   attributed to the process that held its source port; docs/webrtc.md).
 - Reading another window (`parent`, `top`, `frames[i]`) costs a few

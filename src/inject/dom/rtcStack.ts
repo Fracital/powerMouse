@@ -10,6 +10,18 @@ import type {
 	WorkerMessage,
 } from '../../rtc/protocol';
 import { isReply } from '../../rtc/protocol';
+import {
+	candidateLine,
+	channelChecked,
+	channelInit,
+	configuration,
+	parseDescription,
+	Refusal,
+	remoteRefusal,
+	serversRefusal,
+	type Configuration,
+	type Description as Parsed,
+} from '../rtcValidation';
 import type { RtcContext } from './rtcLazy';
 
 /*
@@ -41,8 +53,6 @@ import type { RtcContext } from './rtcLazy';
  */
 
 // taken before any hook or page script, by the inject module (modules/WebRTC.ts)
-let stringIndexOf: typeof String.prototype.indexOf;
-let stringSlice: typeof String.prototype.slice;
 let mapEntries: typeof Map.prototype.entries;
 let mapNext: () => IteratorResult<[string, unknown]>;
 
@@ -53,25 +63,17 @@ interface Shared {
 	channels: WeakMap<object, Members>;
 	channelEvents: WeakMap<object, Members>;
 	reports: WeakMap<object, Members>;
+	/** every connection made and not yet collected, a closed one included */
+	made: WeakRef<object>[];
 }
 // an about:blank child (a frame, a popup) runs its creator's bundle: its
 // worker when the child has no controller
 let bundleWorker: (() => Worker) | null = null;
 
-/** `sdp` without its candidate lines, with no method a page can patch */
-function withoutCandidates(sdp: string): string {
-	let out = '';
-	for (let at = 0; at < sdp.length;) {
-		const found: number = Reflect.apply(stringIndexOf, sdp, ['\n', at]);
-		const end = found === -1 ? sdp.length : found + 1;
-		const line: string = Reflect.apply(stringSlice, sdp, [at, end]);
-		if (Reflect.apply(stringIndexOf, line, ['a=candidate']) !== 0) out += line;
-		at = end;
-	}
-	return out;
-}
-
 const MAX_MESSAGE_SIZE = 262144;
+/** Chrome's: connections a renderer holds at once, closed ones until collected */
+const MAX_CONNECTIONS = 500;
+let weakDeref: typeof WeakRef.prototype.deref;
 
 type Description = { type: RTCSdpType; sdp: string };
 
@@ -81,10 +83,9 @@ const method = (name: string, what: string) =>
 export default class WebRTCStack {
 	install(ctx: RtcContext) {
 		const client = ctx.client;
-		stringIndexOf = ctx.captures.stringIndexOf;
-		stringSlice = ctx.captures.stringSlice;
 		mapEntries = ctx.captures.mapEntries;
 		mapNext = ctx.captures.mapNext;
+		weakDeref = ctx.captures.weakDeref;
 		const withStack = ctx.withStack;
 		const global = client.global as unknown as typeof globalThis &
 			Record<string, any>;
@@ -115,11 +116,14 @@ export default class WebRTCStack {
 			.RTCDataChannelEvent as unknown as typeof RTCDataChannelEvent;
 		const NativeStatsReport = ctx.natives
 			.RTCStatsReport as unknown as typeof RTCStatsReport;
+		const RealmWeakRef = global.WeakRef as WeakRefConstructor;
+		const realmClone = global.structuredClone as typeof structuredClone;
 
 		const domException = (message: string, name: string) =>
 			withStack(new RealmDOMException(message, name));
 		const rejected = (message: string, name: string) =>
 			RealmPromise.reject(new RealmDOMException(message, name));
+		const rejectedWith = (error: unknown) => RealmPromise.reject(error);
 
 		// --- the tables: the inject module's, shared by the documents that reach each other ---
 
@@ -128,6 +132,7 @@ export default class WebRTCStack {
 		shared.channels ??= new WeakMap();
 		shared.channelEvents ??= new WeakMap();
 		shared.reports ??= new WeakMap();
+		shared.made ??= [];
 
 		// --- the document's worker, started on the first connection ---
 
@@ -250,87 +255,87 @@ export default class WebRTCStack {
 		const isObject = (value: unknown): value is Record<string, unknown> =>
 			(typeof value === 'object' && value !== null) ||
 			typeof value === 'function';
+		const certificateExpires =
+			typeof global.RTCCertificate === 'function'
+				? Reflect.getOwnPropertyDescriptor(
+						global.RTCCertificate.prototype,
+						'expires',
+					)?.get
+				: undefined;
+		/** an RTCCertificate's expiry: throws for anything else */
+		const expires = (certificate: unknown): number =>
+			Reflect.apply(certificateExpires!, certificate, []);
 		/**
-		 * `config` for a probe: the page's own members, with no candidate
-		 * pool (the browser gathers for a pool at once, with or without a
-		 * local description, whatever the policy)
+		 * Whether this browser still reads `iceTransports` (Chrome 152 does,
+		 * 156 does not), asked of its own constructor with a configuration
+		 * whose last member throws, so it never makes a connection. The
+		 * browsers that stopped reading it also check the range of
+		 * `maxRetransmits` and `maxPacketLifeTime` where the older ones wrap
+		 * them, and nothing but a connection of the browser's could tell
+		 * that apart, so this answers for both.
 		 */
-		const poolless = (config: unknown) =>
-			isObject(config)
-				? Object.create(config, {
-						iceCandidatePoolSize: { value: 0, enumerable: true },
-					})
-				: config;
-		/** the pool as the browser converts it (an octet, range enforced) */
-		const poolOf = (config: unknown, context: string): number => {
-			const given = isObject(config) ? config.iceCandidatePoolSize : undefined;
-			if (given === undefined) return 0;
-			const number = Math.trunc(+(given as number));
-			const finite = number - number === 0;
-			if (!finite || number < 0 || number > 255)
-				throw new RealmTypeError(
-					`${context}: Failed to read the 'iceCandidatePoolSize' property from 'RTCConfiguration': Value is ${finite ? "outside the 'octet' value range" : "not of type 'octet'"}.`,
-				);
-			return number + 0;
+		let legacy: boolean | null = null;
+		const isLegacy = () => {
+			if (legacy === null) {
+				legacy = false;
+				try {
+					(
+						Reflect.construct(NativePeerConnection, [
+							{
+								get iceTransports() {
+									legacy = true;
+									return undefined;
+								},
+								get rtcpMuxPolicy() {
+									throw new RealmTypeError();
+								},
+							},
+						]) as RTCPeerConnection
+					).close();
+				} catch (error) {
+					// the last member's getter, every time
+				}
+			}
+			return legacy;
 		};
-		/**
-		 * The page's configuration through the browser: `read` constructs a
-		 * probe, or sets it on one, and answers what it reads back; its
-		 * errors are the browser's own. The browser converts the members in
-		 * name order, so a bad pool is reported after a bad bundle policy
-		 * or certificate and before anything else.
-		 */
-		const normalise = (
-			config: unknown,
-			context: string,
-			read: (config: unknown) => RTCConfiguration,
-		): { shown: RTCConfiguration; forWorker: ConnectionConfig } => {
-			let shown: RTCConfiguration;
+		/** a refusal as this realm's error, `context` before its words */
+		const raised = (refusal: Refusal, context: string) =>
+			refusal.name === 'TypeError'
+				? new RealmTypeError(`${context}: ${refusal.message}`)
+				: domException(`${context}: ${refusal.message}`, refusal.name);
+		const refusing = <T>(context: string, run: () => T): T => {
 			try {
-				shown = read(poolless(config));
+				return run();
 			} catch (error) {
-				if (
-					!(error instanceof RealmTypeError) ||
-					!/'(?:bundlePolicy|certificates)' property/.test(error.message)
-				)
-					poolOf(config, context);
-				throw error;
-			}
-			shown.iceCandidatePoolSize = poolOf(config, context);
-			const servers = [];
-			for (const server of shown.iceServers ?? [])
-				servers.push({
-					urls: Array.isArray(server.urls) ? [...server.urls] : [server.urls],
-					...(server.username !== undefined
-						? { username: server.username }
-						: {}),
-					...(server.credential !== undefined
-						? { credential: server.credential }
-						: {}),
-				});
-			return {
-				shown,
-				forWorker: {
-					iceServers: servers,
-					iceTransportPolicy: shown.iceTransportPolicy ?? 'all',
-					iceCandidatePoolSize: shown.iceCandidatePoolSize ?? 0,
-				},
-			};
-		};
-		/** a probe: the browser's own connection, which never gets a local description */
-		const probed = <T>(
-			config: unknown,
-			use: (probe: RTCPeerConnection) => T,
-		) => {
-			const probe = Reflect.construct(NativePeerConnection, [
-				config,
-			]) as RTCPeerConnection;
-			try {
-				return use(probe);
-			} finally {
-				probe.close();
+				throw error instanceof Refusal ? raised(error, context) : error;
 			}
 		};
+		/** counts `made` among the connections alive, unless they are too many */
+		const counted = (made: object) => {
+			if (shared.made.length >= MAX_CONNECTIONS) {
+				const alive: WeakRef<object>[] = [];
+				for (let i = 0; i < shared.made.length; i++)
+					if (Reflect.apply(weakDeref, shared.made[i], []))
+						alive[alive.length] = shared.made[i];
+				shared.made = alive;
+			}
+			// the refused one counts as well, until it is collected
+			shared.made[shared.made.length] = new RealmWeakRef(made);
+			if (shared.made.length > MAX_CONNECTIONS)
+				throw domException(
+					"Failed to construct 'RTCPeerConnection': Cannot create so many PeerConnections",
+					'UnknownError',
+				);
+		};
+		const forWorker = (config: Configuration): ConnectionConfig => ({
+			iceServers: config.iceServers.map(({ urls, username, credential }) => ({
+				urls,
+				username,
+				credential,
+			})),
+			iceTransportPolicy: config.iceTransportPolicy as 'all' | 'relay',
+			iceCandidatePoolSize: config.iceCandidatePoolSize,
+		});
 
 		// --- RTCDataChannel ---
 
@@ -437,15 +442,16 @@ export default class WebRTCStack {
 			set binaryType(value: BinaryType) {
 				const state = channelOf(this);
 				const text = String(value);
-				if (text !== 'blob' && text !== 'arraybuffer')
-					throw domException(
-						`Failed to set the 'binaryType' property on 'RTCDataChannel': Unknown binary type : ${text}`,
-						'TypeMismatchError',
-					);
+				// an unknown one is ignored (the browser warns in the console)
+				if (text !== 'blob' && text !== 'arraybuffer') return;
 				state.binaryType = text;
 			}
 			send(data: string | Blob | ArrayBuffer | ArrayBufferView) {
 				const state = channelOf(this);
+				if (!arguments.length)
+					throw new RealmTypeError(
+						"Failed to execute 'send' on 'RTCDataChannel': 1 argument required, but only 0 present.",
+					);
 				if (state.readyState !== 'open')
 					throw domException(
 						"Failed to execute 'send' on 'RTCDataChannel': RTCDataChannel.readyState is not 'open'",
@@ -689,7 +695,7 @@ export default class WebRTCStack {
 				request: Unsequenced<Request>,
 				transfer?: Transferable[],
 			): Promise<unknown>;
-			config: RTCConfiguration;
+			config: Configuration;
 			signalingState: RTCSignalingState;
 			iceGatheringState: RTCIceGatheringState;
 			iceConnectionState: RTCIceConnectionState;
@@ -707,8 +713,14 @@ export default class WebRTCStack {
 			/** candidates the page added, as the remote description shows them */
 			remoteCandidates: { section: number; line: string }[];
 			channels: Map<number, MockDataChannel>;
+			/** the channels createDataChannel made */
+			created: MockDataChannel[];
 			negotiated: boolean;
 			needsNegotiation: boolean;
+			/** negotiation is needed for a data section alone, not for an ICE restart */
+			forChannel: boolean;
+			/** operations on the chain: the event waits for it to empty */
+			busy: number;
 			chain: Promise<unknown>;
 			closed: boolean;
 		}
@@ -725,14 +737,23 @@ export default class WebRTCStack {
 			RealmEventTarget,
 			ctx.standIns.RTCPeerConnection,
 		) {
-			constructor(configuration?: RTCConfiguration) {
+			constructor(configurationInit?: RTCConfiguration) {
 				super();
 				shared.peers.set(this, peerMembers);
-				const { shown, forWorker } = normalise(
-					configuration,
+				const shown = refusing(
 					"Failed to construct 'RTCPeerConnection'",
-					(config) => probed(config, (probe) => probe.getConfiguration()),
+					() => {
+						const converted = configuration(
+							configurationInit,
+							isLegacy(),
+							expires,
+						);
+						const refusal = serversRefusal(converted.iceServers);
+						if (refusal) throw refusal;
+						return converted;
+					},
 				);
+				counted(this);
 				const state: PeerState = {
 					target: this,
 					port: null,
@@ -762,8 +783,11 @@ export default class WebRTCStack {
 					remoteMids: [],
 					remoteCandidates: [],
 					channels: new Map(),
+					created: [],
 					negotiated: false,
 					needsNegotiation: false,
+					forChannel: false,
+					busy: 0,
 					chain: RealmPromise.resolve(),
 					closed: false,
 				};
@@ -776,7 +800,7 @@ export default class WebRTCStack {
 					{
 						kind: 'connection',
 						port: channel.port2,
-						config: forWorker,
+						config: forWorker(shown),
 					} satisfies RtcWorkerConnection,
 					[channel.port2],
 				);
@@ -796,7 +820,10 @@ export default class WebRTCStack {
 			}
 			get canTrickleIceCandidates() {
 				const state = peerOf(this);
-				return state.currentRemote || state.pendingRemote ? true : null;
+				const remote = state.pendingRemote ?? state.currentRemote;
+				// nothing to say of a description without a section
+				if (!remote || !/^m=/m.test(remote.sdp)) return null;
+				return /^a=ice-options:(?:.* )?trickle(?: |\r?$)/m.test(remote.sdp);
 			}
 			get sctp() {
 				peerOf(this);
@@ -832,52 +859,72 @@ export default class WebRTCStack {
 			}
 
 			getConfiguration() {
-				const state = peerOf(this);
-				const config = state.config;
+				const { config } = peerOf(this);
 				return {
 					...config,
-					iceServers: (config.iceServers ?? []).map((server) => ({
+					// each reading has objects of its own for the certificates
+					certificates: config.certificates.map((certificate) =>
+						realmClone(certificate),
+					),
+					iceServers: config.iceServers.map((server) => ({
 						...server,
-						urls: Array.isArray(server.urls) ? [...server.urls] : server.urls,
+						urls: [...server.urls],
 					})),
-					certificates: [...(config.certificates ?? [])],
 				};
 			}
-			setConfiguration(configuration?: RTCConfiguration) {
+			setConfiguration(configurationInit?: RTCConfiguration) {
 				const state = peerOf(this);
-				if (state.closed)
-					throw domException(
-						method(
-							'setConfiguration',
-							"RTCPeerConnection's signalingState is 'closed'.",
-						),
+				const context = method('setConfiguration', '').slice(0, -2);
+				const next = refusing(context, () => {
+					// the dictionary's own errors come before a closed connection's
+					const read = () =>
+						configuration(configurationInit, isLegacy(), expires);
+					if (!state.closed) return read();
+					try {
+						read();
+					} catch (error) {
+						if (
+							!(error instanceof Refusal) ||
+							/^Failed to read |^The provided value is not of type/.test(
+								error.message,
+							)
+						)
+							throw error;
+					}
+					throw new Refusal(
 						'InvalidStateError',
+						"The RTCPeerConnection's signalingState is 'closed'.",
 					);
-				// what the browser makes of the change, on a probe configured as
-				// this connection is
-				const { shown, forWorker } = normalise(
-					configuration,
-					method('setConfiguration', '').slice(0, -2),
-					(config) =>
-						probed(poolless(state.config), (probe) => {
-							probe.setConfiguration(config as RTCConfiguration);
-							return probe.getConfiguration();
-						}),
-				);
+				});
+				const now = state.config;
+				// what a connection keeps for life, and the pool once it has
+				// a local description
 				if (
-					shown.iceCandidatePoolSize !== state.config.iceCandidatePoolSize &&
-					(state.pendingLocal || state.currentLocal)
+					next.certificates.length ||
+					next.bundlePolicy !== now.bundlePolicy ||
+					next.rtcpMuxPolicy !== now.rtcpMuxPolicy ||
+					next.encodedInsertableStreams !== now.encodedInsertableStreams ||
+					// Chrome 152 lets this one change, 156 does not
+					(!isLegacy() &&
+						next.alwaysNegotiateDataChannels !==
+							now.alwaysNegotiateDataChannels) ||
+					(next.iceCandidatePoolSize !== now.iceCandidatePoolSize &&
+						(state.pendingLocal || state.currentLocal))
 				)
 					throw domException(
-						method(
-							'setConfiguration',
-							"Attempted to modify the PeerConnection's configuration in an unsupported way.",
-						),
+						`${context}: Attempted to modify the PeerConnection's configuration in an unsupported way.`,
 						'InvalidModificationError',
 					);
-				state.config = shown;
+				const refusal = serversRefusal(next.iceServers);
+				if (refusal)
+					throw domException(
+						`${context}: The given configuration has ${refusal.name === 'SyntaxError' ? 'a syntax error' : 'invalid parameters'}.`,
+						refusal.name,
+					);
+				next.certificates = now.certificates;
+				state.config = next;
 				state
-					.call({ op: 'setConfiguration', config: forWorker })
+					.call({ op: 'setConfiguration', config: forWorker(next) })
 					.catch(() => {});
 			}
 
@@ -997,7 +1044,7 @@ export default class WebRTCStack {
 						// gathered; the last description's is not this one's
 						state.liveLocal = null;
 						state.pendingLocal = { type: 'offer', sdp };
-						state.negotiated = true;
+						state.negotiated ||= hasData(sdp);
 						setSignaling(state, 'have-local-offer');
 						return;
 					}
@@ -1027,7 +1074,7 @@ export default class WebRTCStack {
 					state.pendingLocal = null;
 					state.currentRemote = state.pendingRemote ?? state.currentRemote;
 					state.pendingRemote = null;
-					state.negotiated = true;
+					state.negotiated ||= hasData(sdp);
 					setSignaling(state, 'stable');
 				});
 				return legacyForm(
@@ -1039,46 +1086,78 @@ export default class WebRTCStack {
 			}
 			setRemoteDescription(...args: any[]) {
 				const state = peerOf(this);
-				const init = args[0];
+				const name = 'setRemoteDescription';
 				const legacy = typeof args[1] === 'function';
-				const result = chained(state, 'setRemoteDescription', async () => {
-					if (init === null || init === undefined || typeof init !== 'object')
-						throw new TypeError(
-							method(
-								'setRemoteDescription',
-								`1 argument required, but only ${args.length} present.`,
+				// the dictionary first, a closed connection next, then the text:
+				// all three before the operation takes its turn
+				let type: string | undefined;
+				let sdp = '';
+				const init = args[0];
+				if (!args.length)
+					return rejectedWith(
+						new RealmTypeError(
+							method(name, '1 argument required, but only 0 present.'),
+						),
+					);
+				if (init !== undefined && init !== null) {
+					if (!isObject(init))
+						return rejectedWith(
+							new RealmTypeError(
+								method(
+									name,
+									"The provided value is not of type 'RTCSessionDescriptionInit'.",
+								),
 							),
 						);
-					const type = init.type === undefined ? undefined : String(init.type);
-					const sdp = init.sdp === undefined ? '' : String(init.sdp);
-					// no type: the browser has nothing to parse the text as
-					if (type === undefined)
-						throw new RealmDOMException(
-							method(
-								'setRemoteDescription',
-								'Failed to parse SessionDescription.  ',
-							),
-							'OperationError',
-						);
+					try {
+						if (init.sdp !== undefined) sdp = `${init.sdp}`;
+						if (init.type !== undefined) type = `${init.type}`;
+					} catch (error) {
+						return rejectedWith(error);
+					}
 					if (
+						type !== undefined &&
 						type !== 'offer' &&
 						type !== 'answer' &&
 						type !== 'rollback' &&
 						type !== 'pranswer'
 					)
-						throw new TypeError(
-							method(
-								'setRemoteDescription',
-								`The provided value '${type}' is not a valid enum value of type RTCSdpType.`,
+						return rejectedWith(
+							new RealmTypeError(
+								method(
+									name,
+									`Failed to read the 'type' property from 'RTCSessionDescriptionInit': The provided value '${type}' is not a valid enum value of type RTCSdpType.`,
+								),
 							),
 						);
+				}
+				if (state.closed) return chained(state, name, async () => {});
+				let parsed: Parsed | null = null;
+				if (type !== 'rollback') {
+					const read =
+						type === undefined
+							? { line: '', description: '' }
+							: parseDescription(sdp);
+					if ('description' in read) {
+						const words = `Failed to parse SessionDescription. ${read.line} ${read.description}`;
+						if (!legacy) return rejected(method(name, words), 'OperationError');
+						// the old form is told at once, in its own words
+						if (typeof args[2] === 'function')
+							Reflect.apply(args[2], undefined, [
+								new RealmDOMException(words, 'OperationError'),
+							]);
+						return RealmPromise.resolve();
+					}
+					parsed = read;
+				}
+				const result = chained(state, name, async () => {
 					if (type === 'rollback') {
 						if (
 							state.signalingState !== 'have-local-offer' &&
 							state.signalingState !== 'have-remote-offer'
 						)
 							throw wrongState(
-								'setRemoteDescription',
+								name,
 								'remote',
 								'rollback',
 								state.signalingState,
@@ -1093,36 +1172,39 @@ export default class WebRTCStack {
 					if (
 						offer
 							? state.signalingState !== 'stable' &&
+								state.signalingState !== 'have-local-offer' &&
 								state.signalingState !== 'have-remote-offer'
 							: state.signalingState !== 'have-local-offer' &&
 								state.signalingState !== 'have-remote-pranswer'
-					) {
-						// the browser parses the text before it looks at the state
-						const refusal = await refused(type, sdp);
-						throw refusal && PARSE.test(refusal.message)
-							? refusal
-							: wrongState(
-									'setRemoteDescription',
-									'remote',
-									type,
-									state.signalingState,
-								);
+					)
+						throw wrongState(name, 'remote', type!, state.signalingState);
+					// an offer over the connection's own takes that one back first
+					if (offer && state.signalingState === 'have-local-offer') {
+						await state.call({ op: 'setRemote', type: 'rollback', sdp: '' });
+						state.pendingLocal = null;
+						setSignaling(state, 'stable');
 					}
-					try {
-						await stackCall(state, 'setRemoteDescription', `remote ${type}`, {
-							op: 'setRemote',
-							type: offer ? 'offer' : 'answer',
-							sdp,
-						});
-					} catch (error) {
-						// the browser's own words for a description it refuses too
-						// (a probe is in no state for an answer: its parser's only)
-						const refusal = await refused(type, sdp);
-						throw refusal && (offer || PARSE.test(refusal.message))
-							? refusal
-							: error;
-					}
-					state.remoteMids = midsOf(sdp);
+					const refusal = remoteRefusal(
+						parsed!,
+						offer,
+						parsedOf(
+							offer
+								? (state.pendingLocal ?? state.currentLocal)
+								: state.pendingLocal,
+						),
+						parsedOf(state.pendingRemote ?? state.currentRemote),
+					);
+					if (refusal)
+						throw new RealmDOMException(
+							method(name, `Failed to set remote ${type} sdp: ${refusal}`),
+							'InvalidAccessError',
+						);
+					await stackCall(state, name, `remote ${type}`, {
+						op: 'setRemote',
+						type: offer ? 'offer' : 'answer',
+						sdp,
+					});
+					state.remoteMids = parsed!.sections.map((section) => section.mid);
 					state.remoteCandidates = [];
 					if (offer) {
 						state.pendingRemote = { type: 'offer', sdp };
@@ -1149,57 +1231,70 @@ export default class WebRTCStack {
 			}
 			addIceCandidate(...args: any[]) {
 				const state = peerOf(this);
+				const name = 'addIceCandidate';
 				const init = args[0];
 				const legacy = typeof args[1] === 'function';
-				const result = chained(state, 'addIceCandidate', async () => {
-					let candidate = '';
-					let sdpMid: string | null = null;
-					let sdpMLineIndex: number | null = null;
-					if (init !== null && init !== undefined) {
-						if (init.candidate !== undefined)
-							candidate = String(init.candidate);
-						if (init.sdpMid !== undefined && init.sdpMid !== null)
-							sdpMid = String(init.sdpMid);
+				let candidate = '';
+				let sdpMid: string | null = null;
+				let sdpMLineIndex: number | null = null;
+				if (init !== undefined && init !== null) {
+					if (!isObject(init))
+						return rejectedWith(
+							new RealmTypeError(
+								method(
+									name,
+									"The provided value is not of type 'RTCIceCandidateInit'.",
+								),
+							),
+						);
+					try {
+						if (init.candidate !== undefined) candidate = `${init.candidate}`;
 						if (init.sdpMLineIndex !== undefined && init.sdpMLineIndex !== null)
-							sdpMLineIndex = Number(init.sdpMLineIndex);
+							sdpMLineIndex = (+init.sdpMLineIndex & 0xffff) >>> 0;
+						if (init.sdpMid !== undefined && init.sdpMid !== null)
+							sdpMid = `${init.sdpMid}`;
+					} catch (error) {
+						return rejectedWith(error);
 					}
+				}
+				const result = chained(state, name, async () => {
+					// the end of candidates, with or without a remote description
+					if (candidate === '') return;
 					// a candidate for no section, before anything else is looked at
-					if (candidate !== '' && sdpMid === null && sdpMLineIndex === null)
+					if (sdpMid === null && sdpMLineIndex === null)
 						throw new RealmTypeError(
 							method(
-								'addIceCandidate',
+								name,
 								'Candidate missing values for both sdpMid and sdpMLineIndex',
 							),
 						);
 					if (!state.currentRemote && !state.pendingRemote)
 						throw new RealmDOMException(
-							method('addIceCandidate', 'The remote description was null'),
+							method(name, 'The remote description was null'),
 							'InvalidStateError',
 						);
-					if (candidate === '') return;
-					const section =
-						sdpMid !== null
-							? state.remoteMids.indexOf(sdpMid)
-							: sdpMLineIndex! < state.remoteMids.length
-								? sdpMLineIndex!
-								: -1;
-					// a section the remote description does not have, or text the
-					// stack cannot read
-					if (
-						section < 0 ||
-						!(await state.call({ op: 'addCandidate', candidate, sdpMid }).then(
-							() => true,
-							() => false,
-						))
-					)
+					// the section a mid names, or the one at the index (the
+					// first without one)
+					const section = sdpMid
+						? state.remoteMids.indexOf(sdpMid)
+						: (sdpMLineIndex ?? 0) < state.remoteMids.length
+							? (sdpMLineIndex ?? 0)
+							: -1;
+					const line = candidateLine(candidate);
+					if (section < 0 || typeof line !== 'string')
 						throw new RealmDOMException(
-							method('addIceCandidate', 'Error processing ICE candidate'),
+							method(name, 'Error processing ICE candidate'),
 							'OperationError',
 						);
-					// as the remote description lists it from now on: no ufrag,
-					// always a generation
-					let line = candidate.replace(/^a=/, '').replace(/ ufrag \S+/, '');
-					if (!/ generation \d/.test(line)) line += ' generation 0';
+					// one the browser takes and the stack cannot read (a third
+					// component, ssltcp) pairs with nothing there either
+					await state
+						.call({
+							op: 'addCandidate',
+							candidate: line,
+							sdpMid: state.remoteMids[section],
+						})
+						.catch(() => {});
 					if (
 						!state.remoteCandidates.some(
 							(known) => known.section === section && known.line === line,
@@ -1219,6 +1314,7 @@ export default class WebRTCStack {
 				if (state.closed) return;
 				state.call({ op: 'restartIce' }).catch(() => {});
 				state.needsNegotiation = true;
+				state.forChannel = false;
 				queue(() => fireNegotiationNeeded(state));
 			}
 			// no media through the proxy yet: a connection has none of these
@@ -1234,30 +1330,39 @@ export default class WebRTCStack {
 				peerOf(this);
 				return new RealmArray();
 			}
-			createDataChannel(label: string, init?: RTCDataChannelInit) {
+			createDataChannel(...args: any[]) {
 				const state = peerOf(this);
-				if (arguments.length < 1)
-					throw new TypeError(
-						method(
-							'createDataChannel',
-							'1 argument required, but only 0 present.',
-						),
+				const context = method('createDataChannel', '').slice(0, -2);
+				if (!args.length)
+					throw new RealmTypeError(
+						`${context}: 1 argument required, but only 0 present.`,
 					);
-				if (state.closed)
-					throw domException(
-						method(
-							'createDataChannel',
-							"RTCPeerConnection's signalingState is 'closed'.",
-						),
-						'InvalidStateError',
-					);
-				const options = channelOptions(String(label), init);
+				const options = refusing(context, () => {
+					const init = channelInit(args[0], args[1], !isLegacy());
+					if (state.closed)
+						throw new Refusal(
+							'InvalidStateError',
+							"The RTCPeerConnection's signalingState is 'closed'.",
+						);
+					return channelChecked(init);
+				});
+				// an id another channel of the connection has
+				if (options.id !== null)
+					for (const other of [...state.created, ...state.channels.values()]) {
+						const its = channelStates.get(other)!;
+						if (its.id === options.id && its.readyState !== 'closed')
+							throw domException(
+								`${context}: RTCDataChannel creation failed`,
+								'OperationError',
+							);
+					}
 				const channel = new MockDataChannel(
 					state,
 					-1,
 					options,
 					options.negotiated ? options.id : null,
 				);
+				state.created.push(channel);
 				const promise = state.call({ op: 'createChannel', options });
 				promise.then(
 					(index) => {
@@ -1275,6 +1380,7 @@ export default class WebRTCStack {
 				// the first channel wants an offer (an SCTP section); later ones ride on it
 				if (!state.negotiated && !state.needsNegotiation) {
 					state.needsNegotiation = true;
+					state.forChannel = true;
 					queue(() => fireNegotiationNeeded(state));
 				}
 				return channel;
@@ -1288,6 +1394,11 @@ export default class WebRTCStack {
 							'The track is not associated with this RTCPeerConnection',
 						),
 						'InvalidAccessError',
+					);
+				// a closed connection still answers, with its own entry alone
+				if (state.closed)
+					return RealmPromise.resolve(
+						Reflect.construct(MockStatsReport, [statsEntries(state, null)]),
 					);
 				return state
 					.call({ op: 'stats' })
@@ -1343,13 +1454,11 @@ export default class WebRTCStack {
 			if (!local) sdp = withAdded(sdp, state.remoteCandidates);
 			return new NativeSessionDescription({ type: description.type, sdp });
 		};
-		const midsOf = (sdp: string) => {
-			const mids: (string | null)[] = [];
-			for (const line of sdp.split(/\r?\n/))
-				if (line.startsWith('m=')) mids.push(null);
-				else if (mids.length && line.startsWith('a=mid:'))
-					mids[mids.length - 1] = line.slice(6);
-			return mids;
+		/** a description in force, parsed: its sections for the order checks */
+		const parsedOf = (description: Description | null): Parsed | null => {
+			if (!description) return null;
+			const read = parseDescription(description.sdp);
+			return 'sections' in read ? read : null;
 		};
 		/**
 		 * A remote description with the candidates the page added since, as
@@ -1434,29 +1543,8 @@ export default class WebRTCStack {
 			}
 			return out.join('\r\n');
 		};
-		const PARSE = /Failed to parse SessionDescription/;
-		/**
-		 * What the browser says to a remote description (null: it takes it),
-		 * from a connection of its own that gets no local description, so no
-		 * socket, and no candidate, so no name to look up
-		 */
-		const refused = async (type: string, sdp: string) => {
-			const probe = Reflect.construct(
-				NativePeerConnection,
-				[],
-			) as RTCPeerConnection;
-			try {
-				await probe.setRemoteDescription({
-					type: type as RTCSdpType,
-					sdp: withoutCandidates(sdp),
-				});
-				return null;
-			} catch (error) {
-				return error as DOMException;
-			} finally {
-				probe.close();
-			}
-		};
+		/** a description with a data section: channels need no offer after it */
+		const hasData = (sdp: string) => /^m=application /m.test(sdp);
 		const setSignaling = (state: PeerState, next: RTCSignalingState) => {
 			if (state.closed || state.signalingState === next) return;
 			state.signalingState = next;
@@ -1465,13 +1553,17 @@ export default class WebRTCStack {
 				queue(() => fireNegotiationNeeded(state));
 		};
 		const fireNegotiationNeeded = (state: PeerState) => {
+			// the event waits for the operations under way, and is not due at
+			// all once an answer has brought the data section it was for
 			if (
 				state.closed ||
+				state.busy ||
 				state.signalingState !== 'stable' ||
 				!state.needsNegotiation
 			)
 				return;
 			state.needsNegotiation = false;
+			if (state.forChannel && state.negotiated) return;
 			state.target.dispatchEvent(new RealmEvent('negotiationneeded'));
 		};
 		const wrongState = (
@@ -1483,7 +1575,7 @@ export default class WebRTCStack {
 			new RealmDOMException(
 				method(
 					name,
-					`Failed to set ${side} ${type} sdp: Called in wrong state: ${signaling}`,
+					`Failed to set ${side} ${type} sdp: Called in wrong ${type === 'rollback' ? 'signalingState' : 'state'}: ${signaling}`,
 				),
 				'InvalidStateError',
 			);
@@ -1514,17 +1606,21 @@ export default class WebRTCStack {
 		): Promise<T> => {
 			if (state.closed)
 				return rejected(
-					method(name, "RTCPeerConnection's signalingState is 'closed'."),
+					method(name, "The RTCPeerConnection's signalingState is 'closed'."),
 					'InvalidStateError',
 				) as Promise<T>;
+			state.busy++;
 			const run = state.chain.then(operation, operation);
-			state.chain = run.then(
-				() => {},
-				() => {},
-			);
-			return new RealmPromise<T>((resolve, reject) =>
+			const done = () => {
+				if (!--state.busy) queue(() => fireNegotiationNeeded(state));
+			};
+			// the caller hears the result before the event is thought of: what
+			// it does next (the next operation, as a rule) is under way by then
+			const result = new RealmPromise<T>((resolve, reject) =>
 				run.then(resolve, reject),
 			);
+			state.chain = run.then(done, done);
+			return result;
 		};
 		/** the legacy callback forms resolve the callbacks and answer an undefined promise */
 		const legacyForm = <T>(
@@ -1539,64 +1635,25 @@ export default class WebRTCStack {
 					Reflect.apply(success, undefined, voidResult ? [] : [value]);
 				},
 				(error) => {
-					if (typeof failure === 'function')
-						Reflect.apply(failure, undefined, [error]);
+					if (typeof failure !== 'function') return;
+					// the old form hears the words without the method's name
+					const told =
+						error instanceof RealmDOMException
+							? new RealmDOMException(
+									error.message.replace(
+										/^Failed to execute '\w+' on 'RTCPeerConnection': /,
+										'',
+									),
+									error.name,
+								)
+							: error;
+					Reflect.apply(failure, undefined, [told]);
 				},
 			);
 		};
-		const channelOptions = (
-			label: string,
-			init?: RTCDataChannelInit,
-		): ChannelOptions => {
-			const options: ChannelOptions = {
-				label,
-				ordered: true,
-				maxPacketLifeTime: null,
-				maxRetransmits: null,
-				protocol: '',
-				negotiated: false,
-				id: null,
-			};
-			if (init === null || init === undefined) return options;
-			if (typeof init !== 'object')
-				throw new TypeError(
-					method(
-						'createDataChannel',
-						"The provided value is not of type 'RTCDataChannelInit'.",
-					),
-				);
-			if (init.ordered !== undefined) options.ordered = !!init.ordered;
-			if (
-				init.maxPacketLifeTime !== undefined &&
-				init.maxPacketLifeTime !== null
-			)
-				options.maxPacketLifeTime = Number(init.maxPacketLifeTime) & 0xffff;
-			if (init.maxRetransmits !== undefined && init.maxRetransmits !== null)
-				options.maxRetransmits = Number(init.maxRetransmits) & 0xffff;
-			if (options.maxPacketLifeTime !== null && options.maxRetransmits !== null)
-				throw domException(
-					method(
-						'createDataChannel',
-						'RTCDataChannel cannot have both max retransmits and max lifetime',
-					),
-					'TypeError',
-				);
-			if (init.protocol !== undefined) options.protocol = String(init.protocol);
-			if (init.negotiated !== undefined) options.negotiated = !!init.negotiated;
-			if (init.id !== undefined && init.id !== null)
-				options.id = Number(init.id) & 0xffff;
-			if (options.negotiated && options.id === null)
-				throw new TypeError(
-					method(
-						'createDataChannel',
-						'RTCDataChannel cannot be negotiated without an id',
-					),
-				);
-			return options;
-		};
 		const statsEntries = (
 			state: PeerState,
-			info: { ice: string; connection: string; local: string[] },
+			info: { ice: string; connection: string; local: string[] } | null,
 		) => {
 			const timestamp = performance.timeOrigin + performance.now();
 			const entries = new Map<string, unknown>();
@@ -1610,6 +1667,7 @@ export default class WebRTCStack {
 				)
 					opened++;
 				if (channelState.readyState === 'closed') closed++;
+				if (!info) continue;
 				entries.set(`D${channelState.index}`, {
 					id: `D${channelState.index}`,
 					timestamp,
@@ -1627,6 +1685,7 @@ export default class WebRTCStack {
 				dataChannelsOpened: opened,
 				dataChannelsClosed: closed,
 			});
+			if (!info) return entries;
 			entries.set('T01', {
 				id: 'T01',
 				timestamp,

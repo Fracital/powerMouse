@@ -214,8 +214,46 @@ const portless = (run, value) =>
 // how the browser shows a host address in icecandidateerror without media access
 const REDACTED = /^(?:0\.0\.0\.x|\[0:0:0:x:x:x:x:x\])(?::\d+)?$/;
 
+/**
+ * Run in every document before any script of it (the inject's included):
+ * the browser's RTCPeerConnection reports each connection it really makes.
+ * The stand-in is built on what it finds there, so a connection of the
+ * browser's made on a proxied page's behalf, a validation probe included,
+ * is counted; one the constructor refuses is not.
+ */
+const NATIVE_MADE = 'native RTCPeerConnection made';
+const countNative = (mark) => {
+	const Native = window.RTCPeerConnection;
+	if (typeof Native !== 'function') return;
+	const debug = console.debug.bind(console);
+	const Counting = new Proxy(Native, {
+		construct(target, args, newTarget) {
+			const made = Reflect.construct(
+				target,
+				args,
+				newTarget === Counting ? target : newTarget,
+			);
+			debug(mark);
+			return made;
+		},
+	});
+	Native.prototype.constructor = Counting;
+	window.RTCPeerConnection = Counting;
+	if ('webkitRTCPeerConnection' in window)
+		window.webkitRTCPeerConnection = Counting;
+};
+/** counts them for `page`'s context from here on: `page.nativeMade` */
+async function watchNative(page) {
+	page.nativeMade = 0;
+	page.context().on('console', (message) => {
+		if (message.text() === NATIVE_MADE) page.nativeMade++;
+	});
+	await page.context().addInitScript(countNative, NATIVE_MADE);
+}
+
 async function nativePage(browser) {
 	const page = await (await browser.newContext()).newPage();
+	await watchNative(page);
 	page.errors = [];
 	page.on('pageerror', (error) => page.errors.push(error.message));
 	await page.goto(target);
@@ -225,6 +263,7 @@ async function nativePage(browser) {
 
 async function proxiedPage(browser, mode, base) {
 	const page = await openDemo(browser, base);
+	await watchNative(page);
 	await submitLanding(page, target);
 	const frame = () =>
 		page.frames().findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
@@ -238,6 +277,28 @@ async function proxiedPage(browser, mode, base) {
 			break;
 	}
 	return { label: mode, page, frame };
+}
+
+// Known difference (docs/webrtc.md, limits): an offer with a section Chrome
+// answers as rejected (a protocol it does not know, a second data section)
+// is refused whole by the stack
+const REJECTED_SECTIONS = new Set([
+	'errors.remote.mediaProtocolBad',
+	'errors.remote.twoSections',
+]);
+
+/** collects garbage in the page's process and in its frame's, where that is another */
+async function collect(entry) {
+	await entry.page.requestGC();
+	const frame = entry.frame();
+	if (frame === entry.page.mainFrame()) return;
+	const session = await entry.page
+		.context()
+		.newCDPSession(frame)
+		.catch(() => null);
+	if (!session) return;
+	await session.send('HeapProfiler.collectGarbage');
+	await session.detach();
 }
 
 /** `probe` in each page at once, with fresh fixtures for each (`tcp`: the sink listens over TCP too) */
@@ -662,6 +723,88 @@ async function suite(name, flags, raw) {
 		);
 	}
 
+	// every bad call of test/pages/webrtc-errors.js: natively the browser's
+	// connection answers, here STomp's own reading of the configuration, the
+	// description, the candidate and the channel dictionary does
+	const errorTables = await each(all, (fixtures) =>
+		window.__rtcErrors(fixtures),
+	);
+	// Chrome refuses a renderer its 501st connection until the closed ones
+	// are collected, and so does the stand-in
+	await Promise.all(all.map(collect));
+	const urlTables = await each(all, (fixtures) => window.__rtcUrls(fixtures));
+	await Promise.all(all.map(collect));
+	const answerTables = await each(all, () => window.__rtcAnswers());
+	{
+		const flat = (index) => {
+			const out = {};
+			const walk = (run, path, value) => {
+				if (value && typeof value === 'object' && !Array.isArray(value))
+					for (const [key, inner] of Object.entries(value))
+						walk(run, `${path}.${key}`, inner);
+				else out[path] = portless(run, value);
+			};
+			walk(errorTables[index], 'errors', errorTables[index].result);
+			walk(urlTables[index], 'urls', urlTables[index].result);
+			walk(answerTables[index], 'answers', answerTables[index].result);
+			return out;
+		};
+		const expected = flat(0);
+		const threw =
+			errorTables[0].result.threw ??
+			urlTables[0].result.threw ??
+			answerTables[0].result.threw ??
+			'';
+		precondition(
+			`${name}, natively: the tables of bad calls run to their end`,
+			Object.keys(expected).length > 500 && !threw,
+			`${Object.keys(expected).length} cases ${threw}`,
+		);
+		for (const [at, run] of errorTables.entries()) {
+			if (at === 0) continue;
+			const got = flat(at);
+			const differ = Object.keys({ ...expected, ...got }).filter(
+				(key) => got[key] !== expected[key] && !REJECTED_SECTIONS.has(key),
+			);
+			ok(
+				`${run.label}: a bad configuration, remote description, candidate or channel dictionary gets the browser's own error, and a good one reads back as the browser's, case by case`,
+				differ.length === 0 && Object.keys(got).length > 500,
+				`${Object.keys(got).length} cases, ${differ.length} differ: ${JSON.stringify(
+					differ.slice(0, 40).map((key) => [key, got[key], expected[key]]),
+				).slice(0, 6000)}`,
+			);
+		}
+	}
+
+	// 500 connections to a renderer, the closed ones too until collected
+	{
+		await Promise.all(all.map(collect));
+		const many = await each(all, () => window.__rtcMany());
+		await Promise.all(all.map(collect));
+		const after = await each(all, () => window.__rtcOneMore());
+		// a connection or two of the steps above may still be held
+		const told = ({ made, ...rest }, after) =>
+			JSON.stringify([made > 490 && made <= 500, rest, after]);
+		const seen = (index) =>
+			`${JSON.stringify(many[index].result)} then ${after[index].result}`;
+		const expected = told(many[0].result, after[0].result);
+		precondition(
+			`${name}, natively: the 501st connection is refused until the closed ones are collected`,
+			many[0].result.made > 490 &&
+				many[0].result.made <= 500 &&
+				many[0].result.closed === 'UnknownError' &&
+				after[0].result === 'made',
+			seen(0),
+		);
+		for (const [at, run] of many.entries())
+			if (at)
+				ok(
+					`${run.label}: a document holds as many connections as the browser lets it, and a closed one is let go of`,
+					told(run.result, after[at].result) === expected,
+					`${seen(at)}, natively ${seen(0)}`,
+				);
+	}
+
 	// a hostile page: its own events, another document's members (that
 	// document runs an inject of its own), its prototypes swapped
 	const attacked = await each(all, (fixtures) =>
@@ -723,6 +866,19 @@ async function suite(name, flags, raw) {
 			JSON.stringify(differ.slice(0, 8)),
 		);
 	}
+
+	// every probe above is behind this one
+	precondition(
+		`${name}, natively: the page's connections are the browser's own`,
+		native.page.nativeMade > 0,
+		String(native.page.nativeMade),
+	);
+	for (const entry of proxied)
+		ok(
+			`${entry.label}: no native RTCPeerConnection is ever constructed, in any realm, by any call above`,
+			entry.page.nativeMade === 0,
+			String(entry.page.nativeMade),
+		);
 
 	const errors = proxied.flatMap((entry) => entry.page.errors);
 	await browser.close();

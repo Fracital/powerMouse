@@ -19,6 +19,10 @@ export interface ParsedSdp {
 	origin: string | null;
 	session: [name: string, value: string | null][];
 	medias: Media[];
+	/** an answer to an offer that named no BUNDLE group names none either */
+	ungrouped?: boolean;
+	/** an answer to an offer of no section: the session's first lines alone */
+	bare?: boolean;
 }
 
 function attribute(line: string): [string, string | null] {
@@ -154,8 +158,9 @@ export function renderChrome(
 		(media) => first(media.attributes, 'mid') ?? '',
 	);
 	const group = first(parsed.session, 'group');
-	lines.push(`a=group:${group ?? `BUNDLE ${mids.join(' ')}`}`);
-	lines.push('a=extmap-allow-mixed');
+	if (!parsed.ungrouped && (group !== null || mids.length))
+		lines.push(`a=group:${group ?? `BUNDLE ${mids.join(' ')}`}`);
+	if (!parsed.bare) lines.push('a=extmap-allow-mixed');
 	lines.push('a=msid-semantic: WMS');
 	for (const media of parsed.medias) {
 		// the port and the connection address are the default candidate's
@@ -264,6 +269,53 @@ export function stripCandidates(sdp: string): {
 		else out.push(raw);
 	}
 	return { sdp: out.join(CRLF), candidates };
+}
+
+/**
+ * A remote offer as the stack reads it. Chrome takes an offer whose
+ * sections have no name (each is named by its position), one that names no
+ * BUNDLE group, and a data section over TCP/DTLS/SCTP, and its answer
+ * mirrors the last two; the stack reads none of the three. Null for an
+ * offer of no section at all, which is not the stack's to answer.
+ */
+export function offerForStack(
+	offer: string,
+): { sdp: string; grouped: boolean; protocols: (string | null)[] } | null {
+	const lines = offer.split(/\r?\n/);
+	const starts: number[] = [];
+	for (let at = 0; at < lines.length; at++)
+		if (lines[at].startsWith('m=')) starts.push(at);
+	if (!starts.length) return null;
+	const protocols: (string | null)[] = [];
+	const mids: string[] = [];
+	// from the last section to the first: an inserted line moves none before it
+	for (let index = starts.length - 1; index >= 0; index--) {
+		const start = starts[index];
+		const end = starts[index + 1] ?? lines.length;
+		const fields = lines[start].split(' ');
+		protocols[index] = null;
+		if (fields[0] === 'm=application' && fields[2] === 'TCP/DTLS/SCTP') {
+			protocols[index] = fields[2];
+			fields[2] = 'UDP/DTLS/SCTP';
+			lines[start] = fields.join(' ');
+		}
+		let named = -1;
+		let last = start;
+		for (let at = start + 1; at < end; at++) {
+			if (lines[at].startsWith('a=mid:')) named = at;
+			if (lines[at].startsWith('a=')) last = at;
+		}
+		const mid = named < 0 ? '' : lines[named].slice(6).trim();
+		mids[index] = mid || String(index);
+		// among the section's attributes: the stack reads none after a c= line
+		if (named < 0) lines.splice(last + 1, 0, `a=mid:${mids[index]}`);
+		else if (!mid) lines[named] = `a=mid:${mids[index]}`;
+	}
+	const grouped = lines
+		.slice(0, starts[0])
+		.some((line) => line.startsWith('a=group:BUNDLE'));
+	if (!grouped) lines.splice(starts[0], 0, `a=group:BUNDLE ${mids.join(' ')}`);
+	return { sdp: lines.join(CRLF), grouped, protocols };
 }
 
 /** the first m-section's index whose mid is `mid` */
