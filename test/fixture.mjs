@@ -189,6 +189,21 @@ const transportFile = (name) =>
 			import.meta.url,
 		),
 	);
+// a transport's sibling wasm: the de-inlined epoxy ships epoxy.wasm next to
+// index.mjs and fetches it with new URL('epoxy.wasm', import.meta.url), so the
+// renamed transport (served as /neutral/transport.mjs) resolves it to
+// /neutral/epoxy.wasm, served here from the package's dist (assets,
+// blank-loads, sw-restart suites)
+const TRANSPORT_SIBLINGS = {
+	'epoxy.wasm': 'epoxy-transport',
+};
+const transportSibling = (name, pkg) =>
+	fileURLToPath(
+		new URL(
+			`../node_modules/@mercuryworkshop/${pkg}/dist/${name}`,
+			import.meta.url,
+		),
+	);
 
 export function startFixture(port = 8084) {
 	const server = createServer(async (req, res) => {
@@ -207,7 +222,9 @@ export function startFixture(port = 8084) {
 		if (neutral) {
 			const file = TRANSPORTS[neutral]
 				? transportFile(TRANSPORTS[neutral])
-				: NEUTRAL[neutral] && `${distDir}${NEUTRAL[neutral]}`;
+				: TRANSPORT_SIBLINGS[neutral]
+					? transportSibling(neutral, TRANSPORT_SIBLINGS[neutral])
+					: NEUTRAL[neutral] && `${distDir}${NEUTRAL[neutral]}`;
 			if (!file || !existsSync(file)) {
 				res.statusCode = 404;
 				return res.end('no such neutral asset');
@@ -216,7 +233,9 @@ export function startFixture(port = 8084) {
 				'content-type',
 				neutral.endsWith('.html')
 					? 'text/html; charset=utf-8'
-					: 'text/javascript; charset=utf-8',
+					: neutral.endsWith('.wasm')
+						? 'application/wasm'
+						: 'text/javascript; charset=utf-8',
 			);
 			res.setHeader('cache-control', 'no-cache');
 			return res.end(readFileSync(file));

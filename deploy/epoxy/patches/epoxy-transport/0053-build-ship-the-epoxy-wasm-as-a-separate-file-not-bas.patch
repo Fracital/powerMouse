@@ -1,0 +1,97 @@
+From d7734ebcfba6c65b2b55199e56056986296e4cc1 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Thu, 12 Nov 2026 02:46:07 -0500
+Subject: [PATCH] build: ship the epoxy wasm as a separate file, not base64 in
+ the ESM bundle
+
+The ESM bundle (dist/index.mjs, which STomp loads at /epoxy/) carried the
+epoxy-tls wasm inline as base64 through the default epoxy-bundled.js entry.
+Base64 inside JavaScript compresses far worse under brotli than the same
+bytes as a raw .wasm binary: the inlined module was 1055 KiB brotli, of which
+about 255 KiB was the base64 penalty alone. Import the non-bundled
+@mercuryworkshop/epoxy-tls/epoxy entry instead, whose wasm-bindgen glue
+fetches new URL('epoxy.wasm', import.meta.url); esbuild leaves that runtime
+URL in place, so copy the wasm next to the emitted module. The browser then
+downloads the raw wasm (790 KiB brotli) and caches it on its own URL, the way
+the stomp-h3 stand-in already ships (dist/h3/stomp_h3_bg.wasm). The wasm bytes
+are unchanged, so every patch and fingerprint behaviour is unchanged.
+
+The CJS/UMD bundle (dist/index.js) has no import.meta.url and is not fetched
+by STomp; alias it back to the inlined entry so it still runs standalone.
+---
+ esbuild.bundle.mjs | 25 +++++++++++++++++++++++--
+ src/main.ts        |  2 +-
+ 2 files changed, 24 insertions(+), 3 deletions(-)
+
+diff --git a/esbuild.bundle.mjs b/esbuild.bundle.mjs
+index 2728e45..fb95d15 100644
+--- a/esbuild.bundle.mjs
++++ b/esbuild.bundle.mjs
+@@ -2,8 +2,24 @@ import { dtsPlugin } from "esbuild-plugin-d.ts";
+ import { build } from "esbuild";
+ import path from 'node:path'
+ import fs, { readFileSync } from 'node:fs'
++import { fileURLToPath } from 'node:url'
+ import { umdWrapper } from "esbuild-plugin-umd-wrapper";
+ 
++// The ESM bundle (dist/index.mjs, what STomp loads at /epoxy/) imports the
++// non-bundled epoxy-tls entry (`@mercuryworkshop/epoxy-tls/epoxy`), whose
++// wasm-bindgen glue fetches `new URL('epoxy.wasm', import.meta.url)` instead
++// of carrying the wasm inline as base64. A raw .wasm file brotli-compresses
++// far better than the same bytes base64-wrapped in JavaScript (the module
++// shed ~250 KiB brotli), the browser caches it on its own URL, and the h3
++// stand-in already ships this way (dist/h3/stomp_h3_bg.wasm). esbuild leaves
++// that bare runtime URL untouched, so the build copies the wasm next to the
++// module. The CJS/UMD bundle (dist/index.js) has no import.meta and is not
++// fetched by STomp; it keeps the inlined entry so it still runs standalone.
++function copyEpoxyWasm() {
++  const epoxyEntry = fileURLToPath(import.meta.resolve('@mercuryworkshop/epoxy-tls/epoxy'))
++  fs.copyFileSync(path.join(path.dirname(epoxyEntry), 'epoxy.wasm'), './dist/epoxy.wasm')
++}
++
+ const umdWrapperOptions = {
+   libraryName: "EpoxyTransport", // default is unset
+   external: "inherit", // <= default
+@@ -90,15 +106,17 @@ let makeAllPackagesExternalPlugin = {
+ }
+ 
+ 
+-build({
++await build({
+   bundle: true,
+   format: "esm",
+   entryPoints: [`./src/main.ts`],
+   outfile: `./dist/index.mjs`,
+-  plugins: [wasmPlugin],
+   external: ["fs", "path"],
+   logLevel: "info",
+ })
++// epoxy.js references `new URL('epoxy.wasm', import.meta.url)`; esbuild keeps
++// that bare URL, so place the wasm beside the emitted module.
++copyEpoxyWasm()
+ 
+ await build({
+   bundle: true,
+@@ -107,6 +125,9 @@ await build({
+   outdir: `./dist/`,
+   external: ["fs", "path"],
+   logLevel: "info",
++  // the CJS/UMD bundle has no import.meta.url; keep the inlined entry so it
++  // still runs when fetched standalone (STomp loads the ESM bundle only).
++  alias: { "@mercuryworkshop/epoxy-tls/epoxy": "@mercuryworkshop/epoxy-tls" },
+   plugins: [
+     wasmPlugin,
+     umdWrapper(umdWrapperOptions),
+diff --git a/src/main.ts b/src/main.ts
+index c107430..69030b7 100644
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -8,7 +8,7 @@ import initEpoxy, {
+ 	EpoxyClientOptions,
+ 	EpoxyHandlers,
+ 	info as epoxyInfo,
+-} from "@mercuryworkshop/epoxy-tls";
++} from "@mercuryworkshop/epoxy-tls/epoxy";
+ import { EchResolver } from "./ech";
+ 
+ export { epoxyInfo };
