@@ -738,7 +738,8 @@ The first release after a four-year gap. Everything below is breaking.
   the channel to the worker and the transport port the worker gets, and
   its connections' promises were its own `Promise`'s (`webrtc-lazy`).
 - A proxied page's WebRTC connections carry video: the page's video
-  tracks are encoded with VP8 in the worker with
+  tracks are encoded with VP8, VP9, H.264 or AV1 (the first the peer
+  lists that the browser encodes) in the worker with
   WebCodecs and a peer's are decoded there and played on the received
   track, which reads as Chrome's (`remote video`, unmuted by its first
   picture, its source named by its id), in the color space Chrome's
@@ -5416,10 +5417,10 @@ Fixed while testing real sites and a feature fixture:
   the way out is an origin per proxied site (a subdomain of the proxy's),
   which needs the service worker, the cookie jar and the stores, one per
   origin today, shared between those origins.
-- WebRTC carries data channels, audio and VP8 video so far
-  (docs/webrtc-over-wisp.md sections 15 and 16): no other video codec,
-  simulcast or bandwidth estimate for video yet, comfort noise is not sent
-  (a peer's is played), a lost Opus packet's in-band FEC copy is not used, TURN over TCP or TLS and TCP candidates are
+- WebRTC carries data channels, audio and video so far
+  (docs/webrtc-over-wisp.md sections 15 and 16): no simulcast or bandwidth
+  estimate for video yet, comfort noise is not sent (a peer's is played), a
+  lost Opus packet's in-band FEC copy is not used, TURN over TCP or TLS and TCP candidates are
   not carried,
   `getStats()` has no media entries. A peer behind
   a restrictive NAT is reached only through a TURN server the page names.

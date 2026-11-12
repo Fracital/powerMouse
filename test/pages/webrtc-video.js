@@ -242,6 +242,29 @@
 			}
 			return { track: source.track.id, settings: source.track.getSettings() };
 		},
+		/**
+		 * Whether this browser sends and receives `mime` with its own
+		 * stack, and a page's WebCodecs encodes and decodes it (H.264 may
+		 * be missing from a Chrome build)
+		 */
+		async capable(name, mime, codec) {
+			const has = (list) =>
+				list.codecs.some((entry) => entry.mimeType === mime);
+			const config = {
+				codec,
+				width: 320,
+				height: 180,
+				bitrate: 300000,
+				latencyMode: 'realtime',
+				...(codec.startsWith('avc1.') ? { avc: { format: 'annexb' } } : {}),
+			};
+			return (
+				has(RTCRtpSender.getCapabilities('video')) &&
+				has(RTCRtpReceiver.getCapabilities('video')) &&
+				!!(await VideoEncoder.isConfigSupported(config)).supported &&
+				!!(await VideoDecoder.isConfigSupported({ codec })).supported
+			);
+		},
 		/** the codecs a transceiver lists first (the browser's own, `mime` first) */
 		prefer(name, at, mime) {
 			const { codecs } = RTCRtpReceiver.getCapabilities('video');

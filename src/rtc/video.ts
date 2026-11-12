@@ -103,14 +103,52 @@ function maxBitrate(pixels: number): number {
 	return 2500000;
 }
 
-/** WebCodecs' name for what a payload carries, or null for one it is not given */
+/**
+ * WebCodecs' name for what a payload carries, or null for one it is not
+ * given: VP8; VP9 of the profile the `a=fmtp` line names (Chrome offers 0
+ * and 2); H.264 of its `profile-level-id`, in Annex B (start codes, the
+ * parameter sets in band), which is what the stack packetizes; AV1 of its
+ * `profile` and `level-idx`, 8-bit at the main tier. Measured on Chrome
+ * 152 and 156: each of these encodes and decodes in software.
+ */
 export function videoCodec(payload: Payload): string | null {
+	const parameters = payload.parameters;
 	switch (payload.name.toUpperCase()) {
 		case 'VP8':
 			return 'vp8';
+		case 'VP9': {
+			const profile = Number(parameters['profile-id'] ?? 0);
+			if (profile === 0) return 'vp09.00.10.08';
+			if (profile === 2) return 'vp09.02.10.10';
+			return null;
+		}
+		case 'H264': {
+			const id = (parameters['profile-level-id'] ?? '42001f').toLowerCase();
+			return /^[0-9a-f]{6}$/.test(id) ? `avc1.${id}` : null;
+		}
+		case 'AV1': {
+			const profile = Number(parameters.profile ?? 0);
+			const level = Number(parameters['level-idx'] ?? 5);
+			if (profile > 2 || !(level >= 0 && level < 32)) return null;
+			return `av01.${profile}.${String(level).padStart(2, '0')}M.08`;
+		}
 		default:
 			return null;
 	}
+}
+
+/**
+ * Whether this side sends a payload: one it encodes, and for H.264 only
+ * in packetization mode 1, which is how the stack packetizes it (mode 0
+ * sends each NAL unit in a packet of its own, which an encoder that
+ * cannot bound its NAL units does not make)
+ */
+export function sendable(payload: Payload): boolean {
+	if (videoCodec(payload) === null) return false;
+	return (
+		payload.name.toUpperCase() !== 'H264' ||
+		payload.parameters['packetization-mode'] === '1'
+	);
 }
 
 /**
@@ -170,8 +208,7 @@ export class VideoSender {
 
 	/** the payload to send: the first the section negotiated that can be encoded here */
 	configure(payloads: Payload[]) {
-		const payload =
-			payloads.find((candidate) => videoCodec(candidate) !== null) ?? null;
+		const payload = payloads.find(sendable) ?? null;
 		if (JSON.stringify(payload) === JSON.stringify(this.#payload)) return;
 		this.#payload = payload;
 		this.#codec = payload && videoCodec(payload);
@@ -232,8 +269,10 @@ export class VideoSender {
 			frame.close();
 			return;
 		}
-		const width = frame.displayWidth;
-		const height = frame.displayHeight;
+		// H.264 is made of 2x2 blocks of colour: an odd size is cut down
+		const even = codec.startsWith('avc1.');
+		const width = even ? frame.displayWidth & ~1 : frame.displayWidth;
+		const height = even ? frame.displayHeight & ~1 : frame.displayHeight;
 		const made = `${codec}/${width}x${height}`;
 		if (!this.#encoder || this.#made !== made) {
 			this.#restart();
@@ -253,12 +292,20 @@ export class VideoSender {
 				frame.timestamp;
 		}
 		this.#readAt.set(frame.timestamp, now);
+		let input = frame;
 		try {
-			encoder.encode(frame, { keyFrame: this.#keyframe });
+			if (width !== frame.displayWidth || height !== frame.displayHeight)
+				input = new VideoFrame(frame, {
+					visibleRect: { x: 0, y: 0, width, height },
+					displayWidth: width,
+					displayHeight: height,
+				});
+			encoder.encode(input, { keyFrame: this.#keyframe });
 			this.#keyframe = false;
 		} catch (error) {
 			this.#restart();
 		} finally {
+			if (input !== frame) input.close();
 			frame.close();
 		}
 	}
@@ -283,6 +330,9 @@ export class VideoSender {
 				height,
 				bitrate: maxBitrate(width * height),
 				latencyMode: 'realtime',
+				...(codec.startsWith('avc1.')
+					? { avc: { format: 'annexb' as const } }
+					: {}),
 			});
 			this.#encoder = encoder;
 			this.#made = made;

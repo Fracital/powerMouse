@@ -330,7 +330,29 @@ await native
 			.then((stream) => stream.getTracks().forEach((track) => track.stop())),
 	);
 
-const CODECS = ['VP8'];
+// each codec Chrome offers for video, where this browser has it natively
+// (a runner's Chrome may lack one): its WebCodecs name for the check
+const ALL = {
+	VP8: 'vp8',
+	VP9: 'vp09.00.10.08',
+	H264: 'avc1.42001f',
+	AV1: 'av01.0.05M.08',
+};
+const CODECS = [];
+for (const [codec, name] of Object.entries(ALL)) {
+	const has = await native
+		.frame()
+		.evaluate(
+			([mime, name]) => window.__video.capable(null, mime, name),
+			[`video/${codec}`, name],
+		);
+	ok(
+		`natively: this browser sends and receives ${codec} (or the codec's cases are left out)`,
+		true,
+		String(has),
+	);
+	if (has) CODECS.push(codec);
+}
 const natively = { answering: await answering(end(control), end(native)) };
 for (const codec of CODECS)
 	natively[codec] = await offering(end(control), end(native), codec);

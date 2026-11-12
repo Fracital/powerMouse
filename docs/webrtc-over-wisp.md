@@ -1590,8 +1590,17 @@ and 156 headless on Linux: `VideoEncoder` and `VideoDecoder` have VP8,
 VP9, H.264 and AV1 in software (no hardware codec, no H.265), the payloads
 Chrome offers.
 
-Sending (`VideoSender`): VP8 for now, the first payload the section
-negotiated that this side encodes. Each picture of the track is encoded
+Sending (`VideoSender`): the first payload the section negotiated that
+this side encodes: VP8; VP9 of profile 0 or 2 (`vp09.00.10.08`,
+`vp09.02.10.10`); H.264 of the payload's `profile-level-id` in
+packetization mode 1 (`avc1.42001f` and the others, Annex B, the parameter
+sets with each keyframe; mode 0 sends each NAL unit in a packet of its own
+and an encoder that cannot bound its NAL units does not make those, so a
+mode 0 payload is passed over), with an odd side cut down by one, as
+H.264's encoders take only even sizes; AV1 of the payload's `profile` and
+`level-idx` (`av01.0.05M.08`). The stack packetizes each as str0m does
+(the VP8 and VP9 descriptors, FU-A and STAP-A, AV1's aggregation header)
+and the receiver decodes the same names (`videoCodec`). Each picture of the track is encoded
 while the section sends and the connection is up (`latencyMode:
 'realtime'`, at the most WebRTC sends a picture of its size: 600 kbit/s up
 to 320x240, 1.7 Mbit/s to 640x480, 2 Mbit/s to 960x540, 2.5 Mbit/s above),
@@ -1646,8 +1655,16 @@ sees are Chrome's within 6 of 255 and in the same color space.
 loaded `dist/rtcStack.js` by 512 (137); `rtc.wasm` by 251 for the color
 space (11 fewer with brotli); every document's bundle is as it was.
 
-Limits of video so far: VP8 only (a section that negotiated another codec
-first sends nothing); a fixed bitrate, not the estimate; no simulcast and
+The suite runs the offering scenario once for each of VP8, VP9, H.264
+and AV1, with the far end's answer listing it first, where this browser
+has it natively and in WebCodecs (Chrome 152 and 156 headless on Linux
+have all four in software); each arrives both ways at its size and in its
+colours, and Chrome's receiver reports the codec. `dist/rtcWorker.js`
+grew by 775 bytes more for them (301 with brotli).
+
+Limits of video so far: H.264 is not sent in packetization mode 0 and
+VP9 of profiles 1 and 3 not at all (Chrome offers neither to send); a
+fixed bitrate, not the estimate; no simulcast and
 no `setParameters` of a video encoding but `active`. The descriptions
 leave out Chrome's video RED, its rtx and ULPFEC (118, 119 and 120 in
 Chrome's numbering: the stack has no format for them; Chrome sends none
