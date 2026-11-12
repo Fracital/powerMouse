@@ -590,6 +590,70 @@ const copied = (record) =>
 	record.before.copies > 25 &&
 	record.sent.copies - record.before.copies >
 		(record.sent.frames - record.before.frames) / 2;
+/**
+ * Comfort noise from the page: it offers its tone, the far end answers
+ * listing `prefer` (PCMU or G.722) first (and CN, as Chrome does), the page's tone stops for
+ * 1.5 s and comes back. Chrome's sender sends comfort noise in a silence
+ * once its voice detector has heard enough of it; the far end's receiver
+ * notes every frame it gets.
+ */
+async function quietly(own, far, prefer) {
+	const record = { failure: null };
+	try {
+		await own.call('open');
+		await far.call('open');
+		await own.call('tone', 440);
+		const offer = await own.call('local', 'offer');
+		await far.call('remote', 'offer', offer.sdp, 0);
+		await far.call('prefer', 0, prefer);
+		await describe(far, own, 'answer');
+		await own.call('connected');
+		await far.call('connected');
+		await sleep(1000);
+		await far.call('heardFrames');
+		await own.call('level', 0, 0);
+		await sleep(1500);
+		await own.call('level', 0, 0.5);
+		await sleep(600);
+		record.frames = await far.call('heardFrames');
+		record.codecs = await far.call('codecs');
+		record.seen = await far.call('far');
+		record.owner = record.seen?.remote
+			? await sockets.owner(record.seen.remote.port)
+			: 'no pair';
+	} catch (error) {
+		record.failure = String(error).slice(0, 400);
+	}
+	await own.call('close').catch(() => {});
+	await far.call('close').catch(() => {});
+	return record;
+}
+/**
+ * The frames of `quietly` in runs: speech as its count, comfort noise as
+ * its packets ([time since the first of the run, bytes])
+ */
+function quietRuns(frames) {
+	const runs = [];
+	for (const [, time, bytes] of frames ?? []) {
+		const last = runs.at(-1);
+		if (bytes === undefined) {
+			if (typeof last === 'number') runs[runs.length - 1]++;
+			else runs.push(1);
+		} else if (Array.isArray(last)) last.push([time - last.start, bytes]);
+		else {
+			const run = [[0, bytes]];
+			run.start = time;
+			runs.push(run);
+		}
+	}
+	return runs;
+}
+/** a silence the far end heard as comfort noise packets every 100 ms */
+const noiseRun = (record) => {
+	const runs = quietRuns(record.frames);
+	const noise = runs.filter(Array.isArray);
+	return noise.length === 1 && runs.length === 3 ? noise[0] : null;
+};
 /** the telephone events of `heard` grouped by RTP time: each event's payloads */
 const events = (heard) => {
 	const out = new Map();
@@ -698,6 +762,22 @@ for (const key of ['tones', 'pcmuTones']) {
 		`natively (${key}): Chrome's receiver sees the tones as telephone events`,
 		!record.failure && events(record.heard).length === 3,
 		record.failure ?? JSON.stringify(record.heard),
+	);
+}
+natively.quietly = {};
+for (const prefer of ['audio/PCMU', 'audio/G722']) {
+	const record = await quietly(
+		end(control),
+		end(native, 'the far end'),
+		prefer,
+	);
+	natively.quietly[prefer] = record;
+	ok(
+		`natively: in the page's silence Chrome's sender sends comfort noise every 100 ms with ${prefer}, between its speech`,
+		!record.failure &&
+			noiseRun(record)?.length >= 10 &&
+			noiseRun(record).every(([time], i) => time === i * 800),
+		JSON.stringify([record.failure, quietRuns(record.frames)]),
 	);
 }
 natively.lossy = await lossy(end(control), end(native, 'the far end'));
@@ -980,6 +1060,30 @@ for (const proxied of pages) {
 				Object.keys(got.heard).length === 3 &&
 				heard(got),
 			JSON.stringify([got.failure, got.codecs, want.codecs, got.heard]),
+		);
+	}
+	// comfort noise in the page's silence
+	for (const prefer of ['audio/PCMU', 'audio/G722']) {
+		const got = await quietly(end(proxied), end(native, 'the far end'), prefer);
+		const control = natively.quietly[prefer];
+		const want = noiseRun(control);
+		const have = noiseRun(got);
+		ok(
+			`${label}: in the page's silence it sends Chrome's comfort noise with ${prefer}: the same packets, every 100 ms, from a socket of the wisp server`,
+			!!have &&
+				!!want &&
+				got.codecs?.['inbound-rtp'] === prefer &&
+				Math.abs(have.length - want.length) <= 1 &&
+				have.every(([time], i) => time === i * 800) &&
+				have.every(([, bytes]) => bytes === want[0][1]) &&
+				got.owner === 'server',
+			JSON.stringify([
+				got.failure,
+				got.codecs,
+				quietRuns(got.frames),
+				quietRuns(control.frames),
+				got.owner,
+			]),
 		);
 	}
 	// a tenth of the far end's packets lost on the way

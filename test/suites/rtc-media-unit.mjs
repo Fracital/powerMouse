@@ -522,9 +522,15 @@ globalThis.AudioEncoder = FakeEncoder;
 
 /**
  * What a sender makes of `inputs`, configured with `payloads`; with
- * `pause`, the track gives nothing for `ms` before input number `before`
+ * `pause`, the track gives nothing for `ms` before input number `before`;
+ * it is read for `wait` ms
  */
-async function send(inputs, payloads, pause = { before: Infinity, ms: 0 }) {
+async function send(
+	inputs,
+	payloads,
+	pause = { before: Infinity, ms: 0 },
+	wait = 50,
+) {
 	const frames = [];
 	const sender = new m.AudioSender(3, (frame, age) =>
 		frames.push({ ...frame, age }),
@@ -542,7 +548,7 @@ async function send(inputs, payloads, pause = { before: Infinity, ms: 0 }) {
 			},
 		}),
 	);
-	await sleep(50 + (pause.before < inputs.length ? pause.ms : 0));
+	await sleep(wait + (pause.before < inputs.length ? pause.ms : 0));
 	sender.close();
 	return frames;
 }
@@ -1164,6 +1170,114 @@ function tonePackets(ms, rate, step, { frames = 40, start = 1000 } = {}) {
 			stats.fecPacketsReceived === 5 &&
 			stats.fecPacketsDiscarded === 3,
 		`${seen.join()} ${JSON.stringify(stats)}`,
+	);
+}
+
+// --- comfort noise sent ---
+
+{
+	// What WebRTC's own AudioEncoderCng (C++, built from Chrome 152's and
+	// 156's revision, identical) makes of a signal at 8 and 16 kHz: per
+	// 20 ms packet 's' for speech, '' for nothing, or the SID's bytes
+	const reference = JSON.parse(
+		readFileSync(`${root}test/fixtures/rtc/cng-reference.json`, 'utf8'),
+	);
+	// the signal: a tone, digital silence, the tone, white noise, the
+	// tone, quieter noise (the reference's own generator, in its words)
+	const signal = (rate) => {
+		const out = new Int16Array(rate * 6);
+		let seed = 12345;
+		const tone = (n) =>
+			Math.round(8000 * Math.sin((2 * Math.PI * 440 * n) / rate));
+		for (let n = 0; n < out.length; n++) {
+			const t = n / rate;
+			if (t < 1 || (t >= 2.5 && t < 3) || (t >= 4.5 && t < 5)) out[n] = tone(n);
+			else if (t >= 3) {
+				seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+				const x = ((seed >>> 16) & 0xffff) - 32768;
+				out[n] = Math.round(x / (t < 4.5 ? 64 : 2048));
+			}
+		}
+		return out;
+	};
+	for (const [rate, payloads] of [
+		[8000, '0,PCMU,8000,1,|13,CN,8000,1,|126,telephone-event,8000,1,0-16'],
+		[16000, '9,G722,16000,1,|13,CN,8000,1,'],
+	]) {
+		const samples = signal(rate);
+		const inputs = [];
+		const block = rate / 100;
+		for (let at = 0; at + block <= samples.length; at += block) {
+			const data = new Float32Array(block);
+			for (let i = 0; i < block; i++) {
+				const x = samples[at + i];
+				// what Chrome takes back to x (its conversion truncates)
+				data[i] = x > 0 ? (x + 0.25) / 32767 : x / 32768;
+			}
+			inputs.push(
+				new FakeAudioData({
+					format: 'f32-planar',
+					sampleRate: rate,
+					numberOfFrames: block,
+					numberOfChannels: 1,
+					timestamp: (at / rate) * 1e6,
+					data,
+				}),
+			);
+		}
+		const frames = await send(
+			inputs,
+			m.parsePayloads(payloads),
+			undefined,
+			500,
+		);
+		const speech = frames.filter((frame) => frame.pt !== 13);
+		const first = speech[0].time / (rate === 16000 ? 2n : 1n);
+		const seen = new Array(reference[rate].length).fill('');
+		const flagsOk = [];
+		for (const frame of frames) {
+			const wire =
+				rate === 16000 && frame.pt !== 13 ? frame.time / 2n : frame.time;
+			const index = Number(wire - first) / 160;
+			if (frame.pt === 13) {
+				seen[index] = Buffer.from(frame.payload).toString('hex');
+				flagsOk.push(frame.flags === 0);
+			} else {
+				seen[index] = 's';
+				// the first speech after a passive packet is marked, and
+				// every packet of speech says a voice is speaking
+				flagsOk.push(
+					!!(frame.flags & records.FLAG_TALKSPURT) ===
+						(index === 0 || reference[rate][index - 1] !== 's') &&
+						!!(frame.flags & records.FLAG_VOICE),
+				);
+			}
+		}
+		const differ = seen.findIndex((value, i) => value !== reference[rate][i]);
+		ok(
+			`with ${rate === 8000 ? 'PCMU' : 'G.722'} and CN, each packet is speech, comfort noise or nothing as WebRTC's AudioEncoderCng makes it, byte for byte; noise packets unmarked and with no voice, the speech after them marked`,
+			differ === -1 && flagsOk.every(Boolean),
+			`packet ${differ}: ${seen[differ]} | ${reference[rate][differ]}; flags ${flagsOk.indexOf(false)}`,
+		);
+	}
+	// without CN, and with Opus, nothing changes
+	const quiet = Array.from(
+		{ length: 100 },
+		(_, i) =>
+			new FakeAudioData({
+				format: 'f32-planar',
+				sampleRate: 8000,
+				numberOfFrames: 80,
+				numberOfChannels: 1,
+				timestamp: i * 10000,
+				data: new Float32Array(80),
+			}),
+	);
+	const plain = await send(quiet, m.parsePayloads('0,PCMU,8000,1,'));
+	ok(
+		'without CN negotiated a silence goes out as speech, as Chrome sends it',
+		plain.length === 50 && plain.every((frame) => frame.pt === 0),
+		plain.map((frame) => frame.pt).join(),
 	);
 }
 

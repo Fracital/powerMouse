@@ -1470,13 +1470,54 @@ connection reads `new` again, where here the transport stays.
 
 ### Comfort noise
 
-Chrome's sender, with G.711 or G.722 and CN (13) in the peer's description,
-stops sending speech once its voice detector has heard 160 to 180 ms of
-silence and sends a comfort noise packet every 100 ms instead (RFC 3389:
-nine bytes, the level and eight reflection coefficients; digital silence is
-`5e7f7f7f7f7f7f7f7f`), and marks the first speech packet after it. With
-Opus it never does (`usedtx` leaves the silence out instead). The worker
-does not send comfort noise (below).
+Chrome's sender, with G.711 or G.722 and CN at 8000 Hz in the peer's
+description (Chrome offers CN/8000 only), wraps the speech encoder in
+WebRTC's AudioEncoderCng: for each 20 ms packet its voice detector (the
+GMM detector in `kVadNormal` mode, at the speech codec's rate: 8 kHz for
+G.711, 16 kHz for G.722) says speech or not. Speech is encoded as ever;
+after speech, the first packet that is not goes out as a comfort noise
+packet (RFC 3389: nine bytes, the level and eight reflection coefficients
+of an LPC analysis; digital silence is `5e7f7f7f7f7f7f7f7f`), then one
+every 100 ms from it and nothing in between. The detector's hangover
+keeps 7 or 8 packets of speech after a long sound stops (4 or 5 after a
+short burst), so the first comfort noise packet comes 150 to 180 ms in.
+Comfort noise packets are never marked, carry their packet's first
+sample's time and that packet's audio level with the voice bit clear
+(every packet of speech has it set, the silent ones of the hangover too);
+the speech after them is marked; the speech encoder is neither fed nor reset
+in between (G.722's state carries across the silence). White noise above
+about -65 dBFS is speech to the detector, below -70 it is comfort noise.
+With Opus Chrome never sends comfort noise (`usedtx` leaves the silence
+out instead). Measured on 152 and 156 with a werift peer logging every
+packet, from tones, silences and noises a page wrote sample for sample at
+the codec's rate (every speech packet byte for byte what its samples
+encode to).
+
+The worker does the same (`src/rtc/vad.ts`, `src/rtc/cng.ts`, and
+`AudioSender` asking them about each packet): WebRTC's voice detector,
+its comfort noise encoder and AudioEncoderCng's framing, ported from the
+WebRTC of Chrome 152 and 156 (the files are the same in both and at
+WebRTC's head) integer step for integer step. Against the C and C++ built
+from that source (gcc and clang), on digital silence, white noise from
+-90 to 0 dBFS, tones, chirps, synthetic speech, clipping and detectors
+started from random states, at 8 and 16 kHz, in frames of 10, 20 and 30
+ms and in all four modes, nothing differs: the detector's decisions and
+state (773,284 frames, and as many from random states), the comfort noise
+bytes (720,816 frames) and what each packet becomes (950,319 packets).
+Against Chrome itself, fed the exact samples of the measured runs, the
+port makes what Chrome sent in every one of 197,240 packets (76 runs of
+PCMU, PCMA and G.722 on both versions, packets of 10 to 40 ms, noises the
+detector learns for seconds before it calls them silence: speech, comfort
+noise or nothing, and every comfort noise byte). The 4 other runs had a
+DTMF event in a silence: a comfort noise packet due during the event is
+not sent and the 100 ms go on from it, as the worker does, the event's
+packets going in place of the frame. The samples reach the detector as
+Chrome's sender takes a track's floats into 16 bits (measured: times 32768
+below zero and 32767 above, toward zero). `rtc-media-unit` holds the sender
+to the C++ reference on a signal of tone, silence and noise at both rates,
+byte for byte, and `webrtc-media` has the page fall silent with PCMU and
+with G.722 and Chrome's own receiver get the same comfort noise packets,
+every 100 ms, as it gets from the browser's own connection.
 
 Chrome's receiver plays the noise a packet describes from the packet's time
 until speech comes again, whether the packet comes once or every 100 ms,
@@ -1497,12 +1538,12 @@ quiet noise, which Chrome's sender turns into comfort noise packets, and
 holds the level the page plays to the level the browser's own connection
 plays.
 
-Limits: the worker sends no comfort noise. With G.711 or G.722 and CN
-negotiated it goes on sending encoded silence, as Chrome does when CN is
-not negotiated; matching Chrome would take WebRTC's voice detector (its
-GMM detector in `kVadNormal` mode, with its hangover) and its comfort noise
-encoder (the level and an LPC analysis of order 8, every 100 ms), in the
-worker as G.722 is, and neither is there.
+Limits: the detector hears the samples the worker made for the codec
+(its own resampling, from a track at another rate), not the ones Chrome's
+resampler makes, so from such a track a decision near the threshold or a
+comfort noise byte can differ from Chrome's; and the G.711 and G.722
+encoders round a sample where Chrome truncates, one step apart now and
+then.
 
 Limits: audio only (video sections negotiate and their frames are
 dropped); in-band FEC of a hybrid Opus packet is decoded as wideband
@@ -1518,8 +1559,6 @@ packets with no header extension and the stack gives them the section's
 (the MID, the send time and the transport-wide sequence number), and a
 page's own `dispatchEvent` of a `tonechange`, as every event the stand-ins
 fire, is untrusted and runs no microtask checkpoint between listeners;
-the worker sends no comfort noise (Chrome does with G.711 and G.722
-when CN is negotiated: that takes WebRTC's voice detector and CN encoder);
 the far ends in the suite are Chrome's own stack, not werift or a TURN
 relayed proxied page. With codec preferences: once an answer has taken
 Opus without redundant audio the stack offers no RED again (str0m keeps a

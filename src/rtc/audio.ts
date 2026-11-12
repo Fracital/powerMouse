@@ -7,6 +7,7 @@
 // stack packetizes and depacketizes. What crosses to the stack is whole
 // encoded frames with their RTP time.
 import { ComfortNoise, parseNoise, type NoiseDescription } from './cn';
+import { CngFramer } from './cng';
 import { eventPayload, TONES, ToneSender } from './dtmf';
 import type { Payload } from './formats';
 import { Downsampler, g711Decode, g711Encode } from './g711';
@@ -170,6 +171,14 @@ export class AudioSender {
 	#g722: G722Encoder | null = null;
 	#fill = 0;
 	#made = 0;
+	/**
+	 * The comfort noise payload, with G.711 or G.722 when the section
+	 * negotiated CN at 8000 Hz (Chrome's condition), and what decides each
+	 * packet: speech, a comfort noise packet or nothing (src/rtc/cng.ts)
+	 */
+	#noise: Payload | null = null;
+	#framer: CngFramer | null = null;
+	#blocks = new Int16Array(G722_FRAME);
 	/** the telephone-event payload DTMF goes on, and the tones to play */
 	#event: Payload | null = null;
 	#tones = new ToneSender();
@@ -243,6 +252,13 @@ export class AudioSender {
 				['opus', 'g722', 'pcmu', 'pcma'].includes(candidate.name.toLowerCase()),
 			) ?? null;
 		this.#event = payload ? eventPayload(payloads) : null;
+		this.#noise =
+			payload && payload.name.toLowerCase() !== 'opus'
+				? (payloads.find(
+						(candidate) =>
+							candidate.name.toLowerCase() === 'cn' && candidate.clock === 8000,
+					) ?? null)
+				: null;
 		if (JSON.stringify(payload) === JSON.stringify(this.#payload)) return;
 		this.#payload = payload;
 		this.#restart();
@@ -310,6 +326,7 @@ export class AudioSender {
 		this.#placed = false;
 		this.#down = null;
 		this.#g722 = null;
+		this.#framer = null;
 		this.#fill = 0;
 		this.#made = 0;
 		this.#squares = 0;
@@ -488,27 +505,68 @@ export class AudioSender {
 			at += take;
 			if (this.#fill < frame) break;
 			this.#fill = 0;
-			this.#send(
-				payload.pt,
-				rate,
-				Math.round((this.#epoch * rate) / 1e6) + this.#made++ * frame,
-				frame,
-				this.#g722 ? g722Encode(this.#g722, pcm) : g711Encode(law, pcm),
-				// the packet's first sample was read 20 ms before its last
-				20 + ((narrow.length - at) * 1000) / rate,
-			);
+			const time =
+				Math.round((this.#epoch * rate) / 1e6) + this.#made++ * frame;
+			// the packet's first sample was read 20 ms before its last
+			const age = 20 + ((narrow.length - at) * 1000) / rate;
+			const decided = this.#decide(pcm, time, rate);
+			if (decided === 'speech')
+				this.#send(
+					payload.pt,
+					rate,
+					time,
+					frame,
+					this.#g722 ? g722Encode(this.#g722, pcm) : g711Encode(law, pcm),
+					age,
+				);
+			else this.#send(payload.pt, rate, time, frame, decided, age, true);
 		}
 		this.#fedUs += duration;
 		this.#fedAt = performance.now();
 	}
 
+	/**
+	 * With comfort noise negotiated, what a packet of G.711 or G.722 is,
+	 * as Chrome's AudioEncoderCng decides (WebRTC's voice detector in its
+	 * normal mode, over the packet's two blocks of 10 ms): 'speech', or
+	 * the comfort noise packet that goes in its place, or null for nothing
+	 */
+	#decide(
+		pcm: Float32Array,
+		time: number,
+		rate: number,
+	): 'speech' | Uint8Array | null {
+		if (!this.#noise) return 'speech';
+		this.#framer ??= new CngFramer(rate);
+		// the samples as Chrome takes a track's into its 16 bits (measured
+		// on 152 and 156: 32768 below zero, 32767 above, toward zero)
+		const blocks = this.#blocks.subarray(0, pcm.length);
+		for (let at = 0; at < pcm.length; at++) {
+			const value = pcm[at] < -1 ? -1 : pcm[at] > 1 ? 1 : pcm[at];
+			blocks[at] = Math.trunc(value * (value < 0 ? 32768 : 32767));
+		}
+		const half = pcm.length / 2;
+		this.#framer.push(blocks.subarray(0, half), time);
+		const packet = this.#framer.push(blocks.subarray(half), time + half);
+		return !packet || packet.speech ? 'speech' : packet.sid;
+	}
+
+	/**
+	 * A frame to the stack: encoded speech, or with `passive` a comfort
+	 * noise packet (`payload`) or nothing (null), which a passive packet
+	 * sends in place of the speech. Either way the frame's time passes
+	 * (a telephone event under way goes out in its place) and its level
+	 * is counted afresh, as Chrome's sender does with the empty frames of
+	 * a silence.
+	 */
 	#send(
 		pt: number,
 		rate: number,
 		time: number,
 		length: number,
-		payload: Uint8Array,
+		payload: Uint8Array | null,
 		age: number,
+		passive = false,
 	) {
 		const now = performance.now();
 		if (!this.#placed) {
@@ -546,19 +604,22 @@ export class AudioSender {
 		const level = levelOf(this.#squares, this.#count);
 		this.#squares = 0;
 		this.#count = 0;
-		let flags = level < 127 ? FLAG_VOICE : 0;
+		// with comfort noise the voice bit is the detector's: set on every
+		// packet of speech, its silent hangover too (measured)
+		let flags = level < 127 || this.#noise ? FLAG_VOICE : 0;
 		// the first frame of a run, or after frames the encoder left out
-		// (silence it did not send)
+		// (silence it did not send, comfort noise in its place)
 		if (this.#last !== time) flags |= FLAG_TALKSPURT;
-		this.#last = time + length;
+		if (!passive) this.#last = time + length;
+		// a payload of 8000 Hz on the wire's clock (G.722's is half the
+		// stack's count)
+		const wire =
+			this.#payload?.name.toLowerCase() === 'g722'
+				? Math.floor((at + this.#offset) / 2)
+				: at + this.#offset;
 		const event = this.#event;
 		if (event) {
-			// a tone under way goes out in place of the frame, stamped on the
-			// wire's clock (G.722's is half the stack's count)
-			const wire =
-				this.#payload?.name.toLowerCase() === 'g722'
-					? Math.floor((at + this.#offset) / 2)
-					: at + this.#offset;
+			// a tone under way goes out in place of the frame
 			const tones = this.#tones.frame(wire, event.clock, now);
 			if (tones) {
 				for (const tone of tones)
@@ -578,16 +639,20 @@ export class AudioSender {
 				return;
 			}
 		}
+		if (!payload) return;
 		this.stats.frames++;
 		this.stats.bytes += payload.length;
+		// Chrome's comfort noise packets are never marked and say no voice
+		// is speaking; the speech after them is marked
+		const noise = passive ? this.#noise : null;
 		this.#write(
 			{
 				media: this.media,
-				pt,
-				flags,
+				pt: noise ? noise.pt : pt,
+				flags: noise ? 0 : flags,
 				level,
 				orientation: ABSENT,
-				time: BigInt(at + this.#offset),
+				time: BigInt(noise ? wire : at + this.#offset),
 				rid: '',
 				payload,
 			},

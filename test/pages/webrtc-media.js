@@ -529,9 +529,12 @@
 				readable.pipeThrough(new TransformStream({
 					transform(frame, controller) {
 						const meta = frame.getMetadata();
-						if (meta.mimeType === 'audio/telephone-event')
+						if (meta.mimeType === 'audio/telephone-event' ||
+							meta.mimeType === 'audio/CN')
 							postMessage([meta.payloadType, meta.rtpTimestamp,
-								[...new Uint8Array(frame.data)]]);
+								[...new Uint8Array(frame.data)], meta.mimeType]);
+						else postMessage([meta.payloadType, meta.rtpTimestamp, null,
+							meta.mimeType]);
 						controller.enqueue(frame);
 					},
 				})).pipeTo(writable);
@@ -639,13 +642,29 @@
 		 * payload type, its RTP time less the first one's and its four bytes
 		 */
 		heardTones(name) {
-			const events = peer(name).events.splice(0);
+			const events = peer(name)
+				.events.splice(0)
+				.filter((event) => event[3] === 'audio/telephone-event');
 			const first = events[0]?.[1] ?? 0;
 			return events.map(([pt, time, bytes]) => [
 				pt,
 				(time - first) >>> 0,
 				bytes.join(' '),
 			]);
+		},
+		/**
+		 * The frames heard since the last call, in order: speech as its
+		 * payload type, a comfort noise frame as its payload type, its RTP
+		 * time less the first frame's and its bytes
+		 */
+		heardFrames(name) {
+			const events = peer(name).events.splice(0);
+			const first = events[0]?.[1] ?? 0;
+			return events.map(([pt, time, bytes, mime]) =>
+				mime === 'audio/CN'
+					? [pt, (time - first) >>> 0, bytes.join(' ')]
+					: [pt],
+			);
 		},
 		/**
 		 * The sender of transceiver `at` plays `tones`: what its

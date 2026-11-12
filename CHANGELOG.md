@@ -632,8 +632,14 @@ The first release after a four-year gap. Everything below is breaking.
   noise (RFC 3389): noise at the packet's level (2.6 dB below it, measured)
   and in its shape, until speech comes again, instead of silence; and a
   peer's DTMF events as their two tones at Chrome's levels in place of the
-  sound of their time. The worker does not send comfort noise yet, where
-  Chrome does with G.711 or G.722 (docs/webrtc-over-wisp.md section 16).
+  sound of their time (docs/webrtc-over-wisp.md section 16).
+- A proxied page sends comfort noise where Chrome does: with G.711 or G.722
+  and CN negotiated, WebRTC's voice detector, comfort noise encoder and
+  AudioEncoderCng framing, ported bit for bit (`src/rtc/vad.ts`,
+  `src/rtc/cng.ts`), decide each 20 ms packet, so after 150 to 180 ms of
+  silence a peer gets an RFC 3389 packet every 100 ms instead of encoded
+  silence, unmarked, and marked speech after it (docs/webrtc-over-wisp.md
+  section 16).
 - A proxied page's lost Opus packet is rebuilt from the FEC copy the next
   packet carries, as Chrome's receiver rebuilds it: `src/rtc/lbrr.ts`
   rewrites the copy as a packet WebCodecs decodes (bit for bit libopus's
