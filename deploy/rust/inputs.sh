@@ -37,7 +37,7 @@ grep -qx "$crate" <<< "$dirs" || { echo "cargo tree does not name rust/$crate" >
 
 echo files
 for dir in $dirs; do
-	for file in Cargo.toml abi.json wasm-target bindgen build.rs; do
+	for file in Cargo.toml abi.json wasm-target bindgen build.rs rustflags speed; do
 		if [[ -f "$dir/$file" ]]; then echo "$dir/$file"; fi
 	done
 	find "$dir/src" -type f | sort

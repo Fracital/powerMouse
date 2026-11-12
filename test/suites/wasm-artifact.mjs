@@ -121,11 +121,18 @@ if (artifacts.includes('core.wasm')) {
 	const bytes = readFileSync(`${root}dist/core.wasm`);
 	// what it costs (the rewriter, the scanner and the suffix lookup in one;
 	// the budget is the measurement and a margin, raised only by the change
-	// that needs it)
+	// that needs it). Raised from 640,000 / 230,000 when the core module
+	// moved to the speed build (rust/core-module/rustflags -Copt-level=3 and
+	// rust/core-module/speed: the standard library built without
+	// optimize_for_size and wasm-opt -O2 over the workspace -Oz), which
+	// rewrites about 40 percent faster for about 445,000 more bytes
+	// (75,000 brotli). The module is opt-in (src/config.ts rewriter) and
+	// fetched apart from the bundles, so this is a download of its own, not
+	// part of the inject bundle a frame carries (frame-cost).
 	const brotli = brotliCompressSync(bytes).length;
 	ok(
-		'the core is within its budget of 640,000 bytes, 230,000 brotli',
-		bytes.length <= 640_000 && brotli <= 230_000,
+		'the core is within its budget of 1,085,000 bytes, 302,000 brotli',
+		bytes.length <= 1_085_000 && brotli <= 302_000,
 		`${bytes.length} bytes, ${brotli} brotli`,
 	);
 	const module = await compileModule(bytes);

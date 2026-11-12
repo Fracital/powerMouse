@@ -1,5 +1,5 @@
 crate rust/core-module
-sources 14532f1ebe31
+sources 904d82bc67b4
 toolchain stomp-rust-toolchain:eda716cbc2c6
 RUST_IMAGE=rustlang/rust@sha256:dde6da7d1b5fa1ba0ebd311488ddc916f36311a2ce0038420ceba5ce76fdcc23
 RUST_NIGHTLY=2026-11-09
@@ -10,4 +10,4 @@ WASM_BINDGEN_SHA256=63d6a38deb65bd7023c02bdf382ab66b0d2c0241c8582fd3413b5a808b8a
 PSL_COMMIT=52b71b3c4576ff77450cc7ebcfc7f34a916af3f9
 PSL_DATE=2026-10-17
 PSL_SHA256=3d92f70d719426d7e82dc4aee181058d0ad570d2559f0ea3ece8e731a25e5f33
-built 2026-11-11
+built 2026-11-12
