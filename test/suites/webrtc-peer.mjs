@@ -1016,11 +1016,17 @@ for (const proxied of pages) {
 				await answering.call('opened', 'chat'),
 				await answering.call('opened', 'lossy'),
 			];
+			// 256 KiB both ways on the reliable channel: a message on one
+			// with no retransmissions is lost with any of its packets (natively
+			// too), and this one is some 200 of them
 			await carried(offering, answering, 'chat', [
 				{ bytes: 262144, seed: 21, as: 'ArrayBuffer' },
 			]);
-			await carried(answering, offering, 'lossy', [
+			await carried(answering, offering, 'chat', [
 				{ bytes: 262144, seed: 22, as: 'ArrayBuffer' },
+			]);
+			await carried(answering, offering, 'lossy', [
+				{ text: 'unordered, never sent again' },
 			]);
 		} catch (error) {
 			failure = String(error).slice(0, 300);
@@ -1035,9 +1041,11 @@ for (const proxied of pages) {
 				same(await answering.call('received', 'chat', 1), [
 					bytesOf(262144, 21),
 				]) &&
-				same(await offering.call('received', 'lossy', 1), [
+				same(await offering.call('received', 'chat', 1), [
 					bytesOf(262144, 22),
 				]) &&
+				(await offering.call('received', 'lossy', 1))[0]?.text ===
+					'unordered, never sent again' &&
 				seen.owner === 'server' &&
 				ownAddresses(answerRead, answered.sent.answerer).length === 0,
 			failure ??
