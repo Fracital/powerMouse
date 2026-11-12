@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>keyboard layout</title>
+	</head>
+	<body>
+		<p>navigator.keyboard.getLayoutMap(), as a page reads the keyboard</p>
+		<script>
+			// twitch (and its ad frames) read the keyboard layout at load. Chrome
+			// rejects getLayoutMap() outside the outermost main frame unless the
+			// keyboard-map permission policy is delegated; every proxied document
+			// is a frame, and an isolated deployment's frame is cross-origin, so
+			// the call would throw the SecurityError a top-level page never sees.
+			window.__keyboard = { done: false };
+			(async () => {
+				const out = { done: true, has: !!navigator.keyboard };
+				try {
+					if (navigator.keyboard && navigator.keyboard.getLayoutMap) {
+						const map = await navigator.keyboard.getLayoutMap();
+						out.resolved = true;
+						out.size = map.size;
+					} else {
+						out.resolved = 'no-api';
+					}
+				} catch (error) {
+					out.resolved = false;
+					out.error = String((error && error.name) || error);
+				}
+				window.__keyboard = out;
+			})();
+		</script>
+	</body>
+</html>

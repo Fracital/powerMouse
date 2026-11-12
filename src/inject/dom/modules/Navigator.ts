@@ -76,6 +76,35 @@ export default class NavigatorModule extends Module<DocumentClient> {
 					},
 				);
 
+		// navigator.keyboard.getLayoutMap() rejects with a SecurityError
+		// ("must be called from a top-level browsing context or allowed by the
+		// permission policy") in any document the browser does not see as the
+		// outermost main frame. Every proxied document is a frame of the host,
+		// so a page that reads the keyboard layout at the top level (twitch)
+		// hits it where it would not natively, and in an isolated deployment a
+		// cross-origin proxied subframe hits it for good. A proxied document
+		// believes it is top-level, so the call resolves as it would there:
+		// the real layout when the browser still gives it (a same-origin frame
+		// is allowed the feature), an empty map when it refuses, never the
+		// SecurityError the page never catches.
+		const Keyboard = (this.client.global as Record<string, any>).Keyboard;
+		const nativeGetLayoutMap = Keyboard?.prototype?.getLayoutMap;
+		if (typeof nativeGetLayoutMap === 'function') {
+			const Mapp = this.client.global.Map;
+			Keyboard.prototype.getLayoutMap = proxyModule.wrapFunction(
+				nativeGetLayoutMap,
+				async (target, that, args) => {
+					try {
+						return await Reflect.apply(target, that, args);
+					} catch (error) {
+						if ((error as { name?: string })?.name === 'SecurityError')
+							return new Mapp();
+						throw error;
+					}
+				},
+			);
+		}
+
 		if (this.client.global.Navigator.prototype.sendBeacon)
 			this.client.global.Navigator.prototype.sendBeacon =
 				proxyModule.wrapFunction(
