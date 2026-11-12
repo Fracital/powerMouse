@@ -302,14 +302,17 @@ export class Blocker {
 		return this.#building;
 	}
 	async #build(): Promise<void> {
-		let resources: string;
-		try {
-			resources = await this.#fetchText(this.#init.resources);
-			JSON.parse(resources);
-		} catch (error) {
-			this.lastError = `the resources could not be fetched: ${String(error)}`;
-			return;
-		}
+		// the resources (Brave's resources.json) are needed to load the engine,
+		// not to compile it, so fetch them alongside the lists (or the prebuilt
+		// engine) rather than before: their round trip then overlaps the list
+		// fetch and the compile instead of adding a serial fetch to every cold
+		// build. The list fetch failing must not leave this rejection unhandled
+		const resourcesPromise = (async () => {
+			const text = await this.#fetchText(this.#init.resources);
+			JSON.parse(text);
+			return text;
+		})();
+		resourcesPromise.catch(() => {});
 		let engine: Uint8Array<ArrayBuffer>;
 		if (this.#init.engine) {
 			try {
@@ -363,6 +366,13 @@ export class Blocker {
 				this.lastError = `the lists could not be compiled: ${String(error)}`;
 				return;
 			}
+		}
+		let resources: string;
+		try {
+			resources = await resourcesPromise;
+		} catch (error) {
+			this.lastError = `the resources could not be fetched: ${String(error)}`;
+			return;
 		}
 		// the engine is loaded into an instance of its own (the builder holds
 		// the lists' text and the build's garbage), stored, and serves
