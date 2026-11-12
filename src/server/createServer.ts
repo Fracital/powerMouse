@@ -4,6 +4,7 @@ import {
 } from '@mercuryworkshop/proxy-transports';
 import { IDBPDatabase, openDB } from 'idb';
 import type { AdblockInit } from '../blocker/types';
+import type GenericCodec from '../Codecs';
 import {
 	assetName,
 	Assets,
@@ -11,6 +12,7 @@ import {
 	ConfigCodec,
 	generateConfigCodecKey,
 	parseConfig,
+	validConfigCodecKey,
 } from '../config';
 import { parseRoutedURL } from '../routeURL';
 import StompURL from '../StompURL';
@@ -55,8 +57,12 @@ export interface StompServer {
 	setRules(rules: RequestRule[]): void;
 	/** the real URL of a routed one; the input when it is not routed */
 	realURL(routed: string): string;
-	/** the route kind and real URL of a routed one, or null */
-	routeOf(routed: string): { resource: string; url: string } | null;
+	/** the route kind and real URL of a routed one, and the codec its kind and URL are written in, or null */
+	routeOf(
+		routed: string,
+	): { resource: string; url: string; codec: GenericCodec } | null;
+	/** the codec of this controller's routes */
+	codec: GenericCodec;
 	/** the routed URL of a real one under a route kind (`binary`, `sw:<version>`) */
 	routeAs(kind: string, url: string): string;
 	/** the built-in blocker, unless the host turned it off (docs/adblock.md) */
@@ -223,7 +229,14 @@ export default async function createServer(
 	// an IndexedDB transaction commits during any other await, so nothing
 	// but the store may be awaited until tx.done
 	let newKey = false;
-	if (!(await store.get(`codecKey:${config.codec}`))) {
+	// (a key of the xor codec before docs/codec.md is none of today's: its
+	// routes showed most of the URL, and a new one is drawn in its place)
+	if (
+		!validConfigCodecKey(
+			config.codec,
+			await store.get(`codecKey:${config.codec}`),
+		)
+	) {
 		await store.put(
 			generateConfigCodecKey(config.codec),
 			`codecKey:${config.codec}`,
@@ -326,7 +339,7 @@ export default async function createServer(
 		!adblock?.byDefault,
 	);
 	if (blocker) registerBlocker(router, blocker);
-	registerStorage(router, stores.storage);
+	registerStorage(router, stores.storage, init.codec);
 	registerMediaLoads(router);
 	registerKeptLoads(router);
 	registerXhr(router);
@@ -343,6 +356,7 @@ export default async function createServer(
 		setRules,
 		hostReloaded,
 		realURL,
+		codec: init.codec,
 		routeOf: (routed) => {
 			try {
 				const { resource, url } = parseRoutedURL(
@@ -350,7 +364,7 @@ export default async function createServer(
 					init.codec,
 					`${location.origin}${init.directory}`,
 				);
-				return { resource, url: url.toString() };
+				return { resource, url: url.toString(), codec: init.codec };
 			} catch (error) {
 				return null;
 			}

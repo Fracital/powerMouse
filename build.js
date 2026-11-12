@@ -1,6 +1,6 @@
 import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { watch } from 'node:fs';
+import { readFileSync, watch } from 'node:fs';
 import {
 	appendFile,
 	copyFile,
@@ -55,6 +55,12 @@ const common = {
 		// what the rewriter library asset is asked for by: known once that
 		// file is built (see `bundles` below)
 		'process.env.STOMP_LIBRARY': '""',
+		// the codec module (rust/codec), carried in every bundle that seals a
+		// routed URL and compiled where it runs (src/wasm/codec.ts): 1.4 KB
+		// no realm can wait for a fetch of
+		'process.env.STOMP_CODEC_WASM': JSON.stringify(
+			readFileSync('assets/codec.wasm').toString('base64url'),
+		),
 	},
 };
 
@@ -185,10 +191,12 @@ const rewriterLib = {
 			async () => {
 				if (!worker)
 					return { contents: 'export default null;\n', loader: 'js' };
-				const { text, inputs } = await lightLibrary(
-					worker,
-					pluginBuild.initialOptions.define,
-				);
+				// the library seals its URLs in JavaScript, the same text: the
+				// bundle that carries it carries the codec module already
+				const { text, inputs } = await lightLibrary(worker, {
+					...pluginBuild.initialOptions.define,
+					'process.env.STOMP_CODEC_WASM': 'undefined',
+				});
 				return {
 					contents: `export default function rewriterLib(__stompRealm) {\n${text}\nreturn __stompLib.api;\n}\n`,
 					loader: 'js',
@@ -218,6 +226,8 @@ const rewriterLib = {
  */
 const rewriterLibrary = {
 	...common,
+	// (as the light library's: it seals its URLs in JavaScript)
+	define: { ...common.define, 'process.env.STOMP_CODEC_WASM': 'undefined' },
 	entryPoints: { rewriterLib: 'src/rewriterLibDocument.ts' },
 	format: 'iife',
 	globalName: '__stompLib',
@@ -234,7 +244,10 @@ const rewriterLibrary = {
 			setup(pluginBuild) {
 				pluginBuild.onEnd(async (result) => {
 					if (result.errors.length) return;
-					const { text } = await lightLibrary(false, common.define);
+					const { text } = await lightLibrary(false, {
+						...common.define,
+						'process.env.STOMP_CODEC_WASM': 'undefined',
+					});
 					await appendFile(
 						'dist/rewriterLib.js',
 						`\n${LIGHT_FACTORY}=function(__stompRealm){\n${text}\nreturn __stompLib.api;\n};\n`,

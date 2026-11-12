@@ -1,5 +1,6 @@
 import { escapeText } from 'entities';
 import type { AdblockPage } from './blocker/types';
+import type GenericCodec from './Codecs';
 import { Config } from './config';
 import { helperNames } from './helperNames';
 import type { Prewritten } from './prewrite';
@@ -128,7 +129,7 @@ export function routeHTML(
 
 	return routeURL(
 		`html${form ? ':form' : ''}${
-			nested ? `:nested:${encodeURIComponent(nested)}` : ''
+			nested ? `:nested:${resource.codec.encode(nested)}` : ''
 		}`,
 		resource,
 	);
@@ -137,13 +138,14 @@ export function routeHTML(
 /**
  * The top-level origin a routed document URL's kind names when it is a
  * nested document, else null. Works on any routed path (a request's own, or
- * its referrer's).
+ * its referrer's) of the controller whose codec is `codec`.
  */
 export function nestedTopOf(
 	pathname: string,
 	directory: string,
+	codec: GenericCodec,
 ): string | null {
-	const mark = nestedMarkOf(pathname, directory);
+	const mark = nestedMarkOf(pathname, directory, codec);
 	if (mark === null) return null;
 	try {
 		return new URL(mark).origin;
@@ -156,13 +158,18 @@ export function nestedTopOf(
  * A nested route kind's marker as routeHTML was given it (src/partition.ts
  * nestedMark: the top origin, and whether a frame above the document is of
  * another site), or null for any other kind. A route the worker makes for
- * the same document (a redirect, a form's) passes it on.
+ * the same document (a redirect, a form's) passes it on. The kind holds it
+ * as the codec writes a URL, so a nested document's address names its top
+ * no more than its own URL.
  */
-export function nestedMarkOfKind(kind: string): string | null {
+export function nestedMarkOfKind(
+	kind: string,
+	codec: GenericCodec,
+): string | null {
 	const match = /^html(?::form)?:nested:(.*)$/.exec(kind);
 	if (!match) return null;
 	try {
-		return decodeURIComponent(match[1]);
+		return codec.decode(match[1]) || null;
 	} catch (error) {
 		return null;
 	}
@@ -172,9 +179,13 @@ export function nestedMarkOfKind(kind: string): string | null {
 export function nestedMarkOf(
 	pathname: string,
 	directory: string,
+	codec: GenericCodec,
 ): string | null {
 	if (!pathname.startsWith(directory)) return null;
-	return nestedMarkOfKind(pathname.slice(directory.length).split('/')[0]);
+	return nestedMarkOfKind(
+		pathname.slice(directory.length).split('/')[0],
+		codec,
+	);
 }
 
 /** the shell's statement that hands the client its document's referrer (none without one) */

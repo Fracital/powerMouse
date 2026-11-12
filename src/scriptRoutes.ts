@@ -94,7 +94,7 @@ export function routeJS(
 
 	return routeURL(
 		type === 'worker' || type === 'workerModule'
-			? workerKind(type, partition)
+			? workerKind(type, partition, resource.codec)
 			: `js:${type}`,
 		resource,
 	);

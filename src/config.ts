@@ -75,6 +75,15 @@ export interface Config {
 	 * declines or has not reached yet
 	 */
 	rewriter?: 'wasm' | 'js';
+	/**
+	 * @internal `false` in the config of a document the service worker
+	 * serves under a blocking list's own policy (`$csp=`, docs/adblock.md):
+	 * its realm, and what it creates under that policy, compiles no codec
+	 * module (the policy may refuse it and would report the attempt to the
+	 * page) and seals its URLs in JavaScript, the same text
+	 * (src/wasm/codec.ts)
+	 */
+	codecModule?: false;
 	/** @internal ms an emulated service worker may take to say whether it answers a request (tests; default 5000, a start twice that, an answer six times) */
 	serviceWorkerTimeout?: number;
 	/** @internal ms every emulated service worker event waits before it reaches the pages (tests: the events trail the answers to the pages' calls) */
@@ -167,6 +176,16 @@ export function generateConfigCodecKey(codec: ConfigCodec): string {
 		default:
 			return GenericCodec.generateKey();
 	}
+}
+
+/**
+ * Whether `key` is a key the codec makes today. A stored xor key of the
+ * codec before docs/codec.md (three hex digits at the most) is not: the
+ * worker draws a new one, as for a first visit.
+ */
+export function validConfigCodecKey(codec: ConfigCodec, key: unknown): boolean {
+	if (typeof key !== 'string') return false;
+	return codec === 'xor' ? XORCodec.validKey(key) : true;
 }
 
 export function codecType(codec: GenericCodec): ConfigCodec {

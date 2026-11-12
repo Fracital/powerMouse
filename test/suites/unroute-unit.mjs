@@ -1,11 +1,12 @@
-// Routed URLs in error text read back as the page's own, checked in node
-// with a codec key pinned so a route's own text ends in `:digits` (the xor
-// codec's `:` is one of its characters): in a message (no line or column)
-// the route is read whole, in a frame (V8's `at` lines, Gecko's `@`) the
-// last two `:digits` are its line and column. Reading the route's own `:1`
-// as a column decoded the rest to another URL: `?ms=3009` came back as
-// `?ms=300:1`, now and then, with the random key a controller drew. Skips
-// when esbuild is not installed, as rewriter-unit does.
+// Routed URLs in error text read back as the page's own, checked in node:
+// in a message (no line or column) the route is read whole, in a frame
+// (V8's `at` lines, Gecko's `@`) the last two `:digits` are its line and
+// column. Under the codec before docs/codec.md a route's own text could end
+// in `:digits` (its `:` was one of the codec's characters), and reading
+// that as a column decoded the rest to another URL: `?ms=3009` came back as
+// `?ms=300:1`, now and then, with the random key a controller drew. The
+// sealed route has no `:`, checked here with many keys. Skips when esbuild
+// is not installed, as rewriter-unit does.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { done, ok, OUT } from '../lib.mjs';
@@ -48,9 +49,7 @@ const {
 	opaqueContext,
 } = await import(`${bundle}?${Date.now()}`);
 
-// xor 9, every character: '0' encodes to ':' and '9' to '1', so a URL
-// ending in 3009 ends its route in `::1`
-const codec = new XORCodec('91');
+const codec = new XORCodec('0123456789abcdef');
 const origin = 'http://127.0.0.1:8090';
 const client = {
 	isDOM: false,
@@ -62,11 +61,10 @@ const client = {
 };
 const page = 'https://example.com/pages/import404.js?ms=3009';
 const routed = `${origin}/stomp/abc/js:generic/${codec.encode(page)}`;
-ok(
-	"the pinned key makes the route's own text end in :digits",
-	/:\d+$/.test(routed),
-	routed.slice(-20),
-);
+let colons = 0;
+for (let n = 0; n < 2000; n++)
+	if (new XORCodec(XORCodec.generateKey()).encode(page).includes(':')) colons++;
+ok("no key puts a `:` in a route's own text", colons === 0, String(colons));
 for (const [name, text, expected] of [
 	[
 		'a message',

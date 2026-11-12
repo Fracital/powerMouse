@@ -245,14 +245,16 @@ export default class StorageModule extends Module<DocumentClient> {
 					if (entry.seq === seq) shadow.values.delete(item);
 				changed(directory, true);
 			};
+			// the origin and the key as the codec writes a URL: the request is
+			// the proxy's own, but its address names them no more than a route
 			const operation: Record<string, string> = {
 				sender,
 				seq: String(seq),
 				base: String(base),
 				name,
-				origin: getOrigin(),
+				origin: this.client.codec.encode(getOrigin()),
 			};
-			if (key !== null) operation.key = key;
+			if (key !== null) operation.key = this.client.codec.encode(key);
 			post(directory, operation, args).then(settle, (error) => {
 				console.error(`Stomp: a storage write could not be stored: ${error}`);
 				settle();

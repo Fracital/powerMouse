@@ -62,9 +62,14 @@ const nativeDocumentElement = Reflect.getOwnPropertyDescriptor(
 	'documentElement',
 )!.get!;
 
-/** the Content-Security-Policy that lets only the inject's own scripts (`nonce`) run */
+/**
+ * The Content-Security-Policy that lets only the inject's own scripts
+ * (`nonce`) run. They may compile a module (the codec's, src/wasm/codec.ts;
+ * a refused compile would be reported to the document): no other script
+ * runs to compile one.
+ */
 export function scriptPolicy(nonce: string): string {
-	return `script-src 'nonce-${nonce}'`;
+	return `script-src 'nonce-${nonce}' 'wasm-unsafe-eval'`;
 }
 
 // the nonce of each document whose policy is in place: a frame's about:blank

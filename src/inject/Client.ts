@@ -46,6 +46,7 @@ import RemoteTransport from '../transport/RemoteTransport';
 import { fragmentOf } from '../urlShape';
 import { BUILD } from '../version';
 import { LINK_SEGMENT } from '../visited';
+import { forbidCodecModule } from '../wasm/codec';
 import Module from './Module';
 import { rewriteCounts, rewriterLibraryAt } from './rewriter';
 
@@ -135,6 +136,8 @@ export default class Client {
 	serviceWorkers: boolean;
 	/** the wasm rewriters answer where this realm holds them (config.rewriter) */
 	wasmRewriter: boolean;
+	/** false under a policy that may refuse a module: what this client creates under it compiles none either (config.codecModule) */
+	codecModule: boolean;
 	/** the host's served file names (config.assets) */
 	assets?: Assets;
 	/** the built-in blocker is on (config.adblock): a document's inject applies the cosmetic rules it is handed */
@@ -387,6 +390,7 @@ export default class Client {
 		this.membrane = init.membrane !== false;
 		this.serviceWorkers = init.serviceWorkers !== false;
 		this.wasmRewriter = init.rewriter === 'wasm';
+		this.codecModule = init.codecModule !== false;
 		this.assets = init.assets;
 		// where a rewrite of this realm finds the rewriter library the
 		// bundle does not carry (rewriter.ts): beside the bundle itself
@@ -427,6 +431,7 @@ export default class Client {
 			...(this.membrane ? {} : { membrane: false }),
 			...(this.serviceWorkers ? {} : { serviceWorkers: false }),
 			...(this.wasmRewriter ? { rewriter: 'wasm' } : {}),
+			...(this.codecModule ? {} : { codecModule: false }),
 			...(this.assets ? { assets: this.assets } : {}),
 			...(this.blocking ? { adblock: true } : {}),
 			...(this.hostIsolated ? { isolated: true } : {}),
@@ -1072,6 +1077,9 @@ export function createClientFactory<T>(
 ) {
 	return function (config: Config, codecKey: string) {
 		delete globalThis.createClient;
+
+		// before the client reads its own address (src/wasm/codec.ts)
+		if (config.codecModule === false) forbidCodecModule();
 
 		const client = new Client(parseConfig(config, codecKey), globalThis);
 

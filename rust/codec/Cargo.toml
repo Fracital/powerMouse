@@ -1,0 +1,13 @@
+[package]
+name = "codec"
+version = "0.1.0"
+edition = "2024"
+description = "the xor codec of stomp's routed URLs, built to wasm (docs/codec.md)"
+license = "GPL-3.0-only"
+publish = false
+build = "build.rs"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]

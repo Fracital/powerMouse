@@ -25,6 +25,7 @@ import { HOOK_ERROR, OPEN_TAB, WORKER_BASE } from '../../transport/messages';
 import { queryOf } from '../../urlShape';
 import { BUILD } from '../../version';
 import { contextText, linkRoute, opaqueContext } from '../../visited';
+import { ownCodec, shareCodec, type CodecBackend } from '../../wasm/codec';
 import Client from '../Client';
 import {
 	getPublicSuffix,
@@ -318,6 +319,11 @@ export default class DocumentClient extends Client {
 			'parent',
 		)!;
 		this.topDescriptor = Reflect.getOwnPropertyDescriptor(this.global, 'top')!;
+		// A frame seals and opens its URLs in its top's codec instance, as it
+		// rewrites in its top's library: one module and one memory for a
+		// page however many frames it has (src/wasm/codec.ts). Taken by the
+		// bundle's first client, before it reads its own address.
+		shareCodec(() => this.#topCodec());
 		try {
 			this.topPostMessage = this.top.postMessage;
 		} catch (error) {
@@ -450,6 +456,39 @@ export default class DocumentClient extends Client {
 				}
 		}
 		return this.#topRewriter;
+	}
+	/**
+	 * This bundle's codec instance, for the frames under this document
+	 * when it is their top (null: it has none, they make their own).
+	 * @internal
+	 */
+	get sharedCodec(): CodecBackend | null {
+		return ownCodec();
+	}
+	/** the codec instance of this document's top, once looked up (null: none to share) */
+	#topCodecKnown: CodecBackend | null | undefined;
+	#topCodec(): CodecBackend | null {
+		if (this.#topCodecKnown === undefined) {
+			this.#topCodecKnown = null;
+			const top = this.#topClient();
+			if (top !== this)
+				try {
+					const codec = top.sharedCodec;
+					if (
+						typeof codec === 'object' &&
+						codec !== null &&
+						codec.build === BUILD
+					)
+						this.#topCodecKnown = codec;
+				} catch (error) {
+					// a top of another kind
+				}
+		}
+		return this.#topCodecKnown;
+	}
+	/** where this document's URLs are sealed: its top's instance, its own, or JavaScript (tests) */
+	get codecRuns(): 'top' | 'own' | 'js' {
+		return this.#topCodec() ? 'top' : ownCodec() ? 'own' : 'js';
 	}
 	#canvasTaints?: CanvasTaints;
 	#heldTaints?: CanvasTaints;
@@ -1008,7 +1047,11 @@ export default class DocumentClient extends Client {
 	 */
 	#ownEmbedder(): NestedEmbedder | null {
 		if (!this.hostIsolated) return null;
-		const mark = nestedMarkOf(this.baseURI.pathname, this.directory);
+		const mark = nestedMarkOf(
+			this.baseURI.pathname,
+			this.directory,
+			this.codec,
+		);
 		const parsed = mark === null ? null : parseNestedMark(mark);
 		if (parsed) return { ...parsed.embedder, later: true };
 		try {

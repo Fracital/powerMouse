@@ -1,4 +1,5 @@
 import { IDBPDatabase, openDB } from 'idb';
+import type GenericCodec from '../Codecs';
 import { encodeCookie } from '../encodeCookie';
 import { STORAGE_EVENT, StorageChange } from '../transport/messages';
 import Router, { json, jsonAPI } from './Router';
@@ -197,21 +198,26 @@ export default class Storage {
 	 * the answer to the one before was lost when the page unloaded first), so
 	 * they can arrive and be read in any order. Which operation it is comes in
 	 * its URL (the document's `sender`, the operation's `seq`, `base`, `name`,
-	 * `origin` and `key`) and its arguments in its body: every other call of
+	 * and `origin` and `key` as `codec` writes a URL) and its arguments in its
+	 * body: every other call of
 	 * the origin waits for it from the moment its request arrives, not from
 	 * when its body has been read, and one whose body never comes is known by
 	 * its key. `base` is the oldest the document has in flight: every one
 	 * before it landed, so a worker that started since waits for none of
 	 * those.
 	 */
-	async ordered(request: Request): Promise<Response> {
+	async ordered(request: Request, codec: GenericCodec): Promise<Response> {
 		const params = new URL(request.url).searchParams;
 		const sender = params.get('sender');
 		const seq = Number(params.get('seq'));
 		const base = Number(params.get('base'));
 		const name = params.get('name') ?? '';
-		const origin = params.get('origin');
-		const key = params.get('key');
+		const sealed = (name: string) => {
+			const value = params.get(name);
+			return value === null ? null : codec.decode(value);
+		};
+		const origin = sealed('origin') || null;
+		const key = sealed('key');
 		if (
 			sender === null ||
 			origin === null ||
@@ -469,7 +475,11 @@ export async function openStorage(): Promise<StorageHosts> {
 }
 
 /** the page-facing routes of a server, over the scope's stores */
-export function registerStorage(router: Router, hosts: StorageHosts) {
+export function registerStorage(
+	router: Router,
+	hosts: StorageHosts,
+	codec: GenericCodec,
+) {
 	const register: [name: string, host: Storage][] = [
 		['sessionStorage', hosts.sessionStorage],
 		['localStorage', hosts.localStorage],
@@ -492,7 +502,7 @@ export function registerStorage(router: Router, hosts: StorageHosts) {
 			router.routes.set(
 				new RegExp(`^\\/${name}\\/${api}$`),
 				api === 'ordered'
-					? (request) => host.ordered(request)
+					? (request) => host.ordered(request, codec)
 					: jsonAPI(async (origin: string, ...args: unknown[]) => {
 							await host.settled(origin);
 							return call.call(host, origin, ...args);

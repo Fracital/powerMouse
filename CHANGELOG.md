@@ -767,6 +767,21 @@ The first release after a four-year gap. Everything below is breaking.
   simulcast (a browser). The encodings read and are refused as Chrome's, and
   the offer names the layers with Chrome's `a=rid` and `a=simulcast` lines
   (docs/webrtc-over-wisp.md section 16).
+- The xor codec seals the whole URL (docs/codec.md): every byte of a
+  route's URL is XORed with a stream drawn from a 64-bit key and written in
+  URL-safe base64, where it XORed one character in four (none at all with
+  one key in fifteen) and left the rest as written. The route kinds that
+  named a site in clear (`html:nested:<origin>`, `js:worker:top:<site>`)
+  and the storage bridge's `origin` and `key` are sealed too, and a GET
+  form without an action lands at its sealed address instead of keeping
+  its fields after the route. The codec is a wasm
+  module (`rust/codec`, `codec.wasm`, 1,449 bytes) carried in each bundle
+  as text and compiled where it runs, a frame using its top's instance, with
+  a JavaScript fallback that writes the same text (`rust/host/codec.mjs`:
+  101,022 texts, no differences). Sealing a URL takes about 2.2 us where it
+  took 10 to 11. A stored key of the old codec is replaced, so a route
+  written before (an open page, a link kept from one) no longer opens. A
+  URL's fragment stays in clear.
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,

@@ -397,10 +397,13 @@ const show = (value) => JSON.stringify(value)?.slice(0, 400);
 	);
 	// the route of the sheet around it goes on answering after the sheet
 	// inside returned: the url() after the import resolves against the
-	// outer sheet's own URL
+	// outer sheet's own URL (read out of the route: it is sealed)
+	const codec = lib.parseConfig(config, 'k').codec;
 	ok(
 		"the outer sheet's route answers what follows the import",
-		/\/stomp\/binary\/[^)#"]*x[^)#"]*png/.test(output),
+		[...output.matchAll(/\/stomp\/binary\/([\w-]+)/g)].some(
+			([, sealed]) => codec.decode(sealed) === 'https://example.com/dir/x.png',
+		),
 		show(output),
 	);
 	// one data: stylesheet inside another, deeper than the thread goes:
@@ -435,7 +438,9 @@ const show = (value) => JSON.stringify(value)?.slice(0, 400);
 		{ ...config, rewriter: 'js' },
 		'genericModule',
 	);
-	const specifier = /import ['"]([^'"]+b[^'"]+js)['"]/;
+	// (the route after the data: module's: its URL is sealed, so the two
+	// are compared as routes)
+	const specifier = /import ['"](\/stomp\/[^'"]+)['"]/;
 	const inner = decodeURIComponent(
 		/from "data:text\/javascript,([^"]*)"/.exec(output)?.[1] ?? '',
 	);
