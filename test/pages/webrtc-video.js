@@ -28,13 +28,25 @@
 	 * another, with a small square moving across the middle so that every
 	 * picture differs from the last
 	 */
-	function picture({ width, height, left, right, fps }) {
+	function picture({ width, height, left, right, fps, noise }) {
 		const canvas = document.createElement('canvas');
 		canvas.width = width;
 		canvas.height = height;
 		const context = canvas.getContext('2d');
 		let count = 0;
+		const grain = context.createImageData(width, height);
+		const source = { noise: !!noise };
 		const draw = () => {
+			// noise: as many bits as an encoder is given
+			if (source.noise) {
+				for (let i = 0; i < grain.data.length; i += 4) {
+					const value = Math.random() * 255;
+					grain.data[i] = grain.data[i + 1] = grain.data[i + 2] = value;
+					grain.data[i + 3] = 255;
+				}
+				context.putImageData(grain, 0, 0);
+				return;
+			}
 			context.fillStyle = `rgb(${left})`;
 			context.fillRect(0, 0, width >> 1, height);
 			context.fillStyle = `rgb(${right})`;
@@ -50,7 +62,9 @@
 		};
 		draw();
 		const [track] = canvas.captureStream(fps).getVideoTracks();
-		return { track, timer: setInterval(draw, 1000 / fps) };
+		source.track = track;
+		source.timer = setInterval(draw, 1000 / fps);
+		return source;
 	}
 	/** a picture's mean colour over a rectangle, from a frame of the track */
 	function colours(frame) {
@@ -369,6 +383,102 @@
 			for (const worker of peer(name).sendTransforms.values())
 				out.push(await ask(worker, 'seen'));
 			return out;
+		},
+		/** the canvas `at` draws noise, or its colours */
+		noise(name, at, on) {
+			peer(name).sources[at].noise = on;
+		},
+		/**
+		 * setParameters on the sender of transceiver `at` with `changes` to
+		 * its encoding (a member given as null is taken out): what
+		 * getParameters lists then, or the refusal
+		 */
+		async encode(name, at, changes) {
+			const { sender } = transceiver(name, at);
+			try {
+				const parameters = sender.getParameters();
+				const [encoding] = parameters.encodings;
+				for (const [key, value] of Object.entries(changes))
+					if (value === null) delete encoding[key];
+					else encoding[key] = value;
+				await sender.setParameters(parameters);
+				return JSON.stringify(sender.getParameters().encodings);
+			} catch (error) {
+				return [error.name, error.message];
+			}
+		},
+		/** what a sender's encodings read as made each way, on a connection of its own */
+		made() {
+			const pc = new RTCPeerConnection();
+			const canvas = document.createElement('canvas');
+			canvas.getContext('2d');
+			const [track] = canvas.captureStream().getVideoTracks();
+			const read = (sender) => JSON.stringify(sender.getParameters().encodings);
+			const attempt = (run) => {
+				try {
+					return read(run().sender);
+				} catch (error) {
+					return [error.name, error.message];
+				}
+			};
+			const out = {
+				addTrack: read(pc.addTrack(track)),
+				kind: attempt(() => pc.addTransceiver('video')),
+				track: attempt(() => pc.addTransceiver(track.clone())),
+				given: attempt(() =>
+					pc.addTransceiver('video', {
+						sendEncodings: [
+							{
+								active: false,
+								maxBitrate: 5e5,
+								maxFramerate: 12,
+								scaleResolutionDownBy: 4,
+							},
+						],
+					}),
+				),
+				tiny: attempt(() =>
+					pc.addTransceiver('video', {
+						sendEncodings: [{ scaleResolutionDownBy: 0.5 }],
+					}),
+				),
+				sound: attempt(() =>
+					pc.addTransceiver('audio', {
+						sendEncodings: [{ scaleResolutionDownBy: 2, maxFramerate: 3 }],
+					}),
+				),
+			};
+			pc.close();
+			track.stop();
+			return out;
+		},
+		/**
+		 * What the receiver of transceiver `at` gets in `ms` (natively only:
+		 * the far end's view of the page): bits and pictures a second, and
+		 * the picture's size
+		 */
+		async rate(name, at, ms = 2000) {
+			const { receiver } = transceiver(name, at);
+			const read = async () => {
+				for (const report of (await receiver.getStats()).values())
+					if (report.type === 'inbound-rtp') return report;
+				return null;
+			};
+			const before = await read();
+			await wait(ms);
+			const after = await read();
+			if (!before || !after) return null;
+			return {
+				kbps: Math.round(
+					((after.bytesReceived - before.bytesReceived) * 8) / ms,
+				),
+				fps: +(
+					((after.framesDecoded - before.framesDecoded) * 1000) /
+					ms
+				).toFixed(1),
+				width: after.frameWidth,
+				height: after.frameHeight,
+			};
 		},
 		/** the receiver of transceiver `at` asks its peer for a keyframe (natively only) */
 		async askKeyframe(name, at) {

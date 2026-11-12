@@ -163,7 +163,17 @@ export type Request =
 			legacy: boolean;
 	  }
 	/** the sender's encoding, as setParameters left it: whether it sends at all */
-	| { seq: number; op: 'mediaEncoding'; handle: number; active: boolean }
+	| {
+			seq: number;
+			op: 'mediaEncoding';
+			handle: number;
+			active: boolean;
+			/** a video sender's limits (setParameters): bits a second and pictures a second, null for none */
+			maxBitrate?: number | null;
+			maxFramerate?: number | null;
+			/** what the picture's sides are divided by */
+			scale?: number;
+	  }
 	/** what the section sends: a MediaStreamTrackProcessor's readable (transferred), or null for no track */
 	| {
 			seq: number;

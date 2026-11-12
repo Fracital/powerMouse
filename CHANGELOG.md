@@ -751,6 +751,14 @@ The first release after a four-year gap. Everything below is breaking.
   holds a call with Chrome's own stack to what the browser's own
   connection reads and sees, in both demo modes (docs/webrtc-over-wisp.md
   section 16). Video sections used to negotiate and drop their frames.
+- A proxied page's video senders follow the connection's bandwidth
+  estimate, as Chrome's do (from 300 kbit/s, rising within seconds), and
+  keep to the page's `setParameters`: `maxBitrate`, `maxFramerate`,
+  `scaleResolutionDownBy` and `active`, read back and refused as Chrome
+  reads and refuses them (Chrome 152 and 156 differ on a `maxBitrate` of
+  0 and on the scale a new transceiver lists, and each version is matched).
+  The worker lets pictures go when the encoder runs ahead of its bitrate,
+  as Chrome's sender does (docs/webrtc-over-wisp.md section 16).
 - The project is written STomp in prose: the READMEs and docs, code comments,
   the package description, and the demo's page text (its error page, page
   description and version line). Machine-read names (the npm name, files,
@@ -5418,9 +5426,9 @@ Fixed while testing real sites and a feature fixture:
   which needs the service worker, the cookie jar and the stores, one per
   origin today, shared between those origins.
 - WebRTC carries data channels, audio and video so far
-  (docs/webrtc-over-wisp.md sections 15 and 16): no simulcast or bandwidth
-  estimate for video yet, comfort noise is not sent (a peer's is played), a
-  lost Opus packet's in-band FEC copy is not used, TURN over TCP or TLS and TCP candidates are
+  (docs/webrtc-over-wisp.md sections 15 and 16): no video simulcast yet,
+  comfort noise is not sent (a peer's is played), a lost Opus packet's
+  in-band FEC copy is not used, TURN over TCP or TLS and TCP candidates are
   not carried,
   `getStats()` has no media entries. A peer behind
   a restrictive NAT is reached only through a TURN server the page names.

@@ -1662,10 +1662,51 @@ have all four in software); each arrives both ways at its size and in its
 colours, and Chrome's receiver reports the codec. `dist/rtcWorker.js`
 grew by 775 bytes more for them (301 with brotli).
 
+Bitrate. The stack estimates what the path carries (str0m's send-side
+estimator from transport-wide feedback, started at WebRTC's 300 kbit/s,
+the `bwe` field), and each video sender that sends is given an equal share
+of the estimate after 40 kbit/s for each sound being sent; the encoder
+sends the least of that, its size's most (above) and the page's
+`maxBitrate`, at least 30 kbit/s, and the stack is told the least and the
+most they would send, for its probing (`bitrate`). A lower bitrate reaches
+the encoder at once, a higher one at most every 500 ms (a reconfigured
+`VideoEncoder` with only a new bitrate makes no keyframe, measured).
+WebCodecs' encoders do not keep to their bitrate on a picture that is
+hard to compress (noise at 320x180 came out at 1.2 Mbit/s for 600 kbit/s);
+Chrome's sender lets pictures go instead, and so does the worker: a
+picture is let go while what was sent runs more than a quarter of a
+second ahead of the bitrate.
+
+The page's limits (`setParameters`, or `sendEncodings` at
+`addTransceiver`): `maxBitrate`, `maxFramerate` (a picture that comes
+sooner after the last one sent is let go), `scaleResolutionDownBy` (the
+encoder is made for the smaller size and scales each picture to it; at
+least 16 a side, as WebRTC keeps) and `active`, each read back by
+`getParameters` with Chrome's members in Chrome's order and Chrome's
+conversions (`maxBitrate` an unsigned long held as an int: -5 reads
+2147483647, 100000.7 reads 100000; a picture's members only on a video
+sender), and refused as Chrome refuses them: a scale below 1 or a negative
+frame rate is a `RangeError` with Chrome's words, another number of
+encodings or a `rid` an `InvalidModificationError`. Measured on 152 and
+156: a frame rate of 0 sends nothing; a `maxBitrate` of 0 sends nothing on
+156 and has no limit on 152; 156 lists `scaleResolutionDownBy: 1` for a
+video transceiver the page added (not for `addTrack`'s), 152 never; a new
+frame rate or scale starts with a keyframe. The suite's `limits` scenario
+(the page sends noise, the far end receives) holds each to Chrome's: the
+rate rises from the estimate's start as Chrome's does (425 to 433 kbit/s
+in the first second against Chrome's 374, then 618 against 481, within
+half and one and a half times), at most 150 kbit/s it sends 137 (Chrome
+117), scaled by 2 the far end decodes 160x90, at most 5 pictures a second
+it sends 5.3, and at a frame rate of 0 or turned off nothing.
+`dist/rtcWorker.js` grew by 1982 bytes more (652 with brotli), the lazily
+loaded `dist/rtcStack.js` by 1418 (403).
+
 Limits of video so far: H.264 is not sent in packetization mode 0 and
-VP9 of profiles 1 and 3 not at all (Chrome offers neither to send); a
-fixed bitrate, not the estimate; no simulcast and
-no `setParameters` of a video encoding but `active`. The descriptions
+VP9 of profiles 1 and 3 not at all (Chrome offers neither to send); no
+simulcast; `scalabilityMode` and `degradationPreference` are not kept
+(Chrome sends temporal layers when asked; here a single layer goes out);
+the estimate is shared equally where Chrome weighs each stream's
+`priority`. The descriptions
 leave out Chrome's video RED, its rtx and ULPFEC (118, 119 and 120 in
 Chrome's numbering: the stack has no format for them; Chrome sends none
 of them by default, measured), and the header extensions are numbered as

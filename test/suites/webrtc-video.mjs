@@ -310,6 +310,57 @@ async function answering(own, far) {
 	return record;
 }
 
+/**
+ * The page sends noise (as many bits as it is given), the far end only
+ * receives; the page's sender is limited (setParameters) in bitrate,
+ * size and frame rate, turned off and on again, and refused what Chrome
+ * refuses
+ */
+async function limits(own, far) {
+	const record = { reads: {}, rates: {}, failure: null };
+	try {
+		await own.call('open');
+		await far.call('open');
+		record.made = await own.call('made');
+		await own.call('canvas', { ...OWN, noise: true });
+		await describe(own, far, 'offer');
+		await describe(far, own, 'answer');
+		await own.call('connected');
+		await far.call('connected');
+		await far.call('muted', 0, false);
+		// the estimate starts low and has risen within seconds, natively
+		record.rates.start = await far.call('rate', 0, 1000);
+		await sleep(2000);
+		record.rates.free = await far.call('rate', 0);
+		const step = async (name, changes, ms = 1500) => {
+			record.reads[name] = await own.call('encode', 0, changes);
+			await sleep(ms);
+			record.rates[name] = await far.call('rate', 0, 1500);
+		};
+		await step('capped', { maxBitrate: 150000 });
+		await own.call('noise', 0, false);
+		await step('halved', { maxBitrate: null, scaleResolutionDownBy: 2 });
+		await step('slow', { scaleResolutionDownBy: null, maxFramerate: 5 });
+		await step('still', { maxFramerate: 0 });
+		await step('off', { maxFramerate: null, active: false });
+		await step('on', { active: true });
+		for (const [name, changes] of Object.entries({
+			small: { scaleResolutionDownBy: 0.5 },
+			backwards: { maxFramerate: -1 },
+			rid: { rid: 'x' },
+			wrapped: { maxBitrate: -5 },
+			fraction: { maxBitrate: 100000.7, maxFramerate: 7.5 },
+			text: { scaleResolutionDownBy: '3' },
+		}))
+			record.reads[name] = await own.call('encode', 0, changes);
+	} catch (error) {
+		record.failure = String(error).slice(0, 400);
+	}
+	await own.call('close').catch(() => {});
+	await far.call('close').catch(() => {});
+	return record;
+}
+
 // --- pages ---
 
 const browser = await launch(FAKE);
@@ -356,16 +407,28 @@ for (const [codec, name] of Object.entries(ALL)) {
 const natively = { answering: await answering(end(control), end(native)) };
 for (const codec of CODECS)
 	natively[codec] = await offering(end(control), end(native), codec);
+natively.limits = await limits(end(control), end(native));
+ok(
+	'natively: limited, the sender sends what it is let send',
+	!natively.limits.failure &&
+		natively.limits.rates.capped?.kbps <= 200 &&
+		natively.limits.rates.halved?.width === OWN.width / 2 &&
+		natively.limits.rates.still?.fps === 0 &&
+		natively.limits.rates.off?.fps === 0 &&
+		natively.limits.rates.on?.fps > 2,
+	natively.limits.failure ?? JSON.stringify(natively.limits.rates),
+);
 for (const [name, record] of Object.entries(natively))
-	ok(
-		`natively: the ${name} scenario runs to its end, with pictures both ways`,
-		!record.failure &&
-			shows(record.ownSaw, FAR) &&
-			shows(record.farSaw, OWN) &&
-			(record.keyframes === undefined || record.keyframes === 1),
-		record.failure ??
-			JSON.stringify([record.ownSaw, record.farSaw, record.keyframes]),
-	);
+	if (name !== 'limits')
+		ok(
+			`natively: the ${name} scenario runs to its end, with pictures both ways`,
+			!record.failure &&
+				shows(record.ownSaw, FAR) &&
+				shows(record.farSaw, OWN) &&
+				(record.keyframes === undefined || record.keyframes === 1),
+			record.failure ??
+				JSON.stringify([record.ownSaw, record.farSaw, record.keyframes]),
+		);
 
 for (const proxied of pages) {
 	const { label } = proxied;
@@ -497,6 +560,61 @@ for (const proxied of pages) {
 			JSON.stringify(leaks),
 		);
 	}
+}
+
+for (const proxied of pages) {
+	const { label } = proxied;
+	const want = natively.limits;
+	const got = await limits(end(proxied), end(native, 'the far end'));
+	ok(
+		`${label}, limited: the scenario runs to its end`,
+		!got.failure,
+		got.failure ?? '',
+	);
+	const reads = [];
+	for (const [name, read] of Object.entries({ ...want.made, ...want.reads }))
+		if (
+			JSON.stringify((got.made?.[name] ?? got.reads[name]) || null) !==
+			JSON.stringify(read)
+		)
+			reads.push(
+				`${name}: ${JSON.stringify(got.made?.[name] ?? got.reads[name])} | natively ${JSON.stringify(read)}`,
+			);
+	ok(
+		`${label}, limited: the encodings a video sender is made with and set to read as natively, and what Chrome refuses is refused alike`,
+		!reads.length,
+		reads.slice(0, 4).join('; '),
+	);
+	const rates = got.rates;
+	const detail = JSON.stringify([rates, want.rates]);
+	ok(
+		`${label}, limited: the encoder follows the estimate up, as Chrome's sender does (within half and one and a half times its rate)`,
+		rates.free?.kbps >= want.rates.free?.kbps * 0.5 &&
+			rates.free?.kbps <= want.rates.free?.kbps * 1.5,
+		detail,
+	);
+	ok(
+		`${label}, limited: at most 150 kbit/s it sends no more (as natively)`,
+		rates.capped?.kbps <= 200 && rates.capped.kbps > 20,
+		detail,
+	);
+	ok(
+		`${label}, limited: scaled down by 2, Chrome receives the picture at half its size`,
+		rates.halved?.width === OWN.width / 2 &&
+			rates.halved.height === OWN.height / 2 &&
+			rates.halved.fps > 5,
+		detail,
+	);
+	ok(
+		`${label}, limited: at most 5 pictures a second, it sends no more`,
+		rates.slow?.fps <= 6 && rates.slow.fps >= 2 && want.rates.slow?.fps <= 6,
+		detail,
+	);
+	ok(
+		`${label}, limited: a frame rate of 0 or an encoding turned off sends nothing, turned on again it sends`,
+		rates.still?.fps === 0 && rates.off?.fps === 0 && rates.on?.fps > 2,
+		detail,
+	);
 }
 
 const errors = pages.flatMap((entry) => entry.page.errors);

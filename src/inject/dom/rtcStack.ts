@@ -151,6 +151,23 @@ export default class WebRTCStack {
 		const RealmDOMException = global.DOMException as typeof DOMException;
 		const RealmTypeError = global.TypeError as TypeErrorConstructor;
 		const RealmArray = global.Array as ArrayConstructor;
+		/**
+		 * The document's RangeError, which is not among the globals the
+		 * bundle takes (every document's bundle would grow by it): the
+		 * constructor of the error its own Array throws for a bad length
+		 */
+		const RealmRangeError = ((): RangeErrorConstructor => {
+			try {
+				Reflect.construct(RealmArray, [-1]);
+			} catch (error) {
+				const made = Reflect.getOwnPropertyDescriptor(
+					Reflect.getPrototypeOf(error as object) as object,
+					'constructor',
+				)?.value;
+				if (typeof made === 'function') return made as RangeErrorConstructor;
+			}
+			return RangeError;
+		})();
 		const addListener = captures.addListener;
 		const removeListener = captures.removeListener;
 		const RealmMessageEvent = global.MessageEvent as typeof MessageEvent;
@@ -1149,19 +1166,35 @@ export default class WebRTCStack {
 						),
 						'InvalidModificationError',
 					);
+				const encodings = isObject(given.encodings)
+					? (given.encodings as unknown as unknown[])
+					: null;
+				// as many encodings as there are, each with the rid it had
+				if (
+					encodings &&
+					(encodings.length !== 1 ||
+						(isObject(encodings[0]) && encodings[0].rid !== undefined))
+				)
+					return rejected(
+						onSender(
+							'setParameters',
+							'Read-only field modified in setParameters().',
+						),
+						'InvalidModificationError',
+					);
+				const encoding = encodings?.[0];
+				const refusal =
+					slot.kind === 'video' && isObject(encoding)
+						? badEncoding(encoding)
+						: null;
+				if (refusal)
+					return RealmPromise.reject(
+						new RealmRangeError(onSender('setParameters', refusal)),
+					);
 				slot.transaction = null;
-				const encoding = isObject(given.encodings)
-					? (given.encodings as Record<number, unknown>)[0]
-					: undefined;
 				if (isObject(encoding)) {
-					slot.encoding = encodingOf(encoding);
-					slot.pc
-						.call({
-							op: 'mediaEncoding',
-							handle: slot.handle,
-							active: slot.encoding.active !== false,
-						})
-						.catch(() => {});
+					slot.encoding = encodingOf(encoding, slot.kind === 'video');
+					sendEncoding(slot);
 				}
 				return RealmPromise.resolve(undefined);
 			}
@@ -1617,17 +1650,69 @@ export default class WebRTCStack {
 			}
 			return ids;
 		};
-		/** an encoding as getParameters lists one: the members in name order */
-		const encodingOf = (given: Record<string, unknown>) => {
+		/**
+		 * An encoding as getParameters lists one: the members in name
+		 * order, a picture's own (`maxFramerate`, `scaleResolutionDownBy`)
+		 * for a video sender only, as Chrome keeps them. `maxBitrate` is a
+		 * WebIDL unsigned long, which Chrome holds as an int.
+		 */
+		const encodingOf = (given: Record<string, unknown>, video = false) => {
 			const encoding: Record<string, unknown> = {
 				active: given.active !== false,
 				adaptivePtime: !!given.adaptivePtime,
 			};
-			if (given.maxBitrate !== undefined)
-				encoding.maxBitrate = Number(given.maxBitrate);
+			if (given.maxBitrate !== undefined) {
+				const number = Number(given.maxBitrate);
+				const whole = Number.isFinite(number)
+					? Math.trunc(number) -
+						2 ** 32 * Math.floor(Math.trunc(number) / 2 ** 32)
+					: 0;
+				encoding.maxBitrate = Math.min(whole, 2147483647);
+			}
+			if (video && given.maxFramerate !== undefined)
+				encoding.maxFramerate = Number(given.maxFramerate);
 			encoding.networkPriority = given.networkPriority ?? 'low';
 			encoding.priority = given.priority ?? 'low';
+			if (video && given.scaleResolutionDownBy !== undefined)
+				encoding.scaleResolutionDownBy = Number(given.scaleResolutionDownBy);
 			return encoding;
+		};
+		/** what Chrome refuses in a video encoding (a RangeError), or null */
+		const badEncoding = (given: Record<string, unknown>) => {
+			if (
+				given.scaleResolutionDownBy !== undefined &&
+				Number(given.scaleResolutionDownBy) < 1
+			)
+				return 'Attempted to set RtpParameters scale_resolution_down_by to an invalid value. scale_resolution_down_by must be >= 1.0';
+			if (given.maxFramerate !== undefined && Number(given.maxFramerate) < 0)
+				return 'Attempted to set RtpParameters max_framerate to an invalid value. max_framerate must be >= 0.0';
+			return null;
+		};
+		/**
+		 * The sender's encoding to the worker. A picture's encoding with a
+		 * frame rate of 0 sends nothing, and so does one with a bitrate of 0
+		 * in Chrome 156 (152 takes that for no limit), measured.
+		 */
+		const sendEncoding = (slot: MediaSlot) => {
+			const encoding = slot.encoding;
+			const video = slot.kind === 'video';
+			const bitrate = encoding.maxBitrate as number | undefined;
+			const rate = encoding.maxFramerate as number | undefined;
+			slot.pc
+				.call({
+					op: 'mediaEncoding',
+					handle: slot.handle,
+					active:
+						encoding.active !== false &&
+						!(video && rate === 0) &&
+						!(video && bitrate === 0 && !isLegacy()),
+					maxBitrate: bitrate ? bitrate : null,
+					maxFramerate: video && rate ? rate : null,
+					scale: video
+						? ((encoding.scaleResolutionDownBy as number | undefined) ?? 1)
+						: 1,
+				})
+				.catch(() => {});
 		};
 		/**
 		 * A transceiver. `added` is what the worker hears of one the page
@@ -3031,6 +3116,10 @@ export default class WebRTCStack {
 					if (isObject(init.sendEncodings))
 						encoding = (init.sendEncodings as unknown as unknown[])[0];
 				}
+				const refusal =
+					kind === 'video' && isObject(encoding) ? badEncoding(encoding) : null;
+				if (refusal)
+					throw new RealmRangeError(method('addTransceiver', refusal));
 				if (state.closed) throw closedState('addTransceiver');
 				const slot = makeSlot(
 					state,
@@ -3047,7 +3136,20 @@ export default class WebRTCStack {
 						byTrack: false,
 					},
 				);
-				if (isObject(encoding)) slot.encoding = encodingOf(encoding);
+				// Chrome 156 lists a picture's scale from the start for a
+				// transceiver the page added (not for addTrack's)
+				if (isObject(encoding) || (kind === 'video' && !isLegacy())) {
+					slot.encoding = encodingOf(
+						{
+							...(kind === 'video' && !isLegacy()
+								? { scaleResolutionDownBy: 1 }
+								: {}),
+							...(isObject(encoding) ? encoding : {}),
+						},
+						kind === 'video',
+					);
+					sendEncoding(slot);
+				}
 				if (track) sendTrack(slot).catch(() => {});
 				negotiate(state);
 				return slot.transceiver;

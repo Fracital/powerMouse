@@ -24,6 +24,20 @@ const DECODE_QUEUE = 8;
  */
 const KEYFRAME_WAIT_MS = 200;
 /**
+ * How far ahead of its bitrate an encoder may run before pictures are let
+ * go, in seconds of that bitrate. WebCodecs' encoders do not keep to a
+ * bitrate on a picture that is hard to compress (noise at 320x180 came
+ * out at twice its bitrate, measured); Chrome's sender lets pictures go
+ * instead (its frame dropper), and so does this.
+ */
+const DROP_WINDOW = 0.25;
+/** the least a picture's side is scaled down to (WebRTC's kMinLayerSize) */
+const MIN_SIDE = 16;
+/** how often the encoder's bitrate follows the estimate, at most, when it rises */
+const RETUNE_MS = 500;
+/** the least a sending picture is given (WebRTC's kDefaultMinVideoBitrateBps) */
+export const MIN_BITRATE = 30000;
+/**
  * The color-space RTP extension's numbers (ITU-T H.273) for WebCodecs'
  * names. Chrome's encoder says what it encoded in (156 encodes a canvas in
  * BT.709 at full range, 152 in BT.601 at limited range, measured), its
@@ -185,6 +199,22 @@ export class VideoSender {
 	#sent = false;
 	/** when each picture under way was read, by its timestamp: its age when it goes out */
 	#readAt = new Map<number, number>();
+	/** the page's limits (setParameters): bits and pictures a second, and the scale */
+	#maxBitrate: number | null = null;
+	#maxFramerate: number | null = null;
+	#scale = 1;
+	/** the share of the bandwidth estimate this sender is given, null before there is one */
+	#target: number | null = null;
+	/** what the encoder was configured with, and when its bitrate last changed */
+	#config: VideoEncoderConfig | null = null;
+	#tunedAt = 0;
+	/** the timestamp of the last picture encoded, for the frame rate's limit */
+	#lastTaken: number | null = null;
+	/** the size of the last picture read, as sent */
+	#pixels = 0;
+	/** bytes made beyond the bitrate, and when that was counted */
+	#debt = 0;
+	#debtAt = 0;
 	/** the color space the encoder last said it encoded in (the extension's bytes) */
 	#colour = 0;
 	stats: SenderStats = { frames: 0, bytes: 0 };
@@ -229,6 +259,70 @@ export class VideoSender {
 		this.#restart();
 	}
 
+	/**
+	 * The page's encoding (setParameters): a picture's sides divided by
+	 * `scale`, at most `maxFramerate` pictures and `maxBitrate` bits a
+	 * second. A new frame rate or scale starts with a keyframe, as Chrome's
+	 * encoder does (measured).
+	 */
+	setEncoding(
+		maxBitrate: number | null,
+		maxFramerate: number | null,
+		scale: number,
+	) {
+		const reshaped =
+			maxFramerate !== this.#maxFramerate || scale !== this.#scale;
+		this.#maxBitrate = maxBitrate;
+		this.#maxFramerate = maxFramerate;
+		this.#scale = scale >= 1 ? scale : 1;
+		if (reshaped) this.#keyframe = true;
+		this.#retune(true);
+	}
+
+	/** what this sender would send at most now, for the estimator */
+	get desired(): number {
+		const most = maxBitrate(this.#pixels || 640 * 480);
+		return this.#maxBitrate ? Math.min(most, this.#maxBitrate) : most;
+	}
+
+	/** whether it is sending now (pictures of a track, on a section that sends) */
+	get sending(): boolean {
+		return this.#active && !!this.#codec && !!this.#reader;
+	}
+
+	/** its share of the bandwidth estimate, in bits a second */
+	setTarget(bps: number) {
+		this.#target = bps;
+		this.#retune(false);
+	}
+
+	/** the bitrate the encoder is given: the least of its size's most, the page's limit and the estimate's share */
+	#bitrate(pixels: number): number {
+		let bps = maxBitrate(pixels);
+		if (this.#maxBitrate) bps = Math.min(bps, this.#maxBitrate);
+		if (this.#target !== null) bps = Math.min(bps, this.#target);
+		return Math.max(MIN_BITRATE, Math.round(bps));
+	}
+
+	/** the encoder follows a new bitrate: at once when it falls or the page asked, otherwise now and then */
+	#retune(now: boolean) {
+		const encoder = this.#encoder;
+		const config = this.#config;
+		if (!encoder || !config || encoder.state !== 'configured') return;
+		const bitrate = this.#bitrate(config.width * config.height);
+		const old = config.bitrate ?? bitrate;
+		if (Math.abs(bitrate - old) < old * 0.05) return;
+		const at = performance.now();
+		if (!now && bitrate > old && at - this.#tunedAt < RETUNE_MS) return;
+		this.#tunedAt = at;
+		this.#config = { ...config, bitrate };
+		try {
+			encoder.configure(this.#config);
+		} catch (error) {
+			this.#restart();
+		}
+	}
+
 	/** the peer asked for a keyframe (PLI or FIR): the next picture is one */
 	keyframe() {
 		this.#keyframe = true;
@@ -258,8 +352,10 @@ export class VideoSender {
 		this.#encoder = null;
 		this.#made = '';
 		if (encoder && encoder.state !== 'closed') encoder.close();
+		this.#config = null;
 		this.#keyframe = true;
 		this.#shift = null;
+		this.#lastTaken = null;
 		this.#readAt.clear();
 	}
 
@@ -269,14 +365,37 @@ export class VideoSender {
 			frame.close();
 			return;
 		}
+		// a frame rate's limit: a picture that comes too soon after the
+		// last one encoded is let go
+		const rate = this.#maxFramerate;
+		if (
+			rate &&
+			this.#lastTaken !== null &&
+			frame.timestamp - this.#lastTaken < (1e6 / rate) * 0.95
+		) {
+			frame.close();
+			return;
+		}
 		// H.264 is made of 2x2 blocks of colour: an odd size is cut down
 		const even = codec.startsWith('avc1.');
 		const width = even ? frame.displayWidth & ~1 : frame.displayWidth;
 		const height = even ? frame.displayHeight & ~1 : frame.displayHeight;
-		const made = `${codec}/${width}x${height}`;
+		// what goes out: the sides divided by the scale (the encoder scales
+		// the picture to the size it was made for)
+		const scaled = (side: number) => {
+			const out = Math.max(
+				Math.min(side, MIN_SIDE),
+				Math.floor(side / this.#scale),
+			);
+			return even ? out & ~1 : out;
+		};
+		const outWidth = scaled(width);
+		const outHeight = scaled(height);
+		this.#pixels = outWidth * outHeight;
+		const made = `${codec}/${width}x${height}/${outWidth}x${outHeight}`;
 		if (!this.#encoder || this.#made !== made) {
 			this.#restart();
-			this.#start(codec, width, height, made);
+			this.#start(codec, outWidth, outHeight, made);
 		}
 		const encoder = this.#encoder;
 		// a picture the encoder cannot take now is let go: the next one is
@@ -286,6 +405,19 @@ export class VideoSender {
 			return;
 		}
 		const now = performance.now();
+		// and so is one while what was made runs ahead of the bitrate
+		const bitrate = this.#config?.bitrate ?? 0;
+		if (bitrate) {
+			this.#debt = Math.max(
+				0,
+				this.#debt - ((now - this.#debtAt) * bitrate) / 8000,
+			);
+			this.#debtAt = now;
+			if (this.#debt > (bitrate / 8) * DROP_WINDOW && !this.#keyframe) {
+				frame.close();
+				return;
+			}
+		}
 		if (this.#shift === null) {
 			this.#shift =
 				(this.#sent ? this.#sentUs + (now - this.#sentAt) * 1000 : 0) -
@@ -302,6 +434,7 @@ export class VideoSender {
 				});
 			encoder.encode(input, { keyFrame: this.#keyframe });
 			this.#keyframe = false;
+			this.#lastTaken = frame.timestamp;
 		} catch (error) {
 			this.#restart();
 		} finally {
@@ -324,16 +457,19 @@ export class VideoSender {
 					if (this.#encoder === encoder) this.#restart();
 				},
 			});
-			encoder.configure({
+			const config: VideoEncoderConfig = {
 				codec,
 				width,
 				height,
-				bitrate: maxBitrate(width * height),
+				bitrate: this.#bitrate(width * height),
 				latencyMode: 'realtime',
 				...(codec.startsWith('avc1.')
 					? { avc: { format: 'annexb' as const } }
 					: {}),
-			});
+			};
+			encoder.configure(config);
+			this.#config = config;
+			this.#tunedAt = performance.now();
 			this.#encoder = encoder;
 			this.#made = made;
 		} catch (error) {
@@ -349,6 +485,7 @@ export class VideoSender {
 		const bytes = new Uint8Array(chunk.byteLength);
 		chunk.copyTo(bytes);
 		const now = performance.now();
+		this.#debt += bytes.length;
 		const us = chunk.timestamp + this.#shift;
 		this.#sent = true;
 		this.#sentUs = us;

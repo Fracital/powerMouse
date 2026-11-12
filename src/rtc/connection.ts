@@ -76,7 +76,7 @@ import {
 	STUN_SCHEDULE_MS,
 } from './stun';
 import { TurnAllocation } from './turn';
-import { VideoReceiver, VideoSender } from './video';
+import { MIN_BITRATE, VideoReceiver, VideoSender } from './video';
 import { wasiImports } from './wasi';
 
 /** what opens a wisp stream: the document's transport (StreamTransport.stream) */
@@ -422,6 +422,11 @@ function relayPriority(server: Server, servers: Server[]): string {
 /** how long a TCP or TLS connection to a TURN server may take to come up (Chrome: 30 s for TLS, measured) */
 const CONNECT_MS = 30000;
 
+/** the estimate a connection starts from (WebRTC's kDefaultStartBitrateBps) */
+const START_BITRATE = 300000;
+/** what a sound being sent is taken to need of the estimate */
+const AUDIO_SHARE = 40000;
+
 /** how long a remote whose stream was refused or lost is left alone */
 const REFUSED_MS = 10000;
 
@@ -497,6 +502,10 @@ export class Connection {
 	#iceState: RTCIceConnectionState = 'new';
 	#connectionState: RTCPeerConnectionState = 'new';
 	#connected = false;
+	/** the stack's bandwidth estimate, and what it was last told the encoders want */
+	#estimate = START_BITRATE;
+	#told = '';
+	#allocating = false;
 	#closed = false;
 	/** the stack is gone too (a moment after the close: see close()) */
 	#ended = false;
@@ -560,6 +569,9 @@ export class Connection {
 			...(config.iceTransportPolicy === 'relay' ? {} : { local: this.#local }),
 			cert: hex(certificate.certificate),
 			key: hex(certificate.privateKey),
+			// send-side bandwidth estimation from Chrome's start bitrate,
+			// which the video encoders follow
+			bwe: START_BITRATE,
 		};
 		// with the browser's own codecs and header extensions; a list the
 		// stack cannot read leaves it with its own
@@ -848,6 +860,52 @@ export class Connection {
 		return stats;
 	}
 
+	/**
+	 * The estimate shared by the video senders that send, after what the
+	 * sound takes, and what they want told to the estimator (the least they
+	 * send and the most, for its probing). Run after the stack's records
+	 * are read: it makes control calls.
+	 */
+	#share() {
+		if (this.#allocating) return;
+		this.#allocating = true;
+		queueMicrotask(() => {
+			this.#allocating = false;
+			if (this.#closed || this.#ended) return;
+			const videos: VideoSender[] = [];
+			let sounds = 0;
+			for (const state of this.#medias.values()) {
+				const sender = state.sender;
+				if (sender instanceof VideoSender) {
+					if (sender.sending) videos.push(sender);
+				} else if (
+					sender &&
+					!state.paused &&
+					!state.stopped &&
+					state.direction !== null &&
+					sends(state.direction)
+				)
+					sounds++;
+			}
+			const share =
+				(this.#estimate - sounds * AUDIO_SHARE) / Math.max(1, videos.length);
+			for (const sender of videos) sender.setTarget(share);
+			const desired = videos.reduce((sum, sender) => sum + sender.desired, 0);
+			const told = videos.length
+				? `${videos.length * MIN_BITRATE}/${desired}`
+				: '';
+			if (told === this.#told) return;
+			this.#told = told;
+			if (videos.length)
+				this.#control({
+					op: 'bitrate',
+					min: videos.length * MIN_BITRATE,
+					desired: desired + sounds * AUDIO_SHARE,
+				});
+			else this.#control({ op: 'bitrate', min: 0, desired: 0 });
+		});
+	}
+
 	/** a section sends when its direction says so and the connection is up */
 	#activate(state: MediaState) {
 		state.sender?.setActive(
@@ -861,6 +919,7 @@ export class Connection {
 		// what is heard after a section stopped receiving is a new start
 		if (state.direction !== null && !receives(state.direction))
 			state.receiver?.rearm();
+		if (state.kind === 'video') this.#share();
 	}
 
 	/** the sections as they are, for the page's transceivers; `remote` is the peer's description */
@@ -1250,6 +1309,11 @@ export class Connection {
 			}
 			case 'media_changed':
 				this.#stale.add(Number(fields.index));
+				break;
+			// what the connection can send now: the video senders share it
+			case 'bitrate':
+				this.#estimate = Number(fields.bps) || this.#estimate;
+				this.#share();
 				break;
 			// the peer lost a picture (a PLI or a FIR): the next is a keyframe
 			case 'keyframe': {
@@ -2149,6 +2213,12 @@ export class Connection {
 					const state = this.#handles.get(request.handle);
 					if (!state) throw 'no such media section';
 					state.paused = !request.active;
+					if (state.sender instanceof VideoSender)
+						state.sender.setEncoding(
+							request.maxBitrate ?? null,
+							request.maxFramerate ?? null,
+							request.scale ?? 1,
+						);
 					this.#activate(state);
 					reply(null);
 					break;
@@ -2157,11 +2227,12 @@ export class Connection {
 					const state = this.#handles.get(request.handle);
 					if (!state) throw 'no such media section';
 					const { sender } = state;
-					if (sender instanceof VideoSender)
+					if (sender instanceof VideoSender) {
 						sender.setTrack(
 							request.readable as ReadableStream<VideoFrame> | null,
 						);
-					else
+						this.#share();
+					} else
 						sender?.setTrack(
 							request.readable as ReadableStream<AudioData> | null,
 						);
