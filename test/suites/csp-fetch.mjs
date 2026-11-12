@@ -48,6 +48,25 @@ const CASES = {
 			'worker-data',
 		],
 	},
+	// the full kits4beats/Cloudflare shape: the turnstile policy AND a
+	// Permissions-Policy of sync-xhr=(). A proxied fetch('data:,')/blob: the
+	// connect-src refuses must be refused by the browser's connect-src exactly
+	// as natively, never routed through the sync bridge (which the proxy
+	// origin's sync-xhr=() would then refuse as a "disabled by permissions
+	// policy" error instead); src/inject/dom/Client.ts connectRefusal fetches
+	// a local-scheme URL as written, asynchronously.
+	'turnstile-pp': {
+		p: "default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src blob:; style-src 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-src 'self' blob:; child-src 'self' blob:",
+		pp: 'sync-xhr=()',
+		probes: [
+			'fetch-data',
+			'fetch-blob',
+			'fetch-self',
+			'xhr-sync-data',
+			'img-data',
+			'img-self',
+		],
+	},
 	none: {
 		p: "default-src 'none'; script-src 'self' 'unsafe-inline'",
 		probes: [
@@ -153,5 +172,16 @@ ok(
 				event.effectiveDirective === 'connect-src',
 		),
 	JSON.stringify(native.turnstile?.results),
+);
+ok(
+	"natively, a data: fetch is refused by connect-src under both the CSP and sync-xhr=()",
+	native['turnstile-pp']?.results['fetch-data'] ===
+		'TypeError: Failed to fetch' &&
+		native['turnstile-pp'].events.some(
+			(event) =>
+				event.blockedURI === 'data' &&
+				event.effectiveDirective === 'connect-src',
+		),
+	JSON.stringify(native['turnstile-pp']?.results),
 );
 await done(browser);
