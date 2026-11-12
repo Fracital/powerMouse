@@ -35,7 +35,10 @@ import {
 } from '../../modules/Unroute';
 import { modifyCSS, modifyJS } from '../../rewriter';
 import { blobLoads, opaqueCopies } from '../blobLoads';
-import DocumentClient, { type StyleElement } from '../Client';
+import DocumentClient, {
+	addDocumentOpenListener,
+	type StyleElement,
+} from '../Client';
 import { inertDocumentOf } from '../cloneNode';
 import { ELEMENT_STYLE_INTERFACES } from '../cssRules';
 import { forgetDestination, frameWindow } from '../freshContext';
@@ -286,6 +289,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					return true;
 				},
 				`${new URL(scopePrefix(this.client)).origin}${this.client.directory}${SEALER_ROUTE}`,
+				{
+					worker: this.client.browserRefuses('worker-src', 'blob:'),
+					fetch: this.client.browserRefuses('connect-src', 'blob:'),
+				},
 			);
 			if (dead !== null) {
 				if (state.sound !== false) state.sound = primed;
@@ -1421,17 +1428,18 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					shouldRewriteScript(element)
 				) {
 					element.setAttributeOG('src', element.getAttribute('src')!);
+					const url = new URL(
+						element.getAttribute('src')!,
+						this.client.baseURL.toString(),
+					);
+					// let through by its host or its integrity where the page's
+					// policy says so and the browser's copy would not (src/csp.ts)
+					this.client.giveCodeNonce(element, url, null, false);
 					placeLoad(
 						element,
 						'src',
 						routeJS(
-							new StompURL(
-								new URL(
-									element.getAttribute('src')!,
-									this.client.baseURL.toString(),
-								),
-								this.client.baseURL,
-							),
+							new StompURL(url, this.client.baseURL),
 							this.client.baseURL,
 							this.client.config,
 							scriptType(element),
@@ -1595,6 +1603,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			return undefined;
 		};
 
+		const contentWindowOf = Reflect.getOwnPropertyDescriptor(
+			this.client.global.HTMLIFrameElement.prototype,
+			'contentWindow',
+		)!.get!;
 		domHooksModule.useAttributes(
 			(element) => {
 				element.restoreAttributesOG('src');
@@ -1618,6 +1630,19 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.removeAttribute('src');
 						return;
 					}
+					// the page's frame-src (src/csp.ts): a frame its policy
+					// refuses is sent where the browser's copy of the policy
+					// refuses it, and the browser refuses and reports it as natively
+					const refused = this.client.loadRefusal(
+						'frame-src',
+						resource.url,
+						true,
+					);
+					if (refused !== null) {
+						this.client.opaqueFrames.delete(element);
+						element.setAttribute('src', refused);
+						return;
+					}
 					const opaque = opaqueDocument(resource);
 					if (opaque) this.client.opaqueFrames.add(element);
 					else this.client.opaqueFrames.delete(element);
@@ -1626,7 +1651,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// (the worker's client hints and permissions policy for the
 					// frame read it; empty when the element has none),
 					// `allowfullscreen` being `fullscreen *` where the attribute
-					// does not name the feature
+					// does not name the feature; and with what judges the frame's
+					// later hops and the document it ends in: this document's
+					// frame-src, and the frame's real ancestors (src/csp.ts)
 					if (!opaque)
 						this.client
 							.getModule(NavigationHintModule)
@@ -1635,6 +1662,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								element.nodeName === 'IFRAME'
 									? containerPolicy(element)
 									: undefined,
+								{
+									policies: this.client.hopPolicies('frame-src') ?? [],
+									ancestors: [
+										this.client.origin,
+										...this.client.ancestorOrigins(),
+									],
+								},
 							);
 					const routed =
 						opaque ??
@@ -1672,6 +1706,20 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						this.client.freshFrame
 					) {
 						if (this.client.freshFrame(element, routed)) return;
+					}
+					// the document the frame shows now sees the navigation (its
+					// navigate event): this one judged it
+					try {
+						const shown = (
+							Reflect.apply(contentWindowOf, element, []) as Record<
+								string,
+								unknown
+							> | null
+						)?.[this.client.names.client] as DocumentClient | undefined;
+						const hints = shown?.getModule?.(NavigationHintModule);
+						if (hints) hints.judged = resource.url.href.replace(/#.*$/s, '');
+					} catch (error) {
+						// a document of another origin, or none
 					}
 					element.setAttribute('src', routed);
 				}
@@ -1720,13 +1768,17 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.getAttribute('content') !== ''
 				)
 					switch (element.getAttribute('http-equiv')?.toLowerCase()) {
-						case 'content-security-policy':
-							element.setAttributeOG(
-								'content',
-								element.getAttribute('content')!,
-							);
-							element.removeAttribute('content');
+						// the page's policy as the browser can apply it to the
+						// proxy's URLs (src/csp.ts); it applies when the meta is
+						// inserted, as natively
+						case 'content-security-policy': {
+							const content = element.getAttribute('content')!;
+							element.setAttributeOG('content', content);
+							const policy = this.client.metaPolicy(content);
+							if (policy === null) element.removeAttribute('content');
+							else element.setAttribute('content', policy);
 							break;
+						}
 						// client hints are the worker's to send for the real
 						// origins (src/server/clientHints.ts, which reads a
 						// page's own metas from its markup): the browser must
@@ -2758,6 +2810,16 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					false,
 					this.client.childRoute,
 				);
+			// the page's object-src (src/csp.ts): the browser refuses and
+			// reports what it refuses, where the browser's copy of the policy
+			// refuses it too (the copy itself is a blob: URL, which the copy
+			// allows wherever the page allows any load)
+			const refused = this.client.loadRefusal('object-src', resource.url, true);
+			if (refused !== null) {
+				loads.delete(element);
+				element.setAttribute(attribute, refused);
+				return;
+			}
 			let routed = routedOf();
 			if (!ROUTE_PROTOCOLS.includes(resource.url.protocol)) {
 				// data:, blob: and the like: as routeHTML leaves them
@@ -3105,8 +3167,54 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// base URL (which client.baseURL follows once a base is in place, and
 		// is the page's own base while loadHTML rewrites the markup)
 		const documentURL = () => this.client.url;
+		// A report-only base-uri's refusal is the inject's to report (the base
+		// applies): once, for the document's first base, a task later as
+		// natively, and for the markup's own once it is parsed (the hook ran
+		// on its copy, before the page's scripts could listen)
+		const reported = new WeakSet<Element>();
+		const reportBase = (element: Element, url: URL) => {
+			const global = this.client.global;
+			const owner = element.ownerDocument;
+			const first = owner.querySelector('base[href]');
+			if (reported.has(element) || (first !== element && first !== null))
+				return;
+			reported.add(element);
+			const report = () => this.client.reportRefusal('base-uri', url);
+			if (owner === global.document) {
+				Reflect.apply(setTimeout, global, [report, 0]);
+				return;
+			}
+			// (the markup is written after a document.open, which drops the
+			// document's listeners)
+			let pending = true;
+			addDocumentOpenListener(global, () => {
+				if (!pending) return;
+				pending = false;
+				global.document.addEventListener('DOMContentLoaded', report, {
+					once: true,
+				});
+			});
+		};
+		// the refusal URL each base was given, for the page's href: a hook
+		// that runs again (the base inserted) leaves it, as a write would be
+		// another check of the base, and another violation
+		const refusedBases = new WeakMap<Element, [string, string]>();
 		domHooksModule.useAttributes(
 			(element) => {
+				const refused = refusedBases.get(element);
+				console.log(
+					'BASEDBG run',
+					element.isConnected,
+					element.getAttribute('href'),
+					element.getAttributeOG('href'),
+					new Error().stack?.split('\n').slice(2, 7).join(' | '),
+				);
+				if (
+					refused &&
+					element.getAttribute('href') === refused[1] &&
+					element.getAttributeOG('href') === refused[0]
+				)
+					return;
 				element.restoreAttributesOG('href');
 
 				if (
@@ -3115,13 +3223,38 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				) {
 					const document = documentURL();
 					element.setAttributeOG('href', element.getAttribute('href')!);
+					const url = new URL(
+						element.getAttribute('href')!,
+						document.toString(),
+					);
+					// the page's base-uri (src/csp.ts): a base it refuses names a
+					// refusal URL the browser's copy refuses, and the browser
+					// refuses and reports it as natively (the document's URL stays
+					// its base URL); a report-only one's refusal is reported
+					const refusals = /^https?:$/.test(url.protocol)
+						? this.client.pageRefusals('base-uri', url)
+						: [];
+					if (
+						/^https?:$/.test(url.protocol) &&
+						this.client.baseRefused(url, element)
+					) {
+						const refusal = this.client.refusalURL(
+							'https',
+							url.href,
+							url.href.replace(/#.*$/s, ''),
+						);
+						refusedBases.set(element, [
+							element.getAttributeOG('href')!,
+							refusal,
+						]);
+						element.setAttribute('href', refusal);
+						return;
+					}
+					if (refusals.length) reportBase(element, url);
 					element.setAttribute(
 						'href',
 						routeHTML(
-							new StompURL(
-								new URL(element.getAttribute('href')!, document.toString()),
-								document,
-							),
+							new StompURL(url, document),
 							document,
 							this.client.config,
 							false,

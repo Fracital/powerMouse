@@ -334,6 +334,14 @@
 							tag +
 							'-uirmeta&uirmeta=1',
 					),
+				'upgrade-insecure-requests-report-only': () =>
+					frameReport(
+						'mixed-content-child.html?b=' +
+							B +
+							'&tag=' +
+							tag +
+							'-uirro&uirro=1',
+					),
 				'block-all-mixed-content': () =>
 					frameReport(
 						'mixed-content-child.html?b=' + B + '&tag=' + tag + '-bamc&bamc=1',

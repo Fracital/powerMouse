@@ -284,6 +284,14 @@ export default class SandboxModule extends Module<DocumentClient> {
 					form.getAttribute('action') ??
 					'',
 			);
+			// what the form's document's form-action refuses is left to the
+			// browser, which refuses it as natively (NavigationHint)
+			if (
+				client
+					.pageRefusals('form-action', destination)
+					.some(({ policy }) => policy.disposition === 'enforce')
+			)
+				return false;
 			if (destination.protocol === 'javascript:') {
 				aimed.client.callIn(nativeAssign, aimed.window.location, [
 					routeHTML(
@@ -374,8 +382,11 @@ export default class SandboxModule extends Module<DocumentClient> {
 					native,
 					(target, that, args) => {
 						if (opaque()) {
+							// (Chrome words databases()'s refusal its own way)
 							const error = securityError(
-								`Failed to execute '${method}' on 'IDBFactory': access to the Indexed Database API is denied in this context.`,
+								method === 'databases'
+									? "Failed to execute 'databases' on 'IDBFactory': Access to the IndexedDB API is denied in this context."
+									: `Failed to execute '${method}' on 'IDBFactory': access to the Indexed Database API is denied in this context.`,
 							);
 							// databases() rejects, the others throw
 							if (method === 'databases') return global.Promise.reject(error);

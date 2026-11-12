@@ -1,5 +1,6 @@
 import type GenericCodec from '../Codecs';
 import { Config, ConfigCodec } from '../config';
+import type { HopPolicy } from '../csp';
 import { isolationResponseHeaders } from '../isolation';
 import { kindPartition, partitionSite } from '../partition';
 import { nestedMarkOfKind, nestedTopOf } from '../rewriteHTML';
@@ -82,6 +83,7 @@ import { openLoadChannel, servedLoadClient } from './loadGrants';
 import {
 	awaitNavigationHintPeek,
 	peekNavigationHint,
+	recordNavigationChain,
 	recordNavigationHint,
 } from './navigationHints';
 import {
@@ -889,6 +891,31 @@ function handleMessage(event: ExtendableMessageEvent) {
 			// readback); a routed one is decoded to it
 			const target = new URL(ready.realURL(message.url));
 			if (!/^https?:$/.test(target.protocol)) return;
+			const csp = message.csp;
+			if (
+				csp &&
+				Array.isArray(csp.policies) &&
+				csp.policies.length <= 32 &&
+				JSON.stringify(csp).length <= 65536
+			)
+				recordNavigationChain(
+					target.href,
+					csp.policies.filter(
+						(policy): policy is HopPolicy =>
+							Array.isArray(policy) &&
+							typeof policy[0] === 'string' &&
+							Array.isArray(policy[1]) &&
+							policy[1].every((source) => typeof source === 'string') &&
+							(policy[2] === 'enforce' || policy[2] === 'report') &&
+							typeof policy[3] === 'string',
+					),
+					Array.isArray(csp.ancestors) &&
+						csp.ancestors.every((origin) => typeof origin === 'string')
+						? csp.ancestors
+						: undefined,
+					(event.source as Client).id,
+					csp.parent === true,
+				);
 			recordNavigationHint(target.href, {
 				origin: new URL(real).origin,
 				activated: message.activated === true,

@@ -1,6 +1,10 @@
 import type { RewriterLib } from '../../rewriterLib';
 import { LIBRARY_FACTORY } from '../../version';
 import { lightFactory } from '../rewriter';
+import { trustedScript } from '../trusted';
+
+/** the name the realm's factory is assigned to while its script runs */
+const REALM_FACTORY = '$stomp$realm';
 
 // taken when the bundle loads, before any hook or page code runs: the realm
 // is made through the browser's own methods, so no hook of ours (the IFrame
@@ -21,6 +25,12 @@ const setAttribute = Element.prototype.setAttribute;
 const textContentSet = Reflect.getOwnPropertyDescriptor(
 	Node.prototype,
 	'textContent',
+)!.set!;
+// an HTML script's own: under Trusted Types the text it is given as a
+// trusted value is what the script runs (Node's leaves it refused)
+const scriptTextSet = Reflect.getOwnPropertyDescriptor(
+	HTMLScriptElement.prototype,
+	'text',
 )!.set!;
 
 /**
@@ -44,6 +54,12 @@ export function createRewriterRealm(
 	document: Document,
 	/** what makes the library: the light one (src/inject/rewriter.ts lightFactory), or the rewriter library itself when the shell loaded it (givenLibrary) */
 	given?: (realm?: Record<string, unknown>) => RewriterLib,
+	/**
+	 * The document's nonce, where its policy refuses code made from a
+	 * string (src/csp.ts): the frame inherits the policy, and the factory's
+	 * text runs there as a script that carries it
+	 */
+	nonce: string | null = null,
 ): RewriterLib | null {
 	let root: Element | null = null;
 	let frame: HTMLIFrameElement | null = null;
@@ -59,7 +75,17 @@ export function createRewriterRealm(
 			(typeof globalThis & { eval: (code: string) => unknown }) | null;
 		if (!realm) return null;
 		// the library's own text, which names nothing of this bundle's
-		const make = realm.eval(`(${Reflect.apply(toSource, factory, [])})`);
+		const source = `(${Reflect.apply(toSource, factory, [])})`;
+		const make =
+			nonce === null
+				? realm.eval(trustedScript(source))
+				: libraryFactoryFromScript(
+						realm.document,
+						`${REALM_FACTORY}=${source};`,
+						nonce,
+						REALM_FACTORY,
+						realm,
+					);
 		if (typeof make !== 'function') return null;
 		const lib = make() as RewriterLib;
 		return typeof lib === 'object' && lib !== null ? lib : null;
@@ -93,6 +119,8 @@ export function libraryFactoryFromScript(
 	nonce: string,
 	/** the name the text assigns: the rewriter library's, or the light library's */
 	name: string = LIBRARY_FACTORY,
+	/** the realm `document` is of, where the name is made (this one's by default) */
+	global: typeof globalThis = globalThis,
 ): ((realm?: Record<string, unknown>) => RewriterLib) | null {
 	let root: Element | null = null;
 	let script: Element | null = null;
@@ -101,24 +129,26 @@ export function libraryFactoryFromScript(
 		if (!root) return null;
 		script = Reflect.apply(createElement, document, ['script']) as Element;
 		Reflect.apply(setAttribute, script, ['nonce', nonce]);
-		Reflect.apply(textContentSet, script, [text]);
-		Reflect.defineProperty(globalThis, name, {
+		try {
+			Reflect.apply(scriptTextSet, script, [trustedScript(text)]);
+		} catch (error) {
+			// an XML document's script
+			Reflect.apply(textContentSet, script, [text]);
+		}
+		Reflect.defineProperty(global, name, {
 			value: undefined,
 			writable: true,
 			configurable: true,
 		});
 		Reflect.apply(appendChild, root, [script]);
-		const made: unknown = Reflect.getOwnPropertyDescriptor(
-			globalThis,
-			name,
-		)?.value;
+		const made: unknown = Reflect.getOwnPropertyDescriptor(global, name)?.value;
 		return typeof made === 'function'
 			? (made as (realm?: Record<string, unknown>) => RewriterLib)
 			: null;
 	} catch (error) {
 		return null;
 	} finally {
-		Reflect.deleteProperty(globalThis, name);
+		Reflect.deleteProperty(global, name);
 		if (root && script)
 			try {
 				Reflect.apply(removeChild, root, [script]);

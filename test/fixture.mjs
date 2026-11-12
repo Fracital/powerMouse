@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { readCases, STRICT } from '../rust/host/early-lib.mjs';
 import { coi } from './coi-server.mjs';
+import { csp } from './csp-server.mjs';
 import { shapes } from './shapes-server.mjs';
 import { sop } from './sop-server.mjs';
 import { visited } from './visited-server.mjs';
@@ -17,6 +18,7 @@ import { wpt } from './wpt-server.mjs';
 // New fixtures go there, so suites never need to touch this file. The
 // web-platform-tests paths (/resources/, /common/, /cookies/, /fetch/,
 // /referrer-policy/ and /_wpt/) are served by test/wpt-server.mjs,
+// /csp/ (the content security policy suites) by test/csp-server.mjs,
 // /sop/ (the same-origin policy suites) by test/sop-server.mjs, /visited/
 // (the visited suite) by test/visited-server.mjs, /coi/ (the
 // cross-origin isolation suite) by test/coi-server.mjs and /shape/ (the
@@ -196,6 +198,7 @@ export function startFixture(port = 8084) {
 		if (sop(req, res)) return;
 		if (visited(req, res)) return;
 		if (coi(req, res)) return;
+		if (csp(req, res)) return;
 		if (shapes(req, res)) return;
 		if (await wpt(req, res, port)) return;
 		served.push(path);

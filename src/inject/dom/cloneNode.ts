@@ -1,3 +1,5 @@
+import { asParsed, trustedHTML } from '../trusted';
+
 /** the DOMParser of the document's own realm (a child frame runs its creator's bundle) */
 function parserFor(document: Document): DOMParser {
 	const Parser =
@@ -11,7 +13,7 @@ export function parseHTML(
 	document: Document = globalThis.document,
 	mime: DOMParserSupportedType = 'text/html',
 ) {
-	return parserFor(document).parseFromString(script, mime);
+	return parserFor(document).parseFromString(trustedHTML(script), mime);
 }
 
 /**
@@ -33,7 +35,7 @@ export function parseHTMLContainer(
 	document: Document = globalThis.document,
 ): Element {
 	const parsed = parserFor(document).parseFromString(
-		`<fragment>${script}</fragment>`,
+		trustedHTML(`<fragment>${script}</fragment>`),
 		'text/html',
 	);
 	return parsed.body.children[0];
@@ -180,7 +182,7 @@ export function parseHTMLFragmentIn(
 		Reflect.apply(nativeNamespace, context, []),
 		Reflect.apply(nativeLocalName, context, []),
 	]) as Element;
-	Reflect.apply(nativeInnerHTMLSet, holder, [script]);
+	Reflect.apply(nativeInnerHTMLSet, holder, [trustedHTML(script)]);
 	// a template's markup lands in its content
 	const parent = isHTMLTemplate(holder)
 		? Reflect.apply(nativeTemplateContent, holder, [])
@@ -336,8 +338,10 @@ export default function cloneRawNode(
 						for (const child of children) script.removeChild(child);
 						// by qualified name: an SVG script's xlink:href keeps the
 						// namespace the parser gave it
-						for (const attribute of script.getAttributeNames())
-							script.setAttribute(attribute, script.getAttribute(attribute)!);
+						asParsed(script, () => {
+							for (const attribute of script.getAttributeNames())
+								script.setAttribute(attribute, script.getAttribute(attribute)!);
+						});
 						for (const child of children) script.appendChild(child);
 						stack.push([STACK_FINALIZE, d[1], script]);
 						continue;
@@ -367,18 +371,21 @@ export default function cloneRawNode(
 
 					// the native map: the hooked `attributes` getter hands the page a
 					// view that hides the markers, not an iterable NamedNodeMap
-					for (const attribute of Array.from(
-						Reflect.apply(nativeAttributes, d[0], []) as NamedNodeMap,
-					))
-						// a namespaced attribute (xlink:href) keeps its namespace; the
-						// hooks see both ways of setting it
-						if (attribute.namespaceURI)
-							target.setAttributeNS(
-								attribute.namespaceURI,
-								attribute.name,
-								attribute.value,
-							);
-						else target.setAttribute(attribute.name, attribute.value);
+					// (the parser's attributes, which no Trusted Types judge)
+					asParsed(target, () => {
+						for (const attribute of Array.from(
+							Reflect.apply(nativeAttributes, d[0], []) as NamedNodeMap,
+						))
+							// a namespaced attribute (xlink:href) keeps its namespace; the
+							// hooks see both ways of setting it
+							if (attribute.namespaceURI)
+								target.setAttributeNS(
+									attribute.namespaceURI,
+									attribute.name,
+									attribute.value,
+								);
+							else target.setAttribute(attribute.name, attribute.value);
+					});
 
 					if (d[3]) inertClones.add(target);
 
