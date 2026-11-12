@@ -1,0 +1,40 @@
+<!doctype html>
+<title>RESPONSEXML</title>
+<!-- XMLHttpRequest.responseXML exists in a document and parses an XML body,
+     but a worker's XMLHttpRequest has no responseXML at all. The proxied
+     stand-in must match both, and mirroring the worker's class must not warn
+     "Key not present in global: responseXML" on the console. -->
+<script>
+	window.__rx = {};
+	// a document XHR: responseXML is present and parses the XML body
+	const doc = new XMLHttpRequest();
+	window.__rx.docHasResponseXML = 'responseXML' in doc;
+	doc.open('GET', 'data:application/xml,<root><child/></root>');
+	doc.responseType = 'document';
+	doc.onload = () => {
+		try {
+			window.__rx.docRoot = doc.responseXML?.documentElement?.tagName ?? null;
+		} catch (error) {
+			window.__rx.docRoot = 'ERR:' + error.name;
+		}
+		window.__rx.docDone = true;
+	};
+	doc.onerror = () => {
+		window.__rx.docRoot = 'ERR:network';
+		window.__rx.docDone = true;
+	};
+	doc.send();
+	// a worker XHR: responseXML is absent, on the instance and the prototype
+	const code =
+		'self.onmessage = () => { const x = new XMLHttpRequest(); postMessage({' +
+		" onInstance: 'responseXML' in x," +
+		" onPrototype: 'responseXML' in XMLHttpRequest.prototype }); };";
+	const worker = new Worker(
+		URL.createObjectURL(new Blob([code], { type: 'text/javascript' })),
+	);
+	worker.onmessage = (event) => {
+		window.__rx.worker = event.data;
+		window.__rx.workerDone = true;
+	};
+	worker.postMessage(1);
+</script>
