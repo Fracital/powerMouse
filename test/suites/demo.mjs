@@ -103,11 +103,26 @@ ok(
 	(await omni(page)).startsWith('https://en.wikipedia.org/wiki/'),
 	await omni(page),
 );
+// the fragment is the page's route, sealed: it names the page only to the
+// controller
+const hashed = await page.evaluate(async () => {
+	const text = location.hash.slice(1);
+	// the routes' origin: the proxy's, which in isolated mode is not the host's
+	const origin = new URL(await window.controller.route('https://example.com/'))
+		.origin;
+	return {
+		text,
+		real: await window.controller.unroute(
+			`${origin}${window.controller.config.directory}${text}`,
+		),
+	};
+});
 ok(
-	'hash tracks url',
-	decodeURIComponent(
-		await page.evaluate(() => location.hash.slice(1)),
-	).startsWith('https://en.wikipedia.org/wiki/'),
+	'hash tracks url, sealed',
+	/^html\/[\w-]+(#|$)/.test(hashed.text) &&
+		!/wikipedia|wiki/i.test(hashed.text) &&
+		String(hashed.real).startsWith('https://en.wikipedia.org/wiki/'),
+	JSON.stringify(hashed),
 );
 await screenshot(page, 'browsing');
 

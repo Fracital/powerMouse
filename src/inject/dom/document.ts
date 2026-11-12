@@ -18,6 +18,8 @@ import DOMAttributesModule from './modules/DOMAttributes';
 import DOMContentHooks from './modules/DOMContentHooks';
 import DOMHooksModule from './modules/DOMHooks';
 import DownloadModule from './modules/Download';
+import FormQueryModule from './modules/FormQuery';
+import FragmentModule from './modules/Fragment';
 import FramingModule from './modules/Framing';
 import HistoryModule from './modules/History';
 import IFrameModule from './modules/IFrame';
@@ -47,6 +49,8 @@ export function addClientModules(client: DocumentClient) {
 	// any other module hooks them (and nothing at all with the blocker off)
 	client.addModule(AdblockModule);
 	baseModules(client);
+	// before History and Location: it takes the native history calls
+	client.addModule(FragmentModule);
 	client.addModule(HistoryModule);
 	client.addModule(NavigatorModule);
 	// before DOMAttributes: it takes the native getComputedStyle
@@ -87,6 +91,8 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(AnimationFramesModule);
 	client.addModule(NavigateModule);
 	client.addModule(NavigationHintModule);
+	// after NavigationHint, whose FormData of a submission comes before it arms
+	client.addModule(FormQueryModule);
 	client.addModule(ClientHintsModule);
 	client.addModule(VisitedModule);
 	client.addModule(ReadbackModule);

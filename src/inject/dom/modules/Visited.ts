@@ -7,6 +7,7 @@ import ProxyModule from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { nativeElement, nativeEventTarget } from './DOMHooks';
+import FragmentModule from './Fragment';
 import HistoryModule from './History';
 import { hookWrite } from './MutationObserver';
 import XMLHttpRequestModule from './XMLHttpRequest';
@@ -246,7 +247,13 @@ export default class VisitedModule extends Module<DocumentClient> {
 				} catch (error) {
 					return;
 				}
-				const address = absolute(plain(real));
+				// to a fragment of it as written (the Fragment module)
+				const routedAddress = plain(real);
+				const address = absolute(
+					this.client
+						.getModule(FragmentModule)
+						?.live(absolute(routedAddress)) ?? routedAddress,
+				);
 				const route = link(real);
 				const at = location.href;
 				const entry = push && address !== at;

@@ -5,6 +5,8 @@ import AES from 'crypto-js/aes';
 import Base64 from 'crypto-js/enc-base64';
 import Utf8 from 'crypto-js/enc-utf8';
 import MD5 from 'crypto-js/md5';
+import { openText, sealText } from './wasm/codec';
+import { generateKey, keyHalves, validKey } from './xorWire';
 
 const encodeChar = '$';
 const validChars =
@@ -74,48 +76,33 @@ export default class GenericCodec {
 	}
 }
 
-const URI_max = 0x7f;
-const URI_min = 0x01;
-
+/**
+ * The xor codec (docs/codec.md, src/xorWire.ts): every byte of the URL
+ * XORed with a stream drawn from the key, in the URL-safe base64 alphabet.
+ * The key is 16 hex digits, the stream's two halves. Sealed and opened in
+ * the codec module where the realm has one (src/wasm/codec.ts), in
+ * JavaScript otherwise: the same text either way.
+ */
 export class XORCodec extends GenericCodec {
-	get frequency(): number {
-		return parseInt(this.key, 16) & 0xf;
-	}
-	get xor(): number {
-		return parseInt(this.key, 16) >> 0x4;
+	readonly #a: number;
+	readonly #b: number;
+	constructor(key: string) {
+		super(key);
+		[this.#a, this.#b] = keyHalves(key);
 	}
 	static generateKey(): string {
-		const xor = ~~(Math.random() * (URI_max - URI_min)) + URI_min;
-		// 2-4
-		const frequency = Math.min(~~(Math.random() * 0xf), 4);
-		// SHORT xor
-		// CHAR frequency
-		return ((xor << 4) + frequency).toString(16);
+		return generateKey();
+	}
+	/** whether `key` is one generateKey makes (a key of the codec before this one is not) */
+	static validKey(key: unknown): key is string {
+		return validKey(key);
 	}
 	encode(input: string): string {
-		let result = '';
-		for (let i = 0; i < input.length; i++) {
-			if (i % this.frequency === 0) {
-				const char = (input.charCodeAt(i) ^ this.xor) + URI_min;
-				result += String.fromCharCode(char);
-			} else {
-				result += input[i];
-			}
-		}
-		return encodeCodecURI(result);
+		return sealText(input, this.#a, this.#b);
 	}
+	/** the text `input` seals; empty for what is no seal, so nothing reads a URL out of it */
 	decode(input: string): string {
-		input = decodeCodecURI(input);
-		let result = '';
-		for (let i = 0; i < input.length; i++) {
-			if (i % this.frequency === 0) {
-				const char = (input.charCodeAt(i) - URI_min) ^ this.xor;
-				result += String.fromCharCode(char);
-			} else {
-				result += input[i];
-			}
-		}
-		return result;
+		return openText(input, this.#a, this.#b) ?? '';
 	}
 }
 

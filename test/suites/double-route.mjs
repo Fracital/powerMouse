@@ -47,42 +47,31 @@ async function landed(page, loads, timeout = 15000) {
 
 /**
  * The XOR codec of the controller, derived from the route of a known URL
- * (the key is not exposed): encode a string as the controller would.
+ * (the key is not exposed): encode a string as the controller would. The
+ * route is the URL's bytes XORed with the key's stream in URL-safe base64
+ * (docs/codec.md), so the route of a long enough known URL gives the stream
+ * for any shorter ASCII text.
  */
 async function codecOf(page) {
-	const known = `https://x.invalid/${'a'.repeat(40)}`;
+	const known = `https://x.invalid/${'a'.repeat(2000)}`;
 	const routed = await page.evaluate(
 		(url) => window.controller.route(url),
 		known,
 	);
 	const encoded = routed.slice(routed.lastIndexOf('/html/') + 6);
-	const valid =
-		'-_~:0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-	const encodeWith = (frequency, xor) => (input) => {
-		let out = '';
-		for (let i = 0; i < input.length; i++)
-			out +=
-				frequency && i % frequency === 0
-					? String.fromCharCode((input.charCodeAt(i) ^ xor) + 1)
-					: input[i];
-		return [...out]
-			.map((c) =>
-				valid.includes(c)
-					? c
-					: `$${c.charCodeAt(0).toString(16).padStart(2, '0')}`,
-			)
-			.join('');
+	const sealed = Buffer.from(encoded, 'base64url');
+	if (sealed.length !== known.length) throw new Error('codec not derived');
+	const stream = sealed.map((byte, at) => byte ^ known.charCodeAt(at));
+	const encode = (input) => {
+		if (
+			input.length > stream.length ||
+			[...input].some((c) => c.charCodeAt(0) > 0x7f)
+		)
+			throw new Error('not derived for this text');
+		return Buffer.from(
+			[...input].map((c, at) => c.charCodeAt(0) ^ stream[at]),
+		).toString('base64url');
 	};
-	// every (frequency, key) pair is tried: guessing them from where the
-	// characters changed fails for a key that leaves one of them as it was
-	let encode = null;
-	for (let frequency = 0; frequency <= known.length && !encode; frequency++)
-		for (let xor = 0; xor < 256 && !encode; xor++) {
-			const candidate = encodeWith(frequency, xor);
-			if (candidate(known) === encoded) encode = candidate;
-			if (!frequency) break;
-		}
-	if (!encode) throw new Error('codec not derived');
 	return { encode, prefix: routed.slice(0, routed.lastIndexOf('/html/') + 6) };
 }
 

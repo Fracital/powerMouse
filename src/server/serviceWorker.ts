@@ -1,3 +1,4 @@
+import type GenericCodec from '../Codecs';
 import { Config, ConfigCodec } from '../config';
 import { isolationResponseHeaders } from '../isolation';
 import { kindPartition, partitionSite } from '../partition';
@@ -424,7 +425,7 @@ serviceWorkers.setEnvironment({
 			return {
 				url: route.url,
 				origin,
-				partition: routePartition(route.resource, origin),
+				partition: routePartition(route.resource, origin, route.codec),
 				resource: route.resource,
 				directory: ref.directory,
 			};
@@ -504,7 +505,7 @@ function serviceWorkerSender(
 		return {
 			url: route.url,
 			origin,
-			partition: routePartition(route.resource, origin),
+			partition: routePartition(route.resource, origin, route.codec),
 		};
 	} catch (error) {
 		return null;
@@ -516,10 +517,19 @@ function serviceWorkerSender(
  * route names (a nested document's top, a partitioned worker's), or for an
  * emulated service worker its registration's
  */
-function routePartition(kind: string, origin: string): string {
+function routePartition(
+	kind: string,
+	origin: string,
+	codec: GenericCodec,
+): string {
 	if (kind.startsWith('sw:'))
 		return serviceWorkers.versionPartition(kind.slice(3));
-	return kindPartition(kind, origin, (host) => getPublicSuffix(host, true));
+	return kindPartition(
+		kind,
+		origin,
+		(host) => getPublicSuffix(host, true),
+		codec,
+	);
 }
 
 /** the first segment under the scope, and the rest of the path */
@@ -723,7 +733,11 @@ function handleMessage(event: ExtendableMessageEvent) {
 		let partition = '';
 		try {
 			if (route)
-				partition = routePartition(route.resource, new URL(route.url).origin);
+				partition = routePartition(
+					route.resource,
+					new URL(route.url).origin,
+					route.codec,
+				);
 		} catch (error) {
 			// not a URL: first-party
 		}
@@ -788,7 +802,9 @@ function handleMessage(event: ExtendableMessageEvent) {
 						origin,
 						top: inline
 							? await knownTopSiteOf(source)
-							: partitionSite(routePartition(route.resource, origin)),
+							: partitionSite(
+									routePartition(route.resource, origin, route.codec),
+								),
 					});
 				} catch (error) {
 					// not a URL: no vouch
@@ -840,7 +856,9 @@ function handleMessage(event: ExtendableMessageEvent) {
 				message.url,
 				origin,
 				(event.source as Client).id,
-				route ? partitionSite(routePartition(route.resource, origin)) : null,
+				route
+					? partitionSite(routePartition(route.resource, origin, route.codec))
+					: null,
 			);
 		} catch (error) {
 			// not a URL: nothing to record
@@ -907,7 +925,7 @@ function handleMessage(event: ExtendableMessageEvent) {
 		let site: string;
 		try {
 			site =
-				nestedTopOf(new URL(source.url).pathname, ref.directory) ??
+				nestedTopOf(new URL(source.url).pathname, ref.directory, ready.codec) ??
 				new URL(real).origin;
 		} catch (error) {
 			reply.postMessage(null);
@@ -1424,7 +1442,7 @@ async function answerLink(event: FetchEvent, scope: string): Promise<Response> {
 		(hinted === ref && !hint!.own
 			? hint!.nested
 			: referrer?.ref === ref && referrer.kind.startsWith('html')
-				? (nestedMarkOfKind(referrer.kind) ?? false)
+				? (nestedMarkOfKind(referrer.kind, ref.ready!.codec) ?? false)
 				: hinted === ref
 					? hint!.nested
 					: false);
@@ -1446,7 +1464,7 @@ async function answerLink(event: FetchEvent, scope: string): Promise<Response> {
 		return redirect(next);
 	}
 	const target = ready.routeAs(
-		`html${nested ? `:nested:${encodeURIComponent(nested)}` : ''}`,
+		`html${nested ? `:nested:${ready.codec.encode(nested)}` : ''}`,
 		parsed.url.href,
 	);
 	rememberVisitedHop(target, {

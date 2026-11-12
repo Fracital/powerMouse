@@ -67,6 +67,7 @@ import {
 } from '../rewriteHTML';
 import { modifyJS, RewrittenBy, routeJS, ScriptType } from '../rewriteJS';
 import {
+	formQuery,
 	linkRouteURL,
 	parseRoutedURL,
 	routeBinary,
@@ -641,7 +642,7 @@ function shellSites(
 	const hosts = [url.url.hostname];
 	if (routed !== undefined && directory !== undefined)
 		try {
-			const top = nestedTopOf(new URL(routed).pathname, directory);
+			const top = nestedTopOf(new URL(routed).pathname, directory, url.codec);
 			if (top) hosts.push(new URL(top).hostname);
 		} catch (error) {
 			// no top to name
@@ -658,21 +659,25 @@ function shellSites(
  * The top-level site a routed URL's kind names: a nested document's (its
  * top origin's site), a partitioned worker's; null for any other
  */
-function routeTopSite(routed: string, directory: string): string | null {
+function routeTopSite(
+	routed: string,
+	directory: string,
+	codec: GenericCodec,
+): string | null {
 	let pathname: string;
 	try {
 		pathname = new URL(routed).pathname;
 	} catch (error) {
 		return null;
 	}
-	const nested = nestedTopOf(pathname, directory);
+	const nested = nestedTopOf(pathname, directory, codec);
 	if (nested) return siteOf(nested, publicSuffix);
 	if (!pathname.startsWith(directory)) return null;
 	const kind = pathname.slice(directory.length).split('/')[0];
 	// an emulated service worker's is its registration's
 	if (kind.startsWith('sw:'))
 		return partitionSite(serviceWorkers.versionPartition(kind.slice(3)));
-	return partitionSite(workerKindPartition(kind));
+	return partitionSite(workerKindPartition(kind, codec));
 }
 
 /** the partition of a client of `origin` at a routed URL, from its route kind (src/partition.ts) */
@@ -680,6 +685,7 @@ function routePartition(
 	routed: string,
 	directory: string,
 	origin: string,
+	codec: GenericCodec,
 ): string {
 	let pathname: string;
 	try {
@@ -691,7 +697,7 @@ function routePartition(
 	const kind = pathname.slice(directory.length).split('/')[0];
 	if (kind.startsWith('sw:'))
 		return serviceWorkers.versionPartition(kind.slice(3));
-	return kindPartition(kind, origin, publicSuffix);
+	return kindPartition(kind, origin, publicSuffix, codec);
 }
 
 /** requests in flight the page may still abort, by the id it sent (ABORT_HEADER) */
@@ -953,7 +959,11 @@ function genericForward(
 		const destination =
 			load?.destination ?? (serverRequest.destination || 'empty');
 		const navigation = serverRequest.mode === 'navigate';
-		const nestedRoute = nestedTopOf(oURL.pathname, rewriter.directory);
+		const nestedRoute = nestedTopOf(
+			oURL.pathname,
+			rewriter.directory,
+			rewriter.codec,
+		);
 		// every proxied page arrives here as an iframe (the host's frame): a
 		// document the page did not route as nested (an iframe of its own, or
 		// a navigation from inside one) is a top-level one
@@ -991,7 +1001,7 @@ function genericForward(
 			serverRequest.method === 'GET'
 		) {
 			const kind = oURL.pathname.slice(rewriter.directory.length).split('/')[0];
-			const mark = nestedMarkOfKind(kind);
+			const mark = nestedMarkOfKind(kind, rewriter.codec);
 			const parsed = mark === null ? null : parseNestedMark(mark);
 			if (
 				parsed &&
@@ -1005,7 +1015,7 @@ function genericForward(
 				back.pathname = `${rewriter.directory}${kind.slice(
 					0,
 					kind.indexOf(':nested:') + ':nested:'.length,
-				)}${encodeURIComponent(
+				)}${rewriter.codec.encode(
 					nestedMark(parsed.top, parsed.crossAncestor, {
 						...parsed.embedder,
 						later: true,
@@ -1143,7 +1153,11 @@ function genericForward(
 			let top: string | null = navigation ? nestedRoute : null;
 			if (!navigation && contextRoute)
 				try {
-					top = nestedTopOf(new URL(contextRoute).pathname, rewriter.directory);
+					top = nestedTopOf(
+						new URL(contextRoute).pathname,
+						rewriter.directory,
+						rewriter.codec,
+					);
 				} catch (error) {
 					// not a URL: no top to name
 				}
@@ -1314,7 +1328,11 @@ function genericForward(
 		const nestedTop =
 			nestedRoute ??
 			(referrer
-				? nestedTopOf(new URL(referrer).pathname, rewriter.directory)
+				? nestedTopOf(
+						new URL(referrer).pathname,
+						rewriter.directory,
+						rewriter.codec,
+					)
 				: null);
 		const nestedSite = nestedTop
 			? widestSite(site, siteBetween(new URL(nestedTop), url.url))
@@ -1330,7 +1348,9 @@ function genericForward(
 				? null
 				: siteOf(nestedRoute, publicSuffix)
 			: (clientTopSite ??
-				(clientRoute ? routeTopSite(clientRoute, rewriter.directory) : null) ??
+				(clientRoute
+					? routeTopSite(clientRoute, rewriter.directory, rewriter.codec)
+					: null) ??
 				(nestedTop ? siteOf(nestedTop, publicSuffix) : null) ??
 				(client && client.origin !== 'null'
 					? siteOf(client, publicSuffix)
@@ -1344,11 +1364,16 @@ function genericForward(
 		const contextPartition = navigation
 			? topLevel
 				? ''
-				: kindPartition(resource, url.url.origin, publicSuffix)
+				: kindPartition(resource, url.url.origin, publicSuffix, rewriter.codec)
 			: clientTopSite
 				? `^${clientTopSite}`
 				: clientRoute && client
-					? routePartition(clientRoute, rewriter.directory, client.origin)
+					? routePartition(
+							clientRoute,
+							rewriter.directory,
+							client.origin,
+							rewriter.codec,
+						)
 					: '';
 		const partitionKey =
 			partitionSite(contextPartition) ??
@@ -1738,7 +1763,8 @@ function genericForward(
 							url,
 							rewriter.config,
 							false,
-							nestedMarkOf(oURL.pathname, rewriter.directory) ?? false,
+							nestedMarkOf(oURL.pathname, rewriter.directory, rewriter.codec) ??
+								false,
 						),
 					},
 					'redirected by a rule',
@@ -2652,7 +2678,11 @@ function genericForward(
 						topLevel: destination === 'document',
 					};
 			} else {
-				const mark = nestedMarkOf(oURL.pathname, rewriter.directory);
+				const mark = nestedMarkOf(
+					oURL.pathname,
+					rewriter.directory,
+					rewriter.codec,
+				);
 				const embedder = (mark !== null ? parseNestedMark(mark) : null)
 					?.embedder ?? {
 					origin: '',
@@ -2973,7 +3003,7 @@ function genericForward(
 					rememberVisitedHop(link, {
 						context: hop.context,
 						directory: rewriter.directory,
-						nested: nestedMarkOfKind(next.resource) ?? false,
+						nested: nestedMarkOfKind(next.resource, rewriter.codec) ?? false,
 						hops: hop.hops,
 						...((hop.crossed || next.url.url.origin !== url.url.origin) && {
 							crossed: true,
@@ -3523,6 +3553,9 @@ export function withRefreshMeta(markup: string, value: string): string {
 		: `${meta}${markup}`;
 }
 
+/** the route of a document (src/rewriteHTML.ts routeHTML) */
+const DOCUMENT_ROUTE = /^\/html(:nested:[^/]*)?\//;
+
 export function registerRewrites(
 	router: Router,
 	init: ParsedConfig,
@@ -3857,7 +3890,7 @@ export function registerRewrites(
 					url,
 					rewriter.config,
 					type,
-					kind ? workerKindPartition(kind) : '',
+					kind ? workerKindPartition(kind, rewriter.codec) : '',
 				),
 			undefined,
 			(headers, filteredHeaders) => {
@@ -3988,7 +4021,7 @@ export function registerRewrites(
 	);
 
 	router.routes.set(
-		/^\/html(:nested:[^/]*)?\//,
+		DOCUMENT_ROUTE,
 		genericForward(
 			rewriter,
 			async (url, response, responseHeaders, referrer, request, note) => {
@@ -4003,8 +4036,11 @@ export function registerRewrites(
 				// shell loads the rewriter library
 				const top =
 					request.navigation &&
-					nestedTopOf(new URL(request.routed).pathname, rewriter.directory) ===
-						null;
+					nestedTopOf(
+						new URL(request.routed).pathname,
+						rewriter.directory,
+						rewriter.codec,
+					) === null;
 				// an XML document (a standalone SVG, an XHTML page) keeps its mime
 				// and gets an XML shell: the HTML one is not well-formed XML
 				if (XML_DOCUMENT_MIMES.includes(mime))
@@ -4057,11 +4093,20 @@ export function registerRewrites(
 				const listCsp = rewriter.blocker?.ready
 					? rewriter.blocker.documentCsp(
 							url.url.href,
-							nestedTopOf(new URL(request.routed).pathname, rewriter.directory),
+							nestedTopOf(
+								new URL(request.routed).pathname,
+								rewriter.directory,
+								rewriter.codec,
+							),
 							`${new URL(request.routed).origin}${rewriter.directory}${SEALER_ROUTE}`,
 						)
 					: null;
 				if (listCsp) responseHeaders.append('content-security-policy', listCsp);
+				// under a list's policy the document's realm compiles no codec
+				// module: the policy may refuse it, and would tell the page
+				const shellConfig: Config = listCsp
+					? { ...rewriter.config, codecModule: false }
+					: rewriter.config;
 				const job = prewrite(
 					markup,
 					url,
@@ -4078,7 +4123,7 @@ export function registerRewrites(
 					return modifyHTML(
 						markup,
 						url,
-						rewriter.config,
+						shellConfig,
 						false,
 						referrer,
 						undefined,
@@ -4103,7 +4148,7 @@ export function registerRewrites(
 				const { head, tail } = modifyHTMLStreamed(
 					markup,
 					url,
-					rewriter.config,
+					shellConfig,
 					referrer,
 					note.serviceWorker,
 					upgradeInsecure,
@@ -4143,7 +4188,7 @@ export function registerRewrites(
 					url,
 					rewriter.config,
 					false,
-					(kind && nestedMarkOfKind(kind)) ?? false,
+					(kind && nestedMarkOfKind(kind, rewriter.codec)) ?? false,
 				),
 			undefined,
 			(headers, filteredHeaders, url) => {
@@ -4182,6 +4227,94 @@ export function registerRewrites(
 		),
 	);
 
+	/**
+	 * Where a GET form's submission goes on to (`url`, the URL the browser
+	 * built; `oURL`, the route it was submitted to): its document's sealed
+	 * address, through the link route of the document that holds the form
+	 */
+	const formLocation = (
+		serverRequest: Request,
+		oURL: URL,
+		url: StompURL,
+	): string => {
+		const target = routeHTML(
+			url,
+			url,
+			rewriter.config,
+			false,
+			nestedMarkOf(oURL.pathname, rewriter.directory, rewriter.codec) ?? false,
+		);
+		// A GET form's navigation is a visit like a link's: it goes on
+		// through the link route (src/visited.ts) of the URL the browser
+		// built, in the context of the document that holds the form, which
+		// the referrer names. The redirect here is the worker's own, like the
+		// link route's (HOPS_MARKER)
+		let location = target;
+		if (serverRequest.method === 'GET')
+			try {
+				const from = new URL(serverRequest.referrer);
+				if (
+					from.origin === oURL.origin &&
+					from.pathname.startsWith(rewriter.directory) &&
+					/^html(:nested:[^/]*)?$/.test(
+						from.pathname.slice(rewriter.directory.length).split('/')[0],
+					)
+				) {
+					const source = parseRoutedURL(
+						from.href,
+						rewriter.codec,
+						`${oURL.origin}${rewriter.directory}`,
+					).url.url;
+					const context = {
+						frame: source.origin,
+						top: siteOf(
+							nestedTopOf(from.pathname, rewriter.directory, rewriter.codec) ??
+								source.origin,
+							publicSuffix,
+						),
+					};
+					location = linkRoute(
+						`${oURL.origin}${rewriter.config.scope}`,
+						rewriter.codec,
+						contextText(context, publicSuffix),
+						url.url,
+					);
+					rememberVisitedHop(location, {
+						context,
+						directory: rewriter.directory,
+						nested:
+							nestedMarkOf(oURL.pathname, rewriter.directory, rewriter.codec) ??
+							false,
+						hops: 1,
+					});
+				}
+			} catch (error) {
+				// no referrer, or not a document of this controller: as before
+			}
+		return location;
+	};
+
+	// A GET form without an action submits to the document's own address,
+	// and the browser writes its fields after the route as they are: the
+	// document is answered at its sealed address, as a form with an action
+	// is (the html:form route below), so the frame's address and its history
+	// entry hold no field in clear
+	const documents = router.routes.get(DOCUMENT_ROUTE)!;
+	router.routes.set(DOCUMENT_ROUTE, (serverRequest, resolved, context) => {
+		const oURL = new URL(serverRequest.url);
+		if (serverRequest.method !== 'GET' || !oURL.search)
+			return documents(serverRequest, resolved, context);
+		const { url } = parseRoutedURL(
+			serverRequest.url,
+			rewriter.codec,
+			`${oURL.origin}${rewriter.directory}`,
+		);
+		return new Response(undefined, {
+			headers: { location: formLocation(serverRequest, oURL, url) },
+			status: 307,
+		});
+	});
+
 	router.routes.set(/^\/html:form(:nested:[^/]*)?\//, async (serverRequest) => {
 		const oURL = new URL(serverRequest.url);
 		const { url } = parseRoutedURL(
@@ -4190,14 +4323,20 @@ export function registerRewrites(
 			`${oURL.origin}${rewriter.directory}`,
 		);
 
-		// a form without fields submits to `action?`, an empty query
-		url.url = withQuery(url.url, queryOf(oURL));
+		// a form without fields submits to `action?`, an empty query; a GET
+		// form's query comes sealed (the inject's FormQuery module), or as the
+		// browser wrote the fields
+		url.url = withQuery(url.url, formQuery(rewriter.codec, queryOf(oURL)));
 
 		// a form an https page (or one under an https top) submits to http:
 		// warned about, blocked in a nested frame, stopped at Chrome's
 		// interstitial at the top; under upgrade-insecure-requests, upgraded
 		// (src/mixedContent.ts)
-		const nested = nestedTopOf(oURL.pathname, rewriter.directory);
+		const nested = nestedTopOf(
+			oURL.pathname,
+			rewriter.directory,
+			rewriter.codec,
+		);
 		if (insecure(url.url)) {
 			const referrer =
 				serverRequest.referrer && serverRequest.referrer !== 'about:client'
@@ -4250,58 +4389,10 @@ export function registerRewrites(
 			}
 		}
 
-		const target = routeHTML(
-			url,
-			url,
-			rewriter.config,
-			false,
-			nestedMarkOf(oURL.pathname, rewriter.directory) ?? false,
-		);
-		// A GET form's navigation is a visit like a link's: it goes on
-		// through the link route (src/visited.ts) of the URL the browser
-		// built, in the context of the document that holds the form, which
-		// the referrer names. The redirect here is the worker's own, like the
-		// link route's (HOPS_MARKER)
-		let location = target;
-		if (serverRequest.method === 'GET')
-			try {
-				const from = new URL(serverRequest.referrer);
-				if (
-					from.origin === oURL.origin &&
-					from.pathname.startsWith(rewriter.directory) &&
-					/^html(:nested:[^/]*)?$/.test(
-						from.pathname.slice(rewriter.directory.length).split('/')[0],
-					)
-				) {
-					const source = parseRoutedURL(
-						from.href,
-						rewriter.codec,
-						`${oURL.origin}${rewriter.directory}`,
-					).url.url;
-					const context = {
-						frame: source.origin,
-						top: siteOf(
-							nestedTopOf(from.pathname, rewriter.directory) ?? source.origin,
-							publicSuffix,
-						),
-					};
-					location = linkRoute(
-						`${oURL.origin}${rewriter.config.scope}`,
-						rewriter.codec,
-						contextText(context, publicSuffix),
-						url.url,
-					);
-					rememberVisitedHop(location, {
-						context,
-						directory: rewriter.directory,
-						nested: nestedMarkOf(oURL.pathname, rewriter.directory) ?? false,
-						hops: 1,
-					});
-				}
-			} catch (error) {
-				// no referrer, or not a document of this controller: as before
-			}
-		return new Response(undefined, { headers: { location }, status: 307 });
+		return new Response(undefined, {
+			headers: { location: formLocation(serverRequest, oURL, url) },
+			status: 307,
+		});
 	});
 
 	registerServiceWorkerScripts(router, rewriter);
@@ -4382,6 +4473,7 @@ async function answerFromServiceWorker<N extends Response>(
 						.split('/')[0],
 					url.url.origin,
 					publicSuffix,
+					rewriter.codec,
 				)
 			: undefined,
 		clientId,

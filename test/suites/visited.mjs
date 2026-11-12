@@ -96,7 +96,9 @@ const state = (frame) =>
 	frame
 		.evaluate(() => ({
 			title: document.title,
-			hash: location.hash,
+			// the page's own view (the frame's address holds its fragment
+			// sealed, docs/codec.md): document.URL's getter is the page's
+			hash: new URL(document.URL).hash,
 			did: document.documentElement.dataset.did === '1',
 		}))
 		.catch(() => null);
@@ -913,13 +915,13 @@ for (const [mode, base] of [
 				[linkRoute, target],
 			);
 			ok(
-				`${mode}: a link is routed as its link route, with its fragment`,
-				/\/~\/[^/?#]+#part$/.test(linkRoute),
+				`${mode}: a link is routed as its link route, with its fragment sealed`,
+				/\/~\/[^/?#]+#~[\w-]+$/.test(linkRoute) && !linkRoute.includes('part'),
 				linkRoute,
 			);
 			ok(
 				`${mode}: controller.route() is the document's address, as before`,
-				/\/[\w-]+\/html\/[^/?#]+#part$/.test(host.address) &&
+				/\/[\w-]+\/html\/[^/?#]+#~[\w-]+$/.test(host.address) &&
 					!host.address.includes('/~/'),
 				host.address,
 			);
