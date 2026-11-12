@@ -1,0 +1,77 @@
+<!doctype html>
+<title>MEMORY</title>
+<body>
+	<script>
+		// performance.memory per site (the Memory module). The top is one site;
+		// it embeds a child of another site (`?child=<origin>`), which embeds
+		// an about:blank iframe of its own (same site) and allocates a few MB.
+		// Each realm reports performance.memory. The memory suite checks that,
+		// proxied as natively, the child differs from its embedding top and
+		// agrees with its own about:blank helper, and that a site's figure
+		// moves up as it allocates. `window.__mem` holds this realm's report.
+		const query = new URLSearchParams(location.search);
+		const role = query.get('role') || 'top';
+		const read = () => {
+			const m = performance.memory;
+			return m
+				? {
+						used: m.usedJSHeapSize,
+						total: m.totalJSHeapSize,
+						limit: m.jsHeapSizeLimit,
+					}
+				: null;
+		};
+		const report = { role, supported: !!performance.memory };
+		window.__mem = report;
+		// hold a growing buffer so a read after it is larger
+		window.__hog = [];
+		const allocate = (mb) => {
+			for (let i = 0; i < mb; i++)
+				window.__hog.push(new Uint8Array(1048576).fill(i + 1));
+		};
+
+		if (role === 'top') {
+			const childOrigin = query.get('child');
+			report.before = read();
+			const frame = document.createElement('iframe');
+			const heard = {};
+			addEventListener('message', (event) => {
+				const data = event.data;
+				if (!data || data.mem === undefined) return;
+				heard[data.from] = data.mem;
+				if (heard.child && heard.blank) {
+					report.child = heard.child;
+					report.blank = heard.blank;
+					// our own figure after the child allocated: our site only
+					report.after = read();
+					report.done = true;
+				}
+			});
+			frame.src = `${childOrigin}/pages/memory.html?role=child`;
+			document.body.append(frame);
+		} else if (role === 'child') {
+			allocate(4);
+			const blank = document.createElement('iframe');
+			document.body.append(blank);
+			const post = () => {
+				// read ours and the helper's back to back: same site, so the
+				// module hands both the one figure; natively both land in one
+				// 50 ms performance.memory cache window and so also agree
+				const helper = blank.contentWindow;
+				const mine = read();
+				helper.__mem = helper.performance.memory
+					? {
+							used: helper.performance.memory.usedJSHeapSize,
+							total: helper.performance.memory.totalJSHeapSize,
+						}
+					: null;
+				parent.postMessage({ from: 'child', mem: mine }, '*');
+				parent.postMessage({ from: 'blank', mem: helper.__mem }, '*');
+				report.done = true;
+			};
+			if (blank.contentWindow && blank.contentWindow.document.readyState)
+				post();
+			else blank.addEventListener('load', post);
+		}
+	</script>
+</body>
