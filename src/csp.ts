@@ -380,7 +380,6 @@ export function codeSources(
 	return kept;
 }
 
-
 const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
 const NAMED_REFUSAL = '.u.refused.invalid';
 
