@@ -10,6 +10,20 @@
 // renamed itself), and a glue that named its own file would break the
 // moment a host renamed it.
 
+// STomp's own wasm (the epoxy transport, the content blocker) compiles here.
+// The inject enforces the page's script-src against the page's WebAssembly by
+// wrapping the global WebAssembly (src/inject/dom/modules/WebAssemblyPolicy.ts);
+// STomp's own compilation must never be subject to it, so this captures the
+// native methods at load, before any wrap, and compiles with them.
+const nativeWasm =
+	typeof WebAssembly === 'object' && WebAssembly
+		? {
+				Module: WebAssembly.Module,
+				compile: WebAssembly.compile?.bind(WebAssembly),
+				compileStreaming: WebAssembly.compileStreaming?.bind(WebAssembly),
+			}
+		: { Module: undefined, compile: undefined, compileStreaming: undefined };
+
 /** where a module comes from, as a host may give it */
 export type ModuleSource =
 	| WebAssembly.Module
@@ -30,24 +44,25 @@ export async function compileModule(
 	source: ModuleSource,
 	base?: string,
 ): Promise<WebAssembly.Module> {
+	const compile = nativeWasm.compile ?? WebAssembly.compile.bind(WebAssembly);
+	const NativeModule = nativeWasm.Module ?? WebAssembly.Module;
 	const given = await source;
-	if (given instanceof WebAssembly.Module) return given;
+	if (given instanceof NativeModule) return given;
 	if (typeof given === 'string' || given instanceof URL) {
 		const url = new URL(given, base);
 		const response = fetch(url.href);
-		if (typeof WebAssembly.compileStreaming === 'function')
+		if (typeof nativeWasm.compileStreaming === 'function')
 			try {
-				return await WebAssembly.compileStreaming(response);
+				return await nativeWasm.compileStreaming(response);
 			} catch (error) {
 				// a server that does not label the file application/wasm fails
 				// the streaming form only: the bytes compile the same
-				return WebAssembly.compile(await (await fetch(url.href)).arrayBuffer());
+				return compile(await (await fetch(url.href)).arrayBuffer());
 			}
-		return WebAssembly.compile(await (await response).arrayBuffer());
+		return compile(await (await response).arrayBuffer());
 	}
-	if (given instanceof Response)
-		return WebAssembly.compile(await given.arrayBuffer());
-	return WebAssembly.compile(given);
+	if (given instanceof Response) return compile(await given.arrayBuffer());
+	return compile(given);
 }
 
 /** what a buffer module exports, or a member of the core under its view's names */

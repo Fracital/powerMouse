@@ -197,6 +197,12 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		const rewriteStyleText = (style: StyleElement) => {
 			const text = style.textContent;
 			if (!text) return;
+			// the page's own style-src refuses this inline style of the markup:
+			// it applies nothing (no text) and the inject reports it (src/csp.ts)
+			if (this.client.refuseInlineStyle(style, text, true)) {
+				style.textContent = '';
+				return;
+			}
 			const routed = this.client.prepareStyleText(text);
 			// a style the page's policy lets through by the hash of its text,
 			// which the routing changed (src/csp.ts)
@@ -305,6 +311,17 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			// not in document
 			if (!style.sheet) {
 				// eventually we'll catch a connected style
+				return;
+			}
+
+			// the page's own style-src refuses this inline style (now connected,
+			// so the browser parsed its sheet): it applies nothing and the inject
+			// reports it (src/csp.ts). Its text is the page's own.
+			if (
+				this.client.refuseInlineStyle(style, style.textContent ?? '', false)
+			) {
+				for (let i = style.sheet.cssRules.length - 1; i >= 0; i--)
+					style.sheet.deleteRule(i);
 				return;
 			}
 
@@ -439,9 +456,16 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			// errors read as an unnamed script's. Rewriting it again changes
 			// nothing
 			if (rewritten !== script.text) rewrittenScripts.set(script, rewritten);
-			// let through by the hash of the page's text where its policy says so
-			if (!script.hasAttribute('src'))
+			// the page's own script-src refuses this inline script: it keeps no
+			// text, so it runs nothing, and the inject reports it (src/csp.ts)
+			if (!script.hasAttribute('src')) {
+				if (this.client.refuseInlineScript(script, passed, false)) {
+					script.text = '';
+					return;
+				}
+				// let through by the hash of the page's text where its policy says so
 				this.client.giveCodeNonce(script, null, passed, false);
+			}
 			script.text = trustedScript(rewritten);
 		};
 

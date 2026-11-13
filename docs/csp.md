@@ -31,20 +31,18 @@ child-src, script-src for workers), the browser's policy has that
 directive with `'self'` (the proxy origin: every routed load and every
 request of the proxy's own) and the page's local schemes as written. A
 `data:` image, a `blob:` frame or a `fetch('data:,')` is refused, reported
-and seen by the page exactly as natively, by the browser itself. Scripts and
-styles reach it too (below); base-uri, form-action, sandbox,
-frame-ancestors and Trusted Types do not yet. report-uri and report-to are left out
-styles are not among them yet (the shell and every rewritten inline script
-would be judged too); neither are sandbox or Trusted Types (base-uri,
-form-action and frame-ancestors: Navigations, below). report-uri and report-to are left out
-would be judged too); neither are base-uri, form-action, frame-ancestors
-or Trusted Types (sandbox has a section of its own). report-uri and report-to are left out
-styles reach it too (below), and Trusted Types (below); base-uri,
-form-action, sandbox and frame-ancestors do not yet. report-uri and report-to are left out
-(the browser would post the proxy's URLs). A report-only policy goes to the
-browser as one. A meta's content is replaced by the browser policy for it
-(the inject's attribute hook; the page reads its own content back), and it
-applies when the meta is inserted, as natively.
+and seen by the page exactly as natively, by the browser itself. base-uri,
+form-action, frame-ancestors and sandbox reach it too (Navigations and
+Sandbox, below). script-src, style-src and Trusted Types never reach the
+browser: it would judge the proxy's shell, the inject bundle and every
+rewritten inline script by them too, and a nonce or hash on the real
+injected element does not hold on the live proxy origin. The inject enforces
+those against the page's own code instead (Scripts and styles, below).
+report-uri and report-to are left out (the browser would post the proxy's
+URLs). A report-only policy goes to the browser as one. A meta's content is
+replaced by the browser policy for it (the inject's attribute hook; the page
+reads its own content back), and it applies when the meta is inserted, as
+natively.
 
 Each browser policy carries a mark of its own, a scheme source that matches
 nothing (`p1a2b3c-0:`), so the inject knows which of the page's policies
@@ -62,91 +60,57 @@ while the inject refuses the page's own `blob:` objects.
 
 ## Scripts and styles
 
-script-src-elem, script-src-attr, style-src-elem and style-src-attr reach
-the browser each for itself (`codeSources`), with the page's keywords,
-nonces, hashes and local schemes as written: the browser itself runs or
-refuses the page's inline code by 'unsafe-inline' and its nonces, runs what
-'strict-dynamic' lets through, and refuses the rest, reporting it as
-natively. The proxy's own scripts (the shell, the inject bundle, the
-rewriter library, the scripts the inject makes) carry a nonce of the
-document's (the worker makes one per document and names it in the shell,
-`CSP_FACTS`), which every browser policy names wherever the page's inline
-code does not run without a nonce (a nonce turns 'unsafe-inline' off);
-where it does, the bundle loads by 'self'. 'self' (every routed script) is
-given where the page's list names URLs and decides by nothing else, and
-the worker applies the hosts (`hostsApply`); where the list also takes
-nonces or hashes, a script the page's policy allows by its host carries
-the document's nonce, given by the inject (`codeNonce`). A worker of the
-document imports the inject by URL, which the browser's policy names
-(importScripts takes no nonce).
+The browser never gets the page's script-src or style-src, so STomp's own
+scripts and styles are never subject to it. The inject enforces them against
+the page's own code, from the page's policies the shell hands the client
+(`policyTexts`, and the metas the inject sees), as Chrome does (measured,
+Chrome 152 and 156; `src/csp.ts` `codeAllows`, `src/inject/dom/Client.ts`).
+A refusal is the inject's own securitypolicyviolation event, dispatched on
+the document, with Chrome's fields (the page's policy as its
+`originalPolicy`, the page's code as its `sample` under 'report-sample', the
+element Chrome names as its `target`); it is not trusted, which the suite
+does not compare for scripts and styles.
 
-The rewrite changes the page's inline code, so the browser's hash of it is
-not the page's: the inject hashes the page's own text (`src/sha.ts`, SHA-256,
-384 and 512 synchronously) and gives an inline script or style the
-document's nonce where every enforced policy of the page's allows it (by a
-hash, by a nonce, by 'unsafe-inline') and the browser's copy of one would
-not; an external script by its `integrity` likewise. The page reads no
-such nonce back (`nonce` is the page's).
+An inline script (its text) or an inline style runs only where an enforced
+policy allows it by 'unsafe-inline', by a nonce the element carries, or by
+the hash of the page's own text (`src/sha.ts`, SHA-256, 384 and 512); a
+script the page inserts through the DOM runs under 'strict-dynamic', the
+parser's and document.write's do not. A refused inline script keeps no text
+(it runs nothing); a refused inline style's rules are dropped. An external
+script or style by its URL is the service worker's to refuse and report
+where it sees the request (`hostsApply`, Hosts below); the inject refuses a
+`data:` or `blob:` one itself and fires the enforced violation the worker
+cannot. A script-src-attr handler and a style-src-attr style attribute run
+only by 'unsafe-inline' (or 'unsafe-hashes' with the value's hash); the
+inject clears the live attribute where they do not. A CSSOM write (an
+element's `style` property, `setProperty`) is the browser's to allow, so the
+inject does not refuse it, only the `style` attribute the page sets as a
+string.
 
-script-src (or default-src) itself reaches the browser as the page wrote
-it, since everything else it would govern has a directive of its own: it
-decides eval, `Function`, string timers and WebAssembly compilation, and
-the EvalError and CompileError the browser throws name the page's
-directive. Where it refuses code made from a string, the inject makes
-none of its own (the browser would report each attempt): the shared
-rewriter realm, a frame's library, the host's hooks and the blocker's
-scriptlets are made by scripts that carry the document's nonce, the
-realm holds the whole rewriter library (the light one would make it from
-its text), and a worker imports the library's file. A classic worker of a
-`blob:` URL, which inherits the document's policy, cannot import the page's
-blob where the policy refuses `blob:` scripts: the page's Blob is the
-bootstrap's own text, after its preamble. A violation's `sample`
-('report-sample') is the page's code.
+script-src (or default-src) decides eval, `Function`, a string timer and
+WebAssembly compilation: without 'unsafe-eval' (or 'wasm-unsafe-eval', which
+allows only WebAssembly) the inject throws Chrome's EvalError or CompileError
+naming the page's directive, runs nothing, and reports it; a string timer
+runs nothing and throws nothing. STomp's own code is never refused: it evals
+through the realm's own `eval` captured before the page's, and its wasm
+compiles with native `WebAssembly` methods captured before the inject's wrap
+(`src/wasm/module.ts`), so the page's policy never reaches it.
 
 ## Trusted Types
 
-`require-trusted-types-for` reaches the browser as the page wrote it, and
-`trusted-types` with the page's names and one more: the name of the
-inject's own policy (`ScriptFacts.tt`, made by the worker for each
-document; a meta's comes from the inject), which no page knows. So the
-browser refuses a string at every sink as natively, and every sink the
-inject does not write for the page (`Document.parseHTMLUnsafe`,
-`DOMParser.parseFromString`, `setAttributeNode`, a script element's text
-that lands as a Text node) is judged by the browser itself, with the
-page's default policy, Chrome's TypeError and a trusted violation.
-Policies are made, refused and reported by the browser (the names, 'none',
-'allow-duplicates', `*`), and `trustedTypes.defaultPolicy` is the page's.
-
-The inject writes strings into these sinks all the time (the page's
-rewritten markup, its rewritten scripts, eval of rewritten code, the
-proxy's own scripts and functions): they carry values of its own policy
-(`src/inject/trusted.ts`), made in the bundle's realm (a trusted value of
-one realm is one in every realm, measured). The Function constructor takes
-no trusted value (only a default policy's identical string, measured), so
-the inject's own functions are made by eval of a trusted value where
-Trusted Types are in use, and a top's rewriter realm holds the rewriter
-library itself. A blob: worker inherits its document's policy: its
-bootstrap makes the inject's policy and hands importScripts trusted URLs.
-
-Where the inject writes for the page (an innerHTML, a script's text or src,
-a handler or srcdoc attribute, document.write, insertAdjacentHTML,
-setHTMLUnsafe, createContextualFragment, execCommand, eval, Function, a
-string timer, a Worker, a javascript: navigation), it judges the page's
-value first, as Chrome does (`src/inject/modules/TrustedTypes.ts`): a
-trusted value of the sink's type passes, a string goes to the page's
-default policy with Chrome's arguments (the value, the type, the sink's
-name: `Element innerHTML`) and what it returns is the value (for eval and
-Function only the identical string). What is left is refused by the
-browser: the native sink is handed the page's own value, and the default
-policy's answer is replayed to it (the page's callbacks are wrapped when it
-makes its default policy), so the TypeError or EvalError, the violation and
-its sample are Chrome's. A script's text the page set through a sink is
-its own; text that reached it otherwise (a Text node, a clone) is judged as
-the script runs (`HTMLScriptElement text`), and the inject's rewrite of
-text that lands as a Text node is let through by the default policy's
-wrapper without asking the page. A report-only policy's refusal of a sink
-the inject writes is the inject's event, with Chrome's fields, but not
-trusted.
+`require-trusted-types-for` and `trusted-types` are not yet enforced. The
+browser never gets them (it would refuse the proxy's own `Function`, eval
+and outerHTML, and the inject's own Trusted Types policy would have to cover
+every write STomp makes into a sink, which is what blocked the inject on
+strict sites). The inject's own policy never activates (`src/inject/trusted.ts`
+`name` stays null, so `trustedTypesUsed()` is always false), and the sink
+emulation (`src/inject/modules/TrustedTypes.ts`) stays dormant
+(`ScriptFacts.rtt` is never set). A page's Trusted Types therefore do
+nothing through the proxy for now: the csp-trusted-types suite stays pending
+(`test/run.mjs`). The next slice enforces them against the page's own sinks
+the way scripts and styles are enforced above, inject-side, with the
+retained hash and sink machinery (`src/sha.ts`, the TrustedTypes module,
+`src/server/contentPolicies.ts`).
 
 ## Hosts
 

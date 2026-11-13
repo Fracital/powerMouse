@@ -313,6 +313,84 @@ export function hostsApply(sources: string[]): boolean {
 	);
 }
 
+/** what `codeAllows` is asked of a piece of the page's own code */
+export interface CodeItem {
+	/** the real URL of an external script or style, or null for inline code */
+	url?: URL | null;
+	/** the page's own text of an inline script, style, handler or eval (for a hash) */
+	text?: string | null;
+	/** a script or style element's nonce attribute, as the page set it */
+	nonce?: string | null;
+	/** an external script's integrity attribute */
+	integrity?: string | null;
+	/** what 'self' means (the real URL of the document whose policy it is) */
+	self?: URL;
+	/** code made from a string that WebAssembly compilation allows under 'wasm-unsafe-eval' */
+	wasm?: boolean;
+	/** the element is the parser's or a document.write's (not DOM-inserted): 'strict-dynamic' does not propagate to it */
+	parser?: boolean;
+}
+
+/**
+ * Whether a script or style directive's `sources` let a specific piece of
+ * the page's own code run, refuse or report, as Chrome judges it (measured,
+ * Chrome 152 and 156). The browser never gets the page's script-src,
+ * style-src or Trusted Types (browserPolicy); the inject enforces them
+ * against the page's own code with this. `directive` is the effective
+ * directive (CODE_DIRECTIVES); `script-src`/`style-src` stand for code made
+ * from a string (eval, the Function constructor, a string timer, WebAssembly
+ * compilation).
+ */
+export function codeAllows(
+	sources: string[],
+	directive: string,
+	item: CodeItem = {},
+): boolean {
+	const lower = sources.map((source) => source.toLowerCase());
+	// code made from a string: only 'unsafe-eval' (and 'wasm-unsafe-eval' for
+	// WebAssembly compilation) lets it run
+	if (directive === 'script-src' || directive === 'style-src') {
+		if (lower.includes("'unsafe-eval'")) return true;
+		return !!item.wasm && lower.includes("'wasm-unsafe-eval'");
+	}
+	const attr = directive.endsWith('-attr');
+	const script = directive.startsWith('script');
+	const { url = null, text = null, nonce = null, self } = item;
+	// 'strict-dynamic' (script-src-elem only): a script the page inserts
+	// through the DOM is let through whether inline or external (trust
+	// propagates from the running script), host sources and 'unsafe-inline'
+	// are ignored, and the parser's and document.write's need a nonce or hash
+	if (script && !attr && lower.includes("'strict-dynamic'")) {
+		if (!item.parser) return true;
+		if (nonce && sources.includes(`'nonce-${nonce}'`)) return true;
+		if (url === null) return text !== null && hashMatches(sources, text);
+		return !!item.integrity && integrityMatches(sources, item.integrity);
+	}
+	if (url === null) {
+		// inline: a <script>/<style>'s text, or a handler/style attribute
+		if (!attr && nonce && sources.includes(`'nonce-${nonce}'`)) return true;
+		if (inlineAllowed(sources, directive)) return true;
+		if (text === null) return false;
+		// a handler or style attribute is let through by its hash only with
+		// 'unsafe-hashes'; a script or style element's by its hash alone
+		if (attr)
+			return lower.includes("'unsafe-hashes'") && hashMatches(sources, text);
+		return hashMatches(sources, text);
+	}
+	// an external script or style, named by its URL
+	if (nonce && sources.includes(`'nonce-${nonce}'`)) return true;
+	if (script && item.integrity && integrityMatches(sources, item.integrity))
+		return true;
+	return sourcesMatch(sources, url, self ?? url);
+}
+
+/** whether any of `policies` governs scripts or styles (the inject enforces those against the page's code) */
+export function enforcesCode(policies: Policy[]): boolean {
+	return policies.some((policy) =>
+		CODE_DIRECTIVES.some((directive) => governing(policy, directive) !== null),
+	);
+}
+
 /**
  * The sources the browser gets for a script or style directive whose page
  * sources are `sources`. The page's keywords, nonces, hashes and local
@@ -836,6 +914,13 @@ export interface ScriptFacts {
 	/** false when a policy refuses code made from a string (browserEvaluates) */
 	evaluates: boolean;
 	/**
+	 * Whether the page's own policy governs scripts or styles, so the inject
+	 * enforces it against the page's code (the browser never gets those
+	 * directives, browserPolicy). A hint from the shell; the inject's live
+	 * check of pagePolicies() (metas included) is what decides.
+	 */
+	code?: boolean;
+	/**
 	 * The name of the inject's own Trusted Types policy, where a policy has
 	 * Trusted Types directives (browserPolicy), and whether one requires
 	 * them of a sink
@@ -846,12 +931,23 @@ export interface ScriptFacts {
 	policy?: unknown;
 }
 
-/** the script facts of a document whose browser policies are `texts` and whose nonce is `nonce` */
-export function scriptFacts(_texts: string[], _nonce: string): ScriptFacts {
+/**
+ * The script facts of a document whose browser policies are `texts`, whose
+ * nonce is `nonce`, and whose own policies (headers' and the head's metas')
+ * are `pagePolicies`
+ */
+export function scriptFacts(
+	_texts: string[],
+	_nonce: string,
+	pagePolicies: Policy[] = [],
+): ScriptFacts {
 	// the browser enforces no script policy of the page's (browserPolicy), so
 	// STomp's own scripts carry no nonce and its code always evaluates; the
-	// inject enforces the page's script directives against the page's code
-	return { evaluates: true };
+	// inject enforces the page's script and style directives against the
+	// page's own code (dom/Client.ts), where its policy governs them
+	return enforcesCode(pagePolicies)
+		? { evaluates: true, code: true }
+		: { evaluates: true };
 }
 
 /**

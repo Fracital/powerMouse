@@ -1062,6 +1062,16 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				if (element.hasAttribute(name)) {
 					const source = element.getAttribute(name)!;
 					element.setAttributeOG(name, source);
+					// the page's own script-src-attr refuses this inline handler: it
+					// compiles nothing (no browser-facing attribute) and the inject
+					// reports it (src/csp.ts)
+					if (this.client.refuseHandler(element, source)) {
+						// clear the live handler (the page's own, which the page's
+						// setAttribute left on the element) so clicking runs nothing
+						element.removeAttribute(name);
+						element.removeAttributeOG(name);
+						return;
+					}
 					// the browser compiles the code as a function's body: marked,
 					// so the function reads back with the page's code in it
 					const key = sourceKey(source);
@@ -1432,6 +1442,18 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src')!,
 						this.client.baseURL.toString(),
 					);
+					// the page's own script-src refuses this external script: it
+					// does not load, the browser fires 'error', and the inject
+					// reports it (src/csp.ts). A script the page inserts through the
+					// DOM, not the parser (DOMAttributes runs for inserted elements)
+					if (this.client.refuseExternalScript(element, url, false)) {
+						// clear the live src (the page's own, which the browser would
+						// otherwise load) so nothing loads; the browser fires 'error'
+						element.removeAttribute('src');
+						element.removeAttributeOG('src');
+						this.client.dispatchLoadError(element);
+						return;
+					}
 					// let through by its host or its integrity where the page's
 					// policy says so and the browser's copy would not (src/csp.ts)
 					this.client.giveCodeNonce(element, url, null, false);
@@ -1523,11 +1545,26 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						this.client.baseURL,
 					);
 					element.setAttributeOG('href', element.getAttribute('href')!);
-					if (rel.has('manifest')) element.removeAttribute('href');
-					else if (
+					const stylesheet =
 						rel.has('stylesheet') ||
-						((rel.has('preload') || rel.has('prefetch')) && as === 'style')
-					)
+						((rel.has('preload') || rel.has('prefetch')) && as === 'style');
+					if (rel.has('manifest')) element.removeAttribute('href');
+					// the page's own style-src refuses this external stylesheet: it
+					// does not load, the browser fires 'error', the inject reports it
+					else if (
+						stylesheet &&
+						this.client.refuseExternalStyle(
+							element,
+							new URL(
+								element.getAttribute('href')!,
+								this.client.baseURL.toString(),
+							),
+						)
+					) {
+						element.removeAttribute('href');
+						element.removeAttributeOG('href');
+						this.client.dispatchLoadError(element);
+					} else if (stylesheet)
 						placeLoad(element, 'href', routeCSS(resource, this.client.baseURL));
 					else if (rel.has('modulepreload'))
 						placeLoad(
@@ -2045,6 +2082,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.hasAttribute('style') &&
 					element.getAttribute('style') !== ''
 				) {
+					// (the page's style-src-attr refuses a style attribute the page
+					// sets as a string: enforced at the setAttribute hook, not here,
+					// so a CSSOM write that serialises into the attribute, which the
+					// browser does not refuse, is not caught, src/inject/dom/
+					// modules/DOMHooks.ts)
 					// a style the browser serialised from a CSSOM write (a copy of
 					// such an element, inserted) holds routes: the page's is the
 					// browser's serialisation of the url()s it wrote

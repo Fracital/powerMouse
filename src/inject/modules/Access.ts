@@ -64,6 +64,17 @@ export default class AccessModule extends Module<Client> {
 		 * as natively): a trusted value where they are in use (trusted.ts)
 		 */
 		const evaluated = (x: string | object, refuse: () => unknown) => {
+			// the page's own script-src refuses the string before its Trusted
+			// Types judge it, throwing Chrome's EvalError (src/csp.ts codeEval).
+			// Both a direct eval (evalScope) and an indirect one reach here.
+			const refusal = this.client.codeEval(
+				'eval',
+				typeof x === 'string' ? x : String(x),
+			);
+			if (refusal) {
+				if (refusal.error) throw refusal.error;
+				return null;
+			}
 			const page = this.client.trustedValue(x, 'TrustedScript', 'eval', refuse);
 			if (page === null) return null;
 			const code = modifyJS(
@@ -75,10 +86,12 @@ export default class AccessModule extends Module<Client> {
 			this.client.noteCodeSample(code, page);
 			return trustedScript(code);
 		};
-		const globalEval = (x: unknown) =>
-			isCode(x)
-				? evalSnapshot(evaluated(x, () => evalSnapshot(x as string))!)
-				: x;
+		const globalEval = (x: unknown) => {
+			if (!isCode(x)) return x;
+			// (eval refused by the page's script-src throws in `evaluated`)
+			const code = evaluated(x, () => evalSnapshot(x as string));
+			return code === null ? undefined : evalSnapshot(code);
+		};
 
 		const globalEvalProxy = proxyModule?.wrapFunction(
 			evalSnapshot,

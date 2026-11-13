@@ -19,6 +19,9 @@ export default class TimersModule extends Module<Client> {
 				global[name],
 				(target, that, args) => {
 					if (args.length && typeof args[0] !== 'function') {
+						// the page's own script-src refuses the string: Chrome runs
+						// nothing and throws nothing, and reports it (src/csp.ts codeEval)
+						if (this.client.codeEval('timer', String(args[0]))) return 0;
 						// (the page's Trusted Types judge the code first: trusted.ts)
 						const code = this.client.trustedValue(
 							args[0],

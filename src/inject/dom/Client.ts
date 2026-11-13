@@ -4,6 +4,8 @@ import {
 	BLOB_COPIES,
 	browserPolicy,
 	browserRefuses,
+	codeAllows,
+	enforcesCode,
 	governing,
 	hashMatches,
 	hostsApply,
@@ -16,6 +18,7 @@ import {
 	refusalNamed,
 	sourcesMatch,
 	trustedTypesRequired,
+	type CodeItem,
 	type HopPolicy,
 	type Policy,
 	type PolicyText,
@@ -1232,6 +1235,288 @@ export default class DocumentClient extends Client {
 				);
 	}
 	/**
+	 * A synthesised script/style violation of `policy`, dispatched where the
+	 * browser would fire it (`node`, or the document): the browser never gets
+	 * the page's script-src/style-src (src/csp.ts browserPolicy), so the
+	 * inject reports the page's own code itself. Deferred, so it does not
+	 * re-enter the page mid-mutation; untrusted (csp-scripts compares no
+	 * isTrusted; the fields it compares are the browser's).
+	 */
+	/**
+	 * What a synthesised code violation's `target` reads as (the element the
+	 * browser names, which may be gone or never connected by the time the
+	 * event fires): the event is dispatched on the document, which always
+	 * reaches the page's listener, and ContentSecurity reads this back
+	 * (src/inject/dom/modules/ContentSecurity.ts).
+	 */
+	readonly codeViolationTarget = new WeakMap<object, Node>();
+	#dispatchCodeViolation(
+		policy: Policy,
+		directive: string,
+		blocked: string,
+		sample: string,
+		node: Node | null,
+	) {
+		const global = this.global as typeof globalThis;
+		const Event = global.SecurityPolicyViolationEvent;
+		if (typeof Event !== 'function') return;
+		const document = global.document;
+		nativeSetTimeout(() => {
+			try {
+				const event = new Event('securitypolicyviolation', {
+					bubbles: true,
+					composed: true,
+					blockedURI: blocked,
+					documentURI: this.url.url.href.replace(/#.*$/s, ''),
+					referrer: this.referrerOf(document) ?? '',
+					violatedDirective: directive,
+					effectiveDirective: directive,
+					originalPolicy: policy.text,
+					disposition: policy.disposition,
+					sourceFile: '',
+					statusCode: 200,
+					lineNumber: 0,
+					columnNumber: 0,
+					sample,
+				});
+				// the browser names an element (an inline script, a handler's
+				// element, a style); fire on the document all the same, where the
+				// page's listener always hears it, and read the target back there
+				if (node && node !== document)
+					this.codeViolationTarget.set(event, node);
+				Reflect.apply(global.EventTarget.prototype.dispatchEvent, document, [
+					event,
+				]);
+			} catch (error) {
+				// the document is gone
+			}
+		});
+	}
+	/** whether any policy of this document governs scripts or styles (the inject enforces them against the page's code) */
+	get codeEnforced(): boolean {
+		return this.scriptFacts.code === true || enforcesCode(this.#ownPolicies());
+	}
+	#ownPolicies(): Policy[] {
+		return this.pagePolicies().map(({ policy }) => policy);
+	}
+	/**
+	 * Whether the page's own policy refuses a piece of its code at `directive`
+	 * (a script or style element, a handler or style attribute), firing the
+	 * violation(s) the browser would: true where an enforced policy refuses it,
+	 * so the caller must not run, load or apply it. `node` is the element the
+	 * violation's target is (null for the document). `blocked` is the
+	 * blockedURI Chrome names ('inline', a URL, 'data', 'blob'). `item`'s
+	 * `sample` is the page's own code, shown where the directive has
+	 * 'report-sample'.
+	 */
+	codeRefused(
+		directive: string,
+		blocked: string,
+		node: Node | null,
+		item: CodeItem & { sample?: string | null } = {},
+		/**
+		 * The load reaches the service worker (an http(s) external script or
+		 * style), which reports a report-only refusal itself (reportRefusal): the
+		 * inject reports only the enforced ones, so the page sees each once
+		 */
+		workerReports = false,
+	): boolean {
+		let refused = false;
+		for (const { policy, self } of this.pagePolicies()) {
+			const governed = governing(policy, directive);
+			if (!governed) continue;
+			if (codeAllows(governed.sources, directive, { ...item, self })) continue;
+			if (policy.disposition === 'report' && workerReports) continue;
+			const sample =
+				item.sample &&
+				governed.sources.some(
+					(source) => source.toLowerCase() === "'report-sample'",
+				)
+					? item.sample.slice(0, 40)
+					: '';
+			this.#dispatchCodeViolation(policy, directive, blocked, sample, node);
+			if (policy.disposition === 'enforce') refused = true;
+		}
+		return refused;
+	}
+	/**
+	 * How the page's own script-src refuses code made from a string, as Chrome
+	 * does (measured): fires the violation(s) and returns the error to throw
+	 * (an EvalError, or a CompileError for WebAssembly; null for a string
+	 * timer, which runs nothing and throws nothing), or null where it runs.
+	 */
+	override codeEval(
+		kind: 'eval' | 'Function' | 'timer' | 'wasm-compile' | 'wasm-module',
+		sample: string,
+	): { error: Error | null } | null {
+		const wasm = kind === 'wasm-compile' || kind === 'wasm-module';
+		const blocked = wasm ? 'wasm-eval' : 'eval';
+		let directive: string | null = null;
+		for (const { policy } of this.pagePolicies()) {
+			const governed = governing(policy, 'script-src');
+			if (!governed) continue;
+			if (codeAllows(governed.sources, 'script-src', { wasm })) continue;
+			const shown =
+				sample &&
+				governed.sources.some(
+					(source) => source.toLowerCase() === "'report-sample'",
+				)
+					? sample.slice(0, 40)
+					: '';
+			this.#dispatchCodeViolation(policy, 'script-src', blocked, shown, null);
+			// the first enforced policy that refuses it names the thrown error
+			if (policy.disposition === 'enforce' && directive === null)
+				directive = `${governed.name} ${governed.sources.join(' ')}`;
+		}
+		if (directive === null) return null;
+		if (kind === 'timer') return { error: null };
+		const global = this.global as typeof globalThis;
+		if (wasm) {
+			const CompileError = (
+				global as unknown as { WebAssembly: { CompileError: ErrorConstructor } }
+			).WebAssembly.CompileError;
+			const fn = kind === 'wasm-compile' ? 'compile' : 'Module';
+			return {
+				error: new CompileError(
+					`WebAssembly.${fn}(): Compiling or instantiating WebAssembly module violates the following Content Security policy directive because 'unsafe-eval' is not an allowed source of script in the following Content Security Policy directive: "${directive}".`,
+				),
+			};
+		}
+		return {
+			error: new global.EvalError(
+				`Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: ${directive}".\n`,
+			),
+		};
+	}
+	#elementNonce(element: Element): string | null {
+		try {
+			return (element as HTMLElement).nonce || element.getAttribute('nonce');
+		} catch (error) {
+			return null;
+		}
+	}
+	#elementIntegrity(element: Element): string | null {
+		return (
+			(
+				element as Element & {
+					getAttributeOG?: (name: string) => string | null;
+				}
+			).getAttributeOG?.('integrity') ?? element.getAttribute('integrity')
+		);
+	}
+	/** each element a code violation was already reported for, and its verdict (so a second pass neither re-fires nor changes it) */
+	readonly #codeVerdict = new WeakMap<object, boolean>();
+	#refuseOnce(
+		element: Element,
+		directive: string,
+		blocked: string,
+		node: Node | null,
+		item: CodeItem & { sample?: string | null },
+		workerReports = false,
+	): boolean {
+		if (!this.codeEnforced) return false;
+		const cached = this.#codeVerdict.get(element);
+		if (cached !== undefined) return cached;
+		const refused = this.codeRefused(
+			directive,
+			blocked,
+			node,
+			item,
+			workerReports,
+		);
+		this.#codeVerdict.set(element, refused);
+		return refused;
+	}
+	/** whether the page's script-src refuses this inline script (its own `text`); fires the violation and the caller blanks it */
+	refuseInlineScript(element: Element, text: string, parser: boolean): boolean {
+		return this.#refuseOnce(element, 'script-src-elem', 'inline', element, {
+			text,
+			nonce: this.#elementNonce(element),
+			parser,
+			sample: text,
+		});
+	}
+	/** whether the page's script-src refuses this external script (`url`); fires the violation and the caller neutralises it */
+	refuseExternalScript(element: Element, url: URL, parser: boolean): boolean {
+		const blocked =
+			url.protocol === 'data:'
+				? 'data'
+				: url.protocol === 'blob:'
+					? 'blob'
+					: url.href.replace(/#.*$/s, '');
+		return this.#refuseOnce(
+			element,
+			'script-src-elem',
+			blocked,
+			null,
+			{
+				url,
+				nonce: this.#elementNonce(element),
+				integrity: this.#elementIntegrity(element),
+				parser,
+			},
+			// an http(s) load the service worker sees and reports itself
+			/^https?:$/.test(url.protocol),
+		);
+	}
+	/** whether the page's script-src-attr refuses this inline handler (`value`); fires the violation */
+	refuseHandler(element: Element, value: string): boolean {
+		return this.#refuseOnce(element, 'script-src-attr', 'inline', element, {
+			text: value,
+			sample: value,
+		});
+	}
+	/** whether the page's style-src refuses this inline style (its own `text`); fires the violation (targets the document, as Chrome does for styles) and the caller blanks it */
+	refuseInlineStyle(element: Element, text: string, parser: boolean): boolean {
+		return this.#refuseOnce(element, 'style-src-elem', 'inline', null, {
+			text,
+			nonce: this.#elementNonce(element),
+			parser,
+			sample: text,
+		});
+	}
+	/** the 'error' event the browser fires on a script or stylesheet its policy refused (deferred, once it is connected) */
+	dispatchLoadError(element: Element) {
+		const global = this.global as typeof globalThis;
+		nativeSetTimeout(() => {
+			try {
+				Reflect.apply(global.EventTarget.prototype.dispatchEvent, element, [
+					new global.Event('error'),
+				]);
+			} catch (error) {
+				// the element was removed
+			}
+		});
+	}
+	/** whether the page's style-src-attr refuses this style attribute (`value`); fires the violation (targets the document, as Chrome does for styles) */
+	refuseStyleAttribute(element: Element, value: string): boolean {
+		return this.#refuseOnce(element, 'style-src-attr', 'inline', null, {
+			text: value,
+			sample: value,
+		});
+	}
+	/** whether the page's style-src refuses this external stylesheet (`url`); fires the violation and the caller neutralises it */
+	refuseExternalStyle(element: Element, url: URL): boolean {
+		const blocked =
+			url.protocol === 'data:'
+				? 'data'
+				: url.protocol === 'blob:'
+					? 'blob'
+					: url.href.replace(/#.*$/s, '');
+		return this.#refuseOnce(
+			element,
+			'style-src-elem',
+			blocked,
+			null,
+			{
+				url,
+				nonce: this.#elementNonce(element),
+			},
+			// an http(s) load the service worker sees and reports itself
+			/^https?:$/.test(url.protocol),
+		);
+	}
+	/**
 	 * The nonce a script or style element of the page's (`directive`
 	 * script-src-elem or style-src-elem) gets to be let through by the
 	 * browser where every enforced policy of the page's allows it natively
@@ -2317,10 +2602,17 @@ export default class DocumentClient extends Client {
 			// the client's own (a style's stand-in, DOMContentHooks)
 			if (isHTMLScript && this.rewrittenScripts.get(script) === source)
 				continue;
-			// let through by the hash of its text where the page's policy says
-			// so: the rewrite is not that text (src/csp.ts)
-			if (!script.hasAttribute('src'))
+			// the page's own script-src refuses this inline script of the
+			// markup: it keeps no text, so it runs nothing (src/csp.ts)
+			if (!script.hasAttribute('src')) {
+				if (this.refuseInlineScript(script, source, true)) {
+					write('');
+					continue;
+				}
+				// let through by the hash of its text where the page's policy says
+				// so: the rewrite is not that text (src/csp.ts)
 				this.giveCodeNonce(script, null, source, true);
+			}
 			const isModule = scriptKind(script) === 'module';
 			// the restore runs after the script's directive prologue, so a strict
 			// script stays strict
@@ -2487,8 +2779,12 @@ export default class DocumentClient extends Client {
 		if (!this.isConnected(script) || !shouldRewriteScript(script)) return text;
 		const passed = this.scriptPrepared(script, text);
 		if (passed === null) return text;
-		if (!script.hasAttribute('src'))
+		if (!script.hasAttribute('src')) {
+			// the page's own script-src refuses this inline script: it runs
+			// nothing (empty text) and the inject reports it (src/csp.ts)
+			if (this.refuseInlineScript(script, passed, false)) return '';
 			this.giveCodeNonce(script, null, passed, false);
+		}
 		const module = scriptKind(script) === 'module';
 		const rewritten =
 			this.prewrittenScript(module, passed, true) ??

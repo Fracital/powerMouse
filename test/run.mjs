@@ -155,20 +155,15 @@ const SKIP_MEASUREMENT = process.env.SKIP_MEASUREMENT === '1';
 
 // suites for work that is in the tree but not yet landed: left out of a full
 // run (and of GitHub CI, which runs a bare `npm test`) so master stays green,
-// and still run when named on the command line. The CSP stage-1 landing
-// enforces the page's fetch and navigation directives but not its script-src,
-// style-src or Trusted Types (the browser enforces none of the page's script
-// or style policy, so STomp's own inject is never blocked by it); the inject
-// enforces those against the page's own code in stage 2, when these suites
-// come back.
+// and still run when named on the command line. The inject now enforces the
+// page's script-src and style-src against the page's own code (csp-scripts);
+// Trusted Types enforcement (csp-trusted-types) is the next slice. The browser
+// enforces none of the page's script, style or Trusted Types policy, so
+// STomp's own inject is never blocked by it.
 const PENDING_SUITES = new Map([
 	[
-		'csp-scripts',
-		'CSP stage 2: page script-src/style-src/Trusted-Types enforcement, not yet landed',
-	],
-	[
 		'csp-trusted-types',
-		'CSP stage 2: page script-src/style-src/Trusted-Types enforcement, not yet landed',
+		'CSP stage 2: page Trusted-Types enforcement, not yet landed',
 	],
 ]);
 

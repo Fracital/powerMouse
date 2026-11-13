@@ -2423,6 +2423,27 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						value = passed;
 					}
 
+					// the page's style-src-attr refuses a style attribute the page
+					// sets as a string (a CSSOM write that serialises into the
+					// attribute is the browser's to allow, and never calls
+					// setAttribute): apply nothing and report it (src/csp.ts)
+					if (
+						attribute === 'style' &&
+						args.length > 1 &&
+						typeof value === 'string' &&
+						value !== '' &&
+						!isParsed(that) &&
+						this.client.refuseStyleAttribute(that, value)
+					) {
+						pageWrite(that, attribute, () =>
+							usePrototype(that, CustomElement.prototype, (element) => {
+								element.removeAttribute('style');
+								element.removeAttributeOG('style');
+							}),
+						);
+						return;
+					}
+
 					pageWrite(that, attribute, () => {
 						// an attribute no hook watches (class, aria-*, data-*) is
 						// written as the hooks' view would write it, with no swap

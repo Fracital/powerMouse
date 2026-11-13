@@ -440,6 +440,22 @@ export default class Client {
 	}
 	/** report a sink's refusal of `value` that only a report-only policy makes (documents dispatch it) */
 	reportTrustedTypes(_sink: string, _value: string) {}
+	/**
+	 * How the page's own script-src refuses code made from a string (eval, the
+	 * Function constructor, a string timer, WebAssembly compilation), as Chrome
+	 * does: null where it runs, or an object whose `error` is the error to
+	 * throw (an EvalError/CompileError; null for a string timer, which runs
+	 * nothing and throws nothing). Fires the violations itself (the browser
+	 * never gets the page's script-src, src/csp.ts). Overridden by the document
+	 * client; the base never enforces. `sample` is the page's own code (for
+	 * 'report-sample').
+	 */
+	codeEval(
+		_kind: 'eval' | 'Function' | 'timer' | 'wasm-compile' | 'wasm-module',
+		_sample: string,
+	): { error: Error | null } | null {
+		return null;
+	}
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		this.names = helperNames(init);
 		this.#customNames = !!(init as { names?: unknown }).names;
@@ -453,6 +469,7 @@ export default class Client {
 				? {
 						nonce: facts.nonce,
 						evaluates: facts.evaluates !== false,
+						code: facts.code,
 						tt: facts.tt,
 						rtt: facts.rtt,
 						policy: facts.policy,

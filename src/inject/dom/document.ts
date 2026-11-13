@@ -43,6 +43,7 @@ import SyncModule from './modules/Sync';
 import TokenListsModule from './modules/TokenLists';
 import ViewTransitionModule from './modules/ViewTransition';
 import VisitedModule from './modules/Visited';
+import WebAssemblyPolicyModule from './modules/WebAssemblyPolicy';
 import WebRTCModule from './modules/WebRTC';
 import XMLHttpRequestModule from './modules/XMLHttpRequest';
 
@@ -99,6 +100,7 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(ClientHintsModule);
 	client.addModule(VisitedModule);
 	client.addModule(ContentSecurityModule);
+	client.addModule(WebAssemblyPolicyModule);
 	client.addModule(ReadbackModule);
 	client.addModule(CSSReadbackModule);
 	// last: the Navigate module's own observer keeps the native constructor

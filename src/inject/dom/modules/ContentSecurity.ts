@@ -211,6 +211,21 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 					}
 				}),
 			});
+		// A synthesised script-src/style-src violation of the page's own code
+		// (dom/Client.ts: the browser never gets those directives) is dispatched
+		// on the document so the page's listener always hears it, but names the
+		// element the browser would (an inline script or style, a handler's
+		// element): read that element back here.
+		if (nativeTarget) {
+			Reflect.defineProperty(prototype, 'target', {
+				configurable: true,
+				enumerable: true,
+				get: proxyModule.wrapFunction(nativeTarget, (target, that, args) => {
+					const named = this.client.codeViolationTarget.get(that as object);
+					return named ?? Reflect.apply(target, that, args);
+				}),
+			});
+		}
 		// the document's nonce on an element of the page's (one its policy
 		// lets through by a hash or a host, which the browser's copy cannot
 		// judge: DocumentClient.codeNonce) is not the page's

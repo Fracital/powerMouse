@@ -4297,8 +4297,17 @@ export function registerRewrites(
 						.map((policy) => browserContentPolicy(policy))
 						.filter((text) => text !== null),
 				];
+				// the page's own policies (headers' and the head's metas'), which
+				// the inject enforces against the page's code (the browser never
+				// gets their script/style/Trusted-Types directives, src/csp.ts)
+				const ownPolicies = [
+					...policies.texts.flatMap(([, page, disposition]) =>
+						parsePolicies(page, disposition, 'header'),
+					),
+					...metaPolicies(decoded),
+				];
 				const facts = {
-					...scriptFacts(texts, nonce),
+					...scriptFacts(texts, nonce, ownPolicies),
 					...trustedFacts(texts, tt),
 				};
 				// the document the hints machinery recorded for this response
