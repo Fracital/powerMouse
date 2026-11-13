@@ -1,0 +1,144 @@
+<!doctype html>
+<title>SHARED TIMING</title>
+<link rel="stylesheet" href="/pages/shared-timing.css" />
+<body>
+	<pre id="probe-marker">pending</pre>
+	<script src="/pages/shared-timing.js"></script>
+	<script>
+		// Probe for measure-shared-timing: three fidelity surfaces a page can
+		// read about itself. Reports into window.__probe when done.
+		//  1. performance.getEntriesByType('resource'): the names, count and
+		//     per-entry shape (initiatorType, sizes, nextHopProtocol) a page
+		//     sees of its own sub-resources. A proxied page must not see the
+		//     inject's own fetches (bundles, rewriter lib, routed helper
+		//     requests) and every name must be the page's URL, not a route.
+		//  2. performance.memory (handled elsewhere; recorded for the record).
+		//  3. cross-frame timing: performance.now resolution and timeOrigin,
+		//     and same-origin postMessage round-trip latency.
+		(async () => {
+			const out = { href: location.href };
+
+			// a fetch, so an initiatorType "fetch" entry exists
+			try {
+				await fetch('/pages/shared-timing.json').then((r) => r.json());
+			} catch (e) {
+				out.fetchError = String(e);
+			}
+			// an image, so an initiatorType "img"/"css" entry exists
+			await new Promise((resolve) => {
+				const img = new Image();
+				img.onload = img.onerror = () => resolve();
+				img.src = '/favicon.ico?probe=' + Date.now();
+				setTimeout(resolve, 1500);
+			});
+			// let the entries settle
+			await new Promise((r) => setTimeout(r, 300));
+
+			// --- surface 1: resource timing ---
+			const entries = performance.getEntriesByType('resource').map((e) => ({
+				name: e.name,
+				initiatorType: e.initiatorType,
+				transferSize: e.transferSize,
+				encodedBodySize: e.encodedBodySize,
+				decodedBodySize: e.decodedBodySize,
+				nextHopProtocol: e.nextHopProtocol,
+				deliveryType: e.deliveryType,
+				duration: e.duration,
+				serverTiming: (e.serverTiming || []).map((m) => m.name),
+			}));
+			out.resource = {
+				count: entries.length,
+				entries,
+				// names that are not under this page's own origin (a leak of a
+				// route or the proxy's own origin would show here)
+				foreignNames: entries
+					.map((e) => e.name)
+					.filter((n) => {
+						try {
+							return new URL(n).origin !== location.origin;
+						} catch {
+							return true;
+						}
+					}),
+				// an observer's view of the same, buffered (a page can watch
+				// these live; the inject must filter this path too)
+				observed: await new Promise((resolve) => {
+					const seen = [];
+					try {
+						const obs = new PerformanceObserver((list) => {
+							for (const e of list.getEntries()) seen.push(e.name);
+						});
+						obs.observe({ type: 'resource', buffered: true });
+						setTimeout(() => {
+							obs.disconnect();
+							resolve(seen);
+						}, 200);
+					} catch {
+						resolve(seen);
+					}
+				}),
+			};
+
+			// --- surface 2: performance.memory ---
+			const m = performance.memory;
+			out.memory = m
+				? {
+						used: m.usedJSHeapSize,
+						total: m.totalJSHeapSize,
+						limit: m.jsHeapSizeLimit,
+					}
+				: null;
+
+			// --- surface 3: cross-frame timing ---
+			out.timeOrigin = performance.timeOrigin;
+			// performance.now resolution: the smallest nonzero step over a busy
+			// spin (Chrome clamps to ~100 us cross-origin-isolated off, finer
+			// when isolated). Measured so a proxied offset/clamp shows.
+			let minStep = Infinity;
+			let last = performance.now();
+			for (let i = 0; i < 400000; i++) {
+				const t = performance.now();
+				const d = t - last;
+				if (d > 0 && d < minStep) minStep = d;
+				last = t;
+			}
+			out.nowMinStep = minStep === Infinity ? 0 : minStep;
+			out.crossOriginIsolated = self.crossOriginIsolated;
+			out.hasSAB = typeof SharedArrayBuffer === 'function';
+
+			// same-origin child: postMessage round-trip latency and the child's
+			// timeOrigin offset from ours (shared realm could skew it)
+			await new Promise((resolve) => {
+				const frame = document.createElement('iframe');
+				frame.src = '/pages/shared-timing-child.html';
+				frame.onload = async () => {
+					const win = frame.contentWindow;
+					out.childTimeOrigin = win.performance.timeOrigin;
+					const samples = [];
+					for (let i = 0; i < 30; i++) {
+						const t0 = performance.now();
+						const got = await new Promise((res) => {
+							const onMsg = (e) => {
+								if (e.data === 'pong') {
+									removeEventListener('message', onMsg);
+									res(performance.now());
+								}
+							};
+							addEventListener('message', onMsg);
+							win.postMessage('ping', '*');
+						});
+						samples.push(got - t0);
+					}
+					samples.sort((a, b) => a - b);
+					out.postMessageMedianMs = samples[samples.length >> 1];
+					resolve();
+				};
+				document.body.append(frame);
+				setTimeout(resolve, 3000);
+			});
+
+			out.done = true;
+			window.__probe = out;
+		})();
+	</script>
+</body>

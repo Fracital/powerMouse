@@ -1,0 +1,3 @@
+{
+	"probe": "fetch target so a resource-timing entry of initiatorType fetch exists"
+}

@@ -1,0 +1,5 @@
+/* a stylesheet the probe page loads, so a resource-timing entry of the
+   initiatorType "link"/"css" exists (measure-shared-timing suite) */
+#probe-marker {
+	color: rgb(1, 2, 3);
+}

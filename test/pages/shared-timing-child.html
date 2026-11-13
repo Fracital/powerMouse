@@ -1,0 +1,8 @@
+<!doctype html>
+<title>SHARED TIMING CHILD</title>
+<script>
+	// same-origin child for the cross-frame timing probe: echoes ping -> pong
+	addEventListener('message', (e) => {
+		if (e.data === 'ping') parent.postMessage('pong', '*');
+	});
+</script>
