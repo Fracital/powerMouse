@@ -2015,6 +2015,37 @@ console.warn = warn;
 			[exported, member, declared].every(asModule),
 		JSON.stringify([exported, member, declared]),
 	);
+	// An anonymous class or function the page wrote as the expression of a
+	// statement, in parentheses it needs: minified, the mark the printer
+	// writes in the class's name place stands right after `class`, and the
+	// printer writes no space there before a comment, so its "a leading
+	// `class` needs parentheses" check (it reads the character after `class`)
+	// missed it and the class printed bare, a nameless class declaration,
+	// which does not parse, and one such statement lost the whole bundle (as
+	// snapchat.com's did). A long line so the output is compact, with nested
+	// marked functions as the page's class had. `function` kept its space and
+	// its parentheses already; both are checked here on each backend's output.
+	const headClass =
+		'var MR,LR;(class extends PR{constructor(e){super(e,top)}static m(){return window.addEventListener(top,e,{passive:!1}),function(){window.removeEventListener(top,e)};function e(){}}});' +
+		';'.repeat(40);
+	const headFunction =
+		'(function(){var a=top;return function(){return a};function z(){}})();' +
+		';'.repeat(160);
+	const headAnon = [headClass, headFunction].map((code) => marked(code));
+	const headTrees = headAnon.map((code) => tree(code));
+	const headExpr = (statements, type) =>
+		statements.some(
+			(statement) =>
+				statement.type === 'ExpressionStatement' &&
+				statement.expression.type === type,
+		);
+	ok(
+		'a parenthesised class or function expression statement keeps its parentheses, minified and marked',
+		headAnon.every(parses) &&
+			headExpr(headTrees[0].body, 'ClassExpression') &&
+			headExpr(headTrees[1].body, 'CallExpression'),
+		headAnon.join('\n\n'),
+	);
 }
 {
 	// The fuzz (test/pages/rewriter-fuzz.js): a payload that reads `top`

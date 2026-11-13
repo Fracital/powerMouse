@@ -2736,14 +2736,28 @@ function markFunctions(
 			case 'FunctionDeclaration':
 			case 'FunctionExpression':
 			case 'ClassDeclaration':
-			case 'ClassExpression':
+			case 'ClassExpression': {
 				if (methodValues.has(node)) continue;
+				// An anonymous class takes the mark in its name's place, right
+				// after `class`, where the generator writes no space before a
+				// comment (`class/*m*/extends`). As the expression of a
+				// statement that leaves `class` the first token, which the
+				// generator parenthesises only when it reads a `{`, a space or
+				// a line break after it (`class A extends B {}` is a
+				// declaration, not an expression): the class prints bare and
+				// the script does not parse. A space in the mark's place keeps
+				// that read right; an anonymous `function` already prints one.
+				const anonymous =
+					node.type === 'ClassDeclaration' || node.type === 'ClassExpression'
+						? ' '
+						: '';
 				node.id = suffixed(
-					node.id ?? { type: 'Identifier', name: '' },
+					node.id ?? { type: 'Identifier', name: anonymous },
 					markOf(node.range[0], node.range[1]),
 				);
 				count++;
 				continue;
+			}
 			case 'ArrowFunctionExpression': {
 				const mark = markOf(node.range[0], node.range[1]);
 				count++;
