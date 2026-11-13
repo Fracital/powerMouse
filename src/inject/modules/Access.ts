@@ -64,19 +64,18 @@ export default class AccessModule extends Module<Client> {
 		 * as natively): a trusted value where they are in use (trusted.ts)
 		 */
 		const evaluated = (x: string | object, refuse: () => unknown) => {
-			// the page's own script-src refuses the string before its Trusted
-			// Types judge it, throwing Chrome's EvalError (src/csp.ts codeEval).
-			// Both a direct eval (evalScope) and an indirect one reach here.
-			const refusal = this.client.codeEval(
-				'eval',
-				typeof x === 'string' ? x : String(x),
-			);
+			// the page's Trusted Types judge the string first (its default policy
+			// may change it, and refuse it with Chrome's EvalError); then its
+			// script-src, which may refuse code made from a string (src/csp.ts
+			// codeEval). Both a direct eval (evalScope) and an indirect one reach
+			// here.
+			const page = this.client.trustedValue(x, 'TrustedScript', 'eval', refuse);
+			if (page === null) return null;
+			const refusal = this.client.codeEval('eval', page);
 			if (refusal) {
 				if (refusal.error) throw refusal.error;
 				return null;
 			}
-			const page = this.client.trustedValue(x, 'TrustedScript', 'eval', refuse);
-			if (page === null) return null;
 			const code = modifyJS(
 				page,
 				this.client.baseURL,

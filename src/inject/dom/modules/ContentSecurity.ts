@@ -65,10 +65,20 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 		const nativePolicy = native('originalPolicy');
 		const nativeBlocked = native('blockedURI');
 		const nativeDirective = native('effectiveDirective');
-		const nativeTrusted = Reflect.getOwnPropertyDescriptor(
-			global.Event.prototype,
-			'isTrusted',
-		)?.get;
+		// isTrusted lives on Event.prototype; walk the event's own chain to it,
+		// since the realm's `Event` may be the inject's stand-in
+		let nativeTrusted: (() => boolean) | undefined;
+		for (
+			let proto: object | null = prototype;
+			proto;
+			proto = Reflect.getPrototypeOf(proto)
+		) {
+			const descriptor = Reflect.getOwnPropertyDescriptor(proto, 'isTrusted');
+			if (descriptor?.get) {
+				nativeTrusted = descriptor.get as () => boolean;
+				break;
+			}
+		}
 		const stop = global.Event.prototype.stopImmediatePropagation;
 		const listen = global.EventTarget.prototype.addEventListener;
 		// The browser reports a refusal against each of its policies that
@@ -211,6 +221,90 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 					}
 				}),
 			});
+		// An enforced Trusted Types violation reads back trusted, as the
+		// browser's would (the enforced csp-trusted-types cases compare
+		// isTrusted; the browser never gets require-trusted-types-for). isTrusted
+		// is an own, non-configurable accessor Chrome puts on every event, so it
+		// cannot be set on the inject's own event. Instead the page's
+		// securitypolicyviolation listeners are handed a view of a tagged event
+		// that reads isTrusted true; a real violation, and every other event, is
+		// handed as it is.
+		{
+			const client = this.client;
+			const Proxy = global.Proxy;
+			const views = new WeakMap<object, object>();
+			const view = (event: object): object => {
+				let proxy = views.get(event);
+				if (!proxy) {
+					proxy = new Proxy(event, {
+						get(target, key) {
+							if (key === 'isTrusted') return true;
+							// receiver is the real event, so its getters and methods run
+							// on it (a Proxy receiver throws "Illegal invocation")
+							const value = Reflect.get(target, key);
+							return typeof value === 'function'
+								? (value as Function).bind(target)
+								: value;
+						},
+					});
+					views.set(event, proxy);
+				}
+				return proxy;
+			};
+			const wraps = new WeakMap<object, EventListener>();
+			const wrap = (listener: EventListener): EventListener => {
+				let wrapped = wraps.get(listener as unknown as object);
+				if (!wrapped) {
+					wrapped = function (this: EventTarget, event: Event) {
+						return listener.call(
+							this,
+							client.trustedViolations.has(event)
+								? (view(event) as unknown as Event)
+								: event,
+						);
+					};
+					wraps.set(listener as unknown as object, wrapped);
+				}
+				return wrapped;
+			};
+			const proto = global.EventTarget.prototype as EventTarget & {
+				addEventListener: Function;
+				removeEventListener: Function;
+			};
+			const nativeAdd = proto.addEventListener;
+			const nativeRemove = proto.removeEventListener;
+			proto.addEventListener = proxyModule.wrapFunction(
+				nativeAdd,
+				(target, that, args) => {
+					if (
+						args[0] === 'securitypolicyviolation' &&
+						typeof args[1] === 'function'
+					)
+						return Reflect.apply(target, that, [
+							args[0],
+							wrap(args[1] as EventListener),
+							args[2],
+						]);
+					return Reflect.apply(target, that, args);
+				},
+			);
+			proto.removeEventListener = proxyModule.wrapFunction(
+				nativeRemove,
+				(target, that, args) => {
+					if (
+						args[0] === 'securitypolicyviolation' &&
+						typeof args[1] === 'function' &&
+						wraps.has(args[1] as unknown as object)
+					)
+						return Reflect.apply(target, that, [
+							args[0],
+							wraps.get(args[1] as unknown as object),
+							args[2],
+						]);
+					return Reflect.apply(target, that, args);
+				},
+			);
+		}
 		// A synthesised script-src/style-src violation of the page's own code
 		// (dom/Client.ts: the browser never gets those directives) is dispatched
 		// on the document so the page's listener always hears it, but names the

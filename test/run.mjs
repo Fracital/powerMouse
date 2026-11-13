@@ -160,12 +160,7 @@ const SKIP_MEASUREMENT = process.env.SKIP_MEASUREMENT === '1';
 // Trusted Types enforcement (csp-trusted-types) is the next slice. The browser
 // enforces none of the page's script, style or Trusted Types policy, so
 // STomp's own inject is never blocked by it.
-const PENDING_SUITES = new Map([
-	[
-		'csp-trusted-types',
-		'CSP stage 2: page Trusted-Types enforcement, not yet landed',
-	],
-]);
+const PENDING_SUITES = new Map([]);
 
 const wanted = process.argv.slice(2);
 const suites = readdirSync(suitesDir)

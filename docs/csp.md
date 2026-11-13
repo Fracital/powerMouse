@@ -98,19 +98,42 @@ compiles with native `WebAssembly` methods captured before the inject's wrap
 
 ## Trusted Types
 
-`require-trusted-types-for` and `trusted-types` are not yet enforced. The
-browser never gets them (it would refuse the proxy's own `Function`, eval
-and outerHTML, and the inject's own Trusted Types policy would have to cover
-every write STomp makes into a sink, which is what blocked the inject on
-strict sites). The inject's own policy never activates (`src/inject/trusted.ts`
-`name` stays null, so `trustedTypesUsed()` is always false), and the sink
-emulation (`src/inject/modules/TrustedTypes.ts`) stays dormant
-(`ScriptFacts.rtt` is never set). A page's Trusted Types therefore do
-nothing through the proxy for now: the csp-trusted-types suite stays pending
-(`test/run.mjs`). The next slice enforces them against the page's own sinks
-the way scripts and styles are enforced above, inject-side, with the
-retained hash and sink machinery (`src/sha.ts`, the TrustedTypes module,
-`src/server/contentPolicies.ts`).
+The browser never gets `require-trusted-types-for` or `trusted-types`: it
+would refuse the proxy's own `Function`, eval and HTML/script sinks, and
+STomp's own policy would have to cover every write STomp makes into a sink,
+which is what blocked the inject on strict sites. The inject's own policy
+never activates (`src/inject/trusted.ts` `name` stays null). So the inject
+enforces the page's Trusted Types against the page's own sinks and policy
+names itself, as Chrome does (measured, Chrome 152 and 156;
+`src/inject/modules/TrustedTypes.ts`), wherever the page's policy carries a
+Trusted Types directive (`ScriptFacts.ttActive`, from `src/csp.ts`).
+
+A trusted value of the sink's type passes as its own string; a string is
+handed to the page's default policy with Chrome's arguments (the sink name,
+the type), and what it returns is the value (for eval and `Function` only an
+identical string runs). What is left is refused with Chrome's own per-sink
+TypeError (the `require-trusted-types-for 'script'` sinks: innerHTML, a
+script's text, `eval`, a string timer, a javascript: URL, a worker URL, and
+the parser sinks) and a trusted-types-sink violation; the message gains its
+tail when a default policy exists but returned null or does not cover the
+type. A `createPolicy` the `trusted-types` directive refuses (a disallowed or
+duplicate name) throws Chrome's TypeError and reports a trusted-types-policy
+violation. Under a report-only policy the sink goes on with the page's value
+and the inject reports it; the violation is not trusted.
+
+An enforced Trusted Types violation is the browser's own to the page, which
+compares `isTrusted`: the browser never gets the directive, so the inject
+synthesises the event and tags it (`trustedViolations`). `isTrusted` is an
+own, non-configurable accessor Chrome puts on every event, so it cannot be
+set on the event; the ContentSecurity module hands the page's
+securitypolicyviolation listeners a view that reads it true for a tagged one.
+A violation in a document the browser made of its creator's (about:blank,
+srcdoc) names, as Chrome's report strips it, the bare scheme (`about`) with
+status 0, not the page's URL. STomp's own DOM writes, parses and worker loads
+never reach a sink: they go through native sink setters and a native
+`DOMParser` captured before the inject's wraps (`src/inject/dom/cloneNode.ts`,
+`src/inject/dom/modules/TrustedParse.ts`), so the page's Trusted Types never
+reach them.
 
 ## Hosts
 
@@ -262,9 +285,6 @@ refuses fires a violation, natively either.
   code by its nonce too: each such document compiles its own copy of the
   bundle (about 770 KB of heap a frame, measured). Elsewhere the bundle
   loads by its URL, which the browser's policy names.
-- Scripts and styles (script-src, style-src and their -elem and -attr
-  forms, nonces, hashes, `'strict-dynamic'`, `'unsafe-eval'`), Trusted
-  Types, base-uri, form-action and frame-ancestors are not applied.
 - A sandbox's console messages name the proxy's URLs (a refused form's,
   a refused popup's), and a meta's or a report-only policy's `sandbox`
   is ignored without Chrome's console error for it. An external script of
@@ -272,9 +292,6 @@ refuses fires a violation, natively either.
   not run).
 - A frame's navigations other than the src its parent sets (a redirect, a
   navigation the frame starts) are not judged by the parent's frame-src.
-- Scripts and styles (script-src, style-src and their -elem and -attr
-  forms, nonces, hashes, `'strict-dynamic'`, `'unsafe-eval'`), sandbox and
-  Trusted Types are not applied.
 - A report-only base-uri or form-action refusal, and one of a frame's own
   navigation, is the inject's event (untrusted, no source position); a
   same-frame one may go with the document, as natively it may.

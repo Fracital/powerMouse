@@ -13,7 +13,6 @@ import {
 	policyNonce,
 	REFUSED_URL,
 	scriptFacts,
-	trustedFacts,
 	WORKER_DIRECTIVES,
 } from '../csp';
 import { freshFrameDocument } from '../freshFrame';
@@ -4284,9 +4283,6 @@ export function registerRewrites(
 				// nonce, which the browser's script policies name; a worker of
 				// the document imports the inject by its URL)
 				const nonce = policyNonce();
-				// (and the name of the inject's own Trusted Types policy, which
-				// every list of policy names allows)
-				const tt = `${policyMark()}t`;
 				const policies = browserHeaders(response.headers, policyMark());
 				// whether code made from a string runs, under the headers' policies
 				// and the metas' of the head (src/csp.ts ScriptFacts)
@@ -4306,10 +4302,7 @@ export function registerRewrites(
 					),
 					...metaPolicies(decoded),
 				];
-				const facts = {
-					...scriptFacts(texts, nonce, ownPolicies),
-					...trustedFacts(texts, tt),
-				};
+				const facts = scriptFacts(texts, nonce, ownPolicies);
 				// the document the hints machinery recorded for this response
 				// (its permissions policy, under its parent's): whether its real
 				// `sync-xhr` is off, which the served Permissions-Policy no longer

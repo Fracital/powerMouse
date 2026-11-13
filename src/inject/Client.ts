@@ -52,7 +52,12 @@ import { LINK_SEGMENT } from '../visited';
 import { forbidCodecModule } from '../wasm/codec';
 import Module from './Module';
 import { rewriteCounts, rewriterLibraryAt } from './rewriter';
-import { trustedFunction, useTrustedTypes, type TrustedKind } from './trusted';
+import {
+	trustedFunction,
+	usePageSinks,
+	useTrustedTypes,
+	type TrustedKind,
+} from './trusted';
 
 export interface ModuleCtor {
 	new (client: any): Module<any>;
@@ -391,8 +396,12 @@ export default class Client {
 	}
 	set scriptFacts(facts: ScriptFacts) {
 		this.#scriptFacts = facts;
-		// its writes into Trusted Types sinks carry trusted values (trusted.ts)
+		// its writes into Trusted Types sinks carry trusted values (trusted.ts);
+		// never set in stage 2, so STomp's own policy stays dormant
 		if (facts.tt) useTrustedTypes(facts.tt, facts.policy);
+		// the page's require-trusted-types-for is enforced against the page's own
+		// attribute sinks (trustedSink), without STomp's own policy
+		usePageSinks(facts.rtt !== undefined);
 	}
 	#scriptFacts!: ScriptFacts;
 	/** set by the TrustedTypes module: the page's value at a sink, as Chrome judges it (trustedValue) */
@@ -402,6 +411,8 @@ export default class Client {
 		sink: string,
 		refuse: () => unknown,
 		convert: (value: unknown) => string,
+		/** the write is a setAttribute call, so a refusal names setAttribute, not the property */
+		attribute?: boolean,
 	) => string | null;
 	/**
 	 * What the page's sink named `sink` (Chrome's name: `Element
@@ -416,9 +427,10 @@ export default class Client {
 		sink: string,
 		refuse: () => unknown,
 		convert: (value: unknown) => string = String,
+		attribute = false,
 	): string | null {
 		return this.trustedCheck
-			? this.trustedCheck(value, type, sink, refuse, convert)
+			? this.trustedCheck(value, type, sink, refuse, convert, attribute)
 			: convert(value);
 	}
 	/**
@@ -440,6 +452,26 @@ export default class Client {
 	}
 	/** report a sink's refusal of `value` that only a report-only policy makes (documents dispatch it) */
 	reportTrustedTypes(_sink: string, _value: string) {}
+	/** a sink's refusal an enforced require-trusted-types-for makes: a trusted violation (documents dispatch it) */
+	reportTrustedSink(_sink: string, _value: string) {}
+	/** a createPolicy the page's trusted-types directive refuses (documents dispatch it) */
+	reportTrustedPolicy(_policy: unknown, _name: string) {}
+	/** how the page's trusted-types directive refuses a createPolicy of `name` (documents decide) */
+	refusedTrustedPolicy(
+		_name: string,
+		_made: ReadonlySet<string>,
+	): { policy: unknown; message: string }[] {
+		return [];
+	}
+	/** the exact error Chrome throws at a refused Trusted Types `sink` (documents build it) */
+	trustedTypeError(
+		_sink: string,
+		_type: string,
+		_tail: string,
+		_attribute: boolean,
+	): Error {
+		return new Error('Trusted Types');
+	}
 	/**
 	 * How the page's own script-src refuses code made from a string (eval, the
 	 * Function constructor, a string timer, WebAssembly compilation), as Chrome
@@ -471,6 +503,7 @@ export default class Client {
 						evaluates: facts.evaluates !== false,
 						code: facts.code,
 						tt: facts.tt,
+						ttActive: facts.ttActive,
 						rtt: facts.rtt,
 						policy: facts.policy,
 					}

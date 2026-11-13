@@ -107,6 +107,18 @@ type OpenCallback = () => void;
 const nativeSetAttribute = Element.prototype.setAttribute;
 const nativeSetTimeout = setTimeout;
 const nativeFragmentQuery = DocumentFragment.prototype.querySelectorAll;
+/** the Trusted Types sink members Chrome names with "execute '<member>'" (not a property set), by their sink member name */
+const TT_METHOD_SINKS = new Set([
+	'insertAdjacentHTML',
+	'setHTMLUnsafe',
+	'parseHTMLUnsafe',
+	'parseFromString',
+	'createContextualFragment',
+	'write',
+	'writeln',
+	'setTimeout',
+	'setInterval',
+]);
 const nativeQuerySelectorAll = Element.prototype.querySelectorAll;
 const nativeGetAttribute = Element.prototype.getAttribute;
 const nativeParent = Reflect.getOwnPropertyDescriptor(
@@ -1205,34 +1217,182 @@ export default class DocumentClient extends Client {
 		);
 	}
 	/**
-	 * A sink's refusal of the page's `value` that only report-only policies
-	 * make: an event for each, with Chrome's fields, after the call (the
-	 * browser cannot report it itself: it judges the inject's own value)
+	 * Synthesised Trusted Types violations the browser cannot fire (it gets no
+	 * `require-trusted-types-for`/`trusted-types`, src/csp.ts): the inject
+	 * judges the page's value and reports its refusal itself. An enforced one
+	 * is tagged so it reads back trusted, as the browser's is
+	 * (ContentSecurity); a report-only one is left untrusted (the suite does
+	 * not compare isTrusted for the report-only cases).
 	 */
-	override reportTrustedTypes(sink: string, value: string) {
+	readonly trustedViolations = new WeakSet<object>();
+	/**
+	 * How a violation names the document it is reported from. A loaded http(s)
+	 * document is named by the page's URL with status 200; a document the
+	 * browser made of its creator's (about:blank, srcdoc) is named, as Chrome's
+	 * report strips it, by its bare scheme (e.g. `about`) with status 0.
+	 */
+	#violationDocument(): { documentURI: string; statusCode: number } {
+		try {
+			const protocol = this.global.location.protocol;
+			if (!/^https?:$/.test(protocol))
+				return { documentURI: protocol.replace(/:$/, ''), statusCode: 0 };
+		} catch (error) {
+			// location unreadable
+		}
+		return {
+			documentURI: this.url.url.href.replace(/#.*$/s, ''),
+			statusCode: 200,
+		};
+	}
+	#dispatchTrusted(
+		policy: Policy,
+		effectiveDirective: string,
+		blockedURI: string,
+		sample: string,
+	) {
 		const global = this.global as typeof globalThis;
 		const Event = global.SecurityPolicyViolationEvent;
 		if (typeof Event !== 'function') return;
 		const document = global.document;
+		const { documentURI, statusCode } = this.#violationDocument();
+		nativeSetTimeout(() => {
+			try {
+				const event = new Event('securitypolicyviolation', {
+					bubbles: true,
+					composed: true,
+					blockedURI,
+					documentURI,
+					violatedDirective: effectiveDirective,
+					effectiveDirective,
+					originalPolicy: policy.text,
+					disposition: policy.disposition,
+					statusCode,
+					sample,
+				});
+				// an enforced Trusted Types violation reads back trusted, as the
+				// browser's would (the enforced csp-trusted-types cases compare
+				// isTrusted; the browser never gets require-trusted-types-for, so
+				// the inject tags its own). isTrusted is an own, non-configurable
+				// accessor Chrome puts on every event, so it cannot be set here;
+				// ContentSecurity hands the page's listeners a view that reads it
+				// true for a tagged event.
+				if (policy.disposition === 'enforce') this.trustedViolations.add(event);
+				Reflect.apply(global.EventTarget.prototype.dispatchEvent, document, [
+					event,
+				]);
+			} catch (error) {
+				// the document is gone
+			}
+		});
+	}
+	/** the page's value at a sink as a violation's sample (Function's without the source's head, measured) */
+	#sinkSample(sink: string, value: string): string {
+		return `${sink}|${value.replace(/^\([^(]*anonymous/, '').slice(0, 40)}`;
+	}
+	/** a sink's refusal only report-only policies make: the inject's event, untrusted (the browser judges its own value) */
+	override reportTrustedTypes(sink: string, value: string) {
+		const sample = this.#sinkSample(sink, value);
 		for (const { policy } of this.pagePolicies())
 			if (policy.disposition === 'report' && trustedTypesRequired([policy]))
-				nativeSetTimeout(() =>
-					Reflect.apply(global.EventTarget.prototype.dispatchEvent, document, [
-						new Event('securitypolicyviolation', {
-							bubbles: true,
-							composed: true,
-							blockedURI: 'trusted-types-sink',
-							documentURI: this.url.url.href.replace(/#.*$/s, ''),
-							violatedDirective: 'require-trusted-types-for',
-							effectiveDirective: 'require-trusted-types-for',
-							originalPolicy: policy.text,
-							disposition: 'report',
-							statusCode: 200,
-							// (Function's without the source's head, measured)
-							sample: `${sink}|${value.replace(/^\([^(]*anonymous/, '').slice(0, 40)}`,
-						}),
-					]),
+				this.#dispatchTrusted(
+					policy,
+					'require-trusted-types-for',
+					'trusted-types-sink',
+					sample,
 				);
+	}
+	/** a sink's refusal an enforced require-trusted-types-for makes: a trusted violation, as the browser's */
+	reportTrustedSink(sink: string, value: string) {
+		const sample = this.#sinkSample(sink, value);
+		for (const { policy } of this.pagePolicies())
+			if (policy.disposition === 'enforce' && trustedTypesRequired([policy])) {
+				this.#dispatchTrusted(
+					policy,
+					'require-trusted-types-for',
+					'trusted-types-sink',
+					sample,
+				);
+				return;
+			}
+	}
+	/** a createPolicy the page's `trusted-types` directive refuses (`policy` is the one that refuses it) */
+	reportTrustedPolicy(policy: Policy, name: string) {
+		this.#dispatchTrusted(
+			policy,
+			'trusted-types',
+			'trusted-types-policy',
+			name,
+		);
+	}
+	/**
+	 * How the page's `trusted-types` directive refuses a `createPolicy` of
+	 * `name` (`made`: the names already created): a refusal for each policy
+	 * that refuses it (its disposition decides whether it throws, and whether
+	 * its violation is trusted), with Chrome's message, or an empty list where
+	 * every policy allows it. No `trusted-types` directive lets any name and
+	 * any duplicate through (src/csp.ts: the browser gets neither directive).
+	 */
+	refusedTrustedPolicy(
+		name: string,
+		made: ReadonlySet<string>,
+	): { policy: Policy; message: string }[] {
+		const policies = this.pagePolicies()
+			.map(({ policy }) => policy)
+			.filter((policy) => policy.directives.has('trusted-types'));
+		const factory = "'createPolicy' on 'TrustedTypePolicyFactory'";
+		const disallowed = `Failed to execute ${factory}: Policy "${name}" disallowed.`;
+		const exists = `Failed to execute ${factory}: Policy with name "${name}" already exists.`;
+		const refusals: { policy: Policy; message: string }[] = [];
+		for (const policy of policies) {
+			const tokens = policy.directives.get('trusted-types')!;
+			const lower = tokens.map((token) => token.toLowerCase());
+			const names = tokens.filter(
+				(token) => !token.startsWith("'") && token !== '*',
+			);
+			if (
+				lower.includes("'none'") ||
+				(!tokens.includes('*') && !names.includes(name))
+			)
+				refusals.push({ policy, message: disallowed });
+		}
+		if (refusals.length) return refusals;
+		// allowed by every policy by name: a duplicate is refused by each policy
+		// that does not allow them
+		if (made.has(name))
+			for (const policy of policies) {
+				const lower = policy.directives
+					.get('trusted-types')!
+					.map((token) => token.toLowerCase());
+				if (!lower.includes("'allow-duplicates'"))
+					refusals.push({ policy, message: exists });
+			}
+		return refusals;
+	}
+	/** the exact error Chrome throws at a refused Trusted Types `sink` (src/inject/modules/TrustedTypes.ts) */
+	trustedTypeError(
+		sink: string,
+		type: string,
+		tail: string,
+		attribute: boolean,
+	): Error {
+		const global = this.global as typeof globalThis;
+		if (sink === 'eval' || sink === 'Function')
+			return new global.EvalError(
+				"Evaluating a string as JavaScript violates this document's Trusted Type assignment requirements.",
+			);
+		const space = sink.indexOf(' ');
+		const iface = sink.slice(0, space);
+		const member = sink.slice(space + 1);
+		const operation = attribute
+			? "execute 'setAttribute' on 'Element'"
+			: sink === 'Worker constructor'
+				? "construct 'Worker'"
+				: TT_METHOD_SINKS.has(member)
+					? `execute '${member}' on '${iface}'`
+					: `set the '${member}' property on '${iface}'`;
+		return new global.TypeError(
+			`Failed to ${operation}: This document requires '${type}' assignment${tail}`,
+		);
 	}
 	/**
 	 * A synthesised script/style violation of `policy`, dispatched where the
@@ -1284,6 +1444,10 @@ export default class DocumentClient extends Client {
 				// page's listener always hears it, and read the target back there
 				if (node && node !== document)
 					this.codeViolationTarget.set(event, node);
+				// an enforced one reads back trusted, as the browser's does: a
+				// Trusted Types case that also sends a script-src (csp-trusted-types)
+				// compares isTrusted; csp-scripts does not, so this is harmless there
+				if (policy.disposition === 'enforce') this.trustedViolations.add(event);
 				Reflect.apply(global.EventTarget.prototype.dispatchEvent, document, [
 					event,
 				]);
@@ -2716,7 +2880,10 @@ export default class DocumentClient extends Client {
 		refuse: () => unknown,
 		convert: (value: unknown) => string = String,
 	): string | null {
-		if (!trustedTypesUsed() || script === this.global.document.currentScript)
+		if (
+			!this.trustedTypesRequired() ||
+			script === this.global.document.currentScript
+		)
 			return convert(value);
 		const text = this.trustedValue(
 			value,
@@ -2730,7 +2897,7 @@ export default class DocumentClient extends Client {
 	}
 	/** the scripts of a fragment the parser made of the page's markup, whose text is the parser's (scriptValue) */
 	parsedScripts(root: DocumentFragment) {
-		if (trustedTypesUsed())
+		if (this.trustedTypesRequired())
 			for (const script of Reflect.apply(nativeFragmentQuery, root, [
 				'script',
 			]) as Iterable<Element>)
@@ -2743,7 +2910,7 @@ export default class DocumentClient extends Client {
 	 * where nothing requires it.
 	 */
 	trustedScriptText(script: HTMLScriptElement, text: string): boolean {
-		if (!trustedTypesUsed()) return false;
+		if (!this.trustedTypesRequired()) return false;
 		this.scriptText(script, this.prepareScriptText(script, text));
 		return true;
 	}
@@ -2760,11 +2927,21 @@ export default class DocumentClient extends Client {
 		sink = 'HTMLScriptElement text',
 	): string | null {
 		// (a script's own text is empty until a sink sets it)
-		if (!trustedTypesUsed() || (this.#scriptSlots.get(script) ?? '') === text)
+		if (
+			!this.trustedTypesRequired() ||
+			(this.#scriptSlots.get(script) ?? '') === text
+		)
 			return text;
-		const passed = this.trustedValue(text, 'TrustedScript', sink, () => {});
-		if (passed !== null) this.#scriptSlots.set(script, passed);
-		return passed;
+		// text that reached the script any other way (a Text node, a clone) is
+		// judged as the script runs: refused, the script runs nothing and the
+		// inject reports it, with no throw (the browser would not throw either)
+		try {
+			const passed = this.trustedValue(text, 'TrustedScript', sink, () => {});
+			if (passed !== null) this.#scriptSlots.set(script, passed);
+			return passed;
+		} catch (error) {
+			return null;
+		}
 	}
 	prepareScriptText(script: HTMLScriptElement, text: string): string {
 		// the running script setting its own text is the preamble of a
@@ -2778,7 +2955,10 @@ export default class DocumentClient extends Client {
 		}
 		if (!this.isConnected(script) || !shouldRewriteScript(script)) return text;
 		const passed = this.scriptPrepared(script, text);
-		if (passed === null) return text;
+		// refused by the page's Trusted Types as the script runs: it runs nothing
+		// (the inject reported it in scriptPrepared), where the browser's own
+		// Trusted Types would have stopped it
+		if (passed === null) return '';
 		if (!script.hasAttribute('src')) {
 			// the page's own script-src refuses this inline script: it runs
 			// nothing (empty text) and the inject reports it (src/csp.ts)

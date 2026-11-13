@@ -438,10 +438,14 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			/*document.currentScript.textContent = ${JSON.stringify(
 				script.textContent
 			)};*/
-			// what the page's Trusted Types let run of it: refused, it keeps the
-			// page's text, which the browser refuses
+			// what the page's Trusted Types let run of it (judged as it runs,
+			// scriptPrepared): refused, it runs nothing (its text is cleared) and
+			// the inject already reported it
 			const passed = this.client.scriptPrepared(script, script.text);
-			if (passed === null) return;
+			if (passed === null) {
+				script.text = '';
+				return;
+			}
 			// a script of the document's own markup the page inserts again (it
 			// read the text back and made a script of it): the worker's rewrite
 			const type = scriptType(script);
@@ -617,7 +621,9 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						this.client.config,
 					);
 				if (!shouldRewriteScript(element)) return null;
-				// (the page's Trusted Types judge the text as the script runs)
+				// (the page's Trusted Types judge the text as the script runs;
+				// refused, the script holds nothing and runs nothing, the inject
+				// having reported it in scriptPrepared)
 				const passed = this.client.scriptPrepared(
 					script,
 					text,
@@ -625,7 +631,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						? undefined
 						: 'SVGScriptElement text',
 				);
-				if (passed === null) return null;
+				if (passed === null) return '';
 				const type = scriptType(element);
 				const output =
 					this.client.prewrittenScript(

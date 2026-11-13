@@ -2418,6 +2418,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							sink[1],
 							() => Reflect.apply(target, that, args),
 							() => value as string,
+							true,
 						);
 						if (passed === null) return;
 						value = passed;

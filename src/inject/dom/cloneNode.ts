@@ -1,5 +1,11 @@
 import { asParsed, trustedHTML } from '../trusted';
 
+// the native parser call, taken before the Trusted Types parse wrap
+// (src/inject/dom/modules/TrustedParse.ts): STomp's own parses are never
+// judged by the page's require-trusted-types-for
+const nativeParseFromString =
+	typeof DOMParser === 'function' ? DOMParser.prototype.parseFromString : null;
+
 /** the DOMParser of the document's own realm (a child frame runs its creator's bundle) */
 function parserFor(document: Document): DOMParser {
 	const Parser =
@@ -8,12 +14,23 @@ function parserFor(document: Document): DOMParser {
 	return new Parser();
 }
 
+function parse(
+	document: Document,
+	markup: string,
+	mime: DOMParserSupportedType,
+): Document {
+	const parser = parserFor(document);
+	return nativeParseFromString
+		? (Reflect.apply(nativeParseFromString, parser, [markup, mime]) as Document)
+		: parser.parseFromString(markup, mime);
+}
+
 export function parseHTML(
 	script: string,
 	document: Document = globalThis.document,
 	mime: DOMParserSupportedType = 'text/html',
 ) {
-	return parserFor(document).parseFromString(trustedHTML(script), mime);
+	return parse(document, trustedHTML(script), mime);
 }
 
 /**
@@ -34,7 +51,8 @@ export function parseHTMLContainer(
 	script: string,
 	document: Document = globalThis.document,
 ): Element {
-	const parsed = parserFor(document).parseFromString(
+	const parsed = parse(
+		document,
 		trustedHTML(`<fragment>${script}</fragment>`),
 		'text/html',
 	);

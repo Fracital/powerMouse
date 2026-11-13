@@ -36,6 +36,18 @@ let name: string | null = null;
 let policy: TrustedTypePolicy | null | undefined;
 
 /**
+ * Whether a document of this realm's requires Trusted Types of the page's
+ * own sinks (scriptFacts.rtt), so the inject judges the page's attribute
+ * writes (trustedSink). Separate from `name`: the inject's own policy never
+ * activates in stage 2 (its own writes carry no trusted value), but the page's
+ * Trusted Types are still enforced against the page's code (src/csp.ts).
+ */
+let pageSinks = false;
+export function usePageSinks(on: boolean) {
+	pageSinks = on;
+}
+
+/**
  * Note that a document of this realm's has Trusted Types directives, and
  * the name of the inject's policy its browser policies allow (the first
  * one this realm is told of: the policy is made in this realm, whose own
@@ -139,7 +151,8 @@ export function trustedSink(
 	property = false,
 	namespace: string | null = null,
 ): [kind: 0 | 1 | 2, sink: string] | null {
-	if (name === null || !attributeType || !propertyType) return null;
+	if ((name === null && !pageSinks) || !attributeType || !propertyType)
+		return null;
 	try {
 		const local = Reflect.apply(nativeLocalName, element, []) as string;
 		const space = Reflect.apply(nativeNamespace, element, []) as string;

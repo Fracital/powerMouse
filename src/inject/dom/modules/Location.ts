@@ -98,9 +98,13 @@ export default class LocationModule extends Module<DocumentClient> {
 				this.client.trustedJavascript?.(
 					decoded(destination.href),
 					decoded(route),
-					() => Reflect.apply(real[how], real, [destination.href]),
+					// navigate to the rewrite (the inject's, which no Trusted Types
+					// judge); the page's Trusted Types judge its code (trustedJavascript)
+					() => Reflect.apply(real[how], real, [route]),
 				) === false
 			)
+				// refused, or deferred to the page's default policy (async, as the
+				// navigation is): the inject navigates itself where it may
 				return;
 			return Reflect.apply(real[how], real, [route]);
 		};

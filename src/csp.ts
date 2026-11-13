@@ -921,11 +921,20 @@ export interface ScriptFacts {
 	 */
 	code?: boolean;
 	/**
-	 * The name of the inject's own Trusted Types policy, where a policy has
-	 * Trusted Types directives (browserPolicy), and whether one requires
-	 * them of a sink
+	 * The name of the inject's own Trusted Types policy. Never set in stage 2:
+	 * the inject's own writes carry no trusted value (the browser enforces no
+	 * Trusted Types of the page's, so STomp is never judged), so this would
+	 * only activate the inject's own policy needlessly (src/inject/trusted.ts).
 	 */
 	tt?: string;
+	/**
+	 * Whether the page's own policy has any Trusted Types directive, so the
+	 * inject enforces it against the page's own sinks and policy names
+	 * (src/inject/modules/TrustedTypes.ts); the live pagePolicies() check
+	 * (metas included) is what decides each case.
+	 */
+	ttActive?: boolean;
+	/** how the page's policy requires Trusted Types of a sink (enforce/report), from its require-trusted-types-for */
 	rtt?: Policy['disposition'];
 	/** a worker's: the policy of that name its bootstrap made (src/inject/trusted.ts) */
 	policy?: unknown;
@@ -943,31 +952,20 @@ export function scriptFacts(
 ): ScriptFacts {
 	// the browser enforces no script policy of the page's (browserPolicy), so
 	// STomp's own scripts carry no nonce and its code always evaluates; the
-	// inject enforces the page's script and style directives against the
-	// page's own code (dom/Client.ts), where its policy governs them
-	return enforcesCode(pagePolicies)
-		? { evaluates: true, code: true }
-		: { evaluates: true };
-}
-
-/**
- * What the shell tells the client of Trusted Types (ScriptFacts.tt, rtt)
- * under `texts` (browser policies): the name of its own policy where one
- * of them has a Trusted Types directive, and whether one requires them
- */
-export function trustedFacts(
-	texts: string[],
-	tt: string,
-): Pick<ScriptFacts, 'tt' | 'rtt'> {
-	const policies = texts.flatMap((text) =>
-		parsePolicies(text, 'enforce', 'header'),
-	);
+	// inject enforces the page's script, style and Trusted Types directives
+	// against the page's own code and sinks (dom/Client.ts), where its policy
+	// governs them. `tt` is never set: the inject's own writes carry no
+	// trusted value (STomp is never judged), so its own policy stays dormant.
+	const facts: ScriptFacts = { evaluates: true };
+	if (enforcesCode(pagePolicies)) facts.code = true;
 	if (
-		!policies.some((policy) =>
+		pagePolicies.some((policy) =>
 			TRUSTED_TYPES.some((name) => policy.directives.has(name)),
 		)
-	)
-		return {};
-	const rtt = trustedTypesRequired(policies);
-	return rtt ? { tt, rtt } : { tt };
+	) {
+		facts.ttActive = true;
+		const rtt = trustedTypesRequired(pagePolicies);
+		if (rtt) facts.rtt = rtt;
+	}
+	return facts;
 }

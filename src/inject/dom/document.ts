@@ -41,6 +41,7 @@ import ServiceWorkerModule from './modules/ServiceWorker';
 import StorageModule from './modules/Storage';
 import SyncModule from './modules/Sync';
 import TokenListsModule from './modules/TokenLists';
+import TrustedParseModule from './modules/TrustedParse';
 import ViewTransitionModule from './modules/ViewTransition';
 import VisitedModule from './modules/Visited';
 import WebAssemblyPolicyModule from './modules/WebAssemblyPolicy';
@@ -101,6 +102,7 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(VisitedModule);
 	client.addModule(ContentSecurityModule);
 	client.addModule(WebAssemblyPolicyModule);
+	client.addModule(TrustedParseModule);
 	client.addModule(ReadbackModule);
 	client.addModule(CSSReadbackModule);
 	// last: the Navigate module's own observer keeps the native constructor

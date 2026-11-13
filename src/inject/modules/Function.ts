@@ -29,16 +29,10 @@ export default class FunctionModule extends Module<Client> {
 					// their own function, and made by the realm's eval at global
 					// scope, as the constructor would
 					const written = `${prefix} anonymous(${args.map(String).join(',')}\n) {\n${String(code)}\n}`;
-					// the page's own script-src refuses the string before its Trusted
-					// Types judge it, throwing Chrome's EvalError (src/csp.ts codeEval);
-					// Chrome's violation sample is the whole function expression it
-					// compiles, parentheses and all
-					const refusal = this.client.codeEval('Function', `(${written})`);
-					if (refusal) {
-						if (refusal.error) throw refusal.error;
-						return undefined;
-					}
-					// (the page's Trusted Types judge that source, as Chrome does)
+					// the page's Trusted Types judge that source first (as Chrome
+					// does); then its script-src refuses code made from a string,
+					// Chrome's violation sample being the whole function expression
+					// it compiles, parentheses and all (src/csp.ts codeEval)
 					if (
 						this.client.trustedValue(
 							`(${written})`,
@@ -51,6 +45,11 @@ export default class FunctionModule extends Module<Client> {
 						) === null
 					)
 						return undefined;
+					const refusal = this.client.codeEval('Function', `(${written})`);
+					if (refusal) {
+						if (refusal.error) throw refusal.error;
+						return undefined;
+					}
 					const rewritten = modifyJS(
 						`(${written})`,
 						this.client.baseURL,
