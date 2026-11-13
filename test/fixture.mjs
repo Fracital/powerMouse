@@ -165,6 +165,11 @@ const served = [];
 // request headers kept by key (/echo-headers?k=<key>), for the requests whose
 // response a page cannot read back: images, scripts, navigations
 const recorded = new Map();
+// what each step of a FedCM flow saw, by run id `k` (fedcm suite): the mock
+// identity provider records the Sec-Fetch-Dest and cookie of each endpoint and
+// the token POST's body, so a suite can prove every step went through the proxy
+// with the right destination and credentials
+const fedcmLog = new Map();
 // the dist bundle under neutral names (assets suite): /neutral/<name>
 const distDir = fileURLToPath(new URL('../dist/', import.meta.url));
 const NEUTRAL = {
@@ -452,9 +457,8 @@ export function startFixture(port = 8084) {
 			}
 			return res.end(JSON.stringify({ n: count.requests }));
 		}
-		// FedCM's well-known file (fedcm suite): the browser fetches it from
-		// the identity provider's site before the config the page names
-		// (test/pages/fedcm-config.json)
+		// FedCM's well-known file (fedcm suite): fetched from the identity
+		// provider's site before the config the page names
 		if (path === '/.well-known/web-identity') {
 			res.setHeader('content-type', 'application/json');
 			return res.end(
@@ -462,6 +466,141 @@ export function startFixture(port = 8084) {
 					provider_urls: [`http://${req.headers.host}/pages/fedcm-config.json`],
 				}),
 			);
+		}
+		// The mock identity provider the fedcm suite flows through. Every FedCM
+		// endpoint requires Sec-Fetch-Dest: webidentity (so the suite proves the
+		// proxy sends it) and reflects the Origin with credentials allowed (the
+		// proxied, page-level emulation reads these cross-origin bodies with CORS,
+		// where a real browser reads them no-cors from its own process). `k=<run>`
+		// ties a flow's steps together; the config bakes it into the sibling
+		// endpoint URLs it returns. `?signin` seeds the IdP session cookie.
+		if (path.startsWith('/pages/fedcm-')) {
+			const query = new URL(req.url, 'http://x').searchParams;
+			const run = query.get('k') ?? '';
+			const origin = req.headers.origin;
+			if (origin) {
+				res.setHeader('access-control-allow-origin', origin);
+				res.setHeader('access-control-allow-credentials', 'true');
+				res.setHeader('vary', 'origin');
+			} else res.setHeader('access-control-allow-origin', '*');
+			res.setHeader('cache-control', 'no-store');
+			const dest = req.headers['sec-fetch-dest'];
+			const record = (step) => {
+				const log = fedcmLog.get(run) ?? {};
+				fedcmLog.set(run, log);
+				log[step] = {
+					dest: dest ?? null,
+					cookie: req.headers.cookie ?? null,
+					mode: req.headers['sec-fetch-mode'] ?? null,
+					accept: req.headers.accept ?? null,
+				};
+				return log;
+			};
+			// a webidentity endpoint that the proxy failed to label: fail loudly so
+			// the suite's happy path only passes when the header is forwarded. The
+			// signin, log and the RP page itself are not webidentity fetches.
+			const isEndpoint =
+				/fedcm-(config|accounts|client|token|disconnect)\b/.test(path);
+			if (isEndpoint && path !== '/pages/fedcm-log' && dest !== 'webidentity') {
+				record(path.replace('/pages/fedcm-', '').replace('.json', ''));
+				res.statusCode = 400;
+				res.setHeader('content-type', 'application/json');
+				return res.end(JSON.stringify({ error: 'expected webidentity' }));
+			}
+			const sendJSON = (body) => {
+				res.setHeader('content-type', 'application/json');
+				res.end(JSON.stringify(body));
+			};
+			// /pages/fedcm-log?k=<run>: what each step saw
+			if (path === '/pages/fedcm-log') return sendJSON(fedcmLog.get(run) ?? {});
+			// seed the IdP's session cookie (credentialed), so the accounts step
+			// carries it and the config/metadata steps (uncredentialed) do not
+			if (path === '/pages/fedcm-signin') {
+				res.setHeader(
+					'set-cookie',
+					'fedcm_sid=yes; Path=/; SameSite=None; Secure',
+				);
+				return sendJSON({ signedIn: true });
+			}
+			if (path === '/pages/fedcm-config.json') {
+				record('config');
+				const q = run ? `?k=${encodeURIComponent(run)}` : '';
+				return sendJSON({
+					accounts_endpoint: `fedcm-accounts.json${q}`,
+					client_metadata_endpoint: `fedcm-client.json${q}`,
+					id_assertion_endpoint: `fedcm-token.json${q}`,
+					disconnect_endpoint: `fedcm-disconnect.json${q}`,
+					login_url: 'fedcm.html',
+				});
+			}
+			if (path === '/pages/fedcm-accounts.json') {
+				record('accounts');
+				// one returning account (approved_clients holds the RP), so a flow
+				// that allows it auto-selects without a chooser; `?multi` adds a
+				// second, unapproved account to force the chooser
+				const accounts = [
+					{
+						id: 'acct-1',
+						name: 'Ada Proxy',
+						email: 'ada@idp.test',
+						given_name: 'Ada',
+						approved_clients: ['stomp-rp'],
+					},
+				];
+				if (query.has('multi'))
+					accounts.push({
+						id: 'acct-2',
+						name: 'Bo Guest',
+						email: 'bo@idp.test',
+						given_name: 'Bo',
+					});
+				return sendJSON({ accounts });
+			}
+			if (path === '/pages/fedcm-client.json') {
+				record('client');
+				return sendJSON({
+					privacy_policy_url: 'https://idp.test/privacy',
+					terms_of_service_url: 'https://idp.test/terms',
+				});
+			}
+			if (path === '/pages/fedcm-token.json') {
+				const chunks = [];
+				req.on('data', (chunk) => chunks.push(chunk));
+				req.on('end', () => {
+					const body = new URLSearchParams(Buffer.concat(chunks).toString());
+					const log = record('token');
+					log.token = {
+						...log.token,
+						method: req.method,
+						contentType: req.headers['content-type'] ?? null,
+						clientId: body.get('client_id'),
+						nonce: body.get('nonce'),
+						accountId: body.get('account_id'),
+						disclosureTextShown: body.get('disclosure_text_shown'),
+						isAutoSelected: body.get('is_auto_selected'),
+					};
+					// a token the suite can read back to prove the POST's body round-
+					// tripped through the proxy with the chosen account and flags
+					if (query.has('error'))
+						return sendJSON({
+							error: { code: 'invalid_request', url: 'https://idp.test/e' },
+						});
+					sendJSON({
+						token: `idtok.${body.get('account_id')}.${body.get('is_auto_selected')}.${body.get('nonce')}`,
+					});
+				});
+				return;
+			}
+			if (path === '/pages/fedcm-disconnect.json') {
+				const chunks = [];
+				req.on('data', (chunk) => chunks.push(chunk));
+				req.on('end', () => {
+					const body = new URLSearchParams(Buffer.concat(chunks).toString());
+					record('disconnect');
+					sendJSON({ account_id: body.get('account_hint') ?? 'acct-1' });
+				});
+				return;
+			}
 		}
 		// /http-cache[/<any>]?k=<run>&n=<name>: a counting body under the
 		// caching headers the query names, and a log of what each request

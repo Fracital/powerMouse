@@ -74,16 +74,10 @@ const GROUPS = [
 	],
 ];
 
-// interfaces the proxy takes away on purpose: FedCM (the Credentials
-// module) and the service worker API (the Navigator module)
-const ABSENT = new Set([
-	'IdentityCredential',
-	'IdentityCredentialError',
-	'IdentityProvider',
-	'NavigatorLogin',
-	'ServiceWorkerContainer',
-	'ServiceWorkerRegistration',
-]);
+// interfaces the proxy takes away on purpose: the service worker API (the
+// Navigator module). FedCM's interfaces are now kept and stood in for (the
+// Credentials module), so they are compared like any other.
+const ABSENT = new Set(['ServiceWorkerContainer', 'ServiceWorkerRegistration']);
 const present = (map = {}) =>
 	Object.fromEntries(Object.entries(map).filter(([name]) => !ABSENT.has(name)));
 

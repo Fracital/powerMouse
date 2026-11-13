@@ -237,7 +237,10 @@ export function loadFetch(
 	const from = loadSource();
 	const token = from ? from.announce(url, load) : null;
 	if (!from || token === null) return client.routedFetch(url, init);
-	init = { ...init, headers: { [LOAD_HEADER]: token } };
+	// the grant's token rides alongside the caller's headers (a request that
+	// names a load still sends its own Accept, Content-Type and the rest); every
+	// caller passes a plain header record or none
+	init = { ...init, headers: { ...init.headers, [LOAD_HEADER]: token } };
 	// from another document's realm the referrer would be that document's
 	// URL: an about:blank document's own strips to none (Client.routedFetch)
 	if (from.client !== client)

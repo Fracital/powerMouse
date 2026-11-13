@@ -1,6 +1,0 @@
-{
-	"accounts_endpoint": "fedcm-accounts.json",
-	"client_metadata_endpoint": "fedcm-client.json",
-	"id_assertion_endpoint": "fedcm-token.json",
-	"login_url": "fedcm.html"
-}

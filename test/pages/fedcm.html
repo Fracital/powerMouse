@@ -1,112 +1,170 @@
 <!doctype html>
 <title>FEDCM</title>
 <script>
-	// FedCM (Google One Tap) against this fixture as the identity provider:
-	// the page's own origin and its other name (localhost) as a cross-site
-	// IdP, like a site calling accounts.google.com. Records the feature
-	// detection a sign-in library makes and what each call gives.
+	// The relying-party harness for the fedcm suite. It records the feature
+	// detection a sign-in library makes (so a proxied page can be diffed against
+	// the same page loaded natively) and exposes functions the suite drives to
+	// run a whole navigator.credentials.get({ identity }) flow against the mock
+	// identity provider (test/fixture.mjs), to read the IdP-side statics, and to
+	// start a get and leave it pending so the suite can act on the chooser.
 	window.__fedcm = {};
-	const cross = location.origin.replace('127.0.0.1', 'localhost');
-	const config = (origin) => `${origin}/pages/fedcm-config.json`;
-	const provider = (origin) => ({
-		configURL: config(origin),
-		clientId: 'stomp-rp',
-	});
+	const native = (f) =>
+		typeof f === 'function' &&
+		/\{\s*\[native code\]\s*\}/.test(Function.prototype.toString.call(f));
+	const iface = (name) => {
+		const C = window[name];
+		if (typeof C === 'undefined') return { present: false };
+		return {
+			present: true,
+			typeof: typeof C,
+			native: native(C),
+			name: C.name,
+			length: C.length,
+			inWindow: name in window,
+			ownValue:
+				Object.getOwnPropertyDescriptor(window, name) &&
+				'value' in Object.getOwnPropertyDescriptor(window, name),
+			protoChain: (() => {
+				const names = [];
+				for (let p = C.prototype; p; p = Object.getPrototypeOf(p))
+					names.push(p === Object.prototype ? 'Object' : p.constructor?.name);
+				return names;
+			})(),
+			constructorIsSelf: C.prototype?.constructor === C,
+		};
+	};
+	__fedcm.detect = {
+		IdentityCredential: iface('IdentityCredential'),
+		IdentityCredentialError: iface('IdentityCredentialError'),
+		IdentityProvider: iface('IdentityProvider'),
+		NavigatorLogin: iface('NavigatorLogin'),
+		statics: {
+			disconnect: native(window.IdentityCredential?.disconnect),
+			getUserInfo: native(window.IdentityProvider?.getUserInfo),
+			close: native(window.IdentityProvider?.close),
+			resolve: native(window.IdentityProvider?.resolve),
+		},
+		login: {
+			inNavigator: 'login' in navigator,
+			inProto: 'login' in Navigator.prototype,
+			typeofLogin: typeof navigator.login,
+			getterNative: native(
+				Object.getOwnPropertyDescriptor(Navigator.prototype, 'login')?.get,
+			),
+			ctor: navigator.login?.constructor?.name ?? null,
+			setStatusNative: native(navigator.login?.setStatus),
+		},
+		errorConstructible: (() => {
+			try {
+				const e = new IdentityCredentialError('m', { error: 'x', url: 'u' });
+				return [e instanceof DOMException, e.name, e.error, e.url];
+			} catch (error) {
+				return `${error.name}: ${error.message}`;
+			}
+		})(),
+		globals: Object.getOwnPropertyNames(window)
+			.filter((name) => /Credential|Identity|Login/.test(name))
+			.sort(),
+		credentialsGet: Function.prototype.toString.call(navigator.credentials.get),
+	};
+
+	// settle a get: a token's own fields, a plain value, or the error name+message
+	window.settleGet = async (opts) => {
+		try {
+			const cred = await navigator.credentials.get(opts);
+			if (cred && typeof cred === 'object' && 'token' in cred)
+				return {
+					kind: 'token',
+					token: cred.token,
+					isAutoSelected: cred.isAutoSelected,
+					type: cred.type,
+					id: cred.id,
+					configURL: cred.configURL,
+					ctor: cred.constructor.name,
+					instanceOf: cred instanceof IdentityCredential,
+					toStringTag: Object.prototype.toString.call(cred),
+				};
+			return { kind: 'value', value: String(cred) };
+		} catch (error) {
+			return { kind: 'error', error: `${error.name}: ${error.message}` };
+		}
+	};
+
+	// a named scenario's options, built in the page (a signal cannot cross
+	// page.evaluate). `flow` is a real provider the suite points at the mock IdP.
+	const optionsFor = (name, params) => {
+		const {
+			configURL,
+			clientId = 'stomp-rp',
+			nonce = 'n0',
+			mediation,
+		} = params;
+		const provider = () => ({ configURL, clientId, nonce });
+		switch (name) {
+			case 'noProviders':
+				return { identity: { providers: [] } };
+			case 'identityNull':
+				return { identity: null };
+			case 'providersUndefined':
+				return { identity: {} };
+			case 'nothing':
+				return {};
+			case 'identityUndefined':
+				return { identity: undefined };
+			case 'badConfig':
+				return { identity: { providers: [{ clientId }] } };
+			case 'badClientId':
+				return { identity: { providers: [{ configURL }] } };
+			case 'relativeConfig':
+				return {
+					identity: { providers: [{ configURL: 'cfg.json', clientId }] },
+				};
+			case 'aborted': {
+				const c = new AbortController();
+				c.abort();
+				return { identity: { providers: [provider()] }, signal: c.signal };
+			}
+			case 'flow':
+				return { identity: { providers: [provider()] }, mediation };
+			default:
+				throw new Error(`unknown scenario ${name}`);
+		}
+	};
+	window.runScenario = (name, params = {}) =>
+		settleGet(optionsFor(name, params));
+	// start a scenario without awaiting, so the suite can act on the chooser,
+	// then read window.__pending for the settled result
+	window.startScenario = (name, params = {}) => {
+		window.__pending = settleGet(optionsFor(name, params));
+		return true;
+	};
+	window.readPending = () => window.__pending;
+
+	// the IdP-side statics and navigator.login.setStatus, settled the same way
 	const settle = async (call) => {
 		try {
-			const value = await Promise.race([
-				call(),
-				// headless Chrome shows no account chooser: a request that got
-				// that far stays pending
-				new Promise((resolve) => setTimeout(() => resolve('pending'), 3000)),
-			]);
-			return value === null || typeof value !== 'object'
-				? String(value)
-				: value.constructor.name;
+			const value = await call();
+			return value === undefined ? 'undefined' : String(value);
 		} catch (error) {
 			return `${error.name}: ${error.message}`;
 		}
 	};
-	__fedcm.detect = {
-		IdentityCredential: 'IdentityCredential' in window,
-		IdentityProvider: 'IdentityProvider' in window,
-		IdentityCredentialError: 'IdentityCredentialError' in window,
-		NavigatorLogin: 'NavigatorLogin' in window,
-		login: 'login' in navigator,
-		protoLogin: 'login' in Navigator.prototype,
-		typeofLogin: typeof navigator.login,
-		globals: Object.getOwnPropertyNames(window)
-			.filter((name) => /Credential|Identity|Login/.test(name))
-			.sort(),
-		credentials: 'credentials' in navigator,
-		get: Function.prototype.toString.call(navigator.credentials.get),
-		getName: navigator.credentials.get.name,
-		getLength: navigator.credentials.get.length,
-	};
-	(async () => {
-		const calls = {};
-		// the rest of the Credential Management API keeps working (first, so
-		// no FedCM request is outstanding: one get at a time)
-		calls.password = await settle(() =>
-			navigator.credentials.get({ password: true, mediation: 'silent' }),
-		);
-		calls.federated = await settle(() =>
-			navigator.credentials.get({
-				federated: { providers: [cross] },
-				mediation: 'silent',
-			}),
-		);
-		calls.preventSilentAccess = await settle(() =>
-			navigator.credentials.preventSilentAccess(),
-		);
-		calls.conditional = await settle(() =>
-			PublicKeyCredential.isConditionalMediationAvailable(),
-		);
-		calls.crossSite = await settle(() =>
-			navigator.credentials.get({ identity: { providers: [provider(cross)] } }),
-		);
-		calls.sameSite = await settle(() =>
-			navigator.credentials.get({
-				identity: { providers: [provider(location.origin)] },
-				mediation: 'silent',
-			}),
-		);
-		calls.noProviders = await settle(() =>
-			navigator.credentials.get({ identity: { providers: [] } }),
-		);
-		calls.withPassword = await settle(() =>
-			navigator.credentials.get({
-				identity: { providers: [provider(cross)] },
-				password: true,
-			}),
-		);
-		calls.identityUndefined = await settle(() =>
-			navigator.credentials.get({ identity: undefined }),
-		);
-		calls.nothing = await settle(() => navigator.credentials.get({}));
-		calls.aborted = await settle(() => {
-			const controller = new AbortController();
-			controller.abort();
-			return navigator.credentials.get({
-				identity: { providers: [provider(cross)] },
-				signal: controller.signal,
-			});
+	window.callStatic = (name, arg) =>
+		settle(() => {
+			if (name === 'getUserInfo') return IdentityProvider.getUserInfo(arg);
+			if (name === 'close') return IdentityProvider.close();
+			if (name === 'resolve') return IdentityProvider.resolve('tok');
+			if (name === 'disconnect') return IdentityCredential.disconnect(arg);
+			if (name === 'setStatus') return navigator.login.setStatus(arg);
+			throw new Error('unknown');
 		});
-		// the IdP-side calls a FedCM-less browser does not have
-		calls.getUserInfo = await settle(() =>
-			IdentityProvider.getUserInfo(provider(cross)),
-		);
-		calls.close = await settle(() => IdentityProvider.close());
-		calls.disconnect = await settle(() =>
-			IdentityCredential.disconnect({
-				...provider(cross),
-				accountHint: 'user@idp.test',
-			}),
-		);
-		calls.setStatus = await settle(() =>
-			navigator.login.setStatus('logged-in'),
-		);
-		__fedcm.calls = calls;
-		__fedcm.done = true;
-	})();
+
+	// seed the IdP session cookie through the proxy (credentialed), so a later
+	// accounts step carries it
+	window.signIn = (origin) =>
+		fetch(`${origin}/pages/fedcm-signin`, { credentials: 'include' })
+			.then((r) => r.json())
+			.catch((e) => ({ error: String(e) }));
+
+	__fedcm.ready = true;
 </script>

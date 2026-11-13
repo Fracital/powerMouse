@@ -362,6 +362,11 @@ const LOAD_DESTINATIONS = [
 	// an <embed>'s or <object>'s resource, which the inject loads as a copy
 	'embed',
 	'object',
+	// a FedCM endpoint (config, accounts, client metadata, token, disconnect),
+	// which the Credentials inject fetches through the proxy in the browser's
+	// place; the destination makes Sec-Fetch-Dest: webidentity go to the IdP
+	// (src/inject/dom/modules/Credentials.ts)
+	'webidentity',
 ];
 const LOAD_MODES = ['no-cors', 'cors'];
 /**
