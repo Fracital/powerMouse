@@ -824,7 +824,32 @@ export function startFixture(port = 8084) {
 						`<base href="${base.replace(/[&"<]/g, (c) => `&#${c.charCodeAt(0)};`)}" />`,
 					),
 				);
-			return res.end(readFileSync(`${pagesDir}${file}`));
+			// a Range request gets a 206 of the raw file bytes. The sidecar's
+			// content-encoding stays, so a Range of an encoded file is a
+			// fragment of the *compressed* stream, exactly as a CDN serves it:
+			// the transport must pass such a partial body through, not try to
+			// decode it (range-encoding suite; deploy/epoxy patch 0060)
+			const bytes = readFileSync(`${pagesDir}${file}`);
+			const asked = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range ?? '');
+			if (asked) {
+				res.setHeader('accept-ranges', 'bytes');
+				const from = Number(asked[1]);
+				const to =
+					asked[2] === ''
+						? bytes.length - 1
+						: Math.min(Number(asked[2]), bytes.length - 1);
+				if (from > to || from >= bytes.length) {
+					res.statusCode = 416;
+					res.setHeader('content-range', `bytes */${bytes.length}`);
+					return res.end();
+				}
+				const part = bytes.subarray(from, to + 1);
+				res.statusCode = 206;
+				res.setHeader('content-range', `bytes ${from}-${to}/${bytes.length}`);
+				res.setHeader('content-length', part.length);
+				return res.end(part);
+			}
+			return res.end(bytes);
 		}
 		if (path in MODULES) {
 			res.setHeader('content-type', 'text/javascript; charset=utf-8');
