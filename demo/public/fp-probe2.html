@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Function Probe</title>
+		<style>
+			body {
+				font:
+					13px/1.4 ui-monospace,
+					Menlo,
+					Consolas,
+					monospace;
+				margin: 0;
+				background: #111;
+				color: #ddd;
+			}
+			header {
+				position: sticky;
+				top: 0;
+				padding: 10px 16px;
+				background: #1b1b1b;
+				border-bottom: 1px solid #333;
+			}
+			button {
+				font: inherit;
+				padding: 6px 12px;
+				margin-right: 8px;
+				cursor: pointer;
+			}
+			#note {
+				color: #9ad1f5;
+			}
+			textarea {
+				width: 100%;
+				height: 72vh;
+				box-sizing: border-box;
+				border: 0;
+				padding: 12px 16px;
+				background: #111;
+				color: #cfe9cf;
+				white-space: pre;
+			}
+		</style>
+	</head>
+	<body>
+		<header>
+			<button id="copy">Copy JSON</button>
+			<span id="note"
+				>Functional surface a challenge may exercise. Run direct AND proxied,
+				then diff. Any field that differs or says "throw"/"MISSING" is a
+				suspect.</span
+			>
+		</header>
+		<textarea id="out" readonly spellcheck="false"></textarea>
+		<script>
+			// A functional-support probe: it EXERCISES the APIs a managed challenge
+			// tends to use (a wasm VM, workers, crypto, cross-frame messaging, the
+			// chrome object, storage, media, gpu readback) and records what each
+			// returns, so the SAME page direct vs proxied is diffed. Any divergence
+			// or throw is something the proxy breaks. It touches no challenge.
+			(async () => {
+				const out = {};
+				const put = async (label, fn) => {
+					try {
+						out[label] = await fn();
+					} catch (e) {
+						out[label] = 'throw: ' + (e && e.name + ': ' + e.message);
+					}
+				};
+
+				// --- the chrome object (challenges read its shape deeply) ---
+				await put('chrome', () => {
+					const c = self.chrome;
+					if (!c) return 'MISSING';
+					return {
+						keys: Object.keys(c).sort().join(','),
+						runtime: typeof c.runtime,
+						runtimeKeys: c.runtime
+							? Object.keys(c.runtime).sort().join(',')
+							: '-',
+						loadTimes: typeof c.loadTimes,
+						csi: typeof c.csi,
+						app: c.app ? Object.keys(c.app).sort().join(',') : typeof c.app,
+						runtimeConnectThrows: (() => {
+							try {
+								c.runtime && c.runtime.connect && c.runtime.connect();
+								return 'no-throw';
+							} catch (e) {
+								return e.message.slice(0, 50);
+							}
+						})(),
+					};
+				});
+
+				// --- WebAssembly: compile + instantiate + run (a challenge VM) ---
+				await put('wasm', async () => {
+					// (module (func (export "add") (param i32 i32) (result i32)
+					//   local.get 0 local.get 1 i32.add))
+					const bytes = new Uint8Array([
+						0, 97, 115, 109, 1, 0, 0, 0, 1, 7, 1, 96, 2, 127, 127, 1, 127, 3, 2,
+						1, 0, 7, 7, 1, 3, 97, 100, 100, 0, 0, 10, 9, 1, 7, 0, 32, 0, 32, 1,
+						106, 11,
+					]);
+					const r = { validate: WebAssembly.validate(bytes) };
+					const mod = await WebAssembly.instantiate(bytes, {});
+					r.add = mod.instance.exports.add(19, 23);
+					// streaming path (challenges use instantiateStreaming)
+					try {
+						const resp = new Response(bytes, {
+							headers: { 'content-type': 'application/wasm' },
+						});
+						const s = await WebAssembly.instantiateStreaming(resp, {});
+						r.streamingAdd = s.instance.exports.add(2, 2);
+					} catch (e) {
+						r.streaming = 'throw: ' + e.message.slice(0, 60);
+					}
+					return r;
+				});
+
+				// --- crypto.subtle: digest + HMAC sign (attestation signing) ---
+				await put('cryptoDigest', async () => {
+					const data = new TextEncoder().encode('stomp-fidelity-probe');
+					const h = await crypto.subtle.digest('SHA-256', data);
+					return Array.from(new Uint8Array(h))
+						.slice(0, 8)
+						.map((b) => b.toString(16).padStart(2, '0'))
+						.join('');
+				});
+				await put('cryptoSign', async () => {
+					const key = await crypto.subtle.importKey(
+						'raw',
+						new TextEncoder().encode('0123456789abcdef'),
+						{ name: 'HMAC', hash: 'SHA-256' },
+						false,
+						['sign'],
+					);
+					const sig = await crypto.subtle.sign(
+						'HMAC',
+						key,
+						new TextEncoder().encode('challenge'),
+					);
+					return Array.from(new Uint8Array(sig))
+						.slice(0, 8)
+						.map((b) => b.toString(16).padStart(2, '0'))
+						.join('');
+				});
+				await put('getRandomValues', () => {
+					const a = new Uint32Array(2);
+					crypto.getRandomValues(a);
+					return a[0] !== 0 || a[1] !== 0 ? 'works' : 'all-zero';
+				});
+				await put('randomUUID', () =>
+					typeof crypto.randomUUID === 'function' ? 'present' : 'MISSING',
+				);
+
+				// --- MessageChannel roundtrip (widget <-> iframe transport) ---
+				await put('messageChannel', () => {
+					return new Promise((res, rej) => {
+						const mc = new MessageChannel();
+						const t = setTimeout(() => rej(new Error('timeout')), 2000);
+						mc.port1.onmessage = (e) => {
+							clearTimeout(t);
+							res('echo:' + e.data);
+						};
+						mc.port2.onmessage = (e) => mc.port2.postMessage('got:' + e.data);
+						mc.port1.start();
+						mc.port2.start();
+						mc.port1.postMessage('ping');
+					});
+				});
+
+				// --- same-origin iframe postMessage: does e.origin read right? ---
+				await put('iframePostMessage', () => {
+					return new Promise((res, rej) => {
+						const ifr = document.createElement('iframe');
+						const t = setTimeout(() => {
+							ifr.remove();
+							rej(new Error('timeout'));
+						}, 3000);
+						ifr.srcdoc =
+							'<script>parent.postMessage({o:location.origin,top:window.top===window},"*")<\/script>';
+						ifr.style.display = 'none';
+						window.addEventListener('message', function h(e) {
+							if (!e.data || typeof e.data.o === 'undefined') return;
+							window.removeEventListener('message', h);
+							clearTimeout(t);
+							ifr.remove();
+							res({
+								childOrigin: e.data.o,
+								parentOriginSeen: e.origin,
+								childIsTop: e.data.top,
+								source: e.source ? 'set' : 'null',
+							});
+						});
+						document.body.appendChild(ifr);
+					});
+				});
+
+				// --- Worker: compute + crypto + wasm inside it, env consistency ---
+				await put('worker', async () => {
+					const src = `
+						self.onmessage = async () => {
+							const r = {};
+							r.loc = String(self.location);
+							r.origin = self.origin;
+							r.crossOriginIsolated = self.crossOriginIsolated;
+							r.fetchNative = Function.prototype.toString.call(self.fetch).includes('[native code]');
+							try {
+								const b = new Uint8Array([0,97,115,109,1,0,0,0,1,7,1,96,2,127,127,1,127,3,2,1,0,7,7,1,3,97,100,100,0,0,10,9,1,7,0,32,0,32,1,106,11]);
+								const m = await WebAssembly.instantiate(b, {});
+								r.wasmAdd = m.instance.exports.add(40, 2);
+							} catch (e) { r.wasm = 'throw: ' + e.message; }
+							try {
+								const h = await self.crypto.subtle.digest('SHA-256', new TextEncoder().encode('w'));
+								r.digest = new Uint8Array(h)[0];
+							} catch (e) { r.digest = 'throw: ' + e.message; }
+							r.importScripts = typeof self.importScripts;
+							r.perfNow = typeof self.performance.now === 'function';
+							self.postMessage(r);
+						};`;
+					const url = URL.createObjectURL(
+						new Blob([src], { type: 'text/javascript' }),
+					);
+					const w = new Worker(url);
+					const r = await new Promise((res, rej) => {
+						const t = setTimeout(() => rej(new Error('timeout')), 4000);
+						w.onmessage = (e) => {
+							clearTimeout(t);
+							res(e.data);
+						};
+						w.onerror = (e) => {
+							clearTimeout(t);
+							rej(new Error(e.message || 'worker error'));
+						};
+						w.postMessage('go');
+					});
+					w.terminate();
+					URL.revokeObjectURL(url);
+					return r;
+				});
+
+				// --- crossOriginIsolated / SharedArrayBuffer / Atomics ---
+				await put('isolation', () => ({
+					crossOriginIsolated: self.crossOriginIsolated,
+					SharedArrayBuffer: typeof self.SharedArrayBuffer,
+					Atomics: typeof self.Atomics,
+					sabWorks: (() => {
+						try {
+							const sab = new SharedArrayBuffer(8);
+							const ta = new Int32Array(sab);
+							Atomics.store(ta, 0, 42);
+							return Atomics.load(ta, 0) === 42 ? 'yes' : 'no';
+						} catch (e) {
+							return 'throw: ' + e.message.slice(0, 40);
+						}
+					})(),
+				}));
+
+				// --- WebGL real readback (render a known color, read the pixel) ---
+				await put('webglReadback', () => {
+					const c = document.createElement('canvas');
+					c.width = 2;
+					c.height = 2;
+					const gl = c.getContext('webgl2') || c.getContext('webgl');
+					if (!gl) return 'no-webgl';
+					gl.clearColor(0.2, 0.4, 0.6, 1);
+					gl.clear(gl.COLOR_BUFFER_BIT);
+					const px = new Uint8Array(4);
+					gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+					return Array.from(px).join(',');
+				});
+
+				// --- OffscreenCanvas + convertToBlob ---
+				await put('offscreen', async () => {
+					if (typeof OffscreenCanvas === 'undefined') return 'MISSING';
+					const oc = new OffscreenCanvas(20, 20);
+					const ctx = oc.getContext('2d');
+					ctx.fillStyle = '#123456';
+					ctx.fillRect(0, 0, 20, 20);
+					const blob = await oc.convertToBlob();
+					return { type: blob.type, size: blob.size };
+				});
+
+				await put('createImageBitmap', async () => {
+					const c = document.createElement('canvas');
+					c.width = c.height = 8;
+					c.getContext('2d').fillRect(0, 0, 8, 8);
+					const bmp = await createImageBitmap(c);
+					return `${bmp.width}x${bmp.height}`;
+				});
+
+				// --- storage: indexedDB roundtrip, storage estimate, cookieStore ---
+				await put('indexedDB', () => {
+					return new Promise((res, rej) => {
+						const t = setTimeout(() => rej(new Error('timeout')), 3000);
+						const req = indexedDB.open('probe-db', 1);
+						req.onupgradeneeded = () => req.result.createObjectStore('s');
+						req.onerror = () => {
+							clearTimeout(t);
+							rej(new Error('open error'));
+						};
+						req.onsuccess = () => {
+							const db = req.result;
+							const tx = db.transaction('s', 'readwrite');
+							tx.objectStore('s').put({ v: 7 }, 'k');
+							tx.oncomplete = () => {
+								const g = db
+									.transaction('s', 'readonly')
+									.objectStore('s')
+									.get('k');
+								g.onsuccess = () => {
+									clearTimeout(t);
+									db.close();
+									indexedDB.deleteDatabase('probe-db');
+									res('roundtrip:' + (g.result && g.result.v));
+								};
+							};
+						};
+					});
+				});
+				await put('storageEstimate', async () => {
+					if (!navigator.storage || !navigator.storage.estimate)
+						return 'MISSING';
+					const e = await navigator.storage.estimate();
+					return { quotaGB: Math.round(e.quota / 1e9), usage: e.usage };
+				});
+				await put('cookieStore', () =>
+					typeof self.cookieStore !== 'undefined' ? 'present' : 'MISSING',
+				);
+				await put('hasStorageAccess', async () =>
+					typeof document.hasStorageAccess === 'function'
+						? String(await document.hasStorageAccess())
+						: 'MISSING',
+				);
+
+				// --- permissions / notification states ---
+				await put('permissions', async () => {
+					const r = { notification: Notification.permission };
+					for (const name of ['geolocation', 'notifications', 'camera']) {
+						try {
+							r[name] = (await navigator.permissions.query({ name })).state;
+						} catch (e) {
+							r[name] = 'throw: ' + e.message.slice(0, 30);
+						}
+					}
+					return r;
+				});
+
+				// --- media / speech (classic bot tells) ---
+				await put('mediaDevices', async () => {
+					if (!navigator.mediaDevices) return 'MISSING';
+					const d = await navigator.mediaDevices.enumerateDevices();
+					const kinds = {};
+					for (const x of d) kinds[x.kind] = (kinds[x.kind] || 0) + 1;
+					return kinds;
+				});
+				await put('speechVoices', () => {
+					const v = speechSynthesis.getVoices();
+					return v.length + (v[0] ? ' first:' + v[0].name : '');
+				});
+
+				// --- connection / battery / hardware signals ---
+				await put('connection', () => {
+					const c = navigator.connection;
+					return c
+						? {
+								effectiveType: c.effectiveType,
+								rtt: c.rtt,
+								downlink: c.downlink,
+								saveData: c.saveData,
+							}
+						: 'MISSING';
+				});
+				await put('battery', async () =>
+					navigator.getBattery
+						? (() => {
+								const b = navigator.getBattery();
+								return b.then
+									? b.then((x) => ({
+											charging: x.charging,
+											level: x.level,
+										}))
+									: 'sync?';
+							})()
+						: 'MISSING',
+				);
+				await put('gamepads', () =>
+					typeof navigator.getGamepads === 'function'
+						? navigator.getGamepads().length + ' slots'
+						: 'MISSING',
+				);
+
+				// --- compression / encoding ---
+				await put('compressionStream', async () => {
+					if (typeof CompressionStream === 'undefined') return 'MISSING';
+					const cs = new Blob(['hello hello hello'])
+						.stream()
+						.pipeThrough(new CompressionStream('gzip'));
+					const buf = await new Response(cs).arrayBuffer();
+					return 'gzip ' + buf.byteLength + 'B';
+				});
+				await put('structuredCloneTransfer', () => {
+					const ab = new ArrayBuffer(16);
+					const c = structuredClone(
+						{ x: new Uint8Array([1, 2, 3]), ab },
+						{
+							transfer: [ab],
+						},
+					);
+					return `detached:${ab.byteLength === 0} arr:${c.x[2]}`;
+				});
+
+				// --- audio realtime context ---
+				await put('audioContext', () => {
+					const Ctx = self.AudioContext || self.webkitAudioContext;
+					if (!Ctx) return 'MISSING';
+					const ac = new Ctx();
+					const r = {
+						sampleRate: ac.sampleRate,
+						state: ac.state,
+						baseLatency: ac.baseLatency,
+						maxChannelCount: ac.destination.maxChannelCount,
+					};
+					ac.close();
+					return r;
+				});
+
+				// --- viewport / media queries / css ---
+				await put('viewport', () => ({
+					visualViewport: self.visualViewport
+						? `${Math.round(visualViewport.width)}x${Math.round(visualViewport.height)} scale ${visualViewport.scale}`
+						: 'MISSING',
+					orientation: screen.orientation ? screen.orientation.type : 'MISSING',
+				}));
+				await put('matchMedia', () =>
+					[
+						'(prefers-color-scheme: dark)',
+						'(hover: hover)',
+						'(pointer: fine)',
+						'(prefers-reduced-motion: reduce)',
+						'(display-mode: browser)',
+					]
+						.map(
+							(q) =>
+								q.split(':')[1].trim().replace(')', '') +
+								'=' +
+								matchMedia(q).matches,
+						)
+						.join(' '),
+				);
+
+				// --- error / function internals ---
+				await put('errorInternals', () => ({
+					captureStackTrace: typeof Error.captureStackTrace,
+					stackTraceLimit: Error.stackTraceLimit,
+					boundToString: function x() {}.bind(null).toString(),
+					arrowToString: (() => {}).toString(),
+				}));
+
+				const text = JSON.stringify(out, null, 2);
+				document.getElementById('out').value = text;
+				document.getElementById('copy').onclick = () =>
+					navigator.clipboard &&
+					navigator.clipboard.writeText(text).then(
+						() => (document.getElementById('note').textContent = 'copied'),
+						() => {},
+					);
+			})();
+		</script>
+	</body>
+</html>
