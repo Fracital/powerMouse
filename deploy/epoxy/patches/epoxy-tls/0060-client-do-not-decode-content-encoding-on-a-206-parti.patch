@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Thu, 13 Nov 2026 10:00:00 -0500
+Subject: [PATCH] client: do not decode content-encoding on a 206 partial
+ response
+
+`fetch` picks a Gzip/Brotli/Zlib/Zstd decoder from the response's
+Content-Encoding and wraps the body in it for every response that has one.
+A `206 Partial Content` body is not a whole coded stream, though: the
+origin computes the byte range over the *compressed* representation (the
+Content-Range denominator is the compressed length), so the body is a
+fragment of the gzip/brotli/zstd stream. Running a decoder over a fragment
+ends the stream with `UnexpectedEof` (the read errors part way), or, when
+the cut lands on a block boundary, decodes to a short, truncated body with
+no error at all. A truncated font delivered to the page then fails Chrome's
+OTS sanitizer with "Size of decompressed WOFF 2.0 is less than compressed
+size", and any ranged, content-encoded resource (media, large assets) is
+corrupted the same way.
+
+A proxy cannot decode a partial coded stream and must not try: leave a
+partial response encoded, headers untouched, and let the real client decode
+the range it asked for (a service worker response is not re-decoded by the
+browser from Content-Encoding, and a direct range consumer handles the
+coding itself). Detect the partial response by its 206 status or the
+presence of a Content-Range header and force the decoder off for it.
+---
+ client/src/lib.rs | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/client/src/lib.rs b/client/src/lib.rs
+index a1b2c3d..e4f5a6b 100644
+--- a/client/src/lib.rs
++++ b/client/src/lib.rs
+@@ -783,6 +783,23 @@ impl EpoxyClient {
+ 						"zstd" => Some(EpoxyCompression::Zstd),
+ 						_ => None,
+ 					};
++
++					// A 206 Partial Content body is a fragment of the
++					// *content-coded* representation: the origin computes the
++					// range over the compressed bytes (the Content-Range
++					// denominator is the compressed length). A Gzip/Brotli/
++					// Zlib/Zstd decoder run over that fragment ends in
++					// UnexpectedEof, or decodes to a short, truncated body -- a
++					// truncated font then fails OTS with "Size of decompressed
++					// WOFF 2.0 is less than compressed size". Leave a partial
++					// response encoded and let the client decode the range.
++					let compression = if response.status().as_u16() == 206
++						|| response.headers().contains_key("Content-Range")
++					{
++						None
++					} else {
++						compression
++					};
+
+ 					let response_body = BodyDataStream::new(response.into_body()).map_err(std::io::Error::other).into_async_read();
+ 					let decompressed_body = match compression {
+--
+2.43.0
