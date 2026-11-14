@@ -33,6 +33,7 @@ const FLAG_META = 16;
 const FLAG_REVISION = 32;
 const FLAG_PARSES = 64;
 const FLAG_SINGLE = 128;
+const FLAG_PRINT = 256;
 const STATUS_INVALID = 7;
 const ROUTE_IMPORT = 1;
 const ROUTE_SOURCE_MAP = 2;
@@ -82,7 +83,7 @@ export function rewriterRevision(): string | null {
  * the page wrote it, and a revision 1 module takes the flags of the parse
  * questions for a rewrite.
  */
-export const REVISION = '7';
+export const REVISION = '8';
 
 /** whether an instance answered REVISION, asked once of each */
 const speaks = new WeakMap<BufferInstance, boolean>();
@@ -112,6 +113,26 @@ export function parsesInWasm(code: string, single: boolean): boolean | null {
 	if (parses === null) counts.declined++;
 	else counts.answered++;
 	return parses;
+}
+
+/**
+ * What V8 names a part of a page's expression by in an error's message
+ * (src/callPrinter.ts printExpression, ported to rust/rwjs/src/printer.rs),
+ * asked of this thread's module: `{ printed }` with the string or null (the
+ * source did not parse, or the part does not apply), or null when the thread
+ * holds no module or another revision's, for the caller to ask the rewriter
+ * library instead. The `print` member of src/inject/rewriter.ts reaches it.
+ */
+export function printInWasm(
+	source: string,
+	part: string,
+): { printed: string | null } | null {
+	if (!hasModule(REWRITER)) return null;
+	return withInstance(REWRITER, (instance) => {
+		if (!sameRevision(instance)) return null;
+		const answered = instance.call(`${part}\n${source}`, FLAG_PRINT);
+		return { printed: 'output' in answered ? answered.output : null };
+	});
 }
 
 /**
@@ -185,7 +206,7 @@ export function rewriteWith(
 		// back where the browser refuses it as it is (an early error, syntax
 		// no browser has shipped), or with an end no browser compiles where
 		// the browser would run it (so unshipped syntax a browser later takes
-		// does not run unrewritten) — the same `cannotRewrite` the JavaScript
+		// does not run unrewritten), the same `cannotRewrite` the JavaScript
 		// rewriter uses for the shapes its printer cannot write
 		return result.status === STATUS_INVALID
 			? cannotRewrite(

@@ -4,10 +4,12 @@
 //! the walk, `walk` the rewrites of src/rewriteJS.ts as edits at the tree's
 //! spans, `shape` the questions they ask of a node, `early` the early errors
 //! a browser refuses a script for, `config` what a host hands over, `source`
-//! the function marks and keys of src/functionSource.ts.
+//! the function marks and keys of src/functionSource.ts, `printer` the port of
+//! src/callPrinter.ts (how V8 names an expression in an error's message).
 pub mod config;
 pub mod early;
 pub mod pattern;
+pub mod printer;
 pub mod rewrite;
 pub mod shape;
 pub mod source;

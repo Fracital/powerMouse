@@ -31,7 +31,12 @@ import { scriptLead } from './scriptLead';
 import type { ScriptType } from './scriptRoutes';
 import type StompURL from './StompURL';
 import { BUILD, LIBRARY_FACTORY } from './version';
-import { counts, parsesInWasm, rewriteInWasm } from './wasm/rewriter';
+import {
+	counts,
+	parsesInWasm,
+	printInWasm,
+	rewriteInWasm,
+} from './wasm/rewriter';
 import { adoptModule, hasModule } from './wasm/thread';
 
 /**
@@ -310,7 +315,15 @@ export function library(parts: LightParts): RewriterLib {
 			);
 		},
 		print(source: string, part: string): string | null {
-			return run(() => inLibrary((lib) => lib.print(source, part), null), null);
+			// the wasm module prints it (rust/rwjs/src/printer.rs); the rewriter
+			// library, which the meriyah parser comes with, only when no module
+			// answers (another revision's, or a repeated call)
+			return run(() => {
+				const answered = repeated ? null : printInWasm(source, part);
+				return answered
+					? answered.printed
+					: inLibrary((lib) => lib.print(source, part), null);
+			}, null);
 		},
 		domain(host: string): string | null {
 			return run(() => {

@@ -53,6 +53,12 @@ const FLAG_REVISION: u32 = 32;
 const FLAG_PARSES: u32 = 64;
 /// answer whether the input is a script of one expression statement
 const FLAG_SINGLE: u32 = 128;
+/// print a part of a page's expression the way V8 names it in an error's
+/// message (`rwjs::printer`, the port of src/callPrinter.ts): the input is
+/// `<part>\n<source>`, the output the printed text, status `STATUS_PARSE` when
+/// the source does not parse or the part does not apply (a None told from an
+/// empty answer)
+const FLAG_PRINT: u32 = 256;
 
 /// statuses besides 0: the configuration or the params did not parse
 const STATUS_CONFIG: i32 = 1;
@@ -163,6 +169,16 @@ pub unsafe extern "C" fn call(ptr: *mut u8, len: usize, flags: u32) -> i32 {
 		let answer = rewrite::parses(source, flags & FLAG_SINGLE != 0);
 		state().output = vec![if answer { b'1' } else { b'0' }];
 		return 0;
+	}
+	if flags & FLAG_PRINT != 0 {
+		let (part, text) = source.split_once('\n').unwrap_or((source, ""));
+		return match rwjs::printer::print_expression(text, part) {
+			Some(printed) => {
+				state().output = printed.into_bytes();
+				0
+			}
+			None => STATUS_PARSE,
+		};
 	}
 	if flags & FLAG_PARAMS != 0 {
 		return match Params::parse(source) {
