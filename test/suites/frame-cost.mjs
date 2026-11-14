@@ -20,8 +20,15 @@
 //   and style directives) took it to 456 KB, and its Trusted Types (every
 //   sink the inject writes judging the page's value, the inject's own
 //   writes carrying trusted values of its own policy) to 465 KB: the budget
-//   is 468 KB. Raise it in the same change as code that has to grow the
-//   bundle, and say why.
+//   is 468 KB. The Brave-parity anti-fingerprinting layer (the Fingerprint
+//   module: per-site farbling of canvas, WebGL and audio readbacks and the
+//   limiting of fonts, screen, hardware concurrency, device memory, media
+//   devices and locale) added about 8 KB to the bundle (485 to 493 KB), so
+//   the budget is 500 KB. The module is off by default and added to a frame
+//   only when a surface is opted in, so it costs a default frame nothing at
+//   run time; only the bundle (which carries every module's code) grows, and
+//   the per-frame heap ceiling below is unchanged. Raise the budget in the
+//   same change as code that has to grow the bundle, and say why.
 // - the JS heap one proxied frame adds (test/frame-memory.mjs, FRAMES frames
 //   of a small ad-like page, same site), against a ceiling above what this
 //   build measures: 1,094 to 1,100 KB with 20 frames on Chrome 152 and 156
@@ -38,7 +45,7 @@ import { measureFrames } from '../frame-memory.mjs';
 import { done, ok } from '../lib.mjs';
 
 const BUNDLE = new URL('../../dist/injectDocument.js', import.meta.url);
-const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 490;
+const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 500;
 const FRAMES = Number(process.env.FRAMES) || 20;
 const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1150;
 

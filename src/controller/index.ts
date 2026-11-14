@@ -89,7 +89,12 @@ import {
 	traverse,
 } from './history';
 import { hostReload } from './hostReload';
-import { controllerId, forgetControllerIds, keptControllerId } from './id';
+import {
+	controllerId,
+	fingerprintSeed,
+	forgetControllerIds,
+	keptControllerId,
+} from './id';
 import { mediaVerdict } from './mediaVerdict';
 import type { StaleInfo, TransportDescriptor } from './messages';
 import { DEFAULT_SANDBOX } from './remote';
@@ -799,6 +804,13 @@ export class StompController extends EventTarget {
 	 * every handshake as the rules do. Built in the constructor
 	 */
 	#shields!: Shields;
+	/**
+	 * The per-session farbling seed for the anti-fingerprint surfaces, kept in
+	 * the host origin's storage so a site's noise is stable across reloads, tabs
+	 * and worker restarts (src/controller/id.ts fingerprintSeed). Sent to the
+	 * worker with the shields; the worker mixes it with each document's eTLD+1.
+	 */
+	readonly #fpSeed = fingerprintSeed();
 	/** the blocker's lists in force, while it is on (docs/adblock.md); its module is `#modules.blocker` */
 	#adblock: AdblockInit | null = null;
 	/**
@@ -881,7 +893,7 @@ export class StompController extends EventTarget {
 		// each change pushes the whole set to the worker (fire and forget: it is
 		// resent with the handshake); the host persists it from onShieldsChange
 		this.#shields = createShields((list) => {
-			this.#call('shields', list).catch(() => {});
+			this.#call('shields', { list, seed: this.#fpSeed }).catch(() => {});
 		}, init.onShieldsChange);
 		if (init.shields?.length) this.#shields.replace(init.shields);
 		this.directory = isUrlLike(init.directory)
@@ -1727,7 +1739,8 @@ export class StompController extends EventTarget {
 					// the shields travel with every handshake too (a new worker
 					// starts with none)
 					const shields = this.#shields.all();
-					if (shields.length) await rpc.call('shields', shields);
+					if (shields.length)
+						await rpc.call('shields', { list: shields, seed: this.#fpSeed });
 					// how the host was loaded is said once: it is about the pages
 					// the host shows again right after
 					const reloaded = this.#hostReload;

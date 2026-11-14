@@ -1,5 +1,9 @@
 import { BareCompatibleClient } from '@mercuryworkshop/proxy-transports';
-import type { FpSurface } from '../blocker/types';
+import {
+	FP_DEFAULT_ON_SURFACES,
+	sameSurfaceSet,
+	type FpSurface,
+} from '../blocker/types';
 import GenericCodec from '../Codecs';
 import {
 	Assets,
@@ -173,11 +177,17 @@ export default class Client {
 	/** the host's page is cross-origin isolated (config.isolated; src/isolation.ts) */
 	hostIsolated: boolean;
 	/**
-	 * the fingerprint-emulation surfaces this host turned off (config.fingerprintOff):
-	 * each one's hook leaves its emulation out so the page reads the raw value.
-	 * Empty (the default) emulates every surface. Read via emulatesFingerprint.
+	 * the fingerprint surfaces STomp protects for this document (config.fingerprintOn):
+	 * the FingerprintModule installs a hook for each. Absent in the config means
+	 * the default set, `performanceMemory` alone. Read via emulatesFingerprint.
 	 */
-	fingerprintOff: FpSurface[];
+	fingerprintOn: FpSurface[];
+	/**
+	 * the per-session farbling seed (config.fingerprintSeed), present only when a
+	 * seeded surface is active; 0 when none is. Mixed with the document's eTLD+1
+	 * by the FingerprintModule.
+	 */
+	fingerprintSeed: number;
 	applied: boolean;
 	/** @internal called after a response reached this context (fetch, XHR): caches that depend on the jar drop */
 	readonly responseListeners = new Set<() => void>();
@@ -574,7 +584,8 @@ export default class Client {
 		coreModuleAt(() => coreWasm(this.url, this.config));
 		this.blocking = !!init.adblock;
 		this.hostIsolated = !!init.isolated;
-		this.fingerprintOff = init.fingerprintOff ?? [];
+		this.fingerprintOn = init.fingerprintOn ?? [...FP_DEFAULT_ON_SURFACES];
+		this.fingerprintSeed = init.fingerprintSeed ?? 0;
 		// a stale cached bundle next to a new service worker: say so once,
 		// the page still gets its best effort
 		if (init.build && init.build !== BUILD)
@@ -598,13 +609,14 @@ export default class Client {
 			?.prototype.postMessage as PostMessage | undefined;
 	}
 	/**
-	 * Whether this document emulates the given fingerprint surface (true unless
-	 * its host turned the surface off in its shields: config.fingerprintOff). A
-	 * surface's hook calls this once, at apply time, and skips its emulation
-	 * when it is off, so the per-site control costs one array check per module.
+	 * Whether STomp protects the given fingerprint surface for this document
+	 * (its host opted the surface in, or it is on by default:
+	 * config.fingerprintOn). A surface's hook calls this once, at apply time,
+	 * and installs nothing when it is off, so a surface left at its default
+	 * costs one array check and no heap.
 	 */
 	emulatesFingerprint(surface: FpSurface): boolean {
-		return !this.fingerprintOff.includes(surface);
+		return this.fingerprintOn.includes(surface);
 	}
 	get config(): Config {
 		return {
@@ -622,8 +634,11 @@ export default class Client {
 			...(this.assets ? { assets: this.assets } : {}),
 			...(this.blocking ? { adblock: true } : {}),
 			...(this.hostIsolated ? { isolated: true } : {}),
-			...(this.fingerprintOff.length
-				? { fingerprintOff: this.fingerprintOff }
+			...(sameSurfaceSet(this.fingerprintOn, FP_DEFAULT_ON_SURFACES)
+				? {}
+				: { fingerprintOn: this.fingerprintOn }),
+			...(this.fingerprintSeed
+				? { fingerprintSeed: this.fingerprintSeed }
 				: {}),
 			...(this.#customNames ? { names: this.names } : {}),
 			...(this.hooks ? { hooks: this.hooks } : {}),

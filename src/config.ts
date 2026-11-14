@@ -121,16 +121,24 @@ export interface Config {
 	 */
 	adblock?: boolean;
 	/**
-	 * @internal The fingerprint-emulation surfaces this document's host turned
-	 * off in its shields: the inject leaves each one's emulation out so the
-	 * page reads the renderer's raw value for it (today the only surface is
-	 * `deviceMemory`, the Memory module's per-site performance.memory,
-	 * src/inject/dom/document.ts). Absent or empty (the default) every surface
-	 * is emulated, as it always has been; the master "Block fingerprinting"
-	 * off, or shields down, lists them all. Decided per document by the service
-	 * worker from the per-site shields (src/server/shields.ts fingerprintOff()).
+	 * @internal The fingerprint surfaces STomp protects for this document's host
+	 * (its shields): the FingerprintModule installs a hook for each and the
+	 * Memory module runs when `performanceMemory` is listed
+	 * (src/inject/dom/document.ts). Absent is the default set, `performanceMemory`
+	 * alone, so a default page's config is unchanged by this feature; an entry
+	 * that opts a farbling/limiting surface in, or turns the master off (`[]`),
+	 * sends the explicit set. Decided per document by the service worker from the
+	 * per-site shields (src/server/shields.ts fingerprintConfig()).
 	 */
-	fingerprintOff?: FpSurface[];
+	fingerprintOn?: FpSurface[];
+	/**
+	 * @internal The per-session farbling seed (ShieldsStore.seed), present only
+	 * when a seeded surface (canvas/webgl/audio) is active for the document. The
+	 * FingerprintModule mixes it with the document's eTLD+1 so its noise is
+	 * deterministic within the site but unique across sites. The page never
+	 * reads it (src/inject/dom/modules/Fingerprint.ts).
+	 */
+	fingerprintSeed?: number;
 	/** the served file names, when the host renamed them (see Assets) */
 	assets?: Assets;
 	/**

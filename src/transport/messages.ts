@@ -807,9 +807,12 @@ export type SWbound = {
 	 * the per-site shields (the demo's content-blocker UI): the whole
 	 * host-keyed allowlist, which the worker's server consults before each
 	 * privacy layer runs for a host (src/server/shields.ts). Replaces what
-	 * it held, and travels with every handshake as the rules do
+	 * it held, and travels with every handshake as the rules do. `seed` is the
+	 * controller's persisted anti-fingerprint farbling seed (src/controller/id.ts),
+	 * so a site's noise is stable across this worker restarting; a plain array is
+	 * accepted too (a caller that sends no seed).
 	 */
-	shields: [SiteShields[]];
+	shields: [{ list: SiteShields[]; seed?: number } | SiteShields[]];
 	/**
 	 * change the built-in blocker's lists at runtime (the demo's Filter Lists
 	 * editor, docs/adblock.md): the controller re-resolves the `AdblockInit` and

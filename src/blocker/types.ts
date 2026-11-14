@@ -118,23 +118,100 @@ export interface ProceduralFilter {
 export type ShieldsMode = 'aggressive' | 'standard' | 'allow';
 
 /**
- * The per-site fingerprint-emulation surfaces STomp can turn off one at a
- * time (the Shields "Block fingerprinting" detail submenu). STomp runs every
- * proxied site in one shared renderer, so most fingerprint inputs
- * (hardwareConcurrency, screen, userAgent, canvas, WebGL, audio, fonts,
- * languages, timezone) already read that one real browser's native values:
- * there is nothing to emulate per site and nothing to gate. The one place the
- * shared process would leak a cross-site tell, and where STomp actively
- * synthesizes a per-site value, is `performance.memory` (the Memory module);
- * that is this list's one surface today. OFF, STomp stops emulating it and the
- * site reads the renderer's raw figure; ON (the default) the per-site
- * emulation stands. New surfaces join here as real hooks appear
- * (src/server/shields.ts, docs/adblock.md "Per-site shields").
+ * The per-site anti-fingerprinting surfaces STomp can protect one at a time
+ * (the Shields "Block fingerprinting" detail submenu), after Brave's model.
+ *
+ * `performanceMemory` is match-native: STomp synthesizes a plausible per-site
+ * `performance.memory` so a frame does not read the same shared-process heap as
+ * the page that embeds it (the Memory module; the one cross-site tell a shared
+ * renderer leaks, and the signal Cloudflare Turnstile reads). It is ON by
+ * default because a real-looking figure helps pass bot checks.
+ *
+ * The rest are Brave-style protections that make STomp *stop* matching native:
+ * they farble (canvas, webgl, audio: deterministic per-site sub-perceptual
+ * noise from a per-session seed and the document's eTLD+1, so a site is stable
+ * within itself but cannot be correlated across sites) or limit/round (fonts,
+ * screen, hardwareConcurrency, deviceMemory, mediaDevices, locale). A farbled
+ * canvas or a capped core count is itself a signal that can FAIL a strict bot
+ * check, the opposite of STomp's "look like real Chrome" baseline, so every one
+ * of them is OFF by default (opt-in per site). See FP_DEFAULT_ON.
+ *
+ * The inject's FingerprintModule installs a surface's hook only when the
+ * surface is active for the document (src/inject/dom/modules/Fingerprint.ts),
+ * so a surface left at its default adds nothing to the frame's heap. The master
+ * "Block fingerprinting" is the umbrella kill switch over the set (off: every
+ * surface native); it does not force the opt-in surfaces on. New surfaces join
+ * here as real hooks appear (src/server/shields.ts, docs/adblock.md).
  */
-export type FpSurface = 'deviceMemory';
+export type FpSurface =
+	| 'performanceMemory'
+	| 'canvas'
+	| 'webgl'
+	| 'audio'
+	| 'fonts'
+	| 'screen'
+	| 'hardwareConcurrency'
+	| 'deviceMemory'
+	| 'mediaDevices'
+	| 'locale';
 
-/** every fp surface, in submenu order; the master toggle is all-on/all-off over it */
-export const FP_SURFACES: FpSurface[] = ['deviceMemory'];
+/** every fp surface, in submenu order; the master toggle is the kill switch over it */
+export const FP_SURFACES: FpSurface[] = [
+	'performanceMemory',
+	'canvas',
+	'webgl',
+	'audio',
+	'fonts',
+	'screen',
+	'hardwareConcurrency',
+	'deviceMemory',
+	'mediaDevices',
+	'locale',
+];
+
+/**
+ * Which surfaces STomp protects by default. Only `performanceMemory` is on:
+ * it matches native and helps bot checks. Every farbling/limiting surface is
+ * off (opt-in), because turning it on makes STomp diverge from a real Chrome
+ * and can fail a strict bot check (docs/adblock.md "Anti-fingerprinting"). A
+ * surface with no per-site flag takes this value.
+ */
+export const FP_DEFAULT_ON: Record<FpSurface, boolean> = {
+	performanceMemory: true,
+	canvas: false,
+	webgl: false,
+	audio: false,
+	fonts: false,
+	screen: false,
+	hardwareConcurrency: false,
+	deviceMemory: false,
+	mediaDevices: false,
+	locale: false,
+};
+
+/** the surfaces active by default (performanceMemory alone), in FP_SURFACES order */
+export const FP_DEFAULT_ON_SURFACES: FpSurface[] = FP_SURFACES.filter(
+	(surface) => FP_DEFAULT_ON[surface],
+);
+
+/**
+ * The surfaces whose protection needs the per-session farbling seed: canvas,
+ * webgl and audio add deterministic per-site noise seeded from it. The
+ * limiting/rounding surfaces are deterministic and need no seed, so the shell
+ * carries the seed (Config.fingerprintSeed) only when one of these is active.
+ */
+export const FP_SEEDED_SURFACES: FpSurface[] = ['canvas', 'webgl', 'audio'];
+
+/**
+ * Whether two surface sets are the same set (order-independent): the shell
+ * omits `fingerprintOn` from a document's config when the active set is the
+ * default, so a default page's config is unchanged.
+ */
+export function sameSurfaceSet(a: FpSurface[], b: FpSurface[]): boolean {
+	if (a.length !== b.length) return false;
+	for (const surface of a) if (!b.includes(surface)) return false;
+	return true;
+}
 
 /**
  * One host's shields, as the demo stores them (host-keyed, in its own
@@ -153,16 +230,21 @@ export interface SiteShields {
 	/** block the page's own scripts (the inject enforces script-src 'none' against the page's code, src/csp.ts) */
 	blockScripts?: boolean;
 	/**
-	 * The master fingerprint-emulation toggle (on by default): off, the site
-	 * reads this browser's native values for every surface (src/server/shields.ts).
-	 * It is all-on/all-off over the per-surface `fingerprint` set below.
+	 * The master fingerprint toggle (on by default): the umbrella kill switch
+	 * over the per-surface set. Off, the site reads this browser's native values
+	 * for every surface (STomp protects none, src/server/shields.ts). On, each
+	 * surface takes its own `fingerprint` flag, or FP_DEFAULT_ON when it has
+	 * none. It does not force the opt-in surfaces on; it only turns everything
+	 * off when down.
 	 */
 	blockFingerprinting?: boolean;
 	/**
-	 * Per-surface fingerprint emulation (each on by default, so an absent key
-	 * is on). A surface set false means STomp stops emulating it for the host
-	 * and the site reads the proxy's raw value; the master `blockFingerprinting`
-	 * off, or shields down, is every surface off. See FpSurface.
+	 * Per-surface fingerprint protection. An absent key takes the surface's
+	 * default (FP_DEFAULT_ON: `performanceMemory` on, every farbling/limiting
+	 * surface off). A key set true opts the surface in (STomp farbles or limits
+	 * it for the host); false opts it out. The master `blockFingerprinting` off,
+	 * or shields down, forces every surface off whatever these say. See
+	 * FpSurface.
 	 */
 	fingerprint?: Partial<Record<FpSurface, boolean>>;
 	/** the cookie policy for the host's requests */

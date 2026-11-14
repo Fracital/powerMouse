@@ -3,6 +3,7 @@ import {
 	type ProxyTransport,
 } from '@mercuryworkshop/proxy-transports';
 import { acceptLanguage } from '../acceptLanguage';
+import { FP_DEFAULT_ON_SURFACES, FP_SEEDED_SURFACES } from '../blocker/types';
 import GenericCodec from '../Codecs';
 import { codecType, Config, ParsedConfig } from '../config';
 import {
@@ -4464,20 +4465,31 @@ export function registerRewrites(
 						)
 					: null;
 				if (listCsp) responseHeaders.append('content-security-policy', listCsp);
-				// the surfaces the host turned off in its shields' fingerprint
-				// controls: the shell tells the inject which emulations to leave
-				// out (Config.fingerprintOff), each read raw for the site
-				const fingerprintOff = rewriter.shields
-					? rewriter.shields.fingerprintOff(url.url.hostname)
-					: [];
+				// the fingerprint surfaces STomp protects for this host (its
+				// shields): the shell tells the inject which to hook
+				// (Config.fingerprintOn), omitted when it is the default set so a
+				// default page's config is unchanged. The per-session farbling
+				// seed rides along only when a seeded surface (canvas/webgl/audio)
+				// is active.
+				const fingerprintOn = rewriter.shields?.fingerprintConfig(
+					url.url.hostname,
+				);
+				const fingerprintSeed =
+					rewriter.shields &&
+					(fingerprintOn ?? FP_DEFAULT_ON_SURFACES).some((surface) =>
+						FP_SEEDED_SURFACES.includes(surface),
+					)
+						? rewriter.shields.seed
+						: undefined;
 				// under a list's policy the document's realm compiles no codec
 				// module: the policy may refuse it, and would tell the page
 				const shellConfig: Config =
-					listCsp || fingerprintOff.length
+					listCsp || fingerprintOn || fingerprintSeed !== undefined
 						? {
 								...rewriter.config,
 								...(listCsp ? { codecModule: false } : {}),
-								...(fingerprintOff.length ? { fingerprintOff } : {}),
+								...(fingerprintOn ? { fingerprintOn } : {}),
+								...(fingerprintSeed !== undefined ? { fingerprintSeed } : {}),
 							}
 						: rewriter.config;
 				const job = prewrite(

@@ -1,3 +1,4 @@
+import type { SiteShields } from '../blocker/types';
 import type GenericCodec from '../Codecs';
 import { Config, ConfigCodec } from '../config';
 import type { HopPolicy } from '../csp';
@@ -253,8 +254,13 @@ function registerController(
 			clearCache: async () => {
 				await (await server).clearCache();
 			},
-			shields: async (list) => {
-				(await server).setShields(list);
+			shields: async (payload) => {
+				// the controller sends { list, seed }; an array is the legacy
+				// list-only shape (and the remote controller's frame hop)
+				const { list, seed } = Array.isArray(payload)
+					? { list: payload, seed: undefined }
+					: (payload as { list: SiteShields[]; seed?: number });
+				(await server).setShields(list, seed);
 			},
 			adblock: async ({ init, refresh }) => {
 				await (await server).reloadBlocker(init, !!refresh);

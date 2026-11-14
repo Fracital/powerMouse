@@ -15,7 +15,10 @@
 // (enabled=false) turns every layer off for the host without touching STomp's
 // core rewriting.
 import {
+	FP_DEFAULT_ON,
+	FP_DEFAULT_ON_SURFACES,
 	FP_SURFACES,
+	sameSurfaceSet,
 	shieldsDown,
 	type FpSurface,
 	type SiteShields,
@@ -23,6 +26,28 @@ import {
 
 export class ShieldsStore {
 	#map = new Map<string, SiteShields>();
+	/**
+	 * The per-session farbling seed, carried to a document (Config.fingerprintSeed)
+	 * when a seeded surface is active and mixed there with the document's eTLD+1,
+	 * so a site's canvas/webgl/audio noise is deterministic within itself but
+	 * unique across sites. The controller owns it and sends it with the shields
+	 * (kept in the host origin's storage, so it is stable across reloads, tabs and
+	 * this worker restarting); until then this random fallback serves, so a worker
+	 * with no controller yet still farbles consistently within its own lifetime.
+	 * The page never reads it, only its noise, so it is no fingerprint of its own.
+	 */
+	#seed: number = (() => {
+		try {
+			const bytes = new Uint32Array(1);
+			crypto.getRandomValues(bytes);
+			return bytes[0] >>> 0;
+		} catch (error) {
+			return (Math.random() * 0x100000000) >>> 0;
+		}
+	})();
+	get seed(): number {
+		return this.#seed;
+	}
 	/**
 	 * The baseline a host with no entry of its own is governed by: the `'*'`
 	 * entry of the pushed list, when the controller sends one (the demo's
@@ -32,8 +57,20 @@ export class ShieldsStore {
 	 */
 	#default: SiteShields | undefined;
 
-	/** replace the whole allowlist (the controller sends it as one list) */
-	set(list: SiteShields[]): void {
+	/**
+	 * Replace the whole allowlist (the controller sends it as one list). `seed`
+	 * is the controller's persisted farbling seed, when it sent one: a valid
+	 * 32-bit integer replaces the fallback, so every document of this worker
+	 * farbles with the same per-session seed the controller keeps.
+	 */
+	set(list: SiteShields[], seed?: number): void {
+		if (
+			typeof seed === 'number' &&
+			Number.isInteger(seed) &&
+			seed >= 0 &&
+			seed <= 0xffffffff
+		)
+			this.#seed = seed;
 		this.#map = new Map(
 			list
 				.filter((entry): entry is SiteShields => !!entry && !!entry.host)
@@ -103,38 +140,46 @@ export class ShieldsStore {
 	}
 
 	/**
-	 * The fingerprint-emulation surfaces STomp leaves OUT for the host (the
-	 * shell carries these to the inject as `Config.fingerprintOff`, and each
-	 * hook skips its own emulation so the site reads the renderer's raw value).
-	 * Empty everywhere by default: every surface is emulated. The master
-	 * `blockFingerprinting` off, or shields down, lists every surface; with the
-	 * master on, only the surfaces an entry's `fingerprint` map sets false. A
-	 * host with no entry (neutral) emulates everything (empty).
+	 * The fingerprint surfaces STomp actively protects for the host (the shell
+	 * carries these to the inject as `Config.fingerprintOn`, and the
+	 * FingerprintModule installs a hook for each). A surface with no per-site
+	 * flag takes its default (FP_DEFAULT_ON: `performanceMemory` on, every
+	 * farbling/limiting surface off), so a neutral host and the "goodies on"
+	 * default both protect `performanceMemory` alone. The master
+	 * `blockFingerprinting` off, or shields down, protects nothing.
 	 */
-	fingerprintOff(host: string): FpSurface[] {
+	fingerprintOn(host: string): FpSurface[] {
 		const entry = this.get(host);
-		if (!entry) return [];
-		if (shieldsDown(entry) || entry.blockFingerprinting === false)
-			return [...FP_SURFACES];
+		if (!entry) return [...FP_DEFAULT_ON_SURFACES];
+		if (shieldsDown(entry) || entry.blockFingerprinting === false) return [];
 		const fp = entry.fingerprint;
-		return fp ? FP_SURFACES.filter((surface) => fp[surface] === false) : [];
+		return FP_SURFACES.filter((surface) =>
+			fp?.[surface] === undefined ? FP_DEFAULT_ON[surface] : fp[surface],
+		);
 	}
 
 	/**
-	 * Whether STomp emulates a given fingerprint surface for the host (the
-	 * inverse of its membership in `fingerprintOff`): on unless the master is
-	 * off, shields are down, or the surface's own flag is false.
+	 * The active set to put in a document's config, or undefined when it is the
+	 * default (`performanceMemory` alone): the shell then omits `fingerprintOn`
+	 * and the inject defaults to it, so a default page's config is unchanged by
+	 * this feature and no field rides on every request.
 	 */
+	fingerprintConfig(host: string): FpSurface[] | undefined {
+		const on = this.fingerprintOn(host);
+		return sameSurfaceSet(on, FP_DEFAULT_ON_SURFACES) ? undefined : on;
+	}
+
+	/** whether STomp protects a given fingerprint surface for the host */
 	fingerprintSurface(host: string, surface: FpSurface): boolean {
-		return !this.fingerprintOff(host).includes(surface);
+		return this.fingerprintOn(host).includes(surface);
 	}
 
 	/**
-	 * Whether STomp's fingerprint emulation runs for the host at all (the
+	 * Whether STomp's fingerprint protection runs for the host at all (the
 	 * master): true unless every surface is off (`blockFingerprinting` off or
-	 * shields down). On everywhere by default (docs/process-model.md).
+	 * shields down). On everywhere by default, since `performanceMemory` is.
 	 */
 	fingerprint(host: string): boolean {
-		return this.fingerprintOff(host).length < FP_SURFACES.length;
+		return this.fingerprintOn(host).length > 0;
 	}
 }

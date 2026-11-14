@@ -106,6 +106,46 @@ const keptIds = () =>
  * (forgetControllerIds, on `cookies.clear()` for every site), and with the
  * host origin's own site data.
  */
+/**
+ * Where the host origin's farbling seed is kept (localStorage). A fixed,
+ * project-neutral name, like the kept ids (KEY): a host that rewrites such
+ * names per build would otherwise lose it each deploy, which only re-seeds the
+ * noise, but keep it in step all the same.
+ */
+const SEED_KEY = 'anti-fp-seed';
+
+/**
+ * The per-session farbling seed the anti-fingerprint surfaces mix with each
+ * document's eTLD+1 (src/inject/dom/modules/Fingerprint.ts). One random 32-bit
+ * value for the host origin, kept in its localStorage so a site's canvas/audio/
+ * webgl noise is stable across reloads, tabs and the service worker restarting
+ * (which would otherwise re-roll it and change a site's readback under it).
+ * The controller sends it to the worker with the shields. It is never shown to
+ * a page, only its noise is, so it is no fingerprint of its own, and it is
+ * forgotten with the site data (forgetControllerIds, on `cookies.clear()`), so
+ * that is when it re-seeds. Where storage refuses, a fresh random one serves
+ * this page alone (stable within the page, which is enough for one document).
+ */
+export function fingerprintSeed(): number {
+	try {
+		const stored = localStorage.getItem(SEED_KEY);
+		if (stored !== null) {
+			const value = Number(stored);
+			if (Number.isInteger(value) && value >= 0 && value <= 0xffffffff)
+				return value;
+		}
+	} catch (error) {
+		// no storage: a fresh one below, for this page
+	}
+	const seed = crypto.getRandomValues(new Uint32Array(1))[0] >>> 0;
+	try {
+		localStorage.setItem(SEED_KEY, String(seed));
+	} catch (error) {
+		// not kept: it still serves this page
+	}
+	return seed;
+}
+
 export function keptControllerId(): Promise<string> {
 	const place = claims++;
 	return claimKeptId(place).catch(() => mintId());
@@ -205,6 +245,8 @@ export async function forgetControllerIds(): Promise<void> {
 		try {
 			localStorage.removeItem(KEY);
 			sessionStorage.removeItem(KEY);
+			// the farbling seed goes with the site data too, so it re-seeds
+			localStorage.removeItem(SEED_KEY);
 		} catch (error) {
 			// no storage: nothing was kept
 		}

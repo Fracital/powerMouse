@@ -1,3 +1,4 @@
+import type { FpSurface } from '../../blocker/types';
 import { createClientFactory } from '../Client';
 import baseModules from '../modules';
 import DocumentClient from './Client';
@@ -19,6 +20,7 @@ import DOMAttributesModule from './modules/DOMAttributes';
 import DOMContentHooks from './modules/DOMContentHooks';
 import DOMHooksModule from './modules/DOMHooks';
 import DownloadModule from './modules/Download';
+import FingerprintModule from './modules/Fingerprint';
 import FormQueryModule from './modules/FormQuery';
 import FragmentModule from './modules/Fragment';
 import FramingModule from './modules/Framing';
@@ -47,6 +49,20 @@ import VisitedModule from './modules/Visited';
 import WebAssemblyPolicyModule from './modules/WebAssemblyPolicy';
 import WebRTCModule from './modules/WebRTC';
 import XMLHttpRequestModule from './modules/XMLHttpRequest';
+
+// the surfaces the FingerprintModule handles (every surface but performanceMemory,
+// which is the Memory module): the module is added only when one of these is on
+const FINGERPRINT_SURFACES: FpSurface[] = [
+	'canvas',
+	'webgl',
+	'audio',
+	'fonts',
+	'screen',
+	'hardwareConcurrency',
+	'deviceMemory',
+	'mediaDevices',
+	'locale',
+];
 
 export function addClientModules(client: DocumentClient) {
 	// first: it takes the natives the blocker's cosmetic rules use before
@@ -87,18 +103,24 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(ServiceWorkerModule);
 	client.addModule(OpenModule);
 	client.addModule(DownloadModule);
+	// before CanvasTaint: its canvas/webgl/audio readback hooks wrap the native
+	// methods, and CanvasTaint's taint check then wraps those, so a tainted
+	// canvas throws before anything is farbled. Added only when a farbling or
+	// limiting surface is active for this host (every one is opt-in, off by
+	// default), so a default frame installs nothing and pays no heap.
+	if (
+		FINGERPRINT_SURFACES.some((surface) => client.emulatesFingerprint(surface))
+	)
+		client.addModule(FingerprintModule);
 	client.addModule(CanvasTaintModule);
 	client.addModule(MediaTaintModule);
 	client.addModule(MediaSessionModule);
 	client.addModule(IsolationModule);
-	// STomp's fingerprint emulation (the goodies-on "Block fingerprinting"
-	// shield, now per surface). A host that turned a surface off reads the
-	// renderer's native value for it, so the surface's module is left out
-	// entirely: the single, cheap gate (one array check per frame, no per-call
-	// cost, and nothing added to the budget when the surface stays on, which is
-	// the default). Device Memory's per-site performance.memory is the one
-	// surface today; new fingerprint surfaces join this block.
-	if (client.emulatesFingerprint('deviceMemory'))
+	// STomp's per-site performance.memory (the `performanceMemory` surface, on
+	// by default so a frame does not read the shared process heap of the page
+	// that embeds it). Gated like every surface: one array check, and the module
+	// (and its heap) is left out entirely when the host turned it off.
+	if (client.emulatesFingerprint('performanceMemory'))
 		client.addModule(MemoryModule);
 	client.addModule(WebRTCModule);
 	client.addModule(AnimationFramesModule);

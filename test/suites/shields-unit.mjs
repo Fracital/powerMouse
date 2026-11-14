@@ -151,18 +151,25 @@ const GOODIES = {
 }
 
 // --- per-surface fingerprint controls (the "Block fingerprinting" submenu) --
-// Each surface defaults on; a surface set false is the only one left out, while
-// every other surface stays emulated. The master blockFingerprinting is
-// all-on/all-off over the set. Today the one gated surface is 'deviceMemory'.
+// Each surface takes its default (FP_DEFAULT_ON: performanceMemory on, every
+// farbling/limiting surface off); a per-site flag opts a surface in or out. The
+// master blockFingerprinting is the kill switch over the set, and the config the
+// shell sends (fingerprintConfig) is omitted when the active set is the default.
 {
 	const shields = new ShieldsStore();
 	shields.set([
 		GOODIES,
 		{
-			host: 'one.test',
+			host: 'canvas.test',
 			enabled: true,
 			mode: 'standard',
-			fingerprint: { deviceMemory: false },
+			fingerprint: { canvas: true },
+		},
+		{
+			host: 'nopm.test',
+			enabled: true,
+			mode: 'standard',
+			fingerprint: { performanceMemory: false },
 		},
 		{
 			host: 'master.test',
@@ -172,31 +179,57 @@ const GOODIES = {
 		},
 	]);
 	ok(
-		'a surface off: only that surface is left out, others stay emulated',
-		shields.fingerprintOff('one.test').join(',') === 'deviceMemory' &&
-			shields.fingerprintSurface('one.test', 'deviceMemory') === false,
-		`${shields.fingerprintOff('one.test')} / ${shields.fingerprintSurface('one.test', 'deviceMemory')}`,
+		'defaults: a no-entry host protects performanceMemory alone, farbling surfaces off',
+		shields.fingerprintOn('other.test').join(',') === 'performanceMemory' &&
+			shields.fingerprintSurface('other.test', 'performanceMemory') === true &&
+			shields.fingerprintSurface('other.test', 'canvas') === false,
+		`${shields.fingerprintOn('other.test')}`,
 	);
 	ok(
-		'a no-entry host emulates every surface (nothing off)',
-		shields.fingerprintOff('other.test').length === 0 &&
-			shields.fingerprintSurface('other.test', 'deviceMemory') === true,
-		`${shields.fingerprintOff('other.test')}`,
+		'opt a farbling surface in: canvas joins the active set (with the default performanceMemory)',
+		shields.fingerprintSurface('canvas.test', 'canvas') === true &&
+			shields.fingerprintSurface('canvas.test', 'performanceMemory') === true &&
+			shields.fingerprintSurface('canvas.test', 'webgl') === false,
+		`${shields.fingerprintOn('canvas.test')}`,
 	);
 	ok(
-		'the master off lists every surface (all-off over the set)',
-		shields.fingerprintSurface('master.test', 'deviceMemory') === false &&
-			shields.fingerprintOff('master.test').includes('deviceMemory'),
-		`${shields.fingerprintOff('master.test')}`,
+		'opt performanceMemory out: it leaves the active set, the rest keep their defaults',
+		shields.fingerprintSurface('nopm.test', 'performanceMemory') === false &&
+			shields.fingerprintOn('nopm.test').length === 0,
+		`${shields.fingerprintOn('nopm.test')}`,
 	);
 	ok(
-		'shields down lists every surface too',
+		'the master off protects nothing (kill switch over the set)',
+		shields.fingerprintSurface('master.test', 'performanceMemory') === false &&
+			shields.fingerprintOn('master.test').length === 0,
+		`${shields.fingerprintOn('master.test')}`,
+	);
+	ok(
+		'shields down protects nothing either',
 		(() => {
 			const s = new ShieldsStore();
 			s.set([{ host: 'd.test', enabled: false, mode: 'standard' }]);
-			return s.fingerprintSurface('d.test', 'deviceMemory') === false;
+			return (
+				s.fingerprintSurface('d.test', 'performanceMemory') === false &&
+				s.fingerprintOn('d.test').length === 0
+			);
 		})(),
 		'down',
+	);
+	ok(
+		'fingerprintConfig is omitted at the default set, sent when it differs',
+		shields.fingerprintConfig('other.test') === undefined &&
+			Array.isArray(shields.fingerprintConfig('canvas.test')) &&
+			Array.isArray(shields.fingerprintConfig('master.test')),
+		`${shields.fingerprintConfig('other.test')} / ${shields.fingerprintConfig('canvas.test')}`,
+	);
+	ok(
+		'the per-session farbling seed is a stable 32-bit integer',
+		Number.isInteger(shields.seed) &&
+			shields.seed >= 0 &&
+			shields.seed <= 0xffffffff &&
+			shields.seed === shields.seed,
+		String(shields.seed),
 	);
 }
 

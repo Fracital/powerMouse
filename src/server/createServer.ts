@@ -91,7 +91,7 @@ export interface StompServer {
 	/** the per-site shields the controller set (src/server/shields.ts) */
 	shields: ShieldsStore;
 	/** replace the per-site shields allowlist (the controller's `shields` RPC) */
-	setShields(list: SiteShields[]): void;
+	setShields(list: SiteShields[], seed?: number): void;
 	/** the context and real URL of a link route (src/visited.ts), or null */
 	linkOf(routed: string): { context: VisitedContext; url: URL } | null;
 	/** the link route of `url` for a link in a document of `context` */
@@ -419,7 +419,7 @@ export default async function createServer(
 		route,
 		blocker,
 		shields,
-		setShields: (list) => shields.set(list),
+		setShields: (list, seed) => shields.set(list, seed),
 		reloadBlocker: (next, force = false) =>
 			blocker
 				? reconfigureBlocker(init.scope, blocker, next, force)

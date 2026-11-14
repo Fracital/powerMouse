@@ -3077,51 +3077,114 @@ function setShield(host, patch) {
 }
 
 // --- Fingerprinting protections (the "Block fingerprinting" > detail) --------
-// STomp defends fingerprinting by matching native, not by adding noise: every
-// proxied site runs in the one real browser, so its fingerprint inputs already
-// read that browser's own values and look like a real Chrome's. Most surfaces
-// therefore need nothing per site and have nothing to gate (FP_NATIVE). The one
-// place sharing a single renderer would leak a cross-site tell (a frame whose
-// performance.memory equals the page that embeds it) is where STomp instead
-// synthesizes a per-site value, and the one surface a site can turn off here
-// (FP_GATED). Keep this in step with src/blocker/types.ts FP_SURFACES and
-// src/server/shields.ts.
-const FP_GATED = [
+// Brave-style, per surface. `performanceMemory` is match-native and ON by
+// default: STomp synthesizes a per-site performance.memory so a frame does not
+// read the shared process heap of the page that embeds it (the one cross-site
+// tell a shared renderer leaks, and the signal Cloudflare Turnstile reads), and
+// a real-looking figure helps pass bot checks. The rest are opt-in and OFF by
+// default: they farble (canvas, WebGL, audio) or limit/round (fonts, screen,
+// CPU cores, device memory, media devices, locale), which makes STomp diverge
+// from a real Chrome. A farbled canvas or a capped core count is itself a signal
+// a strict bot check can reject, the opposite of STomp's "look like real Chrome"
+// baseline, so they default off and a site opts in. Keep this in step with
+// src/blocker/types.ts FP_SURFACES / FP_DEFAULT_ON and src/server/shields.ts.
+const FP_SURFACE_INFO = [
+	{
+		id: 'performanceMemory',
+		icon: 'memory',
+		label: 'Memory (per-site heap)',
+		on: true,
+		note: 'Reports a per-site performance.memory, so a frame can’t be matched to the page that embeds it by heap size. On by default; keeps bot checks passing.',
+	},
+	{
+		id: 'canvas',
+		icon: 'fingerprint',
+		label: 'Canvas',
+		on: false,
+		note: 'Adds per-site noise to canvas readbacks (toDataURL, toBlob, getImageData).',
+	},
+	{
+		id: 'webgl',
+		icon: 'fingerprint',
+		label: 'WebGL',
+		on: false,
+		note: 'Noises readPixels and spoofs the unmasked GPU vendor/renderer.',
+	},
+	{
+		id: 'audio',
+		icon: 'fingerprint',
+		label: 'Audio',
+		on: false,
+		note: 'Adds tiny per-site noise to AudioBuffer and analyser readbacks.',
+	},
+	{
+		id: 'fonts',
+		icon: 'fingerprint',
+		label: 'Fonts',
+		on: false,
+		note: 'Limits font enumeration (measureText and document.fonts) to a standard set.',
+	},
+	{
+		id: 'screen',
+		icon: 'fingerprint',
+		label: 'Screen size',
+		on: false,
+		note: 'Rounds screen and window dimensions to a bucket.',
+	},
+	{
+		id: 'hardwareConcurrency',
+		icon: 'fingerprint',
+		label: 'CPU cores',
+		on: false,
+		note: 'Caps navigator.hardwareConcurrency low (2).',
+	},
 	{
 		id: 'deviceMemory',
 		icon: 'memory',
 		label: 'Device memory',
-		note: 'Reports a per-site performance.memory, so a frame can’t be matched to the page that embeds it by heap size.',
+		on: false,
+		note: 'Caps navigator.deviceMemory low (4).',
+	},
+	{
+		id: 'mediaDevices',
+		icon: 'fingerprint',
+		label: 'Media devices',
+		on: false,
+		note: 'Reports one input/output of each kind, so the device count can’t enumerate.',
+	},
+	{
+		id: 'locale',
+		icon: 'fingerprint',
+		label: 'Language & timezone',
+		on: false,
+		note: 'Reports a standard language list (en-US) and timezone (UTC).',
 	},
 ];
-// surfaces STomp already serves at the real browser's value (nothing to gate)
-const FP_NATIVE = [
-	'Hardware concurrency',
-	'Screen size',
-	'User agent',
-	'Media devices',
-	'Fonts',
-	'Canvas & WebGL',
-	'Audio',
-	'Languages & timezone',
-];
+// User Agent: deferred. Brave freezes/reduces it, but a reduced UA breaks
+// STomp's "look like real Chrome" badly (it is the strongest bot-check signal),
+// so it is not offered here. See the report / docs/adblock.md.
 
-// whether STomp emulates a gated surface for this state; mirrors the service
-// worker's ShieldsStore.fingerprintSurface (master on, and the surface's own
-// per-site flag not turned off)
+// a surface's default on/off, from FP_SURFACE_INFO (mirrors FP_DEFAULT_ON)
+const fpDefaultOn = (id) => !!FP_SURFACE_INFO.find((s) => s.id === id)?.on;
+
+// whether STomp protects a surface for this state; mirrors the service worker's
+// ShieldsStore.fingerprintSurface (master off -> nothing; else the surface's own
+// flag, or its default when it has none)
 function fpEmulated(state, id) {
 	if (state.blockFingerprinting === false) return false;
-	return state.fingerprint?.[id] !== false;
+	const flag = state.fingerprint?.[id];
+	return flag === undefined ? fpDefaultOn(id) : flag;
 }
 
 // the per-site note under the main panel's "Block fingerprinting" row
 function fpSummary(state) {
 	if (state.blockFingerprinting === false)
 		return 'This site reads your browser’s own values.';
-	const off = FP_GATED.filter((s) => !fpEmulated(state, s.id));
-	if (!off.length) return '';
-	if (off.length === 1) return `${off[0].label} reads native for this site.`;
-	return `${off.length} protections off for this site.`;
+	const extra = FP_SURFACE_INFO.filter((s) => !s.on && fpEmulated(state, s.id));
+	if (!extra.length) return '';
+	if (extra.length === 1)
+		return `${extra[0].label} protection on for this site.`;
+	return `${extra.length} extra protections on for this site.`;
 }
 
 function buildShieldsPanel(host) {
@@ -3309,42 +3372,37 @@ function wireShieldsPanel(host) {
 
 // The "Block fingerprinting" detail submenu: a sub-view inside the panel, after
 // Brave's fingerprinting detail. A back arrow returns to the per-site panel.
-// Honest about STomp's model (it matches a real browser rather than adding
-// noise), so the one surface STomp emulates per site is a live toggle, and the
-// surfaces it already serves at the browser's own value are listed as such,
-// not as toggles that would do nothing.
+// Every surface is a real toggle now: the match-native one (performanceMemory,
+// on by default) and the Brave-style opt-in protections (off by default, since
+// farbling/limiting makes STomp diverge from a real Chrome and can fail a
+// strict bot check). The applied count is the live number of active surfaces.
+function fpRow(state, s, masterOff) {
+	const on = fpEmulated(state, s.id);
+	return `
+		<div class="shieldsRow">
+			${shieldIcon(s.icon)}
+			<div class="shieldsRowMain">
+				<div class="shieldsRowLabel">${escapeHtml(s.label)}</div>
+				<div class="shieldsNote">${escapeHtml(s.note)}</div>
+			</div>
+			<input type="checkbox" class="shieldsToggle small" id="shFp_${s.id}" data-surface="${s.id}" ${on ? 'checked' : ''} ${masterOff ? 'disabled' : ''} aria-label="${escapeHtml(s.label)}" />
+			<div class="shieldsDetail"></div>
+		</div>`;
+}
+
 function buildFpSubmenu(host) {
 	const state = controller.shields.get(host);
 	const masterOff = state.blockFingerprinting === false;
 	const active = masterOff
 		? 0
-		: FP_GATED.filter((s) => fpEmulated(state, s.id)).length;
+		: FP_SURFACE_INFO.filter((s) => fpEmulated(state, s.id)).length;
 
-	const gatedRows = FP_GATED.map((s) => {
-		const on = fpEmulated(state, s.id);
-		return `
-			<div class="shieldsRow">
-				${shieldIcon(s.icon)}
-				<div class="shieldsRowMain">
-					<div class="shieldsRowLabel">${s.label}</div>
-					<div class="shieldsNote">${s.note}</div>
-				</div>
-				<input type="checkbox" class="shieldsToggle small" id="shFp_${s.id}" data-surface="${s.id}" ${on ? 'checked' : ''} ${masterOff ? 'disabled' : ''} aria-label="${escapeHtml(s.label)}" />
-				<div class="shieldsDetail"></div>
-			</div>`;
-	}).join('');
-
-	const nativeRows = FP_NATIVE.map(
-		(label) => `
-			<div class="shieldsRow shieldsRowNative">
-				<span class="shieldsIcon shieldsDot" aria-hidden="true"></span>
-				<div class="shieldsRowMain">
-					<div class="shieldsRowLabel">${escapeHtml(label)}</div>
-				</div>
-				<span class="shieldsNativeTag">Your browser’s value</span>
-				<div class="shieldsDetail"></div>
-			</div>`,
-	).join('');
+	const baseline = FP_SURFACE_INFO.filter((s) => s.on)
+		.map((s) => fpRow(state, s, masterOff))
+		.join('');
+	const optIn = FP_SURFACE_INFO.filter((s) => !s.on)
+		.map((s) => fpRow(state, s, masterOff))
+		.join('');
 
 	shieldsPanel.innerHTML = `
 		<div class="shieldsSubHead">
@@ -3355,16 +3413,20 @@ function buildFpSubmenu(host) {
 			</div>
 		</div>
 		<div class="shieldsSubNote">
-			STomp makes this site read a real browser’s values, so it can’t single you
-			out by them. The control below is the one reading sharing a browser would
-			otherwise leak across sites; the rest already match your browser. A
-			protection applied does not mean this site tried to fingerprint you.
+			STomp protects the reading that sharing one browser would otherwise leak
+			across sites. A protection applied does not mean this site tried to
+			fingerprint you.
 		</div>
 		${masterOff ? '<div class="shieldsSubNote shieldsSubWarn">Block fingerprinting is off for this site, so every surface reads native. Turn it on to adjust them.</div>' : ''}
 		<div class="shieldsRows">
-			${gatedRows}
-			<div class="shieldsSubSection">Already your browser’s values</div>
-			${nativeRows}
+			${baseline}
+			<div class="shieldsSubSection">Extra protections (off by default)</div>
+			<div class="shieldsSubNote shieldsSubWarn">
+				Turning these on makes this site’s values differ from a real Chrome’s,
+				which can make some sites’ bot checks (Cloudflare, Turnstile) fail. Turn
+				them on per site if a site is fingerprinting you.
+			</div>
+			${optIn}
 		</div>`;
 
 	wireFpSubmenu(host);

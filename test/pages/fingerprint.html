@@ -1,0 +1,133 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>fingerprint surfaces</title>
+	</head>
+	<body>
+		<p>fingerprint</p>
+		<script>
+			// Compute a stable reading of each fingerprint surface and expose it on
+			// window.__fp for the fingerprint-shields suite: native values when loaded
+			// directly, STomp's values when loaded through the proxy. Everything is
+			// deterministic so two loads of the same content agree unless STomp farbles.
+			function hashBytes(bytes) {
+				let hash = 0x811c9dc5;
+				for (let i = 0; i < bytes.length; i++) {
+					hash ^= bytes[i];
+					hash = Math.imul(hash, 0x01000193) >>> 0;
+				}
+				return hash >>> 0;
+			}
+
+			const fp = { ok: false, host: location.hostname };
+			try {
+				// --- canvas: draw deterministic content, hash the 2D readback -------
+				const canvas = document.createElement('canvas');
+				canvas.width = 220;
+				canvas.height = 60;
+				const ctx = canvas.getContext('2d');
+				ctx.fillStyle = '#f0a';
+				ctx.fillRect(0, 0, 220, 60);
+				ctx.fillStyle = '#073';
+				ctx.font = '18px serif';
+				ctx.fillText('STomp fingerprint 1234567890', 8, 30);
+				ctx.strokeStyle = 'rgba(0,80,200,0.7)';
+				ctx.beginPath();
+				ctx.arc(60, 40, 18, 0, Math.PI * 2);
+				ctx.stroke();
+				const image = ctx.getImageData(0, 0, 220, 60);
+				fp.canvasImage = hashBytes(image.data);
+				const url = canvas.toDataURL();
+				fp.canvasUrl = hashBytes(
+					Uint8Array.from(url, (c) => c.charCodeAt(0) & 0xff),
+				);
+
+				// --- fonts: measureText width and a document.fonts probe ------------
+				ctx.font = '40px "Segoe Script", "Comic Sans MS", cursive';
+				fp.measure = ctx.measureText('font-probe WxWxWx').width;
+				try {
+					fp.fontArial = document.fonts.check('12px "Arial"');
+					fp.fontProbe = document.fonts.check('12px "ZZ No Such Font 9000"');
+				} catch (error) {
+					fp.fontArial = null;
+				}
+
+				// --- navigator surfaces --------------------------------------------
+				fp.cores = navigator.hardwareConcurrency;
+				fp.deviceMemory = navigator.deviceMemory ?? null;
+				fp.language = navigator.language;
+				fp.languages = (navigator.languages || []).join(',');
+
+				// --- screen geometry -----------------------------------------------
+				fp.screen = [
+					screen.width,
+					screen.height,
+					screen.availWidth,
+					screen.availHeight,
+				].join('x');
+				fp.outer = `${window.outerWidth}x${window.outerHeight}`;
+
+				// --- timezone ------------------------------------------------------
+				try {
+					fp.timezone =
+						Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+					fp.tzOffset = new Date().getTimezoneOffset();
+				} catch (error) {
+					fp.timezone = null;
+				}
+
+				// --- webgl: unmasked renderer, best effort -------------------------
+				try {
+					const gl = document.createElement('canvas').getContext('webgl');
+					if (gl) {
+						const ext = gl.getExtension('WEBGL_debug_renderer_info');
+						fp.webglVendor = ext
+							? gl.getParameter(ext.UNMASKED_VENDOR_WEBGL)
+							: null;
+						fp.webglRenderer = ext
+							? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)
+							: null;
+					} else fp.webglVendor = undefined;
+				} catch (error) {
+					fp.webglVendor = undefined;
+				}
+
+				fp.ok = true;
+			} catch (error) {
+				fp.error = String((error && error.message) || error);
+			}
+
+			// --- audio: async, hashes an OfflineAudioContext render ---------------
+			(async () => {
+				try {
+					const OAC =
+						window.OfflineAudioContext || window.webkitOfflineAudioContext;
+					if (!OAC) {
+						fp.audio = undefined;
+						return;
+					}
+					const octx = new OAC(1, 4096, 44100);
+					const osc = octx.createOscillator();
+					osc.type = 'triangle';
+					osc.frequency.value = 10000;
+					const comp = octx.createDynamicsCompressor();
+					osc.connect(comp);
+					comp.connect(octx.destination);
+					osc.start(0);
+					const rendered = await octx.startRendering();
+					const data = rendered.getChannelData(0);
+					let sum = 0;
+					for (let i = 0; i < data.length; i++) sum += Math.abs(data[i]);
+					fp.audio = sum;
+				} catch (error) {
+					fp.audio = undefined;
+				} finally {
+					fp.audioDone = true;
+				}
+			})();
+
+			window.__fp = fp;
+		</script>
+	</body>
+</html>
