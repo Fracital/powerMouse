@@ -2887,6 +2887,30 @@ input:focus-visible {
 	background: #12121b;
 	border: 1px solid rgba(255, 255, 255, 0.06);
 }
+/* thin, unobtrusive scrollbars everywhere in the settings pages */
+.shieldsPage ::-webkit-scrollbar {
+	width: 9px;
+	height: 9px;
+}
+.shieldsPage ::-webkit-scrollbar-thumb {
+	background: rgba(255, 255, 255, 0.16);
+	border-radius: 999px;
+	border: 3px solid transparent;
+	background-clip: padding-box;
+}
+.shieldsPage ::-webkit-scrollbar-thumb:hover {
+	background: rgba(255, 255, 255, 0.28);
+	background-clip: padding-box;
+}
+.shieldsPage ::-webkit-scrollbar-track {
+	background: transparent;
+}
+.spBody,
+.spListBox,
+.spEditor {
+	scrollbar-width: thin;
+	scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
 .spListRow {
 	display: flex;
 	align-items: flex-start;
