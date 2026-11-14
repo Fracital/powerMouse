@@ -2493,7 +2493,7 @@ input:focus-visible {
 	grid-template-columns: 22px 1fr auto;
 	align-items: center;
 	gap: 10px;
-	padding: 9px 2px;
+	padding: 6px 2px;
 	border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 .shieldsRow .shieldsIcon {
@@ -2614,6 +2614,9 @@ input:focus-visible {
 	margin-top: 4px;
 	color: #8f8fa6;
 	font-size: 11px;
+}
+.shieldsNote:empty {
+	display: none;
 }
 .shieldsMore {
 	flex: none;

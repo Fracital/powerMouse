@@ -3123,7 +3123,6 @@ function buildShieldsPanel(host) {
 				${shieldIcon('scripts')}
 				<div class="shieldsRowMain">
 					<div class="shieldsRowLabel">Block scripts</div>
-					<div class="shieldsNote">Blocks the page's own scripts. Breaks many sites.</div>
 				</div>
 				<input type="checkbox" class="shieldsToggle small" id="shScripts" ${state.blockScripts ? 'checked' : ''} aria-label="Block scripts" />
 			</div>
@@ -3153,7 +3152,6 @@ function buildShieldsPanel(host) {
 				${shieldIcon('forget')}
 				<div class="shieldsRowMain">
 					<div class="shieldsRowLabel">Forget me when I close this site</div>
-					<div class="shieldsNote">Clears this site's cookies and storage when its last tab closes.</div>
 				</div>
 				<input type="checkbox" class="shieldsToggle small" id="shForget" ${state.forget ? 'checked' : ''} aria-label="Forget me when I close this site" />
 			</div>`;
