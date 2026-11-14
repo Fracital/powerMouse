@@ -664,6 +664,8 @@ interface Rewriter {
 	hostReload?: { mode: HostReload; until: number; loads: Map<string, number> };
 	/** the host's page is cross-origin isolated (config.isolated) */
 	isolated: boolean;
+	/** proxy-ception: forward the proxy's own origin instead of refusing it (config.allowSelfProxy) */
+	allowSelfProxy: boolean;
 }
 
 /** how long after a reloaded host's word a top-level navigation is one it restores */
@@ -872,8 +874,10 @@ function genericForward(
 
 		// a route that decodes to the proxy's own origin would make the proxy
 		// fetch itself (its host page, its worker): a loop and an exposure
-		// of the host, so it is refused, like a blocked request
-		if (url.url.origin === oURL.origin) {
+		// of the host, so it is refused, like a blocked request. Proxy-ception
+		// on (config.allowSelfProxy) forwards it like any other origin, so the
+		// demo can be loaded through itself; off in production.
+		if (url.url.origin === oURL.origin && !rewriter.allowSelfProxy) {
 			const page = DOCUMENT_DESTINATIONS.has(serverRequest.destination)
 				? await hostErrorPage(rewriter, {
 						url: reportURL(url),
@@ -3805,6 +3809,7 @@ export function registerRewrites(
 		blocker,
 		blockerAsked,
 		isolated: !!init.isolated,
+		allowSelfProxy: !!init.allowSelfProxy,
 		codec: init.codec,
 		directory: init.directory,
 		errorPage: init.errorPage,

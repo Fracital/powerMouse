@@ -263,6 +263,15 @@ export interface ControllerInit {
 	 */
 	rules?: RequestRule[];
 	/**
+	 * Proxy-ception, off unless `true`. A route that decodes to the proxy's
+	 * own origin is normally refused with 403 (the proxy will not fetch its own
+	 * host page, controller or worker). `true` forwards the proxy origin like
+	 * any other, so the demo can be loaded through itself. Exploratory and
+	 * security-sensitive (proxied content reaches the proxy origin, the wisp
+	 * endpoint among it); leave it off in production. See `Config.allowSelfProxy`.
+	 */
+	allowSelfProxy?: boolean;
+	/**
 	 * The served file names, when the host renamed them (see Assets): the
 	 * inject bundles the worker names in its shell. A same-origin host
 	 * registers the worker itself, so `serviceWorker` only documents its choice.
@@ -887,6 +896,8 @@ export class StompController extends EventTarget {
 				: {}),
 			...(init.assets ? { assets: init.assets } : {}),
 			...(init.adblock !== false ? { adblock: true } : {}),
+			// proxy-ception: the worker forwards its own origin (src/server/rewrites.ts)
+			...(init.allowSelfProxy ? { allowSelfProxy: true } : {}),
 			// the client's name is this controller's own unless the host chose
 			// one: a page that could name it would reach the real windows it
 			// holds (see mintClientName)

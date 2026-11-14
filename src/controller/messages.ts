@@ -75,6 +75,8 @@ export interface ControllerFrameInit {
 	rewriteTimeout?: number;
 	/** request rules (RemoteControllerInit.rules) */
 	rules?: RequestRule[];
+	/** proxy-ception: forward the proxy's own origin (RemoteControllerInit.allowSelfProxy) */
+	allowSelfProxy?: boolean;
 	/** the served file names (RemoteControllerInit.assets) */
 	assets?: Assets;
 	/** the deployment's helper names (RemoteControllerInit.names) */

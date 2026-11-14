@@ -80,6 +80,8 @@ const SUITE_ENV = {
 	'cross-origin-isolation': { STOMP_ISOLATION: 'on' },
 	// for its page that sends COOP and COEP
 	'sop-escapes': { STOMP_ISOLATION: 'on' },
+	// proxy-ception: the proxy forwards its own origin (the demo through itself)
+	'self-proxy': { STOMP_ALLOW_SELF_PROXY: '1' },
 };
 // where the content blocker's default lists and resources live
 // (src/blocker/types.ts DEFAULT_LISTS, DEFAULT_RESOURCES)

@@ -101,6 +101,8 @@ export interface RemoteControllerInit {
 	rewriteTimeout?: number;
 	/** request rules run in the service worker (see StompController) */
 	rules?: RequestRule[];
+	/** proxy-ception: forward the proxy's own origin, off unless `true` (see StompController) */
+	allowSelfProxy?: boolean;
 	/** the served file names, when the host renamed them (see StompController) */
 	assets?: Assets;
 	/** the deployment's helper names (see StompController.names) */
@@ -402,6 +404,7 @@ export class RemoteController extends EventTarget {
 						? { rewriteTimeout: init.rewriteTimeout }
 						: {}),
 					...(init.rules ? { rules: init.rules } : {}),
+					...(init.allowSelfProxy ? { allowSelfProxy: true } : {}),
 					...(init.assets ? { assets: init.assets } : {}),
 					...(init.adblock !== undefined ? { adblock: init.adblock } : {}),
 					...(init.names ? { names: init.names } : {}),
