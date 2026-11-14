@@ -31,6 +31,7 @@ export const ROWS = [
 	'stomp-js',
 	'stomp-wasm',
 	'scramjet',
+	'ramjet',
 	'ultraviolet',
 	'stompv1',
 	'powermouse-v1',
@@ -174,6 +175,16 @@ async function locate(row, { repoRoot, contendersDir, dirs }) {
 			if (!dir || !files.every((file) => exists(join(dir, file))))
 				return { error: `no ${name} with ${files.join(', ')} under ${root}` };
 			return { dir, version: packageName(dir)?.version };
+		}
+		case 'ramjet': {
+			// the compiled browser archive the ramjet contender extracted
+			const root = given ?? contender('ramjet');
+			if (!root) return { error: 'no contenders directory given' };
+			const dir = given ?? join(root, 'dist', 'ramjet');
+			const files = ['ramjet.mjs', 'ramjet.wasm'];
+			if (!files.every((file) => exists(join(dir, file))))
+				return { error: `no ramjet with ${files.join(', ')} under ${root}` };
+			return { dir };
 		}
 		case 'stompv1': {
 			const dir = given ?? contender('stompv1');
@@ -373,6 +384,45 @@ async function loadScramjet(dir) {
 }
 
 /**
+ * Ramjet: its compiled runtime (dist/ramjet/ramjet.mjs) with the release wasm
+ * (ramjet.wasm). Ramjet is a Scramjet fork, so the rewriter API is the same:
+ * setWasm(bytes); per script rewriteJs(Uint8Array body, url, context, { origin,
+ * base }, isModule) with the Controller's default config, the demo prefix and
+ * encodeURIComponent codec. The Rust/wasm rewriter is the only backend.
+ */
+async function loadRamjet(dir) {
+	const rj = await import(pathToFileURL(join(dir, 'ramjet.mjs')).href);
+	rj.setWasm(new Uint8Array(await readFile(join(dir, 'ramjet.wasm'))));
+	const config = structuredClone(rj.defaultConfig);
+	const codecEncode = (url) => (url ? encodeURIComponent(url) : url);
+	const codecDecode = (url) => (url ? decodeURIComponent(url) : url);
+	const prefix = new URL('/~/sj/benchctl/benchfrm/', PROXY_ORIGIN);
+	const context = {
+		config,
+		prefix,
+		cookieJar: new rj.CookieJar(),
+		interface: { codecEncode, codecDecode },
+	};
+	const decoder = new TextDecoder();
+	return {
+		describe: `${join(dir, 'ramjet.mjs')}: setWasm(ramjet.wasm); per script rewriteJs(Uint8Array body, url, { config: defaultConfig, prefix: '${prefix.href}', interface.codecEncode: encodeURIComponent, cookieJar }, { origin: url, base: url }, isModule); Rust/wasm only; flags ${JSON.stringify(config.flags)}`,
+		bytes: true,
+		rewrite: (bytes, { url, module }) => {
+			const base = new URL(url);
+			const out = rj.rewriteJs(
+				bytes,
+				url,
+				context,
+				{ origin: base, base },
+				module,
+			);
+			return typeof out === 'string' ? out : decoder.decode(out);
+		},
+		unrewritten: (output) => !output.includes('$ramjet'),
+	};
+}
+
+/**
  * Ultraviolet: dist/uv.bundle.js's Ultraviolet class as its service worker
  * uses it for a response of destination "script" (src/uv.sw.js): a new
  * Ultraviolet per request with uv.config.js's defaults, meta.origin the
@@ -485,6 +535,7 @@ const LOADERS = {
 	'stomp-js': (dir) => loadStomp(dir, false),
 	'stomp-wasm': (dir) => loadStomp(dir, true),
 	scramjet: loadScramjet,
+	ramjet: loadRamjet,
 	ultraviolet: loadUltraviolet,
 	stompv1: loadStompV1,
 	'powermouse-v1': loadPowermouse,
