@@ -264,6 +264,12 @@ function parting(a, b) {
 }
 
 function compare(text, js, out, module) {
+	// both backends hand a script no browser runs back as it was (syntax no
+	// browser has shipped, an `accessor` field or a decorator, which the
+	// JavaScript rewriter's printer cannot write either): byte-identical
+	// output is the same program, and escodegen cannot reparse-print the
+	// shape to compare it as a tree anyway
+	if (js === out) return null;
 	let a;
 	let b;
 	try {

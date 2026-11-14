@@ -103,6 +103,26 @@ top ({ m() { this.#a } })
 top class A { #a } a.#a
 top class A { #a } class B { m() { this.#a } }
 
+# the same of `new.target`: V8 refuses it outside a function (a script's or a
+# module's top level, an arrow there, a class heritage or a computed key,
+# which are evaluated outside the class's methods), and takes it in a
+# function's body. A handler attribute's body and a direct eval's code reach
+# the module as classic scripts, where `new.target` may stand as it may in a
+# function (meriyah's globalReturn; the module parses a classic script as
+# CommonJS for it, rust/rwjs/src/rewrite.rs), so it rewrites the text, and the
+# rewrite keeps the `new.target` V8 refuses. The parse questions are answered
+# as V8 does, "no" (rewrite::parses parses a script, where `new.target` is
+# refused).
+top new.target
+top new.target.x
+top x = new.target
+top () => new.target
+top ({ a: new.target })
+top async () => new.target
+top class A { [new.target]() {} }
+top class A extends new.target {}
+top return new.target
+
 # return: the same of a `return` at the top level, a handler's. Here the
 # first parse question is answered "yes" as well, as the JavaScript
 # rewriter's parser answers it (globalReturn): a text that does not compile

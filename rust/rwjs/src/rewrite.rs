@@ -88,7 +88,7 @@ pub struct Output {
 /// an older module's text and the glue never drives a module it was not
 /// written for (src/wasm/rewriter.ts holds the same number).
 /// rust/host/parity.mjs --cases holds it to the outputs (cases.revision).
-pub const REVISION: &str = "6";
+pub const REVISION: &str = "7";
 
 /// Why the rewriter hands a script back to the JavaScript one
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,9 +97,10 @@ pub enum Decline {
 	Parse,
 	/// a shape this rewriter does not rewrite yet
 	Shape,
-	/// a script no browser runs (an early error, a V8 intrinsic): the caller
-	/// hands it back as it was, as the JavaScript rewriter does with what
-	/// it cannot parse, and the browser refuses it as it does natively
+	/// a script no browser runs: an early error, a V8 intrinsic, or syntax no
+	/// browser has shipped yet (a decorator, an `accessor` field). The caller
+	/// hands it back as it was, as the JavaScript rewriter does with what it
+	/// cannot parse or print, and the browser refuses it as it does natively
 	Invalid,
 	/// the host could not route a URL of it
 	Route,
@@ -189,10 +190,20 @@ pub fn parses(source: &str, single: bool) -> bool {
 /// rewriter, which decides what to do with it)
 pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Output, Decline> {
 	let allocator = Allocator::default();
+	// a classic script's text is parsed as CommonJS, not a script: a browser
+	// compiles a handler attribute's body and a direct eval's code as a
+	// classic script's text (`lenient` below), where `new.target` may stand
+	// at the top level as it may in a function. The JavaScript rewriter's
+	// parser takes it so (meriyah's globalReturn); oxc allows top-level
+	// `new.target` only for CommonJS, which otherwise parses as a script does
+	// (top-level `return` too, already allowed below; top-level `await` stays
+	// an identifier, as in a script). A script element with top-level
+	// `new.target` is refused by the browser either way, with or without the
+	// rewrite the walk makes of the rest.
 	let source_type = SourceType::unambiguous()
 		.with_javascript(true)
 		.with_module(options.module)
-		.with_script(!options.module)
+		.with_commonjs(!options.module)
 		.with_standard(true);
 	let parsed = Parser::new(&allocator, source, source_type)
 		.with_options(ParseOptions {
@@ -274,7 +285,16 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 	match verdict {
 		Verdict::Compiles => {}
 		Verdict::Refused => return Err(Decline::Invalid),
-		Verdict::Unshipped => return Err(Decline::Shape),
+		// syntax no browser runs today (a decorator, an `accessor` field,
+		// `import.defer()`): the caller hands it back, and the browser refuses
+		// it as it does natively. The JavaScript rewriter cannot print it
+		// either (escodegen has no such node), so it hands it back the same
+		// way. Were it `Decline::Shape` the caller would run the JavaScript
+		// rewriter on it, which a wasm-only build does not have; and were the
+		// script handed back as it is the day a browser ships the syntax, it
+		// would run unrewritten, which the caller's fallback guards against
+		// (src/wasm/rewriter.ts, an early-error end the browser refuses).
+		Verdict::Unshipped => return Err(Decline::Invalid),
 	}
 
 	// the two comments DevTools reads keep their place; a source map's URL

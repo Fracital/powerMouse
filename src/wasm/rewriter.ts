@@ -15,6 +15,7 @@ import {
 	sourceKey,
 } from '../functionSource';
 import { helperNames } from '../helperNames';
+import { cannotRewrite } from '../rewriteJS';
 import { routeBinary } from '../routeURL';
 import { routeImport, type ScriptType } from '../scriptRoutes';
 import StompURL from '../StompURL';
@@ -81,7 +82,7 @@ export function rewriterRevision(): string | null {
  * the page wrote it, and a revision 1 module takes the flags of the parse
  * questions for a rewrite.
  */
-export const REVISION = '6';
+export const REVISION = '7';
 
 /** whether an instance answered REVISION, asked once of each */
 const speaks = new WeakMap<BufferInstance, boolean>();
@@ -180,12 +181,18 @@ export function rewriteWith(
 	const result = instance.call(script, flags);
 	if (!('output' in result))
 		// a script no browser runs is answered as the JavaScript rewriter
-		// answers what it cannot parse, without asking it
+		// answers what it cannot parse or print, without asking it: handed
+		// back where the browser refuses it as it is (an early error, syntax
+		// no browser has shipped), or with an end no browser compiles where
+		// the browser would run it (so unshipped syntax a browser later takes
+		// does not run unrewritten) — the same `cannotRewrite` the JavaScript
+		// rewriter uses for the shapes its printer cannot write
 		return result.status === STATUS_INVALID
-			? unrewritten(
+			? cannotRewrite(
 					script,
 					url,
 					config,
+					type,
 					'SyntaxError: no browser runs this script',
 				)
 			: null;
