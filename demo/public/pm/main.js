@@ -107,6 +107,29 @@ const ADBLOCK = (() => {
 	if (!on) return { adblock: false };
 	return typeof CFG.adblock === 'object' ? { adblock: CFG.adblock } : {};
 })();
+
+// Per-site shields (the content blocker's UI, docs/adblock.md). The state is
+// host-keyed and kept in this page's own localStorage; the controller carries
+// it to the service worker, which applies each layer (the ad/tracker blocker,
+// HTTPS upgrading, the cookie policy) for that site. onShieldsChange persists
+// every change the panel makes.
+const SHIELDS_KEY = 'stomp-demo:shields';
+function loadShields() {
+	try {
+		const raw = JSON.parse(localStorage.getItem(SHIELDS_KEY));
+		return Array.isArray(raw) ? raw : [];
+	} catch {
+		return [];
+	}
+}
+function persistShields() {
+	try {
+		localStorage.setItem(SHIELDS_KEY, JSON.stringify(controller.shields.all()));
+	} catch {}
+}
+// how many requests the blocker stopped or redirected for each tab's frame,
+// for the omnibar badge and the panel's count; reset when a tab navigates
+const blockedCounts = new Map();
 // real Encrypted Client Hello where a site's HTTPS DNS record has a config,
 // looked up over DoH by epoxy (STOMP_ECH_DNS on the server; ?noech sends
 // GREASE ECH only, as before)
@@ -435,6 +458,10 @@ const controllerCallbacks = {
 			post: { source: `${KEY_HOOK}\n${TOKEN_HOOK}` },
 		},
 	},
+	// per-site shields (the content blocker's UI): the state this page kept,
+	// and a callback to persist each change back to it
+	shields: loadShields(),
+	onShieldsChange: persistShields,
 	// a site asks for a permission another site was given (the browser's own
 	// prompt asked for the first)
 	onPermissionRequest: askPermission,
@@ -695,9 +722,38 @@ function activateTab(tab) {
 	hideRecents(tab); // animates the card back to full screen if the manager is open
 }
 
+// "Forget me when I close this site" (shields): when the last tab on a host
+// with that toggle on closes, clear its cookie jar. Storage clearing is a
+// later phase. The controller carries the toggle; this is the host-side half.
+function forgetSiteOnClose(tab) {
+	if (!controller || !controller.shields) return;
+	let origin, host;
+	try {
+		const url = new URL(pageUrl(tab) || '');
+		origin = url.origin;
+		host = url.hostname;
+	} catch {
+		return;
+	}
+	if (!host || !controller.shields.get(host).forget) return;
+	// another open tab still on this host: keep its data
+	if (tabs.some((other) => other !== tab && activeHostOf(other) === host))
+		return;
+	controller.cookies.clear(origin).catch(() => {});
+}
+
+function activeHostOf(tab) {
+	try {
+		return new URL(pageUrl(tab) || '').hostname || null;
+	} catch {
+		return null;
+	}
+}
+
 function closeTab(tab, { stayInRecents = false } = {}) {
 	const index = tabs.indexOf(tab);
 	if (index === -1) return;
+	forgetSiteOnClose(tab);
 	tabs.splice(index, 1);
 	tab.element.remove();
 	labelFor.get(tab)?.remove();
@@ -1385,6 +1441,8 @@ async function navigate(input, { newTab = false } = {}) {
 	const going = { url, from };
 	tab.goingTo = going;
 	tab.stayedOn = null;
+	// a fresh navigation: the blocked count starts over for this tab's page
+	blockedCounts.set(tab.frame, 0);
 	omni.url.value = url;
 	syncToolbar();
 	syncCardBar(tab);
@@ -1509,6 +1567,7 @@ function syncToolbar() {
 	$('toolReload').disabled = !tab;
 	syncStar($('toolStar'), tab);
 	syncTokenButton();
+	syncShields();
 }
 
 /** whether a URL's real host is Discord: discord.com or a subdomain of it */
@@ -1646,6 +1705,8 @@ $('toolReload').addEventListener('click', () => {
 	if (!activeTab) return;
 	stopGoing(activeTab); // Reload stays on the page the tab shows
 	setStatus('Loading…');
+	// the page's blocked count starts over on a reload, as on a navigation
+	blockedCounts.set(activeTab.frame, 0);
 	activeTab.frame.reload();
 });
 $('recents').addEventListener('click', toggleRecents);
@@ -1966,6 +2027,12 @@ function recordRequest(info) {
 	log.total++;
 	if (info.cached) log.cached++;
 	if (info.status === 0) log.failed++;
+	// the content blocker stopped or redirected this request (the only reports
+	// whose error names it): count it for this frame's shields badge
+	if (info.error && info.error.includes('content blocker')) {
+		blockedCounts.set(info.frame, (blockedCounts.get(info.frame) || 0) + 1);
+		if (activeTab && activeTab.frame === info.frame) scheduleShieldsBadge();
+	}
 	if (!requestsOpen() || !activeTab || activeTab.frame !== info.frame) return;
 	// bursts (a page fanning out its assets) become one DOM update per frame
 	pendingRequests.push(info);
@@ -2840,6 +2907,387 @@ const SEEDED_KEY = 'stomp-demo:bookmarks-seeded';
 	}
 }
 renderBookmarks();
+
+// ---------------------------------------------------------------------------
+// Shields: the content blocker's per-site panel (docs/adblock.md). The omnibar
+// button shows the powerMouse mark saturated when shields are up and grey when
+// down, with the tab's blocked count on a badge. Clicking it opens a popover
+// modelled on Brave Shields. Only the master toggle, the "block trackers & ads"
+// mode and the count are fully wired to real blocking in phase 1; HTTPS upgrade
+// and the third-party-cookie policy are wired in the service worker too. The
+// other rows persist their state per site (the controller carries them) and are
+// labelled honestly where their enforcement is still to come.
+const shieldsButton = $('toolShields');
+const shieldsBadge = $('shieldsBadge');
+const shieldsPanel = $('shieldsPanel');
+const shieldsScrim = $('shieldsScrim');
+
+function activeHost() {
+	const url = pageUrl(activeTab);
+	try {
+		return url ? new URL(url).hostname : null;
+	} catch {
+		return null;
+	}
+}
+
+// the active tab's blocked count, for the badge and the open panel
+function shieldsCountNow() {
+	return activeTab ? blockedCounts.get(activeTab.frame) || 0 : 0;
+}
+
+function syncShields() {
+	const host = activeHost();
+	if (!host || !controller || !controller.shields) {
+		shieldsButton.hidden = true;
+		return;
+	}
+	shieldsButton.hidden = false;
+	// no seeding on mere navigation: a host with no entry stays neutral in the
+	// worker (the blocker still runs, STomp's default), so simply browsing never
+	// turns on the per-site layers (HTTPS upgrade, cookie policy) that would
+	// change requests out from under a page. The entry, with its "goodies on"
+	// defaults, is written when the user opens Shields for the site (openShields)
+	const state = controller.shields.get(host);
+	shieldsButton.classList.toggle('up', !!state.enabled);
+	const count = shieldsCountNow();
+	shieldsBadge.hidden = count === 0 || !state.enabled;
+	shieldsBadge.textContent = count > 999 ? '999+' : String(count);
+	// keep an open panel's live numbers in step with the badge
+	if (
+		!shieldsPanel.classList.contains('hidden') &&
+		shieldsPanel.dataset.host === host
+	)
+		refreshShieldsCount(count);
+}
+
+let shieldsRaf = 0;
+function scheduleShieldsBadge() {
+	if (shieldsRaf) return;
+	shieldsRaf = requestAnimationFrame(() => {
+		shieldsRaf = 0;
+		syncShields();
+	});
+}
+
+function refreshShieldsCount(count) {
+	const big = shieldsPanel.querySelector('.shieldsCount b');
+	if (big) big.textContent = String(count);
+	const inline = shieldsPanel.querySelector('.adsCount');
+	if (inline) inline.textContent = count ? String(count) : '';
+}
+
+// small line icons, in the panel's own colour (stroke: currentColor)
+const SHIELD_ICONS = {
+	gear: '<path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19 12a7 7 0 00-.1-1l2-1.6-2-3.4-2.3 1a7 7 0 00-1.7-1l-.3-2.5h-4l-.3 2.5a7 7 0 00-1.7 1l-2.3-1-2 3.4 2 1.6a7 7 0 000 2l-2 1.6 2 3.4 2.3-1a7 7 0 001.7 1l.3 2.5h4l.3-2.5a7 7 0 001.7-1l2.3 1 2-3.4-2-1.6c.07-.33.1-.66.1-1z"/>',
+	chevron: '<path d="M6 9l6 6 6-6"/>',
+	caret: '<path d="M9 6l6 6-6 6"/>',
+	ads: '<path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3z"/><path d="M9.5 12l1.8 1.8L15 10"/>',
+	https:
+		'<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>',
+	scripts: '<path d="M9 8l-4 4 4 4"/><path d="M15 8l4 4-4 4"/>',
+	fingerprint:
+		'<path d="M12 4a7 7 0 00-7 7v2"/><path d="M19 13v-2a7 7 0 00-3-5.7"/><path d="M8.5 12a3.5 3.5 0 017 0v2a9 9 0 01-1 4"/><path d="M12 12v3a6 6 0 01-1.3 3.7"/><path d="M15.5 14.5a12 12 0 01-1 5"/>',
+	cookie:
+		'<path d="M12 3a9 9 0 109 9 4 4 0 01-4-4 3 3 0 01-3-3 .9.9 0 00-1-1z"/><circle cx="9" cy="11" r="1"/><circle cx="13" cy="15" r="1"/><circle cx="15" cy="9" r="1"/>',
+	forget:
+		'<path d="M3 12s3.5-7 9-7 9 7 9 7-3.5 7-9 7a9.8 9.8 0 01-5-1.4"/><path d="M4 4l16 16"/>',
+};
+function shieldIcon(name, cls = 'shieldsIcon') {
+	return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${SHIELD_ICONS[name] || ''}</svg>`;
+}
+
+const escapeHtml = (text) =>
+	String(text).replace(
+		/[&<>"]/g,
+		(c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c],
+	);
+
+// a custom dropdown (a native <select> cannot be styled like Brave's and its
+// open list is not captured in a screenshot): a button and a list of options
+function drop(id, current, opts) {
+	const selected = opts.find((o) => o.v === current) || opts[0];
+	const items = opts
+		.map(
+			(o) =>
+				`<li role="option" data-value="${o.v}"${o.v === current ? ' aria-selected="true"' : ''}>${o.label}</li>`,
+		)
+		.join('');
+	return `<div class="shieldsDrop" id="${id}" data-value="${current}">
+		<button type="button" class="shieldsDropBtn" aria-haspopup="listbox" aria-expanded="false">
+			<span class="shieldsDropLabel">${selected.label}</span>
+			${shieldIcon('chevron', 'shieldsIcon chev')}
+		</button>
+		<ul class="shieldsDropList" role="listbox" hidden>${items}</ul>
+	</div>`;
+}
+
+function setShield(host, patch) {
+	controller.shields.set(host, patch);
+	syncShields();
+}
+
+function buildShieldsPanel(host) {
+	const state = controller.shields.get(host);
+	const count = shieldsCountNow();
+	const favicon = (activeTab && activeTab.icon) || '/pm/icons/globe.png';
+	shieldsPanel.classList.toggle('down', !state.enabled);
+
+	const head = `
+		<div class="shieldsHead">
+			<span class="shieldsFavicon" style="background-image:url('${escapeHtml(favicon)}')"></span>
+			<span class="shieldsDomain" dir="ltr" title="${escapeHtml(host)}">${escapeHtml(host)}</span>
+			<span class="shieldsState">Shields <b>${state.enabled ? 'up' : 'down'}</b> for this site</span>
+			<input type="checkbox" class="shieldsToggle" id="shMaster" ${state.enabled ? 'checked' : ''} aria-label="Shields up for this site" />
+		</div>`;
+
+	const footer = `
+		<div class="shieldsFooter">
+			<button type="button" id="shFilterLists">Filter lists</button>
+			<button type="button" id="shGlobal">Global Settings</button>
+		</div>`;
+
+	if (!state.enabled) {
+		shieldsPanel.innerHTML =
+			head +
+			`<div class="shieldsReport">
+				Is this site not working correctly with Shields up?
+				<div><button type="button" id="shReport">Report a broken site</button></div>
+			</div>` +
+			footer;
+	} else {
+		const rows = `
+			<div class="shieldsRow">
+				${shieldIcon('ads')}
+				<div class="shieldsRowMain">
+					<div class="shieldsRowLabel">Block trackers &amp; ads <span class="count adsCount">${count || ''}</span></div>
+					${drop('shAds', state.mode, [
+						{ v: 'aggressive', label: 'Aggressively block trackers &amp; ads' },
+						{ v: 'standard', label: 'Block trackers &amp; ads' },
+						{ v: 'allow', label: 'Allow all trackers &amp; ads' },
+					])}
+				</div>
+				<button class="shieldsMore" id="shAdsMore" aria-label="Trackers and ads details">${shieldIcon('caret', 'shieldsIcon')}</button>
+			</div>
+			<div class="shieldsRow">
+				${shieldIcon('https')}
+				<div class="shieldsRowMain">
+					<div class="shieldsRowLabel">Upgrade connections to HTTPS</div>
+					${drop('shHttps', state.httpsUpgrade, [
+						{ v: 'strict', label: 'Only connect with HTTPS' },
+						{ v: 'upgrade', label: 'Upgrade connections to HTTPS' },
+						{ v: 'off', label: "Don't upgrade HTTP connections" },
+					])}
+				</div>
+			</div>
+			<div class="shieldsRow">
+				${shieldIcon('scripts')}
+				<div class="shieldsRowMain">
+					<div class="shieldsRowLabel">Block scripts</div>
+					<div class="shieldsNote">Breaks many sites; enforcement lands in a later phase.</div>
+				</div>
+				<input type="checkbox" class="shieldsToggle small" id="shScripts" ${state.blockScripts ? 'checked' : ''} aria-label="Block scripts" />
+			</div>
+			<div class="shieldsRow">
+				${shieldIcon('fingerprint')}
+				<div class="shieldsRowMain">
+					<div class="shieldsRowLabel">Block fingerprinting</div>
+					<div class="shieldsNote" id="shFpNote"></div>
+				</div>
+				<div class="shieldsRowEnd">
+					<button class="shieldsMore" id="shFpMore" aria-label="Fingerprinting details">${shieldIcon('caret', 'shieldsIcon')}</button>
+					<input type="checkbox" class="shieldsToggle small" id="shFp" ${state.blockFingerprinting ? 'checked' : ''} aria-label="Block fingerprinting" />
+				</div>
+			</div>
+			<div class="shieldsRow">
+				${shieldIcon('cookie')}
+				<div class="shieldsRowMain">
+					<div class="shieldsRowLabel">Block third-party cookies</div>
+					${drop('shCookies', state.cookies, [
+						{ v: 'all', label: 'Block all cookies' },
+						{ v: 'third-party', label: 'Block third-party cookies' },
+						{ v: 'allow', label: 'Allow all cookies' },
+					])}
+				</div>
+			</div>
+			<div class="shieldsRow">
+				${shieldIcon('forget')}
+				<div class="shieldsRowMain">
+					<div class="shieldsRowLabel">Forget me when I close this site</div>
+					<div class="shieldsNote">Clears this site's cookies on close; storage clearing lands later.</div>
+				</div>
+				<input type="checkbox" class="shieldsToggle small" id="shForget" ${state.forget ? 'checked' : ''} aria-label="Forget me when I close this site" />
+			</div>`;
+
+		shieldsPanel.innerHTML =
+			head +
+			`<div class="shieldsCount"><b>${count}</b> trackers, ads, and more blocked</div>
+			<div class="shieldsAdvanced" id="shAdvanced">
+				<button class="shieldsAdvancedHead" id="shAdvancedHead" aria-expanded="true">
+					${shieldIcon('gear')}
+					<span>Advanced options</span>
+					${shieldIcon('chevron', 'shieldsIcon chev')}
+				</button>
+				<div class="shieldsRows">${rows}</div>
+			</div>` +
+			footer +
+			`<div class="shieldsHint">If this site seems broken, try Shields down. This may reduce STomp's privacy protections.</div>`;
+	}
+
+	wireShieldsPanel(host);
+}
+
+function wireShieldsPanel(host) {
+	const q = (sel) => shieldsPanel.querySelector(sel);
+	q('#shMaster').addEventListener('change', (event) => {
+		setShield(host, { enabled: event.target.checked });
+		buildShieldsPanel(host); // the layout changes between up and down
+	});
+	q('#shFilterLists')?.addEventListener('click', () =>
+		shieldsComingSoon('Filter lists'),
+	);
+	q('#shGlobal')?.addEventListener('click', () =>
+		shieldsComingSoon('Global Settings'),
+	);
+	q('#shReport')?.addEventListener('click', () =>
+		setStatus('Thanks, broken-site reports are coming in a later phase.'),
+	);
+
+	const advanced = q('#shAdvanced');
+	q('#shAdvancedHead')?.addEventListener('click', () => {
+		const closed = advanced.classList.toggle('closed');
+		q('#shAdvancedHead').setAttribute('aria-expanded', String(!closed));
+	});
+
+	wireDrop('shAds', (v) => setShield(host, { mode: v }));
+	wireDrop('shHttps', (v) => setShield(host, { httpsUpgrade: v }));
+	wireDrop('shCookies', (v) => setShield(host, { cookies: v }));
+	q('#shScripts')?.addEventListener('change', (e) =>
+		setShield(host, { blockScripts: e.target.checked }),
+	);
+	q('#shForget')?.addEventListener('change', (e) =>
+		setShield(host, { forget: e.target.checked }),
+	);
+	q('#shAdsMore')?.addEventListener('click', () =>
+		shieldsComingSoon('Trackers & ads'),
+	);
+	// a click anywhere else in the panel closes an open dropdown
+	shieldsPanel.onclick = (e) => {
+		if (!e.target.closest('.shieldsDrop')) closeAllDrops();
+	};
+
+	// STomp's fingerprint emulation is core and always on: the toggle shows on
+	// and, turned off, says so honestly rather than pretending to disable it
+	const fp = q('#shFp');
+	const fpNote = q('#shFpNote');
+	fp?.addEventListener('change', (e) => {
+		setShield(host, { blockFingerprinting: e.target.checked });
+		if (fpNote)
+			fpNote.textContent = e.target.checked
+				? ''
+				: "STomp's fingerprint emulation is part of its core and stays on.";
+	});
+	q('#shFpMore')?.addEventListener('click', () =>
+		shieldsComingSoon('Fingerprinting'),
+	);
+}
+
+function closeAllDrops() {
+	for (const list of shieldsPanel.querySelectorAll('.shieldsDropList'))
+		list.hidden = true;
+	for (const btn of shieldsPanel.querySelectorAll('.shieldsDropBtn'))
+		btn.setAttribute('aria-expanded', 'false');
+}
+
+function wireDrop(id, onPick) {
+	const root = shieldsPanel.querySelector(`#${id}`);
+	if (!root) return;
+	const btn = root.querySelector('.shieldsDropBtn');
+	const list = root.querySelector('.shieldsDropList');
+	btn.addEventListener('click', (event) => {
+		event.stopPropagation();
+		const wasClosed = list.hidden;
+		closeAllDrops();
+		if (wasClosed) {
+			list.hidden = false;
+			btn.setAttribute('aria-expanded', 'true');
+		}
+	});
+	for (const item of list.querySelectorAll('li')) {
+		item.addEventListener('click', () => {
+			const value = item.dataset.value;
+			root.dataset.value = value;
+			root.querySelector('.shieldsDropLabel').innerHTML = item.innerHTML;
+			for (const other of list.querySelectorAll('li'))
+				other.removeAttribute('aria-selected');
+			item.setAttribute('aria-selected', 'true');
+			closeAllDrops();
+			onPick(value);
+		});
+	}
+}
+
+// the detail views and the global pages are placeholders in phase 1
+function shieldsComingSoon(title) {
+	const back = shieldsPanel.dataset.host;
+	shieldsPanel.classList.remove('down');
+	shieldsPanel.innerHTML = `
+		<div class="shieldsHead">
+			<button class="shieldsMore" id="shBack" aria-label="Back" style="transform:rotate(180deg)">${shieldIcon('caret', 'shieldsIcon')}</button>
+			<span class="shieldsDomain" dir="ltr" style="grid-column:2">${escapeHtml(title)}</span>
+		</div>
+		<div class="shieldsReport">Coming in a later phase.</div>`;
+	shieldsPanel
+		.querySelector('#shBack')
+		.addEventListener('click', () => buildShieldsPanel(back));
+}
+
+function positionShields() {
+	const rect = shieldsButton.getBoundingClientRect();
+	shieldsPanel.style.top = `${Math.round(rect.bottom + 8)}px`;
+	shieldsPanel.style.left = 'auto';
+	shieldsPanel.style.right = `${Math.max(8, Math.round(window.innerWidth - rect.right))}px`;
+}
+
+function openShields() {
+	const host = activeHost();
+	if (!host) return;
+	if (!controller.shields.has(host)) controller.shields.set(host, {});
+	shieldsPanel.dataset.host = host;
+	buildShieldsPanel(host);
+	positionShields();
+	shieldsPanel.classList.remove('hidden');
+	shieldsPanel.setAttribute('aria-hidden', 'false');
+	shieldsScrim.classList.remove('hidden');
+	shieldsButton.setAttribute('aria-expanded', 'true');
+}
+
+function closeShields() {
+	shieldsPanel.classList.add('hidden');
+	shieldsPanel.setAttribute('aria-hidden', 'true');
+	shieldsScrim.classList.add('hidden');
+	shieldsButton.setAttribute('aria-expanded', 'false');
+}
+
+const shieldsOpen = () => !shieldsPanel.classList.contains('hidden');
+
+shieldsButton.addEventListener('click', () => {
+	if (shieldsOpen()) closeShields();
+	else openShields();
+});
+shieldsScrim.addEventListener('click', closeShields);
+window.addEventListener('resize', () => {
+	if (shieldsOpen()) positionShields();
+});
+addEventListener(
+	'keydown',
+	(event) => {
+		if (event.key !== 'Escape' || !shieldsOpen()) return;
+		closeShields();
+		event.stopImmediatePropagation();
+	},
+	true,
+);
 
 const booted = boot();
 booted

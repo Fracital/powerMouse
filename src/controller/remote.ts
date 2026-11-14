@@ -1,4 +1,4 @@
-import type { AdblockOptions } from '../blocker/types';
+import type { AdblockOptions, SiteShields } from '../blocker/types';
 import { assetName } from '../config';
 // Host-side controller for origin isolation. The real StompController runs in
 // a hidden controller frame on the proxy origin (dist/controllerFrame.html);
@@ -41,6 +41,7 @@ import {
 	STORAGE_BLOCKED,
 	TransportDescriptor,
 } from './messages';
+import { createShields, type Shields } from './shields';
 
 export interface RemoteControllerInit {
 	/** origin that serves dist/ and the proxied content, e.g. https://proxy.example.com */
@@ -103,6 +104,10 @@ export interface RemoteControllerInit {
 	rules?: RequestRule[];
 	/** proxy-ception: forward the proxy's own origin, off unless `true` (see StompController) */
 	allowSelfProxy?: boolean;
+	/** per-site shields the controller starts with (see StompController.shields) */
+	shields?: SiteShields[];
+	/** called after `controller.shields.set(...)` to persist the change (see StompController) */
+	onShieldsChange?: (host: string, state: SiteShields) => void;
 	/** the served file names, when the host renamed them (see StompController) */
 	assets?: Assets;
 	/** the deployment's helper names (see StompController.names) */
@@ -186,6 +191,8 @@ export class RemoteController extends EventTarget {
 	#ready: Promise<void>;
 	#init: RemoteControllerInit;
 	#sandbox: string;
+	/** per-site shields, forwarded to the controller frame (see StompController.shields) */
+	#shields!: Shields;
 
 	constructor(init: RemoteControllerInit) {
 		super();
@@ -428,6 +435,16 @@ export class RemoteController extends EventTarget {
 				},
 			);
 
+		// per-site shields: the host-side state the demo reads and writes, each
+		// change forwarded to the controller frame (which applies it to the inner
+		// StompController, so it reaches the worker and its handshakes)
+		this.#shields = createShields((list) => {
+			void this.#ready
+				.then(() => this.#rpc.call('shields', list))
+				.catch(() => {});
+		}, init.onShieldsChange);
+		if (init.shields?.length) this.#shields.replace(init.shields);
+
 		const every = init.pollInterval ?? 500;
 		if (every > 0)
 			setInterval(() => {
@@ -457,6 +474,10 @@ export class RemoteController extends EventTarget {
 	async setRules(rules: RequestRule[]): Promise<void> {
 		await this.#ready;
 		await this.#rpc.call('rules', rules);
+	}
+	/** per-site shields (see StompController.shields) */
+	get shields(): Shields {
+		return this.#shields;
 	}
 	/** drop every entry of the service worker's HTTP cache */
 	async clearCache(): Promise<void> {

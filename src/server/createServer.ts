@@ -3,7 +3,7 @@ import {
 	type ProxyTransport,
 } from '@mercuryworkshop/proxy-transports';
 import { IDBPDatabase, openDB } from 'idb';
-import type { AdblockInit } from '../blocker/types';
+import type { AdblockInit, SiteShields } from '../blocker/types';
 import type GenericCodec from '../Codecs';
 import {
 	assetName,
@@ -40,6 +40,7 @@ import { RewriteCache } from './rewriteCache';
 import type { RewritePool } from './rewritePool';
 import { registerRewrites } from './rewrites';
 import Router, { json } from './Router';
+import { ShieldsStore } from './shields';
 import { openStorage, registerStorage, StorageHosts } from './Storage';
 import { registerXhr } from './Sync';
 
@@ -67,6 +68,10 @@ export interface StompServer {
 	routeAs(kind: string, url: string): string;
 	/** the built-in blocker, unless the host turned it off (docs/adblock.md) */
 	blocker?: Blocker;
+	/** the per-site shields the controller set (src/server/shields.ts) */
+	shields: ShieldsStore;
+	/** replace the per-site shields allowlist (the controller's `shields` RPC) */
+	setShields(list: SiteShields[]): void;
 	/** the context and real URL of a link route (src/visited.ts), or null */
 	linkOf(routed: string): { context: VisitedContext; url: URL } | null;
 	/** the link route of `url` for a link in a document of `context` */
@@ -341,6 +346,7 @@ export default async function createServer(
 	const blocker = adblock
 		? sharedBlocker(init.scope, adblock, new BareCompatibleClient(transport))
 		: undefined;
+	const shields = new ShieldsStore();
 	const { route, setRules, hostReloaded } = registerRewrites(
 		router,
 		init,
@@ -352,6 +358,7 @@ export default async function createServer(
 		pool,
 		blocker,
 		!adblock?.byDefault,
+		shields,
 	);
 	if (blocker) registerBlocker(router, blocker);
 	registerStorage(router, stores.storage, init.codec);
@@ -363,6 +370,8 @@ export default async function createServer(
 		router,
 		route,
 		blocker,
+		shields,
+		setShields: (list) => shields.set(list),
 		cookies,
 		clearCache: async () => {
 			await cache?.clear();

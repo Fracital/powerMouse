@@ -283,6 +283,10 @@ if (window === window.parent || !origins.length) {
 					if (!controller) throw new Error('Controller is not initialised');
 					await controller.setRules(rules);
 				},
+				shields: async (list) => {
+					if (!controller) throw new Error('Controller is not initialised');
+					controller.shields.replace(list);
+				},
 				cookies: async (command) => {
 					if (!controller) throw new Error('Controller is not initialised');
 					return [await controller.cookieCommand(command), []];

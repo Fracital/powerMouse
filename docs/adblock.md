@@ -204,6 +204,54 @@ With `adblock: false` none of this exists: the config carries no `adblock`,
 the module is never fetched, the worker has no engine and the inject takes
 no natives and installs no hook.
 
+## Per-site shields
+
+A host application can turn STomp's privacy layers on or off per site, the
+way Brave Shields does, and the demo (`demo/public/pm`) builds that UI. The
+state is host-keyed and the host owns it (the demo keeps it in its own
+localStorage); the controller carries it to the service worker, which keeps
+one `ShieldsStore` per server (`src/server/shields.ts`) and consults it
+before each layer runs. A host with no entry is neutral: STomp behaves as it
+would with no shields, so a controller that never sets any (every test
+suite's) is unchanged.
+
+`controller.shields` (`src/controller/shields.ts`), on `StompController` and
+`RemoteController` alike:
+
+| Call               | What it does                                                          |
+| ------------------ | --------------------------------------------------------------------- |
+| `get(host)`        | the host's shields, the defaults when it has no entry                 |
+| `has(host)`        | whether the host has a stored entry                                   |
+| `set(host, patch)` | merge a patch, push the whole set to the worker, return the new state |
+| `all()`            | every entry, for the host to persist                                  |
+| `replace(list)`    | set them all (on startup, from what the host persisted)               |
+
+`ControllerInit.shields` seeds them, and `onShieldsChange(host, state)` fires
+after each `set` so the host can persist it. The set travels with every
+handshake, as the request rules do. A `SiteShields` entry
+(`src/blocker/types.ts`) is `{ host, enabled, mode, httpsUpgrade,
+blockScripts, blockFingerprinting, cookies, forget }`.
+
+`enabled` is the master toggle: down, every layer below is off for the host
+without touching STomp's rewriting. What the worker enforces today:
+
+- `mode` (`aggressive` | `standard` | `allow`): the ad/tracker blocker.
+  `allow` turns it off for the host; `aggressive` and `standard` both block
+  (the crate is not asked to tell them apart yet).
+- `httpsUpgrade` (`strict` | `upgrade` | `off`): `upgrade` and `strict` upgrade
+  the host's HTTP requests through the mixed-content machinery; `strict`'s
+  "block when HTTPS is unavailable" is not yet told apart from `upgrade`.
+- `cookies` (`all` | `third-party` | `allow`): `all` sends no cookies on the
+  host's requests, `third-party` none on cross-site requests, `allow` leaves
+  STomp's own jar and SameSite to decide.
+- `forget`: the demo clears the site's cookie jar when its last tab closes.
+
+`blockScripts` and `blockFingerprinting` are carried but not yet enforced:
+blocking the page's own scripts wants the CSP stage-2 machinery
+(`src/csp.ts`, the inject's `ContentSecurity`), and STomp's fingerprint
+emulation is core and always on, so a per-site off switch wants the inject's
+emulation gated on a per-document flag. The demo labels both honestly.
+
 ## Measured
 
 On this machine, node 22, the module as shipped, Brave's main list (6.9 MB,

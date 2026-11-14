@@ -1,4 +1,4 @@
-import type { AdblockOptions } from '../blocker/types';
+import type { AdblockOptions, SiteShields } from '../blocker/types';
 import type { Assets, Config, ConfigCodec } from '../config';
 import type { HelperNames } from '../helperNames';
 import type { HookErrorInfo, InitHooks } from '../hooks';
@@ -131,6 +131,8 @@ export type FrameBound = {
 	cookies: [CookieCommand, CookieResult];
 	/** replace the request rules */
 	rules: [RequestRule[]];
+	/** replace the per-site shields (forwarded to the inner controller) */
+	shields: [SiteShields[]];
 	/** which of these service worker clients no longer exist (the host's ClientFrames) */
 	goneClients: [string[], string[]];
 };

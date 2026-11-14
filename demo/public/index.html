@@ -182,6 +182,29 @@
 							hidden
 						></button>
 						<span id="chromeStatus" class="select">…</span>
+						<!-- STomp's content blocker for this site (docs/adblock.md):
+						     the powerMouse mark, saturated when shields are up and
+						     grey when down, with the active tab's blocked count on a
+						     badge. Click opens the Shields panel. Hidden with no site. -->
+						<button
+							id="toolShields"
+							class="shieldsbtn"
+							type="button"
+							title="Shields"
+							aria-label="Shields for this site"
+							aria-expanded="false"
+							aria-haspopup="dialog"
+							hidden
+						>
+							<img
+								src="/pm/logo.png"
+								width="24"
+								height="24"
+								alt=""
+								draggable="false"
+							/>
+							<span class="shieldsBadge" id="shieldsBadge" hidden>0</span>
+						</button>
 						<button
 							id="toolStar"
 							class="starbtn"
@@ -233,6 +256,17 @@
 			<div class="requestsList" id="requestsList"></div>
 			<div class="requestsEmpty" id="requestsEmpty">No requests yet</div>
 		</section>
+
+		<!-- Shields: the content blocker's per-site panel, a popover under the
+		     omnibar button (built and filled by pm/main.js on open) -->
+		<div id="shieldsScrim" class="shieldsScrim hidden"></div>
+		<div
+			id="shieldsPanel"
+			class="shields hidden"
+			role="dialog"
+			aria-label="Shields for this site"
+			aria-hidden="true"
+		></div>
 
 		<!-- bookmarks: the home page's star tab slides this in from the left -->
 		<div id="bookmarksScrim" class="bookmarksScrim"></div>

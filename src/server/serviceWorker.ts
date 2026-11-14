@@ -253,6 +253,9 @@ function registerController(
 			clearCache: async () => {
 				await (await server).clearCache();
 			},
+			shields: async (list) => {
+				(await server).setShields(list);
+			},
 			modules: async () => [await heldModules(), []],
 			suffixList: async () => {
 				await heldModules();
@@ -261,7 +264,18 @@ function registerController(
 			socket: async ({ url, source }) => {
 				// a WebSocket never passes this worker: the controller asks from
 				// its handshake hook and refuses the socket on a yes
-				const blocked = !!(await server).blocker?.socket(url, source);
+				// a WebSocket the site's shields let through (shields down, or the
+				// blocker in "allow all") is not refused; a host with no entry is
+				// checked as before. The Origin the handshake carries is the host
+				const srv = await server;
+				let socketHost: string;
+				try {
+					socketHost = source ? new URL(source).hostname : '';
+				} catch (error) {
+					socketHost = '';
+				}
+				const blocked =
+					srv.shields.blocks(socketHost) && !!srv.blocker?.socket(url, source);
 				if (blocked && config.requestLog)
 					report({
 						url,

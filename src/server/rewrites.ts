@@ -221,6 +221,7 @@ import type { RewritePool } from './rewritePool';
 import Router from './Router';
 import { applyHeaderRule, CompiledRule, compileRules } from './rules';
 import { serviceWorkers } from './serviceWorkers';
+import type { ShieldsStore } from './shields';
 import { boundClient } from './srcdocVouches';
 import { rememberVisitedHop, takeVisitedHop } from './visitedHops';
 
@@ -235,6 +236,24 @@ function reportURL(url: StompURL): string {
 	const text = url.toString();
 	const marker = text.indexOf('#url(');
 	return marker === -1 ? text : text.slice(0, marker);
+}
+
+/** the hostname of a real URL, '' when it is not a URL (for the shields key) */
+function hostOf(url: string): string {
+	try {
+		return new URL(url).hostname;
+	} catch (error) {
+		return '';
+	}
+}
+
+/** a URL, or null when the string is not one (for the shields key, computed per request) */
+function urlOrNull(value: string): URL | null {
+	try {
+		return new URL(value);
+	} catch (error) {
+		return null;
+	}
 }
 
 type Site = 'none' | 'same-origin' | 'same-site' | 'cross-site';
@@ -655,6 +674,8 @@ interface Rewriter {
 	blocker?: Blocker;
 	/** the host asked for the blocker: the first navigation waits for its lists (on by default, none does) */
 	blockerAsked?: boolean;
+	/** the per-site shields the controller set (src/server/shields.ts) */
+	shields?: ShieldsStore;
 	/**
 	 * the host page was reloaded (src/controller/hostReload.ts): the cache
 	 * mode the pages it restores take, until when a navigation counts as
@@ -1196,6 +1217,22 @@ function genericForward(
 		if (!refererSource && referrer === `${oURL.origin}/`)
 			refererSource = client;
 
+		// the real document this request belongs to, which the blocker reads as
+		// its source and the per-site shields are keyed by (a navigation's: the
+		// page that frames it; a subresource's: the document that makes it)
+		const blockerSource =
+			(navigation
+				? (refererSource ?? (nestedRoute ? urlOrNull(nestedRoute) : null))
+				: (client ?? refererSource)
+			)?.href ?? '';
+		// the host whose shields govern this request: a top-level navigation is
+		// its own page, otherwise the document that makes the request. A deeply
+		// nested third-party frame's subresources are keyed by that frame, not
+		// the real top page (phase-1 limit, FINDINGS)
+		const shieldsHost = hostOf(
+			navigation && topLevel ? reportURL(url) : blockerSource || reportURL(url),
+		);
+
 		// mixed content (src/mixedContent.ts), decided by the real URL of the
 		// document that makes the request (for a nested navigation, the
 		// parent at its referrer) and the proxied top's, under the document's
@@ -1218,11 +1255,16 @@ function genericForward(
 				} catch (error) {
 					// not a URL: no top to name
 				}
-			upgradeInsecure = upgradesInsecure(
-				navigation ? undefined : context?.clientId,
-				navigation ? null : clientRoute,
-				referrer,
-			);
+			upgradeInsecure =
+				upgradesInsecure(
+					navigation ? undefined : context?.clientId,
+					navigation ? null : clientRoute,
+					referrer,
+				) ||
+				// the site's shields upgrade its HTTP requests (Brave's "upgrade
+				// connections to HTTPS"): the mixed-content machinery then rewrites
+				// them to https, as a document's own upgrade-insecure-requests would
+				!!rewriter.shields?.httpsUpgrade(shieldsHost);
 			// the URL as the page asked for it (a stylesheet's url() keeps its
 			// own in a fragment the rewriter adds)
 			asked = new URL(reportURL(url));
@@ -1503,17 +1545,27 @@ function genericForward(
 				: serverRequest.credentials === 'same-origin'
 					? (initiator === null && !unknownBlob && !opaque) || sameOrigin
 					: true;
+		// the site's shields cookie policy (Brave's "block third-party cookies"):
+		// 'all' sends none, 'third-party' none on a cross-site request, 'allow'
+		// (and shields down, and a host with no entry) leaves STomp's own jar and
+		// SameSite to decide. This is the send side; STomp already partitions
+		// what a cross-site response may set (crossSiteSet, CHIPS)
+		const shieldCookies = rewriter.shields?.cookies(shieldsHost) ?? 'allow';
+		const shieldBlocksCookie =
+			shieldCookies === 'all' ||
+			(shieldCookies === 'third-party' && cookieSite === 'cross-site');
 		// no cookie to send is no Cookie header, as the browser sends it
-		const cookie = credentials
-			? (
-					await rewriter.cookies.get(url.url, {
-						site: cookieSite,
-						navigation: topLevel,
-						method: serverRequest.method,
-						partitionKey,
-					})
-				).toString()
-			: '';
+		const cookie =
+			credentials && !shieldBlocksCookie
+				? (
+						await rewriter.cookies.get(url.url, {
+							site: cookieSite,
+							navigation: topLevel,
+							method: serverRequest.method,
+							partitionKey,
+						})
+					).toString()
+				: '';
 		if (cookie) requestHeaders.set('cookie', cookie);
 		else requestHeaders.delete('cookie');
 
@@ -1723,29 +1775,31 @@ function genericForward(
 			}
 		}
 		const blocker = context?.internal ? undefined : rewriter.blocker;
+		// shields down (or the blocker in "allow all") for this site: the
+		// ad/tracker layer does not run, as a content blocker the user turned
+		// off for the site would not. STomp's rewriting is untouched
+		const blocks = !rewriter.shields || rewriter.shields.blocks(shieldsHost);
 		// the first navigation after a start waits for the engine: the stored
 		// one, and, when the host asked for the blocker, a first fetch of the
 		// lists, bounded
-		if (blocker && navigation && !blocker.ready)
+		if (blocker && blocks && navigation && !blocker.ready)
 			await blocker.settled(!!rewriter.blockerAsked);
-		const decision = blocker?.decide({
-			url: reportURL(url),
-			source:
-				(navigation
-					? (refererSource ?? (nestedRoute ? new URL(nestedRoute) : null))
-					: (client ?? refererSource)
-				)?.href ?? '',
-			destination,
-			navigation,
-			topLevel,
-			method: serverRequest.method,
-			ping:
-				serverRequest.headers.has('ping-to') ||
-				(!serverRequest.destination &&
-					serverRequest.keepalive &&
-					serverRequest.mode === 'no-cors' &&
-					serverRequest.method === 'POST'),
-		});
+		const decision = blocks
+			? blocker?.decide({
+					url: reportURL(url),
+					source: blockerSource,
+					destination,
+					navigation,
+					topLevel,
+					method: serverRequest.method,
+					ping:
+						serverRequest.headers.has('ping-to') ||
+						(!serverRequest.destination &&
+							serverRequest.keepalive &&
+							serverRequest.mode === 'no-cors' &&
+							serverRequest.method === 'POST'),
+				})
+			: null;
 		if (decision?.block) {
 			// as a content blocker's ERR_BLOCKED_BY_CLIENT reaches a page: a
 			// network error, nothing of the proxy's in it. A top-level
@@ -3766,6 +3820,7 @@ export function registerRewrites(
 	pool?: RewritePool,
 	blocker?: Blocker,
 	blockerAsked = true,
+	shields?: ShieldsStore,
 ) {
 	const rewriter: Rewriter = {
 		get config() {
@@ -3808,6 +3863,7 @@ export function registerRewrites(
 		rules: [],
 		blocker,
 		blockerAsked,
+		shields,
 		isolated: !!init.isolated,
 		allowSelfProxy: !!init.allowSelfProxy,
 		codec: init.codec,
@@ -4393,14 +4449,20 @@ export function registerRewrites(
 					]);
 				// the blocker's side of the document (docs/adblock.md): the
 				// lists' `$csp=` policies the proxy can enforce, beside its own,
-				// and the cosmetic rules and scriptlets its inject applies
-				const adblock = rewriter.blocker?.ready
-					? rewriter.blocker.cosmetic(url.url.href, (script) =>
+				// and the cosmetic rules and scriptlets its inject applies. Shields
+				// down (or the blocker off) for this document's host hides nothing
+				// and runs no scriptlet, as a content blocker the user turned off
+				// for the site would not; STomp's own rewriting is untouched
+				const adblockOn =
+					!!rewriter.blocker?.ready &&
+					(!rewriter.shields || rewriter.shields.blocks(url.url.hostname));
+				const adblock = adblockOn
+					? rewriter.blocker!.cosmetic(url.url.href, (script) =>
 							modifyJS(script, url, rewriter.config, 'generic'),
 						)
 					: null;
-				const listCsp = rewriter.blocker?.ready
-					? rewriter.blocker.documentCsp(
+				const listCsp = adblockOn
+					? rewriter.blocker!.documentCsp(
 							url.url.href,
 							nestedTopOf(
 								new URL(request.routed).pathname,

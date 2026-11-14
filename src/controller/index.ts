@@ -7,6 +7,7 @@ import {
 	resolveAdblockOptions,
 	type AdblockInit,
 	type AdblockOptions,
+	type SiteShields,
 } from '../blocker/types';
 import {
 	assetName,
@@ -93,6 +94,7 @@ import RewriteWorkers, {
 	DEFAULT_REWRITE_TIMEOUT_MS,
 	defaultRewriteWorkers,
 } from './rewriteWorkers';
+import { createShields, type Shields } from './shields';
 
 export { default as SearchBuilder } from '../bootstrapper/SearchBuilder';
 export type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
@@ -271,6 +273,19 @@ export interface ControllerInit {
 	 * endpoint among it); leave it off in production. See `Config.allowSelfProxy`.
 	 */
 	allowSelfProxy?: boolean;
+	/**
+	 * Per-site shields the controller starts with (the demo's content-blocker
+	 * UI, docs/adblock.md): a host-keyed state the host persisted. They travel
+	 * to the service worker with the handshake, and `controller.shields` reads
+	 * and writes them later. Left out, no host has an entry and STomp behaves as
+	 * it would without shields (the blocker on, cookies and HTTPS untouched).
+	 */
+	shields?: SiteShields[];
+	/**
+	 * Called after `controller.shields.set(host, ...)` with the host and its new
+	 * state, for the host to persist the change (the demo writes localStorage).
+	 */
+	onShieldsChange?: (host: string, state: SiteShields) => void;
 	/**
 	 * The served file names, when the host renamed them (see Assets): the
 	 * inject bundles the worker names in its shell. A same-origin host
@@ -772,6 +787,12 @@ export class StompController extends EventTarget {
 	/** a build mismatch is being healed: the next ready answer must agree */
 	#healing = false;
 	#rules: RequestRule[];
+	/**
+	 * Per-site shields (docs/adblock.md): `controller.shields` reads and writes
+	 * them, each change pushes the whole set to the worker, and they travel with
+	 * every handshake as the rules do. Built in the constructor
+	 */
+	#shields!: Shields;
 	/** the blocker's lists, while it is on (docs/adblock.md); its module is `#modules.blocker` */
 	#adblock: AdblockInit | null = null;
 	/**
@@ -845,6 +866,12 @@ export class StompController extends EventTarget {
 		);
 		this.#onRequest = init.onRequest;
 		this.#rules = init.rules ?? [];
+		// each change pushes the whole set to the worker (fire and forget: it is
+		// resent with the handshake); the host persists it from onShieldsChange
+		this.#shields = createShields((list) => {
+			this.#call('shields', list).catch(() => {});
+		}, init.onShieldsChange);
+		if (init.shields?.length) this.#shields.replace(init.shields);
 		this.directory = isUrlLike(init.directory)
 			? new URL(init.directory, location.href)
 			: defaultDirectory();
@@ -1654,6 +1681,10 @@ export class StompController extends EventTarget {
 					if (build !== undefined) this.config = { ...this.config, build };
 					// the rules travel with every handshake (a new worker starts empty)
 					if (this.#rules.length) await rpc.call('rules', this.#rules);
+					// the shields travel with every handshake too (a new worker
+					// starts with none)
+					const shields = this.#shields.all();
+					if (shields.length) await rpc.call('shields', shields);
 					// how the host was loaded is said once: it is about the pages
 					// the host shows again right after
 					const reloaded = this.#hostReload;
@@ -2027,6 +2058,15 @@ export class StompController extends EventTarget {
 		this.#rules = rules;
 		await this.#ready;
 		await this.#call('rules', rules);
+	}
+	/**
+	 * Per-site shields (the demo's content-blocker UI, docs/adblock.md):
+	 * `get(host)` reads a host's state (the defaults when it has none),
+	 * `set(host, patch)` changes it and pushes the whole set to the worker,
+	 * `all()` is every entry (to persist), `replace(list)` sets them all.
+	 */
+	get shields(): Shields {
+		return this.#shields;
 	}
 	/** drop every entry of the service worker's HTTP cache */
 	async clearCache(): Promise<void> {

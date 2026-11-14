@@ -934,4 +934,116 @@ ok(
 	JSON.stringify(demoState),
 );
 await demo.close();
+
+// Per-site shields (the demo's content-blocker UI, docs/adblock.md): shields
+// down for a site turns the blocker off for it, no blocked request, no
+// cosmetic hiding, no scriptlet, without breaking STomp's own rewriting;
+// shields up blocks again. The state is keyed by the page's host and reaches
+// the worker over the controller's `shields` RPC.
+const shieldsRun = await page.evaluate(
+	async ({ fixture, site }) => {
+		const log = [];
+		const controller = new window.StompController({
+			serviceworker: window.controller.serviceworker,
+			transport: window.controller.transport,
+			directory: window.controller.directory.pathname,
+			codec: 'xor',
+			cache: false,
+			onRequest: (info) => log.push(info),
+			adblock: {
+				lists: [{ url: `${fixture}pages/adblock-list.txt`, trusted: true }],
+				resources: `${fixture}pages/adblock-resources.json`,
+			},
+		});
+		await controller.wait();
+		const element = document.createElement('iframe');
+		document.body.append(element);
+		const frame = controller.createFrame(element);
+		const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+		const load = async (url) => {
+			const loaded = new Promise((resolve) =>
+				element.addEventListener('load', resolve, { once: true }),
+			);
+			await frame.go(url);
+			await loaded;
+			const win = element.contentWindow;
+			for (let i = 0; i < 100 && !win.__adblockReport; i++) await wait(50);
+			return win.__adblockReport ? await win.__adblockReport() : null;
+		};
+		const host = new URL(site).hostname;
+		// blocks of the page's own blocked script since a mark: a request only
+		// the blocker stops, so the count is not disturbed by late reports of
+		// the previous load's report-time fetches
+		const mark = () => {
+			const at = log.length;
+			return () =>
+				log
+					.slice(at)
+					.filter(
+						(e) =>
+							e.error &&
+							e.error.includes('content blocker') &&
+							e.url.includes('adblock-blocked.js'),
+					).length;
+		};
+		// the engine builds on the first load(s); load until the blocker is on
+		let up = null;
+		for (let i = 0; i < 25; i++) {
+			up = await load(site);
+			if (up && !up.ran.includes('blocked')) break;
+			await wait(600);
+		}
+		// let late block reports from the shields-up load drain before marking,
+		// so the shields-down window counts only its own requests
+		await wait(700);
+		const downBlocks = mark();
+		controller.shields.set(host, { enabled: false });
+		await wait(500);
+		const down = await load(site);
+		await wait(700);
+		const downCount = downBlocks();
+		const upBlocks = mark();
+		controller.shields.set(host, { enabled: true });
+		await wait(500);
+		const again = await load(site);
+		await wait(700);
+		const againCount = upBlocks();
+		element.remove();
+		return { up, down, again, downCount, againCount, host };
+	},
+	{ fixture: FIXTURE, site },
+);
+console.log('INFO shields:', JSON.stringify(shieldsRun));
+ok(
+	'shields up (default): the blocker runs, a blocked script never runs, the elements are hidden, the scriptlet ran',
+	!shieldsRun.up.ran.includes('blocked') &&
+		shieldsRun.up.gone === true &&
+		shieldsRun.up.spy !== null &&
+		shieldsRun.up.trackAttribute === null,
+	JSON.stringify(shieldsRun.up),
+);
+ok(
+	'shields down: the blocked request now runs, nothing is hidden, no scriptlet, and the rewritten page still works',
+	shieldsRun.down.ran.includes('blocked') &&
+		shieldsRun.down.gone === false &&
+		shieldsRun.down.spy === null &&
+		shieldsRun.down.trackAttribute === '1' &&
+		shieldsRun.down.ran.includes('allowed') &&
+		shieldsRun.down.href === site,
+	JSON.stringify(shieldsRun.down),
+);
+ok(
+	'shields down: no request is reported blocked by the content blocker',
+	shieldsRun.downCount === 0,
+	String(shieldsRun.downCount),
+);
+ok(
+	'shields up again: the blocker blocks once more',
+	!shieldsRun.again.ran.includes('blocked') &&
+		shieldsRun.again.gone === true &&
+		shieldsRun.again.spy !== null &&
+		shieldsRun.againCount > 0,
+	JSON.stringify([shieldsRun.again.ran, shieldsRun.againCount]),
+);
+
 await done(browser);

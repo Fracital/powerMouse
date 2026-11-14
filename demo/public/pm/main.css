@@ -2237,3 +2237,463 @@ input:focus-visible {
 		transition: none;
 	}
 }
+
+/* ---------------------------------------------------------------------------
+   Shields: STomp's content blocker, per site (docs/adblock.md). The omnibar
+   button carries the powerMouse mark and the active tab's blocked count; the
+   panel under it follows Brave Shields, a dark panel, a pill master toggle, a
+   count bar and line-iconed rows. The demo page is black, so the panel is the
+   slightly lighter navy #1c1c28 Brave uses, to read as a layer over the page.
+   ------------------------------------------------------------------------- */
+
+.shieldsbtn {
+	position: relative;
+	flex: none;
+	width: 30px;
+	height: 30px;
+	padding: 0;
+	border: 1px solid transparent;
+	border-radius: 0.25rem;
+	background: none;
+	cursor: pointer;
+	display: grid;
+	place-items: center;
+	transition-property: background-color, border-color;
+}
+.shieldsbtn[hidden] {
+	display: none;
+}
+.shieldsbtn img {
+	width: 22px;
+	height: 22px;
+	display: block;
+	filter: grayscale(1);
+	opacity: 0.5;
+	transition:
+		filter 0.12s ease,
+		opacity 0.12s ease;
+}
+.shieldsbtn.up img {
+	filter: none;
+	opacity: 1;
+}
+.shieldsbtn:hover {
+	background-color: rgba(255, 255, 255, 0.08);
+	border-color: rgba(255, 255, 255, 0.15);
+}
+.shieldsbtn:active {
+	background-color: rgba(255, 255, 255, 0.14);
+}
+.shieldsbtn:focus-visible {
+	outline: 2px solid #4ca9fb;
+	outline-offset: 1px;
+}
+
+.shieldsBadge {
+	position: absolute;
+	top: -3px;
+	right: -3px;
+	min-width: 15px;
+	height: 15px;
+	padding: 0 3px;
+	box-sizing: border-box;
+	border-radius: 999px;
+	background: #6a6fe6;
+	color: #fff;
+	font-size: 9px;
+	font-weight: 600;
+	line-height: 15px;
+	text-align: center;
+	pointer-events: none;
+	box-shadow: 0 0 0 1.5px #1b1b1b;
+}
+.shieldsBadge[hidden] {
+	display: none;
+}
+
+.shieldsScrim {
+	position: fixed;
+	inset: 0;
+	z-index: 60;
+	background: transparent;
+}
+.shieldsScrim.hidden {
+	display: none;
+}
+
+.shields {
+	position: fixed;
+	z-index: 61;
+	width: 360px;
+	max-width: calc(100vw - 16px);
+	max-height: calc(100vh - 76px);
+	overflow-y: auto;
+	box-sizing: border-box;
+	padding: 16px 16px 14px;
+	border-radius: 12px;
+	background: #1c1c28;
+	color: #e9e9f1;
+	font-family: 'Montserrat', sans-serif;
+	font-weight: 500;
+	font-size: 13px;
+	line-height: 1.35;
+	box-shadow:
+		0 12px 40px rgba(0, 0, 0, 0.55),
+		0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+.shields.hidden {
+	display: none;
+}
+.shields * {
+	box-sizing: border-box;
+}
+
+.shieldsHead {
+	display: grid;
+	grid-template-columns: 28px 1fr auto;
+	grid-template-rows: auto auto;
+	column-gap: 10px;
+	align-items: center;
+}
+.shieldsFavicon {
+	grid-row: 1 / span 2;
+	width: 28px;
+	height: 28px;
+	border-radius: 6px;
+	background: #2a2a3a center / cover no-repeat;
+	object-fit: cover;
+}
+.shieldsDomain {
+	grid-column: 2;
+	min-width: 0;
+	color: #fff;
+	font-size: 15px;
+	font-weight: 600;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	direction: rtl;
+	text-align: left;
+}
+.shieldsState {
+	grid-column: 2;
+	color: #a7a7bd;
+	font-size: 12px;
+}
+.shieldsState b {
+	color: #e9e9f1;
+	font-weight: 600;
+}
+.shieldsHead .shieldsToggle {
+	grid-column: 3;
+	grid-row: 1 / span 2;
+}
+
+.shieldsToggle {
+	appearance: none;
+	-webkit-appearance: none;
+	flex: none;
+	position: relative;
+	width: 44px;
+	height: 24px;
+	border-radius: 999px;
+	background: #3a3a4c;
+	border: none;
+	cursor: pointer;
+	transition: background 0.15s ease;
+}
+.shieldsToggle::after {
+	content: '';
+	position: absolute;
+	top: 3px;
+	left: 3px;
+	width: 18px;
+	height: 18px;
+	border-radius: 50%;
+	background: #fff;
+	transition: transform 0.15s ease;
+}
+.shieldsToggle:checked {
+	background: linear-gradient(120deg, #4c54d2, #8a5cf6);
+}
+.shieldsToggle:checked::after {
+	transform: translateX(20px);
+}
+.shieldsToggle:focus-visible {
+	outline: 2px solid #8a9bff;
+	outline-offset: 2px;
+}
+.shieldsToggle.small {
+	width: 38px;
+	height: 21px;
+}
+.shieldsToggle.small::after {
+	width: 15px;
+	height: 15px;
+}
+.shieldsToggle.small:checked::after {
+	transform: translateX(17px);
+}
+
+.shieldsCount {
+	margin-top: 14px;
+	padding: 12px 14px;
+	border-radius: 9px;
+	background: #12121b;
+	color: #c9c9d8;
+	font-size: 12.5px;
+}
+.shieldsCount b {
+	color: #fff;
+	font-size: 22px;
+	font-weight: 700;
+	margin-right: 4px;
+}
+
+.shieldsAdvanced {
+	margin-top: 14px;
+}
+.shieldsAdvancedHead {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 6px 2px;
+	background: none;
+	border: none;
+	color: #c9c9d8;
+	font-family: inherit;
+	font-size: 12px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	cursor: pointer;
+}
+.shieldsAdvancedHead .chev {
+	margin-left: auto;
+	transition: transform 0.15s ease;
+}
+.shieldsAdvanced.closed .chev {
+	transform: rotate(-90deg);
+}
+.shieldsAdvanced.closed .shieldsRows {
+	display: none;
+}
+.shieldsIcon {
+	flex: none;
+	width: 18px;
+	height: 18px;
+	color: #9a9ab2;
+}
+
+.shieldsRows {
+	margin-top: 4px;
+}
+.shieldsRow {
+	display: grid;
+	grid-template-columns: 22px 1fr auto;
+	align-items: center;
+	gap: 10px;
+	padding: 9px 2px;
+	border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.shieldsRow .shieldsIcon {
+	width: 20px;
+	height: 20px;
+}
+.shieldsRowMain {
+	min-width: 0;
+}
+/* a row whose right column holds both a detail chevron and a toggle */
+.shieldsRowEnd {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.shieldsRowLabel {
+	color: #e9e9f1;
+	font-size: 13px;
+}
+.shieldsRowLabel .count {
+	color: #8f8fa6;
+	font-weight: 600;
+}
+.shieldsSelect {
+	appearance: none;
+	-webkit-appearance: none;
+	margin-top: 5px;
+	width: 100%;
+	padding: 7px 28px 7px 10px;
+	border-radius: 7px;
+	background: #2a2a3a
+		url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%23a7a7bd' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>")
+		no-repeat right 9px center;
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	color: #e9e9f1;
+	font-family: inherit;
+	font-size: 12.5px;
+	cursor: pointer;
+}
+.shieldsSelect:focus-visible {
+	outline: 2px solid #8a9bff;
+	outline-offset: 1px;
+}
+/* a custom dropdown (the three-way controls), styleable and screenshot-able
+   where a native <select>'s open list is neither */
+.shieldsDrop {
+	position: relative;
+	margin-top: 5px;
+}
+.shieldsDropBtn {
+	width: 100%;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 10px;
+	border-radius: 7px;
+	background: #2a2a3a;
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	color: #e9e9f1;
+	font-family: inherit;
+	font-size: 12.5px;
+	text-align: left;
+	cursor: pointer;
+}
+.shieldsDropLabel {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.shieldsDropBtn .chev {
+	flex: none;
+	margin-left: auto;
+	width: 16px;
+	height: 16px;
+	transition: transform 0.15s ease;
+}
+.shieldsDropBtn[aria-expanded='true'] .chev {
+	transform: rotate(180deg);
+}
+.shieldsDropBtn:focus-visible {
+	outline: 2px solid #8a9bff;
+	outline-offset: 1px;
+}
+.shieldsDropList {
+	position: absolute;
+	z-index: 2;
+	left: 0;
+	right: 0;
+	top: calc(100% + 4px);
+	margin: 0;
+	padding: 4px;
+	list-style: none;
+	border-radius: 8px;
+	background: #24243a;
+	border: 1px solid rgba(255, 255, 255, 0.1);
+	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+.shieldsDropList[hidden] {
+	display: none;
+}
+.shieldsDropList li {
+	padding: 8px 10px;
+	border-radius: 6px;
+	font-size: 12.5px;
+	color: #d7d7e4;
+	cursor: pointer;
+}
+.shieldsDropList li:hover {
+	background: rgba(255, 255, 255, 0.07);
+}
+.shieldsDropList li[aria-selected='true'] {
+	color: #fff;
+	background: rgba(124, 92, 246, 0.2);
+}
+
+.shieldsNote {
+	margin-top: 4px;
+	color: #8f8fa6;
+	font-size: 11px;
+}
+.shieldsMore {
+	flex: none;
+	width: 22px;
+	height: 22px;
+	display: grid;
+	place-items: center;
+	background: none;
+	border: none;
+	color: #7d7d95;
+	cursor: pointer;
+	border-radius: 5px;
+}
+.shieldsMore:hover {
+	background: rgba(255, 255, 255, 0.06);
+	color: #c9c9d8;
+}
+
+.shieldsFooter {
+	display: flex;
+	gap: 10px;
+	margin-top: 16px;
+}
+.shieldsFooter button {
+	flex: 1 1 0;
+	padding: 9px 10px;
+	border-radius: 999px;
+	background: #2a2a3a;
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	color: #e9e9f1;
+	font-family: inherit;
+	font-size: 12.5px;
+	font-weight: 600;
+	cursor: pointer;
+}
+.shieldsFooter button:hover {
+	background: #33334a;
+}
+.shieldsFooter button:focus-visible {
+	outline: 2px solid #8a9bff;
+	outline-offset: 1px;
+}
+
+.shieldsHint {
+	margin-top: 12px;
+	text-align: center;
+	color: #7d7d95;
+	font-size: 11px;
+	line-height: 1.4;
+}
+
+.shieldsReport {
+	margin-top: 14px;
+	padding: 14px;
+	border-radius: 9px;
+	background: #12121b;
+	color: #c9c9d8;
+	font-size: 12.5px;
+	text-align: center;
+}
+.shieldsReport button {
+	margin-top: 10px;
+	padding: 8px 22px;
+	border-radius: 999px;
+	background: linear-gradient(120deg, #4c54d2, #8a5cf6);
+	border: none;
+	color: #fff;
+	font-family: inherit;
+	font-size: 12.5px;
+	font-weight: 600;
+	cursor: pointer;
+}
+.shieldsDownHint {
+	display: none;
+}
+.shields.down .shieldsCount,
+.shields.down .shieldsAdvanced,
+.shields.down .shieldsHint {
+	display: none;
+}
+.shields.down .shieldsDownHint {
+	display: block;
+}

@@ -3,7 +3,7 @@ import type {
 	TransferrableResponse,
 	WebSocketDataType,
 } from '@mercuryworkshop/proxy-transports';
-import type { AdblockInit } from '../blocker/types';
+import type { AdblockInit, SiteShields } from '../blocker/types';
 import type { Config } from '../config';
 import type { PortBody } from './bodyPort';
 import type { Http3DescriptorOptions } from './construct';
@@ -797,6 +797,13 @@ export type SWbound = {
 	 * frame it kept for each (the request log's attribution)
 	 */
 	goneClients: [string[], string[]];
+	/**
+	 * the per-site shields (the demo's content-blocker UI): the whole
+	 * host-keyed allowlist, which the worker's server consults before each
+	 * privacy layer runs for a host (src/server/shields.ts). Replaces what
+	 * it held, and travels with every handshake as the rules do
+	 */
+	shields: [SiteShields[]];
 };
 
 /** a cookie as the jar stores it, for export and import by the host */

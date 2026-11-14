@@ -80,6 +80,51 @@ export interface ProceduralFilter {
 	action?: { type: string; arg?: string };
 }
 
+/**
+ * Per-site "shields" (the demo's content-blocker UI, after Brave Shields):
+ * what the user turned on or off for one host. It governs STomp's privacy
+ * layers for that host alone, the ad/tracker blocker, HTTPS upgrading and
+ * the cookie policy today, and never STomp's core rewriting or fingerprint
+ * emulation, which stay on whatever the shields say. A host with no entry
+ * keeps STomp's defaults (the blocker as the controller configured it, no
+ * forced upgrade, cookies as SameSite allows); the demo writes an entry the
+ * first time a tab lands on a host, so its "goodies on" defaults then apply.
+ */
+export type ShieldsMode = 'aggressive' | 'standard' | 'allow';
+
+/**
+ * One host's shields, as the demo stores them (host-keyed, in its own
+ * localStorage) and plumbs to the service worker. `enabled` is the master
+ * toggle; down (or mode 'allow') turns every layer below off for the host.
+ */
+export interface SiteShields {
+	/** the host the entry is keyed by (lower-cased) */
+	host: string;
+	/** shields up (true) or down (false); down turns every layer off for the host */
+	enabled: boolean;
+	/** the ad/tracker blocker: 'allow' is "allow all", the blocking layer off */
+	mode: ShieldsMode;
+	/** HTTPS upgrade for the host's requests: 'off' leaves http alone */
+	httpsUpgrade?: 'strict' | 'upgrade' | 'off';
+	/** block the page's own scripts (framework flag; enforcement is phase 2) */
+	blockScripts?: boolean;
+	/** STomp's fingerprint emulation is core and on; the UI's toggle (framework flag, phase 2) */
+	blockFingerprinting?: boolean;
+	/** the cookie policy for the host's requests */
+	cookies?: 'all' | 'third-party' | 'allow';
+	/** clear the host's cookies and storage when its last tab closes (cookies wired, storage phase 2) */
+	forget?: boolean;
+}
+
+/**
+ * Whether a host's shields turn every layer off: shields down, or the blocker
+ * in "allow all" mode is still shields-up for the other layers, so this is
+ * only the master switch. The per-layer getters on the server's store read it.
+ */
+export function shieldsDown(shields: SiteShields | undefined): boolean {
+	return !!shields && !shields.enabled;
+}
+
 export const DEFAULT_LISTS: AdblockList[] = [
 	{ url: 'https://easylist.to/easylist/easylist.txt' },
 	{ url: 'https://easylist.to/easylist/easyprivacy.txt' },
