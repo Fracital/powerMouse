@@ -118,10 +118,7 @@ export async function setup(ctx) {
 	);
 
 	// what the runtime reports as its own version/build
-	const ramjetJs = readFileSync(
-		join(distDir(ctx), 'ramjet/ramjet.js'),
-		'utf8',
-	);
+	const ramjetJs = readFileSync(join(distDir(ctx), 'ramjet/ramjet.js'), 'utf8');
 	const match = ramjetJs.match(
 		/version:"([^"]+)",build:"([0-9a-f]+)",date:"([^"]+)"/,
 	);
@@ -186,7 +183,11 @@ export async function assets(ctx) {
 			url: '/controller/controller.sw.js',
 			role: 'sw',
 		},
-		{ file: join(d, 'ramjet/ramjet.js'), url: '/ramjet/ramjet.js', role: 'client' },
+		{
+			file: join(d, 'ramjet/ramjet.js'),
+			url: '/ramjet/ramjet.js',
+			role: 'client',
+		},
 		{
 			file: join(d, 'ramjet/ramjet.wasm'),
 			url: '/ramjet/ramjet.wasm',
