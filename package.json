@@ -73,7 +73,7 @@
 		"@mercuryworkshop/epoxy-transport": "git+https://github.com/Fracital/EpoxyTransport.git#cef3afee33e71d10574e3be5527a143ef09f0963",
 		"@mercuryworkshop/libcurl-transport": "^2.0.6",
 		"@types/crypto-js": "^4.2.2",
-		"@types/serviceworker": "^0.0.204",
+		"@types/serviceworker": "^0.0.207",
 		"esbuild": "^0.28.0",
 		"eslint": "^10.0.0",
 		"eslint-config-prettier": "^10.1.0",
