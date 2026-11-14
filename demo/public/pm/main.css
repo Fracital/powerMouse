@@ -2627,15 +2627,19 @@ input:focus-visible {
 }
 .shieldsMore {
 	flex: none;
-	width: 22px;
-	height: 22px;
+	width: 24px;
+	height: 24px;
 	display: grid;
 	place-items: center;
 	background: none;
 	border: none;
 	color: #7d7d95;
 	cursor: pointer;
-	border-radius: 5px;
+	border-radius: 6px;
+}
+.shieldsMore .shieldsIcon {
+	width: 16px;
+	height: 16px;
 }
 .shieldsMore:hover {
 	background: rgba(255, 255, 255, 0.06);

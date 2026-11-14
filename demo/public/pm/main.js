@@ -3065,6 +3065,10 @@ function drop(id, current, opts, extra = '') {
 function setShield(host, patch) {
 	controller.shields.set(host, patch);
 	syncShields();
+	// most shields take effect only on a fresh load (block scripts,
+	// fingerprinting, HTTPS upgrade, cookies, the blocker's mode): reload the
+	// open page so the change applies
+	if (activeTab && activeTab.frame) activeTab.frame.reload();
 }
 
 function buildShieldsPanel(host) {
@@ -3140,8 +3144,8 @@ function buildShieldsPanel(host) {
 					<div class="shieldsNote" id="shFpNote"></div>
 				</div>
 				<div class="shieldsRowEnd">
-					<button class="shieldsMore" id="shFpMore" aria-label="Fingerprinting details">${shieldIcon('caret', 'shieldsIcon')}</button>
 					<input type="checkbox" class="shieldsToggle small" id="shFp" ${state.blockFingerprinting ? 'checked' : ''} aria-label="Block fingerprinting" />
+					<button class="shieldsMore" id="shFpMore" aria-label="Fingerprinting details">${shieldIcon('caret', 'shieldsIcon')}</button>
 				</div>
 			</div>
 			<div class="shieldsRow">
