@@ -2952,7 +2952,7 @@ input:focus-visible {
 }
 
 .spSection {
-	padding: 18px 0;
+	padding: 14px 0;
 	border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 .spSection:first-of-type {
@@ -3014,7 +3014,7 @@ input:focus-visible {
 	display: flex;
 	align-items: flex-start;
 	gap: 11px;
-	padding: 11px 14px;
+	padding: 8px 14px;
 	border-top: 1px solid rgba(255, 255, 255, 0.05);
 	cursor: pointer;
 }
@@ -3159,7 +3159,7 @@ input:focus-visible {
 	align-items: center;
 	gap: 16px;
 	width: 100%;
-	padding: 14px 0;
+	padding: 9px 0;
 	border-top: 1px solid rgba(255, 255, 255, 0.06);
 	text-align: left;
 }
