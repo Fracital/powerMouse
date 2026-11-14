@@ -83,12 +83,13 @@ export interface ProceduralFilter {
 /**
  * Per-site "shields" (the demo's content-blocker UI, after Brave Shields):
  * what the user turned on or off for one host. It governs STomp's privacy
- * layers for that host alone, the ad/tracker blocker, HTTPS upgrading and
- * the cookie policy today, and never STomp's core rewriting or fingerprint
- * emulation, which stay on whatever the shields say. A host with no entry
- * keeps STomp's defaults (the blocker as the controller configured it, no
- * forced upgrade, cookies as SameSite allows); the demo writes an entry the
- * first time a tab lands on a host, so its "goodies on" defaults then apply.
+ * layers for that host alone: the ad/tracker blocker, HTTPS upgrading, the
+ * cookie policy, blocking the page's own scripts, STomp's fingerprint
+ * emulation, and forgetting the site on close. STomp's core rewriting is never
+ * touched. A host with no entry of its own is governed by the controller's
+ * '*' default entry when it sends one (the demo's "goodies on by default"),
+ * else it is neutral (the blocker as the controller configured it, no forced
+ * upgrade, cookies as SameSite allows, fingerprint emulation on).
  */
 export type ShieldsMode = 'aggressive' | 'standard' | 'allow';
 
@@ -106,13 +107,13 @@ export interface SiteShields {
 	mode: ShieldsMode;
 	/** HTTPS upgrade for the host's requests: 'off' leaves http alone */
 	httpsUpgrade?: 'strict' | 'upgrade' | 'off';
-	/** block the page's own scripts (framework flag; enforcement is phase 2) */
+	/** block the page's own scripts (the inject enforces script-src 'none' against the page's code, src/csp.ts) */
 	blockScripts?: boolean;
-	/** STomp's fingerprint emulation is core and on; the UI's toggle (framework flag, phase 2) */
+	/** STomp's fingerprint emulation (on by default); off, the site reads this browser's native values (src/server/shields.ts) */
 	blockFingerprinting?: boolean;
 	/** the cookie policy for the host's requests */
 	cookies?: 'all' | 'third-party' | 'allow';
-	/** clear the host's cookies and storage when its last tab closes (cookies wired, storage phase 2) */
+	/** clear the host's cookies and virtualized storage when its last tab closes */
 	forget?: boolean;
 }
 

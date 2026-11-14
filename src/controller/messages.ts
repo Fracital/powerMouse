@@ -129,6 +129,8 @@ export type FrameBound = {
 	frameCommand: [{ index: number; command: FrameCommand }, boolean];
 	clearCache: [];
 	cookies: [CookieCommand, CookieResult];
+	/** clear a site's virtualized storage (the "Forget me on close" shield) */
+	forgetStorage: [string];
 	/** replace the request rules */
 	rules: [RequestRule[]];
 	/** replace the per-site shields (forwarded to the inner controller) */

@@ -786,6 +786,12 @@ export type SWbound = {
 	/** the host reading, importing or wiping the cookie jar */
 	cookies: [CookieCommand, CookieResult];
 	/**
+	 * clear a site's virtualized storage on the proxy origin (localStorage,
+	 * sessionStorage, IndexedDB, Cache Storage): the "Forget me when I close
+	 * this site" shield, once its last tab closes (src/server/Storage.ts)
+	 */
+	forgetStorage: [string];
+	/**
 	 * whether the built-in blocker's lists block a WebSocket to `url` opened
 	 * under `source` (the Origin its handshake carries, '' when it has none):
 	 * the controller asks from its handshake hook, since a socket never passes

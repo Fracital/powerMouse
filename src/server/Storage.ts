@@ -474,6 +474,54 @@ export async function openStorage(): Promise<StorageHosts> {
 	};
 }
 
+/**
+ * Clear every virtualized store of a site on the proxy origin (the "Forget me
+ * when I close this site" shield, once its last tab closes): the service
+ * worker's localStorage and sessionStorage (keyed by the raw storage key), and
+ * the page's own IndexedDB databases and Cache Storage caches, which live on
+ * the proxy origin natively, each suffixed `@<storageKey>` (IndexedDB.ts,
+ * Partition.ts). A storage key is the origin for a site's own first-party
+ * store, or `origin^top` where the site is embedded under another; both are
+ * cleared, STomp's own caches (the HTTP cache, the blocker) and other sites'
+ * are not. The cookie jar is cleared separately (src/server/Cookies.ts).
+ */
+export async function forgetSiteStorage(
+	origin: string,
+	hosts: StorageHosts,
+): Promise<void> {
+	await hosts.localStorage.clear(origin).catch(() => {});
+	await hosts.sessionStorage.clear(origin).catch(() => {});
+	// a native name is this site's when its `@<storageKey>` suffix is the
+	// origin (first-party) or begins `origin^` (this site under another)
+	const mine = (name: string): boolean =>
+		name.endsWith(`@${origin}`) || name.includes(`@${origin}^`);
+	try {
+		const databases = (await indexedDB.databases?.()) ?? [];
+		await Promise.all(
+			databases.map((info) => {
+				if (!info.name || !mine(info.name)) return undefined;
+				return new Promise<void>((resolve) => {
+					const request = indexedDB.deleteDatabase(info.name!);
+					request.onsuccess =
+						request.onerror =
+						request.onblocked =
+							() => resolve();
+				});
+			}),
+		);
+	} catch (error) {
+		// indexedDB.databases() is not available, or storage is blocked
+	}
+	try {
+		const keys = await caches.keys();
+		await Promise.all(
+			keys.map((key) => (mine(key) ? caches.delete(key) : null)),
+		);
+	} catch (error) {
+		// Cache Storage is not available, or storage is blocked
+	}
+}
+
 /** the page-facing routes of a server, over the scope's stores */
 export function registerStorage(
 	router: Router,

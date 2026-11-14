@@ -170,6 +170,8 @@ export default class Client {
 	blocking: boolean;
 	/** the host's page is cross-origin isolated (config.isolated; src/isolation.ts) */
 	hostIsolated: boolean;
+	/** this host turned fingerprint protection off: leave the emulation out (config.noFingerprint) */
+	noFingerprint: boolean;
 	applied: boolean;
 	/** @internal called after a response reached this context (fetch, XHR): caches that depend on the jar drop */
 	readonly responseListeners = new Set<() => void>();
@@ -563,6 +565,7 @@ export default class Client {
 		rewriterLibraryAt(() => rewriterLibJS(this.url, this.config));
 		this.blocking = !!init.adblock;
 		this.hostIsolated = !!init.isolated;
+		this.noFingerprint = !!init.noFingerprint;
 		// a stale cached bundle next to a new service worker: say so once,
 		// the page still gets its best effort
 		if (init.build && init.build !== BUILD)
@@ -601,6 +604,7 @@ export default class Client {
 			...(this.assets ? { assets: this.assets } : {}),
 			...(this.blocking ? { adblock: true } : {}),
 			...(this.hostIsolated ? { isolated: true } : {}),
+			...(this.noFingerprint ? { noFingerprint: true } : {}),
 			...(this.#customNames ? { names: this.names } : {}),
 			...(this.hooks ? { hooks: this.hooks } : {}),
 		};

@@ -3,17 +3,29 @@
 // server, set as a whole by the controller's `shields` RPC and consulted by
 // the request path and the document builder before each privacy layer runs.
 //
-// A host with no entry is neutral: STomp behaves as it would with no shields
-// at all (the blocker on as the controller configured it, no forced HTTPS
-// upgrade, cookies as SameSite allows), so a controller that never sets
-// shields, every test suite's, is unchanged. The demo writes an entry the
-// first time a tab lands on a host, which is when its "goodies on" defaults
-// take effect. The master toggle (enabled=false) turns every layer off for
-// the host without touching STomp's core rewriting.
+// A host with no entry of its own is governed by the `'*'` entry of the
+// pushed list when the controller sends one: the demo's "goodies on by
+// default" (the blocker on, HTTPS upgraded, third-party cookies blocked,
+// fingerprint emulation on), keyed under `'*'` so it reaches every host
+// without an entry each. With no `'*'` entry the no-entry host is neutral,
+// as it always was (the blocker on as the controller configured it, no
+// forced HTTPS upgrade, cookies as SameSite allows), so a controller that
+// sends neither, every test suite's own and the demo opted out of defaults,
+// is unchanged. A host's own entry overrides the default. The master toggle
+// (enabled=false) turns every layer off for the host without touching STomp's
+// core rewriting.
 import { shieldsDown, type SiteShields } from '../blocker/types';
 
 export class ShieldsStore {
 	#map = new Map<string, SiteShields>();
+	/**
+	 * The baseline a host with no entry of its own is governed by: the `'*'`
+	 * entry of the pushed list, when the controller sends one (the demo's
+	 * "goodies on by default", keyed under `'*'`). Without it a no-entry host
+	 * is neutral, as it always was, so a controller that sends no `'*'` entry
+	 * (every test's own, the demo opted out) is unchanged.
+	 */
+	#default: SiteShields | undefined;
 
 	/** replace the whole allowlist (the controller sends it as one list) */
 	set(list: SiteShields[]): void {
@@ -22,10 +34,18 @@ export class ShieldsStore {
 				.filter((entry): entry is SiteShields => !!entry && !!entry.host)
 				.map((entry) => [entry.host.toLowerCase(), entry]),
 		);
+		this.#default = this.#map.get('*');
+		this.#map.delete('*');
 	}
 
+	/**
+	 * The entry that governs the host: its own, or the `'*'` default when it
+	 * has none (undefined when there is neither, which is the neutral host)
+	 */
 	get(host: string): SiteShields | undefined {
-		return host ? this.#map.get(host.toLowerCase()) : undefined;
+		return (
+			(host ? this.#map.get(host.toLowerCase()) : undefined) ?? this.#default
+		);
 	}
 
 	/** the master toggle is down for the host: every layer off */
@@ -65,10 +85,29 @@ export class ShieldsStore {
 		return entry.cookies ?? 'allow';
 	}
 
-	/** framework flag: block the page's own scripts (enforcement is phase 2) */
+	/**
+	 * Whether the page's own scripts are blocked for the host (the inject
+	 * enforces `script-src 'none'` against the page's code, src/csp.ts stage 2;
+	 * STomp's own inject is exempt). Off unless an entry turns it on, and off
+	 * when shields are down: destructive, so never a default.
+	 */
 	blockScripts(host: string): boolean {
 		const entry = this.get(host);
 		if (!entry || shieldsDown(entry)) return false;
 		return !!entry.blockScripts;
+	}
+
+	/**
+	 * Whether STomp's fingerprint emulation runs for the host (the Memory
+	 * module's per-site performance.memory, docs/process-model.md): on
+	 * everywhere by default, off only where an entry turns `blockFingerprinting`
+	 * off or shields are down, so that site reads the renderer's native values.
+	 * The shell carries the inverse to the inject as `noFingerprint`.
+	 */
+	fingerprint(host: string): boolean {
+		const entry = this.get(host);
+		if (!entry) return true;
+		if (shieldsDown(entry)) return false;
+		return entry.blockFingerprinting !== false;
 	}
 }

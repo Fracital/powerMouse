@@ -127,6 +127,18 @@ function persistShields() {
 		localStorage.setItem(SHIELDS_KEY, JSON.stringify(controller.shields.all()));
 	} catch {}
 }
+// the shields the controller starts with: what this page kept, plus a '*'
+// default entry so every host with no entry of its own gets the "goodies on"
+// defaults (the blocker on, HTTPS upgraded, fingerprint protected, third-party
+// cookies blocked; DEFAULT_SHIELDS). STOMP_SHIELDS_DEFAULTS=0 on the server
+// (the native-parity test suites) leaves it out, so no-entry hosts stay neutral
+// and those suites compare against native behaviour.
+function initialShields() {
+	const list = loadShields();
+	if (CFG.shieldsDefaults !== false && !list.some((e) => e && e.host === '*'))
+		list.push({ host: '*' });
+	return list;
+}
 // how many requests the blocker stopped or redirected for each tab's frame,
 // for the omnibar badge and the panel's count; reset when a tab navigates
 const blockedCounts = new Map();
@@ -460,7 +472,7 @@ const controllerCallbacks = {
 	},
 	// per-site shields (the content blocker's UI): the state this page kept,
 	// and a callback to persist each change back to it
-	shields: loadShields(),
+	shields: initialShields(),
 	onShieldsChange: persistShields,
 	// a site asks for a permission another site was given (the browser's own
 	// prompt asked for the first)
@@ -723,8 +735,9 @@ function activateTab(tab) {
 }
 
 // "Forget me when I close this site" (shields): when the last tab on a host
-// with that toggle on closes, clear its cookie jar. Storage clearing is a
-// later phase. The controller carries the toggle; this is the host-side half.
+// with that toggle on closes, clear its cookie jar and its virtualized storage
+// (localStorage, sessionStorage, IndexedDB, Cache Storage). The controller
+// carries the toggle; this is the host-side half.
 function forgetSiteOnClose(tab) {
 	if (!controller || !controller.shields) return;
 	let origin, host;
@@ -740,6 +753,7 @@ function forgetSiteOnClose(tab) {
 	if (tabs.some((other) => other !== tab && activeHostOf(other) === host))
 		return;
 	controller.cookies.clear(origin).catch(() => {});
+	controller.forgetStorage?.(origin).catch(() => {});
 }
 
 function activeHostOf(tab) {
@@ -2912,11 +2926,13 @@ renderBookmarks();
 // Shields: the content blocker's per-site panel (docs/adblock.md). The omnibar
 // button shows the powerMouse mark saturated when shields are up and grey when
 // down, with the tab's blocked count on a badge. Clicking it opens a popover
-// modelled on Brave Shields. Only the master toggle, the "block trackers & ads"
-// mode and the count are fully wired to real blocking in phase 1; HTTPS upgrade
-// and the third-party-cookie policy are wired in the service worker too. The
-// other rows persist their state per site (the controller carries them) and are
-// labelled honestly where their enforcement is still to come.
+// modelled on Brave Shields. Every control is real: the master toggle, the
+// "block trackers & ads" mode and count, HTTPS upgrade, block scripts, block
+// fingerprinting, the third-party-cookie policy, and "forget me on close" all
+// take effect in the service worker and the inject. The protective ones are on
+// by default (the DEFAULT_SHIELDS the controller carries, applied to every
+// host through the '*' default below); block scripts and forget-on-close are
+// destructive and stay off.
 const shieldsButton = $('toolShields');
 const shieldsBadge = $('shieldsBadge');
 const shieldsPanel = $('shieldsPanel');
@@ -3084,7 +3100,7 @@ function buildShieldsPanel(host) {
 				${shieldIcon('scripts')}
 				<div class="shieldsRowMain">
 					<div class="shieldsRowLabel">Block scripts</div>
-					<div class="shieldsNote">Breaks many sites; enforcement lands in a later phase.</div>
+					<div class="shieldsNote">Blocks the page's own scripts. Breaks many sites.</div>
 				</div>
 				<input type="checkbox" class="shieldsToggle small" id="shScripts" ${state.blockScripts ? 'checked' : ''} aria-label="Block scripts" />
 			</div>
@@ -3114,7 +3130,7 @@ function buildShieldsPanel(host) {
 				${shieldIcon('forget')}
 				<div class="shieldsRowMain">
 					<div class="shieldsRowLabel">Forget me when I close this site</div>
-					<div class="shieldsNote">Clears this site's cookies on close; storage clearing lands later.</div>
+					<div class="shieldsNote">Clears this site's cookies and storage when its last tab closes.</div>
 				</div>
 				<input type="checkbox" class="shieldsToggle small" id="shForget" ${state.forget ? 'checked' : ''} aria-label="Forget me when I close this site" />
 			</div>`;
@@ -3176,16 +3192,20 @@ function wireShieldsPanel(host) {
 		if (!e.target.closest('.shieldsDrop')) closeAllDrops();
 	};
 
-	// STomp's fingerprint emulation is core and always on: the toggle shows on
-	// and, turned off, says so honestly rather than pretending to disable it
+	// On (the default) STomp presents a consistent native-Chrome fingerprint
+	// for the site; off, the site reads this browser's own values (the inject
+	// leaves the emulation out for it, src/server/shields.ts fingerprint()).
 	const fp = q('#shFp');
 	const fpNote = q('#shFpNote');
+	const fpNoteFor = (on) =>
+		on ? '' : 'This site will read your browser’s own values.';
+	if (fpNote)
+		fpNote.textContent = fpNoteFor(
+			controller.shields.get(host).blockFingerprinting !== false,
+		);
 	fp?.addEventListener('change', (e) => {
 		setShield(host, { blockFingerprinting: e.target.checked });
-		if (fpNote)
-			fpNote.textContent = e.target.checked
-				? ''
-				: "STomp's fingerprint emulation is part of its core and stays on.";
+		if (fpNote) fpNote.textContent = fpNoteFor(e.target.checked);
 	});
 	q('#shFpMore')?.addEventListener('click', () =>
 		shieldsComingSoon('Fingerprinting'),

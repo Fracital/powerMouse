@@ -145,4 +145,40 @@ for (const [mode, base] of [
 	await page.close();
 }
 
+// The "Block fingerprinting" shield, off: the site reads the renderer's native
+// performance.memory, so the Turnstile tell returns (a frame equals its
+// embedder in the proxy's one process). The inject leaves the Memory module
+// out for a host whose shields set blockFingerprinting off (Config.noFingerprint,
+// src/server/shields.ts). On (the default, checked above) the emulation stands.
+{
+	const top = new URL(FIXTURE).hostname;
+	const childHost = new URL(CHILD).hostname;
+	const page = await openDemo(browser, PROXY);
+	await page.evaluate(
+		([a, b]) => {
+			window.controller.shields.set(a, { blockFingerprinting: false });
+			window.controller.shields.set(b, { blockFingerprinting: false });
+		},
+		[top, childHost],
+	);
+	await sleep(500); // let the shields reach the worker before the navigation
+	await submitLanding(page, target);
+	const off = await report(page);
+	ok(
+		'fingerprint off: performance.memory is still exposed and the inject is intact',
+		off?.supported && off.child?.used > 0 && off.after?.used > 0,
+		JSON.stringify({ top: off?.after?.used, child: off?.child?.used }),
+	);
+	// with the emulation on (the checks above) the child's figure is a small
+	// per-site floor, ~1-2 MB; off, both frames read the renderer's real,
+	// multi-MB shared heap (the native values the shield exposes). 4 MB sits
+	// well above the floor and below the real heap seen here (~18-27 MB).
+	ok(
+		'fingerprint off: the child reads the real process heap, not the emulated per-site floor',
+		off && off.child.used > 4 * MB && off.after.used > 4 * MB,
+		JSON.stringify({ top: off?.after?.used, child: off?.child?.used }),
+	);
+	await page.close();
+}
+
 await done(browser);

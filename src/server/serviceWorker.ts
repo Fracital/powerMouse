@@ -256,6 +256,9 @@ function registerController(
 			shields: async (list) => {
 				(await server).setShields(list);
 			},
+			forgetStorage: async (origin) => {
+				await (await server).forgetStorage(origin);
+			},
 			modules: async () => [await heldModules(), []],
 			suffixList: async () => {
 				await heldModules();

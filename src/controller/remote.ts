@@ -493,6 +493,11 @@ export class RemoteController extends EventTarget {
 			await forgetControllerIds();
 		return result;
 	});
+	/** clear a site's virtualized storage (see StompController.forgetStorage) */
+	async forgetStorage(origin: string): Promise<void> {
+		await this.#ready;
+		await this.#rpc.call('forgetStorage', origin);
+	}
 	async setTransport(transport: TransportDescriptor): Promise<void> {
 		await this.#ready;
 		await this.#rpc.call('setTransport', transport);

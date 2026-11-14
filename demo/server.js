@@ -304,6 +304,12 @@ const pageConfig = {
 	// production, where this server is the proxy origin.
 	...(process.env.STOMP_ALLOW_SELF_PROXY === '1' && { allowSelfProxy: true }),
 	...(process.env.STOMP_REWRITER === 'wasm' && { rewriter: 'wasm' }),
+	// the protective shields are on by default for every site (the demo seeds a
+	// '*' default entry, src/controller/shields.ts DEFAULT_SHIELDS). The native-
+	// parity test suites run the demo with STOMP_SHIELDS_DEFAULTS=0, so a no-
+	// entry host stays shields-neutral and their proxied requests match native
+	// (upgrade and third-party cookies untouched); unset in production.
+	shieldsDefaults: process.env.STOMP_SHIELDS_DEFAULTS !== '0',
 	...(process.env.STOMP_ADBLOCK === '0'
 		? { adblock: false }
 		: process.env.STOMP_ADBLOCK?.startsWith('{') && {

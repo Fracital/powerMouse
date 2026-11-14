@@ -41,7 +41,12 @@ import type { RewritePool } from './rewritePool';
 import { registerRewrites } from './rewrites';
 import Router, { json } from './Router';
 import { ShieldsStore } from './shields';
-import { openStorage, registerStorage, StorageHosts } from './Storage';
+import {
+	forgetSiteStorage,
+	openStorage,
+	registerStorage,
+	StorageHosts,
+} from './Storage';
 import { registerXhr } from './Sync';
 
 export interface StompServer {
@@ -54,6 +59,13 @@ export interface StompServer {
 	hostReloaded(mode: HostReload): void;
 	/** the cookie jar, for the host's cookies API */
 	cookies: Cookies;
+	/**
+	 * Clear every virtualized store of a site on the proxy origin (the "Forget
+	 * me when I close this site" shield): its localStorage, sessionStorage,
+	 * IndexedDB and Cache Storage (src/server/Storage.ts). The cookie jar is
+	 * cleared through `cookies`.
+	 */
+	forgetStorage(origin: string): Promise<void>;
 	/** replace the host's request rules */
 	setRules(rules: RequestRule[]): void;
 	/** the real URL of a routed one; the input when it is not routed */
@@ -373,6 +385,7 @@ export default async function createServer(
 		shields,
 		setShields: (list) => shields.set(list),
 		cookies,
+		forgetStorage: (origin) => forgetSiteStorage(origin, stores.storage),
 		clearCache: async () => {
 			await cache?.clear();
 			await rewrites?.clear();

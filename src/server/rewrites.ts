@@ -4345,6 +4345,14 @@ export function registerRewrites(
 				// the document imports the inject by its URL)
 				const nonce = policyNonce();
 				const policies = browserHeaders(response.headers, policyMark());
+				// "Block scripts" shield: the inject enforces script-src 'none'
+				// against the page's own code (src/csp.ts stage 2; the inject's own
+				// scripts are exempt by design). It rides as a page policy with no
+				// browser text, so the browser never gets it (a script-src header
+				// would kill STomp's shell) and only the inject's page-code
+				// enforcement sees it. Off unless the host's shields turn it on.
+				if (rewriter.shields?.blockScripts(url.url.hostname))
+					policies.texts.push(['', "script-src 'none'", 'enforce']);
 				// whether code made from a string runs, under the headers' policies
 				// and the metas' of the head (src/csp.ts ScriptFacts)
 				const decoded = decodeDocument(bytes, contentType);
@@ -4473,11 +4481,20 @@ export function registerRewrites(
 						)
 					: null;
 				if (listCsp) responseHeaders.append('content-security-policy', listCsp);
+				// the host turned fingerprint protection off in its shields: the
+				// shell tells the inject to leave the emulation out (Config.noFingerprint)
+				const noFingerprint =
+					!!rewriter.shields && !rewriter.shields.fingerprint(url.url.hostname);
 				// under a list's policy the document's realm compiles no codec
 				// module: the policy may refuse it, and would tell the page
-				const shellConfig: Config = listCsp
-					? { ...rewriter.config, codecModule: false }
-					: rewriter.config;
+				const shellConfig: Config =
+					listCsp || noFingerprint
+						? {
+								...rewriter.config,
+								...(listCsp ? { codecModule: false } : {}),
+								...(noFingerprint ? { noFingerprint: true } : {}),
+							}
+						: rewriter.config;
 				const job = prewrite(
 					markup,
 					url,

@@ -91,7 +91,13 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(MediaTaintModule);
 	client.addModule(MediaSessionModule);
 	client.addModule(IsolationModule);
-	client.addModule(MemoryModule);
+	// STomp's fingerprint emulation (the goodies-on "Block fingerprinting"
+	// shield). A host that turned it off reads the renderer's native values,
+	// so the module is left out entirely: the single, cheap gate (one flag
+	// read per frame, no per-call cost, and nothing added to the budget when it
+	// stays on, which is the default). Memory's per-site performance.memory is
+	// the emulation today; new fingerprint modules join this block.
+	if (!client.noFingerprint) client.addModule(MemoryModule);
 	client.addModule(WebRTCModule);
 	client.addModule(AnimationFramesModule);
 	client.addModule(NavigateModule);

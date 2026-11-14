@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>block scripts fixture</title>
+	</head>
+	<body>
+		<!-- the "Block scripts" shield test (test/suites/shields.mjs): with the
+		shield on, the inject enforces script-src 'none' against the page's own
+		code, so neither script below runs and the marker keeps its text, while
+		STomp's own inject still renders the page. The suite reads the result
+		through the debugger (window globals), not a page script, since a page
+		script would itself be blocked. -->
+		<p id="marker">unscripted</p>
+		<script>
+			window.__inlineRan = true;
+			document.getElementById('marker').textContent = 'inline ran';
+		</script>
+		<script src="/pages/shields-scripts-ext.js"></script>
+	</body>
+</html>

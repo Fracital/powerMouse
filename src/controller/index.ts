@@ -2096,6 +2096,16 @@ export class StompController extends EventTarget {
 			await forgetControllerIds();
 		return result;
 	});
+	/**
+	 * Clear a site's virtualized storage (localStorage, sessionStorage,
+	 * IndexedDB, Cache Storage) on the proxy origin: the "Forget me when I close
+	 * this site" shield, called by the host once the site's last tab closes. The
+	 * cookie jar is wiped through `cookies.clear(origin)`.
+	 */
+	async forgetStorage(origin: string): Promise<void> {
+		await this.#ready;
+		await this.#call('forgetStorage', origin);
+	}
 	/** the proxied URL a frame should navigate to in order to load `url` */
 	async route(url: string): Promise<string> {
 		await this.#ready;

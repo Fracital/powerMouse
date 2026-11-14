@@ -119,6 +119,16 @@ export interface Config {
 	 * cosmetic rules and the scriptlets it is handed (docs/adblock.md).
 	 */
 	adblock?: boolean;
+	/**
+	 * @internal Set for a document whose host turned fingerprint protection
+	 * off in its shields (`blockFingerprinting` off, or shields down): the
+	 * inject leaves STomp's fingerprint emulation out so the page reads the
+	 * renderer's native values (today the Memory module's per-site
+	 * performance.memory, src/inject/dom/document.ts). Absent (the default) the
+	 * emulation runs, as it always has. Decided per document by the service
+	 * worker from the per-site shields (src/server/shields.ts fingerprint()).
+	 */
+	noFingerprint?: boolean;
 	/** the served file names, when the host renamed them (see Assets) */
 	assets?: Assets;
 	/**

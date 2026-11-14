@@ -258,6 +258,11 @@ async function startServersOnce(name) {
 		WISP_ALLOW_LOOPBACK: '1',
 		...blockerEnv(fixturePort),
 		STOMP_ISOLATION: process.env.STOMP_ISOLATION || ISOLATION_DEFAULT,
+		// the demo seeds a '*' goodies-on shields default in production; the
+		// suites run it shields-neutral so a no-entry host's proxied requests
+		// match native (mixed-content and the cookie suites compare them). A
+		// suite that drives the demo and wants the defaults sets it to '1'.
+		STOMP_SHIELDS_DEFAULTS: process.env.STOMP_SHIELDS_DEFAULTS ?? '0',
 		...SUITE_ENV[name],
 	};
 	delete env.STOMP_PROXY_ORIGIN;
