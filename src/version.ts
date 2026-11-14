@@ -13,27 +13,20 @@ export const BUILD: string =
 	'dev';
 
 /**
- * What the rewriter library asset is asked for by, after a `?`: the hash of
- * the file this build made (build.js), so the URL of another build's is
- * another URL and a host may let browsers keep the file for good. A
- * worker's synchronous request for it must not wait for a revalidation.
+ * What the light rewriter library asset is asked for by, after a `?`: the
+ * hash of the file this build made (build.js), so the URL of another build's
+ * is another URL and a host may let browsers keep the file for good. A
+ * synchronous request for it must not wait for a revalidation.
  */
 export const LIBRARY: string =
 	(process.env.STOMP_LIBRARY as string | undefined) || BUILD;
 
 /**
- * The name the rewriter library asset assigns its factory to (build.js
- * writes the file as `__stompRewriterLib=function(__stompRealm){...};`).
- * Loaded by a top's shell it is a global for the moment between that
- * script and the inject bundle, which takes it and deletes the name
- * (src/inject/rewriter.ts); evaluated by a library it is the parameter of
- * the function that evaluates the text (src/rewriterLight.ts).
- */
-export const LIBRARY_FACTORY = '__stompRewriterLib';
-
-/**
- * The name the rewriter library's file assigns the document's light library
- * to, in a second statement after the library's (build.js): a document
- * bundle carries none of its own (src/inject/rewriter.ts lightFactory)
+ * The name the light rewriter library asset assigns its factory to (build.js
+ * writes the file as `__stompRewriterLight=function(__stompRealm){...};`).
+ * Loaded by a top's shell it is a global for the moment between that script
+ * and the inject bundle, which takes it and deletes the name
+ * (src/inject/rewriter.ts); evaluated by a copy it is the parameter of the
+ * function that evaluates the text (src/rewriterLight.ts).
  */
 export const LIGHT_FACTORY = '__stompRewriterLight';

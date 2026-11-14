@@ -35,12 +35,12 @@ import { codecType, type Config } from '../config';
 import { LAZY_CONTEXTS, MAY_ROUTE } from '../cssURL';
 import { keepSource } from '../functionSource';
 import type { ScriptSource } from '../rewriteJS';
-import type { RewriterLib } from '../rewriterLib';
+import type { RewriterLib } from '../rewriterLight';
 import { provideRewriters } from '../rewriters';
 import { blobOriginPair, routeScopeList } from '../routeURL';
 import type { ScriptType } from '../scriptRoutes';
 import type StompURL from '../StompURL';
-import { LIBRARY_FACTORY, LIGHT_FACTORY } from '../version';
+import { LIGHT_FACTORY } from '../version';
 import { knownSite } from './sites';
 import { trustedFunction } from './trusted';
 
@@ -68,6 +68,7 @@ const nativeConsole = globalThis.console;
 // the inject wraps these methods later, and a page may replace them
 const requestOpen = XMLHttpRequest.prototype.open;
 const requestSend = XMLHttpRequest.prototype.send;
+const requestOverrideMime = XMLHttpRequest.prototype.overrideMimeType;
 const requestStatus = Reflect.getOwnPropertyDescriptor(
 	XMLHttpRequest.prototype,
 	'status',
@@ -83,27 +84,11 @@ const now = (): number =>
 const toSource = Function.prototype.toString;
 
 /**
- * The rewriter library's factory, when the document's shell loaded the
- * asset before this bundle (the service worker writes that script into a
- * proxied top's shell: rewriteHTML.ts). The file assigns it to a global
- * the shell made non-enumerable; it is taken and the name is gone here,
- * while the bundle loads, before the client exists and long before any
- * script of the page.
- */
-const given: Function | null = (() => {
-	const descriptor = Reflect.getOwnPropertyDescriptor(
-		globalThis,
-		LIBRARY_FACTORY,
-	);
-	if (!descriptor) return null;
-	Reflect.deleteProperty(globalThis, LIBRARY_FACTORY);
-	return typeof descriptor.value === 'function' ? descriptor.value : null;
-})();
-
-/**
- * The document's light library's factory, where the shell loaded the
- * rewriter library's file (its second statement, build.js), taken the
- * same way
+ * The document's light library's factory, when the shell loaded the asset
+ * before this bundle (the service worker writes that script into a proxied
+ * top's shell: rewriteHTML.ts). The file assigns it to a global the shell
+ * made non-enumerable; it is taken and the name is gone here, while the
+ * bundle loads, before the client exists and long before any page script.
  */
 const givenLight: Function | null = (() => {
 	const descriptor = Reflect.getOwnPropertyDescriptor(
@@ -121,27 +106,18 @@ type Factory = (realm?: Record<string, unknown>) => RewriterLib;
 let light: Factory | null =
 	rewriterLib ?? (givenLight as Factory | null) ?? null;
 
-/** where the light library's statement starts in the rewriter library's file */
-const LIGHT_START = `\n${LIGHT_FACTORY}=function(`;
-
-/** the rewriter library's own statement of the file's text */
-const libraryPart = (text: string): string => {
-	const at = text.indexOf(LIGHT_START);
-	return at === -1 ? text : text.slice(0, at);
-};
-
-/** the file's text, once this realm asked for it (lightFactory) */
+/** the light library file's text, once this realm asked for it (lightFactory) */
 let fetched: string | null = null;
 
 /**
  * The light library's factory. A worker's bundle carries it; a document's
  * does not (a frame uses its top's library and evaluates none): it is the
- * rewriter library file's second statement, which a top's shell loaded.
- * Anywhere else (a frame's own copy, a top whose shell did not load the
- * file) it is made from the statement's text: its top's, or the file's,
- * asked for with one synchronous request (as the rewriter library is), and
- * evaluated here as the body of a function that has the name as its
- * parameter, which writes no global. Throws when it cannot be had.
+ * asset `rewriterLib` (now the light library alone), which a top's shell
+ * loaded. Anywhere else (a frame's own copy, a top whose shell did not load
+ * the file) it is made from the file's text: its top's, or the file's, asked
+ * for with one synchronous request, and evaluated here as the body of a
+ * function that has the name as its parameter, which writes no global.
+ * Throws when it cannot be had.
  */
 export function lightFactory(): Factory {
 	if (light) return light;
@@ -152,13 +128,7 @@ export function lightFactory(): Factory {
 	} catch (error) {
 		// the realm above is gone or of another kind: this one asks
 	}
-	if (text === null) {
-		fetched ??= fetchLibrary().source;
-		const at = fetched.indexOf(LIGHT_START);
-		if (at === -1)
-			throw new Error('Stomp: the rewriterLib asset has no light library');
-		text = fetched.slice(at + 1);
-	}
+	if (text === null) text = fetched ??= fetchLibrary().source;
 	let made: unknown;
 	try {
 		if (sharing.evaluates?.() === false) throw new Error('no eval');
@@ -191,51 +161,17 @@ export function lightText(): string | null {
 		: null;
 }
 
-/**
- * That factory, which makes the library itself: with `rewriter: 'js'` a
- * top evaluates its text in the realm it shares as the whole of its
- * library (src/inject/dom/rewriterRealm.ts), which then never asks for
- * another, and so does a copy this realm makes for itself (ownRewriter).
- * Null without one.
- */
-export function givenLibrary():
-	((realm?: Record<string, unknown>) => RewriterLib) | null {
-	return given as ((realm?: Record<string, unknown>) => RewriterLib) | null;
-}
-
-/**
- * The rewriter library's text, where this realm's shell loaded the file:
- * what a library that needs it is handed (a top's light library with
- * `rewriter: 'wasm'`, a sandboxed frame's own copy). Null without it.
- */
-export function libraryText(): string | null {
-	return given
-		? `${LIBRARY_FACTORY}=${Reflect.apply(toSource, given, []) as string};`
-		: null;
-}
-
 /** how this bundle's first client lets its rewrites share (shareRewriter) */
 export interface RewriterSharing {
 	/**
-	 * The rewriter library loaded into a library the provider answered, by
-	 * the realm that made it (a top, for the frames under it); false when
-	 * that realm could not, and this one loads it itself
-	 */
-	load?: (library: RewriterLib) => boolean;
-	/**
-	 * The rewriter library's text from the realm above this one (a frame's
-	 * top holds it), for this realm's own copy; null when it has none
-	 */
-	text?: () => string | null;
-	/**
-	 * The light library's statement from the realm above (lightFactory)
+	 * The light library's statement from the realm above this one (a frame's
+	 * top holds it), for this realm's own copy (lightFactory)
 	 */
 	lightText?: () => string | null;
 	/**
-	 * The rewriter library's factory (or the light library's, by `name`)
-	 * made from its text in this realm, where this realm's own copy cannot
-	 * make it (a document whose script policy refuses eval,
-	 * src/inject/dom/rewriterRealm.ts); null where it can
+	 * The light library's factory made from its text in this realm, where
+	 * this realm's own copy cannot make it (a document whose script policy
+	 * refuses eval, src/inject/dom/rewriterRealm.ts); null where it can
 	 */
 	factory?: (
 		text: string,
@@ -253,6 +189,7 @@ let own: RewriterLib | null = null;
 let shared: (() => RewriterLib | null) | null = null;
 let sharing: RewriterSharing = {};
 let libraryURL: (() => string) | null = null;
+let coreURL: (() => string) | null = null;
 
 /**
  * Where this bundle's rewrites go when they can share a library: `provider`
@@ -272,53 +209,81 @@ export function shareRewriter(
 }
 
 /**
- * Where the rewriter library asset is (routeURL.ts rewriterLibJS), said by
- * the bundle's first client: read when a call first needs the library
+ * Where the light library asset is (routeURL.ts rewriterLibJS), said by the
+ * bundle's first client: read when this realm's own copy first needs it (a
+ * worker, a sandboxed frame; a document under a top uses the top's)
  */
 export function rewriterLibraryAt(url: () => string): void {
 	libraryURL ??= url;
 }
 
-/** loads that failed in a row: a host that stopped serving the asset is not asked on every rewrite */
+/**
+ * Where the rewriter's wasm core module is (routeURL.ts coreWasm), said by
+ * the bundle's first client: fetched and compiled here when a rewrite is
+ * needed before the controller's compiled module has arrived (requestModules)
+ */
+export function coreModuleAt(url: () => string): void {
+	coreURL ??= url;
+}
+
+/** loads that failed in a row: a host that stopped serving an asset is not asked on every rewrite */
 let failedLoads = 0;
 const LOAD_ATTEMPTS = 3;
 
 /**
- * Load the rewriter library into `lib` from this realm: its text, which
- * `lib` evaluates in its own realm. The text is the one this realm's shell
- * loaded or the one its top holds; without either it is fetched with one
- * synchronous request for the asset, which the calling script waits for,
- * once per library. Throws when the asset cannot be had or is not the
- * library.
+ * Give `lib` the rewriter's wasm core module, for a rewrite needed before the
+ * controller's compiled module has arrived in this realm (a page's first task
+ * often rewrites something: eval, new Function, an inline script or style).
+ * The bytes are fetched with one synchronous request (the controller fetched
+ * the same URL when it started, so the answer is in the HTTP cache) and
+ * compiled here with the native WebAssembly taken before the page wrapped it;
+ * `lib` reads no property of the module and only instantiates it. The
+ * controller's module, posted compiled, replaces this one when it arrives.
+ * Throws when the module cannot be had or compiled (a page whose policy
+ * refuses WebAssembly, where the codec module could not compile either).
  */
-export function loadRewriterLibrary(lib: RewriterLib): void {
-	let source = libraryText();
-	if (source === null && lib === own)
-		try {
-			const held: unknown = sharing.text?.();
-			if (typeof held === 'string') source = held;
-		} catch (error) {
-			// the realm above is gone or of another kind: this one asks
-		}
-	// (negative: no request was made)
-	let waited = -1;
-	if (source === null && fetched !== null) source = libraryPart(fetched);
-	if (source === null) {
-		const answer = fetchLibrary();
-		fetched = answer.source;
-		source = libraryPart(answer.source);
-		waited = answer.waited;
-	}
-	// this realm's own copy, in a document that may not evaluate a string:
-	// the rewriter library takes its place
-	const factory = lib === own ? sharing.factory?.(source) : null;
-	if (factory) own = factory(realm);
-	else settle(lib, lib.load(source, waited) !== true);
+export function provideModule(lib: RewriterLib): void {
+	if (lib.holds('core')) return;
+	if (failedLoads >= LOAD_ATTEMPTS)
+		throw new Error('Stomp: the rewriter module did not load');
+	failedLoads++;
+	const bytes = fetchCoreBytes();
+	const Module = realm.WebAssembly.Module;
+	if (!Module) throw new Error('Stomp: no WebAssembly to compile the module');
+	const module = Reflect.construct(Module, [bytes]) as WebAssembly.Module;
+	lib.adopt('core', module);
 	failedLoads = 0;
 }
 
 /**
- * The rewriter library's file, with one synchronous request for the asset,
+ * The core module's bytes, with one synchronous request. A window's
+ * synchronous XHR cannot ask for an ArrayBuffer, so the bytes are read as a
+ * `x-user-defined` string and unpacked a byte at a time. Throws when the
+ * asset cannot be had.
+ */
+function fetchCoreBytes(): Uint8Array {
+	const url = coreURL?.();
+	if (!url) throw new Error('Stomp: no rewriter module to load');
+	const request = new XMLHttpRequest();
+	Reflect.apply(requestOpen, request, ['GET', url, false]);
+	Reflect.apply(requestOverrideMime, request, [
+		'text/plain; charset=x-user-defined',
+	]);
+	Reflect.apply(requestSend, request, []);
+	const status: unknown = Reflect.apply(requestStatus, request, []);
+	if (status !== 200)
+		throw new Error(
+			`Stomp: the rewriter module did not load (HTTP ${String(status)})`,
+		);
+	const binary = text(Reflect.apply(requestText, request, []));
+	const bytes = new Uint8Array(binary.length);
+	for (let i = 0; i < binary.length; i++)
+		bytes[i] = binary.charCodeAt(i) & 0xff;
+	return bytes;
+}
+
+/**
+ * The light library's file, with one synchronous request for the asset,
  * which the calling script waits for. Throws when it cannot be had.
  */
 function fetchLibrary(): { source: string; waited: number } {
@@ -342,13 +307,13 @@ function fetchLibrary(): { source: string; waited: number } {
 }
 
 /**
- * This realm's own copy of the library, evaluated the first time it is
- * needed: the rewriter library itself where the shell loaded it (a top
- * that could make no realm to share), else the bundle's light one.
+ * This realm's own copy of the light library, evaluated the first time it is
+ * needed: a worker's, a sandboxed frame's, a frame under a top of another
+ * build (src/inject/rewriter.ts).
  */
 export function ownRewriter(): RewriterLib {
 	if (own) return own;
-	const lib = ((givenLibrary() as Factory | null) ?? lightFactory())(realm);
+	const lib = lightFactory()(realm);
 	own = lib;
 	if (handed) adoptHanded(lib, handed);
 	return lib;
@@ -384,26 +349,18 @@ function library(): RewriterLib {
 
 /**
  * `work` asked of the library for this realm's next call. When the call
- * stopped because the library it was asked of holds no rewriter library,
- * that is loaded (by the realm the library is shared from where it can:
- * a frame's own requests may be refused by its `allow` attribute) and the
- * call is made again.
+ * stopped because the library it was asked of holds no wasm module yet (a
+ * rewrite early in the realm's life, before the controller's compiled module
+ * arrived), the module is fetched and compiled here (provideModule) and the
+ * call is made again. A frame's rewrite adopts into its top's shared library,
+ * so one fetch serves the frames too.
  */
 function ask<T>(work: (lib: RewriterLib) => T): [RewriterLib, T] {
 	const lib = library();
 	const result = work(lib);
 	if (lib.needs() !== true) return [lib, result];
-	let loaded = false;
-	if (lib !== own && sharing.load)
-		try {
-			loaded = sharing.load(lib) === true;
-		} catch (error) {
-			// the realm it is shared from could not: this one tries
-		}
-	if (!loaded) loadRewriterLibrary(lib);
-	// (this realm's own copy may be another one now)
-	const holder = library();
-	return [holder, work(holder)];
+	provideModule(lib);
+	return [lib, work(lib)];
 }
 
 /**
@@ -480,7 +437,6 @@ export function modifyJS(
 	config: Config,
 	type: ScriptType = 'generic',
 	preamble = '',
-	compact?: boolean,
 	source?: ScriptSource,
 ): string {
 	const context = contextOf(url, config);
@@ -490,7 +446,6 @@ export function modifyJS(
 			text(script),
 			text(type),
 			text(preamble),
-			compact === undefined ? -1 : compact ? 1 : 0,
 			source === undefined ? '' : JSON.stringify(source),
 		),
 	);

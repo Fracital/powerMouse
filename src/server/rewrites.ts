@@ -3841,8 +3841,8 @@ export function registerRewrites(
 				...(init.membrane === false ? { membrane: false } : {}),
 				// pages get emulated service workers (docs/service-workers.md)
 				...(init.serviceWorkers === false ? { serviceWorkers: false } : {}),
-				// the wasm rewriters answer where a thread holds them
-				...(init.rewriter === 'wasm' ? { rewriter: 'wasm' as const } : {}),
+				// the rewriter is the wasm core module (the only one)
+				rewriter: 'wasm' as const,
 				...(init.assets ? { assets: init.assets } : {}),
 				// the blocker is on: every document's inject takes its natives
 				// for the cosmetic rules before it hooks anything
@@ -3902,36 +3902,16 @@ export function registerRewrites(
 		type: ScriptType,
 		note: Note,
 	): Promise<string> => {
-		let split = false;
 		const told: RewrittenBy = {};
 		const pooled = rewriter.pool?.live
-			? await rewriter.pool.rewrite(
-					text,
-					url,
-					rewriter.config,
-					type,
-					() => (split = true),
-					told,
-				)
+			? await rewriter.pool.rewrite(text, url, rewriter.config, type, told)
 			: null;
-		note.rewriteIn =
-			pooled === null ? 'service-worker' : split ? 'pool split' : 'pool';
+		note.rewriteIn = pooled === null ? 'service-worker' : 'pool';
 		const output =
-			pooled ??
-			modifyJS(
-				text,
-				url,
-				rewriter.config,
-				type,
-				'',
-				undefined,
-				undefined,
-				told,
-			);
-		// which backend made it: the module, or the JavaScript rewriter (the
-		// module declined the script, the thread held none, or the script was
-		// split, whose parts are the JavaScript rewriter's)
-		if (rewriter.config.rewriter === 'wasm') note.rewriteBy = told.by ?? 'js';
+			pooled ?? modifyJS(text, url, rewriter.config, type, '', undefined, told);
+		// the wasm module made it (the only rewriter), or it was handed back
+		// where no shipped syntax could be rewritten
+		note.rewriteBy = told.by ?? 'wasm';
 		return output;
 	};
 	// the config a script's rewrite depends on, for its cache key: all of it
@@ -3976,10 +3956,10 @@ export function registerRewrites(
 		const pool = rewriter.pool;
 		if (!pool?.live) return null;
 		const config = rewriter.config;
-		// `rewriter: 'wasm'`: one pass of the scanner over the markup in place
-		// of the three expressions, and the same answer
-		const wasm = config.rewriter === 'wasm';
-		const scanned = wasm ? scanMarkup(markup) : null;
+		// one pass of the wasm scanner over the markup finds the inline scripts
+		// and styles and whether the document has a <base> (null when the
+		// thread holds no module yet: the markup is scanned in JavaScript)
+		const scanned = scanMarkup(markup);
 		if (scanned ? scanned.base : hasBase(markup)) return null;
 		const { scripts, styles } = inlineSources(markup, scanned ?? undefined);
 		if (!scripts.length && !styles.length) return null;
@@ -4040,17 +4020,13 @@ export function registerRewrites(
 		return {
 			dispatched: Promise.all(dispatches).then(() => {}),
 			finish: async () => {
-				// the module, when it is still being compiled
-				if (wasm && styles.length) await scannerSettled();
+				// the scanner module, when it is still being compiled
+				if (styles.length) await scannerSettled();
 				// as the client's prepareStyleText makes them
 				const styleOutputs = styles.map(
 					([source, start, end]): Prewritten['styles'][number] => {
 						try {
-							return [
-								start,
-								end,
-								modifyCSS(source, url, 'stylesheet', wasm ? {} : undefined),
-							];
+							return [start, end, modifyCSS(source, url, 'stylesheet', {})];
 						} catch (error) {
 							return [start, end, rewriteCSSValueURLs(source, url)];
 						}
@@ -4215,11 +4191,10 @@ export function registerRewrites(
 				if (!response.ok) return false;
 				const text = await response.text();
 				try {
-					if (rewriter.config.rewriter !== 'wasm') return modifyCSS(text, url);
-					// the module rewrites the sheet (waited for when this worker
-					// has only just been handed it), and the request log says
-					// whether it did or css-tree had to (a sheet with nothing to
-					// route is looked into by neither)
+					// the wasm scanner rewrites the sheet (waited for when this
+					// worker has only just been handed the module), and the request
+					// log says whether it did (a sheet with nothing to route is not
+					// looked into)
 					await scannerSettled();
 					const told: StyleRewrittenBy = {};
 					const output = modifyCSS(text, url, 'stylesheet', told);

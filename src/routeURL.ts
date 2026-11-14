@@ -244,12 +244,22 @@ export function injectWorkerJS(url: StompURL, config?: Config) {
 }
 
 /**
- * The rewriter library asset (a top's shell loads it, src/rewriteHTML.ts;
- * a worker fetches it, src/inject/rewriter.ts), by the URL the controller
- * fetched it with when it started: the same cache entry
+ * The light rewriter library asset (a top's shell loads it,
+ * src/rewriteHTML.ts; a worker or sandboxed frame fetches it,
+ * src/inject/rewriter.ts), by the URL the controller fetched it with when it
+ * started: the same cache entry
  */
 export function rewriterLibJS(url: StompURL, config?: Config) {
 	return `${assetBase(url, config)}${libraryFile(config?.assets)}`;
+}
+
+/**
+ * The rewriter's wasm core module, by the URL the controller fetched it with
+ * (src/controller/index.ts), so a page's synchronous fetch of it on a cold
+ * rewrite (src/inject/rewriter.ts) is answered from the HTTP cache
+ */
+export function coreWasm(url: StompURL, config?: Config) {
+	return `${assetBase(url, config)}${assetName(config?.assets, 'core')}`;
 }
 
 /** the rewriter library's file as it is asked for: its name and its build's hash */

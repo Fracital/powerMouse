@@ -1,5 +1,5 @@
-import type { RewriterLib } from '../../rewriterLib';
-import { LIBRARY_FACTORY } from '../../version';
+import type { RewriterLib } from '../../rewriterLight';
+import { LIGHT_FACTORY } from '../../version';
 import { lightFactory } from '../rewriter';
 import { trustedScript } from '../trusted';
 
@@ -117,8 +117,8 @@ export function libraryFactoryFromScript(
 	document: Document,
 	text: string,
 	nonce: string,
-	/** the name the text assigns: the rewriter library's, or the light library's */
-	name: string = LIBRARY_FACTORY,
+	/** the name the text assigns (the light library's) */
+	name: string = LIGHT_FACTORY,
 	/** the realm `document` is of, where the name is made (this one's by default) */
 	global: typeof globalThis = globalThis,
 ): ((realm?: Record<string, unknown>) => RewriterLib) | null {

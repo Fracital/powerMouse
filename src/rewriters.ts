@@ -4,14 +4,11 @@ import type { ScriptType } from './scriptRoutes';
 import type StompURL from './StompURL';
 
 /**
- * The rewriters that need a parser (meriyah and escodegen for scripts,
- * css-tree for stylesheets), for the light modules that route URLs and only
- * sometimes rewrite what they route: a data: script or stylesheet, a
- * javascript: URL. Every bundle that holds the rewriters themselves gets
- * them by importing them (rewriteJS.ts and rewriteCSS.ts provide themselves
- * when they load); the inject bundles provide stand-ins that reach the
- * rewriter library, which a frame loads only when it rewrites something or
- * shares with its top (src/inject/rewriter.ts).
+ * The rewriters the light modules reach when they route a URL that itself
+ * holds something to rewrite (a data: script or stylesheet, a javascript:
+ * URL). rewriteJS.ts and rewriteCSS.ts provide the wasm-backed ones when they
+ * load; the inject bundles provide the same through the light library
+ * (src/rewriterLight.ts).
  */
 export interface Rewriters {
 	modifyJS: (
@@ -20,7 +17,6 @@ export interface Rewriters {
 		config: Config,
 		type?: ScriptType,
 		preamble?: string,
-		compact?: boolean,
 		source?: ScriptSource,
 	) => string;
 	modifyCSS: (script: string, url: StompURL, context?: string) => string;

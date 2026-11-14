@@ -3,7 +3,6 @@
 // controller and its declarations import, because this names the rewriter.
 import type { Config } from './config';
 import type { RewrittenBy, ScriptSource, ScriptType } from './rewriteJS';
-import type { SplitPlan } from './splitRewrite';
 
 /** rpc id on a rewrite worker's port */
 export const REWRITE_RPC = 'stomp-rewrite';
@@ -26,28 +25,18 @@ export interface RewriteRequest {
 	type: ScriptType;
 	/** the service worker's route scopes (routeURL), origin included */
 	scopes: string[];
-	/** printed compact whatever it looks like: a part of a split script (splitRewrite) */
-	compact?: boolean;
-	/** where its functions' text is kept: a part of a split script */
+	/** where its functions' text is kept (a javascript: URL) */
 	source?: ScriptSource;
 	/** code to run first, after the directive prologue (an inline script's currentScript restore) */
 	preamble?: string;
 }
 
-/** a script's output with the backend that made it: the answer under `rewriter: 'wasm'`, where the module was asked (the output alone otherwise) */
+/** a script's output with the backend that made it (always the wasm module); the output alone when nothing rewrote it */
 export interface RewriteAnswer extends Required<RewrittenBy> {
 	output: string;
-}
-
-/** a large script to plan a split of (splitRewrite) */
-export interface PlanRequest {
-	script: string;
-	/** how many groups */
-	parts: number;
 }
 
 /** implemented by a rewrite worker (src/rewriteWorker.ts), called by the service worker */
 export type RewriteBound = {
 	rewrite: [RewriteRequest, string | RewriteAnswer];
-	plan: [PlanRequest, SplitPlan | null];
 };

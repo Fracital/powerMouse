@@ -16,7 +16,6 @@ import {
 	RewriteRequest,
 } from './rewriteMessages';
 import { addRouteScopes } from './routeURL';
-import { planSplit } from './splitRewrite';
 import StompURL from './StompURL';
 import { REWRITE_MODULES, REWRITE_PORT } from './transport/messages';
 import { RpcHelper } from './transport/rpc';
@@ -40,7 +39,6 @@ function rewrite(request: RewriteRequest): string | RewriteAnswer {
 		request.config,
 		request.type,
 		request.preamble ?? '',
-		request.compact,
 		request.source,
 		told,
 	);
@@ -51,7 +49,6 @@ function serve(port: MessagePort) {
 	const rpc = new RpcHelper<RewriteBound, Record<string, never>>(
 		{
 			rewrite: async (request) => [rewrite(request), []],
-			plan: async (request) => [planSplit(request.script, request.parts), []],
 		},
 		REWRITE_RPC,
 		(data, transfer) => port.postMessage(data, transfer),

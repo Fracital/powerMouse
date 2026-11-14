@@ -6,13 +6,11 @@
 // with the page or a crash) or the worker took longer than the timeout. A
 // port that closed or timed out is not used again.
 import type { Config } from '../config';
-import { minified, RewrittenBy, ScriptSource, ScriptType } from '../rewriteJS';
+import { RewrittenBy, ScriptSource, ScriptType } from '../rewriteJS';
 import { REWRITE_READY, REWRITE_RPC, RewriteBound } from '../rewriteMessages';
 import { routeScopeList } from '../routeURL';
-import { SPLIT_MIN, splitSources, stitch } from '../splitRewrite';
 import type StompURL from '../StompURL';
 import { RpcHelper } from '../transport/rpc';
-import { hasRewriter } from '../wasm/rewriter';
 
 interface Member {
 	rpc: RpcHelper<Record<string, never>, RewriteBound>;
@@ -121,7 +119,6 @@ export class RewritePool {
 		url: StompURL,
 		config: Config,
 		type: ScriptType,
-		compact?: boolean,
 		source?: ScriptSource,
 		preamble?: string,
 		told?: RewrittenBy,
@@ -136,23 +133,19 @@ export class RewritePool {
 				config,
 				type,
 				scopes: routeScopeList(),
-				...(compact === undefined ? {} : { compact }),
 				...(source === undefined ? {} : { source }),
 				...(preamble ? { preamble } : {}),
 			},
 			script.length,
 		);
-		// under `rewriter: 'wasm'` the worker says which backend answered
+		// the worker says the wasm module rewrote it (the only backend)
 		if (answer === null || typeof answer === 'string') return answer;
 		if (told) told.by = answer.by;
 		return answer.output;
 	}
 	/**
-	 * A document's inline script, rewritten as the document's client would
-	 * (with its preamble): split across the workers when it is a shape the
-	 * split knows (its preamble goes with the skeleton, where the whole's
-	 * directive prologue is), else by the worker with the least in hand.
-	 * Null when none is ready or answered in time.
+	 * A document's inline script, rewritten by the worker with the least in
+	 * hand (with its preamble). Null when none is ready or answered in time.
 	 */
 	async rewriteInline(
 		script: string,
@@ -161,108 +154,26 @@ export class RewritePool {
 		type: ScriptType,
 		preamble: string,
 	): Promise<string | null> {
-		const parts = await this.#split(script, url, config, type, preamble);
-		if (parts !== null) return parts;
-		return this.#rewriteOne(
-			script,
-			url,
-			config,
-			type,
-			undefined,
-			undefined,
-			preamble,
-		);
+		return this.#rewriteOne(script, url, config, type, undefined, preamble);
 	}
 	/**
-	 * A large webpack or Closure bundle rewritten by every live worker at
-	 * once (splitRewrite): one plans the split, then the skeleton and each
-	 * group go, the largest first, to the one with the least in hand. Null
-	 * when it is not split (not a page's classic script, too small, not
-	 * minified, fewer than two workers,
-	 * a shape not recognised) or a part did not come back: the whole is then
-	 * rewritten as one.
-	 */
-	async #split(
-		script: string,
-		url: StompURL,
-		config: Config,
-		type: ScriptType,
-		preamble = '',
-	): Promise<string | null> {
-		if (type !== 'generic' || script.length < SPLIT_MIN) return null;
-		// the wasm rewriter takes the whole in less time than the split's
-		// plan alone (12 MB: 0.4 s against a 0.9 s parse), so once the
-		// modules are in (this thread's arrive with the workers') nothing is
-		// split
-		if (config.rewriter === 'wasm' && hasRewriter()) return null;
-		const live = this.#members.filter(
-			(member) => member.alive && member.ready,
-		).length;
-		if (live < 2 || !minified(script)) return null;
-		const plan = await this.#call(
-			'plan',
-			{ script, parts: live },
-			script.length,
-		);
-		if (!plan) return null;
-		const { skeleton, parts, skeletonSource, partSources } = splitSources(
-			script,
-			plan,
-		);
-		// the largest first, each to the worker with the least in hand, so
-		// the work evens out across them
-		const texts = [skeleton, ...parts];
-		const outputs: (string | null)[] = new Array(texts.length);
-		await Promise.all(
-			texts
-				.map((text, i) => i)
-				.sort((a, b) => texts[b]!.length - texts[a]!.length)
-				.map(async (i) => {
-					outputs[i] = await this.#rewriteOne(
-						texts[i]!,
-						url,
-						config,
-						type,
-						true,
-						i === 0 ? skeletonSource : partSources[i - 1],
-						i === 0 ? preamble : undefined,
-					);
-				}),
-		);
-		if (outputs.some((output) => output === null)) return null;
-		// a part the rewriter could not parse on its own comes back as it
-		// went (the rewriter's fallback), which would put code that was
-		// never rewritten into the whole: the whole is rewritten instead (a
-		// rewritten part never equals its input: a run's wrapper has line
-		// breaks the compact output does not, a group of modules comes back
-		// with a mark in each function)
-		if (parts.some((part, i) => outputs[i + 1] === part)) return null;
-		return stitch(outputs[0]!, outputs.slice(1) as string[], plan);
-	}
-	/**
-	 * The script rewritten by the workers, or null when the caller must
-	 * rewrite it itself. `split` is told when it was split across them,
-	 * `told` which backend rewrote it whole (`rewriter: 'wasm'`).
+	 * The script rewritten by a worker, or null when the caller must rewrite
+	 * it itself (none is ready or answered in time). `told` is which backend
+	 * rewrote it: always the wasm module. The wasm rewriter takes even a 12 MB
+	 * bundle whole faster than the old split's plan alone, so nothing is split.
 	 */
 	async rewrite(
 		script: string,
 		url: StompURL,
 		config: Config,
 		type: ScriptType,
-		split?: () => void,
 		told?: RewrittenBy,
 	): Promise<string | null> {
-		const parts = await this.#split(script, url, config, type);
-		if (parts !== null) {
-			split?.();
-			return parts;
-		}
 		return this.#rewriteOne(
 			script,
 			url,
 			config,
 			type,
-			undefined,
 			undefined,
 			undefined,
 			told,

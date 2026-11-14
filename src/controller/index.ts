@@ -29,7 +29,6 @@ import {
 	type HookErrorInfo,
 	type InitHooks,
 } from '../hooks';
-import { libraryFile } from '../routeURL';
 import { isUrlLike, urlLike } from '../StompURL';
 import { constructTransport, resolveHttp3 } from '../transport/construct';
 import type { HostReload, RequestRule } from '../transport/messages';
@@ -229,16 +228,6 @@ export interface ControllerInit {
 	 * behave alike.)
 	 */
 	membrane?: boolean;
-	/**
-	 * The rewriter backend, `'js'` by default. `'wasm'` loads the Rust
-	 * modules under `init.assets` (`core`; docs/rust-plan.md) once and
-	 * hands them to the rewrite workers (compiled) and the service worker
-	 * (as bytes it compiles itself), which answer from them wherever a
-	 * module takes the input and from the JavaScript rewriters otherwise, so
-	 * a module that is missing, declines or traps never changes what a page
-	 * gets.
-	 */
-	rewriter?: 'wasm' | 'js';
 	/**
 	 * Emulated service workers, on unless `false` (docs/service-workers.md).
 	 * A proxied page's `navigator.serviceWorker` works: its worker script
@@ -910,7 +899,8 @@ export class StompController extends EventTarget {
 			...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 			...(init.membrane === false ? { membrane: false } : {}),
 			...(init.serviceWorkers === false ? { serviceWorkers: false } : {}),
-			...(init.rewriter === 'wasm' ? { rewriter: 'wasm' } : {}),
+			// the rewriter is wasm-only (the core module); every thread uses it
+			rewriter: 'wasm',
 			...(init.serviceWorkerTimeout
 				? { serviceWorkerTimeout: init.serviceWorkerTimeout }
 				: {}),
@@ -942,8 +932,12 @@ export class StompController extends EventTarget {
 				new URL(assetName(this.config.assets, 'rewriteWorker'), this.directory),
 				rewriteWorkers,
 			);
-		if (init.rewriter === 'wasm')
-			this.#compiled = this.#compileModules(WASM_ASSETS);
+		// the rewriter is the wasm core, always: the controller compiles it
+		// once and hands it to the rewrite workers (compiled) and the service
+		// worker (as bytes it compiles itself), and the first handshake waits
+		// for it (#rewriterReady), so no thread rewrites a script before it
+		// holds the module
+		this.#compiled = this.#compileModules(WASM_ASSETS);
 
 		// a described transport is started where it is hosted before the first
 		// handshake; a failure there never leaves the controller dead
@@ -980,20 +974,20 @@ export class StompController extends EventTarget {
 					this.id = id;
 					this.config.directory = `${this.directory.pathname}${id}/`;
 				});
-		// the rewriter library is in no bundle: a proxied top's shell loads
-		// it beside the inject bundle, and a realm with no such top (a
-		// worker) loads it with a synchronous request the first time one of
-		// its rewrites needs it. So the file is fetched here, and is in the
-		// HTTP cache before the first proxied page exists. A host that does
-		// not serve it is told here, not by a page that cannot rewrite:
-		// nothing is handed to the service worker and `wait()` rejects
-		const libraryReady = this.#fetchLibrary();
+		// the rewriter is the wasm core module, so the first handshake waits
+		// for it to load and compile here: a host that does not serve it is
+		// told here, not by a page that cannot rewrite, and no thread is handed
+		// a script to rewrite before it holds the module (the rewrite workers
+		// are adopted before the service worker's handshake sends them a port,
+		// the service worker compiles the bytes it is handed, and a page's
+		// library compiles them synchronously if a rewrite beats the module)
+		const rewriterReady = this.#rewriterReady();
 		this.#hostReady = Promise.all([
 			hooksReady,
 			transportReady,
 			idReady,
 			adblockReady,
-			libraryReady,
+			rewriterReady,
 		]).then(() => {
 			if (this.transportHost === 'worker') this.config.workerTransport = true;
 			else delete this.config.workerTransport;
@@ -1424,30 +1418,19 @@ export class StompController extends EventTarget {
 		);
 	}
 	/**
-	 * Fetch the rewriter library asset (`init.assets.rewriterLib`) by the
-	 * URL a page loads it with (src/routeURL.ts), which leaves it in the
-	 * HTTP cache, where a page's shell and a worker's synchronous request
-	 * find it. Throws, with the asset's key, when the host does not serve
-	 * it.
+	 * Wait for the rewriter's wasm core module to load and compile
+	 * (#compileModules), and fail with the asset's key when the host does
+	 * not serve it: the rewriter is wasm-only, so without the module no
+	 * script can be rewritten. The first handshake waits for this, so the
+	 * controller hands nothing to the service worker and `wait()` rejects.
 	 */
-	async #fetchLibrary(): Promise<void> {
-		const url = new URL(libraryFile(this.config.assets), this.directory);
-		const missing = (why: string) =>
-			new Error(
-				`Stomp: the host does not serve the asset 'rewriterLib' (${why} for ${url.href}). The inject bundles load the rewriter library from that file; serve dist/${DEFAULT_ASSETS.rewriterLib} beside the other bundles, or name it in init.assets.rewriterLib.`,
-			);
-		let response: Response;
-		try {
-			response = await fetch(url);
-		} catch (error) {
-			throw missing(`${error}`);
-		}
-		if (!response.ok) throw missing(`HTTP ${response.status}`);
-		// a host that answers every path with its own page
-		const type = response.headers.get('content-type') ?? '';
-		if (/^text\/html\b/i.test(type)) throw missing(`a ${type} answer`);
-		// the cache keeps a response that was read to its end
-		await response.arrayBuffer();
+	async #rewriterReady(): Promise<void> {
+		const compiled = (await this.#compiled) ?? {};
+		if (compiled.core) return;
+		const url = new URL(assetName(this.config.assets, 'core'), this.directory);
+		throw new Error(
+			`Stomp: the host does not serve the asset 'core' (${url.href}). The rewriter is the wasm core module; serve dist/${DEFAULT_ASSETS.core} beside the other bundles, or name it in init.assets.core.`,
+		);
 	}
 	/**
 	 * The wasm artifacts, loaded once and compiled once, here. The rewrite

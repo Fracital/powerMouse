@@ -63,8 +63,6 @@ export interface ControllerFrameInit {
 	membrane?: boolean;
 	/** emulated service workers off when false (RemoteControllerInit.serviceWorkers) */
 	serviceWorkers?: boolean;
-	/** the wasm rewriters when 'wasm' (RemoteControllerInit.rewriter) */
-	rewriter?: 'wasm' | 'js';
 	/** @internal RemoteControllerInit.serviceWorkerTimeout */
 	serviceWorkerTimeout?: number;
 	/** @internal RemoteControllerInit.serviceWorkerEventDelay */

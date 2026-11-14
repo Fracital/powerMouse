@@ -24,7 +24,7 @@ import {
 	WORKER_BASE,
 } from './transport/messages';
 import { dataBody } from './urlShape';
-import { LIBRARY_FACTORY, LIGHT_FACTORY } from './version';
+import { LIGHT_FACTORY } from './version';
 
 /**
  * The route of a document. `form`: a GET form's action, whose query the
@@ -101,15 +101,7 @@ export function routeHTML(
 		// when it rewrites the URL, otherwise they read as rewritten
 		const kept = { embed: false };
 		const modifyJS = rewriter('modifyJS');
-		const rewritten = modifyJS(
-			body,
-			url,
-			config,
-			'generic',
-			'',
-			undefined,
-			kept,
-		);
+		const rewritten = modifyJS(body, url, config, 'generic', '', kept);
 		const client = JSON.stringify(helperNames(config).client);
 		// The body runs in the window it navigates: in a fresh iframe that is
 		// the frame's initial about:blank, which nothing injected, and the
@@ -129,7 +121,7 @@ export function routeHTML(
 		if (expression === null)
 			// statements: injected after their directive prologue, so a
 			// 'use strict' stays one
-			return `javascript:${modifyJS(body, url, config, 'generic', `void (${inject});`, undefined, kept)}`;
+			return `javascript:${modifyJS(body, url, config, 'generic', `void (${inject});`, kept)}`;
 		return `javascript:((r,c)=>typeof r==='string'&&c?c.javascriptDocument(r,document.URL):r)((${inject},(${expression})),self[${client}]||(()=>{try{return ${creator}}catch(e){}})())`;
 	}
 
@@ -522,20 +514,19 @@ ${blocked}
 }
 
 /**
- * The scripts that load the rewriter library in a proxied top's shell,
+ * The scripts that load the light rewriter library in a proxied top's shell,
  * before the inject bundle (the parser fetches the two together, from the
  * HTTP cache: the controller fetched the file when it started). The library
- * is in no bundle. With `rewriter: 'js'` a top needs it for its first
- * script; with `'wasm'` it is what answers a rewrite the page asks for
- * before its module has arrived, which a page's first task often does.
- * Either costs the top what it paid when the bundle carried the library,
- * and a page that had to fetch the file when a rewrite asked would wait for
- * a synchronous request, which the browser reports to the page as
- * deprecated. The file assigns its factory to a name, made here so that it
- * is never enumerable; the bundle takes it and deletes the name as it loads
- * (src/inject/rewriter.ts). A frame shares its top's library and gets none
- * of this. `attribute`: what the shell's own scripts carry (a nonce, the
- * XHTML namespace).
+ * is the wasm glue; no document bundle carries it. The top evaluates it in a
+ * realm of its own and the frames under it share that copy. It is what
+ * rewrites what a page's first task does (eval, new Function, an inline
+ * script or style) in the module the controller compiled, which the copy
+ * compiles from its bytes itself (src/inject/rewriter.ts provideModule) if
+ * the rewrite comes before the compiled module has arrived. The file assigns
+ * its factory to a name, made here so that it is never enumerable; the bundle
+ * takes it and deletes the name as it loads. A frame shares its top's library
+ * and gets none of this. `attribute`: what the shell's own scripts carry (a
+ * nonce, the XHTML namespace).
  */
 function libraryScripts(
 	url: StompURL,
@@ -544,15 +535,9 @@ function libraryScripts(
 	/** what the script that loads the file carries */
 	loading = attribute,
 ) {
-	// the file assigns two names: the library's and the document's light
-	// library's (build.js)
-	const names = [LIBRARY_FACTORY, LIGHT_FACTORY]
-		.map(
-			(name) =>
-				`Reflect.defineProperty(globalThis, ${JSON.stringify(name)}, { writable: true, configurable: true });`,
-		)
-		.join(' ');
-	return `<script${attribute}>${names}</script><script${loading} src="${rewriterLibJS(url, config)}"></script>`;
+	// the file assigns the light library's factory to this name (build.js)
+	const name = `Reflect.defineProperty(globalThis, ${JSON.stringify(LIGHT_FACTORY)}, { writable: true, configurable: true });`;
+	return `<script${attribute}>${name}</script><script${loading} src="${rewriterLibJS(url, config)}"></script>`;
 }
 
 /** the mimes an XML document is served under and parsed with */

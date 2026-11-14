@@ -79,13 +79,13 @@ export interface Config {
 	 */
 	serviceWorkers?: boolean;
 	/**
-	 * Which rewriter backend the service worker, the rewrite workers and the
-	 * inject use: `'js'` (default) the JavaScript rewriters, `'wasm'` the
-	 * Rust modules in `assets/` (docs/rust-plan.md) wherever a thread holds
-	 * them, with the JavaScript rewriter answering for whatever a module
-	 * declines or has not reached yet
+	 * The rewriter is the Rust wasm core module in `assets/`
+	 * (docs/rust-plan.md): the service worker, the rewrite workers and the
+	 * inject all rewrite in it. Always `'wasm'`; a thread that holds no module
+	 * yet compiles the bytes it holds synchronously (src/wasm/thread.ts), so
+	 * no script is ever rewritten without it. @internal
 	 */
-	rewriter?: 'wasm' | 'js';
+	rewriter?: 'wasm';
 	/**
 	 * @internal `false` in the config of a document the service worker
 	 * serves under a blocking list's own policy (`$csp=`, docs/adblock.md):
@@ -261,13 +261,11 @@ export interface Assets {
 	/** the built-in blocker's wasm module (docs/adblock.md) */
 	blocker?: string;
 	/**
-	 * The rewriter library (meriyah, escodegen, css-tree, tldts and the
-	 * rewriters on them): no inject bundle carries it. A proxied top's shell
-	 * loads this file, and a worker fetches it the first time it rewrites.
-	 * A controller fetches it when it starts and fails when the host does
-	 * not serve it; it is asked for as `<name>?<hash of its bytes>`, so it
-	 * can be cached for as long as the host likes (docs/rust-plan.md,
-	 * section 6)
+	 * The light rewriter library (the wasm glue, src/rewriterLightDocument.ts):
+	 * no document bundle carries it. A proxied top's shell loads this file,
+	 * and a sandboxed frame fetches it the first time it rewrites. It is asked
+	 * for as `<name>?<hash of its bytes>`, so it can be cached for as long as
+	 * the host likes. The rewriter itself is the wasm `core` module.
 	 */
 	rewriterLib?: string;
 }

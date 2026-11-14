@@ -34,11 +34,26 @@ export type ModuleSource =
 	| Promise<WebAssembly.Module | BufferSource | Response>;
 
 /**
+ * Compile `bytes` synchronously, with the native WebAssembly captured at
+ * load (never the page-wrapped one, src/inject/dom/modules/WebAssemblyPolicy.ts).
+ * Chrome's synchronous-compile limit on a window's main thread is 8 MB, which
+ * the stomp artifacts are far below (core.wasm is ~570 KB, ~1.5 ms to compile),
+ * so a thread that holds the bytes but not yet the compiled module can still
+ * answer a rewrite at once (src/wasm/thread.ts): the asynchronous compile of
+ * the same bytes replaces it when it settles. A worker (the service worker,
+ * the rewrite workers) has no such limit at all.
+ */
+export function compileModuleSync(bytes: BufferSource): WebAssembly.Module {
+	const NativeModule = nativeWasm.Module ?? WebAssembly.Module;
+	return new NativeModule(bytes);
+}
+
+/**
  * The compiled module for `source`: as given when it is one, compiled from
  * bytes or a Response, fetched (and compiled while it streams) from a URL
- * resolved against `base` when it is a string. Compiling off the main
- * thread or asynchronously is what keeps a 600 KB module out of Chrome's
- * synchronous-compile limit, so this is the only place that compiles.
+ * resolved against `base` when it is a string. This compiles asynchronously
+ * (off the main thread where it can), the warm path for every thread; a cold
+ * rewrite that cannot wait compiles synchronously instead (compileModuleSync).
  */
 export async function compileModule(
 	source: ModuleSource,

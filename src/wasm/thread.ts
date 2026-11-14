@@ -12,6 +12,7 @@
 // is no instance: the module has not arrived, the host runs
 // `rewriter: 'js'`, or the instance trapped.
 import {
+	compileModuleSync,
 	CoreInstance,
 	MEMBERS,
 	type BufferInstance,
@@ -88,6 +89,16 @@ interface Held {
 }
 
 const modules = new Map<string, WebAssembly.Module>();
+/**
+ * The bytes each module was handed as, kept until its asynchronous compile
+ * settles: a thread that holds the bytes but not yet the compiled module
+ * compiles them synchronously the first time a call needs it
+ * (src/wasm/module.ts compileModuleSync), so a rewrite early in a thread's
+ * life is never answered without the module. The compiled module replaces
+ * the bytes when it is in. This is what the JavaScript rewriter used to
+ * answer in the window before the module compiled.
+ */
+const rawBytes = new Map<string, ArrayBuffer>();
 /** the instances of each module that are in no call, the one last used last */
 const idle = new Map<string, Held[]>();
 /** how many calls each module has in hand (one inside another) */
@@ -105,6 +116,8 @@ const pending = new Set<Promise<void>>();
 export function adoptModule(name: string, module: WebAssembly.Module): void {
 	if (modules.get(name) === module) return;
 	modules.set(name, module);
+	// the compiled module wins over any bytes kept for the sync fallback
+	rawBytes.delete(name);
 	idle.delete(name);
 }
 
@@ -120,12 +133,18 @@ async function adoptBytes(name: string, bytes: ArrayBuffer): Promise<void> {
 	const print = fingerprint(bytes);
 	if (compiledFrom.get(name) === print) return;
 	compiledFrom.set(name, print);
+	// kept at once (before the await) so a rewrite on this thread before the
+	// compile settles has the bytes to compile synchronously (instantiate)
+	if (!modules.has(name)) rawBytes.set(name, bytes);
 	try {
 		const module = await WebAssembly.compile(bytes);
 		// a newer handshake's bytes won while these compiled
 		if (compiledFrom.get(name) === print) adoptModule(name, module);
 	} catch (error) {
-		if (compiledFrom.get(name) === print) compiledFrom.delete(name);
+		if (compiledFrom.get(name) === print) {
+			compiledFrom.delete(name);
+			if (rawBytes.get(name) === bytes) rawBytes.delete(name);
+		}
 		console.warn(`Stomp: the ${name} module did not compile`, error);
 	}
 }
@@ -151,9 +170,10 @@ export async function adoptModules(
 	pending.delete(all);
 }
 
-/** whether this thread holds the module `name` at all (a member: the core) */
+/** whether this thread holds the module `name` at all (a member: the core), compiled or as bytes it can compile synchronously */
 export function hasModule(name: string): boolean {
-	return modules.has(moduleName(name));
+	const which = moduleName(name);
+	return modules.has(which) || rawBytes.has(which);
 }
 
 /**
@@ -165,15 +185,36 @@ export function moduleOf(name: string): WebAssembly.Module | null {
 	return modules.get(name) ?? null;
 }
 
-/** the modules this thread holds, once every compile it was asked for has settled */
+/** the modules this thread holds, once every compile it was asked for has settled (bytes not yet compiled count: a call compiles them synchronously) */
 export async function heldModules(): Promise<string[]> {
 	while (pending.size) await Promise.all(pending);
-	return [...modules.keys()];
+	return [...new Set([...modules.keys(), ...rawBytes.keys()])];
+}
+
+/**
+ * The compiled core module this thread holds: the one it was handed, or one
+ * compiled synchronously (and kept) from the bytes it holds when its
+ * asynchronous compile has not settled. Null when it holds neither.
+ */
+function coreModule(): WebAssembly.Module | null {
+	const module = modules.get(CORE);
+	if (module) return module;
+	const bytes = rawBytes.get(CORE);
+	if (!bytes) return null;
+	try {
+		const compiled = compileModuleSync(bytes);
+		adoptModule(CORE, compiled);
+		return compiled;
+	} catch (error) {
+		rawBytes.delete(CORE);
+		console.warn(`Stomp: the ${CORE} module did not compile`, error);
+		return null;
+	}
 }
 
 /** a new instance of the core module, or null when the thread was never handed it or it would not instantiate */
 function instantiate(): Held | null {
-	const module = modules.get(CORE);
+	const module = coreModule();
 	if (!module) return null;
 	try {
 		const held: Held = {

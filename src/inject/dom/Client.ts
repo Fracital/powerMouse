@@ -46,7 +46,7 @@ import {
 	provideShellSyncXHR,
 	routeHTML,
 } from '../../rewriteHTML';
-import type { RewriterLib } from '../../rewriterLib';
+import type { RewriterLib } from '../../rewriterLight';
 import {
 	parseRoutedURL,
 	proxyBlobURL,
@@ -63,16 +63,13 @@ import { ownCodec, shareCodec, type CodecBackend } from '../../wasm/codec';
 import Client from '../Client';
 import {
 	getPublicSuffix,
-	givenLibrary,
-	libraryText,
 	lightText,
-	loadRewriterLibrary,
 	modifyCSS,
 	modifyJS,
 	shareRewriter,
 } from '../rewriter';
 import { learnSites, siteAnswers } from '../sites';
-import { trustedHTML, trustedScript, trustedTypesUsed } from '../trusted';
+import { trustedHTML, trustedScript } from '../trusted';
 import cloneRawNode, {
 	inertDocumentOf,
 	nativeAttributes,
@@ -418,11 +415,6 @@ export default class DocumentClient extends Client {
 		// it shares now, before any of our hooks or of the page's code exists
 		if (
 			shareRewriter(() => this.#rewriterLibrary(), {
-				load: (library) => this.#topClient().loadSharedRewriter(library),
-				text: () => {
-					const top = this.#topClient();
-					return top === this ? null : top.rewriterLibraryText(BUILD);
-				},
 				lightText: () => {
 					const top = this.#topClient();
 					return top === this ? null : top.rewriterLightText(BUILD);
@@ -443,30 +435,21 @@ export default class DocumentClient extends Client {
 			!this.sandboxedOpaque &&
 			this.#topClient() === this
 		)
-			// with `rewriter: 'js'` the realm holds the rewriter library
-			// itself, made from the file this top's shell loaded; with
-			// `'wasm'` the light library, which is handed that file's text
-			// when a call needs it
-			// (in a document whose policy refuses code made from a string the
-			// realm is made by a script with the document's nonce, and holds
-			// the rewriter library itself whatever the option: the light one
-			// would make it from its text)
+			// the top makes the light library in a realm no page code runs in,
+			// from the file its shell loaded (a document whose policy refuses
+			// code made from a string makes it with a script carrying the
+			// document's nonce instead)
 			this.#rewriter = createRewriterRealm(
 				this.global.document,
-				// (or under Trusted Types, where the light one's Function
-				// would be refused)
-				this.wasmRewriter && this.scriptFacts.evaluates && !trustedTypesUsed()
-					? undefined
-					: (givenLibrary() ?? undefined),
+				undefined,
 				this.scriptFacts.evaluates ? null : this.scriptNonce,
 			);
-		// with `rewriter: 'wasm'` the library a top shares rewrites in the
-		// module the controller compiled, once it has arrived: the realm
-		// only instantiates it, and until then (and whenever the module
-		// declines a script) its JavaScript rewriter answers. One instance
-		// per top; a frame under it holds none
+		// the library a top shares rewrites in the wasm module the controller
+		// compiled, once it has arrived: the realm only instantiates it, and
+		// until then a rewrite compiles the bytes synchronously (rewriter.ts
+		// provideModule). One instance per top; a frame under it holds none
 		const library = this.#rewriter;
-		if (library && this.wasmRewriter)
+		if (library)
 			this.requestModules((name, module) => {
 				try {
 					library.adopt(name, module);
@@ -482,29 +465,6 @@ export default class DocumentClient extends Client {
 	 */
 	get sharedRewriter(): RewriterLib | null {
 		return this.#rewriter ?? null;
-	}
-	/**
-	 * The rewriter library (the asset the bundles do not carry) loaded into
-	 * the library this top shares, by this top's realm, which holds the
-	 * file's text (its shell loaded it); where it does not, its request for
-	 * it is this document's, not a frame's, whose own answer to the `allow`
-	 * attribute the page gave it (`sync-xhr 'none'`, as on ad frames).
-	 * False when `library` is not this top's. @internal
-	 */
-	loadSharedRewriter(library: RewriterLib): boolean {
-		if (!this.#rewriter || library !== this.#rewriter) return false;
-		loadRewriterLibrary(library);
-		return true;
-	}
-	/**
-	 * The rewriter library's text as this top's shell loaded it, for a
-	 * document under it that keeps a library of its own (one sandboxed
-	 * without allow-same-origin): a string, and nothing of this realm's
-	 * with it. Null without the text, or for a bundle of another `build`.
-	 * @internal
-	 */
-	rewriterLibraryText(build: string): string | null {
-		return build === BUILD ? libraryText() : null;
 	}
 	/**
 	 * The light library's statement (src/inject/rewriter.ts lightFactory)

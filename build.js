@@ -1,13 +1,7 @@
 import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, watch } from 'node:fs';
-import {
-	appendFile,
-	copyFile,
-	mkdir,
-	readdir,
-	readFile,
-} from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { build, context, formatMessages } from 'esbuild';
 import { rimraf } from 'rimraf';
@@ -65,9 +59,9 @@ const common = {
 };
 
 /**
- * `source-map` (escodegen) and `source-map-js` (css-tree's generator) are
- * loaded only to print source maps, which the rewriters never ask for:
- * every bundle that holds a rewriter gets src/noSourceMaps.ts instead.
+ * `source-map` / `source-map-js` are pulled in only to print source maps,
+ * which the rewriters never ask for: any bundle that reaches them gets
+ * src/noSourceMaps.ts instead.
  *
  * @type {import('esbuild').Plugin}
  */
@@ -77,56 +71,6 @@ const noSourceMaps = {
 		pluginBuild.onResolve({ filter: /^source-map(-js)?(\/.*)?$/ }, () => ({
 			path: resolve('src/noSourceMaps.ts'),
 		}));
-	},
-};
-
-/**
- * meriyah builds a 272 KB table of the Unicode identifier characters when it
- * loads (a Uint32Array outside the heap), which it reads only for a
- * character past ASCII where an identifier may start or go on. Every realm
- * that holds the rewriter (the service worker, each rewrite worker, a top's
- * rewriter realm, a sandboxed frame's own copy) paid it whether or not a
- * script it rewrote had one. The table is built the first time it is read.
- * A meriyah whose source no longer has the shape this expects fails the
- * build, so an upgrade has to look at it.
- *
- * @type {import('esbuild').Plugin}
- */
-const lazyUnicodeTable = {
-	name: 'lazy-unicode-table',
-	setup(pluginBuild) {
-		pluginBuild.onLoad(
-			{ filter: /[\\/]meriyah[\\/]dist[\\/]meriyah\.mjs$/ },
-			async (args) => {
-				let source = await readFile(args.path, 'utf8');
-				const edits = [
-					[
-						'const unicodeLookup = ((compressed, lookup) => {',
-						'let unicodeLookup;\nconst buildUnicodeLookup = () => ((compressed, lookup) => {',
-					],
-					[
-						'const isIDContinue = (code) => (unicodeLookup[',
-						'const isIDContinue = (code) => ((unicodeLookup ??= buildUnicodeLookup())[',
-					],
-					[
-						'const isIDStart = (code) => (unicodeLookup[',
-						'const isIDStart = (code) => ((unicodeLookup ??= buildUnicodeLookup())[',
-					],
-				];
-				for (const [from, to] of edits) {
-					if (source.split(from).length !== 2)
-						throw new Error(
-							`lazy-unicode-table: meriyah no longer has \`${from}\` once; see build.js`,
-						);
-					source = source.replace(from, to);
-				}
-				if (source.split('unicodeLookup[').length !== 1)
-					throw new Error(
-						'lazy-unicode-table: meriyah reads its table somewhere else too; see build.js',
-					);
-				return { contents: source, loader: 'js' };
-			},
-		);
 	},
 };
 
@@ -211,54 +155,32 @@ const rewriterLib = {
 };
 
 /**
- * The rewriter library (src/rewriterLib.ts: meriyah, escodegen, css-tree,
- * tldts and the rewriters on them), the asset `rewriterLib`: no bundle
- * carries it. The file is one statement that assigns the library's factory
- * to a name (src/version.ts LIBRARY_FACTORY), and is read two ways. With
- * `rewriter: 'js'` a proxied top's shell loads it as a script before the
+ * The light rewriter library (src/rewriterLightDocument.ts: the wasm glue and
+ * nothing a parser stands in for), the asset `rewriterLib`: no document bundle
+ * carries it (a frame uses its top's and evaluates none). The file is one
+ * statement that assigns the factory to a name (src/version.ts LIGHT_FACTORY),
+ * and is read two ways. A proxied top's shell loads it as a script before the
  * inject bundle, which takes the factory and removes the name
- * (src/rewriteHTML.ts, src/inject/rewriter.ts). Anywhere else a copy of
- * the light library is handed its text the first time a call needs it
- * (src/inject/rewriter.ts loads it, synchronously) and evaluates it in its
- * own realm as the body of a function that has the name as a parameter,
- * which writes no global. A statement survives a host's minifier, which
- * drops a function expression nobody uses. One file for documents and
- * workers; a worker never calls the parts it has no use for.
+ * (src/rewriteHTML.ts, src/inject/rewriter.ts). A sandboxed frame's own copy,
+ * and a top whose shell did not load it, are handed its text the first time a
+ * call needs it (src/inject/rewriter.ts, synchronously) and evaluate it in
+ * their own realm as the body of a function that has the name as a parameter,
+ * which writes no global. A statement survives a host's minifier, which drops
+ * a function expression nobody uses.
  *
  * @type {import('esbuild').BuildOptions}
  */
 const rewriterLibrary = {
 	...common,
-	// (as the light library's: it seals its URLs in JavaScript)
+	// (the light library seals its URLs in JavaScript, the same text)
 	define: { ...common.define, 'process.env.STOMP_CODEC_WASM': 'undefined' },
-	entryPoints: { rewriterLib: 'src/rewriterLibDocument.ts' },
+	entryPoints: { rewriterLib: 'src/rewriterLightDocument.ts' },
 	format: 'iife',
 	globalName: '__stompLib',
 	inject: [resolve('src/libGlobals.ts')],
-	banner: { js: '__stompRewriterLib=function(__stompRealm){' },
+	banner: { js: `${LIGHT_FACTORY}=function(__stompRealm){` },
 	footer: { js: 'return __stompLib.api;};' },
-	plugins: [
-		noSourceMaps,
-		lazyUnicodeTable,
-		{
-			// the document's light library, after the rewriter library in
-			// its file (a watch build's too)
-			name: 'light-library',
-			setup(pluginBuild) {
-				pluginBuild.onEnd(async (result) => {
-					if (result.errors.length) return;
-					const { text } = await lightLibrary(false, {
-						...common.define,
-						'process.env.STOMP_CODEC_WASM': 'undefined',
-					});
-					await appendFile(
-						'dist/rewriterLib.js',
-						`\n${LIGHT_FACTORY}=function(__stompRealm){\n${text}\nreturn __stompLib.api;\n};\n`,
-					);
-				});
-			},
-		},
-	],
+	plugins: [noSourceMaps],
 };
 
 /**
@@ -381,7 +303,7 @@ const bundles = (library) =>
 			...common.define,
 			'process.env.STOMP_LIBRARY': JSON.stringify(library),
 		},
-		plugins: [noSourceMaps, lazyUnicodeTable, ...(options.plugins ?? [])],
+		plugins: [noSourceMaps, ...(options.plugins ?? [])],
 	}));
 
 await rimraf('dist');

@@ -58,13 +58,10 @@
 		"prepack": "npm run build"
 	},
 	"dependencies": {
-		"@javascript-obfuscator/escodegen": "^2.4.2",
 		"@mercuryworkshop/proxy-transports": "^1.0.2",
 		"crypto-js": "^4.2.0",
-		"css-tree": "^3.1.0",
 		"entities": "^9.0.0",
 		"idb": "^8.0.3",
-		"meriyah": "^7.0.0",
 		"set-cookie-parser": "^3.0.0",
 		"srcset": "^5.0.1",
 		"tldts": "^7.0.0"
@@ -76,7 +73,6 @@
 		"@mercuryworkshop/epoxy-transport": "git+https://github.com/Fracital/EpoxyTransport.git#cef3afee33e71d10574e3be5527a143ef09f0963",
 		"@mercuryworkshop/libcurl-transport": "^2.0.6",
 		"@types/crypto-js": "^4.2.2",
-		"@types/css-tree": "^3.2.0",
 		"@types/serviceworker": "^0.0.204",
 		"esbuild": "^0.28.0",
 		"eslint": "^10.0.0",

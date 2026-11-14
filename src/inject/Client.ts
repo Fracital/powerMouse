@@ -18,6 +18,7 @@ import type {
 import { routeHTML } from '../rewriteHTML';
 import {
 	addRouteScope,
+	coreWasm,
 	linkRouteURL,
 	openFragment,
 	parseRoutedURL,
@@ -51,7 +52,7 @@ import { BUILD } from '../version';
 import { LINK_SEGMENT } from '../visited';
 import { forbidCodecModule } from '../wasm/codec';
 import Module from './Module';
-import { rewriteCounts, rewriterLibraryAt } from './rewriter';
+import { coreModuleAt, rewriteCounts, rewriterLibraryAt } from './rewriter';
 import {
 	trustedFunction,
 	usePageSinks,
@@ -560,9 +561,12 @@ export default class Client {
 		this.wasmRewriter = init.rewriter === 'wasm';
 		this.codecModule = init.codecModule !== false;
 		this.assets = init.assets;
-		// where a rewrite of this realm finds the rewriter library the
-		// bundle does not carry (rewriter.ts): beside the bundle itself
+		// where a rewrite of this realm finds the light rewriter library the
+		// bundle does not carry, and the wasm core module for a cold rewrite
+		// before the controller's compiled one has arrived (rewriter.ts):
+		// both beside the bundle itself
 		rewriterLibraryAt(() => rewriterLibJS(this.url, this.config));
+		coreModuleAt(() => coreWasm(this.url, this.config));
 		this.blocking = !!init.adblock;
 		this.hostIsolated = !!init.isolated;
 		this.noFingerprint = !!init.noFingerprint;

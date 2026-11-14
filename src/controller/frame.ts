@@ -180,7 +180,6 @@ if (window === window.parent || !origins.length) {
 						...(init.membrane === false ? { membrane: false } : {}),
 						...(init.serviceWorkers === false ? { serviceWorkers: false } : {}),
 						...(init.allowSelfProxy ? { allowSelfProxy: true } : {}),
-						...(init.rewriter === 'wasm' ? { rewriter: 'wasm' } : {}),
 						...(typeof init.serviceWorkerTimeout === 'number'
 							? { serviceWorkerTimeout: init.serviceWorkerTimeout }
 							: {}),
