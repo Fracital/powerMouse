@@ -11,7 +11,7 @@
 		"check": "dist/serviceWorker.js"
 	},
 	"packages": {
-		"@mercuryworkshop/epoxy-transport": "git+https://github.com/Fracital/EpoxyTransport.git#3242c612e04e516ead0a19456b4f939396b542bc"
+		"@mercuryworkshop/epoxy-transport": "git+https://github.com/Fracital/EpoxyTransport.git#cef3afee33e71d10574e3be5527a143ef09f0963"
 	},
 	"serve": {
 		"/stomp/": "dist/",
