@@ -2277,7 +2277,8 @@ input:focus-visible {
 	filter: none;
 	opacity: 1;
 }
-.shieldsbtn:hover {
+.shieldsbtn:hover,
+.shieldsbtn[aria-expanded='true'] {
 	background-color: rgba(0, 0, 0, 0.06);
 	border-color: rgba(0, 0, 0, 0.15);
 }
