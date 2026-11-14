@@ -196,6 +196,7 @@ if (window === window.parent || !origins.length) {
 						...(init.rules ? { rules: init.rules } : {}),
 						...(init.assets ? { assets: init.assets } : {}),
 						...(init.adblock !== undefined ? { adblock: init.adblock } : {}),
+						...(init.adblockLists ? { adblockLists: init.adblockLists } : {}),
 						...(init.names ? { names: init.names } : {}),
 						...(init.hooks ? { hooks: init.hooks } : {}),
 						onHookError: (info: HookErrorInfo) => {
@@ -285,6 +286,14 @@ if (window === window.parent || !origins.length) {
 				shields: async (list) => {
 					if (!controller) throw new Error('Controller is not initialised');
 					controller.shields.replace(list);
+				},
+				adblock: async ({ lists }) => {
+					if (!controller) throw new Error('Controller is not initialised');
+					return [await controller.setAdblockLists(lists), []];
+				},
+				adblockRefresh: async () => {
+					if (!controller) throw new Error('Controller is not initialised');
+					return [await controller.refreshAdblockLists(), []];
 				},
 				cookies: async (command) => {
 					if (!controller) throw new Error('Controller is not initialised');

@@ -1,4 +1,9 @@
-import type { AdblockOptions, SiteShields } from '../blocker/types';
+import type {
+	AdblockApplied,
+	AdblockList,
+	AdblockOptions,
+	SiteShields,
+} from '../blocker/types';
 import type { Assets, Config, ConfigCodec } from '../config';
 import type { HelperNames } from '../helperNames';
 import type { HookErrorInfo, InitHooks } from '../hooks';
@@ -85,6 +90,8 @@ export interface ControllerFrameInit {
 	errorPage?: string;
 	/** the built-in blocker (RemoteControllerInit.adblock) */
 	adblock?: boolean | AdblockOptions;
+	/** filter lists to start the blocker with in place of the defaults (RemoteControllerInit.adblockLists) */
+	adblockLists?: (string | AdblockList)[];
 }
 
 export interface FrameInfo {
@@ -133,6 +140,10 @@ export type FrameBound = {
 	rules: [RequestRule[]];
 	/** replace the per-site shields (forwarded to the inner controller) */
 	shields: [SiteShields[]];
+	/** replace the blocker's filter lists at runtime (StompController.setAdblockLists) */
+	adblock: [{ lists: (string | AdblockList)[] }, AdblockApplied];
+	/** re-fetch and recompile the blocker's current lists (StompController.refreshAdblockLists) */
+	adblockRefresh: [undefined, AdblockApplied];
 	/** which of these service worker clients no longer exist (the host's ClientFrames) */
 	goneClients: [string[], string[]];
 };

@@ -114,7 +114,14 @@ type FetchResource = (url: string) => Promise<Response>;
 async function keyOf(init: AdblockInit): Promise<string> {
 	const text = JSON.stringify([
 		FORMAT,
-		init.lists.map((list) => [list.url, !!list.trusted, list.format ?? '']),
+		init.lists.map((list) => [
+			list.url,
+			!!list.trusted,
+			list.format ?? '',
+			// an inline list (the custom-filters editor) is its text, so two
+			// different rule sets never share a stored engine
+			list.filters ?? null,
+		]),
 		init.engine ?? '',
 	]);
 	const digest = await crypto.subtle.digest(
@@ -127,7 +134,7 @@ async function keyOf(init: AdblockInit): Promise<string> {
 }
 
 export class Blocker {
-	readonly #init: AdblockInit;
+	#init: AdblockInit;
 	readonly #fetch: FetchResource;
 	readonly #given: () => Promise<WebAssembly.Module | null>;
 	#module: WebAssembly.Module | null = null;
@@ -143,6 +150,13 @@ export class Blocker {
 	#resources = '';
 	#building: Promise<void> | null = null;
 	#replacing: Promise<void> | null = null;
+	/**
+	 * bumped whenever the lists change (`reconfigure`): a build that was fetching
+	 * the old lists when the lists changed must not load its stale engine over
+	 * the new one, so `#build` checks the generation it started in before it
+	 * swaps or stores
+	 */
+	#generation = 0;
 	readonly #scripts = new Map<string, string>();
 	/** a host-visible note of what went wrong, for the request log */
 	lastError: string | null = null;
@@ -194,6 +208,48 @@ export class Blocker {
 			this.#settled,
 			new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ms)),
 		]);
+	}
+
+	/**
+	 * Change the lists this blocker serves at runtime (the demo's Filter Lists
+	 * editor, docs/adblock.md "Changing the lists"). The engine now serving keeps
+	 * answering requests until the new lists are compiled, then the new engine is
+	 * swapped in in place: the Blocker object's identity never changes, so the
+	 * request path that holds it needs no rewiring. A stored engine for the new
+	 * lists loads in milliseconds; otherwise they are fetched and compiled in the
+	 * background. `force` recompiles even when a fresh stored engine for these
+	 * exact lists exists (the "Update lists" button re-fetches).
+	 */
+	async reconfigure(init: AdblockInit, force = false): Promise<void> {
+		this.#init = init;
+		// any build in flight is for the old lists now (its generation check
+		// drops it); a fresh #refresh below reads the new #init
+		this.#generation++;
+		this.#building = null;
+		this.#failed = false;
+		if (!this.#module) {
+			try {
+				this.#module = await this.#given();
+			} catch (error) {
+				this.#module = null;
+			}
+			if (!this.#module) {
+				this.lastError = 'the blocker module did not reach the service worker';
+				return;
+			}
+		}
+		try {
+			this.#key = await keyOf(init);
+		} catch (error) {
+			this.#key = '';
+		}
+		const stored = !force && this.#key ? await this.#stored() : null;
+		if (stored && this.#load(stored.engine, stored.resources)) {
+			this.#scripts.clear();
+			if (Date.now() - stored.at > init.refreshMs) void this.#refresh();
+			return;
+		}
+		await this.#refresh();
 	}
 
 	async #start(): Promise<boolean> {
@@ -302,6 +358,10 @@ export class Blocker {
 		return this.#building;
 	}
 	async #build(): Promise<void> {
+		// the lists in force when this build began: if `reconfigure` changes them
+		// while this build is fetching, its engine is stale and must be discarded
+		// rather than loaded over the newer lists (see #generation)
+		const generation = this.#generation;
 		// the resources (Brave's resources.json) are needed to load the engine,
 		// not to compile it, so fetch them alongside the lists (or the prebuilt
 		// engine) rather than before: their round trip then overlaps the list
@@ -327,6 +387,9 @@ export class Blocker {
 			let missed = '';
 			const lists = await Promise.all(
 				this.#init.lists.map(async (list) => {
+					// an inline list (the custom-filters editor) is its own text:
+					// compiled in place, never fetched (docs/adblock.md)
+					if (list.filters !== undefined) return { list, text: list.filters };
 					try {
 						return { list, text: await this.#fetchText(list.url) };
 					} catch (error) {
@@ -374,6 +437,9 @@ export class Blocker {
 			this.lastError = `the resources could not be fetched: ${String(error)}`;
 			return;
 		}
+		// the lists changed under this build (reconfigure): its engine is for
+		// the old lists, so drop it rather than serve or store it
+		if (generation !== this.#generation) return;
 		// the engine is loaded into an instance of its own (the builder holds
 		// the lists' text and the build's garbage), stored, and serves
 		if (this.#load(engine, resources)) {

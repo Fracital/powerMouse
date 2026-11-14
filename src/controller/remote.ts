@@ -1,4 +1,12 @@
-import type { AdblockOptions, SiteShields } from '../blocker/types';
+import {
+	resolveAdblockOptions,
+	withAdblockLists,
+	type AdblockApplied,
+	type AdblockInit,
+	type AdblockList,
+	type AdblockOptions,
+	type SiteShields,
+} from '../blocker/types';
 import { assetName } from '../config';
 // Host-side controller for origin isolation. The real StompController runs in
 // a hidden controller frame on the proxy origin (dist/controllerFrame.html);
@@ -114,6 +122,8 @@ export interface RemoteControllerInit {
 	hooks?: InitHooks;
 	/** the built-in blocker (see StompController.adblock) */
 	adblock?: boolean | AdblockOptions;
+	/** filter lists to start the blocker with in place of the defaults (see StompController.adblockLists) */
+	adblockLists?: (string | AdblockList)[];
 	/** a host hook threw in a proxied realm, or a hook URL failed (see StompController) */
 	onHookError?: (info: HookErrorInfo) => void;
 	/**
@@ -191,6 +201,10 @@ export class RemoteController extends EventTarget {
 	#sandbox: string;
 	/** per-site shields, forwarded to the controller frame (see StompController.shields) */
 	#shields!: Shields;
+	/** the blocker's default lists (adblockDefaults()), null when it is off */
+	#adblockBase: AdblockInit | null = null;
+	/** the lists in force (getAdblockLists()); what setAdblockLists last sent, or the defaults */
+	#adblock: AdblockInit | null = null;
 
 	constructor(init: RemoteControllerInit) {
 		super();
@@ -411,6 +425,7 @@ export class RemoteController extends EventTarget {
 					...(init.allowSelfProxy ? { allowSelfProxy: true } : {}),
 					...(init.assets ? { assets: init.assets } : {}),
 					...(init.adblock !== undefined ? { adblock: init.adblock } : {}),
+					...(init.adblockLists ? { adblockLists: init.adblockLists } : {}),
 					...(init.names ? { names: init.names } : {}),
 					...(init.hooks ? { hooks: init.hooks } : {}),
 					...(init.errorPage ? { errorPage: init.errorPage } : {}),
@@ -441,6 +456,16 @@ export class RemoteController extends EventTarget {
 				.catch(() => {});
 		}, init.onShieldsChange);
 		if (init.shields?.length) this.#shields.replace(init.shields);
+
+		// the blocker's lists, mirrored host-side so adblockDefaults() and
+		// getAdblockLists() read without a round trip to the frame; the inner
+		// controller is the one that actually rebuilds the engine
+		this.#adblockBase =
+			init.adblock === false ? null : resolveAdblockOptions(init.adblock);
+		this.#adblock =
+			this.#adblockBase && init.adblockLists
+				? withAdblockLists(this.#adblockBase, init.adblockLists)
+				: this.#adblockBase;
 
 		const every = init.pollInterval ?? 500;
 		if (every > 0)
@@ -475,6 +500,31 @@ export class RemoteController extends EventTarget {
 	/** per-site shields (see StompController.shields) */
 	get shields(): Shields {
 		return this.#shields;
+	}
+	/** the blocker's default filter lists (see StompController.adblockDefaults) */
+	adblockDefaults(): AdblockList[] {
+		return this.#adblockBase
+			? this.#adblockBase.lists.map((l) => ({ ...l }))
+			: [];
+	}
+	/** the filter lists the blocker is serving now (see StompController.getAdblockLists) */
+	getAdblockLists(): AdblockList[] {
+		return this.#adblock ? this.#adblock.lists.map((l) => ({ ...l })) : [];
+	}
+	/** replace the blocker's filter lists at runtime (see StompController.setAdblockLists) */
+	async setAdblockLists(
+		lists: (string | AdblockList)[],
+	): Promise<AdblockApplied> {
+		if (!this.#adblock) return { applied: 'off' };
+		this.#adblock = withAdblockLists(this.#adblock, lists);
+		await this.#ready;
+		return this.#rpc.call('adblock', { lists });
+	}
+	/** re-fetch and recompile the blocker's current lists (see StompController.refreshAdblockLists) */
+	async refreshAdblockLists(): Promise<AdblockApplied> {
+		if (!this.#adblock) return { applied: 'off' };
+		await this.#ready;
+		return this.#rpc.call('adblockRefresh', undefined);
 	}
 	/** drop every entry of the service worker's HTTP cache */
 	async clearCache(): Promise<void> {

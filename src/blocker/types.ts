@@ -13,6 +13,30 @@ export interface AdblockList {
 	trusted?: boolean;
 	/** a hosts file (`0.0.0.0 host` lines) rather than filter syntax */
 	format?: 'standard' | 'hosts';
+	/**
+	 * the list's filter text itself, compiled in place of fetching `url`: the
+	 * demo's "custom filters" editor hands its uBlock-syntax rules this way
+	 * (docs/adblock.md "Custom filters"). `url` then only names the inline list
+	 * for the engine's cache key, and `trusted` must stay false (the user's own
+	 * rules do not get the `trusted-*` scriptlets). The blocker uses this string
+	 * directly and never fetches the list.
+	 */
+	filters?: string;
+	/**
+	 * a human-readable name for the host application's UI (the demo's Filter
+	 * Lists page). Never sent to the engine, never part of the cache key.
+	 */
+	name?: string;
+}
+
+/**
+ * what the controllers' `setAdblockLists`/`refreshAdblockLists` report:
+ * `'live'` when the change was pushed to the running blocker (it rebuilds the
+ * engine and swaps it in once compiled), `'off'` when the host turned the
+ * blocker off and there was nothing to apply.
+ */
+export interface AdblockApplied {
+	applied: 'live' | 'off';
 }
 
 export interface AdblockOptions {
@@ -127,30 +151,39 @@ export function shieldsDown(shields: SiteShields | undefined): boolean {
 }
 
 export const DEFAULT_LISTS: AdblockList[] = [
-	{ url: 'https://easylist.to/easylist/easylist.txt' },
-	{ url: 'https://easylist.to/easylist/easyprivacy.txt' },
+	{ url: 'https://easylist.to/easylist/easylist.txt', name: 'EasyList' },
+	{
+		url: 'https://easylist.to/easylist/easyprivacy.txt',
+		name: 'EasyPrivacy',
+	},
 	{
 		url: 'https://ublockorigin.github.io/uAssets/filters/filters.min.txt',
+		name: 'uBlock Origin filters',
 		trusted: true,
 	},
 	{
 		url: 'https://ublockorigin.github.io/uAssets/filters/unbreak.min.txt',
+		name: 'uBlock Origin unbreak',
 		trusted: true,
 	},
 	{
 		url: 'https://ublockorigin.github.io/uAssets/filters/badware.min.txt',
+		name: 'uBlock Origin badware risks',
 		trusted: true,
 	},
 	{
 		url: 'https://ublockorigin.github.io/uAssets/filters/privacy.min.txt',
+		name: 'uBlock Origin privacy',
 		trusted: true,
 	},
 	{
 		url: 'https://ublockorigin.github.io/uAssets/filters/resource-abuse.txt',
+		name: 'uBlock Origin resource abuse',
 		trusted: true,
 	},
 	{
 		url: 'https://ublockorigin.github.io/uAssets/filters/quick-fixes.min.txt',
+		name: 'uBlock Origin quick fixes',
 		trusted: true,
 	},
 ];
@@ -182,6 +215,30 @@ export function resolveAdblockOptions(
 			(Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_REFRESH_HOURS) *
 			3600_000,
 		...(given === undefined || given === null ? { byDefault: true } : {}),
+	};
+}
+
+/**
+ * The same blocker options with a different set of lists: the host application
+ * changed them at runtime (the demo's Filter Lists editor, docs/adblock.md).
+ * The resources and the refresh interval are kept; a prebuilt `engine` is
+ * dropped, since the engine is the old lists compiled and cannot take new ones.
+ * The lists are normalized as `resolveAdblockOptions` does, and `byDefault` is
+ * cleared: a list the user chose, unlike one that is merely the default, is the
+ * user's to hear of when it cannot be fetched.
+ */
+export function withAdblockLists(
+	base: AdblockInit,
+	lists: (string | AdblockList)[],
+): AdblockInit {
+	// kept: the resources and the refresh interval; dropped: a prebuilt engine
+	// (it is the old lists compiled) and byDefault (the user chose these lists)
+	return {
+		lists: lists.map((list) =>
+			typeof list === 'string' ? { url: list } : { ...list },
+		),
+		resources: base.resources,
+		refreshMs: base.refreshMs,
 	};
 }
 

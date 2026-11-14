@@ -5,7 +5,10 @@ import type {
 import { acceptLanguage } from '../acceptLanguage';
 import {
 	resolveAdblockOptions,
+	withAdblockLists,
+	type AdblockApplied,
 	type AdblockInit,
+	type AdblockList,
 	type AdblockOptions,
 	type SiteShields,
 } from '../blocker/types';
@@ -103,7 +106,11 @@ export type { Config, ConfigCodec } from '../config';
 export { RemoteController, RemoteFrame, DEFAULT_SANDBOX } from './remote';
 export type { RemoteControllerInit } from './remote';
 export type { TransportDescriptor, FrameInfo } from './messages';
-export type { AdblockList, AdblockOptions } from '../blocker/types';
+export type {
+	AdblockApplied,
+	AdblockList,
+	AdblockOptions,
+} from '../blocker/types';
 export { default as Http3Transport } from '../transport/http3/Http3Transport';
 export type {
 	DatagramChannel,
@@ -336,6 +343,15 @@ export interface ControllerInit {
 	 * the first navigation then waits for the engine (five seconds at most).
 	 */
 	adblock?: boolean | AdblockOptions;
+	/**
+	 * The filter lists to start the blocker with in place of the defaults (the
+	 * demo seeds what its Filter Lists editor kept): the same lists
+	 * `setAdblockLists` would push, but carried by the first handshake so the
+	 * engine is built from them once, not rebuilt after a default build. Ignored
+	 * when `adblock` is `false`. `adblockDefaults()` still reports the untouched
+	 * default lists, for the editor to show.
+	 */
+	adblockLists?: (string | AdblockList)[];
 	/**
 	 * sandbox flags for proxied frames, default `DEFAULT_SANDBOX`. Same-origin
 	 * frames are not a security boundary, but without a sandbox the browser
@@ -783,8 +799,14 @@ export class StompController extends EventTarget {
 	 * every handshake as the rules do. Built in the constructor
 	 */
 	#shields!: Shields;
-	/** the blocker's lists, while it is on (docs/adblock.md); its module is `#modules.blocker` */
+	/** the blocker's lists in force, while it is on (docs/adblock.md); its module is `#modules.blocker` */
 	#adblock: AdblockInit | null = null;
+	/**
+	 * the blocker's default lists, kept untouched when `setAdblockLists` changes
+	 * the lists in force, so `adblockDefaults()` can show the editor what the
+	 * defaults are. Null when the host turned the blocker off
+	 */
+	#adblockBase: AdblockInit | null = null;
 	/**
 	 * Register the STomp service worker served from `directory` (the
 	 * constructor's default when omitted: the directory of the current script)
@@ -954,6 +976,11 @@ export class StompController extends EventTarget {
 		// builds the engine once it holds the module. A module that cannot be
 		// had leaves the blocker off (and the config says so to every document)
 		this.#adblock = resolveAdblockOptions(init.adblock);
+		// the default lists are kept for adblockDefaults(); the lists in force
+		// start as the host's seed (the demo's kept editor state) or the defaults
+		this.#adblockBase = this.#adblock;
+		if (this.#adblock && init.adblockLists)
+			this.#adblock = withAdblockLists(this.#adblock, init.adblockLists);
 		const adblockReady: Promise<void> = this.#adblock
 			? this.#compileModules(['blocker']).then(() => {
 					if (this.#modules?.blocker) return;
@@ -2083,6 +2110,54 @@ export class StompController extends EventTarget {
 	 */
 	get shields(): Shields {
 		return this.#shields;
+	}
+	/**
+	 * The blocker's default filter lists (docs/adblock.md), for a host UI to
+	 * show as toggle rows (the demo's Filter Lists editor): the list objects
+	 * with their `name`, `url`, `trusted` and `format`, untouched by
+	 * `setAdblockLists`. Empty when the host turned the blocker off.
+	 */
+	adblockDefaults(): AdblockList[] {
+		return this.#adblockBase
+			? this.#adblockBase.lists.map((l) => ({ ...l }))
+			: [];
+	}
+	/**
+	 * The filter lists the blocker is serving now: the defaults, or what
+	 * `setAdblockLists` last set (an inline list among them is the custom-filters
+	 * editor's text). Empty when the blocker is off.
+	 */
+	getAdblockLists(): AdblockList[] {
+		return this.#adblock ? this.#adblock.lists.map((l) => ({ ...l })) : [];
+	}
+	/**
+	 * Replace the built-in blocker's filter lists at runtime (docs/adblock.md
+	 * "Changing the lists"): the service worker rebuilds the engine and swaps it
+	 * in once compiled, keeping the old lists serving in between, so the change
+	 * is live. An inline list (`{ filters, ... }`) compiles the custom-filters
+	 * editor's own rules. The lists travel with every later handshake too, so a
+	 * worker that restarts rebuilds from them. Returns `'live'` when the blocker
+	 * is on to apply them, `'off'` when the host turned it off.
+	 */
+	async setAdblockLists(
+		lists: (string | AdblockList)[],
+	): Promise<AdblockApplied> {
+		if (!this.#adblock) return { applied: 'off' };
+		this.#adblock = withAdblockLists(this.#adblock, lists);
+		await this.#ready;
+		await this.#call('adblock', { init: this.#adblock });
+		return { applied: 'live' };
+	}
+	/**
+	 * Re-fetch and recompile the blocker's current lists (the demo's "Update
+	 * lists" button): the engine is rebuilt even when the stored one for these
+	 * exact lists is still fresh. `'off'` when the blocker is off.
+	 */
+	async refreshAdblockLists(): Promise<AdblockApplied> {
+		if (!this.#adblock) return { applied: 'off' };
+		await this.#ready;
+		await this.#call('adblock', { init: this.#adblock, refresh: true });
+		return { applied: 'live' };
 	}
 	/** drop every entry of the service worker's HTTP cache */
 	async clearCache(): Promise<void> {

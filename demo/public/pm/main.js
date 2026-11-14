@@ -2990,7 +2990,9 @@ function syncShields() {
 	const state = controller.shields.get(host);
 	shieldsButton.classList.toggle('up', !!state.enabled);
 	const count = shieldsCountNow();
-	shieldsBadge.hidden = count === 0 || !state.enabled;
+	// the global "Show the number of blocked items on the shields icon" setting
+	// hides the count badge everywhere when off (Global Settings page)
+	shieldsBadge.hidden = count === 0 || !state.enabled || !shieldsShowBadge();
 	shieldsBadge.textContent = count > 999 ? '999+' : String(count);
 	// keep an open panel's live numbers in step with the badge
 	if (
@@ -3190,12 +3192,14 @@ function wireShieldsPanel(host) {
 		setShield(host, { enabled: event.target.checked });
 		buildShieldsPanel(host); // the layout changes between up and down
 	});
-	q('#shFilterLists')?.addEventListener('click', () =>
-		shieldsComingSoon('Filter lists'),
-	);
-	q('#shGlobal')?.addEventListener('click', () =>
-		shieldsComingSoon('Global Settings'),
-	);
+	q('#shFilterLists')?.addEventListener('click', () => {
+		closeShields();
+		openShieldsPage('filters');
+	});
+	q('#shGlobal')?.addEventListener('click', () => {
+		closeShields();
+		openShieldsPage('global');
+	});
 	q('#shReport')?.addEventListener('click', () =>
 		setStatus('Thanks, broken-site reports are coming in a later phase.'),
 	);
@@ -3278,7 +3282,734 @@ function wireDrop(id, onPick) {
 	}
 }
 
-// the detail views and the global pages are placeholders in phase 1
+// ---- Shields settings pages -------------------------------------------------
+// Two full-overlay pages the Shields panel's footer opens, after Brave's
+// brave://settings/shields and .../shields/filters: "Content Filters" (the
+// filter-list editor, with the custom-filters code editor) and "Global
+// Settings" (the defaults behind the per-site shields, the '*' entry). Both
+// are real: the Global rows write the controller's '*' shields default, so
+// they change new-site behaviour; the Filter Lists editor calls
+// controller.setAdblockLists, which rebuilds the blocker's engine LIVE (the
+// old lists keep serving until the new ones compile). The custom-filters
+// editor feeds the user's own uBlock-syntax rules as one inline, untrusted
+// list (docs/adblock.md "Changing the lists").
+
+const shieldsPage = $('shieldsPage');
+const shieldsPageScrim = $('shieldsPageScrim');
+
+// a few optional community lists STomp can fetch, beyond the eight defaults
+// (the "Additional popular community lists" box). Plain third-party lists are
+// untrusted: only uBlock Origin's own carry the trusted-* scriptlets, and the
+// user did not write these, so they stay as published. These are not uBO's, so
+// untrusted all round.
+const OPTIONAL_LISTS = [
+	{
+		url: 'https://secure.fanboy.co.nz/fanboy-cookiemonster.txt',
+		name: 'Cookie notice blocker',
+		source: 'EasyList Cookie',
+	},
+	{
+		url: 'https://secure.fanboy.co.nz/fanboy-annoyance.txt',
+		name: 'Annoying distractions blocker',
+		source: "Fanboy's Annoyances",
+	},
+	{
+		url: 'https://secure.fanboy.co.nz/fanboy-social.txt',
+		name: 'Social media buttons blocker',
+		source: "Fanboy's Social",
+	},
+];
+
+// the host-owned editor state, kept in this page's own localStorage and
+// applied to the blocker. `off`: default-list URLs the user unchecked; `on`:
+// optional-list URLs the user checked; `custom`: user-added list URLs
+// (untrusted); `filters`: the custom-filters editor's text; `developer`: the
+// developer-mode switch that reveals the custom-filters editor.
+const ADBLOCK_CONFIG_KEY = 'stomp-demo:adblock-config';
+const SHIELDS_BADGE_KEY = 'stomp-demo:shields-badge';
+
+function loadAdblockConfig() {
+	try {
+		const raw = JSON.parse(localStorage.getItem(ADBLOCK_CONFIG_KEY));
+		if (raw && typeof raw === 'object')
+			return {
+				off: Array.isArray(raw.off)
+					? raw.off.filter((u) => typeof u === 'string')
+					: [],
+				on: Array.isArray(raw.on)
+					? raw.on.filter((u) => typeof u === 'string')
+					: [],
+				custom: Array.isArray(raw.custom)
+					? raw.custom.filter((e) => e && typeof e.url === 'string')
+					: [],
+				filters: typeof raw.filters === 'string' ? raw.filters : '',
+				developer: !!raw.developer,
+			};
+	} catch {}
+	return { off: [], on: [], custom: [], filters: '', developer: false };
+}
+
+let adblockConfig = loadAdblockConfig();
+
+function persistAdblockConfig() {
+	try {
+		localStorage.setItem(ADBLOCK_CONFIG_KEY, JSON.stringify(adblockConfig));
+	} catch {}
+}
+
+// whether this config asks for anything but the eight defaults: a fresh visit
+// (nothing of its own) loads the defaults with no extra engine build
+function adblockConfigCustomized() {
+	return (
+		adblockConfig.off.length > 0 ||
+		adblockConfig.on.length > 0 ||
+		adblockConfig.custom.length > 0 ||
+		adblockConfig.filters.trim() !== ''
+	);
+}
+
+// the lists to hand the blocker: the enabled defaults, the enabled optional
+// lists, the user's custom URL lists (untrusted), then the custom-filters
+// editor's text as one inline, untrusted list
+function effectiveAdblockLists() {
+	const defaults = controller.adblockDefaults
+		? controller.adblockDefaults()
+		: [];
+	const lists = [];
+	for (const list of defaults)
+		if (!adblockConfig.off.includes(list.url)) lists.push(list);
+	for (const opt of OPTIONAL_LISTS)
+		if (adblockConfig.on.includes(opt.url))
+			lists.push({ url: opt.url, name: opt.name });
+	for (const entry of adblockConfig.custom)
+		lists.push({
+			url: entry.url,
+			name: entry.name || entry.url,
+			trusted: false,
+		});
+	const filters = adblockConfig.filters.trim();
+	if (filters)
+		lists.push({
+			url: 'stomp-filters:my-filters',
+			name: 'My filters',
+			filters: adblockConfig.filters,
+			trusted: false,
+		});
+	return lists;
+}
+
+// push the current config to the blocker, rebuilding its engine live. Reports
+// honestly whether it applied ('live') or the blocker is off ('off', nothing
+// to apply); never claims "applied" when it did not.
+async function applyAdblockLists(note = 'Filter lists updated', reload = true) {
+	if (!controller?.setAdblockLists) return null;
+	try {
+		const result = await controller.setAdblockLists(effectiveAdblockLists());
+		if (result.applied === 'live') {
+			// setAdblockLists resolves once the engine is rebuilt and serving, so
+			// a reload here re-serves the page with the new filter set (the live
+			// change filters new requests; a reload also re-hides, re-runs the
+			// cosmetic side the already-built page kept)
+			if (reload) {
+				reloadActiveTab();
+				setShieldsPageStatus(
+					`${note}. The page was reloaded with the updated filters.`,
+				);
+			} else
+				setShieldsPageStatus(
+					`${note}. New requests are filtered by the updated lists.`,
+				);
+		} else
+			setShieldsPageStatus(
+				'The content blocker is off. Turn it on (the shield toggle by the transport) to apply filter lists.',
+				true,
+			);
+		return result;
+	} catch (error) {
+		setShieldsPageStatus(`Could not apply: ${error.message}`, true);
+		return null;
+	}
+}
+
+// on boot, a kept non-default config is applied once the controller is ready;
+// a fresh config does nothing, so a first visit builds the defaults only. No
+// reload here: the page the controller restores loads with the config already
+// in force
+function applyAdblockConfigOnBoot() {
+	if (adblockConfigCustomized())
+		applyAdblockLists('Filter lists restored', false);
+}
+
+// re-serve the active tab, as the reload button does, so a shields or filter
+// change that only takes effect on a fresh load actually takes effect. A no-op
+// with no active tab (the shields pages open from a site, so there is one)
+function reloadActiveTab() {
+	if (!activeTab) return;
+	stopGoing(activeTab); // the reload stays on the page the tab shows
+	blockedCounts.set(activeTab.frame, 0); // the blocked count starts over
+	activeTab.frame.reload();
+}
+
+function shieldsShowBadge() {
+	try {
+		return localStorage.getItem(SHIELDS_BADGE_KEY) !== '0';
+	} catch {
+		return true;
+	}
+}
+function setShieldsShowBadge(on) {
+	try {
+		localStorage.setItem(SHIELDS_BADGE_KEY, on ? '1' : '0');
+	} catch {}
+	syncShields();
+}
+
+// the '*' default shields entry (the baseline behind every site with no entry
+// of its own): what the Global Settings rows read and write
+function globalShields() {
+	return controller.shields.get('*');
+}
+function setGlobalShield(patch) {
+	controller.shields.set('*', patch);
+	syncShields();
+	// the per-layer defaults (mode, HTTPS upgrade, cookies, fingerprint, block
+	// scripts) take effect when a page is served, so reload the active tab so
+	// its site, if it has no entry of its own, re-serves under the new defaults
+	reloadActiveTab();
+}
+
+// a short status line at the foot of the page, cleared after a while
+let shieldsPageStatusTimer = 0;
+function setShieldsPageStatus(text, bad = false) {
+	const line = shieldsPage.querySelector('.spStatus');
+	if (!line) return;
+	line.textContent = text;
+	line.classList.toggle('bad', bad);
+	line.classList.toggle('show', true);
+	clearTimeout(shieldsPageStatusTimer);
+	shieldsPageStatusTimer = setTimeout(() => {
+		line.classList.remove('show');
+	}, 6000);
+}
+
+// lightweight uBlock-syntax highlighting for the custom-filters editor: a
+// coloured <pre> backdrop behind a transparent textarea (the caret and
+// selection stay native). Comments, the cosmetic separators (##, #@#, #?#),
+// network options after $, and @@ exceptions are tinted; everything else is
+// plain. Cheap: one pass of small regexps per line, only on input.
+function highlightFilters(text) {
+	const esc = (s) => escapeHtml(s);
+	return text
+		.split('\n')
+		.map((line) => {
+			if (line === '') return '<span class="cmPlain"> </span>';
+			const trimmed = line.trimStart();
+			if (trimmed.startsWith('!') || trimmed.startsWith('# '))
+				return `<span class="cmComment">${esc(line)}</span>`;
+			// cosmetic rule: domains ## selector (or #@#, #?#, #$#)
+			const cosmetic = line.match(/^(.*?)(#@?\$?\??#)(.*)$/);
+			if (cosmetic)
+				return (
+					`<span class="cmDomain">${esc(cosmetic[1])}</span>` +
+					`<span class="cmSep">${esc(cosmetic[2])}</span>` +
+					`<span class="cmSelector">${esc(cosmetic[3])}</span>`
+				);
+			// network rule: optional @@ exception, a pattern, optional $options
+			let html = '';
+			let rest = line;
+			if (rest.startsWith('@@')) {
+				html += '<span class="cmException">@@</span>';
+				rest = rest.slice(2);
+			}
+			const opt = rest.match(/^(.*?)(\$)([^$]*)$/);
+			if (opt)
+				html +=
+					`<span class="cmPlain">${esc(opt[1])}</span>` +
+					`<span class="cmSep">$</span>` +
+					`<span class="cmOption">${esc(opt[3])}</span>`;
+			else html += `<span class="cmPlain">${esc(rest)}</span>`;
+			return html;
+		})
+		.join('\n');
+}
+
+// a monospace code editor: a line-number gutter and a textarea over a
+// syntax-highlighted backdrop. Returns the textarea so callers can read it.
+function buildFilterEditor(initial) {
+	const wrap = element('div', 'cmEditor');
+	const gutter = element('div', 'cmGutter');
+	const area = element('div', 'cmArea');
+	const pre = element('pre', 'cmHighlight');
+	pre.setAttribute('aria-hidden', 'true');
+	const code = element('code', 'cmCode');
+	pre.append(code);
+	const input = element('textarea', 'cmInput');
+	input.spellcheck = false;
+	input.autocapitalize = 'off';
+	input.setAttribute('autocomplete', 'off');
+	input.setAttribute('autocorrect', 'off');
+	input.setAttribute(
+		'aria-label',
+		'Custom filters, one uBlock-syntax rule per line',
+	);
+	input.value = initial;
+	area.append(pre, input);
+	wrap.append(gutter, area);
+
+	const sync = () => {
+		code.innerHTML = highlightFilters(input.value);
+		const lines = input.value.split('\n').length;
+		let nums = '';
+		for (let i = 1; i <= lines; i++) nums += `${i}\n`;
+		gutter.textContent = nums;
+	};
+	const scroll = () => {
+		pre.scrollTop = input.scrollTop;
+		pre.scrollLeft = input.scrollLeft;
+		gutter.scrollTop = input.scrollTop;
+	};
+	input.addEventListener('input', sync);
+	input.addEventListener('scroll', scroll);
+	// a Tab inserts two spaces instead of leaving the editor
+	input.addEventListener('keydown', (event) => {
+		if (event.key !== 'Tab' || event.shiftKey) return;
+		event.preventDefault();
+		const start = input.selectionStart;
+		const end = input.selectionEnd;
+		input.value = `${input.value.slice(0, start)}  ${input.value.slice(end)}`;
+		input.selectionStart = input.selectionEnd = start + 2;
+		sync();
+	});
+	sync();
+	wrap._input = input;
+	return wrap;
+}
+
+// count the real filter rules in the editor text (non-blank, non-comment),
+// for the honest "N rules" status
+function countFilterRules(text) {
+	return text.split('\n').filter((line) => {
+		const t = line.trim();
+		return t && !t.startsWith('!') && !t.startsWith('# ');
+	}).length;
+}
+
+function buildFilterListsPage() {
+	const defaults = controller.adblockDefaults
+		? controller.adblockDefaults()
+		: [];
+	const blockerOff = defaults.length === 0;
+	shieldsPage.dataset.view = 'filters';
+	shieldsPage.innerHTML = `
+		<div class="spHead">
+			<button class="spBack" id="spBack" type="button" aria-label="Back">
+				${shieldIcon('caret', 'shieldsIcon')}
+			</button>
+			<h2 class="spTitle" id="shieldsPageTitle">Content Filters</h2>
+			<button class="spClose" id="spClose" type="button" aria-label="Close">×</button>
+		</div>
+		<div class="spBody">
+			${
+				blockerOff
+					? `<div class="spCallout warn">The content blocker is off. Turn it on with the shield toggle beside the transport selector to edit and apply filter lists.</div>`
+					: ''
+			}
+			<section class="spSection">
+				<h3 class="spSectionTitle">Filter lists</h3>
+				<p class="spSectionNote">Additional popular community lists. Note that enabling too many filters will degrade browsing speeds.</p>
+				<div class="spListBox" id="spListBox"></div>
+				<div class="spRowButtons">
+					<button class="spBtn ghost" id="spShowFull" type="button">Show full list</button>
+					<button class="spBtn ghost" id="spUpdate" type="button">Update lists</button>
+				</div>
+			</section>
+
+			<section class="spSection">
+				<h3 class="spSectionTitle">Add custom filter lists</h3>
+				<p class="spSectionNote">Add additional lists created and maintained by your trusted community. Only subscribe to lists from entities you trust.</p>
+				<p class="spSectionNote good">Lists are fetched through the proxy, so the list server never sees your address, only the wisp server's. A custom list is untrusted: it cannot run the trusted-* scriptlets that edit a page's cookies, storage or responses.</p>
+				<div class="spAddRow">
+					<input class="spInput" id="spCustomUrl" type="url" inputmode="url" placeholder="Enter filter list URL" aria-label="Filter list URL" />
+					<button class="spBtn" id="spCustomAdd" type="button">Add</button>
+				</div>
+				<div class="spCustomList" id="spCustomList"></div>
+			</section>
+
+			<section class="spSection">
+				<div class="spToggleRow">
+					<div class="spRowText">
+						<div class="spRowLabel">Developer mode</div>
+						<div class="spRowSub">Allow adding custom filters and scriptlets.</div>
+					</div>
+					<input type="checkbox" class="shieldsToggle small" id="spDeveloper" ${adblockConfig.developer ? 'checked' : ''} aria-label="Developer mode" />
+				</div>
+			</section>
+
+			<div id="spDevArea" class="${adblockConfig.developer ? '' : 'hidden'}">
+				<section class="spSection">
+					<h3 class="spSectionTitle">Create custom filters</h3>
+					<p class="spSectionNote">Add custom filters you've created, one per line, in the field below. Be sure to use the Adblock filter syntax.</p>
+					<div id="spEditorMount"></div>
+					<div class="spRowButtons">
+						<span class="spEditorStat" id="spEditorStat"></span>
+						<button class="spBtn" id="spSaveFilters" type="button">Save changes</button>
+					</div>
+				</section>
+
+				<section class="spSection">
+					<h3 class="spSectionTitle">Custom scriptlets</h3>
+					<p class="spSectionNote warn">Not available in STomp. Scriptlets run with the trusted-* powers that edit a page's cookies, storage and responses, so STomp never runs scriptlets a user typed. Only the maintained lists' own scriptlets run, and only from lists marked trusted.</p>
+				</section>
+			</div>
+
+			<div class="spStatus" id="spStatus" aria-live="polite"></div>
+		</div>`;
+
+	// the filter-list rows: the eight defaults (checked unless unchecked) then
+	// the optional community lists (checked only when the user added them)
+	const box = shieldsPage.querySelector('#spListBox');
+	const rowFor = (url, name, source, on, trusted) => {
+		const row = element('label', 'spListRow');
+		const check = element('input');
+		check.type = 'checkbox';
+		check.className = 'spCheck';
+		check.checked = on;
+		check.disabled = blockerOff;
+		const text = element('span', 'spListText');
+		const title = element('span', 'spListName', name);
+		if (trusted) {
+			const tag = element('span', 'spTag', 'trusted');
+			title.append(' ', tag);
+		}
+		text.append(title, element('span', 'spListSource', source));
+		row.append(check, text);
+		return { row, check };
+	};
+	for (const list of defaults) {
+		const on = !adblockConfig.off.includes(list.url);
+		const { row, check } = rowFor(
+			list.url,
+			list.name || list.url,
+			shortListUrl(list.url),
+			on,
+			list.trusted,
+		);
+		check.addEventListener('change', () => {
+			adblockConfig.off = adblockConfig.off.filter((u) => u !== list.url);
+			if (!check.checked) adblockConfig.off.push(list.url);
+			persistAdblockConfig();
+			applyAdblockLists();
+		});
+		box.append(row);
+	}
+	for (const opt of OPTIONAL_LISTS) {
+		const on = adblockConfig.on.includes(opt.url);
+		const { row, check } = rowFor(opt.url, opt.name, opt.source, on, false);
+		check.addEventListener('change', () => {
+			adblockConfig.on = adblockConfig.on.filter((u) => u !== opt.url);
+			if (check.checked) adblockConfig.on.push(opt.url);
+			persistAdblockConfig();
+			applyAdblockLists();
+		});
+		box.append(row);
+	}
+
+	renderCustomLists();
+
+	const editor = buildFilterEditor(adblockConfig.filters);
+	shieldsPage.querySelector('#spEditorMount').append(editor);
+	const editorInput = editor._input;
+	const stat = shieldsPage.querySelector('#spEditorStat');
+	const showStat = () => {
+		const n = countFilterRules(editorInput.value);
+		stat.textContent = n ? `${n} rule${n === 1 ? '' : 's'}` : 'No rules yet';
+	};
+	editorInput.addEventListener('input', showStat);
+	showStat();
+
+	shieldsPage
+		.querySelector('#spBack')
+		.addEventListener('click', backShieldsPage);
+	shieldsPage
+		.querySelector('#spClose')
+		.addEventListener('click', closeShieldsPage);
+	shieldsPage
+		.querySelector('#spShowFull')
+		.addEventListener('click', () =>
+			setShieldsPageStatus(
+				'STomp ships the eight default lists and these optional ones; a fuller catalogue is a later phase. Add any list by URL below.',
+			),
+		);
+	shieldsPage.querySelector('#spUpdate').addEventListener('click', async () => {
+		setShieldsPageStatus('Updating lists…');
+		const result = await controller.refreshAdblockLists?.();
+		if (result?.applied === 'live') {
+			reloadActiveTab();
+			setShieldsPageStatus(
+				'Lists re-fetched and recompiled through the proxy; the page was reloaded.',
+			);
+		} else if (result?.applied === 'off')
+			setShieldsPageStatus(
+				'The content blocker is off; nothing to update.',
+				true,
+			);
+	});
+	shieldsPage
+		.querySelector('#spDeveloper')
+		.addEventListener('change', (event) => {
+			adblockConfig.developer = event.target.checked;
+			persistAdblockConfig();
+			shieldsPage
+				.querySelector('#spDevArea')
+				.classList.toggle('hidden', !event.target.checked);
+		});
+	shieldsPage.querySelector('#spSaveFilters').addEventListener('click', () => {
+		adblockConfig.filters = editorInput.value;
+		persistAdblockConfig();
+		applyAdblockLists('Custom filters saved');
+	});
+	const addInput = shieldsPage.querySelector('#spCustomUrl');
+	const addList = () => {
+		const url = addInput.value.trim();
+		if (!url) return;
+		let parsed;
+		try {
+			parsed = new URL(url);
+		} catch {
+			setShieldsPageStatus('That is not a valid URL.', true);
+			return;
+		}
+		if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+			setShieldsPageStatus('A filter list must be an http(s) URL.', true);
+			return;
+		}
+		if (
+			adblockConfig.custom.some((e) => e.url === parsed.href) ||
+			[...defaults, ...OPTIONAL_LISTS].some((l) => l.url === parsed.href)
+		) {
+			setShieldsPageStatus('That list is already in the list.', true);
+			return;
+		}
+		adblockConfig.custom.push({ url: parsed.href });
+		addInput.value = '';
+		persistAdblockConfig();
+		renderCustomLists();
+		applyAdblockLists('Custom list added');
+	};
+	shieldsPage.querySelector('#spCustomAdd').addEventListener('click', addList);
+	addInput.addEventListener('keydown', (event) => {
+		if (event.key === 'Enter') {
+			event.preventDefault();
+			addList();
+		}
+	});
+}
+
+// the shortest readable form of a list URL for the grey source line
+function shortListUrl(url) {
+	try {
+		const u = new URL(url);
+		return u.hostname.replace(/^www\./, '') + u.pathname;
+	} catch {
+		return url;
+	}
+}
+
+function renderCustomLists() {
+	const box = shieldsPage.querySelector('#spCustomList');
+	if (!box) return;
+	box.replaceChildren();
+	if (!adblockConfig.custom.length) return;
+	for (const entry of adblockConfig.custom) {
+		const row = element('div', 'spCustomRow');
+		const text = element('span', 'spCustomUrlText', entry.url);
+		const remove = element('button', 'spCustomRemove', '×');
+		remove.type = 'button';
+		remove.title = 'Remove';
+		remove.setAttribute('aria-label', `Remove ${entry.url}`);
+		remove.addEventListener('click', () => {
+			adblockConfig.custom = adblockConfig.custom.filter(
+				(e) => e.url !== entry.url,
+			);
+			persistAdblockConfig();
+			renderCustomLists();
+			applyAdblockLists('Custom list removed');
+		});
+		row.append(text, remove);
+		box.append(row);
+	}
+}
+
+// a native select styled like the panel's dropdowns, for the Global rows
+function spSelect(id, value, options) {
+	const sel = element('select', 'shieldsSelect spSelect');
+	sel.id = id;
+	for (const opt of options) {
+		const o = element('option', null, opt.label);
+		o.value = opt.v;
+		if (opt.v === value) o.selected = true;
+		sel.append(o);
+	}
+	return sel;
+}
+
+function buildGlobalPage() {
+	const g = globalShields();
+	shieldsPage.dataset.view = 'global';
+	shieldsPage.innerHTML = `
+		<div class="spHead">
+			<h2 class="spTitle" id="shieldsPageTitle">Shields</h2>
+			<button class="spClose" id="spClose" type="button" aria-label="Close">×</button>
+		</div>
+		<div class="spBody">
+			<div class="spCallout">
+				<div class="spCalloutTitle">Block trackers and ads which follow you across the web</div>
+				<p>These are the default Shields settings. They apply to all websites unless you change something in the Shields panel on a particular site. Changing these won't affect your existing per-site settings.</p>
+			</div>
+
+			<div class="spRows">
+				<div class="spSettingRow">
+					<div class="spRowText"><div class="spRowLabel">Show the number of blocked items on the shields icon</div></div>
+					<input type="checkbox" class="shieldsToggle small" id="spBadge" ${shieldsShowBadge() ? 'checked' : ''} aria-label="Show the number of blocked items on the shields icon" />
+				</div>
+				<div class="spSettingRow">
+					<div class="spRowText"><div class="spRowLabel">Trackers &amp; ads blocking</div></div>
+					<div class="spRowControl" id="spModeMount"></div>
+				</div>
+				<div class="spSettingRow">
+					<div class="spRowText"><div class="spRowLabel">Upgrade connections to HTTPS</div></div>
+					<div class="spRowControl" id="spHttpsMount"></div>
+				</div>
+				<div class="spSettingRow">
+					<div class="spRowText"><div class="spRowLabel">Block scripts</div></div>
+					<input type="checkbox" class="shieldsToggle small" id="spScripts" ${g.blockScripts ? 'checked' : ''} aria-label="Block scripts" />
+				</div>
+				<div class="spSettingRow">
+					<div class="spRowText"><div class="spRowLabel">Block fingerprinting</div></div>
+					<input type="checkbox" class="shieldsToggle small" id="spFp" ${g.blockFingerprinting !== false ? 'checked' : ''} aria-label="Block fingerprinting" />
+				</div>
+				<div class="spSettingRow">
+					<div class="spRowText"><div class="spRowLabel">Block cookies</div></div>
+					<div class="spRowControl" id="spCookiesMount"></div>
+				</div>
+				<div class="spSettingRow">
+					<div class="spRowText">
+						<div class="spRowLabel">Forget me when I close this site</div>
+						<div class="spRowSub">Clears cookies and other site data when you close a site.</div>
+					</div>
+					<input type="checkbox" class="shieldsToggle small" id="spForget" ${g.forget ? 'checked' : ''} aria-label="Forget me when I close this site" />
+				</div>
+				<button class="spSettingRow nav" id="spContentFiltering" type="button">
+					<div class="spRowText"><div class="spRowLabel">Content filtering</div><div class="spRowSub">Filter lists and your own custom filters.</div></div>
+					${shieldIcon('caret', 'shieldsIcon')}
+				</button>
+			</div>
+
+			<div class="spStatus" id="spStatus" aria-live="polite"></div>
+		</div>`;
+
+	shieldsPage.querySelector('#spModeMount').append(
+		spSelect('spMode', g.mode, [
+			{ v: 'aggressive', label: 'Aggressive' },
+			{ v: 'standard', label: 'Standard' },
+			{ v: 'allow', label: 'Allow all trackers & ads' },
+		]),
+	);
+	shieldsPage.querySelector('#spHttpsMount').append(
+		spSelect('spHttps', g.httpsUpgrade, [
+			{ v: 'strict', label: 'Only connect with HTTPS' },
+			{ v: 'upgrade', label: 'Upgrade connections to HTTPS' },
+			{ v: 'off', label: "Don't upgrade connections" },
+		]),
+	);
+	shieldsPage.querySelector('#spCookiesMount').append(
+		spSelect('spCookies', g.cookies, [
+			{ v: 'all', label: 'Block all cookies' },
+			{ v: 'third-party', label: 'Block third-party cookies' },
+			{ v: 'allow', label: 'Allow all cookies' },
+		]),
+	);
+
+	const q = (sel) => shieldsPage.querySelector(sel);
+	q('#spClose').addEventListener('click', closeShieldsPage);
+	q('#spBadge').addEventListener('change', (e) =>
+		setShieldsShowBadge(e.target.checked),
+	);
+	q('#spMode').addEventListener('change', (e) =>
+		setGlobalShield({ mode: e.target.value }),
+	);
+	q('#spHttps').addEventListener('change', (e) =>
+		setGlobalShield({ httpsUpgrade: e.target.value }),
+	);
+	q('#spScripts').addEventListener('change', (e) =>
+		setGlobalShield({ blockScripts: e.target.checked }),
+	);
+	q('#spFp').addEventListener('change', (e) =>
+		setGlobalShield({ blockFingerprinting: e.target.checked }),
+	);
+	q('#spCookies').addEventListener('change', (e) =>
+		setGlobalShield({ cookies: e.target.value }),
+	);
+	q('#spForget').addEventListener('change', (e) =>
+		setGlobalShield({ forget: e.target.checked }),
+	);
+	q('#spContentFiltering').addEventListener('click', () =>
+		openShieldsPage('filters', 'global'),
+	);
+}
+
+// which page opened this one, so the Filter Lists back arrow returns to Global
+// Settings when that is where it came from, else closes
+let shieldsPageFrom = null;
+let shieldsPageOpener = null;
+
+function openShieldsPage(view, from = null) {
+	shieldsPageFrom = from;
+	if (!shieldsPageOpener) shieldsPageOpener = document.activeElement;
+	if (view === 'global') buildGlobalPage();
+	else buildFilterListsPage();
+	shieldsPage.classList.remove('hidden');
+	shieldsPage.setAttribute('aria-hidden', 'false');
+	shieldsPageScrim.classList.remove('hidden');
+	landing.inert = true;
+	browser.inert = true;
+	shieldsPage.scrollTop = 0;
+	(shieldsPage.querySelector('.spClose') || shieldsPage).focus();
+}
+
+function backShieldsPage() {
+	if (shieldsPageFrom === 'global') openShieldsPage('global');
+	else closeShieldsPage();
+}
+
+function closeShieldsPage() {
+	shieldsPage.classList.add('hidden');
+	shieldsPage.setAttribute('aria-hidden', 'true');
+	shieldsPageScrim.classList.add('hidden');
+	landing.inert = false;
+	browser.inert = false;
+	shieldsPageFrom = null;
+	const opener = shieldsPageOpener;
+	shieldsPageOpener = null;
+	if (opener && opener.isConnected) opener.focus();
+}
+
+const shieldsPageOpen = () => !shieldsPage.classList.contains('hidden');
+
+shieldsPageScrim.addEventListener('click', closeShieldsPage);
+addEventListener(
+	'keydown',
+	(event) => {
+		if (event.key !== 'Escape' || !shieldsPageOpen()) return;
+		if (shieldsPage.dataset.view === 'filters' && shieldsPageFrom === 'global')
+			backShieldsPage();
+		else closeShieldsPage();
+		event.stopImmediatePropagation();
+	},
+	true,
+);
+
+// the detail views and the panel's own popovers are placeholders in phase 1
 function shieldsComingSoon(title) {
 	const back = shieldsPanel.dataset.host;
 	shieldsPanel.classList.remove('down');
@@ -3343,6 +4074,9 @@ addEventListener(
 const booted = boot();
 booted
 	.then(async () => {
+		// a kept, non-default filter-list config is applied once the controller
+		// is up (a fresh visit loads the defaults with no extra engine build)
+		applyAdblockConfigOnBoot();
 		// restore a proxied URL from the fragment after a refresh
 		const restore = await readHash();
 		if (restore) navigate(restore, { newTab: true });

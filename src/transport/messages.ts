@@ -810,6 +810,14 @@ export type SWbound = {
 	 * it held, and travels with every handshake as the rules do
 	 */
 	shields: [SiteShields[]];
+	/**
+	 * change the built-in blocker's lists at runtime (the demo's Filter Lists
+	 * editor, docs/adblock.md): the controller re-resolves the `AdblockInit` and
+	 * the worker rebuilds the engine in place, serving the old lists until the
+	 * new ones compile. `refresh` re-fetches even unchanged lists ("Update
+	 * lists"). Travels with every handshake too, as the init's `adblock` does
+	 */
+	adblock: [{ init: AdblockInit; refresh?: boolean }];
 };
 
 /** a cookie as the jar stores it, for export and import by the host */

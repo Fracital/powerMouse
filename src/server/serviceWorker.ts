@@ -256,6 +256,9 @@ function registerController(
 			shields: async (list) => {
 				(await server).setShields(list);
 			},
+			adblock: async ({ init, refresh }) => {
+				await (await server).reloadBlocker(init, !!refresh);
+			},
 			forgetStorage: async (origin) => {
 				await (await server).forgetStorage(origin);
 			},

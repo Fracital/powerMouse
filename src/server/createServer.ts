@@ -80,6 +80,14 @@ export interface StompServer {
 	routeAs(kind: string, url: string): string;
 	/** the built-in blocker, unless the host turned it off (docs/adblock.md) */
 	blocker?: Blocker;
+	/**
+	 * Change the built-in blocker's lists at runtime (the controller's `adblock`
+	 * RPC, from the demo's Filter Lists editor): the engine is rebuilt in place
+	 * and keeps serving the old lists until the new ones compile. `force`
+	 * re-fetches even unchanged lists (the "Update lists" button). A no-op when
+	 * the host turned the blocker off (there is no engine to reload).
+	 */
+	reloadBlocker(init: AdblockInit, force?: boolean): Promise<void>;
 	/** the per-site shields the controller set (src/server/shields.ts) */
 	shields: ShieldsStore;
 	/** replace the per-site shields allowlist (the controller's `shields` RPC) */
@@ -119,18 +127,25 @@ const blockers = new Map<
 	{ blocker: Blocker; bare: BareCompatibleClient }
 >();
 
-function sharedBlocker(
-	scope: string,
-	init: AdblockInit,
-	bare: BareCompatibleClient,
-): Blocker {
-	const key = JSON.stringify([
+/** a blocker of the `blockers` map is keyed by its scope and everything that
+ * shapes its engine, so controllers of one scope asking for the same lists
+ * share one, and a runtime list change (reloadBlocker) re-keys it */
+function blockerKey(scope: string, init: AdblockInit): string {
+	return JSON.stringify([
 		scope,
 		init.lists,
 		init.resources,
 		init.engine ?? '',
 		init.refreshMs,
 	]);
+}
+
+function sharedBlocker(
+	scope: string,
+	init: AdblockInit,
+	bare: BareCompatibleClient,
+): Blocker {
+	const key = blockerKey(scope, init);
 	let entry = blockers.get(key);
 	// one that never got an engine (no module, no list fetched) is tried
 	// again by the next controller to shake hands
@@ -147,6 +162,27 @@ function sharedBlocker(
 		blockers.set(key, entry);
 	} else entry.bare = bare;
 	return entry.blocker;
+}
+
+/**
+ * Change a scope's blocker lists at runtime (the demo's Filter Lists editor,
+ * docs/adblock.md): the engine is rebuilt in place, so the request path that
+ * holds this Blocker keeps working, and the `blockers` map is re-keyed to the
+ * new lists so a later controller of the scope with the same lists reuses it.
+ */
+function reconfigureBlocker(
+	scope: string,
+	blocker: Blocker,
+	init: AdblockInit,
+	force: boolean,
+): Promise<void> {
+	for (const [key, entry] of blockers)
+		if (entry.blocker === blocker) {
+			blockers.delete(key);
+			blockers.set(blockerKey(scope, init), entry);
+			break;
+		}
+	return blocker.reconfigure(init, force);
 }
 
 function sharedStores(scope: string): Promise<SharedStores> {
@@ -384,6 +420,10 @@ export default async function createServer(
 		blocker,
 		shields,
 		setShields: (list) => shields.set(list),
+		reloadBlocker: (next, force = false) =>
+			blocker
+				? reconfigureBlocker(init.scope, blocker, next, force)
+				: Promise.resolve(),
 		cookies,
 		forgetStorage: (origin) => forgetSiteStorage(origin, stores.storage),
 		clearCache: async () => {

@@ -101,6 +101,38 @@ nothing else, so only load an engine that the same `blocker.wasm` built
 `test/suites/adblock-engine.mjs` for the dozen lines it takes in node). The
 resources are not part of the engine and are still fetched.
 
+### Changing the lists
+
+A host application can change the lists while the proxy runs, without a
+reload. `controller.setAdblockLists(lists)` replaces the lists the blocker
+serves; the service worker rebuilds the engine and swaps it in once it is
+compiled, keeping the old lists serving in between, so the change is live.
+The new lists travel with every later handshake too, so a worker that
+restarts rebuilds from them. It returns `{ applied: 'live' }` when the
+blocker is on to apply them, `{ applied: 'off' }` when the host turned it
+off. `controller.refreshAdblockLists()` re-fetches and recompiles the
+current lists even when the stored engine for them is still fresh (a
+"check for updates" button).
+
+The live change is forward-looking, as a content blocker's own is: new
+requests and newly built documents are judged by the new lists, and a
+document already on screen keeps the cosmetic rules it was built with until
+it is navigated again.
+
+`controller.adblockDefaults()` returns the default lists (with their `name`),
+for a settings UI to show as toggle rows, and `controller.getAdblockLists()`
+the lists in force. `ControllerInit.adblockLists` seeds a non-default set on
+the first handshake, so a host that persisted the user's choices builds the
+engine from them once rather than rebuilding after a default build.
+
+A list may carry its filter text itself, in `filters`, in place of a `url`
+to fetch: the blocker compiles that text directly. This is how the demo's
+"custom filters" editor feeds the user's own uBlock-syntax rules to the
+engine, as one inline list alongside the fetched ones. An inline list's
+`url` only names it for the engine's cache key, and it must stay untrusted
+(`trusted: false`): the `trusted-*` scriptlets, which edit a page's cookies,
+storage and responses, are never run from rules a user typed.
+
 ## What it does
 
 **Requests.** The service worker asks the engine before a request reaches

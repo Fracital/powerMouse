@@ -2711,3 +2711,500 @@ input:focus-visible {
 .shields.down .shieldsDownHint {
 	display: block;
 }
+
+/* ---- Shields settings pages (Filter Lists, Global Settings) --------------- */
+/* full-overlay settings views in the Shields panel's own dark language, after
+   brave://settings/shields. One centred card over a dimmed page. */
+.shieldsPageScrim {
+	position: fixed;
+	inset: 0;
+	z-index: 62;
+	background: rgba(6, 6, 12, 0.6);
+	backdrop-filter: blur(2px);
+}
+.shieldsPageScrim.hidden {
+	display: none;
+}
+
+.shieldsPage {
+	position: fixed;
+	z-index: 63;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	width: min(720px, calc(100vw - 32px));
+	max-height: min(760px, calc(100vh - 56px));
+	display: flex;
+	flex-direction: column;
+	box-sizing: border-box;
+	border-radius: 14px;
+	background: #1c1c28;
+	color: #e9e9f1;
+	font-family: 'Montserrat', sans-serif;
+	font-weight: 500;
+	box-shadow:
+		0 24px 70px rgba(0, 0, 0, 0.6),
+		0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+.shieldsPage.hidden {
+	display: none;
+}
+.shieldsPage * {
+	box-sizing: border-box;
+}
+
+.spHead {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 16px 16px 14px;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+.spBack {
+	flex: none;
+	width: 30px;
+	height: 30px;
+	display: grid;
+	place-items: center;
+	padding: 0;
+	border: none;
+	border-radius: 7px;
+	background: none;
+	color: #b7b7cc;
+	cursor: pointer;
+	transform: rotate(180deg);
+}
+.spBack:hover {
+	background: rgba(255, 255, 255, 0.07);
+	color: #fff;
+}
+.spTitle {
+	flex: 1 1 auto;
+	margin: 0;
+	font-size: 19px;
+	font-weight: 700;
+	color: #fff;
+}
+.spClose {
+	flex: none;
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	border: none;
+	border-radius: 50%;
+	background: none;
+	color: #b7b7cc;
+	font-size: 22px;
+	line-height: 32px;
+	cursor: pointer;
+}
+.spClose:hover {
+	background: rgba(255, 255, 255, 0.1);
+	color: #fff;
+}
+.spBack:focus-visible,
+.spClose:focus-visible,
+.spBtn:focus-visible,
+.spCheck:focus-visible,
+.spSelect:focus-visible,
+.spInput:focus-visible,
+.spSettingRow.nav:focus-visible,
+.cmInput:focus-visible {
+	outline: 2px solid #8a9bff;
+	outline-offset: 2px;
+}
+
+.spBody {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 4px 20px 20px;
+}
+
+/* the intro card and off-blocker warning */
+.spCallout {
+	margin-top: 16px;
+	padding: 14px 16px;
+	border-radius: 10px;
+	background: #12121b;
+	border: 1px solid rgba(255, 255, 255, 0.05);
+}
+.spCallout.warn {
+	border-color: rgba(245, 171, 53, 0.4);
+	background: rgba(245, 171, 53, 0.08);
+	color: #f0cf96;
+	font-size: 12.5px;
+}
+.spCalloutTitle {
+	font-size: 14px;
+	font-weight: 700;
+	color: #fff;
+	margin-bottom: 6px;
+}
+.spCallout p {
+	margin: 0;
+	color: #b7b7cc;
+	font-size: 12.5px;
+	line-height: 1.5;
+}
+
+.spSection {
+	padding: 18px 0;
+	border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.spSection:first-of-type {
+	border-top: none;
+}
+.spSectionTitle {
+	margin: 0 0 6px;
+	font-size: 14.5px;
+	font-weight: 700;
+	color: #fff;
+}
+.spSectionNote {
+	margin: 0 0 12px;
+	color: #9a9ab2;
+	font-size: 12px;
+	line-height: 1.5;
+	max-width: 62ch;
+}
+.spSectionNote.good {
+	color: #7fd8a6;
+}
+.spSectionNote.warn {
+	color: #f0cf96;
+}
+
+/* the scrollable filter-list box: checkbox + bold name + grey source */
+.spListBox {
+	max-height: 230px;
+	overflow-y: auto;
+	border-radius: 9px;
+	background: #12121b;
+	border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.spListRow {
+	display: flex;
+	align-items: flex-start;
+	gap: 11px;
+	padding: 11px 14px;
+	border-top: 1px solid rgba(255, 255, 255, 0.05);
+	cursor: pointer;
+}
+.spListRow:first-child {
+	border-top: none;
+}
+.spListRow:hover {
+	background: rgba(255, 255, 255, 0.03);
+}
+.spCheck {
+	flex: none;
+	width: 17px;
+	height: 17px;
+	margin-top: 1px;
+	accent-color: #7c5cf6;
+	cursor: pointer;
+}
+.spListText {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+.spListName {
+	font-size: 13px;
+	font-weight: 600;
+	color: #e9e9f1;
+}
+.spListSource {
+	font-size: 11.5px;
+	color: #8585a0;
+	word-break: break-word;
+}
+.spTag {
+	display: inline-block;
+	padding: 0 6px;
+	border-radius: 999px;
+	font-size: 10px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	color: #b7a6ff;
+	background: rgba(124, 92, 246, 0.18);
+	vertical-align: 1px;
+}
+
+.spRowButtons {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-top: 12px;
+}
+.spBtn {
+	padding: 8px 16px;
+	border-radius: 8px;
+	border: none;
+	background: linear-gradient(120deg, #4c54d2, #8a5cf6);
+	color: #fff;
+	font-family: inherit;
+	font-size: 12.5px;
+	font-weight: 600;
+	cursor: pointer;
+}
+.spBtn:hover {
+	filter: brightness(1.08);
+}
+.spBtn.ghost {
+	background: #2a2a3a;
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	color: #e9e9f1;
+}
+.spBtn.ghost:hover {
+	background: #33334a;
+	filter: none;
+}
+
+.spAddRow {
+	display: flex;
+	gap: 10px;
+}
+.spInput {
+	flex: 1 1 auto;
+	min-width: 0;
+	padding: 9px 12px;
+	border-radius: 8px;
+	background: #12121b;
+	border: 1px solid rgba(255, 255, 255, 0.1);
+	color: #e9e9f1;
+	font-family: inherit;
+	font-size: 12.5px;
+}
+.spInput::placeholder {
+	color: #6f6f88;
+}
+
+.spCustomList {
+	margin-top: 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.spCustomRow {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 8px 10px 8px 14px;
+	border-radius: 8px;
+	background: #12121b;
+	border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.spCustomUrlText {
+	flex: 1 1 auto;
+	min-width: 0;
+	font-size: 12px;
+	color: #c9c9d8;
+	word-break: break-all;
+}
+.spCustomRemove {
+	flex: none;
+	width: 26px;
+	height: 26px;
+	padding: 0;
+	border: none;
+	border-radius: 50%;
+	background: none;
+	color: #9a9ab2;
+	font-size: 18px;
+	line-height: 26px;
+	cursor: pointer;
+}
+.spCustomRemove:hover {
+	background: rgba(255, 255, 255, 0.08);
+	color: #fff;
+}
+
+/* Global Settings rows: label left, control right */
+.spRows {
+	margin-top: 14px;
+}
+.spToggleRow,
+.spSettingRow {
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	width: 100%;
+	padding: 14px 0;
+	border-top: 1px solid rgba(255, 255, 255, 0.06);
+	text-align: left;
+}
+.spRows .spSettingRow:first-child {
+	border-top: none;
+}
+.spSettingRow.nav {
+	background: none;
+	border-top: 1px solid rgba(255, 255, 255, 0.06);
+	border-left: none;
+	border-right: none;
+	border-bottom: none;
+	color: inherit;
+	font: inherit;
+	cursor: pointer;
+}
+.spSettingRow.nav:hover {
+	background: rgba(255, 255, 255, 0.03);
+}
+.spSettingRow.nav .shieldsIcon {
+	flex: none;
+	color: #8585a0;
+}
+.spRowText {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+.spRowLabel {
+	font-size: 13.5px;
+	color: #e9e9f1;
+}
+.spRowSub {
+	margin-top: 3px;
+	font-size: 11.5px;
+	color: #8585a0;
+	line-height: 1.45;
+}
+.spRowControl {
+	flex: none;
+}
+.spSelect {
+	min-width: 230px;
+	max-width: 44vw;
+	margin: 0;
+}
+
+/* the custom-filters code editor: a gutter and a textarea over a
+   syntax-highlighted backdrop, the one crafted centrepiece */
+.cmEditor {
+	display: flex;
+	height: 230px;
+	border-radius: 10px;
+	overflow: hidden;
+	background: #0e0e16;
+	border: 1px solid rgba(255, 255, 255, 0.1);
+	font-family:
+		ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Code', Menlo, Consolas,
+		monospace;
+	font-size: 13px;
+	line-height: 1.55;
+}
+.cmGutter {
+	flex: none;
+	width: 46px;
+	padding: 10px 8px 10px 0;
+	margin: 0;
+	overflow: hidden;
+	text-align: right;
+	white-space: pre;
+	color: #4f4f6a;
+	background: #0b0b12;
+	border-right: 1px solid rgba(255, 255, 255, 0.06);
+	user-select: none;
+	font-variant-numeric: tabular-nums;
+}
+.cmArea {
+	position: relative;
+	flex: 1 1 auto;
+	min-width: 0;
+}
+.cmHighlight,
+.cmInput {
+	margin: 0;
+	padding: 10px 12px;
+	border: 0;
+	font: inherit;
+	line-height: inherit;
+	white-space: pre;
+	tab-size: 2;
+	overflow: auto;
+}
+.cmHighlight {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	color: #cfd0e6;
+	background: transparent;
+}
+.cmHighlight code {
+	font: inherit;
+	white-space: inherit;
+}
+.cmInput {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	resize: none;
+	background: transparent;
+	color: transparent;
+	caret-color: #e9e9f1;
+	-webkit-text-fill-color: transparent;
+}
+.cmInput::selection {
+	background: rgba(124, 92, 246, 0.35);
+}
+/* uBlock-syntax tints */
+.cmComment {
+	color: #6b6b85;
+	font-style: italic;
+}
+.cmDomain {
+	color: #7fd8a6;
+}
+.cmSep {
+	color: #e0719b;
+}
+.cmSelector {
+	color: #cfa6ff;
+}
+.cmOption {
+	color: #e8b974;
+}
+.cmException {
+	color: #78c7ff;
+	font-weight: 600;
+}
+.cmPlain {
+	color: #cfd0e6;
+}
+
+.spEditorStat {
+	flex: 1 1 auto;
+	font-size: 11.5px;
+	color: #8585a0;
+}
+
+.spStatus {
+	margin-top: 10px;
+	min-height: 18px;
+	font-size: 12px;
+	color: #7fd8a6;
+	opacity: 0;
+	transition: opacity 0.2s ease;
+}
+.spStatus.show {
+	opacity: 1;
+}
+.spStatus.bad {
+	color: #f09a9a;
+}
+
+@media (max-width: 560px) {
+	.shieldsPage {
+		width: calc(100vw - 16px);
+		max-height: calc(100vh - 24px);
+	}
+	.spSelect {
+		min-width: 150px;
+	}
+	.spSettingRow,
+	.spToggleRow {
+		gap: 10px;
+	}
+}
