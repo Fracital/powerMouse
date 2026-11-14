@@ -405,7 +405,35 @@ export default class PermissionsModule extends Module<DocumentClient> {
 				: sameOriginAsParent();
 		};
 
-		this.geolocation(request, allowed);
+		// Geolocation's prototype is hooked the first time the page reads
+		// navigator.geolocation, the only way to a Geolocation object, not
+		// here: reading global.Geolocation.prototype made the Geolocation and
+		// GeolocationPositionError interfaces in every frame (frame-cost),
+		// which a document that never asks for a location does not use. The
+		// hooks are in place before any getCurrentPosition/watchPosition,
+		// which need that read first; Navigator.prototype is already made.
+		const geolocationDescriptor = Reflect.getOwnPropertyDescriptor(
+			global.Navigator.prototype,
+			'geolocation',
+		);
+		if (geolocationDescriptor?.get) {
+			const nativeGeolocation = geolocationDescriptor.get;
+			let hooked = false;
+			Reflect.defineProperty(global.Navigator.prototype, 'geolocation', {
+				...geolocationDescriptor,
+				get: proxyModule.wrapFunction(
+					nativeGeolocation,
+					(target, that, args) => {
+						const geolocation = Reflect.apply(target, that, args);
+						if (!hooked) {
+							hooked = true;
+							this.geolocation(request, allowed);
+						}
+						return geolocation;
+					},
+				),
+			});
+		} else this.geolocation(request, allowed);
 		// whether a request for `names` reaches the browser's own call without
 		// this module refusing it or the host being asked: the site holds the
 		// permission, or neither it nor the browser has decided and the

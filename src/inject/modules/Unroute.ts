@@ -801,9 +801,16 @@ export default class UnrouteModule extends Module<Client> {
 					},
 				);
 		};
-		for (const name of Reflect.ownKeys(global))
-			if (typeof name === 'string' && name.endsWith('ReportBody'))
-				hook(global[name]?.prototype);
+		// The bodies the page sees are hooked from the first reports of their
+		// kind (`seen`, below), before the page's callback or takeRecords has
+		// them, not by walking the globals here: reading `global[name]` for
+		// every exposed `*ReportBody` made each of those interfaces in every
+		// frame (frame-cost), and a document that never gets a report of a
+		// kind has no body of it to un-route. A report reaches the page only
+		// through a ReportingObserver (its callback or takeRecords), both of
+		// which pass through `seen` first, so the body's prototype is hooked
+		// before the page reads a url on it: the same prototype the walk
+		// reached, `global[name].prototype`, taken from the report's body.
 
 		// Report and most bodies are not exposed: their prototypes are taken
 		// from the first reports, before the page's callback has them
