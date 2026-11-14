@@ -2278,11 +2278,11 @@ input:focus-visible {
 	opacity: 1;
 }
 .shieldsbtn:hover {
-	background-color: rgba(255, 255, 255, 0.08);
-	border-color: rgba(255, 255, 255, 0.15);
+	background-color: rgba(0, 0, 0, 0.06);
+	border-color: rgba(0, 0, 0, 0.15);
 }
 .shieldsbtn:active {
-	background-color: rgba(255, 255, 255, 0.14);
+	background-color: rgba(0, 0, 0, 0.12);
 }
 .shieldsbtn:focus-visible {
 	outline: 2px solid #4ca9fb;
@@ -2300,12 +2300,12 @@ input:focus-visible {
 	border-radius: 999px;
 	background: #6a6fe6;
 	color: #fff;
-	font-size: 9px;
+	font-size: 8px;
 	font-weight: 600;
 	line-height: 15px;
 	text-align: center;
 	pointer-events: none;
-	box-shadow: 0 0 0 1.5px #1b1b1b;
+	font-family: 'Montserrat';
 }
 .shieldsBadge[hidden] {
 	display: none;
