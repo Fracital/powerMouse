@@ -1,9 +1,8 @@
-// `rewriter: 'wasm'` rewrites scripts with the Rust rewriter (rust/rwjs) in
-// the rewrite workers and the service worker: the same rewrites as the
-// JavaScript rewriter makes, as edits to the script's own text, so what no
-// rewrite touches (a comment, the spacing) comes back as the page wrote it.
-// A script the module declines is the JavaScript rewriter's, as is every
-// script of a controller that did not ask for wasm.
+// The wasm rewriter (rust/rwjs, the core module) rewrites scripts in the
+// rewrite workers and the service worker as edits to the script's own text,
+// so what no rewrite touches (a comment, the spacing) comes back as the page
+// wrote it. It is the only rewriter, so every controller rewrites in it,
+// whether or not it was built with the (vestigial) rewriter option.
 import { done, FIXTURE, launch, ok, openDemo, PROXY, sleep } from '../lib.mjs';
 
 const browser = await launch();
@@ -168,15 +167,8 @@ ok('the service worker holds the rewriter', await settled(0));
 		show(result.seen),
 	);
 
-	// a shape the module leaves to the JavaScript rewriter (a pattern key
-	// that is a BigInt, beside an unforgeable): that script is printed,
-	// not spliced, and runs the same
-	const declined = await load(
-		'd',
-		'/* gone */ const { 1n: half, top: mine } = { 1: "h", top: "t" }; window.__seen = [half, mine];',
-	);
-	// a key that is no integer is the module's, spelled as JavaScript
-	// spells the number
+	// a pattern key that is no integer is the module's, spelled as the
+	// number is
 	const keyed = await load(
 		'k',
 		'/* kept */ const { 1.5: half, 1e21: big, top: mine } = { 1.5: "h", 1e21: "b", top: "t" }; window.__seen = [half, big, mine];',
@@ -189,22 +181,7 @@ ok('the service worker holds the rewriter', await settled(0));
 			keyedBody?.includes('/* kept */'),
 		show([keyed, keyedBody?.slice(0, 300)]),
 	);
-	const [body] = bodiesOf('d');
-	ok(
-		'a script the module declines is rewritten by the JavaScript rewriter, and runs',
-		declined.ran &&
-			declined.seen?.join() === 'h,t' &&
-			body?.includes('.pattern(') &&
-			!body.includes('/* gone */'),
-		show([declined, body?.slice(0, 300)]),
-	);
-	ok(
-		'and the request log says the JavaScript rewriter rewrote it',
-		declined.by === 'js',
-		show(declined.by),
-	);
-
-	// a script neither rewriter parses runs as it was written (and fails as
+	// a script the module cannot parse runs as it was written (and fails as
 	// it would natively), not as something half rewritten
 	const broken = await load('b', 'window.__seen = 1;\nvar 1x;', 40);
 	ok(
@@ -214,24 +191,24 @@ ok('the service worker holds the rewriter', await settled(0));
 	);
 }
 
-// a controller that did not ask for wasm: the JavaScript rewriter, though
-// the service worker still holds the module
-await controller('wasm-rewriter-js', { rewriteWorkers: 0 });
+// a controller given no rewriter option: the wasm module all the same, the
+// only rewriter (the public rewriter option is gone)
+await controller('wasm-rewriter-default', { rewriteWorkers: 0 });
 {
 	const result = await load('j', SCRIPT);
 	const [body] = bodiesOf('j');
 	ok(
-		"a 'js' controller's script is the JavaScript rewriter's",
+		'a controller given no rewriter option still rewrites in the module',
 		result.ran &&
 			result.seen?.[0] === WRITTEN &&
 			body !== undefined &&
-			!body.includes('/* kept */') &&
-			body.includes("$s$j.get(top, 'top')"),
+			body.includes('/* kept */') &&
+			body.includes('$s$j.get(top, "top")'),
 		show([result, body?.slice(0, 300)]),
 	);
 	ok(
-		'and its request log names no backend',
-		result.by === undefined,
+		'and its request log says the module rewrote it',
+		result.by === 'wasm',
 		show(result.by),
 	);
 }

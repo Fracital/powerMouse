@@ -14,16 +14,7 @@
 // request log says
 // which it was (`rewriteCache`: hit, miss or skip). The suite constructs its
 // own controllers on the demo's service worker, as request-log does.
-import {
-	done,
-	FIXTURE,
-	launch,
-	ok,
-	openDemo,
-	PROXY,
-	REWRITER,
-	sleep,
-} from '../lib.mjs';
+import { done, FIXTURE, launch, ok, openDemo, PROXY, sleep } from '../lib.mjs';
 
 const browser = await launch();
 const page = await openDemo(browser, PROXY);
@@ -56,14 +47,8 @@ const bodiesOf = (name) =>
 		(body) => body?.match(/push\(\[\s*['"](\w+)['"]/)?.[1] === name,
 	);
 
-/**
- * a controller of its own, logging to window.__log, with the run's rewriter
- * backend (STOMP_REWRITER) handed in each time: the host page is loaded again
- * below, which forgets whatever the page was told before, and a controller
- * made after that without it would be the default backend's (another config,
- * so every script a miss)
- */
-const controller = (options = {}) => construct({ ...REWRITER, ...options });
+/** a controller of its own, logging to window.__log (the wasm module is the only rewriter) */
+const controller = (options = {}) => construct(options);
 const construct = (options) =>
 	page.evaluate(async (options) => {
 		const old = window.controller;

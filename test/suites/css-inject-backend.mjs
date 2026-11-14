@@ -1,10 +1,10 @@
 // The CSS a page's own script writes (a style element, a style attribute,
-// CSSOM text) is rewritten in the frame's rewriter library. With
-// `rewriter: 'wasm'` a proxied top is handed the compiled modules and its
-// library rewrites that CSS in the scanner module (rust/rwcss); with
-// `rewriter: 'js'`, and until the module has arrived, css-tree does. The two
-// write the same text, so which one ran is read from the library's own count
-// (`styleRewrites`), and the request for each URL says the text was routed.
+// CSSOM text) is rewritten in the frame's rewriter library. A proxied top is
+// handed the compiled core module and its library rewrites that CSS in the
+// scanner member (rust/rwcss), the only CSS rewriter; that it ran in the
+// module (not the regex fallback) is read from the library's own count
+// (`styleRewrites`, whose js column is always 0 now), and the request for
+// each URL says the text was routed.
 import { done, FIXTURE, launch, ok, openDemo, PROXY, sleep } from '../lib.mjs';
 
 const browser = await launch();
@@ -115,43 +115,24 @@ const routed = ({ request }) =>
 	request?.status === 200 && request.destination === 'image';
 
 ok(
-	"a 'js' controller shakes hands",
-	await controller('css-inject-js', { rewriteWorkers: 0 }),
-);
-{
-	const { state, results } = await written('js', 1);
-	ok(
-		"with rewriter 'js' the top's library holds no scanner",
-		state?.holds === false,
-		JSON.stringify(state),
-	);
-	for (const way of WAYS)
-		ok(
-			`js: ${way} is rewritten by css-tree, and its URL is routed`,
-			routed(results[way]) && results[way].js >= 1 && results[way].wasm === 0,
-			JSON.stringify(results[way]),
-		);
-}
-
-ok(
-	"a 'wasm' controller shakes hands",
-	await controller('css-inject-wasm', { rewriter: 'wasm', rewriteWorkers: 0 }),
+	'the controller shakes hands',
+	await controller('css-inject', { rewriteWorkers: 0 }),
 );
 {
 	const { state, results } = await written('wasm', 2);
 	ok(
-		"with rewriter 'wasm' the top's library holds the scanner",
+		"the top's library holds the scanner module",
 		state?.holds === true,
 		JSON.stringify(state),
 	);
 	for (const way of WAYS)
 		ok(
-			`wasm: ${way} is rewritten by the scanner module, and its URL is routed`,
+			`${way} is rewritten by the scanner module, and its URL is routed`,
 			routed(results[way]) && results[way].wasm >= 1 && results[way].js === 0,
 			JSON.stringify(results[way]),
 		);
 	ok(
-		"wasm: a sheet nested a thousand deep, with a byte order mark and half a surrogate pair, is the module's too",
+		"a sheet nested a thousand deep, with a byte order mark and half a surrogate pair, is the module's too",
 		results.deep.wasm >= 1 && results.deep.js === 0,
 		JSON.stringify(results.deep),
 	);

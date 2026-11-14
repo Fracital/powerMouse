@@ -1,12 +1,12 @@
-// The two JavaScript rewriters print the same programs: rust/host/parity.mjs
-// --cases, the differential harness, in node with the module the build
-// ships (dist/core.wasm). Every rewrite family of src/rewriteJS.ts by
-// shape (rust/host/cases.mjs), and a family for each hole the JavaScript
-// rewriter had (the `holes` families: what each fix changed, which the wasm
-// rewriter must do too, or shows it never had), are rewritten by both and
-// compared as trees, their function marks as lists and the holder as text.
-// No known divergence is allowed, and the module's revision must be the one
-// its outputs for the cases were recorded under.
+// The wasm rewriter's output is stable: rust/host/parity.mjs --cases, in node
+// with the module the build ships (dist/core.wasm). Every rewrite family of
+// src/rewriteJS.ts by shape (rust/host/cases.mjs), and a family for each hole
+// the old JavaScript rewriter had (the `holes` families: shapes it got wrong,
+// which the wasm rewriter must get right), are rewritten by the module. No
+// case may trap, every hole's shape must be rewritten, and the digest of the
+// module's outputs must be the one recorded under the module's revision
+// (rust/host/cases.revision); that recorded-outputs check is the correctness
+// oracle now that the wasm core is the only rewriter.
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { done, ok } from '../lib.mjs';
@@ -34,11 +34,11 @@ const count = (label) =>
 	Number(new RegExp(`^ {2}${label}: (\\d+)`, 'm').exec(output)?.[1] ?? NaN);
 const all = cases();
 const holes = all.filter((entry) => entry.family.startsWith('holes'));
-// a hole's case reported as anything but the same program
+// a hole's case the module did not rewrite itself
 const reported = [
-	...output.matchAll(/^(DIFF|TRAP|DECLINED|KNOWN) (holes\w+#\d+)/gm),
+	...output.matchAll(/^(DIFF|TRAP|DECLINED) (holes\w+#\d+)/gm),
 ].map(([, kind, name]) => `${kind} ${name}`);
-for (const line of output.trim().split('\n').slice(-12))
+for (const line of output.trim().split('\n').slice(-10))
 	console.log(`  ${line}`);
 
 ok(
@@ -48,19 +48,18 @@ ok(
 	`exit ${harness.status}: ${(harness.stderr ?? '').slice(0, 2000)}`,
 );
 ok(
-	'both rewriters print the same program for every case, with no known divergence',
-	count('differ') === 0 &&
-		count('trapped') === 0 &&
-		count('known divergences \\(rust/host/cases.mjs\\)') === 0 &&
-		count('same program, marks and holder') > 800,
+	'the module rewrote the cases with no trap, and declined none it parses',
+	count('trapped') === 0 &&
+		count('declined by the module') === 0 &&
+		count('rewritten') > 800,
 	output
 		.split('\n')
-		.filter((line) => /^(DIFF|TRAP|KNOWN)/.test(line))
+		.filter((line) => /^(DIFF|TRAP|DECLINED)/.test(line))
 		.slice(0, 10)
 		.join(' | '),
 );
 ok(
-	"and the module rewrites every hole's case itself, as the JavaScript rewriter does",
+	"and the module rewrites every hole's case itself, as a correct rewriter must",
 	holes.length > 100 && reported.length === 0,
 	`${holes.length} cases; ${reported.join(', ')}`,
 );

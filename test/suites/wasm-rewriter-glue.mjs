@@ -2,12 +2,12 @@
 // rewrite only when the module answers the revision the glue was written
 // against, in node. The module is an asset of its own: a host that serves
 // an older one beside newer bundles (a cache in front of it, half a deploy)
-// hands every thread a module that speaks something else. The phase 0
-// artifact answered every call with a copy of its input and status 0: as
-// the rewriter's answer that is the script as the page wrote it, its `top`
-// and `location` the real ones. So a thread that holds such a module
-// rewrites in JavaScript, and the build's own module answers the glue's
-// revision (rust/rwjs/src/rewrite.rs REVISION, rust/host/cases.revision).
+// hands every thread a module that speaks something else. The wasm core is
+// the only rewriter now, so a thread handed such a module, or none at all,
+// does not rewrite: the glue returns null and modifyJS hands the script back
+// through cannotRewrite (refused with an early error where the browser would
+// run it, so it never runs unrewritten). The build's own module answers the
+// glue's revision (src/wasm/rewriter.ts REVISION, rust/host/cases.revision).
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { done, ok, OUT } from '../lib.mjs';
@@ -38,16 +38,13 @@ await esbuild.build({
 	bundle: true,
 	platform: 'node',
 	format: 'esm',
-	external: ['css-tree'],
 	outfile: bundle,
 	logLevel: 'silent',
 });
-// two threads: one that never holds a module (the JavaScript rewriter) and
-// one that is handed them
-const plain = await import(`${bundle}?js`);
+// one thread, handed modules below (and none to begin with)
 const thread = await import(`${bundle}?wasm`);
 
-const config = { directory: '/stomp/', codec: 'xor', rewriter: 'wasm' };
+const config = { directory: '/stomp/', codec: 'xor' };
 const urlOf = (from) =>
 	new from.StompURL(
 		'https://example.com/dir/a.js',
@@ -59,9 +56,10 @@ const SCRIPTS = [
 	'parent.postMessage(document.cookie, "*");',
 	'function reads(a)  { return a ? top : location }',
 ];
-const js = SCRIPTS.map((script) =>
-	plain.modifyJS(script, urlOf(plain), config, 'generic'),
-);
+// a script the glue does not rewrite is handed back by cannotRewrite: these
+// all run in the browser, so they come back ended with an early error no
+// browser compiles (UNREWRITTEN_END), not rewritten and not run
+const REFUSED = /#STomp_could_not_rewrite_this_script/;
 const rewritten = () =>
 	SCRIPTS.map((script) =>
 		thread.modifyJS(script, urlOf(thread), config, 'generic'),
@@ -147,11 +145,16 @@ function copyingModule() {
 	]);
 }
 
-ok(
-	'a thread that holds no module rewrites in JavaScript',
-	rewritten().join('\n') === js.join('\n') && !js.includes(SCRIPTS[0]),
-	show(js),
-);
+{
+	const outputs = rewritten();
+	ok(
+		'a thread that holds no module does not rewrite: it hands the script back refused',
+		outputs.every(
+			(output) => REFUSED.test(output) && !output.includes('$s$j.get'),
+		) && outputs[0].startsWith(SCRIPTS[0]),
+		show(outputs),
+	);
+}
 
 thread.adoptModule('core', await WebAssembly.compile(copyingModule()));
 {
@@ -163,18 +166,19 @@ thread.adoptModule('core', await WebAssembly.compile(copyingModule()));
 		show(answered),
 	);
 	ok(
-		'and is never asked for a rewrite: its thread rewrites in JavaScript',
-		outputs.join('\n') === js.join('\n') &&
-			outputs.every((output, i) => output !== SCRIPTS[i]),
+		'and is never asked for a rewrite: its thread hands the script back refused, not rewritten',
+		outputs.every(
+			(output) => REFUSED.test(output) && !output.includes('$s$j.get'),
+		),
 		show(outputs),
 	);
-	// its answer to "is this one expression" would be the question back
+	// nor for what parses: with a module that is not the revision the glue
+	// asks nothing of it, so singleExpression has no answer and says no
 	const asked = ['a.b(1)', 'a; b', 'if (a) b'];
 	const single = asked.map((code) => thread.singleExpression(code));
 	ok(
-		'nor for what parses: a javascript: URL of one expression is still one',
-		show(single) === show([true, false, false]) &&
-			show(single) === show(asked.map((code) => plain.singleExpression(code))),
+		'nor for what parses: singleExpression says no with a module that is not the revision',
+		show(single) === show([false, false, false]),
 		show(single),
 	);
 }
@@ -208,16 +212,20 @@ thread.adoptModule('core', await WebAssembly.compile(bytes));
 }
 
 // a string a page evaluates may hold a lone surrogate, which has no UTF-8:
-// the module would be handed U+FFFD in its place and write that back
+// the module would be handed U+FFFD in its place and write that back, so the
+// glue does not hand it to the module at all. With no other rewriter it is
+// refused (handed back with the early-error end), the surrogate untouched: it
+// does not run, so its `top` never reaches the real one
 {
 	const script = '/* kept */ x = "\ud83d".charCodeAt(0) + top.length;';
 	const output = thread.modifyJS(script, urlOf(thread), config, 'generic');
 	ok(
-		"a script with a lone surrogate is the JavaScript rewriter's, and the surrogate is not replaced",
+		'a script with a lone surrogate is not handed to the module: refused, the surrogate not replaced and not rewritten',
 		!script.isWellFormed() &&
-			output === plain.modifyJS(script, urlOf(plain), config, 'generic') &&
+			REFUSED.test(output) &&
+			output.startsWith(script) &&
 			!output.includes('\ufffd') &&
-			output.includes('.get(top'),
+			!output.includes('.get(top'),
 		show(output),
 	);
 }

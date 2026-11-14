@@ -40,13 +40,9 @@ await esbuild.build({
 	bundle: true,
 	platform: 'node',
 	format: 'esm',
-	external: ['css-tree'],
 	outfile: bundle,
 	logLevel: 'silent',
 });
-// two threads: one that never holds a module (the JavaScript rewriter) and
-// one that is handed them
-const plain = await import(`${bundle}?js`);
 const lib = await import(`${bundle}?wasm`);
 const { thread, BufferInstance } = lib;
 
@@ -80,7 +76,7 @@ const warn = console.warn;
 console.warn = () => {};
 
 const MB = 1024 * 1024;
-const config = { directory: '/stomp/', codec: 'xor', rewriter: 'wasm' };
+const config = { directory: '/stomp/', codec: 'xor' };
 const urlOf = (from) =>
 	new from.StompURL(
 		'https://example.com/dir/a.js',
@@ -373,16 +369,13 @@ const show = (value) => JSON.stringify(value)?.slice(0, 400);
 		const told = {};
 		return [lib.modifyCSS(sheet, pageOf(lib), 'stylesheet', told), told.by];
 	};
-	const byCSSTree = (sheet) =>
-		plain.modifyCSS(sheet, pageOf(plain), 'stylesheet');
 	const sheet =
 		'@import url("data:text/css,a%7Bb:url(c)%7D"); @import "data:text/css;base64,YXtiOnVybChjKX0="; a { background: url(x.png) }';
 	const [sheetMade, [output, by]] = during(() => styles(sheet));
-	const expected = byCSSTree(sheet);
 	ok(
-		"a data: stylesheet a stylesheet imports is the module's rewrite, as the sheet around it is, and is css-tree's byte for byte",
-		by === 'wasm' && output === expected && output !== sheet,
-		show({ by, output, expected }),
+		"a data: stylesheet a stylesheet imports is the module's rewrite, as the sheet around it is",
+		by === 'wasm' && output !== sheet,
+		show({ by, output }),
 	);
 	ok(
 		'by an instance of its own: two were made, one for the sheet and one for both sheets inside it',
@@ -406,20 +399,31 @@ const show = (value) => JSON.stringify(value)?.slice(0, 400);
 		),
 		show(output),
 	);
-	// one data: stylesheet inside another, deeper than the thread goes:
-	// css-tree has the innermost, and the text is the same
+	// one data: stylesheet inside another, deeper than the thread runs
+	// instances: the outer sheets are the module's (each data: import routed
+	// in an instance of its own), and the innermost routeCSS call, finding no
+	// free instance, is the regex fallback's (src/cssURLs.ts); so the sheet
+	// is rewritten to its full depth, every level's url() sealed into the one
+	// above it. The outermost level's own url() shows as a routed URL; the
+	// rest are sealed inside the data: imports.
 	const wrap = (text, level) =>
 		`@import url("data:text/css,${encodeURIComponent(text)}"); .level${level} { background: url(l${level}.png) }`;
 	let nested = '.level0 { background: url(l0.png) }';
 	for (let level = 1; level <= thread.INSTANCES; level++)
 		nested = wrap(nested, level);
 	const [nestedMade, [deep, deepBy]] = during(() => styles(nested));
+	const codecCSS = lib.parseConfig(config, 'k').codec;
+	const outerRouted = [...deep.matchAll(/\/stomp\/binary\/([\w-]+)/g)].some(
+		([, sealed]) =>
+			codecCSS.decode(sealed).endsWith(`/l${thread.INSTANCES}.png`),
+	);
 	ok(
-		'stylesheets nested deeper than INSTANCES are all rewritten, the innermost by css-tree, the same as css-tree rewrites them all',
+		'stylesheets nested deeper than INSTANCES are rewritten to their depth (the innermost by the regex fallback)',
 		deepBy === 'wasm' &&
-			deep === byCSSTree(nested) &&
+			deep !== nested &&
+			outerRouted &&
 			nestedMade === thread.INSTANCES - 2,
-		show({ deepBy, nestedMade, deep }),
+		show({ deepBy, nestedMade, outerRouted }),
 	);
 }
 
@@ -432,14 +436,6 @@ const show = (value) => JSON.stringify(value)?.slice(0, 400);
 	next();
 	thread.withInstance('rewriter', () => next());
 	const [glueMade, output] = during(() => rewrite(script, 'genericModule'));
-	const js = plain.modifyJS(
-		script,
-		urlOf(plain),
-		{ ...config, rewriter: 'js' },
-		'genericModule',
-	);
-	// (the route after the data: module's: its URL is sealed, so the two
-	// are compared as routes)
 	const specifier = /import ['"](\/stomp\/[^'"]+)['"]/;
 	const inner = decodeURIComponent(
 		/from "data:text\/javascript,([^"]*)"/.exec(output)?.[1] ?? '',
@@ -453,18 +449,22 @@ const show = (value) => JSON.stringify(value)?.slice(0, 400);
 		show(output),
 	);
 	ok(
-		'the import after it is routed as the JavaScript rewriter routes it',
-		specifier.exec(output)?.[1] !== undefined &&
-			specifier.exec(output)?.[1] === specifier.exec(js)?.[1],
-		show([specifier.exec(output)?.[1], specifier.exec(js)?.[1]]),
+		'the import after it is routed through the proxy',
+		/^\/stomp\/\S+$/.test(specifier.exec(output)?.[1] ?? ''),
+		show(specifier.exec(output)?.[1]),
 	);
 	ok(
 		'by the two instances the thread keeps',
 		glueMade === 0,
 		`${glueMade} made`,
 	);
-	// one data: module inside another, deeper than the thread goes: the
-	// JavaScript rewriter has the innermost, which prints no comment
+	// one data: module inside another, deeper than the thread runs instances:
+	// the outer modules are the module's rewrite (its comment kept), and the
+	// innermost, finding no free instance, is declined. A wasm-only build has
+	// no JavaScript rewriter to take it, so cannotRewrite hands it back as the
+	// page wrote it (its comment kept, but nothing rewritten); being a module
+	// the browser runs, it carries an end no browser compiles so it cannot run
+	// unrewritten.
 	const wrap = (text, level) =>
 		`import v from "data:text/javascript,${encodeURIComponent(text)}"; /* level ${level} */ export default v + top.length;`;
 	let nested = '/* level 0 */ export default top.length;';
@@ -484,8 +484,8 @@ const show = (value) => JSON.stringify(value)?.slice(0, 400);
 		);
 	}
 	ok(
-		'modules nested deeper than INSTANCES are all rewritten, the innermost by the JavaScript rewriter',
-		levels.every(([level, kept, rewritten]) => rewritten && kept === level > 0),
+		'modules nested deeper than INSTANCES are rewritten to their depth, the innermost handed back as written (its comment kept, nothing rewritten)',
+		levels.every(([level, kept, rewritten]) => kept && rewritten === level > 0),
 		show(levels),
 	);
 }

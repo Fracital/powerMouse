@@ -182,6 +182,11 @@ const NEUTRAL = {
 	'tw.js': 'transportWorker.js',
 	'rw.js': 'rewriteWorker.js',
 	'lib.js': 'rewriterLib.js',
+	// the rewriter is the wasm core module, always required now; the content
+	// blocker's module too. neutral-host.html does not rename them, so they
+	// keep their default names under /neutral/
+	'core.wasm': 'core.wasm',
+	'blocker.wasm': 'blocker.wasm',
 };
 // the transport modules under neutral names too (assets and transport-worker
 // suites): /neutral/transport.mjs is epoxy, /neutral/libcurl.mjs is libcurl

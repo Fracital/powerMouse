@@ -21,7 +21,6 @@ const entry = `${OUT}rewriter-unit-entry.mjs`;
 writeFileSync(
 	entry,
 	`export { cannotRewrite, modifyJS, postMessageMethod, routeJS } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
-export { planSplit, splitSources, stitch } from ${JSON.stringify(`${root}src/splitRewrite.ts`)};
 export { routeHTML, modifyHTML, modifyRefresh, parseRefresh } from ${JSON.stringify(`${root}src/rewriteHTML.ts`)};
 export { parseDataURI, createDataURI } from ${JSON.stringify(`${root}src/routeURL.ts`)};
 export { modifyCSS } from ${JSON.stringify(`${root}src/rewriteCSS.ts`)};
@@ -39,17 +38,12 @@ await esbuild.build({
 	bundle: true,
 	platform: 'node',
 	format: 'esm',
-	// css-tree reads a data file next to itself: resolved from node_modules
-	external: ['css-tree'],
 	outfile: bundle,
 	logLevel: 'silent',
 });
 const {
 	cannotRewrite,
 	modifyJS,
-	planSplit,
-	splitSources,
-	stitch,
 	postMessageMethod,
 	routeJS,
 	routeHTML,
@@ -72,21 +66,17 @@ const {
 	adoptModule,
 } = await import(`${bundle}?${Date.now()}`);
 
-// STOMP_REWRITER=wasm: the same checks with the wasm rewriter answering
-// (rust/rwjs, the committed artifact), which splices its rewrites into the
-// script's own text where the JavaScript rewriter prints its tree. A check
-// of what a rewrite does holds for both; one of how the output is spelled
-// states each backend's spelling.
-const WASM = process.env.STOMP_REWRITER === 'wasm';
-if (WASM)
-	adoptModule(
-		'core',
-		await compileModule(readFileSync(`${root}assets/core.wasm`)),
-	);
+// The rewriter is the wasm core module (rust/rwjs, the committed artifact),
+// which splices its rewrites into the script's own text. It is the only
+// rewriter now, so the checks run against its output directly; the module is
+// adopted here so modifyJS (which calls into it) has it in node.
+adoptModule(
+	'core',
+	await compileModule(readFileSync(`${root}assets/core.wasm`)),
+);
 const config = {
 	directory: '/stomp/',
 	codec: 'xor',
-	...(WASM && { rewriter: 'wasm' }),
 };
 const parsed = parseConfig(config, 'k');
 const url = new StompURL('https://example.com/a.js', parsed.codec, '/stomp/');
@@ -105,42 +95,13 @@ const unmarked = (out) =>
 		.replace(/\/\*[0-9a-z]+\.[0-9a-z]+\.[0-9a-z]+\*\//g, '');
 const marked = (source, type = 'generic', extra = {}) =>
 	modifyJS(source, url, { ...config, ...extra }, type);
-// A check of how a rewrite is spelled is written in the JavaScript
-// rewriter's spelling (what its printer makes of the tree). The wasm
-// rewriter's output is the page's own text with the rewrites spliced in, so
-// in its run such a check (`shape`) parses that output and prints it the
-// same way first: it holds when the two are the same program, which is the
-// contract between the backends (the wasm spelling itself is pinned in
-// rust/rwjs's own tests and in the wasm-artifact suite). What does not
-// parse is compared as it is.
-let spelled = (out) => out;
-if (WASM) {
-	const { parse } = await import('meriyah');
-	const { generate } = await import('@javascript-obfuscator/escodegen');
-	spelled = (out, source, type) => {
-		const lines = source.split('\n').length;
-		try {
-			const tree = parse(out, {
-				module: type === 'genericModule' || type === 'workerModule',
-				next: true,
-				globalReturn: true,
-				webcompat: true,
-			});
-			// (a `debugger` is rewritten to an empty statement, which the
-			// JavaScript rewriter prints and so is kept)
-			return generate(
-				tree,
-				source.length / lines > 200 ? { format: { compact: true } } : undefined,
-			);
-		} catch (error) {
-			return out;
-		}
-	};
-}
+// The wasm rewriter's output is the page's own text with the rewrites spliced
+// in; a check of how a rewrite is spelled (`shape`) reads that output with
+// the marks and the kept-text statement taken out. The spelling is the
+// module's own, pinned here, in rust/rwjs's tests and in the wasm-artifact
+// suite.
 const rewrite = (source, type, extra) => unmarked(marked(source, type, extra));
-/** `rewrite`, in the JavaScript rewriter's spelling whichever backend made it */
-const shape = (source, type, extra) =>
-	spelled(rewrite(source, type, extra), source, type);
+const shape = (source, type, extra) => rewrite(source, type, extra);
 const parses = (code) => {
 	try {
 		new Function(code);
@@ -198,9 +159,11 @@ const parses = (code) => {
 	const out = shape('a?.b.location.c; a?.b().top.x; (a?.b).location.c');
 	ok(
 		'an optional chain stays optional past an unforgeable link',
-		/get2\(a\?\.b, 'location', '\(a\?\.b\.location\)', true\)\?\.c/.test(out) &&
-			/get2\(a\?\.b\(\), 'top', '\(a\?\.b\(\)\.top\)', true\)\?\.x/.test(out) &&
-			/get2\(a\?\.b, 'location', '\(\(a\?\.b\)\.location\)'\)\.c/.test(out) &&
+		/get2\(a\?\.b, "location", "\(a\?\.b\.location\)", true\)\?\.c/.test(out) &&
+			/get2\(a\?\.b\(\), "top", "\(a\?\.b\(\)\.top\)", true\)\?\.x/.test(out) &&
+			/get2\(\(a\?\.b\), "location", "\(\(a\?\.b\)\.location\)"\)\.c/.test(
+				out,
+			) &&
 			parses(out),
 		out,
 	);
@@ -218,9 +181,9 @@ const parses = (code) => {
 		'sourceURL is kept and sourceMappingURL is routed',
 		/\n\/\/# sourceURL=named\.js/.test(out) &&
 			/\n\/\/# sourceMappingURL=\/stomp\/binary\/\S+$/.test(out) &&
-			// (the JavaScript rewriter prints no other comment; the wasm one
-			// leaves the page's text as it is)
-			(WASM ? /note[^]*block/.test(out) : !/note|block/.test(out)) &&
+			// the wasm rewriter leaves the page's text as it is, so the
+			// `note` and `block` comments stay
+			/note[^]*block/.test(out) &&
 			/sourceMappingURL=data:application\/json;base64,e30=$/.test(inline) &&
 			parses(out),
 		JSON.stringify([out, inline]),
@@ -356,19 +319,19 @@ const parses = (code) => {
 	);
 	ok(
 		'postMessage calls in every shape go through the access API',
-		/\$s\$j\.post\(w,\s*\[\s*m,\s*'\*'\s*\],\s*false,\s*'w\.postMessage\(0, 0\)'\)/.test(
+		/\$s\$j\.post\(w,\s*\[\s*m,\s*'\*'\s*\],\s*false,\s*"w\.postMessage\(0, 0\)"\)/.test(
 			out,
 		) &&
-			/\$s\$j\.post\(w,\s*\[\s*m\s*\],\s*true,\s*'/.test(out) &&
-			/\$s\$j\.call3\(w,\s*'postMessage',\s*'call',\s*\[\s*w2,\s*m,\s*o\s*\],\s*'/.test(
+			/\$s\$j\.post\(w,\s*\[\s*m\s*\],\s*true,\s*"/.test(out) &&
+			/\$s\$j\.call3\(w,\s*"postMessage",\s*"call",\s*\[\s*w2,\s*m,\s*o\s*\],\s*"/.test(
 				out,
 			) &&
-			/\$s\$j\.call3\(w,\s*'postMessage',\s*'apply',\s*\[\s*w2,\s*list\s*\],\s*'/.test(
+			/\$s\$j\.call3\(w,\s*"postMessage",\s*"apply",\s*\[\s*w2,\s*list\s*\],\s*"/.test(
 				out,
 			) &&
-			/Reflect\.apply\(\$s\$j\.get2\(w,\s*'postMessage',\s*'/.test(out) &&
-			/pm\s*=\s*\$s\$j\.get2\(w,\s*'postMessage',\s*'/.test(out) &&
-			/\$s\$j\.post\(port,\s*\[\s*m\s*\],\s*false,\s*'/.test(out) &&
+			/Reflect\.apply\(\$s\$j\.get2\(w,\s*"postMessage",\s*"/.test(out) &&
+			/pm\s*=\s*\$s\$j\.get2\(w,\s*"postMessage",\s*"/.test(out) &&
+			/\$s\$j\.post\(port,\s*\[\s*m\s*\],\s*false,\s*"/.test(out) &&
 			/x\.postmessage\(m\)/.test(out) &&
 			parses(out),
 		out,
@@ -386,7 +349,7 @@ const parses = (code) => {
 		/\$s\$j\.has\('\$s\$j',\s*window\)/.test(out) &&
 			/\$s\$j\.has\(k,\s*o\)/.test(out) &&
 			/\$s\$j\.has\(`[^`]*`,\s*o\)/.test(out) &&
-			/\$s\$j\.has\(o\.k,\s*\$s\$j\.get\(top,\s*'top'\)\)/.test(out) &&
+			/\$s\$j\.has\(o\.k,\s*\$s\$j\.get\(top,\s*"top"\)\)/.test(out) &&
 			/\$s\$j\.has\('\$P\$s',\s*w\)/.test(out) &&
 			/'x' in o/.test(out) &&
 			/\b0 in a/.test(out) &&
@@ -408,7 +371,7 @@ const parses = (code) => {
 	const mod = shape("var location = 'x';", 'genericModule');
 	ok(
 		'a top-level var binding of location routes the assignment',
-		(top.match(/\$s\$j\.set1\(location, 'location'/g) || []).length === 3 &&
+		(top.match(/\$s\$j\.set1\(location, "location"/g) || []).length === 3 &&
 			/var \$s\$jl0 = 'x'/.test(top) &&
 			/location: \$s\$jl0/.test(top) &&
 			/var \[\$s\$jl0\] = l/.test(top) &&
@@ -433,18 +396,18 @@ const parses = (code) => {
 		// the key may be `location`)
 		[
 			'[a[i], a[j]] = [b, c];',
-			'[$s$j.ref2(a, i).value, $s$j.ref2(a, j).value] = [\n    b,\n    c\n];',
+			'[$s$j.ref2(a, i).value, $s$j.ref2(a, j).value] = [b, c];',
 		],
-		['[a[0], a.x] = [b, c];', '[a[0], a.x] = [\n    b,\n    c\n];'],
-		['({x: a.top, y: [b]} = o);', '({\n    x: a.top,\n    y: [b]\n} = o);'],
+		['[a[0], a.x] = [b, c];', '[a[0], a.x] = [b, c];'],
+		['({x: a.top, y: [b]} = o);', '({x: a.top, y: [b]} = o);'],
 		['for (a.top of b);', 'for (a.top of b);'],
-		['for (k in o) f(k);', 'for (k in o)\n    f(k);'],
-		['function f([location]) {}', 'function f([location]) {\n}'],
+		['for (k in o) f(k);', 'for (k in o) f(k);'],
+		['function f([location]) {}', 'function f([location]) {}'],
 		// (a catch clause's pattern is read through the access API, like a
 		// parameter's)
 		[
 			'try {} catch ({location}) {}',
-			"try {\n} catch ($s$jc) {\n    let {location} = $s$j.pattern($s$jc, { 'location': true }, '{location}=$s$jc');\n}",
+			'try {} catch ($s$jc) {let {location} = $s$j.pattern($s$jc, {"location":true}, "{location}=$s$jc");}',
 		],
 	];
 	ok(
@@ -456,11 +419,11 @@ const parses = (code) => {
 				targets,
 			) &&
 			members.includes(
-				"[$s$j.ref2($s$j.get(top, 'top'), 'location').value] = a",
+				`[$s$j.ref2($s$j.get(top, "top"), "location").value] = a`,
 			) &&
 			members.includes("a: $s$j.ref2(window, 'location').value") &&
 			members.includes(
-				"for ($s$j.ref2($s$j.get2(frames, 0, '(frames[0])'), 'location').value of a)",
+				`for ($s$j.ref2($s$j.get2(frames, 0, "(frames[0])"), "location").value of a)`,
 			) &&
 			kept.every(([code, out]) => shape(code) === out) &&
 			parses(targets) &&
@@ -476,13 +439,13 @@ const parses = (code) => {
 	ok(
 		'an eval an assignment pattern or a loop head writes keeps it the eval',
 		loose(evals).includes(
-			loose("[$s$j.ref1(eval, t$v => eval = t$v, 'eval').value] = [e];"),
+			loose(`[$s$j.ref1(eval, t$v => eval = t$v, "eval").value] = [e];`),
 		) &&
 			loose(evals).includes(
-				loose("{eval: $s$j.ref1(eval, t$v => eval = t$v, 'eval').value}"),
+				loose(`{eval: $s$j.ref1(eval, t$v => eval = t$v, "eval").value}`),
 			) &&
 			loose(evals).includes(
-				loose("for ($s$j.ref1(eval, t$v => eval = t$v, 'eval').value of a)"),
+				loose(`for ($s$j.ref1(eval, t$v => eval = t$v, "eval").value of a)`),
 			) &&
 			parses(evals),
 		evals,
@@ -510,7 +473,7 @@ const parses = (code) => {
 			routed[0].startsWith('$s$j.get2(frames, 0, ') &&
 				routed[1].startsWith("$s$j.get2(parent, '1', ") &&
 				routed[2].startsWith('x = $s$j.get2(w, 2, ') &&
-				routed[2].endsWith(').document;') &&
+				routed[2].endsWith(').document') &&
 				kept.every((code) => !shape(code).includes('$s$j')),
 			JSON.stringify([routed, kept.map((code) => shape(code))]),
 		);
@@ -526,8 +489,8 @@ const parses = (code) => {
 	);
 	ok(
 		'a var binding of location outside any function routes the assignment',
-		(nested.match(/\$s\$j\.set1\(location, 'location'/g) || []).length === 5 &&
-			nested.includes("var $s$jl0 = $s$j.get(top, 'top').a;") &&
+		(nested.match(/\$s\$j\.set1\(location, "location"/g) || []).length === 5 &&
+			nested.includes('var $s$jl0 = $s$j.get(top, "top").a;') &&
 			/for \(var \$s\$jl0 of a\) \{\s*\$s\$j\.set1\(location/.test(nested) &&
 			/for \(var \$s\$jl0 = c, i = 0, \$s\$jl1 = \(?\$s\$j\.set1/.test(
 				nested,
@@ -544,9 +507,9 @@ const parses = (code) => {
 	ok(
 		'a loop replaced for its head and for its source has its source rewritten',
 		twice.includes(
-			"of $s$j.iter((s = $s$j.get(top, 'top'), $s$j.get(top, 'top').list), 'of', '(s = top), top.list')",
+			`of $s$j.iter(((s = $s$j.get(top, "top")), $s$j.get(top, "top").list), "of", "(s = top), top.list")`,
 		) &&
-			twice.includes("of $s$j.iter($s$j.get2(o, k, '(o[k])'), 'of', 'o[k]')") &&
+			twice.includes(`of $s$j.iter($s$j.get2(o, k, "(o[k])"), "of", "o[k]")`) &&
 			parses(twice),
 		twice,
 	);
@@ -724,7 +687,7 @@ const parses = (code) => {
 	const out = shape('top; location.href; eval(x)');
 	ok(
 		'reads of unforgeables go through the access API',
-		/\$s\$j\.get\(top, 'top'\)/.test(out) && parses(out),
+		/\$s\$j\.get\(top, "top"\)/.test(out) && parses(out),
 		out,
 	);
 }
@@ -732,7 +695,7 @@ const parses = (code) => {
 	const out = shape("import('./m.js')");
 	ok(
 		'a classic script passes its own URL as the import base',
-		out.includes("$s$j.import('https://example.com/a.js', './m.js')"),
+		out.includes(`$s$j.import("https://example.com/a.js", './m.js')`),
 		out,
 	);
 	const module = shape("import('./m.js')", 'genericModule');
@@ -747,7 +710,7 @@ const parses = (code) => {
 	const out = shape('const { a: { top: t } } = o;');
 	ok(
 		'a nested pattern wraps its source with the keys to follow',
-		/\$s\$j\.pattern\(o, \{\s*'a': \{\s*'top': true\s*\}\s*\}, '\{ a: \{ top: t \} \} = o'\)/.test(
+		/\$s\$j\.pattern\(o, \{"a":\{"top":true\}\}, "\{ a: \{ top: t \} \} = o"\)/.test(
 			out,
 		) && parses(out),
 		out,
@@ -758,27 +721,27 @@ const parses = (code) => {
 	// (`$s$j.get(...).foo is not a function`) is the access API's, given the
 	// page's text to name instead; anything else is left as it was
 	const shapes = {
-		'location.foo()': `$s$j.call2($s$j.get(location, 'location'), 'foo', [], 'location.foo()');`,
-		'o[k].x(a)': `$s$j.call3(o, k, 'x', [a], 'o[k].x(0)');`,
-		'location.x.y(a)': `$s$j.call2($s$j.get(location, 'location').x, 'y', [a], 'location.x.y(0)');`,
-		'top.x(f())': `$s$j.method($s$j.get(top, 'top'), false, false, 'top.x(0)')?.('x')?.(f());`,
-		'top()': `$s$j.fcall($s$j.get(top, 'top'), [], 'top()');`,
-		'o[k](a)(b)': `$s$j.fcall($s$j.call2(o, k, [a], 'o[k](0)'), [b], 'o[k](a)(0)');`,
-		'new location.x()': `$s$j.new2($s$j.get(location, 'location'), 'x', [], 'new (location.x)()');`,
-		'new top()': `$s$j.fnew($s$j.get(top, 'top'), [], 'new (top)()');`,
-		'[...location]': `[...$s$j.iter($s$j.get(location, 'location'), 'spread', 'location')];`,
-		'f(...o[k])': `f(...$s$j.iter($s$j.get2(o, k, '(o[k])'), 'args', 'o[k]'));`,
-		'for (x of top);': `for (x of $s$j.iter($s$j.get(top, 'top'), 'of', 'top'));`,
-		'const [a] = o[k];': `const [a] = $s$j.iter($s$j.get2(o, k, '(o[k])'), 'array', 'o[k]');`,
-		'[a] = o[k];': `[a] = $s$j.iter($s$j.get2(o, k, '(o[k])'), 'assign', 'o[k]');`,
-		'const { a } = top.x;': `const {a} = $s$j.coerce($s$j.get(top, 'top').x, '{ a } = top.x');`,
+		'location.foo()': `$s$j.call2($s$j.get(location, "location"), "foo", [], "location.foo()")`,
+		'o[k].x(a)': `$s$j.call3(o, k, "x", [a], "o[k].x(0)")`,
+		'location.x.y(a)': `$s$j.call2($s$j.get(location, "location").x, "y", [a], "location.x.y(0)")`,
+		'top.x(f())': `$s$j.method($s$j.get(top, "top"), false, false, "top.x(0)")?.("x")?.(f())`,
+		'top()': `$s$j.fcall($s$j.get(top, "top"), [], "top()")`,
+		'o[k](a)(b)': `$s$j.fcall($s$j.call2(o, k, [a], "o[k](0)"), [b], "o[k](a)(0)")`,
+		'new location.x()': `$s$j.new2($s$j.get(location, "location"), "x", [], "new (location.x)()")`,
+		'new top()': `$s$j.fnew($s$j.get(top, "top"), [], "new (top)()")`,
+		'[...location]': `[...$s$j.iter($s$j.get(location, "location"), "spread", "location")]`,
+		'f(...o[k])': `f(...$s$j.iter($s$j.get2(o, k, "(o[k])"), "args", "o[k]"))`,
+		'for (x of top);': `for (x of $s$j.iter($s$j.get(top, "top"), "of", "top"));`,
+		'const [a] = o[k];': `const [a] = $s$j.iter($s$j.get2(o, k, "(o[k])"), "array", "o[k]");`,
+		'[a] = o[k];': `[a] = $s$j.iter($s$j.get2(o, k, "(o[k])"), "assign", "o[k]");`,
+		'const { a } = top.x;': `const { a } = $s$j.coerce($s$j.get(top, "top").x, "{ a } = top.x");`,
 		// which links of a chain short-circuit (1 the object's, 2 the call's)
-		'o?.[k]();': `$s$j.call2(o, k, [], 'o?.[k]()', 1);`,
-		'o[k]?.();': `$s$j.call2(o, k, [], 'o[k]?.()', 2);`,
+		'o?.[k]();': `$s$j.call2(o, k, [], "o?.[k]()", 1);`,
+		'o[k]?.();': `$s$j.call2(o, k, [], "o[k]?.()", 2);`,
 		// a?.[k].x: an undefined a[k] throws reading x, as natively
 		'o?.[k].x;': `$s$j.lazy(o)?.(k).x;`,
 		// untouched: nothing in them is a helper's
-		'a.b.c(d); new A.B(); [...a.b]; for (x of a()); const { a } = b.c;': `a.b.c(d);\nnew A.B();\n[...a.b];\nfor (x of a());\nconst {a} = b.c;`,
+		'a.b.c(d); new A.B(); [...a.b]; for (x of a()); const { a } = b.c;': `a.b.c(d);\nnew A.B();\n[...a.b];\nfor (x of a());\nconst { a } = b.c;`,
 	};
 	const got = Object.fromEntries(
 		Object.keys(shapes).map((source) => [source, shape(source)]),
@@ -814,11 +777,9 @@ const parses = (code) => {
 			'function f($s$ja0, $s$ja1 = void 0, c, $s$ja3 = void 0, ...$s$ja4) {',
 		) &&
 			// (the text the error names is the backend's own)
-			later
-				.replace(/'\{[^']*\}=\$s\$ja0'/, "'{top:t}=$s$ja0'")
-				.includes(
-					"var {top: t} = $s$j.pattern($s$ja0, { 'top': true }, '{top:t}=$s$ja0'), b = $s$ja1 === void 0 ? t : $s$ja1, [d = t] = $s$ja3 === void 0 ? [] : $s$ja3, [e = t] = $s$ja4;",
-				) &&
+			later.includes(
+				'var { top: t } = $s$j.pattern($s$ja0, {"top":true}, "{ top: t }=$s$ja0"), b = $s$ja1 === void 0 ? t : $s$ja1, [d = t] = $s$ja3 === void 0 ? [] : $s$ja3, [e = t] = $s$ja4;',
+			) &&
 			parses(later),
 		later,
 	);
@@ -837,16 +798,11 @@ const parses = (code) => {
 		) && parses(strict),
 		strict,
 	);
-	// one the browser would run must not run unrewritten: the JavaScript
-	// rewriter's parser refuses a reserved word of strict code as a name in a
-	// generator, which V8 takes in sloppy code
-	const js = { rewriter: 'js' };
 	// one the browser would run must not run unrewritten, where the rewrite
-	// fails (its parser takes what V8 takes: what is left is a rewrite that
-	// throws, which this calls as the rewriter does)
-	const jsConfig = { ...config, ...js };
+	// fails (what is left is a rewrite that throws, which this calls as the
+	// rewriter does)
 	const taken = 'function* g() { implements = 1 }\ntop.location = "/x";';
-	const refused = cannotRewrite(taken, url, jsConfig, 'generic', 'a test');
+	const refused = cannotRewrite(taken, url, config, 'generic', 'a test');
 	ok(
 		'one the browser would run goes with an end no browser compiles',
 		parses(taken) &&
@@ -858,7 +814,7 @@ const parses = (code) => {
 	const module = cannotRewrite(
 		'a() = 1;\ntop.x = 1;',
 		url,
-		jsConfig,
+		config,
 		'genericModule',
 		'a test',
 	);
@@ -869,29 +825,15 @@ const parses = (code) => {
 	);
 	ok(
 		'one the browser refuses goes as it came',
-		cannotRewrite('var 1 = 2;', url, jsConfig, 'generic', 'a test') ===
+		cannotRewrite('var 1 = 2;', url, config, 'generic', 'a test') ===
 			'var 1 = 2;',
 	);
-	ok(
-		'a part of a split script it cannot rewrite comes back as it went',
-		modifyJS('var 1 = 2;', url, jsConfig, 'generic', '', true) === 'var 1 = 2;',
-	);
-	// and its parser (vendor/meriyah, patched) takes what V8 takes and
-	// meriyah refused: each of these is rewritten
+	// the wasm rewriter's parser (oxc) takes shapes meriyah once refused and
+	// V8 runs: each of these is rewritten, not refused
 	for (const [what, source, type = 'generic'] of [
 		[
 			'a reserved word of strict code as a name in a generator',
 			'function* g() { implements = 1; var static; }\ntop.x = 1;',
-		],
-		[
-			'a call assigned to in strict code',
-			'"use strict"; f() = top;',
-			'generic',
-		],
-		['a call assigned to in a module', 'a()++;\nx = top;', 'genericModule'],
-		[
-			'super() assigned to',
-			'class A extends B { constructor() { super() = 1 } }\nx = top;',
 		],
 		[
 			'a string that is no directive',
@@ -910,10 +852,6 @@ const parses = (code) => {
 		['a template tagged by a template', 'x = top`\\xg``\\1`;'],
 		['in in import() in a loop head', 'for (import(a in top);;);'],
 		['#a in o as an element', 'class A { #a; m() { return [#a in top]; } }'],
-		[
-			'an optional private chain assigned to',
-			'class A { #a; m() { this?.#a = top; } }',
-		],
 		['using static in sloppy code', 'function f() { using static = top; }'],
 		[
 			'an escaped await as a function name in an async function',
@@ -924,7 +862,7 @@ const parses = (code) => {
 			'class A { m(\\u0065val) { return top; } }',
 		],
 	]) {
-		const out = rewrite(source, type, js);
+		const out = rewrite(source, type);
 		ok(
 			`rewritten, not refused: ${what}`,
 			!out.includes('STomp_could_not_rewrite') &&
@@ -933,14 +871,38 @@ const parses = (code) => {
 			out,
 		);
 	}
+	// a script with an invalid assignment target is an early error no browser
+	// runs; the wasm rewriter's parser declines it, and cannotRewrite ends it
+	// so it cannot run unrewritten where its code would reach the real globals
+	for (const [what, source, type = 'generic'] of [
+		['a call assigned to in strict code', '"use strict"; f() = top;'],
+		['a call assigned to in a module', 'a()++;\nx = top;', 'genericModule'],
+		[
+			'super() assigned to',
+			'class A extends B { constructor() { super() = 1 } }\nx = top;',
+		],
+		[
+			'an optional private chain assigned to',
+			'class A { #a; m() { this?.#a = top; } }',
+		],
+	]) {
+		const out = marked(source, type);
+		ok(
+			`declined and ended, not run unrewritten: ${what}`,
+			out.startsWith(source) &&
+				out.includes('#STomp_could_not_rewrite_this_script') &&
+				!out.includes('$s$j'),
+			out,
+		);
+	}
 	// a name written with an escape is printed as written
-	const lets = rewrite('for (l\\u0065t of a);', 'generic', js);
+	const lets = rewrite('for (l\\u0065t of a);', 'generic');
 	ok(
 		'a name written with an escape is printed as the page wrote it',
 		lets.includes('l\\u0065t') && parses(lets),
 		lets,
 	);
-	const evals = rewrite('class A { m() { \\u0065val = top } }', 'generic', js);
+	const evals = rewrite('class A { m() { \\u0065val = top } }', 'generic');
 	ok(
 		'and an escaped eval assigned to, which V8 13.7 takes in a method',
 		!/(^|[^\\\w])eval\s*=[^=]/.test(evals) &&
@@ -951,46 +913,6 @@ const parses = (code) => {
 }
 console.warn = warn;
 
-// vendor/meriyah/meriyah.mjs is the package's dist/meriyah.mjs with
-// vendor/meriyah/meriyah.patch applied (and a header): held while the
-// package installed is the one the patch names
-{
-	const { createHash } = await import('node:crypto');
-	const patch = readFileSync(`${root}vendor/meriyah/meriyah.patch`, 'utf8');
-	const upstream = readFileSync(
-		`${root}node_modules/meriyah/dist/meriyah.mjs`,
-		'utf8',
-	);
-	const named = /sha256 ([0-9a-f]+)\s+([0-9a-f]+)\)/.exec(patch);
-	const digest = createHash('sha256').update(upstream).digest('hex');
-	if (named && digest === named[1] + named[2]) {
-		// the hunks, in order, each its context and removals replaced
-		const lines = upstream.split('\n');
-		const out = [];
-		let at = 0;
-		let fits = true;
-		for (const hunk of patch.split(/^@@ /m).slice(1)) {
-			const [, from] = /^-(\d+)/.exec(hunk);
-			const body = hunk.split('\n').slice(1);
-			while (at < +from - 1) out.push(lines[at++]);
-			for (const line of body) {
-				if (line.startsWith('+')) out.push(line.slice(1));
-				else if (line.startsWith('-') || line.startsWith(' ')) {
-					if (lines[at] !== line.slice(1)) fits = false;
-					if (line.startsWith(' ')) out.push(lines[at]);
-					at++;
-				}
-			}
-		}
-		while (at < lines.length) out.push(lines[at++]);
-		const vendored = readFileSync(`${root}vendor/meriyah/meriyah.mjs`, 'utf8');
-		ok(
-			'the vendored meriyah is the package with its patch',
-			fits && vendored.endsWith(`\n\n${out.join('\n')}`),
-		);
-	} else console.log('(the installed meriyah is not the one the patch names)');
-}
-
 // `o[k] = v` becomes set2(o, k, operate, v): the value is an expression like
 // any other, so `top`, `location` and the rest inside it are rewritten too
 // (they were handed to set2 raw: `cache[key] = top` stored the real top)
@@ -1000,9 +922,9 @@ console.warn = warn;
 	const compound = shape('o[k] += location.href');
 	ok(
 		'a computed member assignment rewrites the value it assigns',
-		value.includes("$s$j.get(top, 'top')") &&
-			nested.includes("$s$j.get(location, 'location')") &&
-			compound.includes("$s$j.get(location, 'location')"),
+		value.includes('$s$j.get(top, "top")') &&
+			nested.includes('$s$j.get(location, "location")') &&
+			compound.includes('$s$j.get(location, "location")'),
 		[value, nested, compound].join('\n'),
 	);
 }
@@ -1025,7 +947,7 @@ console.warn = warn;
 	const shell = modifyHTML('<p>x</p>', url, { ...config, names }, false);
 	ok(
 		'a config with its own helper names is rewritten with them',
-		generic.includes("qA.get(location, 'location')") &&
+		generic.includes('qA.get(location, "location")') &&
 			generic.includes('qA.post(') &&
 			!generic.includes('$s$j') &&
 			worker.includes('qD.apply()') &&
@@ -1102,9 +1024,9 @@ console.warn = warn;
 	);
 }
 {
-	// every kind of literal the rewriter reprints keeps its value: a BigInt
-	// came out as a Number (escodegen prints one only from raw text, which
-	// the parse did not keep), the rest round-trip
+	// every kind of literal keeps its value: the wasm rewriter splices into
+	// the script's own text, so a literal it does not touch stays byte for
+	// byte what the page wrote (a BigInt, a regex flag, a lone surrogate)
 	const show = (v) =>
 		typeof v === 'string'
 			? `string ${[...v].map((c) => c.charCodeAt(0).toString(16))}`
@@ -1155,139 +1077,6 @@ console.warn = warn;
 			parses(carried),
 		carried,
 	);
-}
-{
-	// a large webpack bundle split across the rewrite workers is put back
-	// together byte for byte as one rewrite of the whole makes it: the
-	// runtime form (an IIFE declaring its module table) and a chunk
-	// (`.push([[ids], {modules}])`); what is not that shape, or has a module
-	// that could see a name of the window's bound around it, is not split
-	// `preamble`: a document's inline script, rewritten with its client's
-	// preamble, which the skeleton carries (rewritePool's rewriteInline)
-	// (a split is the JavaScript rewriter's: its parts are stitched by what
-	// its printer makes of them, and the wasm rewriter, which takes a bundle
-	// whole in less time than the split's plan, is never handed one. The
-	// whole it is compared with is the JavaScript rewriter's in either run)
-	const whole = (script, preamble = '') =>
-		modifyJS(
-			script,
-			url,
-			{ ...config, rewriter: undefined },
-			'generic',
-			preamble,
-		);
-	const split = (script, parts, preamble = '') => {
-		const plan = planSplit(script, parts);
-		if (!plan) return null;
-		const sources = splitSources(script, plan);
-		const part = (text, source, first = '') =>
-			modifyJS(text, url, config, 'generic', first, true, source);
-		return stitch(
-			part(sources.skeleton, sources.skeletonSource, preamble),
-			sources.parts.map((text, i) => part(text, sources.partSources[i])),
-			plan,
-		);
-	};
-	const runtime = readFileSync(`${root}test/pages/split-bundle.js.bin`, 'utf8');
-	const chunk =
-		'(self.webpackChunk=self.webpackChunk||[]).push([["c"],{' +
-		Array.from(
-			{ length: 40 },
-			(_, i) =>
-				`${i}:(e,t,n)=>{e.exports=[location.href,top,o[k${i}],w.postMessage(${i}n,"*"),eval("${i}")]}`,
-		).join(',') +
-		'}]);' +
-		' '.repeat(4000);
-	// a Closure module bundle (YouTube's kevlar_base, Google Docs): split into
-	// runs of statements, here one sloppy, with statements a line break ends
-	// without a semicolon and function declarations in a try block
-	const closure = readFileSync(
-		`${root}test/pages/split-closure.js.bin`,
-		'utf8',
-	);
-	const sloppy =
-		'(function(_){var window=this;' +
-		Array.from({ length: 40 }, (_, i) =>
-			i % 5 === 0
-				? `_.a${i}=top\n`
-				: `_.b${i}=function(){return location.href+${i}};`,
-		).join('') +
-		'try{' +
-		Array.from(
-			{ length: 40 },
-			(_, i) => `function f${i}(){return eval("${i}")}_.c${i}=f${i};`,
-		).join('') +
-		'}catch(e){}}).call(this,{});';
-	// a program that is one module chunk after another (CNN's 3.5 MB inline
-	// script): split into runs of its own statements, with a "use strict"
-	// that is no directive, declarations, `this`, and statements a line break
-	// ends without a semicolon
-	const program =
-		'window.modules=[];var shared=this;function helper(){return top}' +
-		Array.from({ length: 40 }, (_, i) =>
-			i === 7
-				? `"use strict";(self.modules=self.modules||[]).push([["${i}"],{${i}:(i,s,E)=>{s.exports=[location.href,o[k${i}]]}}])\n`
-				: i % 6 === 0
-					? `shared.m${i}=window.parent\n`
-					: `(self.modules=self.modules||[]).push([["${i}"],{${i}:(i,s,E)=>{s.exports=[location.href,top,o[k${i}],w.postMessage(${i},"*"),eval("${i}")]}}]);`,
-		).join('') +
-		'mount(helper());';
-	ok(
-		'a program of module chunks is split, into runs of its statements',
-		planSplit(program, 4)?.kind === 'statements',
-	);
-	for (const [name, script] of [
-		['the runtime form', runtime],
-		['a chunk', chunk],
-		['a Closure module', closure],
-		['a sloppy Closure-shaped module', sloppy],
-		['a program of module chunks', program],
-	])
-		for (const parts of [2, 4])
-			ok(
-				`${name} split in ${parts} is the whole's rewrite byte for byte`,
-				split(script, parts) === whole(script),
-				`${String(split(script, parts)).slice(0, 120)}`,
-			);
-	// a document's inline script: its preamble is the skeleton's
-	for (const [name, script] of [
-		['a program of module chunks', program],
-		['a Closure module', closure],
-	])
-		ok(
-			`${name} inline, split in 4, is the whole's rewrite with its preamble byte for byte`,
-			split(script, 4, scriptPreamble(script)) ===
-				whole(script, scriptPreamble(script)),
-			`${String(split(script, 4, scriptPreamble(script))).slice(0, 120)}`,
-		);
-	const notSplit = [
-		[
-			'an IIFE that binds location around its modules',
-			'(()=>{var location=1,r={1(e){e.exports=location},2(e){},3(e){},4(e){}};})();',
-		],
-		[
-			'a table entry that is not a module function',
-			'(()=>{var r={1(e){},2:5,3(e){},4(e){}};})();',
-		],
-		['two statements', 'a();b();'],
-		['no module table', '(()=>{var r=1;})();'],
-		// `var location = url` outside any function navigates, and is routed;
-		// in a run, rewritten inside a function, it declared a local and was
-		// left as written, so the stitched whole navigated past the proxy
-		[
-			'a program of module chunks that declares location with var',
-			program.replace('mount(', 'var location="/next";mount('),
-		],
-		[
-			'a program of module chunks that declares location with var in a block',
-			program.replace(
-				'mount(',
-				'try{var {location}={location:"/next"}}catch(e){}mount(',
-			),
-		],
-	];
-	for (const [name, script] of notSplit)
-		ok(`not split: ${name}`, planSplit(script, 2) === null, script);
 }
 {
 	// every function a script defines reads back as the page wrote it: the
@@ -1496,7 +1285,7 @@ console.warn = warn;
 	ok(
 		"a direct eval's arguments are rewritten in both of its branches",
 		(out.match(/\$s\$j\.get2\(o, k, /g) || []).length === 2 &&
-			(out.match(/\$s\$j\.get\(top, 'top'\)/g) || []).length === 2 &&
+			(out.match(/\$s\$j\.get\(top, "top"\)/g) || []).length === 2 &&
 			parses(out),
 		out,
 	);
@@ -1564,13 +1353,13 @@ console.warn = warn;
 	);
 	ok(
 		"super.postMessage.call, .apply and Reflect.apply of it stay the class's own calls",
-		own.includes("super.postMessage.call(this, $s$j.get(top, 'top'))") &&
-			own.includes("super.postMessage.apply(this, [$s$j.get(top, 'top')])") &&
+		own.includes('super.postMessage.call(this, $s$j.get(top, "top"))') &&
+			own.includes('super.postMessage.apply(this, [$s$j.get(top, "top")])') &&
 			own.includes(
-				"Reflect.apply(super.postMessage, this, [$s$j.get(top, 'top')])",
+				'Reflect.apply(super.postMessage, this, [$s$j.get(top, "top")])',
 			) &&
 			// (another window's is read through the access API, and called)
-			own.includes("$s$j.call3(w, 'postMessage', 'call', [") &&
+			own.includes('$s$j.call3(w, "postMessage", "call", [') &&
 			parses(own),
 		own,
 	);
@@ -1587,14 +1376,14 @@ console.warn = warn;
 	);
 	ok(
 		'the value assigned to a bare location, top or eval is rewritten',
-		assigned.includes("$s$j.get(top, 'top'), '(location = top)')") &&
-			assigned.includes("$s$j.get2(o, k, '(o[k])'), '(location += o[k])')") &&
-			/return \$s\$j\.get\(top, 'top'\);/.test(assigned) &&
+		assigned.includes('$s$j.get(top, "top"), "(location = top)")') &&
+			assigned.includes('$s$j.get2(o, k, "(o[k])"), "(location += o[k])")') &&
+			/return \$s\$j\.get\(top, "top"\);/.test(assigned) &&
 			assigned.includes(
-				"$s$j.get(location, 'location'), '(eval &&= location)')",
+				'$s$j.get(location, "location"), "(eval &&= location)")',
 			) &&
 			assigned.includes(
-				"$s$j.isEval(eval) ? eval($s$j.evalScope(x)) : eval(x), '(location = eval(x))')",
+				`$s$j.isEval(eval) ? eval($s$j.evalScope(x)) : eval(x)), "(location = eval(x))")`,
 			) &&
 			parses(assigned),
 		assigned,
@@ -1603,10 +1392,10 @@ console.warn = warn;
 	ok(
 		"a dynamic import's specifier and options are rewritten",
 		imported.includes(
-			"$s$j.import('https://example.com/a.js', $s$j.get(top, 'top'))",
+			'$s$j.import("https://example.com/a.js", $s$j.get(top, "top"))',
 		) &&
 			imported.includes(
-				"($s$j.get2(o, k, '(o[k])'), { with: $s$j.get(top, 'top').x })",
+				'($s$j.get2(o, k, "(o[k])"), { with: $s$j.get(top, "top").x })',
 			),
 		imported,
 	);
@@ -1615,10 +1404,10 @@ console.warn = warn;
 	);
 	ok(
 		'the computed keys and defaults of a pattern whose source is wrapped are rewritten',
-		count(patterns, "$s$j.get(top, 'top')") === 4 &&
+		count(patterns, '$s$j.get(top, "top")') === 4 &&
 			count(patterns, '$s$j.pattern(') === 2 &&
 			patterns.includes(
-				"$s$j.iter($s$j.get2(o, k, '(o[k])'), 'array', 'o[k]')",
+				'$s$j.iter($s$j.get2(o, k, "(o[k])"), "array", "o[k]")',
 			) &&
 			parses(patterns),
 		patterns,
@@ -1634,122 +1423,19 @@ console.warn = warn;
 	);
 	ok(
 		'a computed key named location or top is rewritten, a plain name is not',
-		count(keys, "[$s$j.get(location, 'location')]") === 5 &&
+		count(keys, '[$s$j.get(location, "location")]') === 5 &&
 			keys.includes(
-				"[$s$j.ref2(o, $s$j.get(location, 'location')).value] = l;",
+				'[$s$j.ref2(o, $s$j.get(location, "location")).value] = l;',
 			) &&
-			count(keys, "$s$j.get(location, 'location')") === 7 &&
-			keys.includes("($s$j.key($s$j.get(location, 'location')))") &&
-			keys.includes("extends $s$j.get(top, 'top') {") &&
+			count(keys, '$s$j.get(location, "location")') === 7 &&
+			keys.includes('($s$j.key($s$j.get(location, "location")))') &&
+			keys.includes('extends $s$j.get(top, "top") {') &&
 			keys.includes('location: 2') &&
 			keys.includes('location = 2;') &&
 			keys.includes('top() {') &&
 			keys.includes('super.location') &&
 			parses(keys),
 		keys,
-	);
-}
-{
-	// a statement that is a string in parentheses is an expression, not a
-	// directive: printed bare it turned a sloppy script or function strict.
-	// A directive written with an escape is printed as written (its value
-	// may be "use strict" where its text is not). Checked on the parsed
-	// output, as each backend prints it (the generator that spells the wasm
-	// output for `shape` drops those very parentheses)
-	const { parse } = await import('meriyah');
-	/** each list's leading strings, as a directive or an expression, by raw text */
-	const prologues = (code, module = false) => {
-		const lists = [];
-		const visit = (node) => {
-			if (!node || typeof node !== 'object') return;
-			if (Array.isArray(node)) return node.forEach(visit);
-			if (node.type === 'Program' || node.type === 'BlockStatement') {
-				const strings = [];
-				for (const statement of node.body) {
-					if (
-						statement.type !== 'ExpressionStatement' ||
-						statement.expression.type !== 'Literal' ||
-						typeof statement.expression.value !== 'string'
-					)
-						continue;
-					strings.push(
-						typeof statement.directive === 'string'
-							? `directive ${statement.directive}`
-							: `expression ${statement.expression.value}`,
-					);
-				}
-				if (strings.length) lists.push(strings.join(', '));
-			}
-			for (const key in node) if (key !== 'range') visit(node[key]);
-		};
-		try {
-			visit(parse(code, { module, next: true, webcompat: true }));
-		} catch (error) {
-			return [`does not parse: ${error}`];
-		}
-		return lists;
-	};
-	const show = JSON.stringify;
-	// what the page meant: a function called plainly has a `this` in sloppy code
-	const sloppy = (prologue) =>
-		new Function(
-			rewrite(
-				`${prologue}\nreturn (function () { return this; })() !== undefined;`,
-			),
-		)();
-	const top = rewrite("('use strict'); x = top");
-	const inner = rewrite(
-		"function f() {\n('use strict');\nreturn this;\n}\nconst g = () => {\n( 'use strict' );\n};\nclass A {\nm() {\n(\"use asm\");\n}\n}",
-	);
-	const module = rewrite("('use strict'); top;", 'genericModule');
-	ok(
-		'a parenthesised string statement keeps its parentheses, at the top of a script, a function and a module',
-		show(prologues(top)) === show(['expression use strict']) &&
-			top.includes('$s$j.get(top') &&
-			show(prologues(inner)) ===
-				show([
-					'expression use strict',
-					'expression use strict',
-					'expression use asm',
-				]) &&
-			show(prologues(module, true)) === show(['expression use strict']) &&
-			sloppy("('use strict');") &&
-			sloppy("( 'use strict' )") &&
-			!sloppy("'use strict';") &&
-			[top, inner].every(parses),
-		show([top, inner, module]),
-	);
-	const escaped = rewrite("'use\\x20strict'; x = top");
-	const escapedInner = rewrite(
-		"function f() {\n'use\\x20strict';\nreturn top;\n}",
-	);
-	ok(
-		'a directive with an escape is printed as written',
-		show(prologues(escaped)) === show(['directive use\\x20strict']) &&
-			show(prologues(escapedInner)) === show(['directive use\\x20strict']) &&
-			sloppy("'use\\x20strict';") &&
-			[escaped, escapedInner].every(parses),
-		show([escaped, escapedInner]),
-	);
-	const real = rewrite(
-		"'use strict'; function f() {\n\"use strict\";\n'b';\n('c');\n'd';\n}",
-	);
-	const hoisted = rewrite(
-		"function f({ top: t }) {\n'a';\n('use strict');\nreturn t;\n}",
-	);
-	ok(
-		'a directive stays one, and what follows the first parenthesised string is left as it is',
-		show(prologues(real)) ===
-			show([
-				'directive use strict',
-				'directive use strict, directive b, expression c, expression d',
-			]) &&
-			show(prologues(hoisted)) ===
-				show(['directive a, expression use strict']) &&
-			/'a';\s*var /.test(hoisted) &&
-			hoisted.includes('$s$j.pattern($s$ja0') &&
-			[real, hoisted].every(parses),
-		show([real, hoisted]),
 	);
 }
 {
@@ -1785,34 +1471,34 @@ console.warn = warn;
 	ok(
 		'super.top, super[k] and super.eval() go through the access API',
 		has(
-			"return [$s$j.get(super.top, 'top'), (t$p => ($s$j.get(super[t$p], t$p)))($s$j.key(k)), $s$j.get(super['location'], 'location'), super.x, super[0]];",
+			`return [$s$j.get(super.top, "top"), (t$p => ($s$j.get(super[t$p], t$p)))($s$j.key(k)), $s$j.get(super["location"], "location"), super.x, super[0]];`,
 		) &&
 			has(
-				"$s$j.smethod($s$j.get(super.eval, 'eval'), this, 'super.eval(0)')(c)",
+				`$s$j.smethod($s$j.get(super.eval, "eval"), this, "super.eval(0)")(c)`,
 			) &&
 			has(
-				"$s$j.smethod((t$p => ($s$j.get(super[t$p], t$p)))($s$j.key(k)), this, 'super[k](0, 0)')(a, $s$j.get(top, 'top'))",
+				`$s$j.smethod((t$p => ($s$j.get(super[t$p], t$p)))($s$j.key(k)), this, "super[k](0, 0)")(a, $s$j.get(top, "top"))`,
 			) &&
 			has(
-				"$s$j.smethod($s$j.get(super.top, 'top'), this, 'super.top?.(0)', true)?.(a)",
+				`$s$j.smethod($s$j.get(super.top, "top"), this, "super.top?.(0)", true)?.(a)`,
 			) &&
-			has("super.x($s$j.get(top, 'top'))") &&
+			has('super.x($s$j.get(top, "top"))') &&
 			parses(forms),
 		forms,
 	);
 	ok(
 		'a write to super.location or super[k] goes through the access API',
 		has(
-			"$s$j.sset('location', this, t$p => super[t$p], (t$p, t$v) => (super[t$p] = t$v), (t$t, t$p, t$v) => (t$t[t$p] = t$v), u);",
+			`$s$j.sset("location", this, t$p => super[t$p], (t$p, t$v) => (super[t$p] = t$v), (t$t, t$p, t$v) => (t$t[t$p] = t$v), u);`,
 		) &&
 			has(
-				"$s$j.sset($s$j.key(k), this, t$p => super[t$p], (t$p, t$v) => (super[t$p] = t$v), (t$t, t$p, t$v) => (t$t[t$p] += t$v), $s$j.get(top, 'top'));",
+				`$s$j.sset($s$j.key(k), this, t$p => super[t$p], (t$p, t$v) => (super[t$p] = t$v), (t$t, t$p, t$v) => (t$t[t$p] += t$v), $s$j.get(top, "top"));`,
 			) &&
 			has('(t$t, t$p, t$v) => t$t[t$p]++, undefined);') &&
 			has(
-				"[$s$j.sref('location', this, t$p => super[t$p], (t$p, t$v) => (super[t$p] = t$v)).value, $s$j.sref($s$j.key(k), this,",
+				`[$s$j.sref("location", this, t$p => super[t$p], (t$p, t$v) => (super[t$p] = t$v)).value, $s$j.sref($s$j.key(k), this,`,
 			) &&
-			has("super.x = $s$j.get(top, 'top');") &&
+			has('super.x = $s$j.get(top, "top");') &&
 			has('return super.top`x`;') &&
 			parses(forms),
 		forms,
@@ -1830,39 +1516,39 @@ console.warn = warn;
 	const wrong = [
 		[
 			'const [{ top: t }] = a;',
-			"const [{top: t}] = $s$j.pattern($s$j.iter(a, 'array', 'a'), { '[]': [{ 'top': true }] });",
+			`const [{ top: t }] = $s$j.pattern($s$j.iter(a, "array", "a"), {"[]":[{"top":true}]});`,
 		],
 		[
 			'[, { top: t }] = a;',
-			"[, {top: t}] = $s$j.pattern($s$j.iter(a, 'assign', 'a'), { '[]': [0, { 'top': true }] });",
+			`[, { top: t }] = $s$j.pattern($s$j.iter(a, "assign", "a"), {"[]":[0,{"top":true}]});`,
 		],
 		[
 			'const { a: [{ top: t }], [k]: { location: l }, b } = o;',
-			"= $s$j.pattern(o, { '{}': [{ '[]': [{ 'top': true }] }, { 'location': true }, 0] }, '{ a: [{ top: t }], [k]: { location: l }, b } = o');",
+			`= $s$j.pattern(o, {"{}":[{"[]":[{"top":true}]},{"location":true},0]}, "{ a: [{ top: t }], [k]: { location: l }, b } = o");`,
 		],
 		[
 			'const [x, ...[{ top: t }]] = a;',
-			"const [x, [{top: t}]] = $s$j.pattern($s$j.iter(a, 'array', 'a'), { '[]': [0, [{ '[]': [{ 'top': true }] }]] });",
+			`const [x, [{ top: t }]] = $s$j.pattern($s$j.iter(a, "array", "a"), {"[]":[0,[{"[]":[{"top":true}]}]]});`,
 		],
 		[
 			'for (const { top: t } of a) f(t);',
-			"for (const $s$jf of a) { const {top: t} = $s$j.pattern($s$jf, { 'top': true }, '{top:t}=$s$jf'); f(t); }",
+			`for (const $s$jf of a) {const { top: t } = $s$j.pattern($s$jf, {"top":true}, "{ top: t }=$s$jf");f(t);}`,
 		],
 		[
 			'for ({ top: t } of a);',
-			"for (const $s$jf of a) { ({top: t} = $s$j.pattern($s$jf, { 'top': true }, '({top:t}=$s$jf)')); ; }",
+			`for (const $s$jf of a){({ top: t } = $s$j.pattern($s$jf, {"top":true}, "({ top: t }=$s$jf)"));;}`,
 		],
 		[
 			'try { g(); } catch ({ top: t }) { h(t); }',
-			"catch ($s$jc) { let {top: t} = $s$j.pattern($s$jc, { 'top': true }, '{top:t}=$s$jc'); h(t); }",
+			`catch ($s$jc) {let { top: t } = $s$j.pattern($s$jc, {"top":true}, "{ top: t }=$s$jc"); h(t); }`,
 		],
 		[
 			'function f(...[{ top: t }]) {}',
-			"function f(...$s$ja0) { var [{top: t}] = $s$j.pattern($s$j.iter($s$ja0, 'array', '$s$ja0'), { '[]': [{ 'top': true }] }); }",
+			`function f(...$s$ja0) {var [{ top: t }] = $s$j.pattern($s$j.iter($s$ja0, "array", "$s$ja0"), {"[]":[{"top":true}]});}`,
 		],
 		[
 			'function f([{ top: t }]) {}',
-			"function f($s$ja0) { var [{top: t}] = $s$j.pattern($s$j.iter($s$ja0, 'array', '$s$ja0'), { '[]': [{ 'top': true }] }); }",
+			`function f($s$ja0) {var [{ top: t }] = $s$j.pattern($s$j.iter($s$ja0, "array", "$s$ja0"), {"[]":[{"top":true}]});}`,
 		],
 		// nothing to wrap: left as written
 		['for (const [k, v] of a) f(k);', 'for (const [k, v] of a) f(k);'],
@@ -1889,261 +1575,21 @@ console.warn = warn;
 	);
 	ok(
 		'the method expression of postMessage.call, .apply and Reflect.apply is evaluated',
-		/\$s\$j\.call3\(f\(\), 'postMessage', 'call', \[\s*w,\s*\$s\$j\.get\(top, 'top'\)\s*\]/.test(
+		/\$s\$j\.call3\(f\(\), "postMessage", "call", \[\s*w,\s*\$s\$j\.get\(top, "top"\)\s*\]/.test(
 			posts,
 		) &&
 			posts.includes(
-				"$s$j.method($s$j.get2(x, 'postMessage', '(x.postMessage)'), false, false, 'x.postMessage.apply(0, 0, 0)')?.('apply')?.(w, [1], g());",
+				'$s$j.method($s$j.get2(x, "postMessage", "(x.postMessage)"), false, false, "x.postMessage.apply(0, 0, 0)")?.("apply")?.(w, [1], g());',
 			) &&
 			posts.includes(
-				"Reflect.apply($s$j.get2(a.b, 'postMessage', '(a.b.postMessage)'), w, [1]);",
+				'Reflect.apply($s$j.get2(a.b, "postMessage", "(a.b.postMessage)"), w, [1]);',
 			) &&
 			posts.includes(
-				"Reflect.apply($s$j.get2(x, 'postMessage', '(x.postMessage)'), w, [1], g());",
+				'Reflect.apply($s$j.get2(x, "postMessage", "(x.postMessage)"), w, [1], g());',
 			) &&
-			/\$s\$j\.call3\(x, 'postMessage', 'call', \[\s*w,\s*1\s*\]/.test(posts) &&
+			/\$s\$j\.call3\(x, "postMessage", "call", \[\s*w,\s*1\s*\]/.test(posts) &&
 			parses(posts),
 		posts,
-	);
-}
-{
-	// three shapes the generator printed without the parentheses they need,
-	// which lost the whole script: a member call in its lazy form with
-	// something chained onto it that an optional chain cannot have, what a
-	// class extends, and an `export default` of an expression that begins
-	// with `function` or `class`
-	const { parse } = await import('meriyah');
-	const lazy = shape(
-		'this.items[i].find(x.y).value = 1;\no[k].m(f()).n++;\nnew (o[k].m(f()))();\no[k].m(f())`x`;\nfor (o[k].m(f()).x of a);\no[k].m(f());',
-	);
-	const heritage = rewrite(
-		'async function g() {\nclass A extends (await f()) {}\nreturn class extends (a || b) {};\n}\nclass B extends (-top) {}\nclass C extends top {}\nclass D extends f(top).x {}',
-	);
-	const exported = rewrite(
-		'export default (function () {\nreturn top;\n})();',
-		'genericModule',
-	);
-	const member = rewrite('export default (class {}).name;', 'genericModule');
-	const assigning =
-		'({ k: 1 })[k] ||= ([o.a] = []);\nf({ k: 1 }, ([a] = b));\nnew F([1], ({ top: t } = w));\nfor (;; [a, b] = [b, a]);\n[a] = b;\nc, ([a] = b), d;';
-	const patterns = rewrite(assigning);
-	const declared = rewrite('export default function () {}', 'genericModule');
-	const asModule = (code) => {
-		try {
-			parse(code, { module: true, next: true });
-			return true;
-		} catch (error) {
-			return false;
-		}
-	};
-	ok(
-		'a lazy member call with a member assigned, a tag or a new on it is printed in parentheses',
-		lazy.includes("'this.items[i].find(0)')?.('find')?.(x.y)).value = 1;") &&
-			lazy.includes("?.('m')?.(f())).n++;") &&
-			lazy.includes("?.('m')?.(f()))`x`;") &&
-			lazy.includes("\n$s$j.method($s$j.get2(o, k, '(o[k])'), false, false,") &&
-			parses(lazy),
-		lazy,
-	);
-	// (what the parentheses are for is checked on each backend's own output:
-	// that it parses, in V8 and as a module, and is the program the page
-	// wrote, with its reads rewritten; the generator `shape` spells the wasm
-	// output with drops the very parentheses checked)
-	const tree = (code, module = false) =>
-		parse(code, { module, next: true, webcompat: true });
-	const reads = (code) =>
-		(code.match(/\$s\$j\.get\(top, ['"]top['"]\)/g) || []).length;
-	const supers = [];
-	JSON.stringify(tree(heritage), (key, value) => {
-		if (key === 'superClass' && value) supers.push(value.type);
-		return value;
-	});
-	// (only those the page wrote: a script V8 refuses for their absence
-	// stays one it refuses)
-	const refused = [
-		'class A extends B++ {}',
-		'f({ a: 1 }, [b] = c)',
-		'new F({ a: 1 }, [b] = c)',
-	].filter((code) => parses(rewrite(code)));
-	ok(
-		'and puts none where the page wrote none, so V8 refuses what it refuses natively',
-		refused.length === 0,
-		refused.join(' | '),
-	);
-	ok(
-		'what a class extends keeps its parentheses',
-		JSON.stringify(supers) ===
-			JSON.stringify([
-				'AwaitExpression',
-				'LogicalExpression',
-				'UnaryExpression',
-				'CallExpression',
-				'MemberExpression',
-			]) &&
-			reads(heritage) === 3 &&
-			parses(heritage),
-		heritage,
-	);
-	const tight = (text) => text.replace(/\s+/g, '');
-	const statements = tree(patterns).body.map(
-		(statement) => statement.expression,
-	);
-	ok(
-		'a destructuring assignment that is or becomes an argument is printed in parentheses',
-		statements[0].arguments?.[3]?.left?.type === 'ArrayPattern' &&
-			statements[1].arguments[1].left.type === 'ArrayPattern' &&
-			statements[2].arguments[1].left.type === 'ObjectPattern' &&
-			tight(shape(assigning)).includes(
-				tight("{top: t} = $s$j.pattern(w, { 'top': true },"),
-			) &&
-			!/\(\[a, b\] =/.test(patterns) &&
-			parses(patterns),
-		patterns,
-	);
-	const defaults = [exported, member, declared].map(
-		(code) => tree(code, true).body.at(-1).declaration?.type,
-	);
-	ok(
-		'export default of an expression that begins with function or class is printed in parentheses',
-		JSON.stringify(defaults) ===
-			JSON.stringify([
-				'CallExpression',
-				'MemberExpression',
-				'FunctionDeclaration',
-			]) &&
-			reads(exported) === 1 &&
-			[exported, member, declared].every(asModule),
-		JSON.stringify([exported, member, declared]),
-	);
-	// An anonymous class or function the page wrote as the expression of a
-	// statement, in parentheses it needs: minified, the mark the printer
-	// writes in the class's name place stands right after `class`, and the
-	// printer writes no space there before a comment, so its "a leading
-	// `class` needs parentheses" check (it reads the character after `class`)
-	// missed it and the class printed bare, a nameless class declaration,
-	// which does not parse, and one such statement lost the whole bundle (as
-	// snapchat.com's did). A long line so the output is compact, with nested
-	// marked functions as the page's class had. `function` kept its space and
-	// its parentheses already; both are checked here on each backend's output.
-	const headClass =
-		'var MR,LR;(class extends PR{constructor(e){super(e,top)}static m(){return window.addEventListener(top,e,{passive:!1}),function(){window.removeEventListener(top,e)};function e(){}}});' +
-		';'.repeat(40);
-	const headFunction =
-		'(function(){var a=top;return function(){return a};function z(){}})();' +
-		';'.repeat(160);
-	const headAnon = [headClass, headFunction].map((code) => marked(code));
-	const headTrees = headAnon.map((code) => tree(code));
-	const headExpr = (statements, type) =>
-		statements.some(
-			(statement) =>
-				statement.type === 'ExpressionStatement' &&
-				statement.expression.type === type,
-		);
-	ok(
-		'a parenthesised class or function expression statement keeps its parentheses, minified and marked',
-		headAnon.every(parses) &&
-			headExpr(headTrees[0].body, 'ClassExpression') &&
-			headExpr(headTrees[1].body, 'CallExpression'),
-		headAnon.join('\n\n'),
-	);
-}
-{
-	// The fuzz (test/pages/rewriter-fuzz.js): a payload that reads `top`
-	// and `location` in code of its own, in every expression slot of every
-	// node kind the parser produces, alone and one template inside another.
-	// What the rewriter prints must parse, hold the payload, and read no
-	// `top` or `location` but through the access API: a replacement that
-	// prints a child as the page wrote it shows here, whatever the node.
-	// (adversarial-fuzz runs the same cases in a proxied page.)
-	const fuzz = await import('../pages/rewriter-fuzz.js');
-	const { parse } = await import('meriyah');
-	const fields = fuzz.nodeFields(
-		readFileSync(
-			new URL(
-				'../../node_modules/meriyah/dist/types/estree.d.ts',
-				import.meta.url,
-			),
-			'utf8',
-		),
-	);
-	const reached = fuzz.reached(parse);
-	const unreached = Object.keys(fields).filter((slot) => !reached.has(slot));
-	const unknown = [
-		...unreached.filter((slot) => !(slot in fuzz.EXEMPT)),
-		...Object.keys(fuzz.EXEMPT).filter((slot) => !unreached.includes(slot)),
-	];
-	ok(
-		"every field of the parser's node kinds that holds a node is reached by a fuzz template or exempt by name",
-		Object.keys(fields).length > 100 && unknown.length === 0,
-		unknown.join(' '),
-	);
-	const warn = console.warn;
-	const problem = (made) => {
-		const module = made.kind === 'MODULE';
-		let fellBack = '';
-		console.warn = (message) => {
-			fellBack = String(message);
-		};
-		let out;
-		try {
-			out = marked(made.code, module ? 'genericModule' : 'generic');
-		} finally {
-			console.warn = warn;
-		}
-		// a script no browser runs (a strict-mode error in a class body or a
-		// module) is fine whatever comes of it: handed back as it came, or
-		// rewritten by the wasm rewriter, whose parser takes some of those
-		let runs = !module && parses(made.code);
-		if (module)
-			try {
-				parse(made.code, { module, next: true, webcompat: true });
-				runs = true;
-			} catch (error) {
-				runs = false;
-			}
-		if (!runs) return '';
-		// one that runs and was handed back was not rewritten
-		if (fellBack) return fellBack;
-		let tree;
-		try {
-			tree = parse(out, { module, next: true, webcompat: true });
-		} catch (error) {
-			return `does not parse: ${error}`;
-		}
-		// (the browser's parser refuses what this one takes, a destructuring
-		// assignment after a literal in a call's arguments for one)
-		if (!module && !parses(out) && parses(made.code))
-			return 'does not parse in the browser';
-		const { problems, payloads } = fuzz.unrewritten(tree);
-		if (/__fz\(|__fzT`/.test(made.code) && payloads === 0)
-			problems.push('the payload is gone');
-		return problems.join('; ');
-	};
-	const failures = (cases) =>
-		cases
-			.map((made) => [made.name, problem(made)])
-			.filter(([, found]) => found)
-			.map(([name, found]) => `${name}: ${found}`);
-	const payloads = [...fuzz.SHAPES, ...fuzz.BARE];
-	const alone = payloads.flatMap((payload) => fuzz.single(() => payload));
-	const aloneFailures = failures(alone);
-	ok(
-		'fuzz: a payload in any slot of any node kind comes out rewritten',
-		alone.length > 2000 && aloneFailures.length === 0,
-		`${aloneFailures.length} of ${alone.length}: ${aloneFailures.slice(0, 5).join(' | ')}`,
-	);
-	// the same cases every run
-	const next = fuzz.random(0x570a9);
-	const nested = fuzz.pairs(
-		6000,
-		next,
-		() => payloads[Math.floor(next() * payloads.length)],
-	);
-	const nestedFailures = failures(nested);
-	ok(
-		'fuzz: and in a template inside another (seeded)',
-		nested.length === 6000 && nestedFailures.length === 0,
-		`${nestedFailures.length} of ${nested.length}: ${nestedFailures.slice(0, 5).join(' | ')}`,
 	);
 }
 await done();

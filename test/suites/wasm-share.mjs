@@ -1,17 +1,14 @@
-// `rewriter: 'wasm'`: the controller loads the core module once and every
-// thread that rewrites holds it (src/wasm/thread.ts). The rewrite workers
-// get the compiled module; the service worker gets its bytes with the
-// handshake, because a message holding a WebAssembly.Module never reaches a
-// service worker (it is an agent cluster of its own) and a handshake that
-// carried one left the controller waiting for the worker forever. A proxied
-// top asks its controller for the compiled module (they are one agent
-// cluster) for the rewriter library it shares with its frames, so a frame
-// holds no instance. A page loads and runs as before either way: a module
-// only ever answers what the JavaScript rewriter would have. A stylesheet's
-// request says the module rewrote it (`rewriteBy`), and its url() is routed
-// as before. The service worker names the public suffix list its sites are
-// answered from once it holds the module (rust/suffix/src/pins.env), and
-// none while tldts answers.
+// The controller loads the core module once and every thread that rewrites
+// holds it (src/wasm/thread.ts). The rewrite workers get the compiled module;
+// the service worker gets its bytes with the handshake, because a message
+// holding a WebAssembly.Module never reaches a service worker (it is an agent
+// cluster of its own) and a handshake that carried one left the controller
+// waiting for the worker forever. A proxied top asks its controller for the
+// compiled module (they are one agent cluster) for the rewriter library it
+// shares with its frames, so a frame holds no instance. A stylesheet's
+// request says the module rewrote it (`rewriteBy`), and its url() is routed.
+// The service worker names the public suffix list its sites are answered from
+// once it holds the module (rust/suffix/src/pins.env).
 import { readFileSync } from 'node:fs';
 import { done, FIXTURE, launch, ok, openDemo, PROXY, sleep } from '../lib.mjs';
 
@@ -120,29 +117,9 @@ async function load(name) {
 	return { where: 'none', ran: false };
 }
 
-// the service worker's modules outlive a controller, so the JavaScript-only
-// state can be seen only where the demo itself did not start with wasm
-if (process.env.STOMP_REWRITER !== 'wasm') {
-	ok(
-		"a 'js' controller shakes hands",
-		await controller('wasm-share-js', { rewriteWorkers: 1 }),
-	);
-	const none = await held(() => true);
-	// the content blocker's module is no rewriter's: it is on by default, and
-	// the demo's own controller has the service worker hold it
-	ok(
-		"with rewriter 'js' no thread is handed a rewriter's module",
-		none.serviceWorker.every((name) => name === 'blocker') &&
-			none.rewriteWorkers.every((names) => names.length === 0),
-		JSON.stringify(none),
-	);
-	const list = await page.evaluate(() => window.__controller.suffixList());
-	ok('and tldts answers the service worker its sites', list === null, list);
-}
-
 ok(
-	"a 'wasm' controller shakes hands with the service worker",
-	await controller('wasm-share', { rewriter: 'wasm', rewriteWorkers: 2 }),
+	'a controller shakes hands with the service worker',
+	await controller('wasm-share', { rewriteWorkers: 2 }),
 );
 {
 	const all = await held(
@@ -293,8 +270,8 @@ ok(
 // another controller of the scope (a second host tab): its handshake carries
 // the bytes again and the worker keeps the module it has
 ok(
-	"a second 'wasm' controller shakes hands",
-	await controller('wasm-share-2', { rewriter: 'wasm', rewriteWorkers: 0 }),
+	'a second controller shakes hands',
+	await controller('wasm-share-2', { rewriteWorkers: 0 }),
 );
 {
 	const again = await held((now) => holdsAll(now.serviceWorker));
@@ -314,7 +291,7 @@ ok(
 	// that woke it waits for its controller's handshake, which carries the
 	// modules' bytes, and a stylesheet waits for their compile. The first
 	// stylesheet of the new worker (here the request that wakes it) is the
-	// module's, not css-tree's.
+	// module's.
 	await loadStyled();
 	const cdp = await page.context().newCDPSession(page);
 	await cdp.send('ServiceWorker.enable');

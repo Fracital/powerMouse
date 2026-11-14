@@ -1,19 +1,24 @@
-// The scanner (rust/rwcss, a member of dist/core.wasm) against the JavaScript
-// it stands in for, in node: with `rewriter: 'wasm'` the module rewrites a
-// stylesheet, a declaration list (an element's style) and a single value
-// (css-tree's parse and walk, and the URL expression, otherwise), asking
-// the thread only what each URL routes to, and finds a document's inline
-// scripts and styles (three regular expressions otherwise). The contract is
-// identical output, so every input here is rewritten both ways and the two
-// are compared byte for byte: hand-written edge cases, every stylesheet and
-// page of test/pages, a seeded fuzz of mutations of them (unbalanced
-// brackets, cut strings, escapes, comments, non-ASCII, URLs that do not
-// parse or are routed already), and with SCANNER_CORPUS=<dir>[:<dir>...]
-// every .css file (and every string of a JSON array) under those
-// directories. The module answers every one of them itself (a byte order
-// mark, a surrogate with no other half, a URL of megabytes, brackets nested
-// by the thousand): css-tree is what rewrites when a thread holds no
-// module, and nothing here is left to it.
+// The scanner (rust/rwcss, a member of dist/core.wasm), in node. It is the
+// only CSS rewriter now, so this no longer compares it to css-tree; it holds
+// the scanner to the oracles that remain and exercises it against an
+// adversarial corpus:
+//   - VALUES: the module's url() routing (rewriteValueURLs) must match the
+//     regex that answers a single value when no module is held
+//     (src/cssURLs.ts, rewriteCSSValueURLs/valueInJS) byte for byte; the two
+//     are built to agree (src/rewriteCSS.ts), so this is a real oracle.
+//   - MARKUP: the module's scan of a document's inline scripts and styles
+//     (scanMarkup) must match the suite's own independent regexes and
+//     inlineSources, with and without the scan.
+//   - ROBUSTNESS: the module must ANSWER every stylesheet, declaration list
+//     and value itself (never throw, never decline back to the regex) across
+//     hand-written edge cases, deep nesting, surrogates, stray brackets, a
+//     byte order mark, megabyte inputs, every stylesheet and page of
+//     test/pages, a seeded fuzz of mutations of them, and with
+//     SCANNER_CORPUS=<dir>[:<dir>...] every .css file (and every string of a
+//     JSON array) under those directories.
+// Stylesheets have no independent byte-for-byte oracle left (the regex does
+// not parse a sheet the way the module does), so sheets are checked for the
+// module answering them, not against a reference.
 import {
 	mkdirSync,
 	readdirSync,
@@ -37,13 +42,13 @@ mkdirSync(OUT, { recursive: true });
 const entry = `${OUT}scanner-parity-entry.mjs`;
 writeFileSync(
 	entry,
-	`export { modifyCSS, rewriteCSSValueURLs } from ${JSON.stringify(`${root}src/rewriteCSS.ts`)};
+	`export { modifyCSS } from ${JSON.stringify(`${root}src/rewriteCSS.ts`)};
 export { rewriteCSSValueURLs as valueInJS } from ${JSON.stringify(`${root}src/cssURLs.ts`)};
 export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
 export { parseConfig } from ${JSON.stringify(`${root}src/config.ts`)};
 export { hasBase, inlineSources } from ${JSON.stringify(`${root}src/prewrite.ts`)};
 export { adoptModules } from ${JSON.stringify(`${root}src/wasm/thread.ts`)};
-export { rewriteStyles, scanMarkup } from ${JSON.stringify(`${root}src/wasm/scanner.ts`)};
+export { rewriteStyles, rewriteValueURLs, scanMarkup } from ${JSON.stringify(`${root}src/wasm/scanner.ts`)};
 `,
 );
 const bundle = `${OUT}scanner-parity.mjs`;
@@ -52,8 +57,6 @@ await esbuild.build({
 	bundle: true,
 	platform: 'node',
 	format: 'esm',
-	// css-tree reads a data file next to itself: resolved from node_modules
-	external: ['css-tree'],
 	outfile: bundle,
 	logLevel: 'silent',
 });
@@ -62,7 +65,7 @@ await esbuild.build({
 const libraryEntry = `${OUT}scanner-parity-library-entry.mjs`;
 writeFileSync(
 	libraryEntry,
-	`export { api } from ${JSON.stringify(`${root}src/rewriterLibDocument.ts`)};
+	`export { api } from ${JSON.stringify(`${root}src/rewriterLightDocument.ts`)};
 export { adoptModules } from ${JSON.stringify(`${root}src/wasm/thread.ts`)};
 `,
 );
@@ -72,14 +75,12 @@ await esbuild.build({
 	bundle: true,
 	platform: 'node',
 	format: 'esm',
-	external: ['css-tree'],
 	inject: [`${root}src/libGlobals.ts`],
 	outfile: libraryBundle,
 	logLevel: 'silent',
 });
 const {
 	modifyCSS,
-	rewriteCSSValueURLs,
 	valueInJS,
 	StompURL,
 	parseConfig,
@@ -88,6 +89,7 @@ const {
 	adoptModules,
 	scanMarkup,
 	rewriteStyles,
+	rewriteValueURLs,
 } = await import(`${bundle}?${Date.now()}`);
 
 const { codec } = parseConfig({ directory: '/stomp/', codec: 'xor' }, 'k');
@@ -98,15 +100,15 @@ console.error = () => {};
 console.warn = () => {};
 
 {
-	const told = {};
+	// without a module in the thread the scanner declines (returns null) and
+	// modifyCSS falls back to the regex (src/cssURLs.ts), the same with or
+	// without `told`
 	ok(
-		'without the module every rewrite and scan is declined, and JavaScript rewrites',
+		'without the module the scanner declines and modifyCSS falls back to the regex',
 		rewriteStyles('a{b:url(c)}', url, 'stylesheet') === null &&
 			scanMarkup('<style>a{}</style>') === null &&
-			modifyCSS('a{b:url(c)}', url, 'stylesheet', told) ===
-				modifyCSS('a{b:url(c)}', url) &&
-			told.by === 'js',
-		JSON.stringify(told),
+			modifyCSS('a{b:url(c)}', url, 'stylesheet', {}) ===
+				modifyCSS('a{b:url(c)}', url),
 	);
 }
 const bytes = readFileSync(`${root}dist/core.wasm`);
@@ -126,55 +128,57 @@ const attempt = (run) => {
 	}
 };
 
+// `answered`: the scanner handled the text itself (returned a string, routed
+// or left as written). `declined`: the module returned null, so a thread
+// would fall back to the regex; there should be none. `differ`: the module
+// threw on it (a crash); there should be none.
 const tally = { answered: 0, declined: 0, differ: 0 };
 const differences = [];
-/** texts the module left to JavaScript: there should be none */
-const leftToJS = [];
+/** texts the module declined (fell back to the regex): there should be none */
+const leftToRegex = [];
 function noteDeclined(text) {
-	if (leftToJS.length < 3) leftToJS.push(text.slice(0, 300));
+	if (leftToRegex.length < 3) leftToRegex.push(text.slice(0, 300));
 }
-/** `text` rewritten by css-tree and by the module: the same? */
+/** the scanner's answer for a stylesheet or declaration list; does it answer, without throwing? */
 function sameStyles(text, context, label) {
-	const expected = attempt(() => modifyCSS(text, url, context));
-	const told = {};
-	const got = attempt(() => modifyCSS(text, url, context, told));
-	const answered = told.by === 'wasm';
-	// a sheet with nothing to route never reaches the module
-	if (answered) tally.answered++;
-	else if (told.by === 'js') {
+	const got = attempt(() => rewriteStyles(text, url, context));
+	if (typeof got === 'string') {
+		tally.answered++;
+		return true;
+	}
+	if (got === null) {
 		tally.declined++;
 		noteDeclined(text);
+		return false;
 	}
-	if (got === expected) return answered;
+	// a THROWN string: the module crashed on this input
 	tally.differ++;
 	if (differences.length < 5)
 		differences.push({
 			label,
 			context,
 			text: text.slice(0, 2000),
-			expected: String(expected).slice(0, 2000),
 			got: String(got).slice(0, 2000),
 		});
-	return answered;
+	return false;
 }
 
 const valueTally = { answered: 0, declined: 0, differ: 0 };
-/** the url()s of the single value `text` routed by the expression and by the module: the same? */
+/** the url()s of the single value `text` routed by the module and by the regex: byte for byte the same? */
 function sameValue(text, label) {
 	const expected = attempt(() => valueInJS(text, url));
-	const told = {};
-	const got = attempt(() => rewriteCSSValueURLs(text, url, told));
-	const answered = told.by === 'wasm';
-	if (answered) valueTally.answered++;
-	else if (told.by === 'js') {
+	const got = attempt(() => rewriteValueURLs(text, url));
+	if (typeof got !== 'string') {
 		valueTally.declined++;
 		noteDeclined(text);
+		return false;
 	}
-	if (got === expected) return answered;
+	valueTally.answered++;
+	if (got === expected) return true;
 	valueTally.differ++;
 	if (differences.length < 5)
 		differences.push({ label, context: 'value', text, expected, got });
-	return answered;
+	return true;
 }
 
 /** an expression's matches as the scanner answers them: where group 1 and group 2 stand */
@@ -218,8 +222,9 @@ function sameMarkup(markup, label) {
 }
 
 // The inject side: a frame's stylesheets and style attributes are rewritten
-// by its rewriter library, which takes the module's answer once its copy of
-// the thread state holds the module and css-tree's until then.
+// by its rewriter library. It has no css-tree fallback now: a call made
+// before the module has reached this realm defers (returns null, the caller
+// waits for the module), and once the module is adopted the scanner rewrites.
 {
 	const library = await import(`${libraryBundle}?${Date.now()}`);
 	const context = JSON.stringify([
@@ -263,10 +268,10 @@ function sameMarkup(markup, label) {
 	WebAssembly.Instance = Instance;
 	const expected = cases.map(([text, kind]) => modifyCSS(text, page, kind));
 	ok(
-		"the inject's rewriter library rewrites by css-tree until it holds the module and in the module from then on, the same",
+		"the inject's rewriter library defers until it holds the module, then rewrites in the scanner",
 		madeBefore === 0 &&
 			made === 1 &&
-			JSON.stringify(before) === JSON.stringify(expected) &&
+			before.every((output) => output === null) &&
 			JSON.stringify(after) === JSON.stringify(expected) &&
 			expected.every((output, i) => output !== cases[i][0]),
 		JSON.stringify({ madeBefore, made, before, after, expected }),
@@ -292,7 +297,7 @@ const SHEETS = [
 	'.md\\:flex { display: flex } .a\\(b\\) { c: url(d) }',
 	'a { b: url(c) } /* } url(d) { */ e { f: url(g) }',
 	'/*! kept */ a { b: url(c) } <!-- d { e: url(f) } -->',
-	'a { url(x); b: url(c); ; d: url(e) }',
+	'a { url(x); b: url(c);; d: url(e) }',
 	'a { b: url(c); & d { e: url(f) } &:hover { g: url(h) } }',
 	'a { b: var(--x, url(c)); d: expression(url(e)) }',
 	'a { *zoom: 1; _b: url(c); $d: url(e); //f: url(g); #h: url(i) }',
@@ -488,104 +493,75 @@ SHEETS.push(
 );
 
 {
-	let answered = 0;
-	const unanswered = [];
-	for (const sheet of SHEETS)
-		if (sameStyles(sheet, 'stylesheet', 'sheet')) answered++;
-		else unanswered.push(sheet);
+	for (const sheet of SHEETS) sameStyles(sheet, 'stylesheet', 'sheet');
 	for (const list of LISTS)
-		if (list && sameStyles(list, 'declarationList', 'list')) answered++;
-		else if (list) unanswered.push(list);
+		if (list) sameStyles(list, 'declarationList', 'list');
 	ok(
-		'the hand-written stylesheets and declaration lists rewrite the same both ways',
-		tally.differ === 0,
-		JSON.stringify(differences[0] ?? null),
-	);
-	const wanted = SHEETS.length - 2 + LISTS.filter((list) => list).length;
-	ok(
-		'the module rewrites every one of them itself',
-		answered === wanted,
-		`${answered} of ${wanted} ${JSON.stringify(unanswered.map((text) => text.slice(0, 200)))}`,
+		'the module answers every hand-written stylesheet and declaration list itself, without throwing',
+		tally.differ === 0 && tally.declined === 0,
+		`differ ${tally.differ}, declined ${tally.declined}; ${JSON.stringify(differences[0] ?? leftToRegex[0] ?? null)}`,
 	);
 	let values = 0;
 	const wantedValues = VALUES.filter((value) => value.includes('url(')).length;
 	for (const value of VALUES) if (sameValue(value, 'value')) values++;
 	ok(
-		'the hand-written values route the same both ways, each by the module',
-		valueTally.differ === 0 && values === wantedValues,
-		`${values} of ${wantedValues} ${JSON.stringify(differences[0] ?? null)}`,
+		'the hand-written values route the same as the regex, each answered by the module',
+		valueTally.differ === 0 &&
+			valueTally.declined === 0 &&
+			values >= wantedValues,
+		`${values} values, ${valueTally.differ} differ, ${valueTally.declined} declined; ${JSON.stringify(differences[0] ?? null)}`,
 	);
-	let crossed = 0;
-	for (const sheet of CROSSED)
-		if (sameStyles(sheet, 'stylesheet', 'crossed')) crossed++;
-	for (const value of CROSSED_VALUES)
-		if (sameValue(value, 'crossed value')) crossed++;
-	// a text with nothing to route (the lone half) is handed to neither
-	const wantedCrossed = CROSSED.length - 1 + CROSSED_VALUES.length;
+	for (const sheet of CROSSED) sameStyles(sheet, 'stylesheet', 'crossed');
+	for (const value of CROSSED_VALUES) sameValue(value, 'crossed value');
 	ok(
-		'a surrogate with no other half crosses to the module and back, and rewrites the same',
-		crossed === wantedCrossed && tally.differ === 0 && valueTally.differ === 0,
-		`${crossed} of ${wantedCrossed} ${JSON.stringify(differences[0] ?? null)}`,
+		'a surrogate with no other half crosses to the module and back, answered and not thrown on',
+		tally.differ === 0 && valueTally.differ === 0,
+		JSON.stringify(differences[0] ?? null),
 	);
-	let stray = 0;
-	for (const sheet of STRAY)
-		if (sameStyles(sheet, 'stylesheet', 'stray')) stray++;
+	for (const sheet of STRAY) sameStyles(sheet, 'stylesheet', 'stray');
 	ok(
-		'a closing bracket with nothing open is answered, and rewrites the same',
-		stray === STRAY.length && tally.differ === 0,
-		`${stray} of ${STRAY.length} ${JSON.stringify(differences[0] ?? null)}`,
+		'a closing bracket with nothing open is answered by the module',
+		tally.differ === 0 && tally.declined === 0,
+		`differ ${tally.differ}, declined ${tally.declined}; ${JSON.stringify(differences[0] ?? leftToRegex[0] ?? null)}`,
 	);
-	let once = 0;
 	for (const sheet of ONCE_DECLINED)
-		if (sameStyles(sheet, 'stylesheet', 'once declined')) once++;
+		sameStyles(sheet, 'stylesheet', 'once declined');
 	ok(
-		'deep nesting and a URL that begins with a byte order mark are answered, and rewrite the same',
-		once === ONCE_DECLINED.length && tally.differ === 0,
-		`${once} of ${ONCE_DECLINED.length} ${JSON.stringify(differences[0] ?? null).slice(0, 600)}`,
+		'deep nesting and a URL that begins with a byte order mark are answered by the module',
+		tally.differ === 0 && tally.declined === 0,
+		`differ ${tally.differ}, declined ${tally.declined}; ${JSON.stringify(differences[0] ?? leftToRegex[0] ?? null).slice(0, 600)}`,
 	);
 	let deep = 0;
 	const deepDifferences = [];
 	for (const sheet of TOO_DEEP) {
-		// as the callers of modifyCSS do when it throws
-		let expected;
-		let threw = false;
-		try {
-			expected = modifyCSS(sheet, url);
-		} catch (error) {
-			threw = true;
-			expected = valueInJS(sheet, url);
-		}
-		const told = {};
-		const got = attempt(() => modifyCSS(sheet, url, 'stylesheet', told));
-		if (told.by === 'wasm' && got === expected) deep++;
+		// the module stops recursing at 1,024 levels and routes what is deeper
+		// as raw text (the url() expression), so it answers every one of these
+		// and the deep url(c) is routed
+		const got = attempt(() => rewriteStyles(sheet, url, 'stylesheet'));
+		if (typeof got === 'string' && got.includes('/stomp/')) deep++;
 		else
 			deepDifferences.push({
 				sheet: sheet.slice(0, 40),
-				by: told.by,
-				threw,
-				expected: expected.slice(-80),
-				got: got.slice(-80),
+				got: String(got).slice(-80),
 			});
 	}
 	ok(
-		"nesting past where css-tree's stack ends is answered by the module, as css-tree or its callers answer it",
+		'nesting past 1,024 levels is answered by the module, with the deep url routed',
 		deep === TOO_DEEP.length,
 		`${deep} of ${TOO_DEEP.length} ${JSON.stringify(deepDifferences)}`,
 	);
 	{
-		// and the module's answer is always the first of the two: what is too
-		// deep is the expression's, the sheet around it is parsed
+		// the module's answer for a value too deep is the url() expression's,
+		// and the sheet around it is parsed as usual
 		const value = `${'f('.repeat(20000)}url(c)${')'.repeat(20000)}`;
 		const around = '@import "g.css"; d { e: url(f) }';
-		const told = {};
 		const got = attempt(() =>
-			modifyCSS(`a{b:${value}}${around}`, url, 'stylesheet', told),
+			modifyCSS(`a{b:${value}}${around}`, url, 'stylesheet', {}),
 		);
 		ok(
 			'the sheet around a value that is too deep is parsed all the same',
-			told.by === 'wasm' &&
-				got === `a{b:${valueInJS(value, url)}}${modifyCSS(around, url)}`,
-			`${told.by} ${got.slice(-200)}`,
+			got === `a{b:${valueInJS(value, url)}}${modifyCSS(around, url)}`,
+			`${got.slice(-200)}`,
 		);
 	}
 	let large = 0;
@@ -594,27 +570,24 @@ SHEETS.push(
 	// and the small ones after them, in buffers made again
 	if (sameStyles(SHEETS[0], 'stylesheet', 'after large')) large++;
 	ok(
-		'a sheet and a routed URL larger than the module keeps are answered, and rewrite the same',
+		'a sheet and a routed URL larger than the module keeps are answered',
 		large === LARGE.length + 1 && tally.differ === 0,
 		`${large} of ${LARGE.length + 1} ${JSON.stringify(differences[0] ?? null).slice(0, 600)}`,
 	);
-	// css-tree keeps a token's offset in 24 bits: in a sheet past 16,777,215
-	// units what follows that point is no longer parsed (a url() there is
-	// routed by the expression, an @import's string is left as written and
-	// loads from the origin, unproxied). The module's offsets are whole, and
-	// it rewrites the sheet to its end.
+	// the module's offsets are whole (css-tree kept a token's offset in 24
+	// bits and stopped parsing past 16,777,215 units): it rewrites the sheet
+	// to its end, so the whole is the head and tail each rewritten with the
+	// filler comment kept between them.
 	const head = 'a { b: url(c) }';
 	const tail = 'd { e: url(f) } @import "g.css";';
 	const filler = `/*${'x'.repeat(0x1000000)}*/`;
-	const told = {};
 	const whole = attempt(() =>
-		modifyCSS(head + filler + tail, url, 'stylesheet', told),
+		modifyCSS(head + filler + tail, url, 'stylesheet', {}),
 	);
 	ok(
 		'a sheet past 16,777,215 units is rewritten to its end by the module',
-		told.by === 'wasm' &&
-			whole === modifyCSS(head, url) + filler + modifyCSS(tail, url),
-		`${told.by} ${whole.length} ${whole.slice(0, 80)} ... ${whole.slice(-120)}`,
+		whole === modifyCSS(head, url) + filler + modifyCSS(tail, url),
+		`${whole.length} ${whole.slice(0, 80)} ... ${whole.slice(-120)}`,
 	);
 }
 
@@ -639,12 +612,12 @@ for (const name of readdirSync(pages)) {
 	for (const sheet of pageSheets) sameStyles(sheet, 'stylesheet', 'page');
 	for (const list of LISTS) sameStyles(list, 'declarationList', 'page');
 	ok(
-		`the ${pageSheets.length} stylesheets of test/pages rewrite the same both ways`,
-		tally.differ === before.differ,
+		`the module answers every one of the ${pageSheets.length} stylesheets of test/pages, without throwing`,
+		tally.differ === before.differ && tally.declined === before.declined,
 		JSON.stringify({
 			answered: tally.answered - before.answered,
 			declined: tally.declined - before.declined,
-			first: differences[0] ?? null,
+			first: differences[0] ?? leftToRegex[0] ?? null,
 		}),
 	);
 }
@@ -818,14 +791,14 @@ const ROUNDS = Number(process.env.SCANNER_FUZZ) || 6000;
 	const answered = tally.answered - before.answered;
 	const declined = tally.declined - before.declined;
 	ok(
-		`${ROUNDS + ROUNDS / 3} mutated stylesheets and declaration lists rewrite the same both ways`,
+		`${ROUNDS + ROUNDS / 3} mutated stylesheets and declaration lists never throw the module`,
 		tally.differ === before.differ,
 		JSON.stringify({ answered, declined, first: differences[0] ?? null }),
 	);
 	ok(
-		'the module rewrites every one of them itself',
+		'the module answers every one of them itself',
 		answered > ROUNDS / 2 && declined === 0,
-		JSON.stringify({ answered, declined, leftToJS }),
+		JSON.stringify({ answered, declined, leftToRegex }),
 	);
 }
 {
@@ -842,14 +815,14 @@ const ROUNDS = Number(process.env.SCANNER_FUZZ) || 6000;
 	const answered = valueTally.answered - before.answered;
 	const declined = valueTally.declined - before.declined;
 	ok(
-		`${ROUNDS} mutated values route the same both ways`,
+		`${ROUNDS} mutated values route the same as the regex`,
 		valueTally.differ === before.differ,
 		JSON.stringify({ answered, declined, first: differences[0] ?? null }),
 	);
 	ok(
 		'the module routes every one of them itself',
 		answered > ROUNDS / 2 && declined === 0,
-		JSON.stringify({ answered, declined, leftToJS }),
+		JSON.stringify({ answered, declined, leftToRegex }),
 	);
 }
 {
@@ -864,7 +837,7 @@ const ROUNDS = Number(process.env.SCANNER_FUZZ) || 6000;
 		sameMarkup(mutate(seed, random, MARKUP_TOKENS), `fuzz ${i}`);
 	}
 	ok(
-		`${ROUNDS} mutated documents scan the same both ways`,
+		`${ROUNDS} mutated documents scan the same as the independent regexes`,
 		markupTally.differ === before,
 		JSON.stringify(markupDifferences[0] ?? null),
 	);
@@ -895,35 +868,28 @@ if (process.env.SCANNER_CORPUS) {
 		walk(directory);
 	const before = { ...tally };
 	let bytesIn = 0;
-	const timed = { js: 0, wasm: 0 };
+	let wasmMs = 0;
 	const declinedSheets = [];
 	for (const [path, text] of sheets) {
 		bytesIn += text.length;
 		const declinedBefore = tally.declined;
 		sameStyles(text, 'stylesheet', path);
 		if (tally.declined > declinedBefore) declinedSheets.push(path);
-		// each way again, timed (the first pass warmed both)
-		let start = performance.now();
-		attempt(() => modifyCSS(text, url, 'stylesheet'));
-		timed.js += performance.now() - start;
-		start = performance.now();
-		attempt(() => modifyCSS(text, url, 'stylesheet', {}));
-		timed.wasm += performance.now() - start;
+		// again, timed (the first pass warmed the module)
+		const start = performance.now();
+		attempt(() => rewriteStyles(text, url, 'stylesheet'));
+		wasmMs += performance.now() - start;
 	}
 	ok(
-		`the corpus (${sheets.length} stylesheets, ${(bytesIn / 1e6).toFixed(1)} MB) rewrites the same both ways`,
+		`the module answers the corpus (${sheets.length} stylesheets, ${(bytesIn / 1e6).toFixed(1)} MB), without throwing`,
 		tally.differ === before.differ,
 		JSON.stringify({
 			answered: tally.answered - before.answered,
 			declined: tally.declined - before.declined,
 			declinedSheets: declinedSheets.slice(0, 8),
-			ms: { js: Math.round(timed.js), wasm: Math.round(timed.wasm) },
+			ms: Math.round(wasmMs),
 			first: differences[0]
-				? {
-						label: differences[0].label,
-						expected: differences[0].expected.length,
-						got: differences[0].got.length,
-					}
+				? { label: differences[0].label, got: differences[0].got.length }
 				: null,
 		}),
 	);

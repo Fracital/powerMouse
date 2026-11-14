@@ -4,16 +4,14 @@
 // worker, a blob: worker, a worker of a worker, a frame's worker and a
 // service worker (test/pages/worker-rewrites*). Each reads the worker's own
 // location, which only rewritten code reads as the page's, so the answers
-// of the two loads must be the same, with either rewriter.
+// of the two loads must be the same.
 //
-// With `rewriter: 'wasm'` the rewrite is the module's, not the JavaScript
-// library's: a dedicated worker is handed the compiled module by the
-// context that starts it, in its first message (docs/rust-plan.md, "One
-// module, many realms"). The suite reads the functions the workers made as
-// the browser holds them (the worker's own `toString` answers the page's
-// text either way): the module keeps a comment, the JavaScript rewriter
-// prints none. What a classic worker evaluates while its own script runs
-// comes before any message can, and stays the JavaScript library's.
+// The rewrite is the wasm module's (the only rewriter): a dedicated worker is
+// handed the compiled module by the context that starts it, in its first
+// message (docs/rust-plan.md, "One module, many realms"). The suite reads the
+// functions the workers made as the browser holds them (the worker's own
+// `toString` answers the page's text), and the module keeps a comment, which
+// is how a rewrite is told to be the module's.
 import { readFileSync } from 'node:fs';
 import {
 	done,
@@ -25,7 +23,6 @@ import {
 	submitLanding,
 } from '../lib.mjs';
 
-const WASM = process.env.STOMP_REWRITER === 'wasm';
 const ROUTED = /\/stomp\/[\w-]+\/html\//;
 const browser = await launch();
 
@@ -156,14 +153,13 @@ async function proxied(url, work) {
 	// the top's library holds the module before the workers start (what the
 	// page evaluates is the module's rewrite): they are handed it in their
 	// first message
-	if (WASM)
-		for (let i = 0; i < 100; i++) {
-			const text = await frame()
-				.evaluateHandle(() => new Function('/* kept */ return location.href;'))
-				.then(String, () => '');
-			if (text.includes('/* kept */')) break;
-			await sleep(100);
-		}
+	for (let i = 0; i < 100; i++) {
+		const text = await frame()
+			.evaluateHandle(() => new Function('/* kept */ return location.href;'))
+			.then(String, () => '');
+		if (text.includes('/* kept */')) break;
+		await sleep(100);
+	}
 	const result = await work(frame);
 	return { page, frame, result };
 }
@@ -194,11 +190,10 @@ async function proxied(url, work) {
 				same(expected, loaded.result),
 				differences(expected, loaded.result).join('; ').slice(0, 600),
 			);
-		if (!WASM) break;
 		functions = await made(page, loaded.frame);
 		if (byModule(functions, 'moduleTop')) break;
 	}
-	if (WASM) {
+	{
 		const check = (name, stage) =>
 			ok(name, byModule(functions, stage), report(functions, stage));
 		check(
@@ -238,9 +233,8 @@ async function proxied(url, work) {
 	await page.close();
 }
 
-// workers started by the page's first script: with `rewriter: 'wasm'` the
-// module has not reached the page yet, and follows the workers' first
-// message on a port
+// workers started by the page's first script: the module has not reached the
+// page yet, and follows the workers' first message on a port
 {
 	const expected = await native(fixture('?early'), (frame) => run(frame, true));
 	const { page, result } = await proxied(fixture('?early'), (frame) =>
@@ -251,7 +245,7 @@ async function proxied(url, work) {
 		same(expected, result),
 		differences(expected, result).join('; ').slice(0, 600),
 	);
-	if (WASM) {
+	{
 		const functions = await made(page);
 		for (const [name, stage] of [
 			['a classic worker', 'again'],
@@ -299,7 +293,7 @@ async function proxied(url, work) {
 				),
 		String(glue),
 	);
-	if (WASM) {
+	{
 		const functions = await made(page);
 		ok(
 			"and by the controller's module",
@@ -336,7 +330,7 @@ async function proxied(url, work) {
 		same(expected, result),
 		same(expected, result) ? '' : JSON.stringify(result),
 	);
-	if (WASM) {
+	{
 		const functions = await made(page);
 		ok(
 			"and its rewrite is the module's",

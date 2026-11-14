@@ -5,21 +5,10 @@
 // timeout (then it is not asked again). The output is
 // byte for byte the service worker's own. The request log says where
 // (`rewriteIn`). The rewrite cache is off, so every load is rewritten.
-import {
-	done,
-	FIXTURE,
-	launch,
-	ok,
-	openDemo,
-	PROXY,
-	REWRITER,
-	sleep,
-} from '../lib.mjs';
+import { done, FIXTURE, launch, ok, openDemo, PROXY, sleep } from '../lib.mjs';
 
 const browser = await launch();
 const page = await openDemo(browser, PROXY);
-// the run's rewriter backend (STOMP_REWRITER), for every controller made here
-await page.evaluate((rewriter) => (window.__rewriter = rewriter), REWRITER);
 
 // every routed script response's body, in order
 const bodies = [];
@@ -48,7 +37,6 @@ const controller = (options = {}) =>
 			// one address throughout: the output names it
 			id: 'rewrite-pool',
 			onRequest: (info) => window.__log.push(info),
-			...window.__rewriter,
 			...options,
 		});
 		await controller.wait();
@@ -183,16 +171,16 @@ await controller({
 }
 
 // a ready worker that takes longer than the timeout: the service worker
-// rewrites that script itself, and does not send that worker another
-await controller({ rewriteWorkers: 1, rewriteTimeout: 150 });
+// rewrites that script itself, and does not send that worker another. The
+// timeout is set well under the time the module takes on a large script and
+// well over a small one's, so the small script answers from the worker and
+// the large one does not.
+await controller({ rewriteWorkers: 1, rewriteTimeout: 80 });
 {
 	const small = await load('name=e');
-	// (the wasm rewriter takes three copies of three.js well inside the
-	// timeout: in its run the script opens with a shape it leaves to the
-	// JavaScript rewriter, a pattern key that is a BigInt beside `top`)
-	const slow = await load(
-		`name=e&three=3${REWRITER.rewriter ? `&extra=${encodeURIComponent('var { 1n: one, top: mine } = { top: 0 };')}` : ''}`,
-	);
+	// eight copies of three.js (~4.9 MB): the module's rewrite of them is
+	// well past the 80 ms timeout, so the service worker makes it instead
+	const slow = await load('name=e&three=8');
 	const after = await load('name=e&after');
 	ok(
 		'a ready worker answers first',

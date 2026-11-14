@@ -1,22 +1,23 @@
-// Early errors, three ways: what V8 refuses to compile, what the JavaScript
-// rewriter (meriyah) makes of it, and what the wasm rewriter (rust/rwjs)
-// makes of it, without a browser. The cases are rust/host/early-errors.txt
-// (one text a line, with V8's recorded verdict as a classic script, a strict
-// one and a module); each text is also run inside a function, an arrow, an
-// async function, a generator, a method, a static block and a block, with
-// V8 asked each time.
+// Early errors, two ways: what V8 refuses to compile and what the wasm
+// rewriter (rust/rwjs) makes of it, without a browser. The cases are
+// rust/host/early-errors.txt (one text a line, with V8's recorded verdict as
+// a classic script, a strict one and a module); each text is also run inside
+// a function, an arrow, an async function, a generator, a method, a static
+// block and a block, with V8 asked each time.
 //
 //   node rust/host/early.mjs [--narrow] [-v] [--list outcome] [file...]
 //   node rust/host/early.mjs --record
 //   node rust/host/early.mjs --corpus <dir-or-file>...
 //
-// For a script V8 refuses, a rewriter either hands it back as it was (the
+// For a script V8 refuses, the rewriter either hands it back as it was (the
 // page gets V8's own SyntaxError), rewrites it into something V8 still
 // refuses (a SyntaxError at the same moment), or rewrites it into something
 // that RUNS, which is the defect. For one V8 takes, it rewrites it, hands it
 // back unrewritten as if it did not parse (RAW: the page's code runs with
 // the real globals), or rewrites it into something V8 refuses (BROKE). The
-// module may also decline a script (the JavaScript rewriter then decides).
+// module may also decline a script; a declined script the browser would run
+// is ended so it cannot run unrewritten (src/rewriteJS.ts cannotRewrite, the
+// UNREWRITTEN_END marker), which the rewriter-unit suite holds directly.
 //
 // The run fails on RUNS, RAW and BROKE of the wasm rewriter, on a recorded
 // verdict that is not this V8's, and on anything short of V8's answer that
@@ -135,7 +136,7 @@ mkdirSync(out, { recursive: true });
 const entry = `${out}early-entry.mjs`;
 writeFileSync(
 	entry,
-	`export { modifyJS, singleExpression, UNREWRITTEN_END } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
+	`export { UNREWRITTEN_END } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
 export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
 export { parseConfig } from ${JSON.stringify(`${root}src/config.ts`)};
 export { compileModule, memberInstance } from ${JSON.stringify(`${root}src/wasm/module.ts`)};
@@ -146,19 +147,16 @@ await esbuild.build({
 	bundle: true,
 	platform: 'node',
 	format: 'esm',
-	external: ['css-tree'],
 	outfile: `${out}early.mjs`,
 	logLevel: 'silent',
 });
 const {
-	modifyJS,
 	UNREWRITTEN_END,
 	StompURL,
 	parseConfig,
 	compileModule,
 	memberInstance,
 } = await import(`${out}early.mjs?${Date.now()}`);
-const { parse } = await import(`${root}node_modules/meriyah/dist/meriyah.mjs`);
 
 const config = { directory: '/stomp/', codec: 'xor' };
 const parsed = parseConfig(config, 'k');
@@ -173,11 +171,7 @@ const compiled = await compileModule(
 // a static import routes to anything: only what compiles is asked here
 const route = (kind, text) => `/routed/${kind}/${text.length}`;
 let instance = memberInstance(compiled, 'rewriter', route);
-/** the JavaScript rewriter gave the last script up (it says so) */
-let gaveUp = false;
-console.warn = (message) => {
-	if (/could not rewrite/.test(message)) gaveUp = true;
-};
+console.warn = () => {};
 
 /** what the module makes of a script: `{ output }` or `{ status }` */
 function wasm({ code, module }) {
@@ -348,21 +342,6 @@ const named = (script, ...kinds) => {
 	return true;
 };
 
-/** what the JavaScript rewriter makes of a script, null when it gives up */
-function javascript({ code, module }) {
-	gaveUp = false;
-	const output = modifyJS(
-		code,
-		url,
-		config,
-		module ? 'genericModule' : 'generic',
-	);
-	// (one it gave up comes back as it was, or with an end no browser
-	// compiles where this V8 may take it: UNREWRITTEN_END; one it rewrote
-	// may be printed as it was written)
-	return gaveUp && output === code ? null : output;
-}
-
 // V8 on every source, then on every rewrite. Where node's V8 is known to
 // answer otherwise than Chrome's, the recorded verdict stands
 const refused = v8Verdicts(scripts);
@@ -380,12 +359,11 @@ const recordedVerdicts = [...refused];
 v8Verdicts(
 	recordedForms.map(([script]) => ({ ...script, eager: true })),
 ).forEach((verdict, at) => (recordedVerdicts[recordedForms[at][1]] = verdict));
+
+// what the module makes of every source, then V8 on the rewrites it made
 const rewrites = [];
 for (const script of scripts) {
-	script.js = javascript(script);
 	script.wasm = wasm(script);
-	if (script.js !== null)
-		rewrites.push({ code: script.js, module: script.module });
 	if ('output' in script.wasm)
 		rewrites.push({ code: script.wasm.output, module: script.module });
 }
@@ -397,11 +375,12 @@ const inherited = [];
 scripts.forEach((script, index) => {
 	if (script.name !== 'script' || script.recorded !== '+') return;
 	if (refused[index + 1] === null) return;
-	for (const backend of ['js', 'wasm']) {
-		const output = backend === 'js' ? script.js : script.wasm.output;
-		if (typeof output === 'string')
-			inherited.push({ backend, script, code: STRICT + output, module: false });
-	}
+	if ('output' in script.wasm)
+		inherited.push({
+			script,
+			code: STRICT + script.wasm.output,
+			module: false,
+		});
 });
 const inheritedVerdicts = v8Verdicts(inherited);
 
@@ -415,29 +394,24 @@ const OUTCOMES = [
 	'rewritten',
 	'RAW',
 	'BROKE',
-	// the JavaScript rewriter gave it up and wrote an end no browser
-	// compiles: the page's script is refused, and does not run unrewritten
+	// the rewriter gave the script up and the production fallback wrote an end
+	// no browser compiles (UNREWRITTEN_END): the page's script is refused, and
+	// does not run unrewritten
 	'refused for STomp',
-	// the module only: handed to the JavaScript rewriter
+	// the module declined the script (handed to cannotRewrite in production)
 	'declined',
 ];
-const table = { js: {}, wasm: {} };
-for (const backend of ['js', 'wasm'])
-	for (const side of ['refused', 'taken']) {
-		table[backend][side] = Object.fromEntries(
-			OUTCOMES.map((name) => [name, 0]),
-		);
-	}
+const table = { refused: {}, taken: {} };
+for (const side of ['refused', 'taken'])
+	table[side] = Object.fromEntries(OUTCOMES.map((name) => [name, 0]));
 const examples = new Map();
-const note = (backend, side, outcome, script, detail = '') => {
-	table[backend][side][outcome]++;
-	const key = `${backend} ${side} ${outcome}`;
+const note = (side, outcome, script, detail = '') => {
+	table[side][outcome]++;
+	const key = `${side} ${outcome}`;
 	if (!examples.has(key)) examples.set(key, []);
 	examples.get(key).push({ script, detail });
 };
 const statuses = new Map();
-/** what a script the module declined ends as in the JavaScript rewriter */
-const declines = { refused: {}, taken: {} };
 let stale = 0;
 let parseWrong = 0;
 let singleWrong = 0;
@@ -469,58 +443,45 @@ scripts.forEach((script, index) => {
 		unnamed.push({ script, what: 'rewritten, and Chrome refuses it' });
 	if (script.recorded === '+' && script.wasm.status === 7)
 		unnamed.push({ script, what: 'no browser runs it, and Chrome takes it' });
-	const classify = (backend, output) => {
+
+	if ('output' in script.wasm) {
+		const output = script.wasm.output;
+		const after = rewritten[at++];
 		let outcome;
 		let detail = '';
-		if (output === null) outcome = sourceRefused ? 'as it was' : 'RAW';
+		if (sourceRefused && after === null && !NODE_DIFFERS.has(script.text)) {
+			outcome = 'RUNS';
+			detail = output;
+		} else if (sourceRefused) {
+			outcome =
+				after === verdict || NODE_DIFFERS.has(script.text)
+					? 'still refused'
+					: 'still refused, other message';
+			detail = `${verdict} / ${after}`;
+		} else if (after === null) outcome = 'rewritten';
+		else if (output.endsWith(UNREWRITTEN_END)) outcome = 'refused for STomp';
 		else {
-			const after = rewritten[at++];
-			if (sourceRefused && after === null && !NODE_DIFFERS.has(script.text)) {
-				outcome = 'RUNS';
-				detail = output;
-			} else if (sourceRefused) {
-				outcome =
-					after === verdict || NODE_DIFFERS.has(script.text)
-						? 'still refused'
-						: 'still refused, other message';
-				detail = `${verdict} / ${after}`;
-			} else if (after === null) outcome = 'rewritten';
-			else if (backend === 'js' && output.endsWith(UNREWRITTEN_END))
-				outcome = 'refused for STomp';
-			else {
-				outcome = 'BROKE';
-				detail = `${after}\n      ${output}`;
-			}
+			outcome = 'BROKE';
+			detail = `${after}\n      ${output}`;
 		}
-		note(backend, where, outcome, script, detail);
-		return outcome;
-	};
-	const ended = classify('js', script.js);
-	if ('output' in script.wasm) {
-		const outcome = classify('wasm', script.wasm.output);
+		note(where, outcome, script, detail);
 		if (
 			outcome.startsWith('still refused') &&
 			!named(script, 'top', 'return', 'lazy')
 		)
 			unnamed.push({ script, what: outcome });
-	} else if (script.wasm.status === 7) classify('wasm', null);
-	else {
+	} else if (script.wasm.status === 7) {
+		note(where, sourceRefused ? 'as it was' : 'RAW', script);
+	} else {
 		const { status } = script.wasm;
 		statuses.set(status, (statuses.get(status) ?? 0) + 1);
-		note(
-			'wasm',
-			where,
-			'declined',
-			script,
-			`status ${status}; the JavaScript rewriter: ${ended}`,
-		);
-		declines[where][ended] = (declines[where][ended] ?? 0) + 1;
+		note(where, 'declined', script, `status ${status}`);
 		if (!sourceRefused && !named(script, status === 4 ? 'parser' : 'shape'))
 			unnamed.push({ script, what: `declined, status ${status}` });
 	}
 
 	// the parse questions are of a classic script; a top-level `return` is
-	// a function body's and is let through by both parsers on purpose
+	// a function body's and is let through by the parser on purpose
 	if (!script.module && !/Illegal return/.test(verdict ?? '')) {
 		const answer = asked(script.code, 64);
 		if (answer !== !sourceRefused) {
@@ -531,22 +492,16 @@ scripts.forEach((script, index) => {
 					what: `parses as a script: the module says ${answer}, V8 ${verdict ?? 'compiles'}`,
 				});
 		}
+		// a script V8 refuses is no single valid expression: the module must
+		// say so. For one V8 takes there is no parser left to judge the shape
+		// against (meriyah is gone), so only V8's refusal is held.
 		const single = asked(script.code, 128);
-		let shape = null;
-		try {
-			const program = parse(script.code, { next: true, webcompat: true });
-			shape =
-				program.body.length === 1 &&
-				program.body[0].type === 'ExpressionStatement';
-		} catch (error) {
-			// meriyah does not take it: only V8's refusal is held
-		}
-		if (sourceRefused ? single !== false : shape !== null && single !== shape) {
+		if (sourceRefused && single !== false) {
 			singleWrong++;
-			if (!named(script, sourceRefused ? 'lazy' : 'parser'))
+			if (!named(script, 'lazy'))
 				unnamed.push({
 					script,
-					what: `single expression: the module says ${single}, ${sourceRefused ? `V8 ${verdict}` : `it is ${shape}`}`,
+					what: `single expression: the module says ${single}, V8 ${verdict}`,
 				});
 		}
 	}
@@ -563,43 +518,31 @@ for (const side of ['refused', 'taken']) {
 	);
 	console.table(
 		Object.fromEntries(
-			OUTCOMES.filter(
-				(name) => table.js[side][name] || table.wasm[side][name],
-			).map((name) => [
+			OUTCOMES.filter((name) => table[side][name]).map((name) => [
 				name,
-				{ javascript: table.js[side][name], wasm: table.wasm[side][name] },
+				{ wasm: table[side][name] },
 			]),
 		),
 	);
 }
 if (statuses.size)
 	console.log(
-		`declined by status: ${[...statuses].map(([status, count]) => `${status}: ${count}`).join(', ')}`,
+		`the module declines (status): ${[...statuses].map(([status, count]) => `${status}: ${count}`).join(', ')}`,
 	);
-for (const side of ['refused', 'taken'])
-	if (Object.keys(declines[side]).length)
-		console.log(
-			`  of what V8 ${side === 'refused' ? 'refuses' : 'takes'}, the JavaScript rewriter then: ${Object.entries(
-				declines[side],
-			)
-				.map(([outcome, count]) => `${outcome} ${count}`)
-				.join(', ')}`,
-		);
 console.log(
 	`parse question (flag 64) answers that are not V8's: ${parseWrong}; single expression (flag 128): ${singleWrong}; recorded verdicts that are not this V8's: ${stale}`,
 );
-const inheritedRuns = { js: [], wasm: [] };
-inherited.forEach(({ backend, script }, index) => {
-	if (inheritedVerdicts[index] === null) inheritedRuns[backend].push(script);
+const inheritedRuns = [];
+inherited.forEach(({ script }, index) => {
+	if (inheritedVerdicts[index] === null) inheritedRuns.push(script);
 });
 console.log(
-	`inherited strictness: ${inherited.length / 2} sloppy rewrites behind 'use strict' of what strict code alone refuses; V8 takes ${inheritedRuns.js.length} of the JavaScript rewriter's, ${inheritedRuns.wasm.length} of the module's`,
+	`inherited strictness: ${inherited.length} sloppy rewrites behind 'use strict' of what strict code alone refuses; V8 takes ${inheritedRuns.length} of the module's`,
 );
-for (const backend of ['js', 'wasm'])
-	for (const script of inheritedRuns[backend].slice(0, verbose ? Infinity : 12))
-		console.log(
-			`  ${backend} ${script.line}: ${script.text}${verbose ? `\n      ${backend === 'js' ? script.js : script.wasm.output}` : ''}`,
-		);
+for (const script of inheritedRuns.slice(0, verbose ? Infinity : 12))
+	console.log(
+		`  ${script.line}: ${script.text}${verbose ? `\n      ${script.wasm.output}` : ''}`,
+	);
 const kinds = {};
 for (const kind of known.values()) kinds[kind] = (kinds[kind] ?? 0) + 1;
 console.log(
@@ -631,13 +574,12 @@ const show = (key, limit) => {
 	}
 };
 const BAD = ['RUNS', 'RAW', 'BROKE'];
-for (const backend of ['wasm', 'js'])
-	for (const side of ['refused', 'taken'])
-		for (const outcome of OUTCOMES) {
-			const key = `${backend} ${side} ${outcome}`;
-			if (listed ? key.includes(listed) : BAD.includes(outcome))
-				show(key, listed || verbose ? Infinity : 12);
-		}
+for (const side of ['refused', 'taken'])
+	for (const outcome of OUTCOMES) {
+		const key = `${side} ${outcome}`;
+		if (listed ? key.includes(listed) : BAD.includes(outcome))
+			show(key, listed || verbose ? Infinity : 12);
+	}
 
 if (unnamed.length) {
 	console.log(`\nnot named in early-known.txt: ${unnamed.length}`);
@@ -658,6 +600,6 @@ const failed =
 	stale ||
 	unnamed.length ||
 	idle.length ||
-	inheritedRuns.wasm.length ||
-	BAD.some((name) => table.wasm.refused[name] || table.wasm.taken[name]);
+	inheritedRuns.length ||
+	BAD.some((name) => table.refused[name] || table.taken[name]);
 process.exitCode = failed ? 1 : 0;

@@ -1,33 +1,18 @@
-// A large webpack bundle is rewritten by several rewrite workers at once and
-// runs as natively. Discord's 13 MB main bundle was one worker's work for
-// three and a half seconds; a minified page script of 512 KB or more in a
-// shape the split recognises (here the runtime form: an IIFE declaring a
-// table of 2000 module functions) is cut into one group per worker, and the
-// groups' output put back together. Its modules read location and top,
+// A large webpack bundle is rewritten by the wasm module and runs as
+// natively. Discord's 13 MB main bundle, a minified page script of 512 KB or
+// more (here the runtime form: an IIFE declaring a table of 2000 module
+// functions): the module rewrites it whole in one rewrite worker (or the
+// service worker), faster than splitting it across workers would plan to, so
+// the bundle is never cut into groups. Its modules read location and top,
 // index an object, eval and use BigInts; the results hash the same as the
-// page loaded natively. The request log says the bundle was rewritten split
-// ("pool split") with four workers, and whole ("pool") with one. The same
-// for a Closure module bundle (the shape of YouTube's kevlar_base and Google
-// Docs: a function called with `.call(this, ...)` whose modules are try
-// statements, one of them most of the script), split into runs of
-// statements, with statements that end at a line break without a semicolon
-// and function declarations in its blocks. The suite constructs its own
-// controllers on the demo's service worker, as rewrite-cache does.
-import {
-	done,
-	FIXTURE,
-	launch,
-	ok,
-	openDemo,
-	PROXY,
-	REWRITER,
-	sleep,
-} from '../lib.mjs';
-
-// The wasm rewriter takes a bundle whole in less time than the split's plan
-// alone, so a run with it (STOMP_REWRITER=wasm) splits nothing: the bundle
-// is one worker's, and runs the same.
-const WASM = REWRITER.rewriter === 'wasm';
+// page loaded natively. The request log says the bundle was rewritten in the
+// pool ("pool") whatever the worker count. The same for a Closure module
+// bundle (the shape of YouTube's kevlar_base and Google Docs: a function
+// called with `.call(this, ...)` whose modules are try statements, one of
+// them most of the script), with statements that end at a line break without
+// a semicolon and function declarations in its blocks. The suite constructs
+// its own controllers on the demo's service worker, as rewrite-cache does.
+import { done, FIXTURE, launch, ok, openDemo, PROXY, sleep } from '../lib.mjs';
 
 const browser = await launch();
 
@@ -36,11 +21,10 @@ async function proxied(workers, name) {
 	const PAGE = `${FIXTURE}pages/${name}.html`;
 	const page = await openDemo(browser, PROXY);
 	await page.evaluate(
-		async ({ workers, url, rewriter }) => {
+		async ({ workers, url }) => {
 			const old = window.controller;
 			window.__log = [];
 			const controller = new window.StompController({
-				...rewriter,
 				serviceworker: (
 					await navigator.serviceWorker.getRegistration('/stomp/')
 				).active,
@@ -51,9 +35,9 @@ async function proxied(workers, name) {
 				onRequest: (info) => window.__log.push(info),
 			});
 			await controller.wait();
-			// (until the modules are in, a bundle is split for the JavaScript
-			// rewriter as before)
-			for (let i = 0; rewriter.rewriter && i < 100; i++) {
+			// the bundle is rewritten by the module: wait until every thread
+			// that will rewrite it holds the core module
+			for (let i = 0; i < 100; i++) {
 				const held = await controller.wasmModules();
 				if (
 					held.serviceWorker.includes('core') &&
@@ -68,7 +52,7 @@ async function proxied(workers, name) {
 			document.body.append(element);
 			controller.createFrame(element).go(url);
 		},
-		{ workers, url: PAGE, rewriter: REWRITER },
+		{ workers, url: PAGE },
 	);
 	let result = null;
 	let entry = null;
@@ -104,14 +88,11 @@ for (const [name, shape] of [
 		native?.count === 2000,
 		JSON.stringify(native),
 	);
-	for (const [workers, expected] of [
-		[4, WASM ? 'pool' : 'pool split'],
-		[1, 'pool'],
-	]) {
+	for (const workers of [4, 1]) {
 		const { result, entry } = await proxied(workers, name);
 		ok(
-			`${shape}, ${workers} rewrite worker${workers > 1 ? 's' : ''}: the bundle is rewritten ${expected === 'pool split' ? 'split across them' : 'whole'}`,
-			entry?.rewriteIn === expected,
+			`${shape}, ${workers} rewrite worker${workers > 1 ? 's' : ''}: the bundle is rewritten whole in the pool`,
+			entry?.rewriteIn === 'pool',
 			JSON.stringify({ rewriteIn: entry?.rewriteIn, ms: entry?.ms }),
 		);
 		ok(

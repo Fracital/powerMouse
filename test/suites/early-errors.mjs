@@ -26,8 +26,9 @@
 // something the browser still refuses.
 //
 // KNOWN names what differs and why, by text; a name nothing needs any more
-// fails the suite. The wasm backend declines what its parser refuses to the
-// JavaScript rewriter, so that rewriter's defects show under both.
+// fails the suite. The wasm core is the only rewriter, and it changes no
+// early-error verdict, so KNOWN is empty; a text the browser runs but the
+// rewriter refuses is counted apart, not failed.
 import { readCases, STRICT } from '../../rust/host/early-lib.mjs';
 import {
 	done,
@@ -37,69 +38,37 @@ import {
 	ok,
 	openDemo,
 	PROXY,
-	REWRITER,
 	sleep,
 	submitLanding,
 } from '../lib.mjs';
 
-const WASM = REWRITER.rewriter === 'wasm';
 const PAGE = `${FIXTURE}pages/early-errors.html`;
 const cases = readCases().filter((entry) => entry.code !== undefined);
 
-// The JavaScript rewriter's parser takes these and V8 does not, and what
-// it prints of them compiles: the script runs through the proxy. Under the
-// wasm backend too, whose parser refuses them: what it cannot parse is the
-// JavaScript rewriter's to decide
-// (`00e1` no longer: its parser takes it for a string, which is printed as
-// written and refused, as natively)
-const JS_RUNS = [
-	'new a.b?.()',
-	"import.defer('a')",
-	'(...(a)) => 1',
-	'for (var a = () => b in c;;);',
-	'for (() => a in b;;);',
-	'class A { async m }',
-	'class A { async m = 1 }',
-	'@a class A {}',
-	'class A { @a m() {} }',
-	"var a; export { a as 'b', a as b }",
-];
-// ... and these two run forever when they do, so only `new Function` is
-// handed them
+// Two early-error texts run forever when they run at all, so only
+// `new Function` is handed them (the wasm rewriter's parser refuses both, so
+// they are refused as natively and never run; the filter stays as a guard)
 const NEVER_RUN = new Set([
 	'for (var a = () => b in c;;);',
 	'for (() => a in b;;);',
 ]);
-// The JavaScript rewriter alone: scripts V8 takes that it prints into ones
-// V8 refuses (parentheses its printer drops around a loop head's target;
-// what it dropped around a class heritage, the string statements it printed
-// as directives and the names written with an escape it printed plain are
-// kept now)
-const JS_BREAKS = [
-	'for ((let) of a);',
-	'for ((let.a) of b);',
-	'for ((async) of a);',
-];
-// ... and scripts V8 refuses that it rewrites into ones V8 refuses with
-// another message: its parser takes `\\u0065val` as a target in strict
-// code, which V8 refuses as no target at all
-const JS_MESSAGES = [
-	'[\\u0065val] = a',
-	'[...\\u0065val] = a',
-	'({ a: \\u0065val } = a)',
-];
-// A script the JavaScript rewriter cannot rewrite and the browser would
-// run goes with an end no browser compiles (src/rewriteJS.ts
-// UNREWRITTEN_END): refused, with the name in this message, where natively
-// it compiles. Under both backends (what the module's parser refuses is the
-// JavaScript rewriter's); counted, not named
+// A script the rewriter cannot rewrite and the browser would run goes with an
+// end no browser compiles (src/rewriteJS.ts UNREWRITTEN_END): refused, with
+// the name in this message, where natively it compiles. The wasm rewriter's
+// parser refuses a few shapes V8 takes (an accessor field and other unshipped
+// syntax, `import.defer`, a decorator); those are counted here, not named,
+// since refusing is the safe answer.
 const STOMP_REFUSES =
 	/Private field '#STomp_could_not_rewrite_this_script' must be declared/;
-const KNOWN = new Map(JS_RUNS.map((text) => [text, 'runs']));
-if (!WASM) {
-	for (const text of JS_BREAKS) KNOWN.set(text, 'breaks');
-	for (const text of JS_MESSAGES) KNOWN.set(text, 'message');
-}
+// The wasm rewriter splices its edits into the script's own text and keeps
+// the page's escapes and parentheses, so the JavaScript rewriter's printer
+// defects (parentheses dropped around a loop head's target or a class
+// heritage, an escaped name printed plain, a string statement printed as a
+// directive) do not arise, and there is no JavaScript backend to take a shape
+// its parser refuses and run it where V8 would not. So no early-error text is
+// answered differently through the proxy than natively; any that is fails the
+// suite below (a text the browser runs but STomp refuses is counted apart).
+const KNOWN = new Map();
 const needed = new Set();
 
 const browser = await launch();
@@ -277,6 +246,15 @@ for (const [mode, base] of [
 				refusedForStomp++;
 				return;
 			}
+			// a module the rewriter declines that the browser also refuses (an
+			// invalid or duplicate export the rewriter will not rewrite): both
+			// refuse, so nothing of it runs, but STomp's early error is the one
+			// the browser reports instead of the native SyntaxError. Counted,
+			// not a divergence that matters
+			if (/SyntaxError/.test(said(want)) && STOMP_REFUSES.test(said(have))) {
+				refusedForStomp++;
+				return;
+			}
 			if (KNOWN.has(entry.text)) {
 				known++;
 				needed.add(entry.text);
@@ -295,7 +273,7 @@ for (const [mode, base] of [
 		);
 		if (refusedForStomp)
 			console.log(
-				`${mode}: ${carrier}: ${refusedForStomp} of ${list.length} the browser compiles refused for STomp, which could not rewrite them`,
+				`${mode}: ${carrier}: ${refusedForStomp} of ${list.length} refused for STomp (the rewriter could not rewrite them): where the browser compiles it this changes the verdict, where the browser refuses it too only the message`,
 			);
 		if (moved)
 			console.log(

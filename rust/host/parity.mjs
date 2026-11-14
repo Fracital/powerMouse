@@ -1,18 +1,17 @@
-// Output parity between the wasm rewriter (rust/rwjs) and the JavaScript one
-// (src/rewriteJS.ts), without a browser. The two do not print alike: the
-// JavaScript rewriter prints its tree, the wasm one splices edits into the
-// script's own text. So each output is parsed again and the two programs
-// are compared as trees (printed compact from the tree, empty statements
-// dropped), and the function marks, which are comments, as the lists they
-// are. A script the module declines is counted apart: it is the JavaScript
-// rewriter's in a browser, which is correct and slow.
+// Output stability of the wasm rewriter (rust/rwjs, a member of the core
+// module), without a browser. The wasm core is the only rewriter now, so this
+// no longer compares two backends: every rewrite family of src/rewriteJS.ts by
+// shape (rust/host/cases.mjs) is rewritten by the module, and the digest of
+// its outputs must be the one rust/host/cases.revision recorded under the
+// module's revision. A rewrite that changed without REVISION being raised
+// fails the run: that recorded-outputs check is the correctness oracle.
 //
 //   node rust/host/parity.mjs [--cases] [--family name] [-v] <dir-or-file>...
 //
 // --cases runs rust/host/cases.mjs (every rewrite family, by shape); a
 // directory is a corpus (docs/rust-plan.md, section 11): an index.json of
-// {file, url, bytes, module} entries, or plain .js files. TIME=1 times both
-// backends on what they agree on. CORE_WASM names another artifact than
+// {file, url, bytes, module} entries, or plain .js files. TIME=1 times the
+// module on what it rewrites. CORE_WASM names another artifact than
 // assets/core.wasm (a fresh deploy/rust/out build).
 //
 // --cases also holds the module's revision (rust/rwjs/src/rewrite.rs
@@ -42,7 +41,7 @@ function scripts(path) {
 	const out = [];
 	if (statSync(path).isFile()) {
 		// a plain file says nothing of its kind: a module when it only parses
-		// as one (decided below, once the parser is loaded)
+		// as one (decided below, once the module is loaded)
 		out.push({
 			name: path,
 			module: /\.mjs$/.test(path) ? true : undefined,
@@ -91,17 +90,15 @@ if (!inputs.length) {
 	process.exit(2);
 }
 
-// both rewriters, bundled as the suites bundle them
+// the wasm rewriter, bundled as the suites bundle it
 const esbuild = await import('esbuild');
-// (a directory of its own: two runs may share the tree, as the suites'
-// runs under both backends do; under test/out, where the bundle's external
-// css-tree resolves)
+// (a directory of its own, under test/out)
 mkdirSync(`${root}test/out/`, { recursive: true });
 const out = `${mkdtempSync(`${root}test/out/parity-`)}/`;
 const entry = `${out}parity-entry.mjs`;
 writeFileSync(
 	entry,
-	`export { modifyJS, scriptLead } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
+	`export { scriptLead } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
 export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
 export { parseConfig } from ${JSON.stringify(`${root}src/config.ts`)};
 export { compileModule, CoreInstance } from ${JSON.stringify(`${root}src/wasm/module.ts`)};
@@ -113,12 +110,10 @@ await esbuild.build({
 	bundle: true,
 	platform: 'node',
 	format: 'esm',
-	external: ['css-tree'],
 	outfile: `${out}parity.mjs`,
 	logLevel: 'silent',
 });
 const {
-	modifyJS,
 	scriptLead,
 	StompURL,
 	parseConfig,
@@ -128,8 +123,6 @@ const {
 	rewriterRoute,
 } = await import(`${out}parity.mjs?${Date.now()}`);
 rmSync(out, { recursive: true, force: true });
-const { parse } = await import(`${root}node_modules/meriyah/dist/meriyah.mjs`);
-const { generate } = await import('@javascript-obfuscator/escodegen');
 
 const config = { directory: '/stomp/', codec: 'xor' };
 const parsed = parseConfig(config, 'k');
@@ -142,14 +135,12 @@ const rewriterOf = () =>
 	new CoreInstance(module, (member, kind, text) => route(kind, text)).members
 		.rewriter;
 let instance = rewriterOf();
-// the JavaScript rewriter warns about a script it cannot parse
-console.warn = () => {};
 
 const STATUS = {
 	2: 'a URL did not route',
 	3: 'not UTF-8',
 	4: 'did not parse',
-	5: 'a shape left to the JavaScript rewriter',
+	5: 'a shape the rewriter declines',
 	6: 'the edits did not nest',
 	7: 'no browser runs it',
 };
@@ -172,134 +163,27 @@ function wasm(text, url, type) {
 	}
 }
 
+/** the raw status the module answers for `text`, or null when it rewrote it */
+function status(text, type) {
+	const result = instance.call(text, type === 'genericModule' ? 2 : 0);
+	return 'status' in result ? result.status : null;
+}
+
 /** why the module declined `text` */
 function declined(text, type) {
-	const result = instance.call(text, type === 'genericModule' ? 2 : 0);
-	return 'status' in result
-		? (STATUS[result.status] ?? `status ${result.status}`)
-		: 'declined';
+	const code = status(text, type);
+	return code === null ? 'declined' : (STATUS[code] ?? `status ${code}`);
 }
 
-const MARK = /\/\*[0-9a-z]+\.[0-9a-z]+\.[0-9a-z]+\*\//g;
-const HOLDER = /\.src\("[0-9a-z]+","[^"]*",function\(\)\{\/\*[^]*?\*\/\}\);/;
-
-/** the statement lists an empty statement means nothing in */
-const LISTS = new Set(['Program', 'BlockStatement', 'StaticBlock']);
-
-/** whether a node names a temporary the rewriter binds a moved pattern's source to */
-function temporary(node, access) {
-	if (Array.isArray(node)) return node.some((item) => temporary(item, access));
-	if (!node || typeof node !== 'object') return false;
-	if (
-		node.type === 'Identifier' &&
-		(node.name === `${access}f` ||
-			node.name === `${access}c` ||
-			(node.name.startsWith(`${access}a`) &&
-				/^\d+$/.test(node.name.slice(access.length + 1))))
-	)
-		return true;
-	for (const key in node)
-		if (
-			node[key] &&
-			typeof node[key] === 'object' &&
-			temporary(node[key], access)
-		)
-			return true;
-	return false;
-}
-
-/** a tree both rewriters' outputs print alike from */
-function clean(node, access) {
-	if (Array.isArray(node)) {
-		for (const item of node) clean(item, access);
-		return;
-	}
-	if (!node || typeof node !== 'object') return;
-	if (LISTS.has(node.type) && Array.isArray(node.body))
-		node.body = node.body.filter((item) => item.type !== 'EmptyStatement');
-	if (node.type === 'SwitchCase')
-		node.consequent = node.consequent.filter(
-			(item) => item.type !== 'EmptyStatement',
-		);
-	// a pattern moved to where it has a source (a parameter's, a loop
-	// head's, a catch clause's: its source is a temporary, `$s$ja0`,
-	// `$s$jf`, `$s$jc`) has no text of its own to name in an error: the
-	// JavaScript rewriter prints the declaration it made, the wasm one quotes
-	// the page's pattern, and neither is checked beyond being there
-	if (
-		node.type === 'CallExpression' &&
-		node.callee.type === 'MemberExpression' &&
-		node.callee.object.name === access &&
-		(node.callee.property.name === 'pattern' ||
-			node.callee.property.name === 'iter') &&
-		node.arguments[0] &&
-		temporary(node.arguments[0], access) &&
-		node.arguments[2]?.type === 'Literal'
-	)
-		node.arguments[2] = { type: 'Literal', value: 'hoisted' };
-	for (const key in node) {
-		const value = node[key];
-		if (value && typeof value === 'object') clean(value, access);
-	}
-}
-
-function normal(code, module) {
-	const tree = parse(code, {
-		module,
-		next: true,
-		globalReturn: true,
-		webcompat: true,
-	});
-	clean(tree, '$s$j');
-	return generate(tree, { format: { compact: true } });
-}
-
-/** where two strings part, with what stands around it in each */
-function parting(a, b) {
-	let at = 0;
-	while (at < a.length && at < b.length && a[at] === b[at]) at++;
-	const around = (text) =>
-		JSON.stringify(text.slice(Math.max(0, at - 100), at + 140));
-	return `at ${at}\n      js:   ${around(a)}\n      wasm: ${around(b)}`;
-}
-
-function compare(text, js, out, module) {
-	// both backends hand a script no browser runs back as it was (syntax no
-	// browser has shipped, an `accessor` field or a decorator, which the
-	// JavaScript rewriter's printer cannot write either): byte-identical
-	// output is the same program, and escodegen cannot reparse-print the
-	// shape to compare it as a tree anyway
-	if (js === out) return null;
-	let a;
-	let b;
-	try {
-		a = normal(js, module);
-	} catch (error) {
-		return `the JavaScript output does not parse: ${error}`;
-	}
-	try {
-		b = normal(out, module);
-	} catch (error) {
-		return `the wasm output does not parse: ${error}\n      wasm: ${JSON.stringify(out.slice(0, 400))}`;
-	}
-	if (a !== b) return `the programs differ ${parting(a, b)}`;
-	const marksJS = (js.match(MARK) ?? []).sort();
-	const marksOut = (out.match(MARK) ?? []).sort();
-	// (a page's own comment may look like a mark: it is in the wasm output
-	// only, where comments stay)
-	const page = (text.match(MARK) ?? []).length;
-	if (
-		marksJS.length !== marksOut.length - page ||
-		(!page && marksJS.join() !== marksOut.join())
-	) {
-		const only = (from, other) => from.filter((mark) => !other.includes(mark));
-		return `the marks differ: ${marksJS.length} js, ${marksOut.length} wasm; js only ${only(marksJS, marksOut).slice(0, 5)}; wasm only ${only(marksOut, marksJS).slice(0, 5)}`;
-	}
-	const holderJS = HOLDER.exec(js)?.[0];
-	const holderOut = HOLDER.exec(out)?.[0];
-	if (holderJS !== holderOut && !page)
-		return `the holders differ ${parting(holderJS ?? '', holderOut ?? '')}`;
-	return null;
+/**
+ * Whether the module's parser accepts `text` (as a module or a classic
+ * script): the wasm module is the only parser now, so its own verdict stands
+ * in for what used to be a separate parse. Status 4 is "did not parse";
+ * any other answer (a rewrite, or a decline for another reason) means it
+ * parsed.
+ */
+function parses(text, module) {
+	return status(text, module ? 'genericModule' : 'generic') !== 4;
 }
 
 const median = (times) => [...times].sort((a, b) => a - b)[times.length >> 1];
@@ -314,12 +198,10 @@ function timed(work, runs = 3) {
 }
 
 const tally = {
-	same: 0,
-	differ: 0,
-	known: 0,
+	rewritten: 0,
+	unchanged: 0,
 	declined: 0,
 	gaveUp: 0,
-	invalid: 0,
 	trapped: 0,
 };
 const reasons = new Map();
@@ -327,14 +209,6 @@ const reasons = new Map();
 const written = createHash('sha256');
 const rows = [];
 let bytes = 0;
-const parses = (text, module) => {
-	try {
-		parse(text, { module, next: true, globalReturn: true, webcompat: true });
-		return true;
-	} catch (error) {
-		return false;
-	}
-};
 for (const input of inputs) {
 	const { name, text } = input;
 	const isModule = input.module ?? (!parses(text, false) && parses(text, true));
@@ -347,15 +221,11 @@ for (const input of inputs) {
 		'/stomp/',
 	);
 	bytes += text.length;
-	const js = modifyJS(text, url, config, type);
-	let out = wasm(text, url, type);
-	// a script the module calls one no browser runs (status 7) comes back
-	// as it was, which is what the JavaScript rewriter makes of it too
-	const invalid = out === text && !parses(text, isModule);
-	if (invalid) {
-		tally.invalid++;
-		out = null;
-	}
+	const out = wasm(text, url, type);
+	// the digest the recorded revision keys on: the module's output for every
+	// case, byte for byte (the correctness oracle). A script no browser runs
+	// (status 7) comes back as it was, which is the module's answer and is
+	// recorded as such; a decline (null) is recorded as "declined"
 	if (input.family)
 		written.update(`${typeof out === 'string' ? out : 'declined'}\0`);
 	const label = `${name}${isModule ? ' (module)' : ''}`;
@@ -368,20 +238,8 @@ for (const input of inputs) {
 		show(`TRAP ${label}: ${out.trap}`);
 		continue;
 	}
-	// the JavaScript rewriter hands back what it cannot parse as it was
-	let gaveUp = false;
-	try {
-		parse(text, {
-			module: isModule,
-			next: true,
-			globalReturn: true,
-			webcompat: true,
-		});
-	} catch (error) {
-		gaveUp = true;
-	}
 	if (out === null) {
-		if (gaveUp) tally.gaveUp++;
+		if (!parses(text, isModule)) tally.gaveUp++;
 		else {
 			const why = declined(text, type);
 			reasons.set(why, (reasons.get(why) ?? 0) + 1);
@@ -390,40 +248,17 @@ for (const input of inputs) {
 		}
 		continue;
 	}
-	if (gaveUp) {
-		tally.differ++;
-		show(
-			`DIFF ${label}: the wasm rewriter took what the JavaScript one gives up`,
-		);
-		continue;
-	}
-	const difference = compare(text, js, out, isModule);
-	if (input.diverges) {
-		tally.known++;
-		console.log(
-			`KNOWN ${label}: ${input.diverges}${difference ? '' : ' (the outputs are the same now)'}\n      source: ${JSON.stringify(text)}`,
-		);
-		continue;
-	}
-	if (difference) {
-		tally.differ++;
-		show(`DIFF ${label}: ${difference}`);
-		continue;
-	}
-	tally.same++;
+	if (out === text) tally.unchanged++;
+	else tally.rewritten++;
 	if (verbose && input.family)
-		console.log(`same ${label}\n      ${JSON.stringify(out)}`);
-	if (process.env.TIME) {
+		console.log(`ok ${label}\n      ${JSON.stringify(out)}`);
+	if (process.env.TIME && out !== text) {
 		const wasmMs = timed(() => wasm(text, url, type));
-		const jsMs = timed(() => modifyJS(text, url, config, type));
 		rows.push({
 			script: name.replace(/^\/tmp\/stomp-speed\/js\//, ''),
 			KB: Math.round(text.length / 1024),
 			outKB: Math.round(out.length / 1024),
-			jsOutKB: Math.round(js.length / 1024),
 			wasmMs: Math.round(wasmMs),
-			jsMs: Math.round(jsMs),
-			ratio: +(jsMs / wasmMs).toFixed(1),
 		});
 	}
 }
@@ -432,22 +267,18 @@ if (rows.length) {
 	console.table(rows);
 	const sum = (key) => rows.reduce((n, row) => n + row[key], 0);
 	console.log(
-		`total wasm ${sum('wasmMs')} ms, js ${sum('jsMs')} ms over ${(bytes / 1024 / 1024).toFixed(1)} MB (${(sum('jsMs') / sum('wasmMs')).toFixed(1)}x); instance memory ${Math.round(instance.memoryBytes / 1024 / 1024)} MB`,
+		`total wasm ${sum('wasmMs')} ms over ${(bytes / 1024 / 1024).toFixed(1)} MB; instance memory ${Math.round(instance.memoryBytes / 1024 / 1024)} MB`,
 	);
 }
 console.log(`${inputs.length} scripts`);
-console.log(`  same program, marks and holder: ${tally.same}`);
-console.log(`  differ: ${tally.differ}`);
-console.log(`  known divergences (rust/host/cases.mjs): ${tally.known}`);
+console.log(`  rewritten: ${tally.rewritten}`);
+console.log(
+	`  unchanged (nothing to route, or no browser runs it): ${tally.unchanged}`,
+);
 console.log(`  trapped: ${tally.trapped}`);
-console.log(
-	`  declined by the module (the JavaScript rewriter's): ${tally.declined}`,
-);
+console.log(`  declined by the module: ${tally.declined}`);
 for (const [why, count] of reasons) console.log(`    ${why}: ${count}`);
-console.log(`  neither rewrites (does not parse): ${tally.gaveUp}`);
-console.log(
-	`    of which the module answers itself (no browser runs it): ${tally.invalid}`,
-);
+console.log(`  neither parses nor rewrites (does not parse): ${tally.gaveUp}`);
 let stale = false;
 if (args.includes('--cases') && !family) {
 	const answered = instance.call('', 32);
@@ -472,4 +303,4 @@ if (args.includes('--cases') && !family) {
 		);
 	}
 }
-process.exit(tally.differ || tally.trapped || stale ? 1 : 0);
+process.exit(tally.trapped || stale ? 1 : 0);

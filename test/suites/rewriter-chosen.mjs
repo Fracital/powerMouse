@@ -1,13 +1,12 @@
-// A top page must not choose the rewriter the frames under it share. Under
-// `rewriter: 'wasm'` a proxied top's rewriter library instantiates the
-// module the controller compiled, for itself and every frame under it,
-// whatever their site (src/inject/dom/rewriterRealm.ts). The page here
-// passed no hook: it replaces the browser's own MessagePort.prototype.close
-// and plays, on each port closed, a message that hands over a module of its
-// own making (test/pages/rewriter-chosen.wat). The frame under it is of
-// another site; its scripts run as they do natively, and none of them is
-// the top page's. Its own controller with `rewriter: 'wasm'`, both modes,
-// whatever backend the run is.
+// A top page must not choose the rewriter the frames under it share. A
+// proxied top's rewriter library instantiates the module the controller
+// compiled (the wasm core, the only rewriter), for itself and every frame
+// under it, whatever their site (src/inject/dom/rewriterRealm.ts). The page
+// here passed no hook: it replaces the browser's own MessagePort.prototype
+// .close and plays, on each port closed, a message that hands over a module
+// of its own making (test/pages/rewriter-chosen.wat). The frame under it is
+// of another site; its scripts run as they do natively, and none of them is
+// the top page's. Its own controller, both modes.
 import {
 	done,
 	FIXTURE,
@@ -56,7 +55,7 @@ for (const [mode, base] of [
 	const page = await openDemo(browser, base);
 	const ready = await page.evaluate(
 		async ({ mode, proxy }) => {
-			const options = { codec: 'xor', cache: false, rewriter: 'wasm' };
+			const options = { codec: 'xor', cache: false };
 			const controller =
 				mode === 'isolated'
 					? new window.StompRemoteController({
@@ -84,7 +83,7 @@ for (const [mode, base] of [
 		},
 		{ mode, proxy: PROXY },
 	);
-	ok(`${mode}: the controller with the wasm rewriter shook hands`, ready);
+	ok(`${mode}: the controller shook hands`, ready);
 	await page.evaluate(async (url) => {
 		const element = document.createElement('iframe');
 		element.id = '__chosenFrame';
