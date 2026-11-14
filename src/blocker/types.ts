@@ -118,6 +118,25 @@ export interface ProceduralFilter {
 export type ShieldsMode = 'aggressive' | 'standard' | 'allow';
 
 /**
+ * The per-site fingerprint-emulation surfaces STomp can turn off one at a
+ * time (the Shields "Block fingerprinting" detail submenu). STomp runs every
+ * proxied site in one shared renderer, so most fingerprint inputs
+ * (hardwareConcurrency, screen, userAgent, canvas, WebGL, audio, fonts,
+ * languages, timezone) already read that one real browser's native values:
+ * there is nothing to emulate per site and nothing to gate. The one place the
+ * shared process would leak a cross-site tell, and where STomp actively
+ * synthesizes a per-site value, is `performance.memory` (the Memory module);
+ * that is this list's one surface today. OFF, STomp stops emulating it and the
+ * site reads the renderer's raw figure; ON (the default) the per-site
+ * emulation stands. New surfaces join here as real hooks appear
+ * (src/server/shields.ts, docs/adblock.md "Per-site shields").
+ */
+export type FpSurface = 'deviceMemory';
+
+/** every fp surface, in submenu order; the master toggle is all-on/all-off over it */
+export const FP_SURFACES: FpSurface[] = ['deviceMemory'];
+
+/**
  * One host's shields, as the demo stores them (host-keyed, in its own
  * localStorage) and plumbs to the service worker. `enabled` is the master
  * toggle; down (or mode 'allow') turns every layer below off for the host.
@@ -133,8 +152,19 @@ export interface SiteShields {
 	httpsUpgrade?: 'strict' | 'upgrade' | 'off';
 	/** block the page's own scripts (the inject enforces script-src 'none' against the page's code, src/csp.ts) */
 	blockScripts?: boolean;
-	/** STomp's fingerprint emulation (on by default); off, the site reads this browser's native values (src/server/shields.ts) */
+	/**
+	 * The master fingerprint-emulation toggle (on by default): off, the site
+	 * reads this browser's native values for every surface (src/server/shields.ts).
+	 * It is all-on/all-off over the per-surface `fingerprint` set below.
+	 */
 	blockFingerprinting?: boolean;
+	/**
+	 * Per-surface fingerprint emulation (each on by default, so an absent key
+	 * is on). A surface set false means STomp stops emulating it for the host
+	 * and the site reads the proxy's raw value; the master `blockFingerprinting`
+	 * off, or shields down, is every surface off. See FpSurface.
+	 */
+	fingerprint?: Partial<Record<FpSurface, boolean>>;
 	/** the cookie policy for the host's requests */
 	cookies?: 'all' | 'third-party' | 'allow';
 	/** clear the host's cookies and virtualized storage when its last tab closes */

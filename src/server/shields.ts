@@ -14,7 +14,12 @@
 // is unchanged. A host's own entry overrides the default. The master toggle
 // (enabled=false) turns every layer off for the host without touching STomp's
 // core rewriting.
-import { shieldsDown, type SiteShields } from '../blocker/types';
+import {
+	FP_SURFACES,
+	shieldsDown,
+	type FpSurface,
+	type SiteShields,
+} from '../blocker/types';
 
 export class ShieldsStore {
 	#map = new Map<string, SiteShields>();
@@ -98,16 +103,38 @@ export class ShieldsStore {
 	}
 
 	/**
-	 * Whether STomp's fingerprint emulation runs for the host (the Memory
-	 * module's per-site performance.memory, docs/process-model.md): on
-	 * everywhere by default, off only where an entry turns `blockFingerprinting`
-	 * off or shields are down, so that site reads the renderer's native values.
-	 * The shell carries the inverse to the inject as `noFingerprint`.
+	 * The fingerprint-emulation surfaces STomp leaves OUT for the host (the
+	 * shell carries these to the inject as `Config.fingerprintOff`, and each
+	 * hook skips its own emulation so the site reads the renderer's raw value).
+	 * Empty everywhere by default: every surface is emulated. The master
+	 * `blockFingerprinting` off, or shields down, lists every surface; with the
+	 * master on, only the surfaces an entry's `fingerprint` map sets false. A
+	 * host with no entry (neutral) emulates everything (empty).
+	 */
+	fingerprintOff(host: string): FpSurface[] {
+		const entry = this.get(host);
+		if (!entry) return [];
+		if (shieldsDown(entry) || entry.blockFingerprinting === false)
+			return [...FP_SURFACES];
+		const fp = entry.fingerprint;
+		return fp ? FP_SURFACES.filter((surface) => fp[surface] === false) : [];
+	}
+
+	/**
+	 * Whether STomp emulates a given fingerprint surface for the host (the
+	 * inverse of its membership in `fingerprintOff`): on unless the master is
+	 * off, shields are down, or the surface's own flag is false.
+	 */
+	fingerprintSurface(host: string, surface: FpSurface): boolean {
+		return !this.fingerprintOff(host).includes(surface);
+	}
+
+	/**
+	 * Whether STomp's fingerprint emulation runs for the host at all (the
+	 * master): true unless every surface is off (`blockFingerprinting` off or
+	 * shields down). On everywhere by default (docs/process-model.md).
 	 */
 	fingerprint(host: string): boolean {
-		const entry = this.get(host);
-		if (!entry) return true;
-		if (shieldsDown(entry)) return false;
-		return entry.blockFingerprinting !== false;
+		return this.fingerprintOff(host).length < FP_SURFACES.length;
 	}
 }

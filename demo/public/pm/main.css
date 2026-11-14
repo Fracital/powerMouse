@@ -2394,6 +2394,9 @@ input:focus-visible {
 	appearance: none;
 	-webkit-appearance: none;
 	flex: none;
+	/* zero the checkbox's default UA margin so the toggle's right edge lands on
+	   the detail slot, level with the dropdown buttons' right edge */
+	margin: 0;
 	position: relative;
 	width: 44px;
 	height: 24px;
@@ -2489,9 +2492,13 @@ input:focus-visible {
 .shieldsRows {
 	margin-top: 4px;
 }
+/* Every row is [icon][main flex:1][toggle?][detail slot]. The main control, a
+   toggle or a dropdown, ends at the detail slot's left edge, so toggles and
+   dropdowns share one right edge down the panel; the fixed-width detail slot is
+   always present (the trailing > sits in it on the rows that have one, empty and
+   reserved on the rest) so the alignment holds whether or not a row has a >. */
 .shieldsRow {
-	display: grid;
-	grid-template-columns: 22px 1fr auto;
+	display: flex;
 	align-items: center;
 	gap: 10px;
 	padding: 6px 2px;
@@ -2502,13 +2509,17 @@ input:focus-visible {
 	height: 20px;
 }
 .shieldsRowMain {
+	flex: 1 1 auto;
 	min-width: 0;
 }
-/* a row whose right column holds both a detail chevron and a toggle */
-.shieldsRowEnd {
-	display: flex;
-	align-items: center;
-	gap: 6px;
+/* the reserved trailing slot for a row's detail > (empty on rows without one),
+   the same width as the .shieldsMore button it holds so every > lines up */
+.shieldsDetail {
+	flex: none;
+	width: 24px;
+	height: 24px;
+	display: grid;
+	place-items: center;
 }
 .shieldsRowLabel {
 	color: #e9e9f1;
@@ -2681,6 +2692,94 @@ input:focus-visible {
 	color: #7d7d95;
 	font-size: 11px;
 	line-height: 1.4;
+}
+
+/* the "Block fingerprinting" > detail submenu, a sub-view inside the panel */
+.shieldsSubHead {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding-bottom: 12px;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+.shieldsBack {
+	flex: none;
+	width: 30px;
+	height: 30px;
+	display: grid;
+	place-items: center;
+	background: none;
+	border: none;
+	border-radius: 7px;
+	color: #c9c9d8;
+	cursor: pointer;
+}
+.shieldsBack:hover {
+	background: rgba(255, 255, 255, 0.06);
+}
+.shieldsBack:focus-visible {
+	outline: 2px solid #8a9bff;
+	outline-offset: 1px;
+}
+.shieldsBack .shieldsIcon {
+	width: 20px;
+	height: 20px;
+}
+.shieldsSubTitleBlock {
+	min-width: 0;
+}
+.shieldsSubTitle {
+	color: #fff;
+	font-size: 14px;
+	font-weight: 600;
+}
+.shieldsSubDomain {
+	margin-top: 1px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: #8f8fa6;
+	font-size: 12px;
+}
+.shieldsSubNote {
+	margin-top: 12px;
+	color: #8f8fa6;
+	font-size: 11.5px;
+	line-height: 1.5;
+}
+.shieldsSubWarn {
+	margin-top: 10px;
+	padding: 9px 11px;
+	border-radius: 8px;
+	background: #1d1a24;
+	border-left: 2px solid #8a5cf6;
+	color: #c9c9d8;
+}
+.shieldsSubSection {
+	margin: 14px 0 2px;
+	color: #6f6f87;
+	font-size: 11px;
+	font-weight: 600;
+}
+/* a surface STomp already serves at the browser's own value: shown, not toggled */
+.shieldsRowNative .shieldsRowLabel {
+	color: #a9a9bd;
+}
+.shieldsDot {
+	display: grid;
+	place-items: center;
+}
+.shieldsDot::before {
+	content: '';
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: #51516a;
+}
+.shieldsNativeTag {
+	flex: none;
+	color: #6f6f87;
+	font-size: 11px;
 }
 
 .shieldsReport {

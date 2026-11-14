@@ -148,8 +148,9 @@ for (const [mode, base] of [
 // The "Block fingerprinting" shield, off: the site reads the renderer's native
 // performance.memory, so the Turnstile tell returns (a frame equals its
 // embedder in the proxy's one process). The inject leaves the Memory module
-// out for a host whose shields set blockFingerprinting off (Config.noFingerprint,
-// src/server/shields.ts). On (the default, checked above) the emulation stands.
+// out for a host whose shields set blockFingerprinting off (Config.fingerprintOff
+// lists every surface, src/server/shields.ts). On (the default, checked above)
+// the emulation stands.
 {
 	const top = new URL(FIXTURE).hostname;
 	const childHost = new URL(CHILD).hostname;
@@ -175,6 +176,43 @@ for (const [mode, base] of [
 	// well above the floor and below the real heap seen here (~18-27 MB).
 	ok(
 		'fingerprint off: the child reads the real process heap, not the emulated per-site floor',
+		off && off.child.used > 4 * MB && off.after.used > 4 * MB,
+		JSON.stringify({ top: off?.after?.used, child: off?.child?.used }),
+	);
+	await page.close();
+}
+
+// The per-surface control: Device Memory off alone (the master still on) leaves
+// the Memory module out just as the master does, so the site reads the renderer's
+// native performance.memory and the Turnstile tell returns. This proves the
+// per-surface path (shields `fingerprint.deviceMemory` -> Config.fingerprintOff
+// -> document.ts) end to end, distinct from the whole-master blockFingerprinting
+// off checked above.
+{
+	const top = new URL(FIXTURE).hostname;
+	const childHost = new URL(CHILD).hostname;
+	const page = await openDemo(browser, PROXY);
+	await page.evaluate(
+		([a, b]) => {
+			window.controller.shields.set(a, {
+				fingerprint: { deviceMemory: false },
+			});
+			window.controller.shields.set(b, {
+				fingerprint: { deviceMemory: false },
+			});
+		},
+		[top, childHost],
+	);
+	await sleep(500);
+	await submitLanding(page, target);
+	const off = await report(page);
+	ok(
+		'device-memory surface off: performance.memory exposed, inject intact',
+		off?.supported && off.child?.used > 0 && off.after?.used > 0,
+		JSON.stringify({ top: off?.after?.used, child: off?.child?.used }),
+	);
+	ok(
+		'device-memory surface off: the child reads the real process heap, not the per-site floor',
 		off && off.child.used > 4 * MB && off.after.used > 4 * MB,
 		JSON.stringify({ top: off?.after?.used, child: off?.child?.used }),
 	);

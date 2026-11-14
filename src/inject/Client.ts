@@ -1,4 +1,5 @@
 import { BareCompatibleClient } from '@mercuryworkshop/proxy-transports';
+import type { FpSurface } from '../blocker/types';
 import GenericCodec from '../Codecs';
 import {
 	Assets,
@@ -171,8 +172,12 @@ export default class Client {
 	blocking: boolean;
 	/** the host's page is cross-origin isolated (config.isolated; src/isolation.ts) */
 	hostIsolated: boolean;
-	/** this host turned fingerprint protection off: leave the emulation out (config.noFingerprint) */
-	noFingerprint: boolean;
+	/**
+	 * the fingerprint-emulation surfaces this host turned off (config.fingerprintOff):
+	 * each one's hook leaves its emulation out so the page reads the raw value.
+	 * Empty (the default) emulates every surface. Read via emulatesFingerprint.
+	 */
+	fingerprintOff: FpSurface[];
 	applied: boolean;
 	/** @internal called after a response reached this context (fetch, XHR): caches that depend on the jar drop */
 	readonly responseListeners = new Set<() => void>();
@@ -569,7 +574,7 @@ export default class Client {
 		coreModuleAt(() => coreWasm(this.url, this.config));
 		this.blocking = !!init.adblock;
 		this.hostIsolated = !!init.isolated;
-		this.noFingerprint = !!init.noFingerprint;
+		this.fingerprintOff = init.fingerprintOff ?? [];
 		// a stale cached bundle next to a new service worker: say so once,
 		// the page still gets its best effort
 		if (init.build && init.build !== BUILD)
@@ -592,6 +597,15 @@ export default class Client {
 		this.#workerPostMessage = (global.Worker as typeof Worker | undefined)
 			?.prototype.postMessage as PostMessage | undefined;
 	}
+	/**
+	 * Whether this document emulates the given fingerprint surface (true unless
+	 * its host turned the surface off in its shields: config.fingerprintOff). A
+	 * surface's hook calls this once, at apply time, and skips its emulation
+	 * when it is off, so the per-site control costs one array check per module.
+	 */
+	emulatesFingerprint(surface: FpSurface): boolean {
+		return !this.fingerprintOff.includes(surface);
+	}
 	get config(): Config {
 		return {
 			directory: this.directory,
@@ -608,7 +622,9 @@ export default class Client {
 			...(this.assets ? { assets: this.assets } : {}),
 			...(this.blocking ? { adblock: true } : {}),
 			...(this.hostIsolated ? { isolated: true } : {}),
-			...(this.noFingerprint ? { noFingerprint: true } : {}),
+			...(this.fingerprintOff.length
+				? { fingerprintOff: this.fingerprintOff }
+				: {}),
 			...(this.#customNames ? { names: this.names } : {}),
 			...(this.hooks ? { hooks: this.hooks } : {}),
 		};

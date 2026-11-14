@@ -4464,18 +4464,20 @@ export function registerRewrites(
 						)
 					: null;
 				if (listCsp) responseHeaders.append('content-security-policy', listCsp);
-				// the host turned fingerprint protection off in its shields: the
-				// shell tells the inject to leave the emulation out (Config.noFingerprint)
-				const noFingerprint =
-					!!rewriter.shields && !rewriter.shields.fingerprint(url.url.hostname);
+				// the surfaces the host turned off in its shields' fingerprint
+				// controls: the shell tells the inject which emulations to leave
+				// out (Config.fingerprintOff), each read raw for the site
+				const fingerprintOff = rewriter.shields
+					? rewriter.shields.fingerprintOff(url.url.hostname)
+					: [];
 				// under a list's policy the document's realm compiles no codec
 				// module: the policy may refuse it, and would tell the page
 				const shellConfig: Config =
-					listCsp || noFingerprint
+					listCsp || fingerprintOff.length
 						? {
 								...rewriter.config,
 								...(listCsp ? { codecModule: false } : {}),
-								...(noFingerprint ? { noFingerprint: true } : {}),
+								...(fingerprintOff.length ? { fingerprintOff } : {}),
 							}
 						: rewriter.config;
 				const job = prewrite(

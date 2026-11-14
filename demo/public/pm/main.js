@@ -3033,6 +3033,9 @@ const SHIELD_ICONS = {
 		'<path d="M12 3a9 9 0 109 9 4 4 0 01-4-4 3 3 0 01-3-3 .9.9 0 00-1-1z"/><circle cx="9" cy="11" r="1"/><circle cx="13" cy="15" r="1"/><circle cx="15" cy="9" r="1"/>',
 	forget:
 		'<path d="M3 12s3.5-7 9-7 9 7 9 7-3.5 7-9 7a9.8 9.8 0 01-5-1.4"/><path d="M4 4l16 16"/>',
+	back: '<path d="M15 6l-6 6 6 6"/>',
+	memory:
+		'<rect x="4" y="7" width="16" height="10" rx="1.5"/><path d="M8 7V4M12 7V4M16 7V4M8 20v-3M12 20v-3M16 20v-3"/>',
 };
 function shieldIcon(name, cls = 'shieldsIcon') {
 	return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${SHIELD_ICONS[name] || ''}</svg>`;
@@ -3073,6 +3076,54 @@ function setShield(host, patch) {
 	if (activeTab && activeTab.frame) activeTab.frame.reload();
 }
 
+// --- Fingerprinting protections (the "Block fingerprinting" > detail) --------
+// STomp defends fingerprinting by matching native, not by adding noise: every
+// proxied site runs in the one real browser, so its fingerprint inputs already
+// read that browser's own values and look like a real Chrome's. Most surfaces
+// therefore need nothing per site and have nothing to gate (FP_NATIVE). The one
+// place sharing a single renderer would leak a cross-site tell (a frame whose
+// performance.memory equals the page that embeds it) is where STomp instead
+// synthesizes a per-site value, and the one surface a site can turn off here
+// (FP_GATED). Keep this in step with src/blocker/types.ts FP_SURFACES and
+// src/server/shields.ts.
+const FP_GATED = [
+	{
+		id: 'deviceMemory',
+		icon: 'memory',
+		label: 'Device memory',
+		note: 'Reports a per-site performance.memory, so a frame can’t be matched to the page that embeds it by heap size.',
+	},
+];
+// surfaces STomp already serves at the real browser's value (nothing to gate)
+const FP_NATIVE = [
+	'Hardware concurrency',
+	'Screen size',
+	'User agent',
+	'Media devices',
+	'Fonts',
+	'Canvas & WebGL',
+	'Audio',
+	'Languages & timezone',
+];
+
+// whether STomp emulates a gated surface for this state; mirrors the service
+// worker's ShieldsStore.fingerprintSurface (master on, and the surface's own
+// per-site flag not turned off)
+function fpEmulated(state, id) {
+	if (state.blockFingerprinting === false) return false;
+	return state.fingerprint?.[id] !== false;
+}
+
+// the per-site note under the main panel's "Block fingerprinting" row
+function fpSummary(state) {
+	if (state.blockFingerprinting === false)
+		return 'This site reads your browser’s own values.';
+	const off = FP_GATED.filter((s) => !fpEmulated(state, s.id));
+	if (!off.length) return '';
+	if (off.length === 1) return `${off[0].label} reads native for this site.`;
+	return `${off.length} protections off for this site.`;
+}
+
 function buildShieldsPanel(host) {
 	const state = controller.shields.get(host);
 	const count = shieldsCountNow();
@@ -3102,6 +3153,10 @@ function buildShieldsPanel(host) {
 			</div>` +
 			footer;
 	} else {
+		// every row ends with a .shieldsDetail slot so the toggles and dropdowns
+		// share one right edge; the slot holds the > on the rows that have one
+		// (trackers & ads, fingerprinting) and is empty but reserved on the rest
+		const detail = (inner = '') => `<div class="shieldsDetail">${inner}</div>`;
 		const rows = `
 			<div class="shieldsRow">
 				${shieldIcon('ads')}
@@ -3120,7 +3175,9 @@ function buildShieldsPanel(host) {
 						`<span class="count adsCount">${count || ''}</span>`,
 					)}
 				</div>
-				<button class="shieldsMore" id="shAdsMore" aria-label="Trackers and ads details">${shieldIcon('caret', 'shieldsIcon')}</button>
+				${detail(
+					`<button class="shieldsMore" id="shAdsMore" aria-label="Trackers and ads details">${shieldIcon('caret', 'shieldsIcon')}</button>`,
+				)}
 			</div>
 			<div class="shieldsRow">
 				${shieldIcon('https')}
@@ -3131,6 +3188,7 @@ function buildShieldsPanel(host) {
 						{ v: 'off', label: "Don't upgrade HTTP connections" },
 					])}
 				</div>
+				${detail()}
 			</div>
 			<div class="shieldsRow">
 				${shieldIcon('scripts')}
@@ -3138,6 +3196,7 @@ function buildShieldsPanel(host) {
 					<div class="shieldsRowLabel">Block scripts</div>
 				</div>
 				<input type="checkbox" class="shieldsToggle small" id="shScripts" ${state.blockScripts ? 'checked' : ''} aria-label="Block scripts" />
+				${detail()}
 			</div>
 			<div class="shieldsRow">
 				${shieldIcon('fingerprint')}
@@ -3145,10 +3204,10 @@ function buildShieldsPanel(host) {
 					<div class="shieldsRowLabel">Block fingerprinting</div>
 					<div class="shieldsNote" id="shFpNote"></div>
 				</div>
-				<div class="shieldsRowEnd">
-					<input type="checkbox" class="shieldsToggle small" id="shFp" ${state.blockFingerprinting ? 'checked' : ''} aria-label="Block fingerprinting" />
-					<button class="shieldsMore" id="shFpMore" aria-label="Fingerprinting details">${shieldIcon('caret', 'shieldsIcon')}</button>
-				</div>
+				<input type="checkbox" class="shieldsToggle small" id="shFp" ${state.blockFingerprinting ? 'checked' : ''} aria-label="Block fingerprinting" />
+				${detail(
+					`<button class="shieldsMore" id="shFpMore" aria-label="Fingerprinting protections">${shieldIcon('caret', 'shieldsIcon')}</button>`,
+				)}
 			</div>
 			<div class="shieldsRow">
 				${shieldIcon('cookie')}
@@ -3159,6 +3218,7 @@ function buildShieldsPanel(host) {
 						{ v: 'allow', label: 'Allow all cookies' },
 					])}
 				</div>
+				${detail()}
 			</div>
 			<div class="shieldsRow">
 				${shieldIcon('forget')}
@@ -3166,6 +3226,7 @@ function buildShieldsPanel(host) {
 					<div class="shieldsRowLabel">Forget me when I close this site</div>
 				</div>
 				<input type="checkbox" class="shieldsToggle small" id="shForget" ${state.forget ? 'checked' : ''} aria-label="Forget me when I close this site" />
+				${detail()}
 			</div>`;
 
 		shieldsPanel.innerHTML =
@@ -3227,24 +3288,100 @@ function wireShieldsPanel(host) {
 		if (!e.target.closest('.shieldsDrop')) closeAllDrops();
 	};
 
-	// On (the default) STomp presents a consistent native-Chrome fingerprint
-	// for the site; off, the site reads this browser's own values (the inject
-	// leaves the emulation out for it, src/server/shields.ts fingerprint()).
+	// The master "Block fingerprinting": on (the default) STomp emulates every
+	// surface to match a native Chrome; off, the site reads this browser's own
+	// values for all of them (src/server/shields.ts). It is all-on/all-off over
+	// the per-surface set in the > submenu, so turning it on clears any surfaces
+	// a site had turned off individually. The note summarises the per-site state.
 	const fp = q('#shFp');
 	const fpNote = q('#shFpNote');
-	const fpNoteFor = (on) =>
-		on ? '' : 'This site will read your browser’s own values.';
-	if (fpNote)
-		fpNote.textContent = fpNoteFor(
-			controller.shields.get(host).blockFingerprinting !== false,
-		);
+	if (fpNote) fpNote.textContent = fpSummary(controller.shields.get(host));
 	fp?.addEventListener('change', (e) => {
-		setShield(host, { blockFingerprinting: e.target.checked });
-		if (fpNote) fpNote.textContent = fpNoteFor(e.target.checked);
+		const on = e.target.checked;
+		setShield(host, {
+			blockFingerprinting: on,
+			...(on ? { fingerprint: {} } : {}),
+		});
+		if (fpNote) fpNote.textContent = fpSummary(controller.shields.get(host));
 	});
-	q('#shFpMore')?.addEventListener('click', () =>
-		shieldsComingSoon('Fingerprinting'),
-	);
+	q('#shFpMore')?.addEventListener('click', () => buildFpSubmenu(host));
+}
+
+// The "Block fingerprinting" detail submenu: a sub-view inside the panel, after
+// Brave's fingerprinting detail. A back arrow returns to the per-site panel.
+// Honest about STomp's model (it matches a real browser rather than adding
+// noise), so the one surface STomp emulates per site is a live toggle, and the
+// surfaces it already serves at the browser's own value are listed as such,
+// not as toggles that would do nothing.
+function buildFpSubmenu(host) {
+	const state = controller.shields.get(host);
+	const masterOff = state.blockFingerprinting === false;
+	const active = masterOff
+		? 0
+		: FP_GATED.filter((s) => fpEmulated(state, s.id)).length;
+
+	const gatedRows = FP_GATED.map((s) => {
+		const on = fpEmulated(state, s.id);
+		return `
+			<div class="shieldsRow">
+				${shieldIcon(s.icon)}
+				<div class="shieldsRowMain">
+					<div class="shieldsRowLabel">${s.label}</div>
+					<div class="shieldsNote">${s.note}</div>
+				</div>
+				<input type="checkbox" class="shieldsToggle small" id="shFp_${s.id}" data-surface="${s.id}" ${on ? 'checked' : ''} ${masterOff ? 'disabled' : ''} aria-label="${escapeHtml(s.label)}" />
+				<div class="shieldsDetail"></div>
+			</div>`;
+	}).join('');
+
+	const nativeRows = FP_NATIVE.map(
+		(label) => `
+			<div class="shieldsRow shieldsRowNative">
+				<span class="shieldsIcon shieldsDot" aria-hidden="true"></span>
+				<div class="shieldsRowMain">
+					<div class="shieldsRowLabel">${escapeHtml(label)}</div>
+				</div>
+				<span class="shieldsNativeTag">Your browser’s value</span>
+				<div class="shieldsDetail"></div>
+			</div>`,
+	).join('');
+
+	shieldsPanel.innerHTML = `
+		<div class="shieldsSubHead">
+			<button type="button" class="shieldsBack" id="shFpBack" aria-label="Back to Shields">${shieldIcon('back', 'shieldsIcon')}</button>
+			<div class="shieldsSubTitleBlock">
+				<div class="shieldsSubTitle">Fingerprinting protections (${active})</div>
+				<div class="shieldsSubDomain" dir="ltr" title="${escapeHtml(host)}">${escapeHtml(host)}</div>
+			</div>
+		</div>
+		<div class="shieldsSubNote">
+			STomp makes this site read a real browser’s values, so it can’t single you
+			out by them. The control below is the one reading sharing a browser would
+			otherwise leak across sites; the rest already match your browser. A
+			protection applied does not mean this site tried to fingerprint you.
+		</div>
+		${masterOff ? '<div class="shieldsSubNote shieldsSubWarn">Block fingerprinting is off for this site, so every surface reads native. Turn it on to adjust them.</div>' : ''}
+		<div class="shieldsRows">
+			${gatedRows}
+			<div class="shieldsSubSection">Already your browser’s values</div>
+			${nativeRows}
+		</div>`;
+
+	wireFpSubmenu(host);
+}
+
+function wireFpSubmenu(host) {
+	const q = (sel) => shieldsPanel.querySelector(sel);
+	q('#shFpBack')?.addEventListener('click', () => buildShieldsPanel(host));
+	for (const input of shieldsPanel.querySelectorAll('[data-surface]'))
+		input.addEventListener('change', (e) => {
+			const surface = e.target.dataset.surface;
+			const current = controller.shields.get(host).fingerprint || {};
+			setShield(host, {
+				fingerprint: { ...current, [surface]: e.target.checked },
+			});
+			buildFpSubmenu(host); // refresh the applied-count and any dependents
+		});
 }
 
 function closeAllDrops() {

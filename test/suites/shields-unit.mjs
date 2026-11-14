@@ -150,4 +150,54 @@ const GOODIES = {
 	);
 }
 
+// --- per-surface fingerprint controls (the "Block fingerprinting" submenu) --
+// Each surface defaults on; a surface set false is the only one left out, while
+// every other surface stays emulated. The master blockFingerprinting is
+// all-on/all-off over the set. Today the one gated surface is 'deviceMemory'.
+{
+	const shields = new ShieldsStore();
+	shields.set([
+		GOODIES,
+		{
+			host: 'one.test',
+			enabled: true,
+			mode: 'standard',
+			fingerprint: { deviceMemory: false },
+		},
+		{
+			host: 'master.test',
+			enabled: true,
+			mode: 'standard',
+			blockFingerprinting: false,
+		},
+	]);
+	ok(
+		'a surface off: only that surface is left out, others stay emulated',
+		shields.fingerprintOff('one.test').join(',') === 'deviceMemory' &&
+			shields.fingerprintSurface('one.test', 'deviceMemory') === false,
+		`${shields.fingerprintOff('one.test')} / ${shields.fingerprintSurface('one.test', 'deviceMemory')}`,
+	);
+	ok(
+		'a no-entry host emulates every surface (nothing off)',
+		shields.fingerprintOff('other.test').length === 0 &&
+			shields.fingerprintSurface('other.test', 'deviceMemory') === true,
+		`${shields.fingerprintOff('other.test')}`,
+	);
+	ok(
+		'the master off lists every surface (all-off over the set)',
+		shields.fingerprintSurface('master.test', 'deviceMemory') === false &&
+			shields.fingerprintOff('master.test').includes('deviceMemory'),
+		`${shields.fingerprintOff('master.test')}`,
+	);
+	ok(
+		'shields down lists every surface too',
+		(() => {
+			const s = new ShieldsStore();
+			s.set([{ host: 'd.test', enabled: false, mode: 'standard' }]);
+			return s.fingerprintSurface('d.test', 'deviceMemory') === false;
+		})(),
+		'down',
+	);
+}
+
 done();
