@@ -1,0 +1,23 @@
+# Functions wasm-snip replaces with `unreachable` before wasm-opt, so the
+# optimizer's dead-code pass can drop them and everything only they reach.
+# One regex per line (matched against the name section); `#` lines and blank
+# lines are ignored. These are code paths a JS-only rewrite never enters:
+#
+# - jsx: oxc's JSX lexer, parser and the AST walks/visits of JSX nodes. The
+#   rewriter always parses with SourceType variant Standard (never Jsx,
+#   rust/rwjs/src/rewrite.rs), so no JSX token is ever lexed and no JSX node
+#   is ever built.
+# - walk_ts: oxc_ast_visit's generated walks of TypeScript AST nodes. The
+#   rewrite only ever walks an error-free JavaScript parse (rewrite.rs bails
+#   on diagnostics before the walk), and such a tree holds no TS node, so the
+#   `if let Some(ts_field)` arms that reach these walks are never taken.
+#
+# NOT snipped: oxc's TS *parser* (parse_ts_*) and the TS AST builder. `as`
+# and `satisfies` are lexed unconditionally, so `x as y` reaches parse_ts_type
+# even in JS (it parses, then errors, and the script is declined to the JS
+# rewriter). Snipping those would turn that decline into a trap and, worse,
+# any script the optimizer could not prove never reaches them into a trap
+# handled as a decline (thread.ts withInstance) -> a JS-rewriter fallback
+# whose bytes differ from the wasm output. Only provably-dead code is listed.
+jsx
+walk_ts

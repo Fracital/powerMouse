@@ -1,13 +1,14 @@
 crate rust/core-module
-sources 14532f1ebe31
-toolchain stomp-rust-toolchain:eda716cbc2c6
+sources ca1ccef38e87
+toolchain stomp-rust-toolchain:71dc901650dc
 RUST_IMAGE=rustlang/rust@sha256:dde6da7d1b5fa1ba0ebd311488ddc916f36311a2ce0038420ceba5ce76fdcc23
 RUST_NIGHTLY=2026-11-09
 BINARYEN=version_124
 BINARYEN_SHA256=0290c3779fedf592b8da0ded3032ff55c41a2b7bfa2d6bf7b7bac6f0e6e28963
 WASM_BINDGEN=0.2.100
 WASM_BINDGEN_SHA256=63d6a38deb65bd7023c02bdf382ab66b0d2c0241c8582fd3413b5a808b8aeb5b
+WASM_SNIP=0.4.0
 PSL_COMMIT=52b71b3c4576ff77450cc7ebcfc7f34a916af3f9
 PSL_DATE=2026-10-17
 PSL_SHA256=3d92f70d719426d7e82dc4aee181058d0ad570d2559f0ea3ece8e731a25e5f33
-built 2026-11-11
+built 2026-11-14

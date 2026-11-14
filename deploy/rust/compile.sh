@@ -53,6 +53,12 @@ flags='-Zlocation-detail=none -Zfmt-debug=none'
 if [[ -f "$crate/rustflags" ]]; then
 	flags="$flags $(tr '\n' ' ' < "$crate/rustflags")"
 fi
+# wasm-snip (below) matches function names, so a crate that lists any keep
+# the name section through the cargo build; wasm-opt --strip-debug takes it
+# out of the final artifact all the same
+if [[ -f "$crate/snip" ]]; then
+	flags="$flags -Cstrip=none"
+fi
 
 export RUSTFLAGS=$flags
 # shellcheck disable=SC2086
@@ -73,7 +79,24 @@ else
 	cp "$built" "/work/out/$name.unopt.wasm"
 fi
 
-wasm-opt -Oz --strip-debug --strip-producers --strip-target-features \
+# a crate that lists never-taken functions in rust/<crate>/snip: force them
+# to `unreachable` so wasm-opt's dead-code pass can drop them and everything
+# only they reach (the core module lists oxc's JSX and TypeScript-node paths,
+# which a JS-only rewrite never enters; rust/core-module/snip). One regex per
+# line, `#` and blank lines ignored.
+if [[ -f "$crate/snip" ]]; then
+	patterns=()
+	while IFS= read -r line; do
+		case "$line" in '' | '#'*) continue ;; esac
+		patterns+=(-p "$line")
+	done < "$crate/snip"
+	wasm-snip "${patterns[@]}" --skip-producers-section \
+		-o "/work/out/$name.snipped.wasm" "/work/out/$name.unopt.wasm"
+	mv "/work/out/$name.snipped.wasm" "/work/out/$name.unopt.wasm"
+fi
+
+# --converge: rerun the passes until the bytes stop shrinking
+wasm-opt -Oz --converge --strip-debug --strip-producers --strip-target-features \
 	--enable-bulk-memory --enable-nontrapping-float-to-int \
 	--enable-sign-ext --enable-mutable-globals \
 	-o "/work/out/$name.wasm" "/work/out/$name.unopt.wasm"

@@ -40,6 +40,7 @@ if ! "$engine" image inspect "$tag" >/dev/null 2>&1; then
 		--build-arg "BINARYEN_SHA256=$BINARYEN_SHA256" \
 		--build-arg "WASM_BINDGEN=$WASM_BINDGEN" \
 		--build-arg "WASM_BINDGEN_SHA256=$WASM_BINDGEN_SHA256" \
+		--build-arg "WASM_SNIP=$WASM_SNIP" \
 		-t "$tag" "$here"
 fi
 

@@ -87,6 +87,9 @@ its `lib.rs` documents; it depends on nothing.
   checked before they are unpacked. (`deploy/epoxy`'s image floats its base
   tag and does not check its downloads; this one does both, because the
   artifact's bytes are committed and must be reproducible.)
+- the `wasm-snip` CLI by version (`WASM_SNIP`), built from crates.io source
+  with its own committed lockfile (`--locked`); it ships no binary release to
+  checksum.
 - `rust/Cargo.lock`, committed, and `--locked` builds.
 - a crate built with a patch of STomp's (`rust/patches/crates`: name,
   version, sha256 of the `.crate` file crates.io serves, which is the
@@ -105,23 +108,34 @@ the standard library rebuilt (`-Z build-std=std,panic_abort`, optimized for
 size) under `-Zlocation-detail=none -Zfmt-debug=none`, so no panic location,
 source path or Debug formatting reaches the bytes; the workspace profile is
 `opt-level = "z"`, `lto`, one codegen unit, `panic = "abort"`, stripped.
-Then `wasm-opt -Oz` with the debug, producers and target-features sections
-stripped.
+Then `wasm-opt -Oz --converge` (the passes rerun until the bytes stop
+shrinking) with the debug, producers and target-features sections stripped.
 
-Two per-crate markers, each a file in `rust/<crate>/`:
+Four per-crate markers, each a file in `rust/<crate>/`:
 
 - `wasm-target`, holding a target triple, builds for that target instead of
   `wasm32-unknown-unknown`. The image has `wasm32-wasip1` too, for a crate
   that needs a clock and randomness from the host (the WebRTC stack): its
   worker answers the few WASI imports with a small shim, and its `abi.json`
   lists them.
+- `rustflags`, extra flags for this crate's `cargo build` (the WebRTC stack
+  and the core module take `-Zunstable-options -Cpanic=immediate-abort`, so a
+  panic is a bare trap and its unwinding and message machinery leaves the
+  bytes).
+- `snip`, regexes (one per line, `#` and blank lines ignored) of functions
+  `wasm-snip` replaces with `unreachable` before `wasm-opt`, so the
+  optimizer's dead-code pass drops them and all they reach. The core module
+  lists oxc's JSX and TypeScript-node paths, which a JS-only rewrite never
+  enters (see `rust/core-module/snip`). A crate with this marker builds
+  `-Cstrip=none` so the name section survives to `wasm-snip`; `wasm-opt
+  --strip-debug` still removes it from the shipped artifact.
 - `bindgen`, empty, runs `wasm-bindgen --target web` on the output and ships
   the glue beside the module with every `import.meta.url` in it replaced,
   because the glue must never name its own file.
 
-The rewriter uses neither: its boundary is byte buffers under single-letter
-names (`rust/rwjs/src/lib.rs`, `src/wasm/module.ts`), which a host can
-rename and substitute at the same length.
+The rewriter uses no `bindgen`: its boundary is byte buffers under
+single-letter names (`rust/rwjs/src/lib.rs`, `src/wasm/module.ts`), which a
+host can rename and substitute at the same length.
 
 ## What an artifact may look like
 

@@ -32,5 +32,11 @@ RUN curl -fsSL "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$
  && install -m755 "/tmp/wasm-bindgen-${WASM_BINDGEN}-x86_64-unknown-linux-musl/wasm-bindgen" /usr/local/bin/ \
  && rm -rf /tmp/wbg* && wasm-bindgen -V
 
+# wasm-snip, for a crate that lists never-taken functions in rust/<crate>/snip
+# (compile.sh runs it before wasm-opt). No binary release to checksum: built
+# from crates.io source at the pinned version with its own committed lockfile.
+ARG WASM_SNIP
+RUN cargo install wasm-snip --version "${WASM_SNIP}" --locked && wasm-snip --version
+
 # the crate build runs here; build.sh copies the workspace in (compile.sh too)
 WORKDIR /work
