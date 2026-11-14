@@ -29,6 +29,7 @@ import {
 	type HookErrorInfo,
 	type InitHooks,
 } from '../hooks';
+import { libraryFile } from '../routeURL';
 import { isUrlLike, urlLike } from '../StompURL';
 import { constructTransport, resolveHttp3 } from '../transport/construct';
 import type { HostReload, RequestRule } from '../transport/messages';
@@ -1426,11 +1427,43 @@ export class StompController extends EventTarget {
 	 */
 	async #rewriterReady(): Promise<void> {
 		const compiled = (await this.#compiled) ?? {};
-		if (compiled.core) return;
-		const url = new URL(assetName(this.config.assets, 'core'), this.directory);
-		throw new Error(
-			`Stomp: the host does not serve the asset 'core' (${url.href}). The rewriter is the wasm core module; serve dist/${DEFAULT_ASSETS.core} beside the other bundles, or name it in init.assets.core.`,
-		);
+		if (!compiled.core) {
+			const url = new URL(
+				assetName(this.config.assets, 'core'),
+				this.directory,
+			);
+			throw new Error(
+				`Stomp: the host does not serve the asset 'core' (${url.href}). The rewriter is the wasm core module; serve dist/${DEFAULT_ASSETS.core} beside the other bundles, or name it in init.assets.core.`,
+			);
+		}
+		await this.#fetchLibrary();
+	}
+	/**
+	 * Fetch the light rewriter library asset (`init.assets.rewriterLib`) by the
+	 * URL a page's shell loads it with (src/routeURL.ts), which leaves it in
+	 * the HTTP cache where a proxied top's shell and a sandboxed frame's
+	 * synchronous request find it. The library is the wasm glue the inject
+	 * bundles do not carry; a top cannot rewrite without it. Throws, with the
+	 * asset's key, when the host does not serve it.
+	 */
+	async #fetchLibrary(): Promise<void> {
+		const url = new URL(libraryFile(this.config.assets), this.directory);
+		const missing = (why: string) =>
+			new Error(
+				`Stomp: the host does not serve the asset 'rewriterLib' (${why} for ${url.href}). The inject bundles load the light rewriter library from that file; serve dist/${DEFAULT_ASSETS.rewriterLib} beside the other bundles, or name it in init.assets.rewriterLib.`,
+			);
+		let response: Response;
+		try {
+			response = await fetch(url);
+		} catch (error) {
+			throw missing(`${error}`);
+		}
+		if (!response.ok) throw missing(`HTTP ${response.status}`);
+		// a host that answers every path with its own page
+		const type = response.headers.get('content-type') ?? '';
+		if (/^text\/html\b/i.test(type)) throw missing(`a ${type} answer`);
+		// the cache keeps a response that was read to its end
+		await response.arrayBuffer();
 	}
 	/**
 	 * The wasm artifacts, loaded once and compiled once, here. The rewrite

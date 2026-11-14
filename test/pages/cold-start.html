@@ -1,0 +1,50 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>cold start</title>
+	</head>
+	<body>
+		<script>
+			// The page's LITERAL FIRST script does runtime rewrites, in the window
+			// before the controller's compiled wasm module has reached this realm
+			// (the suite cold-start): a direct eval, an indirect eval, a
+			// new Function, and a script element inserted with inline text. Each
+			// reads location.href, which only rewritten code sees as the page's own
+			// URL; code that ran raw would see the proxy's routed URL instead. An
+			// inline style's url() is rewritten the same way, read back as the page
+			// wrote it. Stored for the suite to compare against the native page.
+			window.__cold = {};
+			(function () {
+				const c = window.__cold;
+				const run = (name, fn) => {
+					try {
+						c[name] = fn();
+					} catch (error) {
+						c[name] = `threw: ${error}`;
+					}
+				};
+				run('directEval', () => eval('location.href'));
+				run('indirectEval', () => (0, eval)('location.href'));
+				run('newFunction', () => new Function('return location.href')());
+				run('inlineScript', () => {
+					const script = document.createElement('script');
+					script.textContent =
+						'window.__cold.inlineScriptHref = location.href;';
+					document.documentElement.appendChild(script);
+					script.remove();
+					return c.inlineScriptHref;
+				});
+				run('inlineStyle', () => {
+					const el = document.createElement('div');
+					el.style.backgroundImage = "url('bg.png')";
+					document.body.appendChild(el);
+					const read = el.style.backgroundImage;
+					el.remove();
+					return read;
+				});
+				c.ready = true;
+			})();
+		</script>
+	</body>
+</html>
