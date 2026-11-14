@@ -2542,7 +2542,13 @@ input:focus-visible {
    where a native <select>'s open list is neither */
 .shieldsDrop {
 	position: relative;
-	margin-top: 5px;
+	margin-top: 0;
+}
+.shieldsDropBtn .count {
+	flex: none;
+	color: #8f8fa6;
+	font-weight: 600;
+	font-size: 12px;
 }
 .shieldsDropBtn {
 	width: 100%;

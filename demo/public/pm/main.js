@@ -3044,7 +3044,7 @@ const escapeHtml = (text) =>
 
 // a custom dropdown (a native <select> cannot be styled like Brave's and its
 // open list is not captured in a screenshot): a button and a list of options
-function drop(id, current, opts) {
+function drop(id, current, opts, extra = '') {
 	const selected = opts.find((o) => o.v === current) || opts[0];
 	const items = opts
 		.map(
@@ -3055,6 +3055,7 @@ function drop(id, current, opts) {
 	return `<div class="shieldsDrop" id="${id}" data-value="${current}">
 		<button type="button" class="shieldsDropBtn" aria-haspopup="listbox" aria-expanded="false">
 			<span class="shieldsDropLabel">${selected.label}</span>
+			${extra}
 			${shieldIcon('chevron', 'shieldsIcon chev')}
 		</button>
 		<ul class="shieldsDropList" role="listbox" hidden>${items}</ul>
@@ -3099,19 +3100,25 @@ function buildShieldsPanel(host) {
 			<div class="shieldsRow">
 				${shieldIcon('ads')}
 				<div class="shieldsRowMain">
-					<div class="shieldsRowLabel">Block trackers &amp; ads <span class="count adsCount">${count || ''}</span></div>
-					${drop('shAds', state.mode, [
-						{ v: 'aggressive', label: 'Aggressively block trackers &amp; ads' },
-						{ v: 'standard', label: 'Block trackers &amp; ads' },
-						{ v: 'allow', label: 'Allow all trackers &amp; ads' },
-					])}
+					${drop(
+						'shAds',
+						state.mode,
+						[
+							{
+								v: 'aggressive',
+								label: 'Aggressively block trackers &amp; ads',
+							},
+							{ v: 'standard', label: 'Block trackers &amp; ads' },
+							{ v: 'allow', label: 'Allow all trackers &amp; ads' },
+						],
+						`<span class="count adsCount">${count || ''}</span>`,
+					)}
 				</div>
 				<button class="shieldsMore" id="shAdsMore" aria-label="Trackers and ads details">${shieldIcon('caret', 'shieldsIcon')}</button>
 			</div>
 			<div class="shieldsRow">
 				${shieldIcon('https')}
 				<div class="shieldsRowMain">
-					<div class="shieldsRowLabel">Upgrade connections to HTTPS</div>
 					${drop('shHttps', state.httpsUpgrade, [
 						{ v: 'strict', label: 'Only connect with HTTPS' },
 						{ v: 'upgrade', label: 'Upgrade connections to HTTPS' },
@@ -3140,7 +3147,6 @@ function buildShieldsPanel(host) {
 			<div class="shieldsRow">
 				${shieldIcon('cookie')}
 				<div class="shieldsRowMain">
-					<div class="shieldsRowLabel">Block third-party cookies</div>
 					${drop('shCookies', state.cookies, [
 						{ v: 'all', label: 'Block all cookies' },
 						{ v: 'third-party', label: 'Block third-party cookies' },
