@@ -13,6 +13,23 @@ export const BUILD: string =
 	'dev';
 
 /**
+ * The identity of the rewriter this build ships: a digest of the bytes that
+ * decide what a rewrite produces (the wasm core, the codec module, and the
+ * light rewriter library), baked in by esbuild's define (build.js) under a
+ * production build. It changes when the rewriter changes and stays the same
+ * across a deploy that only touched something else (the demo, the infra),
+ * unlike BUILD, which is the commit and changes every deploy. The rewrite
+ * cache is made and kept under it (src/server/rewriteCache.ts): a revisit
+ * after a rewriter-unchanged deploy comes back warm, and output from a build
+ * whose rewriter differs is never served. Empty under a dev build, which has
+ * no generation baked in (its rewriter can change without the commit
+ * changing): the cache then falls back to BUILD and is dropped on every
+ * activation, as it was before.
+ */
+export const REWRITE_GENERATION: string =
+	(process.env.STOMP_REWRITE_GENERATION as string | undefined) || '';
+
+/**
  * What the light rewriter library asset is asked for by, after a `?`: the
  * hash of the file this build made (build.js), so the URL of another build's
  * is another URL and a host may let browsers keep the file for good. A

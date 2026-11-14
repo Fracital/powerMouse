@@ -2,11 +2,15 @@
 // under a digest of everything the output depends on: the response body's
 // bytes (a hit decodes nothing), the URL (the output names it), the script
 // type, the config the page gets (helper names, flags) with the codec's
-// key, the build, and the partition it was made for (the top-level site,
-// the site of the frame or worker that asked, and whether the request had
-// credentials, as the HTTP cache is kept): what one site's page loaded is
-// never another's, not even as the time a rewrite did not take. A new
-// worker clears it on activation besides. A document's inline script is
+// key, the rewriter's generation (src/version.ts REWRITE_GENERATION, the
+// identity of the rewriter that made it), and the partition it was made for
+// (the top-level site, the site of the frame or worker that asked, and
+// whether the request had credentials, as the HTTP cache is kept): what one
+// site's page loaded is never another's, not even as the time a rewrite did
+// not take. A worker of another generation drops the whole store when it
+// activates (adopt), and keeps it when the generation is the same (a deploy
+// that did not touch the rewriter): a revisit after it comes back warm,
+// where before every activation dropped it. A document's inline script is
 // kept under its digest. A script the page loads is kept under the routed
 // URL it was asked for, as the response it was given, with its digest
 // (matchServed): a hit is answered with the store's own Response, which is
@@ -30,6 +34,14 @@ const ENTRY_LIMIT = 48 * 1024 * 1024;
 const TOTAL_LIMIT = 512 * 1024 * 1024;
 /** the header an entry's size is kept in */
 const SIZE = 'x-stomp-size';
+/**
+ * The store's own entry (not a rewrite) that records the generation its
+ * entries were made under: adopt reads it to decide whether a new worker
+ * keeps the store or drops it. Its URL is not a digest (64 hex) and not a
+ * routed URL, so no rewrite's entry and no served script is ever under it,
+ * and eviction leaves it be.
+ */
+const GENERATION = '__generation';
 /** the header a served entry (matchServed) keeps the key of its output in */
 const DIGEST = 'x-stomp-digest';
 /** the header a served entry keeps a digest of the partition it was made for in */
@@ -206,9 +218,10 @@ export class RewriteCache {
 			sizes.delete(request.url);
 			sizes.set(request.url, size);
 			this.#total += size;
+			const marker = this.#request(GENERATION).url;
 			for (const [url, kept] of sizes) {
 				if (sizes.size <= LIMIT && this.#total <= TOTAL_LIMIT) break;
-				if (url === request.url) continue;
+				if (url === request.url || url === marker) continue;
 				sizes.delete(url);
 				this.#total -= kept;
 				await store.delete(url);
@@ -227,6 +240,37 @@ export class RewriteCache {
 			await store.delete(url);
 		} catch (error) {
 			// an unavailable store: nothing to delete
+		}
+	}
+	/**
+	 * Keep the store only when it was made under `generation` (the rewriter's
+	 * identity: src/version.ts REWRITE_GENERATION), called by a newly
+	 * activated worker. A worker of the same generation (a deploy that did not
+	 * touch the rewriter) keeps every entry, so its revisits come back warm; a
+	 * worker of another generation drops the whole store, as all of it is the
+	 * last rewriter's output and none could be served under the new key
+	 * anyway. The generation is recorded in an entry of the store's own
+	 * (GENERATION), which eviction leaves be, so it outlasts the worker that
+	 * wrote it. Returns whether the store was kept.
+	 */
+	async adopt(generation: string): Promise<boolean> {
+		try {
+			const marker = this.#request(GENERATION);
+			const held = await (await this.#open()).match(marker);
+			if (held && (await held.text()) === generation) return true;
+			await this.clear();
+			await (
+				await this.#open()
+			).put(
+				marker,
+				new Response(generation, {
+					headers: { 'content-type': 'text/plain', [SIZE]: '0' },
+				}),
+			);
+			return false;
+		} catch (error) {
+			// an unavailable store: nothing kept, the next rewrite makes it again
+			return false;
 		}
 	}
 	async clear(): Promise<void> {

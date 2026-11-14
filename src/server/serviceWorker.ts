@@ -52,7 +52,7 @@ import {
 } from '../transport/messages';
 import RemoteTransport from '../transport/RemoteTransport';
 import { RpcHelper } from '../transport/rpc';
-import { BUILD } from '../version';
+import { BUILD, REWRITE_GENERATION } from '../version';
 import {
 	isLinkRoute,
 	makesSelfLink,
@@ -1566,12 +1566,22 @@ self.addEventListener('install', () => {
 	self.skipWaiting();
 });
 
-// a new worker is new bytes, and may be a new rewriter: what the last one
-// made is dropped (the key names the build, but a build made from an
-// uncommitted tree has the same name as its commit's)
+// a new worker is new bytes, but not always a new rewriter: it keeps the
+// rewrite cache when its generation is the same (a deploy that touched the
+// demo or the infra, not the rewriter), so a revisit after it comes back
+// warm, and drops it when the generation differs, so the last rewriter's
+// output is never served (adopt). A dev build bakes in no generation (its
+// rewriter can change without the commit changing, so the generation could
+// not be trusted): the cache falls back to the build in its key and is
+// dropped on every activation, as it was before.
 self.addEventListener('activate', (event: ExtendableEvent) => {
 	event.waitUntil(
-		Promise.all([self.clients.claim(), new RewriteCache().clear()]),
+		Promise.all([
+			self.clients.claim(),
+			REWRITE_GENERATION
+				? new RewriteCache().adopt(REWRITE_GENERATION)
+				: new RewriteCache().clear(),
+		]),
 	);
 });
 

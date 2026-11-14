@@ -49,6 +49,11 @@ const common = {
 		// what the rewriter library asset is asked for by: known once that
 		// file is built (see `bundles` below)
 		'process.env.STOMP_LIBRARY': '""',
+		// the rewriter's generation (src/version.ts REWRITE_GENERATION): a
+		// digest of the bytes a rewrite's output depends on, known once the
+		// wasm artifacts are copied and the library is built (see `bundles`
+		// and the production branch below). Empty under a dev build.
+		'process.env.STOMP_REWRITE_GENERATION': '""',
 		// the codec module (rust/codec), carried in every bundle that seals a
 		// routed URL and compiled where it runs (src/wasm/codec.ts): 1.4 KB
 		// no realm can wait for a fetch of
@@ -295,13 +300,14 @@ const builds = [
  * good. The watch build has no bytes to hash before it starts: its files
  * are asked for by the time it started, and the dev server caches nothing.
  */
-const bundles = (library) =>
+const bundles = (library, generation = '') =>
 	builds.map((options) => ({
 		...common,
 		...options,
 		define: {
 			...common.define,
 			'process.env.STOMP_LIBRARY': JSON.stringify(library),
+			'process.env.STOMP_REWRITE_GENERATION': JSON.stringify(generation),
 		},
 		plugins: [noSourceMaps, ...(options.plugins ?? [])],
 	}));
@@ -393,5 +399,22 @@ if (dev) {
 		.update(await readFile('dist/rewriterLib.js'))
 		.digest('hex')
 		.slice(0, 16);
-	await Promise.all(bundles(library).map((options) => build(options)));
+	// the rewriter's generation (src/version.ts REWRITE_GENERATION): everything
+	// a rewrite's output depends on that is not already in the cache key per
+	// entry (the URL, the script type, the config, the codec key, the
+	// partition). That is the rewriter itself: the wasm core, the codec module
+	// whose sealing the output carries, and the light rewriter library. A
+	// deploy that changes none of these keeps the same generation, so a
+	// revisit after it is answered from the rewrite cache; one that changes any
+	// of them gets a new generation, and the last build's output is never
+	// served under it.
+	const generation = createHash('sha256')
+		.update(await readFile('assets/core.wasm'))
+		.update(await readFile('assets/codec.wasm'))
+		.update(await readFile('dist/rewriterLib.js'))
+		.digest('hex')
+		.slice(0, 16);
+	await Promise.all(
+		bundles(library, generation).map((options) => build(options)),
+	);
 }

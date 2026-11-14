@@ -116,7 +116,7 @@ import {
 	XHR_MARKER,
 } from '../transport/messages';
 import { fragmentOf, queryOf, withQuery } from '../urlShape';
-import { BUILD } from '../version';
+import { BUILD, REWRITE_GENERATION } from '../version';
 import { contextText, isLinkRoute, LINK_SEGMENT, linkRoute } from '../visited';
 import { scanMarkup, scannerSettled } from '../wasm/scanner';
 import {
@@ -224,6 +224,14 @@ import { serviceWorkers } from './serviceWorkers';
 import type { ShieldsStore } from './shields';
 import { boundClient } from './srcdocVouches';
 import { rememberVisitedHop, takeVisitedHop } from './visitedHops';
+
+// What the rewrite cache keys its entries under for this build's rewriter: the
+// generation (the rewriter's identity, stable across a deploy that did not
+// touch it) when one is baked in, else the build (a dev build has no
+// generation, and drops the cache on every activation anyway). A new rewriter
+// is a new key, so its output never matches the last one's. Kept the same for
+// the inline and the loaded-script paths.
+const CACHE_GENERATION = REWRITE_GENERATION || BUILD;
 
 export const statusEmpty = [101, 204, 205, 304];
 
@@ -3985,7 +3993,7 @@ export function registerRewrites(
 					const key = rewrites
 						? await rewrites.key(
 								[
-									BUILD,
+									CACHE_GENERATION,
 									url.toString(),
 									type,
 									'inline',
@@ -4071,7 +4079,7 @@ export function registerRewrites(
 				const bytes = new Uint8Array(await response.arrayBuffer());
 				const key = await rewrites.key(
 					[
-						BUILD,
+						CACHE_GENERATION,
 						url.toString(),
 						type,
 						cacheConfig(rewriter.config, type, (name) =>
