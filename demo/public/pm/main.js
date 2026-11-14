@@ -1026,7 +1026,30 @@ function createLabel(tab) {
 	status.setAttribute('aria-hidden', 'true');
 	status.textContent = chromeStatus.textContent;
 	status.classList.toggle('error', chromeStatus.classList.contains('error'));
-	end.append(status, star);
+	// a non-interactive copy of the live shields button so the card's chip
+	// sits where the live one does (the live omniEnd is status, shields, star);
+	// it mirrors the live button's shown state, saturation and badge
+	const liveShields = $('toolShields');
+	const liveBadge = $('shieldsBadge');
+	const shields = document.createElement('button');
+	shields.type = 'button';
+	shields.className = 'shieldsbtn';
+	shields.tabIndex = -1;
+	shields.setAttribute('aria-hidden', 'true');
+	shields.hidden = liveShields.hidden;
+	shields.classList.toggle('up', liveShields.classList.contains('up'));
+	const shieldsImg = document.createElement('img');
+	shieldsImg.src = '/pm/logo.png';
+	shieldsImg.width = 24;
+	shieldsImg.height = 24;
+	shieldsImg.alt = '';
+	shieldsImg.draggable = false;
+	const shieldsBadgeCopy = document.createElement('span');
+	shieldsBadgeCopy.className = 'shieldsBadge';
+	shieldsBadgeCopy.hidden = liveBadge.hidden;
+	shieldsBadgeCopy.textContent = liveBadge.textContent;
+	shields.append(shieldsImg, shieldsBadgeCopy);
+	end.append(status, shields, star);
 	box.append(url, end);
 	chrome.append(box);
 

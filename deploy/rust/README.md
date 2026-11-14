@@ -128,7 +128,7 @@ Four per-crate markers, each a file in `rust/<crate>/`:
   lists oxc's JSX and TypeScript-node paths, which a JS-only rewrite never
   enters (see `rust/core-module/snip`). A crate with this marker builds
   `-Cstrip=none` so the name section survives to `wasm-snip`; `wasm-opt
-  --strip-debug` still removes it from the shipped artifact.
+--strip-debug` still removes it from the shipped artifact.
 - `bindgen`, empty, runs `wasm-bindgen --target web` on the output and ships
   the glue beside the module with every `import.meta.url` in it replaced,
   because the glue must never name its own file.

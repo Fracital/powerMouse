@@ -20,7 +20,9 @@ import { done, FIXTURE, launch, ok, openDemo, PROXY } from '../lib.mjs';
 
 // the raw gzip file the fixture serves (its content-encoding: gzip sidecar makes
 // a Range of it a fragment of the compressed stream, as a CDN serves a woff2)
-const gz = readFileSync(fileURLToPath(new URL('../pages/gz-font.woff2', import.meta.url)));
+const gz = readFileSync(
+	fileURLToPath(new URL('../pages/gz-font.woff2', import.meta.url)),
+);
 const sha = (buf) => createHash('sha256').update(buf).digest('hex');
 const RANGES = [
 	[0, 65535], // from the start, over one 64 KiB packet
@@ -72,7 +74,9 @@ const results = await page.evaluate(
 						chunks.push(value);
 					}
 				} catch (error) {
-					got.readError = String(error && error.message ? error.message : error);
+					got.readError = String(
+						error && error.message ? error.message : error,
+					);
 				}
 				got.length = total;
 				const all = new Uint8Array(total);
