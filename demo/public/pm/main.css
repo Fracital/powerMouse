@@ -2462,7 +2462,7 @@ input:focus-visible {
 	padding: 6px 2px;
 	background: none;
 	border: none;
-	color: #c9c9d8;
+	color: #6c8cff;
 	font-family: inherit;
 	font-size: 12px;
 	font-weight: 600;
@@ -2672,7 +2672,11 @@ input:focus-visible {
 }
 
 .shieldsHint {
-	margin-top: 12px;
+	margin: 14px -16px -14px;
+	padding: 12px 18px 14px;
+	background: #16161f;
+	border-top: 1px solid rgba(255, 255, 255, 0.06);
+	border-radius: 0 0 12px 12px;
 	text-align: center;
 	color: #7d7d95;
 	font-size: 11px;
