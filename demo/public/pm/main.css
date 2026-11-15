@@ -2517,7 +2517,7 @@ input:focus-visible {
 	justify-content: flex-start;
 	gap: 12px;
 	width: 100%;
-	padding: 10px 2px;
+	padding: 10px 16px;
 	background: none;
 	border: none;
 	color: var(--sh-text);
@@ -2924,7 +2924,7 @@ input:focus-visible {
 	top: 50%;
 	left: 50%;
 	transform: translate(-50%, -50%);
-	width: min(720px, calc(100vw - 32px));
+	width: min(460px, calc(100vw - 32px));
 	max-height: min(760px, calc(100vh - 56px));
 	display: flex;
 	flex-direction: column;
