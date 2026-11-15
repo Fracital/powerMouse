@@ -4239,7 +4239,7 @@ function shieldsComingSoon(title) {
 
 function positionShields() {
 	const rect = shieldsButton.getBoundingClientRect();
-	shieldsPanel.style.top = `${Math.round(rect.bottom + 8)}px`;
+	shieldsPanel.style.top = `${Math.round(rect.bottom + 4)}px`;
 	shieldsPanel.style.left = 'auto';
 	shieldsPanel.style.right = `${Math.max(8, Math.round(window.innerWidth - rect.right))}px`;
 }

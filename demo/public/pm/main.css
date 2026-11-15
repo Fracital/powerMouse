@@ -2361,9 +2361,20 @@ input:focus-visible {
 	box-shadow:
 		0 12px 40px rgba(0, 0, 0, 0.55),
 		0 0 0 1px rgba(255, 255, 255, 0.06);
+	opacity: 1;
+	transform: none;
+	transition:
+		opacity 0.15s ease,
+		transform 0.15s ease,
+		visibility 0.15s;
 }
+/* Fade the panel both in and out: opacity + visibility rather than display:none,
+   so closing animates too, not just opening. */
 .shields.hidden {
-	display: none;
+	opacity: 0;
+	transform: translateY(6px) scale(0.98);
+	visibility: hidden;
+	pointer-events: none;
 }
 .shields * {
 	box-sizing: border-box;
@@ -2526,7 +2537,7 @@ input:focus-visible {
 	justify-content: flex-start;
 	gap: 12px;
 	width: 100%;
-	padding: 10px 16px;
+	padding: 14px 16px;
 	background: none;
 	border: none;
 	color: var(--sh-text);
@@ -2565,24 +2576,11 @@ input:focus-visible {
 .shieldsAdvanced.closed .chev {
 	transform: rotate(0);
 }
-/* expand/collapse the advanced rows smoothly rather than snapping display:none.
-   max-height is a generous ceiling the row list never reaches; the padding
-   collapses with it so no sliver is left when closed. */
-.shieldsAdvanced .shieldsRows {
-	overflow: hidden;
-	max-height: 600px;
-	opacity: 1;
-	transition:
-		max-height 0.2s ease,
-		opacity 0.2s ease,
-		padding-top 0.2s ease,
-		padding-bottom 0.2s ease;
-}
-.shieldsAdvanced.closed .shieldsRows {
-	max-height: 0;
-	padding-top: 0;
-	padding-bottom: 0;
-	opacity: 0;
+/* Advanced rows show/hide instantly — no expand/collapse slide animation. The
+   filter-lists / global-settings footer hides with them when collapsed. */
+.shieldsAdvanced.closed .shieldsRows,
+.shieldsAdvanced.closed ~ .shieldsFooter {
+	display: none;
 }
 .shieldsIcon {
 	flex: none;
@@ -3486,19 +3484,8 @@ input:focus-visible {
 /* The panel popping in: a subtle fade with a slight rise + scale, like the Leo
    panel settling in. Runs on open because .hidden toggles display, and a
    display change restarts the animation. */
-@keyframes shieldsPanelIn {
-	from {
-		opacity: 0;
-		transform: translateY(6px) scale(0.98);
-	}
-	to {
-		opacity: 1;
-		transform: none;
-	}
-}
-.shields:not(.hidden) {
-	animation: shieldsPanelIn 0.15s ease-out;
-}
+/* The panel fades in and out via the opacity/visibility transition on .shields
+   (defined above), so no appear-only keyframe is needed. */
 
 /* Detail-view navigation (fingerprinting / trackers & ads > and Back). The
    panel renders by swapping innerHTML, so a two-pane slide would mean keeping
@@ -3568,7 +3555,7 @@ input:focus-visible {
 	.shieldsPageScrim:not(.hidden) {
 		animation: none;
 	}
-	.shieldsAdvanced .shieldsRows {
+	.shields {
 		transition: none;
 	}
 	.shieldsToggle,
