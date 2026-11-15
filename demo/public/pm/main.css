@@ -2457,12 +2457,16 @@ input:focus-visible {
 	background: var(--sh-outline);
 	border: none;
 	cursor: pointer;
-	/* Leo keeps the thumb transition off until the toggle is touched, so the
-	   first render (checked state applied straight away) does not jump; it only
-	   animates while hovered or focused. --leo-toggle-transition-duration: .12s
-	   on hover in Brave's app.style.ts. */
-	--sh-toggle-dur: 0s;
-	transition: background var(--sh-toggle-dur) ease;
+	/* Leo toggle: the track and thumb animate on every change at
+	   --leo-duration-s (100ms) with --leo-easing-in-out. A freshly built panel
+	   does not jump, because a just-inserted element has no prior value to
+	   transition from; only a later :checked change animates. Reduced motion
+	   drops it (below). */
+	--sh-toggle-dur: 0.1s;
+	--sh-toggle-ease: cubic-bezier(0.42, 0, 0.58, 1);
+	transition:
+		background-color var(--sh-toggle-dur) var(--sh-toggle-ease),
+		box-shadow var(--sh-toggle-dur) var(--sh-toggle-ease);
 }
 .shieldsToggle::after {
 	content: '';
@@ -2474,12 +2478,8 @@ input:focus-visible {
 	border-radius: 50%;
 	background: #fff;
 	transition:
-		transform var(--sh-toggle-dur) ease,
-		background var(--sh-toggle-dur) ease;
-}
-.shieldsToggle:hover,
-.shieldsToggle:focus-visible {
-	--sh-toggle-dur: 0.12s;
+		transform var(--sh-toggle-dur) var(--sh-toggle-ease),
+		background-color var(--sh-toggle-dur) var(--sh-toggle-ease);
 }
 .shieldsToggle:checked {
 	background: var(--sh-interactive);
@@ -2680,7 +2680,7 @@ input:focus-visible {
 	width: 20px;
 	height: 20px;
 	color: var(--sh-icon);
-	transition: transform 0.15s ease;
+	transition: transform 0.1s cubic-bezier(0.42, 0, 0.58, 1);
 }
 .shieldsDropBtn[aria-expanded='true'] .chev {
 	transform: rotate(180deg);
@@ -2688,6 +2688,19 @@ input:focus-visible {
 .shieldsDropBtn:focus-visible {
 	outline: 2px solid var(--sh-interactive);
 	outline-offset: 1px;
+}
+/* Leo menu open: --leo-duration-m (200ms) --leo-easing-out, opacity and a
+   slight scale from the top. Re-runs each time the list leaves [hidden]
+   (display none to block restarts the animation). */
+@keyframes shieldsMenuIn {
+	from {
+		opacity: 0;
+		transform: scale(0.95);
+	}
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
 }
 .shieldsDropList {
 	position: absolute;
@@ -2702,6 +2715,8 @@ input:focus-visible {
 	background: var(--sh-card);
 	border: 1px solid var(--sh-divider);
 	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+	transform-origin: top center;
+	animation: shieldsMenuIn 0.2s cubic-bezier(0, 0, 0.58, 1);
 }
 .shieldsDropList[hidden] {
 	display: none;
@@ -2712,6 +2727,7 @@ input:focus-visible {
 	font-size: 14px;
 	color: var(--sh-text-2);
 	cursor: pointer;
+	transition: background-color 0.1s cubic-bezier(0.42, 0, 0.58, 1);
 }
 .shieldsDropList li:hover {
 	background: rgba(255, 255, 255, 0.05);
@@ -3560,6 +3576,13 @@ input:focus-visible {
 	}
 	.shieldsToggle,
 	.shieldsToggle::after {
+		transition: none;
+	}
+	.shieldsDropList {
+		animation: none;
+	}
+	.shieldsDropList li,
+	.shieldsDropBtn .chev {
 		transition: none;
 	}
 }
