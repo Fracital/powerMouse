@@ -2576,8 +2576,8 @@ input:focus-visible {
 .shieldsAdvanced.closed .chev {
 	transform: rotate(0);
 }
-/* Advanced rows show/hide instantly — no expand/collapse slide animation. The
-   filter-lists / global-settings footer hides with them when collapsed. */
+/* Advanced rows show/hide instantly, with no expand/collapse slide animation.
+   The filter-lists / global-settings footer hides with them when collapsed. */
 .shieldsAdvanced.closed .shieldsRows,
 .shieldsAdvanced.closed ~ .shieldsFooter {
 	display: none;
