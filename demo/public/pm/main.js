@@ -2020,9 +2020,12 @@ function fitCommits() {
 	if (last) last.classList.add('last');
 	list.closest('.commits').classList.toggle('none', !last);
 }
-// the list's size changes with the window, and from nothing when the home
-// page comes back; hiding rows leaves its box as it is, so this settles
-new ResizeObserver(fitCommits).observe($('commitList'));
+// Re-fit on any change to the room. Observe the .commits box, not the list:
+// it is anchored to the viewport (top/bottom), so it grows and shrinks with
+// the window and comes back from nothing when the home page returns. The list
+// itself cannot be observed for growth, because trimmed rows are display:none,
+// so a fitted list keeps its short box when the window grows and never fires.
+new ResizeObserver(fitCommits).observe($('commitList').closest('.commits'));
 
 // ---- request viewer ---------------------------------------------------------
 // The controller reports every proxied request (onRequest). Closed, the viewer
