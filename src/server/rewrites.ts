@@ -4328,7 +4328,11 @@ export function registerRewrites(
 				// nonce, which the browser's script policies name; a worker of
 				// the document imports the inject by its URL)
 				const nonce = policyNonce();
-				const policies = browserHeaders(response.headers, policyMark());
+				const policies = browserHeaders(
+					response.headers,
+					policyMark(),
+					url.url,
+				);
 				// "Block scripts" shield: the inject enforces script-src 'none'
 				// against the page's own code (src/csp.ts stage 2; the inject's own
 				// scripts are exempt by design). It rides as a page policy with no

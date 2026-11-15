@@ -929,7 +929,7 @@ export default class DocumentClient extends Client {
 			// the browser enforces no Trusted Types policy of the page's
 			// (src/csp.ts), so a meta that sets one does not turn STomp's own
 			// Trusted Types on
-			const text = browserPolicy(policy);
+			const text = browserPolicy(policy, this.url.url);
 			texts.push([
 				text === null
 					? ''

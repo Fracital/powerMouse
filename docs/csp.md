@@ -173,9 +173,9 @@ XMLHttpRequest, EventSource, beacon and WebSocket hooks report their own.
 
 base-uri and form-action reach the browser as the fetch directives do,
 with `'self'` and the page's other schemes (`'none'` as written), with no
-fallback: default-src governs neither, natively. A javascript: or mailto:
-action names no host, and the browser refuses it as natively (even under
-`form-action *`).
+fallback: default-src governs neither, natively (base-uri also with the
+document's own origin, below). A javascript: or mailto: action names no
+host, and the browser refuses it as natively (even under `form-action *`).
 
 - **base-uri.** A `<base>` whose real URL the page's enforced policy
   refuses (its headers', its metas', the metas before it in the markup
@@ -185,8 +185,17 @@ action names no host, and the browser refuses it as natively (even under
   first one again). A base the markup rewrite reads (loadHTML's base URL)
   is the document's URL then. A report-only refusal is the inject's
   event: once, for the first base, a task after the hook (for the markup's
-  own base, at DOMContentLoaded). A violation of a base the hooks wrote
-  for a moment with the page's own URL is stopped.
+  own base, at DOMContentLoaded). A base the page allows keeps its real URL
+  for a moment while the inject routes it to the proxy origin, and the
+  browser judges that write: so base-uri reaches the browser with the
+  document's own origin as a host source besides `'self'` wherever the
+  page's base-uri allows the document's origin (`browserPolicy`), so the
+  browser accepts the page's own base as natively (the proxied route is the
+  proxy origin, `'self'`; a refused base's refusal URL is on
+  `refused.invalid`, which the real origin never matches). A base-uri
+  violation of a base the hooks wrote for a moment with the page's own URL,
+  where that origin is not the browser's base-uri (a cross-origin base the
+  page allows), is stopped.
 - **form-action.** A submission (a submit event, at the window's capture,
   or `submit()`) whose URL the page's enforced policy refuses goes to a
   refusal URL: the element's action (or the submitter's formaction) is

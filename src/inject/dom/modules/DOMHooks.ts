@@ -230,8 +230,6 @@ export class CustomElement extends Element {
 			if (name.startsWith(ORIGINAL_ATTRIBUTE))
 				names.push(name.slice(ORIGINAL_ATTRIBUTE.length));
 
-		console.log(names, ORIGINAL_ATTRIBUTE, this.getAttributeNames());
-
 		return names;
 	}
 	setAttributeOG(attribute: string, value: string) {

@@ -3244,13 +3244,6 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		domHooksModule.useAttributes(
 			(element) => {
 				const refused = refusedBases.get(element);
-				console.log(
-					'BASEDBG run',
-					element.isConnected,
-					element.getAttribute('href'),
-					element.getAttributeOG('href'),
-					new Error().stack?.split('\n').slice(2, 7).join(' | '),
-				);
 				if (
 					refused &&
 					element.getAttribute('href') === refused[1] &&

@@ -191,7 +191,7 @@ export const NAVIGATION_DIRECTIVES = ['base-uri', 'form-action'];
  * out: report-uri and report-to (the browser would post the proxy's URLs),
  * and what the proxy applies another way.
  */
-export function browserPolicy(policy: Policy): string | null {
+export function browserPolicy(policy: Policy, self?: URL): string | null {
 	const directives: string[] = [];
 	for (const effective of BROWSER_DIRECTIVES) {
 		const governed = governing(policy, effective);
@@ -211,14 +211,32 @@ export function browserPolicy(policy: Policy): string | null {
 	// Types against the page's code alone (docs/csp.md).
 	for (const name of NAVIGATION_DIRECTIVES) {
 		const sources = policy.directives.get(name);
+		if (!sources) continue;
 		// (one that allows nothing is the browser's as written: it refuses
 		// the proxy's own URLs too, and its <base> or form with them)
-		if (sources)
-			directives.push(
-				sources.every((source) => source.toLowerCase() === "'none'")
-					? `${name} 'none'`
-					: `${name} ${browserSources(sources).join(' ')}`,
-			);
+		if (sources.every((source) => source.toLowerCase() === "'none'")) {
+			directives.push(`${name} 'none'`);
+			continue;
+		}
+		const browser = browserSources(sources);
+		// A page's own <base href> keeps its real URL for a moment while the
+		// inject routes it to the proxy origin (src/inject/dom/modules/DOMAttributes.ts),
+		// and the browser judges that transient write against base-uri. Its
+		// proxied route is the proxy origin ('self'), but the transient real-origin
+		// value is not, so the browser would spuriously refuse and report the
+		// page's own base. Where the page's base-uri allows the document's own
+		// origin, give the browser that origin as a host source too, so it
+		// accepts the transient as natively it accepts the base. A refused base's
+		// href is a refused.invalid refusal URL (refusalURL), which the real
+		// origin never matches, so refused bases are still refused and reported.
+		if (
+			name === 'base-uri' &&
+			self &&
+			self.origin !== 'null' &&
+			sourcesMatch(sources, new URL(self.origin), self)
+		)
+			browser.push(self.origin);
+		directives.push(`${name} ${browser.join(' ')}`);
 	}
 	return directives.length ? directives.join('; ') : null;
 }
@@ -713,11 +731,13 @@ export function browserRefuses(
  * The page's policies of a response's `headers` as the browser gets them:
  * the header values (null for none), and each browser policy's text with
  * the page's text it stands for. `mark`: a prefix the policies' marks
- * share (markedPolicy), unique to the document.
+ * share (markedPolicy), unique to the document. `self`: the document's real
+ * URL (what the policies' 'self' means), for base-uri (browserPolicy).
  */
 export function browserHeaders(
 	headers: Headers,
 	mark: string,
+	self?: URL,
 ): {
 	enforce: string | null;
 	report: string | null;
@@ -734,7 +754,7 @@ export function browserHeaders(
 			disposition,
 			'header',
 		)) {
-			const text = browserPolicy(policy);
+			const text = browserPolicy(policy, self);
 			// a policy the browser gets nothing of is the inject's all the same
 			if (text === null) {
 				texts.push(['', policy.text, disposition]);
