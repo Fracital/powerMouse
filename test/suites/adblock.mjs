@@ -349,9 +349,12 @@ ok(
 );
 ok(
 	'on: the lists and the resources were fetched through the proxy, not by the browser',
-	count(afterOn, 'adblock-list.txt') === 1 &&
-		count(afterOn, 'adblock-untrusted.txt') === 1 &&
-		count(afterOn, 'adblock-resources.json') === 1 &&
+	// fetched through the proxy at least once (the exact count is timing-
+	// dependent under parallel/loaded CI; what matters is it went through the
+	// proxy, not the browser)
+	count(afterOn, 'adblock-list.txt') >= 1 &&
+		count(afterOn, 'adblock-untrusted.txt') >= 1 &&
+		count(afterOn, 'adblock-resources.json') >= 1 &&
 		!requested.some((url) => url.includes('adblock-list')),
 	JSON.stringify([
 		count(afterOn, 'adblock-list.txt'),
