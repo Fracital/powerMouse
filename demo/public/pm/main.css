@@ -2363,18 +2363,34 @@ input:focus-visible {
 		0 0 0 1px rgba(255, 255, 255, 0.06);
 	opacity: 1;
 	transform: none;
+	/* positionShields anchors the panel below and right of the button, so the
+	   pop grows from that top-right corner, like Brave's bubble from its
+	   toolbar icon */
+	transform-origin: top right;
+	/* Brave's Shields popup is a native Views bubble: it pops in with a scale
+	   from the anchor plus a fade (Chromium's bubble show) and dismisses with a
+	   fade. Opening plays shieldsPopIn; closing fades through this transition. */
 	transition:
-		opacity 0.15s ease,
-		transform 0.15s ease,
-		visibility 0.15s;
+		opacity 0.12s ease,
+		visibility 0.12s;
 }
-/* Fade the panel both in and out: opacity + visibility rather than display:none,
-   so closing animates too, not just opening. */
+.shields:not(.hidden) {
+	animation: shieldsPopIn 0.16s cubic-bezier(0, 0, 0.58, 1);
+}
 .shields.hidden {
 	opacity: 0;
-	transform: translateY(6px) scale(0.98);
 	visibility: hidden;
 	pointer-events: none;
+}
+@keyframes shieldsPopIn {
+	from {
+		opacity: 0;
+		transform: scale(0.9);
+	}
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
 }
 .shields * {
 	box-sizing: border-box;
@@ -3500,8 +3516,8 @@ input:focus-visible {
 /* The panel popping in: a subtle fade with a slight rise + scale, like the Leo
    panel settling in. Runs on open because .hidden toggles display, and a
    display change restarts the animation. */
-/* The panel fades in and out via the opacity/visibility transition on .shields
-   (defined above), so no appear-only keyframe is needed. */
+/* The panel pops in with shieldsPopIn and fades out through the .shields
+   transition, both defined with .shields above. */
 
 /* Detail-view navigation (fingerprinting / trackers & ads > and Back). The
    panel renders by swapping innerHTML, so a two-pane slide would mean keeping
