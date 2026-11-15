@@ -2362,35 +2362,18 @@ input:focus-visible {
 		0 12px 40px rgba(0, 0, 0, 0.55),
 		0 0 0 1px rgba(255, 255, 255, 0.06);
 	opacity: 1;
-	transform: none;
-	/* positionShields anchors the panel below and right of the button, so the
-	   pop grows from that top-right corner, like Brave's bubble from its
-	   toolbar icon */
-	transform-origin: top right;
-	/* Brave's Shields popup is a native Views bubble: it pops in with a scale
-	   from the anchor plus a fade (Chromium's bubble show) and dismisses with a
-	   fade. Opening plays shieldsPopIn; closing fades through this transition. */
+	/* Brave's Shields popup is a native WebUI Views bubble (WebUIBubbleManager,
+	   no Brave animation override), and Chromium shows it with a plain opacity
+	   fade: no scale and no directional zoom from a corner. Match that, and
+	   dismiss the same way. This fades the panel both in and out. */
 	transition:
-		opacity 0.12s ease,
-		visibility 0.12s;
-}
-.shields:not(.hidden) {
-	animation: shieldsPopIn 0.16s cubic-bezier(0, 0, 0.58, 1);
+		opacity 0.16s ease,
+		visibility 0.16s;
 }
 .shields.hidden {
 	opacity: 0;
 	visibility: hidden;
 	pointer-events: none;
-}
-@keyframes shieldsPopIn {
-	from {
-		opacity: 0;
-		transform: scale(0.9);
-	}
-	to {
-		opacity: 1;
-		transform: scale(1);
-	}
 }
 .shields * {
 	box-sizing: border-box;
@@ -3154,6 +3137,29 @@ input:focus-visible {
 	scrollbar-width: thin;
 	scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
 }
+/* the popup is its own scroller; give it the same thin scrollbar as the pages
+   so a short viewport does not put a chunky default bar over its rounded edge */
+.shields {
+	scrollbar-width: thin;
+	scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+.shields::-webkit-scrollbar {
+	width: 9px;
+	height: 9px;
+}
+.shields::-webkit-scrollbar-thumb {
+	background: rgba(255, 255, 255, 0.16);
+	border-radius: 999px;
+	border: 3px solid transparent;
+	background-clip: padding-box;
+}
+.shields::-webkit-scrollbar-thumb:hover {
+	background: rgba(255, 255, 255, 0.28);
+	background-clip: padding-box;
+}
+.shields::-webkit-scrollbar-track {
+	background: transparent;
+}
 .spListRow {
 	display: flex;
 	align-items: flex-start;
@@ -3516,8 +3522,8 @@ input:focus-visible {
 /* The panel popping in: a subtle fade with a slight rise + scale, like the Leo
    panel settling in. Runs on open because .hidden toggles display, and a
    display change restarts the animation. */
-/* The panel pops in with shieldsPopIn and fades out through the .shields
-   transition, both defined with .shields above. */
+/* The panel fades in and out through the opacity/visibility transition on
+   .shields, defined with .shields above. */
 
 /* Detail-view navigation (fingerprinting / trackers & ads > and Back). The
    panel renders by swapping innerHTML, so a two-pane slide would mean keeping
