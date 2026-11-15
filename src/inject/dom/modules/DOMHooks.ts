@@ -15,6 +15,7 @@ import {
 } from '../../modules/Unroute';
 import { getPublicSuffix } from '../../rewriter';
 import {
+	isOwnInjector,
 	isParsed,
 	ownScripts,
 	TRUSTED_KINDS,
@@ -1296,16 +1297,20 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				outerHTMLDescriptor.set!,
 				(target, that: Element, args) => {
 					// (the page's Trusted Types judge the markup first; a style's
-					// stand-in writes the inject's own)
-					const markup = ownScripts.has(that)
-						? htmlString(args[0])
-						: this.client.trustedValue(
-								args[0],
-								'TrustedHTML',
-								'Element outerHTML',
-								() => Reflect.apply(target, that, args),
-								htmlString,
-							);
+					// stand-in writes the inject's own, known by its element, or, once
+					// the written page is parsed again and the running script is a
+					// fresh one, by the markup it writes: isOwnInjector)
+					const written = htmlString(args[0]);
+					const markup =
+						ownScripts.has(that) || isOwnInjector(written)
+							? written
+							: this.client.trustedValue(
+									args[0],
+									'TrustedHTML',
+									'Element outerHTML',
+									() => Reflect.apply(target, that, args),
+									htmlString,
+								);
 					if (markup === null) return;
 					// as the browser: nothing without a parent, an error under the
 					// document, and the markup parsed in the parent's context (a

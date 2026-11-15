@@ -7,7 +7,7 @@ import ProxyModule, {
 } from '../../modules/Proxy';
 import { unrouteCSS } from '../../modules/Unroute';
 import { modifyCSS, modifyJS } from '../../rewriter';
-import { ownScripts, trustedScript } from '../../trusted';
+import { markOwnInjector, ownScripts, trustedScript } from '../../trusted';
 import DocumentClient, {
 	getGlobalParsingState,
 	type StyleElement,
@@ -287,13 +287,17 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 
 						usePrototype(script, nativeHTMLScriptElement, (script) => {
 							if (nonce) script.setAttribute('nonce', nonce);
+							const markup = style.outerHTML;
 							script.textContent = trustedScript(
-								`document.currentScript.outerHTML=${JSON.stringify(
-									style.outerHTML,
-								)}`,
+								`document.currentScript.outerHTML=${JSON.stringify(markup)}`,
 							);
 							// (its outerHTML is the inject's, which no Trusted Types judge)
+							// the page is serialized and parsed again, so the script that
+							// runs is not this element: ownScripts (held by element) no
+							// longer finds it, and the markup it writes is recognised by
+							// its text instead (markOwnInjector)
 							ownScripts.add(script);
+							markOwnInjector(markup);
 							// the client's own code, nothing of the page's to rewrite: the
 							// insertion and the written page's pass leave it as it is
 							// (rewriting a 3 MB stylesheet as a string literal took CNN

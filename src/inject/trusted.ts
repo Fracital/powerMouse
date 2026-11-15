@@ -192,6 +192,40 @@ export function trustedAttribute(
 /** scripts the inject writes markup from (a style's stand-in): their outerHTML is the inject's write */
 export const ownScripts = new WeakSet<object>();
 
+/**
+ * The markup the inject's own style injectors write with outerHTML
+ * (DOMContentHooks), by a hash of its text. An injector is a `<script>` the
+ * inject puts in the written page in place of a `<style>`, which replaces
+ * itself with that style at parse time (`document.currentScript.outerHTML =
+ * <style>…`). It is serialized into the markup and parsed again, so the
+ * script that runs is a fresh element the `ownScripts` WeakSet never held:
+ * its outerHTML write would be judged by the page's Trusted Types and
+ * refused (the inject's own re-insertion of a style the browser already
+ * passed), and the style would be lost. The markup it writes is the inject's
+ * own, registered here when the injector is built and recognised when it
+ * runs, so that write bypasses the page's Trusted Types as `ownScripts` does.
+ * A hash, not the text, so a style's markup (a megabyte of CSS) is not held
+ * alive after its injector replaced itself.
+ */
+const ownInjectorMarkup = new Set<number>();
+
+function markupHash(text: string): number {
+	let hash = 0x811c9dc5;
+	for (let i = 0; i < text.length; i++)
+		hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193);
+	return hash >>> 0;
+}
+
+/** register `markup` as an own style injector's write (markOwnInjector) */
+export function markOwnInjector(markup: string): void {
+	ownInjectorMarkup.add(markupHash(markup));
+}
+
+/** whether `markup` is an own style injector's write (ownScripts, across the written page's re-parse) */
+export function isOwnInjector(markup: string): boolean {
+	return ownInjectorMarkup.has(markupHash(markup));
+}
+
 /** the element whose attributes the inject copies from the browser's parse of the page's markup (asParsed) */
 let parsed: object | null = null;
 /**

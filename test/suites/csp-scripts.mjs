@@ -116,6 +116,16 @@ const CASES = {
 		s: true,
 		probes: ['markup-styles', 'style-inline'],
 	},
+	// the inject re-inserts a rewritten inline <style> with a script that
+	// replaces itself (document.currentScript.outerHTML), serialized into the
+	// written page and parsed again: its outerHTML write of the inject's own
+	// style must not be refused by the page's require-trusted-types-for, or
+	// the style is lost and the page renders unstyled (accounts.google.com)
+	'markup styles under require-trusted-types-for': {
+		p: "require-trusted-types-for 'script'",
+		s: true,
+		probes: ['markup-styles', 'style-inline'],
+	},
 	'unsafe-inline styles': {
 		p: "style-src 'self' 'unsafe-inline'",
 		probes: ['style-inline', 'style-attribute', 'style-other'],
