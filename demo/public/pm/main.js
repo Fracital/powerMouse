@@ -3300,12 +3300,13 @@ function buildShieldsPanel(host) {
 				${detail()}
 			</div>`;
 
+		const advOpen = shieldsAdvancedOpen();
 		shieldsPanel.innerHTML =
 			`<div class="shieldsCard">` +
 			head +
 			`<div class="shieldsCount"><b>${count}</b> trackers, ads, and more blocked</div></div>
-			<div class="shieldsAdvanced" id="shAdvanced">
-				<button class="shieldsAdvancedHead" id="shAdvancedHead" aria-expanded="true">
+			<div class="shieldsAdvanced${advOpen ? '' : ' closed'}" id="shAdvanced">
+				<button class="shieldsAdvancedHead" id="shAdvancedHead" aria-expanded="${advOpen}">
 					${shieldIcon('gear')}
 					<span>Advanced options</span>
 					${shieldIcon('chevron', 'shieldsIcon chev')}
@@ -3338,6 +3339,7 @@ function wireShieldsPanel(host) {
 	q('#shAdvancedHead')?.addEventListener('click', () => {
 		const closed = advanced.classList.toggle('closed');
 		q('#shAdvancedHead').setAttribute('aria-expanded', String(!closed));
+		setShieldsAdvancedOpen(!closed);
 	});
 
 	wireDrop('shAds', (v) => setShield(host, { mode: v }));
@@ -3539,6 +3541,7 @@ const OPTIONAL_LISTS = [
 // developer-mode switch that reveals the custom-filters editor.
 const ADBLOCK_CONFIG_KEY = 'stomp-demo:adblock-config';
 const SHIELDS_BADGE_KEY = 'stomp-demo:shields-badge';
+const SHIELDS_ADVANCED_KEY = 'stomp-demo:shields-advanced';
 
 function loadAdblockConfig() {
 	try {
@@ -3674,6 +3677,21 @@ function setShieldsShowBadge(on) {
 		localStorage.setItem(SHIELDS_BADGE_KEY, on ? '1' : '0');
 	} catch {}
 	syncShields();
+}
+
+// Whether the Advanced options section is expanded, remembered across popup
+// opens (and reloads) in this page's own localStorage. Defaults to open.
+function shieldsAdvancedOpen() {
+	try {
+		return localStorage.getItem(SHIELDS_ADVANCED_KEY) !== '0';
+	} catch {
+		return true;
+	}
+}
+function setShieldsAdvancedOpen(on) {
+	try {
+		localStorage.setItem(SHIELDS_ADVANCED_KEY, on ? '1' : '0');
+	} catch {}
 }
 
 // the '*' default shields entry (the baseline behind every site with no entry
