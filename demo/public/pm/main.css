@@ -2323,6 +2323,26 @@ input:focus-visible {
 }
 
 .shields {
+	/* Brave Shields, 1:1 with the panel_new Leo panel. Colours are the resolved
+	   Nala dark tokens (from @brave/leo universal.tokens.json, cross-checked by
+	   sampling Brave's rendered panel): page.background #141415, container
+	   .background #1c1c1d, neutral.10 #252527, text.primary #e4e4e5, secondary
+	   #c9c9ca, tertiary #909093, text.interactive / schemes.primary #bcc6f3,
+	   schemes.on-primary #212848, divider.subtle #303032, outline-variant
+	   #464649, divider.interactive #303a68. */
+	--sh-page: #141415;
+	--sh-container: #1c1c1d;
+	--sh-card: #252527;
+	--sh-control: #1f1f23;
+	--sh-text: #e4e4e5;
+	--sh-text-2: #c9c9ca;
+	--sh-text-3: #909093;
+	--sh-interactive: #bcc6f3;
+	--sh-on-primary: #212848;
+	--sh-icon: #c9c9ca;
+	--sh-divider: #303032;
+	--sh-outline: #464649;
+	--sh-border-interactive: #303a68;
 	position: fixed;
 	z-index: 61;
 	width: 360px;
@@ -2330,14 +2350,14 @@ input:focus-visible {
 	max-height: calc(100vh - 76px);
 	overflow-y: auto;
 	box-sizing: border-box;
-	padding: 16px 16px 14px;
-	border-radius: 12px;
-	background: #1c1c28;
-	color: #e9e9f1;
+	padding: 0;
+	border-radius: 16px;
+	background: var(--sh-container);
+	color: var(--sh-text);
 	font-family: 'Montserrat', sans-serif;
-	font-weight: 500;
-	font-size: 13px;
-	line-height: 1.35;
+	font-weight: 400;
+	font-size: 14px;
+	line-height: 1.571;
 	box-shadow:
 		0 12px 40px rgba(0, 0, 0, 0.55),
 		0 0 0 1px rgba(255, 255, 255, 0.06);
@@ -2349,27 +2369,47 @@ input:focus-visible {
 	box-sizing: border-box;
 }
 
+/* main_card: the raised surface holding the site row and the count box */
+.shieldsCard {
+	background: var(--sh-card);
+	padding: 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	border-bottom: 1px solid var(--sh-divider);
+	border-radius: 16px 16px 0 0;
+}
+.shieldsCardOff {
+	background: #303032;
+	color: var(--sh-text-2);
+}
+.shieldsCardOff .shieldsFavicon {
+	filter: grayscale(100%);
+}
+
 .shieldsHead {
+	padding: 12px;
 	display: grid;
-	grid-template-columns: 28px 1fr auto;
+	grid-template-columns: 32px 1fr auto;
 	grid-template-rows: auto auto;
-	column-gap: 10px;
+	column-gap: 16px;
 	align-items: center;
 }
 .shieldsFavicon {
 	grid-row: 1 / span 2;
-	width: 28px;
-	height: 28px;
-	border-radius: 6px;
-	background: #2a2a3a center / cover no-repeat;
-	object-fit: cover;
+	width: 32px;
+	height: 32px;
+	border-radius: 50%;
+	background: var(--sh-container) center / 20px 20px no-repeat;
+	box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
 }
 .shieldsDomain {
 	grid-column: 2;
 	min-width: 0;
-	color: #fff;
-	font-size: 15px;
+	color: var(--sh-text);
+	font-size: 20px;
 	font-weight: 600;
+	line-height: 1.3;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -2378,11 +2418,12 @@ input:focus-visible {
 }
 .shieldsState {
 	grid-column: 2;
-	color: #a7a7bd;
-	font-size: 12px;
+	color: var(--sh-text);
+	font-size: 16px;
+	line-height: 1.5;
 }
 .shieldsState b {
-	color: #e9e9f1;
+	color: var(--sh-text);
 	font-weight: 600;
 }
 .shieldsHead .shieldsToggle {
@@ -2390,18 +2431,19 @@ input:focus-visible {
 	grid-row: 1 / span 2;
 }
 
+/* Leo toggle, dark: on = schemes.primary track (#bcc6f3) + on-primary thumb
+   (#212848); off = outline-variant track (#464649) + white thumb. The master
+   toggle is 65x40, the row/detail toggles are the small 40x24 size. */
 .shieldsToggle {
 	appearance: none;
 	-webkit-appearance: none;
 	flex: none;
-	/* zero the checkbox's default UA margin so the toggle's right edge lands on
-	   the detail slot, level with the dropdown buttons' right edge */
 	margin: 0;
 	position: relative;
-	width: 44px;
-	height: 24px;
+	width: 65px;
+	height: 40px;
 	border-radius: 999px;
-	background: #3a3a4c;
+	background: var(--sh-outline);
 	border: none;
 	cursor: pointer;
 	transition: background 0.15s ease;
@@ -2409,75 +2451,107 @@ input:focus-visible {
 .shieldsToggle::after {
 	content: '';
 	position: absolute;
-	top: 3px;
-	left: 3px;
-	width: 18px;
-	height: 18px;
+	top: 4px;
+	left: 4px;
+	width: 32px;
+	height: 32px;
 	border-radius: 50%;
 	background: #fff;
-	transition: transform 0.15s ease;
+	transition:
+		transform 0.15s ease,
+		background 0.15s ease;
 }
 .shieldsToggle:checked {
-	background: linear-gradient(120deg, #4c54d2, #8a5cf6);
+	background: var(--sh-interactive);
 }
 .shieldsToggle:checked::after {
-	transform: translateX(20px);
+	transform: translateX(25px);
+	background: var(--sh-on-primary);
 }
 .shieldsToggle:focus-visible {
-	outline: 2px solid #8a9bff;
+	outline: 2px solid var(--sh-interactive);
 	outline-offset: 2px;
 }
 .shieldsToggle.small {
-	width: 38px;
-	height: 21px;
+	width: 40px;
+	height: 24px;
 }
 .shieldsToggle.small::after {
-	width: 15px;
-	height: 15px;
+	width: 16px;
+	height: 16px;
 }
 .shieldsToggle.small:checked::after {
-	transform: translateX(17px);
+	transform: translateX(16px);
+}
+.shieldsToggle:disabled {
+	opacity: 0.5;
+	cursor: default;
 }
 
+/* block-info: the count box, centred, recessed inside the card */
 .shieldsCount {
-	margin-top: 14px;
-	padding: 12px 14px;
-	border-radius: 9px;
-	background: #12121b;
-	color: #c9c9d8;
-	font-size: 12.5px;
+	padding: 12px 8px;
+	border-radius: 16px;
+	background: var(--sh-container);
+	box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	color: var(--sh-text-2);
+	font-size: 14px;
 }
 .shieldsCount b {
-	color: #fff;
+	color: var(--sh-text);
 	font-size: 22px;
-	font-weight: 700;
-	margin-right: 4px;
+	font-weight: 600;
+	line-height: 1.27;
 }
 
 .shieldsAdvanced {
-	margin-top: 14px;
+	margin: 0;
 }
 .shieldsAdvancedHead {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: 16px;
 	width: 100%;
-	padding: 6px 2px;
+	padding: 8px 16px;
 	background: none;
 	border: none;
-	color: #6c8cff;
+	color: var(--sh-text);
 	font-family: inherit;
-	font-size: 12px;
-	font-weight: 600;
-	letter-spacing: 0.02em;
+	font-size: 14px;
+	font-weight: 400;
 	cursor: pointer;
 }
+.shieldsAdvancedHead > span {
+	flex: 1 1 auto;
+}
+.shieldsAdvancedHead .shieldsIcon {
+	width: 20px;
+	height: 20px;
+	color: var(--sh-icon);
+}
 .shieldsAdvancedHead .chev {
-	margin-left: auto;
+	flex: none;
+	width: 20px;
+	height: 20px;
+	transform: rotate(180deg);
 	transition: transform 0.15s ease;
 }
+/* expanded (the default) or hover takes the interactive colour, like Brave's
+   data-expanded view-toggle */
+.shieldsAdvanced:not(.closed) .shieldsAdvancedHead,
+.shieldsAdvancedHead:hover {
+	color: var(--sh-interactive);
+}
+.shieldsAdvanced:not(.closed) .shieldsAdvancedHead .shieldsIcon,
+.shieldsAdvancedHead:hover .shieldsIcon {
+	color: var(--sh-interactive);
+}
 .shieldsAdvanced.closed .chev {
-	transform: rotate(-90deg);
+	transform: rotate(0);
 }
 .shieldsAdvanced.closed .shieldsRows {
 	display: none;
@@ -2486,23 +2560,25 @@ input:focus-visible {
 	flex: none;
 	width: 18px;
 	height: 18px;
-	color: #9a9ab2;
+	color: var(--sh-icon);
 }
 
 .shieldsRows {
-	margin-top: 4px;
+	padding: 8px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
 }
-/* Every row is [icon][main flex:1][toggle?][detail slot]. The main control, a
-   toggle or a dropdown, ends at the detail slot's left edge, so toggles and
-   dropdowns share one right edge down the panel; the fixed-width detail slot is
-   always present (the trailing > sits in it on the rows that have one, empty and
-   reserved on the rest) so the alignment holds whether or not a row has a >. */
+/* Every row is [icon][main flex:1][toggle?][detail slot]. Brave's advanced rows
+   carry no dividers; the gap separates them. The main control (toggle or
+   dropdown) ends at the detail slot's left edge so toggles and dropdowns share
+   one right edge; the fixed-width detail slot holds the trailing > where a row
+   has one and is empty but reserved elsewhere, so the > column lines up. */
 .shieldsRow {
 	display: flex;
 	align-items: center;
-	gap: 10px;
-	padding: 6px 2px;
-	border-top: 1px solid rgba(255, 255, 255, 0.06);
+	gap: 8px;
+	padding: 0 4px 0 8px;
 }
 .shieldsRow .shieldsIcon {
 	width: 20px;
@@ -2512,67 +2588,57 @@ input:focus-visible {
 	flex: 1 1 auto;
 	min-width: 0;
 }
-/* the reserved trailing slot for a row's detail > (empty on rows without one),
-   the same width as the .shieldsMore button it holds so every > lines up */
+/* a label-only control (block scripts, fingerprinting, forget) gets the row its
+   height, matching the padding a dropdown control supplies on the other rows */
+.shieldsRowMain:has(.shieldsRowLabel) {
+	padding: 11px 0;
+}
 .shieldsDetail {
 	flex: none;
-	width: 24px;
-	height: 24px;
+	min-width: 28px;
+	height: 28px;
 	display: grid;
 	place-items: center;
+	margin-inline-start: -4px;
 }
 .shieldsRowLabel {
-	color: #e9e9f1;
-	font-size: 13px;
+	color: var(--sh-text);
+	font-size: 14px;
+	line-height: 1.571;
 }
-.shieldsRowLabel .count {
-	color: #8f8fa6;
-	font-weight: 600;
-}
-.shieldsSelect {
-	appearance: none;
-	-webkit-appearance: none;
-	margin-top: 5px;
-	width: 100%;
-	padding: 7px 28px 7px 10px;
-	border-radius: 7px;
-	background: #2a2a3a
-		url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%23a7a7bd' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>")
-		no-repeat right 9px center;
-	border: 1px solid rgba(255, 255, 255, 0.08);
-	color: #e9e9f1;
-	font-family: inherit;
-	font-size: 12.5px;
-	cursor: pointer;
-}
-.shieldsSelect:focus-visible {
-	outline: 2px solid #8a9bff;
-	outline-offset: 1px;
-}
-/* a custom dropdown (the three-way controls), styleable and screenshot-able
-   where a native <select>'s open list is neither */
-.shieldsDrop {
-	position: relative;
-	margin-top: 0;
-}
+.shieldsRowLabel .count,
 .shieldsDropBtn .count {
 	flex: none;
-	color: #8f8fa6;
-	font-weight: 600;
+	border-radius: 6px;
+	padding: 2px 4px;
+	background: var(--sh-card);
+	color: var(--sh-text-2);
 	font-size: 12px;
+	font-weight: 600;
+	line-height: 1.4;
+}
+/* Brave's Counter renders nothing at 0; don't leave an empty chip */
+.shieldsRowLabel .count:empty,
+.shieldsDropBtn .count:empty {
+	display: none;
+}
+/* a custom dropdown (the three-way controls): a styleable, screenshot-able
+   stand-in for leo-dropdown (a native <select>'s open list is neither) */
+.shieldsDrop {
+	position: relative;
 }
 .shieldsDropBtn {
 	width: 100%;
 	display: flex;
 	align-items: center;
-	gap: 8px;
-	padding: 8px 10px;
-	border-radius: 7px;
-	background: #2a2a3a;
-	border: 1px solid rgba(255, 255, 255, 0.08);
-	color: #e9e9f1;
+	gap: 6px;
+	padding: 10px 6px 10px 10px;
+	border-radius: 8px;
+	background: var(--sh-control);
+	border: 1px solid var(--sh-divider);
+	color: var(--sh-text);
 	font-family: inherit;
-	font-size: 12.5px;
+	font-size: 14px;
 	text-align: left;
 	cursor: pointer;
 }
@@ -2585,15 +2651,16 @@ input:focus-visible {
 .shieldsDropBtn .chev {
 	flex: none;
 	margin-left: auto;
-	width: 16px;
-	height: 16px;
+	width: 20px;
+	height: 20px;
+	color: var(--sh-icon);
 	transition: transform 0.15s ease;
 }
 .shieldsDropBtn[aria-expanded='true'] .chev {
 	transform: rotate(180deg);
 }
 .shieldsDropBtn:focus-visible {
-	outline: 2px solid #8a9bff;
+	outline: 2px solid var(--sh-interactive);
 	outline-offset: 1px;
 }
 .shieldsDropList {
@@ -2606,8 +2673,8 @@ input:focus-visible {
 	padding: 4px;
 	list-style: none;
 	border-radius: 8px;
-	background: #24243a;
-	border: 1px solid rgba(255, 255, 255, 0.1);
+	background: var(--sh-card);
+	border: 1px solid var(--sh-divider);
 	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
 }
 .shieldsDropList[hidden] {
@@ -2616,109 +2683,114 @@ input:focus-visible {
 .shieldsDropList li {
 	padding: 8px 10px;
 	border-radius: 6px;
-	font-size: 12.5px;
-	color: #d7d7e4;
+	font-size: 14px;
+	color: var(--sh-text-2);
 	cursor: pointer;
 }
 .shieldsDropList li:hover {
-	background: rgba(255, 255, 255, 0.07);
+	background: rgba(255, 255, 255, 0.05);
 }
 .shieldsDropList li[aria-selected='true'] {
-	color: #fff;
-	background: rgba(124, 92, 246, 0.2);
+	color: var(--sh-interactive);
+	background: rgba(188, 198, 243, 0.12);
 }
 
 .shieldsNote {
-	margin-top: 4px;
-	color: #8f8fa6;
-	font-size: 11px;
+	margin-top: 2px;
+	color: var(--sh-text-3);
+	font-size: 12px;
+	line-height: 1.5;
 }
 .shieldsNote:empty {
 	display: none;
 }
 .shieldsMore {
 	flex: none;
-	width: 24px;
-	height: 24px;
+	width: 28px;
+	height: 28px;
 	display: grid;
 	place-items: center;
 	background: none;
 	border: none;
-	color: #7d7d95;
+	color: var(--sh-icon);
 	cursor: pointer;
-	border-radius: 6px;
+	border-radius: 8px;
 }
 .shieldsMore .shieldsIcon {
-	width: 16px;
-	height: 16px;
+	width: 20px;
+	height: 20px;
 }
 .shieldsMore:hover {
-	background: rgba(255, 255, 255, 0.06);
-	color: #c9c9d8;
+	background: rgba(255, 255, 255, 0.05);
 }
 
+/* footer: two Leo outline buttons, then the try-off note on page.background */
 .shieldsFooter {
 	display: flex;
-	gap: 10px;
-	margin-top: 16px;
+	flex-wrap: wrap;
+	gap: 8px;
+	padding: 16px;
+	border-top: 1px solid var(--sh-divider);
 }
 .shieldsFooter button {
-	flex: 1 1 0;
-	padding: 9px 10px;
+	flex: 1 1 calc(50% - 8px);
+	white-space: nowrap;
+	padding: 10px 16px;
 	border-radius: 999px;
-	background: #2a2a3a;
-	border: 1px solid rgba(255, 255, 255, 0.08);
-	color: #e9e9f1;
+	background: transparent;
+	border: 1px solid var(--sh-border-interactive);
+	color: var(--sh-interactive);
 	font-family: inherit;
-	font-size: 12.5px;
+	font-size: 14px;
 	font-weight: 600;
 	cursor: pointer;
 }
 .shieldsFooter button:hover {
-	background: #33334a;
+	background: rgba(188, 198, 243, 0.08);
+	border-color: #7686ec;
 }
 .shieldsFooter button:focus-visible {
-	outline: 2px solid #8a9bff;
+	outline: 2px solid var(--sh-interactive);
 	outline-offset: 1px;
 }
 
 .shieldsHint {
-	margin: 14px -16px -14px;
-	padding: 12px 18px 14px;
-	background: #16161f;
-	border-top: 1px solid rgba(255, 255, 255, 0.06);
-	border-radius: 0 0 12px 12px;
+	padding: 12px 8px 16px;
+	background: var(--sh-page);
+	border-top: 1px solid var(--sh-divider);
+	border-radius: 0 0 16px 16px;
 	text-align: center;
-	color: #7d7d95;
-	font-size: 11px;
-	line-height: 1.4;
+	color: var(--sh-text-3);
+	font-size: 12px;
+	line-height: 1.5;
 }
 
-/* the "Block fingerprinting" > detail submenu, a sub-view inside the panel */
+/* the "Block fingerprinting" > detail submenu (details_header + toggle list) */
 .shieldsSubHead {
 	display: flex;
-	align-items: center;
-	gap: 8px;
-	padding-bottom: 12px;
-	border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+	align-items: flex-start;
+	gap: 4px;
+	padding: 16px 16px 16px 12px;
+	background: var(--sh-page);
+	border-bottom: 1px solid var(--sh-divider);
 }
 .shieldsBack {
 	flex: none;
-	width: 30px;
-	height: 30px;
+	width: 32px;
+	height: 32px;
 	display: grid;
 	place-items: center;
 	background: none;
 	border: none;
-	border-radius: 7px;
-	color: #c9c9d8;
+	border-radius: 50%;
+	color: var(--sh-icon);
 	cursor: pointer;
 }
 .shieldsBack:hover {
-	background: rgba(255, 255, 255, 0.06);
+	background: rgba(255, 255, 255, 0.05);
 }
 .shieldsBack:focus-visible {
-	outline: 2px solid #8a9bff;
+	outline: 2px solid var(--sh-interactive);
 	outline-offset: 1px;
 }
 .shieldsBack .shieldsIcon {
@@ -2726,44 +2798,53 @@ input:focus-visible {
 	height: 20px;
 }
 .shieldsSubTitleBlock {
+	flex: 1 1 auto;
 	min-width: 0;
+	padding-top: 4px;
 }
 .shieldsSubTitle {
-	color: #fff;
-	font-size: 14px;
+	color: var(--sh-text);
+	font-size: 16px;
 	font-weight: 600;
+	line-height: 1.5;
 }
 .shieldsSubDomain {
-	margin-top: 1px;
+	margin-top: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	color: #8f8fa6;
-	font-size: 12px;
+	color: var(--sh-text-2);
+	font-size: 14px;
+	line-height: 1.571;
+}
+/* intro + master-off note sit directly under the sub-header (outside the row
+   list), so they take the page's horizontal padding themselves */
+.shields > .shieldsSubNote {
+	padding-inline: 16px;
 }
 .shieldsSubNote {
 	margin-top: 12px;
-	color: #8f8fa6;
-	font-size: 11.5px;
+	color: var(--sh-text-3);
+	font-size: 12px;
 	line-height: 1.5;
 }
 .shieldsSubWarn {
 	margin-top: 10px;
 	padding: 9px 11px;
 	border-radius: 8px;
-	background: #1d1a24;
-	border-left: 2px solid #8a5cf6;
-	color: #c9c9d8;
+	background: var(--sh-card);
+	border-left: 2px solid var(--sh-interactive);
+	color: var(--sh-text-2);
 }
 .shieldsSubSection {
-	margin: 14px 0 2px;
-	color: #6f6f87;
-	font-size: 11px;
+	margin: 6px 0 2px;
+	padding-inline: 8px;
+	color: var(--sh-text-3);
+	font-size: 12px;
 	font-weight: 600;
 }
-/* a surface STomp already serves at the browser's own value: shown, not toggled */
 .shieldsRowNative .shieldsRowLabel {
-	color: #a9a9bd;
+	color: var(--sh-text-2);
 }
 .shieldsDot {
 	display: grid;
@@ -2774,32 +2855,32 @@ input:focus-visible {
 	width: 6px;
 	height: 6px;
 	border-radius: 50%;
-	background: #51516a;
+	background: var(--sh-outline);
 }
 .shieldsNativeTag {
 	flex: none;
-	color: #6f6f87;
-	font-size: 11px;
+	color: var(--sh-text-3);
+	font-size: 12px;
 }
 
+/* shields-off: the report prompt, on page.background inside the off card */
 .shieldsReport {
-	margin-top: 14px;
-	padding: 14px;
-	border-radius: 9px;
-	background: #12121b;
-	color: #c9c9d8;
-	font-size: 12.5px;
+	padding: 12px 16px;
+	border-radius: 16px;
+	background: var(--sh-page);
+	color: var(--sh-text-2);
+	font-size: 14px;
 	text-align: center;
 }
 .shieldsReport button {
 	margin-top: 10px;
-	padding: 8px 22px;
+	padding: 9px 22px;
 	border-radius: 999px;
-	background: linear-gradient(120deg, #4c54d2, #8a5cf6);
+	background: var(--sh-interactive);
 	border: none;
-	color: #fff;
+	color: var(--sh-on-primary);
 	font-family: inherit;
-	font-size: 12.5px;
+	font-size: 14px;
 	font-weight: 600;
 	cursor: pointer;
 }
@@ -2830,6 +2911,11 @@ input:focus-visible {
 }
 
 .shieldsPage {
+	/* the .shieldsToggle / .shieldsIcon are shared with the panel and read these */
+	--sh-interactive: #bcc6f3;
+	--sh-on-primary: #212848;
+	--sh-outline: #464649;
+	--sh-icon: #c9c9ca;
 	position: fixed;
 	z-index: 63;
 	top: 50%;
@@ -2841,8 +2927,8 @@ input:focus-visible {
 	flex-direction: column;
 	box-sizing: border-box;
 	border-radius: 14px;
-	background: #1c1c28;
-	color: #e9e9f1;
+	background: #1c1c1d;
+	color: #e4e4e5;
 	font-family: 'Montserrat', sans-serif;
 	font-weight: 500;
 	box-shadow:
@@ -2873,7 +2959,7 @@ input:focus-visible {
 	border: none;
 	border-radius: 7px;
 	background: none;
-	color: #b7b7cc;
+	color: #c9c9ca;
 	cursor: pointer;
 	transform: rotate(180deg);
 }
@@ -2896,7 +2982,7 @@ input:focus-visible {
 	border: none;
 	border-radius: 50%;
 	background: none;
-	color: #b7b7cc;
+	color: #c9c9ca;
 	font-size: 22px;
 	line-height: 32px;
 	cursor: pointer;
@@ -2913,7 +2999,7 @@ input:focus-visible {
 .spInput:focus-visible,
 .spSettingRow.nav:focus-visible,
 .cmInput:focus-visible {
-	outline: 2px solid #8a9bff;
+	outline: 2px solid #bcc6f3;
 	outline-offset: 2px;
 }
 
@@ -2929,7 +3015,7 @@ input:focus-visible {
 	margin-top: 16px;
 	padding: 14px 16px;
 	border-radius: 10px;
-	background: #12121b;
+	background: #141415;
 	border: 1px solid rgba(255, 255, 255, 0.05);
 }
 .spCallout.warn {
@@ -2946,7 +3032,7 @@ input:focus-visible {
 }
 .spCallout p {
 	margin: 0;
-	color: #b7b7cc;
+	color: #c9c9ca;
 	font-size: 12.5px;
 	line-height: 1.5;
 }
@@ -2966,7 +3052,7 @@ input:focus-visible {
 }
 .spSectionNote {
 	margin: 0 0 12px;
-	color: #9a9ab2;
+	color: #909093;
 	font-size: 12px;
 	line-height: 1.5;
 	max-width: 62ch;
@@ -2983,7 +3069,7 @@ input:focus-visible {
 	max-height: 230px;
 	overflow-y: auto;
 	border-radius: 9px;
-	background: #12121b;
+	background: #141415;
 	border: 1px solid rgba(255, 255, 255, 0.06);
 }
 /* thin, unobtrusive scrollbars everywhere in the settings pages */
@@ -3029,7 +3115,7 @@ input:focus-visible {
 	width: 17px;
 	height: 17px;
 	margin-top: 1px;
-	accent-color: #7c5cf6;
+	accent-color: #bcc6f3;
 	cursor: pointer;
 }
 .spListText {
@@ -3041,11 +3127,11 @@ input:focus-visible {
 .spListName {
 	font-size: 13px;
 	font-weight: 600;
-	color: #e9e9f1;
+	color: #e4e4e5;
 }
 .spListSource {
 	font-size: 11.5px;
-	color: #8585a0;
+	color: #909093;
 	word-break: break-word;
 }
 .spTag {
@@ -3055,8 +3141,8 @@ input:focus-visible {
 	font-size: 10px;
 	font-weight: 600;
 	letter-spacing: 0.02em;
-	color: #b7a6ff;
-	background: rgba(124, 92, 246, 0.18);
+	color: #bcc6f3;
+	background: rgba(188, 198, 243, 0.18);
 	vertical-align: 1px;
 }
 
@@ -3070,8 +3156,8 @@ input:focus-visible {
 	padding: 8px 16px;
 	border-radius: 8px;
 	border: none;
-	background: linear-gradient(120deg, #4c54d2, #8a5cf6);
-	color: #fff;
+	background: #bcc6f3;
+	color: #212848;
 	font-family: inherit;
 	font-size: 12.5px;
 	font-weight: 600;
@@ -3081,12 +3167,12 @@ input:focus-visible {
 	filter: brightness(1.08);
 }
 .spBtn.ghost {
-	background: #2a2a3a;
+	background: #252527;
 	border: 1px solid rgba(255, 255, 255, 0.08);
-	color: #e9e9f1;
+	color: #e4e4e5;
 }
 .spBtn.ghost:hover {
-	background: #33334a;
+	background: #303032;
 	filter: none;
 }
 
@@ -3099,14 +3185,14 @@ input:focus-visible {
 	min-width: 0;
 	padding: 9px 12px;
 	border-radius: 8px;
-	background: #12121b;
+	background: #141415;
 	border: 1px solid rgba(255, 255, 255, 0.1);
-	color: #e9e9f1;
+	color: #e4e4e5;
 	font-family: inherit;
 	font-size: 12.5px;
 }
 .spInput::placeholder {
-	color: #6f6f88;
+	color: #5e5e62;
 }
 
 .spCustomList {
@@ -3121,14 +3207,14 @@ input:focus-visible {
 	gap: 10px;
 	padding: 8px 10px 8px 14px;
 	border-radius: 8px;
-	background: #12121b;
+	background: #141415;
 	border: 1px solid rgba(255, 255, 255, 0.06);
 }
 .spCustomUrlText {
 	flex: 1 1 auto;
 	min-width: 0;
 	font-size: 12px;
-	color: #c9c9d8;
+	color: #c9c9ca;
 	word-break: break-all;
 }
 .spCustomRemove {
@@ -3139,7 +3225,7 @@ input:focus-visible {
 	border: none;
 	border-radius: 50%;
 	background: none;
-	color: #9a9ab2;
+	color: #909093;
 	font-size: 18px;
 	line-height: 26px;
 	cursor: pointer;
@@ -3181,7 +3267,7 @@ input:focus-visible {
 }
 .spSettingRow.nav .shieldsIcon {
 	flex: none;
-	color: #8585a0;
+	color: #909093;
 }
 .spRowText {
 	flex: 1 1 auto;
@@ -3189,16 +3275,42 @@ input:focus-visible {
 }
 .spRowLabel {
 	font-size: 13.5px;
-	color: #e9e9f1;
+	color: #e4e4e5;
 }
 .spRowSub {
 	margin-top: 3px;
 	font-size: 11.5px;
-	color: #8585a0;
+	color: #909093;
 	line-height: 1.45;
 }
 .spRowControl {
 	flex: none;
+}
+/* native <select> base for the settings pages (the panel uses .shieldsDrop);
+   styled to match the panel dropdowns: control fill, subtle border, Nala
+   chevron. */
+.shieldsSelect {
+	appearance: none;
+	-webkit-appearance: none;
+	width: 100%;
+	padding: 9px 30px 9px 12px;
+	border-radius: 8px;
+	background: #1f1f23
+		url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%23c9c9ca' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>")
+		no-repeat right 10px center;
+	border: 1px solid #303032;
+	color: #e4e4e5;
+	font-family: inherit;
+	font-size: 14px;
+	cursor: pointer;
+}
+.shieldsSelect option {
+	background: #252527;
+	color: #e4e4e5;
+}
+.shieldsSelect:focus-visible {
+	outline: 2px solid #bcc6f3;
+	outline-offset: 1px;
 }
 .spSelect {
 	min-width: 230px;
@@ -3213,7 +3325,7 @@ input:focus-visible {
 	height: 230px;
 	border-radius: 10px;
 	overflow: hidden;
-	background: #0e0e16;
+	background: #141415;
 	border: 1px solid rgba(255, 255, 255, 0.1);
 	font-family:
 		ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Code', Menlo, Consolas,
@@ -3229,8 +3341,8 @@ input:focus-visible {
 	overflow: hidden;
 	text-align: right;
 	white-space: pre;
-	color: #4f4f6a;
-	background: #0b0b12;
+	color: #464649;
+	background: #0e0e0f;
 	border-right: 1px solid rgba(255, 255, 255, 0.06);
 	user-select: none;
 	font-variant-numeric: tabular-nums;
@@ -3255,7 +3367,7 @@ input:focus-visible {
 	position: absolute;
 	inset: 0;
 	pointer-events: none;
-	color: #cfd0e6;
+	color: #c9c9ca;
 	background: transparent;
 }
 .cmHighlight code {
@@ -3270,15 +3382,15 @@ input:focus-visible {
 	resize: none;
 	background: transparent;
 	color: transparent;
-	caret-color: #e9e9f1;
+	caret-color: #e4e4e5;
 	-webkit-text-fill-color: transparent;
 }
 .cmInput::selection {
-	background: rgba(124, 92, 246, 0.35);
+	background: rgba(188, 198, 243, 0.35);
 }
 /* uBlock-syntax tints */
 .cmComment {
-	color: #6b6b85;
+	color: #5e5e62;
 	font-style: italic;
 }
 .cmDomain {
@@ -3298,13 +3410,13 @@ input:focus-visible {
 	font-weight: 600;
 }
 .cmPlain {
-	color: #cfd0e6;
+	color: #c9c9ca;
 }
 
 .spEditorStat {
 	flex: 1 1 auto;
 	font-size: 11.5px;
-	color: #8585a0;
+	color: #909093;
 }
 
 .spStatus {

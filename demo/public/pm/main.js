@@ -3209,11 +3209,12 @@ function buildShieldsPanel(host) {
 
 	if (!state.enabled) {
 		shieldsPanel.innerHTML =
+			`<div class="shieldsCard shieldsCardOff">` +
 			head +
 			`<div class="shieldsReport">
 				Is this site not working correctly with Shields up?
 				<div><button type="button" id="shReport">Report a broken site</button></div>
-			</div>` +
+			</div></div>` +
 			footer;
 	} else {
 		// every row ends with a .shieldsDetail slot so the toggles and dropdowns
@@ -3293,8 +3294,9 @@ function buildShieldsPanel(host) {
 			</div>`;
 
 		shieldsPanel.innerHTML =
+			`<div class="shieldsCard">` +
 			head +
-			`<div class="shieldsCount"><b>${count}</b> trackers, ads, and more blocked</div>
+			`<div class="shieldsCount"><b>${count}</b> trackers, ads, and more blocked</div></div>
 			<div class="shieldsAdvanced" id="shAdvanced">
 				<button class="shieldsAdvancedHead" id="shAdvancedHead" aria-expanded="true">
 					${shieldIcon('gear')}
