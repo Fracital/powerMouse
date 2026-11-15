@@ -2446,7 +2446,12 @@ input:focus-visible {
 	background: var(--sh-outline);
 	border: none;
 	cursor: pointer;
-	transition: background 0.15s ease;
+	/* Leo keeps the thumb transition off until the toggle is touched, so the
+	   first render (checked state applied straight away) does not jump; it only
+	   animates while hovered or focused. --leo-toggle-transition-duration: .12s
+	   on hover in Brave's app.style.ts. */
+	--sh-toggle-dur: 0s;
+	transition: background var(--sh-toggle-dur) ease;
 }
 .shieldsToggle::after {
 	content: '';
@@ -2458,8 +2463,12 @@ input:focus-visible {
 	border-radius: 50%;
 	background: #fff;
 	transition:
-		transform 0.15s ease,
-		background 0.15s ease;
+		transform var(--sh-toggle-dur) ease,
+		background var(--sh-toggle-dur) ease;
+}
+.shieldsToggle:hover,
+.shieldsToggle:focus-visible {
+	--sh-toggle-dur: 0.12s;
 }
 .shieldsToggle:checked {
 	background: var(--sh-interactive);
@@ -2556,8 +2565,24 @@ input:focus-visible {
 .shieldsAdvanced.closed .chev {
 	transform: rotate(0);
 }
+/* expand/collapse the advanced rows smoothly rather than snapping display:none.
+   max-height is a generous ceiling the row list never reaches; the padding
+   collapses with it so no sliver is left when closed. */
+.shieldsAdvanced .shieldsRows {
+	overflow: hidden;
+	max-height: 600px;
+	opacity: 1;
+	transition:
+		max-height 0.2s ease,
+		opacity 0.2s ease,
+		padding-top 0.2s ease,
+		padding-bottom 0.2s ease;
+}
 .shieldsAdvanced.closed .shieldsRows {
-	display: none;
+	max-height: 0;
+	padding-top: 0;
+	padding-bottom: 0;
+	opacity: 0;
 }
 .shieldsIcon {
 	flex: none;
@@ -3454,5 +3479,100 @@ input:focus-visible {
 	.spSettingRow,
 	.spToggleRow {
 		gap: 10px;
+	}
+}
+
+/* ---- Shields motion (Brave-matched: short, ease-out, nothing bouncy) ------- */
+/* The panel popping in: a subtle fade with a slight rise + scale, like the Leo
+   panel settling in. Runs on open because .hidden toggles display, and a
+   display change restarts the animation. */
+@keyframes shieldsPanelIn {
+	from {
+		opacity: 0;
+		transform: translateY(6px) scale(0.98);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+.shields:not(.hidden) {
+	animation: shieldsPanelIn 0.15s ease-out;
+}
+
+/* Detail-view navigation (fingerprinting / trackers & ads > and Back). The
+   panel renders by swapping innerHTML, so a two-pane slide would mean keeping
+   both views in the DOM at once; instead the new view does a directional
+   cross-fade: a short fade with a small horizontal offset that hints the
+   direction of travel (forward slides in from the right, Back from the left). */
+@keyframes shieldsViewFwd {
+	from {
+		opacity: 0;
+		transform: translateX(10px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+@keyframes shieldsViewBack {
+	from {
+		opacity: 0;
+		transform: translateX(-10px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+.shields.shAnimFwd > * {
+	animation: shieldsViewFwd 0.16s ease-out;
+}
+.shields.shAnimBack > * {
+	animation: shieldsViewBack 0.16s ease-out;
+}
+
+/* Settings pages (Filter Lists / Global Settings): the card fades + scales in
+   over its scrim; the scrim fades up with it. */
+@keyframes shieldsPageIn {
+	from {
+		opacity: 0;
+		transform: translate(-50%, -50%) scale(0.96);
+	}
+	to {
+		opacity: 1;
+		transform: translate(-50%, -50%) scale(1);
+	}
+}
+.shieldsPage:not(.hidden) {
+	animation: shieldsPageIn 0.15s ease-out;
+}
+@keyframes shieldsScrimIn {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+.shieldsPageScrim:not(.hidden) {
+	animation: shieldsScrimIn 0.15s ease;
+}
+
+/* Reduced motion: keep the end states, drop the non-essential motion. */
+@media (prefers-reduced-motion: reduce) {
+	.shields:not(.hidden),
+	.shields.shAnimFwd > *,
+	.shields.shAnimBack > *,
+	.shieldsPage:not(.hidden),
+	.shieldsPageScrim:not(.hidden) {
+		animation: none;
+	}
+	.shieldsAdvanced .shieldsRows {
+		transition: none;
+	}
+	.shieldsToggle,
+	.shieldsToggle::after {
+		transition: none;
 	}
 }

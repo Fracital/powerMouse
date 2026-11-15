@@ -3188,6 +3188,18 @@ function fpSummary(state) {
 	return `${extra.length} extra protections on for this site.`;
 }
 
+// Play the directional cross-fade when navigating between the panel's views
+// (into a detail submenu and Back). The panel re-renders by swapping innerHTML,
+// so a true two-pane slide would mean holding both views at once; this instead
+// fades the freshly-rendered view in with a small directional offset. The
+// animation is re-triggered by clearing the class and forcing a reflow before
+// re-adding it; reduced motion neutralises it in CSS.
+function playShieldsNav(dir) {
+	shieldsPanel.classList.remove('shAnimFwd', 'shAnimBack');
+	void shieldsPanel.offsetWidth; // reflow so the animation restarts
+	shieldsPanel.classList.add(dir === 'back' ? 'shAnimBack' : 'shAnimFwd');
+}
+
 function buildShieldsPanel(host) {
 	const state = controller.shields.get(host);
 	const count = shieldsCountNow();
@@ -3337,9 +3349,10 @@ function wireShieldsPanel(host) {
 	q('#shForget')?.addEventListener('change', (e) =>
 		setShield(host, { forget: e.target.checked }),
 	);
-	q('#shAdsMore')?.addEventListener('click', () =>
-		shieldsComingSoon('Trackers & ads'),
-	);
+	q('#shAdsMore')?.addEventListener('click', () => {
+		shieldsComingSoon('Trackers & ads');
+		playShieldsNav('fwd');
+	});
 	// a click anywhere else in the panel closes an open dropdown
 	shieldsPanel.onclick = (e) => {
 		if (!e.target.closest('.shieldsDrop')) closeAllDrops();
@@ -3361,7 +3374,10 @@ function wireShieldsPanel(host) {
 		});
 		if (fpNote) fpNote.textContent = fpSummary(controller.shields.get(host));
 	});
-	q('#shFpMore')?.addEventListener('click', () => buildFpSubmenu(host));
+	q('#shFpMore')?.addEventListener('click', () => {
+		buildFpSubmenu(host);
+		playShieldsNav('fwd');
+	});
 }
 
 // The "Block fingerprinting" detail submenu: a sub-view inside the panel, after
@@ -3428,7 +3444,10 @@ function buildFpSubmenu(host) {
 
 function wireFpSubmenu(host) {
 	const q = (sel) => shieldsPanel.querySelector(sel);
-	q('#shFpBack')?.addEventListener('click', () => buildShieldsPanel(host));
+	q('#shFpBack')?.addEventListener('click', () => {
+		buildShieldsPanel(host);
+		playShieldsNav('back');
+	});
 	for (const input of shieldsPanel.querySelectorAll('[data-surface]'))
 		input.addEventListener('change', (e) => {
 			const surface = e.target.dataset.surface;
@@ -4212,9 +4231,10 @@ function shieldsComingSoon(title) {
 			<span class="shieldsDomain" dir="ltr" style="grid-column:2">${escapeHtml(title)}</span>
 		</div>
 		<div class="shieldsReport">Coming in a later phase.</div>`;
-	shieldsPanel
-		.querySelector('#shBack')
-		.addEventListener('click', () => buildShieldsPanel(back));
+	shieldsPanel.querySelector('#shBack').addEventListener('click', () => {
+		buildShieldsPanel(back);
+		playShieldsNav('back');
+	});
 }
 
 function positionShields() {
@@ -4229,6 +4249,9 @@ function openShields() {
 	if (!host) return;
 	if (!controller.shields.has(host)) controller.shields.set(host, {});
 	shieldsPanel.dataset.host = host;
+	// clear any leftover view-swap class so reopening plays only the panel-in
+	// animation, not a stale per-child one
+	shieldsPanel.classList.remove('shAnimFwd', 'shAnimBack');
 	buildShieldsPanel(host);
 	positionShields();
 	shieldsPanel.classList.remove('hidden');
