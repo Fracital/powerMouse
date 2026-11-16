@@ -897,9 +897,9 @@ function genericForward(
 			// answers, messages.ts Delivery: natively the document's own second
 			// use of what it has, which is no load at all)
 			const headers = new Headers(recent.headers);
-			if (!headers.get('server-timing')?.includes(CACHED_MARKER))
+			if (!hasMark(headers.get('server-timing'), CACHED_MARKER))
 				headers.append('server-timing', CACHED_MARKER);
-			if (!headers.get('server-timing')?.includes(MEMORY_MARKER))
+			if (!hasMark(headers.get('server-timing'), MEMORY_MARKER))
 				headers.append('server-timing', MEMORY_MARKER);
 			return new Response(recent.body, {
 				status: recent.status,
@@ -3037,6 +3037,10 @@ function genericForward(
 				),
 			additionalResponseFilter,
 		);
+		// the origin's own Server-Timing metrics, before any mark of the
+		// worker's is added: one named like a mark is not taken for one
+		// (an emulated service worker's answer is the worker's already)
+		if (!fromWorker) escapeSiteMetrics(responseHeaders);
 		// a fetch or an XMLHttpRequest reads a response's policy headers as
 		// natively (the browser applies none of them to such a response); a
 		// document's and a worker's reach the browser as the proxy gives them
@@ -3181,7 +3185,7 @@ function genericForward(
 			!redirect &&
 			(serverRequest.destination === 'video' ||
 				serverRequest.destination === 'audio') &&
-			responseHeaders.get('server-timing')?.includes(OPAQUE_MARKER)
+			hasMark(responseHeaders.get('server-timing'), OPAQUE_MARKER)
 		)
 			await recordCrossedMedia(previousHop?.first ?? serverRequest.url);
 		// the page's resource timing of another origin's load is restricted
@@ -3923,6 +3927,28 @@ function keptHeaders(headers: Headers): Headers {
 	out.append('server-timing', KEPT_MARKER);
 	return out;
 }
+
+/**
+ * The origin's Server-Timing metrics with every name that starts with
+ * `stomp-` (as the worker's marks do) made `stomp-!<rest>`, which the
+ * inject reads back (siteMetrics in messages.ts); a quoted description's
+ * text is left as it is
+ */
+function escapeSiteMetrics(headers: Headers) {
+	const value = headers.get('server-timing');
+	if (value?.includes('stomp-'))
+		headers.set(
+			'server-timing',
+			value.replace(
+				/("(?:[^"\\]|\\.)*")|((?:^|,)\s*stomp-)/g,
+				(all, quoted, start) => quoted ?? `${start}!`,
+			),
+		);
+}
+
+/** whether a Server-Timing value has the worker's mark `mark` */
+const hasMark = (value: string | null, mark: string) =>
+	!!value?.split(',').some((metric) => metric.split(';')[0].trim() === mark);
 
 /**
  * The Server-Timing metric that tells the inject the sizes the origin's

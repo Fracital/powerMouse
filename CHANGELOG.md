@@ -1242,6 +1242,16 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   origin's, and the inject, which decided by the URLs, said "basic". The
   worker marks every cors answer of a chain that left the origin
   (performance-resources suite).
+- A site's own Server-Timing metric named like one of the service worker's
+  marks (`stomp-tao`, `stomp-cached`, any name that starts with `stomp-`)
+  reads as the site sent it: in resource timing, in the document's
+  navigation timing and in the header of a `fetch` or `XMLHttpRequest`.
+  The inject took it for the worker's own, hid it (a page could tell it was
+  proxied) and acted on it, so a site's metric could restrict its own entry,
+  hide it, change its sizes or delivery, make a fetch of its own origin read
+  "cors" or hide the whole header. The worker now escapes such a name in
+  the origin's header (`stomp-!<rest>`) before it adds a mark, and the
+  inject gives the page the name back (performance-server-timing suite).
 - `performance.memory` is each proxied site's own, as a renderer process of
   its own would report it (`src/inject/dom/modules/Memory.ts`). Every
   proxied site shares the proxy's one process, so `usedJSHeapSize` is the

@@ -277,6 +277,19 @@ export const ENCODING_MARKER = 'stomp-encoding';
  * nor its final headers' (measured natively), unlike every other load's
  */
 export const WORKER_SCRIPT_MARKER = 'stomp-worker-script';
+/**
+ * A site's own Server-Timing metric named like the worker's marks (one
+ * that starts with `stomp-`) reaches the browser as `stomp-!<rest>`, a name
+ * no mark has: the worker escapes the origin's header before it adds a mark
+ * (escapeSiteMetrics, src/server/rewrites.ts), and the inject shows the page
+ * the name the site gave (siteMetrics: a metric's name, a header's value).
+ * Only a metric's name is touched, not a quoted description's text.
+ */
+export const siteMetrics = (value: string) =>
+	value.replace(
+		/("(?:[^"\\]|\\.)*")|((?:^|,)\s*stomp-)!/g,
+		(all, quoted, start) => quoted ?? start,
+	);
 /** every Server-Timing metric of the worker's own, which the page never sees */
 export const PROXY_METRICS: readonly string[] = [
 	TAO_MARKER,

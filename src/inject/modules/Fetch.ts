@@ -13,6 +13,7 @@ import {
 	OPAQUE_MARKER,
 	PROXY_METRICS,
 	RESPONSE_TYPE_HEADER,
+	siteMetrics,
 	TIMING_ONLY_MARKER,
 } from '../../transport/messages';
 import Client from '../Client';
@@ -73,18 +74,17 @@ const metricNames = (value: string) =>
 	value.split(',').map((metric) => metric.split(';')[0].trim());
 
 /**
- * A Server-Timing value without the worker's metrics (PROXY_METRICS), or
- * null for none left or for a header the page may not read at all
- * (TIMING_ONLY_MARKER)
+ * A Server-Timing value without the worker's metrics (PROXY_METRICS), as
+ * the site sent it (siteMetrics), or null for none left or for a header the
+ * page may not read at all (TIMING_ONLY_MARKER)
  */
 export function withoutProxyMetrics(value: string): string | null {
-	const metrics = value.split(',');
 	const names = metricNames(value);
 	if (names.includes(TIMING_ONLY_MARKER)) return null;
-	const kept = metrics
-		.filter((metric, index) => !PROXY_METRICS.includes(names[index]))
-		.map((metric) => metric.trim());
-	return kept.length ? kept.join(', ') : null;
+	const kept = value
+		.split(',')
+		.filter((metric, index) => !PROXY_METRICS.includes(names[index]));
+	return kept.length ? siteMetrics(kept.join(',').trim()) : null;
 }
 
 /** a response's body stream as the browser has it, whatever its type reads as */
@@ -121,14 +121,11 @@ export function adoptTypeMark(response: Response): boolean {
 		return false;
 	}
 	// the worker's Server-Timing metrics (resource timing's marks) are the
-	// proxy's: the page reads the response's headers without them
+	// proxy's: the page reads the response's headers without them, and a
+	// site's own metric named like one as the site named it
 	const timing = Reflect.apply(nativeHeadersGet, headers, ['server-timing']) as
 		string | null;
-	if (
-		timing !== null &&
-		metricNames(timing).some((name) => PROXY_METRICS.includes(name))
-	)
-		marked.add(response);
+	if (timing?.includes('stomp-')) marked.add(response);
 	const mark = Reflect.apply(nativeHeadersGet, headers, [
 		RESPONSE_TYPE_HEADER,
 	]) as string | null;

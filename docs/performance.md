@@ -24,6 +24,15 @@ The service worker marks its answers with Server-Timing metrics of its own
 the inject reads and never shows (`src/inject/modules/ResourceTiming.ts`;
 a `fetch` or `XMLHttpRequest` reads its headers without them).
 
+A site may name its own metrics like those (`stomp-cached`): before it adds
+a mark, the worker escapes every name of the origin's header that starts
+with `stomp-` to `stomp-!<rest>`, which no mark is, and the inject gives the
+page the site's name back wherever it reads one (`PerformanceServerTiming`
+`name` and `toJSON`, the header of a `fetch` or `XMLHttpRequest`;
+`siteMetrics` in `src/transport/messages.ts`). An emulated service
+worker's answer is not escaped again: its metrics came through the worker
+already (performance-server-timing suite).
+
 | What the page reads                                                    | Natively                                                                                                                                                | Where it comes from                                                                                                                                                                         |
 | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `name`                                                                 | the URL the page asked for                                                                                                                              | the routed name, unrouted (`Unroute`)                                                                                                                                                       |

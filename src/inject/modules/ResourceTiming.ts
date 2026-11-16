@@ -11,6 +11,7 @@ import {
 	OPAQUE_MARKER,
 	PROXY_METRICS,
 	REVALIDATED_MARKER,
+	siteMetrics,
 	SIZE_MARKER,
 	TAO_MARKER,
 	TIMING_DENIED_MARKER,
@@ -839,6 +840,25 @@ export default class ResourceTimingModule extends Module<Client> {
 				),
 			);
 		});
+		// a site's metric named like a mark has the name the site gave it
+		// (the worker escaped it: siteMetrics)
+		const metricProto = global.PerformanceServerTiming?.prototype;
+		if (metricName && metricProto) {
+			Reflect.defineProperty(metricProto, 'name', {
+				...Reflect.getOwnPropertyDescriptor(metricProto, 'name'),
+				get: proxyModule.wrapFunction(metricName, (target, that, args) =>
+					siteMetrics(Reflect.apply(target, that, args)),
+				),
+			});
+			metricProto.toJSON = proxyModule.wrapFunction(
+				metricProto.toJSON,
+				(target, that, args) => {
+					const json = Reflect.apply(target, that, args);
+					if (json) json.name = siteMetrics(json.name);
+					return json;
+				},
+			);
+		}
 		// an XMLHttpRequest goes as a fetch() of the inject's: the worker
 		// marks its answer (XHR_MARKER)
 		hook('initiatorType', (entry, native) => {
