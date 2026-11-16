@@ -65,6 +65,16 @@ for (let i = 0; i < 80; i++) {
 		.frames()
 		.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 	if (!frame) continue;
+	// The suite's code runs in the frame from outside, where the page's own
+	// scripts never could: before the document has loaded, its inject may
+	// not have hooked fetch yet, and `/pages/<font>` then resolves against
+	// the proxy's own address (the demo server's 404). The page's scripts
+	// all run after the inject, so the fonts are read once the document is
+	// complete.
+	const loaded = await frame
+		.evaluate(() => document.readyState === 'complete')
+		.catch(() => false);
+	if (!loaded) continue;
 	try {
 		results = await frame.evaluate(
 			async ({ names, crossBase }) => {
