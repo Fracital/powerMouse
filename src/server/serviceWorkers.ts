@@ -35,7 +35,9 @@ import {
 	SW_RPC,
 } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
+import { browserMajor } from './clientHints';
 import type { JarCookie } from './Cookies';
+import { safelistedHeaders } from './cors';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -1470,11 +1472,21 @@ export class ServiceWorkers {
 				// refused (CORS, CORP, mixed content) or unreachable
 				if (response.type === 'error') throw new Error('network error');
 				const body = await response.blob();
+				// Chrome 157 hands a record of another origin as the CORS
+				// filtered response (type `cors`, the safelisted headers only)
+				// where earlier ones hand it whole (`default`); measured, and no
+				// background fetch of STomp's own could tell it without one
+				const filtered =
+					browserMajor() >= 157 &&
+					new URL(item.request.url).origin !== record.origin;
 				item.response = {
 					status: response.status,
 					statusText: response.statusText,
-					headers: [...response.headers],
+					headers: filtered
+						? safelistedHeaders(response.headers)
+						: [...response.headers],
 					body,
+					...(filtered ? { type: 'cors' as const } : {}),
 				};
 				entry.snapshot.downloaded += body.size;
 				if (!response.ok && !failure) failure = 'bad-status';

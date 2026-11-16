@@ -108,6 +108,8 @@ export interface BackgroundFetchRecordWire {
 		statusText: string;
 		headers: [string, string][];
 		body: Blob;
+		/** what it reads as where that is not a made response's `default` */
+		type?: 'cors';
 	} | null;
 }
 

@@ -1219,6 +1219,13 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   proxied page as a frame and answered prompt (found comparing Cloudflare's
   challenge page on kits4beats.com natively and proxied). Frames still read
   prompt, as natively. (storage-access suite, natively against both modes.)
+- A background fetch's record of another site reads from Chrome 157 on as
+  natively: Chrome 157 hands it as the CORS filtered response (`type`
+  `cors`, only the CORS-safelisted headers, whatever
+  Access-Control-Expose-Headers says), where earlier ones hand it whole as
+  `default`. The emulation follows the running Chrome's version, since no
+  background fetch of STomp's own could tell it without showing one.
+  (sop-escapes suite, Chrome 152, 156 and 157.)
 - A document's permissions policy is the browser's own, as natively. The
   browser sees every proxied frame as same-origin with its parent and never
   saw a page's `Permissions-Policy`, so a frame of another site had every

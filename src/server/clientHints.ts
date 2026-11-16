@@ -367,7 +367,7 @@ const FEATURE_VERSIONS: Record<string, { since?: number; until?: number }> = {
 };
 
 /** the browser's Chrome major version, from the worker's own user agent */
-function browserMajor(): number {
+export function browserMajor(): number {
 	const match = /Chrome\/(\d+)/.exec(globalThis.navigator?.userAgent ?? '');
 	return match ? Number(match[1]) : 0;
 }

@@ -133,6 +133,15 @@ export function exposedHeaders(
 }
 
 /**
+ * Only the CORS-safelisted headers of a response, whatever
+ * Access-Control-Expose-Headers says: a background fetch's record of
+ * another origin from Chrome 157 on (measured, `*` and named headers alike)
+ */
+export function safelistedHeaders(headers: Headers): [string, string][] {
+	return [...headers].filter(([name]) => SAFELISTED_RESPONSE.includes(name));
+}
+
+/**
  * Whether a resource's Timing-Allow-Origin lets `origin` see its timing
  * (https://w3c.github.io/resource-timing/#sec-timing-allow-origin)
  */

@@ -18,6 +18,7 @@ import type {
 	WorkerSnapshot,
 	WorkerState,
 } from '../serviceWorkerTypes';
+import { recordResponse } from './modules/Fetch';
 import type ProxyModule from './modules/Proxy';
 import { nativeFunction } from './nativeUtil';
 
@@ -851,14 +852,17 @@ export default class ServiceWorkerObjects {
 			})) as BackgroundFetchRecordWire[];
 			const objects = found.map((record) => {
 				const object = Object.create(Record.prototype);
-				const response = record.response
-					? Promise.resolve(
-							new global.Response(record.response.body, {
-								status: record.response.status,
-								statusText: record.response.statusText,
-								headers: record.response.headers,
-							}),
-						)
+				const made =
+					record.response &&
+					new global.Response(record.response.body, {
+						status: record.response.status,
+						statusText: record.response.statusText,
+						headers: record.response.headers,
+					});
+				if (made && record.response?.type)
+					recordResponse(made, record.response.type);
+				const response = made
+					? Promise.resolve(made)
 					: Promise.reject(
 							new global.DOMException(
 								'The response is not available.',
