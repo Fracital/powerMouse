@@ -2361,17 +2361,10 @@ input:focus-visible {
 	box-shadow:
 		0 12px 40px rgba(0, 0, 0, 0.55),
 		0 0 0 1px rgba(255, 255, 255, 0.06);
-	opacity: 1;
-	/* Brave's Shields popup is a native WebUI Views bubble (WebUIBubbleManager,
-	   no Brave animation override), and Chromium shows it with a plain opacity
-	   fade: no scale and no directional zoom from a corner. Match that, and
-	   dismiss the same way. This fades the panel both in and out. */
-	transition:
-		opacity 0.16s ease,
-		visibility 0.16s;
+	/* Brave's Shields popup appears and disappears instantly: no fade, no
+	   scale, no entrance animation of any kind. */
 }
 .shields.hidden {
-	opacity: 0;
 	visibility: hidden;
 	pointer-events: none;
 }
@@ -3519,11 +3512,8 @@ input:focus-visible {
 }
 
 /* ---- Shields motion (Brave-matched: short, ease-out, nothing bouncy) ------- */
-/* The panel popping in: a subtle fade with a slight rise + scale, like the Leo
-   panel settling in. Runs on open because .hidden toggles display, and a
-   display change restarts the animation. */
-/* The panel fades in and out through the opacity/visibility transition on
-   .shields, defined with .shields above. */
+/* The panel itself opens and closes instantly, as Brave's does (see .shields
+   above); only the detail views below move. */
 
 /* Detail-view navigation (fingerprinting / trackers & ads > and Back). The
    panel renders by swapping innerHTML, so a two-pane slide would mean keeping
@@ -3592,9 +3582,6 @@ input:focus-visible {
 	.shieldsPage:not(.hidden),
 	.shieldsPageScrim:not(.hidden) {
 		animation: none;
-	}
-	.shields {
-		transition: none;
 	}
 	.shieldsToggle,
 	.shieldsToggle::after {
