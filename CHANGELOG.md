@@ -1231,6 +1231,15 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- Calling a hooked element method or accessor on an interface's prototype
+  itself (`Element.prototype`, as a script that probes for hooks does) no
+  longer reorders that prototype's keys. The hooks set the receiver's own
+  members aside while they work, to get past an instance's own shadowing
+  members, and put them back after: on a prototype that moved its
+  `constructor` and `@@toStringTag` behind the rest, so
+  `Reflect.ownKeys(Element.prototype)` ended with `@@unscopables,
+@@toStringTag` where natively it ends `@@toStringTag, @@unscopables`.
+  (realm-surface: an about:blank frame walked a second time.)
 - `location.assign()` and `location.replace()` with no argument, or with a
   URL that does not parse, throw the browser's own error and navigate
   nowhere, as natively. Through the proxy they navigated the page to

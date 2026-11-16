@@ -22,16 +22,21 @@ export function usePrototype<Prototype extends object, CallbackResult>(
 	// scripts it creates an own setAttribute that writes through the hooked
 	// one, so a hook calling `element.setAttribute` ran the page's and
 	// recursed. The own ones the hook prototype also has are set aside while
-	// the hooks work (a non-configurable one cannot be, and stays)
+	// the hooks work (a non-configurable one cannot be, and stays). An
+	// interface's prototype object is no such element: a hook called on
+	// Element.prototype itself set its constructor and @@toStringTag aside
+	// and back, which listed them after the rest (@@toStringTag after
+	// @@unscopables) once a page had called a hooked method on it
 	let hidden: [key: string | symbol, descriptor: PropertyDescriptor][] | null =
 		null;
-	for (const key of Reflect.ownKeys(target)) {
-		if (!(key in usePrototype)) continue;
-		const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
-		if (!descriptor?.configurable || !Reflect.deleteProperty(target, key))
-			continue;
-		(hidden ??= []).push([key, descriptor]);
-	}
+	if (!isInterfacePrototype(target))
+		for (const key of Reflect.ownKeys(target)) {
+			if (!(key in usePrototype)) continue;
+			const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+			if (!descriptor?.configurable || !Reflect.deleteProperty(target, key))
+				continue;
+			(hidden ??= []).push([key, descriptor]);
+		}
 
 	const uses = <
 		{ [preparePrototype]?: () => void; [cleanupPrototype]?: () => void }
@@ -73,6 +78,18 @@ export function usePrototype<Prototype extends object, CallbackResult>(
 	}
 
 	return result[0];
+}
+
+/** whether `object` is the prototype its own `constructor` names (read as data, no getter run) */
+function isInterfacePrototype(object: object): boolean {
+	const constructor = Reflect.getOwnPropertyDescriptor(
+		object,
+		'constructor',
+	)?.value;
+	return (
+		typeof constructor === 'function' &&
+		Reflect.getOwnPropertyDescriptor(constructor, 'prototype')?.value === object
+	);
 }
 
 export function applyDescriptors(target: any, from: any): any {
