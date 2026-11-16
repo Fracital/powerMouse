@@ -62,6 +62,7 @@ import { contextText, linkRoute, opaqueContext } from '../../visited';
 import { ownCodec, shareCodec, type CodecBackend } from '../../wasm/codec';
 import Client from '../Client';
 import {
+	deferredText,
 	getPublicSuffix,
 	lightText,
 	modifyCSS,
@@ -420,6 +421,10 @@ export default class DocumentClient extends Client {
 					const top = this.#topClient();
 					return top === this ? null : top.rewriterLightText(BUILD);
 				},
+				deferredText: () => {
+					const top = this.#topClient();
+					return top === this ? null : top.deferredPartsText(BUILD);
+				},
 				factory: (text, name) => {
 					// only where the document refuses eval: a document without
 					// allow-scripts (its guard's nonce), or one whose policy refuses
@@ -474,6 +479,14 @@ export default class DocumentClient extends Client {
 	 */
 	rewriterLightText(build: string): string | null {
 		return build === BUILD ? lightText() : null;
+	}
+	/**
+	 * The bundle's deferred parts' statement (src/inject/dom/deferred.ts) as
+	 * this top holds it, for a document under it that evaluates them; null
+	 * without it, or for a bundle of another `build`. @internal
+	 */
+	deferredPartsText(build: string): string | null {
+		return build === BUILD ? deferredText() : null;
 	}
 	/** a top's library (null: it could not make one), undefined for a frame under a top */
 	#rewriter: RewriterLib | null | undefined;

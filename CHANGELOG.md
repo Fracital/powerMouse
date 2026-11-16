@@ -11,6 +11,20 @@ The first release after a four-year gap. Everything below is breaking.
   as the snapshot's own under a name of its own; the same function): the
   document bundle names them some 1,700 times, and `injectDocument.js`
   is 18 KB smaller (505 to 487 KB), the worker bundle 5 KB. (frame-cost.)
+- The document bundle has deferred parts: code most frames never run, which
+  no document bundle carries. They are the last statement of
+  `dist/rewriterLib.js` (a proxied top's shell loads that file already, so
+  no host serves a new file), and a document evaluates them the first time
+  it needs one, from its top's copy with no request (a document with no top
+  to take them from reads the file with its light library's one request).
+  The first parts are the service worker container's objects (made when a
+  page first reads `navigator.serviceWorker`), the Cookie Store API's
+  methods (at a page's first call) and the Fingerprint module (applied only
+  where a farbling surface is on). `injectDocument.js` is 28 KB smaller (487
+  to 459 KB) and `rewriterLib.js` 31 KB larger; the rewriter's generation
+  (the rewrite cache's key) is the light library's alone, as before.
+  build.js lists a part's files in `DEFERRED_FILES`. (deferred-parts,
+  rewriter-fallback, frame-cost, service-worker suites, fingerprint-shields.)
 - The document inject bundle no longer carries the light rewriter library
   (41 KB of its 475): a frame uses its top's library and never evaluated
   its own. The library is the second statement of `dist/rewriterLib.js`,

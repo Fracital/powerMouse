@@ -40,7 +40,7 @@ import { provideRewriters } from '../rewriters';
 import { blobOriginPair, routeScopeList } from '../routeURL';
 import type { ScriptType } from '../scriptRoutes';
 import type StompURL from '../StompURL';
-import { LIGHT_FACTORY } from '../version';
+import { DEFERRED_FACTORY, LIGHT_FACTORY } from '../version';
 import { knownSite } from './sites';
 import { trustedFunction } from './trusted';
 
@@ -90,15 +90,16 @@ const toSource = Function.prototype.toString;
  * made non-enumerable; it is taken and the name is gone here, while the
  * bundle loads, before the client exists and long before any page script.
  */
-const givenLight: Function | null = (() => {
-	const descriptor = Reflect.getOwnPropertyDescriptor(
-		globalThis,
-		LIGHT_FACTORY,
-	);
+const givenLight: Function | null = taken(LIGHT_FACTORY);
+/** the document bundle's deferred parts' function, the file's last statement, taken the same way */
+const givenDeferred: Function | null = taken(DEFERRED_FACTORY);
+
+function taken(name: string): Function | null {
+	const descriptor = Reflect.getOwnPropertyDescriptor(globalThis, name);
 	if (!descriptor) return null;
-	Reflect.deleteProperty(globalThis, LIGHT_FACTORY);
+	Reflect.deleteProperty(globalThis, name);
 	return typeof descriptor.value === 'function' ? descriptor.value : null;
-})();
+}
 
 type Factory = (realm?: Record<string, unknown>) => RewriterLib;
 
@@ -106,8 +107,19 @@ type Factory = (realm?: Record<string, unknown>) => RewriterLib;
 let light: Factory | null =
 	rewriterLib ?? (givenLight as Factory | null) ?? null;
 
-/** the light library file's text, once this realm asked for it (lightFactory) */
+/** the light library file's text, once this realm asked for it (lightFactory, deferredFactory) */
 let fetched: string | null = null;
+
+/**
+ * The file's statements: the light library's, then the document bundle's
+ * deferred parts' (build.js writes the second after a line break, and the
+ * first has no line that starts with its name)
+ */
+function fileStatements(): [light: string, deferred: string | null] {
+	const file = (fetched ??= fetchLibrary().source);
+	const at = file.lastIndexOf(`\n${DEFERRED_FACTORY}=`);
+	return at === -1 ? [file, null] : [file.slice(0, at), file.slice(at + 1)];
+}
 
 /**
  * The light library's factory. A worker's bundle carries it; a document's
@@ -128,27 +140,82 @@ export function lightFactory(): Factory {
 	} catch (error) {
 		// the realm above is gone or of another kind: this one asks
 	}
-	if (text === null) text = fetched ??= fetchLibrary().source;
-	let made: unknown;
-	try {
-		if (sharing.evaluates?.() === false) throw new Error('no eval');
-		const body = `${text}\n;return ${LIGHT_FACTORY};`;
-		// (eval of a trusted value where Trusted Types are in use: trusted.ts)
-		made = (
-			(trustedFunction(globalThis, [LIGHT_FACTORY], body) ??
-				Reflect.construct(realm.Function, [
-					LIGHT_FACTORY,
-					body,
-				])) as () => unknown
-		)();
-	} catch (error) {
-		// a document whose script policy refuses eval: a script of its own
-		made = sharing.factory?.(text, LIGHT_FACTORY) ?? null;
-	}
+	if (text === null) text = fileStatements()[0];
+	const made = evaluated(text, LIGHT_FACTORY);
 	if (typeof made !== 'function')
 		throw new Error('Stomp: the rewriterLib asset has no light library');
 	light = made as Factory;
 	return light;
+}
+
+/**
+ * The function `statement` (`<name>=function...;`) assigns, evaluated here
+ * as the body of a function that has the name as its parameter, which
+ * writes no global; where this realm's policy refuses code made from a
+ * string, run as a script of its own (sharing.factory). `sourceURL` names
+ * the code (a comment the text ends with), so the stack cleaner knows its
+ * frames for the inject's (Unroute).
+ */
+function evaluated(statement: string, name: string, sourceURL = ''): unknown {
+	try {
+		if (sharing.evaluates?.() === false) throw new Error('no eval');
+		const body = `${statement}\n;return ${name};${sourceURL}`;
+		// (eval of a trusted value where Trusted Types are in use: trusted.ts)
+		return (
+			(trustedFunction(globalThis, [name], body) ??
+				Reflect.construct(realm.Function, [name, body])) as () => unknown
+		)();
+	} catch (error) {
+		// a document whose script policy refuses eval: a script of its own
+		return sharing.factory?.(`${statement}${sourceURL}`, name) ?? null;
+	}
+}
+
+/** the deferred parts' function, once this realm has it (deferredFactory) */
+let deferredMade: Function | null = givenDeferred;
+
+/**
+ * The document bundle's deferred parts' function (src/inject/dom/deferred.ts),
+ * the last statement of the light library's file: the one a top's shell
+ * loaded, else made here from its text (the top's, or the file's, asked for
+ * with the light library's one synchronous request) as lightFactory makes
+ * that library. Throws when it cannot be had.
+ */
+export function deferredFactory(): (shared: unknown) => unknown {
+	if (!deferredMade) {
+		let text: string | null = null;
+		try {
+			const held: unknown = sharing.deferredText?.();
+			if (typeof held === 'string') text = held;
+		} catch (error) {
+			// the realm above is gone or of another kind: this one asks
+		}
+		text ??= fileStatements()[1];
+		if (text === null)
+			throw new Error('Stomp: the rewriterLib asset has no deferred parts');
+		// named as the file the statement is in: the stack cleaner drops the
+		// frames of the inject's own files
+		const url = libraryURL?.();
+		const made = evaluated(
+			text,
+			DEFERRED_FACTORY,
+			url ? `\n//# sourceURL=${url}` : '',
+		);
+		if (typeof made !== 'function')
+			throw new Error('Stomp: the rewriterLib asset has no deferred parts');
+		deferredMade = made;
+	}
+	return deferredMade as (shared: unknown) => unknown;
+}
+
+/**
+ * The deferred parts' statement, for a document under this top that
+ * evaluates them: null where this realm has not had them yet
+ */
+export function deferredText(): string | null {
+	return deferredMade
+		? `${DEFERRED_FACTORY}=${Reflect.apply(toSource, deferredMade, []) as string};`
+		: null;
 }
 
 /**
@@ -168,15 +235,15 @@ export interface RewriterSharing {
 	 * top holds it), for this realm's own copy (lightFactory)
 	 */
 	lightText?: () => string | null;
+	/** the deferred parts' statement from the realm above (deferredFactory) */
+	deferredText?: () => string | null;
 	/**
-	 * The light library's factory made from its text in this realm, where
-	 * this realm's own copy cannot make it (a document whose script policy
-	 * refuses eval, src/inject/dom/rewriterRealm.ts); null where it can
+	 * The function the statement `text` assigns to `name` (the light
+	 * library's factory, the deferred parts'), made in this realm where this
+	 * realm's own copy cannot make it from the text (a document whose script
+	 * policy refuses eval, src/inject/dom/rewriterRealm.ts); null where it can
 	 */
-	factory?: (
-		text: string,
-		name?: string,
-	) => ((realm?: Record<string, unknown>) => RewriterLib) | null;
+	factory?: (text: string, name?: string) => Function | null;
 	/**
 	 * Whether this realm may make code from a string: where its policy
 	 * refuses it (src/csp.ts), the factory makes the library at once, since

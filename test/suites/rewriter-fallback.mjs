@@ -183,16 +183,20 @@ for (const [mode, base] of [
 	const watch = mode === 'same-origin' ? await watchLibrary(page) : null;
 	const name = await clientName(page);
 	// every document from here on notes, after each script its parser runs,
-	// whether the name the light library's file assigns is there and enumerable
+	// whether the names the light library's file assigns (the light library's
+	// factory, the document bundle's deferred parts') are there and enumerable
 	await page.addInitScript(() => {
 		const states = [];
 		const note = () => {
-			const descriptor = Object.getOwnPropertyDescriptor(
-				window,
-				'__stompRewriterLight',
+			const descriptors = ['__stompRewriterLight', '__stompDeferred'].map(
+				(name) => Object.getOwnPropertyDescriptor(window, name),
 			);
 			states.push(
-				!descriptor ? 'absent' : descriptor.enumerable ? 'listed' : 'hidden',
+				descriptors.some((descriptor) => descriptor?.enumerable)
+					? 'listed'
+					: descriptors.some(Boolean)
+						? 'hidden'
+						: 'absent',
 			);
 		};
 		Object.defineProperty(window, '__libraryName', {
@@ -262,9 +266,12 @@ for (const [mode, base] of [
 			.map((entry) => entry.name)
 			.filter((name) => /rewriterLib|injectDocument|\/stomp\//.test(name)),
 		names: Object.getOwnPropertyNames(window).filter((name) =>
-			/stompRewriterLi(b|ght)/i.test(name),
+			/stompRewriterLi(b|ght)|stompDeferred/i.test(name),
 		),
-		has: '__stompRewriterLib' in window || '__stompRewriterLight' in window,
+		has:
+			'__stompRewriterLib' in window ||
+			'__stompRewriterLight' in window ||
+			'__stompDeferred' in window,
 	}));
 	ok(
 		`${mode}: the page sees no script, timing entry or global of the library's`,

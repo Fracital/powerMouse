@@ -21,7 +21,31 @@ const MAX_COOKIE_BYTES = 4096;
 const MAX_ATTRIBUTE_BYTES = 1024;
 const MALFORMED =
 	'Cookie was malformed and could not be stored, due to problem(s) while parsing.';
-const encoder = new TextEncoder();
+
+/**
+ * The length of `text` in UTF-8, as TextEncoder encodes it (a lone surrogate
+ * is U+FFFD, three bytes). Counted here, with no global read: a document
+ * evaluates this file as a deferred part of its bundle (src/inject/dom/
+ * deferredParts.ts), maybe after the page replaced TextEncoder.
+ */
+function utf8Length(text: string): number {
+	let length = 0;
+	for (let i = 0; i < text.length; i++) {
+		const unit = text.charCodeAt(i);
+		if (unit < 0x80) length += 1;
+		else if (unit < 0x800) length += 2;
+		else if (
+			unit >= 0xd800 &&
+			unit < 0xdc00 &&
+			i + 1 < text.length &&
+			(text.charCodeAt(i + 1) & 0xfc00) === 0xdc00
+		) {
+			length += 4;
+			i++;
+		} else length += 3;
+	}
+	return length;
+}
 
 export interface CookieStoreContext {
 	global: typeof globalThis;
@@ -232,9 +256,8 @@ export function cookieStoreMethods(
 		}
 		if (
 			malformedPart(name + value + path) ||
-			encoder.encode(name).length + encoder.encode(value).length >
-				MAX_COOKIE_BYTES ||
-			encoder.encode(path).length > MAX_ATTRIBUTE_BYTES
+			utf8Length(name) + utf8Length(value) > MAX_COOKIE_BYTES ||
+			utf8Length(path) > MAX_ATTRIBUTE_BYTES
 		)
 			throw fail('set', MALFORMED);
 		return { ...write, name, value, domain, path };

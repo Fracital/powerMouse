@@ -117,11 +117,11 @@ export function libraryFactoryFromScript(
 	document: Document,
 	text: string,
 	nonce: string,
-	/** the name the text assigns (the light library's) */
+	/** the name the text assigns (the light library's, the deferred parts') */
 	name: string = LIGHT_FACTORY,
 	/** the realm `document` is of, where the name is made (this one's by default) */
 	global: typeof globalThis = globalThis,
-): ((realm?: Record<string, unknown>) => RewriterLib) | null {
+): Function | null {
 	let root: Element | null = null;
 	let script: Element | null = null;
 	try {
@@ -142,9 +142,7 @@ export function libraryFactoryFromScript(
 		});
 		Reflect.apply(appendChild, root, [script]);
 		const made: unknown = Reflect.getOwnPropertyDescriptor(global, name)?.value;
-		return typeof made === 'function'
-			? (made as (realm?: Record<string, unknown>) => RewriterLib)
-			: null;
+		return typeof made === 'function' ? made : null;
 	} catch (error) {
 		return null;
 	} finally {

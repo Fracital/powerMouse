@@ -1,7 +1,9 @@
 import type { FpSurface } from '../../blocker/types';
 import { createClientFactory } from '../Client';
+import Module from '../Module';
 import baseModules from '../modules';
 import DocumentClient from './Client';
+import { deferred } from './deferred';
 import AdblockModule from './modules/Adblock';
 import AnchorModule from './modules/Anchor';
 import AnimationFramesModule from './modules/AnimationFrames';
@@ -20,7 +22,6 @@ import DOMAttributesModule from './modules/DOMAttributes';
 import DOMContentHooks from './modules/DOMContentHooks';
 import DOMHooksModule from './modules/DOMHooks';
 import DownloadModule from './modules/Download';
-import FingerprintModule from './modules/Fingerprint';
 import FormQueryModule from './modules/FormQuery';
 import FragmentModule from './modules/Fragment';
 import FramingModule from './modules/Framing';
@@ -49,6 +50,20 @@ import VisitedModule from './modules/Visited';
 import WebAssemblyPolicyModule from './modules/WebAssemblyPolicy';
 import WebRTCModule from './modules/WebRTC';
 import XMLHttpRequestModule from './modules/XMLHttpRequest';
+
+/**
+ * The Fingerprint module (./modules/Fingerprint.ts), a deferred part of the
+ * bundle (./deferred.ts): it is added only where a surface is on, which no
+ * default frame has, so the frames that never farble anything do not
+ * evaluate it. Made when the client applies its modules, in this one's
+ * place; it has no state before that.
+ */
+class FingerprintStandIn extends Module<DocumentClient> {
+	apply() {
+		const Fingerprint = deferred().FingerprintModule;
+		new Fingerprint(this.client).apply();
+	}
+}
 
 // the surfaces the FingerprintModule handles (every surface but performanceMemory,
 // which is the Memory module): the module is added only when one of these is on
@@ -111,7 +126,7 @@ export function addClientModules(client: DocumentClient) {
 	if (
 		FINGERPRINT_SURFACES.some((surface) => client.emulatesFingerprint(surface))
 	)
-		client.addModule(FingerprintModule);
+		client.addModule(FingerprintStandIn);
 	client.addModule(CanvasTaintModule);
 	client.addModule(MediaTaintModule);
 	client.addModule(MediaSessionModule);

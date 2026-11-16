@@ -116,6 +116,22 @@ on every save (use a `git worktree`).
   (`requestModules` in `src/inject/Client.ts`) reads the message with
   getters taken before any page script ran: a module the page could swap in
   would be the rewriter of everything its top and frames evaluate.
+- **The document bundle's deferred parts are in no bundle.** The files
+  build.js lists in `DEFERRED_FILES` (the service worker container's objects,
+  the Cookie Store methods, the Fingerprint module) are the last statement of
+  `dist/rewriterLib.js`, evaluated by a document the first time it calls
+  `deferred()` (`src/inject/dom/deferred.ts`): a top's shell loaded it, a
+  frame takes its top's text, and only a realm with no top to take it from
+  reads the file (the light library's one request). Every other module they
+  import is the bundle's own, read from `__stompShared` once, when the parts
+  are evaluated: build.js refuses a `let`/`var` import and a namespace import,
+  and fails when a listed file reaches a document bundle or a file only the
+  parts import is not listed. A listed file can be evaluated after page
+  scripts ran, so its top level reads no global (constants and functions
+  only). A part is code that runs after something happened (a first read, a
+  first call, a surface turned on), never a hook the page's first script
+  must meet; moving one there is the cheap way to add a feature without
+  growing every frame (`frame-cost`).
 - **Classic-script globals use `Reflect.defineProperty`, not `globalName`.**
   The inject bundles delete `createClient` after use; a top-level `var` from
   esbuild's `globalName` can't be deleted. See `src/*/entry.ts`.

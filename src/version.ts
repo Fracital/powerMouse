@@ -47,3 +47,11 @@ export const LIBRARY: string =
  * function that evaluates the text (src/rewriterLight.ts).
  */
 export const LIGHT_FACTORY = '__stompRewriterLight';
+
+/**
+ * The name the document bundle's deferred parts assign their function to
+ * (src/inject/dom/deferredParts.ts): the last statement of the light
+ * rewriter library's file, `__stompDeferred=function(__stompShared){...};`
+ * (build.js). Taken and deleted as LIGHT_FACTORY is (src/inject/rewriter.ts).
+ */
+export const DEFERRED_FACTORY = '__stompDeferred';

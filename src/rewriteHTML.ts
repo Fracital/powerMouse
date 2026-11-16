@@ -24,7 +24,7 @@ import {
 	WORKER_BASE,
 } from './transport/messages';
 import { dataBody } from './urlShape';
-import { LIGHT_FACTORY } from './version';
+import { DEFERRED_FACTORY, LIGHT_FACTORY } from './version';
 
 /**
  * The route of a document. `form`: a GET form's action, whose query the
@@ -535,8 +535,14 @@ function libraryScripts(
 	/** what the script that loads the file carries */
 	loading = attribute,
 ) {
-	// the file assigns the light library's factory to this name (build.js)
-	const name = `Reflect.defineProperty(globalThis, ${JSON.stringify(LIGHT_FACTORY)}, { writable: true, configurable: true });`;
+	// the file assigns the light library's factory, and the document bundle's
+	// deferred parts' function, to these names (build.js)
+	const name = [LIGHT_FACTORY, DEFERRED_FACTORY]
+		.map(
+			(factory) =>
+				`Reflect.defineProperty(globalThis, ${JSON.stringify(factory)}, { writable: true, configurable: true });`,
+		)
+		.join('');
 	return `<script${attribute}>${name}</script><script${loading} src="${rewriterLibJS(url, config)}"></script>`;
 }
 

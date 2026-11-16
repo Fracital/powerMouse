@@ -1,10 +1,17 @@
 import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, watch } from 'node:fs';
-import { copyFile, mkdir, readdir, readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import {
+	copyFile,
+	mkdir,
+	readdir,
+	readFile,
+	writeFile,
+} from 'node:fs/promises';
+import { relative, resolve, sep } from 'node:path';
 import { build, context, formatMessages } from 'esbuild';
 import { rimraf } from 'rimraf';
+import ts from 'typescript';
 
 const pkg = JSON.parse(await readFile('package.json', 'utf8'));
 const dev = process.argv.includes('--dev');
@@ -152,6 +159,8 @@ async function lightLibrary(worker, define) {
  * its own.
  */
 const LIGHT_FACTORY = '__stompRewriterLight';
+/** the name the deferred parts' statement assigns (src/version.ts DEFERRED_FACTORY) */
+const DEFERRED_FACTORY = '__stompDeferred';
 
 const rewriterLib = {
 	name: 'rewriter-lib',
@@ -196,9 +205,10 @@ const rewriterLib = {
 /**
  * The light rewriter library (src/rewriterLightDocument.ts: the wasm glue and
  * nothing a parser stands in for), the asset `rewriterLib`: no document bundle
- * carries it (a frame uses its top's and evaluates none). The file is one
- * statement that assigns the factory to a name (src/version.ts LIGHT_FACTORY),
- * and is read two ways. A proxied top's shell loads it as a script before the
+ * carries it (a frame uses its top's and evaluates none). Its statement
+ * assigns the factory to a name (src/version.ts LIGHT_FACTORY), and is the
+ * file's first; the document bundles' deferred parts are its second (below).
+ * It is read two ways. A proxied top's shell loads it as a script before the
  * inject bundle, which takes the factory and removes the name
  * (src/rewriteHTML.ts, src/inject/rewriter.ts). A sandboxed frame's own copy,
  * and a top whose shell did not load it, are handed its text the first time a
@@ -220,7 +230,326 @@ const rewriterLibrary = {
 	banner: { js: `${LIGHT_FACTORY}=function(__stompRealm){` },
 	footer: { js: 'return __stompLib.api;};' },
 	plugins: [noSourceMaps],
+	// written with the deferred parts after it (libraryFile)
+	write: false,
 };
+
+/**
+ * The document bundles' deferred parts (src/inject/dom/deferredParts.ts,
+ * src/inject/dom/deferred.ts): code most frames never run, which no
+ * document bundle carries. They are the last statement of the rewriter
+ * library's file, `__stompDeferred=function(__stompShared){...};`
+ * (src/version.ts DEFERRED_FACTORY), after the light library's: a proxied
+ * top's shell loads that file already, the controller fetched it when it
+ * started, and a realm with no top to take them from reads them from the one
+ * request its light library makes. No host serves a new file.
+ *
+ * Only the files listed here are the parts' own. Every other module they
+ * import is the document bundle's, the same values: the import is a module
+ * of the parts' that reads them from `__stompShared`, which the bundle
+ * makes (`stomp:deferred-shared`, below) with exactly the names the parts
+ * import. So the snapshots are the ones taken before any page script ran,
+ * the client's classes are the bundle's (getModule finds its modules) and
+ * nothing is evaluated twice. A name read that way is read once, when the
+ * parts are evaluated: one that may change later (`let`, `var`) is refused
+ * here. A listed file may be in no document bundle, and a file only the
+ * parts import has to be listed (both checked after the build).
+ */
+const DEFERRED_FILES = new Set(
+	[
+		'src/inject/cookieStoreMethods.ts',
+		'src/inject/dom/deferredParts.ts',
+		'src/inject/dom/modules/Fingerprint.ts',
+		'src/inject/dom/modules/serviceWorkerEmulation.ts',
+		'src/inject/serviceWorkerObjects.ts',
+	].map((file) => resolve(file)),
+);
+const DEFERRED_ENTRY = 'src/inject/dom/deferredParts.ts';
+/** what the parts read of the bundle: by file (from the root), the names */
+const deferredShared = new Map();
+const fileId = (file) => relative(resolve('.'), file).split(sep).join('/');
+
+const parsedSources = new Map();
+function parsedSource(file) {
+	let source = parsedSources.get(file);
+	if (!source) {
+		source = ts.createSourceFile(
+			file,
+			readFileSync(file, 'utf8'),
+			ts.ScriptTarget.Latest,
+		);
+		parsedSources.set(file, source);
+	}
+	return source;
+}
+const hasModifier = (node, kind) =>
+	!!ts.canHaveModifiers(node) &&
+	!!ts.getModifiers(node)?.some((modifier) => modifier.kind === kind);
+
+/** the value names `importer` imports (or re-exports) from `specifier` */
+function importedNames(importer, specifier) {
+	const names = new Set();
+	const elements = (list) => {
+		for (const element of list)
+			if (!element.isTypeOnly)
+				names.add((element.propertyName ?? element.name).text);
+	};
+	for (const node of parsedSource(importer).statements) {
+		if (node.moduleSpecifier?.text !== specifier) continue;
+		if (ts.isImportDeclaration(node)) {
+			const clause = node.importClause;
+			if (!clause || clause.isTypeOnly) continue;
+			if (clause.name) names.add('default');
+			if (clause.namedBindings && ts.isNamespaceImport(clause.namedBindings))
+				throw new Error(
+					`${fileId(importer)}: a deferred part imports '${specifier}' as a namespace; import its names`,
+				);
+			if (clause.namedBindings) elements(clause.namedBindings.elements);
+		} else if (ts.isExportDeclaration(node) && !node.isTypeOnly) {
+			if (!node.exportClause || ts.isNamespaceExport(node.exportClause))
+				throw new Error(
+					`${fileId(importer)}: a deferred part re-exports all of '${specifier}'; name what it exports`,
+				);
+			elements(node.exportClause.elements);
+		}
+	}
+	return names;
+}
+
+/**
+ * What `file` exports as values, each with whether its binding may change
+ * (`let`, `var`); `star` when it re-exports another module whole
+ */
+function valueExports(file) {
+	const exports = new Map();
+	const locals = new Map();
+	const lists = [];
+	let star = false;
+	for (const node of parsedSource(file).statements) {
+		const exported = hasModifier(node, ts.SyntaxKind.ExportKeyword);
+		const named = hasModifier(node, ts.SyntaxKind.DefaultKeyword)
+			? 'default'
+			: node.name?.text;
+		if (ts.isVariableStatement(node)) {
+			const mutable = !(node.declarationList.flags & ts.NodeFlags.Const);
+			for (const declaration of node.declarationList.declarations)
+				if (ts.isIdentifier(declaration.name)) {
+					locals.set(declaration.name.text, mutable);
+					if (exported) exports.set(declaration.name.text, mutable);
+				}
+		} else if (
+			ts.isFunctionDeclaration(node) ||
+			ts.isClassDeclaration(node) ||
+			ts.isEnumDeclaration(node)
+		) {
+			if (node.name) locals.set(node.name.text, false);
+			if (exported && named) exports.set(named, false);
+		} else if (
+			ts.isInterfaceDeclaration(node) ||
+			ts.isTypeAliasDeclaration(node)
+		) {
+			locals.set(node.name.text, 'type');
+		} else if (ts.isExportAssignment(node) && !node.isExportEquals) {
+			exports.set('default', false);
+		} else if (ts.isExportDeclaration(node) && !node.isTypeOnly) {
+			if (!node.exportClause) star = true;
+			else if (ts.isNamedExports(node.exportClause))
+				for (const element of node.exportClause.elements)
+					if (!element.isTypeOnly)
+						lists.push([
+							element.name.text,
+							node.moduleSpecifier
+								? undefined
+								: (element.propertyName ?? element.name).text,
+						]);
+		}
+	}
+	for (const [name, local] of lists) {
+		const kind = local === undefined ? false : locals.get(local);
+		if (kind !== 'type') exports.set(name, kind === true);
+	}
+	return { exports, star };
+}
+
+const SHARED = 'deferred-shared';
+/** the parts' imports of the bundle's modules (see DEFERRED_FILES) */
+const deferredSharing = {
+	name: 'deferred-sharing',
+	setup(pluginBuild) {
+		const injected = new Set(
+			(pluginBuild.initialOptions.inject ?? []).map((file) => resolve(file)),
+		);
+		pluginBuild.onResolve({ filter: /.*/ }, async (args) => {
+			if (args.pluginData === SHARED || args.namespace !== 'file') return;
+			const found = await pluginBuild.resolve(args.path, {
+				kind: args.kind,
+				importer: args.importer,
+				resolveDir: args.resolveDir,
+				pluginData: SHARED,
+			});
+			if (found.errors.length || found.external || found.namespace !== 'file')
+				return;
+			const entry = args.kind === 'entry-point';
+			if (entry && !injected.has(found.path)) return;
+			if (DEFERRED_FILES.has(found.path)) return;
+			const id = fileId(found.path);
+			const { exports, star } = valueExports(found.path);
+			// an injected file (a snapshot) gives every name it exports
+			const names = entry
+				? [...exports.keys()]
+				: [...importedNames(args.importer, args.path)].filter(
+						(name) => exports.has(name) || star,
+					);
+			for (const name of names)
+				if (exports.get(name) === true)
+					throw new Error(
+						`${id}: a deferred part imports '${name}', a binding that may change (let, var): export a const or a function`,
+					);
+			names.sort();
+			const known = deferredShared.get(id) ?? new Set();
+			for (const name of names) known.add(name);
+			deferredShared.set(id, known);
+			return {
+				path: `${found.path}?${names.join(',')}`,
+				namespace: SHARED,
+				pluginData: { id, names },
+			};
+		});
+		pluginBuild.onLoad({ filter: /.*/, namespace: SHARED }, (args) => {
+			const { id, names } = args.pluginData;
+			const values = names.map(
+				(name, index) => `v${index} = m[${JSON.stringify(name)}]`,
+			);
+			return {
+				contents: `const m = __stompShared[${JSON.stringify(id)}];\n${
+					values.length ? `const ${values.join(', ')};\n` : ''
+				}export { ${names.map((name, index) => `v${index} as ${name}`).join(', ')} };\n`,
+				loader: 'js',
+			};
+		});
+	},
+};
+
+/** @type {import('esbuild').BuildOptions} */
+const deferredParts = {
+	...common,
+	define: { ...common.define, ...reflectDefines },
+	entryPoints: { deferredParts: DEFERRED_ENTRY },
+	format: 'iife',
+	inject: [snapshot, domSnapshot],
+	// (src/inject/dom/deferredParts.ts sets `made`)
+	banner: {
+		js: `${DEFERRED_FACTORY}=function(__stompShared){"use strict";var __stompParts={};`,
+	},
+	footer: { js: 'return __stompParts.made;};' },
+	plugins: [noSourceMaps, deferredSharing],
+	write: false,
+	metafile: true,
+};
+
+/**
+ * `stomp:deferred-shared` in the document bundles: a function that makes,
+ * when the parts are first evaluated, what they read of the bundle
+ * (deferredSharing), by file and name
+ */
+const deferredTable = {
+	name: 'deferred-table',
+	setup(pluginBuild) {
+		pluginBuild.onResolve({ filter: /^stomp:deferred-shared$/ }, (args) => ({
+			path: args.path,
+			namespace: 'deferred-table',
+		}));
+		pluginBuild.onLoad({ filter: /.*/, namespace: 'deferred-table' }, () => {
+			let imports = '';
+			const entries = [];
+			[...deferredShared].forEach(([id, names], index) => {
+				const list = [...names];
+				if (!list.length) return;
+				imports += `import { ${list.map((name, at) => `${name} as s${index}_${at}`).join(', ')} } from ${JSON.stringify(resolve(id))};\n`;
+				entries.push(
+					`${JSON.stringify(id)}: { ${list.map((name, at) => `${JSON.stringify(name)}: s${index}_${at}`).join(', ')} }`,
+				);
+			});
+			return {
+				contents: `${imports}export default () => ({ ${entries.join(', ')} });\n`,
+				loader: 'js',
+				resolveDir: resolve('.'),
+			};
+		});
+	},
+};
+
+/**
+ * What a document bundle's build says of the deferred parts: no listed file
+ * in it, and none of the files the parts read of it there only for them
+ */
+function checkDeferred(metafile, name) {
+	const importers = new Map();
+	for (const [input, { imports }] of Object.entries(metafile.inputs))
+		for (const imported of imports)
+			if (!input.startsWith('deferred-table:'))
+				importers.set(
+					resolve(imported.path),
+					(importers.get(resolve(imported.path)) ?? 0) + 1,
+				);
+	const inputs = new Set(
+		Object.keys(metafile.inputs).map((input) => resolve(input)),
+	);
+	for (const file of DEFERRED_FILES)
+		if (inputs.has(file))
+			throw new Error(
+				`${name}: ${fileId(file)} is a deferred part (build.js DEFERRED_FILES) but the bundle imports it`,
+			);
+	for (const id of deferredShared.keys()) {
+		const file = resolve(id);
+		if (file === snapshot || file === domSnapshot) continue;
+		if (!importers.get(file))
+			throw new Error(
+				`${name}: only the deferred parts import ${id}: list it in build.js DEFERRED_FILES`,
+			);
+	}
+}
+
+/** the text of a built file and its map, without the comment that names the map */
+function outputOf(result) {
+	const text = result.outputFiles.find((file) => file.path.endsWith('.js'));
+	const map = result.outputFiles.find((file) => file.path.endsWith('.js.map'));
+	return {
+		raw: text.text,
+		text: text.text.replace(/\/\/# sourceMappingURL=[^\n]*\n?$/, ''),
+		map: map ? JSON.parse(map.text) : null,
+	};
+}
+
+/**
+ * dist/rewriterLib.js: the light library's statement, then the deferred
+ * parts' after a line break (src/inject/rewriter.ts fileStatements), with
+ * one map of both (a sectioned source map)
+ */
+async function writeLibrary(light, parts) {
+	if (
+		parts.text.includes(`\n${DEFERRED_FACTORY}=`) ||
+		light.text.includes(`\n${DEFERRED_FACTORY}=`)
+	)
+		throw new Error(
+			"rewriterLib: a line of the file starts with the deferred parts' name",
+		);
+	const head = light.text.endsWith('\n') ? light.text : `${light.text}\n`;
+	const lines = head.split('\n').length - 1;
+	await writeFile(
+		'dist/rewriterLib.js',
+		`${head}${parts.text}${parts.text.endsWith('\n') ? '' : '\n'}//# sourceMappingURL=rewriterLib.js.map\n`,
+	);
+	const sections = [];
+	if (light.map)
+		sections.push({ offset: { line: 0, column: 0 }, map: light.map });
+	if (parts.map)
+		sections.push({ offset: { line: lines, column: 0 }, map: parts.map });
+	await writeFile(
+		'dist/rewriterLib.js.map',
+		JSON.stringify({ version: 3, file: 'rewriterLib.js', sections }),
+	);
+}
 
 /**
  * Bundles that expose a classic-script global do so through an entry shim
@@ -253,13 +582,13 @@ const builds = [
 		format: 'iife',
 		alias: stubCrypto,
 		inject: [snapshot, domSnapshot],
-		plugins: [rewriterLib],
+		plugins: [rewriterLib, deferredTable],
 	},
 	{
 		entryPoints: { injectDocumentFull: 'src/inject/dom/entry.ts' },
 		format: 'iife',
 		inject: [snapshot, domSnapshot],
-		plugins: [rewriterLib],
+		plugins: [rewriterLib, deferredTable],
 	},
 	{
 		entryPoints: { injectWorker: 'src/inject/worker/entry.ts' },
@@ -410,14 +739,42 @@ const reporter = {
 };
 
 if (dev) {
+	// the file is the two statements: each rebuild of one writes it with the
+	// other's last output. The parts are built once first, so the document
+	// bundles know what they read (a part that imports a new name of the
+	// bundle's needs a restart of the watch)
+	const latest = {
+		light: null,
+		parts: await build(deferredParts).then(outputOf),
+	};
+	const written = (key) => ({
+		name: 'rewriter-lib-file',
+		setup(pluginBuild) {
+			pluginBuild.onEnd(async (result) => {
+				if (result.errors.length || !result.outputFiles) return;
+				latest[key] = outputOf(result);
+				if (latest.light && latest.parts)
+					await writeLibrary(latest.light, latest.parts);
+			});
+		},
+	});
 	const contexts = await Promise.all(
-		[rewriterLibrary, ...bundles(`dev${Date.now().toString(36)}`)].map(
-			(options) =>
-				context({
-					...options,
-					metafile: true,
-					plugins: [...(options.plugins ?? []), reporter],
-				}),
+		[
+			{
+				...rewriterLibrary,
+				plugins: [...rewriterLibrary.plugins, written('light')],
+			},
+			{
+				...deferredParts,
+				plugins: [...deferredParts.plugins, written('parts')],
+			},
+			...bundles(`dev${Date.now().toString(36)}`),
+		].map((options) =>
+			context({
+				...options,
+				metafile: true,
+				plugins: [...(options.plugins ?? []), reporter],
+			}),
 		),
 	);
 	await Promise.all(contexts.map((ctx) => ctx.watch()));
@@ -429,7 +786,11 @@ if (dev) {
 	watch(ASSETS, async () => notify(await copyAssets()));
 	console.log('Watching for changes...');
 } else {
-	await build(rewriterLibrary);
+	const [light, parts] = await Promise.all([
+		build(rewriterLibrary).then(outputOf),
+		build(deferredParts).then(outputOf),
+	]);
+	await writeLibrary(light, parts);
 	const library = createHash('sha256')
 		.update(await readFile('dist/rewriterLib.js'))
 		.digest('hex')
@@ -438,7 +799,8 @@ if (dev) {
 	// a rewrite's output depends on that is not already in the cache key per
 	// entry (the URL, the script type, the config, the codec key, the
 	// partition). That is the rewriter itself: the wasm core, the codec module
-	// whose sealing the output carries, and the light rewriter library. A
+	// whose sealing the output carries, and the light rewriter library (its
+	// statement as built, not the deferred parts after it in the file). A
 	// deploy that changes none of these keeps the same generation, so a
 	// revisit after it is answered from the rewrite cache; one that changes any
 	// of them gets a new generation, and the last build's output is never
@@ -446,10 +808,17 @@ if (dev) {
 	const generation = createHash('sha256')
 		.update(await readFile('assets/core.wasm'))
 		.update(await readFile('assets/codec.wasm'))
-		.update(await readFile('dist/rewriterLib.js'))
+		.update(light.raw)
 		.digest('hex')
 		.slice(0, 16);
 	await Promise.all(
-		bundles(library, generation).map((options) => build(options)),
+		bundles(library, generation).map(async (options) => {
+			const result = await build({
+				...options,
+				metafile: options.plugins.includes(deferredTable) || options.metafile,
+			});
+			if (options.plugins.includes(deferredTable))
+				checkDeferred(result.metafile, Object.keys(options.entryPoints)[0]);
+		}),
 	);
 }

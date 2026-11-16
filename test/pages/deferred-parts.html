@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>deferred parts</title>
+	</head>
+	<body>
+		<script src="deferred-parts.js"></script>
+		<script>
+			// The children the suite deferred-parts asks: each loads
+			// deferred-parts.js and posts what it answered. `kind` is how the
+			// child is made: from a URL, srcdoc, a written about:blank, a blob
+			// document, or sandboxed without allow-same-origin.
+			window.__child = (kind) => {
+				const frame = document.createElement('iframe');
+				frame.name = kind;
+				const script = new URL('deferred-parts.js', location.href).href;
+				const markup = `<!doctype html><script src="${script}"><\/script>`;
+				const answer = new Promise((resolve) => {
+					addEventListener('message', (event) => {
+						if (event.data && event.data.name === kind)
+							resolve(event.data.deferred);
+					});
+					setTimeout(() => resolve({ error: 'no answer' }), 20000);
+				});
+				if (kind === 'url') frame.src = 'deferred-parts-child.html';
+				else if (kind === 'sandboxed') {
+					frame.sandbox = 'allow-scripts';
+					frame.src = 'deferred-parts-child.html';
+				} else if (kind === 'srcdoc') frame.srcdoc = markup;
+				else if (kind === 'blob')
+					frame.src = URL.createObjectURL(
+						new Blob([markup], { type: 'text/html' }),
+					);
+				document.body.append(frame);
+				if (kind === 'blank') {
+					const doc = frame.contentDocument;
+					doc.open();
+					doc.write(markup);
+					doc.close();
+				}
+				return answer;
+			};
+		</script>
+	</body>
+</html>

@@ -1,12 +1,15 @@
 import { isSecureURL, type JarCookie } from '../../../server/Cookies';
-import {
-	cookieStoreMethods,
-	type CookieStoreMethod,
+import type {
+	CookieStoreMethod,
+	CookieStoreMethods,
 } from '../../cookieStoreMethods';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import DocumentClient from '../Client';
+import { deferred } from '../deferred';
 import { CookiesModule } from './Cookies';
+
+const METHODS: CookieStoreMethod[] = ['get', 'getAll', 'set', 'delete'];
 
 type Method = CookieStoreMethod;
 
@@ -65,22 +68,24 @@ export default class CookieStoreModule extends Module<DocumentClient> {
 		const withoutHash = (url: URL) => url.href.replace(/#[^]*$/, '');
 
 		// the four methods and their dictionaries, as the browser answers
-		// them, over this document's view of the jar
-		const shared = cookieStoreMethods({
-			global,
-			base: () => this.client.url.toString(),
-			refuseURL: (url) =>
-				!url || withoutHash(url) !== withoutHash(this.client.url.url)
-					? 'URL must match the document URL'
-					: null,
-			host: () => this.client.url.url.hostname,
-			jar: () => cookies.jarCookies(),
-			store: (write) => cookies.store(write),
-			refused: (method) => opaque(method),
-			crossSite: () => cookies.crossSite,
-			look: () => watch(),
-		});
-		const { methods, item, deletedItem } = shared;
+		// them, over this document's view of the jar: a deferred part of the
+		// bundle (../deferred.ts), made at the page's first call
+		let made: CookieStoreMethods | null = null;
+		const shared = (): CookieStoreMethods =>
+			(made ??= deferred().cookieStoreMethods({
+				global,
+				base: () => this.client.url.toString(),
+				refuseURL: (url) =>
+					!url || withoutHash(url) !== withoutHash(this.client.url.url)
+						? 'URL must match the document URL'
+						: null,
+				host: () => this.client.url.url.hostname,
+				jar: () => cookies.jarCookies(),
+				store: (write) => cookies.store(write),
+				refused: (method) => opaque(method),
+				crossSite: () => cookies.crossSite,
+				look: () => watch(),
+			}));
 
 		// what the page has seen of the jar, from its first look at the API
 		let seen: Map<string, JarCookie> | null = null;
@@ -125,10 +130,11 @@ export default class CookieStoreModule extends Module<DocumentClient> {
 					const now = new Map(list.map((cookie) => [cookie.id, cookie]));
 					seen = now;
 					for (const [id, cookie] of before)
-						if (!now.has(id)) dispatch([], [deletedItem(cookie)]);
+						if (!now.has(id)) dispatch([], [shared().deletedItem(cookie)]);
 					for (const cookie of list) {
 						const old = before.get(cookie.id);
-						if (!old || differs(old, cookie)) dispatch([item(cookie)], []);
+						if (!old || differs(old, cookie))
+							dispatch([shared().item(cookie)], []);
 					}
 				} while (again);
 			} catch (error) {
@@ -148,15 +154,14 @@ export default class CookieStoreModule extends Module<DocumentClient> {
 					)
 				: null;
 
-		for (const [method, own] of Object.entries(methods) as [
-			Method,
-			(args: unknown[]) => Promise<unknown>,
-		][])
+		for (const method of METHODS)
 			if (typeof prototype[method] === 'function')
 				prototype[method] = proxyModule.wrapFunction(
 					prototype[method],
 					(target, that, args) =>
-						that === store ? own(args) : Reflect.apply(target, that, args),
+						that === store
+							? shared().methods[method](args)
+							: Reflect.apply(target, that, args),
 				);
 
 		// the page's first look at the API starts the record of what it has

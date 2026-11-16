@@ -83,8 +83,11 @@ function farbleFloats(data: Float32Array, seed: number, scale: number): void {
 }
 
 // a small standard allowlist for font-availability probing (document.fonts):
-// the generic families plus fonts a stock Chrome always has, lower-cased
-const FONT_ALLOWLIST = new Set([
+// the generic families plus fonts a stock Chrome always has, lower-cased.
+// (A list, not a Set: this file is a deferred part of the bundle, evaluated
+// when the bundle first needs a part, maybe after the page has replaced the
+// global Set, so its top level reads no global.)
+const FONT_ALLOWLIST = [
 	'serif',
 	'sans-serif',
 	'monospace',
@@ -105,7 +108,7 @@ const FONT_ALLOWLIST = new Set([
 	'verdana',
 	'tahoma',
 	'trebuchet ms',
-]);
+];
 
 export default class FingerprintModule extends Module<DocumentClient> {
 	apply() {
@@ -653,7 +656,7 @@ export default class FingerprintModule extends Module<DocumentClient> {
 						family = parts[parts.length - 1];
 					}
 					family = family.replace(/^["']|["']$/g, '').toLowerCase();
-					if (family && !FONT_ALLOWLIST.has(family)) return false;
+					if (family && !FONT_ALLOWLIST.includes(family)) return false;
 				}
 				return true;
 			};
