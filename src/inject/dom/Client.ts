@@ -107,6 +107,24 @@ type OpenCallback = () => void;
 const nativeSetAttribute = Element.prototype.setAttribute;
 const nativeSetTimeout = setTimeout;
 const nativeFragmentQuery = DocumentFragment.prototype.querySelectorAll;
+// The `nonce` getters (the HTMLOrSVGElement mixin's): a hook at work swaps
+// an element's prototype for one that is an Element's only (DOMHooks
+// CustomElement), where `element.nonce` reads undefined, and a nonce the
+// page gave by the property sets no attribute
+const nativeNonceGetters = [HTMLElement, SVGElement].flatMap((owner) => {
+	const get = Reflect.getOwnPropertyDescriptor(owner.prototype, 'nonce')?.get;
+	return get ? [get] : [];
+});
+/** a script or style element's nonce, by the property or the attribute (whichever the page set), even mid-hook; '' for none */
+function nonceOf(element: Element): string {
+	for (const get of nativeNonceGetters)
+		try {
+			return String(Reflect.apply(get, element, []));
+		} catch (error) {
+			// an element of the other kind
+		}
+	return '';
+}
 /** the Trusted Types sink members Chrome names with "execute '<member>'" (not a property set), by their sink member name */
 const TT_METHOD_SINKS = new Set([
 	'insertAdjacentHTML',
@@ -1538,9 +1556,13 @@ export default class DocumentClient extends Client {
 			),
 		};
 	}
+	/** the nonce the page gave a script or style element of its own (not the document's, which the inject gives: ContentSecurity's nonce getter) */
 	#elementNonce(element: Element): string | null {
 		try {
-			return (element as HTMLElement).nonce || element.getAttribute('nonce');
+			const own = nonceOf(element);
+			return (
+				(own !== this.scriptNonce ? own : '') || element.getAttribute('nonce')
+			);
 		} catch (error) {
 			return null;
 		}
@@ -1691,12 +1713,7 @@ export default class DocumentClient extends Client {
 			({ policy }) => policy.disposition === 'enforce',
 		);
 		if (!enforced.length) return null;
-		let own: string | null = null;
-		try {
-			own = (element as HTMLElement).nonce || element.getAttribute('nonce');
-		} catch (error) {
-			// an element of another kind
-		}
+		const own = this.#elementNonce(element);
 		// (the page's integrity, which the browser never gets: the rewritten
 		// body is not the one it names)
 		const integrity =

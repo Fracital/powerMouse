@@ -1375,6 +1375,16 @@ required, but only 1 present.`, `Illegal invocation`, a rejected promise
   expression. The API is listed among the worklet's Number.prototype keys,
   where no hook hides it. (workers suite, natively against proxied;
   realm-surface walks both worklet scopes.)
+- A script the page inserts with its nonce given by the `nonce` property,
+  which sets no attribute, is let through by that nonce again. Since the
+  inject enforces the page's script-src itself, it read the nonce while one
+  of its own hooks had given the element a prototype with no `nonce`
+  getter, so it saw none and refused the script (a violation and an `error`
+  event, natively a load). Cloudflare's challenge page inserts its challenge
+  script that way, by a URL of its own origin only the nonce allows: through
+  the proxy the challenge never started and the page stayed blank.
+  (csp-scripts suite, natively against both modes.)
+
 - An emulated service worker's global answers as the Chrome it runs in
   does: it keeps what a dedicated worker has where that Chrome's own service
   worker has it too (Chrome 157 gave service workers `ProgressEvent`, which

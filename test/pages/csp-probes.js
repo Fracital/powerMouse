@@ -355,6 +355,22 @@
 		'script-inline': () => script({}, 'window.__ran = 1'),
 		'script-inline-nonce': () =>
 			script({ nonce: 'probes' }, 'window.__ran = 1'),
+		// a script by URL the policy lets through only by its nonce, given as
+		// the attribute or as the property (a script's `nonce` property sets
+		// no attribute), inserted into the head
+		'script-self-nonce': () => script({ nonce: 'probes', src: '/csp/run.js' }),
+		'script-self-nonce-property': () =>
+			settle(
+				new Promise((resolve) => {
+					window.__ran = undefined;
+					const node = document.createElement('script');
+					node.nonce = 'probes';
+					node.src = '/csp/run.js';
+					node.onload = () => resolve(`load, ran ${window.__ran}`);
+					node.onerror = () => resolve(`error, ran ${window.__ran}`);
+					document.getElementsByTagName('head')[0].appendChild(node);
+				}),
+			),
 		eval: () => evaluated(() => eval('1 + 1')),
 		function: () => evaluated(() => new Function('return 2')()),
 		'timeout-string': () =>

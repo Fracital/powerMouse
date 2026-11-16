@@ -100,6 +100,15 @@ const CASES = {
 			'style-inline',
 		],
 	},
+	// Cloudflare's interstitial: an inline script with the nonce inserts the
+	// challenge's script by a URL of its own origin, which only the nonce
+	// lets through, under the same policy in a header and in a meta
+	'nonce by property': {
+		p: `default-src 'none'; script-src 'nonce-probes' 'unsafe-eval' ${other}; script-src-attr 'none'; style-src 'unsafe-inline'; img-src 'self'; connect-src 'self'`,
+		m: `default-src 'none'; script-src 'nonce-probes' 'unsafe-eval' ${other}; script-src-attr 'none'; style-src 'unsafe-inline'; img-src 'self'; connect-src 'self'`,
+		h: 'inline-nonce',
+		probes: ['script-self-nonce-property', 'script-self-nonce', 'script-self'],
+	},
 	styles: {
 		p: "style-src 'self'",
 		probes: [
