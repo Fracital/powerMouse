@@ -919,9 +919,11 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 		classConstant(globalProxy, 'LOADING', LOADING);
 		classConstant(globalProxy, 'DONE', DONE);
 
-		proxyModule.mirrorClass(XMLHttpRequest, globalProxy, instances);
+		// (the realm's own interfaces, which are not the bundle's in a frame
+		// its parent's bundle hooks: a refusal is an error of the page's realm)
+		proxyModule.mirrorClass(RealmXHR, globalProxy, instances);
 		proxyModule.mirrorClass(
-			XMLHttpRequestEventTarget,
+			that.client.global.XMLHttpRequestEventTarget,
 			globalTargetProxy,
 			instances,
 		);

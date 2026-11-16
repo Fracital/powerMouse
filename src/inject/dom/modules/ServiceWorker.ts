@@ -2,6 +2,7 @@ import type { ControlInfo, PageEvent } from '../../../serviceWorkerTypes';
 import { SW_CONTROL, SW_EVENT } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
+import { withStack } from '../../nativeErrors';
 import DocumentClient from '../Client';
 import { deferred } from '../deferred';
 import type { Emulated } from './serviceWorkerEmulation';
@@ -83,15 +84,24 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 		)!;
 		Reflect.defineProperty(global.Navigator.prototype, 'serviceWorker', {
 			...navigatorDescriptor,
-			get: proxyModule.wrapFunction(navigatorDescriptor.get!, () => {
-				// an opaque origin has no service workers
-				if (this.client.opaqueRequests)
-					throw new global.DOMException(
-						"Failed to read the 'serviceWorker' property from 'Navigator': The document is sandboxed and lacks the 'allow-same-origin' flag.",
-						'SecurityError',
-					);
-				return emulate().container;
-			}),
+			get: proxyModule.wrapFunction(
+				navigatorDescriptor.get!,
+				(target, that, args) => {
+					// (anything but this window's navigator is the browser's to
+					// answer: its Illegal invocation for what is no Navigator)
+					if (that !== global.navigator)
+						return Reflect.apply(target, that, args);
+					// an opaque origin has no service workers
+					if (this.client.opaqueRequests)
+						throw withStack(
+							new global.DOMException(
+								"Failed to read the 'serviceWorker' property from 'Navigator': Service worker is disabled because the context is sandboxed and lacks the 'allow-same-origin' flag.",
+								'SecurityError',
+							),
+						);
+					return emulate().container;
+				},
+			),
 		});
 	}
 }

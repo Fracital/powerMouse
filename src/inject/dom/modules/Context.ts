@@ -609,7 +609,13 @@ export default class ContextModule extends Module<DocumentClient> {
 					value: proxyModule.wrapFunction(
 						this.client.global.postMessage,
 						(target, that, args) => {
-							catchRequiredArguments(args.length, 1, 'Window', 'postMessage');
+							catchRequiredArguments(
+								args.length,
+								1,
+								'Window',
+								'postMessage',
+								this.client.global,
+							);
 							// the browser serializes the message before it looks at the
 							// target origin
 							this.#cloneCheck(args);
@@ -1185,7 +1191,13 @@ export default class ContextModule extends Module<DocumentClient> {
 		this.client.postToRestricted = (target, args) => {
 			const context = this.restrictedContexts.get(target as Context);
 			if (!context) return false;
-			catchRequiredArguments(args.length, 1, 'Window', 'postMessage');
+			catchRequiredArguments(
+				args.length,
+				1,
+				'Window',
+				'postMessage',
+				this.client.global,
+			);
 			this.#cloneCheck(args);
 			if (this.targetAllows(args, context)) this.#postFromHere(context, args);
 			return true;
@@ -1225,7 +1237,13 @@ export default class ContextModule extends Module<DocumentClient> {
 						? home
 						: that;
 				if (receiver === this.client.global) {
-					catchRequiredArguments(args.length, 1, 'Window', 'postMessage');
+					catchRequiredArguments(
+						args.length,
+						1,
+						'Window',
+						'postMessage',
+						this.client.global,
+					);
 					this.#cloneCheck(args);
 					return Reflect.apply(
 						target,
@@ -1247,7 +1265,13 @@ export default class ContextModule extends Module<DocumentClient> {
 				}
 				if (!window)
 					throw new this.client.global.TypeError('Illegal invocation');
-				catchRequiredArguments(args.length, 1, 'Window', 'postMessage');
+				catchRequiredArguments(
+					args.length,
+					1,
+					'Window',
+					'postMessage',
+					this.client.global,
+				);
 				if (stomp?.nativePostMessage)
 					return this.client.postToWindow!(receiver as object, args);
 				if (this.client.postToRestricted!(receiver, args)) return undefined;

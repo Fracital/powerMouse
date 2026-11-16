@@ -4,6 +4,7 @@ import Module from '../../Module';
 import { reportOnly } from '../../modules/Fetch';
 import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule from '../../modules/Proxy';
+import { withStack } from '../../nativeErrors';
 import DocumentClient from '../Client';
 
 export default class NavigatorModule extends Module<DocumentClient> {
@@ -61,17 +62,24 @@ export default class NavigatorModule extends Module<DocumentClient> {
 				navigator[name] = proxyModule.wrapFunction(
 					navigator[name],
 					(target, that, args) => {
-						if (args.length < 2) return Reflect.apply(target, that, args);
+						// the browser's own refusals: of too few arguments, and of
+						// a receiver that is not this window's navigator
+						if (args.length < 2 || that !== this.client.global.navigator)
+							return Reflect.apply(target, that, args);
 						const scheme = String(args[0]);
 						if (!SAFE_SCHEMES.has(scheme) && !/^web\+[a-z]+$/.test(scheme))
-							throw new this.client.global.DOMException(
-								`Failed to execute '${name}' on 'Navigator': The scheme '${scheme}' doesn't belong to the scheme allowlist. Please prefix non-allowlisted schemes with the string 'web+'.`,
-								'SecurityError',
+							throw withStack(
+								new this.client.global.DOMException(
+									`Failed to execute '${name}' on 'Navigator': The scheme '${scheme}' doesn't belong to the scheme allowlist. Please prefix non-allowlisted schemes with the string 'web+'.`,
+									'SecurityError',
+								),
 							);
 						if (!String(args[1]).includes('%s'))
-							throw new this.client.global.DOMException(
-								`Failed to execute '${name}' on 'Navigator': The url provided ('${String(args[1])}') does not contain '%s'.`,
-								'SyntaxError',
+							throw withStack(
+								new this.client.global.DOMException(
+									`Failed to execute '${name}' on 'Navigator': The url provided ('${String(args[1])}') does not contain '%s'.`,
+									'SyntaxError',
+								),
 							);
 						return undefined;
 					},
@@ -111,6 +119,8 @@ export default class NavigatorModule extends Module<DocumentClient> {
 				proxyModule.wrapFunction(
 					this.client.global.Navigator.prototype.sendBeacon,
 					(target, that, args) => {
+						// no URL to route: the browser's own error for the call
+						if (args.length < 1) return Reflect.apply(target, that, args);
 						let url: URL;
 						try {
 							url = new URL(args[0], this.client.baseURL.toString());

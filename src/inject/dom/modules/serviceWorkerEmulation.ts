@@ -501,6 +501,11 @@ function hook(
 		length,
 		call: (_that, args) => call(args),
 		foreign: () =>
-			Promise.reject(new objects.global.TypeError('Illegal invocation')),
+			// (the browser's message names the method and the interface)
+			Promise.reject(
+				new objects.global.TypeError(
+					`Failed to execute '${name}' on 'ServiceWorkerContainer': Illegal invocation`,
+				),
+			),
 	});
 }

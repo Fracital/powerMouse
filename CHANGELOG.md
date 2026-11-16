@@ -1231,6 +1231,24 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A platform member the inject hooks refuses what the browser refuses, in
+  the browser's words and realm, before the hook does anything: a call on
+  something that is not of its interface (the prototype itself, another
+  window's object) and a call with too few arguments get the browser's own
+  error (`Failed to execute 'setAttribute' on 'Element': 2 arguments
+required, but only 1 present.`, `Illegal invocation`, a rejected promise
+  where the member answers with one). Covered: setAttribute and
+  removeAttribute, reflecting properties, innerHTML, outerHTML, outerText,
+  insertAdjacent*, document.domain, history.back/forward/go,
+  navigation.back/forward, registerProtocolHandler, sendBeacon,
+  clearWatch, getUserMedia, setSinkId and sinkId, Cache and CacheStorage,
+  the sandbox's storage refusals, navigator.serviceWorker and the
+  container's methods, NavigatorLogin.setStatus (now a rejection, as
+  natively), the WebRTC stand-ins and the XMLHttpRequest stand-in (its
+  prototype now lists the browser's members in the browser's order, with
+  its descriptors). The required-arguments message is Blink's
+  ("2 arguments required", "Failed to construct 'X'"), as a TypeError of
+  the page's realm. (realm-surface, error-messages, error-surfaces.)
 - Reading the property descriptors of another window or of its document
   reads as natively. `Object.getOwnPropertyDescriptor(frame.document,
 'location')` handed out the getter that returns the frame's real

@@ -2,7 +2,6 @@ import { rewriteImportMap } from '../../../scriptRoutes';
 import Module from '../../Module';
 import ProxyModule, {
 	applyDescriptors,
-	catchRequiredArguments,
 	usePrototype,
 } from '../../modules/Proxy';
 import { unrouteCSS } from '../../modules/Unroute';
@@ -572,6 +571,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 
 		const domAttributesModule = this.client.getModule(DOMAttributesModule)!;
 		const domHooksModule = this.client.getModule(DOMHooksModule)!;
+		const { requireElement } = domHooksModule;
 		// the browser's own answers, called on the node: a prototype swapped
 		// in does not reach a getter the page put on the instance itself, and
 		// that getter would run with its prototype chain gone (YouTube's
@@ -1070,12 +1070,10 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			proxyModule.wrapFunction(
 				this.client.global.Element.prototype.insertAdjacentText,
 				(target, that: Element, args) => {
-					catchRequiredArguments(
-						args.length,
-						2,
-						'Element',
-						'insertAdjacentText',
-					);
+					// the browser's own refusals first: of the receiver, then of
+					// the count
+					if (args.length < 2) return Reflect.apply(target, that, args);
+					requireElement(that);
 					const position = adjacentPosition(args[0], 'insertAdjacentText');
 					const text = Reflect.apply(
 						nativeCreateTextNode,
@@ -1090,12 +1088,10 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			proxyModule.wrapFunction(
 				this.client.global.Element.prototype.insertAdjacentElement,
 				(target, that: Element, args) => {
-					catchRequiredArguments(
-						args.length,
-						2,
-						'Element',
-						'insertAdjacentElement',
-					);
+					// the browser's own refusals first: of the receiver, then of
+					// the count
+					if (args.length < 2) return Reflect.apply(target, that, args);
+					requireElement(that);
 					// an element of any realm (instanceof knows only one)
 					if (nodeTypeOf(args[1]) !== 1)
 						throw new this.client.global.TypeError(
@@ -1112,12 +1108,10 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			proxyModule.wrapFunction(
 				this.client.global.Element.prototype.insertAdjacentHTML,
 				(target, that: Element, args) => {
-					catchRequiredArguments(
-						args.length,
-						2,
-						'Element',
-						'insertAdjacentHTML',
-					);
+					// the browser's own refusals first: of the receiver, then of
+					// the count
+					if (args.length < 2) return Reflect.apply(target, that, args);
+					requireElement(that);
 					// (the page's Trusted Types judge the markup first)
 					const markup = this.client.trustedValue(
 						args[1],

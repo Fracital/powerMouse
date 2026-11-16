@@ -252,7 +252,10 @@ export default class WebRTCModule extends Module<DocumentClient> {
 				if (!wrapped) {
 					wrapped = proxyModule.wrapFunction(native, (target, that, args) => {
 						const own = table.get(that);
-						if (!own) throw illegal();
+						// not an object of these stand-ins: the browser's own
+						// refusal (thrown, or a rejected promise where the
+						// method answers with one), in its words
+						if (!own) return Reflect.apply(target, that, args);
 						const implemented = own[key]?.[part];
 						return implemented
 							? Reflect.apply(implemented, that, args)

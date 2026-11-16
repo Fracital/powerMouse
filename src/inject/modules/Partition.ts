@@ -108,6 +108,21 @@ export default class PartitionModule extends Module<Client> {
 		// a cache entry is keyed by the page's URL: a string resolves against
 		// the page (the hooked Request constructor), so `keys()` and matches
 		// come back as the page's; add() and addAll() fetch through the proxy
+		// A call the browser refuses before it does anything is the
+		// browser's to answer, with its own rejection: one with no argument
+		// where one is required, and one whose receiver is plainly none of
+		// the interface (the prototype itself, as a script that tests for
+		// hooks calls it)
+		const isPrototypeOf = global.Object.prototype.isPrototypeOf;
+		const refused = (
+			that: unknown,
+			C: { prototype: object },
+			args: unknown[],
+		) =>
+			!args.length ||
+			typeof that !== 'object' ||
+			that === null ||
+			!Reflect.apply(isPrototypeOf, C.prototype, [that]);
 		if (typeof global.Cache === 'function') {
 			const cache = global.Cache.prototype;
 			const asRequest = (input: unknown): Request =>
@@ -156,9 +171,11 @@ export default class PartitionModule extends Module<Client> {
 				if (args.length > 1) args[1] = cacheableResponse(args[1]);
 				return Reflect.apply(target, that, args);
 			});
-			cache.addAll = proxyModule.wrapFunction(
+			const addAll = (cache.addAll = proxyModule.wrapFunction(
 				cache.addAll,
 				async (target, that, args) => {
+					if (refused(that, global.Cache, args))
+						return await Reflect.apply(target, that, args);
 					const requests = [...(args[0] as Iterable<unknown>)].map(asRequest);
 					const responses = await Promise.all(
 						requests.map((request) => global.fetch(request)),
@@ -174,9 +191,11 @@ export default class PartitionModule extends Module<Client> {
 						]);
 					}
 				},
-			);
+			));
 			cache.add = proxyModule.wrapFunction(cache.add, (target, that, args) =>
-				(that as Cache).addAll([args[0] as RequestInfo]),
+				refused(that, global.Cache, args)
+					? Reflect.apply(target, that, args)
+					: Reflect.apply(addAll, that, [[args[0] as RequestInfo]]),
 			);
 		}
 		// caches.match() looks in this origin's caches only, in the order they
@@ -191,6 +210,8 @@ export default class PartitionModule extends Module<Client> {
 			storage.match = proxyModule.wrapFunction(
 				storage.match,
 				async (target, that, args) => {
+					if (refused(that, global.CacheStorage, args))
+						return await Reflect.apply(target, that, args);
 					if (args.length && args[0] !== undefined)
 						args[0] =
 							args[0] instanceof global.Request

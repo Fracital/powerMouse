@@ -204,21 +204,33 @@ export default class HistoryModule extends Module<DocumentClient> {
 			return index >= 0 && index < allEntries().length;
 		};
 
-		prototype.back = proxyModule.wrapFunction(prototype.back, () => {
-			const index = indexOf(currentEntry()!);
-			if (index > 0) quiet(traverse(allEntries()[index - 1].key));
-		});
+		// (a receiver that is not this window's history is the browser's to
+		// answer: its Illegal invocation for anything that is no History)
+		const history = global.history;
+		prototype.back = proxyModule.wrapFunction(
+			prototype.back,
+			(target, that, args) => {
+				if (that !== history) return Reflect.apply(target, that, args);
+				const index = indexOf(currentEntry()!);
+				if (index > 0) quiet(traverse(allEntries()[index - 1].key));
+			},
+		);
 
-		prototype.forward = proxyModule.wrapFunction(prototype.forward, () => {
-			const entries = allEntries();
-			const index = indexOf(currentEntry()!);
-			if (index >= 0 && index < entries.length - 1)
-				quiet(traverse(entries[index + 1].key));
-		});
+		prototype.forward = proxyModule.wrapFunction(
+			prototype.forward,
+			(target, that, args) => {
+				if (that !== history) return Reflect.apply(target, that, args);
+				const entries = allEntries();
+				const index = indexOf(currentEntry()!);
+				if (index >= 0 && index < entries.length - 1)
+					quiet(traverse(entries[index + 1].key));
+			},
+		);
 
 		prototype.go = proxyModule.wrapFunction(
 			prototype.go,
 			(target, that, args) => {
+				if (that !== history) return Reflect.apply(target, that, args);
 				// go() and go(0) reload the document
 				const delta = args.length ? Number(args[0]) : 0;
 				if (delta === 0 || Number.isNaN(delta))
@@ -396,13 +408,16 @@ export default class HistoryModule extends Module<DocumentClient> {
 			navigationProto[name] = proxyModule.wrapFunction(
 				native,
 				(target, that, args) => {
+					if (that !== navigation) return Reflect.apply(target, that, args);
 					const entries = visible();
 					const current = currentEntry();
 					const index = current ? entries.indexOf(current) : -1;
 					const next = entries[index + step];
 					if (index >= 0 && next)
 						return Reflect.apply(nativeTraverseTo, that, [next.key, ...args]);
-					const error = new global.DOMException(message, 'InvalidStateError');
+					const error = withStack(
+						new global.DOMException(message, 'InvalidStateError'),
+					);
 					const committed = global.Promise.reject(error);
 					const finished = global.Promise.reject(error);
 					finished.catch(() => {});

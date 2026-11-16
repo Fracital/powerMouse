@@ -111,7 +111,12 @@ export function classConstant(target: any, key: string, value: any) {
 	};
 
 	Reflect.defineProperty(target, key, descriptor);
-	Reflect.defineProperty(target.prototype, key, descriptor);
+	// the prototype's copy can still be moved: mirrorClass lists the
+	// prototype's members in the browser's order, with its descriptors
+	Reflect.defineProperty(target.prototype, key, {
+		...descriptor,
+		configurable: true,
+	});
 }
 
 export function onEventTarget(target: any, event: string) {
@@ -144,7 +149,26 @@ export function onEventTarget(target: any, event: string) {
 }
 
 /**
- * Throws a generic argument error.
+ * The message of the browser's error for a call with too few arguments, as
+ * Blink words it ("1 argument required", "2 arguments required").
+ */
+export function requiredArgumentsMessage(
+	args: number,
+	requiredArguments: number,
+	on: string,
+	api: string,
+): string {
+	const message = `${
+		requiredArguments === 1 ? '1 argument' : `${requiredArguments} arguments`
+	} required, but only ${args} present.`;
+	return api === 'constructor'
+		? `Failed to construct '${on}': ${message}`
+		: `Failed to execute '${api}' on '${on}': ${message}`;
+}
+
+/**
+ * Throws the browser's error for a call with too few arguments: a TypeError
+ * of `realm` (the realm of the function called, the bundle's when not given).
  * @example
  * catchRequiredArguments([].length, 1, "Window", "fetch"); // TypeError: Failed to execute 'fetch' on 'Window': 1 argument required, but only 0 present.
  */
@@ -153,20 +177,12 @@ export function catchRequiredArguments(
 	requiredArguments: number,
 	on: string,
 	api: string,
+	realm: { TypeError: TypeErrorConstructor } = globalThis,
 ) {
-	if (args < requiredArguments) {
-		const message = `${
-			requiredArguments === 1
-				? '1 argument required'
-				: `${requiredArguments} required`
-		}, but only ${args} present.`;
-
-		throw new TypeError(
-			on === 'constructor'
-				? `Failed to construct ${api}: ${message}`
-				: `Failed to execute '${api}' on '${on}: ${message}`,
+	if (args < requiredArguments)
+		throw new realm.TypeError(
+			requiredArgumentsMessage(args, requiredArguments, on, api),
 		);
-	}
 }
 
 export function contextThis(that: unknown, global: typeof globalThis): unknown {
@@ -652,73 +668,116 @@ export default class ProxyModule extends Module<Client> {
 			Reflect.defineProperty(target, prop, descriptor);
 		}
 	}
+	/**
+	 * The stand-in class `to` reads as the realm's `from`: its prototype
+	 * lists the native prototype's members in the native order with the
+	 * native descriptors, each function a wrapper of the native one that
+	 * runs the stand-in's. A member the stand-in does not have is the
+	 * native's own. A call on anything but an instance of the stand-in is
+	 * the browser's to answer (the native, called as the page called it:
+	 * its Illegal invocation, thrown or as a rejected promise, with its
+	 * message), and so is a call with fewer arguments than the native takes
+	 * (its wording, as a TypeError of this realm).
+	 */
 	mirrorClass(from: any, to: any, instances: WeakSet<any>) {
-		Reflect.defineProperty(to.prototype, Symbol.toStringTag, {
-			configurable: true,
-			enumerable: false,
-			writable: false,
-			value: from.prototype[Symbol.toStringTag],
-		});
-
-		this.mirrorAttributes(from, to);
-
-		const descriptors = Object.getOwnPropertyDescriptors(to.prototype);
-		const mirrorDescriptors = Object.getOwnPropertyDescriptors(from.prototype);
-
-		for (const key in descriptors) {
-			// the stand-in's own (standIn), not a method of the instances
-			if (key === 'constructor') continue;
-
-			const descriptor = descriptors[key];
-
-			const mirrorDescriptor = mirrorDescriptors[key];
-
-			if (!mirrorDescriptor) {
-				console.warn('Key not present in global:', key);
+		const native = from.prototype as object;
+		const mock = to.prototype as object;
+		const realm = this.client.global;
+		const own = new Map<PropertyKey, PropertyDescriptor>();
+		for (const key of Reflect.ownKeys(mock)) {
+			const descriptor = Reflect.getOwnPropertyDescriptor(mock, key)!;
+			own.set(key, descriptor);
+			if (descriptor.configurable) Reflect.deleteProperty(mock, key);
+		}
+		const mirror = <T extends Function>(
+			nativeFn: T,
+			mine: Function,
+			key: PropertyKey,
+		): T =>
+			this.wrapFunction(nativeFn, (target, that, args) => {
+				if (!instances.has(that)) return Reflect.apply(target, that, args);
+				catchRequiredArguments(
+					args.length,
+					target.length,
+					from.name,
+					String(key),
+					realm,
+				);
+				return Reflect.apply(mine, that, args);
+			});
+		for (const key of Reflect.ownKeys(native)) {
+			const nativeDescriptor = Reflect.getOwnPropertyDescriptor(native, key)!;
+			const mine = own.get(key);
+			own.delete(key);
+			if (key === 'constructor') {
+				// the stand-in itself (standIn)
+				if (mine) Reflect.defineProperty(mock, key, mine);
 				continue;
 			}
-
-			if (!descriptor?.configurable) continue;
-
-			if (typeof descriptor.value === 'function')
-				mirrorDescriptor.value = this.wrapFunction(
-					mirrorDescriptor.value,
-					(target, that, args) => {
-						if (!instances.has(that)) {
-							throw new TypeError('Illegal Invocation');
-						}
-
-						return Reflect.apply(descriptor.value, that, args);
-					},
-				);
-			else if ('value' in descriptor) mirrorDescriptor.value = descriptor.value;
-
-			if (typeof descriptor.get === 'function')
-				mirrorDescriptor.get = this.wrapFunction(
-					mirrorDescriptor.get!,
-					(target, that, args) => {
-						if (!instances.has(that)) {
-							throw new TypeError('Illegal Invocation');
-						}
-
-						return Reflect.apply(descriptor.get!, that, args);
-					},
-				);
-
-			if (typeof descriptor.set === 'function')
-				mirrorDescriptor.set = this.wrapFunction(
-					mirrorDescriptor.set!,
-					(target, that, args) => {
-						if (!instances.has(that)) {
-							throw new TypeError('Illegal Invocation');
-						}
-
-						return Reflect.apply(descriptor.set!, that, args);
-					},
-				);
-
-			Reflect.defineProperty(to.prototype, key, mirrorDescriptor);
+			if (!mine || typeof key === 'symbol') {
+				Reflect.defineProperty(mock, key, nativeDescriptor);
+				continue;
+			}
+			// one that cannot be moved stays as and where it is
+			if (!mine.configurable) continue;
+			const mirrored = { ...nativeDescriptor };
+			if ('value' in nativeDescriptor) {
+				if (
+					typeof mine.value === 'function' &&
+					typeof nativeDescriptor.value === 'function'
+				)
+					mirrored.value = mirror(nativeDescriptor.value, mine.value, key);
+			} else {
+				if (typeof mine.get === 'function' && nativeDescriptor.get)
+					mirrored.get = mirror(nativeDescriptor.get, mine.get, key);
+				if (typeof mine.set === 'function' && nativeDescriptor.set)
+					mirrored.set = mirror(nativeDescriptor.set, mine.set, key);
+			}
+			Reflect.defineProperty(mock, key, mirrored);
 		}
+		// what only the stand-in has, after the native's
+		for (const [key, descriptor] of own)
+			if (descriptor.configurable)
+				Reflect.defineProperty(mock, key, descriptor);
+		// The prototype above it is the one above the native's (the page's
+		// stand-in for that interface, where it has one): the stand-in is a
+		// class of the bundle's, whose prototype had the bundle realm's
+		// Object.prototype or EventTarget.prototype above it, another
+		// realm's in a frame the parent's bundle hooks.
+		const above = Reflect.getPrototypeOf(native);
+		const aboveConstructor =
+			above && Reflect.getOwnPropertyDescriptor(above, 'constructor')?.value;
+		const standIn =
+			typeof aboveConstructor === 'function'
+				? this.#standIns.get(aboveConstructor)
+				: undefined;
+		const wanted =
+			(standIn as { prototype?: object } | undefined)?.prototype ?? above;
+		if (Reflect.getPrototypeOf(mock) !== wanted)
+			Reflect.setPrototypeOf(mock, wanted);
+	}
+	/**
+	 * `target`'s own properties listed in the order `native` lists the same
+	 * keys, then any of its own: a stand-in prototype is built member by
+	 * member, in the order the code defines them, and a page that lists it
+	 * reads the order.
+	 */
+	orderLike(target: object, native: object) {
+		const order = Reflect.ownKeys(native);
+		const own = Reflect.ownKeys(target);
+		const wanted = [
+			...order.filter((key) => own.includes(key)),
+			...own.filter((key) => !order.includes(key)),
+		];
+		if (wanted.every((key, index) => key === own[index])) return;
+		const descriptors = wanted.map(
+			(key) => [key, Reflect.getOwnPropertyDescriptor(target, key)!] as const,
+		);
+		// only what can be put back is taken out
+		if (descriptors.some(([, descriptor]) => !descriptor.configurable)) return;
+		for (const [key] of descriptors) Reflect.deleteProperty(target, key);
+		for (const [key, descriptor] of descriptors)
+			Reflect.defineProperty(target, key, descriptor);
 	}
 	mirrorAttributes<F extends Function, T extends Function>(from: F, to: T): T {
 		this.mirrorSource(from, to);

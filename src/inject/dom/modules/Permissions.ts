@@ -564,6 +564,8 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		Reflect.defineProperty(prototype, 'clearWatch', {
 			...Reflect.getOwnPropertyDescriptor(prototype, 'clearWatch'),
 			value: proxyModule.wrapFunction(nativeClear, (target, that, args) => {
+				// no id: the browser's own error for the call
+				if (!args.length) return Reflect.apply(target, that, args);
 				const id = Number(args[0]);
 				const real = watches.get(id);
 				watches.delete(id);
@@ -1013,31 +1015,47 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		const sink =
 			(context: boolean) =>
 			async (native: Function, that: unknown, args: unknown[]) => {
+				// (a receiver that is no context or element is the browser's
+				// to refuse, before the policy is looked at: its own getter
+				// tells)
+				const brand = context ? contextSinkId : elementSinkId;
+				if (brand)
+					try {
+						Reflect.apply(brand, that, []);
+					} catch (error) {
+						return await Reflect.apply(native, that, args);
+					}
 				const id: unknown = args[0];
 				// the policy comes first, whatever is asked for
 				if (context && args.length && !speakers())
-					throw new global.DOMException(
-						'Permissions-Policy disallows speaker selection.',
-						'NotAllowedError',
+					throw withStack(
+						new global.DOMException(
+							'Permissions-Policy disallows speaker selection.',
+							'NotAllowedError',
+						),
 					);
 				if (
 					typeof id === 'string' &&
 					(context ? id !== '' : !LITERAL.has(id))
 				) {
 					const missing = () =>
-						new global.DOMException(
-							context
-								? `AudioContext.setSinkId(): failed: the device ${id} is not found.`
-								: 'Requested device not found',
-							'NotFoundError',
+						withStack(
+							new global.DOMException(
+								context
+									? `AudioContext.setSinkId(): failed: the device ${id} is not found.`
+									: 'Requested device not found',
+								'NotFoundError',
+							),
 						);
 					await refresh();
 					if (!mayRead('microphone'))
 						throw context
 							? missing()
-							: new global.DOMException(
-									'No permission to use requested device',
-									'SecurityError',
+							: withStack(
+									new global.DOMException(
+										'No permission to use requested device',
+										'SecurityError',
+									),
 								);
 					if (!LITERAL.has(id)) {
 						// an id that is not this site's names no device, whatever
@@ -1053,6 +1071,13 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		const sinkId = (native: Function, that: unknown) =>
 			toShown('deviceId', Reflect.apply(native, that, []));
 		const element = global.HTMLMediaElement?.prototype;
+		// the native getters, before they are hooked below
+		const elementSinkId =
+			element && Reflect.getOwnPropertyDescriptor(element, 'sinkId')?.get;
+		const contextSinkId =
+			global.AudioContext &&
+			Reflect.getOwnPropertyDescriptor(global.AudioContext.prototype, 'sinkId')
+				?.get;
 		hook(element, 'setSinkId', sink(false));
 		hook(element, 'sinkId', sinkId, 'get');
 		const NativeContext = global.AudioContext as
@@ -1191,6 +1216,8 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		const prototype = global.MediaDevices?.prototype;
 		if (!prototype?.getUserMedia) return;
 		const proxyModule = this.client.getModule(ProxyModule)!;
+		// this document's own (absent outside a secure context)
+		const mediaDevices: unknown = global.navigator.mediaDevices;
 		const enumerate = prototype.enumerateDevices;
 		const kindOf = Reflect.getOwnPropertyDescriptor(
 			global.MediaDeviceInfo?.prototype ?? {},
@@ -1264,6 +1291,10 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			value: proxyModule.wrapFunction(
 				prototype.getUserMedia,
 				async (target, that, args) => {
+					// (a receiver that is not this document's MediaDevices is
+					// the browser's to refuse, before anything is awaited)
+					if (that !== mediaDevices)
+						return await Reflect.apply(target, that, args);
 					// the ids the page names are its site's: the browser's own go in
 					const constraints = (await deviceIds.incoming(args[0])) as
 						MediaStreamConstraints | undefined;

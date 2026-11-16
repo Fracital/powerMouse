@@ -258,6 +258,17 @@ const nativeHTMLTemplateElement: HTMLTemplateElement =
 	Object.create(nativeHTMLElement);
 
 applyDescriptors(nativeNode, Node.prototype);
+
+// taken before any page code could replace it
+const isPrototypeOf = Object.prototype.isPrototypeOf;
+/**
+ * Whether `that` has `ctor`'s prototype above it: an element of this realm
+ * (a prototype object, an impostor made of one and an element of another
+ * realm do not, and the browser is asked about those)
+ */
+const inherits = (that: unknown, ctor: { prototype: object }): boolean =>
+	((typeof that === 'object' && that !== null) || typeof that === 'function') &&
+	(Reflect.apply(isPrototypeOf, ctor.prototype, [that]) as boolean);
 applyDescriptors(nativeEventTarget, EventTarget.prototype);
 applyDescriptors(nativeElement, Element.prototype);
 applyDescriptors(nativeHTMLElement, HTMLElement.prototype);
@@ -347,6 +358,22 @@ function isAttributeHook(
  * Provides a framework for hooking elements
  */
 export default class DOMHooksModule extends Module<DocumentClient> {
+	#namespaceURI?: () => unknown;
+	/**
+	 * The browser's own refusal of a receiver that is no element, for a
+	 * hook that works on its receiver before any native call would refuse
+	 * it: a native getter of this realm's Element (called directly:
+	 * Reflect.get would be a frame of the error's stack), which throws the
+	 * Illegal invocation a native method or accessor called on `that`
+	 * throws, an error of the page's realm.
+	 */
+	requireElement = (that: unknown): void => {
+		this.#namespaceURI ??= Reflect.getOwnPropertyDescriptor(
+			this.client.global.Element.prototype,
+			'namespaceURI',
+		)!.get!;
+		Reflect.apply(this.#namespaceURI, that, []);
+	};
 	/** markup of an element as the page wrote it (markers folded back) */
 	serializeOriginal!: (element: Element, outer: boolean) => string;
 	/** getHTML's serialized markup, for the readback modules to finish (CSS) */
@@ -552,6 +579,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// all hooks are in, now apply them
 
 		const proxyModule = this.client.getModule(ProxyModule)!;
+		const { requireElement } = this;
 
 		/**
 		 * Etc hooks are here
@@ -879,14 +907,19 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			set: proxyModule.wrapFunction(
 				domainDescriptor.set!,
 				(target, that: Document, args) => {
+					// (the getter refuses a receiver that is no document, as the
+					// setter would)
+					Reflect.apply(domainDescriptor.get!, that, []);
 					const value = String(args[0]);
 					// the effective domain: the host, or what an earlier write set
 					const host =
 						this.client.documentDomain ?? this.client.url.url.hostname;
 					const refuse = (reason: string) =>
-						new this.client.global.DOMException(
-							`Failed to set the 'domain' property on 'Document': ${reason}`,
-							'SecurityError',
+						withStack(
+							new this.client.global.DOMException(
+								`Failed to set the 'domain' property on 'Document': ${reason}`,
+								'SecurityError',
+							),
 						);
 					// a sandboxed document never sets it, allow-same-origin or not
 					if (this.client.sandboxFlags !== null)
@@ -1150,6 +1183,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				set: proxyModule.wrapFunction(
 					outerTextDescriptor.set!,
 					(target, that: Element, args) => {
+						requireElement(that);
 						that.replaceWith(new this.client.global.Text(args[0]));
 					},
 				),
@@ -1184,7 +1218,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			configurable: true,
 			get: proxyModule.wrapFunction(
 				innerHTMLDescriptor.get!,
-				(target, that: Element) => this.serializeOriginal(that, false),
+				(target, that: Element) => {
+					requireElement(that);
+					return this.serializeOriginal(that, false);
+				},
 			),
 			set: proxyModule.wrapFunction(
 				innerHTMLDescriptor.set!,
@@ -1290,7 +1327,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			configurable: true,
 			get: proxyModule.wrapFunction(
 				outerHTMLDescriptor.get!,
-				(target, that: Element) => this.serializeOriginal(that, true),
+				(target, that: Element) => {
+					requireElement(that);
+					return this.serializeOriginal(that, true);
+				},
 			),
 			set: proxyModule.wrapFunction(
 				outerHTMLDescriptor.set!,
@@ -2395,9 +2435,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			proxyModule.wrapFunction(
 				this.client.global.Element.prototype.setAttribute,
 				(target, that: Element, args) => {
-					// too many side effects
-					// illegal invocation error will throw by nature
-					// Reflect.apply(target, that, args);
+					// the native's side effects are the hooks' to decide, so it is
+					// not called first; what it would refuse is: a call without
+					// both arguments (the browser's own error, for the receiver or
+					// for the count, whichever it checks first) and a receiver
+					// that is no element
+					if (args.length < 2) return Reflect.apply(target, that, args);
+					requireElement(that);
 
 					// the hooks are keyed by the name the attribute gets:
 					// `setAttribute('HREF', x)` writes `href`.
@@ -2473,9 +2517,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			proxyModule.wrapFunction(
 				this.client.global.Element.prototype.removeAttribute,
 				(target, that: Element, args) => {
-					// too many side effects
-					// illegal invocation error will throw by nature
-					// Reflect.apply(target, that, args);
+					// (as setAttribute: the browser's own refusals first)
+					if (args.length < 1) return Reflect.apply(target, that, args);
+					requireElement(that);
 
 					const attribute =
 						typeof args[0] === 'string'
@@ -2531,6 +2575,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					get: proxyModule.wrapFunction(
 						descriptor.get!,
 						(target, that, args) => {
+							// a receiver that is plainly no element of this interface
+							// (the prototype itself, as a script that tests for hooks
+							// calls it): the browser refuses it before any hook runs
+							if (!inherits(that, ctor)) Reflect.apply(target, that, args);
 							return usePrototype(that, CustomElement.prototype, (element) => {
 								for (const entry of this.#propertyHooks(property)) {
 									const result = (entry.hook as PropertyHook)[2](element);
@@ -2551,76 +2599,83 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							});
 						},
 					),
-					set: proxyModule.wrapFunction(descriptor.set!, (target, that, args) =>
-						// one write for the page's observers, however many it takes
-						pageWrite(that, propertyAttribute(property), () => {
-							// properties are only set at the end of the stack
-							// attributes differ because they will immediately have an effect and will overrule properties set in the same stack
+					set: proxyModule.wrapFunction(
+						descriptor.set!,
+						(target, that, args) => {
+							// (the getter refuses what the setter would, and writes
+							// nothing)
+							if (!inherits(that, ctor))
+								Reflect.apply(descriptor.get!, that, []);
+							// one write for the page's observers, however many it takes
+							return pageWrite(that, propertyAttribute(property), () => {
+								// properties are only set at the end of the stack
+								// attributes differ because they will immediately have an effect and will overrule properties set in the same stack
 
-							// A reflecting property is its attribute: the page's value goes
-							// into the hooks' view of it and only what they make of it (a
-							// route, a copy) reaches the element, as with setAttribute.
-							// Handed to the native setter first, the raw URL would start a
-							// load (a connected script, link or frame, an image) straight
-							// from the site, past the proxy. `style` is not one: its setter
-							// forwards to cssText.
-							if (property === 'style') Reflect.apply(target, that, args);
+								// A reflecting property is its attribute: the page's value goes
+								// into the hooks' view of it and only what they make of it (a
+								// route, a copy) reaches the element, as with setAttribute.
+								// Handed to the native setter first, the raw URL would start a
+								// load (a connected script, link or frame, an image) straight
+								// from the site, past the proxy. `style` is not one: its setter
+								// forwards to cssText.
+								if (property === 'style') Reflect.apply(target, that, args);
 
-							// (the page's Trusted Types judge a script's src, a frame's
-							// srcdoc)
-							const sink = trustedSink(that as Element, property, true);
-							const written = sink
-								? this.client.trustedValue(
-										args[0],
-										TRUSTED_KINDS[sink[0]],
-										sink[1],
-										() => Reflect.apply(target, that, args),
-									)
-								: String(args[0]);
-							if (written === null) return;
-							let untouched = false;
-							usePrototype(that, CustomElement.prototype, (element) => {
-								const attribute = propertyAttribute(property);
-								if (property !== 'style')
-									element.setAttribute(attribute, written);
-								this.updatePropertyHooks(element, ctor, property);
-								untouched =
-									property !== 'style' &&
-									element.getAttribute(attribute) === written;
+								// (the page's Trusted Types judge a script's src, a frame's
+								// srcdoc)
+								const sink = trustedSink(that as Element, property, true);
+								const written = sink
+									? this.client.trustedValue(
+											args[0],
+											TRUSTED_KINDS[sink[0]],
+											sink[1],
+											() => Reflect.apply(target, that, args),
+										)
+									: String(args[0]);
+								if (written === null) return;
+								let untouched = false;
+								usePrototype(that, CustomElement.prototype, (element) => {
+									const attribute = propertyAttribute(property);
+									if (property !== 'style')
+										element.setAttribute(attribute, written);
+									this.updatePropertyHooks(element, ctor, property);
+									untouched =
+										property !== 'style' &&
+										element.getAttribute(attribute) === written;
+								});
+								// No hook took the value (a link's href before its rel is
+								// set, an icon's): it is the page's attribute as written,
+								// as natively. Read back through the native getter it would
+								// be resolved against the document's real URL, the proxy's,
+								// and the hook that takes it later (when the rel comes)
+								// would load it from the proxy origin.
+								if (untouched) return;
+
+								// getter isn't stack based and we can use this to make the attribute immediately take effect
+
+								// equivalent to i.src = i.src. Not for `style`: its getter
+								// returns the declaration object, and assigning that back goes
+								// through PutForwards=cssText as "[object CSSStyleDeclaration]",
+								// which wipes the inline style
+								// An empty value stays empty: the browser's reading of it is
+								// the document's own URL (a route), not a URL to apply.
+								const value = Reflect.apply(descriptor.get!, that, []);
+
+								// nor one a hook removed (a load whose proxied copy is still on
+								// its way): written back it would be an empty URL, which a
+								// script reports as an error and never loads again
+								// A base's href took effect with its attribute, and written
+								// again it is judged again (base-uri, a violation each time)
+								if (
+									typeof value === 'string' &&
+									written !== '' &&
+									value !== '' &&
+									ctor !== this.client.global.HTMLBaseElement
+								)
+									Reflect.apply(target, that, [
+										sink ? trustedOf(sink[0], value) : value,
+									]);
 							});
-							// No hook took the value (a link's href before its rel is
-							// set, an icon's): it is the page's attribute as written,
-							// as natively. Read back through the native getter it would
-							// be resolved against the document's real URL, the proxy's,
-							// and the hook that takes it later (when the rel comes)
-							// would load it from the proxy origin.
-							if (untouched) return;
-
-							// getter isn't stack based and we can use this to make the attribute immediately take effect
-
-							// equivalent to i.src = i.src. Not for `style`: its getter
-							// returns the declaration object, and assigning that back goes
-							// through PutForwards=cssText as "[object CSSStyleDeclaration]",
-							// which wipes the inline style
-							// An empty value stays empty: the browser's reading of it is
-							// the document's own URL (a route), not a URL to apply.
-							const value = Reflect.apply(descriptor.get!, that, []);
-
-							// nor one a hook removed (a load whose proxied copy is still on
-							// its way): written back it would be an empty URL, which a
-							// script reports as an error and never loads again
-							// A base's href took effect with its attribute, and written
-							// again it is judged again (base-uri, a violation each time)
-							if (
-								typeof value === 'string' &&
-								written !== '' &&
-								value !== '' &&
-								ctor !== this.client.global.HTMLBaseElement
-							)
-								Reflect.apply(target, that, [
-									sink ? trustedOf(sink[0], value) : value,
-								]);
-						}),
+						},
 					),
 				});
 			}

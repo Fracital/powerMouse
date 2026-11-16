@@ -45,10 +45,17 @@ export default class SandboxModule extends Module<DocumentClient> {
 		) => {
 			const descriptor = Reflect.getOwnPropertyDescriptor(owner, property);
 			if (!descriptor?.get) return;
+			// what the refusal is about: this window, or its document. Called
+			// on anything else (the prototype itself) the accessor is the
+			// browser's, which refuses the receiver before the sandbox
+			const subject = (that: unknown) =>
+				owner === global
+					? that === global || that === undefined || that === null
+					: that === global.document;
 			Reflect.defineProperty(owner, property, {
 				...descriptor,
 				get: proxyModule.wrapFunction(descriptor.get, (target, that, args) => {
-					if (opaque()) throw securityError(message);
+					if (opaque() && subject(that)) throw securityError(message);
 					return Reflect.apply(target, that, args);
 				}),
 				...(descriptor.set && setMessage
@@ -56,7 +63,8 @@ export default class SandboxModule extends Module<DocumentClient> {
 							set: proxyModule.wrapFunction(
 								descriptor.set,
 								(target, that, args) => {
-									if (opaque()) throw securityError(setMessage);
+									if (opaque() && subject(that))
+										throw securityError(setMessage);
 									return Reflect.apply(target, that, args);
 								},
 							),
@@ -382,7 +390,14 @@ export default class SandboxModule extends Module<DocumentClient> {
 				factory[method] = proxyModule.wrapFunction(
 					native,
 					(target, that, args) => {
-						if (opaque()) {
+						// (the browser refuses a receiver that is not the
+						// factory, and a call without its argument, before
+						// the sandbox)
+						if (
+							opaque() &&
+							that === global.indexedDB &&
+							args.length >= target.length
+						) {
 							// (Chrome words databases()'s refusal its own way)
 							const error = securityError(
 								method === 'databases'

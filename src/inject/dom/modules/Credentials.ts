@@ -1,7 +1,7 @@
 import { routeXHR } from '../../../routeURL';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
-import ProxyModule from '../../modules/Proxy';
+import ProxyModule, { requiredArgumentsMessage } from '../../modules/Proxy';
 import { scopePrefix } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
 import type DocumentClient from '../Client';
@@ -234,21 +234,24 @@ export default class CredentialsModule extends Module<DocumentClient> {
 		};
 
 		// IdentityCredential: its prototype reads token, isAutoSelected and
-		// configURL (and the Credential base's id and type) from the credential
-		// this document resolved; the browser constructs it (illegal). Its chain
-		// is IdentityCredential.prototype -> Credential.prototype -> Object.
+		// configURL from the credential this document resolved; the browser
+		// constructs it (illegal). Its chain is IdentityCredential.prototype ->
+		// Credential.prototype -> Object, and `id` and `type` are the base's,
+		// as natively: Credential.prototype's own getters answer for a
+		// credential of this document (and as ever for any other), so the
+		// stand-in's prototype has the browser's keys and no more.
 		const icPrototype = PageObject.create(NativeCredential.prototype);
-		for (const [key, base] of [
-			['token', NativeIdentityCredential.prototype],
-			['isAutoSelected', NativeIdentityCredential.prototype],
-			['configURL', NativeIdentityCredential.prototype],
-			['id', NativeCredential.prototype],
-			['type', NativeCredential.prototype],
-		] as const)
+		for (const key of ['token', 'isAutoSelected', 'configURL'] as const)
 			Reflect.defineProperty(
 				icPrototype,
 				key,
-				wrappedGetter(base, key, credentialData),
+				wrappedGetter(NativeIdentityCredential.prototype, key, credentialData),
+			);
+		for (const key of ['id', 'type'] as const)
+			Reflect.defineProperty(
+				NativeCredential.prototype,
+				key,
+				wrappedGetter(NativeCredential.prototype, key, credentialData),
 			);
 		copyStringTag(icPrototype, NativeIdentityCredential.prototype);
 		const IdentityCredential = standInClass(
@@ -341,11 +344,23 @@ export default class CredentialsModule extends Module<DocumentClient> {
 				value: proxyModule.wrapFunction(
 					descriptor.value,
 					(target, that, args) => {
-						if (!loginData.has(that)) throw typeError('Illegal invocation');
+						// (the browser's own rejection for anything that is no
+						// NavigatorLogin)
+						if (!loginData.has(that)) return Reflect.apply(target, that, args);
+						// the method answers with a promise, so what it refuses
+						// is a rejection, never a throw
+						if (!args.length)
+							return reject(
+								typeError(
+									requiredArgumentsMessage(0, 1, 'NavigatorLogin', 'setStatus'),
+								),
+							);
 						const status = String(args[0]);
 						if (status !== 'logged-in' && status !== 'logged-out')
-							throw typeError(
-								`Failed to execute 'setStatus' on 'NavigatorLogin': The provided value '${status}' is not a valid enum value of type LoginStatus.`,
+							return reject(
+								typeError(
+									`Failed to execute 'setStatus' on 'NavigatorLogin': The provided value '${status}' is not a valid enum value of type LoginStatus.`,
+								),
 							);
 						loginStatus = status;
 						return Reflect.apply(PagePromise.resolve, PagePromise, [undefined]);
@@ -353,6 +368,12 @@ export default class CredentialsModule extends Module<DocumentClient> {
 				),
 			});
 		}
+
+		// each prototype lists its members where the browser's does (the
+		// stand-in's `constructor` was its first key)
+		proxyModule.orderLike(icPrototype, NativeIdentityCredential.prototype);
+		proxyModule.orderLike(ipPrototype, NativeIdentityProvider.prototype);
+		proxyModule.orderLike(nlPrototype, NativeNavigatorLogin.prototype);
 
 		// --- navigator.login: a NavigatorLogin of this document ---
 

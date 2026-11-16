@@ -587,7 +587,13 @@ export default class FetchModule extends Module<Client> {
 			global.fetchLater = proxyModule.wrapFunction(
 				global.fetchLater,
 				(target, that, args) => {
-					catchRequiredArguments(args.length, 1, 'Window', 'fetchLater');
+					catchRequiredArguments(
+						args.length,
+						1,
+						'Window',
+						'fetchLater',
+						global,
+					);
 					const request = args[0] instanceof Request ? args[0] : null;
 					let url: URL;
 					try {
