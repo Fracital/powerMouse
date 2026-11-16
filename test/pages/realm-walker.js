@@ -131,6 +131,9 @@
 		// read through it is read past whatever this realm's has become
 		let freshToString = null;
 		let freshFrame = null;
+		// (how getting it went is a fact of the realm too: a frame the
+		// realm makes is its own, of its origin, natively)
+		let freshness = 'none';
 		if (options.fresh !== false && typeof scope.document === 'object')
 			try {
 				freshFrame = scope.document.createElement('iframe');
@@ -138,11 +141,14 @@
 					freshFrame,
 				);
 				freshToString = freshFrame.contentWindow.Function.prototype.toString;
-				// out of the document again before anything is read: the
-				// walk counts the window's frames like everything else
-				freshFrame.remove();
+				freshness = 'own';
 			} catch (error) {
 				freshToString = null;
+				freshness = `failed: ${error?.name}: ${error?.message}`;
+			} finally {
+				// out of the document again before anything is read: the
+				// walk counts the window's frames like everything else
+				freshFrame?.remove();
 			}
 
 		// calls the fixture leaves out, each by the fact it would be
@@ -577,7 +583,7 @@
 			}
 		};
 		counts.ms = scope.Date.now() - started;
-		const result = { record, counts };
+		const result = { record, counts, fresh: freshness };
 		// how each promise a call answered with settles: appended to the
 		// property's text, in the order the calls were made
 		let settledTo = 0;
@@ -642,6 +648,7 @@
 	 */
 	function lines(result) {
 		const out = {};
+		if (result.fresh) out['walker:fresh-frame'] = result.fresh;
 		for (const path in result.record) {
 			const entry = result.record[path];
 			out[`${path}:object`] =

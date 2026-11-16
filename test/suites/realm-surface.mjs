@@ -76,6 +76,15 @@ const EXCLUDED = [
 	],
 	[
 		/./,
+		/^G\.performance(\.timing~|~timeOrigin$)/,
+		"a clock: the moments the document's load passed and the realm's time origin, which two native loads share only by chance (one at 0 is no moment, and is compared)",
+		null,
+		(native, proxied) =>
+			/^number:[1-9]/.test(String(native)) &&
+			/^number:[1-9]/.test(String(proxied)),
+	],
+	[
+		/./,
 		/\.userActivation~(hasBeenActive|isActive)$/,
 		"OPEN: the host page's activation is its frames': the suite starts the page from a script in the host (as a user's click in the host does), and the proxied page reads as activated before anyone touched it",
 	],
@@ -158,7 +167,7 @@ const OPEN_REALMS = new Map([
 	],
 	[
 		'frame-data',
-		'a data: document is no secure context natively and lacks every API that needs one; the proxy serves it from its own origin, a secure context with all of them',
+		"a data: document is no secure context natively and lacks every API that needs one; the proxy serves it from its own origin, a secure context with all of them; and an about:blank frame it makes is its own natively, where through the proxy reading the frame's Function is refused as another origin's (walker:fresh-frame)",
 	],
 	[
 		'inert-documents',
@@ -170,7 +179,7 @@ const OPEN_REALMS = new Map([
 	],
 	[
 		'frame-javascript',
-		"the document a javascript: URL's string makes is about:blank natively; the proxy shows it at the URL of the page that made it",
+		"the document a javascript: URL's string makes is about:blank natively (its location, document.URL, its navigation entry); the proxy shows it at the URL of the page that made it",
 	],
 	[
 		'service-worker',
