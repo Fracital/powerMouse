@@ -27,6 +27,33 @@ function buildId() {
 }
 
 const snapshot = resolve('src/inject/snapshot.ts');
+// Every `Reflect.<method>` an inject bundle names is the snapshot's method
+// under a name of its own (src/inject/snapshot.ts `reflectApply`, ...): a
+// call is one short name instead of a member of the snapshot object, which
+// the document bundle names some 1,700 times (18 KB of it). The bundles
+// that inject the snapshot define these; nothing else does (the light
+// library's Reflect is src/libGlobals.ts's).
+const REFLECT_METHODS = [
+	'apply',
+	'construct',
+	'defineProperty',
+	'deleteProperty',
+	'get',
+	'has',
+	'getOwnPropertyDescriptor',
+	'getPrototypeOf',
+	'isExtensible',
+	'ownKeys',
+	'preventExtensions',
+	'set',
+	'setPrototypeOf',
+];
+const reflectDefines = Object.fromEntries(
+	REFLECT_METHODS.map((name) => [
+		`Reflect.${name}`,
+		`reflect${name[0].toUpperCase()}${name.slice(1)}`,
+	]),
+);
 const domSnapshot = resolve('src/inject/dom/snapshot.ts');
 
 /** @type {import('esbuild').BuildOptions} */
@@ -145,8 +172,15 @@ const rewriterLib = {
 					return { contents: 'export default null;\n', loader: 'js' };
 				// the library seals its URLs in JavaScript, the same text: the
 				// bundle that carries it carries the codec module already
+				// (its Reflect is src/libGlobals.ts's, and it names nothing of the
+				// bundle's: not the snapshot's methods either)
+				const define = Object.fromEntries(
+					Object.entries(pluginBuild.initialOptions.define).filter(
+						([key]) => !(key in reflectDefines),
+					),
+				);
 				const { text, inputs } = await lightLibrary(worker, {
-					...pluginBuild.initialOptions.define,
+					...define,
 					'process.env.STOMP_CODEC_WASM': 'undefined',
 				});
 				return {
@@ -308,6 +342,7 @@ const bundles = (library, generation = '') =>
 			...common.define,
 			'process.env.STOMP_LIBRARY': JSON.stringify(library),
 			'process.env.STOMP_REWRITE_GENERATION': JSON.stringify(generation),
+			...(options.inject?.includes(snapshot) ? reflectDefines : {}),
 		},
 		plugins: [noSourceMaps, ...(options.plugins ?? [])],
 	}));

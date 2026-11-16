@@ -84,7 +84,10 @@ on every save (use a `git worktree`).
   `WebSocket`, `navigator`, ... and `build.js` injects them into the inject
   bundles, so any unqualified use of those names anywhere in that bundle
   (including node_modules) gets the pristine copy taken before the page ran.
-  Write `globalThis.X` when you really want the live global.
+  Write `globalThis.X` when you really want the live global. Each
+  `Reflect.<method>` there is defined as the snapshot's method under a name
+  of its own (`reflectApply`, build.js `reflectDefines`): a new method of
+  the snapshot's `Reflect` goes in both lists.
 - **The inject's rewriter is a library of its own, often in a detached
   realm.** meriyah, escodegen, css-tree and tldts reach the inject only
   through `src/inject/rewriter.ts` (light code reaches modifyJS/modifyCSS

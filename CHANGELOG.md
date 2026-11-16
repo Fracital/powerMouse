@@ -6,6 +6,11 @@ The first release after a four-year gap. Everything below is breaking.
 
 ### Build
 
+- A call of `Reflect.<method>` in the inject bundles is one short name
+  instead of a member of the snapshot object (build.js defines each method
+  as the snapshot's own under a name of its own; the same function): the
+  document bundle names them some 1,700 times, and `injectDocument.js`
+  is 18 KB smaller (505 to 487 KB), the worker bundle 5 KB. (frame-cost.)
 - The document inject bundle no longer carries the light rewriter library
   (41 KB of its 475): a frame uses its top's library and never evaluated
   its own. The library is the second statement of `dist/rewriterLib.js`,

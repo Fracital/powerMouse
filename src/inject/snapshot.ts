@@ -21,6 +21,23 @@ export const Reflect: typeof globalThis.Reflect = {
 	setPrototypeOf: globalThis.Reflect.setPrototypeOf.bind(globalThis.Reflect),
 };
 
+// The same methods under names of their own: build.js defines each
+// `Reflect.<method>` of the inject bundles as one of these, so a call is a
+// short name rather than a member of the object above (the same function)
+export const reflectApply = Reflect.apply;
+export const reflectConstruct = Reflect.construct;
+export const reflectDefineProperty = Reflect.defineProperty;
+export const reflectDeleteProperty = Reflect.deleteProperty;
+export const reflectGet = Reflect.get;
+export const reflectHas = Reflect.has;
+export const reflectGetOwnPropertyDescriptor = Reflect.getOwnPropertyDescriptor;
+export const reflectGetPrototypeOf = Reflect.getPrototypeOf;
+export const reflectIsExtensible = Reflect.isExtensible;
+export const reflectOwnKeys = Reflect.ownKeys;
+export const reflectPreventExtensions = Reflect.preventExtensions;
+export const reflectSet = Reflect.set;
+export const reflectSetPrototypeOf = Reflect.setPrototypeOf;
+
 export const fetch = globalThis.fetch;
 
 export const URL = globalThis.URL;
