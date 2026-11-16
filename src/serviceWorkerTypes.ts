@@ -142,6 +142,19 @@ export interface EmulateInfo {
 	type: WorkerType;
 	/** its registration's storage partition (src/partition.ts), none for a first-party one */
 	partition?: string;
+	/** a service worker's global in this Chrome, read from STomp's own (nativeServiceWorker) */
+	native?: NativeServiceWorker;
+}
+
+/**
+ * What a service worker's global holds in the Chrome that runs it, which
+ * changes between versions (Chrome 157 gave it ProgressEvent and moved
+ * ServiceWorkerRegistration.prototype's members): its own names, and the
+ * registration prototype's members in order
+ */
+export interface NativeServiceWorker {
+	names: string[];
+	registration: string[];
 }
 
 /** a request as the emulated worker's FetchEvent shows it */

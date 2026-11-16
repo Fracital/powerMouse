@@ -1204,6 +1204,14 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- An emulated service worker's global answers as the Chrome it runs in
+  does: it keeps what a dedicated worker has where that Chrome's own service
+  worker has it too (Chrome 157 gave service workers `ProgressEvent`, which
+  the emulation removed), and `ServiceWorkerRegistration.prototype` lists
+  its members in that Chrome's order (Chrome 157 moved them; the emulation
+  kept Chrome 152's, in the worker and in a page alike). Both are read from
+  STomp's own service worker, a real one, and handed to the emulated worker
+  with its script. (service-worker-global suite, Chrome 152, 156 and 157.)
 - `navigator.permissions.query({ name: 'storage-access' })` reads granted
   in a proxied top-level page, as natively: a top-level document has
   storage access, and Chrome answers granted there (denied when its

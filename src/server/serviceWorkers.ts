@@ -16,6 +16,7 @@ import type {
 	FetchInit,
 	FromEmulated,
 	MessageInit,
+	NativeServiceWorker,
 	NavigationPreloadState,
 	PageEvent,
 	RegistrationSnapshot,
@@ -2185,3 +2186,20 @@ export class ServiceWorkers {
 
 /** the one instance of STomp's service worker */
 export const serviceWorkers = new ServiceWorkers();
+
+let nativeShape: NativeServiceWorker | undefined;
+/**
+ * A service worker's global as this Chrome makes it, read from STomp's own
+ * (a real one, which nothing hooks): what an emulated worker's global keeps
+ * of a dedicated worker's and the order of its registration's members
+ * follow it, so the emulation answers as the running browser does
+ */
+export function nativeServiceWorker(): NativeServiceWorker {
+	return (nativeShape ??= {
+		names: Object.getOwnPropertyNames(globalThis),
+		registration:
+			typeof globalThis.ServiceWorkerRegistration === 'function'
+				? Object.getOwnPropertyNames(ServiceWorkerRegistration.prototype)
+				: [],
+	});
+}

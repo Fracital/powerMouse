@@ -49,29 +49,14 @@ export interface ObjectsBackend {
 export interface ObjectsOptions {
 	/** the realm is the emulated worker's (push answers and backgroundFetch.fetch differ there) */
 	inWorker?: boolean;
+	/**
+	 * ServiceWorkerRegistration.prototype's members in this Chrome's order,
+	 * where the realm's own prototype lacks some (a dedicated worker's has no
+	 * `cookies`): its order moved in Chrome 157, so it is read natively
+	 * (EmulateInfo.native). Without it the realm's own order is kept
+	 */
+	registrationOrder?: readonly string[];
 }
-
-/** ServiceWorkerRegistration.prototype's members in Chrome 152's order */
-const REGISTRATION_ORDER = [
-	'installing',
-	'waiting',
-	'active',
-	'navigationPreload',
-	'scope',
-	'updateViaCache',
-	'onupdatefound',
-	'unregister',
-	'update',
-	'paymentManager',
-	'constructor',
-	'backgroundFetch',
-	'periodicSync',
-	'sync',
-	'cookies',
-	'pushManager',
-	'getNotifications',
-	'showNotification',
-];
 
 /** a manager a registration has, by the member that holds it */
 const MANAGERS = {
@@ -125,6 +110,7 @@ export default class ServiceWorkerObjects {
 		{ request: Request; response: Promise<Response> }
 	>();
 	readonly #inWorker: boolean;
+	readonly #registrationOrder?: readonly string[];
 	/** the interfaces this realm uses, its own or stand-ins (the worker exposes the ones a service worker has) */
 	readonly classes = new Map<string, Function>();
 	/** a background fetch registration object of this realm (the worker's events carry one) */
@@ -147,6 +133,7 @@ export default class ServiceWorkerObjects {
 		this.#proxy = proxy;
 		this.#backend = backend;
 		this.#inWorker = !!options.inWorker;
+		this.#registrationOrder = options.registrationOrder;
 		this.#addEventListener = global.EventTarget.prototype.addEventListener;
 		this.#dispatchEvent = global.EventTarget.prototype.dispatchEvent;
 		this.#Registration = global.ServiceWorkerRegistration;
@@ -482,6 +469,11 @@ export default class ServiceWorkerObjects {
 	#hookRegistration() {
 		const proto = this.#Registration.prototype;
 		const brand = this.isRegistration;
+		const names = () =>
+			Reflect.ownKeys(proto).filter(
+				(key): key is string => typeof key === 'string',
+			);
+		const reference = this.#registrationOrder ?? names();
 		const state = (that: object) => this.#registrationStates.get(that)!;
 		for (const slot of ['installing', 'waiting', 'active'] as const)
 			this.hook(proto, slot, brand, {
@@ -528,14 +520,14 @@ export default class ServiceWorkerObjects {
 			this.hook(proto, kind, brand, {
 				get: (that) => state(that).managers.get(kind),
 			});
-		// a member the realm lacked was added last: the members in Chrome's
-		// order, as the prototype lists them natively
-		const order = Reflect.ownKeys(proto).filter(
-			(key): key is string => typeof key === 'string',
-		);
-		const wanted = REGISTRATION_ORDER.filter((key) => order.includes(key));
-		const current = order.filter((key) => REGISTRATION_ORDER.includes(key));
-		if (wanted.join() !== current.join())
+		// a member the realm lacked was added last: the members in this
+		// Chrome's order, as a service worker's prototype lists them natively
+		const order = names();
+		const wanted = [
+			...reference.filter((key) => order.includes(key)),
+			...order.filter((key) => !reference.includes(key)),
+		];
+		if (wanted.join() !== order.join())
 			for (const key of wanted) {
 				const descriptor = Reflect.getOwnPropertyDescriptor(proto, key)!;
 				Reflect.deleteProperty(proto, key);

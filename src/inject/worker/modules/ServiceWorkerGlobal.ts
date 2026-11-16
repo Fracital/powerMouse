@@ -63,7 +63,9 @@ const DEDICATED_ONLY = [
 /**
  * What a dedicated worker's global has and a service worker's lacks
  * besides (measured against Chrome 152's service worker global): device and
- * media APIs, WebCodecs, the RTC script transform, the old file system API
+ * media APIs, WebCodecs, the RTC script transform, the old file system API.
+ * A name this Chrome's own service worker global has is kept
+ * (EmulateInfo.native): Chrome 157 gave service workers ProgressEvent
  */
 const DEDICATED_ONLY_INTERFACES = [
 	'AudioData',
@@ -233,7 +235,7 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 					return answer.value;
 				},
 			},
-			{ inWorker: true },
+			{ inWorker: true, registrationOrder: info.native?.registration },
 		);
 		const registration = objects.registration(info.registration);
 		const self = objects.worker(info.version, info.registration.id)!;
@@ -987,8 +989,9 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 					1,
 				),
 			});
+		const nativeNames = new Set(info.native?.names ?? []);
 		for (const name of [...DEDICATED_ONLY, ...DEDICATED_ONLY_INTERFACES])
-			Reflect.deleteProperty(global, name);
+			if (!nativeNames.has(name)) Reflect.deleteProperty(global, name);
 		// a service worker cannot mint blob: URLs
 		Reflect.deleteProperty(global.URL, 'createObjectURL');
 		Reflect.deleteProperty(global.URL, 'revokeObjectURL');

@@ -221,7 +221,7 @@ import type { RewriteCache, RewriteCacheOutcome } from './rewriteCache';
 import type { RewritePool } from './rewritePool';
 import Router from './Router';
 import { applyHeaderRule, CompiledRule, compileRules } from './rules';
-import { serviceWorkers } from './serviceWorkers';
+import { nativeServiceWorker, serviceWorkers } from './serviceWorkers';
 import type { ShieldsStore } from './shields';
 import { boundClient } from './srcdocVouches';
 import { rememberVisitedHop, takeVisitedHop } from './visitedHops';
@@ -4987,7 +4987,7 @@ function registerServiceWorkerScripts(router: Router, rewriter: Rewriter) {
 					url,
 					rewriter.config,
 					found.info.type === 'module' ? 'workerModule' : 'worker',
-					`${client}.emulateServiceWorker(${JSON.stringify(found.info)});`,
+					`${client}.emulateServiceWorker(${JSON.stringify({ ...found.info, native: nativeServiceWorker() })});`,
 				) + `\n;${client}.serviceWorkerEvaluated();`;
 			return new Response(script, { headers: SCRIPT_HEADERS });
 		},
