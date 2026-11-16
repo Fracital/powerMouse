@@ -1,0 +1,115 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>access tamper</title>
+	</head>
+	<body>
+		<script>
+			// A page that replaces a native the access helpers could have
+			// called (test/suites/access-tamper.mjs): what it then reads of
+			// its location, its top and its eval must be what it reads
+			// natively. `?case=` names the native it replaces.
+			(function () {
+				var which = new URLSearchParams(location.search).get('case');
+				var report = { case: which, done: false };
+				var note = function (name, read) {
+					try {
+						report[name] = String(read());
+					} catch (error) {
+						report[name] = 'threw ' + error.name;
+					}
+				};
+				// an option that carries a script, for the indexed setter of a
+				// select: the script must run as the page's (its location is
+				// the page's)
+				var landed = function (index) {
+					var select = document.createElement('select');
+					document.body.appendChild(select);
+					var option = document.createElement('option');
+					var script = document.createElement('script');
+					script.textContent = 'window.__landed = location.href;';
+					option.appendChild(script);
+					window.__landed = 'did not run';
+					select[index] = option;
+					return window.__landed;
+				};
+				if (which === 'includes')
+					Array.prototype.includes = function () {
+						return false;
+					};
+				if (which === 'isArrayFalse')
+					Array.isArray = function () {
+						return false;
+					};
+				if (which === 'isArrayTrue')
+					Array.isArray = function () {
+						return true;
+					};
+				if (which === 'isInteger')
+					Number.isInteger = function () {
+						return false;
+					};
+				if (which === 'regexpTest')
+					RegExp.prototype.test = function () {
+						return false;
+					};
+				if (which === 'regexpExec')
+					RegExp.prototype.exec = function () {
+						return null;
+					};
+				if (which === 'proxy')
+					window.Proxy = function (target) {
+						return target;
+					};
+				note('location', function () {
+					return location.href;
+				});
+				note('computedLocation', function () {
+					var key = 'loc' + 'ation';
+					return window[key].href;
+				});
+				note('evalLocation', function () {
+					var run = eval;
+					return run('location.href');
+				});
+				note('computedEval', function () {
+					var key = 'ev' + 'al';
+					return window[key]('location.href');
+				});
+				note('topIsWindow', function () {
+					return top === window;
+				});
+				note('patternTop', function () {
+					var [{ top: t }] = [window];
+					return t === window;
+				});
+				note('patternLocation', function () {
+					var [{ location: l }] = [window];
+					return l.href;
+				});
+				note('objectPatternTop', function () {
+					var { top: t } = window;
+					return t === window;
+				});
+				note('objectPatternLocation', function () {
+					var { location: l } = window;
+					return l.href;
+				});
+				note('descriptorLocation', function () {
+					return Object.getOwnPropertyDescriptor(window, 'location').get.call(
+						window,
+					).href;
+				});
+				note('landedNumber', function () {
+					return landed(0);
+				});
+				note('landedString', function () {
+					return landed('0');
+				});
+				report.done = true;
+				window.__tamper = report;
+			})();
+		</script>
+	</body>
+</html>

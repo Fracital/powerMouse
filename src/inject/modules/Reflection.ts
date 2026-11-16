@@ -1,4 +1,3 @@
-import { UNDEFINABLE } from '../../scriptRoutes';
 import Client from '../Client';
 import Module from '../Module';
 import ProxyModule from './Proxy';
@@ -32,8 +31,10 @@ export default class ReflectionModule extends Module<Client> {
 		const api = () => this.client.accessApi as Api;
 		const document = (global as { document?: unknown }).document;
 
+		// (the names of UNDEFINABLE, asked without a method a page could have
+		// replaced on Array.prototype)
 		const unforgeable = (key: unknown): key is string =>
-			typeof key === 'string' && UNDEFINABLE.includes(key);
+			key === 'eval' || key === 'location' || key === 'top';
 		// the helper names (the access API and client key on the window, the
 		// stand-in tags on location and eval) never show in an enumeration of
 		// those objects and are not "own" to any reflective question, nor have

@@ -40,9 +40,15 @@ export function setGlobalProxy(
 		});
 }
 
-// taken when the bundle loads, before any page code could replace them
+// taken when the bundle loads, before any page code could replace them: a
+// helper that asked the page's `Array.isArray`, its `Proxy` or a method of
+// its `Array.prototype` would decide what the page told it to
 const isArray = Array.isArray;
 const isView = ArrayBuffer.isView;
+const NativeProxy = Proxy;
+const NativeSymbol = Symbol;
+const ITERATOR = Symbol.iterator;
+const create = Object.create;
 
 /**
  * Whether `value` is an array or a typed array (or a DataView), by the
@@ -62,6 +68,19 @@ const array = (value: unknown): boolean => {
 	} catch (error) {
 		return false;
 	}
+};
+
+/**
+ * Whether `key` names an element the way an array index does (`0`, `'17'`;
+ * not `'01'`, not `1.5`), asked with operators alone: a write lands through
+ * the hooks by this answer, and Number.isInteger and a RegExp's methods are
+ * the page's to replace.
+ */
+const indexKey = (key: unknown): boolean => {
+	if (typeof key === 'number') return key >= 0 && key % 1 === 0;
+	if (typeof key !== 'string') return false;
+	const index = +key;
+	return index >= 0 && index % 1 === 0 && `${index}` === key;
 };
 
 type PatternSpec = {
@@ -242,12 +261,12 @@ export default class AccessModule extends Module<Client> {
 			return wrapper;
 		};
 		const iterated = (source: any, specs: unknown[]): unknown => {
-			const method = source[Symbol.iterator];
+			const method = source[ITERATOR];
 			// not iterable: the pattern's own error
 			if (typeof method !== 'function') return source;
 			return wraps(
 				{
-					[Symbol.iterator]: () => {
+					[ITERATOR]: () => {
 						const iterator = Reflect.apply(method, source, []);
 						if (!isObject(iterator)) return iterator;
 						const next = (iterator as any).next;
@@ -266,7 +285,7 @@ export default class AccessModule extends Module<Client> {
 								if (drained) return { done: true, value: undefined };
 								const spec = specs[index++];
 								if (!spec) return Reflect.apply(next, iterator, []);
-								if (Array.isArray(spec)) {
+								if (isArray(spec)) {
 									const rest: unknown[] = [];
 									for (let result = step(); !result.done; result = step())
 										rest.push(result.value);
@@ -433,7 +452,7 @@ export default class AccessModule extends Module<Client> {
 							const standIn = (this.client.global.location as any)[
 								this.client.names.globalProxy
 							];
-							const property = Symbol();
+							const property = NativeSymbol();
 							return operate(
 								{
 									get [property]() {
@@ -487,10 +506,8 @@ export default class AccessModule extends Module<Client> {
 					typeof target === 'object' &&
 					target !== null &&
 					this.client.landIndexed &&
-					(typeof key === 'number'
-						? Number.isInteger(key) && key >= 0
-						: typeof key === 'string' && /^(0|[1-9]\d*)$/.test(key)) &&
-					!Array.isArray(target) &&
+					indexKey(key) &&
+					!isArray(target) &&
 					'selectedIndex' in target
 				)
 					return this.client.landIndexed(target, righthand, () =>
@@ -635,7 +652,7 @@ export default class AccessModule extends Module<Client> {
 				righthand: any,
 			) => {
 				// name = normalizeKey(name);
-				const property = Symbol();
+				const property = NativeSymbol();
 				let value = api.get(target, name);
 				let assigned = false;
 				const object = {
@@ -787,7 +804,7 @@ export default class AccessModule extends Module<Client> {
 					const standIn = api.get(real, key);
 					if (standIn !== real) return operate(standIn, 'href', righthand);
 				}
-				const property = Symbol();
+				const property = NativeSymbol();
 				return operate(
 					{
 						get [property]() {
@@ -1107,9 +1124,9 @@ export default class AccessModule extends Module<Client> {
 				)
 					return object;
 				const elements = spec?.['[]'];
-				if (Array.isArray(elements)) return iterated(object, elements);
+				if (isArray(elements)) return iterated(object, elements);
 				const positions = spec?.['{}'];
-				const ordered = Array.isArray(positions) ? positions : undefined;
+				const ordered = isArray(positions) ? positions : undefined;
 				// (the pattern reads each of its properties once, in order)
 				let position = 0;
 				const source = object as object;
@@ -1120,7 +1137,7 @@ export default class AccessModule extends Module<Client> {
 				// (a rest element lists the keys and reads each descriptor), and
 				// each is asked of the source once, as the pattern would ask it
 				return wraps(
-					new Proxy(Object.create(null) as object, {
+					new NativeProxy(create(null) as object, {
 						ownKeys: () => Reflect.ownKeys(source),
 						getOwnPropertyDescriptor: (_, key) => {
 							const descriptor = Reflect.getOwnPropertyDescriptor(source, key);

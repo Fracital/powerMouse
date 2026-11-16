@@ -1270,6 +1270,19 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   document's URL stays the base URL and the page gets the base-uri
   violation. The copy is now judged by the metas before the parsed base it
   is made from. (csp-navigation suite, natively against both modes.)
+- A page that replaces a native the access helpers asked gains nothing by
+  it. The helpers decide what a page reads of its `location`, its `top` and
+  its `eval`, and whether an element it assigns by index lands through the
+  hooks, and some of those answers came from the page's own natives: with
+  `Array.isArray` replaced, `const [{ top: t }] = [window]` was the real top
+  and the pattern's `location` the proxy's URL; with `Number.isInteger`,
+  `RegExp.prototype.test` or `RegExp.prototype.exec` replaced,
+  `select[0] = option` skipped the hooks and a script in the option ran
+  unrewritten, reading the proxy's URL; with `Proxy` replaced, a pattern of
+  `window` (`const { top: t } = window`) read nothing, where natively it
+  reads the window's. The helpers and the reflection hooks now ask natives
+  taken when the bundle loads, and operators where no native is needed.
+  (access-tamper suite, natively against the proxy.)
 - Rewritten code that reads and writes the elements of arrays, typed
   arrays and strings by number runs many times faster. Every computed
   member access goes through the access helpers (`a[i]` is
