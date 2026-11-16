@@ -15,6 +15,7 @@ import type {
 import { SW_API } from '../../../transport/messages';
 import { closePort, onPort, privateChannel } from '../../../transport/ports';
 import type ProxyModule from '../../modules/Proxy';
+import { withStack } from '../../nativeErrors';
 import ServiceWorkerObjects from '../../serviceWorkerObjects';
 import type DocumentClient from '../Client';
 
@@ -126,9 +127,11 @@ export function emulateServiceWorker(
 				)
 			) {
 				reject(
-					new global.DOMException(
-						'The document is in an invalid state.',
-						'InvalidStateError',
+					withStack(
+						new global.DOMException(
+							'The document is in an invalid state.',
+							'InvalidStateError',
+						),
 					),
 				);
 				return;
@@ -140,9 +143,11 @@ export function emulateServiceWorker(
 				answered = true;
 				closePort(port);
 				reject(
-					new global.DOMException(
-						'The document is in an invalid state.',
-						'InvalidStateError',
+					withStack(
+						new global.DOMException(
+							'The document is in an invalid state.',
+							'InvalidStateError',
+						),
 					),
 				);
 				release();
@@ -338,12 +343,14 @@ export function emulateServiceWorker(
 				),
 			);
 		if (script.origin !== origin())
-			throw new global.DOMException(
-				failed(
-					'register',
-					`The origin of the provided scriptURL ('${script.origin}') does not match the current origin ('${origin()}').`,
+			throw withStack(
+				new global.DOMException(
+					failed(
+						'register',
+						`The origin of the provided scriptURL ('${script.origin}') does not match the current origin ('${origin()}').`,
+					),
+					'SecurityError',
 				),
-				'SecurityError',
 			);
 		const options = (args[1] ?? {}) as RegistrationOptions;
 		if (typeof options !== 'object')
@@ -372,12 +379,14 @@ export function emulateServiceWorker(
 				),
 			);
 		if (scope.origin !== origin())
-			throw new global.DOMException(
-				failed(
-					'register',
-					`The origin of the provided scope ('${scope.origin}') does not match the current origin ('${origin()}').`,
+			throw withStack(
+				new global.DOMException(
+					failed(
+						'register',
+						`The origin of the provided scope ('${scope.origin}') does not match the current origin ('${origin()}').`,
+					),
+					'SecurityError',
 				),
-				'SecurityError',
 			);
 		for (const [name, url] of [
 			['script', script],
@@ -425,9 +434,11 @@ export function emulateServiceWorker(
 			);
 		}
 		if (url.origin !== origin())
-			throw new global.DOMException(
-				`Failed to get a ServiceWorkerRegistration: The origin of the provided documentURL ('${url.origin}') does not match the current origin ('${origin()}').`,
-				'SecurityError',
+			throw withStack(
+				new global.DOMException(
+					`Failed to get a ServiceWorkerRegistration: The origin of the provided documentURL ('${url.origin}') does not match the current origin ('${origin()}').`,
+					'SecurityError',
+				),
 			);
 		url.hash = '';
 		return registrationOf(

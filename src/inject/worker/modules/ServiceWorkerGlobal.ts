@@ -18,6 +18,7 @@ import { cookieStoreMethods } from '../../cookieStoreMethods';
 import Module from '../../Module';
 import { nativeBodyOf, recordResponse } from '../../modules/Fetch';
 import ProxyModule from '../../modules/Proxy';
+import { withStack } from '../../nativeErrors';
 import ServiceWorkerObjects from '../../serviceWorkerObjects';
 import type WorkerClient from '../Client';
 import { getServiceWorkerPort } from '../Client';
@@ -298,9 +299,11 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 			});
 		};
 		const invalidState = (method: string, on: string, message: string) =>
-			new global.DOMException(
-				`Failed to execute '${method}' on '${on}': ${message}`,
-				'InvalidStateError',
+			withStack(
+				new global.DOMException(
+					`Failed to execute '${method}' on '${on}': ${message}`,
+					'InvalidStateError',
+				),
 			);
 
 		// ---- events
@@ -904,9 +907,11 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 			});
 		objects.hook(WindowClient.prototype, 'focus', isWindowClient, {
 			call: async () => {
-				throw new global.DOMException(
-					'Not allowed to focus a window.',
-					'InvalidAccessError',
+				throw withStack(
+					new global.DOMException(
+						'Not allowed to focus a window.',
+						'InvalidAccessError',
+					),
 				);
 			},
 		});
@@ -943,9 +948,11 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 		objects.hook(Clients.prototype, 'openWindow', isClients, {
 			length: 1,
 			call: async () => {
-				throw new global.DOMException(
-					'Not allowed to open a window.',
-					'InvalidAccessError',
+				throw withStack(
+					new global.DOMException(
+						'Not allowed to open a window.',
+						'InvalidAccessError',
+					),
 				);
 			},
 		});
@@ -1146,9 +1153,11 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 		const preloadOf = (event: string) =>
 			rpc.call('preloadResponse', { event }).then((wire) => {
 				if (!wire)
-					throw new global.DOMException(
-						'The service worker navigation preload request failed due to a network error. This may have been an actual network error, or caused by the browser shutting down, or the service worker crashing.',
-						'NetworkError',
+					throw withStack(
+						new global.DOMException(
+							'The service worker navigation preload request failed due to a network error. This may have been an actual network error, or caused by the browser shutting down, or the service worker crashing.',
+							'NetworkError',
+						),
 					);
 				let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 				let pulled = false;
@@ -1338,9 +1347,11 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 									`The FetchEvent for "${init.request.url}" resulted in a network error response: ${answer.message}`,
 								);
 								state.rejectHandled?.(
-									new global.DOMException(
-										'The fetch was not handled.',
-										'NetworkError',
+									withStack(
+										new global.DOMException(
+											'The fetch was not handled.',
+											'NetworkError',
+										),
 									),
 								);
 							} else state.resolveHandled?.();

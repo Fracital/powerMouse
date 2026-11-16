@@ -13,6 +13,7 @@ import {
 } from '../../modules/Fetch';
 import ProxyModule, { classConstant, onEventTarget } from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
+import { withStack } from '../../nativeErrors';
 import { trackUploadListeners } from '../../uploadListeners';
 import {
 	decodeText,
@@ -185,9 +186,11 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			}
 			set timeout(value) {
 				if (!this.#async && typeof document !== 'undefined')
-					throw new DOMException(
-						"Failed to set the 'timeout' property on 'XMLHttpRequest': Timeouts cannot be set for synchronous requests made from a document.",
-						'InvalidAccessError',
+					throw withStack(
+						new DOMException(
+							"Failed to set the 'timeout' property on 'XMLHttpRequest': Timeouts cannot be set for synchronous requests made from a document.",
+							'InvalidAccessError',
+						),
 					);
 				this.#timeout = Math.max(0, Number(value) || 0);
 			}
@@ -196,9 +199,11 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			}
 			set withCredentials(value) {
 				if (this.#sent || this.#loadingOrDone)
-					throw new DOMException(
-						"Failed to set the 'withCredentials' property on 'XMLHttpRequest': The value may only be set if the object's state is UNSENT or OPENED.",
-						'InvalidStateError',
+					throw withStack(
+						new DOMException(
+							"Failed to set the 'withCredentials' property on 'XMLHttpRequest': The value may only be set if the object's state is UNSENT or OPENED.",
+							'InvalidStateError',
+						),
 					);
 				this.#withCredentials = !!value;
 			}
@@ -238,11 +243,13 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			}
 			get responseText() {
 				if (this.responseType !== '' && this.responseType !== 'text')
-					throw new DOMException(
-						`Failed to read the 'responseText' property from 'XMLHttpRequest': The value is only accessible if the object's 'responseType' is '' or 'text' (was '${
-							this.#responseType
-						}').`,
-						'InvalidStateError',
+					throw withStack(
+						new DOMException(
+							`Failed to read the 'responseText' property from 'XMLHttpRequest': The value is only accessible if the object's 'responseType' is '' or 'text' (was '${
+								this.#responseType
+							}').`,
+							'InvalidStateError',
+						),
 					);
 
 				return this.#responseText;
@@ -254,9 +261,11 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				// a worker may set any type on a synchronous request; only a
 				// document may not
 				if (this.#loadingOrDone) {
-					throw new DOMException(
-						`Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be set if the object's state is LOADING or DONE.`,
-						'InvalidStateError',
+					throw withStack(
+						new DOMException(
+							`Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be set if the object's state is LOADING or DONE.`,
+							'InvalidStateError',
+						),
 					);
 				}
 
@@ -489,9 +498,11 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 									? ''
 									: null;
 							this.#responseText = '';
-							throw new that.client.global.DOMException(
-								`Failed to execute 'send' on 'XMLHttpRequest': Failed to load '${this.#sentURL}'.`,
-								'TimeoutError',
+							throw withStack(
+								new that.client.global.DOMException(
+									`Failed to execute 'send' on 'XMLHttpRequest': Failed to load '${this.#sentURL}'.`,
+									'TimeoutError',
+								),
 							);
 						}
 						this.#onDone(error);
@@ -500,9 +511,11 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			}
 			overrideMimeType(mime: string) {
 				if (this.#loadingOrDone)
-					throw new DOMException(
-						"Failed to execute 'overrideMimeType' on 'XMLHttpRequest': MimeType cannot be overridden when the state is LOADING or DONE.",
-						'InvalidStateError',
+					throw withStack(
+						new DOMException(
+							"Failed to execute 'overrideMimeType' on 'XMLHttpRequest': MimeType cannot be overridden when the state is LOADING or DONE.",
+							'InvalidStateError',
+						),
 					);
 				this.#override = overrideMime(mime);
 			}
@@ -570,8 +583,10 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			}
 			setRequestHeader(header: string, value: string) {
 				if (this.#readyState !== OPENED) {
-					throw new DOMException(
-						`Failed to execute 'setRequestHeader' on 'XMLHttpRequest': The object's state must be OPENED.`,
+					throw withStack(
+						new DOMException(
+							`Failed to execute 'setRequestHeader' on 'XMLHttpRequest': The object's state must be OPENED.`,
+						),
 					);
 				}
 

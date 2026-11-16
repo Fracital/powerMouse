@@ -1231,6 +1231,14 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- Every DOMException the inject throws or rejects with in the browser's
+  place has a stack, as the browser's own do (V8 captures one for each
+  DOMException it throws; one made with `new DOMException` has none, and
+  `error.stack` read `undefined`): 53 more such sites (XMLHttpRequest,
+  WebSocket, the service worker objects, storage quotas, CSP and canvas
+  refusals, navigation and others) now go through `withStack`, as the rest
+  already did. (realm-surface compares each error's own keys and stack
+  shape natively and proxied.)
 - Calling a hooked element method or accessor on an interface's prototype
   itself (`Element.prototype`, as a script that probes for hooks does) no
   longer reorders that prototype's keys. The hooks set the receiver's own

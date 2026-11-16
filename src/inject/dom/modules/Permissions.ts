@@ -9,6 +9,7 @@ import {
 import { closePort, onPort, privateChannel } from '../../../transport/ports';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
+import { withStack } from '../../nativeErrors';
 import DocumentClient from '../Client';
 
 /** the permissions each site keeps (src/server/permissions.ts); push is notifications' */
@@ -1287,9 +1288,11 @@ export default class PermissionsModule extends Module<DocumentClient> {
 					if (names.every(browserRefuses))
 						return Reflect.apply(target, that, args);
 					const refused = (dismissed = false) =>
-						new global.DOMException(
-							dismissed ? 'Permission dismissed' : 'Permission denied',
-							'NotAllowedError',
+						withStack(
+							new global.DOMException(
+								dismissed ? 'Permission dismissed' : 'Permission denied',
+								'NotAllowedError',
+							),
 						);
 					// what the browser answers before its policy and its permission
 					// (in a frame of the controller's document: `elsewhere`)
@@ -1321,9 +1324,11 @@ export default class PermissionsModule extends Module<DocumentClient> {
 							(first?.name !== 'NotAllowedError' &&
 								(await missing(that, names)))
 						)
-							throw new global.DOMException(
-								'Requested device not found',
-								'NotFoundError',
+							throw withStack(
+								new global.DOMException(
+									'Requested device not found',
+									'NotFoundError',
+								),
 							);
 					};
 					// a request that goes straight to the browser's call gets the

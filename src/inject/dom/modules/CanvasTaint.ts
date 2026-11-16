@@ -2,6 +2,7 @@ import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import ResourceTimingModule from '../../modules/ResourceTiming';
 import { unrouteURL } from '../../modules/Unroute';
+import { withStack } from '../../nativeErrors';
 import { blobLoads, opaqueCopies } from '../blobLoads';
 import type DocumentClient from '../Client';
 import type { CanvasTaints } from '../Client';
@@ -298,7 +299,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 			},
 		);
 		const securityError = (message: string) =>
-			new global.DOMException(message, 'SecurityError');
+			withStack(new global.DOMException(message, 'SecurityError'));
 
 		/** a 2D context draws: a tainting source taints it and its canvas */
 		const hookDraw = (
@@ -752,9 +753,11 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 		) => {
 			const how = taintIn(data, transfer);
 			if (how)
-				throw new global.DOMException(
-					`Failed to execute '${method}' on '${iface}': Non-origin-clean ImageBitmap cannot be ${how}.`,
-					'DataCloneError',
+				throw withStack(
+					new global.DOMException(
+						`Failed to execute '${method}' on '${iface}': Non-origin-clean ImageBitmap cannot be ${how}.`,
+						'DataCloneError',
+					),
 				);
 		};
 		this.client.cloneCheck = check;

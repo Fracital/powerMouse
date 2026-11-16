@@ -1,5 +1,6 @@
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
+import { withStack } from '../../nativeErrors';
 import type DocumentClient from '../Client';
 import CanvasTaintModule from './CanvasTaint';
 
@@ -39,7 +40,7 @@ export default class MediaTaintModule extends Module<DocumentClient> {
 		const shared = this.client.canvasTaints;
 		const taints = (source: unknown) => canvasTaint.taints(source);
 		const securityError = (message: string) =>
-			new global.DOMException(message, 'SecurityError');
+			withStack(new global.DOMException(message, 'SecurityError'));
 		const getter = (proto: object, name: string) =>
 			Reflect.getOwnPropertyDescriptor(proto, name)!.get as Method;
 		const call = (method: Method, that: unknown, ...args: unknown[]) =>

@@ -61,6 +61,7 @@ import { BUILD } from '../../version';
 import { contextText, linkRoute, opaqueContext } from '../../visited';
 import { ownCodec, shareCodec, type CodecBackend } from '../../wasm/codec';
 import Client from '../Client';
+import { withStack } from '../nativeErrors';
 import {
 	deferredText,
 	getPublicSuffix,
@@ -2236,9 +2237,11 @@ export default class DocumentClient extends Client {
 		call: boolean,
 		url: URL | string,
 	): DOMException {
-		return new this.global.DOMException(
-			`${call ? `Failed to execute '${member}' on` : `Failed to set a named property '${member}' on`} 'Location': The current window does not have permission to navigate the target frame to '${String(url)}'.`,
-			'SecurityError',
+		return withStack(
+			new this.global.DOMException(
+				`${call ? `Failed to execute '${member}' on` : `Failed to set a named property '${member}' on`} 'Location': The current window does not have permission to navigate the target frame to '${String(url)}'.`,
+				'SecurityError',
+			),
 		);
 	}
 	/** what a navigation from this context routes as: the top origin when nested, else a top-level document */

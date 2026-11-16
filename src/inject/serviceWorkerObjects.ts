@@ -20,6 +20,7 @@ import type {
 } from '../serviceWorkerTypes';
 import { recordResponse } from './modules/Fetch';
 import type ProxyModule from './modules/Proxy';
+import { withStack } from './nativeErrors';
 import { nativeFunction } from './nativeUtil';
 
 /** what the objects ask of whoever talks to STomp's service worker */
@@ -199,7 +200,7 @@ export default class ServiceWorkerObjects {
 	error(info: ErrorInfo): Error {
 		const { global } = this;
 		if (info.name === 'TypeError') return new global.TypeError(info.message);
-		return new global.DOMException(info.message, info.name);
+		return withStack(new global.DOMException(info.message, info.name));
 	}
 
 	/** a function whose source reads as the native `name`'s */
@@ -629,9 +630,11 @@ export default class ServiceWorkerObjects {
 		const proto = Push.prototype;
 		this.hook(proto, 'subscribe', brand, {
 			call: async () => {
-				throw new this.global.DOMException(
-					'Registration failed - permission denied',
-					'AbortError',
+				throw withStack(
+					new this.global.DOMException(
+						'Registration failed - permission denied',
+						'AbortError',
+					),
 				);
 			},
 		});
@@ -784,9 +787,11 @@ export default class ServiceWorkerObjects {
 			2,
 			async (that, [id, requests, options]) => {
 				if (this.#inWorker)
-					throw new global.DOMException(
-						"Failed to execute 'fetch' on 'BackgroundFetchManager': backgroundFetch.fetch() is not allowed in service worker environments.",
-						'NotAllowedError',
+					throw withStack(
+						new global.DOMException(
+							"Failed to execute 'fetch' on 'BackgroundFetchManager': backgroundFetch.fetch() is not allowed in service worker environments.",
+							'NotAllowedError',
+						),
 					);
 				const opts = (options ?? {}) as {
 					title?: unknown;
@@ -842,9 +847,11 @@ export default class ServiceWorkerObjects {
 		});
 		const records = async (that: object, args: unknown[], all: boolean) => {
 			if (!fetchOf(that).snapshot.recordsAvailable)
-				throw new global.DOMException(
-					'The records associated with this background fetch are no longer available.',
-					'InvalidStateError',
+				throw withStack(
+					new global.DOMException(
+						'The records associated with this background fetch are no longer available.',
+						'InvalidStateError',
+					),
 				);
 			const filter = args[0] === undefined ? undefined : requestsOf(args[0])[0];
 			const found = (await fetchCall(that, 'records', {
@@ -864,9 +871,11 @@ export default class ServiceWorkerObjects {
 				const response = made
 					? Promise.resolve(made)
 					: Promise.reject(
-							new global.DOMException(
-								'The response is not available.',
-								'UnknownError',
+							withStack(
+								new global.DOMException(
+									'The response is not available.',
+									'UnknownError',
+								),
 							),
 						);
 				response.catch(() => {});

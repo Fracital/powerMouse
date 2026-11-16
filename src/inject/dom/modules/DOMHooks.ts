@@ -13,6 +13,7 @@ import {
 	unrouteCSS,
 	unrouteURL,
 } from '../../modules/Unroute';
+import { withStack } from '../../nativeErrors';
 import { getPublicSuffix } from '../../rewriter';
 import {
 	isOwnInjector,
@@ -1325,9 +1326,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						(node) => node.nodeType,
 					);
 					if (parentType === 9)
-						throw new this.client.global.DOMException(
-							"Failed to set the 'outerHTML' property on 'Element': This element's parent is a Document, which may not be modified.",
-							'NoModificationAllowedError',
+						throw withStack(
+							new this.client.global.DOMException(
+								"Failed to set the 'outerHTML' property on 'Element': This element's parent is a Document, which may not be modified.",
+								'NoModificationAllowedError',
+							),
 						);
 					that.replaceWith(
 						cloneRawNode(

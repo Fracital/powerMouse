@@ -16,7 +16,7 @@ import {
 } from '../../transport/messages';
 import Client from '../Client';
 import Module from '../Module';
-import { failsToParse } from '../nativeErrors';
+import { failsToParse, withStack } from '../nativeErrors';
 import ProxyModule, { catchRequiredArguments } from './Proxy';
 import { unrouteURL } from './Unroute';
 
@@ -358,8 +358,10 @@ export default class FetchModule extends Module<Client> {
 			this.client.global.Request,
 			(target, _that, args, newTarget) => {
 				if (args.length === 0) {
-					throw new this.client.global.DOMException(
-						"Failed to construct 'Request': 1 argument required, but only 0 present.'",
+					throw withStack(
+						new this.client.global.DOMException(
+							"Failed to construct 'Request': 1 argument required, but only 0 present.'",
+						),
 					);
 				}
 
@@ -607,9 +609,11 @@ export default class FetchModule extends Module<Client> {
 							failed("fetchLater's activateAfter cannot be negative."),
 						);
 					if (signal?.aborted)
-						throw new global.DOMException(
-							failed('The user aborted a fetchLater request.'),
-							'AbortError',
+						throw withStack(
+							new global.DOMException(
+								failed('The user aborted a fetchLater request.'),
+								'AbortError',
+							),
 						);
 					if (init.body instanceof global.ReadableStream)
 						throw new global.TypeError(

@@ -6,6 +6,7 @@ import ProxyModule, {
 	usePrototype,
 } from '../../modules/Proxy';
 import { unrouteCSS } from '../../modules/Unroute';
+import { withStack } from '../../nativeErrors';
 import { modifyCSS, modifyJS } from '../../rewriter';
 import { markOwnInjector, ownScripts, trustedScript } from '../../trusted';
 import DocumentClient, {
@@ -1023,9 +1024,11 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			const given = String(value);
 			const position = given.replace(/[A-Z]/g, (c) => c.toLowerCase());
 			if (!POSITIONS.includes(position))
-				throw new this.client.global.DOMException(
-					`Failed to execute '${api}' on 'Element': The value provided ('${given}') is not one of 'beforeBegin', 'afterBegin', 'beforeEnd', or 'afterEnd'.`,
-					'SyntaxError',
+				throw withStack(
+					new this.client.global.DOMException(
+						`Failed to execute '${api}' on 'Element': The value provided ('${given}') is not one of 'beforeBegin', 'afterBegin', 'beforeEnd', or 'afterEnd'.`,
+						'SyntaxError',
+					),
 				);
 			return position;
 		};
@@ -1128,9 +1131,11 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					if (position === 'beforebegin' || position === 'afterend') {
 						context = parentOf(that);
 						if (context === null || nodeTypeOf(context) === 9)
-							throw new this.client.global.DOMException(
-								"Failed to execute 'insertAdjacentHTML' on 'Element': The element has no parent.",
-								'NoModificationAllowedError',
+							throw withStack(
+								new this.client.global.DOMException(
+									"Failed to execute 'insertAdjacentHTML' on 'Element': The element has no parent.",
+									'NoModificationAllowedError',
+								),
 							);
 					}
 					const document = this.client.global.document;

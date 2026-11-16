@@ -7,6 +7,7 @@ import { headersRecord } from '../../../syncHeaders';
 import { SW_KICK, SYNC_KICK_MS } from '../../../transport/messages';
 import Module from '../../Module';
 import ResourceTimingModule from '../../modules/ResourceTiming';
+import { withStack } from '../../nativeErrors';
 import DocumentClient from '../Client';
 
 const statusEmpty: number[] = [101, 204, 205, 304];
@@ -361,9 +362,11 @@ export default class SyncModule extends Module<DocumentClient> {
 		// spinning for an answer that cannot come would freeze the page
 		if (!navigator.sendBeacon(queueXHR(this.client.url), payload)) {
 			if (budget !== undefined) return null;
-			throw new DOMException(
-				`The synchronous bridge cannot carry this request to ${url} (beacon refused, likely over the 64 KiB payload limit)`,
-				'QuotaExceededError',
+			throw withStack(
+				new DOMException(
+					`The synchronous bridge cannot carry this request to ${url} (beacon refused, likely over the 64 KiB payload limit)`,
+					'QuotaExceededError',
+				),
 			);
 		}
 		inflight += bytes;

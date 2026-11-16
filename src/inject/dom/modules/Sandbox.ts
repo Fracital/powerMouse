@@ -2,6 +2,7 @@ import { routeHTML } from '../../../rewriteHTML';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
+import { withStack } from '../../nativeErrors';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 
 const LACKS_SAME_ORIGIN =
@@ -34,7 +35,7 @@ export default class SandboxModule extends Module<DocumentClient> {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const opaque = () => this.client.sandboxedOpaque;
 		const securityError = (message: string) =>
-			new global.DOMException(message, 'SecurityError');
+			withStack(new global.DOMException(message, 'SecurityError'));
 
 		const guardGetter = (
 			owner: object,

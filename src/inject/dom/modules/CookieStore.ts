@@ -5,6 +5,7 @@ import type {
 } from '../../cookieStoreMethods';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
+import { withStack } from '../../nativeErrors';
 import DocumentClient from '../Client';
 import { deferred } from '../deferred';
 import { CookiesModule } from './Cookies';
@@ -148,9 +149,11 @@ export default class CookieStoreModule extends Module<DocumentClient> {
 		/** a refusal of an opaque origin, as natively */
 		const opaque = (method: Method) =>
 			this.client.sandboxedOpaque
-				? new global.DOMException(
-						`Failed to execute '${method}' on 'CookieStore': Access to the CookieStore API is denied in this context.`,
-						'SecurityError',
+				? withStack(
+						new global.DOMException(
+							`Failed to execute '${method}' on 'CookieStore': Access to the CookieStore API is denied in this context.`,
+							'SecurityError',
+						),
 					)
 				: null;
 

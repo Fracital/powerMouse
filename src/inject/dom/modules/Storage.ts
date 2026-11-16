@@ -5,6 +5,7 @@ import ProxyModule, {
 	contextThis,
 	usePrototype,
 } from '../../modules/Proxy';
+import { withStack } from '../../nativeErrors';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import SyncModule, { WRITE_BUDGET } from './Sync';
 
@@ -473,9 +474,11 @@ export default class StorageModule extends Module<DocumentClient> {
 
 				const after = sizeAfter(directory, item, value);
 				if (after === null)
-					throw new realm.DOMException(
-						`Failed to execute 'setItem' on 'Storage': Setting the value of '${item}' exceeded the quota.`,
-						'QuotaExceededError',
+					throw withStack(
+						new realm.DOMException(
+							`Failed to execute 'setItem' on 'Storage': Setting the value of '${item}' exceeded the quota.`,
+							'QuotaExceededError',
+						),
 					);
 
 				const call = [getOrigin(), item, value, sender, here()];

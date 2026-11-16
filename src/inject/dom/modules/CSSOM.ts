@@ -3,6 +3,7 @@ import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import ResourceTimingModule from '../../modules/ResourceTiming';
 import { unrouteURL } from '../../modules/Unroute';
+import { withStack } from '../../nativeErrors';
 import { modifyCSS } from '../../rewriter';
 import { blobLoads, opaqueCopies } from '../blobLoads';
 import DocumentClient from '../Client';
@@ -141,7 +142,7 @@ export default class CSSOMModule extends Module<DocumentClient> {
 			return verdict;
 		};
 		const refuse = (message: string) =>
-			new global.DOMException(message, 'SecurityError');
+			withStack(new global.DOMException(message, 'SecurityError'));
 		const promiseThen = global.Promise.prototype.then;
 		const sheet = global.CSSStyleSheet.prototype;
 		for (const name of ['cssRules', 'rules']) {

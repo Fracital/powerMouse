@@ -216,8 +216,10 @@ export default class WebSocketModule extends Module<Client> {
 			}
 			send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {
 				if (this.#socket.readyState === CONNECTING) {
-					throw new DOMException(
-						`Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.`,
+					throw withStack(
+						new DOMException(
+							`Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.`,
+						),
 					);
 				}
 
@@ -237,8 +239,10 @@ export default class WebSocketModule extends Module<Client> {
 					}
 
 					if (code !== 1000 && (code < 3000 || code > 4999)) {
-						throw new DOMException(
-							`Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 4999. ${code} is neither.`,
+						throw withStack(
+							new DOMException(
+								`Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 4999. ${code} is neither.`,
+							),
 						);
 					}
 				}
@@ -289,7 +293,7 @@ export default class WebSocketModule extends Module<Client> {
 		if (typeof nativeStream === 'function') {
 			const streamInstances = new WeakSet();
 			const networkError = (message: string) =>
-				new DOMException(message, 'NetworkError');
+				withStack(new DOMException(message, 'NetworkError'));
 			class MockWebSocketStream {
 				#socket: MockWebSocket;
 				#url: string;

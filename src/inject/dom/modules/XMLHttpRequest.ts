@@ -17,6 +17,7 @@ import {
 import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule, { classConstant, onEventTarget } from '../../modules/Proxy';
 import UnrouteModule, { unrouteURL } from '../../modules/Unroute';
+import { withStack } from '../../nativeErrors';
 import { trustedHTML } from '../../trusted';
 import { trackUploadListeners } from '../../uploadListeners';
 import {
@@ -294,9 +295,11 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 			}
 			set timeout(value) {
 				if (!this.#async && typeof document !== 'undefined')
-					throw new DOMException(
-						"Failed to set the 'timeout' property on 'XMLHttpRequest': Timeouts cannot be set for synchronous requests made from a document.",
-						'InvalidAccessError',
+					throw withStack(
+						new DOMException(
+							"Failed to set the 'timeout' property on 'XMLHttpRequest': Timeouts cannot be set for synchronous requests made from a document.",
+							'InvalidAccessError',
+						),
 					);
 				this.#timeout = Math.max(0, Number(value) || 0);
 			}
@@ -305,9 +308,11 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 			}
 			set withCredentials(value) {
 				if (this.#sent || this.#loadingOrDone)
-					throw new DOMException(
-						"Failed to set the 'withCredentials' property on 'XMLHttpRequest': The value may only be set if the object's state is UNSENT or OPENED.",
-						'InvalidStateError',
+					throw withStack(
+						new DOMException(
+							"Failed to set the 'withCredentials' property on 'XMLHttpRequest': The value may only be set if the object's state is UNSENT or OPENED.",
+							'InvalidStateError',
+						),
 					);
 				this.#withCredentials = !!value;
 			}
@@ -349,22 +354,26 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 			}
 			get responseText() {
 				if (this.#responseType !== '' && this.#responseType !== 'text')
-					throw new DOMException(
-						`Failed to read the 'responseText' property from 'XMLHttpRequest': The value is only accessible if the object's 'responseType' is '' or 'text' (was '${
-							this.#responseType
-						}').`,
-						'InvalidStateError',
+					throw withStack(
+						new DOMException(
+							`Failed to read the 'responseText' property from 'XMLHttpRequest': The value is only accessible if the object's 'responseType' is '' or 'text' (was '${
+								this.#responseType
+							}').`,
+							'InvalidStateError',
+						),
 					);
 
 				return this.#responseText;
 			}
 			get responseXML() {
 				if (this.#responseType !== '' && this.#responseType !== 'document')
-					throw new DOMException(
-						"Failed to read the 'responseXML' property from 'XMLHttpRequest': The value is only accessible if the object's 'responseType' is '' or 'document' (was '" +
-							this.#responseType +
-							"').",
-						'InvalidStateError',
+					throw withStack(
+						new DOMException(
+							"Failed to read the 'responseXML' property from 'XMLHttpRequest': The value is only accessible if the object's 'responseType' is '' or 'document' (was '" +
+								this.#responseType +
+								"').",
+							'InvalidStateError',
+						),
 					);
 				return this.#responseXML;
 			}
@@ -373,14 +382,18 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 			}
 			set responseType(value) {
 				if (this.#loadingOrDone) {
-					throw new DOMException(
-						`Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be set if the object's state is LOADING or DONE.`,
-						'InvalidStateError',
+					throw withStack(
+						new DOMException(
+							`Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be set if the object's state is LOADING or DONE.`,
+							'InvalidStateError',
+						),
 					);
 				} else if (!this.#async) {
-					throw new DOMException(
-						`Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be changed for synchronous requests made from a document.`,
-						'InvalidAccessError',
+					throw withStack(
+						new DOMException(
+							`Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be changed for synchronous requests made from a document.`,
+							'InvalidAccessError',
+						),
 					);
 				}
 
@@ -589,9 +602,11 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 						? ''
 						: null;
 				this.#responseText = '';
-				throw new that.client.global.DOMException(
-					`Failed to execute 'send' on 'XMLHttpRequest': Failed to load '${url}'.`,
-					'NetworkError',
+				throw withStack(
+					new that.client.global.DOMException(
+						`Failed to execute 'send' on 'XMLHttpRequest': Failed to load '${url}'.`,
+						'NetworkError',
+					),
 				);
 			}
 			#fetch(url: string | URL, init: RequestInit) {
@@ -662,9 +677,11 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 			}
 			overrideMimeType(mime: string) {
 				if (this.#loadingOrDone)
-					throw new DOMException(
-						"Failed to execute 'overrideMimeType' on 'XMLHttpRequest': MimeType cannot be overridden when the state is LOADING or DONE.",
-						'InvalidStateError',
+					throw withStack(
+						new DOMException(
+							"Failed to execute 'overrideMimeType' on 'XMLHttpRequest': MimeType cannot be overridden when the state is LOADING or DONE.",
+							'InvalidStateError',
+						),
 					);
 				this.#override = overrideMime(mime);
 			}
@@ -687,9 +704,11 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				// a document may not make a synchronous request with a response
 				// type or a timeout set beforehand
 				if (!async && (this.#timeout !== 0 || this.#responseType !== ''))
-					throw new DOMException(
-						"Failed to execute 'open' on 'XMLHttpRequest': Synchronous requests from a document must not set a response type or timeout.",
-						'InvalidAccessError',
+					throw withStack(
+						new DOMException(
+							"Failed to execute 'open' on 'XMLHttpRequest': Synchronous requests from a document must not set a response type or timeout.",
+							'InvalidAccessError',
+						),
 					);
 				// a request in flight is dropped without events, and everything of
 				// the last response is gone: status 0, no headers, no body
@@ -740,8 +759,10 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 			}
 			setRequestHeader(header: string, value: string) {
 				if (this.#readyState !== OPENED) {
-					throw new DOMException(
-						`Failed to execute 'setRequestHeader' on 'XMLHttpRequest': The object's state must be OPENED.`,
+					throw withStack(
+						new DOMException(
+							`Failed to execute 'setRequestHeader' on 'XMLHttpRequest': The object's state must be OPENED.`,
+						),
 					);
 				}
 
@@ -834,9 +855,11 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 					if (mixed?.action === 'block') {
 						that.client.getModule(MixedContentModule)!.report(mixed.notices);
 						this.#end('error');
-						throw new that.client.global.DOMException(
-							`Failed to execute 'send' on 'XMLHttpRequest': Failed to load '${target.href}'.`,
-							'NetworkError',
+						throw withStack(
+							new that.client.global.DOMException(
+								`Failed to execute 'send' on 'XMLHttpRequest': Failed to load '${target.href}'.`,
+								'NetworkError',
+							),
 						);
 					}
 					if (mixed?.action === 'upgrade') sent = mixed.url;

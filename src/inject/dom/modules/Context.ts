@@ -449,11 +449,13 @@ export default class ContextModule extends Module<DocumentClient> {
 						try {
 							return new URL(target).origin;
 						} catch (error) {
-							throw new this.client.global.DOMException(
-								"Failed to execute 'postMessage' on 'Window': Invalid target origin '" +
-									target +
-									"' in a call to 'postMessage'.",
-								'SyntaxError',
+							throw withStack(
+								new this.client.global.DOMException(
+									"Failed to execute 'postMessage' on 'Window': Invalid target origin '" +
+										target +
+										"' in a call to 'postMessage'.",
+									'SyntaxError',
+								),
 							);
 						}
 					})();
