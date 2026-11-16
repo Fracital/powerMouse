@@ -663,8 +663,17 @@ export default class CredentialsModule extends Module<DocumentClient> {
 				})().catch((error) => rejectPage(error));
 			});
 
-		// --- WebAuthn: no related origins request from the browser itself ---
+		// --- WebAuthn: the browser's own authenticator never acts for a proxied page ---
 
+		// WebAuthn cannot work through an origin-rewriting proxy: the browser
+		// checks a request's relying party id against the proxy's one real
+		// origin and would sign that origin, which every proxied site shares,
+		// into the credential. STomp does not stand in as an authenticator
+		// either (docs/passkeys.md, "Threat model": a page that escaped the
+		// inject could then get an assertion for any site, and nothing in the
+		// single proxy origin can stop it). So no proxied page may create, list
+		// or assert a credential on that origin, by two routes handled here.
+		//
 		// A relying party id that is neither the document's host nor a suffix
 		// of it makes Chrome fetch https://<id>/.well-known/webauthn from its
 		// own process (WebAuthn's related origins, 5.11.1), with nothing of the
@@ -676,6 +685,13 @@ export default class CredentialsModule extends Module<DocumentClient> {
 		// empty one), after every check of its own, and its refusal is given the
 		// words of a file that could not be fetched. A document on an address
 		// is refused before any fetch (an address is no relying party).
+		//
+		// A relying party id the browser would accept (its own host or a
+		// suffix) is the one that reaches the browser's real authenticator and
+		// makes or asserts a credential on the shared proxy origin. It is handed
+		// the browser empty the same way, which it refuses before any
+		// authenticator, and the refusal is reshaped into the native decline (a
+		// create or get) or the native no-op (a signal): see validRpId below.
 		const documentHost: string = global.location.hostname;
 		const onDomain =
 			documentHost !== '' &&
@@ -702,6 +718,26 @@ export default class CredentialsModule extends Module<DocumentClient> {
 		const RP_REFUSED =
 			'The relying party ID is not a registrable domain suffix of, nor equal to the current domain.';
 		const RP_UNFETCHED = `${RP_REFUSED} Subsequently, an attempt to fetch the .well-known/webauthn resource of the claimed RP ID failed.`;
+		// Chrome's own words for a create or get the user did not allow (the
+		// authenticator declined, timed out, or there was none): what a request
+		// that would reach the browser's real authenticator ends as instead
+		const DECLINED =
+			'The operation either timed out or was not allowed. See: https://www.w3.org/TR/webauthn-2/#sctn-privacy-considerations-client.';
+		/**
+		 * A relying party id the browser would accept for this document: its
+		 * own host or a registrable suffix of it. These, and only these, make
+		 * the browser's own authenticator create or assert a credential, and
+		 * that credential is scoped to the proxy's one real origin, which every
+		 * proxied site shares. STomp does not hold passkeys (docs/passkeys.md),
+		 * so no proxied page may make or use one on that origin: the id is
+		 * handed the browser empty (below), which it refuses before reaching any
+		 * authenticator, and the refusal is reshaped into the native decline.
+		 */
+		const validRpId = (id: string): boolean => {
+			const low = id.toLowerCase();
+			if (low === documentHost) return true;
+			return low.includes('.') && documentHost.endsWith(`.${low}`);
+		};
 		/**
 		 * `value` with the member at `path` read through `pin`: the page's
 		 * object, read where and when the browser reads it, once
@@ -727,35 +763,65 @@ export default class CredentialsModule extends Module<DocumentClient> {
 		};
 		/**
 		 * The browser's own WebAuthn call `call`, with the relying party id at
-		 * `path` of its options kept from asking the network
+		 * `path` of its options kept from asking the network, and kept from
+		 * reaching the browser's own authenticator when it is one the proxy
+		 * origin shares (validRpId). `kind` is which call it is: a create or a
+		 * get that is refused ends as the native decline, a signal ends as the
+		 * native no-op. An omitted id defaults to the document's own domain for
+		 * a create or a get (a valid, shared id), but a signal requires one.
 		 */
 		const withoutRelatedOrigins = (
 			call: (args: unknown[]) => unknown,
 			args: unknown[],
 			path: string[],
+			kind: 'create' | 'get' | 'signal',
 		): unknown => {
 			if (!onDomain || !args.length) return call(args);
-			let kept = false;
+			const defaultValid = kind !== 'signal';
+			let keptNetwork = false;
+			let keptValid = false;
 			const pin = (id: unknown) => {
-				if (id === undefined || typeof id === 'symbol') return id;
+				if (typeof id === 'symbol') return id;
+				// an omitted id: create and get default it to the document's own
+				// domain, which the proxy origin shares; a signal requires one
+				if (id === undefined) {
+					if (!defaultValid) return id;
+					keptValid = true;
+					return '';
+				}
 				// converted here, once, as the browser would (a toString is the page's)
 				const text = String(id);
-				if (!asksNetwork(text)) return text;
-				kept = true;
-				return '';
+				if (validRpId(text)) {
+					keptValid = true;
+					return '';
+				}
+				if (asksNetwork(text)) {
+					keptNetwork = true;
+					return '';
+				}
+				return text;
 			};
 			const result = call([through(args[0], path, pin), ...args.slice(1)]);
 			// (the browser reads the options during the call)
-			if (!kept || !(result instanceof PagePromise)) return result;
+			if ((!keptValid && !keptNetwork) || !(result instanceof PagePromise))
+				return result;
 			return Reflect.apply(PagePromise.prototype.then, result, [
 				undefined,
 				(error: unknown) => {
-					if (
-						kept &&
+					const refused =
 						error instanceof PageDOMException &&
 						error.name === 'SecurityError' &&
-						error.message === RP_REFUSED
-					)
+						error.message === RP_REFUSED;
+					if (refused && keptValid)
+						// never a credential on the shared proxy origin: a create or
+						// get ends as one the user declined, a signal as the no-op it
+						// is natively (it changes nothing, since STomp holds nothing)
+						return kind === 'signal'
+							? undefined
+							: (() => {
+									throw domException(DECLINED, 'NotAllowedError');
+								})();
+					if (refused && keptNetwork)
 						throw domException(RP_UNFETCHED, 'SecurityError');
 					throw error;
 				},
@@ -769,6 +835,7 @@ export default class CredentialsModule extends Module<DocumentClient> {
 						(called) => Reflect.apply(target, that, called),
 						args,
 						['publicKey', 'rp', 'id'],
+						'create',
 					),
 			);
 		const NativePublicKeyCredential = global.PublicKeyCredential as
@@ -793,6 +860,7 @@ export default class CredentialsModule extends Module<DocumentClient> {
 								(called) => Reflect.apply(target, that, called),
 								args,
 								['rpId'],
+								'signal',
 							),
 					),
 				});
@@ -805,6 +873,7 @@ export default class CredentialsModule extends Module<DocumentClient> {
 				(called) => Reflect.apply(target, that, called),
 				args,
 				['publicKey', 'rpId'],
+				'get',
 			);
 		container.get = proxyModule.wrapFunction(
 			container.get,

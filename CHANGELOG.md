@@ -5942,6 +5942,24 @@ token '%'`. The body is decoded before rewriting and re-encoded after.
   fetch would have had. An address is no relying party and asks nothing,
   as before. (webauthn-related-origins suite, natively against the demo
   on a domain.)
+- A proxied page no longer creates or asserts a passkey on the proxy's one
+  real origin. WebAuthn cannot work through an origin-rewriting proxy (the
+  browser checks the relying party id against the proxy's origin and signs
+  that origin), and STomp does not stand in as an authenticator, because a
+  page that escaped the inject could then obtain an assertion for any site
+  the user holds a passkey for and nothing in the single proxy origin, which
+  every proxied site shares, can stop it (docs/passkeys.md). So a relying
+  party id the browser would accept (the proxy origin's own host or a
+  suffix) is handed the browser empty the same way a related-origins id is,
+  which the browser refuses before reaching any authenticator, and the
+  refusal is reshaped into Chrome's own words for a create or get the user
+  declined (`NotAllowedError`) and the no-op a `PublicKeyCredential.signal*`
+  static is. Without this a page on a domain proxy origin could make the
+  browser's authenticator hold a credential for that origin, which a second
+  proxied site then asserted. The related-origins and malformed-request
+  refusals are unchanged, and a page on an address was already refused by
+  the browser (an address is no relying party). (passkeys-safety suite,
+  natively against Chrome's virtual authenticator.)
 
 ### Origin isolation
 

@@ -1,0 +1,14 @@
+<!doctype html>
+<title>PASSKEYS PROBE</title>
+<script>
+	// A page for the passkeys-safety suite to drive navigator.credentials from,
+	// natively and through the proxy. It only marks itself ready and names the
+	// site the query asked for, so the suite can find its proxied frame and
+	// prove that no proxied page creates or asserts a credential on the proxy's
+	// one real origin (docs/passkeys.md, "Threat model"). The suite runs the
+	// ceremonies itself through frame.evaluate.
+	window.__pkProbe = {
+		ready: true,
+		site: new URLSearchParams(location.search).get('site') || 'a',
+	};
+</script>
