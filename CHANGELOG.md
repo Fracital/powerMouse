@@ -1381,6 +1381,32 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   realm's API or client, and a destructured Proxy is not asked for
   descriptors. (rewriter-unit, error-messages, adversarial-eval and tells
   suites.)
+- `WebTransport` no longer leaves a proxied page natively. Nothing hooked
+  it: `new WebTransport('https://server/')` in a proxied page, a worker or
+  a frame made Chrome's network service open a QUIC connection of its own
+  to that server, from the user's address, past the proxy, the page's
+  emulated origin and policy and the content blocker (a UDP port that
+  only listens heard the browser's handshake from each of the 26 ways to
+  the constructor the browser has, of 27 tried). A proxied realm now has a stand-in for the constructor
+  (`src/inject/modules/WebTransport.ts`, docs/webtransport.md) that reads
+  as the browser's (the browser's own prototypes, whose members are the
+  browser's functions wrapped), answers its arguments in Chrome's words
+  and order, and makes sessions of the proxy's own. No transport carries
+  a session yet, so a session ends as Chrome's own does when its server
+  cannot be reached: `closed` and then `ready` reject with
+  "Opening handshake failed." and the session's streams end with it, when
+  Chrome's own throttle would have started the handshake (64 pending at
+  most, each waiting twice as long as the one before), with the two
+  things Chrome 155 changed (streams asked for before `ready`, the
+  datagrams' ages) as the running browser has them; a page that falls
+  back to a WebSocket falls back. A session the page's `connect-src`
+  refuses ends and is reported as natively. Known differences are listed
+  in docs/webtransport.md (`structuredClone` copies a session; the
+  throttle is one per inject bundle, not per page). The document bundle
+  grows by 7 KB (frame-cost's budget is 508 KB) and a frame's heap by
+  about 2 KB, the interface the browser makes for the wrapper.
+  (webtransport suite, natively against both modes on Chrome 152 and 156,
+  in the page and in dedicated, shared and service workers.)
 - `navigator.permissions.query({ name: 'storage-access' })` reads granted
   in a proxied top-level page, as natively: a top-level document has
   storage access, and Chrome answers granted there (denied when its

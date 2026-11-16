@@ -1,0 +1,234 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>WEBTRANSPORT</title>
+	</head>
+	<body>
+		<script src="webtransport.js"></script>
+		<script>
+			// One case of webtransport.js (?case), run where ?realm says: this
+			// page, one of its workers, or a frame of one kind or another.
+			// The answer is window.__wt. A page that is itself a frame of the
+			// suite's page (?report) tells its parent instead.
+			const params = Object.fromEntries(new URLSearchParams(location.search));
+			const name = params.case;
+			const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+			const script = new URL('webtransport.js', location.href).href;
+
+			// what a document that is not this page's runs: one session to the
+			// port that hears, told to this page
+			const childScript = `(async () => {
+				let result;
+				try {
+					if (typeof WebTransport !== 'function') result = 'no WebTransport here';
+					else {
+						const t = new WebTransport('https://127.0.0.1:${params.silent}/');
+						t.closed.catch(() => {});
+						result = await Promise.race([
+							t.ready.then(
+								() => 'fulfilled connected',
+								(e) => 'rejected ' + e.name + ' | ' + e.message + ' | ' + e.source,
+							),
+							new Promise((resolve) => setTimeout(() => resolve('pending'), 1200)),
+						]);
+					}
+				} catch (e) {
+					result = 'threw ' + e;
+				}
+				(window.opener || parent).postMessage({ wtChild: result }, '*');
+			})()`;
+			const childPage = `<!doctype html><title>child</title><script>${childScript}<\/script>`;
+			const fromChild = () =>
+				new Promise((resolve) => {
+					addEventListener('message', (event) => {
+						if (event.data && 'wtChild' in event.data)
+							resolve(event.data.wtChild);
+					});
+					setTimeout(() => resolve('the child never answered'), 6000);
+				});
+			// a session made in another window's realm from this page's script
+			const reachIn = async (target) => {
+				const WT = target.WebTransport;
+				if (typeof WT !== 'function') return 'no WebTransport here';
+				const t = new WT('https://127.0.0.1:' + params.silent + '/');
+				t.closed.catch(() => {});
+				return Promise.race([
+					t.ready.then(
+						() => 'fulfilled connected',
+						(e) => 'rejected ' + e.name + ' | ' + e.message + ' | ' + e.source,
+					),
+					sleep(1200).then(() => 'pending'),
+				]);
+			};
+			const frame = (set) => {
+				const element = document.createElement('iframe');
+				set?.(element);
+				document.body.append(element);
+				return element;
+			};
+			const loaded = (element) =>
+				new Promise((resolve) => {
+					element.addEventListener('load', () => resolve(element), {
+						once: true,
+					});
+				});
+			const fromWorker = (worker, port = worker, message = { name, params }) =>
+				new Promise((resolve) => {
+					port.onmessage = (event) => resolve(event.data);
+					worker.onerror = (event) =>
+						resolve({ probeError: 'worker error: ' + event.message });
+					port.postMessage(message);
+				});
+
+			const realms = {
+				top: () => wtRun(name, params),
+				worker: () => fromWorker(new Worker(script)),
+				moduleWorker: () => fromWorker(new Worker(script, { type: 'module' })),
+				blobWorker: () =>
+					fromWorker(
+						new Worker(
+							URL.createObjectURL(
+								new Blob([`importScripts(${JSON.stringify(script)});`], {
+									type: 'text/javascript',
+								}),
+							),
+						),
+					),
+				nestedWorker: () =>
+					fromWorker(new Worker(script), undefined, {
+						name,
+						params,
+						nested: script,
+					}),
+				sharedWorker: () => {
+					const worker = new SharedWorker(script);
+					return fromWorker(worker, worker.port);
+				},
+				serviceWorker: async () => {
+					const registration =
+						await navigator.serviceWorker.register('webtransport.js');
+					const worker =
+						registration.active ||
+						(await new Promise((resolve) => {
+							const installing =
+								registration.installing || registration.waiting;
+							installing.addEventListener('statechange', () => {
+								if (installing.state === 'activated') resolve(installing);
+							});
+						}));
+					const answer = new Promise((resolve) => {
+						navigator.serviceWorker.addEventListener('message', (event) =>
+							resolve(event.data),
+						);
+						navigator.serviceWorker.startMessages?.();
+					});
+					worker.postMessage({ name, params });
+					return answer;
+				},
+				// a frame's first window, read before anything loaded in it
+				freshFrame: () => reachIn(frame().contentWindow),
+				freshFrameWithSrc: () =>
+					reachIn(
+						frame((element) => {
+							element.src = 'webtransport-child.html';
+						}).contentWindow,
+					),
+				blankFrame: async () => {
+					const element = frame((e) => {
+						e.src = 'about:blank';
+					});
+					await sleep(300);
+					return reachIn(element.contentWindow);
+				},
+				loadedFrame: async () =>
+					reachIn(
+						(
+							await loaded(
+								frame((element) => {
+									element.src = 'webtransport-child.html';
+								}),
+							)
+						).contentWindow,
+					),
+				popup: async () => {
+					const opened = open('about:blank');
+					if (!opened) return 'the popup was blocked';
+					const result = await reachIn(opened);
+					opened.close();
+					return result;
+				},
+				// documents that run the session themselves
+				srcdocFrame: () => {
+					frame((element) => {
+						element.srcdoc = childPage;
+					});
+					return fromChild();
+				},
+				sandboxedFrame: () => {
+					frame((element) => {
+						element.sandbox = 'allow-scripts';
+						element.srcdoc = childPage;
+					});
+					return fromChild();
+				},
+				blobFrame: () => {
+					frame((element) => {
+						element.src = URL.createObjectURL(
+							new Blob([childPage], { type: 'text/html' }),
+						);
+					});
+					return fromChild();
+				},
+				dataFrame: () => {
+					frame((element) => {
+						element.src = 'data:text/html,' + encodeURIComponent(childPage);
+					});
+					return fromChild();
+				},
+				writtenFrame: () => {
+					const element = frame();
+					element.contentDocument.open();
+					element.contentDocument.write(childPage);
+					element.contentDocument.close();
+					return fromChild();
+				},
+				javascriptFrame: () => {
+					frame((element) => {
+						element.src = 'javascript:' + JSON.stringify(childPage);
+					});
+					return fromChild();
+				},
+				pageFrame: () => {
+					frame((element) => {
+						element.src =
+							'webtransport.html?case=reach&report=1&silent=' + params.silent;
+					});
+					return fromChild();
+				},
+				crossOriginFrame: () => {
+					// the fixture's other name: another origin
+					const other = new URL(location.href);
+					other.hostname =
+						other.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+					other.search = '?case=reach&report=1&silent=' + params.silent;
+					frame((element) => {
+						element.src = other.href;
+					});
+					return fromChild();
+				},
+			};
+
+			(async () => {
+				let result;
+				try {
+					result = await realms[params.realm || 'top']();
+				} catch (error) {
+					result = { probeError: String((error && error.stack) || error) };
+				}
+				if (params.report) parent.postMessage({ wtChild: result }, '*');
+				else window.__wt = { run: params.run, result };
+			})();
+		</script>
+	</body>
+</html>

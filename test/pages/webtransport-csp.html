@@ -1,0 +1,91 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>WEBTRANSPORT CSP</title>
+	</head>
+	<body>
+		<script>
+			// A session the page's own connect-src refuses (the policy is in
+			// this page's headers: enforced, or report-only with ?ro): what
+			// the constructor does, how the session ends, and the violation
+			// the page hears of.
+			const params = Object.fromEntries(new URLSearchParams(location.search));
+			const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+			const describe = (e) =>
+				[
+					e && e.constructor && e.constructor.name,
+					e && e.name,
+					e && e.message,
+					'source ' + (e && e.source),
+					'streamErrorCode ' + (e && e.streamErrorCode),
+				].join(' | ');
+			(async () => {
+				const log = [];
+				const violations = [];
+				addEventListener('securitypolicyviolation', (event) =>
+					violations.push(
+						[
+							event.effectiveDirective,
+							event.violatedDirective,
+							event.blockedURI,
+							event.disposition,
+							event.originalPolicy,
+							event.documentURI === location.href,
+							event.statusCode,
+							// (a refusal a report-only policy reports is the proxy's
+							// own event, the browser's not being had without
+							// refusing the session: docs/csp.md)
+							location.pathname.includes('-ro')
+								? ''
+								: 'trusted ' + event.isTrusted,
+						].join(' | '),
+					),
+				);
+				const url = 'https://127.0.0.1:' + params.closed + '/refused?q=1';
+				let made = 'made';
+				let t;
+				try {
+					t = new WebTransport(url);
+				} catch (e) {
+					made = 'threw ' + describe(e);
+				}
+				if (t) {
+					t.ready.then(
+						() => log.push('ready fulfilled'),
+						(e) => log.push('ready rejected ' + describe(e)),
+					);
+					t.closed.then(
+						() => log.push('closed fulfilled'),
+						(e) => log.push('closed rejected ' + describe(e)),
+					);
+					// what else the page can tell before any task
+					log.push(
+						'create: ' +
+							(await Promise.race([
+								t.createBidirectionalStream().then(
+									() => 'fulfilled',
+									(e) => 'rejected ' + describe(e),
+								),
+								sleep(800).then(() => 'pending'),
+							])),
+					);
+				}
+				// a refusal that also names a bad protocol: which one the page hears
+				let both = 'made';
+				try {
+					const second = new WebTransport(url, { protocols: ['a', 'a'] });
+					second.ready.catch(() => {});
+					second.closed.catch(() => {});
+				} catch (e) {
+					both = 'threw ' + describe(e);
+				}
+				await sleep(700);
+				window.__wt = {
+					run: params.run,
+					result: { made, both, log, violations },
+				};
+			})();
+		</script>
+	</body>
+</html>

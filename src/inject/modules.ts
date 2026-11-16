@@ -15,6 +15,7 @@ import TimersModule from './modules/Timers';
 import TrustedTypesModule from './modules/TrustedTypes';
 import UnrouteModule from './modules/Unroute';
 import WebSocketModule from './modules/WebSocket';
+import WebTransportModule from './modules/WebTransport';
 import WorkerModule from './modules/Worker';
 
 export default function baseModules(client: Client) {
@@ -33,6 +34,7 @@ export default function baseModules(client: Client) {
 	client.addModule(PartitionModule);
 	client.addModule(MixedContentModule);
 	client.addModule(WebSocketModule);
+	client.addModule(WebTransportModule);
 	client.addModule(UnrouteModule);
 	client.addModule(ResourceTimingModule);
 	client.addModule(ConsoleModule);

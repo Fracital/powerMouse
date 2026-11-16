@@ -505,9 +505,9 @@ stand-in's code is a file of its own too (section 15).
   ranges) fail; the server's egress address is what peers see. A server
   with UDP off leaves TURN over TCP and TLS.
 - **Adjacent, out of scope here:** `WebTransport` is another API that
-  sends from the network service and is not hooked today; it needs its own
-  stand-in over wisp UDP (the QUIC stack of docs/http3.md is most of it)
-  and is noted for a later plan.
+  sends from the network service. A proxied page has a stand-in for it
+  that connects nowhere yet; carrying its sessions over wisp UDP (the QUIC
+  stack of docs/http3.md is most of it) is planned in docs/webtransport.md.
 
 ## 11. Phases
 
