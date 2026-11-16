@@ -281,7 +281,6 @@ refuses fires a violation, natively either.
 
 ## Not yet as natively
 
-- Sandbox, base-uri, form-action and frame-ancestors are not applied.
 - Trusted Types: a report-only policy's violation of a sink the inject
   writes is not trusted and reaches no `ReportingObserver`, and the
   browser reports a report-only refusal of a script whose text landed as
@@ -312,8 +311,6 @@ refuses fires a violation, natively either.
   is ignored without Chrome's console error for it. An external script of
   a document without allow-scripts is not fetched (natively it is, and
   not run).
-- A frame's navigations other than the src its parent sets (a redirect, a
-  navigation the frame starts) are not judged by the parent's frame-src.
 - A form a frame submits to a URL its parent's frame-src refuses: the
   navigate event the frame's own listeners get is that of the navigation
   made again to the refusal URL (the browser refuses a navigation only

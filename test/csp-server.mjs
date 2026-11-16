@@ -39,7 +39,8 @@
 //   /csp/framed?p=..     a document under the policies p, ro and m name
 //                        (as /csp/doc's) that posts "framed" to its parent
 //   /csp/go?u=<url>&how=<location|link|form>  a document that navigates
-//                        itself to `u` once loaded
+//                        itself to `u` once loaded (`&watch` posts what its
+//                        navigate events name to its parent)
 //   /csp/form            a form's destination: posts "arrived <method>
 //                        q=<q>" to its parent and its opener
 //
@@ -204,9 +205,13 @@ export function csp(req, res) {
 		case '/csp/go': {
 			const to = JSON.stringify(query.get('u') ?? '/csp/ok');
 			const how = JSON.stringify(query.get('how') ?? 'location');
+			// `watch`: its navigate events' destinations are posted to its parent
+			const watch = query.has('watch')
+				? "window.navigation?.addEventListener('navigate', (event) => parent.postMessage('navigate ' + event.destination.url + ' ' + event.navigationType + (event.formData ? ' with a form' : ''), '*')); "
+				: '';
 			send(
 				'text/html; charset=utf-8',
-				`<!doctype html><title>go</title><body><script>onload = () => setTimeout(() => { const to = ${to}.replace(/</g, ''); const how = ${how}; if (how === 'link') { const a = document.createElement('a'); a.href = to; document.body.append(a); a.click(); } else if (how === 'form') { const f = document.createElement('form'); f.method = 'post'; f.action = to; document.body.append(f); f.submit(); } else location.href = to; });</script></body>`,
+				`<!doctype html><title>go</title><body><script>onload = () => setTimeout(() => { ${watch}const to = ${to}.replace(/</g, ''); const how = ${how}; if (how === 'link') { const a = document.createElement('a'); a.href = to; document.body.append(a); a.click(); } else if (how === 'form') { const f = document.createElement('form'); f.method = 'post'; f.action = to; document.body.append(f); f.submit(); } else if (how === 'replace') location.replace(to); else location.href = to; });</script></body>`,
 			);
 			return true;
 		}

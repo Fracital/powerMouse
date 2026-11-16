@@ -33,11 +33,12 @@ export function caseURL(
 	// browser's connect-src, never turned into a "disabled by permissions
 	// policy" sync-XHR error (src/inject/dom/Client.ts connectRefusal)
 	for (const policy of [].concat(pp)) query.append('pp', policy);
-	// (the navigation probes: their script, and the markup's <base> elements)
-	if (s) query.set('s', s);
+	// `s`: 'nav' for the navigation probes' page (their script, and the
+	// markup's <base> elements), true for the ordinary page with styles in
+	// its markup
+	if (s) query.set('s', s === true ? '1' : s);
 	for (const href of [].concat(b)) query.append('b', href);
 	if (h) query.set('h', h);
-	if (s) query.set('s', '1');
 	if (js) query.set('js', js);
 	query.set('probes', probes.join(','));
 	query.set('case', name);
@@ -118,8 +119,29 @@ export const FIELDS = [
  * Every case of `cases` natively, then in both modes: each probe's outcome
  * and the violations (their `fields`) as natively. Returns the native
  * reports.
+ *
+ * `expected`: the differences from native that are known and kept (each
+ * one listed in docs/csp.md), as `{ case: { probe: why } }`. A listed probe
+ * must differ from native in both modes: the suite fails when one matches
+ * again (the entry and the doc's line then go), as it does for a
+ * difference that is not listed.
  */
-export async function compareCases(browser, cases, { fields = FIELDS } = {}) {
+export async function compareCases(
+	browser,
+	cases,
+	{ fields = FIELDS, expected = {} } = {},
+) {
+	const strays = Object.entries(expected).flatMap(([name, probes]) =>
+		Object.keys(probes)
+			.filter((probe) => !cases[name]?.probes.includes(probe))
+			.map((probe) => `${name}: ${probe}`),
+	);
+	if (Object.keys(expected).length)
+		ok(
+			'every listed difference names a probe of a case',
+			strays.length === 0,
+			JSON.stringify(strays),
+		);
 	const native = {};
 	for (const [name, spec] of Object.entries(cases)) {
 		const page = await browser.newPage();
@@ -132,6 +154,28 @@ export async function compareCases(browser, cases, { fields = FIELDS } = {}) {
 		Object.values(native).every((value) => value?.done),
 		JSON.stringify(Object.keys(native).filter((name) => !native[name]?.done)),
 	);
+	// A case that exercises nothing passes any comparison: natively and
+	// proxied, a page that does not know a probe answers "no such probe" for
+	// it, and the two match. So every probe a case names must have run
+	// natively and said something (a `sub:` probe's answer is its frame's
+	// report, which names its own probe's answer).
+	const vacuous = Object.entries(cases).flatMap(([name, spec]) => {
+		const results = native[name]?.results ?? {};
+		const idle = spec.probes.filter(
+			(probe) =>
+				results[probe] === undefined ||
+				results[probe] === null ||
+				results[probe] === '' ||
+				String(results[probe]).includes('no such probe'),
+		);
+		if (!spec.probes.length) return [`${name}: no probes`];
+		return idle.map((probe) => `${name}: ${probe}: ${results[probe]}`);
+	});
+	ok(
+		'natively, every probe a case names runs',
+		vacuous.length === 0,
+		JSON.stringify(vacuous).slice(0, 3000),
+	);
 	for (const [mode, base] of [
 		['same-origin', PROXY],
 		['isolated', HOST],
@@ -141,9 +185,11 @@ export async function compareCases(browser, cases, { fields = FIELDS } = {}) {
 			await submitLanding(page, caseURL(name, spec));
 			const proxied = await report(page, name);
 			const want = native[name];
-			const differing = Object.keys(want?.results ?? {}).filter(
+			const known = expected[name] ?? {};
+			const differs = Object.keys(want?.results ?? {}).filter(
 				(probe) => want.results[probe] !== proxied?.results?.[probe],
 			);
+			const differing = differs.filter((probe) => !(probe in known));
 			ok(
 				`${mode}: ${name}: every probe does what it does natively`,
 				proxied && differing.length === 0,
@@ -156,6 +202,25 @@ export async function compareCases(browser, cases, { fields = FIELDS } = {}) {
 					),
 				).slice(0, 1500),
 			);
+			if (Object.keys(known).length) {
+				const matching = Object.keys(known).filter(
+					(probe) => !differs.includes(probe),
+				);
+				ok(
+					`${mode}: ${name}: every listed difference is still one`,
+					proxied && matching.length === 0,
+					JSON.stringify(
+						matching.length
+							? { 'as natively now': matching }
+							: Object.fromEntries(
+									Object.keys(known).map((probe) => [
+										probe,
+										[want?.results[probe], proxied?.results?.[probe]],
+									]),
+								),
+					).slice(0, 1500),
+				);
+			}
 			const wanted = shape(want?.events, fields);
 			const got = shape(proxied?.events, fields);
 			ok(

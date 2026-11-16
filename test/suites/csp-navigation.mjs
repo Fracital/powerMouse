@@ -148,11 +148,18 @@ const CASES = {
 		p: "frame-src 'self'",
 		probes: [
 			'frame-nav-other',
+			'frame-nav-other-heard',
+			'frame-replace-other-heard',
 			'frame-nav-self',
 			'frame-link-other',
 			'frame-form-other',
 			'frame-nav-redirect-other',
 		],
+	},
+	'a refused form, as its frame hears of it': {
+		s: 'nav',
+		p: "frame-src 'self'",
+		probes: ['frame-form-other-heard'],
 	},
 	'a frame of the other origin': {
 		s: 'nav',
@@ -171,6 +178,16 @@ const CASES = {
 	},
 };
 
+// What differs from native and stays so (docs/csp.md, "Not yet as
+// natively"): case, probe, why. A probe listed here must differ in both
+// modes; one that matches again fails the suite.
+const EXPECTED = {
+	'a refused form, as its frame hears of it': {
+		'frame-form-other-heard':
+			"the navigation the parent's frame-src refuses is made again to a refusal URL, for the browser to refuse, and that one is no form submission: the navigate event the frame hears has no formData",
+	},
+};
+
 const browser = await launch();
 if (process.env.CSP_NATIVE_DUMP) {
 	// the native reports only, for measuring
@@ -180,5 +197,5 @@ if (process.env.CSP_NATIVE_DUMP) {
 		console.log(JSON.stringify({ name, report: await report(page, name) }));
 		await page.close();
 	}
-} else await compareCases(browser, CASES);
+} else await compareCases(browser, CASES, { expected: EXPECTED });
 await done(browser);

@@ -183,16 +183,24 @@
 		else form.submit();
 		return form;
 	};
-	/** a same-frame submission (run in a sub document): what is left after it, and the server's log */
+	/**
+	 * A same-frame submission (run in a sub document): what is left after
+	 * it, the destinations its navigate events named (the browser refuses a
+	 * submission after the event), and the server's log
+	 */
 	const submitHere = async (key, attributes, fields, how) => {
 		let threw = 'none';
+		const navigated = [];
+		window.navigation?.addEventListener('navigate', (event) =>
+			navigated.push(event.destination.url),
+		);
 		try {
 			submit(attributes, fields, how);
 		} catch (e) {
 			threw = error(e);
 		}
 		await wait(2500);
-		return `stayed, threw ${threw}, log ${await logged(key)}`;
+		return `stayed, threw ${threw}, navigate ${navigated.join(' ') || 'none'}, log ${await logged(key)}`;
 	};
 	/** a submission into a frame of this document named for it */
 	const submitToFrame = async (key, attributes, fields) => {
@@ -405,6 +413,19 @@
 			frame(`/csp/go?u=${encodeURIComponent(`${other}/csp/framed?n=1`)}`),
 		'frame-nav-self': () =>
 			frame(`/csp/go?u=${encodeURIComponent('/csp/framed?n=2')}`),
+		// (the frame says what its navigate events named)
+		'frame-nav-other-heard': () =>
+			frame(
+				`/csp/go?watch=1&u=${encodeURIComponent(`${other}/csp/framed?n=7`)}`,
+			),
+		'frame-form-other-heard': () =>
+			frame(
+				`/csp/go?watch=1&how=form&u=${encodeURIComponent(`${other}/csp/framed?n=8`)}`,
+			),
+		'frame-replace-other-heard': () =>
+			frame(
+				`/csp/go?watch=1&how=replace&u=${encodeURIComponent(`${other}/csp/framed?n=9`)}`,
+			),
 		'frame-link-other': () =>
 			frame(
 				`/csp/go?how=link&u=${encodeURIComponent(`${other}/csp/framed?n=3`)}`,
