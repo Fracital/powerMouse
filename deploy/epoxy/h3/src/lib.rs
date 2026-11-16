@@ -28,9 +28,13 @@ use wasm_bindgen::{prelude::*, JsCast};
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 use web_sys::{ReadableStream, ReadableStreamDefaultReader, WritableStream};
 
+mod certhash;
 mod mlkem;
 mod runtime;
 mod socket;
+mod wt;
+
+pub use wt::{connect_webtransport, WtSession};
 
 use runtime::BrowserRuntime;
 use socket::{ChannelSocket, Stats, PEER};
@@ -90,13 +94,15 @@ fn client_config(pem: &str) -> Result<ClientConfig, JsValue> {
 		// connection to a server resumes (1-RTT; early data stays off)
 		return Ok(config);
 	}
-	let mut roots = RootCertStore::empty();
-	roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-	if !pem.is_empty() {
-		for cert in rustls_pemfile::certs(&mut pem.as_bytes()) {
-			roots.add(cert.map_err(js_error)?).map_err(js_error)?;
-		}
-	}
+	let config = quic_client_config(tls_config(pem, None)?, transport_config())?;
+	CONFIG.with(|c| *c.borrow_mut() = Some((pem.to_string(), config.clone())));
+	Ok(config)
+}
+
+/// Chrome's TLS inside QUIC. `hashes`: trust the server's certificate by
+/// its SHA-256 (WebTransport's serverCertificateHashes) instead of WebPKI
+/// and `pem`.
+fn tls_config(pem: &str, hashes: Option<Vec<Vec<u8>>>) -> Result<rustls::ClientConfig, JsValue> {
 	let mut provider = provider::default_provider();
 	// Chrome's groups in its order: X25519MLKEM768 (with a separate X25519
 	// share), X25519, P-256, P-384
@@ -112,11 +118,26 @@ fn client_config(pem: &str) -> Result<ClientConfig, JsValue> {
 		provider::cipher_suite::TLS13_AES_256_GCM_SHA384,
 		provider::cipher_suite::TLS13_CHACHA20_POLY1305_SHA256,
 	];
-	let mut tls = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
+	let algorithms = provider.signature_verification_algorithms;
+	let builder = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
 		.with_protocol_versions(&[&rustls::version::TLS13])
-		.map_err(js_error)?
-		.with_root_certificates(roots)
-		.with_no_client_auth();
+		.map_err(js_error)?;
+	let mut tls = match hashes {
+		Some(hashes) => builder
+			.dangerous()
+			.with_custom_certificate_verifier(Arc::new(certhash::HashVerifier::new(hashes, algorithms)))
+			.with_no_client_auth(),
+		None => {
+			let mut roots = RootCertStore::empty();
+			roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+			if !pem.is_empty() {
+				for cert in rustls_pemfile::certs(&mut pem.as_bytes()) {
+					roots.add(cert.map_err(js_error)?).map_err(js_error)?;
+				}
+			}
+			builder.with_root_certificates(roots).with_no_client_auth()
+		}
+	};
 	tls.alpn_protocols = vec![b"h3".to_vec()];
 	// Chrome's QUIC ClientHello (patched rustls): its extension set and
 	// random order, ALPS for h3, a GREASE ECH, trust anchor ids, its
@@ -127,17 +148,36 @@ fn client_config(pem: &str) -> Result<ClientConfig, JsValue> {
 	// 0-RTT replays a request the server cannot tell from the original; a
 	// proxy does not know which requests are safe to replay, so never
 	tls.enable_early_data = false;
+	Ok(tls)
+}
+
+fn quic_client_config(tls: rustls::ClientConfig, transport: TransportConfig) -> Result<ClientConfig, JsValue> {
 	let quic = QuicClientConfig::try_from(tls).map_err(js_error)?;
 	let mut config = ClientConfig::new(Arc::new(quic));
-	config.transport_config(Arc::new(transport_config()));
+	config.transport_config(Arc::new(transport));
 	// Chrome's first destination connection id is 8 random bytes (quinn's 20)
 	config.initial_dst_cid_provider(Arc::new(|| {
 		let mut id = [0u8; 8];
 		let _ = getrandom02::getrandom(&mut id);
 		quinn::ConnectionId::new(&id)
 	}));
-	CONFIG.with(|c| *c.borrow_mut() = Some((pem.to_string(), config.clone())));
 	Ok(config)
+}
+
+/// A client endpoint over the datagram channel, Chrome's shape
+fn new_endpoint(socket: Arc<ChannelSocket>) -> Result<Endpoint, JsValue> {
+	let mut endpoint_config = EndpointConfig::default();
+	// max_udp_payload_size, as Chrome sends it
+	endpoint_config
+		.max_udp_payload_size(1472)
+		.map_err(js_error)?;
+	// Chrome's client uses an empty source connection id (so no
+	// active_connection_id_limit either) and does not grease the fixed bit
+	endpoint_config
+		.grease_quic_bit(false)
+		.cid_generator(|| Box::new(EmptyConnectionIds));
+	Endpoint::new_with_abstract_socket(endpoint_config, None, socket, Arc::new(BrowserRuntime))
+		.map_err(js_error)
 }
 
 /// Zero-length local connection ids, as Chrome's client uses: one
@@ -199,23 +239,7 @@ pub async fn connect(
 		let _ = closed_tx.send(());
 	})?);
 	let stats = socket.stats.clone();
-	let mut endpoint_config = EndpointConfig::default();
-	// max_udp_payload_size, as Chrome sends it
-	endpoint_config
-		.max_udp_payload_size(1472)
-		.map_err(js_error)?;
-	// Chrome's client uses an empty source connection id (so no
-	// active_connection_id_limit either) and does not grease the fixed bit
-	endpoint_config
-		.grease_quic_bit(false)
-		.cid_generator(|| Box::new(EmptyConnectionIds));
-	let endpoint = Endpoint::new_with_abstract_socket(
-		endpoint_config,
-		None,
-		socket.clone(),
-		Arc::new(BrowserRuntime),
-	)
-	.map_err(js_error)?;
+	let endpoint = new_endpoint(socket.clone())?;
 	let connecting = endpoint
 		.connect_with(config, PEER, &host)
 		.map_err(js_error)?;

@@ -51,6 +51,7 @@ pub struct ChannelSocket {
 	pub closed: Arc<AtomicBool>,
 	pub stats: Arc<Stats>,
 	write_failed: Arc<AtomicBool>,
+	write_closed: AtomicBool,
 }
 
 impl fmt::Debug for ChannelSocket {
@@ -112,11 +113,20 @@ impl ChannelSocket {
 			closed,
 			stats,
 			write_failed: Arc::new(AtomicBool::new(false)),
+			write_closed: AtomicBool::new(false),
 		})
 	}
 
+	/// Close the write side once (a second close, or one after the stream
+	/// errored, would reject unhandled)
 	pub fn close(&self) {
-		let _ = self.writer.close();
+		if self.write_closed.swap(true, Ordering::Relaxed) {
+			return;
+		}
+		let promise = self.writer.close();
+		spawn_local(async move {
+			let _ = JsFuture::from(promise).await;
+		});
 	}
 }
 
@@ -135,7 +145,7 @@ impl AsyncUdpSocket for ChannelSocket {
 	}
 
 	fn try_send(&self, transmit: &Transmit) -> io::Result<()> {
-		if self.write_failed.load(Ordering::Relaxed) {
+		if self.write_failed.load(Ordering::Relaxed) || self.write_closed.load(Ordering::Relaxed) {
 			return Err(io::Error::new(io::ErrorKind::BrokenPipe, "datagram channel closed"));
 		}
 		// one datagram per write; segment_size is never set because

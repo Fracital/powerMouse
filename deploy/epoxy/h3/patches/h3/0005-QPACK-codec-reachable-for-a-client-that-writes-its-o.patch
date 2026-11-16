@@ -1,0 +1,147 @@
+From 60eb4406a8b42d7985e9c2a70ac4aabb6f38257a Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Sun, 15 Nov 2026 20:02:54 -0500
+Subject: [PATCH] QPACK codec reachable for a client that writes its own
+ streams
+
+stomp-h3's WebTransport session drives its QUIC connection itself
+(Chrome's control stream, extended CONNECT and capsules, byte for byte)
+instead of through h3's client, which refuses streams the server opens
+and orders its writes its own way. It still needs QPACK: the response
+to its CONNECT may use the server's dynamic table, which the decoder of
+patch 0003 handles, and its request fields are Huffman coded where that
+is shorter, as Chrome's are.
+
+A hidden module, qpack_codec, exposes that decoder (encoder stream in,
+Insert Count Increment and Section Acknowledgment out, blocked sections
+detected by their Required Insert Count), the static table lookups and
+the Huffman encoder. Nothing else in h3 changes.
+---
+ src/lib.rs         |  3 ++
+ src/qpack/mod.rs   |  1 +
+ src/qpack_codec.rs | 89 ++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 93 insertions(+)
+ create mode 100644 src/qpack_codec.rs
+
+diff --git a/src/lib.rs b/src/lib.rs
+index 726a4d6..f73211c 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -51,6 +51,9 @@ mod webtransport;
+ 
+ #[allow(dead_code)]
+ mod qpack;
++/// QPACK for a client that writes its own streams (a WebTransport session)
++#[doc(hidden)]
++pub mod qpack_codec;
+ #[cfg(test)]
+ mod tests;
+ #[cfg(test)]
+diff --git a/src/qpack/mod.rs b/src/qpack/mod.rs
+index 06af8f0..5f2f734 100644
+--- a/src/qpack/mod.rs
++++ b/src/qpack/mod.rs
+@@ -1,4 +1,5 @@
+ pub(crate) use self::decoder::{ack_header, Decoder};
++pub(crate) use self::{prefix_string::HpackStringEncode, static_::StaticTable};
+ pub use self::{
+     decoder::{decode_stateless, Decoded, DecoderError},
+     encoder::{encode_stateless, EncoderError},
+diff --git a/src/qpack_codec.rs b/src/qpack_codec.rs
+new file mode 100644
+index 0000000..a8544fb
+--- /dev/null
++++ b/src/qpack_codec.rs
+@@ -0,0 +1,89 @@
++//! QPACK (RFC 9204) for a client that writes and reads its own HTTP/3
++//! streams (stomp-h3's WebTransport session): the dynamic-table decoder the
++//! connection uses, the static table and Huffman coding, without the rest of
++//! h3's connection machinery.
++
++use bytes::{Buf, BytesMut};
++
++use crate::qpack::{self, HpackStringEncode, HeaderField, StaticTable};
++
++/// A field section decoder with the peer's dynamic table
++pub struct Decoder {
++    inner: qpack::Decoder,
++}
++
++impl Decoder {
++    /// A decoder for a connection that advertised `max_capacity` as its
++    /// SETTINGS_QPACK_MAX_TABLE_CAPACITY
++    pub fn new(max_capacity: usize) -> Self {
++        Self {
++            inner: qpack::Decoder::new(max_capacity),
++        }
++    }
++
++    /// Entries inserted so far
++    pub fn total_inserted(&self) -> usize {
++        self.inner.total_inserted()
++    }
++
++    /// Apply what arrived on the peer's encoder stream. Whole instructions
++    /// are consumed from `data` (a partial one stays there for the rest);
++    /// the decoder instructions to send (Insert Count Increment) are
++    /// appended to `out`.
++    pub fn on_encoder(&mut self, data: &mut BytesMut, out: &mut Vec<u8>) -> Result<(), String> {
++        self.inner
++            .on_encoder_recv(data, out)
++            .map(|_| ())
++            .map_err(|e| e.to_string())
++    }
++
++    /// The Required Insert Count of a field section
++    pub fn required_insert_count(&self, block: &[u8]) -> Result<usize, String> {
++        self.inner
++            .required_insert_count(block)
++            .map_err(|e| e.to_string())
++    }
++
++    /// Decode a field section whose entries have all arrived: its fields in
++    /// order, whether it referenced the dynamic table, and its size as RFC
++    /// 9114 section 4.2.2 counts it
++    pub fn decode(&self, block: &[u8]) -> Result<(Vec<(Vec<u8>, Vec<u8>)>, bool, u64), String> {
++        let mut buf = block;
++        let decoded = self
++            .inner
++            .decode_header(&mut buf)
++            .map_err(|e| e.to_string())?;
++        if buf.has_remaining() {
++            return Err("trailing bytes".to_string());
++        }
++        let fields = decoded
++            .fields
++            .into_iter()
++            .map(|f| {
++                let (name, value) = f.into_inner();
++                (name.into_owned(), value.into_owned())
++            })
++            .collect();
++        Ok((fields, decoded.dyn_ref, decoded.mem_size))
++    }
++}
++
++/// A Section Acknowledgment for `stream_id`, appended to `out`
++pub fn section_ack(stream_id: u64, out: &mut Vec<u8>) {
++    qpack::ack_header(stream_id, out);
++}
++
++/// The static table index of exactly `name: value`
++pub fn static_find(name: &[u8], value: &[u8]) -> Option<usize> {
++    StaticTable::find(&HeaderField::new(name, value))
++}
++
++/// The static table index of an entry named `name`
++pub fn static_find_name(name: &[u8]) -> Option<usize> {
++    StaticTable::find_name(name)
++}
++
++/// `value` Huffman coded (RFC 7541 appendix B)
++pub fn huffman_encode(value: &[u8]) -> Vec<u8> {
++    value.to_vec().hpack_encode().unwrap_or_default()
++}
+-- 
+2.54.0
+

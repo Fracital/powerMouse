@@ -103,7 +103,10 @@ on and an origin offers h3 (docs/http3.md).
   decodes responses with the server's QPACK dynamic table (h3 0.0.8 only
   had the static table) and opens the QPACK streams in Chrome's order,
   typing them on first use; `h3/0004` sends a PRIORITY_UPDATE for each
-  request with a Priority field, as Chrome does. It also vendors rustls 0.23.29 with epoxy's own
+  request with a Priority field, as Chrome does; `h3/0005` makes h3's QPACK
+  decoder (with the dynamic table), static table and Huffman encoder
+  reachable as a hidden `qpack_codec` module for the WebTransport client
+  below. It also vendors rustls 0.23.29 with epoxy's own
   `patches/rustls` (`EPOXY_PATCHES`, `/patches` in the image), whose
   `chrome_hello` gives the QUIC ClientHello Chrome's shape (no GREASE,
   Chrome's QUIC extensions, ALPS for h3, a GREASE ECH), and quinn-proto
@@ -117,6 +120,30 @@ on and an origin offers h3 (docs/http3.md).
   fixed bit, every Initial padded to 1250 bytes and no path MTU probes, as
   Chrome's client, and seeds fastrand (h3's GREASE source, a fixed seed on
   wasm32-unknown-unknown otherwise).
+- `connect_webtransport` (`src/wt.rs`) opens a WebTransport (draft 02)
+  session as Chrome does, on a QUIC connection of its own with the same
+  transport parameters and ClientHello as `connect` but no TLS session
+  cache and a 15 s keep-alive. It drives quinn directly instead of h3's
+  client (which refuses streams the server opens): Chrome's control stream
+  (its SETTINGS with MAX_FIELD_SECTION_SIZE 16384, both H3_DATAGRAM
+  settings and ENABLE_WEBTRANSPORT, a GREASE setting and frame), the QPACK
+  stream ids skipped and left empty, no CONNECT before the server's
+  SETTINGS take datagrams and WebTransport, the extended CONNECT with
+  Chrome's fields in its order (Huffman only where shorter, as quiche
+  decides) and the page's own `headers` (Chrome 157) last, as the caller
+  hands them, a pseudo-header, a name that is no lower-case token and the
+  fields it writes itself refused again, and a GREASE capsule, `:status 200` alone accepted, the `0x41`
+  and `0x54` stream headers, quarter-stream-id datagrams,
+  CLOSE_WEBTRANSPORT_SESSION both ways, and stream codes mapped to and from
+  the HTTP/3 space. A session ends as Chrome's does: once both sides of
+  the CONNECT stream are over, the data streams still open are stopped and
+  reset with H3_CONNECT_ERROR (0x10f) in the packet with its FIN, and the
+  connection goes quiet (no ACK and no CONNECTION_CLOSE after); a
+  STOP_SENDING on the CONNECT stream is answered with RESET_STREAM and
+  turns the close that follows into a lost session.
+  `serverCertificateHashes` replaces WebPKI with `src/certhash.rs`
+  (SHA-256 of the leaf, at most 14 days of validity that hold now, a
+  P-256, P-384, Ed25519 or RSA key, the handshake signature checked).
 - `out/UPSTREAM` ends with a `stomp-h3 <hash>` line naming the sources that
   went in.
 
