@@ -1231,6 +1231,14 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- `document.URL` and `document.documentURI` read as natively for documents
+  other than the page's own: a frame's contentDocument read from the
+  parent is the frame's page's URL, a document made with
+  createHTMLDocument is `about:blank`, and a document without a window
+  reads the URL of the document that made it. All of them read the page's
+  own URL. And `document.featurePolicy.getAllowlistForFeature()` names the
+  page's origin where it named the proxy's. (realm-surface: inert
+  documents; surface-enumeration: featurePolicy.)
 - A worker's scope lists what the browser's lists. The hooks of `fetch`,
   `setTimeout`, `setInterval` and `importScripts` assigned to the worker's
   global, which made each an own property of it where the browser has them

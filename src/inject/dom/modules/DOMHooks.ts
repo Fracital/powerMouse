@@ -864,9 +864,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					'URL',
 				)!.get!,
 				(target, that, args) => {
-					// only side effect this getter has is the potential to throw an illegal invocation error
-					Reflect.apply(target, that, args);
-					return responseURLOf(that) ?? this.client.location.toString();
+					// (the native getter throws for what is no document)
+					const native = Reflect.apply(target, that, args) as string;
+					return this.client.documentURL(
+						that,
+						native,
+						() => responseURLOf(that) ?? this.client.location.toString(),
+					);
 				},
 			),
 		});

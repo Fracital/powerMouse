@@ -43,11 +43,53 @@ export default class ReadbackModule extends Module<DocumentClient> {
 		Reflect.defineProperty(global.Document.prototype, 'documentURI', {
 			...documentURI,
 			get: proxyModule.wrapFunction(documentURI.get!, (target, that, args) => {
-				// the native getter only throws for a non-document
-				Reflect.apply(target, that, args);
-				return responseURLOf(that) ?? this.client.location.toString();
+				// (the native getter throws for what is no document)
+				const native = Reflect.apply(target, that, args) as string;
+				return this.client.documentURL(
+					that,
+					native,
+					() => responseURLOf(that) ?? this.client.location.toString(),
+				);
 			}),
 		});
+
+		// document.featurePolicy.getAllowlistForFeature() names origins, and
+		// the document's own is the proxy's to the browser: a feature allowed
+		// to `self` listed the proxy's origin. It reads as the page's. Only
+		// this document's policy: a frame element's names what the browser
+		// knows of the frame.
+		const policyPrototype = (
+			global.FeaturePolicy as { prototype: object } | undefined
+		)?.prototype;
+		const ownPolicy = Reflect.getOwnPropertyDescriptor(
+			global.Document.prototype,
+			'featurePolicy',
+		)?.get;
+		const allowlist =
+			policyPrototype &&
+			Reflect.getOwnPropertyDescriptor(
+				policyPrototype,
+				'getAllowlistForFeature',
+			);
+		if (policyPrototype && ownPolicy && typeof allowlist?.value === 'function')
+			Reflect.defineProperty(policyPrototype, 'getAllowlistForFeature', {
+				...allowlist,
+				value: proxyModule.wrapFunction(
+					allowlist.value as (...args: unknown[]) => unknown,
+					(target, that, args) => {
+						const list = Reflect.apply(target, that, args) as unknown;
+						if (
+							!Array.isArray(list) ||
+							that !== Reflect.apply(ownPolicy, global.document, [])
+						)
+							return list;
+						const real = global.location.origin;
+						for (let i = 0; i < list.length; i++)
+							if (list[i] === real) list[i] = this.client.origin;
+						return list;
+					},
+				),
+			});
 
 		// an own accessor of the window, like location
 		const origin = Reflect.getOwnPropertyDescriptor(global, 'origin');

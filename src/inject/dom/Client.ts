@@ -196,6 +196,10 @@ const documentURLGetter = Reflect.getOwnPropertyDescriptor(
 	Document.prototype,
 	'URL',
 )?.get;
+const documentViewGetter = Reflect.getOwnPropertyDescriptor(
+	Document.prototype,
+	'defaultView',
+)?.get;
 
 /**
  * The page's markup (and the worker's prewritten table) from the shell's
@@ -1975,6 +1979,35 @@ export default class DocumentClient extends Client {
 		} catch (error) {
 			return false;
 		}
+	}
+	/**
+	 * What `URL` and `documentURI` read as for `document`, whose native
+	 * reading is `native`: this window's document is the page's; another
+	 * proxied window's (a frame's contentDocument, read through this
+	 * realm's getter) is that window's page's, by its own client; a
+	 * document without a window is `about:blank` where the browser says so
+	 * (one made with createHTMLDocument) and else the URL of the document
+	 * that parsed it. It was this page's URL whatever the document.
+	 */
+	documentURL(document: object, native: string, answer: () => string): string {
+		if (document === this.global.document) return answer();
+		try {
+			const view =
+				documentViewGetter &&
+				(Reflect.apply(documentViewGetter, document, []) as object | null);
+			const other =
+				view &&
+				(Reflect.getOwnPropertyDescriptor(view, this.names.client)?.value as
+					DocumentClient | undefined);
+			if (other && other !== this)
+				return other.documentURL(document, native, () =>
+					other.location.toString(),
+				);
+			if (!view && native === 'about:blank') return native;
+		} catch (error) {
+			// not a document this realm may read: the page's answer
+		}
+		return answer();
 	}
 	/** the outermost proxied window above this one (its own when it is the top) */
 	get proxiedTop(): typeof globalThis {
