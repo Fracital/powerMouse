@@ -1,8 +1,10 @@
+import type { WorkerPolicies } from '../../csp';
 import { injectWorkerJS, pageBlobURL, proxyBlobURL } from '../../routeURL';
 import { routeJS } from '../../scriptRoutes';
 import StompURL from '../../StompURL';
 import {
 	CSP_FACTS,
+	CSP_WORKER,
 	WORKER_BASE,
 	WORKER_ERROR,
 	WORKER_PARTITION,
@@ -91,13 +93,23 @@ export default class WorkerModule extends Module<Client> {
 				// script runs (a routed worker's route names it)
 				const partition = this.client.partition;
 				// and its document's script policy, which a blob: worker
-				// inherits (src/csp.ts ScriptFacts)
+				// inherits (src/csp.ts ScriptFacts), and its connect policies
+				// (WorkerPolicies), which judge the worker's own WebSockets and
+				// WebTransport sessions
+				const connect = (
+					this.client as {
+						connectInheritance?: () => WorkerPolicies | null;
+					}
+				).connectInheritance?.();
 				const base =
 					`globalThis[${JSON.stringify(WORKER_BASE)}] = ${JSON.stringify(
 						this.client.url.toString(),
 					)};` +
 					(partition
 						? `globalThis[${JSON.stringify(WORKER_PARTITION)}] = ${JSON.stringify(partition)};`
+						: '') +
+					(connect
+						? `globalThis[${JSON.stringify(CSP_WORKER)}] = ${JSON.stringify(connect)};`
 						: '') +
 					// (and its Trusted Types, which a worker's own code meets too)
 					(this.client.trustedTypesRequired() && trustedTypesUsed()
@@ -152,12 +164,25 @@ export default class WorkerModule extends Module<Client> {
 					),
 				);
 			}
+			// a data: worker is rewritten here, into the data: URL it starts
+			// from: it inherits its creator's connect policies (WorkerPolicies)
+			const connect =
+				url.protocol === 'data:'
+					? (
+							this.client as {
+								connectInheritance?: () => WorkerPolicies | null;
+							}
+						).connectInheritance?.()
+					: null;
 			return routeJS(
 				new StompURL(url, this.client.url),
 				this.client.url,
 				this.client.config,
 				type,
 				this.client.partition,
+				connect
+					? `${this.client.names.client}.judgeConnections(${JSON.stringify({ ...connect, named: 'data' })});`
+					: '',
 			);
 		};
 

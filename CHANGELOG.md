@@ -1430,6 +1430,17 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   `postMessage` of a function read `(/*1sx72wjbg.49u.8*/) => {} could not
 be cloned.`, the function as the rewriter printed it, mark and helper
   calls included (performance-entries suite).
+- A worker's WebSockets and WebTransport sessions are judged by the
+  worker's own connect-src (or default-src), as natively: a dedicated,
+  module, shared or service worker of a URL by the policies of its
+  script's response, a `blob:` or `data:` worker by its creator's. They
+  were judged by none, so a worker was a way past its policy. A refused
+  socket fires error and no close, a refused session's `ready` and
+  `closed` reject with Chrome's WebTransportError, and the worker's global
+  gets Chrome's securitypolicyviolation event for each policy that refuses
+  it, report-only ones too, trusted, with the worker's URL. The document
+  hears nothing of it, as natively. (csp-workers, natively against both
+  modes on Chrome 157.)
 - A frame read before it loaded (an about:blank child or popup, one written
   with document.write) no longer shows the access API on its
   Number.prototype to the page that made it. The inject defines the API

@@ -484,17 +484,23 @@ export function standIn(
 			throw syntax(
 				`The URL contains a fragment identifier ('#${url.hash.slice(1)}'). Fragment identifiers are not allowed in WebTransport URLs.`,
 			);
-		// the page's own connect-src (a document's; no worker's is known
-		// here, as for a WebSocket): the browser reports the refusal itself,
-		// by a request the browser's copy of the policy refuses
-		// (DocumentClient.connectRefusal), and a policy that only reports
-		// hears of it from the inject
+		// the page's own connect-src. A document's: the browser reports the
+		// refusal itself, by a request the browser's copy of the policy
+		// refuses (DocumentClient.connectRefusal), and a policy that only
+		// reports hears of it from the inject. A worker's (its script's
+		// response's, or its creator's): the worker reports every refusal
+		// itself (WorkerClient.connectVerdict)
 		const policed = client as {
 			connectRefusal?: (url: URL) => boolean;
 			reportRefusal?: (directive: string, url: URL) => void;
+			connectVerdict?: (url: URL) => boolean;
 		};
-		const refused = policed.connectRefusal?.(url) ?? false;
-		if (!refused) policed.reportRefusal?.('connect-src', url);
+		let refused: boolean;
+		if (policed.connectVerdict) refused = policed.connectVerdict(url);
+		else {
+			refused = policed.connectRefusal?.(url) ?? false;
+			if (!refused) policed.reportRefusal?.('connect-src', url);
+		}
 		const seen: string[] = [];
 		for (const name of protocols) {
 			if (name === '') throw syntax('Protocol name cannot be empty.');

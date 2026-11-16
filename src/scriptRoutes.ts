@@ -87,6 +87,8 @@ export function routeJS(
 	config: Config,
 	type: ScriptType = 'generic',
 	partition = '',
+	/** code a data: script runs first, after a worker's bootstrap (modifyJS's) */
+	preamble = '',
 ) {
 	if (resource.url.protocol === 'data:') {
 		const { mime, data, attributes } = parseDataURI(
@@ -96,7 +98,7 @@ export function routeJS(
 		);
 		return createDataURI({
 			mime,
-			data: rewriter('modifyJS')(data, url, config, type),
+			data: rewriter('modifyJS')(data, url, config, type, preamble),
 			attributes,
 		});
 	}

@@ -28,6 +28,24 @@ export interface Policy {
 	directives: Map<string, string[]>;
 }
 
+/**
+ * The policies a worker judges its own connections by (the WebSockets and
+ * WebTransport sessions no service worker sees), as its client is handed
+ * them: its script's response's for a worker of a URL, its creator's for a
+ * blob: or data: worker, natively (measured, Chrome 157). Each is the
+ * page's text, its disposition and the URL 'self' means in it (the
+ * creator's, for one inherited); `named` is how a violation names a blob:
+ * or data: worker's URL.
+ */
+export interface WorkerPolicies {
+	policies: [text: string, disposition: Policy['disposition'], self: string][];
+	named?: 'blob' | 'data';
+}
+
+/** whether `policy` says anything of connections (connect-src, or default-src) */
+export const governsConnect = (policy: Policy): boolean =>
+	governing(policy, 'connect-src') !== null;
+
 /** the directives a <meta> policy cannot carry: the browser ignores them there */
 const NOT_IN_META = ['frame-ancestors', 'report-uri', 'sandbox'];
 

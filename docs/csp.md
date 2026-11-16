@@ -167,6 +167,27 @@ stops a violation whose page policy allows the URL natively (a refused
 route is still shown when no enforced policy refuses it: a later hop of a
 redirect, which Chrome names by its first URL).
 
+A worker's WebSockets and WebTransport sessions are judged by the
+worker's own policies, as Chrome judges them (measured, Chrome 157): a
+worker of a URL (dedicated, module, shared, or a page's service worker)
+has its script's response's policies, never its document's; a `blob:` or
+`data:` worker has its creator's, each with its creator's 'self'. The
+browser applies none of them to the proxy's URLs (the worker's policy
+headers are dropped like any response's), so the worker's client is
+handed them: the route's preamble names those of a worker's own script
+(`judgeConnections`; a module the worker imports is a `cors` request and
+names none), an emulated service worker's are kept with its script, and
+a `blob:` worker's bootstrap or a `data:` worker's rewrite names its
+creator's (`connectInheritance`). A connection one refuses fails as
+natively (a socket fires error and no close; a session's `ready` and
+`closed` reject with Chrome's WebTransportError), and the worker's global
+gets one event for each policy that refuses it, report-only ones too, a
+task later: Chrome's fields (the worker's URL as its documentURI and,
+without its query, as its sourceFile, `blob` or `data` for those, status
+0, no referrer). The event is the inject's; its listeners read it as
+trusted, as the browser's is (`trustTaggedViolations`, as for Trusted
+Types). The document hears nothing of it, natively either (csp-workers).
+
 A report-only policy's refusal of a load that goes out cannot be made the
 browser's without refusing the load: the inject dispatches the violation
 itself, with Chrome's fields, as many times as Chrome fires it (a fetch, a
@@ -347,7 +368,15 @@ refuses fires a violation, natively either.
 - sourceFile, lineNumber and columnNumber of a violation the browser
   reports for a load the inject made on the page's behalf name no script
   of the page's.
-- A worker's own policy (its script's response headers) is not applied.
+- A worker's own policy (its script's response headers, or its creator's
+  for a `blob:` or `data:` worker) judges only its WebSockets and
+  WebTransport sessions: its fetches, XMLHttpRequests, EventSources and
+  imports go out as if it had none (a `blob:` or `data:` worker's local
+  schemes excepted, which the browser refuses by its creator's browser
+  policy). A module worker's own policy is known once its script's body
+  starts, so what a module it imports connects to at its top level is not
+  judged. A worker's violation's lineNumber and columnNumber are 0, and its
+  sourceFile is the worker's script even for a script it imported.
 - No report goes to a policy's report-uri or report-to endpoint (the site
   never sees one; the page sees every violation, as natively).
 - An `<object>` of a page-made `blob:` URL does not load through the proxy,

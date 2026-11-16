@@ -168,6 +168,8 @@ export class RewritePool {
 		config: Config,
 		type: ScriptType,
 		told?: RewrittenBy,
+		/** code to run first, after the worker's bootstrap (modifyJS's) */
+		preamble?: string,
 	): Promise<string | null> {
 		return this.#rewriteOne(
 			script,
@@ -175,7 +177,7 @@ export class RewritePool {
 			config,
 			type,
 			undefined,
-			undefined,
+			preamble,
 			told,
 		);
 	}

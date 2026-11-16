@@ -24,6 +24,26 @@ export default class WebSocketModule extends Module<Client> {
 		const NativeWebSocket = this.client.global.WebSocket;
 		const { CONNECTING, OPEN, CLOSING, CLOSED } = NativeWebSocket;
 
+		/**
+		 * A socket a worker's policy refused: an error a task later, reading
+		 * CLOSED, and nothing else (no close, measured), as the browser
+		 * fails one its policy refuses
+		 */
+		const refusedSocket = (): BareCompatibleWebSocket => {
+			const socket = Object.assign(new EventTarget(), {
+				readyState: CONNECTING as number,
+				protocol: '',
+				extensions: '',
+				send: () => Promise.resolve(),
+				close: () => {},
+			});
+			setTimeout(() => {
+				socket.readyState = CLOSED;
+				socket.dispatchEvent(new Event('error'));
+			});
+			return socket as unknown as BareCompatibleWebSocket;
+		};
+
 		class MockWebSocket extends EventTarget {
 			#socket: BareCompatibleWebSocket;
 			#opened: Promise<void>;
@@ -102,12 +122,15 @@ export default class WebSocketModule extends Module<Client> {
 				// WebSocket, so a socket the page's policy refuses is opened to a
 				// URL the browser's copy of the policy refuses, and the browser
 				// fails it (error, then close 1006) and reports it as natively
-				const refused =
-					(
-						client as {
-							socketRefusal?: (url: URL) => string | null;
-						}
-					).socketRefusal?.(parsed) ?? null;
+				const policed = client as {
+					socketRefusal?: (url: URL) => string | null;
+					connectVerdict?: (url: URL) => boolean;
+				};
+				const refused = policed.socketRefusal?.(parsed) ?? null;
+				// a worker's own policies (WorkerClient.connectVerdict): the
+				// browser applies none of them, so the worker reports the
+				// refusal itself and the socket only fails
+				const workerRefused = policed.connectVerdict?.(parsed) ?? false;
 				// client.bare is created lazily; a failure there (no transport)
 				// surfaces as an error event like a refused connection would.
 				this.#socket =
@@ -115,7 +138,9 @@ export default class WebSocketModule extends Module<Client> {
 						? (Reflect.construct(NativeWebSocket, [
 								refused,
 							]) as unknown as BareCompatibleWebSocket)
-						: client.bare.createWebSocket(parsed, protocol, requestHeaders);
+						: workerRefused
+							? refusedSocket()
+							: client.bare.createWebSocket(parsed, protocol, requestHeaders);
 
 				this.#opened = new Promise<void>((resolve) => {
 					this.#socket.addEventListener('open', () => resolve(), {
@@ -170,7 +195,7 @@ export default class WebSocketModule extends Module<Client> {
 				this.#socket.addEventListener('error', () => {
 					this.dispatchEvent(new Event('error'));
 					// a socket the policy refused fires no close (measured)
-					if (refused === null) dispatchClose(1006, '');
+					if (refused === null && !workerRefused) dispatchClose(1006, '');
 					else this.#closed = true;
 				});
 

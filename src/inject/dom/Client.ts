@@ -7,6 +7,7 @@ import {
 	codeAllows,
 	enforcesCode,
 	governing,
+	governsConnect,
 	hashMatches,
 	hostsApply,
 	inlineAllowed,
@@ -22,6 +23,7 @@ import {
 	type HopPolicy,
 	type Policy,
 	type PolicyText,
+	type WorkerPolicies,
 } from '../../csp';
 import { rewriteCSSValueURLs } from '../../cssURLs';
 import type { HookContext, HookErrorInfo, HookPhase } from '../../hooks';
@@ -1146,6 +1148,21 @@ export default class DocumentClient extends Client {
 				: url.href,
 		).catch(() => {});
 		return true;
+	}
+	/**
+	 * What a blob: worker this document makes inherits of its policies, for
+	 * its own connections (src/csp.ts WorkerPolicies), or null for none that
+	 * governs them
+	 */
+	connectInheritance(): WorkerPolicies | null {
+		const policies = this.pagePolicies()
+			.filter(({ policy }) => governsConnect(policy))
+			.map(({ policy, self }): WorkerPolicies['policies'][number] => [
+				policy.text,
+				policy.disposition,
+				self.href,
+			]);
+		return policies.length ? { policies, named: 'blob' } : null;
 	}
 	/** where a WebSocket to `url` goes instead when the page's enforced connect-src refuses it, or null */
 	socketRefusal(url: URL): string | null {

@@ -360,6 +360,12 @@ export const CSP_REPORT = '$stomp$cspReport';
  */
 export const CSP_FACTS = '$stomp$cspFacts';
 /**
+ * The global a blob: worker's bootstrap names the policies it inherits in
+ * for the client it makes (src/csp.ts WorkerPolicies), taken and deleted
+ * by the client
+ */
+export const CSP_WORKER = '$stomp$cspWorker';
+/**
  * SW -> the window that asked for a script the rewrite cache's kept
  * response answered: [the routed URL, when (ms since the epoch), how it
  * was delivered] (src/server/keptLoads.ts), which the response itself

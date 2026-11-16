@@ -224,6 +224,10 @@ The worker bundle has both parts as its own code.
   the browser's copy of the policy refuses, `DocumentClient.connectRefusal`,
   as a synchronous XMLHttpRequest's is reported); a report-only policy's
   report is the inject's own event (docs/csp.md).
+- The worker's own `connect-src`, in a worker (its script's response's,
+  or its creator's for a `blob:` or `data:` worker): a session it refuses
+  ends as natively, and the worker reports every refusal itself, on its
+  global, read as trusted (`WorkerClient.connectVerdict`, docs/csp.md).
 
 Mixed content does not come into it (the URL must be https, and the
 interface exists only in secure contexts). A session a content blocker
@@ -260,10 +264,6 @@ anything is opened (below).
   made), where Chrome's is one per page, shared by its frames; and it does
   not know servers by their addresses, which Chrome 152 to 156 do not use
   either (every failure is the five minutes).
-- A worker's sessions are not judged by a policy: the inject knows a
-  document's `connect-src` only, as for a WebSocket. Now that sessions
-  connect, that is a way past a worker's policy, to be closed with the
-  same fix as the WebSocket's.
 - A page on an http origin has `WebTransport` through a proxy origin that
   is a secure context, as it has every other interface of secure contexts;
   natively it has none.

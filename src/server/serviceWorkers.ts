@@ -5,6 +5,7 @@
 // service worker.
 
 import { IDBPDatabase, openDB } from 'idb';
+import type { WorkerPolicies } from '../csp';
 import { partitionSite } from '../partition';
 import type {
 	BackgroundFetchRecordWire,
@@ -36,6 +37,7 @@ import {
 } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
 import { browserMajor } from './clientHints';
+import { workerPolicies } from './contentPolicies';
 import type { JarCookie } from './Cookies';
 import { safelistedHeaders } from './cors';
 
@@ -86,6 +88,8 @@ interface ScriptRecord {
 	script: string;
 	/** what the version imported while it installed, by real URL */
 	imports: Record<string, string>;
+	/** the policies of its response its connections are judged by (src/csp.ts WorkerPolicies) */
+	policies?: WorkerPolicies | null;
 }
 
 /** the controller that can host a worker, and fetch for one */
@@ -934,7 +938,14 @@ export class ServiceWorkers {
 			type,
 			state: 'parsed',
 		};
-		await db.put('scripts', { script: text, imports: {} }, version.id);
+		// (what of its response's policies the worker judges its own
+		// connections by: the browser applies none of it)
+		const policies = workerPolicies(response.headers, new URL(scriptURL));
+		await db.put(
+			'scripts',
+			{ script: text, imports: {}, ...(policies ? { policies } : {}) },
+			version.id,
+		);
 		// the version's script runs now: one that throws at its top level is
 		// an evaluation failure
 		let instance: Instance;
@@ -1932,6 +1943,7 @@ export class ServiceWorkers {
 	/** a version's main script and type, for the `sw:` route */
 	async script(versionId: string): Promise<{
 		script: string;
+		policies: WorkerPolicies | null;
 		info: {
 			version: WorkerSnapshot;
 			registration: RegistrationSnapshot;
@@ -1948,6 +1960,7 @@ export class ServiceWorkers {
 					if (!stored) return null;
 					return {
 						script: stored.script,
+						policies: stored.policies ?? null,
 						info: {
 							version: this.#worker(version)!,
 							registration: this.snapshot(record),
@@ -1964,6 +1977,7 @@ export class ServiceWorkers {
 		if (!stored) return null;
 		return {
 			script: stored.script,
+			policies: stored.policies ?? null,
 			info: {
 				version: this.#worker(pending.version)!,
 				registration: this.snapshot(pending.record),

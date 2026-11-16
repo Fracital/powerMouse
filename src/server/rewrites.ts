@@ -172,6 +172,7 @@ import {
 	refusesAncestors,
 	refusingPolicies,
 	rememberPolicies,
+	workerPolicies,
 } from './contentPolicies';
 import Cookies from './Cookies';
 import {
@@ -635,6 +636,9 @@ type BodyTransform = (
 		upgradeInsecure: boolean;
 		/** a frame's navigation: the real origins of the frame's ancestors, nearest first */
 		ancestors?: string[] | null;
+		/** the request's destination and mode (a worker's own script is `same-origin`, what it imports `cors`) */
+		destination?: RequestDestination;
+		mode?: RequestMode;
 		/**
 		 * what the rewrite cache keeps this request's output for: its network
 		 * partition (as the HTTP cache's: the top-level site and the site of
@@ -3493,6 +3497,8 @@ function genericForward(
 								headers: requestHeaders,
 								routed: serverRequest.url,
 								clientId: context?.clientId,
+								destination: serverRequest.destination,
+								mode: serverRequest.mode,
 								navigation,
 								upgradeInsecure,
 								// a frame's real ancestors (its frame-ancestors'), as told,
@@ -4135,14 +4141,23 @@ export function registerRewrites(
 		url: StompURL,
 		type: ScriptType,
 		note: Note,
+		preamble = '',
 	): Promise<string> => {
 		const told: RewrittenBy = {};
 		const pooled = rewriter.pool?.live
-			? await rewriter.pool.rewrite(text, url, rewriter.config, type, told)
+			? await rewriter.pool.rewrite(
+					text,
+					url,
+					rewriter.config,
+					type,
+					told,
+					preamble,
+				)
 			: null;
 		note.rewriteIn = pooled === null ? 'service-worker' : 'pool';
 		const output =
-			pooled ?? modifyJS(text, url, rewriter.config, type, '', undefined, told);
+			pooled ??
+			modifyJS(text, url, rewriter.config, type, preamble, undefined, told);
 		// the wasm module made it (the only rewriter), or it was handed back
 		// where no shipped syntax could be rewritten
 		note.rewriteBy = told.by ?? 'wasm';
@@ -4282,6 +4297,20 @@ export function registerRewrites(
 			rewriter,
 			async (url, response, headers, _referrer, request, note) => {
 				if (!response.ok) return false;
+				// a worker's own script (not a module it imports: those are
+				// `cors`) hands its client the policies its connections are
+				// judged by (src/csp.ts WorkerPolicies): the browser applies none
+				// of the worker's own policy to the proxy's URLs
+				const policies =
+					(type === 'worker' || type === 'workerModule') &&
+					(request.destination === 'worker' ||
+						request.destination === 'sharedworker') &&
+					request.mode === 'same-origin'
+						? workerPolicies(response.headers, url.url)
+						: null;
+				const preamble = policies
+					? `${helperNames(rewriter.config).client}.judgeConnections(${JSON.stringify(policies)});`
+					: '';
 				const rewrites = rewriter.rewrites;
 				const partition = request.partition;
 				if (
@@ -4298,7 +4327,13 @@ export function registerRewrites(
 					// as Response.text() decodes (a BOM goes, bad bytes are U+FFFD)
 					const read = new Uint8Array(await response.arrayBuffer());
 					note.bytes = read.byteLength;
-					return rewriteScript(new TextDecoder().decode(read), url, type, note);
+					return rewriteScript(
+						new TextDecoder().decode(read),
+						url,
+						type,
+						note,
+						preamble,
+					);
 				}
 				// The key is a digest of the bytes as they came, and a script kept
 				// rewritten goes out as the store's own Response: a hit decodes
@@ -4317,6 +4352,8 @@ export function registerRewrites(
 						),
 						url.codec.key,
 						partition,
+						// (the policies are the response's, not the body's)
+						...(preamble ? [preamble] : []),
 					],
 					bytes,
 				);
@@ -4349,7 +4386,7 @@ export function registerRewrites(
 				}
 				// as Response.text() decodes (a BOM goes, bad bytes are U+FFFD)
 				const text = new TextDecoder().decode(bytes);
-				const output = await rewriteScript(text, url, type, note);
+				const output = await rewriteScript(text, url, type, note, preamble);
 				note.rewriteCache = 'miss';
 				return output;
 			},
@@ -5224,7 +5261,10 @@ function registerServiceWorkerScripts(router: Router, rewriter: Rewriter) {
 					url,
 					rewriter.config,
 					found.info.type === 'module' ? 'workerModule' : 'worker',
-					`${client}.emulateServiceWorker(${JSON.stringify({ ...found.info, native: nativeServiceWorker() })});`,
+					`${client}.emulateServiceWorker(${JSON.stringify({ ...found.info, native: nativeServiceWorker() })});` +
+						(found.policies
+							? `${client}.judgeConnections(${JSON.stringify(found.policies)});`
+							: ''),
 				) + `\n;${client}.serviceWorkerEvaluated();`;
 			return new Response(script, { headers: SCRIPT_HEADERS });
 		},

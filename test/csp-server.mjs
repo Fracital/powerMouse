@@ -9,7 +9,10 @@
 //         (repeatable)
 //     probes: the names of test/pages/csp-probes.js's probes to run
 //     s:  styles in the head, one carrying nonce="probes" (markup-styles)
-//     js: `tt` for test/pages/csp-tt-probes.js's (Trusted Types) instead
+//     js: `tt` for test/pages/csp-tt-probes.js's (Trusted Types) instead,
+//         `worker` for test/pages/csp-worker-probes.js's (the workers'
+//         connections), after a script that leaves the worker's text on
+//         the window for the blob: and data: workers
 //     h:  how the probe script is included, so that the policy lets it
 //         run: `self` (a script element whose src is /csp/probes.js, the
 //         default), `nonce` (that element with nonce="probes"), `inline`
@@ -22,6 +25,11 @@
 //   /csp/sse             an event stream of one message, "sse"
 //   /csp/img.png         a 1x1 PNG
 //   /csp/worker.js       a worker that posts "worker" back
+//   /csp/cw.js?wp=<policy>&wro=<policy>  the csp-workers suite's worker
+//                        (test/pages/csp-worker.js) under the policies of
+//                        its own response's headers (repeatable)
+//   /csp/cw-text.js      a script that leaves that worker's text on the
+//                        global as `__cspWorkerText`
 //   /csp/frame.html      a document that posts "frame" to its parent
 //   /csp/font.woff       a font (test/pages/blank-font.ttf)
 //   /csp/style.css       a stylesheet that sets --csp-style on :root
@@ -97,12 +105,12 @@ export function csp(req, res) {
 	};
 	switch (url.pathname) {
 		case '/csp/doc': {
-			const tt = query.get('js') === 'tt';
-			const probes = readFileSync(
-				`${pages}${tt ? 'csp-tt-probes.js' : 'csp-probes.js'}`,
-				'utf8',
-			);
-			const src = tt ? '/csp/probes.js?js=tt' : '/csp/probes.js';
+			const js = query.get('js');
+			const probes = readFileSync(`${pages}${probeFile(js)}`, 'utf8');
+			const src =
+				js === 'tt' || js === 'worker'
+					? `/csp/probes.js?js=${js}`
+					: '/csp/probes.js';
 			const metas = policies(res, query);
 			if (query.get('s') === 'nav') {
 				const bases = query
@@ -123,13 +131,14 @@ export function csp(req, res) {
 					`sha256-${createHash('sha256').update(text).digest('base64')}`,
 				);
 			const script =
-				how === 'self'
+				(js === 'worker' ? '<script src="/csp/cw-text.js"></script>' : '') +
+				(how === 'self'
 					? `<script src="${src}"></script>`
 					: how === 'nonce'
 						? `<script nonce="probes" src="${src}"></script>`
 						: how === 'inline-nonce'
 							? `<script nonce="probes">${text}</script>`
-							: `<script>${text}</script>`;
+							: `<script>${text}</script>`);
 			// `s=1`: styles in the markup, one with the nonce, one without
 			const styles = query.has('s')
 				? '<style nonce="probes">:root { --csp-markup-nonce: yes; }</style><style>:root { --csp-markup-plain: yes; }</style>'
@@ -143,9 +152,23 @@ export function csp(req, res) {
 		case '/csp/probes.js':
 			send(
 				'text/javascript; charset=utf-8',
-				readFileSync(
-					`${pages}${query.get('js') === 'tt' ? 'csp-tt-probes.js' : 'csp-probes.js'}`,
-				),
+				readFileSync(`${pages}${probeFile(query.get('js'))}`),
+			);
+			return true;
+		case '/csp/cw.js':
+			for (const policy of query.getAll('wp'))
+				res.appendHeader('content-security-policy', policy);
+			for (const policy of query.getAll('wro'))
+				res.appendHeader('content-security-policy-report-only', policy);
+			send(
+				'text/javascript; charset=utf-8',
+				readFileSync(`${pages}csp-worker.js`),
+			);
+			return true;
+		case '/csp/cw-text.js':
+			send(
+				'text/javascript; charset=utf-8',
+				`self.__cspWorkerText = ${JSON.stringify(readFileSync(`${pages}csp-worker.js`, 'utf8')).replace(/</g, '\\u003c')};`,
 			);
 			return true;
 		case '/csp/ok':
@@ -236,6 +259,14 @@ export function csp(req, res) {
 	}
 	return false;
 }
+
+/** the probes file of a /csp/doc page whose `js` is `js` */
+const probeFile = (js) =>
+	js === 'tt'
+		? 'csp-tt-probes.js'
+		: js === 'worker'
+			? 'csp-worker-probes.js'
+			: 'csp-probes.js';
 
 /** the policies a /csp/ document's query names: its headers set, its metas returned */
 function policies(res, query) {

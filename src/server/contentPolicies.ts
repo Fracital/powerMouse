@@ -3,6 +3,7 @@ import {
 	CODE_DIRECTIVES,
 	FALLBACK,
 	governing,
+	governsConnect,
 	hopRefusals,
 	hostsApply,
 	namedRefusal,
@@ -10,6 +11,7 @@ import {
 	REFUSED_URL,
 	sourcesMatch,
 	type Policy,
+	type WorkerPolicies,
 } from '../csp';
 import { CSP_REPORT } from '../transport/messages';
 import type { NavigationChain } from './navigationHints';
@@ -73,6 +75,37 @@ function policiesOf(
 		}
 	}
 	return null;
+}
+
+/**
+ * The policies a worker whose script answered at `url` with `headers`
+ * judges its own connections by (src/csp.ts WorkerPolicies), or null for
+ * none that governs them: its response's, natively (a blob: or data:
+ * worker inherits its creator's, which the inject hands it)
+ */
+export function workerPolicies(
+	headers: Headers,
+	url: URL,
+): WorkerPolicies | null {
+	const policies = [
+		...parsePolicies(
+			headers.get('content-security-policy'),
+			'enforce',
+			'header',
+		),
+		...parsePolicies(
+			headers.get('content-security-policy-report-only'),
+			'report',
+			'header',
+		),
+	]
+		.filter(governsConnect)
+		.map((policy): WorkerPolicies['policies'][number] => [
+			policy.text,
+			policy.disposition,
+			url.href,
+		]);
+	return policies.length ? { policies } : null;
 }
 
 /** the directive a request of `destination` is judged by (CSP3 §6.8.1) */
