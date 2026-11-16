@@ -144,7 +144,15 @@ export default class ReadbackModule extends Module<DocumentClient> {
 							this.client.parentClient()?.refusedURI(value))
 						: null;
 					if (refused) return refused.url;
-					const page = unrouteURL(this.client, value) ?? value;
+					// (no route of a page's URL, such as an inline document's:
+					// this document's own address is what its location reads, and
+					// the proxy's address of anything else is not the page's to
+					// read either way)
+					const page =
+						unrouteURL(this.client, value) ??
+						(value === this.client.global.location.href
+							? this.client.location.toString()
+							: value);
 					return image ? upgradedImage(value, page) : page;
 				}),
 			});

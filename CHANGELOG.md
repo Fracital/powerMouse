@@ -1231,6 +1231,10 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- `navigation.currentEntry.url` of a document the proxy serves from
+  page-made markup (a javascript: URL's string in a frame) reads what the
+  document's location reads; it read the proxy's own `inline:` route.
+  (realm-surface, frame-javascript against native.)
 - A removed frame's window reads as natively: null for `parent`,
   `localStorage`, `sessionStorage` and `cookieStore`, and an empty
   `document.domain`. It read itself as its parent, the inject's Storage
