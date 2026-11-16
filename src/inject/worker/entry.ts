@@ -7,12 +7,22 @@ import {
 import { listenOn, messageOf, startPort } from '../../transport/ports';
 import { messageField, readModules, type HandedModules } from '../Client';
 import { handModules } from '../rewriter';
+import { carry as carryWebTransport } from '../webTransport';
+import { webTransportParts } from '../webTransportParts';
 import WorkerClient, {
 	setServiceWorkerPort,
 	setWorkerModules,
 	setWorkerTransportPort,
 } from './Client';
 import createWorkerClient from './worker';
+
+// a worker's sessions are carried by the bundle's own code
+/** set once the bootstrap came without a transport (a worker of a worker): nothing carries its sessions */
+let transportless = false;
+webTransportParts.carry = () =>
+	transportless
+		? () => Promise.reject(new Error('no transport'))
+		: carryWebTransport;
 
 /**
  * The transport port a TRANSPORT_INIT the browser delivered carries, read
@@ -100,8 +110,10 @@ setWorkerTransportPort(
 					removeEventListener('message', handler);
 					const ports = portsOf(event);
 					// (a worker of a worker has no transport to be handed: its
-					// port never comes, as before)
+					// port never comes, as before, and its WebTransport
+					// sessions fail as the stand-in alone fails them)
 					if (transport) resolve(ports[0]);
+					else transportless = true;
 					// the modules follow on the message's last port
 					const later =
 						field === true && ports.length > (transport ? 1 : 0)

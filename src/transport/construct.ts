@@ -7,6 +7,7 @@
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import Http3Transport, { type Http3Options } from './http3/Http3Transport';
 import RevivingTransport from './RevivingTransport';
+import { useWebTransportModule } from './webTransportHost';
 
 /** `http3` in a descriptor: a function (`udp`) cannot be cloned into a worker */
 export type Http3DescriptorOptions = Omit<Http3Options, 'udp'>;
@@ -44,11 +45,19 @@ export async function constructTransport({
 	const transport = new RevivingTransport(
 		() => new Transport(...(options || [])),
 	);
+	// stomp-h3 ships in epoxy-transport's dist/h3/ (deploy/epoxy/h3); a
+	// page's WebTransport sessions use it whether or not HTTP/3 is on
+	// (src/transport/webTransportHost.ts)
+	const h3 = http3 && http3 !== true ? http3 : {};
+	useWebTransportModule(
+		transport,
+		h3.module ?? new URL('h3/stomp_h3.js', module).href,
+		h3.pem,
+	);
 	if (!http3) return transport;
-	// stomp-h3 ships in epoxy-transport's dist/h3/ (deploy/epoxy/h3)
 	return new Http3Transport(
 		transport,
-		http3 === true ? {} : http3,
+		h3,
 		new URL('h3/stomp_h3.js', module).href,
 	);
 }

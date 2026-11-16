@@ -1407,6 +1407,32 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   about 2 KB, the interface the browser makes for the wrapper.
   (webtransport suite, natively against both modes on Chrome 152 and 156,
   in the page and in dedicated, shared and service workers.)
+- A proxied page's WebTransport sessions connect, through the proxy. The
+  transport worker carries each one as QUIC on a wisp UDP stream with
+  stomp-h3's new WebTransport client (`connect_webtransport`, draft 02 as
+  Chrome speaks it: its SETTINGS, the extended CONNECT with its fields in
+  its order and the page's real origin, no cookie and no user agent,
+  HTTP/3 datagrams, the close capsule both ways, the stream error codes,
+  and `serverCertificateHashes` checked as Chrome checks them), and the
+  page's streams are the realm's own: byte readables, writables answered
+  once QUIC took a chunk (QUIC's flow control is the page's backpressure),
+  buffers transferred. Closes, resets and stop-sendings end the page's
+  streams and the session with Chrome's errors, codes and order, a session
+  the server refuses fails as natively, and the content blocker is asked
+  before anything is opened (a session it refuses fails as Chrome's own
+  blocker fails one). What carries a session is a deferred part of the
+  document bundle, evaluated with a realm's first session (999 bytes of
+  `injectDocument.js`). A transport without UDP, a worker's own worker,
+  and an epoxy-transport whose stomp-h3 has no WebTransport client (every
+  release up to now) end every session as before, with
+  nothing sent and the blocker not asked; webtransport-live then skips. A
+  session to a closed port fails as natively once the wisp server closes
+  the UDP stream on the port unreachable: holyWisp 0.5.2 can miss it, and
+  such a session fails after up to 4 s. A worker's sessions are not judged
+  by its `connect-src` (as a WebSocket's are not). (webtransport-live
+  suite, against a WebTransport server of the suite's, test/wtserver.mjs,
+  natively against both modes on Chrome 152, 156 and 157; webtransport
+  suite.)
 - `navigator.permissions.query({ name: 'storage-access' })` reads granted
   in a proxied top-level page, as natively: a top-level document has
   storage access, and Chrome answers granted there (denied when its

@@ -10,11 +10,13 @@ it. A proxied page therefore never gets the browser's constructor. Its
 realm that has the interface: documents and dedicated, shared and service
 workers.
 
-Sessions are not carried through the transport yet. Until they are (the
-plan is the last section), a session of a proxied page ends as the
-browser's own does when its server cannot be reached, and a page that falls
-back to a WebSocket or to fetch, as pages written for WebTransport do,
-falls back.
+Its sessions travel as the page's requests do: the transport carries them
+as QUIC on a wisp UDP stream (stomp-h3's WebTransport client), and the
+page's streams, datagrams, closes and errors read as the browser's own
+(the last sections). A transport that cannot carry one (no UDP, a stomp-h3
+without the client) ends a session as the browser's own ends when its
+server cannot be reached, and a page that falls back to a WebSocket or to
+fetch, as pages written for WebTransport do, falls back.
 
 ## What the browser does natively
 
@@ -99,6 +101,46 @@ speaks draft 02 of WebTransport over HTTP/3:
 `datagrams.maxDatagramSize` is 1024 before a session is ready; after, 152
 still reads 1024 and 156 reads 1215 (against the same server).
 
+### A live session
+
+Measured the same way against a WebTransport server on the machine
+(webtransport-go's, and the suite's, test/wtserver.mjs):
+
+- A stream's readable, an incoming unidirectional stream and
+  `datagrams.readable` are byte streams (a BYOB reader works; a view too
+  short for a datagram errors the readable with a RangeError "supplied view
+  is not large enough."). Chunks are exact Uint8Arrays at offset 0, as the
+  network split them, up to about 64 KiB. A writable's high-water mark is
+  one chunk, and a write resolves once QUIC took it; written buffers are not
+  detached.
+- A write of something that is no buffer errors the writable with a
+  TypeError and tells the server nothing. A datagram larger than the
+  connection takes is dropped and its write still resolves.
+- The incoming datagrams nobody reads keep the newest
+  `incomingHighWaterMark`.
+- The request carries the page's origin and nothing else of the page's: no
+  cookie, no user agent, from a document and from workers alike. A 403 or a
+  404 fails the session with "Opening handshake failed.".
+- `close({ closeCode, reason })` fulfills `closed` at once with what the
+  page gave (the code wrapped to 32 bits, the reason made well formed; the
+  wire carries at most 1024 bytes of it), after every open stream and the
+  datagrams' streams rejected with "The session is closed." (source
+  `'session'`); the two streams of incoming streams end as done. The
+  server's close capsule does the same with the server's code and reason; a
+  FIN without one is `{ closeCode: 0, reason: '' }`; a STOP_SENDING or a
+  reset of the CONNECT stream with it (webtransport-go's own close), or the
+  connection lost, rejects everything with "Connection lost.".
+- A peer's RESET_STREAM rejects the read with "Received RESET_STREAM." and
+  its STOP_SENDING the writable (whether or not a write waits) with
+  "Received STOP_SENDING.", both with `streamErrorCode` the peer's
+  WebTransport code (0 for one that is not, as the WEBTRANSPORT_SESSION_GONE
+  a server's close resets its streams with). The page's `cancel(reason)`
+  and `abort(reason)` send the code of a `WebTransportError` of the
+  browser's own making (its constructor takes 0 to 255), 0 for anything
+  else.
+- A session is open until it is closed: Chrome's keep-alive holds an idle
+  one past the server's idle timeout.
+
 ## The stand-in
 
 The page's `WebTransport` is the browser's function wrapped
@@ -127,10 +169,13 @@ What a frame pays: the wrapper around the constructor, and the browser
 making the `WebTransport` interface for it (about 2 KB of heap a frame,
 frame-cost). The prototypes are wrapped, the other three interfaces looked
 at, the tables and the throttle made when a realm makes its first session.
-The code is in the inject bundles (7 KB of `injectDocument.js`): a page
-may call a session's members in the statement after it made it, so none of
-it can be a file fetched when a session is first made without a synchronous
-request for it.
+The stand-in is in the inject bundles (7 KB of `injectDocument.js`): a page
+may call a session's members in the statement after it made it. What
+carries a session (`src/inject/webTransport.ts`) is a deferred part of the
+document bundle (`src/inject/dom/deferred.ts`, the last statement of
+`dist/rewriterLib.js`), evaluated when a realm's first session starts its
+handshake, from the top's copy with no request; the worker bundle has it as
+its own code.
 
 ### What it answers
 
@@ -141,11 +186,12 @@ request for it.
   and `value`), then the URL (invalid, not https, a fragment), then the
   page's policy, then the protocol names (empty, a character outside
   printable ASCII, 512 characters or more, a duplicate).
-- A session ends as one whose server cannot be reached: when Chrome's
-  throttle would have started its handshake (the model above, one for the
-  bundle), `closed` and `ready` reject and the four streams end, in
-  Chrome's order, with "Opening handshake failed."; past 64 pending, with
-  "Connection lost.". `ready` and `closed` are made when the page first
+- A session's handshake starts when Chrome's throttle would have started
+  it (the model above, one for the bundle; a handshake that failed keeps
+  its place five minutes, one that came up gives it back). One that fails
+  (no answer in 4 s, a refusal, a certificate that is not taken) rejects
+  `closed` and `ready` and ends the four streams, in Chrome's order, with
+  "Opening handshake failed."; past 64 pending, with "Connection lost.". `ready` and `closed` are made when the page first
   reads them, as the browser's are, so one nobody read is no unhandled
   rejection.
 - `close()`, `createBidirectionalStream()`, `createUnidirectionalStream()`
@@ -164,13 +210,23 @@ refuses ends natively as one whose server cannot be reached: Chrome for
 Testing 155 with a `declarativeNetRequest` block rule, one for the type
 `webtransport` and one with no type alike, rejects `closed` and then `ready`
 with "Opening handshake failed." 3 to 5 ms after the constructor, and
-nothing is sent. Since no session of the stand-in connects, a session the
-lists would refuse already ends that way; the lists are not asked
-(docs/adblock.md) and have to be once sessions connect (item 5 below).
+nothing is sent. The proxy's blocker refuses a session the same way, before
+anything is opened (below).
 
 ### Where it differs from the browser's
 
-- No session connects yet (below).
+- A session to a closed port fails when the wisp server reports the port
+  unreachable: within a few milliseconds of the browser's with a holyWisp
+  that closes the UDP stream on either side's ECONNREFUSED. holyWisp 0.5.2
+  and before drop the error when a send collects it before a read does, and
+  a QUIC Initial goes out two datagrams at a time, so there the stream closes
+  on a later retransmit (0.3 s, 0.9 s, 2.1 s) or never, and the session fails
+  when the handshake gives up after 4 s.
+- A worker's own worker has no transport (as for a WebSocket's), so its
+  sessions fail as the stand-in alone fails them, and nothing is sent.
+- Chrome keeps up to 6 MiB of a stream the page does not read; the
+  transport reads 256 KiB ahead of the page's reader, and the rest waits in
+  stomp-h3's QUIC window.
 - `structuredClone(session)` (and a `postMessage` of one) copies an empty
   object where the browser throws a DataCloneError: a session is an
   ordinary object. The suite tells this difference apart.
@@ -184,7 +240,9 @@ lists would refuse already ends that way; the lists are not asked
   not know servers by their addresses, which Chrome 152 to 156 do not use
   either (every failure is the five minutes).
 - A worker's sessions are not judged by a policy: the inject knows a
-  document's `connect-src` only, as for a WebSocket.
+  document's `connect-src` only, as for a WebSocket. Now that sessions
+  connect, that is a way past a worker's policy, to be closed with the
+  same fix as the WebSocket's.
 - A page on an http origin has `WebTransport` through a proxy origin that
   is a secure context, as it has every other interface of secure contexts;
   natively it has none.
@@ -192,100 +250,115 @@ lists would refuse already ends that way; the lists are not asked
   `DOMException` on its window before it made its first session has its
   own used for that session's objects, where the browser's are its own.
 
-## Not built: a session over wisp
+## Sessions over wisp
 
-A session has to travel as the page's requests do: QUIC datagrams on a
-wisp UDP stream (epoxy's `connect_udp`), from the transport worker, through
-stomp-h3 (`deploy/epoxy/h3`), which already makes Chrome's QUIC and TLS
-handshake there for HTTP/3. What that takes, in the order to build it:
+A session travels as the page's requests do: QUIC datagrams on a wisp UDP
+stream (epoxy's `connect_udp`), from the transport worker, through
+stomp-h3's WebTransport client (`deploy/epoxy/h3`, `connect_webtransport`),
+on a QUIC connection of its own per session, as Chrome's. Nothing of it runs
+before a page makes a session:
 
-1. **stomp-h3: a WebTransport client** (`connect_webtransport(url,
-readable, writable, options)` beside `connect`), on a connection of its
-   own per session, as Chrome's:
-   - the SETTINGS of the table above (the fetch connection's with
-     MAX_FIELD_SECTION_SIZE 16384, the draft 04 datagram setting and
-     ENABLE_WEBTRANSPORT added; `h3/patches/h3/0002` writes the fetch
-     ones), and waiting for the server's with H3_DATAGRAM and
-     ENABLE_WEBTRANSPORT before the request;
-   - the extended CONNECT with Chrome's fields in Chrome's order (`:scheme`
-     first, which differs from the fetch order of `h3/patches/h3/0001`),
-     `origin` the page's real origin, no cookie; the GREASE capsule after
-     it; `:status 200` and nothing else accepted; `wt-protocol` read for
-     `protocol`;
-   - streams: the `0x41` and `0x54` prefixes with the session id on the
-     ones the page opens, and the server's (h3 0.0.8 keeps incoming
-     `0x54` streams in `accepted_streams.wt_uni_streams` when
-     `enable_webtransport` is set, and its client refuses a bidirectional
-     stream the server opens: that needs a patch or a wrapper of the quic
-     traits that takes those streams before h3 sees them);
-   - datagrams with the quarter stream id (quinn's `send_datagram` and
-     `read_datagram`; the connection already advertises
-     `max_datagram_frame_size`), and the size Chrome reports as
-     `maxDatagramSize`;
-   - capsules on the CONNECT stream: CLOSE_WEBTRANSPORT_SESSION (0x2843)
-     both ways, a FIN without one as code 0, DRAIN and unknown ones
-     skipped;
-   - the stream error codes (`0x52e4a40fa8db + n + n / 0x1e`) for
-     RESET_STREAM and STOP_SENDING both ways, and
-     WEBTRANSPORT_SESSION_GONE (0x170d7b68) for a session's streams when
-     it ends;
-   - `serverCertificateHashes`: a rustls verifier in place of the WebPKI
-     one that does what Chrome's does (the SHA-256 of the leaf is one of
-     the hashes, a validity period of at most 14 days that holds now, a
-     key type Chrome allows there, the handshake signature still checked,
-     no name and no chain).
-     The build and its publication follow deploy/epoxy/README.md.
-2. **The transport worker**: a `webtransport` call beside `udp` and `tcp`
-   (`src/transport/messages.ts`, `serveTransport.ts`) that opens the UDP
-   stream, loads stomp-h3 as `Http3Transport` does and serves one session
-   on a port: a message for each datagram, and a port for each stream with
-   credit both ways (a chunk written is acknowledged when QUIC took it,
-   which is the page's `writer.ready`; a chunk read is asked for by the
-   page's stream), buffers transferred, never copied. With a transport
-   that has no UDP (libcurl) a session ends as it does today.
-3. **The page**: the session object of this module with its streams fed
-   from that port instead of ending (`WebTransportBidirectionalStream`'s
-   two getters wrapped the same way), the throttle fed by what the
-   handshakes did, and that part of the code in an asset of its own,
-   loaded when a session is first made (nothing of it is needed before the
-   first task).
-4. **A server for the suite**: the measurements here used a server built
-   on quic-go's webtransport-go (echo on streams and datagrams, streams of
-   its own, a close code, resets, a slow reader, a refusal), which no
-   suite can build today (the repository builds nothing in Go and has no
-   QUIC origin of its own); the suite needs that server, or one made from
-   stomp-h3's own stack, checked in with a way to build it. Natively
-   Chrome takes that server's certificate only with a pinned hash, or with
-   both `--ignore-certificate-errors-spki-list` and
-   `--origin-to-force-quic-on` for its address.
-5. **The content blocker**: the transport host asks the engine before it
-   opens the UDP stream, as it does for a WebSocket's handshake
-   (docs/adblock.md), with the session's https URL and the page's real
-   origin, and a refused session ends as above (3 to 5 ms, "Opening
-   handshake failed.", nothing sent). The type the engine is asked with
-   has to be checked against adblock-rust's request types (Chrome's
-   blocker has `webtransport`; a rule with no type applies to it).
-6. **Policy in workers**: a worker's `connect-src` is not known to the
-   inject today (as for a WebSocket); once sessions connect that becomes a
-   way past a worker's policy, so it lands with the same fix as the
-   WebSocket's or before this.
+1. **The page** (`src/inject/modules/WebTransport.ts`): when Chrome's
+   throttle would start a session's handshake, the realm hands it to what
+   carries it (`src/inject/webTransport.ts`), a deferred part in a
+   document, evaluated with the realm's first session.
+2. **What carries it** asks the transport (`webtransport`, on the realm's
+   transport port, or its parent's or opener's for a frame's first window
+   or a popup with no service worker yet; `src/transport/messages.ts`) for
+   a session on a MessagePort of its own, with the URL, the page's real
+   origin, its protocols and its pinned hashes. Once it is up the
+   session's `ready` fulfills, `protocol` is the server's, and on Chrome
+   155 on `maxDatagramSize` is the connection's. Its streams are the
+   realm's own `ReadableStream` (bytes, as natively) and `WritableStream`
+   (a high-water mark of one chunk): what arrives is in the page's stream
+   as it arrives, up to 256 KiB ahead of its reader, each chunk the page
+   writes is answered once QUIC took it, so QUIC's flow control is the
+   page's backpressure both ways, and every buffer is transferred.
+   `WebTransportBidirectionalStream`'s two getters are wrapped as the
+   session's members are. A session ends in Chrome's order: the datagrams'
+   streams, the streams' readables, their writables, `closed`, the two
+   streams of incoming streams.
+3. **The transport worker** (`src/transport/webTransportHost.ts`) imports
+   stomp-h3 from where HTTP/3 loads it (the descriptor's `http3.module`, or
+   epoxy's `h3/stomp_h3.js`, whether or not HTTP/3 is on) and looks for its
+   WebTransport client among the exports before the wasm is instantiated,
+   asks the controller whether the session may be made (the content
+   blocker, below), opens the UDP stream and serves the session on the
+   port. The roots a
+   certificate may chain to besides the WebPKI's are the ones the host gave
+   epoxy (`pem_files`) and the HTTP/3 option's.
+4. **stomp-h3** speaks Chrome's draft 02 as in the table above: the
+   SETTINGS, the extended CONNECT with Chrome's fields in Chrome's order and
+   the page's origin (no cookie, no user agent), the GREASE capsule, only
+   `:status 200` taken, the stream prefixes, HTTP/3 datagrams with the
+   quarter stream id, the close capsule both ways, the stream error codes,
+   and `serverCertificateHashes` checked as Chrome checks them (the leaf's
+   SHA-256, a validity of at most 14 days that holds now, no name and no
+   chain). Its build and publication follow deploy/epoxy/README.md.
+5. **The content blocker**: the transport asks the controller, which asks
+   the engine as for a WebSocket's handshake (docs/adblock.md), with the
+   session's URL and the page's real origin, as a request of the type
+   `other` (adblock-rust has no `webtransport` type; Chrome's blocker
+   does, and a rule with no type applies to both). A refused session ends
+   as natively (3 to 5 ms, "Opening handshake failed.") and nothing is
+   sent.
+
+A transport without stomp-h3 or without UDP (libcurl) and a stomp-h3
+without the client (an epoxy-transport released before it had one) end
+every session as the stand-in alone does: "Opening handshake failed." when
+Chrome's throttle would have started it, before the blocker is asked or a
+stream is opened, so nothing is sent. A wisp server that refuses UDP ends it
+the same way once it refuses the stream.
 
 ## Tests
 
 `webtransport` (no network): a UDP socket of the suite's hears what is sent
-to it. Natively a session from each of 27 ways to a constructor is a
-handshake it hears (the control; a way this Chrome does not open, a `data:`
-frame for one, is noted and left out). Through the proxy, in both demo
-modes, it hears nothing from any of them, and each session ends as one
-whose server cannot be reached. Then every answer of the stand-in is
-compared with the browser's own on the same page, in the page and in a
-dedicated, a shared and a service worker: the shapes of the constructor and
-the prototypes before and after a session is made, the constructor's
-answers to some eighty arguments and the order it reads its options in, a
-session to a closed port (used before, during and after it fails), to a
-name that does not resolve and with a pinned hash, `close()` while
-connecting, the datagram numbers and what they take, every member on
-something that is no session, the page's own `WebTransportError`, unhandled
-rejections, seventy sessions at once, and a session the page's `connect-src`
-refuses, enforced and report-only. On a build without the stand-in the
-suite fails at every way: the server hears the browser.
+to it, and test/sockets.mjs tells whose socket sent each datagram.
+Natively a session from each of 27 ways to a constructor is a handshake it
+hears (the control; a way this Chrome does not open, a `data:` frame for
+one, is noted and left out). Through the proxy, in both demo modes, it
+hears nothing from the browser from any of them: what it hears is the wisp
+server's, and each session reads as the browser's does to a server that
+never answers. Then every answer of the stand-in is compared with the
+browser's own on the same page, in the page and in a dedicated, a shared
+and a service worker: the shapes of the constructor and the prototypes
+before and after a session is made, the constructor's answers to some
+eighty arguments and the order it reads its options in, a session to a
+closed port (used before, during and after it fails), to a name that does
+not resolve and with a pinned hash, `close()` while connecting, the
+datagram numbers and what they take, every member on something that is no
+session, the page's own `WebTransportError`, unhandled rejections, seventy
+sessions at once, and a session the page's `connect-src` refuses, enforced
+and report-only, and when each session to a closed port fails, against the
+browser's (at most 50 ms later). On a build without the stand-in the suite
+fails at every way: the server hears the browser.
+
+Two things outside STomp change what it holds the stand-in to
+(test/webtransport-env.mjs). With a stomp-h3 that has no WebTransport client,
+every session must fail as one whose server cannot be reached with nothing
+reaching the server, as the stand-in alone does; webtransport-live then
+skips, saying why. With a wisp server that reports a closed UDP port late
+(the suite asks the demo's own: six UDP streams to a closed port, two
+datagrams each, each closed within 100 ms or not), sessions to a closed port
+are compared by how they end, not by what the page saw while they waited,
+and how late each failed is listed.
+
+`webtransport-live` (no network): the suite's WebTransport server
+(test/wtserver.mjs, a Rust crate built to wasm and run on node:dgram; its
+outputs are checked in and rebuild byte for byte with
+test/wtserver/build.sh) is the far end for the same page natively and
+proxied, in both demo modes, and every answer is compared, with what the
+server saw of each session (its request's fields and SETTINGS, how each
+stream ended): a bidirectional stream echoed (every kind of buffer, a
+large write, its end), the server's own streams and its CONNECT request,
+a unidirectional stream each way, datagrams (echo, the numbers, one too
+large, one that is no buffer), a close by the page and two by the server
+(its capsule; and webtransport-go's, which resets the streams first), the
+server's reset and stop-sending and the page's, a refused session (404 and
+403), the protocol the server picks, a server that does not read, a
+certificate the WebPKI takes (through the proxy, the root the test
+transport gives epoxy), a hash that is not the certificate's, a session in
+a worker, and one the content blocker's list refuses, which the server
+never hears of through the proxy. Natively Chrome takes the server's
+certificate with a pinned hash, or with `--ignore-certificate-errors-spki-list`
+and `--origin-to-force-quic-on`.

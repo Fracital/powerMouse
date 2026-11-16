@@ -3,13 +3,17 @@
 // address, to the server a page names, past everything the proxy does: a
 // proxied page that constructed one reached the server natively. So no
 // realm of a proxied page has the browser's constructor: `WebTransport` is
-// a stand-in, and this suite holds it to two things.
+// a stand-in, whose sessions the transport carries (QUIC on a wisp UDP
+// stream; their streams and datagrams are webtransport-live's), and this
+// suite holds it to two things.
 //
 // Nothing leaves natively. A UDP socket of the suite's hears every
 // datagram sent to it and never answers. Natively a session to it is a
 // QUIC handshake it hears (the control, checked first for every way: a way
 // the browser itself has no WebTransport for is no way). Through the proxy
-// it hears nothing, whichever way the page reaches a constructor: `new`,
+// what it hears is the demo's wisp server's (test/sockets.mjs tells whose
+// socket sent each datagram), never the browser's, whichever way the page
+// reaches a constructor: `new`,
 // Reflect.construct with and without a new.target, the prototype's
 // `constructor`, another session's, a subclass, a bound function; in the
 // page, in a dedicated, a module, a blob, a nested, a shared and a service
@@ -44,6 +48,13 @@ import {
 	submitLanding,
 	submitOmni,
 } from '../lib.mjs';
+import { tally, watchSockets } from '../sockets.mjs';
+import {
+	webTransportClient,
+	wispReportsRefusal,
+} from '../webtransport-env.mjs';
+
+const sockets = await watchSockets();
 
 const bound = (socket) =>
 	new Promise((resolve) => socket.bind(0, '127.0.0.1', () => resolve(socket)));
@@ -57,8 +68,10 @@ const closedPort = await (async () => {
 /** a UDP port that hears and never answers */
 async function hearing() {
 	const socket = await bound(createSocket('udp4'));
-	const heard = { port: socket.address().port, datagrams: 0, socket };
-	socket.on('message', () => heard.datagrams++);
+	const heard = { port: socket.address().port, packets: [], socket };
+	socket.on('message', (message, from) =>
+		heard.packets.push(sockets.arrival(from.port)),
+	);
 	return heard;
 }
 
@@ -91,10 +104,36 @@ async function finish({ heard }, result) {
 	// what was sent while the page answered has arrived by now
 	await sleep(100);
 	heard.socket.close();
-	return { result, heard: heard.datagrams };
+	const senders = sockets.senders(heard.packets);
+	return {
+		result,
+		heard: senders.length,
+		browser: senders.filter((who) => who === 'browser').length,
+		senders: tally(senders),
+	};
 }
 
 const browser = await launch();
+
+// a stomp-h3 without a WebTransport client (one released before it had one)
+// leaves the stand-in alone: its sessions fail as ones whose server cannot
+// be reached, and nothing leaves at all
+if (!webTransportClient)
+	console.log(
+		'NOTE the stomp-h3 epoxy-transport ships has no WebTransport client: the stand-in is held to failing every session, with nothing sent',
+	);
+// a wisp server that reports a closed UDP port late makes a proxied session
+// to one fail late: there, how such a session ends is compared, and when is
+// listed (../webtransport-env.mjs)
+const wisp = webTransportClient
+	? await wispReportsRefusal(`${PROXY.replace(/^http/, 'ws')}wisp/`)
+	: { prompt: true, ms: [] };
+if (!wisp.prompt)
+	console.log(
+		`NOTE the wisp server reports a closed UDP port late (streams closed after ${wisp.ms.map((ms) => (ms === null ? 'never' : `${ms} ms`)).join(', ')}): sessions to a closed port are compared by how they end, not when`,
+	);
+/** how much later than natively a proxied session to a closed port may fail */
+const LATER_MS = 50;
 
 async function natively(file, query) {
 	const made = await run(file, query);
@@ -310,29 +349,59 @@ for (const [mode, base] of [
 		reaches.map(([query]) => proxied('webtransport.html', query)),
 	);
 	reaches.forEach(([, what], index) => {
-		const { result, heard } = reached[index];
+		const { result, heard, browser, senders } = reached[index];
 		if (!open[index]) {
-			// still nothing may leave
+			// still nothing may leave natively (the proxy's realm there is a
+			// secure context's, whose sessions the transport carries:
+			// docs/webtransport.md)
 			ok(
 				`${mode}: a session from ${what} sends nothing natively (the browser has none there)`,
+				browser === 0,
+				`${senders}, ${brief(result)}`,
+			);
+			return;
+		}
+		if (!webTransportClient) {
+			ok(
+				`${mode}: a session from ${what} sends nothing`,
 				heard === 0,
-				`${heard} datagrams, ${brief(result)}`,
+				`${senders} reached the server`,
+			);
+			ok(
+				`${mode}: and ends as one whose server cannot be reached`,
+				typeof result === 'string' &&
+					result.startsWith('rejected') &&
+					result.includes('WebTransportError') &&
+					result.includes('Opening handshake failed.') &&
+					result.includes('session'),
+				brief(result),
 			);
 			return;
 		}
 		ok(
 			`${mode}: a session from ${what} sends nothing natively`,
-			heard === 0,
-			`${heard} datagrams reached the server from the browser`,
+			browser === 0,
+			`${senders} reached the server`,
+		);
+		if (reaches[index][0].realm === 'nestedWorker') {
+			// a worker's worker has no transport (as for a WebSocket's;
+			// docs/webtransport.md): its session never starts
+			ok(
+				`${mode}: known difference: a nested worker's session never reaches the server`,
+				heard === 0,
+				senders,
+			);
+			return;
+		}
+		ok(
+			`${mode}: and reaches the server through the wisp server`,
+			heard > 0 && senders === `${heard} server`,
+			senders,
 		);
 		ok(
-			`${mode}: and ends as one whose server cannot be reached`,
-			typeof result === 'string' &&
-				result.startsWith('rejected') &&
-				result.includes('WebTransportError') &&
-				result.includes('Opening handshake failed.') &&
-				result.includes('session'),
-			brief(result),
+			`${mode}: and reads as natively, whose server never answers`,
+			result === nativeReaches[index].result,
+			`native ${brief(nativeReaches[index].result)} proxied ${brief(result)}`,
 		);
 	});
 
@@ -356,6 +425,52 @@ for (const [mode, base] of [
 			delete native.cloned;
 			delete result.cloned;
 		}
+		const [file, query] = compared[index];
+		// when the session ended is told apart from how
+		const nativeAfter = native.end?.after;
+		const after = result.end?.after;
+		for (const answer of [native, result])
+			if (answer.end?.after !== undefined)
+				answer.end = { ...answer.end, after: undefined };
+		const late =
+			!wisp.prompt &&
+			(file === 'webtransport-csp-ro.html' ||
+				['closed', 'closedEarly', 'pinned', 'throttle'].includes(query.case));
+		if (late) {
+			// how it ends, without what the page saw while it waited
+			const ending = (answer) =>
+				query.case === 'throttle'
+					? { last: answer.last, lost: answer.lost }
+					: file === 'webtransport-csp-ro.html'
+						? {
+								made: answer.made,
+								both: answer.both,
+								violations: answer.violations,
+								end: answer.end,
+							}
+						: {
+								end: answer.end,
+								lateClose: answer.lateClose,
+								lateCloseInfo: answer.lateCloseInfo,
+								protocol: answer.protocol,
+							};
+			const differ = differences(ending(native), ending(result));
+			ok(
+				`${mode}: ${what}: ends as natively`,
+				differ.length === 0,
+				differ.slice(0, 12).join('\n     '),
+			);
+			console.log(
+				`NOTE ${mode}: known difference: ${what}: ${after === undefined ? 'fails late' : `failed after ${after} ms, natively ${nativeAfter} ms`} (the wisp server reports the closed port late)`,
+			);
+			return;
+		}
+		if (after !== undefined && nativeAfter !== undefined)
+			ok(
+				`${mode}: ${what}: ends when natively`,
+				after <= nativeAfter + LATER_MS,
+				`after ${after} ms, natively ${nativeAfter} ms`,
+			);
 		const differ = differences(native, result);
 		ok(
 			`${mode}: ${what}: as natively`,
@@ -366,4 +481,5 @@ for (const [mode, base] of [
 	});
 }
 
+console.log(`the server heard: ${await sockets.stop()}`);
 await done(browser);

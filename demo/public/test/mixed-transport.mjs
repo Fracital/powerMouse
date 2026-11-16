@@ -25,8 +25,9 @@
 //   127.0.0.1:<port>. No real credentials are used; it exercises the
 //   write-and-navigate path with a dummy token.
 //
-// It also gives epoxy the certificate authority of the WebRTC suites' TURN
-// server over TLS (test/turn.mjs, the certificate in turn-ca.pem here).
+// It also gives epoxy the certificate authorities of the WebRTC suites' TURN
+// server over TLS (test/turn.mjs, the certificate in turn-ca.pem here) and
+// of the WebTransport suite's server (test/wtserver.mjs, webtransport-ca.pem).
 import EpoxyTransport from '../epoxy/index.mjs';
 
 const MIXED_HOST = /^(?:[\w-]+\.)*mixed\.test$/;
@@ -61,10 +62,13 @@ function fixtureURL(url) {
 // (test/turn.mjs), which epoxy takes besides its own roots: the suites'
 // turns: servers are reached as the real ones are, through epoxy's TLS
 const TURN_CA = new URL('./turn-ca.pem', import.meta.url);
+const WEBTRANSPORT_CA = new URL('./webtransport-ca.pem', import.meta.url);
 
 export default class MixedTestTransport extends EpoxyTransport {
 	async init() {
-		this.opts.pem_files ??= [await (await fetch(TURN_CA)).text()];
+		this.opts.pem_files ??= await Promise.all(
+			[TURN_CA, WEBTRANSPORT_CA].map(async (url) => (await fetch(url)).text()),
+		);
 		return super.init();
 	}
 	request(remote, ...rest) {

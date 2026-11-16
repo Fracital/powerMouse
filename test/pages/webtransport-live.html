@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>WEBTRANSPORT LIVE</title>
+	</head>
+	<body>
+		<script src="webtransport-live.js"></script>
+		<script>
+			// One case of webtransport-live.js (?case), in this page or, with
+			// ?realm=worker, in a dedicated worker. The answer is window.__wt.
+			const params = Object.fromEntries(new URLSearchParams(location.search));
+			(async () => {
+				let result;
+				if (params.realm === 'worker') {
+					const worker = new Worker('webtransport-live.js');
+					result = await new Promise((resolve) => {
+						worker.onmessage = (event) => resolve(event.data);
+						worker.onerror = (event) =>
+							resolve({ probeError: 'worker error: ' + event.message });
+						worker.postMessage({ name: params.case, params });
+					});
+				} else result = await wtLive(params.case, params);
+				window.__wt = { run: params.run, result };
+			})();
+		</script>
+	</body>
+</html>

@@ -8,6 +8,9 @@
 // `__stompShared` (the snapshots, the client, the Proxy module): only the
 // files build.js lists in DEFERRED_FILES are the parts' own.
 //
+// (and what carries WebTransport sessions, ../webTransport.ts, once a
+// realm's first session starts its handshake)
+//
 // What belongs here: code that runs only once something has happened (a
 // first read, a first call, a surface turned on) and may then wait for one
 // synchronous evaluation, never a hook that must be in place before the
@@ -16,10 +19,16 @@
 // it): constants and functions only, as the bundle's code reads what it
 // needs when it is called.
 import { cookieStoreMethods } from '../cookieStoreMethods';
+import { carry as carryWebTransport } from '../webTransport';
 import FingerprintModule from './modules/Fingerprint';
 import { emulateServiceWorker } from './modules/serviceWorkerEmulation';
 
-const parts = { cookieStoreMethods, FingerprintModule, emulateServiceWorker };
+const parts = {
+	cookieStoreMethods,
+	FingerprintModule,
+	emulateServiceWorker,
+	carryWebTransport,
+};
 
 export type DeferredParts = typeof parts;
 

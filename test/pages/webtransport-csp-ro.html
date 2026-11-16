@@ -81,9 +81,19 @@
 					both = 'threw ' + describe(e);
 				}
 				await sleep(700);
+				// how the session ended, however long that took
+				const end = t
+					? await Promise.race([
+							t.closed.then(
+								() => 'closed fulfilled',
+								(e) => 'closed rejected ' + describe(e),
+							),
+							sleep(8000).then(() => 'pending'),
+						])
+					: null;
 				window.__wt = {
 					run: params.run,
-					result: { made, both, log, violations },
+					result: { made, both, log, violations, end },
 				};
 			})();
 		</script>

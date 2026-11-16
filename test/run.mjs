@@ -74,6 +74,8 @@ const SUITE_ENV = {
 	'sop-partitions': { STOMP_TEST_TRANSPORT: '1' },
 	'site-facts': { STOMP_TEST_TRANSPORT: '1' },
 	'agent-cluster': { STOMP_TEST_TRANSPORT: '1' },
+	// epoxy that takes the WebTransport fixture's certificate authority
+	'webtransport-live': { STOMP_TEST_TRANSPORT: '1' },
 	// a discord.com fixture host, so the "Sign in with token" gate matches
 	'demo-token': { STOMP_TEST_TRANSPORT: '1' },
 	// the host's pages cross-origin isolated (the demo server's default)

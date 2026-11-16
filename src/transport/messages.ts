@@ -797,7 +797,15 @@ export type SWbound = {
 	 * the controller asks from its handshake hook, since a socket never passes
 	 * the service worker (docs/adblock.md). False while no engine answers.
 	 */
-	socket: [{ url: string; source: string }, boolean];
+	socket: [
+		{
+			url: string;
+			source: string;
+			/** a WebTransport session (an https URL) rather than a WebSocket */
+			type?: 'webtransport';
+		},
+		boolean,
+	];
 	/**
 	 * which of these clients no longer exist: the controller forgets the
 	 * frame it kept for each (the request log's attribution)
@@ -964,6 +972,50 @@ export type WireResponse =
 export type StreamMessage =
 	{ type: 'data'; data: ArrayBuffer } | { type: 'close'; reason?: string };
 
+/**
+ * A page's WebTransport session on a port of its own
+ * (docs/webtransport.md). `id` names a stream: the page numbers the ones
+ * it opens from 1 up, the host the server's from -1 down. Buffers are
+ * transferred. The page asks for each chunk it reads (`p`) and the host
+ * acknowledges each one written once QUIC took it (`a`), so the browser's
+ * backpressure is QUIC's flow control on both sides.
+ */
+export type WebTransportMessage =
+	// page -> host
+	/** a datagram to send */
+	| { t: 'd'; b: ArrayBuffer }
+	/** open a stream (bidirectional unless `uni`) */
+	| { t: 'o'; id: number; uni?: boolean }
+	/** write a chunk to a stream; acknowledged with `a` */
+	| { t: 'w'; id: number; b: ArrayBuffer }
+	/** finish a stream's sending side; acknowledged with `a` */
+	| { t: 'f'; id: number }
+	/** reset a stream's sending side (`r`) or stop its receiving side (`s`) with a WebTransport code */
+	| { t: 'r' | 's'; id: number; code: number }
+	/** the page's reader took every chunk of this stream it was sent (the host reads ahead of it at most 256 KiB) */
+	| { t: 'p'; id: number }
+	/** close the session */
+	| { t: 'c'; code: number; reason: string }
+	// host -> page
+	/** a write or a finish of this stream is done (`a`); the stream the page opened is open (`n`) */
+	| { t: 'a' | 'n'; id: number }
+	/** a stream the server opened */
+	| { t: 'i'; id: number; uni?: boolean }
+	/** a chunk of a stream as it arrived, or (no `b`) its end */
+	| { t: 'b'; id: number; b?: ArrayBuffer }
+	/**
+	 * a stream failed: its sending side (`w`, STOP_SENDING) or its
+	 * receiving side (RESET_STREAM), with the peer's WebTransport code (0
+	 * for one that is no WebTransport code), or none (the session is gone)
+	 */
+	| { t: 'e'; id: number; w?: boolean; code?: number }
+	/** a datagram that arrived */
+	| { t: 'D'; b: ArrayBuffer }
+	/** the session ended cleanly: the server's close, or the page's own */
+	| { t: 'Z'; code: number; reason: string }
+	/** the session's connection was lost */
+	| { t: 'L' };
+
 /** implemented by the transport host, called by RemoteTransport */
 export type TransportToHost = {
 	/** a wisp UDP stream to `host:port` on `port`; fails when the transport has no UDP (libcurl) or the server refuses it */
@@ -975,6 +1027,26 @@ export type TransportToHost = {
 	tcp: [
 		{ host: string; port: number; tls: boolean; stream: MessagePort },
 		{ result: 'success' } | { result: 'failure'; error: string },
+	];
+	/**
+	 * a WebTransport session to `url` (https) for a page of `origin`, served
+	 * on `port` (WebTransportMessage) once it is up. `hashes` are the
+	 * SHA-256 values of the page's serverCertificateHashes. Fails when the
+	 * transport has no UDP or no WebTransport client, the content blocker
+	 * refuses it, or the handshake fails
+	 */
+	webtransport: [
+		{
+			url: string;
+			origin: string;
+			protocols: string[];
+			hashes: ArrayBuffer[];
+			port: MessagePort;
+		},
+		(
+			| { result: 'success'; protocol: string; maxDatagramSize: number }
+			| { result: 'failure'; error: string }
+		),
 	];
 	request: [
 		{
@@ -1047,6 +1119,8 @@ export const SOCKET_PARTITION = '$stomp$partition';
 export type WorkerToController = {
 	/** the headers a WebSocket handshake goes out with (the controller adds the jar's Cookie); rejects with HANDSHAKE_REFUSED to refuse the socket */
 	decorate: [{ url: string; headers: RawHeaders }, RawHeaders];
+	/** whether a page of `origin` may open a WebTransport session to `url` (false: the built-in blocker's lists refuse it) */
+	admit: [{ url: string; origin: string }, boolean];
 	/** KEEPALIVE_MS went by: the controller keeps the service worker running */
 	tick: [];
 };

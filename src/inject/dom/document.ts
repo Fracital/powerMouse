@@ -2,6 +2,7 @@ import type { FpSurface } from '../../blocker/types';
 import { createClientFactory } from '../Client';
 import Module from '../Module';
 import baseModules from '../modules';
+import { webTransportParts } from '../webTransportParts';
 import DocumentClient from './Client';
 import { deferred } from './deferred';
 import AdblockModule from './modules/Adblock';
@@ -58,6 +59,10 @@ import XMLHttpRequestModule from './modules/XMLHttpRequest';
  * evaluate it. Made when the client applies its modules, in this one's
  * place; it has no state before that.
  */
+// a document's sessions are carried by a deferred part, evaluated with its
+// realm's first one
+webTransportParts.carry = () => deferred().carryWebTransport;
+
 class FingerprintStandIn extends Module<DocumentClient> {
 	apply() {
 		const Fingerprint = deferred().FingerprintModule;

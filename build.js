@@ -262,6 +262,7 @@ const DEFERRED_FILES = new Set(
 		'src/inject/dom/modules/Fingerprint.ts',
 		'src/inject/dom/modules/serviceWorkerEmulation.ts',
 		'src/inject/serviceWorkerObjects.ts',
+		'src/inject/webTransport.ts',
 	].map((file) => resolve(file)),
 );
 const DEFERRED_ENTRY = 'src/inject/dom/deferredParts.ts';

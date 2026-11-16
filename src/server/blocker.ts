@@ -609,8 +609,16 @@ export class Blocker {
 	 * uBlock Origin, and the other is not applied. False while no engine
 	 * answers, as for any request that is not a navigation.
 	 */
-	socket(url: string, source: string): boolean {
-		return !!this.check(url, source, 'websocket', 'GET')?.block;
+	socket(url: string, source: string, type?: 'webtransport'): boolean {
+		// a WebTransport session: adblock-rust has no type of its own for it
+		// (Chrome's blocker has `webtransport`), so only the rules that name
+		// no type apply to it, as they do in Chrome's
+		return !!this.check(
+			url,
+			source,
+			type ? 'other' : 'websocket',
+			type ? 'CONNECT' : 'GET',
+		)?.block;
 	}
 	/**
 	 * The `$csp=` policies of the lists for a document at `url` (a nested

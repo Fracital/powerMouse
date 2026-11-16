@@ -61,7 +61,20 @@
 	/** one session to `url`, and what the page sees of it */
 	async function session(WT, url, options, how) {
 		const log = [];
+		const born = performance.now();
 		const t = options ? new WT(url, options) : new WT(url);
+		const outcome = (settled) =>
+			settled.status === 'fulfilled'
+				? 'fulfilled ' + JSON.stringify(settled.value)
+				: 'rejected ' + describe(settled.reason);
+		// how the session ended and when, whatever was asked of it meanwhile
+		const ended = Promise.allSettled([t.ready, t.closed]).then(
+			([ready, closed]) => ({
+				ready: outcome(ready),
+				closed: outcome(closed),
+				after: Math.round(performance.now() - born),
+			}),
+		);
 		const waits = [];
 		const watch = (name, promise, ms) =>
 			waits.push(
@@ -124,6 +137,7 @@
 		});
 		out.protocol = t.protocol;
 		out.log = log;
+		out.end = await Promise.race([ended, sleep(8000).then(() => 'pending')]);
 		return out;
 	}
 

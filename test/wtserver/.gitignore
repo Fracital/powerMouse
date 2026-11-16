@@ -1,0 +1,4 @@
+# made in the build container (compile.sh), never on this side
+/patched/
+/target/
+/out/

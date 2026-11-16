@@ -15,6 +15,7 @@ import {
 	WebSocketMessage,
 } from './messages';
 import { RpcHelper } from './rpc';
+import { serveWebTransport, type AdmitSession } from './webTransportHost';
 
 /**
  * The headers a WebSocket handshake goes out with, given the page's. A hook
@@ -214,6 +215,8 @@ export default function serveTransport(
 	port: MessagePort,
 	getTransport: () => ProxyTransport,
 	decorate?: DecorateHandshake,
+	/** asked before a page's WebTransport session opens (the built-in blocker) */
+	admit?: AdmitSession,
 ): () => void {
 	const post = (data: unknown, transfer: Transferable[] = []) =>
 		postToPort(port, data, transfer);
@@ -307,6 +310,8 @@ export default function serveTransport(
 
 				return [await result, []];
 			},
+			webtransport: async (session) =>
+				serveWebTransport(await readyTransport(), session, admit),
 			udp: async ({ host, port: remotePort, stream }) => {
 				const transport = await readyTransport();
 				const client = rawClient(transport);

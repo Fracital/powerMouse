@@ -273,7 +273,7 @@ function registerController(
 				await heldModules();
 				return [suffixListPin(), []];
 			},
-			socket: async ({ url, source }) => {
+			socket: async ({ url, source, type }) => {
 				// a WebSocket never passes this worker: the controller asks from
 				// its handshake hook and refuses the socket on a yes
 				// a WebSocket the site's shields let through (shields down, or the
@@ -287,12 +287,13 @@ function registerController(
 					socketHost = '';
 				}
 				const blocked =
-					srv.shields.blocks(socketHost) && !!srv.blocker?.socket(url, source);
+					srv.shields.blocks(socketHost) &&
+					!!srv.blocker?.socket(url, source, type);
 				if (blocked && config.requestLog)
 					report({
 						url,
-						method: 'GET',
-						destination: 'websocket',
+						method: type ? 'CONNECT' : 'GET',
+						destination: type ?? 'websocket',
 						status: 0,
 						ms: 0,
 						cached: false,

@@ -1,0 +1,46 @@
+# The WebTransport fixture server of the webtransport suite (test/wtserver.mjs
+# runs it under Node): QUIC (quinn), HTTP/3 and WebTransport draft 02 as
+# Chrome speaks it, built to wasm32 by build.sh and committed, so CI runs it
+# with nothing to install. Not a member of rust/ (nothing of STomp ships it);
+# its own lockfile, --locked builds.
+[package]
+name = "wtserver"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+bytes = "1"
+futures-channel = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+js-sys = "=0.3.77"
+quinn = { version = "=0.11.12", default-features = false, features = ["rustls-ring"] }
+# for RandomConnectionIdGenerator, which quinn does not re-export
+quinn-proto = { version = "=0.11.19", default-features = false }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+send_wrapper = "0.6"
+# compiled out: no log text reaches the module
+tracing = { version = "0.1", default-features = false, features = ["release_max_level_off"] }
+wasm-bindgen = "=0.2.100"
+wasm-bindgen-futures = "=0.4.50"
+web-time = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+debug = false
+strip = true
+
+# quinn-proto 0.11.19 as published plus patches/quinn-proto-0.11.19.patch
+# (its CID-space check overflows a 32-bit usize, so a 4-byte CID, quic-go's,
+# refused every connection on wasm32); compile.sh unpacks the checked crate
+# to patched/ in the build container
+[patch.crates-io]
+quinn-proto = { path = "patched/quinn-proto" }

@@ -6,6 +6,7 @@ import {
 } from './messages';
 import { RpcHelper } from './rpc';
 import type { DecorateHandshake } from './serveTransport';
+import type { AdmitSession } from './webTransportHost';
 
 /** how long the worker gets to start and import the transport module before the controller gives up on it */
 const BOOT_TIMEOUT_MS = 30000;
@@ -24,7 +25,12 @@ export default class TransportWorker {
 	#rpc: RpcHelper<WorkerToController, WorkerBound>;
 	/** rejects when the worker script could not start (a 404, a parse error) */
 	#failed: Promise<never>;
-	constructor(url: URL, decorate: DecorateHandshake, tick: () => void) {
+	constructor(
+		url: URL,
+		decorate: DecorateHandshake,
+		tick: () => void,
+		admit?: AdmitSession,
+	) {
 		// a classic worker (see build.js: emscripten's environment detection)
 		this.#worker = new Worker(url);
 		this.#rpc = new RpcHelper<WorkerToController, WorkerBound>(
@@ -34,6 +40,10 @@ export default class TransportWorker {
 					[],
 				],
 				tick: async () => tick(),
+				admit: async ({ url, origin }) => [
+					admit ? await admit(new URL(url), origin) : true,
+					[],
+				],
 			},
 			TRANSPORT_WORKER_RPC,
 			(data, transfer) => this.#worker.postMessage(data, transfer),

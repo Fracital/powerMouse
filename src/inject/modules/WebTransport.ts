@@ -1,6 +1,10 @@
+import { postToPort } from '../../transport/messages';
+import { closePort, onPort, privateChannel } from '../../transport/ports';
 import Client from '../Client';
 import Module from '../Module';
 import { withStack } from '../nativeErrors';
+import type { Context, Property, Session } from '../webTransportLazy';
+import { webTransportParts } from '../webTransportParts';
 import ProxyModule from './Proxy';
 
 /*
@@ -14,10 +18,14 @@ import ProxyModule from './Proxy';
  * prototype, whose members are the browser's functions wrapped to answer
  * for a session of ours and to run as they are for anything else.
  *
- * Nothing carries a session through the transport yet, so every session
- * ends as the browser's does when its server cannot be reached: `closed`
- * and then `ready` reject with "Opening handshake failed.", after the wait
- * Chrome's own throttle gives a page's handshakes.
+ * A session's handshake starts when Chrome's own throttle of a page's
+ * handshakes would start it, and from there it is carried through the
+ * transport (src/transport/webTransportHost.ts: stomp-h3 over a wisp UDP
+ * stream) by a library of its own (../webTransport.ts, the asset
+ * `webTransport`), which the bundle loads when a realm's first session
+ * starts. One that does not come up ends as the browser's does when its
+ * server cannot be reached: `closed` and then `ready` reject with "Opening
+ * handshake failed.".
  *
  * A frame that never constructs one pays for the constructor's wrapper and
  * nothing else: the prototypes are wrapped, and the other WebTransport
@@ -25,36 +33,8 @@ import ProxyModule from './Proxy';
  */
 
 type Realm = Record<string, any>;
-type Settle = (value?: unknown) => void;
-/**
- * `ready` or `closed`: a promise made when the page first reads it, as the
- * browser makes its own (one nobody read is never an unhandled rejection)
- */
-interface Property {
-	promise?: Promise<unknown>;
-	settle?: [Settle, Settle];
-	done?: [fulfilled: boolean, value: unknown];
-}
 /** one of a session's four streams: datagrams in and out, the server's bidirectional and unidirectional streams */
 type Part = 0 | 1 | 2 | 3;
-
-interface Session {
-	/** it connects no more: it failed, was closed, or the page's policy refused it */
-	over: boolean;
-	/** what it ended with, which its streams end with too (a refused one's streams stay as they were) */
-	error?: unknown;
-	ready: Property;
-	closed: Property;
-	/** the page's createBidirectionalStream and createUnidirectionalStream calls a session keeps while it connects (Chrome 155 on) */
-	creations: Settle[];
-	datagrams?: object;
-	streams: (ReadableStream | WritableStream | undefined)[];
-	controllers: ({ error(reason: unknown): void } | undefined)[];
-	/** datagrams the page wrote that wait for the session */
-	writes: Settle[];
-	/** maxDatagramSize, then the ages and the buffer sizes the page set, as `Duplex` numbers them */
-	numbers: (number | null)[];
-}
 
 // one table for every realm this bundle covers (a session's members work
 // through any of those realms' prototypes, as the browser's do), made with
@@ -245,16 +225,24 @@ function standIn(client: Client, Native: Function, proxyModule: ProxyModule) {
 			if (done) (done[0] ? resolve : reject)(done[1]);
 			else property.settle = [resolve, reject];
 		}));
-	const reject = (property: Property, reason: unknown) => {
+	const settle = (property: Property, fulfilled: boolean, value: unknown) => {
 		if (property.done) return;
-		property.done = [false, reason];
-		property.settle?.[1](reason);
+		property.done = [fulfilled, value];
+		property.settle?.[+!fulfilled](value);
 	};
+	const reject = (property: Property, reason: unknown) =>
+		settle(property, false, reason);
+	/** the bytes of a buffer or a view of any realm, copied now */
+	const copy = (value: ArrayBuffer | ArrayBufferView) =>
+		isView(value)
+			? new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice()
+			: new Uint8Array(value).slice();
 
 	/** the constructor's options, read as Chrome reads them: `protocols`, then `serverCertificateHashes` */
-	const options = (value: unknown): string[] => {
+	const options = (value: unknown): [string[], ArrayBuffer[]] => {
 		const context = "construct 'WebTransport'";
-		if (value === undefined || value === null) return [];
+		const values: ArrayBuffer[] = [];
+		if (value === undefined || value === null) return [[], values];
 		if (!isObject(value))
 			throw failed(context, notOfType('WebTransportOptions'));
 		const given = value as Record<string, unknown>;
@@ -277,23 +265,30 @@ function standIn(client: Client, Native: Function, proxyModule: ProxyModule) {
 				if (!isObject(item)) throw failed(reads, notOfType('WebTransportHash'));
 				const hash = item as Record<string, unknown>;
 				const algorithm = hash.algorithm;
-				if (algorithm !== undefined)
-					primitive(algorithm, reading(reads, 'algorithm', 'WebTransportHash'));
+				const name =
+					algorithm === undefined
+						? undefined
+						: primitive(
+								algorithm,
+								reading(reads, 'algorithm', 'WebTransportHash'),
+							);
 				const bytes = hash.value;
 				if (bytes !== undefined && !isBuffer(bytes))
 					throw failed(
 						reading(reads, 'value', 'WebTransportHash'),
 						notOfType('(ArrayBuffer or ArrayBufferView)'),
 					);
+				if (name === 'sha-256' && bytes !== undefined)
+					values.push(copy(bytes as ArrayBuffer).buffer);
 			});
-		return names;
+		return [names, values];
 	};
 
 	/** what ends a session: Chrome's order (WebTransport::Cleanup) */
-	const end = (session: Session, message: string) => {
+	const end = (session: Session, message: string, made?: object) => {
 		if (session.over) return;
 		session.over = true;
-		const error = (session.error = sessionError(message));
+		const error = (session.error = made ?? sessionError(message));
 		if (session.creations.length) {
 			const closed = withStack(
 				new DOMException(
@@ -301,12 +296,12 @@ function standIn(client: Client, Native: Function, proxyModule: ProxyModule) {
 					'InvalidStateError',
 				),
 			);
-			for (const refuse of session.creations.splice(0)) refuse(closed);
+			for (const made of session.creations.splice(0)) made[1](closed);
 		}
 		const { controllers } = session;
 		controllers[0]?.error(error);
 		controllers[1]?.error(error);
-		for (const refuse of session.writes.splice(0)) refuse(error);
+		for (const write of session.writes.splice(0)) write[2](error);
 		reject(session.closed, error);
 		reject(session.ready, error);
 		controllers[2]?.error(error);
@@ -330,18 +325,26 @@ function standIn(client: Client, Native: Function, proxyModule: ProxyModule) {
 								if (!isBuffer(chunk))
 									throw withStack(
 										new TypeError(
-											'Datagram is not an ArrayBuffer or ArrayBufferView type.',
+											"Failed to execute 'write' on 'WritableStreamDefaultWriter': Datagram is not an ArrayBuffer or ArrayBufferView type.",
 										),
 									);
+								const bytes = copy(chunk as ArrayBuffer);
+								if (session.live) return session.live.datagram(bytes);
 								return new Promise((resolve, refuse) => {
-									session.writes.push(refuse);
+									session.writes.push([bytes, resolve, refuse]);
 								});
 							},
 						},
 						{ highWaterMark: 1 },
 					)
 				: part === 0
-					? new realm.ReadableStream({ type: 'bytes', start })
+					? new realm.ReadableStream({
+							type: 'bytes',
+							start,
+							pull: () =>
+								session.live?.pull() ??
+								new Promise<void>((resolve) => (session.pending = resolve)),
+						})
 					: new realm.ReadableStream({ start }, { highWaterMark: 1 }));
 	};
 
@@ -349,7 +352,7 @@ function standIn(client: Client, Native: Function, proxyModule: ProxyModule) {
 		const input = (
 			primitive(args[0], "construct 'WebTransport'") as string
 		).toWellFormed();
-		const protocols = options(args[1]);
+		const [protocols, hashes] = options(args[1]);
 		// (no base: a relative URL is none)
 		let url: URL;
 		try {
@@ -397,6 +400,9 @@ function standIn(client: Client, Native: Function, proxyModule: ProxyModule) {
 			controllers: [],
 			writes: [],
 			numbers: [1024, null, null, 1, 1],
+			url: url.href,
+			protocols,
+			hashes,
 		};
 		const made = Reflect.construct(Object, [], newTarget) as object;
 		sessions.set(made, session);
@@ -411,14 +417,21 @@ function standIn(client: Client, Native: Function, proxyModule: ProxyModule) {
 			return made;
 		}
 
-		// no transport carries a session yet: it fails as one whose server
-		// cannot be reached, when Chrome would have started its handshake
+		// the handshake starts when Chrome's would; one that failed, or was
+		// closed after it started, keeps its place for five minutes
 		const queued = throttle(() => {
 			if (session.over) return release(0);
-			later(() => {
-				release(PENALTY_MS);
-				end(session, 'Opening handshake failed.');
-			}, 1);
+			// (what carries it is evaluated now, the first time: the document
+			// bundle's is a deferred part, ../webTransportParts.ts)
+			Promise.resolve()
+				.then(() => webTransportParts.carry!()(context, session))
+				.then(
+					(up) => release(up ? 0 : PENALTY_MS),
+					() => {
+						release(PENALTY_MS);
+						end(session, 'Opening handshake failed.');
+					},
+				);
 		});
 		if (!queued) later(() => end(session, 'Connection lost.'), 1);
 		return made;
@@ -430,6 +443,8 @@ function standIn(client: Client, Native: Function, proxyModule: ProxyModule) {
 		return new Promise((resolve, refuse) => {
 			if (given !== undefined && given !== null && !isObject(given))
 				throw failed(context, notOfType('WebTransportSendStreamOptions'));
+			const uni = name === 'createUnidirectionalStream';
+			if (session.live && !session.over) return resolve(session.live.open(uni));
 			if (!modern)
 				throw withStack(
 					new DOMException(
@@ -444,7 +459,7 @@ function standIn(client: Client, Native: Function, proxyModule: ProxyModule) {
 						'InvalidStateError',
 					),
 				);
-			session.creations.push(refuse);
+			session.creations.push([resolve, refuse, uni]);
 		});
 	};
 
@@ -522,7 +537,7 @@ function standIn(client: Client, Native: Function, proxyModule: ProxyModule) {
 	hook(Native.prototype, sessions, {
 		ready: { get: (session: Session) => promiseOf(session.ready) },
 		closed: { get: (session: Session) => promiseOf(session.closed) },
-		protocol: { get: () => '' },
+		protocol: { get: (session: Session) => session.protocol ?? '' },
 		datagrams: {
 			get: (session: Session) => {
 				if (!session.datagrams) {
@@ -540,21 +555,27 @@ function standIn(client: Client, Native: Function, proxyModule: ProxyModule) {
 		incomingUnidirectionalStreams: part(3),
 		close: {
 			value: (session: Session, info?: unknown) => {
+				const read: unknown[] = [0, ''];
 				if (info !== undefined && info !== null) {
 					const context = "execute 'close' on 'WebTransport'";
 					if (!isObject(info))
 						throw failed(context, notOfType('WebTransportCloseInfo'));
 					// read as the browser reads them, for what a getter does
-					for (const name of ['closeCode', 'reason']) {
+					['closeCode', 'reason'].forEach((name, index) => {
 						const value = (info as Record<string, unknown>)[name];
 						if (value !== undefined)
-							primitive(
+							read[index] = primitive(
 								value,
 								reading(context, name, 'WebTransportCloseInfo'),
-								name === 'reason' ? 'string' : 'number',
+								index ? 'string' : 'number',
 							);
-					}
+					});
 				}
+				if (session.live && !session.over)
+					return session.live.close(
+						Number(read[0]) >>> 0,
+						(read[1] as string).toWellFormed(),
+					);
 				end(session, 'close() is called while connecting.');
 			},
 		},
@@ -586,6 +607,28 @@ function standIn(client: Client, Native: Function, proxyModule: ProxyModule) {
 		);
 		Reflect.defineProperty(NativeError.prototype, 'source', source);
 	}
+	const context: Context = {
+		realm,
+		origin: client.url.url.origin,
+		client: client as unknown as Context['client'],
+		ports: { privateChannel, onPort, post: postToPort, closePort },
+		natives: {
+			Promise,
+			Uint8Array: realm.Uint8Array as Uint8ArrayConstructor,
+			RangeError,
+			TypeError,
+		},
+		isBuffer,
+		copy,
+		end,
+		settle,
+		sessionError,
+		withStack,
+		hook,
+		stream,
+		modern,
+		Reflect,
+	};
 	return construct;
 }
 

@@ -1354,6 +1354,7 @@ export class StompController extends EventTarget {
 				url,
 				this.#handshakeHeaders,
 				this.#keepAlive,
+				this.#admitSession,
 			);
 			await worker.init(resolvedModule(descriptor));
 			this.#worker = worker;
@@ -1774,6 +1775,7 @@ export class StompController extends EventTarget {
 							transport.port1,
 							() => this.transport,
 							this.#handshakeHeaders,
+							this.#admitSession,
 						);
 					// with `rewriter: 'wasm'` the worker rewrites what it evaluates
 					// in the modules compiled here, as a page's dedicated worker
@@ -1818,7 +1820,12 @@ export class StompController extends EventTarget {
 					// worker when there is one, so the page's sockets run off-thread too
 					if (this.#worker) this.#worker.servePort(port);
 					else
-						serveTransport(port, () => this.transport, this.#handshakeHeaders);
+						serveTransport(
+							port,
+							() => this.transport,
+							this.#handshakeHeaders,
+							this.#admitSession,
+						);
 				},
 				request: async (info) => {
 					// a worker's request is its creator's frame's (info.owner)
@@ -1888,6 +1895,7 @@ export class StompController extends EventTarget {
 				port,
 				() => this.transport,
 				this.#handshakeHeaders,
+				this.#admitSession,
 			);
 		if (this.#standby?.port === port) this.#standby.stopServing = stopServing;
 		else this.#stopServing = stopServing;
@@ -2018,6 +2026,23 @@ export class StompController extends EventTarget {
 		return typeof jar === 'string' && jar
 			? [...headers, ['Cookie', jar]]
 			: headers;
+	};
+	/**
+	 * Whether a page of `origin` may open a WebTransport session to `url`:
+	 * a session never passes the service worker either, so the built-in
+	 * blocker is asked as for a WebSocket (docs/adblock.md). No answer lets
+	 * it go
+	 */
+	#admitSession = async (url: URL, origin: string): Promise<boolean> => {
+		if (!this.#adblock || !this.isReady || !this.#rpc) return true;
+		const blocked = await this.#rpc
+			.call('socket', {
+				url: url.href,
+				source: origin === 'null' ? '' : origin,
+				type: 'webtransport',
+			})
+			.catch(() => false);
+		return !blocked;
 	};
 	/** resolves once the service worker has created a server for this controller */
 	async wait(): Promise<void> {

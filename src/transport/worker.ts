@@ -53,6 +53,7 @@ const rpc = new RpcHelper<WorkerBound, WorkerToController>(
 				() => transport!,
 				async (url, headers) =>
 					rpc.call('decorate', { url: url.href, headers }),
+				async (url, origin) => rpc.call('admit', { url: url.href, origin }),
 			);
 		},
 	},

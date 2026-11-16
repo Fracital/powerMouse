@@ -1,0 +1,19 @@
+--- a/src/endpoint.rs
++++ b/src/endpoint.rs
+@@ -947,11 +947,13 @@
+     /// We leave some space unused so that `new_cid` can be relied upon to finish quickly. We don't
+     /// bother to check when CID longer than 4 bytes are used because 2^40 connections is a lot.
+     fn cids_exhausted(&self) -> bool {
++        // in u64: 2^32 overflows a 32-bit usize (wasm32), which read every
++        // 4-byte CID space as exhausted and refused every connection
+         self.local_cid_generator.cid_len() <= 4
+             && self.local_cid_generator.cid_len() != 0
+-            && (2usize.pow(self.local_cid_generator.cid_len() as u32 * 8)
+-                - self.index.connection_ids.len())
+-                < 2usize.pow(self.local_cid_generator.cid_len() as u32 * 8 - 2)
++            && (2u64.pow(self.local_cid_generator.cid_len() as u32 * 8)
++                - self.index.connection_ids.len() as u64)
++                < 2u64.pow(self.local_cid_generator.cid_len() as u32 * 8 - 2)
+     }
+ }
+ 
