@@ -1285,6 +1285,12 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A worker's synchronous XMLHttpRequest fires no loadstart, and one that
+  fails with a network error fires nothing and throws Chrome's
+  NetworkError from send() ("Failed to execute 'send' on
+  'XMLHttpRequest': Failed to load '<url>'.", the page's URL), as
+  natively. It fired loadstart, and error and loadend for a network
+  error. (csp-worker-requests, natively against both modes on Chrome 157.)
 - A frame of another site no longer reaches a page through the browser's
   own methods that read a window as an array-like. Array.prototype's
   methods called with a window as `this` (`Array.prototype.at.call(window,

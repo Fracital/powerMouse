@@ -486,26 +486,26 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 						this.#onHeaders(undefined, response, final);
 						this.#onDone(undefined, response, buffer);
 					} catch (error) {
-						// the timeout ends a synchronous request with no event:
-						// send() throws, as natively
-						if ((error as { name?: unknown } | null)?.name === 'TimeoutError') {
-							this.#readyState = DONE;
-							this.#status = 0;
-							this.#statusText = '';
-							this.#body = null;
-							this.#response =
-								this.#responseType === '' || this.#responseType === 'text'
-									? ''
-									: null;
-							this.#responseText = '';
-							throw withStack(
-								new that.client.global.DOMException(
-									`Failed to execute 'send' on 'XMLHttpRequest': Failed to load '${this.#sentURL}'.`,
-									'TimeoutError',
-								),
-							);
-						}
-						this.#onDone(error);
+						// a synchronous request that fails (its timeout, a network
+						// error) ends with no event: send() throws, naming the
+						// page's URL, as natively
+						this.#readyState = DONE;
+						this.#status = 0;
+						this.#statusText = '';
+						this.#body = null;
+						this.#response =
+							this.#responseType === '' || this.#responseType === 'text'
+								? ''
+								: null;
+						this.#responseText = '';
+						throw withStack(
+							new that.client.global.DOMException(
+								`Failed to execute 'send' on 'XMLHttpRequest': Failed to load '${this.#sentURL}'.`,
+								(error as { name?: unknown } | null)?.name === 'TimeoutError'
+									? 'TimeoutError'
+									: 'NetworkError',
+							),
+						);
 					}
 				}
 			}
@@ -620,9 +620,12 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 								0);
 				}
 
-				this.dispatchEvent(new ProgressEvent('loadstart'));
-				if (this.#bodySize)
-					this.#upload.dispatchEvent(new ProgressEvent('loadstart'));
+				// (a synchronous request fires none, natively)
+				if (this.#async) {
+					this.dispatchEvent(new ProgressEvent('loadstart'));
+					if (this.#bodySize)
+						this.#upload.dispatchEvent(new ProgressEvent('loadstart'));
+				}
 				if (this.#async && this.#timeout > 0)
 					this.#timer = setTimeout(() => {
 						if (this.#readyState === DONE) return;
