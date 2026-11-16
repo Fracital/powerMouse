@@ -5,8 +5,9 @@
 import type { Config } from './config';
 import { helperNames } from './helperNames';
 import { injectWorkerJS } from './routeURL';
-import { BARE_SPECIFIER, type ScriptType } from './scriptRoutes';
+import { BARE_SPECIFIER, isModuleType, type ScriptType } from './scriptRoutes';
 import type StompURL from './StompURL';
+import { workletAccess } from './workletLead';
 
 /**
  * What runs before a script's own code, after its directive prologue: a
@@ -20,7 +21,7 @@ export function scriptLead(
 	preamble: string,
 ): string {
 	const names = helperNames(config);
-	const isModule = type === 'genericModule' || type === 'workerModule';
+	const isModule = isModuleType(type);
 	const isWorker = type === 'workerModule' || type === 'worker';
 	const bundle = JSON.stringify(injectWorkerJS(url, config));
 	return (
@@ -65,7 +66,11 @@ if (!(${JSON.stringify(names.client)} in globalThis))
 
 if (!${names.client}.applied) 
 	${names.client}.apply();`
-				: '') +
+				: type === 'workletModule'
+					? // a worklet scope holds no inject: the module declares the
+						// access API its rewrite calls (src/workletLead.ts)
+						workletAccess(names.access)
+					: '') +
 		// import.meta.resolve answers with the page's URLs; a bare specifier
 		// belongs to the import map and comes back as it is
 		(isModule

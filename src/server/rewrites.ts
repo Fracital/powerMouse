@@ -4166,6 +4166,10 @@ export function registerRewrites(
 		/^\/js:genericModule\//,
 		scriptTypeFactory('genericModule'),
 	);
+	router.routes.set(
+		/^\/js:workletModule\//,
+		scriptTypeFactory('workletModule'),
+	);
 	router.routes.set(/^\/js:worker(:top:[^/]*)?\//, scriptTypeFactory('worker'));
 	router.routes.set(
 		/^\/js:workerModule(:top:[^/]*)?\//,

@@ -1231,6 +1231,20 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- An audio worklet's or a paint worklet's module runs through the proxy as
+  natively. The rewrite of a module routes member reads, writes and calls
+  through the access API (`0..$s$j`), which the inject defines on a
+  window's or a worker's Number.prototype, and nothing defines in a worklet
+  scope: an AudioWorkletProcessor that read `inputs[0]` or called
+  `this.port.postMessage()` threw a TypeError, and the page got
+  `processorerror` ("invoking user-supplied constructor failed"). A
+  worklet's module is now routed as one (`js:workletModule/`), and its
+  rewrite defines, once per worklet scope, an access API that does what the
+  page's expression does: nothing is added to the worklet's global, and a
+  call of no function throws V8's own message naming the page's
+  expression. The API is listed among the worklet's Number.prototype keys,
+  where no hook hides it. (workers suite, natively against proxied;
+  realm-surface walks both worklet scopes.)
 - An emulated service worker's global answers as the Chrome it runs in
   does: it keeps what a dedicated worker has where that Chrome's own service
   worker has it too (Chrome 157 gave service workers `ProgressEvent`, which

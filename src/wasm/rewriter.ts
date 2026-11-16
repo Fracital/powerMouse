@@ -17,7 +17,7 @@ import {
 import { helperNames } from '../helperNames';
 import { cannotRewrite } from '../rewriteJS';
 import { routeBinary } from '../routeURL';
-import { routeImport, type ScriptType } from '../scriptRoutes';
+import { isModuleType, routeImport, type ScriptType } from '../scriptRoutes';
 import StompURL from '../StompURL';
 import type { BufferInstance } from './module';
 import { hasModule, withInstance } from './thread';
@@ -266,7 +266,7 @@ export function rewriteWith(
 	lead: string,
 	source?: Source,
 ): string | null {
-	const isModule = type === 'genericModule' || type === 'workerModule';
+	const isModule = isModuleType(type);
 	const here = keepsSourcesHere();
 	let key = source?.key;
 	// the module makes the key of the text it is handed: where that is not
@@ -355,7 +355,9 @@ export function rewriterRoute(
 					),
 					url,
 					config,
-					type === 'workerModule' ? 'workerModule' : 'genericModule',
+					type === 'workerModule' || type === 'workletModule'
+						? type
+						: 'genericModule',
 					moduleType || undefined,
 				);
 			}

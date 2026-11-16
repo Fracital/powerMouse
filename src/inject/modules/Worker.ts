@@ -394,8 +394,9 @@ export default class WorkerModule extends Module<Client> {
 				true,
 			);
 
-		// worklets load modules; nothing of ours can run inside one, so the
-		// module is only routed
+		// worklets load modules; no inject runs inside one, so the module is
+		// routed as a worklet's, whose rewrite declares the access API it
+		// calls (src/workletLead.ts)
 		const worklet = (global as { Worklet?: typeof Worklet }).Worklet;
 		if (worklet && typeof worklet.prototype.addModule === 'function')
 			worklet.prototype.addModule = proxyModule.wrapFunction(
@@ -409,7 +410,7 @@ export default class WorkerModule extends Module<Client> {
 							),
 							this.client.url,
 							this.client.config,
-							'genericModule',
+							'workletModule',
 						);
 					return Reflect.apply(target, that, args);
 				},

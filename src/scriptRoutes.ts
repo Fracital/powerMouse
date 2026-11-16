@@ -47,7 +47,16 @@ export function postMessageMethod(
 }
 
 export type ScriptType =
-	'generic' | 'genericModule' | 'worker' | 'workerModule';
+	'generic' | 'genericModule' | 'worker' | 'workerModule' | 'workletModule';
+
+/** whether a script of `type` is a module (a page's, a worker's or a worklet's) */
+export function isModuleType(type: ScriptType): boolean {
+	return (
+		type === 'genericModule' ||
+		type === 'workerModule' ||
+		type === 'workletModule'
+	);
+}
 
 /**
  * The route of a module an import loads, by its `with { type }`: a JSON

@@ -49,6 +49,28 @@
 			__wk.worklet = 'error ' + e.message;
 		},
 	);
+	// an audio worklet's module runs (an offline context needs no device)
+	try {
+		const context = new OfflineAudioContext(1, 128, 44100);
+		context.audioWorklet.addModule('/pages/worklet-processor.js').then(
+			() => {
+				const node = new AudioWorkletNode(context, 'workers-probe', {
+					processorOptions: { tag: 'given' },
+				});
+				node.port.onmessage = (event) => {
+					__wk.audio = event.data;
+				};
+				node.onprocessorerror = (event) => {
+					__wk.audio = 'processorerror ' + (event.message ?? '');
+				};
+			},
+			(e) => {
+				__wk.audio = 'error ' + e.message;
+			},
+		);
+	} catch (e) {
+		__wk.audio = 'threw ' + e.message;
+	}
 	setTimeout(() => {
 		__wk.done = true;
 	}, 5000);

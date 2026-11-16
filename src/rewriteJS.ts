@@ -1,7 +1,7 @@
 import { Config } from './config';
 import { provideRewriters } from './rewriters';
 import { scriptLead } from './scriptLead';
-import { type ScriptType } from './scriptRoutes';
+import { isModuleType, type ScriptType } from './scriptRoutes';
 import StompURL from './StompURL';
 import { parsesInWasm, rewriteInWasm, unrewritten } from './wasm/rewriter';
 
@@ -88,7 +88,7 @@ export function modifyJS(
 function refusedHere(script: string, type: ScriptType): boolean {
 	if (escapesEval(script)) return false;
 	const body = script.replace(/^#![^\n\r\u2028\u2029]*/, '');
-	const module = type === 'genericModule' || type === 'workerModule';
+	const module = isModuleType(type);
 	if (module && /\b(?:import|export)\b/.test(body)) return false;
 	try {
 		new Function(
