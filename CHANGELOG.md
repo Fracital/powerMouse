@@ -1231,6 +1231,16 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A page can no longer change the URL it reads as by writing
+  `$stomp$workerBase`. The shell of a document the page made (a blob:,
+  data: or inline document, an `<object>`'s) and the bootstrap of a blob:
+  worker leave the URL the context shows on the global under that fixed
+  name, and the inject read it from there on every URL lookup: the name was
+  listed among the window's keys, and a page that assigned another site's
+  URL to it read as that site from then on (`location`, `origin`,
+  `document.domain`) and was given that origin's localStorage and cookies.
+  The client now takes the name off the global before any page code runs
+  and keeps the URL itself. (realm-surface: the global's keys match native.)
 - A module worker whose entry module imports two or more modules starts
   through the proxy, as natively. Each module of a module worker carries
   the preamble that loads the inject, and the browser evaluates sibling

@@ -55,7 +55,7 @@ import {
 } from '../../routeURL';
 import { rewriteImportMap } from '../../scriptRoutes';
 import StompURL from '../../StompURL';
-import { HOOK_ERROR, OPEN_TAB, WORKER_BASE } from '../../transport/messages';
+import { HOOK_ERROR, OPEN_TAB } from '../../transport/messages';
 import { queryOf } from '../../urlShape';
 import { BUILD } from '../../version';
 import { contextText, linkRoute, opaqueContext } from '../../visited';
@@ -2555,7 +2555,7 @@ export default class DocumentClient extends Client {
 	 * page writes resolves against is `baseURL`.
 	 */
 	get url(): StompURL {
-		const named = (this.global as Record<string, unknown>)[WORKER_BASE];
+		const named = this.namedBase;
 		let location: string;
 		try {
 			location = this.#locationHref(this.global.location);
@@ -2635,7 +2635,7 @@ export default class DocumentClient extends Client {
 		// function of the base URL and the shell's name for the page, so it
 		// is made again only when either changed (a new copy each time, as a
 		// caller may change what it is given)
-		const named = (this.global as Record<string, unknown>)[WORKER_BASE];
+		const named = this.namedBase;
 		const base = this.baseURIDescriptor.get!.call(
 			this.global.document,
 		) as string;
@@ -2682,7 +2682,7 @@ export default class DocumentClient extends Client {
 			).url;
 		} else {
 			// a blob: document the page built: its shell named the page URL
-			const base = (this.global as Record<string, unknown>)[WORKER_BASE];
+			const base = this.namedBase;
 			return new StompURL(
 				typeof base === 'string' ? base : this.baseURI.href,
 				this.codec,

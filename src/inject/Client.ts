@@ -361,7 +361,7 @@ export default class Client {
 	get location(): StompURL {
 		// a document the page made, or an inline document the worker served:
 		// its shell named the URL it shows (with the live fragment)
-		const named = (this.global as Record<string, unknown>)[WORKER_BASE];
+		const named = this.namedBase;
 		if (typeof named === 'string' && this.isDOM) {
 			const url = new URL(named);
 			// an empty fragment too, which `location.hash` reads as ''
@@ -399,7 +399,7 @@ export default class Client {
 			return parsed;
 		} else {
 			// a worker started from a blob: URL belongs to the page that made it
-			const base = (this.global as Record<string, unknown>)[WORKER_BASE];
+			const base = this.namedBase;
 			return new StompURL(
 				typeof base === 'string' ? base : location.toString(),
 				this.codec,
@@ -518,7 +518,34 @@ export default class Client {
 	): { error: Error | null } | null {
 		return null;
 	}
+	/**
+	 * The URL the shell of a document the page made (a blob:, data: or
+	 * inline document, an <object>'s) or the bootstrap of a blob: worker
+	 * named for this context: what the context's own URL reads as. The
+	 * shell leaves it on the global under a fixed name before the bundle
+	 * loads; it is taken off it here, before any page code runs, and kept.
+	 * It was read from the global every time, where a page listed it
+	 * (`$stomp$workerBase` in Object.keys(window)) and could write it: a
+	 * page that assigned another site's URL to it read as that site from
+	 * then on, to its own code and to the storage and cookies the inject
+	 * keeps by origin.
+	 */
+	#namedBase: string | undefined;
+	get namedBase(): string | undefined {
+		return this.#namedBase;
+	}
+	/**
+	 * Takes what the shell named for the document that is loading now (a
+	 * window this client already hooked, showing a new document), or
+	 * nothing where its shell named none.
+	 */
+	takeNamedBase(global: object = this.global) {
+		const named = Reflect.getOwnPropertyDescriptor(global, WORKER_BASE)?.value;
+		Reflect.deleteProperty(global, WORKER_BASE);
+		this.#namedBase = typeof named === 'string' ? named : undefined;
+	}
 	constructor(init: ParsedConfig, global: typeof globalThis) {
+		this.takeNamedBase(global);
 		this.names = helperNames(init);
 		this.#customNames = !!(init as { names?: unknown }).names;
 		this.hooks = init.hooks;

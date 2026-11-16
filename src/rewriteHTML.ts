@@ -451,7 +451,10 @@ function shell(
 } else {
 	${controlled}if (!(${JSON.stringify(names.client)} in globalThis))
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
-	else delete globalThis.createClient;${keptFacts(names.client, facts)}
+	else {
+		delete globalThis.createClient;
+		${names.client}.takeNamedBase();
+	}${keptFacts(names.client, facts)}
 
 ${sited(names.client, sites)}${referred(names.client, referrer)}${policyTexts(names.client, policies)}${syncXHR(names.client, syncXHRBlocked)}${
 		upgradeInsecure
@@ -598,7 +601,10 @@ export function modifyXML(
 } else {
 	${scriptFacts(facts)}if (!(${JSON.stringify(names.client)} in globalThis))
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
-	else delete globalThis.createClient;${keptFacts(names.client, facts)}
+	else {
+		delete globalThis.createClient;
+		${names.client}.takeNamedBase();
+	}${keptFacts(names.client, facts)}
 ${sited(names.client, sites)}${referred(names.client, referrer)}${policyTexts(names.client, policies)}${syncXHR(names.client, syncXHRBlocked)}
 	if (!${names.client}.applied) ${names.client}.apply();
 	${names.client}.loadXML(${JSON.stringify(script)}, ${JSON.stringify(mime)});
