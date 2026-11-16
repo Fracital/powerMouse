@@ -94,8 +94,16 @@ jobs:
   # (SKIP_NETWORK leaves out the ones that drive Wikipedia); no secrets, read
   # only, not required by branch protection until it has proven stable.
   browser:
-    name: browser suites
+    name: browser suites (${{ matrix.group.name }})
     runs-on: ubuntu-latest
+    # the adversarial corpus (about 5 minutes here) runs as a job of its own
+    # beside the rest, which alone come near the time limit
+    strategy:
+      fail-fast: false
+      matrix:
+        group:
+          - { name: main, suites: '!adversarial-' }
+          - { name: adversarial, suites: 'adversarial-' }
     # a clean run takes about 40 minutes (cross-origin-isolation alone takes
     # about 15, visited about 3); a suite that failed runs once more alone
     # after the others and needs room for it
@@ -133,6 +141,13 @@ jobs:
         if: steps.head.outputs.superseded != 'true'
         run: npm run build
 
+      # which Chrome gates this push: the runner image updates it on its own
+      - name: Chrome version
+        if: steps.head.outputs.superseded != 'true'
+        env:
+          CHROME: /usr/bin/google-chrome
+        run: '"$CHROME" --version'
+
       - name: Browser suites
         if: steps.head.outputs.superseded != 'true'
         env:
@@ -141,6 +156,7 @@ jobs:
           SKIP_TIMING: '1'
           SKIP_MEASUREMENT: '1'
           PARALLEL: '2'
+          SUITES: ${{ matrix.group.suites }}
           NO_COLOR: '1'
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

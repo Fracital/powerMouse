@@ -7,4 +7,9 @@
 // pairs, without a browser.
 import { runGroup } from '../adversarial.mjs';
 
-await runGroup('fuzz');
+// The checks of this group that fail on purpose, each with its reason
+// (test/adversarial.mjs, `knownOpen`): none on Chrome 156 or 157 (2026-11-16).
+// A new failure is a regression to fix, or an entry here that says why not.
+const KNOWN_OPEN = {};
+
+await runGroup('fuzz', {}, { knownOpen: KNOWN_OPEN });

@@ -13,6 +13,11 @@
 // anything: a leak is a FAIL line that names the probe and the value, so the
 // parity doc can carry it.
 //
+// The suites gate CI. Each one lists its open cases (`knownOpen`): a listed
+// check that still fails passes as "known open", one that passes again fails
+// (the entry is stale and goes, with the parity doc's line), and a failure
+// that is not listed fails the suite.
+//
 // This file is a library. Run by test/run.mjs it prints nothing and exits 0.
 import {
 	done,
@@ -245,13 +250,50 @@ async function measure(browser, base, group, limit = 60000) {
  * test it mirrors, for the "also fails" annotation. `limit`: how long the
  * page may run; `bypass: 'fail'` makes a request past the proxy a failure of
  * its own instead of a line outside the counts.
+ *
+ * `knownOpen`: the group's checks that fail today on purpose, keyed by what
+ * follows `<mode>: <group>` in the check's name (a probe's name, or `page ran
+ * to completion`, `host page untouched`, `makes no request past the proxy`).
+ * The value is the reason, or `{ why, modes, chrome }` for an entry that
+ * holds only in some modes (`['same-origin']`, `['isolated']`) or Chrome
+ * majors (`[157]`, or a function of the major).
  */
 export async function runGroup(
 	group,
 	scramjet = {},
-	{ limit = 60000, bypass = 'report' } = {},
+	{ limit = 60000, bypass = 'report', knownOpen = {} } = {},
 ) {
 	const browser = await launch();
+	const major = Number(browser.version().split('.')[0]);
+	console.log(`Chrome ${browser.version()}`);
+	const entries = Object.fromEntries(
+		Object.entries(knownOpen).map(([key, entry]) => [
+			key,
+			typeof entry === 'string' ? { why: entry } : entry,
+		]),
+	);
+	const applies = (entry, mode) =>
+		(!entry.modes || entry.modes.includes(mode)) &&
+		(!entry.chrome ||
+			(typeof entry.chrome === 'function'
+				? entry.chrome(major)
+				: entry.chrome.includes(major)));
+	const checked = new Set();
+	// a check of this group (`probe` for a probe's, which reads <group>/<key>):
+	// a listed one must still fail
+	const check = (mode, key, probe, condition, detail) => {
+		checked.add(key);
+		const name = `${mode}: ${group}${probe ? '/' : ' '}${key}`;
+		const entry = entries[key];
+		if (!entry || !applies(entry, mode)) return ok(name, condition, detail);
+		return ok(
+			`${name} (known open: ${entry.why})`,
+			!condition,
+			condition
+				? `passes now: the known-open entry is stale and goes - ${detail}`
+				: detail,
+		);
+	};
 	const errors = [];
 	for (const [mode, base] of MODES) {
 		const {
@@ -280,8 +322,10 @@ export async function runGroup(
 			].join('|'),
 		);
 		const probes = Object.entries(adv.probes || {});
-		ok(
-			`${mode}: ${group} page ran to completion`,
+		check(
+			mode,
+			'page ran to completion',
+			false,
 			adv.done === true && !navigated,
 			navigated
 				? 'the page navigated away mid-run'
@@ -297,10 +341,12 @@ export async function runGroup(
 			const seen = result.error
 				? `threw ${result.error}${result.message ? `: ${result.message}` : ''}`
 				: `saw ${text.length > 500 ? `${text.slice(0, 500)}...` : text}`;
-			ok(`${mode}: ${group}/${name}`, !leaked, `${seen}${note}`);
+			check(mode, name, true, !leaked, `${seen}${note}`);
 		}
-		ok(
-			`${mode}: ${group} host page untouched`,
+		check(
+			mode,
+			'host page untouched',
+			false,
 			after.url === host.url &&
 				after.title === host.title &&
 				after.leak === null &&
@@ -315,8 +361,10 @@ export async function runGroup(
 				`BYPASS: ${mode}: ${group} ${entry.url.slice(0, 160)} (${entry.type}, ${entry.source})`,
 			);
 		if (bypass === 'fail')
-			ok(
-				`${mode}: ${group} makes no request past the proxy`,
+			check(
+				mode,
+				'makes no request past the proxy',
+				false,
 				raw.length === 0,
 				raw
 					.map((entry) => `${entry.url.slice(0, 160)} (${entry.type})`)
@@ -324,6 +372,17 @@ export async function runGroup(
 					.join(' | '),
 			);
 	}
+	// an entry for this Chrome that names no check of the group (renamed,
+	// removed) is stale
+	const strays = Object.keys(entries).filter(
+		(key) =>
+			!checked.has(key) && MODES.some(([mode]) => applies(entries[key], mode)),
+	);
+	ok(
+		`${group}: every known-open entry names a check`,
+		strays.length === 0,
+		JSON.stringify(strays),
+	);
 	await done(browser, errors);
 }
 

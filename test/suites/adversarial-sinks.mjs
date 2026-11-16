@@ -7,4 +7,17 @@
 // page wrote it), in both demo modes.
 import { runGroup } from '../adversarial.mjs';
 
-await runGroup('sinks', {}, { limit: 180000, bypass: 'fail' });
+// The checks of this group that fail on purpose, each with its reason
+// (test/adversarial.mjs, `knownOpen`): none on Chrome 156 or 157 (2026-11-16).
+// A new failure is a regression to fix, or an entry here that says why not.
+const KNOWN_OPEN = {};
+
+await runGroup(
+	'sinks',
+	{},
+	{
+		limit: 180000,
+		bypass: 'fail',
+		knownOpen: KNOWN_OPEN,
+	},
+);

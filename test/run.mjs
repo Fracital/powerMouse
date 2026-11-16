@@ -149,15 +149,23 @@ const SKIP_NETWORK = process.env.SKIP_NETWORK === '1';
 // and misfire on a two-core runner; SKIP_TIMING=1 leaves them out
 const TIMING_SUITES = new Set(['switcher-momentum']);
 const SKIP_TIMING = process.env.SKIP_TIMING === '1';
-// measurement suites (the adversarial corpus, the vendored web-platform-tests,
-// the timings named measure-*) report every known leak, every expected WPT
-// failure and numbers that depend on the machine on purpose;
-// SKIP_MEASUREMENT=1 leaves them out of a gate run
+// measurement suites (the vendored web-platform-tests, the timings named
+// measure-*) report every expected WPT failure and numbers that depend on the
+// machine on purpose; SKIP_MEASUREMENT=1 leaves them out of a gate run. The
+// adversarial corpus is a gate: each adversarial-* suite lists its open
+// cases, which pass as known open (test/adversarial.mjs)
 const isMeasurement = (name) =>
-	name.startsWith('adversarial-') ||
-	name.startsWith('wpt-') ||
-	name.startsWith('measure-');
+	name.startsWith('wpt-') || name.startsWith('measure-');
 const SKIP_MEASUREMENT = process.env.SKIP_MEASUREMENT === '1';
+// SUITES=<prefix> runs only the suites named with it, SUITES=!<prefix> all
+// but those: GitHub CI runs the adversarial corpus as a job of its own beside
+// the rest, so neither runs into the job's time limit
+const GROUP = process.env.SUITES ?? '';
+const inGroup = (name) =>
+	!GROUP ||
+	(GROUP.startsWith('!')
+		? !name.startsWith(GROUP.slice(1))
+		: name.startsWith(GROUP));
 
 // suites for work that is in the tree but not yet landed: left out of a full
 // run (and of GitHub CI, which runs a bare `npm test`) so master stays green,
@@ -173,6 +181,7 @@ const suites = readdirSync(suitesDir)
 	.filter((name) => name.endsWith('.mjs'))
 	.map((name) => name.slice(0, -4))
 	.filter((name) => !wanted.length || wanted.includes(name))
+	.filter((name) => wanted.length || inGroup(name))
 	.filter((name) => {
 		if (PENDING_SUITES.has(name) && !wanted.includes(name)) {
 			console.log(`PENDING ${name} (${PENDING_SUITES.get(name)})`);

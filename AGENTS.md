@@ -330,16 +330,22 @@ rewriter: reproduce with a raw `controller.transport.request()` /
 request: `npm ci --ignore-scripts`, `npm run check`, `npm run lint`,
 `npx prettier --check .`, `npm run check:prose` (no em dashes, no AI
 attribution; the same script checks a PR's commit messages) and the esbuild
-build. All of it must pass locally before you push. A `browser suites` job
-runs `npm test` on the runner's Chrome with `SKIP_NETWORK=1` (the suites
+build. All of it must pass locally before you push. Two `browser suites`
+jobs (`SUITES=adversarial-` for the adversarial corpus, `SUITES=!adversarial-`
+for the rest, side by side so neither nears the time limit) run `npm test` on the runner's Chrome with `SKIP_NETWORK=1` (the suites
 that drive Wikipedia stay out), `SKIP_TIMING=1` (the flick-velocity suite)
-and `SKIP_MEASUREMENT=1` (the adversarial corpus, the vendored
-web-platform-tests, which report every known leak and expected failure on
-purpose, and the `measure-*` timings) and `PARALLEL=2`; since 2026-11-07 it is
-required by branch protection, so a suite that cannot pass on the runner
-goes behind one of those flags rather than staying red (a per-frame animation
-measurement reads `SKIP_TIMING` itself and keeps only its final-position
-assertion there). A suite that fails is run once more, alone, after the others
+and `SKIP_MEASUREMENT=1` (the vendored web-platform-tests, which report
+every expected failure on purpose, and the `measure-*` timings) and
+`PARALLEL=2`, after printing the runner's Chrome version. The adversarial
+corpus (`adversarial-*`) runs there as a gate: each suite lists its open cases
+(`knownOpen` in its file, with the reason and, where a case differs between
+Chrome versions, the majors it holds for); a listed check that still fails
+passes as known open, an unlisted failure fails the suite, and a listed check
+that passes again fails it too, so the entry goes when a fix lands. Since
+2026-11-07 the job is required by branch protection, so a suite that cannot
+pass on the runner goes behind one of those flags rather than staying red (a
+per-frame animation measurement reads `SKIP_TIMING` itself and keeps only
+its final-position assertion there). A suite that fails is run once more, alone, after the others
 (`test/run.mjs`; `RERUN=0` turns it off): one that then passes leaves a
 "Flaky suite" warning on the run with its failed checks and does not fail
 the job, one that fails twice does. A warning is a bug to fix in the suite or

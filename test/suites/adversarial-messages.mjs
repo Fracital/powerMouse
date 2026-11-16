@@ -5,17 +5,26 @@
 // property (test/pages/adv-messages.html).
 import { runGroup } from '../adversarial.mjs';
 
-await runGroup('messages', {
-	'host message': 'escapes-postmessage-source-eval',
-	'host message source eval': 'escapes-postmessage-source-eval',
-	'o.postMessage identity': 'pmwrap-identity',
-	'MessagePort.postMessage identity': 'pmwrap-identity',
-	'postMessage name/length': 'pmwrap-function-shape',
-	'postMessage getter invoked once': 'pmwrap-getter-invocation-count',
-	'postMessage assignment sticks': 'pmwrap-assignment',
-	'delete o.postMessage': 'pmwrap-delete',
-	'MessagePort.prototype.postMessage.call': 'pmwrap-prototype-method',
-	'detached postMessage loses receiver': 'pmwrap-detached-loses-receiver',
-	'MessageChannel event': 'pmwrap-messagechannel',
-	'BroadcastChannel event': 'broadcastchannel-cross-origin-isolated',
-});
+// The checks of this group that fail on purpose, each with its reason
+// (test/adversarial.mjs, `knownOpen`): none on Chrome 156 or 157 (2026-11-16).
+// A new failure is a regression to fix, or an entry here that says why not.
+const KNOWN_OPEN = {};
+
+await runGroup(
+	'messages',
+	{
+		'host message': 'escapes-postmessage-source-eval',
+		'host message source eval': 'escapes-postmessage-source-eval',
+		'o.postMessage identity': 'pmwrap-identity',
+		'MessagePort.postMessage identity': 'pmwrap-identity',
+		'postMessage name/length': 'pmwrap-function-shape',
+		'postMessage getter invoked once': 'pmwrap-getter-invocation-count',
+		'postMessage assignment sticks': 'pmwrap-assignment',
+		'delete o.postMessage': 'pmwrap-delete',
+		'MessagePort.prototype.postMessage.call': 'pmwrap-prototype-method',
+		'detached postMessage loses receiver': 'pmwrap-detached-loses-receiver',
+		'MessageChannel event': 'pmwrap-messagechannel',
+		'BroadcastChannel event': 'broadcastchannel-cross-origin-isolated',
+	},
+	{ knownOpen: KNOWN_OPEN },
+);

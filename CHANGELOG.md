@@ -1166,6 +1166,17 @@ window }`, `frameId` being the controller's id. It is trusted host code,
   pull requests with a read-only token, pinned actions, install scripts
   disabled and no write-back; dependabot for actions and npm;
   `npm run check:prose` enforces the no-em-dash and no-AI-attribution rules.
+- The adversarial corpus (the 11 `adversarial-*` suites) gates the browser
+  suites job: each suite lists the checks that fail on purpose, with the
+  reason and, where a check differs between Chrome versions, the majors it
+  holds for (`knownOpen`, test/adversarial.mjs). A listed check that still
+  fails passes as known open; a failure that is not listed fails the suite,
+  and so does a listed check that passes again or an entry that names no
+  check. Every list is empty on Chrome 156 and 157 today. They were
+  measurements CI skipped (`SKIP_MEASUREMENT=1`), so a sandbox regression
+  went unseen there (the Chrome 157 markup members of adversarial-scripts
+  sat failing locally). The job prints the runner's Chrome version first,
+  so a run says which Chrome gated it.
 
 ### Deployment
 
