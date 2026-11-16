@@ -304,6 +304,81 @@
 		if (!d.setHTMLUnsafe) throw new Error('no setHTMLUnsafe');
 		d.setHTMLUnsafe('<img src="x:" onerror=\'' + p + "'>");
 	});
+	// setHTMLUnsafe's runScripts option runs the markup's scripts (Chrome
+	// 156 and later)
+	// setHTMLUnsafe's runScripts option runs the markup's scripts (Chrome
+	// 156 and later); these cases and the next take what they inserted out
+	// again (an image's error still fires), so the page's markup is the same
+	// whichever of them the browser has
+	route('setHTMLUnsafe runScripts script', (p) => {
+		const d = document.createElement('div');
+		document.body.append(d);
+		if (!d.setHTMLUnsafe) throw new Error('no setHTMLUnsafe');
+		try {
+			d.setHTMLUnsafe('<script>' + p + '<\/script>', { runScripts: true });
+		} finally {
+			d.remove();
+		}
+	});
+	route('shadowRoot.setHTMLUnsafe runScripts script', (p) => {
+		const host = document.createElement('div');
+		const root = host.attachShadow({ mode: 'open' });
+		document.body.append(host);
+		if (!root.setHTMLUnsafe) throw new Error('no setHTMLUnsafe');
+		try {
+			root.setHTMLUnsafe('<script>' + p + '<\/script>', { runScripts: true });
+		} finally {
+			host.remove();
+		}
+	});
+	// the markup insertion methods Chrome 157 added (appendHTMLUnsafe and its
+	// kin, their sanitizing forms), on an element, a shadow root and a text
+	// node: an absent one is skipped
+	for (const name of [
+		'appendHTML',
+		'appendHTMLUnsafe',
+		'prependHTML',
+		'prependHTMLUnsafe',
+		'beforeHTML',
+		'beforeHTMLUnsafe',
+		'afterHTML',
+		'afterHTMLUnsafe',
+		'replaceWithHTML',
+		'replaceWithHTMLUnsafe',
+	])
+		for (const [where, make] of [
+			// a child of the case's own div, so what goes in before or after it
+			// goes out with the div
+			['element', (d) => d.appendChild(document.createElement('div'))],
+			['shadowRoot', (d) => d.attachShadow({ mode: 'open' })],
+			[
+				'text',
+				(d) => {
+					const t = document.createTextNode('t');
+					d.append(t);
+					return t;
+				},
+			],
+		]) {
+			const call = (markup, options) => {
+				const d = document.createElement('div');
+				document.body.append(d);
+				try {
+					const node = make(d);
+					if (typeof node[name] !== 'function') throw new Error('no ' + name);
+					node[name](markup, options);
+				} finally {
+					d.remove();
+				}
+			};
+			route(`${where}.${name} img onerror`, (p) =>
+				call('<img src="x:" onerror=\'' + p + "'>"),
+			);
+			if (name.endsWith('Unsafe'))
+				route(`${where}.${name} runScripts script`, (p) =>
+					call('<script>' + p + '<\/script>', { runScripts: true }),
+				);
+		}
 	route('shadowRoot.innerHTML img onerror', (p) => {
 		const host = document.createElement('div');
 		const root = host.attachShadow({ mode: 'open' });

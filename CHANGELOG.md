@@ -1274,6 +1274,23 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- Markup a page inserts through `setHTMLUnsafe(markup, { runScripts: true })`
+  (Chrome 156) or through the members Chrome 157 added (`appendHTMLUnsafe`,
+  `prependHTMLUnsafe`, `beforeHTML(Unsafe)`, `afterHTML(Unsafe)`,
+  `replaceWithHTML(Unsafe)` and their `stream*` forms, on Element,
+  ShadowRoot and CharacterData) no longer runs as the page wrote it. The
+  option made the markup's scripts run with nothing rewriting them, and the
+  new members parsed markup with no hook in the way (an `<img onerror>` ran
+  unrewritten, its loads went out unrouted), so a page reached the proxy's
+  real top through them. `runScripts` is no longer passed on (the markup's
+  scripts stay inert, as in any other markup), and every markup member of
+  those prototypes the inject does not hook is taken off them, so a page
+  sees a Chrome without them until each is hooked, and one a later Chrome
+  adds is taken off the same way (DOMHooks.ts `HOOKED_MARKUP_MEMBERS`).
+  adversarial-scripts covers each, on an element, a shadow root and a text
+  node; it failed on Chrome 156 (runScripts) and 157 (every Unsafe member)
+  before. CI never saw it: the adversarial suites are measurements there,
+  and its Chrome is 156.
 - A `Link` response header that preloads a stylesheet or a script with an
   `integrity` no longer fails the page's own element. The header's URLs
   were routed but its `integrity` kept, so the browser checked the

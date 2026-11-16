@@ -61,6 +61,19 @@ const appliedTab = new WeakMap<Element, Map<string, string | null>>();
 const removedNamespaces = new WeakMap<Element, Map<string, string>>();
 
 const ORIGINAL_ATTRIBUTE = MARKER;
+/**
+ * the markup members of Node, Element, ShadowRoot, CharacterData,
+ * DocumentFragment and Document the inject hooks (or that only serialize);
+ * any other member named with HTML is taken off those prototypes
+ */
+const HOOKED_MARKUP_MEMBERS = new Set([
+	'innerHTML',
+	'outerHTML',
+	'getHTML',
+	'insertAdjacentHTML',
+	'setHTMLUnsafe',
+	'setHTML',
+]);
 const XLINK_NAMESPACE = 'http://www.w3.org/1999/xlink';
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 
@@ -1583,6 +1596,43 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		const shadowRootPrototype = (
 			this.client.global as { ShadowRoot?: typeof ShadowRoot }
 		).ShadowRoot?.prototype;
+		const withoutRunScripts = (options: unknown): unknown => {
+			if (
+				options === null ||
+				(typeof options !== 'object' && typeof options !== 'function')
+			)
+				return options;
+			const view = options as { runScripts?: unknown; sanitizer?: unknown };
+			void view.runScripts;
+			const sanitizer = view.sanitizer;
+			return sanitizer === undefined ? {} : { sanitizer };
+		};
+		// Markup insertion members the inject does not hook are taken off the
+		// page's prototypes: Chrome 157 added appendHTML(Unsafe), prependHTML,
+		// beforeHTML, afterHTML, replaceWithHTML and their stream* forms on
+		// Element, ShadowRoot and CharacterData, which parse markup with no hook
+		// in the way (an `<img onerror>` or, with runScripts, a `<script>` in it
+		// ran as the page wrote it, and its loads went out unrouted). A page
+		// sees the browser without them, as a Chrome before 157, until each is
+		// hooked; one a later Chrome adds is taken off the same way.
+		for (const proto of [
+			this.client.global.Element.prototype,
+			shadowRootPrototype,
+			(this.client.global as { CharacterData?: typeof CharacterData })
+				.CharacterData?.prototype,
+			this.client.global.DocumentFragment.prototype,
+			this.client.global.Document.prototype,
+			this.client.global.Node.prototype,
+		]) {
+			if (!proto) continue;
+			for (const name of Reflect.ownKeys(proto))
+				if (
+					typeof name === 'string' &&
+					name.includes('HTML') &&
+					!HOOKED_MARKUP_MEMBERS.has(name)
+				)
+					Reflect.deleteProperty(proto, name);
+		}
 		for (const proto of [
 			this.client.global.Element.prototype,
 			shadowRootPrototype,
@@ -1627,6 +1677,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 										: ((that as ShadowRoot).host ?? null),
 								),
 							);
+						// `runScripts: true` runs the markup's scripts as the parser
+						// made them, which the rewrite above leaves as the page wrote
+						// them (they are inert in any other markup): the option is
+						// not passed on, so they stay inert (its members are read as
+						// the browser reads them, in order, a throwing one throwing)
+						if (args.length > 1) args[1] = withoutRunScripts(args[1]);
 						const result = Reflect.apply(target, that, args);
 						this.client.sweepFrames?.();
 						return result;

@@ -140,6 +140,24 @@ const EXCLUDED = [
 		'OPEN: in a document written with document.write a script right after <body> runs in the head, before there is a body',
 	],
 	[
+		/./,
+		/^G\.(Element|ShadowRoot|CharacterData)\.prototype(:keys$|\.(?!(?:innerHTML|outerHTML|getHTML|insertAdjacentHTML|setHTMLUnsafe|setHTML)(?:$|[.:~]))[A-Za-z]*HTML[A-Za-z]*($|[.:~]))/,
+		"the markup insertion members Chrome 157 added (appendHTMLUnsafe and its kin) are taken off the page's prototypes until the inject hooks them (src/inject/dom/modules/DOMHooks.ts HOOKED_MARKUP_MEMBERS): a page reads them as a Chrome before 157 has them, absent",
+		null,
+		(native, proxied) => {
+			if (proxied === undefined) return true;
+			const strip = (value) =>
+				String(value)
+					.replace(
+						/(^|[,:])(?!(?:innerHTML|outerHTML|getHTML|insertAdjacentHTML|setHTMLUnsafe|setHTML)(?=,|$))[A-Za-z]*HTML[A-Za-z]*(?=,|$)/g,
+						'$1',
+					)
+					.replace(/,{2,}/g, ',')
+					.replace(/,$/, '');
+			return strip(proxied) === strip(native);
+		},
+	],
+	[
 		/^(audio|paint)-worklet$/,
 		/^G\.Number\.prototype(:keys$|\.\$s\$j($|[.:~]))/,
 		"OPEN: a worklet's rewritten module reaches the access API on the worklet's Number.prototype (0..$s$j), where no hook of the inject hides it from reflection",
