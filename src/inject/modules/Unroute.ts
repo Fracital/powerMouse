@@ -1,5 +1,6 @@
 import { serializeCSSURL } from '../../cssURL';
 import { originalOf } from '../../cssURLs';
+import { originalSource } from '../../functionSource';
 import {
 	linkRouteURL,
 	pageBlobURL,
@@ -302,6 +303,8 @@ const MUTED: ErrorReport = {
 	colno: 0,
 	error: null,
 };
+/** a DataCloneError's message: what it was thrown for, the value as text, the verdict */
+const UNCLONEABLE = /^([^:]*: )([\s\S]+)( could not be cloned\.)$/;
 /** the deprecation report's id for a synchronous request on a document's main thread */
 const SYNCHRONOUS_REQUEST_REPORT =
 	'XMLHttpRequestSynchronousInNonWorkerOutsideBeforeUnload';
@@ -736,9 +739,15 @@ export default class UnrouteModule extends Module<Client> {
 				...domMessage,
 				get: proxyModule.wrapFunction(domMessage.get, (target, that, args) => {
 					const message = Reflect.apply(target, that, args);
-					return typeof message === 'string'
-						? unrouteText(this.client, message)
-						: message;
+					if (typeof message !== 'string') return message;
+					// a value that cannot be cloned is quoted: a function, by
+					// its source, which is the page's (src/functionSource.ts)
+					const quoted = UNCLONEABLE.exec(message);
+					const source = quoted && originalSource(quoted[2]!);
+					return unrouteText(
+						this.client,
+						source ? `${quoted[1]}${source}${quoted[3]}` : message,
+					);
 				}),
 			});
 

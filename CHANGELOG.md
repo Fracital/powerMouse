@@ -1398,6 +1398,11 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   of the page's own `PerformanceTimingConfidence`, new at every read as
   the browser's is, with Chrome's trigger rate and a value drawn once per
   document (performance-navigation suite).
+- A `DataCloneError`'s message quotes a function by the page's source of
+  it: `performance.mark('x', { detail: () => {} })`, `structuredClone` or a
+  `postMessage` of a function read `(/*1sx72wjbg.49u.8*/) => {} could not
+be cloned.`, the function as the rewriter printed it, mark and helper
+  calls included (performance-entries suite).
 - A frame read before it loaded (an about:blank child or popup, one written
   with document.write) no longer shows the access API on its
   Number.prototype to the page that made it. The inject defines the API
