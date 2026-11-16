@@ -12,6 +12,8 @@
 /test/wpt/resources/testharness.js
 /test/wpt/resources/testdriver.js
 test/pages/vendor-*.js
+# minified shapes of real sites' bundles (test/corpus/check.mjs): kept as minified
+/test/corpus/sample
 # benchmark output and the contenders bench/setup.mjs builds
 /bench/results
 /bench/.contenders

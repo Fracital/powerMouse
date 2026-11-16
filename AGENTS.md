@@ -442,6 +442,16 @@ suite, and they run against the real thing:
 4. For "did the proxy leak the origin", read attributes with the parent
    realm's `Element.prototype.getAttribute.call(el, name)`: the page's own
    `getAttribute` is hooked to return the original value.
+5. A change to the JavaScript rewriter (rust/rwjs) is checked on real
+   sites' scripts, not only on the suites' hand-written shapes:
+   `node test/corpus/fetch.mjs <dir>` collects what about forty sites'
+   login and home pages load (plain HTTP, never from CI; keep the
+   directory outside the repository) and
+   `node test/corpus/check.mjs --minify <dir>` rewrites every script and
+   fails on one whose rewrite V8 refuses, one the rewriter gave up, or one
+   that lost code. A failure found there is reduced to a few lines in
+   `test/corpus/sample/` (the site and bundle named in the file), which CI
+   checks on every push.
 
 ## Style
 

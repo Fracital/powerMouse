@@ -90,6 +90,12 @@ jobs:
         if: steps.head.outputs.superseded != 'true'
         run: node build.js && test -f dist/serviceWorker.js && test -f dist/controller.mjs
 
+      # the rewriter on the minified shapes real sites broke it with
+      # (test/corpus/sample; the rewrite-corpus suite runs the same check)
+      - name: Rewrite corpus sample
+        if: steps.head.outputs.superseded != 'true'
+        run: node test/corpus/check.mjs --minify test/corpus/sample
+
   # Browser suites on the runner's Chrome. Fixture-based suites only
   # (SKIP_NETWORK leaves out the ones that drive Wikipedia); no secrets, read
   # only, not required by branch protection until it has proven stable.
