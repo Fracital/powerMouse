@@ -1231,6 +1231,16 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A frame read before it loaded (an about:blank child or popup, one written
+  with document.write) no longer shows the access API on its
+  Number.prototype to the page that made it. The inject defines the API
+  there for rewritten code (`0..$s$j`) and hid the name from reflection
+  only for its own realm's Number.prototype, so
+  `Object.getOwnPropertyNames(frame.contentWindow.Number.prototype)` in the
+  parent listed `$s$j`, and its descriptor handed out the API and its
+  helpers' sources. Every Number.prototype the bundle defined the API on
+  now hides it from this realm's reflection. (realm-surface, blank-loaded,
+  blank-sync and their popups.)
 - `navigation.currentEntry.url` of a document the proxy serves from
   page-made markup (a javascript: URL's string in a frame) reads what the
   document's location reads; it read the proxy's own `inline:` route.

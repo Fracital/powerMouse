@@ -1,5 +1,6 @@
 import Client from '../Client';
 import Module from '../Module';
+import { accessHolders } from './Access';
 import ProxyModule from './Proxy';
 
 type Api = {
@@ -46,6 +47,17 @@ export default class ReflectionModule extends Module<Client> {
 			this.client.names.globalProxy,
 			this.client.names.globalName,
 		]);
+		// A Number.prototype with the access API on it (where rewritten code
+		// reaches it: src/helperNames.ts accessExpression): this realm's, or
+		// that of a frame this bundle hooked. A page that listed a frame's
+		// Number.prototype through this window's Reflect.ownKeys or
+		// Object.getOwnPropertyDescriptors saw the API's name, its descriptor
+		// and its helpers' sources (asked of a set of the bundle's, so no
+		// trap of a page's Proxy runs)
+		const holdsAccess = (target: unknown): target is object =>
+			typeof target === 'object' &&
+			target !== null &&
+			accessHolders.has(target);
 		// a window (this one, another, a Proxy over one), the document, a
 		// worker scope or a prototype of the scope (WorkerGlobalScope.prototype
 		// holds a worker's `location`): the objects whose `top`, `location`
@@ -177,8 +189,8 @@ export default class ReflectionModule extends Module<Client> {
 						PropertyDescriptor | undefined;
 					if (
 						descriptor &&
-						args[0] === global.Number.prototype &&
-						args[1] === this.client.names.access
+						args[1] === this.client.names.access &&
+						holdsAccess(args[0])
 					)
 						return undefined;
 					if (!descriptor || !windowLike(args[0])) return descriptor;
@@ -227,7 +239,7 @@ export default class ReflectionModule extends Module<Client> {
 								: restricted(descriptors[key], key, args[0]);
 				// (where rewritten code reaches the access API: src/helperNames.ts
 				// accessExpression)
-				if (args[0] === global.Number.prototype)
+				if (holdsAccess(args[0]))
 					Reflect.deleteProperty(descriptors, this.client.names.access);
 				return descriptors;
 			},
@@ -354,16 +366,15 @@ export default class ReflectionModule extends Module<Client> {
 		};
 		// (and Number.prototype, where rewritten code reaches the access API:
 		// src/helperNames.ts accessExpression)
-		const numberPrototype = global.Number.prototype as object;
 		const ours = (target: unknown) =>
-			windowLike(target) || target === numberPrototype || tagged(target);
+			windowLike(target) || holdsAccess(target) || tagged(target);
 		// a number object finds the access API's name on its prototype
 		const inherits = (target: unknown) => {
 			try {
 				return (
 					typeof target === 'object' &&
 					target !== null &&
-					Reflect.getPrototypeOf(target) === numberPrototype &&
+					holdsAccess(Reflect.getPrototypeOf(target)) &&
 					!Reflect.getOwnPropertyDescriptor(target, this.client.names.access)
 				);
 			} catch (error) {

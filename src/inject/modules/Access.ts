@@ -6,6 +6,7 @@ import StompURL, { urlLike } from '../../StompURL';
 import Client from '../Client';
 import ErrorMessages from '../errorMessages';
 import Module from '../Module';
+import { OwnWeakSet } from '../ownCollections';
 import { modifyJS } from '../rewriter';
 import { trustedScript } from '../trusted';
 import ProxyModule from './Proxy';
@@ -42,6 +43,14 @@ export function setGlobalProxy(
 
 // taken when the bundle loads, before any page code could replace them: a
 // helper that asked the page's `Array.isArray`, its `Proxy` or a method of
+/**
+ * Every Number.prototype this bundle defined an access API on: its own
+ * realm's and that of each frame it hooked (one read before it loaded),
+ * whose reflection is this realm's for the page that lists that frame's
+ * objects from here (src/inject/modules/Reflection.ts).
+ */
+export const accessHolders = new OwnWeakSet<object>();
+
 // its `Array.prototype` would decide what the page told it to
 const isArray = Array.isArray;
 const isView = ArrayBuffer.isView;
@@ -1207,6 +1216,7 @@ export default class AccessModule extends Module<Client> {
 			this.client.names.access,
 			{ value: api, configurable: false, writable: false, enumerable: false },
 		);
+		accessHolders.add(this.client.global.Number.prototype);
 		// and the global of that name, which hosts' hooks read (src/hooks.ts)
 		// and nothing of the inject's does. Not enumerable: Object.keys(window)
 		// must not name it
