@@ -1231,6 +1231,16 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A worker's scope lists what the browser's lists. The hooks of `fetch`,
+  `setTimeout`, `setInterval` and `importScripts` assigned to the worker's
+  global, which made each an own property of it where the browser has them
+  on WorkerGlobalScope.prototype, and the worker's `location` stand-in had
+  every member as an own property where the browser's WorkerLocation has
+  none. Each hook now replaces the member where the browser has it, and the
+  stand-in is a bare object of WorkerLocation.prototype whose accessors
+  answer for it. `fetch` with no argument, or called on what is not this
+  scope or window, rejects with the browser's own error. (realm-surface:
+  every worker kind.)
 - A platform member the inject hooks refuses what the browser refuses, in
   the browser's words and realm, before the hook does anything: a call on
   something that is not of its interface (the prototype itself, another

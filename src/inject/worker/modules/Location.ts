@@ -22,7 +22,11 @@ const URL_PARTS = [
  * agrees, and a shared worker reads its own name back without the origin the
  * page's constructor hook appended to keep proxied origins apart. Like the
  * document's Location module, the stand-in is what rewritten code gets from
- * the access API; WorkerLocation.prototype itself is left alone.
+ * the access API. It is an object of WorkerLocation.prototype with nothing
+ * of its own, as the browser's is (it had every member as an own property,
+ * which a page that lists its keys read): the prototype's accessors answer
+ * for it, and stay the browser's for the real location, which the bundle
+ * itself reads, and for anything else.
  */
 export default class WorkerLocationModule extends Module<WorkerClient> {
 	apply() {
@@ -49,34 +53,32 @@ export default class WorkerLocationModule extends Module<WorkerClient> {
 		// rewritten code reads `location` through the access API, which hands
 		// it this stand-in; the bundle's own reads of the real location (the
 		// client's URL, the routed prefix) stay native, like a document's
-		const proxy = Object.create(global.WorkerLocation.prototype) as object;
+		const prototype = global.WorkerLocation.prototype as object;
+		const proxy = Object.create(prototype) as object;
 		for (const part of URL_PARTS) {
 			const urlGetter = Reflect.getOwnPropertyDescriptor(
 				global.URL.prototype,
 				part,
 			)?.get;
-			if (!urlGetter) continue;
-			Reflect.defineProperty(proxy, part, {
-				enumerable: true,
-				configurable: false,
-				get: proxyModule.wrapFunction(
-					Reflect.getOwnPropertyDescriptor(
-						global.WorkerLocation.prototype,
-						part,
-					)!.get!,
-					() => Reflect.apply(urlGetter, spoofed(), []),
+			const descriptor = Reflect.getOwnPropertyDescriptor(prototype, part);
+			if (!urlGetter || !descriptor?.get) continue;
+			Reflect.defineProperty(prototype, part, {
+				...descriptor,
+				get: proxyModule.wrapFunction(descriptor.get, (target, that, args) =>
+					that === proxy
+						? Reflect.apply(urlGetter, spoofed(), [])
+						: Reflect.apply(target, that, args),
 				),
 			});
 		}
-		Reflect.defineProperty(proxy, 'toString', {
-			enumerable: true,
-			configurable: false,
-			writable: false,
-			value: proxyModule.wrapFunction(
-				global.WorkerLocation.prototype.toString,
-				() => spoofed().href,
-			),
-		});
+		const toString = Reflect.getOwnPropertyDescriptor(prototype, 'toString');
+		if (typeof toString?.value === 'function')
+			Reflect.defineProperty(prototype, 'toString', {
+				...toString,
+				value: proxyModule.wrapFunction(toString.value, (target, that, args) =>
+					that === proxy ? spoofed().href : Reflect.apply(target, that, args),
+				),
+			});
 		setGlobalProxy(nativeLocation, 'location', proxy, this.client.names);
 
 		// `origin` and `name` live on the global itself ([Global] interfaces

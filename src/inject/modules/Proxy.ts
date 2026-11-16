@@ -185,6 +185,23 @@ export function catchRequiredArguments(
 		);
 }
 
+/**
+ * The object `key` is an own property of: `target`, or the prototype above
+ * it that has it. A window's functions are its own, a worker's are its
+ * scope's prototypes' (WorkerGlobalScope.prototype.fetch), and a hook that
+ * assigned to the global made the worker's an own property of the global,
+ * which a page that lists the global's keys reads.
+ */
+export function ownerOf<T extends object>(target: T, key: PropertyKey): T {
+	for (
+		let owner: object | null = target;
+		owner;
+		owner = Reflect.getPrototypeOf(owner)
+	)
+		if (Reflect.getOwnPropertyDescriptor(owner, key)) return owner as T;
+	return target;
+}
+
 export function contextThis(that: unknown, global: typeof globalThis): unknown {
 	if (that === undefined || that === null) {
 		return global;

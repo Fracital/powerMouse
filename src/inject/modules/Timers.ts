@@ -2,7 +2,7 @@ import Client from '../Client';
 import Module from '../Module';
 import { modifyJS } from '../rewriter';
 import { trustedScript } from '../trusted';
-import ProxyModule from './Proxy';
+import ProxyModule, { ownerOf } from './Proxy';
 
 /**
  * `setTimeout("code", ms)` compiles its string like a classic script, so it
@@ -14,7 +14,12 @@ export default class TimersModule extends Module<Client> {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
 		for (const name of ['setTimeout', 'setInterval'] as const) {
-			const global = this.client.global as unknown as Record<string, Function>;
+			// (where the browser has it: the window itself, a worker scope's
+			// prototype)
+			const global = ownerOf(
+				this.client.global as unknown as Record<string, Function>,
+				name,
+			);
 			global[name] = proxyModule.wrapFunction(
 				global[name],
 				(target, that, args) => {

@@ -17,7 +17,7 @@ import {
 import Client from '../Client';
 import Module from '../Module';
 import { failsToParse, withStack } from '../nativeErrors';
-import ProxyModule, { catchRequiredArguments } from './Proxy';
+import ProxyModule, { catchRequiredArguments, ownerOf } from './Proxy';
 import { unrouteURL } from './Unroute';
 
 /**
@@ -405,9 +405,28 @@ export default class FetchModule extends Module<Client> {
 			'type',
 		)!.get!;
 
-		this.client.global.fetch = proxyModule.wrapFunction(
+		// (where the browser has it: the window itself, a worker scope's
+		// prototype)
+		ownerOf(this.client.global, 'fetch').fetch = proxyModule.wrapFunction(
 			this.client.global.fetch,
 			async (target, that, args) => {
+				// nothing to fetch: the browser's own rejection
+				if (!args.length) return await Reflect.apply(target, that, args);
+				// called on something that is not this scope (fetch.call(o)):
+				// the browser says whether it takes the receiver, asked with
+				// no argument, which fetches nothing and rejects either way
+				if (
+					that !== undefined &&
+					that !== null &&
+					that !== this.client.global
+				) {
+					const refusal = (await Reflect.apply(target, that, []).then(
+						() => null,
+						(error: unknown) => error,
+					)) as Error | null;
+					if (/Illegal invocation$/.test(String(refusal?.message)))
+						return await Reflect.apply(target, that, args);
+				}
 				let init: RequestInit;
 				let url: urlLike;
 
