@@ -507,8 +507,8 @@ async function startController(name) {
 		'Mode',
 		ISOLATED
 			? `isolated: proxy on ${PROXY_ORIGIN}, host on ${location.origin}`
-			: `same origin (${location.origin}); not a security boundary`,
-		ISOLATED ? 'green' : 'orange',
+			: `same origin (${location.origin})`,
+		'green',
 	);
 	badge(
 		'Transport',
