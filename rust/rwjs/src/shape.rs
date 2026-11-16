@@ -377,7 +377,8 @@ impl Shapes<'_> {
 
 	/// a key an object pattern reads through the access API: an
 	/// unforgeable's name, or `postMessage` (`{ postMessage } = parent`
-	/// reads another window's, see `routes_member`)
+	/// reads another window's, see `routes_member`). An index key and a
+	/// rest are read through it only from a window or a document (`Fields`)
 	fn pattern_key(&self, name: &str) -> bool {
 		self.routed(name) || name == "postMessage"
 	}
@@ -507,7 +508,8 @@ impl Shapes<'_> {
 
 	/// What a pattern reads without a member expression to rewrite, at any
 	/// depth (`patternSpec`), for a binding pattern: an object pattern that
-	/// names an unforgeable or has a computed key, an array pattern with
+	/// names an unforgeable or has a computed key (or an index key or a
+	/// rest, marked `"..."` when that is all it has), an array pattern with
 	/// such a pattern among its elements. `rests` gets the `...` of each
 	/// array rest that is such a pattern, which is printed as a plain last
 	/// element (the spec says so)
@@ -544,6 +546,7 @@ impl Shapes<'_> {
 					let name = if property.computed { None } else { Some(self.key_name(&property.key)?) };
 					fields.add(self, name, nested);
 				}
+				fields.children |= o.rest.is_some();
 				Ok(fields.spec())
 			}
 			_ => Ok(None),
@@ -587,6 +590,7 @@ impl Shapes<'_> {
 						}
 					}
 				}
+				fields.children |= o.rest.is_some();
 				Ok(fields.spec())
 			}
 			_ => Ok(None),
@@ -625,6 +629,12 @@ struct Fields {
 	any: bool,
 	/// a computed key's value is destructured further: told apart by order
 	positional: bool,
+	/// an index key or a rest, what reads a window's children (and a rest
+	/// its `top` and `location`, a document's `location`) and nothing of
+	/// any other object the access API looks at: marked `"..."` when it is
+	/// all the pattern reads so, which the access API hands back as it is
+	/// unless the source is a window or a document
+	children: bool,
 }
 
 impl Fields {
@@ -648,6 +658,8 @@ impl Fields {
 				if shapes.pattern_key(&name) {
 					set_spec(&mut self.entries, name, Spec::True);
 					self.any = true;
+				} else if index_text(&name) {
+					self.children = true;
 				}
 			}
 		}
@@ -657,7 +669,10 @@ impl Fields {
 		if self.positional {
 			return Some(vec![("{}".to_owned(), Spec::List(self.positions))]);
 		}
-		self.any.then(|| key_order(self.entries))
+		if self.any {
+			return Some(key_order(self.entries));
+		}
+		self.children.then(|| vec![("...".to_owned(), Spec::True)])
 	}
 }
 

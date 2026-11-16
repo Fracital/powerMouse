@@ -182,12 +182,12 @@ Why the open ones stay open:
   call), and the rewriter routes an object spread through the access API
   (`{ ...0..$s$j.spread(x) }`) unless what it spreads is no window for
   certain; `spread` copies a window's own properties as member reads hand
-  them out. Still open: an array method the page made a method of the
-  window itself and calls as one
-  (`window.f = Array.prototype.at; window.f(0)`), which no call the inject
-  sees, and an object pattern's rest and a pattern's index key
-  (`const { ...rest } = window`, `const { 0: w } = window`), which the
-  rewriter does not route (window-children lists each as known).
+  them out; an object pattern's rest and a pattern's index key
+  (`const { ...rest } = window`, `const { 0: w } = window`) have their
+  source looked at the same way (`pattern` with the spec `{ "...": true }`).
+  Still open: an array method the page made a method of the window itself
+  and calls as one (`window.f = Array.prototype.at; window.f(0)`), which no
+  call the inject sees (window-children lists it as known).
 - `Document` has `[LegacyOverrideBuiltIns]`: a named iframe is an own
   property of the document that nothing can shadow or redefine while it
   exists. Only virtualising frame names (the real name attribute and

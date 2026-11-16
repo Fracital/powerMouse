@@ -885,6 +885,29 @@
 		},
 	);
 
+	// object rests: a component's props split from its children, and a
+	// record taken apart into a field and the rest
+	const component = ({ children, ...props }) => props.size.length + children;
+	function split(record) {
+		const { id, ...fields } = record;
+		return id + fields.count;
+	}
+	kernel(
+		'object-rest',
+		() => [
+			{ children: 1, size: 's', tone: 'plain' },
+			{ children: 2, size: 'm', disabled: true },
+			{ id: 3, count: 4, name: 'x' },
+			{ id: 5, count: 6, open: false },
+		],
+		(list) => {
+			let t = 0;
+			for (let r = 0; r < 1000000; r++)
+				t += component(list[r & 1]) + split(list[2 + (r & 1)]);
+			return t;
+		},
+	);
+
 	const median = (values) => {
 		const sorted = values.slice().sort((a, b) => a - b);
 		return sorted[sorted.length >> 1];

@@ -721,6 +721,13 @@ export const families = {
 		'for (const { top: t } of a) ;',
 		'for (const { top: t } = o; ; ) ;',
 		'try {} catch ({ top: t }) {}',
+		'const { ...r } = o; const { a, ...s } = f(); ({ ...t } = p)',
+		'const { 0: c } = o; const { 1e3: d, "2": e, 01: g } = p; ({ 0: h } = q)',
+		'const { a: { ...r } } = o; const [{ ...s }] = p; const { [k]: { ...t } } = q',
+		'for (const { ...r } of a) ; for ({ 0: c } of b) ;',
+		'try {} catch ({ ...e }) {}',
+		'x = ({ a, ...r } = o)',
+		'const { top, ...r } = o; const { a, ...s } = top',
 		'const { top: t = function () { return a[b] } } = o',
 	],
 
@@ -758,6 +765,8 @@ export const families = {
 		'function f(/* a */ { top: t } /* b */, c) {}',
 		'function f({ top: t }) { function g({ location: l }) {} }',
 		'x = ({ top: t }) => ({ location: l }) => t + l',
+		'x = ({ children, ...props }) => f(props); y = function ({ 0: a }, ...[{ ...b }]) {}',
+		'x = ({ ...r } = {}) => r; y = async ({ ...r }) => r; z = function* ({ ...r }) {}',
 		'x = ({ top: t }, { a = t }) => 1',
 	],
 

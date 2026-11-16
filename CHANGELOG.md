@@ -1364,6 +1364,22 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   the URL it was asked for (a module's import.meta.url). Chrome's console
   still shows the warning. (preload-consumers suite.)
 
+- An object pattern's rest of a window (`const { ...rest } = window`, in a
+  declaration, an assignment, a parameter, a loop's head or a nested
+  pattern) and a pattern's index key (`const { 0: w } = window`) no longer
+  hand a page the real top window, the proxy's own location or a frame of
+  another site: the rest copied a window's own properties as the spread
+  did, and the index key read a child, with no call the inject could wrap.
+  The rewriter now routes the source of such a pattern through the access
+  API's `pattern` with the spec `{ "...": true }`, which hands back what is
+  neither a window nor a document as it is (the same brand checks as
+  `spread`) and wraps a window or a document as it wraps a pattern that
+  names `top`. A parameter's pattern moves into the function's body as one
+  that names `top` does. Measured in Chrome 157 on the measure-compute
+  fixture, a loop that splits a component's props from its children and a
+  record into a field and the rest went from 1.75 to 2.9 times its native
+  time (some 30 ns a pattern). The wasm rewriter's revision is 14.
+  (window-children suite.)
 - An object spread of a window (`{ ...window }`) no longer hands a page the
   real top window, the proxy's own location or a frame of another site.
   The spread copies a window's own enumerable properties with no call the

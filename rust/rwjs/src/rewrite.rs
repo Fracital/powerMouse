@@ -88,7 +88,7 @@ pub struct Output {
 /// an older module's text and the glue never drives a module it was not
 /// written for (src/wasm/rewriter.ts holds the same number).
 /// rust/host/parity.mjs --cases holds it to the outputs (cases.revision).
-pub const REVISION: &str = "13";
+pub const REVISION: &str = "14";
 
 /// Why the rewriter hands a script back to the JavaScript one
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -538,6 +538,30 @@ pub(crate) mod tests {
 		);
 		// an array's spread and a call's are iterated, as they were
 		assert_eq!(plain("x = [...o]; f(...o)"), "x = [...o]; f(...o)");
+	}
+
+	#[test]
+	fn object_rests() {
+		// a rest or an index key: the source is looked at, marked
+		assert_eq!(
+			plain("const { ...r } = o;"),
+			"const { ...r } = 0..$s$j.pattern(o, {\"...\":true}, \"{ ...r } = o\");"
+		);
+		assert_eq!(
+			plain("const { a, 0: b, ...r } = o;"),
+			"const { a, 0: b, ...r } = 0..$s$j.pattern(o, {\"...\":true}, \"{ a, 0: b, ...r } = o\");"
+		);
+		assert_eq!(
+			plain("({ ...r } = o);"),
+			"({ ...r } = 0..$s$j.pattern(o, {\"...\":true}, \"({ ...r } = o)\"));"
+		);
+		// with an unforgeable's name, the whole spec as before
+		assert_eq!(
+			plain("const { top, ...r } = o;"),
+			"const { top, ...r } = 0..$s$j.pattern(o, {\"top\":true}, \"{ top, ...r } = o\");"
+		);
+		// none: a plain key, an index that is no index
+		assert_eq!(plain("const { a, '01': b } = o;"), "const { a, '01': b } = o;");
 	}
 
 	#[test]

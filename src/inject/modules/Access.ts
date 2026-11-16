@@ -1409,6 +1409,12 @@ export default class AccessModule extends Module<Client> {
 					object === null
 				)
 					return object;
+				// `{ ...rest } = o`, `{ 0: w } = o`: a pattern that reads nothing
+				// of any other object the helpers look at reads a window's
+				// children (and its rest a window's `top` and `location`, a
+				// document's `location`), so only those are wrapped
+				if (spec?.['...'] === true && !copiesGuarded(object as object))
+					return object;
 				const elements = spec?.['[]'];
 				if (isArray(elements)) return iterated(object, elements);
 				const positions = spec?.['{}'];
@@ -1437,8 +1443,9 @@ export default class AccessModule extends Module<Client> {
 							const value = api.get(
 								Reflect.get(target, key),
 								key,
-								// (`{ postMessage } = parent`: a read of the window's)
-								key === 'postMessage' ? target : undefined,
+								// (`{ postMessage } = parent`: a read of the window's, as
+								// `{ 0: w } = window` is of a child it injects first)
+								key === 'postMessage' || indexKey(key) ? target : undefined,
 							);
 							const nested = ordered
 								? ordered[position++]

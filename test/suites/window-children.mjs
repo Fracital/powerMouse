@@ -23,13 +23,15 @@
 // and `location` (a document's spread its `location`), which came out as
 // the browser holds them, the real top and the proxy's own URL. The
 // rewriter routes the spread through the access API, which hands each out
-// as a member read does.
+// as a member read does. An object pattern's rest (`const { ...rest } =
+// window`, in a declaration, an assignment, a parameter, a loop's head, a
+// nested pattern) copies the same, and a pattern's index key
+// (`const { 0: child } = window`) reads a child: the rewriter routes their
+// source too.
 //
-// What this does not cover: an object pattern's rest (`const { ...rest } =
-// window`) and a pattern's index key (`const { 0: child } = window`), which
-// read a window's children with no call the inject can wrap, and an array
-// method the page made a method of the window itself and calls as one; they
-// are listed below as known, and fail the suite once they read as natively.
+// What this does not cover: an array method the page made a method of the
+// window itself and calls as one; it is listed below as known, and fails
+// the suite once it reads as natively.
 import {
 	done,
 	FIXTURE,
@@ -41,20 +43,7 @@ import {
 	waitActive,
 } from '../lib.mjs';
 
-const rest =
-	"an object pattern's rest copies a window's own properties as the browser reads them (the rewriter does not route a pattern with only a rest)";
 const KNOWN = new Map([
-	['restChildren', rest],
-	['restTop', rest],
-	['restAssign', rest],
-	['restParam', rest],
-	['restNested', rest],
-	['restForOf', rest],
-	['restDocument', rest],
-	[
-		'indexPattern',
-		"a pattern's index key reads a window's child as the browser reads it (the rewriter routes a pattern's unforgeable names, not its index keys)",
-	],
 	[
 		'ownMethod',
 		"Array.prototype's method made a window's own and called as one has the window as `this` with no call the inject sees (the methods are not wrapped: src/inject/modules/Reflection.ts applyWindowChildren)",
