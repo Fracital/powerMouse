@@ -380,13 +380,17 @@ export default class UnrouteModule extends Module<Client> {
 			);
 		}
 
-		const visible = (entries: PerformanceEntry[]) =>
-			entries.filter((entry) => pageName(entry) !== null);
+		const pageEntry = (entry: object) =>
+			pageName(entry as PerformanceEntry) !== null;
+		const visible = (entries: PerformanceEntry[]) => entries.filter(pageEntry);
 		const filterList = <T extends Function>(fn: T) =>
 			proxyModule.wrapFunction(fn, (target, that, args) =>
 				visible(Reflect.apply(target, that, args)),
 			);
 
+		// (an observer's list as the browser has it, for the callbacks below)
+		const nativeListEntries =
+			global.PerformanceObserverEntryList?.prototype.getEntries;
 		for (const prototype of [
 			Performance.prototype,
 			global.PerformanceObserverEntryList?.prototype,
@@ -412,10 +416,40 @@ export default class UnrouteModule extends Module<Client> {
 			);
 		}
 
-		if (global.PerformanceObserver)
-			global.PerformanceObserver.prototype.takeRecords = filterList(
-				global.PerformanceObserver.prototype.takeRecords,
-			);
+		const NativeObserver = global.PerformanceObserver;
+		if (typeof NativeObserver !== 'function') return;
+		NativeObserver.prototype.takeRecords = filterList(
+			NativeObserver.prototype.takeRecords,
+		);
+		// An observer hears of the proxy's own entries too: a callback whose
+		// entries are all the proxy's would be called with an empty list,
+		// which the browser never does
+		global.PerformanceObserver = proxyModule.wrapFunction(
+			NativeObserver,
+			(target, that, args, newTarget) => {
+				// not a constructor call, or not a callback: the browser's error
+				if (!newTarget || typeof args[0] !== 'function')
+					return newTarget
+						? Reflect.construct(target, args, newTarget)
+						: Reflect.apply(target, that, args);
+				const callback = args[0] as Function;
+				args[0] = function (this: unknown, ...called: unknown[]) {
+					try {
+						const entries: PerformanceEntry[] = Reflect.apply(
+							nativeListEntries,
+							called[0],
+							[],
+						);
+						if (entries.length && !entries.some(pageEntry)) return;
+					} catch (error) {
+						// not the browser's own call: as it came
+					}
+					return Reflect.apply(callback, this, called);
+				};
+				return Reflect.construct(target, args, newTarget);
+			},
+			true,
+		);
 	}
 	/** the first of the page's frames in each error's stack, once formatted */
 	#pageSites = new WeakMap<object, ErrorLocation>();

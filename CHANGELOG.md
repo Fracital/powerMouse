@@ -1299,6 +1299,13 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   network error), and the console names the route's network error, not
   Chrome's digest message. Import maps' `integrity` stays inert
   (src/scriptRoutes.ts). (sri suite.)
+- A `PerformanceObserver`'s callback no longer runs with an empty list.
+  The browser tells an observer of every entry of its types, the proxy's
+  own loads and the long tasks of other sites' frames among them; the
+  lists never showed those, but the callback still ran for a batch of
+  nothing else (measured: twice for resources and once for long tasks on
+  the fixture page, never natively) (performance-entries,
+  performance-buffer suites).
 - A frame read before it loaded (an about:blank child or popup, one written
   with document.write) no longer shows the access API on its
   Number.prototype to the page that made it. The inject defines the API
