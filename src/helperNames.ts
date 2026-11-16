@@ -39,6 +39,18 @@ export const DEFAULT_NAMES: Readonly<HelperNames> = Object.freeze({
 	error: 'stompError',
 });
 
+/**
+ * The access API as a rewritten script reaches it: a property of a number
+ * literal (`0..$s$j`), read off Number.prototype, where the inject defines
+ * it for good (src/inject/modules/Access.ts). A global of that name is
+ * whatever the page's scopes make of the name: a parameter, a `let`, a
+ * `with` object or an eval'd `var` called `$s$j` was handed every value a
+ * rewritten read meant to route, the real `top` among them. No binding
+ * stands between a literal and its prototype. The rewriter writes the same
+ * (rust/rwjs/src/config.rs `api`).
+ */
+export const accessExpression = (access: string) => `0..${access}`;
+
 /** the names a config asks for, the defaults for the rest */
 export function helperNames(config?: object | null): HelperNames {
 	const names: HelperNames = { ...DEFAULT_NAMES };

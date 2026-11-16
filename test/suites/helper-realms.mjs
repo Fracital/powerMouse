@@ -1,6 +1,6 @@
 // Rewritten code in realms of its own (helper-realms.html): a javascript:
 // URL in a fresh iframe, blob: module and classic workers, a data: worker.
-// Code the rewriter rewrote calls the access helper (`$s$j.get(...)`), so
+// Code the rewriter rewrote calls the access helper (`0..$s$j.get(...)`), so
 // wherever it runs the inject must have installed it first, or the page's
 // code throws a ReferenceError instead of running. Each route's report is
 // compared with the same page loaded natively, and the proxied load may

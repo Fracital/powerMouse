@@ -173,7 +173,7 @@ if (artifacts.includes('core.wasm')) {
 	ok(
 		'a read of location goes through the access API, the rest as it was',
 		'output' in read &&
-			read.output === 'x = $s$j.get(location, "location").href; // why',
+			read.output === 'x = 0..$s$j.get(location, "location").href; // why',
 		JSON.stringify(read),
 	);
 	instance.configure('access\t$a\n');
@@ -181,7 +181,7 @@ if (artifacts.includes('core.wasm')) {
 	instance.configure('access\t$s$j\n');
 	ok(
 		"the helper names are the configuration's",
-		'output' in renamed && renamed.output === 'x = $a.get(top, "top");',
+		'output' in renamed && renamed.output === 'x = 0..$a.get(top, "top");',
 		JSON.stringify(renamed),
 	);
 	// what a rewrite depends on per script (flag 8), and what it found (16)
@@ -211,7 +211,7 @@ if (artifacts.includes('core.wasm')) {
 	const unled = instance.call('location', 0);
 	ok(
 		'the leading text holds for one script',
-		'output' in unled && unled.output === '$s$j.get(location, "location")',
+		'output' in unled && unled.output === '0..$s$j.get(location, "location")',
 		JSON.stringify(unled),
 	);
 	// (64, 128) the parser alone: a classic script, and one of a single

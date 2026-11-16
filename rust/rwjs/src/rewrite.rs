@@ -88,7 +88,7 @@ pub struct Output {
 /// an older module's text and the glue never drives a module it was not
 /// written for (src/wasm/rewriter.ts holds the same number).
 /// rust/host/parity.mjs --cases holds it to the outputs (cases.revision).
-pub const REVISION: &str = "8";
+pub const REVISION: &str = "10";
 
 /// Why the rewriter hands a script back to the JavaScript one
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -465,59 +465,56 @@ pub(crate) mod tests {
 
 	#[test]
 	fn identifier_reads() {
-		assert_eq!(plain("x = location;"), "x = $s$j.get(location, \"location\");");
-		assert_eq!(plain("({ top })"), "({ top: $s$j.get(top, \"top\") })");
-		assert_eq!(plain("typeof top; a.top;"), "typeof top; $s$j.get2(a, \"top\", \"(a.top)\");");
-		assert_eq!(plain("return[location]"), "return[$s$j.get(location, \"location\")]");
+		assert_eq!(plain("x = location;"), "x = 0..$s$j.get(location, \"location\");");
+		assert_eq!(plain("({ top })"), "({ top: 0..$s$j.get(top, \"top\") })");
+		assert_eq!(plain("typeof top; a.top;"), "typeof top; 0..$s$j.get2(a, \"top\", \"(a.top)\");");
+		assert_eq!(plain("return[location]"), "return[0..$s$j.get(location, \"location\")]");
 	}
 
 	#[test]
 	fn member_reads() {
-		assert_eq!(plain("x = o[k];"), "x = $s$j.get2(o, k, \"(o[k])\");");
-		assert_eq!(plain("return o[k];"), "return $s$j.get2(o, k, \"o[k]\");");
+		assert_eq!(plain("x = o[k];"), "x = 0..$s$j.get2(o, k, \"(o[k])\");");
+		assert_eq!(plain("return o[k];"), "return 0..$s$j.get2(o, k, \"o[k]\");");
 		assert_eq!(
 			plain("f(location.href)"),
-			"f($s$j.get(location, \"location\").href)"
+			"f(0..$s$j.get(location, \"location\").href)"
 		);
 		assert_eq!(
 			plain("x = a[b][c]"),
-			"x = $s$j.get2($s$j.get2(a, b, \"(a[b])\"), c, \"(a[b][c])\")"
+			"x = 0..$s$j.get2(0..$s$j.get2(a, b, \"(a[b])\"), c, \"(a[b][c])\")"
 		);
-		assert_eq!(plain("return\"abc\"[i]"), "return $s$j.get2(\"abc\", i, \"\\\"abc\\\"[i]\")");
-		assert_eq!(plain("x = o['a'] + o[0]"), "x = o['a'] + $s$j.get2(o, 0, \"(o[0])\")");
+		assert_eq!(plain("return\"abc\"[i]"), "return 0..$s$j.get2(\"abc\", i, \"\\\"abc\\\"[i]\")");
+		assert_eq!(plain("x = o['a'] + o[0]"), "x = o['a'] + 0..$s$j.get2(o, 0, \"(o[0])\")");
 	}
 
 	#[test]
 	fn optional_chains() {
-		assert_eq!(plain("x = a?.[k]"), "x = $s$j.get2(a, k, \"(a?.[k])\", true)");
-		assert_eq!(plain("x = a?.[k].x"), "x = $s$j.lazy(a)?.(k).x");
+		assert_eq!(plain("x = a?.[k]"), "x = 0..$s$j.get2(a, k, \"(a?.[k])\", true)");
+		assert_eq!(plain("x = a?.[k].x"), "x = 0..$s$j.lazy(a)?.(k).x");
 		assert_eq!(
 			plain("x = a?.b[k].x"),
-			"x = $s$j.get2(a?.b, k, \"(a?.b[k])\", true)?.x"
+			"x = 0..$s$j.get2(a?.b, k, \"(a?.b[k])\", true)?.x"
 		);
-		assert_eq!(plain("x = a?.b[k()]"), "x = $s$j.lazy(a?.b)?.(k())");
+		assert_eq!(plain("x = a?.b[k()]"), "x = 0..$s$j.lazy(a?.b)?.(k())");
 	}
 
 	#[test]
 	fn calls() {
-		assert_eq!(plain("o[k](a)"), "$s$j.call2(o, k, [a], \"o[k](0)\")");
-		assert_eq!(
-			plain("o[k](f())"),
-			"$s$j.call2(o, k, [f()], \"o[k](0)\")"
-		);
+		assert_eq!(plain("o[k](a)"), "0..$s$j.call2(o, k, [a], \"o[k](0)\")");
+		assert_eq!(plain("o[k](f())"), "0..$s$j.fn2(o, k, \"o[k](0)\")(f())");
 		assert_eq!(
 			plain("location.reload()"),
-			"$s$j.call2(location, \"reload\", [], \"location.reload()\")".replace("location,", "$s$j.get(location, \"location\"),")
+			"0..$s$j.call2(location, \"reload\", [], \"location.reload()\")".replace("location,", "0..$s$j.get(location, \"location\"),")
 		);
-		assert_eq!(plain("top(1)"), "$s$j.fcall($s$j.get(top, \"top\"), [1], \"top(0)\")");
+		assert_eq!(plain("top(1)"), "0..$s$j.fcall(0..$s$j.get(top, \"top\"), [1], \"top(0)\")");
 		assert_eq!(
 			plain("a?.[k](f())"),
-			"$s$j.method(a, true, false, \"a?.[k](0)\")?.(k)?.(f())"
+			"0..$s$j.method(a, true, false, \"a?.[k](0)\")?.(k)?.(f())"
 		);
-		assert_eq!(plain("new o[k]"), "$s$j.new2(o, k, [], \"new (o[k])()\")");
+		assert_eq!(plain("new o[k]"), "0..$s$j.new2(o, k, [], \"new (o[k])()\")");
 		assert_eq!(
 			plain("new top"),
-			"$s$j.fnew($s$j.get(top, \"top\"), [], \"new (top)()\")"
+			"0..$s$j.fnew(0..$s$j.get(top, \"top\"), [], \"new (top)()\")"
 		);
 	}
 
@@ -526,10 +523,10 @@ pub(crate) mod tests {
 		// a call is `post`; every other way to the function is a read of it
 		assert_eq!(
 			plain("w.postMessage.call(v, m)"),
-			"$s$j.call3(w, \"postMessage\", \"call\", [v, m], \"w.postMessage.call(0, 0)\")"
+			"0..$s$j.call3(w, \"postMessage\", \"call\", [v, m], \"w.postMessage.call(0, 0)\")"
 		);
-		assert!(plain("x = w.postMessage").starts_with("x = $s$j.get2(w, \"postMessage\", "));
-		assert!(plain("f(w['postMessage'])").starts_with("f($s$j.get2(w, 'postMessage', "));
+		assert!(plain("x = w.postMessage").starts_with("x = 0..$s$j.get2(w, \"postMessage\", "));
+		assert!(plain("f(w['postMessage'])").starts_with("f(0..$s$j.get2(w, 'postMessage', "));
 		for kept in [
 			"w.postMessage = f",
 			"w.postMessage++",
@@ -543,7 +540,7 @@ pub(crate) mod tests {
 		}
 		assert_eq!(
 			plain("var { postMessage: pm } = parent"),
-			"var { postMessage: pm } = $s$j.pattern(parent, {\"postMessage\":true}, \"{ postMessage: pm } = parent\")"
+			"var { postMessage: pm } = 0..$s$j.pattern(parent, {\"postMessage\":true}, \"{ postMessage: pm } = parent\")"
 		);
 	}
 
@@ -551,11 +548,11 @@ pub(crate) mod tests {
 	fn with_scopes() {
 		assert_eq!(
 			plain("with (o) postMessage(m)"),
-			"{const $s$jw = $s$j.scope(o); with ($s$jw[0]) with ($s$jw[1]) postMessage(m)}"
+			"with (0..$s$j.scope(o)) with (0..$s$j.scoped()) postMessage(m)"
 		);
 		assert_eq!(
 			plain("with (a, b) { postMessage }"),
-			"{const $s$jw = $s$j.scope((a, b)); with ($s$jw[0]) with ($s$jw[1]) { postMessage }}"
+			"with (0..$s$j.scope((a, b))) with (0..$s$j.scoped()) { postMessage }"
 		);
 		assert_eq!(plain("with (o) o.postMessage = 1"), "with (o) o.postMessage = 1");
 		assert_eq!(plain("with (o) ({ postMessage: 1 })"), "with (o) ({ postMessage: 1 })");
@@ -565,11 +562,11 @@ pub(crate) mod tests {
 	fn index_writes() {
 		assert_eq!(
 			plain("s[0] = o"),
-			"$s$j.set2(s, 0, (t$t, t$p, t$v) => t$t[t$p] = t$v, o, \"(s[0] = o)\")"
+			"0..$s$j.set2(s, 0, (t$t, t$p, t$v) => t$t[t$p] = t$v, o, \"(s[0] = o)\")"
 		);
 		assert_eq!(
 			plain("s.options['1'] = (o)"),
-			"$s$j.set2(s.options, '1', (t$t, t$p, t$v) => t$t[t$p] = t$v, (o), \"(s.options['1'] = (o))\")"
+			"0..$s$j.set2(s.options, '1', (t$t, t$p, t$v) => t$t[t$p] = t$v, (o), \"(s.options['1'] = (o))\")"
 		);
 		// a value made where it is written is no node
 		for kept in [
@@ -593,58 +590,58 @@ pub(crate) mod tests {
 	fn writes() {
 		assert_eq!(
 			plain("location = u"),
-			"$s$j.set1(location, \"location\", (t$t, t$p, t$v) => t$t[t$p] = t$v, t$v => location = t$v, u, \"(location = u)\")"
+			"0..$s$j.set1(location, \"location\", (t$t, t$p, t$v) => t$t[t$p] = t$v, t$v => location = t$v, u, \"(location = u)\")"
 		);
 		assert_eq!(
 			plain("o[k] += v"),
-			"$s$j.set2(o, k, (t$t, t$p, t$v) => t$t[t$p] += t$v, v, \"(o[k] += v)\")"
+			"0..$s$j.set2(o, k, (t$t, t$p, t$v) => t$t[t$p] += t$v, v, \"(o[k] += v)\")"
 		);
 		assert_eq!(
 			plain("o[k]++"),
-			"$s$j.set2(o, k, (t$t, t$p, t$v) => t$t[t$p]++, undefined, \"(o[k]++)\")"
+			"0..$s$j.set2(o, k, (t$t, t$p, t$v) => t$t[t$p]++, undefined, \"(o[k]++)\")"
 		);
 		assert_eq!(
 			plain("o[k]++\n(f)()"),
-			"$s$j.set2(o, k, (t$t, t$p, t$v) => t$t[t$p]++, undefined, \"(o[k]++)\");\n(f)()"
+			"0..$s$j.set2(o, k, (t$t, t$p, t$v) => t$t[t$p]++, undefined, \"(o[k]++)\");\n(f)()"
 		);
 		assert_eq!(
 			plain("[location] = a"),
-			"[$s$j.ref1(location, t$v => location = t$v).value] = a"
+			"[0..$s$j.ref1(location, t$v => location = t$v).value] = a"
 		);
 	}
 
 	#[test]
 	fn the_rest() {
-		assert_eq!(plain("k in o"), "$s$j.has(k, o)");
+		assert_eq!(plain("k in o"), "0..$s$j.has(k, o)");
 		assert_eq!(plain("'k' in o; debugger"), "'k' in o; ;");
 		assert_eq!(
 			plain("import(u)"),
-			"$s$j.import(\"https://a.example/x.js\", u)"
+			"0..$s$j.import(\"https://a.example/x.js\", u)"
 		);
 		assert_eq!(
 			plain("w.postMessage(m, '*')"),
-			"$s$j.post(w, [m, '*'], false, \"w.postMessage(0, 0)\")"
+			"0..$s$j.post(w, [m, '*'], 1, \"w.postMessage(0, 0)\")"
 		);
 		// the `;` that keeps a statement's opening parenthesis from being the
 		// call of the one before stands ahead of the whole statement
-		assert_eq!(plain("x\neval(c)"), "x\n;($s$j.isEval(eval) ? eval($s$j.evalScope(c)) : eval(c))");
-		assert!(plain("x\neval(c)[b]").starts_with("x\n$s$j.get2(($s$j.isEval(eval) ?"));
-		assert!(plain("x\neval(c).top").starts_with("x\n$s$j.get2(($s$j.isEval(eval) ?"));
-		assert!(plain("x\neval(c).top = 1").starts_with("x\n$s$j.set2(($s$j.isEval(eval) ?"));
-		assert!(plain("x\neval(c).postMessage(m)").starts_with("x\n$s$j.post(($s$j.isEval(eval) ?"));
-		assert!(plain("x\neval(c)(top)").starts_with("x\n;($s$j.isEval(eval) ?"));
-		assert!(plain("x\neval(c), top").starts_with("x\n;($s$j.isEval(eval) ?"));
+		assert_eq!(plain("x\neval(c)"), "x\n;(0..$s$j.isEval(eval) ? eval(0..$s$j.evalScope(c)) : eval(c))");
+		assert!(plain("x\neval(c)[b]").starts_with("x\n0..$s$j.get2((0..$s$j.isEval(eval) ?"));
+		assert!(plain("x\neval(c).top").starts_with("x\n0..$s$j.get2((0..$s$j.isEval(eval) ?"));
+		assert!(plain("x\neval(c).top = 1").starts_with("x\n0..$s$j.set2((0..$s$j.isEval(eval) ?"));
+		assert!(plain("x\neval(c).postMessage(m)").starts_with("x\n0..$s$j.post((0..$s$j.isEval(eval) ?"));
+		assert!(plain("x\neval(c)(top)").starts_with("x\n;(0..$s$j.isEval(eval) ?"));
+		assert!(plain("x\neval(c), top").starts_with("x\n;(0..$s$j.isEval(eval) ?"));
 		assert_eq!(
 			plain("x = eval(c)"),
-			"x = ($s$j.isEval(eval) ? eval($s$j.evalScope(c)) : eval(c))"
+			"x = (0..$s$j.isEval(eval) ? eval(0..$s$j.evalScope(c)) : eval(c))"
 		);
 		assert_eq!(
 			plain("const { top: t } = o"),
-			"const { top: t } = $s$j.pattern(o, {\"top\":true}, \"{ top: t } = o\")"
+			"const { top: t } = 0..$s$j.pattern(o, {\"top\":true}, \"{ top: t } = o\")"
 		);
 		assert_eq!(
 			plain("var location = u;"),
-			"{var $s$jl0 = u;$s$j.set1(location, \"location\", (t$t, t$p, t$v) => t$t[t$p] = t$v, t$v => location = t$v, $s$jl0, \"(location=$s$jl0)\");}"
+			"{var $s$jl0 = u;0..$s$j.set1(location, \"location\", (t$t, t$p, t$v) => t$t[t$p] = t$v, t$v => location = t$v, $s$jl0, \"(location=$s$jl0)\");}"
 		);
 	}
 
@@ -654,80 +651,146 @@ pub(crate) mod tests {
 		// parentheses
 		assert_eq!(
 			plain("o[k].m(f()).v = 1"),
-			"($s$j.method($s$j.get2(o, k, \"(o[k])\"), false, false, \"o[k].m(0)\")?.(\"m\")?.(f())).v = 1"
+			"(0..$s$j.method(0..$s$j.get2(o, k, \"(o[k])\"), false, false, \"o[k].m(0)\")?.(\"m\")?.(f())).v = 1"
 		);
 		// a post's method read for `.call` or `.apply` is a read of it, made
 		// where the page wrote it
 		assert_eq!(
 			plain("f().postMessage.call(w, m)"),
-			"$s$j.call3(f(), \"postMessage\", \"call\", [w, m], \"f().postMessage.call(0, 0)\")"
+			"0..$s$j.call3(f(), \"postMessage\", \"call\", [w, m], \"f().postMessage.call(0, 0)\")"
 		);
 		assert_eq!(
 			plain("x.postMessage.apply(w, [1], g())"),
-			"$s$j.method($s$j.get2(x, \"postMessage\", \"(x.postMessage)\"), false, false, \"x.postMessage.apply(0, 0, 0)\")?.(\"apply\")?.(w, [1], g())"
+			"0..$s$j.method(0..$s$j.get2(x, \"postMessage\", \"(x.postMessage)\"), false, false, \"x.postMessage.apply(0, 0, 0)\")?.(\"apply\")?.(w, [1], g())"
 		);
 		// super's members
-		assert_eq!(plain("o = { m() { super.top } }"), "o = { m() { $s$j.get(super.top, \"top\") } }");
+		assert_eq!(plain("o = { m() { super.top } }"), "o = { m() { 0..$s$j.get(super.top, \"top\") } }");
 		assert_eq!(
 			plain("o = { m() { super[k] } }"),
-			"o = { m() { (t$p => $s$j.get(super[t$p], t$p))($s$j.key(k)) } }"
+			"o = { m() { (t$p => 0..$s$j.get(super[t$p], t$p))(0..$s$j.key(k)) } }"
 		);
 		assert_eq!(
 			plain("o = { m() { super.eval(c) } }"),
-			"o = { m() { $s$j.smethod($s$j.get(super.eval, \"eval\"), this, \"super.eval(0)\")(c) } }"
+			"o = { m() { 0..$s$j.smethod(0..$s$j.get(super.eval, \"eval\"), this, \"super.eval(0)\")(c) } }"
 		);
 		assert_eq!(
 			plain("o = { m() { super.location = u } }"),
-			"o = { m() { $s$j.sset(\"location\", this, t$p => super[t$p], (t$p, t$v) => super[t$p] = t$v, (t$t, t$p, t$v) => t$t[t$p] = t$v, u) } }"
+			"o = { m() { 0..$s$j.sset(\"location\", this, t$p => super[t$p], (t$p, t$v) => super[t$p] = t$v, (t$t, t$p, t$v) => t$t[t$p] = t$v, u) } }"
 		);
 		assert_eq!(
 			plain("o = { m() { [super[k]] = a } }"),
-			"o = { m() { [$s$j.sref($s$j.key(k), this, t$p => super[t$p], (t$p, t$v) => super[t$p] = t$v).value] = a } }"
+			"o = { m() { [0..$s$j.sref(0..$s$j.key(k), this, t$p => super[t$p], (t$p, t$v) => super[t$p] = t$v).value] = a } }"
 		);
 		assert_eq!(plain("o = { m() { super.x; super.top`t` } }"), "o = { m() { super.x; super.top`t` } }");
 		// computed keys, heritage, a target whose key is known when it runs
-		assert_eq!(plain("({ [top]: 1 })"), "({ [$s$j.get(top, \"top\")]: 1 })");
-		assert_eq!(plain("class A extends top {}"), "class A extends $s$j.get(top, \"top\") {}");
-		assert_eq!(plain("[o[k]] = a"), "[$s$j.ref2(o, k).value] = a");
+		assert_eq!(plain("({ [top]: 1 })"), "({ [0..$s$j.get(top, \"top\")]: 1 })");
+		assert_eq!(plain("class A extends top {}"), "class A extends 0..$s$j.get(top, \"top\") {}");
+		assert_eq!(
+			plain("[o[k]] = a"),
+			"[0..$s$j.ref2(o, k, (t$t, t$p, t$v) => t$t[t$p] = t$v).value] = a"
+		);
 		// what a replacement stands around
 		assert_eq!(
 			plain("import(top)"),
-			"$s$j.import(\"https://a.example/x.js\", $s$j.get(top, \"top\"))"
+			"0..$s$j.import(\"https://a.example/x.js\", 0..$s$j.get(top, \"top\"))"
 		);
 		// patterns wherever they stand
 		assert_eq!(
 			plain("const [{ top: t }] = a"),
-			"const [{ top: t }] = $s$j.pattern($s$j.iter(a, \"array\", \"a\"), {\"[]\":[{\"top\":true}]})"
+			"const [{ top: t }] = 0..$s$j.pattern(0..$s$j.iter(a, \"array\", \"a\"), {\"[]\":[{\"top\":true}]})"
 		);
 		assert_eq!(
 			plain("const [x, ...[{ top: t }]] = a"),
-			"const [x, [{ top: t }]] = $s$j.pattern($s$j.iter(a, \"array\", \"a\"), {\"[]\":[0,[{\"[]\":[{\"top\":true}]}]]})"
+			"const [x, [{ top: t }]] = 0..$s$j.pattern(0..$s$j.iter(a, \"array\", \"a\"), {\"[]\":[0,[{\"[]\":[{\"top\":true}]}]]})"
 		);
 		assert_eq!(
 			plain("const { [k]: { top: t }, a } = o"),
-			"const { [k]: { top: t }, a } = $s$j.pattern(o, {\"{}\":[{\"top\":true},0]}, \"{ [k]: { top: t }, a } = o\")"
+			"const { [k]: { top: t }, a } = 0..$s$j.pattern(o, {\"{}\":[{\"top\":true},0]}, \"{ [k]: { top: t }, a } = o\")"
 		);
 		assert_eq!(
 			plain("for (const { top: t } of a) f(t)"),
-			"for (const $s$jf of a) {const { top: t } = $s$j.pattern($s$jf, {\"top\":true}, \"{ top: t }=$s$jf\");f(t)}"
+			"for (const $s$jf of a) {const { top: t } = 0..$s$j.pattern($s$jf, {\"top\":true}, \"{ top: t }=$s$jf\");f(t)}"
 		);
 		assert_eq!(
 			plain("try {} catch ({ top: t }) {}"),
-			"try {} catch ($s$jc) {let { top: t } = $s$j.pattern($s$jc, {\"top\":true}, \"{ top: t }=$s$jc\");}"
+			"try {} catch ($s$jc) {let { top: t } = 0..$s$j.pattern($s$jc, {\"top\":true}, \"{ top: t }=$s$jc\");}"
 		);
 		assert_eq!(
 			plain("function f({ top: t }, b = t) {}"),
-			"function f($s$ja0, $s$ja1 = void 0) {var { top: t } = $s$j.pattern($s$ja0, {\"top\":true}, \"{ top: t }=$s$ja0\"), b = $s$ja1 === void 0 ? t : $s$ja1;}"
+			"function f($s$ja0, $s$ja1 = void 0) {var { top: t } = 0..$s$j.pattern($s$ja0, {\"top\":true}, \"{ top: t }=$s$ja0\"), b = $s$ja1 === void 0 ? t : $s$ja1;}"
 		);
 		// `eval` as a pattern's target is a reference whose write keeps it the eval
-		assert_eq!(plain("[eval] = [e]"), "[$s$j.ref1(eval, t$v => eval = t$v, \"eval\").value] = [e]");
+		assert_eq!(plain("[eval] = [e]"), "[0..$s$j.ref1(eval, t$v => eval = t$v, \"eval\").value] = [e]");
 		assert_eq!(
 			plain("({ eval } = o)"),
-			"({ eval: $s$j.ref1(eval, t$v => eval = t$v, \"eval\").value } = $s$j.pattern(o, {\"eval\":true}, \"({ eval } = o)\"))"
+			"({ eval: 0..$s$j.ref1(eval, t$v => eval = t$v, \"eval\").value } = 0..$s$j.pattern(o, {\"eval\":true}, \"({ eval } = o)\"))"
 		);
-		assert_eq!(plain("[location] = a"), "[$s$j.ref1(location, t$v => location = t$v).value] = a");
+		assert_eq!(plain("[location] = a"), "[0..$s$j.ref1(location, t$v => location = t$v).value] = a");
 		// a parenthesised string stays an expression
-		assert_eq!(plain("('use strict'); top"), "('use strict'); $s$j.get(top, \"top\")");
+		assert_eq!(plain("('use strict'); top"), "('use strict'); 0..$s$j.get(top, \"top\")");
+	}
+
+	#[test]
+	fn evaluation_order() {
+		// a compound or logical write whose value does work: the operator
+		// itself reads the reference, evaluates the value (or does not), writes
+		assert_eq!(
+			plain("o[k] ||= f()"),
+			"0..$s$j.ref2(o, k, (t$t, t$p, t$v) => t$t[t$p] = t$v).value ||= f()"
+		);
+		assert_eq!(
+			plain("x = (o.top) += g()"),
+			"x = (0..$s$j.ref2(o, \"top\", (t$t, t$p, t$v) => t$t[t$p] = t$v).value) += g()"
+		);
+		assert_eq!(
+			plain("location ??= f()"),
+			"0..$s$j.ref1(location, t$v => location = t$v).value ??= f()"
+		);
+		assert_eq!(
+			plain("o = { m() { super[k] += f() } }"),
+			"o = { m() { 0..$s$j.sref(0..$s$j.key(k), this, t$p => super[t$p], (t$p, t$v) => super[t$p] = t$v).value += f() } }"
+		);
+		// (one whose value does none keeps the one helper)
+		assert!(plain("o[k] ||= 1").starts_with("0..$s$j.set2(o, k, "));
+		assert!(plain("o[k] = f()").starts_with("0..$s$j.set2(o, k, "));
+		// a call whose arguments do work reads its method first
+		assert_eq!(plain("o[k](f(), 1)"), "0..$s$j.fn2(o, k, \"o[k](0, 0)\")(f(), 1)");
+		assert_eq!(plain("(o[k])(a.b)"), "0..$s$j.fn2(o, k, \"o[k](0)\")(a.b)");
+		assert_eq!(
+			plain("new o[k](f())"),
+			"0..$s$j.fnew(0..$s$j.get2(o, k, \"(o[k])\"), [f()], \"new (o[k])(0)\")"
+		);
+		assert_eq!(
+			plain("w.postMessage(f())"),
+			"0..$s$j.poster(w, \"w.postMessage(0)\", 1)(f())"
+		);
+		assert_eq!(
+			plain("w?.postMessage(f())"),
+			"0..$s$j.poster(w, \"w?.postMessage(0)\", 2)?.(f())"
+		);
+		// a tag is called on its object
+		assert_eq!(plain("o[k]`a${1}`"), "0..$s$j.fn2(o, k, \"o[k]()\")`a${1}`");
+		assert_eq!(
+			plain("new o[k]`a`"),
+			"0..$s$j.fnew(0..$s$j.fn2(o, k, \"o[k]()\")`a`, [], \"new (o[k]`a`)()\")"
+		);
+		// `delete` of a chain's member deletes it, and an optional call of
+		// eval is no direct eval
+		assert_eq!(plain("delete o?.[k]; delete o?.a[k]"), "delete o?.[k]; delete o?.a[k]");
+		assert_eq!(plain("eval?.(c)"), "0..$s$j.get(eval, \"eval\")?.(c)");
+		assert_eq!(
+			plain("eval(...a)"),
+			"(0..$s$j.isEval(eval) ? eval(0..$s$j.evalScope(...a)) : eval(...a))"
+		);
+		// the value of a pattern assignment is its source
+		assert_eq!(
+			plain("r = ({ top: t } = o)"),
+			"r = (0..$s$j.source({ top: t } = 0..$s$j.pattern(o, {\"top\":true}, \"({ top: t } = o)\")))"
+		);
+		assert_eq!(
+			plain("({ top: t } = o)"),
+			"({ top: t } = 0..$s$j.pattern(o, {\"top\":true}, \"({ top: t } = o)\"))"
+		);
 	}
 
 	#[test]
@@ -753,11 +816,11 @@ pub(crate) mod tests {
 		};
 		let mut route = |_: u32, _: &str| None;
 		let out = |source: &str, route: &mut Route| rewrite(source, &options, route).unwrap().text;
-		assert_eq!(out("'use strict'\nlocation", &mut route), "'use strict';PRE;\n$s$j.get(location, \"location\")");
-		assert_eq!(out("location", &mut route), "PRE;$s$j.get(location, \"location\")");
+		assert_eq!(out("'use strict'\nlocation", &mut route), "'use strict';PRE;\n0..$s$j.get(location, \"location\")");
+		assert_eq!(out("location", &mut route), "PRE;0..$s$j.get(location, \"location\")");
 		assert_eq!(
 			out("--> a\n /* b */ --> c\nlocation", &mut route),
-			"--> a\n /* b */ --> c\nPRE;$s$j.get(location, \"location\")"
+			"--> a\n /* b */ --> c\nPRE;0..$s$j.get(location, \"location\")"
 		);
 		assert_eq!(out("--> a", &mut route), "--> a\nPRE;");
 		assert_eq!(out("a-->b", &mut route), "PRE;a-->b");

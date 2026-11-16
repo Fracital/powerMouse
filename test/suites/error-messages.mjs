@@ -32,13 +32,9 @@ import {
 const target = `${FIXTURE}pages/error-messages.html`;
 
 // what cannot read as natively, and why
-const TAGGED =
-	'a tagged template calls its tag itself, with the strings object made once for its place in the code, so the call cannot move into a helper: V8 names the helper that read the tag';
 const EARLIER_LINK =
 	'the helper is handed the value of the chain before it (`o?.u`), undefined whether `o` short-circuited or `o.u` is undefined, and answers undefined for both, where natively only the first skips the rest';
 const RECORDED = {
-	'top.nope`x`': TAGGED,
-	'o[k]`x`': TAGGED,
 	'o?.u[k]': EARLIER_LINK,
 	'o?.u[k]()': EARLIER_LINK,
 };

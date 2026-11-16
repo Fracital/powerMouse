@@ -956,6 +956,11 @@ export default class ContextModule extends Module<DocumentClient> {
 
 		const isWindow = (value: unknown): value is Context => {
 			try {
+				// (by the browser's own `window` getter, which answers for a
+				// window of any origin: a Proxy of the page's is asked nothing
+				// and passes for none)
+				if (this.client.isWindowObject)
+					return this.client.isWindowObject(value);
 				return (
 					typeof value === 'object' &&
 					value !== null &&
@@ -1007,6 +1012,12 @@ export default class ContextModule extends Module<DocumentClient> {
 		this.client.restrictForeign = (value, container) => {
 			if (typeof value !== 'object' || value === null) return value;
 			try {
+				// Only a window is asked for the client. Every computed read
+				// that lands on an object comes here, and a Proxy of the
+				// page's asked `client in value` would learn the client's
+				// name, which no page is told and every page of a controller
+				// shares
+				if (!isWindow(value)) return value;
 				if (!(this.client.names.client in value)) {
 					// a child window that runs nothing yet (an iframe's initial
 					// about:blank), read off its window by index or by name: injected
@@ -1272,28 +1283,22 @@ export default class ContextModule extends Module<DocumentClient> {
 		// with no member read to route. The rewriter puts this scope inside
 		// the head's. It has the one name, for as long as the window's
 		// postMessage is the hook, and a write or a delete of the name is the
-		// window's. It has the access API's name too: the helpers the body's
-		// code calls are this realm's, where the head's window would answer
-		// with its own.
+		// window's. (The helpers the body's code calls are reached by no name
+		// a scope answers: src/helperNames.ts accessExpression.)
 		this.client.postScope = (target) => {
 			if (!this.client.postMessageOf!(target)) return undefined;
 			let scope = scopes.get(target as object);
 			if (!scope) {
-				const access = this.client.names.access;
 				scope = new Proxy(Object.create(null) as object, {
 					has: (_, key) =>
-						key === access ||
-						(key === 'postMessage' && !!this.client.postMessageOf!(target)),
+						key === 'postMessage' && !!this.client.postMessageOf!(target),
 					get: (_, key) =>
-						key === access
-							? (this.client.global as Record<string, any>)[access]
-							: key === 'postMessage'
-								? this.client.postMessageOf!(target)
-								: undefined,
-					set: (_, key, value) =>
-						key === access || Reflect.set(target as object, key, value),
+						key === 'postMessage'
+							? this.client.postMessageOf!(target)
+							: undefined,
+					set: (_, key, value) => Reflect.set(target as object, key, value),
 					deleteProperty: (_, key) =>
-						key === access || Reflect.deleteProperty(target as object, key),
+						Reflect.deleteProperty(target as object, key),
 				});
 				scopes.set(target as object, scope);
 			}

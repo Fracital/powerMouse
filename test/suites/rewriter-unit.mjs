@@ -89,7 +89,7 @@ console.warn = () => {};
 const unmarked = (out) =>
 	out
 		.replace(
-			/typeof (\S+?)!=="undefined"&&\1\.src\("[0-9a-z]+","[^"]*",function\(\)\{\/\*[^*]*\*\/\}\);/,
+			/0\.\.\S+?\?\.src\("[0-9a-z]+","[^"]*",function\(\)\{\/\*[^*]*\*\/\}\);/,
 			'',
 		)
 		.replace(/\/\*[0-9a-z]+\.[0-9a-z]+\.[0-9a-z]+\*\//g, '');
@@ -102,6 +102,22 @@ const marked = (source, type = 'generic', extra = {}) =>
 // suite.
 const rewrite = (source, type, extra) => unmarked(marked(source, type, extra));
 const shape = (source, type, extra) => rewrite(source, type, extra);
+/**
+ * `run` with `api` as the access API a rewritten script reaches: a property
+ * of Number.prototype (`0..$s$j`, src/helperNames.ts accessExpression), as
+ * the inject defines it in a page
+ */
+const withAccess = (api, run) => {
+	Reflect.defineProperty(Number.prototype, '$s$j', {
+		value: api,
+		configurable: true,
+	});
+	try {
+		return run();
+	} finally {
+		delete Number.prototype.$s$j;
+	}
+};
 const parses = (code) => {
 	try {
 		new Function(code);
@@ -238,9 +254,9 @@ const parses = (code) => {
 	ok(
 		'data: bodies are percent-decoded before rewriting and encoded again',
 		/^data:text\/javascript,/.test(js) &&
-			/\$s\$j\.get\(top, ['"]top['"]\)\.x/.test(decoded(js)) &&
+			/0\.\.\$s\$j\.get\(top, ['"]top['"]\)\.x/.test(decoded(js)) &&
 			/^data:text\/javascript;base64,/.test(b64) &&
-			/\$s\$j\.get\(top, ['"]top['"]\)/.test(
+			/0\.\.\$s\$j\.get\(top, ['"]top['"]\)/.test(
 				Buffer.from(b64.split(',')[1], 'base64').toString(),
 			) &&
 			/^data:text\/html,/.test(html) &&
@@ -319,19 +335,19 @@ const parses = (code) => {
 	);
 	ok(
 		'postMessage calls in every shape go through the access API',
-		/\$s\$j\.post\(w,\s*\[\s*m,\s*'\*'\s*\],\s*false,\s*"w\.postMessage\(0, 0\)"\)/.test(
+		/0\.\.\$s\$j\.post\(w,\s*\[\s*m,\s*'\*'\s*\],\s*1,\s*"w\.postMessage\(0, 0\)"\)/.test(
 			out,
 		) &&
-			/\$s\$j\.post\(w,\s*\[\s*m\s*\],\s*true,\s*"/.test(out) &&
-			/\$s\$j\.call3\(w,\s*"postMessage",\s*"call",\s*\[\s*w2,\s*m,\s*o\s*\],\s*"/.test(
+			/0\.\.\$s\$j\.post\(w,\s*\[\s*m\s*\],\s*2,\s*"/.test(out) &&
+			/0\.\.\$s\$j\.call3\(w,\s*"postMessage",\s*"call",\s*\[\s*w2,\s*m,\s*o\s*\],\s*"/.test(
 				out,
 			) &&
-			/\$s\$j\.call3\(w,\s*"postMessage",\s*"apply",\s*\[\s*w2,\s*list\s*\],\s*"/.test(
+			/0\.\.\$s\$j\.call3\(w,\s*"postMessage",\s*"apply",\s*\[\s*w2,\s*list\s*\],\s*"/.test(
 				out,
 			) &&
-			/Reflect\.apply\(\$s\$j\.get2\(w,\s*"postMessage",\s*"/.test(out) &&
-			/pm\s*=\s*\$s\$j\.get2\(w,\s*"postMessage",\s*"/.test(out) &&
-			/\$s\$j\.post\(port,\s*\[\s*m\s*\],\s*false,\s*"/.test(out) &&
+			/Reflect\.apply\(0\.\.\$s\$j\.get2\(w,\s*"postMessage",\s*"/.test(out) &&
+			/pm\s*=\s*0\.\.\$s\$j\.get2\(w,\s*"postMessage",\s*"/.test(out) &&
+			/0\.\.\$s\$j\.post\(port,\s*\[\s*m\s*\],\s*1,\s*"/.test(out) &&
 			/x\.postmessage\(m\)/.test(out) &&
 			parses(out),
 		out,
@@ -346,11 +362,13 @@ const parses = (code) => {
 	);
 	ok(
 		'an in that may find a helper name goes through the access API',
-		/\$s\$j\.has\('\$s\$j',\s*window\)/.test(out) &&
-			/\$s\$j\.has\(k,\s*o\)/.test(out) &&
-			/\$s\$j\.has\(`[^`]*`,\s*o\)/.test(out) &&
-			/\$s\$j\.has\(o\.k,\s*\$s\$j\.get\(top,\s*"top"\)\)/.test(out) &&
-			/\$s\$j\.has\('\$P\$s',\s*w\)/.test(out) &&
+		/0\.\.\$s\$j\.has\('\$s\$j',\s*window\)/.test(out) &&
+			/0\.\.\$s\$j\.has\(k,\s*o\)/.test(out) &&
+			/0\.\.\$s\$j\.has\(`[^`]*`,\s*o\)/.test(out) &&
+			/0\.\.\$s\$j\.has\(o\.k,\s*0\.\.\$s\$j\.get\(top,\s*"top"\)\)/.test(
+				out,
+			) &&
+			/0\.\.\$s\$j\.has\('\$P\$s',\s*w\)/.test(out) &&
 			/'x' in o/.test(out) &&
 			/\b0 in a/.test(out) &&
 			/#p in o/.test(out) &&
@@ -371,7 +389,8 @@ const parses = (code) => {
 	const mod = shape("var location = 'x';", 'genericModule');
 	ok(
 		'a top-level var binding of location routes the assignment',
-		(top.match(/\$s\$j\.set1\(location, "location"/g) || []).length === 3 &&
+		(top.match(/0\.\.\$s\$j\.set1\(location, "location"/g) || []).length ===
+			3 &&
 			/var \$s\$jl0 = 'x'/.test(top) &&
 			/location: \$s\$jl0/.test(top) &&
 			/var \[\$s\$jl0\] = l/.test(top) &&
@@ -381,10 +400,12 @@ const parses = (code) => {
 		JSON.stringify([top, inner]),
 	);
 	// a location the pattern or loop head of an assignment writes is a
-	// reference: it becomes the member `$s$j.ref1(location, setter).value`
-	// (`ref2(object, key)` for `x.location`), whose write routes; bindings
+	// reference: it becomes the member `0..$s$j.ref1(location, setter).value`
+	// (`ref2(object, key, write)` for `x.location`, the write being the
+	// page's own code's, so it fails as the page's would), whose write routes; bindings
 	// and other targets stay as written (a member target named `top` was a
 	// get2 call, which is no assignment target)
+	const WRITE = '(t$t, t$p, t$v) => t$t[t$p] = t$v';
 	const targets = shape(
 		'[location] = a; ({location} = o); ({a: location = 1} = o); [...location] = a; for (location of a); for (location in o);',
 	);
@@ -396,7 +417,7 @@ const parses = (code) => {
 		// the key may be `location`)
 		[
 			'[a[i], a[j]] = [b, c];',
-			'[$s$j.ref2(a, i).value, $s$j.ref2(a, j).value] = [b, c];',
+			'[0..$s$j.ref2(a, i, (t$t, t$p, t$v) => t$t[t$p] = t$v).value, 0..$s$j.ref2(a, j, (t$t, t$p, t$v) => t$t[t$p] = t$v).value] = [b, c];',
 		],
 		['[a[0], a.x] = [b, c];', '[a[0], a.x] = [b, c];'],
 		['({x: a.top, y: [b]} = o);', '({x: a.top, y: [b]} = o);'],
@@ -407,23 +428,24 @@ const parses = (code) => {
 		// parameter's)
 		[
 			'try {} catch ({location}) {}',
-			'try {} catch ($s$jc) {let {location} = $s$j.pattern($s$jc, {"location":true}, "{location}=$s$jc");}',
+			'try {} catch ($s$jc) {let {location} = 0..$s$j.pattern($s$jc, {"location":true}, "{location}=$s$jc");}',
 		],
 	];
 	ok(
 		'a location an assignment pattern or a loop head writes routes',
-		(targets.match(/\$s\$j\.ref1\(location, t\$v =>/g) || []).length === 6 &&
-			/location: \$s\$j\.ref1\(/.test(targets) &&
+		(targets.match(/0\.\.\$s\$j\.ref1\(location, t\$v =>/g) || []).length ===
+			6 &&
+			/location: 0\.\.\$s\$j\.ref1\(/.test(targets) &&
 			/\.value = 1/.test(targets) &&
-			/for \(\$s\$j\.ref1\(location, t\$v =>\s*\(?location = t\$v\)?\)\.value of a\)/.test(
+			/for \(0\.\.\$s\$j\.ref1\(location, t\$v =>\s*\(?location = t\$v\)?\)\.value of a\)/.test(
 				targets,
 			) &&
 			members.includes(
-				`[$s$j.ref2($s$j.get(top, "top"), "location").value] = a`,
+				`[0..$s$j.ref2(0..$s$j.get(top, "top"), "location", ${WRITE}).value] = a`,
 			) &&
-			members.includes("a: $s$j.ref2(window, 'location').value") &&
+			members.includes(`a: 0..$s$j.ref2(window, 'location', ${WRITE}).value`) &&
 			members.includes(
-				`for ($s$j.ref2($s$j.get2(frames, 0, "(frames[0])"), "location").value of a)`,
+				`for (0..$s$j.ref2(0..$s$j.get2(frames, 0, "(frames[0])"), "location", ${WRITE}).value of a)`,
 			) &&
 			kept.every(([code, out]) => shape(code) === out) &&
 			parses(targets) &&
@@ -439,13 +461,13 @@ const parses = (code) => {
 	ok(
 		'an eval an assignment pattern or a loop head writes keeps it the eval',
 		loose(evals).includes(
-			loose(`[$s$j.ref1(eval, t$v => eval = t$v, "eval").value] = [e];`),
+			loose(`[0..$s$j.ref1(eval, t$v => eval = t$v, "eval").value] = [e];`),
 		) &&
 			loose(evals).includes(
-				loose(`{eval: $s$j.ref1(eval, t$v => eval = t$v, "eval").value}`),
+				loose(`{eval: 0..$s$j.ref1(eval, t$v => eval = t$v, "eval").value}`),
 			) &&
 			loose(evals).includes(
-				loose(`for ($s$j.ref1(eval, t$v => eval = t$v, "eval").value of a)`),
+				loose(`for (0..$s$j.ref1(eval, t$v => eval = t$v, "eval").value of a)`),
 			) &&
 			parses(evals),
 		evals,
@@ -470,9 +492,9 @@ const parses = (code) => {
 		];
 		ok(
 			'a literal index read goes through the access API, nothing else by index does',
-			routed[0].startsWith('$s$j.get2(frames, 0, ') &&
-				routed[1].startsWith("$s$j.get2(parent, '1', ") &&
-				routed[2].startsWith('x = $s$j.get2(w, 2, ') &&
+			routed[0].startsWith('0..$s$j.get2(frames, 0, ') &&
+				routed[1].startsWith("0..$s$j.get2(parent, '1', ") &&
+				routed[2].startsWith('x = 0..$s$j.get2(w, 2, ') &&
 				routed[2].endsWith(').document') &&
 				kept.every((code) => !shape(code).includes('$s$j')),
 			JSON.stringify([routed, kept.map((code) => shape(code))]),
@@ -489,10 +511,13 @@ const parses = (code) => {
 	);
 	ok(
 		'a var binding of location outside any function routes the assignment',
-		(nested.match(/\$s\$j\.set1\(location, "location"/g) || []).length === 5 &&
-			nested.includes('var $s$jl0 = $s$j.get(top, "top").a;') &&
-			/for \(var \$s\$jl0 of a\) \{\s*\$s\$j\.set1\(location/.test(nested) &&
-			/for \(var \$s\$jl0 = c, i = 0, \$s\$jl1 = \(?\$s\$j\.set1/.test(
+		(nested.match(/0\.\.\$s\$j\.set1\(location, "location"/g) || []).length ===
+			5 &&
+			nested.includes('var $s$jl0 = 0..$s$j.get(top, "top").a;') &&
+			/for \(var \$s\$jl0 of a\) \{\s*0\.\.\$s\$j\.set1\(location/.test(
+				nested,
+			) &&
+			/for \(var \$s\$jl0 = c, i = 0, \$s\$jl1 = \(?0\.\.\$s\$j\.set1/.test(
 				nested,
 			) &&
 			!/set1/.test(local) &&
@@ -507,9 +532,11 @@ const parses = (code) => {
 	ok(
 		'a loop replaced for its head and for its source has its source rewritten',
 		twice.includes(
-			`of $s$j.iter(((s = $s$j.get(top, "top")), $s$j.get(top, "top").list), "of", "(s = top), top.list")`,
+			`of 0..$s$j.iter(((s = 0..$s$j.get(top, "top")), 0..$s$j.get(top, "top").list), "of", "(s = top), top.list")`,
 		) &&
-			twice.includes(`of $s$j.iter($s$j.get2(o, k, "(o[k])"), "of", "o[k]")`) &&
+			twice.includes(
+				`of 0..$s$j.iter(0..$s$j.get2(o, k, "(o[k])"), "of", "o[k]")`,
+			) &&
 			parses(twice),
 		twice,
 	);
@@ -632,21 +659,25 @@ const parses = (code) => {
 	// given; after a blocked window.open that is null, and the rewritten call
 	// must fail the way the original does (it threw "Function.prototype.apply
 	// was called on undefined" from inside the access API)
+	// (the third argument says which links may short-circuit: 1 none, 2 the
+	// receiver's, src/inject/modules/Access.ts `post`)
 	const access = {
-		post: (target, args, optional) => {
-			const method = postMessageMethod(target, optional);
+		post: (target, args, links) => {
+			const method = postMessageMethod(target, links !== 1);
 			return method === undefined
 				? undefined
 				: Reflect.apply(method, target, args);
 		},
-		poster: (target) =>
-			postMessageMethod(target, true) === undefined
+		poster: (target, partial, links) =>
+			postMessageMethod(target, links !== 1) === undefined
 				? undefined
-				: (...args) => access.post(target, args, true),
+				: (...args) => access.post(target, args, links),
 	};
 	const run = (code, remote) => {
 		try {
-			return String(new Function('remote', '$s$j', code)(remote, access));
+			return String(
+				withAccess(access, () => new Function('remote', code)(remote)),
+			);
 		} catch (error) {
 			return `${error.constructor.name}: ${error.message}`;
 		}
@@ -687,7 +718,7 @@ const parses = (code) => {
 	const out = shape('top; location.href; eval(x)');
 	ok(
 		'reads of unforgeables go through the access API',
-		/\$s\$j\.get\(top, "top"\)/.test(out) && parses(out),
+		/0\.\.\$s\$j\.get\(top, "top"\)/.test(out) && parses(out),
 		out,
 	);
 }
@@ -695,13 +726,13 @@ const parses = (code) => {
 	const out = shape("import('./m.js')");
 	ok(
 		'a classic script passes its own URL as the import base',
-		out.includes(`$s$j.import("https://example.com/a.js", './m.js')`),
+		out.includes(`0..$s$j.import("https://example.com/a.js", './m.js')`),
 		out,
 	);
 	const module = shape("import('./m.js')", 'genericModule');
 	ok(
 		'a module passes import.meta.url and defines import.meta.resolve',
-		module.includes('$s$j.import(import.meta.url,') &&
+		module.includes('0..$s$j.import(import.meta.url,') &&
 			module.includes('import.meta.resolve = '),
 		module,
 	);
@@ -710,7 +741,7 @@ const parses = (code) => {
 	const out = shape('const { a: { top: t } } = o;');
 	ok(
 		'a nested pattern wraps its source with the keys to follow',
-		/\$s\$j\.pattern\(o, \{"a":\{"top":true\}\}, "\{ a: \{ top: t \} \} = o"\)/.test(
+		/0\.\.\$s\$j\.pattern\(o, \{"a":\{"top":true\}\}, "\{ a: \{ top: t \} \} = o"\)/.test(
 			out,
 		) && parses(out),
 		out,
@@ -718,28 +749,28 @@ const parses = (code) => {
 }
 {
 	// an operation V8 would name in its message by printing a helper's call
-	// (`$s$j.get(...).foo is not a function`) is the access API's, given the
+	// (`0..$s$j.get(...).foo is not a function`) is the access API's, given the
 	// page's text to name instead; anything else is left as it was
 	const shapes = {
-		'location.foo()': `$s$j.call2($s$j.get(location, "location"), "foo", [], "location.foo()")`,
-		'o[k].x(a)': `$s$j.call3(o, k, "x", [a], "o[k].x(0)")`,
-		'location.x.y(a)': `$s$j.call2($s$j.get(location, "location").x, "y", [a], "location.x.y(0)")`,
-		'top.x(f())': `$s$j.method($s$j.get(top, "top"), false, false, "top.x(0)")?.("x")?.(f())`,
-		'top()': `$s$j.fcall($s$j.get(top, "top"), [], "top()")`,
-		'o[k](a)(b)': `$s$j.fcall($s$j.call2(o, k, [a], "o[k](0)"), [b], "o[k](a)(0)")`,
-		'new location.x()': `$s$j.new2($s$j.get(location, "location"), "x", [], "new (location.x)()")`,
-		'new top()': `$s$j.fnew($s$j.get(top, "top"), [], "new (top)()")`,
-		'[...location]': `[...$s$j.iter($s$j.get(location, "location"), "spread", "location")]`,
-		'f(...o[k])': `f(...$s$j.iter($s$j.get2(o, k, "(o[k])"), "args", "o[k]"))`,
-		'for (x of top);': `for (x of $s$j.iter($s$j.get(top, "top"), "of", "top"));`,
-		'const [a] = o[k];': `const [a] = $s$j.iter($s$j.get2(o, k, "(o[k])"), "array", "o[k]");`,
-		'[a] = o[k];': `[a] = $s$j.iter($s$j.get2(o, k, "(o[k])"), "assign", "o[k]");`,
-		'const { a } = top.x;': `const { a } = $s$j.coerce($s$j.get(top, "top").x, "{ a } = top.x");`,
+		'location.foo()': `0..$s$j.call2(0..$s$j.get(location, "location"), "foo", [], "location.foo()")`,
+		'o[k].x(a)': `0..$s$j.call3(o, k, "x", [a], "o[k].x(0)")`,
+		'location.x.y(a)': `0..$s$j.call2(0..$s$j.get(location, "location").x, "y", [a], "location.x.y(0)")`,
+		'top.x(f())': `0..$s$j.method(0..$s$j.get(top, "top"), false, false, "top.x(0)")?.("x")?.(f())`,
+		'top()': `0..$s$j.fcall(0..$s$j.get(top, "top"), [], "top()")`,
+		'o[k](a)(b)': `0..$s$j.fcall(0..$s$j.call2(o, k, [a], "o[k](0)"), [b], "o[k](a)(0)")`,
+		'new location.x()': `0..$s$j.new2(0..$s$j.get(location, "location"), "x", [], "new (location.x)()")`,
+		'new top()': `0..$s$j.fnew(0..$s$j.get(top, "top"), [], "new (top)()")`,
+		'[...location]': `[...0..$s$j.iter(0..$s$j.get(location, "location"), "spread", "location")]`,
+		'f(...o[k])': `f(...0..$s$j.iter(0..$s$j.get2(o, k, "(o[k])"), "args", "o[k]"))`,
+		'for (x of top);': `for (x of 0..$s$j.iter(0..$s$j.get(top, "top"), "of", "top"));`,
+		'const [a] = o[k];': `const [a] = 0..$s$j.iter(0..$s$j.get2(o, k, "(o[k])"), "array", "o[k]");`,
+		'[a] = o[k];': `[a] = 0..$s$j.iter(0..$s$j.get2(o, k, "(o[k])"), "assign", "o[k]");`,
+		'const { a } = top.x;': `const { a } = 0..$s$j.coerce(0..$s$j.get(top, "top").x, "{ a } = top.x");`,
 		// which links of a chain short-circuit (1 the object's, 2 the call's)
-		'o?.[k]();': `$s$j.call2(o, k, [], "o?.[k]()", 1);`,
-		'o[k]?.();': `$s$j.call2(o, k, [], "o[k]?.()", 2);`,
+		'o?.[k]();': `0..$s$j.call2(o, k, [], "o?.[k]()", 1);`,
+		'o[k]?.();': `0..$s$j.call2(o, k, [], "o[k]?.()", 2);`,
 		// a?.[k].x: an undefined a[k] throws reading x, as natively
-		'o?.[k].x;': `$s$j.lazy(o)?.(k).x;`,
+		'o?.[k].x;': `0..$s$j.lazy(o)?.(k).x;`,
 		// untouched: nothing in them is a helper's
 		'a.b.c(d); new A.B(); [...a.b]; for (x of a()); const { a } = b.c;': `a.b.c(d);\nnew A.B();\n[...a.b];\nfor (x of a());\nconst { a } = b.c;`,
 	};
@@ -760,7 +791,7 @@ const parses = (code) => {
 	const out = rewrite('const f = ({ top: t }, b) => t;');
 	ok(
 		'a destructured parameter moves into the body as var',
-		/\(\$s\$ja0, b\) => \{\s*var \{\s*top: t\s*\} = \$s\$j\.pattern\(\$s\$ja0/.test(
+		/\(\$s\$ja0, b\) => \{\s*var \{\s*top: t\s*\} = 0\.\.\$s\$j\.pattern\(\$s\$ja0/.test(
 			out,
 		) && parses(out),
 		out,
@@ -778,7 +809,7 @@ const parses = (code) => {
 		) &&
 			// (the text the error names is the backend's own)
 			later.includes(
-				'var { top: t } = $s$j.pattern($s$ja0, {"top":true}, "{ top: t }=$s$ja0"), b = $s$ja1 === void 0 ? t : $s$ja1, [d = t] = $s$ja3 === void 0 ? [] : $s$ja3, [e = t] = $s$ja4;',
+				'var { top: t } = 0..$s$j.pattern($s$ja0, {"top":true}, "{ top: t }=$s$ja0"), b = $s$ja1 === void 0 ? t : $s$ja1, [d = t] = $s$ja3 === void 0 ? [] : $s$ja3, [e = t] = $s$ja4;',
 			) &&
 			parses(later),
 		later,
@@ -922,9 +953,9 @@ console.warn = warn;
 	const compound = shape('o[k] += location.href');
 	ok(
 		'a computed member assignment rewrites the value it assigns',
-		value.includes('$s$j.get(top, "top")') &&
-			nested.includes('$s$j.get(location, "location")') &&
-			compound.includes('$s$j.get(location, "location")'),
+		value.includes('0..$s$j.get(top, "top")') &&
+			nested.includes('0..$s$j.get(location, "location")') &&
+			compound.includes('0..$s$j.get(location, "location")'),
 		[value, nested, compound].join('\n'),
 	);
 }
@@ -1096,11 +1127,12 @@ console.warn = warn;
 	const run = (code, helper) => {
 		const got = {};
 		const window = { __put: (prefix, fns) => Object.assign(got, fns) };
-		new Function('window', '$s$j', 'location', 'top', code)(
-			window,
-			helper,
-			{ href: '', hash: '' },
-			window,
+		withAccess(helper, () =>
+			new Function('window', 'location', 'top', code)(
+				window,
+				{ href: '', hash: '' },
+				window,
+			),
 		);
 		return got;
 	};
@@ -1129,10 +1161,8 @@ console.warn = warn;
 	const load = (code, helper) => {
 		// its UMD wrapper puts THREE on globalThis
 		const self = {};
-		new Function('globalThis', 'console', '$s$j', code)(
-			self,
-			{ warn() {} },
-			helper,
+		withAccess(helper, () =>
+			new Function('globalThis', 'console', code)(self, { warn() {} }),
 		);
 		return self.THREE;
 	};
@@ -1284,8 +1314,8 @@ console.warn = warn;
 	const out = shape('eval(o[k], top)');
 	ok(
 		"a direct eval's arguments are rewritten in both of its branches",
-		(out.match(/\$s\$j\.get2\(o, k, /g) || []).length === 2 &&
-			(out.match(/\$s\$j\.get\(top, "top"\)/g) || []).length === 2 &&
+		(out.match(/0\.\.\$s\$j\.get2\(o, k, /g) || []).length === 2 &&
+			(out.match(/0\.\.\$s\$j\.get\(top, "top"\)/g) || []).length === 2 &&
 			parses(out),
 		out,
 	);
@@ -1353,13 +1383,15 @@ console.warn = warn;
 	);
 	ok(
 		"super.postMessage.call, .apply and Reflect.apply of it stay the class's own calls",
-		own.includes('super.postMessage.call(this, $s$j.get(top, "top"))') &&
-			own.includes('super.postMessage.apply(this, [$s$j.get(top, "top")])') &&
+		own.includes('super.postMessage.call(this, 0..$s$j.get(top, "top"))') &&
 			own.includes(
-				'Reflect.apply(super.postMessage, this, [$s$j.get(top, "top")])',
+				'super.postMessage.apply(this, [0..$s$j.get(top, "top")])',
+			) &&
+			own.includes(
+				'Reflect.apply(super.postMessage, this, [0..$s$j.get(top, "top")])',
 			) &&
 			// (another window's is read through the access API, and called)
-			own.includes('$s$j.call3(w, "postMessage", "call", [') &&
+			own.includes('0..$s$j.call3(w, "postMessage", "call", [') &&
 			parses(own),
 		own,
 	);
@@ -1376,14 +1408,18 @@ console.warn = warn;
 	);
 	ok(
 		'the value assigned to a bare location, top or eval is rewritten',
-		assigned.includes('$s$j.get(top, "top"), "(location = top)")') &&
-			assigned.includes('$s$j.get2(o, k, "(o[k])"), "(location += o[k])")') &&
-			/return \$s\$j\.get\(top, "top"\);/.test(assigned) &&
+		assigned.includes('0..$s$j.get(top, "top"), "(location = top)")') &&
+			// (a compound write whose value does work reads the name first:
+			// the reference form, which the operator itself reads and writes)
 			assigned.includes(
-				'$s$j.get(location, "location"), "(eval &&= location)")',
+				'0..$s$j.ref1(location, t$v => location = t$v).value += 0..$s$j.get2(o, k, "(o[k])");',
+			) &&
+			/return 0\.\.\$s\$j\.get\(top, "top"\);/.test(assigned) &&
+			assigned.includes(
+				'0..$s$j.get(location, "location"), "(eval &&= location)")',
 			) &&
 			assigned.includes(
-				`$s$j.isEval(eval) ? eval($s$j.evalScope(x)) : eval(x)), "(location = eval(x))")`,
+				`0..$s$j.isEval(eval) ? eval(0..$s$j.evalScope(x)) : eval(x)), "(location = eval(x))")`,
 			) &&
 			parses(assigned),
 		assigned,
@@ -1392,10 +1428,10 @@ console.warn = warn;
 	ok(
 		"a dynamic import's specifier and options are rewritten",
 		imported.includes(
-			'$s$j.import("https://example.com/a.js", $s$j.get(top, "top"))',
+			'0..$s$j.import("https://example.com/a.js", 0..$s$j.get(top, "top"))',
 		) &&
 			imported.includes(
-				'($s$j.get2(o, k, "(o[k])"), { with: $s$j.get(top, "top").x })',
+				'(0..$s$j.get2(o, k, "(o[k])"), { with: 0..$s$j.get(top, "top").x })',
 			),
 		imported,
 	);
@@ -1404,10 +1440,10 @@ console.warn = warn;
 	);
 	ok(
 		'the computed keys and defaults of a pattern whose source is wrapped are rewritten',
-		count(patterns, '$s$j.get(top, "top")') === 4 &&
-			count(patterns, '$s$j.pattern(') === 2 &&
+		count(patterns, '0..$s$j.get(top, "top")') === 4 &&
+			count(patterns, '0..$s$j.pattern(') === 2 &&
 			patterns.includes(
-				'$s$j.iter($s$j.get2(o, k, "(o[k])"), "array", "o[k]")',
+				'0..$s$j.iter(0..$s$j.get2(o, k, "(o[k])"), "array", "o[k]")',
 			) &&
 			parses(patterns),
 		patterns,
@@ -1423,13 +1459,13 @@ console.warn = warn;
 	);
 	ok(
 		'a computed key named location or top is rewritten, a plain name is not',
-		count(keys, '[$s$j.get(location, "location")]') === 5 &&
+		count(keys, '[0..$s$j.get(location, "location")]') === 5 &&
 			keys.includes(
-				'[$s$j.ref2(o, $s$j.get(location, "location")).value] = l;',
+				'[0..$s$j.ref2(o, 0..$s$j.get(location, "location"), (t$t, t$p, t$v) => t$t[t$p] = t$v).value] = l;',
 			) &&
-			count(keys, '$s$j.get(location, "location")') === 7 &&
-			keys.includes('($s$j.key($s$j.get(location, "location")))') &&
-			keys.includes('extends $s$j.get(top, "top") {') &&
+			count(keys, '0..$s$j.get(location, "location")') === 7 &&
+			keys.includes('(0..$s$j.key(0..$s$j.get(location, "location")))') &&
+			keys.includes('extends 0..$s$j.get(top, "top") {') &&
 			keys.includes('location: 2') &&
 			keys.includes('location = 2;') &&
 			keys.includes('top() {') &&
@@ -1471,34 +1507,34 @@ console.warn = warn;
 	ok(
 		'super.top, super[k] and super.eval() go through the access API',
 		has(
-			`return [$s$j.get(super.top, "top"), (t$p => ($s$j.get(super[t$p], t$p)))($s$j.key(k)), $s$j.get(super["location"], "location"), super.x, super[0]];`,
+			`return [0..$s$j.get(super.top, "top"), (t$p => (0..$s$j.get(super[t$p], t$p)))(0..$s$j.key(k)), 0..$s$j.get(super["location"], "location"), super.x, super[0]];`,
 		) &&
 			has(
-				`$s$j.smethod($s$j.get(super.eval, "eval"), this, "super.eval(0)")(c)`,
+				`0..$s$j.smethod(0..$s$j.get(super.eval, "eval"), this, "super.eval(0)")(c)`,
 			) &&
 			has(
-				`$s$j.smethod((t$p => ($s$j.get(super[t$p], t$p)))($s$j.key(k)), this, "super[k](0, 0)")(a, $s$j.get(top, "top"))`,
+				`0..$s$j.smethod((t$p => (0..$s$j.get(super[t$p], t$p)))(0..$s$j.key(k)), this, "super[k](0, 0)")(a, 0..$s$j.get(top, "top"))`,
 			) &&
 			has(
-				`$s$j.smethod($s$j.get(super.top, "top"), this, "super.top?.(0)", true)?.(a)`,
+				`0..$s$j.smethod(0..$s$j.get(super.top, "top"), this, "super.top?.(0)", true)?.(a)`,
 			) &&
-			has('super.x($s$j.get(top, "top"))') &&
+			has('super.x(0..$s$j.get(top, "top"))') &&
 			parses(forms),
 		forms,
 	);
 	ok(
 		'a write to super.location or super[k] goes through the access API',
 		has(
-			`$s$j.sset("location", this, t$p => super[t$p], (t$p, t$v) => (super[t$p] = t$v), (t$t, t$p, t$v) => (t$t[t$p] = t$v), u);`,
+			`0..$s$j.sset("location", this, t$p => super[t$p], (t$p, t$v) => (super[t$p] = t$v), (t$t, t$p, t$v) => (t$t[t$p] = t$v), u);`,
 		) &&
 			has(
-				`$s$j.sset($s$j.key(k), this, t$p => super[t$p], (t$p, t$v) => (super[t$p] = t$v), (t$t, t$p, t$v) => (t$t[t$p] += t$v), $s$j.get(top, "top"));`,
+				`0..$s$j.sset(0..$s$j.key(k), this, t$p => super[t$p], (t$p, t$v) => (super[t$p] = t$v), (t$t, t$p, t$v) => (t$t[t$p] += t$v), 0..$s$j.get(top, "top"));`,
 			) &&
 			has('(t$t, t$p, t$v) => t$t[t$p]++, undefined);') &&
 			has(
-				`[$s$j.sref("location", this, t$p => super[t$p], (t$p, t$v) => (super[t$p] = t$v)).value, $s$j.sref($s$j.key(k), this,`,
+				`[0..$s$j.sref("location", this, t$p => super[t$p], (t$p, t$v) => (super[t$p] = t$v)).value, 0..$s$j.sref(0..$s$j.key(k), this,`,
 			) &&
-			has('super.x = $s$j.get(top, "top");') &&
+			has('super.x = 0..$s$j.get(top, "top");') &&
 			has('return super.top`x`;') &&
 			parses(forms),
 		forms,
@@ -1516,39 +1552,39 @@ console.warn = warn;
 	const wrong = [
 		[
 			'const [{ top: t }] = a;',
-			`const [{ top: t }] = $s$j.pattern($s$j.iter(a, "array", "a"), {"[]":[{"top":true}]});`,
+			`const [{ top: t }] = 0..$s$j.pattern(0..$s$j.iter(a, "array", "a"), {"[]":[{"top":true}]});`,
 		],
 		[
 			'[, { top: t }] = a;',
-			`[, { top: t }] = $s$j.pattern($s$j.iter(a, "assign", "a"), {"[]":[0,{"top":true}]});`,
+			`[, { top: t }] = 0..$s$j.pattern(0..$s$j.iter(a, "assign", "a"), {"[]":[0,{"top":true}]});`,
 		],
 		[
 			'const { a: [{ top: t }], [k]: { location: l }, b } = o;',
-			`= $s$j.pattern(o, {"{}":[{"[]":[{"top":true}]},{"location":true},0]}, "{ a: [{ top: t }], [k]: { location: l }, b } = o");`,
+			`= 0..$s$j.pattern(o, {"{}":[{"[]":[{"top":true}]},{"location":true},0]}, "{ a: [{ top: t }], [k]: { location: l }, b } = o");`,
 		],
 		[
 			'const [x, ...[{ top: t }]] = a;',
-			`const [x, [{ top: t }]] = $s$j.pattern($s$j.iter(a, "array", "a"), {"[]":[0,[{"[]":[{"top":true}]}]]});`,
+			`const [x, [{ top: t }]] = 0..$s$j.pattern(0..$s$j.iter(a, "array", "a"), {"[]":[0,[{"[]":[{"top":true}]}]]});`,
 		],
 		[
 			'for (const { top: t } of a) f(t);',
-			`for (const $s$jf of a) {const { top: t } = $s$j.pattern($s$jf, {"top":true}, "{ top: t }=$s$jf");f(t);}`,
+			`for (const $s$jf of a) {const { top: t } = 0..$s$j.pattern($s$jf, {"top":true}, "{ top: t }=$s$jf");f(t);}`,
 		],
 		[
 			'for ({ top: t } of a);',
-			`for (const $s$jf of a){({ top: t } = $s$j.pattern($s$jf, {"top":true}, "({ top: t }=$s$jf)"));;}`,
+			`for (const $s$jf of a){({ top: t } = 0..$s$j.pattern($s$jf, {"top":true}, "({ top: t }=$s$jf)"));;}`,
 		],
 		[
 			'try { g(); } catch ({ top: t }) { h(t); }',
-			`catch ($s$jc) {let { top: t } = $s$j.pattern($s$jc, {"top":true}, "{ top: t }=$s$jc"); h(t); }`,
+			`catch ($s$jc) {let { top: t } = 0..$s$j.pattern($s$jc, {"top":true}, "{ top: t }=$s$jc"); h(t); }`,
 		],
 		[
 			'function f(...[{ top: t }]) {}',
-			`function f(...$s$ja0) {var [{ top: t }] = $s$j.pattern($s$j.iter($s$ja0, "array", "$s$ja0"), {"[]":[{"top":true}]});}`,
+			`function f(...$s$ja0) {var [{ top: t }] = 0..$s$j.pattern(0..$s$j.iter($s$ja0, "array", "$s$ja0"), {"[]":[{"top":true}]});}`,
 		],
 		[
 			'function f([{ top: t }]) {}',
-			`function f($s$ja0) {var [{ top: t }] = $s$j.pattern($s$j.iter($s$ja0, "array", "$s$ja0"), {"[]":[{"top":true}]});}`,
+			`function f($s$ja0) {var [{ top: t }] = 0..$s$j.pattern(0..$s$j.iter($s$ja0, "array", "$s$ja0"), {"[]":[{"top":true}]});}`,
 		],
 		// nothing to wrap: left as written
 		['for (const [k, v] of a) f(k);', 'for (const [k, v] of a) f(k);'],
@@ -1575,19 +1611,21 @@ console.warn = warn;
 	);
 	ok(
 		'the method expression of postMessage.call, .apply and Reflect.apply is evaluated',
-		/\$s\$j\.call3\(f\(\), "postMessage", "call", \[\s*w,\s*\$s\$j\.get\(top, "top"\)\s*\]/.test(
+		/0\.\.\$s\$j\.call3\(f\(\), "postMessage", "call", \[\s*w,\s*0\.\.\$s\$j\.get\(top, "top"\)\s*\]/.test(
 			posts,
 		) &&
 			posts.includes(
-				'$s$j.method($s$j.get2(x, "postMessage", "(x.postMessage)"), false, false, "x.postMessage.apply(0, 0, 0)")?.("apply")?.(w, [1], g());',
+				'0..$s$j.method(0..$s$j.get2(x, "postMessage", "(x.postMessage)"), false, false, "x.postMessage.apply(0, 0, 0)")?.("apply")?.(w, [1], g());',
 			) &&
 			posts.includes(
-				'Reflect.apply($s$j.get2(a.b, "postMessage", "(a.b.postMessage)"), w, [1]);',
+				'Reflect.apply(0..$s$j.get2(a.b, "postMessage", "(a.b.postMessage)"), w, [1]);',
 			) &&
 			posts.includes(
-				'Reflect.apply($s$j.get2(x, "postMessage", "(x.postMessage)"), w, [1], g());',
+				'Reflect.apply(0..$s$j.get2(x, "postMessage", "(x.postMessage)"), w, [1], g());',
 			) &&
-			/\$s\$j\.call3\(x, "postMessage", "call", \[\s*w,\s*1\s*\]/.test(posts) &&
+			/0\.\.\$s\$j\.call3\(x, "postMessage", "call", \[\s*w,\s*1\s*\]/.test(
+				posts,
+			) &&
 			parses(posts),
 		posts,
 	);

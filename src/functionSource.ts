@@ -17,6 +17,8 @@
 // toString when a function of it is first read, so the page's realm keeps no
 // copy of the text but the script's own source.
 
+import { accessExpression } from './helperNames';
+
 /** the characters a kept text cannot carry in a block comment on one line, in the order `subs` replaces them */
 const CARRIED = ['*', '<', '\n', '\r', '\u2028', '\u2029'];
 /** what stands for them: characters scripts do not contain (one picked per text) */
@@ -75,7 +77,9 @@ export function holderStatement(access: string, key: string, text: string) {
 	CARRIED.forEach((c, i) => {
 		if (encoded.includes(c)) encoded = encoded.replaceAll(c, subs[i]!);
 	});
-	return `typeof ${access}!=="undefined"&&${access}.src(${JSON.stringify(key)},${JSON.stringify(subs.join(''))},${HOLDER_HEAD}${encoded}${HOLDER_TAIL});`;
+	// (an optional call of the API where a rewritten script reaches it,
+	// src/helperNames.ts accessExpression; a realm without the inject has none)
+	return `${accessExpression(access)}?.src(${JSON.stringify(key)},${JSON.stringify(subs.join(''))},${HOLDER_HEAD}${encoded}${HOLDER_TAIL});`;
 }
 
 let here = false;

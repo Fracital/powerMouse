@@ -23,6 +23,13 @@ pub struct Names {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
 	pub names: Names,
+	/// the access API as a rewritten script reaches it: `0..<access>`, a
+	/// property of a number literal, read off Number.prototype where the
+	/// inject defines it and nothing redefines it. A name (`<access>` as a
+	/// global) is whatever the page's scopes make of it: a parameter, a
+	/// `with` object or an eval'd `var` of that name would be handed every
+	/// value a rewritten read was meant to route
+	pub api: String,
 	/// the script's real URL, for `import()` of a classic script and routing
 	pub url: String,
 	/// the names a read of must go through the access API: the unforgeables
@@ -42,6 +49,7 @@ impl Default for Config {
 				global_proxy: "$s$L".into(),
 				global_name: "$s$N".into(),
 			},
+			api: "0..$s$j".into(),
 			url: String::new(),
 			routed: vec!["eval".into(), "location".into(), "top".into(), "$P$s".into()],
 			temps: ["t$t".into(), "t$p".into(), "t$v".into()],
@@ -63,7 +71,10 @@ impl Config {
 				return Err(format!("config line without a tab: {line:?}"));
 			};
 			match key {
-				"access" => config.names.access = value.to_owned(),
+				"access" => {
+					config.names.access = value.to_owned();
+					config.api = format!("0..{value}");
+				}
 				"client" => {
 					config.names.client = value.to_owned();
 					client_named = true;
@@ -122,6 +133,7 @@ mod tests {
 		)
 		.unwrap();
 		assert_eq!(config.names.access, "qz");
+		assert_eq!(config.api, "0..qz");
 		assert_eq!(config.names.client, "$Abc123");
 		assert!(config.routes("$Abc123") && !config.routes("$P$s"));
 		assert_eq!(config.url, "https://a.example/x.js");

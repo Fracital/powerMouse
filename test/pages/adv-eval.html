@@ -381,6 +381,29 @@
 		return (window[key] ??= 0)(C('window[key] ??= value (eval)'));
 	});
 	P('parent.top ||= value', () => who((parent.top ||= 0)));
+	// a name of the page's own that is the access API's: the rewritten read
+	// of `top` must not hand the real one to whatever the page bound there
+	P('a parameter named as the access API', () => {
+		function f($s$j) {
+			return top;
+		}
+		return who(f({ get: (value) => value }));
+	});
+	P('a let named as the access API', () => {
+		let seen;
+		{
+			let $s$j = { get: (value) => value };
+			seen = top;
+		}
+		return who(seen);
+	});
+	P('a catch parameter named as the access API', () => {
+		try {
+			throw { get: (value) => value };
+		} catch ($s$j) {
+			return who(top);
+		}
+	});
 	P('location = (seen = top, value)', () => {
 		let seen;
 		location = ((seen = top), '#sequence');
@@ -995,4 +1018,47 @@
 </script>
 <script>
 	__advFinish();
+</script>
+<script>
+	// `with` consults its object for every name, the access API's included
+	__advProbe('with an object that has the access API name', () => {
+		var seen;
+		with ({ $s$j: { get: (value) => value } }) seen = top;
+		return seen === window ? 'self' : 'OTHER-WINDOW';
+	});
+	__advProbe('with a Proxy that has every name', () => {
+		var seen;
+		var fake = new Proxy(
+			{},
+			{
+				get: (target, key) =>
+					key === Symbol.unscopables
+						? undefined
+						: key === 'top'
+							? top
+							: key === 'window'
+								? window
+								: key === 'seen'
+									? undefined
+									: { get: (value) => value },
+				has: (target, key) => key !== 'seen' && key !== 'fake',
+			},
+		);
+		with (fake) seen = top;
+		return seen === window ? 'self' : 'OTHER-WINDOW';
+	});
+	// the access API, found by its name, is not the page's to change (last:
+	// where it is, every probe after it would read through the page's get)
+	__advProbe('a member of the access API replaced', () => {
+		var api = window['$s' + '$j'];
+		var seen;
+		if (api && typeof api === 'object')
+			try {
+				api.get = (value) => value;
+			} catch (error) {
+				// a frozen object refuses in strict code only
+			}
+		seen = top;
+		return seen === window ? 'self' : 'OTHER-WINDOW';
+	});
 </script>

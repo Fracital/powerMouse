@@ -1125,6 +1125,27 @@ export const families = {
 		'class A { m() { with (o) top } }',
 		m('location = 01'),
 	],
+
+	// what the differential oracle (test/differential) found: the order a
+	// script evaluates in, what short-circuits, what a call is made on
+	order: [
+		'o[k] ||= f(); o[k] &&= f(); o[k] ??= f(); o[k] += f(); o[k] **= a.b',
+		'o[k] ||= 1; o[k] += 1; o[k] = f(); o[k]++',
+		'x = (o[k]) ??= await_; y = o.top ||= g(); o["location"] += g()',
+		'location ||= f(); top ??= f(); eval &&= f(); location += g()',
+		'function* g() { o[k] ??= yield 1; location ||= yield 2 }',
+		'async function f() { o[k] += await a; o[k] ||= await b }',
+		'class A extends B { m() { super[k] ||= f(); super.location += g(); super.x += g() } }',
+		'o[k](f()); o[k](a.b, 1); (o[k])(g()); o[k](x); o.top(f()); o["eval"](f())',
+		'new o[k](f()); new o[k](x); new o.top(f()); new (o[k])(g(), 1)',
+		'w.postMessage(f()); w.postMessage(x); w?.postMessage(f()); w.postMessage(...a)',
+		'o[k]`a${1}b`; o.top`t`; new o[k]`t`; (o[k])`t`; o[k]`t`.x = 1; w.postMessage`t`',
+		'delete o?.[k]; delete o?.a[k]; delete o?.top; delete (o?.[k]); delete o?.[k]()',
+		'eval?.(c); eval?.(c)[k]; eval(...a); eval(c, ...a); (eval)?.(c)',
+		'r = ({ top: t } = o); f([a, { top: t }] = l); ({ top: t } = o); x = { [k]: v } = o',
+		'for (({ top: t } = o); ; ) ; if (({ top: t } = o)) ; ({ top: t } = o), 1',
+		'[o[k]] = a; ({ a: o[k] } = b); for (o[k] of a) ; [o.location, w.eval] = a',
+	],
 };
 
 /** every case as {name, code, module} */

@@ -61,6 +61,16 @@
 		evalNames: names(eval),
 		evalAsks: asks(eval),
 		documentNames: names(document),
+		// where rewritten code reaches the access API (a property of a number
+		// literal): Number.prototype and a number object show nothing either
+		numberNames: names(Number.prototype),
+		numberAsks: asks(Number.prototype),
+		numberDescriptors: descriptors(Number.prototype),
+		numberIn: [Number.prototype, Object(5), new Number(1)].map(
+			(object) => helpers.filter((key) => key in object).length,
+		),
+		numberLiteralIn: literalIn(Number.prototype, 'Number.prototype'),
+		numberForIn: forIn(Object(5)),
 
 		// the `in` operator: a computed key, a literal one, a template, a
 		// key that converts to the name, on every object that has helpers

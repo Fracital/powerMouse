@@ -2077,8 +2077,9 @@ mod tests {
 			assert!(answer.is_ok(), "{source}: {answer:?}");
 			assert!(parses(source, false), "{source}");
 		}
-		// what no browser has yet is the JavaScript rewriter's, not an error
-		assert_eq!(run("@a class A {}", false), Err(Decline::Shape));
+		// what no browser has yet is answered as what no browser runs: the
+		// caller ends it so that it cannot run unrewritten the day one does
+		assert_eq!(run("@a class A {}", false), Err(Decline::Invalid));
 		// `delete` keeps the name it is asked of, for strict eval code to refuse
 		assert_eq!(run("delete top", false).unwrap(), "delete top");
 	}

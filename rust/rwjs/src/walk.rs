@@ -26,7 +26,7 @@ use oxc::allocator::Allocator;
 use crate::rewrite::{Decline, Options, ROUTE_IMPORT, Route, js_whitespace};
 use crate::shape::{
 	Mem, Shapes, Spec, bindings_named, bound_names, in_optional_chain, index_write, inner_span,
-	is_literal, is_pattern_call, iterates, post_message, pure, pure_arguments, refers_to,
+	is_literal, iterates, post_message, pure, pure_arguments, refers_to,
 	spec_text, unparen,
 };
 use crate::source::{Utf16Offsets, function_mark, quote, source_key};
@@ -107,6 +107,8 @@ pub struct Walker<'a, 'c, 'h> {
 	statement_start: Option<u32>,
 	/// the statement start a helper call was written at (`head`)
 	headed: std::cell::Cell<Option<u32>>,
+	/// the expression whose value nothing reads: an expression statement's
+	discarded: Option<Span>,
 	marks: u32,
 	key: Option<String>,
 	declined: Option<Decline>,
@@ -160,6 +162,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			method_value: None,
 			statement_start: None,
 			headed: std::cell::Cell::new(None),
+			discarded: None,
 			marks: 0,
 			key: options.params.key.clone(),
 			declined: None,
@@ -204,8 +207,18 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 
 	// ---- text ----
 
+	/// the access API's name: what the temporaries the rewriter declares
+	/// start with
 	fn access(&self) -> &'c str {
 		&self.options.config.names.access
+	}
+
+	/// the access API as a rewritten script reaches it: a property of a
+	/// number literal (`0..$s$j`), which no binding of the page's, no `with`
+	/// object and no eval'd declaration can stand in for, where a name is
+	/// whatever the page's scopes make of it
+	fn api(&self) -> &'c str {
+		&self.options.config.api
 	}
 
 	fn slice(&self, span: Span) -> &'a str {
@@ -221,7 +234,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			// opens the statement any more (open_paren)
 			self.headed.set(Some(at));
 		}
-		format!("{}{}.{name}(", if glued { " " } else { "" }, self.access())
+		format!("{}{}.{name}(", if glued { " " } else { "" }, self.api())
 	}
 
 	/// an opening parenthesis ahead of a replacement at `at`: behind a `;`
@@ -587,7 +600,12 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		if m.on_super() {
 			return self.super_read(m, cx);
 		}
-		if !self.shapes.routes_member(m, cx.no_index) {
+		let routed = self.shapes.routes_member(m, cx.no_index);
+		// (a tag on a member of a helper's value, top.f`t`: V8 would name the
+		// helper's call when it is no function, so the call is the access
+		// API's too, as for a call)
+		let named = cx.tag && !m.is_private() && self.shapes.prints_helper(m.object());
+		if !routed && !named {
 			return self.plain_member(m, cx);
 		}
 		let chained = m.optional() || in_optional_chain(m.object());
@@ -597,6 +615,18 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		};
 		let span = m.span();
 		self.paren(span, cx);
+		if cx.tag {
+			// o[k]`t`: the tag is called on its object, so what stands there is
+			// the function the access API read, bound to it
+			let partial = quote(&format!("{}()", self.slice(span)));
+			let mut seq = self.seq(span, "fn2");
+			self.seq_operand(&mut seq, m.object());
+			self.seq_key(&mut seq, m);
+			seq.pending.push_str(&format!(", {partial})"));
+			self.seq_end(seq);
+			self.chain_out = false;
+			return;
+		}
 		if (chained && !key_pure) || (m.optional() && cx.continues) {
 			// a?.b[k()], a?.[k].x: the key is evaluated only past the links
 			// that can short-circuit, and the rest of the chain follows
@@ -660,9 +690,9 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 	/// `(t$p => $s$j.get(super[t$p], t$p))($s$j.key(`, for a key known only
 	/// when it runs
 	fn super_computed_read(&self) -> String {
-		let access = self.access();
+		let api = self.api();
 		let prop = &self.options.config.temps[1];
-		format!("({prop} => {access}.get(super[{prop}], {prop}))({access}.key(")
+		format!("({prop} => {api}.get(super[{prop}], {prop}))({api}.key(")
 	}
 
 	/// `super.top` as a value: `$s$j.get(super.top, "top")`
@@ -701,7 +731,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		}
 		self.early.super_property();
 		let span = m.span();
-		let access = self.access();
+		let api = self.api();
 		let after = format!(
 			", this, {}{})",
 			self.call_text(&c.callee, &c.arguments, c.optional, false),
@@ -710,7 +740,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		let head = self.head(span.start, "smethod");
 		match key {
 			SuperKey::Named(name) => {
-				self.wrap(span, format!("{head}{access}.get("), format!(", {}){after}", quote(name)));
+				self.wrap(span, format!("{head}{api}.get("), format!(", {}){after}", quote(name)));
 			}
 			SuperKey::Computed(k) => {
 				let read = self.super_computed_read();
@@ -742,7 +772,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			return false;
 		}
 		self.early.super_property();
-		let access = self.access();
+		let api = self.api();
 		let rest = format!(", this, {}, {operate}, ", self.super_arrows());
 		if value.is_some() {
 			// (the value is the assignment's last operand)
@@ -762,7 +792,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 				None
 			}
 			SuperKey::Computed(k) => {
-				self.replace(span.start, k.span().start, format!("{head}{access}.key("));
+				self.replace(span.start, k.span().start, format!("{head}{api}.key("));
 				self.operand(k);
 				Some(k.span().end)
 			}
@@ -786,7 +816,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 	fn super_ref(&mut self, m: Mem<'_, 'a>) -> bool {
 		let key = self.super_key(m);
 		let span = m.span();
-		let access = self.access();
+		let api = self.api();
 		let rest = format!(", this, {}).value", self.super_arrows());
 		let head = self.head(span.start, "sref");
 		if !matches!(key, SuperKey::Leave) {
@@ -798,7 +828,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 				self.replace(span.start, span.end, format!("{head}{}{rest}", quote(name)))
 			}
 			SuperKey::Computed(k) => {
-				self.replace(span.start, k.span().start, format!("{head}{access}.key("));
+				self.replace(span.start, k.span().start, format!("{head}{api}.key("));
 				self.operand(k);
 				self.replace(k.span().end, span.end, format!("){rest}"));
 			}
@@ -821,7 +851,12 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			return self.post(c, m);
 		}
 		let callee = unparen(&c.callee);
-		if matches!(callee, Expression::Identifier(id) if id.name == "eval") && !c.arguments.is_empty() {
+		// (`eval?.(code)` is no direct eval: the name is read like any other.
+		// `eval(...a)` is one in Chrome, with or without other arguments)
+		if matches!(callee, Expression::Identifier(id) if id.name == "eval")
+			&& !c.arguments.is_empty()
+			&& !c.optional
+		{
 			return self.direct_eval(c);
 		}
 		if let Some(m) = Mem::of(callee).filter(|m| m.on_super()) {
@@ -852,6 +887,9 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 						|| (m.optional() && cx.continues)
 					{
 						return self.method(c, m, chained, cx);
+					}
+					if !args_pure {
+						return self.fn2(c, m);
 					}
 					let links = u8::from(chained) | (u8::from(c.optional) << 1);
 					self.call2(c, m, links, false);
@@ -910,6 +948,21 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		self.seq_end(seq);
 	}
 
+	/// `$s$j.fn2(o, k, text)(...)`: a call whose arguments do work. The
+	/// method is read before they are evaluated, as natively (a null object
+	/// throws before any of them runs, and what they do to the member comes
+	/// too late for this call)
+	fn fn2(&mut self, c: &CallExpression<'a>, m: Mem<'_, 'a>) {
+		let partial = self.call_text(&c.callee, &c.arguments, false, false);
+		let mut seq = self.seq(c.span, "fn2");
+		self.seq_operand(&mut seq, m.object());
+		self.seq_key(&mut seq, m);
+		seq.pending.push_str(&format!(", {partial})"));
+		self.seq_arguments(&mut seq, &c.arguments, "(", None);
+		self.seq_end(seq);
+		self.chain_out = false;
+	}
+
 	/// `$s$j.method(o, chained, optional, text)?.(k)?.(...)`: the key and
 	/// the arguments are evaluated only past the links that can short-circuit
 	fn method(&mut self, c: &CallExpression<'a>, m: Mem<'_, 'a>, chained: bool, cx: Cx) {
@@ -938,20 +991,30 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 	fn post(&mut self, c: &CallExpression<'a>, m: Mem<'_, 'a>) {
 		let partial = self.call_text(&c.callee, &c.arguments, c.optional, false);
 		let args = &c.arguments;
-		let optional = c.optional || m.optional() || in_optional_chain(m.object());
-		if optional && !pure_arguments(args) {
-			// w?.postMessage(f()): nothing is posted, nor f called, when w
-			// is nullish
+		// which links may short-circuit: the object's (`w?.postMessage(m)`:
+		// nothing is posted when w is nullish, and a w without the method
+		// still throws), the call's (`w.postMessage?.(m)`), both or neither
+		let object = m.optional() || in_optional_chain(m.object());
+		let links = match (object, c.optional) {
+			(false, false) => "1",
+			(true, false) => "2",
+			(false, true) => "3",
+			(true, true) => "0",
+		};
+		if !pure_arguments(args) {
+			// w?.postMessage(f()): f is not called when nothing is posted;
+			// w.postMessage(f()): the method is read before f is called, and
+			// a nullish w throws before it
 			let mut seq = self.seq(c.span, "poster");
 			self.seq_operand(&mut seq, m.object());
-			seq.pending.push_str(&format!(", {partial}"));
-			self.seq_arguments(&mut seq, args, ")?.(", None);
+			seq.pending.push_str(&format!(", {partial}, {links}"));
+			self.seq_arguments(&mut seq, args, if links == "1" { ")(" } else { ")?.(" }, None);
 			return self.seq_end(seq);
 		}
 		let mut seq = self.seq(c.span, "post");
 		self.seq_operand(&mut seq, m.object());
 		self.seq_arguments(&mut seq, args, ", [", Some("], "));
-		seq.pending.push_str(&format!("{optional}, {partial})"));
+		seq.pending.push_str(&format!("{links}, {partial})"));
 		self.seq_end(seq);
 	}
 
@@ -969,12 +1032,12 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 				}
 			});
 		});
-		let access = self.access();
+		let api = self.api();
 		let open = self.open_paren(c.span.start);
 		self.replace(
 			c.span.start,
 			c.span.end,
-			format!("{open}{access}.isEval(eval) ? eval({access}.evalScope({args})) : eval({args}))"),
+			format!("{open}{api}.isEval(eval) ? eval({api}.evalScope({args})) : eval({args}))"),
 		);
 	}
 
@@ -984,6 +1047,17 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		match Mem::of(callee) {
 			Some(m) if !m.is_private() && !m.on_super() => {
 				let routed = self.shapes.routes_member(m, true);
+				if routed && !pure_arguments(&n.arguments) {
+					// new o[k](f()): the constructor is read before f is called
+					let partial = partial();
+					self.paren(n.span, cx);
+					let mut seq = self.seq(n.span, "fnew");
+					self.seq_operand(&mut seq, &n.callee);
+					self.seq_arguments(&mut seq, &n.arguments, ", [", Some("], "));
+					seq.pending.push_str(&partial);
+					seq.pending.push(')');
+					return self.seq_end(seq);
+				}
 				if routed
 					|| (self.shapes.prints_helper(m.object()) && pure_arguments(&n.arguments))
 				{
@@ -1073,6 +1147,16 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 				if !self.options.config.routes(name) {
 					return self.under(true, |walker| walker.visit_expression(&a.right));
 				}
+				if reads_first(a) {
+					// location ||= f(), top += f(): the name is read before f
+					// is called, and f is not called at all where the operator
+					// short-circuits. The target becomes a reference the
+					// operator itself reads and writes
+					let text = self.ref1(id.span.start, name, self.slice(id.span));
+					self.replace(id.span.start, id.span.end, text);
+					self.cx = Cx::default();
+					return self.under(true, |walker| walker.visit_expression(&a.right));
+				}
 				let partial = self.partial(a.span);
 				let write = self.setter(|slot, value| format!("{slot} {operator} {value}"));
 				let head = self.set1_head(a.span.start, name, self.slice(id.span), write);
@@ -1087,6 +1171,10 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 				};
 				let m = Mem::of_member(member);
 				if m.on_super() {
+					if reads_first(a) && self.super_ref(m) {
+						self.cx = Cx::default();
+						return self.under(true, |walker| walker.visit_expression(&a.right));
+					}
 					let operate = self.setter(|slot, value| format!("{slot} {operator} {value}"));
 					if self.super_write(a.span, m, operate, Some(&a.right), "") {
 						return;
@@ -1094,6 +1182,12 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 				}
 				if !self.shapes.routes_member(m, true) && !index_write(m, a) {
 					self.plain_member(m, Cx::default());
+					return self.under(true, |walker| walker.visit_expression(&a.right));
+				}
+				if reads_first(a) {
+					// o[k] ||= f(), o[k] += f(): as for a name, above
+					self.member_ref(m);
+					self.cx = Cx::default();
 					return self.under(true, |walker| walker.visit_expression(&a.right));
 				}
 				let partial = self.partial(a.span);
@@ -1119,13 +1213,13 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			Err(_) => return self.decline(Decline::Shape),
 		};
 		let right = a.right.span();
-		let access = self.access();
+		let api = self.api();
 		let source = || quote(self.slice(inner_span(&a.right)));
 		let wrapped = match &spec {
 			// an array pattern's source is iterated: checked by the access API
 			// first, then wrapped
 			Some(spec) if iterates(spec) => Some((
-				format!("{}{access}.iter(", self.head(right.start, "pattern")),
+				format!("{}{api}.iter(", self.head(right.start, "pattern")),
 				format!(", \"assign\", {}), {})", source(), spec_text(spec, &|key| quote(key))),
 			)),
 			Some(spec) => Some((
@@ -1148,6 +1242,13 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		});
 		match wrapped {
 			Some((before, after)) => {
+				// the assignment's value is its source, not what the access
+				// API wrapped it in (`r = ({ top: t } = o)`): unwrapped where
+				// the value goes anywhere
+				if self.discarded != Some(a.span) {
+					let head = self.head(a.span.start, "source");
+					self.wrap(a.span, head, ")".into());
+				}
 				self.wrap(right, before, after);
 				self.operand(&a.right);
 			}
@@ -1234,16 +1335,25 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 				let computed =
 					matches!(m, Mem::Computed(c) if !is_literal(unparen(&c.expression)));
 				if computed || matches!(m.literal_key(), Some("location" | "eval")) {
-					let mut seq = self.seq(m.span(), "ref2");
-					self.seq_operand(&mut seq, m.object());
-					self.seq_key(&mut seq, m);
-					seq.pending.push_str(").value");
-					self.seq_end(seq);
+					self.member_ref(m);
 				} else {
 					self.plain_member(m, Cx::default());
 				}
 			}
 		}
+	}
+
+	/// `$s$j.ref2(o, k, write).value`: a member as a reference the access
+	/// API reads and writes. The write is the page's own code's (`write`, an
+	/// arrow written where the member stood), so it fails as the member's
+	/// would there: silently in sloppy code, with a TypeError in strict code
+	fn member_ref(&mut self, m: Mem<'_, 'a>) {
+		let write = self.setter(|slot, value| format!("{slot} = {value}"));
+		let mut seq = self.seq(m.span(), "ref2");
+		self.seq_operand(&mut seq, m.object());
+		self.seq_key(&mut seq, m);
+		seq.pending.push_str(&format!(", {write}).value"));
+		self.seq_end(seq);
 	}
 
 	/// `$s$j.ref1(location, t$v => location = t$v).value`, and for `eval`
@@ -1320,18 +1430,18 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		spec: Option<&[(String, Spec)]>,
 		assign: bool,
 	) -> String {
-		let access = self.access();
+		let api = self.api();
 		let (open, close) = if assign { ("(", ")") } else { ("", "") };
 		match spec {
 			None => format!("{open}{moved} = {source}{close}"),
 			Some(spec) if iterates(spec) => format!(
-				"{open}{moved} = {access}.pattern({access}.iter({source}, {}, {}), {}){close}",
+				"{open}{moved} = {api}.pattern({api}.iter({source}, {}, {}), {}){close}",
 				quote(if assign { "assign" } else { "array" }),
 				quote(source),
 				spec_text(spec, &|key| quote(key))
 			),
 			Some(spec) => format!(
-				"{open}{moved} = {access}.pattern({source}, {}, {}){close}",
+				"{open}{moved} = {api}.pattern({source}, {}, {}){close}",
 				spec_text(spec, &|key| quote(key)),
 				quote(&format!("{open}{page}={source}{close}"))
 			),
@@ -1560,6 +1670,14 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 	}
 }
 
+/// Whether a write reads its target before its value is evaluated and the
+/// value does work: a compound or logical assignment (`o[k] += f()`,
+/// `o[k] ??= f()`). A helper handed the value as an argument would evaluate
+/// it first, and always
+fn reads_first(a: &AssignmentExpression) -> bool {
+	a.operator != AssignmentOperator::Assign && !pure(&a.right)
+}
+
 /// a URL-like specifier is absolute, scheme-relative, or starts with `/`,
 /// `./`, `../`; anything else is bare (`BARE_SPECIFIER`)
 fn is_bare_specifier(specifier: &str) -> bool {
@@ -1784,12 +1902,13 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 		self.chain_out = false;
 		match e {
 			Expression::ParenthesizedExpression(p) => {
-				// a parenthesis ends a chain, and is no place of its own
+				// a parenthesis ends a chain, and is no place of its own (a tag
+				// in parentheses is still called on its object: (o[k])`t`)
 				self.cx = Cx {
 					no_index: cx.no_index,
 					continues: false,
 					new_callee: false,
-					tag: false,
+					tag: cx.tag,
 				};
 				walk::walk_parenthesized_expression(self, p);
 				self.chain_out = false;
@@ -1848,6 +1967,18 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 							self.plain_member(m, Cx::default());
 						}
 					}
+					// (`delete o?.[k]` deletes the member too: a helper's call
+					// there would read it and delete nothing)
+					UnaryOperator::Delete
+						if matches!(argument, Expression::ChainExpression(chain)
+							if chain.expression.as_member_expression().is_some()) =>
+					{
+						if let Expression::ChainExpression(chain) = argument {
+							if let Some(member) = chain.expression.as_member_expression() {
+								self.plain_member(Mem::of_member(member), Cx::default());
+							}
+						}
+					}
 					_ => walk::walk_unary_expression(self, u),
 				}
 			}
@@ -1866,7 +1997,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 				if i.phase.is_some() {
 					return self.decline(Decline::Shape);
 				}
-				let access = self.access();
+				let api = self.api();
 				let base = if self.options.module {
 					"import.meta.url".to_owned()
 				} else {
@@ -1880,7 +2011,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 					// them, so the import stays the page's own, given the
 					// routed URL: the specifier first, then the options
 					Some(_) => format!(
-						"{}(s, o) => {access}.imported(import({access}.importRoute({base}, s, o), o)))(",
+						"{}(s, o) => {api}.imported(import({api}.importRoute({base}, s, o), o)))(",
 						self.open_paren(i.span.start)
 					),
 				};
@@ -1976,10 +2107,10 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 				let name = id.name.as_str();
 				self.early.reference(name);
 				if self.options.config.routes(name) {
-					let access = self.access();
+					let api = self.api();
 					self.wrap(
 						id.span,
-						format!("{name}: {access}.get("),
+						format!("{name}: {api}.get("),
 						format!(", {})", quote(name)),
 					);
 				}
@@ -2154,6 +2285,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 		for statement in it {
 			if let Statement::ExpressionStatement(statement) = statement {
 				self.statement_start = Some(statement.span.start);
+				self.discarded = Some(unparen(&statement.expression).span());
 			}
 			self.visit_statement(statement);
 		}
@@ -2164,29 +2296,24 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 		// window in the head, and the call posts to it from this realm. No
 		// member is written that a read could be routed through, so a scope
 		// goes inside the head's that answers that one name (access API
-		// `scope`: nothing when the head is no window of another realm).
-		// Only for a body that says the name. The two come from one call
-		// made before the head is entered, where the helper's name is still
-		// this realm's.
+		// `scope` hands the head on and keeps the scope for `scoped`:
+		// nothing when the head is no window of another realm). Only for a
+		// body that says the name.
 		self.early.with(it);
 		if !self.rewriting || !refers_to(&it.body, "postMessage") {
 			return walk::walk_with_statement(self, it);
 		}
-		let access = self.access();
-		let scopes = format!("{access}w");
+		let api = self.api();
 		let object = it.object.span();
-		self.wrap(it.span, String::new(), "}".into());
-		self.replace(it.span.start, object.start, format!("{{const {scopes} = {access}.scope("));
+		self.replace(it.span.start, object.start, format!("with ({api}.scope("));
 		if matches!(it.object, Expression::SequenceExpression(_)) {
 			// `with (a, b)`: one argument of the helper, not two
 			self.wrap(object, "(".into(), ")".into());
 		}
 		self.operand(&it.object);
-		self.replace(
-			object.end,
-			it.body.span().start,
-			format!("); with ({scopes}[0]) with ({scopes}[1]) "),
-		);
+		// (the second head is evaluated as soon as the first is entered, by
+		// a call no name of the first's object can stand in for)
+		self.replace(object.end, it.body.span().start, format!(")) with ({api}.scoped()) "));
 		self.cx = Cx::default();
 		self.under(false, |walker| walker.visit_statement(&it.body));
 	}
@@ -2220,18 +2347,15 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 		// resolve through it (an array pattern's source is iterated, checked
 		// first); a pattern whose source is a helper's value checks it
 		// first, so an error names the page's expression
-		if is_pattern_call(init, self.access()) {
-			return walk::walk_variable_declarator(self, it);
-		}
 		let mut rests = Vec::new();
 		let spec = self.binding_spec(&it.id, &mut rests);
-		let access = self.access();
+		let api = self.api();
 		let start = init.span().start;
 		let text = || quote(self.slice(it.span));
 		let source = || quote(self.slice(inner_span(init)));
 		let wrapped = match (&it.id, &spec) {
 			(_, Some(spec)) if iterates(spec) => Some((
-				format!("{}{access}.iter(", self.head(start, "pattern")),
+				format!("{}{api}.iter(", self.head(start, "pattern")),
 				format!(", \"array\", {}), {})", source(), spec_text(spec, &|key| quote(key))),
 			)),
 			(_, Some(spec)) => Some((

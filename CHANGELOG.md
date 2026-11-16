@@ -1305,6 +1305,34 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   off the raw window: the real top of the proxy's page, and the browser's
   own eval, which ran the code unrewritten against the proxy's location.
   (adversarial-eval suite.)
+- Rewritten code reaches the access API as a property of a number literal
+  (`0..$s$j`), which the inject defines on the realm's Number.prototype for
+  good, and the API is frozen. Rewritten code named the API by a global,
+  which the page's own scopes could bind: a parameter, a `let`, a catch
+  parameter or a `with` object named `$s$j` was handed every value a
+  rewritten read meant to route, the real `top` among them, and a page that
+  replaced a member of the API (`window.$s$j.get = (o) => o`) read the real
+  location, top and eval from then on. Reflection on Number.prototype and
+  on a number object shows no new name. (adversarial-eval and tells suites.)
+- Rewritten code evaluates in the order and with the outcome of the code as
+  written: `o[k](f())` and `new o[k](f())` read the callee before the
+  arguments (a null `o` throws before they run); `o[k] ||= f()`, `&&=` and
+  `??=` run `f()` only when the operator needs it, and `o[k] += f()` reads
+  `o[k]` first, so a `yield` or an `await` in the value suspends as
+  natively; a tagged template whose tag is a computed member calls it with
+  the object as `this`; `delete o?.[k]` deletes the member and reads
+  nothing; `eval?.(c)` is an indirect eval; the value of a destructuring
+  assignment is its source; `w.postMessage(...)` reads the method once and
+  its optional forms short-circuit as natively; a failed `import()` rejects;
+  a function a subclass of Function makes has the subclass's prototype. A
+  BigInt key in a pattern (`({ 1n: b } = c)`) is rewritten where it was
+  declined and so did not run, and a page object with a property named as
+  the access API is no longer taken for another realm's API. A page's
+  Proxy sees no question native code does not ask: a computed write or read
+  asks only a window, by the browser's own `window` getter, for another
+  realm's API or client, and a destructured Proxy is not asked for
+  descriptors. (rewriter-unit, error-messages, adversarial-eval and tells
+  suites.)
 - `navigator.permissions.query({ name: 'storage-access' })` reads granted
   in a proxied top-level page, as natively: a top-level document has
   storage access, and Chrome answers granted there (denied when its
@@ -5761,9 +5789,9 @@ Fixed while testing real sites and a feature fixture:
   parse. Nothing in the rewrite is involved: sloppy global writes, script
   order and GTM's inserted scripts behave as natively.
 - Scripts created from markup strings read back rewritten.
-- A page that names the access API reads it: `window.$s$j`, `window[name]`
-  and `typeof $s$j` give an object where natively there is nothing (tells
-  suite, recorded). The client's name reads undefined, and nothing lists
+- A page that names the access API reads it: `window.$s$j`, `window[name]`,
+  `typeof $s$j` and `(0).$s$j` give an object where natively there is
+  nothing (tells suite, recorded); the object is frozen. The client's name reads undefined, and nothing lists
   or finds either name.
 - Error surfaces (error-surfaces suite): line and column numbers of rewritten
   code are the rewritten code's (stacks, ErrorEvent, onerror, report bodies),

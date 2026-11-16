@@ -135,23 +135,48 @@ export default class AccessModule extends Module<Client> {
 				},
 			]);
 
+		/**
+		 * What `import()` is handed for a specifier that cannot be routed (its
+		 * conversion to a string threw): the browser's import converts it
+		 * again, gets the same error and answers a rejected promise, where a
+		 * throw here would leave the page's `import()` throwing
+		 */
+		const failing = (error: unknown) => ({
+			toString() {
+				throw error;
+			},
+		});
 		const route = (
 			baseURL: string | undefined,
-			url: string,
+			url: unknown,
 			moduleType: unknown,
-		): string =>
-			isBareSpecifier(String(url))
-				? url
-				: routeImport(
-						new StompURL(
-							new URL(url, baseURL || this.client.baseURL.toString()),
-							this.client.url,
-						),
-						this.client.url,
-						this.client.config,
-						'genericModule',
-						moduleType,
-					);
+		): string => {
+			let specifier: string;
+			try {
+				// (converted once, as the import converts it)
+				specifier = `${url as string}`;
+			} catch (error) {
+				return failing(error) as unknown as string;
+			}
+			if (isBareSpecifier(specifier)) return specifier;
+			let resource: URL;
+			try {
+				resource = new URL(
+					specifier,
+					baseURL || this.client.baseURL.toString(),
+				);
+			} catch (error) {
+				// no URL: the browser's import fails on it as it does natively
+				return specifier;
+			}
+			return routeImport(
+				new StompURL(resource, this.client.url),
+				this.client.url,
+				this.client.config,
+				'genericModule',
+				moduleType,
+			);
+		};
 		// the errors a helper throws in the page's place, with the message V8
 		// gives the page's expression (`partial`, its source)
 		const errors = new ErrorMessages(this.client);
@@ -181,56 +206,67 @@ export default class AccessModule extends Module<Client> {
 		 * rewriter printed as a plain last element): the values left, as an
 		 * array, wrapped for the pattern that takes it.
 		 */
+		// what a pattern's source was wrapped in, by the wrapper: the value of
+		// an assignment is its source (`r = ({ top: t } = o)`, access API
+		// `source`)
+		const wrapped = new WeakMap<object, unknown>();
+		const wraps = <T extends object>(wrapper: T, source: unknown): T => {
+			wrapped.set(wrapper, source);
+			return wrapper;
+		};
 		const iterated = (source: any, specs: unknown[]): unknown => {
 			const method = source[Symbol.iterator];
 			// not iterable: the pattern's own error
 			if (typeof method !== 'function') return source;
-			return {
-				[Symbol.iterator]: () => {
-					const iterator = Reflect.apply(method, source, []);
-					if (!isObject(iterator)) return iterator;
-					const next = (iterator as any).next;
-					const step = () => {
-						const result = Reflect.apply(next, iterator, []);
-						if (!isObject(result))
-							throw new TypeError(
-								`Iterator result ${String(result)} is not an object`,
-							);
-						return result as IteratorResult<unknown>;
-					};
-					let index = 0;
-					let drained = false;
-					return {
-						next: () => {
-							if (drained) return { done: true, value: undefined };
-							const spec = specs[index++];
-							if (!spec) return Reflect.apply(next, iterator, []);
-							if (Array.isArray(spec)) {
-								const rest: unknown[] = [];
-								for (let result = step(); !result.done; result = step())
-									rest.push(result.value);
-								drained = true;
-								return { done: false, value: api.pattern(rest, spec[0]) };
-							}
-							const result = step();
-							if (result.done) {
-								drained = true;
-								return { done: true, value: undefined };
-							}
-							return {
-								done: false,
-								value: api.pattern(result.value, spec as PatternSpec),
-							};
-						},
-						return: () => {
-							if (drained) return {};
-							const close = (iterator as any).return;
-							if (close === undefined || close === null) return {};
-							return Reflect.apply(close, iterator, []);
-						},
-					};
+			return wraps(
+				{
+					[Symbol.iterator]: () => {
+						const iterator = Reflect.apply(method, source, []);
+						if (!isObject(iterator)) return iterator;
+						const next = (iterator as any).next;
+						const step = () => {
+							const result = Reflect.apply(next, iterator, []);
+							if (!isObject(result))
+								throw new TypeError(
+									`Iterator result ${String(result)} is not an object`,
+								);
+							return result as IteratorResult<unknown>;
+						};
+						let index = 0;
+						let drained = false;
+						return {
+							next: () => {
+								if (drained) return { done: true, value: undefined };
+								const spec = specs[index++];
+								if (!spec) return Reflect.apply(next, iterator, []);
+								if (Array.isArray(spec)) {
+									const rest: unknown[] = [];
+									for (let result = step(); !result.done; result = step())
+										rest.push(result.value);
+									drained = true;
+									return { done: false, value: api.pattern(rest, spec[0]) };
+								}
+								const result = step();
+								if (result.done) {
+									drained = true;
+									return { done: true, value: undefined };
+								}
+								return {
+									done: false,
+									value: api.pattern(result.value, spec as PatternSpec),
+								};
+							},
+							return: () => {
+								if (drained) return {};
+								const close = (iterator as any).return;
+								if (close === undefined || close === null) return {};
+								return Reflect.apply(close, iterator, []);
+							},
+						};
+					},
 				},
-			};
+				source,
+			);
 		};
 		/**
 		 * `target.postMessage(...args)` with the method the page's read gave:
@@ -249,11 +285,9 @@ export default class AccessModule extends Module<Client> {
 			if (this.client.postToWindow) {
 				let receiver: Client | undefined;
 				try {
-					if (
-						typeof target === 'object' &&
-						target !== null &&
-						target.window === target
-					)
+					// (asked of a window alone: a Proxy of the page's with a
+					// postMessage of its own sees no question)
+					if (isWindowObject(target))
 						receiver = target[this.client.names.client];
 				} catch (error) {
 					// a cross-origin window: called as written
@@ -277,6 +311,43 @@ export default class AccessModule extends Module<Client> {
 				[Symbol.toPrimitive]: { value: () => '[object Object]' },
 			}),
 		) as object;
+		// the scope `scoped` hands the `with` that follows a head (`scope`)
+		let pendingScope: object = NO_SCOPE;
+		// Whether a value is a window, asked without a property read a Proxy
+		// of the page's would see: the browser's own getter of `window` (an
+		// unforgeable property, so no hook's and no page's) answers for a
+		// window and throws for anything else. A worker has no windows.
+		const windowGetter = Reflect.getOwnPropertyDescriptor(
+			this.client.global,
+			'window',
+		)?.get;
+		// The browser's own `onmouseenter` getter answers a receiver that is
+		// no window with undefined instead of throwing ([LegacyLenientThis]),
+		// and asks nothing of it either: a window's is its handler or null
+		// (the setter makes undefined null), a window of another origin
+		// throws. Asked first, so that what is no window costs no exception:
+		// every computed read that lands on an object asks this (a throw
+		// costs about 3 us, which made a loop over an array of objects about
+		// sixty times slower)
+		const lenient = Reflect.getOwnPropertyDescriptor(
+			this.client.global,
+			'onmouseenter',
+		)?.get;
+		const isWindowObject = (value: unknown): boolean => {
+			if (!windowGetter || !isObject(value)) return false;
+			if (lenient)
+				try {
+					if (Reflect.apply(lenient, value, []) === undefined) return false;
+				} catch (error) {
+					// a window of another origin: asked below
+				}
+			try {
+				return Reflect.apply(windowGetter, value, []) === value;
+			} catch (error) {
+				return false;
+			}
+		};
+		this.client.isWindowObject = isWindowObject;
 		// a window the page held whose frame got a fresh browsing context since
 		// stands for the frame's window now (src/inject/dom/freshContext.ts):
 		// what the page does to it is done to that window as the page has it,
@@ -383,27 +454,49 @@ export default class AccessModule extends Module<Client> {
 					if (target === this.client.global || isDocument) {
 						if (key === 'location') {
 							// this client's location: an about:blank child runs its
-							// creator's bundle, whose free `location` is the creator's
-							target = (this.client.global.location as any)[
+							// creator's bundle, whose free `location` is the creator's.
+							// The operator reads the Location (`w.location ||= u`
+							// answers it, `w.location += u` makes it a string) and
+							// writes its href
+							const standIn = (this.client.global.location as any)[
 								this.client.names.globalProxy
 							];
-							key = 'href';
+							const property = Symbol();
+							return operate(
+								{
+									get [property]() {
+										return standIn;
+									},
+									set [property](value: unknown) {
+										standIn.href = value;
+									},
+								},
+								property,
+								righthand,
+							);
 						}
-					} else {
-						let foreign = false;
+					} else if (key === 'location' || key === 'eval') {
+						// (another window's own API writes its location and its
+						// eval; asked only for those keys: the question is a
+						// `has` and a `get` a Proxy of the page's would see on
+						// every write of a computed key)
+						// Its API is its client's (the global of the API's name is
+						// its page's to replace, and what it was handed here is
+						// this realm's write of a member). Only a window is asked
+						// anything, so a Proxy of the page's sees no question
+						let theirs: { set2?: unknown } | undefined;
 						try {
-							foreign =
-								((typeof target === 'object' && target !== null) ||
-									typeof target === 'function') &&
-								this.client.names.access in target &&
-								target[this.client.names.access]!.set2 !== api.set2;
+							if (isWindowObject(target))
+								theirs = target[this.client.names.client]?.accessApi;
 						} catch (error) {
 							// a cross-origin window: nothing of ours to delegate to
 						}
+						const foreign =
+							typeof theirs?.set2 === 'function' && theirs.set2 !== api.set2;
 						if (foreign && key === 'location')
 							this.client.gateNavigation?.(target, righthand);
 						if (foreign)
-							return target[this.client.names.access]!.set2(
+							return (theirs as { set2: (...args: unknown[]) => unknown }).set2(
 								target,
 								key,
 								operate,
@@ -518,6 +611,11 @@ export default class AccessModule extends Module<Client> {
 				// `location`, or `eval` (`[eval] = [saved]`)
 				name = 'location',
 			) => ({
+				// (`location ||= f()`, `top += f()`: the operator reads the
+				// name, then evaluates its value, then writes)
+				get value() {
+					return api.get(target, name);
+				},
 				set value(value: unknown) {
 					api.set1(
 						target,
@@ -528,17 +626,31 @@ export default class AccessModule extends Module<Client> {
 					);
 				},
 			}),
-			/** `[top.location] = a`: the member form of `ref1`, routed by set2 */
-			ref2: (target: any, key: any) => ({
+			/**
+			 * `[top.location] = a`: the member form of `ref1`, routed by set2,
+			 * and `o[k] ||= f()`, `o[k] += f()`, whose operator reads the member
+			 * (as get2 reads it), then evaluates its value, then writes. `write`
+			 * is the plain write as the page's code makes it (it fails as the
+			 * page's own would: silently in sloppy code). A key that is an
+			 * object is converted by the read and again by the write, as V8
+			 * converts it.
+			 */
+			ref2: (
+				target: any,
+				key: any,
+				write: (target: any, property: any, value: any) => any = (
+					object,
+					property,
+					v,
+				) => {
+					object[property] = v;
+				},
+			) => ({
+				get value() {
+					return api.get2(target, key);
+				},
 				set value(value: unknown) {
-					api.set2(
-						target,
-						key,
-						(object: any, property: any, v: unknown) => {
-							object[property] = v;
-						},
-						value,
-					);
+					api.set2(target, key, write, value);
 				},
 			}),
 			/** the property key a computed `super[k]` reads (see keyOf) */
@@ -609,6 +721,10 @@ export default class AccessModule extends Module<Client> {
 				read: (key: any) => any,
 				write: (key: any, value: any) => any,
 			) => ({
+				// (`super[k] ||= f()`: read as `super[k]` is)
+				get value() {
+					return api.get(read(key), key);
+				},
 				set value(value: unknown) {
 					api.sset(
 						key,
@@ -699,15 +815,26 @@ export default class AccessModule extends Module<Client> {
 			post: (
 				target: any,
 				args: any[],
-				optional?: boolean,
+				// which links may short-circuit: 1 none, 2 the object's
+				// (`w?.postMessage(m)`), 3 the call's (`w.postMessage?.(m)`),
+				// 0 both; `true` and `false` (code rewritten before the two
+				// were told apart) for both and none
+				links?: boolean | number,
 				partial?: string,
 			): any => {
+				const none = links === false || links === 1;
 				if (nullish(target)) {
-					if (optional) return undefined;
+					if (!none && links !== 3) return undefined;
 					throw errors.read(target, 'postMessage');
 				}
 				target = live(target);
-				return posted(target.postMessage, target, args, optional, partial);
+				return posted(
+					target.postMessage,
+					target,
+					args,
+					!none && links !== 2,
+					partial,
+				);
 			},
 			call2: (
 				target: any,
@@ -778,22 +905,64 @@ export default class AccessModule extends Module<Client> {
 							: errors.call(method, holder, args, partial);
 				};
 			},
+			// `links` as for `post` (none given: both, as code rewritten
+			// before they were told apart has it). The method is read once,
+			// before the arguments are evaluated, as natively
 			poster: (
 				target: any,
 				partial?: string,
-			): ((...args: any[]) => any) | undefined =>
-				nullish(target) || nullish(target.postMessage)
-					? undefined
-					: (...args: any[]) => api.post(target, args, true, partial),
+				links?: number,
+			): ((...args: any[]) => any) | undefined => {
+				if (nullish(target)) {
+					if (links === 1 || links === 3)
+						throw errors.read(target, 'postMessage');
+					return undefined;
+				}
+				const holder = live(target);
+				const method = holder.postMessage;
+				if (nullish(method) && links !== 1 && links !== 2) return undefined;
+				return (...args: any[]) => posted(method, holder, args, false, partial);
+			},
+			/**
+			 * `o[k](f())`, and `o[k]` as a template's tag: the method is read
+			 * before the arguments are evaluated (what they do to the member
+			 * comes too late for this call, and a null `o` throws before any of
+			 * them runs), and called on the object
+			 */
+			fn2: (
+				target: any,
+				key: any,
+				partial?: string,
+			): ((...args: any[]) => any) => {
+				if (nullish(target)) throw errors.read(target, key);
+				key = keyOf(key);
+				const holder = live(target, key);
+				if (key === 'postMessage') {
+					const method = holder[key];
+					return (...args: any[]) =>
+						posted(method, holder, args, false, partial);
+				}
+				const method = api.get(holder[key], key);
+				return (...args: any[]) =>
+					typeof method === 'function'
+						? Reflect.apply(method, holder, args)
+						: errors.call(method, holder, args, partial);
+			},
 			// `with (o) body` whose body says `postMessage` is printed
-			// `{ const w = scope(o); with (w[0]) with (w[1]) body }`: the head
-			// as written, and inside it a scope that answers that one name
-			// when the head is a window of another realm (see get), nothing
-			// otherwise
-			scope: (object: unknown): [unknown, object] => [
-				object,
-				this.client.postScope?.(object) ?? NO_SCOPE,
-			],
+			// `with (scope(o)) with (scoped()) body`: the head as written, and
+			// inside it a scope that answers that one name when the head is a
+			// window of another realm (see get), nothing otherwise. `scoped`
+			// is called as soon as the head is entered, with nothing of the
+			// page's in between (no name is looked up to call it)
+			scope: (object: unknown): unknown => {
+				pendingScope = this.client.postScope?.(object) ?? NO_SCOPE;
+				return object;
+			},
+			scoped: (): object => {
+				const scope = pendingScope;
+				pendingScope = NO_SCOPE;
+				return scope;
+			},
 			evalScope: (code: unknown) => {
 				// `eval(x)` with anything but a string returns x: handed back as it
 				// is, the direct eval then returns it
@@ -851,24 +1020,55 @@ export default class AccessModule extends Module<Client> {
 				const ordered = Array.isArray(positions) ? positions : undefined;
 				// (the pattern reads each of its properties once, in order)
 				let position = 0;
-				return new Proxy(object as object, {
-					get: (target, key) => {
-						const value = api.get(
-							Reflect.get(target, key),
-							key,
-							// (`{ postMessage } = parent`: a read of the window's)
-							key === 'postMessage' ? target : undefined,
-						);
-						const nested = ordered
-							? ordered[position++]
-							: spec && typeof key === 'string'
-								? spec[key]
-								: undefined;
-						return nested && nested !== true
-							? api.pattern(value, nested as PatternSpec)
-							: value;
-					},
-				});
+				const source = object as object;
+				// The Proxy is over an object of its own, not over the source: a
+				// Proxy asks its target for a property's descriptor after each
+				// get, which a source that is a Proxy of the page's would see.
+				// A pattern asks only these three things of what it destructures
+				// (a rest element lists the keys and reads each descriptor), and
+				// each is asked of the source once, as the pattern would ask it
+				return wraps(
+					new Proxy(Object.create(null) as object, {
+						ownKeys: () => Reflect.ownKeys(source),
+						getOwnPropertyDescriptor: (_, key) => {
+							const descriptor = Reflect.getOwnPropertyDescriptor(source, key);
+							// (as the Proxy's own target could have it: only whether it
+							// is enumerable is read)
+							if (descriptor) descriptor.configurable = true;
+							return descriptor;
+						},
+						get: (_, key) => {
+							const target = source;
+							const value = api.get(
+								Reflect.get(target, key),
+								key,
+								// (`{ postMessage } = parent`: a read of the window's)
+								key === 'postMessage' ? target : undefined,
+							);
+							const nested = ordered
+								? ordered[position++]
+								: spec && typeof key === 'string'
+									? spec[key]
+									: undefined;
+							return nested && nested !== true
+								? api.pattern(value, nested as PatternSpec)
+								: value;
+						},
+					}),
+					source,
+				);
+			},
+			/**
+			 * The value of a pattern assignment whose source the access API
+			 * wrapped (`r = ({ top: t } = o)`, `f([a, { top: t }] = list)`): the
+			 * source itself, as the page's assignment answers it
+			 */
+			source: (value: unknown): unknown => {
+				let source = value;
+				// (an array pattern's is wrapped by `iter` and by `pattern`)
+				while (isObject(source) && wrapped.has(source))
+					source = wrapped.get(source);
+				return source;
 			},
 			// whether a direct `eval(...)` calls the real eval (the rewriter's
 			// test before it rewrites the code): a predicate, never the native
@@ -881,7 +1081,22 @@ export default class AccessModule extends Module<Client> {
 				keepEmbedded(key, subs, holder),
 		};
 
-		// not enumerable: Object.keys(window) must not name it
+		// The helpers are not the page's to replace: a rewritten script hands
+		// them the arrows it writes a member with, and a page that swapped one
+		// would be handed a write nothing routes
+		Object.freeze(api);
+		this.client.accessApi = api;
+		// Where a rewritten script reaches it (src/helperNames.ts
+		// accessExpression): a property of the realm's Number.prototype, for
+		// good. A page can neither redefine it nor bind a name in its way
+		Reflect.defineProperty(
+			this.client.global.Number.prototype,
+			this.client.names.access,
+			{ value: api, configurable: false, writable: false, enumerable: false },
+		);
+		// and the global of that name, which hosts' hooks read (src/hooks.ts)
+		// and nothing of the inject's does. Not enumerable: Object.keys(window)
+		// must not name it
 		Reflect.defineProperty(this.client.global, this.client.names.access, {
 			value: api,
 			configurable: true,

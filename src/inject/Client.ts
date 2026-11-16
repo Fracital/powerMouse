@@ -292,6 +292,18 @@ export default class Client {
 	 * stands)
 	 */
 	postScope?: (target: unknown) => object | undefined;
+	/**
+	 * This realm's access API (src/inject/modules/Access.ts), for the inject's
+	 * own use and for another realm's API to find: the global of its name is
+	 * the page's to write, so nothing of the inject's reads it
+	 */
+	accessApi?: unknown;
+	/**
+	 * Whether a value is a window, by the browser's own `window` getter: no
+	 * property of the value is read, so a Proxy of the page's sees nothing
+	 * (and cannot pass for one). Set by the access module.
+	 */
+	isWindowObject?: (value: unknown) => boolean;
 	readonly #callIn: CallIn;
 	readonly #ownCallback: (callback: () => void) => () => void;
 	/**

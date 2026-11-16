@@ -59,8 +59,22 @@ export default class FunctionModule extends Module<Client> {
 					this.client.noteCodeSample(rewritten, `(${written})`);
 					const made = nativeEval(trustedScript(rewritten));
 					// toString shows the source the page gave, not the rewritten body
-					if (typeof made === 'function')
+					if (typeof made === 'function') {
 						proxyModule.functionStrings.set(made, written);
+						// `class Callable extends Function`, `Reflect.construct(
+						// Function, [code], Other)`: the function is made with the
+						// prototype of what was constructed, as natively
+						if (newTarget && newTarget !== target) {
+							const prototype = (newTarget as { prototype?: unknown })
+								.prototype;
+							if (
+								((typeof prototype === 'object' && prototype !== null) ||
+									typeof prototype === 'function') &&
+								prototype !== Reflect.getPrototypeOf(made)
+							)
+								Reflect.setPrototypeOf(made, prototype as object);
+						}
+					}
 					return made;
 				},
 				'callable',

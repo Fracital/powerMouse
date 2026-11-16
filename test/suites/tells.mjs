@@ -56,6 +56,17 @@ const GROUPS = [
 		['windowKeys', 'windowForIn', 'windowEntries', 'windowDescriptors'],
 	],
 	[
+		'Number.prototype, where rewritten code reaches the access API, and a number object show no helper name',
+		[
+			'numberNames',
+			'numberAsks',
+			'numberDescriptors',
+			'numberIn',
+			'numberLiteralIn',
+			'numberForIn',
+		],
+	],
+	[
 		"a page's own object with such a key answers natively",
 		['plainHasOwn', 'plainAsks', 'plainNames'],
 	],

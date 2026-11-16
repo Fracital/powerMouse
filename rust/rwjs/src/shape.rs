@@ -467,7 +467,8 @@ impl Shapes<'_> {
 					n.value.to_js_string()
 				}
 			}
-			PropertyKey::BigIntLiteral(_) => return Err(Unsupported),
+			// (a BigInt key is the property its decimal digits name)
+			PropertyKey::BigIntLiteral(n) => n.value.as_str().to_owned(),
 			_ => String::new(),
 		})
 	}
@@ -700,19 +701,6 @@ pub fn bindings_named(pattern: &BindingPattern, name: &str, shorthand: bool, out
 		}
 		BindingPattern::AssignmentPattern(ap) => bindings_named(&ap.left, name, shorthand, out),
 	}
-}
-
-/// `$s$j.pattern(...)`: a source the rewriter (or a page that names the
-/// helper) already wrapped
-pub fn is_pattern_call(e: &Expression, access: &str) -> bool {
-	let Expression::CallExpression(call) = unparen(e) else {
-		return false;
-	};
-	let Expression::StaticMemberExpression(callee) = unparen(&call.callee) else {
-		return false;
-	};
-	callee.property.name == "pattern"
-		&& matches!(unparen(&callee.object), Expression::Identifier(id) if id.name == access)
 }
 
 /// the span of an expression without its parentheses, as meriyah ranges it

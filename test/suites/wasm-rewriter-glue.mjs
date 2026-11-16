@@ -151,7 +151,7 @@ function copyingModule() {
 	ok(
 		'a thread that holds no module does not rewrite: it hands the script back refused',
 		outputs.every(
-			(output) => REFUSED.test(output) && !output.includes('$s$j.get'),
+			(output) => REFUSED.test(output) && !output.includes('0..$s$j.get'),
 		) && outputs[0].startsWith(SCRIPTS[0]),
 		show(outputs),
 	);
@@ -169,7 +169,7 @@ thread.adoptModule('core', await WebAssembly.compile(copyingModule()));
 	ok(
 		'and is never asked for a rewrite: its thread hands the script back refused, not rewritten',
 		outputs.every(
-			(output) => REFUSED.test(output) && !output.includes('$s$j.get'),
+			(output) => REFUSED.test(output) && !output.includes('0..$s$j.get'),
 		),
 		show(outputs),
 	);
@@ -206,8 +206,9 @@ thread.adoptModule('core', await WebAssembly.compile(bytes));
 	);
 	ok(
 		'and is asked: what no rewrite touches comes back as written, the reads go through the access API',
-		outputs[0].includes('/* kept */ x = $s$j.get2($s$j.get(top, "top")') &&
-			outputs[2].includes('(a)  { return a ? $s$j.get(top, "top") : '),
+		outputs[0].includes(
+			'/* kept */ x = 0..$s$j.get2(0..$s$j.get(top, "top")',
+		) && outputs[2].includes('(a)  { return a ? 0..$s$j.get(top, "top") : '),
 		show(outputs),
 	);
 }
@@ -271,11 +272,19 @@ thread.adoptModule('core', await WebAssembly.compile(bytes));
 					.join(', ')}}`;
 			return `${typeof value} ${String(value)}`;
 		};
+		// (rewritten code reaches the access API off a number literal,
+		// `0..$s$j`: src/helperNames.ts accessExpression)
+		Reflect.defineProperty(Number.prototype, '$s$j', {
+			value: access,
+			configurable: true,
+		});
 		try {
-			const value = new Function('$s$j', 'top', code)(access, TOP);
+			const value = new Function('top', code)(TOP);
 			return { value: flat(value), partials };
 		} catch (error) {
 			return { threw: `${error?.name}: ${units(String(error?.message))}` };
+		} finally {
+			Reflect.deleteProperty(Number.prototype, '$s$j');
 		}
 	};
 
@@ -448,7 +457,7 @@ thread.adoptModule('core', await WebAssembly.compile(bytes));
 		);
 		ok(
 			"known: a module's export name that holds a lone surrogate is rewritten, the name as the page wrote it",
-			output.includes(lone('export { a as "x<L>" }; $s$j.get(top, "top");')),
+			output.includes(lone('export { a as "x<L>" }; 0..$s$j.get(top, "top");')),
 			units(output.slice(-80)),
 		);
 	}

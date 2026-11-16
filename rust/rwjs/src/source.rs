@@ -55,11 +55,11 @@ pub fn holder_statement(access: &str, key: &str, text: &str) -> Option<String> {
 		return None;
 	}
 	let mut out = String::with_capacity(text.len() + 96);
-	out.push_str("typeof ");
+	// (an optional call of the API where it is, as the walk's own calls
+	// reach it: config.rs `api`; a realm without the inject has none)
+	out.push_str("0..");
 	out.push_str(access);
-	out.push_str("!==\"undefined\"&&");
-	out.push_str(access);
-	out.push_str(".src(");
+	out.push_str("?.src(");
 	out.push_str(&quote(key));
 	out.push(',');
 	out.push_str(&quote(&subs.iter().collect::<String>()));
@@ -199,7 +199,7 @@ mod tests {
 	fn holders_match_the_typescript() {
 		assert_eq!(
 			holder_statement("$s$j", "k", "a*b<c\nd").unwrap(),
-			"typeof $s$j!==\"undefined\"&&$s$j.src(\"k\",\"\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\",function(){/*a\u{1}b\u{2}c\u{3}d*/});"
+			"0..$s$j?.src(\"k\",\"\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\",function(){/*a\u{1}b\u{2}c\u{3}d*/});"
 		);
 		let all: String = STAND_INS.iter().map(|code| *code as char).collect();
 		assert!(holder_statement("$s$j", "k", &all).is_none());

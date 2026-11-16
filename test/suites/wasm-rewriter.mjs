@@ -123,8 +123,8 @@ ok('every thread holds the rewriter', await settled(1));
 	ok(
 		'what no rewrite touches comes back as written, and the reads go through the access API',
 		body?.includes('/* kept */ function') &&
-			body.includes('(a)  { return a ? $s$j.get(top, "top") : ') &&
-			body.includes('$s$j.get(location, "location").href }'),
+			body.includes('(a)  { return a ? 0..$s$j.get(top, "top") : ') &&
+			body.includes('0..$s$j.get(location, "location").href }'),
 		show(body?.slice(0, 600)),
 	);
 	ok(
@@ -203,7 +203,7 @@ await controller('wasm-rewriter-default', { rewriteWorkers: 0 });
 			result.seen?.[0] === WRITTEN &&
 			body !== undefined &&
 			body.includes('/* kept */') &&
-			body.includes('$s$j.get(top, "top")'),
+			body.includes('0..$s$j.get(top, "top")'),
 		show([result, body?.slice(0, 300)]),
 	);
 	ok(

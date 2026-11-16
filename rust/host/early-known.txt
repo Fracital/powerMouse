@@ -46,11 +46,6 @@ parser let (a) = 1
 parser class A { #a; m() { this?.#a = 1 } }
 parser for (yi\u0065ld of a);
 
-# shape: V8 takes the text and the module's walk does not rewrite the shape
-# yet (a BigInt key in an assignment pattern). The module declines it
-# (status 5) and the JavaScript rewriter rewrites it.
-shape ({ 1n: b } = c)
-
 # top: V8 refuses the text as a script, and takes it at the top of a
 # function's body or of eval code under a method (`super`, a private name
 # of a class around the call) or in a function's body (`using`). A handler

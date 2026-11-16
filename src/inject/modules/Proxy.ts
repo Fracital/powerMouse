@@ -530,6 +530,11 @@ export default class ProxyModule extends Module<Client> {
 					proto = Reflect.getPrototypeOf(proto);
 				}
 				if (!proto || proto === ownPrototype) return null;
+				// (only another realm's Function.prototype, which is itself a
+				// function: `Function.prototype` reaches Object.prototype's
+				// toString this way, and a function given another prototype
+				// the page's own, neither of which reads a function's source)
+				if (typeof proto !== 'function') return null;
 				return typeof toString === 'function' &&
 					toString !== ownPrototype.toString
 					? toString

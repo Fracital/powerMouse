@@ -600,12 +600,19 @@ function children(node, visit) {
 	}
 }
 
+// the access API as a rewritten script reaches it: a property of a number
+// literal (`0..$s$j`, src/helperNames.ts accessExpression)
+const api = (node, access) =>
+	node?.type === 'MemberExpression' &&
+	!node.computed &&
+	node.object.type === 'Literal' &&
+	node.object.value === 0 &&
+	node.property.name === access;
 const helper = (node, access, name) =>
 	node?.type === 'CallExpression' &&
 	node.callee.type === 'MemberExpression' &&
 	!node.callee.computed &&
-	node.callee.object.type === 'Identifier' &&
-	node.callee.object.name === access &&
+	api(node.callee.object, access) &&
 	node.callee.property.name === name;
 
 /**
@@ -679,7 +686,7 @@ function named(node, parent, key, grand, access) {
 			// code refuses it, as natively, and sloppy code answers false)
 			return parent.operator === 'typeof' || parent.operator === 'delete';
 		case 'CallExpression':
-			// $s$j.get(top, 'top'), $s$j.set1(location, ...), $s$j.ref1(location, ...)
+			// 0..$s$j.get(top, 'top'), 0..$s$j.set1(location, ...), 0..$s$j.ref1(location, ...)
 			return (
 				key === 'arguments' &&
 				parent.arguments[0] === node &&

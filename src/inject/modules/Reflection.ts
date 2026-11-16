@@ -28,7 +28,8 @@ export default class ReflectionModule extends Module<Client> {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const global = this.client.global as typeof globalThis &
 			Record<string, unknown>;
-		const api = () => global[this.client.names.access] as Api;
+		// (the client's own: the global of that name is the page's to write)
+		const api = () => this.client.accessApi as Api;
 		const document = (global as { document?: unknown }).document;
 
 		const unforgeable = (key: unknown): key is string =>
@@ -119,6 +120,12 @@ export default class ReflectionModule extends Module<Client> {
 						this.client.lazyGlobals.get(args[1])?.();
 					const descriptor = Reflect.apply(target, that, args) as
 						PropertyDescriptor | undefined;
+					if (
+						descriptor &&
+						args[0] === global.Number.prototype &&
+						args[1] === this.client.names.access
+					)
+						return undefined;
 					if (!descriptor || !windowLike(args[0])) return descriptor;
 					if (hidden.has(args[1] as PropertyKey)) return undefined;
 					return unforgeable(args[1])
@@ -164,6 +171,10 @@ export default class ReflectionModule extends Module<Client> {
 							descriptors[key] = unforgeable(key)
 								? spoofed(descriptors[key], key)
 								: restricted(descriptors[key], key, args[0]);
+				// (where rewritten code reaches the access API: src/helperNames.ts
+				// accessExpression)
+				if (args[0] === global.Number.prototype)
+					Reflect.deleteProperty(descriptors, this.client.names.access);
 				return descriptors;
 			},
 		);
@@ -287,10 +298,28 @@ export default class ReflectionModule extends Module<Client> {
 				return false;
 			}
 		};
-		const ours = (target: unknown) => windowLike(target) || tagged(target);
+		// (and Number.prototype, where rewritten code reaches the access API:
+		// src/helperNames.ts accessExpression)
+		const numberPrototype = global.Number.prototype as object;
+		const ours = (target: unknown) =>
+			windowLike(target) || target === numberPrototype || tagged(target);
+		// a number object finds the access API's name on its prototype
+		const inherits = (target: unknown) => {
+			try {
+				return (
+					typeof target === 'object' &&
+					target !== null &&
+					Reflect.getPrototypeOf(target) === numberPrototype &&
+					!Reflect.getOwnPropertyDescriptor(target, this.client.names.access)
+				);
+			} catch (error) {
+				return false;
+			}
+		};
 		// the `in` operator asks the same (access API `has`)
 		this.client.hidesName = (target, key) =>
-			hidden.has(key as PropertyKey) && ours(target);
+			hidden.has(key as PropertyKey) &&
+			(ours(target) || (key === this.client.names.access && inherits(target)));
 		for (const [holder, name] of [
 			[global.Object, 'getOwnPropertyNames'],
 			[global.Reflect, 'ownKeys'],

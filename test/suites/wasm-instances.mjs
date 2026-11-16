@@ -113,7 +113,7 @@ const show = (value) => JSON.stringify(value)?.slice(0, 400);
 		'the instance rewrites a script that takes it past the limit',
 		grown > thread.PAGE_MEMORY_LIMIT &&
 			large.includes('/* kept 400 */') &&
-			large.includes('$s$j.get(top, "top")'),
+			large.includes('0..$s$j.get(top, "top")'),
 		`${grown} bytes`,
 	);
 	const second = next();
@@ -442,9 +442,11 @@ const show = (value) => JSON.stringify(value)?.slice(0, 400);
 	);
 	ok(
 		"a data: module a module imports is the module's rewrite, as the module around it is",
-		output.includes('/* kept outer */ export const x = $s$j.get(top, "top")') &&
+		output.includes(
+			'/* kept outer */ export const x = 0..$s$j.get(top, "top")',
+		) &&
 			inner.includes(
-				'/* kept inner */ export default $s$j.get2($s$j.get(top, "top")',
+				'/* kept inner */ export default 0..$s$j.get2(0..$s$j.get(top, "top")',
 			),
 		show(output),
 	);
@@ -476,8 +478,8 @@ const show = (value) => JSON.stringify(value)?.slice(0, 400);
 		levels.push([
 			level,
 			text.includes(`/* level ${level} */`),
-			text.includes('$s$j.get(top, "top")') ||
-				text.includes("$s$j.get(top, 'top')"),
+			text.includes('0..$s$j.get(top, "top")') ||
+				text.includes("0..$s$j.get(top, 'top')"),
 		]);
 		text = decodeURIComponent(
 			/from "data:text\/javascript,([^"]*)"/.exec(text)?.[1] ?? '',
