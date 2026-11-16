@@ -141,7 +141,7 @@ window or document as is.
 | `frames[i]`, a `frames.length` loop, `parent.frames[1]` and `parent[1]` from the child (a stand-in)                                                                                                                                                             | restricted                            | restricted                                                                              |
 | `for...of frames`; `Array.from(parent.frames)` across origins                                                                                                                                                                                                   | TypeError; SecurityError, as natively | same                                                                                    |
 | `Reflect.get(window, 0)`, `Object.getOwnPropertyDescriptor(window, '0').value`, `Reflect.getOwnPropertyDescriptor`, `getOwnPropertyDescriptors`, `Object.values`, `Object.entries`, `Object.assign({}, frames)`, `Array.from(frames)` (with a map function too) | raw                                   | restricted                                                                              |
-| `Array.prototype.slice.call(frames)`, `Array.prototype.forEach.call(frames)`, `{ ...window }`, read without an index                                                                                                                                            | raw                                   | **raw (open)**                                                                          |
+| `Array.prototype.slice.call(frames)`, `Array.prototype.forEach.call(frames)`, `{ ...window }`, read without an index                                                                                                                                            | raw                                   | restricted                                                                              |
 | `window['kid']`, `frames.kid`, `window.kid`, a bare `kid`, `Reflect.get(window, 'kid')`, `Object.getPrototypeOf(Window.prototype).kid`, its descriptor, `window.__proto__.__proto__.kid`; `parent.kid`, `parent.frames.kid` from a sibling                      | raw                                   | restricted (an accessor per child name)                                                 |
 | `document.kid` (a named iframe), also from a sibling                                                                                                                                                                                                            | raw                                   | **raw (open)**                                                                          |
 | `parent.sib`, `parent.frames.sib`, `opener.frames.sib` across origins                                                                                                                                                                                           | SecurityError (natively a window)     | restricted, as natively                                                                 |
@@ -175,10 +175,19 @@ Why the open ones stay open:
   popup's `postMessage` to its opener needs; the demo opens a page's popup
   as a tab of its own, where `window.open()` returns null, so it holds
   none. Only a real origin per proxied site closes it for other hosts.
-- `Array.prototype` methods called on a window and object spread read the
-  window's indices natively. Wrapping every array method would tax every
-  array call; spread could be rewritten (`{ ...$s$j.spread(x) }`) for a cost
-  per spread.
+- (Closed.) `Array.prototype` methods called on a window, and an object
+  spread of one, read the window's indices natively. The calls that give a
+  method a window as `this` are hooked (src/inject/modules/Reflection.ts
+  applyWindowChildren: wrapping every array method would tax every array
+  call), and the rewriter routes an object spread through the access API
+  (`{ ...0..$s$j.spread(x) }`) unless what it spreads is no window for
+  certain; `spread` copies a window's own properties as member reads hand
+  them out. Still open: an array method the page made a method of the
+  window itself and calls as one
+  (`window.f = Array.prototype.at; window.f(0)`), which no call the inject
+  sees, and an object pattern's rest and a pattern's index key
+  (`const { ...rest } = window`, `const { 0: w } = window`), which the
+  rewriter does not route (window-children lists each as known).
 - `Document` has `[LegacyOverrideBuiltIns]`: a named iframe is an own
   property of the document that nothing can shadow or redefine while it
   exists. Only virtualising frame names (the real name attribute and

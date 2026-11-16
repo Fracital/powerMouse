@@ -851,6 +851,40 @@
 		},
 	);
 
+	// object spreads: a store's update and a component's props merged with
+	// its defaults, as every render does (`{ ...state, count }`,
+	// `{ ...defaults, ...props }`), and a spread of a literal by a condition,
+	// which the rewriter leaves as it is
+	function update(state, r) {
+		return { ...state, count: state.count + r };
+	}
+	function merge(defaults, props) {
+		return { ...defaults, ...props, ...(props.on && { active: true }) };
+	}
+	kernel(
+		'object-spread',
+		() => ({
+			state: { count: 0, name: 'list', items: null, open: false },
+			defaults: { size: 'm', tone: 'plain', disabled: false },
+			props: [
+				{ size: 's', on: true },
+				{ tone: 'loud' },
+				{ disabled: true },
+				{},
+			],
+		}),
+		(s) => {
+			let t = 0;
+			let state = s.state;
+			for (let r = 0; r < 1000000; r++) {
+				state = update(state, r & 7);
+				const merged = merge(s.defaults, s.props[r & 3]);
+				t += merged.size.length + (merged.active ? 1 : 0);
+			}
+			return t + state.count;
+		},
+	);
+
 	const median = (values) => {
 		const sorted = values.slice().sort((a, b) => a - b);
 		return sorted[sorted.length >> 1];

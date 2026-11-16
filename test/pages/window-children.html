@@ -84,6 +84,73 @@
 							title(Object.values(Object.assign({}, W)).at(0)),
 						);
 						note('objectSpread', () => title(Object.values({ ...W }).at(0)));
+						// what an object spread or rest copies of a window or a
+						// document, each value read off the copy with no hook in the way
+						var copied = function (object, key) {
+							return Reflect.getOwnPropertyDescriptor(object, key).value;
+						};
+						note('spreadTop', () => copied({ ...W }, 'top') === top);
+						note('spreadLocation', () => copied({ ...W }, 'location').href);
+						note(
+							'spreadDocument',
+							() => copied({ ...document }, 'location').href,
+						);
+						note(
+							'spreadKeys',
+							() => Object.keys({ ...W }).join() === Object.keys(W).join(),
+						);
+						note('spreadMixed', () => {
+							var o = { a: 1, ...W, b: 2 };
+							return title(Object.values(o).at(0)) + o.a + o.b;
+						});
+						note('spreadProxy', () =>
+							title(Object.values({ ...new Proxy(W, {}) }).at(0)),
+						);
+						note('spreadChild', () => Object.keys({ ...W[0] }).length);
+						note('restChildren', () => {
+							const { ...rest } = W;
+							return title(Object.values(rest).at(0));
+						});
+						note('restTop', () => {
+							const { document: d, ...rest } = W;
+							return copied(rest, 'top') === top && d === document;
+						});
+						note('restAssign', () => {
+							var rest;
+							({ ...rest } = W);
+							return title(Object.values(rest).at(0));
+						});
+						note('restParam', () =>
+							(({ ...rest }) => title(Object.values(rest).at(0)))(W),
+						);
+						note('restNested', () => {
+							const {
+								w: { ...rest },
+							} = { w: W };
+							return title(Object.values(rest).at(0));
+						});
+						note('restForOf', () => {
+							for (const { ...rest } of [W])
+								return title(Object.values(rest).at(0));
+						});
+						note('restDocument', () => {
+							const { ...rest } = document;
+							return copied(rest, 'location').href;
+						});
+						note('indexPattern', () => {
+							const { 0: child } = W;
+							return title(child);
+						});
+						note('arrayPattern', () => {
+							const [child] = W;
+							return title(child);
+						});
+						note('fromEntries', () => title(Object.fromEntries(W)[0]));
+						note('structuredClone', () => structuredClone(W));
+						note('postWindow', () => {
+							postMessage(W, '*');
+							return 'posted';
+						});
 						note('applyArrayOf', () => title(Array.of.apply(null, W).pop()));
 						note('reflectApply', () =>
 							title(Reflect.apply(Array.of, null, W).pop()),

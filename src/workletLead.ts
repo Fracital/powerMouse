@@ -86,6 +86,7 @@ export function workletAccess(access: string): string {
 		get2: (target, key, partial, optional) =>
 			nullish(target) && optional ? undefined : target[keyOf(key)],
 		arg: (target, key) => target[keyOf(key)],
+		spread: (value) => value,
 		get: (object) => object,
 		set2: (target, key, operate, righthand) =>
 			operate(target, nullish(target) ? key : keyOf(key), righthand),

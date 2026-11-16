@@ -58,6 +58,8 @@ const NativeProxy = Proxy;
 const NativeSymbol = Symbol;
 const ITERATOR = Symbol.iterator;
 const create = Object.create;
+const ownKeys = Reflect.ownKeys;
+const ownDescriptor = Reflect.getOwnPropertyDescriptor;
 // (a worklet's global has none: nothing is remembered there, see `brandless`)
 const enqueue: ((callback: () => void) => void) | undefined =
 	typeof queueMicrotask === 'function' ? queueMicrotask : undefined;
@@ -409,6 +411,19 @@ export default class AccessModule extends Module<Client> {
 			}
 		};
 		this.client.isWindowObject = isWindowObject;
+		// A document's own `location` is the window's (unforgeable, so an own
+		// property of each document), and Document.prototype's own
+		// `onmouseenter` getter is as lenient as the window's: it answers
+		// undefined for anything that is no document and asks nothing of it
+		const documentLenient = (
+			this.client.global as { Document?: { prototype: object } }
+		).Document
+			? Reflect.getOwnPropertyDescriptor(
+					(this.client.global as unknown as { Document: { prototype: object } })
+						.Document.prototype,
+					'onmouseenter',
+				)?.get
+			: undefined;
 		// The objects the browser's brand check last found to be no window at
 		// all (the lenient getter answered undefined, as it does for nothing
 		// that is a window, attached or not, or a stand-in of one): two of
@@ -450,6 +465,26 @@ export default class AccessModule extends Module<Client> {
 				// a window of another origin
 				return false;
 			}
+		};
+		/**
+		 * Whether an object spread (`{ ...value }`) of `value` copies what a
+		 * page must not hold raw: a window's children, `top`, `location`
+		 * (its own properties), a document's `location`. Asked by the
+		 * browser's brand checks alone, so nothing of the value is read and
+		 * no trap of a page's Proxy runs. (An object's own `location` would
+		 * tell most objects apart in a third of the time, but a Proxy's trap
+		 * would see the question; a cache of the objects found to be
+		 * neither, as `brandless` keeps, made a loop of spreads slower.)
+		 */
+		const copiesGuarded = (value: object): boolean => {
+			if (documentLenient)
+				try {
+					if (Reflect.apply(documentLenient, value, []) !== undefined)
+						return true;
+				} catch (error) {
+					// (nothing that is no document makes it throw)
+				}
+			return isWindowObject(value);
 		};
 		/**
 		 * Whether `target`, the receiver of a computed access, is no window
@@ -720,6 +755,20 @@ export default class AccessModule extends Module<Client> {
 			target = live(target, key);
 			return api.get(target[key], key, target);
 		};
+		// a window's or a document's own enumerable properties, each as a
+		// member read hands it out (`spread`): a copy with no prototype, so
+		// that no setter of Object.prototype's takes a key
+		const copyOf = (value: object): object => {
+			const source = live(value);
+			const copy = create(null) as Record<PropertyKey, unknown>;
+			const keys = ownKeys(source);
+			for (let index = 0; index < keys.length; index++) {
+				const key = keys[index];
+				if (!ownDescriptor(source, key)?.enumerable) continue;
+				copy[key] = api.get(source[key], key, source);
+			}
+			return copy;
+		};
 		const api = {
 			get2: (
 				target: any,
@@ -778,6 +827,21 @@ export default class AccessModule extends Module<Client> {
 				}
 				return api.get2(target, key, partial);
 			},
+			/**
+			 * What an object spread spreads (`{ ...value }`, the rewriter
+			 * routes it unless it can be no window). The spread copies its
+			 * own enumerable properties with no call the inject can wrap, and
+			 * a window's are its child frames, its `top` and its `location`, a
+			 * document's its `location`: those come out as a member read hands
+			 * them out, in a copy the spread copies again (the properties in
+			 * the same order, each read once, as the spread reads them).
+			 * Anything else is handed back as it is: this is on the way of
+			 * every spread of a page's objects.
+			 */
+			spread: (value: unknown): unknown =>
+				typeof value !== 'object' || value === null || !copiesGuarded(value)
+					? value
+					: copyOf(value),
 			// `container`: what `object` was read from, when the read is a member
 			// read (a window's child is injected before the page gets it)
 			get: (object: any, key: any, container?: unknown): any => {

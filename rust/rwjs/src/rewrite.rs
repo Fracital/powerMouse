@@ -88,7 +88,7 @@ pub struct Output {
 /// an older module's text and the glue never drives a module it was not
 /// written for (src/wasm/rewriter.ts holds the same number).
 /// rust/host/parity.mjs --cases holds it to the outputs (cases.revision).
-pub const REVISION: &str = "12";
+pub const REVISION: &str = "13";
 
 /// Why the rewriter hands a script back to the JavaScript one
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -516,6 +516,28 @@ pub(crate) mod tests {
 			plain("function f() { return arguments.top; }"),
 			"function f() { return 0..$s$j.get2(arguments, \"top\", \"arguments.top\"); }"
 		);
+	}
+
+	#[test]
+	fn object_spreads() {
+		// what may be a window is looked at by the access API first
+		assert_eq!(plain("x = { ...o }"), "x = { ...0..$s$j.spread(o) }");
+		assert_eq!(
+			plain("x = { a, ...this, ...f(), ...o.p, ...(p || {}) }"),
+			"x = { a, ...0..$s$j.spread(this), ...0..$s$j.spread(f()), ...0..$s$j.spread(o.p), ...0..$s$j.spread((p || {})) }"
+		);
+		// its argument is rewritten as it was
+		assert_eq!(
+			plain("x = { ...top, ...o[k] }"),
+			"x = { ...0..$s$j.spread(0..$s$j.get(top, \"top\")), ...0..$s$j.spread(0..$s$j.get2(o, k, \"o[k]\")) }"
+		);
+		// what is no window for certain is left as it is
+		assert_eq!(
+			plain("x = { ...{ a }, ...[b], ...(c ? { d } : {}), ...(e && { f }), ...'g', ...!h }"),
+			"x = { ...{ a }, ...[b], ...(c ? { d } : {}), ...(e && { f }), ...'g', ...!h }"
+		);
+		// an array's spread and a call's are iterated, as they were
+		assert_eq!(plain("x = [...o]; f(...o)"), "x = [...o]; f(...o)");
 	}
 
 	#[test]

@@ -1364,6 +1364,23 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   the URL it was asked for (a module's import.meta.url). Chrome's console
   still shows the warning. (preload-consumers suite.)
 
+- An object spread of a window (`{ ...window }`) no longer hands a page the
+  real top window, the proxy's own location or a frame of another site.
+  The spread copies a window's own enumerable properties with no call the
+  inject could wrap: its child frames, its `top` (the demo's own window)
+  and its `location` (whose `href` is the proxy's URL, and whose writes
+  navigate past the rewriter), and a document's spread its `location`. The
+  rewriter now prints `{ ...0..$s$j.spread(o) }` for a spread of anything
+  that may be a window (an object or array literal, a function, a class,
+  anything that is no object, and a choice of only such, `c && { a }`, stay
+  as written), and `spread` hands back what is neither a window nor a
+  document, told by the browser's brand checks, which no Proxy of the
+  page's sees; of a window or a document it hands over a copy of the same
+  properties in the same order, each read as a member read hands it out.
+  Measured in Chrome 157 on the measure-compute fixture, a loop of three
+  spreads of the page's own objects went from 1.5 to about 4 times its
+  native time (some 25 ns a spread). The wasm rewriter's revision is 13.
+  (window-children suite.)
 - A function that reads its arguments by index (`arguments[i]`, the loop
   every downlevelled rest parameter and variadic helper is) runs about four
   times as fast rewritten. The rewriter now prints such a read as

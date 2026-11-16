@@ -18,8 +18,16 @@
 // spreadable, JSON.stringify's replacer, a typed array's `from` and
 // Array.fromAsync.
 //
-// What this does not cover: an object spread of a window (`{ ...window }`),
-// which copies its children with no call the inject can wrap, and an array
+// An object spread of a window (`{ ...window }`) copies its own enumerable
+// properties with no call the inject can wrap: its children, and its `top`
+// and `location` (a document's spread its `location`), which came out as
+// the browser holds them, the real top and the proxy's own URL. The
+// rewriter routes the spread through the access API, which hands each out
+// as a member read does.
+//
+// What this does not cover: an object pattern's rest (`const { ...rest } =
+// window`) and a pattern's index key (`const { 0: child } = window`), which
+// read a window's children with no call the inject can wrap, and an array
 // method the page made a method of the window itself and calls as one; they
 // are listed below as known, and fail the suite once they read as natively.
 import {
@@ -33,10 +41,19 @@ import {
 	waitActive,
 } from '../lib.mjs';
 
+const rest =
+	"an object pattern's rest copies a window's own properties as the browser reads them (the rewriter does not route a pattern with only a rest)";
 const KNOWN = new Map([
+	['restChildren', rest],
+	['restTop', rest],
+	['restAssign', rest],
+	['restParam', rest],
+	['restNested', rest],
+	['restForOf', rest],
+	['restDocument', rest],
 	[
-		'objectSpread',
-		'an object spread of a window copies its children as the browser reads them (the rewriter does not route an object spread)',
+		'indexPattern',
+		"a pattern's index key reads a window's child as the browser reads it (the rewriter routes a pattern's unforgeable names, not its index keys)",
 	],
 	[
 		'ownMethod',

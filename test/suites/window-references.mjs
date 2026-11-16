@@ -37,11 +37,8 @@ const KNOWN_OPEN = {
 		'heldPopup',
 		'heldPopupSource',
 		'popupMessageSource',
-		// a spread copy of a window's children (`Array.prototype.slice` and
-		// `forEach` called on a window read them through the access API:
-		// window-children), and the document's named iframe (its named
-		// properties come before anything definable)
-		'spread',
+		// the document's named iframe (its named properties come before
+		// anything definable)
 		'documentName',
 	],
 	sib: ['parentDocumentKid'],

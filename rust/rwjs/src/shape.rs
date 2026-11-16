@@ -178,6 +178,38 @@ pub fn pure(e: &Expression) -> bool {
 	}
 }
 
+/// Whether what an object spread spreads is no window and no document for
+/// certain: an object or an array literal, a function, a class, anything
+/// that is no object (a literal, a template, what an operator makes), or
+/// a choice of only such (`c ? { a } : {}`, `c && { a }`, whose other
+/// value is falsy, which no window is). Anything else the access API looks
+/// at first (`spread`): the spread copies a window's own properties, its
+/// children, `top` and `location`, with no call of its own.
+pub fn spreads_plain(e: &Expression) -> bool {
+	match unparen(e) {
+		Expression::ObjectExpression(_)
+		| Expression::ArrayExpression(_)
+		| Expression::ArrowFunctionExpression(_)
+		| Expression::FunctionExpression(_)
+		| Expression::ClassExpression(_)
+		| Expression::TemplateLiteral(_)
+		| Expression::UnaryExpression(_)
+		| Expression::BinaryExpression(_)
+		| Expression::PrivateInExpression(_)
+		| Expression::UpdateExpression(_)
+		| Expression::NewTarget(_)
+		| Expression::ImportMeta(_) => true,
+		e if is_literal(e) => true,
+		Expression::ConditionalExpression(c) => spreads_plain(&c.consequent) && spreads_plain(&c.alternate),
+		Expression::LogicalExpression(l) => {
+			spreads_plain(&l.right) && (l.operator == LogicalOperator::And || spreads_plain(&l.left))
+		}
+		Expression::SequenceExpression(s) => s.expressions.last().is_some_and(spreads_plain),
+		Expression::AssignmentExpression(a) => a.operator == AssignmentOperator::Assign && spreads_plain(&a.right),
+		_ => false,
+	}
+}
+
 pub fn pure_arguments(args: &[Argument]) -> bool {
 	args.iter().all(|argument| match argument {
 		Argument::SpreadElement(_) => false,

@@ -26,7 +26,7 @@ use oxc::allocator::Allocator;
 use crate::rewrite::{Decline, Options, ROUTE_IMPORT, Route, js_whitespace};
 use crate::shape::{
 	Mem, Shapes, Spec, bindings_named, bound_names, in_optional_chain, index_write, inner_span,
-	is_literal, iterates, post_message, pure, pure_arguments, refers_to,
+	is_literal, iterates, post_message, pure, pure_arguments, refers_to, spreads_plain,
 	spec_text, unparen,
 };
 use crate::source::{Utf16Offsets, function_mark, quote, source_key};
@@ -2122,7 +2122,15 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 	}
 
 	fn visit_spread_element(&mut self, it: &SpreadElement<'a>) {
-		// an object's spread: read like any expression
+		// an object's spread: it copies the own enumerable properties of
+		// what it spreads with no call, a window's children, `top` and
+		// `location` among them, so the access API looks at it first unless
+		// it is no window for certain (the argument is otherwise read like
+		// any expression, its parent the spread as it was)
+		if self.rewriting && !spreads_plain(&it.argument) {
+			let head = self.head(it.argument.span().start, "spread");
+			self.wrap(it.argument.span(), head, ")".into());
+		}
 		self.spread(it, "");
 	}
 
