@@ -11,7 +11,9 @@
 // test/pages/access-tamper-frame.html does the same for the collections
 // the inject keeps windows in (`WeakSet.prototype.has`,
 // `WeakMap.prototype.get`), and then reads a frame of another site, which
-// it must be refused as natively.
+// it must be refused as natively: by index, and as the page keeps the
+// frame's window in its own objects, arrays and arguments and reads it
+// back by a computed key (the helpers' short ways for those receivers).
 //
 // What this does not cover: the natives the rest of the inject calls. A
 // page that replaces `Array.prototype.includes` (`?case=includes`, which the
@@ -97,4 +99,22 @@ ok(
 		natives['frame-none'].contentDocument === 'null',
 	JSON.stringify(natives['frame-none']),
 );
+// (natively, so is its window read back out of the page's own objects)
+for (const name of [
+	'objectKey',
+	'objectKeyAgain',
+	'arrayIndex',
+	'argumentsIndex',
+	'nested',
+	'compound',
+	'compoundAnswer',
+	'forIn',
+	'method',
+	'written',
+])
+	ok(
+		`natively, ${name} is refused`,
+		natives['frame-none'][name] === 'threw SecurityError',
+		natives['frame-none'][name],
+	);
 await done(browser, tab.errors);

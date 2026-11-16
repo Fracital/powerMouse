@@ -615,6 +615,242 @@
 		},
 	);
 
+	// The shapes of a framework's own loops over plain objects, where a
+	// page's time goes on most sites: a JSON payload walked by its keys, a
+	// virtual DOM's props and children diffed, a store's subscribers
+	// notified by key, records grouped into an object, an object cloned.
+
+	// a JSON payload, walked by for-in (every value read by its key)
+	function walkForIn(node) {
+		if (typeof node !== 'object' || node === null)
+			return typeof node === 'number' ? node : 1;
+		let t = 0;
+		for (const k in node) t += walkForIn(node[k]);
+		return t;
+	}
+	const payload = () => {
+		const users = [];
+		for (let i = 0; i < 400; i++)
+			users.push({
+				id: i,
+				name: 'user' + i,
+				active: i % 3 === 0,
+				score: Math.floor(random() * 1000),
+				tags: ['a' + (i % 5), 'b' + (i % 7)],
+				address: { city: 'c' + (i % 11), zip: 10000 + i, geo: [i, -i] },
+				posts: [
+					{ id: i * 2, likes: i % 13, title: 't' + i },
+					{ id: i * 2 + 1, likes: i % 17, title: 'u' + i },
+				],
+			});
+		return JSON.parse(JSON.stringify({ users, total: users.length }));
+	};
+	kernel('json-forin', payload, (data) => {
+		let t = 0;
+		for (let r = 0; r < 200; r++) t += walkForIn(data);
+		return t;
+	});
+
+	// a virtual DOM diff: props compared by key, children by index
+	function diffProps(prev, next, patch) {
+		let changed = 0;
+		for (const k in next)
+			if (prev[k] !== next[k]) {
+				patch[k] = next[k];
+				changed++;
+			}
+		for (const k in prev)
+			if (!(k in next)) {
+				patch[k] = undefined;
+				changed++;
+			}
+		return changed;
+	}
+	function diffTree(prev, next) {
+		let t = diffProps(prev.props, next.props, {});
+		const a = prev.children;
+		const b = next.children;
+		const n = a.length < b.length ? a.length : b.length;
+		for (let i = 0; i < n; i++)
+			if (a[i].tag === b[i].tag) t += diffTree(a[i], b[i]);
+			else t += 100;
+		return t + b.length - n;
+	}
+	const vnode = (depth, salt) => {
+		const props = {
+			className: 'c' + (depth % 3),
+			id: 'n' + depth,
+			title: salt % 4 === 0 ? 'changed' : 'same',
+			'data-x': depth * salt,
+		};
+		if (salt % 3 === 0) props.hidden = true;
+		const children = [];
+		if (depth > 0)
+			for (let i = 0; i < 4; i++) children.push(vnode(depth - 1, salt + i));
+		return { tag: depth % 2 ? 'div' : 'span', props, children };
+	};
+	kernel(
+		'vdom-diff',
+		() => ({ prev: vnode(6, 1), next: vnode(6, 2) }),
+		(s) => {
+			let t = 0;
+			for (let r = 0; r < 100; r++) t += diffTree(s.prev, s.next);
+			return t;
+		},
+	);
+
+	// a reactive store: a write by key notifies that key's subscribers
+	// (closures kept in arrays in an object), which recompute derived state
+	function makeStore(keys) {
+		const state = {};
+		const subs = {};
+		const derived = {};
+		for (let i = 0; i < keys.length; i++) {
+			const key = keys[i];
+			state[key] = i;
+			subs[key] = [];
+			for (let j = 0; j < 3; j++) {
+				const name = key + '$' + j;
+				subs[key].push((value) => {
+					derived[name] = value * (j + 1) + state[keys[(i + 1) % keys.length]];
+				});
+			}
+		}
+		const set = (key, value) => {
+			if (state[key] === value) return;
+			state[key] = value;
+			const list = subs[key];
+			for (let i = 0; i < list.length; i++) list[i](value);
+		};
+		return { keys, state, derived, set };
+	}
+	kernel(
+		'reactive',
+		() => {
+			const keys = [];
+			for (let i = 0; i < 64; i++) keys.push('field' + i);
+			return makeStore(keys);
+		},
+		(store) => {
+			const { keys, set, derived } = store;
+			for (let r = 0; r < 12000; r++)
+				for (let i = 0; i < keys.length; i++) set(keys[i], r + i);
+			let t = 0;
+			for (const k in derived) t = (t + derived[k]) % 1000000007;
+			return t;
+		},
+	);
+
+	// records grouped into an object of arrays, then summed by key
+	function groupBy(rows) {
+		const groups = {};
+		for (let i = 0; i < rows.length; i++) {
+			const row = rows[i];
+			(groups[row.kind] ||= []).push(row);
+		}
+		let t = 0;
+		for (const kind in groups) {
+			const list = groups[kind];
+			for (let i = 0; i < list.length; i++) t += list[i].amount;
+		}
+		return t;
+	}
+	kernel(
+		'group-by',
+		() => {
+			const rows = [];
+			for (let i = 0; i < 20000; i++)
+				rows.push({
+					kind: 'k' + Math.floor(random() * 40),
+					amount: i % 97,
+				});
+			return rows;
+		},
+		(rows) => {
+			let t = 0;
+			for (let r = 0; r < 150; r++) t += groupBy(rows);
+			return t;
+		},
+	);
+
+	// an object cloned key by key, as a state update copies it
+	function clone(value) {
+		if (typeof value !== 'object' || value === null) return value;
+		if (Array.isArray(value)) {
+			const list = [];
+			for (let i = 0; i < value.length; i++) list.push(clone(value[i]));
+			return list;
+		}
+		const out = {};
+		for (const k in value) out[k] = clone(value[k]);
+		return out;
+	}
+	kernel('deep-clone', payload, (data) => {
+		let t = 0;
+		for (let r = 0; r < 200; r++) t += clone(data).users.length;
+		return t;
+	});
+
+	// string keys read and written, values that are numbers
+	function readByKey(o, keys) {
+		let t = 0;
+		for (let i = 0; i < keys.length; i++) t += o[keys[i]];
+		return t;
+	}
+	function writeByKey(o, keys, r) {
+		for (let i = 0; i < keys.length; i++) o[keys[i]] = i + r;
+	}
+	const keyed = () => {
+		const o = {};
+		const keys = [];
+		for (let i = 0; i < 200; i++) {
+			keys.push('prop' + i);
+			o['prop' + i] = i;
+		}
+		return { o, keys };
+	};
+	kernel('key-read', keyed, (s) => {
+		let t = 0;
+		for (let r = 0; r < 40000; r++) t += readByKey(s.o, s.keys);
+		return t;
+	});
+	kernel(
+		'key-write',
+		keyed,
+		(s) => {
+			for (let r = 0; r < 40000; r++) writeByKey(s.o, s.keys, r);
+			return 0;
+		},
+		(s) => readByKey(s.o, s.keys),
+	);
+
+	// handlers kept by event type, each list called in turn
+	function emit(handlers, type, event) {
+		const list = handlers[type];
+		let t = 0;
+		for (let i = 0; i < list.length; i++) t += list[i](event);
+		return t;
+	}
+	kernel(
+		'event-emit',
+		() => {
+			const handlers = {};
+			const types = ['click', 'input', 'change', 'keydown', 'scroll'];
+			for (let i = 0; i < types.length; i++) {
+				handlers[types[i]] = [];
+				for (let j = 0; j < 4; j++)
+					handlers[types[i]].push((event) => event.value * (j + 1) + i);
+			}
+			return { handlers, types };
+		},
+		(s) => {
+			let t = 0;
+			for (let r = 0; r < 2000000; r++)
+				t += emit(s.handlers, s.types[r % 5], { value: r & 15 });
+			return t;
+		},
+	);
+
 	const median = (values) => {
 		const sorted = values.slice().sort((a, b) => a - b);
 		return sorted[sorted.length >> 1];

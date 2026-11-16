@@ -1364,6 +1364,28 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   the URL it was asked for (a module's import.meta.url). Chrome's console
   still shows the warning. (preload-consumers suite.)
 
+- Rewritten code that reads and writes plain objects by computed keys runs
+  about twice as fast: grouping records by a key, counting into a map,
+  copying objects, a store's reactive setters, `for (k in o) o[k]`. Each
+  such read or write took the access helpers' whole way, which asks the
+  object whether it is a window held across a fresh browsing context, and
+  for a write reads the document's `location` and `eval` stand-ins whatever
+  the key. A read or write of a key that is none of the names the helpers
+  answer for (`top`, `location`, `eval`, `postMessage`, the API's own) now
+  asks the object and the value only whether they are windows, by the
+  browser's own brand check, and remembers an object that is not one until
+  the next microtask (no object becomes a window). A window, and
+  every value that is one, still takes the whole way, so a frame of
+  another site kept in a page's object, array or arguments and read back
+  by a computed key is refused as natively (access-tamper suite, ten new
+  cases). Measured in Chrome 157 on the measure-compute fixture, which
+  has eight new kernels shaped like sites' object loops (JSON walking, a
+  virtual DOM diff, reactive setters, group-by, a deep clone, keyed reads
+  and writes, an event emitter): group-by from 12.6 to 7.5 times its
+  native time, keyed writes from 9.7 to 4.0, a cache fill from 8.1 to 3.4,
+  reactive setters from 5.4 to 3.4, a deep clone from 5.4 to 3.7, keyed
+  reads from 4.6 to 2.5, a small `for...in` from 3.1 to 1.7; numeric
+  kernels are unchanged.
 - A `Link` response header that preloads a stylesheet or a script with an
   `integrity` no longer fails the page's own element. The header's URLs
   were routed but its `integrity` kept, so the browser checked the

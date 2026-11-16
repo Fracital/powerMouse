@@ -52,6 +52,71 @@
 							var i = 0;
 							return frames[i].location.href;
 						});
+						// The frame's window as a page holds it in its own
+						// objects, read back by a computed key: each read is the
+						// access helpers' (their short ways for plain objects,
+						// arrays and arguments), and each must be refused as
+						// natively. (The window an iterator of `window` hands
+						// out is the frame's own, a way past the hooks that is
+						// not this suite's: it is read here only through the
+						// helpers.)
+						var raw = null;
+						try {
+							raw = Array.prototype.values.call(window).next().value;
+						} catch (error) {
+							// none
+						}
+						var k = 'w' + which.length;
+						var i = 0;
+						var o = {};
+						o[k] = raw;
+						note('objectKey', function () {
+							return o[k].document.title;
+						});
+						note('objectKeyAgain', function () {
+							var title = '';
+							for (var j = 0; j < 3; j++) title += o[k].document.title;
+							return title;
+						});
+						note('arrayIndex', function () {
+							var list = [o, raw];
+							return list[i + 1].document.title;
+						});
+						note('argumentsIndex', function () {
+							return (function () {
+								return arguments[i].document.title;
+							})(raw);
+						});
+						note('nested', function () {
+							var n = 'inner';
+							var box = { inner: o };
+							return box[n][k].document.title;
+						});
+						note('compound', function () {
+							var target = {};
+							target[k] = null;
+							target[k] ||= raw;
+							return target[k].document.title;
+						});
+						note('compoundAnswer', function () {
+							var target = {};
+							target[k] = raw;
+							return (target[k] ||= 1).document.title;
+						});
+						note('forIn', function () {
+							var title = '';
+							for (var key in o) title += o[key].document.title;
+							return title;
+						});
+						note('method', function () {
+							o[k].addEventListener('message', function () {});
+							return 'listening';
+						});
+						note('written', function () {
+							var name = 'stomp' + which.length;
+							raw[name] = 1;
+							return 'wrote';
+						});
 						report.done = true;
 						window.__tamper = report;
 					}, 300);

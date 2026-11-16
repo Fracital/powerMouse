@@ -58,6 +58,9 @@ const NativeProxy = Proxy;
 const NativeSymbol = Symbol;
 const ITERATOR = Symbol.iterator;
 const create = Object.create;
+// (a worklet's global has none: nothing is remembered there, see `brandless`)
+const enqueue: ((callback: () => void) => void) | undefined =
+	typeof queueMicrotask === 'function' ? queueMicrotask : undefined;
 
 /**
  * Whether `value` is an array or a typed array (or a DataView), by the
@@ -88,6 +91,9 @@ const array = (value: unknown): boolean => {
 const indexKey = (key: unknown): boolean => {
 	if (typeof key === 'number') return key >= 0 && key % 1 === 0;
 	if (typeof key !== 'string') return false;
+	// (a name is told by its first character, without converting it)
+	const first = key[0];
+	if (!(first >= '0' && first <= '9')) return false;
 	const index = +key;
 	return index >= 0 && index % 1 === 0 && `${index}` === key;
 };
@@ -403,6 +409,104 @@ export default class AccessModule extends Module<Client> {
 			}
 		};
 		this.client.isWindowObject = isWindowObject;
+		// The objects the browser's brand check last found to be no window at
+		// all (the lenient getter answered undefined, as it does for nothing
+		// that is a window, attached or not, or a stand-in of one): two of
+		// the receivers and two of the values a computed access had. A loop
+		// reads and writes one object, or two side by side, by many keys,
+		// and reads one value more than once (`a[i].x === b[i].x`, then
+		// `f(a[i], b[i])`): the check is asked once of each. Nothing the
+		// page does changes what an object is; they are let go when the
+		// microtasks are done, so that nothing of the page's is kept alive
+		// longer than the page keeps it.
+		let seenReceiver: object | undefined;
+		let seenReceiverBefore: object | undefined;
+		let seenValue: object | undefined;
+		let seenValueBefore: object | undefined;
+		let forgetting = false;
+		const forget = () => {
+			seenReceiver =
+				seenReceiverBefore =
+				seenValue =
+				seenValueBefore =
+					undefined;
+			forgetting = false;
+		};
+		const remembered = () => {
+			if (forgetting) return;
+			forgetting = true;
+			try {
+				enqueue?.(forget);
+			} catch (error) {
+				// a realm whose window is gone: what it remembers stays
+			}
+		};
+		/** whether the browser's brand check says `object` is no window at all */
+		const brandless = (object: object): boolean => {
+			if (!lenient || !enqueue) return false;
+			try {
+				return Reflect.apply(lenient, object, []) === undefined;
+			} catch (error) {
+				// a window of another origin
+				return false;
+			}
+		};
+		/**
+		 * Whether `target`, the receiver of a computed access, is no window
+		 * (so it is no window `live` knows, and nothing restrictForeign
+		 * changes): a function, an array, a typed array are none (a window
+		 * is an object, not callable, and no array), anything else by the
+		 * brand check
+		 */
+		const noWindow = (target: object): boolean => {
+			if (
+				target === seenReceiver ||
+				target === seenReceiverBefore ||
+				typeof target === 'function' ||
+				indexed(target)
+			)
+				return true;
+			if (!brandless(target)) return false;
+			seenReceiverBefore = seenReceiver;
+			seenReceiver = target;
+			remembered();
+			return true;
+		};
+		/**
+		 * Whether `got`, the value of a computed read, is handed to the page
+		 * as it is by `get` past its names (restrictForeign changes only a
+		 * window): anything that is no object is (a function, an array, a
+		 * typed array as well), anything else by the brand check
+		 */
+		const plain = (got: unknown): boolean => {
+			if (
+				typeof got !== 'object' ||
+				got === null ||
+				got === seenValue ||
+				got === seenValueBefore ||
+				indexed(got) ||
+				!this.client.restrictForeign
+			)
+				return true;
+			if (brandless(got)) {
+				seenValueBefore = seenValue;
+				seenValue = got;
+				remembered();
+				return true;
+			}
+			return !isWindowObject(got);
+		};
+		/**
+		 * A key that is a name `get` knows (the client's, postMessage, and
+		 * the names of UNDEFINABLE), or that a write knows (eval, location):
+		 * those take the long way, every other string the short one
+		 */
+		const named = (key: string): boolean =>
+			key === names.client ||
+			key === 'postMessage' ||
+			key === 'top' ||
+			key === 'eval' ||
+			key === 'location';
 		// a window the page held whose frame got a fresh browsing context since
 		// stands for the frame's window now (src/inject/dom/freshContext.ts):
 		// what the page does to it is done to that window as the page has it,
@@ -432,6 +536,34 @@ export default class AccessModule extends Module<Client> {
 				operate: (target: any, property: any, value: any) => any,
 				righthand: any,
 			): any => {
+				// a number, or a string that is no name a write or `get` knows,
+				// on an object, whose write lands through no hook (an object
+				// value written by an index may be an option landing in a
+				// select): what is left of the way below is `live` and the look
+				// at the target (a window of another origin is written through
+				// its stand-in), both not for an object the browser's brand check
+				// found no window, and the look at a compound write's answer
+				if (
+					typeof target === 'object' &&
+					target !== null &&
+					(typeof key === 'number' ||
+						(typeof key === 'string' && !named(key))) &&
+					(typeof righthand !== 'object' ||
+						righthand === null ||
+						!this.client.landIndexed ||
+						!indexKey(key))
+				) {
+					const maybeWindow = !noWindow(target);
+					const object = maybeWindow ? live(target, key) : target;
+					const result = operate(
+						!maybeWindow || plain(object) ? object : api.get(object, key),
+						key,
+						righthand,
+					);
+					return result === righthand || plain(result)
+						? result
+						: api.get(result, key, object);
+				}
 				// (a null or undefined target throws before the key is converted,
 				// as natively)
 				if (!nullish(target)) {
@@ -445,7 +577,9 @@ export default class AccessModule extends Module<Client> {
 				if (key === 'eval' && target === this.client.global)
 					righthand = evalWritten(righthand);
 
-				if (typeof key === 'string') {
+				// (asked of these two names alone: reading the document is a
+				// call of its getter, on every write of a computed key)
+				if (key === 'location' || key === 'eval') {
 					// `document.location = url` is `window.location = url`
 					const isDocument =
 						typeof target === 'object' &&
@@ -475,7 +609,7 @@ export default class AccessModule extends Module<Client> {
 								righthand,
 							);
 						}
-					} else if (key === 'location' || key === 'eval') {
+					} else {
 						// (another window's own API writes its location and its
 						// eval; asked only for those keys: the question is a
 						// `has` and a `get` a Proxy of the page's would see on
@@ -563,6 +697,19 @@ export default class AccessModule extends Module<Client> {
 		};
 		/** `target[key]`, a computed member read: get2 past its short path */
 		const read = (target: any, key: any, optional?: boolean): unknown => {
+			// a number, or a string that is no name of `get`'s, on an object:
+			// what is left of the long way is `live` (not for an object the
+			// browser's brand check found no window) and the look at the
+			// value (the key needs no conversion, and `get` knows no such key)
+			if (
+				typeof target === 'object' &&
+				target !== null &&
+				(typeof key === 'number' || (typeof key === 'string' && !named(key)))
+			) {
+				const object = noWindow(target) ? target : live(target, key);
+				const value = object[key];
+				return plain(value) ? value : api.get(value, key, object);
+			}
 			if (nullish(target)) {
 				// a?.[k]
 				if (optional) return undefined;
@@ -921,8 +1068,17 @@ export default class AccessModule extends Module<Client> {
 			): any => {
 				if (nullish(target)) throw errors.read(target, key);
 				key = keyOf(key);
-				target = live(target, key);
-				const object = api.get(target[key], key, target);
+				// (a key `get` knows no name of, on an object that is no window:
+				// see get2)
+				const known =
+					typeof key === 'number' || (typeof key === 'string' && !named(key));
+				target =
+					known && isObject(target) && noWindow(target)
+						? target
+						: live(target, key);
+				const value = target[key];
+				const object =
+					known && plain(value) ? value : api.get(value, key, target);
 				if (nullish(object)) throw errors.read(object, name);
 				const method = object[name];
 				if (typeof method === 'function')
@@ -1001,9 +1157,15 @@ export default class AccessModule extends Module<Client> {
 				// `w['post' + 'Message'](m)` posts like `w.postMessage(m)`
 				if (key === 'postMessage')
 					return api.post(target, args, !!(links & 2), partial);
-				target = live(target, key);
-
-				const method = api.get(target[key], key);
+				// (see call3)
+				const known =
+					typeof key === 'number' || (typeof key === 'string' && !named(key));
+				target =
+					known && isObject(target) && noWindow(target)
+						? target
+						: live(target, key);
+				const value = target[key];
+				const method = known && plain(value) ? value : api.get(value, key);
 
 				if (typeof method === 'function')
 					return Reflect.apply(method, target, args);
