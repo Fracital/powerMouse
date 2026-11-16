@@ -1,0 +1,1 @@
+window.__ran.push(['imap-static-good', typeof location.href]);

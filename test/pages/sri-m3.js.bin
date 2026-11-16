@@ -1,0 +1,1 @@
+window.__ran.push(['imap-src-bad', typeof location.href]);

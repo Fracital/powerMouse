@@ -32,7 +32,9 @@ function constants(): Uint32Array {
 	return (K512 = made);
 }
 
-const encoder = new TextEncoder();
+// made on first use: this module is in every bundle that reads an integrity
+// mark (routeURL), and a realm can load it before it has a TextEncoder
+let encoder: TextEncoder | undefined;
 
 function padded(bytes: Uint8Array, block: number): DataView {
 	const lengthBytes = block === 64 ? 8 : 16;
@@ -204,7 +206,7 @@ export function digest(
 	algorithm: 'sha256' | 'sha384' | 'sha512',
 	text: string,
 ): string {
-	return digestBytes(algorithm, encoder.encode(text));
+	return digestBytes(algorithm, (encoder ??= new TextEncoder()).encode(text));
 }
 
 /** the base64 digest of `bytes` by `algorithm` (sha256, sha384, sha512) */

@@ -88,7 +88,15 @@ import {
 import { MODULE_PREFIX_ROUTE } from '../scriptRoutes';
 import type { ControlInfo } from '../serviceWorkerTypes';
 import { siteFacts, type SiteFacts } from '../siteFacts';
-import { INTEGRITY_MARK, markIntegrity, withIntegrityMark } from '../sri';
+import {
+	INTEGRITY_MARK,
+	integrityMark,
+	markIntegrity,
+	NO_INTEGRITY,
+	refusalBytes,
+	REFUSED_FRAGMENT,
+	withIntegrityMark,
+} from '../sri';
 import StompURL from '../StompURL';
 import { getDomain, getPublicSuffix } from '../suffix';
 import type {
@@ -210,6 +218,7 @@ import {
 	upgradesInsecure,
 } from './insecureRequests';
 import { integrityHolds } from './integrity';
+import { importMapIntegrity } from './integrityLoads';
 import { noteKeptLoad } from './keptLoads';
 import { takeLoadGrant } from './loadGrants';
 import { recordCrossedMedia } from './mediaLoads';
@@ -853,11 +862,43 @@ function genericForward(
 				client: context?.clientId,
 			});
 		const oURL = new URL(serverRequest.url);
-		const { url, resource, integrity } = parseRoutedURL(
+		const {
+			url,
+			resource,
+			integrity: routeIntegrity,
+		} = parseRoutedURL(
 			serverRequest.url,
 			rewriter.codec,
 			`${oURL.origin}${rewriter.directory}`,
 		);
+		// a refused stylesheet asked for again with the page's metadata on its
+		// element (src/sri.ts): bytes that fail that metadata, which the
+		// browser refuses itself. Nothing of the origin's is in them and they
+		// are answered to whoever asks; any other request ending in the
+		// fragment is routed as usual
+		if (
+			serverRequest.url.endsWith(REFUSED_FRAGMENT) &&
+			serverRequest.destination === 'style' &&
+			serverRequest.integrity
+		) {
+			const bytes = refusalBytes(serverRequest.integrity);
+			if (bytes)
+				return new Response(bytes as Uint8Array<ArrayBuffer>, {
+					headers: { 'content-type': 'text/css' },
+				});
+		}
+		// the integrity checked here: the route's, else (a module script whose
+		// element named none) the document's import maps' for its URL. One that
+		// names nothing valid checks nothing and stands for the element's own
+		const integrity =
+			routeIntegrity === NO_INTEGRITY
+				? ''
+				: routeIntegrity ||
+					(resource === 'js:genericModule'
+						? integrityMark(importMapIntegrity(context?.clientId, url.url.href))
+								.slice(INTEGRITY_MARK.length)
+								.replace(NO_INTEGRITY, '')
+						: '');
 
 		// the same document asking again for an output it was just given, or
 		// for an image or a font it was given as it came (REPEAT_DESTINATIONS)
@@ -3067,7 +3108,8 @@ function genericForward(
 			(target, base) =>
 				withIntegrityMark(
 					transformRoute(target, base, resource),
-					integrity && INTEGRITY_MARK + integrity,
+					(routeIntegrity || integrity) &&
+						INTEGRITY_MARK + (routeIntegrity || integrity),
 					rewriter.directory,
 				),
 			additionalResponseFilter,
@@ -3505,9 +3547,10 @@ function genericForward(
 						});
 						checked.rawHeaders = response.rawHeaders;
 						response = checked;
-					} else
+					} else {
 						refusal =
 							'refused by its integrity: no digest matches the response';
+					}
 				}
 				if (refusal !== null) {
 					if (report) report = { ...report, status: 0, error: refusal };

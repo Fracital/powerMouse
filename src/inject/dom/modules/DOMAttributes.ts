@@ -16,7 +16,14 @@ import {
 } from '../../../routeURL';
 import { routeJS, ScriptType } from '../../../scriptRoutes';
 import { parseAcceptCH } from '../../../server/hintNames';
-import { markIntegrity } from '../../../sri';
+import {
+	dataURLBytes,
+	INTEGRITY_MARK,
+	integrityHoldsSync,
+	markIntegrity,
+	NO_INTEGRITY,
+	REFUSED_FRAGMENT,
+} from '../../../sri';
 import StompURL from '../../../StompURL';
 import {
 	LOAD_HEADER,
@@ -49,11 +56,12 @@ import { guardDocument, realSandbox, sandboxTokens } from '../sandbox';
 import { sealedURL } from '../sealedCopies';
 import { SVG_HREF_INTERFACES } from '../svgReferences';
 import DOMHooksModule, {
+	appliedAttribute,
 	CustomElement,
 	nativeElement,
 	pendingAttributes,
 } from './DOMHooks';
-import { hookWrite, MARKER } from './MutationObserver';
+import { hiddenMutation, hookWrite, MARKER } from './MutationObserver';
 import NavigationHintModule from './NavigationHint';
 import TokenListsModule from './TokenLists';
 
@@ -796,15 +804,122 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		 * its element: the worker checks the origin's bytes against it, the
 		 * element itself keeps none (src/sri.ts)
 		 */
-		const withIntegrity = (element: CustomElement, routed: string) =>
-			markIntegrity(
-				routed,
-				// a value the integrity hook has not taken yet is the newest
-				element.hasAttribute('integrity')
-					? element.getAttribute('integrity')
-					: element.getAttributeOG('integrity'),
-				this.client.directory,
-			);
+		const withIntegrity = (
+			element: CustomElement,
+			routed: string,
+			original?: URL,
+		) => {
+			// a value the integrity hook has not taken yet is the newest
+			const metadata = element.hasAttribute('integrity')
+				? element.getAttribute('integrity')
+				: element.getAttributeOG('integrity');
+			// a data: URL's bytes are here, and checked now: ones that do not
+			// match go to the browser as they are, with the page's metadata on
+			// the element, and it refuses them itself as natively (its error,
+			// its message, a stylesheet with no sheet). Nothing of them runs, so
+			// nothing needs rewriting
+			if (original?.protocol === 'data:' && metadata) {
+				const bytes = dataURLBytes(original.href);
+				if (bytes && !integrityHoldsSync(bytes, metadata)) {
+					givenIntegrity.add(element);
+					element.setAttribute('integrity', metadata);
+					element.removeAttributeOG('integrity');
+					return original.href;
+				}
+			}
+			return markIntegrity(routed, metadata, this.client.directory);
+		};
+		/**
+		 * Elements the browser is given the page's integrity for (a data: URL
+		 * that does not match it, a refused stylesheet asked for again): the
+		 * integrity hook leaves the attribute on them, and a new load of theirs
+		 * takes it back (releaseIntegrity)
+		 */
+		const givenIntegrity = new WeakSet<Element>();
+		/** before a script or a link routes a new load: the integrity it gave the browser goes back to the page's copy */
+		const releaseIntegrity = (element: CustomElement) => {
+			if (!givenIntegrity.delete(element)) return;
+			if (element.hasAttribute('integrity')) {
+				element.setAttributeOG('integrity', element.getAttribute('integrity')!);
+				element.removeAttribute('integrity');
+			}
+		};
+		// A stylesheet the worker refused by its integrity fails as a network
+		// error, which leaves the link an empty sheet; natively it has none,
+		// and document.styleSheets does not list it. Its 'error' is held here,
+		// before any listener of the page's, and the link asks for its route
+		// again (REFUSED_FRAGMENT) with the page's metadata on it: the worker
+		// answers with bytes that fail that metadata (none of the origin's),
+		// and the browser refuses them itself, with the error and the console
+		// message it gives natively.
+		{
+			const global = this.client.global as typeof globalThis;
+			const targetOf = Reflect.getOwnPropertyDescriptor(
+				global.Event.prototype,
+				'target',
+			)!.get!;
+			const localNameOf = Reflect.getOwnPropertyDescriptor(
+				global.Element.prototype,
+				'localName',
+			)!.get!;
+			const stop = global.Event.prototype.stopImmediatePropagation;
+			const read = nativeElement.getAttribute;
+			const write = nativeElement.setAttribute;
+			const remove = nativeElement.removeAttribute;
+			const held = (event: Event) => {
+				if (!event.isTrusted) return;
+				const target = Reflect.apply(targetOf, event, []) as Element | null;
+				let href: string | null;
+				try {
+					if (Reflect.apply(localNameOf, target, []) !== 'link') return;
+					href = Reflect.apply(read, target, ['href']) as string | null;
+				} catch (error) {
+					// not an element
+					return;
+				}
+				const rel = (
+					(Reflect.apply(read, target, ['rel']) as string | null) ?? ''
+				)
+					.toLowerCase()
+					.split(/[\t\n\f\r ]+/);
+				// a link given the page's metadata already: the browser's own
+				// refusal (a page's own URL may end in the fragment too)
+				if (
+					!href ||
+					givenIntegrity.has(target!) ||
+					!rel.includes('stylesheet') ||
+					!href.includes(INTEGRITY_MARK) ||
+					href.includes(INTEGRITY_MARK + NO_INTEGRITY)
+				)
+					return;
+				const metadata =
+					(Reflect.apply(read, target, [`${MARKER}integrity`]) as
+						string | null) ??
+					(Reflect.apply(read, target, ['integrity']) as string | null);
+				if (metadata === null) return;
+				Reflect.apply(stop, event, []);
+				const again = href.replace(/#.*$/s, '') + REFUSED_FRAGMENT;
+				hiddenMutation(() => {
+					Reflect.apply(write, target, ['integrity', metadata]);
+					Reflect.apply(remove, target, [`${MARKER}integrity`]);
+					// the network error gave the link an empty sheet, which a new
+					// load that fails does not take away: no href first
+					Reflect.apply(remove, target, ['href']);
+					Reflect.apply(write, target, ['href', again]);
+				});
+				appliedAttribute(target!, 'href', again);
+				givenIntegrity.add(target!);
+			};
+			// opening the document (loadHTML) removes the window's listeners
+			const listen = () =>
+				Reflect.apply(nativeElement.addEventListener, global, [
+					'error',
+					held,
+					true,
+				]);
+			listen();
+			addDocumentOpenListener(global, listen);
+		}
 		/**
 		 * Set a load attribute to its routed value, or in a document no service
 		 * worker controls to a copy of what it names (`urls` maps the value to
@@ -1448,6 +1563,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				// the browser reads a script's integrity when it starts the load,
 				// at its insertion: a connected one keeps the load it has
 				if (attribute === 'integrity' && element.isConnected) return;
+				releaseIntegrity(element);
 				element.restoreAttributesOG('src');
 				// a held script (holdScript) keeps its page's src through a change
 				// of its type or integrity (its route, integrity and all, is made
@@ -1506,6 +1622,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								this.client.config,
 								scriptType(element),
 							),
+							url,
 						),
 					);
 				}
@@ -1533,6 +1650,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 
 		domHooksModule.useAttributes(
 			(element) => {
+				// the browser checks this one itself (withIntegrity)
+				if (givenIntegrity.has(element)) return;
 				element.restoreAttributesOG('integrity');
 
 				if (element.hasAttribute('integrity')) {
@@ -1566,6 +1685,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				// a stylesheet's integrity is read when its load starts: a
 				// connected link keeps the load it has (as natively)
 				if (attribute === 'integrity' && element.isConnected) return;
+				releaseIntegrity(element);
 				element.restoreAttributesOG('href');
 
 				if (
@@ -1609,7 +1729,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						placeLoad(
 							element,
 							'href',
-							withIntegrity(element, routeCSS(resource, this.client.baseURL)),
+							withIntegrity(
+								element,
+								routeCSS(resource, this.client.baseURL),
+								resource.url,
+							),
 						);
 					else if (rel.has('modulepreload'))
 						placeLoad(

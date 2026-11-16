@@ -7,7 +7,13 @@
 // makes with the integrity given before or after the URL, another origin
 // with and without CORS, several algorithms, metadata the browser ignores)
 // loads or fails as it does natively, in both modes, and the page reads its
-// own integrity back.
+// own integrity back. A refused stylesheet has no sheet, as natively (not a
+// network error's empty one); an import map's integrity applies to the
+// module scripts it names (static and dynamic imports, a module script with
+// no integrity of its own, a bare specifier); a data: URL's bytes are
+// checked. A refused stylesheet's URL with the fragment of STomp's own
+// retry, fetched or linked again by the page, reads as natively: never the
+// bytes of another origin's stylesheet without CORS.
 import {
 	done,
 	FIXTURE,
@@ -22,9 +28,11 @@ import {
 
 const PAGE = `${FIXTURE}pages/sri.html`;
 const browser = await launch();
-/** the browser hashed a response itself: a route's rewrite, if proxied */
+/** the browser hashed a response itself */
 const digestErrors = (lines) =>
 	lines.filter((line) => /valid digest in the 'integrity'/.test(line));
+/** a digest message for a data: URL (proxied, the browser checks those itself) */
+const dataRefusal = (line) => /resource 'data:/.test(line);
 
 const nativePage = await browser.newPage();
 const nativeLines = [];
@@ -65,7 +73,15 @@ for (const [mode, base] of [
 		await page.close();
 		continue;
 	}
-	const differ = cases.filter(
+	const ids = [
+		...new Set([
+			...cases,
+			...native.ran,
+			...Object.keys(proxied.events),
+			...proxied.ran,
+		]),
+	].sort();
+	const differ = ids.filter(
 		(id) =>
 			proxied.events[id] !== native.events[id] ||
 			proxied.ran.includes(id) !== native.ran.includes(id),
@@ -80,26 +96,45 @@ for (const [mode, base] of [
 			)
 			.join('; '),
 	);
-	// a stylesheet that loads is applied (one that fails keeps an empty
-	// sheet proxied where natively it has none: the worker's refusal is a
-	// network error, see CHANGELOG)
+	// a stylesheet that loads is applied, and one refused has no sheet, as
+	// natively (a network error would leave it an empty one, listed)
 	const sheetsDiffer = Object.keys(native.sheets).filter(
-		(id) => native.sheets[id] && !proxied.sheets[id],
+		(id) => native.sheets[id] !== proxied.sheets[id],
 	);
 	ok(
-		`${mode}: every stylesheet that loads natively has its sheet`,
-		sheetsDiffer.length === 0,
-		sheetsDiffer.join(', '),
+		`${mode}: each stylesheet has a sheet as natively, and the document lists as many`,
+		sheetsDiffer.length === 0 && proxied.styleSheets === native.styleSheets,
+		JSON.stringify({
+			differ: sheetsDiffer,
+			native: native.styleSheets,
+			proxied: proxied.styleSheets,
+		}),
+	);
+	// a refused stylesheet's URL with the retry's fragment, fetched or linked
+	// again by the page, reads as natively: nothing of another origin's
+	// bytes without CORS
+	ok(
+		`${mode}: a refused stylesheet asked for again by the page reads as natively, never its bytes`,
+		JSON.stringify(proxied.escapes) === JSON.stringify(native.escapes) &&
+			!JSON.stringify(proxied.escapes).includes('secret'),
+		JSON.stringify({ native: native.escapes, proxied: proxied.escapes }),
 	);
 	ok(
 		`${mode}: the page reads its integrity back as natively`,
 		JSON.stringify(proxied.readback) === JSON.stringify(native.readback),
 		JSON.stringify(proxied.readback),
 	);
+	// proxied, the browser hashes only what the page refuses: a data: URL,
+	// and a refused stylesheet asked for again with the page's metadata (one
+	// message each). One more would be a rewrite it was given metadata for
+	const refusedSheets = Object.keys(native.sheets).filter(
+		(id) => native.events[id] === 'error' && !id.includes('data'),
+	);
+	const routeDigests = digestErrors(lines).filter((line) => !dataRefusal(line));
 	ok(
-		`${mode}: the browser never hashed a rewritten response`,
-		digestErrors(lines).length === 0,
-		JSON.stringify(digestErrors(lines)),
+		`${mode}: the browser never hashed a rewritten response, only what the page refuses`,
+		routeDigests.length === refusedSheets.length,
+		JSON.stringify({ refusedSheets, routeDigests }),
 	);
 	await page.close();
 }

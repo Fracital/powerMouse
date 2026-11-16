@@ -1,0 +1,3 @@
+.sri-private {
+	content: "sri-private-secret";
+}

@@ -56,6 +56,7 @@ import {
 	unwrapRoute,
 } from '../../routeURL';
 import { rewriteImportMap } from '../../scriptRoutes';
+import { IMPORT_MAP_ROUTE } from '../../sri';
 import StompURL from '../../StompURL';
 import { HOOK_ERROR, OPEN_TAB } from '../../transport/messages';
 import { queryOf } from '../../urlShape';
@@ -2667,6 +2668,41 @@ export default class DocumentClient extends Client {
 		return this.getModule(SyncModule);
 	}
 	/**
+	 * An import map's `integrity` (its JSON `text`, as the page wrote it) goes
+	 * to the worker before the browser has the map, so before any module it
+	 * names is asked for: the worker checks a module script whose element
+	 * named no integrity of its own against it (server/integrityLoads.ts).
+	 * The keys are URLs, resolved against the document's base as the browser
+	 * resolves them; the routed modules never match them in the browser.
+	 */
+	noteImportMap(text: string) {
+		let integrity: unknown;
+		try {
+			integrity = (JSON.parse(text) as { integrity?: unknown })?.integrity;
+		} catch (error) {
+			return;
+		}
+		if (typeof integrity !== 'object' || integrity === null) return;
+		const entries: [string, string][] = [];
+		for (const [key, value] of Object.entries(integrity)) {
+			if (typeof value !== 'string') continue;
+			try {
+				entries.push([
+					new URL(key, this.baseURL.toString()).href.replace(/#.*$/s, ''),
+					value,
+				]);
+			} catch (error) {
+				// not a URL: the browser ignores the entry
+			}
+		}
+		if (!entries.length) return;
+		try {
+			this.syncBridge?.jsonAPI(`${this.directory}${IMPORT_MAP_ROUTE}`, entries);
+		} catch (error) {
+			// a document with no bridge: the modules go unchecked
+		}
+	}
+	/**
 	 * @internal inject this page's bundle into a child frame's window nothing
 	 * injected yet, as reading its contentWindow does (IFrame sets it):
 	 * routeHTML's javascript: wrapper calls it from the frame, whose rewritten
@@ -2889,6 +2925,7 @@ export default class DocumentClient extends Client {
 			if (
 				(script.getAttribute('type') || '').trim().toLowerCase() === 'importmap'
 			) {
+				this.noteImportMap(read());
 				write(rewriteImportMap(read(), this.baseURL, this.config));
 				continue;
 			}

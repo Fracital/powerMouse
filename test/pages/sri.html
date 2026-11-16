@@ -12,6 +12,21 @@
 				window.__events[id] = kind;
 			};
 		</script>
+		<!-- an import map's integrity applies to the module scripts it names
+		     (the imap-* cases) -->
+		<script type="importmap">
+			{
+				"imports": { "sri-bare": "./sri-m6.js.bin" },
+				"integrity": {
+					"./sri-m1.js.bin": "sha384-8X7YhvuXNTIh3RyVmxgw2H2DiqELwsozkvpPh33s+/FXLo/F3biKHyELZFphSTWn",
+					"./sri-m2.js.bin": "sha384-AAAAi+/2mlQgDzJX6Os+5O+UnSzyI7Yse2Sza8+eMGGVqZRRN1vDgfkgd6SPk9gR",
+					"./sri-m3.js.bin": "sha384-AAAAI149ZWNrBKdGriicCHmwbIiDdlN1HTD5KF/5qgBa4SxeMXQqKR0qGGS9nalR",
+					"./sri-m4.js.bin": "sha384-AAAAhhjnY69WcEogff3+W46TmPRgUwDUHHf5B6m0tT1v+zh+LkoqsDjaBIRQalII",
+					"./sri-m5.js.bin": "sha384-AAAACuR0rfDOLTYLPAnKukBekobttFEXYOC8h28oq5Z0G1IkX9kKBfDSicMByd9e",
+					"./sri-m6.js.bin": "sha384-AAAAEqR0D+TZ9frQTSH7cMphSUe4v8jkDbMxYKNIMsszuxeGj4Upb/oPWG52SIq+"
+				}
+			}
+		</script>
 		<link
 			rel="preload"
 			as="style"
@@ -94,6 +109,45 @@
 	</head>
 	<body>
 		<p id="p">sri</p>
+		<script type="module">
+			import './sri-m1.js.bin';
+		</script>
+		<script type="module">
+			import './sri-m2.js.bin';
+		</script>
+		<script
+			type="module"
+			src="sri-m3.js.bin"
+			data-case="imap-src-bad"
+			onload="ev(this, 'load')"
+			onerror="ev(this, 'error')"
+		></script>
+		<!-- the element's own integrity, which names nothing valid, stands -->
+		<script
+			type="module"
+			src="sri-m4.js.bin"
+			integrity=""
+			data-case="imap-src-own"
+			onload="ev(this, 'load')"
+			onerror="ev(this, 'error')"
+		></script>
+		<script type="module">
+			import('./sri-m5.js.bin').then(
+				() => (window.__events['imap-dynamic-bad'] = 'load'),
+				() => (window.__events['imap-dynamic-bad'] = 'error'),
+			);
+		</script>
+		<script type="module">
+			import 'sri-bare';
+		</script>
+		<!-- a data: URL's bytes are checked too -->
+		<script
+			src="data:text/javascript,window.__ran.push(%5Bdocument.currentScript.dataset.case%2C%20typeof%20location.href%5D)%3B%0A"
+			integrity="sha384-AAAAC8gfznjqaqG3EDeI77n+yzzDnPxfUKq1woTJ3NLXSGw56sU2LuZrSsAlBI08"
+			data-case="markup-script-data-bad"
+			onload="ev(this, 'load')"
+			onerror="ev(this, 'error')"
+		></script>
 		<script>
 			{
 				const style = 'sri-style.css.bin';
@@ -246,14 +300,107 @@
 					el.integrity = js384;
 					el.src = src;
 				});
+				// data: URLs, whose bytes the browser checks natively
+				const jsText =
+					'window.__ran.push([document.currentScript.dataset.case, typeof location.href]);\n';
+				const cssText =
+					'.sri-style {\n\tbackground-image: url(blank-pixel.svg);\n}\n';
+				const dataJS = `data:text/javascript,${encodeURIComponent(jsText)}`;
+				const dataCSS = `data:text/css,${encodeURIComponent(cssText)}`;
+				script('dom-script-data-good', dataJS, (el, src) => {
+					el.integrity = js384;
+					el.src = src;
+				});
+				script('dom-script-data-bad', dataJS, (el, src) => {
+					el.integrity = bad384;
+					el.src = src;
+				});
+				script(
+					'dom-script-data-base64',
+					`data:text/javascript;base64,${btoa(jsText)}`,
+					(el, src) => {
+						el.src = src;
+						el.integrity = js384;
+					},
+				);
+				sheet('dom-style-data-good', dataCSS, (el, href) => {
+					el.rel = 'stylesheet';
+					el.integrity = css384;
+					el.href = href;
+				});
+				sheet('dom-style-data-bad', dataCSS, (el, href) => {
+					el.rel = 'stylesheet';
+					el.integrity = css384.replace('Mx', 'AA');
+					el.href = href;
+				});
 				script('dom-module-bad', `${run}?module-bad`, (el, src) => {
 					el.type = 'module';
 					el.integrity = bad384;
 					el.src = src;
 				});
+				// a refused stylesheet's bytes stay out of the page's reach. Another
+				// origin's stylesheet without CORS, refused for a wrong digest or
+				// for its lack of CORS (the right digest), asked for again by its
+				// URL with the fragment STomp's own retry uses: fetch() and a
+				// second link read it as natively, and never its rules
+				const privateCSS = `${other}sri-private.css.bin`;
+				const private384 =
+					'sha384-c+0cjYoml5IDkJgZPnoROXHpIgzXV4kxMUs2NY9us5CVzqWXUCI7KZKcwOlD1GRm';
+				const linked = (id, href, integrity) =>
+					new Promise((resolve) => {
+						const el = document.createElement('link');
+						listen(el, id);
+						el.rel = 'stylesheet';
+						if (integrity) el.integrity = integrity;
+						el.href = href;
+						const settle = (kind) => {
+							let rules;
+							try {
+								const list = el.sheet.cssRules;
+								rules = [...list].some((rule) =>
+									rule.cssText.includes('secret'),
+								)
+									? 'secret'
+									: `rules ${list.length}`;
+							} catch (error) {
+								rules = error.name;
+							}
+							resolve(`${kind} ${rules}`);
+						};
+						el.addEventListener('load', () => settle('load'));
+						el.addEventListener('error', () => settle('error'));
+						document.head.append(el);
+					});
+				const read = (response) =>
+					response
+						.text()
+						.then(
+							(text) =>
+								`${response.type} ${response.status} ${text.includes('secret') ? 'secret' : text.length}`,
+						);
+				const escape = async (id, integrity) => {
+					const url = `${privateCSS}?${id}`;
+					const refusal = await linked(id, url, integrity);
+					const again = `${url}#stomp-sri-refused`;
+					return {
+						refusal,
+						fetched: await fetch(again).then(read, (e) => `rejected ${e.name}`),
+						opaque: await fetch(again, { mode: 'no-cors' }).then(
+							read,
+							(e) => `rejected ${e.name}`,
+						),
+						plain: await linked(`${id}-plain`, again, null),
+						same: await linked(`${id}-same`, again, integrity),
+					};
+				};
+				window.__escapes = Promise.all([
+					escape('esc-mismatch', private384.replace('c+0c', 'AAAA')),
+					escape('esc-cors', private384),
+				]).then(([mismatch, cors]) => ({ mismatch, cors }));
 			}
 			addEventListener('load', () =>
-				setTimeout(() => {
+				setTimeout(async () => {
+					const escapes = await window.__escapes;
 					const read = (selector) => {
 						const el = document.querySelector(selector);
 						return [
@@ -266,6 +413,8 @@
 					for (const el of document.querySelectorAll('link[rel=stylesheet]'))
 						sheets[el.dataset.case] = !!el.sheet;
 					window.__sri = {
+						styleSheets: document.styleSheets.length,
+						escapes,
 						events: window.__events,
 						ran: window.__ran.map(([id]) => id).sort(),
 						sheets,

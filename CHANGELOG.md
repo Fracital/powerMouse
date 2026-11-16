@@ -1498,6 +1498,26 @@ be cloned.`, the function as the rewriter printed it, mark and helper
   page. (top-navigation suite: 66 cases natively, Chrome 152,
   156 and 157 alike, against both modes; docs/same-origin-policy.md.)
 
+  page's value (they read ''). A refused stylesheet has no sheet and
+  `document.styleSheets` does not list it, as natively: the worker's
+  refusal is a network error, which leaves an empty sheet, so the inject
+  holds that 'error' before the page's listeners and asks for the route
+  again with the page's metadata on the link (`#stomp-sri-refused`); the
+  worker answers a stylesheet request carrying integrity with bytes made to
+  fail it, never the origin's, and the browser refuses them itself, with
+  Chrome's own message (naming the route) and the page's one 'error'. An import map's `integrity` applies to the module scripts it
+  names (static and dynamic imports, a bare specifier, a module script with
+  no `integrity` of its own; one with `integrity=""` keeps its own, as
+  natively): the inject gives each map's entries to the worker over the
+  synchronous bridge before the browser has the map
+  (server/integrityLoads.ts). A data: URL's bytes are checked in the
+  inject, and one that does not match goes to the browser as it is, with
+  the page's metadata, which refuses it as natively. A refused script's
+  console line is still the route's network error ("Failed to load
+  resource: net::ERR_FAILED"), not Chrome's digest message: only a load the
+  browser itself checks and refuses prints that, and a script is not asked
+  for again. (sri suite.)
+
 - A frame read before it loaded (an about:blank child or popup, one written
   with document.write) no longer shows the access API on its
   Number.prototype to the page that made it. The inject defines the API

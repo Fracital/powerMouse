@@ -34,6 +34,7 @@ import { Blocker, registerBlocker } from './blocker';
 import { HttpCache, memoryCache } from './cache';
 import Cookies, { openCookies, registerCookies } from './Cookies';
 import { hostErrorPage } from './errorPage';
+import { registerIntegrityLoads } from './integrityLoads';
 import { registerKeptLoads } from './keptLoads';
 import { registerMediaLoads } from './mediaLoads';
 import { RewriteCache } from './rewriteCache';
@@ -412,6 +413,7 @@ export default async function createServer(
 	registerStorage(router, stores.storage, init.codec);
 	registerMediaLoads(router);
 	registerKeptLoads(router);
+	registerIntegrityLoads(router);
 	registerXhr(router);
 
 	return {

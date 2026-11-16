@@ -419,6 +419,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			if (script.type.trim().toLowerCase() === 'importmap') {
 				if (rewrittenScripts.has(script)) return;
 				rewrittenScripts.set(script, script.text);
+				this.client.noteImportMap(script.text);
 				script.text = trustedScript(
 					rewriteImportMap(
 						script.text,
@@ -619,12 +620,14 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				if (
 					(element.getAttribute('type') || '').trim().toLowerCase() ===
 					'importmap'
-				)
+				) {
+					this.client.noteImportMap(text);
 					return rewriteImportMap(
 						text,
 						this.client.baseURL,
 						this.client.config,
 					);
+				}
 				if (!shouldRewriteScript(element)) return null;
 				// (the page's Trusted Types judge the text as the script runs;
 				// refused, the script holds nothing and runs nothing, the inject
