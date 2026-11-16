@@ -88,7 +88,7 @@ pub struct Output {
 /// an older module's text and the glue never drives a module it was not
 /// written for (src/wasm/rewriter.ts holds the same number).
 /// rust/host/parity.mjs --cases holds it to the outputs (cases.revision).
-pub const REVISION: &str = "10";
+pub const REVISION: &str = "11";
 
 /// Why the rewriter hands a script back to the JavaScript one
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -711,6 +711,22 @@ pub(crate) mod tests {
 			plain("for (const { top: t } of a) f(t)"),
 			"for (const $s$jf of a) {const { top: t } = 0..$s$j.pattern($s$jf, {\"top\":true}, \"{ top: t }=$s$jf\");f(t)}"
 		);
+		// minified: no space between the head's pattern and `of`, or between
+		// `of` and what it iterates (discord.com/login's web bundle)
+		assert_eq!(
+			plain("for(const{location:t}of a)f(t)"),
+			"for(const $s$jf of a){const {location:t} = 0..$s$j.pattern($s$jf, {\"location\":true}, \"{location:t}=$s$jf\");f(t)}"
+		);
+		for source in [
+			"for(const{location:t,applicationId:n}of nR.Ay.values()){g(t,n)}",
+			"for(let{top:t}of a)f(t)",
+			"for(var[{location:l}]of a)f(l)",
+			"for({top:t}of a)f(t)",
+			"for([{location:l}]of a)f(l)",
+		] {
+			let out = plain(source);
+			assert!(!out.contains("$s$jfof"), "{source} -> {out}");
+		}
 		assert_eq!(
 			plain("try {} catch ({ top: t }) {}"),
 			"try {} catch ($s$jc) {let { top: t } = 0..$s$j.pattern($s$jc, {\"top\":true}, \"{ top: t }=$s$jc\");}"

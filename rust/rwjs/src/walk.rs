@@ -349,11 +349,30 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 	// ---- edits ----
 
 	fn wrap(&mut self, span: Span, before: String, after: String) {
+		let before = self.spaced(span.start, before, span.start);
+		let after = self.spaced(span.end, after, span.end);
 		self.edits.push(Edit::wrap(espan(span), text(before), text(after)));
 	}
 
 	fn replace(&mut self, start: u32, end: u32, with: String) {
+		let with = self.spaced(start, with, end);
 		self.edits.push(Edit::replace(EditSpan::new(start, end), text(with)));
+	}
+
+	/// `with`, put in the place of the source from `start` to `end`, kept a
+	/// token of its own: a space where it would run into a word of the page's
+	/// text before or after it (minified `for(const{a}of b)` has none between
+	/// its pattern and `of`, and the pattern's stand-in ends in a name)
+	fn spaced(&self, start: u32, with: String, end: u32) -> String {
+		let word = |c: char| c.is_alphanumeric() || c == '_' || c == '$' || c == '\\' || c as u32 > 0x7f;
+		let ahead = with.chars().next().is_some_and(word) && self.src[..start as usize].chars().next_back().is_some_and(word);
+		let behind = with.chars().next_back().is_some_and(word) && self.src[end as usize..].chars().next().is_some_and(word);
+		match (ahead, behind) {
+			(false, false) => with,
+			(true, false) => format!(" {with}"),
+			(false, true) => format!("{with} "),
+			(true, true) => format!(" {with} "),
+		}
 	}
 
 	/// `walk` with the parent of what it visits an expression or not
