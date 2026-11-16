@@ -5471,6 +5471,22 @@ token '%'`. The body is decoded before rewriting and re-encoded after.
   that realm however it is called. And `o.postMessage.call(x, m)` on an
   object of the page's called `x.postMessage` instead (it threw for any `x`
   with no such method). (adversarial-messages suite.)
+- A proxied page's WebAuthn request no longer makes the browser reach a
+  host past the proxy. A relying party id that is neither the document's
+  host nor a suffix of it makes Chrome fetch `https://<id>/.well-known/webauthn`
+  from its own process (related origins), and the document is the
+  proxy's: on a proxy origin that is a domain, `credentials.create()`,
+  `get()` and the three `PublicKeyCredential.signal*` statics let any
+  proxied page make the browser reach any host directly, and a site's own
+  id, the usual case, reached the real site from the user's own address
+  (in isolation mode the signals, whose frame has no policy for create
+  and get). The inject hands the browser an id it refuses without a fetch,
+  read where and when the browser reads the page's (once, a `toString`
+  included), and gives the refusal Chrome's words for a file that could
+  not be fetched: no such file lists the proxy, so the answer is the one a
+  fetch would have had. An address is no relying party and asks nothing,
+  as before. (webauthn-related-origins suite, natively against the demo
+  on a domain.)
 
 ### Origin isolation
 

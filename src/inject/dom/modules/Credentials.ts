@@ -642,8 +642,149 @@ export default class CredentialsModule extends Module<DocumentClient> {
 				})().catch((error) => rejectPage(error));
 			});
 
+		// --- WebAuthn: no related origins request from the browser itself ---
+
+		// A relying party id that is neither the document's host nor a suffix
+		// of it makes Chrome fetch https://<id>/.well-known/webauthn from its
+		// own process (WebAuthn's related origins, 5.11.1), with nothing of the
+		// proxy in the way: on a proxy origin that is a domain, any proxied page
+		// could make the browser reach any host directly, and a site's own id,
+		// the usual case, reaches the real site from the user's own address.
+		// No such file lists the proxy's origin, so the answer is known without
+		// asking: the browser is handed an id it refuses without a fetch (the
+		// empty one), after every check of its own, and its refusal is given the
+		// words of a file that could not be fetched. A document on an address
+		// is refused before any fetch (an address is no relying party).
+		const documentHost: string = global.location.hostname;
+		const onDomain =
+			documentHost !== '' &&
+			!documentHost.startsWith('[') &&
+			!/^\d+\.\d+\.\d+\.\d+$/.test(documentHost);
+		/** an id Chrome would ask the network about for this document */
+		const asksNetwork = (id: string): boolean => {
+			if (
+				id === documentHost ||
+				// a suffix of the host (a public suffix too: one the proxy's own
+				// name has, never a page's choice; a lone label is a top-level
+				// domain, which Chrome asks about)
+				(id.includes('.') && documentHost.endsWith(`.${id}`))
+			)
+				return false;
+			try {
+				// a name of a host alone: an address with a port, a URL or a
+				// name with a space is refused without a fetch
+				return new URL(`https://${id}/`).host === id.toLowerCase();
+			} catch (error) {
+				return false;
+			}
+		};
+		const RP_REFUSED =
+			'The relying party ID is not a registrable domain suffix of, nor equal to the current domain.';
+		const RP_UNFETCHED = `${RP_REFUSED} Subsequently, an attempt to fetch the .well-known/webauthn resource of the claimed RP ID failed.`;
+		/**
+		 * `value` with the member at `path` read through `pin`: the page's
+		 * object, read where and when the browser reads it, once
+		 */
+		const through = (
+			value: unknown,
+			path: string[],
+			pin: (member: unknown) => unknown,
+		): unknown => {
+			if (
+				!path.length ||
+				value === null ||
+				(typeof value !== 'object' && typeof value !== 'function')
+			)
+				return path.length ? value : pin(value);
+			const [key, ...rest] = path;
+			return new Proxy(value as object, {
+				get: (target, name) => {
+					const member: unknown = Reflect.get(target, name, target);
+					return name === key ? through(member, rest, pin) : member;
+				},
+			});
+		};
+		/**
+		 * The browser's own WebAuthn call `call`, with the relying party id at
+		 * `path` of its options kept from asking the network
+		 */
+		const withoutRelatedOrigins = (
+			call: (args: unknown[]) => unknown,
+			args: unknown[],
+			path: string[],
+		): unknown => {
+			if (!onDomain || !args.length) return call(args);
+			let kept = false;
+			const pin = (id: unknown) => {
+				if (id === undefined || typeof id === 'symbol') return id;
+				// converted here, once, as the browser would (a toString is the page's)
+				const text = String(id);
+				if (!asksNetwork(text)) return text;
+				kept = true;
+				return '';
+			};
+			const result = call([through(args[0], path, pin), ...args.slice(1)]);
+			// (the browser reads the options during the call)
+			if (!kept || !(result instanceof PagePromise)) return result;
+			return Reflect.apply(PagePromise.prototype.then, result, [
+				undefined,
+				(error: unknown) => {
+					if (
+						kept &&
+						error instanceof PageDOMException &&
+						error.name === 'SecurityError' &&
+						error.message === RP_REFUSED
+					)
+						throw domException(RP_UNFETCHED, 'SecurityError');
+					throw error;
+				},
+			]) as unknown;
+		};
+		if (typeof container.create === 'function')
+			container.create = proxyModule.wrapFunction(
+				container.create,
+				(target, that, args) =>
+					withoutRelatedOrigins(
+						(called) => Reflect.apply(target, that, called),
+						args,
+						['publicKey', 'rp', 'id'],
+					),
+			);
+		const NativePublicKeyCredential = global.PublicKeyCredential as
+			object | undefined;
+		if (NativePublicKeyCredential)
+			for (const name of [
+				'signalUnknownCredential',
+				'signalAllAcceptedCredentials',
+				'signalCurrentUserDetails',
+			]) {
+				const descriptor = Reflect.getOwnPropertyDescriptor(
+					NativePublicKeyCredential,
+					name,
+				);
+				if (typeof descriptor?.value !== 'function') continue;
+				Reflect.defineProperty(NativePublicKeyCredential, name, {
+					...descriptor,
+					value: proxyModule.wrapFunction(
+						descriptor.value as Function,
+						(target, that, args) =>
+							withoutRelatedOrigins(
+								(called) => Reflect.apply(target, that, called),
+								args,
+								['rpId'],
+							),
+					),
+				});
+			}
+
 		// --- the hook: FedCM for an identity request, the browser's get otherwise ---
 
+		const browserGet = (target: Function, that: unknown, args: unknown[]) =>
+			withoutRelatedOrigins(
+				(called) => Reflect.apply(target, that, called),
+				args,
+				['publicKey', 'rpId'],
+			);
 		container.get = proxyModule.wrapFunction(
 			container.get,
 			(target, that, args) => {
@@ -652,7 +793,7 @@ export default class CredentialsModule extends Module<DocumentClient> {
 					options === null ||
 					(typeof options !== 'object' && typeof options !== 'function')
 				)
-					return Reflect.apply(target, that, args);
+					return browserGet(target, that, args);
 				let identity: unknown;
 				try {
 					identity = options.identity;
@@ -663,7 +804,7 @@ export default class CredentialsModule extends Module<DocumentClient> {
 				// browser an identity request this never saw. No identity: the
 				// browser's own get (password, federated, NotSupportedError).
 				if (identity === undefined)
-					return Reflect.apply(target, that, [
+					return browserGet(target, that, [
 						{ __proto__: options, identity: undefined },
 						...args.slice(1),
 					]);
