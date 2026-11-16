@@ -852,6 +852,28 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				}
 			}
 
+			// scripts the page's script-src refused before they connected, which
+			// a nonce could still let through (DocumentClient.holdScript): judged
+			// again now, with the nonce they have; refused, the violation and the
+			// error, let through, their src is the page's again. Before the
+			// scripts are rewritten, which would take one without its src for
+			// an empty inline script
+			if (willConnect && queryable !== null && this.client.scriptsHeld) {
+				const scripts = queryIn(insert, queryable, 'script');
+				if (queryable === 1) scripts.unshift(insert as Element);
+				for (const script of scripts) {
+					const held = this.client.releaseScript(script);
+					if (!held) continue;
+					if (this.client.refuseExternalScript(script, held.url, false))
+						this.client.dispatchLoadError(script);
+					else
+						usePrototype(script, CustomElement.prototype, (element) => {
+							element.setAttribute('src', held.src);
+							domHooksModule.updateAttributeHooks(element, 'src');
+						});
+				}
+			}
+
 			// we're about to render
 			const name = htmlName(insert);
 			// an HTML or an SVG <style>, inserted itself

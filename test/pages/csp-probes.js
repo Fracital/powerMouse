@@ -193,6 +193,138 @@
 				} else document.body.append(node);
 			}),
 		);
+	/** a script by URL whose nonce (`how`: 'property', 'attribute' or null for none) comes after its src, inserted alone or in a div (`nested`) */
+	const lateNonce = (how, nested) =>
+		settle(
+			new Promise((resolve) => {
+				window.__ran = undefined;
+				const node = document.createElement('script');
+				node.src = '/csp/run.js';
+				if (how === 'property') node.nonce = 'probes';
+				else if (how === 'attribute') node.setAttribute('nonce', 'probes');
+				node.onload = () => resolve(`load, ran ${window.__ran}`);
+				node.onerror = () => resolve(`error, ran ${window.__ran}`);
+				let insert = node;
+				if (nested) {
+					insert = document.createElement('div');
+					insert.append(node);
+				}
+				document.body.insertBefore(insert, document.body.firstChild);
+			}),
+		);
+	/**
+	 * A script by URL whose nonce, if any (`late`), is given after its src, as
+	 * it reaches the document by `path`: each way a script connects, or its
+	 * markup is carried into the document. What it did: its load or error, or
+	 * for markup (whose element the probe does not hold) whether it ran
+	 */
+	const scriptBy = (path, late) =>
+		settle(
+			new Promise((resolve) => {
+				window.__ran = undefined;
+				const make = (doc = document) => {
+					const node = doc.createElement('script');
+					node.src = '/csp/run.js';
+					if (late) node.setAttribute('nonce', 'probes');
+					return node;
+				};
+				const watch = (node) => {
+					node.onload = () => resolve(`load, ran ${window.__ran}`);
+					node.onerror = () => resolve(`error, ran ${window.__ran}`);
+					return node;
+				};
+				const later = (read = () => window.__ran) =>
+					setTimeout(() => resolve(`no event, ran ${read()}`), 800);
+				const holder = (node) => {
+					const div = document.createElement('div');
+					div.append(node);
+					return div;
+				};
+				const connected = (name = 'span') =>
+					document.body.appendChild(document.createElement(name));
+				const body = document.body;
+				switch (path) {
+					case 'append':
+						return body.append(watch(make()));
+					case 'appendChild':
+						return body.appendChild(watch(make()));
+					case 'insertBefore':
+						return body.insertBefore(watch(make()), body.firstChild);
+					case 'replaceChild': {
+						const old = connected();
+						return body.replaceChild(watch(make()), old);
+					}
+					case 'replaceWith':
+						return connected().replaceWith(watch(make()));
+					case 'replaceChildren':
+						return connected('div').replaceChildren(watch(make()));
+					case 'before':
+						return connected().before(watch(make()));
+					case 'after':
+						return connected().after(watch(make()));
+					case 'prepend':
+						return body.prepend(watch(make()));
+					case 'insertAdjacentElement':
+						return body.insertAdjacentElement('beforeend', watch(make()));
+					case 'range': {
+						const range = document.createRange();
+						range.selectNodeContents(connected('div'));
+						return range.insertNode(watch(make()));
+					}
+					case 'nested':
+						return body.append(holder(watch(make())));
+					case 'fragment': {
+						const fragment = document.createDocumentFragment();
+						fragment.append(watch(make()));
+						return body.append(fragment);
+					}
+					case 'innerHTML':
+						later();
+						return (connected('div').innerHTML = holder(make()).innerHTML);
+					case 'outerHTML':
+						later();
+						return (connected().outerHTML = holder(make()).innerHTML);
+					case 'insertAdjacentHTML':
+						later();
+						return body.insertAdjacentHTML(
+							'beforeend',
+							holder(make()).innerHTML,
+						);
+					case 'write': {
+						const frame = connected('iframe');
+						const doc = frame.contentDocument;
+						later(() => frame.contentWindow.__ran);
+						doc.open();
+						doc.write(holder(make()).innerHTML);
+						return doc.close();
+					}
+					case 'adoptNode': {
+						const node = make(document.implementation.createHTMLDocument(''));
+						return body.append(watch(document.adoptNode(node)));
+					}
+					case 'importNode': {
+						const node = make(document.implementation.createHTMLDocument(''));
+						return body.append(watch(document.importNode(node, true)));
+					}
+					case 'template': {
+						const template = document.createElement('template');
+						template.content.append(make(template.content.ownerDocument));
+						const copy = document.importNode(template.content, true);
+						watch(copy.querySelector('script'));
+						return body.append(copy);
+					}
+					case 'srcRemoved': {
+						const node = make();
+						node.removeAttribute('src');
+						later();
+						return body.append(watch(node));
+					}
+					case 'cloneNode':
+						return body.append(watch(make().cloneNode(true)));
+				}
+				resolve('no such path');
+			}),
+		);
 	const evaluated = (run) => {
 		try {
 			return `ran ${run()}`;
@@ -371,6 +503,44 @@
 					document.getElementsByTagName('head')[0].appendChild(node);
 				}),
 			),
+		// the nonce given after the src (Chrome judges a script as it connects,
+		// with the nonce it has then), by the property, or by the attribute on
+		// a script that connects with its parent (Google Tag Manager's snippet
+		// order); and one with no nonce that connects with its parent
+		'script-self-nonce-after-src': () => lateNonce('property', false),
+		'script-self-nested-nonce-after-src': () => lateNonce('attribute', true),
+		'script-self-nested': () => lateNonce(null, true),
+		// every way a script reaches the document, its nonce given after its
+		// src (`-late`) or none (`-none`): script-path-<path>-<late|none>
+		...Object.fromEntries(
+			[
+				'append',
+				'appendChild',
+				'insertBefore',
+				'replaceChild',
+				'replaceWith',
+				'replaceChildren',
+				'before',
+				'after',
+				'prepend',
+				'insertAdjacentElement',
+				'range',
+				'nested',
+				'fragment',
+				'innerHTML',
+				'outerHTML',
+				'insertAdjacentHTML',
+				'write',
+				'adoptNode',
+				'importNode',
+				'template',
+				'cloneNode',
+				'srcRemoved',
+			].flatMap((path) => [
+				[`script-path-${path}-late`, () => scriptBy(path, true)],
+				[`script-path-${path}-none`, () => scriptBy(path, false)],
+			]),
+		),
 		eval: () => evaluated(() => eval('1 + 1')),
 		function: () => evaluated(() => new Function('return 2')()),
 		'timeout-string': () =>

@@ -121,7 +121,8 @@ export const FIELDS = [
  * reports.
  *
  * `expected`: the differences from native that are known and kept (each
- * one listed in docs/csp.md), as `{ case: { probe: why } }`. A listed probe
+ * one listed in docs/csp.md), as `{ case: { probe: why } }`; the key
+ * `violations` lists the case's violations as one. A listed probe
  * must differ from native in both modes: the suite fails when one matches
  * again (the entry and the doc's line then go), as it does for a
  * difference that is not listed.
@@ -133,7 +134,10 @@ export async function compareCases(
 ) {
 	const strays = Object.entries(expected).flatMap(([name, probes]) =>
 		Object.keys(probes)
-			.filter((probe) => !cases[name]?.probes.includes(probe))
+			.filter(
+				(probe) =>
+					probe !== 'violations' && !cases[name]?.probes.includes(probe),
+			)
 			.map((probe) => `${name}: ${probe}`),
 	);
 	if (Object.keys(expected).length)
@@ -185,7 +189,7 @@ export async function compareCases(
 			await submitLanding(page, caseURL(name, spec));
 			const proxied = await report(page, name);
 			const want = native[name];
-			const known = expected[name] ?? {};
+			const { violations: knownViolations, ...known } = expected[name] ?? {};
 			const differs = Object.keys(want?.results ?? {}).filter(
 				(probe) => want.results[probe] !== proxied?.results?.[probe],
 			);
@@ -223,16 +227,25 @@ export async function compareCases(
 			}
 			const wanted = shape(want?.events, fields);
 			const got = shape(proxied?.events, fields);
-			ok(
-				`${mode}: ${name}: the violations the page sees are the native ones`,
-				proxied &&
-					wanted.length === got.length &&
-					wanted.every((event, index) => event === got[index]),
-				JSON.stringify({
-					missing: without(wanted, got).map(brief),
-					extra: without(got, wanted).map(brief),
-				}).slice(0, 3000),
-			);
+			const same =
+				wanted.length === got.length &&
+				wanted.every((event, index) => event === got[index]);
+			// a case whose violations are a listed difference (`violations`)
+			if (knownViolations)
+				ok(
+					`${mode}: ${name}: the violations are still the listed difference`,
+					proxied && !same,
+					knownViolations,
+				);
+			else
+				ok(
+					`${mode}: ${name}: the violations the page sees are the native ones`,
+					proxied && same,
+					JSON.stringify({
+						missing: without(wanted, got).map(brief),
+						extra: without(got, wanted).map(brief),
+					}).slice(0, 3000),
+				);
 		}
 		await page.close();
 	}

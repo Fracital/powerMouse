@@ -1429,8 +1429,15 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		);
 
 		domHooksModule.useAttributes(
-			(element) => {
+			(element, attribute) => {
 				element.restoreAttributesOG('src');
+				// a held script (holdScript) keeps its page's src through a change
+				// of its type (its route is made as it connects); a src set or
+				// removed again replaces it
+				if (this.client.scriptsHeld && this.client.scriptHeld(element)) {
+					if (attribute === 'type') return;
+					this.client.releaseScript(element);
+				}
 
 				if (
 					element.hasAttribute('src') &&
@@ -1445,7 +1452,20 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// the page's own script-src refuses this external script: it
 					// does not load, the browser fires 'error', and the inject
 					// reports it (src/csp.ts). A script the page inserts through the
-					// DOM, not the parser (DOMAttributes runs for inserted elements)
+					// DOM, not the parser (DOMAttributes runs for inserted elements).
+					// One not connected yet that a nonce could still let through is
+					// held refused, and judged again as it connects, as Chrome
+					// judges it (with the nonce it has then: DOMContentHooks)
+					if (
+						!element.isConnected &&
+						this.client.scriptAwaitsNonce(element, url)
+					) {
+						const src = element.getAttribute('src')!;
+						element.removeAttribute('src');
+						element.removeAttributeOG('src');
+						this.client.holdScript(element, url, src);
+						return;
+					}
 					if (this.client.refuseExternalScript(element, url, false)) {
 						// clear the live src (the page's own, which the browser would
 						// otherwise load) so nothing loads; the browser fires 'error'

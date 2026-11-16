@@ -39,6 +39,44 @@ const CODE = [
 	'handler-attribute',
 ];
 
+// every way a script reaches the document (test/pages/csp-probes.js
+// scriptBy), its nonce given after its src (-late) or none (-none)
+const PATHS = [
+	'append',
+	'appendChild',
+	'insertBefore',
+	'replaceChild',
+	'replaceWith',
+	'replaceChildren',
+	'before',
+	'after',
+	'prepend',
+	'insertAdjacentElement',
+	'range',
+	'nested',
+	'fragment',
+	'innerHTML',
+	'outerHTML',
+	'insertAdjacentHTML',
+	'write',
+	'adoptNode',
+	'importNode',
+	'template',
+	'cloneNode',
+	'srcRemoved',
+].flatMap((path) => [`script-path-${path}-late`, `script-path-${path}-none`]);
+// those that differ from native (EXPECTED)
+const COPIED = [
+	'script-path-write-late',
+	'script-path-adoptNode-late',
+	'script-path-importNode-late',
+	'script-path-importNode-none',
+	'script-path-template-late',
+	'script-path-template-none',
+	'script-path-cloneNode-late',
+	'script-path-cloneNode-none',
+];
+
 const CASES = {
 	nonce: {
 		p: "script-src 'nonce-probes'",
@@ -109,6 +147,25 @@ const CASES = {
 		h: 'inline-nonce',
 		probes: ['script-self-nonce-property', 'script-self-nonce', 'script-self'],
 	},
+	'nonce after the src': {
+		p: `script-src 'nonce-probes' ${other}`,
+		h: 'inline-nonce',
+		probes: [
+			'script-self-nonce-after-src',
+			'script-self-nested-nonce-after-src',
+			'script-self-nested',
+		],
+	},
+	'every way a script connects': {
+		p: `script-src 'nonce-probes' ${other}`,
+		h: 'inline-nonce',
+		probes: PATHS.filter((probe) => !COPIED.includes(probe)),
+	},
+	'a script refused before it connects, copied': {
+		p: `script-src 'nonce-probes' ${other}`,
+		h: 'inline-nonce',
+		probes: COPIED,
+	},
 	styles: {
 		p: "style-src 'self'",
 		probes: [
@@ -141,6 +198,32 @@ const CASES = {
 	},
 };
 
+// known differences (docs/csp.md, Not yet as natively): a script the page's
+// policy refused before it connected keeps no src, so its markup, a copy of
+// it, and one judged in another document load nothing
+const EXPECTED = {
+	'a script refused before it connects, copied': {
+		violations:
+			'the copies fire no violation (natively each is judged as it connects), and the scripts of another document fire theirs as their src is set',
+		'script-path-write-late':
+			'a refused script keeps no src (it loads nothing), and the inject judged this one before it had its nonce: the markup the page reads back and writes carries no src, so the written script loads nothing (natively it runs)',
+		'script-path-adoptNode-late':
+			'a script of another document is judged as its src is set there, without the nonce it is given later, and stays refused when it is adopted and connected (natively it loads)',
+		'script-path-importNode-late':
+			'the script of another document was refused as its src was set; its copy has no src and fires nothing (natively it loads)',
+		'script-path-importNode-none':
+			'the script of another document was refused as its src was set; its copy has no src and fires nothing (natively an error)',
+		'script-path-template-late':
+			"the script of a template's content was refused as its src was set; its copy has no src and fires nothing (natively it loads)",
+		'script-path-template-none':
+			"the script of a template's content was refused as its src was set; its copy has no src and fires nothing (natively an error)",
+		'script-path-cloneNode-late':
+			"the held script's copy has no src and is not held: it fires nothing (natively it loads)",
+		'script-path-cloneNode-none':
+			"the held script's copy has no src and is not held: it fires nothing (natively an error)",
+	},
+};
+
 const browser = await launch();
-await compareCases(browser, CASES);
+await compareCases(browser, CASES, { expected: EXPECTED });
 await done(browser);

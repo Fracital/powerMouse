@@ -80,7 +80,12 @@ parser's and document.write's do not. A refused inline script keeps no text
 script or style by its URL is the service worker's to refuse and report
 where it sees the request (`hostsApply`, Hosts below); the inject refuses a
 `data:` or `blob:` one itself and fires the enforced violation the worker
-cannot. A script-src-attr handler and a style-src-attr style attribute run
+cannot. A script the page inserts through the DOM is judged as it connects,
+with the nonce it has then, as Chrome judges it as it prepares it: one whose
+src the page set before it connected, and that a nonce could still let
+through, is held refused (no src) and judged again by the insertion that
+connects it (`DocumentClient.holdScript`); any other way it reaches the
+document, it stays refused. A script-src-attr handler and a style-src-attr style attribute run
 only by 'unsafe-inline' (or 'unsafe-hashes' with the value's hash); the
 inject clears the live attribute where they do not. A CSSOM write (an
 element's `style` property, `setProperty`) is the browser's to allow, so the
@@ -301,6 +306,13 @@ refuses fires a violation, natively either.
   scripts does not start (its bootstrap imports the page's module).
 - A report-only policy does not report an inline script an enforced one
   allows by its hash.
+- A refused external script keeps no src: its markup read back (and
+  written, as by document.write), a copy of it (cloneNode, importNode, a
+  template's content), and the script itself once it connects load nothing
+  and fire no event, where natively each is judged again as it connects. A
+  script of another document is judged as its src is set there, so a nonce
+  it is given later does not count when it is adopted (csp-scripts lists
+  these as expected differences).
 - Under 'strict-dynamic' the inject bundle's script carries the document's
   nonce (nothing else lets it through), and V8 keys a script's compiled
   code by its nonce too: each such document compiles its own copy of the

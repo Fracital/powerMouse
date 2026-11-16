@@ -1384,6 +1384,19 @@ required, but only 1 present.`, `Illegal invocation`, a rejected promise
   script that way, by a URL of its own origin only the nonce allows: through
   the proxy the challenge never started and the page stayed blank.
   (csp-scripts suite, natively against both modes.)
+- A script the page gives its src before it connects is judged by the
+  page's script-src as it connects, with the nonce it has then, as Chrome
+  judges it. The inject judged it as the src was set, so a nonce given after
+  the src did not count and the script was refused (Google Tag Manager's
+  snippet sets the src, then the nonce, then inserts the script). Such a
+  script is held refused, without its src, and judged again by the
+  insertion that connects it (append, insertBefore, replaceWith,
+  replaceChildren, a Range, inside an element or a fragment); any other way
+  it reaches a document it stays refused, as before, so nothing the page's
+  policy or a shield refuses loads. A script without a src whose text is
+  empty is no longer reported as a refused inline script (Chrome judges it
+  once it has text). (csp-scripts suite, every insertion path natively
+  against both modes; shields suite.)
 
 - An emulated service worker's global answers as the Chrome it runs in
   does: it keeps what a dedicated worker has where that Chrome's own service

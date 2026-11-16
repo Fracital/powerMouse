@@ -107,6 +107,10 @@ type OpenCallback = () => void;
 const nativeSetAttribute = Element.prototype.setAttribute;
 const nativeSetTimeout = setTimeout;
 const nativeFragmentQuery = DocumentFragment.prototype.querySelectorAll;
+const nativeOwnerDocument = Reflect.getOwnPropertyDescriptor(
+	Node.prototype,
+	'ownerDocument',
+)!.get!;
 // The `nonce` getters (the HTMLOrSVGElement mixin's): a hook at work swaps
 // an element's prototype for one that is an Element's only (DOMHooks
 // CustomElement), where `element.nonce` reads undefined, and a nonce the
@@ -1601,6 +1605,10 @@ export default class DocumentClient extends Client {
 	}
 	/** whether the page's script-src refuses this inline script (its own `text`); fires the violation and the caller blanks it */
 	refuseInlineScript(element: Element, text: string, parser: boolean): boolean {
+		// Chrome prepares no script without a src whose text is empty (it is
+		// judged once it has text): a held script (holdScript), or markup that
+		// carries one, has no src
+		if (text === '') return false;
 		return this.#refuseOnce(element, 'script-src-elem', 'inline', element, {
 			text,
 			nonce: this.#elementNonce(element),
@@ -1630,6 +1638,70 @@ export default class DocumentClient extends Client {
 			// an http(s) load the service worker sees and reports itself
 			/^https?:$/.test(url.protocol),
 		);
+	}
+	/**
+	 * The page's external scripts its script-src refused when their src was
+	 * set, before they connected, where a nonce could still let them through:
+	 * Chrome judges a script as it prepares it, when it connects, with the
+	 * nonce it has then (a page may give the nonce after the src). Such a
+	 * script is held refused, its src the page's (`src`) and its real URL
+	 * (`url`), and judged again by the insertion that connects it
+	 * (DOMContentHooks). One that reaches a document any other way stays
+	 * refused, as it was judged.
+	 */
+	readonly #heldScripts = new WeakMap<Element, { url: URL; src: string }>();
+	#heldCount = 0;
+	/**
+	 * Whether a script by `url` the page gives a src to before it connects is
+	 * refused for now only by enforced policies that take nonces, so the nonce
+	 * it has when it connects decides (holdScript); nothing is fired. A script
+	 * of another document (the inject's own copies of markup) never waits
+	 */
+	scriptAwaitsNonce(element: Element, url: URL): boolean {
+		if (!this.codeEnforced) return false;
+		if (
+			Reflect.apply(nativeOwnerDocument, element, []) !== this.global.document
+		)
+			return false;
+		const item = {
+			url,
+			nonce: this.#elementNonce(element),
+			integrity: this.#elementIntegrity(element),
+			parser: false,
+		};
+		let refused = false;
+		for (const { policy, self } of this.pagePolicies()) {
+			if (policy.disposition !== 'enforce') continue;
+			const governed = governing(policy, 'script-src-elem');
+			if (!governed) continue;
+			if (codeAllows(governed.sources, 'script-src-elem', { ...item, self }))
+				continue;
+			if (!governed.sources.some((source) => /^'nonce-/i.test(source)))
+				return false;
+			refused = true;
+		}
+		return refused;
+	}
+	/** hold `element` (scriptAwaitsNonce) until it connects */
+	holdScript(element: Element, url: URL, src: string) {
+		if (!this.#heldScripts.has(element)) this.#heldCount++;
+		this.#heldScripts.set(element, { url, src });
+	}
+	/** whether any script is held (holdScript) */
+	get scriptsHeld(): boolean {
+		return this.#heldCount > 0;
+	}
+	/** whether `element` is held (holdScript) */
+	scriptHeld(element: Element): boolean {
+		return this.#heldScripts.has(element);
+	}
+	/** a held script's src and URL, which it no longer is (it connects, or the page set its src again) */
+	releaseScript(element: Element): { url: URL; src: string } | null {
+		const held = this.#heldScripts.get(element);
+		if (!held) return null;
+		this.#heldScripts.delete(element);
+		this.#heldCount--;
+		return held;
 	}
 	/** whether the page's script-src-attr refuses this inline handler (`value`); fires the violation */
 	refuseHandler(element: Element, value: string): boolean {
