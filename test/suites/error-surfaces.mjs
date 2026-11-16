@@ -3,7 +3,8 @@
 // name. test/pages/error-surfaces.html runs each case in turn (window error
 // events and onerror for a thrown, a cross-origin, a failed, a syntax-error
 // and a module-import script; stacks from a script, eval, new Function and a
-// string timer; rejections of import() and fetch; the DOMExceptions of a
+// string timer, from a page function that throws through nested hooked
+// calls, and under every odd Error.stackTraceLimit; rejections of import() and fetch; the DOMExceptions of a
 // cross-origin pushState, Worker, SharedWorker and frame access and of bad
 // URLs; dedicated, module and shared workers' own surfaces and the events on
 // their Worker objects; Server-Timing, a CSP violation and ReportingObserver)
@@ -103,7 +104,7 @@ const native = distinct(await measure(() => nativePage.mainFrame()));
 await nativePage.close();
 ok(
 	'natively: every case ran',
-	Object.keys(native.cases).length === 35,
+	Object.keys(native.cases).length === 38,
 	Object.keys(native.cases).join(','),
 );
 console.log(`natively: cases tried again: ${tries(native)}`);

@@ -73,16 +73,20 @@ export default class HistoryModule extends Module<DocumentClient> {
 					// looks same-origin to it, so the check is made here on the real
 					// origins) and one that does not parse, with a SecurityError
 					const page = this.client.url.url;
+					// converted once, as the browser does, and with no call of the
+					// inject's own between the page's toString and its caller
+					// (`String(value)` is a frame of its own in the page's stack)
+					const text = `${args[2]}`;
 					let url: URL | null;
 					try {
-						url = new URL(String(args[2]), this.client.baseURL.toString());
+						url = new URL(text, this.client.baseURL.toString());
 					} catch (error) {
 						url = null;
 					}
 					if (!url || url.origin !== page.origin)
 						throw withStack(
 							new this.client.global.DOMException(
-								`Failed to execute '${name}' on 'History': A history state object with URL '${String(args[2])}' cannot be created in a document with origin '${page.origin}' and URL '${page.href}'.`,
+								`Failed to execute '${name}' on 'History': A history state object with URL '${text}' cannot be created in a document with origin '${page.origin}' and URL '${page.href}'.`,
 								'SecurityError',
 							),
 						);

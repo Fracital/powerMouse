@@ -1283,6 +1283,64 @@ export default class UnrouteModule extends Module<Client> {
 			const holder = pageHolder();
 			return holder === null ? undefined : Reflect.get(holder, KEY, receiver);
 		};
+		// Error.stackTraceLimit. V8 reads the real Error's (a data property:
+		// an accessor or anything but a number captures no stack at all) when
+		// it captures a stack, and every frame of the inject's counts, though
+		// the formatter below drops them all: the page's own frames fell off the
+		// end of a stack that ran through hooks. The real Error holds the
+		// page's limit and HEADROOM more, and the formatter cuts what is left
+		// to the page's (the one when the error was made, where it is known
+		// which). The page reads and writes its own value as an own property
+		// of Error holds it, here beside its formatter, unless it made Error
+		// keep it for good (`limitPinned`, the real Error then holds it as
+		// it is).
+		const LIMIT = 'stackTraceLimit';
+		const nativeLimit = Reflect.getOwnPropertyDescriptor(ErrorCtor, LIMIT);
+		const limiting =
+			!!nativeLimit && 'value' in nativeLimit && !!nativeLimit.configurable;
+		let limitPinned = false;
+		if (limiting) Reflect.defineProperty(pageOwn, LIMIT, nativeLimit);
+		// what V8 would read of the page's: an own data property, or one that
+		// Error inherits
+		const pageLimit = (): unknown => {
+			let descriptor = Reflect.getOwnPropertyDescriptor(
+				limitPinned ? ErrorCtor : pageOwn,
+				LIMIT,
+			);
+			for (
+				let holder = Reflect.getPrototypeOf(ErrorCtor);
+				!descriptor && holder;
+				holder = Reflect.getPrototypeOf(holder)
+			)
+				descriptor = Reflect.getOwnPropertyDescriptor(holder, LIMIT);
+			return descriptor && 'value' in descriptor ? descriptor.value : undefined;
+		};
+		// the real one, from the page's (a page that turned stacks off still
+		// has them captured for the inject's own use, and reads none)
+		const syncLimit = () => {
+			if (!limiting || limitPinned) return;
+			const limit = pageLimit();
+			Reflect.defineProperty(ErrorCtor, LIMIT, {
+				value:
+					typeof limit === 'number' && limit >= 1 ? limit + HEADROOM : HEADROOM,
+				writable: true,
+				enumerable: true,
+				configurable: true,
+			});
+		};
+		syncLimit();
+		// the page's limit once an error of its own was made (the page's
+		// Error, a subclass, Error.captureStackTrace): a limit raised around
+		// one and put back before its stack is read holds for that stack
+		const limits = new WeakMap<object, unknown>();
+		const madeWith = <T>(made: T): T => {
+			if (
+				(typeof made === 'object' && made !== null) ||
+				typeof made === 'function'
+			)
+				Reflect.apply(weakMapSet, limits, [made, pageLimit()]);
+			return made;
+		};
 		// The page's frame that called into the inject, for a hook that has to
 		// say where it was called from (noteReportSite): the stack of an error
 		// made here, formatted without the page's formatter.
@@ -1351,6 +1409,19 @@ export default class UnrouteModule extends Module<Client> {
 					? skippedFrames.get(error)
 					: undefined;
 			if (skip) shown = shown.slice(skip);
+			if (fromV8 && !locating && limiting) {
+				const limit =
+					typeof error === 'object' &&
+					error !== null &&
+					Reflect.apply(weakMapHas, limits, [error])
+						? Reflect.apply(weakMapGet, limits, [error])
+						: pageLimit();
+				// (natively no stack was captured, and the formatter not asked)
+				if (typeof limit !== 'number') return undefined;
+				// (none below one, NaN included; a fraction counts whole frames)
+				const kept = limit >= 1 ? limit : 0;
+				if (shown.length > kept) shown = shown.slice(0, kept);
+			}
 			// (a stack the inject formats for itself is not the page's to format)
 			const own = fromV8 && !locating ? pagePrepare(pageError) : undefined;
 			if (typeof own === 'function') {
@@ -1404,17 +1475,76 @@ export default class UnrouteModule extends Module<Client> {
 				);
 			},
 		});
+		// the page's stackTraceLimit is asked of the page's own, not the real
+		const limited = (key: PropertyKey) =>
+			key === LIMIT && limiting && !limitPinned;
+		// where the page's limit is found: its own, or what Error inherits
+		const limitHolder = (): object =>
+			Reflect.getOwnPropertyDescriptor(pageOwn, LIMIT)
+				? pageOwn
+				: (Reflect.getPrototypeOf(ErrorCtor) ?? nothing);
+		// An error the page makes: its limit noted once it is made (V8 converts
+		// the message and reads the options first). V8 leaves out of the
+		// stack every frame down to the one of the constructor it is given
+		// as new.target, which is this trap when the page's is its Error (as
+		// it is when the page calls Error without `new`): no frame of the
+		// inject's is the error's first, which is where the browser places
+		// an uncaught one (a frame of the inject's there moved an error of
+		// eval code to the page's script). Its `prototype` is Error's, which
+		// the error is made with.
+		const made = function (
+			target: typeof ErrorCtor,
+			second: unknown,
+			third: unknown,
+		) {
+			// (a call: `that` and the arguments; a construction: the
+			// arguments and new.target)
+			const constructing = typeof third === 'function';
+			return madeWith(
+				Reflect.construct(
+					target,
+					(constructing ? second : third) as unknown[],
+					constructing && third !== pageError ? third : made,
+				),
+			);
+		};
+		made.prototype = ErrorCtor.prototype;
 		const handler: ProxyHandler<typeof ErrorCtor> = {
+			get: (target, key, receiver) =>
+				limited(key)
+					? Reflect.get(limitHolder(), key, receiver)
+					: Reflect.get(target, key, receiver),
+			set: (target, key, value, receiver) =>
+				limited(key)
+					? Reflect.set(limitHolder(), key, value, receiver)
+					: Reflect.set(target, key, value, receiver),
+			apply: made,
+			construct: made,
 			has: (target, key) => {
+				if (limited(key)) return Reflect.has(limitHolder(), key);
 				if (key !== KEY || pinned) return Reflect.has(target, key);
 				const holder = pageHolder();
 				return holder !== null && Reflect.has(holder, key);
 			},
 			getOwnPropertyDescriptor: (target, key) =>
-				key !== KEY || pinned
+				(key !== KEY || pinned) && !limited(key)
 					? Reflect.getOwnPropertyDescriptor(target, key)
 					: Reflect.getOwnPropertyDescriptor(pageOwn, key),
 			defineProperty: (target, key, descriptor) => {
+				if (limited(key)) {
+					const had = !!Reflect.getOwnPropertyDescriptor(pageOwn, key);
+					if (!Reflect.defineProperty(pageOwn, key, descriptor)) return false;
+					const defined = Reflect.getOwnPropertyDescriptor(pageOwn, key)!;
+					if (!defined.configurable) {
+						// kept for good: the real Error holds it as the page has it
+						limitPinned = true;
+						return Reflect.defineProperty(target, key, defined);
+					}
+					// (one made anew is listed last, as natively)
+					if (!had) Reflect.deleteProperty(target, key);
+					syncLimit();
+					return true;
+				}
 				if (key !== KEY || pinned)
 					return Reflect.defineProperty(target, key, descriptor);
 				if (!Reflect.defineProperty(pageOwn, key, descriptor)) return false;
@@ -1428,12 +1558,20 @@ export default class UnrouteModule extends Module<Client> {
 				}
 				return true;
 			},
-			deleteProperty: (target, key) =>
-				key !== KEY || pinned
+			deleteProperty: (target, key) => {
+				if (limited(key)) {
+					if (!Reflect.deleteProperty(pageOwn, key)) return false;
+					syncLimit();
+					return true;
+				}
+				return key !== KEY || pinned
 					? Reflect.deleteProperty(target, key)
-					: Reflect.deleteProperty(pageOwn, key),
+					: Reflect.deleteProperty(pageOwn, key);
+			},
 			ownKeys: (target) => {
-				const keys = Reflect.ownKeys(target);
+				let keys = Reflect.ownKeys(target);
+				if (limited(LIMIT) && !Reflect.getOwnPropertyDescriptor(pageOwn, LIMIT))
+					keys = keys.filter((key) => key !== LIMIT);
 				if (pinned) return keys;
 				const shown = keys.filter((key) => key !== KEY);
 				// a property the page made comes after the string keys Error had
@@ -1448,9 +1586,34 @@ export default class UnrouteModule extends Module<Client> {
 				// properties: from here on the accessor shows (it still cleans, and
 				// reads and writes the page's own property)
 				pinned = true;
+				if (limited(LIMIT)) {
+					const own = Reflect.getOwnPropertyDescriptor(pageOwn, LIMIT);
+					if (own) Reflect.defineProperty(target, LIMIT, own);
+					else Reflect.deleteProperty(target, LIMIT);
+					limitPinned = true;
+				}
 				return Reflect.preventExtensions(target);
 			},
 		};
+		// Error.captureStackTrace notes the limit too; with no function of the
+		// page's to start after, the stack starts after this one, as it starts
+		// after the native's own natively
+		const capture = ErrorCtor.captureStackTrace;
+		if (limiting && typeof capture === 'function') {
+			const hook = {
+				captureStackTrace(this: unknown, object: unknown, caller: unknown) {
+					const result = Reflect.apply(capture, this, [
+						object,
+						typeof caller === 'function' ? caller : hook,
+					]);
+					madeWith(object);
+					return result;
+				},
+			}.captureStackTrace;
+			proxyModule.mirrorSource(capture, hook);
+			proxyModule.adopt(hook);
+			ErrorCtor.captureStackTrace = hook;
+		}
 		pageError = new Proxy(ErrorCtor, handler);
 		errorProxies.add(pageError);
 		proxyModule.functionStrings.set(pageError, ErrorCtor.toString());
@@ -1503,5 +1666,17 @@ const WASM_ERRORS = [
 	'RuntimeError',
 	'SuspendError',
 ];
+/**
+ * How many frames more than the page's Error.stackTraceLimit V8 captures,
+ * for the inject's own (applyErrorStacks): a hook is a few, and a stack can
+ * run through several. Measured, Chrome 157: an error made 120 frames deep
+ * costs about 15 us with a limit of 10 and 21 with one of 30 to 100.
+ */
+const HEADROOM = 50;
+// taken when the bundle loads: the limits a page's errors were made under
+// are kept with no method a page could have replaced
+const weakMapGet = WeakMap.prototype.get;
+const weakMapHas = WeakMap.prototype.has;
+const weakMapSet = WeakMap.prototype.set;
 // the page's Error of every realm this bundle hooked: one never wraps another
 const errorProxies = new WeakSet<object>();

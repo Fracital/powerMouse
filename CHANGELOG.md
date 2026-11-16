@@ -1274,6 +1274,26 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A page's own frames no longer fall off a stack that runs through the
+  inject's hooks. V8 counts every frame toward `Error.stackTraceLimit` (10)
+  when it captures a stack, the inject's included, and the formatter then
+  dropped those: a page function that threw inside a hooked call a few
+  levels down lost its callers, and a misused DOM method (`appendChild` with
+  no arguments) could leave a stack with no frame at all. The real limit is
+  now the page's plus 50, and the formatter cuts the stack to the page's
+  limit once the inject's frames are gone, the one an error was made under
+  when the page made it (a limit raised around `new Error()` or
+  `Error.captureStackTrace` and put back holds for that stack). The page
+  reads and writes its own `Error.stackTraceLimit` as natively: any value,
+  a getter, deletion (Error then inherits one), with V8's reading of each
+  (none below one, NaN included, all for Infinity, no stack at all for
+  anything but a number). The constructor's trap is the frame V8 starts the
+  stack after, so an uncaught error is still placed where the page threw
+  it. `history.pushState` and `replaceState` convert the URL once, as
+  the browser does (they called the page's `toString` twice). New
+  error-surfaces cases: `deepThroughHooks` (failed before), `stackLimits`
+  and `uncaughtBuiltinThroughCall`.
+
 - Markup a page inserts through `setHTMLUnsafe(markup, { runScripts: true })`
   (Chrome 156) or through the members Chrome 157 added (`appendHTMLUnsafe`,
   `prependHTMLUnsafe`, `beforeHTML(Unsafe)`, `afterHTML(Unsafe)`,

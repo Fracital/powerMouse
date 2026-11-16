@@ -153,6 +153,11 @@
 		await run('functionStack', () => surfaces.functionThrow());
 		await run('uncaughtEval', () => surfaces.uncaughtEval());
 		await run('uncaughtThroughHook', () => surfaces.badWorkerLater());
+		await run('uncaughtBuiltinThroughCall', () =>
+			surfaces.builtinThroughCallLater(),
+		);
+		await run('deepThroughHooks', () => surfaces.deepThroughHooks());
+		await run('stackLimits', () => surfaces.stackLimits());
 		await run('timerString', () => {
 			setTimeout('throw new Error("from timer string")');
 		});
