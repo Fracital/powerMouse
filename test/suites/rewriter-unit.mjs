@@ -614,9 +614,9 @@ const parses = (code) => {
 	if (process.env.SKIP_TIMING !== '1') {
 		// a large sheet with a single url(): the full parse it replaces was
 		// nearly all of the rewrite (YouTube's 3 MB stylesheet took 2 s, the
-		// lazy parse 0.13 s); a ratio to css-tree's full parse of the same text,
-		// so a slow runner does not change the verdict
-		const { parse } = await import('css-tree');
+		// lazy parse 0.13 s); a ratio to one tokenizing split of the same text
+		// (the lazy rewrite measures 1 to 1.5 times it, a full parse was about
+		// 15 times), so a slow runner does not change the verdict
 		const rules = [];
 		for (let i = 0; i < 12000; i++)
 			rules.push(
@@ -630,13 +630,13 @@ const parses = (code) => {
 			fn();
 			return performance.now() - start;
 		};
-		let full = Infinity;
+		let split = Infinity;
 		let lazy = Infinity;
 		let out = '';
 		for (let i = 0; i < 3; i++) {
-			full = Math.min(
-				full,
-				time(() => parse(sheet, { positions: true })),
+			split = Math.min(
+				split,
+				time(() => sheet.split(/([{};:,()])/).length),
 			);
 			lazy = Math.min(
 				lazy,
@@ -644,11 +644,11 @@ const parses = (code) => {
 			);
 		}
 		ok(
-			'a large stylesheet with one url() rewrites in a fraction of a full parse of it',
-			lazy < full * 0.75 && routes(out).join() === '1,0',
+			'a large stylesheet with one url() rewrites in a few times one tokenizing pass over it',
+			lazy < split * 4 && routes(out).join() === '1,0',
 			JSON.stringify({
 				bytes: sheet.length,
-				full: Math.round(full),
+				split: Math.round(split),
 				lazy: Math.round(lazy),
 			}),
 		);
