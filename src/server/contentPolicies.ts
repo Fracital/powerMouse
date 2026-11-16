@@ -216,7 +216,8 @@ export async function postReport(
  * browser reports a form's refused hop by the chain's first URL, so any
  * refused URL does; a frame's by the URL it refused, which the host of the
  * one returned names. A report-only policy's refusal is told to the
- * document whose policy it is.
+ * document whose policy it is, unless `report` is false (a hop asked about
+ * before it is requested, which is judged again when it is).
  */
 export function hopRefusal(
 	chain: NavigationChain,
@@ -224,6 +225,7 @@ export function hopRefusal(
 	frame: boolean,
 	/** the real URL the navigation began at */
 	first: string,
+	report = true,
 ): string | null {
 	for (const directive of frame
 		? ['form-action', 'frame-src']
@@ -233,6 +235,7 @@ export function hopRefusal(
 		);
 		if (refusing.some(({ policy }) => policy[2] === 'enforce'))
 			return directive === 'form-action' ? REFUSED_URL : namedRefusal(url.href);
+		if (!report) continue;
 		for (const { policy, client, parent } of refusing) {
 			let blocked = url.href.replace(/#.*$/s, '');
 			try {

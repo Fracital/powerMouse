@@ -1212,6 +1212,17 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   kept Chrome 152's, in the worker and in a page alike). Both are read from
   STomp's own service worker, a real one, and handed to the emulated worker
   with its script. (service-worker-global suite, Chrome 152, 156 and 157.)
+- A frame's redirect to another origin that the page's form-action or the
+  parent's frame-src refuses is refused in the frame the navigation is in.
+  The worker answered such a redirect with the document that asks for a
+  fresh browsing context before it asked the policies, and the request the
+  new context made was a plain load of the parent's: a form whose
+  submission redirected to an origin its form-action refuses arrived there
+  (natively nothing more is sent, and the form's document gets the
+  violation, named by the first URL of the submission), and a frame's own
+  navigation whose redirect its parent's frame-src refuses loaded. The hop
+  is judged before the fresh context is asked for. (csp-navigation suite,
+  natively against both modes.)
 - A frame's own navigations obey its form-action and its parent's frame-src
   again. Since a frame gets a fresh browsing context for another origin's
   document, the frame's inject cancelled every such navigation and its

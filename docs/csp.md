@@ -229,7 +229,10 @@ host, and the browser refuses it as natively (even under `form-action *`).
   with the navigation's hint, and a hop it refuses goes to a URL whose host
   names the refused URL (`namedRefusal`): Chrome names a refused navigation
   by the URL refused, its origin alone for another origin than the
-  parent's, and the inject reads the host back.
+  parent's, and the inject reads the host back. A hop to another origin
+  that a policy of the chain refuses is refused in the context the
+  navigation is in, before the worker would answer the redirect with the
+  document that asks for a fresh context (`src/freshFrame.ts`).
 - **frame-ancestors.** A framed document's own frame-ancestors (headers
   only; a meta's is ignored, natively) is judged against the real origins
   of its ancestors, the proxied top the outermost (the host's page is no

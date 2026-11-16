@@ -3293,6 +3293,26 @@ function genericForward(
 			crossOriginLocation(response.headers.get('location'), url)
 		) {
 			await response.body?.cancel().catch(() => {});
+			// A hop the page's policies refuse (a form's form-action, the
+			// parent's frame-src) is refused where the navigation is: the
+			// browser judges a form's submission by its document's policy in
+			// the context that submitted it, and reports it there, and the
+			// frame keeps its context, as natively
+			if (chain) {
+				let refusal: string | null = null;
+				try {
+					refusal = hopRefusal(
+						chain,
+						new URL(response.headers.get('location')!, url.url),
+						true,
+						chainStart,
+						false,
+					);
+				} catch (error) {
+					// no URL: the redirect goes nowhere either way
+				}
+				if (refusal !== null) return Response.redirect(refusal, 302);
+			}
 			const to = new URL(responseHeaders.get('location')!, serverRequest.url)
 				.href;
 			rememberReturn(to, {
