@@ -3249,14 +3249,20 @@ function genericForward(
 				'link',
 				rewriteLinkHeader(responseHeaders.get('link')!, (target, params) => {
 					const resource = new StompURL(new URL(target, url.toString()), url);
-					if (params.as === 'style') return routeCSS(resource, url);
+					const rewritten = (href: string) => ({ href, rewritten: true });
+					if (params.as === 'style') return rewritten(routeCSS(resource, url));
 					if (params.rel === 'modulepreload')
-						return routeJS(resource, url, rewriter.config, 'genericModule');
+						return rewritten(
+							routeJS(resource, url, rewriter.config, 'genericModule'),
+						);
 					if (params.as === 'script')
-						return routeJS(resource, url, rewriter.config, 'generic');
+						return rewritten(
+							routeJS(resource, url, rewriter.config, 'generic'),
+						);
 					if (params.as === 'document' || params.rel === 'prefetch')
-						return routeHTML(resource, url, rewriter.config);
-					return routeBinary(resource);
+						return rewritten(routeHTML(resource, url, rewriter.config));
+					// fonts, images, fetches: /binary/ hands on the origin's body
+					return { href: routeBinary(resource), rewritten: false };
 				}),
 			);
 

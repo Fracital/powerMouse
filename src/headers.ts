@@ -160,11 +160,21 @@ export function capitalizeHeaders(headers: Headers): RawHeaders {
 
 /**
  * Rewrite the URLs of a `Link` header (`<url>; rel=preload; as=style, ...`)
- * so preloads fetch through the proxy, by what each link is for.
+ * so preloads fetch through the proxy, by what each link is for. `route`
+ * says where a link goes and whether that route rewrites the body: the
+ * page's `integrity` names the origin's bytes, so it is left out of a link
+ * to a rewritten copy, as DOMAttributes leaves it out of a <link> or
+ * <script>. Kept, the browser checked the copy against it and failed the
+ * preload, and the page's own <link> then took the failed preload (Discord's
+ * Webflow stylesheet never applied). A body that crosses as it is keeps it,
+ * and the browser checks the origin's bytes as natively.
  */
 export function rewriteLinkHeader(
 	value: string,
-	route: (target: string, params: Record<string, string>) => string,
+	route: (
+		target: string,
+		params: Record<string, string>,
+	) => { href: string; rewritten: boolean },
 ): string {
 	return value
 		.split(/,(?=\s*<)/)
@@ -182,7 +192,11 @@ export function rewriteLinkHeader(
 						.toLowerCase();
 			}
 			try {
-				return `<${route(match[1], params)}>${match[2]}`;
+				const { href, rewritten } = route(match[1], params);
+				const rest = rewritten
+					? match[2].replace(/;\s*integrity\s*=\s*(?:"[^"]*"|[^;]*)/gi, '')
+					: match[2];
+				return `<${href}>${rest}`;
 			} catch (error) {
 				return link;
 			}

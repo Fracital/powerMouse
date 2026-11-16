@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>sri-preload</title>
+		<!-- the hashes are those of sri-preload.js and sri-preload.css as served;
+		sri-preload.html.headers.json preloads both with the same integrity. The
+		script comes first, as on most pages: the parser takes up the markup
+		after it again outside the inject's document.write, and the <link> it
+		then makes takes the preload (inside the write it is a fetch of its own) -->
+		<script
+			src="sri-preload.js"
+			integrity="sha384-tyvr7NWn2rWmOI1ia/zGzw6bTQGoeY8LVHHwY0ngyRCQgqHK4k1JUh7GTiAuNxC+"
+			crossorigin="anonymous"
+		></script>
+		<link
+			rel="stylesheet"
+			href="sri-preload.css"
+			integrity="sha384-g95fwuQaY2cvvx3P0/t+UIlIs3sLrNIrqdVKqYx8xle99Pdo22KkfLt0N6LeYs7K"
+			crossorigin="anonymous"
+		/>
+	</head>
+	<body>
+		<div id="probe"></div>
+		<script>
+			addEventListener('load', () => {
+				window.__sri = {
+					width: getComputedStyle(document.getElementById('probe')).width,
+					script: window.__sriScript || 0,
+				};
+			});
+		</script>
+	</body>
+</html>

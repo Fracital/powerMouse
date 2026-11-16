@@ -1231,6 +1231,20 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A `Link` response header that preloads a stylesheet or a script with an
+  `integrity` no longer fails the page's own element. The header's URLs
+  were routed but its `integrity` kept, so the browser checked the
+  rewritten copy against the origin's hash and failed the preload ("Failed
+  to find a valid digest in the 'integrity' attribute"), and the page's
+  `<link>` (whose own integrity STomp already leaves out) took the failed
+  preload. Discord's home page preloads its Webflow stylesheet so: it
+  rendered blank, its text fell back to a font whose file Discord serves
+  damaged, and the console filled with "OTS parsing error: Size of
+  decompressed WOFF 2.0 is less than compressed size" for every web font,
+  with or without HTTP/3. A link to a rewritten copy (style, script,
+  modulepreload, document) now goes without the integrity; one to a body
+  STomp hands on as it is (a font, an image) keeps it, and the browser
+  checks the origin's bytes as natively. (sri-preload suite.)
 - A frame read before it loaded (an about:blank child or popup, one written
   with document.write) no longer shows the access API on its
   Number.prototype to the page that made it. The inject defines the API

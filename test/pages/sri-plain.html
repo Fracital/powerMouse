@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>sri-plain</title>
+		<!-- sri-preload.html without its Link header -->
+		<script
+			src="sri-preload.js"
+			integrity="sha384-tyvr7NWn2rWmOI1ia/zGzw6bTQGoeY8LVHHwY0ngyRCQgqHK4k1JUh7GTiAuNxC+"
+			crossorigin="anonymous"
+		></script>
+		<link
+			rel="stylesheet"
+			href="sri-preload.css"
+			integrity="sha384-g95fwuQaY2cvvx3P0/t+UIlIs3sLrNIrqdVKqYx8xle99Pdo22KkfLt0N6LeYs7K"
+			crossorigin="anonymous"
+		/>
+	</head>
+	<body>
+		<div id="probe"></div>
+		<script>
+			addEventListener('load', () => {
+				window.__sri = {
+					width: getComputedStyle(document.getElementById('probe')).width,
+					script: window.__sriScript || 0,
+				};
+			});
+		</script>
+	</body>
+</html>

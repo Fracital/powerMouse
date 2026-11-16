@@ -1,0 +1,7 @@
+/* a stylesheet whose integrity the page and its Link header name: the
+ * rewriter changes its bytes (the url below), so the browser must not be
+ * handed that integrity for the routed copy (sri-preload suite) */
+#probe {
+	width: 123px;
+	background-image: url(sri-preload-missing.png);
+}
