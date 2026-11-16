@@ -34,8 +34,11 @@
 //   it connects cannot be a file loaded when one is first made without a
 //   synchronous request for it; a frame that makes none runs none of it
 //   (one wrapper around the constructor, and the heap ceiling below is
-//   unchanged). The budget is 508 KB. Raise the budget in the same change
-//   as code that has to grow the bundle, and say why.
+//   unchanged). The budget went to 508 KB for it, and back to 500 KB once
+//   the deferred parts (build.js DEFERRED_FILES) took the stand-in and other
+//   code most frames never run out of the bundle (about 454 KB with the
+//   stand-in deferred). Raise the budget in the same change as code that has
+//   to grow the bundle, and say why; first see whether it can be deferred.
 // - the JS heap one proxied frame adds (test/frame-memory.mjs, FRAMES frames
 //   of a small ad-like page, same site), against a ceiling above what this
 //   build measures: 1,094 to 1,100 KB with 20 frames on Chrome 152 and 156
@@ -52,7 +55,7 @@ import { measureFrames } from '../frame-memory.mjs';
 import { done, ok } from '../lib.mjs';
 
 const BUNDLE = new URL('../../dist/injectDocument.js', import.meta.url);
-const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 508;
+const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 500;
 const FRAMES = Number(process.env.FRAMES) || 20;
 const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1150;
 
