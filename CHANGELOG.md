@@ -1231,6 +1231,15 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A module worker whose entry module imports two or more modules starts
+  through the proxy, as natively. Each module of a module worker carries
+  the preamble that loads the inject, and the browser evaluates sibling
+  imports side by side: the second preamble fetched and evaluated the
+  bundle again while the first still waited for it, and the worker died at
+  start with "Cannot read properties of undefined (reading
+  'releaseHeld')". The first preamble's work is now one promise that every
+  other preamble awaits, under a name that is gone before any of the
+  page's code runs. (realm-surface's module worker imports two modules.)
 - An audio worklet's or a paint worklet's module runs through the proxy as
   natively. The rewrite of a module routes member reads, writes and calls
   through the access API (`0..$s$j`), which the inject defines on a
