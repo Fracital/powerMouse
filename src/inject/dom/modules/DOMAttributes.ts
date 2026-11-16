@@ -16,6 +16,7 @@ import {
 } from '../../../routeURL';
 import { routeJS, ScriptType } from '../../../scriptRoutes';
 import { parseAcceptCH } from '../../../server/hintNames';
+import { markIntegrity } from '../../../sri';
 import StompURL from '../../../StompURL';
 import {
 	LOAD_HEADER,
@@ -791,6 +792,20 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			}
 		};
 		/**
+		 * A script's or a stylesheet's route with the integrity the page gave
+		 * its element: the worker checks the origin's bytes against it, the
+		 * element itself keeps none (src/sri.ts)
+		 */
+		const withIntegrity = (element: CustomElement, routed: string) =>
+			markIntegrity(
+				routed,
+				// a value the integrity hook has not taken yet is the newest
+				element.hasAttribute('integrity')
+					? element.getAttribute('integrity')
+					: element.getAttributeOG('integrity'),
+				this.client.directory,
+			);
+		/**
 		 * Set a load attribute to its routed value, or in a document no service
 		 * worker controls to a copy of what it names (`urls` maps the value to
 		 * the routed URLs it holds, for a srcset; one URL otherwise). The copies
@@ -1430,12 +1445,15 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 
 		domHooksModule.useAttributes(
 			(element, attribute) => {
+				// the browser reads a script's integrity when it starts the load,
+				// at its insertion: a connected one keeps the load it has
+				if (attribute === 'integrity' && element.isConnected) return;
 				element.restoreAttributesOG('src');
 				// a held script (holdScript) keeps its page's src through a change
-				// of its type (its route is made as it connects); a src set or
-				// removed again replaces it
+				// of its type or integrity (its route, integrity and all, is made
+				// as it connects); a src set or removed again replaces it
 				if (this.client.scriptsHeld && this.client.scriptHeld(element)) {
-					if (attribute === 'type') return;
+					if (attribute === 'type' || attribute === 'integrity') return;
 					this.client.releaseScript(element);
 				}
 
@@ -1480,11 +1498,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					placeLoad(
 						element,
 						'src',
-						routeJS(
-							new StompURL(url, this.client.baseURL),
-							this.client.baseURL,
-							this.client.config,
-							scriptType(element),
+						withIntegrity(
+							element,
+							routeJS(
+								new StompURL(url, this.client.baseURL),
+								this.client.baseURL,
+								this.client.config,
+								scriptType(element),
+							),
 						),
 					);
 				}
@@ -1493,6 +1514,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['SCRIPT', 'src'],
 				// the route depends on type=module, which pages may set after src
 				['SCRIPT', 'type'],
+				// and carries the integrity (src/sri.ts), which may come after src
+				['SCRIPT', 'integrity'],
+				[this.client.global.HTMLScriptElement, 'integrity', () => false],
 				[
 					this.client.global.HTMLScriptElement,
 					'src',
@@ -1522,29 +1546,26 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			[
 				['LINK', 'integrity'],
 				['SCRIPT', 'integrity'],
+				// the page's value: the element itself has none (the browser
+				// would check the rewrite against it)
 				[
 					this.client.global.HTMLLinkElement,
 					'integrity',
-					(element) =>
-						element.hasAttribute('integrity') &&
-						element.getAttribute('integrity') !== '' &&
-						(element.getAttributeOG('integrity') ??
-							element.getAttribute('integrity'))!,
+					(element) => element.getAttributeOG('integrity') ?? false,
 				],
 				[
 					this.client.global.HTMLScriptElement,
 					'integrity',
-					(element) =>
-						element.hasAttribute('integrity') &&
-						element.getAttribute('integrity') !== '' &&
-						(element.getAttributeOG('integrity') ??
-							element.getAttribute('integrity'))!,
+					(element) => element.getAttributeOG('integrity') ?? false,
 				],
 			],
 		);
 
 		domHooksModule.useAttributes(
-			(element) => {
+			(element, attribute) => {
+				// a stylesheet's integrity is read when its load starts: a
+				// connected link keeps the load it has (as natively)
+				if (attribute === 'integrity' && element.isConnected) return;
 				element.restoreAttributesOG('href');
 
 				if (
@@ -1585,16 +1606,23 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.removeAttributeOG('href');
 						this.client.dispatchLoadError(element);
 					} else if (stylesheet)
-						placeLoad(element, 'href', routeCSS(resource, this.client.baseURL));
+						placeLoad(
+							element,
+							'href',
+							withIntegrity(element, routeCSS(resource, this.client.baseURL)),
+						);
 					else if (rel.has('modulepreload'))
 						placeLoad(
 							element,
 							'href',
-							routeJS(
-								resource,
-								this.client.baseURL,
-								this.client.config,
-								'genericModule',
+							withIntegrity(
+								element,
+								routeJS(
+									resource,
+									this.client.baseURL,
+									this.client.config,
+									'genericModule',
+								),
 							),
 						);
 					else if (
@@ -1604,11 +1632,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						placeLoad(
 							element,
 							'href',
-							routeJS(
-								resource,
-								this.client.baseURL,
-								this.client.config,
-								'generic',
+							withIntegrity(
+								element,
+								routeJS(
+									resource,
+									this.client.baseURL,
+									this.client.config,
+									'generic',
+								),
 							),
 						);
 					else placeLoad(element, 'href', routeBinary(resource));
@@ -1618,6 +1649,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['LINK', 'href'],
 				['LINK', 'rel'],
 				['LINK', 'as'],
+				// the route carries the integrity (src/sri.ts), which markup and
+				// pages may give after href
+				['LINK', 'integrity'],
+				[this.client.global.HTMLLinkElement, 'integrity', () => false],
 				[this.client.global.HTMLLinkElement, 'as', () => false],
 				[
 					this.client.global.HTMLLinkElement,

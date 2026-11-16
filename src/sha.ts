@@ -204,7 +204,14 @@ export function digest(
 	algorithm: 'sha256' | 'sha384' | 'sha512',
 	text: string,
 ): string {
-	const bytes = encoder.encode(text);
+	return digestBytes(algorithm, encoder.encode(text));
+}
+
+/** the base64 digest of `bytes` by `algorithm` (sha256, sha384, sha512) */
+export function digestBytes(
+	algorithm: 'sha256' | 'sha384' | 'sha512',
+	bytes: Uint8Array,
+): string {
 	return algorithm === 'sha256'
 		? sha256(bytes)
 		: sha512(bytes, algorithm === 'sha384');

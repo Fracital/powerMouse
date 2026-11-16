@@ -1245,6 +1245,27 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   modulepreload, document) now goes without the integrity; one to a body
   STomp hands on as it is (a font, an image) keeps it, and the browser
   checks the origin's bytes as natively. (sri-preload suite.)
+- Subresource integrity of the scripts and stylesheets STomp rewrites is
+  checked as natively, against the origin's bytes. STomp left the page's
+  `integrity` out of every element and preload it rewrites (the browser
+  would hash the rewrite), so nothing was checked: a script or stylesheet
+  whose bytes do not match the page's hash loaded and ran where Chrome
+  refuses it. Now the metadata of an element (markup or script, given
+  before or after the URL, a preload, a module preload) and of a `Link`
+  header's preload rides in the route after its kind (`;sri=`,
+  src/sri.ts), and the service worker checks the origin's bytes against it
+  as the SRI spec does (the strongest algorithm only, any of its digests,
+  invalid tokens and options ignored, `sha-384` and base64url as Chrome
+  takes them, a redirect's last response) before it rewrites anything. A
+  mismatch is a network error, and so is another origin's response
+  without CORS, which natively cannot be checked. An element and the
+  `Link` header that preloads it carry the same route, so the element still
+  takes the preload. `link.integrity` and `script.integrity` read the
+  page's value (they read ''). A stylesheet refused this way keeps an
+  empty sheet where natively it has none (the browser makes one for any
+  network error), and the console names the route's network error, not
+  Chrome's digest message. Import maps' `integrity` stays inert
+  (src/scriptRoutes.ts). (sri suite.)
 - A frame read before it loaded (an about:blank child or popup, one written
   with document.write) no longer shows the access API on its
   Number.prototype to the page that made it. The inject defines the API

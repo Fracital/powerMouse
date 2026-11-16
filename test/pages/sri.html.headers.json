@@ -1,0 +1,3 @@
+{
+	"link": "</pages/sri-hdr.css.bin?delay=1500>; rel=preload; as=style; integrity=\"sha384-MxBXOayLpgikkR+uZ+/4eciYOZoaU760A1Piz/XY2n6z+s3CIa5h6j4k5pBbnixd\", </pages/sri-hdr.css.bin?cors&delay=1500>; rel=preload; as=style; crossorigin; integrity=\"sha384-MxBXOayLpgikkR+uZ+/4eciYOZoaU760A1Piz/XY2n6z+s3CIa5h6j4k5pBbnixd\", </pages/sri-hdr.js.bin?delay=1500>; rel=preload; as=script; integrity=\"sha384-lF3GC8gfznjqaqG3EDeI77n+yzzDnPxfUKq1woTJ3NLXSGw56sU2LuZrSsAlBI08\""
+}

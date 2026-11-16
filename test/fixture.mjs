@@ -829,6 +829,10 @@ export function startFixture(port = 8084) {
 						`<base href="${base.replace(/[&"<]/g, (c) => `&#${c.charCodeAt(0)};`)}" />`,
 					),
 				);
+			// `?delay=<ms>` (at most three seconds): the file arrives late, a
+			// preload still in flight when its element asks (sri suite)
+			const delay = Math.min(Number(query.get('delay')) || 0, 3000);
+			if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
 			// a Range request gets a 206 of the raw file bytes. The sidecar's
 			// content-encoding stays, so a Range of an encoded file is a
 			// fragment of the *compressed* stream, exactly as a CDN serves it:

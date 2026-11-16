@@ -166,14 +166,17 @@ export function capitalizeHeaders(headers: Headers): RawHeaders {
  * to a rewritten copy, as DOMAttributes leaves it out of a <link> or
  * <script>. Kept, the browser checked the copy against it and failed the
  * preload, and the page's own <link> then took the failed preload (Discord's
- * Webflow stylesheet never applied). A body that crosses as it is keeps it,
- * and the browser checks the origin's bytes as natively.
+ * Webflow stylesheet never applied); the route carries it instead, for the
+ * service worker to check the origin's bytes against (src/sri.ts). A body
+ * that crosses as it is keeps it, and the browser checks the origin's bytes
+ * as natively.
  */
 export function rewriteLinkHeader(
 	value: string,
 	route: (
 		target: string,
 		params: Record<string, string>,
+		raw: Record<string, string>,
 	) => { href: string; rewritten: boolean },
 ): string {
 	return value
@@ -181,18 +184,19 @@ export function rewriteLinkHeader(
 		.map((link) => {
 			const match = /^\s*<([^>]*)>(.*)$/s.exec(link);
 			if (!match) return link;
+			// each parameter lower-cased (`params`) and as written (`raw`: an
+			// integrity's digests are case-sensitive)
 			const params: Record<string, string> = {};
+			const raw: Record<string, string> = {};
 			for (const param of match[2].split(';')) {
 				const [name, ...rest] = param.split('=');
-				if (name.trim())
-					params[name.trim().toLowerCase()] = rest
-						.join('=')
-						.trim()
-						.replace(/^"|"$/g, '')
-						.toLowerCase();
+				if (!name.trim()) continue;
+				const value = rest.join('=').trim().replace(/^"|"$/g, '');
+				raw[name.trim().toLowerCase()] = value;
+				params[name.trim().toLowerCase()] = value.toLowerCase();
 			}
 			try {
-				const { href, rewritten } = route(match[1], params);
+				const { href, rewritten } = route(match[1], params, raw);
 				const rest = rewritten
 					? match[2].replace(/;\s*integrity\s*=\s*(?:"[^"]*"|[^;]*)/gi, '')
 					: match[2];

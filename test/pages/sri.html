@@ -1,0 +1,282 @@
+<!doctype html>
+<html>
+	<head>
+		<title>sri fixture</title>
+		<script>
+			// what each element did: 'load' or 'error' (and a stylesheet whether
+			// its sheet is there); the scripts that ran record their case
+			window.__ran = [];
+			window.__events = {};
+			window.ev = (el, kind) => {
+				const id = el.dataset.case;
+				window.__events[id] = kind;
+			};
+		</script>
+		<link
+			rel="preload"
+			as="style"
+			href="sri-pre.css.bin"
+			integrity="sha384-MxBXOayLpgikkR+uZ+/4eciYOZoaU760A1Piz/XY2n6z+s3CIa5h6j4k5pBbnixd"
+		/>
+		<!-- announced by the Link header too (sri.html.headers.json), and late:
+		     a preload still in flight is the one its element takes -->
+		<link
+			rel="stylesheet"
+			href="sri-hdr.css.bin?cors&amp;delay=1500"
+			integrity="sha384-MxBXOayLpgikkR+uZ+/4eciYOZoaU760A1Piz/XY2n6z+s3CIa5h6j4k5pBbnixd"
+			crossorigin="anonymous"
+			data-case="header-style-cors"
+			onload="ev(this, 'load')"
+			onerror="ev(this, 'error')"
+		/>
+		<link
+			rel="stylesheet"
+			href="sri-hdr.css.bin?delay=1500"
+			integrity="sha384-MxBXOayLpgikkR+uZ+/4eciYOZoaU760A1Piz/XY2n6z+s3CIa5h6j4k5pBbnixd"
+			data-case="header-style"
+			onload="ev(this, 'load')"
+			onerror="ev(this, 'error')"
+		/>
+		<link
+			rel="stylesheet"
+			href="sri-style.css.bin?markup-good"
+			integrity="sha384-MxBXOayLpgikkR+uZ+/4eciYOZoaU760A1Piz/XY2n6z+s3CIa5h6j4k5pBbnixd"
+			data-case="markup-style-good"
+			onload="ev(this, 'load')"
+			onerror="ev(this, 'error')"
+		/>
+		<link
+			rel="stylesheet"
+			href="sri-style.css.bin?markup-bad"
+			integrity="sha384-AAAAOayLpgikkR+uZ+/4eciYOZoaU760A1Piz/XY2n6z+s3CIa5h6j4k5pBbnixd"
+			data-case="markup-style-bad"
+			onload="ev(this, 'load')"
+			onerror="ev(this, 'error')"
+		/>
+		<link
+			rel="stylesheet"
+			href="sri-style.css.bin?markup-cors"
+			integrity="sha384-MxBXOayLpgikkR+uZ+/4eciYOZoaU760A1Piz/XY2n6z+s3CIa5h6j4k5pBbnixd"
+			crossorigin="anonymous"
+			data-case="markup-style-cors"
+			onload="ev(this, 'load')"
+			onerror="ev(this, 'error')"
+		/>
+		<link
+			rel="stylesheet"
+			href="sri-pre.css.bin"
+			integrity="sha384-MxBXOayLpgikkR+uZ+/4eciYOZoaU760A1Piz/XY2n6z+s3CIa5h6j4k5pBbnixd"
+			data-case="preload-style"
+			onload="ev(this, 'load')"
+			onerror="ev(this, 'error')"
+		/>
+		<script
+			src="sri-hdr.js.bin?delay=1500"
+			integrity="sha384-lF3GC8gfznjqaqG3EDeI77n+yzzDnPxfUKq1woTJ3NLXSGw56sU2LuZrSsAlBI08"
+			data-case="header-script"
+			onload="ev(this, 'load')"
+			onerror="ev(this, 'error')"
+		></script>
+		<script
+			src="sri-run.js.bin?markup-good"
+			integrity="sha384-lF3GC8gfznjqaqG3EDeI77n+yzzDnPxfUKq1woTJ3NLXSGw56sU2LuZrSsAlBI08"
+			data-case="markup-script-good"
+			onload="ev(this, 'load')"
+			onerror="ev(this, 'error')"
+		></script>
+		<script
+			src="sri-run.js.bin?markup-bad"
+			integrity="sha256-AAAABFS/fDaLE+beIgBPyZkKhlRyuWK3879GhndqqMQ="
+			data-case="markup-script-bad"
+			onload="ev(this, 'load')"
+			onerror="ev(this, 'error')"
+		></script>
+	</head>
+	<body>
+		<p id="p">sri</p>
+		<script>
+			{
+				const style = 'sri-style.css.bin';
+				const run = 'sri-run.js.bin';
+				const css384 =
+					'sha384-MxBXOayLpgikkR+uZ+/4eciYOZoaU760A1Piz/XY2n6z+s3CIa5h6j4k5pBbnixd';
+				const css256 = 'sha256-2TIwpI29IhZKFDf6vNb3BaSO+b93sVdq/TrLz9n8254=';
+				const js384 =
+					'sha384-lF3GC8gfznjqaqG3EDeI77n+yzzDnPxfUKq1woTJ3NLXSGw56sU2LuZrSsAlBI08';
+				const js256 = 'sha256-kJ1NBFS/fDaLE+beIgBPyZkKhlRyuWK3879GhndqqMQ=';
+				const js512 =
+					'sha512-TXbY9FbXK/qzX7zd7JOhlEAoR2JG66CSIBytoFNl65FJitDPeJOAW7JY05yRHQN1YxIgg3PSwDOxqud7ci+VdQ==';
+				const bad384 =
+					'sha384-AAAAC8gfznjqaqG3EDeI77n+yzzDnPxfUKq1woTJ3NLXSGw56sU2LuZrSsAlBI08';
+				const bad512 =
+					'sha512-AAAAFbXK/qzX7zd7JOhlEAoR2JG66CSIBytoFNl65FJitDPeJOAW7JY05yRHQN1YxIgg3PSwDOxqud7ci+VdQ==';
+				// the other loopback name: another origin of the same server
+				const other = `${location.protocol}//${
+					location.hostname === '127.0.0.1' ? 'localhost' : '127.0.0.1'
+				}:${location.port}/pages/`;
+				const listen = (el, id) => {
+					el.dataset.case = id;
+					el.addEventListener('load', () => (window.__events[id] = 'load'));
+					el.addEventListener('error', () => (window.__events[id] = 'error'));
+				};
+				const sheet = (id, href, set) => {
+					const el = document.createElement('link');
+					listen(el, id);
+					set(el, href);
+					document.head.append(el);
+				};
+				const script = (id, src, set) => {
+					const el = document.createElement('script');
+					listen(el, id);
+					set(el, src);
+					document.head.append(el);
+				};
+				// the property after href: what the browser reads at the fetch
+				sheet('dom-style-prop-bad', `${style}?dom-prop-bad`, (el, href) => {
+					el.rel = 'stylesheet';
+					el.href = href;
+					el.integrity = css384.replace('Mx', 'AA');
+				});
+				sheet('dom-style-attr-good', `${style}?dom-attr-good`, (el, href) => {
+					el.setAttribute('integrity', css384);
+					el.setAttribute('rel', 'stylesheet');
+					el.setAttribute('href', href);
+				});
+				sheet(
+					'dom-style-other-cors',
+					`${other}${style}?other-cors`,
+					(el, href) => {
+						el.rel = 'stylesheet';
+						el.crossOrigin = 'anonymous';
+						el.integrity = css384;
+						el.href = href;
+					},
+				);
+				sheet(
+					'dom-style-other-nocors',
+					`${other}${style}?other-nocors`,
+					(el, href) => {
+						el.rel = 'stylesheet';
+						el.integrity = css384;
+						el.href = href;
+					},
+				);
+				sheet('dom-style-256', `${style}?dom-256`, (el, href) => {
+					el.rel = 'stylesheet';
+					el.integrity = css256;
+					el.href = href;
+				});
+				script('dom-script-prop-good', `${run}?dom-prop-good`, (el, src) => {
+					el.src = src;
+					el.integrity = js384;
+				});
+				script('dom-script-prop-bad', `${run}?dom-prop-bad`, (el, src) => {
+					el.src = src;
+					el.integrity = bad384;
+				});
+				script(
+					'dom-script-other-cors',
+					`${other}${run}?other-cors`,
+					(el, src) => {
+						el.crossOrigin = 'anonymous';
+						el.integrity = js384;
+						el.src = src;
+					},
+				);
+				script(
+					'dom-script-other-nocors',
+					`${other}${run}?other-nocors`,
+					(el, src) => {
+						el.integrity = js384;
+						el.src = src;
+					},
+				);
+				// only the strongest algorithm counts
+				script(
+					'dom-script-strongest-good',
+					`${run}?strongest-good`,
+					(el, src) => {
+						el.integrity = `sha256-AAAA ${js384}`;
+						el.src = src;
+					},
+				);
+				script(
+					'dom-script-strongest-bad',
+					`${run}?strongest-bad`,
+					(el, src) => {
+						el.integrity = `${bad512} ${js384}`;
+						el.src = src;
+					},
+				);
+				script('dom-script-any-good', `${run}?any-good`, (el, src) => {
+					el.integrity = `${bad384} ${js384}`;
+					el.src = src;
+				});
+				script('dom-script-512', `${run}?sha512`, (el, src) => {
+					el.integrity = js512;
+					el.src = src;
+				});
+				script('dom-script-256', `${run}?sha256`, (el, src) => {
+					el.integrity = js256;
+					el.src = src;
+				});
+				// no valid metadata: nothing to check
+				script('dom-script-unknown', `${run}?unknown`, (el, src) => {
+					el.integrity = 'md5-AAAA';
+					el.src = src;
+				});
+				script('dom-script-options', `${run}?options`, (el, src) => {
+					el.integrity = `${js384}?foo=bar`;
+					el.src = src;
+				});
+				script('dom-script-base64url', `${run}?base64url`, (el, src) => {
+					el.integrity = js384.replace(/\+/g, '-').replace(/\//g, '_');
+					el.src = src;
+				});
+				script('dom-script-upper', `${run}?upper`, (el, src) => {
+					el.integrity = js384.replace('sha384', 'SHA384');
+					el.src = src;
+				});
+				script('dom-script-dashed', `${run}?dashed`, (el, src) => {
+					el.integrity = js384.replace('sha384', 'sha-384');
+					el.src = src;
+				});
+				script('dom-module-good', `${run}?module-good`, (el, src) => {
+					el.type = 'module';
+					el.integrity = js384;
+					el.src = src;
+				});
+				script('dom-module-bad', `${run}?module-bad`, (el, src) => {
+					el.type = 'module';
+					el.integrity = bad384;
+					el.src = src;
+				});
+			}
+			addEventListener('load', () =>
+				setTimeout(() => {
+					const read = (selector) => {
+						const el = document.querySelector(selector);
+						return [
+							el.integrity,
+							el.getAttribute('integrity'),
+							el.hasAttribute('integrity'),
+						];
+					};
+					const sheets = {};
+					for (const el of document.querySelectorAll('link[rel=stylesheet]'))
+						sheets[el.dataset.case] = !!el.sheet;
+					window.__sri = {
+						events: window.__events,
+						ran: window.__ran.map(([id]) => id).sort(),
+						sheets,
+						readback: {
+							markupLink: read('link[data-case="markup-style-good"]'),
+							markupScript: read('script[data-case="markup-script-good"]'),
+							domScript: read('script[data-case="dom-script-prop-good"]'),
+						},
+					};
+				}, 1500),
+			);
+		</script>
+	</body>
+</html>

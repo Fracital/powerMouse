@@ -1,0 +1,1 @@
+window.__ran.push([document.currentScript.dataset.case, typeof location.href]);

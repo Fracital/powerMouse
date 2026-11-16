@@ -88,6 +88,7 @@ import {
 import { MODULE_PREFIX_ROUTE } from '../scriptRoutes';
 import type { ControlInfo } from '../serviceWorkerTypes';
 import { siteFacts, type SiteFacts } from '../siteFacts';
+import { INTEGRITY_MARK, markIntegrity, withIntegrityMark } from '../sri';
 import StompURL from '../StompURL';
 import { getDomain, getPublicSuffix } from '../suffix';
 import type {
@@ -200,6 +201,7 @@ import {
 	rememberUpgradeInsecure,
 	upgradesInsecure,
 } from './insecureRequests';
+import { integrityHolds } from './integrity';
 import { noteKeptLoad } from './keptLoads';
 import { takeLoadGrant } from './loadGrants';
 import { recordCrossedMedia } from './mediaLoads';
@@ -830,7 +832,7 @@ function genericForward(
 				client: context?.clientId,
 			});
 		const oURL = new URL(serverRequest.url);
-		const { url, resource } = parseRoutedURL(
+		const { url, resource, integrity } = parseRoutedURL(
 			serverRequest.url,
 			rewriter.codec,
 			`${oURL.origin}${rewriter.directory}`,
@@ -3003,7 +3005,14 @@ function genericForward(
 		let responseHeaders = filterResponseHeaders(
 			response.headers,
 			url,
-			(target, base) => transformRoute(target, base, resource),
+			// a redirect keeps the integrity its load carries: the browser
+			// checks the response at the end of the chain
+			(target, base) =>
+				withIntegrityMark(
+					transformRoute(target, base, resource),
+					integrity && INTEGRITY_MARK + integrity,
+					rewriter.directory,
+				),
 			additionalResponseFilter,
 		);
 		// a fetch or an XMLHttpRequest reads a response's policy headers as
@@ -3247,23 +3256,32 @@ function genericForward(
 		if (responseHeaders.has('link'))
 			responseHeaders.set(
 				'link',
-				rewriteLinkHeader(responseHeaders.get('link')!, (target, params) => {
-					const resource = new StompURL(new URL(target, url.toString()), url);
-					const rewritten = (href: string) => ({ href, rewritten: true });
-					if (params.as === 'style') return rewritten(routeCSS(resource, url));
-					if (params.rel === 'modulepreload')
-						return rewritten(
-							routeJS(resource, url, rewriter.config, 'genericModule'),
-						);
-					if (params.as === 'script')
-						return rewritten(
-							routeJS(resource, url, rewriter.config, 'generic'),
-						);
-					if (params.as === 'document' || params.rel === 'prefetch')
-						return rewritten(routeHTML(resource, url, rewriter.config));
-					// fonts, images, fetches: /binary/ hands on the origin's body
-					return { href: routeBinary(resource), rewritten: false };
-				}),
+				rewriteLinkHeader(
+					responseHeaders.get('link')!,
+					(target, params, raw) => {
+						const resource = new StompURL(new URL(target, url.toString()), url);
+						const rewritten = (href: string) => ({ href, rewritten: true });
+						// a script's or a stylesheet's integrity rides in its route, for
+						// this worker to check the origin's bytes against (src/sri.ts);
+						// the page's element of it carries the same, so the element takes
+						// the preload
+						const checked = (href: string) =>
+							rewritten(markIntegrity(href, raw.integrity, rewriter.directory));
+						if (params.as === 'style') return checked(routeCSS(resource, url));
+						if (params.rel === 'modulepreload')
+							return checked(
+								routeJS(resource, url, rewriter.config, 'genericModule'),
+							);
+						if (params.as === 'script')
+							return checked(
+								routeJS(resource, url, rewriter.config, 'generic'),
+							);
+						if (params.as === 'document' || params.rel === 'prefetch')
+							return rewritten(routeHTML(resource, url, rewriter.config));
+						// fonts, images, fetches: /binary/ hands on the origin's body
+						return { href: routeBinary(resource), rewritten: false };
+					},
+				),
 			);
 
 		// an EventSource must get its MIME type even from a server that
@@ -3346,6 +3364,39 @@ function genericForward(
 			await response.body?.cancel().catch(() => {});
 			body = undefined;
 		} else {
+			// the page's integrity metadata (src/sri.ts), checked against the
+			// origin's bytes before anything is rewritten, as the browser checks
+			// them natively: a mismatch is a network error, and so is a response
+			// the page could not read (another origin's without CORS), which
+			// the browser cannot check at all
+			if (integrity && !redirect) {
+				let refusal: string | null = null;
+				if (chainCrossed && policyMode === 'no-cors') {
+					await response.body?.cancel().catch(() => {});
+					refusal =
+						'refused by its integrity: the response is not CORS enabled';
+				} else {
+					const bytes = new Uint8Array(await response.arrayBuffer());
+					if (await integrityHolds(bytes, integrity)) {
+						const checked: Response & {
+							rawHeaders?: [string, string][];
+						} = new Response(bytes, {
+							status: response.status,
+							statusText: response.statusText,
+							headers: response.headers,
+						});
+						checked.rawHeaders = response.rawHeaders;
+						response = checked;
+					} else
+						refusal =
+							'refused by its integrity: no digest matches the response';
+				}
+				if (refusal !== null) {
+					if (report) report = { ...report, status: 0, error: refusal };
+					sendReport();
+					return Response.error();
+				}
+			}
 			let output: BodyInit | false;
 			try {
 				output = transformBody

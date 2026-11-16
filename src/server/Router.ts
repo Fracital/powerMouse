@@ -1,3 +1,4 @@
+import { splitIntegrityMark } from '../sri';
 import { RouteContext } from '../transport/messages';
 
 export function json(status: number, data: unknown): Response {
@@ -63,7 +64,11 @@ export default class Router {
 		this.routes = new Map();
 	}
 	private resolveURL(fullURL: string): string {
-		return '/' + new URL(fullURL).pathname.slice(this.directory.length);
+		const path = new URL(fullURL).pathname.slice(this.directory.length);
+		// a route's kind is matched without the integrity it carries (src/sri.ts)
+		const slash = path.indexOf('/');
+		const kind = slash === -1 ? path : path.slice(0, slash);
+		return '/' + splitIntegrityMark(kind)[0] + path.slice(kind.length);
 	}
 	willRoute(fullURL: string): boolean {
 		const url = this.resolveURL(fullURL);

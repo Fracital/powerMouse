@@ -1,5 +1,6 @@
 import GenericCodec from './Codecs';
 import { assetName, type Assets, type Config } from './config';
+import { splitIntegrityMark } from './sri';
 import StompURL, { openFragment, sealedFragmentText } from './StompURL';
 import { withQuery } from './urlShape';
 import { BUILD, LIBRARY } from './version';
@@ -299,8 +300,11 @@ export function queueXHR(url: StompURL) {
 }*/
 
 export interface ParsedRoutedURL {
+	/** the route's kind, without its integrity mark */
 	resource: string;
 	url: StompURL;
+	/** the integrity the load carries (src/sri.ts), '' for none */
+	integrity: string;
 }
 
 export function parseRoutedURL(
@@ -325,7 +329,7 @@ export function parseRoutedURL(
 		throw new Error('Invalid route');
 	}
 
-	const resource = path.slice(0, split);
+	const [resource, integrity] = splitIntegrityMark(path.slice(0, split));
 	// every codec escapes `?`, so a literal one starts a query the browser put
 	// after the route: a GET form submitted to a document's own address (a
 	// form without an action) replaces that URL's query with its fields
@@ -346,6 +350,7 @@ export function parseRoutedURL(
 	return {
 		resource: resource,
 		url: new StompURL(url, codec, directory),
+		integrity,
 	};
 }
 
