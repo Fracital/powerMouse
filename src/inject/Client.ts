@@ -253,12 +253,27 @@ export default class Client {
 	hidesName?: (target: unknown, key: unknown) => boolean;
 	/**
 	 * @internal set by the Sandbox module: what a read of another window's
-	 * location (`real`, its stand-in `standIn`) gives a sandboxed document,
-	 * which may not navigate every window
+	 * location (`real`, its stand-in `standIn`, read off `container`) gives
+	 * this document, whose navigation of that window is its own
+	 * (navigateWindow)
 	 */
-	gateLocation?: (real: unknown, standIn: unknown) => unknown;
-	/** @internal set by the Sandbox module: throws when a sandboxed document may not navigate `target` to `value` */
-	gateNavigation?: (target: unknown, value: unknown) => void;
+	gateLocation?: (
+		real: unknown,
+		standIn: unknown,
+		container?: unknown,
+	) => unknown;
+	/**
+	 * @internal set by the Context module: this document navigates another
+	 * proxied window `target` to `value` (its location set, or `member`
+	 * called), as Chrome would let it or refuse it, from that window's realm
+	 * with this document as the navigation's initiator. False when `target`
+	 * is no window of the proxied world (the caller does what it did)
+	 */
+	navigateWindow?: (
+		target: unknown,
+		value: unknown,
+		member: 'href' | 'assign' | 'replace',
+	) => boolean;
 	/** @internal this context's native window.postMessage, taken before the Context module wraps it: another context posting here calls it from its own realm */
 	nativePostMessage?: PostMessage;
 	/** @internal the Context module's wrapper over window.postMessage: a page that replaced it is called as written */

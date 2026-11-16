@@ -1441,6 +1441,34 @@ be cloned.`, the function as the rewriter printed it, mark and helper
   it, report-only ones too, trusted, with the worker's URL. The document
   hears nothing of it, as natively. (csp-workers, natively against both
   modes on Chrome 157.)
+- A frame navigates its top or its parent by script as natively. In the
+  same-origin controller, and the isolated one, `top.location = url`,
+  `top.location.href = url`, `top.location.replace(url)` and the same on
+  `parent` from a frame of another site threw a SecurityError (naming
+  `replace` even for an `href` write, from the wrong realm, with a console
+  line full of routed URLs), where Chrome navigates the top: frame-busting
+  scripts, OAuth and payment return pages, embedded sign-in widgets and ad
+  landing frames stayed stuck in their frame. The browser refused because
+  the inject asked it from the frame, and the host frames the proxied top
+  sandboxed. The inject now decides as Chrome does (sticky user activation,
+  a destination of the top's origin or registrable domain, a window of the
+  frame's origin or under one, its opener, the sandbox's top navigation
+  flags; otherwise Chrome's SecurityError and console message, the
+  framebusting intervention's included) and makes an allowed navigation
+  from the target window's own realm, with the frame as its initiator: the
+  frame tells the service worker first (a POST to the new `initiator` route
+  under the address), so the request carries the frame's Referer under the
+  frame's referrer policy, Sec-Fetch-Site from the frame's origin, and
+  Sec-Fetch-User only when the frame had activation and is of the target's
+  site, and `document.referrer` follows. `href` and `location =` make a
+  history entry, `replace` none. A same-origin frame's navigation of its
+  top had the top's own URL as its Referer and now has the frame's. Reads
+  of another origin's `top.location.href` still throw, and `assign` stays
+  out of reach on it; a call with no URL gets the browser's own
+  error. The announcement is no resource timing entry of the
+  page. (top-navigation suite: 65 cases natively, Chrome 152,
+  156 and 157 alike, against both modes; docs/same-origin-policy.md.)
+
 - A frame read before it loaded (an about:blank child or popup, one written
   with document.write) no longer shows the access API on its
   Number.prototype to the page that made it. The inject defines the API

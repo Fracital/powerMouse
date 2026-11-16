@@ -758,6 +758,19 @@ export function startFixture(port = 8084) {
 				res.setHeader('content-type', 'text/javascript');
 				return res.end('');
 			}
+			// `&html`: a document that reports what it saw as it loaded
+			// (top-navigation suite): its referrer, whether it is the top and
+			// its history.length, as an /echo-post beacon of shape `landed`
+			if (query.has('html')) {
+				res.setHeader('content-type', 'text/html; charset=utf-8');
+				res.setHeader('cache-control', 'no-store');
+				const beacon = JSON.stringify(
+					`/echo-post?k=${encodeURIComponent(query.get('k') ?? '')}&shape=landed`,
+				).replace(/</g, '\\u003c');
+				return res.end(
+					`<!doctype html><title>landed</title><script>navigator.sendBeacon(${beacon}, JSON.stringify({referrer: document.referrer, top: window === top, length: history.length}))</script>`,
+				);
+			}
 			res.setHeader('content-type', 'application/json');
 			return res.end(JSON.stringify(req.headers));
 		}

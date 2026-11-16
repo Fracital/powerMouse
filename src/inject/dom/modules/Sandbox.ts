@@ -2,7 +2,8 @@ import { routeHTML } from '../../../rewriteHTML';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
-import { withStack } from '../../nativeErrors';
+import { failsToParse, withStack } from '../../nativeErrors';
+import { OwnWeakMap } from '../../ownCollections';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 
 const LACKS_SAME_ORIGIN =
@@ -23,9 +24,11 @@ const LACKS_SAME_ORIGIN =
  * it, since the proxied top is not the browser's top (the frame's real
  * sandbox never has the top navigation flags) and a write to another
  * window's location runs that window's own inject, a navigation the browser
- * takes for the target's. Another window's location, read by a sandboxed
- * document, refuses what DocumentClient.mayNavigate refuses with the
- * browser's SecurityError; a target=_top link (or _parent, when the parent
+ * takes for the target's. Another window's location, read by a document,
+ * navigates that window as the document's own navigation (the Context
+ * module's navigateWindow, which refuses what Chrome refuses, a sandboxed
+ * document's what DocumentClient.mayNavigate refuses, with the browser's
+ * SecurityError); a target=_top link (or _parent, when the parent
  * is the top) navigates the proxied top when the sandbox allows it, and is
  * left to the browser, which refuses it, when it does not.
  */
@@ -121,17 +124,15 @@ export default class SandboxModule extends Module<DocumentClient> {
 			}
 			return null;
 		};
-		this.client.gateNavigation = (target, value) => {
-			if (client.sandboxFlags === null) return;
-			const destination = resolve(value);
-			if (!client.mayNavigate(target))
-				throw client.navigationRefused('href', false, destination);
-		};
 		// one gated location per window, so a page comparing two reads sees one
-		const gated = new WeakMap<object, object>();
-		this.client.gateLocation = (real, standIn) => {
+		const gated = new OwnWeakMap<object, object>();
+		// Another window's location, as this document reads it: its
+		// navigation of that window (a location set, assign, replace) is this
+		// document's own, refused or made as Chrome would (Context
+		// navigateWindow); a sandboxed document's reload, or a write of a
+		// part of the URL, is refused where it may not navigate the window
+		this.client.gateLocation = (real, standIn, container) => {
 			if (
-				client.sandboxFlags === null ||
 				real === global.location ||
 				typeof standIn !== 'object' ||
 				standIn === null
@@ -139,45 +140,88 @@ export default class SandboxModule extends Module<DocumentClient> {
 				return standIn;
 			const known = gated.get(real as object);
 			if (known) return known;
-			const target = windowOf(real);
+			// the window it was read off (`w.location`, `w.document.location`),
+			// else found by a walk of the proxied world's frames
+			let target: typeof globalThis | null = null;
+			try {
+				const owner =
+					container !== null &&
+					typeof container === 'object' &&
+					(container as { window?: unknown }).window === container
+						? container
+						: (container as Document | undefined)?.defaultView;
+				if (owner && (owner as typeof globalThis).location === real)
+					target = owner as typeof globalThis;
+			} catch (error) {
+				// a window of another real origin
+			}
+			target ??= windowOf(real);
 			if (!target) return standIn;
 			const location = standIn as Location;
 			const check = (member: string, call: boolean, destination: URL) => {
-				if (!client.mayNavigate(target))
+				if (client.sandboxFlags !== null && !client.mayNavigate(target))
 					throw client.navigationRefused(member, call, destination);
 			};
-			const proxy = new Proxy(location, {
-				get: (object, property) => {
-					const value = Reflect.get(object, property, object);
-					if (typeof value !== 'function') return value;
-					if (property === 'assign' || property === 'replace')
-						return (url: unknown) => {
-							check(property, true, resolve(url));
-							return Reflect.apply(value, object, [url]);
-						};
-					if (property === 'reload')
-						return () => {
-							check(property, true, new URL(object.href));
-							return Reflect.apply(value, object, []);
-						};
-					return (...args: unknown[]) => Reflect.apply(value, object, args);
-				},
-				set: (object, property, value) => {
-					if (
-						typeof property === 'string' &&
-						LOCATION_PARTS.includes(property)
-					) {
-						const destination =
-							property === 'href' ? resolve(value) : new URL(object.href);
-						if (property !== 'href')
-							Reflect.set(destination, property, String(value));
-						check(property, false, destination);
-					}
-					return Reflect.set(object, property, value, object);
-				},
-			});
-			gated.set(real as object, proxy);
-			return proxy;
+			const navigate = (
+				member: 'href' | 'assign' | 'replace',
+				url: string,
+			): boolean => !!client.navigateWindow?.(target, url, member);
+			// A Location of its own, every member the stand-in's with its
+			// descriptor (unforgeable, so a Proxy could not answer for them),
+			// each function reading as the native one and acting on the stand-in;
+			// the navigating ones go through `navigate` first
+			const view = {} as Location;
+			const wrap = (native: Function, own: (args: unknown[]) => unknown): any =>
+				proxyModule.wrapFunction(native, (method, that, args) =>
+					that === view ? own(args) : Reflect.apply(method, that, args),
+				);
+			for (const key of Reflect.ownKeys(location)) {
+				const descriptor = Reflect.getOwnPropertyDescriptor(location, key)!;
+				const { value, get, set } = descriptor;
+				// (valueOf is the realm's own, which answers for what it is called on)
+				if (typeof value === 'function' && key !== 'valueOf')
+					descriptor.value = wrap(value, (args) => {
+						if (key === 'assign' || key === 'replace') {
+							// no URL, or one that does not parse: the stand-in hands
+							// the call to the browser, whose error the page gets
+							if (!args.length) return Reflect.apply(value, location, []);
+							const url = String(args[0]);
+							if (!failsToParse(client, url)) {
+								if (navigate(key, url)) return undefined;
+								check(key, true, resolve(url));
+							}
+							return Reflect.apply(value, location, [url]);
+						} else if (key === 'reload')
+							check(key, true, new URL(location.href));
+						return Reflect.apply(value, location, args);
+					});
+				if (get)
+					descriptor.get = wrap(get, () => Reflect.apply(get, location, []));
+				if (set)
+					descriptor.set = wrap(set, (args) => {
+						if (key === 'href') {
+							// (converted once; one that does not parse is the stand-in's
+							// to refuse, as the browser does)
+							const url = String(args[0]);
+							if (!failsToParse(client, url)) {
+								if (navigate('href', url)) return;
+								check(key, false, resolve(url));
+							}
+							Reflect.apply(set, location, [url]);
+							return;
+						}
+						if (typeof key === 'string' && LOCATION_PARTS.includes(key)) {
+							const destination = new URL(location.href);
+							Reflect.set(destination, key, String(args[0]));
+							check(key, false, destination);
+						}
+						Reflect.apply(set, location, args);
+					});
+				Reflect.defineProperty(view, key, descriptor);
+			}
+			Reflect.setPrototypeOf(view, Reflect.getPrototypeOf(location));
+			gated.set(real as object, view);
+			return view;
 		};
 
 		// a link to the top (or to the parent, when the parent is the top) in

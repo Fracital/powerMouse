@@ -143,3 +143,47 @@ export function navigationChain(url: string): NavigationChain | null {
 	const chain = chains.get(keyOf(url));
 	return chain && Date.now() - chain.at <= CHAIN_TTL_MS ? chain : null;
 }
+
+/**
+ * A navigation of another window that a document started (INITIATOR_ROUTE):
+ * the inject makes it from that window's realm, since the browser would not
+ * let the frame navigate an ancestor inside the host's frame, so the
+ * request names that window as its referrer. The document that started it
+ * is the navigation's initiator, as natively: its routed URL is the
+ * referrer under its own policy (the announcement's, which the browser
+ * filled in from the document), its origin judges Sec-Fetch-Site, and its
+ * activation Sec-Fetch-User. Keyed and kept as the hints are, and it wins
+ * over the hint the navigated window's own navigate event sends.
+ */
+export interface NavigationInitiator {
+	/** the initiator's routed URL, '' for an opaque one (no referrer) */
+	referrer: string;
+	policy: ReferrerPolicy;
+	/** its real origin, "null" for an opaque one */
+	origin: string;
+	activated: boolean;
+}
+
+const initiators = new Map<string, NavigationInitiator & { at: number }>();
+
+export function recordNavigationInitiator(
+	url: string,
+	initiator: NavigationInitiator,
+) {
+	const key = keyOf(url);
+	initiators.delete(key);
+	initiators.set(key, { ...initiator, at: Date.now() });
+	if (initiators.size > KEPT)
+		initiators.delete(initiators.keys().next().value!);
+}
+
+/** the initiator a document announced for a navigation to `url`, taken */
+export function takeNavigationInitiator(
+	url: string,
+): NavigationInitiator | null {
+	const key = keyOf(url);
+	const initiator = initiators.get(key);
+	if (!initiator) return null;
+	initiators.delete(key);
+	return Date.now() - initiator.at > TTL_MS ? null : initiator;
+}

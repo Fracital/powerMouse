@@ -1,5 +1,7 @@
+import { siteOf } from '../../../partition';
 import { routeHTML } from '../../../rewriteHTML';
 import StompURL, { urlLike } from '../../../StompURL';
+import { INITIATOR_ROUTE } from '../../../transport/messages';
 import Client from '../../Client';
 import Module from '../../Module';
 import ProxyModule, {
@@ -8,9 +10,10 @@ import ProxyModule, {
 	usePrototype,
 } from '../../modules/Proxy';
 import { routedPrefix } from '../../modules/Unroute';
-import { withStack } from '../../nativeErrors';
+import { failsToParse, withStack } from '../../nativeErrors';
 import { nativeFunction } from '../../nativeUtil';
 import { OwnWeakMap, OwnWeakSet } from '../../ownCollections';
+import { getPublicSuffix } from '../../rewriter';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { frameDestination, frameOfHeld, heldBefore } from '../freshContext';
 
@@ -66,6 +69,29 @@ export function reachableClients(
 
 // taken before the page runs: a page may replace the global
 const NativeWeakRef = WeakRef;
+// Chrome's console message for a navigation it refuses is the browser's own:
+// printed with the console's native method, which no page hook sees
+const nativeConsoleError = console.error;
+
+/** how long a navigation of another window waits for the worker to hear of its initiator */
+const INITIATOR_WAIT_MS = 1000;
+
+/** Chrome's reason for refusing a frame's navigation of its top (its framebusting intervention) */
+const FRAMEBUSTING =
+	'The frame attempting navigation is targeting its top-level window, but is neither same-origin with its target nor has it received a user gesture. See https://www.chromestatus.com/feature/5851021045661696.';
+
+/**
+ * A host's registrable domain as Chrome's framebusting check asks for it
+ * (GetDomainAndRegistry): '' for an IP address and for a host that is a
+ * public suffix itself (localhost)
+ */
+function registrableDomainOf(host: string): string {
+	if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.startsWith('[')) return '';
+	const suffix = getPublicSuffix(host);
+	if (!suffix || host === suffix || !host.endsWith(`.${suffix}`)) return '';
+	const rest = host.slice(0, -suffix.length - 1);
+	return `${rest.slice(rest.lastIndexOf('.') + 1)}.${suffix}`;
+}
 
 /** whether a frame's window is still on the initial about:blank its creation gave it */
 export function initialBlank(context: typeof globalThis): boolean {
@@ -142,17 +168,6 @@ function isPostMessageArgs2(
 
 type Context = typeof globalThis;
 
-/** the nested route marker of a STomp window (its top origin when it is a child of a proxied page) */
-function nestedRouteOf(context: Context, client: string): string | false {
-	try {
-		return (
-			((context as Record<string, any>)[client] as DocumentClient | undefined)
-				?.nestedRoute ?? false
-		);
-	} catch (error) {
-		return false;
-	}
-}
 type RestrictedContext = typeof globalThis;
 
 const nativeMessageEvent: MessageEvent = Object.create({});
@@ -461,34 +476,279 @@ export default class ContextModule extends Module<DocumentClient> {
 					})();
 		return wanted !== 'null' && wanted === receiverOrigin;
 	}
+	/** the client of a window of the proxied world, if it is one */
+	#clientOf(context: unknown): DocumentClient | undefined {
+		try {
+			const client = (context as Record<string, any>)[
+				this.client.names.client
+			] as DocumentClient | undefined;
+			return client?.global === context ? client : undefined;
+		} catch (error) {
+			// a window of another real origin
+			return undefined;
+		}
+	}
+	/** whether this document reaches `context`'s (same origin-domain, neither opaque) */
+	#reaches(context: unknown): boolean {
+		const other = this.#clientOf(context);
+		if (!other) return false;
+		if (other === this.client) return true;
+		try {
+			return (
+				!this.client.sandboxedOpaque &&
+				!other.sandboxedOpaque &&
+				reachableClients(this.client, other)
+			);
+		} catch (error) {
+			return false;
+		}
+	}
+	/** whether this document reaches `context` or one of its proxied ancestors */
+	#reachesAncestor(context: unknown): boolean {
+		let current = this.#clientOf(context);
+		for (let depth = 0; current && depth < 64; depth++) {
+			if (this.#reaches(current.global)) return true;
+			let parent: Context;
+			try {
+				parent = current.parent;
+			} catch (error) {
+				return false;
+			}
+			if (parent === current.global) return false;
+			current = this.#clientOf(parent);
+		}
+		return false;
+	}
+	/**
+	 * Why Chrome refuses this document's navigation of `target` to
+	 * `destination` (the reason its console message gives), or null when it
+	 * allows it: LocalFrame::CanNavigate, measured in Chrome 152, 156 and 157
+	 * alike (top-navigation suite). The real frames cannot decide it: inside
+	 * the host's frame the proxied top is no browser top, and every proxied
+	 * window is of one real origin. A sandboxed document navigates what
+	 * DocumentClient.mayNavigate allows. Any other navigates a window of
+	 * its origin or under one (its descendants, a frame whose parent is its
+	 * origin's), its opener, the top level its opener's ancestors reach,
+	 * and its proxied top when it has had a user's activation (sticky: a
+	 * click long ago counts) or the destination is of the top's origin (or
+	 * registrable domain, of its scheme); Chrome's framebusting
+	 * intervention refuses the rest. A javascript: URL goes only to a
+	 * window this document reaches.
+	 */
+	#refusal(target: Context, destination: URL): string | null {
+		const client = this.client;
+		if (target === client.global) return null;
+		if (destination.protocol === 'javascript:' && !this.#reaches(target))
+			return 'The frame attempting navigation must be same-origin with the target if navigating to a javascript: url';
+		const top = client.proxiedTop;
+		if (client.sandboxFlags !== null) {
+			if (client.mayNavigate(target)) return null;
+			if (target !== top)
+				return 'The frame attempting navigation is sandboxed, and is therefore disallowed from navigating its ancestors.';
+			if (
+				!client.allows('allow-top-navigation') &&
+				!client.allows('allow-top-navigation-by-user-activation')
+			)
+				return "The frame attempting navigation of the top-level window is sandboxed, but the flag of 'allow-top-navigation' or 'allow-top-navigation-by-user-activation' is not set.";
+			if (!client.allows('allow-top-navigation'))
+				return "The frame attempting navigation of the top-level window is sandboxed with the 'allow-top-navigation-by-user-activation' flag, but has no user activation (aka gesture). See https://www.chromestatus.com/feature/5629582019395584.";
+			return FRAMEBUSTING;
+		}
+		if (this.#reachesAncestor(target)) return null;
+		const targetClient = this.#clientOf(target);
+		// a top level of the proxied world: this document's opener, or one
+		// whose opener this document reaches
+		if (targetClient && targetClient.proxiedTop === target) {
+			try {
+				const opener = client.global.opener;
+				if (opener === target) return null;
+				const theirs = target.opener;
+				if (theirs && this.#reachesAncestor(theirs)) return null;
+			} catch (error) {
+				// an opener of another real origin
+			}
+		}
+		if (target === top) {
+			let active = false;
+			try {
+				active = client.global.navigator.userActivation?.hasBeenActive === true;
+			} catch (error) {
+				// no user activation API
+			}
+			if (active) return null;
+			const topURL = targetClient?.url.url;
+			if (topURL && !targetClient!.sandboxedOpaque) {
+				if (topURL.origin === destination.origin) return null;
+				const domain = registrableDomainOf(topURL.hostname);
+				if (
+					domain !== '' &&
+					domain === registrableDomainOf(destination.hostname) &&
+					topURL.protocol === destination.protocol
+				)
+					return null;
+			}
+			return FRAMEBUSTING;
+		}
+		return "The frame attempting navigation is neither same-origin with the target, nor is it the target's parent or opener.";
+	}
+	/**
+	 * Chrome's refusal of a navigation: its console message (printed by the
+	 * browser, so no page hook sees it) and the SecurityError of the
+	 * Location member, naming the URL as resolved
+	 */
+	#refuse(
+		target: Context,
+		reason: string,
+		member: 'href' | 'assign' | 'replace',
+		destination: URL,
+	): DOMException {
+		const client = this.client;
+		let from: string;
+		try {
+			from = client.global.location.href;
+			if (/^https?:$/.test(new URL(from).protocol))
+				from = client.location.toString();
+		} catch (error) {
+			from = '';
+		}
+		const origin = this.#clientOf(target)?.origin ?? 'null';
+		try {
+			Reflect.apply(nativeConsoleError, client.global.console, [
+				`Unsafe attempt to initiate navigation for frame with origin '${origin}' from frame with URL '${from}'. ${reason}\n`,
+			]);
+		} catch (error) {
+			// no console
+		}
+		return client.navigationRefused(member, member !== 'href', destination);
+	}
+	/**
+	 * Navigate `target`, another window of the proxied world, to
+	 * `destination` as this document's navigation: refused as Chrome
+	 * refuses it (#refusal), else made from that window's own realm through
+	 * its Location (the browser lets a window navigate itself, and its
+	 * Location keeps the route, the history entry and the fresh browsing
+	 * context of a frame that changes origin), once this document has told
+	 * the service worker it started it (INITIATOR_ROUTE): its Referer by its
+	 * referrer policy, Sec-Fetch-Site from its origin, and Sec-Fetch-User
+	 * only when it had activation and is of the target document's site
+	 * (measured: a click in a frame of another site sends none). The
+	 * navigation starts a moment later, as natively (a navigation is never
+	 * synchronous).
+	 */
+	#navigateOther(
+		target: Context,
+		value: urlLike,
+		member: 'href' | 'assign' | 'replace',
+	) {
+		const client = this.client;
+		const destination = new URL(value, client.baseURL.toString());
+		const targetClient = this.#clientOf(target);
+		// a window that runs nothing yet (a popup or frame still on its
+		// initial about:blank): only a sandbox decides, and the browser lets
+		// this document navigate it
+		if (!targetClient) {
+			if (!client.mayNavigate(target))
+				throw client.navigationRefused(member, member !== 'href', destination);
+			target.location.replace(
+				routeHTML(
+					new StompURL(destination, client.url),
+					client.url,
+					client.config,
+					false,
+					false,
+				),
+			);
+			return;
+		}
+		const reason = this.#refusal(target, destination);
+		if (reason !== null)
+			throw this.#refuse(target, reason, member, destination);
+		const replace = member === 'replace';
+		const go = () => {
+			try {
+				const standIn = (target.location as Record<string, any>)[
+					client.names.globalProxy
+				] as Location;
+				const descriptor = Reflect.getOwnPropertyDescriptor(
+					standIn,
+					replace ? 'replace' : 'href',
+				);
+				const method = replace ? descriptor?.value : descriptor?.set;
+				if (typeof method === 'function')
+					targetClient.callIn(method, standIn, [destination.href]);
+			} catch (error) {
+				// the window went away
+			}
+		};
+		if (!/^https?:$/.test(destination.protocol)) return go();
+		let active = false;
+		try {
+			active = client.global.navigator.userActivation?.isActive === true;
+		} catch (error) {
+			// no user activation API
+		}
+		let sameSite = false;
+		try {
+			sameSite =
+				!client.sandboxedOpaque &&
+				!targetClient.sandboxedOpaque &&
+				siteOf(client.url.url, getPublicSuffix) ===
+					siteOf(targetClient.url.url, getPublicSuffix);
+		} catch (error) {
+			// no URL to compare
+		}
+		const routed = this.#voucher();
+		let started = false;
+		const start = () => {
+			if (started) return;
+			started = true;
+			// (in the target's realm: this document may be gone by then)
+			targetClient.global.setTimeout(targetClient.ownCallback(go), 0);
+		};
+		if (!routed) return start();
+		// bounded: a worker that does not answer delays nothing for long
+		targetClient.global.setTimeout(
+			targetClient.ownCallback(start),
+			INITIATOR_WAIT_MS,
+		);
+		routed
+			.nativeFetch(
+				`${routed.global.location.origin}${routed.directory}${INITIATOR_ROUTE}`,
+				{
+					method: 'POST',
+					body: JSON.stringify({
+						url: destination.href,
+						activated: active && sameSite,
+						opaque: client.sandboxedOpaque,
+					}),
+					cache: 'no-store',
+				},
+			)
+			.then(start, start);
+	}
+	/**
+	 * The routed document that speaks for this one to the service worker:
+	 * this one, or for a document the page made (about:srcdoc, a written
+	 * about:blank) the nearest routed one of its origin above it
+	 */
+	#voucher(): DocumentClient | null {
+		const routed = this.client.routedClient() as DocumentClient | null;
+		if (!routed) return null;
+		try {
+			return routed === this.client ||
+				routed.url.url.origin === this.client.url.url.origin
+				? routed
+				: null;
+		} catch (error) {
+			return null;
+		}
+	}
 	/**
 	 * Navigate `context` (a window behind a restricted stand-in) to the
-	 * page's `value`. A sandboxed document navigates only what it may
-	 * (DocumentClient.mayNavigate); the one it may but the browser would not
-	 * let it (the proxied top, an ancestor of its real frame) is navigated by
-	 * that window's own realm, as a navigation the target starts.
+	 * page's `value`: as #navigateOther
 	 */
 	#navigate(context: Context, value: urlLike, member: 'replace' | 'href') {
-		const destination = new URL(value, this.client.baseURL.toString());
-		if (!this.client.mayNavigate(context))
-			throw this.client.navigationRefused(
-				member,
-				member === 'replace',
-				destination,
-			);
-		const routed = routeHTML(
-			new StompURL(destination, this.client.url),
-			this.client.url,
-			this.client.config,
-			false,
-			nestedRouteOf(context, this.client.names.client),
-		);
-		const target = (context as Record<string, any>)[
-			this.client.names.client
-		] as DocumentClient | undefined;
-		if (this.client.sandboxFlags !== null && target)
-			target.callIn(context.location.replace, context.location, [routed]);
-		else context.location.replace(routed);
+		this.#navigateOther(context, value, member);
 	}
 	/**
 	 * A message that holds or transfers a tainted ImageBitmap is not sent
@@ -533,9 +793,20 @@ export default class ContextModule extends Module<DocumentClient> {
 
 		const restrictedLocation = this.restrictObject('Location', {
 			replace: {
-				value: (url: urlLike) => {
-					this.#navigate(context, url, 'replace');
-				},
+				// (the browser's own count check first)
+				value: proxyModule.wrapFunction(
+					this.client.global.location.replace,
+					(target, that, args) => {
+						catchRequiredArguments(
+							args.length,
+							1,
+							'Location',
+							'replace',
+							this.client.global,
+						);
+						this.#navigate(context, String(args[0]), 'replace');
+					},
+				),
 			},
 			href: {
 				set: (value: urlLike) => {
@@ -995,6 +1266,18 @@ export default class ContextModule extends Module<DocumentClient> {
 			const frame = frameOfHeld(this.client, target);
 			if (!frame?.now || (frame.now as unknown) === target) return undefined;
 			return this.#restrict(frame.now as unknown as Context);
+		};
+
+		// another proxied window's location, set or called by this document
+		// (Sandbox's gated Location, the access API's `w.location = url`)
+		// (false for a URL that does not parse: the location's own setter or
+		// method throws the browser's error for it)
+		this.client.navigateWindow = (target, value, member) => {
+			if (!isWindow(target) || !this.#clientOf(target)) return false;
+			const url = String(value);
+			if (failsToParse(this.client, url)) return false;
+			this.#navigateOther(target, url, member);
+			return true;
 		};
 
 		this.client.resolveTop = (value) => {

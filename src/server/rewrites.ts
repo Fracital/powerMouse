@@ -105,6 +105,7 @@ import {
 	CREDENTIALS_HEADER,
 	ENCODING_MARKER,
 	HOPS_MARKER,
+	INITIATOR_ROUTE,
 	KEPT_MARKER,
 	LOAD_HEADER,
 	MEMORY_MARKER,
@@ -217,7 +218,9 @@ import {
 	NavigationChain,
 	navigationChain,
 	NavigationHint,
+	recordNavigationInitiator,
 	takeNavigationHint,
+	takeNavigationInitiator,
 } from './navigationHints';
 import {
 	ORB_SNIFF_BYTES,
@@ -1005,11 +1008,20 @@ function genericForward(
 						);
 		let internal = granted !== null || (!!context?.internal && !context.cors);
 		const load = loadOf(granted);
+		// a navigation of a window that another document started, which the
+		// inject made from that window's realm (NavigationInitiator): that
+		// document is its initiator
+		const initiated =
+			serverRequest.mode === 'navigate'
+				? takeNavigationInitiator(url.url.href)
+				: null;
 		// a page's own request from an opaque origin (a document the page
-		// sandboxed without allow-same-origin): never a navigation
+		// sandboxed without allow-same-origin), or a navigation such a
+		// document started
 		const opaque =
-			serverRequest.mode !== 'navigate' &&
-			serverRequest.headers.has(OPAQUE_HEADER);
+			(serverRequest.mode !== 'navigate' &&
+				serverRequest.headers.has(OPAQUE_HEADER)) ||
+			initiated?.origin === 'null';
 		requestHeaders.delete(OPAQUE_HEADER);
 		// an XMLHttpRequest with upload listeners (the CORS-preflight flag)
 		const forcePreflight = serverRequest.headers.has(PREFLIGHT_HEADER);
@@ -1088,12 +1100,15 @@ function genericForward(
 		// its first request with (below) is that first one again
 		const returned = navigation ? takeReturn(serverRequest.url) : undefined;
 		const policy =
+			initiated?.policy ||
 			returned?.policy ||
 			serverRequest.referrerPolicy ||
 			DEFAULT_REFERRER_POLICY;
-		const requestReferrer = returned
-			? returned.referrer
-			: serverRequest.referrer;
+		const requestReferrer = initiated
+			? initiated.referrer
+			: returned
+				? returned.referrer
+				: serverRequest.referrer;
 
 		// A frame's first navigation in a cross-origin isolated document, to a
 		// document that will not be isolated there (the embedder's permission
@@ -1141,6 +1156,8 @@ function genericForward(
 					policy,
 					url: returned?.url ?? serverRequest.url,
 				});
+				// (and its initiator, for the request that comes back)
+				if (initiated) recordNavigationInitiator(url.url.href, initiated);
 				const headers = new Headers({
 					'content-type': 'text/html; charset=utf-8',
 					'cache-control': 'no-store',
@@ -1402,21 +1419,28 @@ function genericForward(
 		let hint: NavigationHint | null = null;
 		if (navigation) {
 			hint = takeNavigationHint(url.url.href);
-			if (!hint && !known && !referrer && !previousHop)
+			if (!hint && !known && !referrer && !previousHop && !initiated)
 				hint = await awaitNavigationHint(
 					url.url.href,
 					rewriter.config.navigationHintWait ?? NAVIGATION_HINT_WAIT_MS,
 				);
 		}
 		const hinted =
-			hint && !referrer && !previousHop ? new URL(hint.origin) : null;
+			initiated && initiated.origin !== 'null'
+				? new URL(initiated.origin)
+				: hint && !referrer && !previousHop
+					? new URL(hint.origin)
+					: null;
 		const initiator =
 			known ??
 			hinted ??
 			(previousHop?.initiator ? new URL(previousHop.initiator) : null);
 		// the page had user activation when this navigation (or the chain it
 		// redirects) began
-		const activated = !!(hint?.activated || previousHop?.user);
+		// (the initiator's, when another document started it)
+		const activated = initiated
+			? initiated.activated
+			: !!(hint?.activated || previousHop?.user);
 		// an opaque origin is the same origin as nothing: its Origin is "null"
 		const sameOrigin =
 			!opaque &&
@@ -5065,6 +5089,51 @@ export function registerRewrites(
 	});
 
 	registerServiceWorkerScripts(router, rewriter);
+
+	// a document about to navigate another window from that window's realm
+	// names itself its initiator (navigationHints.ts NavigationInitiator):
+	// who it is is its client, verified to be a routed document of this
+	// controller, and its policy is the one the browser gave the request
+	router.routes.set(
+		new RegExp(`^/${INITIATOR_ROUTE}$`),
+		async (serverRequest, _url, context) => {
+			const refused = () => new Response(null, { status: 403 });
+			if (
+				serverRequest.method !== 'POST' ||
+				!context?.clientId ||
+				typeof clients === 'undefined'
+			)
+				return refused();
+			const prefix = `${new URL(serverRequest.url).origin}${rewriter.directory}`;
+			const found = await clients.get(context.clientId);
+			if (!found?.url.startsWith(prefix)) return refused();
+			let origin: string;
+			let target: URL;
+			let body: { url?: unknown; activated?: unknown; opaque?: unknown };
+			try {
+				origin = parseRoutedURL(found.url, rewriter.codec, prefix).url.url
+					.origin;
+				const text = await serverRequest.text();
+				if (text.length > 20000) return refused();
+				body = JSON.parse(text);
+				target = new URL(String(body.url));
+			} catch (error) {
+				return refused();
+			}
+			if (!/^https?:$/.test(target.protocol)) return refused();
+			const opaque = body.opaque === true;
+			recordNavigationInitiator(target.href, {
+				referrer: opaque ? '' : found.url,
+				policy: serverRequest.referrerPolicy,
+				origin: opaque ? 'null' : origin,
+				activated: body.activated === true,
+			});
+			return new Response(null, {
+				status: 204,
+				headers: { 'cache-control': 'no-store' },
+			});
+		},
+	);
 
 	// todo: parse more request headers
 	router.routes.set(

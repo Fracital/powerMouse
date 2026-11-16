@@ -493,8 +493,35 @@ export default class AccessModule extends Module<Client> {
 						}
 						const foreign =
 							typeof theirs?.set2 === 'function' && theirs.set2 !== api.set2;
-						if (foreign && key === 'location')
-							this.client.gateNavigation?.(target, righthand);
+						// another proxied window's location: navigated as this
+						// document's navigation (Context navigateWindow), with the
+						// value the assignment makes (`w.location += '#x'` too)
+						if (foreign && key === 'location' && this.client.navigateWindow) {
+							let value: unknown;
+							let assigned = false;
+							const property = NativeSymbol();
+							const result = operate(
+								{
+									get [property]() {
+										return api.get(target.location, 'location', target);
+									},
+									set [property](next: unknown) {
+										value = next;
+										assigned = true;
+									},
+								},
+								property,
+								righthand,
+							);
+							if (!assigned) return result;
+							// (converted once, as the setter would)
+							const url = String(value);
+							if (this.client.navigateWindow(target, url, 'href'))
+								return result;
+							righthand = url;
+							operate = (object: any, property: any, next: any) =>
+								(object[property] = next);
+						}
 						if (foreign)
 							return (theirs as { set2: (...args: unknown[]) => unknown }).set2(
 								target,
@@ -616,7 +643,7 @@ export default class AccessModule extends Module<Client> {
 							) {
 								const standIn = object[names.globalProxy];
 								return key === 'location' && this.client.gateLocation
-									? this.client.gateLocation(object, standIn)
+									? this.client.gateLocation(object, standIn, container)
 									: standIn;
 							}
 						} catch (error) {

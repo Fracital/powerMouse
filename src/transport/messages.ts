@@ -157,6 +157,14 @@ export const SEALER_ROUTE = 'sealer';
  */
 export const ECHO_ROUTE = 'echo';
 /**
+ * The service worker's route under an address where a document announces,
+ * with a POST of `{ url, activated, opaque }` (url: the real destination),
+ * that it is about to navigate another window from that window's realm
+ * (src/server/navigationHints.ts NavigationInitiator). The request itself
+ * says who it is (its client) and its referrer policy.
+ */
+export const INITIATOR_ROUTE = 'initiator';
+/**
  * A Server-Timing metric the worker adds to a response of another origin
  * whose Timing-Allow-Origin lets the page see its timing: every route is
  * same-origin to the browser, so only the worker knows. The inject's

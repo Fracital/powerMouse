@@ -286,6 +286,47 @@ Filled in commit by commit; see the CHANGELOG for each.
   page's own `history.back()` does not. A popup held the same way
   stays open: a fresh context for it would cut its opener
   (docs/scramjet-parity.md section 2c).
+- **A frame navigates its top and its parent as natively** (top-navigation
+  suite: 65 cases, Chrome 152, 156 and 157 alike natively, against both
+  modes). A frame's `top.location = url`, `top.location.href = url`,
+  `top.location.replace(url)` and the same on `parent` threw a SecurityError
+  through the proxy: the inject called the target's location from the
+  frame, and the browser refused it, since the host frames the proxied top
+  sandboxed and a sandboxed frame navigates no ancestor; the message named
+  `replace` for an `href` write, its console line showed routed URLs, and a
+  write that did go through made no history entry. Now the inject decides
+  as Chrome's `LocalFrame::CanNavigate` does (Context `#refusal`): a
+  document navigates a window of its origin-domain or under one, its
+  opener, and its top when it has had a user's activation (sticky), or the
+  destination is of the top's origin or registrable domain; anything else
+  is refused with Chrome's SecurityError ("Failed to set a named property
+  'href' on 'Location'", "Failed to execute 'replace' on 'Location'") and
+  its console message, the framebusting intervention's, the sandbox's
+  (`allow-top-navigation`, `allow-top-navigation-by-user-activation`) and
+  "neither same-origin with the target, nor is it the target's parent or
+  opener" (a grandchild of a third origin and its parent). A read of the
+  top's `location.href` still throws, and `assign` stays out of reach on
+  another origin's Location. An allowed navigation is made from the target
+  window's realm through its own Location (route, history entry, fresh
+  context as for its own navigation), after the frame told the service
+  worker it started it (`INITIATOR_ROUTE`, a POST its routed document makes,
+  which carries its referrer policy, and which no resource timing entry of
+  the page shows, compared with the page's entries natively): the request's
+  Referer is the frame's
+  URL under the frame's policy (none from an opaque one), Sec-Fetch-Site
+  compares the frame's origin, and Sec-Fetch-User is `?1` only when the
+  frame had activation and is of the target document's site (measured:
+  Chrome sends none for a click in a frame of another site). The same goes
+  for a same-origin frame's navigation of its top, whose Referer was the
+  top's own URL. Left: Chrome consumes the frame's activation when a frame
+  of the top's site navigates the top, and when
+  `allow-top-navigation-by-user-activation` lets it, which the inject
+  cannot do (`navigator.userActivation.isActive` reads true after); a frame
+  that lands in a frame gains no history entry (the fresh context, above);
+  an announcement names only its own document as the initiator (a page
+  could pre-announce a navigation to a URL another window then makes,
+  claiming it as its own, with a Referer of its own URL, which it could
+  send by navigating there itself).
 - **Where a site ends** (samesite, sop-partitions and site-facts, with
   the names of `test/private-sites.mjs`: `stomp-a`,
   `www.stomp-a` and `stomp-b` under `github.io`, `blogspot.com`,
