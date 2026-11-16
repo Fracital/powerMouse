@@ -1231,6 +1231,15 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- Reading the property descriptors of another window or of its document
+  reads as natively. `Object.getOwnPropertyDescriptor(frame.document,
+'location')` handed out the getter that returns the frame's real
+  Location (the proxy's URL, and a way to navigate the frame past the
+  rewriter); a frame's document is now treated as its window is. And a
+  global the inject defines only when it is first looked at read as the
+  inject's accessor (with its source) when the parent read the frame's
+  window's descriptors; such globals of another proxied window are now
+  defined before they are read, as this window's were. (realm-surface.)
 - Every DOMException the inject throws or rejects with in the browser's
   place has a stack, as the browser's own do (V8 captures one for each
   DOMException it throws; one made with `new DOMException` has none, and

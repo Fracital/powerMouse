@@ -50,6 +50,14 @@ export default class ReflectionModule extends Module<Client> {
 		// worker scope or a prototype of the scope (WorkerGlobalScope.prototype
 		// holds a worker's `location`): the objects whose `top`, `location`
 		// and `eval` the page must not see raw
+		const nativeDefaultView = (global as { Document?: { prototype: object } })
+			.Document
+			? Reflect.getOwnPropertyDescriptor(
+					(global as unknown as { Document: { prototype: object } }).Document
+						.prototype,
+					'defaultView',
+				)?.get
+			: undefined;
 		const scopePrototypes = new Set<object>();
 		for (
 			let prototype = Object.getPrototypeOf(global);
@@ -62,10 +70,57 @@ export default class ReflectionModule extends Module<Client> {
 			if (target === global || target === document) return true;
 			if (scopePrototypes.has(target)) return true;
 			try {
-				const scope = target as { window?: unknown; self?: unknown };
-				return scope.window === target || scope.self === target;
+				const scope = target as {
+					window?: unknown;
+					self?: unknown;
+					nodeType?: unknown;
+				};
+				if (scope.window === target || scope.self === target) return true;
+				// the document of another window (a frame's contentDocument):
+				// its `location` is that window's, and its descriptor's getter
+				// handed out the frame's real Location, the proxy's URL and a
+				// way to navigate the frame past the rewriter
+				return (
+					scope.nodeType === 9 &&
+					!!nativeDefaultView &&
+					Reflect.apply(nativeDefaultView, target, []) !== null
+				);
 			} catch (error) {
 				return false;
+			}
+		};
+
+		// The globals a module defines only when they are first looked at
+		// (lazyGlobals), of this window or of another this bundle or its own
+		// hooked: until then such a global is an accessor of the inject's,
+		// and a page that read its descriptor on a frame's window from
+		// outside (the parent's Object.getOwnPropertyDescriptor) saw the
+		// accessor and its source. Another window is told by the browser
+		// (the native `window` getter, which no Proxy answers), so the
+		// client's name is read from nothing a page made.
+		const nativeWindow = Reflect.getOwnPropertyDescriptor(
+			global,
+			'window',
+		)?.get;
+		const lazyOf = (target: unknown): Map<string, () => void> | undefined => {
+			if (target === global) return this.client.lazyGlobals;
+			if (!nativeWindow || typeof target !== 'object' || target === null)
+				return undefined;
+			try {
+				// (a plain read first: the native getter throws for every
+				// object that is no window, and reflection is asked of many)
+				if (
+					(target as { window?: unknown }).window !== target ||
+					Reflect.apply(nativeWindow, target, []) !== target
+				)
+					return undefined;
+				return (
+					Reflect.getOwnPropertyDescriptor(target, this.client.names.client)
+						?.value as Client | undefined
+				)?.lazyGlobals;
+			} catch (error) {
+				// no window, or another origin's
+				return undefined;
 			}
 		};
 
@@ -117,8 +172,7 @@ export default class ReflectionModule extends Module<Client> {
 			holder[name] = proxyModule.wrapFunction(
 				holder[name],
 				(target, that, args) => {
-					if (args[0] === global && typeof args[1] === 'string')
-						this.client.lazyGlobals.get(args[1])?.();
+					if (typeof args[1] === 'string') lazyOf(args[0])?.get(args[1])?.();
 					const descriptor = Reflect.apply(target, that, args) as
 						PropertyDescriptor | undefined;
 					if (
@@ -152,9 +206,8 @@ export default class ReflectionModule extends Module<Client> {
 		global.Object.getOwnPropertyDescriptors = proxyModule.wrapFunction(
 			global.Object.getOwnPropertyDescriptors,
 			(target, that, args) => {
-				if (args[0] === global)
-					for (const resolve of [...this.client.lazyGlobals.values()])
-						resolve();
+				const lazy = lazyOf(args[0]);
+				if (lazy) for (const resolve of [...lazy.values()]) resolve();
 				let descriptors = Reflect.apply(target, that, args) as Record<
 					PropertyKey,
 					PropertyDescriptor
@@ -366,8 +419,7 @@ export default class ReflectionModule extends Module<Client> {
 				objectPrototype[name] = proxyModule.wrapFunction(
 					objectPrototype[name],
 					(target, that, args) => {
-						if (that === global && typeof args[0] === 'string')
-							this.client.lazyGlobals.get(args[0])?.();
+						if (typeof args[0] === 'string') lazyOf(that)?.get(args[0])?.();
 						const accessor = Reflect.apply(target, that, args);
 						if (!accessor || !windowLike(that) || !unforgeable(args[0]))
 							return accessor;
