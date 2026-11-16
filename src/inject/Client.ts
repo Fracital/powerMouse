@@ -335,6 +335,8 @@ export default class Client {
 	get opaqueRequests(): boolean {
 		return false;
 	}
+	/** @internal set by the ResourceTiming module: whether the page's resource timing has no entry for the load `entry` is of */
+	unreportedEntry?: (entry: object) => boolean;
 	/** @internal set by the Context module: post `args` to the window behind a restricted stand-in this context holds, from this realm; false when `target` is not one */
 	postToRestricted?: (target: unknown, args: unknown[]) => boolean;
 	// pristine copies taken before modules hook them: the Navigator module

@@ -101,7 +101,9 @@ import type {
 import {
 	ABORT_HEADER,
 	CACHED_MARKER,
+	CORS_MARKER,
 	CREDENTIALS_HEADER,
+	ENCODING_MARKER,
 	HOPS_MARKER,
 	KEPT_MARKER,
 	LOAD_HEADER,
@@ -113,8 +115,12 @@ import {
 	RESPONSE_TYPE_HEADER,
 	REVALIDATED_MARKER,
 	SEALER_ROUTE,
+	SIZE_MARKER,
 	TAO_MARKER,
+	TIMING_DENIED_MARKER,
 	TIMING_ONLY_MARKER,
+	UNREPORTED_MARKER,
+	WORKER_SCRIPT_MARKER,
 	XHR_MARKER,
 } from '../transport/messages';
 import { fragmentOf, queryOf, withQuery } from '../urlShape';
@@ -369,6 +375,12 @@ interface RedirectHop {
 	 * spec's response tainting)
 	 */
 	crossed?: boolean;
+	/**
+	 * a hop of the chain was of another origin and its Timing-Allow-Origin
+	 * did not name the initiator: the load's resource timing is restricted
+	 * whatever its last hop allows (the timing allow check fails for good)
+	 */
+	timingDenied?: boolean;
 	/**
 	 * the chain is a load the inject copies for a page, under a grant its
 	 * first hop took (loadGrants.ts): the browser repeats the token on every
@@ -659,6 +671,8 @@ interface Note {
 		stored: Response | null;
 	};
 	rewriteBy?: 'wasm' | 'js';
+	/** how many bytes the origin's body was, when the transform read it (SIZE_MARKER) */
+	bytes?: number;
 }
 
 interface Rewriter {
@@ -879,10 +893,18 @@ function genericForward(
 				noteKeptLoad(serverRequest.url, 'memory', context?.clientId);
 				return recentServed;
 			}
+			// (in resource timing it reads as what the renderer's memory cache
+			// answers, messages.ts Delivery: natively the document's own second
+			// use of what it has, which is no load at all)
+			const headers = new Headers(recent.headers);
+			if (!headers.get('server-timing')?.includes(CACHED_MARKER))
+				headers.append('server-timing', CACHED_MARKER);
+			if (!headers.get('server-timing')?.includes(MEMORY_MARKER))
+				headers.append('server-timing', MEMORY_MARKER);
 			return new Response(recent.body, {
 				status: recent.status,
 				statusText: recent.statusText,
-				headers: recent.headers,
+				headers,
 			});
 		}
 
@@ -3067,6 +3089,10 @@ function genericForward(
 			responseHeaders.get(RESPONSE_TYPE_HEADER)?.startsWith('opaque')
 		)
 			responseHeaders.append('server-timing', OPAQUE_MARKER);
+		// (and a cors response of its own has a status the page's resource
+		// timing shows, as a cors answer from the network has: CORS_MARKER)
+		else if (responseHeaders.get(RESPONSE_TYPE_HEADER)?.startsWith('cors'))
+			responseHeaders.append('server-timing', CORS_MARKER);
 		const redirect =
 			REDIRECT_STATUSES.includes(response.status) &&
 			responseHeaders.has('location');
@@ -3089,16 +3115,34 @@ function genericForward(
 			serviceWorkers.isEmulated(context?.clientId, clientRoute ?? undefined);
 		// another origin's timing the page may see (its Timing-Allow-Origin
 		// names the page): the inject reads the marks below
-		const timingShown =
+		// (every hop of another origin has to allow it: a redirect chain that
+		// went through one that did not is restricted to its end, and one that
+		// came back to the page's origin past hops that all allowed it is
+		// shown, though the entry's name is another origin's)
+		const timingDenied =
 			fromNetwork &&
-			crossOrigin &&
-			timingAllowed(response.headers, policyOrigin!);
+			(!!previousHop?.timingDenied ||
+				(crossOrigin && !timingAllowed(response.headers, policyOrigin!)));
+		const timingShown = fromNetwork && chainCrossed && !timingDenied;
 		if ((fromNetwork && corsChecked) || opaqueFetch) {
 			const location = responseHeaders.get('location');
 			const serverTiming = responseHeaders.get('server-timing');
+			const encoding = responseHeaders.get('content-encoding')?.trim();
 			responseHeaders = opaqueFetch
 				? new Headers()
 				: exposedHeaders(responseHeaders, credentialsIncluded);
+			// (and the entry's contentEncoding from the header, which is not
+			// one the page may read either: the inject is told it apart)
+			if (
+				!opaqueFetch &&
+				encoding &&
+				/^[\w-]+$/.test(encoding) &&
+				!responseHeaders.has('content-encoding')
+			)
+				responseHeaders.append(
+					'server-timing',
+					`${ENCODING_MARKER};desc=${encoding}`,
+				);
 			if (redirect && location !== null)
 				responseHeaders.set('location', location);
 			// the browser takes the entry's Server-Timing from the headers it
@@ -3144,6 +3188,40 @@ function genericForward(
 		// unless its Timing-Allow-Origin names the page: the inject reads this
 		// mark (and takes it out of the headers a fetch or XHR shows)
 		if (timingShown) responseHeaders.append('server-timing', TAO_MARKER);
+		// (a chain that began at the page's own origin has its name: the
+		// inject is told that it went where the page may not see)
+		else if (timingDenied && !redirect)
+			responseHeaders.append('server-timing', TIMING_DENIED_MARKER);
+		// the status and content type of another origin's answer are in the
+		// page's resource timing when the request was a cors one (it passed
+		// the check, or the page got a network error instead)
+		if (fromNetwork && chainCrossed && policyMode === 'cors' && !redirect)
+			responseHeaders.append('server-timing', CORS_MARKER);
+		// what a style sheet of another origin loads is in no resource timing
+		// when the page took the sheet without cors (the sheet's content is
+		// not the page's to learn from its entries): the sheet is remembered
+		// by the client and its address, which its loads name as their
+		// referrer, and each of them is marked for the inject to leave out
+		// (UNREPORTED_MARKER). A sheet such a sheet imports is one too.
+		if (!navigation && !redirect) {
+			const fromOpaqueSheet =
+				!!serverRequest.referrer &&
+				opaqueSheets.has(sheetKey(context?.clientId, serverRequest.referrer));
+			if (fromOpaqueSheet)
+				responseHeaders.append('server-timing', UNREPORTED_MARKER);
+			if (
+				serverRequest.destination === 'style' &&
+				(fromOpaqueSheet ||
+					(fromNetwork && chainCrossed && policyMode === 'no-cors'))
+			) {
+				opaqueSheets.add(sheetKey(context?.clientId, serverRequest.url));
+				if (opaqueSheets.size > OPAQUE_SHEETS)
+					opaqueSheets.delete(opaqueSheets.values().next().value!);
+			}
+			// the script of a dedicated worker (WORKER_SCRIPT_MARKER)
+			if (serverRequest.destination === 'worker')
+				responseHeaders.append('server-timing', WORKER_SCRIPT_MARKER);
+		}
 		// a copy of a load the page may not read says so to the inject that
 		// asked for it, which keeps the copy out of the page's reach (only a
 		// granted request's answer carries the header)
@@ -3197,6 +3275,7 @@ function genericForward(
 						? { tainted: true }
 						: {}),
 					...(chainCrossed ? { crossed: true } : {}),
+					...(timingDenied ? { timingDenied: true } : {}),
 					...(granted !== null && loadToken !== null
 						? { grant: { token: loadToken, load: granted } }
 						: {}),
@@ -3505,6 +3584,16 @@ function genericForward(
 				responseHeaders.delete('expires');
 				responseHeaders.delete('age');
 			}
+			// the sizes the origin's body had, for the page's resource timing:
+			// the browser counts the bytes it is given here (SIZE_MARKER)
+			const sizes =
+				serverRequest.method === 'HEAD'
+					? null
+					: sizeMark(
+							response.headers,
+							transformed !== false ? (note.bytes ?? null) : null,
+						);
+			if (sizes !== null) responseHeaders.append('server-timing', sizes);
 			const kept = encoded ?? (output instanceof Blob ? output : null);
 			if (
 				recentKey !== null &&
@@ -3688,6 +3777,12 @@ const UTF8 = new TextEncoder();
 const recentOutputs = new Map<string, RecentOutput & { at: number }>();
 let recentBytes = 0;
 
+/** the style sheets of another origin their clients loaded without cors (UNREPORTED_MARKER), oldest first */
+const opaqueSheets = new Set<string>();
+const OPAQUE_SHEETS = 2048;
+const sheetKey = (clientId: string | undefined, url: string) =>
+	`${clientId ?? ''}\u0000${url.split('#')[0]}`;
+
 /** what makes two requests the same request of the same document, or null for one that is never answered from what it was given before */
 function recentOutputKey(
 	request: Request,
@@ -3818,8 +3913,35 @@ function servedHeaders(headers: Headers): Headers {
  */
 function keptHeaders(headers: Headers): Headers {
 	const out = servedHeaders(headers);
+	// (the sizes of the origin's body are the bytes', whatever load they
+	// answer; two responses are not compared by them either)
+	const sizes = (headers.get('server-timing') ?? '')
+		.split(',')
+		.map((metric) => metric.trim())
+		.find((metric) => metric.startsWith(`${SIZE_MARKER};`));
+	if (sizes) out.append('server-timing', sizes);
 	out.append('server-timing', KEPT_MARKER);
 	return out;
+}
+
+/**
+ * The Server-Timing metric that tells the inject the sizes the origin's
+ * body had (SIZE_MARKER), or null when the browser's own count of the
+ * answer is the origin's already. `headers` are the origin's and `read` the
+ * bytes of the body a transform read (null for a body passed through).
+ * A body that came encoded is as long as its Content-Length says; without
+ * one (a chunked answer) nothing says how long it was before the transport
+ * decoded it, and it counts as its decoded bytes.
+ */
+function sizeMark(headers: Headers, read: number | null): string | null {
+	const encoding = (headers.get('content-encoding') ?? '').trim().toLowerCase();
+	const encoded = encoding !== '' && encoding !== 'identity';
+	const told = headers.get('content-length');
+	const length =
+		told !== null && /^\d+$/.test(told.trim()) ? Number(told.trim()) : null;
+	if (read === null)
+		return encoded && length !== null ? `${SIZE_MARKER};dur=${length}` : null;
+	return `${SIZE_MARKER};dur=${encoded && length !== null ? length : read};desc=${read}`;
 }
 
 /** what the forward sets itself on a rewritten body, whatever the origin said */
@@ -4147,7 +4269,10 @@ export function registerRewrites(
 					})
 				) {
 					note.rewriteCache = 'skip';
-					return rewriteScript(await response.text(), url, type, note);
+					// as Response.text() decodes (a BOM goes, bad bytes are U+FFFD)
+					const read = new Uint8Array(await response.arrayBuffer());
+					note.bytes = read.byteLength;
+					return rewriteScript(new TextDecoder().decode(read), url, type, note);
 				}
 				// The key is a digest of the bytes as they came, and a script kept
 				// rewritten goes out as the store's own Response: a hit decodes
@@ -4155,6 +4280,7 @@ export function registerRewrites(
 				// 10 MB in and 20 MB out, read, decoded and encoded again on
 				// every load).
 				const bytes = new Uint8Array(await response.arrayBuffer());
+				note.bytes = bytes.byteLength;
 				const key = await rewrites.key(
 					[
 						CACHE_GENERATION,
@@ -4279,7 +4405,10 @@ export function registerRewrites(
 			rewriter,
 			async (url, response, _headers, _referrer, _request, note) => {
 				if (!response.ok) return false;
-				const text = await response.text();
+				// as Response.text() decodes (a BOM goes, bad bytes are U+FFFD)
+				const read = new Uint8Array(await response.arrayBuffer());
+				note.bytes = read.byteLength;
+				const text = new TextDecoder().decode(read);
 				try {
 					// the wasm scanner rewrites the sheet (waited for when this
 					// worker has only just been handed the module), and the request
@@ -4392,6 +4521,7 @@ export function registerRewrites(
 				// decode the way the browser would have (BOM, header charset,
 				// <meta charset>), then serve the rewritten document as UTF-8
 				const bytes = new Uint8Array(await response.arrayBuffer());
+				note.bytes = bytes.byteLength;
 				responseHeaders.set('content-type', utf8ContentType(contentType));
 				// a proxied top (not a document a page routed as nested): its
 				// shell loads the rewriter library
@@ -5106,7 +5236,14 @@ function registerServiceWorkerScripts(router: Router, rewriter: Rewriter) {
 			// after install, a script it did not import then is a network error
 			if (text === null) return Response.error();
 			return new Response(modifyJS(text, url, rewriter.config, 'generic'), {
-				headers: SCRIPT_HEADERS,
+				headers: {
+					...SCRIPT_HEADERS,
+					// a service worker's imported script reads in its resource
+					// timing as its script cache's (measured natively, at its
+					// first install too): nothing transferred, no encoded
+					// bytes, the script's own decoded
+					'server-timing': `${CACHED_MARKER}, ${MEMORY_MARKER}, ${SIZE_MARKER};dur=0;desc=${utf8Length(text)}`,
+				},
 			});
 		},
 	);

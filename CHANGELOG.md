@@ -1209,6 +1209,34 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fidelity
 
+- Resource timing reads as the page loaded natively reads it, entry by
+  entry, measured against native Chrome on a fixture of every kind of load
+  (docs/performance.md, performance-resources suite). The service worker
+  tells the inject what the browser's own entry of a worker's answer cannot
+  say, in Server-Timing marks the page never sees:
+  `encodedBodySize`, `decodedBodySize` and `transferSize` are the origin's
+  body's (a rewritten script, style sheet or document counted the rewritten
+  text, a compressed body its decoded bytes); `fetchStart` and the
+  connection times start where the load did, a redirect's times are in
+  order, and `firstInterimResponseStart` and `finalResponseHeadersStart`
+  read by how the load was delivered (every entry had the HTTP cache's
+  shape); a load whose redirects went through an origin that does not name
+  the page in Timing-Allow-Origin is restricted though its URL is the
+  page's own origin's (its timing and sizes were shown), and one that came
+  back past origins that all allowed it is shown; `responseStatus`,
+  `contentType` and `contentEncoding` of another origin's answer follow the
+  request's mode (a `<script crossorigin>` read 0, a no-cors `fetch` 200);
+  an aborted request has no protocol and transferred nothing. Entries the
+  page would not have are left out: a cacheable script the document uses
+  again, the parser's second request for a script or style sheet its
+  preload scanner fetched (Chrome 152 makes one, Chrome 156 does not), and
+  what a style sheet of another origin loads
+  when the page took the sheet without cors. An emulated service worker's
+  `importScripts` reads as its script cache's. What remains different is
+  listed with its reason in docs/performance.md and asserted by the suite
+  (a synchronous XMLHttpRequest has no entry, Early Hints are not seen; on
+  Chrome 152, not on 156, an image in the markup that no cache may keep is
+  fetched twice and has two entries).
 - `performance.memory` is each proxied site's own, as a renderer process of
   its own would report it (`src/inject/dom/modules/Memory.ts`). Every
   proxied site shares the proxy's one process, so `usedJSHeapSize` is the

@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" href="data:," />
+		<title>PERF RESOURCES</title>
+		<script src="/pages/perf-lib.js"></script>
+		<link
+			rel="preload"
+			as="script"
+			href="/perf/r?t=js&n=preloaded&run=__RUN__"
+		/>
+		<link rel="stylesheet" href="/perf/r?t=css&n=sheet&k=sheet&run=__RUN__" />
+		<link
+			rel="stylesheet"
+			href="__CROSS__/perf/r?t=css&n=xsheet&k=xsheet&run=__RUN__"
+		/>
+		<script src="/perf/r?t=js&n=classic&size=2000&run=__RUN__"></script>
+		<script src="/perf/r?t=js&n=preloaded&run=__RUN__"></script>
+		<script async src="/perf/r?t=js&n=async&run=__RUN__"></script>
+		<script defer src="/perf/r?t=js&n=defer&run=__RUN__"></script>
+		<script type="module" src="/pages/perf-module.js?run=__RUN__"></script>
+		<script src="__CROSS__/perf/r?t=js&n=xclassic&run=__RUN__"></script>
+		<script src="__CROSS__/perf/r?t=js&n=xtao&tao=*&run=__RUN__"></script>
+		<script
+			crossorigin
+			src="__CROSS__/perf/r?t=js&n=xcors&cors=1&run=__RUN__"
+		></script>
+	</head>
+	<body>
+		<p class="bg font">text in the fixture's font</p>
+		<p class="xbg">a cross-origin background</p>
+		<img src="/perf/r?t=img&n=img&cc=max-age%3D600&run=__RUN__" />
+		<img src="__CROSS__/perf/r?t=img&n=ximg&cc=max-age%3D600&run=__RUN__" />
+		<img
+			src="__CROSS__/perf/r?t=img&n=ximgtao&tao=origin&cc=max-age%3D600&run=__RUN__"
+		/>
+		<img src="/perf/r?t=img&n=img-nostore&run=__RUN__" />
+		<img src="/perf/r?t=img&n=img404&status=404&run=__RUN__" />
+		<iframe src="/perf/page/child?run=__RUN__&n=frame-same"></iframe>
+		<iframe src="__CROSS__/perf/page/child?run=__RUN__&n=frame-cross"></iframe>
+		<iframe
+			srcdoc="<script src='/pages/perf-lib.js'></script><script src='/pages/perf-child.js?n=frame-srcdoc'></script>"
+		></iframe>
+		<iframe src="about:blank"></iframe>
+		<script src="/pages/perf-resources.js"></script>
+	</body>
+</html>

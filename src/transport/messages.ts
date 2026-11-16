@@ -234,9 +234,58 @@ export const KEPT_MARKER = 'stomp-kept';
  * off the document's navigation timing (`redirectCount`)
  */
 export const HOPS_MARKER = 'stomp-hops';
+/**
+ * A Server-Timing metric the worker adds to a load whose redirect chain
+ * went through another origin that did not let the page see its timing (no
+ * Timing-Allow-Origin naming it): the entry is restricted whatever origin
+ * its name (the chain's first URL) and its last hop are of, as natively
+ */
+export const TIMING_DENIED_MARKER = 'stomp-tao-denied';
+/**
+ * A Server-Timing metric the worker adds to another origin's answer to a
+ * cors request (a fetch, an XMLHttpRequest, an element with `crossorigin`):
+ * its status and content type are the page's to read in resource timing,
+ * which a no-cors load's are not
+ */
+export const CORS_MARKER = 'stomp-cors';
+/**
+ * A Server-Timing metric with the sizes the origin's body had: its
+ * duration is the bytes it came as (`encodedBodySize`: the origin's
+ * Content-Length, or the decoded size of a body without a
+ * Content-Encoding) and its description, when there is one, the bytes of
+ * the body the worker rewrote (`decodedBodySize`). The browser counts the
+ * bytes the worker answers with: the rewritten text, the decoded body
+ */
+export const SIZE_MARKER = 'stomp-size';
+/**
+ * A Server-Timing metric the worker adds to a load a style sheet of
+ * another origin made, when the page loaded that sheet without cors: the
+ * browser reports no resource timing entry for it (the sheet's content is
+ * not the page's to learn), so the inject shows none
+ */
+export const UNREPORTED_MARKER = 'stomp-unreported';
+/**
+ * A Server-Timing metric whose description is the Content-Encoding of
+ * another origin's cors answer whose timing the page may see: the header
+ * itself is not one the page may read, so the browser is not given it, and
+ * the entry's `contentEncoding` is read from here
+ */
+export const ENCODING_MARKER = 'stomp-encoding';
+/**
+ * A Server-Timing metric on the script a page starts a dedicated worker
+ * with: the page's entry for it has neither an interim response's time
+ * nor its final headers' (measured natively), unlike every other load's
+ */
+export const WORKER_SCRIPT_MARKER = 'stomp-worker-script';
 /** every Server-Timing metric of the worker's own, which the page never sees */
 export const PROXY_METRICS: readonly string[] = [
 	TAO_MARKER,
+	TIMING_DENIED_MARKER,
+	CORS_MARKER,
+	SIZE_MARKER,
+	UNREPORTED_MARKER,
+	ENCODING_MARKER,
+	WORKER_SCRIPT_MARKER,
 	OPAQUE_MARKER,
 	TIMING_ONLY_MARKER,
 	XHR_MARKER,

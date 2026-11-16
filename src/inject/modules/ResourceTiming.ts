@@ -1,6 +1,8 @@
 import {
 	CACHED_MARKER,
+	CORS_MARKER,
 	Delivery,
+	ENCODING_MARKER,
 	HOPS_MARKER,
 	KEPT_LOAD,
 	KEPT_MARKER,
@@ -9,7 +11,11 @@ import {
 	OPAQUE_MARKER,
 	PROXY_METRICS,
 	REVALIDATED_MARKER,
+	SIZE_MARKER,
 	TAO_MARKER,
+	TIMING_DENIED_MARKER,
+	UNREPORTED_MARKER,
+	WORKER_SCRIPT_MARKER,
 	XHR_MARKER,
 } from '../../transport/messages';
 import Client from '../Client';
@@ -72,11 +78,18 @@ const nativeEntriesByType =
 	typeof Performance === 'function'
 		? Performance.prototype.getEntriesByType
 		: undefined;
+const nativeEntryType =
+	typeof PerformanceEntry === 'function'
+		? Reflect.getOwnPropertyDescriptor(PerformanceEntry.prototype, 'entryType')
+				?.get
+		: undefined;
 
 /** how far a kept load's note may be from its entry's own times (two clocks) */
 const KEPT_SLACK_MS = 2000;
 /** how many kept loads' notes a context keeps */
 const KEPT_NOTES = 4096;
+/** how many of the names of its loads a context remembers (unreported) */
+const LOADED_NAMES = 4096;
 
 /** a URL without its fragment (a resource timing entry's name has none) */
 const withoutFragment = (url: string) => {
@@ -125,8 +138,12 @@ const RESTRICTED_STRINGS = ['nextHopProtocol', 'deliveryType'];
  * sees: it marks a resource of another origin that passed with a
  * Server-Timing metric of its own (TAO_MARKER), which the page never sees.
  * An entry of another origin without the mark reads as Chrome's restricted
- * one, in getters and in toJSON. `workerStart` is 0 for every entry: the
- * page has no service worker of its own (the proxy's answers them all).
+ * one, in getters and in toJSON, and so does one whose redirects went
+ * through an origin that did not allow it (TIMING_DENIED_MARKER).
+ * `workerStart` is 0 for every entry: the page has no service worker of its
+ * own (the proxy's answers them all), and the times and sizes a service
+ * worker's answer has in the browser read as a network load's do (the
+ * hooks below, each with what was measured natively).
  */
 export default class ResourceTimingModule extends Module<Client> {
 	/**
@@ -200,6 +217,76 @@ export default class ResourceTimingModule extends Module<Client> {
 			return marked.size > 0 && marked.has(realOf(loaded));
 		});
 	}
+	/**
+	 * Whether the page's resource timing has no entry for the load `entry`
+	 * is of, though the browser has one:
+	 * - a load a style sheet of another origin made, when the page took the
+	 *   sheet without cors (the worker marks it: UNREPORTED_MARKER);
+	 * - a load the renderer's memory cache would have answered (`delivery`
+	 *   says `memory`) of something this document loaded before. Natively
+	 *   that makes no request and no entry: a document's second use of what
+	 *   it has is not a load. Through the proxy the browser asks the worker
+	 *   again for every rewritten script and style sheet (they go out
+	 *   no-cache) and has an entry for each answer: a script the page
+	 *   inserts twice, and on Chrome 152 (not 156, measured) what the
+	 *   parser asks for after its preload scanner fetched it.
+	 * Every entry is looked at once, in the order the browser lists them
+	 * (by when they started), once per run of the page's script.
+	 */
+	#unreported(
+		delivery: (entry: object) => Delivery,
+	): (entry: object) => boolean {
+		const global = this.client.global as typeof globalThis &
+			Record<string, any>;
+		const hidden = new WeakSet<object>();
+		const examined = new WeakSet<object>();
+		/** what this document loaded, by the names the browser has */
+		const loaded = new Set<string>();
+		let looked = false;
+		const stale = () => {
+			looked = false;
+		};
+		const examine = (entry: object) => {
+			examined.add(entry);
+			if (hasProxyMetric(entry, UNREPORTED_MARKER)) {
+				hidden.add(entry);
+				return;
+			}
+			const name = String(Reflect.apply(nativeEntryName!, entry, []));
+			if (!loaded.has(name)) {
+				loaded.add(name);
+				if (loaded.size > LOADED_NAMES)
+					loaded.delete(loaded.values().next().value!);
+			} else if (delivery(entry) === 'memory') hidden.add(entry);
+		};
+		const look = () => {
+			if (looked) return;
+			looked = true;
+			try {
+				Reflect.apply(global.queueMicrotask, global, [stale]);
+				for (const entry of Reflect.apply(
+					nativeEntriesByType!,
+					global.performance,
+					['resource'],
+				) as object[])
+					if (!examined.has(entry)) examine(entry);
+			} catch (error) {
+				// no list to look through: each entry as it is asked about
+				looked = false;
+			}
+		};
+		return (entry) => {
+			try {
+				if (Reflect.apply(nativeEntryType!, entry, []) !== 'resource')
+					return false;
+				look();
+				if (!examined.has(entry)) examine(entry);
+				return hidden.has(entry);
+			} catch (error) {
+				return false;
+			}
+		};
+	}
 	apply() {
 		const global = this.client.global as typeof globalThis &
 			Record<string, any>;
@@ -215,7 +302,6 @@ export default class ResourceTimingModule extends Module<Client> {
 			'name',
 		)!.get!;
 		const nativeServerTiming = getter('serverTiming');
-		const nativeInitiator = getter('initiatorType');
 		const metricName = Reflect.getOwnPropertyDescriptor(
 			global.PerformanceServerTiming?.prototype ?? {},
 			'name',
@@ -223,11 +309,20 @@ export default class ResourceTimingModule extends Module<Client> {
 		const own = () =>
 			this.client.opaqueRequests ? 'null' : this.client.url.url.origin;
 
-		/** per entry: whether it is another origin's, and restricted; its real URL's scheme */
-		const judged = new WeakMap<
-			object,
-			{ crossOrigin: boolean; restricted: boolean; protocol: string }
-		>();
+		/**
+		 * per entry: whether it is another origin's, restricted, and its
+		 * status the page's to read; whether its URL is one no network
+		 * answers (about:srcdoc, a blob:), which the browser's entry is right
+		 * about; its real URL's scheme
+		 */
+		interface Verdict {
+			crossOrigin: boolean;
+			restricted: boolean;
+			statusShown: boolean;
+			local: boolean;
+			protocol: string;
+		}
+		const judged = new WeakMap<object, Verdict>();
 		const judge = (entry: object) => {
 			let verdict = judged.get(entry);
 			if (verdict) return verdict;
@@ -243,14 +338,26 @@ export default class ResourceTimingModule extends Module<Client> {
 			} catch (error) {
 				// not a URL: as the page's own
 			}
-			const marked =
-				crossOrigin &&
-				!!nativeServerTiming &&
-				!!metricName &&
-				(Reflect.apply(nativeServerTiming, entry, []) as object[]).some(
-					(metric) => Reflect.apply(metricName, metric, []) === TAO_MARKER,
-				);
-			verdict = { crossOrigin, restricted: crossOrigin && !marked, protocol };
+			const marks = new Set<string>();
+			if (nativeServerTiming && metricName)
+				for (const metric of Reflect.apply(
+					nativeServerTiming,
+					entry,
+					[],
+				) as object[])
+					marks.add(String(Reflect.apply(metricName, metric, [])));
+			verdict = {
+				crossOrigin,
+				restricted:
+					marks.has(TIMING_DENIED_MARKER) ||
+					(crossOrigin && !marks.has(TAO_MARKER)),
+				// (a cors request's answer, or the page's own origin's unless
+				// its chain went through another's without cors)
+				statusShown:
+					marks.has(CORS_MARKER) || (!crossOrigin && !marks.has(OPAQUE_MARKER)),
+				local: !/^https?:$/.test(protocol),
+				protocol,
+			};
 			judged.set(entry, verdict);
 			return verdict;
 		};
@@ -412,6 +519,9 @@ export default class ResourceTimingModule extends Module<Client> {
 					: 'network';
 		};
 
+		if (nativeEntryName && nativeEntryType && nativeEntriesByType)
+			this.client.unreportedEntry = this.#unreported(delivery);
+
 		// A navigation that went through link routes (src/visited.ts) was
 		// redirected by the worker, once for each: the document's navigation
 		// timing counts the site's redirects only, and shows none when the
@@ -505,32 +615,162 @@ export default class ResourceTimingModule extends Module<Client> {
 				);
 		}
 
+		// the sizes the origin's body had, when they are not what the browser
+		// counted of the worker's answer (a rewritten text, a body that came
+		// compressed): [encoded, decoded or null] (SIZE_MARKER)
+		const metricDescription = Reflect.getOwnPropertyDescriptor(
+			global.PerformanceServerTiming?.prototype ?? {},
+			'description',
+		)?.get;
+		const toldSizes = (entry: object): [number, number | null] | null => {
+			if (!nativeServerTiming || !metricName || !metricDuration) return null;
+			for (const metric of Reflect.apply(
+				nativeServerTiming,
+				entry,
+				[],
+			) as object[])
+				if (Reflect.apply(metricName, metric, []) === SIZE_MARKER) {
+					const decoded = metricDescription
+						? String(Reflect.apply(metricDescription, metric, []))
+						: '';
+					return [
+						Number(Reflect.apply(metricDuration, metric, [])),
+						/^\d+$/.test(decoded) ? Number(decoded) : null,
+					];
+				}
+			return null;
+		};
+		const entryType = Reflect.getOwnPropertyDescriptor(
+			global.PerformanceEntry.prototype,
+			'entryType',
+		)?.get;
+		const startTime = Reflect.getOwnPropertyDescriptor(
+			global.PerformanceEntry.prototype,
+			'startTime',
+		)?.get;
+		// (the browser's own, taken before the hooks below replace them)
+		const times = {
+			startTime,
+			fetchStart: getter('fetchStart'),
+			redirectStart: getter('redirectStart'),
+			redirectEnd: getter('redirectEnd'),
+			requestStart: getter('requestStart'),
+			responseStart: getter('responseStart'),
+		};
+		const read = (entry: object, name: keyof typeof times) => {
+			const get = times[name];
+			return get ? (Reflect.apply(get, entry, []) as number) : 0;
+		};
+		const isResource = (entry: object) =>
+			!!entryType && Reflect.apply(entryType, entry, []) === 'resource';
+		/** whether an answer came at all (an aborted or refused load has none) */
+		const answered = (entry: object) => read(entry, 'responseStart') !== 0;
+		// A service worker's answer starts its fetch after the load started
+		// (the worker is asked first), and a redirect it answers leaves the
+		// redirect's times out of order (measured: redirectStart after
+		// redirectEnd, fetchStart at the load's start). Natively a load
+		// without a redirect fetches from its start, and one with redirects
+		// has them from its start to the last hop's fetch; the times of a
+		// connection that was there already are the fetch's own.
+		/** when the page's fetch of `entry` started, and the browser's own figure for it */
+		const fetchStarts = (entry: object): [page: number, native: number] => {
+			const native = read(entry, 'fetchStart');
+			// (a navigation's own times are the browser's)
+			if (!isResource(entry)) return [native, native];
+			const redirectEnd = read(entry, 'redirectEnd');
+			if (redirectEnd === 0) return [read(entry, 'startTime'), native];
+			const request = read(entry, 'requestStart');
+			return [
+				Math.max(
+					redirectEnd,
+					Math.min(read(entry, 'redirectStart'), request || Infinity),
+				),
+				native,
+			];
+		};
+		hook('fetchStart', (entry, native) => {
+			const result = native();
+			const verdict = judge(entry);
+			if (verdict.local) return result;
+			if (verdict.restricted)
+				return isResource(entry) ? read(entry, 'startTime') : result;
+			return fetchStarts(entry)[0];
+		});
+		const CONNECTION_TIMES = [
+			'domainLookupStart',
+			'domainLookupEnd',
+			'connectStart',
+			'connectEnd',
+			'requestStart',
+		];
+
 		for (const name of RESTRICTED_TIMES)
 			hook(name, (entry, native) => {
 				const result = native();
-				if (judge(entry).restricted) return 0;
+				const verdict = judge(entry);
+				if (verdict.local) return result;
+				if (verdict.restricted) return 0;
+				if (name === 'redirectStart' || name === 'redirectEnd') {
+					if (result === 0 || siteRedirects(entry) === 0) return 0;
+					// (a navigation's are the browser's: it starts at 0, its
+					// redirects after it)
+					return name === 'redirectStart' && isResource(entry)
+						? read(entry, 'startTime')
+						: result;
+				}
+				if (CONNECTION_TIMES.includes(name)) {
+					if (result === 0) return 0;
+					const [page, own] = fetchStarts(entry);
+					return result === own ? page : Math.max(result as number, page);
+				}
+				// The browser has no final headers' time for a service worker's
+				// answer and gives the response's start as an interim one's.
+				// Natively that is how an answer from the HTTP cache reads; one
+				// from the network (a revalidation too) has no interim response
+				// and its headers at the response's start (measured in Chrome
+				// 152 and 156).
 				if (
-					(name === 'redirectStart' || name === 'redirectEnd') &&
-					siteRedirects(entry) === 0
-				)
-					return 0;
+					name === 'firstInterimResponseStart' ||
+					name === 'finalResponseHeadersStart'
+				) {
+					if (!answered(entry)) return result;
+					// (a dedicated worker's script has neither: measured)
+					if (hasProxyMetric(entry, WORKER_SCRIPT_MARKER)) return 0;
+					const how = delivery(entry);
+					// (nor has what the renderer's memory cache answers)
+					if (how === 'memory') return 0;
+					return (how === 'cache') === (name === 'firstInterimResponseStart')
+						? read(entry, 'responseStart')
+						: 0;
+				}
+				const sizes = name.endsWith('BodySize') ? toldSizes(entry) : null;
+				if (name === 'encodedBodySize') return sizes ? sizes[0] : result;
+				if (name === 'decodedBodySize') return sizes?.[1] ?? result;
 				if (name !== 'transferSize' || result !== 0 || !bodySize) return result;
+				// (nothing came of a load that was aborted or refused)
+				if (!answered(entry)) return 0;
 				const how = delivery(entry);
 				return how === 'cache' || how === 'memory'
 					? 0
 					: how === 'network'
-						? (Reflect.apply(bodySize, entry, []) as number) + 300
+						? (toldSizes(entry)?.[0] ??
+								(Reflect.apply(bodySize, entry, []) as number)) + 300
 						: 300;
 			});
 		for (const name of RESTRICTED_STRINGS)
 			hook(name, (entry, native) => {
 				const result = native();
 				const verdict = judge(entry);
+				if (verdict.local) return result;
 				if (verdict.restricted) return '';
 				const how = delivery(entry);
 				if (name === 'nextHopProtocol')
-					// (the HTTP cache's answer has none)
-					return result !== '' || how === 'cache' || how === 'revalidated'
+					// (the HTTP cache's answer has none, nor has a load nothing
+					// answered)
+					return result !== '' ||
+						how === 'cache' ||
+						how === 'revalidated' ||
+						!answered(entry)
 						? result
 						: verdict.protocol === 'https:'
 							? 'h2'
@@ -550,33 +790,54 @@ export default class ResourceTimingModule extends Module<Client> {
 			native();
 			return 0;
 		});
-		// the status and content type of another origin's resource need CORS:
-		// a fetch or XMLHttpRequest reached the page only past the worker's
-		// check; any other load is taken as a no-cors one
-		const corsInitiators = ['fetch', 'xmlhttprequest'];
+		// the encoding of another origin's cors answer is not a header the
+		// browser was given (ENCODING_MARKER)
+		hook('contentEncoding', (entry, native) => {
+			const result = native();
+			const verdict = judge(entry);
+			if (verdict.local) return result;
+			// (shown with the status, whatever the timing: measured)
+			if (!verdict.statusShown) return '';
+			if (
+				result === '' &&
+				nativeServerTiming &&
+				metricName &&
+				metricDescription
+			)
+				for (const metric of Reflect.apply(
+					nativeServerTiming,
+					entry,
+					[],
+				) as object[])
+					if (Reflect.apply(metricName, metric, []) === ENCODING_MARKER)
+						return String(Reflect.apply(metricDescription, metric, []));
+			return result;
+		});
+		// the status and content type of another origin's resource need CORS,
+		// which the worker's check decided (CORS_MARKER)
 		for (const [name, empty] of [
 			['responseStatus', 0],
 			['contentType', ''],
 		] as const)
 			hook(name, (entry, native) => {
 				const result = native();
-				if (!judge(entry).crossOrigin) return result;
-				const initiator = nativeInitiator
-					? String(Reflect.apply(nativeInitiator, entry, []))
-					: '';
-				return corsInitiators.includes(initiator) ? result : empty;
+				return judge(entry).statusShown ? result : empty;
 			});
+		// (a frozen array, a new one at each read, as the browser's is; made
+		// from the browser's own, so it is the entry's realm's)
 		hook('serverTiming', (entry, native) => {
 			const metrics = native() as object[];
-			if (judge(entry).restricted) return [];
-			return metricName
-				? metrics.filter(
-						(metric) =>
+			const restricted = judge(entry).restricted;
+			return Object.freeze(
+				metrics.filter(
+					(metric) =>
+						!restricted &&
+						(!metricName ||
 							!PROXY_METRICS.includes(
 								String(Reflect.apply(metricName, metric, [])),
-							),
-					)
-				: metrics;
+							)),
+				),
+			);
 		});
 		// an XMLHttpRequest goes as a fetch() of the inject's: the worker
 		// marks its answer (XHR_MARKER)
@@ -602,6 +863,8 @@ export default class ResourceTimingModule extends Module<Client> {
 						for (const name of [
 							...RESTRICTED_TIMES,
 							...RESTRICTED_STRINGS,
+							'fetchStart',
+							'contentEncoding',
 							'initiatorType',
 							'workerStart',
 							'responseStatus',

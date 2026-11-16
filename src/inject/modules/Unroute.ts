@@ -343,9 +343,12 @@ export default class UnrouteModule extends Module<Client> {
 		)!;
 		const nativeName = (entry: PerformanceEntry): string =>
 			Reflect.apply(nameDescriptor.get!, entry, []);
-		// null for an entry of the proxy's own machinery
+		// null for an entry of the proxy's own machinery, and for one the
+		// page's resource timing would not have natively (ResourceTiming)
 		const pageName = (entry: PerformanceEntry): string | null =>
-			unrouteURL(this.client, String(nativeName(entry)));
+			this.client.unreportedEntry?.(entry)
+				? null
+				: unrouteURL(this.client, String(nativeName(entry)));
 
 		Reflect.defineProperty(PerformanceEntry.prototype, 'name', {
 			...nameDescriptor,
