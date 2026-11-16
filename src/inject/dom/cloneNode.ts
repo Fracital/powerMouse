@@ -273,6 +273,15 @@ export function releaseMarkup(root: Node | null | undefined): void {
  */
 export const inertClones = new WeakSet<Node>();
 
+/**
+ * The parsed <base> a copy is being made from, while its attributes are
+ * set. They go through the hooks before the copy is put in its tree, so
+ * its hook cannot see what stands before it; the parsed one is still where
+ * the markup has it (the metas before it are the policies that judge it,
+ * DocumentClient baseRefused).
+ */
+export const parsedBases = new WeakMap<Element, Element>();
+
 const STACK_ITERATE = Symbol();
 const STACK_FINALIZE = Symbol();
 
@@ -387,6 +396,9 @@ export default function cloneRawNode(
 						debugger;
 					}
 
+					const base = d[0].nodeName === 'BASE';
+					if (base) parsedBases.set(target, d[0] as Element);
+
 					// the native map: the hooked `attributes` getter hands the page a
 					// view that hides the markers, not an iterable NamedNodeMap
 					// (the parser's attributes, which no Trusted Types judge)
@@ -404,6 +416,8 @@ export default function cloneRawNode(
 								);
 							else target.setAttribute(attribute.name, attribute.value);
 					});
+					// (the copy may live on in the page: it keeps nothing of the markup)
+					if (base) parsedBases.delete(target);
 
 					if (d[3]) inertClones.add(target);
 

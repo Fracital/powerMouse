@@ -73,6 +73,7 @@ import { trustedHTML, trustedScript } from '../trusted';
 import cloneRawNode, {
 	inertDocumentOf,
 	nativeAttributes,
+	parsedBases,
 	parseHTML,
 	releaseMarkup,
 	startedScripts,
@@ -1803,11 +1804,14 @@ export default class DocumentClient extends Client {
 			)
 		)
 			return true;
-		for (const meta of base.ownerDocument.querySelectorAll(
+		// (a copy of the markup's base is judged before it is in its tree:
+		// by the metas before the parsed one it was made from)
+		const placed = parsedBases.get(base) ?? base;
+		for (const meta of placed.ownerDocument.querySelectorAll(
 			'head meta[http-equiv]',
 		)) {
 			if (
-				!(meta.compareDocumentPosition(base) & 4) ||
+				!(meta.compareDocumentPosition(placed) & 4) ||
 				meta.getAttribute('http-equiv')!.toLowerCase() !==
 					'content-security-policy'
 			)

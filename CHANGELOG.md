@@ -1212,6 +1212,15 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   kept Chrome 152's, in the worker and in a page alike). Both are read from
   STomp's own service worker, a real one, and handed to the emulated worker
   with its script. (service-worker-global suite, Chrome 152, 156 and 157.)
+- A `<base>` in a page's markup is refused by the `base-uri` of a
+  `<meta http-equiv="Content-Security-Policy">` that stands before it, as
+  natively. The inject rewrites a base while it copies the markup, before
+  the copy is in its tree, and looked for the metas before it in a tree it
+  was not in yet: a cross-origin base under a meta's `base-uri 'self'`
+  became the document's base URL and no violation fired, where natively the
+  document's URL stays the base URL and the page gets the base-uri
+  violation. The copy is now judged by the metas before the parsed base it
+  is made from. (csp-navigation suite, natively against both modes.)
 - `navigator.permissions.query({ name: 'storage-access' })` reads granted
   in a proxied top-level page, as natively: a top-level document has
   storage access, and Chrome answers granted there (denied when its
