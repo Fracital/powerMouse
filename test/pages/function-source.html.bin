@@ -14,7 +14,7 @@
 		}
 	};
 	window.__pending = {
-		left: ['inline', 'handler', 'timer', 'module', 'inlinemodule', 'worker', 'gsi'],
+		left: ['inline', 'handler', 'timer', 'module', 'inlinemodule', 'worker', 'gsi', 'surrogate'],
 		done: function (name) {
 			this.left = this.left.filter(function (n) { return n !== name });
 			if (!this.left.length) window.__fnsrcDone = true;
@@ -108,6 +108,48 @@
 	gsi.src = 'function-source-gsi.html.bin?listener=' + encodeURIComponent(String(clickListener));
 	document.body.appendChild(gsi);
 	window.__pending.done('inline');
+</script>
+<script>
+	// Text a page evaluates may hold a surrogate with no other half (made with
+	// fromCharCode, so this file stays UTF-8): here in a string, a template, a
+	// pattern and two comments of one function, evaluated every way a page
+	// can. What the function answers and how it reads back are kept by their
+	// UTF-16 units, so nothing between the page and the suite changes them.
+	(function () {
+		var L = String.fromCharCode(0xd800), M = String.fromCharCode(0xdbff), T = String.fromCharCode(0xdc00);
+		var units = function (text) {
+			var codes = [];
+			for (var i = 0; i < text.length; i++) codes.push(text.charCodeAt(i).toString(16));
+			return codes.join(' ');
+		};
+		var record = function (name, work) {
+			var value;
+			try { value = work() } catch (error) { value = 'threw ' + error }
+			window.__fnsrc['surrogate:' + name] = units(String(value));
+		};
+		var each = function (name, made) {
+			record(name + ' source', function () { return Function.prototype.toString.call(made()) });
+			record(name + ' values', function () { return made()(1) });
+		};
+		var body = '/* ' + T + ' */ return [ "x' + L + 'y", `t' + L + '${ a }' + T + '`, /[' + L + '-' + M + ']+' + T + '/.exec("-' + L + M + T + '-")[0], location.href ].join("|") // ' + L;
+		var written = 'function  lone ( a ) { ' + body + '\n}';
+		each('direct eval', function () { return eval('(' + written + ')') });
+		each('indirect eval', function () { return (0, eval)('(' + written + ')') });
+		each('new Function', function () { return new Function('a', body) });
+		var script = document.createElement('script');
+		script.text = 'window.__loneInline = ' + written;
+		document.head.appendChild(script);
+		each('inline script', function () { return window.__loneInline });
+		var element = document.createElement('span');
+		element.setAttribute('onclick', 'return ' + written);
+		each('handler', function () { return element.onclick() });
+		record('handler itself', function () { return Function.prototype.toString.call(element.onclick) });
+		setTimeout('window.__loneTimer = ' + written, 0);
+		setTimeout(function () {
+			each('timer', function () { return window.__loneTimer });
+			window.__pending.done('surrogate');
+		}, 0);
+	})();
 </script>
 <script type="module">
 	function   inlineModule ( ) { return import.meta.url }

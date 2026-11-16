@@ -98,6 +98,88 @@ function sameRevision(instance: BufferInstance): boolean {
 	return same;
 }
 
+/** a surrogate with no other half (under `u` a pair is one character, which the class does not hold) */
+const LONE = /[\ud800-\udfff]/gu;
+/** the private use characters of the BMP, which stand in for them */
+const PRIVATE = /[\ue000-\uf8ff]/g;
+
+/** how the texts of one call cross to the module (`out`) and its answers come back (`back`) */
+interface StandIns {
+	out(text: string): string;
+	back(text: string): string;
+}
+
+const same = (text: string) => text;
+/** the crossing of texts that are well-formed: as they are */
+const PLAIN: StandIns = { out: same, back: same };
+
+/**
+ * How `texts`, of which one is not well-formed, cross to the module. It
+ * reads UTF-8, which has no bytes for a surrogate without its other half
+ * (the encoder would hand it U+FFFD, and what came back would not be the
+ * page's text). A script from the network never holds one; a string a page
+ * evaluates can, and V8 runs it. So each such surrogate crosses as a
+ * private use character that none of the texts holds, and every one of
+ * those in an answer is read back as the surrogate it stands for. The
+ * stand-in is one UTF-16 unit as the surrogate is, so every position the
+ * module answers (a function's mark) is the page's text's; and it is to
+ * the module's parser what the surrogate is to V8: no white space, no line
+ * end, nothing a name starts with or goes on with, and a character like
+ * any other where V8 takes a lone surrogate at all (a string, a template,
+ * a comment, a pattern). One stands for each surrogate, given out in the
+ * surrogates' order, so a class range between two of them is in order when
+ * the page's is.
+ *
+ * Two things the module then answers are not V8's answer for the page's
+ * text. The order of a lone surrogate and a character between U+D800 and
+ * the stand-in that is no lone surrogate of the text (written as an
+ * escape, a half of a pair in a pattern without `u`, a private use
+ * character): a class range from a lone surrogate up to one of those is
+ * refused by the module where V8 takes it (the script is handed back like
+ * any the module declines), and one from such a character down to a lone
+ * surrogate, which V8 refuses, is rewritten. And a module's import or
+ * export name written as a string, where V8 refuses a lone surrogate and
+ * nothing else: rewritten too. What is rewritten where V8 refuses the
+ * page's text is refused by V8 all the same, the literal being the page's.
+ *
+ * Null when the texts leave fewer private use characters free than they
+ * hold different lone surrogates.
+ */
+function standIns(...texts: string[]): StandIns | null {
+	const lone = new Set<string>();
+	const taken = new Set<string>();
+	for (const text of texts) {
+		for (const unit of text.match(LONE) ?? []) lone.add(unit);
+		for (const unit of text.match(PRIVATE) ?? []) taken.add(unit);
+	}
+	const out = new Map<string, string>();
+	const back = new Map<string, string>();
+	let code = 0xe000;
+	// (single units sort by their value)
+	for (const unit of [...lone].sort()) {
+		while (taken.has(String.fromCharCode(code))) code++;
+		if (code > 0xf8ff) return null;
+		const standIn = String.fromCharCode(code++);
+		out.set(unit, standIn);
+		back.set(standIn, unit);
+	}
+	return {
+		out: (text) => text.replace(LONE, (unit) => out.get(unit)!),
+		back: (text) => text.replace(PRIVATE, (unit) => back.get(unit) ?? unit),
+	};
+}
+
+/** how one text crosses: as it is when it is well-formed, as nearly every text is */
+const crossingOf = (text: string) =>
+	text.isWellFormed() ? PLAIN : standIns(text);
+
+/**
+ * The crossing of the rewrite in hand, for its routing calls (the text the
+ * module asks about is the page's once read back). A rewrite made from
+ * inside a routing call has its own, and puts this one back.
+ */
+let crossing = PLAIN;
+
 /**
  * Whether `code` parses as a classic script (`single`: as one of a single
  * expression statement), asked of this thread's module, or null when it
@@ -106,8 +188,12 @@ function sameRevision(instance: BufferInstance): boolean {
 export function parsesInWasm(code: string, single: boolean): boolean | null {
 	if (!hasModule(REWRITER)) return null;
 	const parses = withInstance(REWRITER, (instance) => {
-		if (!sameRevision(instance)) return null;
-		const answered = instance.call(code, single ? FLAG_SINGLE : FLAG_PARSES);
+		const cross = crossingOf(code);
+		if (!cross || !sameRevision(instance)) return null;
+		const answered = instance.call(
+			cross.out(code),
+			single ? FLAG_SINGLE : FLAG_PARSES,
+		);
 		return 'output' in answered ? answered.output === '1' : null;
 	});
 	if (parses === null) counts.declined++;
@@ -129,9 +215,13 @@ export function printInWasm(
 ): { printed: string | null } | null {
 	if (!hasModule(REWRITER)) return null;
 	return withInstance(REWRITER, (instance) => {
-		if (!sameRevision(instance)) return null;
-		const answered = instance.call(`${part}\n${source}`, FLAG_PRINT);
-		return { printed: 'output' in answered ? answered.output : null };
+		const asked = `${part}\n${source}`;
+		const cross = crossingOf(asked);
+		if (!cross || !sameRevision(instance)) return null;
+		const answered = instance.call(cross.out(asked), FLAG_PRINT);
+		return {
+			printed: 'output' in answered ? cross.back(answered.output) : null,
+		};
 	});
 }
 
@@ -179,6 +269,11 @@ export function rewriteWith(
 	const isModule = type === 'genericModule' || type === 'workerModule';
 	const here = keepsSourcesHere();
 	let key = source?.key;
+	// the module makes the key of the text it is handed: where that is not
+	// the page's (a lone surrogate crosses as a stand-in), the key is made
+	// here, of the page's text, which is the one kept
+	const loose = !script.isWellFormed();
+	if (loose) key ??= sourceKey(script);
 	let flags = isModule ? FLAG_MODULE : 0;
 	if (source?.text === undefined) {
 		// the script's own text is the one kept: written into the output by
@@ -193,13 +288,21 @@ export function rewriteWith(
 			lead +=
 				holderStatement(helperNames(config).access, key, source.text) ?? '';
 	}
+	const params = `${url.toString()}\n${key ?? ''}\n${(source?.shifts ?? []).join(',')}\n${lead}`;
+	const cross =
+		loose || !params.isWellFormed() ? standIns(script, params) : PLAIN;
+	if (!cross) return null;
 	instance.configure(rewriterConfig(config));
-	const given = instance.call(
-		`${url.toString()}\n${key ?? ''}\n${(source?.shifts ?? []).join(',')}\n${lead}`,
-		FLAG_PARAMS,
-	);
+	const given = instance.call(cross.out(params), FLAG_PARAMS);
 	if (!('output' in given)) return null;
-	const result = instance.call(script, flags);
+	const around = crossing;
+	crossing = cross;
+	let result: { output: string } | { status: number };
+	try {
+		result = instance.call(cross.out(script), flags);
+	} finally {
+		crossing = around;
+	}
 	if (!('output' in result))
 		// a script no browser runs is answered as the JavaScript rewriter
 		// answers what it cannot parse or print, without asking it: handed
@@ -224,7 +327,7 @@ export function rewriteWith(
 		if (+meta.output.slice(0, tab) > 0)
 			keepSource(meta.output.slice(tab + 1), script);
 	}
-	return result.output;
+	return cross.back(result.output);
 }
 
 /**
@@ -239,7 +342,7 @@ export function rewriterRoute(
 	config: Config,
 	type: ScriptType,
 ): (kind: number, text: string) => string | null {
-	return (kind, text) => {
+	const route = (kind: number, text: string) => {
 		try {
 			if (kind === ROUTE_IMPORT) {
 				const colon = text.indexOf(':');
@@ -263,14 +366,21 @@ export function rewriterRoute(
 		}
 		return null;
 	};
+	return (kind, asked) => {
+		const cross = crossing;
+		const answer = route(kind, cross.back(asked));
+		// (an answer that held a stand-in would be read back as holding the
+		// surrogate: no URL does)
+		return answer !== null && cross.back(answer) !== answer ? null : answer;
+	};
 }
 
 /**
  * `script` rewritten by an instance of this thread's module, or null: the
- * thread holds none, it holds another revision's, the script is not
- * well-formed UTF-16, it trapped, or it declined the script. A data:
- * module the script imports is rewritten from inside this call's routing,
- * by another instance (src/wasm/thread.ts).
+ * thread holds none, it holds another revision's, the script holds more
+ * lone surrogates than can cross (standIns), it trapped, or it declined
+ * the script. A data: module the script imports is rewritten from inside
+ * this call's routing, by another instance (src/wasm/thread.ts).
  */
 export function rewriteInWasm(
 	script: string,
@@ -284,20 +394,14 @@ export function rewriteInWasm(
 		counts.early++;
 		return null;
 	}
-	// a lone surrogate has no UTF-8: the encoder would hand the module
-	// U+FFFD in its place, and what came back would not be the page's
-	// text. A script from the network never holds one; a string a page
-	// evaluates can
-	const output = script.isWellFormed()
-		? withInstance(
-				REWRITER,
-				(instance) =>
-					sameRevision(instance)
-						? rewriteWith(instance, script, url, config, type, lead(), source)
-						: null,
-				rewriterRoute(url, config, type),
-			)
-		: null;
+	const output = withInstance(
+		REWRITER,
+		(instance) =>
+			sameRevision(instance)
+				? rewriteWith(instance, script, url, config, type, lead(), source)
+				: null,
+		rewriterRoute(url, config, type),
+	);
 	if (output === null) counts.declined++;
 	else counts.answered++;
 	return output;

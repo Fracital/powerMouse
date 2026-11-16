@@ -8,11 +8,15 @@
 // inline script and an inline module, handler attributes (parsed and set
 // later), eval and indirect eval, new Function and its async and generator
 // siblings, a string timer and a dedicated worker. Bound, native and Proxy
-// functions keep their native strings. And Google's GSI case: a page puts a
-// listener's source in its button frame's URL, and the frame answers 400
-// unless it is the source the page wrote. test/pages/function-source.html.bin
-// collects every string; the suite compares them with the page loaded
-// natively, group by group, in both demo modes.
+// functions keep their native strings. Text that holds a surrogate with no
+// other half (in a string, a template, a pattern and comments) is evaluated
+// every one of those ways too, and what it computes and how its function
+// reads back are compared by their UTF-16 units. And Google's GSI case: a
+// page puts a listener's source in its button frame's URL, and the frame
+// answers 400 unless it is the source the page wrote.
+// test/pages/function-source.html.bin collects every string; the suite
+// compares them with the page loaded natively, group by group, in both demo
+// modes.
 import {
 	done,
 	FIXTURE,
@@ -37,6 +41,7 @@ const GROUPS = [
 	['timer', 'a string timer'],
 	['worker', 'a dedicated worker'],
 	['native', 'bound, native and Proxy functions'],
+	['surrogate', 'evaluated text that holds a lone surrogate'],
 ];
 
 const browser = await launch();

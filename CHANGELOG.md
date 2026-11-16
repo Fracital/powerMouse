@@ -1270,6 +1270,34 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   document's URL stays the base URL and the page gets the base-uri
   violation. The copy is now judged by the metas before the parsed base it
   is made from. (csp-navigation suite, natively against both modes.)
+- A script a page evaluates that holds a surrogate with no other half
+  (`eval`, `new Function`, an inline script made through the DOM, a handler
+  attribute, a string timer: text made of strings, such as a template
+  compiled from text cut in the middle of an emoji) is rewritten and runs
+  as natively. A lone surrogate has no UTF-8, which is all the wasm
+  rewriter reads, so since the JavaScript rewriter was removed such a
+  script was handed back with the end no browser compiles and did not run
+  at all, where Chrome runs it. Each lone surrogate now crosses to the
+  module as a private use character the text does not hold, one UTF-16
+  unit like the surrogate and to a parser what the surrogate is to V8, and
+  comes back as itself: in a string, a template (cooked and raw), a
+  pattern, a comment and a property key the script computes what it
+  computes natively, its functions read back as the page wrote them, and
+  the text an error's message quotes holds the surrogate. Where V8 refuses
+  the surrogate (in a name, between tokens, in a group's name) the script
+  comes back as it was and the browser refuses it as it does natively.
+  The questions asked of the module besides a rewrite (whether a text
+  parses, how an expression is named in an error's message) cross the same
+  way: they were answered for U+FFFD before. Two shapes are not exact: a
+  class range in a pattern from a lone surrogate up to an escaped surrogate
+  or private use character (`/[<lone>-\udbff]/`) is still handed back
+  where Chrome runs it, and a range the other way round, or a module's
+  import or export name with a lone surrogate, both of which Chrome
+  refuses, are rewritten and refused by Chrome all the same. A script that
+  holds every private use character of the BMP and a lone surrogate
+  cannot cross and is handed back as before. (`wasm-rewriter-glue` suite,
+  each position against this V8; `function-source` suite, natively against
+  both modes.)
 - `navigator.permissions.query({ name: 'storage-access' })` reads granted
   in a proxied top-level page, as natively: a top-level document has
   storage access, and Chrome answers granted there (denied when its
