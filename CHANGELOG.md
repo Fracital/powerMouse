@@ -1270,6 +1270,28 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   document's URL stays the base URL and the page gets the base-uri
   violation. The copy is now judged by the metas before the parsed base it
   is made from. (csp-navigation suite, natively against both modes.)
+- Rewritten code that reads and writes the elements of arrays, typed
+  arrays and strings by number runs many times faster. Every computed
+  member access goes through the access helpers (`a[i]` is
+  `$s$j.get2(a, i, ...)`), and each read or write of an element took the
+  helpers' whole way: the checks for a window held across a fresh browsing
+  context, the names `top`, `location` and `eval` (with
+  `Array.prototype.includes`), a foreign window's API, a select's indexed
+  setter, and for a write a second look at the array itself. A number key
+  on an array, a typed array or a string takes a short path now: none of
+  those receivers is a window or anything else the long way is for (a
+  window's numbers are its child frames, which stay routed, and so does a
+  window read out of an array), decided by `Array.isArray` and
+  `ArrayBuffer.isView` taken when the bundle loads, so a page that replaces
+  them changes nothing. Measured in Chrome 152 and 156 on a fixture of 26
+  kernels, natively against the proxy (measure-compute suite): a loop
+  summing a packed array went from 25 to 30 times its native time to about
+  2, filling one from 71 to 75 times to under 4, typed-array loops from 14
+  to 86 times to 2 to 5, a matrix multiply from 111 to 140 times to 12 to
+  13, a histogram from 102 to 130 times to 6 to 8, indexing a string from
+  6 times to 1.5; a loop over an array of objects went from 46 to 79 times
+  to 18 to 39 (each object read is still asked whether it is a window);
+  loops that do no computed access are unchanged.
 - A script a page evaluates that holds a surrogate with no other half
   (`eval`, `new Function`, an inline script made through the DOM, a handler
   attribute, a string timer: text made of strings, such as a template

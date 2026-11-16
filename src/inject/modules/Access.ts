@@ -1,7 +1,7 @@
 import { keepEmbedded } from '../../functionSource';
 import { HelperNames } from '../../helperNames';
 import { routeHTML } from '../../rewriteHTML';
-import { isBareSpecifier, routeImport, UNDEFINABLE } from '../../scriptRoutes';
+import { isBareSpecifier, routeImport } from '../../scriptRoutes';
 import StompURL, { urlLike } from '../../StompURL';
 import Client from '../Client';
 import ErrorMessages from '../errorMessages';
@@ -39,6 +39,30 @@ export function setGlobalProxy(
 			enumerable: false,
 		});
 }
+
+// taken when the bundle loads, before any page code could replace them
+const isArray = Array.isArray;
+const isView = ArrayBuffer.isView;
+
+/**
+ * Whether `value` is an array or a typed array (or a DataView), by the
+ * natives' own brand checks: nothing of the value is read and no trap of a
+ * page's Proxy runs. Such a value is no window, no stand-in of one and no
+ * element, whatever the page did to its globals, so a read or a write of
+ * it by a number needs none of what the helpers do for those (a window's
+ * numbers are its child frames). Array.isArray answers for a Proxy's
+ * target, as the member access will, and throws for a revoked Proxy: that
+ * one goes the long way, where the access throws its own error.
+ */
+const indexed = (value: unknown): boolean => isView(value) || array(value);
+/** an array, or a Proxy of one that is not revoked */
+const array = (value: unknown): boolean => {
+	try {
+		return isArray(value);
+	} catch (error) {
+		return false;
+	}
+};
 
 type PatternSpec = {
 	[key: string]: true | PatternSpec | (0 | PatternSpec | [PatternSpec])[];
@@ -177,6 +201,9 @@ export default class AccessModule extends Module<Client> {
 				moduleType,
 			);
 		};
+		// (the helpers below run on every computed access of a page: its names
+		// are read once)
+		const names = this.client.names;
 		// the errors a helper throws in the page's place, with the message V8
 		// gives the page's expression (`partial`, its source)
 		const errors = new ErrorMessages(this.client);
@@ -365,73 +392,18 @@ export default class AccessModule extends Module<Client> {
 				return target;
 			return this.client.liveWindow(target) ?? target;
 		};
-		const api = {
-			get2: (
-				target: any,
-				key: any,
-				_partial?: string,
-				optional?: boolean,
-			): unknown => {
-				if (nullish(target)) {
-					// a?.[k]
-					if (optional) return undefined;
-					throw errors.read(target, key);
-				}
-
-				key = keyOf(key);
-				target = live(target, key);
-				return api.get(target[key], key, target);
-			},
-			// `container`: what `object` was read from, when the read is a member
-			// read (a window's child is injected before the page gets it)
-			get: (object: any, key: any, container?: unknown): any => {
-				// the client, by its name, is nothing to a page: it holds the
-				// real windows the inject works with, and a page that read it
-				// would reach every proxied site that frames it. The rewriter
-				// routes every mention of the name here, and reflection's reads
-				// come here too, so knowing the name (a same-site frame's shell
-				// shows it while it loads) gives a page nothing
-				if (key === this.client.names.client) return undefined;
-				// another window's postMessage, read and not called: the page
-				// gets a function of this realm for it, so a call of it later
-				// (bound, detached, handed to `call`) posts from this realm,
-				// which the browser names as the source
-				if (key === 'postMessage' && container !== undefined) {
-					const own = this.client.postMessageOf?.(container);
-					if (own) return own;
-				}
-				try {
-					if (key === 'top' && this.client.resolveTop)
-						return this.client.resolveTop(object);
-
-					if (
-						typeof key === 'string' &&
-						UNDEFINABLE.includes(key) &&
-						((typeof object === 'object' && object !== null) ||
-							typeof object === 'function') &&
-						this.client.names.globalProxy in object
-					) {
-						const standIn = object[this.client.names.globalProxy];
-						return key === 'location' && this.client.gateLocation
-							? this.client.gateLocation(object, standIn)
-							: standIn;
-					}
-				} catch (error) {
-					// error was thrown during an accessor
-					// should not be introduced into normal execution
-				}
-
-				if (this.client.restrictForeign)
-					return this.client.restrictForeign(object, container);
-
-				return object;
-			},
+		// `target[key] = righthand` and its kin (`operate`): set2 past its
+		// short path. Under set2's own name, which is the name V8 gives its
+		// frame: the page's write is done by a function of the page's script
+		// (`operate`), and the stack cleaner (Unroute) takes that function's
+		// frame out by the name of the helper that called it.
+		const long = {
 			set2: (
 				target: any,
 				key: any,
 				operate: (target: any, property: any, value: any) => any,
 				righthand: any,
-			) => {
+			): any => {
 				// (a null or undefined target throws before the key is converted,
 				// as natively)
 				if (!nullish(target)) {
@@ -534,6 +506,126 @@ export default class AccessModule extends Module<Client> {
 				return result === righthand || !isObject(result)
 					? result
 					: api.get(result, key, target);
+			},
+		};
+		/** `target[key]`, a computed member read: get2 past its short path */
+		const read = (target: any, key: any, optional?: boolean): unknown => {
+			if (nullish(target)) {
+				// a?.[k]
+				if (optional) return undefined;
+				throw errors.read(target, key);
+			}
+
+			key = keyOf(key);
+			target = live(target, key);
+			return api.get(target[key], key, target);
+		};
+		const api = {
+			get2: (
+				target: any,
+				key: any,
+				_partial?: string,
+				optional?: boolean,
+			): unknown => {
+				// an element of an array, a typed array or a string, by a number:
+				// the loops of a page's own computing, which pay this helper per
+				// element. Such a receiver is no window (see `indexed`), so it is
+				// nothing `live` knows, and a number is no name `get` knows; what
+				// is left of the long way is `get`'s look at a value that is an
+				// object, which only a window passes (`restrictForeign`), kept
+				// for one that is not itself an array. (Each kind is read where
+				// only its kind is read: one read for all of them would know no
+				// shape and be the slowest the engine has. One call of `read` in
+				// the body, so that the engine inlines the helper into a loop of
+				// the page's that reads an arguments object.)
+				short: if (typeof key === 'number') {
+					let value;
+					if (typeof target === 'string') value = target[key as any];
+					else if (isView(target)) value = (target as any)[key];
+					else if (array(target)) value = target[key];
+					else break short;
+					return typeof value !== 'object' ||
+						value === null ||
+						indexed(value) ||
+						!this.client.restrictForeign ||
+						!isWindowObject(value)
+						? value
+						: api.get(value, key, target);
+				}
+				return read(target, key, optional);
+			},
+			// `container`: what `object` was read from, when the read is a member
+			// read (a window's child is injected before the page gets it)
+			get: (object: any, key: any, container?: unknown): any => {
+				// (this runs on every computed read, and most keys are numbers or
+				// names of the page's own: only a string is a name known here)
+				if (typeof key === 'string') {
+					// the client, by its name, is nothing to a page: it holds the
+					// real windows the inject works with, and a page that read it
+					// would reach every proxied site that frames it. The rewriter
+					// routes every mention of the name here, and reflection's reads
+					// come here too, so knowing the name (a same-site frame's shell
+					// shows it while it loads) gives a page nothing
+					if (key === names.client) return undefined;
+					// another window's postMessage, read and not called: the page
+					// gets a function of this realm for it, so a call of it later
+					// (bound, detached, handed to `call`) posts from this realm,
+					// which the browser names as the source
+					if (key === 'postMessage') {
+						if (container !== undefined) {
+							const own = this.client.postMessageOf?.(container);
+							if (own) return own;
+						}
+					} else if (key === 'top' || key === 'eval' || key === 'location') {
+						// (the names of UNDEFINABLE, spelled out: this is asked of
+						// every other name a page reads by a computed key)
+						try {
+							if (key === 'top' && this.client.resolveTop)
+								return this.client.resolveTop(object);
+
+							if (
+								((typeof object === 'object' && object !== null) ||
+									typeof object === 'function') &&
+								names.globalProxy in object
+							) {
+								const standIn = object[names.globalProxy];
+								return key === 'location' && this.client.gateLocation
+									? this.client.gateLocation(object, standIn)
+									: standIn;
+							}
+						} catch (error) {
+							// error was thrown during an accessor
+							// should not be introduced into normal execution
+						}
+					}
+				}
+
+				// (anything that is no object is handed back as it is)
+				if (typeof object !== 'object' || object === null) return object;
+
+				if (this.client.restrictForeign)
+					return this.client.restrictForeign(object, container);
+
+				return object;
+			},
+			set2: (
+				target: any,
+				key: any,
+				operate: (target: any, property: any, value: any) => any,
+				righthand: any,
+			) => {
+				// an element of an array or a typed array, written by a number (see
+				// get2): no window, no document, no select, and no name of ours.
+				// What the long way reads of the target first (`get`) is the
+				// target itself, and a compound write's answer is looked at as
+				// there
+				if (typeof key === 'number' && indexed(target)) {
+					const result = operate(target, key, righthand);
+					return result === righthand || !isObject(result)
+						? result
+						: api.get(result, key, target);
+				}
+				return long.set2(target, key, operate, righthand);
 			},
 			set1: (
 				target: any,
