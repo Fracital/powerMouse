@@ -859,11 +859,16 @@ function genericForward(
 			`${oURL.origin}${rewriter.directory}`,
 		);
 
-		// the same document asking again for an output it was just given
-		const recentKey = transformBody
-			? recentOutputKey(serverRequest, context)
-			: null;
-		// never a hop of a redirect chain: its origin may be "null" by then
+		// the same document asking again for an output it was just given, or
+		// for an image or a font it was given as it came (REPEAT_DESTINATIONS)
+		const recentKey =
+			transformBody ||
+			(REPEAT_DESTINATIONS.has(serverRequest.destination) &&
+				!serverRequest.headers.has('range'))
+				? recentOutputKey(serverRequest, context)
+				: null;
+		// never a hop of a redirect chain: its origin may be "null" by then.
+		// One the worker is still reading waits for it
 		const recent =
 			recentKey !== null &&
 			!redirectPending(
@@ -871,7 +876,9 @@ function genericForward(
 				serverRequest.referrer,
 				serverRequest.url,
 			)
-				? takeRecentOutput(recentKey)
+				? (takeRecentOutput(recentKey) ??
+					(await pendingOutputs.get(recentKey)) ??
+					null)
 				: null;
 		// what it was given was the rewrite cache's entry for its URL: that
 		// entry again (the response Chrome keeps the compiled code with), if
@@ -3683,6 +3690,25 @@ function genericForward(
 				void rewriter.rewrites?.put(served.key, rewritten);
 		}
 
+		// an image or a font goes to the page as it arrives, and is kept for
+		// the same document's repeat of the request (REPEAT_DESTINATIONS)
+		if (
+			recentKey !== null &&
+			!transformBody &&
+			body instanceof ReadableStream &&
+			response.status === 200 &&
+			!previousHop &&
+			!(Number(responseHeaders.get('content-length')) > REPEAT_BYTES)
+		) {
+			const [toPage, toKeep] = body.tee();
+			body = toPage;
+			keepRepeat(recentKey, toKeep, {
+				status: response.status,
+				statusText: response.statusText,
+				headers: [...responseHeaders],
+			});
+		}
+
 		sendReport();
 		return new Response(body, {
 			status: response.status,
@@ -3832,7 +3858,15 @@ function recentOutputKey(
 		return null;
 	return [
 		context.clientId,
-		request.url,
+		// an image's or a font's without its fragment, which never reaches
+		// the network: a stylesheet's url() is routed with one (`#url(...)`,
+		// for its readback), and what it names is the same request as the
+		// page's preload of it. A script's or a stylesheet's is kept: its
+		// rewrite carries the URL it was asked for (a module's
+		// import.meta.url, `m.js#` as well as `m.js`)
+		REPEAT_DESTINATIONS.has(request.destination)
+			? request.url.replace(/#.*$/s, '')
+			: request.url,
 		request.destination,
 		request.mode,
 		request.credentials,
@@ -3877,7 +3911,70 @@ function rememberOutput(key: string, output: RecentOutput) {
 /** what the worker gave documents before stands for nothing now (the host's rules changed) */
 function forgetRecentOutputs() {
 	recentOutputs.clear();
+	pendingOutputs.clear();
 	recentBytes = 0;
+}
+
+/**
+ * Destinations whose body goes to the page as it came, and whose repeat from
+ * the same document is answered from the first response (recentOutputs):
+ * natively a document takes its own preload of an image or a font, and an
+ * image it loaded, whatever the response's cache headers say. Through the
+ * proxy the page's markup is written by the inject (document.open and
+ * write, loadHTML), and Chrome does not hand a preload fetched through a
+ * service worker to a request from the other side of that write ("A preload
+ * ... is not used because it is a cross-world service worker resource
+ * mismatch"): a Link header's preload to an element of the markup in a
+ * frame, a preload of the markup to a stylesheet's background or
+ * @font-face. Each was fetched from the origin twice (Discord's background
+ * image). Chrome does the same natively for a document written so; a page
+ * the network parser reads has none of it. A response still arriving is
+ * shared as it comes in (pendingOutputs).
+ */
+const REPEAT_DESTINATIONS = new Set(['image', 'font']);
+/** a larger body is not kept for a repeat */
+const REPEAT_BYTES = 16 * 1024 * 1024;
+/** a repeatable response the worker is still reading, by recentOutputKey */
+const pendingOutputs = new Map<string, Promise<RecentOutput | null>>();
+
+/** read `stream` (a branch of the page's body) and keep it under `key`, unless it is larger than REPEAT_BYTES or fails */
+function keepRepeat(
+	key: string,
+	stream: ReadableStream<Uint8Array>,
+	response: Omit<RecentOutput, 'body' | 'bytes'>,
+) {
+	const read = async (): Promise<RecentOutput | null> => {
+		const reader = stream.getReader();
+		const chunks: Uint8Array[] = [];
+		let size = 0;
+		try {
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				size += value.byteLength;
+				if (size > REPEAT_BYTES) {
+					await reader.cancel().catch(() => {});
+					return null;
+				}
+				chunks.push(value);
+			}
+		} catch (error) {
+			return null;
+		}
+		const body = new Uint8Array(size);
+		let offset = 0;
+		for (const chunk of chunks) {
+			body.set(chunk, offset);
+			offset += chunk.byteLength;
+		}
+		const output = { ...response, body, bytes: size };
+		rememberOutput(key, output);
+		return output;
+	};
+	const pending: Promise<RecentOutput | null> = read().finally(() => {
+		if (pendingOutputs.get(key) === pending) pendingOutputs.delete(key);
+	});
+	pendingOutputs.set(key, pending);
 }
 
 /**

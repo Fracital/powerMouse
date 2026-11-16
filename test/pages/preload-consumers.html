@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>preload-consumers</title>
+		<!-- each file is requested once natively: every preload here is the
+		     request its element or its stylesheet's background then takes
+		     (preload-consumers suite). pc-c.svg, pc-hdr.css, pc-e.svg, pc-g.ttf
+		     and pc-h.svg are preloaded by the Link header
+		     (preload-consumers.html.headers.json) -->
+		<link rel="preload" as="image" href="pc-a.svg" />
+		<link rel="preload" as="image" href="pc-d.svg" />
+		<link rel="preload" as="font" href="pc-f.ttf" crossorigin />
+		<link rel="stylesheet" href="pc-bg.css" />
+		<link rel="stylesheet" href="pc-hdr.css" />
+	</head>
+	<body>
+		<!-- a: a markup preload, a stylesheet's background -->
+		<div class="pc-a"></div>
+		<!-- c: a header preload, an <img> -->
+		<img src="pc-c.svg" alt="" />
+		<!-- d: a markup preload, an <img> -->
+		<img src="pc-d.svg" alt="" />
+		<!-- e: a header preload, a header-preloaded stylesheet's background -->
+		<div class="pc-e"></div>
+		<!-- f: a markup preload, @font-face -->
+		<p class="pc-f">f</p>
+		<!-- g: a header preload, @font-face -->
+		<p class="pc-g">g</p>
+		<!-- h: a header preload still arriving when its <img> asks -->
+		<img src="pc-h.svg?delay=800" alt="" />
+		<script>
+			addEventListener('load', () =>
+				document.fonts.ready.then(() =>
+					setTimeout(() => {
+						window.__done = {
+							fonts: [...document.fonts]
+								.filter((face) => face.status === 'loaded')
+								.map((face) => face.family)
+								.sort(),
+							images: [...document.images].map((image) => image.naturalWidth),
+						};
+					}, 300),
+				),
+			);
+		</script>
+	</body>
+</html>

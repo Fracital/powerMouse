@@ -1291,6 +1291,27 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   node; it failed on Chrome 156 (runScripts) and 157 (every Unsafe member)
   before. CI never saw it: the adversarial suites are measurements there,
   and its Chrome is 156.
+- A page's preloaded images and fonts are fetched from the origin once,
+  as natively, not twice. The inject writes the page's markup (document.open
+  and write), and Chrome does not hand a preload fetched through a service
+  worker to a request from the other side of that write ("A preload ... is
+  found, but is not used because it is a cross-world service worker
+  resource mismatch"): a preload in the markup taken by a stylesheet's
+  background or `@font-face`, and in a frame (the same-origin mode) a `Link`
+  header's preload taken by an `<img>` of the markup. Chrome does the same
+  natively for a page written so; a page the network parser reads has none
+  of it. Each such file went through the worker and the transport twice
+  (Discord's background image, every font a page preloads in its markup).
+  The worker now answers the same document's repeat of an image or a font
+  request from the first response, as natively the document takes its
+  preload whatever the response's cache headers say: one still arriving is
+  shared as it comes in (at most 16 MB a body, kept 30 seconds, under the
+  64 MB the worker keeps such outputs in). An image's or a font's repeat is
+  matched without its fragment, which a stylesheet's routed url() carries; a
+  script's or a stylesheet's keeps it, as before, since its rewrite carries
+  the URL it was asked for (a module's import.meta.url). Chrome's console
+  still shows the warning. (preload-consumers suite.)
+
 - A `Link` response header that preloads a stylesheet or a script with an
   `integrity` no longer fails the page's own element. The header's URLs
   were routed but its `integrity` kept, so the browser checked the

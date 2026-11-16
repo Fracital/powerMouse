@@ -1,0 +1,20 @@
+.pc-a {
+	width: 8px;
+	height: 8px;
+	background-image: url(pc-a.svg);
+}
+
+@font-face {
+	font-family: pc-f;
+	src: url(pc-f.ttf);
+}
+@font-face {
+	font-family: pc-g;
+	src: url(pc-g.ttf);
+}
+.pc-f {
+	font-family: pc-f;
+}
+.pc-g {
+	font-family: pc-g;
+}
