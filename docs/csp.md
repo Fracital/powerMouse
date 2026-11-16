@@ -201,25 +201,35 @@ host, and the browser refuses it as natively (even under `form-action *`).
   refusal URL: the element's action (or the submitter's formaction) is
   that URL until the next task (to the end of `submit()`). The browser
   refuses it before anything is sent, opens no window for `_blank`, and
-  reports it with the form's query, as natively. A form aimed at a proxied
-  parent or top (Sandbox) is left to the browser when refused. The document
-  tells the worker its form-action with the navigation's hint, and the
-  worker judges every later hop of the chain by it (paths not compared): a
-  hop it refuses is redirected to `REFUSED_URL`, which the browser refuses
-  and reports by the chain's first URL, as Chrome does. A report-only
-  refusal is the inject's event, the worker's for a hop (CSP_REPORT).
+  reports it with the form's query, as natively. The refusal is the
+  submitting document's own: a frame that submits to a refusal URL is not
+  given a fresh browsing context for it (`freshContext.ts`, which would make
+  the navigation its parent's, a plain load no form-action judges), its
+  navigate event names the URL the page submitted to (`Readback`), and a
+  frame still on its initial about:blank that a refused form is aimed at
+  keeps its context. A form aimed at a proxied parent or top (Sandbox) is
+  left to the browser when refused. The document tells the worker its
+  form-action with the navigation's hint, and the worker judges every later
+  hop of the chain by it (paths not compared): a hop it refuses is
+  redirected to `REFUSED_URL`, which the browser refuses and reports by the
+  chain's first URL, as Chrome does. A report-only refusal is the inject's
+  event, the worker's for a hop (CSP_REPORT).
 - **A frame's navigations.** Natively the parent's frame-src judges every
   navigation of a frame and every hop. The src a parent sets the parent
   judges (above). A navigation of the frame's own, or one another document
   starts in it, its document judges in its navigate event by its parent's
   policies: a refused one is cancelled and goes to a refusal URL of the
   parent's, which the parent's browser frame-src refuses (the frame shows
-  the error page, the parent gets Chrome's event). Both documents tell the
-  worker the parent's frame-src with the navigation's hint, and a hop it
-  refuses goes to a URL whose host names the refused URL (`namedRefusal`):
-  Chrome names a refused navigation by the URL refused, its origin alone
-  for another origin than the parent's, and the inject reads the host
-  back.
+  the error page, the parent gets Chrome's event). The page's own navigate
+  listeners hear of a refused one once, when it goes to the refusal URL,
+  whose destination reads as the URL they named. A navigation to another
+  origin is judged before the frame gets its fresh browsing context
+  (`freshContext.ts`: the guard asks `NavigationHint`), and a refusal URL
+  never gets one. Both documents tell the worker the parent's frame-src
+  with the navigation's hint, and a hop it refuses goes to a URL whose host
+  names the refused URL (`namedRefusal`): Chrome names a refused navigation
+  by the URL refused, its origin alone for another origin than the
+  parent's, and the inject reads the host back.
 - **frame-ancestors.** A framed document's own frame-ancestors (headers
   only; a meta's is ignored, natively) is judged against the real origins
   of its ancestors, the proxied top the outermost (the host's page is no
@@ -301,6 +311,12 @@ refuses fires a violation, natively either.
   not run).
 - A frame's navigations other than the src its parent sets (a redirect, a
   navigation the frame starts) are not judged by the parent's frame-src.
+- A form a frame submits to a URL its parent's frame-src refuses: the
+  navigate event the frame's own listeners get is that of the navigation
+  made again to the refusal URL (the browser refuses a navigation only
+  where it goes to a URL its copy of the policy refuses), which is no form
+  submission: its `formData` is null, natively the form's (csp-navigation
+  lists it as an expected difference).
 - A report-only base-uri or form-action refusal, and one of a frame's own
   navigation, is the inject's event (untrusted, no source position); a
   same-frame one may go with the document, as natively it may.

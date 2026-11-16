@@ -1212,6 +1212,25 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   kept Chrome 152's, in the worker and in a page alike). Both are read from
   STomp's own service worker, a real one, and handed to the emulated worker
   with its script. (service-worker-global suite, Chrome 152, 156 and 157.)
+- A frame's own navigations obey its form-action and its parent's frame-src
+  again. Since a frame gets a fresh browsing context for another origin's
+  document, the frame's inject cancelled every such navigation and its
+  parent made it again, as a plain load of the parent's. So a form the
+  frame's own form-action refuses, which the inject sends to a refusal URL
+  for the browser to refuse, was loaded by the parent instead: a GET went
+  out to `refused.invalid`, and a POST was refused by the parent's
+  form-action where it had one, whose page then got a violation naming
+  `https://r....refused.invalid/`. A navigation the frame started to
+  another origin was never judged by its parent's frame-src, and a refused
+  form aimed at a frame still on about:blank gave that frame a new context
+  (its `contentDocument` read null, natively about:blank). Now a refusal URL
+  never gets a fresh context (the browser refuses it in the document whose
+  navigation it is, and reports it there), the parent's frame-src judges a
+  frame's navigation before the frame gets its context and the worker is
+  told which policies judge its later hops, and a refused form leaves the
+  frame it is aimed at alone. The destination a frame's `navigate` event
+  names for a refused navigation is the URL the page navigated to, not the
+  refusal URL. (csp-navigation suite, natively against both modes.)
 - A `<base>` in a page's markup is refused by the `base-uri` of a
   `<meta http-equiv="Content-Security-Policy">` that stands before it, as
   natively. The inject rewrites a base while it copies the markup, before

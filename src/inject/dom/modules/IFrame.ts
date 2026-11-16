@@ -26,6 +26,7 @@ import { pageSandbox, sandboxTokens } from '../sandbox';
 import ContextModule, { initialBlank, isStomp } from './Context';
 import { nativeElement } from './DOMHooks';
 import { MARKER } from './MutationObserver';
+import NavigationHintModule from './NavigationHint';
 
 export default class IFrameModule extends Module<DocumentClient> {
 	apply() {
@@ -473,6 +474,15 @@ export default class IFrameModule extends Module<DocumentClient> {
 						url.search = new URLSearchParams(
 							data as unknown as Record<string, string>,
 						).toString();
+					// a submission the page's form-action refuses goes nowhere
+					// (NavigationHint sends it to a refusal URL, which the
+					// browser refuses): the frame keeps its context, as natively
+					if (
+						this.client
+							.pageRefusals('form-action', url)
+							.some(({ policy }) => policy.disposition === 'enforce')
+					)
+						return false;
 					return target.freshTo!(url, null, true);
 				} catch (error) {
 					return false;
@@ -648,9 +658,15 @@ export default class IFrameModule extends Module<DocumentClient> {
 				// browser's is the route the navigation goes to
 				let routed = destinationURL(navigate.destination);
 				if (!routed) return;
+				// where the inject sent a navigation the page's own policy
+				// refuses (DocumentClient refusalURL, no route): the browser
+				// refuses it in this context, by this document's policies and
+				// its parent's, and reports it where it does natively
+				if (/^https:\/\/[^/]*\.refused\.invalid[:/]/.test(routed)) return;
 				let origin: string;
+				let page: URL;
 				try {
-					const page = new URL(unrouteURL(this.client, routed) ?? routed);
+					page = new URL(unrouteURL(this.client, routed) ?? routed);
 					if (!/^(https?|data):$/.test(page.protocol)) return;
 					origin = page.origin;
 					// a link route (src/visited.ts) takes its kind of route from
@@ -672,6 +688,17 @@ export default class IFrameModule extends Module<DocumentClient> {
 				if (origin === this.client.originKey) return;
 				const container = this.#container();
 				if (!container) return;
+				// The parent's frame-src judges the navigation before the frame
+				// goes anywhere, as natively (NavigationHint, whose own listener
+				// this one keeps the event from): one it refuses goes to a
+				// refusal URL in this context, and the worker is told what
+				// judges the later hops of one that goes on
+				if (
+					this.client
+						.getModule(NavigationHintModule)
+						?.judgeFrame(event, page.href) === true
+				)
+					return;
 				event.preventDefault();
 				event.stopImmediatePropagation();
 				const formData = navigate.formData;

@@ -79,6 +79,8 @@ export default class ReadbackModule extends Module<DocumentClient> {
 			target: object | undefined,
 			key: string,
 			image = false,
+			/** a navigation's: one the page's policy refuses goes to a refusal URL */
+			navigation = false,
 		) => {
 			if (!target) return;
 			const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
@@ -91,6 +93,15 @@ export default class ReadbackModule extends Module<DocumentClient> {
 					// a copy the inject loaded for a document no worker controls
 					const copied = blobLoads.get(value);
 					if (copied !== undefined) return copied;
+					// (the URL the page's navigation named, as natively: the
+					// browser refuses it after the navigate event; a frame's is
+					// refused by its parent's policy, with a refusal URL of the
+					// parent's)
+					const refused = navigation
+						? (this.client.refusedURI(value) ??
+							this.client.parentClient()?.refusedURI(value))
+						: null;
+					if (refused) return refused.url;
 					const page = unrouteURL(this.client, value) ?? value;
 					return image ? upgradedImage(value, page) : page;
 				}),
@@ -99,7 +110,7 @@ export default class ReadbackModule extends Module<DocumentClient> {
 		unrouteGetter(global.HashChangeEvent?.prototype, 'oldURL');
 		unrouteGetter(global.HashChangeEvent?.prototype, 'newURL');
 		unrouteGetter(global.NavigationHistoryEntry?.prototype, 'url');
-		unrouteGetter(global.NavigationDestination?.prototype, 'url');
+		unrouteGetter(global.NavigationDestination?.prototype, 'url', false, true);
 		// the candidate the browser picked from src / srcset, as the page wrote it
 		unrouteGetter(global.HTMLImageElement?.prototype, 'currentSrc', true);
 		unrouteGetter(global.HTMLMediaElement?.prototype, 'currentSrc');

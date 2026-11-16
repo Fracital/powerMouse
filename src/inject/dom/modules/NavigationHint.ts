@@ -7,6 +7,7 @@ import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import { destinationURL } from '../freshContext';
 import { nativeElement } from './DOMHooks';
 import { hookWrite } from './MutationObserver';
 
@@ -41,6 +42,16 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 	) => void = () => {};
 	/** the real URL a frame's src was set to by its parent, which judged it (set by the parent on this document's module) */
 	judged: string | null = null;
+	/**
+	 * This document is a frame's and a navigate event says it goes to
+	 * `destination` (the page's URL): its parent's frame-src judges it. True
+	 * when it refused it (the navigation is cancelled, kept from the page's
+	 * listeners, and made again to a refusal URL), false when it goes on and
+	 * the worker was told, null when the navigation is none of a frame's to
+	 * judge. Set by apply.
+	 */
+	judgeFrame: (event: Event, destination: string) => boolean | null = () =>
+		null;
 	apply() {
 		const global = this.client.global as typeof globalThis & {
 			navigation?: EventTarget;
@@ -102,47 +113,58 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 				},
 			});
 		});
-		navigation.addEventListener('navigate', (event) => {
-			const navigate = event as Event & {
-				destination?: { url: string; sameDocument: boolean };
-				navigationType?: string;
-			};
-			if (!navigate.destination || navigate.destination.sameDocument) return;
-			const destination = navigate.destination.url;
-			// a frame's navigation is its parent's frame-src's to judge,
-			// whoever started it; the src its parent set it judged itself
+		// a frame's navigation is its parent's frame-src's to judge, whoever
+		// started it; the src its parent set it judged itself
+		const judgeFrame = (this.judgeFrame = (event, destination) => {
+			const navigate = event as Event & { navigationType?: string };
 			const parent = this.client.parentClient();
 			// (the destination reads as the page's URL, a route's real one;
 			// a refusal URL is one already)
 			const real = parent && unrouteURL(this.client, destination);
 			if (
-				parent &&
-				real &&
-				/^https?:/.test(real) &&
-				!/^[a-z]+:\/\/[^/]*\.refused\.invalid[:/]/.test(real) &&
-				navigate.navigationType !== 'traverse'
-			) {
-				const judged = this.judged === real.replace(/#.*$/s, '');
-				this.judged = null;
-				const refused = judged
-					? null
-					: parent.loadRefusal('frame-src', new URL(real), true);
-				if (refused !== null && navigate.cancelable) {
-					event.preventDefault();
-					// (a Location's methods are its own: the page cannot replace them)
-					if (navigate.navigationType === 'replace')
-						global.location.replace(refused);
-					else global.location.assign(refused);
-					return;
-				}
-				send(destination, undefined, {
-					policies: parent.hopPolicies('frame-src') ?? [],
-					ancestors: this.client.ancestorOrigins(),
-					parent: true,
-				});
-				return;
+				!parent ||
+				!real ||
+				!/^https?:/.test(real) ||
+				/^[a-z]+:\/\/[^/]*\.refused\.invalid[:/]/.test(real) ||
+				navigate.navigationType === 'traverse'
+			)
+				return null;
+			const judged = this.judged === real.replace(/#.*$/s, '');
+			this.judged = null;
+			const refused = judged
+				? null
+				: parent.loadRefusal('frame-src', new URL(real), true);
+			if (refused !== null && navigate.cancelable) {
+				// (the page's listeners hear of the navigation once: when it
+				// goes to the refusal URL, which reads as this destination)
+				event.preventDefault();
+				event.stopImmediatePropagation();
+				// (a Location's methods are its own: the page cannot replace them)
+				if (navigate.navigationType === 'replace')
+					global.location.replace(refused);
+				else global.location.assign(refused);
+				return true;
 			}
-			send(destination);
+			send(destination, undefined, {
+				policies: parent.hopPolicies('frame-src') ?? [],
+				ancestors: this.client.ancestorOrigins(),
+				parent: true,
+			});
+			return false;
+		});
+		navigation.addEventListener('navigate', (event) => {
+			const navigate = event as Event & {
+				destination?: { url: string; sameDocument: boolean };
+			};
+			if (!navigate.destination || navigate.destination.sameDocument) return;
+			// as the browser has it, read as the page's URL (the page's own
+			// getter reads a refusal URL as the URL it stands for, Readback)
+			const routed = destinationURL(navigate.destination);
+			const destination =
+				routed === null
+					? navigate.destination.url
+					: (unrouteURL(this.client, routed) ?? routed);
+			if (judgeFrame(event, destination) === null) send(destination);
 		});
 		// a link says where it goes when activated: the navigation may be
 		// another browsing context's (a target), and an initial about:blank
