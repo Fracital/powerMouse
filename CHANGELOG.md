@@ -1306,6 +1306,19 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   nothing else (measured: twice for resources and once for long tasks on
   the fixture page, never natively) (performance-entries,
   performance-buffer suites).
+- A page's resource timing buffer holds the page's entries only
+  (`src/inject/modules/ResourceBuffer.ts`). Every request the proxy makes
+  in a document for itself (the inject bundles, each beacon of the
+  synchronous bridge, the rewriter library) was an entry in the browser's
+  one buffer of 250, which the page never saw: a page that used its
+  storage a hundred times filled it at 102 loads of its own where natively
+  250, heard `resourcetimingbufferfull` for the proxy's entries (162 events
+  where natively 14) and lost its own entries from then on. The browser's
+  buffer is now sized for the page's count and the proxy's entries it
+  holds, so the browser fires its own event and takes in or drops entries
+  on the page's count; `setResourceTimingBufferSize`,
+  `clearResourceTimings` and a buffered observer's `droppedEntriesCount`
+  read as natively (performance-buffer suite).
 - A frame read before it loaded (an about:blank child or popup, one written
   with document.write) no longer shows the access API on its
   Number.prototype to the page that made it. The inject defines the API

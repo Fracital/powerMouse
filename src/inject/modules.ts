@@ -9,6 +9,7 @@ import ObjectURLModule from './modules/ObjectURL';
 import PartitionModule from './modules/Partition';
 import ProxyModule from './modules/Proxy';
 import ReflectionModule from './modules/Reflection';
+import ResourceBufferModule from './modules/ResourceBuffer';
 import ResourceTimingModule from './modules/ResourceTiming';
 import StorageEstimateModule from './modules/StorageEstimate';
 import TimersModule from './modules/Timers';
@@ -35,6 +36,8 @@ export default function baseModules(client: Client) {
 	client.addModule(MixedContentModule);
 	client.addModule(WebSocketModule);
 	client.addModule(WebTransportModule);
+	// (before the Unroute module, which starts it)
+	client.addModule(ResourceBufferModule);
 	client.addModule(UnrouteModule);
 	client.addModule(ResourceTimingModule);
 	client.addModule(ConsoleModule);

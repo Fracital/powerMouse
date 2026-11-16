@@ -15,6 +15,7 @@ import type DocumentClient from '../dom/Client';
 import Module from '../Module';
 import { skippedFrames } from '../nativeErrors';
 import ProxyModule from './Proxy';
+import ResourceBufferModule from './ResourceBuffer';
 
 /**
  * The proxy-origin prefix every route of this context starts with. A
@@ -380,6 +381,10 @@ export default class UnrouteModule extends Module<Client> {
 			);
 		}
 
+		const startOf = Reflect.getOwnPropertyDescriptor(
+			PerformanceEntry.prototype,
+			'startTime',
+		)?.get;
 		const pageEntry = (entry: object) =>
 			pageName(entry as PerformanceEntry) !== null;
 		const visible = (entries: PerformanceEntry[]) => entries.filter(pageEntry);
@@ -387,6 +392,42 @@ export default class UnrouteModule extends Module<Client> {
 			proxyModule.wrapFunction(fn, (target, that, args) =>
 				visible(Reflect.apply(target, that, args)),
 			);
+		// the page's buffer is counted in the page's entries only, from here
+		// on (ResourceBuffer.ts)
+		const buffer = this.client.getModule(ResourceBufferModule);
+		buffer?.start(pageEntry);
+		/**
+		 * `entries` (what the browser's buffer has of the page's, by start
+		 * time) with the page's entries that are in its buffer though the
+		 * browser's own task has not taken them in yet, when the read is of
+		 * this context's performance object and takes in resources
+		 */
+		const withWaiting = (
+			entries: PerformanceEntry[],
+			that: unknown,
+			type?: unknown,
+			name?: string,
+		) => {
+			if (that !== global.performance) return entries;
+			let waiting = (buffer?.read() ?? []) as PerformanceEntry[];
+			if (!waiting.length || (type !== undefined && type !== 'resource'))
+				return entries;
+			if (name !== undefined)
+				waiting = waiting.filter((entry) => pageName(entry) === name);
+			for (const entry of waiting) {
+				if (entries.includes(entry)) continue;
+				const start = startOf ? Reflect.apply(startOf, entry, []) : 0;
+				let index = entries.length;
+				while (
+					index > 0 &&
+					startOf &&
+					Reflect.apply(startOf, entries[index - 1], []) > start
+				)
+					index--;
+				entries.splice(index, 0, entry);
+			}
+			return entries;
+		};
 
 		// (an observer's list as the browser has it, for the callbacks below)
 		const nativeListEntries =
@@ -398,8 +439,21 @@ export default class UnrouteModule extends Module<Client> {
 			if (!prototype) continue;
 			const getEntries = prototype.getEntries;
 			const getEntriesByType = prototype.getEntriesByType;
-			prototype.getEntries = filterList(getEntries);
-			prototype.getEntriesByType = filterList(getEntriesByType);
+			prototype.getEntries = proxyModule.wrapFunction(
+				getEntries,
+				(target, that, args) =>
+					withWaiting(visible(Reflect.apply(target, that, args)), that),
+			);
+			prototype.getEntriesByType = proxyModule.wrapFunction(
+				getEntriesByType,
+				(target, that, args) => {
+					const entries = visible(Reflect.apply(target, that, args));
+					// (the browser has read the type: a string here)
+					return args[0] === 'resource'
+						? withWaiting(entries, that, 'resource')
+						: entries;
+				},
+			);
 			prototype.getEntriesByName = proxyModule.wrapFunction(
 				prototype.getEntriesByName,
 				(target, that, args) => {
@@ -407,11 +461,17 @@ export default class UnrouteModule extends Module<Client> {
 					if (!args.length) return Reflect.apply(target, that, args);
 					// the page asks by its own URL, which no native entry carries
 					const name = String(args[0]);
-					const entries: PerformanceEntry[] =
-						args.length > 1 && args[1] !== undefined
-							? Reflect.apply(getEntriesByType, that, [args[1]])
-							: Reflect.apply(getEntries, that, []);
-					return entries.filter((entry) => pageName(entry) === name);
+					const typed = args.length > 1 && args[1] !== undefined;
+					const type = typed ? String(args[1]) : undefined;
+					const entries: PerformanceEntry[] = typed
+						? Reflect.apply(getEntriesByType, that, [type])
+						: Reflect.apply(getEntries, that, []);
+					return withWaiting(
+						entries.filter((entry) => pageName(entry) === name),
+						that,
+						type,
+						name,
+					);
 				},
 			);
 		}
@@ -421,9 +481,14 @@ export default class UnrouteModule extends Module<Client> {
 		NativeObserver.prototype.takeRecords = filterList(
 			NativeObserver.prototype.takeRecords,
 		);
+		const typeOf = Reflect.getOwnPropertyDescriptor(
+			PerformanceEntry.prototype,
+			'entryType',
+		)?.get;
 		// An observer hears of the proxy's own entries too: a callback whose
 		// entries are all the proxy's would be called with an empty list,
-		// which the browser never does
+		// which the browser never does, and what a buffered observer is told
+		// was dropped counts the page's entries only
 		global.PerformanceObserver = proxyModule.wrapFunction(
 			NativeObserver,
 			(target, that, args, newTarget) => {
@@ -441,6 +506,22 @@ export default class UnrouteModule extends Module<Client> {
 							[],
 						);
 						if (entries.length && !entries.some(pageEntry)) return;
+						const options = called[2] as
+							{ droppedEntriesCount?: unknown } | undefined;
+						if (
+							buffer?.notThePages &&
+							options &&
+							typeof options.droppedEntriesCount === 'number' &&
+							options.droppedEntriesCount > 0 &&
+							typeOf &&
+							entries.some(
+								(entry) => Reflect.apply(typeOf, entry, []) === 'resource',
+							)
+						)
+							options.droppedEntriesCount = Math.max(
+								0,
+								options.droppedEntriesCount - buffer.notThePages,
+							);
 					} catch (error) {
 						// not the browser's own call: as it came
 					}
