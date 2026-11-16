@@ -1237,6 +1237,11 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   (a synchronous XMLHttpRequest has no entry, Early Hints are not seen; on
   Chrome 152, not on 156, an image in the markup that no cache may keep is
   fetched twice and has two entries).
+- A `fetch` that a redirect takes to another origin and back to the page's
+  own reads `response.type` "cors", as natively: its last URL is the page's
+  origin's, and the inject, which decided by the URLs, said "basic". The
+  worker marks every cors answer of a chain that left the origin
+  (performance-resources suite).
 - `performance.memory` is each proxied site's own, as a renderer process of
   its own would report it (`src/inject/dom/modules/Memory.ts`). Every
   proxied site shares the proxy's one process, so `usedJSHeapSize` is the

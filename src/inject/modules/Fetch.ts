@@ -7,6 +7,7 @@ import {
 import StompURL, { urlLike } from '../../StompURL';
 import {
 	ABORT_HEADER,
+	CORS_MARKER,
 	OPAQUE_COPY_HEADER,
 	OPAQUE_HEADER,
 	OPAQUE_MARKER,
@@ -166,12 +167,17 @@ export function opaqueCopy(response: Response): boolean {
  * URL (OPAQUE_MARKER: a no-cors chain that went through another origin)
  */
 export function opaqueMarked(response: Response): boolean {
+	return hasMark(response, OPAQUE_MARKER);
+}
+
+/** whether the worker's answer carries its Server-Timing mark `mark` */
+function hasMark(response: Response, mark: string): boolean {
 	try {
 		const headers = Reflect.apply(nativeResponseHeaders, response, []);
 		const timing = Reflect.apply(nativeHeadersGet, headers, [
 			'server-timing',
 		]) as string | null;
-		return timing !== null && metricNames(timing).includes(OPAQUE_MARKER);
+		return timing !== null && metricNames(timing).includes(mark);
 	} catch (error) {
 		return false;
 	}
@@ -561,6 +567,11 @@ export default class FetchModule extends Module<Client> {
 				// to B to A): its URLs are this origin's, the worker marks it
 				else if (type === 'basic' && mode === 'no-cors' && opaqueMarked(res))
 					responseTypes.set(res, 'opaque');
+				// and a cors one through another origin and back is a cors
+				// response, as natively (the worker marks every cors answer of
+				// a chain that left the origin: CORS_MARKER)
+				else if (type === 'basic' && hasMark(res, CORS_MARKER))
+					responseTypes.set(res, 'cors');
 
 				return res;
 			},
