@@ -1,0 +1,123 @@
+From eed23bb5432b9b3247933bf34252d49c53d4885f Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Sun, 15 Nov 2026 12:00:00 -0500
+Subject: [PATCH] websocket: flush every frame written
+
+fastwebsockets writes a frame into the stream without flushing it, and a
+wisp stream's AsyncWrite only hands the packet to the transport sink,
+which sends it on its next poll: the socket's next frame, or a write of
+another stream on the same wisp connection. A message the page sent, the
+page's close, and the answers to the server's ping and close waited in
+epoxy until then, so a server answering the page looked silent until the
+page wrote again, and a close the server started was not answered.
+send, close and the read loop's obligated sends now flush the frame.
+---
+ client/src/websocket.rs | 59 +++++++++++++++++++++++++----------------
+ 1 file changed, 36 insertions(+), 23 deletions(-)
+
+diff --git a/client/src/websocket.rs b/client/src/websocket.rs
+index 46ccb2f..6eb6522 100644
+--- a/client/src/websocket.rs
++++ b/client/src/websocket.rs
+@@ -5,7 +5,8 @@ use std::{
+ 
+ use bytes::Bytes;
+ use fastwebsockets::{
+-	FragmentCollectorRead, Frame, OpCode, Payload, Role, WebSocket, WebSocketWrite,
++	FragmentCollectorRead, Frame, OpCode, Payload, Role, WebSocket, WebSocketError,
++	WebSocketWrite,
+ };
+ use futures_util::lock::Mutex;
+ use http::{
+@@ -23,7 +24,7 @@ use hyper::{
+ };
+ use hyper_util_wasm::client::legacy::connect::ConnectSvc;
+ use js_sys::{ArrayBuffer, Function, Uint8Array};
+-use tokio::io::WriteHalf;
++use tokio::io::{AsyncWrite, WriteHalf};
+ use wasm_bindgen::{prelude::*, JsError, JsValue};
+ use wasm_bindgen_futures::spawn_local;
+ 
+@@ -143,7 +144,7 @@ impl EpoxyWebSocket {
+ 				loop {
+ 					match rx
+ 						.read_frame(&mut |arg| async {
+-							read_tx.lock().await.write_frame(arg).await
++							write_flushed(&mut *read_tx.lock().await, arg).await
+ 						})
+ 						.await
+ 					{
+@@ -199,21 +200,19 @@ impl EpoxyWebSocket {
+ 
+ 	pub async fn send(&self, payload: EpoxyWebSocketInput) -> Result<(), EpoxyError> {
+ 		let ret = if let Some(str) = payload.as_string() {
+-			self.tx
+-				.lock()
+-				.await
+-				.write_frame(Frame::text(Payload::Owned(str.as_bytes().to_vec())))
+-				.await
+-				.map_err(EpoxyError::from)
++			write_flushed(
++				&mut *self.tx.lock().await,
++				Frame::text(Payload::Owned(str.as_bytes().to_vec())),
++			)
++			.await
++			.map_err(EpoxyError::from)
+ 		} else if let Some(binary) = payload.dyn_ref::<ArrayBuffer>() {
+-			self.tx
+-				.lock()
+-				.await
+-				.write_frame(Frame::binary(Payload::Owned(
+-					Uint8Array::new(binary).to_vec(),
+-				)))
+-				.await
+-				.map_err(EpoxyError::from)
++			write_flushed(
++				&mut *self.tx.lock().await,
++				Frame::binary(Payload::Owned(Uint8Array::new(binary).to_vec())),
++			)
++			.await
++			.map_err(EpoxyError::from)
+ 		} else {
+ 			Err(EpoxyError::WsInvalidPayload(format!(
+ 				"{:?}",
+@@ -233,12 +232,11 @@ impl EpoxyWebSocket {
+ 	}
+ 
+ 	pub async fn close(&self, code: u16, reason: String) -> Result<(), EpoxyError> {
+-		let ret = self
+-			.tx
+-			.lock()
+-			.await
+-			.write_frame(Frame::close(code, reason.as_bytes()))
+-			.await;
++		let ret = write_flushed(
++			&mut *self.tx.lock().await,
++			Frame::close(code, reason.as_bytes()),
++		)
++		.await;
+ 		match ret {
+ 			Ok(ok) => Ok(ok),
+ 			Err(err) => {
+@@ -251,6 +249,21 @@ impl EpoxyWebSocket {
+ 	}
+ }
+ 
++/// Writes a frame and flushes it. fastwebsockets only writes a frame into
++/// the stream, and a wisp stream (with or without TLS over it) queues what
++/// it is written: the packet goes out on the sink's next poll, which is the
++/// socket's next frame or another stream's write on the same connection. A
++/// message the page sent, a close and the answer to a ping or to the
++/// server's close waited in epoxy until then, so a server answering the page
++/// seemed silent until the page wrote again.
++async fn write_flushed<S: AsyncWrite + Unpin>(
++	tx: &mut WebSocketWrite<S>,
++	frame: Frame<'_>,
++) -> Result<(), WebSocketError> {
++	tx.write_frame(frame).await?;
++	tx.flush().await
++}
++
+ /// A close frame's status code and reason; a frame without a status
+ /// reads 1005, as in a browser, and a reason that is not UTF-8 is empty
+ /// (fastwebsockets has failed such a frame already)

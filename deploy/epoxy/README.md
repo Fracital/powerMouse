@@ -25,6 +25,10 @@ inner hello and Chrome's retries. Its writes go out as wisp packets of at
 most 64 KiB within each stream's flow control credit, so a wisp server that
 bounds its messages (the holyWisp relays, 262149 bytes) no longer closes the
 whole connection over an upload (see the `wisp-message-size` suite).
+And every WebSocket frame it writes is flushed: the page's message, its
+close and the answers to the server's ping and close waited in the wisp
+stream for the next write, so a server answering the page looked silent
+(see the `websocket-frames` suite).
 The build also carries stomp-h3, HTTP/3 over wisp
 UDP for STomp's `http3` option (`h3/`, below), whose QUIC ClientHello and
 transport parameters are Chrome's too.
@@ -74,6 +78,7 @@ fails the build at `git apply --check`.
 | MercuryWorkshop/EpoxyTransport                                 | `0052` | `ech_dns`: HTTPS records over DNS-over-HTTPS through the client, their `ech` handed to `ech_resolver` (kept for the TTL, at most 1.5 s of waiting per connection); `pem_files` passed through.                                                                                                                                                                                    |
 | MercuryWorkshop/epoxy-tls                                      | `0057` | Writes go out as DATA packets of at most 64 KiB, each within the stream's CONTINUE credit (the transport flushed while it waits). A body was one packet, and holyWisp closes the connection past 262149 bytes (1009). A UDP datagram over it fails that send alone (EMSGSIZE, `send(datagram)`).                                                                                  |
 | MercuryWorkshop/epoxy-tls                                      | `0058` | A UDP stream from `connect_udp` gets `closeReason()`: the wisp close reason it ended with, once its read side has ended. STomp's HTTP/3 tells a refused destination from a relay without UDP by it (docs/http3.md, rule 5); http3-fallback checks the reasons arrive.                                                                                                             |
+| MercuryWorkshop/epoxy-tls                                      | `0061` | A WebSocket frame is flushed once written (`send`, `close`, the read loop's pong and close answers). fastwebsockets does not flush and the wisp stream only queued the packet for the sink's next poll, so the page's message left with its next frame or another stream's write.                                                                                                 |
 
 ## stomp-h3 (`h3/`)
 
