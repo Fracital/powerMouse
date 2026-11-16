@@ -167,26 +167,54 @@ stops a violation whose page policy allows the URL natively (a refused
 route is still shown when no enforced policy refuses it: a later hop of a
 redirect, which Chrome names by its first URL).
 
-A worker's WebSockets and WebTransport sessions are judged by the
-worker's own policies, as Chrome judges them (measured, Chrome 157): a
-worker of a URL (dedicated, module, shared, or a page's service worker)
-has its script's response's policies, never its document's; a `blob:` or
-`data:` worker has its creator's, each with its creator's 'self'. The
-browser applies none of them to the proxy's URLs (the worker's policy
-headers are dropped like any response's), so the worker's client is
-handed them: the route's preamble names those of a worker's own script
+A worker's requests are judged by the worker's own policies, as Chrome
+judges them (measured, Chrome 157): a worker of a URL (dedicated, module,
+shared, or a page's service worker) has its script's response's
+policies, never its document's; a `blob:` or `data:` worker has its
+creator's, each with its creator's 'self'. Its fetches, XMLHttpRequests,
+EventSources, WebSockets and WebTransport sessions by connect-src, its
+importScripts and `import()` by script-src-elem, its own workers by
+worker-src; a module worker's static imports by its creator's
+script-src-elem (they load before the worker has a policy). The browser
+applies none of them to the proxy's URLs (the worker's policy headers
+are dropped like any response's), so the worker's client is handed them:
+the route's preamble names those of a worker's own script
 (`judgeConnections`; a module the worker imports is a `cors` request and
 names none), an emulated service worker's are kept with its script, and
 a `blob:` worker's bootstrap or a `data:` worker's rewrite names its
-creator's (`connectInheritance`). A connection one refuses fails as
-natively (a socket fires error and no close; a session's `ready` and
-`closed` reject with Chrome's WebTransportError), and the worker's global
-gets one event for each policy that refuses it, report-only ones too, a
-task later: Chrome's fields (the worker's URL as its documentURI and,
-without its query, as its sourceFile, `blob` or `data` for those, status
-0, no referrer). The event is the inject's; its listeners read it as
-trusted, as the browser's is (`trustTaggedViolations`, as for Trusted
-Types). The document hears nothing of it, natively either (csp-workers).
+creator's (`connectInheritance`).
+
+The worker's inject judges each request as the page's code makes it
+(`requestVerdict`): only it sees a socket, a session, a `data:` or `blob:`
+URL, and a worker's own worker, and only it knows which API made a
+request, which decides the violation. A request one refuses goes to the
+`refused` route instead, which the service worker answers with a network
+error, so the browser fails it with its own error (fetch rejects with
+"TypeError: Failed to fetch", an XMLHttpRequest fires error, a sync one
+throws NetworkError, importScripts throws NetworkError and `import()`
+rejects, each naming the page's URL; a worker fires error); an
+EventSource's route answers 204, which fails its connection without a
+reconnect, as natively. A socket fires error and no close; a session's
+`ready` and `closed` reject with Chrome's WebTransportError. The worker's
+global gets one event for each policy that refuses it, report-only ones
+too, a task later (twice for a fetch or an importScripts only a
+report-only policy refuses, as Chrome): Chrome's fields (the worker's URL
+as its documentURI and, without its query, as its sourceFile, none for
+an EventSource, `blob` or `data` for those, a local scheme's URL as its
+scheme, status 0, no referrer). The event is the inject's; its listeners
+read it as trusted, as the browser's is (`trustTaggedViolations`, as for
+Trusted Types). The document hears nothing of it, natively either
+(csp-workers, csp-worker-requests).
+
+The service worker keeps each worker's own policies by its client id as
+it serves the worker's script (a `blob:` worker's are its creator's), and
+refuses what the inject did not: a redirect's hop, a module worker's
+static import, a request of a module's top level before the worker was
+handed its policies. A worker's refused request is answered with a
+network error, not `REFUSED_URL`: a `blob:` worker's realm has its
+document's browser policies, whose violations would name the proxy. The
+inject stops those at the worker's global, before the page's listeners
+(the worker reports its requests itself).
 
 A report-only policy's refusal of a load that goes out cannot be made the
 browser's without refusing the load: the inject dispatches the violation
@@ -368,16 +396,19 @@ refuses fires a violation, natively either.
 - sourceFile, lineNumber and columnNumber of a violation the browser
   reports for a load the inject made on the page's behalf name no script
   of the page's.
-- A worker's own policy (its script's response headers, or its creator's
-  for a `blob:` or `data:` worker) judges only its WebSockets and
-  WebTransport sessions: its fetches, XMLHttpRequests, EventSources and
-  imports go out as if it had none (a `blob:` or `data:` worker's local
-  schemes excepted, which the browser refuses by its creator's browser
-  policy). A module worker's own policy is known once its script's body
-  starts, so what a module it imports connects to at its top level is not
-  judged. A worker's violation's lineNumber and columnNumber are 0, and its
+- A worker's request its own policy refuses at a redirect's hop is
+  refused (or, report-only, let out) by the service worker, but fires no
+  violation: the service worker cannot reach the worker's global
+  (csp-worker-requests lists it as an expected difference). A module
+  worker's own policy reaches its inject once its script's body starts, so
+  what a module it imports connects to at its top level is refused by the
+  service worker without a violation. A worker's script list that takes
+  nonces, hashes or 'strict-dynamic' judges none of its imports. A
+  worker's violation's lineNumber and columnNumber are 0, and its
   sourceFile is the worker's script even for a script it imported.
-- No report goes to a policy's report-uri or report-to endpoint (the site
-  never sees one; the page sees every violation, as natively).
+- No report goes to a policy's report-uri or report-to endpoint, a
+  document's or a worker's (the site never sees one; the page sees every
+  violation, as natively; csp-worker-requests lists a worker's as an
+  expected difference).
 - An `<object>` of a page-made `blob:` URL does not load through the proxy,
   with or without a policy.

@@ -1,10 +1,11 @@
-import { routeURL } from '../../../routeURL';
+import { routeRefused, routeURL } from '../../../routeURL';
 import { routeJS } from '../../../scriptRoutes';
 import { SW_IMPORT_ROUTE } from '../../../serviceWorkerTypes';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule, { ownerOf } from '../../modules/Proxy';
-import { failsToParse } from '../../nativeErrors';
+import { unrouteText } from '../../modules/Unroute';
+import { failsToParse, withStack } from '../../nativeErrors';
 import WorkerClient from '../Client';
 
 export default class ImportScriptsModule extends Module<WorkerClient> {
@@ -21,6 +22,9 @@ export default class ImportScriptsModule extends Module<WorkerClient> {
 					if (args.some((arg) => failsToParse(this.client, String(arg))))
 						return Reflect.apply(target, that, args);
 
+					// a module worker's: the browser's TypeError, before anything is
+					// judged (called with nothing, it loads nothing)
+					Reflect.apply(target, that, []);
 					// an emulated service worker's imports are kept with its version,
 					// so it starts again without the network (docs/service-workers.md)
 					const version = this.client.serviceWorkerVersion;
@@ -29,8 +33,16 @@ export default class ImportScriptsModule extends Module<WorkerClient> {
 							new URL(String(args[i]), this.client.url.toString()),
 							this.client.url,
 						);
-						args[i] =
-							version && /^https?:$/.test(resource.url.protocol)
+						// one the worker's script-src refuses fails to load, as the
+						// browser fails it (requestVerdict reports it, twice for a
+						// report-only policy alone); those before it run
+						args[i] = this.client.requestVerdict(
+							'script-src-elem',
+							resource.url,
+							2,
+						)
+							? routeRefused(resource)
+							: version && /^https?:$/.test(resource.url.protocol)
 								? routeURL(`${SW_IMPORT_ROUTE}:${version}`, resource)
 								: routeJS(
 										resource,
@@ -40,7 +52,17 @@ export default class ImportScriptsModule extends Module<WorkerClient> {
 									);
 					}
 
-					return Reflect.apply(target, that, args);
+					try {
+						return Reflect.apply(target, that, args);
+					} catch (error) {
+						// the browser's NetworkError names the script it was given:
+						// the page's URL, as natively
+						const DOMError = this.client.global.DOMException;
+						if (!(error instanceof DOMError)) throw error;
+						const message = unrouteText(this.client, error.message);
+						if (message === error.message) throw error;
+						throw withStack(new DOMError(message, error.name));
+					}
 				},
 			);
 	}

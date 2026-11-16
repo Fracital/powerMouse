@@ -1,5 +1,10 @@
 import type { WorkerPolicies } from '../../csp';
-import { injectWorkerJS, pageBlobURL, proxyBlobURL } from '../../routeURL';
+import {
+	injectWorkerJS,
+	pageBlobURL,
+	proxyBlobURL,
+	routeRefused,
+} from '../../routeURL';
 import { routeJS } from '../../scriptRoutes';
 import StompURL from '../../StompURL';
 import {
@@ -12,6 +17,7 @@ import {
 import Client from '../Client';
 import Module from '../Module';
 import { failsToParse, withStack } from '../nativeErrors';
+import { requestRefused } from '../requestVerdict';
 import { modifyJS } from '../rewriter';
 import {
 	trustedScriptURL,
@@ -109,7 +115,11 @@ export default class WorkerModule extends Module<Client> {
 						? `globalThis[${JSON.stringify(WORKER_PARTITION)}] = ${JSON.stringify(partition)};`
 						: '') +
 					(connect
-						? `globalThis[${JSON.stringify(CSP_WORKER)}] = ${JSON.stringify(connect)};`
+						? `globalThis[${JSON.stringify(CSP_WORKER)}] = ${JSON.stringify(
+								// (and the page's script the bootstrap imports, which no
+								// policy of the worker's judges: its worker-src did)
+								inline ? connect : { ...connect, script },
+							)};`
 						: '') +
 					// (and its Trusted Types, which a worker's own code meets too)
 					(this.client.trustedTypesRequired() && trustedTypesUsed()
@@ -359,6 +369,15 @@ export default class WorkerModule extends Module<Client> {
 					if (failsToParse(this.client, source))
 						return Reflect.construct(target, args, newTarget);
 					checkOrigin('Worker', source);
+					// a worker a worker's worker-src refuses fails to start, as the
+					// browser fails it (requestVerdict reports it)
+					const resolved = new URL(source, this.client.baseURL.toString());
+					if (requestRefused(this.client, 'worker-src', resolved)) {
+						args[0] = trustedScriptURL(
+							routeRefused(new StompURL(resolved, this.client.url)),
+						);
+						return Reflect.construct(target, args, newTarget);
+					}
 					const url = workerURL(source, isModuleOptions(args[1]));
 					args[0] = trustedScriptURL(url);
 					const own = lastPrivate;

@@ -26,6 +26,8 @@ const owners = new Map<string, string | null>();
 const blobWorkers = new Map<string, string>();
 /** the clients being looked up */
 const pending = new Map<string, Promise<void>>();
+/** a blob: worker -> the client that made it (its policies are its creator's, src/server/contentPolicies.ts) */
+const blobCreators = new Map<string, string>();
 
 function remember<V>(map: Map<string, V>, key: string, value: V) {
 	map.delete(key);
@@ -70,6 +72,8 @@ async function identify(id: string) {
 		if (client && client.type !== 'window') {
 			owner = blobWorkers.get(client.url) ?? null;
 			blobWorkers.delete(client.url);
+			if (owner && client.url.startsWith('blob:'))
+				remember(blobCreators, id, owner);
 		} else if (client && client.url === 'about:srcdoc')
 			client.postMessage({ [CLIENT_ID]: id });
 	} catch (error) {
@@ -93,9 +97,23 @@ export async function goneClients(asked: string[]): Promise<string[]> {
 	}))
 		live.add(client.id);
 	const gone = asked.filter((id) => typeof id === 'string' && !live.has(id));
-	for (const id of gone) owners.delete(id);
+	for (const id of gone) {
+		owners.delete(id);
+		blobCreators.delete(id);
+	}
 	return gone;
 }
+
+/** the client that made the worker `client` (a worker's script named it), or undefined */
+export const creatorOf = (client: string): string | undefined =>
+	owners.get(client) ?? undefined;
+
+/**
+ * The client that made the blob: worker `client`, once a request of the
+ * worker's was looked up (requestOwner); undefined for any other client
+ */
+export const blobCreatorOf = (client: string): string | undefined =>
+	blobCreators.get(client);
 
 /**
  * The owner to report with a request of `client`: at once for a client seen

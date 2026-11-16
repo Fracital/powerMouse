@@ -1285,6 +1285,25 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A worker's fetches, XMLHttpRequests, EventSources, importScripts,
+  `import()` and own workers are judged by the worker's own policy, as
+  natively: a dedicated, module, shared or service worker of a URL by its
+  script's response's (connect-src, script-src-elem, worker-src and their
+  fallbacks), a `blob:` worker by its creator's, and a module worker's
+  static imports by its creator's script-src. They went out as if it had
+  none, so a worker was a way past its policy (only its sockets were
+  judged). A refused one fails as the browser fails it: fetch rejects with
+  "TypeError: Failed to fetch", an XMLHttpRequest fires error, a sync one
+  throws NetworkError, an EventSource fires error and is closed,
+  importScripts throws NetworkError and `import()` rejects, each naming
+  the page's URL, and a worker of a worker fires error. The worker's
+  global gets Chrome's securitypolicyviolation for each policy that
+  refuses it (twice for a fetch or an importScripts a report-only policy
+  alone refuses), trusted, with Chrome's fields. A `blob:` worker under a
+  report-only policy no longer hears its document's browser policy (which
+  named the proxy's script and a marked scheme), and a page's service
+  worker's `import()` rejects with Chrome's TypeError, as natively.
+  (csp-worker-requests, natively against both modes on Chrome 157.)
 - A worker's synchronous XMLHttpRequest fires no loadstart, and one that
   fails with a network error fires nothing and throws Chrome's
   NetworkError from send() ("Failed to execute 'send' on

@@ -2,6 +2,7 @@ import {
 	proxyBlobURL,
 	ROUTE_PROTOCOLS,
 	routeBinary,
+	routeRefused,
 	routeXHR,
 } from '../../routeURL';
 import StompURL, { urlLike } from '../../StompURL';
@@ -19,6 +20,7 @@ import {
 import Client from '../Client';
 import Module from '../Module';
 import { failsToParse, withStack } from '../nativeErrors';
+import { requestRefused } from '../requestVerdict';
 import ProxyModule, { catchRequiredArguments, ownerOf } from './Proxy';
 import { unrouteURL } from './Unroute';
 
@@ -300,9 +302,17 @@ export default class FetchModule extends Module<Client> {
 
 				const url = new URL(args[0], this.client.baseURL.toString());
 
+				// one a worker's policy refuses fails as the browser fails it
+				// (requestVerdict, which reports it with no sourceFile, as
+				// Chrome reports an EventSource's)
+				const resource = new StompURL(url, this.client.url);
 				const result = Reflect.construct(
 					target,
-					[routeBinary(new StompURL(url, this.client.url))],
+					[
+						requestRefused(this.client, 'connect-src', url, 1, false)
+							? routeRefused(resource, true)
+							: routeBinary(resource),
+					],
 					newTarget || target,
 				);
 
@@ -453,6 +463,11 @@ export default class FetchModule extends Module<Client> {
 						? (Reflect.apply(nativeRequestMode, request, []) as RequestMode)
 						: 'cors');
 
+				// one a worker's policy refuses (requestVerdict, which reports it
+				// as the browser does: twice for a report-only policy alone) fails
+				// as the browser fails it, with its own TypeError
+				if (requestRefused(this.client, 'connect-src', url, 2))
+					return await fetch(routeRefused(new StompURL(url, this.client.url)));
 				if (!ROUTE_PROTOCOLS.includes(url.protocol)) {
 					// a page-origin blob: URL is fetched as the browser's
 					const browserURL = proxyBlobURL(url.href);

@@ -206,6 +206,29 @@ export function routeXHR(resource: StompURL) {
 }
 
 /**
+ * The route of a request a page's policy refused (src/server/rewrites.ts),
+ * and of an EventSource's, which a network error would have reconnect
+ */
+export const REFUSED_ROUTE = 'refused';
+export const REFUSED_SOURCE_ROUTE = 'refusedsource';
+
+/**
+ * Where a worker's request its policy refuses goes instead (a fetch, an
+ * XMLHttpRequest, an EventSource, an import, a worker): the service worker
+ * answers it with a network error, so the browser fails it as it fails a
+ * refused one, with its own error, and an error that names the route
+ * names `resource` (a local scheme's names no URL)
+ */
+export function routeRefused(resource: StompURL, eventSource = false) {
+	return routeURL(
+		eventSource ? REFUSED_SOURCE_ROUTE : REFUSED_ROUTE,
+		ROUTE_PROTOCOLS.includes(resource.url.protocol)
+			? resource
+			: new StompURL(new URL('http://refused.invalid/'), resource),
+	);
+}
+
+/**
  * Where the bundles live for a routed URL: its directory is the controller's
  * address (`/stomp/<id>/`, with or without the origin in front), the assets
  * are served from the scope (`/stomp/`), so the address is swapped for the

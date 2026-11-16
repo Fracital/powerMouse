@@ -79,7 +79,127 @@
 		}
 		return `${outcome}; ${end}`;
 	};
-	const run = async (urls) => {
+	/** what an XMLHttpRequest fired, in order, and its status at the end */
+	const xhr = (url, sync) =>
+		new Promise((resolve) => {
+			let request;
+			try {
+				request = new XMLHttpRequest();
+			} catch (e) {
+				return resolve(`threw ${error(e)}`);
+			}
+			const seen = [];
+			for (const type of ['loadstart', 'load', 'error', 'abort', 'loadend'])
+				request.addEventListener(type, () =>
+					seen.push(`${type} ${request.readyState} ${request.status}`),
+				);
+			const end = () => resolve(seen.join(', ') || 'nothing');
+			if (!sync) request.addEventListener('loadend', () => setTimeout(end));
+			try {
+				request.open('GET', url, !sync);
+				request.send();
+			} catch (e) {
+				seen.push(`threw ${error(e)}`);
+				return end();
+			}
+			if (sync) end();
+			else setTimeout(end, 3000);
+		});
+	/** what an EventSource fired in its first 1.5 s */
+	const eventSource = (url) =>
+		new Promise((resolve) => {
+			let source;
+			try {
+				source = new EventSource(url);
+			} catch (e) {
+				return resolve(`threw ${error(e)}`);
+			}
+			const seen = [];
+			source.onopen = () => seen.push('open');
+			source.onmessage = (event) => seen.push(`message ${event.data}`);
+			source.onerror = () => {
+				seen.push(`error ${source.readyState}`);
+				// (an open one reconnects: once is enough)
+				source.close();
+			};
+			setTimeout(() => {
+				source.close();
+				resolve(seen.join(', ') || 'nothing');
+			}, 1500);
+		});
+	/** a nested worker of `url` (or of this worker's text, for `blob`) told `message` */
+	const nested = (url, message, text) =>
+		new Promise((resolve) => {
+			let worker;
+			try {
+				worker = new Worker(
+					url === 'blob'
+						? URL.createObjectURL(
+								new Blob([text ?? ''], { type: 'text/javascript' }),
+							)
+						: url,
+				);
+			} catch (e) {
+				return resolve(`threw ${error(e)}`);
+			}
+			worker.onmessage = (event) => {
+				const answer = event.data;
+				resolve(
+					JSON.stringify({
+						results: answer?.results,
+						requests: answer?.requests,
+						events: (answer?.events ?? [])
+							.map((seen) => JSON.stringify(seen))
+							.sort(),
+					}),
+				);
+				worker.terminate();
+			};
+			worker.onerror = () => resolve('nested worker error');
+			worker.postMessage(message);
+			setTimeout(() => resolve('nested no answer'), 9000);
+		});
+	/** what one request of the page's did: `[kind, url, more]` */
+	const request = async ([kind, url, more]) => {
+		switch (kind) {
+			case 'fetch':
+				return fetch(url).then(
+					(response) => `ok ${response.status} ${response.type}`,
+					(e) => `rejected ${error(e)}`,
+				);
+			case 'xhr':
+				return typeof XMLHttpRequest === 'function' ? xhr(url) : 'absent';
+			case 'xhr-sync':
+				return typeof XMLHttpRequest === 'function' ? xhr(url, true) : 'absent';
+			case 'es':
+				return typeof EventSource === 'function' ? eventSource(url) : 'absent';
+			case 'import-scripts': {
+				const before = self.__ran ?? 0;
+				try {
+					importScripts(url);
+				} catch (e) {
+					return `threw ${error(e)}`;
+				}
+				return `ran ${(self.__ran ?? 0) - before}`;
+			}
+			case 'import':
+				return import(url).then(
+					() => 'imported',
+					(e) => `rejected ${error(e)}`,
+				);
+			case 'beacon':
+				return `sendBeacon ${typeof navigator.sendBeacon}`;
+			case 'nested':
+				return typeof Worker === 'function'
+					? nested(url, more, textOf)
+					: 'absent';
+			default:
+				return 'no such request';
+		}
+	};
+	// a worker that makes a blob: worker of its own text is told it
+	let textOf;
+	const run = async (urls, requests) => {
 		// side by side, each named by its host and kind
 		const results = await Promise.all(
 			urls.map(
@@ -89,13 +209,22 @@
 					}`,
 			),
 		);
+		// one after another, each named by its kind and where it went
+		const made = [];
+		for (const entry of requests ?? [])
+			made.push(
+				`${entry[0]} ${String(entry[1] ?? '').replace(/^https?:\/\/[^/]+/, (origin) => origin.split(':')[1].slice(2))}: ${await request(entry)}`,
+			);
 		// the events of the last connection are queued as tasks
 		await wait(300);
-		return { results, events };
+		return requests ? { results, requests: made, events } : { results, events };
 	};
 	const answer = (data, reply) => {
 		if (!Array.isArray(data?.urls)) return;
-		run(data.urls).then(reply, (e) => reply({ error: error(e) }));
+		if (typeof data.text === 'string') textOf = data.text;
+		run(data.urls, data.requests).then(reply, (e) =>
+			reply({ error: error(e) }),
+		);
 	};
 	if (typeof self.registration === 'object' && self.registration) {
 		self.addEventListener('install', () => self.skipWaiting());

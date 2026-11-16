@@ -1,12 +1,14 @@
 import { keepEmbedded } from '../../functionSource';
 import { HelperNames } from '../../helperNames';
 import { routeHTML } from '../../rewriteHTML';
+import { routeRefused } from '../../routeURL';
 import { isBareSpecifier, routeImport } from '../../scriptRoutes';
 import StompURL, { urlLike } from '../../StompURL';
 import Client from '../Client';
 import ErrorMessages from '../errorMessages';
 import Module from '../Module';
 import { OwnWeakSet } from '../ownCollections';
+import { requestRefused } from '../requestVerdict';
 import { modifyJS } from '../rewriter';
 import { trustedScript } from '../trusted';
 import ProxyModule from './Proxy';
@@ -218,6 +220,16 @@ export default class AccessModule extends Module<Client> {
 			} catch (error) {
 				return failing(error) as unknown as string;
 			}
+			// a page's service worker imports nothing so, natively: the
+			// emulated one is a worker that would
+			if (
+				(this.client as { serviceWorkerVersion?: string }).serviceWorkerVersion
+			)
+				return failing(
+					new this.client.global.TypeError(
+						'import() is disallowed on ServiceWorkerGlobalScope by the HTML specification. See https://github.com/w3c/ServiceWorker/issues/1356.',
+					),
+				) as unknown as string;
 			if (isBareSpecifier(specifier)) return specifier;
 			let resource: URL;
 			try {
@@ -229,8 +241,13 @@ export default class AccessModule extends Module<Client> {
 				// no URL: the browser's import fails on it as it does natively
 				return specifier;
 			}
+			const module = new StompURL(resource, this.client.url);
+			// one a worker's script-src refuses fails to load, as the browser
+			// fails it (requestVerdict reports it), and its TypeError names it
+			if (requestRefused(this.client, 'script-src-elem', resource))
+				return routeRefused(module);
 			return routeImport(
-				new StompURL(resource, this.client.url),
+				module,
 				this.client.url,
 				this.client.config,
 				'genericModule',

@@ -62,26 +62,43 @@
 		none: { wp: "connect-src 'none'" },
 		ro: { wro: "connect-src 'self'" },
 		'connect-ro': { wp: "connect-src 'self' ws:", wro: "connect-src 'none'" },
+		script: { wp: "script-src 'self'" },
+		'default-ro': { wro: "default-src 'self'" },
+		'worker-none': { wp: "worker-src 'none'" },
+		// a module worker whose script imports another origin's module
+		'plain-si': { si: `${other}/csp/wrun.js` },
+		'default-si': { wp: "default-src 'self'", si: `${other}/csp/wrun.js` },
+		// policies that report to the fixture (a requests probe's key)
+		report: { wp: "connect-src 'self'", rk: '' },
+		'report-ro': { wro: "connect-src 'self'", rk: '' },
+		'report-to': { wp: "connect-src 'self'", rk: '', rt: '' },
 	};
 	const TEXT = self.__cspWorkerText;
 	const scriptURL = (policy, extra = {}) =>
 		`/csp/cw.js?${new URLSearchParams({ ...POLICIES[policy], ...extra })}`;
+	/** a requests probe's script: one that reports does under the probe's key */
+	const reportingURL = (policy, k, extra = {}) =>
+		scriptURL(policy, 'rk' in POLICIES[policy] ? { ...extra, rk: k } : extra);
 	/** what a worker answered, as compared: its outcomes, and its events sorted */
 	const said = (answer) => {
 		if (typeof answer === 'string') return answer;
 		if (answer?.error) return `worker threw ${answer.error}`;
 		const seen = (answer?.events ?? []).map((event) => JSON.stringify(event));
-		return JSON.stringify({ results: answer?.results, events: seen.sort() });
+		return JSON.stringify({
+			results: answer?.results,
+			...(answer?.requests ? { requests: answer.requests } : {}),
+			events: seen.sort(),
+		});
 	};
 	/** the answer of a worker that takes messages on `target` and answers on `from` */
-	const ask = (target, from) =>
+	const ask = (target, from, message = { urls: URLS }) =>
 		Promise.race([
 			new Promise((resolve) => {
 				from.addEventListener('message', (event) => resolve(event.data), {
 					once: true,
 				});
 				if ('start' in from) from.start();
-				target.postMessage({ urls: URLS });
+				target.postMessage(message);
 			}),
 			wait(12000, 'no answer'),
 		]);
@@ -91,18 +108,21 @@
 				resolve(`worker error ${event.message ?? ''}`.trim()),
 			),
 		);
-	const dedicated = async (url, options) => {
+	const dedicated = async (url, options, message) => {
 		let worker;
 		try {
 			worker = new Worker(url, options);
 		} catch (e) {
 			return `threw ${error(e)}`;
 		}
-		const answer = await Promise.race([ask(worker, worker), failed(worker)]);
+		const answer = await Promise.race([
+			ask(worker, worker, message),
+			failed(worker),
+		]);
 		worker.terminate();
 		return said(answer);
 	};
-	const shared = async (url, name) => {
+	const shared = async (url, name, message) => {
 		let worker;
 		try {
 			worker = new SharedWorker(url, name);
@@ -110,10 +130,13 @@
 			return `threw ${error(e)}`;
 		}
 		return said(
-			await Promise.race([ask(worker.port, worker.port), failed(worker)]),
+			await Promise.race([
+				ask(worker.port, worker.port, message),
+				failed(worker),
+			]),
 		);
 	};
-	const service = async (policy, name) => {
+	const service = async (policy, name, message) => {
 		const scope = `/csp/sw-${name}/`;
 		let registration;
 		try {
@@ -135,7 +158,7 @@
 				),
 				wait(8000),
 			]);
-		const answer = await ask(worker, navigator.serviceWorker);
+		const answer = await ask(worker, navigator.serviceWorker, message);
 		await registration.unregister();
 		return said(answer);
 	};
@@ -201,6 +224,128 @@
 				`${policy}-${(query.get('case') ?? '').replace(/[^a-z]+/gi, '-')}`,
 			);
 	}
+	// The requests a worker makes (`r-<kind>-<policy>`): what each did, and
+	// the events the worker's global saw; `k` marks those that reached the
+	// fixture, which the probe reads back
+	// (an `h-` probe's worker fetches a URL of its own origin that redirects
+	// to another, alone)
+	const requests = (name) => {
+		const k = `${query.get('case')}-${name}`.replace(/[^a-z0-9-]+/gi, '-');
+		const at = (origin, path) =>
+			`${origin}${path}${path.includes('?') ? '&' : '?'}k=${k}`;
+		if (name.startsWith('h-'))
+			return {
+				k,
+				message: {
+					urls: [],
+					text: TEXT,
+					requests: [
+						['fetch', at(location.origin, `/csp/to?u=${other}/csp/ok`)],
+					],
+				},
+			};
+		return {
+			k,
+			message: {
+				urls: [],
+				text: TEXT,
+				requests: [
+					['fetch', at(location.origin, '/csp/ok')],
+					['fetch', at(other, '/csp/ok')],
+					['fetch', 'data:,data'],
+					['xhr', at(other, '/csp/ok')],
+					['xhr-sync', at(other, '/csp/ok?sync')],
+					['es', at(location.origin, '/csp/sse')],
+					['es', at(other, '/csp/sse')],
+					['import-scripts', at(other, '/csp/wrun.js')],
+					['import', at(other, '/csp/wrun.js?import')],
+					['beacon'],
+				],
+			},
+		};
+	};
+	/** the answer of a requests probe, and the paths of it that reached the fixture */
+	const reached = async (k, answer, policy) => {
+		// (a report is sent a moment after its violation)
+		await wait(policy && 'rk' in POLICIES[policy] ? 2500 : 300);
+		const paths = await fetch(`/csp/log?k=${k}&clear`).then(
+			(response) => response.json(),
+			() => ['log unread'],
+		);
+		return `${answer}; reached ${[...paths].sort().join(' ')}`;
+	};
+	for (const policy of Object.keys(POLICIES)) {
+		for (const kind of ['r', 'h'])
+			PROBES[`${kind}-dedicated-${policy}`] = () => {
+				const { k, message } = requests(`${kind}-dedicated-${policy}`);
+				return dedicated(reportingURL(policy, k), undefined, message).then(
+					(a) => reached(k, a, policy),
+				);
+			};
+		PROBES[`r-module-${policy}`] = () => {
+			const { k, message } = requests(`r-module-${policy}`);
+			return dedicated(
+				reportingURL(policy, k),
+				{ type: 'module' },
+				message,
+			).then((a) => reached(k, a, policy));
+		};
+		PROBES[`r-shared-${policy}`] = () => {
+			const { k, message } = requests(`r-shared-${policy}`);
+			return shared(
+				reportingURL(policy, k, { n: `r-${query.get('case')}` }),
+				`r-${policy}`,
+				message,
+			).then((a) => reached(k, a, policy));
+		};
+		PROBES[`r-service-${policy}`] = () => {
+			const { k, message } = requests(`r-service-${policy}`);
+			return service(
+				policy,
+				`r-${policy}-${(query.get('case') ?? '').replace(/[^a-z]+/gi, '-')}`,
+				message,
+			).then((a) => reached(k, a, policy));
+		};
+		// a worker's own worker: of a URL under `policy`, and of a blob:
+		// (which has `policy` too). A worker of a worker has no transport
+		// through the proxy: its socket is opened only where one is refused
+		PROBES[`n-dedicated-${policy}`] = () => {
+			const { k, message } = requests(`n-dedicated-${policy}`);
+			const inner = (refused) => ({
+				urls: refused ? [URLS[1], URLS[3]] : [URLS[3]],
+				requests: message.requests.slice(0, 2),
+			});
+			return dedicated(scriptURL(policy), undefined, {
+				urls: [],
+				text: TEXT,
+				requests: [
+					['nested', scriptURL('plain'), inner(false)],
+					['nested', scriptURL('connect'), inner(true)],
+					['nested', 'blob', inner(policy === 'connect')],
+				],
+			}).then((a) => reached(k, a));
+		};
+	}
+	PROBES['r-blob-plain'] = () => {
+		const { k, message } = requests('r-blob-plain');
+		return dedicated(blobOf(), undefined, message).then((a) => reached(k, a));
+	};
+	PROBES['r-blob-module-plain'] = () => {
+		const { k, message } = requests('r-blob-module-plain');
+		return dedicated(blobOf(), { type: 'module' }, message).then((a) =>
+			reached(k, a),
+		);
+	};
+	PROBES['r-shared-blob-plain'] = () => {
+		const { k, message } = requests('r-shared-blob-plain');
+		return shared(blobOf(), `r-blob-${query.get('case')}`, message).then((a) =>
+			reached(k, a),
+		);
+	};
+	PROBES['r-data-plain'] = () => {
+		const { k, message } = requests('r-data-plain');
+		return dedicated(dataOf(), undefined, message).then((a) => reached(k, a));
+	};
 	PROBES['w-blob-plain'] = () => dedicated(blobOf());
 	PROBES['w-blob-module-plain'] = () => dedicated(blobOf(), { type: 'module' });
 	PROBES['w-shared-blob-plain'] = () => shared(blobOf(), 'blob');

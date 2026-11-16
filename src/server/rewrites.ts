@@ -82,6 +82,8 @@ import {
 	formQuery,
 	linkRouteURL,
 	parseRoutedURL,
+	REFUSED_ROUTE,
+	REFUSED_SOURCE_ROUTE,
 	routeBinary,
 	unwrapRoute,
 } from '../routeURL';
@@ -176,11 +178,14 @@ import {
 import {
 	directiveOf,
 	hopRefusal,
+	knowsPoliciesOf,
 	metaPolicies,
 	postReport,
 	refusesAncestors,
 	refusingPolicies,
 	rememberPolicies,
+	rememberWorkerPolicies,
+	responsePolicies,
 	workerPolicies,
 } from './contentPolicies';
 import Cookies from './Cookies';
@@ -238,6 +243,7 @@ import {
 	orbSniff,
 	peekBody,
 } from './orb';
+import { blobCreatorOf, creatorOf, requestOwner } from './requestClients';
 import type { RewriteCache, RewriteCacheOutcome } from './rewriteCache';
 import type { RewritePool } from './rewritePool';
 import Router from './Router';
@@ -651,6 +657,8 @@ type BodyTransform = (
 		/** the request's destination and mode (a worker's own script is `same-origin`, what it imports `cors`) */
 		destination?: RequestDestination;
 		mode?: RequestMode;
+		/** the client a worker's own script makes (the worker) */
+		resultingClientId?: string;
 		/**
 		 * what the rewrite cache keeps this request's output for: its network
 		 * partition (as the HTTP cache's: the top-level site and the site of
@@ -1797,9 +1805,23 @@ function genericForward(
 		// browser's own, naming the first URL of the chain (the inject reads
 		// it back as the page's). A copy the inject makes for a document no
 		// worker controls fails as a network error.
+		// A worker's requests are judged by the worker's own policies (a
+		// blob: worker's are its creator's): the browser has no copy of
+		// them, so a refused one is a network error, which is how the
+		// browser fails it, and the worker's inject reports it as the
+		// browser does (WorkerClient.requestVerdict), report-only ones too.
 		if (!navigation && (!context?.internal || granted !== null)) {
 			const directive = directiveOf(destination);
-			const refusals =
+			// (a blob: worker is known by its creator once one of its
+			// requests was looked up)
+			if (
+				directive !== null &&
+				WORKER_DIRECTIVES.includes(directive) &&
+				context?.clientId &&
+				!knowsPoliciesOf(context.clientId)
+			)
+				await requestOwner(context.clientId);
+			const { policies: refusals, worker: workerClient } =
 				directive !== null && WORKER_DIRECTIVES.includes(directive)
 					? refusingPolicies(
 							context?.clientId,
@@ -1807,19 +1829,24 @@ function genericForward(
 							destination,
 							url.url,
 							!!previousHop,
+							serverRequest.mode,
+							blobCreatorOf,
+							creatorOf,
 						)
-					: [];
+					: { policies: [], worker: false };
 			const refusing = refusals.filter(
 				(policy) => policy.disposition === 'enforce',
 			);
 			// only a report-only policy refuses it: it goes out, and the
 			// document is told to report it (a request of its connect-src it
-			// reported itself, knowing which API made it)
+			// reported itself, knowing which API made it, as a worker does
+			// every one)
 			if (
 				!refusing.length &&
 				refusals.length &&
 				granted === null &&
-				directive !== 'connect-src'
+				directive !== 'connect-src' &&
+				!workerClient
 			)
 				postReport(context?.clientId, directive!, url.url);
 			if (refusing.length) {
@@ -1834,7 +1861,7 @@ function genericForward(
 					error: `refused by the page's ${directive}`,
 					client: context?.clientId,
 				});
-				return granted !== null
+				return granted !== null || workerClient
 					? Response.error()
 					: Response.redirect(REFUSED_URL, 302);
 			}
@@ -3573,6 +3600,7 @@ function genericForward(
 								clientId: context?.clientId,
 								destination: serverRequest.destination,
 								mode: serverRequest.mode,
+								resultingClientId: context?.resultingClientId,
 								navigation,
 								upgradeInsecure,
 								// a frame's real ancestors (its frame-ancestors'), as told,
@@ -4462,16 +4490,22 @@ export function registerRewrites(
 			async (url, response, headers, _referrer, request, note) => {
 				if (!response.ok) return false;
 				// a worker's own script (not a module it imports: those are
-				// `cors`) hands its client the policies its connections are
-				// judged by (src/csp.ts WorkerPolicies): the browser applies none
-				// of the worker's own policy to the proxy's URLs
-				const policies =
+				// `cors`) hands its client the policies its requests are judged
+				// by (src/csp.ts WorkerPolicies): the browser applies none of the
+				// worker's own policy to the proxy's URLs. This worker judges the
+				// worker's requests by them too (src/server/contentPolicies.ts)
+				const own =
 					(type === 'worker' || type === 'workerModule') &&
 					(request.destination === 'worker' ||
 						request.destination === 'sharedworker') &&
-					request.mode === 'same-origin'
-						? workerPolicies(response.headers, url.url)
-						: null;
+					request.mode === 'same-origin';
+				if (own && request.resultingClientId)
+					rememberWorkerPolicies(
+						request.resultingClientId,
+						url.url,
+						responsePolicies(response.headers),
+					);
+				const policies = own ? workerPolicies(response.headers, url.url) : null;
 				const preamble = policies
 					? `${helperNames(rewriter.config).client}.judgeConnections(${JSON.stringify(policies)});`
 					: '';
@@ -4570,6 +4604,16 @@ export function registerRewrites(
 				}
 			},
 		);
+
+	// a request a worker's policy refused (src/routeURL.ts routeRefused): a
+	// network error, as the browser fails a refused request; an EventSource
+	// fails its connection on a response that is not a stream, and is closed
+	// as natively (on a network error it would reconnect)
+	router.routes.set(new RegExp(`^/${REFUSED_ROUTE}/`), () => Response.error());
+	router.routes.set(
+		new RegExp(`^/${REFUSED_SOURCE_ROUTE}/`),
+		() => new Response(null, { status: 204 }),
+	);
 
 	router.routes.set(/^\/js:generic\//, scriptTypeFactory('generic'));
 	router.routes.set(
@@ -5463,6 +5507,15 @@ function registerServiceWorkerScripts(router: Router, rewriter: Rewriter) {
 			if (!found) return new Response(null, { status: 404 });
 			serviceWorkers.markEmulated(context?.resultingClientId, version);
 			const url = parse(request);
+			// its requests are judged by its response's policies, kept with it
+			if (context?.resultingClientId && found.policies)
+				rememberWorkerPolicies(
+					context.resultingClientId,
+					url.url,
+					found.policies.policies.flatMap(([text, disposition]) =>
+						parsePolicies(text, disposition, 'header'),
+					),
+				);
 			const client = helperNames(rewriter.config).client;
 			const script =
 				modifyJS(

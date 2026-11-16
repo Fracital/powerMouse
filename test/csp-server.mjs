@@ -25,9 +25,15 @@
 //   /csp/sse             an event stream of one message, "sse"
 //   /csp/img.png         a 1x1 PNG
 //   /csp/worker.js       a worker that posts "worker" back
-//   /csp/cw.js?wp=<policy>&wro=<policy>  the csp-workers suite's worker
-//                        (test/pages/csp-worker.js) under the policies of
-//                        its own response's headers (repeatable)
+//   /csp/cw.js?wp=<policy>&wro=<policy>&si=<url>  the csp-workers suite's
+//                        worker (test/pages/csp-worker.js) under the
+//                        policies of its own response's headers
+//                        (repeatable), a module worker's after a static
+//                        import of each `si`
+//                        `&rk=<key>` adds a report-uri of /csp/report
+//                        under that key to each (`&rt` a report-to of it)
+//   /csp/wrun.js         a script or module that counts self.__ran up
+//   /csp/report?k=<key>  takes a report (the log of its key has it)
 //   /csp/cw-text.js      a script that leaves that worker's text on the
 //                        global as `__cspWorkerText`
 //   /csp/frame.html      a document that posts "frame" to its parent
@@ -155,15 +161,41 @@ export function csp(req, res) {
 				readFileSync(`${pages}${probeFile(query.get('js'))}`),
 			);
 			return true;
-		case '/csp/cw.js':
+		case '/csp/cw.js': {
+			// `rk`: each policy reports to /csp/report under that key, by
+			// report-uri, or by report-to (`rt`)
+			const rk = query.get('rk');
+			const reporting = rk
+				? query.has('rt')
+					? '; report-to cw'
+					: `; report-uri /csp/report?k=${encodeURIComponent(rk)}`
+				: '';
+			if (rk && query.has('rt'))
+				res.setHeader(
+					'reporting-endpoints',
+					`cw="/csp/report?k=${encodeURIComponent(rk)}"`,
+				);
 			for (const policy of query.getAll('wp'))
-				res.appendHeader('content-security-policy', policy);
+				res.appendHeader('content-security-policy', policy + reporting);
 			for (const policy of query.getAll('wro'))
-				res.appendHeader('content-security-policy-report-only', policy);
+				res.appendHeader(
+					'content-security-policy-report-only',
+					policy + reporting,
+				);
 			send(
 				'text/javascript; charset=utf-8',
-				readFileSync(`${pages}csp-worker.js`),
+				query
+					.getAll('si')
+					.map((url) => `import ${JSON.stringify(url)};\n`)
+					.join('') + readFileSync(`${pages}csp-worker.js`, 'utf8'),
 			);
+			return true;
+		}
+		case '/csp/report':
+			// (what reached it is in the log of its key)
+			req.resume();
+			res.statusCode = 204;
+			res.end();
 			return true;
 		case '/csp/cw-text.js':
 			send(
@@ -176,6 +208,9 @@ export function csp(req, res) {
 			return true;
 		case '/csp/run.js':
 			send('text/javascript', 'window.__ran = 1;');
+			return true;
+		case '/csp/wrun.js':
+			send('text/javascript', 'self.__ran = (self.__ran ?? 0) + 1;');
 			return true;
 		case '/csp/sse':
 			send('text/event-stream', 'data: sse\n\n');

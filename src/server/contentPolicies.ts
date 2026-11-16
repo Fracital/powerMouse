@@ -3,7 +3,7 @@ import {
 	CODE_DIRECTIVES,
 	FALLBACK,
 	governing,
-	governsConnect,
+	governsWorkerRequests,
 	hopRefusals,
 	hostsApply,
 	namedRefusal,
@@ -30,6 +30,8 @@ interface Served {
 	/** the document's real URL: what 'self' means */
 	url: URL;
 	policies: Policy[];
+	/** a worker's (rememberWorkerPolicies) */
+	worker?: true;
 }
 
 const served = new Map<string, Served>();
@@ -58,14 +60,46 @@ export function rememberPolicies(
 	if (clientId) remember(`client ${clientId}`, value);
 }
 
-/** the policies of the client, or of the document at `referrer` (an about:blank or srcdoc document's creator) */
+/** whether the policies of the client `clientId` are known (a document's, a worker's) */
+export const knowsPoliciesOf = (clientId: string): boolean =>
+	served.has(`client ${clientId}`);
+
+/**
+ * The worker `clientId` (a dedicated, shared or emulated service worker of
+ * a URL), whose script answered at `url`, has the policies of that response
+ * (`policies`, none included), never its creator's, natively (measured,
+ * Chrome 157): its requests are judged by them, and a blob: worker it makes
+ * inherits them
+ */
+export function rememberWorkerPolicies(
+	clientId: string,
+	url: URL,
+	policies: Policy[],
+) {
+	remember(`client ${clientId}`, { url, policies, worker: true });
+}
+
+/**
+ * The policies of the client, or of the document at `referrer` (an
+ * about:blank or srcdoc document's creator). A blob: worker has its
+ * creator's (`creatorOf`, which knows only blob: workers), as a worker of
+ * a URL has its own
+ */
 function policiesOf(
 	clientId: string | undefined,
 	referrer: string | null | undefined,
+	creatorOf?: (client: string) => string | undefined,
 ): Served | null {
 	if (clientId) {
 		const known = served.get(`client ${clientId}`);
 		if (known) return known;
+		// (a blob: worker of a blob: worker: its creator's creator's)
+		let creator = creatorOf?.(clientId);
+		for (let depth = 0; creator && depth < 8; depth++) {
+			const inherited = served.get(`client ${creator}`);
+			if (inherited) return { ...inherited, worker: true };
+			creator = creatorOf?.(creator);
+		}
 	}
 	if (referrer) {
 		const known = served.get(`url ${withoutHash(referrer)}`);
@@ -77,6 +111,16 @@ function policiesOf(
 	return null;
 }
 
+/** a response's policies, enforced and report-only */
+export const responsePolicies = (headers: Headers): Policy[] => [
+	...parsePolicies(headers.get('content-security-policy'), 'enforce', 'header'),
+	...parsePolicies(
+		headers.get('content-security-policy-report-only'),
+		'report',
+		'header',
+	),
+];
+
 /**
  * The policies a worker whose script answered at `url` with `headers`
  * judges its own connections by (src/csp.ts WorkerPolicies), or null for
@@ -87,19 +131,8 @@ export function workerPolicies(
 	headers: Headers,
 	url: URL,
 ): WorkerPolicies | null {
-	const policies = [
-		...parsePolicies(
-			headers.get('content-security-policy'),
-			'enforce',
-			'header',
-		),
-		...parsePolicies(
-			headers.get('content-security-policy-report-only'),
-			'report',
-			'header',
-		),
-	]
-		.filter(governsConnect)
+	const policies = responsePolicies(headers)
+		.filter(governsWorkerRequests)
 		.map((policy): WorkerPolicies['policies'][number] => [
 			policy.text,
 			policy.disposition,
@@ -151,9 +184,13 @@ export function directiveOf(destination: string): string | null {
 }
 
 /**
- * The policies of the document that makes a request of `destination` for
- * `url` that refuse it, enforced and report-only (empty for none, or for a
- * document the worker knows no policy of)
+ * The policies of the document or worker that makes a request of
+ * `destination` for `url` that refuse it, enforced and report-only (empty
+ * for none, or for a client the worker knows no policy of), and whether
+ * the client is a worker. A module worker's static imports (a worker
+ * destination in `cors` mode, from the worker itself) are judged by its
+ * creator's policies, as natively: the worker's own are not yet in force
+ * while its module graph loads (measured, Chrome 157).
  */
 export function refusingPolicies(
 	clientId: string | undefined,
@@ -161,21 +198,36 @@ export function refusingPolicies(
 	destination: string,
 	url: URL,
 	redirected = false,
-): Policy[] {
+	mode?: RequestMode,
+	creatorOf?: (client: string) => string | undefined,
+	ownerOf?: (client: string) => string | undefined,
+): { policies: Policy[]; worker: boolean } {
 	const directive = directiveOf(destination);
-	if (!directive || !FALLBACK[directive]) return [];
-	const document = policiesOf(clientId, referrer);
-	if (!document) return [];
-	return document.policies.filter((policy) => {
+	if (!directive || !FALLBACK[directive])
+		return { policies: [], worker: false };
+	let document = policiesOf(clientId, referrer, creatorOf);
+	const worker = !!document?.worker;
+	if (
+		worker &&
+		mode === 'cors' &&
+		(destination === 'worker' || destination === 'sharedworker') &&
+		clientId
+	) {
+		const creator = ownerOf?.(clientId);
+		document = creator ? policiesOf(creator, null, creatorOf) : null;
+	}
+	if (!document) return { policies: [], worker };
+	const policies = document.policies.filter((policy) => {
 		const governed = governing(policy, directive);
 		return (
 			governed !== null &&
 			// a script or style list that decides by the element too is the
 			// browser's and the inject's (src/csp.ts hostsApply)
 			(!CODE_DIRECTIVES.includes(directive) || hostsApply(governed.sources)) &&
-			!sourcesMatch(governed.sources, url, document.url, redirected)
+			!sourcesMatch(governed.sources, url, document!.url, redirected)
 		);
 	});
+	return { policies, worker };
 }
 
 /**

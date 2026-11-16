@@ -1,7 +1,8 @@
 import { ParsedConfig } from '../../config';
 import {
 	governing,
-	governsConnect,
+	governsWorkerRequests,
+	hostsApply,
 	parsePolicies,
 	sourcesMatch,
 	type Policy,
@@ -143,29 +144,35 @@ export default class WorkerClient extends Client {
 		this.#partition = partition;
 	}
 	/**
-	 * The policies this worker judges its own WebSockets and WebTransport
-	 * sessions by (src/csp.ts WorkerPolicies), each with what 'self' means
-	 * in it, and how a report names the worker's URL; null for none
+	 * The policies this worker judges its own requests by (src/csp.ts
+	 * WorkerPolicies), each with what 'self' means in it, and how a report
+	 * names the worker's URL; null for none
 	 */
-	#connect: {
+	#policies: {
 		policies: { policy: Policy; self: URL }[];
 		named?: 'blob' | 'data';
 	} | null = null;
+	/** a blob: worker's: the page's script its bootstrap imports (WorkerPolicies.script) */
+	#bootstrapped: string | null = null;
 	/** the violations judgeConnections dispatched, which the worker's listeners read as trusted (violationViews) */
 	readonly #violations = new WeakSet<object>();
 	#viewsOn = false;
 	/**
-	 * Hands the worker the policies its connections are judged by: its
+	 * Hands the worker the policies its requests are judged by: its
 	 * script's response's (the route's preamble, an emulated service
 	 * worker's), or its creator's (a blob: worker's bootstrap, a data:
 	 * worker's route). The browser applies none of them to the proxy's
-	 * URLs, and no service worker sees a WebSocket or a session. The first
-	 * a worker is handed are its own: a script it imports after hands none.
+	 * URLs, and no service worker sees a WebSocket or a session (the service
+	 * worker judges the worker's other requests by them too). The first a
+	 * worker is handed are its own: a script it imports after hands none.
 	 */
 	judgeConnections(given: unknown) {
-		if (this.#connect !== null) return;
-		const { policies, named } = (given ?? {}) as Partial<WorkerPolicies>;
+		if (this.#policies !== null) return;
+		const { policies, named, script, browser } = (given ??
+			{}) as Partial<WorkerPolicies>;
 		if (!Array.isArray(policies)) return;
+		if (typeof script === 'string') this.#bootstrapped = script;
+		if (Array.isArray(browser)) this.#hideBrowserViolations(browser);
 		const parsed: { policy: Policy; self: URL }[] = [];
 		for (const entry of policies) {
 			if (!Array.isArray(entry)) continue;
@@ -183,17 +190,53 @@ export default class WorkerClient extends Client {
 				continue;
 			}
 			for (const policy of parsePolicies(text, disposition, 'header'))
-				if (governsConnect(policy)) parsed.push({ policy, self: url });
+				if (governsWorkerRequests(policy)) parsed.push({ policy, self: url });
 		}
-		this.#connect = {
+		this.#policies = {
 			policies: parsed,
 			...(named === 'blob' || named === 'data' ? { named } : {}),
 		};
 		this.#trustViolations();
 	}
+	/** the browser policies this worker's realm inherited (WorkerPolicies.browser) */
+	#browser: string[] = [];
+	/**
+	 * The violations of the browser policies a blob: worker's realm inherits
+	 * from its document never reach the page: the worker reports its
+	 * requests by the page's policies (requestVerdict), and the browser's
+	 * name the proxy (a local scheme's request, a data: fetch a report-only
+	 * policy lets out, is reported by both). A listener of the inject's,
+	 * before any of the page's, stops them.
+	 */
+	#hideBrowserViolations(browser: unknown[]) {
+		const texts = browser.filter(
+			(text): text is string => typeof text === 'string' && text !== '',
+		);
+		if (!texts.length) return;
+		this.#browser = texts;
+		const hidden = new Set(texts);
+		// (read with the realm's own, before the page's script can change them)
+		const stop = Reflect.get(
+			Event.prototype,
+			'stopImmediatePropagation',
+		) as Event['stopImmediatePropagation'];
+		const originalPolicy = Reflect.getOwnPropertyDescriptor(
+			SecurityPolicyViolationEvent.prototype,
+			'originalPolicy',
+		)?.get;
+		if (!originalPolicy) return;
+		Reflect.apply(EventTarget.prototype.addEventListener, globalThis, [
+			'securitypolicyviolation',
+			(event: SecurityPolicyViolationEvent) => {
+				if (hidden.has(Reflect.apply(originalPolicy, event, [])))
+					Reflect.apply(stop, event, []);
+			},
+			true,
+		]);
+	}
 	/** what a blob: worker this worker makes inherits of its policies (src/csp.ts WorkerPolicies), or null for none */
 	connectInheritance(): WorkerPolicies | null {
-		const policies = this.#connect?.policies ?? [];
+		const policies = this.#policies?.policies ?? [];
 		if (!policies.length) return null;
 		return {
 			policies: policies.map(({ policy, self }) => [
@@ -202,6 +245,7 @@ export default class WorkerClient extends Client {
 				self.href,
 			]),
 			named: 'blob',
+			...(this.#browser.length ? { browser: this.#browser } : {}),
 		};
 	}
 	override apply(deferPost = false) {
@@ -210,7 +254,7 @@ export default class WorkerClient extends Client {
 	}
 	/** its listeners read its own violations as trusted, once there is a policy to report them (violationViews) */
 	#trustViolations() {
-		if (this.#viewsOn || !this.applied || !this.#connect?.policies.length)
+		if (this.#viewsOn || !this.applied || !this.#policies?.policies.length)
 			return;
 		this.#viewsOn = true;
 		trustTaggedViolations(
@@ -221,48 +265,83 @@ export default class WorkerClient extends Client {
 	}
 	/**
 	 * Judges a connection of this worker's to `url` (a WebSocket, a
-	 * WebTransport session) by its policies' connect-src, as Chrome does
-	 * (measured, Chrome 157): each policy that refuses it, report-only ones
-	 * too, reports it on the worker's global a task later (trusted; the
-	 * worker's URL as its documentURI, without its query as its sourceFile,
-	 * `blob` or `data` for those, status 0). True where an enforced one
-	 * refuses it.
+	 * WebTransport session) by its policies' connect-src (requestVerdict).
+	 * True where an enforced one refuses it.
 	 */
 	connectVerdict(url: URL): boolean {
-		const connect = this.#connect;
-		if (!connect?.policies.length) return false;
-		const own = connect.named ?? this.url.url.href.replace(/#.*$/s, '');
-		const sourceFile = connect.named ?? own.replace(/\?.*$/s, '');
-		const blockedURI = url.href.replace(/#.*$/s, '');
-		let refused = false;
-		for (const { policy, self } of connect.policies) {
-			const governed = governing(policy, 'connect-src');
-			if (!governed || sourcesMatch(governed.sources, url, self)) continue;
-			if (policy.disposition === 'enforce') refused = true;
-			if (typeof NativeViolationEvent !== 'function') continue;
-			Reflect.apply(nativeSetTimeout, globalThis, [
-				() => {
-					const event = new NativeViolationEvent('securitypolicyviolation', {
-						bubbles: true,
-						composed: true,
-						blockedURI,
-						documentURI: own,
-						referrer: '',
-						violatedDirective: 'connect-src',
-						effectiveDirective: 'connect-src',
-						originalPolicy: policy.text,
-						disposition: policy.disposition,
-						sourceFile,
-						statusCode: 0,
-						lineNumber: 0,
-						columnNumber: 0,
-						sample: '',
-					});
-					this.#violations.add(event);
-					Reflect.apply(nativeDispatchEvent, globalThis, [event]);
-				},
-			]);
-		}
+		return this.requestVerdict('connect-src', url);
+	}
+	/**
+	 * Judges a request of this worker's for `url` by its policies'
+	 * `directive` (connect-src: a fetch, an XMLHttpRequest, an EventSource,
+	 * a socket, a session; script-src-elem: importScripts, import();
+	 * worker-src: a worker), as Chrome does (measured, Chrome 157): each
+	 * policy that refuses it reports it on the worker's global a task later
+	 * (trusted; the worker's URL as its documentURI, without its query as
+	 * its sourceFile, `blob` or `data` for those, none where `sourced` is
+	 * false (an EventSource's), status 0; a local scheme's URL as its
+	 * scheme). A refused request is never made, and the browser judges a
+	 * request it lets out once more: a report-only policy alone reports it
+	 * `reportTimes` times. True where an enforced one refuses it.
+	 */
+	requestVerdict(
+		directive: string,
+		url: URL,
+		reportTimes = 1,
+		sourced = true,
+	): boolean {
+		const judged = this.#policies;
+		if (!judged?.policies.length) return false;
+		// (the bootstrap's import of a blob: worker's own script is not one)
+		if (directive === 'script-src-elem' && url.href === this.#bootstrapped)
+			return false;
+		const refusing = judged.policies.filter(({ policy, self }) => {
+			const governed = governing(policy, directive);
+			return (
+				governed !== null &&
+				// a script list that decides by more than the URL is left to
+				// the browser, which judges no worker's (as the service worker,
+				// src/server/contentPolicies.ts refusingPolicies)
+				(directive !== 'script-src-elem' || hostsApply(governed.sources)) &&
+				!sourcesMatch(governed.sources, url, self)
+			);
+		});
+		if (!refusing.length) return false;
+		const refused = refusing.some(
+			({ policy }) => policy.disposition === 'enforce',
+		);
+		if (typeof NativeViolationEvent !== 'function') return refused;
+		const own = judged.named ?? this.url.url.href.replace(/#.*$/s, '');
+		const sourceFile = sourced
+			? (judged.named ?? own.replace(/\?.*$/s, ''))
+			: '';
+		const blockedURI = /^(https?|wss?):$/.test(url.protocol)
+			? url.href.replace(/#.*$/s, '')
+			: url.protocol.slice(0, -1);
+		for (const { policy } of refusing)
+			for (let i = refused ? 1 : reportTimes; i > 0; i--)
+				Reflect.apply(nativeSetTimeout, globalThis, [
+					() => {
+						const event = new NativeViolationEvent('securitypolicyviolation', {
+							bubbles: true,
+							composed: true,
+							blockedURI,
+							documentURI: own,
+							referrer: '',
+							violatedDirective: directive,
+							effectiveDirective: directive,
+							originalPolicy: policy.text,
+							disposition: policy.disposition,
+							sourceFile,
+							statusCode: 0,
+							lineNumber: 0,
+							columnNumber: 0,
+							sample: '',
+						});
+						this.#violations.add(event);
+						Reflect.apply(nativeDispatchEvent, globalThis, [event]);
+					},
+				]);
 		return refused;
 	}
 	/** the `sw:` route's preamble: this worker is a page's service worker */

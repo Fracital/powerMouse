@@ -1,4 +1,4 @@
-import { routeXHR } from '../../../routeURL';
+import { routeRefused, routeXHR } from '../../../routeURL';
 import StompURL from '../../../StompURL';
 import {
 	ABORT_HEADER,
@@ -652,7 +652,15 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 					this.#credentialed = { shown: shown.href, plain: plain.href };
 				}
 
-				this.#fetch(routeXHR(new StompURL(target, that.client.url)), options);
+				// one the worker's policy refuses fails as the browser fails it
+				// (requestVerdict reports it)
+				const resource = new StompURL(target, that.client.url);
+				this.#fetch(
+					that.client.requestVerdict('connect-src', target)
+						? routeRefused(resource)
+						: routeXHR(resource),
+					options,
+				);
 			}
 			getResponseHeader(header: string) {
 				return this.#responseHeaders.get(header);

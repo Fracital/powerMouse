@@ -7,7 +7,7 @@ import {
 	codeAllows,
 	enforcesCode,
 	governing,
-	governsConnect,
+	governsWorkerRequests,
 	hashMatches,
 	hostsApply,
 	inlineAllowed,
@@ -1157,13 +1157,15 @@ export default class DocumentClient extends Client {
 	 */
 	connectInheritance(): WorkerPolicies | null {
 		const policies = this.pagePolicies()
-			.filter(({ policy }) => governsConnect(policy))
+			.filter(({ policy }) => governsWorkerRequests(policy))
 			.map(({ policy, self }): WorkerPolicies['policies'][number] => [
 				policy.text,
 				policy.disposition,
 				self.href,
 			]);
-		return policies.length ? { policies, named: 'blob' } : null;
+		return policies.length
+			? { policies, named: 'blob', browser: this.browserPolicies() }
+			: null;
 	}
 	/** where a WebSocket to `url` goes instead when the page's enforced connect-src refuses it, or null */
 	socketRefusal(url: URL): string | null {
