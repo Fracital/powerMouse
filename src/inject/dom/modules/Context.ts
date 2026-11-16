@@ -10,6 +10,7 @@ import ProxyModule, {
 import { routedPrefix } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
 import { nativeFunction } from '../../nativeUtil';
+import { OwnWeakMap, OwnWeakSet } from '../../ownCollections';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { frameDestination, frameOfHeld, heldBefore } from '../freshContext';
 
@@ -192,9 +193,11 @@ export default class ContextModule extends Module<DocumentClient> {
 	held: WeakSet<Context>;
 	constructor(client: DocumentClient) {
 		super(client);
-		this.restricted = new WeakMap();
-		this.restrictedContexts = new WeakMap();
-		this.held = new WeakSet();
+		// (asked through natives the page cannot replace: what they answer
+		// decides which window the page is handed)
+		this.restricted = new OwnWeakMap();
+		this.restrictedContexts = new OwnWeakMap();
+		this.held = new OwnWeakSet();
 	}
 	/** a window this realm now holds as itself (see `held`) */
 	hold(context: Context) {

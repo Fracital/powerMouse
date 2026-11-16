@@ -8,10 +8,16 @@
 // way the helpers serve; every answer must be the one the same page gives
 // natively (where replacing the native changes nothing of the kind).
 //
+// test/pages/access-tamper-frame.html does the same for the collections
+// the inject keeps windows in (`WeakSet.prototype.has`,
+// `WeakMap.prototype.get`), and then reads a frame of another site, which
+// it must be refused as natively.
+//
 // What this does not cover: the natives the rest of the inject calls. A
 // page that replaces `Array.prototype.includes` (`?case=includes`, which the
-// fixture knows and this suite does not run) or a collection's `has` still
-// reads its real location or another site's window: open.
+// fixture knows and this suite does not run) still reads its real location,
+// and the inject's other collections and arrays still call the page's
+// methods: open.
 import {
 	done,
 	FIXTURE,
@@ -33,24 +39,37 @@ const CASES = [
 	'regexpExec',
 	'proxy',
 ];
+const FRAME_CASES = ['none', 'weakSetHas', 'weakMapGet'];
 const url = (which) => `${FIXTURE}pages/access-tamper.html?case=${which}`;
+const frameURL = (which) =>
+	`${FIXTURE}pages/access-tamper-frame.html?case=${which}`;
+const runs = [
+	...CASES.map((which) => ({ which, address: url(which) })),
+	...FRAME_CASES.map((which) => ({
+		which: `frame-${which}`,
+		address: frameURL(which),
+	})),
+];
 
 const browser = await launch();
 const natives = {};
-for (const which of CASES) {
+for (const { which, address } of runs) {
 	const page = await browser.newPage();
-	await page.goto(url(which));
+	await page.goto(address);
 	await page.waitForFunction(() => window.__tamper?.done === true);
 	natives[which] = await page.evaluate(() => window.__tamper);
 	await page.close();
 }
 
 const tab = await openDemo(browser, PROXY);
-for (const [index, which] of CASES.entries()) {
-	await (index === 0 ? submitLanding : submitOmni)(tab, url(which));
+for (const [index, { which, address }] of runs.entries()) {
+	const own = new URL(address).searchParams.get('case');
+	await (index === 0 ? submitLanding : submitOmni)(tab, address);
 	const frame = await waitActive(
 		tab,
-		`window.__tamper?.done === true && window.__tamper.case === '${which}'`,
+		`window.__tamper?.done === true && window.__tamper.case === '${own}' && document.title === ${JSON.stringify(
+			index < CASES.length ? 'access tamper' : 'access tamper frame',
+		)}`,
 	);
 	const proxied = await frame.evaluate(() => window.__tamper);
 	const native = natives[which];
@@ -70,5 +89,12 @@ ok(
 	'natively, the page reads its own location and is its own top',
 	natives.none.location === url('none') && natives.none.topIsWindow === 'true',
 	natives.none.location,
+);
+// (natively a frame of another site is refused)
+ok(
+	'natively, the frame of another site is refused',
+	natives['frame-none'].indexDocument === 'threw SecurityError' &&
+		natives['frame-none'].contentDocument === 'null',
+	JSON.stringify(natives['frame-none']),
 );
 await done(browser, tab.errors);

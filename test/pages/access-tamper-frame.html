@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>access tamper frame</title>
+	</head>
+	<body>
+		<script>
+			// A page that replaces a method of the collections the inject
+			// keeps windows in (test/suites/access-tamper.mjs), then reads a
+			// frame of another site: it must be refused as natively. `?case=`
+			// names the method it replaces.
+			(function () {
+				var which = new URLSearchParams(location.search).get('case');
+				var frame = document.createElement('iframe');
+				frame.src =
+					'http://localhost:' + location.port + '/pages/first-rewrite.html';
+				frame.onload = function () {
+					setTimeout(function () {
+						if (which === 'weakSetHas')
+							WeakSet.prototype.has = function () {
+								return true;
+							};
+						if (which === 'weakMapGet') {
+							var get = WeakMap.prototype.get;
+							// what the map holds for a key is the key
+							WeakMap.prototype.get = function (key) {
+								return get.call(this, key) === undefined ? undefined : key;
+							};
+						}
+						var report = { case: which, done: false };
+						var note = function (name, read) {
+							try {
+								report[name] = String(read());
+							} catch (error) {
+								report[name] = 'threw ' + error.name;
+							}
+						};
+						note('indexDocument', function () {
+							var i = 0;
+							return frames[i].document.title;
+						});
+						note('contentDocument', function () {
+							return frame.contentDocument === null
+								? 'null'
+								: frame.contentDocument.title;
+						});
+						note('contentWindowDocument', function () {
+							return frame.contentWindow.document.title;
+						});
+						note('childLocation', function () {
+							var i = 0;
+							return frames[i].location.href;
+						});
+						report.done = true;
+						window.__tamper = report;
+					}, 300);
+				};
+				document.body.appendChild(frame);
+			})();
+		</script>
+	</body>
+</html>

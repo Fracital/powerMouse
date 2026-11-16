@@ -1270,6 +1270,19 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   document's URL stays the base URL and the page gets the base-uri
   violation. The copy is now judged by the metas before the parsed base it
   is made from. (csp-navigation suite, natively against both modes.)
+- A page that replaces a method of `WeakMap.prototype` or
+  `WeakSet.prototype` can no longer read a frame of another site. The
+  inject keeps the windows it hands a page in such collections and asked
+  them through the prototype's methods, which are the page's: a page whose
+  `WeakMap.prototype.get` answered its argument got the real window of a
+  frame of another site out of the map of stand-ins (`frames[0].document`,
+  `iframe.contentDocument` and the frame's `location.href` were readable,
+  natively a SecurityError and null), and one whose `WeakSet.prototype.has`
+  answered true had every window handed out as one it already held. Those
+  collections now ask natives taken when the bundle loads
+  (`src/inject/ownCollections.ts`); the inject's other collections still
+  call the page's methods (Known limitations). (access-tamper suite,
+  natively against the proxy.)
 - A page that replaces a native the access helpers asked gains nothing by
   it. The helpers decide what a page reads of its `location`, its `top` and
   its `eval`, and whether an element it assigns by index lands through the
@@ -5842,6 +5855,14 @@ Fixed while testing real sites and a feature fixture:
   `typeof $s$j` and `(0).$s$j` give an object where natively there is
   nothing (tells suite, recorded); the object is frozen. The client's name reads undefined, and nothing lists
   or finds either name.
+- A page that replaces a built-in method the inject calls changes some of
+  its answers: with `Array.prototype.includes` replaced, `location.href`
+  reads the proxy's URL (access-tamper.html's `?case=includes`, which the
+  suite does not run), and the inject's collections other than the ones
+  that hold windows (and its arrays) call the page's `get`, `has` or `push`
+  with the inject's own values. The access helpers and the collections that
+  decide which window a page is handed take their natives when the bundle
+  loads.
 - Error surfaces (error-surfaces suite): line and column numbers of rewritten
   code are the rewritten code's (stacks, ErrorEvent, onerror, report bodies),
   and an error the browser reported for a worker the page terminated mid
