@@ -364,6 +364,23 @@
 		})();
 		return who(seen);
 	});
+	// a compound or logical write of a member reads the member first: what
+	// it read is the page's top or eval, as a plain read's is
+	P('window.top ||= value', () => who((window.top ||= 0)));
+	P('self.top ??= value', () => who((self.top ??= 0)));
+	P('window[key] ||= value (top)', () => {
+		const key = 'top';
+		return who((window[key] ||= 0));
+	});
+	P('window.top &&= window.top', () => who((window.top &&= window.top)));
+	P('window.eval ||= value', () =>
+		(window.eval ||= 0)(C('window.eval ||= value')),
+	);
+	P('window[key] ??= value (eval)', () => {
+		const key = 'eval';
+		return (window[key] ??= 0)(C('window[key] ??= value (eval)'));
+	});
+	P('parent.top ||= value', () => who((parent.top ||= 0)));
 	P('location = (seen = top, value)', () => {
 		let seen;
 		location = ((seen = top), '#sequence');

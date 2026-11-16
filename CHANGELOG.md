@@ -1298,6 +1298,13 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   cannot cross and is handed back as before. (`wasm-rewriter-glue` suite,
   each position against this V8; `function-source` suite, natively against
   both modes.)
+- A compound or logical write of a member that assigns nothing
+  (`window.top ||= x`, `self.top ??= x`, `window[k] ||= x`,
+  `(window.eval ||= 0)(code)`) answers the page's top and the page's eval,
+  as a read of the member does. It answered what the write's operator read
+  off the raw window: the real top of the proxy's page, and the browser's
+  own eval, which ran the code unrewritten against the proxy's location.
+  (adversarial-eval suite.)
 - `navigator.permissions.query({ name: 'storage-access' })` reads granted
   in a proxied top-level page, as natively: a top-level document has
   storage access, and Chrome answers granted there (denied when its

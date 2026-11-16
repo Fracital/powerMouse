@@ -432,7 +432,15 @@ export default class AccessModule extends Module<Client> {
 						operate(api.get(target, key), key, righthand),
 					);
 
-				return operate(api.get(target, key), key, righthand);
+				// a compound or logical write answers what it read when it
+				// assigned nothing (`w.top ||= v`, `w.eval ??= v`, `w[0] ||= v`),
+				// and its operator read the member off the object itself: the
+				// real top, the eval, a window of another origin. The page gets
+				// what a read of the member answers
+				const result = operate(api.get(target, key), key, righthand);
+				return result === righthand || !isObject(result)
+					? result
+					: api.get(result, key, target);
 			},
 			set1: (
 				target: any,
