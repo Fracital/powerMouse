@@ -1335,6 +1335,14 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   natively: the request goes through the synchronous bridge, which opens
   no synchronous request, so a `ReportingObserver` heard of none
   (performance-frames suite).
+- `performance.measureUserAgentSpecificMemory()` in a cross-origin
+  isolated page names the page's own URLs
+  (`src/inject/dom/modules/Isolation.ts`): its attribution listed routed
+  URLs, a frame's `container.src` was the routed `src`, and the host's
+  page, the controller's frame and the proxy's workers were listed as
+  parts of the page (in isolated mode the host as a cross-origin
+  aggregated part with no container). Those parts and their bytes are left
+  out (performance-clocks suite).
 - A frame read before it loaded (an about:blank child or popup, one written
   with document.write) no longer shows the access API on its
   Number.prototype to the page that made it. The inject defines the API

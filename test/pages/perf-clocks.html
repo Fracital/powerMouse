@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" href="data:," />
+		<title>PERF CLOCKS</title>
+		<script>
+			window.__firstNow = performance.now();
+			window.__firstDate = Date.now();
+		</script>
+		<script src="/pages/perf-lib.js"></script>
+	</head>
+	<body>
+		<iframe id="same" src="/perf/page/clock-child?n=same&run=__RUN__"></iframe>
+		<iframe
+			id="cross"
+			src="__CROSS__/perf/page/clock-child?n=cross&run=__RUN__"
+		></iframe>
+		<iframe
+			id="srcdoc"
+			srcdoc="<script>parent.postMessage({ perfClock: 'srcdoc', record: { timeOrigin: performance.timeOrigin, now: performance.now(), date: Date.now(), used: performance.memory && performance.memory.usedJSHeapSize, limit: performance.memory && performance.memory.jsHeapSizeLimit, navigation: performance.getEntriesByType('navigation').map((entry) => entry.name + ' ' + entry.type).join() } }, '*')</script>"
+		></iframe>
+		<script src="/pages/perf-clocks.js"></script>
+	</body>
+</html>

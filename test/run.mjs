@@ -80,6 +80,8 @@ const SUITE_ENV = {
 	'demo-token': { STOMP_TEST_TRANSPORT: '1' },
 	// the host's pages cross-origin isolated (the demo server's default)
 	'cross-origin-isolation': { STOMP_ISOLATION: 'on' },
+	// a page that isolates itself is isolated only in an isolated host
+	'performance-clocks': { STOMP_ISOLATION: 'on' },
 	// for its page that sends COOP and COEP
 	'sop-escapes': { STOMP_ISOLATION: 'on' },
 	// proxy-ception: the proxy forwards its own origin (the demo through itself)

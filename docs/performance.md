@@ -78,3 +78,39 @@ difference that starts matching fails the suite.
   with the sizes of a cache's.
 - **A srcdoc frame's navigation entry has the sizes of the shell** the
   proxy wrote into the frame, not of the page's `srcdoc` text.
+
+## The buffer, clocks, memory and frames
+
+`performance-buffer` fills the resource timing buffer at its default size
+and at a small one, in the page, a frame and a worker, and reads the
+`resourcetimingbufferfull` events, what each read lists and a buffered
+observer's `droppedEntriesCount`. `performance-clocks` reads `timeOrigin`
+against the wall clock and the grain of `performance.now()` in the page,
+its frames and its workers, `performance.memory`, and, in a cross-origin
+isolated page, `performance.measureUserAgentSpecificMemory()`.
+`performance-frames` reads the timeline of frames the page makes itself
+(read in the task that made them, a task later, after a `document.write`,
+after removal). `performance-shapes` describes every interface and every
+member the inject hooks: descriptors, names, lengths, sources, prototype
+chains and the errors of a wrong receiver.
+
+| what the page reads                                                | natively                                      | what the browser has through the proxy                                                       | where it is made right                          |
+| ------------------------------------------------------------------ | --------------------------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| the resource timing buffer, `resourcetimingbufferfull`             | the page's 250 entries (or its own size)      | one buffer for the page's entries and the proxy's own (bundles, bridge beacons, the library) | `src/inject/modules/ResourceBuffer.ts`, Unroute |
+| a buffered observer's `droppedEntriesCount`                        | the page's dropped entries                    | the proxy's counted too                                                                      | Unroute.ts                                      |
+| an about:blank frame's own loads                                   | in the frame's timeline                       | in the nearest controlled ancestor's, which made them                                        | Client.ts (`routedFetch`), Unroute.ts           |
+| a synchronous request's deprecation report                         | made once a page, at the page's call          | none: the bridge opens no synchronous request                                                | XMLHttpRequest.ts, Unroute.ts                   |
+| `measureUserAgentSpecificMemory()` attribution                     | the page's URLs, its frames' `src` as written | routes, routed `src`, the host's page, the controller's frame, the proxy's workers           | `src/inject/dom/modules/Isolation.ts`           |
+| `getEntriesByName(Symbol())`                                       | the browser's TypeError                       | an empty list                                                                                | Unroute.ts                                      |
+| `timeOrigin`, `now()`, a frame's and a worker's clock, their grain | as measured                                   | the same                                                                                     | nothing to do                                   |
+
+### Differences that are left
+
+- **`performance.memory` in a frame of another site** includes the page's
+  allocations: every proxied site shares one renderer heap, and what the
+  heap grew is no one site's to tell (docs/process-model.md).
+- **A load an about:blank frame makes is not told to the frame's own
+  `PerformanceObserver`** (nor to one made with the frame's constructor
+  before anything ran in it, nor to a buffered observer in a removed
+  frame's realm): the browser reports it to the ancestor that made it.
+  The frame's `performance` lists it.
