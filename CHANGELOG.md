@@ -1323,6 +1323,13 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   TypeError (it returned an empty list), and a name whose `toString`
   throws leaves no frame of the inject's in the error's stack
   (performance-shapes suite).
+- A load an about:blank frame makes (a `fetch` of a frame the page made or
+  wrote into) is the frame's own in resource timing: its
+  `performance.getEntries*` list it, and its parent's do not. Such a frame
+  is no client of the service worker, so the nearest controlled document
+  above it makes its loads, and that document's timeline had the entry.
+  The frame's own `PerformanceObserver` is still not told of them, listed
+  in docs/performance.md (performance-frames suite).
 - A frame read before it loaded (an about:blank child or popup, one written
   with document.write) no longer shows the access API on its
   Number.prototype to the page that made it. The inject defines the API

@@ -65,6 +65,10 @@ import {
 	type TrustedKind,
 } from './trusted';
 
+// the browser's clock, taken when the bundle runs (routedFetch)
+const nativeNow =
+	typeof Performance === 'function' ? Performance.prototype.now : undefined;
+
 export interface ModuleCtor {
 	new (client: any): Module<any>;
 }
@@ -810,7 +814,45 @@ export default class Client {
 				init instanceof Request || init instanceof this.global.Request
 					? new Request(init as Request, { referrer: '' })
 					: { ...init, referrer: '' };
-		return client.nativeFetch(input, init);
+		// the load is this document's, though the ancestor's realm makes it:
+		// the ancestor's resource timing entry of it is told apart by its
+		// URL and by when it started (noteChildLoad)
+		const clock = client.global.performance;
+		const now = () =>
+			nativeNow && clock ? (Reflect.apply(nativeNow, clock, []) as number) : 0;
+		const from = now();
+		const answer = client.nativeFetch(input, init);
+		try {
+			const target =
+				typeof input === 'string'
+					? input
+					: input instanceof URL || input instanceof this.global.URL
+						? (input as URL).href
+						: (input as Request).url;
+			const routed = new URL(target, client.global.location.href);
+			routed.hash = '';
+			client.noteChildLoad(routed.href, from, now(), this);
+		} catch (error) {
+			// no URL to know the entry by: it stays the ancestor's
+		}
+		return answer;
+	}
+	/**
+	 * The loads this context made for documents below it that no worker
+	 * controls (routedFetch): by the URL the browser has, between two
+	 * readings of this context's clock, and whose it is
+	 */
+	childLoads: { url: string; from: number; to: number; of: Client }[] = [];
+	/**
+	 * The resource timing entries of the loads an ancestor made for this
+	 * document (its own, natively): the ancestor's, which hides them from
+	 * its own page, in the order their loads ended
+	 */
+	adoptedLoads: object[] = [];
+	noteChildLoad(url: string, from: number, to: number, of: Client) {
+		this.childLoads.push({ url, from, to, of });
+		// (a load that never ends has no entry to take its note)
+		if (this.childLoads.length > 64) this.childLoads.shift();
 	}
 	/**
 	 * post to the service worker that controls this document; whether it

@@ -310,6 +310,8 @@ export default class ResourceBufferModule extends Module<Client> {
 				const result = Reflect.apply(target, that, args);
 				held = 0;
 				own = 0;
+				// (and the entries an ancestor's loads for this document left)
+				this.client.adoptedLoads.length = 0;
 				if (event) setNative(admitted());
 				// (entries wait for the task: it finds the buffer full, and its
 				// event settles them)

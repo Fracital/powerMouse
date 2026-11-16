@@ -385,8 +385,29 @@ export default class UnrouteModule extends Module<Client> {
 			PerformanceEntry.prototype,
 			'startTime',
 		)?.get;
+		// A load this context made for a document below it that no worker
+		// controls (an about:blank frame's fetch, Client.routedFetch) is that
+		// document's natively, entry and all: the entry of it here goes to
+		// the document it was made for, which shows it as its own, and is
+		// none of this page's
+		const adopted = new WeakSet<object>();
+		const madeForChild = (entry: object): boolean => {
+			if (adopted.has(entry)) return true;
+			const loads = this.client.childLoads;
+			if (!loads.length || !startOf) return false;
+			const name = String(nativeName(entry as PerformanceEntry));
+			const start = Reflect.apply(startOf, entry, []) as number;
+			const index = loads.findIndex(
+				(load) => load.url === name && load.from <= start && start <= load.to,
+			);
+			if (index === -1) return false;
+			const [load] = loads.splice(index, 1);
+			adopted.add(entry);
+			if (load.of.adoptedLoads.length < 1024) load.of.adoptedLoads.push(entry);
+			return true;
+		};
 		const pageEntry = (entry: object) =>
-			pageName(entry as PerformanceEntry) !== null;
+			pageName(entry as PerformanceEntry) !== null && !madeForChild(entry);
 		const visible = (entries: PerformanceEntry[]) => entries.filter(pageEntry);
 		const filterList = <T extends Function>(fn: T) =>
 			proxyModule.wrapFunction(fn, (target, that, args) =>
@@ -399,7 +420,8 @@ export default class UnrouteModule extends Module<Client> {
 		/**
 		 * `entries` (what the browser's buffer has of the page's, by start
 		 * time) with the page's entries that are in its buffer though the
-		 * browser's own task has not taken them in yet, when the read is of
+		 * browser's own task has not taken them in yet, and the entries of
+		 * the loads an ancestor made for this document, when the read is of
 		 * this context's performance object and takes in resources
 		 */
 		const withWaiting = (
@@ -410,6 +432,18 @@ export default class UnrouteModule extends Module<Client> {
 		) => {
 			if (that !== global.performance) return entries;
 			let waiting = (buffer?.read() ?? []) as PerformanceEntry[];
+			if (!this.client.controlled) {
+				// (the ancestor's count brought up to now: it gives this
+				// document its entries as it hears of them)
+				const ancestor = this.client.controlledClient();
+				if (ancestor && ancestor !== this.client)
+					ancestor.getModule(ResourceBufferModule)?.read();
+				if (this.client.adoptedLoads.length)
+					waiting = [
+						...waiting,
+						...(this.client.adoptedLoads as PerformanceEntry[]),
+					];
+			}
 			if (!waiting.length || (type !== undefined && type !== 'resource'))
 				return entries;
 			if (name !== undefined)
@@ -469,7 +503,9 @@ export default class UnrouteModule extends Module<Client> {
 						? Reflect.apply(getEntriesByType, that, [type])
 						: Reflect.apply(getEntries, that, []);
 					return withWaiting(
-						entries.filter((entry) => pageName(entry) === name),
+						entries.filter(
+							(entry) => pageName(entry) === name && pageEntry(entry),
+						),
 						that,
 						type,
 						name,
