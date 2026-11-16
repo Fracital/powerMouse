@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>SURFACE ENUMERATION</title>
+	</head>
+	<body>
+		<script src="surface-enumeration.js"></script>
+		<script>
+			// The record of this document, of a frame of the same page and of a
+			// worker (test/suites/surface-enumeration.mjs). The frame reports
+			// to its parent; the top document keeps all three.
+			(async () => {
+				const framed = location.search === '?frame';
+				const record = {};
+				try {
+					record.document = await __surfaceEnumeration();
+				} catch (error) {
+					record.document = `threw ${error?.stack}`;
+				}
+				if (framed) {
+					parent.postMessage({ surfaceEnumeration: record.document }, '*');
+					return;
+				}
+				record.frame = await new Promise((resolve) => {
+					addEventListener('message', (event) => {
+						if (event.data?.surfaceEnumeration)
+							resolve(event.data.surfaceEnumeration);
+					});
+					const frame = document.createElement('iframe');
+					frame.src = 'surface-enumeration.html?frame';
+					frame.width = 300;
+					frame.height = 200;
+					document.body.append(frame);
+					setTimeout(() => resolve('no report in 90 s'), 90000);
+				});
+				record.worker = await new Promise((resolve) => {
+					const worker = new Worker('surface-enumeration-worker.js');
+					worker.onmessage = (event) => resolve(event.data);
+					worker.onerror = (event) => resolve(`worker error ${event.message}`);
+					worker.postMessage('go');
+					setTimeout(() => resolve('no report in 90 s'), 90000);
+				});
+				window.__surfaceEnumerationRecord = { record, done: true };
+			})();
+		</script>
+	</body>
+</html>
