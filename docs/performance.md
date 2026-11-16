@@ -79,6 +79,115 @@ difference that starts matching fails the suite.
 - **A srcdoc frame's navigation entry has the sizes of the shell** the
   proxy wrote into the frame, not of the page's `srcdoc` text.
 
+## Navigation timing (performance-navigation suite)
+
+The fixture walks itself through a plain navigation, two redirects of its
+own origin, a redirect through another origin, a navigation from another
+origin's document, a reload, a document with Server-Timing and a step back,
+then loads documents in frames through the same kinds of redirect.
+
+| what the page reads                                                                            | natively                                                                         | what the browser has through the proxy                            | where it is made right                             |
+| ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------------------- |
+| `type`, `name`, `redirectCount`, `redirectStart`/`End`, `serverTiming`                         | the navigation's                                                                 | the routed URL, the worker's own redirects counted                | Unroute.ts, ResourceTiming.ts (before this page)   |
+| `unloadEventStart`/`End` after another origin's document, or a redirect through another origin | 0                                                                                | the previous document's: every document is the proxy's origin     | `src/inject/dom/modules/NavigationTiming.ts`       |
+| `performance.timing.toJSON()` redirect and unload times, `performance.navigation.toJSON()`     | what the getters answer                                                          | the browser's own values (the worker's redirects)                 | NavigationTiming.ts                                |
+| `confidence` of a top-level document                                                           | an object (`randomizedTriggerRate` 0.4994798, `value` high or low), new per read | null: a proxied top is a frame of the host                        | NavigationTiming.ts (a stand-in, value drawn once) |
+| a frame's document after another origin's                                                      | no unload times                                                                  | none either: the frame is given a fresh context (freshContext.ts) | nothing to do                                      |
+| `notRestoredReasons`, `activationStart`, `type` after Back                                     | null, 0, `back_forward` (see below)                                              | the same                                                          | nothing to do                                      |
+
+The unload times are decided when first read, from the page's own view of
+where it came from: `navigation.activation.from` is null for another
+origin's document (the Navigation API's hooks hide it, as natively), and
+the worker marks a navigation whose site's redirects crossed origins.
+
+Not measurable in the harness, so not compared:
+
+- The back/forward cache. Playwright starts Chrome with
+  `--disable-back-forward-cache`, so natively a step back loads the
+  document again (`type` is `back_forward`, `notRestoredReasons` null), which
+  is what a proxied frame always does: a frame's document is never kept in
+  the cache. A user's own Chrome may restore the page instead, with no new
+  navigation entry and `pageshow.persisted`; a proxied page never is.
+- Prerendering. Speculation rules do not start a prerender in headless
+  Chrome (measured, 152 and 156: `activationStart` 0), and a frame cannot
+  be prerendered, so a proxied page never reads a nonzero
+  `activationStart`.
+
+## Entry types (performance-entries suite)
+
+The fixture makes one entry of every type a page can make without a GPU:
+paints, the largest contentful paint, element timing (text, images of its
+own and another origin, a background image), marks and measures, long
+tasks of its own and of frames (its own origin, another site, another
+origin of one site), a long animation frame from each kind of script, and,
+after the suite clicks and types, the first input, event timing and a
+layout shift.
+
+An entry that is not a load's reaches a page through a list
+(`performance.getEntries*`, an observer's list, `takeRecords`). The inject
+looks at each entry there, by type, and hooks the entry's interface the
+first time one of the type comes, from the entry itself
+(`src/inject/dom/modules/EntryTiming.ts`): a frame that never has a long
+task never names `PerformanceLongTaskTiming`, as natively.
+
+| what the page reads                                                              | natively                                                          | what the browser has through the proxy                                                                                                                                                                         | where it is made right                       |
+| -------------------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `LargestContentfulPaint.url`, `PerformanceElementTiming.url` (and `toJSON`)      | the image's URL                                                   | its routed URL                                                                                                                                                                                                 | EntryTiming.ts                               |
+| a long animation frame's `scripts[]`: `sourceURL`, `invoker`                     | the script's URL; `IMG[src="/as/written.png"].onload`             | the routed URL; the routed `src`                                                                                                                                                                               | LongFrames.ts                                |
+| scripts of the host's page, another tab, a frame of another origin               | not listed (another origin's scripts never are)                   | could be listed, each with its `window`: a frame lists the scripts of other windows of its origin that ran in it (measured natively with a same-origin frame's function), and every proxied site is one origin | LongFrames.ts (not pinned by a fixture case) |
+| the inject bundle as a script                                                    | no such script                                                    | listed by its URL                                                                                                                                                                                              | LongFrames.ts                                |
+| a long task of the page itself: `attribution[0]`                                 | `containerType` "window", no source, id or name                   | the host's frame element: "iframe", the routed URL (same-origin mode)                                                                                                                                          | LongTasks.ts                                 |
+| a long task of a frame of the page's origin                                      | `same-origin-descendant`, `containerSrc` the attribute as written | the routed `src`                                                                                                                                                                                               | LongTasks.ts                                 |
+| a long task of a frame of another site                                           | not reported (another process)                                    | `same-origin-descendant` with the frame's `src`, id and name                                                                                                                                                   | LongTasks.ts                                 |
+| a long task of a frame of the page's site, another origin                        | `cross-origin-descendant`, `containerType` "window", nothing else | `same-origin-descendant` with everything                                                                                                                                                                       | LongTasks.ts                                 |
+| a frame's own long task, its parent of another site                              | "window", nothing of the parent's element                         | "iframe" with the parent's `src`, id and name for it                                                                                                                                                           | LongTasks.ts                                 |
+| an observer's callback for entries the page never sees                           | never runs                                                        | ran with an empty list                                                                                                                                                                                         | Unroute.ts                                   |
+| `performance.mark('x', { detail: () => {} })`: the DataCloneError's message      | quotes the function's source                                      | quoted the rewritten source, with its mark                                                                                                                                                                     | Unroute.ts                                   |
+| paints, visibility, marks, measures, event counts, the first input, event timing | as recorded                                                       | the same: nothing of the inject's shows (no mark, no measure, no entry, no count)                                                                                                                              | nothing to do                                |
+
+### Differences that are left
+
+Listed in the suite, which fails when one reads as natively:
+
+- **A function's position in a long animation frame's script**
+  (`sourceCharPosition`) is its place in the script as the rewriter printed
+  it, as the columns of an error's stack are: the entry names no function
+  object to read the page's own position from, and the page's realm keeps
+  no map from one text to the other.
+- **A callback run from a promise the inject made** (the reaction to
+  `fetch()`) is listed without a source (`sourceURL` empty, position -1)
+  where natively it has the page's script: the browser records where the
+  chain of reactions started, which is the inject's own continuation, and
+  the page's callback runs in the same checkpoint. The inject's URL is
+  never shown.
+- **A handler of an element that is not in the document**
+  (`new Image().onload`) is named by the element's whole URL
+  (`IMG[src="http://site/a.png"].onload`) where natively it is the
+  attribute as written: only an element in the document can be found again
+  to read what the page wrote.
+- **`interaction-contentful-paint`** entries are made for the main frame
+  only, and a proxied page is a frame of the host: an observer of the type
+  is never called.
+
+In same-origin mode only (the host's page and the proxied page share a
+frame tree and a process there; the mode is for development):
+
+- **A long animation frame that ends in a rendering update** (an animation
+  callback, an input handler, a load that paints) is reported to the local
+  root's window, which is the host's: the proxied page has no entry for it.
+- **A layout shift's `lastInputTime`** is kept by the local root: 0 in the
+  proxied page.
+
+Not closed and not listed (they are not the same from run to run, so no
+suite can pin them):
+
+- The proxy's own work runs on the page's thread: a document's first
+  script can make a long animation frame or a long task where natively
+  there is none. The frame is reported (the time did pass); the inject's
+  scripts are not named in it.
+- An ancestor's long task does not say which ancestor ran it: a frame
+  takes it for its parent's.
+
 ## The buffer, clocks, memory and frames
 
 `performance-buffer` fills the resource timing buffer at its default size

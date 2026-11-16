@@ -1,0 +1,85 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" href="data:," />
+		<title>PERF ENTRIES</title>
+		<style>
+			body {
+				margin: 8px;
+				font: 16px/20px monospace;
+			}
+			img,
+			iframe,
+			button,
+			input {
+				display: block;
+			}
+			iframe {
+				width: 200px;
+				height: 40px;
+				border: 0;
+			}
+			#shift-box {
+				position: absolute;
+				top: 0;
+				right: 0;
+				width: 220px;
+			}
+			#backdrop {
+				width: 100px;
+				height: 60px;
+				background-image: url('/perf/png?w=100&h=60&n=backdrop&run=__RUN__');
+			}
+		</style>
+		<script src="/pages/perf-lib.js"></script>
+		<script src="/pages/perf-entries.js"></script>
+	</head>
+	<body>
+		<h1 id="heading" elementtiming="heading-text">Performance entries</h1>
+		<!-- in a corner of its own: what is inserted above the paragraph
+		     moves nothing else, wherever the viewport ends -->
+		<div id="shift-box">
+			<p id="tail">the paragraph a late insertion shifts</p>
+		</div>
+		<img
+			id="hero"
+			elementtiming="hero-image"
+			src="/perf/png?w=240&h=160&n=hero&delay=200&run=__RUN__"
+			width="240"
+			height="160"
+		/>
+		<img
+			id="xhero"
+			elementtiming="cross-image"
+			src="__CROSS__/perf/png?w=120&h=80&n=xhero&run=__RUN__"
+			width="120"
+			height="80"
+		/>
+		<img
+			id="xtao"
+			elementtiming="cross-allowed-image"
+			src="__CROSS__/perf/png?w=110&h=70&n=xtao&tao=*&run=__RUN__"
+			width="110"
+			height="70"
+		/>
+		<div id="backdrop" elementtiming="backdrop-image"></div>
+		<button id="button">click</button>
+		<input id="input" />
+		<iframe
+			id="child-frame"
+			name="child-name"
+			src="/perf/page/entries-child?run=__RUN__&n=same"
+		></iframe>
+		<iframe
+			id="cross-frame"
+			name="cross-name"
+			src="__CROSS__/perf/page/entries-child?run=__RUN__&n=cross"
+		></iframe>
+		<iframe
+			id="site-frame"
+			src="http://a.zone.localhost:__PORT__/perf/page/entries-site?run=__RUN__"
+		></iframe>
+		<script src="/pages/perf-entries-run.js"></script>
+	</body>
+</html>

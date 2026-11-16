@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" href="data:," />
+		<title>PERF NAVIGATION CHILD</title>
+	</head>
+	<body>
+		<script>
+			// a frame of the navigation fixture: it tells its parent what
+			// its navigation timing shows, then goes where `next` says
+			addEventListener('load', () =>
+				setTimeout(() => {
+					const params = new URLSearchParams(location.search);
+					const [entry] = performance.getEntriesByType('navigation');
+					const json = entry.toJSON();
+					parent.postMessage(
+						{
+							perfNavigationChild: params.get('n'),
+							record: {
+								type: entry.type,
+								redirectCount: entry.redirectCount,
+								redirectZero:
+									entry.redirectStart === 0 && entry.redirectEnd === 0,
+								unloadZero:
+									entry.unloadEventStart === 0 && entry.unloadEventEnd === 0,
+								jsonRedirectCount: json.redirectCount,
+								jsonRedirectZero:
+									json.redirectStart === 0 && json.redirectEnd === 0,
+								jsonUnloadZero:
+									json.unloadEventStart === 0 && json.unloadEventEnd === 0,
+								legacy: JSON.stringify(performance.navigation.toJSON()),
+								legacyCount: performance.navigation.redirectCount,
+								legacyRedirectZero:
+									performance.timing.redirectStart === 0 &&
+									performance.timing.toJSON().redirectStart === 0,
+								legacyUnloadZero:
+									performance.timing.unloadEventStart === 0 &&
+									performance.timing.toJSON().unloadEventStart === 0,
+								confidence:
+									entry.confidence === null ? null : typeof entry.confidence,
+								notRestoredReasons: entry.notRestoredReasons,
+							},
+						},
+						'*',
+					);
+					if (params.get('next')) location.href = params.get('next');
+				}, 30),
+			);
+		</script>
+	</body>
+</html>
