@@ -5789,6 +5789,20 @@ Fixed while testing real sites and a feature fixture:
   parse. Nothing in the rewrite is involved: sloppy global writes, script
   order and GTM's inserted scripts behave as natively.
 - Scripts created from markup strings read back rewritten.
+- What rewritten code still does otherwise than the code as written
+  (rewriter-differential suite: the curated corpus and generated programs,
+  natively and rewritten in node, and the same corpus in Chrome in both
+  modes; each case named with why in test/differential/corpus.mjs). An
+  object as a computed key of an update or a compound write is converted
+  once, where V8 converts it for the read and for the write. An update or
+  an arithmetic compound write of a window's `top` converts the host top
+  (the result is the same NaN or string). A parameter pattern that reads a
+  guarded name (`function f({ top: t }, b)`) is declared at the top of the
+  body, so a sloppy function's `arguments` is mapped and the pattern's
+  names share the body's scope. A binding named `eval` that holds the
+  page's eval makes no direct eval. `eval(c)()` of no function names a
+  conditional in its message. `a?.b[k]` answers undefined when `a.b` is
+  undefined, where natively it throws.
 - A page that names the access API reads it: `window.$s$j`, `window[name]`,
   `typeof $s$j` and `(0).$s$j` give an object where natively there is
   nothing (tells suite, recorded); the object is frozen. The client's name reads undefined, and nothing lists

@@ -1,0 +1,44 @@
+<!doctype html>
+<title>DIFFERENTIAL</title>
+<pre id="result">pending</pre>
+<script>
+	// The browser's half of the rewriter's differential oracle
+	// (test/suites/rewriter-differential-browser.mjs). The suite hands this
+	// page the world's source (test/differential/world.js) and a list of
+	// cases; each case runs in a fresh frame of this page, whose realm is
+	// given `log`, `M` and `F` and nothing else, and leaves its trace: what
+	// was done to the objects it made, what it logged, how it ended. The same
+	// page runs natively and through the proxy, and the suite compares the
+	// traces. A frame's code is evaluated by the frame's own eval, which
+	// through the proxy is where the page's text is rewritten.
+	window.__differential = async (world, cases) => {
+		const turn = () => new Promise((resolve) => setTimeout(resolve, 0));
+		const traces = [];
+		for (const code of cases) {
+			const frame = document.createElement('iframe');
+			document.body.append(frame);
+			const realm = frame.contentWindow;
+			let made = null;
+			let outcome;
+			try {
+				realm.eval(world)('browser', {}, String(location));
+				made = realm.__world;
+				delete realm.__world;
+				try {
+					outcome = `completion ${made.show(realm.eval(code))}`;
+				} catch (error) {
+					outcome = `threw ${made.show(error)}`;
+				}
+			} catch (error) {
+				outcome = `no world: ${error}`;
+			}
+			// what the case left for later (a promise's reactions)
+			await turn();
+			await turn();
+			traces.push(made ? made.done(outcome) : outcome);
+			frame.remove();
+		}
+		document.getElementById('result').textContent = 'done';
+		return traces;
+	};
+</script>
