@@ -903,8 +903,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				(target, that: Document, args) => {
 					// only side effect this getter has is the potential to throw an illegal invocation error
 					Reflect.apply(target, that, args);
-					// an opaque origin has no domain
-					if (this.client.sandboxedOpaque) return '';
+					// an opaque origin has no domain, nor has a removed frame's
+					// document (a document the page made without a window has
+					// its creator's, as natively)
+					if (this.client.sandboxedOpaque || this.client.global.closed)
+						return '';
 					return this.client.documentDomain ?? this.client.url.url.hostname;
 				},
 			),

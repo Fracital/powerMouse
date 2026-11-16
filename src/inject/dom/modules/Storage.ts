@@ -688,6 +688,8 @@ export default class StorageModule extends Module<DocumentClient> {
 					if (contextThis(that, this.client.global) !== this.client.global) {
 						throw new TypeError('Illegal invocation');
 					}
+					// a removed frame's window has no storage (null), as natively
+					if (this.client.global.closed) return null;
 
 					return localStorage;
 				},
@@ -704,6 +706,8 @@ export default class StorageModule extends Module<DocumentClient> {
 					if (contextThis(that, this.client.global) !== this.client.global) {
 						throw new TypeError('Illegal invocation');
 					}
+					// a removed frame's window has no storage (null), as natively
+					if (this.client.global.closed) return null;
 
 					return sessionStorage;
 				},

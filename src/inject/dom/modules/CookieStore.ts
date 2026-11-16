@@ -173,6 +173,10 @@ export default class CookieStoreModule extends Module<DocumentClient> {
 			...getter,
 			get: proxyModule.wrapFunction(getter.get, (target, that, args) => {
 				const result = Reflect.apply(target, that, args);
+				// (the store this module took while the frame was there is
+				// still the getter's once it is removed, where natively the
+				// window of a removed frame answers null)
+				if (result === store && global.closed) return null;
 				if (result === store) watch();
 				return result;
 			}),

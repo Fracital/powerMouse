@@ -1231,6 +1231,11 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A removed frame's window reads as natively: null for `parent`,
+  `localStorage`, `sessionStorage` and `cookieStore`, and an empty
+  `document.domain`. It read itself as its parent, the inject's Storage
+  objects, the cookie store taken while the frame was attached, and the
+  proxied host. (realm-surface, frame-detached against native.)
 - Objects the inject shapes list the browser's keys and no more:
   `Reflect.ownKeys(window)` no longer ends with the per-site memory
   registry's symbol (kept on the top's client now);

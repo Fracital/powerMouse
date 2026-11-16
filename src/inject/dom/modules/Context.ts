@@ -939,6 +939,8 @@ export default class ContextModule extends Module<DocumentClient> {
 				parentDescriptor.get!,
 				(target, that, args) => {
 					const got = Reflect.apply(target, that, args);
+					// a removed frame's window has no parent (null), as natively
+					if (got === null) return null;
 					return this.newRestricted(got);
 				},
 			),
