@@ -1364,6 +1364,19 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   the URL it was asked for (a module's import.meta.url). Chrome's console
   still shows the warning. (preload-consumers suite.)
 
+- A function that reads its arguments by index (`arguments[i]`, the loop
+  every downlevelled rest parameter and variadic helper is) runs about four
+  times as fast rewritten. The rewriter now prints such a read as
+  `0..$s$j.arg(arguments, i, ...)` where `arguments` is the function's own
+  arguments object for certain: nothing in the function or the functions in
+  it declares or assigns the name, and it holds no `with` and no direct
+  `eval` (rust/rwjs/src/args.rs). `arg` reads a number key with no question
+  about the object, which is no window, and still asks the value whether it
+  is one, so a window handed in as an argument is restricted as before.
+  Every other `arguments[k]` is `get2` as it was. Measured in Chrome 157 on
+  the measure-compute fixture: summing a function's arguments went from 17
+  times its native time (8 with the plain-object short ways) to 1.9. The
+  wasm rewriter's revision is 12, and core.wasm grows by 7 KB.
 - Rewritten code that reads and writes plain objects by computed keys runs
   about twice as fast: grouping records by a key, counting into a map,
   copying objects, a store's reactive setters, `for (k in o) o[k]`. Each

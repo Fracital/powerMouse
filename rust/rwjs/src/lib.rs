@@ -6,6 +6,7 @@
 //! a browser refuses a script for, `config` what a host hands over, `source`
 //! the function marks and keys of src/functionSource.ts, `printer` the port of
 //! src/callPrinter.ts (how V8 names an expression in an error's message).
+pub mod args;
 pub mod config;
 pub mod early;
 pub mod pattern;

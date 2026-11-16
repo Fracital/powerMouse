@@ -88,7 +88,7 @@ pub struct Output {
 /// an older module's text and the glue never drives a module it was not
 /// written for (src/wasm/rewriter.ts holds the same number).
 /// rust/host/parity.mjs --cases holds it to the outputs (cases.revision).
-pub const REVISION: &str = "11";
+pub const REVISION: &str = "12";
 
 /// Why the rewriter hands a script back to the JavaScript one
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -485,6 +485,37 @@ pub(crate) mod tests {
 		);
 		assert_eq!(plain("return\"abc\"[i]"), "return 0..$s$j.get2(\"abc\", i, \"\\\"abc\\\"[i]\")");
 		assert_eq!(plain("x = o['a'] + o[0]"), "x = o['a'] + 0..$s$j.get2(o, 0, \"(o[0])\")");
+	}
+
+	#[test]
+	fn own_arguments() {
+		// a function's own arguments object, read by a computed key
+		assert_eq!(
+			plain("function f() { return arguments[i]; }"),
+			"function f() { return 0..$s$j.arg(arguments, i, \"arguments[i]\"); }"
+		);
+		assert_eq!(
+			plain("function f() { return () => arguments[0]; }"),
+			"function f() { return () => 0..$s$j.arg(arguments, 0, \"(arguments[0])\"); }"
+		);
+		// none of a script's top, an initializer's, or one that may be rebound
+		assert_eq!(plain("x = arguments[i];"), "x = 0..$s$j.get2(arguments, i, \"(arguments[i])\");");
+		assert_eq!(
+			plain("function f(arguments) { return arguments[i]; }"),
+			"function f(arguments) { return 0..$s$j.get2(arguments, i, \"arguments[i]\"); }"
+		);
+		assert_eq!(
+			plain("function f() { with (o) return arguments[i]; }"),
+			"function f() { with (o) return 0..$s$j.get2(arguments, i, \"arguments[i]\"); }"
+		);
+		assert_eq!(
+			plain("function f() { return arguments?.[i]; }"),
+			"function f() { return 0..$s$j.get2(arguments, i, \"(arguments?.[i])\", true); }"
+		);
+		assert_eq!(
+			plain("function f() { return arguments.top; }"),
+			"function f() { return 0..$s$j.get2(arguments, \"top\", \"arguments.top\"); }"
+		);
 	}
 
 	#[test]

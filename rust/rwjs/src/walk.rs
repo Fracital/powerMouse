@@ -122,6 +122,12 @@ pub struct Walker<'a, 'c, 'h> {
 	allocator: &'c Allocator,
 	/// a regular expression's pattern does not compile: the parser's error
 	bad_pattern: bool,
+	/// the functions whose `arguments` something may rebind (src/args.rs)
+	rebound: std::collections::HashSet<u32>,
+	/// for each function, field initializer and static block around (not
+	/// arrows), innermost last: whether `arguments` is its own arguments
+	/// object for certain
+	own_arguments: Vec<bool>,
 }
 
 fn espan(span: Span) -> EditSpan {
@@ -130,6 +136,11 @@ fn espan(span: Span) -> EditSpan {
 
 fn text(text: String) -> Vec<Piece> {
 	if text.is_empty() { Vec::new() } else { vec![Piece::Text(text)] }
+}
+
+/// `arguments` (the name as it is read, not a member of anything)
+fn is_arguments(e: &Expression) -> bool {
+	matches!(unparen(e), Expression::Identifier(id) if id.name == "arguments")
 }
 
 fn ident_byte(byte: u8) -> bool {
@@ -170,6 +181,8 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			pending_method: None,
 			allocator,
 			bad_pattern: false,
+			rebound: std::collections::HashSet::new(),
+			own_arguments: Vec::new(),
 		}
 	}
 
@@ -663,7 +676,14 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			return;
 		}
 		let partial = self.partial(span);
-		let mut seq = self.seq(span, "get2");
+		// `arguments[i]` of a function's own arguments object (src/args.rs)
+		let own = !chained && matches!(m, Mem::Computed(_)) && self.own_arguments.last() == Some(&true);
+		let helper = if own && is_arguments(m.object()) {
+			"arg"
+		} else {
+			"get2"
+		};
+		let mut seq = self.seq(span, helper);
 		self.seq_operand(&mut seq, m.object());
 		self.seq_key(&mut seq, m);
 		seq.pending.push_str(", ");
@@ -2174,6 +2194,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 			.filter(|(span, _)| *span == it.span)
 			.map(|(_, calls_super)| calls_super);
 		self.functions += 1;
+		self.own_arguments.push(!self.rebound.contains(&it.span.start));
 		let saved = self.early.function_enter(it, method);
 		let directives = it.body.as_ref().map_or(&[][..], |body| &body.directives[..]);
 		match (&it.body, self.rewriting) {
@@ -2197,6 +2218,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 			}
 		}
 		self.early.function_leave(saved);
+		self.own_arguments.pop();
 		self.functions -= 1;
 	}
 
@@ -2265,18 +2287,23 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 		self.visit_decorators(&it.decorators);
 		self.visit_property_key(&it.key);
 		if let Some(value) = &it.value {
+			// (`arguments` is no name in an initializer: V8 refuses it)
+			self.own_arguments.push(false);
 			let saved = self.early.field_enter();
 			self.visit_expression(value);
 			self.early.field_leave(saved);
+			self.own_arguments.pop();
 		}
 		self.leave_node(kind);
 	}
 
 	fn visit_accessor_property(&mut self, it: &AccessorProperty<'a>) {
 		// (no browser has it yet: the check reads none of it)
+		self.own_arguments.push(false);
 		self.early.mute();
 		walk::walk_accessor_property(self, it);
 		self.early.unmute();
+		self.own_arguments.pop();
 	}
 
 	fn visit_decorator(&mut self, it: &Decorator<'a>) {
@@ -2294,9 +2321,11 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 
 	fn visit_static_block(&mut self, it: &StaticBlock<'a>) {
 		self.functions += 1;
+		self.own_arguments.push(false);
 		let saved = self.early.static_enter();
 		walk::walk_static_block(self, it);
 		self.early.static_leave(saved);
+		self.own_arguments.pop();
 		self.functions -= 1;
 	}
 
@@ -2498,6 +2527,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 	}
 
 	fn visit_program(&mut self, it: &Program<'a>) {
+		self.rebound = crate::args::rebound(it);
 		self.early.program_enter(it);
 		walk::walk_program(self, it);
 		self.early.program_leave();

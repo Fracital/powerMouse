@@ -254,7 +254,12 @@ thread.adoptModule('core', await WebAssembly.compile(bytes));
 			return o[k];
 		};
 		const access = new Proxy(
-			{ src: from.keepEmbedded, get: (value) => value, get2: reads },
+			{
+				src: from.keepEmbedded,
+				get: (value) => value,
+				get2: reads,
+				arg: reads,
+			},
 			{ get: (target, key) => target[key] ?? ((value) => value) },
 		);
 		const flat = (value) => {

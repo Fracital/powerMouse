@@ -1117,7 +1117,12 @@ console.warn = warn;
 	// every class, method, getter and function three.js exports
 	const toString = Function.prototype.toString;
 	const access = new Proxy(
-		{ src: keepEmbedded, get: (value) => value, get2: (o, k) => o[k] },
+		{
+			src: keepEmbedded,
+			get: (value) => value,
+			get2: (o, k) => o[k],
+			arg: (o, k) => o[k],
+		},
 		{ get: (target, key) => target[key] ?? ((value) => value) },
 	);
 	const readBack = (fn) => {

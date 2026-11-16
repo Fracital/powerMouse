@@ -754,6 +754,30 @@ export default class AccessModule extends Module<Client> {
 				}
 				return read(target, key, optional);
 			},
+			/**
+			 * `arguments[k]` of a function's own arguments object, as the
+			 * rewriter knows it (nothing in reach can rebind the name:
+			 * rust/rwjs/src/args.rs): the loop a downlevelled rest parameter
+			 * is, and every variadic helper's. That object is no window, no
+			 * stand-in and nothing `live` knows, and a number is no name `get`
+			 * knows: what is left of get2 is the look at a value that is an
+			 * object (a window handed in as an argument is restricted as a
+			 * read of it is). Small, so that the engine takes it into the
+			 * page's loop: anything but a number is get2's.
+			 */
+			arg: (target: any, key: any, partial?: string): unknown => {
+				if (typeof key === 'number') {
+					const value = target[key];
+					return typeof value !== 'object' ||
+						value === null ||
+						indexed(value) ||
+						!this.client.restrictForeign ||
+						!isWindowObject(value)
+						? value
+						: api.get(value, key, target);
+				}
+				return api.get2(target, key, partial);
+			},
 			// `container`: what `object` was read from, when the read is a member
 			// read (a window's child is injected before the page gets it)
 			get: (object: any, key: any, container?: unknown): any => {
