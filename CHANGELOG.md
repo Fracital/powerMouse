@@ -2300,6 +2300,20 @@ sinkId })` and made in a track's settings, capabilities and constraints
   websocket-close suite now compares the server's closes with native too
   (no status, 4000 with a reason, 1000, 1001, a UTF-8 reason, a 123-byte
   one, a dropped connection), in both modes.
+- A message a proxied page sends on a WebSocket through epoxy leaves at
+  once. Epoxy wrote each frame into the wisp stream without flushing it,
+  and the packet went out only with the socket's next frame or another
+  stream's write on the same wisp connection, so a server that answers the
+  page (an echo, a request and its reply, a game's input and state) looked
+  silent until the page wrote again, the page's close and the answers to
+  the server's ping and to its close waited too, and a close the page
+  started could reach the server not at all. It looked like incoming frames
+  stalling; frames the server pushes unprompted always arrived. The epoxy
+  build flushes every frame it writes (websocket-frames suite: a server
+  pushing while the page is silent, a page answering each echo while the
+  server keeps pushing, a large frame each way, the server's ping, a close
+  each side starts, on epoxy and libcurl and in both modes, against
+  native, the server's side included).
 - An IPv6 literal (`https://[::1]:8443/`, `wss://[2001:db8::1]/`) loads
   through epoxy. Epoxy handed the host with the URL's brackets to rustls,
   which refused `[::1]` as an invalid DNS name, and to the wisp server, which
@@ -5902,11 +5916,15 @@ Fixed while testing real sites and a feature fixture:
   rewritten; worklet modules get no inject; an HTML blob built from another
   Blob is shown as it is.
 - Transports, as tested against `wisp-js` 0.5.2 with or without Stomp in the
-  path: epoxy 3.0.2 handles HTTP well but stops delivering incoming WebSocket
-  frames after the first round trip; libcurl 2.0.6 handles WebSockets but
+  path: epoxy 3.0.2 handles HTTP well, and its WebSocket frames flow both
+  ways with the pinned build (the published package holds each frame the
+  page sends until the next one); libcurl 2.0.6 handles WebSockets but
   stops answering HTTP after roughly 70 requests with its default pool and
   roughly 160 with a larger one, which breaks any page that fans out that many
-  assets. The demo defaults to epoxy and raises libcurl's pool when selected.
+  assets, answers no ping, reports a close the server starts with no code
+  (the page reads 1005) and ends a connection with no close frame (the
+  server reads 1006 for any close). The demo defaults to epoxy and raises
+  libcurl's pool when selected.
 - A wisp server that never refills a TCP stream's credit (wisp-js 0.5.2 and
   older send CONTINUE for UDP streams only) stalls an epoxy stream after
   its first window, 128 packets there: an upload over 8 MiB, or a long-lived

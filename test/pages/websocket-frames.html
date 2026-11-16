@@ -1,0 +1,142 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>WEBSOCKET FRAMES</title>
+	</head>
+	<body>
+		<script>
+			// Frames both ways on a WebSocket, against the websocket-frames
+			// suite's server (?port): the server pushing while the page never
+			// writes, a page that answers each echo while the server keeps
+			// pushing, a large frame each way (several wisp packets), the
+			// server's ping, a close the server starts and one the page starts.
+			// window.__run(tag) runs them one after another and resolves with
+			// what the page saw; the server keeps what it saw under the tag.
+			const params = new URLSearchParams(location.search);
+			const base = 'ws://127.0.0.1:' + params.get('port');
+			const LARGE_DOWN = 300 * 1024;
+			const LARGE_UP = 200 * 1024;
+			const pattern = (n, seed) => {
+				const bytes = new Uint8Array(n);
+				for (let i = 0; i < n; i++) bytes[i] = (i * seed + 3) & 255;
+				return bytes;
+			};
+			const matches = (data, n, seed) => {
+				const bytes = new Uint8Array(data);
+				if (bytes.length !== n) return 'length ' + bytes.length;
+				for (let i = 0; i < n; i++)
+					if (bytes[i] !== ((i * seed + 3) & 255)) return 'differs at ' + i;
+				return 'ok';
+			};
+			// one socket: `step(ws, data, finish)` is told each message, finish
+			// ends the scenario with its result; one that is not finished in
+			// time reads what it had and "timeout"
+			const scenario = (path, tag, { open, message, close }, ms = 4000) =>
+				new Promise((resolve) => {
+					const seen = [];
+					let finished = false;
+					const finish = (result) => {
+						if (finished) return;
+						finished = true;
+						resolve(result ?? seen.join(', '));
+					};
+					const ws = new WebSocket(
+						base + path + '?tag=' + encodeURIComponent(tag),
+					);
+					ws.binaryType = 'arraybuffer';
+					ws.onopen = () => open?.(ws, seen, finish);
+					ws.onmessage = (e) => message?.(ws, e.data, seen, finish);
+					ws.onerror = () => seen.push('error');
+					ws.onclose = (e) => {
+						seen.push(['close', e.code, e.reason, e.wasClean].join(' '));
+						if (close) close(seen, finish);
+						else finish();
+					};
+					setTimeout(() => {
+						seen.push('timeout');
+						finish(seen.join(', '));
+						try {
+							ws.close();
+						} catch {}
+					}, ms);
+				});
+			window.__run = async (tag) => {
+				const results = {};
+				// six frames the server sends unprompted, the last 300 ms in
+				results.push = await scenario('/push', tag, {
+					message: (ws, data, seen, finish) => {
+						seen.push(data);
+						if (seen.length === 6) {
+							ws.close();
+							finish();
+						}
+					},
+				});
+				// the page answers each echo with its next message while the
+				// server sends ticks of its own
+				results.interleaved = await scenario('/interleaved', tag, {
+					open: (ws, seen) => {
+						seen.echoes = [];
+						seen.ticks = 0;
+						ws.send('c0');
+					},
+					message: (ws, data, seen, finish) => {
+						if (data.startsWith('tick')) seen.ticks++;
+						else {
+							seen.echoes.push(data);
+							const next = seen.echoes.length;
+							if (next < 5) ws.send('c' + next);
+						}
+						if (seen.echoes.length === 5 && seen.ticks === 6) {
+							ws.close();
+							finish(seen.echoes.join(',') + ' ticks ' + seen.ticks);
+						}
+					},
+					close: (seen, finish) =>
+						finish(
+							seen.echoes.join(',') +
+								' ticks ' +
+								seen.ticks +
+								' ' +
+								seen.join(', '),
+						),
+				});
+				// a frame larger than a wisp packet from the server
+				results.largeDown = await scenario('/large-down', tag, {
+					message: (ws, data, seen, finish) => {
+						ws.close();
+						finish('down ' + matches(data, LARGE_DOWN, 7));
+					},
+				});
+				// one from the page, which the server checks and sends back
+				results.largeUp = await scenario('/large-up', tag, {
+					open: (ws) => ws.send(pattern(LARGE_UP, 13).buffer),
+					message: (ws, data, seen, finish) => {
+						if (typeof data === 'string') return seen.push(data);
+						ws.close();
+						finish(
+							seen.concat('back ' + matches(data, LARGE_UP, 13)).join(', '),
+						);
+					},
+				});
+				// the server's ping: the server tells the page it got the pong
+				results.ping = await scenario('/ping', tag, {
+					message: (ws, data, seen, finish) => {
+						ws.close();
+						finish(data);
+					},
+				});
+				// the server says goodbye and closes with 4000 "srv"
+				results.serverClose = await scenario('/server-close', tag, {
+					message: (ws, data, seen) => seen.push(data),
+				});
+				// the page closes with 4001 "bye" as soon as it opens
+				results.pageClose = await scenario('/page-close', tag, {
+					open: (ws) => ws.close(4001, 'bye'),
+				});
+				return results;
+			};
+		</script>
+	</body>
+</html>

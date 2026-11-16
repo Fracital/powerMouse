@@ -282,8 +282,10 @@ on every save (use a `git worktree`).
 
 ## Transports (measured, see CHANGELOG known limitations)
 
-- epoxy 3.0.2: HTTP solid, incoming WebSocket frames stop after the first
-  round trip (against wisp-js 0.5). It is installed from our own build, not
+- epoxy 3.0.2: HTTP solid. The npm package holds every WebSocket frame it
+  writes in the wisp stream until the next write, which looked like incoming
+  frames stalling after the first round trip; the build flushes each frame
+  (epoxy-tls 0061, `websocket-frames` suite). It is installed from our own build, not
   npm: `deploy/epoxy/` pins the upstream revisions and carries the patches
   (hyper-util-wasm exposes the HTTP/2 header-list limit, epoxy-tls sets it to
   256 KiB like Chrome; the npm package's 16 KiB resets YouTube with
