@@ -47,16 +47,10 @@ const OWN = WRITES.flatMap((target, index) =>
 );
 // What differs in the browser alone, each with why. Like the node suite's
 // KNOWN, such a case runs and must still differ, so the list stays true.
-// The cases run in frames on their initial about:blank, which the parent's
-// bundle injects, and the hooks such a frame gets (its `Function`, `eval`,
-// `fetch`...) are functions of the parent's realm (src/inject/modules/
-// Function.ts, src/inject/dom/modules/IFrame.ts injectChild).
-const PARENT_REALM =
-	"a frame on its initial about:blank holds hooks of its parent's realm: its `Function`, `eval`, `fetch` are no instances of its own Object";
+// (The cases run in frames on their initial about:blank, which the parent's
+// bundle injects; the hooks such a frame gets are its own realm's to look
+// at: src/inject/modules/Proxy.ts adopt.)
 const BROWSER_KNOWN = {
-	'source#14': PARENT_REALM,
-	'read#34.2': PARENT_REALM,
-	'read#34.17': PARENT_REALM,
 	'source#17':
 		"`f.caller` of a function eval'd code calls: the eval the page called is the inject's stand-in, a strict function, so the caller is null",
 };

@@ -504,6 +504,51 @@ class Shapes {
 
 export default class ProxyModule extends Module<Client> {
 	functionStrings = functionStrings;
+	/**
+	 * The Function.prototype and Object.prototype of the realm this client
+	 * hooks when it is not the bundle's own: a frame its parent read before
+	 * it loaded has the parent's bundle for its hooks, and every function
+	 * the bundle makes is the parent realm's. Null in the bundle's own realm.
+	 */
+	#foreign: { function: object; object: object } | null | undefined;
+	#foreignRealm() {
+		if (this.#foreign === undefined) {
+			const global = this.client.global;
+			// (read from natives the page cannot have replaced yet, and that
+			// no module replaces: a constructor's prototype is its realm's
+			// Function.prototype)
+			const realm = Reflect.getPrototypeOf(global.Object) as object;
+			this.#foreign =
+				realm === Function.prototype
+					? null
+					: { function: realm, object: global.Object.prototype };
+		}
+		return this.#foreign;
+	}
+	/**
+	 * `value` (a function, or an object and the functions it holds) made
+	 * the hooked realm's to look at, where that is not the bundle's own: a
+	 * function made here is the bundle realm's, with that realm's
+	 * Function.prototype above it, so in a frame the parent's bundle hooked
+	 * `frame.fetch instanceof frame.Function` was false, and
+	 * `frame.fetch.constructor` was the parent's Function, which makes code
+	 * for the parent's window. Its prototype is the hooked realm's instead.
+	 */
+	adopt<T extends object>(value: T): T {
+		const foreign = this.#foreignRealm();
+		if (!foreign) return value;
+		if (typeof value === 'function') {
+			Reflect.setPrototypeOf(value, foreign.function);
+			return value;
+		}
+		Reflect.setPrototypeOf(value, foreign.object);
+		for (const key of Reflect.ownKeys(value)) {
+			const member = Reflect.getOwnPropertyDescriptor(value, key)?.value;
+			if (typeof member === 'function')
+				Reflect.setPrototypeOf(member, foreign.function);
+		}
+		return value;
+	}
 	/** the constructors the page has in place of the realm's own, by the native */
 	#standIns = new Map<Function, Function>();
 	apply() {
@@ -819,10 +864,11 @@ export default class ProxyModule extends Module<Client> {
 			this.mirrorAttributes(fn, wrapped);
 		}
 
+		// (a constructor's place in its realm is the native's: standIn)
 		if (construct) {
 			wrapped.prototype = fn.prototype;
 			this.standIn(wrapped, fn);
-		}
+		} else this.adopt(wrapped);
 
 		return <T>(<unknown>wrapped);
 	}

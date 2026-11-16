@@ -1231,6 +1231,18 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- Making a frame no longer hands the page's `Function` constructor to the
+  frame. A frame the parent reads before it loads gets the parent's bundle
+  for its hooks, and the Function module wrapped the bundle realm's
+  Function for it, which made the frame's wrapper the `constructor` of the
+  parent's own Function.prototype: from then on
+  `(function () {}).constructor('return location.host')()` in the parent
+  ran for the frame's window, whatever site it showed. Each realm's Function
+  is now wrapped for that realm, and what a frame's page reaches of the
+  parent's bundle (its wrappers, the access API) has the frame's
+  Function.prototype and Object.prototype above it, so
+  `frame.fetch instanceof frame.Function` holds, as natively. (helper-seal,
+  realm-surface suites.)
 - A page can no longer change the URL it reads as by writing
   `$stomp$workerBase`. The shell of a document the page made (a blob:,
   data: or inline document, an `<object>`'s) and the bootstrap of a blob:

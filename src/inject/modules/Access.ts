@@ -1190,6 +1190,10 @@ export default class AccessModule extends Module<Client> {
 				keepEmbedded(key, subs, holder),
 		};
 
+		// the realm's own to look at, where the bundle is another realm's
+		// (before the freeze: adopt gives the object and its functions the
+		// realm's prototypes)
+		this.client.getModule(ProxyModule)?.adopt(api);
 		// The helpers are not the page's to replace: a rewritten script hands
 		// them the arrows it writes a member with, and a page that swapped one
 		// would be handed a write nothing routes
