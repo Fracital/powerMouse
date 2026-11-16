@@ -29,7 +29,7 @@
 // fails the suite. The wasm core is the only rewriter, and it changes no
 // early-error verdict, so KNOWN is empty; a text the browser runs but the
 // rewriter refuses is counted apart, not failed.
-import { readCases, STRICT } from '../../rust/host/early-lib.mjs';
+import { readCases, recordedIn, STRICT } from '../../rust/host/early-lib.mjs';
 import {
 	done,
 	FIXTURE,
@@ -72,6 +72,10 @@ const KNOWN = new Map();
 const needed = new Set();
 
 const browser = await launch();
+// a text a later Chrome answers otherwise than the file records is held to
+// its verdict in this one (rust/host/early-lib.mjs CHROME_CHANGED)
+const major = Number(/^(\d+)\./.exec(browser.version())?.[1] ?? 0);
+for (const entry of cases) entry.recorded = recordedIn(entry, major);
 
 // --- the record against this Chrome -------------------------------------
 const nativePage = await browser.newPage();

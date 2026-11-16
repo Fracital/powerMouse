@@ -24,6 +24,30 @@ export const NODE_DIFFERS = new Map([
 	],
 ]);
 
+/**
+ * Texts a later Chrome answers otherwise than the file records, by the
+ * first major version that does (`since`) and its marks there: the file
+ * keeps the verdict of the Chromes before it, which node's V8 and the
+ * crate's tests share, and the early-errors suite holds the Chrome it runs
+ * in to the one for its version (`recordedIn`)
+ */
+export const CHROME_CHANGED = new Map([
+	[
+		'class A { #a; m() { this?.#a = 1 } }',
+		{
+			since: 157,
+			recorded: '---',
+			why: 'an optional chain is no assignment target; the preparser of V8 before Chrome 157 took one ending in a private name inside a function it compiles lazily, and Chrome 157 refuses it there as its full parse does',
+		},
+	],
+]);
+
+/** a case's marks in Chrome `major` (CHROME_CHANGED), the file's otherwise */
+export function recordedIn(entry, major) {
+	const changed = CHROME_CHANGED.get(entry.text);
+	return changed && major >= changed.since ? changed.recorded : entry.recorded;
+}
+
 const TOKENS = { NL: '\n', CR: '\r', LS: ' ', PS: ' ' };
 
 /** a case's text with its `<NL>`, `<U+XXXX>` and the like spelled out */

@@ -17,6 +17,8 @@
 # `<U+XXXX>` that code point; nothing else is escaped. rust/host/early.mjs
 # also runs every text inside a function, an arrow, an async function, a
 # generator, a method, a static block and a block, with V8 asked each time.
+# A text a later Chrome answers otherwise keeps the earlier verdict here and
+# is named with the later one in early-lib.mjs `CHROME_CHANGED`.
 
 # 12.5 Hashbang comments; B.1.1 HTML-like comments
 +-+ #!shebang<NL>x
