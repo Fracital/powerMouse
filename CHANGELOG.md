@@ -1231,6 +1231,11 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- `location.assign()` and `location.replace()` with no argument, or with a
+  URL that does not parse, throw the browser's own error and navigate
+  nowhere, as natively. Through the proxy they navigated the page to
+  `.../undefined` (no argument) or to the unparsable text resolved as a
+  path. (realm-surface: the walker calls both with no argument.)
 - Making a frame no longer hands the page's `Function` constructor to the
   frame. A frame the parent reads before it loads gets the parent's bundle
   for its hooks, and the Function module wrapped the bundle realm's

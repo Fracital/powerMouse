@@ -3,6 +3,7 @@ import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import { setGlobalProxy } from '../../modules/Access';
 import ProxyModule from '../../modules/Proxy';
+import { failsToParse } from '../../nativeErrors';
 import DocumentClient from '../Client';
 import FragmentModule from './Fragment';
 import NavigationHintModule from './NavigationHint';
@@ -216,13 +217,17 @@ export default class LocationModule extends Module<DocumentClient> {
 				get: member(ancestorDescriptor.get, ancestorList),
 			});
 
-		const navigation =
-			(method: 'assign' | 'replace') =>
-			([url]: any[]) => {
-				const destination = new URL(url, this.client.baseURL.toString());
-				this.client.getModule(NavigationHintModule)?.hint(destination.href);
-				return go(destination, method);
-			};
+		const navigation = (method: 'assign' | 'replace') => (args: any[]) => {
+			// no URL, or one that does not parse: the browser's own error
+			// for the call (a TypeError for the count, a SyntaxError that
+			// names the URL as the page wrote it), and no navigation
+			const url = args.length ? String(args[0]) : '';
+			if (!args.length || failsToParse(this.client, url))
+				return Reflect.apply(real[method], real, args.length ? [url] : []);
+			const destination = new URL(url, this.client.baseURL.toString());
+			this.client.getModule(NavigationHintModule)?.hint(destination.href);
+			return go(destination, method);
+		};
 		const methods: Record<string, (args: any[]) => unknown> = {
 			assign: navigation('assign'),
 			replace: navigation('replace'),
