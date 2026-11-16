@@ -23,6 +23,7 @@ import DOMAttributesModule from './modules/DOMAttributes';
 import DOMContentHooks from './modules/DOMContentHooks';
 import DOMHooksModule from './modules/DOMHooks';
 import DownloadModule from './modules/Download';
+import EntryTimingModule from './modules/EntryTiming';
 import FormQueryModule from './modules/FormQuery';
 import FragmentModule from './modules/Fragment';
 import FramingModule from './modules/Framing';
@@ -124,6 +125,8 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(ServiceWorkerModule);
 	client.addModule(OpenModule);
 	client.addModule(DownloadModule);
+	// after the base modules: their lists (Unroute) are what it reads
+	client.addModule(EntryTimingModule);
 	// before CanvasTaint: its canvas/webgl/audio readback hooks wrap the native
 	// methods, and CanvasTaint's taint check then wraps those, so a tainted
 	// canvas throws before anything is farbled. Added only when a farbling or

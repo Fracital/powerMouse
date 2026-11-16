@@ -407,7 +407,9 @@ export default class UnrouteModule extends Module<Client> {
 			return true;
 		};
 		const pageEntry = (entry: object) =>
-			pageName(entry as PerformanceEntry) !== null && !madeForChild(entry);
+			pageName(entry as PerformanceEntry) !== null &&
+			!madeForChild(entry) &&
+			(this.client.admitEntry?.(entry) ?? true);
 		const visible = (entries: PerformanceEntry[]) => entries.filter(pageEntry);
 		const filterList = <T extends Function>(fn: T) =>
 			proxyModule.wrapFunction(fn, (target, that, args) =>

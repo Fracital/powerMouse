@@ -1343,6 +1343,16 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   parts of the page (in isolated mode the host as a cross-origin
   aggregated part with no container). Those parts and their bytes are left
   out (performance-clocks suite).
+- The image a largest contentful paint or an element timing entry names
+  (`LargestContentfulPaint.url`, `PerformanceElementTiming.url`, and both
+  in `toJSON()`) is the page's URL of it; both read the routed URL
+  (`http://proxy/stomp/<id>/binary/...`). The entry types that are not
+  loads are looked at where they reach a page (the lists of
+  `performance.getEntries*`, an observer and `takeRecords`), and an
+  interface is hooked when its first entry comes, from the entry: no frame
+  names an interface it has no entry of
+  (`src/inject/dom/modules/EntryTiming.ts`; performance-entries suite,
+  docs/performance.md).
 - A frame read before it loaded (an about:blank child or popup, one written
   with document.write) no longer shows the access API on its
   Number.prototype to the page that made it. The inject defines the API
