@@ -1353,6 +1353,21 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   names an interface it has no entry of
   (`src/inject/dom/modules/EntryTiming.ts`; performance-entries suite,
   docs/performance.md).
+- A long animation frame names the page's scripts by their own URLs
+  (`src/inject/dom/modules/LongFrames.ts`, docs/performance.md): a
+  script's `sourceURL` and `invoker` (and both in `toJSON()`) were the
+  routed URL, a handler's element was named by its routed `src`
+  (`IMG[src="..."].onload` now has the attribute as written), and a
+  callback the inject wraps was listed under the inject bundle's URL. The
+  bundle is never named now. A frame also lists the scripts of other
+  windows of its origin that ran in it, each with its `window` (measured
+  natively with a same-origin frame's function), and every proxied site is
+  one origin to the browser: a script of a window that is not of the
+  page's own origin and page is left out, as the browser leaves another
+  origin's out. Left as they are, and listed in docs/performance.md:
+  `sourceCharPosition` is the function's place in the rewritten script,
+  and a callback run from a promise the inject made (the reaction to
+  `fetch()`) has no source (performance-entries suite).
 - A frame read before it loaded (an about:blank child or popup, one written
   with document.write) no longer shows the access API on its
   Number.prototype to the page that made it. The inject defines the API
