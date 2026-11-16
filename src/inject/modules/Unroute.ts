@@ -457,12 +457,14 @@ export default class UnrouteModule extends Module<Client> {
 			prototype.getEntriesByName = proxyModule.wrapFunction(
 				prototype.getEntriesByName,
 				(target, that, args) => {
-					// the native argument check
-					if (!args.length) return Reflect.apply(target, that, args);
+					// the native argument check, and the browser's own words
+					// for a name that is no string
+					if (!args.length || typeof args[0] === 'symbol')
+						return Reflect.apply(target, that, args);
 					// the page asks by its own URL, which no native entry carries
-					const name = String(args[0]);
+					const name = `${args[0]}`;
 					const typed = args.length > 1 && args[1] !== undefined;
-					const type = typed ? String(args[1]) : undefined;
+					const type = typed ? `${args[1]}` : undefined;
 					const entries: PerformanceEntry[] = typed
 						? Reflect.apply(getEntriesByType, that, [type])
 						: Reflect.apply(getEntries, that, []);

@@ -1319,6 +1319,10 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   on the page's count; `setResourceTimingBufferSize`,
   `clearResourceTimings` and a buffered observer's `droppedEntriesCount`
   read as natively (performance-buffer suite).
+- `performance.getEntriesByName()` with a Symbol throws the browser's
+  TypeError (it returned an empty list), and a name whose `toString`
+  throws leaves no frame of the inject's in the error's stack
+  (performance-shapes suite).
 - A frame read before it loaded (an about:blank child or popup, one written
   with document.write) no longer shows the access API on its
   Number.prototype to the page that made it. The inject defines the API
