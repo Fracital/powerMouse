@@ -600,6 +600,22 @@ export default class UnrouteModule extends Module<Client> {
 	#reportSites: ErrorLocation[] = [];
 	/** the first of the page's frames on the stack now (applyErrorStacks) */
 	#callerLocation?: () => ErrorLocation | undefined;
+	/** where the page first opened a synchronous request (noteSynchronousRequest) */
+	#synchronousSite?: ErrorLocation;
+	/**
+	 * The page opens a synchronous request on a document's main thread,
+	 * from inside the hook that stands for `open()`: true the first time,
+	 * with the page's call site kept. The browser deprecates such a request
+	 * and reports it once a page, where it is opened; the page's go through
+	 * the bridge, which opens none, so the hook has the browser open one
+	 * that is never sent, and the report the browser then makes names the
+	 * hook: it shows the place kept here (applyReports).
+	 */
+	noteSynchronousRequest(): boolean {
+		if (this.#synchronousSite) return false;
+		this.#synchronousSite = this.#callerLocation?.() ?? NO_LOCATION;
+		return true;
+	}
 	/** note the page's call site, from inside a hook (#reportSites) */
 	noteReportSite() {
 		if (this.#reportSites.length >= 16) return;
@@ -857,7 +873,7 @@ export default class UnrouteModule extends Module<Client> {
 				: value;
 		const unrouteJSON = (json: Record<string, unknown>) => {
 			const site = Object.hasOwn(json, 'sourceFile')
-				? siteFor(json.sourceFile)
+				? siteFor(json.sourceFile, json.id)
 				: undefined;
 			if (site) {
 				json.sourceFile = site.filename;
@@ -884,11 +900,21 @@ export default class UnrouteModule extends Module<Client> {
 		// hook for the caller. It shows the page's call site, which the hook
 		// noted (noteReportSite; a deprecation is reported once a document,
 		// so the first one noted is the one reported).
-		const siteFor = (sourceFile: unknown) =>
+		// (a synchronous request's has a place of its own: `id` is the
+		// report's)
+		const siteFor = (sourceFile: unknown, id?: unknown) =>
 			typeof sourceFile === 'string' &&
 			unrouteURL(this.client, sourceFile) === null
-				? this.#reportSites[0]
+				? (id === SYNCHRONOUS_REQUEST_REPORT && this.#synchronousSite) ||
+					this.#reportSites[0]
 				: undefined;
+		const idOf = (body: unknown) => {
+			try {
+				return (body as { id?: unknown }).id;
+			} catch (error) {
+				return undefined;
+			}
+		};
 		const hooked = new WeakSet<object>();
 		const hook = (prototype: any) => {
 			if (!prototype || hooked.has(prototype)) return;
@@ -907,7 +933,7 @@ export default class UnrouteModule extends Module<Client> {
 						(target, that, args) => {
 							const value = Reflect.apply(target, that, args);
 							return key === 'sourceFile'
-								? (siteFor(value)?.filename ?? unroute(value))
+								? (siteFor(value, idOf(that))?.filename ?? unroute(value))
 								: unroute(value);
 						},
 					),
@@ -937,7 +963,10 @@ export default class UnrouteModule extends Module<Client> {
 							descriptor.get,
 							(target, that, args) => {
 								const value = Reflect.apply(target, that, args);
-								const site = siteFor(Reflect.apply(nativeSource, that, []));
+								const site = siteFor(
+									Reflect.apply(nativeSource, that, []),
+									idOf(that),
+								);
 								return site ? site[part] : value;
 							},
 						),
@@ -992,6 +1021,8 @@ export default class UnrouteModule extends Module<Client> {
 				return (
 					type === 'deprecation' &&
 					body?.id === SYNCHRONOUS_REQUEST_REPORT &&
+					// (one the page opened is the page's: noteSynchronousRequest)
+					!this.#synchronousSite &&
 					typeof body.sourceFile === 'string' &&
 					unrouteURL(this.client, body.sourceFile) === null
 				);
@@ -1028,9 +1059,12 @@ export default class UnrouteModule extends Module<Client> {
 				if (typeof args[0] === 'function') {
 					const callback = args[0];
 					args[0] = function (this: unknown, ...called: unknown[]) {
+						const came = Array.isArray(called[0]) ? called[0].length : 0;
 						called[0] = seen(called[0]);
-						// (nothing left: there was no report of the page's)
-						if (Array.isArray(called[0]) && !called[0].length) return;
+						// (nothing left: there was no report of the page's. A list
+						// that came empty is the browser's own call, after the page
+						// took its records)
+						if (came && Array.isArray(called[0]) && !called[0].length) return;
 						return Reflect.apply(callback, this, called);
 					};
 				}

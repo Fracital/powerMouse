@@ -1330,6 +1330,11 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   above it makes its loads, and that document's timeline had the entry.
   The frame's own `PerformanceObserver` is still not told of them, listed
   in docs/performance.md (performance-frames suite).
+- A synchronous `XMLHttpRequest` on a document's main thread makes the
+  browser's deprecation report, once a page, naming the page's call, as
+  natively: the request goes through the synchronous bridge, which opens
+  no synchronous request, so a `ReportingObserver` heard of none
+  (performance-frames suite).
 - A frame read before it loaded (an about:blank child or popup, one written
   with document.write) no longer shows the access API on its
   Number.prototype to the page that made it. The inject defines the API

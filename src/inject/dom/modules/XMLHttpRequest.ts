@@ -740,6 +740,24 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 					this.#async = true;
 				} else {
 					this.#async = false;
+					// the browser deprecates a synchronous request on a document's
+					// main thread and reports it where it is opened, once a page:
+					// this one goes through the bridge, so the browser is given one
+					// to open (never sent) and makes its own report of it, which
+					// shows the page's call (Unroute's noteSynchronousRequest)
+					if (
+						typeof document !== 'undefined' &&
+						that.client.getModule(UnrouteModule)?.noteSynchronousRequest()
+					)
+						try {
+							Reflect.apply(realmOpen, new RealmXHR(), [
+								'GET',
+								'data:,',
+								false,
+							]);
+						} catch (error) {
+							// a document that may open none: no report natively either
+						}
 				}
 
 				// set, they replace the URL's own user and password
