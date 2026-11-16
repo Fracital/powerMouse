@@ -682,7 +682,7 @@ export default class StorageModule extends Module<DocumentClient> {
 
 		Reflect.defineProperty(this.client.global, 'localStorage', {
 			get: proxyModule.wrapFunction(
-				Reflect.getOwnPropertyDescriptor(this.client.global, 'sessionStorage')!
+				Reflect.getOwnPropertyDescriptor(this.client.global, 'localStorage')!
 					.get!,
 				(target, that) => {
 					if (contextThis(that, this.client.global) !== this.client.global) {

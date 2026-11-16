@@ -39,9 +39,6 @@ interface SiteMemory {
 	at: number;
 }
 
-/** the registry of per-site memory, shared same-origin across the proxied tab */
-const REGISTRY = Symbol.for('$stomp$memory');
-
 /**
  * A plausible baseline used heap for `site` (0.7 to 1.8 MB), the same on
  * every reload (FNV-1a of the site, so no new fingerprint and different
@@ -99,23 +96,21 @@ export default class MemoryModule extends Module<DocumentClient> {
 		const opaqueKey = `opaque:${this.client.realOrigin()}:${Math.random()}`;
 		const siteOf = () => this.client.siteKey ?? opaqueKey;
 
-		// the registry on the proxied top, which every proxied realm of the
+		// the registry of the proxied top, which every proxied realm of the
 		// tab reaches same-origin (the host page may be another origin): one
 		// entry per site, so a site's frames and their about:blank children
-		// agree. A realm that cannot reach it (a window being torn down) keeps
-		// its own, which still differs from another site's.
+		// agree. It is kept on the top's client, not on its window: a
+		// property of the window, even under a symbol, is one the page lists
+		// (Reflect.ownKeys(window) ended with it). A realm that cannot reach
+		// it (a window being torn down) keeps its own, which still differs
+		// from another site's.
 		const registry = ((): Map<string, SiteMemory> => {
 			try {
-				const top = this.client.proxiedTop as Record<symbol, unknown>;
-				let map = top[REGISTRY] as Map<string, SiteMemory> | undefined;
-				if (!map) {
-					map = new Map();
-					Reflect.defineProperty(top, REGISTRY, {
-						value: map,
-						configurable: true,
-					});
-				}
-				return map;
+				const top = (this.client.proxiedTop as Record<string, any>)[
+					this.client.names.client
+				] as DocumentClient;
+				return ((top.siteMemory as Map<string, SiteMemory> | undefined) ??=
+					new Map());
 			} catch (error) {
 				return new Map();
 			}

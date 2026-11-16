@@ -1389,6 +1389,11 @@ export default class DocumentClient extends Client {
 	 * (src/inject/dom/modules/ContentSecurity.ts).
 	 */
 	readonly codeViolationTarget = new WeakMap<object, Node>();
+	/**
+	 * Hooks the getter that reads them back, the first time one is recorded
+	 * (ContentSecurity sets it; gone once it ran)
+	 */
+	namesViolationTargets?: () => void;
 	#dispatchCodeViolation(
 		policy: Policy,
 		directive: string,
@@ -1421,8 +1426,10 @@ export default class DocumentClient extends Client {
 				// the browser names an element (an inline script, a handler's
 				// element, a style); fire on the document all the same, where the
 				// page's listener always hears it, and read the target back there
-				if (node && node !== document)
+				if (node && node !== document) {
+					this.namesViolationTargets?.();
 					this.codeViolationTarget.set(event, node);
+				}
 				// an enforced one reads back trusted, as the browser's does: a
 				// Trusted Types case that also sends a script-src (csp-trusted-types)
 				// compares isTrusted; csp-scripts does not, so this is harmless there
@@ -2009,6 +2016,11 @@ export default class DocumentClient extends Client {
 		}
 		return answer();
 	}
+	/**
+	 * performance.memory per site (the Memory module), kept by the proxied
+	 * top's client for every realm under it
+	 */
+	siteMemory?: Map<string, unknown>;
 	/** the outermost proxied window above this one (its own when it is the top) */
 	get proxiedTop(): typeof globalThis {
 		let context: typeof globalThis = this.global;

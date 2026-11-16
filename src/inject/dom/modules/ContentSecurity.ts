@@ -310,15 +310,29 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 		// on the document so the page's listener always hears it, but names the
 		// element the browser would (an inline script or style, a handler's
 		// element): read that element back here.
+		// The getter is Event.prototype's, hooked in place the first time such
+		// an event is made: a `target` of SecurityPolicyViolationEvent.prototype's
+		// own is a member the browser's prototype does not have (a page that
+		// lists it saw one more key), and a hook on every event's target is
+		// paid only by a document that has such a violation.
 		if (nativeTarget) {
-			Reflect.defineProperty(prototype, 'target', {
-				configurable: true,
-				enumerable: true,
-				get: proxyModule.wrapFunction(nativeTarget, (target, that, args) => {
-					const named = this.client.codeViolationTarget.get(that as object);
-					return named ?? Reflect.apply(target, that, args);
-				}),
-			});
+			const eventPrototype = global.Event.prototype;
+			const descriptor = Reflect.getOwnPropertyDescriptor(
+				eventPrototype,
+				'target',
+			)!;
+			this.client.namesViolationTargets = () => {
+				this.client.namesViolationTargets = undefined;
+				Reflect.defineProperty(eventPrototype, 'target', {
+					...descriptor,
+					get: proxyModule.wrapFunction(
+						nativeTarget,
+						(target, that, args) =>
+							this.client.codeViolationTarget.get(that as object) ??
+							Reflect.apply(target, that, args),
+					),
+				});
+			};
 		}
 		// the document's nonce on an element of the page's (one its policy
 		// lets through by a hash or a host, which the browser's copy cannot

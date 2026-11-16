@@ -188,24 +188,72 @@ export default class LocationModule extends Module<DocumentClient> {
 			}
 			return origins;
 		};
-		const ancestorList = () => {
-			const origins = ancestorOrigins();
-			const descriptors: PropertyDescriptorMap = {
-				length: { value: origins.length, enumerable: true },
-				item: { value: (index: number) => origins[index] ?? null },
-				contains: { value: (origin: string) => origins.includes(origin) },
-				[Symbol.iterator]: {
-					value: function* () {
-						yield* origins;
-					},
-				},
+		// The list is an object of DOMStringList.prototype whose own
+		// properties are the browser's (an index for each origin, as a legacy
+		// platform object lists its items: not writable, enumerable,
+		// configurable) and whose length, item and contains are the
+		// prototype's, hooked the first time a list is made to answer for it
+		// (most documents never read one). It was an object with `length`,
+		// `item`, `contains` and an iterator of its own, frozen: four keys and
+		// three function sources the browser's list does not have.
+		const lists = new WeakMap<object, string[]>();
+		let list: object | null = null;
+		// (the prototype of the browser's own list: a removed frame's window
+		// has no DOMStringList of its own any more, and still lists)
+		const listPrototype = () =>
+			Reflect.getPrototypeOf(
+				Reflect.apply(ancestorDescriptor!.get!, real, []) as object,
+			) as object;
+		const hookListPrototype = (prototype: object) => {
+			const proxyModule = this.client.getModule(ProxyModule)!;
+			const answers: Record<
+				string,
+				(origins: string[], args: any[]) => unknown
+			> = {
+				length: (origins) => origins.length,
+				// (an index as the browser reads one: an unsigned long)
+				item: (origins, args) => origins[Number(args[0]) >>> 0] ?? null,
+				contains: (origins, args) => origins.includes(String(args[0])),
 			};
+			for (const key of Object.keys(answers)) {
+				const descriptor = Reflect.getOwnPropertyDescriptor(prototype, key);
+				const part = descriptor?.get ? 'get' : 'value';
+				const native = descriptor?.[part] as Function | undefined;
+				if (!descriptor || typeof native !== 'function') continue;
+				Reflect.defineProperty(prototype, key, {
+					...descriptor,
+					[part]: proxyModule.wrapFunction(native, (target, that, args) => {
+						const origins = lists.get(that);
+						// (the browser's own answer for its own lists, and its
+						// errors: a receiver that is no list, a call with no
+						// argument)
+						if (!origins || args.length < target.length)
+							return Reflect.apply(
+								target,
+								origins ? this.client.global.location.ancestorOrigins : that,
+								args,
+							);
+						return answers[key](origins, args);
+					}),
+				});
+			}
+		};
+		const ancestorList = () => {
+			if (list) return list;
+			const origins = ancestorOrigins();
+			const prototype = listPrototype();
+			hookListPrototype(prototype);
+			const descriptors: PropertyDescriptorMap = {};
 			origins.forEach((origin, index) => {
-				descriptors[index] = { value: origin, enumerable: true };
+				descriptors[index] = {
+					value: origin,
+					enumerable: true,
+					configurable: true,
+				};
 			});
-			return Object.freeze(
-				Object.create(this.client.global.DOMStringList.prototype, descriptors),
-			);
+			list = Object.create(prototype, descriptors) as object;
+			lists.set(list, origins);
+			return list;
 		};
 		const ancestorDescriptor = Reflect.getOwnPropertyDescriptor(
 			real,

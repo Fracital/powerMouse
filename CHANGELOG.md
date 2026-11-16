@@ -1231,6 +1231,19 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- Objects the inject shapes list the browser's keys and no more:
+  `Reflect.ownKeys(window)` no longer ends with the per-site memory
+  registry's symbol (kept on the top's client now);
+  SecurityPolicyViolationEvent.prototype no longer has a `target` of its
+  own (Event.prototype's getter is hooked in place, and only once a
+  document has such a violation); `location.ancestorOrigins` is a list
+  like the browser's DOMStringList (an index per origin, the prototype's
+  length, item and contains), not a frozen object with four own members;
+  `localStorage`'s getter is the native localStorage getter's, not
+  sessionStorage's (its name read "get sessionStorage"); and
+  `viewport.segments` reads one rectangle, the viewport, in a proxied
+  top-level page, as natively in a tab, and null in a frame or a removed
+  frame. (realm-surface.)
 - `document.URL` and `document.documentURI` read as natively for documents
   other than the page's own: a frame's contentDocument read from the
   parent is the frame's page's URL, a document made with

@@ -62,6 +62,40 @@ export default class FramingModule extends Module<DocumentClient> {
 			}),
 		});
 
+		// window.viewport.segments (the Viewport Segments API) is a frozen
+		// array of one rectangle, the viewport, in a top-level page on an
+		// ordinary screen, and null in every frame. A page the host frames
+		// read null; it reads the one rectangle of a window its size. A
+		// frame nested in a proxied page still reads null, as natively, and
+		// so does a removed frame's window (closed, its parent itself, and
+		// no DOMRect of its own to make one with).
+		const viewport = (global as { viewport?: object }).viewport;
+		const viewportPrototype = (global as Record<string, any>).Viewport
+			?.prototype as object | undefined;
+		const segments =
+			viewportPrototype &&
+			Reflect.getOwnPropertyDescriptor(viewportPrototype, 'segments');
+		if (viewportPrototype && segments?.get)
+			Reflect.defineProperty(viewportPrototype, 'segments', {
+				...segments,
+				get: proxyModule.wrapFunction(segments.get, (target, that, args) => {
+					const native = Reflect.apply(target, that, args);
+					if (
+						native !== null ||
+						that !== viewport ||
+						this.client.nested ||
+						global.closed ||
+						typeof global.DOMRect !== 'function'
+					)
+						return native;
+					return global.Object.freeze(
+						global.Array.of(
+							new global.DOMRect(0, 0, global.innerWidth, global.innerHeight),
+						),
+					);
+				}),
+			});
+
 		// getInstalledRelatedApps() rejects in any frame ("only supported in
 		// top-level browsing contexts"), which a page the host frames threw
 		// where natively it runs (whatpwacando.today): a top-level page with
