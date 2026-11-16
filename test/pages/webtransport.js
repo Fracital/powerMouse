@@ -260,6 +260,85 @@
 						return t[key];
 					},
 				});
+			// Chrome 157's `headers` (before it, a member nothing reads)
+			const headed = (headers, url = u, more = {}) =>
+				make(url, { headers, ...more });
+			Object.assign(out, {
+				headersNumber: headed(5),
+				headersNull: headed(null),
+				headersString: headed('x'),
+				headersFunction: headed(() => {}),
+				headersRecord: headed({ 'x-a': 'b', 'X-Up': ' v ' }),
+				headersPairs: headed([['x-a', 'b']]),
+				headersMap: headed(new Map([['x-a', 'b']])),
+				headersObject: headed(new Headers({ 'x-a': 'b' })),
+				headersNonEnumerable: headed(
+					Object.defineProperty({}, 'x-a', { value: 'b' }),
+				),
+				headersSymbolKey: headed({ [Symbol('s')]: 'v' }),
+				headersWide: headed({ 'x-a': '\u0100' }),
+				headersWideName: headed({ '\u0100': 'v' }),
+				headersLatin1: headed({ 'x-a': '\u00e9' }),
+				headersInnerString: headed(['ab']),
+				headersInnerNumber: headed([5]),
+				headersTriple: headed([['x-a', 'b', 'c']]),
+				headersEmptyPair: headed([[]]),
+				headersTripleBadName: headed([['a b', 'v', 'w']]),
+				headersBadName: headed({ 'a b': 'v' }),
+				headersEmptyName: headed({ '': 'v' }),
+				headersPseudo: headed({ ':path': '/x' }),
+				headersLatinName: headed({ 'x\u00e9': 'v' }),
+				headersBadValue: headed({ 'x-a': 'a\nb' }),
+				headersNul: headed({ 'x-a': 'a\0b' }),
+				headersCR: headed({ 'x-a': 'a\rb' }),
+				headersEdgeCRLF: headed({ 'x-a': '\r\nv\r\n' }),
+				headersBothBad: headed([['a b', 'a\nb']]),
+				headersValueThenName: headed([
+					['x-a', 'a\nb'],
+					['a b', 'v'],
+				]),
+				headersReserved: headed({ 'WT-Available-Protocols': 'v' }),
+				headersReservedThenBadName: headed([
+					['wt-available-protocols', 'v'],
+					['a b', 'v'],
+				]),
+				headersForbidden: headed({ cookie: 'a', origin: 'b', 'sec-x': 'c' }),
+				headersBadURL: headed({ 'a b': 'v' }, 'x'),
+				headersBadURLType: headed(5, 'x'),
+				headersDuplicateProtocols: headed({ 'a b': 'v' }, u, {
+					protocols: ['a', 'a'],
+				}),
+				headersBadHash: headed({ 'a b': 'v' }, u, {
+					serverCertificateHashes: [5],
+				}),
+			});
+			const traced = (name, target) =>
+				new Proxy(target, {
+					get(t, key) {
+						reads.push(name + '.' + String(key));
+						return t[key];
+					},
+					ownKeys(t) {
+						reads.push(name + ' ownKeys');
+						return Reflect.ownKeys(t);
+					},
+					getOwnPropertyDescriptor(t, key) {
+						reads.push(name + ' descriptor ' + String(key));
+						return Reflect.getOwnPropertyDescriptor(t, key);
+					},
+				});
+			reads.length = 0;
+			make(
+				u,
+				traced('options', {
+					headers: traced('headers', { 'x-a': 'b', 'x-c': 'd' }),
+					protocols: traced('protocols', ['a']),
+				}),
+			);
+			out.headersReadOrder = reads.filter(
+				(read) => !read.includes('Symbol(Symbol.toPrimitive)'),
+			);
+			reads.length = 0;
 			out.readOrder = [
 				make(
 					{

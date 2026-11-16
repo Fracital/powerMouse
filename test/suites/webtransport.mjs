@@ -465,7 +465,13 @@ for (const [mode, base] of [
 			);
 			return;
 		}
-		if (after !== undefined && nativeAfter !== undefined)
+		// (a name that does not resolve fails when the wisp server's resolver
+		// says so, whose time is a lookup's through the relay)
+		if (
+			after !== undefined &&
+			nativeAfter !== undefined &&
+			query.case !== 'unresolvable'
+		)
 			ok(
 				`${mode}: ${what}: ends when natively`,
 				after <= nativeAfter + LATER_MS,

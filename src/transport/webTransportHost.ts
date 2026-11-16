@@ -41,6 +41,7 @@ interface WtModule {
 		options: {
 			origin: string;
 			protocols: string[];
+			headers: [string, string][];
 			hashes: Uint8Array[];
 			pem?: string;
 			timeoutMs: number;
@@ -166,7 +167,14 @@ const codeOf = (error: unknown): number | undefined => {
  */
 export async function serveWebTransport(
 	transport: ProxyTransport,
-	{ url, origin, protocols, hashes, port }: TransportToHost['webtransport'][0],
+	{
+		url,
+		origin,
+		protocols,
+		headers,
+		hashes,
+		port,
+	}: TransportToHost['webtransport'][0],
 	admit?: AdmitSession,
 ): Promise<[TransportToHost['webtransport'][1], []]> {
 	let target: URL;
@@ -217,6 +225,7 @@ export async function serveWebTransport(
 		session = await connect(url, opened.read, opened.write, {
 			origin,
 			protocols,
+			headers: headers ?? [],
 			hashes: hashes.map((hash) => new Uint8Array(hash)),
 			...(pem ? { pem } : {}),
 			timeoutMs: HANDSHAKE_MS,

@@ -30,6 +30,54 @@ type Part = 0 | 1 | 2 | 3;
 let sessions: WeakMap<object, Session>;
 /** a session's `datagrams` */
 let duplexes: WeakMap<object, Session>;
+/** leading and trailing HTTP whitespace */
+const HTTP_SPACE = /^[\t\n\r ]+|[\t\n\r ]+$/g;
+/**
+ * The request headers Chrome leaves out of a session's CONNECT without a
+ * word (measured on 157): Fetch's forbidden request headers, and
+ * user-agent
+ */
+const DROPPED = [
+	'accept-charset',
+	'accept-encoding',
+	'access-control-request-headers',
+	'access-control-request-method',
+	'connection',
+	'content-length',
+	'cookie',
+	'cookie2',
+	'date',
+	'dnt',
+	'expect',
+	'host',
+	'keep-alive',
+	'origin',
+	'referer',
+	'set-cookie',
+	'te',
+	'trailer',
+	'transfer-encoding',
+	'upgrade',
+	'via',
+	'user-agent',
+];
+const OVERRIDES = [
+	'x-http-method',
+	'x-http-method-override',
+	'x-method-override',
+];
+const dropped = (name: string, value: string) =>
+	DROPPED.includes(name) ||
+	name.startsWith('sec-') ||
+	name.startsWith('proxy-') ||
+	(OVERRIDES.includes(name) &&
+		value
+			.split(',')
+			.some((method) =>
+				['connect', 'trace', 'track'].includes(
+					method.replace(HTTP_SPACE, '').toLowerCase(),
+				),
+			));
 /** the errors a session ends with: their `source` reads 'session' */
 let sessionErrors: WeakSet<object>;
 
@@ -219,16 +267,76 @@ export function standIn(
 			? new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice()
 			: new Uint8Array(value).slice();
 
-	/** the constructor's options, read as Chrome reads them: `protocols`, then `serverCertificateHashes` */
-	const options = (value: unknown): [string[], ArrayBuffer[]] => {
+	// Chrome 157 reads `headers` from the options (a member Chrome may
+	// leave out): asked of the realm's own constructor once, with a URL it
+	// refuses after reading them, so nothing is opened
+	let headersRead: boolean | undefined;
+	const takesHeaders = () =>
+		(headersRead ??= (() => {
+			let read = false;
+			try {
+				Reflect.construct(Native, [
+					'',
+					{
+						get headers() {
+							read = true;
+							return undefined;
+						},
+					},
+				]);
+			} catch (error) {
+				// the URL, refused
+			}
+			return read;
+		})());
+	/** a WebIDL ByteString of the page's value */
+	const byteString = (value: unknown, context: string) => {
+		const text = primitive(value, context) as string;
+		if (/[\u0100-\uffff]/.test(text))
+			throw failed(context, 'String contains non ISO-8859-1 code point.');
+		return text;
+	};
+	/** `headers`: (record<ByteString, ByteString> or sequence<sequence<ByteString>>), read as Chrome reads it */
+	const headerList = (value: unknown, context: string): string[][] => {
+		if (value === undefined) return [];
+		if (value === null || !isObject(value))
+			throw failed(
+				context,
+				notOfType(
+					'(record<ByteString, ByteString> or sequence<sequence<ByteString>>)',
+				),
+			);
+		const given = value as Record<PropertyKey, unknown>;
+		const method = given[Symbol.iterator];
+		if (method !== undefined && method !== null)
+			return sequence(value, context, (pair) =>
+				sequence(pair, context, (item) => byteString(item, context)),
+			);
+		const out: string[][] = [];
+		for (const key of Reflect.ownKeys(given)) {
+			if (!Reflect.getOwnPropertyDescriptor(given, key)?.enumerable) continue;
+			const name = byteString(key, context);
+			out.push([name, byteString(given[key], context)]);
+		}
+		return out;
+	};
+
+	/**
+	 * The constructor's options, read as Chrome reads them: `headers` (157
+	 * on), `protocols`, then `serverCertificateHashes`
+	 */
+	const options = (value: unknown): [string[], ArrayBuffer[], string[][]] => {
 		const context = "construct 'WebTransport'";
 		const values: ArrayBuffer[] = [];
-		if (value === undefined || value === null) return [[], values];
+		if (value === undefined || value === null) return [[], values, []];
 		if (!isObject(value))
 			throw failed(context, notOfType('WebTransportOptions'));
 		const given = value as Record<string, unknown>;
 		const from = (name: string) =>
 			reading(context, name, 'WebTransportOptions');
+		const headers = takesHeaders()
+			? headerList(given.headers, from('headers'))
+			: [];
 		const protocols = given.protocols;
 		const names =
 			protocols === undefined
@@ -262,7 +370,34 @@ export function standIn(
 				if (name === 'sha-256' && bytes !== undefined)
 					values.push(copy(bytes as ArrayBuffer).buffer);
 			});
-		return [names, values];
+		return [names, values, headers];
+	};
+
+	/** the page's headers as Chrome sends them, or Chrome's refusal of them */
+	const headersOut = (given: string[][]) => {
+		const context = "construct 'WebTransport'";
+		const out: [string, string][] = [];
+		let reserved = false;
+		for (const pair of given) {
+			if (pair.length !== 2) throw failed(context, 'Invalid value');
+			if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(pair[0]))
+				throw failed(context, 'Invalid name');
+			const value = pair[1].replace(HTTP_SPACE, '');
+			if (/[\0\r\n]/.test(value)) throw failed(context, 'Invalid value');
+			const name = pair[0].toLowerCase();
+			if (name === 'wt-available-protocols') reserved = true;
+			if (dropped(name, value)) continue;
+			// sorted by name, in the page's order within one
+			let at = out.length;
+			while (at > 0 && out[at - 1][0] > name) at--;
+			out.splice(at, 0, [name, value]);
+		}
+		if (reserved)
+			throw failed(
+				context,
+				"The 'wt-available-protocols' header cannot be set.",
+			);
+		return out;
 	};
 
 	/** what ends a session: Chrome's order (WebTransport::Cleanup) */
@@ -333,7 +468,7 @@ export function standIn(
 		const input = (
 			primitive(args[0], "construct 'WebTransport'") as string
 		).toWellFormed();
-		const [protocols, hashes] = options(args[1]);
+		const [protocols, hashes, given] = options(args[1]);
 		// (no base: a relative URL is none)
 		let url: URL;
 		try {
@@ -371,6 +506,7 @@ export function standIn(
 				throw syntax('Duplicate protocols are not allowed.');
 			seen.push(name);
 		}
+		const headers = headersOut(given);
 
 		const session: Session = {
 			over: false,
@@ -383,6 +519,7 @@ export function standIn(
 			numbers: [1024, null, null, 1, 1],
 			url: url.href,
 			protocols,
+			headers,
 			hashes,
 		};
 		const made = Reflect.construct(Object, [], newTarget) as object;

@@ -97,6 +97,7 @@ export async function carry(ctx: Context, session: Session): Promise<boolean> {
 				url: session.url,
 				origin: ctx.origin,
 				protocols: session.protocols,
+				headers: session.headers,
 				hashes: session.hashes,
 				port: theirs,
 			},

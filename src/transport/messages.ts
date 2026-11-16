@@ -1040,6 +1040,8 @@ export type TransportToHost = {
 			url: string;
 			origin: string;
 			protocols: string[];
+			/** the page's own (Chrome 157 on): checked, lower case, sorted */
+			headers: [string, string][];
 			hashes: ArrayBuffer[];
 			port: MessagePort;
 		},

@@ -1441,6 +1441,16 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   suite, against a WebTransport server of the suite's, test/wtserver.mjs,
   natively against both modes on Chrome 152, 156 and 157; webtransport
   suite.)
+- On Chrome 157, a proxied page's `new WebTransport(url, { headers })`
+  reads, checks and refuses its headers as the browser does (read before
+  `protocols`, a record or a sequence of pairs; "Invalid name", "Invalid
+  value", and `wt-available-protocols` refused; the forbidden ones left out
+  without a word), and its session's CONNECT carries them as Chrome's does:
+  lower case, sorted by name, after `wt-available-protocols`. Whether a
+  realm reads `headers` is asked of its own constructor, so Chrome 152 to
+  156 are as before. (webtransport suite's constructor cases and
+  webtransport-live's headers case, natively against both modes on Chrome
+  152, 156 and 157.)
 - `navigator.permissions.query({ name: 'storage-access' })` reads granted
   in a proxied top-level page, as natively: a top-level document has
   storage access, and Chrome answers granted there (denied when its

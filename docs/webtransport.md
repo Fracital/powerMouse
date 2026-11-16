@@ -45,6 +45,22 @@ WebTransport server (quic-go's) on the machine.
   `serverCertificateHashes` (`allowPooling`, `requireUnreliable` and
   `congestionControl` are never read). The URL is parsed with no base, so a
   relative one is invalid.
+- Chrome 157 (157.0.8103.50) reads a third, `headers`, first: a
+  `(record<ByteString, ByteString> or sequence<sequence<ByteString>>)`
+  (an iterable is pairs, anything else its own enumerable keys; null, a
+  number or a string is refused, and so is a character past U+00FF). After
+  the URL and the protocols the constructor refuses, with a TypeError, a
+  pair that is not two ("Invalid value"), a name that is no token
+  ("Invalid name") and a value with a NUL, CR or LF once its leading and
+  trailing whitespace is cut ("Invalid value"), pair by pair, and then
+  `wt-available-protocols` ("The 'wt-available-protocols' header cannot be
+  set."). Fetch's forbidden request headers, `user-agent`, `sec-` and
+  `proxy-` names, and a method override that names CONNECT, TRACE or TRACK
+  are left out without a word. The rest go on the CONNECT after
+  `wt-available-protocols`, in lower case and sorted by name (the page's
+  order within one name), their values trimmed; a value of Latin-1 bytes
+  goes as those bytes. (Measured with a server of our own, which logs the
+  fields, and quic-go's for the Latin-1 bytes our server refuses.)
 - A server that cannot be reached (a closed port, a name that does not
   resolve, with a pinned certificate or without): `closed` rejects and then
   `ready`, in one task, with one `WebTransportError` whose message is
@@ -182,11 +198,15 @@ The worker bundle has both parts as its own code.
 
 - The constructor's arguments, in Chrome's order and words: the URL
   converted to a string (a symbol, a `toString` that throws), the options
-  dictionary (`protocols` read before `serverCertificateHashes`, each a
-  sequence read through the page's iterator once, each hash's `algorithm`
-  and `value`), then the URL (invalid, not https, a fragment), then the
-  page's policy, then the protocol names (empty, a character outside
-  printable ASCII, 512 characters or more, a duplicate).
+  dictionary (`headers` where the realm's own constructor reads it,
+  `protocols` read before `serverCertificateHashes`, each a sequence read
+  through the page's iterator once, each hash's `algorithm` and `value`),
+  then the URL (invalid, not https, a fragment), then the page's policy,
+  then the protocol names (empty, a character outside printable ASCII, 512
+  characters or more, a duplicate), then the headers as Chrome 157 checks
+  them. Whether the realm's constructor reads `headers` is asked of it once,
+  with a URL it refuses after reading its options, so nothing is opened.
+  The headers Chrome would send go with the session's handshake.
 - A session's handshake starts when Chrome's throttle would have started
   it (the model above, one for the bundle; a handshake that failed keeps
   its place five minutes, one that came up gives it back). One that fails
@@ -290,7 +310,10 @@ before a page makes a session:
    epoxy (`pem_files`) and the HTTP/3 option's.
 4. **stomp-h3** speaks Chrome's draft 02 as in the table above: the
    SETTINGS, the extended CONNECT with Chrome's fields in Chrome's order and
-   the page's origin (no cookie, no user agent), the GREASE capsule, only
+   the page's origin (no cookie, no user agent) and on Chrome 157 the
+   page's own headers as the realm checked them (stomp-h3 refuses a
+   pseudo-header, a name that is no lower-case token and the fields it
+   writes itself again), the GREASE capsule, only
    `:status 200` taken, the stream prefixes, HTTP/3 datagrams with the
    quarter stream id, the close capsule both ways, the stream error codes,
    and `serverCertificateHashes` checked as Chrome checks them (the leaf's
@@ -356,7 +379,8 @@ a unidirectional stream each way, datagrams (echo, the numbers, one too
 large, one that is no buffer), a close by the page and two by the server
 (its capsule; and webtransport-go's, which resets the streams first), the
 server's reset and stop-sending and the page's, a refused session (404 and
-403), the protocol the server picks, a server that does not read, a
+403), the protocol the server picks, the page's own headers (Chrome 157;
+none before it), a server that does not read, a
 certificate the WebPKI takes (through the proxy, the root the test
 transport gives epoxy), a hash that is not the certificate's, a session in
 a worker, and one the content blocker's list refuses, which the server

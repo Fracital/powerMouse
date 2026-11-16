@@ -50,6 +50,8 @@ export interface Session {
 	/** what the handshake asks for */
 	url: string;
 	protocols: string[];
+	/** the page's own headers (Chrome 157 on) as they go out: checked, lower case, sorted by name */
+	headers: [string, string][];
 	hashes: ArrayBuffer[];
 	/** the server's answer, once up */
 	protocol?: string;

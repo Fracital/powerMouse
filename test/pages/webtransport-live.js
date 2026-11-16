@@ -90,6 +90,7 @@
 				],
 			}),
 			...(options.protocols && { protocols: options.protocols }),
+			...(options.headers && { headers: options.headers }),
 		});
 		t.closed.catch(() => {});
 		t.ready.catch(() => {});
@@ -372,6 +373,52 @@
 			await u.ready;
 			out.push(u.protocol);
 			u.close();
+			return out;
+		},
+		/**
+		 * the page's own headers on the CONNECT (Chrome 157 on; before it
+		 * there are none): which go out, in what order and how
+		 */
+		async headers(params) {
+			const kinds = {
+				record: {
+					'X-Up': 'V',
+					'x-a': ' \ttrimmed\t ',
+					'b-first': '1',
+					cookie: 'a=b',
+					origin: 'https://other.example',
+					'user-agent': 'x',
+					'sec-x': '1',
+					'proxy-x': '1',
+					'x-http-method-override': 'GET, trace',
+					'x-http-method': 'GET',
+					'access-control-request-private-network': 'true',
+					tab: 'a\tb',
+					del: 'a\x7fb',
+					empty: '',
+					big: 'v'.repeat(20000),
+				},
+				pairs: [
+					['x-dup', '2'],
+					['x-dup', '1'],
+					['a-z', 'v'],
+				],
+				headersObject: new Headers([
+					['x-b', '2'],
+					['x-a', '1'],
+					['X-a', '3'],
+				]),
+				map: new Map([['x-m', '1']]),
+			};
+			const out = {};
+			for (const [kind, headers] of Object.entries(kinds)) {
+				const t = open(params, `/echo?kind=${kind}`, {
+					headers,
+					...(kind === 'map' && { protocols: ['p1', 'p2'] }),
+				});
+				out[kind] = await settled(t.ready);
+				t.close();
+			}
 			return out;
 		},
 		/** a server that does not read: the page's writes stall on `ready`, and go on once it reads */
