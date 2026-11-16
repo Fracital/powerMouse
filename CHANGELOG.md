@@ -1274,6 +1274,27 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fixes
 
+- A frame of another site no longer reaches a page through the browser's
+  own methods that read a window as an array-like. Array.prototype's
+  methods called with a window as `this` (`Array.prototype.at.call(window,
+0)`, `values`, `find`, `slice`, a sort's comparisons and the rest, by
+  `call`, `apply`, `bind`, `Reflect.apply` or `call.call`, and the same
+  functions that NodeList and the other lists share), a window as the
+  arguments of `apply`, `Reflect.apply` or `Reflect.construct`, `concat` of
+  a window the page made spreadable, JSON.stringify's replacer (which was
+  also given the window's real `top`, `parent` and `location`), a typed
+  array's `from` and `Array.fromAsync` read each child with no hook in the
+  way, and the page got the proxy's own window of the other site. Such a
+  call now reads the window as the page may see it, each child as the
+  access API hands out `window[i]` (an iterator stays live, a callback is
+  given the window). The methods are not wrapped on Array.prototype:
+  another function written to an array's `@@iterator` turns off V8's fast
+  path for every spread and `Array.from` of an array in the whole renderer
+  process (about thirty times slower, measured on Chrome 157), so the calls
+  that hand a method another `this` are hooked instead. window-children
+  compares 68 such reads with native Chrome; an array method the page makes
+  the window's own method and calls as one is left open (listed as known),
+  with an object spread of a window.
 - A page's own frames no longer fall off a stack that runs through the
   inject's hooks. V8 counts every frame toward `Error.stackTraceLimit` (10)
   when it captures a stack, the inject's included, and the formatter then

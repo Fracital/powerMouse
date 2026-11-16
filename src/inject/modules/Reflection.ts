@@ -321,6 +321,8 @@ export default class ReflectionModule extends Module<Client> {
 				},
 			);
 
+		this.applyWindowChildren(windowLike);
+
 		// `Array.from(frames)`: a window is array-like by its children
 		global.Array.from = proxyModule.wrapFunction(
 			global.Array.from,
@@ -446,4 +448,368 @@ export default class ReflectionModule extends Module<Client> {
 					},
 				);
 	}
+
+	/**
+	 * The rest of a window's array-likeness. The browser's own methods that
+	 * read an array-like read a window's children with no hook in the way:
+	 * Array.prototype's (`Array.prototype.at.call(window, 0)`, `values`,
+	 * `find`, `slice` and the rest, which a window has as `this` only by
+	 * `call`, `apply`, `bind` or `Reflect.apply`), a `concat` of a window the
+	 * page made spreadable, and a window given as the arguments of a call
+	 * (`f.apply(null, window)`, `Reflect.apply`, `Reflect.construct`). A
+	 * child of another site came out of them as the proxy's own window. Such
+	 * a call reads the window as the page may see it: each child as the
+	 * access API hands out `window[i]` (a view of the window, read as late
+	 * as natively, so an iterator of it is live), and a callback is given the
+	 * window itself where natively it is given the receiver.
+	 *
+	 * The methods are not wrapped on Array.prototype: many interfaces hold
+	 * the same functions (NodeList.prototype.forEach is
+	 * Array.prototype.forEach, every iterable list's `@@iterator` is its
+	 * `values`), and V8 keeps one flag for the whole process that an array's
+	 * `@@iterator` is the browser's: another function written there turns
+	 * off the fast path of every spread and `Array.from` of an array in
+	 * every page of the process for good, about thirty times slower
+	 * (measured, Chrome 157). The calls that give a method another `this`
+	 * are where a window becomes the receiver.
+	 */
+	applyWindowChildren(windowLike: (target: unknown) => boolean) {
+		const global = this.client.global as typeof globalThis &
+			Record<string, any>;
+		// a scope without windows (a worker) has no children to read
+		if (!Reflect.getOwnPropertyDescriptor(global, 'window')?.get) return;
+		const proxyModule = this.client.getModule(ProxyModule)!;
+		const api = () => this.client.accessApi as Api;
+		const isArray = global.Array.isArray;
+		const isWindow = (value: unknown): boolean =>
+			typeof value === 'object' &&
+			value !== null &&
+			!isArray(value) &&
+			(this.client.isWindowObject
+				? this.client.isWindowObject(value)
+				: windowLike(value));
+		const isIndex = (key: unknown): key is string => {
+			if (typeof key !== 'string') return false;
+			const index = +key;
+			return index >= 0 && index % 1 === 0 && `${index}` === key;
+		};
+		// a window as the page may read it: a child as `window[i]` hands it
+		// out, any other key the window's own (`length` included). It is
+		// handed to concat only once the window was found spreadable.
+		const views = new WeakMap<object, object>();
+		const viewOf = (window: any): object => {
+			let view = Reflect.apply(weakMapGet, views, [window]) as
+				object | undefined;
+			if (!view) {
+				view = new Proxy(Object.create(null) as object, {
+					get: (_, key) =>
+						isIndex(key)
+							? api().get(window[key], +key, window)
+							: key === SPREADABLE || Reflect.get(window, key),
+					has: (_, key) => Reflect.has(window, key),
+				});
+				Reflect.apply(weakMapSet, views, [window, view]);
+			}
+			return view;
+		};
+		// a window given as a list of arguments: read at once, as natively
+		const childrenOf = (window: any): unknown[] => {
+			const length = window.length;
+			const children: unknown[] = [];
+			for (let index = 0; index < length; index++)
+				children[index] = api().get(window[index], index, window);
+			return children;
+		};
+		const listOf = (list: unknown) =>
+			isWindow(list) ? childrenOf(list) : list;
+
+		const arrayPrototype = global.Array.prototype as any;
+		for (const name in READERS) {
+			const native = Reflect.getOwnPropertyDescriptor(
+				arrayPrototype,
+				name,
+			)?.value;
+			if (typeof native === 'function')
+				Reflect.apply(weakMapSet, arrayReaders, [native, name]);
+		}
+		const route = (
+			native: Function,
+			name: string,
+			window: object,
+			args: unknown[],
+		): unknown => {
+			const callback = args[0];
+			if (name === 'sort') {
+				// sort writes the window, which the browser refuses after the
+				// comparisons: those see what the page may of each child
+				const shown = (value: unknown) => api().get(value, 0, window);
+				const compare =
+					callback === undefined
+						? (a: unknown, b: unknown) => {
+								const x = `${shown(a)}`;
+								const y = `${shown(b)}`;
+								return x < y ? -1 : y < x ? 1 : 0;
+							}
+						: typeof callback === 'function'
+							? (a: unknown, b: unknown) =>
+									Reflect.apply(callback, undefined, [shown(a), shown(b)])
+							: callback;
+				return Reflect.apply(native, window, [compare]);
+			}
+			const at = READERS[name];
+			if (at > 0 && typeof callback === 'function')
+				args[0] = function (this: unknown, ...values: unknown[]) {
+					if (values.length > at) values[at] = window;
+					return Reflect.apply(callback, this, values);
+				};
+			return Reflect.apply(native, viewOf(window), args);
+		};
+		// a method bound to a window
+		const routers = new WeakMap<Function, Function>();
+		const routerOf = (native: Function) => {
+			let router = Reflect.apply(weakMapGet, routers, [native]) as
+				Function | undefined;
+			if (!router) {
+				router = proxyModule.wrapFunction(native, (target, that, args) =>
+					isWindow(that)
+						? route(target, readerOf(target)!, that, args)
+						: Reflect.apply(target, that, args),
+				);
+				Reflect.apply(weakMapSet, routers, [native, router]);
+			}
+			return router;
+		};
+
+		// (`length`: a hook with a rest parameter where the native counts one)
+		const install = (holder: any, hook: Function, length = false) => {
+			const { name } = hook;
+			if (length) proxyModule.mirrorAttributes(holder[name], hook);
+			else proxyModule.mirrorSource(holder[name], hook);
+			proxyModule.adopt(hook);
+			holder[name] = hook;
+		};
+		// (each hook as light as can be: these are among the calls a page
+		// makes most, and one that the engine inlines costs next to nothing;
+		// a misuse is the browser's to refuse, the realm's own native's)
+		const functionPrototype = global.Function.prototype as any;
+		const { call, apply, bind } = functionPrototype as {
+			call: Function;
+			apply: Function;
+			bind: Function;
+		};
+		const functionHooks = {
+			call(this: unknown, thisArg: unknown, ...args: unknown[]) {
+				const name = readerOf(this);
+				if (name !== undefined && isWindow(thisArg))
+					return route(this as Function, name, thisArg as object, args);
+				return typeof this === 'function'
+					? Reflect.apply(this, thisArg, args)
+					: Reflect.apply(call, this, before(thisArg, args));
+			},
+			apply(this: unknown, thisArg: unknown, list: unknown) {
+				const empty = list === undefined || list === null;
+				if (empty || typeof list === 'object') {
+					const name = readerOf(this);
+					if (name !== undefined && isWindow(thisArg))
+						return route(
+							this as Function,
+							name,
+							thisArg as object,
+							empty
+								? []
+								: Reflect.apply(gather, undefined, listOf(list) as unknown[]),
+						);
+					if (typeof this === 'function')
+						return Reflect.apply(
+							this,
+							thisArg,
+							empty ? EMPTY : (listOf(list) as unknown[]),
+						);
+				}
+				return Reflect.apply(apply, this, [thisArg, list]);
+			},
+			bind(this: unknown, thisArg: unknown, ...args: unknown[]) {
+				const name = readerOf(this);
+				return Reflect.apply(
+					bind,
+					name !== undefined && isWindow(thisArg)
+						? routerOf(this as Function)
+						: this,
+					before(thisArg, args),
+				);
+			},
+		};
+		install(functionPrototype, functionHooks.call);
+		install(functionPrototype, functionHooks.apply);
+		install(functionPrototype, functionHooks.bind);
+
+		const reflect = global.Reflect as any;
+		const realmReflectApply = reflect.apply as Function;
+		const realmReflectConstruct = reflect.construct as Function;
+		const reflectHooks = {
+			apply(target: unknown, thisArg: unknown, list: unknown) {
+				const name = readerOf(target);
+				if (
+					name !== undefined &&
+					typeof list === 'object' &&
+					list !== null &&
+					isWindow(thisArg)
+				)
+					return route(
+						target as Function,
+						name,
+						thisArg as object,
+						Reflect.apply(gather, undefined, listOf(list) as unknown[]),
+					);
+				return Reflect.apply(realmReflectApply, undefined, [
+					target,
+					thisArg,
+					listOf(list),
+				]);
+			},
+			construct(target: unknown, list: unknown, ...newTarget: unknown[]) {
+				return Reflect.apply(
+					realmReflectConstruct,
+					undefined,
+					newTarget.length
+						? [target, listOf(list), newTarget[0]]
+						: [target, listOf(list)],
+				);
+			},
+		};
+		install(reflect, reflectHooks.apply);
+		install(reflect, reflectHooks.construct);
+
+		// what reads a window's own properties and hands each to the page's
+		// function: JSON.stringify's replacer is given a window's children,
+		// its `top`, `parent` and `location` as a member read hands them out
+		const stringify = global.JSON.stringify as Function;
+		install(
+			global.JSON,
+			{
+				stringify(value: unknown, replacer: unknown, space: unknown) {
+					if (typeof replacer === 'function') {
+						const pages = replacer;
+						replacer = function (this: unknown, key: string, member: unknown) {
+							return Reflect.apply(pages, this, [
+								key,
+								isWindow(this) ? api().get(member, key, this) : member,
+							]);
+						};
+					}
+					return Reflect.apply(stringify, undefined, [value, replacer, space]);
+				},
+			}.stringify,
+		);
+		// and what reads an array-like as Array.from does (which the access
+		// API's Array.from hook covers): a typed array's `from` (a window
+		// has no number in it, but the map function sees each child) and
+		// Array.fromAsync
+		const typedArray = Reflect.getPrototypeOf(global.Int8Array) as any;
+		for (const [holder, name] of [
+			[typedArray, 'from'],
+			[global.Array, 'fromAsync'],
+		] as const) {
+			const native = holder?.[name];
+			if (typeof native !== 'function') continue;
+			install(
+				holder,
+				{
+					[name](this: unknown, items: unknown, ...rest: unknown[]) {
+						return Reflect.apply(
+							native,
+							this,
+							before(isWindow(items) ? viewOf(items) : items, rest),
+						);
+					},
+				}[name],
+				true,
+			);
+		}
+
+		// `[].concat(window)` spreads a window that the page made spreadable
+		// (`window[Symbol.isConcatSpreadable] = true`), as natively, by its
+		// children
+		const concat = arrayPrototype.concat as Function;
+		const spreadable = (value: unknown) =>
+			isWindow(value) && !!(value as any)[SPREADABLE];
+		install(
+			arrayPrototype,
+			{
+				concat(this: unknown, ...items: unknown[]) {
+					for (let index = 0; index < items.length; index++) {
+						const item = items[index];
+						if (!isArray(item) && spreadable(item)) items[index] = viewOf(item);
+					}
+					return Reflect.apply(
+						concat,
+						!isArray(this) && spreadable(this) ? viewOf(this) : this,
+						items,
+					);
+				},
+			}.concat,
+			true,
+		);
+	}
 }
+
+const SPREADABLE = Symbol.isConcatSpreadable;
+const EMPTY: unknown[] = [];
+/** `first`, then `rest`: a list made with no iterator a page could replace */
+const before = (first: unknown, rest: unknown[]): unknown[] => {
+	const list = [first];
+	for (let index = 0; index < rest.length; index++)
+		list[index + 1] = rest[index];
+	return list;
+};
+/** a function to spread a list into: the list as a browser's call reads it */
+const gather = (...items: unknown[]) => items;
+/**
+ * Array.prototype's methods that read the elements of what they are called
+ * on, each with where its callback is given that object (the receiver, as
+ * its last argument) or -1. The ones that only write (`push`, `fill`) the
+ * browser refuses on a window, and `keys` reads only its length.
+ */
+const READERS: Record<string, number> = {
+	at: -1,
+	entries: -1,
+	every: 2,
+	filter: 2,
+	find: 2,
+	findIndex: 2,
+	findLast: 2,
+	findLastIndex: 2,
+	flat: -1,
+	flatMap: 2,
+	forEach: 2,
+	includes: -1,
+	indexOf: -1,
+	join: -1,
+	lastIndexOf: -1,
+	map: 2,
+	reduce: 3,
+	reduceRight: 3,
+	slice: -1,
+	some: 2,
+	sort: -1,
+	toLocaleString: -1,
+	toReversed: -1,
+	toSorted: -1,
+	toSpliced: -1,
+	values: -1,
+	with: -1,
+};
+/** those natives, of every realm this bundle hooked, by name */
+const arrayReaders = new WeakMap<object, string>();
+// the collections' own methods, taken when the bundle loads: a page that
+// replaced WeakMap.prototype.get and called the one it replaced by `call`
+// (hooked here) had every call of its own ask its function again
+const weakMapGet = WeakMap.prototype.get;
+const weakMapSet = WeakMap.prototype.set;
+/**
+ * the name of one of those, asked of anything a page calls `call` on (the
+ * map's own `get` bound to it: no list made per call)
+ */
+const readerOf = Reflect.apply(Function.prototype.bind, weakMapGet, [
+	arrayReaders,
+]) as (fn: unknown) => string | undefined;

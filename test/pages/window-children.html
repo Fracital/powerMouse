@@ -1,0 +1,210 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>window children</title>
+	</head>
+	<body>
+		<script>
+			(function () {
+				// two frames of another site (a comparison takes two)
+				var loaded = 0;
+				var frame = document.createElement('iframe');
+				var second = document.createElement('iframe');
+				frame.src = second.src =
+					'http://localhost:' + location.port + '/pages/first-rewrite.html';
+				frame.onload = second.onload = function () {
+					if (++loaded < 2) return;
+					setTimeout(function () {
+						var W = window;
+						var P = Array.prototype;
+						var out = { done: false };
+						var title = function (w) {
+							return w.document.title;
+						};
+						var note = function (name, read) {
+							try {
+								out[name] = String(read());
+							} catch (error) {
+								out[name] = 'threw ' + error.name;
+							}
+						};
+						note('values', () => title(P.values.call(W).next().value));
+						note('iterator', () =>
+							title(P[Symbol.iterator].call(W).next().value),
+						);
+						note('entries', () => title(P.entries.call(W).next().value.at(1)));
+						note('forOfValues', () => {
+							for (const w of P.values.call(W)) return title(w);
+						});
+						note('arrayFrom', () => title(Array.from(W).at(0)));
+						note('arrayFromMap', () => Array.from(W, title).at(0));
+						note('at', () => title(P.at.call(W, 0)));
+						note('find', () => title(P.find.call(W, () => true)));
+						note('findLast', () => title(P.findLast.call(W, () => true)));
+						note('filter', () => title(P.filter.call(W, () => true).pop()));
+						note('mapCallback', () => P.map.call(W, title).pop());
+						note('forEachCallback', () => {
+							var t;
+							P.forEach.call(W, (w) => (t = title(w)));
+							return t;
+						});
+						note('reduce', () => title(P.reduce.call(W, (a, w) => w, 0)));
+						note('someCallback', () => {
+							var t;
+							P.some.call(W, (w) => ((t = title(w)), true));
+							return t;
+						});
+						note('slice', () => title(P.slice.call(W).pop()));
+						note('flat', () => title(P.flat.call(W).pop()));
+						note('flatMap', () => title(P.flatMap.call(W, (w) => [w]).pop()));
+						note('toReversed', () => title(P.toReversed.call(W).pop()));
+						note('toSorted', () => title(P.toSorted.call(W, () => 0).pop()));
+						note('toSpliced', () => title(P.toSpliced.call(W).pop()));
+						note('with', () => title(P.with.call(W, 0, 0).pop()));
+						note('concatSpread', () => {
+							var o = { length: 1, 0: 0, [Symbol.isConcatSpreadable]: true };
+							return title([].concat(Object.setPrototypeOf(o, W)).pop());
+						});
+						note('objectValues', () => title(Object.values(W).at(0)));
+						note('objectEntries', () => title(Object.entries(W).at(0).at(1)));
+						note('ownDescriptor', () =>
+							title(Object.getOwnPropertyDescriptor(W, '0').value),
+						);
+						note('ownDescriptors', () =>
+							title(
+								Object.values(Object.getOwnPropertyDescriptors(W)).at(0).value,
+							),
+						);
+						note('reflectGet', () => title(Reflect.get(W, 0)));
+						note('reflectDescriptor', () =>
+							title(Reflect.getOwnPropertyDescriptor(W, 0).value),
+						);
+						note('assign', () =>
+							title(Object.values(Object.assign({}, W)).at(0)),
+						);
+						note('objectSpread', () => title(Object.values({ ...W }).at(0)));
+						note('applyArrayOf', () => title(Array.of.apply(null, W).pop()));
+						note('reflectApply', () =>
+							title(Reflect.apply(Array.of, null, W).pop()),
+						);
+						note('reflectConstruct', () =>
+							title(
+								Reflect.construct(Array, [0, 0].concat(P.slice.call(W))).pop(),
+							),
+						);
+						note('applyArguments', () =>
+							function () {
+								return title([...arguments].pop());
+							}.apply(null, W),
+						);
+						note('spread', () => title([...W].pop()));
+						note('forOfWindow', () => {
+							for (const w of W) return title(w);
+						});
+						note('iteratorFrom', () =>
+							title(Iterator.from(P.values.call(W)).toArray().pop()),
+						);
+						note('iteratorTake', () =>
+							title(P.values.call(W).take(1).next().value),
+						);
+						note('mapFromEntries', () =>
+							title(new Map(P.entries.call(W)).get(0)),
+						);
+						note('setFromValues', () =>
+							title([...new Set(P.values.call(W))].pop()),
+						);
+						note('proxyAt', () => title(P.at.call(new Proxy(W, {}), 0)));
+						note('createAt', () => title(P.at.call(Object.create(W), 0)));
+						note('framesAt', () => title(P.at.call(frames, 0)));
+						note('promiseAll', () => 'async');
+						// the comparisons of a sort the browser then refuses to write
+						note('sortCompare', () => P.sort.call(W, (a, b) => title(a)));
+						note('sortDefault', () => P.sort.call(W));
+						// what the page has of a child is what the methods find
+						var first = 0;
+						note('indexOfChild', () => P.indexOf.call(W, W[first]));
+						note('includesChild', () => P.includes.call(W, W[first]));
+						note('lastIndexOfChild', () => P.lastIndexOf.call(W, W[first]));
+						note('every', () => P.every.call(W, (w) => title(w)));
+						note('findIndex', () => P.findIndex.call(W, (w) => title(w)));
+						note('reduceRight', () =>
+							title(P.reduceRight.call(W, (a, w) => w, 0)),
+						);
+						note('callbackArray', () =>
+							P.map.call(W, (w, i, all) => all === W).join(),
+						);
+						note('join', () => P.join.call(W));
+						note('toLocaleString', () => P.toLocaleString.call(W));
+						note('keys', () => [...P.keys.call(W)].join());
+						note('nodeListForEach', () => {
+							var t;
+							NodeList.prototype.forEach.call(W, (w) => (t = title(w)));
+							return t;
+						});
+						// a method reaches a window as `this` every way a call gives one
+						note('bound', () => title(P.at.bind(W)(0)));
+						note('callCall', () =>
+							title(Function.prototype.call.call(P.at, W, 0)),
+						);
+						note('uncurried', () =>
+							title(Function.prototype.call.bind(P.at)(W, 0)),
+						);
+						note('applyValues', () => title(P.values.apply(W).next().value));
+						note('reflectApplyValues', () =>
+							title(Reflect.apply(P.values, W, []).next().value),
+						);
+						note('liveIterator', () => {
+							var children = P.values.call(W);
+							var extra = document.createElement('iframe');
+							document.body.appendChild(extra);
+							children.next();
+							children.next();
+							var third = children.next().value;
+							extra.remove();
+							return third === undefined ? 'none' : typeof third;
+						});
+						// a window the page made spreadable is spread by its children
+						note('concatSpreadable', () => {
+							W[Symbol.isConcatSpreadable] = true;
+							try {
+								return title([].concat(W).pop());
+							} finally {
+								delete W[Symbol.isConcatSpreadable];
+							}
+						});
+						note('jsonReplacer', () => {
+							var t = 'not asked';
+							JSON.stringify(W, function (key, value) {
+								if (key === '0') t = title(value);
+								return key === '' ? value : undefined;
+							});
+							return t;
+						});
+						note('ownMethod', () => {
+							W.childAt = P.at;
+							try {
+								return title(W.childAt(0));
+							} finally {
+								delete W.childAt;
+							}
+						});
+						note('typedArrayFrom', () => Uint8Array.from(W, (w) => title(w)));
+						// read as it settles
+						Array.fromAsync(W, (w) => title(w))
+							.then(
+								(list) => (out.fromAsync = String(list)),
+								(error) => (out.fromAsync = 'threw ' + error.name),
+							)
+							.finally(() => {
+								out.done = true;
+								window.__children = out;
+							});
+					}, 300);
+				};
+				document.body.appendChild(frame);
+				document.body.appendChild(second);
+			})();
+		</script>
+	</body>
+</html>

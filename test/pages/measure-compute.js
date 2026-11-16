@@ -503,6 +503,75 @@
 		() => callWithArguments(3000000),
 	);
 
+	// the array methods a framework calls on small arrays, millions of times
+	// a page: what a hook on Array.prototype or Function.prototype.apply
+	// costs each call
+	function arrayMethods(a, n) {
+		let t = 0;
+		for (let i = 0; i < n; i++) {
+			t += a.map((x) => x + i).filter((x) => x & 1).length;
+			t += a.indexOf(i & 7) + a.slice(1).length;
+			a.forEach((x) => (t += x));
+			t += Math.max.apply(null, a);
+		}
+		return t;
+	}
+	kernel(
+		'array-methods',
+		() => [0, 1, 2, 3, 4, 5, 6, 7],
+		(a) => arrayMethods(a, 200000),
+	);
+
+	// spread, for-of, destructuring and Array.from of small arrays: V8 runs
+	// them on a fast path while an array's @@iterator is the browser's, a
+	// flag of the whole process that one write of it turns off
+	function iterateArrays(a, n) {
+		let t = 0;
+		for (let i = 0; i < n; i++) {
+			t += [...a].length + Math.max(...a);
+			for (const x of a) t += x;
+			const [x, y] = a;
+			t += x + y + Array.from(a).length;
+		}
+		return t;
+	}
+	kernel(
+		'array-iteration',
+		() => [0, 1, 2, 3, 4, 5, 6, 7],
+		(a) => iterateArrays(a, 300000),
+	);
+
+	// call, apply and bind, as compiled classes and older libraries use them:
+	// what a hook on Function.prototype costs each call
+	function Base(x) {
+		this.x = x;
+	}
+	Base.prototype.add = function (y) {
+		return this.x + y;
+	};
+	function Derived(x) {
+		Base.call(this, x);
+	}
+	function forward() {
+		return Base.prototype.add.apply(this, arguments);
+	}
+	function callMethods(n) {
+		let t = 0;
+		const slice = Array.prototype.slice;
+		for (let i = 0; i < n; i++) {
+			const o = new Derived(i);
+			t += Base.prototype.add.call(o, 1) + forward.call(o, 2);
+			t += slice.call([i, 1, 2], 1).length;
+			if ((i & 63) === 0) t += Base.prototype.add.bind(o, 3)();
+		}
+		return t;
+	}
+	kernel(
+		'call-apply',
+		() => null,
+		() => callMethods(1000000),
+	);
+
 	// `in` with a key that is no literal
 	function countPresent(o, keys) {
 		let t = 0;
