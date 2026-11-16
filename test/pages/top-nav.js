@@ -4,8 +4,8 @@
 // www.localhost as C), sandboxed or not, or a srcdoc or a written
 // about:blank child of the hop above, and the innermost document runs the
 // case's form: `top.location = u`, `top.location.href = u`, `assign`,
-// `replace` (with no URL too), the same on `parent`, or a read of
-// top.location.href. With
+// `replace` (with no URL too, or one that does not parse: `bad`), the same
+// on `parent`, or a read of top.location.href. With
 // `user` it waits for a click on its #go button (`stale`: the click, then 6
 // s, past Chrome's transient activation). What it caught goes to the fixture
 // as a beacon (/echo-post, shape `result`), the top's history.length at load
@@ -91,9 +91,10 @@ var TOP_NAV_CASES = (function () {
 		add('sb0 ' + form, [{ o: 'B', sandbox: TOP_NAV_FLAGS.sb0 }], form);
 		add('sb5 ' + form, [{ o: 'B', sandbox: TOP_NAV_FLAGS.sb5 }], form);
 	});
-	// no URL: the browser's own error
+	// no URL, and one that does not parse: the browser's own errors
 	add('s top.assign()', [{ o: 'A' }], 'top.assign()');
 	add('s top.replace()', [{ o: 'A' }], 'top.replace()');
+	add('s top.href bad', [{ o: 'A' }], 'top.href', { bad: true });
 	add('x top.replace()', B, 'top.replace()');
 	return cases;
 })();
@@ -178,6 +179,7 @@ function topNavRun(params) {
 		topNavOrigin(spec.to || 'A', params.p) +
 		'/echo-headers?html&k=' +
 		encodeURIComponent(params.k);
+	if (spec.bad) target = 'http://[';
 	var act = function () {
 		var result = {};
 		var started = performance.now();

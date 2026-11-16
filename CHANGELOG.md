@@ -1441,6 +1441,14 @@ be cloned.`, the function as the rewriter printed it, mark and helper
   it, report-only ones too, trusted, with the worker's URL. The document
   hears nothing of it, as natively. (csp-workers, natively against both
   modes on Chrome 157.)
+- `location.href = url` with a URL that does not parse throws the
+  browser's SyntaxError ("Failed to set the 'href' property on 'Location':
+  'http://[/' is not a valid URL.") and stays put, as natively, for a
+  page's own location and another same-origin window's. The Location
+  stand-in resolved the URL first, so the page got URL's TypeError
+  ("Failed to construct 'URL': Invalid URL"), as `assign` and `replace`
+  did before they handed such a URL to the browser. (top-navigation
+  suite, `s top.href bad`, natively against both modes.)
 - A frame navigates its top or its parent by script as natively. In the
   same-origin controller, and the isolated one, `top.location = url`,
   `top.location.href = url`, `top.location.replace(url)` and the same on
@@ -1466,7 +1474,7 @@ be cloned.`, the function as the rewriter printed it, mark and helper
   of another origin's `top.location.href` still throw, and `assign` stays
   out of reach on it; a call with no URL gets the browser's own
   error. The announcement is no resource timing entry of the
-  page. (top-navigation suite: 65 cases natively, Chrome 152,
+  page. (top-navigation suite: 66 cases natively, Chrome 152,
   156 and 157 alike, against both modes; docs/same-origin-policy.md.)
 
 - A frame read before it loaded (an about:blank child or popup, one written

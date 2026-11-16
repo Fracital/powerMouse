@@ -142,7 +142,12 @@ export default class LocationModule extends Module<DocumentClient> {
 							const temp = new URL(this.client.location.toString());
 
 							if (common === 'href') {
-								args[0] = new URL(args[0], this.client.baseURL.toString());
+								// one that does not parse: the browser's own SyntaxError,
+								// which names it as the page wrote it, and no navigation
+								const url = String(args[0]);
+								if (failsToParse(this.client, url))
+									return Reflect.apply(locationDescriptor.set!, real, [url]);
+								args[0] = new URL(url, this.client.baseURL.toString());
 							}
 
 							if (common === 'hash') {

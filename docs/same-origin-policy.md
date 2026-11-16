@@ -287,7 +287,7 @@ Filled in commit by commit; see the CHANGELOG for each.
   stays open: a fresh context for it would cut its opener
   (docs/scramjet-parity.md section 2c).
 - **A frame navigates its top and its parent as natively** (top-navigation
-  suite: 65 cases, Chrome 152, 156 and 157 alike natively, against both
+  suite: 66 cases, Chrome 152, 156 and 157 alike natively, against both
   modes). A frame's `top.location = url`, `top.location.href = url`,
   `top.location.replace(url)` and the same on `parent` threw a SecurityError
   through the proxy: the inject called the target's location from the
