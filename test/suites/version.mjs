@@ -114,13 +114,20 @@ ok(
 // the fake worker again, for a directory with no registration to update
 // from: nothing to heal with, so the controller settles for it. A
 // controller does not start where its host does not serve the rewriter
-// library, so that one file is answered under the directory
-await page.route(/\/nowhere\/rewriterLib\.js(\?|$)/, (route) =>
-	route.fulfill({
-		contentType: 'text/javascript',
-		body: readFileSync(new URL('../../dist/rewriterLib.js', import.meta.url)),
-	}),
-);
+// (the wasm core module and the light library over it), so those two files
+// are answered under the directory
+for (const [file, contentType] of [
+	['rewriterLib.js', 'text/javascript'],
+	['core.wasm', 'application/wasm'],
+])
+	await page.route(
+		new RegExp(`/nowhere/${file.replace('.', '\\.')}(\\?|$)`),
+		(route) =>
+			route.fulfill({
+				contentType,
+				body: readFileSync(new URL(`../../dist/${file}`, import.meta.url)),
+			}),
+	);
 const settled = await page.evaluate(async () => {
 	const INIT = '$stomp$controllerInit';
 	const RPC = 'stomp';
