@@ -37,6 +37,7 @@ import MemoryModule from './modules/Memory';
 import MutationObserverModule from './modules/MutationObserver';
 import NavigateModule from './modules/Navigate';
 import NavigationHintModule from './modules/NavigationHint';
+import NavigationTimingModule from './modules/NavigationTiming';
 import NavigatorModule from './modules/Navigator';
 import OpenModule from './modules/Open';
 import PermissionsModule from './modules/Permissions';
@@ -127,6 +128,8 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(DownloadModule);
 	// after the base modules: their lists (Unroute) are what it reads
 	client.addModule(EntryTimingModule);
+	// after ResourceTiming: the older interfaces serialise its getters
+	client.addModule(NavigationTimingModule);
 	// before CanvasTaint: its canvas/webgl/audio readback hooks wrap the native
 	// methods, and CanvasTaint's taint check then wraps those, so a tainted
 	// canvas throws before anything is farbled. Added only when a farbling or

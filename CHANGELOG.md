@@ -1384,6 +1384,20 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   `cross-origin-descendant` named without its container, as measured
   natively. Each type's hooks are made when its first entry comes, so a
   frame without one pays for the code only (performance-entries suite).
+- Navigation timing reads as a top-level document's of the page's own
+  origin (`src/inject/dom/modules/NavigationTiming.ts`, docs/performance.md).
+  `unloadEventStart` and `unloadEventEnd` (the entry's, its `toJSON()`'s
+  and `performance.timing`'s) are 0 after another origin's document and
+  after a redirect through another origin, as natively: every proxied
+  document is the proxy's origin to the browser, so a proxied top read the
+  unload times of the site it came from. `performance.timing.toJSON()` and
+  `performance.navigation.toJSON()` carry what their getters answer (they
+  had the worker's own redirects: `redirectCount` 5 for a navigation of 2,
+  nonzero redirect times for one with none). And the entry's `confidence`
+  is an object in a proxied top (it was null, as in any frame): a stand-in
+  of the page's own `PerformanceTimingConfidence`, new at every read as
+  the browser's is, with Chrome's trigger rate and a value drawn once per
+  document (performance-navigation suite).
 - A frame read before it loaded (an about:blank child or popup, one written
   with document.write) no longer shows the access API on its
   Number.prototype to the page that made it. The inject defines the API
