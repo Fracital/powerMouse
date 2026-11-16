@@ -11,6 +11,14 @@ The first release after a four-year gap. Everything below is breaking.
   as the snapshot's own under a name of its own; the same function): the
   document bundle names them some 1,700 times, and `injectDocument.js`
   is 18 KB smaller (505 to 487 KB), the worker bundle 5 KB. (frame-cost.)
+- The `WebTransport` stand-in is a deferred part of the document bundle
+  (`src/inject/webTransportStandIn.ts`): a frame evaluates it, from its
+  top's copy with no request, when it first constructs a session, and the
+  constructor still answers in the same statement. The bundle keeps the
+  constructor's wrapper and the natives the stand-in takes before any page
+  script ran; the worker bundle has the stand-in as its own code.
+  `injectDocument.js` is 7 KB smaller (466,851 to 459,521 bytes).
+  (webtransport, webtransport-live, deferred-parts and frame-cost suites.)
 - The document bundle has deferred parts: code most frames never run, which
   no document bundle carries. They are the last statement of
   `dist/rewriterLib.js` (a proxied top's shell loads that file already, so

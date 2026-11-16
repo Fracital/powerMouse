@@ -59,8 +59,9 @@ import XMLHttpRequestModule from './modules/XMLHttpRequest';
  * evaluate it. Made when the client applies its modules, in this one's
  * place; it has no state before that.
  */
-// a document's sessions are carried by a deferred part, evaluated with its
-// realm's first one
+// a document's WebTransport stand-in and what carries its sessions are
+// deferred parts, evaluated with its realm's first session
+webTransportParts.standIn = () => deferred().webTransportStandIn;
 webTransportParts.carry = () => deferred().carryWebTransport;
 
 class FingerprintStandIn extends Module<DocumentClient> {

@@ -118,8 +118,8 @@ on every save (use a `git worktree`).
   would be the rewriter of everything its top and frames evaluate.
 - **The document bundle's deferred parts are in no bundle.** The files
   build.js lists in `DEFERRED_FILES` (the service worker container's objects,
-  the Cookie Store methods, the Fingerprint module, what carries
-  WebTransport sessions) are the last statement of
+  the Cookie Store methods, the Fingerprint module, the WebTransport stand-in
+  and what carries its sessions) are the last statement of
   `dist/rewriterLib.js`, evaluated by a document the first time it calls
   `deferred()` (`src/inject/dom/deferred.ts`): a top's shell loaded it, a
   frame takes its top's text, and only a realm with no top to take it from

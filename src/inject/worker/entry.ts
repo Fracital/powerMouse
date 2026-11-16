@@ -9,6 +9,7 @@ import { messageField, readModules, type HandedModules } from '../Client';
 import { handModules } from '../rewriter';
 import { carry as carryWebTransport } from '../webTransport';
 import { webTransportParts } from '../webTransportParts';
+import { standIn as webTransportStandIn } from '../webTransportStandIn';
 import WorkerClient, {
 	setServiceWorkerPort,
 	setWorkerModules,
@@ -16,7 +17,9 @@ import WorkerClient, {
 } from './Client';
 import createWorkerClient from './worker';
 
-// a worker's sessions are carried by the bundle's own code
+// a worker's WebTransport stand-in and what carries its sessions are the
+// bundle's own code
+webTransportParts.standIn = () => webTransportStandIn;
 /** set once the bootstrap came without a transport (a worker of a worker): nothing carries its sessions */
 let transportless = false;
 webTransportParts.carry = () =>

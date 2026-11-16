@@ -167,15 +167,16 @@ ones whose source is `'stream'`), marked as a session's.
 
 What a frame pays: the wrapper around the constructor, and the browser
 making the `WebTransport` interface for it (about 2 KB of heap a frame,
-frame-cost). The prototypes are wrapped, the other three interfaces looked
-at, the tables and the throttle made when a realm makes its first session.
-The stand-in is in the inject bundles (7 KB of `injectDocument.js`): a page
-may call a session's members in the statement after it made it. What
-carries a session (`src/inject/webTransport.ts`) is a deferred part of the
-document bundle (`src/inject/dom/deferred.ts`, the last statement of
-`dist/rewriterLib.js`), evaluated when a realm's first session starts its
-handshake, from the top's copy with no request; the worker bundle has it as
-its own code.
+frame-cost). Everything else is made when a realm makes its first session:
+the stand-in (`src/inject/webTransportStandIn.ts`) and what carries its
+sessions (`src/inject/webTransport.ts`) are deferred parts of the document
+bundle (`src/inject/dom/deferred.ts`, the last statement of
+`dist/rewriterLib.js`), evaluated synchronously then, from the top's copy
+with no request, so the constructor still answers in the statement that
+called it; the prototypes are wrapped, the other three interfaces looked
+at, the tables and the throttle made then too. What the bundle keeps is the
+wrapper and the few natives the stand-in takes before any page script ran.
+The worker bundle has both parts as its own code.
 
 ### What it answers
 
@@ -258,7 +259,7 @@ stomp-h3's WebTransport client (`deploy/epoxy/h3`, `connect_webtransport`),
 on a QUIC connection of its own per session, as Chrome's. Nothing of it runs
 before a page makes a session:
 
-1. **The page** (`src/inject/modules/WebTransport.ts`): when Chrome's
+1. **The page** (`src/inject/webTransportStandIn.ts`): when Chrome's
    throttle would start a session's handshake, the realm hands it to what
    carries it (`src/inject/webTransport.ts`), a deferred part in a
    document, evaluated with the realm's first session.
