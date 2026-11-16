@@ -1368,6 +1368,22 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
   `sourceCharPosition` is the function's place in the rewritten script,
   and a callback run from a promise the inject made (the reaction to
   `fetch()`) has no source (performance-entries suite).
+- A long task's `attribution` reads as the page's own frame tree would say
+  it (`src/inject/dom/modules/LongTasks.ts`, docs/performance.md). The
+  browser answered for the proxy's frames: in same-origin mode a page's
+  own task named the host's frame element as its container, with the
+  routed URL it loads; a frame's task named its container by the routed
+  `src`; a task of a frame of another site, which natively runs in another
+  process and is never reported, was a `same-origin-descendant` with the
+  frame's `src`, id and name; and a frame of another site read its
+  parent's element for its own tasks. Now a top page, and a frame of
+  another site than its parent, is a `window` with nothing else; a
+  container's `src` is the attribute as the page wrote it; a task of
+  another site's frame, of the host or of another tab is not reported; and
+  a frame of the page's site but another origin is a
+  `cross-origin-descendant` named without its container, as measured
+  natively. Each type's hooks are made when its first entry comes, so a
+  frame without one pays for the code only (performance-entries suite).
 - A frame read before it loaded (an about:blank child or popup, one written
   with document.write) no longer shows the access API on its
   Number.prototype to the page that made it. The inject defines the API

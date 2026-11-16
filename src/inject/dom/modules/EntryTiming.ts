@@ -3,6 +3,7 @@ import ProxyModule from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
 import type DocumentClient from '../Client';
 import { longFrames } from './LongFrames';
+import { longTasks } from './LongTasks';
 
 // the browser's own, taken when the bundle runs
 const nativeEntryType =
@@ -27,7 +28,7 @@ export type Admit = (entry: object) => boolean;
  *
  * Here: the URL of the image a largest contentful paint or an element
  * timing entry names is the page's URL of it. A long animation frame's
- * scripts are LongFrames.ts.
+ * scripts are LongFrames.ts, a long task's culprit LongTasks.ts.
  */
 export default class EntryTimingModule extends Module<DocumentClient> {
 	#types = new Map<string, Admit>();
@@ -119,11 +120,12 @@ export default class EntryTimingModule extends Module<DocumentClient> {
 		this.onType('largest-contentful-paint', named());
 		this.onType('element', named());
 		// (each made when its first entry comes: a frame that never has a
-		// long animation frame does not run its code)
+		// long frame or task does not run their code)
 		const late = (make: (client: DocumentClient, timing: this) => Admit) => {
 			let admit: Admit | undefined;
 			return (entry: object) => (admit ??= make(this.client, this))(entry);
 		};
 		this.onType('long-animation-frame', late(longFrames));
+		this.onType('longtask', late(longTasks));
 	}
 }
