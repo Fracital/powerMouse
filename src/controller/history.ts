@@ -70,6 +70,7 @@ const supported = Object.values(NATIVE).every((fn) => fn !== null);
 
 const call = (fn: Native | null, that: unknown, ...args: unknown[]) =>
 	Reflect.apply(fn!, that, args);
+const weakDeref = WeakRef.prototype.deref;
 
 interface Entry {
 	key: string;
@@ -773,14 +774,21 @@ export function earlierWindows(
 				| {
 						groupClient?: {
 							freshRegistry?: {
-								frames: WeakMap<Element, { windows: Window[] }>;
+								frames: WeakMap<Element, { windows: WeakRef<Window>[] }>;
 							};
 						};
 				  }
 				| undefined;
 			const record =
 				element && client?.groupClient?.freshRegistry?.frames.get(element);
-			return record ? [...record.windows].reverse() : [];
+			if (!record) return [];
+			// held weakly: the ones nothing holds any more are gone
+			const live: Window[] = [];
+			for (const ref of record.windows) {
+				const held = Reflect.apply(weakDeref, ref, []) as Window | undefined;
+				if (held) live.push(held);
+			}
+			return live.reverse();
 		} catch (error) {
 			return []; // another origin's, or a window being torn down
 		}

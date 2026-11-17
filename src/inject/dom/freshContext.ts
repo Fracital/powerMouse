@@ -98,13 +98,34 @@ export function frameWindow(element: Element): Window | null {
 	}
 }
 
-/** what the browsing context group keeps of the fresh contexts its frames were given */
+const NativeWeakRef = WeakRef;
+const weakDeref = WeakRef.prototype.deref;
+
+/**
+ * What the browsing context group keeps of the fresh contexts its frames
+ * were given. A frame's old windows are held weakly: one matters only to a
+ * realm that holds it (Context), and each kept its whole realm (about a
+ * megabyte with the inject) for as long as the frame element, one more for
+ * every navigation of an ad frame from one site to another. The refs are
+ * made by the registry's realm: an object keeps the realm that made it.
+ */
 function registry(client: DocumentClient) {
 	const group = client.groupClient;
 	return (group.freshRegistry ??= {
 		frames: new WeakMap(),
 		elements: new WeakMap(),
+		weakRef: NativeWeakRef,
 	});
+}
+
+/** the old windows of a frame's record still alive, latest last */
+function liveWindows(record: { windows: WeakRef<object>[] }): object[] {
+	const live: object[] = [];
+	for (const ref of record.windows) {
+		const window = Reflect.apply(weakDeref, ref, []) as object | undefined;
+		if (window) live[live.length] = window;
+	}
+	return live;
 }
 
 /**
@@ -125,12 +146,18 @@ export function recordFresh(
 	destination: string,
 	wrap: (native: Function, hook: (args: unknown[]) => unknown) => Function,
 ) {
-	const { frames, elements } = registry(client);
+	const { frames, elements, weakRef } = registry(client);
 	let record = frames.get(element);
 	if (!record) frames.set(element, (record = { windows: [], destination }));
 	record.destination = destination;
 	if (!old || elements.has(old)) return;
-	record.windows.push(old);
+	// (the refs of windows nothing holds any more go)
+	const kept: WeakRef<object>[] = [];
+	for (const ref of record.windows)
+		if (Reflect.apply(weakDeref, ref, []) !== undefined)
+			kept[kept.length] = ref;
+	kept[kept.length] = Reflect.construct(weakRef, [old]) as WeakRef<object>;
+	record.windows = kept;
 	elements.set(old, element);
 	const live = () => frameWindow(element);
 	const own = (name: string) => {
@@ -199,7 +226,7 @@ export function heldBefore(client: DocumentClient, context: object): object[] {
 		return [];
 	}
 	const record = element && registry(client).frames.get(element);
-	return record ? [...record.windows].reverse() : [];
+	return record ? liveWindows(record).reverse() : [];
 }
 
 /**

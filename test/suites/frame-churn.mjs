@@ -18,6 +18,10 @@
 //
 // An about:blank frame runs its creator's bundle, whose table of the Blobs
 // behind minted blob: URLs kept the frame's Blobs, and with them its realm.
+//
+// A frame navigated from site to site is given a fresh browsing context
+// each time, and the registry of the windows it showed before kept them all
+// (freshContext).
 import {
 	done,
 	FIXTURE,
@@ -55,6 +59,17 @@ const CASES = {
 			}
 			frame.onload = () => setTimeout(resolve, 50);
 			frame.src = `${same}${child}?img&n=${i}`;
+		}),
+	'a frame navigated from one site to another': (i, same, cross, child) =>
+		new Promise((resolve) => {
+			let frame = document.getElementById('crossing');
+			if (!frame) {
+				frame = document.createElement('iframe');
+				frame.id = 'crossing';
+				document.body.append(frame);
+			}
+			frame.onload = () => setTimeout(resolve, 50);
+			frame.src = `${i % 2 ? cross : same}${child}?img&n=${i}`;
 		}),
 	'a frame of another site, added and removed': (i, same, cross, child) =>
 		new Promise((resolve) => {

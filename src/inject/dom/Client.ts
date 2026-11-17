@@ -989,8 +989,13 @@ export default class DocumentClient extends Client {
 	 * client, and the element each such window was the frame of
 	 */
 	freshRegistry?: {
-		frames: WeakMap<Element, { windows: object[]; destination: string | null }>;
+		frames: WeakMap<
+			Element,
+			{ windows: WeakRef<object>[]; destination: string | null }
+		>;
 		elements: WeakMap<object, Element>;
+		/** the WeakRef of the realm that made the registry, which makes `windows`' */
+		weakRef: typeof WeakRef;
 	};
 	/**
 	 * The policies the browser applies to this document for the page's own
