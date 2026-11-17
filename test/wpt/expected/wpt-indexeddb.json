@@ -1,9 +1,1 @@
-{
-	"/IndexedDB/database-names-by-origin.html": {
-		"(harness)": "TIMEOUT: timeout: no report within 30 s",
-		"open database names don't leak to cross-origin iframe": "MISSING: the harness ended TIMEOUT before this subtest",
-		"open database names don't leak to cross-origin window": "MISSING: the harness ended TIMEOUT before this subtest",
-		"closed database names don't leak to cross-origin iframe": "MISSING: the harness ended TIMEOUT before this subtest",
-		"closed database names don't leak to cross-origin window": "MISSING: the harness ended TIMEOUT before this subtest"
-	}
-}
+{}

@@ -3,10 +3,6 @@
 		"(harness)": "TIMEOUT: ",
 		"SameSite cookies on subresource of top-level about:blank window": "TIMEOUT: Test timed out"
 	},
-	"/cookies/samesite/about-blank-toplevel.https.html": {
-		"(harness)": "TIMEOUT: ",
-		"SameSite cookies with top-level about:blank window": "TIMEOUT: Test timed out"
-	},
 	"/cookies/samesite/form-get-blank.https.html": {
 		"Cross-site top-level form GETs are laxly same-site": "FAIL: assert_equals: SameSite=Lax cookies are sent with lax requests. expected (string) \"0.7428033700212177\" but got (undefined) undefined",
 		"Cross-site redirecting to subdomain top-level form GETs are laxly same-site": "FAIL: assert_equals: SameSite=Lax cookies are sent with lax requests. expected (string) \"0.5042836433951114\" but got (undefined) undefined",

@@ -72,12 +72,14 @@ The list is empty. Two gaps no kept test measures, from reading the code:
   sent with a navigation started inside a sandboxed frame. The initiator's
   opaque origin is lost: the nested navigation carries the sandboxed
   document's real route as referrer and is judged same-site.
-- `cookies/samesite/about-blank-toplevel.https.html`,
-  `cookies/samesite/about-blank-subresource.https.html` (2 each: the harness
+- `cookies/samesite/about-blank-subresource.https.html` (2: the harness
   TIMEOUT and its subtest): the page writes into a `window.open("")` popup
   and navigates a frame in it; the popup's about:blank document is not the
   opener's to write. Still listed with the lead's popup and opener fixes and
-  the about:blank origin fix in the tree; not probed.
+  the about:blank origin fix in the tree; not probed. Its sibling
+  `about-blank-toplevel.https.html` passes since the site pool series
+  (1b74600d), whose write hook opens a written popup before its scripts
+  run; that this is why was not probed.
 - `cookies/samesite/setcookie-navigation.https.html` (9: the harness TIMEOUT
   and 8 subtests MISSING): no report within 30 s. Cause not yet known (not
   triaged); a candidate is the page navigating its own top-level window away
@@ -479,14 +481,9 @@ Passing since the rebase onto 082ac470 (no fix of this series names them):
 
 ## wpt-indexeddb
 
-- `IndexedDB/database-names-by-origin.html` (5: the harness TIMEOUT and four
-  subtests MISSING): no report within 30 s. The first step loads
-  `resources/cross-origin-helper-frame.html` in a same-origin iframe, posts
-  it a request with `postMessage(request, origin)` and waits for an answer
-  whose `event.origin` is `get_host_info().ORIGIN`. The database scoping is
-  not the cause (every other origin and cross-realm page passes); either the
-  iframe's `load` never comes or the reply's `origin` is not the page's. Not
-  narrowed further.
+Nothing listed. `IndexedDB/database-names-by-origin.html` (no report
+within 30 s before) passes since the site pool series (1b74600d); which of
+its changes made it pass was not narrowed.
 
 ## wpt-location
 
