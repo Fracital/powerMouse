@@ -8,6 +8,7 @@ import {
 import { BLOB_MINTED } from '../../transport/messages';
 import Client from '../Client';
 import Module from '../Module';
+import { LazyMap } from '../ownCollections';
 import {
 	blobOf,
 	blobTable,
@@ -72,6 +73,12 @@ export default class ObjectURLModule extends Module<Client> {
 		// page's revoke right after the load starts reaches no load, as
 		// natively; it goes a while after that revoke.
 		const privates = new Map<string, string>();
+		// The routed URL of each blob: module this realm loaded: a module map
+		// holds a module by its URL, so an import of a revoked blob: URL the
+		// map already has answers with that module natively. Routed again
+		// after the revoke, the URL lost its private copy and the import was
+		// a new fetch of a revoked Blob (TypeError)
+		const modules = new LazyMap<string, string>();
 		// the realm's own crossOriginIsolated, as the browser answers it
 		const isolated = Reflect.getOwnPropertyDescriptor(
 			client.global,
@@ -108,6 +115,10 @@ export default class ObjectURLModule extends Module<Client> {
 							// (a blob: document inherits its creator's embedder policy)
 							!!isolated && Reflect.apply(isolated, client.global, []) === true,
 						);
+			if (script === 'genericModule' && !blob) {
+				const kept = modules.get(href);
+				if (kept) return kept;
+			}
 			let at = '';
 			if (blob) {
 				let copy = privates.get(href);
@@ -134,7 +145,9 @@ export default class ObjectURLModule extends Module<Client> {
 						: script
 							? 'js'
 							: 'css';
-			return `${directory}blob~${kindOf}${at}/${codec.encode(pageBlobURL(href))}`;
+			const routed = `${directory}blob~${kindOf}${at}/${codec.encode(pageBlobURL(href))}`;
+			if (script === 'genericModule' && blob) modules.set(href, routed);
+			return routed;
 		}, client.global === globalThis);
 		URLCtor.createObjectURL = proxyModule.wrapFunction(
 			URLCtor.createObjectURL,

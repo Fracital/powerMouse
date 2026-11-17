@@ -11,8 +11,10 @@
   (from a private URL of the Blob, so a revoke right after the load starts
   stops nothing, as natively). A Blob now holds the page's own bytes
   (`size`, `text()`, `arrayBuffer()` read what the page put in it, where an
-  HTML or script Blob read the proxy's rewrite). (blob-unseen, blobdoc,
-  adversarial-local suites.)
+  HTML or script Blob read the proxy's rewrite). A module imported from a
+  blob: URL still answers a later import of that URL after the page revokes
+  it, as natively: the module map holds it by its URL. (blob-unseen,
+  blobdoc, adversarial-local, wpt-modules suites.)
 - Another site's blob: URL in the browser's form (every proxied site's
   Blobs are minted at the proxy's origin) loads nothing, as another origin's
   blob: URL natively does: a page that named one read the other site's Blob.
