@@ -35,19 +35,5 @@
 	},
 	"/html/browsers/history/the-location-interface/location_reload_javascript_url.html": {
 		"location_reload_javascript_url": "FAIL: assert_equals: iframe url (2) expected \"http://localhost:PORT/common/blank.html#foo\" but got \"http://localhost:PORT/common/blank.html#~JHIC\""
-	},
-	"/html/browsers/history/the-location-interface/same-hash.html": {
-		"Using location.hash = \"#te<st\" must not reset scroll position": "FAIL: assert_equals: Reassigning the same hash must not change the scroll position expected 0 but got 166",
-		"Using location.hash = \"te<st\" must not reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166",
-		"Using location.hash = \"#te%3Cst\" must not reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166",
-		"Using location.hash = \"te%3Cst\" must not reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166",
-		"Using location.hash = \"#te%3cst\" must reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166",
-		"Using location.hash = \"te%3cst\" must reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166",
-		"Using location.href = \"about:srcdoc#te<st\" must reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166",
-		"Using location.assign(\"about:srcdoc#te<st\") must reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166",
-		"Using location.href = \"about:srcdoc#te%3cst\" must reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166",
-		"Using location.assign(\"about:srcdoc#te%3cst\") must reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166",
-		"Using location.href = \"about:srcdoc#te%3Cst\" must reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166",
-		"Using location.assign(\"about:srcdoc#te%3Cst\") must reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166"
 	}
 }

@@ -174,9 +174,11 @@ export default class LocationModule extends Module<DocumentClient> {
 							if (common === 'hash') {
 								// Location's own: '' is an empty fragment (`page#`), and
 								// the fragment the document is at already is no navigation
-								// (nor is '' where it has none: measured, url-shapes)
+								// (nor is '' where it has none: measured, url-shapes).
+								// The document's own address: an about:srcdoc document's
+								// `url` is its parent's
 								const input = String(args[0]).replace(/^#/, '');
-								const at = this.client.url.toString();
+								const at = temp.href;
 								if (!input && !at.includes('#')) return;
 								if (input) Reflect.apply(urlDescriptor.set!, temp, [input]);
 								else temp.href = `${temp.href.split('#')[0]}#`;

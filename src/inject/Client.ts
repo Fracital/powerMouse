@@ -423,8 +423,17 @@ export default class Client {
 		} else {
 			// a worker started from a blob: URL belongs to the page that made it
 			const base = this.namedBase;
+			let own = location.toString();
+			// an about:blank or about:srcdoc document's fragment is sealed in
+			// its address like a routed document's (the Fragment module): the
+			// page reads it as written
+			if (this.isDOM) {
+				const hash = fragmentOf(own);
+				if (hash.length > 1)
+					own = `${own.slice(0, -hash.length)}#${openFragment(this.codec, hash.slice(1))}`;
+			}
 			return new StompURL(
-				typeof base === 'string' ? base : location.toString(),
+				typeof base === 'string' ? base : own,
 				this.codec,
 				`${location.origin}${this.directory}`,
 			);
