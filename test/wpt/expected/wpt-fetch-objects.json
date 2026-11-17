@@ -7,20 +7,7 @@
 		"XMLHttpRequest with value x%0Ax needs to throw": "FAIL: assert_throws_dom: function \"() => xhr.setRequestHeader(\"value-test\", val)\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid value\" that is not a DOMException SyntaxError: pro",
 		"XMLHttpRequest with value x%0Dx needs to throw": "FAIL: assert_throws_dom: function \"() => xhr.setRequestHeader(\"value-test\", val)\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid value\" that is not a DOMException SyntaxError: pro"
 	},
-	"/fetch/api/request/request-clone.sub.html": {
-		"Check cloning a request": "FAIL: assert_equals: Check referrer attribute expected \"http://localhost:PORT/\" but got \"about:client\""
-	},
-	"/fetch/api/request/request-init-001.sub.html": {
-		"Check referrer init value of /relative/ressource and associated getter": "FAIL: assert_equals: Expect request's referrer is http://localhost:PORT/relative/ressource when initialized with /relative/ressource expected \"http://localhost:PORT/relative/ressource\" but got \"http://127.0",
-		"Check referrer init value of http://localhost:PORT/relative/ressource?query=true#fragment and associated getter": "FAIL: assert_equals: Expect request's referrer is http://localhost:PORT/relative/ressource?query=true#fragment when initialized with http://localhost:PORT/relative/ressource?query=true#fragment expected \"ht",
-		"Check referrer init value of http://localhost:PORT/ and associated getter": "FAIL: assert_equals: Expect request's referrer is http://localhost:PORT/ when initialized with http://localhost:PORT/ expected \"http://localhost:PORT/\" but got \"about:client\""
-	},
-	"/fetch/api/request/request-init-003.sub.html": {
-		"Check request values when initialized from Request": "FAIL: assert_equals: Check referrer attribute expected \"http://localhost:PORT/\" but got \"about:client\"",
-		"Check request values when initialized from Request and init values": "FAIL: assert_equals: Check referrer attribute expected \"http://localhost:PORT/\" but got \"about:client\"",
-		"Check request values when initialized from url and init values": "FAIL: assert_equals: Check referrer attribute expected \"http://localhost:PORT/\" but got \"about:client\""
-	},
 	"/fetch/api/response/multi-globals/url-parsing.html": {
-		"should parse the redirect Location URL relative to the current settings object": "FAIL: assert_equals: expected \"http://localhost:PORT/fetch/api/response/multi-globals/current/success/url\" but got \"http://127.0.0.1:PORT/stomp/K4pxFUtm/html:nested:GgcN5v97y0Jj0Aze2WM6H0Yk0Rqb9Q/url\""
+		"should parse the redirect Location URL relative to the current settings object": "FAIL: assert_equals: expected \"http://localhost:PORT/fetch/api/response/multi-globals/current/success/url\" but got \"http://127.0.0.1:PORT/stomp/Hf1LjRYn/html:nested:z_i5KbKTPVfK8Jvt9QwanRbK4gzpVw/url\""
 	}
 }

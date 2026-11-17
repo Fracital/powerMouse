@@ -38,12 +38,17 @@ export const isStompHeader = (name: string) =>
 // getters and methods, and the browser reads a request's headers through
 // them when it converts an init (`init.headers`, a Request's `headers`
 // getter, a Headers' @@iterator)
+const NativeProxy = Proxy;
 const nativeHeadersForEach = Headers.prototype.forEach;
 const nativeHeadersSet = Headers.prototype.set;
 const nativeHeadersDelete = Headers.prototype.delete;
 const nativeRequestHeaders = Reflect.getOwnPropertyDescriptor(
 	Request.prototype,
 	'headers',
+)!.get!;
+const nativeRequestReferrer = Reflect.getOwnPropertyDescriptor(
+	Request.prototype,
+	'referrer',
 )!.get!;
 
 const nativeHeadersGet = Headers.prototype.get;
@@ -262,6 +267,12 @@ export function pageRequest(
 		value: pageHeaderRecord(inside),
 		configurable: true,
 	});
+	// and the referrer the browser has (a route), which the prototype's
+	// getter shows the page as its own URL
+	Reflect.defineProperty(copy, 'referrer', {
+		value: Reflect.apply(nativeRequestReferrer, copy, []),
+		configurable: true,
+	});
 	return copy;
 }
 
@@ -367,6 +378,47 @@ export default class FetchModule extends Module<Client> {
 		// over the URL's readback above
 		this.hookResponses();
 
+		/**
+		 * An init whose `referrer` the browser can take. The page names a URL
+		 * of its own: one of its origin goes as its route (same-origin to the
+		 * browser, and the worker reads the real one back), one of another
+		 * origin is the client's default, as natively, where the browser would
+		 * have taken a URL that happens to be of the proxy's origin. One that
+		 * does not parse is the TypeError the browser throws (`failed` is how
+		 * its message begins). The init is read through, not copied: it may
+		 * be a Request, whose members are its prototype's getters.
+		 */
+		const pageReferrer = <T extends RequestInit | undefined>(
+			init: T,
+			failed: string,
+		): T => {
+			if (init === undefined || init === null || typeof init !== 'object')
+				return init;
+			const given = (init as RequestInit).referrer;
+			if (given === undefined) return init;
+			const referrer = String(given);
+			if (referrer === '' || referrer === 'about:client') return init;
+			let requested: URL;
+			try {
+				requested = new URL(referrer, this.client.baseURL.toString());
+			} catch (error) {
+				throw new this.client.global.TypeError(
+					`${failed}: Referrer '${referrer}' is not a valid URL.`,
+				);
+			}
+			const taken =
+				requested.origin === this.client.url.url.origin
+					? routeXHR(new StompURL(requested, this.client.url))
+					: 'about:client';
+			return new NativeProxy(init as RequestInit & object, {
+				get: (target, key) =>
+					key === 'referrer' ? taken : Reflect.get(target, key, target),
+			}) as T;
+		};
+		const fetchFailed = `Failed to execute 'fetch' on '${
+			this.client.isWorker ? 'WorkerGlobalScope' : 'Window'
+		}'`;
+
 		this.client.global.Request = proxyModule.wrapFunction(
 			this.client.global.Request,
 			(target, _that, args, newTarget) => {
@@ -396,12 +448,39 @@ export default class FetchModule extends Module<Client> {
 						);
 					}
 				}
-				return Reflect.construct(target, [input, args[1]], newTarget);
+				return Reflect.construct(
+					target,
+					[input, pageReferrer(args[1], "Failed to construct 'Request'")],
+					newTarget,
+				);
 			},
 			true,
 		);
 		// (the fetch hook makes its own, whatever the page puts on the window)
 		const PageRequest = this.client.global.Request;
+
+		// a Request's referrer is a route to the browser (pageReferrer): the
+		// page reads the URL it gave
+		const referrerDescriptor = Reflect.getOwnPropertyDescriptor(
+			this.client.global.Request.prototype,
+			'referrer',
+		)!;
+		Reflect.defineProperty(this.client.global.Request.prototype, 'referrer', {
+			...referrerDescriptor,
+			get: proxyModule.wrapFunction(
+				referrerDescriptor.get!,
+				(target, that, args) => {
+					const referrer = Reflect.apply(target, that, args);
+					if (
+						typeof referrer !== 'string' ||
+						referrer === '' ||
+						referrer === 'about:client'
+					)
+						return referrer;
+					return unrouteURL(this.client, referrer) ?? referrer;
+				},
+			),
+		});
 
 		// a Request's own URL: the browser fetches that, whatever `url` the
 		// page has defined on the object (YouTube shadows a data: Request's
@@ -461,6 +540,12 @@ export default class FetchModule extends Module<Client> {
 					if (args.length && failsToParse(this.client, text))
 						return await Reflect.apply(target, that, [text, ...args.slice(1)]);
 					url = new URL(text, this.client.baseURL.toString());
+					// a URL with credentials is no request: the browser's own
+					// TypeError, which the route (it has none) would not get
+					if (url.username !== '' || url.password !== '')
+						throw new this.client.global.TypeError(
+							`${fetchFailed}: Request cannot be constructed from a URL that includes credentials: ${url.href}`,
+						);
 					init = args[1];
 				}
 				// the request's mode, which decides the response's type
@@ -486,33 +571,9 @@ export default class FetchModule extends Module<Client> {
 				// worker's): a fetch is judged twice natively
 				reportOnly(this.client, url, 2);
 
-				// an explicit referrer is a page URL: in proxy space (routed) the
-				// browser takes it as same-origin and the worker reads the real
-				// one back; one of another real origin is not allowed, and the
-				// request falls back to its default, as the browser's would
-				if (
-					init &&
-					!(init instanceof Request) &&
-					typeof init.referrer === 'string' &&
-					init.referrer !== '' &&
-					init.referrer !== 'about:client'
-				) {
-					const { referrer, ...rest } = init;
-					try {
-						const requested = new URL(referrer, this.client.baseURL.toString());
-						init =
-							requested.origin === this.client.url.url.origin
-								? {
-										...rest,
-										referrer: routeXHR(
-											new StompURL(requested, this.client.url),
-										),
-									}
-								: rest;
-					} catch (error) {
-						init = rest;
-					}
-				}
+				// an explicit referrer is a page URL (a Request's was taken when
+				// it was made)
+				if (!request) init = pageReferrer(init, fetchFailed);
 				// the proxy's own headers: an abort never reaches the worker on its
 				// own, so the request carries an id and the abort is posted to the
 				// worker under it; a request of an opaque origin goes as one

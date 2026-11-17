@@ -28,14 +28,5 @@
 	},
 	"/fetch/api/basic/request-headers-nonascii.any.worker.html": {
 		"Non-ascii bytes in request headers": "FAIL: assert_equals: Accept Header expected \"before-æøå-after\" but got \"\""
-	},
-	"/fetch/api/basic/request-referrer-redirected-worker.html": {
-		"url referrer": "FAIL: assert_equals: request's referer should be: http://localhost:PORT/fetch/api/basic/foo expected \"http://localhost:PORT/fetch/api/basic/foo\" but got \"http://localhost:PORT/fetch/api/basic/request-referr"
-	},
-	"/fetch/api/basic/request-referrer.any.html": {
-		"url referrer": "FAIL: assert_equals: request's referer should be: http://localhost:PORT/fetch/api/basic/foo expected \"http://localhost:PORT/fetch/api/basic/foo\" but got \"http://localhost:PORT/fetch/api/basic/request-referr"
-	},
-	"/fetch/api/basic/request-referrer.any.worker.html": {
-		"url referrer": "FAIL: assert_equals: request's referer should be: http://localhost:PORT/fetch/api/basic/foo expected \"http://localhost:PORT/fetch/api/basic/foo\" but got \"http://localhost:PORT/fetch/api/basic/request-referr"
 	}
 }
