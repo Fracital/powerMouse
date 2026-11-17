@@ -58,7 +58,16 @@
 //   with about 25 KB to spare. A module that makes an interface every frame
 //   (the WebGL ones, +90 KB; every SVG element interface, +33 KB) or
 //   evaluates the rewriter library in every frame again (+230 KB) goes past
-//   it.
+//   it. That is what the ceiling is for: a regression of a whole interface
+//   or library in every frame, not the KB or two each fix costs. By the
+//   time master measured 1,149 to 1,151 KB on CI, fixes of real escapes
+//   were queueing on 1 to 3 KB a frame each, and the measure itself moves
+//   by a KB or two between runs, so the ceiling went to 1,170 KB: the SVG
+//   interfaces (+33 KB) still go past it from any master under about
+//   1,137 KB. Each change's own cost is measured and stated in its message,
+//   and kept down there (deferred parts, lazy installs, about 55 B a frame
+//   for each function made at load); when the deferred parts are split so
+//   each is evaluated alone, the ceiling comes back down.
 import { statSync } from 'node:fs';
 import { measureFrames } from '../frame-memory.mjs';
 import { done, ok } from '../lib.mjs';
@@ -66,7 +75,7 @@ import { done, ok } from '../lib.mjs';
 const BUNDLE = new URL('../../dist/injectDocument.js', import.meta.url);
 const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 500;
 const FRAMES = Number(process.env.FRAMES) || 20;
-const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1150;
+const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1170;
 
 const bundleKB = statSync(BUNDLE).size / 1024;
 ok(

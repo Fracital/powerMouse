@@ -27,8 +27,11 @@ const FRAMES = Number(process.env.FRAMES) || 60;
 // a ceiling above what this build measures (1,015 KB) that a frame which
 // evaluates the rewriter library again (about +230 KB), ast-types (+450 KB)
 // or makes the WebGL interfaces (+90 KB) goes past. frame-cost keeps a
-// lighter form of this check in CI
-const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1100;
+// lighter form of this check in CI. 1,120 KB since master measured 1,100 to
+// 1,101 KB for a frame of the same site with the escape fixes of 2026-11
+// (frame-cost's comment says why the ceilings went up, and when they come
+// back down)
+const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1120;
 const fixture = new URL(FIXTURE);
 const otherSite = `http://localhost:${fixture.port}/`;
 
