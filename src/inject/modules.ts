@@ -7,6 +7,7 @@ import IndexedDBModule from './modules/IndexedDB';
 import LegacyFileSystemModule from './modules/LegacyFileSystem';
 import MixedContentModule from './modules/MixedContent';
 import ObjectURLModule from './modules/ObjectURL';
+import OriginFromModule from './modules/OriginFrom';
 import PartitionModule from './modules/Partition';
 import ProxyModule from './modules/Proxy';
 import ReflectionModule from './modules/Reflection';
@@ -37,6 +38,7 @@ export default function baseModules(client: Client) {
 	client.addModule(IndexedDBModule);
 	client.addModule(PartitionModule);
 	client.addModule(LegacyFileSystemModule);
+	client.addModule(OriginFromModule);
 	client.addModule(MixedContentModule);
 	client.addModule(WebSocketModule);
 	client.addModule(WebTransportModule);

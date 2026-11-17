@@ -1,0 +1,115 @@
+<!doctype html>
+<title>origin api</title>
+<body>
+	<a id="link" href="http://localhost/">a</a>
+	<a id="bare">none</a>
+	<map><area id="area" href="https://area.example/" /></map>
+	<script>
+		// The Origin API on the platform objects it extracts an origin from
+		// (the origin-api suite runs this natively and through the proxy): the
+		// page's own global, links, a cross-site child's message and window, a
+		// sandboxed child's, a same-origin child window, a worker's global,
+		// and what Chrome refuses, in its words.
+		const R = {};
+		const other = `http://localhost:${location.port}`;
+		document.getElementById('link').href = `${other}/x`;
+		const T = (f) => {
+			try {
+				return f();
+			} catch (e) {
+				return `throw ${e.name}: ${e.message}`;
+			}
+		};
+		const O = (o) =>
+			o && typeof o === 'object' ? (o.opaque ? 'opaque' : 'tuple') : o;
+		const wait = (pred) =>
+			new Promise((resolve) => {
+				addEventListener('message', function listen(event) {
+					if (pred(event)) {
+						removeEventListener('message', listen);
+						resolve(event);
+					}
+				});
+				setTimeout(() => resolve(null), 6000);
+			});
+		window.__origin = (async () => {
+			R.has = typeof Origin;
+			if (typeof Origin === 'undefined') return { ...R, done: true };
+			const self_ = Origin.from(self);
+			R.self = [
+				self_.opaque,
+				self_.isSameOrigin(Origin.from(location.href)),
+				self_.isSameOrigin(Origin.from(self)),
+				self_.isSameOrigin(Origin.from(other)),
+				self_.isSameSite(Origin.from(other)),
+			];
+			R.location = T(() => O(Origin.from(location)));
+			R.document = T(() => O(Origin.from(document)));
+			R.link = T(() =>
+				Origin.from(document.getElementById('link')).isSameOrigin(
+					Origin.from(other),
+				),
+			);
+			R.linkIsSelf = T(() =>
+				Origin.from(document.getElementById('link')).isSameOrigin(self_),
+			);
+			R.bareLink = T(() => O(Origin.from(document.getElementById('bare'))));
+			R.area = T(() =>
+				Origin.from(document.getElementById('area')).isSameOrigin(
+					Origin.from('https://area.example'),
+				),
+			);
+			R.url = T(() =>
+				Origin.from(new URL('https://u.example/p')).isSameOrigin(
+					Origin.from('https://u.example'),
+				),
+			);
+			R.relative = T(() => O(Origin.from('/relative')));
+			R.synthetic = T(() =>
+				O(Origin.from(new MessageEvent('message', { origin: other }))),
+			);
+			const cross = document.createElement('iframe');
+			cross.src = `${other}/pages/origin-api-child.html`;
+			document.body.append(cross);
+			const event = await wait((e) => e.data === 'origin-api-child');
+			R.crossEvent =
+				event &&
+				T(() => [
+					O(Origin.from(event)),
+					Origin.from(event).isSameOrigin(self_),
+					Origin.from(event).isSameOrigin(Origin.from(other)),
+				]);
+			R.crossWindow = T(() => O(Origin.from(cross.contentWindow)));
+			R.frameElement = T(() => O(Origin.from(cross)));
+			const sandboxed = document.createElement('iframe');
+			sandboxed.sandbox = 'allow-scripts';
+			sandboxed.srcdoc =
+				'<script>const o = Origin.from(self); parent.postMessage({ inside: [o.opaque, o.isSameOrigin(Origin.from(self)), o.isSameOrigin(Origin.from(location.href))] }, "*")<\/script>';
+			document.body.append(sandboxed);
+			const opaqueEvent = await wait((e) => e.data && e.data.inside);
+			R.sandboxedInside = opaqueEvent && opaqueEvent.data.inside;
+			R.sandboxedEvent =
+				opaqueEvent &&
+				T(() => [
+					O(Origin.from(opaqueEvent)),
+					Origin.from(opaqueEvent).isSameOrigin(Origin.from(opaqueEvent)),
+					Origin.from(opaqueEvent).isSameOrigin(self_),
+				]);
+			R.sandboxedWindow = T(() => O(Origin.from(sandboxed.contentWindow)));
+			const same = document.createElement('iframe');
+			same.srcdoc = 'same';
+			document.body.append(same);
+			await new Promise((resolve) => same.addEventListener('load', resolve));
+			R.sameWindow = T(() =>
+				Origin.from(same.contentWindow).isSameOrigin(self_),
+			);
+			R.worker = await new Promise((resolve) => {
+				const worker = new Worker('origin-api-worker.js');
+				worker.onmessage = (e) => resolve(e.data);
+				setTimeout(() => resolve('timeout'), 6000);
+			});
+			R.done = true;
+			return R;
+		})().catch((error) => ({ failed: String(error && error.stack) }));
+	</script>
+</body>

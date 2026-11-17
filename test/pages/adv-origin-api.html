@@ -1,0 +1,94 @@
+<!doctype html>
+<title>ADV ORIGIN API</title>
+<pre id="result">pending</pre>
+<a id="cross">cross</a>
+<script src="adv-harness.js"></script>
+<script>
+	// The Origin API reads an object's origin from its internal slots, which
+	// under a proxy are the proxy's for every site: a page that trusts
+	// Origin.from(event).isSameOrigin(Origin.from(self)) would take another
+	// site's message as its own. Each probe marks an answer native Chrome
+	// would not give as TELL:.
+	const A = __advAsync;
+	const P = __advProbe;
+	const other = location.origin.replace('127.0.0.1', 'localhost');
+	const tell = (wrong, what) => (wrong ? `TELL:${what}` : 'native');
+	const cross = document.createElement('iframe');
+	cross.src = `${other}/pages/origin-api-child.html`;
+	const message = new Promise((resolve) => {
+		addEventListener('message', (event) => {
+			if (event.data === 'origin-api-child') resolve(event);
+		});
+		setTimeout(() => resolve(null), 8000);
+	});
+	document.body.append(cross);
+	P('origin-api self is the page origin', () =>
+		typeof Origin === 'undefined'
+			? 'no Origin'
+			: tell(
+					!Origin.from(self).isSameOrigin(Origin.from(location.href)),
+					'self is not the page origin',
+				),
+	);
+	P('origin-api cross-site link', () => {
+		if (typeof Origin === 'undefined') return 'no Origin';
+		const link = document.getElementById('cross');
+		link.href = `${other}/x`;
+		return tell(
+			Origin.from(link).isSameOrigin(Origin.from(self)),
+			'a cross-site link is same-origin',
+		);
+	});
+	A(
+		'origin-api cross-site sender',
+		async () => {
+			const event = await message;
+			if (typeof Origin === 'undefined') return 'no Origin';
+			if (!event) return 'no message';
+			return [
+				tell(
+					Origin.from(event).isSameOrigin(Origin.from(self)),
+					'a cross-site sender is same-origin',
+				),
+				tell(
+					!Origin.from(event).isSameOrigin(Origin.from(other)),
+					'the sender is not its own origin',
+				),
+			];
+		},
+		10000,
+	);
+	A(
+		'origin-api cross-site window',
+		async () => {
+			await message;
+			if (typeof Origin === 'undefined') return 'no Origin';
+			try {
+				Origin.from(cross.contentWindow);
+				return 'TELL:another site window gave an origin';
+			} catch (error) {
+				return error.name;
+			}
+		},
+		10000,
+	);
+	A(
+		'origin-api worker self',
+		() =>
+			new Promise((resolve) => {
+				const worker = new Worker(
+					URL.createObjectURL(
+						new Blob(
+							[
+								`postMessage(typeof Origin === 'undefined' ? 'no Origin' : Origin.from(self).isSameOrigin(Origin.from(${JSON.stringify(location.href)})) ? 'native' : 'TELL:worker self is not the page origin')`,
+							],
+							{ type: 'text/javascript' },
+						),
+					),
+				);
+				worker.onmessage = (event) => resolve(event.data);
+			}),
+		10000,
+	);
+	__advFinish(3000);
+</script>
