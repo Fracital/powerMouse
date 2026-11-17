@@ -20,6 +20,10 @@
 // (and the client a document opens its WebSockets with, ../bareClient.ts,
 // with the transport it talks over, at its first WebSocket)
 //
+// (and the handlers of long tasks and long animation frames,
+// ./modules/LongTasks.ts and ./modules/LongFrames.ts, at a document's first
+// such entry)
+//
 // (and the WebTransport stand-in, ../webTransportStandIn.ts, with what
 // carries its sessions, ../webTransport.ts, once a realm makes its first
 // session)
@@ -48,6 +52,8 @@ import { relayBeacon } from './beaconRelay';
 import { formEncoding, legacyFormQuery, legacyQuery } from './legacyEncoding';
 import { markupMembers } from './markupMembers';
 import FingerprintModule from './modules/Fingerprint';
+import { longFrames } from './modules/LongFrames';
+import { longTasks } from './modules/LongTasks';
 import { emulateServiceWorker } from './modules/serviceWorkerEmulation';
 import { openerFacts, opensWithoutOpener } from './openerFacts';
 import { pictureWindows } from './pictureWindows';
@@ -55,6 +61,8 @@ import { sourcePolicy } from './sourcePolicy';
 
 const parts = {
 	bareClient,
+	longFrames,
+	longTasks,
 	cookieStoreMethods,
 	relayBeacon,
 	ancestorOriginsList,

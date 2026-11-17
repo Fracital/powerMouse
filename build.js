@@ -428,6 +428,8 @@ const DEFERRED_FILES = new Set(
 		'src/inject/dom/openerFacts.ts',
 		'src/inject/dom/pictureWindows.ts',
 		'src/inject/dom/modules/Fingerprint.ts',
+		'src/inject/dom/modules/LongFrames.ts',
+		'src/inject/dom/modules/LongTasks.ts',
 		'src/inject/dom/modules/serviceWorkerEmulation.ts',
 		'src/inject/dom/passkeys.ts',
 		'src/inject/dom/passkeysPart.ts',

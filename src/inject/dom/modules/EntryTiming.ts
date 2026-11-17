@@ -2,8 +2,10 @@ import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
 import type DocumentClient from '../Client';
-import { longFrames } from './LongFrames';
-import { longTasks } from './LongTasks';
+import { deferred } from '../deferred';
+// (the natives the deferred long task and frame handlers read: taken as the
+// bundle runs)
+import '../longEntryNatives';
 
 // the browser's own, taken when the bundle runs
 const nativeEntryType =
@@ -120,13 +122,14 @@ export default class EntryTimingModule extends Module<DocumentClient> {
 			});
 		this.onType('largest-contentful-paint', named());
 		this.onType('element', named());
-		// (each made when its first entry comes: a frame that never has a
-		// long frame or task does not run their code)
-		const late = (make: (client: DocumentClient, timing: this) => Admit) => {
+		// (each made when its first entry comes, deferred parts: a frame
+		// that never has a long frame or task does not carry their code)
+		const late = (name: 'longFrames' | 'longTasks') => {
 			let admit: Admit | undefined;
-			return (entry: object) => (admit ??= make(moduleClient, this))(entry);
+			return (entry: object) =>
+				(admit ??= deferred()[name](moduleClient, this))(entry);
 		};
-		this.onType('long-animation-frame', late(longFrames));
-		this.onType('longtask', late(longTasks));
+		this.onType('long-animation-frame', late('longFrames'));
+		this.onType('longtask', late('longTasks'));
 	}
 }

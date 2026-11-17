@@ -1,31 +1,15 @@
 import ProxyModule from '../../modules/Proxy';
 import type DocumentClient from '../Client';
+import {
+	nativeContentWindow,
+	nativeEntryName,
+	nativeFrameElement,
+	nativeGetAttribute,
+	nativeQuery,
+} from '../longEntryNatives';
 import type EntryTimingModule from './EntryTiming';
 import type { Admit } from './EntryTiming';
 import { MARKER } from './MutationObserver';
-
-// the browser's own, taken when the bundle runs
-const nativeEntryName =
-	typeof PerformanceEntry === 'function'
-		? Reflect.getOwnPropertyDescriptor(PerformanceEntry.prototype, 'name')
-		: undefined;
-const nativeFrameElement =
-	typeof Window === 'function'
-		? Reflect.getOwnPropertyDescriptor(globalThis, 'frameElement')?.get
-		: undefined;
-const nativeContentWindow =
-	typeof HTMLIFrameElement === 'function'
-		? Reflect.getOwnPropertyDescriptor(
-				HTMLIFrameElement.prototype,
-				'contentWindow',
-			)?.get
-		: undefined;
-const nativeQuery =
-	typeof Document === 'function'
-		? Document.prototype.querySelectorAll
-		: undefined;
-const nativeGetAttribute =
-	typeof Element === 'function' ? Element.prototype.getAttribute : undefined;
 
 /** what a long task's culprit says of the frame it ran in */
 const CONTAINER = [
@@ -115,7 +99,7 @@ export function longTasks(
 			];
 			let budget = 2000;
 			const within = (document: Document): Element | null => {
-				for (const element of Reflect.apply(nativeQuery, document, [
+				for (const element of Reflect.apply(nativeQuery!, document, [
 					'iframe,frame,embed,object',
 				]) as Iterable<Element>) {
 					if (budget-- <= 0) return null;
@@ -154,7 +138,7 @@ export function longTasks(
 		if (known) return known;
 		known = { shown: true, window: false, container: null };
 		try {
-			const name = String(Reflect.apply(nativeEntryName.get!, task, []));
+			const name = String(Reflect.apply(nativeEntryName!.get!, task, []));
 			const list = nativeAttribution
 				? Reflect.apply(nativeAttribution, task, [])
 				: [];

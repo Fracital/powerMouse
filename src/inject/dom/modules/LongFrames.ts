@@ -1,5 +1,6 @@
 import { scopePrefix } from '../../modules/Unroute';
 import type DocumentClient from '../Client';
+import { nativeGetAttribute, nativeQuery } from '../longEntryNatives';
 import type EntryTimingModule from './EntryTiming';
 import type { Admit } from './EntryTiming';
 import { MARKER } from './MutationObserver';
@@ -16,13 +17,6 @@ interface ScriptView {
 
 /** an invoker that names an element by its `src` attribute: `IMG[src="..."].onload` */
 const BY_SOURCE = /^([^[\]]*\[src=")(.*)("\]\.[^[\]."]*)$/s;
-// the browser's own, taken when the bundle runs
-const nativeQuery =
-	typeof Document === 'function'
-		? Document.prototype.querySelectorAll
-		: undefined;
-const nativeGetAttribute =
-	typeof Element === 'function' ? Element.prototype.getAttribute : undefined;
 
 /**
  * A long animation frame names the scripts that ran in it, each with the
