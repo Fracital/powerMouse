@@ -66,6 +66,50 @@ export const nativeAttributes = Reflect.getOwnPropertyDescriptor(
 	'attributes',
 )!.get!;
 
+const nativeGetAttributeNames = Element.prototype.getAttributeNames;
+const nativeGetAttributeNS = Element.prototype.getAttributeNS;
+const nativeHasAttributeNS = Element.prototype.hasAttributeNS;
+
+/**
+ * A parsed element's attributes as [namespace, qualified name, value], in
+ * their order. Read by name where that is exact: Blink makes the element's
+ * attribute map, an Attr node for each attribute and their wrappers the
+ * moment `attributes` is read, and for an element of markup parsed only to
+ * be copied all of it is garbage (on a page of links, the copy's largest
+ * share of what it left to the collector). An attribute of a namespace (a
+ * prefixed name, an unprefixed one of a namespace, or two of one name) is
+ * read from the map, as before.
+ */
+function attributesOf(element: Element): [string | null, string, string][] {
+	const names = Reflect.apply(nativeGetAttributeNames, element, []) as string[];
+	const out: [string | null, string, string][] = [];
+	for (let i = 0; i < names.length; i++) {
+		const name = names[i];
+		let plain = !name.includes(':');
+		for (let j = 0; plain && j < i; j++) if (names[j] === name) plain = false;
+		if (plain)
+			plain = Reflect.apply(nativeHasAttributeNS, element, [
+				null,
+				name,
+			]) as boolean;
+		if (!plain)
+			return Array.from(
+				Reflect.apply(nativeAttributes, element, []) as NamedNodeMap,
+				(attribute) => [
+					attribute.namespaceURI,
+					attribute.name,
+					attribute.value,
+				],
+			);
+		out.push([
+			null,
+			name,
+			Reflect.apply(nativeGetAttributeNS, element, [null, name]) as string,
+		]);
+	}
+	return out;
+}
+
 const nativeOwnerDocument = Reflect.getOwnPropertyDescriptor(
 	Node.prototype,
 	'ownerDocument',
@@ -591,22 +635,18 @@ export default function cloneRawNode(
 					const base = d[0].nodeName === 'BASE';
 					if (base) parsedBases.set(target, d[0] as Element);
 
-					// the native map: the hooked `attributes` getter hands the page a
-					// view that hides the markers, not an iterable NamedNodeMap
-					// (the parser's attributes, which no Trusted Types judge)
+					// by the browser's own members: the hooked `attributes` getter
+					// hands the page a view that hides the markers, not an
+					// iterable NamedNodeMap (the parser's attributes, which no
+					// Trusted Types judge)
 					asParsed(target, () => {
-						for (const attribute of Array.from(
-							Reflect.apply(nativeAttributes, d[0], []) as NamedNodeMap,
+						for (const [namespace, name, value] of attributesOf(
+							d[0] as Element,
 						))
 							// a namespaced attribute (xlink:href) keeps its namespace; the
 							// hooks see both ways of setting it
-							if (attribute.namespaceURI)
-								target.setAttributeNS(
-									attribute.namespaceURI,
-									attribute.name,
-									attribute.value,
-								);
-							else target.setAttribute(attribute.name, attribute.value);
+							if (namespace) target.setAttributeNS(namespace, name, value);
+							else target.setAttribute(name, value);
 					});
 					// (the copy may live on in the page: it keeps nothing of the markup)
 					if (base) parsedBases.delete(target);
