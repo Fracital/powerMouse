@@ -36,6 +36,7 @@ import {
 	InitRemoteTransportMessage,
 	INLINE_DOCUMENT,
 	InlineDocumentMessage,
+	LEGACY_FS_CLEARED,
 	LOAD_CHANNEL,
 	LoadChannelMessage,
 	NAVIGATION_HINT,
@@ -74,6 +75,7 @@ import {
 	setMemoryLimit,
 } from '../wasm/thread';
 import { knownOriginOf, knownTopSiteOf, recordBlobOrigin } from './blobOrigins';
+import { legacyFileSystemCleared } from './clearSiteData';
 import {
 	hintsDocument,
 	recordReport as recordClientHintsReport,
@@ -1227,6 +1229,8 @@ function handleMessage(event: ExtendableMessageEvent) {
 				)
 				.finally(() => serviceWorkers.sweep()),
 		);
+	} else if (LEGACY_FS_CLEARED in data) {
+		legacyFileSystemCleared(data[LEGACY_FS_CLEARED]);
 	} else if (ABORT_REQUEST in data) {
 		abortRequest((data as Record<string, unknown>)[ABORT_REQUEST]);
 	} else if (CONTROLLER_CLOSE in data) {

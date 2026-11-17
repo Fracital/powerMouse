@@ -70,7 +70,10 @@ import { bareClient } from '../bareClient';
 import { cookieStoreMethods } from '../cookieStoreMethods';
 import { hookDevices } from '../deviceGrants';
 import { recordSize } from '../idbSize';
-import { partitionLegacyFileSystem } from '../legacyFileSystem';
+import {
+	dropLegacyFileSystem,
+	partitionLegacyFileSystem,
+} from '../legacyFileSystem';
 import {
 	gateCall,
 	gateGetter,
@@ -114,6 +117,7 @@ const parts = {
 	sourcePolicy,
 	recordSize,
 	partitionLegacyFileSystem,
+	dropLegacyFileSystem,
 	checkedMethod,
 	checkedHeader,
 	notOpened,

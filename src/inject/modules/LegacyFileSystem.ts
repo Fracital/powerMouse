@@ -16,6 +16,17 @@ const ENTRY_POINTS = [
  * (../legacyFileSystem.ts), set up with the realm's first call.
  */
 export default class LegacyFileSystemModule extends Module<Client> {
+	/** webkitRequestFileSystem as the browser made it */
+	#request?: (...args: unknown[]) => unknown;
+	/**
+	 * Clear-Site-Data "storage" of storage key `key`: its directory goes
+	 * (the service worker cannot reach it); `done` once it is gone
+	 */
+	drop(key: string, done: () => void) {
+		const drop = legacyFileSystemParts.drop;
+		if (!this.#request || !drop) return done();
+		drop()(this.client.global, this.#request, key, done);
+	}
 	apply() {
 		const client = this.client;
 		const proxyModule = client.getModule(ProxyModule)!;
@@ -28,6 +39,8 @@ export default class LegacyFileSystemModule extends Module<Client> {
 		for (const name of ENTRY_POINTS) {
 			const entry = global[name];
 			if (typeof entry !== 'function') continue;
+			if (name === 'webkitRequestFileSystem')
+				this.#request = entry as (...args: unknown[]) => unknown;
 			global[name] = proxyModule.wrapFunction(
 				entry as (...args: unknown[]) => unknown,
 				(target, that, args) =>

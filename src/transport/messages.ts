@@ -447,6 +447,19 @@ export const OPEN_TAB = '$stomp$open';
  */
 export const STORAGE_EVENT = '$stomp$storageEvent';
 /**
+ * Clear-Site-Data "storage": the service worker asking every window to drop
+ * a storage key's directory of the legacy file system (its `key`), which it
+ * cannot reach itself, and waiting for the first to say it is gone (its
+ * `id`, in LEGACY_FS_CLEARED)
+ */
+export const LEGACY_FS_CLEAR = '$stomp$legacyFSClear';
+/** a window telling the service worker a LEGACY_FS_CLEAR is done (its id) */
+export const LEGACY_FS_CLEARED = '$stomp$legacyFSCleared';
+export interface LegacyFileSystemClear {
+	key: string;
+	id: string;
+}
+/**
  * a proxied page telling the host application where it is now (on load,
  * pushState / replaceState, hashchange, popstate and title changes); posted
  * to the real top window, the host matches the source to one of its frames

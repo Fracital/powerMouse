@@ -35,12 +35,33 @@
 			} catch (error) {
 				// no file system here
 			}
+			await this.legacy({ create: true });
 			return this.state();
 		},
 		async clear(types) {
 			const response = await fetch(hdr(`clear-site-data:${types}`));
 			await response.text();
 			return this.state();
+		},
+		// a file of the legacy sandboxed file system: 'kept', 'none', or why not
+		legacy(options = {}) {
+			return new Promise((resolve) => {
+				if (typeof webkitRequestFileSystem !== 'function')
+					return resolve('no file system');
+				webkitRequestFileSystem(
+					TEMPORARY,
+					1024,
+					(fs) =>
+						fs.root.getFile(
+							'csd-legacy',
+							options,
+							() => resolve('kept'),
+							(error) =>
+								resolve(error.name === 'NotFoundError' ? 'none' : error.name),
+						),
+					(error) => resolve(error.name),
+				);
+			});
 		},
 		async state() {
 			const sent = await (await fetch('/hdr/doc?echo=cookie')).text();
@@ -70,6 +91,7 @@
 				databases: databases.join(),
 				caches: (await caches.keys()).filter((n) => n === 'csd-cache').join(),
 				files: files.join(),
+				legacy: await this.legacy(),
 				workers: (await navigator.serviceWorker.getRegistrations()).length,
 			};
 		},

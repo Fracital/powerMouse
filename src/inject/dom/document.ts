@@ -74,6 +74,7 @@ idbSizeParts.recordSize = () => deferred().recordSize;
 storageBucketParts.methods = () => deferred().bucketMethods;
 // and the per-site legacy file system, with its first call
 legacyFileSystemParts.partition = () => deferred().partitionLegacyFileSystem;
+legacyFileSystemParts.drop = () => deferred().dropLegacyFileSystem;
 
 class FingerprintStandIn extends Module<DocumentClient> {
 	apply() {

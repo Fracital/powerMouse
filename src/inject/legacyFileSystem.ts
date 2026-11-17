@@ -254,6 +254,61 @@ function patch(
 	}
 }
 
+/**
+ * Drop the directory of storage key `key` from the real file systems
+ * (Clear-Site-Data "storage", which drops the origin's natively), with the
+ * realm's own `request` (webkitRequestFileSystem before its hook) and the
+ * entries' native methods; `done` once both kinds are gone or could not be
+ * reached
+ */
+export function dropLegacyFileSystem(
+	global: object,
+	request: Native,
+	key: string,
+	done: () => void,
+) {
+	state ??= {
+		natives: new WeakMap(),
+		patched: new WeakSet(),
+		sync: new WeakSet(),
+		sites: new WeakMap(),
+	};
+	const name = `/${siteDirectory(key)}`;
+	let left = 2;
+	const one = () => {
+		if (--left === 0) done();
+	};
+	// TEMPORARY and PERSISTENT
+	for (const type of [0, 1])
+		try {
+			Reflect.apply(request, global, [
+				type,
+				0,
+				(system: object) => {
+					try {
+						call(call(system, 'root') as object, 'getDirectory', [
+							name,
+							{},
+							(directory: object) => {
+								try {
+									call(directory, 'removeRecursively', [one, one]);
+								} catch (error) {
+									one();
+								}
+							},
+							one,
+						]);
+					} catch (error) {
+						one();
+					}
+				},
+				one,
+			]);
+		} catch (error) {
+			one();
+		}
+}
+
 export function partitionLegacyFileSystem(
 	client: Client,
 	proxyModule: ProxyModule,

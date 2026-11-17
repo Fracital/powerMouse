@@ -1,3 +1,7 @@
+import {
+	LEGACY_FS_CLEAR,
+	type LegacyFileSystemClear,
+} from '../transport/messages';
 import type Cookies from './Cookies';
 import { serviceWorkers } from './serviceWorkers';
 import { clearStorageKey, type StorageHosts } from './Storage';
@@ -39,6 +43,60 @@ export async function clearSiteData(
 	if (all || types.has('storage')) {
 		const key = `${url.origin}${partition}`;
 		if (storage) await clearStorageKey(key, storage);
+		await clearLegacyFileSystem(key);
 		await serviceWorkers.unregisterAll(key).catch(() => {});
 	}
+}
+
+declare const clients: Clients | undefined;
+
+/** how long the answer waits for a window to drop the legacy file system */
+const LEGACY_FS_WAIT_MS = 1500;
+/** the drops a window has not answered yet, by id */
+const legacyDrops = new Map<string, () => void>();
+
+/**
+ * Clear-Site-Data "storage" drops the origin's legacy sandboxed file system
+ * too (measured, Chrome 157). STomp keeps each storage key's in a directory
+ * of the proxy origin's (src/inject/legacyFileSystem.ts), which only a
+ * window or a worker can reach: every window is asked, and the answer waits
+ * for the first that dropped it, at most LEGACY_FS_WAIT_MS (with no
+ * injected window to ask, the directory stays)
+ */
+async function clearLegacyFileSystem(key: string): Promise<void> {
+	if (typeof clients === 'undefined') return;
+	let windows: readonly Client[];
+	try {
+		windows = await clients.matchAll({
+			type: 'window',
+			includeUncontrolled: true,
+		});
+	} catch (error) {
+		return;
+	}
+	if (!windows.length) return;
+	const id = crypto.randomUUID();
+	const message: LegacyFileSystemClear = { key, id };
+	await new Promise<void>((resolve) => {
+		const timer = setTimeout(() => {
+			legacyDrops.delete(id);
+			resolve();
+		}, LEGACY_FS_WAIT_MS);
+		legacyDrops.set(id, () => {
+			clearTimeout(timer);
+			legacyDrops.delete(id);
+			resolve();
+		});
+		for (const window of windows)
+			try {
+				window.postMessage({ [LEGACY_FS_CLEAR]: message });
+			} catch (error) {
+				// a window that went away
+			}
+	});
+}
+
+/** a window dropped what a LEGACY_FS_CLEAR asked (its id) */
+export function legacyFileSystemCleared(id: unknown) {
+	if (typeof id === 'string') legacyDrops.get(id)?.();
 }

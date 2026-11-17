@@ -3,8 +3,13 @@
 // with a realm's first webkitRequestFileSystem or
 // webkitResolveLocalFileSystemURL call, and the worker bundle's is its own.
 // Each bundle's entry says which (dom/document.ts, worker/entry.ts).
-import type { partitionLegacyFileSystem } from './legacyFileSystem';
+import type {
+	dropLegacyFileSystem,
+	partitionLegacyFileSystem,
+} from './legacyFileSystem';
 
 export const legacyFileSystemParts: {
 	partition?: () => typeof partitionLegacyFileSystem;
+	/** (the document bundle's alone: Clear-Site-Data asks windows) */
+	drop?: () => typeof dropLegacyFileSystem;
 } = {};

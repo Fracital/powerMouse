@@ -1,5 +1,12 @@
-import { STORAGE_EVENT, StorageChange } from '../../../transport/messages';
+import {
+	LEGACY_FS_CLEAR,
+	LEGACY_FS_CLEARED,
+	STORAGE_EVENT,
+	StorageChange,
+	type LegacyFileSystemClear,
+} from '../../../transport/messages';
 import Module from '../../Module';
+import LegacyFileSystemModule from '../../modules/LegacyFileSystem';
 import ProxyModule, {
 	catchRequiredArguments,
 	contextThis,
@@ -792,6 +799,17 @@ export default class StorageModule extends Module<DocumentClient> {
 		// service worker; the area must be our own object, which the event's
 		// dictionary would reject, so it is set on the event afterwards
 		client.onServiceWorkerMessage((data) => {
+			// Clear-Site-Data "storage": the legacy file system's directory of
+			// the key, which the worker cannot reach (any window drops it)
+			const drop = (data as Record<string, LegacyFileSystemClear> | null)?.[
+				LEGACY_FS_CLEAR
+			];
+			if (drop && typeof drop.key === 'string')
+				return client
+					.getModule(LegacyFileSystemModule)
+					?.drop(drop.key, () =>
+						client.postToWorker({ [LEGACY_FS_CLEARED]: drop.id }),
+					);
 			const change = (data as Record<string, StorageChange> | null)?.[
 				STORAGE_EVENT
 			];
