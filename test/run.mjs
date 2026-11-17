@@ -158,9 +158,18 @@ const isMeasurement = (name) =>
 	name.startsWith('wpt-') || name.startsWith('measure-');
 const SKIP_MEASUREMENT = process.env.SKIP_MEASUREMENT === '1';
 // SUITES=<prefix> runs only the suites named with it, SUITES=!<prefix> all
-// but those: GitHub CI runs the adversarial corpus as a job of its own beside
-// the rest, so neither runs into the job's time limit
+// but those; SHARD=<k>/<n> then keeps every n-th of what is left, from the
+// k-th (1-based, by name). GitHub CI runs the adversarial corpus as a job of
+// its own and the rest as four shards beside it: the rest alone took 64 to 69
+// of the job's 70 minutes.
 const GROUP = process.env.SUITES ?? '';
+const SHARD = /^(\d+)\/(\d+)$/.exec(process.env.SHARD ?? '');
+if (process.env.SHARD && (!SHARD || +SHARD[1] < 1 || +SHARD[1] > +SHARD[2])) {
+	console.error(
+		`SHARD=${process.env.SHARD}: expected <k>/<n> with 1 <= k <= n`,
+	);
+	process.exit(2);
+}
 const inGroup = (name) =>
 	!GROUP ||
 	(GROUP.startsWith('!')
@@ -201,6 +210,13 @@ const suites = readdirSync(suitesDir)
 		}
 		return true;
 	});
+
+if (SHARD && !wanted.length) {
+	const [, k, n] = SHARD.map(Number);
+	const kept = suites.filter((_, index) => index % n === k - 1);
+	console.log(`SHARD ${k}/${n}: ${kept.length} of ${suites.length} suites`);
+	suites.splice(0, suites.length, ...kept);
+}
 
 if (!suites.length) {
 	console.error(`no suites match ${wanted.join(', ')}`);

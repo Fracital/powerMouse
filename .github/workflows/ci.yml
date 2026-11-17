@@ -102,14 +102,18 @@ jobs:
   browser:
     name: browser suites (${{ matrix.group.name }})
     runs-on: ubuntu-latest
-    # the adversarial corpus (about 5 minutes here) runs as a job of its own
-    # beside the rest, which alone come near the time limit
+    # the adversarial corpus (about 5 minutes here) runs as a job of its own,
+    # and the rest as four shards beside it (alone they took 64 to 69 of the
+    # 70 minutes; a shard takes about 20)
     strategy:
       fail-fast: false
       matrix:
         group:
-          - { name: main, suites: '!adversarial-' }
-          - { name: adversarial, suites: 'adversarial-' }
+          - { name: main 1, suites: '!adversarial-', shard: 1/4 }
+          - { name: main 2, suites: '!adversarial-', shard: 2/4 }
+          - { name: main 3, suites: '!adversarial-', shard: 3/4 }
+          - { name: main 4, suites: '!adversarial-', shard: 4/4 }
+          - { name: adversarial, suites: 'adversarial-', shard: '' }
     # a clean run takes about 40 minutes (cross-origin-isolation alone takes
     # about 15, visited about 3); a suite that failed runs once more alone
     # after the others and needs room for it
@@ -163,6 +167,7 @@ jobs:
           SKIP_MEASUREMENT: '1'
           PARALLEL: '2'
           SUITES: ${{ matrix.group.suites }}
+          SHARD: ${{ matrix.group.shard }}
           NO_COLOR: '1'
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

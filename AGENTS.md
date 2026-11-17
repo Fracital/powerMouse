@@ -330,9 +330,10 @@ rewriter: reproduce with a raw `controller.transport.request()` /
 request: `npm ci --ignore-scripts`, `npm run check`, `npm run lint`,
 `npx prettier --check .`, `npm run check:prose` (no em dashes, no AI
 attribution; the same script checks a PR's commit messages) and the esbuild
-build. All of it must pass locally before you push. Two `browser suites`
+build. All of it must pass locally before you push. Five `browser suites`
 jobs (`SUITES=adversarial-` for the adversarial corpus, `SUITES=!adversarial-`
-for the rest, side by side so neither nears the time limit) run `npm test` on the runner's Chrome with `SKIP_NETWORK=1` (the suites
+with `SHARD=1/4` to `4/4` for the rest, side by side so none nears the time
+limit) run `npm test` on the runner's Chrome with `SKIP_NETWORK=1` (the suites
 that drive Wikipedia stay out), `SKIP_TIMING=1` (the flick-velocity suite)
 and `SKIP_MEASUREMENT=1` (the vendored web-platform-tests, which report
 every expected failure on purpose, and the `measure-*` timings) and
