@@ -1774,7 +1774,7 @@ function genericForward(
 							method: serverRequest.method,
 							partitionKey,
 						})
-					).toString()
+					).header()
 				: '';
 		if (cookie) requestHeaders.set('cookie', cookie);
 		else requestHeaders.delete('cookie');

@@ -517,6 +517,33 @@ export class BrowserCookieArray extends Array<JarCookie> {
 
 		return result.join('; ');
 	}
+
+	/**
+	 * The Cookie header's value. A cookie a script wrote is text, which the
+	 * browser sends as its UTF-8 bytes; one from Set-Cookie is the bytes
+	 * already, a character each. Text with a character no byte holds is a
+	 * script's, and goes as its UTF-8: as it was, Headers refused it, and the
+	 * request failed, a page that wrote one and reloaded with it
+	 */
+	header() {
+		const result: string[] = [];
+		for (const cookie of this) {
+			const text =
+				cookie.name === '' ? cookie.value : `${cookie.name}=${cookie.value}`;
+			result.push(WIDE.test(text) ? utf8Bytes(text) : text);
+		}
+		return result.join('; ');
+	}
+}
+
+/** a character above U+00FF, which a header's byte cannot carry */
+const WIDE = /[\u0100-\uffff]/;
+
+/** text as its UTF-8 bytes, a character each, as a header carries them */
+function utf8Bytes(text: string): string {
+	let bytes = '';
+	for (const byte of encoder.encode(text)) bytes += String.fromCharCode(byte);
+	return bytes;
 }
 
 const STORE = 'cookies';
