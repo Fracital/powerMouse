@@ -308,6 +308,72 @@ export interface CacheHit {
 	part: Part | null;
 }
 
+/** a body this long at most (by its Content-Length) is read whole for a store whatever the page does */
+const FINISHED_LENGTH = 64 * 1024;
+
+/**
+ * A response body for a store that keeps it (this cache, the memory cache)
+ * and for the page, in that order. The page's copy leads: the origin's body
+ * is read as the page reads it, and a page that gives its copy up (an
+ * aborted fetch, a cancelled read, a document that went away) ends the
+ * transfer, as the browser ends one nobody waits for; the store's copy
+ * fails with it and nothing is kept. A tee would read on for the store and
+ * keep the origin sending up to the entry limit (a stream that never ends,
+ * for ever). A short body of a known length is teed: finishing it costs
+ * less than the connection it leaves reusable, and a redirect's, which no
+ * page reads, is kept.
+ */
+export function splitForStore(
+	body: ReadableStream<Uint8Array>,
+	headers: Headers,
+): [ReadableStream<Uint8Array>, ReadableStream<Uint8Array>] {
+	const length = headers.get('content-length');
+	if (
+		length !== null &&
+		/^\d+$/.test(length) &&
+		Number(length) <= FINISHED_LENGTH
+	)
+		return body.tee();
+	const reader = body.getReader();
+	let store: ReadableStreamDefaultController<Uint8Array> | null = null;
+	const forStore = new ReadableStream<Uint8Array>({
+		start(controller) {
+			store = controller;
+		},
+		// the store took all it keeps (an entry over its limit): the page reads on
+		cancel() {
+			store = null;
+		},
+	});
+	const forPage = new ReadableStream<Uint8Array>({
+		async pull(controller) {
+			let chunk: ReadableStreamReadResult<Uint8Array>;
+			try {
+				chunk = await reader.read();
+			} catch (error) {
+				store?.error(error);
+				store = null;
+				controller.error(error);
+				return;
+			}
+			if (chunk.done) {
+				store?.close();
+				store = null;
+				controller.close();
+				return;
+			}
+			store?.enqueue(chunk.value);
+			controller.enqueue(chunk.value);
+		},
+		cancel(reason) {
+			store?.error(new Error('the page gave the response up'));
+			store = null;
+			return reader.cancel(reason);
+		},
+	});
+	return [forStore, forPage];
+}
+
 /** a body read whole, null when it is over the entry limit (the rest is dropped) */
 async function wholeBody(
 	body: ReadableStream<Uint8Array>,

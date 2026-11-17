@@ -160,6 +160,7 @@ import {
 	parseCacheControl,
 	partitionedKey,
 	sameVersion,
+	splitForStore,
 	type CacheHit,
 } from './cache';
 import { decodeDocument, utf8ContentType } from './charset';
@@ -2751,7 +2752,10 @@ function genericForward(
 				})
 			) {
 				// a part of the resource: kept as one (cache.ts putPart)
-				const [forStore, forPage] = upstream.body.tee();
+				const [forStore, forPage] = splitForStore(
+					upstream.body,
+					upstream.headers,
+				);
 				const part = contentRange(upstream.headers.get('content-range'))!;
 				const kept = upstream;
 				new Response(forStore)
@@ -2775,7 +2779,10 @@ function genericForward(
 				});
 				response.rawHeaders = upstream.rawHeaders;
 			} else if (upstream.body && storable(upstream.status, upstream.headers)) {
-				const [forStore, forPage] = upstream.body.tee();
+				const [forStore, forPage] = splitForStore(
+					upstream.body,
+					upstream.headers,
+				);
 				cache!.put(cacheKey!, requestHeaders, upstream, forStore);
 				response = new Response(forPage, {
 					status: upstream.status,
@@ -2832,7 +2839,7 @@ function genericForward(
 			response.body &&
 			MemoryCache.keeps(response.status, response.headers)
 		) {
-			const [kept, forPage] = response.body.tee();
+			const [kept, forPage] = splitForStore(response.body, response.headers);
 			memoryCache
 				.put(memoryKey, requestHeaders, response, kept)
 				.catch(() => {});
