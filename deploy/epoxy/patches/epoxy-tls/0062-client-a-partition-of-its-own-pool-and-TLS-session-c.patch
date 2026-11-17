@@ -1,0 +1,230 @@
+From 5fa79d4335f0d4eb5416e7707a1206ac468809be Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 17 Nov 2026 12:00:00 -0500
+Subject: [PATCH] client: a partition of its own pool and TLS session caches
+ over the same wisp connection
+
+---
+ client/src/lib.rs             | 113 ++++++++++++++++++++++++----------
+ client/src/stream_provider.rs |  31 +++++++++-
+ 2 files changed, 108 insertions(+), 36 deletions(-)
+
+diff --git a/client/src/lib.rs b/client/src/lib.rs
+index 278f91c..54a59d1 100644
+--- a/client/src/lib.rs
++++ b/client/src/lib.rs
+@@ -402,6 +402,9 @@ fn create_wisp_transport(function: Function) -> ProviderWispTransportGenerator {
+ pub struct EpoxyClient {
+ 	stream_provider: Arc<StreamProvider>,
+ 	client: Client<StreamProviderService, StreamingBody>,
++	/// what http_client was built with, for a partition's
++	title_case_headers: bool,
++	http_header_limit: usize,
+ 
+ 	certs_tampered: bool,
+ 
+@@ -415,6 +418,48 @@ pub struct EpoxyClient {
+ 	pub buffer_size: usize,
+ }
+ 
++/// The HTTP client (its connection pool) over `stream_provider`, with
++/// Chrome's settings
++fn http_client(
++	stream_provider: &Arc<StreamProvider>,
++	title_case_headers: bool,
++	header_limit: usize,
++) -> Client<StreamProviderService, StreamingBody> {
++	let service = StreamProviderService(stream_provider.clone());
++	let mut builder = Client::builder(WasmExecutor);
++	builder
++		.http09_responses(true)
++		.http1_title_case_headers(title_case_headers)
++		.http1_max_headers(header_limit)
++		// hyper refuses a whole HTTP/1 response over one header line it
++		// does not like, where Chrome reads the response: it skips a line
++		// with no colon or a control character, accepts a space before the
++		// colon and joins an obs-fold line to the one before it
++		.http1_ignore_invalid_headers_in_responses(true)
++		.http1_allow_spaces_after_header_name_in_responses(true)
++		.http1_allow_obsolete_multiline_headers_in_responses(true);
++
++	#[cfg(feature = "full")]
++	builder.http2_max_concurrent_reset_streams(10); // set back to default, on wasm it is 0
++	// hyper's HTTP/2 default caps a response header block at 16 KiB and resets the
++	// stream with PROTOCOL_ERROR past it; YouTube sends 12 to 20 KiB of headers
++	// (cookies, report-only policies). Chrome allows 256 KiB; match it.
++	#[cfg(feature = "full")]
++	builder.http2_max_header_list_size(256 * 1024);
++	// the rest of Chrome's SETTINGS and its first WINDOW_UPDATE (the
++	// Akamai HTTP/2 fingerprint 1:65536;2:0;4:6291456;6:262144|15663105):
++	// a 64 KiB HPACK table, 6 MiB stream windows, a 15 MiB connection
++	// window, and no MAX_FRAME_SIZE (hyper announced 16384, the default)
++	#[cfg(feature = "full")]
++	builder
++		.http2_header_table_size(65536)
++		.http2_initial_stream_window_size(6 * 1024 * 1024)
++		.http2_initial_connection_window_size(15 * 1024 * 1024)
++		.http2_adaptive_window(false)
++		.http2_max_frame_size(None);
++	builder.build(service)
++}
++
+ #[wasm_bindgen]
+ impl EpoxyClient {
+ 	#[wasm_bindgen(constructor)]
+@@ -466,43 +511,17 @@ impl EpoxyClient {
+ 			)));
+ 		};
+ 
+-		let service = StreamProviderService(stream_provider.clone());
+-		let mut builder = Client::builder(WasmExecutor);
+-		builder
+-			.http09_responses(true)
+-			.http1_title_case_headers(options.title_case_headers)
+-			.http1_max_headers(options.header_limit)
+-			// hyper refuses a whole HTTP/1 response over one header line it
+-			// does not like, where Chrome reads the response: it skips a line
+-			// with no colon or a control character, accepts a space before the
+-			// colon and joins an obs-fold line to the one before it
+-			.http1_ignore_invalid_headers_in_responses(true)
+-			.http1_allow_spaces_after_header_name_in_responses(true)
+-			.http1_allow_obsolete_multiline_headers_in_responses(true);
+-
+-		#[cfg(feature = "full")]
+-		builder.http2_max_concurrent_reset_streams(10); // set back to default, on wasm it is 0
+-		// hyper's HTTP/2 default caps a response header block at 16 KiB and resets the
+-		// stream with PROTOCOL_ERROR past it; YouTube sends 12 to 20 KiB of headers
+-		// (cookies, report-only policies). Chrome allows 256 KiB; match it.
+-		#[cfg(feature = "full")]
+-		builder.http2_max_header_list_size(256 * 1024);
+-		// the rest of Chrome's SETTINGS and its first WINDOW_UPDATE (the
+-		// Akamai HTTP/2 fingerprint 1:65536;2:0;4:6291456;6:262144|15663105):
+-		// a 64 KiB HPACK table, 6 MiB stream windows, a 15 MiB connection
+-		// window, and no MAX_FRAME_SIZE (hyper announced 16384, the default)
+-		#[cfg(feature = "full")]
+-		builder
+-			.http2_header_table_size(65536)
+-			.http2_initial_stream_window_size(6 * 1024 * 1024)
+-			.http2_initial_connection_window_size(15 * 1024 * 1024)
+-			.http2_adaptive_window(false)
+-			.http2_max_frame_size(None);
+-		let client = builder.build(service);
++		let client = http_client(
++			&stream_provider,
++			options.title_case_headers,
++			options.header_limit,
++		);
+ 
+ 		Ok(Self {
+ 			stream_provider,
+ 			client,
++			title_case_headers: options.title_case_headers,
++			http_header_limit: options.header_limit,
+ 			redirect_limit: options.redirect_limit,
+ 			user_agent: options.user_agent,
+ 			buffer_size: options.buffer_size,
+@@ -518,6 +537,34 @@ impl EpoxyClient {
+ 		})
+ 	}
+ 
++	/// A client of its own connection pool and TLS session caches over this
++	/// client's wisp connection: a network partition's (a browser keeps
++	/// apart what pages of different top-level sites connect to, and every
++	/// connection is a wisp stream, so the partition opens no new wisp
++	/// connection)
++	pub fn partition(&self) -> EpoxyClient {
++		let stream_provider = Arc::new(self.stream_provider.partition());
++		let client = http_client(
++			&stream_provider,
++			self.title_case_headers,
++			self.http_header_limit,
++		);
++		Self {
++			stream_provider,
++			client,
++			certs_tampered: self.certs_tampered,
++			title_case_headers: self.title_case_headers,
++			http_header_limit: self.http_header_limit,
++			redirect_limit: self.redirect_limit,
++			#[cfg(feature = "full")]
++			header_limit: self.header_limit,
++			#[cfg(feature = "full")]
++			ws_title_case_headers: self.ws_title_case_headers,
++			user_agent: self.user_agent.clone(),
++			buffer_size: self.buffer_size,
++		}
++	}
++
+ 	pub async fn replace_stream_provider(&self) -> Result<(), EpoxyError> {
+ 		self.stream_provider.replace_client().await
+ 	}
+diff --git a/client/src/stream_provider.rs b/client/src/stream_provider.rs
+index e1af353..c93e433 100644
+--- a/client/src/stream_provider.rs
++++ b/client/src/stream_provider.rs
+@@ -3,6 +3,7 @@ use std::{io::ErrorKind, pin::Pin, sync::Arc, task::Poll};
+ use cfg_if::cfg_if;
+ #[cfg(feature = "full")]
+ use futures_rustls::rustls::client::{EchConfig, EchMode};
++use futures_rustls::rustls::client::Resumption;
+ use futures_rustls::{
+ 	rustls::{pki_types::ServerName, ClientConfig, RootCertStore},
+ 	TlsConnector,
+@@ -68,7 +69,7 @@ pub fn bare_host(host: &str) -> &str {
+ }
+ 
+ pub struct StreamProvider {
+-	wisp_generator: ProviderWispTransportGenerator,
++	wisp_generator: Arc<ProviderWispTransportGenerator>,
+ 
+ 	wisp_v2: bool,
+ 	udp_extension: bool,
+@@ -204,7 +205,7 @@ impl StreamProvider {
+ 		let ws_config = Arc::new(ws_config);
+ 
+ 		Ok(Self {
+-			wisp_generator,
++			wisp_generator: Arc::new(wisp_generator),
+ 			current_client: Arc::new(Mutex::new(None)),
+ 			wisp_v2: options.wisp_v2,
+ 			udp_extension: options.udp_extension_required,
+@@ -218,6 +219,30 @@ impl StreamProvider {
+ 		})
+ 	}
+ 
++	/// A provider over the same wisp connection (and the one that replaces
++	/// it) with TLS session caches of its own: a network partition's. A
++	/// browser keys its connections, and the TLS sessions it resumes, by the
++	/// top-level site; each connection is a wisp stream already, so a
++	/// partition needs no wisp connection of its own, only its own pool
++	/// (EpoxyClient::partition) and these caches.
++	pub fn partition(&self) -> Self {
++		let fresh = |config: &Arc<ClientConfig>| {
++			let mut config = ClientConfig::clone(config);
++			config.resumption = Resumption::default();
++			Arc::new(config)
++		};
++		Self {
++			wisp_generator: self.wisp_generator.clone(),
++			wisp_v2: self.wisp_v2,
++			udp_extension: self.udp_extension,
++			current_client: self.current_client.clone(),
++			h2_config: fresh(&self.h2_config),
++			ws_config: fresh(&self.ws_config),
++			client_config: fresh(&self.client_config),
++			ech_resolver: self.ech_resolver.clone(),
++		}
++	}
++
+ 	async fn create_client(
+ 		&self,
+ 		mut locked: MutexGuard<'_, Option<ClientMux<ProviderWispTransportWrite>>>,
+@@ -232,7 +257,7 @@ impl StreamProvider {
+ 			None
+ 		};
+ 
+-		let (read, write) = (self.wisp_generator)(self.wisp_v2).await?;
++		let (read, write) = (self.wisp_generator.as_ref())(self.wisp_v2).await?;
+ 
+ 		let client = ClientMux::new(read, write, extensions).await?;
+ 		let (mux, fut) = if self.udp_extension {

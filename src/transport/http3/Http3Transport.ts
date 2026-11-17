@@ -16,6 +16,7 @@ import type {
 	RawHeaders,
 	TransferrableResponse,
 } from '@mercuryworkshop/proxy-transports';
+import { NETWORK_PARTITION } from '../networkPartition';
 import { wispGone } from '../RevivingTransport';
 import { AltSvcCache, type AltService } from './altSvc';
 import { base64url, httpsQuery, parseHttpsAnswer } from './dnsHttps';
@@ -244,6 +245,9 @@ export function h3RequestHeaders(
 	let length = false;
 	for (const [name, value] of headers) {
 		const lower = name.toLowerCase();
+		// the worker's word for the partition (Http3Transport.request), never
+		// the server's
+		if (lower === NETWORK_PARTITION) continue;
 		agent ||= lower === 'user-agent';
 		type ||= lower === 'content-type';
 		length ||= lower === 'content-length';
@@ -314,10 +318,16 @@ export default class Http3Transport implements ProxyTransport {
 	 * that turned HTTP/3 on); no Accept-Encoding, since stomp-h3 decodes gzip
 	 * and br only and names them itself
 	 */
-	get fieldSupport(): { priority?: boolean } {
-		const base = (this.base as { fieldSupport?: { priority?: boolean } })
-			.fieldSupport;
-		return { priority: !!base?.priority };
+	get fieldSupport(): { priority?: boolean; partition?: string } {
+		const base = (
+			this.base as {
+				fieldSupport?: { priority?: boolean; partition?: string };
+			}
+		).fieldSupport;
+		return {
+			priority: !!base?.priority,
+			...(base?.partition && { partition: base.partition }),
+		};
 	}
 
 	get ready(): boolean {
@@ -381,16 +391,24 @@ export default class Http3Transport implements ProxyTransport {
 		signal: AbortSignal | undefined,
 	): Promise<TransferrableResponse> {
 		const origin = remote.origin;
+		// what it knows of an origin and the QUIC connections it keeps are
+		// the request's network partition's (the field the service worker
+		// names it in), as Chrome keys them by the top-level site: a page of
+		// one site does not find a QUIC connection another site's opened
+		const partition = Array.isArray(headers)
+			? headers.find(([name]) => name.toLowerCase() === NETWORK_PARTITION)?.[1]
+			: undefined;
+		const key = partition ? `${partition} ${origin}` : origin;
 		const usable = remote.protocol === 'https:' && !!this.#udp();
 		// an origin the last wisp connection's relay refused is not broken
 		// on a new one
 		if (usable) this.#currentRelay();
-		const alt = usable ? this.#cache.lookup(origin) : null;
+		const alt = usable ? this.#lookup(key, origin) : null;
 		let retryBody = body;
 		let via: Http3Info['recent'][number]['via'] = 'base';
 
 		if (alt) {
-			const conn = await this.#connectionFor(origin, alt);
+			const conn = await this.#connectionFor(key, alt);
 			if (conn) {
 				const prepared = await h3Body(body);
 				retryBody = prepared.retry;
@@ -403,13 +421,13 @@ export default class Http3Transport implements ProxyTransport {
 						headers,
 					);
 					this.#note(remote, 'h3');
-					this.#learn(remote, response.headers);
+					this.#learn(key, remote, response.headers);
 					// the copy kept for a retry is not needed
 					if (prepared.retry instanceof ReadableStream)
 						void prepared.retry.cancel().catch(() => {});
 					return response;
 				} catch (error) {
-					if (!conn.alive) this.#lost(origin, conn);
+					if (!conn.alive) this.#lost(key, conn);
 					// a request whose stream never opened never reached the
 					// server, whatever its method
 					const unsent = /^h3 send:/.test(String((error as Error)?.message));
@@ -422,7 +440,7 @@ export default class Http3Transport implements ProxyTransport {
 				}
 			}
 		} else if (usable && this.#options.dns) {
-			void this.#askDns(remote);
+			void this.#askDns(key, remote);
 		}
 
 		const response = await this.base.request(
@@ -436,7 +454,7 @@ export default class Http3Transport implements ProxyTransport {
 		if (usable) {
 			// the base transport may have answered over a new wisp connection
 			this.#currentRelay();
-			this.#learn(remote, response.headers);
+			this.#learn(key, remote, response.headers);
 		}
 		return response;
 	}
@@ -446,19 +464,33 @@ export default class Http3Transport implements ProxyTransport {
 		if (this.#recent.length > RECENT) this.#recent.shift();
 	}
 
-	/** Alt-Svc from any response of an https origin updates its entry */
-	#learn(remote: URL, headers: RawHeaders) {
+	/**
+	 * The alternative for `origin` in the partition `key` names: its own
+	 * entry, else a forced one (`force`, kept under the origin alone), which
+	 * the partition takes as its own so that a failure there is its own
+	 */
+	#lookup(key: string, origin: string): AltService | null {
+		const own = this.#cache.lookup(key);
+		if (own || key === origin || this.#cache.known(key)) return own;
+		const forced = this.#cache.lookup(origin);
+		if (forced?.source !== 'force') return null;
+		this.#cache.add(key, forced);
+		return forced;
+	}
+
+	/** Alt-Svc from any response of an https origin updates its entry (under `key`, its partition's) */
+	#learn(key: string, remote: URL, headers: RawHeaders) {
 		const values = headers
 			.filter(([name]) => name.toLowerCase() === 'alt-svc')
 			.map(([, value]) => value);
 		if (!values.length) return;
-		const before = this.#cache.lookup(remote.origin);
-		this.#cache.learn(remote.origin, remote.hostname, values);
-		const after = this.#cache.lookup(remote.origin);
+		const before = this.#cache.lookup(key);
+		this.#cache.learn(key, remote.hostname, values);
+		const after = this.#cache.lookup(key);
 		// a newly learned (or moved) alternative: connect now, so the next
 		// request finds it up
 		if (after && (!before || before.port !== after.port))
-			void this.#connectionFor(remote.origin, after);
+			void this.#connectionFor(key, after);
 	}
 
 	/** the base transport's UDP opener (epoxy's `client.connect_udp`), or the host's */
@@ -757,8 +789,8 @@ export default class Http3Transport implements ProxyTransport {
 	}
 
 	/** ask the DoH server for `remote`'s HTTPS record, once per name per answer's TTL */
-	async #askDns(remote: URL) {
-		const origin = remote.origin;
+	async #askDns(key: string, remote: URL) {
+		const origin = key;
 		if (remote.port && remote.port !== '443') return;
 		if (this.#cache.known(origin)) return;
 		const name = remote.hostname;

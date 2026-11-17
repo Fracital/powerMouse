@@ -1,0 +1,45 @@
+<!doctype html>
+<title>NET PARTITION</title>
+<body>
+	<script>
+		// a page of one site that reaches a third site, `?c=` (net-partitions
+		// suite): which of that server's connections its requests came on,
+		// without and with credentials, and how many of its loads of one
+		// cacheable resource reached the server. Reported in window.__net, and
+		// to the parent when framed
+		const query = new URLSearchParams(location.search);
+		const c = query.get('c');
+		const t = query.get('t');
+		const connection = async (credentials) =>
+			(
+				await (
+					await fetch(`${c}/sop/conn?r=${Math.random()}`, { credentials })
+				).json()
+			).connection;
+		(async () => {
+			const report = { role: query.get('role') };
+			try {
+				report.plain = [
+					await connection('same-origin'),
+					await connection('same-origin'),
+				];
+				report.credentialed = await connection('include');
+				await (
+					await fetch(
+						`${c}/sop/r?k=${t}-cache&acao=*&type=text&cc=${encodeURIComponent('max-age=600')}`,
+					)
+				).text();
+				report.cacheLoads = (
+					await (
+						await fetch(`${c}/sop/log?k=${t}-cache&r=${Math.random()}`)
+					).json()
+				).length;
+			} catch (error) {
+				report.error = String(error);
+			}
+			report.done = true;
+			window.__net = report;
+			if (parent !== window) parent.postMessage({ net: report }, '*');
+		})();
+	</script>
+</body>

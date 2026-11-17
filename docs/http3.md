@@ -175,7 +175,13 @@ relay: `udpBlockedUntil`, `udpCarried` and the hosts in `udpRefused`.
   same either way (warm medians within a few ms).
 - The alt-svc cache lives as long as the transport (the transport worker of
   one controller); Chrome keeps it on disk. A new tab learns it again from
-  the first response.
+  the first response. It is kept per network partition (the field the
+  service worker names a request's top-level site in,
+  src/transport/networkPartition.ts), and so are the QUIC connections: what
+  one site's pages learned of an origin's alternatives, and the
+  connections they opened, are not another site's, as Chrome keys them by
+  its network anonymization key. A `force` entry applies to every
+  partition.
 - WebSockets stay on the base transport (no RFC 9220).
 - Abort signals are not passed down, as with epoxy itself.
 

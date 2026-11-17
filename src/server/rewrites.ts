@@ -1,6 +1,7 @@
 import {
 	BareCompatibleClient,
 	type ProxyTransport,
+	type RawHeaders,
 } from '@mercuryworkshop/proxy-transports';
 import { acceptLanguage } from '../acceptLanguage';
 import { FP_DEFAULT_ON_SURFACES, FP_SEEDED_SURFACES } from '../blocker/types';
@@ -152,6 +153,7 @@ import {
 	WORKER_SCRIPT_MARKER,
 	XHR_MARKER,
 } from '../transport/messages';
+import { NETWORK_PARTITION } from '../transport/networkPartition';
 import { fragmentOf, queryOf, withQuery } from '../urlShape';
 import { BUILD, REWRITE_GENERATION } from '../version';
 import { contextText, isLinkRoute, LINK_SEGMENT, linkRoute } from '../visited';
@@ -2604,6 +2606,30 @@ function genericForward(
 				: serverRequest.blob();
 		upload.catch(() => {});
 
+		// The connections it goes on are its network partition's, as Chrome
+		// keys its socket pool (src/transport/networkPartition.ts; measured in Chrome 157,
+		// net-partitions): the top-level site, and whether the context is
+		// cross-site to it (its own site is another, or an ancestor's is: a
+		// context in a partition). The transport is told which in a field it
+		// takes off (a page's own field of that name is dropped). A context
+		// with no site of its own and no top-level site shares one partition.
+		// Chrome also keeps a request without credentials off the connections
+		// of those with: not done, since it tells no site anything of
+		// another's (and doubles the pools)
+		const networkTop = topSite ?? requestFrameSite;
+		const networkPartition =
+			networkTop === null
+				? 'opaque'
+				: `${networkTop} ${
+						networkTop !== requestFrameSite ||
+						partitionSite(contextPartition) !== null
+							? 'cross-site'
+							: 'same-site'
+					}`;
+		const partitioned = (headers: RawHeaders): RawHeaders => [
+			...headers.filter(([name]) => name.toLowerCase() !== NETWORK_PARTITION),
+			[NETWORK_PARTITION, networkPartition],
+		];
 		// the fields go out in the order Chrome sends them (headerOrder.ts)
 		const shape: RequestShape = {
 			navigation: navigation && DOCUMENT_DESTINATIONS.has(destination),
@@ -2621,7 +2647,7 @@ function genericForward(
 					redirect: 'manual',
 					// redirect: serverRequest.redirect,
 					body,
-					headers: chromeOrderedHeaders(headers, shape),
+					headers: partitioned(chromeOrderedHeaders(headers, shape)),
 				}),
 			);
 			// an answer that arrives after the page gave up is dropped unread, so
@@ -2746,13 +2772,15 @@ function genericForward(
 						rewriter.bare.fetch(url.toString(), {
 							method: 'OPTIONS',
 							redirect: 'manual',
-							headers: chromeOrderedHeaders(preflightHeaders, {
-								navigation: false,
-								destination,
-								mode: 'cors',
-								method: 'OPTIONS',
-								cache: 'no-store',
-							}),
+							headers: partitioned(
+								chromeOrderedHeaders(preflightHeaders, {
+									navigation: false,
+									destination,
+									mode: 'cors',
+									method: 'OPTIONS',
+									cache: 'no-store',
+								}),
+							),
 						}),
 						abortedSoon,
 					]);

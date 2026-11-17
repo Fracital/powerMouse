@@ -954,6 +954,30 @@ Filled in commit by commit; see the CHANGELOG for each.
   `AudioContext`, `requestStorageAccess`, `getDisplayMedia` and
   `PaymentRequest.show` are not gated; a native the page took before the
   first foreign activation keeps the browser's answer.
+- **Connections** (net-partitions: 4 checks per mode differed). Chrome
+  157 keys its socket pool by the top-level site, apart again for a
+  context cross-site to it, and apart again for a request without
+  credentials (measured with a server that numbers its connections: a page
+  of B never gets the connection a page of A opened to C, nor a frame of
+  B under A A's own). The transport kept one pool, so every proxied site
+  reused every other's connection to a third site: its first request
+  there skipped the connect, which a page can time. The worker names each
+  request's network partition (its top-level site and whether the context
+  is cross-site to it, as the HTTP cache's key) in a field
+  (`src/transport/networkPartition.ts`) that our epoxy build reads and
+  takes off (deploy/epoxy patches epoxy-tls 0062, epoxy-transport 0054): a
+  partition is an epoxy client of its own pool and TLS session caches over
+  the one wisp connection, since every connection is a wisp stream
+  already, so a user holds one wisp WebSocket as before. Http3Transport
+  keys its alt-svc knowledge and QUIC connections (each a wisp UDP stream)
+  by the same field. A partition idle for 5 minutes is let go, and at most
+  64 are kept. Left: a request without credentials goes on the
+  connections of those with (it tells no site anything of another's); a
+  transport that does not say it reads the field (libcurl, a host's own)
+  keeps one pool, and serveTransport takes the field off for it;
+  WebSockets and raw streams have no pool to share. The HTTP cache and the
+  renderer's memory cache were partitioned already (net-partitions checks
+  the first too).
 
 ## Visited links
 
@@ -1607,3 +1631,14 @@ suites' known lists with the same reason.
    - Opaque response blocking is applied to scripts, where a page can tell;
      Chrome also empties other blocked no-cors responses, which a page
      cannot read anyway.
+   - Network state STomp does not partition, none read across sites
+     through a page: a request without credentials shares the connections
+     of those with (Connections, above), and so does every request of a
+     transport other than our epoxy build; DNS answers are the wisp
+     server's resolver's, shared by every user of the relay; HSTS is not
+     kept at all (the worker drops `Strict-Transport-Security`, which
+     would pin the proxy's host), so an `http:` URL of a site that sent it
+     loads over http where Chrome upgrades it (not measured locally:
+     Chrome takes HSTS only over a certificate it trusts, which a test
+     fixture does not have; Chrome's own HSTS store is not keyed by
+     top-level site).

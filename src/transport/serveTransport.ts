@@ -14,6 +14,7 @@ import {
 	TransportToHost,
 	WebSocketMessage,
 } from './messages';
+import { NETWORK_PARTITION } from './networkPartition';
 import { resumableBody } from './resumableBody';
 import { RpcHelper } from './rpc';
 import { serveWebTransport, type AdmitSession } from './webTransportHost';
@@ -40,6 +41,8 @@ export type DecorateHandshake = (
 interface FieldSupport {
 	acceptEncoding?: string;
 	priority?: boolean;
+	/** the field it reads a request's network partition from (NETWORK_PARTITION) */
+	partition?: string;
 }
 
 /** `headers` as `transport` can send them */
@@ -51,10 +54,15 @@ export function fitHeaders(
 	// takes (an object of fields); the worker always sends pairs
 	if (!Array.isArray(headers)) return headers;
 	const support = (transport as { fieldSupport?: FieldSupport }).fieldSupport;
+	// the worker's word for the partition, for a transport that keeps a pool
+	// per partition; never the server's
+	const partitioned = support?.partition === NETWORK_PARTITION;
 	const out: RawHeaders = [];
 	for (const [name, value] of headers) {
 		const lower = name.toLowerCase();
-		if (lower === 'accept-encoding') {
+		if (lower === NETWORK_PARTITION) {
+			if (partitioned) out.push([name, value]);
+		} else if (lower === 'accept-encoding') {
 			if (support?.acceptEncoding) out.push([name, support.acceptEncoding]);
 		} else if (lower === 'priority') {
 			if (support?.priority) out.push([name, value]);

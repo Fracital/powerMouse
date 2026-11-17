@@ -1,0 +1,122 @@
+From 086ce8dd1f72f8b18a6022b2e0e5be0b55a6f827 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 17 Nov 2026 12:00:00 -0500
+Subject: [PATCH] request: each network partition on a pool of its own over the
+ one wisp connection
+
+---
+ src/main.ts | 66 ++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 65 insertions(+), 1 deletion(-)
+
+diff --git a/src/main.ts b/src/main.ts
+index 69030b7..6d45722 100644
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -69,6 +69,27 @@ function loadEpoxy(): Promise<void> {
+ 	return epoxyLoaded;
+ }
+ 
++/**
++ * The request field a host names a request's network partition in (its
++ * top-level site, as STomp's service worker puts it): the request goes on
++ * that partition's connections, and the field is taken off. A browser keys
++ * its connection pool and the TLS sessions it resumes by the top-level site
++ * of the page that asks; each connection is a wisp stream, so a partition
++ * is a client of its own pool over the one wisp connection
++ * (EpoxyClient.partition), never a wisp connection of its own.
++ */
++export const PARTITION_FIELD = "$stomp$network";
++/** a partition with nothing in flight for this long is let go (Chrome closes idle sockets after 5 minutes) */
++const PARTITION_IDLE_MS = 5 * 60 * 1000;
++/** partitions kept at once; past it the one used longest ago with nothing in flight is let go */
++const PARTITIONS_KEPT = 64;
++
++interface Partition {
++	client: EpoxyClient;
++	inFlight: number;
++	used: number;
++}
++
+ export default class EpoxyTransport implements ProxyTransport {
+ 	ready = false;
+ 	// What this build does with the request fields a host sends in Chrome's
+@@ -78,7 +99,10 @@ export default class EpoxyTransport implements ProxyTransport {
+ 	readonly fieldSupport = {
+ 		acceptEncoding: "gzip, deflate, br, zstd",
+ 		priority: true,
++		partition: PARTITION_FIELD,
+ 	};
++	/** by name, the one used longest ago first */
++	private partitions = new Map<string, Partition>();
+ 	private initializing: Promise<void> | null = null;
+ 
+ 	client_version: typeof epoxyInfo;
+@@ -142,9 +166,14 @@ export default class EpoxyTransport implements ProxyTransport {
+ 	): Promise<TransferrableResponse> {
+ 		if (body instanceof Blob) body = await body.arrayBuffer();
+ 
++		let partition: Partition | null = null;
+ 		try {
+ 			let headersObj: Record<string, string> = {};
+ 			for (let [key, value] of headers) {
++				if (key.toLowerCase() === PARTITION_FIELD) {
++					partition = this.partition(value);
++					continue;
++				}
+ 				if (headersObj[key]) {
+ 					// epoxy does not support multiple headers with the same key
+ 					console.warn(
+@@ -154,7 +183,8 @@ export default class EpoxyTransport implements ProxyTransport {
+ 				headersObj[key] = value;
+ 			}
+ 
+-			let res = await this.client.fetch(remote.href, {
++			if (partition) partition.inFlight++;
++			let res = await (partition?.client ?? this.client).fetch(remote.href, {
+ 				method,
+ 				body,
+ 				headers: headersObj,
+@@ -179,9 +209,43 @@ export default class EpoxyTransport implements ProxyTransport {
+ 		} catch (err) {
+ 			console.error(err);
+ 			throw err;
++		} finally {
++			if (partition) {
++				partition.inFlight--;
++				partition.used = Date.now();
++			}
+ 		}
+ 	}
+ 
++	/** the client of the partition `name`, made over this client's wisp connection the first time */
++	private partition(name: string): Partition {
++		const now = Date.now();
++		const kept = this.partitions.get(name);
++		if (kept) {
++			this.partitions.delete(name);
++			this.partitions.set(name, kept);
++			kept.used = now;
++			return kept;
++		}
++		let over = this.partitions.size + 1 - PARTITIONS_KEPT;
++		for (const [other, partition] of this.partitions) {
++			if (partition.inFlight) continue;
++			if (now - partition.used < PARTITION_IDLE_MS && over <= 0) continue;
++			// its pool goes with it (collected; a body it still streams keeps
++			// its own connection)
++			this.partitions.delete(other);
++			over--;
++		}
++		const partition = { client: this.client.partition(), inFlight: 0, used: now };
++		this.partitions.set(name, partition);
++		return partition;
++	}
++
++	/** the partitions kept now, by name */
++	partitionNames(): string[] {
++		return [...this.partitions.keys()];
++	}
++
+ 	connect(
+ 		url: URL,
+ 		protocols: string[],

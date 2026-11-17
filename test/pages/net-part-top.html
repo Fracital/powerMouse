@@ -1,0 +1,14 @@
+<!doctype html>
+<title>NET PARTITION TOP</title>
+<body>
+	<script>
+		// a page framing `?src=` (net-partitions suite): keeps what the
+		// frame reports
+		addEventListener('message', (event) => {
+			if (event.data?.net) window.__net = event.data.net;
+		});
+		const frame = document.createElement('iframe');
+		frame.src = new URLSearchParams(location.search).get('src');
+		document.body.append(frame);
+	</script>
+</body>

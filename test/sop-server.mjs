@@ -32,6 +32,12 @@
 //                                       text/html (a page under csp)
 //   /sop/log?k=<key>     what reached /sop/r under k, in order
 //   /sop/cookies         the names of the cookies the request carried
+//   /sop/conn            which of the server's connections carried the
+//                        request (its number, counted from 1), with CORS
+//                        for the asking origin and credentials; the
+//                        connection is kept a minute after it idles, so a
+//                        suite can tell a reused one from a new one
+//                        (net-partitions)
 //
 // test/fixture.mjs calls `sop(req, res)` first and serves the rest.
 import { readFileSync } from 'node:fs';
@@ -80,6 +86,9 @@ const LONG_WAV = (() => {
 })();
 
 const logs = new Map();
+/** the number of each connection /sop/conn heard on */
+const connections = new WeakMap();
+let connectionCount = 0;
 
 /** true when the request was one of ours and has been answered */
 export function sop(req, res) {
@@ -92,6 +101,21 @@ export function sop(req, res) {
 		res.setHeader('cache-control', 'no-store');
 		res.setHeader('access-control-allow-origin', '*');
 		res.end(JSON.stringify(logs.get(key) ?? []));
+		return true;
+	}
+	if (url.pathname === '/sop/conn') {
+		const socket = req.socket;
+		if (!connections.has(socket)) connections.set(socket, ++connectionCount);
+		res.setHeader('content-type', 'application/json');
+		res.setHeader('cache-control', 'no-store');
+		res.setHeader('access-control-allow-origin', req.headers.origin ?? '*');
+		res.setHeader('access-control-allow-credentials', 'true');
+		res.setHeader('vary', 'origin');
+		// node closes an idle connection after 5 s (its keepAliveTimeout, set
+		// as the response finishes): longer, so a step that takes a while
+		// still finds it
+		res.on('finish', () => socket.setTimeout(60000));
+		res.end(JSON.stringify({ connection: connections.get(socket) }));
 		return true;
 	}
 	if (url.pathname === '/sop/cookies') {
