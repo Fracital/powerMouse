@@ -28,7 +28,6 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import vm from 'node:vm';
 
 export const ROWS = [
-	'stomp-js',
 	'stomp-wasm',
 	'scramjet',
 	'ramjet',
@@ -43,8 +42,16 @@ const scriptURL = (id) => `http://a.bench.test:8000/rewrite/scripts/${id}.js`;
 const PROXY_ORIGIN = 'http://127.0.0.1:8080';
 
 const SELF = fileURLToPath(import.meta.url);
-/** the flags every row's process runs with */
-const CHILD_FLAGS = ['--expose-gc', '--max-old-space-size=8192'];
+/**
+ * the flags every row's process runs with (vm modules: whether an input or
+ * an output compiles as a module is V8's answer, `compiles`)
+ */
+const CHILD_FLAGS = [
+	'--expose-gc',
+	'--max-old-space-size=8192',
+	'--experimental-vm-modules',
+	'--disable-warning=ExperimentalWarning',
+];
 
 /**
  * `{ median, min, max, p25, p75, n, runs, dnf }` of a list of numbers
@@ -149,12 +156,12 @@ async function locate(row, { repoRoot, contendersDir, dirs }) {
 	const given = dirs?.[row];
 	const contender = (id) => (contendersDir ? join(contendersDir, id) : null);
 	switch (row) {
-		case 'stomp-js':
 		case 'stomp-wasm': {
 			const dir = given ?? join(repoRoot, 'dist');
-			const need = ['rewriteWorker.js'];
-			if (row === 'stomp-wasm')
-				need.push(...stompWasmNames(dir).map((n) => `${n}.wasm`));
+			const need = [
+				'rewriteWorker.js',
+				...stompWasmNames(dir).map((n) => `${n}.wasm`),
+			];
 			const missing = need.filter((file) => !exists(join(dir, file)));
 			return missing.length
 				? { error: `no ${missing.join(', ')} in ${dir} (npm run build)` }
@@ -228,11 +235,12 @@ async function locate(row, { repoRoot, contendersDir, dirs }) {
  * standing in for the worker's global and is handed a port, as the
  * controller hands it one, and asked over the same RPC the pool uses with the
  * config the demo's StompController sends (codec xor, adblock on, a minted
- * client name; rewriter 'wasm' with the modules of WASM_ASSETS for
- * stomp-wasm). One worker, no split: the pool's split of a large script
- * across workers is the in-browser scenario's.
+ * client name; rewriter 'wasm' with the modules of WASM_ASSETS, its only
+ * rewriter since the JavaScript one was deleted). One worker, no split: the
+ * pool's split of a large script across workers is the in-browser
+ * scenario's.
  */
-async function loadStomp(dir, wasm) {
+async function loadStomp(dir) {
 	const file = join(dir, 'rewriteWorker.js');
 	// the worker's global: what it listens to and posts on
 	let onWorkerMessage = null;
@@ -248,22 +256,20 @@ async function loadStomp(dir, wasm) {
 		{ filename: file },
 	)(self);
 	if (!onWorkerMessage) throw new Error(`${file} listens to no message`);
-	if (wasm) {
-		const modules = {};
-		for (const name of stompWasmNames(dir))
-			modules[name] = await WebAssembly.compile(
-				await readFile(join(dir, `${name}.wasm`)),
-			);
-		onWorkerMessage({ data: { $stomp$rewriteModules: modules }, ports: [] });
-		for (let i = 0; i < 100 && !posted.length; i++)
-			await new Promise((done) => setTimeout(done, 10));
-		const held = posted[0]?.$stomp$rewriteModules;
-		if (
-			!Array.isArray(held) ||
-			!(held.includes('core') || held.includes('rewriter'))
-		)
-			throw new Error(`the rewrite worker holds ${JSON.stringify(held)}`);
-	}
+	const modules = {};
+	for (const name of stompWasmNames(dir))
+		modules[name] = await WebAssembly.compile(
+			await readFile(join(dir, `${name}.wasm`)),
+		);
+	onWorkerMessage({ data: { $stomp$rewriteModules: modules }, ports: [] });
+	for (let i = 0; i < 100 && !posted.length; i++)
+		await new Promise((done) => setTimeout(done, 10));
+	const held = posted[0]?.$stomp$rewriteModules;
+	if (
+		!Array.isArray(held) ||
+		!(held.includes('core') || held.includes('rewriter'))
+	)
+		throw new Error(`the rewrite worker holds ${JSON.stringify(held)}`);
 	// the port the service worker would hold, in this thread: a call hands
 	// the worker the script itself, where a MessagePort would copy it in
 	// and the output out (20 to 30 ms for typescript.js), which no other
@@ -298,14 +304,14 @@ async function loadStomp(dir, wasm) {
 		scope: '/stomp/',
 		adblock: true,
 		names: { client: '$Bq7xK2mPzR' },
-		...(wasm ? { rewriter: 'wasm' } : {}),
+		rewriter: 'wasm',
 	};
 	const by = { wasm: 0, js: 0 };
 	return {
-		describe: `${file} (the rewrite worker bundle) evaluated in Node with \`self\` standing in for the worker's global, handed a port in the same thread (no copy of the script or output); per script the pool's RPC 'rewrite' with { url, directory: '${directory}', codecKey: '3a42', config: ${JSON.stringify(config)}, type: 'generic' | 'genericModule', scopes: ['${PROXY_ORIGIN}${directory}'] }${wasm ? '; the WASM_ASSETS modules compiled from dist/ and handed over as the controller does (REWRITE_MODULES)' : ''}; one worker, no split`,
+		describe: `${file} (the rewrite worker bundle) evaluated in Node with \`self\` standing in for the worker's global, handed a port in the same thread (no copy of the script or output); per script the pool's RPC 'rewrite' with { url, directory: '${directory}', codecKey: '3a42', config: ${JSON.stringify(config)}, type: 'generic' | 'genericModule', scopes: ['${PROXY_ORIGIN}${directory}'] }; the WASM_ASSETS modules compiled from dist/ and handed over as the controller does (REWRITE_MODULES); one worker, no split`,
 		// which backend made each output of the last pass
 		info: () => {
-			const told = wasm ? { lastPassAnsweredBy: { ...by } } : {};
+			const told = { lastPassAnsweredBy: { ...by } };
 			by.wasm = by.js = 0;
 			return told;
 		},
@@ -532,8 +538,7 @@ async function loadPowermouse(dir) {
 }
 
 const LOADERS = {
-	'stomp-js': (dir) => loadStomp(dir, false),
-	'stomp-wasm': (dir) => loadStomp(dir, true),
+	'stomp-wasm': loadStomp,
 	scramjet: loadScramjet,
 	ramjet: loadRamjet,
 	ultraviolet: loadUltraviolet,
@@ -542,10 +547,24 @@ const LOADERS = {
 };
 
 /** a row's process: loads its rewriter, then answers one pass over the corpus per message */
+/**
+ * Whether V8 compiles `text` as a module, or as a classic script's text
+ * with `return` allowed at its top level (a function body, as the rewriters'
+ * parsers take it): the error's message when it does not, else null
+ */
+function compiles(text, module) {
+	try {
+		if (module) new vm.SourceTextModule(text);
+		else vm.compileFunction(text);
+		return null;
+	} catch (error) {
+		return String(error?.message ?? error);
+	}
+}
+
 async function childMain(row) {
 	let rewriter;
 	let scripts;
-	let parse;
 	/** each script's output length in the warm-up pass */
 	const warmLength = new Map();
 	const UNREWRITTEN_END = '\n;this.#STomp_could_not_rewrite_this_script;\n';
@@ -564,17 +583,8 @@ async function childMain(row) {
 		if (!warm) return null;
 		warmLength.set(script.id, output.length);
 		if (rewriter.same || script.inputParses === false) return null;
-		try {
-			parse(output, {
-				module: script.module,
-				next: true,
-				webcompat: true,
-				globalReturn: !script.module,
-			});
-		} catch (error) {
-			return `output does not parse: ${error.message}`;
-		}
-		return null;
+		const refused = compiles(output, script.module);
+		return refused === null ? null : `output does not parse: ${refused}`;
 	};
 
 	const pass = async (warm) => {
@@ -611,24 +621,13 @@ async function childMain(row) {
 	process.on('message', async (message) => {
 		try {
 			if (message.init) {
-				const { dir, repoRoot } = message.init;
-				({ parse } = createRequire(join(repoRoot, 'package.json'))('meriyah'));
+				const { dir } = message.init;
 				rewriter = await LOADERS[row](dir);
 				scripts = [];
 				for (const entry of message.init.scripts) {
 					const buffer = await readFile(entry.file);
 					const text = buffer.toString('utf8');
-					let inputParses = true;
-					try {
-						parse(text, {
-							module: entry.module,
-							next: true,
-							webcompat: true,
-							globalReturn: !entry.module,
-						});
-					} catch {
-						inputParses = false;
-					}
+					const inputParses = compiles(text, entry.module) === null;
 					scripts.push({
 						id: entry.id,
 						module: entry.module,
