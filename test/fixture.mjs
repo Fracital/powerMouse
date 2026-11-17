@@ -239,6 +239,16 @@ export function startFixture(port = 8084) {
 			res.setHeader('content-type', 'application/json');
 			return res.end(JSON.stringify(served));
 		}
+		// /redirect?to=<url>: a 302 to the URL, of any origin (error-surfaces:
+		// a script redirected through another origin)
+		if (path === '/redirect') {
+			res.statusCode = 302;
+			res.setHeader(
+				'location',
+				new URL(req.url, 'http://x').searchParams.get('to') ?? '/',
+			);
+			return res.end();
+		}
 		const neutral = /^\/neutral\/([\w.-]+)$/.exec(path)?.[1];
 		if (neutral) {
 			const file = TRANSPORTS[neutral]

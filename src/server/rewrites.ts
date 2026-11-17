@@ -110,6 +110,7 @@ import type {
 } from '../transport/messages';
 import {
 	ABORT_HEADER,
+	AWAY_MARKER,
 	CACHED_MARKER,
 	CORS_MARKER,
 	CREDENTIALS_HEADER,
@@ -3399,8 +3400,12 @@ function genericForward(
 			policyMode === 'no-cors' &&
 			(serverRequest.destination !== '' || opaqueFetch || internal) &&
 			!redirect
-		)
+		) {
 			responseHeaders.append('server-timing', OPAQUE_MARKER);
+			// (and one that ended at another origin than the request's says
+			// so too: what a worker's importScripts() mutes, AWAY_MARKER)
+			if (!sameOrigin) responseHeaders.append('server-timing', AWAY_MARKER);
+		}
 		// (a video or sound says so before its load is over, which is when the
 		// mark can be read: the inject asks, mediaLoads.ts)
 		if (
@@ -4202,7 +4207,7 @@ const actedOn = (name: string) =>
 	!name.startsWith('cf-') &&
 	(!name.startsWith('x-') || ACTED_X_HEADERS.has(name));
 /** the worker's own Server-Timing marks, which the inject reads */
-const OWN_MARKS = [TAO_MARKER, OPAQUE_MARKER];
+const OWN_MARKS = [TAO_MARKER, OPAQUE_MARKER, AWAY_MARKER];
 
 /**
  * The headers a kept script response has, of the ones the page is given

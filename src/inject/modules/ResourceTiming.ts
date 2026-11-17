@@ -1,4 +1,5 @@
 import {
+	AWAY_MARKER,
 	CACHED_MARKER,
 	CORS_MARKER,
 	Delivery,
@@ -23,7 +24,7 @@ import Client from '../Client';
 import Module from '../Module';
 import { LazyMap, LazySet, LazyWeakMap, LazyWeakSet } from '../ownCollections';
 import ProxyModule from './Proxy';
-import { unrouteURL } from './Unroute';
+import UnrouteModule, { unrouteURL } from './Unroute';
 
 // the browser's own members, taken when the bundle runs
 const serverTimingOf =
@@ -112,26 +113,57 @@ export function hasProxyMetric(entry: object, name: string): boolean {
 }
 
 /**
- * Whether the browser's last load of `routed` went to another origin
- * without CORS on the way (a redirect): the service worker marks the last
- * hop of such a chain (OPAQUE_MARKER) in its resource timing entry, which a
- * worker's importScripts() has once the call is over
+ * For a worker's importScripts(): whether the browser's last load of a
+ * route ended at another origin than the request's own through redirects no
+ * CORS allowed. The service worker marks the last hop of such a chain
+ * (AWAY_MARKER) in the load's resource timing entry, which is queued once
+ * the call is over. An observer of the inject's own hears of every entry,
+ * made before any of the page's script runs, so what the page does to its
+ * timing buffer (clears it, lets it fill, replaces the methods that read it)
+ * changes nothing; its pending records are taken at every ask, since
+ * imports load while script runs.
  */
-export function crossedTo(global: typeof globalThis, routed: string): boolean {
-	if (!nativeEntriesByType || !nativeEntryName) return false;
-	try {
-		const entries = Reflect.apply(nativeEntriesByType, global.performance, [
-			'resource',
-		]) as object[];
-		for (let i = entries.length - 1; i >= 0; i--) {
-			const name = String(Reflect.apply(nativeEntryName, entries[i], []));
-			if (new URL(routed, name).href === name)
-				return hasProxyMetric(entries[i]!, OPAQUE_MARKER);
+export function awayLoads(
+	global: typeof globalThis,
+): (routed: string) => boolean {
+	const away = new Set<string>();
+	// (a name to resolve a route against: every entry's is the proxy's origin)
+	let base = '';
+	const note = (entries: object[]) => {
+		for (let i = 0; i < entries.length; i++) {
+			const name = String(Reflect.apply(nativeEntryName!, entries[i], []));
+			base = name;
+			if (hasProxyMetric(entries[i]!, AWAY_MARKER)) away.add(name);
+			else away.delete(name);
 		}
-	} catch (error) {
-		// no entries to read
-	}
-	return false;
+	};
+	let take = () => {};
+	if (
+		typeof global.PerformanceObserver === 'function' &&
+		nativeTakeRecords &&
+		nativeObserve &&
+		nativeListEntries &&
+		nativeEntryName
+	)
+		try {
+			const observer = new global.PerformanceObserver((list: object) =>
+				note(Reflect.apply(nativeListEntries, list, []) as object[]),
+			);
+			Reflect.apply(nativeObserve, observer, [{ type: 'resource' }]);
+			take = () =>
+				note(Reflect.apply(nativeTakeRecords, observer, []) as object[]);
+		} catch (error) {
+			// no resource timing here: nothing is marked
+		}
+	return (routed) => {
+		take();
+		if (!away.size) return false;
+		try {
+			return away.has(new URL(routed, base).href);
+		} catch (error) {
+			return false;
+		}
+	};
 }
 
 /** what a resource of another origin without Timing-Allow-Origin shows as 0 */
@@ -314,6 +346,12 @@ export default class ResourceTimingModule extends Module<Client> {
 	}
 	apply() {
 		const client = this.client;
+		// a document's script of its own origin redirected through another
+		// is muted, as the observer below tells (Unroute)
+		if (client.isDOM) {
+			const unroute = client.getModule(UnrouteModule);
+			if (unroute) unroute.opaqueLoad = this.opaqueLoads();
+		}
 		const global = client.global as typeof globalThis & Record<string, any>;
 		const Timing = global.PerformanceResourceTiming;
 		if (typeof Timing !== 'function') return;

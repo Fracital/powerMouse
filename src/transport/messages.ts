@@ -185,6 +185,15 @@ export const TAO_MARKER = 'stomp-tao';
  */
 export const OPAQUE_MARKER = 'stomp-opaque';
 /**
+ * A Server-Timing metric the worker adds, with OPAQUE_MARKER, to the last
+ * hop of a no-cors redirect chain that ended at another origin than the
+ * request's own: a worker's importScripts() mutes such a script natively,
+ * and not one whose chain came back to the worker's origin (measured on
+ * Chrome 157; a document mutes both). The inject reads it
+ * (ImportScripts) and the page never sees it.
+ */
+export const AWAY_MARKER = 'stomp-away';
+/**
  * A Server-Timing metric the worker adds to a cors response of another
  * origin whose own Server-Timing the browser needs for resource timing (its
  * Timing-Allow-Origin names the page) but the page may not read as a
@@ -314,6 +323,7 @@ export const PROXY_METRICS: readonly string[] = [
 	ENCODING_MARKER,
 	WORKER_SCRIPT_MARKER,
 	OPAQUE_MARKER,
+	AWAY_MARKER,
 	TIMING_ONLY_MARKER,
 	XHR_MARKER,
 	CACHED_MARKER,

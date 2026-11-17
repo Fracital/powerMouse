@@ -350,6 +350,35 @@
 					}, 1000);
 				}),
 		);
+		// 4. scripts of the page's origin redirected through another origin
+		// (to it, and back), with the resource timing buffer as it was, cleared
+		// and full (last: the buffer is the page's): muted natively
+		const own = location.href.replace(/pages\/.*$/, '');
+		const away = (path) =>
+			`${own}redirect?to=${encodeURIComponent(cross + path)}`;
+		const back = (path) =>
+			away(`redirect?to=${encodeURIComponent(own + path)}`);
+		const buffers = {
+			Kept() {},
+			Cleared() {
+				performance.clearResourceTimings();
+			},
+			Full() {
+				performance.setResourceTimingBufferSize(
+					performance.getEntriesByType('resource').length,
+				);
+			},
+		};
+		for (const [buffer, prepare] of Object.entries(buffers)) {
+			prepare();
+			const path = `pages/error-surfaces-throw.js?buffer=${buffer}`;
+			await run(`redirectedAway${buffer}`, () => script(away(path)));
+			await run(`redirectedBack${buffer}`, () => script(back(`${path}&back`)));
+		}
+		performance.setResourceTimingBufferSize(250);
+		await run('workerImportRedirected', () =>
+			workerCase(() => new Worker('error-surfaces-redirect-worker.js')),
+		);
 		R.done = true;
 	})();
 </script>

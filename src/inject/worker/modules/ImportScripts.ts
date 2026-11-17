@@ -4,7 +4,7 @@ import { SW_IMPORT_ROUTE } from '../../../serviceWorkerTypes';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule, { ownerOf } from '../../modules/Proxy';
-import { crossedTo } from '../../modules/ResourceTiming';
+import { awayLoads } from '../../modules/ResourceTiming';
 import { failsToParse, withStack } from '../../nativeErrors';
 import WorkerClient from '../Client';
 
@@ -13,6 +13,7 @@ export default class ImportScriptsModule extends Module<WorkerClient> {
 		const client = this.client;
 		const global = client.global;
 		const proxyModule = client.getModule(ProxyModule)!;
+		const away = awayLoads(global);
 
 		// (on the scope's prototype, where the browser has it)
 		ownerOf(global, 'importScripts').importScripts = proxyModule.wrapFunction(
@@ -58,9 +59,10 @@ export default class ImportScriptsModule extends Module<WorkerClient> {
 				// one is reported where it was (a SyntaxError at the script's
 				// line, not this hook's). Its redirects may still have taken
 				// it to another origin, which only the service worker saw: it
-				// marks the last hop of such a chain (OPAQUE_MARKER), and the
+				// marks the last hop of such a chain (AWAY_MARKER), and the
 				// import's resource timing entry, there once the call is over,
-				// says so.
+				// says so (one that came back to the worker's origin is not
+				// muted natively).
 				const DOMError = global.DOMException;
 				const failed = (i: number) =>
 					withStack(
@@ -85,7 +87,7 @@ export default class ImportScriptsModule extends Module<WorkerClient> {
 						threw = false;
 					} finally {
 						// (a throw here replaces what the browser threw)
-						if (threw && crossedTo(global, String(args[i])))
+						if (threw && away(String(args[i])))
 							// eslint-disable-next-line no-unsafe-finally
 							throw failed(i);
 					}

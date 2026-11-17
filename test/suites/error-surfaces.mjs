@@ -7,7 +7,10 @@
 // calls, and under every odd Error.stackTraceLimit; rejections of import() and fetch; the DOMExceptions of a
 // cross-origin pushState, Worker, SharedWorker and frame access and of bad
 // URLs; dedicated, module and shared workers' own surfaces and the events on
-// their Worker objects; Server-Timing, a CSP violation and ReportingObserver)
+// their Worker objects; Server-Timing, a CSP violation and ReportingObserver;
+// scripts of the page's origin whose redirects went through another origin,
+// in the document and imported by a worker, with the page's resource timing
+// buffer as it was, cleared and full)
 // and the suite compares every case with the page loaded natively, along with
 // the uncaught errors the console shows. Both demo modes.
 //
@@ -104,7 +107,7 @@ const native = distinct(await measure(() => nativePage.mainFrame()));
 await nativePage.close();
 ok(
 	'natively: every case ran',
-	Object.keys(native.cases).length === 41,
+	Object.keys(native.cases).length === 48,
 	Object.keys(native.cases).join(','),
 );
 console.log(`natively: cases tried again: ${tries(native)}`);

@@ -673,6 +673,13 @@ export default class UnrouteModule extends Module<Client> {
 			});
 		return error;
 	}
+	/**
+	 * Whether the load of a route of the page's own origin was marked by the
+	 * worker as another origin's (redirected through one without CORS): the
+	 * ResourceTiming module's observer, which no page's use of its timing
+	 * buffer changes (a document's only)
+	 */
+	opaqueLoad?: (routed: string) => boolean;
 	/** a URL of the inject's own (a bundle), which no page URL stands for */
 	#isInternal(name: unknown): boolean {
 		return (
@@ -683,8 +690,10 @@ export default class UnrouteModule extends Module<Client> {
 	}
 	/**
 	 * Whether the browser mutes errors of the script at `routed`: a classic
-	 * script of another real origin fetched without CORS. Every route is
-	 * same-origin for the browser, so it never mutes one itself. A module is
+	 * script of another real origin fetched without CORS, or one of the
+	 * page's own origin whose redirects went through another (Chrome mutes
+	 * both, measured on 157). Every route is same-origin for the browser, so
+	 * it never mutes one itself. A module is
 	 * always fetched with CORS, and a classic script with it when its element
 	 * says `crossorigin`.
 	 */
@@ -705,7 +714,7 @@ export default class UnrouteModule extends Module<Client> {
 		const real = parsed.url.url;
 		if (
 			!ROUTE_PROTOCOLS.includes(real.protocol) ||
-			real.origin === client.url.url.origin
+			(real.origin === client.url.url.origin && !this.opaqueLoad?.(routed))
 		)
 			return false;
 		for (const script of client.global.document.querySelectorAll(
