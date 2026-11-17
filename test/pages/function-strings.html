@@ -11,7 +11,23 @@
 			document.createElement('iframe'),
 		).contentWindow;
 		const read = (fn) => Function.prototype.toString.call(fn);
+		// a function whose prototype chain has a function with a toString
+		// of the page's before Function.prototype: the native never asks it
+		let asked = false;
+		class Parent {
+			static toString() {
+				asked = true;
+				return 'the page answered';
+			}
+		}
+		const underParent = Object.setPrototypeOf(Math.max.bind(null), Parent);
+		const values = {
+			underParent: read(underParent),
+			prototypeItself: read(Function.prototype),
+		};
 		return {
+			...values,
+			parentAsked: asked,
 			sameFetch: read(same.fetch),
 			sameOpen: read(same.open),
 			sameWrite: read(same.document.write),

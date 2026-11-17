@@ -2,9 +2,6 @@
 	"/workers/SharedWorker-detach-frame-in-error-event.html": {
 		"Test frame detach in shared worker's error handler": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
 	},
-	"/workers/Worker-constructor-proto.any.worker.html": {
-		"Tests that setting the proto of a built in constructor is not reset.": "FAIL: assert_equals: expected \"function () { [native code] }\" but got \"[object Function]\""
-	},
 	"/workers/Worker-postMessage-happens-in-parallel.https.html": {
 		"(harness)": "ERROR: Uncaught ReferenceError: SharedArrayBuffer is not defined",
 		"Tests that calling \"worker.postMessage()\" will occur truly in parallel to the main JS thread": "TIMEOUT: Test timed out"

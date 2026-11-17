@@ -1,7 +1,9 @@
 // A page reads another realm's hooked functions through its own
 // Function.prototype.toString and sees the native source: a same-origin frame
 // that loaded its own copy of the inject (whose wrappers this realm's copy
-// never made) and an about:blank frame this page's copy injected.
+// never made) and an about:blank frame this page's copy injected. A function
+// whose prototype chain has a toString of the page's before
+// Function.prototype, and Function.prototype itself, read as natively too.
 import {
 	done,
 	FIXTURE,

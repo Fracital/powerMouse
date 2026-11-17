@@ -612,24 +612,25 @@ export default class ProxyModule extends Module<Client> {
 		const foreignToString = (that: unknown): Function | null => {
 			if (typeof that !== 'function') return null;
 			try {
-				// the own toString of the nearest prototype that has one, read as a
-				// value (a page-defined getter never runs)
+				// its realm's Function.prototype: the last function on its
+				// prototype chain (a class's parent is a function too, and may
+				// have a toString of the page's, which the native never calls;
+				// Function.prototype itself, or a function given a plain object
+				// for a prototype, has none and is answered natively)
 				let proto = Reflect.getPrototypeOf(that);
-				let toString: unknown;
+				let functionPrototype: object | null = null;
 				while (proto) {
-					const own = Reflect.getOwnPropertyDescriptor(proto, 'toString');
-					if (own) {
-						toString = own.value;
-						break;
-					}
+					if (typeof proto === 'function') functionPrototype = proto;
 					proto = Reflect.getPrototypeOf(proto);
 				}
-				if (!proto || proto === ownPrototype) return null;
-				// (only another realm's Function.prototype, which is itself a
-				// function: `Function.prototype` reaches Object.prototype's
-				// toString this way, and a function given another prototype
-				// the page's own, neither of which reads a function's source)
-				if (typeof proto !== 'function') return null;
+				if (!functionPrototype || functionPrototype === ownPrototype)
+					return null;
+				// its own toString, read as a value (a page-defined getter
+				// never runs)
+				const toString: unknown = Reflect.getOwnPropertyDescriptor(
+					functionPrototype,
+					'toString',
+				)?.value;
 				return typeof toString === 'function' &&
 					toString !== ownPrototype.toString
 					? toString
