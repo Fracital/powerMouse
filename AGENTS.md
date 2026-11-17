@@ -158,6 +158,12 @@ on every save (use a `git worktree`).
   reads the page's source back by it. A new rewrite that rebuilds a function
   node must keep the original node (its `range`), and a check on exact
   rewriter output strips marks first (rewriter-unit's `unmarked`).
+- **Binary routes carry their document's site cache mark**
+  (`binary;m=<mark>/...`, `src/memoryMark.ts`): the worker hands such a load
+  out with the origin's caching headers only when the mark is its client's
+  site's, so the renderer's memory cache is shared per site. A check that
+  parses a route's kind must allow `;m=` and `;sri=` after it, and a new
+  kind the renderer keeps goes in `MARKED_KINDS`.
 - **Inline `<script type="module">` and `src` set before `type`** need the
   module goal; both are handled, keep it that way.
 - **Optional chaining** through a computed member is rewritten to

@@ -25,6 +25,8 @@ export interface RewriteRequest {
 	type: ScriptType;
 	/** the service worker's route scopes (routeURL), origin included */
 	scopes: string[];
+	/** the cache mark of the document the script is for (src/memoryMark.ts), when the worker names one */
+	mark?: string;
 	/** where its functions' text is kept (a javascript: URL) */
 	source?: ScriptSource;
 	/** code to run first, after the directive prologue (an inline script's currentScript restore) */

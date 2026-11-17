@@ -1,3 +1,4 @@
+import { splitCacheMark } from '../memoryMark';
 import { splitIntegrityMark } from '../sri';
 import { RouteContext } from '../transport/messages';
 
@@ -65,10 +66,15 @@ export default class Router {
 	}
 	private resolveURL(fullURL: string): string {
 		const path = new URL(fullURL).pathname.slice(this.directory.length);
-		// a route's kind is matched without the integrity it carries (src/sri.ts)
+		// a route's kind is matched without the integrity and the cache mark
+		// it carries (src/sri.ts, src/memoryMark.ts)
 		const slash = path.indexOf('/');
 		const kind = slash === -1 ? path : path.slice(0, slash);
-		return '/' + splitIntegrityMark(kind)[0] + path.slice(kind.length);
+		return (
+			'/' +
+			splitCacheMark(splitIntegrityMark(kind)[0])[0] +
+			path.slice(kind.length)
+		);
 	}
 	willRoute(fullURL: string): boolean {
 		const url = this.resolveURL(fullURL);

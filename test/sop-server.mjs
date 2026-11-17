@@ -26,6 +26,7 @@
 //     status=<n>                        the status of a non-preflight answer
 //     cookie=<value>                    a Set-Cookie of the answer
 //     cc=<value>                        its Cache-Control (default no-store)
+//     ms=<n>                            the answer waits n ms (at most 3000)
 //   /sop/log?k=<key>     what reached /sop/r under k, in order
 //   /sop/cookies         the names of the cookies the request carried
 //
@@ -121,6 +122,18 @@ export function sop(req, res) {
 		custom: h['x-custom'] ?? null,
 		ifNoneMatch: !!h['if-none-match'],
 	});
+	const wait = Math.min(Number(query.get('ms')) || 0, 3000);
+	if (wait && req.method !== 'OPTIONS') {
+		setTimeout(() => answer(req, res, query), wait);
+		return true;
+	}
+	answer(req, res, query);
+	return true;
+}
+
+/** the answer of /sop/r, as the query names it */
+function answer(req, res, query) {
+	const h = req.headers;
 	res.setHeader('cache-control', query.get('cc') ?? 'no-store');
 	const set = (name, value) => {
 		if (value !== null && value !== undefined) res.setHeader(name, value);

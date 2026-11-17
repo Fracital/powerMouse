@@ -4,6 +4,7 @@ import type GenericCodec from './Codecs';
 import { Config } from './config';
 import type { PolicyText, ScriptFacts } from './csp';
 import { helperNames } from './helperNames';
+import { CACHE_MARK_SHAPE, realmCacheMark } from './memoryMark';
 import type { Prewritten } from './prewrite';
 import type { ReferrerInfo } from './referrerPolicy';
 import { rewriter } from './rewriters';
@@ -209,6 +210,19 @@ export function provideShellFacts(provider: () => ScriptFacts | undefined) {
 let shellSyncXHR: (() => boolean) | null = null;
 export function provideShellSyncXHR(provider: () => boolean) {
 	shellSyncXHR = provider;
+}
+
+/**
+ * The shell's statement that gives the client its site's cache mark
+ * (src/memoryMark.ts): the one the service worker set on the document's URL,
+ * else the one of the realm that builds the shell (a blob: or javascript:
+ * document is its builder's site's). Always made, with '' for none: a
+ * window the browser kept from its initial document takes the mark of the
+ * document it shows now.
+ */
+function marked(client: string, url: StompURL): string {
+	const mark = url.mark ?? realmCacheMark();
+	return `\n\t${client}.cacheMark = ${JSON.stringify(CACHE_MARK_SHAPE.test(mark) ? mark : '')};`;
 }
 
 /**
@@ -454,7 +468,7 @@ function shell(
 	else {
 		delete globalThis.createClient;
 		${names.client}.takeNamedBase();
-	}${keptFacts(names.client, facts)}
+	}${keptFacts(names.client, facts)}${marked(names.client, url)}
 
 ${sited(names.client, sites)}${referred(names.client, referrer)}${policyTexts(names.client, policies)}${syncXHR(names.client, syncXHRBlocked)}${
 		upgradeInsecure
@@ -604,7 +618,7 @@ export function modifyXML(
 	else {
 		delete globalThis.createClient;
 		${names.client}.takeNamedBase();
-	}${keptFacts(names.client, facts)}
+	}${keptFacts(names.client, facts)}${marked(names.client, url)}
 ${sited(names.client, sites)}${referred(names.client, referrer)}${policyTexts(names.client, policies)}${syncXHR(names.client, syncXHRBlocked)}
 	if (!${names.client}.applied) ${names.client}.apply();
 	${names.client}.loadXML(${JSON.stringify(script)}, ${JSON.stringify(mime)});

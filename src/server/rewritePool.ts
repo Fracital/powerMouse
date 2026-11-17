@@ -133,6 +133,7 @@ export class RewritePool {
 				config,
 				type,
 				scopes: routeScopeList(),
+				...(url.mark === undefined ? {} : { mark: url.mark }),
 				...(source === undefined ? {} : { source }),
 				...(preamble ? { preamble } : {}),
 			},

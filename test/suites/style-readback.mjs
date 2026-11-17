@@ -144,7 +144,7 @@ ok(
 	rb.baseVal === 'sprite.svg#icon' &&
 		rb.animVal === 'sprite.svg#icon' &&
 		rb.baseValSet === 'sprite.svg#other' &&
-		/\/stomp\/[\w-]+\/binary\//.test(realUse) &&
+		/\/stomp\/[\w-]+\/binary(;[^/]*)?\//.test(realUse) &&
 		realUse.endsWith('#other'),
 	JSON.stringify([rb.baseVal, rb.animVal, rb.baseValSet, realUse]),
 );

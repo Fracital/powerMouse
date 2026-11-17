@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+	<head>
+		<title>memory share</title>
+	</head>
+	<body>
+		<script>
+			// One load of a resource that may be kept (memory-cache-share suite):
+			// `r` is its URL, `as` how it is loaded (an image, or a font through
+			// FontFace). What the page can tell of the load goes in __share: how
+			// long it took, and its resource timing entry.
+			(function () {
+				var query = new URLSearchParams(location.search);
+				var url = new URL(query.get('r'), location.href).href;
+				var as = query.get('as') || 'image';
+				var started = performance.now();
+				var report = function (loaded) {
+					var ms = Math.round(performance.now() - started);
+					// the entry is queued after the load event
+					setTimeout(function () {
+						window.__share = {
+							loaded: loaded,
+							ms: ms,
+							entries: performance.getEntriesByName(url).map(function (entry) {
+								return {
+									transferSize: entry.transferSize,
+									encodedBodySize: entry.encodedBodySize,
+									decodedBodySize: entry.decodedBodySize,
+									deliveryType: entry.deliveryType,
+									initiatorType: entry.initiatorType,
+								};
+							}),
+						};
+					}, 300);
+				};
+				if (as === 'font') {
+					new FontFace('Shared', 'url(' + JSON.stringify(url) + ')')
+						.load()
+						.then(
+							function () {
+								report(true);
+							},
+							function () {
+								report(false);
+							},
+						);
+				} else {
+					var image = new Image();
+					image.onload = function () {
+						report(true);
+					};
+					image.onerror = function () {
+						report(false);
+					};
+					image.src = url;
+				}
+			})();
+		</script>
+	</body>
+</html>

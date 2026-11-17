@@ -109,7 +109,8 @@ export default class ReadbackModule extends Module<DocumentClient> {
 		// was mixed content (the worker upgraded it, src/mixedContent.ts), where
 		// a srcset candidate (binary:set) was blocked instead
 		const upgradedImage = (routed: string, page: string): string => {
-			if (!/\/binary\//.test(routed)) return page;
+			// (a kind with its marks, src/memoryMark.ts and src/sri.ts)
+			if (!/\/binary(?:;[^/]*)?\//.test(routed)) return page;
 			try {
 				const verdict = client
 					.getModule(MixedContentModule)

@@ -499,6 +499,45 @@ Filled in commit by commit; see the CHANGELOG for each.
   each build, alternated, medians of the time to the page's main content,
   cold, warm and revisit): within a few hundred ms either way, the noise
   of the runs (see the CHANGELOG).
+  What the worker hands on as the origin sent it (an image, a font, a text
+  track, a poster: the `binary` routes) is the renderer's to keep again,
+  per site (memory-cache-share: a site's second document takes the first
+  one's copy without a request, another site's document and an opaque one
+  wait for the network, in both modes, as natively). Natively one copy
+  serves every document of the site's renderer; with every document handed
+  its own, a proxied ad frame held about 4 MB of copies of what natively
+  takes nothing past the first frame (an ad frame of three images and a
+  web font, 30 frames in one renderer, Chrome 157: 5.0 MB of RSS a frame
+  before, 2.9 MB with the mark, natively 2.7 MB). So the route
+  of such a load carries a mark of its document's site after its kind
+  (`binary;m=<mark>/...`, `src/memoryMark.ts`), and the worker hands the
+  load out with the origin's caching headers when the mark is the asking
+  document's site's (`siteShared` in `genericForward`): the renderer's
+  memory cache, keyed by the URL, keeps one copy per site and hands it to
+  that site's next document, never to another's, whose routes carry
+  another mark. The mark is no name a page could write: the worker draws
+  it from a secret of its own (`src/server/cacheMarks.ts`, kept with the
+  codec keys, drawn again on Clear-Site-Data `"cache"` and when the host
+  clears the cache) over the build, the site and the emulated service
+  worker that controls the document (natively a controlled document's
+  memory cache is the controller's), and hands each document its own in
+  its shell (`cacheMark`). A page that learned the route's shape, the codec
+  and another site's URL still cannot name that site's copy, and a route
+  of another site's that a page hands a hook is routed again as its own
+  site's. With the site pool each slot origin's worker draws a secret of
+  its own, and a slot that holds more than one site keeps them apart by
+  the mark as the one renderer does. An opaque origin's document (a frame
+  sandboxed without allow-same-origin, a data: document) marks its loads
+  as such (`;m=o`),
+  and the worker keeps them out of every cache, as natively its renderer
+  and its HTTP cache are its own (before, its images and fonts were
+  answered from its site's copies). A load the renderer answers this way
+  never reaches the worker: its resource timing entry has no worker start,
+  which is how the inject tells it (a memory cache's entry, as natively:
+  no bytes transferred, delivery "cache"). Scripts and stylesheets are
+  rewritten and stay `no-cache`. A route without a mark (one this build's
+  worker did not give, an inline document's controlled by an emulated
+  worker) is handed out as before.
 - **Output reuse** (`recentOutputs`, master's speed series): the worker
   gives a document the output it just gave it for the same request only
   when everything the policy decides by is the same: the client (its

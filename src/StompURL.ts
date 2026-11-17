@@ -54,6 +54,13 @@ export default class StompURL {
 	codec: GenericCodec;
 	directory: string;
 	url: URL;
+	/**
+	 * The cache mark of the document whose routes these are (src/memoryMark.ts),
+	 * when the caller names it ('' for none): the service worker's, set per
+	 * request, and the rewriter library's, per call. Taken on from a
+	 * reference; unset, a route takes its realm's.
+	 */
+	mark?: string;
 	constructor(url: urlLike, reference: StompURL);
 	constructor(url: urlLike, codec: GenericCodec, directory: string);
 
@@ -66,6 +73,7 @@ export default class StompURL {
 			const copy = codec;
 			codec = copy.codec;
 			directory = copy.directory;
+			if (copy.mark !== undefined) this.mark = copy.mark;
 		}
 
 		if (isUrlLike(url)) {

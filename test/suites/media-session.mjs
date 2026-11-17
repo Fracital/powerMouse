@@ -56,7 +56,7 @@ for (const [mode, base] of [
 	const artwork = [];
 	page.context().on('response', (response) => {
 		if (
-			/\/binary\//.test(response.url()) &&
+			/\/binary(;[^/]*)?\//.test(response.url()) &&
 			response.request().resourceType() === 'other'
 		)
 			artwork.push([response.status(), response.fromServiceWorker()]);

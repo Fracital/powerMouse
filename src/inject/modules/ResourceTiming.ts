@@ -567,8 +567,24 @@ export default class ResourceTimingModule extends Module<Client> {
 			keptDeliveries.set(entry, delivery);
 			return delivery;
 		};
+		const workerStart = getter('workerStart');
+		const responseStart = getter('responseStart');
+		/**
+		 * Whether the renderer's memory cache answered the load of `entry`
+		 * without asking the worker: a site's next document's load of what an
+		 * earlier one of the site loaded, by the route of the site's mark
+		 * (src/memoryMark.ts). Every load the worker answers has a worker
+		 * start; this one has none, and the Server-Timing of the load whose
+		 * response it keeps, which says how that one came.
+		 */
+		const fromRenderer = (entry: object) =>
+			!!workerStart &&
+			!!responseStart &&
+			Reflect.apply(workerStart, entry, []) === 0 &&
+			Reflect.apply(responseStart, entry, []) !== 0;
 		/** how the worker answered the load of `entry` */
 		const delivery = (entry: object): Delivery => {
+			if (fromRenderer(entry)) return 'memory';
 			if (hasProxyMetric(entry, KEPT_MARKER)) return keptDelivery(entry);
 			const memory = hasProxyMetric(entry, MEMORY_MARKER);
 			return hasProxyMetric(entry, CACHED_MARKER)

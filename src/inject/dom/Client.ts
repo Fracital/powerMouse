@@ -29,6 +29,11 @@ import { rewriteCSSValueURLs } from '../../cssURLs';
 import type { HookContext, HookErrorInfo, HookPhase } from '../../hooks';
 import { allowDelegates } from '../../isolation';
 import {
+	CACHE_MARK_SHAPE,
+	OPAQUE_MARK,
+	setCacheMarkSource,
+} from '../../memoryMark';
+import {
 	nestedMark,
 	parseNestedMark,
 	partitionOf,
@@ -419,8 +424,12 @@ export default class DocumentClient extends Client {
 				'ownerDocument',
 			)!.get!,
 		];
-		// the bundle's own realm's client: its load channel opens now
-		if (global === globalThis) initLoads(this);
+		// the bundle's own realm's client: its load channel opens now, and
+		// the routes the bundle makes carry its site's cache mark
+		if (global === globalThis) {
+			initLoads(this);
+			setCacheMarkSource(() => this.cacheMark);
+		}
 		this.#setTimeout = this.global.setTimeout;
 		this.write = this.global.document.write;
 		this.open = this.global.document.open;
@@ -897,6 +906,43 @@ export default class DocumentClient extends Client {
 	 * page runs)
 	 */
 	agentCluster: 'site' | 'origin' | null = null;
+	/** the mark its shell gave, and the document it was given for */
+	#cacheMark: { document: Document; mark: string } | null = null;
+	/**
+	 * The cache mark of this document's site (src/memoryMark.ts), which the
+	 * routes it makes of what the renderer's memory cache keeps carry: its
+	 * shell's (the service worker's, or its builder's), an about:blank or
+	 * about:srcdoc document's maker's, the opaque one for an opaque origin (it
+	 * shares nothing with its site's documents natively: a sandboxed frame is
+	 * isolated in a renderer of its own), none for a document no shell named
+	 * one for.
+	 */
+	get cacheMark(): string {
+		if (this.sandboxedOpaque) return OPAQUE_MARK;
+		const document = this.global.document;
+		const own = this.#cacheMark;
+		if (own && own.document === document) return own.mark;
+		let protocol: string;
+		try {
+			protocol = this.global.location.protocol;
+		} catch (error) {
+			return '';
+		}
+		if (protocol !== 'about:') return '';
+		const creator = this.#creatorClient();
+		if (!creator || creator.originKey !== this.originKey) return '';
+		// (kept for the document: its maker's site is its own for good)
+		const mark = creator.cacheMark;
+		this.#cacheMark = { document, mark };
+		return mark;
+	}
+	/** @internal its shell names it, before the page runs */
+	set cacheMark(mark: unknown) {
+		this.#cacheMark =
+			typeof mark === 'string' && (mark === '' || CACHE_MARK_SHAPE.test(mark))
+				? { document: this.global.document, mark }
+				: null;
+	}
 	/**
 	 * @internal the agent cluster keying of each origin in this browsing
 	 * context group, kept by its top (true: keyed by site): an origin's first

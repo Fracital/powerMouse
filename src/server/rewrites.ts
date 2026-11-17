@@ -39,6 +39,7 @@ import {
 	topLevelIsolation,
 	type DocumentIsolation,
 } from '../isolation';
+import { MARKED_KINDS, OPAQUE_MARK } from '../memoryMark';
 import {
 	insecure,
 	metaUpgradesInsecureRequests,
@@ -174,6 +175,7 @@ import {
 	splitForStore,
 	type CacheHit,
 } from './cache';
+import { cacheMarkOf, renewCacheSecret } from './cacheMarks';
 import {
 	decodeDocument,
 	decodeScript,
@@ -938,6 +940,7 @@ function genericForward(
 			url,
 			resource,
 			integrity: routeIntegrity,
+			cacheMark: routeMark,
 		} = parseRoutedURL(
 			serverRequest.url,
 			rewriter.codec,
@@ -2355,6 +2358,7 @@ function genericForward(
 		const {
 			response: fromWorker,
 			control,
+			controller,
 			network: preloaded,
 		} = await answerFromServiceWorker(
 			rewriter,
@@ -2368,6 +2372,15 @@ function genericForward(
 		);
 		// the worker gave the page a network error
 		if (fromWorker?.type === 'error') return Response.error();
+
+		// The mark of the documents of the site that asks, under the emulated
+		// worker that controls them (src/memoryMark.ts): what this worker
+		// routes for the request (a document's shell, a stylesheet's url()s)
+		// carries it, and a load whose route carries it is one of those
+		// documents', which the renderer may keep and hand to the next of them
+		// as natively
+		const siteMark = cacheMarkOf(requestFrameSite, controller);
+		url.mark = siteMark;
 
 		// a cross-origin request the CORS protocol does not let go out as it
 		// is asks first (when it reaches the network: a request the page's
@@ -2466,7 +2479,9 @@ function genericForward(
 		// site and the site of the frame or worker that asks (a navigation's
 		// is its destination's); a request whose client has no site of its
 		// own (opaque, unknown) is not cached at all.
-		const frameSite = requestFrameSite;
+		// (an opaque origin's image or font load, by its route's mark: none,
+		// as for its other loads, src/memoryMark.ts)
+		const frameSite = routeMark === OPAQUE_MARK ? null : requestFrameSite;
 		const cacheKey =
 			frameSite === null
 				? null
@@ -2485,6 +2500,18 @@ function genericForward(
 			requestHeaders.delete('if-none-match');
 			requestHeaders.delete('if-modified-since');
 		}
+		// ...except a load of its own site's documents, by a route that carries
+		// their mark (src/memoryMark.ts), of a body this worker hands on as the
+		// origin sent it: it goes to the renderer with the origin's caching
+		// headers, so the renderer's memory cache keeps it for that site's
+		// next document as natively, under a URL no other site's document
+		// writes
+		const siteShared =
+			memoryDestination &&
+			!transformBody &&
+			MARKED_KINDS.has(resource) &&
+			routeMark !== '' &&
+			routeMark === siteMark;
 		// The request's cache mode, as Chrome's HTTP cache takes it
 		// (docs/http-cache.md). What the page wrote in the request's headers
 		// changes the default: with a conditional header of its own the
@@ -2970,6 +2997,9 @@ function genericForward(
 		if (cleared) {
 			await rewriter.cache?.clearOrigin(url.url.origin);
 			memoryCache.clearOrigin(url.url.origin);
+			// what the renderer keeps under the sites' marks is no later
+			// document's either (cacheMarks.ts)
+			await renewCacheSecret();
 			for (const key of rendererHas)
 				if (MemoryCache.origin(key) === url.url.origin) rendererHas.delete(key);
 		}
@@ -3834,6 +3864,10 @@ function genericForward(
 												topSite ?? frameSite,
 												frameSite,
 												credentials,
+												// the site's cache mark, which a rewrite's routes
+												// carry: one made before the marks were drawn
+												// again is not served after
+												...(siteMark ? [siteMark] : []),
 											]),
 							},
 							note,
@@ -3944,7 +3978,7 @@ function genericForward(
 		// out again, per site (MemoryCache): the browser asks for it each
 		// document, and has no validators to make it a revalidation of a copy
 		// another site's document loaded
-		if (memoryDestination) {
+		if (memoryDestination && !siteShared) {
 			responseHeaders.set('cache-control', 'no-cache');
 			for (const name of ['expires', 'age', 'etag', 'last-modified'])
 				responseHeaders.delete(name);
@@ -5055,6 +5089,11 @@ export function registerRewrites(
 				rewriter.codec,
 				`${location.origin}${rewriter.directory}`,
 			);
+			// of its creator's site, whose cache mark it takes (an opaque
+			// origin's document keeps none, src/memoryMark.ts)
+			url.mark = /^https?:$/.test(url.url.protocol)
+				? cacheMarkOf(siteOf(url.url, publicSuffix))
+				: '';
 			// a document of a local scheme (about:, blob:, data:) inherits its
 			// creator's referrer policy, which this navigation's request carries
 			if (request.referrerPolicy)
@@ -5816,6 +5855,14 @@ async function answerFromServiceWorker<N extends Response>(
 ): Promise<{
 	response: Response | null;
 	control?: ControlInfo;
+	/**
+	 * the emulated worker that controls the document the request is for (a
+	 * navigation's: the one it makes), as `<registration> <version>`; none
+	 * for an uncontrolled one. Natively the renderer's memory cache keeps a
+	 * controlled document's loads apart from an uncontrolled one's, and from
+	 * another worker's: its key names the controller.
+	 */
+	controller?: string;
 	/** the navigation preload's answer, for the page as the network's */
 	network?: N;
 }> {
@@ -5871,12 +5918,14 @@ async function answerFromServiceWorker<N extends Response>(
 			? startPreload(routed.record.navigationPreload.headerValue)
 			: undefined;
 	preload?.catch(() => {});
+	const active = routed.record.active;
+	const controller = active ? `${routed.record.id} ${active.id}` : undefined;
 	let body: Blob | null;
 	try {
 		body = (await upload) ?? null;
 	} catch (error) {
 		// the page's body could not be read: as the network would have
-		return { response: null, control: routed.control };
+		return { response: null, control: routed.control, controller };
 	}
 	const answer = await serviceWorkers.dispatch(
 		routed.record,
@@ -5908,8 +5957,13 @@ async function answerFromServiceWorker<N extends Response>(
 		preload,
 	);
 	if (answer !== null && 'network' in answer)
-		return { response: null, control: routed.control, network: answer.network };
-	return { response: answer, control: routed.control };
+		return {
+			response: null,
+			control: routed.control,
+			controller,
+			network: answer.network,
+		};
+	return { response: answer, control: routed.control, controller };
 }
 
 const SCRIPT_HEADERS = {

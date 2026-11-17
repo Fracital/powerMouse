@@ -63,8 +63,12 @@ const real = await page.evaluate(() => {
 	};
 });
 // the JS route carries the script type: /stomp/<id>/js:generic/, /stomp/<id>/js:genericModule/
+// (a binary one the cache mark of the document's site: binary;m=<mark>/, src/memoryMark.ts)
 const route = (value, kind) =>
-	typeof value === 'string' && new RegExp(`/stomp/[\\w-]+/${kind}`).test(value);
+	typeof value === 'string' &&
+	new RegExp(`/stomp/[\\w-]+/${kind.replace(/\/$/, '(;m=[\\w-]+)?/')}`).test(
+		value,
+	);
 ok(
 	'link rel tokens and as decide the route',
 	route(real.l1, 'css/') &&

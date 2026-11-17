@@ -32,6 +32,7 @@ function rewrite(request: RewriteRequest): string | RewriteAnswer {
 	addRouteScopes(request.scopes);
 	const { codec } = parseConfig(request.config, request.codecKey);
 	const url = new StompURL(new URL(request.url), codec, request.directory);
+	if (typeof request.mark === 'string') url.mark = request.mark;
 	const told: RewrittenBy = {};
 	const output = modifyJS(
 		request.script,

@@ -1,5 +1,11 @@
 import GenericCodec from './Codecs';
 import { assetName, type Assets, type Config } from './config';
+import {
+	CACHE_MARK,
+	MARKED_KINDS,
+	realmCacheMark,
+	splitCacheMark,
+} from './memoryMark';
 import { splitIntegrityMark } from './sri';
 import StompURL, { openFragment, sealedFragmentText } from './StompURL';
 import { withQuery } from './urlShape';
@@ -138,7 +144,12 @@ export function routeURL(resourceType: string, url: StompURL) {
 	const real = routeScopes.size ? unwrapRoute(url.url, url.codec) : null;
 	if (real) url = new StompURL(real, url);
 
-	return `${url.directory}${resourceType}/${url.encode(isDocumentKind(resourceType))}`;
+	// what a renderer's memory cache keeps carries its document's site's
+	// mark (src/memoryMark.ts)
+	const mark = MARKED_KINDS.has(resourceType)
+		? (url.mark ?? realmCacheMark())
+		: '';
+	return `${url.directory}${resourceType}${mark ? CACHE_MARK + mark : ''}/${url.encode(isDocumentKind(resourceType))}`;
 }
 
 /**
@@ -323,11 +334,13 @@ export function queueXHR(url: StompURL) {
 }*/
 
 export interface ParsedRoutedURL {
-	/** the route's kind, without its integrity mark */
+	/** the route's kind, without its integrity and cache marks */
 	resource: string;
 	url: StompURL;
 	/** the integrity the load carries (src/sri.ts), '' for none */
 	integrity: string;
+	/** the cache mark of the document that routed it (src/memoryMark.ts), '' for none */
+	cacheMark: string;
 }
 
 export function parseRoutedURL(
@@ -352,7 +365,8 @@ export function parseRoutedURL(
 		throw new Error('Invalid route');
 	}
 
-	const [resource, integrity] = splitIntegrityMark(path.slice(0, split));
+	const [marked, integrity] = splitIntegrityMark(path.slice(0, split));
+	const [resource, cacheMark] = splitCacheMark(marked);
 	// every codec escapes `?`, so a literal one starts a query the browser put
 	// after the route: a GET form submitted to a document's own address (a
 	// form without an action) replaces that URL's query with its fields
@@ -374,6 +388,7 @@ export function parseRoutedURL(
 		resource: resource,
 		url: new StompURL(url, codec, directory),
 		integrity,
+		cacheMark,
 	};
 }
 

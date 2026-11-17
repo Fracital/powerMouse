@@ -3,11 +3,15 @@
 // allowed (a year, here), with an old rewriter's output or old helper names
 // in it. Rewritten responses go out `cache-control: no-cache`, so the browser
 // asks the worker again and the worker answers from its own caches: a reload
-// asks the worker without an upstream request. What a renderer's memory
-// cache keeps (the script, the image, rewritten or not) goes out no-cache
-// without validators as well: the worker keeps that cache per site
-// (cache.ts MemoryCache), and the browser must neither hand it to another
-// site's document nor revalidate another site's copy.
+// asks the worker without an upstream request. A rewritten script that a
+// renderer's memory cache keeps goes out no-cache without validators as
+// well: the worker keeps that cache per site (cache.ts MemoryCache), and the
+// browser must neither hand it to another site's document nor revalidate
+// another site's copy. An image the worker does not rewrite goes to the
+// browser with the origin's caching, under a route that carries the mark of
+// its document's site (src/memoryMark.ts): the renderer keeps it for the
+// site's next document, as natively, and no other site's document names
+// that URL (memory-cache-share).
 import {
 	done,
 	FIXTURE,
@@ -26,8 +30,10 @@ page.on('response', (response) => {
 	const url = response.url();
 	if (!url.includes('/stomp/')) return;
 	responses.push({
-		// the routed URL carries the controller's id before the kind
-		kind: /\/stomp\/[\w-]+\/([^/]+)\//.exec(url)?.[1] ?? '',
+		// the routed URL carries the controller's id before the kind, and the
+		// kind its marks
+		kind: /\/stomp\/[\w-]+\/([^/;]+)/.exec(url)?.[1] ?? '',
+		mark: /\/stomp\/[\w-]+\/[^/;]+;m=([\w-]+)\//.exec(url)?.[1] ?? null,
 		status: response.status(),
 		cacheControl: response.headers()['cache-control'] ?? null,
 		etag: response.headers()['etag'] ?? null,
@@ -66,11 +72,17 @@ ok(
 	JSON.stringify([first, script]),
 );
 ok(
-	`the rewritten document is no-cache too, and so is the image the worker did not rewrite (the origin sent ${UPSTREAM})`,
-	html?.cacheControl === 'no-cache' &&
-		image?.cacheControl === 'no-cache' &&
-		image?.etag === null,
-	JSON.stringify([html, image]),
+	'the rewritten document is no-cache too',
+	html?.cacheControl === 'no-cache',
+	JSON.stringify(html),
+);
+ok(
+	`the image the worker did not rewrite goes out as the origin sent it (${UPSTREAM}), by a route of its site's mark`,
+	image?.cacheControl === UPSTREAM &&
+		typeof image?.mark === 'string' &&
+		image.mark.length === 16 &&
+		script?.mark === null,
+	JSON.stringify([image, script]),
 );
 const hitsBefore = await upstreamHits();
 await page.evaluate(() => window.controller.frames[0].reload());

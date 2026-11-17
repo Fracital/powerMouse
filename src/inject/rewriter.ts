@@ -34,6 +34,7 @@ import rewriterLib from 'stomp:rewriter-lib';
 import { codecType, type Config } from '../config';
 import { LAZY_CONTEXTS, MAY_ROUTE } from '../cssURL';
 import { keepSource } from '../functionSource';
+import { realmCacheMark } from '../memoryMark';
 import type { ScriptSource } from '../rewriteJS';
 import type { RewriterLib } from '../rewriterLight';
 import { provideRewriters } from '../rewriters';
@@ -493,6 +494,7 @@ function contextOf(url: StompURL, config: Config | null): string {
 		config,
 		blobOriginPair(),
 		routeScopeList(),
+		url.mark ?? realmCacheMark(),
 	]);
 }
 

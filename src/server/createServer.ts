@@ -33,6 +33,13 @@ import {
 import { heldModules, moduleOf } from '../wasm/thread';
 import { Blocker, registerBlocker } from './blocker';
 import { HttpCache, memoryCache } from './cache';
+import {
+	CACHE_SECRET_KEY,
+	keepCacheSecretWith,
+	newCacheSecret,
+	renewCacheSecret,
+	useCacheSecret,
+} from './cacheMarks';
 import Cookies, { openCookies, registerCookies } from './Cookies';
 import { hostErrorPage } from './errorPage';
 import { registerIntegrityLoads } from './integrityLoads';
@@ -204,7 +211,7 @@ function sharedStores(scope: string): Promise<SharedStores> {
 	return stores;
 }
 
-/** the worker's own settings: the codec keys and the codec of every address it served */
+/** the worker's own settings: the codec keys, the codec of every address it served, the cache marks' secret */
 export function openConfigDB(): Promise<IDBPDatabase> {
 	return openDB('stompConfig', 1, {
 		upgrade: (db) => {
@@ -212,6 +219,11 @@ export function openConfigDB(): Promise<IDBPDatabase> {
 		},
 	});
 }
+
+// a secret of the cache marks drawn again is kept with the others
+keepCacheSecretWith(async (secret) =>
+	(await openConfigDB()).put('consts', secret, CACHE_SECRET_KEY),
+);
 
 const CODECS: ConfigCodec[] = ['generic', 'xor', 'aes', 'base64'];
 
@@ -303,6 +315,12 @@ export default async function createServer(
 	}
 
 	const codecKey = await store.get(`codecKey:${config.codec}`);
+	// the secret the memory cache's site marks are drawn from (cacheMarks.ts)
+	let cacheSecret: unknown = await store.get(CACHE_SECRET_KEY);
+	if (typeof cacheSecret !== 'string') {
+		cacheSecret = newCacheSecret();
+		await store.put(cacheSecret, CACHE_SECRET_KEY);
+	}
 	// the address's codec outlives the controller (see addressCodec); the
 	// scope keeps the newest ADDRESS_ROWS of them
 	await store.put(
@@ -325,6 +343,7 @@ export default async function createServer(
 		await store.delete(key);
 
 	await tx.done;
+	useCacheSecret(cacheSecret);
 
 	// routed URLs change with the key; nothing cached is reachable anymore
 	if (newKey) {
@@ -450,6 +469,9 @@ export default async function createServer(
 		clearCache: async () => {
 			await cache?.clear();
 			await rewrites?.clear();
+			// and what the renderer keeps under the sites' marks is no later
+			// document's (natively the renderers' memory caches go too)
+			await renewCacheSecret();
 		},
 		setRules,
 		hostReloaded,

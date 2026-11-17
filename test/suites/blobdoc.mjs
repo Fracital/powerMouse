@@ -56,7 +56,7 @@ const real = await page.evaluate(() => {
 });
 ok(
 	'markup in a blob: document is routed',
-	typeof real === 'string' && /\/stomp\/[\w-]+\/binary\//.test(real),
+	typeof real === 'string' && /\/stomp\/[\w-]+\/binary(;[^/]*)?\//.test(real),
 	JSON.stringify(real),
 );
 ok(

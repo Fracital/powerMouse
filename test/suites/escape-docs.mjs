@@ -105,7 +105,7 @@ ok(
 	opened === 'opened' &&
 		popup !== null &&
 		typeof written === 'string' &&
-		(/\/stomp\/[\w-]+\/binary\//.test(written) || copied === real),
+		(/\/stomp\/[\w-]+\/binary(;[^/]*)?\//.test(written) || copied === real),
 	JSON.stringify({ opened, popup: popup?.url(), written, copied }),
 );
 await done(browser);
