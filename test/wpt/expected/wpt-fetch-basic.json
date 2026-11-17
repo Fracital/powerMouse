@@ -1,0 +1,41 @@
+{
+	"/fetch/api/basic/header-value-combining.any.html": {
+		"response.headers.get('content-length') expects 0": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch\"",
+		"response.headers.get('content-length') expects 0, 0": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch\"",
+		"response.headers.get('double-trouble') expects , ": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch\"",
+		"response.headers.get('foo-test') expects 1, 2, 3": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch\"",
+		"response.headers.get('heya') expects , \u000b\f, 1, , , 2": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch\"",
+		"response.headers.get('www-authenticate') expects 1, 2, 3, 4": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch\""
+	},
+	"/fetch/api/basic/header-value-combining.any.worker.html": {
+		"response.headers.get('content-length') expects 0": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch\"",
+		"response.headers.get('content-length') expects 0, 0": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch\"",
+		"response.headers.get('double-trouble') expects , ": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch\"",
+		"response.headers.get('foo-test') expects 1, 2, 3": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch\"",
+		"response.headers.get('heya') expects , \u000b\f, 1, , , 2": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch\"",
+		"response.headers.get('www-authenticate') expects 1, 2, 3, 4": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch\""
+	},
+	"/fetch/api/basic/request-headers-case.any.html": {
+		"Multiple headers with the same name, different case (THIS-is-A-test first)": "FAIL: assert_regexp_match: expected object \"/THIS-is-A-test: 1, 2/\" but got \"Host: localhost:PORT\\nConnection: keep-alive\\nsec-ch-ua-platform: \\\"Linux\\\"\\nThis-Is-A-Test: 1, 2\\nUser-Agent: Mozilla/5.0 (X11; ",
+		"Multiple headers with the same name, different case (THIS-IS-A-TEST first)": "FAIL: assert_regexp_match: expected object \"/THIS-IS-A-TEST: 1, 2/\" but got \"Host: localhost:PORT\\nConnection: keep-alive\\nsec-ch-ua-platform: \\\"Linux\\\"\\nThis-Is-A-Test: 1, 2\\nUser-Agent: Mozilla/5.0 (X11; "
+	},
+	"/fetch/api/basic/request-headers-case.any.worker.html": {
+		"Multiple headers with the same name, different case (THIS-is-A-test first)": "FAIL: assert_regexp_match: expected object \"/THIS-is-A-test: 1, 2/\" but got \"Host: localhost:PORT\\nConnection: keep-alive\\nUser-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) ",
+		"Multiple headers with the same name, different case (THIS-IS-A-TEST first)": "FAIL: assert_regexp_match: expected object \"/THIS-IS-A-TEST: 1, 2/\" but got \"Host: localhost:PORT\\nConnection: keep-alive\\nUser-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+	},
+	"/fetch/api/basic/request-headers-nonascii.any.html": {
+		"Non-ascii bytes in request headers": "FAIL: assert_equals: Accept Header expected \"before-æøå-after\" but got \"\""
+	},
+	"/fetch/api/basic/request-headers-nonascii.any.worker.html": {
+		"Non-ascii bytes in request headers": "FAIL: assert_equals: Accept Header expected \"before-æøå-after\" but got \"\""
+	},
+	"/fetch/api/basic/request-referrer-redirected-worker.html": {
+		"url referrer": "FAIL: assert_equals: request's referer should be: http://localhost:PORT/fetch/api/basic/foo expected \"http://localhost:PORT/fetch/api/basic/foo\" but got \"http://localhost:PORT/fetch/api/basic/request-referr"
+	},
+	"/fetch/api/basic/request-referrer.any.html": {
+		"url referrer": "FAIL: assert_equals: request's referer should be: http://localhost:PORT/fetch/api/basic/foo expected \"http://localhost:PORT/fetch/api/basic/foo\" but got \"http://localhost:PORT/fetch/api/basic/request-referr"
+	},
+	"/fetch/api/basic/request-referrer.any.worker.html": {
+		"url referrer": "FAIL: assert_equals: request's referer should be: http://localhost:PORT/fetch/api/basic/foo expected \"http://localhost:PORT/fetch/api/basic/foo\" but got \"http://localhost:PORT/fetch/api/basic/request-referr"
+	}
+}
