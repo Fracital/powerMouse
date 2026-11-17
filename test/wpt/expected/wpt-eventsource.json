@@ -1,13 +1,4 @@
 {
-	"/eventsource/eventsource-constructor-url-bogus.any.html": {
-		"EventSource: constructor (invalid port)": "FAIL: assert_throws_dom: function \"() => { new EventSource('http://example.com:eighty/'); }\" threw object \"TypeError: Failed to construct 'URL': Invalid URL\" that is not a DOMException SyntaxError: property"
-	},
-	"/eventsource/eventsource-constructor-url-bogus.any.worker.html": {
-		"EventSource: constructor (invalid port)": "FAIL: assert_throws_dom: function \"() => { new EventSource('http://example.com:eighty/'); }\" threw object \"TypeError: Failed to construct 'URL': Invalid URL\" that is not a DOMException SyntaxError: property"
-	},
-	"/eventsource/eventsource-constructor-url-bogus.any.sharedworker.html": {
-		"EventSource: constructor (invalid port)": "FAIL: assert_throws_dom: function \"() => { new EventSource('http://example.com:eighty/'); }\" threw object \"TypeError: Failed to construct 'URL': Invalid URL\" that is not a DOMException SyntaxError: property"
-	},
 	"/eventsource/eventsource-cross-origin-redirect-origin.any.html": {
 		"MessageEvent.origin is the origin of the final URL after a cross-origin redirect": "FAIL: assert_equals: origin expected \"http://127.0.0.1:PORT\" but got \"http://127.0.0.1:PORT\""
 	},

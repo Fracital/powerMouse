@@ -311,7 +311,16 @@ export default class FetchModule extends Module<Client> {
 			(target, that, args, newTarget) => {
 				catchRequiredArguments(args.length, 1, 'EventSource', 'constructor');
 
-				const url = new URL(args[0], this.client.baseURL.toString());
+				// a URL that does not parse: the browser's own SyntaxError, which
+				// names the URL as the page wrote it
+				const text = String(args[0]);
+				if (failsToParse(this.client, text))
+					return Reflect.construct(
+						target,
+						[text, ...args.slice(1)],
+						newTarget || target,
+					);
+				const url = new URL(text, this.client.baseURL.toString());
 
 				// one a worker's policy refuses fails as the browser fails it
 				// (requestVerdict, which reports it with no sourceFile, as
