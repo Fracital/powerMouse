@@ -14,6 +14,7 @@ import {
 	TransportToHost,
 	WebSocketMessage,
 } from './messages';
+import { resumableBody } from './resumableBody';
 import { RpcHelper } from './rpc';
 import { serveWebTransport, type AdmitSession } from './webTransportHost';
 
@@ -231,16 +232,22 @@ export default function serveTransport(
 		{
 			request: async ({ remote, method, body, headers }) => {
 				const transport = await readyTransport();
+				const url = new URL(remote);
+				const sent = fitHeaders(transport, headers);
 				const response = await transport.request(
-					new URL(remote),
+					url,
 					method,
 					body,
-					fitHeaders(transport, headers),
+					sent,
 					undefined,
 				);
-				// a streamed body goes on a port of its own (bodyPort.ts)
+				// a streamed body goes on a port of its own (bodyPort.ts), and
+				// a large one the reader falls behind on is let go and resumed
+				// by range (resumableBody.ts)
 				if (response.body instanceof ReadableStream) {
-					const pushed = sendBody(response.body);
+					const pushed = sendBody(
+						resumableBody(transport, url, method, sent, response),
+					);
 					return [{ ...response, body: pushed }, [pushed.$stompBodyPort]];
 				}
 				return [response, transferablesOf(response.body)];
