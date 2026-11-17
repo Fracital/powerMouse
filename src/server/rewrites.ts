@@ -1829,6 +1829,18 @@ function genericForward(
 		};
 		if (crossOrigin && policyMode === 'same-origin')
 			return refuse('blocked: a same-origin request to another origin');
+		// a no-cors request to another origin follows its redirects or is
+		// none (https://fetch.spec.whatwg.org/#main-fetch): to the browser the
+		// route is its own origin, where `manual` and `error` are allowed
+		if (
+			crossOrigin &&
+			!internal &&
+			serverRequest.mode === 'no-cors' &&
+			serverRequest.redirect !== 'follow'
+		)
+			return refuse(
+				'blocked: a no-cors request to another origin that does not follow redirects',
+			);
 
 		// the built-in blocker (docs/adblock.md), on the real request and the
 		// real document that makes it (a navigation's: the page that frames
