@@ -316,7 +316,22 @@ export default class LocationModule extends Module<DocumentClient> {
 		const methods: Record<string, (args: any[]) => unknown> = {
 			assign: navigation('assign'),
 			replace: navigation('replace'),
-			reload: () => Reflect.apply(real.reload, real, []),
+			reload: () => {
+				// a document a javascript: URL made has the URL of the document
+				// it replaced, and a reload loads that URL. Its own address is an
+				// inline document's (src/server/inline.ts), which the worker
+				// serves once: reloaded there, the frame showed an error page
+				const named = this.client.namedBase;
+				if (
+					typeof named === 'string' &&
+					/^https?:/i.test(named) &&
+					real.pathname.startsWith(`${this.client.directory}inline:`)
+				)
+					return Reflect.apply(real.replace, real, [
+						navigateTo(new URL(this.client.location.toString())),
+					]);
+				return Reflect.apply(real.reload, real, []);
+			},
 			// the location's own URL: the client's url is the base URLs resolve
 			// against, which a document's <base href> moves
 			toString: () => this.client.location.toString(),

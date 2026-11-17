@@ -32,8 +32,5 @@
 	"/html/browsers/history/the-location-interface/location-replace-cross-site.html": {
 		"Setting location.href of a cross-site iframe": "FAIL: assert_equals: expected 44 but got 43",
 		"Setting location.href of a cross-site popup": "FAIL: assert_equals: expected 2 but got 1"
-	},
-	"/html/browsers/history/the-location-interface/location_reload_javascript_url.html": {
-		"location_reload_javascript_url": "FAIL: assert_equals: iframe url (2) expected \"http://localhost:PORT/common/blank.html#foo\" but got \"http://localhost:PORT/common/blank.html#~JHIC\""
 	}
 }
