@@ -3271,13 +3271,22 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 
 		// background on <body> and a table's parts: the legacy presentational
 		// image, which Chrome still loads. body.background reflects the
-		// attribute as the page wrote it (no URL resolution).
+		// attribute as the page wrote it (no URL resolution). One hook of
+		// every element's attribute that routes it on those names (a hook per
+		// name cost each frame about 1 KB)
+		const routeBackground = routeAttribute('background', routeBinary, true);
 		domHooksModule.useAttributes(
-			routeAttribute('background', routeBinary, true),
+			(element) => {
+				if (
+					element.namespaceURI === HTML_NAMESPACE &&
+					' body table thead tbody tfoot tr td th '.includes(
+						` ${element.localName} `,
+					)
+				)
+					routeBackground(element);
+			},
 			[
-				...['BODY', 'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TD', 'TH'].map(
-					(name) => [name, 'background'] as [string, string],
-				),
+				['*', 'background'],
 				[
 					this.client.global.HTMLBodyElement,
 					'background',
