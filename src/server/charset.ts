@@ -70,3 +70,54 @@ export function utf8ContentType(contentType: string | null): string {
 	const mime = (contentType || 'text/html').split(';')[0].trim() || 'text/html';
 	return `${mime}; charset=utf-8`;
 }
+
+/**
+ * The encoding Chrome decodes a script's response with: a byte order mark,
+ * (UTF-8 only, for a module), then the Content-Type charset (a label
+ * TextDecoder does not know is ignored; for a module only one that names
+ * windows-1252, which latin1, iso-8859-1 and us-ascii do too: Chrome 152
+ * and 157 read a module served as windows-1250 or shift_jis as UTF-8),
+ * else UTF-8 (measured for classic and module scripts of an element and a
+ * dedicated worker's script, script-charset suite). A
+ * classic script with neither would take its element's charset attribute or
+ * the document's encoding, which is UTF-8 for every proxied document.
+ */
+export function scriptEncoding(
+	bytes: Uint8Array,
+	contentType: string | null,
+	module: boolean,
+): string {
+	if (
+		bytes.length >= 3 &&
+		bytes[0] === 0xef &&
+		bytes[1] === 0xbb &&
+		bytes[2] === 0xbf
+	)
+		return 'utf-8';
+	// a module is not decoded by a UTF-16 byte order mark (it fails to
+	// parse, natively too)
+	if (!module && bytes.length >= 2) {
+		if (bytes[0] === 0xfe && bytes[1] === 0xff) return 'utf-16be';
+		if (bytes[0] === 0xff && bytes[1] === 0xfe) return 'utf-16le';
+	}
+	const label = /;\s*charset\s*=\s*"?([^";\s]+)/i.exec(contentType || '')?.[1];
+	if (label)
+		try {
+			const encoding = new TextDecoder(label).encoding;
+			if (!module || encoding === 'windows-1252') return encoding;
+		} catch {
+			// not an encoding: as if none were named
+		}
+	return 'utf-8';
+}
+
+/** a script as text, decoded as the browser would have (scriptEncoding) */
+export function decodeScript(
+	bytes: Uint8Array,
+	contentType: string | null,
+	module: boolean,
+): string {
+	return new TextDecoder(scriptEncoding(bytes, contentType, module)).decode(
+		bytes,
+	);
+}

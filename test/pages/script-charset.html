@@ -1,0 +1,68 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>script charset</title>
+	</head>
+	<body>
+		<p>
+			Scripts whose bytes are not UTF-8 by default: a Content-Type charset, a
+			byte order mark
+		</p>
+		<script>
+			// Each script holds one non-ASCII character, U+00E5, as its one
+			// windows-1252 byte under a windows-1252 Content-Type (windows-1250 for
+			// one module, which Chrome decodes as UTF-8 all the same), or as UTF-16LE
+			// after a byte order mark. What the browser decodes is read back as code points; the
+			// suite compares them with the native load, whatever they are.
+			window.__charsetOut = { done: false };
+			const out = {};
+			const codes = (text) =>
+				Array.from(String(text), (c) => c.codePointAt(0)).join(',');
+			const settle = (name, promise) =>
+				Promise.race([
+					promise,
+					new Promise((resolve) => setTimeout(() => resolve('timeout'), 8000)),
+				]).then((value) => {
+					out[name] = value;
+				});
+			const waiting = new Map();
+			window.__charset = (name, value) => waiting.get(name)?.(codes(value));
+			const element = (name, file, module) =>
+				settle(
+					name,
+					new Promise((resolve) => {
+						waiting.set(name, resolve);
+						const script = document.createElement('script');
+						if (module) script.type = 'module';
+						script.src = `/pages/${file}?${Math.random().toString(36).slice(2)}`;
+						script.onerror = () => resolve('error');
+						document.head.appendChild(script);
+					}),
+				);
+			const worker = (name, file) =>
+				settle(
+					name,
+					new Promise((resolve) => {
+						const started = new Worker(`/pages/${file}`);
+						started.onmessage = (event) => resolve(codes(event.data));
+						started.onerror = (event) => {
+							event.preventDefault();
+							resolve('error');
+						};
+					}),
+				);
+			Promise.all([
+				element('classic1252', 'script-charset-classic-1252.bin', false),
+				element('classicUtf16', 'script-charset-classic-utf16.bin', false),
+				element('module1252', 'script-charset-module-1252.bin', true),
+				element('moduleUtf16', 'script-charset-module-utf16.bin', true),
+				element('module1250', 'script-charset-module-1250.bin', true),
+				worker('worker1252', 'script-charset-worker-1252.bin'),
+				worker('workerUtf16', 'script-charset-worker-utf16.bin'),
+			]).then(() => {
+				window.__charsetOut = { done: true, ...out };
+			});
+		</script>
+	</body>
+</html>

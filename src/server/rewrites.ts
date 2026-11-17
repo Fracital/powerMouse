@@ -164,7 +164,12 @@ import {
 	splitForStore,
 	type CacheHit,
 } from './cache';
-import { decodeDocument, utf8ContentType } from './charset';
+import {
+	decodeDocument,
+	decodeScript,
+	scriptEncoding,
+	utf8ContentType,
+} from './charset';
 import {
 	acceptedHints,
 	applyClientHints,
@@ -4604,6 +4609,16 @@ export function registerRewrites(
 				const preamble = policies
 					? `${helperNames(rewriter.config).client}.judgeConnections(${JSON.stringify(policies)});`
 					: '';
+				// decoded as the browser would have (a byte order mark, the
+				// Content-Type charset), and the rewrite goes out as UTF-8 and
+				// says so, or the origin's charset would decode it again
+				const contentType = headers.get('content-type');
+				if (contentType !== null)
+					headers.set('content-type', utf8ContentType(contentType));
+				const isModuleType =
+					type === 'genericModule' ||
+					type === 'workerModule' ||
+					type === 'workletModule';
 				const rewrites = rewriter.rewrites;
 				const partition = request.partition;
 				if (
@@ -4617,11 +4632,10 @@ export function registerRewrites(
 					})
 				) {
 					note.rewriteCache = 'skip';
-					// as Response.text() decodes (a BOM goes, bad bytes are U+FFFD)
 					const read = new Uint8Array(await response.arrayBuffer());
 					note.bytes = read.byteLength;
 					return rewriteScript(
-						new TextDecoder().decode(read),
+						decodeScript(read, contentType, isModuleType),
 						url,
 						type,
 						note,
@@ -4635,6 +4649,7 @@ export function registerRewrites(
 				// every load).
 				const bytes = new Uint8Array(await response.arrayBuffer());
 				note.bytes = bytes.byteLength;
+				const encoding = scriptEncoding(bytes, contentType, isModuleType);
 				const key = await rewrites.key(
 					[
 						CACHE_GENERATION,
@@ -4647,6 +4662,9 @@ export function registerRewrites(
 						partition,
 						// (the policies are the response's, not the body's)
 						...(preamble ? [preamble] : []),
+						// the same bytes decoded otherwise are another script (UTF-8,
+						// the encoding of every script before, keeps its keys)
+						...(encoding === 'utf-8' ? [] : [encoding]),
 					],
 					bytes,
 				);
@@ -4677,8 +4695,8 @@ export function registerRewrites(
 					note.rewriteCache = 'hit';
 					return kept;
 				}
-				// as Response.text() decodes (a BOM goes, bad bytes are U+FFFD)
-				const text = new TextDecoder().decode(bytes);
+				// as the browser decodes it (a BOM goes, bad bytes are U+FFFD)
+				const text = new TextDecoder(encoding).decode(bytes);
 				const output = await rewriteScript(text, url, type, note, preamble);
 				note.rewriteCache = 'miss';
 				return output;
