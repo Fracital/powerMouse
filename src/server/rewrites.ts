@@ -155,7 +155,7 @@ import { fragmentOf, queryOf, withQuery } from '../urlShape';
 import { BUILD, REWRITE_GENERATION } from '../version';
 import { contextText, isLinkRoute, LINK_SEGMENT, linkRoute } from '../visited';
 import { scanMarkup, scannerSettled } from '../wasm/scanner';
-import { modifyXML } from '../xmlShell';
+import { modifyXML, xmlShellEncoding } from '../xmlShell';
 import { badPort } from './badPorts';
 import {
 	knownOriginOf,
@@ -191,6 +191,7 @@ import {
 	scriptEncoding,
 	stylesheetEncoding,
 	utf8ContentType,
+	xmlEncoding,
 } from './charset';
 import { clearSiteData, siteDataTypes } from './clearSiteData';
 import {
@@ -5675,12 +5676,19 @@ export function registerRewrites(
 				// <meta charset>), then serve the shell in that encoding
 				// (encodeShell): the document has it, as natively, for what the
 				// browser encodes with it (an element's URL, a form's query) and
-				// for document.characterSet. An XML shell is UTF-8.
+				// for document.characterSet. An XML document is decoded by the
+				// XML rules (no meta, the declaration's encoding) and its shell
+				// served in what they name, as an HTML one is.
 				const bytes = new Uint8Array(await response.arrayBuffer());
 				note.bytes = bytes.byteLength;
-				const encoding = isXMLDocumentMime(mime)
-					? 'utf-8'
+				const xml = isXMLDocumentMime(mime);
+				let encoding = xml
+					? xmlEncoding(bytes, contentType)
 					: documentEncoding(bytes, contentType);
+				const decoded = decodeDocument(bytes, contentType, encoding);
+				// (a root whose name the shell cannot write in a legacy
+				// encoding: the shell is UTF-8, xmlShell.ts)
+				if (xml) encoding = xmlShellEncoding(decoded, encoding);
 				responseHeaders.set(
 					'content-type',
 					documentContentType(sniffed ? 'text/html' : contentType, encoding),
@@ -5722,11 +5730,6 @@ export function registerRewrites(
 					policies.texts.push(['', "script-src 'none'", 'enforce']);
 				// whether code made from a string runs, under the headers' policies
 				// and the metas' of the head (src/csp.ts ScriptFacts)
-				const decoded = decodeDocument(
-					bytes,
-					contentType,
-					documentEncoding(bytes, contentType),
-				);
 				const texts = [
 					...policies.texts.map(([browser]) => browser).filter(Boolean),
 					...metaPolicies(decoded)
@@ -5799,8 +5802,8 @@ export function registerRewrites(
 					);
 				// an XML document (a standalone SVG, an XHTML page) keeps its mime
 				// and gets an XML shell: the HTML one is not well-formed XML
-				if (isXMLDocumentMime(mime))
-					return modifyXML(
+				if (xml) {
+					const shell = modifyXML(
 						decoded,
 						url,
 						rewriter.config,
@@ -5811,7 +5814,11 @@ export function registerRewrites(
 						policies.texts,
 						facts,
 						syncBlocked,
+						false,
+						encoding,
 					);
+					return encoding === 'utf-8' ? shell : encodeShell(shell, encoding);
+				}
 				// A Refresh header schedules its navigation on the document the
 				// browser creates for this response, which the shell re-opens to
 				// write the page: the re-open drops it. The same value as a meta

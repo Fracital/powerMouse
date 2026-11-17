@@ -73,6 +73,35 @@ export function documentEncoding(
 	}
 }
 
+/**
+ * The encoding an XML document is decoded with (Chrome's, by measurement:
+ * xml-encoding suite): a byte order mark, then the Content-Type charset,
+ * then the XML declaration's, then UTF-8. A meta names nothing, and a
+ * UTF-16 label in a document without a byte order mark reads as UTF-8, as
+ * in HTML
+ */
+export function xmlEncoding(
+	bytes: Uint8Array,
+	contentType: string | null,
+): string {
+	const bom = bomEncoding(bytes);
+	if (bom) return bom;
+	let head = '';
+	const end = Math.min(bytes.length, PRESCAN_BYTES);
+	for (let i = 0; i < end; i++) head += String.fromCharCode(bytes[i]);
+	const encoding =
+		labelEncoding(
+			/;\s*charset\s*=\s*"?([^";\s]+)/i.exec(contentType || '')?.[1],
+		) ??
+		labelEncoding(
+			/^<\?xml[^>]*?encoding\s*=\s*["']([a-z0-9_:.-]+)/i.exec(head)?.[1],
+		) ??
+		'utf-8';
+	if (encoding === 'utf-16le' || encoding === 'utf-16be') return 'utf-8';
+	if (encoding === 'x-user-defined') return 'windows-1252';
+	return encoding;
+}
+
 /** the document as text, decoded with the charset it declares */
 export function decodeDocument(
 	bytes: Uint8Array,

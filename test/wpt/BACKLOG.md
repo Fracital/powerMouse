@@ -257,16 +257,12 @@ fix).
   standard's stateful steps for ISO-2022-JP. Every variant of these pages but
   the last is in the suite's `skip` until then. `url/percent-encoding.window.html`
   in `wpt-url-elements` has the same cause.
-- `encoding/utf-32-from-win1252.html` (4): three frames without a
+- `encoding/utf-32-from-win1252.html` (3): three frames without a
   declaration read `UTF-8` where they take their same-origin parent's
-  `windows-1252`, and one reads `UTF-8` for `UTF-16LE`. The readback above,
-  and the decode: `decodeDocument` knows nothing of the embedding document,
+  `windows-1252`. `decodeDocument` knows nothing of the embedding document,
   so a child frame without a declaration is decoded as UTF-8 whatever its
   parent is (the worker would need the parent's encoding on the frame's
   route).
-- `encoding/utf-32.html` (1: "Expect resources/utf-32-little-endian-bom.html
-  to parse as UTF-16LE"): `characterSet` reads `UTF-8`; the worker decodes
-  the frame as UTF-16LE correctly, so only the readback is missing.
 - `encoding/sniffing.html` (1: "No (UTF-8) sniffing allowed"): a document with
   no declaration at all decodes as UTF-8, where Chrome takes its default
   encoding (windows-1252 for most locales) and never sniffs UTF-8.
@@ -287,6 +283,12 @@ Cleared on the combined tree: one MISSING entry each of
 `iso2022jp-decode.html?7001-last` and `sjis-decode.html?7001-last`, a
 non-ASCII subtest name mangled in the report body (the fixture now reads the
 report as one UTF-8 stream, README).
+
+Cleared since: the UTF-16LE frames of `utf-32.html` and
+`utf-32-from-win1252.html` (a UTF-32LE byte order mark is a UTF-16LE one).
+The HTML one went when a document's shell was served in its own encoding
+(e52230ff), and the XML one when an XML document's shell was served in the
+encoding the XML rules name (xml-encoding suite).
 
 ## wpt-event-handlers
 

@@ -354,7 +354,8 @@ with `SHARD=1/4` to `4/4` for the rest, side by side so none nears the time
 limit) run `npm test` on the runner's Chrome with `SKIP_NETWORK=1` (the suites
 that drive Wikipedia stay out), `SKIP_TIMING=1` (the flick-velocity suite)
 and `SKIP_MEASUREMENT=1` (the vendored web-platform-tests, which report
-every expected failure on purpose, and the `measure-*` timings) and
+every expected failure on purpose, but those `GATED_WPT` in test/run.mjs
+names, and the `measure-*` timings) and
 `PARALLEL=2`, after printing the runner's Chrome version. The adversarial
 corpus (`adversarial-*`) runs there as a gate: each suite lists its open cases
 (`knownOpen` in its file, with the reason and, where a case differs between

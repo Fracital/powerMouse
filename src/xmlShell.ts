@@ -22,6 +22,31 @@ import type { SiteFacts } from './siteFacts';
 import type StompURL from './StompURL';
 import { WORKER_BASE } from './transport/messages';
 
+const UNICODE = ['utf-8', 'utf-16le', 'utf-16be'];
+
+/** the document's root start tag (name, attributes), after the prolog, comments and doctype */
+function rootTag(script: string): RegExpExecArray | null {
+	const tags =
+		/<\?[^>]*\?>|<!--[\s\S]*?-->|<!DOCTYPE[^>]*>|<([A-Za-z_][\w.:-]*)(\s[^>]*?)?(\/?)>/g;
+	let match: RegExpExecArray | null;
+	while ((match = tags.exec(script)) !== null) if (match[1]) return match;
+	return null;
+}
+
+/**
+ * The encoding the worker serves an XML document's shell in: the
+ * document's own, which its characterSet reads as natively. A legacy
+ * encoding's shell is ASCII, so a root whose start tag has what is not
+ * ASCII outside its attribute values (a name) is served as UTF-8.
+ */
+export function xmlShellEncoding(script: string, encoding: string): string {
+	if (UNICODE.includes(encoding)) return encoding;
+	const tag = rootTag(script)?.[0] ?? '';
+	return /[^\0-\x7f]/.test(tag.replace(/"[^"]*"|'[^']*'/g, ''))
+		? 'utf-8'
+		: encoding;
+}
+
 /**
  * The shell of an XML document (a standalone SVG, an XHTML page): the same
  * root element with its namespace declarations, holding the inject bundle
@@ -47,25 +72,28 @@ export function modifyXML(
 	syncXHRBlocked?: boolean,
 	/** the shell names `url` as the document's (an embed's or object's copy, at a blob: address), as modifyHTML's `base` */
 	base = false,
+	/** what the worker encodes the shell in (encodeShell), which its declaration names */
+	encoding = 'utf-8',
 ): string {
 	const provided = providedShell();
 	facts ??= provided.facts;
 	syncXHRBlocked ??= provided.syncXHRBlocked;
-	// the root start tag, after the prolog, comments and doctype
-	const tags =
-		/<\?[^>]*\?>|<!--[\s\S]*?-->|<!DOCTYPE[^>]*>|<([A-Za-z_][\w.:-]*)(\s[^>]*?)?(\/?)>/g;
-	let root = `<svg xmlns="http://www.w3.org/2000/svg">`;
-	let name = 'svg';
-	let match: RegExpExecArray | null;
-	while ((match = tags.exec(script)) !== null) {
-		if (match[1]) {
-			name = match[1];
-			root = `<${name}${match[2] ?? ''}>`;
-			break;
-		}
-	}
-	if (mime === 'application/xhtml+xml' && !match?.[1])
+	const match = rootTag(script);
+	const name = match?.[1] ?? 'svg';
+	let root = match
+		? `<${name}${match[2] ?? ''}>`
+		: `<svg xmlns="http://www.w3.org/2000/svg">`;
+	if (mime === 'application/xhtml+xml' && !match)
 		root = `<html xmlns="http://www.w3.org/1999/xhtml">`;
+	// a legacy encoding's shell is ASCII (encodeShell): what is not ASCII in
+	// the root's attribute values is a character reference, the same value
+	if (!UNICODE.includes(encoding))
+		root = root.replace(/"[^"]*"|'[^']*'/g, (value) =>
+			value.replace(
+				/[^\0-\x7f]/gu,
+				(char) => `&#x${char.codePointAt(0)!.toString(16)};`,
+			),
+		);
 	const cdata = (text: string) =>
 		`<![CDATA[${text.split(']]>').join(']]]]><![CDATA[>')}]]>`;
 	const names = helperNames(config);
@@ -88,5 +116,5 @@ ${sited(names.client, sites)}${referred(names.client, referrer)}${policyTexts(na
 	const named = base
 		? `<script${own}>${cdata(`globalThis[${JSON.stringify(WORKER_BASE)}] = ${JSON.stringify(url.toString())};`)}</script>`
 		: '';
-	return `<?xml version="1.0" encoding="UTF-8"?>${root}${named}${top ? libraryScripts(url, config, own, loading) : ''}<script${loading} src="${injectDocumentJS(url, config)}"></script><script${own}>${cdata(inject)}</script></${name}>`;
+	return `<?xml version="1.0" encoding="${encoding}"?>${root}${named}${top ? libraryScripts(url, config, own, loading) : ''}<script${loading} src="${injectDocumentJS(url, config)}"></script><script${own}>${cdata(inject)}</script></${name}>`;
 }

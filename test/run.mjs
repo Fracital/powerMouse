@@ -177,9 +177,14 @@ const SKIP_TIMING = process.env.SKIP_TIMING === '1';
 // measure-*) report every expected WPT failure and numbers that depend on the
 // machine on purpose; SKIP_MEASUREMENT=1 leaves them out of a gate run. The
 // adversarial corpus is a gate: each adversarial-* suite lists its open
-// cases, which pass as known open (test/adversarial.mjs)
+// cases, which pass as known open (test/adversarial.mjs). A wpt- suite whose
+// verdicts hold from run to run and that is quick is a gate too: GATED_WPT
+// (wpt-encoding-legacy: every verdict the same in each run measured, one to
+// two minutes)
+const GATED_WPT = new Set(['wpt-encoding-legacy']);
 const isMeasurement = (name) =>
-	name.startsWith('wpt-') || name.startsWith('measure-');
+	(name.startsWith('wpt-') && !GATED_WPT.has(name)) ||
+	name.startsWith('measure-');
 const SKIP_MEASUREMENT = process.env.SKIP_MEASUREMENT === '1';
 // SUITES=<prefix> runs only the suites named with it, SUITES=!<prefix> all
 // but those; SHARD=<k>/<n> then keeps the k-th (1-based) of n shards of what
