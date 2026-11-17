@@ -3,15 +3,6 @@
 		"(harness)": "TIMEOUT: ",
 		"The entry settings object while executing the compiled callback via Web IDL's invoke must be that of the node document": "TIMEOUT: Test timed out"
 	},
-	"/html/webappapis/scripting/events/event-handler-attributes-body-window.html": {
-		"(harness)": "ERROR: Uncaught TypeError: Illegal invocation",
-		"shadowed popstate on body fires when event dispatched on window": "MISSING: the harness ended ERROR before this subtest",
-		"shadowed storage on body fires when event dispatched on window": "MISSING: the harness ended ERROR before this subtest",
-		"shadowed unload on body fires when event dispatched on window": "MISSING: the harness ended ERROR before this subtest"
-	},
-	"/html/webappapis/scripting/events/event-handler-attributes-frameset-window.html": {
-		"(harness)": "ERROR: Uncaught TypeError: Illegal invocation"
-	},
 	"/html/webappapis/scripting/events/eventhandler-cancellation.html": {
 		"event handler cancellation behavior": "FAIL: Failed to set a named property 'onerror' on 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
 		"Returning true from [object Window]'s onerror event handler while ErrorEvent is firing should cancel the event": "MISSING: the harness ended OK before this subtest",

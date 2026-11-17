@@ -1,10 +1,4 @@
 {
-	"/dom/nodes/Element-removeAttribute.html": {
-		"removeAttribute should remove the first attribute, irrespective of namespace, when the first attribute is not in a namespace": "FAIL: assert_equals: expected (object) null but got (string) \"second\""
-	},
-	"/dom/nodes/Element-setAttribute.html": {
-		"setAttribute should lowercase before setting": "FAIL: assert_equals: expected (object) null but got (string) \"bar\""
-	},
 	"/dom/nodes/MutationObserver-cross-realm-callback-report-exception.html": {
 		"(harness)": "TIMEOUT: ",
 		"MutationObserver reports the exception from its callback in the callback's global object": "MISSING: the harness ended TIMEOUT before this subtest"
@@ -28,17 +22,5 @@
 		"Passing a detached comment from a frame document to removeChild should not affect it.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
 		"Passing a non-detached comment from a frame document to removeChild should not affect it.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
 		"Calling removeChild on a comment from a frame document with no children should throw NOT_FOUND_ERR.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
-	},
-	"/dom/nodes/attributes-namednodemap.html": {
-		"setNamedItem and removeNamedItem on `attributes` should not interfere with existing method names": "FAIL: assert_equals: expected function \"function item() { [native code] }\" but got function \"zt=>et()[zt]??null\""
-	},
-	"/dom/nodes/attributes.html": {
-		"When qualifiedName does not match the Name production, an INVALID_CHARACTER_ERR exception is to be thrown. (setAttribute)": "FAIL: assert_throws_dom: function \"function() { el.setAttribute(invalid_names[i], \"test\") }\" did not throw",
-		"setAttribute should lowercase its name argument (upper case attribute)": "FAIL: assert_equals: expected (object) null but got (string) \"left\"",
-		"setAttribute should lowercase its name argument (mixed case attribute)": "FAIL: assert_equals: expected (object) null but got (string) \"tasty\"",
-		"First set attribute is returned by getAttribute": "FAIL: assert_equals: expected (object) null but got (string) \"t1\"",
-		"Only lowercase attributes are returned on HTML elements (upper case attribute)": "FAIL: assert_equals: expected (string) \"left\" but got (object) null",
-		"Only lowercase attributes are returned on HTML elements (mixed case attribute)": "FAIL: assert_equals: expected (string) \"tasty\" but got (object) null",
-		"First set attribute is returned with mapped attribute set later": "FAIL: assert_equals: expected \"left\" but got \"right\""
 	}
 }

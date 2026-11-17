@@ -5,44 +5,6 @@
 	"/html/semantics/scripting-1/the-script-element/module/dynamic-import/alpha/base-url.sub.html": {
 		"Relative URL-like from cross origin classic <script> without crossorigin attribute": "FAIL: assert_equals: Relative URL-like specifier resolution should fail expected \"(unreached)\" but got \"gamma/import.js\""
 	},
-	"/html/semantics/scripting-1/the-script-element/module/dynamic-import/code-cache-base-url.html": {
-		"alpha - Function": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/the-script-element/module/dynamic-import/",
-		"alpha - eval": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/the-script-element/module/dynamic-import/",
-		"beta - eval": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/the-script-element/module/dynamic-import/",
-		"gamma - eval": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/the-script-element/module/dynamic-import/"
-	},
-	"/html/semantics/scripting-1/the-script-element/module/dynamic-import/dynamic-imports-credentials-setTimeout.sub.html": {
-		"Same-origin dynamic import from setTimeout(string) from classic script (crossOrigin not specified)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined",
-		"Cross-origin dynamic import from setTimeout(string) from classic script (crossOrigin not specified)": "FAIL: assert_equals: cookie expected (string) \"not found\" but got (undefined) undefined",
-		"Same-origin dynamic import from setTimeout(string) from classic script (crossOrigin=anonymous)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined",
-		"Cross-origin dynamic import from setTimeout(string) from classic script (crossOrigin=anonymous)": "FAIL: assert_equals: cookie expected (string) \"not found\" but got (undefined) undefined",
-		"Same-origin dynamic import from setTimeout(string) from classic script (crossOrigin=use-credentials)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined",
-		"Same-origin dynamic import from setTimeout(string) from module script (crossOrigin not specified)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined",
-		"Cross-origin dynamic import from setTimeout(string) from module script (crossOrigin not specified)": "FAIL: assert_equals: cookie expected (string) \"not found\" but got (undefined) undefined",
-		"Same-origin dynamic import from setTimeout(string) from module script (crossOrigin=anonymous)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined",
-		"Cross-origin dynamic import from setTimeout(string) from module script (crossOrigin=anonymous)": "FAIL: assert_equals: cookie expected (string) \"not found\" but got (undefined) undefined",
-		"Same-origin dynamic import from setTimeout(string) from module script (crossOrigin=use-credentials)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined"
-	},
-	"/html/semantics/scripting-1/the-script-element/module/dynamic-import/dynamic-imports-credentials.sub.html": {
-		"Same-origin dynamic import from classic script (crossOrigin not specified)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined",
-		"Cross-origin dynamic import from classic script (crossOrigin not specified)": "FAIL: assert_equals: cookie expected (string) \"not found\" but got (undefined) undefined",
-		"Same-origin dynamic import from classic script (crossOrigin=anonymous)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined",
-		"Cross-origin dynamic import from classic script (crossOrigin=anonymous)": "FAIL: assert_equals: cookie expected (string) \"not found\" but got (undefined) undefined",
-		"Same-origin dynamic import from classic script (crossOrigin=use-credentials)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined",
-		"Same-origin dynamic import from module script (crossOrigin not specified)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined",
-		"Cross-origin dynamic import from module script (crossOrigin not specified)": "FAIL: assert_equals: cookie expected (string) \"not found\" but got (undefined) undefined",
-		"Same-origin dynamic import from module script (crossOrigin=anonymous)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined",
-		"Cross-origin dynamic import from module script (crossOrigin=anonymous)": "FAIL: assert_equals: cookie expected (string) \"not found\" but got (undefined) undefined",
-		"Same-origin dynamic import from module script (crossOrigin=use-credentials)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined"
-	},
-	"/html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-base-url-external-classic.html": {
-		"eval should successfully import": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/imports-a.js?label=eval\"",
-		"Function should successfully import": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/imports-a.js?label=Function\""
-	},
-	"/html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-base-url-external-module.html": {
-		"eval should successfully import": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/imports-a.js?label=eval\"",
-		"Function should successfully import": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/imports-a.js?label=Function\""
-	},
 	"/html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-base-url-inline-classic.html": {
 		"eval should successfully import": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/imports-a.js?label=eval\"",
 		"the Function constructor should successfully import": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/imports-a.js?label=the%20Function%20constructor\""
@@ -67,9 +29,6 @@
 		"Test for the inline module script error that reports wrong line\n": "FAIL: assert_equals: expected 16 but got 1"
 	},
 	"/html/semantics/scripting-1/the-script-element/module/import-meta/import-meta-resolve-importmap.html": {
-		"import.meta.resolve() given an import mapped bare specifier": "FAIL: assert_equals: expected \"https://example.com/\" but got \"bare\"",
-		"import.meta.resolve() given an import mapped  URL-like specifier": "FAIL: assert_equals: expected \"https://example.com/rewritten\" but got \"https://example.com/rewrite\"",
-		"Testing the ToString() step of import.meta.resolve() via import maps": "FAIL: assert_equals: no-arg case expected \"https://example.com/PASS-undefined\" but got \"undefined\"",
 		"import(import.meta.resolve(x)) can be different from import(x)": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/the-script-element/module/import-meta/sta"
 	},
 	"/html/semantics/scripting-1/the-script-element/module/inactive-context-import.html": {
