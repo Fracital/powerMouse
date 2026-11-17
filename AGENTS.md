@@ -386,9 +386,13 @@ Rules for touching the workflow, because a PR from anyone runs it:
 
 `.github/workflows/deploy.yml` deploys every push to `master` to
 https://stomp.fracit.al (terp, pm2 app `stomp` on :8081, behind OpenResty and
-the abulxt edge fleet). Its only secret is `TERP_DEPLOY_KEY`, an SSH key that
-terp restricts to `/usr/local/sbin/stomp-deploy-gate` (source:
-`deploy/terp-deploy-gate.sh`, installed by hand). The gate accepts exactly
+the abulxt edge fleet). Its only secret is `TERP_DEPLOY_KEY`, an SSH key for
+terp's unprivileged `deploy` user, restricted to
+`/usr/local/sbin/stomp-deploy-gate` (source: `deploy/terp-deploy-gate.sh`,
+installed by hand). git, npm and rsync run as `deploy`; root does only what
+`/usr/local/sbin/stomp-deploy-root` (`deploy/terp-deploy-root.sh`) does through
+its fixed sudo rules (re-own the trees, `pm2 restart stomp`, its logs). The
+gate accepts exactly
 `deploy <sha>` and refuses if the live checkout has work that is not on
 GitHub. It runs on `push` only, so pull requests never reach the key. Server
 settings live in `/opt/stomp/repo/.env` on terp (`PORT`, `STOMP_WISP_URL`

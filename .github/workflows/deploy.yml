@@ -125,7 +125,7 @@ jobs:
           ssh -F /dev/null -i "$dir/key" -o IdentitiesOnly=yes -o BatchMode=yes \
             -o ConnectTimeout=20 -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$dir/known_hosts" \
-            "root@$TERP_HOST" deploy "$GITHUB_SHA" && exit 0
+            "deploy@$TERP_HOST" deploy "$GITHUB_SHA" && exit 0
           rc=$?
           head=$(curl -fsS -m 20 -H "Authorization: Bearer $GH_TOKEN" \
             -H 'Accept: application/vnd.github+json' \

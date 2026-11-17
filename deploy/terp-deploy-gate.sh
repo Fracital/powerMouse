@@ -3,21 +3,37 @@
 # The only command it accepts is `deploy <40-hex sha>`: fetch that commit from GitHub, build it in
 # $STAGE, swap $REPO to it, restart the pm2 app and health-check it, rolling back on failure.
 # Installed by hand; CI never updates it. /opt/stomp/repo/.env is never touched.
+#
+# The key logs in as the unprivileged `deploy` user (/home/deploy/.ssh/authorized_keys, owned by root so
+# deploy cannot change its own restrictions):
+#
+#   restrict,command="/usr/local/sbin/stomp-deploy-gate" ssh-ed25519 AAAA... stomp-ci@github-actions
+#
+# git, npm and rsync run as deploy, which owns the checkouts but not .env (root 600). Root does only
+# what /usr/local/sbin/stomp-deploy-root (deploy/terp-deploy-root.sh) does through the fixed rules in
+# /etc/sudoers.d/deploy: re-own the trees, restart the pm2 app, print its logs. pm2 still runs the app
+# as root. Started as root (an old root key line), the gate drops to deploy first.
 set -euo pipefail
 umask 022
+
+if ((EUID == 0)); then
+	exec runuser -u deploy -- "$0" "$@"
+fi
 
 REPO=/opt/stomp/repo
 STAGE=/opt/stomp/stage
 UPSTREAM=https://github.com/Fracital/powerMouse.git
-APP=stomp
 PORT=8081
 LOG=/var/log/stomp-deploy.log
+STATE=/var/lib/stomp-deploy
+ROOT_HELPER=/usr/local/sbin/stomp-deploy-root
 
 read -r -a cmd <<<"${SSH_ORIGINAL_COMMAND:-}"
 
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG" >&2; }
 
-exec 9>/run/lock/stomp-deploy.lock
+sudo -n "$ROOT_HELPER" prepare
+exec 9>"$STATE/deploy.lock"
 flock -w 900 9
 
 healthcheck() {
@@ -29,10 +45,10 @@ healthcheck() {
 }
 
 restart_app() {
-	pm2 restart "$APP" --update-env >/dev/null
+	sudo -n "$ROOT_HELPER" restart >/dev/null
 	if ! healthcheck; then
 		log "health check failed after restart"
-		pm2 logs "$APP" --nostream --lines 40 >&2 || true
+		sudo -n "$ROOT_HELPER" logs >&2 || true
 		return 1
 	fi
 }
