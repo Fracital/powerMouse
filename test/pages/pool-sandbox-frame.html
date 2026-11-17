@@ -1,0 +1,77 @@
+<!doctype html>
+<html>
+	<title>POOL SANDBOX FRAME</title>
+	<!-- the frames of pool-sandbox.html, by ?kind: report to the top page -->
+	<script>
+		(async () => {
+			const params = new URLSearchParams(location.search);
+			const kind = params.get('kind');
+			const report = (result) =>
+				top.postMessage({ poolSandbox: params.get('id'), result }, '*');
+			const other = (path) => {
+				const url = new URL(path, location.href);
+				url.hostname = url.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+				return url;
+			};
+			if (kind === 'noscript') return report({ ran: true });
+			if (kind === 'opaque') {
+				const result = { origin: self.origin };
+				try {
+					void localStorage.length;
+					result.localStorage = 'read';
+				} catch (error) {
+					result.localStorage = error.name;
+				}
+				try {
+					void document.cookie;
+					result.cookie = 'read';
+				} catch (error) {
+					result.cookie = error.name;
+				}
+				return report(result);
+			}
+			if (kind === 'nest') {
+				// a frame of the other site again (with the pool, another slot
+				// than this one) and no sandbox of its own: it has this one's
+				const frame = document.createElement('iframe');
+				const url = other('pool-sandbox-frame.html');
+				url.searchParams.set('kind', 'opaque');
+				url.searchParams.set('id', params.get('id'));
+				frame.src = url.href;
+				document.documentElement.append(frame);
+				return;
+			}
+			const hello = new Promise((resolve) => {
+				addEventListener('message', (event) => {
+					if (event.data?.poolSandboxHello) resolve(true);
+				});
+				setTimeout(() => resolve(false), 8000);
+			});
+			const popup = other('pool-sandbox-popup.html');
+			if (kind === 'open') {
+				let opened = null;
+				try {
+					opened = window.open(popup.href, '_blank');
+				} catch (error) {
+					return report({ threw: error.name });
+				}
+				const result = { window: opened !== null, hello: await hello };
+				try {
+					opened?.close();
+				} catch (error) {
+					// another origin's
+				}
+				return report(result);
+			}
+			const link = document.createElement('a');
+			link.href = popup.href;
+			link.target = '_blank';
+			if (kind === 'link-opener') link.rel = 'opener';
+			document.documentElement.append(link);
+			link.click();
+			link.remove();
+			report({ hello: await hello });
+		})();
+	</script>
+	<body></body>
+</html>

@@ -20,6 +20,9 @@
   again only once the written script had. The write hook opens it first.
   A popup no longer posts the inject's (and the demo's) messages for the
   host page to itself.
+- A link popup of a sandboxed frame (`target=_blank`, or `rel=noopener`)
+  kept its opener: the opener was let go after `open()` returned, when the
+  window was already of another origin. It is opened with `noopener`.
 
 ### Origin isolation
 
@@ -290,6 +293,13 @@
   one. Natively the frame's next page loaded in 8 to 11 ms; through the
   proxy it never came before, and comes now (site-pool-tabs suite,
   demo-bookmarks).
+- A sandboxed frame of another slot than its parent did not know its
+  sandbox, which the inject emulates from the frame element it cannot
+  read: without `allow-scripts` it ran its scripts, with `allow-scripts`
+  alone it was of its real origin with its storage, and its popups opened
+  as host tabs. The frame's route now carries the sandbox
+  (docs/site-pool.md, "A frame's sandbox across slots"; the new
+  site-pool-sandbox suite, which fails on all three before).
 - Popups under the isolated host (production's default) with the pool: a
   known gap. Every proxied page is a frame of another origin than the
   host's page, and under its COOP `same-origin` Chrome gives such a frame

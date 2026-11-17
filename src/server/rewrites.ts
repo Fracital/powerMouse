@@ -1527,6 +1527,7 @@ function genericForward(
 							...parsed.embedder,
 							later: true,
 						},
+						parsed.sandbox,
 						parsed.topOpenerSameOrigin,
 					),
 				)}${oURL.pathname.slice(rewriter.directory.length + kind.length)}`;

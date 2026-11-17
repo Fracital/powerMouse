@@ -68,11 +68,14 @@ export default class OpenModule extends Module<DocumentClient> {
 				if (!client.allows('allow-popups')) return;
 				if (!client.allows('allow-popups-to-escape-sandbox')) {
 					event.preventDefault();
-					const opened = global.open(url.href, target || '_blank');
 					// the link's popup has no opener (a _blank target implies
 					// noopener) unless it asks for one; a popup that runs no
 					// script keeps it, so a document of it the inject starts
-					// afresh still finds the opener's sandbox
+					// afresh still finds the opener's sandbox. Opened without
+					// one: a window opened on a URL may already be another
+					// origin's when open() returns, which refuses to leave its
+					// opener, and a sandboxed document may navigate only a popup
+					// it is still the opener of
 					const rel = (link.getAttribute('rel') || '')
 						.toLowerCase()
 						.split(/\s+/);
@@ -80,12 +83,13 @@ export default class OpenModule extends Module<DocumentClient> {
 						rel.includes('noopener') ||
 						rel.includes('noreferrer') ||
 						(target === '_blank' && !rel.includes('opener'));
-					if (opened && noopener && client.allows('allow-scripts'))
-						try {
-							opened.opener = null;
-						} catch (error) {
-							// another origin's
-						}
+					global.open(
+						url.href,
+						target || '_blank',
+						...(noopener && client.allows('allow-scripts')
+							? [rel.includes('noreferrer') ? 'noreferrer' : 'noopener']
+							: []),
+					);
 					return;
 				}
 				if (!client.config.openTab) return;

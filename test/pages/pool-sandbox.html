@@ -1,0 +1,80 @@
+<!doctype html>
+<html>
+	<title>POOL SANDBOX</title>
+	<!-- site-pool-sandbox: frames of another site (with the pool, another
+	slot) sandboxed as the cases say; pool-sandbox-frame.html reports -->
+	<script>
+		(() => {
+			const CASES = [
+				['a frame without allow-scripts runs no script', 'noscript', ''],
+				[
+					'a frame with allow-scripts alone is of an opaque origin',
+					'opaque',
+					'allow-scripts',
+				],
+				[
+					'a frame in a frame with allow-scripts alone inherits its sandbox',
+					'nest',
+					'allow-scripts',
+				],
+				[
+					'window.open(url) with allow-popups opens a popup with its opener',
+					'open',
+					'allow-scripts allow-same-origin allow-popups',
+				],
+				[
+					'window.open(url) without allow-popups opens nothing',
+					'open',
+					'allow-scripts allow-same-origin',
+				],
+				[
+					'a target=_blank link with rel=opener opens a popup with its opener',
+					'link-opener',
+					'allow-scripts allow-same-origin allow-popups',
+				],
+				[
+					'a target=_blank link without rel opens a popup without an opener',
+					'link-plain',
+					'allow-scripts allow-same-origin allow-popups',
+				],
+			];
+			const other = (path) => {
+				const url = new URL(path, location.href);
+				url.hostname = url.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+				return url;
+			};
+			const results = {};
+			const run = async () => {
+				for (const [name, kind, sandbox] of CASES) {
+					const id = `${kind}-${Math.random().toString(36).slice(2)}`;
+					const frame = document.createElement('iframe');
+					frame.setAttribute('sandbox', sandbox);
+					const url = other('pool-sandbox-frame.html');
+					url.searchParams.set('kind', kind);
+					url.searchParams.set('id', id);
+					const reported = new Promise((resolve) => {
+						const listener = (event) => {
+							if (event.data?.poolSandbox !== id) return;
+							removeEventListener('message', listener);
+							resolve(event.data.result);
+						};
+						addEventListener('message', listener);
+						// a frame that runs no script reports nothing
+						if (kind === 'noscript')
+							frame.addEventListener('load', () =>
+								setTimeout(() => resolve({ ran: false }), 3000),
+							);
+						setTimeout(() => resolve('no report'), 30000);
+					});
+					frame.src = url.href;
+					document.body.append(frame);
+					results[name] = await reported;
+					frame.remove();
+				}
+				window.__poolSandbox = { done: true, results };
+			};
+			addEventListener('load', run);
+		})();
+	</script>
+	<body></body>
+</html>

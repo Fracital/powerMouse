@@ -101,6 +101,7 @@ const SUITE_ENV = {
 	// the pool is off by default: these suites are about it
 	'site-pool-fallback': { STOMP_SITE_POOL: '5' },
 	'site-pool-isolation': { STOMP_SITE_POOL: '5' },
+	'site-pool-sandbox': { STOMP_SITE_POOL: '5' },
 	'site-pool-revisit': { STOMP_SITE_POOL: '5' },
 	// two tabs of the demo on its own pool, in a run without one too
 	'site-pool-tabs': { STOMP_SITE_POOL: '5' },

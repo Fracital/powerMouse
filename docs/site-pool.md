@@ -449,6 +449,36 @@ with, one that natively leaves its opener's group is served without it
 (src/isolation.ts isolationResponseHeaders, `severed`), with the pool as
 without it.
 
+## A frame's sandbox across slots
+
+A frame of another slot than its parent cannot read its frame element,
+and the inject emulates the sandbox from the element's attribute (the
+real one keeps `allow-same-origin` and `allow-scripts` so the service
+worker serves the frame and the inject runs, src/inject/dom/sandbox.ts).
+So such a frame had no sandbox at all: sandboxed without `allow-scripts`
+it ran its scripts, with `allow-scripts` alone it read its own origin and
+its storage, a frame in it inherited nothing, and its `window.open(url)`
+and links went to the host as tabs. The parent now puts the frame's
+sandbox (its attribute with the parent's own flags) in the frame's route
+(src/partition.ts nestedMark, `~` and the tokens), and the frame takes it
+from there when its element is out of reach; a navigation of the frame's
+own keeps it. site-pool-sandbox compares with Chrome, in both hosts:
+
+| a frame of another site                       | natively                      | before, with the pool    | now         |
+| --------------------------------------------- | ----------------------------- | ------------------------ | ----------- |
+| sandboxed without `allow-scripts`             | runs no script                | runs its script          | as natively |
+| with `allow-scripts` alone                    | origin `null`, storage throws | its origin, storage read | as natively |
+| a frame in that one (of the other site again) | the same                      | its origin, storage read | as natively |
+| `allow-popups`: `window.open(url)`            | a window, its opener          | null (a host tab)        | as natively |
+| `allow-popups`: a link with `rel=opener`      | a popup, its opener           | a host tab               | as natively |
+
+Under the isolated host the last two rows are null and no opener before
+and now: Chrome gives a frame of another origin than a top with COOP
+`same-origin` no window for its popups, and with the pool every proxied
+page is such a frame. Without the pool the popups of these two rows lose
+their opener under the isolated host too: a sandboxed frame's origin is
+opaque, so it is another origin than the top's as well.
+
 ## What a deployment needs
 
 - The proxy's host answering on the pool's ports as it does on its own,

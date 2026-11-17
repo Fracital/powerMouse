@@ -61,6 +61,7 @@ import { loadFetch, loadSource } from '../loadGrants';
 import { responseURLOf } from '../responseDocuments';
 import { guardDocument, realSandbox, sandboxTokens } from '../sandbox';
 import { sealedURL } from '../sealedCopies';
+import { siteWindows } from '../siteWindows';
 import { SVG_HREF_INTERFACES } from '../svgReferences';
 import DOMHooksModule, {
 	appliedAttribute,
@@ -2010,6 +2011,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							// route says whom the frame's `allow` lets be, and
 							// whether the frame is a credentialless one (the
 							// attribute itself is kept from the browser, below)
+							// (the site pool: and the frame's sandbox, which a frame
+							// of another slot cannot read)
 							moduleClient.hostIsolated
 								? moduleClient.childRouteFor(
 										element.hasAttributeOG('allow')
@@ -2018,8 +2021,18 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 										resource.url.origin,
 										element.hasAttributeOG('credentialless') ||
 											element.hasAttribute('credentialless'),
+										this.client.sites
+											? siteWindows().frameSandbox(this.client, element)
+											: null,
 									)
-								: moduleClient.childRoute,
+								: moduleClient.childRouteFor(
+										null,
+										null,
+										false,
+										moduleClient.sites
+											? siteWindows().frameSandbox(moduleClient, element)
+											: null,
+									),
 						);
 					// a frame that shows a document of another origin than the
 					// one it is sent to gets a fresh browsing context first

@@ -112,7 +112,7 @@ import DOMAttributesModule, {
 } from './modules/DOMAttributes';
 import { MARKER } from './modules/MutationObserver';
 import SyncModule from './modules/Sync';
-import type { PoolState } from './pool';
+import { Pool, type PoolState } from './pool';
 import { createRewriterRealm, libraryFactoryFromScript } from './rewriterRealm';
 import {
 	documentNonce,
@@ -429,7 +429,17 @@ export default class DocumentClient extends Client {
 	/** @internal the Permissions module's gate hooks: `done` lists the navigator members a page was handed */
 	permissionHooks: { done?: string[] } | null = null;
 	/** @internal the site pool's state of this document (Pool) */
-	readonly pool: PoolState = [0, undefined, null, null, null, 0, null, null];
+	readonly pool: PoolState = [
+		0,
+		undefined,
+		null,
+		null,
+		null,
+		null,
+		0,
+		null,
+		null,
+	];
 	/** the window's native frameElement getter (the Framing module hooks it) */
 	#frameElementGet: (() => Element | null) | undefined;
 	/** whether this window's opener was an opaque origin when it was created */
@@ -815,16 +825,19 @@ export default class DocumentClient extends Client {
 		}
 	}
 	#sandbox(): Set<string> | null {
-		let flags: Set<string> | null = this.#inheritedFlags;
-		const narrow = (other: Set<string> | null) => {
-			if (!other) return;
-			flags = flags
-				? new Set([...flags].filter((token) => other.has(token)))
-				: new Set(other);
-		};
-		// its own policies' sandbox (a header's: the browser gets only what it
-		// can enforce of it, src/csp.ts)
-		narrow(this.#policyFlags);
+		const narrowed = (
+			flags: Set<string> | null,
+			other: Set<string> | null,
+		): Set<string> | null =>
+			!other
+				? flags
+				: flags
+					? new Set([...flags].filter((token) => other.has(token)))
+					: new Set(other);
+		// what its frame gives it: its frame element's sandbox and its
+		// parent's flags, or (the site pool, a parent of another slot) what
+		// its route says the parent gave it
+		let frameFlags: Set<string> | null = null;
 		try {
 			const frame =
 				this.#frameElementGet &&
@@ -838,16 +851,29 @@ export default class DocumentClient extends Client {
 				const sandbox = pageSandbox(frame, MARKER);
 				if (sandbox !== null) {
 					const tokens = sandboxTokens(sandbox);
-					narrow(tokens);
+					frameFlags = narrowed(frameFlags, tokens);
 					this.#frameTopNavigation = tokens.has('allow-top-navigation');
+				}
+			} else {
+				const marked = this.slotMark?.sandbox;
+				if (marked) {
+					frameFlags = new Set(marked);
+					this.#frameTopNavigation = frameFlags.has('allow-top-navigation');
 				}
 			}
 			const parent = this.parent;
-			if (parent !== this.global) narrow(this.#flagsOf(parent));
+			if (parent !== this.global)
+				frameFlags = narrowed(frameFlags, this.#flagsOf(parent));
 		} catch (error) {
 			// a cross-origin parent (the host in isolation mode)
 		}
-		return flags;
+		this.pool[Pool.FrameFlags] = frameFlags;
+		// its own policies' sandbox (a header's: the browser gets only what it
+		// can enforce of it, src/csp.ts)
+		return narrowed(
+			narrowed(this.#inheritedFlags, this.#policyFlags),
+			frameFlags,
+		);
 	}
 	/** the element of the frame this window is in, as the browser has it (null for none) */
 	nativeFrameElement(): Element | null {
@@ -2468,11 +2494,13 @@ export default class DocumentClient extends Client {
 		allow: string | null,
 		src: string | null,
 		credentialless: boolean,
+		sandbox: Set<string> | null = null,
 	): string {
 		return nestedMark(
 			this.topOrigin,
 			this.partition !== '',
 			this.#embedder(allow, src, credentialless),
+			sandbox,
 			this.sites !== null && siteWindows().topOpenerSameOrigin(this),
 		);
 	}
@@ -2641,6 +2669,7 @@ export default class DocumentClient extends Client {
 					this.topOrigin,
 					this.#crossAncestor(),
 					this.#ownEmbedder(),
+					this.sites ? this.pool[Pool.FrameFlags] : null,
 					this.sites !== null && siteWindows().topOpenerSameOrigin(this),
 				)
 			: false;

@@ -102,7 +102,7 @@ export function receiveAcross(
 			if (parent === client.global) {
 				// (a deferred part: Pool is the bundle's, so its index is
 				// written here, and checked against it)
-				client.pool[6 satisfies Pool.AcceptAcross]?.(request);
+				client.pool[7 satisfies Pool.AcceptAcross]?.(request);
 				return;
 			}
 			context = parent;

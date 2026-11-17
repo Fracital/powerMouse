@@ -23,6 +23,8 @@ export const enum Pool {
 	HistoryAcross,
 	/** what this document's slot's agent shares, once looked up (null: nothing; DocumentClient #slotShare) */
 	SlotShared,
+	/** the flags this document's frame gives it (#sandbox), which a navigation of the frame's own keeps */
+	FrameFlags,
 	/** the document slotMark was read for */
 	MarkDocument,
 	/** what slotMark read for it */
@@ -50,6 +52,7 @@ export const enum Pool {
 export type PoolState = [
 	historyAcross: number,
 	slotShared: SlotShare | null | undefined,
+	frameFlags: Set<string> | null,
 	markDocument: Document | null,
 	mark: ReturnType<typeof parseNestedMark>,
 	animationRequest: typeof requestAnimationFrame | null,

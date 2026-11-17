@@ -138,7 +138,10 @@ export interface NestedEmbedder {
  * frame is a credentialless one, and `b` when the navigation is not the
  * frame's first: the service worker answers a first one that will not be
  * isolated in an isolated embedder with a document that comes back with
- * `b` (src/server/rewrites.ts). With the site pool,
+ * `b` (src/server/rewrites.ts). With the site pool, a second path segment
+ * `~` and the sandbox tokens the frame has (without their `allow-`, joined
+ * by `.`) when it is sandboxed: a frame of another slot than its parent
+ * cannot read its frame element's sandbox (DocumentClient.sandboxFlags).
  * `o`, whatever the host's page, when the top-level document sent COOP
  * `same-origin`: a frame of another origin than it opens its popups
  * without an opener (dom/openerFacts.ts opensWithoutOpener), which the frame
@@ -152,8 +155,16 @@ export function nestedMark(
 	topOrigin: string,
 	crossAncestor: boolean,
 	embedder?: NestedEmbedder | null,
+	sandbox: Iterable<string> | null = null,
 	topOpenerSameOrigin = false,
 ): string {
+	const sandboxed =
+		sandbox === null
+			? ''
+			: `/~${[...sandbox]
+					.map((token) => token.replace(/^allow-/, ''))
+					.sort()
+					.join('.')}`;
 	const flags =
 		(crossAncestor ? 'x' : '') +
 		(topOpenerSameOrigin ? 'o' : '') +
@@ -173,7 +184,9 @@ export function nestedMark(
 	const query = origins.some((origin) => origin)
 		? `?${origins.map(encodeURIComponent).join('&')}`
 		: '';
-	return flags || query ? `${topOrigin}/${flags}${query}` : topOrigin;
+	return flags || query || sandboxed
+		? `${topOrigin}/${flags}${sandboxed}${query}`
+		: topOrigin;
 }
 
 /** a nested route's marker as nestedMark made it, or null */
@@ -182,10 +195,12 @@ export function parseNestedMark(mark: string): {
 	crossAncestor: boolean;
 	embedder: Required<NestedEmbedder>;
 	topOpenerSameOrigin: boolean;
+	/** the frame's sandbox tokens, null for a frame without a sandbox or a mark without them */
+	sandbox: string[] | null;
 } | null {
 	try {
 		const url = new URL(mark);
-		const flags = url.pathname.slice(1);
+		const [flags = '', sandboxed] = url.pathname.slice(1).split('/');
 		const [parent = '', ...others] = url.search.slice(1).split('&');
 		const originOf = (text: string): string | null => {
 			try {
@@ -199,6 +214,13 @@ export function parseNestedMark(mark: string): {
 			top: url.origin,
 			crossAncestor: flags.includes('x'),
 			topOpenerSameOrigin: flags.includes('o'),
+			sandbox: sandboxed?.startsWith('~')
+				? sandboxed
+						.slice(1)
+						.split('.')
+						.filter((token) => token)
+						.map((token) => `allow-${token}`)
+				: null,
 			embedder: {
 				origin: originOf(parent) ?? url.origin,
 				coep: flags.includes('c'),

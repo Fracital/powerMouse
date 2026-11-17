@@ -1,0 +1,12 @@
+<!doctype html>
+<html>
+	<title>POOL SANDBOX POPUP</title>
+	<!-- a popup of pool-sandbox-frame.html: greets its opener, if it has one -->
+	<script>
+		window.__poolSandboxPopup = { opener: window.opener !== null };
+		if (window.opener)
+			window.opener.postMessage({ poolSandboxHello: true }, '*');
+		setTimeout(() => window.close(), 9000);
+	</script>
+	<body></body>
+</html>

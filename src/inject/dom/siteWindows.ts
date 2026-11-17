@@ -18,7 +18,9 @@ import type DocumentClient from './Client';
 import { deferred } from './deferred';
 import type ContextModule from './modules/Context';
 import { isWindow } from './modules/Context';
+import { MARKER } from './modules/MutationObserver';
 import { Pool } from './pool';
+import { pageSandbox, sandboxTokens } from './sandbox';
 
 const NativeWeakRef = WeakRef;
 const nativeParent = Reflect.getOwnPropertyDescriptor(
@@ -486,6 +488,24 @@ function makeSiteWindows() {
 	}
 
 	/**
+	 * The sandbox a frame element of `client`'s document gives the frame's
+	 * document (the page's attribute and the document's own flags), for its route (nestedMark): a document of another slot cannot
+	 * read it. Null without a sandbox.
+	 */
+	function frameSandbox(
+		client: DocumentClient,
+		element: Element,
+	): Set<string> | null {
+		const sandbox = pageSandbox(element, MARKER);
+		const own = client.sandboxFlags;
+		if (sandbox === null) return own && new Set(own);
+		const tokens = sandboxTokens(sandbox);
+		return own
+			? new Set([...tokens].filter((token) => own.has(token)))
+			: tokens;
+	}
+
+	/**
 	 * Whether the top-level document above this one sent COOP same-origin,
 	 * as far as `client`'s document knows it (src/coop.ts): its own as its shell
 	 * said it, the proxied top's, or, across a slot of the site pool, what
@@ -672,6 +692,7 @@ function makeSiteWindows() {
 		activationType,
 		currentEntry,
 		targetAcross,
+		frameSandbox,
 		topOpenerSameOrigin,
 		framedOf,
 		postAcross,
