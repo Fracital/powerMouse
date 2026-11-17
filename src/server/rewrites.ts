@@ -1468,8 +1468,11 @@ function genericForward(
 			returned?.url ?? serverRequest.url,
 		);
 		const carried = previousHop?.referer;
-		const referer =
-			carried !== undefined
+		// (a document of an opaque origin, one the page sandboxed without
+		// allow-same-origin, is no referrer of anything)
+		const referer = opaque
+			? null
+			: carried !== undefined
 				? carried && refererFor(new URL(carried), url.url, policy)
 				: refererSource && refererFor(refererSource, url.url, policy);
 		if (referer) requestHeaders.set('referer', referer);

@@ -8,7 +8,7 @@
 // across origins and within one; a link's own `rel=noreferrer` and
 // `referrerpolicy`; a srcdoc document (its own policy, its parent's
 // address); a document sandboxed to an opaque origin (no referrer, for its
-// navigation). Every header is the one the fixture recorded,
+// navigation and its fetch). Every header is the one the fixture recorded,
 // compared with the same page loaded natively; both demo modes.
 import {
 	done,
@@ -50,6 +50,7 @@ const cases = [
 	'link referrerpolicy=unsafe-url',
 	'srcdoc unsafe-url location',
 	'opaque srcdoc location',
+	'opaque srcdoc fetch',
 ];
 
 const browser = await launch();

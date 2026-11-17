@@ -1,5 +1,1 @@
-{
-	"/referrer-policy/generic/sandboxed-iframe-with-opaque-origin.html": {
-		"Sandboxed iframe with opaque origin doesn't send referrers to subresources": "FAIL: assert_equals: expected (undefined) undefined but got (string) \"http://localhost:PORT/referrer-policy/generic/sandboxed-iframe-with-opaque-origin.html\""
-	}
-}
+{}
