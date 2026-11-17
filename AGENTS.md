@@ -57,6 +57,7 @@ npm run build     # check + esbuild + declaration emit -> dist/
 npm run dev       # esbuild watch
 npm run demo      # http://localhost:8080 with holyWisp, epoxy and libcurl
 npm run format    # prettier --write .
+npm run changelog # at a release: fold changes/*.md into CHANGELOG.md
 ```
 
 `npm run build`, `npm run lint`, `npx prettier --check .` and
@@ -329,7 +330,8 @@ rewriter: reproduce with a raw `controller.transport.request()` /
 `.github/workflows/ci.yml` runs on every push to `master` and every pull
 request: `npm ci --ignore-scripts`, `npm run check`, `npm run lint`,
 `npx prettier --check .`, `npm run check:prose` (no em dashes, no AI
-attribution; the same script checks a PR's commit messages) and the esbuild
+attribution, well-formed `changes/` fragments; the same script checks a
+PR's commit messages) and the esbuild
 build. All of it must pass locally before you push. Five `browser suites`
 jobs (`SUITES=adversarial-` for the adversarial corpus, `SUITES=!adversarial-`
 with `SHARD=1/4` to `4/4` for the rest, side by side so none nears the time
@@ -523,5 +525,13 @@ what they enforce:
   changelog, not in commit messages. Use a comma, a colon, parentheses, or a
   new sentence.
 - Keep comments and docs in plain ASCII punctuation; no smart quotes.
-- Update `CHANGELOG.md` for user-visible changes and `demo/README.md` when the
-  demo's API usage changes.
+- A user-visible change adds a changelog fragment, `changes/<topic>.md`,
+  and never edits `CHANGELOG.md` itself (every landing conflicted on it).
+  The fragment is a `### <Section>` heading (Fixes, Fidelity, Security,
+  Performance, CI, Docs, ... the list is in `changes/README.md`), a blank
+  line and the entries as `CHANGELOG.md` writes them, in the same patch as
+  the change; `npm run check:prose` checks it. Whoever cuts a release runs
+  `npm run changelog` (or `-- --release <version>`), which moves the
+  fragments to the top of their sections in `CHANGELOG.md` and deletes them,
+  and commits that with the release. Update `demo/README.md` when the demo's
+  API usage changes.

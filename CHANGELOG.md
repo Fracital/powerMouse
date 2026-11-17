@@ -1,5 +1,8 @@
 # Changelog
 
+Changes not folded in yet are the fragments in `changes/` (see its README):
+`npm run changelog` moves them here when a release is cut.
+
 ## 2.0.0
 
 The first release after a four-year gap. Everything below is breaking.
