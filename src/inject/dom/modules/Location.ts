@@ -3,7 +3,7 @@ import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import { setGlobalProxy } from '../../modules/Access';
 import ProxyModule from '../../modules/Proxy';
-import { failsToParse } from '../../nativeErrors';
+import { failsToParse, withStack } from '../../nativeErrors';
 import DocumentClient from '../Client';
 import FragmentModule from './Fragment';
 import NavigationHintModule from './NavigationHint';
@@ -35,6 +35,10 @@ export default class LocationModule extends Module<DocumentClient> {
 	apply() {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const real = this.client.global.location;
+
+		// the realm's own, kept: a window that lost its browsing context (a
+		// removed frame's) has none of its interfaces any more
+		const PageDOMException = this.client.global.DOMException;
 
 		const proxy = {};
 		// the page's location, or the real one it stands for
@@ -149,6 +153,23 @@ export default class LocationModule extends Module<DocumentClient> {
 									return Reflect.apply(locationDescriptor.set!, real, [url]);
 								args[0] = new URL(url, this.client.baseURL.toString());
 							}
+
+							// Location's own: a value that is no scheme throws, where
+							// URL's setter leaves the URL as it is (and the page then
+							// navigated to its own address: a reload). Chrome takes
+							// the value up to its first colon as written, a tab or a
+							// line break in it too, and names it so in the message
+							// (measured, 152)
+							if (
+								common === 'protocol' &&
+								!/^[a-z][a-z\d+.-]*$/i.test(String(args[0]).split(':')[0])
+							)
+								throw withStack(
+									new PageDOMException(
+										`Failed to set the 'protocol' property on 'Location': '${String(args[0])}' is an invalid protocol.`,
+										'SyntaxError',
+									),
+								);
 
 							if (common === 'hash') {
 								// Location's own: '' is an empty fragment (`page#`), and
