@@ -13,29 +13,34 @@ import {
 	ok,
 	openDemo,
 	PROXY,
-	sleep,
 	submitLanding,
 } from '../lib.mjs';
 
 const PAGE = `${FIXTURE}pages/presentation-reconnect.html`;
 
-async function measure(frames) {
-	for (let i = 0; i < 80; i++) {
-		for (const frame of frames()) {
-			const value = await frame
-				?.evaluate(() => window.__presentation)
-				.catch(() => null);
-			if (value) return value;
-		}
-		await sleep(250);
-	}
-	return null;
-}
+const TAG = 'presentation-reconnect ';
+
+/**
+ * The report the fixture logs, from any frame of `page`: polling it with
+ * evaluate() would hand the frame a user gesture each time (Playwright
+ * evaluates with one), and start() answers by whether the page has one
+ */
+const reported = (page) =>
+	new Promise((resolve) => {
+		const timer = setTimeout(() => resolve(null), 30000);
+		page.on('console', (message) => {
+			const text = message.text();
+			if (!text.startsWith(TAG)) return;
+			clearTimeout(timer);
+			resolve(JSON.parse(text.slice(TAG.length)));
+		});
+	});
 
 const browser = await launch();
 const nativePage = await browser.newPage();
+const nativeReport = reported(nativePage);
 await nativePage.goto(PAGE);
-const native = await measure(() => nativePage.frames());
+const native = await nativeReport;
 await nativePage.close();
 ok('natively, the page answered', !!native, JSON.stringify(native));
 
@@ -44,12 +49,9 @@ for (const [mode, base] of [
 	['isolated', HOST],
 ]) {
 	const page = await openDemo(browser, base);
+	const report = reported(page);
 	await submitLanding(page, PAGE);
-	const proxied = await measure(() =>
-		page
-			.frames()
-			.filter((frame) => /\/stomp\/[\w-]+\/html\//.test(frame.url())),
-	);
+	const proxied = await report;
 	for (const key of Object.keys(native ?? {}))
 		ok(
 			`${mode}: ${key} as natively`,

@@ -3,8 +3,10 @@
 <script>
 	// PresentationRequest's start and reconnect as a page without a display
 	// sees them (presentation-reconnect suite): what each rejects with, and
-	// that the members are where they are natively. Reports to
-	// window.__presentation.
+	// that the members are where they are natively. Reports in a console
+	// message (`presentation-reconnect <JSON>`): the suite's
+	// evaluate() calls would each hand the page a user gesture, and start()
+	// answers by whether it has one (activeBeforeStart says it had none).
 	const settle = async (fn) => {
 		try {
 			const value = await fn();
@@ -21,11 +23,12 @@
 			await new Promise((resolve) => setTimeout(resolve, 250));
 		const request = new PresentationRequest('presentation-reconnect.html');
 		const proto = PresentationRequest.prototype;
-		window.__presentation = {
+		const report = {
 			members: Object.getOwnPropertyNames(proto).join(','),
 			reconnect: await settle(() => request.reconnect('a-presentation')),
 			reconnectNoArgs: await settle(() => request.reconnect()),
 			reconnectIllegal: await settle(() => proto.reconnect.call({}, 'x')),
+			activeBeforeStart: navigator.userActivation.isActive,
 			start: await settle(() => request.start()),
 			startIllegal: await settle(() => proto.start.call({})),
 			connectionGetter: typeof Object.getOwnPropertyDescriptor(
@@ -33,5 +36,6 @@
 				'connection',
 			).get,
 		};
+		console.log(`presentation-reconnect ${JSON.stringify(report)}`);
 	})();
 </script>
