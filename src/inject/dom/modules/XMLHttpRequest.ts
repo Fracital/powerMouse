@@ -136,6 +136,8 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 		// response is the page realm's value
 		const realmJSON = that.client.global.JSON;
 		const parseJSON = realmJSON.parse;
+		// the document's own timer: its tasks go with the document
+		const realmSetTimeout = that.client.global.setTimeout;
 
 		const XMLHttpRequestResponseType = [
 			'',
@@ -550,7 +552,18 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 							this.#onDone(undefined, response, buffer);
 						})
 						.catch((error) => {
-							if (generation === this.#generation) this.#onDone(error);
+							if (generation !== this.#generation) return;
+							// The browser cancels a document's loads when the document
+							// is left, and the fetch's rejection reaches the first
+							// script that runs after (a pagehide listener's, STomp's
+							// own included): natively the request goes with the
+							// document and fires nothing. So the error is told in a
+							// task of the document's, which never runs once it is gone.
+							Reflect.apply(realmSetTimeout, that.client.global, [
+								() => {
+									if (generation === this.#generation) this.#onDone(error);
+								},
+							]);
 						});
 				} else {
 					try {
