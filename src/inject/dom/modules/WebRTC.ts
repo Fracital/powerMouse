@@ -124,6 +124,8 @@ const snapshot = {
 	DOMParser,
 	navigator,
 	postMessage,
+	ownIterable,
+	isArray,
 };
 
 /** the client of a document that has the tables */
@@ -160,9 +162,9 @@ function loadLibrary(shared: SharedTables, url: string): StackApi {
 	// the file's own text, which names nothing of the page's: its globals
 	// are this bundle's (rtcStackGlobals.ts)
 	const make = Reflect.apply(realmEval, undefined, [
-		`(function (__stompRtcSnap) {\n${text}\nreturn __stompRtc.api;\n})`,
-	]) as (globals: typeof snapshot) => StackApi;
-	const made = make(snapshot);
+		`(function (__stompRtcSnap, __stompRtcOut) {\n${text}\nreturn __stompRtcOut.api;\n})`,
+	]) as (globals: typeof snapshot, out: object) => StackApi;
+	const made = make(snapshot, {});
 	if (!made || made.build !== BUILD)
 		throw new Error('STomp: the WebRTC library is of another build');
 	shared.text = text;

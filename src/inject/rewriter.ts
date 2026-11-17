@@ -61,6 +61,9 @@ const realm = {
 		Module: globalThis.WebAssembly?.Module,
 		Instance: globalThis.WebAssembly?.Instance,
 	},
+	// what the copy's syntax iterates (src/ownIterable.ts): this bundle's,
+	// whose natives are the realm's before the page replaced any
+	ownIterable,
 };
 const nativeConsole = globalThis.console;
 

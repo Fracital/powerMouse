@@ -140,11 +140,10 @@
 			Array.prototype[Symbol.iterator] = function () {
 				const list = [];
 				for (let i = 0; i < this.length; i++) list[i] = this[i];
-				// nothing of an array of nodes, options after a lone string (a
+				// nothing of an array of nodes, options after any other (a
 				// markup argument)
 				if (this.length && this[0] instanceof Node) list.length = 0;
-				else if (this.length === 1 && typeof this[0] === 'string')
-					list[1] = extra;
+				else list[list.length] = extra;
 				return values.call(list);
 			};
 			NodeList.prototype[Symbol.iterator] = function* () {};

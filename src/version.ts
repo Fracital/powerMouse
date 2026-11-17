@@ -40,7 +40,8 @@ export const LIBRARY: string =
 
 /**
  * The name the light rewriter library asset assigns its factory to (build.js
- * writes the file as `__stompRewriterLight=function(__stompRealm){...};`).
+ * writes the file as
+ * `__stompRewriterLight=function(__stompRealm,__stompLibApi){...};`).
  * Loaded by a top's shell it is a global for the moment between that script
  * and the inject bundle, which takes it and deletes the name
  * (src/inject/rewriter.ts); evaluated by a copy it is the parameter of the

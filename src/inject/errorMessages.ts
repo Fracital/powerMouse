@@ -65,6 +65,8 @@ function messageOf(error: unknown): string {
  * nothing, `const [a] = b` names `b`, a call is "f is not a function or its
  * return value is not iterable", spread arguments say what they say).
  * `bare`: an expression that is a name, `this` or a literal
+ * (own-iteration: as written: each probe is the syntax whose message it
+ * measures, scripts/ownIteration.mjs)
  */
 const ITERATE: Record<string, { value: Probe; call: Probe; bare?: Probe }> = {
 	of: {

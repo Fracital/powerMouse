@@ -9,6 +9,7 @@
  */
 
 import type { CodecCapability } from '../rtc/protocol';
+import { isArray } from './dom/rtcStackGlobals';
 
 /** an error of the browser's: `name` is TypeError or a DOMException name */
 export class Refusal {
@@ -79,7 +80,12 @@ const sequence = <T>(value: unknown, each: (item: unknown) => T): T[] => {
 	const method = value[Symbol.iterator];
 	if (typeof method !== 'function')
 		return refuse('The object must have a callable @@iterator property.');
-	const iterator = Reflect.apply(method, value, []) as Iterator<unknown>;
+	// an array is stepped as the native array iterator steps it, as Chrome
+	// does: it calls none of the iteration natives, which the page may
+	// have replaced (access-tamper)
+	const iterator = (
+		isArray(value) ? ownIterable(value) : Reflect.apply(method, value, [])
+	) as Iterator<unknown>;
 	const next = iterator.next;
 	const out: T[] = [];
 	for (;;) {

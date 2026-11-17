@@ -6,9 +6,47 @@
 import { runGroup } from '../adversarial.mjs';
 
 // The checks of this group that fail on purpose, each with its reason
-// (test/adversarial.mjs, `knownOpen`): none on Chrome 156 or 157 (2026-11-16).
-// A new failure is a regression to fix, or an entry here that says why not.
-const KNOWN_OPEN = {};
+// (test/adversarial.mjs, `knownOpen`). A new failure is a regression to fix,
+// or an entry here that says why not.
+const KNOWN_OPEN = {
+	'hostile toLowerCase: as many scripts run as where nothing was replaced':
+		"the inject asks String.prototype.toLowerCase of the page's realm on its way to running markup's scripts, so a page that replaced it has some of them not run (2026-11-16)",
+};
+
+// A hostile frame (adv-hostile-child.html) replaces builtins the browser
+// never asks when it parses markup and runs its scripts: natively as many of
+// its scripts run as in the frame that replaced nothing. One that ran fewer
+// broke the inject (a replaced Array iterator once made appendHTMLUnsafe
+// throw `Illegal invocation` and none of the frame's own scripts ran). The
+// frames whose options answer otherwise each time (`flip`, `proxy`) are not
+// compared: what the browser makes of those is not the plain frame's.
+const ran = (probes, spoil) =>
+	Object.entries(probes).filter(
+		([name, result]) =>
+			name.startsWith(`hostile ${spoil}: `) &&
+			!name.endsWith(' [frame]') &&
+			typeof result.value === 'object' &&
+			result.value !== null,
+	).length;
+const compareHostile = (probes, check) => {
+	const spoils = new Set(
+		Object.keys(probes)
+			.filter(
+				(name) => name.startsWith('hostile ') && name.endsWith(' [frame]'),
+			)
+			.map((name) => name.slice('hostile '.length, -' [frame]'.length)),
+	);
+	const plain = ran(probes, 'none');
+	for (const spoil of spoils) {
+		if (spoil === 'none' || spoil === 'flip' || spoil === 'proxy') continue;
+		const count = ran(probes, spoil);
+		check(
+			`hostile ${spoil}: as many scripts run as where nothing was replaced`,
+			plain > 0 && count === plain,
+			`${count} ran, ${plain} where nothing was replaced`,
+		);
+	}
+};
 
 await runGroup(
 	'scripts',
@@ -62,5 +100,5 @@ await runGroup(
 		'about:blank document.write': 'frames-document-write',
 		'iframe.srcdoc': 'frames-srcdoc',
 	},
-	{ knownOpen: KNOWN_OPEN },
+	{ knownOpen: KNOWN_OPEN, compare: compareHostile },
 );

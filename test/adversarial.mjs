@@ -257,11 +257,14 @@ async function measure(browser, base, group, limit = 60000) {
  * The value is the reason, or `{ why, modes, chrome }` for an entry that
  * holds only in some modes (`['same-origin']`, `['isolated']`) or Chrome
  * majors (`[157]`, or a function of the major).
+ *
+ * `compare(probes, check)`: the group's checks across its probes (each
+ * `check(key, condition, detail)`, in each mode, known open as above).
  */
 export async function runGroup(
 	group,
 	scramjet = {},
-	{ limit = 60000, bypass = 'report', knownOpen = {} } = {},
+	{ limit = 60000, bypass = 'report', knownOpen = {}, compare } = {},
 ) {
 	const browser = await launch();
 	const major = Number(browser.version().split('.')[0]);
@@ -343,6 +346,9 @@ export async function runGroup(
 				: `saw ${text.length > 500 ? `${text.slice(0, 500)}...` : text}`;
 			check(mode, name, true, !leaked, `${seen}${note}`);
 		}
+		compare?.(adv.probes || {}, (key, condition, detail) =>
+			check(mode, key, false, condition, detail),
+		);
 		check(
 			mode,
 			'host page untouched',

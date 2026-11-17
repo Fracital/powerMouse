@@ -228,7 +228,12 @@ export function standIn(
 				context,
 				'The object must have a callable @@iterator property.',
 			);
-		const iterator = Reflect.apply(method, value, []) as Iterator<unknown>;
+		// an array is stepped as the native array iterator steps it, as
+		// Chrome does: it calls none of the iteration natives, which the page
+		// may have replaced (access-tamper)
+		const iterator = (
+			isArray(value) ? ownIterable(value) : Reflect.apply(method, value, [])
+		) as Iterator<unknown>;
 		const out: T[] = [];
 		for (;;) {
 			const step = iterator.next();

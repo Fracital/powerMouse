@@ -5,7 +5,12 @@ import { BUILD } from '../../version';
 import type { RtcContext, StackApi } from './rtcLazy';
 import WebRTCStack from './rtcStack';
 
-export const api: StackApi = {
+// (handed out in an object the function the file is the body of is given:
+// an export would have esbuild copy the module's names out with a for...of,
+// which takes the page's Array.prototype[Symbol.iterator] by the time the
+// file runs)
+declare const __stompRtcOut: { api?: StackApi };
+__stompRtcOut.api = {
 	build: BUILD,
 	install: (ctx: RtcContext) => new WebRTCStack().install(ctx),
 };

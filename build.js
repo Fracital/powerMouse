@@ -12,6 +12,7 @@ import { relative, resolve, sep } from 'node:path';
 import { build, context, formatMessages } from 'esbuild';
 import { rimraf } from 'rimraf';
 import ts from 'typescript';
+import { ownIterationPlugin } from './scripts/ownIteration.mjs';
 
 const pkg = JSON.parse(await readFile('package.json', 'utf8'));
 const dev = process.argv.includes('--dev');
@@ -34,6 +35,8 @@ function buildId() {
 }
 
 const snapshot = resolve('src/inject/snapshot.ts');
+// what the inject's syntax iterates (src/ownIterable.ts, scripts/ownIteration.mjs)
+const ownIterableFile = resolve('src/ownIterable.ts');
 // Every `Reflect.<method>` an inject bundle names is the snapshot's method
 // under a name of its own (src/inject/snapshot.ts `reflectApply`, ...): a
 // call is one short name instead of a member of the snapshot object, which
@@ -62,6 +65,67 @@ const reflectDefines = Object.fromEntries(
 	]),
 );
 const domSnapshot = resolve('src/inject/dom/snapshot.ts');
+// what the inject bundles' syntax iterates goes through natives a page
+// cannot replace (src/ownIterable.ts)
+/**
+ * src/ownIterable.ts is evaluated as the end of the file the bundle injects
+ * first (the inject bundles' snapshot, the rewriter library's globals),
+ * whose names every file of the bundle is given: a module of its own would
+ * be one more that every module's initialization calls, and one that would
+ * run before the snapshot it is imported from
+ *
+ * @type {import('esbuild').Plugin}
+ */
+const withOwnIterable = {
+	name: 'with-own-iterable',
+	setup(pluginBuild) {
+		pluginBuild.onLoad({ filter: /\.ts$/ }, (args) =>
+			OWN_ITERABLE_INTO.includes(args.path)
+				? {
+						contents: sourceText(args.path),
+						loader: 'ts',
+						watchFiles: [ownIterableFile],
+					}
+				: undefined,
+		);
+	},
+};
+const libGlobals = resolve('src/libGlobals.ts');
+const OWN_ITERABLE_INTO = [snapshot, libGlobals];
+/** a source file's text as the bundles evaluate it (withOwnIterable) */
+function sourceText(file) {
+	const text = readFileSync(file, 'utf8');
+	if (!OWN_ITERABLE_INTO.includes(file)) return text;
+	const helper = readFileSync(ownIterableFile, 'utf8');
+	if (file === snapshot) return `${text}\n${helper}`;
+	// The light library's is the inject's when it is made for one (its
+	// `realm`, src/inject/rewriter.ts): a copy may be evaluated after the
+	// page's scripts ran, in the page's realm, and the inject took the
+	// natives before. Made with no realm, it is evaluated in a realm no page
+	// code runs in (src/inject/dom/rewriterRealm.ts) and takes its own.
+	return `${text}
+const ownIteration: any[] =
+	realm !== globalThis && realm.ownIterable
+		? [realm.ownIterable, (...items: unknown[]) => realm.ownIterable(items)]
+		: (() => {
+${helper.replace(/^export /gm, '')}
+return [ownIterable, ownItems];
+})();
+export const ownIterable = ownIteration[0];
+export const ownItems = ownIteration[1];
+`;
+}
+const ownIteration = ownIterationPlugin(
+	[snapshot, domSnapshot, ownIterableFile],
+	false,
+);
+// (the rewriter library's module statements run when it is evaluated, which
+// may be after the page's scripts ran, in the page's realm: a worker's, a
+// frame's own copy)
+const libraryIteration = ownIterationPlugin(
+	[libGlobals, ownIterableFile],
+	true,
+);
 
 /** @type {import('esbuild').BuildOptions} */
 const common = {
@@ -127,18 +191,75 @@ const noSourceMaps = {
  *
  * @type {import('esbuild').Plugin}
  */
+/**
+ * A light library's entry point: its file's `api`, handed out in
+ * `__stompLibApi`, a parameter of the function the library's text is the body
+ * of. An export would have esbuild copy the module's names out with a
+ * for...of, which takes the page's Array.prototype[Symbol.iterator] when a
+ * copy is evaluated after the page's scripts ran.
+ *
+ * @param {string} file
+ * @returns {import('esbuild').Plugin}
+ */
+const libraryEntry = (file) => ({
+	name: 'library-entry',
+	setup(pluginBuild) {
+		pluginBuild.onResolve({ filter: /^stomp:library-entry$/ }, () => ({
+			path: 'library-entry',
+			namespace: 'library-entry',
+		}));
+		pluginBuild.onLoad({ filter: /.*/, namespace: 'library-entry' }, () => ({
+			contents: `"use strict";\nimport { api } from ${JSON.stringify(resolve(file))};\n__stompLibApi = api;\n`,
+			loader: 'js',
+			resolveDir: resolve('.'),
+		}));
+	},
+});
+
+/**
+ * A light library's CommonJS imports (crypto-js), each a module whose
+ * default is what the package's `require` returns: esbuild's own import of
+ * one copies its names out with a for...of as the library is evaluated,
+ * which a copy does after the page's scripts ran (libraryEntry says why).
+ *
+ * @type {import('esbuild').Plugin}
+ */
+const requiredDefaults = {
+	name: 'required-defaults',
+	setup(pluginBuild) {
+		pluginBuild.onResolve({ filter: /^crypto-js\// }, (args) =>
+			args.kind === 'require-call'
+				? undefined
+				: { path: args.path, namespace: 'required-default' },
+		);
+		pluginBuild.onLoad(
+			{ filter: /.*/, namespace: 'required-default' },
+			(args) => ({
+				contents: `export default require(${JSON.stringify(args.path)});\n`,
+				loader: 'js',
+				resolveDir: resolve('.'),
+			}),
+		);
+	},
+};
+
 /** the light library's text (`worker`: a worker's), built on its own */
 async function lightLibrary(worker, define) {
 	const result = await build({
 		...common,
 		define,
-		entryPoints: [
-			worker ? 'src/rewriterLightWorker.ts' : 'src/rewriterLightDocument.ts',
-		],
+		entryPoints: ['stomp:library-entry'],
 		format: 'iife',
-		globalName: '__stompLib',
 		inject: [resolve('src/libGlobals.ts')],
-		plugins: [noSourceMaps],
+		plugins: [
+			libraryEntry(
+				worker ? 'src/rewriterLightWorker.ts' : 'src/rewriterLightDocument.ts',
+			),
+			requiredDefaults,
+			noSourceMaps,
+			withOwnIterable,
+			libraryIteration,
+		],
 		sourcemap: false,
 		write: false,
 		metafile: true,
@@ -193,7 +314,7 @@ const rewriterLib = {
 					'process.env.STOMP_CODEC_WASM': 'undefined',
 				});
 				return {
-					contents: `export default function rewriterLib(__stompRealm) {\n${text}\nreturn __stompLib.api;\n}\n`,
+					contents: `export default function rewriterLib(__stompRealm, __stompLibApi) {\n${text}\nreturn __stompLibApi;\n}\n`,
 					loader: 'js',
 					watchFiles: inputs,
 				};
@@ -223,13 +344,18 @@ const rewriterLibrary = {
 	...common,
 	// (the light library seals its URLs in JavaScript, the same text)
 	define: { ...common.define, 'process.env.STOMP_CODEC_WASM': 'undefined' },
-	entryPoints: { rewriterLib: 'src/rewriterLightDocument.ts' },
+	entryPoints: { rewriterLib: 'stomp:library-entry' },
 	format: 'iife',
-	globalName: '__stompLib',
 	inject: [resolve('src/libGlobals.ts')],
-	banner: { js: `${LIGHT_FACTORY}=function(__stompRealm){` },
-	footer: { js: 'return __stompLib.api;};' },
-	plugins: [noSourceMaps],
+	banner: { js: `${LIGHT_FACTORY}=function(__stompRealm,__stompLibApi){` },
+	footer: { js: 'return __stompLibApi;};' },
+	plugins: [
+		libraryEntry('src/rewriterLightDocument.ts'),
+		requiredDefaults,
+		noSourceMaps,
+		withOwnIterable,
+		libraryIteration,
+	],
 	// written with the deferred parts after it (libraryFile)
 	write: false,
 };
@@ -284,7 +410,7 @@ function parsedSource(file) {
 	if (!source) {
 		source = ts.createSourceFile(
 			file,
-			readFileSync(file, 'utf8'),
+			sourceText(file),
 			ts.ScriptTarget.Latest,
 		);
 		parsedSources.set(file, source);
@@ -451,7 +577,12 @@ const deferredParts = {
 		js: `${DEFERRED_FACTORY}=function(__stompShared){"use strict";var __stompParts={};`,
 	},
 	footer: { js: 'return __stompParts.made;};' },
-	plugins: [noSourceMaps, deferredSharing],
+	plugins: [
+		noSourceMaps,
+		deferredSharing,
+		withOwnIterable,
+		ownIterationPlugin([snapshot, domSnapshot, ownIterableFile], true),
+	],
 	write: false,
 	metafile: true,
 };
@@ -650,13 +781,17 @@ const builds = [
 	{
 		// what a document's WebRTC classes do (src/inject/dom/rtcStack.ts),
 		// which the inject's WebRTC module evaluates the first time a document
-		// uses them: the file is one function's body, `__stompRtc` a name of
-		// that function's, and its globals are the bundle's
-		// (src/inject/dom/rtcStackGlobals.ts)
+		// uses them: the file is one function's body, which hands the library
+		// out in `__stompRtcOut`, an object that function is given; its globals
+		// are the bundle's (src/inject/dom/rtcStackGlobals.ts), and what its
+		// syntax iterates is handed to the bundle's ownIterable, the library
+		// running after the page's scripts
 		entryPoints: { rtcStack: 'src/inject/dom/rtcStackEntry.ts' },
 		format: 'iife',
-		globalName: '__stompRtc',
 		inject: [resolve('src/inject/dom/rtcStackGlobals.ts')],
+		plugins: [
+			ownIterationPlugin([resolve('src/inject/dom/rtcStackGlobals.ts')], true),
+		],
 	},
 	{
 		entryPoints: { SearchBuilder: 'src/bootstrapper/entry.ts' },
@@ -682,7 +817,13 @@ const bundles = (library, generation = '') =>
 			'process.env.STOMP_REWRITE_GENERATION': JSON.stringify(generation),
 			...(options.inject?.includes(snapshot) ? reflectDefines : {}),
 		},
-		plugins: [noSourceMaps, ...(options.plugins ?? [])],
+		plugins: [
+			noSourceMaps,
+			...(options.plugins ?? []),
+			...(options.inject?.includes(snapshot)
+				? [withOwnIterable, ownIteration]
+				: []),
+		],
 	}));
 
 await rimraf('dist');

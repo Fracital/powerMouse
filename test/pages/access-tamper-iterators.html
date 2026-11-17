@@ -1,0 +1,481 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>access tamper iterators</title>
+	</head>
+	<body>
+		<script>
+			// A page that replaces the iteration protocol's natives
+			// (test/suites/access-tamper.mjs), as a polyfill does: each
+			// replacement counts its calls and hands back what the native
+			// would. Then the page does what pages do (reads, markup, styles,
+			// requests, messages, frames, its own loops) and notes after each
+			// what it got and how often its replacements were called. Natively
+			// only the page's own iteration and the browser's conversion of
+			// the page's own sequences (a Headers init, a Blob's parts, a
+			// transfer list) call them; proxied, a call that the inject's own
+			// loops, spreads, destructuring and collections made would show
+			// in a count, and a replacement that answered otherwise would
+			// steer what the inject did.
+			//
+			// `?case=` names what it replaces (`all`: every one of them);
+			// `&in=frame` runs the same in a same-origin child frame of this
+			// page, `&in=sandbox` in a sandboxed one (an opaque origin, which
+			// evaluates a rewriter of its own the first time it needs one,
+			// after the page replaced the natives); this page takes the
+			// child's report as its own. The page says on the console when it
+			// is done: a driver that polled the page's realm meanwhile would
+			// have its own loops counted.
+			var query = new URLSearchParams(location.search);
+			var which = query.get('case');
+			var role = query.get('role');
+			var where = query.get('in');
+			var counts = {};
+			var arrayIterator = Object.getPrototypeOf([][Symbol.iterator]());
+			var spoils = {
+				arrayIterator: [[Array.prototype, Symbol.iterator, 'array']],
+				arrayIteratorNext: [[arrayIterator, 'next', 'arrayNext']],
+				stringIterator: [
+					[String.prototype, Symbol.iterator, 'string'],
+					[Object.getPrototypeOf(''[Symbol.iterator]()), 'next', 'stringNext'],
+				],
+				mapIterator: [
+					[Map.prototype, Symbol.iterator, 'map'],
+					[Map.prototype, 'entries', 'mapEntries'],
+					[Object.getPrototypeOf(new Map().entries()), 'next', 'mapNext'],
+				],
+				setIterator: [
+					[Set.prototype, Symbol.iterator, 'set'],
+					[Set.prototype, 'values', 'setValues'],
+					[Object.getPrototypeOf(new Set().values()), 'next', 'setNext'],
+				],
+				iteratorPrototype: [
+					[Object.getPrototypeOf(arrayIterator), Symbol.iterator, 'iterator'],
+					[
+						Object.getPrototypeOf(function* () {}.prototype),
+						'next',
+						'generatorNext',
+					],
+				],
+			};
+			var replace = function (spoil) {
+				var original = spoil[0][spoil[1]];
+				var name = spoil[2];
+				// writable, configurable, not enumerable, as a polyfill
+				// defines them
+				Object.defineProperty(spoil[0], spoil[1], {
+					value: function () {
+						counts[name] = (counts[name] || 0) + 1;
+						return original.apply(this, arguments);
+					},
+					writable: true,
+					configurable: true,
+				});
+			};
+			var all = [];
+			for (var key in spoils)
+				if (which === key || which === 'all')
+					for (var i = 0; i < spoils[key].length; i++) all.push(spoils[key][i]);
+			for (var j = 0; j < all.length; j++) replace(all[j]);
+			var taken = function () {
+				var names = Object.keys(counts).sort();
+				var out = '';
+				for (var k = 0; k < names.length; k++)
+					out += (k ? ' ' : '') + names[k] + '=' + counts[names[k]];
+				counts = {};
+				return out || 'none';
+			};
+			// (a page that has a child replaces them as well: what the child
+			// does must call none of its parent's either)
+			if (where === 'frame' || where === 'sandbox') {
+				var took = function (report) {
+					report['parent [calls]'] = taken();
+					window.__tamper = report;
+					console.log('access tamper iterators done ' + which + ' ' + where);
+				};
+				window.__childReport = took;
+				window.addEventListener('message', function (event) {
+					if (event.data && event.data.in === 'sandbox') took(event.data);
+				});
+				var child = document.createElement('iframe');
+				if (where === 'sandbox') child.setAttribute('sandbox', 'allow-scripts');
+				child.src =
+					location.pathname +
+					'?case=' +
+					encodeURIComponent(which) +
+					'&role=' +
+					(where === 'sandbox' ? 'sandbox' : 'child');
+				document.body.appendChild(child);
+			} else
+				(function () {
+					var report = {
+						case: which,
+						in:
+							role === 'child'
+								? 'frame'
+								: role === 'sandbox'
+									? 'sandbox'
+									: 'top',
+						done: false,
+					};
+					var steps = [];
+					var note = function (name, read) {
+						steps.push([name, read]);
+					};
+					var noted = function (name, value) {
+						report[name] = String(value);
+						report[name + ' [calls]'] = taken();
+					};
+					var run = function (index) {
+						if (index === steps.length) {
+							// what the replacements saw while the page did nothing
+							setTimeout(function () {
+								report['idle [calls]'] = taken();
+								report.done = true;
+								if (role === 'child') parent.__childReport(report);
+								else if (role === 'sandbox') parent.postMessage(report, '*');
+								else {
+									window.__tamper = report;
+									console.log('access tamper iterators done ' + which + ' top');
+								}
+							}, 500);
+							return;
+						}
+						var step = steps[index];
+						taken();
+						var answer;
+						try {
+							answer = step[1]();
+						} catch (error) {
+							noted(step[0], 'threw ' + error.name);
+							return run(index + 1);
+						}
+						if (answer && typeof answer.then === 'function')
+							answer.then(
+								function (value) {
+									noted(step[0], value);
+									run(index + 1);
+								},
+								function (error) {
+									noted(step[0], 'rejected ' + (error && error.name));
+									run(index + 1);
+								},
+							);
+						else {
+							noted(step[0], answer);
+							run(index + 1);
+						}
+					};
+					var later = function (ms) {
+						return new Promise(function (resolve) {
+							setTimeout(resolve, ms);
+						});
+					};
+					note('location', function () {
+						return location.href;
+					});
+					note('computedLocation', function () {
+						var key = 'loc' + 'ation';
+						return window[key].href;
+					});
+					note('evalLocation', function () {
+						var run = eval;
+						return run('location.href');
+					});
+					note('functionLocation', function () {
+						return Function('return location.href')();
+					});
+					note('topIsWindow', function () {
+						return top === window;
+					});
+					note('patternTop', function () {
+						var [{ top: t }] = [window];
+						return t === window;
+					});
+					note('patternLocation', function () {
+						var [{ location: l }] = [window];
+						return l.href;
+					});
+					note('ownLoop', function () {
+						var sum = 0;
+						for (var x of [1, 2, 3]) sum += x;
+						return sum + Math.max(...[4, 5]) + [...'ab'].length;
+					});
+					note('ownCollections', function () {
+						var map = new Map([['a', 1]]);
+						var set = new Set(['a', 'b']);
+						var keys = [];
+						for (var entry of map) keys.push(entry[0]);
+						for (var value of set) keys.push(value);
+						return keys.join(',');
+					});
+					note('cookie', function () {
+						document.cookie = 'iterators=1; path=/';
+						return document.cookie.indexOf('iterators=1') >= 0;
+					});
+					note('storage', function () {
+						localStorage.setItem('iterators', 'a');
+						sessionStorage.setItem('iterators', 'b');
+						return (
+							localStorage.getItem('iterators') +
+							sessionStorage.getItem('iterators')
+						);
+					});
+					note('title', function () {
+						return document.title + ' ' + document.domain + ' ' + document.URL;
+					});
+					note('element', function () {
+						var box = document.createElement('div');
+						box.setAttribute('data-x', '1');
+						var a = document.createElement('a');
+						a.href = '/pages/next.html?q=1#h';
+						a.target = '_blank';
+						box.appendChild(a);
+						document.body.appendChild(box);
+						return (
+							a.href + ' ' + a.getAttribute('href') + ' ' + a.host + a.pathname
+						);
+					});
+					note('attributes', function () {
+						var img = document.createElement('img');
+						img.setAttribute('src', '/pages/none.png');
+						img.setAttribute('srcset', '/pages/a.png 1x, /pages/b.png 2x');
+						img.alt = 'x';
+						var names = img.getAttributeNames();
+						var out = [];
+						for (var i = 0; i < img.attributes.length; i++)
+							out.push(img.attributes[i].name + '=' + img.attributes[i].value);
+						return names.length + ' ' + out.join(',');
+					});
+					note('innerHTML', function () {
+						var box = document.createElement('div');
+						box.innerHTML =
+							'<a href="/pages/y.html">y</a><form action="/pages/f"></form>' +
+							'<img src="/pages/none.png"><scr' +
+							'ipt>window.__ranAt = location.href</scr' +
+							'ipt>';
+						document.body.appendChild(box);
+						return box.innerHTML + ' ' + box.querySelector('form').action;
+					});
+					note('insertAdjacentHTML', function () {
+						var box = document.createElement('div');
+						document.body.appendChild(box);
+						box.insertAdjacentHTML(
+							'beforeend',
+							'<a href="/pages/z.html">z</a>',
+						);
+						return box.firstChild.href + ' ' + box.outerHTML;
+					});
+					note('append', function () {
+						var box = document.createElement('div');
+						box.append('a', document.createElement('b'), 'c');
+						box.prepend(document.createElement('i'));
+						box.replaceChildren(document.createElement('u'), 'd');
+						return box.childNodes.length + ' ' + box.innerHTML;
+					});
+					note('script', function () {
+						var script = document.createElement('script');
+						script.textContent = 'window.__scriptAt = location.href;';
+						document.body.appendChild(script);
+						return window.__scriptAt;
+					});
+					note('style', function () {
+						var box = document.createElement('div');
+						box.style.backgroundImage = 'url(/pages/bg.png)';
+						box.style.setProperty('color', 'red');
+						box.style.cssText += ';border: 1px solid red';
+						return box.style.cssText;
+					});
+					note('styleSheet', function () {
+						var style = document.createElement('style');
+						style.textContent = 'body { background: url(/pages/s.png) }';
+						document.head.appendChild(style);
+						style.sheet.insertRule('p { color: blue }', 0);
+						return (
+							style.sheet.cssRules.length +
+							' ' +
+							style.sheet.cssRules[1].cssText
+						);
+					});
+					note('domParser', function () {
+						var parsed = new DOMParser().parseFromString(
+							'<a href="/pages/p.html">p</a>',
+							'text/html',
+						);
+						return parsed.querySelector('a').href;
+					});
+					note('clone', function () {
+						var a = document.createElement('a');
+						a.href = '/pages/c.html';
+						var copy = a.cloneNode(true);
+						return copy.href;
+					});
+					note('headers', function () {
+						var headers = new Headers([['a', 'b']]);
+						headers.append('c', 'd');
+						var out = [];
+						headers.forEach(function (value, name) {
+							out.push(name + ':' + value);
+						});
+						return out.join(',');
+					});
+					note('searchParams', function () {
+						return new URLSearchParams([['a', 'b']]).toString();
+					});
+					note('url', function () {
+						return new URL('/pages/u?x=1', location.href).href;
+					});
+					note('request', function () {
+						return new Request('/pages/r.html').url;
+					});
+					note('blob', function () {
+						return new Blob(['x', 'yz']).size;
+					});
+					note('history', function () {
+						history.replaceState(
+							{ a: 1 },
+							'',
+							location.pathname + location.search + '#h',
+						);
+						return location.hash + ' ' + history.state.a;
+					});
+					note('event', function () {
+						var got = '';
+						var listener = function (event) {
+							got = event.type;
+						};
+						addEventListener('iterators', listener);
+						dispatchEvent(new Event('iterators'));
+						removeEventListener('iterators', listener);
+						return got;
+					});
+					note('toString', function () {
+						return function named(a) {
+							return a;
+						}.toString();
+					});
+					note('message', function () {
+						return new Promise(function (resolve) {
+							var listener = function (event) {
+								removeEventListener('message', listener);
+								resolve(event.data + ' ' + event.origin);
+							};
+							addEventListener('message', listener);
+							postMessage('hi', '*', []);
+						});
+					});
+					note('channel', function () {
+						return new Promise(function (resolve) {
+							var channel = new MessageChannel();
+							channel.port1.onmessage = function (event) {
+								resolve(event.data);
+							};
+							channel.port2.postMessage('ported');
+						});
+					});
+					note('mutation', function () {
+						var seen = [];
+						var observer = new MutationObserver(function (records) {
+							for (var i = 0; i < records.length; i++)
+								seen.push(records[i].type);
+						});
+						var box = document.createElement('div');
+						document.body.appendChild(box);
+						observer.observe(box, { attributes: true, childList: true });
+						box.setAttribute('x', '1');
+						box.appendChild(document.createElement('span'));
+						return later(50).then(function () {
+							observer.disconnect();
+							return seen.join(',');
+						});
+					});
+					note('fetch', function () {
+						return fetch('/pages/first-rewrite.html').then(function (response) {
+							return response.text().then(function (text) {
+								return response.status + ' ' + response.url + ' ' + text.length;
+							});
+						});
+					});
+					note('xhr', function () {
+						return new Promise(function (resolve) {
+							var xhr = new XMLHttpRequest();
+							xhr.open('GET', '/pages/first-rewrite.html');
+							xhr.onloadend = function () {
+								resolve(xhr.status + ' ' + xhr.responseURL);
+							};
+							xhr.send();
+						});
+					});
+					note('frame', function () {
+						return new Promise(function (resolve) {
+							var frame = document.createElement('iframe');
+							frame.src = '/pages/first-rewrite.html';
+							frame.onload = function () {
+								var parentIsUs = frame.contentWindow.parent === window;
+								// (a sandboxed page's child is of another origin)
+								var read;
+								try {
+									read =
+										frame.contentWindow.location.href +
+										' ' +
+										frame.contentDocument.title;
+								} catch (error) {
+									read = 'threw ' + error.name;
+								}
+								frame.remove();
+								resolve(read + ' ' + parentIsUs);
+							};
+							document.body.appendChild(frame);
+						});
+					});
+					note('timer', function () {
+						return new Promise(function (resolve) {
+							setTimeout(function () {
+								requestAnimationFrame(function () {
+									queueMicrotask(function () {
+										resolve('ran');
+									});
+								});
+							}, 10);
+						});
+					});
+					note('resources', function () {
+						var entries = performance.getEntriesByType('resource');
+						var named = [];
+						for (var i = 0; i < entries.length; i++)
+							if (entries[i].name.indexOf('first-rewrite') >= 0)
+								named.push(entries[i].initiatorType);
+						return named.join(',');
+					});
+					note('rtc', function () {
+						// (sequences in a dictionary: the inject's WebRTC classes
+						// convert them, src/inject/rtcValidation.ts)
+						var connection = new RTCPeerConnection({
+							iceServers: [{ urls: ['stun:127.0.0.1:9', 'stun:127.0.0.1:10'] }],
+						});
+						var servers = connection.getConfiguration().iceServers;
+						connection.close();
+						return servers.length + ' ' + servers[0].urls.length;
+					});
+					note('webTransport', function () {
+						// (the same, of the inject's WebTransport stand-in,
+						// src/inject/webTransportStandIn.ts)
+						var transport = new WebTransport('https://127.0.0.1:9/', {
+							serverCertificateHashes: [
+								{ algorithm: 'sha-256', value: new Uint8Array(32) },
+							],
+							protocols: ['a', 'b'],
+						});
+						transport.ready.catch(function () {});
+						transport.closed.catch(function () {});
+						return typeof transport.ready.then;
+					});
+					note('beacon', function () {
+						return navigator.sendBeacon('/pages/iterators-beacon', 'x');
+					});
+					run(0);
+				})();
+		</script>
+	</body>
+</html>

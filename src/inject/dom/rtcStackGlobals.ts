@@ -19,6 +19,8 @@ declare const __stompRtcSnap: {
 	DOMParser: typeof globalThis.DOMParser;
 	navigator: Navigator;
 	postMessage: typeof globalThis.postMessage;
+	ownIterable: typeof import('../../ownIterable').ownIterable;
+	isArray: typeof globalThis.Array.isArray;
 };
 export const Reflect = __stompRtcSnap.Reflect;
 export const Function = __stompRtcSnap.Function;
@@ -35,3 +37,8 @@ export const bindDescriptors = __stompRtcSnap.bindDescriptors;
 export const DOMParser = __stompRtcSnap.DOMParser;
 export const navigator = __stompRtcSnap.navigator;
 export const postMessage = __stompRtcSnap.postMessage;
+// (what the library's syntax iterates: the bundle's, src/ownIterable.ts)
+export const ownIterable = __stompRtcSnap.ownIterable;
+export const ownItems = (...items: unknown[]) => ownIterable(items);
+// (how a WebIDL sequence tells an array, ../rtcValidation.ts)
+export const isArray = __stompRtcSnap.isArray;
