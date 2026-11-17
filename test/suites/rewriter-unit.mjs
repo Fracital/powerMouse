@@ -307,6 +307,9 @@ const parses = (code) => {
 		'4; /plain': ['4', '/plain'],
 		7: ['7', null],
 		'  2;url=https://other.example/x': ['2', 'https://other.example/x'],
+		// the URL parser strips C0 and space only: a no-break space stays,
+		// and makes the javascript: a relative path
+		'0;url=\u00a0javascript:x': ['0', '\u00a0javascript:x'],
 	};
 	const got = Object.fromEntries(
 		Object.entries(cases).map(([value]) => {
@@ -323,6 +326,16 @@ const parses = (code) => {
 			modifyRefresh('7', url, full) === '7' &&
 			modifyRefresh('1; url=javascript:x', url, full) === '1; url=javascript:x',
 		JSON.stringify([got, routed]),
+	);
+	// a refresh to a data: document is the page's markup, as a frame's data:
+	// src is: rewritten, or its script runs raw in the frame
+	const data = 'data:text/html,<script>top.x=1</script>';
+	const routedData = modifyRefresh(`0;url=${data}`, url, full);
+	ok(
+		'a refresh to a data: document is rewritten',
+		routedData.startsWith('0; url=data:text/html') &&
+			!decodeURIComponent(routedData).includes('<script>top.x=1</script>'),
+		routedData.slice(0, 200),
 	);
 }
 {

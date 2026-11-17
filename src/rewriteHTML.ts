@@ -657,7 +657,10 @@ export function parseRefresh(value: string): {
 		const close = url.indexOf(quote, 1);
 		url = close === -1 ? url.slice(1) : url.slice(1, close);
 	}
-	url = url.trim();
+	// what the URL parser strips: C0 controls and space, not the Unicode
+	// spaces String.prototype.trim drops too (a no-break space before
+	// `javascript:` makes it a relative path, natively)
+	url = url.replace(/^[\0-\x20]+|[\0-\x20]+$/g, '');
 	return { time, url: url === '' ? null : url };
 }
 
@@ -677,7 +680,10 @@ export function modifyRefresh(
 	} catch (error) {
 		return script;
 	}
-	if (!/^https?:$/.test(resolved.protocol)) return script;
+	// a data: document is the page's markup like a frame's data: src, and
+	// Chrome follows a refresh to one in a frame: routeHTML rewrites it, or
+	// its scripts run raw. A javascript: refresh Chrome never follows.
+	if (!/^(https?|data):$/.test(resolved.protocol)) return script;
 	return `${time}; url=${routeHTML(
 		new StompURL(resolved, url),
 		url,
