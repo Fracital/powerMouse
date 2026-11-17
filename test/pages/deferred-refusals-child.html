@@ -7,8 +7,8 @@
 	<body>
 		<script>
 			// Each call (the names in the hash) as a page makes it: whether it
-			// threw, or returned a promise and how that settled. Posted to the
-			// parent.
+			// threw, or returned a promise and how that settled; an XHR's
+			// document and the events it got. Posted to the parent.
 			const outcome = async (run) => {
 				try {
 					const value = run();
@@ -29,7 +29,72 @@
 					return { threw: String(error && error.message) };
 				}
 			};
+			const track = () =>
+				document.createElement('canvas').captureStream().getVideoTracks()[0];
+			const xmlDocument = () =>
+				new Promise((resolve) => {
+					const request = new XMLHttpRequest();
+					const events = [];
+					for (const name of ['load', 'error', 'loadend'])
+						request.addEventListener(name, () => {
+							events.push(name);
+							if (name === 'loadend')
+								resolve({ events, document: String(request.responseXML) });
+						});
+					try {
+						request.open('GET', 'blank-sprite.svg');
+						request.responseType = 'document';
+						request.send();
+					} catch (error) {
+						resolve({ events, threw: String(error && error.message) });
+					}
+					setTimeout(() => resolve({ events, pending: true }), 5000);
+				});
 			const CALLS = {
+				getUserMedia: () =>
+					outcome(() => navigator.mediaDevices.getUserMedia({ video: true })),
+				getCurrentPosition: () =>
+					outcome(() =>
+						navigator.geolocation.getCurrentPosition(
+							() => {},
+							() => {},
+						),
+					),
+				watchPosition: () =>
+					outcome(() =>
+						navigator.geolocation.watchPosition(
+							() => {},
+							() => {},
+						),
+					),
+				requestPermission: () =>
+					outcome(() => Notification.requestPermission()),
+				getSettings: () => outcome(() => track().getSettings()),
+				applyConstraints: () =>
+					outcome(() => track().applyConstraints({ deviceId: 'x' })),
+				setSinkId: () => outcome(() => new Audio().setSinkId('x')),
+				audioContext: () => outcome(() => new AudioContext({ sinkId: 'x' })),
+				peer: () => outcome(() => new RTCPeerConnection()),
+				// the other ways a page constructs one first
+				peerSubclass: () =>
+					outcome(() => new (class extends RTCPeerConnection {})()),
+				peerReflect: () =>
+					outcome(() => Reflect.construct(RTCPeerConnection, [])),
+				webkitPeer: () =>
+					typeof webkitRTCPeerConnection === 'function'
+						? outcome(() => new webkitRTCPeerConnection())
+						: { absent: true },
+				// a member on an object no connection made: the browser's own
+				// refusal, with or without the parts
+				foreignStats: () =>
+					outcome(() => RTCPeerConnection.prototype.getStats.call({})),
+				misuse: () =>
+					outcome(() => {
+						const request = new XMLHttpRequest();
+						request.responseType = 'json';
+						return request.responseText;
+					}),
+				xmlDocument,
 				identity: () =>
 					outcome(() =>
 						navigator.credentials.get({ identity: { providers: [] } }),
@@ -43,6 +108,16 @@
 							accountHint: 'x',
 						}),
 					),
+				// a same-origin download link's click: the copy is saved after
+				// the click went through the page (the suite counts downloads)
+				download: () =>
+					outcome(() => {
+						const link = document.createElement('a');
+						link.href = 'deferred-refusals.html';
+						link.download = 'refusals.html';
+						document.body.append(link);
+						link.click();
+					}),
 			};
 			(async () => {
 				const out = {};

@@ -3,7 +3,6 @@ import StompURL from '../../../StompURL';
 import {
 	ABORT_HEADER,
 	CREDENTIALS_HEADER,
-	ECHO_ROUTE,
 	OPAQUE_HEADER,
 	PREFLIGHT_HEADER,
 } from '../../../transport/messages';
@@ -19,7 +18,6 @@ import ProxyModule, { classConstant, onEventTarget } from '../../modules/Proxy';
 import UnrouteModule, { unrouteURL } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
 import { LazyWeakSet } from '../../ownCollections';
-import { trustedHTML } from '../../trusted';
 import { trackUploadListeners } from '../../uploadListeners';
 import {
 	decodeText,
@@ -31,8 +29,9 @@ import {
 import DocumentClient from '../Client';
 import { deferred } from '../deferred';
 import { responseURLs } from '../responseDocuments';
+import type { XhrMessage } from '../xhrMessages';
+import type { ResponseParser } from '../xhrParse';
 import BlobDocumentsModule from './BlobDocuments';
-import DOMAttributesModule from './DOMAttributes';
 import SyncModule from './Sync';
 
 export default class XMLHttpRequestModule extends Module<DocumentClient> {
@@ -74,6 +73,12 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 
 		const decoder = new TextDecoder('utf-8');
 
+		// the browser's messages for a page's misuse of the API, a deferred
+		// part (../xhrMessages.ts): the exception is made here, in the
+		// hook's own frame
+		const message = (key: XhrMessage, detail?: string) =>
+			deferred().xhrMessage(key, detail);
+
 		// whether the document's permissions policy lets the guest make a
 		// synchronous request (Chrome's `sync-xhr`). The served
 		// Permissions-Policy no longer disables the feature, so the browser's
@@ -105,121 +110,28 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 		const toBase64 = (
 			Uint8Array.prototype as { toBase64?: (this: Uint8Array) => string }
 		).toBase64;
-		const base64 = (bytes: ArrayBuffer): string => {
-			const view = new Uint8Array(bytes);
-			if (typeof toBase64 === 'function')
-				return Reflect.apply(toBase64, view, []);
-			let binary = '';
-			for (let i = 0; i < view.length; i += 0x8000)
-				binary += String.fromCharCode(...view.subarray(i, i + 0x8000));
-			return Reflect.apply(realmBtoa, that.client.global, [binary]);
-		};
-		/**
-		 * The browser's document for `bytes` of type `essence` (`charset` as the
-		 * final charset): the `document` type's response, or (`asDocument`
-		 * false) the default type's responseXML; `done` gets it, at once for a
-		 * synchronous request
-		 */
-		const parseResponse = (
-			bytes: ArrayBuffer,
-			essence: string,
-			charset: string | null,
-			asDocument: boolean,
-			sync: boolean,
-			done: (document: Document | null) => void,
-		) => {
-			const xhr = new RealmXHR();
-			const read = () => {
-				let document: Document | null = null;
-				try {
-					document = Reflect.apply(
-						asDocument ? realmResponse : realmResponseXML,
-						xhr,
-						[],
-					);
-				} catch (error) {
-					// nothing to read: null, as for a body that does not parse
-				}
-				done(document ?? null);
-			};
-			try {
-				// a charset that is not a plain token cannot go in the data: URL
-				const parameter =
-					charset && /^[\w.:-]+$/.test(charset) ? `;charset=${charset}` : '';
-				// A document whose policy refuses (or reports) a data: request
-				// (its connect-src, src/csp.ts) would show the page a violation
-				// of the proxy's: the bytes come back from the service worker's
-				// echo instead, the proxy origin's, which the policy allows. A
-				// synchronous request never reaches the worker (nor does one of
-				// a document it does not control): the realm's DOMParser makes
-				// the document.
-				const refused = that.client.browserRefuses('connect-src', 'data:');
-				if (
-					refused &&
-					(sync || that.client.getModule(DOMAttributesModule)?.uncontrolled?.())
-				)
-					return done(parsedText(bytes, essence, charset, asDocument));
-				if (refused) {
-					Reflect.apply(realmOpen, xhr, [
-						'POST',
-						`${that.client.global.location.origin}${that.client.directory}${ECHO_ROUTE}/${encodeURIComponent(`${essence}${parameter}`)}`,
-						true,
-					]);
-					if (asDocument) Reflect.apply(realmSetType, xhr, ['document']);
-					Reflect.apply(realmListen, xhr, ['loadend', read]);
-					Reflect.apply(realmSend, xhr, [bytes]);
-					return;
-				}
-				Reflect.apply(realmOpen, xhr, [
-					'GET',
-					`data:${essence}${parameter};base64,${base64(bytes)}`,
-					!sync,
-				]);
-				if (asDocument) Reflect.apply(realmSetType, xhr, ['document']);
-				if (!sync) Reflect.apply(realmListen, xhr, ['loadend', read]);
-				Reflect.apply(realmSend, xhr, []);
-			} catch (error) {
-				return done(null);
-			}
-			if (sync) read();
-		};
 		const RealmDOMParser = that.client.global.DOMParser;
 		const realmParse = RealmDOMParser.prototype.parseFromString;
 		const realmQuery = that.client.global.Document.prototype.querySelector;
-		/**
-		 * The document of `bytes` the realm's DOMParser makes, as close to
-		 * the browser's response document as it gets (for parseResponse's
-		 * requests that cannot go through a URL): an HTML one for text/html
-		 * (the document type only), an XML one for any XML type, null for XML
-		 * that does not parse
-		 */
-		const parsedText = (
-			bytes: ArrayBuffer,
-			essence: string,
-			charset: string | null,
-			asDocument: boolean,
-		): Document | null => {
-			const html = essence === 'text/html';
-			if (html && !asDocument) return null;
-			try {
-				const text = decodeText(bytes, charset, !html);
-				const document = Reflect.apply(realmParse, new RealmDOMParser(), [
-					trustedHTML(text),
-					html
-						? 'text/html'
-						: ['text/xml', 'application/xhtml+xml', 'image/svg+xml'].includes(
-									essence,
-							  )
-							? essence
-							: 'application/xml',
-				]) as Document;
-				if (!html && Reflect.apply(realmQuery, document, ['parsererror']))
-					return null;
-				return document;
-			} catch (error) {
-				return null;
-			}
-		};
+		// the parse itself is a deferred part (../xhrParse.ts): most pages
+		// never read an XML response as a document
+		let parser: ResponseParser | undefined;
+		const parseResponse: ResponseParser = (...args) =>
+			(parser ??= deferred().responseParser({
+				client: that.client,
+				RealmXHR,
+				realmOpen,
+				realmSend,
+				realmSetType,
+				realmResponse,
+				realmResponseXML,
+				realmListen,
+				realmBtoa,
+				toBase64,
+				RealmDOMParser,
+				realmParse,
+				realmQuery,
+			}))(...args);
 		// the realm's JSON.parse, before page code can replace it: a json
 		// response is the page realm's value
 		const realmJSON = that.client.global.JSON;
@@ -298,10 +210,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 			set timeout(value) {
 				if (!this.#async && typeof document !== 'undefined')
 					throw withStack(
-						new DOMException(
-							"Failed to set the 'timeout' property on 'XMLHttpRequest': Timeouts cannot be set for synchronous requests made from a document.",
-							'InvalidAccessError',
-						),
+						new DOMException(message('timeout'), 'InvalidAccessError'),
 					);
 				this.#timeout = Math.max(0, Number(value) || 0);
 			}
@@ -311,10 +220,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 			set withCredentials(value) {
 				if (this.#sent || this.#loadingOrDone)
 					throw withStack(
-						new DOMException(
-							"Failed to set the 'withCredentials' property on 'XMLHttpRequest': The value may only be set if the object's state is UNSENT or OPENED.",
-							'InvalidStateError',
-						),
+						new DOMException(message('withCredentials'), 'InvalidStateError'),
 					);
 				this.#withCredentials = !!value;
 			}
@@ -358,9 +264,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				if (this.#responseType !== '' && this.#responseType !== 'text')
 					throw withStack(
 						new DOMException(
-							`Failed to read the 'responseText' property from 'XMLHttpRequest': The value is only accessible if the object's 'responseType' is '' or 'text' (was '${
-								this.#responseType
-							}').`,
+							message('responseText', this.#responseType),
 							'InvalidStateError',
 						),
 					);
@@ -371,9 +275,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				if (this.#responseType !== '' && this.#responseType !== 'document')
 					throw withStack(
 						new DOMException(
-							"Failed to read the 'responseXML' property from 'XMLHttpRequest': The value is only accessible if the object's 'responseType' is '' or 'document' (was '" +
-								this.#responseType +
-								"').",
+							message('responseXML', this.#responseType),
 							'InvalidStateError',
 						),
 					);
@@ -385,24 +287,16 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 			set responseType(value) {
 				if (this.#loadingOrDone) {
 					throw withStack(
-						new DOMException(
-							`Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be set if the object's state is LOADING or DONE.`,
-							'InvalidStateError',
-						),
+						new DOMException(message('responseTypeLate'), 'InvalidStateError'),
 					);
 				} else if (!this.#async) {
 					throw withStack(
-						new DOMException(
-							`Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be changed for synchronous requests made from a document.`,
-							'InvalidAccessError',
-						),
+						new DOMException(message('responseTypeSync'), 'InvalidAccessError'),
 					);
 				}
 
 				if (!XMLHttpRequestResponseType.includes(value)) {
-					console.warn(
-						`The provided value '${value}' is not a valid enum value of type XMLHttpRequestResponseType.`,
-					);
+					console.warn(message('responseTypeValue', `${value}`));
 					return;
 				}
 
@@ -680,10 +574,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 			overrideMimeType(mime: string) {
 				if (this.#loadingOrDone)
 					throw withStack(
-						new DOMException(
-							"Failed to execute 'overrideMimeType' on 'XMLHttpRequest': MimeType cannot be overridden when the state is LOADING or DONE.",
-							'InvalidStateError',
-						),
+						new DOMException(message('overrideMimeType'), 'InvalidStateError'),
 					);
 				this.#override = overrideMime(mime);
 			}
@@ -712,10 +603,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				// type or a timeout set beforehand
 				if (!async && (this.#timeout !== 0 || this.#responseType !== ''))
 					throw withStack(
-						new DOMException(
-							"Failed to execute 'open' on 'XMLHttpRequest': Synchronous requests from a document must not set a response type or timeout.",
-							'InvalidAccessError',
-						),
+						new DOMException(message('open'), 'InvalidAccessError'),
 					);
 				// a request in flight is dropped without events, and everything of
 				// the last response is gone: status 0, no headers, no body

@@ -96,14 +96,23 @@ import { markupMembers } from './markupMembers';
 import FingerprintModule from './modules/Fingerprint';
 import { longFrames } from './modules/LongFrames';
 import { longTasks } from './modules/LongTasks';
+import {
+	deviceConstraints,
+	notificationCall,
+	positionCall,
+	userMediaCall,
+} from './modules/permissionCalls';
 import { emulateServiceWorker } from './modules/serviceWorkerEmulation';
 import { navigationRefusal, precommitRedirect } from './navigationRefusal';
 import { openerFacts, opensWithoutOpener } from './openerFacts';
 import { pictureWindows } from './pictureWindows';
 import { presentationIds } from './presentations';
+import { rtcInstall } from './rtcInstall';
 import { sourcePolicy } from './sourcePolicy';
 import { storageAccessHandle } from './storageAccess';
 import { writeStream } from './WriteStream';
+import { xhrMessage } from './xhrMessages';
+import { responseParser } from './xhrParse';
 
 const parts = {
 	bareClient,
@@ -122,6 +131,13 @@ const parts = {
 	checkedHeader,
 	notOpened,
 	FingerprintModule,
+	userMediaCall,
+	deviceConstraints,
+	positionCall,
+	notificationCall,
+	rtcInstall,
+	responseParser,
+	xhrMessage,
 	emulateServiceWorker,
 	markupMembers,
 	navigationRefusal,

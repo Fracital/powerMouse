@@ -16,7 +16,9 @@ import { LazyMap, LazyWeakMap, LazyWeakSet } from '../../ownCollections';
 import type { Decision, GateContext, GateHooks } from '../../permissionGates';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { deferred } from '../deferred';
+import type { DeferredParts } from '../deferredParts';
 import { lazyInterface } from '../lazyInterface';
+import type { DeviceConstraints } from './permissionCalls';
 
 // taken when the bundle loads: a device's getters are checked by their source
 const nativeToString = Function.prototype.toString;
@@ -59,7 +61,7 @@ const FEATURE: Record<string, string> = {
  * What the browser converts as an object where it expects a dictionary: a
  * function too, and document.all, which says it is undefined
  */
-const isObject = (value: unknown): value is object =>
+export const isObject = (value: unknown): value is object =>
 	value !== null &&
 	(typeof value === 'object' ||
 		typeof value === 'function' ||
@@ -67,7 +69,7 @@ const isObject = (value: unknown): value is object =>
 
 type IdKey = 'deviceId' | 'groupId';
 /** the device ids a page names, as the browser knows them (devices()) */
-interface DeviceIds {
+export interface DeviceIds {
 	/** getUserMedia's constraints with the site's ids turned into the browser's */
 	incoming(constraints: unknown): Promise<unknown>;
 	/** learn the browser's ids now, so a track's are shown as the site's */
@@ -719,50 +721,15 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		const nativeGet = prototype.getCurrentPosition;
 		const nativeWatch = prototype.watchPosition;
 		const nativeClear = prototype.clearWatch;
-		// what the browser hands an error callback: code 1 with its message
-		const denial = (message: string) =>
-			Object.create(ErrorType.prototype, {
-				code: { value: 1 },
-				message: { value: message },
-			});
-		const POLICY =
-			'Geolocation has been disabled in this document by permissions policy.';
-		const DENIED = 'User denied Geolocation';
-		const run = (
-			that: Geolocation,
-			args: unknown[],
-			start: (success: unknown, failure: unknown) => void,
-		) => {
-			const [success, failure] = args as [
-				((position: GeolocationPosition) => void) | undefined,
-				((error: GeolocationPositionError) => void) | null | undefined,
-			];
-			const fail = (message: string) => {
-				if (typeof failure === 'function')
-					global.setTimeout(() => failure(denial(message)), 0);
-			};
-			if (!allowed('geolocation')) return fail(POLICY);
-			void request(['geolocation']).then((answer) => {
-				if (!answer.call) return fail(DENIED);
-				let settled = false;
-				const settle = (granted: boolean | null) => {
-					if (settled) return;
-					settled = true;
-					void answer.settle(granted);
-				};
-				start(
-					(position: GeolocationPosition) => {
-						settle(true);
-						if (typeof success === 'function') success(position);
-					},
-					(error: GeolocationPositionError) => {
-						settle(error?.code === 1 ? false : null);
-						if (typeof failure === 'function') failure(error);
-					},
-				);
-			});
-			void that;
-		};
+		// the request itself: a deferred part (./permissionCalls.ts)
+		let made: ReturnType<DeferredParts['positionCall']> | undefined;
+		const run: ReturnType<DeferredParts['positionCall']> = (...call) =>
+			(made ??= deferred().positionCall({
+				global,
+				ErrorType,
+				request,
+				allowed,
+			}))(...call);
 		Reflect.defineProperty(prototype, 'getCurrentPosition', {
 			...Reflect.getOwnPropertyDescriptor(prototype, 'getCurrentPosition'),
 			value: proxyModule.wrapFunction(nativeGet, (target, that, args) => {
@@ -860,6 +827,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		const enumerate = mediaDevices.enumerateDevices;
 		const digest = subtle.digest;
 		const isArray = global.Array.isArray;
+		const PagePromise = global.Promise;
 		// the document's own MediaDevices, read when a list is first needed
 		const navigator = global.navigator;
 		const mediaOf = Reflect.getOwnPropertyDescriptor(
@@ -958,115 +926,28 @@ export default class PermissionsModule extends Module<DocumentClient> {
 				: (shownOf[key].get(real) ??
 					written.get(real) ??
 					(HEX.test(real) ? '' : real));
-		// an id that is not this site's stays what it is, and names nothing:
-		// the browser's own id, which a page was never shown, must not either
-		const toReal = (key: IdKey, shown: unknown): unknown => {
-			if (typeof shown !== 'string' || LITERAL.has(shown)) return shown;
-			const real = realOf[key].get(shown);
-			if (real !== undefined) return real;
-			const told = shownOf[key].has(shown) ? `${shown.slice(1)}0` : shown;
-			written.set(told, shown);
-			return told;
-		};
-
-		// a constraint's ids, one way or the other: a string, a list, or
-		// { exact, ideal } of either. A changed object is a new one over the
-		// page's (its other members are read from the page's as they were)
-		const over = (value: object, changes: Record<string, unknown>) => {
-			const out = Object.create(value) as Record<string, unknown>;
-			for (const name in changes)
-				Reflect.defineProperty(out, name, {
-					value: changes[name],
-					writable: true,
-					enumerable: true,
-					configurable: true,
-				});
-			return out;
-		};
-		type Turn = (key: IdKey, id: unknown) => unknown;
-		const constrained = (key: IdKey, value: unknown, turn: Turn): unknown => {
-			if (isArray(value)) {
-				const out: unknown[] = [];
-				for (let i = 0; i < value.length; i++) out[i] = turn(key, value[i]);
-				return out;
-			}
-			if (value === null || typeof value !== 'object') return turn(key, value);
-			const changes: Record<string, unknown> = {};
-			for (const name of ['exact', 'ideal'])
-				if (name in value)
-					changes[name] = constrained(
-						key,
-						(value as Record<string, unknown>)[name],
-						turn,
-					);
-			return over(value, changes);
-		};
-		const names = (set: unknown): boolean =>
-			set !== null &&
-			typeof set === 'object' &&
-			('deviceId' in set ||
-				'groupId' in set ||
-				'advanced' in set ||
-				'mandatory' in set ||
-				'optional' in set);
-		/** a track's constraints (or one of its `advanced` sets) with its ids turned */
-		const track = (set: unknown, turn: Turn): unknown => {
-			if (!names(set)) return set;
-			const from = set as Record<string, unknown>;
-			const changes: Record<string, unknown> = {};
-			for (const key of ['deviceId', 'groupId'] as IdKey[])
-				if (key in from) changes[key] = constrained(key, from[key], turn);
-			// Chrome's older spelling: mandatory: { sourceId }, optional: [{ sourceId }]
-			const source = (entry: unknown) =>
-				entry !== null && typeof entry === 'object' && 'sourceId' in entry
-					? over(entry, {
-							sourceId: turn(
-								'deviceId',
-								(entry as Record<string, unknown>).sourceId,
-							),
-						})
-					: entry;
-			if ('mandatory' in from) changes.mandatory = source(from.mandatory);
-			for (const list of ['advanced', 'optional'])
-				if (list in from) {
-					const entries = from[list];
-					if (isArray(entries)) {
-						const out: unknown[] = [];
-						for (let i = 0; i < entries.length; i++)
-							out[i] =
-								list === 'advanced'
-									? track(entries[i], turn)
-									: source(entries[i]);
-						changes[list] = out;
-					} else changes[list] = entries;
-				}
-			return over(from, changes);
-		};
-		/** the same, written into the browser's own answer */
-		const shownIn = (value: Record<string, unknown> | undefined) => {
-			if (value === null || typeof value !== 'object') return value;
-			for (const key of ['deviceId', 'groupId'] as IdKey[])
-				if (key in value) {
-					const ids = value[key];
-					if (isArray(ids))
-						for (let i = 0; i < ids.length; i++) ids[i] = toShown(key, ids[i]);
-					else if (ids !== null && typeof ids === 'object') {
-						for (const name of ['exact', 'ideal'])
-							if (name in ids)
-								(ids as Record<string, unknown>)[name] = isArray(
-									(ids as Record<string, unknown>)[name],
-								)
-									? ((ids as Record<string, unknown>)[name] as unknown[]).map(
-											(id) => toShown(key, id),
-										)
-									: toShown(key, (ids as Record<string, unknown>)[name]);
-					} else value[key] = toShown(key, ids);
-				}
-			if (isArray(value.advanced))
-				for (const set of value.advanced as Record<string, unknown>[])
-					shownIn(set);
-			return value;
-		};
+		// what turns the ids of a constraint, an output's or a track's: a
+		// deferred part (./permissionCalls.ts), made at its first use (a
+		// track, a sink, getUserMedia), which a default page never makes
+		let turned: DeviceConstraints | undefined;
+		const constraints = () =>
+			(turned ??= deferred().deviceConstraints({
+				global,
+				isArray,
+				LITERAL,
+				shownOf,
+				realOf,
+				written,
+				toShown,
+				inputs: () => inputs,
+				groups: () => groups,
+				learn,
+				refresh,
+				mayRead,
+				speakers,
+				elementSinkId,
+				contextSinkId,
+			}));
 
 		const hook = (
 			target: object | undefined,
@@ -1231,76 +1112,17 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		const trackPrototype = global.MediaStreamTrack?.prototype;
 		for (const name of ['getSettings', 'getCapabilities', 'getConstraints'])
 			hook(trackPrototype, name, (native, that, args) =>
-				shownIn(Reflect.apply(native, that, args)),
+				constraints().shownIn(Reflect.apply(native, that, args)),
 			);
 		hook(trackPrototype, 'applyConstraints', async (native, that, args) => {
-			if (names(args[0])) {
+			const turn = constraints();
+			if (turn.names(args[0])) {
 				await learn();
-				args[0] = track(args[0], toReal);
+				args[0] = turn.track(args[0], turn.toReal);
 			}
 			return Reflect.apply(native, that, args);
 		});
 
-		// an output is named by its id too. Chrome lets a site choose one only
-		// where it may use the microphone: an element's setSinkId is refused
-		// (SecurityError) for any id but the default's, and an AudioContext
-		// finds no device but '' (measured, with the messages)
-		const sink =
-			(context: boolean) =>
-			async (native: Function, that: unknown, args: unknown[]) => {
-				// (a receiver that is no context or element is the browser's
-				// to refuse, before the policy is looked at: its own getter
-				// tells)
-				const brand = context ? contextSinkId : elementSinkId;
-				if (brand)
-					try {
-						Reflect.apply(brand, that, []);
-					} catch (error) {
-						return await Reflect.apply(native, that, args);
-					}
-				const id: unknown = args[0];
-				// the policy comes first, whatever is asked for
-				if (context && args.length && !speakers())
-					throw withStack(
-						new global.DOMException(
-							'Permissions-Policy disallows speaker selection.',
-							'NotAllowedError',
-						),
-					);
-				if (
-					typeof id === 'string' &&
-					(context ? id !== '' : !LITERAL.has(id))
-				) {
-					const missing = () =>
-						withStack(
-							new global.DOMException(
-								context
-									? `AudioContext.setSinkId(): failed: the device ${id} is not found.`
-									: 'Requested device not found',
-								'NotFoundError',
-							),
-						);
-					await refresh();
-					if (!mayRead('microphone'))
-						throw context
-							? missing()
-							: withStack(
-									new global.DOMException(
-										'No permission to use requested device',
-										'SecurityError',
-									),
-								);
-					if (!LITERAL.has(id)) {
-						// an id that is not this site's names no device, whatever
-						// the browser would say of it
-						await learn();
-						const real = realOf.deviceId.get(id);
-						if (real === undefined) throw missing();
-						args[0] = real;
-					}
-				}
-				return Reflect.apply(native, that, args);
-			};
 		const sinkId = (native: Function, that: unknown) =>
 			toShown('deviceId', Reflect.apply(native, that, []));
 		const element = global.HTMLMediaElement?.prototype;
@@ -1311,6 +1133,16 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			global.AudioContext &&
 			Reflect.getOwnPropertyDescriptor(global.AudioContext.prototype, 'sinkId')
 				?.get;
+		// (without the part, the call's promise rejects with why)
+		const sink =
+			(context: boolean) =>
+			(native: Function, that: unknown, args: unknown[]) => {
+				try {
+					return constraints().sink(context, native, that, args);
+				} catch (error) {
+					return Reflect.apply(PagePromise.reject, PagePromise, [error]);
+				}
+			};
 		hook(element, 'setSinkId', sink(false));
 		hook(element, 'sinkId', sinkId, 'get');
 		const NativeContext = global.AudioContext as
@@ -1329,8 +1161,8 @@ export default class PermissionsModule extends Module<DocumentClient> {
 						typeof options === 'object' &&
 						typeof options.sinkId === 'string'
 					)
-						args[0] = over(options, {
-							sinkId: toReal('deviceId', options.sinkId),
+						args[0] = constraints().over(options, {
+							sinkId: constraints().toReal('deviceId', options.sinkId),
 						});
 					return Reflect.construct(target, args, newTarget);
 				},
@@ -1346,76 +1178,9 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			}
 		}
 
-		// the ids a constraint requires, as the browser reads them: text
-		const exactOf = (value: unknown): string[] | null => {
-			if (value === null || typeof value !== 'object' || isArray(value))
-				return null;
-			const exact = (value as Record<string, unknown>).exact;
-			if (exact === undefined || exact === null) return null;
-			const out: string[] = [];
-			if (isArray(exact))
-				for (let i = 0; i < exact.length; i++) out[i] = `${exact[i]}`;
-			else out[0] = `${exact}`;
-			return out.length ? out : null;
-		};
-		const KINDS = [
-			['audio', 'audioinput'],
-			['video', 'videoinput'],
-		];
-		// names no device anywhere: only ever said to the other document
-		const NO_DEVICE = 'no device of that group';
-		const elsewhere = (plain: unknown) => {
-			// the kinds whose deviceId now stands for a groupId
-			const stands: string[] = [];
-			const known = (kind: string, id: string) =>
-				inputs[kind]?.has(id) || LITERAL.has(id);
-			const sets = (
-				plain !== null && typeof plain === 'object' ? plain : {}
-			) as Record<string, Record<string, unknown> | null | undefined>;
-			for (const [member, kind] of KINDS) {
-				const set = sets[member];
-				if (set === null || typeof set !== 'object') continue;
-				// an advanced set fails no request
-				if (isArray(set.advanced))
-					for (const entry of set.advanced)
-						if (entry !== null && typeof entry === 'object')
-							delete (entry as Record<string, unknown>).groupId;
-				const required = exactOf(set.groupId);
-				delete set.groupId;
-				if (!required) continue;
-				const own = exactOf(set.deviceId);
-				// a deviceId that names no device fails first, as it is
-				if (own && !own.some((id) => known(kind, id))) continue;
-				const ids: string[] = [];
-				for (const group of required)
-					for (const id of groups.get(group)?.[kind] ?? [])
-						if (!own || own.includes(id)) ids.push(id);
-				set.deviceId = { exact: ids.length ? ids : [NO_DEVICE] };
-				stands.push(member);
-			}
-			return (constraint: string) => {
-				if (constraint !== 'deviceId' || !stands.length) return constraint;
-				// the browser settles audio before video
-				for (const [member, kind] of KINDS) {
-					const required = exactOf(sets[member]?.deviceId);
-					if (required && !required.some((id) => known(kind, id)))
-						return stands.includes(member) ? 'groupId' : constraint;
-				}
-				return constraint;
-			};
-		};
-
 		return {
-			elsewhere,
-			incoming: async (constraints) => {
-				if (!isObject(constraints)) return constraints;
-				const { audio, video } = constraints as Record<string, unknown>;
-				if (names(audio) || names(video)) await learn();
-				return over(constraints, {
-					audio: track(audio, toReal),
-					video: track(video, toReal),
-				});
-			},
+			elsewhere: (plain) => constraints().elsewhere(plain),
+			incoming: (value) => constraints().incoming(value),
 			learn,
 		};
 	}
@@ -1456,28 +1221,6 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			global.MediaDeviceInfo?.prototype ?? {},
 			'kind',
 		)?.get;
-		const KIND: Record<string, string> = {
-			camera: 'videoinput',
-			microphone: 'audioinput',
-		};
-		// whether the browser has no device for one of `names`: its list
-		// names every kind it has, whatever the policy and the permission
-		const missing = async (that: unknown, names: string[]) => {
-			if (!enumerate || !kindOf) return false;
-			try {
-				const kinds = new Set<string>();
-				for (const device of (await Reflect.apply(
-					enumerate,
-					that,
-					[],
-				)) as MediaDeviceInfo[])
-					kinds.add(Reflect.apply(kindOf, device, []) as string);
-				return names.some((name) => !kinds.has(KIND[name]));
-			} catch (error) {
-				// no list: the browser's own call says what is wrong
-				return false;
-			}
-		};
 		const Overconstrained = (
 			global as unknown as {
 				OverconstrainedError: new (
@@ -1487,144 +1230,35 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			}
 		).OverconstrainedError;
 		const isArray = global.Array.isArray;
-		// the constraints as plain data a message carries, read as the browser
-		// reads them (inherited members too); undefined when they hold
-		// anything else
-		const plainOf = (value: unknown): unknown => {
-			const copy = (from: unknown, depth: number): unknown => {
-				if (from === null || typeof from !== 'object') {
-					if (
-						typeof from === 'function' ||
-						typeof from === 'symbol' ||
-						typeof from === 'bigint'
-					)
-						throw new RangeError('not plain');
-					return from;
-				}
-				if (depth > 8) throw new RangeError('not plain');
-				if (isArray(from)) {
-					const list: unknown[] = [];
-					for (let i = 0; i < from.length; i++)
-						list[i] = copy(from[i], depth + 1);
-					return list;
-				}
-				const out: Record<string, unknown> = {};
-				for (const key in from)
-					out[key] = copy((from as Record<string, unknown>)[key], depth + 1);
-				return out;
-			};
-			try {
-				return copy(value, 0);
-			} catch (error) {
-				return undefined;
-			}
-		};
+		const PagePromise = global.Promise;
+		// the call itself is a deferred part (./permissionCalls.ts): a page
+		// rarely asks for a camera or a microphone
+		let call:
+			((...args: [Function, unknown, unknown[]]) => unknown) | undefined;
 		Reflect.defineProperty(prototype, 'getUserMedia', {
 			...Reflect.getOwnPropertyDescriptor(prototype, 'getUserMedia'),
 			value: proxyModule.wrapFunction(
 				prototype.getUserMedia,
-				async (target, that, args) => {
-					// (a receiver that is not this document's MediaDevices is
-					// the browser's to refuse, before anything is awaited)
-					if (that !== mediaDevices)
-						return await Reflect.apply(target, that, args);
-					// the ids the page names are its site's: the browser's own go in
-					const constraints = (await deviceIds.incoming(args[0])) as
-						MediaStreamConstraints | undefined;
-					if (args.length) args[0] = constraints;
-					// the kinds asked for, as the browser reads the members: null
-					// and any object are a set of constraints (measured: `audio:
-					// null` opens the microphone), anything else a boolean
-					const asks = (member: unknown) =>
-						member === null || isObject(member) || !!member;
-					const names: string[] = [];
-					if (isObject(constraints)) {
-						if (asks(constraints.video)) names.push('camera');
-						if (asks(constraints.audio)) names.push('microphone');
-					}
-					// the browser rejects a request for nothing with its own TypeError
-					if (!names.length) return Reflect.apply(target, that, args);
-					// kinds the browser's own policy refuses this document (the
-					// host's Permissions-Policy, the allow of a frame above):
-					// its call can neither prompt nor open a device, and answers
-					// as it does natively under that policy, in its order and
-					// with its line in this document's console
-					if (names.every(browserRefuses))
-						return Reflect.apply(target, that, args);
-					const refused = (dismissed = false) =>
-						withStack(
-							new global.DOMException(
-								dismissed ? 'Permission dismissed' : 'Permission denied',
-								'NotAllowedError',
-							),
-						);
-					// what the browser answers before its policy and its permission
-					// (in a frame of the controller's document: `elsewhere`)
-					const checks = async () => {
-						const plain = plainOf(constraints);
-						// kinds with no constraints on them (true, null): no set
-						// of them is malformed and none can fail a device, so only
-						// a missing device ends the request before the policy.
-						// The controller is not asked, and its console gets no
-						// line
-						const bare =
-							plain !== undefined &&
-							!isObject((plain as MediaStreamConstraints).audio) &&
-							!isObject((plain as MediaStreamConstraints).video);
-						const here =
-							plain === undefined || bare ? null : deviceIds.elsewhere(plain);
-						const first = here ? await verdict(plain) : null;
-						if (first?.name === 'TypeError')
-							throw new global.TypeError(first.message);
-						if (first?.name === 'OverconstrainedError')
-							throw new Overconstrained(
-								here!(first.constraint ?? ''),
-								first.message,
-							);
-						if (
-							first?.name === 'NotFoundError' ||
-							// no verdict (none needed, a host without the check,
-							// constraints no message carries): the devices at least
-							(first?.name !== 'NotAllowedError' &&
-								(await missing(that, names)))
-						)
-							throw withStack(
-								new global.DOMException(
-									'Requested device not found',
-									'NotFoundError',
-								),
-							);
-					};
-					// a request that goes straight to the browser's call gets the
-					// browser's order from it; one this module answers, or the
-					// host is asked about, gets those checks first
-					const straight = await direct(names);
-					if (!straight) {
-						await checks();
-						if (!names.every(allowed)) throw refused();
-					}
-					const answer = await request(names);
-					if (!answer.call) {
-						// refused after all (the site was answered meanwhile)
-						if (straight) await checks();
-						throw refused(answer.dismissed);
-					}
+				(target, that, args) => {
 					try {
-						const stream = await Reflect.apply(target, that, args);
-						void answer.settle(true);
-						// what its tracks say of their device is read at once
-						await deviceIds.learn();
-						return stream;
+						call ??= deferred().userMediaCall({
+							global,
+							mediaDevices,
+							enumerate,
+							kindOf,
+							Overconstrained,
+							isArray,
+							request,
+							allowed,
+							browserRefuses,
+							direct,
+							verdict,
+							deviceIds,
+						});
 					} catch (error) {
-						// the site's states are what the refusal made them by the
-						// time the page hears of it, as the browser's are
-						await answer.settle(
-							(error as DOMException)?.name === 'NotAllowedError'
-								? false
-								: null,
-						);
-						throw error;
+						return Reflect.apply(PagePromise.reject, PagePromise, [error]);
 					}
+					return call(target, that, args);
 				},
 			),
 		});
@@ -1647,6 +1281,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		const NativeNotification = global.Notification;
 		if (typeof NativeNotification !== 'function') return;
 		const proxyModule = this.client.getModule(ProxyModule)!;
+		const PagePromise = global.Promise;
 		const toNotification = (state: PermissionState): NotificationPermission =>
 			state === 'prompt' ? 'default' : state;
 		const permission = Reflect.getOwnPropertyDescriptor(
@@ -1671,28 +1306,18 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			value: proxyModule.wrapFunction(
 				requestPermission,
 				(target, that, args) => {
-					const callback = args[0];
-					const decided = (async (): Promise<NotificationPermission> => {
-						if (!allowed('notifications')) return 'denied';
-						const answer = await request(['notifications']);
-						if (!answer.call)
-							return answer.dismissed
-								? 'default'
-								: toNotification(siteState('notifications'));
-						const result = (await Reflect.apply(
-							target,
-							that,
-							[],
-						)) as NotificationPermission;
-						await answer.settle(
-							result === 'granted' ? true : result === 'denied' ? false : null,
-						);
-						return result;
-					})();
-					return decided.then((result) => {
-						if (typeof callback === 'function') callback(result);
-						return result;
-					});
+					// (a deferred part, ./permissionCalls.ts; without it, the
+					// promise rejects with why)
+					try {
+						return deferred().notificationCall({
+							request,
+							allowed,
+							siteState,
+							toNotification,
+						})(target, that, args);
+					} catch (error) {
+						return Reflect.apply(PagePromise.reject, PagePromise, [error]);
+					}
 				},
 			),
 		});

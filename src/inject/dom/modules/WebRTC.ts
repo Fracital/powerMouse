@@ -1,9 +1,5 @@
-import { rtcModule, rtcStackJS, rtcWorkerJS } from '../../../routeURL';
-import { closePort, onPort, privateChannel } from '../../../transport/ports';
-import { BUILD } from '../../../version';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
-import WorkerModule from '../../modules/Worker';
 import { withStack } from '../../nativeErrors';
 import { LazyWeakMap } from '../../ownCollections';
 import {
@@ -17,12 +13,12 @@ import {
 	XMLHttpRequestEventTarget,
 } from '../../snapshot';
 import type DocumentClient from '../Client';
+import { deferred } from '../deferred';
 import type {
 	Installed,
 	Members,
 	RtcContext,
 	SharedTables,
-	StackApi,
 	StandIns,
 } from '../rtcLazy';
 import { DOMParser, navigator, postMessage } from '../snapshot';
@@ -134,6 +130,19 @@ const snapshot = {
 	},
 };
 
+/** what loading the library takes: this bundle's own, from before the page ran */
+const loading = {
+	requestOpen,
+	requestSend,
+	requestStatus,
+	requestText,
+	realmEval,
+	snapshot,
+	setValues,
+	setIteratorNext,
+};
+export type RtcLoading = typeof loading;
+
 /** the client of a document that has the tables */
 interface Linked {
 	rtc?: SharedTables;
@@ -141,43 +150,6 @@ interface Linked {
 // an about:blank child (a frame, a popup) runs its creator's bundle: the
 // creator's tables
 let bundleShared: SharedTables | null = null;
-/** the library, evaluated once for the bundle */
-let api: StackApi | null = null;
-
-/**
- * The library's text: the one a document that shares these tables loaded,
- * or one synchronous request for the asset, which the calling script waits
- * for (from the HTTP cache after the first)
- */
-function libraryText(shared: SharedTables, url: string): string {
-	if (typeof shared.text === 'string') return shared.text;
-	const request = new XMLHttpRequest();
-	Reflect.apply(requestOpen, request, ['GET', url, false]);
-	Reflect.apply(requestSend, request, []);
-	const status: unknown = Reflect.apply(requestStatus, request, []);
-	if (status !== 200)
-		throw new Error(
-			`STomp: the WebRTC library did not load (HTTP ${String(status)})`,
-		);
-	return String(Reflect.apply(requestText, request, []));
-}
-
-function loadLibrary(shared: SharedTables, url: string): StackApi {
-	if (api) return api;
-	const text = libraryText(shared, url);
-	// the file's own text, which names nothing of the page's: its globals
-	// are this bundle's (rtcStackGlobals.ts)
-	const make = Reflect.apply(realmEval, undefined, [
-		`(function (__stompRtcSnap, __stompRtcOut) {\n${text}\nreturn __stompRtcOut.api;\n})`,
-	]) as (globals: typeof snapshot, out: object) => StackApi;
-	const made = make(snapshot, {});
-	if (!made || made.build !== BUILD)
-		throw new Error('STomp: the WebRTC library is of another build');
-	shared.text = text;
-	api = made;
-	return made;
-}
-
 export default class WebRTCModule extends Module<DocumentClient> {
 	apply() {
 		const client = this.client;
@@ -383,31 +355,25 @@ export default class WebRTCModule extends Module<DocumentClient> {
 
 		// --- the library, installed for this document when it is first needed ---
 
+		// (a deferred part, ../rtcInstall.ts: most documents never make a
+		// connection)
 		let installed: Installed | null = null;
-		const install = (): Installed => {
-			if (installed) return installed;
-			const loaded = loadLibrary(shared, rtcStackJS(client.url, client.config));
-			installed = loaded.install(context);
-			// the documents that share these tables have their members on
-			// the browser's prototypes too: their objects are this one's
-			const each = Reflect.apply(setValues, shared.installs, []);
-			for (;;) {
-				const step = Reflect.apply(setIteratorNext, each, []) as {
-					done: boolean;
-					value: WeakRef<() => void>;
-				};
-				if (step.done) break;
-				const other = Reflect.apply(captures.weakDeref, step.value, []);
-				if (other && other !== installNow)
-					try {
-						other();
-					} catch (error) {
-						// a document that is gone or cannot load it: its own
-						// first connection tries again
-					}
-			}
-			return installed;
-		};
+		const install = (): Installed =>
+			installed ??
+			deferred().rtcInstall(
+				{
+					client,
+					realm,
+					shared,
+					proxyModule,
+					natives,
+					standIns,
+					captures,
+					installNow,
+					loading,
+				},
+				(made) => (installed = made),
+			);
 		const installNow = () => void install();
 		// the entries of documents that are gone go first, then this one's,
 		// made by the tables' own realm: one made by this document's WeakRef
@@ -477,20 +443,6 @@ export default class WebRTCModule extends Module<DocumentClient> {
 		};
 		const realm = objectCreate(null) as Record<string, any>;
 		for (const name of REALM) realm[name] = global[name];
-		const context: RtcContext = {
-			client,
-			realm,
-			ports: { privateChannel, onPort, closePort },
-			shared,
-			proxyModule,
-			workerModule: client.getModule(WorkerModule),
-			withStack,
-			natives,
-			standIns,
-			captures,
-			workerURL: () => rtcWorkerJS(client.url, client.config),
-			moduleURL: () => rtcModule(client.url, client.config),
-		};
 
 		const page = global as unknown as Record<string, unknown>;
 		page.RTCPeerConnection = standIns.RTCPeerConnection;

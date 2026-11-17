@@ -813,7 +813,9 @@ TURN server.
   with a synchronous request (from the HTTP cache after the first) and
   evaluates it in the bundle's realm with the globals the bundle took when
   it loaded; the page reads no report and no resource entry of that
-  request. What the library uses of the document is taken before any page
+  request. What loads and installs it is a deferred part of the bundle
+  (`src/inject/dom/rtcInstall.ts`, AGENTS.md), made at that first
+  connection too. What the library uses of the document is taken before any page
   script: the module takes the realm's constructors and objects it needs
   (`Promise`, `Worker`, `MessageEvent`, `setTimeout` and the like) when
   the document starts, and the members it calls (`postMessage` of ports
