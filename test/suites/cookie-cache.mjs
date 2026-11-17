@@ -12,18 +12,26 @@ await page.waitForFunction(
 	null,
 	{ timeout: 45000 },
 );
-await page.evaluate(async (fixture) => {
+const shown = await page.evaluateHandle(async (fixture) => {
 	const element = document.createElement('iframe');
 	document.body.append(element);
 	window.__el = element;
 	await window.controller
 		.createFrame(element)
 		.go(`${fixture}pages/cookie-cache.html`);
-	// the page counts its client's reads of the jar through this reader:
-	// no page can reach its client (by the name the controller minted)
-	const name = window.controller.config.names.client;
-	element.contentWindow.__reads = () => element.contentWindow[name].cookieReads;
+	return element;
 }, FIXTURE);
+// the page counts its client's reads of the jar through this reader: no
+// page can reach its client (by the name the controller minted). Set in the
+// frame, which a site pool shows from another origin than this page's
+await (
+	await shown.asElement().contentFrame()
+).evaluate(
+	(name) => {
+		window.__reads = () => window[name].cookieReads;
+	},
+	await page.evaluate(() => window.controller.config.names.client),
+);
 let cc = {};
 for (let i = 0; i < 60 && !cc.done; i++) {
 	await sleep(500);

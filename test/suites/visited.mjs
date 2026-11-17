@@ -37,6 +37,7 @@ import {
 	ok,
 	PROXY,
 	sleep,
+	SLOTS,
 	submitLanding,
 	submitOmni,
 	waitForServer,
@@ -415,6 +416,46 @@ const KNOWN = {
 	'location.href in a frame of B under A': FRESH_CONTEXT,
 	'a link clicked in a srcdoc frame of A': FRESH_CONTEXT,
 };
+// With the site pool (in both modes) a frame of B under A is shown from
+// another slot than A: its parent's document is of another origin to the
+// browser, no fresh context is made, and the frame's navigation makes its
+// entry as natively
+const POOLED = [
+	'a link clicked in a frame of B under A',
+	'location.href in a frame of B under A',
+];
+/** `slots`: the run's pool (slotsOf), null without one */
+const knownIn = (slots, label) =>
+	label in KNOWN && !(slots && POOLED.includes(label));
+// With the site pool, a self-link of a visit made on S is recorded under
+// the frame origin of S's slot (Chrome keys a visit by the origin of the
+// document that started it), and the visited URL's own site is shown from
+// another slot, whose documents never read it (docs/site-pool.md): only the
+// contexts of S's own site read as natively
+const SELF_LINKS = [
+	"a link clicked on a site's own origin",
+	"a redirect from a site's own origin: where it ends",
+	"a redirect from a site's own origin: the link's own URL",
+];
+/** the slot each site is shown from, by its letter; null without a pool (both modes take it) */
+async function slotsOf(page) {
+	if (!SLOTS.length) return null;
+	const names = Object.keys(SITES);
+	const origins = await page.evaluate(
+		(urls) => Promise.all(urls.map((url) => window.controller.siteOrigin(url))),
+		names.map((name) => `${SITES[name]}/`),
+	);
+	return origins.every((origin) => origin === null)
+		? null
+		: Object.fromEntries(names.map((name, i) => [name, origins[i]]));
+}
+/** the cells of contexts whose frame is shown from S's slot */
+const onS = (cells, slots) =>
+	Object.fromEntries(
+		Object.entries(cells).filter(
+			([context]) => slots[context.split('/').at(-1)] === slots.S,
+		),
+	);
 
 /** where every URL is looked at: top-level on a site, or `[top, frame]` */
 const CONTEXTS = [
@@ -863,14 +904,21 @@ for (const [mode, base] of [
 	ok(`${mode}: every visit and reading was made`, !proxied.failed.length, [
 		...proxied.failed,
 	]);
+	const slots = await slotsOf(page);
 	for (const [label, cells] of Object.entries(native.result)) {
 		const want = row(cells);
 		const got = row(proxied.result[label] ?? {});
-		if (label in KNOWN)
+		if (knownIn(slots, label))
 			ok(
 				`${mode}: ${label} is not recorded (${KNOWN[label]})`,
 				got === all,
 				`\n      native  ${want}\n      proxied ${got}`,
+			);
+		else if (slots && SELF_LINKS.includes(label))
+			ok(
+				`${mode}: ${label} as natively in S's slot (a self-link of another slot is not read)`,
+				row(onS(cells, slots)) === got,
+				`\n      native  ${want}\n      in S's  ${row(onS(cells, slots))}\n      proxied ${got}`,
 			);
 		else
 			ok(

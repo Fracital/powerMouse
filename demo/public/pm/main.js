@@ -83,6 +83,21 @@ const SERVICE_WORKER_EVENT_DELAY =
 const HTTP3 = new URLSearchParams(location.search).has('http3')
 	? new URLSearchParams(location.search).get('http3') !== '0'
 	: CFG.http3 !== false;
+// The site pool (ControllerInit.sitePool, docs/site-pool.md): the server
+// answers on a few more ports (STOMP_SITE_POOL, five by default), and the
+// controller shows every proxied site from one of them, so a page and a
+// frame of another site in it get a process each; ?nopool leaves it out for
+// a visit. The slots are ports of the proxy's host: this page's in the same
+// origin mode, the proxy origin's in the isolated one. The controller falls
+// back to the proxy's own origin by itself where a slot does not answer.
+const SITE_POOL = (() => {
+	const ports = CFG.sitePool;
+	if (!Array.isArray(ports) || !ports.length) return null;
+	const query = new URLSearchParams(location.search);
+	if (query.has('nopool')) return null;
+	const proxy = ISOLATED ? new URL(PROXY_ORIGIN) : location;
+	return ports.map((port) => `${proxy.protocol}//${proxy.hostname}:${port}`);
+})();
 // the Rust rewriters (docs/rust-plan.md): STOMP_REWRITER=wasm on the server
 // or ?wasm on this page; ?js keeps the JavaScript ones for one load
 const REWRITER = new URLSearchParams(location.search).has('js')
@@ -715,7 +730,8 @@ function isFrameOf(element, source) {
 
 // A bookmark keeps its site's icon as a small picture. The host page cannot
 // load it itself: it is outside the service worker's scope, so its request
-// would leave the proxy. Every proxied top document hands the host a port,
+// would leave the proxy. Every proxied top document hands the host a port
+// (not a popup, which is its own top: its page would hear the message),
 // and any of them loads any bookmark's icon on request, as a picture: an
 // <img> whose src the inject routes (so neither the page's CSP nor a
 // cross-origin icon host's missing CORS headers stop it), read back with
@@ -723,7 +739,7 @@ function isFrameOf(element, source) {
 // page's own origin to the browser), at 64 px at the most
 const ICON_MESSAGE = '$stompDemo$icon';
 const ICON_HOOK = `
-if (stomp.kind === 'document' && stomp.isTop) {
+if (stomp.kind === 'document' && stomp.isTop && stomp.window.top !== stomp.window) {
 	const win = stomp.window;
 	const apply = win.Reflect.apply;
 	const bitmap = win.createImageBitmap;
@@ -779,7 +795,7 @@ addEventListener('message', (event) => {
 // early, so the captured store keeps working after that deletion.
 const TOKEN_MESSAGE = '$stompDemo$token';
 const TOKEN_HOOK = `
-if (stomp.kind === 'document' && stomp.isTop) {
+if (stomp.kind === 'document' && stomp.isTop && stomp.window.top !== stomp.window) {
 	const win = stomp.window;
 	let host = '';
 	try { host = new win.URL(stomp.origin).hostname; } catch {}
@@ -859,8 +875,10 @@ async function startController(name) {
 	badge(
 		'Mode',
 		ISOLATED
-			? `isolated: proxy on ${PROXY_ORIGIN}, host on ${location.origin}`
-			: `same origin (${location.origin})`,
+			? `isolated: proxy on ${PROXY_ORIGIN}${SITE_POOL ? ` and a pool of ${SITE_POOL.length} more ports` : ''}, host on ${location.origin}`
+			: SITE_POOL
+				? `same origin (${location.origin}), sites on a pool of ${SITE_POOL.length} more ports`
+				: `same origin (${location.origin})`,
 		'green',
 	);
 	badge(
@@ -895,6 +913,7 @@ async function startController(name) {
 			serviceWorkerEventDelay: SERVICE_WORKER_EVENT_DELAY,
 			...(REWRITER && { rewriter: REWRITER }),
 			...(CFG.allowSelfProxy && { allowSelfProxy: true }),
+			...(SITE_POOL && { sitePool: { origins: SITE_POOL } }),
 			...ADBLOCK,
 			...controllerCallbacks,
 		});
@@ -909,6 +928,7 @@ async function startController(name) {
 			transport: transports[name](),
 			directory: DIRECTORY,
 			codec: 'xor',
+			...(SITE_POOL && { sitePool: { origins: SITE_POOL } }),
 			cache: CACHE,
 			serviceWorkers: SERVICE_WORKERS,
 			serviceWorkerTimeout: SERVICE_WORKER_TIMEOUT,
@@ -1154,10 +1174,15 @@ function closeTab(tab, { stayInRecents = false } = {}) {
 
 function tabTitle(tab) {
 	if (tab.frame.title) return tab.frame.title; // remote frames report it
+	// (a tab on a slot of the site pool is of another origin: its page
+	// reports its title)
+	const reported = SITE_POOL ? tab.frame.lastNavigate?.title : '';
 	try {
-		return tab.element.contentDocument?.title || tab.url || 'New tab';
+		return (
+			tab.element.contentDocument?.title || reported || tab.url || 'New tab'
+		);
 	} catch {
-		return tab.url || 'New tab';
+		return reported || tab.url || 'New tab';
 	}
 }
 

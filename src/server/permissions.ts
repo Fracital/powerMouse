@@ -9,6 +9,7 @@ import type {
 } from '../transport/messages';
 import { PERMISSION_ROUTE } from '../transport/messages';
 import type { HintsDocument } from './clientHints';
+import { PERMISSIONS_DATABASE, PERMISSIONS_STORE, type JarDB } from './jarDB';
 import type Router from './Router';
 import { json } from './Router';
 
@@ -53,11 +54,22 @@ export const PASSKEY_FEATURES = [
 let store: Promise<IDBPDatabase | null> | null = null;
 const states = new Map<string, PermissionState>();
 let loaded: Promise<void> | null = null;
+/**
+ * the site pool: a slot's worker keeps the states in the host origin's
+ * database, which every slot's worker asks (src/server/jarDB.ts), and
+ * reads each one anew: another slot's worker may have changed it
+ */
+let remote: JarDB | null = null;
+
+/** the site pool: ask the host's database for the states, over the jar's port */
+export function usePermissionsRemote(db: JarDB) {
+	remote = db;
+}
 
 function openStore(): Promise<IDBPDatabase | null> {
-	store ??= openDB('stompPermissions', 1, {
+	store ??= openDB(PERMISSIONS_DATABASE, 1, {
 		upgrade: (db) => {
-			db.createObjectStore('states');
+			db.createObjectStore(PERMISSIONS_STORE);
 		},
 	}).catch(() => null);
 	return store;
@@ -85,11 +97,32 @@ function load(): Promise<void> {
 }
 
 async function stateOf(site: string, name: string): Promise<PermissionState> {
+	if (remote) {
+		try {
+			const kept = await remote.get(PERMISSIONS_STORE, keyOf(site, name));
+			return kept === 'granted' || kept === 'denied' ? kept : 'prompt';
+		} catch (error) {
+			// the host's page is gone: what this worker last heard
+			return states.get(keyOf(site, name)) ?? 'prompt';
+		}
+	}
 	await load();
 	return states.get(keyOf(site, name)) ?? 'prompt';
 }
 
 async function setState(site: string, name: string, state: PermissionState) {
+	if (remote) {
+		const key = keyOf(site, name);
+		if (state === 'prompt') states.delete(key);
+		else states.set(key, state);
+		try {
+			if (state === 'prompt') await remote.delete(PERMISSIONS_STORE, key);
+			else await remote.put(PERMISSIONS_STORE, state, key);
+		} catch (error) {
+			// kept for this worker's life only
+		}
+		return;
+	}
 	await load();
 	const key = keyOf(site, name);
 	if (state === 'prompt') states.delete(key);

@@ -1,0 +1,53 @@
+<!doctype html>
+<title>focus nav</title>
+<p><a id="to" href="#">next</a> <input id="field" /></p>
+<script>
+	// The focus suite's page for navigations and frames: what the document
+	// knows of focus at load and after, and every focus and blur it saw.
+	// `?to=` is the link's destination, `?child=` a frame in it.
+	(() => {
+		const query = new URLSearchParams(location.search);
+		const name = (target) =>
+			target === window
+				? 'window'
+				: target === document
+					? 'document'
+					: target?.id || target?.tagName || String(target);
+		const state = (window.__focus = {
+			n: query.get('n'),
+			keys: '',
+			loaded: false,
+			events: [],
+			now() {
+				return {
+					hasFocus: document.hasFocus(),
+					active: name(document.activeElement),
+					matches: document.getElementById('field').matches(':focus'),
+					within: document.body.matches(':focus-within'),
+				};
+			},
+		});
+		const to = query.get('to');
+		if (to) document.getElementById('to').href = to;
+		const child = query.get('child');
+		if (child) {
+			const frame = document.createElement('iframe');
+			frame.id = 'child';
+			frame.src = child;
+			document.body.append(frame);
+		}
+		for (const type of ['focus', 'blur'])
+			addEventListener(
+				type,
+				(event) => state.events.push(`${type}:${name(event.target)}`),
+				true,
+			);
+		addEventListener('keydown', (event) => {
+			if (event.key.length === 1) state.keys += event.key;
+		});
+		addEventListener('load', () => {
+			state.atLoad = state.now();
+			state.loaded = true;
+		});
+	})();
+</script>

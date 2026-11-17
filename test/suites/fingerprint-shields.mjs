@@ -12,6 +12,7 @@
 //     measureText is farbled per site.
 import {
 	done,
+	evaluateIsolated,
 	FIXTURE,
 	launch,
 	ok,
@@ -59,13 +60,30 @@ async function readFp(page, host) {
 				(!host || value.host === host) &&
 				(value.audioDone || i > 20)
 			)
-				return value;
+				return { ...value, realScreen: await realScreenOf(frame) };
 		}
 	}
 	return null;
 }
 
-const browser = await launch();
+/**
+ * The screen the browser reports to the document of `frame`, read in a world
+ * of its own in that document, which no hook reaches: the baseline a proxied
+ * page's screen passes through to, or is rounded from. Not the host
+ * window's: Playwright emulates its viewport's screen in the page's renderer
+ * only, and a frame in another process (a site pool's slot, as natively a
+ * frame of another site) reports the browser's own screen (measured).
+ */
+const realScreenOf = (frame) =>
+	evaluateIsolated(frame, () =>
+		[screen.width, screen.height, screen.availWidth, screen.availHeight].join(
+			'x',
+		),
+	).catch(() => null);
+
+// a screen no dimension of which is a 50 px bucket, so a rounded screen
+// always differs from it (headless Chrome's own is 800x600)
+const browser = await launch(['--screen-info={1283x803}']);
 
 // native, loaded directly (no proxy)
 const nativePage = await browser.newPage();
@@ -77,15 +95,6 @@ ok(
 	native?.ok && native.canvasImage > 0 && native.cores > 0,
 	JSON.stringify({ canvas: native?.canvasImage, cores: native?.cores }),
 );
-
-// a proxied frame sees the same screen as its host window, so the host page's
-// own (native) screen is the right OFF baseline for the proxied frame's screen
-const hostScreenOf = (page) =>
-	page.evaluate(() =>
-		[screen.width, screen.height, screen.availWidth, screen.availHeight].join(
-			'x',
-		),
-	);
 
 // --- OFF (the default): every surface passes through to native ---------------
 {
@@ -101,7 +110,7 @@ const hostScreenOf = (page) =>
 	await sleep(500); // let the shields reach the worker before the navigation
 	await submitLanding(page, targetA);
 	const fpOff = await readFp(page, hostA);
-	const off = fpOff ? { ...fpOff, hostScreen: await hostScreenOf(page) } : null;
+	const off = fpOff;
 	ok(
 		'default: the canvas readback matches native (no farbling)',
 		off &&
@@ -120,13 +129,14 @@ const hostScreenOf = (page) =>
 		}),
 	);
 	ok(
-		'default: screen (vs the host window), languages and measureText pass through',
+		"default: screen (vs the browser's for the document), languages and measureText pass through",
 		off &&
-			off.screen === off.hostScreen &&
+			!!off.realScreen &&
+			off.screen === off.realScreen &&
 			off.languages === native.languages &&
 			off.measure === native.measure,
 		JSON.stringify({
-			screen: [off?.screen, off?.hostScreen],
+			screen: [off?.screen, off?.realScreen],
 			languages: [off?.languages, native.languages],
 		}),
 	);
@@ -158,7 +168,6 @@ await submitOmni(onPage, targetB);
 const onB = await readFp(onPage, hostB);
 await submitOmni(onPage, targetA);
 const onA2 = await readFp(onPage, hostA);
-const onHostScreen = await hostScreenOf(onPage);
 await onPage.close();
 
 ok(
@@ -192,11 +201,12 @@ ok(
 	JSON.stringify({ on: onA?.deviceMemory, native: native.deviceMemory }),
 );
 ok(
-	'screen on: every dimension is rounded to a 50 px bucket (differs from the host window)',
+	"screen on: every dimension is rounded to a 50 px bucket (differs from the browser's)",
 	onA &&
+		!!onA.realScreen &&
 		onA.screen.split('x').every((n) => Number(n) % 50 === 0) &&
-		onA.screen !== onHostScreen,
-	JSON.stringify({ on: onA?.screen, host: onHostScreen }),
+		onA.screen !== onA.realScreen,
+	JSON.stringify({ on: onA?.screen, real: onA?.realScreen }),
 );
 ok(
 	'locale on: languages and timezone are standardised (en-US, UTC)',

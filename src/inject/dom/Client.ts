@@ -81,6 +81,7 @@ import { LazyMap, LazySet, LazyWeakMap, LazyWeakSet } from '../ownCollections';
 import {
 	deferredText,
 	getPublicSuffix,
+	lightFactory,
 	lightText,
 	modifyCSS,
 	modifyJS,
@@ -111,6 +112,7 @@ import DOMAttributesModule, {
 } from './modules/DOMAttributes';
 import { MARKER } from './modules/MutationObserver';
 import SyncModule from './modules/Sync';
+import type { PoolState } from './pool';
 import { createRewriterRealm, libraryFactoryFromScript } from './rewriterRealm';
 import {
 	documentNonce,
@@ -124,6 +126,7 @@ import {
 	unwrapNoscript,
 } from './sandbox';
 import { siteKeyOf } from './site';
+import { siteWindows } from './siteWindows';
 
 type OpenCallback = () => void;
 
@@ -207,6 +210,21 @@ type ParsingState = 'parsingBeforeWrite' | void;
 
 /** a <style> whose text is CSS: an HTML one or an SVG one */
 export type StyleElement = HTMLStyleElement | SVGStyleElement;
+
+/**
+ * The site pool: a navigation a frame asks a window of another slot to
+ * make of itself (DocumentClient navigateAcross): a link's or
+ * window.open's URL, or a form's submission (its attributes, its action
+ * and the entry list the frame's browser built)
+ */
+export type AcrossNavigation =
+	| { kind: 'link'; url: string }
+	| {
+			kind: 'form';
+			action: string;
+			attributes: [string, string][];
+			entries: [string, string | File][];
+	  };
 
 const globalParsingState = new WeakMap<typeof globalThis, ParsingState>();
 
@@ -410,6 +428,8 @@ export default class DocumentClient extends Client {
 	markActivation: typeof markActivation | null = null;
 	/** @internal the Permissions module's gate hooks: `done` lists the navigator members a page was handed */
 	permissionHooks: { done?: string[] } | null = null;
+	/** @internal the site pool's state of this document (Pool) */
+	readonly pool: PoolState = [0, undefined, null, null, null, 0, null, null];
 	/** the window's native frameElement getter (the Framing module hooks it) */
 	#frameElementGet: (() => Element | null) | undefined;
 	/** whether this window's opener was an opaque origin when it was created */
@@ -514,11 +534,17 @@ export default class DocumentClient extends Client {
 			shareRewriter(() => this.#rewriterLibrary(), {
 				lightText: () => {
 					const top = this.#topClient();
-					return top === this ? null : top.rewriterLightText(BUILD);
+					return top === this
+						? ((this.sites ? siteWindows().slotShared(this) : null)?.light ??
+								null)
+						: top.rewriterLightText(BUILD);
 				},
 				deferredText: (name) => {
 					const top = this.#topClient();
-					return top === this ? null : top.deferredPartsText(BUILD, name);
+					return top === this
+						? ((this.sites ? siteWindows().slotShared(this) : null)?.deferred ??
+								null)
+						: top.deferredPartsText(BUILD, name);
 				},
 				factory: (text, name) => {
 					// only where the document refuses eval: a document without
@@ -539,21 +565,32 @@ export default class DocumentClient extends Client {
 			// the top makes the light library in a realm no page code runs in,
 			// from the file its shell loaded (a document whose policy refuses
 			// code made from a string makes it with a script carrying the
-			// document's nonce instead)
-			this.#rewriter = createRewriterRealm(
-				this.global.document,
-				undefined,
-				this.scriptFacts.evaluates ? null : this.scriptNonce,
-			);
+			// document's nonce instead). A frame of another slot than its
+			// page's, which has no top in reach, takes the one its slot's agent
+			// made for every such frame of the slot (siteWindows slotShared)
+			this.#rewriter =
+				(this.sites ? siteWindows().slotShared(this) : null)?.rewriter ??
+				createRewriterRealm(
+					this.global.document,
+					lightFactory,
+					this.scriptFacts.evaluates ? null : this.scriptNonce,
+				);
 		// the library a top shares rewrites in the wasm module the controller
 		// compiled, once it has arrived: the realm only instantiates it, and
 		// until then a rewrite compiles the bytes synchronously (rewriter.ts
-		// provideModule). One instance per top; a frame under it holds none
+		// provideModule). One instance per top; a frame under it holds none,
+		// and the agent's library is given the module once, by the first
+		// frame that has it
 		const library = this.#rewriter;
+		// (a frame under a top holds none, and asks no agent)
+		const agents =
+			!!library &&
+			library ===
+				(this.sites ? siteWindows().slotShared(this) : null)?.rewriter;
 		if (library)
 			this.requestModules((name, module) => {
 				try {
-					library.adopt(name, module);
+					if (!agents || !library.holds(name)) library.adopt(name, module);
 				} catch (error) {
 					// the library is gone with its document
 				}
@@ -1087,6 +1124,8 @@ export default class DocumentClient extends Client {
 		elements: WeakMap<object, Element>;
 		/** the WeakRef of the realm that made the registry, which makes `windows`' */
 		weakRef: typeof WeakRef;
+		/** how many windows were recorded (none: nothing to look up) */
+		held?: number;
 	};
 	/**
 	 * The policies the browser applies to this document for the page's own
@@ -1130,7 +1169,7 @@ export default class DocumentClient extends Client {
 			// the browser enforces no Trusted Types policy of the page's
 			// (src/csp.ts), so a meta that sets one does not turn STomp's own
 			// Trusted Types on
-			const text = browserPolicy(policy, this.url.url);
+			const text = browserPolicy(policy, this.url.url, this.sites?.origins);
 			texts.push([
 				text === null
 					? ''
@@ -2136,13 +2175,27 @@ export default class DocumentClient extends Client {
 	 */
 	ancestorOrigins(): string[] {
 		const origins: string[] = [];
+		let last: DocumentClient | null = null;
 		for (
 			let client = this.parentClient();
 			client && origins.length < 64;
 			client = client.parentClient()
-		)
+		) {
 			origins.push(client.origin);
-		return origins;
+			last = client;
+		}
+		// the site pool: past a parent of another slot's origin, the ancestors
+		// the worker was told of when it served the frame of this world that
+		// is under it (ScriptFacts.framed), else what the route's marker says
+		// (none past a proxied top: the hub's page is above it)
+		const outer = last ?? this;
+		const sites = this.sites;
+		if (sites && outer.nested)
+			origins.push(
+				...(siteWindows().framedOf(outer)?.ancestors ??
+					siteWindows().ancestorsPast(this, sites, outer, origins.length)),
+			);
+		return origins.slice(0, 64);
 	}
 	/**
 	 * Whether the browser refuses (or reports) a URL of `scheme` for
@@ -2248,10 +2301,25 @@ export default class DocumentClient extends Client {
 	get nested(): boolean {
 		try {
 			const parent = this.parent;
-			return parent !== this.global && this.names.client in parent;
+			if (parent !== this.global && this.names.client in parent) return true;
 		} catch (error) {
-			return false;
+			// a parent of another origin: the host's, or another slot's
 		}
+		return this.slotMark !== null;
+	}
+	/**
+	 * The site pool: what this document's route says of the frames above it,
+	 * when its parent is a document of another slot (another origin, out of
+	 * this one's reach). The parent's inject named its top origin, and
+	 * whether it is in a partition, in the route it gave the frame
+	 * (nestedMark), and a navigation of the frame's own keeps it. Null with a
+	 * parent in reach, for a top-level document (its parent is the hub's
+	 * page) and without a pool.
+	 */
+	get slotMark(): ReturnType<typeof parseNestedMark> {
+		// (apart: a document compiles what it runs, and most run without a pool)
+		const sites = this.sites;
+		return sites ? siteWindows().slotMarkOf(this, sites) : null;
 	}
 	/**
 	 * What `URL` and `documentURI` read as for `document`, whose native
@@ -2322,7 +2390,7 @@ export default class DocumentClient extends Client {
 		if (kept && kept.document === document) return kept.partition;
 		let partition = '';
 		try {
-			if (this.proxiedTop !== this.global)
+			if (this.proxiedTop !== this.global || this.slotMark)
 				partition = partitionOf(
 					this.url.url.origin,
 					this.topOrigin,
@@ -2372,10 +2440,13 @@ export default class DocumentClient extends Client {
 		try {
 			const parent = (this.parent as Record<string, any>)[this.names.client] as
 				DocumentClient | undefined;
-			return !!parent && parent.partition !== '';
+			if (parent) return parent.partition !== '';
 		} catch (error) {
-			return false;
+			// a parent of another origin
 		}
+		// the site pool: a parent of another slot (out of reach) said so in
+		// this frame's route
+		return this.slotMark?.crossAncestor ?? false;
 	}
 	/**
 	 * The nested route marker of a frame this document makes (an iframe's
@@ -2402,6 +2473,7 @@ export default class DocumentClient extends Client {
 			this.topOrigin,
 			this.partition !== '',
 			this.#embedder(allow, src, credentialless),
+			this.sites !== null && siteWindows().topOpenerSameOrigin(this),
 		);
 	}
 	/**
@@ -2490,11 +2562,12 @@ export default class DocumentClient extends Client {
 	}
 	/** the origin of the outermost proxied document above this one (its own when it is the top) */
 	get topOrigin(): string {
-		return (
-			(this.proxiedTop as Record<string, any>)[
-				this.names.client
-			] as DocumentClient
-		).url.url.origin;
+		const top = (this.proxiedTop as Record<string, any>)[
+			this.names.client
+		] as DocumentClient;
+		// (the site pool: the outermost document in reach may be a frame of a
+		// document of another slot, whose route names the top)
+		return top.slotMark?.top ?? top.url.url.origin;
 	}
 	/** the windows this document opened (a sandboxed document may navigate them) */
 	readonly openedWindows = new LazyWeakSet<object>();
@@ -2564,7 +2637,12 @@ export default class DocumentClient extends Client {
 	/** what a navigation from this context routes as: the top origin when nested, else a top-level document */
 	get nestedRoute(): string | false {
 		return this.nested
-			? nestedMark(this.topOrigin, this.#crossAncestor(), this.#ownEmbedder())
+			? nestedMark(
+					this.topOrigin,
+					this.#crossAncestor(),
+					this.#ownEmbedder(),
+					this.sites !== null && siteWindows().topOpenerSameOrigin(this),
+				)
 			: false;
 	}
 	#visited?: { document: Document; context: string | null };
@@ -2647,6 +2725,10 @@ export default class DocumentClient extends Client {
 		if (this.sandboxFlags !== null || !this.nested) return null;
 		try {
 			const window = name === '_parent' ? this.parent : this.proxiedTop;
+			// (the site pool: the proxied top is out of reach, of another
+			// slot, when the outermost window in reach is this one;
+			// targetAcross)
+			if (window === this.global) return null;
 			const client = (window as Record<string, any>)[this.names.client] as
 				DocumentClient | undefined;
 			return client ? { window, client } : null;
@@ -2790,6 +2872,10 @@ export default class DocumentClient extends Client {
 
 	postToHost(message: object): boolean {
 		if (!this.topPostMessage) return false;
+		// a window that is its own top (a popup) has no host above it: the
+		// message would reach the page's own listeners, which never hear one
+		// natively
+		if ((this.top as unknown) === this.global) return false;
 		try {
 			Reflect.apply(this.topPostMessage, this.top, [message, '*']);
 			return true;

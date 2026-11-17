@@ -1,0 +1,164 @@
+<!doctype html>
+<title>SOP POOL</title>
+<body>
+	<script src="window-refs.js"></script>
+	<script>
+		// What the site pool must not relax (site-pool-sop suite): the page is
+		// of one site, ?role=child of the other. The top opens a popup of the
+		// other site with window.open(url) and holds what it returns; the
+		// child posts to its parent through the browser's own postMessage,
+		// taken every way a page can, past the hooked call; both list every
+		// URL and origin they can read, which must never name an origin the
+		// proxy shows them from.
+		const params = new URLSearchParams(location.search);
+		const role = params.get('role') || 'top';
+		const report = { role, paths: {}, seen: {}, messages: [] };
+		window.__sop = report;
+		const seen = () => {
+			const read = (key, get) => {
+				try {
+					report.seen[key] = String(get());
+				} catch (error) {
+					report.seen[key] = `threw ${error.name}`;
+				}
+			};
+			read('href', () => location.href);
+			read('url', () => document.URL);
+			read('referrer', () => document.referrer);
+			read('baseURI', () => document.baseURI);
+			read('origin', () => self.origin);
+			read('domain', () => document.domain);
+			read('ancestorOrigins', () => [...location.ancestorOrigins].join(' '));
+			read('entries', () =>
+				performance
+					.getEntries()
+					.map((entry) => entry.name)
+					.join(' '),
+			);
+			read('stack', () => new Error('x').stack);
+			read('script', () => document.scripts[0].src);
+			read('navigation', () => globalThis.navigation?.currentEntry?.url);
+			// what the proxy's own scripts might leave in reach
+			read('markup', () => document.documentElement.outerHTML);
+			read('scriptText', () =>
+				[...document.scripts].map((script) => script.textContent).join(' '),
+			);
+			read('globals', () =>
+				Object.getOwnPropertyNames(window)
+					.filter((name) => name.startsWith('$'))
+					.join(' '),
+			);
+		};
+		addEventListener('message', (event) => {
+			if (event.data && event.data.sop)
+				report.messages.push({ key: event.data.sop, origin: event.origin });
+		});
+		if (role === 'child') {
+			// the top asks it to go to a third site, as its own navigation
+			addEventListener('message', (event) => {
+				if (event.data && event.data.sopGo) location.href = event.data.sopGo;
+			});
+			addEventListener('load', () => {
+				seen();
+				// the browser's own `top` getter, past the rewriter's `top`, and
+				// the titles of every frame it lists that this document can read
+				// (natively the top is the other site's, its one frame this one)
+				const descriptorTop = () =>
+					Object.getOwnPropertyDescriptor(window, 'top').get.call(window);
+				report.paths.descriptorTop = refsInspect(descriptorTop);
+				try {
+					const top = descriptorTop();
+					const titles = [];
+					for (let i = 0; i < top.length; i++)
+						try {
+							titles.push(top[i].document.title || '(untitled)');
+						} catch (error) {
+							titles.push(error.name);
+						}
+					report.paths.descriptorTopFrames = titles.join(',');
+				} catch (error) {
+					report.paths.descriptorTopFrames = `threw ${error.name}`;
+				}
+				const target = parent;
+				const posts = {
+					// the browser's own postMessage of the parent's WindowProxy
+					callRead: () => {
+						const post = target.postMessage;
+						post.call(target, { sop: 'callRead' }, '*');
+					},
+					callCall: () =>
+						Function.prototype.call.call(
+							target.postMessage,
+							target,
+							{ sop: 'callCall' },
+							'*',
+						),
+					descriptor: () => {
+						const post =
+							Object.getOwnPropertyDescriptor(target, 'postMessage')?.value ??
+							target.postMessage;
+						Reflect.apply(post, target, [{ sop: 'descriptor' }, '*']);
+					},
+					hooked: () => target.postMessage({ sop: 'hooked' }, '*'),
+				};
+				// a moment after the load: posted from the load handler, the
+				// messages never reached the parent natively (the parent opens
+				// its popup then, and Chrome pauses the page's frames while a
+				// window opens under DevTools: a test harness artifact, as in
+				// window-refs.html)
+				setTimeout(() => {
+					for (const key of Object.keys(posts))
+						try {
+							posts[key]();
+						} catch (error) {
+							report.paths[key] = `threw ${error.name}`;
+						}
+					report.done = true;
+				}, 500);
+			});
+		} else if (role === 'top') {
+			const frame = document.createElement('iframe');
+			frame.src = refsCross('site-pool-sop.html?role=child');
+			document.body.append(frame);
+			let popup = null;
+			const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+			addEventListener('load', async () => {
+				seen();
+				// the frame's window, held while it shows the other site
+				const held = frames[0];
+				popup = window.open(refsCross('site-pool-sop.html?role=popup'));
+				for (let i = 0; i < 60 && report.messages.length < 4; i++)
+					await sleep(100);
+				// the popup's document has arrived by now
+				await sleep(1500);
+				report.paths.openURL = refsInspect(() => popup);
+				// the frame goes to a third site by its own navigation: the
+				// window this page held is that site's now, of another origin
+				// natively (with a pool of two slots the third site is shown
+				// from this page's slot)
+				const third = new URL('site-pool-sop.html?role=third', location.href);
+				third.hostname = 'c.localhost';
+				held.postMessage({ sopGo: third.href }, '*');
+				const arrived = () =>
+					report.messages.some((message) => message.key === 'third');
+				for (let i = 0; i < 150 && !arrived(); i++) await sleep(100);
+				report.paths.thirdArrived = String(arrived());
+				report.paths.heldThird = refsInspect(() => held);
+				report.paths.frameThird = refsInspect(() => frames[0]);
+				report.done = true;
+			});
+		}
+		if (role === 'third') {
+			document.title = 'THIRD SITE';
+			addEventListener('load', () => {
+				parent.postMessage({ sop: 'third' }, '*');
+				report.done = true;
+			});
+		}
+		if (role === 'popup')
+			addEventListener('load', () => {
+				seen();
+				report.done = true;
+			});
+	</script>
+</body>

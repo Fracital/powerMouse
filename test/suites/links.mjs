@@ -3,9 +3,18 @@
 // imagesrcset are routed, URL properties read back as written, an anchor's
 // URL parts are the link's own. An <area href> reads
 // back as the page wrote it, and a click on it navigates the frame through
-// the proxy. Same-origin mode, where the host realm can read the frame's
+// the proxy. Same-origin mode, where a world of the frame's own reads its
 // real attributes.
-import { done, FIXTURE, launch, ok, PROXY, sleep } from '../lib.mjs';
+import {
+	done,
+	evaluateIsolated,
+	evaluateQuietly,
+	FIXTURE,
+	launch,
+	ok,
+	PROXY,
+	sleep,
+} from '../lib.mjs';
 
 const browser = await launch();
 const page = await browser.newPage();
@@ -26,12 +35,14 @@ await sleep(2000);
 const newest = () =>
 	page.frames().findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 
-// the real attribute, read from the host realm (the frame's own getAttribute
-// answers with what the page wrote)
-const real = await page.evaluate(() => {
-	const doc = window.__el.contentDocument;
-	const get = (id) =>
-		Element.prototype.getAttribute.call(doc.getElementById(id), 'href');
+// the frame of the iframe this page made (a site pool shows it from another
+// origin, in another process)
+const shown = async () =>
+	(await page.evaluateHandle(() => window.__el)).asElement().contentFrame();
+// the real attribute, read in a world of the frame's own that no hook
+// reaches (the frame's own getAttribute answers with what the page wrote)
+const real = await evaluateIsolated(await shown(), () => {
+	const get = (id) => document.getElementById(id).getAttribute('href');
 	return { area: get('area'), a: get('a') };
 });
 // (a link's route names its context, not a controller: src/visited.ts)
@@ -55,12 +66,10 @@ ok(
 	JSON.stringify(seen),
 );
 
-// the URL attributes scramjet rewrites and STomp did not, read from the host
-// realm: every one must be routed
-const attributes = await page.evaluate(() => {
-	const doc = window.__el.contentDocument;
-	const get = (id, name) =>
-		Element.prototype.getAttribute.call(doc.getElementById(id), name);
+// the URL attributes scramjet rewrites and STomp did not, read in a world no
+// hook reaches: every one must be routed
+const attributes = await evaluateIsolated(await shown(), () => {
+	const get = (id, name) => document.getElementById(id).getAttribute(name);
 	return {
 		formaction: get('formaction', 'formaction'),
 		inputformaction: get('inputformaction', 'formaction'),
@@ -158,12 +167,9 @@ ok(
 
 // a URL attribute changed after it was routed takes effect: setAttribute,
 // the property, and on an image
-const realHref = () =>
-	page.evaluate(() =>
-		Element.prototype.getAttribute.call(
-			window.__el.contentDocument.getElementById('a'),
-			'href',
-		),
+const realHref = async () =>
+	evaluateIsolated(await shown(), () =>
+		document.getElementById('a').getAttribute('href'),
 	);
 const realBefore = await realHref();
 const updated = await newest().evaluate(() => {
@@ -210,26 +216,46 @@ ok(
 );
 // a target that names a frame of the page: the browser navigates that frame,
 // a link and window.open alike; the host hears no `open`
-const named = await page.evaluate(async (fixture) => {
-	const opens = [];
+// (the page's state and its frame's title are read in the frame, with no
+// user activation: a site pool shows it from another origin than this
+// page's)
+const namedElement = await page.evaluateHandle(async (fixture) => {
+	window.__opens = [];
 	window.controller.addEventListener('open', (event) =>
-		opens.push(event.detail.url),
+		window.__opens.push(event.detail.url),
 	);
 	const element = document.createElement('iframe');
 	document.body.append(element);
 	const frame = window.controller.createFrame(element);
 	await frame.go(`${fixture}pages/named-target.html`);
-	for (let i = 0; i < 40; i++) {
-		await new Promise((resolve) => setTimeout(resolve, 250));
-		if (element.contentWindow?.__named?.done) break;
-	}
-	const inner = element.contentDocument?.getElementById('slot');
-	return {
-		state: element.contentWindow?.__named ?? null,
-		innerTitle: inner?.contentDocument?.title ?? 'unreadable',
-		opens,
-	};
+	return element;
 }, FIXTURE);
+const namedState = () =>
+	namedElement
+		.asElement()
+		.contentFrame()
+		.then((frame) => frame && evaluateQuietly(frame, 'window.__named ?? null'))
+		.then(
+			(value) => value ?? null,
+			() => null,
+		);
+for (let i = 0; i < 40; i++) {
+	await sleep(250);
+	if ((await namedState())?.done) break;
+}
+const namedFrame = await namedElement.asElement().contentFrame();
+const named = {
+	state: await namedState(),
+	innerTitle: namedFrame
+		? await evaluateIsolated(
+				namedFrame,
+				() =>
+					document.getElementById('slot')?.contentDocument?.title ??
+					'unreadable',
+			).catch(() => 'unreadable')
+		: 'unreadable',
+	opens: await page.evaluate(() => window.__opens),
+};
 ok(
 	'a link and window.open aimed at a named frame of the page navigate that frame, not a new tab',
 	named.state?.linkLoaded === true &&
@@ -242,22 +268,35 @@ ok(
 // a frame whose document a javascript: URL's string makes: it runs injected,
 // so it sees this page as its top, fetches through the proxy (from a document
 // no service worker controls) and posts to this page rather than the host
-const jsurl = await page.evaluate(async (fixture) => {
-	const hostMessages = [];
+const jsurlElement = await page.evaluateHandle(async (fixture) => {
+	window.__hostMessages = [];
 	addEventListener('message', (event) => {
 		if (event.data && event.data.jsurl !== undefined)
-			hostMessages.push(event.data);
+			window.__hostMessages.push(event.data);
 	});
 	const element = document.createElement('iframe');
 	document.body.append(element);
 	const frame = window.controller.createFrame(element);
 	await frame.go(`${fixture}pages/jsurl-frame.html`);
-	for (let i = 0; i < 40; i++) {
-		await new Promise((resolve) => setTimeout(resolve, 200));
-		if (element.contentWindow?.__jsurl?.done) break;
-	}
-	return { page: element.contentWindow?.__jsurl ?? null, hostMessages };
+	return element;
 }, FIXTURE);
+const jsurlState = () =>
+	jsurlElement
+		.asElement()
+		.contentFrame()
+		.then((frame) => frame && evaluateQuietly(frame, 'window.__jsurl ?? null'))
+		.then(
+			(value) => value ?? null,
+			() => null,
+		);
+for (let i = 0; i < 40; i++) {
+	await sleep(200);
+	if ((await jsurlState())?.done) break;
+}
+const jsurl = {
+	page: await jsurlState(),
+	hostMessages: await page.evaluate(() => window.__hostMessages),
+};
 ok(
 	'a javascript: URL frame runs injected: its top is the page, its fetch goes through, its message reaches the page',
 	jsurl.page?.message?.jsurl === true &&

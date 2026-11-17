@@ -138,7 +138,11 @@ export interface NestedEmbedder {
  * frame is a credentialless one, and `b` when the navigation is not the
  * frame's first: the service worker answers a first one that will not be
  * isolated in an isolated embedder with a document that comes back with
- * `b` (src/server/rewrites.ts). The query, when
+ * `b` (src/server/rewrites.ts). With the site pool,
+ * `o`, whatever the host's page, when the top-level document sent COOP
+ * `same-origin`: a frame of another origin than it opens its popups
+ * without an opener (dom/openerFacts.ts opensWithoutOpener), which the frame
+ * cannot ask a top of another slot. The query, when
  * there is one, is the embedder's origin (empty when it is the top's) and
  * the other origins the permission reaches. Read as an origin, the marker
  * is the top origin either way, and without an embedder it is what it was
@@ -148,9 +152,11 @@ export function nestedMark(
 	topOrigin: string,
 	crossAncestor: boolean,
 	embedder?: NestedEmbedder | null,
+	topOpenerSameOrigin = false,
 ): string {
 	const flags =
 		(crossAncestor ? 'x' : '') +
+		(topOpenerSameOrigin ? 'o' : '') +
 		(embedder?.coep ? 'c' : '') +
 		(embedder?.group ? 'g' : '') +
 		(embedder?.delegates === 'self'
@@ -175,6 +181,7 @@ export function parseNestedMark(mark: string): {
 	top: string;
 	crossAncestor: boolean;
 	embedder: Required<NestedEmbedder>;
+	topOpenerSameOrigin: boolean;
 } | null {
 	try {
 		const url = new URL(mark);
@@ -191,6 +198,7 @@ export function parseNestedMark(mark: string): {
 		return {
 			top: url.origin,
 			crossAncestor: flags.includes('x'),
+			topOpenerSameOrigin: flags.includes('o'),
 			embedder: {
 				origin: originOf(parent) ?? url.origin,
 				coep: flags.includes('c'),

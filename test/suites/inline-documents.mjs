@@ -10,8 +10,11 @@
 // XHR goes through the page, and its markup subresources reach the worker
 // as copies the page fetches (object-resources covers them against native).
 // A route hit with an unknown token gets the error page. Both demo modes.
+// With the site pool, an inline route is answered on the origin it names,
+// whose worker alone holds its token, whatever site its referrer is of.
 import {
 	done,
+	evaluateIsolated,
 	FIXTURE,
 	HOST,
 	launch,
@@ -19,6 +22,7 @@ import {
 	openDemo,
 	PROXY,
 	sleep,
+	SLOTS,
 	submitLanding,
 } from '../lib.mjs';
 
@@ -103,31 +107,7 @@ for (const [mode, base] of [
 	await page.close();
 }
 
-// an inline route with a token nobody registered: the error page
 const page = await openDemo(browser, PROXY);
-const unknown = await page.evaluate(async (fixture) => {
-	// a navigation, which the worker answers (the host page itself is not
-	// under its scope, so its own fetch would reach the demo server)
-	const routed = await window.controller.route(`${fixture}pages/hist-1.html`);
-	const element = document.createElement('iframe');
-	element.src = routed.replace(/\/html\//, `/inline:${'A'.repeat(22)}/`);
-	document.body.append(element);
-	await new Promise((resolve) =>
-		element.addEventListener('load', resolve, { once: true }),
-	);
-	const doc = element.contentDocument;
-	return {
-		title: doc?.title ?? null,
-		text: (doc?.body?.textContent ?? '').slice(0, 160),
-	};
-}, FIXTURE);
-ok(
-	'an inline route with an unknown token answers the error page, not content',
-	/unknown, used or expired|Page unavailable/.test(
-		`${unknown.title} ${unknown.text}`,
-	) && unknown.title !== 'HIST 1',
-	JSON.stringify(unknown),
-);
 // a token is single-use: the document it was registered for loads once,
 // the same route again gets the error page
 await page.evaluate(async (fixture) => {
@@ -153,21 +133,153 @@ const route = await proxied.evaluate(
 		),
 	clientName,
 );
-const twice = await page.evaluate(async (route) => {
-	const load = async () => {
-		const element = document.createElement('iframe');
-		element.src = route;
-		document.body.append(element);
-		await new Promise((resolve) =>
-			element.addEventListener('load', resolve, { once: true }),
-		);
-		return element.contentDocument?.title ?? null;
-	};
-	return [await load(), await load()];
-}, route);
+// loaded by the host page, past every hook, on the origin of the document
+// that registered it (with the site pool a slot's, whose worker holds the
+// token), its title read in a world of its own in the frame
+const twice = [];
+for (const id of ['once-1', 'once-2']) {
+	await page.evaluate(
+		async ([route, id]) => {
+			const element = document.createElement('iframe');
+			element.id = id;
+			element.src = route;
+			document.body.append(element);
+			await new Promise((resolve) =>
+				element.addEventListener('load', resolve, { once: true }),
+			);
+		},
+		[new URL(route, proxied.url()).href, id],
+	);
+	const frame = await (await page.$(`#${id}`))?.contentFrame();
+	twice.push(
+		frame
+			? await evaluateIsolated(frame, () => document.title).catch(() => null)
+			: null,
+	);
+}
 ok(
 	'an inline token is single-use: the document loads once, the same route again gets the error page',
 	twice[0] === 'ONCE' && twice[1] === 'Page unavailable',
 	JSON.stringify([route?.slice(-40), twice]),
 );
+
+// The site pool (docs/site-pool.md "Inline documents"): the worker of each
+// origin of the proxy holds the tokens of that origin's documents only, and
+// an inline route is answered by the worker of the origin it names, never
+// sent on to another slot. Without a pool the host's origin is the only one.
+const home = new URL(proxied.url()).origin;
+const hub = new URL(PROXY).origin;
+const origins = [...new Set([hub, ...SLOTS.map((o) => new URL(o).origin)])];
+let shown = 0;
+/** load `urls` at once in frames of the host page; what each shows, read past every hook */
+async function show(urls) {
+	const ids = urls.map(() => `shown-${shown++}`);
+	await page.evaluate(
+		(pairs) =>
+			Promise.all(
+				pairs.map(
+					([url, id]) =>
+						new Promise((resolve) => {
+							const element = document.createElement('iframe');
+							element.id = id;
+							element.src = url;
+							element.addEventListener('load', resolve, { once: true });
+							document.body.append(element);
+						}),
+				),
+			),
+		urls.map((url, i) => [url, ids[i]]),
+	);
+	return Promise.all(
+		ids.map(async (id) => {
+			const frame = await (await page.$(`#${id}`))?.contentFrame();
+			return frame
+				? await evaluateIsolated(frame, () => ({
+						origin: location.origin,
+						title: document.title,
+						text: (document.body?.textContent ?? '').slice(0, 160),
+					})).catch(() => null)
+				: null;
+		}),
+	);
+}
+const errorPage = (seen) =>
+	/unknown, used or expired|Page unavailable/.test(
+		`${seen?.title} ${seen?.text}`,
+	);
+const register = (markup, referrer) =>
+	proxied.evaluate(
+		([name, markup, referrer]) =>
+			window[name].inlineDocument(
+				markup,
+				location.href,
+				referrer ?? location.href,
+			),
+		[clientName, markup, referrer ?? null],
+	);
+
+// a token nobody registered, on every origin at once. A slot the pool has not
+// brought up yet has no worker: the host's server answers its routes with
+// its own 404, which is no content either
+const unknownPath = new URL(proxied.url()).pathname.replace(
+	/\/html\//,
+	`/inline:${'A'.repeat(22)}/`,
+);
+const unknown = await show(origins.map((origin) => `${origin}${unknownPath}`));
+ok(
+	'an inline route with an unknown token answers the error page, not content, on the origin it names, on every origin of the proxy',
+	unknown.every(
+		(seen, i) =>
+			seen?.origin === origins[i] &&
+			!/HIST 1/.test(seen.title) &&
+			(errorPage(seen) ||
+				(origins[i] !== hub &&
+					origins[i] !== home &&
+					/^Cannot GET /.test(seen.text.trim()))),
+	),
+	JSON.stringify(
+		unknown.map((seen, i) => [origins[i], seen?.origin, seen?.title]),
+	),
+);
+
+// a document registered with the referrer of a site the pool shows from
+// another slot (as a page shown from the host's origin when its slot is
+// left out registers its own): the route names that referrer, but only the
+// worker that took the registration has the document
+const far = await register(
+	'<title>FAR</title><p>far</p>',
+	'https://elsewhere.example/page',
+);
+const [farSeen] = await show([new URL(far, proxied.url()).href]);
+ok(
+	'an inline document is served on the origin that registered it, whatever site its referrer is of',
+	farSeen?.title === 'FAR' && farSeen.origin === home,
+	JSON.stringify([home, farSeen]),
+);
+
+// another origin of the proxy has no way to the document: its worker never
+// held the token, so it answers the route with the error page (and leaves
+// the document to load once where it was registered)
+if (origins.length > 1) {
+	const held = new URL(
+		await register('<title>HELD</title><p>held</p>'),
+		proxied.url(),
+	);
+	// another slot whose worker is up (a spare) if there is one, else the
+	// host's origin
+	const away =
+		origins.find(
+			(origin, i) =>
+				origin !== home &&
+				origin !== hub &&
+				!/^Cannot GET /.test(unknown[i]?.text.trim() ?? ''),
+		) ?? hub;
+	const [elsewhere] = await show([`${away}${held.pathname}`]);
+	const [own] = await show([held.href]);
+	ok(
+		"an inline document is never served on another origin of the proxy than its own: the other's worker answers the error page, and the document still loads once on its own",
+		elsewhere?.origin === away && errorPage(elsewhere) && own?.title === 'HELD',
+		JSON.stringify([away, elsewhere, home, own]),
+	);
+}
 await done(browser, errors);

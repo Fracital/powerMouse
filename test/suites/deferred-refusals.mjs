@@ -4,7 +4,8 @@
 // position request, Notification.requestPermission, a track's settings and
 // constraints, setSinkId, an AudioContext's sinkId, RTCPeerConnection, an
 // XHR's misuse and its response document, an identity credential's get and
-// disconnect (FedCM), a same-origin download link's click. A part is made
+// disconnect (FedCM), a same-origin download link's click, a form a
+// frame submits to its proxied parent. A part is made
 // synchronously within the call that needs it, so no page code runs between
 // the hook and the part (a download's copy is made after the click went
 // through the page, which the browser's own download had been cancelled
@@ -21,12 +22,13 @@
 // answers with a promise; an XHR with a document response refuses (its
 // open() throws, since the method check is a part too, xhrChecks.ts; a
 // request past it fails as on a network error: its error event, no
-// document); a download link saves
-// nothing (neither the copy nor the browser's download of the route); and
-// no stand-in counted a call. The same frame with the parts counts the
-// calls that do reach the browser (a track's settings, the XHR document's
-// request), gets FedCM's answers and saves the download, so neither count
-// is vacuous.
+// document); a download link saves nothing (neither the copy nor the
+// browser's download of the route); a form aimed at the frame navigates
+// nothing (neither the copy nor the browser's own submission); and no
+// stand-in counted a call. The same frame with the parts counts the calls
+// that do reach the browser (a track's settings, the XHR document's
+// request), gets FedCM's answers, saves the download and lands where the
+// form went, so neither count is vacuous.
 import {
 	done,
 	FIXTURE,
@@ -58,6 +60,7 @@ const REFUSING = [
 	'identity',
 	'disconnect',
 	'download',
+	'formAimed',
 ];
 /** the calls that answer with a promise, which rejects */
 const PROMISED = [
@@ -170,6 +173,15 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			answer.reached?.includes('xhrDocument'),
 		JSON.stringify(answer),
 	);
+	const aimed = await top.evaluate(
+		(calls) => window.__child(calls),
+		['formAimed'],
+	);
+	ok(
+		'with the parts, a form a frame aims at its parent lands there',
+		aimed.out?.formAimed?.landed === '?x=1',
+		JSON.stringify(aimed),
+	);
 	// FedCM's protocol answers (the browser's get is never asked for an
 	// identity, with the parts or without)
 	const answered = (call) =>
@@ -222,7 +234,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 	const refused = (call) =>
 		out[call]?.threw === 'no parts' || refusedPromise(call);
 	for (const call of REFUSING.filter(
-		(call) => call !== 'xmlDocument' && call !== 'download',
+		(call) => !['xmlDocument', 'download', 'formAimed'].includes(call),
 	))
 		ok(
 			`without the parts, ${call} refuses${
@@ -246,6 +258,11 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			out.foreignStats?.promise ?? '',
 		) || /Illegal invocation/.test(out.foreignStats?.threw ?? ''),
 		JSON.stringify(out.foreignStats),
+	);
+	ok(
+		'without the parts, a form a frame aims at its parent navigates nothing, neither the copy nor the browser',
+		out.formAimed?.stayed === true,
+		JSON.stringify(out.formAimed),
 	);
 	const saved = await downloadsSince(from);
 	ok(

@@ -12,6 +12,7 @@ import { constructTransport, resolveHttp3 } from '../transport/construct';
 import type { RequestInfo } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
 import {
+	answerRun,
 	bindHistory,
 	canTraverse,
 	clientView,
@@ -140,6 +141,17 @@ if (window === window.parent || !origins.length) {
 			}
 		}
 
+		/** a frame the host addresses: its index, and the slot of the site pool its document reported from */
+		function framed(asked: number | { index: number; origin?: string }) {
+			return typeof asked === 'number'
+				? { index: asked, origin: undefined }
+				: {
+						index: Number(asked?.index),
+						origin:
+							typeof asked?.origin === 'string' ? asked.origin : undefined,
+					};
+		}
+
 		const rpc = new RpcHelper<FrameBound, HostBound>(
 			{
 				init: async (init: ControllerFrameInit) => {
@@ -164,6 +176,18 @@ if (window === window.parent || !origins.length) {
 						);
 					}
 					const serviceworker = await activated(registration);
+					// the site pool: the slots' origins, which frame one another's
+					// documents (a frame of another site in a page), as the proxy
+					// origin's and the host's do
+					const slots = (init.sitePool ? init.sitePool.origins : [])
+						.map((origin) => {
+							try {
+								return new URL(origin).origin;
+							} catch (error) {
+								return '';
+							}
+						})
+						.filter((origin) => origin && origin !== location.origin);
 					// the descriptor goes to the controller as it is: it hosts the
 					// transport in its worker (or in this frame, `host: 'page'`)
 					controller = new StompController({
@@ -172,7 +196,14 @@ if (window === window.parent || !origins.length) {
 						directory: init.directory,
 						id: init.id,
 						codec: init.codec,
-						frameAncestors: [hostOrigin],
+						frameAncestors: slots.length
+							? [hostOrigin, location.origin, ...slots]
+							: [hostOrigin],
+						// the hub of the site pool: the proxied frames are the
+						// host page's, of the host's origin
+						...(init.sitePool
+							? { sitePool: init.sitePool, siteHost: hostOrigin }
+							: { sitePool: false as const }),
 						openTab: !!init.openTab,
 						// (the host page's, which it found out: nothing to ask here)
 						hostReload: init.hostReload ?? null,
@@ -253,18 +284,35 @@ if (window === window.parent || !origins.length) {
 						rpc.call('stale', null);
 					});
 					await controller.wait();
-					return [{ config: controller.config, stale: controller.stale }, []];
+					return [
+						{
+							config: controller.config,
+							stale: controller.stale,
+							sites: controller.siteOrigins,
+						},
+						[],
+					];
 				},
 				route: async (url) => {
 					if (!controller) throw new Error('Controller is not initialised');
 					return [await controller.route(url), []];
 				},
+				siteOrigin: async (url) => {
+					if (!controller) throw new Error('Controller is not initialised');
+					return [await controller.siteOrigin(url), []];
+				},
 				unroute: async (url) => {
 					if (!controller) throw new Error('Controller is not initialised');
 					return [await controller.unroute(url), []];
 				},
-				viewport: async ([width, height]) => {
-					controller?.reportViewport(Number(width), Number(height));
+				viewport: async ([width, height, origin]) => {
+					if (typeof origin === 'string' && controller?.siteOriginKnown(origin))
+						await controller.siteViewport(
+							origin,
+							Number(width),
+							Number(height),
+						);
+					else controller?.reportViewport(Number(width), Number(height));
 					return [null, []];
 				},
 				setTransport: async (descriptor) => {
@@ -275,13 +323,25 @@ if (window === window.parent || !origins.length) {
 						await controller.setTransport(onProxyOrigin(descriptor));
 					else await controller.setTransport(await loadTransport(descriptor));
 				},
-				frameInfo: async (index) => {
+				frameInfo: async (asked) => {
+					const { index, origin } = framed(asked);
 					const win = historyWindow(index);
-					if (!win)
+					if (!win) {
+						// the site pool: a document of a slot, which its agent reads
+						const info =
+							origin && controller?.siteOriginKnown(origin)
+								? await controller.siteFrameInfo(origin, index)
+								: null;
 						return [
-							{ url: null, title: null, canGoBack: null, canGoForward: null },
+							info ?? {
+								url: null,
+								title: null,
+								canGoBack: null,
+								canGoForward: null,
+							},
 							[],
 						];
+					}
 					const client = (
 						win as unknown as Record<string, { url?: { toString(): string } }>
 					)[clientName()];
@@ -331,13 +391,52 @@ if (window === window.parent || !origins.length) {
 					if (!controller) throw new Error('Controller is not initialised');
 					return [await controller.goneClients(clients), []];
 				},
-				frameActivated: async ({ index, token, nested }) => {
-					noteActivation(historyWindow(index), String(token), nested === true);
+				frameActivated: async ({ index, token, nested, origin }) => {
+					const win = historyWindow(index);
+					if (!win && origin && controller?.siteOriginKnown(origin))
+						await controller.siteActivated(
+							origin,
+							index,
+							String(token),
+							nested === true,
+						);
+					else noteActivation(win, String(token), nested === true);
 					return [null, []];
 				},
-				frameCommand: async ({ index, command }) => {
+				frameHistory: async ({ index, origin, run, op }) => {
+					if (!controller) return [null, []];
+					if (controller.siteOriginKnown(origin))
+						return [
+							await controller.siteHistory(origin, Number(index), run, op),
+							[],
+						];
+					if (origin !== location.origin) return [null, []];
+					// a run of this origin's (a site shown without the pool): the
+					// host's frame, which is this frame's sibling
+					let win: Window | undefined;
+					try {
+						win = window.parent[Number(index)] as Window | undefined;
+					} catch (error) {
+						// a frame that went away
+					}
+					return [
+						win && win !== window
+							? await answerRun(win, run, op, clientName())
+							: null,
+						[],
+					];
+				},
+				frameCommand: async ({ index, command, origin }) => {
 					const win = historyWindow(index);
-					if (!win) return [false, []];
+					if (!win) {
+						// the site pool: a document of a slot, stepped by its agent
+						if (!origin || !controller?.siteOriginKnown(origin))
+							return [false, []];
+						return [
+							(await controller.siteCommand(origin, index, command)) === true,
+							[],
+						];
+					}
 					if (command === 'typed') {
 						noteBrowserNavigation(win);
 						return [true, []];

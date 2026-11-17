@@ -87,8 +87,25 @@ const SUITE_ENV = {
 	'performance-clocks': { STOMP_ISOLATION: 'on' },
 	// for its page that sends COOP and COEP
 	'sop-escapes': { STOMP_ISOLATION: 'on' },
+	// production's host page (its second server runs one without)
+	'popup-openers': { STOMP_ISOLATION: 'on' },
 	// proxy-ception: the proxy forwards its own origin (the demo through itself)
 	'self-proxy': { STOMP_ALLOW_SELF_PROXY: '1' },
+	// the pool's slots (a sixth for the spare check), also in a run that
+	// turns the pool off for the rest
+	'site-pool': { STOMP_SITE_POOL: '6' },
+	// a pool of two (a page's slot and a slot two sites' frames share) and one
+	'site-pool-agent': { STOMP_SITE_POOL: '3' },
+	// the third site of its fixture (c.localhost)
+	'site-pool-sop': { STOMP_TEST_TRANSPORT: '1', STOMP_SITE_POOL: '5' },
+	// the pool is off by default: these suites are about it
+	'site-pool-fallback': { STOMP_SITE_POOL: '5' },
+	'site-pool-isolation': { STOMP_SITE_POOL: '5' },
+	'site-pool-revisit': { STOMP_SITE_POOL: '5' },
+	// two tabs of the demo on its own pool, in a run without one too
+	'site-pool-tabs': { STOMP_SITE_POOL: '5' },
+	// production's host page (cross-origin isolated) with its pool
+	'site-pool-coep': { STOMP_ISOLATION: 'on', STOMP_SITE_POOL: '5' },
 };
 // where the content blocker's default lists and resources live
 // (src/blocker/types.ts DEFAULT_LISTS, DEFAULT_RESOURCES)
@@ -309,6 +326,31 @@ async function startServersOnce(name) {
 	// or not depending on how long the page before it took is noise there; the
 	// other suites keep node's default
 	if (name.startsWith('wpt-')) fixture.keepAliveTimeout = 10 * 60 * 1000;
+	// the site pool's slots (docs/site-pool.md, off by default in the demo):
+	// picked here, so the suite knows them (SITE_POOL_PORTS, test/lib.mjs
+	// SLOT_PORTS); STOMP_SITE_POOL=5 turns the pool on for the run, a suite's
+	// own setting wins
+	const poolSetting = String(
+		SUITE_ENV[name]?.STOMP_SITE_POOL ?? process.env.STOMP_SITE_POOL ?? '0',
+	).trim();
+	const slotPorts = [];
+	if (/^\d{1,2}$/.test(poolSetting))
+		while (slotPorts.length < Number(poolSetting)) {
+			const slot = await freePort();
+			if (
+				String(slot) !== port &&
+				slot !== fixturePort &&
+				!slotPorts.includes(slot)
+			)
+				slotPorts.push(slot);
+		}
+	else if (!/^off$/i.test(poolSetting))
+		slotPorts.push(
+			...poolSetting
+				.split(',')
+				.map(Number)
+				.filter((slot) => slot > 0),
+		);
 	const env = {
 		...process.env,
 		PORT: port,
@@ -321,6 +363,7 @@ async function startServersOnce(name) {
 		// suite that drives the demo and wants the defaults sets it to '1'.
 		STOMP_SHIELDS_DEFAULTS: process.env.STOMP_SHIELDS_DEFAULTS ?? '0',
 		...SUITE_ENV[name],
+		STOMP_SITE_POOL: slotPorts.length ? slotPorts.join(',') : '0',
 	};
 	delete env.STOMP_PROXY_ORIGIN;
 	delete env.STOMP_WISP_URL;
@@ -328,8 +371,26 @@ async function startServersOnce(name) {
 	if (!SUITE_ENV[name]?.STOMP_HTTP3) delete env.STOMP_HTTP3;
 	const server = spawn(process.execPath, [`${root}demo/server.js`], {
 		env,
-		stdio: ['ignore', 'ignore', 'inherit'],
+		stdio: ['ignore', 'pipe', 'inherit'],
 	});
+	// ready once this server says it listens: a port probed free can be taken
+	// by another run's server (a demo's slots serve the whole app) before
+	// this one binds it, and /api/status would then answer from that one
+	const listening = new Promise((resolve, reject) => {
+		let seen = '';
+		server.stdout.on('data', (chunk) => {
+			if (seen === null) return;
+			seen += chunk;
+			if (seen.includes('Listening on:')) {
+				seen = null;
+				resolve();
+			}
+		});
+		server.once('exit', (code) =>
+			reject(new Error(`EADDRINUSE? the demo server exited (${code})`)),
+		);
+	});
+	listening.catch(() => {});
 	const stop = () => {
 		running.delete(stop);
 		server.kill();
@@ -337,12 +398,18 @@ async function startServersOnce(name) {
 	};
 	running.add(stop);
 	try {
+		await Promise.race([
+			listening,
+			sleep(60000).then(() => {
+				throw new Error(`no server at ${port}: it never said it listens`);
+			}),
+		]);
 		await waitForServer(`http://127.0.0.1:${port}/api/status`);
 	} catch (error) {
 		stop();
 		throw error;
 	}
-	return { port, fixturePort, stop };
+	return { port, fixturePort, slotPorts, stop };
 }
 
 /**
@@ -350,7 +417,7 @@ async function startServersOnce(name) {
  * suites run one at a time, and as one block when it finishes when they run
  * in parallel, so the log never interleaves two suites.
  */
-function runSuite(name, { port, fixturePort }) {
+function runSuite(name, { port, fixturePort, slotPorts }) {
 	return new Promise((resolve) => {
 		const child = spawn(process.execPath, [`${suitesDir}${name}.mjs`], {
 			env: {
@@ -358,6 +425,7 @@ function runSuite(name, { port, fixturePort }) {
 				...blockerEnv(fixturePort),
 				PORT: port,
 				FIXTURE: `http://127.0.0.1:${fixturePort}/`,
+				SITE_POOL_PORTS: slotPorts.join(','),
 			},
 			stdio: ['ignore', 'pipe', 'inherit'],
 		});

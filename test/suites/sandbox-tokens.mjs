@@ -5,10 +5,11 @@
 // without allow-same-origin its navigation went to the proxy server (a 404
 // on stomp.fracit.al) and without allow-scripts nothing ran. The page reads
 // the attribute and its token list calls back as it does natively, with the
-// same MutationObserver records. Same-origin mode (the host realm reads the
-// frame's real attributes).
+// same MutationObserver records. Same-origin mode (a world of the frame's
+// own reads its real attributes).
 import {
 	done,
+	evaluateIsolated,
 	FIXTURE,
 	launch,
 	ok,
@@ -81,13 +82,18 @@ ok(
 	unserved.join(' '),
 );
 
-const real = await page.evaluate((names) => {
-	const doc = document.querySelector('.frame:not(.hidden)').contentDocument;
-	return names.map((name) => {
-		const element = Document.prototype.getElementById.call(doc, name);
-		return element && Element.prototype.getAttribute.call(element, 'sandbox');
-	});
-}, NAMES);
+// the real attributes, in a world of the frame's own that no hook reaches
+// (a site pool shows the frame from another origin than the host page's)
+const shown = await (await page.$('.frame:not(.hidden)')).contentFrame();
+const real = await evaluateIsolated(
+	shown,
+	(names) =>
+		names.map((name) => {
+			const element = document.getElementById(name);
+			return element && element.getAttribute('sandbox');
+		}),
+	NAMES,
+);
 // the real sandbox is the page's flags plus allow-same-origin and
 // allow-scripts, without the top navigation flags (the inject emulates those
 // three; sandbox-restrictions suite)

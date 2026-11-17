@@ -103,6 +103,31 @@ export default class TransportWorker {
 			);
 		});
 	}
+	/**
+	 * hand the worker a port to serve, whose WebSocket handshake headers are
+	 * asked over `decorate` instead (the site pool: a slot's controller
+	 * answers there)
+	 */
+	serveDecorated(port: MessagePort, decorate: MessagePort) {
+		this.#rpc
+			.call('serveDecorated', { port, decorate }, [port, decorate])
+			.catch((error) => {
+				console.error(
+					'Stomp: the transport worker could not serve a port',
+					error,
+				);
+			});
+	}
+	/** the site pool: hand the worker a slot's worker's cookie jar port (jarServer.ts) */
+	serveJar(port: MessagePort) {
+		this.#rpc.call('serveJar', port, [port]).catch((error) => {
+			console.error('Stomp: the transport worker could not serve a jar', error);
+		});
+	}
+	/** the site pool: the host changed the jar for `domain`; the slots' workers hear */
+	jarChanged(domain: string) {
+		this.#rpc.call('jarChanged', domain).catch(() => {});
+	}
 	/** a new port the worker serves, for a RemoteTransport on this side */
 	serve(): MessagePort {
 		const channel = new MessageChannel();

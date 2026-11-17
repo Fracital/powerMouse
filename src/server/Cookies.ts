@@ -9,7 +9,7 @@
 // then earlier creations (a re-set with a new value is a new creation, as
 // in Chrome). The matching functions are exported on their own so they can
 // be checked in node (cookie-rules suite).
-import { IDBPDatabase, openDB } from 'idb';
+import { openDB } from 'idb';
 import parseSetCookie, { Cookie as ParserCookie } from 'set-cookie-parser';
 import { registrableDomain } from '../partition';
 import {
@@ -17,6 +17,7 @@ import {
 	COOKIES_CHANGED,
 	CookiesChange,
 } from '../transport/messages';
+import { JAR_DATABASE, JAR_STORE, type JarDB, type RemoteJar } from './jarDB';
 import Router, { json, jsonAPI } from './Router';
 
 export type SameSite = 'lax' | 'strict' | 'none';
@@ -546,7 +547,7 @@ function utf8Bytes(text: string): string {
 	return bytes;
 }
 
-const STORE = 'cookies';
+const STORE = JAR_STORE;
 
 /**
  * How long a document's script write sent asynchronously waits for the one
@@ -575,7 +576,7 @@ function partitionKeyOf(key: unknown): string | undefined {
 }
 
 export default class Cookies {
-	private db: IDBPDatabase;
+	private db: JarDB;
 	#publicSuffix: PublicSuffix;
 	/** called after the jar changed for a domain ('' for every host) */
 	onChange?: (domain: string) => void;
@@ -585,7 +586,7 @@ export default class Cookies {
 	#turns = new Map<string, Turns>();
 	/** the asynchronous script writes the worker heard of and has not done */
 	#heard = new Set<Promise<void>>();
-	constructor(db: IDBPDatabase, publicSuffix: PublicSuffix) {
+	constructor(db: JarDB, publicSuffix: PublicSuffix) {
 		this.db = db;
 		this.#publicSuffix = publicSuffix;
 	}
@@ -913,11 +914,27 @@ function migrateLegacy(
 /**
  * The jar, opened once per scope (createServer shares it between the
  * controllers of a scope: a controller is a tab, and tabs share cookies).
+ * With `remote` it is the host origin's jar, asked over the host's port
+ * (the site pool: a slot's worker, src/server/jarDB.ts), and a change is
+ * told to the other slots' workers and heard from them.
  */
-export async function openCookies(): Promise<Cookies> {
+export async function openCookies(remote?: RemoteJar): Promise<Cookies> {
 	// loaded here, not at the top: see PublicSuffix
 	const { getPublicSuffix } = await import('../suffix');
-	const db = await openDB('stompCookies', 2, {
+	if (remote) {
+		const cookies = new Cookies(remote, (host) => getPublicSuffix(host, true));
+		const heard = (domain: string) => {
+			broadcastChange(domain);
+			for (const listener of jarListeners) listener(domain);
+		};
+		cookies.onChange = (domain) => {
+			heard(domain);
+			remote.changed(domain);
+		};
+		remote.onChanged = heard;
+		return cookies;
+	}
+	const db = await openDB(JAR_DATABASE, 2, {
 		upgrade: async (db, oldVersion, _newVersion, tx) => {
 			// nothing but the stores' own requests may be awaited in here (an
 			// IndexedDB transaction commits during any foreign await)
@@ -946,7 +963,9 @@ export async function openCookies(): Promise<Cookies> {
 	// restarted whenever the browser idles it, which is not the end of the
 	// user's session
 
-	const cookies = new Cookies(db, (host) => getPublicSuffix(host, true));
+	const cookies = new Cookies(db as unknown as JarDB, (host) =>
+		getPublicSuffix(host, true),
+	);
 	cookies.onChange = (domain) => {
 		broadcastChange(domain);
 		for (const listener of jarListeners) listener(domain);

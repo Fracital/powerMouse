@@ -48,8 +48,10 @@ import type { DeferredParts } from '../deferredParts';
 import { frameWindow } from '../freshContext';
 import type { MarkupContext, ScriptNotes } from '../markupMembers';
 import { responseURLOf } from '../responseDocuments';
+import { siteWindows } from '../siteWindows';
 import { stylesheetPIs } from '../stylesheetPIs';
 import type WriteStream from '../WriteStream';
+import ContextModule from './Context';
 import {
 	attributeName,
 	hookWrite,
@@ -539,12 +541,28 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				callback,
 				hook,
 			});
+			// a property hook added once the hooks are applied (one only some
+			// documents come to need): its property is wrapped now, unless
+			// another hook of it had it wrapped
+			if (
+				this.#wrapProperty &&
+				!isAttributeHook(hook) &&
+				!this.hooks.some(
+					(entry) =>
+						entry.hook !== hook &&
+						entry.hook[0] === hook[0] &&
+						entry.hook[1] === hook[1],
+				)
+			)
+				this.#wrapProperty(hook[0], hook[1]);
 		}
 		this.#hookedNames = null;
 		this.#hooksByName.clear();
 		this.#readHooks.clear();
 		this.#writeHooks.clear();
 	}
+	/** apply's wrapping of a hooked property, for a hook added later */
+	#wrapProperty?: (ctor: ElementCtor, property: string) => void;
 	/** the attribute hooks by element name and attribute (attributeHooks) */
 	#hooksByName = new LazyMap<string, Map<string, readonly HookEntry[]>>();
 	/** every attribute name an attribute hook watches, on any element */
@@ -786,6 +804,25 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					if (client) aimed = { window, client };
 				}
 			}
+			// the site pool: a window of another slot, asked to go there
+			// itself; a javascript: URL runs in no window of another origin.
+			// The caller gets that window's stand-in
+			const across =
+				aimed || !moduleClient.sites
+					? null
+					: siteWindows().targetAcross(moduleClient, name);
+			if (across) {
+				if (routable)
+					deferred().navigateAcross(moduleClient, across, {
+						kind: 'link',
+						url: destination!.href,
+					});
+				return siteWindows().restrictAcross(
+					moduleClient,
+					moduleClient.getModule(ContextModule)!,
+					across,
+				);
+			}
 			// a javascript: URL runs in the opened window: rewritten, like a
 			// javascript: link (routeHTML rewrites its body)
 			if (destination !== null && destination.protocol === 'javascript:')
@@ -910,7 +947,16 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					opens ||
 					(document === realm.document &&
 						realm.document.documentElement === null);
-				if (opens) moduleClient.opened = true;
+				// the browser opens it inside the write, and a script of the
+				// written markup runs before the write returns: the window's
+				// listeners (the message tagger first) are registered again
+				// before it, as after the page's own open()
+				if (opens) {
+					moduleClient.opened = true;
+					stream?.reset(document);
+					Reflect.apply(documentOpen, document, []);
+					runDocumentOpenListeners(realm);
+				}
 				const prevState = getGlobalParsingState(realm);
 				setGlobalParsingState(realm, 'parsingBeforeWrite');
 				let markup: string;
@@ -926,7 +972,6 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				// a frame the written markup made (a script it holds sweeps
 				// first, see prepareScriptText)
 				moduleClient.sweepFrames?.();
-				if (opens) runDocumentOpenListeners(realm);
 				moduleClient.writtenLoads?.(document as Document);
 			});
 
@@ -2983,27 +3028,28 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					]);
 			});
 		};
-		for (const [ctor, properties] of trackProperties) {
-			for (const property of properties) {
-				const descriptor = Reflect.getOwnPropertyDescriptor(
-					ctor.prototype,
-					property,
-				);
+		const wrapProperty = (ctor: ElementCtor, property: string) => {
+			const descriptor = Reflect.getOwnPropertyDescriptor(
+				ctor.prototype,
+				property,
+			);
 
-				if (!descriptor) {
-					throw new Error(`Ctor ${ctor} did not have ${property}`);
-				}
-
-				const record = { ctor, property, get: descriptor.get! };
-				tracked.set(descriptor.get!, record);
-				tracked.set(descriptor.set!, record);
-				Reflect.defineProperty(ctor.prototype, property, {
-					enumerable: true,
-					configurable: true,
-					get: proxyModule.wrapFunction(descriptor.get!, propertyGet),
-					set: proxyModule.wrapFunction(descriptor.set!, propertySet),
-				});
+			if (!descriptor) {
+				throw new Error(`Ctor ${ctor} did not have ${property}`);
 			}
-		}
+
+			const record = { ctor, property, get: descriptor.get! };
+			tracked.set(descriptor.get!, record);
+			tracked.set(descriptor.set!, record);
+			Reflect.defineProperty(ctor.prototype, property, {
+				enumerable: true,
+				configurable: true,
+				get: proxyModule.wrapFunction(descriptor.get!, propertyGet),
+				set: proxyModule.wrapFunction(descriptor.set!, propertySet),
+			});
+		};
+		for (const [ctor, properties] of trackProperties)
+			for (const property of properties) wrapProperty(ctor, property);
+		this.#wrapProperty = wrapProperty;
 	}
 }

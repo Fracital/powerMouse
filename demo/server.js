@@ -40,6 +40,19 @@
 //                       site publishes a config, as Chrome does (default
 //                       https://cloudflare-dns.com/dns-query; `off` sends only
 //                       GREASE ECH; `?noech` on the page does that for a visit)
+//   STOMP_SITE_POOL     the site pool's slots (docs/site-pool.md): more
+//                       ports to answer on, a list (`8082,8083`) or a number
+//                       of free ports to take (`5`; default `0` or `off`:
+//                       no pool, every site on the page's own origin). A page
+//                       that reaches this server directly (its own port, or
+//                       a loopback name) shows every proxied site from one of
+//                       them; `?nopool` leaves the pool out for a visit
+//   STOMP_SITE_POOL_PUBLIC the slots' ports as the browser reaches them
+//                       through a front (a list, `2053,2083`): a page served
+//                       through one gets these on its own host name, and a
+//                       request whose Host (or X-Forwarded-Port) names one
+//                       of them is a slot's. Unset: a page that came through
+//                       a front has no pool
 //   STOMP_REWRITER      `wasm` runs the Rust rewriters where a thread holds
 //                       them (the controller's `rewriter` option); the
 //                       JavaScript rewriters otherwise
@@ -168,6 +181,54 @@ const app = express();
 // controller's frame and the proxied frames from there, and a frame of an
 // isolated page loads only with an embedder policy and, from another origin,
 // with that resource policy.
+// The site pool (docs/site-pool.md): the ports of STOMP_SITE_POOL, once they
+// are bound, and those of STOMP_SITE_POOL_PUBLIC. Everything a pool port
+// answers asks for an agent cluster keyed by its origin: the ports of one
+// host are one site to the browser, which gives one of them a process of its
+// own only when its documents ask (docs/process-model.md), the first of them
+// included, and the first is the controller frame, a file of this server.
+// Told by the Host header, so a front that forwards every port to one does
+// not hide it.
+const poolPorts = [];
+const publicPoolPorts = (process.env.STOMP_SITE_POOL_PUBLIC ?? '')
+	.split(',')
+	.map((text) => parseInt(text))
+	.filter((number) => number > 0 && number < 65536);
+// the port the browser asked: the Host header's, or behind a front that
+// forwards the slots' ports to this one and drops the port from Host (an
+// OpenResty `proxy_set_header Host $host`), the X-Forwarded-Port it sets,
+// heard only for the public slot ports
+const hostPort = (req) => {
+	const port = /:(\d+)$/.exec(req.headers.host ?? '')?.[1];
+	const forwarded = Number(req.headers['x-forwarded-port']);
+	if (publicPoolPorts.includes(forwarded)) return forwarded;
+	return port ? Number(port) : null;
+};
+app.use((req, res, next) => {
+	const port = hostPort(req);
+	if (port && (poolPorts.includes(port) || publicPoolPorts.includes(port)))
+		res.set('Origin-Agent-Cluster', '?1');
+	next();
+});
+/**
+ * the slots' ports for a page asked for with `req`: the bound ones when the
+ * browser reaches this server directly (the page's port is this server's,
+ * or its name is a loopback one, through a local front too), the public ones
+ * through a front that serves them, else none (a front that forwards only
+ * its own port: a slot of another port would not answer)
+ */
+const LOOPBACK = /^(localhost|127\.\d+\.\d+\.\d+|\[::1\]|[\w-]+\.localhost)$/;
+function slotPorts(req) {
+	const hostname = (req.headers.host ?? '').replace(/:\d+$/, '');
+	const port = hostPort(req);
+	if (
+		poolPorts.length &&
+		(port === server.address()?.port || LOOPBACK.test(hostname))
+	)
+		return poolPorts;
+	return publicPoolPorts;
+}
+
 if (process.env.STOMP_ISOLATION !== 'off')
 	app.use((req, res, next) => {
 		res.set({
@@ -320,9 +381,12 @@ const pageConfig = {
 	...(dev && { dev: true, startedAt: started }),
 };
 app.get('/config.js', (req, res) => {
+	const sitePool = slotPorts(req);
 	res.set('Cache-Control', 'no-store');
 	res.type('application/javascript');
-	res.send(`window.STOMP_CONFIG = ${JSON.stringify(pageConfig)};\n`);
+	res.send(
+		`window.STOMP_CONFIG = ${JSON.stringify({ ...pageConfig, ...(sitePool.length && { sitePool }) })};\n`,
+	);
 });
 
 app.get('/api/status', (req, res) => {
@@ -659,5 +723,27 @@ server.on('listening', () => {
 	if (proxyOrigin) console.log(`Proxy origin: ${proxyOrigin}`);
 	if (dev) console.log('Development mode: live reload on /__dev');
 });
+
+// the site pool's ports answer as the main one does (no wisp of their own:
+// the transport is the host page's); bound before it, so whoever waits for
+// the main port finds them
+const pool = (process.env.STOMP_SITE_POOL ?? '0').trim();
+const poolWanted = /^off$/i.test(pool)
+	? []
+	: /^\d{1,2}$/.test(pool)
+		? Array.from({ length: Number(pool) }, () => 0)
+		: pool
+				.split(',')
+				.map((text) => parseInt(text))
+				.filter((number) => number > 0);
+for (const wanted of poolWanted) {
+	const slot = createServer(app);
+	await new Promise((resolve, reject) => {
+		slot.once('error', reject);
+		slot.listen({ port: wanted }, resolve);
+	});
+	poolPorts.push(slot.address().port);
+}
+if (poolPorts.length) console.log(`Site pool ports: ${poolPorts.join(', ')}`);
 
 server.listen({ port });

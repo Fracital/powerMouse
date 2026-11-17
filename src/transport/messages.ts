@@ -416,6 +416,13 @@ export const CLIENT_ID = '$stomp$clientId';
  * (src/controller/history.ts)
  */
 export const FRAME_MOVED = '$stomp$frameMoved';
+/**
+ * Beside FRAME_MOVED under a site pool: the document's current entry of the
+ * browser's session history ({ key, id, url }, the url its route), which the
+ * agent of its page's slot cannot read when the document is another slot's
+ * (src/controller/history.ts)
+ */
+export const FRAME_ENTRY = '$stomp$frameEntry';
 /** SW -> every window: the cookie jar changed for `domain` (every host when empty); pages drop their document.cookie cache */
 export const COOKIES_CHANGED = '$stomp$cookiesChanged';
 export interface CookiesChange {
@@ -470,6 +477,20 @@ export interface LegacyFileSystemClear {
  */
 export const HOOK_ERROR = '$stomp$hookError';
 export const NAVIGATE = '$stomp$navigate';
+/**
+ * Beside NAVIGATE under a site pool: how the browser navigated to the
+ * document (navigation.activation.navigationType: push, replace, traverse,
+ * reload), which tells the hub whether a document of another slot took a
+ * new entry or the last one's (src/controller/index.ts Frame)
+ */
+export const NAVIGATION_TYPE = '$stomp$navigationType';
+/**
+ * Beside NAVIGATE under a site pool: `[index, length]` of the document's
+ * entry in the stretch of the frame's history the browser lists it (the
+ * Navigation API's entries, its own slot's), from which the hub counts the
+ * frame's entries in every slot (`historyAcross` in src/inject/dom/Client.ts)
+ */
+export const HISTORY_RUN = '$stomp$historyRun';
 /**
  * a proxied document telling the host it got its first user activation (a
  * click or a key), posted like a navigate report with the document's token
@@ -858,10 +879,110 @@ export interface ControllerInitMessage {
 	modules?: Record<string, ArrayBuffer>;
 	/** the built-in blocker: its lists (its module is `modules.blocker`) (docs/adblock.md) */
 	adblock?: AdblockInit;
+	/**
+	 * The site pool (ControllerInit.sitePool): the codec key of the host's own
+	 * worker, which every slot's worker takes, so a route decodes on every
+	 * slot's origin
+	 */
+	codecKey?: string;
+	/**
+	 * the site pool: this worker's origin is a slot. The handshake's third
+	 * port (after the rpc's and the transport's) asks the host's cookie jar
+	 * (src/server/jarDB.ts), the fourth the hub's worker's blocker: a slot's
+	 * worker builds no engine of its own (src/server/remoteBlocker.ts)
+	 */
+	slot?: boolean;
+	/**
+	 * the site pool: how many slots it has. Their workers run in one
+	 * process, so what a worker keeps in memory between documents (the
+	 * memory cache, MemoryCache.share, and the rewriter instance's memory)
+	 * is shared out between them
+	 */
+	slots?: number;
+	/**
+	 * the site pool: this worker's controller is the hub (its origin is no
+	 * slot): a navigation to a document of a site whose slot is up leaves
+	 * for that slot, as from a slot's worker
+	 */
+	pooled?: boolean;
+}
+
+/**
+ * The site pool: what the worker of the slot a navigation leaves knew of
+ * it, handed to the worker of the slot it goes to before the browser is sent
+ * there (the browser narrows the referrer to the first slot's origin across
+ * the real redirect, and the first worker's memory is its own). Paths are
+ * the routed URL's path and query, the same on every slot's origin.
+ */
+export interface SiteArrival {
+	/** the routed path the navigation arrives at */
+	path: string;
+	/** the routed path of the document that started it (its referrer), when known */
+	referrer?: string;
+	/** the navigation's referrer policy */
+	policy?: string;
+	/** the navigation hint the document that started it sent (navigationHints.ts) */
+	hint?: unknown;
+	/** the redirect chain so far, when the navigation is a hop of one (rewrites.ts RedirectHop) */
+	hop?: unknown;
+	/**
+	 * what the documents that started the navigation told of it
+	 * (navigationHints.ts NavigationChain): the page policies that judge its
+	 * later hops (a form's form-action, a frame's parent's frame-src: each
+	 * with whether it is the parent's), a frame's real ancestors and the
+	 * policy its csp attribute requires, and a top-level navigation's
+	 * opener policy facts (src/coop.ts), kept by the real URL the chain
+	 * began at
+	 */
+	chain?: {
+		start: string;
+		policies: [unknown, boolean][];
+		ancestors?: string[];
+		required?: string;
+		coop?: unknown;
+		/** the hop that arrives was judged by them already (the first slot's worker told the documents of it) */
+		judged?: boolean;
+	};
+	/**
+	 * Visited links (src/visited.ts, src/server/visitedHops.ts): `hop`, the
+	 * visit the navigation makes, when it began at a link route; `back`, for
+	 * a link route of a context this slot shows that another slot's worker
+	 * sent the navigation through, where the browser goes on to from there
+	 */
+	visited?: { hop?: unknown; back?: string };
+	/** what the first worker knew of the navigation's parent and main frame (src/server/siteContext.ts) */
+	context?: SiteContext;
+}
+
+/**
+ * The site pool: what a frame's navigation needs of the documents above it,
+ * which the worker of the slot it goes to never served (its parent and its
+ * main frame are another slot's): their client hints documents (each with
+ * its permissions policy and the features it may use) and the main frame's
+ * accepted hints and viewport (src/server/clientHints.ts departingHints),
+ * and whether the parent upgrades insecure requests
+ */
+export interface SiteContext {
+	hints?: {
+		parent?: unknown;
+		top?: unknown;
+		accepted?: unknown;
+		viewport?: unknown;
+	};
+	upgradeInsecure?: boolean;
 }
 
 /** controller -> SW: the wasm modules' bytes, when they were not loaded at the handshake */
 export const CONTROLLER_MODULES = '$stomp$controllerModules';
+/**
+ * the hub's controller of a site pool -> its own SW: answer
+ * the blocker questions of a slot's worker on the port it carries
+ * (src/server/remoteBlocker.ts)
+ */
+export const BLOCKER_SERVE = '$stomp$blockerServe';
+export interface BlockerServeMessage {
+	directory: string;
+}
 export interface ControllerModulesMessage {
 	directory: string;
 	modules: Record<string, ArrayBuffer>;
@@ -948,6 +1069,12 @@ export type SWbound = {
 	unroute: [string, string | null];
 	/** drop every entry of the HTTP cache */
 	clearCache: [];
+	/**
+	 * the site pool: forget the device ids of every origin of this origin's
+	 * host (of every origin without one), as a cleared jar does in the hub's
+	 * worker (the ids are each slot's own)
+	 */
+	forgetDeviceIds: [string | undefined];
 	/** the wasm modules the service worker's thread holds, by Assets key (src/wasm/thread.ts) */
 	modules: [undefined, string[]];
 	/**
@@ -1004,6 +1131,12 @@ export type SWbound = {
 	 * lists"). Travels with every handshake too, as the init's `adblock` does
 	 */
 	adblock: [{ init: AdblockInit; refresh?: boolean }];
+	/** the site pool: the key of this worker's codec (the host's, for every slot's worker) */
+	codecKey: [undefined, string];
+	/** the site pool: the site of a URL, by this worker's public suffix list */
+	siteOf: [string, string];
+	/** the site pool: a navigation from another slot's worker is on its way here */
+	arrive: [SiteArrival];
 };
 
 /** a cookie as the jar stores it, for export and import by the host */
@@ -1138,6 +1271,28 @@ export type Controllerbound = {
 	 * (src/passkeys/authenticator.ts)
 	 */
 	passkeyPrompt: [{ request: PasskeyPrompt; port: MessagePort }, unknown];
+	/**
+	 * the site pool: the slot `site` is shown from (its origin), given one
+	 * now when it has none; null without a pool
+	 */
+	siteSlot: [string, string | null];
+	/**
+	 * a slot of the site pool: a new port to the hub's worker's blocker
+	 * (the one before closed or went silent); null when there is none
+	 */
+	blockerPort: [undefined, MessagePort | null];
+	/**
+	 * the site pool: a navigation leaves for `site`, which another slot
+	 * shows; the controller makes sure that slot's worker is up, hands it
+	 * `arrival` and answers with its origin (null: the navigation stays
+	 * where it is)
+	 */
+	crossSite: [{ site: string; arrival: SiteArrival }, string | null];
+	/**
+	 * the site pool, to the hub: the slot of `site` sent a navigation back
+	 * to the hub's origin (its agent is gone); the hub leaves it out
+	 */
+	siteHomed: [string, boolean];
 };
 
 /** a transport's response on its way to a RemoteTransport: a streamed body travels on a port of its own (bodyPort.ts) */
@@ -1279,6 +1434,16 @@ export type WorkerBound = {
 	setTransport: [TransportModule];
 	/** serve the transport to the RemoteTransport on this port (the service worker's, a page's, the host's) */
 	serve: [MessagePort];
+	/**
+	 * serve as `serve` does, and ask `decorate` (an RpcHelper port speaking
+	 * WorkerToController) for the handshake headers instead of the
+	 * controller (the site pool: a slot's controller answers)
+	 */
+	serveDecorated: [{ port: MessagePort; decorate: MessagePort }];
+	/** the site pool: answer a slot's worker's cookie jar requests on this port (jarServer.ts) */
+	serveJar: [MessagePort];
+	/** the site pool: the host changed the jar for a domain ('' for all); every slot's worker hears */
+	jarChanged: [string];
 };
 
 /**

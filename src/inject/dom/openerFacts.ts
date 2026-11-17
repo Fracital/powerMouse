@@ -40,6 +40,10 @@ const clientOf = (
  * window.open returns null (measured in Chrome 157, the coop suite)
  */
 export function opensWithoutOpener(client: DocumentClient): boolean {
+	// the site pool: a frame of another slot than its top's, which it cannot
+	// reach, is of another origin, and its route says what that top sent
+	// (partition.ts nestedMark)
+	if (client.nested && client.slotMark?.topOpenerSameOrigin) return true;
 	const top = clientOf(client, client.proxiedTop);
 	return (
 		!!top &&

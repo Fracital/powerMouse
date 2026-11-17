@@ -181,13 +181,19 @@ const parent = (path) => path.slice(0, path.lastIndexOf('.'));
 /**
  * One check per group of `groups` ([title, pattern over a line's path]) and
  * one for the lines no group takes; `expected` ([pattern over a line,
- * reason]) are the differences the suite lists, each of which must show.
+ * reason, maybe]) are the differences the suite lists, each of which must
+ * show, but for one listed as `maybe`, which is let be either way and noted
+ * when it does not show.
  */
 export function report(mode, lines, groups, expected = []) {
 	const left = new Set(lines);
-	for (const [pattern, reason] of expected) {
+	for (const [pattern, reason, maybe] of expected) {
 		const hit = lines.filter((line) => pattern.test(line));
 		for (const line of hit) left.delete(line);
+		if (maybe && !hit.length) {
+			console.log(`NOTE ${mode}: reads as natively this time: ${reason}`);
+			continue;
+		}
 		ok(
 			`${mode}: still differs, as listed: ${reason}`,
 			hit.length > 0,

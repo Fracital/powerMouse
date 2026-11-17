@@ -25,16 +25,25 @@ ok(
 await page.evaluate(async () => {
 	const element = document.createElement('iframe');
 	document.body.append(element);
+	window.__versionFrame = element;
 	await window.controller.createFrame(element).go('https://example.com/');
 	await new Promise((resolve) =>
 		element.addEventListener('load', resolve, { once: true }),
 	);
 });
-const pageBuild = await page.evaluate(() => {
-	const frame = document.querySelector('iframe:not(.frame)');
-	return frame.contentWindow[window.controller.config.names.client].config
-		.build;
-});
+const CLIENT_NAME = await page.evaluate(
+	() => window.controller.config.names.client,
+);
+// the page client's config, read in the frame (a site pool shows it from
+// another origin than the host page's)
+const pageBuild = await (
+	await page.evaluateHandle(() => window.__versionFrame)
+)
+	.asElement()
+	.contentFrame()
+	.then((frame) =>
+		frame.evaluate((name) => window[name].config.build, CLIENT_NAME),
+	);
 ok(
 	'the page client got the same build id from the shell',
 	pageBuild === hostBuild,

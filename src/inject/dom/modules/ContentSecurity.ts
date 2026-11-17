@@ -6,6 +6,7 @@ import { unrouteURL } from '../../modules/Unroute';
 import { trustTaggedViolations } from '../../violationViews';
 import type DocumentClient from '../Client';
 import { addDocumentOpenListener } from '../Client';
+import { deferred } from '../deferred';
 
 /** how much of the code a violation's sample shows (measured) */
 const SAMPLE_LENGTH = 40;
@@ -112,7 +113,16 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 					return false;
 				const page =
 					refused?.url ??
-					(blocked.includes(':') ? unrouteURL(client, blocked) : null);
+					(blocked.includes(':')
+						? unrouteURL(
+								client,
+								// (the site pool: read on this document's own slot,
+								// ../siteEvents.ts onOwnSlot)
+								client.sites
+									? deferred().onOwnSlot(client, blocked).value
+									: blocked,
+							)
+						: null);
 				if (!page || page === blocked) return true;
 				const url = new URL(page);
 				const governed = governing(entry.policy, directive);
@@ -193,8 +203,13 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 				const refused = client.refusedURI(value);
 				if (refused !== null) return refused.blocked;
 			}
-			const page = unrouteURL(client, value);
-			if (page === null) return '';
+			// (the site pool: a route of another slot is read as this one's,
+			// and what is no route there names no URL of the page's)
+			const slotted = client.sites
+				? deferred().onOwnSlot(client, value)
+				: { value, slot: false };
+			const page = unrouteURL(client, slotted.value);
+			if (page === null || (slotted.slot && page === slotted.value)) return '';
 			// a report names no fragment
 			return key === 'blockedURI' ? page.replace(/#.*$/s, '') : page;
 		});

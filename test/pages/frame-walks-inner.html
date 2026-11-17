@@ -43,6 +43,24 @@
 			walk(top, 0);
 			return visits;
 		});
+		// a window with no frame any more (a frame of this document's own,
+		// taken out): natively its parent and top are null. Through the
+		// proxy its parent read as itself (or the proxied top, through this
+		// window's getter), and with the site pool it threw. And the opener
+		// of the frame of another origin above, which has none: null
+		const removed = document.createElement('iframe');
+		document.documentElement.append(removed);
+		const gone = removed.contentWindow;
+		removed.remove();
+		record('removedFrameParent', () => gone.parent === null);
+		record('removedFrameTop', () => gone.top === null);
+		record(
+			'removedFrameParentByGetter',
+			() =>
+				Reflect.getOwnPropertyDescriptor(window, 'parent').get.call(gone) ===
+				null,
+		);
+		record('otherOriginOpener', () => parent.opener === null);
 		__fw.done = true;
 	});
 	top.postMessage('frame-walks:pending', '*');

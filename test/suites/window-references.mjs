@@ -113,6 +113,10 @@ for (const [mode, base] of [
 	['isolated', HOST],
 ]) {
 	const page = await openDemo(browser, base);
+	// the demo's controller shows the sites from a site pool (its default,
+	// docs/site-pool.md), or from its own origin (STOMP_SITE_POOL=0, a slot
+	// that does not answer): the page says which
+	const pooled = await page.evaluate(() => !!window.controller?.siteMode);
 	await submitLanding(page, target);
 	const proxied = await collect(page.context());
 	for (const role of ROLES) {
@@ -139,7 +143,13 @@ for (const [mode, base] of [
 							!value.includes('"call":"read"')),
 					detail,
 				);
-			} else if (KNOWN_OPEN[role]?.includes(path))
+			} else if (
+				KNOWN_OPEN[role]?.includes(path) &&
+				// under a site pool (docs/site-pool.md) the other site's window
+				// is of another origin, restricted by the browser itself: these
+				// read as natively
+				!pooled
+			)
 				ok(
 					`${mode}: ${role} ${path} is still raw (known open)`,
 					!String(nativePaths[path]).startsWith('RAW') &&

@@ -7,6 +7,7 @@ import { failsToParse, withStack } from '../../nativeErrors';
 import { LazyWeakMap } from '../../ownCollections';
 import DocumentClient from '../Client';
 import { deferred } from '../deferred';
+import { siteWindows } from '../siteWindows';
 import FragmentModule from './Fragment';
 import NavigationHintModule from './NavigationHint';
 
@@ -230,6 +231,7 @@ export default class LocationModule extends Module<DocumentClient> {
 		const ancestorOrigins = (): string[] => {
 			const origins: string[] = [];
 			let context: typeof globalThis = global;
+			let last: DocumentClient = moduleClient;
 			while (true) {
 				try {
 					const parent = (context as any)[moduleClient.names.client]
@@ -238,15 +240,25 @@ export default class LocationModule extends Module<DocumentClient> {
 						break;
 					// its origin as a page sees it: "null" for an opaque one (a
 					// frame sandboxed without allow-same-origin, a data: document)
-					origins.push(
-						(parent as any)[moduleClient.names.client].origin as string,
-					);
+					last = (parent as any)[moduleClient.names.client];
+					origins.push(last.origin as string);
 					context = parent;
 				} catch (error) {
 					// a cross-origin parent
 					break;
 				}
 			}
+			// (the site pool: the top of another slot, named by the route)
+			const sites = this.client.sites;
+			if (sites && last.nested)
+				origins.push(
+					...siteWindows().ancestorsPast(
+						this.client,
+						sites,
+						last,
+						origins.length,
+					),
+				);
 			return origins;
 		};
 		// the list, made by a deferred part (../ancestorOriginsList.ts) the

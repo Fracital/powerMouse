@@ -31,7 +31,10 @@
 //
 // What this does not cover: an array method the page made a method of the
 // window itself and calls as one; it is listed below as known, and fails
-// the suite once it reads as natively.
+// the suite once it reads as natively. With the site pool on
+// (docs/site-pool.md) the frames are of another slot's origin, so the
+// browser itself refuses every read of their document and that case reads
+// as natively too: the list holds only with the pool off.
 import {
 	done,
 	FIXTURE,
@@ -39,16 +42,22 @@ import {
 	ok,
 	openDemo,
 	PROXY,
+	SLOT_PORTS,
 	submitLanding,
 	waitActive,
 } from '../lib.mjs';
 
-const KNOWN = new Map([
-	[
-		'ownMethod',
-		"Array.prototype's method made a window's own and called as one has the window as `this` with no call the inject sees (the methods are not wrapped: src/inject/modules/Reflection.ts applyWindowChildren)",
-	],
-]);
+// the frames of another site share the page's origin only with the pool off
+const KNOWN = new Map(
+	SLOT_PORTS.length
+		? []
+		: [
+				[
+					'ownMethod',
+					"Array.prototype's method made a window's own and called as one has the window as `this` with no call the inject sees (the methods are not wrapped: src/inject/modules/Reflection.ts applyWindowChildren)",
+				],
+			],
+);
 const address = `${FIXTURE}pages/window-children.html`;
 const browser = await launch();
 const page = await browser.newPage();
@@ -64,6 +73,17 @@ const frame = await waitActive(
 	"window.__children?.done === true && document.title === 'window children'",
 );
 const proxied = await frame.evaluate(() => window.__children);
+if (SLOT_PORTS.length) {
+	const origins = frame
+		.childFrames()
+		.map((child) => new URL(child.url()).origin);
+	ok(
+		"with the pool, the frames of another site are of an origin not the page's",
+		origins.length === 2 &&
+			origins.every((origin) => origin !== new URL(frame.url()).origin),
+		`page ${frame.url()}, frames ${origins.join(', ')}`,
+	);
+}
 for (const name of Object.keys(native)) {
 	if (name === 'done') continue;
 	const same = proxied[name] === native[name];

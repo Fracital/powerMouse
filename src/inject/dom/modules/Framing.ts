@@ -3,6 +3,7 @@ import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { routedPrefix } from '../../modules/Unroute';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import { siteWindows } from '../siteWindows';
 import ContextModule, { reachableClients } from './Context';
 
 /**
@@ -30,6 +31,9 @@ export default class FramingModule extends Module<DocumentClient> {
 		const moduleClient = this.client;
 		const proxyModule = moduleClient.getModule(ProxyModule)!;
 		const global = moduleClient.global;
+		// (only a top-level document of a slot has the hub's page above it)
+		if (moduleClient.sites && !moduleClient.nested)
+			siteWindows().keepTopFocus(global, moduleClient.sites.hub);
 
 		// the host's frame is never seen; a frame nested in a proxied page of the
 		// same real origin gets its element, as a browser gives it (another
@@ -130,7 +134,15 @@ export default class FramingModule extends Module<DocumentClient> {
 								.getModule(ContextModule)!
 								.newRestricted(opener);
 					} catch (error) {
-						// cross-origin
+						// cross-origin: the host, or (the site pool) another site's
+						// window, restricted as without a pool (ContextModule)
+						const sites = this.client.sites;
+						if (sites && !siteWindows().isHub(global, opener, sites.hub))
+							return siteWindows().restrictAcross(
+								this.client,
+								this.client.getModule(ContextModule)!,
+								opener,
+							);
 					}
 					return null;
 				}),
@@ -220,12 +232,15 @@ export default class FramingModule extends Module<DocumentClient> {
 			global.MessageEvent.prototype,
 			'source',
 		)!.get!;
+		const sites = this.client.sites;
 		const isStompWindow = (source: unknown) => {
 			if (!source) return true; // MessagePorts, workers: not a window
 			try {
 				return moduleClient.names.client in (source as unknown as object);
 			} catch (error) {
-				return false; // cross-origin: the host
+				// cross-origin: the host, or (the site pool) another site's
+				// window unless it is the hub's page
+				return !!sites && !siteWindows().isHub(global, source, sites.hub);
 			}
 		};
 		// document.open() (which loadHTML uses to write the real page) drops

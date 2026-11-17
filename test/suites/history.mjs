@@ -19,6 +19,9 @@ for (const [mode, base] of [
 		null,
 		{ timeout: 45000 },
 	);
+	// the demo's controller shows the sites from a site pool (its default,
+	// docs/site-pool.md), or from its own origin (STOMP_SITE_POOL=0)
+	const pooled = await page.evaluate(() => !!window.controller.siteMode);
 	await page.evaluate(async (fixture) => {
 		// the host has an entry before the current one, so a traversal that
 		// leaves the frame is visible as a change of the host URL
@@ -109,8 +112,10 @@ for (const [mode, base] of [
 	// isolated: the host is a foreign window, the filter drops its message.
 	// same-origin: the host shares the origin and its call runs the frame's
 	// own postMessage, so the message looks like the page's and arrives; the
-	// tagger (also a window listener) must still unwrap the envelope
-	if (mode === 'isolated')
+	// tagger (also a window listener) must still unwrap the envelope.
+	// Under a site pool (docs/site-pool.md) the page is on a slot's origin,
+	// and the host a foreign window there too
+	if (mode === 'isolated' || pooled)
 		ok(
 			`${mode}: a host message never reaches a page that reopened its document`,
 			Array.isArray(messages) && messages.length === 0,

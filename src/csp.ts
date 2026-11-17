@@ -220,20 +220,44 @@ export function browserSources(
 export const NAVIGATION_DIRECTIVES = ['base-uri', 'form-action'];
 
 /**
+ * The site pool (docs/site-pool.md): the directives whose navigations the
+ * worker of one slot sends on to another slot's origin, a 307 to the same
+ * route there (a frame of a site another slot shows, a form submitted to
+ * one). The browser judges that hop against its copy of the policy, where
+ * another slot's origin is not 'self', so these directives get the pool's
+ * origins too wherever the page's sources let a URL through at all: the
+ * parent's inject and the worker have judged the navigation's real URL by
+ * the page's policy before (a refused one goes to a refusal URL, on no
+ * slot's origin), and the hop only carries an allowed one to its slot.
+ */
+const SLOT_DIRECTIVES = ['frame-src', 'fenced-frame-src', 'form-action'];
+
+/**
  * The policy the browser applies for `policy` (its text), or null when it
  * has nothing the browser can apply. Each directive the browser judges
  * loads by is written out for itself (a page's default-src or child-src
  * would otherwise reach directives the proxy relies on), the rest are left
  * out: report-uri and report-to (the browser would post the proxy's URLs),
- * and what the proxy applies another way.
+ * and what the proxy applies another way. `slots`: the site pool's origins
+ * when the document is shown from one (SLOT_DIRECTIVES).
  */
-export function browserPolicy(policy: Policy, self?: URL): string | null {
+export function browserPolicy(
+	policy: Policy,
+	self?: URL,
+	slots: readonly string[] = [],
+): string | null {
 	const directives: string[] = [];
+	// the pool's other slots, for a directive that lets URLs through (SLOT_DIRECTIVES)
+	const withSlots = (name: string, sources: string[], browser: string[]) => {
+		if (SLOT_DIRECTIVES.includes(name) && namesURLs(sources))
+			for (const slot of slots) if (!browser.includes(slot)) browser.push(slot);
+		return browser;
+	};
 	for (const effective of BROWSER_DIRECTIVES) {
 		const governed = governing(policy, effective);
 		if (governed)
 			directives.push(
-				`${effective} ${browserSources(governed.sources, effective).join(' ')}`,
+				`${effective} ${withSlots(effective, governed.sources, browserSources(governed.sources, effective)).join(' ')}`,
 			);
 	}
 	// The browser never enforces the page's script-src, style-src or Trusted
@@ -254,7 +278,7 @@ export function browserPolicy(policy: Policy, self?: URL): string | null {
 			directives.push(`${name} 'none'`);
 			continue;
 		}
-		const browser = browserSources(sources);
+		const browser = withSlots(name, sources, browserSources(sources));
 		// A page's own <base href> keeps its real URL for a moment while the
 		// inject routes it to the proxy origin (src/inject/dom/modules/DOMAttributes.ts),
 		// and the browser judges that transient write against base-uri. Its
@@ -769,11 +793,14 @@ export function browserRefuses(
  * the page's text it stands for. `mark`: a prefix the policies' marks
  * share (markedPolicy), unique to the document. `self`: the document's real
  * URL (what the policies' 'self' means), for base-uri (browserPolicy).
+ * `slots`: the site pool's origins, when the document is shown from one
+ * (browserPolicy).
  */
 export function browserHeaders(
 	headers: Headers,
 	mark: string,
 	self?: URL,
+	slots?: readonly string[],
 ): {
 	enforce: string | null;
 	report: string | null;
@@ -790,7 +817,7 @@ export function browserHeaders(
 			disposition,
 			'header',
 		)) {
-			const text = browserPolicy(policy, self);
+			const text = browserPolicy(policy, self, slots);
 			// a policy the browser gets nothing of is the inject's all the same
 			if (text === null) {
 				texts.push(['', policy.text, disposition]);
@@ -1005,6 +1032,14 @@ export interface ScriptFacts {
 	 * cluster apart from the documents of its origin that none isolates
 	 */
 	dip?: boolean;
+	/**
+	 * The site pool: a frame's document, whose parent may be of another
+	 * slot's origin, which it cannot reach. What the document that navigated
+	 * it told the worker: its parent's frame-src, which judges every
+	 * navigation of the frame (NavigationHint judgeFrame), and the real
+	 * origins of its ancestors, nearest first (ancestorOrigins)
+	 */
+	framed?: { policies: HopPolicy[]; ancestors?: string[] };
 }
 
 /**

@@ -15,9 +15,13 @@ import {
 } from '../lib.mjs';
 
 const browser = await launch();
-/** a routed document URL on the proxy origin: the scope, the controller id, the html route */
+/**
+ * a routed document URL on the proxy origin, or with the site pool on
+ * (STOMP_SITE_POOL) on a slot's, another port of the proxy's host: the
+ * scope, the controller id, the html route
+ */
 const ROUTED = new RegExp(
-	`^${PROXY.replace(/[.]/g, '\\.')}stomp/[\\w-]+/html/`,
+	`^http://${new URL(PROXY).hostname.replace(/[.]/g, '\\.')}:\\d+/stomp/[\\w-]+/html/`,
 );
 const page = await openDemo(browser);
 const docHeaders = [];
@@ -120,9 +124,17 @@ ok(
 	await omni(page),
 );
 const csp = docHeaders.at(-1)?.['content-security-policy'] ?? null;
+const ancestors = `frame-ancestors 'self' ${HOST.slice(0, -1)}`;
+// (with the site pool on, a slot's document also names the proxy origin
+// and every slot: a frame of another site is a frame of another slot,
+// docs/site-pool.md)
+const pooled = new URL(f1.url()).origin !== new URL(PROXY).origin;
 ok(
 	'service worker sends frame-ancestors for the host and itself',
-	csp === `frame-ancestors 'self' ${HOST.slice(0, -1)}`,
+	pooled
+		? typeof csp === 'string' &&
+				csp.startsWith(`${ancestors} ${PROXY.slice(0, -1)} `)
+		: csp === ancestors,
 	String(csp),
 );
 

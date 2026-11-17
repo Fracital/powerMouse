@@ -22,6 +22,8 @@ import type {
 	RequestInfo,
 	RequestRule,
 } from '../transport/messages';
+import type { SiteHistoryAnswer, SiteHistoryOp } from './history';
+import type { SitePoolInit } from './sitePool';
 
 /**
  * A transport described rather than constructed: what `StompController` hosts
@@ -100,7 +102,16 @@ export interface ControllerFrameInit {
 	adblock?: boolean | AdblockOptions;
 	/** filter lists to start the blocker with in place of the defaults (RemoteControllerInit.adblockLists) */
 	adblockLists?: (string | AdblockList)[];
+	/** the site pool, the controller frame its hub (RemoteControllerInit.sitePool) */
+	sitePool?: SitePoolInit | false;
 }
+
+/**
+ * a frame of the host addressed by its index in the host window's `frames`
+ * list, with the slot of the site pool its document last reported from
+ * (the agent of that origin reads and steps it)
+ */
+export type FrameAddress = number | { index: number; origin?: string };
 
 export interface FrameInfo {
 	url: string | null;
@@ -128,18 +139,47 @@ export const STORAGE_BLOCKED = 'StorageBlockedError';
 
 /** implemented by the controller frame, called by the host */
 export type FrameBound = {
-	init: [ControllerFrameInit, { config: Config; stale: StaleInfo | null }];
+	init: [
+		ControllerFrameInit,
+		{
+			config: Config;
+			stale: StaleInfo | null;
+			/** the site pool's slots, whose documents report too (none without a pool) */
+			sites?: string[];
+		},
+	];
 	route: [string, string];
-	/** the size of a host frame about to navigate (StompController.reportViewport) */
-	viewport: [[number, number], null];
+	/** the slot of the site pool a URL's site is shown from, once it is up; null: the proxy origin */
+	siteOrigin: [string, string | null];
+	/**
+	 * the size of a host frame about to navigate (StompController.reportViewport),
+	 * to the slot's worker when a third element names the slot it goes to
+	 * (StompController.siteViewport)
+	 */
+	viewport: [[number, number] | [number, number, string], null];
 	/** the real URL a routed one stands for, null for a non-route (see StompController.unroute) */
 	unroute: [string, string | null];
 	setTransport: [TransportDescriptor];
 	/** frames are addressed by their index in the host window's `frames` list */
-	frameInfo: [number, FrameInfo];
-	frameActivated: [{ index: number; token: string; nested: boolean }, null];
+	frameInfo: [FrameAddress, FrameInfo];
+	frameActivated: [
+		{ index: number; token: string; nested: boolean; origin?: string },
+		null,
+	];
+	/**
+	 * the site pool: an op on run `run` of the frame's history, for the
+	 * agent of the slot `origin` (or the controller frame, for its own
+	 * origin) to answer (history.ts answerRun, RemoteFrame's SiteRuns)
+	 */
+	frameHistory: [
+		{ index: number; origin: string; run: number; op: SiteHistoryOp },
+		SiteHistoryAnswer | null,
+	];
 	/** resolves to whether the command was carried out (false: nothing to go back/forward to) */
-	frameCommand: [{ index: number; command: FrameCommand }, boolean];
+	frameCommand: [
+		{ index: number; command: FrameCommand; origin?: string },
+		boolean,
+	];
 	clearCache: [];
 	cookies: [CookieCommand, CookieResult];
 	/** clear a site's virtualized storage (the "Forget me on close" shield) */

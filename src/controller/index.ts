@@ -46,9 +46,17 @@ import type {
 import { libraryFile } from '../routeURL';
 import { isUrlLike, urlLike } from '../StompURL';
 import { constructTransport, resolveHttp3 } from '../transport/construct';
-import type { HostReload, RequestRule } from '../transport/messages';
+import { jarChanged, serveJar } from '../transport/jarServer';
+import type {
+	HostReload,
+	PermissionRequestInfo,
+	RequestRule,
+	SiteArrival,
+} from '../transport/messages';
 import {
 	ACTIVATED,
+	BLOCKER_SERVE,
+	BlockerServeMessage,
 	CLIENT_HINTS,
 	CLIENT_ID,
 	ClientHintsReport,
@@ -62,12 +70,15 @@ import {
 	CookieCommand,
 	CookieRecord,
 	CookieResult,
+	FRAME_ENTRY,
 	FRAME_MOVED,
 	HANDSHAKE_REFUSED,
+	HISTORY_RUN,
 	HOOK_ERROR,
 	KEEPALIVE_MS,
 	NAVIGATE,
 	NavigateInfo,
+	NAVIGATION_TYPE,
 	OPEN_TAB,
 	PAGE_MODULES,
 	postToPort,
@@ -91,13 +102,20 @@ import { BUILD } from '../version';
 import { compileModule } from '../wasm/module';
 import { ClientFrames } from './clientFrames';
 import {
+	answerRun,
 	bindHistory,
 	canTraverse,
 	clientView,
 	earlierWindows,
+	framePath,
 	noteActivation,
 	noteBrowserNavigation,
 	traverse,
+	type Direction,
+	type ReportedEntry,
+	type RunState,
+	type SiteHistoryAnswer,
+	type SiteHistoryOp,
 } from './history';
 import { watchHostInput } from './hostActivation';
 import { hostReload } from './hostReload';
@@ -115,6 +133,17 @@ import RewriteWorkers, {
 	defaultRewriteWorkers,
 } from './rewriteWorkers';
 import { createShields, type Shields } from './shields';
+import { poolOrigins, slotAllow, type SitePoolInit } from './sitePool';
+import {
+	decorateOver,
+	SiteHub,
+	type BrokeredPool,
+	type BrokeredTransport,
+	type FannedMethod,
+	type SiteAgentHooks,
+	type SiteFrameInfo,
+	type SiteHistoryCommand,
+} from './sites';
 
 export { default as SearchBuilder } from '../bootstrapper/SearchBuilder';
 export type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
@@ -422,6 +451,33 @@ export interface ControllerInit {
 	 * Default 10000.
 	 */
 	rewriteTimeout?: number;
+	/**
+	 * Show every proxied site (its registrable domain) from one of a few
+	 * origins, the pool's slots (`{ origins: [...] }`,
+	 * src/controller/sitePool.ts, docs/site-pool.md): other ports of this
+	 * page's host, say. The browser then gives each slot a process of its
+	 * own, so a page and a frame of another site in it are apart as
+	 * natively, and a window of a site in another slot is another origin to
+	 * the browser itself. A site keeps its slot; with more sites than slots,
+	 * some share one, as every site does without a pool. Every slot must
+	 * serve `directory` as this page's origin does, with
+	 * `Origin-Agent-Cluster: ?1` on everything it answers.
+	 *
+	 * Used wherever it can work: a page that is not a secure context (where
+	 * the browser ignores Origin-Agent-Cluster), and a slot that does not
+	 * answer or whose service worker does not start, show their sites from
+	 * this page's origin, as without a pool. `false` (or no origins) shows
+	 * every site from this page's origin.
+	 */
+	sitePool?: SitePoolInit | false;
+	/** @internal the controller is a slot's agent of a site pool (src/controller/sites.ts) */
+	agent?: SiteAgentHooks;
+	/**
+	 * @internal the site pool's hub is a controller frame (RemoteController,
+	 * src/controller/frame.ts): the proxied frames are the host page's, of
+	 * this origin
+	 */
+	siteHost?: string;
 }
 
 /**
@@ -556,14 +612,43 @@ export function navigateReport(data: unknown): NavigateInfo | null {
 }
 
 /** the service worker client id a document in a frame of a proxied page posted, else null */
+/** how the browser navigated to the document a navigate report is of (NAVIGATION_TYPE), else null */
+export function navigationTypeReport(data: unknown): string | null {
+	if (typeof data !== 'object' || data === null) return null;
+	const type = (data as Record<string, unknown>)[NAVIGATION_TYPE];
+	return typeof type === 'string' ? type : null;
+}
+/** where the document a navigate report is of is in its slot's stretch of the frame's history (HISTORY_RUN), else null */
+export function historyRunReport(data: unknown): [number, number] | null {
+	if (typeof data !== 'object' || data === null) return null;
+	const run = (data as Record<string, unknown>)[HISTORY_RUN];
+	if (!Array.isArray(run) || run.length !== 2) return null;
+	const [index, length] = run as unknown[];
+	return Number.isInteger(index) &&
+		Number.isInteger(length) &&
+		(index as number) >= 0 &&
+		(index as number) < (length as number)
+		? [index as number, length as number]
+		: null;
+}
 /** a FRAME_MOVED report of a document in a frame of a proxied page (with its client id, when it has one), else null */
 export function frameMovedReport(
 	data: unknown,
-): { client: string | null } | null {
+): { client: string | null; entry: ReportedEntry | null } | null {
 	if (typeof data !== 'object' || data === null || !(FRAME_MOVED in data))
 		return null;
 	const client = (data as Record<string, unknown>)[FRAME_MOVED];
-	return { client: typeof client === 'string' ? client : null };
+	const entry = (data as Record<string, unknown>)[FRAME_ENTRY] as
+		Record<string, unknown> | null | undefined;
+	return {
+		client: typeof client === 'string' ? client : null,
+		entry:
+			typeof entry?.key === 'string' &&
+			typeof entry.id === 'string' &&
+			typeof entry.url === 'string'
+				? { key: entry.key, id: entry.id, url: entry.url }
+				: null,
+	};
 }
 export function clientReport(data: unknown): string | null {
 	if (typeof data !== 'object' || data === null) return null;
@@ -818,13 +903,17 @@ export class StompController extends EventTarget {
 	transportHost: 'worker' | 'page';
 	frames: Frame[] = [];
 	isReady = false;
-	#worker?: TransportWorker;
-	#rewriteWorkers?: RewriteWorkers;
+	#worker?: TransportWorker | BrokeredTransport;
+	#rewriteWorkers?: RewriteWorkers | BrokeredPool;
+	/** the site pool's hub (ControllerInit.sitePool) */
+	#sites?: SiteHub;
 	#rewriteTimeout: number;
 	/** the bytes of the wasm modules loaded for `rewriter: 'wasm'`, once they are; every handshake carries them */
 	#modules: Record<string, ArrayBuffer> | null = null;
 	/** the same modules compiled, for the threads and pages of this agent cluster (none without `rewriter: 'wasm'`) */
 	#compiled: Promise<Record<string, WebAssembly.Module>> | null = null;
+	/** settles once the modules' bytes are in (#modules) */
+	#loaded: Promise<unknown>;
 	/** settles once the transport exists where it is hosted; the handshake waits for it */
 	#hostReady: Promise<void>;
 	/** every hook error so far (a hook that threw, a hook URL that failed), newest last; also `hookerror` events */
@@ -850,6 +939,12 @@ export class StompController extends EventTarget {
 	#ready: Promise<void>;
 	/** how the host page was loaded, until the worker has been told (hostReload.ts) */
 	#hostReload: Promise<HostReload | undefined> | null = null;
+	/**
+	 * the same once known, and when: a site pool's agents tell their slots'
+	 * workers as this one told its own (the page the host shows again is a
+	 * slot's when its site is shown from one)
+	 */
+	#hostReloaded: { mode: HostReload; at: number } | null = null;
 	#readyResolve!: () => void;
 	#readyReject!: (error: Error) => void;
 	#readySettled = false;
@@ -939,7 +1034,14 @@ export class StompController extends EventTarget {
 			this.serviceworker = registrationWorker(init.serviceworker);
 		} else this.serviceworker = init.serviceworker;
 		const given = init.transport;
-		if (isTransportDescriptor(given)) {
+		if (init.agent) {
+			// a slot's agent serves its transport through the hub's
+			this.transportHost = 'worker';
+			this.#worker = init.agent.worker;
+			init.agent.worker.bind(this.#handshakeHeaders, this.#admitSession);
+			init.agent.keepAlive = this.#keepAlive;
+			this.transport = new RemoteTransport(init.agent.worker.serve());
+		} else if (isTransportDescriptor(given)) {
 			this.transportHost =
 				(given.host ?? 'worker') === 'page' ? 'page' : 'worker';
 			this.transport = failingTransport('the transport is still loading');
@@ -962,6 +1064,7 @@ export class StompController extends EventTarget {
 		// resent with the handshake); the host persists it from onShieldsChange
 		this.#shields = createShields((list) => {
 			this.#call('shields', { list, seed: this.#fpSeed }).catch(() => {});
+			this.#sites?.apply('shields', list);
 		}, init.onShieldsChange);
 		if (init.shields?.length) this.#shields.replace(init.shields);
 		this.directory = isUrlLike(init.directory)
@@ -1006,7 +1109,9 @@ export class StompController extends EventTarget {
 			// the host's page sent COOP same-origin and an embedder policy (in
 			// origin-isolation mode this is the controller's frame, which the
 			// host's page lets be isolated): proxied frames can be isolated here
-			...(globalThis.crossOriginIsolated === true ? { isolated: true } : {}),
+			...(globalThis.crossOriginIsolated === true || init.agent?.isolated
+				? { isolated: true }
+				: {}),
 			...(init.cache === false ? { cache: false } : {}),
 			...(init.onRequest || init.requestLog ? { requestLog: true } : {}),
 			...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
@@ -1039,9 +1144,20 @@ export class StompController extends EventTarget {
 					mintClientName(Object.getOwnPropertyNames(globalThis)),
 			},
 			...(errorPage ? { errorPage } : {}),
+			// a slot's agent: its pages know the hub and its message token
+			...(init.agent ? { sites: init.agent.sites } : {}),
+			// the hub of a site pool (as below): its slots are the proxy's own
+			// origins (a slot's agent knows them from `sites`)
+			...(init.sitePool &&
+			init.sitePool.origins?.length &&
+			!init.agent &&
+			globalThis.isSecureContext === true
+				? { slotOrigins: poolOrigins(init.sitePool, location.origin) }
+				: {}),
 		};
 
-		if (rewriteWorkers > 0)
+		if (init.agent) this.#rewriteWorkers = init.agent.pool;
+		else if (rewriteWorkers > 0)
 			this.#rewriteWorkers = new RewriteWorkers(
 				new URL(assetName(this.config.assets, 'rewriteWorker'), this.directory),
 				rewriteWorkers,
@@ -1051,7 +1167,13 @@ export class StompController extends EventTarget {
 		// worker (as bytes it compiles itself), and the first handshake waits
 		// for it (#rewriterReady), so no thread rewrites a script before it
 		// holds the module
-		this.#compiled = this.#compileModules(WASM_ASSETS);
+		// A slot's agent has no rewrite workers of its own: it only loads the
+		// bytes, for its worker, and compiles them the first time a thread of
+		// its agent cluster asks (#compiledNow), which a spare slot's
+		// (SiteHub.warm) may never do
+		this.#loaded = init.agent
+			? this.#compileModules(WASM_ASSETS, false)
+			: (this.#compiled = this.#compileModules(WASM_ASSETS));
 
 		// a described transport is started where it is hosted before the first
 		// handshake; a failure there never leaves the controller dead
@@ -1072,18 +1194,22 @@ export class StompController extends EventTarget {
 		this.#adblockBase = this.#adblock;
 		if (this.#adblock && init.adblockLists)
 			this.#adblock = withAdblockLists(this.#adblock, init.adblockLists);
-		const adblockReady: Promise<void> = this.#adblock
-			? this.#compileModules(['blocker']).then(() => {
-					if (this.#modules?.blocker) return;
-					this.#adblock = null;
-					delete this.config.adblock;
-				})
-			: Promise.resolve();
-		const transportReady: Promise<void> = !isTransportDescriptor(given)
-			? Promise.resolve()
-			: this.transportHost === 'worker'
-				? this.#startWorker(given)
-				: this.#importInPage(given);
+		// a slot's agent: the slot's worker asks the hub's engine, and needs
+		// no module of its own
+		const adblockReady: Promise<void> =
+			!this.#adblock || init.agent
+				? Promise.resolve()
+				: this.#compileModules(['blocker']).then(() => {
+						if (this.#modules?.blocker) return;
+						this.#adblock = null;
+						delete this.config.adblock;
+					});
+		const transportReady: Promise<void> =
+			init.agent || !isTransportDescriptor(given)
+				? Promise.resolve()
+				: this.transportHost === 'worker'
+					? this.#startWorker(given)
+					: this.#importInPage(given);
 		// the transport is hosted where it will stay (a worker that failed has
 		// fallen back to the page by now, and setTransport keeps the host)
 		// before the first handshake hands the config to any frame
@@ -1121,17 +1247,95 @@ export class StompController extends EventTarget {
 		// the host's own input gives its proxied documents no activation of
 		// their own (./hostActivation.ts)
 		watchHostInput(helperNames(this.config).client);
+		// the site pool, where the browser keeps its slots apart: only a
+		// secure context's Origin-Agent-Cluster is heard
+		if (
+			init.sitePool &&
+			init.sitePool.origins?.length &&
+			!init.agent &&
+			globalThis.isSecureContext === true
+		)
+			this.#sites = new SiteHub(
+				{
+					init,
+					// the page whose frames show the sites: this one, or the host
+					// page of the controller frame this controller runs in
+					top: init.siteHost ?? location.origin,
+					framesUp: init.siteHost ? 2 : 1,
+					directory: this.directory,
+					frameFile: assetName(this.config.assets, 'controllerFrame'),
+					scriptFile: assetName(this.config.assets, 'siteFrameScript'),
+					codecKey: () => this.#call('codecKey', undefined),
+					agentOptions: async () => {
+						await this.#ready;
+						return this.#agentOptions();
+					},
+					poolSize: () =>
+						this.#rewriteWorkers instanceof RewriteWorkers
+							? this.#rewriteWorkers.size
+							: 0,
+					serve: (port, decorate) => {
+						if (this.#worker && 'serveDecorated' in this.#worker)
+							this.#worker.serveDecorated(port, decorate);
+						else {
+							// the transport in this page: the handshake headers are
+							// still the site's, asked over its port
+							const asked = decorateOver(decorate);
+							serveTransport(
+								port,
+								() => this.transport,
+								asked.decorate,
+								asked.admit,
+							);
+						}
+					},
+					jar: (port) => {
+						if (this.#worker && 'serveJar' in this.#worker)
+							this.#worker.serveJar(port);
+						else serveJar(port);
+					},
+					blocker: (port) => {
+						// the slots' workers build no engine: this page's worker's
+						// answers theirs
+						this.#ready.then(
+							() =>
+								this.serviceworker.postMessage(
+									{
+										[BLOCKER_SERVE]: {
+											directory: this.config.directory,
+										} satisfies BlockerServeMessage,
+									},
+									[port],
+								),
+							() => port.close(),
+						);
+					},
+					rewritePorts: (ports) => {
+						if (this.#rewriteWorkers instanceof RewriteWorkers)
+							this.#rewriteWorkers.servePorts(ports);
+					},
+					arrive: (arrival) => this.siteArrive(arrival),
+					request: (info) => this.#reportRequest(info),
+					permission: (info) => this.#askPermission(info),
+					setTransport: (descriptor) =>
+						this.setTransport(descriptor as TransportDescriptor),
+				},
+				poolOrigins(init.sitePool, location.origin),
+			);
 
 		window.addEventListener('message', (event) => {
-			// only our own frames, same origin as this page in this mode
-			if (event.origin !== location.origin) return;
+			// only our own frames: same origin as this page, or (the site
+			// pool) of a slot's origin
+			if (event.origin !== location.origin && !this.#sites?.has(event.origin))
+				return;
 			const found = frameOfSource(this.frames, event.source);
 			if (!found) return;
 			const { frame, nested } = found;
 			// a document of the frame got a user activation: read it now
 			const activated = activatedReport(event.data);
 			if (activated !== null) {
-				noteActivation(frame.historyWindow(), activated, nested);
+				if (this.#sites) frame.siteActivated(activated, nested);
+				else noteActivation(frame.historyWindow(), activated, nested);
 				return;
 			}
 			// a document in a frame of the page tells the real top which client
@@ -1146,13 +1350,11 @@ export class StompController extends EventTarget {
 				if (id) this.#clients.attribute(id, frame);
 				// a frame in the page that navigated is a step of the frame's
 				// history (a tab's Back steps it first): the buttons follow
-				const changed = moved && frame.historyChanged();
-				if (changed) {
-					init.onNavigate?.(changed, frame);
-					this.dispatchEvent(
-						new CustomEvent('navigate', { detail: { info: changed, frame } }),
-					);
-				}
+				// (the site pool: once the agent of the frame's slot heard)
+				if (moved && this.#sites)
+					frame.siteNested(event.source as Window, moved.entry);
+				const changed = moved && !this.#sites && frame.historyChanged();
+				if (changed) this.frameNavigated(changed, frame);
 				const thrown = client || moved ? null : hookErrorReport(event.data);
 				if (thrown) this.#reportHookError(thrown, frame);
 				return;
@@ -1160,11 +1362,23 @@ export class StompController extends EventTarget {
 			const navigate = navigateReport(event.data);
 			if (navigate) {
 				if (navigate.client) this.#clients.attribute(navigate.client, frame);
-				frame.report(navigate);
-				init.onNavigate?.(navigate, frame);
-				this.dispatchEvent(
-					new CustomEvent('navigate', { detail: { info: navigate, frame } }),
-				);
+				// the site pool: reported once the agent of the document's slot
+				// took it (the frame's buttons are its history's)
+				if (this.#sites)
+					frame.siteReport(
+						event.origin,
+						navigate,
+						navigationTypeReport(event.data),
+						() => {
+							frame.report(navigate);
+							this.frameNavigated(navigate, frame);
+						},
+						historyRunReport(event.data),
+					);
+				else {
+					frame.report(navigate);
+					this.frameNavigated(navigate, frame);
+				}
 				return;
 			}
 			const url = openRequest(event.data);
@@ -1184,6 +1398,8 @@ export class StompController extends EventTarget {
 		// a controller that cannot start says so once, whether or not the
 		// host waits for it
 		this.#ready.catch(() => {});
+		// the site pool's spare agent, once this controller is up
+		if (this.#sites) this.#ready.then(() => this.#sites?.warm());
 		this.#hostReady.catch((error) => {
 			console.error(error);
 			this.#readyReject(error instanceof Error ? error : new Error(`${error}`));
@@ -1192,6 +1408,9 @@ export class StompController extends EventTarget {
 			init.hostReload === undefined
 				? hostReload()
 				: Promise.resolve(init.hostReload ?? undefined);
+		this.#hostReload.then((mode) => {
+			if (mode) this.#hostReloaded = { mode, at: Date.now() };
+		});
 
 		// Our worker (re)started and asks its controllers to shake hands again.
 		// A revive before the first handshake is nothing to act on (that
@@ -1549,8 +1768,9 @@ export class StompController extends EventTarget {
 	 * controller hands nothing to the service worker and `wait()` rejects.
 	 */
 	async #rewriterReady(): Promise<void> {
+		await this.#loaded;
 		const compiled = (await this.#compiled) ?? {};
-		if (!compiled.core) {
+		if (this.#init.agent ? !this.#modules?.core : !compiled.core) {
 			const url = new URL(
 				assetName(this.config.assets, 'core'),
 				this.directory,
@@ -1586,8 +1806,16 @@ export class StompController extends EventTarget {
 		const type = response.headers.get('content-type') ?? '';
 		if (/^text\/html\b/i.test(type)) throw missing(`a ${type} answer`);
 		// the cache keeps a response that was read to its end
-		await response.arrayBuffer();
+		const bytes = await response.arrayBuffer();
+		// a slot's agent makes the library its slot's frames share from it
+		// (src/controller/slotLibrary.ts)
+		if (this.#init.agent) this.#libraryText = new TextDecoder().decode(bytes);
 	}
+	/** the light rewriter library's file as a slot's agent read it (#fetchLibrary), null elsewhere @internal */
+	get libraryText(): string | null {
+		return this.#libraryText;
+	}
+	#libraryText: string | null = null;
 	/**
 	 * The wasm artifacts, loaded once and compiled once, here. The rewrite
 	 * workers share this page's agent cluster and get the compiled modules,
@@ -1599,7 +1827,7 @@ export class StompController extends EventTarget {
 	 * (`adblock`, docs/adblock.md) runs in the service worker alone: its
 	 * bytes go there and nothing here compiles them.
 	 */
-	async #compileModules(names: readonly (keyof Assets)[]) {
+	async #compileModules(names: readonly (keyof Assets)[], compile = true) {
 		const compiled: Record<string, WebAssembly.Module> = {};
 		const loaded: Record<string, ArrayBuffer> = {};
 		await Promise.all(
@@ -1610,7 +1838,8 @@ export class StompController extends EventTarget {
 					);
 					if (!response.ok) throw new Error(`HTTP ${response.status}`);
 					const bytes = await response.arrayBuffer();
-					if (name !== 'blocker') compiled[name] = await compileModule(bytes);
+					if (compile && name !== 'blocker')
+						compiled[name] = await compileModule(bytes);
 					loaded[name] = bytes;
 				} catch (error) {
 					// a blocker nobody asked for (it is on by default) is not a
@@ -1636,6 +1865,22 @@ export class StompController extends EventTarget {
 			this.serviceworker.postMessage({ [CONTROLLER_MODULES]: message });
 		}
 		return compiled;
+	}
+	/** the rewriter's modules compiled, compiled now when they were not (a slot's agent) */
+	#compiledNow(): Promise<Record<string, WebAssembly.Module>> {
+		return (this.#compiled ??= this.#loaded.then(async () => {
+			const compiled: Record<string, WebAssembly.Module> = {};
+			for (const name of WASM_ASSETS) {
+				const bytes = this.#modules?.[name];
+				if (!bytes) continue;
+				try {
+					compiled[name] = await compileModule(bytes);
+				} catch (error) {
+					console.warn(`Stomp: the ${name} module did not compile`, error);
+				}
+			}
+			return compiled;
+		}));
 	}
 	/** @internal the wasm modules each thread holds, by Assets key (tests: `rewriter: 'wasm'` reached every thread) */
 	async wasmModules(): Promise<{
@@ -1775,6 +2020,7 @@ export class StompController extends EventTarget {
 					if (!current()) return;
 					this.#instance = info?.instance;
 					this.#settleTaken();
+					this.#init.agent?.heard?.();
 				},
 				replaced: async () => {
 					if (this.#port !== port) return;
@@ -1785,20 +2031,20 @@ export class StompController extends EventTarget {
 					await mediaVerdict(constraints),
 					[],
 				],
-				permission: async (info) => {
-					const ask = this.#init.onPermissionRequest;
-					if (!ask) return [null, []];
-					try {
-						const answer = await ask({
-							origin: info.origin,
-							permission: info.permission,
-							frame: this.#clients.frame(info.client),
-							...(info.client ? { client: info.client } : {}),
-						});
-						return [typeof answer === 'boolean' ? answer : null, []];
-					} catch (error) {
-						return [null, []];
-					}
+				permission: async (info) => [await this.#askPermission(info), []],
+				siteSlot: async (site) => [
+					this.#init.agent
+						? await this.#init.agent.siteSlot(site)
+						: this.#sites
+							? ((await this.#sites.originOf(site, location.origin)) ??
+								location.origin)
+							: null,
+					[],
+				],
+				siteHomed: async (site) => [this.#sites?.homed(site) ?? false, []],
+				blockerPort: async () => {
+					const blocker = this.#init.agent?.blocker?.() ?? null;
+					return [blocker, blocker ? [blocker] : []];
 				},
 				passkeyPrompt: async ({ request, port }) => {
 					const relay = this.#init.passkeyRelay;
@@ -1816,6 +2062,14 @@ export class StompController extends EventTarget {
 						[],
 					];
 				},
+				crossSite: async (args) => [
+					this.#init.agent
+						? await this.#init.agent.crossSite(args)
+						: this.#sites
+							? await this.#sites.cross(args.site, args.arrival)
+							: null,
+					[],
+				],
 				ready: async (info) => {
 					if (!current()) return;
 					// a worker of a build that says no hello
@@ -1881,17 +2135,14 @@ export class StompController extends EventTarget {
 					// does in its page's (WORKER_MODULES): it is a worker of this
 					// agent cluster, and they follow on a port of their own once
 					// they are in, so the worker never waits for them
-					if (this.#compiled) {
-						const modules = new MessageChannel();
-						void this.#compiled.then((compiled) =>
-							modules.port1.postMessage({ [WORKER_MODULES]: compiled }),
-						);
-						worker.postMessage(
-							{ [TRANSPORT_INIT]: true, [WORKER_MODULES]: true },
-							[transport.port2, modules.port2],
-						);
-					} else
-						worker.postMessage({ [TRANSPORT_INIT]: true }, [transport.port2]);
+					const modules = new MessageChannel();
+					void this.#compiledNow().then((compiled) =>
+						modules.port1.postMessage({ [WORKER_MODULES]: compiled }),
+					);
+					worker.postMessage(
+						{ [TRANSPORT_INIT]: true, [WORKER_MODULES]: true },
+						[transport.port2, modules.port2],
+					);
 					const channel = new MessageChannel();
 					worker.postMessage({ [SW_PORT]: true }, [channel.port2]);
 					this.#serviceWorkers.get(id)?.terminate();
@@ -1907,7 +2158,7 @@ export class StompController extends EventTarget {
 					// instantiates the modules this controller compiled. A page
 					// outside this agent cluster (a tab opened with noopener)
 					// hears a messageerror and keeps the JavaScript rewriter
-					const compiled = (await this.#compiled) ?? {};
+					const compiled = await this.#compiledNow();
 					try {
 						port.postMessage({ [PAGE_MODULES]: compiled });
 					} catch (error) {
@@ -1926,40 +2177,7 @@ export class StompController extends EventTarget {
 							this.#admitSession,
 						);
 				},
-				request: async (info) => {
-					// a worker's request is its creator's frame's (info.owner)
-					const known = () => this.#clients.frame(info.client, info.owner);
-					let frame = known();
-					// a document's own request, and the subresources its head fetches,
-					// are reported before the page has told us which frame it is in:
-					// give that report a moment to arrive. Not without frames: the
-					// controller frame relays every report to a host that owns them.
-					// And once for a client that never tells (see ClientFrames)
-					if (
-						!frame &&
-						info.client &&
-						this.frames.length &&
-						!this.#clients.silent(info.client)
-					) {
-						const deadline =
-							Date.now() +
-							(DOCUMENT_DESTINATIONS.has(info.destination)
-								? ATTRIBUTION_WAIT_MS
-								: SUBRESOURCE_WAIT_MS);
-						while (!frame && Date.now() < deadline) {
-							await sleep(50);
-							frame = known();
-						}
-						if (!frame) this.#clients.silence(info.client);
-					}
-					// kept under the worker's own id too: the service worker
-					// forgets who made a worker when it restarts
-					if (frame && info.client && info.owner)
-						this.#clients.attribute(info.client, frame);
-					const event: RequestEvent = { ...info, frame };
-					this.#onRequest?.(event);
-					this.dispatchEvent(new CustomEvent('request', { detail: event }));
-				},
+				request: async (info) => this.#reportRequest(info),
 			},
 			CONTROLLER_RPC,
 			(data, transfer) => postToPort(port, data, transfer),
@@ -1999,6 +2217,11 @@ export class StompController extends EventTarget {
 		if (this.#standby?.port === port) this.#standby.stopServing = stopServing;
 		else this.#stopServing = stopServing;
 
+		// a slot's agent: the hub's cookie jar and blocker, for the slot's
+		// worker
+		if (this.#init.agent)
+			transfer.push(this.#init.agent.jar(), this.#init.agent.blocker());
+
 		// the rewrite workers' ports come last (see ControllerInitMessage)
 		const rewritePorts = this.#rewriteWorkers?.ports() ?? [];
 		transfer.push(...rewritePorts);
@@ -2018,11 +2241,77 @@ export class StompController extends EventTarget {
 				: {}),
 			...(this.#modules ? { modules: this.#modules } : {}),
 			...(this.#adblock ? { adblock: this.#adblock } : {}),
+			...(this.#init.agent
+				? {
+						codecKey: this.#init.agent.codecKey,
+						slot: true,
+						slots: this.#init.agent.slots,
+					}
+				: {}),
+			// the hub: its worker sends a site's documents to the site's slot
+			...(this.#sites ? { pooled: true } : {}),
 		};
 
 		this.serviceworker.postMessage({ [CONTROLLER_INIT]: message }, transfer);
 		// what the pages' client hints carry before any page reported it
 		if (!standby) this.#postClientHints();
+	}
+	/** a proxied request completed: the host hears of it with its frame */
+	async #reportRequest(info: RequestInfo) {
+		// a slot's agent: the hub has the frames
+		if (this.#init.agent) {
+			this.#init.agent.request(info);
+			return;
+		}
+		// a worker's request is its creator's frame's (info.owner)
+		const known = () => this.#clients.frame(info.client, info.owner);
+		let frame = known();
+		// a document's own request, and the subresources its head fetches,
+		// are reported before the page has told us which frame it is in:
+		// give that report a moment to arrive. Not without frames: the
+		// controller frame relays every report to a host that owns them.
+		// And once for a client that never tells (see ClientFrames)
+		if (
+			!frame &&
+			info.client &&
+			this.frames.length &&
+			!this.#clients.silent(info.client)
+		) {
+			const deadline =
+				Date.now() +
+				(DOCUMENT_DESTINATIONS.has(info.destination)
+					? ATTRIBUTION_WAIT_MS
+					: SUBRESOURCE_WAIT_MS);
+			while (!frame && Date.now() < deadline) {
+				await sleep(50);
+				frame = known();
+			}
+			if (!frame) this.#clients.silence(info.client);
+		}
+		// kept under the worker's own id too: the service worker
+		// forgets who made a worker when it restarts
+		if (frame && info.client && info.owner)
+			this.#clients.attribute(info.client, frame);
+		const event: RequestEvent = { ...info, frame };
+		this.#onRequest?.(event);
+		this.dispatchEvent(new CustomEvent('request', { detail: event }));
+	}
+	/** a site asks for a permission: the host's onPermissionRequest answers */
+	async #askPermission(info: PermissionRequestInfo): Promise<boolean | null> {
+		if (this.#init.agent) return this.#init.agent.permission(info);
+		const ask = this.#init.onPermissionRequest;
+		if (!ask) return null;
+		try {
+			const answer = await ask({
+				origin: info.origin,
+				permission: info.permission,
+				frame: this.#clients.frame(info.client),
+				...(info.client ? { client: info.client } : {}),
+			});
+			return typeof answer === 'boolean' ? answer : null;
+		} catch (error) {
+			return null;
+		}
 	}
 	/**
 	 * Tell the worker what the browser's client hints carry that a worker
@@ -2215,6 +2504,7 @@ export class StompController extends EventTarget {
 	 */
 	#keepAlive = () => {
 		if (this.lastHandshake) this.#wake();
+		this.#sites?.tick();
 	};
 	async #call<Method extends keyof SWbound>(
 		method: Method,
@@ -2236,6 +2526,7 @@ export class StompController extends EventTarget {
 	/** replace the request rules the service worker applies (see ControllerInit.rules) */
 	async setRules(rules: RequestRule[]): Promise<void> {
 		this.#rules = rules;
+		this.#sites?.apply('rules', rules);
 		await this.#ready;
 		await this.#call('rules', rules);
 	}
@@ -2281,6 +2572,7 @@ export class StompController extends EventTarget {
 	): Promise<AdblockApplied> {
 		if (!this.#adblock) return { applied: 'off' };
 		this.#adblock = withAdblockLists(this.#adblock, lists);
+		this.#sites?.apply('adblock', { init: this.#adblock });
 		await this.#ready;
 		await this.#call('adblock', { init: this.#adblock });
 		return { applied: 'live' };
@@ -2292,12 +2584,14 @@ export class StompController extends EventTarget {
 	 */
 	async refreshAdblockLists(): Promise<AdblockApplied> {
 		if (!this.#adblock) return { applied: 'off' };
+		this.#sites?.apply('adblock', { init: this.#adblock, refresh: true });
 		await this.#ready;
 		await this.#call('adblock', { init: this.#adblock, refresh: true });
 		return { applied: 'live' };
 	}
 	/** drop every entry of the service worker's HTTP cache */
 	async clearCache(): Promise<void> {
+		this.#sites?.apply('clearCache', undefined);
 		await this.#ready;
 		await this.#call('clearCache', undefined);
 	}
@@ -2308,15 +2602,29 @@ export class StompController extends EventTarget {
 		await this.#ready;
 		return this.#call('passkeys', command);
 	}
-	/** @internal */
+	/**
+	 * @internal A command to the jar, from `cookies` or from the controller
+	 * frame of a RemoteController (src/controller/frame.ts), with what a
+	 * change of the jar means for the site pool's slots either way
+	 */
 	async cookieCommand(command: CookieCommand): Promise<CookieResult> {
 		await this.#ready;
-		return this.#call('cookies', command);
+		const result = await this.#call('cookies', command);
+		// the site pool: the slots' documents keep what they read of the jar
+		if (this.#sites && (command.op === 'clear' || command.op === 'set'))
+			this.#jarChanged();
+		// and the device ids of a cleared host's origins, which each slot's
+		// worker keeps for the documents it served
+		if (command.op === 'clear')
+			await this.#sites?.apply('forgetDeviceIds', command.origin);
+		return result;
 	}
 	/** @internal which of these service worker clients no longer exist (ClientFrames; the controller frame asks for its host) */
 	async goneClients(clients: string[]): Promise<string[]> {
 		await this.#ready;
-		return this.#call('goneClients', clients);
+		const gone = await this.#call('goneClients', clients);
+		// the site pool: a slot's documents are its worker's clients
+		return this.#sites && gone.length ? this.#sites.goneClients(gone) : gone;
 	}
 	/**
 	 * The cookie jar, for the host application only (pages never reach this
@@ -2348,6 +2656,8 @@ export class StompController extends EventTarget {
 	 * cookie jar is wiped through `cookies.clear(origin)`.
 	 */
 	async forgetStorage(origin: string): Promise<void> {
+		// the site pool: the site's storage is its slot's
+		this.#sites?.apply('forgetStorage', origin);
 		await this.#ready;
 		await this.#call('forgetStorage', origin);
 	}
@@ -2364,7 +2674,226 @@ export class StompController extends EventTarget {
 	 */
 	async unroute(url: string): Promise<string | null> {
 		await this.#ready;
-		return this.#call('unroute', new URL(url, this.directory).href);
+		const routed = new URL(url, this.directory);
+		// a slot of the site pool has the same routes on its own origin
+		return this.#call(
+			'unroute',
+			this.#sites?.has(routed.origin)
+				? new URL(
+						`${routed.pathname}${routed.search}${routed.hash}`,
+						this.directory,
+					).href
+				: routed.href,
+		);
+	}
+	/**
+	 * @internal the site pool: the slot `url`'s site is shown from (its
+	 * origin), once that slot's agent and worker are up; null without a pool
+	 */
+	async siteOrigin(url: string): Promise<string | null> {
+		if (!this.#sites) return null;
+		await this.#ready;
+		let site: string;
+		try {
+			site = await this.#call('siteOf', url);
+		} catch (error) {
+			// no site of its own (about:blank, a data: URL): any slot will do
+			site = 'null';
+		}
+		// null: its slot does not answer from here (a network that lets
+		// through the host's port alone, a slot left out since): the site is
+		// shown from this page's origin, as without a pool
+		return this.#sites.originOf(site);
+	}
+	/**
+	 * @internal the site pool: the size of a host frame about to navigate to
+	 * the slot `origin` (reportViewport), told to that slot's worker before
+	 * the frame goes there: its top-level navigation's viewport hints
+	 */
+	async siteViewport(origin: string, width: number, height: number) {
+		if (this.#sites && width > 0 && height > 0)
+			await this.#sites.applyTo(origin, 'viewport', [
+				Math.round(width),
+				Math.round(height),
+			]);
+	}
+	/** @internal the site pool: its slots' origins (none without a pool) */
+	get siteOrigins(): string[] {
+		return this.#sites?.origins ?? [];
+	}
+	/** whether this controller shows the sites from a pool of origins (ControllerInit.sitePool) */
+	get siteMode(): boolean {
+		return !!this.#sites;
+	}
+	/** @internal the site pool: whether `origin` is one of its slots */
+	siteOriginKnown(origin: string): boolean {
+		return !!this.#sites?.has(origin);
+	}
+	/** @internal the site pool: the slot `origin` sent a navigation back here (its agent is gone) */
+	siteLeftOut(origin: string) {
+		this.#sites?.leaveOut(origin);
+	}
+	/**
+	 * @internal the site pool: ask the agent of `origin` about run `run` of
+	 * the frame at `index` of this page (a run of this page's own origin, a
+	 * site shown without the pool, is this realm's to answer)
+	 */
+	siteHistory(
+		origin: string,
+		index: number,
+		run: number,
+		op: SiteHistoryOp,
+	): Promise<SiteHistoryAnswer | null> {
+		if (origin === location.origin) {
+			const win = window[index] as Window | undefined;
+			return win
+				? answerRun(win, run, op, helperNames(this.config).client)
+				: Promise.resolve(null);
+		}
+		return this.#sites
+			? this.#sites.history(origin, index, run, op)
+			: Promise.resolve(null);
+	}
+	/** @internal the site pool: what the frame at `index` of the host's page shows, asked of the agent of `origin` */
+	siteFrameInfo(origin: string, index: number): Promise<SiteFrameInfo | null> {
+		return this.#sites
+			? this.#sites.frameInfo(origin, index)
+			: Promise.resolve(null);
+	}
+	/** @internal the site pool: a user activation in the frame at `index`, told to the agent of `origin` */
+	siteActivated(
+		origin: string,
+		index: number,
+		token: string,
+		nested: boolean,
+	): Promise<boolean> {
+		return this.#sites
+			? this.#sites.activated(origin, index, token, nested)
+			: Promise.resolve(false);
+	}
+	/** @internal the site pool: a command of the isolated RemoteController for the frame at `index` of the host's page, to the agent of `origin` (frame.ts frameCommand) */
+	siteCommand(
+		origin: string,
+		index: number,
+		command: SiteHistoryCommand,
+	): Promise<boolean | null> {
+		return this.#sites
+			? this.#sites.command(origin, index, command)
+			: Promise.resolve(null);
+	}
+	/** @internal a frame's report, or its history's state, changed: tell the host */
+	frameNavigated(info: NavigateInfo, frame: Frame) {
+		this.#init.onNavigate?.(info, frame);
+		this.dispatchEvent(
+			new CustomEvent('navigate', { detail: { info, frame } }),
+		);
+	}
+	/** the site pool: the host changed the jar; every slot's worker tells its documents */
+	#jarChanged() {
+		if (this.#worker && 'jarChanged' in this.#worker)
+			this.#worker.jarChanged('');
+		else jarChanged('');
+	}
+	/** @internal a slot's agent: a navigation from another slot's worker is on its way */
+	async siteArrive(arrival: SiteArrival): Promise<void> {
+		await this.#call('arrive', arrival);
+	}
+	/** @internal a slot's agent: what the hub's host changed for every worker (FannedMethod) */
+	async siteApply(method: FannedMethod, args: unknown): Promise<void> {
+		switch (method) {
+			case 'rules':
+				return this.setRules(args as RequestRule[]);
+			case 'shields':
+				this.#shields.replace(args as SiteShields[]);
+				return;
+			case 'adblock': {
+				const change = args as { init: AdblockInit; refresh?: boolean };
+				if (!this.#adblock) return;
+				this.#adblock = change.init;
+				await this.#ready;
+				await this.#call('adblock', change);
+				return;
+			}
+			case 'clearCache':
+				return this.clearCache();
+			case 'forgetStorage':
+				return this.forgetStorage(String(args));
+			case 'forgetDeviceIds':
+				await this.#ready;
+				return this.#call(
+					'forgetDeviceIds',
+					typeof args === 'string' ? args : undefined,
+				);
+			case 'viewport': {
+				const [width, height] = args as [number, number];
+				this.reportViewport(Number(width), Number(height));
+				return;
+			}
+		}
+	}
+	/** @internal a slot's agent: the hub's clock */
+	siteTick() {
+		this.#keepAlive();
+	}
+	/** the options a slot's agent runs its controller with: this one's, as resolved */
+	#agentOptions(): Partial<ControllerInit> {
+		const init = this.#init;
+		const config = this.config;
+		const hooks = config.hooks;
+		return {
+			id: this.id,
+			codec: config.codec,
+			...(config.cache === false ? { cache: false } : {}),
+			...(config.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
+			...(config.membrane === false ? { membrane: false } : {}),
+			...(config.serviceWorkers === false ? { serviceWorkers: false } : {}),
+			...(config.rewriter ? { rewriter: config.rewriter } : {}),
+			...(config.serviceWorkerTimeout
+				? { serviceWorkerTimeout: config.serviceWorkerTimeout }
+				: {}),
+			...(config.serviceWorkerEventDelay
+				? { serviceWorkerEventDelay: config.serviceWorkerEventDelay }
+				: {}),
+			...(config.fetchTimeout ? { fetchTimeout: config.fetchTimeout } : {}),
+			...(config.navigationHintWait
+				? { navigationHintWait: config.navigationHintWait }
+				: {}),
+			...(config.assets ? { assets: config.assets } : {}),
+			// a slot's documents are framed where this controller's are
+			...(config.frameAncestors?.length
+				? { frameAncestors: config.frameAncestors }
+				: {}),
+			...(config.openTab ? { openTab: true } : {}),
+			...(config.requestLog ? { requestLog: true } : {}),
+			...(config.errorPage ? { errorPage: config.errorPage } : {}),
+			// proxy-ception: a slot's worker forwards the proxy's own origin
+			// as this one's does
+			...(config.allowSelfProxy ? { allowSelfProxy: true } : {}),
+			...(config.names ? { names: config.names } : {}),
+			...(hooks
+				? {
+						hooks: {
+							init: {
+								...(hooks.pre ? { pre: { source: hooks.pre } } : {}),
+								...(hooks.post ? { post: { source: hooks.post } } : {}),
+							},
+							...(hooks.workers ? { workers: true } : {}),
+						},
+					}
+				: {}),
+			adblock: this.#adblock ? (init.adblock ?? true) : false,
+			rules: this.#rules,
+			shields: this.#shields.all(),
+			rewriteTimeout: this.#rewriteTimeout,
+			// how the host was loaded, while the page it shows again may still
+			// be coming (the worker's RESTORE_WINDOW_MS); none after, nor a
+			// guess of the agent's own (its frame is no reloaded document)
+			hostReload:
+				this.#hostReloaded &&
+				Date.now() - this.#hostReloaded.at < HOST_RESTORE_MS
+					? this.#hostReloaded.mode
+					: null,
+		};
 	}
 	createFrame(element: HTMLIFrameElement = document.createElement('iframe')) {
 		const frame = new Frame(this, element, this.#sandbox);
@@ -2373,6 +2902,11 @@ export class StompController extends EventTarget {
 	}
 }
 
+/**
+ * how long after the host page was reloaded a slot's agent that starts still
+ * tells its worker (the worker's RESTORE_WINDOW_MS, src/server/rewrites.ts)
+ */
+const HOST_RESTORE_MS = 10_000;
 /** how often `connected` looks for an insertion no mutation of the document's shows */
 const CONNECTED_POLL_MS = 100;
 /** how long `connected` waits for the element at most */
@@ -2425,6 +2959,74 @@ function watchConnection(target: WeakRef<Element>) {
 	timer = setTimeout(() => check(true), CONNECTED_POLL_MS);
 }
 
+/** one run of a frame's history under a site pool (Frame #runs) */
+interface SiteRun {
+	/** names it to the agent of its origin, which keeps its states */
+	id: number;
+	origin: string;
+	/** the last URL the frame reported from it */
+	url: string;
+	state: RunState;
+	/** its agent answered for it */
+	known: boolean;
+	/** siteClock when it began */
+	at: number;
+	/** the frame's entries in it, as its documents reported them (HISTORY_RUN) */
+	count: number;
+	/** where in them the frame was last */
+	index: number;
+}
+
+/**
+ * The site pool: how many of the frame's entries are in other runs than
+ * the one at `at` (the documents' `historyAcross`). The browser lists a
+ * document the entries of its own origin around it, so a run of the same
+ * origin with nothing but emptied runs between (a replace) is in that list
+ * already
+ */
+export function entriesAcross(
+	runs: readonly { origin: string; count: number }[],
+	at: number,
+): number {
+	const current = runs[at];
+	if (!current) return 0;
+	let across = 0;
+	for (const step of [-1, 1]) {
+		let joined = true;
+		for (let i = at + step; i >= 0 && i < runs.length; i += step) {
+			const run = runs[i];
+			if (joined && run.count === 0) continue;
+			if (joined && run.origin === current.origin) continue;
+			joined = false;
+			across += run.count;
+		}
+	}
+	return across;
+}
+/** a run's entries after the frame left it for a new one at `index` (a replace took that entry with it) */
+export function prunedRun(
+	run: { count: number; index: number },
+	replaced: boolean,
+) {
+	run.count = Math.max(0, run.index + (replaced ? 0 : 1));
+	run.index = Math.min(run.index, Math.max(0, run.count - 1));
+}
+/** a run's state before its agent answered: one state, not passed over */
+const FRESH: RunState = {
+	index: 0,
+	skips: [false],
+	exact: true,
+	touched: 0,
+	undecided: false,
+};
+let runIds = 0;
+/** the site pool's clock of changes to the joint session history, across the host's frames */
+let siteClock = 0;
+/** how long a report waits for the agent of its slot before it is told anyway */
+const SITE_ANSWER_MS = 300;
+/** when an undecided activation is asked about again (history.ts ACTIVATION_GRACE, and a little) */
+const SITE_RECHECK_MS = 450;
+
 /**
  * A proxied frame. Dispatches `navigate` (CustomEvent, `detail` is a
  * NavigateInfo) whenever the page reports a new URL, title or history state.
@@ -2432,6 +3034,63 @@ function watchConnection(target: WeakRef<Element>) {
 export class Frame extends EventTarget {
 	/** the last report from the page, if any */
 	lastNavigate: NavigateInfo | null = null;
+	/**
+	 * The site pool: the frame's history as runs, each a stretch of it shown
+	 * from one slot (a slot's origin, or this page's for a site shown without
+	 * the pool), in order. The browser lists a document the entries of its
+	 * own origin only, so a run's states (every step of the frame and of the
+	 * frames in its page, and which of them Chrome's Back passes over) are
+	 * kept by the agent of its slot, which is of that origin
+	 * (src/controller/history.ts answerRun), told of every report of the
+	 * frame's documents; this page composes them. A step within a run is
+	 * the agent's; a step to another run is the browser's own traversal of
+	 * the joint session history, by the number of steps between, from the
+	 * frame's document (the agent of its slot calls it).
+	 */
+	#runs: SiteRun[] = [];
+	#at = -1;
+	/** the step across runs under way: the run the next report from its origin is from */
+	#stepping: number | null = null;
+	/** the frame's next document is the host's (go): the run it leaves is not the page's navigation */
+	#hostNavigation = false;
+	/** siteClock when this frame last changed the joint session history */
+	#touched = 0;
+	/** reports and what they tell the agents, in order */
+	#queue: Promise<unknown> = Promise.resolve();
+	/** a run closed for the next one, until its agent decided on its last document */
+	#leaving: Promise<unknown> = Promise.resolve();
+	/** an undecided activation is asked about again (RunState.undecided) */
+	#recheck = false;
+	/** what the page said of its own slot's run of the history (while its agent does not answer) */
+	#own = { back: false, forward: false };
+	/** the site pool: the element's allow attribute as the host wrote it, and as slotAllow last made it */
+	#hostAllow: string | null = null;
+	#slotAllow: string | null = null;
+	/**
+	 * The site pool: the frame is about to show a slot's document, another
+	 * origin than this page's to the browser: what the host's allow
+	 * attribute lets a frame of this page's origin have, the slots get too
+	 * (slotAllow), as a proxied top has it without a pool
+	 */
+	#allowSlots() {
+		const slots = this.controller.siteOrigins;
+		if (!slots.length) return;
+		const current = this.element.getAttribute('allow');
+		if (current !== this.#slotAllow) this.#hostAllow = current;
+		let features: string[] = [];
+		try {
+			features = (
+				document as Document & {
+					featurePolicy?: { allowedFeatures(): string[] };
+				}
+			).featurePolicy!.allowedFeatures();
+		} catch (error) {
+			// no featurePolicy (not Chrome): what the host's attribute names
+		}
+		const value = slotAllow(this.#hostAllow, slots, location.origin, features);
+		this.#slotAllow = value;
+		if (value !== current) this.element.setAttribute('allow', value);
+	}
 	constructor(
 		public controller: StompController,
 		public element: HTMLIFrameElement,
@@ -2439,16 +3098,340 @@ export class Frame extends EventTarget {
 	) {
 		super();
 		if (sandbox !== null) element.setAttribute('sandbox', sandbox);
+		// the site pool in a cross-origin isolated page: the frame's documents
+		// are of the slots' origins, which the `cross-origin-isolated`
+		// permission reaches only when the frame names them (the default
+		// allowlist is this page's origin), so they may be isolated as one of
+		// this origin is (the service worker serves every document that is
+		// not isolated natively without the permission, src/isolation.ts).
+		// Added to what the host allows the frame already
+		const slots = controller.siteOrigins;
+		if (slots.length && globalThis.crossOriginIsolated === true) {
+			const allow = element.getAttribute('allow')?.trim() ?? '';
+			if (!/(^|;)\s*cross-origin-isolated(\s|;|$)/.test(allow))
+				element.setAttribute(
+					'allow',
+					`${allow}${allow && !allow.endsWith(';') ? '; ' : allow ? ' ' : ''}cross-origin-isolated 'self' ${slots.join(' ')}`,
+				);
+		}
 		// a document of the frame tells of its first user activation here,
 		// at once (the message it would post can come too late)
 		Reflect.defineProperty(element, ACTIVATED, {
 			value: (token: unknown) =>
-				noteActivation(this.historyWindow(), String(token)),
+				this.controller.siteMode
+					? this.siteActivated(String(token), false)
+					: noteActivation(this.historyWindow(), String(token)),
 			configurable: true,
 		});
 	}
+	/**
+	 * @internal the site pool: a top document of the frame reported, from
+	 * `origin`, navigated to as `type` says (NAVIGATION_TYPE), where its
+	 * slot's stretch of the history has it (`entries`, HISTORY_RUN);
+	 * `deliver` reports it once the agent of that origin took it
+	 */
+	siteReport(
+		origin: string,
+		info: NavigateInfo,
+		type: string | null,
+		deliver: () => void,
+		entries: [number, number] | null = null,
+	) {
+		this.#own = {
+			back: info.canGoBack === true,
+			forward: info.canGoForward === true,
+		};
+		this.#enqueue(async () => {
+			const { run, previous } = this.#place(origin, info, type);
+			if (entries) [run.index, run.count] = entries;
+			if (previous) prunedRun(previous, type === 'replace');
+			if (previous) {
+				// the run the frame left for a new one: the entries after its
+				// state are gone, and a document that sent the frame on by
+				// itself is passed over without a history activation; one
+				// that replaced itself took its entry with it (and the run,
+				// when that was the run's first)
+				const replaced = type === 'replace';
+				const decide = !this.#hostNavigation && !replaced;
+				this.#leaving = this.#ask(previous, {
+					kind: 'leave',
+					decide,
+					replaced,
+				}).then((answer) => {
+					const index = this.#runs.indexOf(previous);
+					if (replaced && answer && !answer.done && index !== -1) {
+						this.#runs.splice(index, 1);
+						if (this.#at > index) this.#at--;
+						// the runs either side of it are of one origin now, one
+						// stretch of entries to the browser: the later one's
+						// agent took the earlier one's entries as its first
+						// document's (its first look lists them)
+						const before = this.#runs[index - 1];
+						if (before && before.origin === this.#runs[index]?.origin) {
+							this.#runs.splice(index - 1, 1);
+							if (this.#at >= index) this.#at--;
+						}
+					}
+					this.#changed();
+				});
+			}
+			if (previous || run.state === FRESH) this.#hostNavigation = false;
+			try {
+				// (and how many of the frame's entries are in other runs: its
+				// document's history.length counts them)
+				await this.#ask(run, {
+					kind: 'sync',
+					across: entriesAcross(this.#runs, this.#runs.indexOf(run)),
+				});
+			} finally {
+				// (told whatever the agent said: a late answer tells the
+				// buttons again)
+				deliver();
+			}
+		});
+	}
+	/** which run a report from `origin` is of: a step under way, the current run, the one before or after it (the page's own step past its run), else a new one after the current */
+	#place(
+		origin: string,
+		info: NavigateInfo,
+		type: string | null,
+	): { run: SiteRun; previous: SiteRun | null } {
+		const runs = this.#runs;
+		const current = runs[this.#at];
+		const step = this.#stepping;
+		// a run whose slot is left out since is shown from this page's
+		// origin: a report from here of a step to it is that run's, which
+		// this realm answers from now on (its agent and its states are gone)
+		const of = (run: SiteRun | undefined): run is SiteRun => {
+			if (!run) return false;
+			if (run.origin === origin) return true;
+			if (origin !== location.origin) return false;
+			run.origin = origin;
+			run.state = FRESH;
+			run.known = false;
+			return true;
+		};
+		if (step !== null && of(runs[step])) {
+			this.#stepping = null;
+			this.#at = step;
+			runs[step].url = info.url;
+			return { run: runs[step], previous: null };
+		}
+		// (a step to another origin stays under way through a late report of
+		// the document it leaves)
+		if (current?.origin === origin) {
+			current.url = info.url;
+			return { run: current, previous: null };
+		}
+		this.#stepping = null;
+		// (a traversal is one, whatever URL the run had last)
+		for (const offset of [-1, 1]) {
+			const run = runs[this.#at + offset];
+			if (
+				(run?.origin === origin ||
+					(origin === location.origin && run?.url === info.url)) &&
+				(run.url === info.url || type === 'traverse') &&
+				of(run)
+			) {
+				this.#at += offset;
+				run.url = info.url;
+				return { run, previous: null };
+			}
+		}
+		runs.splice(this.#at + 1);
+		const run: SiteRun = {
+			id: ++runIds,
+			origin,
+			url: info.url,
+			state: FRESH,
+			known: false,
+			at: ++siteClock,
+			count: 1,
+			index: 0,
+		};
+		this.#touched = run.at;
+		runs.push(run);
+		this.#at = runs.length - 1;
+		return { run, previous: current ?? null };
+	}
+	#enqueue(task: () => Promise<unknown>) {
+		this.#queue = this.#queue.then(task).catch(() => {});
+	}
+	/** ask the agent of the run's origin; `wait`: give up after SITE_ANSWER_MS (a step waits for its commit) */
+	async #ask(
+		run: SiteRun,
+		op: SiteHistoryOp,
+		wait = true,
+	): Promise<SiteHistoryAnswer | null> {
+		const asked = Promise.resolve()
+			.then(() =>
+				this.controller.siteHistory(run.origin, this.#index(), run.id, op),
+			)
+			.catch(() => null)
+			.then((answer) => {
+				if (answer?.state) this.#update(run, answer.state);
+				return answer;
+			});
+		if (!wait) return asked;
+		let late = false;
+		const answer = await Promise.race([
+			asked,
+			new Promise<null>((resolve) =>
+				setTimeout(() => {
+					late = true;
+					resolve(null);
+				}, SITE_ANSWER_MS),
+			),
+		]);
+		// an agent slower than that (a slot's first start) is heard when it
+		// answers, and the buttons follow
+		if (late) asked.then(() => this.#changed());
+		return answer;
+	}
+	#update(run: SiteRun, state: RunState) {
+		if (run.known && state.touched !== run.state.touched)
+			this.#touched = ++siteClock;
+		run.state = state;
+		run.known = true;
+		// a document's activation is still awaited: ask again once it is not
+		if (state.undecided && !this.#recheck) {
+			this.#recheck = true;
+			setTimeout(() => {
+				this.#recheck = false;
+				this.#enqueue(async () => {
+					const current = this.#runs[this.#at];
+					if (!current) return;
+					await this.#ask(current, { kind: 'sync' });
+					this.#changed();
+				});
+			}, SITE_RECHECK_MS);
+		}
+	}
+	/** the buttons may have changed with no report of the frame's: tell the host when they did */
+	#changed() {
+		// (the same document: a step or go() under way still waits for the
+		// next one's report)
+		const info = this.historyChanged(false);
+		if (info) this.controller.frameNavigated(info, this);
+	}
+	/** @internal the site pool: a document in a frame of the page (`source`) reported that its history moved */
+	siteNested(source: Window, entry: ReportedEntry | null) {
+		const top = this.element.contentWindow;
+		const path = top && framePath(top, source);
+		if (!path) return;
+		this.#enqueue(async () => {
+			const run = this.#runs[this.#at];
+			if (!run) return;
+			await this.#ask(run, { kind: 'nested', path, entry });
+			this.#changed();
+		});
+	}
+	/** @internal the site pool: a document of the frame (or of a frame in its page, `nested`) reported its first user activation */
+	siteActivated(token: string, nested: boolean) {
+		this.#enqueue(async () => {
+			const run = this.#runs[this.#at];
+			if (run) await this.#ask(run, { kind: 'activated', token, nested });
+		});
+	}
+	/** the site pool: this frame's index in the page's `frames`, which the agents count too */
+	#index(): number {
+		const win = this.element.contentWindow;
+		for (let i = 0; i < window.length; i++) if (window[i] === win) return i;
+		return -1;
+	}
+	/** the site pool: the state of the frame's history Back or Forward goes to (the nearest one Chrome's would not pass over), null when there is none */
+	#target(direction: Direction): { run: number; state: number } | null {
+		const runs = this.#runs;
+		const delta = direction === 'back' ? -1 : 1;
+		let run = this.#at;
+		let state = (runs[run]?.state.index ?? 0) + delta;
+		while (run >= 0 && run < runs.length) {
+			const skips = runs[run].state.skips;
+			for (; state >= 0 && state < skips.length; state += delta)
+				if (!skips[state]) return { run, state };
+			run += delta;
+			state = delta < 0 ? (runs[run]?.state.skips.length ?? 0) - 1 : 0;
+		}
+		return null;
+	}
+	/** the site pool: how many steps of the joint session history the state is from the frame's first */
+	#position(run: number, state: number): number {
+		let position = state;
+		for (let i = 0; i < run; i++) position += this.#runs[i].state.skips.length;
+		return position;
+	}
+	/** the site pool: whether another frame of the host changed the joint session history since `at` */
+	#crossed(at: number): boolean {
+		return this.controller.frames.some(
+			(frame) => frame !== this && frame.#touched > at,
+		);
+	}
+	/** the site pool: step the frame's history, within its run through the agent of its slot, else to another run */
+	async #siteStep(direction: Direction): Promise<boolean> {
+		await this.#queue;
+		await this.#leaving;
+		const current = this.#runs[this.#at];
+		if (!current) return false;
+		let target = this.#target(direction);
+		// within the run (or the agent never answered, and may still have
+		// somewhere to go): the agent's, whose answer has the run's state
+		// as it is now; a step it does not take may be one to another run
+		if (!target || target.run === this.#at) {
+			if (target === null && current.known) return false;
+			if ((await this.#ask(current, { kind: direction }, false))?.done)
+				return true;
+			target = this.#target(direction);
+			if (!target || target.run === this.#at) return false;
+		}
+		const to = this.#runs[target.run];
+		const from = Math.min(target.run, this.#at);
+		const between = this.#runs.slice(from, Math.max(target.run, this.#at) + 1);
+		const reported = this.#nextReport();
+		this.#stepping = target.run;
+		this.#allowSlots();
+		// the browser's own traversal, from the frame's document, when every
+		// step between is one of the joint history's and no other frame
+		// changed it since (Back would then move that frame, and Forward
+		// finds the entries gone)
+		if (
+			between.every((run) => run.known && run.state.exact) &&
+			!this.#crossed(this.#runs[from].at)
+		) {
+			const delta =
+				this.#position(target.run, target.state) -
+				this.#position(this.#at, current.state.index);
+			const answer = await this.#ask(current, { kind: 'go', delta }, false);
+			if (answer?.done) {
+				this.#touched = ++siteClock;
+				await reported;
+				return true;
+			}
+		}
+		// else a navigation that replaces: the frame's history keeps its
+		// length, as a traversal would
+		const win = this.element.contentWindow;
+		if (!win) {
+			this.#stepping = null;
+			return false;
+		}
+		// (the run's agent takes the next document for the state, at the
+		// address it had)
+		const arrive = await this.#ask(to, { kind: 'arrive', state: target.state });
+		let url = arrive?.url;
+		if (!url?.startsWith(`${to.origin}/`)) {
+			const routed = new URL(await this.controller.route(to.url));
+			const origin = (await this.controller.siteOrigin(to.url)) ?? to.origin;
+			url = `${origin}${routed.pathname}${routed.search}${routed.hash}`;
+		}
+		this.#touched = ++siteClock;
+		win.location.replace(url);
+		await reported;
+		const landed = new URL(url).origin;
+		if (landed !== location.origin) this.#bounced(landed);
+		return true;
+	}
 	/** @internal */
-	report(info: NavigateInfo) {
+	report(info: NavigateInfo, settles = true) {
 		// where the frame's history can go is the frame's, nested frames
 		// included, not what the page's own navigable says
 		const canGoBack = this.canGoBack;
@@ -2456,8 +3439,10 @@ export class Frame extends EventTarget {
 		if (canGoBack !== null) info.canGoBack = canGoBack;
 		if (canGoForward !== null) info.canGoForward = canGoForward;
 		this.lastNavigate = info;
-		for (const resolve of this.#awaitingReport) resolve();
-		this.#awaitingReport.clear();
+		if (settles) {
+			for (const resolve of this.#awaitingReport) resolve();
+			this.#awaitingReport.clear();
+		}
 		this.dispatchEvent(new CustomEvent('navigate', { detail: info }));
 	}
 	/** @internal the frame's window, its history told how to read its documents */
@@ -2476,7 +3461,7 @@ export class Frame extends EventTarget {
 	 * @internal A document in a frame of the page reported: the last report
 	 * again, with the history state it changed, or null when it did not
 	 */
-	historyChanged(): NavigateInfo | null {
+	historyChanged(settles = true): NavigateInfo | null {
 		const last = this.lastNavigate;
 		if (!last) return null;
 		if (
@@ -2485,7 +3470,7 @@ export class Frame extends EventTarget {
 		)
 			return null;
 		const info = { ...last };
-		this.report(info);
+		this.report(info, settles);
 		return info;
 	}
 	/** hosts waiting for the next report (go, reload) */
@@ -2533,7 +3518,19 @@ export class Frame extends EventTarget {
 			this.element.clientWidth,
 			this.element.clientHeight,
 		);
-		const routed = await this.controller.route(url);
+		let routed = await this.controller.route(url);
+		// the site pool: the route on the origin of the URL's site, whose
+		// worker is up by now
+		const origin = await this.controller.siteOrigin(url);
+		if (origin) {
+			const path = new URL(routed);
+			routed = `${origin}${path.pathname}${path.search}${path.hash}`;
+			await this.controller.siteViewport(
+				origin,
+				this.element.clientWidth,
+				this.element.clientHeight,
+			);
+		}
 		// In a cross-origin isolated page a frame navigated as it is inserted
 		// keeps its initial document's window, and with it that document's
 		// 5 microsecond clock, whatever the new document is (measured): the
@@ -2545,8 +3542,27 @@ export class Frame extends EventTarget {
 		// is not taken for the new document's
 		const reported = this.#nextReport();
 		noteBrowserNavigation(this.historyWindow());
+		if (origin) this.#allowSlots();
+		// the site pool: the run that shows the URL's origin takes the next
+		// document for the host's, else the next run starts with it
+		const run = this.#runs[this.#at];
+		if (this.controller.siteMode) {
+			if (run && run.origin === (origin ?? location.origin))
+				await this.#ask(run, { kind: 'typed' });
+			else this.#hostNavigation = true;
+		}
 		this.element.src = routed;
 		await reported;
+		if (origin) this.#bounced(origin);
+	}
+	/**
+	 * The site pool: a navigation sent to the slot `origin` reported from
+	 * this page's origin, which the slot's worker does when its agent is
+	 * gone; the hub leaves that slot out from now on
+	 */
+	#bounced(origin: string) {
+		if (this.#runs[this.#at]?.origin === location.origin)
+			this.controller.siteLeftOut(origin);
 	}
 	/**
 	 * Step the frame's history as a tab's Back and Forward do: its own
@@ -2556,24 +3572,55 @@ export class Frame extends EventTarget {
 	 * show its own "nothing to go back to" state.
 	 */
 	async back(): Promise<boolean> {
+		if (this.controller.siteMode) return this.#siteStep('back');
 		const win = this.historyWindow();
 		return win ? traverse(win, 'back') : false;
 	}
 	async forward(): Promise<boolean> {
+		if (this.controller.siteMode) return this.#siteStep('forward');
 		const win = this.historyWindow();
 		return win ? traverse(win, 'forward') : false;
 	}
 	/** whether the frame's history (nested frames included) has an entry before/after the current one; null when the browser cannot tell */
 	get canGoBack(): boolean | null {
+		if (this.controller.siteMode)
+			return (
+				this.#target('back') !== null ||
+				(!this.#runs[this.#at]?.known && this.#own.back)
+			);
 		return canTraverse(this.historyWindow(), 'back');
 	}
 	get canGoForward(): boolean | null {
+		if (this.controller.siteMode)
+			return (
+				this.#target('forward') !== null ||
+				(!this.#runs[this.#at]?.known && this.#own.forward)
+			);
 		return canTraverse(this.historyWindow(), 'forward');
 	}
 	/** reload the frame; resolves when the reloaded document first reports (false when there was no document to reload) */
 	async reload(): Promise<boolean> {
 		const win = this.element.contentWindow;
 		if (!win) return false;
+		const run = this.#runs[this.#at];
+		if (this.controller.siteMode && run) {
+			// another origin's location cannot be reloaded from here: its agent can
+			const reported = this.#nextReport();
+			const answer = await this.#ask(run, { kind: 'reload' }, false);
+			if (answer === null && run.origin !== location.origin) {
+				// the slot is left out since (its agent is gone): the document
+				// again, from this page's origin
+				const url = this.lastNavigate?.url;
+				if (!url) return false;
+				const routed = new URL(await this.controller.route(url));
+				const to = (await this.controller.siteOrigin(url)) ?? location.origin;
+				win.location.replace(
+					`${to}${routed.pathname}${routed.search}${routed.hash}`,
+				);
+			} else if (!answer?.done) return false;
+			await reported;
+			return true;
+		}
 		const reported = this.#nextReport();
 		noteBrowserNavigation(this.historyWindow());
 		win.location.reload();
@@ -2582,6 +3629,8 @@ export class Frame extends EventTarget {
 	}
 	/** the URL the frame is currently showing, if it is a proxied page */
 	get url(): string | null {
+		// the site pool: the page is of another origin, and says where it is
+		if (this.controller.siteMode) return this.lastNavigate?.url ?? null;
 		// proxied pages are same-origin; their inject client exposes the real location
 		try {
 			const win = this.element.contentWindow as

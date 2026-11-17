@@ -71,7 +71,13 @@ const browser = await launch();
 	}, host);
 	await sleep(500);
 	await submitLanding(page, target);
-	const frame = await waitActive(page, () => window.__inlineRan === true);
+	// the external script runs after the inline one, once its fetch is done
+	// (natively too, a few ms later): wait for the parse to end, not for
+	// the first script
+	const frame = await waitActive(
+		page,
+		() => window.__inlineRan === true && document.readyState === 'complete',
+	);
 	const result = await report(frame);
 	ok(
 		'block scripts off: both the inline and the external script ran',

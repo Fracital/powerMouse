@@ -4,7 +4,15 @@
 // URL), their scripts run rewritten, their links read back as written and
 // their images and stylesheets fetch through the proxy. Same-origin mode, the
 // demo's controller, the request reports for the fetches.
-import { done, FIXTURE, launch, ok, PROXY } from '../lib.mjs';
+import {
+	done,
+	evaluateIsolated,
+	FIXTURE,
+	launch,
+	ok,
+	PROXY,
+	sleep,
+} from '../lib.mjs';
 
 const browser = await launch();
 const page = await browser.newPage();
@@ -14,41 +22,61 @@ await page.waitForFunction(
 	null,
 	{ timeout: 45000 },
 );
-const result = await page.evaluate(async (fixture) => {
-	const requests = [];
+await page.evaluate(() => {
+	window.__requests = [];
 	window.controller.addEventListener('request', (event) =>
-		requests.push([
+		window.__requests.push([
 			event.detail.url.split('/pages/').pop(),
 			event.detail.status,
 		]),
 	);
-	const show = async (file) => {
-		const element = document.createElement('iframe');
-		document.body.append(element);
-		const frame = window.controller.createFrame(element);
-		await frame.go(`${fixture}pages/${file}`);
-		await new Promise((resolve) => setTimeout(resolve, 1500));
-		const doc = element.contentDocument;
-		const root = doc?.documentElement;
-		return {
-			contentType: doc?.contentType,
-			root: root?.nodeName,
-			namespace: root?.namespaceURI,
-			title: doc?.title,
-			top: root?.getAttribute('data-top'),
-			href: root?.getAttribute('data-href'),
-			link: root?.getAttribute('data-link'),
-			img: root?.getAttribute('data-img'),
-			injected: doc?.defaultView
-				? window.controller.config.names.client in doc.defaultView
-				: null,
-		};
-	};
-	const svg = await show('standalone.svg');
-	const xhtml = await show('standalone.xhtml');
-	await new Promise((resolve) => setTimeout(resolve, 500));
-	return { svg, xhtml, requests };
-}, FIXTURE);
+});
+const client = await page.evaluate(() => window.controller.config.names.client);
+const show = async (file) => {
+	const id = `xml-${file.replace(/\W/g, '-')}`;
+	await page.evaluate(
+		async ([fixture, file, id]) => {
+			const element = document.createElement('iframe');
+			element.id = id;
+			document.body.append(element);
+			const frame = window.controller.createFrame(element);
+			await frame.go(`${fixture}pages/${file}`);
+			await new Promise((resolve) => setTimeout(resolve, 1500));
+		},
+		[FIXTURE, file, id],
+	);
+	// the document as it is, read in a world of its own in the frame (with
+	// the site pool it is another origin and process than the host page),
+	// and whether the inject is in its own world
+	const frame = await (await page.$(`#${id}`))?.contentFrame();
+	const facts = frame
+		? await evaluateIsolated(frame, () => {
+				const root = document.documentElement;
+				return {
+					contentType: document.contentType,
+					root: root?.nodeName,
+					namespace: root?.namespaceURI,
+					title: document.title,
+					top: root?.getAttribute('data-top'),
+					href: root?.getAttribute('data-href'),
+					link: root?.getAttribute('data-link'),
+					img: root?.getAttribute('data-img'),
+				};
+			}).catch(() => null)
+		: null;
+	const injected = frame
+		? await frame.evaluate((name) => name in window, client).catch(() => null)
+		: null;
+	return { ...facts, injected };
+};
+const svg = await show('standalone.svg');
+const xhtml = await show('standalone.xhtml');
+await sleep(500);
+const result = {
+	svg,
+	xhtml,
+	requests: await page.evaluate(() => window.__requests),
+};
 const fetched = (name) =>
 	result.requests.some(([url, status]) => url === name && status === 200);
 ok(

@@ -16,7 +16,15 @@
 // registration and serves again when the tab is back. The inject bundles
 // answer under an address too, for a worker of the previous build. Same-
 // origin mode on the demo origin, controllers of our own next to the demo's.
-import { done, FIXTURE, launch, ok, PROXY, sleep } from '../lib.mjs';
+import {
+	done,
+	evaluateIsolated,
+	FIXTURE,
+	launch,
+	ok,
+	PROXY,
+	sleep,
+} from '../lib.mjs';
 
 const browser = await launch();
 // one context for both host tabs: a page from browser.newPage() gets a
@@ -32,8 +40,59 @@ await page.waitForFunction(
 	{ timeout: 45000 },
 );
 
+// What a shown document is, read in the document itself: a controller with
+// a site pool (the demo's) shows it from another origin than the host page,
+// which can read nothing of it. The host page asks node with an element it
+// keeps in a list (`peek` in GO): 'read' answers the document's real title,
+// path and type (in a world of the frame's own, which no hook reaches) and
+// what its error page reported, 'text' an element's text, 'fetch' the
+// page's own fetch of a path, as {status, json} or {error}.
+await context.exposeBinding('__peek', async (source, index, op, value) => {
+	const element = await source.frame
+		.evaluateHandle((i) => window.__peekTargets[i], index)
+		.then((handle) => handle.asElement());
+	const frame = await element?.contentFrame();
+	if (!frame) return null;
+	if (op === 'read') {
+		const real = await evaluateIsolated(frame, () => ({
+			title: document.title,
+			path: location.pathname,
+			type: document.contentType,
+		})).catch(() => null);
+		if (!real) return null;
+		const error = await frame
+			.evaluate(() => window.stompError ?? null)
+			.catch(() => null);
+		return { ...real, error };
+	}
+	if (op === 'text')
+		return evaluateIsolated(
+			frame,
+			(id) => document.getElementById(id)?.textContent,
+			value,
+		).catch(() => undefined);
+	return frame
+		.evaluate(
+			(path) =>
+				fetch(path).then(
+					async (response) => ({
+						status: response.status,
+						json: await response.json().catch(() => null),
+					}),
+					(error) => ({ error: String(error) }),
+				),
+			value,
+		)
+		.catch((error) => ({ error: String(error) }));
+});
+
 /** shared page-side helpers; go(url) is bounded so a dead controller cannot hang the suite */
 const GO = `
+	const peek = (element, op, value = null) => {
+		window.__peekTargets ??= [];
+		if (!window.__peekTargets.includes(element)) window.__peekTargets.push(element);
+		return __peek(window.__peekTargets.indexOf(element), op, value);
+	};
 	const go = (frame, url, ms = 15000) =>
 		Promise.race([
 			frame.go(url).then(() => 'went'),
@@ -44,7 +103,9 @@ const GO = `
 		document.body.append(element);
 		return controller.createFrame(element);
 	};
-	const title = (frame) => frame.element.contentDocument?.title ?? 'unreadable';
+	const title = async (frame) =>
+		(await peek(frame.element, 'read'))?.title ?? 'unreadable';
+	const path = async (frame) => (await peek(frame.element, 'read'))?.path;
 	// a bare (unmanaged) frame at a routed URL: where the worker sends it
 	const load = async (url, ms = 20000) => {
 		const element = document.createElement('iframe');
@@ -55,18 +116,15 @@ const GO = `
 		element.src = url;
 		await Promise.race([loaded, new Promise((resolve) => setTimeout(resolve, ms))]);
 		await new Promise((resolve) => setTimeout(resolve, 300));
-		const win = element.contentWindow;
-		try {
-			return {
-				title: win?.document?.title ?? 'unreadable',
-				path: win?.location?.pathname ?? null,
-				type: win?.document?.contentType ?? null,
-				error: win?.stompError ?? null,
-			};
-		} catch (error) {
-			// the frame left this origin: nothing of it can be read
-			return { crossOrigin: String(error), src: element.src };
-		}
+		const read = await peek(element, 'read');
+		return read
+			? {
+					title: read.title ?? 'unreadable',
+					path: read.path ?? null,
+					type: read.type ?? null,
+					error: read.error,
+				}
+			: { unreadable: true, src: element.src };
 	};
 	const { StompController } = await import('/stomp/controller.mjs');
 	const make = (extra = {}) =>
@@ -92,20 +150,20 @@ const two = await page.evaluate(
 	first.addEventListener('request', (event) => log1.push(event.detail.url));
 	const f1 = show(first);
 	out.firstBefore = await go(f1, fixture + 'pages/hist-1.html');
-	out.firstTitleBefore = title(f1);
+	out.firstTitleBefore = await title(f1);
 
 	const second = make({ onRequest: (info) => log2.push(info.url) });
 	await second.wait();
 	window.__second = second;
 	const f2 = show(second);
 	out.second = await go(f2, fixture + 'pages/hist-2.html');
-	out.secondTitle = title(f2);
-	out.secondURL = f2.element.contentWindow.location.pathname;
+	out.secondTitle = await title(f2);
+	out.secondURL = await path(f2);
 
 	// the first controller is still served after the second registered
 	out.firstAfter = await go(f1, fixture + 'pages/hist-2.html');
-	out.firstTitleAfter = title(f1);
-	out.firstURL = f1.element.contentWindow.location.pathname;
+	out.firstTitleAfter = await title(f1);
+	out.firstURL = await path(f1);
 	await new Promise((resolve) => setTimeout(resolve, 500));
 	out.log1 = log1.map((url) => url.split('/').pop());
 	out.log2 = log2.map((url) => url.split('/').pop());
@@ -235,7 +293,7 @@ const twin = await page.evaluate(
 	out.slow = await slow;
 	const fb = show(b);
 	out.b = await go(fb, fixture + 'pages/hist-1.html');
-	out.bTitle = title(fb);
+	out.bTitle = await title(fb);
 	// a's frame lives at the address b now owns: b serves and logs it
 	const aLogged = logA.length;
 	out.afterReplaced = await fa.element.contentWindow
@@ -286,11 +344,9 @@ const jar = await page.evaluate(
 	out.set = await go(f2, fixture + 'pages/cookie-set.html');
 	const f1 = show(first);
 	out.show = await go(f1, fixture + 'pages/cookie-show.html');
-	out.cookie = f1.element.contentDocument?.getElementById('c')?.textContent;
-	out.sent = await f1.element.contentWindow
-		.fetch('/echo-headers')
-		.then((response) => response.json())
-		.then((headers) => headers.cookie ?? null);
+	out.cookie = await peek(f1.element, 'text', 'c');
+	const sent = await peek(f1.element, 'fetch', '/echo-headers');
+	out.sent = sent?.json?.cookie ?? null;
 	out.jar1 = await first.cookies.get(fixture + 'pages/x');
 	out.jar2 = await second.cookies.get(fixture + 'pages/x');
 	await first.cookies.clear(fixtureOrigin);
@@ -336,7 +392,7 @@ const parked = await page.evaluate(
 	out.back = await load(url);
 	out.route = await c.route(fixture + 'pages/hist-1.html').then(() => 'answered', (e) => String(e));
 	out.again = await go(fc, fixture + 'pages/hist-2.html');
-	out.againPath = fc.element.contentWindow.location.pathname;
+	out.againPath = await path(fc);
 	return out;
 })(${JSON.stringify(FIXTURE)})`,
 );
@@ -384,7 +440,7 @@ const gone = await other.evaluate(
 	// the frame actually loaded once, so the worker created both servers
 	const f = show(b64);
 	out.loaded = await go(f, fixture + 'pages/hist-1.html');
-	out.loadedTitle = title(f);
+	out.loadedTitle = await title(f);
 	return out;
 })(${JSON.stringify(FIXTURE)})`,
 );

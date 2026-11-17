@@ -5,9 +5,17 @@
 // policy, is refused as natively (CSP Embedded Enforcement,
 // iframe-attributes); an import map's URLs are routed, so bare specifiers resolve to
 // proxied modules; an about:blank popup the page writes into is injected
-// like a child frame, so what it writes is routed. Same-origin mode (the
-// host realm reads the frame's real attributes).
-import { done, FIXTURE, launch, ok, PROXY, sleep } from '../lib.mjs';
+// like a child frame, so what it writes is routed. Same-origin mode (a
+// world of the frame's own reads its real attributes).
+import {
+	done,
+	evaluateIsolated,
+	FIXTURE,
+	launch,
+	ok,
+	PROXY,
+	sleep,
+} from '../lib.mjs';
 
 const browser = await launch();
 const context = await browser.newContext();
@@ -33,9 +41,11 @@ const frame = page
 			/\/stomp\/[\w-]+\/html\//.test(f.url()),
 	);
 
-const sandbox = await page.evaluate(() => {
-	const sb = window.__el.contentDocument.getElementById('sb');
-	const real = (name) => Element.prototype.getAttribute.call(sb, name);
+// the real attributes, in a world of the frame's own that no hook reaches
+// (the frame can be of another origin than this page: a site pool's slot)
+const sandbox = await evaluateIsolated(frame, () => {
+	const sb = document.getElementById('sb');
+	const real = (name) => sb.getAttribute(name);
 	return {
 		sandbox: real('sandbox'),
 		csp: real('csp'),
@@ -82,22 +92,24 @@ const popupEvent = context.waitForEvent('page', { timeout: 5000 });
 const opened = await frame.evaluate(() => window.__popup());
 const popup = await popupEvent.catch(() => null);
 await sleep(1000);
-// the real attribute, through the host realm's getAttribute (the popup's own
-// is hooked and answers with what the page wrote)
-const written = await page
-	.evaluate(() => {
-		const img = window.__el.contentWindow.__w.document.getElementById('i');
-		return img && Element.prototype.getAttribute.call(img, 'src');
-	})
-	.catch((error) => `error ${error.message.slice(0, 60)}`);
+// the real attribute, in a world of the popup's own (its getAttribute is
+// hooked and answers with what the page wrote)
+const written = popup
+	? await evaluateIsolated(popup.mainFrame(), () => {
+			const img = document.getElementById('i');
+			return img && img.getAttribute('src');
+		}).catch((error) => `error ${error.message.slice(0, 60)}`)
+	: null;
 // no service worker controls the popup (Chrome hands about:blank none), so
 // the load is a blob: copy the inject fetched through the proxy: it must hold
 // the real file
 const copied =
 	typeof written === 'string' && written.startsWith('blob:')
-		? await page
-				.evaluate((url) => fetch(url).then((r) => r.text()), written)
-				.catch((error) => `error ${error.message.slice(0, 60)}`)
+		? await evaluateIsolated(
+				popup.mainFrame(),
+				(url) => fetch(url).then((r) => r.text()),
+				written,
+			).catch((error) => `error ${error.message.slice(0, 60)}`)
 		: null;
 const real = await fetch(`${FIXTURE}pages/hdr.json`).then((r) => r.text());
 ok(

@@ -124,6 +124,36 @@ now.
   Blobs, so what lingers is the browser process's memory, not the
   renderer's.
 
+## With the site pool
+
+With the site pool on (docs/site-pool.md, off by default) a frame of
+another site than its page's is a slot's: its own origin, in a realm of
+its slot's. Chrome 157 at the pool's last commit over b5f6bdaa, two runs
+with the pool (one without, in brackets):
+
+- measure-frame-memory (60 frames): a frame of the page's site 1,074.2 to
+  1,074.4 KB (1,073.4); one of another site 1,083.3 to 1,083.5 KB
+  (1,074.7), about 9 KB more, nearly all of it compiled code
+  (InstructionStream, BytecodeArray) of the slot's realm (8.5 to 9 KB in
+  heap snapshots of 20 frames); one of another site appended after a
+  click in the top 1,083.8 KB (1,075.7), and one loading its next
+  document after a click 1,086.2 KB (1,083.9).
+- frame-cost (20 frames): 1,122.4 to 1,122.6 KB for the page's site
+  (1,118.4), 1,128.4 to 1,129.0 KB for another site (1,120.1), and 1,133.7
+  to 1,133.9 KB for another site's next document after a click (1,133.0).
+
+Every figure is under the ceilings without the pool, so the pool has none
+of its own. A frame of another site that loads its next document after a
+click costs 2.8 KB more than one no click reached with the pool, against
+9.2 KB more without it, where such a frame hooks its gated calls at its
+start (src/inject/dom/activation.ts).
+
+The figures for another site are taken once a first frame of it has
+settled (frame-memory.mjs `warm`): that frame takes the pool's spare
+agent and the hub starts the next one a moment later (SiteHub.warm),
+which the suites would count, as they put every frame in one renderer.
+They print it apart: 3,431 to 3,443 KB once, one agent started.
+
 ## Where to look
 
 frame-cost and measure-frame-memory (the per-frame heap),

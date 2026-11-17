@@ -29,6 +29,30 @@ import { chromium } from 'playwright-core';
 export const PORT = process.env.PORT || '8090';
 export const HOST = `http://localhost:${PORT}/`;
 export const PROXY = `http://127.0.0.1:${PORT}/`;
+/**
+ * The ports of the demo's site pool (docs/site-pool.md) that test/run.mjs
+ * bound for the suite (SITE_POOL_PORTS; none when the run turned the pool
+ * off): the same-origin page shows the proxied sites from these origins of
+ * 127.0.0.1, which are the proxy's own as much as PROXY is
+ */
+export const SLOT_PORTS = (process.env.SITE_POOL_PORTS ?? '')
+	.split(',')
+	.map(Number)
+	.filter((port) => port > 0);
+export const SLOTS = SLOT_PORTS.map((port) => `http://127.0.0.1:${port}/`);
+/** whether `url` is of the proxy's origin or of one of its slots */
+export function proxyOwned(url) {
+	try {
+		const parsed = new URL(url);
+		return (
+			parsed.host === new URL(PROXY).host ||
+			(parsed.hostname === '127.0.0.1' &&
+				SLOT_PORTS.includes(Number(parsed.port)))
+		);
+	} catch (error) {
+		return false;
+	}
+}
 export const FIXTURE = process.env.FIXTURE || 'http://127.0.0.1:8084/';
 export const CHROME = process.env.CHROME || '/usr/bin/google-chrome';
 export const OUT = fileURLToPath(new URL('./out/', import.meta.url));
@@ -314,7 +338,7 @@ export async function recordRequests(context, { scope = '/stomp/' } = {}) {
 			return 'local';
 		}
 		if (!/^(https?|wss?):$/.test(parsed.protocol)) return 'local';
-		if (parsed.host === proxy.host)
+		if (parsed.host === proxy.host || proxyOwned(parsed.href))
 			return parsed.pathname.startsWith(scope) ? 'worker' : 'proxy';
 		if (parsed.host === host.host) return 'host';
 		return 'raw';
@@ -392,6 +416,183 @@ export async function recordRequests(context, { scope = '/stomp/' } = {}) {
 		log,
 		raw: () => log.filter((entry) => entry.kind === 'raw'),
 	};
+}
+
+/**
+ * The CDP session that drives `frame` (a Playwright Frame) and the frame's
+ * id in it: its own session when it runs in a process of its own (a frame of
+ * another origin than its parent's, like a proxied document shown from a
+ * site pool's slot, docs/site-pool.md), else the session of the nearest
+ * ancestor that has one, its page's at the end. With the pool a proxied
+ * document is another origin than the host page and in another process, so
+ * neither the host page's realm nor the page's CDP session reaches it.
+ */
+export async function frameTarget(frame) {
+	const page = frame.page();
+	const context = page.context();
+	// the frames between `frame` and the target that has a session, nearest
+	// first
+	const chain = [];
+	for (let at = frame; ; at = at.parentFrame()) {
+		let session = null;
+		try {
+			session = await context.newCDPSession(at.parentFrame() ? at : page);
+		} catch (error) {
+			// a frame in its parent's process has no session of its own
+		}
+		if (session) {
+			const { frameTree } = await session.send('Page.getFrameTree');
+			let node = frameTree;
+			for (const step of chain.reverse()) {
+				// the frame tree of a session holds the frames of its process
+				// only: match by URL and name, in order among the like ones
+				const like = (f) => f.url() === step.url() && f.name() === step.name();
+				const local = [];
+				for (const sibling of step.parentFrame().childFrames())
+					if (like(sibling) && !(await ownSession(context, sibling)))
+						local.push(sibling);
+				const candidates = (node.childFrames ?? []).filter(
+					(child) =>
+						child.frame.url + (child.frame.urlFragment ?? '') === step.url() &&
+						(child.frame.name ?? '') === step.name(),
+				);
+				node = candidates[local.indexOf(step)] ?? candidates[0];
+				if (!node) throw new Error(`no frame ${step.url()} in its process`);
+			}
+			return { session, frameId: node.frame.id, root: node === frameTree };
+		}
+		if (!at.parentFrame()) throw new Error('no CDP session for the frame');
+		chain.push(at);
+	}
+}
+
+async function ownSession(context, frame) {
+	try {
+		await (await context.newCDPSession(frame)).detach();
+		return true;
+	} catch (error) {
+		return false;
+	}
+}
+
+/**
+ * Evaluate `fn(arg)` in `frame` (a Playwright Frame) in a world of its own:
+ * the frame's DOM with the browser's pristine prototypes and globals, which
+ * no hook of the page or the proxy reaches (CDP Page.createIsolatedWorld).
+ * For what a proxied document really holds (a real attribute, an element
+ * made with the browser's own `createElement`), where a suite used to reach
+ * in through the host page's realm: a site pool's slot is another origin
+ * and process than the host. `fn` and `arg` are serialized (no closures);
+ * the result is returned by value. Works for a frame in its parent's
+ * process too.
+ */
+export async function evaluateIsolated(frame, fn, arg) {
+	const { session, frameId } = await frameTarget(frame);
+	try {
+		const { executionContextId } = await session.send(
+			'Page.createIsolatedWorld',
+			{ frameId, worldName: 'stomp-test', grantUniveralAccess: true },
+		);
+		const { result, exceptionDetails } = await session.send(
+			'Runtime.evaluate',
+			{
+				expression: `(${fn})(${JSON.stringify(arg ?? null)})`,
+				contextId: executionContextId,
+				awaitPromise: true,
+				returnByValue: true,
+			},
+		);
+		if (exceptionDetails)
+			throw new Error(
+				exceptionDetails.exception?.description ?? exceptionDetails.text,
+			);
+		return result.value;
+	} finally {
+		await session.detach().catch(() => {});
+	}
+}
+
+/**
+ * Evaluate `expression` in `frame`'s own (main) world over CDP, with no user
+ * activation (Playwright's `evaluate` gives the page one). Undefined when the
+ * frame went or is between documents.
+ */
+export async function evaluateQuietly(frame, expression) {
+	let target;
+	try {
+		target = await frameTarget(frame);
+	} catch (error) {
+		return undefined;
+	}
+	const { session, frameId, root } = target;
+	try {
+		let contextId;
+		if (!root) {
+			// the frame's main world, in a session that may hold others
+			const contexts = new Map();
+			session.on('Runtime.executionContextCreated', ({ context }) => {
+				if (context.auxData?.frameId === frameId && context.auxData.isDefault)
+					contexts.set('main', context.id);
+			});
+			await session.send('Runtime.enable');
+			contextId = contexts.get('main');
+			await session.send('Runtime.disable').catch(() => {});
+			if (contextId === undefined) return undefined;
+		}
+		const { result, exceptionDetails } = await session.send(
+			'Runtime.evaluate',
+			{
+				expression,
+				...(contextId === undefined ? {} : { contextId }),
+				awaitPromise: true,
+				returnByValue: true,
+				userGesture: false,
+			},
+		);
+		return exceptionDetails ? undefined : result.value;
+	} catch (error) {
+		return undefined;
+	} finally {
+		await session.detach().catch(() => {});
+	}
+}
+
+/**
+ * CDP events of the frames of `page` that run in processes of their own (a
+ * proxied document shown from a site pool's slot, docs/site-pool.md, is one:
+ * the page's own CDP session sees none of its requests). Each such frame is
+ * attached as it starts and held until `enable` (e.g. `['Network.enable']`)
+ * is sent to it, so no event of its first request is missed; `onEvent(method,
+ * params)` hears every event of those frames, and of the frames in their
+ * processes. Frames of frames in further processes are not followed. The
+ * returned function stops watching.
+ */
+export async function watchFrameTargets(page, enable, onEvent) {
+	const cdp = await page.context().newCDPSession(page);
+	let id = 0;
+	const send = (sessionId, method, params = {}) =>
+		cdp
+			.send('Target.sendMessageToTarget', {
+				sessionId,
+				message: JSON.stringify({ id: ++id, method, params }),
+			})
+			.catch(() => {});
+	cdp.on('Target.attachedToTarget', ({ sessionId, targetInfo }) => {
+		if (targetInfo.type === 'iframe')
+			for (const method of enable) send(sessionId, method);
+		// messages to a target are handled in order: it runs once they are in
+		send(sessionId, 'Runtime.runIfWaitingForDebugger');
+	});
+	cdp.on('Target.receivedMessageFromTarget', ({ message }) => {
+		const { method, params } = JSON.parse(message);
+		if (method) onEvent(method, params);
+	});
+	await cdp.send('Target.setAutoAttach', {
+		autoAttach: true,
+		waitForDebuggerOnStart: true,
+		flatten: false,
+	});
+	return () => cdp.detach().catch(() => {});
 }
 
 /** a page on the demo's landing screen with the controller ready */

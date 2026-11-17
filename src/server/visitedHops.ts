@@ -10,6 +10,9 @@
 // - at the document's address: the context, so a redirect the site answers
 //   there goes on through a link route of the same context, as Chrome
 //   records every URL of a redirect chain under the navigation's own key.
+//
+// With the site pool this is one slot's worker's memory: a navigation that
+// leaves for another slot takes its hop along (SiteArrival `visited`).
 import type { VisitedContext } from '../visited';
 
 export interface VisitedHop {
@@ -45,6 +48,31 @@ export function rememberVisitedHop(url: string, hop: VisitedHop) {
 	hops.delete(key);
 	hops.set(key, { ...hop, at: Date.now() });
 	if (hops.size > KEPT) hops.delete(hops.keys().next().value!);
+}
+
+/**
+ * The site pool: the visit a navigation another slot's worker sent here
+ * makes (SiteArrival `visited.hop`), kept for `url` as if this worker's own
+ * link route had begun it
+ */
+export function visitedArrived(url: string, visited: unknown) {
+	const hop = (visited as { hop?: Partial<VisitedHop> } | undefined)?.hop;
+	if (
+		!hop ||
+		typeof hop.context?.frame !== 'string' ||
+		typeof hop.context.top !== 'string' ||
+		typeof hop.hops !== 'number'
+	)
+		return;
+	rememberVisitedHop(url, {
+		context: { frame: hop.context.frame, top: hop.context.top },
+		hops: hop.hops,
+		...(typeof hop.directory === 'string' && { directory: hop.directory }),
+		...((typeof hop.nested === 'string' || hop.nested === false) && {
+			nested: hop.nested,
+		}),
+		...(hop.crossed === true && { crossed: true }),
+	});
 }
 
 /** what the hop before a request for `url` left for it, taken */

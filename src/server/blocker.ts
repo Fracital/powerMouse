@@ -100,7 +100,7 @@ function dataResource(
 }
 
 /** what the crate answers for a document's cosmetic resources */
-interface CosmeticResources {
+export interface CosmeticResources {
 	hide_selectors: string[];
 	procedural_actions: string[];
 	exceptions: string[];
@@ -133,7 +133,45 @@ async function keyOf(init: AdblockInit): Promise<string> {
 	).join('');
 }
 
-export class Blocker {
+/**
+ * What the request path asks of a blocker: the engine itself (Blocker), or,
+ * for a slot of the site pool, the hub's worker's engine asked over a
+ * port (src/server/remoteBlocker.ts), whose answers come later; the callers
+ * await each one
+ */
+export interface BlockerLike {
+	readonly ready: boolean;
+	readonly failed: boolean;
+	lastError: string | null;
+	settled(build?: boolean, ms?: number): Promise<boolean>;
+	decide(request: BlockerRequest): Decision | null | Promise<Decision | null>;
+	socket(
+		url: string,
+		source: string,
+		type?: 'webtransport',
+	): boolean | Promise<boolean>;
+	cosmetic(
+		url: string,
+		rewrite: (script: string) => string,
+	): AdblockPage | null | Promise<AdblockPage | null>;
+	documentCsp(
+		url: string,
+		top: string | null,
+		sealer?: string,
+	): string | null | Promise<string | null>;
+	classIds(
+		classes: string[],
+		ids: string[],
+		exceptions: string[],
+	): string[] | Promise<string[]>;
+}
+
+/** the scriptlets of a document's cosmetic resources as one key (the crate writes them in any order) */
+export function scriptletKey(script: string): string {
+	return script.split('\n').sort().join('\n');
+}
+
+export class Blocker implements BlockerLike {
 	#init: AdblockInit;
 	readonly #fetch: FetchResource;
 	readonly #given: () => Promise<WebAssembly.Module | null>;
@@ -524,20 +562,14 @@ export class Blocker {
 		url: string,
 		rewrite: (script: string) => string,
 	): AdblockPage | null {
-		const answer = this.#call(url, OP.cosmetic);
-		if (answer === null) return null;
-		let resources: CosmeticResources;
-		try {
-			resources = JSON.parse(answer) as CosmeticResources;
-		} catch (error) {
-			return null;
-		}
+		const resources = this.cosmeticResources(url);
+		if (resources === null) return null;
 		let script = '';
 		if (resources.injected_script) {
 			// the crate writes a page's scriptlets in the order of a hash set
 			// that changes from call to call: the same lines in any order are
 			// the same scriptlets, and one rewrite serves them all
-			const key = resources.injected_script.split('\n').sort().join('\n');
+			const key = scriptletKey(resources.injected_script);
 			const memo = this.#scripts.get(key);
 			if (memo !== undefined) script = memo;
 			else {
@@ -559,6 +591,16 @@ export class Blocker {
 			script,
 			generichide: resources.generichide,
 		};
+	}
+	/** the crate's cosmetic resources for a document at `url`, its scriptlets as the lists have them */
+	cosmeticResources(url: string): CosmeticResources | null {
+		const answer = this.#call(url, OP.cosmetic);
+		if (answer === null) return null;
+		try {
+			return JSON.parse(answer) as CosmeticResources;
+		} catch (error) {
+			return null;
+		}
 	}
 	/** the generic hide selectors among `classes` and `ids` a page saw, minus its `exceptions` */
 	classIds(classes: string[], ids: string[], exceptions: string[]): string[] {
@@ -651,7 +693,7 @@ export class Blocker {
  * exceptions}` in, the selectors to hide out. Under the controller's
  * address, like `whoami`: no page URL corresponds to it.
  */
-export function registerBlocker(router: Router, blocker: Blocker) {
+export function registerBlocker(router: Router, blocker: BlockerLike) {
 	router.routes.set(/^\/adblock$/, async (request) => {
 		let selectors: string[] = [];
 		try {
@@ -664,7 +706,7 @@ export function registerBlocker(router: Router, blocker: Blocker) {
 				Array.isArray(value)
 					? value.filter((entry): entry is string => typeof entry === 'string')
 					: [];
-			selectors = blocker.classIds(
+			selectors = await blocker.classIds(
 				strings(asked.classes),
 				strings(asked.ids),
 				strings(asked.exceptions),

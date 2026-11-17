@@ -3,6 +3,8 @@ import ProxyModule from '../../modules/Proxy';
 import { LazyMap, LazySet } from '../../ownCollections';
 import type DocumentClient from '../Client';
 import { addDocumentOpenListener } from '../Client';
+import { Pool } from '../pool';
+import { mainFrameElsewhere } from '../siteWindows';
 
 /**
  * Chrome stops updating the rendering of a frame that is cross-origin to the
@@ -21,8 +23,24 @@ import { addDocumentOpenListener } from '../Client';
  * Measured in Chrome 152: a same-site frame of another origin is held too,
  * `visibility: hidden` holds nothing.
  *
+ * The other way round, Chrome holds a hidden frame of the proxied top's
+ * own origin when the browser's main frame is of another origin, as it is
+ * under a site pool (the proxied top is a slot's origin in the hub's page,
+ * docs/site-pool.md) and in isolated mode (the proxied top is the proxy's
+ * origin in the host's page): measured in Chrome 152 and 156, a page framed
+ * by a top of another origin, of another port of the same host or of another
+ * site, gets its own hidden frames held. Natively the proxied top is the
+ * main frame and they run (and measure 0). While such a frame is not
+ * rendered, its callbacks are run by the proxied top's animation frames,
+ * which run as long as the page is shown; the frame's own request still
+ * stands, and whichever comes first runs a callback, once.
+ *
  * Whether the frame is rendered is followed with an IntersectionObserver per
- * frame element up to the proxied top, rooted at that element's document with
+ * frame element up to the proxied top (for a lifted frame, from its first
+ * request on: most frames never make one, and until its observers have
+ * reported, a frame element without a box counts as not rendered, so a
+ * hidden frame's first callback is lifted at once, as the watch from the
+ * start lifted it), rooted at that element's document with
  * a margin wide enough that only having no box (or being clipped away
  * entirely, which Chrome holds as well) counts: a game in a frame calls
  * requestAnimationFrame at 60 fps or more, and each call only reads a flag,
@@ -51,13 +69,21 @@ export default class AnimationFramesModule extends Module<DocumentClient> {
 		const nativeRequest = global.requestAnimationFrame;
 		const nativeCancel = global.cancelAnimationFrame;
 		const reportError = global.reportError;
+		const timeOrigin = global.performance?.timeOrigin ?? 0;
+		const nativeRects = global.Element.prototype.getClientRects;
+		const pool = this.client.pool;
+		pool[Pool.AnimationRequest] = nativeRequest;
+		pool[Pool.TimeOrigin] = timeOrigin;
 
 		// a frame of the page's that is cross-origin to the proxied top,
 		// decided once per document (an origin never changes within one)
-		let decided: { document: Document; throttled: boolean } | undefined;
+		// (a document and its answer, kept apart: an object for the two cost
+		// every frame two shapes)
+		let decidedFor: Document | undefined;
+		let decided = false;
 		const throttled = () => {
 			const document = global.document;
-			if (decided?.document === document) return decided.throttled;
+			if (decidedFor === document) return decided;
 			let value: boolean;
 			try {
 				value =
@@ -67,9 +93,47 @@ export default class AnimationFramesModule extends Module<DocumentClient> {
 			} catch (error) {
 				value = false;
 			}
-			decided = { document, throttled: value };
+			decidedFor = document;
+			decided = value;
 			if (value) watch();
 			return value;
+		};
+
+		// a frame of the proxied top's origin whose main frame (the browser's)
+		// is of another origin: the proxied top's client, whose animation
+		// frames run the callbacks while the frame is not rendered; decided
+		// once per document
+		let liftingFor: Document | undefined;
+		let lifting: DocumentClient | null = null;
+		const lifted = () => {
+			const document = global.document;
+			if (liftingFor === document) return lifting;
+			let top: DocumentClient | null = null;
+			try {
+				const client = this.client;
+				if (
+					client.nested &&
+					!client.sandboxedOpaque &&
+					client.url.url.origin === client.topOrigin
+				) {
+					const candidate = (client.proxiedTop as Record<string, any>)[
+						client.names.client
+					] as DocumentClient | undefined;
+					if (
+						mainFrameElsewhere(global, client.realOrigin()) &&
+						candidate &&
+						candidate !== client &&
+						!candidate.nested &&
+						candidate.pool?.[Pool.AnimationRequest]
+					)
+						top = candidate;
+				}
+			} catch (error) {
+				top = null;
+			}
+			liftingFor = document;
+			lifting = top;
+			return top;
 		};
 
 		// the frame elements, from this window's up to the proxied top's
@@ -96,14 +160,27 @@ export default class AnimationFramesModule extends Module<DocumentClient> {
 				if (last.isIntersecting) unrendered.delete(frame);
 				else unrendered.add(frame);
 				if (unrendered.size === 0) flushSoon();
+				else liftPending();
 			};
-		const watch = () => {
+		// `boxes`: until the observers report, an element with no box counts
+		// as not rendered (read now, a layout of its document)
+		const watch = (boxes = false) => {
 			if (watching) return;
 			watching = true;
 			let client: DocumentClient = moduleClient;
 			for (let depth = 0; depth < 64 && client.nested; depth++) {
 				const frame = client.nativeFrameElement();
 				if (!frame) break;
+				if (boxes)
+					try {
+						if (
+							(Reflect.apply(nativeRects, frame, []) as DOMRectList).length ===
+							0
+						)
+							unrendered.add(frame);
+					} catch (error) {
+						// an element of a document going away
+					}
 				// each element against its own document: the observer of this
 				// realm, so a page that replaced its IntersectionObserver
 				// changes nothing
@@ -153,6 +230,23 @@ export default class AnimationFramesModule extends Module<DocumentClient> {
 				else run(id, time);
 			}
 		};
+		// the callbacks of a lifted frame not run yet, by the proxied top's
+		// next animation frame (its time in this document's time origin)
+		const lift = (id: number) => {
+			const top = liftingFor === global.document && lifting;
+			const request = top && top.pool?.[Pool.AnimationRequest];
+			if (!request) return;
+			const offset = top.pool[Pool.TimeOrigin] - timeOrigin;
+			Reflect.apply(request, top.global, [
+				(time: number) => {
+					if (unrendered.size) run(id, time + offset);
+				},
+			]);
+		};
+		const liftPending = () => {
+			if (!lifting || liftingFor !== global.document) return;
+			for (const id of callbacks.keys()) lift(id);
+		};
 		const flushSoon = () => {
 			if (flushing || parked.length === 0) return;
 			flushing = true;
@@ -163,8 +257,18 @@ export default class AnimationFramesModule extends Module<DocumentClient> {
 			nativeRequest,
 			(target, that, args) => {
 				const callback = args[0];
-				if (typeof callback !== 'function' || !throttled())
+				if (typeof callback !== 'function')
 					return Reflect.apply(target, that, args);
+				if (!throttled()) {
+					if (!lifted()) return Reflect.apply(target, that, args);
+					watch(true);
+					const id = Reflect.apply(target, that, [
+						(time: number) => run(id, time),
+					]) as number;
+					callbacks.set(id, callback);
+					if (unrendered.size) lift(id);
+					return id;
+				}
 				const id = Reflect.apply(target, that, [
 					(time: number) => {
 						if (!callbacks.has(id)) return;
@@ -199,16 +303,20 @@ export default class AnimationFramesModule extends Module<DocumentClient> {
 			observers.length = 0;
 			unrendered.clear();
 			watching = false;
-			decided = undefined;
+			decidedFor = undefined;
+			liftingFor = undefined;
 		};
 		const listen = () =>
 			Reflect.apply(nativeAdd, global, ['pagehide', unwatch]);
 		listen();
 		// document.open() drops a window's listeners
 		addDocumentOpenListener(global, listen);
-		// watched from the start, so the observers have reported before the
-		// page's first callbacks come due after it starts (Chrome decides as
-		// the document starts too)
+		// a frame held as Chrome holds one of another origin is watched from
+		// the start, so the observers have reported before the page's first
+		// callbacks come due after it starts (Chrome decides as the document
+		// starts too, and runs a hidden frame's first frames); a lifted one is
+		// decided and watched from its first request (most frames make none,
+		// and a frame compiles what it runs)
 		throttled();
 	}
 }

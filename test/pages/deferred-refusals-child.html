@@ -108,6 +108,26 @@
 							accountHint: 'x',
 						}),
 					),
+				// a form a frame of this one submits to its parent, this
+				// document: the copy this window submits, or nothing. Where it
+				// lands, deferred-refusals-landed.html answers to its parent:
+				// for this window when it lands here, to this window when it
+				// lands in the frame (the browser's own submission: the form's
+				// target reads `_self` to the browser)
+				formAimed: () =>
+					new Promise((resolve) => {
+						const frame = document.createElement('iframe');
+						addEventListener('message', (event) => {
+							if (event.source === frame.contentWindow)
+								resolve({ inFrame: event.data.out.formAimed.landed });
+						});
+						frame.srcdoc =
+							'<form target="_parent" action="deferred-refusals-landed.html">' +
+							'<input name="x" value="1"></form>' +
+							'<script>document.forms[0].requestSubmit()<\/script>';
+						document.body.append(frame);
+						setTimeout(() => resolve({ stayed: true }), 2000);
+					}),
 				// a same-origin download link's click: the copy is saved after
 				// the click went through the page (the suite counts downloads)
 				download: () =>

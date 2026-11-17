@@ -117,6 +117,20 @@ export interface Config {
 	 * option: the controller reads `crossOriginIsolated`.
 	 */
 	isolated?: boolean;
+	/**
+	 * @internal the site pool (ControllerInit.sitePool): this document's origin
+	 * is a slot of the pool, so the browser lists only that slot's entries of
+	 * the frame's history to it, and steps into another slot's natively
+	 */
+	sites?: SitesConfig;
+	/**
+	 * @internal the hub of a site pool (ControllerInit.sitePool): its slots'
+	 * origins, which are the proxy's own as much as the hub's (a route on one
+	 * is a route, a route to one is refused: src/routeURL.ts proxyOrigins). Not
+	 * `sites`: a document with `sites` is a slot's, and the hub's worker also
+	 * serves documents of its own origin, which are no slot's.
+	 */
+	slotOrigins?: string[];
 	/** @internal build id of the service worker that serves the page (src/version.ts) */
 	build?: string;
 	/** @internal ms a routed request may take before the service worker answers 504 (tests; default by destination) */
@@ -174,6 +188,40 @@ export interface Config {
 	 */
 	errorPage?: string;
 }
+
+/**
+ * The site pool as a document sees it (Config.sites): the hub's origin (the
+ * host's page, which a proxied document never shows as a window of its
+ * world) and the token every STomp document of the hub puts in a message to
+ * a window of another slot's origin, which the receiver checks (a page
+ * cannot make one, so a message's stated origin is the sender's inject's)
+ */
+export interface SitesConfig {
+	/** the origin of the page whose frames show the sites (the real top) */
+	hub: string;
+	token: string;
+	/**
+	 * the origin of the hub's controller, whose worker shows a slot's
+	 * documents once the slot's agent is gone: `hub`'s own, or the proxy's
+	 * when the hub is a controller frame (RemoteController)
+	 */
+	home?: string;
+	/**
+	 * the pool's slots' origins: a navigation to a site of another slot is
+	 * a 307 there, which the browser's copy of a page's frame-src and
+	 * form-action lets through (src/csp.ts browserPolicy), and what the
+	 * browser names on another slot's origin is read as the route's real
+	 * URL (src/inject/dom/modules/ContentSecurity.ts)
+	 */
+	origins?: string[];
+}
+
+/**
+ * The site pool: the property of a slot's agent window (src/controller/site.ts)
+ * that holds the hub's frame that has focus there, which a top document of
+ * the slot reads as it starts (src/inject/dom/siteWindows.ts keepTopFocus)
+ */
+export const SITE_FOCUS = '$stomp$siteFocus';
 
 export interface ParsedConfig extends Omit<Config, 'codec'> {
 	codec: GenericCodec;
@@ -261,6 +309,8 @@ export interface Assets {
 	controllerFrame?: string;
 	/** the script controllerFrame.html loads; told to the frame through `?script=` */
 	controllerFrameScript?: string;
+	/** the script controllerFrame.html loads as a slot's agent of the site pool (ControllerInit.sitePool) */
+	siteFrameScript?: string;
 	/** the dedicated Worker that hosts a transport given as a descriptor */
 	transportWorker?: string;
 	/** the dedicated Worker a document starts for its WebRTC connections (docs/webrtc-over-wisp.md) */
@@ -297,6 +347,7 @@ export const DEFAULT_ASSETS: Required<Assets> = {
 	injectWorkerFull: 'injectWorkerFull.js',
 	controllerFrame: 'controllerFrame.html',
 	controllerFrameScript: 'controllerFrame.js',
+	siteFrameScript: 'siteFrame.js',
 	transportWorker: 'transportWorker.js',
 	rtcWorker: 'rtcWorker.js',
 	rtc: 'rtc.wasm',

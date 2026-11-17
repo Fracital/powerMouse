@@ -56,6 +56,21 @@ export default class RewriteWorkers {
 	held(): string[][] {
 		return this.#workers.map((worker) => this.#held.get(worker) ?? []);
 	}
+	/** how many workers are running */
+	get size(): number {
+		return this.#workers.length;
+	}
+	/**
+	 * Hand each running worker one of `ports`, in order (the site pool: a
+	 * slot's agent made the channels, its worker holds the other ends)
+	 */
+	servePorts(ports: MessagePort[]) {
+		this.#workers.forEach((worker, i) => {
+			const port = ports[i];
+			if (port) worker.postMessage({ [REWRITE_PORT]: true }, [port]);
+		});
+		for (const port of ports.slice(this.#workers.length)) port.close();
+	}
 	/** a port to each running worker, for the service worker's end of a handshake */
 	ports(): MessagePort[] {
 		return this.#workers.map((worker) => {

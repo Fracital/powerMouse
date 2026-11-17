@@ -865,6 +865,25 @@ interface MemoryEntry {
 export class MemoryCache {
 	#entries = new Map<string, MemoryEntry>();
 	#bytes = 0;
+	#budget = MEMORY_BUDGET;
+	/**
+	 * Keep a `parts`th of the budget: a slot of the site pool, whose
+	 * workers share one process with the others' (each worker has a cache
+	 * of its own, and K of them at the whole budget would be K times it)
+	 */
+	share(parts: number) {
+		this.#budget = Math.floor(
+			MEMORY_BUDGET / Math.max(1, Math.min(64, Math.floor(parts) || 1)),
+		);
+		this.#fit();
+	}
+	/** the least recently used go until what is kept fits the budget */
+	#fit() {
+		for (const [oldest, entry] of this.#entries) {
+			if (this.#bytes <= this.#budget) break;
+			this.#drop(oldest, entry);
+		}
+	}
 	/**
 	 * the key of `url` for documents of `site`, loaded with credentials or
 	 * not (the renderer does not hand one to a load of the other mode)
@@ -921,7 +940,7 @@ export class MemoryCache {
 			const { done, value } = await reader.read();
 			if (done) break;
 			size += value.byteLength;
-			if (size > MEMORY_ENTRY_LIMIT) {
+			if (size > Math.min(MEMORY_ENTRY_LIMIT, this.#budget)) {
 				await reader.cancel();
 				return;
 			}
@@ -946,10 +965,7 @@ export class MemoryCache {
 				: null,
 		});
 		this.#bytes += size;
-		for (const [oldest, entry] of this.#entries) {
-			if (this.#bytes <= MEMORY_BUDGET) break;
-			this.#drop(oldest, entry);
-		}
+		this.#fit();
 	}
 	#drop(key: string, entry: MemoryEntry) {
 		this.#entries.delete(key);

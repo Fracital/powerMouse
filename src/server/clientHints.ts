@@ -520,6 +520,93 @@ export function topDocument(top: string): HintsDocument | null {
 	return tops.get(top) ?? null;
 }
 
+/**
+ * The site pool: what this worker knows of a navigation's parent and main
+ * frame, for the worker of the slot the navigation goes to, which served
+ * neither (SiteContext.hints). `referrer`: the parent's routed URL (a
+ * frame's navigation), `top`: its main frame's origin.
+ */
+export async function departingHints(
+	referrer: string | null,
+	top: string | null,
+	directory: string,
+): Promise<{
+	parent?: HintsDocument;
+	top?: HintsDocument;
+	accepted?: string[];
+	viewport?: [number, number];
+}> {
+	const parent = referrer ? hintsDocument(undefined, referrer) : null;
+	const main = top ? topDocument(top) : null;
+	const accepted = top ? [...(await acceptedHints(top))] : [];
+	const viewport = topViewports.get(directory);
+	return {
+		...(parent ? { parent } : {}),
+		...(main ? { top: main } : {}),
+		...(accepted.length ? { accepted } : {}),
+		...(viewport ? { viewport } : {}),
+	};
+}
+
+/** a HintsDocument as another slot's worker sent it (structured-cloned) */
+function isHintsDocument(value: unknown): value is HintsDocument {
+	const doc = value as HintsDocument | null;
+	return (
+		typeof doc === 'object' &&
+		doc !== null &&
+		typeof doc.origin === 'string' &&
+		typeof doc.top === 'string' &&
+		typeof doc.parentOrigin === 'string' &&
+		doc.enabled instanceof Set &&
+		doc.delegated instanceof Map &&
+		doc.features instanceof Map &&
+		doc.allFeatures instanceof Map &&
+		typeof doc.policy === 'object' &&
+		doc.policy !== null &&
+		doc.policy.disabled instanceof Set &&
+		doc.policy.declared instanceof Map
+	);
+}
+
+/**
+ * The site pool: a navigation another slot's worker sent here, with what it
+ * knew of the parent and the main frame (departingHints): kept as if this
+ * worker had served them, the parent at `referrer` (its route on this
+ * origin, as the navigation's referrer reads here), the main frame as its
+ * origin's latest, the origin's accepted hints for this worker's life. A
+ * later navigation in the frame finds them as it would have in one origin.
+ */
+export function arrivingHints(
+	carried: {
+		parent?: unknown;
+		top?: unknown;
+		accepted?: unknown;
+		viewport?: unknown;
+	},
+	referrer: string | null,
+	directory: string,
+	topLevel: boolean,
+) {
+	if (referrer && isHintsDocument(carried.parent))
+		keep(`url ${withoutHash(referrer)}`, carried.parent);
+	if (isHintsDocument(carried.top) && carried.top.topLevel)
+		tops.set(carried.top.origin, carried.top);
+	if (
+		isHintsDocument(carried.top) &&
+		Array.isArray(carried.accepted) &&
+		carried.accepted.every((hint) => typeof hint === 'string')
+	)
+		accepted.set(carried.top.origin, carried.accepted);
+	const viewport = carried.viewport;
+	if (
+		topLevel &&
+		Array.isArray(viewport) &&
+		viewport.length === 2 &&
+		viewport.every((side) => typeof side === 'number' && side > 0)
+	)
+		topViewports.set(directory, viewport as [number, number]);
+}
+
 /** display state, reported by the proxied documents (and the controller) */
 interface Display {
 	dpr: number;

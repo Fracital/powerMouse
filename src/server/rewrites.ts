@@ -22,6 +22,7 @@ import {
 	REFUSED_URL,
 	scriptFacts,
 	WORKER_DIRECTIVES,
+	type HopPolicy,
 } from '../csp';
 import { freshFrameDocument } from '../freshFrame';
 import { rewriteLinkHeader } from '../headers';
@@ -91,6 +92,7 @@ import {
 	formQuery,
 	linkRouteURL,
 	parseRoutedURL,
+	proxyOrigins,
 	REFUSED_ROUTE,
 	REFUSED_SOURCE_ROUTE,
 	ROUTE_PROTOCOLS,
@@ -118,6 +120,7 @@ import type {
 	RequestInfo,
 	RequestRule,
 	RouteContext,
+	SiteArrival,
 } from '../transport/messages';
 import {
 	ABORT_HEADER,
@@ -158,7 +161,7 @@ import {
 	knownTopSiteOf,
 	recordInlineOrigin,
 } from './blobOrigins';
-import type { Blocker } from './blocker';
+import type { BlockerLike } from './blocker';
 import {
 	askedRange,
 	byteRange,
@@ -269,6 +272,8 @@ import {
 	NavigationChain,
 	navigationChain,
 	NavigationHint,
+	recordNavigationChain,
+	recordNavigationHint,
 	recordNavigationInitiator,
 	takeNavigationHint,
 	takeNavigationInitiator,
@@ -648,6 +653,237 @@ function takeReturn(url: string) {
 	return Date.now() - entry.at > REDIRECT_HOP_TTL ? undefined : entry;
 }
 
+/**
+ * The site pool (src/controller/sitePool.ts): a navigation this worker
+ * sends on to another slot's worker takes with it what this worker knew of it: the
+ * referrer and policy it came back with (rememberReturn), the redirect
+ * chain it is a hop of, and the hint of the document that started it (the
+ * first hop of a chain only). Taken here, so nothing of it is left behind.
+ * And what the documents of the navigation told of the page policies that
+ * judge its later hops and the frame's ancestors (navigationChain), which
+ * stays here too: a chain may come back. `realOf`: the real URL of a route
+ * of this worker's, or null. A later hop of a chain is judged here, by the
+ * policies its documents told this worker (whose clients it can tell of a
+ * report-only refusal): `refused` is where a refused one goes instead
+ * (hopRefusal), and the next slot's worker does not judge it again.
+ * `frame`: the navigation is a frame's (its route is a nested one).
+ */
+export async function siteDeparture(
+	request: Request,
+	real: string,
+	hintWait: number,
+	realOf: (routed: string) => string | null = () => null,
+	frame = false,
+): Promise<Omit<SiteArrival, 'path'> & { refused?: string }> {
+	const returned = takeReturn(request.url);
+	const referrer = returned
+		? returned.referrer
+		: request.referrer && request.referrer !== 'about:client'
+			? request.referrer
+			: '';
+	const policy = returned?.policy ?? request.referrerPolicy;
+	const hop = takeRedirect('', referrer, returned?.url ?? request.url);
+	const own = `${new URL(request.url).origin}/`;
+	const hint =
+		takeNavigationHint(real) ??
+		(referrer || hop ? null : await awaitNavigationHint(real, hintWait));
+	// (kept by the real URL the chain began at, as genericForward looks it up)
+	const start = (hop?.first && realOf(hop.first)) || real;
+	const known = navigationChain(start);
+	if (known && hop) {
+		let url: URL | null = null;
+		try {
+			url = new URL(real);
+		} catch (error) {
+			// not a URL: nothing to judge
+		}
+		const refused = url && hopRefusal(known, url, frame, start);
+		if (refused) return { refused };
+	}
+	const chain: SiteArrival['chain'] = known
+		? {
+				start,
+				policies: known.policies.map(({ policy, parent }) => [policy, parent]),
+				...(known.ancestors ? { ancestors: known.ancestors } : {}),
+				...(known.required !== undefined ? { required: known.required } : {}),
+				...(known.coop ? { coop: known.coop } : {}),
+				...(hop ? { judged: true } : {}),
+			}
+		: undefined;
+	return {
+		...(referrer.startsWith(own)
+			? { referrer: referrer.slice(own.length - 1) }
+			: {}),
+		...(policy ? { policy } : {}),
+		...(hint ? { hint } : {}),
+		...(hop ? { hop } : {}),
+		...(chain ? { chain } : {}),
+	};
+}
+
+/**
+ * The site pool: the routed URLs of hops another slot's worker judged
+ * before it sent them here (siteDeparture), each judged no more here
+ */
+const judgedArrivals = new Set<string>();
+
+/** a hop policy as navigationHints keeps it (HopPolicy) */
+function isHopPolicy(policy: unknown): policy is HopPolicy {
+	return (
+		Array.isArray(policy) &&
+		typeof policy[0] === 'string' &&
+		Array.isArray(policy[1]) &&
+		policy[1].every((source) => typeof source === 'string') &&
+		(policy[2] === 'enforce' || policy[2] === 'report') &&
+		typeof policy[3] === 'string'
+	);
+}
+
+/**
+ * The site pool: a navigation another slot's worker sent here, put where
+ * this worker looks for what it knew of a navigation, as if it had begun
+ * here: its referrer (the routed path, on this origin), its policy, its hint
+ * and its redirect chain
+ */
+export function siteArrived(
+	request: Request,
+	real: string,
+	arrival: SiteArrival,
+) {
+	const origin = new URL(request.url).origin;
+	const referrer = arrival.referrer ? `${origin}${arrival.referrer}` : '';
+	rememberReturn(request.url, {
+		referrer,
+		policy: (arrival.policy || DEFAULT_REFERRER_POLICY) as ReferrerPolicy,
+		url: request.url,
+	});
+	if (arrival.hop && typeof arrival.hop === 'object') {
+		const hop = { ...(arrival.hop as RedirectHop) };
+		// the chain's first URL, a route of the slot it began on: the same
+		// route on this origin, which this worker can read
+		if (typeof hop.first === 'string')
+			try {
+				const first = new URL(hop.first);
+				hop.first = `${origin}${first.pathname}${first.search}${first.hash}`;
+			} catch (error) {
+				delete hop.first;
+			}
+		rememberRedirect('', referrer, request.url, request.url, hop);
+	}
+	if (arrival.hint && typeof arrival.hint === 'object')
+		recordNavigationHint(real, arrival.hint as NavigationHint);
+	// the page policies that judge the chain's later hops and the frame's
+	// real ancestors, as the documents that started it told the first slot
+	const chain = arrival.chain;
+	if (
+		chain &&
+		typeof chain.start === 'string' &&
+		Array.isArray(chain.policies)
+	) {
+		const ancestors =
+			Array.isArray(chain.ancestors) &&
+			chain.ancestors.every((origin) => typeof origin === 'string')
+				? chain.ancestors
+				: undefined;
+		const told = chain.policies.filter(
+			(entry): entry is [HopPolicy, boolean] =>
+				Array.isArray(entry) && isHopPolicy(entry[0]),
+		);
+		const required =
+			typeof chain.required === 'string' && chain.required.length <= 4096
+				? chain.required
+				: undefined;
+		const coop = chain.coop;
+		const facts =
+			Array.isArray(coop) &&
+			coop.length === 4 &&
+			typeof coop[0] === 'boolean' &&
+			coop
+				.slice(1)
+				.every((part) => typeof part === 'string' && part.length <= 2048)
+				? (coop as OpenerFacts)
+				: undefined;
+		if (chain.judged === true) {
+			judgedArrivals.add(request.url);
+			if (judgedArrivals.size > 256)
+				judgedArrivals.delete(judgedArrivals.values().next().value!);
+		}
+		for (const parent of [false, true]) {
+			const policies = told
+				.filter((entry) => (entry[1] === true) === parent)
+				.map(([policy]) => policy);
+			if (policies.length || (!parent && (ancestors || facts)))
+				recordNavigationChain(
+					chain.start,
+					policies,
+					ancestors,
+					undefined,
+					parent,
+					parent ? undefined : required,
+					parent ? undefined : facts,
+				);
+		}
+	}
+}
+
+/**
+ * The site pool: a frame's navigation that leaves for another slot, judged
+ * for mixed content here first, as the route below judges it: the parent
+ * that asked for it (at `referrer`) is this worker's client, which hears
+ * the console notices, and whose upgrade-insecure-requests this worker
+ * knows. A Response when the navigation is blocked (no document commits)
+ * or upgraded (its https route, which may well be this slot's), null when
+ * it goes on. `top`: the main frame's origin (a nested route's); a
+ * top-level navigation is never mixed content.
+ */
+export function departingMixedContent(
+	request: Request,
+	referrer: string | null,
+	top: string | null,
+	rewriter: { directory: string; codec: GenericCodec; shields?: ShieldsStore },
+): Response | null {
+	if (top === null) return null;
+	const oURL = new URL(request.url);
+	const prefix = `${oURL.origin}${rewriter.directory}`;
+	let routed: ReturnType<typeof parseRoutedURL>;
+	try {
+		routed = parseRoutedURL(request.url, rewriter.codec, prefix);
+	} catch (error) {
+		return null;
+	}
+	const { url, resource } = routed;
+	let context: URL | null = null;
+	if (referrer)
+		try {
+			context = parseRoutedURL(referrer, rewriter.codec, prefix).url.url;
+		} catch (error) {
+			// not a routed page: judged by the top alone
+		}
+	const source = context?.href ?? urlOrNull(top)?.href ?? '';
+	const verdict = mixedContentVerdict({
+		url: new URL(reportURL(url)),
+		destination: request.destination || 'empty',
+		imageSet: false,
+		type: requestTypeOf(request),
+		context,
+		top,
+		upgradeInsecure:
+			upgradesInsecure(undefined, null, referrer) ||
+			!!rewriter.shields?.httpsUpgrade(hostOf(source || reportURL(url))),
+	});
+	postNotices(verdict.notices, undefined, referrer);
+	if (verdict.action === 'block') return new Response(null, { status: 204 });
+	if (verdict.action === 'upgrade')
+		return new Response(null, {
+			status: 307,
+			headers: {
+				location: `${prefix}${resource}/${new StompURL(verdict.url, url).encode()}`,
+				'cache-control': 'no-store',
+			},
+		});
+	return null;
+}
+
 const BODY_ILLEGAL = ['GET', 'HEAD'];
 
 /**
@@ -723,6 +959,11 @@ type BodyTransform = (
 		/** the client a worker's own script makes (the worker) */
 		resultingClientId?: string;
 		/**
+		 * a frame's navigation: its parent's frame-src, as the documents that
+		 * navigated it told it (NavigationChain), when they did
+		 */
+		framePolicies?: HopPolicy[] | null;
+		/**
 		 * what the rewrite cache keeps this request's output for: its network
 		 * partition (as the HTTP cache's: the top-level site and the site of
 		 * the frame or worker that asks) and whether it has credentials. Null
@@ -783,7 +1024,7 @@ interface Rewriter {
 	/** the host's request rules, compiled */
 	rules: CompiledRule[];
 	/** the built-in blocker, unless the host turned it off (docs/adblock.md) */
-	blocker?: Blocker;
+	blocker?: BlockerLike;
 	/** the host asked for the blocker: the first navigation waits for its lists (on by default, none does) */
 	blockerAsked?: boolean;
 	/** the per-site shields the controller set (src/server/shields.ts) */
@@ -1044,15 +1285,19 @@ function genericForward(
 			});
 		}
 
+		// the proxy's own origins: this one, and with the site pool the hub's
+		// and every slot's (proxyOrigins)
+		const proxyOwn =
+			url.url.origin === oURL.origin ||
+			proxyOrigins(rewriter.config).includes(url.url.origin);
 		// a route of a route (a page handed a hook its raw proxy URL, routed
 		// again): the real URL is the inner route's, so the request is sent to
-		// the single route of it, a document and a subresource alike
-		const unwrapped =
-			url.url.origin === oURL.origin
-				? unwrapRoute(url.url, rewriter.codec)
-				: null;
+		// the single route of it, a document and a subresource alike, on the
+		// inner route's origin (with the site pool, a slot's route routed on
+		// the hub's origin goes back to the slot that shows its site)
+		const unwrapped = proxyOwn ? unwrapRoute(url.url, rewriter.codec) : null;
 		if (unwrapped) {
-			const single = `${oURL.origin}${rewriter.directory}${resource}/${new StompURL(
+			const single = `${url.url.origin}${rewriter.directory}${resource}/${new StompURL(
 				unwrapped,
 				url,
 			).encode()}`;
@@ -1067,7 +1312,7 @@ function genericForward(
 		// of the host, so it is refused, like a blocked request. Proxy-ception
 		// on (config.allowSelfProxy) forwards it like any other origin, so the
 		// demo can be loaded through itself; off in production.
-		if (url.url.origin === oURL.origin && !rewriter.allowSelfProxy) {
+		if (proxyOwn && !rewriter.allowSelfProxy) {
 			const page = DOCUMENT_DESTINATIONS.has(serverRequest.destination)
 				? await hostErrorPage(rewriter, {
 						url: reportURL(url),
@@ -1275,10 +1520,15 @@ function genericForward(
 					0,
 					kind.indexOf(':nested:') + ':nested:'.length,
 				)}${rewriter.codec.encode(
-					nestedMark(parsed.top, parsed.crossAncestor, {
-						...parsed.embedder,
-						later: true,
-					}),
+					nestedMark(
+						parsed.top,
+						parsed.crossAncestor,
+						{
+							...parsed.embedder,
+							later: true,
+						},
+						parsed.topOpenerSameOrigin,
+					),
 				)}${oURL.pathname.slice(rewriter.directory.length + kind.length)}`;
 				rememberReturn(back.href, {
 					referrer: requestReferrer,
@@ -1291,7 +1541,10 @@ function genericForward(
 					'content-type': 'text/html; charset=utf-8',
 					'cache-control': 'no-store',
 				});
-				isolationResponseHeaders(headers, { isolated: false, topLevel: false });
+				isolationResponseHeaders(headers, {
+					isolated: false,
+					topLevel: false,
+				});
 				return new Response(
 					`<!doctype html><script>location.replace(${JSON.stringify(
 						back.href,
@@ -2060,7 +2313,9 @@ function genericForward(
 		// on to a URL the browser's copy refuses too: the browser refuses it
 		// as natively, and reports it as Chrome does, a form's by its first
 		// URL, a frame's by the URL refused (which namedRefusal's host names)
-		if (chain && previousHop) {
+		// (a hop another slot's worker judged before it sent it here is not
+		// judged again, siteDeparture)
+		if (chain && previousHop && !judgedArrivals.delete(serverRequest.url)) {
 			const refusal = hopRefusal(
 				chain,
 				url.url,
@@ -2093,7 +2348,7 @@ function genericForward(
 		if (blocker && blocks && navigation && !blocker.ready)
 			await blocker.settled(!!rewriter.blockerAsked);
 		const decision = blocks
-			? blocker?.decide({
+			? await blocker?.decide({
 					url: reportURL(url),
 					source: blockerSource,
 					destination,
@@ -3411,7 +3666,25 @@ function genericForward(
 				const value = response.headers.get(name);
 				if (value !== null) responseHeaders.set(name, value);
 			}
-		if (isolation) isolationResponseHeaders(responseHeaders, isolation);
+		if (isolation)
+			isolationResponseHeaders(responseHeaders, {
+				...isolation,
+				// a popup's document that natively leaves its opener's browsing
+				// context group (src/coop.ts, as its hint told the facts): every
+				// window of an isolated host is kept in the host's group by the
+				// COOP it is served with, so this one is served without it
+				severed:
+					isolation.topLevel &&
+					!!chain?.coop &&
+					switchesGroup(
+						chain.coop,
+						openerPolicy(
+							response.headers.get('cross-origin-opener-policy'),
+							url.url.origin,
+						),
+						url.url.origin,
+					),
+			});
 		// what the document may not use, as the browser's own policy for it
 		// (beside the isolation's `cross-origin-isolated=()`). A frame's needs
 		// its element's allow attribute, which comes with the hint its parent
@@ -3792,7 +4065,10 @@ function genericForward(
 				'content-type': 'text/html; charset=utf-8',
 				'cache-control': 'no-store',
 			});
-			isolationResponseHeaders(headers, { isolated: false, topLevel: false });
+			isolationResponseHeaders(headers, {
+				isolated: false,
+				topLevel: false,
+			});
 			return new Response(freshFrameDocument(to), { headers });
 		}
 
@@ -3874,6 +4150,12 @@ function genericForward(
 												window: destination === 'document',
 												facts: chain?.coop ?? null,
 											}
+										: null,
+								framePolicies:
+									navigation && nestedRoute !== null && chain
+										? chain.policies
+												.map(({ policy }) => policy)
+												.filter(([directive]) => directive === 'frame-src')
 										: null,
 								partition:
 									frameSite === null
@@ -4530,7 +4812,7 @@ export function registerRewrites(
 	log?: (info: RequestInfo) => void,
 	rewrites?: RewriteCache,
 	pool?: RewritePool,
-	blocker?: Blocker,
+	blocker?: BlockerLike,
 	blockerAsked = true,
 	shields?: ShieldsStore,
 	storage?: StorageHosts,
@@ -4567,6 +4849,11 @@ export function registerRewrites(
 				...(init.names ? { names: init.names } : {}),
 				// the host's hooks: every shell and worker preamble runs them
 				...(init.hooks ? { hooks: init.hooks } : {}),
+				// the site pool: the page's history steps into another slot's
+				// documents natively
+				...(init.sites ? { sites: init.sites } : {}),
+				// the hub of a site pool: its slots (src/routeURL.ts proxyOrigins)
+				...(init.slotOrigins ? { slotOrigins: init.slotOrigins } : {}),
 				build: BUILD,
 			};
 		},
@@ -4662,26 +4949,26 @@ export function registerRewrites(
 		return output;
 	};
 	// the config a script's rewrite depends on, for its cache key: all of it
-	// but the client's name, which a controller mints anew (a host that keeps
-	// its id across a reload would miss every script). A page script's
-	// output names it only where the body mentions it (the rewriter routes
-	// it); a worker's preamble always does
+	// but the client's name and the site pool's message token, which a
+	// controller mints anew (a host that keeps its id across a reload would
+	// miss every script; with the pool, every script of a slot's sites on
+	// every visit). A page script's output names the client only where the
+	// body mentions it (the rewriter routes it) and the token never; a
+	// worker's preamble carries the whole config
 	const cacheConfig = (
 		config: Config,
 		type: ScriptType,
 		mentions: (name: string) => boolean,
 	) => {
-		const client = config.names?.client;
-		if (
-			client === undefined ||
-			type === 'worker' ||
-			type === 'workerModule' ||
-			mentions(client)
-		)
+		if (type === 'worker' || type === 'workerModule')
 			return JSON.stringify(config);
+		const client = config.names?.client;
 		return JSON.stringify({
 			...config,
-			names: { ...config.names, client: undefined },
+			...(client !== undefined && !mentions(client)
+				? { names: { ...config.names, client: undefined } }
+				: {}),
+			...(config.sites ? { sites: { ...config.sites, token: undefined } } : {}),
 		});
 	};
 	// a document's inline scripts and styles, rewritten here (src/prewrite.ts):
@@ -5371,7 +5658,14 @@ export function registerRewrites(
 				// nonce, which the browser's script policies name; a worker of
 				// the document imports the inject by its URL)
 				const nonce = policyNonce();
-				const policies = browserHeaders(pageHeaders, policyMark(), url.url);
+				const policies = browserHeaders(
+					pageHeaders,
+					policyMark(),
+					url.url,
+					// (a slot of the site pool: a frame or a form of a site
+					// another slot shows goes there by a 307 the browser judges)
+					rewriter.config.sites?.origins,
+				);
 				// "Block scripts" shield: the inject enforces script-src 'none'
 				// against the page's own code (src/csp.ts stage 2; the inject's own
 				// scripts are exempt by design). It rides as a page policy with no
@@ -5433,6 +5727,15 @@ export function registerRewrites(
 					trustworthy(url.url.origin)
 				)
 					facts.dip = true;
+				// a slot of the site pool: a frame's parent may be of another
+				// slot, out of the frame's reach. Its frame-src judges every
+				// navigation of the frame, and the frame's ancestors are what its
+				// next document's frame-ancestors judges (NavigationHint)
+				if (rewriter.config.sites && request.ancestors)
+					facts.framed = {
+						policies: request.framePolicies ?? [],
+						ancestors: request.ancestors,
+					};
 				// the document the hints machinery recorded for this response
 				// (its permissions policy, under its parent's): whether its real
 				// `sync-xhr` is off, which the served Permissions-Policy no longer
@@ -5521,12 +5824,12 @@ export function registerRewrites(
 					!!rewriter.blocker?.ready &&
 					(!rewriter.shields || rewriter.shields.blocks(url.url.hostname));
 				const adblock = adblockOn
-					? rewriter.blocker!.cosmetic(url.url.href, (script) =>
+					? await rewriter.blocker!.cosmetic(url.url.href, (script) =>
 							modifyJS(script, url, rewriter.config, 'generic'),
 						)
 					: null;
 				const listCsp = adblockOn
-					? rewriter.blocker!.documentCsp(
+					? await rewriter.blocker!.documentCsp(
 							url.url.href,
 							nestedTopOf(
 								new URL(request.routed).pathname,
@@ -5675,11 +5978,19 @@ export function registerRewrites(
 				// proxy origin embed itself: a proxied page's iframes are proxied
 				// pages too, and every ancestor has to match (YouTube's sign-in
 				// frame was blocked without 'self')
-				if (rewriter.config.frameAncestors?.length)
+				// (a slot of the site pool: its documents are framed by the hub's
+				// page and by documents of the other slots)
+				if (rewriter.config.frameAncestors?.length) {
+					const sites = rewriter.config.sites;
+					const ancestors = new Set([
+						...rewriter.config.frameAncestors,
+						...(sites ? [sites.hub, ...(sites.origins ?? [])] : []),
+					]);
 					filteredHeaders.set(
 						'content-security-policy',
-						`frame-ancestors 'self' ${rewriter.config.frameAncestors.join(' ')}`,
+						`frame-ancestors 'self' ${[...ancestors].join(' ')}`,
 					);
+				}
 
 				if (headers.has('refresh')) {
 					filteredHeaders.set(

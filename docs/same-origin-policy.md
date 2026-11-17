@@ -1270,6 +1270,81 @@ natively (`src/isolation.ts`, `src/server/rewrites.ts`):
   `allowedFeatures` in the native order); the real policy would show the
   denial the worker added.
 
+**Popups.** Measured natively (Chrome 152.0.7977.64, 156.0.8078.79 and
+157.0.8103.50 agree on every row; the kit is in the sp-popup notes):
+
+- Under a top-level page with COOP `same-origin` (with or without a COEP),
+  a frame of another origin than the top gets null from `window.open`,
+  about:blank included, and its link popups have no opener.
+- A popup leaves its opener (`closed` true at once, no message arrives)
+  when its first document's COOP does not match its initial about:blank's,
+  which is its creator's top-level document's when the creator is of that
+  document's origin and `unsafe-none` otherwise: `same-origin` against
+  anything but the same value and origin, `same-origin-allow-popups` only
+  against `same-origin`, `noopener-allow-popups` against itself of the same
+  origin. An about:blank popup never leaves.
+- A page with `Document-Isolation-Policy` (`isolate-and-credentialless` or
+  `isolate-and-require-corp`) is cross-origin isolated by itself: its
+  frames of another origin load without COEP or CORP and keep their
+  popups, and its dedicated workers are isolated without a COEP on their
+  script. Documents of one origin that differ in being isolated by it do
+  not reach each other (a SecurityError both ways); two that are, whatever
+  the value, do. An about:blank frame with
+  `allow="cross-origin-isolated 'none'"` reads `crossOriginIsolated` true
+  under such a page and false under COOP and COEP.
+
+With the site pool every proxied page is a frame of another origin than
+the host's page (its slot's), so under the isolated host (COOP
+`same-origin`) a proxied page gets null from `window.open('')` and
+`window.open('about:blank')`, and its popups have no opener: the
+open-a-blank-window-then-send-it-to-the-provider pattern of sign-in
+flows finds no window and no opener to answer. No COOP value both keeps
+the host isolated and gives such a frame its popups (docs/site-pool.md,
+"Popups under the isolated host"); a host page isolated by a
+Document-Isolation-Policy does, in Chrome 137 and later, which is a
+follow-up. The host that is not isolated, and the isolated host without
+the pool, have none of this.
+
+A page's COOP is emulated as without the pool (`src/coop.ts`): the worker
+of the slot a top-level navigation arrives at decides whether it leaves
+its browsing context group, from the facts its hint told the slot it left
+(carried across with the navigation), and gives the browser a real policy
+that makes it so. The browser keeps a group under COOP `same-origin` only
+for a document of the same real origin, and every slot is an origin of
+its own, so a window it holds that policy for never leaves its slot for a
+document that keeps the group natively (one that sends none): the
+navigation is served from the window's slot, as a site sharing it is.
+A
+frame of another origin than a top-level page that sent COOP `same-origin`
+opens its popups without an opener, as natively: the frame's route says so
+(the nested mark's `o`). With the pool a frame's route also carries its
+sandbox (`~` and its tokens), which a frame of another slot cannot read
+from its element: without it such a frame ran its scripts with no
+`allow-scripts` and opened its popups as host tabs.
+
+`popup-openers` (test/pages/popup-openers.js) compares with Chrome a page
+and a COOP `same-origin` page whose frames of another site open popups
+every way that keeps a window in the demo (written and navigated
+`window.open()`, and `window.open(url)` and links from a sandboxed frame;
+the demo takes every other one as a tab of its own): the window, its
+opener, messages both ways with their origin and source, `closed` and
+`close()`, a popup to a COOP `same-origin` page, links with and without
+`rel=noopener`, and a frame sandboxed without `allow-scripts`. It runs
+under a demo server whose page is isolated and one whose page is not.
+
+Left:
+
+- Under the isolated host with the pool, a proxied page's popups (above).
+- The COOP check is made on the document a redirect chain ends at, not on
+  each hop.
+- A popup opened on a name (`window.open(url, name)`, a link's named
+  target) may be a window that is already open, which the worker cannot
+  be told of: its COOP is not emulated. Nor is a link's popup in a host
+  that does not take links as tabs of its own (the demo does).
+- Without the pool the isolated host is one COOP `same-origin` group: a
+  popup of a sandboxed frame (sandboxed too) keeps no opener there, and a
+  link popup of one does not load.
+
 `cross-origin-isolation` (test/pages/coi.js, test/coi-server.mjs) loads one
 battery in documents with each set of headers of the table (12 kinds of
 page, one of them reached through redirects), natively and through the
@@ -1453,11 +1528,13 @@ suites' known lists with the same reason.
      the service worker's client otherwise).
    - No COOP or COEP report is sent (`report-to`, the Report-Only forms):
      nothing of the Reporting API is simulated.
-   - COOP's own effect is not simulated under an isolated host (every
-     popup is served COOP `same-origin` to stay in the host's group): a
-     popup without the headers that an isolated page opens keeps its
-     opener, where Chrome severs it. Under a host that is not isolated the
-     worker severs a popup as Chrome does (`src/coop.ts`, the coop suite).
+   - Under an isolated host every popup is served COOP `same-origin` to
+     stay in the host's group, and one that natively leaves its opener's
+     group (`src/coop.ts`) is served without it instead (with a
+     Document-Isolation-Policy when it is isolated natively), which takes
+     it out of the group as Chrome does (popup-openers). Under a host that
+     is not isolated the worker severs a popup with a policy of its own
+     (`src/coop.ts`, the coop suite).
    - A `blob:` worker's loads are not judged by the embedder policy it
      inherits; an origin named in an iframe's `allow` is not the proxy's
      real one, for this feature as for every other (the feature reaches a

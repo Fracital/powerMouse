@@ -151,16 +151,37 @@ for (const [mode, base] of [
 	if (frame) {
 		const { encode, prefix } = await codecOf(page);
 		const double = `${prefix}${encode(raw)}`;
+		// the worker's redirect to the single route
+		const redirects = [];
+		const onResponse = (response) => {
+			if (response.url() === double)
+				redirects.push([response.status(), response.headers().location]);
+		};
+		page.context().on('response', onResponse);
 		// a native navigation, past every hook: only the worker sees it
 		await frame.evaluate((url) => location.replace(url), double);
 		({ state } = await landed(page, loads + 1));
+		page.context().off('response', onResponse);
+		// the prefix is the host's controller's, so with the site pool the
+		// double route is on the hub's origin and the single one on a slot's:
+		// a redirect across origins, which the page's navigation timing does
+		// not count (Chrome counts same-origin redirects only)
+		const across = new URL(double).origin !== new URL(raw).origin;
 		ok(
 			`${mode}: a navigation to a double-routed URL lands on the single route`,
-			state.redirects === 1 &&
+			redirects.some(
+				([status, location]) => status === 307 && location === raw,
+			) &&
+				state.redirects === (across ? 0 : 1) &&
 				state.title === 'DOUBLE' &&
 				state.href === target &&
 				state.raw === raw,
-			JSON.stringify({ state, raw, double: double.slice(0, 80) }),
+			JSON.stringify({
+				state,
+				raw,
+				double: double.slice(0, 80),
+				redirects,
+			}),
 		);
 	}
 	await page.close();

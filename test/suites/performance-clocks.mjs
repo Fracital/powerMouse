@@ -5,7 +5,7 @@
 // and, in a cross-origin isolated page, the result of
 // performance.measureUserAgentSpecificMemory(), whose attribution names the
 // page's own URLs.
-import { done, launch, ok } from '../lib.mjs';
+import { done, launch, ok, SLOT_PORTS } from '../lib.mjs';
 import {
 	differences,
 	MODES,
@@ -42,6 +42,12 @@ const EXPECTED = {
 		[
 			/^memory\.frames\.crossSmaller: true -> false$/,
 			"a frame of another site reads the page's allocations in its own figure: every proxied site shares one renderer heap, and what the heap grew is not any one site's to tell",
+			// with the site pool a frame of another site is in a slot of its
+			// own, a process of its own whenever Chrome gives an
+			// Origin-Agent-Cluster origin one (docs/site-pool.md), which it
+			// does not always: Chrome 157 read it as natively in 2 of 3 runs
+			// in the same-origin page and 1 of 3 in the isolated one
+			SLOT_PORTS.length > 0,
 		],
 	],
 };

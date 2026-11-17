@@ -1,0 +1,107 @@
+<!doctype html>
+<title>SITE POOL</title>
+<body>
+	<a id="to" href="about:blank">to</a>
+	<form id="post" method="post" action="about:blank">
+		<input name="field" value="value" />
+		<button id="send">send</button>
+	</form>
+	<button id="open">open</button>
+	<iframe id="child" src="about:blank"></iframe>
+	<script>
+		// The site-pool suite drives it: `?to=<url>` is where the link, the
+		// form and #open go (`?target=` aims them), `?child=<url>` what the
+		// frame shows. `__sp.watch(ms)` measures how late this page's timers
+		// run for `ms` (a window of another page's busy loop shows when the
+		// two share an event loop), `__sp.spin(ms)` is that busy loop,
+		// `__sp.heap()` the JS heap the page sees (equal across pages that
+		// share a process), `__sp.rtt(n)` the median time of a message to the
+		// frame and its answer back, with the origins each side saw, and
+		// `__sp.probe()` the kit's probe: this page spins 300 ms while its
+		// frame measures its own timers.
+		const query = new URLSearchParams(location.search);
+		const to = query.get('to');
+		if (to) {
+			document.getElementById('to').href = to;
+			document.getElementById('post').action = to;
+		}
+		// `?target=_top`: the link, the form and #open's window.open are
+		// aimed at another window
+		const target = query.get('target');
+		if (target) {
+			document.getElementById('to').target = target;
+			document.getElementById('post').target = target;
+		}
+		document.getElementById('open').onclick = () => window.open(to, target);
+		const child = document.getElementById('child');
+		if (query.get('child')) child.src = query.get('child');
+		const waiting = new Map();
+		let asked = 0;
+		addEventListener('message', (event) => {
+			const data = event.data;
+			if (typeof data !== 'object' || data === null) return;
+			if ('spAsk' in data) {
+				// the frame's side: do what the parent asks and answer it
+				Promise.resolve(
+					data.spAsk === 'watch'
+						? window.__sp.watch(data.ms)
+						: data.spAsk === 'ping'
+							? event.origin
+							: null,
+				).then((answer) =>
+					event.source.postMessage({ spAnswer: data.id, answer }, event.origin),
+				);
+			} else if ('spAnswer' in data) {
+				const resolve = waiting.get(data.spAnswer);
+				waiting.delete(data.spAnswer);
+				resolve?.({ answer: data.answer, origin: event.origin });
+			}
+		});
+		const ask = (spAsk, extra = {}) =>
+			new Promise((resolve) => {
+				const id = ++asked;
+				waiting.set(id, resolve);
+				child.contentWindow.postMessage({ spAsk, id, ...extra }, '*');
+			});
+		window.__sp = {
+			watch: (ms) =>
+				new Promise((resolve) => {
+					let max = 0;
+					let last = performance.now();
+					const end = last + ms;
+					const tick = () => {
+						const now = performance.now();
+						max = Math.max(max, now - last);
+						last = now;
+						if (now < end) setTimeout(tick, 0);
+						else resolve(Math.round(max));
+					};
+					setTimeout(tick, 0);
+				}),
+			spin: (ms) => {
+				const start = performance.now();
+				while (performance.now() - start < ms);
+			},
+			heap: () => performance.memory?.usedJSHeapSize ?? null,
+			rtt: async (count) => {
+				const times = [];
+				let seen = null;
+				for (let i = 0; i < count + 20; i++) {
+					const start = performance.now();
+					const { answer, origin } = await ask('ping');
+					// the first twenty warm the path up
+					if (i >= 20) times.push(performance.now() - start);
+					seen = { child: answer, parent: origin };
+				}
+				times.sort((a, b) => a - b);
+				return { median: times[times.length >> 1], ...seen };
+			},
+			probe: async () => {
+				const watched = ask('watch', { ms: 900 });
+				await new Promise((resolve) => setTimeout(resolve, 200));
+				window.__sp.spin(300);
+				return (await watched).answer;
+			},
+		};
+	</script>
+</body>

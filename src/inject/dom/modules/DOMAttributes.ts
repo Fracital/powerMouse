@@ -77,8 +77,11 @@ import TokenListsModule from './TokenLists';
  * `allowfullscreen` read as `fullscreen *` where the attribute does not name
  * the feature, as Chrome reads it (empty: neither attribute)
  */
-function containerPolicy(element: Element): string {
-	const allow = element.getAttribute('allow');
+function containerPolicy(element: CustomElement): string {
+	// as the page wrote it (the site pool may give the browser another)
+	const allow = element.hasAttributeOG('allow')
+		? element.getAttributeOG('allow')
+		: element.getAttribute('allow');
 	if (!element.hasAttribute('allowfullscreen')) return allow ?? '';
 	if (allow !== null && /(?:^|;)\s*fullscreen(?:\s|;|$)/i.test(allow))
 		return allow;
@@ -1899,6 +1902,39 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			realm.HTMLIFrameElement.prototype,
 			'contentWindow',
 		)!.get!;
+		// a slot of the site pool: the browser reads the frame's allow for a
+		// document of another origin (../siteEvents.ts slotContainerPolicy), the page its own;
+		// before the frame is navigated too, since the browser takes the
+		// container policy with the navigation
+		// The property reads the page's attribute through a hook made the
+		// first time a frame's attribute is changed: until then the native
+		// getter reads what the page wrote, and a frame that never has an
+		// allow attribute (most) makes no wrappers for it
+		let allowRead = false;
+		// (made only under a pool)
+		const slotAllow: ((element: CustomElement) => void) | null = !this.client
+			.sites
+			? null
+			: (element) => {
+					if (element.nodeName !== 'IFRAME') return;
+					element.restoreAttributesOG('allow');
+					if (!element.hasAttribute('allow')) return;
+					const allow = element.getAttribute('allow')!;
+					if (!allowRead) {
+						allowRead = true;
+						domHooksModule.useAttributes(slotAllow!, [
+							[
+								this.client.global.HTMLIFrameElement,
+								'allow',
+								(element) => element.getAttributeOG('allow') ?? false,
+							],
+						]);
+					}
+					element.setAttributeOG('allow', allow);
+					element.setAttribute('allow', deferred().slotContainerPolicy(allow));
+				};
+		if (slotAllow)
+			domHooksModule.useAttributes(slotAllow, [['IFRAME', 'allow']]);
 		domHooksModule.useAttributes(
 			(element) => {
 				element.restoreAttributesOG('src');
@@ -1976,7 +2012,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							// attribute itself is kept from the browser, below)
 							moduleClient.hostIsolated
 								? moduleClient.childRouteFor(
-										element.getAttribute('allow'),
+										element.hasAttributeOG('allow')
+											? element.getAttributeOG('allow')
+											: element.getAttribute('allow'),
 										resource.url.origin,
 										element.hasAttributeOG('credentialless') ||
 											element.hasAttribute('credentialless'),
@@ -2014,6 +2052,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					} catch (error) {
 						// a document of another origin, or none
 					}
+					slotAllow?.(element);
 					element.setAttribute('src', routed);
 				}
 			},

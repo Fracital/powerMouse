@@ -5,9 +5,10 @@
 // keeps the origin's length, for a GET and a HEAD, as natively (a gzipped
 // one too). A HEAD of a route that transforms has no body to measure, so it
 // says no length. Both modes; the route-level HEAD in same-origin mode, where
-// the host can fetch as the proxied frame.
+// a frame the proxied document holds can fetch as it.
 import {
 	done,
+	evaluateIsolated,
 	FIXTURE,
 	HOST,
 	launch,
@@ -106,48 +107,42 @@ for (const [mode, base] of [
 		// a srcdoc frame the host's own DOM methods put in the proxied document
 		// has no hooks, and the worker controls it (it inherits its parent's):
 		// its fetch of the document's route reaches the worker
-		const route = await page
-			.evaluate(async () => {
-				// Location's members are unforgeable: the frame's hooks cannot
-				// reach them, so this is its routed URL
-				const frame = [...document.querySelectorAll('iframe')]
-					.map((element) => element.contentWindow)
-					.find((w) => {
-						try {
-							return /\/stomp\/[\w-]+\/html[:/]/.test(w.location.href);
-						} catch (error) {
-							return false;
-						}
-					});
-				// the page's frame of content-length-head.html.bin, whose origin
-				// says its length for a HEAD too
-				const url = frame.frames[0].location.href;
-				const blank = Document.prototype.createElement.call(
-					frame.document,
-					'iframe',
-				);
+		// (made in a world of its own in the proxied frame: with the site pool
+		// the frame is another origin and process than the host. The fetches
+		// are the srcdoc document's own: a fetch of an isolated world does
+		// not reach the worker, measured)
+		const proxiedFrame = frameOf(page);
+		const route = await (async () => {
+			// Location's members are unforgeable: the frame's hooks cannot
+			// reach them, so this is its routed URL. The page's frame of
+			// content-length-head.html.bin, whose origin says its length for a
+			// HEAD too
+			const url = await evaluateIsolated(proxiedFrame, async () => {
+				const blank = document.createElement('iframe');
 				// a srcdoc document is controlled by its parent's worker
-				Element.prototype.setAttribute.call(blank, 'srcdoc', '<p>probe</p>');
+				blank.setAttribute('srcdoc', '<p>probe</p>');
 				const loaded = new Promise((resolve) =>
-					EventTarget.prototype.addEventListener.call(blank, 'load', resolve),
+					blank.addEventListener('load', resolve),
 				);
-				Node.prototype.appendChild.call(frame.document.body, blank);
+				document.body.appendChild(blank);
 				await loaded;
-				const own = Reflect.getOwnPropertyDescriptor(
-					HTMLIFrameElement.prototype,
-					'contentWindow',
-				).get.call(blank);
-				const get = await own.fetch(url);
-				const head = await own.fetch(url, { method: 'HEAD' });
+				return frames[0].location.href;
+			});
+			const blank = proxiedFrame
+				.childFrames()
+				.find((frame) => frame.url() === 'about:srcdoc');
+			return blank.evaluate(async (url) => {
+				const get = await fetch(url);
+				const head = await fetch(url, { method: 'HEAD' });
 				return {
 					get: get.headers.get('content-length'),
 					body: (await get.arrayBuffer()).byteLength,
 					head: head.headers.get('content-length'),
 					headType: head.headers.get('content-type'),
-					controlled: !!own.navigator.serviceWorker?.controller,
+					controlled: !!navigator.serviceWorker?.controller,
 				};
-			})
-			.catch((error) => ({ error: String(error).slice(0, 200) }));
+			}, url);
+		})().catch((error) => ({ error: String(error).slice(0, 200) }));
 		ok(
 			"same-origin: a GET of a document's route says the shell's length, a HEAD says none (its origin said one)",
 			(route.get === null || Number(route.get) === route.body) &&

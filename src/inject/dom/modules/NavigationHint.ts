@@ -153,6 +153,7 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 		const judgeFrame = (this.judgeFrame = (event, destination) => {
 			const navigate = event as Event & { navigationType?: string };
 			const parent = moduleClient.parentClient();
+			if (!parent) return judgeAcross?.(event, destination) ?? null;
 			// (the destination reads as the page's URL, a route's real one;
 			// a refusal URL is one already)
 			const real = parent && unrouteURL(moduleClient, destination);
@@ -188,6 +189,16 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 			});
 			return false;
 		});
+		// the site pool: a frame whose parent is a document of another slot,
+		// which it cannot reach (a deferred part, ../siteEvents.ts judgeAcross;
+		// made only under a pool)
+		const judgeAcross = this.client.sites
+			? (event: Event, destination: string) =>
+					this.client.scriptFacts.framed &&
+					(global.parent as unknown) !== global
+						? deferred().judgeAcross(this.client, event, destination, send)
+						: null
+			: null;
 		navigation.addEventListener('navigate', (event) => {
 			const navigate = event as Event & {
 				destination?: { url: string; sameDocument: boolean };

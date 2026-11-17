@@ -8,6 +8,7 @@
 // the worker asks for them over its control channel.
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import { constructTransport, resolveHttp3 } from './construct';
+import { jarChanged, serveJar } from './jarServer';
 import {
 	KEEPALIVE_MS,
 	TRANSPORT_WORKER_RPC,
@@ -56,6 +57,29 @@ const rpc = new RpcHelper<WorkerBound, WorkerToController>(
 				async (url, origin) => rpc.call('admit', { url: url.href, origin }),
 			);
 		},
+		serveDecorated: async ({ port, decorate }) => {
+			await ready;
+			// the handshake headers are asked of whoever sent the port (a
+			// slot's controller)
+			const asked = new RpcHelper<Record<never, never>, WorkerToController>(
+				{},
+				TRANSPORT_WORKER_RPC,
+				(data, transfer) => decorate.postMessage(data, transfer),
+			);
+			decorate.addEventListener('message', (event) =>
+				asked.receive(event.data),
+			);
+			decorate.start();
+			serveTransport(
+				port,
+				() => transport!,
+				async (url, headers) =>
+					asked.call('decorate', { url: url.href, headers }),
+				async (url, origin) => asked.call('admit', { url: url.href, origin }),
+			);
+		},
+		serveJar: async (port) => serveJar(port),
+		jarChanged: async (domain) => jarChanged(domain),
 	},
 	TRANSPORT_WORKER_RPC,
 	(data, transfer) => self.postMessage(data, transfer),

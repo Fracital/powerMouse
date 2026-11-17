@@ -587,9 +587,15 @@ export default class IFrameModule extends Module<DocumentClient> {
 				// a navigation the browser did not show (a document its
 				// embedder's policy refused, a network error) leaves the
 				// browser's own error document: of another origin to everyone,
-				// as natively, and nothing of this page's to inject
+				// as natively, and nothing of this page's to inject (the site
+				// pool: another slot's document too, restricted as without a
+				// pool, ContextModule)
 				if (context && !reachable(context))
-					return windowModule.restrictOpaque(context);
+					return this.client.sites
+						? // the frame's window as every other path answers it, the
+							// window this realm held before a fresh context included
+							windowModule.newRestricted(context)
+						: windowModule.restrictOpaque(context);
 
 				if (
 					context &&
@@ -660,6 +666,9 @@ export default class IFrameModule extends Module<DocumentClient> {
 							getContentWindowDescriptor.get!.call(that)
 						)
 							return null;
+						// the site pool: another origin's document, which the
+						// browser does not hand out
+						if (this.client.sites && !reachable(context)) return null;
 
 						return context.document;
 					},

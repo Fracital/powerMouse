@@ -302,10 +302,22 @@ export function embedderRefuses(
 	return !(policy === 'cross-origin' || (policy === 'same-site' && sameSite));
 }
 
-/** what the service worker adds to a document it serves to a host whose page is cross-origin isolated */
+/**
+ * What the service worker adds to a document it serves to a host whose page
+ * is cross-origin isolated. `severed`: a top-level document (a popup) that
+ * natively leaves its opener's browsing context group (src/coop.ts
+ * switchesGroup): it is served without the COOP that keeps it in the
+ * host's group, and with a Document-Isolation-Policy when it is isolated
+ * natively (Chrome 137 and later honour it), since it is then out of the
+ * group that isolated it.
+ */
 export function isolationResponseHeaders(
 	headers: Headers,
-	{ isolated, topLevel }: { isolated: boolean; topLevel: boolean },
+	{
+		isolated,
+		topLevel,
+		severed = false,
+	}: { isolated: boolean; topLevel: boolean; severed?: boolean },
 ) {
 	// without an embedder policy no frame loads in the host's page; with
 	// credentialless a load that is not the proxy's own is not refused for
@@ -315,7 +327,10 @@ export function isolationResponseHeaders(
 	headers.set('cross-origin-resource-policy', 'cross-origin');
 	// a window the page opens stays in the host's browsing context group
 	// (its opener would be gone otherwise), and is isolated as the host is
-	if (topLevel) headers.set('cross-origin-opener-policy', 'same-origin');
+	if (isolated && topLevel && severed)
+		headers.set('document-isolation-policy', 'isolate-and-credentialless');
+	if (topLevel && !severed)
+		headers.set('cross-origin-opener-policy', 'same-origin');
 	// the page's own Permissions-Policy never reaches the browser
 	// (src/server/filterHeaders.ts): this one is the proxy's, and under it
 	// Chrome gives the document what one without isolation has

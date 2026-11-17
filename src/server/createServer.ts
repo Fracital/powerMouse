@@ -15,7 +15,7 @@ import {
 	validConfigCodecKey,
 } from '../config';
 import { workerKindPartition } from '../partition';
-import { parseRoutedURL } from '../routeURL';
+import { parseRoutedURL, proxyOrigins } from '../routeURL';
 import StompURL from '../StompURL';
 import { getPublicSuffix } from '../suffix';
 import type {
@@ -31,7 +31,7 @@ import {
 	type VisitedContext,
 } from '../visited';
 import { heldModules, moduleOf } from '../wasm/thread';
-import { Blocker, registerBlocker } from './blocker';
+import { Blocker, registerBlocker, type BlockerLike } from './blocker';
 import { HttpCache, memoryCache } from './cache';
 import {
 	CACHE_SECRET_KEY,
@@ -43,9 +43,10 @@ import {
 import Cookies, { openCookies, registerCookies } from './Cookies';
 import { hostErrorPage } from './errorPage';
 import { registerIntegrityLoads } from './integrityLoads';
+import { RemoteJar, type JarPort } from './jarDB';
 import { registerKeptLoads } from './keptLoads';
 import { registerMediaLoads } from './mediaLoads';
-import { registerPermissionRoute } from './permissions';
+import { registerPermissionRoute, usePermissionsRemote } from './permissions';
 import { RewriteCache } from './rewriteCache';
 import type { RewritePool } from './rewritePool';
 import { registerRewrites } from './rewrites';
@@ -88,8 +89,12 @@ export interface StompServer {
 	codec: GenericCodec;
 	/** the routed URL of a real one under a route kind (`binary`, `sw:<version>`) */
 	routeAs(kind: string, url: string): string;
-	/** the built-in blocker, unless the host turned it off (docs/adblock.md) */
-	blocker?: Blocker;
+	/**
+	 * the built-in blocker, unless the host turned it off (docs/adblock.md);
+	 * a slot of the site pool asks the hub's worker's
+	 * (src/server/remoteBlocker.ts)
+	 */
+	blocker?: BlockerLike;
 	/**
 	 * Change the built-in blocker's lists at runtime (the controller's `adblock`
 	 * RPC, from the demo's Filter Lists editor): the engine is rebuilt in place
@@ -106,6 +111,8 @@ export interface StompServer {
 	linkOf(routed: string): { context: VisitedContext; url: URL } | null;
 	/** the link route of `url` for a link in a document of `context` */
 	linkRoute(context: VisitedContext, url: URL): string;
+	/** the key of this server's codec (the site pool hands the host's to every slot's worker) */
+	codecKey: string;
 }
 
 /** the public suffix of a host, private registries counted, as Chrome's sites have it */
@@ -195,11 +202,19 @@ function reconfigureBlocker(
 	return blocker.reconfigure(init, force);
 }
 
-function sharedStores(scope: string): Promise<SharedStores> {
+/** the site pool: the host's jar as this worker asks it (src/server/jarDB.ts) */
+let remoteJar: RemoteJar | undefined;
+
+function sharedStores(scope: string, jar?: JarPort): Promise<SharedStores> {
+	// every handshake's port, the newest asked first (RemoteJar)
+	if (jar) {
+		(remoteJar ??= new RemoteJar()).bind(jar);
+		usePermissionsRemote(remoteJar);
+	}
 	let stores = shared.get(scope);
 	if (!stores) {
 		stores = (async () => ({
-			cookies: await openCookies(),
+			cookies: await openCookies(jar ? remoteJar : undefined),
 			cache: new HttpCache(),
 			rewrites: new RewriteCache(),
 			storage: await openStorage(),
@@ -230,6 +245,8 @@ const CODECS: ConfigCodec[] = ['generic', 'xor', 'aes', 'base64'];
 /** what the worker remembers about an address: `controller:<address>` rows */
 interface AddressRecord {
 	codec: ConfigCodec;
+	/** a slot of the site pool: the hub's origin (Config.sites), which shows the address's documents once its agent is gone */
+	hub?: string;
 	/** when the row was written, so the oldest go first */
 	at: number;
 }
@@ -253,6 +270,26 @@ export async function addressCodec(
 		`controller:${directory}`,
 	);
 	return record && CODECS.includes(record.codec) ? record.codec : undefined;
+}
+
+/** a slot's config: the origin of its hub's controller (SitesConfig.home) */
+export function slotHome(config: Config): string | undefined {
+	return config.sites?.home ?? config.sites?.hub;
+}
+
+/**
+ * The site pool: the hub's origin of the agent that was (or is) registered
+ * at `directory` on this slot's origin, undefined for any other address
+ */
+export async function addressHub(
+	directory: string,
+): Promise<string | undefined> {
+	const db = await openConfigDB();
+	const record: AddressRecord | undefined = await db.get(
+		'consts',
+		`controller:${directory}`,
+	);
+	return typeof record?.hub === 'string' ? record.hub : undefined;
 }
 
 /** a regexp source matching exactly `text` */
@@ -290,6 +327,12 @@ export default async function createServer(
 	pool?: RewritePool,
 	/** the built-in blocker's lists, unless the host turned it off */
 	adblock?: AdblockInit,
+	/** the site pool: the host's worker's codec key, which this worker takes */
+	givenKey?: string,
+	/** the site pool: the host's cookie jar, asked over this port */
+	jar?: JarPort,
+	/** a slot of the site pool: the hub's worker's blocker, instead of an engine of this worker's */
+	remoteBlocker?: BlockerLike,
 ): Promise<StompServer> {
 	const db = await openConfigDB();
 
@@ -302,6 +345,12 @@ export default async function createServer(
 	// (a key of the xor codec before docs/codec.md is none of today's: its
 	// routes showed most of the URL, and a new one is drawn in its place)
 	if (
+		givenKey !== undefined &&
+		(await store.get(`codecKey:${config.codec}`)) !== givenKey
+	) {
+		await store.put(givenKey, `codecKey:${config.codec}`);
+		newKey = true;
+	} else if (
 		!validConfigCodecKey(
 			config.codec,
 			await store.get(`codecKey:${config.codec}`),
@@ -324,7 +373,11 @@ export default async function createServer(
 	// the address's codec outlives the controller (see addressCodec); the
 	// scope keeps the newest ADDRESS_ROWS of them
 	await store.put(
-		{ codec: config.codec, at: Date.now() } satisfies AddressRecord,
+		{
+			codec: config.codec,
+			at: Date.now(),
+			...(slotHome(config) ? { hub: slotHome(config) } : {}),
+		} satisfies AddressRecord,
 		`controller:${config.directory}`,
 	);
 	const scopeKey = `controller:${config.scope}`;
@@ -353,21 +406,33 @@ export default async function createServer(
 	}
 
 	const init = parseConfig(config, codecKey);
-	const stores = await sharedStores(init.scope);
+	const stores = await sharedStores(init.scope, jar);
 
 	const router = new Router(init.directory);
 	const scopePrefix = `${location.origin}${init.scope}`;
 	const linkOf = (routed: string) =>
 		parseLinkRoute(routed, init.codec, scopePrefix, publicSuffix);
 	const realURL = (routed: string): string => {
+		// with the site pool a route is this origin's or another of the
+		// proxy's (the hub's, a slot's: proxyOrigins), which a host reads off
+		// a frame of the pool
+		const origin =
+			proxyOrigins(init).find((other) =>
+				routed.startsWith(`${other}${init.scope}`),
+			) ?? location.origin;
 		// a link's route stands for its URL as a document's does
-		const link = linkOf(routed);
+		const link = parseLinkRoute(
+			routed,
+			init.codec,
+			`${origin}${init.scope}`,
+			publicSuffix,
+		);
 		if (link) return link.url.href;
 		try {
 			return parseRoutedURL(
 				routed,
 				init.codec,
-				`${location.origin}${init.directory}`,
+				`${origin}${init.directory}`,
 			).url.toString();
 		} catch (error) {
 			return routed;
@@ -429,9 +494,10 @@ export default async function createServer(
 				headers: { 'content-type': 'text/javascript' },
 			}),
 	);
-	const blocker = adblock
-		? sharedBlocker(init.scope, adblock, new BareCompatibleClient(transport))
-		: undefined;
+	const blocker: BlockerLike | undefined = !adblock
+		? undefined
+		: (remoteBlocker ??
+			sharedBlocker(init.scope, adblock, new BareCompatibleClient(transport)));
 	const shields = new ShieldsStore();
 	const { route, setRules, hostReloaded } = registerRewrites(
 		router,
@@ -461,7 +527,7 @@ export default async function createServer(
 		shields,
 		setShields: (list, seed) => shields.set(list, seed),
 		reloadBlocker: (next, force = false) =>
-			blocker
+			blocker instanceof Blocker
 				? reconfigureBlocker(init.scope, blocker, next, force)
 				: Promise.resolve(),
 		cookies,
@@ -494,6 +560,7 @@ export default async function createServer(
 			return `${prefix}${kind}/${new StompURL(url, init.codec, prefix).encode()}`;
 		},
 		linkOf,
+		codecKey,
 		linkRoute: (context, url) =>
 			linkRoute(
 				scopePrefix,

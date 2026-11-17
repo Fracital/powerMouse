@@ -8,6 +8,14 @@
 // worker is still the one it started with: same-origin, isolated, and a
 // controller that hosts its transport in the page.
 //
+// With a site pool (docs/site-pool.md) the page is shown from a slot's
+// origin, whose agent runs a worker of its own: that worker is the one
+// checked to be the shown document's (a slot's when the run has slot
+// ports), running from the start to the end. The hub starts a spare
+// slot's agent once the page is idle (SiteHub.warm), and that worker's
+// version first reports itself stopped and then starts: a version is
+// stopped when it reports stopping or stopped after it ran.
+//
 // A worker a debugger is attached to is never stopped, and Playwright
 // attaches to every worker, so each case runs in a Chrome of its own that
 // is spoken to over the DevTools protocol with only the page attached.
@@ -26,6 +34,7 @@ import {
 	PORT,
 	PROXY,
 	sleep,
+	SLOT_PORTS,
 	waitForServer,
 } from '../lib.mjs';
 
@@ -112,10 +121,40 @@ async function chrome() {
 		targetId,
 		flatten: true,
 	});
+	// the page's frames in processes of their own (a site pool's slot,
+	// docs/site-pool.md), each attached once (a frame, not a worker: the
+	// worker stays free of a debugger)
+	const frameSessions = new Map();
+	/** the first frame matching `pattern` that answers `expression`: { value, url } */
+	const frameEvaluate = async (pattern, expression) => {
+		const { targetInfos } = await call('Target.getTargets');
+		for (const target of targetInfos) {
+			if (target.type !== 'iframe' || !pattern.test(target.url)) continue;
+			if (!frameSessions.has(target.targetId))
+				frameSessions.set(
+					target.targetId,
+					(
+						await call('Target.attachToTarget', {
+							targetId: target.targetId,
+							flatten: true,
+						})
+					).sessionId,
+				);
+			const { result } = await call(
+				'Runtime.evaluate',
+				{ expression, returnByValue: true },
+				frameSessions.get(target.targetId),
+			);
+			if (result?.value !== undefined)
+				return { value: result.value, url: target.url };
+		}
+		return null;
+	};
 	return {
 		send: (method, params) => call(method, params, sessionId),
 		browser: call,
 		on: (listener) => listeners.push(listener),
+		frameEvaluate,
 		async evaluate(expression) {
 			const { result, exceptionDetails } = await call(
 				'Runtime.evaluate',
@@ -161,7 +200,10 @@ const TITLE = (scope) => `(() => {
 	return null;
 })()`;
 
-/** the demo at `base` with hist-1.html in its first tab */
+/**
+ * the demo at `base` with hist-1.html in its first tab: the port of the
+ * origin whose worker serves it, null when it did not load
+ */
 async function demo(page, base) {
 	await page.send('Page.navigate', { url: base });
 	await until(
@@ -173,15 +215,30 @@ async function demo(page, base) {
 		form.url.value = ${JSON.stringify(`${FIXTURE}pages/hist-1.html`)};
 		form.requestSubmit();
 	})()`);
-	if (base === PROXY) return until(page, `${TITLE('stomp')} === 'HIST 1'`);
-	// the frame is another site's: the controller says where it is
-	return until(
-		page,
-		`/hist-1\\.html$/.test(window.controller?.frames?.at(-1)?.url ?? '')`,
-	);
+	if (base !== PROXY)
+		// the frame is another site's, its worker the host's: the controller
+		// says where it is
+		return (await until(
+			page,
+			`/hist-1\\.html$/.test(window.controller?.frames?.at(-1)?.url ?? '')`,
+		))
+			? PORT
+			: null;
+	// the frame is the host's origin without a site pool, and a slot's (in a
+	// process of its own) with one
+	for (let i = 0; i < 240; i++) {
+		if ((await page.evaluate(TITLE('stomp')).catch(() => null)) === 'HIST 1')
+			return PORT;
+		const shown = await page
+			.frameEvaluate(/\/stomp\/[\w-]+\/html\//, 'document.title')
+			.catch(() => null);
+		if (shown?.value === 'HIST 1') return new URL(shown.url).port;
+		await sleep(250);
+	}
+	return null;
 }
 
-/** transport-host.html with an in-page transport and hist-1.html in a frame */
+/** transport-host.html with an in-page transport and hist-1.html in a frame: the fixture's port (its worker's), null when it did not load */
 async function inPage(page) {
 	const query = new URLSearchParams({
 		wisp: `ws://127.0.0.1:${PORT}/wisp/`,
@@ -197,10 +254,10 @@ async function inPage(page) {
 		const origin = location.origin.replace('127.0.0.1', 'localhost');
 		await window.controller.createFrame(element).go(origin + '/pages/hist-1.html');
 	})()`);
-	return (
-		(await until(page, `${TITLE('neutral')} === 'HIST 1'`)) &&
+	return (await until(page, `${TITLE('neutral')} === 'HIST 1'`)) &&
 		(await page.evaluate('window.__th.host')) === 'page'
-	);
+		? new URL(FIXTURE).port
+		: null;
 }
 
 await waitForServer(PROXY);
@@ -217,23 +274,39 @@ const results = await Promise.all(
 		try {
 			page = await chrome();
 			await page.send('Page.enable');
-			const loaded = await open(page);
-			// the proxy's worker, as the browser reports it: every change of
-			// its running status from here on
+			// the port of the origin whose worker serves the shown document
+			const shown = await open(page);
+			const loaded = shown !== null;
+			// the proxy's workers (the host origin's, and with a site pool
+			// each slot's agent's, a spare's too), as the browser reports
+			// them: every change of each one's running status from here on,
+			// with the version's status
 			const changes = [];
-			let last = null;
+			const statuses = new Map();
+			const ran = new Set();
+			const stops = [];
 			const started = Date.now();
 			page.on((message) => {
 				if (message.method !== 'ServiceWorker.workerVersionUpdated') return;
 				for (const version of message.params.versions) {
 					// the proxy's, not a worker of the browser's own extensions
 					if (!version.scriptURL.startsWith('http')) continue;
-					if (version.runningStatus === last) continue;
-					last = version.runningStatus;
-					changes.push([
+					if (statuses.get(version.versionId) === version.runningStatus)
+						continue;
+					statuses.set(version.versionId, version.runningStatus);
+					const change = [
 						Math.round((Date.now() - started) / 100) / 10,
+						new URL(version.scriptURL).port,
 						version.runningStatus,
-					]);
+						version.status,
+					];
+					changes.push(change);
+					if (
+						version.runningStatus === 'starting' ||
+						version.runningStatus === 'running'
+					)
+						ran.add(version.versionId);
+					else if (ran.has(version.versionId)) stops.push(change);
 				}
 			});
 			await page.send('ServiceWorker.enable');
@@ -247,7 +320,8 @@ const results = await Promise.all(
 			}
 			await sleep(IDLE_MS);
 			const visibility = await page.evaluate('document.visibilityState');
-			return { name, loaded, changes, last, visibility };
+			const last = [...new Set(statuses.values())];
+			return { name, loaded, shown, changes, stops, last, visibility };
 		} catch (error) {
 			return { name, error: String(error) };
 		} finally {
@@ -256,7 +330,16 @@ const results = await Promise.all(
 	}),
 );
 
-for (const { name, loaded, changes, last, visibility, error } of results) {
+for (const {
+	name,
+	loaded,
+	shown,
+	changes,
+	stops,
+	last,
+	visibility,
+	error,
+} of results) {
 	ok(
 		`${name}: a page loads`,
 		loaded === true,
@@ -264,11 +347,25 @@ for (const { name, loaded, changes, last, visibility, error } of results) {
 	);
 	ok(
 		`${name}: after ${IDLE_MS / 1000} s with nothing happening the worker has not been stopped`,
-		last === 'running' &&
-			!changes.some(
-				([, status]) => status === 'stopped' || status === 'stopping',
-			),
+		JSON.stringify(last) === '["running"]' && stops?.length === 0,
 		JSON.stringify({ visibility, changes }),
+	);
+	// the shown document's worker: running when the page sat down and never
+	// after reported anything else (with a site pool, a slot's worker kept
+	// running by the hub's clock, SiteHub.tick)
+	const own = (changes ?? []).filter(([, port]) => port === shown);
+	ok(
+		`${name}: the worker of the shown document runs for the ${IDLE_MS / 1000} s${
+			name === 'same-origin' && SLOT_PORTS.length
+				? ' (a slot of the site pool)'
+				: ''
+		}`,
+		own.length > 0 &&
+			own.every(([, , status]) => status === 'running') &&
+			(name !== 'same-origin' ||
+				!SLOT_PORTS.length ||
+				SLOT_PORTS.includes(Number(shown))),
+		JSON.stringify({ shown, slots: SLOT_PORTS, own }),
 	);
 }
 

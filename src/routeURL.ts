@@ -49,6 +49,29 @@ export function pageBlobURL(url: string): string {
 }
 
 /**
+ * The proxy's origins besides the realm's own that a config names: with the
+ * site pool (docs/site-pool.md) a slot's hub, the hub's controller when that
+ * is a frame of another origin (isolation mode: SitesConfig.home) and every
+ * slot (Config.sites), or a hub's slots (Config.slotOrigins). A route on one
+ * is a route, and a route to one is the proxy's own origin. Never a reason
+ * to treat one as the document's origin: the slots are other origins to the
+ * emulated same-origin policy.
+ */
+export function proxyOrigins(config: Pick<Config, 'sites' | 'slotOrigins'>) {
+	const sites = config.sites;
+	return [
+		...(sites
+			? [
+					sites.hub,
+					...(sites.home && sites.home !== sites.hub ? [sites.home] : []),
+					...(sites.origins ?? []),
+				]
+			: []),
+		...(config.slotOrigins ?? []),
+	];
+}
+
+/**
  * Where routes live, as `<proxy origin><scope>`: the realm's own (the
  * client's) or every controller's (the service worker's). A URL under one
  * of them is already a route.

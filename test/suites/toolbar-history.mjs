@@ -15,7 +15,16 @@
 // going back, and two tabs browsed in turn: every tab of the demo is a frame
 // of one page, so they share the browser's session history, where native
 // tabs have one each.
-import { done, FIXTURE, HOST, launch, ok, PROXY, sleep } from '../lib.mjs';
+import {
+	done,
+	FIXTURE,
+	HOST,
+	launch,
+	ok,
+	PROXY,
+	sleep,
+	SLOT_PORTS,
+} from '../lib.mjs';
 
 const ONE = `${FIXTURE}pages/`;
 // the fixture under another name: another site
@@ -54,6 +63,25 @@ const SEQUENCES = {
 		['back'],
 		['forward'],
 		['forward'],
+	],
+	// a page that replaces itself with another site's document by script:
+	// that document takes its entry (under a site pool, docs/site-pool.md,
+	// from another slot's origin)
+	"a page replaced by another site's": [
+		['open', page('A')],
+		['link', later('L', auto('location-replace', page('T', OTHER)))],
+		['back'],
+		['forward'],
+		['act', 'location-replace', page('R')],
+		['back'],
+		['forward'],
+	],
+	"the first page replaced by another site's": [
+		['open', later('L', auto('location-replace', page('T', OTHER)))],
+		['back'],
+		['link', page('U')],
+		['back'],
+		['back'],
 	],
 	'pushState, replaceState and fragments': [
 		['open', page('A')],
@@ -242,6 +270,28 @@ const SEQUENCES = {
 		['link', page('E')],
 		['back'],
 		['switch', 1],
+		['back'],
+	],
+	// the same across sites: under a site pool (docs/site-pool.md) a tab's
+	// steps to a document of another site cross from one slot's origin to
+	// another's, after the other tab moved the joint history or before
+	'two tabs on two sites in turn': [
+		['open', page('A')],
+		['link', page('B', OTHER)],
+		['tab', page('C', OTHER)],
+		['link', page('D', OTHER)],
+		['switch', 0],
+		['back'],
+		['forward'],
+		['back'],
+		['switch', 1],
+		['back'],
+		['forward'],
+		['link', page('E')],
+		['back'],
+		['forward'],
+		['switch', 0],
+		['forward'],
 		['back'],
 	],
 };
@@ -450,11 +500,12 @@ async function demo(name, steps, expected, mode, base) {
 				document.readyState === 'complete' && !!document.getElementById('act'),
 		);
 	// the proxied page's titles: through the host page in same-origin mode,
-	// over the frame's own CDP session in isolation (a frame of another site
-	// runs in a process of its own)
+	// over the frame's own CDP session in isolation and under a site pool (a
+	// frame of another origin runs in a process of its own; with the pool,
+	// SLOT_PORTS, the proxied page is of a slot's origin, docs/site-pool.md)
 	const sessions = new Map();
 	const frameTitles = async () => {
-		if (mode === 'same-origin')
+		if (mode === 'same-origin' && !SLOT_PORTS.length)
 			return (
 				(await quietly(
 					await viewSession(),

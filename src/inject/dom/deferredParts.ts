@@ -108,6 +108,18 @@ import { openerFacts, opensWithoutOpener } from './openerFacts';
 import { pictureWindows } from './pictureWindows';
 import { presentationIds } from './presentations';
 import { rtcInstall } from './rtcInstall';
+import {
+	acceptAcross,
+	navigateAcross,
+	submitAimed,
+	targetAcross,
+} from './siteAcross';
+import {
+	judgeAcross,
+	onOwnSlot,
+	receiveAcross,
+	slotContainerPolicy,
+} from './siteEvents';
 import { sourcePolicy } from './sourcePolicy';
 import { storageAccessHandle } from './storageAccess';
 import { writeStream } from './WriteStream';
@@ -169,6 +181,14 @@ const parts = {
 	xmlProlog,
 	modifyXML,
 	ownStoreRefusal,
+	targetAcross,
+	navigateAcross,
+	acceptAcross,
+	submitAimed,
+	judgeAcross,
+	receiveAcross,
+	onOwnSlot,
+	slotContainerPolicy,
 };
 
 export type DeferredParts = typeof parts;

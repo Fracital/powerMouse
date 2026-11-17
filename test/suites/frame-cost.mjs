@@ -100,7 +100,7 @@
 // past both.
 import { statSync } from 'node:fs';
 import { measureFrames } from '../frame-memory.mjs';
-import { done, FIXTURE, ok } from '../lib.mjs';
+import { done, FIXTURE, ok, SLOT_PORTS } from '../lib.mjs';
 
 const BUNDLE = new URL('../../dist/injectDocument.js', import.meta.url);
 const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 500;
@@ -108,6 +108,12 @@ const FRAMES = Number(process.env.FRAMES) || 20;
 const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1134;
 const OTHER_LIMIT_KB = Number(process.env.FRAME_HEAP_OTHER_LIMIT_KB) || 1136;
 const CLICK_LIMIT_KB = Number(process.env.FRAME_HEAP_CLICK_LIMIT_KB) || 1149;
+// With the site pool on (STOMP_SITE_POOL) a frame of another site is a
+// slot's: its first one takes the pool's spare and the hub starts the next,
+// about 3.4 MB once, which 20 frames would read as 170 KB each, so the
+// frames of another site are measured after a first one settled (`warm`).
+// The ceilings are the same (docs/frame-memory.md, "With the site pool").
+const POOL = SLOT_PORTS.length > 0;
 
 const bundleKB = statSync(BUNDLE).size / 1024;
 ok(
@@ -133,6 +139,7 @@ const other = await measureFrames({
 	proxied: true,
 	base: otherSite,
 	frames: FRAMES,
+	warm: POOL,
 });
 ok(
 	`all ${FRAMES} proxied frames of another site ran their script`,
@@ -150,6 +157,7 @@ const clicked = await measureFrames({
 	base: otherSite,
 	frames: FRAMES,
 	click: 'refresh',
+	warm: POOL,
 });
 ok(
 	`all ${FRAMES} proxied frames of another site loaded their next document after a click`,

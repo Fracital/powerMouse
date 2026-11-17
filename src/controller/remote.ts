@@ -30,6 +30,12 @@ import type {
 import { RpcHelper } from '../transport/rpc';
 import { BUILD } from '../version';
 import { ClientFrames } from './clientFrames';
+import {
+	framePath,
+	type ReportedEntry,
+	type SiteHistoryAnswer,
+	type SiteHistoryOp,
+} from './history';
 import { hostReload } from './hostReload';
 import { controllerId, forgetControllerIds, keptControllerId } from './id';
 import {
@@ -39,9 +45,11 @@ import {
 	cookieJar,
 	frameMovedReport,
 	frameOfSource,
+	historyRunReport,
 	hookErrorReport,
 	navigateReport,
 	NAVIGATION_WAIT_MS,
+	navigationTypeReport,
 	openRequest,
 	passkeyManager,
 	REPORT_GRACE_MS,
@@ -57,6 +65,8 @@ import {
 	TransportDescriptor,
 } from './messages';
 import { createShields, type Shields } from './shields';
+import type { SitePoolInit } from './sitePool';
+import { SiteRuns } from './siteRuns';
 
 export interface RemoteControllerInit {
 	/** origin that serves dist/ and the proxied content, e.g. https://proxy.example.com */
@@ -150,6 +160,15 @@ export interface RemoteControllerInit {
 		request: RemotePermissionRequest,
 	) => boolean | null | Promise<boolean | null>;
 	/**
+	 * The site pool (see StompController's sitePool): origins that serve the
+	 * proxy as `proxyOrigin` does, other ports of its host, from which the
+	 * controller frame shows each site, so the browser gives a page and a
+	 * frame of another site in it a process each. Their documents are this
+	 * page's frames as the proxy origin's are; a slot that does not answer
+	 * leaves its sites on `proxyOrigin`.
+	 */
+	sitePool?: SitePoolInit | false;
+	/**
 	 * Passkeys for proxied sites (docs/passkeys.md), off unless given: STomp
 	 * is the passkey provider (see StompController's ControllerInit.passkeys).
 	 * The service worker holds the keys; `onRequest`, in this page, asks the
@@ -178,6 +197,9 @@ export interface RemoteRequestEvent extends RequestInfo {
 	frame: RemoteFrame | null;
 }
 
+/** how long the host has to start the navigation a page's open request asked for (RemoteController.openerSlot) */
+const OPENED_TTL_MS = 10000;
+
 export const DEFAULT_SANDBOX =
 	'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation allow-orientation-lock allow-storage-access-by-user-activation';
 
@@ -204,6 +226,10 @@ export class RemoteController extends EventTarget {
 	stale: StaleInfo | null = null;
 	frames: RemoteFrame[] = [];
 	isReady = false;
+	/** the site pool's slots the controller frame shows sites from (none without one) */
+	#slots: string[] = [];
+	/** the site pool: the slot of the page that asked for each URL to be opened (OPEN_TAB), by the URL, for OPENED_TTL_MS */
+	#opened = new Map<string, { origin: string; at: number }>();
 	/** the service worker clients the pages reported, by frame, and those nobody spoke for */
 	#clients = new ClientFrames<RemoteFrame>(
 		() => this.frames,
@@ -368,7 +394,11 @@ export class RemoteController extends EventTarget {
 			);
 		};
 		window.addEventListener('message', (event) => {
-			if (event.origin !== this.proxyOrigin) return;
+			if (
+				event.origin !== this.proxyOrigin &&
+				!this.#slots.includes(event.origin)
+			)
+				return;
 			if (event.source === this.element.contentWindow) {
 				this.#rpc.receive(event.data);
 				return;
@@ -400,7 +430,8 @@ export class RemoteController extends EventTarget {
 				if (id) this.#clients.attribute(id, frame);
 				// a frame in the page that navigated is a step of the frame's
 				// history (a tab's Back steps it first): the buttons follow
-				if (moved) frame.historyChanged(announce);
+				if (moved)
+					frame.historyChanged(announce, event.source as Window, moved.entry);
 				const thrown = client || moved ? null : hookErrorReport(event.data);
 				if (thrown) reportHookError(thrown, frame);
 				return;
@@ -408,14 +439,34 @@ export class RemoteController extends EventTarget {
 			const navigate = navigateReport(event.data);
 			if (navigate) {
 				if (navigate.client) this.#clients.attribute(navigate.client, frame);
-				frame.report(navigate);
 				// where the frame's history can go is the controller frame's to
-				// say (nested frames included), not the page's own navigable
-				frame.reported(navigate, announce);
+				// say (nested frames included), not the page's own navigable;
+				// the site pool: once the agent of the document's slot took it
+				if (this.#slots.length)
+					frame.siteReport(
+						event.origin,
+						navigate,
+						navigationTypeReport(event.data),
+						() => {
+							frame.report(navigate);
+							frame.reported(navigate, announce);
+						},
+						historyRunReport(event.data),
+					);
+				else {
+					frame.report(navigate);
+					frame.reported(navigate, announce);
+				}
 				return;
 			}
 			const url = openRequest(event.data);
 			if (url !== null) {
+				if (this.#slots.includes(event.origin)) {
+					const now = Date.now();
+					for (const [key, opened] of this.#opened)
+						if (now - opened.at > OPENED_TTL_MS) this.#opened.delete(key);
+					this.#opened.set(url, { origin: event.origin, at: now });
+				}
 				init.onOpen?.(url, frame);
 				this.dispatchEvent(new CustomEvent('open', { detail: { url, frame } }));
 				return;
@@ -473,10 +524,12 @@ export class RemoteController extends EventTarget {
 					...(init.names ? { names: init.names } : {}),
 					...(init.hooks ? { hooks: init.hooks } : {}),
 					...(init.errorPage ? { errorPage: init.errorPage } : {}),
+					...(init.sitePool ? { sitePool: init.sitePool } : {}),
 				}),
 			)
 			.then(
-				({ config, stale }) => {
+				({ config, stale, sites }) => {
+					this.#slots = Array.isArray(sites) ? sites : [];
 					this.config = config;
 					this.stale = stale ?? null;
 					this.isReady = true;
@@ -524,12 +577,42 @@ export class RemoteController extends EventTarget {
 		await this.#ready;
 		return this.#rpc.call('route', url);
 	}
+	/** @internal the site pool's slots */
+	get siteOrigins(): string[] {
+		return [...this.#slots];
+	}
+	/** whether the controller frame shows the sites from a pool of origins (see StompController.siteMode) */
+	get siteMode(): boolean {
+		return this.#slots.length > 0;
+	}
+	/** @internal the site pool: the slot `url`'s site is shown from, once it is up; null for the proxy origin */
+	async siteOrigin(url: string): Promise<string | null> {
+		await this.#ready;
+		if (!this.#slots.length) return null;
+		return this.#rpc.call('siteOrigin', url);
+	}
+	/**
+	 * @internal the site pool: the slot of the page that just asked the host
+	 * to open `url` (`onOpen`), taken once; null for any other navigation
+	 */
+	openerSlot(url: string): string | null {
+		const opened = this.#opened.get(url);
+		if (!opened) return null;
+		this.#opened.delete(url);
+		return Date.now() - opened.at > OPENED_TTL_MS ? null : opened.origin;
+	}
 	/** @internal see StompController.reportViewport */
 	reportViewport(width: number, height: number) {
 		if (!(width > 0 && height > 0)) return;
 		this.#ready
 			.then(() => this.#rpc.call('viewport', [width, height]))
 			.catch(() => {});
+	}
+	/** @internal the site pool: see StompController.siteViewport */
+	async siteViewport(origin: string, width: number, height: number) {
+		if (!(width > 0 && height > 0)) return;
+		await this.#ready;
+		await this.#rpc.call('viewport', [width, height, origin]);
 	}
 	/** the real URL a routed one stands for, null for a non-route (see StompController.unroute) */
 	async unroute(url: string): Promise<string | null> {
@@ -620,7 +703,8 @@ export class RemoteController extends EventTarget {
 		const index = this.#frameIndex(element);
 		if (index === -1)
 			return { url: null, title: null, canGoBack: null, canGoForward: null };
-		return this.#rpc.call('frameInfo', index);
+		const origin = this.#slotOf(element);
+		return this.#rpc.call('frameInfo', origin ? { index, origin } : index);
 	}
 	/** @internal */
 	async frameActivated(
@@ -630,8 +714,14 @@ export class RemoteController extends EventTarget {
 	) {
 		await this.#ready;
 		const index = this.#frameIndex(element);
+		const origin = this.#slotOf(element);
 		if (index !== -1)
-			await this.#rpc.call('frameActivated', { index, token, nested });
+			await this.#rpc.call('frameActivated', {
+				index,
+				token,
+				nested,
+				...(origin ? { origin } : {}),
+			});
 	}
 	/** @internal */
 	async frameCommand(
@@ -641,7 +731,31 @@ export class RemoteController extends EventTarget {
 		await this.#ready;
 		const index = this.#frameIndex(element);
 		if (index === -1) return false;
-		return this.#rpc.call('frameCommand', { index, command });
+		const origin = this.#slotOf(element);
+		return this.#rpc.call('frameCommand', {
+			index,
+			command,
+			...(origin ? { origin } : {}),
+		});
+	}
+	/** @internal the site pool: an op on run `run` of `element`'s frame's history, for the agent of `origin` (FrameBound.frameHistory) */
+	async frameHistory(
+		element: HTMLIFrameElement,
+		origin: string,
+		run: number,
+		op: SiteHistoryOp,
+	): Promise<SiteHistoryAnswer | null> {
+		await this.#ready;
+		const index = this.#frameIndex(element);
+		if (index === -1) return null;
+		return this.#rpc.call('frameHistory', { index, origin, run, op });
+	}
+	/** the site pool: the slot the document of `element`'s frame last reported from, when it is one */
+	#slotOf(element: HTMLIFrameElement): string | undefined {
+		const origin = this.frames.find(
+			(frame) => frame.element === element,
+		)?.siteOrigin;
+		return origin && this.#slots.includes(origin) ? origin : undefined;
 	}
 }
 
@@ -659,12 +773,55 @@ export class RemoteFrame extends EventTarget {
 	canGoBack: boolean | null = null;
 	canGoForward: boolean | null = null;
 	#refreshing: Promise<void> | null = null;
+	/**
+	 * The site pool: the frame's history as runs, each a stretch of it shown
+	 * from one slot, as Frame keeps it (src/controller/siteRuns.ts)
+	 */
+	#runs: SiteRuns;
+	/** the controller's announcement of the last report (the buttons changed with no report) */
+	#announce: ((info: NavigateInfo) => void) | null = null;
+	/** @internal the site pool: the origin the frame's document last reported from */
+	get siteOrigin(): string | undefined {
+		return this.#runs.origin;
+	}
+	/**
+	 * @internal the site pool: a top document of the frame reported, from
+	 * `origin`, navigated to as `type` says (NAVIGATION_TYPE), where its
+	 * slot's stretch of the history has it (`entries`, HISTORY_RUN);
+	 * `deliver` reports it once the agent of that origin took it
+	 */
+	siteReport(
+		origin: string,
+		info: NavigateInfo,
+		type: string | null,
+		deliver: () => void,
+		entries: [number, number] | null = null,
+	) {
+		this.#runs.report(origin, info, type, deliver, entries);
+	}
 	constructor(
 		public controller: RemoteController,
 		public element: HTMLIFrameElement,
 		sandbox: string,
 	) {
 		super();
+		this.#runs = new SiteRuns({
+			ask: (origin, run, op) =>
+				controller.frameHistory(element, origin, run, op),
+			home: controller.proxyOrigin,
+			others: () =>
+				controller.frames
+					.filter((frame) => frame !== this)
+					.map((frame) => frame.#runs),
+			changed: () => this.#siteChanged(),
+			window: () => element.contentWindow,
+			address: async (url, origin) => {
+				const routed = new URL(await controller.route(url));
+				const to = (await controller.siteOrigin(url)) ?? origin;
+				return `${to}${routed.pathname}${routed.search}${routed.hash}`;
+			},
+			nextReport: () => this.#nextReport(),
+		});
 		element.setAttribute('sandbox', sandbox);
 		element.setAttribute('referrerpolicy', 'no-referrer');
 		// in a cross-origin isolated host page the frame may be isolated too
@@ -673,12 +830,22 @@ export class RemoteFrame extends EventTarget {
 		// allows the frame already
 		if (globalThis.crossOriginIsolated === true) {
 			const allow = element.getAttribute('allow')?.trim() ?? '';
-			if (!/(^|;)\s*cross-origin-isolated(\s|;|$)/.test(allow))
-				element.setAttribute(
-					'allow',
-					`${allow}${allow && !allow.endsWith(';') ? '; ' : allow ? ' ' : ''}cross-origin-isolated ${controller.proxyOrigin}`,
-				);
+			if (!/(^|;)\s*cross-origin-isolated(\s|;|$)/.test(allow)) {
+				this.#allowBase = allow;
+				this.#allowIsolation([controller.proxyOrigin]);
+			}
 		}
+	}
+	/** what the host's `allow` was before the isolation permission was added to it, null when none was added */
+	#allowBase: string | null = null;
+	/** the cross-origin isolation permission for the frame's documents of `origins` */
+	#allowIsolation(origins: string[]) {
+		const allow = this.#allowBase;
+		if (allow === null) return;
+		this.element.setAttribute(
+			'allow',
+			`${allow}${allow && !allow.endsWith(';') ? '; ' : allow ? ' ' : ''}cross-origin-isolated ${origins.join(' ')}`,
+		);
 	}
 	/** hosts waiting for the next report (go, reload) */
 	#awaitingReport = new Set<() => void>();
@@ -712,9 +879,39 @@ export class RemoteFrame extends EventTarget {
 			this.element.clientWidth,
 			this.element.clientHeight,
 		);
-		const routed = await this.controller.route(url);
+		let routed = await this.controller.route(url);
+		// the site pool: the route on the origin of the URL's site, whose
+		// worker is up by now (and the isolation permission for every slot)
+		const origin = await this.controller.siteOrigin(url).catch(() => null);
+		if (this.controller.siteMode)
+			this.#allowIsolation([
+				this.controller.proxyOrigin,
+				...this.controller.siteOrigins,
+			]);
+		if (origin) {
+			// a page's link or window.open the host opens here leaves from the
+			// page's own slot, whose worker heard from the page who started it
+			// (NAVIGATION_HINT) and hands that on to the slot of the URL's
+			// site, as for a link of the page's; from the URL's slot it would
+			// pass for the user's own (Sec-Fetch-Site none)
+			const from = this.controller.openerSlot(url) ?? origin;
+			const path = new URL(routed);
+			routed = `${from}${path.pathname}${path.search}${path.hash}`;
+			// the slot's worker makes the navigation (and a Critical-CH
+			// retry of it): its viewport hints name this frame's size
+			await this.controller
+				.siteViewport(
+					origin,
+					this.element.clientWidth,
+					this.element.clientHeight,
+				)
+				.catch(() => {});
+		}
 		// the next document is the host's, not the page's (history intervention)
-		await this.controller.frameCommand(this.element, 'typed').catch(() => {});
+		if (this.controller.siteMode)
+			await this.#runs.typed(origin ?? this.controller.proxyOrigin);
+		else
+			await this.controller.frameCommand(this.element, 'typed').catch(() => {});
 		this.element.src = routed;
 		this.#keepFocusAcrossCommit();
 		this.url = url;
@@ -776,6 +973,10 @@ export class RemoteFrame extends EventTarget {
 	}
 	/** @internal a document of the frame got a user activation */
 	historyTouched(token: string, nested: boolean) {
+		if (this.controller.siteMode) {
+			this.#runs.activated(token, nested);
+			return;
+		}
 		// in line with the history state requests, so it is in before the
 		// report of the document the click navigated to
 		const run = () =>
@@ -791,16 +992,25 @@ export class RemoteFrame extends EventTarget {
 	async reported(
 		info: NavigateInfo,
 		announce: (info: NavigateInfo) => void,
+		settles = true,
 	): Promise<void> {
-		await this.#syncHistory();
-		if (this.canGoBack !== null) info.canGoBack = this.canGoBack;
-		if (this.canGoForward !== null) info.canGoForward = this.canGoForward;
+		if (this.controller.siteMode) {
+			this.#announce = announce;
+			info.canGoBack = this.#runs.can('back');
+			info.canGoForward = this.#runs.can('forward');
+		} else {
+			await this.#syncHistory();
+			if (this.canGoBack !== null) info.canGoBack = this.canGoBack;
+			if (this.canGoForward !== null) info.canGoForward = this.canGoForward;
+		}
 		this.canGoBack = info.canGoBack;
 		this.canGoForward = info.canGoForward;
 		this.#last = info;
 		this.dispatchEvent(new CustomEvent('navigate', { detail: info }));
 		announce(info);
-		// go() and reload() resolve once the report is out, as on Frame
+		// go() and reload() resolve once the report is out, as on Frame (a
+		// report out again for the buttons is the same document's)
+		if (!settles) return;
 		for (const resolve of this.#awaitingReport) resolve();
 		this.#awaitingReport.clear();
 	}
@@ -808,7 +1018,18 @@ export class RemoteFrame extends EventTarget {
 	 * @internal A document in a frame of the page reported: the last report
 	 * goes out again when the frame's history state changed
 	 */
-	async historyChanged(announce: (info: NavigateInfo) => void): Promise<void> {
+	async historyChanged(
+		announce: (info: NavigateInfo) => void,
+		source?: Window,
+		entry?: ReportedEntry | null,
+	): Promise<void> {
+		if (this.controller.siteMode) {
+			// the site pool: the agent of the frame's slot hears of it
+			const top = this.element.contentWindow;
+			const path = top && source && framePath(top, source);
+			if (path) this.#runs.nested(path, entry ?? null);
+			return;
+		}
 		await this.#syncHistory();
 		const last = this.#last;
 		if (
@@ -825,15 +1046,32 @@ export class RemoteFrame extends EventTarget {
 	 * there is no entry in that direction.
 	 */
 	back(): Promise<boolean> {
+		if (this.controller.siteMode) return this.#runs.step('back');
 		return this.controller.frameCommand(this.element, 'back');
 	}
 	forward(): Promise<boolean> {
+		if (this.controller.siteMode) return this.#runs.step('forward');
 		return this.controller.frameCommand(this.element, 'forward');
+	}
+	/** the site pool: the buttons may have changed with no report: the last report goes out again when they did */
+	#siteChanged() {
+		const last = this.#last;
+		const announce = this.#announce;
+		if (
+			!last ||
+			!announce ||
+			(this.#runs.can('back') === last.canGoBack &&
+				this.#runs.can('forward') === last.canGoForward)
+		)
+			return;
+		void this.reported({ ...last }, announce, false);
 	}
 	/** reload the frame; resolves when the reloaded document first reports (false when there was nothing to reload) */
 	async reload(): Promise<boolean> {
 		const reported = this.#nextReport();
-		const done = await this.controller.frameCommand(this.element, 'reload');
+		const done =
+			(this.controller.siteMode ? await this.#runs.reload() : null) ??
+			(await this.controller.frameCommand(this.element, 'reload'));
 		if (done) await reported;
 		return done;
 	}
@@ -845,6 +1083,10 @@ export class RemoteFrame extends EventTarget {
 				.then((info) => {
 					if (info.url) this.url = info.url;
 					if (info.title !== null) this.title = info.title;
+					if (this.controller.siteMode) {
+						info.canGoBack = this.#runs.can('back');
+						info.canGoForward = this.#runs.can('forward');
+					}
 					this.canGoBack = info.canGoBack;
 					this.canGoForward = info.canGoForward;
 				})

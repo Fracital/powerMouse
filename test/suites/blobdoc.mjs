@@ -1,8 +1,17 @@
 // A document the page builds itself and shows from a blob: URL is injected
 // and rewritten like a fetched one: its script sees the spoof and the page's
 // URL, its markup is routed, and the Blob reads back as the page made it.
-// Same-origin mode (the host realm reads the blob frame's real attributes).
-import { done, FIXTURE, launch, ok, PROXY, sleep } from '../lib.mjs';
+// Same-origin mode (a world of the frame's own reads the blob frame's real
+// attributes).
+import {
+	done,
+	evaluateIsolated,
+	FIXTURE,
+	launch,
+	ok,
+	PROXY,
+	sleep,
+} from '../lib.mjs';
 
 const browser = await launch();
 const page = await browser.newPage();
@@ -48,11 +57,17 @@ ok(
 		blob.result.href.startsWith(FIXTURE),
 	JSON.stringify(blob.result),
 );
-const real = await page.evaluate(() => {
-	const outer = window.__el.contentDocument;
-	const inner = outer.querySelector('iframe')?.contentDocument;
+// the real attribute, in a world of the frame's own that no hook reaches
+// (the frame can be of another origin than this page: a site pool's slot)
+const outerFrame = await (
+	await page.evaluateHandle(() => window.__el)
+)
+	.asElement()
+	.contentFrame();
+const real = await evaluateIsolated(outerFrame, () => {
+	const inner = document.querySelector('iframe')?.contentDocument;
 	const img = inner?.getElementById('i');
-	return img ? Element.prototype.getAttribute.call(img, 'src') : null;
+	return img ? img.getAttribute('src') : null;
 });
 ok(
 	'markup in a blob: document is routed',

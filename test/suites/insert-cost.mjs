@@ -11,6 +11,7 @@
 // takes at most a few times what it takes natively. Both modes.
 import {
 	done,
+	evaluateIsolated,
 	FIXTURE,
 	HOST,
 	launch,
@@ -66,15 +67,10 @@ for (const [mode, base] of [
 		.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
 	// the real attribute, through a realm the page's hooks do not reach
 	const real =
-		mode === 'same-origin'
-			? await frame
-					?.evaluate(() =>
-						top.Element.prototype.getAttribute.call(
-							document.getElementById('probe'),
-							'href',
-						),
-					)
-					.catch(() => null)
+		mode === 'same-origin' && frame
+			? await evaluateIsolated(frame, () =>
+					document.getElementById('probe')?.getAttribute('href'),
+				).catch(() => null)
 			: null;
 	const detail = JSON.stringify({ native, proxied: best, real });
 	ok(

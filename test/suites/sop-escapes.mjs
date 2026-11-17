@@ -20,11 +20,13 @@ import {
 	openDemo,
 	PROXY,
 	sleep,
+	SLOT_PORTS,
 } from '../lib.mjs';
 
 // Cases known to differ from Chrome, by why (docs/same-origin-policy.md). A
 // case on the list that now reads as natively fails too: take it off. A name
-// that starts with a mode (`isolated: `) is known in that mode only.
+// that starts with a mode (`isolated: `) is known in that mode only, and
+// one that starts with `pool ` in that mode with the site pool only.
 const KNOWN_BY_REASON = {
 	"a video or sound copied for a document no service worker controls keeps a blob: URL the page's process can fetch while the element shows it: its loads go on (a seek, a replay), and Chrome resolves a blob: URL again for each (docs/same-origin-policy.md)":
 		[
@@ -34,6 +36,11 @@ const KNOWN_BY_REASON = {
 	// coi/ case needs
 	"a frame of another origin than its top-level page gets no window for the popups it opens once that page sends COOP same-origin (Chrome opens them without an opener), which the isolated mode's host does to be cross-origin isolated":
 		['isolated: canvas/a popup tainted its canvas, the opener draws it'],
+	// the suite's host is cross-origin isolated (test/run.mjs)
+	"Chrome opens a frame's popup without an opener when its top sends COOP same-origin: window.open('') and about:blank return null from a proxied page under the pool (docs/site-pool.md, \"Popups under the isolated host\"; a host page isolated by Document-Isolation-Policy is the follow-up)":
+		[
+			'pool same-origin: canvas/a popup tainted its canvas, the opener draws it',
+		],
 	'the tracks of a stream captured from a canvas end when the canvas is tainted (their player shows nothing), where Chrome keeps them live and sends them no more frames (their player keeps the last one)':
 		['canvas/the tracks of a stream captured before its canvas was tainted'],
 };
@@ -403,7 +410,10 @@ function compare(mode, native, proxied) {
 		const want = normal(native[name]);
 		const got = normal(proxied?.[name]);
 		const detail = `\n      native  ${want}\n      proxied ${got}`;
-		const known = KNOWN.get(`${mode}: ${name}`) ?? KNOWN.get(name);
+		const known =
+			(SLOT_PORTS.length ? KNOWN.get(`pool ${mode}: ${name}`) : undefined) ??
+			KNOWN.get(`${mode}: ${name}`) ??
+			KNOWN.get(name);
 		if (known)
 			ok(
 				`${mode}: ${name} differs as known (${known})`,

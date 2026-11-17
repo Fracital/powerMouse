@@ -22,6 +22,7 @@ import {
 	openDemo,
 	PROXY,
 	sleep,
+	SLOT_PORTS,
 	submitLanding,
 } from './lib.mjs';
 
@@ -136,13 +137,21 @@ async function pageEval(tab) {
 /**
  * Wait until every child of `frame` ran its script (`count` of them; with
  * `since`, a document's whose script ran after that time, ms since the
- * epoch): their times
+ * epoch; the children whose CDP ids `skip` holds left out): their times
  */
-async function waitForChildren(evaluator, frame, count, since = 0) {
+async function waitForChildren(
+	evaluator,
+	frame,
+	count,
+	since = 0,
+	skip = new Set(),
+) {
 	let times = [];
 	let ranAt = [];
 	for (let i = 0; i < 240; i++) {
-		const children = await evaluator.children(frame);
+		const children = (await evaluator.children(frame)).filter(
+			(id) => !skip.has(id),
+		);
 		const ran = (
 			await Promise.all(
 				children.map((id) =>
@@ -171,17 +180,43 @@ async function waitForChildren(evaluator, frame, count, since = 0) {
 	return { times, ranAt };
 }
 
-/** append `count` children of `base` to `frame`, wait until each ran its script */
-async function addFrames(tab, frame, base, count, evaluator, act = () => {}) {
+/** the site pool's agents in `tab` (a slot's frame the hub made, src/controller/sites.ts) */
+function agents(tab) {
+	return tab.frames().filter((f) => {
+		try {
+			const url = new URL(f.url());
+			return (
+				SLOT_PORTS.includes(Number(url.port)) && url.searchParams.has('script')
+			);
+		} catch (error) {
+			return false;
+		}
+	}).length;
+}
+
+/**
+ * append `count` children of `base` to `frame` (`first` is the first one's
+ * index), wait until each ran its script
+ */
+async function addFrames(
+	tab,
+	frame,
+	base,
+	count,
+	evaluator,
+	act = () => {},
+	first = 0,
+) {
 	const started = Date.now();
+	const old = new Set(await evaluator.children(frame));
 	const spent = await durations(tab);
 	const before = await spent.read();
 	await act();
 	const appended = await evaluator.run(
 		frame,
-		([count, src]) => {
+		([count, src, first]) => {
 			const at = performance.timeOrigin + performance.now();
-			for (let i = 0; i < count; i++) {
+			for (let i = first; i < first + count; i++) {
 				const child = document.createElement('iframe');
 				child.src = `${src}?i=${i}`;
 				child.width = 20;
@@ -190,9 +225,15 @@ async function addFrames(tab, frame, base, count, evaluator, act = () => {}) {
 			}
 			return at;
 		},
-		[count, new URL(page, base).href],
+		[count, new URL(page, base).href, first],
 	);
-	const { times, ranAt } = await waitForChildren(evaluator, frame, count);
+	const { times, ranAt } = await waitForChildren(
+		evaluator,
+		frame,
+		count,
+		0,
+		old,
+	);
 	const after = await spent.read();
 	await spent.stop();
 	times.sort((a, b) => a - b);
@@ -218,12 +259,19 @@ async function addFrames(tab, frame, base, count, evaluator, act = () => {}) {
  * real click in the top; 'refresh', the children, once loaded, loading
  * their next document right after one (the heap is then the next
  * documents', `loaded` how many loaded theirs).
+ *
+ * `warm`: one child of `base` first, and the site pool's agents settled
+ * (the first child of another site takes the pool's spare slot, and the
+ * hub starts the next spare a moment later, SiteHub.warm), before the
+ * baseline: what that cost once is `first` (the child and any agent it
+ * started), and the per-frame figures leave it out.
  */
 export async function measureFrames({
 	proxied,
 	base = FIXTURE,
 	frames,
 	click = null,
+	warm = false,
 }) {
 	const browser = await launch([
 		// natively a frame of another site runs in a process of its own; the
@@ -268,7 +316,25 @@ export async function measureFrames({
 			await tab.mouse.click(box.x + box.width - 5, box.y + box.height - 5);
 		};
 		await sleep(1000);
-		const empty = await sample(browser, tab);
+		let first = null;
+		// the warm child, left out of what is counted
+		let warmed = new Set();
+		let empty = await sample(browser, tab);
+		if (warm) {
+			const cold = empty;
+			const before = agents(tab);
+			await addFrames(tab, frame, base, 1, evaluator, undefined, frames);
+			warmed = new Set(await evaluator.children(frame));
+			// the next spare starts a second after the slot's agent is up,
+			// once the page is idle (at most 2 s), and loads like a frame
+			for (let i = 0; i < 40 && agents(tab) === before; i++) await sleep(250);
+			await sleep(SLOT_PORTS.length ? 3000 : 1000);
+			empty = await sample(browser, tab);
+			first = {
+				heapKB: (empty.heap - cold.heap) * 1024,
+				agents: agents(tab) - before,
+			};
+		}
 		let load = await addFrames(
 			tab,
 			frame,
@@ -282,16 +348,23 @@ export async function measureFrames({
 			await clickTop();
 			const since = await evaluator.run(
 				frame,
-				(src) => {
+				([src, count]) => {
 					const at = performance.timeOrigin + performance.now();
+					// (the last `count`: a warm child came first)
 					const children = document.querySelectorAll('iframe');
-					for (let i = 0; i < children.length; i++)
+					for (let i = children.length - count; i < children.length; i++)
 						children[i].src = `${src}?i=${i}&next`;
 					return at;
 				},
-				new URL(page, base).href,
+				[new URL(page, base).href, frames],
 			);
-			const { times } = await waitForChildren(evaluator, frame, frames, since);
+			const { times } = await waitForChildren(
+				evaluator,
+				frame,
+				frames,
+				since,
+				warmed,
+			);
 			load = { ...load, loaded: times.length };
 		}
 		await sleep(1000);
@@ -299,6 +372,7 @@ export async function measureFrames({
 		await evaluator.stop();
 		return {
 			...load,
+			first,
 			heapKB: ((full.heap - empty.heap) * 1024) / frames,
 			rssKB:
 				full.rss === null || empty.rss === null

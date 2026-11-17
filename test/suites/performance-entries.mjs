@@ -3,7 +3,7 @@
 // animation frames and their scripts, the first input, event timing, layout
 // shifts, visibility) is what it reads natively
 // (test/pages/perf-entries-run.js, test/perf.mjs), in both demo modes.
-import { done, launch, ok } from '../lib.mjs';
+import { done, launch, ok, SLOT_PORTS } from '../lib.mjs';
 import {
 	differences,
 	MODES,
@@ -69,17 +69,23 @@ const EXPECTED = [
 		'the browser makes interaction contentful paint entries for the main frame only, which a proxied page is not',
 	],
 ];
-// only where the page shares the host's process and frame tree
-const EXPECTED_SAME_ORIGIN = [
-	[
-		/^frames\.(animation|click|keydown)\./,
-		"Chrome reports a long frame's rendering part (animation callbacks, input handlers) to the local root's window, which in same-origin mode is the host's",
-	],
-	[
-		/^layoutShift\.lastInputSet: /,
-		"a layout shift's last input time is kept by the local root, which in same-origin mode is the host's",
-	],
-];
+// only where the page shares the host's process and frame tree, which with
+// the site pool (docs/site-pool.md) it does not: the pool shows it from a
+// slot, another origin than the host's, so the page is a local root of its
+// own as in isolated mode. The first pattern leaves out the script
+// positions EXPECTED explains, so that it holds only by what it names.
+const EXPECTED_SAME_ORIGIN = SLOT_PORTS.length
+	? []
+	: [
+			[
+				/^frames\.(animation|click|keydown)\.(?!frame\.(scripts\.\d+\.sourceCharPosition|jsonPositions): )/,
+				"Chrome reports a long frame's rendering part (animation callbacks, input handlers) to the local root's window, which in same-origin mode is the host's",
+			],
+			[
+				/^layoutShift\.lastInputSet: /,
+				"a layout shift's last input time is kept by the local root, which in same-origin mode is the host's",
+			],
+		];
 
 for (const [mode, base] of MODES) {
 	const { record, errors } = await proxiedRecord(browser, base, 'entries', {

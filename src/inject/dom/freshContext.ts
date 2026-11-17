@@ -151,6 +151,8 @@ export function recordFresh(
 	if (!record) frames.set(element, (record = { windows: [], destination }));
 	record.destination = destination;
 	if (!old || elements.has(old)) return;
+	const made = registry(client);
+	made.held = (made.held ?? 0) + 1;
 	// (the refs of windows nothing holds any more go)
 	const kept: WeakRef<object>[] = [];
 	for (const ref of record.windows)
@@ -219,12 +221,26 @@ export function forgetDestination(client: DocumentClient, element: Element) {
  * held one before the frame got a fresh context, latest first
  */
 export function heldBefore(client: DocumentClient, context: object): object[] {
-	let element: Element | null;
+	let element: Element | null = null;
 	try {
 		element = frameElementOf(context);
 	} catch (error) {
-		return [];
+		// a window of another origin
 	}
+	// (the site pool: a frame showing another slot's document names no
+	// element to this origin; one of this document's frames shows it)
+	if (!element && client.sites && registry(client).held)
+		try {
+			for (const frame of Array.from(
+				client.global.document.querySelectorAll('iframe, frame'),
+			))
+				if (frameWindow(frame) === context) {
+					element = frame;
+					break;
+				}
+		} catch (error) {
+			// a document being torn down
+		}
 	const record = element && registry(client).frames.get(element);
 	return record ? liveWindows(record).reverse() : [];
 }
@@ -248,7 +264,10 @@ export function frameOfHeld(
 
 /** the frame element a window is the frame of, read natively */
 function frameElementOf(context: object): Element | null {
-	if (!natives?.frameElement) return null;
+	// (a window of another origin names none to this one, and would throw:
+	// its prototype is null to this realm, as no window of its own has)
+	if (!natives?.frameElement || Reflect.getPrototypeOf(context) === null)
+		return null;
 	return Reflect.apply(natives.frameElement, context, []) as Element | null;
 }
 

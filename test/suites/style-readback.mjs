@@ -9,7 +9,15 @@
 // made them all in each frame): the lists are checked against this
 // browser's.
 import { readFileSync } from 'node:fs';
-import { done, FIXTURE, launch, ok, PROXY, sleep } from '../lib.mjs';
+import {
+	done,
+	evaluateIsolated,
+	FIXTURE,
+	launch,
+	ok,
+	PROXY,
+	sleep,
+} from '../lib.mjs';
 
 const browser = await launch();
 const page = await browser.newPage();
@@ -59,11 +67,10 @@ ok(
 		!rb.typedSet.includes('/stomp/'),
 	JSON.stringify([rb.typed, rb.typedComputed, rb.typedSet, rb.typedError]),
 );
-const realUse = await page.evaluate(() =>
-	Element.prototype.getAttribute.call(
-		window.__el.contentDocument.getElementById('use'),
-		'href',
-	),
+// the real attribute, in a world of the frame's own that no hook reaches
+// (the frame can be of another origin than this page: a site pool's slot)
+const realUse = await evaluateIsolated(frame, () =>
+	document.getElementById('use').getAttribute('href'),
 );
 // the interfaces the inject names (src/inject/dom/svgReferences.ts,
 // cssRules.ts) against the ones of this browser that have the member

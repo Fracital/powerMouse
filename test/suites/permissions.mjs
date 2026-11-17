@@ -50,6 +50,7 @@ import {
 	openDemo,
 	PROXY,
 	sleep,
+	SLOT_PORTS,
 	submitLanding,
 	submitOmni,
 } from '../lib.mjs';
@@ -403,6 +404,10 @@ const MODES = [
 	['same-origin', PROXY],
 	['isolated', HOST],
 ];
+// the proxied top is a frame of another origin than the host's page: in
+// isolation mode, and with the site pool (docs/site-pool.md), whose slots
+// are other origins of the host
+const topAcross = (mode) => mode === 'isolated' || SLOT_PORTS.length > 0;
 
 let browser = null;
 for (const { label, args = [], env = null, has, cases = ASKING } of DEVICES) {
@@ -434,12 +439,12 @@ for (const { label, args = [], env = null, has, cases = ASKING } of DEVICES) {
 			await submitLanding(tab, url(A));
 			const proxied = await result(proxiedFrames(tab));
 			let expected = native.get(name);
-			// in isolation mode the proxied top is a frame of another origin than
-			// the host, and Chrome never shows a frame of another origin the
-			// notification prompt (allow cannot change it): the request is
-			// dismissed, the site stays undecided
+			// in isolation mode (and with the site pool) the proxied top is a
+			// frame of another origin than the host, and Chrome never shows a
+			// frame of another origin the notification prompt (allow cannot
+			// change it): the request is dismissed, the site stays undecided
 			if (
-				mode === 'isolated' &&
+				topAcross(mode) &&
 				expected?.notify === 'denied' &&
 				expected.states.notifications === 'prompt'
 			)
@@ -889,12 +894,13 @@ for (const [mode, base] of MODES) {
 	}).catch((error) => ({ rows: { failed: String(error) } }));
 	for (const [row, native] of Object.entries(nativeDevices.rows)) {
 		let expected = native;
-		// in isolation mode the proxied top is a frame of another origin than
-		// the host, and before Chrome 156 no frame of another origin chooses
+		// in isolation mode (and with the site pool) the proxied top is a
+		// frame of another origin than the host, and before Chrome 156 no
+		// frame of another origin chooses
 		// an AudioContext's output (allow cannot change it): where Chrome
 		// would have taken the id, it refuses
 		const sink =
-			mode === 'isolated' &&
+			topAcross(mode) &&
 			!/"context":"sinkId /.test(nativeDevices.rows[SPEAKERS]) &&
 			/"context":"sinkId /.test(native);
 		if (sink)

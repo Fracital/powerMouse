@@ -5,10 +5,13 @@
 // measured its unrendered button (0) after a double requestAnimationFrame and
 // threw. hidden-frames.html holds frames of both origins hidden and shown;
 // what their animation frames did, before and after the hidden box is shown,
-// must match the page loaded natively, in both modes. In isolated mode the
-// whole proxied page is cross-origin to the host, so Chrome itself holds a
-// hidden frame of the page's own origin as well (a known limitation): there
-// only the frames of another origin are compared.
+// must match the page loaded natively, in both modes. In isolated mode, and
+// in same-origin mode under the site pool (docs/site-pool.md), the proxied
+// page is of another origin than the browser's main frame (the host's or the
+// hub's page), so Chrome holds a hidden frame of the page's own origin too,
+// which the inject runs from the proxied top's animation frames
+// (src/inject/dom/modules/AnimationFrames.ts): every frame is compared in
+// both modes.
 //
 // Nothing here waits by the clock. Which frames run is read off the animation
 // frames each counts from its start, over a stretch of the shown frame's own;
@@ -152,17 +155,10 @@ for (const [mode, base] of [
 				frame = f;
 	}
 	const proxied = frame ? await observe(frame) : null;
-	const compared = (phase) =>
-		Object.fromEntries(
-			Object.entries(phase ?? {}).filter(
-				([name]) => mode === 'same-origin' || name.startsWith('cross-'),
-			),
-		);
 	for (const phase of ['before', 'after'])
 		ok(
 			`${mode}: the frames' animation frames ${phase} the box is shown are native`,
-			JSON.stringify(compared(proxied?.[phase])) ===
-				JSON.stringify(compared(native[phase])),
+			JSON.stringify(proxied?.[phase]) === JSON.stringify(native[phase]),
 			JSON.stringify({ native: native[phase], proxied: proxied?.[phase] }),
 		);
 	ok(

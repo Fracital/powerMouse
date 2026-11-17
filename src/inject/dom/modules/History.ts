@@ -7,6 +7,7 @@ import { withStack } from '../../nativeErrors';
 import { LazyWeakMap } from '../../ownCollections';
 import DocumentClient from '../Client';
 import { destinationURL } from '../freshContext';
+import { Pool } from '../pool';
 import { nativeEventTarget } from './DOMHooks';
 import FragmentModule from './Fragment';
 import NavigationHintModule from './NavigationHint';
@@ -52,6 +53,13 @@ export default class HistoryModule extends Module<DocumentClient> {
 	 * the Navigation API
 	 */
 	canStep: (step: -1 | 1) => boolean | null = () => null;
+	/**
+	 * The document's entry and the count of the entries around it the
+	 * browser lists (`[index, length]`, the Navigation API's own view: under
+	 * a site pool, its slot's stretch of the frame's history); null without
+	 * the Navigation API; only for a top document under a site pool
+	 */
+	ownRun?: () => [number, number] | null;
 	/** the browser's own pushState and replaceState, from before any module wrapped them */
 	native?: Pick<History, 'pushState' | 'replaceState'>;
 	/**
@@ -232,6 +240,13 @@ export default class HistoryModule extends Module<DocumentClient> {
 			const index = indexOf(current) + step;
 			return index >= 0 && index < allEntries().length;
 		};
+		// (the site pool's, for a top document: a frame without one, or with
+		// a parent in reach, makes no closure for it)
+		if (moduleClient.sites && !moduleClient.nested)
+			this.ownRun = () => {
+				const current = currentEntry();
+				return current ? [indexOf(current), allEntries().length] : null;
+			};
 
 		const lengthDescriptor = Reflect.getOwnPropertyDescriptor(
 			prototype,
@@ -245,10 +260,16 @@ export default class HistoryModule extends Module<DocumentClient> {
 		// document is gone with its count.)
 		let queued = 0;
 		let landing = -1;
+		// the site pool: the entries of another site's documents are of
+		// another origin, which the browser lists to nobody here; past this
+		// site's run a step back or forward is the browser's own, across
+		// origins
+		const sites = moduleClient.sites;
 		const step = (
 			that: History,
 			delta: number,
 			name: 'back' | 'forward' | 'go',
+			native?: Function,
 		) => {
 			// the native getter first: it throws for anything but a History, and
 			// for the History of a document that is not fully active (a removed
@@ -268,7 +289,10 @@ export default class HistoryModule extends Module<DocumentClient> {
 			if (!current) return;
 			const entries = allEntries();
 			const index = (queued > 0 ? landing : indexOf(current)) + delta;
-			if (index < 0 || index >= entries.length) return;
+			if (index < 0 || index >= entries.length) {
+				if (sites && native) Reflect.apply(native, that, []);
+				return;
+			}
 			const result = traverse(entries[index].key);
 			queued++;
 			landing = index;
@@ -280,12 +304,12 @@ export default class HistoryModule extends Module<DocumentClient> {
 		};
 
 		prototype.back = proxyModule.wrapFunction(prototype.back, (target, that) =>
-			step(that, -1, 'back'),
+			step(that, -1, 'back', target),
 		);
 
 		prototype.forward = proxyModule.wrapFunction(
 			prototype.forward,
-			(target, that) => step(that, 1, 'forward'),
+			(target, that) => step(that, 1, 'forward', target),
 		);
 
 		prototype.go = proxyModule.wrapFunction(
@@ -304,7 +328,9 @@ export default class HistoryModule extends Module<DocumentClient> {
 			get: proxyModule.wrapFunction(lengthDescriptor.get!, (target, that) => {
 				// the native getter first: it throws for anything but a History
 				Reflect.apply(target, that, []);
-				return allEntries().length;
+				// (the site pool: and the frame's entries in other slots, which
+				// the browser lists to nobody here)
+				return allEntries().length + this.client.pool[Pool.HistoryAcross];
 			}),
 		});
 

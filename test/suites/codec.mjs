@@ -137,6 +137,15 @@ await page.evaluate(() => {
 	window.__frame = window.controller.createFrame(element);
 });
 const frameGo = (url) => page.evaluate((url) => window.__frame.go(url), url);
+// the shown document, in its own realm: a site pool shows it from another
+// origin than this page's, which reaches nothing of it
+const shown = async () =>
+	(await page.evaluateHandle(() => window.__frame.element))
+		.asElement()
+		.contentFrame();
+const CLIENT_NAME = await page.evaluate(
+	() => window.controller.config.names.client,
+);
 const seen = new Set();
 const note = () => {
 	for (const frame of page.frames()) seen.add(frame.url());
@@ -156,28 +165,37 @@ note();
 // where each document seals: a top in its own instance, a frame under it
 // (one the page makes, routed or blank) in its top's
 await frameGo(`${FIXTURE}pages/hist-1.html`);
-await page.evaluate(() => {
-	const top = window.__frame.element.contentWindow;
+await (
+	await shown()
+).evaluate(() => {
 	for (const src of ['/pages/hist-2.html', '']) {
-		const frame = top.document.createElement('iframe');
+		const frame = document.createElement('iframe');
 		if (src) frame.src = src;
-		top.document.body.append(frame);
+		document.body.append(frame);
 	}
 });
+// each realm's client, read in that realm (the frames, in document order,
+// are in creation order: no other frame is made)
+const clientOf = (frame) =>
+	frame
+		.evaluate(
+			(name) =>
+				window[name]
+					? { url: window[name].url.toString(), runs: window[name].codecRuns }
+					: null,
+			CLIENT_NAME,
+		)
+		.catch(() => null);
 let runs = null;
 for (let i = 0; i < 100 && !runs; i++) {
-	runs = await page
-		.evaluate(() => {
-			const top = window.__frame.element.contentWindow;
-			const name = window.controller.config.names.client;
-			const [routed, blank] = [...top.document.querySelectorAll('iframe')].map(
-				(frame) => frame.contentWindow,
-			);
-			if (!top[name] || !routed?.[name] || !blank?.[name]) return null;
-			if (!/hist-2/.test(routed[name].url.toString())) return null;
-			return [top, routed, blank].map((realm) => realm[name].codecRuns);
-		})
-		.catch(() => null);
+	const top = await shown().catch(() => null);
+	const [routed, blank] = top?.childFrames() ?? [];
+	const clients = top
+		? await Promise.all([top, routed, blank].map((f) => f && clientOf(f)))
+		: [];
+	if (clients.length === 3 && clients.every(Boolean))
+		if (/hist-2/.test(clients[1].url))
+			runs = clients.map((client) => client.runs);
 	if (!runs) await sleep(100);
 }
 note();
@@ -190,30 +208,32 @@ ok(
 // storage written past the bridge's beacons (the ordered fetch), a GET form
 // without an action: to the document's own address, then its sealed one,
 // the fields the page sees as it submitted them
-await page.evaluate(() => {
-	const top = window.__frame.element.contentWindow;
-	top.localStorage.setItem('codec-key', 'x'.repeat(200000));
-	const form = top.document.createElement('form');
-	const input = top.document.createElement('input');
+await (
+	await shown()
+).evaluate(() => {
+	localStorage.setItem('codec-key', 'x'.repeat(200000));
+	const form = document.createElement('form');
+	const input = document.createElement('input');
 	input.name = 'field';
 	input.value = 'value';
 	form.append(input);
-	top.document.body.append(form);
+	document.body.append(form);
 	form.submit();
 });
 let landed = null;
 for (let i = 0; i < 100 && !landed; i++) {
-	landed = await page
-		.evaluate(() => {
-			const top = window.__frame.element.contentWindow;
-			const client = top[window.controller.config.names.client];
-			return client && client.url.url.search === '?field=value'
-				? {
-						page: top.document.URL,
-						stored: top.localStorage.getItem('codec-key')?.length,
-					}
-				: null;
-		})
+	landed = await shown()
+		.then((top) =>
+			top.evaluate((name) => {
+				const client = window[name];
+				return client && client.url.url.search === '?field=value'
+					? {
+							page: document.URL,
+							stored: localStorage.getItem('codec-key')?.length,
+						}
+					: null;
+			}, CLIENT_NAME),
+		)
 		.catch(() => null);
 	if (!landed) await sleep(100);
 }

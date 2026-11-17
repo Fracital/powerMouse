@@ -120,9 +120,10 @@ on every save (use a `git worktree`).
 - **The document bundle's deferred parts are in no bundle.** The files
   build.js lists in `DEFERRED_FILES` (the service worker container's objects,
   the Cookie Store methods, the Fingerprint module, the WebTransport stand-in
-  and what carries its sessions, the Permissions module's requests and
-  device ids, the WebRTC library's install, an XHR response's document and
-  XHR's misuse messages) are the last statement of
+  and what carries its sessions, the site pool's code that runs on an
+  event, the Permissions module's requests and device ids, the WebRTC
+  library's install, an XHR response's document and XHR's misuse messages)
+  are the last statement of
   `dist/rewriterLib.js`, evaluated by a document the first time it calls
   `deferred()` (`src/inject/dom/deferred.ts`): a top's shell loaded it, a
   frame takes its top's text, and only a realm with no top to take it from
@@ -368,7 +369,16 @@ the proxy, not a state to leave. What every proxied frame costs is gated by `fra
 which is not a measurement: a heap ceiling for one proxied frame of 20 with
 room for noise (measure-frame-memory is the full measurement) and a size
 budget for `dist/injectDocument.js`. Raise a budget only in the change that
-needs it, saying why. The `test262 differential` job runs test262's
+needs it, saying why. A frame pays for what its realm makes, not for the
+code it never runs: every function the bundle creates as it loads (a
+module's top-level function or constant arrow, a class's method, a closure a
+module's `apply` makes) is a closure each frame holds, about 55 bytes
+(Chrome 157: 40 more read 2.2 KB a frame more in measure-frame-memory), and
+a property hook's pair of wrappers about 1.3 KB. Code only some documents
+need (a site pool's, a hook's rare branch) goes in a deferred part or behind
+one function that makes it on first use, as `siteWindows()`
+(src/inject/dom/siteWindows.ts) does, and a hook only some documents need
+is made when the first one does (DOMAttributes' `slotAllow`). The `test262 differential` job runs test262's
 language, built-ins and annexB tests natively and rewritten in node
 (`npm run test262`, test/test262/run.mjs, about 2 minutes on the runner's 4
 cores) and gates them with `npm run test262:report` against

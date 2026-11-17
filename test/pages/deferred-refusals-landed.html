@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>deferred refusals landed</title>
+	</head>
+	<body>
+		<script>
+			// Where the suite deferred-refusals' child goes when a form a frame
+			// of it aimed at it was submitted: it answers for the child.
+			parent.postMessage(
+				{
+					out: { formAimed: { landed: location.search } },
+					reached: window.__nativeReached ?? null,
+				},
+				'*',
+			);
+		</script>
+	</body>
+</html>

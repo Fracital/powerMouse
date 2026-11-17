@@ -3,9 +3,11 @@
 // library's file: a proxied top's shell loads it before this bundle, which
 // takes the statement's function as it loads (src/inject/rewriter.ts
 // deferredFactory). A document under that top evaluates the function's text
-// in its own realm (the bundle's), taken from the top, with no request. Only
-// a realm with no such top (a frame sandboxed to an opaque origin, a frame
-// under a top of another build, a top the page made) asks for the file
+// in its own realm (the bundle's), taken from the top, with no request (a
+// frame of another slot than its page's, from its slot's agent:
+// src/controller/slotLibrary.ts). Only a realm with neither (a frame
+// sandboxed to an opaque origin, a frame under a top of another build, a top
+// the page made) asks for the file
 // itself, with the one synchronous request its own copy of the light library
 // makes too (the file is read once for both). The function is handed this
 // bundle's own modules (stomp:deferred-shared), so the parts share the

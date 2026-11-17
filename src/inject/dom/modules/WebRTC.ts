@@ -130,8 +130,12 @@ const snapshot = {
 	},
 };
 
-/** what loading the library takes: this bundle's own, from before the page ran */
-const loading = {
+/**
+ * What loading the library takes: this bundle's own, from before the page
+ * ran. Made with the library, as the object it is passed in (an object made
+ * as the bundle loaded cost every frame a shape a member)
+ */
+const loading = () => ({
 	requestOpen,
 	requestSend,
 	requestStatus,
@@ -140,8 +144,8 @@ const loading = {
 	snapshot,
 	setValues,
 	setIteratorNext,
-};
-export type RtcLoading = typeof loading;
+});
+export type RtcLoading = ReturnType<typeof loading>;
 
 /** the client of a document that has the tables */
 interface Linked {
@@ -370,7 +374,7 @@ export default class WebRTCModule extends Module<DocumentClient> {
 					standIns,
 					captures,
 					installNow,
-					loading,
+					loading: loading(),
 				},
 				(made) => (installed = made),
 			);

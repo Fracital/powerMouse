@@ -1,14 +1,18 @@
 import {
 	ACTIVATED,
 	CLIENT_ID,
+	FRAME_ENTRY,
 	FRAME_MOVED,
+	HISTORY_RUN,
 	NAVIGATE,
 	NavigateInfo,
+	NAVIGATION_TYPE,
 } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { activationState, markActivation, noteInput } from '../activation';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import { siteWindows } from '../siteWindows';
 import HistoryModule from './History';
 
 /**
@@ -242,8 +246,25 @@ export default class NavigateModule extends Module<DocumentClient> {
 		// no message per change, in every frame of every page
 		if (moduleClient.nested) {
 			tell = () => moduleClient.postToHost({ [CLIENT_ID]: client });
+			// its entry, for the slot's frame to read when it cannot read the
+			// document itself: one of another origin than the page's top
+			// (history.ts noteEntry). A document that reaches the page's top
+			// is of its origin, and the slot's frame reads it
+			const entry =
+				moduleClient.sites &&
+				((
+					(moduleClient.proxiedTop as Record<string, any>)[
+						moduleClient.names.client
+					] as DocumentClient | undefined
+				)?.nested ??
+					true)
+					? siteWindows().currentEntry(global)
+					: null;
 			watchHistory(() =>
-				moduleClient.postToHost({ [FRAME_MOVED]: client ?? null }),
+				moduleClient.postToHost({
+					[FRAME_MOVED]: client ?? null,
+					...(entry ? { [FRAME_ENTRY]: entry() } : {}),
+				}),
 			);
 			return;
 		}
@@ -251,6 +272,9 @@ export default class NavigateModule extends Module<DocumentClient> {
 		// the frame's own history, all of it, whatever the page does to the
 		// API (the page's view of it stops at its own origin)
 		const history = moduleClient.getModule(HistoryModule)!;
+		const navigationType = moduleClient.sites
+			? siteWindows().activationType(global)
+			: null;
 
 		// the icon as the page declared it: the attribute the page wrote
 		// (getAttribute hands back the original), resolved against the real URL
@@ -286,10 +310,17 @@ export default class NavigateModule extends Module<DocumentClient> {
 				icon: icon(),
 				...(client ? { client } : {}),
 			};
-			const key = JSON.stringify(info);
+			// the site pool: where the document is in its slot's stretch of
+			// the frame's history (a step within it changes no URL at times)
+			const run = history.ownRun?.() ?? null;
+			const key = JSON.stringify([info, run]);
 			if (key === last) return;
 			last = key;
-			moduleClient.postToHost({ [NAVIGATE]: info });
+			moduleClient.postToHost({
+				[NAVIGATE]: info,
+				...(navigationType ? { [NAVIGATION_TYPE]: navigationType() } : {}),
+				...(run ? { [HISTORY_RUN]: run } : {}),
+			});
 		};
 		tell = post;
 

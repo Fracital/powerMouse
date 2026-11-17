@@ -37,6 +37,7 @@ Environment variables:
 | `STOMP_REWRITER`       | unset          | `wasm` runs the Rust rewriters where a thread holds them (the controller's `rewriter` option; `?wasm` does one visit, `?js` the JavaScript ones)                       |
 | `STOMP_ADBLOCK`        | on             | Set to `0` to turn off the content blocker (docs/adblock.md), a JSON object is its `adblock` option; `?noadblock` and `?adblock` do one visit, the toggle is kept      |
 | `STOMP_ECH_DNS`        | Cloudflare DoH | DNS-over-HTTPS endpoint epoxy asks for HTTPS records to offer real Encrypted Client Hello (docs/fingerprint.md); `off` sends GREASE ECH only (`?noech` does one visit) |
+| `STOMP_SITE_POOL`      | unset          | More ports to answer on, a list or a number of free ones to take: the slots of the site pool (see Site pool; `?nopool` on the page leaves it out for a visit)          |
 | `STOMP_TEST_TRANSPORT` | unset          | Set to `1` to use `/test/mixed-transport.mjs` (epoxy that reaches the suites' fixture hosts: mixed-content's, and the names under a private suffix); test runs only    |
 
 They can also live in a `.env` file next to `package.json` (not committed);
@@ -367,6 +368,29 @@ What the isolated mode consists of:
   title are relayed through the controller frame, which is same-origin with
   the proxied pages; the host page never touches them directly.
 
+## Site pool
+
+On by default. The server answers on five more free ports
+(`STOMP_SITE_POOL`: a number of free ports, or a list, `8081,8082`; `0` or
+`off` for none), and the controller shows every proxied site from one of
+them (`init.sitePool`, docs/site-pool.md): the browser gives each port's
+origin a process of its own, so a page and a frame of another site in it
+are apart as natively. The `Mode` badge says so, and `?nopool` leaves the
+pool out for a visit. The controller embeds a hidden agent frame on each
+port in use, which registers that origin's service worker; the tabs are
+frames on the pool's origins, so the address bar's URL and title come from
+the pages' reports and Back and Forward go through the agents. Both pages
+use it, the same-origin one and isolation mode's.
+
+Behind a front (Cloudflare, OpenResty) the slots are the front's ports:
+`STOMP_SITE_POOL_PUBLIC` lists them (`2053,2083,2087,2096,8443`), the
+front forwards each to the server and says which one with
+`X-Forwarded-Port`, and everything those ports answer must keep the
+server's `Origin-Agent-Cluster: ?1`. A page that came through a front with
+no `STOMP_SITE_POOL_PUBLIC` has no pool; a slot the browser cannot reach
+is left out for the page and its sites are shown from the page's own
+origin (docs/site-pool.md, Fallbacks).
+
 ## Cross-origin isolation
 
 Every response of the server carries
@@ -391,7 +415,8 @@ commit list do not; under `credentialless` they load, without cookies.
 
 `STOMP_ISOLATION=off` leaves the three headers out. Nothing is isolated
 then, and everything else is the same. The suites run that way
-(test/run.mjs) except `cross-origin-isolation` and `sop-escapes`: under an
+(test/run.mjs) except `cross-origin-isolation`, `sop-escapes` and
+`popup-openers`: under an
 isolated page whose proxy is on another origin, Chrome gives the proxied
 frames no window for the popups they open, and the suites open real popups
 (the demo's own page takes them as tabs with `onOpen`, so it loses nothing).

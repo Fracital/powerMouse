@@ -77,33 +77,52 @@ const LOST = 'mixed-second|';
  * Trouble on the way to the service worker for the asynchronous storage
  * writes: `late` reads the body of every one LATE_MS late (its fetch event
  * arrives at once; reading it is what takes the time for a large one on a
- * slow runner), `lost` fails the body of the write of LOST
+ * slow runner), `lost` fails the body of the write of LOST. Every worker of
+ * the context gets it, the ones that start later too: with the site pool
+ * (docs/site-pool.md) the page's writes go to the worker of its slot's
+ * origin, which starts when the page is shown. `hits()` counts the writes
+ * it troubled, so a run whose trouble never met a write says so.
  */
 const trouble = async (context, kind) => {
+	const patch = (worker) =>
+		worker
+			.evaluate(
+				([kind, delay, lost]) => {
+					if (self.__trouble !== undefined) return;
+					self.__trouble = 0;
+					const text = Request.prototype.text;
+					for (const name of ['arrayBuffer', 'blob', 'json', 'text']) {
+						const read = Request.prototype[name];
+						Request.prototype[name] = async function () {
+							const { pathname } = new URL(this.url);
+							if (!/\/(local|session)Storage\/ordered$/.test(pathname))
+								return read.call(this);
+							if (kind === 'late') {
+								self.__trouble++;
+								await new Promise((resolve) => setTimeout(resolve, delay));
+							} else if ((await text.call(this.clone())).includes(lost)) {
+								self.__trouble++;
+								throw new TypeError('Failed to fetch');
+							}
+							return read.call(this);
+						};
+					}
+				},
+				[kind, LATE_MS, LOST],
+			)
+			.catch(() => {});
+	context.on('serviceworker', patch);
 	for (let i = 0; i < 100 && !context.serviceWorkers().length; i++)
 		await sleep(100);
 	const workers = context.serviceWorkers();
-	for (const worker of workers)
-		await worker.evaluate(
-			([kind, delay, lost]) => {
-				const text = Request.prototype.text;
-				for (const name of ['arrayBuffer', 'blob', 'json', 'text']) {
-					const read = Request.prototype[name];
-					Request.prototype[name] = async function () {
-						const { pathname } = new URL(this.url);
-						if (!/\/(local|session)Storage\/ordered$/.test(pathname))
-							return read.call(this);
-						if (kind === 'late')
-							await new Promise((resolve) => setTimeout(resolve, delay));
-						else if ((await text.call(this.clone())).includes(lost))
-							throw new TypeError('Failed to fetch');
-						return read.call(this);
-					};
-				}
-			},
-			[kind, LATE_MS, LOST],
-		);
-	return workers.length;
+	await Promise.all(workers.map(patch));
+	const hits = async () => {
+		let sum = 0;
+		for (const worker of context.serviceWorkers())
+			sum += await worker.evaluate(() => self.__trouble ?? 0).catch(() => 0);
+		return sum;
+	};
+	return { count: workers.length, hits };
 };
 /** what natively reads back, less the key of the write that was lost */
 const withoutLost = (read) => {
@@ -131,11 +150,8 @@ for (const [mode, base, kind] of [
 	['isolated with a lost write', HOST, 'lost'],
 ]) {
 	const page = await openDemo(browser, base);
-	if (kind)
-		ok(
-			`${mode}: the worker is in trouble`,
-			(await trouble(page.context(), kind)) > 0,
-		);
+	const troubled = kind ? await trouble(page.context(), kind) : null;
+	if (kind) ok(`${mode}: the worker is in trouble`, troubled.count > 0);
 	await submitLanding(page, target);
 	let proxied = null;
 	// the write phase's results, from the fragment the page reloaded with,
@@ -153,6 +169,14 @@ for (const [mode, base, kind] of [
 		}
 	}
 	ok(`${mode}: the page writes, reloads and reads back`, !!proxied);
+	if (kind) {
+		const hits = await troubled.hits();
+		ok(
+			`${mode}: the trouble met the page's writes`,
+			hits > 0,
+			`${hits} troubled`,
+		);
+	}
 	if (!proxied && written) proxied = { written };
 	if (kind === 'lost')
 		ok(

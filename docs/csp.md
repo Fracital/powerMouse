@@ -44,6 +44,21 @@ replaced by the browser policy for it (the inject's attribute hook; the page
 reads its own content back), and it applies when the meta is inserted, as
 natively.
 
+A document of the site pool (docs/site-pool.md) is on a slot's origin, and a
+frame or a form of a site another slot shows reaches it by a 307 to that
+slot's origin, which the browser judges by its copy of the page's policy.
+So the browser's frame-src, fenced-frame-src and form-action (whatever
+fallback the page's comes from: child-src, default-src) also name the
+pool's slots wherever the page's sources let any URL through. The page's
+own policy is still the inject's and the worker's to apply, before the
+hop: a frame, a form or a redirect it refuses goes to a refusal URL, which
+is on no slot's origin, and what the documents of a navigation told the
+worker of its policies and of a frame's ancestors goes on to the next
+slot's worker with the navigation. The inject reads a URL the browser
+names on another slot's origin as the same route on its own, and one that
+is no route there (a bare slot origin) as no URL: a violation never names
+a slot.
+
 Each browser policy carries a mark of its own, a scheme source that matches
 nothing (`p1a2b3c-0:`), so the inject knows which of the page's policies
 the browser reports (two of the page's can come out the same for the

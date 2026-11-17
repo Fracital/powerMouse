@@ -29,6 +29,7 @@ import {
 	ok,
 	PROXY,
 	sleep,
+	SLOT_PORTS,
 	submitLanding,
 	waitForServer,
 } from '../lib.mjs';
@@ -72,6 +73,18 @@ const EXCLUDED = [
 		"OPEN: Chrome gives a frame of another origin than its top the low-power GPU, which the isolated demo host's frame is",
 		'isolated',
 	],
+	// the site pool (docs/site-pool.md) shows the same-origin page's sites
+	// from a slot, another origin than the host's
+	...(SLOT_PORTS.length
+		? [
+				[
+					/^(document|frame)$/,
+					/^webgl2?\.attributes\.powerPreference$/,
+					"OPEN: Chrome gives a frame of another origin than its top the low-power GPU, which a site pool slot's frame is",
+					'same-origin',
+				],
+			]
+		: []),
 ];
 
 const CONFIGURATIONS = [

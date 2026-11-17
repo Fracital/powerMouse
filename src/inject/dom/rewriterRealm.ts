@@ -1,6 +1,5 @@
 import type { RewriterLib } from '../../rewriterLight';
 import { LIGHT_FACTORY } from '../../version';
-import { lightFactory } from '../rewriter';
 import { trustedScript } from '../trusted';
 
 /** the name the realm's factory is assigned to while its script runs */
@@ -35,9 +34,11 @@ const scriptTextSet = Reflect.getOwnPropertyDescriptor(
 
 /**
  * The rewriter library (src/rewriterLib.ts) in a realm of its own, for a
- * proxied top and every frame under it (src/inject/rewriter.ts), or null
- * when one cannot be made (a document whose script policy refuses eval: a
- * sandbox without allow-scripts, sandbox.ts).
+ * proxied top and every frame under it (src/inject/rewriter.ts), or for
+ * the documents of a slot of the site pool that have no top in reach (a
+ * slot's agent makes it, src/controller/slotLibrary.ts), or null when one
+ * cannot be made (a document whose script policy refuses eval: a sandbox
+ * without allow-scripts, sandbox.ts).
  *
  * The realm is an about:blank frame's, made in `document` and removed again
  * in the same task, before any page code of the document runs: no page can
@@ -52,8 +53,8 @@ const scriptTextSet = Reflect.getOwnPropertyDescriptor(
  */
 export function createRewriterRealm(
 	document: Document,
-	/** what makes the library: the light one (src/inject/rewriter.ts lightFactory), or the rewriter library itself when the shell loaded it (givenLibrary) */
-	given?: (realm?: Record<string, unknown>) => RewriterLib,
+	/** the factory of the library: the light one's (src/inject/rewriter.ts lightFactory), asked for here; it may throw */
+	given: () => (realm?: Record<string, unknown>) => RewriterLib,
 	/**
 	 * The document's nonce, where its policy refuses code made from a
 	 * string (src/csp.ts): the frame inherits the policy, and the factory's
@@ -64,7 +65,7 @@ export function createRewriterRealm(
 	let root: Element | null = null;
 	let frame: HTMLIFrameElement | null = null;
 	try {
-		const factory = given ?? lightFactory();
+		const factory = given();
 		root = Reflect.apply(documentElementGet, document, []) as Element | null;
 		if (!root) return null;
 		frame = Reflect.apply(createElement, document, [

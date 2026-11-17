@@ -96,6 +96,12 @@ const framesIn = Reflect.getOwnPropertyDescriptor(globalThis, 'length')?.get;
 /** how far up, and how far along each window's frames, the controller is looked for */
 const KICK_DEPTH = 8;
 const KICK_FRAMES = 64;
+/**
+ * how many frames of a frame of another origin are looked in: the site
+ * pool's agents, which are the controllers of their slots' pages, are
+ * frames of the controller frame when the hub is one (RemoteController)
+ */
+const KICK_NESTED = 16;
 
 /**
  * Tell the controller at `directory` that this page waits for the worker
@@ -119,8 +125,25 @@ function kick(from: Window, directory: string) {
 	const tell = (target: Window) => {
 		try {
 			Reflect.apply(dispatchEvent, target, [event]);
+			return true;
 		} catch (error) {
 			// a window of another origin
+			return false;
+		}
+	};
+	const tellIn = (target: Window) => {
+		let frames = 0;
+		try {
+			frames = Reflect.apply(framesIn, target, []);
+		} catch (error) {
+			// no frames to look in
+		}
+		for (let index = 0; index < frames && index < KICK_NESTED; index++) {
+			try {
+				tell(target[index]);
+			} catch (error) {
+				// gone since it was counted
+			}
 		}
 	};
 	let window = from;
@@ -141,7 +164,8 @@ function kick(from: Window, directory: string) {
 		}
 		for (let index = 0; index < frames && index < KICK_FRAMES; index++) {
 			try {
-				tell(parent[index]);
+				const frame = parent[index];
+				if (frame !== window && !tell(frame)) tellIn(frame);
 			} catch (error) {
 				// gone since it was counted
 			}

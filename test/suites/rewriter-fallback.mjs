@@ -33,6 +33,7 @@ import {
 	submitLanding,
 	submitOmni,
 	waitActive,
+	watchFrameTargets,
 } from '../lib.mjs';
 
 const target = `${FIXTURE}pages/deep/rwf/rewriter-fallback.html`;
@@ -141,35 +142,45 @@ const counts = (frame, name) =>
  * the HTTP cache.
  */
 async function watchLibrary(page) {
+	const asked = new Map();
+	const on = {
+		'Network.requestWillBeSent': ({ requestId, request }) => {
+			if (LIBRARY.test(request.url))
+				asked.set(requestId, { url: request.url, cached: false, done: false });
+		},
+		'Network.requestServedFromCache': ({ requestId }) => {
+			const entry = asked.get(requestId);
+			if (entry) entry.cached = true;
+		},
+		'Network.responseReceived': ({ requestId, response }) => {
+			const entry = asked.get(requestId);
+			if (!entry) return;
+			entry.status = response.status;
+			entry.cacheControl =
+				response.headers['cache-control'] ?? response.headers['Cache-Control'];
+			if (response.fromDiskCache || response.fromPrefetchCache)
+				entry.cached = true;
+		},
+		'Network.loadingFinished': ({ requestId }) => {
+			const entry = asked.get(requestId);
+			if (entry) entry.done = true;
+		},
+	};
 	const cdp = await page.context().newCDPSession(page);
 	await cdp.send('Network.enable');
-	const asked = new Map();
-	cdp.on('Network.requestWillBeSent', ({ requestId, request }) => {
-		if (LIBRARY.test(request.url))
-			asked.set(requestId, { url: request.url, cached: false, done: false });
-	});
-	cdp.on('Network.requestServedFromCache', ({ requestId }) => {
-		const entry = asked.get(requestId);
-		if (entry) entry.cached = true;
-	});
-	cdp.on('Network.responseReceived', ({ requestId, response }) => {
-		const entry = asked.get(requestId);
-		if (!entry) return;
-		entry.status = response.status;
-		entry.cacheControl =
-			response.headers['cache-control'] ?? response.headers['Cache-Control'];
-		if (response.fromDiskCache || response.fromPrefetchCache)
-			entry.cached = true;
-	});
-	cdp.on('Network.loadingFinished', ({ requestId }) => {
-		const entry = asked.get(requestId);
-		if (entry) entry.done = true;
-	});
+	for (const [method, handle] of Object.entries(on)) cdp.on(method, handle);
+	// and the frames in processes of their own: a document shown from a site
+	// pool's slot is one
+	const unwatch = await watchFrameTargets(
+		page,
+		['Network.enable'],
+		(method, params) => on[method]?.(params),
+	);
 	return {
 		all: () => [...asked.values()],
 		network: () => [...asked.values()].filter((entry) => !entry.cached),
 		clear: () => asked.clear(),
-		stop: () => cdp.detach().catch(() => {}),
+		stop: () => Promise.all([unwatch(), cdp.detach().catch(() => {})]),
 	};
 }
 

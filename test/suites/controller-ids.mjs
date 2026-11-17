@@ -26,9 +26,11 @@ import {
 	ok,
 	OUT,
 	PROXY,
+	proxyOwned,
 	sleep,
 	submitLanding,
 	waitActive,
+	watchFrameTargets,
 } from '../lib.mjs';
 
 const KEY = 'kept-tab-ids';
@@ -207,22 +209,32 @@ ok(
 {
 	const visit = async (page) => {
 		const scripts = [];
-		const cdp = await context.newCDPSession(page);
-		await cdp.send('Network.enable');
-		// the proxied frame is the host's own process in this mode
-		cdp.on('Network.responseReceived', (event) => {
-			if (/\/js:\w+\//.test(event.response.url))
+		const heard = (method, event) => {
+			if (
+				method === 'Network.responseReceived' &&
+				/\/js:\w+\//.test(event.response.url)
+			)
 				scripts.push({
 					url: event.response.url,
 					store: event.response.cacheStorageCacheName ?? '',
 				});
-		});
+		};
+		// the proxied frame is the host's own process without a site pool, and
+		// a process of its own when it is shown from a slot of the pool
+		const cdp = await context.newCDPSession(page);
+		await cdp.send('Network.enable');
+		cdp.on('Network.responseReceived', (event) =>
+			heard('Network.responseReceived', event),
+		);
+		const unwatch = await watchFrameTargets(page, ['Network.enable'], heard);
 		await submitLanding(
 			page,
 			`${FIXTURE}pages/rewrite-cache.html?s=${encodeURIComponent('name=visit&cc=no-cache')}`,
 		);
 		await waitActive(page, () => document.title === 'REWRITE CACHE');
 		await sleep(1500);
+		await unwatch();
+		await cdp.detach();
 		return scripts;
 	};
 	const before = await visit(third);
@@ -230,7 +242,11 @@ ok(
 	const again = await open();
 	const after = await visit(again);
 	const inserted = (list) =>
-		list.filter((script) => script.url.startsWith(`${PROXY}stomp/${firstId}/`));
+		list.filter(
+			(script) =>
+				proxyOwned(script.url) &&
+				new URL(script.url).pathname.startsWith(`/stomp/${firstId}/`),
+		);
 	ok(
 		'a returning visit asks for its scripts under the routed URLs it had',
 		(await idOf(again)) === firstId &&

@@ -3,8 +3,17 @@
 // nothing else runs); a link's rel is a token list, with `as` deciding the
 // route of a preload; every SVG element that references a resource by href
 // or xlink:href (gradients, patterns, filters, links, scripts) is routed.
-// Same-origin mode, where the host realm reads the frame's real attributes.
-import { done, FIXTURE, launch, ok, PROXY, sleep } from '../lib.mjs';
+// Same-origin mode, where a world of the frame's own reads its real
+// attributes.
+import {
+	done,
+	evaluateIsolated,
+	FIXTURE,
+	launch,
+	ok,
+	PROXY,
+	sleep,
+} from '../lib.mjs';
 
 const browser = await launch();
 const page = await browser.newPage();
@@ -44,10 +53,10 @@ ok(
 	JSON.stringify(scripts.plain),
 );
 
-const real = await page.evaluate(() => {
-	const doc = window.__el.contentDocument;
-	const get = (id, name) =>
-		Element.prototype.getAttribute.call(doc.getElementById(id), name);
+// the real attributes, in a world of the frame's own that no hook reaches
+// (the frame can be of another origin than this page: a site pool's slot)
+const real = await evaluateIsolated(frame, () => {
+	const get = (id, name) => document.getElementById(id).getAttribute(name);
 	return {
 		l1: get('l1', 'href'),
 		l2: get('l2', 'href'),

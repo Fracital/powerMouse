@@ -5,6 +5,10 @@ import ProxyModule from '../../modules/Proxy';
 import { failsToParse, withStack } from '../../nativeErrors';
 import { OwnWeakMap } from '../../ownCollections';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import { deferred } from '../deferred';
+import type { DeferredParts } from '../deferredParts';
+import { Pool } from '../pool';
+import { siteWindows } from '../siteWindows';
 
 const LACKS_SAME_ORIGIN =
 	"The document is sandboxed and lacks the 'allow-same-origin' flag.";
@@ -261,11 +265,26 @@ export default class SandboxModule extends Module<DocumentClient> {
 			).toLowerCase();
 			if (client.sandboxFlags === null) {
 				const aimed = client.targetWindow(target);
-				if (!aimed) return;
+				// the site pool: the window is another slot's, asked to go
+				// there itself; a javascript: URL runs in no window of another
+				// origin, as natively
+				const across =
+					aimed || !client.sites
+						? null
+						: siteWindows().targetAcross(client, target);
+				if (!aimed && !across) return;
 				const destination = resolve(link.getAttribute('href'));
 				if (!['http:', 'https:', 'javascript:'].includes(destination.protocol))
 					return;
 				event.preventDefault();
+				if (!aimed) {
+					if (destination.protocol !== 'javascript:')
+						deferred().navigateAcross(client, across!, {
+							kind: 'link',
+							url: destination.href,
+						});
+					return;
+				}
 				aimed.client.callIn(nativeAssign, aimed.window.location, [
 					// a document is one of that window's own navigations; a
 					// javascript: URL's code is rewritten to run there
@@ -317,12 +336,17 @@ export default class SandboxModule extends Module<DocumentClient> {
 			submitter: HTMLElement | null,
 		): boolean => {
 			if (client.sandboxFlags !== null) return false;
-			const aimed = client.targetWindow(
+			const keyword =
 				submitter?.getAttribute('formtarget') ||
-					form.getAttribute('target') ||
-					global.document.querySelector('base[target]')?.getAttribute('target'),
-			);
-			if (!aimed) return false;
+				form.getAttribute('target') ||
+				global.document.querySelector('base[target]')?.getAttribute('target');
+			const aimed = client.targetWindow(keyword);
+			// the site pool: a window of another slot (see onClick)
+			const across =
+				aimed || !client.sites
+					? null
+					: siteWindows().targetAcross(client, keyword);
+			if (!aimed && !across) return false;
 			const method = (
 				submitter?.getAttribute('formmethod') ??
 				form.getAttribute('method') ??
@@ -345,58 +369,50 @@ export default class SandboxModule extends Module<DocumentClient> {
 			)
 				return false;
 			if (destination.protocol === 'javascript:') {
-				aimed.client.callIn(nativeAssign, aimed.window.location, [
-					routeHTML(
-						new StompURL(destination, client.url),
-						client.url,
-						client.config,
-						false,
-						aimed.client.nestedRoute,
-					),
-				]);
+				if (aimed)
+					aimed.client.callIn(nativeAssign, aimed.window.location, [
+						routeHTML(
+							new StompURL(destination, client.url),
+							client.url,
+							client.config,
+							false,
+							aimed.client.nestedRoute,
+						),
+					]);
 				return true;
 			}
 			if (!['http:', 'https:'].includes(destination.protocol)) return false;
-			const document = aimed.window.document;
-			const copy = document.createElement('form');
-			for (const [name, override] of [
-				['method', 'formmethod'],
-				['enctype', 'formenctype'],
-				['accept-charset', null],
-			] as const) {
-				const value =
-					(override && submitter?.getAttribute(override)) ??
-					form.getAttribute(name);
-				if (value !== null && value !== undefined)
-					copy.setAttribute(name, value);
-			}
-			copy.setAttribute('action', destination.href);
-			for (const [name, value] of new global.FormData(
-				form,
-				submitter ?? undefined,
-			)) {
-				const input = document.createElement('input');
-				input.name = name;
-				if (typeof value === 'string') {
-					input.type = 'hidden';
-					input.value = value;
-				} else {
-					input.type = 'file';
-					const files = new global.DataTransfer();
-					files.items.add(value);
-					input.files = files.files;
-				}
-				copy.append(input);
-			}
-			copy.hidden = true;
-			document.documentElement.append(copy);
+			// the copy of the form that window submits, or the ask of a window
+			// of another slot (a deferred part, ../siteAcross.ts); a submission
+			// whose part cannot be had goes nowhere (never the browser's own,
+			// which lands in this frame: the form's target reads `_self` to
+			// the browser)
+			let parts: DeferredParts;
 			try {
-				aimed.client.callIn(nativeSubmit, copy, []);
-			} finally {
-				copy.remove();
+				parts = deferred();
+			} catch (error) {
+				return true;
 			}
+			parts.submitAimed(
+				client,
+				form,
+				submitter,
+				destination,
+				aimed,
+				across,
+				nativeSubmit,
+			);
 			return true;
 		};
+		// the site pool: what a frame of another slot under this window asks
+		// of it (navigateAcross), carried out here as this window's own
+		// navigation: a document routed as its own, a form submitted from a
+		// copy in its document
+		client.pool[Pool.AcceptAcross] = (request) =>
+			deferred().acceptAcross(client, request, {
+				assign: nativeAssign,
+				submit: nativeSubmit,
+			});
 		const onSubmit = (event: SubmitEvent) => {
 			if (event.defaultPrevented) return;
 			const form = event.target;

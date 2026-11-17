@@ -462,6 +462,8 @@ const DEFERRED_FILES = new Set(
 		'src/inject/webTransport.ts',
 		'src/inject/webTransportStandIn.ts',
 		'src/inject/xhrChecks.ts',
+		'src/inject/dom/siteAcross.ts',
+		'src/inject/dom/siteEvents.ts',
 		'src/transport/bodyPort.ts',
 		'src/transport/RemoteTransport.ts',
 		'src/transport/rpc.ts',
@@ -865,6 +867,12 @@ const builds = [
 	},
 	{
 		entryPoints: { controllerFrame: 'src/controller/frame.ts' },
+		format: 'iife',
+	},
+	{
+		// a slot's agent of the site pool (src/controller/sites.ts), loaded by
+		// controllerFrame.html as `?script=siteFrame.js`
+		entryPoints: { siteFrame: 'src/controller/site.ts' },
 		format: 'iife',
 	},
 	{

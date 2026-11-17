@@ -1,3 +1,4 @@
+import type { SitesConfig } from '../../../config';
 import { siteOf } from '../../../partition';
 import { routeHTML } from '../../../rewriteHTML';
 import StompURL, { urlLike } from '../../../StompURL';
@@ -20,8 +21,13 @@ import {
 } from '../../ownCollections';
 import { getPublicSuffix } from '../../rewriter';
 import { activationState } from '../activation';
-import DocumentClient, { addDocumentOpenListener } from '../Client';
+import DocumentClient, {
+	addDocumentOpenListener,
+	type AcrossNavigation,
+} from '../Client';
+import { deferred } from '../deferred';
 import { frameDestination, frameOfHeld, heldBefore } from '../freshContext';
+import { foreignWindow, nativeOrigin, siteWindows } from '../siteWindows';
 
 function removeBlob(protocol: string): string {
 	return protocol.startsWith('blob:') ? protocol.slice(5) : protocol;
@@ -121,11 +127,18 @@ export function initialBlank(context: typeof globalThis): boolean {
 	}
 }
 
-/** whether a window runs STomp (a cross-origin one throws on the check) */
+/**
+ * whether a window runs STomp (one of another origin is asked nothing: it
+ * would throw on the check, and an exception is most of what a read of
+ * another slot's window cost)
+ */
 export function isStomp(value: unknown, client: string): boolean {
 	try {
 		return (
-			typeof value === 'object' && value !== null && client in (value as object)
+			typeof value === 'object' &&
+			value !== null &&
+			!foreignWindow(value) &&
+			client in (value as object)
 		);
 	} catch (error) {
 		return false;
@@ -141,8 +154,12 @@ function childNamed(context: Context, name: string): Context | undefined {
 	try {
 		const prototype = Reflect.getPrototypeOf(context);
 		const named = prototype && Reflect.getPrototypeOf(prototype);
-		if (!named) return undefined;
-		const value = Reflect.getOwnPropertyDescriptor(named, name)?.value;
+		// a window of another real origin (the site pool: another slot's)
+		// has no prototype to read: the browser hands out its named children
+		// itself, and throws for any other name
+		const value = named
+			? Reflect.getOwnPropertyDescriptor(named, name)?.value
+			: Reflect.get(context, name);
 		if (typeof value !== 'object' || value === null) return undefined;
 		for (let index = 0; index < context.length; index++)
 			if ((context as unknown as Record<number, unknown>)[index] === value)
@@ -153,7 +170,13 @@ function childNamed(context: Context, name: string): Context | undefined {
 	return undefined;
 }
 
-function findTop(global: typeof globalThis, client: string): Context {
+function findTop(
+	global: typeof globalThis,
+	client: string,
+	sites?: SitesConfig | null,
+	from: typeof globalThis = global,
+): Context {
+	if (sites) return siteWindows().siteTop(global, sites.hub, from);
 	let context: Context = global;
 
 	// walk up while the parent is still a STomp context; the controller page
@@ -212,6 +235,28 @@ interface ParsedPostMessageArgs {
 	data: any;
 	transfer: Transferable[];
 	targetOrigin: string;
+}
+
+/** whether `value` is a window, of any origin, as `client`'s realm reads it */
+export function isWindow(
+	client: DocumentClient,
+	value: unknown,
+): value is Context {
+	try {
+		// (by the browser's own `window` getter, which answers for a
+		// window of any origin: a Proxy of the page's is asked nothing
+		// and passes for none)
+		if (client.isWindowObject) return client.isWindowObject(value);
+		return (
+			typeof value === 'object' &&
+			value !== null &&
+			(value as { window?: unknown }).window === value
+		);
+	} catch (error) {
+		// cross-origin WindowProxy still exposes .window; anything that
+		// throws here isn't a window we can reason about
+		return false;
+	}
 }
 
 export default class ContextModule extends Module<DocumentClient> {
@@ -865,6 +910,14 @@ export default class ContextModule extends Module<DocumentClient> {
 	 */
 	#postFromHere(receiver: Context, args: unknown[]) {
 		const client = this.client;
+		// the site pool: a window of another site's origin
+		if (
+			client.sites &&
+			siteWindows().postAcross(client, receiver, args, (args) =>
+				this.#cloneCheck(args),
+			)
+		)
+			return undefined;
 		return client.callIn(
 			client.nativePostMessage ?? client.global.postMessage,
 			receiver,
@@ -915,26 +968,47 @@ export default class ContextModule extends Module<DocumentClient> {
 				// climb by `parent` compares what it reaches with this page's `top`
 				top: {
 					get: () =>
-						this.newRestricted(findTop(context, moduleClient.names.client)),
+						this.newRestricted(
+							findTop(
+								context,
+								moduleClient.names.client,
+								moduleClient.sites,
+								global,
+							),
+						),
 				},
 				parent: {
 					get: () => {
-						let parent: Context;
-						try {
-							parent = (
-								(context as Record<string, any>)[
-									moduleClient.names.client
-								] as DocumentClient
-							).parent;
-						} catch (error) {
+						let parent: Context | undefined;
+						// (a window of another origin is asked nothing: it has no
+						// client of this realm's to ask, and the read would throw)
+						if (!foreignWindow(context))
+							try {
+								parent = (
+									(context as Record<string, any>)[
+										moduleClient.names.client
+									] as DocumentClient
+								).parent;
+							} catch (error) {
+								// no STomp in it
+							}
+						if (parent === undefined)
 							return this.newRestricted(<Context>(<unknown>context.parent!));
-						}
 						// a window whose frame was removed has none
 						if (parent === null) return null;
+						if (isStomp(parent, moduleClient.names.client))
+							return this.newRestricted(parent);
+						// the site pool: a parent of another slot is another site's
+						// window, and gets its stand-in (never the window itself:
+						// its own parent may be of this document's slot, which the
+						// browser would hand over whole); the stand-in again would
+						// leave a climb to `top` by `parent` (ad and consent scripts
+						// look for a frame up the tree that way) spinning for good
+						const sites = moduleClient.sites;
+						if (sites && !siteWindows().isHub(global, parent, sites.hub))
+							return this.newRestricted(parent);
 						// the top of the proxied world is its own parent
-						return this.newRestricted(
-							isStomp(parent, moduleClient.names.client) ? parent : context,
-						);
+						return this.newRestricted(context);
 					},
 				},
 				// the window that opened it, when a proxied page did; a window
@@ -1031,6 +1105,15 @@ export default class ContextModule extends Module<DocumentClient> {
 	 * from this side (see DOMAttributes' opaqueDocument).
 	 */
 	restrictOpaque(context: Context): RestrictedContext {
+		// (the site pool: a window of another slot gets the stand-in every
+		// document of this origin shares)
+		if (
+			!this.restricted.has(context) &&
+			this.client.sites &&
+			!isStomp(context, this.client.names.client) &&
+			!siteWindows().isHub(this.client.global, context, this.client.sites.hub)
+		)
+			return siteWindows().restrictAcross(this.client, this, context);
 		if (!this.restricted.has(context)) {
 			const restricted = this.restrictContext(context);
 			this.restricted.set(context, restricted);
@@ -1080,9 +1163,18 @@ export default class ContextModule extends Module<DocumentClient> {
 			sameOrigin(this.client.url.toString(), target.href)
 		)
 			return this.newRestricted(context);
+		// (the site pool too: the other site may share this document's slot,
+		// a pool of one slot or more sites than slots, and then the browser
+		// never restricts the window)
 		return this.restrictOpaque(context);
 	}
 	newRestricted(context: Context): RestrictedContext {
+		// no window: the `parent` and `top` of a window whose frame was taken
+		// out, an `opener` of none. The browser answers null, and so does the
+		// page's: it read as the proxied top (the edge of the proxied world)
+		// or as the window itself, and with the site pool it threw (a
+		// stand-in kept for null)
+		if (context === null || context === undefined) return context;
 		const restricted = this.#restrict(context);
 		return restricted === context
 			? restricted
@@ -1097,11 +1189,33 @@ export default class ContextModule extends Module<DocumentClient> {
 			return context;
 		// a cross-origin window (the host application in isolation mode) throws
 		// on the `in` check; it is never a STomp context
-		if (!isStomp(context, moduleClient.names.client))
+		if (!isStomp(context, moduleClient.names.client)) {
+			// the site pool: a window of another slot's origin, another site's.
+			// Its stand-in, as without a pool, never the window itself: the
+			// browser restricts that only while it shows a document of
+			// another slot, and the frame may go next to a site this
+			// document's slot shows (more sites than slots), when the window
+			// the page held would be that site's, raw. Only the hub's page is
+			// hidden, as the top. (A window this realm already holds as
+			// itself, a popup it opened on about:blank, it gets back as it is:
+			// the page has it, and identity holds, as without a pool.)
+			if (
+				moduleClient.sites &&
+				!siteWindows().isHub(global, context, moduleClient.sites.hub)
+			)
+				return this.held.has(context) ? context : this.restrictOpaque(context);
 			// the proxied world ends here (the host, or anything it opened):
 			// present ourselves as the top, as this page sees it (a frame of
 			// another origin gets its stand-in, as for `top`)
-			context = findTop(global, moduleClient.names.client);
+			context = findTop(global, moduleClient.names.client, moduleClient.sites);
+			if (!isStomp(context, moduleClient.names.client))
+				// (the site pool: a proxied top of another slot, the stand-in
+				// every other path to it answers, so `t = t.parent` meets `top`)
+				return moduleClient.sites &&
+					!siteWindows().isHub(global, context, moduleClient.sites.hub)
+					? siteWindows().restrictAcross(this.client, this, context)
+					: context;
+		}
 
 		if (this.#holds().has(context)) return context;
 
@@ -1357,25 +1471,6 @@ export default class ContextModule extends Module<DocumentClient> {
 			}
 		};
 
-		const isWindow = (value: unknown): value is Context => {
-			try {
-				// (by the browser's own `window` getter, which answers for a
-				// window of any origin: a Proxy of the page's is asked nothing
-				// and passes for none)
-				if (moduleClient.isWindowObject)
-					return moduleClient.isWindowObject(value);
-				return (
-					typeof value === 'object' &&
-					value !== null &&
-					(value as { window?: unknown }).window === value
-				);
-			} catch (error) {
-				// cross-origin WindowProxy still exposes .window; anything that
-				// throws here isn't a window we can reason about
-				return false;
-			}
-		};
-
 		// a window this realm held, whose frame got a fresh context since: what
 		// is done to it through the access API (a message, a location set, a
 		// read or write of another origin's window) is done to the frame's
@@ -1392,7 +1487,8 @@ export default class ContextModule extends Module<DocumentClient> {
 		// (false for a URL that does not parse: the location's own setter or
 		// method throws the browser's error for it)
 		moduleClient.navigateWindow = (target, value, member) => {
-			if (!isWindow(target) || !this.#clientOf(target)) return false;
+			if (!isWindow(moduleClient, target) || !this.#clientOf(target))
+				return false;
 			const url = String(value);
 			if (failsToParse(moduleClient, url)) return false;
 			this.#navigateOther(target, url, member);
@@ -1400,15 +1496,22 @@ export default class ContextModule extends Module<DocumentClient> {
 		};
 
 		moduleClient.resolveTop = (value, container) => {
-			if (!isWindow(value)) return value;
+			// (this window and the browser's top are windows without asking:
+			// the browser's top is the hub's page with the site pool, of
+			// another origin, and asking a window of another origin costs an
+			// exception)
+			const top = moduleClient.top;
+			if (value !== realm && value !== top && !isWindow(moduleClient, value))
+				return value;
 			// a stand-in answers with its own `top` (the top of its world, as
 			// this page may see it), never with this page's top
 			if (this.#standIn(value)) return Reflect.get(value, 'top');
 
 			try {
 				if (
-					value === moduleClient.top ||
-					!(moduleClient.names.client in value)
+					value === top ||
+					(!foreignWindow(value as object) &&
+						!(moduleClient.names.client in value))
 				) {
 					// the top of the world the window it was read off is in: this
 					// page's own, unless that window is in another tab (a popup
@@ -1416,11 +1519,13 @@ export default class ContextModule extends Module<DocumentClient> {
 					const from =
 						container !== undefined &&
 						container !== realm &&
-						isWindow(container) &&
+						isWindow(moduleClient, container) &&
 						moduleClient.names.client in container
 							? container
 							: realm;
-					return this.newRestricted(findTop(from, moduleClient.names.client));
+					return this.newRestricted(
+						findTop(from, moduleClient.names.client, moduleClient.sites, realm),
+					);
 				}
 			} catch (error) {
 				// cross-origin top
@@ -1428,7 +1533,14 @@ export default class ContextModule extends Module<DocumentClient> {
 
 			// another proxied window's top is the top of *its* world, which is
 			// this one's for a frame of this page
-			return this.newRestricted(findTop(value, moduleClient.names.client));
+			return this.newRestricted(
+				findTop(
+					value as Context,
+					moduleClient.names.client,
+					moduleClient.sites,
+					realm,
+				),
+			);
 		};
 
 		// a window of another proxied origin that a computed read lands on
@@ -1443,7 +1555,13 @@ export default class ContextModule extends Module<DocumentClient> {
 				// page's asked `client in value` would learn the client's
 				// name, which no page is told and every page of a controller
 				// shares
-				if (!isWindow(value)) return value;
+				if (!isWindow(moduleClient, value)) return value;
+				// (a window of another origin is asked nothing more: it would
+				// throw, and an exception costs more than the rest of the read)
+				if (foreignWindow(value))
+					return moduleClient.sites
+						? this.newRestricted(value as Context)
+						: value;
 				if (!(moduleClient.names.client in value)) {
 					// a child window that runs nothing yet (an iframe's initial
 					// about:blank), read off its window by index or by name: injected
@@ -1462,8 +1580,13 @@ export default class ContextModule extends Module<DocumentClient> {
 				} else if ((value as { window?: unknown }).window !== value)
 					return value;
 			} catch (error) {
-				// a real cross-origin window: the `in` check throws
-				return value;
+				// a real cross-origin window: the `in` check throws. With the
+				// site pool it is another slot's (or the hub's page): restricted
+				// as without a pool, since the frame may next show a site of
+				// this document's slot (ContextModule #restrict)
+				return this.client.sites && isWindow(this.client, value)
+					? this.newRestricted(value as Context)
+					: value;
 			}
 			// a frame on its initial about:blank: the document its src names decides
 			if (initialBlank(value as Context)) {
@@ -1539,7 +1662,9 @@ export default class ContextModule extends Module<DocumentClient> {
 				sourceDescriptor.get!,
 				(target, that: MessageEvent, args) => {
 					const source = Reflect.apply(target, that, args);
-					return isWindow(source) ? this.newRestricted(source) : source;
+					return isWindow(moduleClient, source)
+						? this.newRestricted(source)
+						: source;
 				},
 			),
 		});
@@ -1564,6 +1689,10 @@ export default class ContextModule extends Module<DocumentClient> {
 		// (see postMessage below) which the data and origin getters unwrap.
 		// Registered now and again after every document.open(), which drops
 		// window listeners.
+		// the realm's own, taken before the page ran: the event below has the
+		// native MessageEvent members alone while its data is read
+		const stopImmediate =
+			this.client.global.Event.prototype.stopImmediatePropagation;
 		const tagMessages = () => {
 			realm.addEventListener('message', (event) => {
 				/*console.error(
@@ -1580,7 +1709,57 @@ export default class ContextModule extends Module<DocumentClient> {
 						// (`dispatchEvent(new Event('message'))`): it carries no data
 						return;
 					}
-					if (!isMessageData(data, moduleClient.names.globalName)) return;
+					const sites = moduleClient.sites;
+					// the site pool: a frame under this window, of another slot,
+					// asks it to navigate (DocumentClient navigateAcross); never
+					// the page's message
+					if (
+						typeof data === 'object' &&
+						data !== null &&
+						(data as Record<string, unknown>)[moduleClient.names.globalName] ===
+							'stompNavigate'
+					) {
+						Reflect.apply(stopImmediate, event, []);
+						const request = data as Record<string, unknown>;
+						if (sites && request.token === sites.token)
+							deferred().receiveAcross(
+								moduleClient,
+								event.source,
+								request.request as AcrossNavigation,
+							);
+						return;
+					}
+					const across =
+						!!sites &&
+						// (an opaque sender, a sandboxed frame of this slot, is
+						// judged as without a pool)
+						event.origin !== 'null' &&
+						event.origin !== Reflect.apply(nativeOrigin!, realm, []);
+					if (!isMessageData(data, moduleClient.names.globalName)) {
+						// the site pool: a window of another slot posted it past its
+						// inject (the browser's own postMessage of a window of
+						// another origin, taken where no hook stands: `post =
+						// w.postMessage; post.call(w, m)`). Nothing says which site
+						// sent it, and its origin is a slot's, which no page may
+						// see: it never arrives. (The hub's page is the host's, as
+						// without a pool.)
+						if (across && event.origin !== sites!.hub)
+							Reflect.apply(stopImmediate, event, []);
+						return;
+					}
+					if (across) {
+						// another slot's origin: only a STomp document of this hub
+						// says where a message is from, and one for another origin
+						// than this page's never arrives, as natively
+						const { token, to } = data as MessageData;
+						if (
+							token !== sites.token ||
+							(to !== '*' && to !== moduleClient.origin)
+						) {
+							Reflect.apply(stopImmediate, event, []);
+							return;
+						}
+					}
 
 					messageData.set(event, data);
 
@@ -1603,7 +1782,14 @@ export default class ContextModule extends Module<DocumentClient> {
 		// this origin made (see newRestricted)
 		moduleClient.postToRestricted = (target, args) => {
 			const context = this.restrictedContexts.get(target as Context);
-			if (!context) return false;
+			// (the site pool: or a window of another slot's origin)
+			if (!context)
+				return (
+					!!moduleClient.sites &&
+					siteWindows().postAcross(moduleClient, target, args, (args) =>
+						this.#cloneCheck(args),
+					)
+				);
 			catchRequiredArguments(args.length, 1, 'Window', 'postMessage', realm);
 			this.#cloneCheck(args);
 			if (this.targetAllows(args, context)) this.#postFromHere(context, args);

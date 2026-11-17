@@ -11,6 +11,7 @@ import {
 	Config,
 	parseConfig,
 	ParsedConfig,
+	type SitesConfig,
 } from '../config';
 import type { ScriptFacts } from '../csp';
 import { HelperNames, helperNames } from '../helperNames';
@@ -28,6 +29,7 @@ import {
 	linkRouteURL,
 	openFragment,
 	parseRoutedURL,
+	proxyOrigins,
 	rewriterLibJS,
 	ROUTE_PROTOCOLS,
 } from '../routeURL';
@@ -495,6 +497,8 @@ export default class Client {
 	readonly #customNames: boolean;
 	/** the host's hooks, as text (config.hooks) */
 	readonly hooks?: ResolvedHooks;
+	/** the site pool: this document's origin is one of its slots (Config.sites) */
+	readonly sites: SitesConfig | null;
 	/** the realm's Function before the Function module wraps it: a hook is host code, not rewritten */
 	readonly #nativeFunction: FunctionConstructor;
 	/**
@@ -631,6 +635,22 @@ export default class Client {
 		this.names = helperNames(init);
 		this.#customNames = !!(init as { names?: unknown }).names;
 		this.hooks = init.hooks;
+		// (read apart: code a frame runs costs it its compiled form, and most
+		// run without the pool)
+		// Config.sites as the shell gave it, checked (null for none)
+		const sites: Partial<SitesConfig> | undefined = init.sites;
+		this.sites =
+			typeof sites?.hub === 'string' && typeof sites.token === 'string'
+				? {
+						hub: sites.hub,
+						token: sites.token,
+						origins: Array.isArray(sites.origins)
+							? sites.origins.filter(
+									(origin): origin is string => typeof origin === 'string',
+								)
+							: [],
+					}
+				: null;
 		this.#nativeFunction = global.Function;
 		const facts = Reflect.getOwnPropertyDescriptor(global, CSP_FACTS)?.value as
 			ScriptFacts | undefined;
@@ -651,6 +671,8 @@ export default class Client {
 							? { coop: [facts.coop[0], facts.coop[1]] as [string, string] }
 							: {}),
 						...(facts.dip === true ? { dip: true } : {}),
+						// (as the worker gave them: checked when first read, framed)
+						...(facts.framed ? { framed: facts.framed } : {}),
 					}
 				: { evaluates: true };
 		// built now, before any page script runs, from the window's own
@@ -698,6 +720,9 @@ export default class Client {
 		// under its scope is already a route (routeURL unwraps it)
 		const origin = global.location?.origin;
 		if (origin && origin !== 'null') addRouteScope(origin, this.scope);
+		// the site pool: the hub's and every slot's origin are the proxy's too
+		if (init.sites || init.slotOrigins)
+			for (const other of proxyOrigins(init)) addRouteScope(other, this.scope);
 		this.openTab = !!init.openTab;
 		this.workerTransport = !!init.workerTransport;
 		this.build = init.build;
@@ -775,6 +800,7 @@ export default class Client {
 				: {}),
 			...(this.#customNames ? { names: this.names } : {}),
 			...(this.hooks ? { hooks: this.hooks } : {}),
+			...(this.sites ? { sites: this.sites } : {}),
 		};
 	}
 	/**

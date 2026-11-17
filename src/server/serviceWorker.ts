@@ -1,23 +1,29 @@
 import type { SiteShields } from '../blocker/types';
 import type GenericCodec from '../Codecs';
 import { Config, ConfigCodec } from '../config';
-import type { OpenerFacts } from '../coop';
+import { switchesGroup, type OpenerFacts } from '../coop';
 import type { HopPolicy } from '../csp';
 import { isolationResponseHeaders } from '../isolation';
-import { kindPartition, partitionSite } from '../partition';
+import {
+	kindPartition,
+	partitionSite,
+	siteOf as schemefulSite,
+} from '../partition';
 import {
 	forgetPasskeysOf,
 	passkeyCommand,
 	runCeremony,
 } from '../passkeys/authenticator';
 import { nestedMarkOfKind, nestedTopOf } from '../rewriteHTML';
-import { addRouteScope } from '../routeURL';
+import { addRouteScope, proxyOrigins } from '../routeURL';
 import { SW_ROUTE, type ApiReply } from '../serviceWorkerTypes';
 import { getPublicSuffix } from '../suffix';
 import {
 	ABORT_REQUEST,
 	BLOB_MINTED,
 	BlobMintedMessage,
+	BLOCKER_SERVE,
+	BlockerServeMessage,
 	CLIENT_HINTS,
 	ClientHintsReport,
 	CONTROLLER_CLIENT,
@@ -49,6 +55,7 @@ import {
 	RequestInfo,
 	ReviveMessage,
 	ServiceWorkerApiMessage,
+	SiteArrival,
 	SRCDOC_CLAIM,
 	SRCDOC_VOUCH,
 	STANDBY_DECLINED,
@@ -66,6 +73,7 @@ import {
 	makesSelfLink,
 	sameContext,
 	selfContext,
+	type VisitedContext,
 } from '../visited';
 import { suffixListPin } from '../wasm/suffix';
 import {
@@ -75,6 +83,8 @@ import {
 	setMemoryLimit,
 } from '../wasm/thread';
 import { knownOriginOf, knownTopSiteOf, recordBlobOrigin } from './blobOrigins';
+import { Blocker } from './blocker';
+import { memoryCache } from './cache';
 import { legacyFileSystemCleared } from './clearSiteData';
 import {
 	hintsDocument,
@@ -83,7 +93,9 @@ import {
 import { forScript, onJarChange } from './Cookies';
 import createServer, {
 	addressCodec,
+	addressHub,
 	publicSuffix,
+	slotHome,
 	StompServer,
 } from './createServer';
 import { hostErrorPage } from './errorPage';
@@ -105,6 +117,7 @@ import {
 	settle,
 	SIMULATED_PERMISSIONS,
 } from './permissions';
+import { RemoteBlocker, serveBlocker } from './remoteBlocker';
 import {
 	goneClients,
 	noteBlobWorker,
@@ -113,10 +126,22 @@ import {
 } from './requestClients';
 import { RewriteCache } from './rewriteCache';
 import { RewritePool } from './rewritePool';
-import { abortRequest, siteBetween } from './rewrites';
+import {
+	abortRequest,
+	departingMixedContent,
+	siteArrived,
+	siteBetween,
+	siteDeparture,
+} from './rewrites';
 import { ApiError, serviceWorkers, type WorkerHost } from './serviceWorkers';
+import { contextArrived, contextDeparture } from './siteContext';
 import { claim, vouch } from './srcdocVouches';
-import { rememberVisitedHop, takeVisitedHop } from './visitedHops';
+import {
+	rememberVisitedHop,
+	takeVisitedHop,
+	visitedArrived,
+	type VisitedHop,
+} from './visitedHops';
 
 interface ControllerRef {
 	/** the controller's address: its scope plus its id */
@@ -143,6 +168,14 @@ interface ControllerRef {
 	serial: number;
 	/** the emulated service workers' host in this controller, unless `serviceWorkers` is off */
 	host?: WorkerHost;
+	/**
+	 * the site pool (src/controller/sitePool.ts): this origin is a slot, and
+	 * these are the slots of the sites this worker asked about (a site keeps
+	 * its slot)
+	 */
+	slots?: Map<string, string>;
+	/** this origin is a slot of the site pool (its documents ask for an agent cluster of their own) */
+	slot?: boolean;
 }
 
 /**
@@ -180,6 +213,20 @@ setMemoryLimit(SERVING_MEMORY_LIMIT);
 
 let serials = 0;
 
+/**
+ * the least a slot of the site pool keeps of its rewriter instance's memory
+ * between documents (SERVING_MEMORY_LIMIT shared out): a document of 500 KB
+ * or so, past which an instance is made again for each one
+ */
+const SLOT_MEMORY_LIMIT = 16 * 1024 * 1024;
+
+/**
+ * a slot of the site pool: each hub's worker's blocker, by the
+ * controller's address (two hubs may name other lists), asked over the
+ * newest handshake's port
+ */
+const remoteBlockers = new Map<string, RemoteBlocker>();
+
 function registerController(
 	{
 		directory,
@@ -188,6 +235,10 @@ function registerController(
 		modules,
 		adblock,
 		standby,
+		codecKey,
+		slot,
+		slots,
+		pooled,
 	}: ControllerInitMessage,
 	ports: MessagePort[],
 	client?: string,
@@ -211,7 +262,27 @@ function registerController(
 		rewritePool && rewritePool.ports > 0
 			? ports.splice(Math.max(1, ports.length - rewritePool.ports))
 			: [];
-	const [port, transportPort] = ports;
+	// (a slot of the site pool: then the host's cookie jar's and the hub's
+	// blocker's)
+	const [port, transportPort, jarPort, blockerPort] = ports;
+	// the pool's workers share one process: each slot keeps its share of
+	// the memory cache's budget, and of the memory its rewriter's instance
+	// keeps between documents (at least SLOT_MEMORY_LIMIT)
+	if (slot) {
+		memoryCache.share(slots ?? 1);
+		setMemoryLimit(
+			Math.max(
+				SLOT_MEMORY_LIMIT,
+				Math.floor(SERVING_MEMORY_LIMIT / Math.max(1, slots ?? 1)),
+			),
+		);
+	}
+	let remoteBlocker: RemoteBlocker | undefined;
+	if (slot && blockerPort) {
+		remoteBlocker = remoteBlockers.get(directory) ?? new RemoteBlocker();
+		remoteBlockers.set(directory, remoteBlocker);
+		remoteBlocker.bind(blockerPort);
+	}
 	const pool = poolPorts.length
 		? new RewritePool(poolPorts, rewritePool!.timeout)
 		: undefined;
@@ -228,6 +299,9 @@ function registerController(
 	const config: Config = { ...given, scope: given.scope || given.directory };
 	// a URL under the scope is already a route: routeURL unwraps it
 	addRouteScope(location.origin, config.scope);
+	// the site pool: the hub's and every slot's origin are the proxy's too
+	for (const origin of proxyOrigins(config))
+		addRouteScope(origin, config.scope);
 
 	// a controller whose transport lives in its worker sends a second port,
 	// served from there; otherwise the transport shares the rpc port
@@ -248,10 +322,27 @@ function registerController(
 		config.requestLog ? report : undefined,
 		pool,
 		adblock,
+		codecKey,
+		slot && jarPort
+			? {
+					port: jarPort,
+					// the agent that shook hands (its tab may close before an older one)
+					alive: () =>
+						client
+							? self.clients.get(client).then((found) => found !== undefined)
+							: Promise.resolve(true),
+				}
+			: undefined,
+		remoteBlocker,
 	);
 
 	const rpc = new RpcHelper<SWbound, Controllerbound>(
 		{
+			codecKey: async () => [(await server).codecKey, []],
+			siteOf: async (url) => [schemefulSite(url, publicSuffix), []],
+			arrive: async (arrival) => {
+				expectArrival(arrival);
+			},
 			route: async (url) => [(await server).route(url), []],
 			unroute: async (url) => {
 				const ready = await server;
@@ -263,6 +354,15 @@ function registerController(
 			},
 			clearCache: async () => {
 				await (await server).clearCache();
+			},
+			forgetDeviceIds: async (origin) => {
+				let host: string | undefined;
+				try {
+					if (origin) host = new URL(origin).hostname;
+				} catch (error) {
+					return;
+				}
+				await forgetDeviceIds(host);
 			},
 			shields: async (payload) => {
 				// the controller sends { list, seed }; an array is the legacy
@@ -305,7 +405,7 @@ function registerController(
 				}
 				const blocked =
 					srv.shields.blocks(socketHost) &&
-					!!srv.blocker?.socket(url, source, type);
+					!!(await srv.blocker?.socket(url, source, type));
 				if (blocked && config.requestLog)
 					report({
 						url,
@@ -374,6 +474,9 @@ function registerController(
 	);
 
 	port.addEventListener('message', (event) => rpc.receive(event.data));
+	// a slot: a port of the hub's blocker that closed is asked for again
+	if (remoteBlocker)
+		remoteBlocker.renew = () => rpc.call('blockerPort', undefined);
 	port.start();
 	// which run of the worker has this controller: its revive, on its way or
 	// still to come, is not for it (a controller of an earlier build has no
@@ -391,6 +494,10 @@ function registerController(
 		client,
 		owner: client,
 		serial: ++serials,
+		// a slot's worker, or the hub's (whose documents of a site with a
+		// slot leave for it too)
+		...(slot || pooled ? { slots: new Map<string, string>() } : {}),
+		...(slot ? { slot: true } : {}),
 	};
 	server.then((ready) => {
 		ref.ready = ready;
@@ -1239,6 +1346,21 @@ function handleMessage(event: ExtendableMessageEvent) {
 		const { directory } = data[CONTROLLER_CLOSE] as ControllerCloseMessage;
 		const ref = controllers.get(directory);
 		if (ref && ref.owner === sender) forget(ref, 'Controller closed');
+	} else if (BLOCKER_SERVE in data) {
+		// the hub of a site pool: from the registering tab
+		// only, a port on which a slot's worker asks this worker's engine
+		const { directory } = data[BLOCKER_SERVE] as BlockerServeMessage;
+		const [port] = event.ports;
+		const ref = controllers.get(directory);
+		if (!port) return;
+		if (!ref || ref.owner !== sender) {
+			port.close();
+			return;
+		}
+		serveBlocker(port, () => {
+			const blocker = controllers.get(directory)?.ready?.blocker;
+			return blocker instanceof Blocker ? blocker : undefined;
+		});
 	} else if (CONTROLLER_MODULES in data) {
 		// the modules compiled after the handshake: from the registering tab
 		// only, as for every other message that acts on a controller
@@ -1422,6 +1544,26 @@ async function isolatedHost(
 }
 
 /**
+ * A link route's answer (src/visited.ts) is no controller's own: made for a
+ * host's page that is cross-origin isolated when a controller of its scope
+ * says its host is. With the site pool its redirect is a frame's whose
+ * embedder is of another slot's origin, which Chrome refuses without the
+ * resource policy (measured: blockedReason
+ * corp-not-same-origin-after-defaulted-to-same-origin-by-coep).
+ */
+async function isolatedScope(
+	request: Request,
+	answer: Promise<Response>,
+	scope: string,
+): Promise<Response> {
+	const response = await answer;
+	for (const ref of controllers.values())
+		if (ref.config.isolated && ref.config.scope === scope)
+			return isolatedHost(request, Promise.resolve(response));
+	return response;
+}
+
+/**
  * The request through its controller. A document for a controller whose tab
  * is not active right now (in the back/forward cache, or gone without its
  * port closing yet) is answered as an orphan, so a link copied from it lands
@@ -1436,6 +1578,11 @@ async function serve(event: FetchEvent, ref: ControllerRef): Promise<Response> {
 			? event.resultingClientId || event.clientId
 			: event.clientId;
 	if (DOCUMENT_DESTINATIONS.has(request.destination) && !(await alive(ref))) {
+		// a slot of the site pool whose agent is gone (its renderer crashed,
+		// the hub's page removed it): the hub's own origin shows the
+		// document, as without a pool
+		const hub = ref.slot ? slotHome(ref.config) : undefined;
+		if (hub && request.mode === 'navigate') return toHub(request, hub);
 		const orphan = orphanOf(new URL(request.url).pathname, ref);
 		if (orphan) return answerOrphan(request, orphan);
 		// nothing else live under the scope: the controller's own error page
@@ -1447,10 +1594,14 @@ async function serve(event: FetchEvent, ref: ControllerRef): Promise<Response> {
 		event.resultingClientId,
 	);
 	const server = ref.ready ?? (await ref.server);
+	if (ref.slots && request.mode === 'navigate') {
+		const away = await leaveSlot(request, ref, server);
+		if (away) return away;
+	}
 	// the document this navigation makes is this worker's: its inject's load
 	// channel is the first its client opens (loadGrants.ts)
 	if (request.mode === 'navigate') servedLoadClient(event.resultingClientId);
-	return server.router.willRoute(request.url)
+	const answer = server.router.willRoute(request.url)
 		? server.router.route(request, {
 				clientId,
 				requestClientId: event.clientId,
@@ -1459,6 +1610,310 @@ async function serve(event: FetchEvent, ref: ControllerRef): Promise<Response> {
 				waitUntil: (promise) => event.waitUntil(promise),
 			})
 		: fetch(request);
+	if (!ref.slots || request.mode !== 'navigate') return answer;
+	// (a link route's redirect goes on to its slot: onItsSlot)
+	const response = await linkOnItsSlot(ref, await answer);
+	return ref.slot ? originKeyed(response) : response;
+}
+
+/** a redirect of a navigation to a link route, sent to its slot's (onItsSlot) */
+async function linkOnItsSlot(
+	ref: ControllerRef,
+	response: Response,
+): Promise<Response> {
+	const location = REDIRECTS.includes(response.status)
+		? response.headers.get('location')
+		: null;
+	if (
+		!location ||
+		!isLinkRoute(location, `${self.location.origin}${ref.config.scope}`)
+	)
+		return response;
+	const moved = await onItsSlot(ref, location);
+	if (moved === location) return response;
+	const headers = new Headers(response.headers);
+	headers.set('location', moved);
+	return new Response(null, {
+		status: response.status,
+		statusText: response.statusText,
+		headers,
+	});
+}
+const REDIRECTS = [301, 302, 303, 307, 308];
+
+/**
+ * The site pool: navigations on their way here from another slot's worker
+ * (`arrive`), by routed path; each is taken by the navigation it names
+ */
+const arrivals = new Map<string, { arrival: SiteArrival; at: number }>();
+/** how long an arrival waits for its navigation */
+const ARRIVAL_TTL_MS = 10000;
+
+function expectArrival(arrival: SiteArrival) {
+	if (typeof arrival?.path !== 'string') return;
+	const now = Date.now();
+	for (const [path, entry] of arrivals)
+		if (now - entry.at > ARRIVAL_TTL_MS) arrivals.delete(path);
+	arrivals.set(arrival.path, { arrival, at: now });
+}
+
+/** the same route on the hub's origin (a slot of the site pool that cannot show it) */
+function toHub(request: Request, hub: string): Response {
+	const url = new URL(request.url);
+	const scope = new URL(self.registration.scope).pathname;
+	// marked (HOMED_SEGMENT), so the hub's worker keeps it rather than send
+	// it back to this slot before the hub heard the agent is gone
+	const path = url.pathname.startsWith(scope)
+		? `${scope}${HOMED_SEGMENT}${url.pathname.slice(scope.length)}`
+		: url.pathname;
+	return new Response(null, {
+		status: 307,
+		headers: {
+			location: `${hub}${path}${url.search}`,
+			'cache-control': 'no-store',
+			// a frame's embedder of another slot's origin under an isolated
+			// host refuses it without (isolatedHost); this worker may know
+			// no controller to ask whether the host is
+			'cross-origin-resource-policy': 'cross-origin',
+		},
+	});
+}
+
+/**
+ * The site pool: the segment after the scope of a navigation a slot's
+ * worker sends to the hub's origin because its agent is gone. The hub's
+ * worker answers it with a 307 to the route without it, which it then
+ * serves itself (HOMED_MS), and tells the hub the slot is gone. It is no
+ * address (an id has no `~`).
+ */
+const HOMED_SEGMENT = '~home/';
+/** routed path and query -> when the slot sent it back */
+const homed = new Map<string, number>();
+/** how long a navigation sent back from a slot is kept on the hub's origin */
+const HOMED_MS = 10000;
+
+/** a navigation a slot sent back (HOMED_SEGMENT): the route without the mark, remembered */
+function unmarkHomed(request: Request): Response | null {
+	const url = new URL(request.url);
+	const scope = new URL(self.registration.scope).pathname;
+	if (!url.pathname.startsWith(`${scope}${HOMED_SEGMENT}`)) return null;
+	if (request.mode !== 'navigate') return new Response(null, { status: 404 });
+	const path = `${scope}${url.pathname.slice(scope.length + HOMED_SEGMENT.length)}`;
+	const now = Date.now();
+	for (const [key, at] of homed) if (now - at > HOMED_MS) homed.delete(key);
+	homed.set(`${path}${url.search}`, now);
+	return new Response(null, {
+		status: 307,
+		headers: {
+			location: `${url.origin}${path}${url.search}`,
+			'cache-control': 'no-store',
+			// (toHub)
+			'cross-origin-resource-policy': 'cross-origin',
+		},
+	});
+}
+
+/**
+ * A request under an address no controller of this run of the worker has:
+ * the network's, unless it is a navigation at the address of a slot's
+ * agent that is gone (its renderer crashed and took this worker with it),
+ * which goes to the hub's origin, as without a pool
+ */
+async function unclaimed(
+	request: Request,
+	pathname: string,
+): Promise<Response> {
+	if (request.mode === 'navigate' && addressShaped(pathname)) {
+		const scope = new URL(self.registration.scope).pathname;
+		const [, id] = SEGMENT.exec(pathname.slice(scope.length))!;
+		const hub = await addressHub(`${scope}${id}/`).catch(() => undefined);
+		if (hub && hub !== location.origin) return toHub(request, hub);
+	}
+	return fetch(request);
+}
+
+/** the arrival `request` (a navigation to `url`) was told of, taken */
+function takeArrival(
+	request: Request,
+	url: string,
+	directory: string,
+	nested: string | null,
+) {
+	const routed = new URL(request.url);
+	const path = `${routed.pathname}${routed.search}`;
+	const arrived = arrivals.get(path);
+	if (!arrived) return;
+	arrivals.delete(path);
+	siteArrived(request, url, arrived.arrival);
+	contextArrived(
+		arrived.arrival.context,
+		arrived.arrival.referrer
+			? `${routed.origin}${arrived.arrival.referrer}`
+			: null,
+		directory,
+		nested === null,
+	);
+	visitedArrived(request.url, arrived.arrival.visited);
+}
+
+/**
+ * The site pool (src/controller/sitePool.ts): a navigation to a document of
+ * a site that is shown from another slot goes there, a 307 to the same route
+ * on that slot's origin once the controller has that slot's worker up and
+ * has handed it what this worker knew of the navigation. A navigation that
+ * came from another slot's worker takes what that worker sent. Null: it is
+ * this slot's to answer (the site's slot is this one, or the pool could not
+ * say).
+ */
+async function leaveSlot(
+	request: Request,
+	ref: ControllerRef,
+	server: StompServer,
+): Promise<Response | null> {
+	const url = new URL(request.url);
+	const path = `${url.pathname}${url.search}`;
+	const routed = server.routeOf(request.url);
+	if (!routed) return null;
+	let target: string;
+	try {
+		target = schemefulSite(routed.url, publicSuffix);
+	} catch (error) {
+		return null;
+	}
+	// the document the navigation makes is a frame's when its route is a
+	// nested one (its main frame's origin)
+	const nested = nestedTopOf(url.pathname, ref.directory, server.codec);
+	const here = () => {
+		takeArrival(request, routed.url, ref.directory, nested);
+		return null;
+	};
+	// the hub's worker: a navigation the site's slot sent back (its agent is
+	// gone) stays here, and the hub leaves that slot out
+	if (!ref.slot && homed.has(path)) {
+		homed.delete(path);
+		ref.slots!.set(target, url.origin);
+		ref.rpc.call('siteHomed', target).catch(() => {});
+		return here();
+	}
+	// a form's route answers with a redirect to its document's route, which
+	// is what leaves: served where the document that submitted the form is
+	// (its referrer, its client, the policies it is judged by), as without
+	// a pool
+	if (/^html:form(:|$)/.test(routed.resource)) return here();
+	// an inline document's route (src/server/inline.ts) is on the origin of
+	// the document that registered it, whose worker alone holds its token:
+	// served here, as that document's, or refused here with the error page.
+	// Its URL names the referrer, whose site's slot never has the token, and
+	// sending it there would only turn a live document into the error page.
+	if (/^inline:/.test(routed.resource)) return here();
+	// a route of a route of the proxy (a double route): the router answers it
+	// here with a redirect to the inner route, on its own origin already
+	if (proxyOrigins(ref.config).includes(new URL(routed.url).origin))
+		return here();
+	let slot = ref.slots!.get(target);
+	if (slot === undefined) {
+		try {
+			slot = (await ref.rpc.call('siteSlot', target)) ?? undefined;
+		} catch (error) {
+			// a controller of a build without the pool, or one gone
+		}
+		if (slot === undefined) return here();
+		ref.slots!.set(target, slot);
+	}
+	if (slot === url.origin) return here();
+	// (the visit a link route began goes on there: visitedHops.ts)
+	const visited = takeVisitedHop(request.url);
+	const departure = await siteDeparture(
+		request,
+		routed.url,
+		ref.config.navigationHintWait ?? NAVIGATION_HINT_WAIT_MS,
+		(first) => server.routeOf(first)?.url ?? null,
+		nestedTopOf(url.pathname, ref.directory, server.codec) !== null,
+	);
+	// a later hop the policies of its chain refuse: refused here, where the
+	// documents that told them are (they hear of a report-only one)
+	if (departure.refused) return Response.redirect(departure.refused, 302);
+	// served here after all, as it would have been
+	const servedHere = () => {
+		if (visited) rememberVisitedHop(request.url, visited);
+		if (departure.referrer !== undefined || departure.hop || departure.hint)
+			siteArrived(request, routed.url, { path, ...departure });
+		return null;
+	};
+	const departingReferrer = departure.referrer
+		? `${url.origin}${departure.referrer}`
+		: null;
+	const mixed = departingMixedContent(request, departingReferrer, nested, {
+		directory: ref.directory,
+		codec: server.codec,
+		shields: server.shields,
+	});
+	if (mixed) return mixed;
+	// a window the browser holds COOP same-origin for (src/coop.ts realPolicy):
+	// that policy keeps the window's browsing context group only for a
+	// document of the same real origin, so a document that keeps the group
+	// natively (one that sends none) would leave it on another slot's
+	// origin, whatever header it got there. Such a navigation is served
+	// here, where the real policy keeps the group or switches it as natively
+	const coop = departure.chain?.coop as OpenerFacts | undefined;
+	if (
+		nested === null &&
+		request.destination === 'document' &&
+		coop?.[3] === 'same-origin' &&
+		!switchesGroup(coop, '', new URL(routed.url).origin)
+	)
+		return servedHere();
+	const context = await contextDeparture(
+		departingReferrer,
+		nested,
+		ref.directory,
+	);
+	let origin: string | null = null;
+	try {
+		origin = await ref.rpc.call('crossSite', {
+			site: target,
+			arrival: {
+				path,
+				...departure,
+				...(context ? { context } : {}),
+				...(visited && { visited: { hop: visited } }),
+			},
+		});
+	} catch (error) {
+		// the controller is gone
+	}
+	if (!origin || origin === url.origin) return servedHere();
+	return new Response(null, {
+		status: 307,
+		headers: { location: `${origin}${path}`, 'cache-control': 'no-store' },
+	});
+}
+
+/** how long a navigation with no referrer waits for its document's hint before it leaves for another site */
+const NAVIGATION_HINT_WAIT_MS = 100;
+
+/**
+ * A document of a slot of the site pool asks for an agent cluster keyed by
+ * its origin: the slots are of one site to the browser (one host, other
+ * ports), and only so does each get a process of its own
+ * (docs/process-model.md)
+ */
+function originKeyed(response: Response): Response {
+	if (response.type === 'opaqueredirect' || response.status === 0)
+		return response;
+	try {
+		response.headers.set('origin-agent-cluster', '?1');
+		return response;
+	} catch (error) {
+		// a response whose headers are the network's
+	}
+	const headers = new Headers(response.headers);
+	headers.set('origin-agent-cluster', '?1');
+	return new Response(response.body, {
+		status: response.status,
+		statusText: response.statusText,
+		headers,
+	});
 }
 
 /** when this worker (re)started: its first moments are the revive window */
@@ -1519,7 +1974,7 @@ async function heldForRevive(
 	pathname: string,
 ): Promise<Response> {
 	await registered(() => !!controllerFor(pathname));
-	return answerFor(event, pathname) ?? fetch(event.request);
+	return answerFor(event, pathname) ?? unclaimed(event.request, pathname);
 }
 
 /** resolves once `there()` holds (looked at with every registration), or when the revive window ends */
@@ -1568,6 +2023,12 @@ const LINK_HINT_WAIT_MS = 100;
  */
 async function answerLink(event: FetchEvent, scope: string): Promise<Response> {
 	const { request } = event;
+	const back = linkArrival(request.url);
+	if (back)
+		return new Response(null, {
+			status: 307,
+			headers: { location: back, 'cache-control': 'no-store' },
+		});
 	const deadline = STARTED_AT + REVIVE_HOLD_MS;
 	while (!scopeControllers(scope).length && Date.now() < deadline)
 		await new Promise<void>((resolve) => {
@@ -1641,40 +2102,152 @@ async function answerLink(event: FetchEvent, scope: string): Promise<Response> {
 				: hinted === ref
 					? hint!.nested
 					: false);
-	const ready = ref.ready!;
-	const context = state?.context ?? parsed.context;
-	const self = selfContext(parsed.url, publicSuffix);
-	const redirect = (to: string) =>
-		new Response(null, { status: 307, headers: { location: to } });
-	const hops = (state?.hops ?? 0) + 1;
-	if (makesSelfLink(context) && !sameContext(parsed.context, self)) {
-		const next = ready.linkRoute(self, parsed.url);
-		rememberVisitedHop(next, {
-			context,
-			directory: ref.directory,
-			nested,
-			hops,
-			...(state?.crossed && { crossed: true }),
-		});
-		return redirect(next);
-	}
-	const target = ready.routeAs(
-		`html${nested ? `:nested:${ready.codec.encode(nested)}` : ''}`,
-		parsed.url.href,
-	);
-	rememberVisitedHop(target, {
-		context,
-		hops,
+	const next = await linkStep(ref, parsed, {
+		context: state?.context ?? parsed.context,
+		nested,
+		hops: (state?.hops ?? 0) + 1,
 		...(state?.crossed && { crossed: true }),
 	});
-	return redirect(target);
+	return new Response(null, {
+		status: 307,
+		headers: { location: ref.slots ? await onItsSlot(ref, next) : next },
+	});
+}
+
+/**
+ * Where a link route's navigation goes next, remembered for that URL: the
+ * link route of the visited URL's own site's context (Chrome's self-links,
+ * makesSelfLink), else the document's address. With the site pool, the
+ * self-link only when that site is shown from this slot: Chrome keys the
+ * visit by the frame origin of the document that started the navigation,
+ * which is this slot, and the visited URL's own site's documents, shown
+ * from another, would never read it (docs/site-pool.md).
+ */
+async function linkStep(
+	ref: ControllerRef,
+	link: { context: VisitedContext; url: URL },
+	hop: VisitedHop & { nested: string | false },
+): Promise<string> {
+	const ready = ref.ready!;
+	const self = selfContext(link.url, publicSuffix);
+	if (
+		makesSelfLink(hop.context) &&
+		!sameContext(link.context, self) &&
+		(!ref.slots || (await slotOf(ref, self.top)) === location.origin)
+	) {
+		const next = ready.linkRoute(self, link.url);
+		rememberVisitedHop(next, { ...hop, directory: ref.directory });
+		return next;
+	}
+	const target = ready.routeAs(
+		`html${hop.nested ? `:nested:${ready.codec.encode(hop.nested)}` : ''}`,
+		link.url.href,
+	);
+	rememberVisitedHop(target, {
+		context: hop.context,
+		hops: hop.hops,
+		...(hop.crossed && { crossed: true }),
+	});
+	return target;
+}
+
+/** the site pool: the origin of the slot `site` is shown from, null when the pool cannot say */
+async function slotOf(
+	ref: ControllerRef,
+	site: string,
+): Promise<string | null> {
+	const known = ref.slots!.get(site);
+	if (known !== undefined) return known;
+	try {
+		const slot = await ref.rpc.call('siteSlot', site);
+		if (slot) ref.slots!.set(site, slot);
+		return slot ?? null;
+	} catch (error) {
+		// a controller of a build without the pool, or one gone
+		return null;
+	}
+}
+
+/** the URL a link route of another slot's sends the browser on to (SiteArrival `visited.back`), taken */
+function linkArrival(url: string): string | null {
+	const { pathname, search } = new URL(url);
+	const arrived = arrivals.get(`${pathname}${search}`);
+	const back = arrived?.arrival.visited?.back;
+	if (typeof back !== 'string') return null;
+	arrivals.delete(`${pathname}${search}`);
+	if (Date.now() - arrived!.at > ARRIVAL_TTL_MS) return null;
+	try {
+		return /^https?:$/.test(new URL(back).protocol) ? back : null;
+	} catch (error) {
+		return null;
+	}
+}
+
+/**
+ * The site pool: a link route (src/visited.ts) a navigation goes through
+ * belongs on the origin of the documents whose links name it, the slot of
+ * its context's site, where Chrome's history keys the visit by that frame
+ * origin. One of another slot's goes there: that slot's worker is told where
+ * the navigation goes on to (the next step, as this worker's own link route
+ * would have answered it) and sends the browser straight back, so the
+ * navigation stays this worker's. `location` as it is otherwise.
+ */
+async function onItsSlot(
+	ref: ControllerRef,
+	location: string,
+): Promise<string> {
+	const ready = ref.ready ?? (await ref.server);
+	const link = ready.linkOf(location);
+	if (!link || link.context.frame === 'null') return location;
+	const url = new URL(location);
+	let site: string;
+	try {
+		site = schemefulSite(link.context.frame, publicSuffix);
+	} catch (error) {
+		return location;
+	}
+	const slot = await slotOf(ref, site);
+	if (slot === null || slot === url.origin) return location;
+	const hop = takeVisitedHop(location);
+	if (!hop) return location;
+	const back = await onItsSlot(
+		ref,
+		await linkStep(ref, link, {
+			context: hop.context,
+			nested: hop.nested ?? false,
+			hops: hop.hops + 1,
+			...(hop.crossed && { crossed: true }),
+		}),
+	);
+	const path = `${url.pathname}${url.search}`;
+	let origin: string | null = null;
+	try {
+		origin = await ref.rpc.call('crossSite', {
+			site,
+			arrival: { path, visited: { back } },
+		});
+	} catch (error) {
+		// the controller is gone
+	}
+	if (!origin || origin === url.origin) {
+		rememberVisitedHop(location, hop);
+		return location;
+	}
+	return `${origin}${path}${url.hash}`;
 }
 
 self.addEventListener('fetch', (event: FetchEvent) => {
 	const { pathname } = new URL(event.request.url);
+	const unmarked = unmarkHomed(event.request);
+	if (unmarked) {
+		event.respondWith(unmarked);
+		return;
+	}
 	const linkScope = linkScopeOf(pathname);
 	if (linkScope) {
-		event.respondWith(answerLink(event, linkScope));
+		event.respondWith(
+			isolatedScope(event.request, answerLink(event, linkScope), linkScope),
+		);
 		return;
 	}
 	// in the revive window an address whose controller has not answered yet
@@ -1689,6 +2262,9 @@ self.addEventListener('fetch', (event: FetchEvent) => {
 	}
 	const answer = answerFor(event, pathname);
 	if (answer) event.respondWith(answer);
+	// the site pool: a slot's navigation whose agent is gone
+	else if (event.request.mode === 'navigate' && addressShaped(pathname))
+		event.respondWith(unclaimed(event.request, pathname));
 });
 
 self.addEventListener('install', () => {
