@@ -1,4 +1,3 @@
-import { parseSrcset, stringifySrcset } from 'srcset';
 import {
 	restoreCSSValueURLs,
 	rewriteCSSValueURLs,
@@ -21,6 +20,7 @@ import {
 } from '../../../routeURL';
 import { routeJS, ScriptType } from '../../../scriptRoutes';
 import { parseAcceptCH } from '../../../server/hintNames';
+import { parseSrcset, stringifySrcset } from '../../../srcset';
 import {
 	dataURLBytes,
 	INTEGRITY_MARK,
