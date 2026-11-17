@@ -1,16 +1,4 @@
 {
-	"/workers/modules/dedicated-worker-import-blob-url.any.worker.html": {
-		"(harness)": "ERROR: Error in remote blob:http://localhost:PORT/UUID: Uncaught TypeError: Failed to fetch dynamically imported module: blob:http://localhost:PORT/UUID",
-		"Static import.": "FAIL: promise_test: Unhandled rejection with value: \"Uncaught TypeError: Failed to fetch dynamically imported module: blob:http://localhost:PORT/UUID\"",
-		"Static import (cross-origin).": "FAIL: promise_test: Unhandled rejection with value: \"Uncaught TypeError: Failed to fetch dynamically imported module: blob:http://localhost:PORT/UUID\"",
-		"Static import (redirect).": "FAIL: promise_test: Unhandled rejection with value: \"Uncaught TypeError: Failed to fetch dynamically imported module: blob:http://localhost:PORT/UUID\"",
-		"Nested static import.": "FAIL: promise_test: Unhandled rejection with value: \"Uncaught TypeError: Failed to fetch dynamically imported module: blob:http://localhost:PORT/UUID\"",
-		"Static import and then dynamic import.": "FAIL: promise_test: Unhandled rejection with value: \"Uncaught TypeError: Failed to fetch dynamically imported module: blob:http://localhost:PORT/UUID\"",
-		"Dynamic import.": "FAIL: promise_test: Unhandled rejection with value: \"Uncaught TypeError: Failed to fetch dynamically imported module: blob:http://localhost:PORT/UUID\"",
-		"Nested dynamic import.": "FAIL: promise_test: Unhandled rejection with value: \"Uncaught TypeError: Failed to fetch dynamically imported module: blob:http://localhost:PORT/UUID\"",
-		"Dynamic import and then static import.": "FAIL: promise_test: Unhandled rejection with value: \"Uncaught TypeError: Failed to fetch dynamically imported module: blob:http://localhost:PORT/UUID\"",
-		"eval(import()).": "FAIL: promise_test: Unhandled rejection with value: \"Uncaught TypeError: Failed to fetch dynamically imported module: blob:http://localhost:PORT/UUID\""
-	},
 	"/workers/modules/dedicated-worker-import-data-url-cross-origin.html": {
 		"(harness)": "ERROR: Uncaught TypeError: Failed to fetch",
 		"static import data url from data: URL should be allowed.": "FAIL: assert_true: expected true got false",

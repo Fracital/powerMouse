@@ -1,5 +1,4 @@
 import {
-	proxyBlobURL,
 	ROUTE_PROTOCOLS,
 	routeBinary,
 	routeRefused,
@@ -619,8 +618,9 @@ export default class FetchModule extends Module<Client> {
 				if (requestRefused(client, 'connect-src', url, 2))
 					return await fetch(routeRefused(new StompURL(url, client.url)));
 				if (!ROUTE_PROTOCOLS.includes(url.protocol)) {
-					// a page-origin blob: URL is fetched as the browser's
-					const browserURL = proxyBlobURL(url.href);
+					// a page-origin blob: URL is fetched as the browser's (another
+					// site's, as no URL: src/inject/modules/ObjectURL.ts)
+					const browserURL = routeXHR(new StompURL(url, client.url));
 					// a Request of a URL the browser can fetch as it is goes as
 					// itself: as an init its members would be read through the
 					// getters the page may have put on it

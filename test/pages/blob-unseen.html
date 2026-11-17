@@ -1,0 +1,247 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>blob-unseen</title>
+<p id="c">styled</p>
+<script>
+	// Blobs the page makes without the constructor ever seeing its bytes as
+	// a document, a script or a stylesheet (a slice, a Blob of Blobs, a
+	// Response's, a structured clone, a worker's own), each loaded where it
+	// runs; and another site's blob: URLs, which this page cannot load
+	(async () => {
+		const cases = {};
+		const cross = `${location.protocol}//localhost:${location.port}`;
+		const proxy = new URLSearchParams(location.search).get('proxy');
+		const doc = (name) =>
+			`<!doctype html><title>${name}</title><script>fetch(${JSON.stringify(`${cross}/pages/pi-a.css?blob-${name}`)}).catch(() => {});parent.postMessage({ name: ${JSON.stringify(name)}, origin: location.origin }, '*');<\/script>`;
+		const svg = (name) =>
+			`<svg xmlns="http://www.w3.org/2000/svg"><script>parent.postMessage({ name: ${JSON.stringify(name)}, origin: location.origin }, '*');<\/script></svg>`;
+		const script = (name) =>
+			`fetch(${JSON.stringify(`${cross}/pages/pi-a.css?blob-${name}`)}).catch(() => {}); (self.__blobS ??= {})[${JSON.stringify(name)}] = location.origin;`;
+		const reports = {};
+		const waiters = {};
+		addEventListener('message', (event) => {
+			const data = event.data;
+			if (!data || typeof data.name !== 'string') return;
+			reports[data.name] = data.origin;
+			waiters[data.name]?.();
+		});
+		const reported = (name, ms = 4000) =>
+			new Promise((resolve) => {
+				if (name in reports) return resolve(reports[name]);
+				waiters[name] = () => resolve(reports[name]);
+				setTimeout(() => resolve(reports[name] ?? 'none'), ms);
+			});
+		const frame = (name, url) => {
+			const iframe = document.createElement('iframe');
+			iframe.src = url;
+			document.body.append(iframe);
+			return reported(name);
+		};
+		const run = (name, url, { revoke = false, module = false } = {}) =>
+			new Promise((resolve) => {
+				const element = document.createElement('script');
+				if (module) element.type = 'module';
+				element.src = url;
+				element.onload = () => resolve(self.__blobS?.[name] ?? 'ran nothing');
+				element.onerror = () => resolve('error');
+				document.head.append(element);
+				if (revoke) URL.revokeObjectURL(url);
+			});
+		const sized = (text) => new TextEncoder().encode(text).length;
+		const tasks = {
+			// documents in a frame
+			'd-nested': () =>
+				frame(
+					'd-nested',
+					URL.createObjectURL(
+						new Blob([new Blob([doc('d-nested')])], { type: 'text/html' }),
+					),
+				),
+			'd-slice': () => {
+				const text = doc('d-slice');
+				return frame(
+					'd-slice',
+					URL.createObjectURL(
+						new Blob([text]).slice(0, sized(text), 'text/html'),
+					),
+				);
+			},
+			'd-response': async () =>
+				frame(
+					'd-response',
+					URL.createObjectURL(
+						await new Response(doc('d-response'), {
+							headers: { 'content-type': 'text/html' },
+						}).blob(),
+					),
+				),
+			'd-clone': () =>
+				frame(
+					'd-clone',
+					URL.createObjectURL(
+						structuredClone(new Blob([doc('d-clone')], { type: 'text/html' })),
+					),
+				),
+			'd-svg': () => {
+				const text = svg('d-svg');
+				return frame(
+					'd-svg',
+					URL.createObjectURL(
+						new Blob([text]).slice(0, sized(text), 'image/svg+xml'),
+					),
+				);
+			},
+			'd-text': () => {
+				const text = doc('d-text');
+				return frame(
+					'd-text',
+					URL.createObjectURL(
+						new Blob([text]).slice(0, sized(text), 'text/plain'),
+					),
+				);
+			},
+			'd-reader': () =>
+				new Promise((resolve) => {
+					const reader = new FileReader();
+					reader.onload = () => resolve(frame('d-reader', reader.result));
+					reader.readAsDataURL(
+						new Blob([doc('d-reader')], { type: 'text/html' }),
+					);
+				}),
+			// scripts
+			's-untyped': () =>
+				run('s-untyped', URL.createObjectURL(new Blob([script('s-untyped')]))),
+			's-slice': () => {
+				const text = script('s-slice');
+				return run(
+					's-slice',
+					URL.createObjectURL(
+						new Blob([text]).slice(0, sized(text), 'text/javascript'),
+					),
+				);
+			},
+			's-nested': () =>
+				run(
+					's-nested',
+					URL.createObjectURL(
+						new Blob([new Blob([script('s-nested')])], {
+							type: 'text/javascript',
+						}),
+					),
+				),
+			's-response': async () =>
+				run(
+					's-response',
+					URL.createObjectURL(await new Response(script('s-response')).blob()),
+				),
+			's-revoked': () =>
+				run('s-revoked', URL.createObjectURL(new Blob([script('s-revoked')])), {
+					revoke: true,
+				}),
+			's-clone': () =>
+				run(
+					's-clone',
+					URL.createObjectURL(structuredClone(new Blob([script('s-clone')]))),
+				),
+			's-module': () => {
+				const text = script('s-module');
+				return run(
+					's-module',
+					URL.createObjectURL(
+						new Blob([text]).slice(0, sized(text), 'text/javascript'),
+					),
+					{ module: true },
+				);
+			},
+			// a stylesheet
+			'c-sheet': () =>
+				new Promise((resolve) => {
+					const text = `#c { color: rgb(1, 2, 3); background-image: url(${cross}/pages/sprite.svg?blob-c-sheet); }`;
+					const link = document.createElement('link');
+					link.rel = 'stylesheet';
+					link.href = URL.createObjectURL(
+						new Blob([text]).slice(0, sized(text), 'text/css'),
+					);
+					link.onload = link.onerror = () =>
+						resolve(getComputedStyle(document.getElementById('c')).color);
+					document.head.append(link);
+				}),
+			// workers: one from a blob nothing rewrote, and one that imports a
+			// blob of its own
+			'w-untyped': () =>
+				new Promise((resolve) => {
+					const worker = new Worker(
+						URL.createObjectURL(
+							new Blob([
+								`fetch(${JSON.stringify(`${cross}/pages/pi-a.css?blob-w-untyped`)}).catch(() => {}); postMessage(location.origin);`,
+							]),
+						),
+					);
+					worker.onmessage = (event) => resolve(event.data);
+					worker.onerror = () => resolve('error');
+					setTimeout(() => resolve('none'), 4000);
+				}),
+			'w-inner': () =>
+				new Promise((resolve) => {
+					const inner = script('w-inner');
+					const worker = new Worker(
+						URL.createObjectURL(
+							new Blob(
+								[
+									`importScripts(URL.createObjectURL(new Blob([${JSON.stringify(inner)}]))); postMessage(self.__blobS['w-inner']);`,
+								],
+								{ type: 'text/javascript' },
+							),
+						),
+					);
+					worker.onmessage = (event) => resolve(event.data);
+					worker.onerror = () => resolve('error');
+					setTimeout(() => resolve('none'), 4000);
+				}),
+			// another site's blob: URLs, in this page's form and in the proxy's
+			'x-site': async () => {
+				const child = document.createElement('iframe');
+				child.src = `${cross}/pages/blob-unseen-child.html`;
+				const urls = await new Promise((resolve) => {
+					addEventListener('message', function take(event) {
+						if (!event.data?.childURLs) return;
+						removeEventListener('message', take);
+						resolve(event.data.childURLs);
+					});
+					document.body.append(child);
+				});
+				const outcome = {};
+				const forms = {
+					page: (url) => url,
+					proxy: (url) =>
+						`blob:${proxy ?? location.origin}/${url.slice(url.lastIndexOf('/') + 1)}`,
+				};
+				for (const [form, map] of Object.entries(forms)) {
+					outcome[`${form} fetch`] = await fetch(map(urls.text))
+						.then((response) => response.text())
+						.then(
+							(text) => (text === 'secret' ? 'read' : 'other'),
+							() => 'fail',
+						);
+					outcome[`${form} script`] = await run(`x-${form}`, map(urls.script));
+					outcome[`${form} frame`] = await frame(
+						`x-${form}-doc`,
+						map(urls.doc),
+					);
+				}
+				return outcome;
+			},
+		};
+		const results = await Promise.all(
+			Object.entries(tasks).map(async ([name, task]) => {
+				try {
+					return [name, await task()];
+				} catch (error) {
+					return [name, `threw ${error?.name}`];
+				}
+			}),
+		);
+		for (const [name, value] of results) cases[name] = value;
+		window.__pi = { done: true, cases };
+	})();
+</script>

@@ -770,7 +770,16 @@ function handleMessage(event: ExtendableMessageEvent) {
 			!INLINE_TOKEN.test(message.token) ||
 			typeof message.markup !== 'string' ||
 			message.markup.length > INLINE_MAX ||
-			typeof message.url !== 'string'
+			typeof message.url !== 'string' ||
+			// a Blob, or a blob: URL of this origin (read here, never fetched
+			// elsewhere)
+			(message.blob !== undefined &&
+				!(message.blob instanceof Blob) &&
+				!(
+					typeof message.blob === 'string' &&
+					message.blob.length <= 512 &&
+					message.blob.startsWith(`blob:${location.origin}/`)
+				))
 		)
 			return;
 		// its partition is its creator's, read from the creator's route
@@ -791,6 +800,8 @@ function handleMessage(event: ExtendableMessageEvent) {
 			directory: message.directory,
 			markup: message.markup,
 			url: message.url,
+			...(message.blob ? { blob: message.blob } : {}),
+			...(message.blob && message.isolated === true ? { isolated: true } : {}),
 			...(partition ? { partition } : {}),
 		});
 	} else if (LOAD_CHANNEL in data) {

@@ -102,6 +102,8 @@ export default class HistoryModule extends Module<DocumentClient> {
 					}
 					if (
 						!url ||
+						// (a blob: URL's origin is its creator's, its scheme another)
+						url.protocol !== page.protocol ||
 						url.origin !== page.origin ||
 						url.username !== page.username ||
 						url.password !== page.password

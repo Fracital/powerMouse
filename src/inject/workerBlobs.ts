@@ -55,6 +55,9 @@ export function forgetBlob(url: string) {
 	tableOf(ref)?.delete(url);
 }
 
+/** every blob: URL this realm minted for the page (the browser's form), until revoked */
+export const mintedURLs = new Set<string>();
+
 /** what a worker's bootstrap posts once it has imported its private URL (released then) */
 export const WORKER_LOADED = '$stomp$workerLoaded';
 

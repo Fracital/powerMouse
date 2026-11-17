@@ -779,6 +779,14 @@ export interface InlineDocumentMessage {
 	token: string;
 	markup: string;
 	url: string;
+	/**
+	 * a document the page made in a Blob the inject never read (a slice, a
+	 * Blob of Blobs, a Response's): the Blob, or the browser's blob: URL of
+	 * one another realm minted, read by the worker in place of the markup
+	 */
+	blob?: Blob | string;
+	/** that Blob's document is cross-origin isolated, as its creator is (it inherits the creator's embedder policy) */
+	isolated?: boolean;
 }
 
 /**

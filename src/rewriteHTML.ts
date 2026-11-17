@@ -57,18 +57,6 @@ function javascriptExpression(body: string, rewritten: string): string | null {
 }
 
 /**
- * In a page: the inline-document route for a navigation to one of the page's
- * own text/html blobs, or null (src/inject/htmlBlobs.ts). Unset in the
- * service worker.
- */
-let inlineBlob: ((blobURL: string) => string | null) | null = null;
-export function setInlineBlobResolver(
-	resolver: (blobURL: string) => string | null,
-) {
-	inlineBlob = resolver;
-}
-
-/**
  * The XML shell (src/xmlShell.ts modifyXML) for a data: XML document: the
  * worker's own, a deferred part in a page (no document bundle carries it).
  * Unset, such a document goes as it is.
@@ -87,11 +75,6 @@ export function routeHTML(
 	form = false,
 	nested: string | false = false,
 ) {
-	if (resource.url.protocol === 'blob:' && inlineBlob) {
-		const inline = inlineBlob(resource.url.href);
-		if (inline) return inline;
-	}
-
 	if (resource.url.protocol === 'data:') {
 		const { mime, data, attributes } = parseDataURI(
 			// the data is everything after `data:` but the fragment: a `?` in it

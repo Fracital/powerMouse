@@ -2,8 +2,8 @@
 <title>BLOBDOC</title>
 <script>
 	// a document the page builds itself and shows from a blob: URL; nothing
-	// fetched it, so its script and markup only get rewritten if the blob's
-	// contents were wrapped when it was made
+	// fetched it, so its script and markup only get rewritten if the load of
+	// its URL is routed to the worker
 	window.__blob = {};
 	const html =
 		'<!doctype html><title>BLOB</title>' +
@@ -29,16 +29,17 @@
 	});
 	__blob.fileType = file.type;
 	__blob.fileName = file.name;
-	// anything that is not an HTML document is left alone
+	// every Blob holds the page's own bytes
 	(async () => {
+		__blob.htmlText = await new Blob([html], { type: 'text/html' }).text();
+		__blob.htmlSize = new Blob([html], { type: 'text/html' }).size;
+		__blob.htmlLength = new TextEncoder().encode(html).length;
 		__blob.plain = await new Blob(['abc'], { type: 'text/plain' }).text();
 		__blob.json = await new Blob(['{"a":1}'], {
 			type: 'application/json',
 		}).text();
 		__blob.image = new Blob([new Uint8Array(4)], { type: 'image/png' }).size;
 		__blob.untyped = await new Blob(['<b>x</b>']).text();
-		// an HTML blob from bytes is wrapped like one from strings; bytes that
-		// do not decode are left alone
 		__blob.binaryHTML = await new Blob([new TextEncoder().encode('<b>x</b>')], {
 			type: 'text/html',
 		}).text();

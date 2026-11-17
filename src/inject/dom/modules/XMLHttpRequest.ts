@@ -47,8 +47,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 
 		const proxyModule = moduleClient.getModule(ProxyModule)!;
 		const syncModule = that.client.getModule(SyncModule)!;
-		// a blob response is the bytes the site sent: the page's Blob (wrapped
-		// by BlobDocuments) would turn an HTML one into the inject's shell
+		// a blob response is the bytes the site sent, in the realm's own Blob
 		const NativeBlob =
 			that.client.getModule(BlobDocumentsModule)?.nativeBlob ??
 			that.client.global.Blob;

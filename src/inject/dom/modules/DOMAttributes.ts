@@ -206,7 +206,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 	apply() {
 		const moduleClient = this.client;
 		const realm = moduleClient.global;
-		// before the BlobDocuments module wraps it (it applies after this one)
+		// (the realm's own, as the page may replace it)
 		const NativeBlob = realm.Blob;
 
 		// A document no service worker controls (an about:blank frame or popup
@@ -3179,10 +3179,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			}
 			let routed = routedOf();
 			// a blob: of the page's is copied like a fetched resource: as it is
-			// it would show a document of the proxy's origin, unrewritten (an
-			// HTML one it made is an inline document's route already)
-			const fromBlob =
-				resource.url.protocol === 'blob:' && routed.startsWith('blob:');
+			// it would show a document of the proxy's origin, unrewritten
+			const fromBlob = resource.url.protocol === 'blob:';
 			if (!fromBlob && !ROUTE_PROTOCOLS.includes(resource.url.protocol)) {
 				// data: and the like: as routeHTML leaves them
 				element.setAttribute(attribute, routed);
@@ -3241,7 +3239,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			// the copy goes out as the load it stands for (loadGrants.ts); a
 			// blob: is read at once, as the browser resolves it at the load
 			(fromBlob
-				? moduleClient.nativeFetch(proxyBlobURL(resource.url.href))
+				? moduleClient.nativeFetch(routeXHR(resource))
 				: loadFetch(
 						moduleClient,
 						new URL(routeXHR(resource), scopePrefix(moduleClient)).href,

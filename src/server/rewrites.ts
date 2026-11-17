@@ -95,6 +95,7 @@ import {
 	REFUSED_SOURCE_ROUTE,
 	ROUTE_PROTOCOLS,
 	routeBinary,
+	setBlobRoute,
 	unwrapRoute,
 } from '../routeURL';
 import { MODULE_PREFIX_ROUTE } from '../scriptRoutes';
@@ -4517,6 +4518,8 @@ export function withRefreshMeta(markup: string, value: string): string {
 
 /** the route of a document (src/rewriteHTML.ts routeHTML) */
 const DOCUMENT_ROUTE = /^\/html(:nested:[^/]*)?\//;
+/** a page's blob: script or stylesheet (src/inject/modules/ObjectURL.ts): its kind, and the private URL's uuid */
+const BLOB_ROUTE = /^\/blob~(js|wjs|module|css)(?:~([\da-f-]{36}))?\//;
 
 export function registerRewrites(
 	router: Router,
@@ -5062,6 +5065,82 @@ export function registerRewrites(
 		),
 	);
 
+	// a script or a stylesheet in a Blob the page made and the inject never
+	// read (src/inject/modules/ObjectURL.ts): the route names the page's
+	// blob: URL (what its loads read back) and, when the page's realm holds
+	// the Blob, the private URL it minted of it (which the page's revoke does
+	// not reach). Read from this origin's blob: URL registry and rewritten
+	// here; a URL another origin's page minted (the worker recorded it) or
+	// one that no longer resolves is a network error, as natively.
+	// a blob: script or stylesheet a script the worker rewrites names (a
+	// static import of a module the page made): routed the same way, by the
+	// page's URL, as the worker holds no Blob of the page's
+	setBlobRoute((kind, href, given) => {
+		const script = /^js:(generic|genericModule|workerModule)$/.exec(kind)?.[1];
+		if (!script && kind !== 'css') return null;
+		if (!/^blob:[^/]+\/\/[^/]+\/[\da-f-]{36}$/.test(given)) return null;
+		return `${rewriter.directory}blob~${script === 'generic' ? 'js' : script ? 'module' : 'css'}/${rewriter.codec.encode(given)}`;
+	}, true);
+
+	router.routes.set(BLOB_ROUTE, async (request, path) => {
+		const [, kind, at] = BLOB_ROUTE.exec(path)!;
+		let page: StompURL;
+		try {
+			page = parseRoutedURL(
+				request.url,
+				rewriter.codec,
+				`${location.origin}${rewriter.directory}`,
+			).url;
+		} catch (error) {
+			return Response.error();
+		}
+		const inner = page.url.pathname;
+		const uuid = at ?? inner.slice(inner.lastIndexOf('/') + 1);
+		if (page.url.protocol !== 'blob:' || !/^[\da-f-]{36}$/.test(uuid))
+			return Response.error();
+		const blobURL = `blob:${location.origin}/${uuid}`;
+		const minter = await knownOriginOf(blobURL);
+		if (minter && minter.origin !== page.url.origin) return Response.error();
+		let response: Response;
+		try {
+			response = await fetch(blobURL);
+		} catch (error) {
+			return Response.error();
+		}
+		const type = response.headers.get('content-type');
+		const bytes = new Uint8Array(await response.arrayBuffer());
+		const headers: Record<string, string> = { 'cache-control': 'no-store' };
+		if (kind === 'css') {
+			if (type) headers['content-type'] = type;
+			const text = new TextDecoder().decode(bytes);
+			let output: string;
+			try {
+				await scannerSettled();
+				output = modifyCSS(text, page, 'stylesheet', {});
+			} catch (error) {
+				output = rewriteCSSValueURLs(text, page);
+			}
+			return new Response(output, { headers });
+		}
+		// a blob of no type runs natively, as a classic script and as a
+		// module (blob-scripts-plain suite); a worker's classic script of any
+		// type too (Worker_script_mimetype); one of another type is the
+		// browser's to judge
+		headers['content-type'] = utf8ContentType(
+			(kind !== 'wjs' && type) || 'text/javascript',
+		);
+		const module = kind === 'module';
+		return new Response(
+			modifyJS(
+				decodeScript(bytes, type, module),
+				page,
+				rewriter.config,
+				module ? 'genericModule' : 'generic',
+			),
+			{ headers },
+		);
+	});
+
 	// an inline document (src/server/inline.ts): markup the page registered
 	// under a single-use token, rewritten here like any fetched page and
 	// served from this address, so the document is controlled and its
@@ -5119,9 +5198,66 @@ export function registerRewrites(
 			// creator's referrer policy, which this navigation's request carries
 			if (request.referrerPolicy)
 				headers['referrer-policy'] = request.referrerPolicy;
+			// and a blob: document its creator's embedder policy: isolated as
+			// its creator is (an inline document of markup never is)
+			if (entry.blob && entry.isolated) {
+				const isolation = new Headers();
+				isolationResponseHeaders(isolation, {
+					isolated: true,
+					topLevel: request.destination === 'document',
+				});
+				isolation.forEach((value, name) => (headers[name] = value));
+			}
+			let markup = entry.markup;
+			if (entry.blob) {
+				// a Blob the page never had read (src/server/inline.ts): an HTML
+				// one is rewritten as the markup would be, an XML one gets the XML
+				// shell, and anything else goes as it is, under its own type and
+				// unsniffed (it runs nothing natively). A revoked URL is the
+				// network error the browser's navigation to it would be
+				let blob: Blob;
+				try {
+					blob =
+						typeof entry.blob === 'string'
+							? await (await fetch(entry.blob)).blob()
+							: entry.blob;
+				} catch (error) {
+					return Response.error();
+				}
+				const mime = getMime(blob.type).trim().toLowerCase();
+				const bytes = new Uint8Array(await blob.arrayBuffer());
+				if (isXMLDocumentMime(mime)) {
+					headers['content-type'] = `${mime}; charset=utf-8`;
+					return new Response(
+						modifyXML(
+							decodeDocument(bytes, blob.type),
+							url,
+							rewriter.config,
+							mime,
+							undefined,
+							shellSites(url),
+							false,
+							undefined,
+							undefined,
+							undefined,
+							true,
+						),
+						{ headers },
+					);
+				}
+				if (mime !== 'text/html')
+					return new Response(bytes, {
+						headers: {
+							...headers,
+							'content-type': blob.type || 'text/plain',
+							'x-content-type-options': 'nosniff',
+						},
+					});
+				markup = decodeDocument(bytes, blob.type);
+			}
 			return new Response(
 				modifyHTML(
-					entry.markup,
+					markup,
 					url,
 					rewriter.config,
 					true,

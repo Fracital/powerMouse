@@ -1,0 +1,29 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>blob-unseen child</title>
+<script>
+	// another site's blobs: a text, a script and a document, their URLs
+	// handed to the framing page
+	const name = (kind) => JSON.stringify(kind);
+	parent.postMessage(
+		{
+			childURLs: {
+				text: URL.createObjectURL(new Blob(['secret'])),
+				script: URL.createObjectURL(
+					new Blob([
+						`(self.__blobS ??= {})[${name('x-page')}] = (self.__blobS[${name('x-proxy')}] = 'ran');`,
+					]),
+				),
+				doc: URL.createObjectURL(
+					new Blob(
+						[
+							`<!doctype html><script>parent.postMessage({ name: 'x-page-doc', origin: location.origin }, '*');parent.postMessage({ name: 'x-proxy-doc', origin: location.origin }, '*');<\/script>`,
+						],
+						{ type: 'text/html' },
+					),
+				),
+			},
+		},
+		'*',
+	);
+</script>

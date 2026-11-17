@@ -1,7 +1,7 @@
 // A document the page builds itself and shows from a blob: URL is injected
 // and rewritten like a fetched one: its script sees the spoof and the page's
-// URL, its markup is routed. Same-origin mode (the host realm reads the
-// blob frame's real attributes).
+// URL, its markup is routed, and the Blob reads back as the page made it.
+// Same-origin mode (the host realm reads the blob frame's real attributes).
 import { done, FIXTURE, launch, ok, PROXY, sleep } from '../lib.mjs';
 
 const browser = await launch();
@@ -76,12 +76,17 @@ ok(
 	]),
 );
 ok(
-	'an HTML blob built from bytes is wrapped like one from strings',
-	typeof blob.binaryHTML === 'string' &&
-		blob.binaryHTML.startsWith('<!DOCTYPE HTML>') &&
-		blob.binaryHTML.includes('loadHTML(') &&
-		blob.binaryHTML.includes('&lt;b&gt;x&lt;/b&gt;'),
-	JSON.stringify((blob.binaryHTML || '').slice(0, 40)),
+	"an HTML blob reads back the page's own bytes, as natively",
+	blob.binaryHTML === '<b>x</b>' &&
+		typeof blob.htmlText === 'string' &&
+		blob.htmlText.startsWith('<!doctype html><title>BLOB</title>') &&
+		blob.htmlSize === blob.htmlLength,
+	JSON.stringify([
+		blob.binaryHTML,
+		(blob.htmlText || '').slice(0, 40),
+		blob.htmlSize,
+		blob.htmlLength,
+	]),
 );
 ok(
 	'a File keeps its name and type',

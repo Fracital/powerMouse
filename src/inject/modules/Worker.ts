@@ -4,6 +4,7 @@ import {
 	pageBlobURL,
 	proxyBlobURL,
 	routeRefused,
+	routeURL,
 } from '../../routeURL';
 import { routeJS } from '../../scriptRoutes';
 import StompURL from '../../StompURL';
@@ -28,7 +29,12 @@ import {
 } from '../trusted';
 import { blobOf, PRIVATE_URL_MS, WORKER_LOADED } from '../workerBlobs';
 import ProxyModule, { catchRequiredArguments } from './Proxy';
-import { reportedLocations, unrouteURL, type ErrorLocation } from './Unroute';
+import {
+	reportedLocations,
+	scopePrefix,
+	unrouteURL,
+	type ErrorLocation,
+} from './Unroute';
 
 const WORKER_CTOR_ERROR = (name: string) =>
 	`Failed to construct '${name}': Please use the 'new' operator, this DOM object constructor cannot be called as a function.`;
@@ -49,18 +55,15 @@ export default class WorkerModule extends Module<Client> {
 		const proxyModule = moduleClient.getModule(ProxyModule)!;
 		const global = moduleClient.global;
 		this.nativeWorker = global.Worker;
-		// the bootstrap below is our own code: a document's BlobDocuments
-		// module (it applies after this one) would rewrite it once more as a
-		// script blob, and the rewritten preamble then called the access
-		// helper before it had loaded the inject that defines it
+		// (the bootstrap below is our own code, made in the realm's own Blob)
 		const NativeBlob = global.Blob;
 
 		/**
-		 * The script URL a worker should really start with. A blob: URL holds
-		 * page data the service worker can never read, so the worker starts
-		 * from a small bootstrap instead: the usual worker preamble (inject,
-		 * client), then the page's blob. A document rewrote the blob's script
-		 * when the page made it (BlobDocuments); a worker's are not rewritten.
+		 * The script URL a worker should really start with. A blob: URL is no
+		 * request the service worker sees, so the worker starts from a small
+		 * bootstrap instead: the usual worker preamble (inject, client), then
+		 * the page's blob, which that import routes to the service worker to
+		 * be rewritten (ObjectURL).
 		 */
 		/** the private URL each worker took its script from, released once it has (see workerBlobs) */
 		let lastPrivate: string | undefined;
@@ -153,6 +156,16 @@ export default class WorkerModule extends Module<Client> {
 							),
 						),
 					);
+				// the page's script as the bootstrap loads it: routed here (the
+				// load is the bootstrap's own, no code the rewriter sees), and
+				// absolute, as a blob: base resolves no path
+				const routed = (kind: string) =>
+					new URL(
+						routeURL(kind, new StompURL(pageBlobURL(script), moduleClient.url)),
+						scopePrefix(moduleClient),
+					).href;
+				// (a name the page never learns: the client's own, extended)
+				const own = `${moduleClient.names.client}_importScripts`;
 				const bootstrap =
 					base +
 					(isModule
@@ -162,15 +175,17 @@ export default class WorkerModule extends Module<Client> {
 							// that come meanwhile held for the handlers it sets
 							modifyJS('', moduleClient.url, moduleClient.config, type) +
 							`\nawait ${moduleClient.names.client}.holdEvents(import(${JSON.stringify(
-								proxyBlobURL(script),
+								routed('js:genericModule'),
 							)}));` +
 							loaded
-						: modifyJS(
-								`importScripts(${JSON.stringify(script)});`,
-								moduleClient.url,
-								moduleClient.config,
-								type,
-							) + loaded);
+						: // the browser's own importScripts, taken before the inject
+							// hooks it: the page's script is the worker's own, which
+							// its document's policy let start (worker-src), not a
+							// script the worker imports (script-src)
+							`const ${own} = self.importScripts;` +
+							modifyJS('', moduleClient.url, moduleClient.config, type) +
+							`\n${own}.call(self, ${JSON.stringify(routed('js:worker'))});` +
+							loaded);
 				// the bootstrap's own blob: URL goes to the browser, so in the
 				// proxy's form (createObjectURL hands the page the page's)
 				return proxyBlobURL(

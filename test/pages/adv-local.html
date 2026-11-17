@@ -1,0 +1,206 @@
+<!doctype html>
+<title>ADV LOCAL</title>
+<pre id="result">pending</pre>
+<script src="adv-harness.js"></script>
+<script>
+	// Documents, scripts and stylesheets the page makes locally, which no
+	// request carried: blobs the Blob constructor never saw as such (a
+	// slice, a Response's, a clone, a worker's own), an embed's blob copy,
+	// a data: XML document, an xml-stylesheet processing instruction the
+	// page inserts (another site's sheet), raw XML documents and an XSLT's
+	// output. Each reports what it read of its location; a load that went
+	// past the proxy is a bypass.
+	const A = __advAsync;
+	const cross = `${location.protocol}//localhost:${location.port}`;
+	const sized = (text) => new TextEncoder().encode(text).length;
+	const waiters = {};
+	addEventListener('message', (event) => {
+		const data = event.data;
+		if (data && typeof data.local === 'string') waiters[data.local]?.(data);
+	});
+	const reported = (name) =>
+		new Promise((resolve) => (waiters[name] = (data) => resolve(data.saw)));
+	const saw = (name) =>
+		`parent.postMessage({ local: ${JSON.stringify(name)}, saw: { href: location.href, origin: location.origin, top: top === parent } }, '*');`;
+	const frame = (src) => {
+		const element = document.createElement('iframe');
+		element.src = src;
+		document.body.append(element);
+		return element;
+	};
+	const html = (name) =>
+		`<!doctype html><script>fetch(${JSON.stringify(`${cross}/pages/pi-a.css?adv-${name}`)}).catch(() => {});${saw(name)}<\/script>`;
+	const docProbe = (name, blob) => {
+		A(
+			name,
+			async () => {
+				const got = reported(name);
+				frame(URL.createObjectURL(await blob));
+				return got;
+			},
+			8000,
+		);
+	};
+	docProbe(
+		'blob document slice',
+		(() => {
+			const text = html('blob document slice');
+			return new Blob([text]).slice(0, sized(text), 'text/html');
+		})(),
+	);
+	docProbe(
+		'blob document of a Response',
+		new Response(html('blob document of a Response'), {
+			headers: { 'content-type': 'text/html' },
+		}).blob(),
+	);
+	docProbe(
+		'blob document clone',
+		structuredClone(
+			new Blob([html('blob document clone')], { type: 'text/html' }),
+		),
+	);
+	docProbe(
+		'blob svg slice',
+		(() => {
+			const text = `<svg xmlns="http://www.w3.org/2000/svg"><script>${saw('blob svg slice')}<\/script></svg>`;
+			return new Blob([text]).slice(0, sized(text), 'image/svg+xml');
+		})(),
+	);
+	// scripts
+	const script = (name, blob, module = false) =>
+		A(
+			name,
+			() =>
+				new Promise((resolve, reject) => {
+					const element = document.createElement('script');
+					if (module) element.type = 'module';
+					element.src = URL.createObjectURL(blob);
+					element.onload = () =>
+						resolve(window.__local?.[name] ?? 'ran nothing');
+					element.onerror = () => reject(new Error('did not load'));
+					document.head.append(element);
+				}),
+		);
+	const body = (name) =>
+		`fetch(${JSON.stringify(`${cross}/pages/pi-a.css?adv-${name}`)}).catch(() => {}); (self.__local ??= {})[${JSON.stringify(name)}] = location.href;`;
+	script('blob script untyped', new Blob([body('blob script untyped')]));
+	script(
+		'blob script module slice',
+		(() => {
+			const text = body('blob script module slice');
+			return new Blob([text]).slice(0, sized(text), 'text/javascript');
+		})(),
+		true,
+	);
+	// workers
+	const worker = (name, source, options) =>
+		A(
+			name,
+			() =>
+				new Promise((resolve, reject) => {
+					const w = new Worker(
+						URL.createObjectURL(new Blob([source], options)),
+					);
+					w.onmessage = (event) => resolve(event.data);
+					w.onerror = () => reject(new Error('worker error'));
+				}),
+		);
+	worker(
+		'blob worker untyped',
+		`fetch(${JSON.stringify(`${cross}/pages/pi-a.css?adv-worker`)}).catch(() => {}); postMessage(location.href);`,
+	);
+	worker(
+		'blob worker imports its own blob',
+		`importScripts(URL.createObjectURL(new Blob([${JSON.stringify(body('inner'))}]))); postMessage(self.__local.inner);`,
+		{ type: 'text/javascript' },
+	);
+	// a stylesheet blob naming another site's image
+	A(
+		'blob stylesheet slice',
+		() =>
+			new Promise((resolve) => {
+				const text = `#local { color: rgb(9, 8, 7); background-image: url(${cross}/pages/sprite.svg?adv-local-css); }`;
+				const target = document.createElement('p');
+				target.id = 'local';
+				document.body.append(target);
+				const link = document.createElement('link');
+				link.rel = 'stylesheet';
+				link.href = URL.createObjectURL(
+					new Blob([text]).slice(0, sized(text), 'text/css'),
+				);
+				link.onload = link.onerror = () =>
+					resolve({ color: getComputedStyle(target).color, href: link.href });
+				document.head.append(link);
+			}),
+	);
+	// an embed of an SVG blob whose script runs
+	A(
+		'embed svg blob',
+		async () => {
+			const got = reported('embed svg blob');
+			const embed = document.createElement('embed');
+			embed.type = 'image/svg+xml';
+			embed.src = URL.createObjectURL(
+				new Blob(
+					[
+						`<svg xmlns="http://www.w3.org/2000/svg"><script>${saw('embed svg blob')}<\/script></svg>`,
+					],
+					{ type: 'image/svg+xml' },
+				),
+			);
+			document.body.append(embed);
+			return got;
+		},
+		8000,
+	);
+	// a data: XHTML document
+	A(
+		'data xhtml document',
+		() => {
+			const got = reported('data xhtml document');
+			frame(
+				`data:application/xhtml+xml,${encodeURIComponent(`<html xmlns="http://www.w3.org/1999/xhtml"><body><script>${saw('data xhtml document')}<\/script></body></html>`)}`,
+			);
+			return got;
+		},
+		8000,
+	);
+	// an xml-stylesheet PI the page inserts, naming another site's sheet
+	A('inserted xml-stylesheet of another site', async () => {
+		const pi = document.createProcessingInstruction(
+			'xml-stylesheet',
+			`href="${cross}/pages/pi-b.css?adv-local" type="text/css"`,
+		);
+		document.insertBefore(pi, document.documentElement);
+		await new Promise((resolve) => setTimeout(resolve, 1500));
+		return {
+			data: pi.data,
+			sheet: pi.sheet?.href ?? null,
+			sheets: [...document.styleSheets].map((sheet) => sheet.href),
+		};
+	});
+	// raw XML documents: a styled one with an XHTML script, and an XSLT's output
+	const xmlProbe = (name, src) =>
+		A(
+			name,
+			() =>
+				new Promise((resolve) => {
+					const element = frame(src);
+					const read = () => {
+						try {
+							const value = element.contentWindow.__pi;
+							if (value?.done) return resolve(value.cases);
+						} catch (error) {
+							return resolve(`blocked ${error.name}`);
+						}
+						setTimeout(read, 200);
+					};
+					read();
+				}),
+			8000,
+		);
+	xmlProbe('xml document with a stylesheet', 'pi-doc.xml');
+	xmlProbe('xslt output', 'pi-xslt.xml');
+	__advFinish(9000);
+</script>

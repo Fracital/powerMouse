@@ -980,7 +980,13 @@ export default class Client {
 	 * send none). Null when no controlled document can register it, or the
 	 * markup is too large.
 	 */
-	inlineDocument(markup: string, url: string, referrer: string): string | null {
+	inlineDocument(
+		markup: string,
+		url: string,
+		referrer: string,
+		blob?: Blob | string,
+		isolated?: boolean,
+	): string | null {
 		if (markup.length > INLINE_DOCUMENT_MAX) return null;
 		// registered by a routed document of this controller (the worker takes
 		// registrations from those only: an about:blank or srcdoc document's
@@ -995,6 +1001,8 @@ export default class Client {
 					token,
 					markup,
 					url,
+					...(blob ? { blob } : {}),
+					...(isolated ? { isolated } : {}),
 				},
 			})
 		)

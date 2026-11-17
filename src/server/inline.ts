@@ -23,6 +23,10 @@ export interface InlineDocument {
 	/** the controller address (`/stomp/<id>/`) it belongs to */
 	directory: string;
 	markup: string;
+	/** a Blob to read in place of the markup, or the browser's blob: URL of one (InlineDocumentMessage) */
+	blob?: Blob | string;
+	/** its creator is cross-origin isolated (InlineDocumentMessage) */
+	isolated?: boolean;
 	/** the document's URL as its readbacks show it (the shell's base) */
 	url: string;
 	/**

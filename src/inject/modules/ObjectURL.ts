@@ -1,9 +1,22 @@
-import { pageBlobURL, proxyBlobURL, setBlobOrigins } from '../../routeURL';
+import {
+	isDocumentKind,
+	pageBlobURL,
+	proxyBlobURL,
+	setBlobOrigins,
+	setBlobRoute,
+} from '../../routeURL';
 import { BLOB_MINTED } from '../../transport/messages';
 import Client from '../Client';
-import { htmlBlobs, htmlBlobURLs } from '../htmlBlobs';
 import Module from '../Module';
-import { blobTable, forgetBlob, isBlob, recordBlob } from '../workerBlobs';
+import {
+	blobOf,
+	blobTable,
+	forgetBlob,
+	isBlob,
+	mintedURLs,
+	PRIVATE_URL_MS,
+	recordBlob,
+} from '../workerBlobs';
 import ProxyModule from './Proxy';
 import { realmOrigin } from './Unroute';
 
@@ -43,20 +56,94 @@ export default class ObjectURLModule extends Module<Client> {
 		// reads "null", which set here made every blob: URL the page minted
 		// after that come out in the proxy's form (YouTube Music's and
 		// SoundCloud's MediaSource URLs, read back through currentSrc)
-		setBlobOrigins(client.url.url.origin, realmOrigin(client));
+		const proxy = realmOrigin(client);
+		setBlobOrigins(client.url.url.origin, proxy);
 		const URLCtor = client.global.URL;
 		if (typeof URLCtor?.createObjectURL !== 'function') return;
+		const create = URLCtor.createObjectURL;
+		const revoke = URLCtor.revokeObjectURL;
+		const own = `blob:${proxy}/`;
+		// The page's bytes the inject never read (a slice, a Blob of Blobs, a
+		// Response's or a FileReader's Blob, one another realm made or a
+		// worker's): a document, a script or a stylesheet loaded from one is
+		// read by the service worker and rewritten there (an inline document,
+		// the script and stylesheet routes in src/server/rewrites.ts). A
+		// Blob this realm holds is read from a private URL of it, so the
+		// page's revoke right after the load starts reaches no load, as
+		// natively; it goes a while after that revoke.
+		const privates = new Map<string, string>();
+		// the realm's own crossOriginIsolated, as the browser answers it
+		const isolated = Reflect.getOwnPropertyDescriptor(
+			client.global,
+			'crossOriginIsolated',
+		)?.get;
+		setBlobRoute((kind, href, given) => {
+			if (!href.startsWith(own)) return null;
+			const uuid = href.slice(own.length);
+			// the browser's form, which this realm never showed the page: the
+			// one blob: URL registry holds every site's Blobs, and another
+			// site's is one the page's real origin could not resolve
+			if (
+				given === href &&
+				given !== pageBlobURL(given) &&
+				!mintedURLs.has(href)
+			)
+				return `blob:null/${uuid}`;
+			const script = /^js:(generic|genericModule|worker)$/.exec(kind)?.[1];
+			const html = isDocumentKind(kind);
+			if (!script && kind !== 'css' && !html) return null;
+			const blob = blobOf(href);
+			if (html)
+				// (natively an HTML or XML document runs; nothing else does)
+				return blob &&
+					!/^(text\/html|[\w!#$&^.-]+\/([\w!#$&^.+-]+\+)?xml)\s*(;|$)/i.test(
+						blob.type,
+					)
+					? null
+					: client.inlineDocument(
+							'',
+							client.url.toString(),
+							client.url.toString(),
+							blob ?? href,
+							// (a blob: document inherits its creator's embedder policy)
+							!!isolated && Reflect.apply(isolated, client.global, []) === true,
+						);
+			let at = '';
+			if (blob) {
+				let copy = privates.get(href);
+				if (!copy) {
+					copy = proxyBlobURL(String(Reflect.apply(create, URLCtor, [blob])));
+					privates.set(href, copy);
+				}
+				at = `~${copy.slice(own.length)}`;
+			}
+			// (the page's URL, which its loads read back: StompURL's encode is
+			// for URLs with a host)
+			const { directory, codec } = client.url;
+			// a worker's classic script (the one it starts with, or one a
+			// worker imports) runs whatever the Blob's type, as natively:
+			// `wjs` is served as JavaScript
+			const kindOf =
+				script === 'genericModule'
+					? 'module'
+					: script === 'worker' ||
+						  (script &&
+								typeof (client.global as { importScripts?: unknown })
+									.importScripts === 'function')
+						? 'wjs'
+						: script
+							? 'js'
+							: 'css';
+			return `${directory}blob~${kindOf}${at}/${codec.encode(pageBlobURL(href))}`;
+		}, client.global === globalThis);
 		URLCtor.createObjectURL = proxyModule.wrapFunction(
 			URLCtor.createObjectURL,
 			(target, that, args) => {
 				const url = String(Reflect.apply(target, that, args));
-				// an HTML blob the page made: a navigation to it becomes an inline
-				// document (htmlBlobs.ts), showing the page's URL as before
-				const markup = htmlBlobs.get(args[0] as Blob);
-				if (markup !== undefined)
-					htmlBlobURLs.set(url, { markup, url: client.url.toString() });
 				// the registry's entry, for a worker started from it (workerBlobs)
+				// and for the loads routed above
 				if (isBlob(args[0])) recordBlob(url, args[0], this.#blobs);
+				mintedURLs.add(url);
 				this.#register(url);
 				return pageBlobURL(url);
 			},
@@ -66,8 +153,17 @@ export default class ObjectURLModule extends Module<Client> {
 			(target, that, args) => {
 				if (args.length) {
 					args[0] = proxyBlobURL(String(args[0]));
-					htmlBlobURLs.delete(args[0] as string);
-					forgetBlob(args[0] as string);
+					const url = args[0] as string;
+					forgetBlob(url);
+					mintedURLs.delete(url);
+					const copy = privates.get(url);
+					if (copy) {
+						privates.delete(url);
+						client.global.setTimeout(
+							() => Reflect.apply(revoke, URLCtor, [copy]),
+							PRIVATE_URL_MS,
+						);
+					}
 				}
 				return Reflect.apply(target, that, args);
 			},

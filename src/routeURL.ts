@@ -131,11 +131,33 @@ export function unwrapRoute(url: URL, codec: GenericCodec): URL | null {
 export const linkRouteURL = (rest: string, codec: GenericCodec): URL | null =>
 	decodeLinkRoute(rest, codec)?.url ?? null;
 
+/**
+ * In a page or a worker: the route of a blob: URL (the browser's form) a
+ * load of `kind` takes when the page's bytes in it were never rewritten
+ * (src/inject/modules/ObjectURL.ts), or null to load it as it is. `given`
+ * is the URL as the page gave it.
+ */
+let blobRoute:
+	((kind: string, href: string, given: string) => string | null) | null = null;
+/**
+ * One per bundle: the realm that runs it sets it, another realm the bundle
+ * hooks (a javascript: or about:blank frame of the page's) only when none
+ * is set, as its client goes with its frame
+ */
+export function setBlobRoute(route: typeof blobRoute, own: boolean) {
+	if (own || !blobRoute) blobRoute = route;
+}
+
 export function routeURL(resourceType: string, url: StompURL) {
 	if (!ROUTE_PROTOCOLS.includes(url.url.protocol)) {
 		// url is out of the scope of STomp (a page-origin blob: URL becomes
 		// the proxy's, which is the one the browser knows)
-		return proxyBlobURL(url.toString());
+		const given = url.toString();
+		const href = proxyBlobURL(given);
+		return (
+			(href.startsWith('blob:') && blobRoute?.(resourceType, href, given)) ||
+			href
+		);
 	}
 
 	// a URL that is already a route (the page read its raw proxy URL through
