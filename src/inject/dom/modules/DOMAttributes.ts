@@ -30,7 +30,7 @@ import {
 	OPAQUE_COPY_HEADER,
 	SEALER_ROUTE,
 } from '../../../transport/messages';
-import { dataBody } from '../../../urlShape';
+import { dataBody, unresolvable } from '../../../urlShape';
 import Module from '../../Module';
 import { opaqueCopy, opaqueMarked } from '../../modules/Fetch';
 import MixedContentModule from '../../modules/MixedContent';
@@ -2891,6 +2891,17 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			// without an action, as it wrote it (a routed one would hand the page
 			// the proxy's address, which it might route again)
 			if (!element.hasAttributeOG('action')) return;
+			// an action no base resolves submits nothing, natively: kept as
+			// written (the page's own value)
+			if (
+				unresolvable(
+					(element.getAttributeOG('action') ?? element.getAttribute('action'))!,
+					this.client.baseURL.toString(),
+				)
+			) {
+				element.setAttribute('action', element.getAttributeOG('action')!);
+				return;
+			}
 
 			/**
 			 * Absolute URL

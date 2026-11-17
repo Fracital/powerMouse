@@ -45,3 +45,22 @@ export function withQuery(url: URL, query: string): URL {
 		(start === -1 ? head : head.slice(0, start)) + query + fragmentOf(url),
 	);
 }
+
+/**
+ * Whether `value` is one URL no base resolves: no whitespace in it (a list
+ * of URLs is not one), and the URL parser rejects it against `base` and
+ * against a plain http and https base too (a bad host, `https://`, `//:0`).
+ * Chrome loads nothing for it whatever the document's real base is; a
+ * relative URL always resolves.
+ */
+export function unresolvable(value: string, base: string): boolean {
+	if (/[\t\n\f\r ]/.test(value.trim())) return false;
+	for (const against of [base, 'http://a/', 'https://a/'])
+		try {
+			new URL(value, against);
+			return false;
+		} catch (error) {
+			// the next base
+		}
+	return true;
+}
