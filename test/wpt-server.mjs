@@ -380,6 +380,9 @@ const json = (res, status, headers, body) => {
 function readBody(req) {
 	return new Promise((resolve) => {
 		let body = '';
+		// (decoded as a stream: a character split between two chunks, in a
+		// report of thousands of subtest names, is still one character)
+		req.setEncoding('utf8');
 		req.on('data', (chunk) => (body += chunk));
 		req.on('end', () => resolve(body));
 	});
