@@ -9,9 +9,6 @@
 		"(harness)": "ERROR: Uncaught ReferenceError: SharedArrayBuffer is not defined",
 		"Tests that calling \"worker.postMessage()\" will occur truly in parallel to the main JS thread": "TIMEOUT: Test timed out"
 	},
-	"/workers/Worker_ErrorEvent_lineno.htm": {
-		" AbstractWorker ErrorEvent.lineno ": "FAIL: assert_equals: expected 3 but got 10"
-	},
 	"/workers/Worker_NosniffErr.htm": {
 		"(harness)": "TIMEOUT: ",
 		" Worker with nosniff X-Content-Type-Options header ": "TIMEOUT: Test timed out"

@@ -42,49 +42,30 @@ export function scriptLead(
 		// "Cannot read properties of undefined (reading 'releaseHeld')". The
 		// first preamble's work is one promise every other waits for, under
 		// a name that is gone before any of the page's code runs.)
+		// (all of it on the script's first line: an uncaught error and a
+		// stack name the page's lines by their own numbers)
 		(type === 'workerModule'
-			? `if (!(${JSON.stringify(names.client)} in globalThis)) {
-	const boot = ${JSON.stringify(`${names.client}$`)};
-	if (!(boot in globalThis))
-		Object.defineProperty(globalThis, boot, {
-			configurable: true,
-			value: (async () => {
-				let held;
-				if (!globalThis.createClient) {
-					held = [];
-					const hold = (event) => {
-						event.stopImmediatePropagation();
-						held.push(event);
-					};
-					addEventListener('message', hold);
-					addEventListener('connect', hold);
-					try {
-						(0, eval)((await (await fetch(${bundle})).text()) + '\\n//# sourceURL=' + new globalThis.URL(${bundle}, globalThis.location.href).href);
-					} finally {
-						removeEventListener('message', hold);
-						removeEventListener('connect', hold);
-					}
-				}
-				createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)}, held);
-			})(),
-		});
-	try {
-		await globalThis[boot];
-	} finally {
-		delete globalThis[boot];
-	}
-}
-if (!${names.client}.applied)
-	${names.client}.apply();`
+			? `if (!(${JSON.stringify(names.client)} in globalThis)) { ` +
+				`const boot = ${JSON.stringify(`${names.client}$`)}; ` +
+				'if (!(boot in globalThis)) Object.defineProperty(globalThis, boot, { configurable: true, value: (async () => { ' +
+				'let held; ' +
+				'if (!globalThis.createClient) { ' +
+				'held = []; ' +
+				'const hold = (event) => { event.stopImmediatePropagation(); held.push(event); }; ' +
+				"addEventListener('message', hold); " +
+				"addEventListener('connect', hold); " +
+				`try { (0, eval)((await (await fetch(${bundle})).text()) + '\\n//# sourceURL=' + new globalThis.URL(${bundle}, globalThis.location.href).href); } ` +
+				"finally { removeEventListener('message', hold); removeEventListener('connect', hold); } " +
+				'} ' +
+				`createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)}, held); ` +
+				'})() }); ' +
+				'try { await globalThis[boot]; } finally { delete globalThis[boot]; } ' +
+				'} ' +
+				`if (!${names.client}.applied) ${names.client}.apply();`
 			: isWorker
-				? `if (!(${JSON.stringify(names.client)} in globalThis) && !globalThis.createClient)
-	importScripts(${JSON.stringify(injectWorkerJS(url, config))});
-
-if (!(${JSON.stringify(names.client)} in globalThis))
-	createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
-
-if (!${names.client}.applied) 
-	${names.client}.apply();`
+				? `if (!(${JSON.stringify(names.client)} in globalThis) && !globalThis.createClient) importScripts(${bundle}); ` +
+					`if (!(${JSON.stringify(names.client)} in globalThis)) createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)}); ` +
+					`if (!${names.client}.applied) ${names.client}.apply();`
 				: type === 'workletModule'
 					? // a worklet scope holds no inject: the module declares the
 						// access API its rewrite calls (src/workletLead.ts)
