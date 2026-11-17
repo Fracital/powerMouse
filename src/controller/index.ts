@@ -2406,6 +2406,7 @@ export class StompController extends EventTarget {
 			.call('cookies', {
 				op: 'get',
 				url: url.href,
+				header: true,
 				...(origin ? { initiator: origin[1] } : {}),
 				...(marked ? { partitionKey: marked[1] } : {}),
 			})

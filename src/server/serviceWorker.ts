@@ -1,4 +1,5 @@
 import type { SiteShields } from '../blocker/types';
+import { utf8Bytes } from '../byteString';
 import type GenericCodec from '../Codecs';
 import { Config, ConfigCodec } from '../config';
 import { switchesGroup, type OpenerFacts } from '../coop';
@@ -430,27 +431,32 @@ function registerController(
 			cookies: async (command) => {
 				const { cookies } = await server;
 				switch (command.op) {
-					case 'get':
-						return [
-							(
-								await cookies.get(
-									command.url,
-									// a context in a partition is another site's to the jar,
-									// as its document.cookie is
-									command.partitionKey !== undefined
-										? {
-												site: 'cross-site',
-												partitionKey: command.partitionKey,
-											}
-										: command.initiator
-											? { site: siteOf(command.initiator, command.url) }
-											: {},
-								)
-							).toString(),
-							[],
-						];
+					case 'get': {
+						const jar = await cookies.get(
+							command.url,
+							// a context in a partition is another site's to the jar,
+							// as its document.cookie is
+							command.partitionKey !== undefined
+								? {
+										site: 'cross-site',
+										partitionKey: command.partitionKey,
+									}
+								: command.initiator
+									? { site: siteOf(command.initiator, command.url) }
+									: {},
+						);
+						// a handshake's Cookie field is bytes, as a request's is
+						return [command.header ? jar.header() : jar.toString(), []];
+					}
 					case 'set':
-						await cookies.set(command.setCookie, command.url);
+						// the host's Set-Cookie is text, where a response's is
+						// bytes (Cookies.ts parseCookie): as its UTF-8 bytes
+						await cookies.set(
+							typeof command.setCookie === 'string'
+								? utf8Bytes(command.setCookie)
+								: command.setCookie.map(utf8Bytes),
+							command.url,
+						);
 						return [undefined, []];
 					case 'list':
 						return [await cookies.list(command.origin), []];

@@ -16,6 +16,7 @@ import type {
 	RawHeaders,
 	TransferrableResponse,
 } from '@mercuryworkshop/proxy-transports';
+import { pastASCII, utf8Bytes } from '../../byteString';
 import { NETWORK_PARTITION } from '../networkPartition';
 import { wispGone } from '../RevivingTransport';
 import { AltSvcCache, type AltService } from './altSvc';
@@ -251,7 +252,9 @@ export function h3RequestHeaders(
 		agent ||= lower === 'user-agent';
 		type ||= lower === 'content-type';
 		length ||= lower === 'content-length';
-		out.push([lower, value]);
+		// stomp-h3 sends a byte a character; a value is the text whose UTF-8
+		// the base transport sends (serveTransport's cookieText)
+		out.push([lower, pastASCII(value) ? utf8Bytes(value) : value]);
 	}
 	// what epoxy adds when the caller leaves them out
 	if (!agent) out.push(['user-agent', navigator.userAgent]);

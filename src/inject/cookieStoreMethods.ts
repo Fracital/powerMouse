@@ -3,6 +3,7 @@
 // cookieStore (dom/modules/CookieStore.ts) and an emulated service worker's
 // (worker/modules/ServiceWorkerGlobal.ts). What differs between the two is
 // passed in: which `url` a call may name, and how the jar is reached.
+import { utf8Text } from '../byteString';
 import {
 	domainMatches,
 	isIP,
@@ -103,21 +104,25 @@ export function cookieStoreMethods(
 		return object;
 	};
 
+	// a cookie whose bytes are not UTF-8 reads as Chrome reads it: the part
+	// that is not text is empty
+	const text = (cookie: JarCookie, part: string) =>
+		cookie.bytes ? (utf8Text(part) ?? '') : part;
 	const item = (cookie: JarCookie) =>
 		own({
 			domain: cookie.hostOnly || isIP(cookie.domain) ? null : cookie.domain,
 			expires: cookie.expires ?? null,
-			name: cookie.name,
+			name: text(cookie, cookie.name),
 			partitioned: !!cookie.partitioned,
 			path: cookie.path,
 			sameSite: cookie.sameSite,
 			secure: cookie.secure,
-			value: cookie.value,
+			value: text(cookie, cookie.value),
 		});
 	const deletedItem = (cookie: JarCookie) =>
 		own({
 			domain: cookie.hostOnly || isIP(cookie.domain) ? null : cookie.domain,
-			name: cookie.name,
+			name: text(cookie, cookie.name),
 			partitioned: !!cookie.partitioned,
 			path: cookie.path,
 			...(cookie.sameSiteDefault ? {} : { sameSite: cookie.sameSite }),
@@ -157,7 +162,7 @@ export function cookieStoreMethods(
 		const list = await context.jar();
 		return name === undefined
 			? list
-			: list.filter((cookie) => cookie.name === name);
+			: list.filter((cookie) => text(cookie, cookie.name) === name);
 	};
 
 	/** `path` checked and given its trailing slash, as Chrome does */

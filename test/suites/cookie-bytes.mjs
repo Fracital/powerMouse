@@ -4,9 +4,9 @@
 // carried the cookie failed: the tab showed the error page ("String
 // contains non ISO-8859-1 code point") the next time the page loaded, as
 // CNN's did a few minutes in. The header carries the text's UTF-8 bytes now,
-// as the browser sends it. Which bytes reach the server is the transport's
-// to keep: epoxy sends each character of a header as UTF-8, so a byte above
-// 0x7f arrives as two (logged, not checked here).
+// as the browser sends it, and the server gets those bytes as natively: the
+// transport worker hands them to the transport as the text it sends as
+// UTF-8 (each byte past 0x7f arrived as two before).
 import {
 	done,
 	FIXTURE,
@@ -93,13 +93,9 @@ ok(
 	JSON.stringify(proxied),
 );
 ok(
-	'the server gets the cookie',
-	typeof proxied.hex === 'string' &&
-		proxied.hex.startsWith(Buffer.from('bytes=').toString('hex')),
-	`proxied ${proxied.hex}`,
-);
-console.log(
-	`cookie bytes at the server: proxied ${proxied.hex} native ${native.hex}`,
+	'the server gets the cookie as natively',
+	typeof proxied.hex === 'string' && proxied.hex === native.hex,
+	`proxied ${proxied.hex} native ${native.hex}`,
 );
 ok(
 	'the page reads the cookie back as it wrote it',

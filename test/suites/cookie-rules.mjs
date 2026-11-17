@@ -189,7 +189,18 @@ async function unit() {
 		'name plus value over 4096 bytes is refused',
 		parse(`big=${'x'.repeat(4093)}`) !== null &&
 			parse(`big=${'x'.repeat(4094)}`) === null &&
-			parse(`b=${'é'.repeat(2048)}`) === null,
+			// (a response's cookie is its bytes: é is c3 a9)
+			parse(`b=${'\u00c3\u00a9'.repeat(2048)}`) === null &&
+			parse(`b=${'é'.repeat(2047)}`, page, 'script') !== null &&
+			parse(`b=${'é'.repeat(2048)}`, page, 'script') === null,
+	);
+	ok(
+		"a response's cookie is its bytes read as UTF-8, kept as bytes when they are not",
+		parse('u=caf\u00c3\u00a9')?.value === 'caf\u00e9' &&
+			!parse('u=caf\u00c3\u00a9')?.bytes &&
+			parse('l=caf\u00e9')?.value === 'caf\u00e9' &&
+			parse('l=caf\u00e9')?.bytes === true &&
+			parse('s=caf\u00e9', page, 'script')?.bytes === undefined,
 	);
 	ok(
 		'control characters are refused, a tab is not',

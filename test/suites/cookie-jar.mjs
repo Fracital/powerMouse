@@ -34,6 +34,20 @@ ok(
 	JSON.stringify(await api('get', [`${FIXTURE}pages/x`])),
 );
 
+// a host's Set-Cookie is text: the jar keeps it as written, where a
+// response's is bytes it reads as UTF-8
+await api('set', [
+	`${FIXTURE}pages/text/x`,
+	'text=caf\u00e9 \u2603; Path=/pages/text',
+]);
+ok(
+	'get() reads text the host set as it was written',
+	(await api('get', [`${FIXTURE}pages/text/x`])).startsWith(
+		'text=caf\u00e9 \u2603;',
+	),
+	JSON.stringify(await api('get', [`${FIXTURE}pages/text/x`])),
+);
+
 async function visit(base) {
 	await page.click('#home');
 	await submitLanding(page, `${base}pages/cookie-page.html`);

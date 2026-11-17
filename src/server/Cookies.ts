@@ -11,6 +11,7 @@
 // be checked in node (cookie-rules suite).
 import { openDB } from 'idb';
 import parseSetCookie, { Cookie as ParserCookie } from 'set-cookie-parser';
+import { pastASCII, utf8Bytes, utf8Text } from '../byteString';
 import { ephemeralKey, registrableDomain } from '../partition';
 import {
 	CookieRecord,
@@ -58,6 +59,15 @@ export interface JarCookie {
 	expires?: number;
 	/** ms since the epoch; kept across re-sets (RFC 6265 5.3 step 11) */
 	created: number;
+	/**
+	 * Set by a Set-Cookie whose bytes are not UTF-8: `name` and `value` are
+	 * those bytes, a character each, where any other cookie's are text (a
+	 * script's, or a response's bytes decoded as UTF-8, as Chrome reads
+	 * them). Chrome shows no document.cookie at all while one is among the
+	 * cookies it would show, and an empty name or value for the part the
+	 * Cookie Store API cannot read as text
+	 */
+	bytes?: boolean;
 }
 
 /**
@@ -296,9 +306,21 @@ export function parseCookie(
 	// as a space (a transport hands the raw value over); anywhere else in the
 	// line, a control character (in the name, the value or any attribute)
 	// drops the whole cookie, not just the attribute
-	if (source === 'http')
+	// and a cookie is its bytes there, which a script reads as UTF-8 text:
+	// the transport hands them over a byte a character
+	let bytes = false;
+	if (source === 'http') {
 		header = header.split(/[\r\n]/, 1)[0].replaceAll('\0', ' ');
+		if (/[\x80-\xff]/.test(header)) {
+			const text = utf8Text(header);
+			if (text === null) bytes = true;
+			else header = text;
+		}
+	}
 	if (hasControlCharacter(header)) return null;
+	// the limits count bytes
+	const size = (text: string) =>
+		bytes ? text.length : encoder.encode(text).length;
 	// an oversize attribute is skipped as if it were absent, so an earlier
 	// Path or Domain of the same name still counts
 	const [pair, ...attributes] = header.split(';');
@@ -307,9 +329,7 @@ export function parseCookie(
 		...attributes.filter((attribute) => {
 			const eq = attribute.indexOf('=');
 			return (
-				eq < 0 ||
-				encoder.encode(attribute.slice(eq + 1).trim()).length <=
-					MAX_ATTRIBUTE_BYTES
+				eq < 0 || size(attribute.slice(eq + 1).trim()) <= MAX_ATTRIBUTE_BYTES
 			);
 		}),
 	].join(';');
@@ -323,11 +343,7 @@ export function parseCookie(
 	if (!parsed) return null;
 	const { name, value } = parsed;
 	if (name === '' && value === '') return null;
-	if (
-		encoder.encode(name).length + encoder.encode(value).length >
-		MAX_COOKIE_BYTES
-	)
-		return null;
+	if (size(name) + size(value) > MAX_COOKIE_BYTES) return null;
 
 	const secure = !!parsed.secure;
 	const httpOnly = !!parsed.httpOnly;
@@ -433,6 +449,7 @@ export function parseCookie(
 		...(partitionKey !== undefined ? { partitionKey } : {}),
 		expires,
 		created: now,
+		...(bytes ? { bytes } : {}),
 	};
 }
 
@@ -525,6 +542,9 @@ export class BrowserCookieArray extends Array<JarCookie> {
 		const result: string[] = [];
 
 		for (const cookie of this) {
+			// Chrome reads the whole line as UTF-8, and has none when one
+			// cookie's bytes are not
+			if (cookie.bytes) return '';
 			// a nameless cookie travels as its bare value, like in a browser
 			result.push(
 				cookie.name === '' ? cookie.value : `${cookie.name}=${cookie.value}`,
@@ -535,31 +555,22 @@ export class BrowserCookieArray extends Array<JarCookie> {
 	}
 
 	/**
-	 * The Cookie header's value. A cookie a script wrote is text, which the
-	 * browser sends as its UTF-8 bytes; one from Set-Cookie is the bytes
-	 * already, a character each. Text with a character no byte holds is a
-	 * script's, and goes as its UTF-8: as it was, Headers refused it, and the
-	 * request failed, a page that wrote one and reloaded with it
+	 * The Cookie header's value, as its bytes, a character each: a cookie's
+	 * text goes as its UTF-8, as the browser sends it, and one that is bytes
+	 * already as it is. (Headers holds no character past U+00FF: as text,
+	 * one a script wrote failed every request of its site.) The transport
+	 * worker hands the bytes to the transport as it takes them
+	 * (src/transport/serveTransport.ts fitHeaders)
 	 */
 	header() {
 		const result: string[] = [];
 		for (const cookie of this) {
 			const text =
 				cookie.name === '' ? cookie.value : `${cookie.name}=${cookie.value}`;
-			result.push(WIDE.test(text) ? utf8Bytes(text) : text);
+			result.push(cookie.bytes || !pastASCII(text) ? text : utf8Bytes(text));
 		}
 		return result.join('; ');
 	}
-}
-
-/** a character above U+00FF, which a header's byte cannot carry */
-const WIDE = /[\u0100-\uffff]/;
-
-/** text as its UTF-8 bytes, a character each, as a header carries them */
-function utf8Bytes(text: string): string {
-	let bytes = '';
-	for (const byte of encoder.encode(text)) bytes += String.fromCharCode(byte);
-	return bytes;
 }
 
 const STORE = JAR_STORE;

@@ -2,6 +2,7 @@ import type {
 	ProxyTransport,
 	RawHeaders,
 } from '@mercuryworkshop/proxy-transports';
+import { pastASCII, utf8Text } from '../byteString';
 import { sendBody } from './bodyPort';
 import {
 	HANDSHAKE_REFUSED,
@@ -49,6 +50,19 @@ interface FieldSupport {
 	httpVersion?: boolean;
 }
 
+/**
+ * A Cookie field as a transport takes it. The service worker writes the
+ * jar's cookies as their bytes, a character each (Headers holds nothing
+ * else: src/server/Cookies.ts header()), where every other field a page
+ * sends is the text the browser handed the worker, which is the bytes read
+ * as UTF-8; a transport sends a value's UTF-8 (epoxy, libcurl), so bytes
+ * that are UTF-8 go as the text they spell, or a cookie a server set in
+ * UTF-8 went back with every byte past 0x7F as two. Bytes that are not
+ * UTF-8 stay as they are: a transport of text has no way to send them.
+ */
+export const cookieText = (value: string) =>
+	(pastASCII(value) && utf8Text(value)) || value;
+
 /** `headers` as `transport` can send them */
 export function fitHeaders(
 	transport: ProxyTransport,
@@ -72,7 +86,8 @@ export function fitHeaders(
 			if (support?.acceptEncoding) out.push([name, support.acceptEncoding]);
 		} else if (lower === 'priority') {
 			if (support?.priority) out.push([name, value]);
-		} else out.push([name, value]);
+		} else if (lower === 'cookie') out.push([name, cookieText(value)]);
+		else out.push([name, value]);
 	}
 	return out;
 }
@@ -286,7 +301,11 @@ export default function serveTransport(
 				);
 				// the inject's word for the hook, never the server's
 				const outgoing = (headers: RawHeaders) =>
-					headers.filter(([name]) => name.toLowerCase() !== SOCKET_PARTITION);
+					headers.flatMap(([name, value]): RawHeaders => {
+						const lower = name.toLowerCase();
+						if (lower === SOCKET_PARTITION) return [];
+						return [[name, lower === 'cookie' ? cookieText(value) : value]];
+					});
 				requestHeaders = outgoing(given);
 				if (decorate)
 					try {

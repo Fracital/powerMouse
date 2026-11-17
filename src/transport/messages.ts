@@ -1184,8 +1184,14 @@ export interface CookieRecord {
 }
 
 export type CookieCommand =
-	/** `initiator`: the origin asking (a WebSocket handshake), so SameSite applies; absent means the host, which gets everything. `partitionKey`: the asking context is in that top-level site's partition (SOCKET_PARTITION) */
-	| { op: 'get'; url: string; initiator?: string; partitionKey?: string }
+	/** `initiator`: the origin asking (a WebSocket handshake), so SameSite applies; absent means the host, which gets everything. `partitionKey`: the asking context is in that top-level site's partition (SOCKET_PARTITION). `header`: the Cookie field's bytes (Cookies.ts header()) rather than the text document.cookie reads */
+	| {
+			op: 'get';
+			url: string;
+			initiator?: string;
+			partitionKey?: string;
+			header?: boolean;
+	  }
 	| { op: 'set'; url: string; setCookie: string | string[] }
 	| { op: 'list'; origin?: string }
 	| { op: 'clear'; origin?: string };
