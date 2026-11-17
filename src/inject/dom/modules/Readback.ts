@@ -266,21 +266,27 @@ export default class ReadbackModule extends Module<DocumentClient> {
 					sources.set(script, { written, rewritten: nativeText(script) });
 			}
 		};
+		// one hook for each way of picking the inserted nodes, shared by its
+		// wrappers (a hook made for each wrapper cost a frame a function and a
+		// context apiece)
+		const insertHook =
+			(pick: (args: any[]) => unknown[]) =>
+			(target: Function, that: unknown, args: any[]) =>
+				recordAround(pick(args), () => Reflect.apply(target, that, args));
 		const wrapInsert = (
 			prototype: object,
 			name: string,
-			pick: (args: any[]) => unknown[],
+			hook: ReturnType<typeof insertHook>,
 		) => {
 			const fn = (prototype as Record<string, any>)[name];
 			if (typeof fn !== 'function') return;
 			(prototype as Record<string, any>)[name] = proxyModule.wrapFunction(
 				fn,
-				(target, that, args) =>
-					recordAround(pick(args), () => Reflect.apply(target, that, args)),
+				hook,
 			);
 		};
-		const first = (args: any[]) => [args[0]];
-		const all = (args: any[]) => args;
+		const first = insertHook((args) => [args[0]]);
+		const all = insertHook((args) => args);
 		wrapInsert(global.Node.prototype, 'appendChild', first);
 		wrapInsert(global.Node.prototype, 'insertBefore', first);
 		wrapInsert(global.Node.prototype, 'replaceChild', first);
@@ -301,9 +307,11 @@ export default class ReadbackModule extends Module<DocumentClient> {
 		])
 			for (const name of ['append', 'prepend', 'replaceChildren'])
 				wrapInsert(prototype, name, all);
-		wrapInsert(global.Element.prototype, 'insertAdjacentElement', (args) => [
-			args[1],
-		]);
+		wrapInsert(
+			global.Element.prototype,
+			'insertAdjacentElement',
+			insertHook((args) => [args[1]]),
+		);
 
 		// the source the page wrote, while the element still holds the
 		// rewritten text; a script the page edited afterwards reads natively

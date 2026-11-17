@@ -948,11 +948,11 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				release?.();
 			}
 		};
-		const willInsertNode = (
-			x: (inserted: Node, ...args: any[]) => any,
-			{ childNode = false, strings = false } = {},
-		) =>
-			proxyModule.wrapFunction(x, (target, that, args) =>
+		// one hook for each kind of method, shared by its wrappers (a hook
+		// made for each wrapper cost a frame a function and a context apiece)
+		const insertHook =
+			(childNode: boolean, strings: boolean) =>
+			(target: Function, that: any, args: any[]) =>
 				landing(
 					that,
 					childNode ? parentOf(that) : that,
@@ -960,8 +960,17 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					strings ? args.length : Math.min(args.length, 1),
 					strings,
 					() => Reflect.apply(target, that, args),
-				),
-			);
+				);
+		/** Node's own: one node, into `this` */
+		const nodeHook = insertHook(false, false);
+		/** ParentNode's: nodes and strings, into `this` */
+		const parentHook = insertHook(false, true);
+		/** ChildNode's: nodes and strings, into `this`'s parent */
+		const childHook = insertHook(true, true);
+		const willInsertNode = (
+			x: (inserted: Node, ...args: any[]) => any,
+			hook = nodeHook,
+		) => proxyModule.wrapFunction(x, hook);
 
 		realm.Node.prototype.appendChild = willInsertNode(
 			realm.Node.prototype.appendChild,
@@ -997,10 +1006,9 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				if (typeof native !== 'function') continue;
 				methods[method] = willInsertNode(
 					native as (inserted: Node, ...args: any[]) => any,
-					{
-						childNode: ['replaceWith', 'before', 'after'].includes(method),
-						strings: true,
-					},
+					['replaceWith', 'before', 'after'].includes(method)
+						? childHook
+						: parentHook,
 				);
 			}
 
