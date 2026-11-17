@@ -288,8 +288,15 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						usePrototype(script, nativeHTMLScriptElement, (script) => {
 							if (nonce) script.setAttribute('nonce', nonce);
 							const markup = style.outerHTML;
+							// the style's markup holds its original text, which can be a
+							// stylesheet with `</script>` in a string or comment; escaped
+							// here, or it would close this stand-in script early and the
+							// rest would run as markup (the loadHTML rule: nothing may
+							// produce `</script` in generated code)
 							script.textContent = trustedScript(
-								`document.currentScript.outerHTML=${JSON.stringify(markup)}`,
+								`document.currentScript.outerHTML=${JSON.stringify(
+									markup,
+								).replace(/</g, '\\u003c')}`,
 							);
 							// (its outerHTML is the inject's, which no Trusted Types judge)
 							// the page is serialized and parsed again, so the script that
