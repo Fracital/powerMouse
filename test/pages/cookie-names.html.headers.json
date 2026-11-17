@@ -1,0 +1,9 @@
+{
+	"set-cookie": [
+		"valueOf=hdr; Path=/",
+		"isPrototypeOf=hdr; Path=/",
+		"__defineGetter__=hdr; Path=/",
+		"propertyIsEnumerable=hdr; Path=/",
+		"hdrplain=hdr; Path=/"
+	]
+}

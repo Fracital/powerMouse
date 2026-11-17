@@ -10,7 +10,6 @@
 // in Chrome). The matching functions are exported on their own so they can
 // be checked in node (cookie-rules suite).
 import { openDB } from 'idb';
-import parseSetCookie, { Cookie as ParserCookie } from 'set-cookie-parser';
 import { pastASCII, utf8Bytes, utf8Text } from '../byteString';
 import { ephemeralKey, registrableDomain } from '../partition';
 import {
@@ -286,6 +285,71 @@ function expired(cookie: JarCookie, now: number): boolean {
 	return cookie.expires !== undefined && cookie.expires <= now;
 }
 
+/** one Set-Cookie value's parts, as parseSetCookie reads them */
+interface ParsedCookie {
+	name: string;
+	value: string;
+	expires?: Date;
+	maxAge?: number;
+	domain?: string;
+	path?: string;
+	secure?: true;
+	httpOnly?: true;
+	sameSite?: string;
+	partitioned?: true;
+}
+
+/** a string without the spaces and tabs at its ends (RFC 6265 WSP) */
+function trimWsp(text: string): string {
+	let start = 0;
+	let end = text.length;
+	while (start < end && (text[start] === ' ' || text[start] === '\t')) start++;
+	while (end > start && (text[end - 1] === ' ' || text[end - 1] === '\t'))
+		end--;
+	return text.slice(start, end);
+}
+
+/**
+ * One Set-Cookie value's name, value and the attributes the jar reads, as
+ * set-cookie-parser 3 read them with `decodeValues: false` (which the jar
+ * used until this): the pair is what comes before the first `;` (none when
+ * it is empty or white space), split at its first `=` (a pair without one is
+ * a value with no name) and trimmed of spaces and tabs; an attribute's name
+ * is what comes before its first `=`, trimmed and in lower case, its value
+ * the rest, trimmed; the last of a name counts, but an Expires that is no
+ * date and a Max-Age that is not an integer are skipped. Unlike that
+ * parser, a cookie named as one of Object.prototype's members (constructor,
+ * toString, __proto__) is kept, as Chrome keeps it.
+ */
+function parseSetCookie(header: string): ParsedCookie | null {
+	const [pair, ...attributes] = header.split(';');
+	if (!pair.trim()) return null;
+	const eq = pair.indexOf('=');
+	const cookie: ParsedCookie = {
+		name: eq < 0 ? '' : trimWsp(pair.slice(0, eq)),
+		value: trimWsp(eq < 0 ? pair : pair.slice(eq + 1)),
+	};
+	for (const attribute of attributes) {
+		const at = attribute.indexOf('=');
+		const key = (at < 0 ? attribute : attribute.slice(0, at))
+			.trim()
+			.toLowerCase();
+		const value = at < 0 ? '' : attribute.slice(at + 1).trim();
+		if (key === 'expires') {
+			const expires = new Date(value);
+			if (!Number.isNaN(expires.getTime())) cookie.expires = expires;
+		} else if (key === 'max-age') {
+			if (/^-?\d+$/.test(value)) cookie.maxAge = parseInt(value, 10);
+		} else if (key === 'secure') cookie.secure = true;
+		else if (key === 'httponly') cookie.httpOnly = true;
+		else if (key === 'samesite') cookie.sameSite = value;
+		else if (key === 'partitioned') cookie.partitioned = true;
+		else if (key === 'domain') cookie.domain = value;
+		else if (key === 'path') cookie.path = value;
+	}
+	return cookie;
+}
+
 /**
  * RFC 6265bis 5.6, the part that needs no store: parse one Set-Cookie value
  * for a response from `url` and return the cookie to store, or null when a
@@ -335,11 +399,7 @@ export function parseCookie(
 	].join(';');
 	// one Set-Cookie value (or one document.cookie write) is one cookie: a
 	// comma belongs to the value, it does not start another cookie
-	const [parsed]: ParserCookie[] = parseSetCookie(header, {
-		decodeValues: false,
-		silent: true,
-		split: false,
-	});
+	const parsed = parseSetCookie(header);
 	if (!parsed) return null;
 	const { name, value } = parsed;
 	if (name === '' && value === '') return null;

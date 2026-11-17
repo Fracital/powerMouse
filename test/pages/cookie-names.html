@@ -1,0 +1,27 @@
+<!doctype html>
+<title>COOKIENAMES</title>
+<script>
+	// cookies named as Object.prototype's members, written by the page; the
+	// response set others (cookie-names.html.headers.json)
+	for (const name of [
+		'constructor',
+		'toString',
+		'__proto__',
+		'hasOwnProperty',
+		'plain',
+	])
+		document.cookie = `${name}=js; path=/`;
+	const sorted = (text) => text.split(/;\s*/).filter(Boolean).sort().join('; ');
+	window.__names = { document: sorted(document.cookie) };
+	fetch('/echo-headers')
+		.then((response) => response.json())
+		.then((headers) => {
+			__names.sent = sorted(headers.cookie || '');
+		})
+		.catch((error) => {
+			__names.sent = String(error);
+		})
+		.finally(() => {
+			__names.done = true;
+		});
+</script>
