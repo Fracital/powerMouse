@@ -716,8 +716,11 @@ export default class StorageModule extends Module<DocumentClient> {
 				document.requestStorageAccess,
 				async (target, that, args) => {
 					const handle = await Reflect.apply(target, that, args);
-					// a top-level document's request resolves with nothing
-					return client.proxiedTop === pageGlobal || !handle
+					// a top-level document's request resolves with nothing (a
+					// frame of another slot reaches no proxied parent: its
+					// route's mark says it is framed)
+					return (client.proxiedTop === pageGlobal && !client.slotMark) ||
+						!handle
 						? undefined
 						: deferred().storageAccessHandle(client, taken, handle);
 				},
