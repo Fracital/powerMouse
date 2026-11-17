@@ -759,6 +759,8 @@ export interface StorageChange {
 	sender?: string;
 	/** that document's URL, for StorageEvent.url */
 	url?: string;
+	/** dropped by Clear-Site-Data: the documents read it again, and no storage event fires */
+	quiet?: boolean;
 }
 
 export interface ControllerInitMessage {

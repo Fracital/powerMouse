@@ -1,0 +1,77 @@
+<!doctype html>
+<title>Clear-Site-Data</title>
+<pre id="result">ready</pre>
+<script>
+	// What a Clear-Site-Data answer of this origin leaves of its state: a
+	// script cookie and an HttpOnly one (the server echoes what it was sent),
+	// localStorage, sessionStorage, an IndexedDB database, a Cache API cache
+	// and a file of the origin private file system. The suite calls
+	// csd.setup(), csd.clear(types) and csd.state() in this document.
+	const hdr = (...headers) =>
+		'/hdr/doc?' + headers.map((h) => `h=${encodeURIComponent(h)}`).join('&');
+	window.csd = {
+		// (read by the page's own code: the suite's evaluate sees the proxy's)
+		origin: location.origin,
+		async setup() {
+			document.cookie = 'js=1; path=/';
+			await fetch(hdr('set-cookie:http=1; path=/; HttpOnly'));
+			localStorage.setItem('csd', '1');
+			sessionStorage.setItem('csd', '1');
+			await new Promise((resolve, reject) => {
+				const open = indexedDB.open('csd-db', 1);
+				open.onupgradeneeded = () => open.result.createObjectStore('s');
+				open.onsuccess = () => {
+					open.result.close();
+					resolve();
+				};
+				open.onerror = () => reject(open.error);
+			});
+			const cache = await caches.open('csd-cache');
+			await cache.put('/csd-entry', new Response('kept'));
+			await navigator.serviceWorker.register('hdr-csd-sw.js');
+			try {
+				const root = await navigator.storage.getDirectory();
+				await root.getFileHandle('csd-file', { create: true });
+			} catch (error) {
+				// no file system here
+			}
+			return this.state();
+		},
+		async clear(types) {
+			const response = await fetch(hdr(`clear-site-data:${types}`));
+			await response.text();
+			return this.state();
+		},
+		async state() {
+			const sent = await (await fetch('/hdr/doc?echo=cookie')).text();
+			const databases = (await indexedDB.databases())
+				.map((info) => info.name)
+				.filter((name) => name === 'csd-db');
+			let files = [];
+			try {
+				const root = await navigator.storage.getDirectory();
+				for await (const name of root.keys())
+					if (name === 'csd-file') files.push(name);
+			} catch (error) {
+				files = ['threw ' + error.name];
+			}
+			return {
+				cookie: document.cookie
+					.split('; ')
+					.filter((c) => c === 'js=1')
+					.join(),
+				sent: sent
+					.split('; ')
+					.filter((c) => c === 'js=1' || c === 'http=1')
+					.sort()
+					.join(),
+				local: localStorage.getItem('csd'),
+				session: sessionStorage.getItem('csd'),
+				databases: databases.join(),
+				caches: (await caches.keys()).filter((n) => n === 'csd-cache').join(),
+				files: files.join(),
+				workers: (await navigator.serviceWorker.getRegistrations()).length,
+			};
+		},
+	};
+</script>

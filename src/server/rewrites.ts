@@ -175,6 +175,7 @@ import {
 	stylesheetEncoding,
 	utf8ContentType,
 } from './charset';
+import { clearSiteData, siteDataTypes } from './clearSiteData';
 import {
 	acceptedHints,
 	applyClientHints,
@@ -277,6 +278,7 @@ import {
 	unknownMime,
 } from './sniff';
 import { boundClient } from './srcdocVouches';
+import type { StorageHosts } from './Storage';
 import { rememberVisitedHop, takeVisitedHop } from './visitedHops';
 
 // What the rewrite cache keys its entries under for this build's rewriter: the
@@ -757,6 +759,8 @@ interface Rewriter {
 	blockerAsked?: boolean;
 	/** the per-site shields the controller set (src/server/shields.ts) */
 	shields?: ShieldsStore;
+	/** the scope's localStorage and sessionStorage (Clear-Site-Data) */
+	storage?: StorageHosts;
 	/**
 	 * the host page was reloaded (src/controller/hostReload.ts): the cache
 	 * mode the pages it restores take, until when a navigation counts as
@@ -2506,9 +2510,9 @@ function genericForward(
 		};
 		// Clear-Site-Data: "cache" from the origin itself (a secure one, as
 		// natively): what the caches keep of that origin goes, in every
-		// partition, and the answer that says so is not kept either. The
-		// header's other types are not acted on, and it never reaches the
-		// browser (filterHeaders).
+		// partition, and the answer that says so is not kept either. Its other
+		// types are acted on for the site alone (clearSiteData.ts), and it
+		// never reaches the browser (filterHeaders).
 		const clears = (responseHeaders: Headers) =>
 			clearsCache(responseHeaders.get('clear-site-data')) &&
 			potentiallyTrustworthy(url.url);
@@ -2878,8 +2882,20 @@ function genericForward(
 			}
 			response.rawHeaders = rawHeaders;
 		}
-		const cleared =
-			!fromWorker && !cached && !revalidated && clears(response.headers);
+		const fromOrigin =
+			!fromWorker && !cached && !revalidated && potentiallyTrustworthy(url.url);
+		// the rest of Clear-Site-Data, for the site alone (clearSiteData.ts),
+		// done before the page has the answer, as natively
+		if (fromOrigin && response.headers.has('clear-site-data'))
+			await clearSiteData(
+				siteDataTypes(response.headers.get('clear-site-data')),
+				url.url,
+				contextPartition,
+				partitionKey,
+				rewriter.cookies,
+				rewriter.storage,
+			);
+		const cleared = fromOrigin && clears(response.headers);
 		if (cleared) {
 			await rewriter.cache?.clearOrigin(url.url.origin);
 			memoryCache.clearOrigin(url.url.origin);
@@ -4377,6 +4393,7 @@ export function registerRewrites(
 	blocker?: Blocker,
 	blockerAsked = true,
 	shields?: ShieldsStore,
+	storage?: StorageHosts,
 ) {
 	const rewriter: Rewriter = {
 		get config() {
@@ -4422,6 +4439,7 @@ export function registerRewrites(
 		blocker,
 		blockerAsked,
 		shields,
+		storage,
 		isolated: !!init.isolated,
 		allowSelfProxy: !!init.allowSelfProxy,
 		codec: init.codec,

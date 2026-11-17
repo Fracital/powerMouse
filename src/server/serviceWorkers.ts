@@ -1056,6 +1056,23 @@ export class ServiceWorkers {
 			await this.#commit(record, [['state', next, 'activated']]);
 	}
 
+	/**
+	 * Clear-Site-Data "storage": every registration of a storage key (an
+	 * origin and its partition) is unregistered, as by the page's own call
+	 */
+	async unregisterAll(key: string): Promise<void> {
+		await this.#load();
+		await Promise.all(
+			[...this.#registrations.values()]
+				.filter((record) => ownerOf(record) === key)
+				.map((record) =>
+					this.#enqueue(recordKey(record), async () => ({
+						value: await this.#unregister(record),
+					})),
+				),
+		);
+	}
+
 	async #unregister(record: RegistrationRecord): Promise<boolean> {
 		if (this.#registrations.get(recordKey(record)) !== record) return false;
 		record.uninstalling = true;

@@ -22,7 +22,10 @@ export type PublicSuffix = (host: string) => string | null;
  * The registrable domain of `host` (the public suffix and one label more),
  * or the host itself for an IP, a public suffix or a name with none
  */
-function registrableDomain(host: string, publicSuffix: PublicSuffix): string {
+export function registrableDomain(
+	host: string,
+	publicSuffix: PublicSuffix,
+): string {
 	if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.startsWith('[')) return host;
 	const suffix = publicSuffix(host);
 	if (!suffix || host === suffix || !host.endsWith(`.${suffix}`)) return host;

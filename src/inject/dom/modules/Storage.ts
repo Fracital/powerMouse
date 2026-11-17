@@ -670,7 +670,7 @@ export default class StorageModule extends Module<DocumentClient> {
 			// the writer changed the stamp already; this is for a writer whose
 			// stamp this document could not see
 			changed(`${client.directory}${change.store}/`, false);
-			if (change.store !== 'localStorage') return;
+			if (change.quiet || change.store !== 'localStorage') return;
 			const event = new pageGlobal.StorageEvent('storage', {
 				key: change.key,
 				oldValue: change.oldValue,

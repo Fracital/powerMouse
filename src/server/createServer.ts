@@ -408,6 +408,7 @@ export default async function createServer(
 		blocker,
 		!adblock?.byDefault,
 		shields,
+		stores.storage,
 	);
 	if (blocker) registerBlocker(router, blocker);
 	registerStorage(router, stores.storage, init.codec);

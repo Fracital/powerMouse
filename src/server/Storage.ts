@@ -423,6 +423,26 @@ export default class Storage {
 			)
 		).map(({ item }: ItemEntry) => item);
 	}
+	/**
+	 * Forget what `origin` (a storage key) keeps, with no storage event
+	 * (Clear-Site-Data). Its documents are told before the answer that
+	 * dropped it reaches any, so none reads what it kept of the store.
+	 */
+	async drop(origin: string): Promise<void> {
+		const keys = await this.getKeys(origin);
+		for (const key of keys)
+			await this.db.delete(this.store, this.resolveKey(origin, key));
+		this.usage.set(origin, Promise.resolve(0));
+		if (keys.length)
+			await broadcast({
+				store: this.store,
+				origin,
+				key: null,
+				oldValue: null,
+				newValue: null,
+				quiet: true,
+			});
+	}
 	async clear(origin: string, sender?: string, url?: string): Promise<void> {
 		const keys = await this.getKeys(origin);
 		for (const key of keys)
@@ -519,6 +539,57 @@ export async function forgetSiteStorage(
 		);
 	} catch (error) {
 		// Cache Storage is not available, or storage is blocked
+	}
+}
+
+/**
+ * Clear-Site-Data "storage": what one storage key (an origin, and its
+ * partition after it: src/partition.ts) keeps, as Chrome drops it for the
+ * response's context (measured: localStorage, sessionStorage, IndexedDB,
+ * Cache API and the origin private file system), with no storage event
+ */
+export async function clearStorageKey(
+	key: string,
+	hosts: StorageHosts,
+): Promise<void> {
+	await hosts.localStorage.drop(key).catch(() => {});
+	await hosts.sessionStorage.drop(key).catch(() => {});
+	// the native names of the key's stores end with `@<key>` (IndexedDB,
+	// Partition modules); a key of the same origin in a partition has more
+	// after it
+	const mine = (name: string) => name.endsWith(`@${key}`);
+	try {
+		const databases = (await indexedDB.databases?.()) ?? [];
+		await Promise.all(
+			databases.map((info) =>
+				info.name && mine(info.name)
+					? new Promise<void>((resolve) => {
+							const request = indexedDB.deleteDatabase(info.name!);
+							request.onsuccess =
+								request.onerror =
+								request.onblocked =
+									() => resolve();
+						})
+					: undefined,
+			),
+		);
+	} catch (error) {
+		// indexedDB.databases() is not available, or storage is blocked
+	}
+	try {
+		const names = await caches.keys();
+		await Promise.all(
+			names.map((name) => (mine(name) ? caches.delete(name) : null)),
+		);
+	} catch (error) {
+		// Cache Storage is not available, or storage is blocked
+	}
+	try {
+		// the key's directory under the real root (Partition module)
+		const root = await navigator.storage.getDirectory();
+		await root.removeEntry(encodeURIComponent(key), { recursive: true });
+	} catch (error) {
+		// none, or no file system here
 	}
 }
 

@@ -10,6 +10,7 @@
 // on their own so they can be checked in node (cookie-rules suite).
 import { IDBPDatabase, openDB } from 'idb';
 import parseSetCookie, { Cookie as ParserCookie } from 'set-cookie-parser';
+import { registrableDomain } from '../partition';
 import {
 	CookieRecord,
 	COOKIES_CHANGED,
@@ -695,6 +696,24 @@ export default class Cookies {
 		for (const cookie of (await this.db.getAll(STORE)) as JarCookie[])
 			if (coversHost(cookie, host)) await this.db.delete(STORE, cookie.id);
 		this.onChange?.(host);
+	}
+	/**
+	 * Clear-Site-Data "cookies" in a response of `url`: the cookies of its
+	 * site (its registrable domain and every host under it), unpartitioned
+	 * or in the partition of the context that got the response
+	 * (`partitionKey`, none for a first-party one)
+	 */
+	async clearSite(url: URL, partitionKey?: string): Promise<void> {
+		const site = registrableDomain(url.hostname, this.#publicSuffix);
+		let changed = false;
+		for (const cookie of (await this.db.getAll(STORE)) as JarCookie[]) {
+			if (cookie.domain !== site && !cookie.domain.endsWith(`.${site}`))
+				continue;
+			if (cookie.partitioned && cookie.partitionKey !== partitionKey) continue;
+			await this.db.delete(STORE, cookie.id);
+			changed = true;
+		}
+		if (changed) this.onChange?.(site);
 	}
 	/** apply a Cookie Store API write of a document at `url` (in `partitionKey`'s partition) */
 	async store(
