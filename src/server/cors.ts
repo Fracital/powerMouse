@@ -101,6 +101,9 @@ export function corsCheck(
 	return headers.get('access-control-allow-credentials') === 'true';
 }
 
+/** an HTTP token (https://httpwg.org/specs/rfc9110.html#tokens) */
+const TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
 /** a comma list header as its trimmed, non-empty items */
 function list(value: string | null): string[] {
 	if (value === null) return [];
@@ -225,6 +228,9 @@ export function preflightAllows(
 	const names = list(response.headers.get('access-control-allow-headers')).map(
 		(name) => name.toLowerCase(),
 	);
+	// a list with an item that is no token is no answer at all (Chrome's
+	// "invalid Access-Control-Allow-Methods/Headers in preflight response")
+	if (![...methods, ...names].every((item) => TOKEN.test(item))) return false;
 	const anyMethod = methods.includes('*');
 	const anyHeader = names.includes('*');
 	if (
