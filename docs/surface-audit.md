@@ -123,6 +123,61 @@ measured, not argued. Expected size: what phase 3 leaves, probably 4,000 to
 waves.
 Artifact: `classified.jsonl`, every entry with a class and a reason.
 
+Measured size (2026-11-17): 6,183 shipped `unknown` entries in 32 batches, a
+classifier and a verifier each, so 64 agents. The 3,461 unknown entries Chrome
+does not ship wait until it does.
+
+### 4b. Rule-decided entries (many agents)
+
+A rule decides a class, never STomp's status, a test or a gap. So the 5,851
+shipped entries that a rule put in a class other than S go through the same
+pipeline to fill those fields, and the rule's class is treated as a claim to
+check, not a fact. The S rules decided about 9,900 shipped entries that no agent
+would otherwise look at: a sample of each rule's victims (every twentieth, at
+least 10 and at most 60 per rule, 608 in all) goes to the verifier with the
+default of suspecting S. A rule that a sample shows wrong is narrowed and its
+victims are decided again. 35 batches.
+
+### 4c. What the member inventory cannot see
+
+BCD and webref list members, but a lot of what a proxy on one origin must get
+right is not a member:
+
+- **State the browser keys by the real origin or site.** Chromium's own lists
+  name it: content settings, permissions, site data types, the partitioned
+  HTTP cache, socket pool and HSTS state, `:visited`, saved passwords and
+  autofill, device grants, registrations for push, sync and protocol handlers.
+  All proxied sites share each of these unless STomp partitions it. The phase 4
+  pilot found per-origin permission grants (window management, local fonts)
+  shared by every site this way.
+- **Browser UI that shows or acts on the origin:** dialogs, print headers,
+  prompts, notifications, downloads, context menu actions, install.
+- **HTTP processing that is not an IDL member:** every response header with a
+  browser effect, the request headers the browser adds, status codes, redirects,
+  sniffing, charset detection, Subresource Integrity (rewriting changes bytes),
+  caching, origin trials (a token is valid for the site's origin only).
+- **Realm and browsing-context kinds,** each measured by phase 2's walk.
+- **Network identity:** TLS, HTTP/2 and HTTP/3 fingerprints, header order, the
+  WebSocket handshake.
+- **Cross-site leak techniques** (xsleaks.dev), since two proxied sites share
+  one origin and one partition.
+
+These go in a second inventory, `behaviors.jsonl`, built from those lists, and
+through the same classify and verify pipeline as phase 4.
+
+### 4d. Differentials
+
+Some classes are best covered by an oracle, not by reading:
+
+- **JavaScript (class J):** every test262 test that passes natively must pass
+  after STomp rewrites it.
+- **HTML, CSS and URL parsing:** grammar-based fuzzers compare what Chrome 157
+  requests and runs, native against proxied. The pilot found by reading that an
+  upper-case `URL(` in a style write goes out unrouted. A generator finds every
+  case of that class.
+
+Both become CI gates in the adversarial-\* style.
+
 ### 5. Gap list and tests
 
 Join: every non-S entry with `stomp` = missing, or with no test, is a gap.
