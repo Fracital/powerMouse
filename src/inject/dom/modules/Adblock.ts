@@ -1,13 +1,10 @@
-import {
-	compileFilter,
-	type CompiledFilter,
-	type Dom,
-} from '../../../blocker/procedural';
+import type { CompiledFilter, Dom } from '../../../blocker/procedural';
 import type { AdblockPage } from '../../../blocker/types';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { LazyWeakSet } from '../../ownCollections';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import { deferred } from '../deferred';
 
 /**
  * The cosmetic side of the built-in blocker in a document (docs/adblock.md).
@@ -349,7 +346,8 @@ function start(
 	for (const selector of page.hide)
 		rules.push(`${selector}{display:none!important}`);
 	for (const json of page.procedural) {
-		const filter = compileFilter(json);
+		// (a deferred part: most sites have no procedural filter)
+		const filter = deferred().compileFilter(json);
 		if (!filter) continue;
 		if (filter.css) rules.push(filter.css);
 		else if (!foreign) filters.push(filter);

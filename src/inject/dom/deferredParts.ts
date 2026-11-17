@@ -20,6 +20,9 @@
 // (and the client a document opens its WebSockets with, ../bareClient.ts,
 // with the transport it talks over, at its first WebSocket)
 //
+// (and the blocker's procedural cosmetic filters, ../../blocker/procedural.ts,
+// at a document whose lists have one for its site)
+//
 // (and the document.write stream, ./WriteStream.ts with its tokenizer, at a
 // document's first write)
 //
@@ -42,6 +45,7 @@
 // have run, so their top level reads no global (a page may have replaced
 // it): constants and functions only, as the bundle's code reads what it
 // needs when it is called.
+import { compileFilter } from '../../blocker/procedural';
 import { bareClient } from '../bareClient';
 import { cookieStoreMethods } from '../cookieStoreMethods';
 import { recordSize } from '../idbSize';
@@ -65,6 +69,7 @@ import { writeStream } from './WriteStream';
 
 const parts = {
 	bareClient,
+	compileFilter,
 	longFrames,
 	longTasks,
 	cookieStoreMethods,

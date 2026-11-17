@@ -417,6 +417,7 @@ const rewriterLibrary = {
 const DEFERRED_FILES = new Set(
 	[
 		'node_modules/@mercuryworkshop/proxy-transports/dist/index.mjs',
+		'src/blocker/procedural.ts',
 		'src/inject/bareClient.ts',
 		'src/inject/cookieStoreMethods.ts',
 		'src/inject/dom/ancestorOriginsList.ts',
