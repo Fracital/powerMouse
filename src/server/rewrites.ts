@@ -84,6 +84,7 @@ import {
 	parseRoutedURL,
 	REFUSED_ROUTE,
 	REFUSED_SOURCE_ROUTE,
+	ROUTE_PROTOCOLS,
 	routeBinary,
 	unwrapRoute,
 } from '../routeURL';
@@ -192,6 +193,8 @@ import {
 import {
 	directiveOf,
 	hopRefusal,
+	integrityPolicyDestinations,
+	integrityRefuses,
 	knowsPoliciesOf,
 	metaPolicies,
 	postReport,
@@ -1958,6 +1961,23 @@ function genericForward(
 					: Response.redirect(REFUSED_URL, 302);
 			}
 		}
+		// the page's Integrity-Policy (contentPolicies.ts integrityRefuses):
+		// a script it blocks fails as a network error, as natively. A local
+		// URL's (data:, blob:) is not blocked
+		if (
+			!navigation &&
+			!context?.internal &&
+			ROUTE_PROTOCOLS.includes(url.url.protocol) &&
+			integrityRefuses(
+				context?.clientId,
+				requestReferrer,
+				destination,
+				serverRequest.mode,
+				integrity !== '',
+				blobCreatorOf,
+			)
+		)
+			return Response.error();
 		// the chain a navigation is a later hop of, as the documents that
 		// started it told it (NavigationHint): what judges its hops and the
 		// document it ends in
@@ -5146,19 +5166,27 @@ export function registerRewrites(
 				// what of its policies names hosts is the worker's to apply to
 				// its requests (src/server/contentPolicies.ts)
 				if (request.navigation)
-					rememberPolicies(request.routed, request.clientId, url.url, [
-						...parsePolicies(
-							response.headers.get('content-security-policy'),
-							'enforce',
-							'header',
+					rememberPolicies(
+						request.routed,
+						request.clientId,
+						url.url,
+						[
+							...parsePolicies(
+								response.headers.get('content-security-policy'),
+								'enforce',
+								'header',
+							),
+							...parsePolicies(
+								response.headers.get('content-security-policy-report-only'),
+								'report',
+								'header',
+							),
+							...metaPolicies(markup),
+						],
+						integrityPolicyDestinations(
+							response.headers.get('integrity-policy'),
 						),
-						...parsePolicies(
-							response.headers.get('content-security-policy-report-only'),
-							'report',
-							'header',
-						),
-						...metaPolicies(markup),
-					]);
+					);
 				// the blocker's side of the document (docs/adblock.md): the
 				// lists' `$csp=` policies the proxy can enforce, beside its own,
 				// and the cosmetic rules and scriptlets its inject applies. Shields

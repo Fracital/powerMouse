@@ -2,12 +2,13 @@
 // the way a browser does: a cookie set without Domain is host-only, Domain
 // matches by label and never a public suffix, paths match on a boundary,
 // Secure cookies go to secure URLs only and an insecure origin cannot touch
-// them, the __Host- and __Secure- prefixes are enforced, oversize cookies and
-// lines with a control character are refused, SameSite is evaluated against
-// the request's site when the caller says what it is, and the Cookie header
-// lists longer paths first, then earlier creations (a re-set with a new value
-// is a new creation, as in Chrome). The matching functions are exported
-// on their own so they can be checked in node (cookie-rules suite).
+// them, the __Host-, __Secure-, __Http- and __Host-Http- prefixes are
+// enforced, oversize cookies and lines with a control character are
+// refused, SameSite is evaluated against the request's site when the
+// caller says what it is, and the Cookie header lists longer paths first,
+// then earlier creations (a re-set with a new value is a new creation, as
+// in Chrome). The matching functions are exported on their own so they can
+// be checked in node (cookie-rules suite).
 import { IDBPDatabase, openDB } from 'idb';
 import parseSetCookie, { Cookie as ParserCookie } from 'set-cookie-parser';
 import { registrableDomain } from '../partition';
@@ -353,13 +354,22 @@ export function parseCookie(
 	const lowerName = name.toLowerCase();
 	// a nameless cookie travels as its bare value, so one whose value starts
 	// like a prefixed name would pass for that cookie (RFC 6265bis 5.7)
-	if (name === '' && /^__(secure|host)-/i.test(value)) return null;
+	if (name === '' && /^__(secure|host|http)-/i.test(value)) return null;
 	if (lowerName.startsWith('__secure-') && !secure) return null;
+	// (a Domain that names the IP address the cookie is for is no domain:
+	// Chrome keeps a __Host- cookie with one, measured)
+	const ipHost = isIP(host) && attribute === host;
 	if (
 		lowerName.startsWith('__host-') &&
-		(!secure || !hostOnly || attribute !== '' || path !== '/')
+		(!secure ||
+			(!hostOnly && !ipHost) ||
+			(attribute !== '' && !ipHost) ||
+			path !== '/')
 	)
 		return null;
+	// __Http- and __Host-Http-: only a response's HttpOnly cookie (Chrome
+	// 157, measured: a script's write and one without HttpOnly are dropped)
+	if (/^__(host-)?http-/.test(lowerName) && (!secure || !httpOnly)) return null;
 
 	const sameSiteAttribute = parsed.sameSite?.toLowerCase();
 	const sameSiteDefault = !SAME_SITES.includes(sameSiteAttribute as SameSite);
@@ -464,6 +474,8 @@ export function storeCookie(
 		hostOnly = false;
 	}
 	if (/^__host-/i.test(name) && (!hostOnly || path !== '/')) return null;
+	// a script's cookie is never HttpOnly, which these need
+	if (/^__(host-)?http-/i.test(name)) return null;
 	// in a partition, as for a script's Set-Cookie string (parseCookie)
 	if (partitionKey !== undefined && sameSite !== 'none') return null;
 	const partitioned = !!write.partitioned;

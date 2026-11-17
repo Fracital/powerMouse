@@ -47,6 +47,17 @@ const bindingHeaders: string[] = [
 	// the browser would fetch the rules it names by itself, past the worker,
 	// and act on none (src/scriptRoutes.ts NO_SPECULATION)
 	'Speculation-Rules',
+	// the browser would block STomp's own scripts, and the page's, whose
+	// integrity the worker checks itself: the worker applies it
+	// (contentPolicies.ts integrityPolicyDestinations)
+	'Integrity-Policy',
+	'Integrity-Policy-Report-Only',
+	// state the browser would keep for the proxy origin, every site's at
+	// once, which nothing of STomp reads: a login status (the inject's FedCM
+	// has its own), a storage access grant, a compression dictionary
+	'Set-Login',
+	'Activate-Storage-Access',
+	'Use-As-Dictionary',
 ];
 
 const removeHeaders: string[] = [

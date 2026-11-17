@@ -32,6 +32,8 @@ interface Served {
 	policies: Policy[];
 	/** a worker's (rememberWorkerPolicies) */
 	worker?: true;
+	/** the destinations its Integrity-Policy blocks (integrityPolicyDestinations) */
+	integrity?: string[];
 }
 
 const served = new Map<string, Served>();
@@ -54,8 +56,9 @@ export function rememberPolicies(
 	clientId: string | undefined,
 	url: URL,
 	policies: Policy[],
+	integrity: string[] = [],
 ) {
-	const value = { url, policies };
+	const value = { url, policies, ...(integrity.length ? { integrity } : {}) };
 	remember(`url ${withoutHash(routed)}`, value);
 	if (clientId) remember(`client ${clientId}`, value);
 }
@@ -109,6 +112,42 @@ function policiesOf(
 		}
 	}
 	return null;
+}
+
+/**
+ * The destinations a document's Integrity-Policy header blocks without
+ * integrity metadata: its blocked-destinations, of those Chrome 157 knows
+ * (script). The browser would apply it to STomp's own scripts and to the
+ * page's, whose metadata the worker checks itself (src/sri.ts), so it never
+ * gets the header (filterHeaders) and the worker applies it
+ * (integrityRefuses).
+ */
+export function integrityPolicyDestinations(header: string | null): string[] {
+	const match = /(?:^|,)\s*blocked-destinations=\(([^)]*)\)/.exec(header ?? '');
+	if (!match) return [];
+	return match[1]
+		.trim()
+		.split(/\s+/)
+		.filter((token) => token === 'script');
+}
+
+/**
+ * Whether the Integrity-Policy of the document that makes a request of
+ * `destination` refuses it, as Chrome does: one with no integrity metadata,
+ * or that is not a CORS request (measured: a same-origin script with a
+ * matching integrity and no crossorigin attribute is blocked)
+ */
+export function integrityRefuses(
+	clientId: string | undefined,
+	referrer: string | null | undefined,
+	destination: string,
+	mode: RequestMode,
+	integrity: boolean,
+	creatorOf?: (client: string) => string | undefined,
+): boolean {
+	const document = policiesOf(clientId, referrer, creatorOf);
+	if (!document?.integrity?.includes(destination)) return false;
+	return !integrity || (mode !== 'cors' && mode !== 'same-origin');
 }
 
 /** a response's policies, enforced and report-only */

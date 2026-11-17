@@ -1,0 +1,35 @@
+<!doctype html>
+<title>Cookie prefixes</title>
+<pre id="result">pending</pre>
+<script>
+	// Which prefixed cookies the browser keeps, from Set-Cookie and from
+	// document.cookie: __Secure- and __Host- (Secure; host-only, Path=/),
+	// __Http- (Secure and HttpOnly, never from script) and __Host-Http-
+	// (both), in any case. What the server is sent afterwards is the result.
+	const set = (cookie) =>
+		fetch('/hdr/doc?h=' + encodeURIComponent(`set-cookie:${cookie}`));
+	(async () => {
+		await set('__Http-a=1; Secure; Path=/');
+		await set('__Http-b=1; Secure; HttpOnly; Path=/');
+		await set('__Host-Http-c=1; Secure; HttpOnly; Path=/');
+		await set('__Host-Http-d=1; Secure; HttpOnly; Path=/; Domain=127.0.0.1');
+		await set('__Host-Http-k=1; Secure; Path=/');
+		await set('__HTTP-h=1; Secure; Path=/');
+		await set('__http-l=1; Secure; HttpOnly; Path=/');
+		await set('__Host-i=1; Secure; Path=/');
+		await set('__Secure-j=1; Path=/');
+		await set('__Host-m=1; Secure; Path=/sub');
+		document.cookie = '__Http-e=1; Secure; path=/';
+		document.cookie = '__Host-Http-f=1; Secure; path=/';
+		document.cookie = '__http-g=1; Secure; path=/';
+		document.cookie = '__Secure-n=1; Secure; path=/';
+		const sent = await (await fetch('/hdr/doc?echo=cookie')).text();
+		window.__result = {
+			sent: sent.split('; ').filter(Boolean).sort().join(' '),
+			script: document.cookie.split('; ').filter(Boolean).sort().join(' '),
+		};
+		document.getElementById('result').textContent = JSON.stringify(
+			window.__result,
+		);
+	})();
+</script>
