@@ -234,6 +234,20 @@ for (const [mode, base] of [
 				made.push(frame);
 				if (await window.__visit(frame, url, `frame-${n}`)) finished++;
 			}
+			// everything of the frames was heard of before they go: a
+			// document's own report waits for its page to say which frame it
+			// is in, and one still waiting when its frame goes (the last
+			// frame's nested document, often) ends without a frame, its client
+			// kept as one with none until the service worker is next asked,
+			// which is in the next step's count
+			const heard = await window.__until(() =>
+				made.every((_, n) =>
+					[
+						`request-clients.html?n=frame-${n}`,
+						`request-frames-child.html?name=frame-${n}`,
+					].every((document) => window.__documents.has(document)),
+				),
+			);
 			const withFrames = window.controller.clientCounts;
 			for (const frame of made) {
 				frame.element.remove();
@@ -244,16 +258,22 @@ for (const [mode, base] of [
 			}
 			// the next client the controller hears of has it look
 			await window.__visit(window.__visitor, url, 'after');
-			return { finished, withFrames, after: window.controller.clientCounts };
+			return {
+				finished,
+				heard,
+				withFrames,
+				after: window.controller.clientCounts,
+			};
 		},
 		[visitURL, FRAMES],
 	);
 	ok(
 		`${mode}: ${FRAMES} frames loaded, and their clients went with them`,
 		removals.finished === FRAMES &&
+			removals.heard &&
 			removals.withFrames.clients >= FRAMES * 3 &&
 			removals.after.clients <= KEPT,
-		`${removals.withFrames.clients} clients with the frames there, ${removals.after.clients} once they are gone`,
+		`${removals.finished} finished, ${removals.heard ? 'all' : 'not all'} of their documents reported, ${removals.withFrames.clients} clients with the frames there, ${removals.after.clients} once they are gone`,
 	);
 
 	// clients with no frame that go away: those of a frame the host took
