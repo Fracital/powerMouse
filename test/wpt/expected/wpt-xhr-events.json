@@ -25,23 +25,11 @@
 	"/xhr/abort-during-loading.window.html": {
 		"XMLHttpRequest: abort() during LOADING": "FAIL: assert_equals: expected null but got Document node with 1 child"
 	},
-	"/xhr/abort-during-open.any.html": {
-		"XMLHttpRequest: abort() during OPEN": "FAIL: assert_unreached: Reached unreachable code"
-	},
-	"/xhr/abort-during-open.any.worker.html": {
-		"XMLHttpRequest: abort() during OPEN": "FAIL: assert_unreached: Reached unreachable code"
-	},
 	"/xhr/abort-during-upload.any.html": {
 		"XMLHttpRequest: abort() while sending data": "FAIL: assert_equals: expected \"upload.loadstart(0,9999,true)\" but got \"upload.loadstart(0,0,false)\""
 	},
 	"/xhr/abort-during-upload.any.worker.html": {
 		"XMLHttpRequest: abort() while sending data": "FAIL: assert_equals: expected \"upload.loadstart(0,9999,true)\" but got \"upload.loadstart(0,0,false)\""
-	},
-	"/xhr/abort-event-abort.any.html": {
-		"XMLHttpRequest: The abort() method: do not fire abort event in OPENED state when send() flag is unset.": "FAIL: assert_unreached: when abort() is called, state is OPENED with the send() flag being unset, must not fire abort event per spec Reached unreachable code"
-	},
-	"/xhr/abort-event-abort.any.worker.html": {
-		"XMLHttpRequest: The abort() method: do not fire abort event in OPENED state when send() flag is unset.": "FAIL: assert_unreached: when abort() is called, state is OPENED with the send() flag being unset, must not fire abort event per spec Reached unreachable code"
 	},
 	"/xhr/abort-event-order.htm": {
 		"XMLHttpRequest: The abort() method: abort and loadend events": "FAIL: assert_equals: state should be UNSENT expected 0 but got 4"
@@ -86,7 +74,6 @@
 		"XMLHttpRequest: open() after abort()": "FAIL: assert_equals: expected 0 but got 4"
 	},
 	"/xhr/open-send-during-abort.htm": {
-		"(harness)": "TIMEOUT: ",
 		"XMLHttpRequest: open() during abort()": "TIMEOUT: Test timed out"
 	},
 	"/xhr/progress-events-response-data-gzip.htm": {

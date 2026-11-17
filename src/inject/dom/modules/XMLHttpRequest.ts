@@ -20,6 +20,7 @@ import UnrouteModule, { unrouteURL } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
 import { trustedHTML } from '../../trusted';
 import { trackUploadListeners } from '../../uploadListeners';
+import { checkedHeader, checkedMethod, notOpened } from '../../xhrChecks';
 import {
 	decodeText,
 	finalMime,
@@ -691,6 +692,9 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				}
 
 				if (this.#readyState === DONE || this.#readyState === UNSENT) return;
+				// opened and not sent: nothing to abort, no events, and send()
+				// may still follow
+				if (this.#readyState === OPENED && !this.#sent) return;
 				this.#abort.abort();
 				this.#end('abort');
 			}
@@ -701,6 +705,8 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				username: string | void,
 				password: string | void,
 			) {
+				// a method the browser refuses changes nothing of the request
+				const checked = checkedMethod(that.client.global, method);
 				// a document may not make a synchronous request with a response
 				// type or a timeout set beforehand
 				if (!async && (this.#timeout !== 0 || this.#responseType !== ''))
@@ -732,7 +738,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				this.#body = null;
 				this.#responseText = '';
 				this.#responseXML = null;
-				this.#method = String(method).toUpperCase();
+				this.#method = checked;
 
 				this.#url = String(url);
 
@@ -776,21 +782,20 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				}
 			}
 			setRequestHeader(header: string, value: string) {
-				if (this.#readyState !== OPENED) {
-					throw withStack(
-						new DOMException(
-							`Failed to execute 'setRequestHeader' on 'XMLHttpRequest': The object's state must be OPENED.`,
-						),
-					);
-				}
-
+				[header, value] = checkedHeader(
+					that.client.global,
+					// eslint-disable-next-line prefer-rest-params
+					arguments,
+					this.#readyState === OPENED && !this.#sent,
+				);
 				// the proxy's markers are never the page's to send (see Fetch)
-				if (isStompHeader(String(header))) return;
+				if (isStompHeader(header)) return;
 				// behavior is equal to append
 				this.#headers.append(header, value);
 			}
 			send(body: string) {
-				this.#readyState = OPENED;
+				if (this.#readyState !== OPENED || this.#sent)
+					throw notOpened(that.client.global, 'send');
 				this.#sent = true;
 
 				// a document whose permissions policy turns `sync-xhr` off (the

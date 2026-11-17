@@ -128,8 +128,5 @@
 		"XMLHttpRequest: status error handling HEAD 699": "FAIL: assert_equals: response status expected 699 but got 0",
 		"XMLHttpRequest: status error handling POST 699": "FAIL: assert_equals: response status expected 699 but got 0",
 		"XMLHttpRequest: status error handling PUT 699": "FAIL: assert_equals: response status expected 699 but got 0"
-	},
-	"/xhr/xmlhttprequest-unsent.htm": {
-		"XMLHttpRequest: members during UNSENT": "FAIL: assert_throws_dom: setRequestHeader function \"function() { client.setRequestHeader(\"x-test\", \"test\") }\" threw object \"Error: Failed to execute 'setRequestHeader' on 'XMLHttpRequest': The object's stat"
 	}
 }

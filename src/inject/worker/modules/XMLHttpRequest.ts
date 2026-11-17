@@ -15,6 +15,7 @@ import ProxyModule, { classConstant, onEventTarget } from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
 import { trackUploadListeners } from '../../uploadListeners';
+import { checkedHeader, checkedMethod, notOpened } from '../../xhrChecks';
 import {
 	decodeText,
 	finalMime,
@@ -525,6 +526,9 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				}
 
 				if (this.#readyState === DONE || this.#readyState === UNSENT) return;
+				// opened and not sent: nothing to abort, no events, and send()
+				// may still follow
+				if (this.#readyState === OPENED && !this.#sent) return;
 				this.#abort.abort();
 				this.#end('abort');
 			}
@@ -535,6 +539,8 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				username: string | void,
 				password: string | void,
 			) {
+				// a method the browser refuses changes nothing of the request
+				const checked = checkedMethod(that.client.global, method);
 				// a request in flight is dropped without events, and everything of
 				// the last response is gone: status 0, no headers, no body
 				this.#generation++;
@@ -556,7 +562,7 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				this.#response = null;
 				this.#body = null;
 				this.#responseText = '';
-				this.#method = String(method).toUpperCase();
+				this.#method = checked;
 
 				this.#url = String(url);
 
@@ -582,21 +588,20 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				}
 			}
 			setRequestHeader(header: string, value: string) {
-				if (this.#readyState !== OPENED) {
-					throw withStack(
-						new DOMException(
-							`Failed to execute 'setRequestHeader' on 'XMLHttpRequest': The object's state must be OPENED.`,
-						),
-					);
-				}
-
+				[header, value] = checkedHeader(
+					that.client.global,
+					// eslint-disable-next-line prefer-rest-params
+					arguments,
+					this.#readyState === OPENED && !this.#sent,
+				);
 				// the proxy's markers are never the page's to send (see Fetch)
-				if (isStompHeader(String(header))) return;
+				if (isStompHeader(header)) return;
 				// behavior is equal to append
 				this.#headers.append(header, value);
 			}
 			send(body: string) {
-				this.#readyState = OPENED;
+				if (this.#readyState !== OPENED || this.#sent)
+					throw notOpened(that.client.global, 'send');
 				this.#sent = true;
 
 				const options: RequestInit = {
