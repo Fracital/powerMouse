@@ -950,11 +950,16 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				// the browser opens it inside the write, and a script of the
 				// written markup runs before the write returns: the window's
 				// listeners (the message tagger first) are registered again
-				// before it, as after the page's own open()
+				// before it, as after the page's own open(). Opened by an empty
+				// write of the browser's, which refuses as the page's would (a
+				// write from a module, async or deferred script opens nothing,
+				// natively with the console's warning): then nothing is written,
+				// as natively. open() itself would not refuse.
 				if (opens) {
-					moduleClient.opened = true;
+					Reflect.apply(nativeWrite, document, [trustedHTML('')]);
+					if (realm.document.readyState === 'complete') return;
 					stream?.reset(document);
-					Reflect.apply(documentOpen, document, []);
+					moduleClient.opened = true;
 					runDocumentOpenListeners(realm);
 				}
 				const prevState = getGlobalParsingState(realm);
