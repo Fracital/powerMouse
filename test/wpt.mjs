@@ -236,11 +236,41 @@ async function runProxied(browser, tests, concurrency) {
 				null,
 				{ timeout: 45000 },
 			);
-			await page.evaluate(() => {
+			// a controller of the suite's own, on the demo page's worker and
+			// a transport described as the demo describes its own: the demo's
+			// controller takes a page's window.open as a tab of the demo and
+			// the page gets null, which is the demo's choice (`onOpen`) and
+			// not the proxy's behaviour. A host that takes no tabs leaves the
+			// popup to the browser, and that is what the tests that open one
+			// measure. The transport is a descriptor, hosted in the transport
+			// worker as the demo's is: a transport instance runs on the page,
+			// which cannot answer a proxied page's synchronous XHR while that
+			// page spins (every sync XHR then waited out its 30 s).
+			await page.evaluate(async () => {
 				const element = document.createElement('iframe');
 				element.style.cssText = 'width: 800px; height: 600px';
 				document.body.append(element);
-				window.__wptFrame = window.controller.createFrame(element);
+				const config = window.STOMP_CONFIG || {};
+				const controller = new window.StompController({
+					serviceworker: window.controller.serviceworker,
+					transport: {
+						module: config.testTransport
+							? '/test/mixed-transport.mjs'
+							: '/epoxy/index.mjs',
+						options: [
+							{
+								wisp:
+									config.wisp ||
+									`${location.origin.replace(/^http/, 'ws')}/wisp/`,
+							},
+						],
+					},
+					directory: window.controller.directory.pathname,
+					codec: 'xor',
+				});
+				await controller.wait();
+				window.__wptController = controller;
+				window.__wptFrame = controller.createFrame(element);
 			});
 			// the fallback reads the frame's own copy: the proxied frame is a
 			// direct child of the host page on a routed URL
@@ -263,7 +293,7 @@ async function runProxied(browser, tests, concurrency) {
 				// the proxy's jar is shared by every controller of the scope; empty
 				// it for the page the way the native run empties the browser's
 				await page
-					.evaluate(() => window.controller.cookies.clear())
+					.evaluate(() => window.__wptController.cookies.clear())
 					.catch(() => {});
 				try {
 					await page.evaluate(

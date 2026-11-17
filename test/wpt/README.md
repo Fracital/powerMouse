@@ -96,9 +96,32 @@ at a time, the `inheritance/` ones for about:blank, `javascript:`, srcdoc,
 data: and `document.write` children among them; those are proxy failures,
 not load.
 
-Since then the lists only shrink as fixes land; on 2026-11-08 they hold 9
+Since then the lists only shrink as fixes land; on 2026-11-08 they held 9
 cookie and 12 referrer-policy entries, each with its cause in
 `docs/scramjet-parity.md` (the WPT row of section 9).
+
+Re-measured 2026-11-15, after the referrer, about:blank and popup fixes of
+that day and with the proxied run on a controller of its own (no `onOpen`,
+so `window.open` opens the browser's popup; `test/wpt.mjs`): the
+referrer-policy list is empty, and what is left is
+
+- `wpt-cookies`, `ordering/ordering.sub.html`, "Cookies with longer paths
+  are listed before cookies with shorter paths" (1): the proxied
+  `fetch('/cookies/resources/cookie.py?set=...&location=...')` of the popup
+  fails ("Failed to fetch") where Chrome follows the redirect; the cause is
+  not yet known. The page's other three subtests fail natively (a `domain`
+  attribute of `localhost` is refused, and the browser keeps an older
+  `testB`), so this one is the only comparison the page gives.
+- `wpt-fetch-metadata`, `element-link-icon` (12): Chrome fetches no favicon
+  for a document in an iframe, and every proxied page is in one, so the
+  page's requests never happen (`docs/scramjet-parity.md`, Sec-Fetch row).
+- `wpt-fetch-metadata`, `element-img-environment-change` (15): the page
+  times out at its cross-site step. In a document no service worker
+  controls, an image of another origin loads from a sealed copy held in
+  the memory cache, and Chrome prefers a cached candidate of higher density
+  (`AvoidDownloadIfHigherDensityResourceIsInCache`), so the environment
+  change loads from the cache with no request and the page waits for an
+  `error` that never comes. A limit of sealed copies.
 
 ## Running and refreshing
 
@@ -135,3 +158,20 @@ node test/wpt/refresh.mjs /tmp/wpt
 checkout is data: nothing in it runs) and prints the upstream commit to put
 in this file. Then rerun the three suites with `UPDATE_EXPECTED=1` and review
 the diff of `expected/`.
+
+## Adding an area
+
+An area beyond the first three keeps its upstream directories and its
+include and exclude lists in `lists/<area>.mjs` (exports `sparse`,
+`include`, `exclude`, read by `refresh.mjs`), and the python handlers its
+kept tests need, ported, in `test/wpt-handlers/<area>.mjs` (its default
+export receives the server's tools and returns `handlers`, `patterns`,
+`upgrades` and `patches`; see the comment above `handlerDir` in
+`test/wpt-server.mjs`). The server ports what wptserve does for every area:
+`.sub.` substitutions, `.headers` sidecars, the `.any.js`, `.window.js` and
+`.worker.js` wrappers, `?pipe=` and `.asis` files. A suite is
+`runWpt('wpt-<area>', { roots, concurrency, globals, skip, budget })` from
+`test/wpt.mjs`: `globals` adds the worker variants of `.any.js` tests,
+`skip` leaves pages out by path and query, `budget` is a page's time to
+report in ms. The proxied run uses a controller of its own on the demo's
+worker, without `onOpen`, so a page's popup is the browser's.
