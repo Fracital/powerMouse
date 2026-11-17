@@ -120,6 +120,8 @@ const ORDER = {
 const probe = `<!doctype html><title>permissions</title><script>
 (async () => {
 	const ask = new URLSearchParams(location.search).get('ask') || '';
+	// (taken before anything reads navigator.geolocation: the site's call all the same)
+	const earlyPosition = Geolocation.prototype.getCurrentPosition;
 	const out = { states: {}, after: {} };
 	const query = async (into) => {
 		for (const name of ${JSON.stringify(NAMES)}) {
@@ -139,6 +141,15 @@ const probe = `<!doctype html><title>permissions</title><script>
 			navigator.geolocation.getCurrentPosition(
 				(position) => { clearTimeout(timer); resolve('position ' + position.coords.latitude); },
 				(error) => { clearTimeout(timer); resolve('error ' + error.code + ' ' + error.message + ' ' + (error instanceof GeolocationPositionError)); },
+			);
+		});
+	if (ask.includes('early'))
+		out.geoEarly = await new Promise((resolve) => {
+			const timer = setTimeout(() => resolve('pending'), 8000);
+			earlyPosition.call(
+				navigator.geolocation,
+				(position) => { clearTimeout(timer); resolve('position ' + position.coords.latitude); },
+				(error) => { clearTimeout(timer); resolve('error ' + error.code + ' ' + error.message); },
 			);
 		});
 	// how long the slowest request took is kept beside the answers (a host's
@@ -491,7 +502,7 @@ for (const [mode, base] of MODES) {
 	await submitLanding(tab, `${A}/probe?ask=geo`);
 	await answer('allow');
 	const siteA = await result(() => proxiedFrames(tab)().slice(-1));
-	await submitOmni(tab, `${B}/probe?ask=geo`);
+	await submitOmni(tab, `${B}/probe?ask=geo-early`);
 	await sleep(1000);
 	await answer('block');
 	await fresh();
@@ -518,6 +529,15 @@ for (const [mode, base] of MODES) {
 			siteB?.after.geolocation === 'denied' &&
 			prompts.length === 2,
 		describe({ siteB, prompts }),
+	);
+	// Geolocation.prototype.getCurrentPosition taken before the page read
+	// navigator.geolocation was the browser's own: it asked for the proxy
+	// origin's permission (the host's), not site B's
+	ok(
+		`${mode}: site B's Geolocation method taken before navigator.geolocation is refused as its own`,
+		siteB?.geoEarly === 'error 1 User denied Geolocation' &&
+			prompts.length === 2,
+		describe({ geoEarly: siteB?.geoEarly, prompts }),
 	);
 	ok(
 		`${mode}: each site keeps its answer`,

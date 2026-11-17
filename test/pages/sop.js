@@ -23,6 +23,32 @@
 		texSubImage2D: window.WebGLRenderingContext?.prototype.texSubImage2D,
 		texImage2D2: window.WebGL2RenderingContext?.prototype.texImage2D,
 	};
+	// the same of the 2D contexts, the bitmap renderer and Geolocation, each
+	// first named another way: a method read, a reflective read, and a
+	// prototype method taken before navigator.geolocation
+	const lazyNames = [
+		'CanvasRenderingContext2D',
+		'OffscreenCanvasRenderingContext2D',
+		'ImageBitmapRenderingContext',
+		'Geolocation',
+	];
+	const lazyNeighbours = (() => {
+		const keys = Object.getOwnPropertyNames(window);
+		return lazyNames.map((name) => keys[keys.indexOf(name) - 1] ?? null);
+	})();
+	const early2D = {
+		drawImage: window.CanvasRenderingContext2D?.prototype.drawImage,
+		getImageData: window.CanvasRenderingContext2D?.prototype.getImageData,
+		offscreenDrawImage:
+			window.OffscreenCanvasRenderingContext2D?.prototype.drawImage,
+		offscreenGetImageData:
+			window.OffscreenCanvasRenderingContext2D?.prototype.getImageData,
+	};
+	const bitmapDescriptor = Object.keys(
+		Object.getOwnPropertyDescriptor(window, 'ImageBitmapRenderingContext') ??
+			{},
+	);
+	const earlyPosition = window.Geolocation?.prototype.getCurrentPosition;
 	const query = new URLSearchParams(location.search);
 	const A = location.origin;
 	const B = query.get('b');
@@ -600,6 +626,59 @@
 	add(
 		'canvas/where the WebGL interfaces are among the window keys',
 		() => webglNeighbours,
+	);
+	add(
+		'canvas/2D methods taken before any context, of a cross-origin image',
+		async () => {
+			const element = await image(r(B, { type: 'png' }).url);
+			const result = {};
+			for (const [kind, draw, read, make] of [
+				[
+					'canvas',
+					early2D.drawImage,
+					early2D.getImageData,
+					() => canvas().getContext('2d'),
+				],
+				[
+					'offscreen',
+					early2D.offscreenDrawImage,
+					early2D.offscreenGetImageData,
+					() => new OffscreenCanvas(4, 4).getContext('2d'),
+				],
+			]) {
+				if (!draw || !read) {
+					result[kind] = 'no interface';
+					continue;
+				}
+				const context = make();
+				try {
+					draw.call(context, element, 0, 0);
+					read.call(context, 0, 0, 1, 1);
+					result[kind] = 'ok';
+				} catch (error) {
+					result[kind] = failed(error);
+				}
+			}
+			return result;
+		},
+	);
+	add('canvas/the bitmap renderer read reflectively first', () => [
+		bitmapDescriptor,
+		typeof ImageBitmapRenderingContext,
+		ImageBitmapRenderingContext.prototype.transferFromImageBitmap ===
+			canvas().getContext('bitmaprenderer').transferFromImageBitmap,
+	]);
+	add(
+		'canvas/where the context and Geolocation interfaces are among the window keys',
+		() => lazyNeighbours,
+	);
+	add(
+		'permissions/Geolocation methods taken before navigator.geolocation are its own',
+		() => [
+			typeof earlyPosition,
+			earlyPosition === navigator.geolocation.getCurrentPosition,
+			Object.getPrototypeOf(navigator.geolocation) === Geolocation.prototype,
+		],
 	);
 	add('canvas/SVG image of another site', async () => {
 		const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');

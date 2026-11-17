@@ -7,6 +7,8 @@ import { LazyWeakMap, LazyWeakSet } from '../../ownCollections';
 import { blobLoads, opaqueCopies } from '../blobLoads';
 import type DocumentClient from '../Client';
 import type { CanvasTaints } from '../Client';
+import { createHTMLElement } from '../cloneNode';
+import { lazyInterface } from '../lazyInterface';
 import SyncModule from './Sync';
 
 // taken when the bundle loads, before page code can replace it
@@ -31,16 +33,19 @@ const toStringTag = Symbol.toStringTag;
  * Hot path: a draw costs a WeakSet lookup when the canvas is tainted
  * already, else a WeakMap lookup and a native getter call for the source.
  *
- * WebGL's methods are hooked the first time a `getContext` of the realm
- * hands out a WebGL context, which is the only way to one: the browser
- * makes an interface the first time anything names it, and the two WebGL
- * ones cost every frame about 90 KB of heap (an ad frame that never draws).
- * A page can name them before any context exists (and keep
- * `WebGLRenderingContext.prototype.texImage2D` unhooked), so the two names
- * are accessors on the window until first read: the read gets a context
- * of the kind from the native getContext of an OffscreenCanvas, hooks its
- * prototype, and makes the name the data property it natively is, before
- * the page has the interface. A frame that never names them pays nothing.
+ * A context's methods (WebGL's, the 2D contexts', the bitmap renderer's)
+ * are hooked the first time a `getContext` of the realm hands out a context
+ * of the kind, which is the only way to one: the browser makes an interface
+ * the first time anything names it, and the two WebGL ones cost every frame
+ * about 90 KB of heap, the 2D and bitmap ones about 8 KB more (an ad frame
+ * that never draws). A page can name them before any context exists (and
+ * keep `WebGLRenderingContext.prototype.texImage2D` or
+ * `CanvasRenderingContext2D.prototype.getImageData` unhooked), so the names
+ * are accessors on the window until first read (../lazyInterface.ts): the
+ * read makes a throwaway context of the kind with the native getContext,
+ * hooks its prototype, and makes the name the data property it natively
+ * is, before the page has the interface. A frame that never names them
+ * pays nothing.
  */
 export default class CanvasTaintModule extends Module<DocumentClient> {
 	/** whether drawing `source` taints a canvas: it holds another origin's data the page may not read */
@@ -64,7 +69,8 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 	apply() {
 		const client = this.client;
 		const global = client.global;
-		if (typeof global.CanvasRenderingContext2D !== 'function') return;
+		// (asked without reading it: that would make the interface)
+		if (!Reflect.has(global, 'CanvasRenderingContext2D')) return;
 		const proxyModule = client.getModule(ProxyModule)!;
 		// What a canvas has drawn, kept for every proxied document that can
 		// reach this one, whichever bundle runs it: a page draws a frame's
@@ -114,14 +120,6 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 		);
 		const canvasWidth = getter(global.HTMLCanvasElement?.prototype, 'width');
 		const offscreenWidth = getter(global.OffscreenCanvas?.prototype, 'width');
-		const contextCanvas = getter(
-			global.CanvasRenderingContext2D.prototype,
-			'canvas',
-		);
-		const offscreenContextCanvas = getter(
-			global.OffscreenCanvasRenderingContext2D?.prototype,
-			'canvas',
-		);
 
 		/** an object's kind, by the native getters it answers (once per object) */
 		const kinds = new LazyWeakMap<object, Kind>();
@@ -392,15 +390,36 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 			);
 		};
 
-		const context2D = global.CanvasRenderingContext2D.prototype;
-		hookDraw(context2D, contextCanvas, 'drawImage');
-		hookPattern(context2D, contextCanvas);
-		hookRead(
-			context2D,
-			'getImageData',
-			taintedContexts,
-			"Failed to execute 'getImageData' on 'CanvasRenderingContext2D': The canvas has been tainted by cross-origin data.",
-		);
+		/** a 2D context's prototype (CanvasRenderingContext2D, OffscreenCanvasRenderingContext2D) */
+		const hook2D = (proto: object, name: string) => {
+			const canvasOf = getter(proto, 'canvas');
+			hookDraw(proto, canvasOf, 'drawImage');
+			hookPattern(proto, canvasOf);
+			hookRead(
+				proto,
+				'getImageData',
+				taintedContexts,
+				`Failed to execute 'getImageData' on '${name}': The canvas has been tainted by cross-origin data.`,
+			);
+		};
+		/** a bitmap of a tainting source taints the canvas a renderer shows it in */
+		const hookBitmapRenderer = (proto: object) => {
+			const native = (proto as Record<string, unknown>)
+				.transferFromImageBitmap as Function | undefined;
+			if (typeof native !== 'function') return;
+			const rendererCanvas = getter(proto, 'canvas');
+			(proto as Record<string, unknown>).transferFromImageBitmap =
+				proxyModule.wrapFunction(native, (target, that, args) => {
+					const result = Reflect.apply(target, that, args);
+					if (
+						args[0] &&
+						taintedSources.has(args[0] as object) &&
+						rendererCanvas
+					)
+						taintCanvas(Reflect.apply(rendererCanvas, that, []) as object);
+					return result;
+				});
+		};
 		const canvasProto = global.HTMLCanvasElement?.prototype;
 		for (const method of ['toDataURL', 'toBlob'])
 			hookRead(
@@ -445,6 +464,17 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 				);
 			}
 		};
+		/** a context's prototype, by its interface's name */
+		const hookContext = (proto: object, name: string) => {
+			if (
+				name === 'CanvasRenderingContext2D' ||
+				name === 'OffscreenCanvasRenderingContext2D'
+			)
+				hook2D(proto, name);
+			else if (name === 'ImageBitmapRenderingContext')
+				hookBitmapRenderer(proto);
+			else hookTextures(proto, name);
+		};
 		// the context prototypes looked at already: each is hooked (or not) on
 		// the first context of it a getContext hands out
 		const seen = new LazyWeakSet<object>();
@@ -466,7 +496,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 							toStringTag,
 						)?.value;
 						if (typeof name === 'string') {
-							hookTextures(proto, name);
+							hookContext(proto, name);
 							resolvers.get(name)?.(
 								Reflect.getOwnPropertyDescriptor(proto, 'constructor')?.value,
 							);
@@ -476,108 +506,60 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 				},
 			);
 		};
+		const canvasGetContext = (canvasProto as { getContext?: Function })
+			?.getContext;
 		hookGetContext(canvasProto);
 
-		// The WebGL interfaces, behind accessors until first read: whoever
-		// reads one gets it with its texture uploads hooked already
+		// The context interfaces, behind accessors until first read: whoever
+		// reads one gets it with its hooks in place already. Each is made by a
+		// throwaway context of its kind from the native getContext (of a
+		// canvas the browser's createElementNS made, or an OffscreenCanvas)
 		const offscreenGetContext = global.OffscreenCanvas?.prototype.getContext;
-		const lazyInterface = (name: string, type: string) => {
-			let pending = true;
-			const settle = (value: unknown, present: boolean) => {
-				pending = false;
-				client.lazyGlobals.delete(name);
-				if (present)
-					Reflect.defineProperty(global, name, {
-						value,
-						writable: true,
-						enumerable: false,
-						configurable: true,
-					});
-				else Reflect.deleteProperty(global, name);
-			};
-			const resolve = () => {
-				if (!pending) return;
-				let found: unknown;
-				try {
-					const context =
-						offscreenGetContext &&
-						(Reflect.apply(
-							offscreenGetContext,
-							new global.OffscreenCanvas(1, 1),
-							[type],
-						) as object | null);
-					if (context) {
-						const proto = Reflect.getPrototypeOf(context);
-						if (proto) {
-							if (!seen.has(proto)) {
-								seen.add(proto);
-								hookTextures(proto, name);
-							}
-							found = Reflect.getOwnPropertyDescriptor(
-								proto,
-								'constructor',
-							)?.value;
-						}
-						// a throwaway context gives its resources back
-						(
-							context as {
-								getExtension?: (
-									name: string,
-								) => { loseContext?: () => void } | null;
-							}
-						)
-							.getExtension?.('WEBGL_lose_context')
-							?.loseContext?.();
+		const lazyContext = (name: string, type: string, offscreen: boolean) => {
+			const settle = lazyInterface(client, proxyModule, name, () => {
+				const native = offscreen ? offscreenGetContext : canvasGetContext;
+				const context =
+					typeof native === 'function'
+						? (Reflect.apply(
+								native,
+								offscreen
+									? new global.OffscreenCanvas(1, 1)
+									: createHTMLElement(global.document, 'canvas'),
+								[type],
+							) as object | null)
+						: null;
+				if (!context) return undefined;
+				const proto = Reflect.getPrototypeOf(context);
+				// a throwaway WebGL context gives its resources back
+				(
+					context as {
+						getExtension?: (
+							name: string,
+						) => { loseContext?: () => void } | null;
 					}
-				} catch (error) {
-					// no WebGL here: then no page has a context to upload to
+				)
+					.getExtension?.('WEBGL_lose_context')
+					?.loseContext?.();
+				if (!proto) return undefined;
+				if (!seen.has(proto)) {
+					seen.add(proto);
+					hookContext(proto, name);
 				}
-				// without WebGL the interface cannot be had (so the name goes)
-				settle(found, found !== undefined);
-			};
-			resolvers.set(name, (value) => {
-				if (pending) settle(value, true);
+				return Reflect.getOwnPropertyDescriptor(proto, 'constructor')?.value;
 			});
-			client.lazyGlobals.set(name, resolve);
-			// deleted first: redefining the browser's lazy property in place
-			// makes the interface (about 85 KB a frame for the two, measured
-			// with frame-cost), deleting it does not, and the context hands it
-			// out again
-			const keys = Reflect.ownKeys(global);
-			const after = keys[keys.indexOf(name) - 1];
-			if (after !== undefined) client.globalKeyAfter.set(name, after);
-			Reflect.deleteProperty(global, name);
-			Reflect.defineProperty(global, name, {
-				get: proxyModule.wrapFunction(
-					function WebGLInterface() {} as () => unknown,
-					() => {
-						resolve();
-						return Reflect.get(global, name);
-					},
-				),
-				set: proxyModule.wrapFunction(
-					function WebGLInterface(_value: unknown) {} as (
-						value: unknown,
-					) => void,
-					(_target, _that, args) => settle(args[0], true),
-				),
-				enumerable: false,
-				configurable: true,
-			});
+			resolvers.set(name, settle);
 		};
-		lazyInterface('WebGLRenderingContext', 'webgl');
-		lazyInterface('WebGL2RenderingContext', 'webgl2');
+		// (without WebGL the interface cannot be had, so the name goes)
+		lazyContext('WebGLRenderingContext', 'webgl', true);
+		lazyContext('WebGL2RenderingContext', 'webgl2', true);
+		lazyContext('CanvasRenderingContext2D', '2d', false);
+		lazyContext('ImageBitmapRenderingContext', 'bitmaprenderer', false);
 
-		const offscreen2D = global.OffscreenCanvasRenderingContext2D?.prototype;
-		if (offscreen2D) {
-			hookDraw(offscreen2D, offscreenContextCanvas, 'drawImage');
-			hookPattern(offscreen2D, offscreenContextCanvas);
-			hookRead(
-				offscreen2D,
-				'getImageData',
-				taintedContexts,
-				"Failed to execute 'getImageData' on 'OffscreenCanvasRenderingContext2D': The canvas has been tainted by cross-origin data.",
-			);
+		if (
+			typeof global.OffscreenCanvas === 'function' &&
+			Reflect.has(global, 'OffscreenCanvasRenderingContext2D')
+		) {
+			lazyContext('OffscreenCanvasRenderingContext2D', '2d', true);
 			hookGetContext(global.OffscreenCanvas.prototype);
 			// Chrome 153 reworded its OffscreenCanvas errors: 'Tainted
 			// "OffscreenCanvas" may not be exported.' became 'A tainted
@@ -652,24 +634,6 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 					},
 					true,
 				);
-		const bitmapRenderer = global.ImageBitmapRenderingContext?.prototype;
-		if (bitmapRenderer) {
-			const native = bitmapRenderer.transferFromImageBitmap;
-			const rendererCanvas = getter(bitmapRenderer, 'canvas');
-			bitmapRenderer.transferFromImageBitmap = proxyModule.wrapFunction(
-				native,
-				(target, that, args) => {
-					const result = Reflect.apply(target, that, args);
-					if (
-						args[0] &&
-						taintedSources.has(args[0] as object) &&
-						rendererCanvas
-					)
-						taintCanvas(Reflect.apply(rendererCanvas, that, []) as object);
-					return result;
-				},
-			);
-		}
 	}
 	/**
 	 * A tainted ImageBitmap never leaves its realm: a message that holds one

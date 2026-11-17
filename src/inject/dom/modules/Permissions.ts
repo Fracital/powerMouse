@@ -12,6 +12,7 @@ import ProxyModule from '../../modules/Proxy';
 import { withStack } from '../../nativeErrors';
 import { LazyMap, LazyWeakMap, LazyWeakSet } from '../../ownCollections';
 import DocumentClient from '../Client';
+import { lazyInterface } from '../lazyInterface';
 
 /** the permissions each site keeps (src/server/permissions.ts); push is notifications' */
 const SIMULATED = new Set([
@@ -420,34 +421,58 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		};
 
 		// Geolocation's prototype is hooked the first time the page reads
-		// navigator.geolocation, the only way to a Geolocation object, not
-		// here: reading global.Geolocation.prototype made the Geolocation and
-		// GeolocationPositionError interfaces in every frame (frame-cost),
-		// which a document that never asks for a location does not use. The
-		// hooks are in place before any getCurrentPosition/watchPosition,
-		// which need that read first; Navigator.prototype is already made.
+		// navigator.geolocation, the only way to a Geolocation object, or the
+		// Geolocation interface, not here: reading global.Geolocation.prototype
+		// made the Geolocation and GeolocationPositionError interfaces in every
+		// frame (frame-cost), which a document that never asks for a location
+		// does not use. The interface's name is an accessor until then
+		// (../lazyInterface.ts): a page that took
+		// Geolocation.prototype.getCurrentPosition before it read
+		// navigator.geolocation called the browser's own method, which asked
+		// for the proxy origin's permission, not the site's. The hooks are in
+		// place before any getCurrentPosition/watchPosition; Navigator.prototype
+		// is already made.
 		const geolocationDescriptor = Reflect.getOwnPropertyDescriptor(
 			global.Navigator.prototype,
 			'geolocation',
 		);
-		if (geolocationDescriptor?.get) {
+		if (geolocationDescriptor?.get && Reflect.has(global, 'Geolocation')) {
 			const nativeGeolocation = geolocationDescriptor.get;
 			let hooked = false;
+			const hook = (geolocation: unknown) => {
+				const prototype =
+					geolocation !== null && typeof geolocation === 'object'
+						? Reflect.getPrototypeOf(geolocation)
+						: null;
+				if (!hooked && prototype) {
+					hooked = true;
+					this.geolocation(request, allowed, prototype as Geolocation);
+					settle(
+						Reflect.getOwnPropertyDescriptor(prototype, 'constructor')?.value,
+					);
+				}
+				return prototype;
+			};
+			const settle = lazyInterface(client, proxyModule, 'Geolocation', () => {
+				const prototype = hook(
+					Reflect.apply(nativeGeolocation, global.navigator, []),
+				);
+				return prototype
+					? Reflect.getOwnPropertyDescriptor(prototype, 'constructor')?.value
+					: undefined;
+			});
 			Reflect.defineProperty(global.Navigator.prototype, 'geolocation', {
 				...geolocationDescriptor,
 				get: proxyModule.wrapFunction(
 					nativeGeolocation,
 					(target, that, args) => {
 						const geolocation = Reflect.apply(target, that, args);
-						if (!hooked) {
-							hooked = true;
-							this.geolocation(request, allowed);
-						}
+						hook(geolocation);
 						return geolocation;
 					},
 				),
 			});
-		} else this.geolocation(request, allowed);
+		} else this.geolocation(request, allowed, global.Geolocation?.prototype);
 		// whether a request for `names` reaches the browser's own call without
 		// this module refusing it or the host being asked: the site holds the
 		// permission, or neither it nor the browser has decided and the
@@ -489,9 +514,9 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			| { call: false; dismissed: boolean }
 		>,
 		allowed: (name: string) => boolean,
+		prototype: Geolocation | undefined,
 	) {
 		const global = this.client.global;
-		const prototype = global.Geolocation?.prototype;
 		const ErrorType = (global as { GeolocationPositionError?: Function })
 			.GeolocationPositionError;
 		if (!prototype || !ErrorType) return;
