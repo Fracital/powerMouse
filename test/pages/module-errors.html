@@ -1,0 +1,49 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>module errors</title>
+<!-- test/suites/module-errors.mjs: what a page reads of a module that fails
+to link or that the engine refuses for a module-level early error -->
+<script>
+	window.__events = [];
+	addEventListener('error', (event) => {
+		const file = String(event.filename).split('/').pop();
+		__events.push({
+			file,
+			message: event.message,
+			error: event.error ? String(event.error.message) : null,
+			stack: event.error ? String(event.error.stack).split('\n')[0] : null,
+		});
+	});
+</script>
+<script type="module" src="module-errors-missing.js"></script>
+<script type="module" src="module-errors-json.js"></script>
+<script type="module" src="module-errors-imports-dup.js"></script>
+<script type="module" src="module-errors-dup.js"></script>
+<script type="module" src="module-errors-global.js"></script>
+<script type="module" src="module-errors-undefined.js"></script>
+<script type="module" src="module-errors-star.js"></script>
+<script type="module">
+	export var z;
+	export { z };
+</script>
+<script type="module">
+	const dynamic = {};
+	const tries = {
+		missing: './module-errors-missing-2.js',
+		dup: './module-errors-dup-2.js',
+		undefined: './module-errors-undefined-2.js',
+	};
+	for (const [name, url] of Object.entries(tries))
+		try {
+			await import(url);
+			dynamic[name] = 'loaded';
+		} catch (error) {
+			dynamic[name] = `${error.name}: ${error.message}`;
+		}
+	setTimeout(() => {
+		window.__moduleErrors = {
+			events: __events.map((event) => JSON.stringify(event)).sort(),
+			dynamic,
+		};
+	}, 500);
+</script>

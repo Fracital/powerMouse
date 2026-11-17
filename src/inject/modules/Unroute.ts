@@ -142,12 +142,30 @@ export function unrouteText(
 	const proxyBlob = `blob:${realmOrigin(client)}/`;
 	if (text.includes(proxyBlob))
 		text = text.split(proxyBlob).join(`blob:${client.url.url.origin}/`);
+	// a route the browser quotes as the page's script wrote it: a module
+	// request's specifier, which the rewriter writes as the route's path
+	// ("The requested module '/<directory>/js:genericModule/...' does not
+	// provide an export named 'x'")
+	const routed = routedPrefix(client);
+	const quotedPath = `'${client.directory}`;
+	if (text.includes(quotedPath)) {
+		const origin = routed.slice(0, routed.length - client.directory.length);
+		text = text.replace(
+			new RegExp(
+				`'(${client.directory.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^\\s'"<>]*)'`,
+				'g',
+			),
+			(match, path: string) => {
+				const real = unrouteURL(client, origin + path);
+				return real !== null && real !== origin + path ? `'${real}'` : match;
+			},
+		);
+	}
 	// this controller's routes, and a link's (src/visited.ts), which names
 	// no controller
-	const prefixes = [
-		routedPrefix(client),
-		`${scopePrefix(client)}${LINK_SEGMENT}/`,
-	].filter((prefix) => text.includes(prefix));
+	const prefixes = [routed, `${scopePrefix(client)}${LINK_SEGMENT}/`].filter(
+		(prefix) => text.includes(prefix),
+	);
 	if (!prefixes.length) return text;
 	const pattern = new RegExp(
 		`(?:${prefixes
@@ -627,6 +645,33 @@ export default class UnrouteModule extends Module<Client> {
 		const site = this.#callerLocation?.();
 		if (site) this.#reportSites.push(site);
 	}
+	// (taken when the module is made: a brand check no trap of a Proxy sees)
+	readonly #isError = (
+		this.client.global as { Error?: { isError?: (value: unknown) => boolean } }
+	).Error?.isError;
+	/**
+	 * A reported error's own message, with any route in it unrouted, as the
+	 * report's message is: the browser's error for a module that fails to
+	 * link names the module by its route ("The requested module '...' does
+	 * not provide an export named 'x'"). Only an error object itself is
+	 * touched (a Proxy of the page's is no error to the brand check, and is
+	 * not asked anything), and only a message that names a route changes.
+	 */
+	#unroutedError(error: unknown): unknown {
+		if (!this.#isError?.(error)) return error;
+		const message = Reflect.getOwnPropertyDescriptor(
+			error as object,
+			'message',
+		);
+		if (!message || typeof message.value !== 'string') return error;
+		const unrouted = unrouteText(this.client, message.value);
+		if (unrouted !== message.value)
+			Reflect.defineProperty(error as object, 'message', {
+				...message,
+				value: unrouted,
+			});
+		return error;
+	}
 	/** a URL of the inject's own (a bundle), which no page URL stands for */
 	#isInternal(name: unknown): boolean {
 		return (
@@ -710,7 +755,7 @@ export default class UnrouteModule extends Module<Client> {
 					: filename,
 			lineno: location ? location.lineno : native.lineno,
 			colno: location ? location.colno : native.colno,
-			error: native.error,
+			error: this.#unroutedError(native.error),
 		};
 	}
 	/**
