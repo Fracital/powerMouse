@@ -30,14 +30,15 @@ type Method = (this: unknown, ...args: unknown[]) => unknown;
  */
 export default class MediaTaintModule extends Module<DocumentClient> {
 	apply() {
-		const global = this.client.global;
-		const canvasTaint = this.client.getModule(CanvasTaintModule);
+		const client = this.client;
+		const global = client.global;
+		const canvasTaint = client.getModule(CanvasTaintModule);
 		const mediaProto = global.HTMLMediaElement?.prototype;
 		const trackProto = global.MediaStreamTrack?.prototype;
 		const streamProto = global.MediaStream?.prototype;
 		if (!canvasTaint || !mediaProto || !trackProto || !streamProto) return;
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const shared = this.client.canvasTaints;
+		const proxyModule = client.getModule(ProxyModule)!;
+		const shared = client.canvasTaints;
 		const taints = (source: unknown) => canvasTaint.taints(source);
 		const securityError = (message: string) =>
 			withStack(new global.DOMException(message, 'SecurityError'));

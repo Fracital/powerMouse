@@ -289,11 +289,11 @@ export default class ResourceTimingModule extends Module<Client> {
 		};
 	}
 	apply() {
-		const global = this.client.global as typeof globalThis &
-			Record<string, any>;
+		const client = this.client;
+		const global = client.global as typeof globalThis & Record<string, any>;
 		const Timing = global.PerformanceResourceTiming;
 		if (typeof Timing !== 'function') return;
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const proxyModule = client.getModule(ProxyModule)!;
 		const proto = Timing.prototype;
 
 		const getter = (name: string) =>
@@ -307,8 +307,7 @@ export default class ResourceTimingModule extends Module<Client> {
 			global.PerformanceServerTiming?.prototype ?? {},
 			'name',
 		)?.get;
-		const own = () =>
-			this.client.opaqueRequests ? 'null' : this.client.url.url.origin;
+		const own = () => (client.opaqueRequests ? 'null' : client.url.url.origin);
 
 		/**
 		 * per entry: whether it is another origin's, restricted, and its
@@ -331,7 +330,7 @@ export default class ResourceTimingModule extends Module<Client> {
 			let crossOrigin = false;
 			let protocol = '';
 			try {
-				const real = unrouteURL(this.client, raw) ?? raw;
+				const real = unrouteURL(client, raw) ?? raw;
 				const parsed = new URL(real);
 				protocol = parsed.protocol;
 				crossOrigin =
@@ -412,7 +411,7 @@ export default class ResourceTimingModule extends Module<Client> {
 				if (!its.length) keptNotes.delete(oldest);
 			}
 		};
-		this.client.onServiceWorkerMessage((data) => {
+		client.onServiceWorkerMessage((data) => {
 			if (typeof data !== 'object' || data === null) return;
 			const load = (data as Record<string, unknown>)[KEPT_LOAD];
 			if (Array.isArray(load) && load.length === 3)
@@ -521,7 +520,7 @@ export default class ResourceTimingModule extends Module<Client> {
 		};
 
 		if (nativeEntryName && nativeEntryType && nativeEntriesByType)
-			this.client.unreportedEntry = this.#unreported(delivery);
+			client.unreportedEntry = this.#unreported(delivery);
 
 		// A navigation that went through link routes (src/visited.ts) was
 		// redirected by the worker, once for each: the document's navigation

@@ -30,9 +30,9 @@ const URL_PARTS = [
  */
 export default class WorkerLocationModule extends Module<WorkerClient> {
 	apply() {
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const global = this.client.global as typeof globalThis &
-			Record<string, any>;
+		const client = this.client;
+		const proxyModule = client.getModule(ProxyModule)!;
+		const global = client.global as typeof globalThis & Record<string, any>;
 		const nativeLocation = global.location;
 		const nativeHref = Reflect.getOwnPropertyDescriptor(
 			global.WorkerLocation.prototype,
@@ -42,12 +42,12 @@ export default class WorkerLocationModule extends Module<WorkerClient> {
 		// the URL the worker should believe it runs at
 		const spoofed = (): URL => {
 			const real = String(Reflect.apply(nativeHref, nativeLocation, []));
-			const page = this.client.url.url;
+			const page = client.url.url;
 			if (real.startsWith('blob:')) {
 				const slash = real.lastIndexOf('/');
 				return new URL(`blob:${page.origin}${real.slice(slash)}`);
 			}
-			return new URL(this.client.url.toString());
+			return new URL(client.url.toString());
 		};
 
 		// rewritten code reads `location` through the access API, which hands
@@ -79,7 +79,7 @@ export default class WorkerLocationModule extends Module<WorkerClient> {
 					that === proxy ? spoofed().href : Reflect.apply(target, that, args),
 				),
 			});
-		setGlobalProxy(nativeLocation, 'location', proxy, this.client.names);
+		setGlobalProxy(nativeLocation, 'location', proxy, client.names);
 
 		// `origin` and `name` live on the global itself ([Global] interfaces
 		// put their attributes there) or on a prototype of the scope
@@ -107,7 +107,7 @@ export default class WorkerLocationModule extends Module<WorkerClient> {
 				...name,
 				get: proxyModule.wrapFunction(name.get, (target, that, args) => {
 					const value = Reflect.apply(target, that, args);
-					const suffix = `@${this.client.storageKey}`;
+					const suffix = `@${client.storageKey}`;
 					return typeof value === 'string' && value.endsWith(suffix)
 						? value.slice(0, -suffix.length)
 						: value;

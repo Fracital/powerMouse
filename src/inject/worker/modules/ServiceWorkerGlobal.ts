@@ -175,9 +175,10 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 		this.#evaluated?.(true);
 	}
 	emulate(info: EmulateInfo) {
-		const global = this.client.global as typeof globalThis &
+		const moduleClient = this.client;
+		const global = moduleClient.global as typeof globalThis &
 			Record<string, unknown>;
-		const proxy = this.client.getModule(ProxyModule)!;
+		const proxy = moduleClient.getModule(ProxyModule)!;
 		const nativeAddEventListener =
 			global.EventTarget.prototype.addEventListener;
 
@@ -746,16 +747,16 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 		// worker's are its registration's subscriptions (cookiechange)
 		const CookieStore = objects.fakeClass('CookieStore', global.EventTarget);
 		const cookieStore = objects.eventTarget(CookieStore);
-		const scriptURL = () => this.client.url.url;
+		const scriptURL = () => moduleClient.url.url;
 		const stripped = (url: URL) => `${url.origin}${url.pathname}`;
 		const jarRoute = (route: string) =>
-			`${new URL(String(global.location.href)).origin}${this.client.directory}cookies/${route}`;
+			`${new URL(String(global.location.href)).origin}${moduleClient.directory}cookies/${route}`;
 		const sender = `sw-${info.version.id}-${Math.random().toString(36).slice(2)}`;
 		// the registration's partition: its Partitioned cookies are that
 		// top-level site's, and a worker in one reads the jar as another
 		// site's (no SameSite=Lax or Strict cookie), as a document there does
 		const partitionContext = () => {
-			const partitionKey = partitionSite(this.client.partition);
+			const partitionKey = partitionSite(moduleClient.partition);
 			return partitionKey === null
 				? null
 				: { partitionKey, site: 'cross-site' as const };
@@ -771,7 +772,7 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 					: null,
 			host: () => scriptURL().hostname,
 			jar: async () => {
-				const response = await this.client.nativeFetch(jarRoute('get'), {
+				const response = await moduleClient.nativeFetch(jarRoute('get'), {
 					method: 'POST',
 					headers: { 'content-type': 'application/json' },
 					body: JSON.stringify([scriptURL().href, partitionContext()]),
@@ -792,13 +793,13 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 				url.searchParams.set('seq', String(seq));
 				url.searchParams.set('base', String(Math.min(...inflight)));
 				try {
-					const response = await this.client.nativeFetch(url.href, {
+					const response = await moduleClient.nativeFetch(url.href, {
 						method: 'POST',
 						headers: { 'content-type': 'application/json' },
 						body: JSON.stringify([
 							write,
 							scriptURL().href,
-							partitionSite(this.client.partition) ?? undefined,
+							partitionSite(moduleClient.partition) ?? undefined,
 						]),
 					});
 					if (!response.ok)
@@ -920,7 +921,7 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 			call: async (that, args) => {
 				const result = await rpc.call('navigate', {
 					id: clientStates.get(that)!.id,
-					url: new URL(String(args[0]), this.client.url.toString()).href,
+					url: new URL(String(args[0]), moduleClient.url.toString()).href,
 				});
 				if (result && 'name' in result) throw objects.error(result);
 				return result ? clientOf(result) : null;
@@ -1062,7 +1063,10 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 			(target, that, args) => {
 				if (args.length)
 					try {
-						args[0] = new URL(String(args[0]), this.client.url.toString()).href;
+						args[0] = new URL(
+							String(args[0]),
+							moduleClient.url.toString(),
+						).href;
 					} catch (error) {
 						// the browser's own TypeError
 					}

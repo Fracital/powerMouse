@@ -42,8 +42,9 @@ import DocumentClient, { addDocumentOpenListener } from '../Client';
 export default class AdblockModule extends Module<DocumentClient> {
 	#adopted = new WeakMap<object, Adopted>();
 	apply() {
-		if (!this.client.blocking) return;
-		const global = this.client.global;
+		const client = this.client;
+		if (!client.blocking) return;
+		const global = client.global;
 		if (typeof global.CSSStyleSheet !== 'function') return;
 		let natives: Natives;
 		try {
@@ -53,9 +54,9 @@ export default class AdblockModule extends Module<DocumentClient> {
 		}
 		this.#hideSheet(natives);
 		// the shell hands over what the lists say of this document
-		this.client.adblock = (page) => {
+		client.adblock = (page) => {
 			try {
-				start(this.client, natives, page, this.#adopted);
+				start(client, natives, page, this.#adopted);
 			} catch (error) {
 				console.warn('Stomp: the cosmetic rules could not be applied', error);
 			}

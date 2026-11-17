@@ -13,10 +13,10 @@ import type DocumentClient from '../Client';
  */
 export default class TrustedParseModule extends Module<DocumentClient> {
 	apply() {
-		if (!this.client.scriptFacts.ttActive) return;
-		const global = this.client.global as typeof globalThis;
-		const proxyModule = this.client.getModule(ProxyModule)!;
 		const client = this.client;
+		if (!client.scriptFacts.ttActive) return;
+		const global = client.global as typeof globalThis;
+		const proxyModule = client.getModule(ProxyModule)!;
 		const hook = (
 			owner: Record<string, unknown> | undefined,
 			name: string,

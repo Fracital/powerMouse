@@ -60,7 +60,8 @@ const CACHE_MS = 50;
 
 export default class MemoryModule extends Module<DocumentClient> {
 	apply() {
-		const global = this.client.global;
+		const moduleClient = this.client;
+		const global = moduleClient.global;
 		const performance = global.performance as
 			(Performance & { memory?: object }) | undefined;
 		const Performance = global.Performance as typeof globalThis.Performance &
@@ -88,13 +89,13 @@ export default class MemoryModule extends Module<DocumentClient> {
 		const usedGet = usedDescriptor?.get;
 		const totalGet = totalDescriptor?.get;
 		if (!usedGet || !totalGet) return;
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const proxyModule = moduleClient.getModule(ProxyModule)!;
 
 		// this document's site: its registrable domain and port, or a key of
 		// its own for an opaque origin (another site to everyone), kept while
 		// the document is
-		const opaqueKey = `opaque:${this.client.realOrigin()}:${Math.random()}`;
-		const siteOf = () => this.client.siteKey ?? opaqueKey;
+		const opaqueKey = `opaque:${moduleClient.realOrigin()}:${Math.random()}`;
+		const siteOf = () => moduleClient.siteKey ?? opaqueKey;
 
 		// the registry of the proxied top, which every proxied realm of the
 		// tab reaches same-origin (the host page may be another origin): one
@@ -106,8 +107,8 @@ export default class MemoryModule extends Module<DocumentClient> {
 		// from another site's.
 		const registry = ((): Map<string, SiteMemory> => {
 			try {
-				const top = (this.client.proxiedTop as Record<string, any>)[
-					this.client.names.client
+				const top = (moduleClient.proxiedTop as Record<string, any>)[
+					moduleClient.names.client
 				] as DocumentClient;
 				return ((top.siteMemory as Map<string, SiteMemory> | undefined) ??=
 					new Map());

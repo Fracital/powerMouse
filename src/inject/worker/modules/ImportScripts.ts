@@ -10,8 +10,9 @@ import WorkerClient from '../Client';
 
 export default class ImportScriptsModule extends Module<WorkerClient> {
 	apply() {
-		const global = this.client.global;
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const client = this.client;
+		const global = client.global;
+		const proxyModule = client.getModule(ProxyModule)!;
 
 		// (on the scope's prototype, where the browser has it)
 		ownerOf(global, 'importScripts').importScripts = proxyModule.wrapFunction(
@@ -19,7 +20,7 @@ export default class ImportScriptsModule extends Module<WorkerClient> {
 			(target, that, args) => {
 				// the browser parses every URL before it loads any: one that does
 				// not parse gets its own SyntaxError, and nothing loads
-				if (args.some((arg) => failsToParse(this.client, String(arg))))
+				if (args.some((arg) => failsToParse(client, String(arg))))
 					return Reflect.apply(target, that, args);
 
 				// a module worker's: the browser's TypeError, before anything is
@@ -27,29 +28,20 @@ export default class ImportScriptsModule extends Module<WorkerClient> {
 				Reflect.apply(target, that, []);
 				// an emulated service worker's imports are kept with its version,
 				// so it starts again without the network (docs/service-workers.md)
-				const version = this.client.serviceWorkerVersion;
+				const version = client.serviceWorkerVersion;
 				for (let i = 0; i < args.length; i++) {
 					const resource = new StompURL(
-						new URL(String(args[i]), this.client.url.toString()),
-						this.client.url,
+						new URL(String(args[i]), client.url.toString()),
+						client.url,
 					);
 					// one the worker's script-src refuses fails to load, as the
 					// browser fails it (requestVerdict reports it, twice for a
 					// report-only policy alone); those before it run
-					args[i] = this.client.requestVerdict(
-						'script-src-elem',
-						resource.url,
-						2,
-					)
+					args[i] = client.requestVerdict('script-src-elem', resource.url, 2)
 						? routeRefused(resource)
 						: version && /^https?:$/.test(resource.url.protocol)
 							? routeURL(`${SW_IMPORT_ROUTE}:${version}`, resource)
-							: routeJS(
-									resource,
-									this.client.url,
-									this.client.config,
-									'generic',
-								);
+							: routeJS(resource, client.url, client.config, 'generic');
 				}
 
 				try {
@@ -59,7 +51,7 @@ export default class ImportScriptsModule extends Module<WorkerClient> {
 					// the page's URL, as natively
 					const DOMError = global.DOMException;
 					if (!(error instanceof DOMError)) throw error;
-					const message = unrouteText(this.client, error.message);
+					const message = unrouteText(client, error.message);
 					if (message === error.message) throw error;
 					throw withStack(new DOMError(message, error.name));
 				}

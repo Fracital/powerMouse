@@ -486,6 +486,7 @@ export default class ContextModule extends Module<DocumentClient> {
 	 * ("null" included) is the browser's SyntaxError.
 	 */
 	targetAllows(args: unknown[], receiver: Context): boolean {
+		const moduleClient = this.client;
 		const second = args[1];
 		const requested =
 			typeof second === 'object' && second !== null
@@ -497,7 +498,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		let receiverClient: DocumentClient;
 		try {
 			const client = (receiver as Record<string, any>)[
-				this.client.names.client
+				moduleClient.names.client
 			] as DocumentClient | undefined;
 			if (!client) return true;
 			receiverClient = client;
@@ -505,17 +506,17 @@ export default class ContextModule extends Module<DocumentClient> {
 		} catch (error) {
 			return true;
 		}
-		if (target === '/' && this.client.origin === 'null')
-			return receiverClient === this.client;
+		if (target === '/' && moduleClient.origin === 'null')
+			return receiverClient === moduleClient;
 		const wanted =
 			target === '/'
-				? this.client.origin
+				? moduleClient.origin
 				: (() => {
 						try {
 							return new URL(target).origin;
 						} catch (error) {
 							throw withStack(
-								new this.client.global.DOMException(
+								new moduleClient.global.DOMException(
 									"Failed to execute 'postMessage' on 'Window': Invalid target origin '" +
 										target +
 										"' in a call to 'postMessage'.",
@@ -540,14 +541,15 @@ export default class ContextModule extends Module<DocumentClient> {
 	}
 	/** whether this document reaches `context`'s (same origin-domain, neither opaque) */
 	#reaches(context: unknown): boolean {
+		const client = this.client;
 		const other = this.#clientOf(context);
 		if (!other) return false;
-		if (other === this.client) return true;
+		if (other === client) return true;
 		try {
 			return (
-				!this.client.sandboxedOpaque &&
+				!client.sandboxedOpaque &&
 				!other.sandboxedOpaque &&
-				reachableClients(this.client, other)
+				reachableClients(client, other)
 			);
 		} catch (error) {
 			return false;
@@ -787,11 +789,12 @@ export default class ContextModule extends Module<DocumentClient> {
 	 * about:blank) the nearest routed one of its origin above it
 	 */
 	#voucher(): DocumentClient | null {
-		const routed = this.client.routedClient() as DocumentClient | null;
+		const client = this.client;
+		const routed = client.routedClient() as DocumentClient | null;
 		if (!routed) return null;
 		try {
-			return routed === this.client ||
-				routed.url.url.origin === this.client.url.url.origin
+			return routed === client ||
+				routed.url.url.origin === client.url.url.origin
 				? routed
 				: null;
 		} catch (error) {
@@ -830,20 +833,22 @@ export default class ContextModule extends Module<DocumentClient> {
 	 * framing page as their source.
 	 */
 	#postFromHere(receiver: Context, args: unknown[]) {
-		return this.client.callIn(
-			this.client.nativePostMessage ?? this.client.global.postMessage,
+		const client = this.client;
+		return client.callIn(
+			client.nativePostMessage ?? client.global.postMessage,
 			receiver,
 			this.postMessage(<any>args, receiver),
 		);
 	}
 	restrictContext(context: Context): RestrictedContext {
-		const global = this.client.global;
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const moduleClient = this.client;
+		const global = moduleClient.global;
+		const proxyModule = moduleClient.getModule(ProxyModule)!;
 		// a child that runs no STomp yet (an iframe still on its initial
 		// about:blank) is still that child, of the frame's origin: never the
 		// top, which a walk down the tree would visit again forever
 		const restrictChild = (child: Context) =>
-			isStomp(child, this.client.names.client)
+			isStomp(child, moduleClient.names.client)
 				? this.newRestricted(child)
 				: this.restrictOpaque(child);
 
@@ -879,7 +884,7 @@ export default class ContextModule extends Module<DocumentClient> {
 				// climb by `parent` compares what it reaches with this page's `top`
 				top: {
 					get: () =>
-						this.newRestricted(findTop(context, this.client.names.client)),
+						this.newRestricted(findTop(context, moduleClient.names.client)),
 				},
 				parent: {
 					get: () => {
@@ -887,7 +892,7 @@ export default class ContextModule extends Module<DocumentClient> {
 						try {
 							parent = (
 								(context as Record<string, any>)[
-									this.client.names.client
+									moduleClient.names.client
 								] as DocumentClient
 							).parent;
 						} catch (error) {
@@ -897,7 +902,7 @@ export default class ContextModule extends Module<DocumentClient> {
 						if (parent === null) return null;
 						// the top of the proxied world is its own parent
 						return this.newRestricted(
-							isStomp(parent, this.client.names.client) ? parent : context,
+							isStomp(parent, moduleClient.names.client) ? parent : context,
 						);
 					},
 				},
@@ -915,7 +920,7 @@ export default class ContextModule extends Module<DocumentClient> {
 						} catch (error) {
 							// a window being torn down
 						}
-						return opener && isStomp(opener, this.client.names.client)
+						return opener && isStomp(opener, moduleClient.names.client)
 							? this.newRestricted(opener)
 							: null;
 					},
@@ -1050,22 +1055,23 @@ export default class ContextModule extends Module<DocumentClient> {
 			: (this.#handle(context) ?? restricted);
 	}
 	#restrict(context: Context): RestrictedContext {
-		const global = this.client.global;
+		const moduleClient = this.client;
+		const global = moduleClient.global;
 		// another document's stand-in (a same-origin parent's getter handed
 		// it over): restricted already
 		if (!this.restrictedContexts.has(context) && this.#standIn(context))
 			return context;
 		// a cross-origin window (the host application in isolation mode) throws
 		// on the `in` check; it is never a STomp context
-		if (!isStomp(context, this.client.names.client))
+		if (!isStomp(context, moduleClient.names.client))
 			// the proxied world ends here (the host, or anything it opened):
 			// present ourselves as the top, as this page sees it (a frame of
 			// another origin gets its stand-in, as for `top`)
-			context = findTop(global, this.client.names.client);
+			context = findTop(global, moduleClient.names.client);
 
 		if (this.#holds().has(context)) return context;
 
-		const other = (context as any)[this.client.names.client] as DocumentClient;
+		const other = (context as any)[moduleClient.names.client] as DocumentClient;
 		// a window this realm holds a stand-in of: its own again once the two
 		// documents reach each other (both set document.domain); a stand-in
 		// the page kept from before stays one
@@ -1074,9 +1080,9 @@ export default class ContextModule extends Module<DocumentClient> {
 			try {
 				reach =
 					context !== global &&
-					!this.client.sandboxedOpaque &&
+					!moduleClient.sandboxedOpaque &&
 					!other.sandboxedOpaque &&
-					reachableClients(this.client, other);
+					reachableClients(moduleClient, other);
 			} catch (error) {
 				// a window being torn down
 			}
@@ -1092,10 +1098,10 @@ export default class ContextModule extends Module<DocumentClient> {
 		try {
 			opaque =
 				context !== global &&
-				(this.client.sandboxedOpaque ||
+				(moduleClient.sandboxedOpaque ||
 					(
 						(context as Record<string, any>)[
-							this.client.names.client
+							moduleClient.names.client
 						] as DocumentClient
 					).sandboxedOpaque);
 		} catch (error) {
@@ -1107,7 +1113,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		// (about 20 us) let the ad frames of a crazygames game page, about 200
 		// walking the frame tree, keep the renderer's main thread busy for
 		// good. An opaque URL (a data: document) has none, and reaches nothing.
-		if (!opaque && reachableClients(this.client, other)) {
+		if (!opaque && reachableClients(moduleClient, other)) {
 			this.#holds().add(context);
 			return context;
 		}
@@ -1119,19 +1125,19 @@ export default class ContextModule extends Module<DocumentClient> {
 			// ones this page's own reads return, or `t = t.parent` never
 			// reaches `top` (rubiconproject's usync in imgur's ad frames)
 			const standIns = (
-				(context as Record<string, any>)[this.client.names.client] as
+				(context as Record<string, any>)[moduleClient.names.client] as
 					DocumentClient | undefined
 			)?.standIns;
 			// (never a sandboxed document's: its stand-ins hold its sandbox's
 			// limits, which another document of the site does not share)
 			// (by what this document reaches others as: its origin, or the
 			// domain it set)
-			const domain = this.client.documentDomain;
+			const domain = moduleClient.documentDomain;
 			const key =
-				this.client.sandboxFlags === null
+				moduleClient.sandboxFlags === null
 					? domain !== null
-						? `${this.client.url.url.protocol}domain:${domain}`
-						: this.client.originKey
+						? `${moduleClient.url.url.protocol}domain:${domain}`
+						: moduleClient.originKey
 					: null;
 			let restricted = key === null ? undefined : standIns?.get(key)?.deref();
 			if (!restricted) {
@@ -1158,7 +1164,8 @@ export default class ContextModule extends Module<DocumentClient> {
 	 * named properties come before anything that could be defined.)
 	 */
 	exposeNames(proxyModule: ProxyModule) {
-		const global = this.client.global;
+		const moduleClient = this.client;
+		const global = moduleClient.global;
 		const exposed = new Set<string>();
 		const accessor = (
 			name: string,
@@ -1183,12 +1190,12 @@ export default class ContextModule extends Module<DocumentClient> {
 			};
 		};
 		const restrict = (value: unknown, container?: unknown) =>
-			this.client.restrictForeign
-				? this.client.restrictForeign(value, container)
+			moduleClient.restrictForeign
+				? moduleClient.restrictForeign(value, container)
 				: value;
 		const windowPrototype = global.Window.prototype;
 		const named = Reflect.getPrototypeOf(windowPrototype);
-		this.client.exposeChild = (name) => {
+		moduleClient.exposeChild = (name) => {
 			if (exposed.has(name)) return;
 			exposed.add(name);
 			// never ahead of a member the browser itself puts before the names
@@ -1252,11 +1259,11 @@ export default class ContextModule extends Module<DocumentClient> {
 		// this window's own name, told to its parent page (a proxied one)
 		const nameDescriptor = Reflect.getOwnPropertyDescriptor(global, 'name');
 		const tell = () => {
-			if (!this.client.nested || !nameDescriptor?.get) return;
+			if (!moduleClient.nested || !nameDescriptor?.get) return;
 			try {
 				const name = Reflect.apply(nameDescriptor.get, global, []) as string;
-				const parent = (this.client.parent as Record<string, any>)[
-					this.client.names.client
+				const parent = (moduleClient.parent as Record<string, any>)[
+					moduleClient.names.client
 				] as DocumentClient | undefined;
 				if (name) parent?.exposeChild?.(name);
 			} catch (error) {
@@ -1264,7 +1271,7 @@ export default class ContextModule extends Module<DocumentClient> {
 			}
 		};
 		tell();
-		if (this.client.nested && nameDescriptor?.set)
+		if (moduleClient.nested && nameDescriptor?.set)
 			Reflect.defineProperty(global, 'name', {
 				...nameDescriptor,
 				set: proxyModule.wrapFunction(
@@ -1277,8 +1284,9 @@ export default class ContextModule extends Module<DocumentClient> {
 			});
 	}
 	apply() {
-		const realm = this.client.global;
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const moduleClient = this.client;
+		const realm = moduleClient.global;
+		const proxyModule = moduleClient.getModule(ProxyModule)!;
 
 		const parentDescriptor = Reflect.getOwnPropertyDescriptor(realm, 'parent')!;
 
@@ -1304,10 +1312,10 @@ export default class ContextModule extends Module<DocumentClient> {
 		// a read off it; nothing for anything else
 		const windowClient = (container: unknown): DocumentClient | undefined => {
 			if (typeof container !== 'object' || container === null) return;
-			if (container === realm) return this.client;
+			if (container === realm) return moduleClient;
 			try {
 				const client = (container as Record<string, any>)[
-					this.client.names.client
+					moduleClient.names.client
 				] as DocumentClient | undefined;
 				return client?.global === container ? client : undefined;
 			} catch (error) {
@@ -1320,8 +1328,8 @@ export default class ContextModule extends Module<DocumentClient> {
 				// (by the browser's own `window` getter, which answers for a
 				// window of any origin: a Proxy of the page's is asked nothing
 				// and passes for none)
-				if (this.client.isWindowObject)
-					return this.client.isWindowObject(value);
+				if (moduleClient.isWindowObject)
+					return moduleClient.isWindowObject(value);
 				return (
 					typeof value === 'object' &&
 					value !== null &&
@@ -1338,9 +1346,9 @@ export default class ContextModule extends Module<DocumentClient> {
 		// is done to it through the access API (a message, a location set, a
 		// read or write of another origin's window) is done to the frame's
 		// window now, as this realm has it (freshContext.ts)
-		this.client.liveWindow = (target) => {
+		moduleClient.liveWindow = (target) => {
 			if (!this.#holds().has(target as Context)) return undefined;
-			const frame = frameOfHeld(this.client, target);
+			const frame = frameOfHeld(moduleClient, target);
 			if (!frame?.now || (frame.now as unknown) === target) return undefined;
 			return this.#restrict(frame.now as unknown as Context);
 		};
@@ -1349,22 +1357,25 @@ export default class ContextModule extends Module<DocumentClient> {
 		// (Sandbox's gated Location, the access API's `w.location = url`)
 		// (false for a URL that does not parse: the location's own setter or
 		// method throws the browser's error for it)
-		this.client.navigateWindow = (target, value, member) => {
+		moduleClient.navigateWindow = (target, value, member) => {
 			if (!isWindow(target) || !this.#clientOf(target)) return false;
 			const url = String(value);
-			if (failsToParse(this.client, url)) return false;
+			if (failsToParse(moduleClient, url)) return false;
 			this.#navigateOther(target, url, member);
 			return true;
 		};
 
-		this.client.resolveTop = (value, container) => {
+		moduleClient.resolveTop = (value, container) => {
 			if (!isWindow(value)) return value;
 			// a stand-in answers with its own `top` (the top of its world, as
 			// this page may see it), never with this page's top
 			if (this.#standIn(value)) return Reflect.get(value, 'top');
 
 			try {
-				if (value === this.client.top || !(this.client.names.client in value)) {
+				if (
+					value === moduleClient.top ||
+					!(moduleClient.names.client in value)
+				) {
 					// the top of the world the window it was read off is in: this
 					// page's own, unless that window is in another tab (a popup
 					// reads `opener.top`, which was the popup itself)
@@ -1372,10 +1383,10 @@ export default class ContextModule extends Module<DocumentClient> {
 						container !== undefined &&
 						container !== realm &&
 						isWindow(container) &&
-						this.client.names.client in container
+						moduleClient.names.client in container
 							? container
 							: realm;
-					return this.newRestricted(findTop(from, this.client.names.client));
+					return this.newRestricted(findTop(from, moduleClient.names.client));
 				}
 			} catch (error) {
 				// cross-origin top
@@ -1383,14 +1394,14 @@ export default class ContextModule extends Module<DocumentClient> {
 
 			// another proxied window's top is the top of *its* world, which is
 			// this one's for a frame of this page
-			return this.newRestricted(findTop(value, this.client.names.client));
+			return this.newRestricted(findTop(value, moduleClient.names.client));
 		};
 
 		// a window of another proxied origin that a computed read lands on
 		// (`frames[i]`, `window[name]`): the browser would hand the page a
 		// cross-origin WindowProxy, so the page gets the restricted stand-in
 		// (a same-origin one is returned as it is)
-		this.client.restrictForeign = (value, container) => {
+		moduleClient.restrictForeign = (value, container) => {
 			if (typeof value !== 'object' || value === null) return value;
 			try {
 				// Only a window is asked for the client. Every computed read
@@ -1399,7 +1410,7 @@ export default class ContextModule extends Module<DocumentClient> {
 				// name, which no page is told and every page of a controller
 				// shares
 				if (!isWindow(value)) return value;
-				if (!(this.client.names.client in value)) {
+				if (!(moduleClient.names.client in value)) {
 					// a child window that runs nothing yet (an iframe's initial
 					// about:blank), read off its window by index or by name: injected
 					// first, as reading its contentWindow does. Its own natives (its
@@ -1413,7 +1424,7 @@ export default class ContextModule extends Module<DocumentClient> {
 					)
 						return value;
 					owner.injectChild?.(value as Context);
-					if (!(this.client.names.client in value)) return value;
+					if (!(moduleClient.names.client in value)) return value;
 				} else if ((value as { window?: unknown }).window !== value)
 					return value;
 			} catch (error) {
@@ -1431,7 +1442,7 @@ export default class ContextModule extends Module<DocumentClient> {
 				if (element)
 					return this.pending(
 						value as Context,
-						frameDestination(this.client, element as object),
+						frameDestination(moduleClient, element as object),
 					);
 			}
 			return this.newRestricted(value as Context);
@@ -1473,7 +1484,7 @@ export default class ContextModule extends Module<DocumentClient> {
 
 					const origin = Reflect.apply(target, that, args);
 					if (origin !== '' && fromBroadcastChannel(that))
-						return this.client.origin;
+						return moduleClient.origin;
 					return origin;
 				},
 			),
@@ -1535,7 +1546,7 @@ export default class ContextModule extends Module<DocumentClient> {
 						// (`dispatchEvent(new Event('message'))`): it carries no data
 						return;
 					}
-					if (!isMessageData(data, this.client.names.globalName)) return;
+					if (!isMessageData(data, moduleClient.names.globalName)) return;
 
 					messageData.set(event, data);
 
@@ -1551,12 +1562,12 @@ export default class ContextModule extends Module<DocumentClient> {
 		// another context posting to this window calls this native from its
 		// own realm (access API `post`), so it is the incumbent the browser
 		// reports as the source
-		this.client.nativePostMessage = realm.postMessage;
+		moduleClient.nativePostMessage = realm.postMessage;
 		// `x.postMessage()` on a stand-in this page holds: posted from this
 		// realm, since the browser names the realm that calls postMessage as
 		// the event's source, and the stand-in may be one another document of
 		// this origin made (see newRestricted)
-		this.client.postToRestricted = (target, args) => {
+		moduleClient.postToRestricted = (target, args) => {
 			const context = this.restrictedContexts.get(target as Context);
 			if (!context) return false;
 			catchRequiredArguments(args.length, 1, 'Window', 'postMessage', realm);
@@ -1564,9 +1575,9 @@ export default class ContextModule extends Module<DocumentClient> {
 			if (this.targetAllows(args, context)) this.#postFromHere(context, args);
 			return true;
 		};
-		this.client.postToWindow = (target, args) => {
+		moduleClient.postToWindow = (target, args) => {
 			const receiver = (target as Record<string, any>)[
-				this.client.names.client
+				moduleClient.names.client
 			] as Client;
 			this.#cloneCheck(args as unknown[]);
 			if (!this.targetAllows(args as unknown[], target as Context)) return;
@@ -1575,7 +1586,7 @@ export default class ContextModule extends Module<DocumentClient> {
 				target as Context,
 			) as PostMessageArgs2;
 			// from this window's realm, whatever bundle this client is (callIn)
-			return this.client.callIn(receiver.nativePostMessage!, target, [
+			return moduleClient.callIn(receiver.nativePostMessage!, target, [
 				data,
 				options,
 			]);
@@ -1621,21 +1632,23 @@ export default class ContextModule extends Module<DocumentClient> {
 						(this.restrictedContexts.has(receiver as Context) ||
 							(receiver as Context).window === receiver);
 					if (window)
-						stomp = (receiver as Record<string, any>)[this.client.names.client];
+						stomp = (receiver as Record<string, any>)[
+							moduleClient.names.client
+						];
 				} catch (error) {
 					// a window of another origin: the browser's own call
 				}
 				if (!window) throw new realm.TypeError('Illegal invocation');
 				catchRequiredArguments(args.length, 1, 'Window', 'postMessage', realm);
 				if (stomp?.nativePostMessage)
-					return this.client.postToWindow!(receiver as object, args);
-				if (this.client.postToRestricted!(receiver, args)) return undefined;
+					return moduleClient.postToWindow!(receiver as object, args);
+				if (moduleClient.postToRestricted!(receiver, args)) return undefined;
 				return Reflect.apply(target, receiver, args);
 			});
 		realm.postMessage = poster(realm as Context);
-		this.client.hookedPostMessage = realm.postMessage;
+		moduleClient.hookedPostMessage = realm.postMessage;
 		const posters = new WeakMap<object, unknown>();
-		this.client.postMessageOf = (target) => {
+		moduleClient.postMessageOf = (target) => {
 			if (target === realm) return undefined;
 			try {
 				if (
@@ -1645,7 +1658,7 @@ export default class ContextModule extends Module<DocumentClient> {
 				)
 					return undefined;
 				const receiver = (target as Record<string, any>)[
-					this.client.names.client
+					moduleClient.names.client
 				] as Client | undefined;
 				if (
 					!receiver?.nativePostMessage ||
@@ -1669,16 +1682,16 @@ export default class ContextModule extends Module<DocumentClient> {
 		// postMessage is the hook, and a write or a delete of the name is the
 		// window's. (The helpers the body's code calls are reached by no name
 		// a scope answers: src/helperNames.ts accessExpression.)
-		this.client.postScope = (target) => {
-			if (!this.client.postMessageOf!(target)) return undefined;
+		moduleClient.postScope = (target) => {
+			if (!moduleClient.postMessageOf!(target)) return undefined;
 			let scope = scopes.get(target as object);
 			if (!scope) {
 				scope = new Proxy(Object.create(null) as object, {
 					has: (_, key) =>
-						key === 'postMessage' && !!this.client.postMessageOf!(target),
+						key === 'postMessage' && !!moduleClient.postMessageOf!(target),
 					get: (_, key) =>
 						key === 'postMessage'
-							? this.client.postMessageOf!(target)
+							? moduleClient.postMessageOf!(target)
 							: undefined,
 					set: (_, key, value) => Reflect.set(target as object, key, value),
 					deleteProperty: (_, key) =>

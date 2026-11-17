@@ -20,7 +20,8 @@ import HistoryModule from './History';
  */
 export default class NavigateModule extends Module<DocumentClient> {
 	apply() {
-		const global = this.client.global;
+		const moduleClient = this.client;
+		const global = moduleClient.global;
 
 		// this document's service worker client id, from the service worker
 		// itself (a page cannot read it); the host attributes requests with it
@@ -34,7 +35,7 @@ export default class NavigateModule extends Module<DocumentClient> {
 		};
 		// about: and blob: documents have no proxy-origin URL to ask
 		if (/^https?:$/.test(global.location.protocol))
-			fetch(`${global.location.origin}${this.client.directory}whoami`)
+			fetch(`${global.location.origin}${moduleClient.directory}whoami`)
 				.then((response) => response.json())
 				.then(learned)
 				.catch(() => {});
@@ -44,12 +45,12 @@ export default class NavigateModule extends Module<DocumentClient> {
 		// a document that loads nothing). One on about:blank is no client:
 		// its loads are made by the page that controls it
 		else if (global.location.href === 'about:srcdoc')
-			this.client.onServiceWorkerMessage((data) => {
+			moduleClient.onServiceWorkerMessage((data) => {
 				if (typeof data === 'object' && data !== null)
 					learned((data as Record<string, unknown>)[CLIENT_ID]);
 			});
 
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const proxyModule = moduleClient.getModule(ProxyModule)!;
 		/**
 		 * `moved` once per turn after this document's history moved: it
 		 * loaded, pushState or replaceState, popstate, hashchange (and
@@ -118,7 +119,7 @@ export default class NavigateModule extends Module<DocumentClient> {
 		let input = false;
 		const activated = () => (start ? input : sticky());
 		const token = `${Date.now().toString(36)}.${Math.random().toString(36).slice(2)}`;
-		this.client.historyActivation = { start, activated, token };
+		moduleClient.historyActivation = { start, activated, token };
 		const onInput = (event: Event) => {
 			if (
 				event.type === 'click'
@@ -143,7 +144,7 @@ export default class NavigateModule extends Module<DocumentClient> {
 			// a message from a document that is navigating can wait behind the
 			// next document's loading for longer than the host can
 			try {
-				const element = this.client.nativeFrameElement() as unknown as Record<
+				const element = moduleClient.nativeFrameElement() as unknown as Record<
 					string,
 					unknown
 				> | null;
@@ -155,7 +156,7 @@ export default class NavigateModule extends Module<DocumentClient> {
 			} catch (error) {
 				// the host's: it reads the message instead
 			}
-			this.client.postToHost({ [ACTIVATED]: token });
+			moduleClient.postToHost({ [ACTIVATED]: token });
 		};
 
 		// document.open() drops window listeners (and runs before the real
@@ -180,17 +181,17 @@ export default class NavigateModule extends Module<DocumentClient> {
 		// takes first), and nothing else, where the frame is being its page's
 		// to say. So no observer over the document, no title or icon read and
 		// no message per change, in every frame of every page
-		if (this.client.nested) {
-			tell = () => this.client.postToHost({ [CLIENT_ID]: client });
+		if (moduleClient.nested) {
+			tell = () => moduleClient.postToHost({ [CLIENT_ID]: client });
 			watchHistory(() =>
-				this.client.postToHost({ [FRAME_MOVED]: client ?? null }),
+				moduleClient.postToHost({ [FRAME_MOVED]: client ?? null }),
 			);
 			return;
 		}
 
 		// the frame's own history, all of it, whatever the page does to the
 		// API (the page's view of it stops at its own origin)
-		const history = this.client.getModule(HistoryModule)!;
+		const history = moduleClient.getModule(HistoryModule)!;
 
 		// the icon as the page declared it: the attribute the page wrote
 		// (getAttribute hands back the original), resolved against the real URL
@@ -203,7 +204,7 @@ export default class NavigateModule extends Module<DocumentClient> {
 				if (!href) continue;
 				let resolved: string;
 				try {
-					resolved = new URL(href, this.client.baseURL.toString()).href;
+					resolved = new URL(href, moduleClient.baseURL.toString()).href;
 				} catch (error) {
 					continue;
 				}
@@ -216,7 +217,7 @@ export default class NavigateModule extends Module<DocumentClient> {
 		let last = '';
 		const post = () => {
 			const info: NavigateInfo = {
-				url: this.client.url.toString(),
+				url: moduleClient.url.toString(),
 				title: global.document.title,
 				canGoBack: history.canStep(-1),
 				canGoForward: history.canStep(1),
@@ -226,7 +227,7 @@ export default class NavigateModule extends Module<DocumentClient> {
 			const key = JSON.stringify(info);
 			if (key === last) return;
 			last = key;
-			this.client.postToHost({ [NAVIGATE]: info });
+			moduleClient.postToHost({ [NAVIGATE]: info });
 		};
 		tell = post;
 

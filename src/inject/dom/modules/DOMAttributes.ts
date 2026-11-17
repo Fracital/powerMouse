@@ -188,7 +188,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		return nativeElement.getAttribute.call(this.#scratch, 'style') ?? '';
 	}
 	apply() {
-		const realm = this.client.global;
+		const moduleClient = this.client;
+		const realm = moduleClient.global;
 		// before the BlobDocuments module wraps it (it applies after this one)
 		const NativeBlob = realm.Blob;
 
@@ -205,8 +206,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// (an about:srcdoc document has its parent's worker, so one under such
 		// a document has none either)
 		const uncontrolled = () =>
-			!this.client.controlled &&
-			(this.client.opened ||
+			!moduleClient.controlled &&
+			(moduleClient.opened ||
 				realm.location.href === 'about:blank' ||
 				realm.location.href === 'about:srcdoc' ||
 				realm.location.protocol === 'blob:');
@@ -214,7 +215,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// the proxy origin from the base URL: an about:blank document's own
 		// origin reads "null"
 		const isRoute = (value: string) => {
-			const prefix = scopePrefix(this.client);
+			const prefix = scopePrefix(moduleClient);
 			try {
 				return new URL(value, prefix).href.startsWith(prefix);
 			} catch (error) {
@@ -296,10 +297,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					).every((loaded) => loaded);
 					return true;
 				},
-				`${new URL(scopePrefix(this.client)).origin}${this.client.directory}${SEALER_ROUTE}`,
+				`${new URL(scopePrefix(moduleClient)).origin}${moduleClient.directory}${SEALER_ROUTE}`,
 				{
-					worker: this.client.browserRefuses('worker-src', 'blob:'),
-					fetch: this.client.browserRefuses('connect-src', 'blob:'),
+					worker: moduleClient.browserRefuses('worker-src', 'blob:'),
+					fetch: moduleClient.browserRefuses('connect-src', 'blob:'),
 				},
 			);
 			if (dead !== null) {
@@ -360,7 +361,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// a route inside a url(): the worker's rewritten CSS writes them whole,
 		// then the marker that keeps the page's token
 		const routePattern = () => {
-			const escaped = scopePrefix(this.client).replace(
+			const escaped = scopePrefix(moduleClient).replace(
 				/[.*+?^${}()|[\]\\]/g,
 				'\\$&',
 			);
@@ -433,7 +434,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						target,
 						await copyOf(
 							target,
-							unrouteURL(this.client, target) ?? target,
+							unrouteURL(moduleClient, target) ?? target,
 							state,
 							depth,
 							kinds.get(target) ?? null,
@@ -617,7 +618,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		const cssLoadKind = (text: string, at: number, target: string): string => {
 			try {
 				const kind = new URL(target).pathname
-					.slice(this.client.directory.length)
+					.slice(moduleClient.directory.length)
 					.split('/')[0];
 				if (kind === 'css') return 'style no-cors';
 			} catch (error) {
@@ -641,10 +642,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			const hash = routed.indexOf('#');
 			const fragment = hash === -1 ? '' : routed.slice(hash);
 			const response = await loadFetch(
-				this.client,
+				moduleClient,
 				new URL(
 					hash === -1 ? routed : routed.slice(0, hash),
-					scopePrefix(this.client),
+					scopePrefix(moduleClient),
 				).href,
 				// the copy stands for the element's load, never a page's read
 				// (a load the worker takes no metadata from is `copy`)
@@ -696,14 +697,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			state: Copy,
 			load: string | null = null,
 		): string | null => {
-			if (!this.client.workerTransport) return null;
+			if (!moduleClient.workerTransport) return null;
 			// the bridge of the client the grant is announced through (it may
 			// be of another bundle): its beacon is the request the worker sees
 			const from = loadSource();
 			const sync = (from?.client as DocumentClient | undefined)?.syncBridge;
 			if (!from || !sync) return null;
 			try {
-				const target = new URL(routed, scopePrefix(this.client)).href;
+				const target = new URL(routed, scopePrefix(moduleClient)).href;
 				const token = from.announce(target, load ?? 'copy');
 				if (token === null) return null;
 				const response = sync.fetch(
@@ -820,7 +821,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					return original.href;
 				}
 			}
-			return markIntegrity(routed, metadata, this.client.directory);
+			return markIntegrity(routed, metadata, moduleClient.directory);
 		};
 		/**
 		 * Elements the browser is given the page's integrity for (a data: URL
@@ -933,7 +934,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					routed,
 					page: new URL(
 						element.getAttributeOG(attribute) ?? routed,
-						this.client.baseURL.toString(),
+						moduleClient.baseURL.toString(),
 					).href,
 				},
 			];
@@ -960,7 +961,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			// markup the page writes: the element here is the clone the markup
 			// is rewritten on; the parser makes the real one, which gets its copy
 			// after the write (writtenLoads). A script is copied at once below.
-			if (this.client.writing && element.localName !== 'script') {
+			if (moduleClient.writing && element.localName !== 'script') {
 				states.delete(attribute);
 				element.removeAttribute(attribute);
 				return;
@@ -970,7 +971,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			if (
 				(attribute === 'src' || element.namespaceURI === SVG_NAMESPACE) &&
 				element.localName === 'script' &&
-				this.client.writing &&
+				moduleClient.writing &&
 				targets.length === 1
 			) {
 				const url = syncCopyOf(
@@ -1090,7 +1091,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			// subresources reaching the worker); its requests refer as a data:
 			// document does, with nothing. Without a worker to register with,
 			// the shell is a blob as before (subresources then miss the worker)
-			const inline = this.client.inlineDocument(
+			const inline = moduleClient.inlineDocument(
 				data,
 				resource.url.href,
 				'data:,',
@@ -1101,23 +1102,23 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					modifyHTML(
 						data,
 						resource,
-						this.client.config,
+						moduleClient.config,
 						true,
 						undefined,
-						this.client.scriptNonce,
+						moduleClient.scriptNonce,
 					),
 				],
 				{ type: 'text/html' },
 			);
 			return proxyBlobURL(realm.URL.createObjectURL(blob));
 		};
-		const domHooksModule = this.client.getModule(DOMHooksModule)!;
+		const domHooksModule = moduleClient.getModule(DOMHooksModule)!;
 		// whether a document in this frame may run scripts: its own sandbox (as
 		// the page wrote it, in the marker) and this document's
 		const frameRunsScripts = (element: CustomElement) => {
 			const sandbox = element.getAttributeOG('sandbox');
 			return (
-				this.client.allows('allow-scripts') &&
+				moduleClient.allows('allow-scripts') &&
 				(sandbox === null || sandboxTokens(sandbox).has('allow-scripts'))
 			);
 		};
@@ -1188,7 +1189,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// the page's own script-src-attr refuses this inline handler: it
 					// compiles nothing (no browser-facing attribute) and the inject
 					// reports it (src/csp.ts)
-					if (this.client.refuseHandler(element, source)) {
+					if (moduleClient.refuseHandler(element, source)) {
 						// clear the live handler (the page's own, which the page's
 						// setAttribute left on the element) so clicking runs nothing
 						element.removeAttribute(name);
@@ -1204,8 +1205,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						handlerMark(key) +
 							modifyJS(
 								source,
-								this.client.baseURL,
-								this.client.config,
+								moduleClient.baseURL,
+								moduleClient.config,
 								'generic',
 							),
 					);
@@ -1228,8 +1229,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			element.setAttributeOG(attribute, value);
 			const routed = routeBinary(
 				new StompURL(
-					new URL(value, this.client.baseURL.toString()),
-					this.client.baseURL,
+					new URL(value, moduleClient.baseURL.toString()),
+					moduleClient.baseURL,
 				),
 			);
 			if (SVG_LOADS.includes(element.localName.toLowerCase()))
@@ -1271,11 +1272,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			element.setAttributeOG(attribute, value);
 			const routed = routeJS(
 				new StompURL(
-					new URL(value, this.client.baseURL.toString()),
-					this.client.baseURL,
+					new URL(value, moduleClient.baseURL.toString()),
+					moduleClient.baseURL,
 				),
-				this.client.baseURL,
-				this.client.config,
+				moduleClient.baseURL,
+				moduleClient.config,
 				'generic',
 			);
 			// an HTML script's href loads nothing
@@ -1293,7 +1294,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// animVal read the attribute the page wrote (the hooked getAttribute),
 		// setting baseVal writes through the hooked setAttribute, so it routes
 		{
-			const proxyModule = this.client.getModule(ProxyModule)!;
+			const proxyModule = moduleClient.getModule(ProxyModule)!;
 			const global = realm as unknown as Record<string, any>;
 			const owners = new WeakMap<object, Element>();
 			for (const name of SVG_HREF_INTERFACES) {
@@ -1365,7 +1366,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			if (!element.hasAttribute(attribute)) return;
 			const value = element.getAttribute(attribute)!;
 			if (!selfTargets.includes(value.toLowerCase())) return;
-			if (this.client.sandboxFlags !== null) return;
+			if (moduleClient.sandboxFlags !== null) return;
 			element.setAttributeOG(attribute, value);
 			element.setAttribute(attribute, '_self');
 		};
@@ -1400,11 +1401,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						'srcdoc',
 						modifyHTML(
 							source,
-							this.client.baseURL,
-							this.client.config,
+							moduleClient.baseURL,
+							moduleClient.config,
 							false,
 							undefined,
-							this.client.scriptNonce,
+							moduleClient.scriptNonce,
 						),
 					);
 				}
@@ -1429,13 +1430,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				element.setAttributeOG(attribute, element.getAttribute(attribute)!);
 				element.setAttribute(
 					attribute,
-					this.client.linkRoute(
+					moduleClient.linkRoute(
 						new StompURL(
 							new URL(
 								element.getAttribute(attribute)!,
-								this.client.baseURL.toString(),
+								moduleClient.baseURL.toString(),
 							),
-							this.client.baseURL,
+							moduleClient.baseURL,
 						),
 					),
 				);
@@ -1475,12 +1476,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				if (trimmed === '' || trimmed.startsWith('#')) return value;
 				try {
 					const url = new StompURL(
-						new URL(trimmed, this.client.baseURL.toString()),
-						this.client.baseURL,
+						new URL(trimmed, moduleClient.baseURL.toString()),
+						moduleClient.baseURL,
 					);
 					// (a link's route rewrites a javascript: URL's code)
 					if (link === true || url.url.protocol === 'javascript:')
-						return this.client.linkRoute(url);
+						return moduleClient.linkRoute(url);
 					return link === false ? routeBinary(url) : value;
 				} catch (error) {
 					// no URL: the browser makes nothing of it either
@@ -1524,7 +1525,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('href') !== '' &&
 						new URL(
 							(element.getAttributeOG('href') ?? element.getAttribute('href'))!,
-							responseURLOf(element) ?? this.client.baseURL.toString(),
+							responseURLOf(element) ?? moduleClient.baseURL.toString(),
 						).toString(),
 				],
 				// an image map's areas are links too
@@ -1536,7 +1537,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('href') !== '' &&
 						new URL(
 							(element.getAttributeOG('href') ?? element.getAttribute('href'))!,
-							responseURLOf(element) ?? this.client.baseURL.toString(),
+							responseURLOf(element) ?? moduleClient.baseURL.toString(),
 						).toString(),
 				],
 			],
@@ -1553,9 +1554,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				// a held script (holdScript) keeps its page's src through a change
 				// of its type or integrity (its route, integrity and all, is made
 				// as it connects); a src set or removed again replaces it
-				if (this.client.scriptsHeld && this.client.scriptHeld(element)) {
+				if (moduleClient.scriptsHeld && moduleClient.scriptHeld(element)) {
 					if (attribute === 'type' || attribute === 'integrity') return;
-					this.client.releaseScript(element);
+					moduleClient.releaseScript(element);
 				}
 
 				if (
@@ -1566,7 +1567,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.setAttributeOG('src', element.getAttribute('src')!);
 					const url = new URL(
 						element.getAttribute('src')!,
-						this.client.baseURL.toString(),
+						moduleClient.baseURL.toString(),
 					);
 					// the page's own script-src refuses this external script: it
 					// does not load, the browser fires 'error', and the inject
@@ -1577,34 +1578,34 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// judges it (with the nonce it has then: DOMContentHooks)
 					if (
 						!element.isConnected &&
-						this.client.scriptAwaitsNonce(element, url)
+						moduleClient.scriptAwaitsNonce(element, url)
 					) {
 						const src = element.getAttribute('src')!;
 						element.removeAttribute('src');
 						element.removeAttributeOG('src');
-						this.client.holdScript(element, url, src);
+						moduleClient.holdScript(element, url, src);
 						return;
 					}
-					if (this.client.refuseExternalScript(element, url, false)) {
+					if (moduleClient.refuseExternalScript(element, url, false)) {
 						// clear the live src (the page's own, which the browser would
 						// otherwise load) so nothing loads; the browser fires 'error'
 						element.removeAttribute('src');
 						element.removeAttributeOG('src');
-						this.client.dispatchLoadError(element);
+						moduleClient.dispatchLoadError(element);
 						return;
 					}
 					// let through by its host or its integrity where the page's
 					// policy says so and the browser's copy would not (src/csp.ts)
-					this.client.giveCodeNonce(element, url, null, false);
+					moduleClient.giveCodeNonce(element, url, null, false);
 					placeLoad(
 						element,
 						'src',
 						withIntegrity(
 							element,
 							routeJS(
-								new StompURL(url, this.client.baseURL),
-								this.client.baseURL,
-								this.client.config,
+								new StompURL(url, moduleClient.baseURL),
+								moduleClient.baseURL,
+								moduleClient.config,
 								scriptType(element),
 							),
 							url,
@@ -1627,7 +1628,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							this.client.baseURL.toString(),
+							moduleClient.baseURL.toString(),
 						).toString(),
 				],
 			],
@@ -1686,9 +1687,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					const resource = new StompURL(
 						new URL(
 							element.getAttribute('href')!,
-							this.client.baseURL.toString(),
+							moduleClient.baseURL.toString(),
 						),
-						this.client.baseURL,
+						moduleClient.baseURL,
 					);
 					element.setAttributeOG('href', element.getAttribute('href')!);
 					const stylesheet =
@@ -1699,24 +1700,24 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// does not load, the browser fires 'error', the inject reports it
 					else if (
 						stylesheet &&
-						this.client.refuseExternalStyle(
+						moduleClient.refuseExternalStyle(
 							element,
 							new URL(
 								element.getAttribute('href')!,
-								this.client.baseURL.toString(),
+								moduleClient.baseURL.toString(),
 							),
 						)
 					) {
 						element.removeAttribute('href');
 						element.removeAttributeOG('href');
-						this.client.dispatchLoadError(element);
+						moduleClient.dispatchLoadError(element);
 					} else if (stylesheet)
 						placeLoad(
 							element,
 							'href',
 							withIntegrity(
 								element,
-								routeCSS(resource, this.client.baseURL),
+								routeCSS(resource, moduleClient.baseURL),
 								resource.url,
 							),
 						);
@@ -1728,8 +1729,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								element,
 								routeJS(
 									resource,
-									this.client.baseURL,
-									this.client.config,
+									moduleClient.baseURL,
+									moduleClient.config,
 									'genericModule',
 								),
 							),
@@ -1745,8 +1746,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								element,
 								routeJS(
 									resource,
-									this.client.baseURL,
-									this.client.config,
+									moduleClient.baseURL,
+									moduleClient.config,
 									'generic',
 								),
 							),
@@ -1771,7 +1772,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('href') !== '' &&
 						new URL(
 							(element.getAttributeOG('href') ?? element.getAttribute('href'))!,
-							responseURLOf(element) ?? this.client.baseURL.toString(),
+							responseURLOf(element) ?? moduleClient.baseURL.toString(),
 						).toString(),
 				],
 				[realm.HTMLLinkElement, 'rel', () => false],
@@ -1791,13 +1792,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			if (!shown) return undefined;
 			try {
 				const client = (shown as unknown as Record<string, unknown>)[
-					this.client.names.client
+					moduleClient.names.client
 				] as DocumentClient | undefined;
 				if (client?.isDOM) return client.originKey ?? 'null';
 				// its initial about:blank, which nothing injected yet: of this
 				// document's origin
 				if (shown.location.href === 'about:blank')
-					return this.client.originKey ?? 'null';
+					return moduleClient.originKey ?? 'null';
 			} catch (error) {
 				// a document of another real origin
 			}
@@ -1817,9 +1818,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					const resource = new StompURL(
 						new URL(
 							element.getAttribute('src')!,
-							this.client.baseURL.toString(),
+							moduleClient.baseURL.toString(),
 						),
-						this.client.baseURL,
+						moduleClient.baseURL,
 					);
 					// a javascript: URL runs in the frame, which a sandbox without
 					// allow-scripts forbids: natively nothing happens, so the frame
@@ -1834,19 +1835,19 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// the page's frame-src (src/csp.ts): a frame its policy
 					// refuses is sent where the browser's copy of the policy
 					// refuses it, and the browser refuses and reports it as natively
-					const refused = this.client.loadRefusal(
+					const refused = moduleClient.loadRefusal(
 						'frame-src',
 						resource.url,
 						true,
 					);
 					if (refused !== null) {
-						this.client.opaqueFrames.delete(element);
+						moduleClient.opaqueFrames.delete(element);
 						element.setAttribute('src', refused);
 						return;
 					}
 					const opaque = opaqueDocument(resource);
-					if (opaque) this.client.opaqueFrames.add(element);
-					else this.client.opaqueFrames.delete(element);
+					if (opaque) moduleClient.opaqueFrames.add(element);
+					else moduleClient.opaqueFrames.delete(element);
 					// the frame navigates for this document, under its activation,
 					// with its element's allow attribute as its container policy
 					// (the worker's client hints and permissions policy for the
@@ -1856,7 +1857,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// later hops and the document it ends in: this document's
 					// frame-src, and the frame's real ancestors (src/csp.ts)
 					if (!opaque)
-						this.client
+						moduleClient
 							.getModule(NavigationHintModule)
 							?.hint(
 								resource.url.href,
@@ -1864,10 +1865,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 									? containerPolicy(element)
 									: undefined,
 								{
-									policies: this.client.hopPolicies('frame-src') ?? [],
+									policies: moduleClient.hopPolicies('frame-src') ?? [],
 									ancestors: [
-										this.client.origin,
-										...this.client.ancestorOrigins(),
+										moduleClient.origin,
+										...moduleClient.ancestorOrigins(),
 									],
 								},
 							);
@@ -1875,21 +1876,21 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						opaque ??
 						routeHTML(
 							resource,
-							this.client.baseURL,
-							this.client.config,
+							moduleClient.baseURL,
+							moduleClient.config,
 							false,
 							// with the host's page cross-origin isolated, the
 							// route says whom the frame's `allow` lets be, and
 							// whether the frame is a credentialless one (the
 							// attribute itself is kept from the browser, below)
-							this.client.hostIsolated
-								? this.client.childRouteFor(
+							moduleClient.hostIsolated
+								? moduleClient.childRouteFor(
 										element.getAttribute('allow'),
 										resource.url.origin,
 										element.hasAttributeOG('credentialless') ||
 											element.hasAttribute('credentialless'),
 									)
-								: this.client.childRoute,
+								: moduleClient.childRoute,
 						);
 					// a frame that shows a document of another origin than the
 					// one it is sent to gets a fresh browsing context first
@@ -1897,16 +1898,16 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// frame was of its origin must not show the next one. Its
 					// initial about:blank is this document's origin, and fires no
 					// navigate event of its own (IFrame)
-					forgetDestination(this.client, element);
+					forgetDestination(moduleClient, element);
 					const shown = frameOrigin(element);
 					if (
 						shown !== undefined &&
 						shown !== (opaque ? 'null' : resource.url.origin) &&
 						resource.url.protocol !== 'javascript:' &&
 						resource.url.href !== 'about:blank' &&
-						this.client.freshFrame
+						moduleClient.freshFrame
 					) {
-						if (this.client.freshFrame(element, routed)) return;
+						if (moduleClient.freshFrame(element, routed)) return;
 					}
 					// the document the frame shows now sees the navigation (its
 					// navigate event): this one judged it
@@ -1916,7 +1917,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								string,
 								unknown
 							> | null
-						)?.[this.client.names.client] as DocumentClient | undefined;
+						)?.[moduleClient.names.client] as DocumentClient | undefined;
 						const hints = shown?.getModule?.(NavigationHintModule);
 						if (hints) hints.judged = resource.url.href.replace(/#.*$/s, '');
 					} catch (error) {
@@ -1929,7 +1930,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['IFRAME', 'src'],
 				['FRAME', 'src'],
 				// what the route says of the frame (an isolated host only)
-				...(this.client.hostIsolated
+				...(moduleClient.hostIsolated
 					? ([
 							['IFRAME', 'allow'],
 							['IFRAME', 'credentialless'],
@@ -1943,7 +1944,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							this.client.baseURL.toString(),
+							moduleClient.baseURL.toString(),
 						).toString(),
 				],
 				[
@@ -1954,7 +1955,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							this.client.baseURL.toString(),
+							moduleClient.baseURL.toString(),
 						).toString(),
 				],
 			],
@@ -1975,7 +1976,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						case 'content-security-policy': {
 							const content = element.getAttribute('content')!;
 							element.setAttributeOG('content', content);
-							const policy = this.client.metaPolicy(content);
+							const policy = moduleClient.metaPolicy(content);
 							if (policy === null) element.removeAttribute('content');
 							else element.setAttribute('content', policy);
 							break;
@@ -1996,7 +1997,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								element.getAttribute('http-equiv')!.toLowerCase() ===
 								'accept-ch'
 							)
-								this.client.reportAcceptCH(parseAcceptCH(content) ?? []);
+								moduleClient.reportAcceptCH(parseAcceptCH(content) ?? []);
 							break;
 						}
 						case 'refresh':
@@ -2008,9 +2009,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								'content',
 								modifyRefresh(
 									element.getAttribute('content')!,
-									this.client.baseURL,
-									this.client.config,
-									this.client.nestedRoute,
+									moduleClient.baseURL,
+									moduleClient.config,
+									moduleClient.nestedRoute,
 								),
 							);
 							break;
@@ -2044,9 +2045,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							new StompURL(
 								new URL(
 									element.getAttribute('src')!,
-									this.client.baseURL.toString(),
+									moduleClient.baseURL.toString(),
 								),
-								this.client.baseURL,
+								moduleClient.baseURL,
 							),
 						),
 					);
@@ -2063,7 +2064,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							this.client.baseURL.toString(),
+							moduleClient.baseURL.toString(),
 						).toString(),
 				],
 				[
@@ -2074,7 +2075,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							this.client.baseURL.toString(),
+							moduleClient.baseURL.toString(),
 						).toString(),
 				],
 			],
@@ -2098,7 +2099,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// browser keeps it in the list and fails it if it picks it
 					const pages = parsed.map((src) => {
 						try {
-							return new URL(src.url, this.client.baseURL.toString());
+							return new URL(src.url, moduleClient.baseURL.toString());
 						} catch (error) {
 							return null;
 						}
@@ -2108,7 +2109,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						updated.push({
 							...src,
 							url: page
-								? routeImageSet(new StompURL(page, this.client.baseURL))
+								? routeImageSet(new StompURL(page, moduleClient.baseURL))
 								: src.url,
 						});
 					});
@@ -2168,9 +2169,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							new StompURL(
 								new URL(
 									element.getAttribute('src')!,
-									this.client.baseURL.toString(),
+									moduleClient.baseURL.toString(),
 								),
-								this.client.baseURL,
+								moduleClient.baseURL,
 							),
 						),
 					);
@@ -2189,7 +2190,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							this.client.baseURL.toString(),
+							moduleClient.baseURL.toString(),
 						).toString(),
 				],
 				[
@@ -2200,7 +2201,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							this.client.baseURL.toString(),
+							moduleClient.baseURL.toString(),
 						).toString(),
 				],
 				[
@@ -2211,7 +2212,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('src') !== '' &&
 						new URL(
 							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							this.client.baseURL.toString(),
+							moduleClient.baseURL.toString(),
 						).toString(),
 				],
 			],
@@ -2235,7 +2236,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				if (current !== null && element.hasAttributeOG('style')) {
 					const rewritten = modifyCSS(
 						(element.getAttributeOG('style') ?? element.getAttribute('style'))!,
-						this.client.baseURL,
+						moduleClient.baseURL,
 						'declarationList',
 					);
 
@@ -2262,14 +2263,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// browser's serialisation of the url()s it wrote
 					element.setAttributeOG(
 						'style',
-						unrouteCSS(this.client, element.getAttribute('style')!, true),
+						unrouteCSS(moduleClient, element.getAttribute('style')!, true),
 					);
 					element.setAttribute(
 						'style',
 						modifyCSS(
 							(element.getAttributeOG('style') ??
 								element.getAttribute('style'))!,
-							this.client.baseURL,
+							moduleClient.baseURL,
 							'declarationList',
 						),
 					);
@@ -2285,7 +2286,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// CSSStyleDeclaration: element.style.x = ..., setProperty(), cssText
 		{
 			const styleProto = realm.CSSStyleDeclaration.prototype;
-			const proxyModule = this.client.getModule(ProxyModule)!;
+			const proxyModule = moduleClient.getModule(ProxyModule)!;
 
 			// the element each page-facing declaration belongs to
 			const owners = new WeakMap<CSSStyleDeclaration, Element>();
@@ -2373,7 +2374,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					try {
 						const routed = modifyCSS(
 							AS_DECLARATION + value,
-							this.client.baseURL,
+							moduleClient.baseURL,
 							'declarationList',
 						);
 						if (routed.startsWith(AS_DECLARATION))
@@ -2382,7 +2383,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						// not a value the parser takes: the url() tokens it has
 					}
 				return value.includes('url(')
-					? rewriteCSSValueURLs(value, this.client.baseURL)
+					? rewriteCSSValueURLs(value, moduleClient.baseURL)
 					: value;
 			};
 
@@ -2390,7 +2391,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				try {
 					return modifyCSS(
 						String(value),
-						this.client.baseURL,
+						moduleClient.baseURL,
 						'declarationList',
 					);
 				} catch (error) {
@@ -2411,7 +2412,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			const restore = (target: CSSStyleDeclaration, value: string) =>
 				computedDeclarations.has(target)
 					? restoreCSSValueURLs(value, (routed) =>
-							computedURL(this.client, routed),
+							computedURL(moduleClient, routed),
 						)
 					: restoreCSSValueURLs(value);
 
@@ -2634,7 +2635,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 									try {
 										return modifyCSS(
 											String(value),
-											this.client.baseURL,
+											moduleClient.baseURL,
 											'declarationList',
 										);
 									} catch (error) {
@@ -2788,7 +2789,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				changedSheets.delete(sheet);
 				let style: StyleElement | null;
 				try {
-					style = this.client.styleElement(Reflect.apply(ownerNode, sheet, []));
+					style = moduleClient.styleElement(
+						Reflect.apply(ownerNode, sheet, []),
+					);
 				} catch (error) {
 					return;
 				}
@@ -2833,7 +2836,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		const writtenObjects = OBJECT_LOADS.map(
 			([tag, name]) => `${tag}[s_o\\:${name}]:not([${name}])`,
 		).join(',');
-		this.client.writtenLoads = (document) => {
+		moduleClient.writtenLoads = (document) => {
 			const all = uncontrolled();
 			let elements: Element[];
 			try {
@@ -2870,7 +2873,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			// method changing) the attribute may hold our own value rather than
 			// the page's; only record it as the original when it isn't ours
 			const current = element.getAttribute('action');
-			const routedPrefix = `${this.client.directory}html`;
+			const routedPrefix = `${moduleClient.directory}html`;
 
 			if (
 				element.hasAttribute('action') &&
@@ -2893,7 +2896,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			try {
 				action = new URL(
 					(element.getAttributeOG('action') ?? element.getAttribute('action'))!,
-					this.client.baseURL.toString(),
+					moduleClient.baseURL.toString(),
 				).toString();
 			} catch (error) {
 				// no URL at all (`https://[`): the form keeps it as written and
@@ -2912,11 +2915,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.setAttribute(
 						'action',
 						routeHTML(
-							new StompURL(action, this.client.baseURL),
-							this.client.baseURL,
-							this.client.config,
+							new StompURL(action, moduleClient.baseURL),
+							moduleClient.baseURL,
+							moduleClient.config,
 							true,
-							this.client.nestedRoute,
+							moduleClient.nestedRoute,
 						),
 					);
 					break;
@@ -2924,11 +2927,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.setAttribute(
 						'action',
 						routeHTML(
-							new StompURL(action, this.client.baseURL),
-							this.client.baseURL,
-							this.client.config,
+							new StompURL(action, moduleClient.baseURL),
+							moduleClient.baseURL,
+							moduleClient.config,
 							false,
-							this.client.nestedRoute,
+							moduleClient.nestedRoute,
 						),
 					);
 
@@ -2942,7 +2945,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			element.getAttribute(attribute) !== '' &&
 			new URL(
 				(element.getAttributeOG(attribute) ?? element.getAttribute(attribute))!,
-				this.client.baseURL.toString(),
+				moduleClient.baseURL.toString(),
 			).toString();
 
 		/** route one URL attribute, keeping the page's value as the original */
@@ -2964,9 +2967,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						new StompURL(
 							new URL(
 								element.getAttribute(attribute)!,
-								this.client.baseURL.toString(),
+								moduleClient.baseURL.toString(),
 							),
-							this.client.baseURL,
+							moduleClient.baseURL,
 						),
 					);
 					if (load) placeLoad(element, attribute, value);
@@ -3012,22 +3015,26 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				return;
 			}
 			const resource = new StompURL(
-				new URL(written, this.client.baseURL.toString()),
-				this.client.baseURL,
+				new URL(written, moduleClient.baseURL.toString()),
+				moduleClient.baseURL,
 			);
 			const routedOf = () =>
 				routeHTML(
 					resource,
-					this.client.baseURL,
-					this.client.config,
+					moduleClient.baseURL,
+					moduleClient.config,
 					false,
-					this.client.childRoute,
+					moduleClient.childRoute,
 				);
 			// the page's object-src (src/csp.ts): the browser refuses and
 			// reports what it refuses, where the browser's copy of the policy
 			// refuses it too (the copy itself is a blob: URL, which the copy
 			// allows wherever the page allows any load)
-			const refused = this.client.loadRefusal('object-src', resource.url, true);
+			const refused = moduleClient.loadRefusal(
+				'object-src',
+				resource.url,
+				true,
+			);
 			if (refused !== null) {
 				loads.delete(element);
 				element.setAttribute(attribute, refused);
@@ -3043,7 +3050,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			// never reaching the worker as the element's, so the page's URL
 			// decides here. A blocked one fails to load, as natively (an object
 			// fires error); an upgraded one loads over https
-			const mixed = this.client
+			const mixed = moduleClient
 				.getModule(MixedContentModule)
 				?.verdict(resource.url, attribute === 'data' ? 'object' : 'embed');
 			if (mixed?.action === 'upgrade') {
@@ -3057,7 +3064,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						written: resource.url.href,
 						generation: ++generations,
 					});
-					this.client.getModule(MixedContentModule)!.report(mixed.notices);
+					moduleClient.getModule(MixedContentModule)!.report(mixed.notices);
 				}
 				// a load that fails as the blocked one does: an object fires
 				// error, an embed nothing (a blob: URL of no origin, never minted;
@@ -3089,8 +3096,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			};
 			// the copy goes out as the load it stands for (loadGrants.ts)
 			loadFetch(
-				this.client,
-				new URL(routeXHR(resource), scopePrefix(this.client)).href,
+				moduleClient,
+				new URL(routeXHR(resource), scopePrefix(moduleClient)).href,
 				// Chrome loads an object's or embed's resource as a nested
 				// context: mode navigate, destination its element
 				attribute === 'data' ? 'object navigate' : 'embed navigate',
@@ -3105,10 +3112,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 									modifyHTML(
 										await response.text(),
 										resource,
-										this.client.config,
+										moduleClient.config,
 										true,
 										undefined,
-										this.client.scriptNonce,
+										moduleClient.scriptNonce,
 									),
 								],
 								{ type: 'text/html' },
@@ -3126,7 +3133,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		const writtenURL = (attribute: string) => (element: CustomElement) => {
 			const written = element.getAttributeOG(attribute);
 			return written !== null && written !== ''
-				? new URL(written, this.client.baseURL.toString()).toString()
+				? new URL(written, moduleClient.baseURL.toString()).toString()
 				: false;
 		};
 		domHooksModule.useAttributes(proxiedLoad('data'), [
@@ -3158,8 +3165,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							routed.push(
 								routeXHR(
 									new StompURL(
-										new URL(token, this.client.baseURL.toString()),
-										this.client.baseURL,
+										new URL(token, moduleClient.baseURL.toString()),
+										moduleClient.baseURL,
 									),
 								),
 							);
@@ -3198,10 +3205,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			routeAttribute('formaction', (resource) =>
 				routeHTML(
 					resource,
-					this.client.baseURL,
-					this.client.config,
+					moduleClient.baseURL,
+					moduleClient.config,
 					true,
-					this.client.nestedRoute,
+					moduleClient.nestedRoute,
 				),
 			),
 			[
@@ -3231,8 +3238,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								...src,
 								url: routeBinary(
 									new StompURL(
-										new URL(src.url, this.client.baseURL.toString()),
-										this.client.baseURL,
+										new URL(src.url, moduleClient.baseURL.toString()),
+										moduleClient.baseURL,
 									),
 								),
 							})),
@@ -3311,7 +3318,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		domHooksModule.useAttributes(
 			(element) => {
 				element.restoreAttributesOG('sandbox');
-				const lists = this.client.getModule(TokenListsModule);
+				const lists = moduleClient.getModule(TokenListsModule);
 				if (!element.hasAttribute('sandbox')) {
 					lists?.sync(element, null);
 					return;
@@ -3322,7 +3329,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				element.setAttribute('sandbox', realSandbox(value));
 				if (
 					sandboxTokens(value).has('allow-scripts') &&
-					this.client.allows('allow-scripts')
+					moduleClient.allows('allow-scripts')
 				)
 					return;
 				try {
@@ -3362,7 +3369,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					new URL(
 						(element.getAttributeOG('action') ??
 							element.getAttribute('action'))!,
-						this.client.baseURL.toString(),
+						moduleClient.baseURL.toString(),
 					).toString(),
 			],
 			[realm.HTMLFormElement, 'method', () => false],
@@ -3371,7 +3378,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// a base's href resolves against the document's URL, not against the
 		// base URL (which client.baseURL follows once a base is in place, and
 		// is the page's own base while loadHTML rewrites the markup)
-		const documentURL = () => this.client.url;
+		const documentURL = () => moduleClient.url;
 		// A report-only base-uri's refusal is the inject's to report (the base
 		// applies): once, for the document's first base, a task later as
 		// natively, and for the markup's own once it is parsed (the hook ran
@@ -3384,7 +3391,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			if (reported.has(element) || (first !== element && first !== null))
 				return;
 			reported.add(element);
-			const report = () => this.client.reportRefusal('base-uri', url);
+			const report = () => moduleClient.reportRefusal('base-uri', url);
 			if (owner === global.document) {
 				Reflect.apply(setTimeout, global, [report, 0]);
 				return;
@@ -3430,13 +3437,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// refuses and reports it as natively (the document's URL stays
 					// its base URL); a report-only one's refusal is reported
 					const refusals = /^https?:$/.test(url.protocol)
-						? this.client.pageRefusals('base-uri', url)
+						? moduleClient.pageRefusals('base-uri', url)
 						: [];
 					if (
 						/^https?:$/.test(url.protocol) &&
-						this.client.baseRefused(url, element)
+						moduleClient.baseRefused(url, element)
 					) {
-						const refusal = this.client.refusalURL(
+						const refusal = moduleClient.refusalURL(
 							'https',
 							url.href,
 							url.href.replace(/#.*$/s, ''),
@@ -3454,9 +3461,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						routeHTML(
 							new StompURL(url, document),
 							document,
-							this.client.config,
+							moduleClient.config,
 							false,
-							this.client.nestedRoute,
+							moduleClient.nestedRoute,
 						),
 					);
 				}

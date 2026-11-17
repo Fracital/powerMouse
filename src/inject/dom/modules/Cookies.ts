@@ -195,6 +195,7 @@ export class CookiesModule extends Module<DocumentClient> {
 	}
 	/** a write the bridge cannot carry now: applied here, sent with fetch */
 	#later(value: string) {
+		const client = this.client;
 		const now = Date.now();
 		const cookie = this.#parse(value, now);
 		const seq = this.#seq++;
@@ -215,17 +216,17 @@ export class CookiesModule extends Module<DocumentClient> {
 			// it reads again
 			this.#restamp();
 		};
-		const url = new URL(`${routedPrefix(this.client)}cookies/ordered`);
+		const url = new URL(`${routedPrefix(client)}cookies/ordered`);
 		url.searchParams.set('sender', this.#sender);
 		url.searchParams.set('seq', String(seq));
 		url.searchParams.set('base', String(base));
-		this.client
+		client
 			.routedFetch(url.href, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify([
 					value,
-					this.client.url.toString(),
+					client.url.toString(),
 					this.#partitionKey,
 				]),
 			})
@@ -246,21 +247,22 @@ export class CookiesModule extends Module<DocumentClient> {
 	 * the promise of the write settles.
 	 */
 	async store(write: CookieStoreWrite): Promise<void> {
+		const client = this.client;
 		const seq = this.#seq++;
 		this.#inflight.add(seq);
 		let base = seq;
 		for (const other of this.#inflight) base = Math.min(base, other);
-		const url = new URL(`${routedPrefix(this.client)}cookies/ordered`);
+		const url = new URL(`${routedPrefix(client)}cookies/ordered`);
 		url.searchParams.set('sender', this.#sender);
 		url.searchParams.set('seq', String(seq));
 		url.searchParams.set('base', String(base));
 		try {
-			const response = await this.client.routedFetch(url.href, {
+			const response = await client.routedFetch(url.href, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify([
 					write,
-					this.client.url.toString(),
+					client.url.toString(),
 					this.#partitionKey,
 				]),
 			});
@@ -278,12 +280,13 @@ export class CookiesModule extends Module<DocumentClient> {
 	 * asynchronously, for the Cookie Store API
 	 */
 	async jarCookies(): Promise<JarCookie[]> {
-		const response = await this.client.routedFetch(
-			`${routedPrefix(this.client)}cookies/get`,
+		const client = this.client;
+		const response = await client.routedFetch(
+			`${routedPrefix(client)}cookies/get`,
 			{
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify([this.client.url.toString(), this.#context]),
+				body: JSON.stringify([client.url.toString(), this.#context]),
 			},
 		);
 		if (!response.ok)
@@ -310,17 +313,18 @@ export class CookiesModule extends Module<DocumentClient> {
 		this.#fresh = false;
 	}
 	get pageCookies() {
+		const client = this.client;
 		const version = this.#version();
 		if (this.#known && this.#fresh && version === this.#cacheVersion)
 			return this.#show(this.#known);
 
-		const syncModule = this.client.getModule(SyncModule)!;
-		this.client.cookieReads++;
+		const syncModule = client.getModule(SyncModule)!;
+		client.cookieReads++;
 		// the jar answers without its HttpOnly cookies (the route filters)
 		const answer = syncModule.tryJsonAPI(
 			BEACON_QUOTA,
-			`${this.client.directory}cookies/get`,
-			this.client.url.toString(),
+			`${client.directory}cookies/get`,
+			client.url.toString(),
 			this.#context,
 		);
 		if (answer) {
@@ -355,16 +359,17 @@ export class CookiesModule extends Module<DocumentClient> {
 		});
 	}
 	set pageCookies(value: string) {
-		const syncModule = this.client.getModule(SyncModule)!;
+		const client = this.client;
+		const syncModule = client.getModule(SyncModule)!;
 
 		// a script-set cookie can neither create nor replace an HttpOnly one
 		if (
 			!this.#inflight.size &&
 			syncModule.tryJsonAPI(
 				WRITE_BUDGET,
-				`${this.client.directory}cookies/set`,
+				`${client.directory}cookies/set`,
 				value,
-				this.client.url.toString(),
+				client.url.toString(),
 				'script',
 				this.#partitionKey,
 			)
@@ -381,17 +386,18 @@ export class CookiesModule extends Module<DocumentClient> {
 		this.#changed();
 	}
 	apply() {
-		const global = this.client.global;
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const client = this.client;
+		const global = client.global;
+		const proxyModule = client.getModule(ProxyModule)!;
 
-		this.client.responseListeners.add(() => this.invalidate());
+		client.responseListeners.add(() => this.invalidate());
 		// Set-Cookie the worker applied for a document of this site
-		this.client.onServiceWorkerMessage((data) => {
+		client.onServiceWorkerMessage((data) => {
 			const change = (data as Record<string, CookiesChange> | null)?.[
 				COOKIES_CHANGED
 			];
 			if (!change) return;
-			const { hostname } = this.client.url.url;
+			const { hostname } = client.url.url;
 			if (
 				change.domain === '' ||
 				hostname === change.domain ||
@@ -410,7 +416,7 @@ export class CookiesModule extends Module<DocumentClient> {
 				(target, that) => {
 					if (this.#cookieAverse(that)) return Reflect.apply(target, that, []);
 					invokeGlobal(that, global.document);
-					if (this.client.cookieAverse) return '';
+					if (client.cookieAverse) return '';
 					return this.pageCookies;
 				},
 			),
@@ -419,7 +425,7 @@ export class CookiesModule extends Module<DocumentClient> {
 				(target, that, args) => {
 					if (this.#cookieAverse(that)) return;
 					invokeGlobal(that, global.document);
-					if (this.client.cookieAverse) return;
+					if (client.cookieAverse) return;
 					this.pageCookies = String(args[0]);
 				},
 			),

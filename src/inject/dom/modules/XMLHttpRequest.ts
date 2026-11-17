@@ -38,12 +38,13 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 	/** the realm's listener count (src/inject/uploadListeners.ts), which the Visited module keeps for `navigation` too */
 	listeners?: ReturnType<typeof trackUploadListeners>;
 	apply() {
+		const moduleClient = this.client;
 		const instances = new WeakSet();
 		const real = Symbol();
 		// eslint-disable-next-line @typescript-eslint/no-this-alias
 		const that = this;
 
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const proxyModule = moduleClient.getModule(ProxyModule)!;
 		const syncModule = that.client.getModule(SyncModule)!;
 		// a blob response is the bytes the site sent: the page's Blob (wrapped
 		// by BlobDocuments) would turn an HTML one into the inject's shell
@@ -951,7 +952,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 			instances,
 		);
 
-		(this.client.global as any).XMLHttpRequest = globalProxy;
-		(this.client.global as any).XMLHttpRequestEventTarget = globalTargetProxy;
+		(moduleClient.global as any).XMLHttpRequest = globalProxy;
+		(moduleClient.global as any).XMLHttpRequestEventTarget = globalTargetProxy;
 	}
 }

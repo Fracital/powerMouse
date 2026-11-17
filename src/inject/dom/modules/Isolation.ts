@@ -34,15 +34,15 @@ export default class IsolationModule extends Module<DocumentClient> {
 	 * parts leave the breakdown and their bytes the total.
 	 */
 	applyMeasuredMemory(proxyModule: ProxyModule) {
-		const global = this.client.global as typeof globalThis &
-			Record<string, any>;
+		const client = this.client;
+		const global = client.global as typeof globalThis & Record<string, any>;
 		const proto = global.Performance?.prototype as unknown as
 			Record<string, unknown> | undefined;
 		const measure = proto?.measureUserAgentSpecificMemory;
 		if (!proto || typeof measure !== 'function') return;
 		const NativePromise = global.Promise as PromiseConstructor;
 		const then = NativePromise.prototype.then;
-		const origin = new URL(scopePrefix(this.client)).origin;
+		const origin = new URL(scopePrefix(client)).origin;
 		/** the `src` the page gave the frame whose element has `routed` */
 		const written = (id: unknown, routed: string): string => {
 			try {
@@ -60,7 +60,7 @@ export default class IsolationModule extends Module<DocumentClient> {
 			} catch (error) {
 				// no document to look in: the route's URL
 			}
-			return unrouteURL(this.client, routed) ?? routed;
+			return unrouteURL(client, routed) ?? routed;
 		};
 		/** whether a place the browser named is the page's; its URLs made the page's */
 		const pages = (where: Record<string, any>): boolean => {
@@ -73,8 +73,8 @@ export default class IsolationModule extends Module<DocumentClient> {
 				return !!container;
 			if (typeof where.url !== 'string' || !where.url.startsWith(origin))
 				return true;
-			const real = where.url.startsWith(scopePrefix(this.client))
-				? unrouteURL(this.client, where.url)
+			const real = where.url.startsWith(scopePrefix(client))
+				? unrouteURL(client, where.url)
 				: null;
 			if (real === null) return false;
 			where.url = real;
@@ -115,12 +115,13 @@ export default class IsolationModule extends Module<DocumentClient> {
 		);
 	}
 	apply() {
-		const global = this.client.global as typeof globalThis & {
+		const client = this.client;
+		const global = client.global as typeof globalThis & {
 			FeaturePolicy?: { prototype: Record<string, unknown> };
 		};
-		if (!this.client.hostIsolated) return;
-		this.client.hideSharedArrayBuffer();
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		if (!client.hostIsolated) return;
+		client.hideSharedArrayBuffer();
+		const proxyModule = client.getModule(ProxyModule)!;
 		this.applyMeasuredMemory(proxyModule);
 		const prototype = global.FeaturePolicy?.prototype;
 		const own = Reflect.getOwnPropertyDescriptor(
@@ -137,7 +138,7 @@ export default class IsolationModule extends Module<DocumentClient> {
 				return false;
 			}
 		};
-		const allowed = () => this.client.isolationFacts.includes('p');
+		const allowed = () => client.isolationFacts.includes('p');
 		const wrap = (
 			name: string,
 			handler: (native: unknown, that: unknown, args: unknown[]) => unknown,
@@ -161,12 +162,12 @@ export default class IsolationModule extends Module<DocumentClient> {
 			if (String(args[0]) !== FEATURE) return native;
 			return (
 				allowed() &&
-				(args.length < 2 || String(args[1]) === this.client.url.url.origin)
+				(args.length < 2 || String(args[1]) === client.url.url.origin)
 			);
 		});
 		wrap('getAllowlistForFeature', (native, _that, args) => {
 			if (String(args[0]) !== FEATURE) return native;
-			return allowed() ? [this.client.url.url.origin] : [];
+			return allowed() ? [client.url.url.origin] : [];
 		});
 		wrap('allowedFeatures', (native, that) => {
 			const list = native as string[];

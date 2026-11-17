@@ -33,8 +33,9 @@ const URL_PARTS = [
  */
 export default class LocationModule extends Module<DocumentClient> {
 	apply() {
-		const global = this.client.global;
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const moduleClient = this.client;
+		const global = moduleClient.global;
+		const proxyModule = moduleClient.getModule(ProxyModule)!;
 		const real = global.location;
 
 		// the realm's own, kept: a window that lost its browsing context (a
@@ -63,14 +64,14 @@ export default class LocationModule extends Module<DocumentClient> {
 			}
 		};
 		// a fragment's navigation goes to it as written (the Fragment module)
-		const fragments = this.client.getModule(FragmentModule);
+		const fragments = moduleClient.getModule(FragmentModule);
 		const navigateTo = (destination: URL) => {
 			const routed = routeHTML(
-				new StompURL(destination, this.client.url),
-				this.client.url,
-				this.client.config,
+				new StompURL(destination, moduleClient.url),
+				moduleClient.url,
+				moduleClient.config,
 				false,
-				this.client.nestedRoute,
+				moduleClient.nestedRoute,
 			);
 			return fragments ? fragments.live(routed) : routed;
 		};
@@ -87,7 +88,7 @@ export default class LocationModule extends Module<DocumentClient> {
 		const go = (destination: URL, method: 'assign' | 'replace') => {
 			// a frame still on its initial about:blank fires no navigate event:
 			// one sent to another origin gets a fresh context first (IFrame)
-			if (this.client.freshTo?.(destination)) return;
+			if (moduleClient.freshTo?.(destination)) return;
 			const loading = global.document.readyState !== 'complete';
 			const how = loading ? 'replace' : method;
 			// a javascript: URL's code is the page's Trusted Types' to judge
@@ -96,12 +97,12 @@ export default class LocationModule extends Module<DocumentClient> {
 			// which it refuses and reports itself
 			const route =
 				how === 'assign'
-					? (fragments?.live(this.client.navigationRoute(destination)) ??
-						this.client.navigationRoute(destination))
+					? (fragments?.live(moduleClient.navigationRoute(destination)) ??
+						moduleClient.navigationRoute(destination))
 					: navigateTo(destination);
 			if (
 				destination.protocol === 'javascript:' &&
-				this.client.trustedJavascript?.(
+				moduleClient.trustedJavascript?.(
 					decoded(destination.href),
 					decoded(route),
 					// navigate to the rewrite (the inject's, which no Trusted Types
@@ -137,22 +138,22 @@ export default class LocationModule extends Module<DocumentClient> {
 				...locationDescriptor,
 				get: locationDescriptor.get
 					? member(locationDescriptor.get, (args) => {
-							const temp = new URL(this.client.location.toString());
+							const temp = new URL(moduleClient.location.toString());
 
 							return Reflect.apply(urlDescriptor.get!, temp, args);
 						})
 					: undefined,
 				set: locationDescriptor.set
 					? member(locationDescriptor.set, (args) => {
-							const temp = new URL(this.client.location.toString());
+							const temp = new URL(moduleClient.location.toString());
 
 							if (common === 'href') {
 								// one that does not parse: the browser's own SyntaxError,
 								// which names it as the page wrote it, and no navigation
 								const url = String(args[0]);
-								if (failsToParse(this.client, url))
+								if (failsToParse(moduleClient, url))
 									return Reflect.apply(locationDescriptor.set!, real, [url]);
-								args[0] = new URL(url, this.client.baseURL.toString());
+								args[0] = new URL(url, moduleClient.baseURL.toString());
 							}
 
 							// Location's own: a value that is no scheme throws, where
@@ -186,7 +187,7 @@ export default class LocationModule extends Module<DocumentClient> {
 								if (temp.href === at) return;
 							} else Reflect.apply(urlDescriptor.set!, temp, args);
 
-							this.client.getModule(NavigationHintModule)?.hint(temp.href);
+							moduleClient.getModule(NavigationHintModule)?.hint(temp.href);
 							go(temp, 'assign');
 						})
 					: undefined,
@@ -202,14 +203,14 @@ export default class LocationModule extends Module<DocumentClient> {
 			let context: typeof globalThis = global;
 			while (true) {
 				try {
-					const parent = (context as any)[this.client.names.client]
+					const parent = (context as any)[moduleClient.names.client]
 						.parent as typeof globalThis;
-					if (parent === context || !(this.client.names.client in parent))
+					if (parent === context || !(moduleClient.names.client in parent))
 						break;
 					// its origin as a page sees it: "null" for an opaque one (a
 					// frame sandboxed without allow-same-origin, a data: document)
 					origins.push(
-						(parent as any)[this.client.names.client].origin as string,
+						(parent as any)[moduleClient.names.client].origin as string,
 					);
 					context = parent;
 				} catch (error) {
@@ -241,7 +242,7 @@ export default class LocationModule extends Module<DocumentClient> {
 		const hookListPrototype = (prototype: object) => {
 			if (hooked.has(prototype)) return;
 			hooked.add(prototype);
-			const proxyModule = this.client.getModule(ProxyModule)!;
+			const proxyModule = moduleClient.getModule(ProxyModule)!;
 			const answers: Record<
 				string,
 				(origins: string[], args: any[]) => unknown
@@ -308,10 +309,10 @@ export default class LocationModule extends Module<DocumentClient> {
 			// for the call (a TypeError for the count, a SyntaxError that
 			// names the URL as the page wrote it), and no navigation
 			const url = args.length ? String(args[0]) : '';
-			if (!args.length || failsToParse(this.client, url))
+			if (!args.length || failsToParse(moduleClient, url))
 				return Reflect.apply(real[method], real, args.length ? [url] : []);
-			const destination = new URL(url, this.client.baseURL.toString());
-			this.client.getModule(NavigationHintModule)?.hint(destination.href);
+			const destination = new URL(url, moduleClient.baseURL.toString());
+			moduleClient.getModule(NavigationHintModule)?.hint(destination.href);
 			return go(destination, method);
 		};
 		const methods: Record<string, (args: any[]) => unknown> = {
@@ -322,20 +323,20 @@ export default class LocationModule extends Module<DocumentClient> {
 				// it replaced, and a reload loads that URL. Its own address is an
 				// inline document's (src/server/inline.ts), which the worker
 				// serves once: reloaded there, the frame showed an error page
-				const named = this.client.namedBase;
+				const named = moduleClient.namedBase;
 				if (
 					typeof named === 'string' &&
 					/^https?:/i.test(named) &&
-					real.pathname.startsWith(`${this.client.directory}inline:`)
+					real.pathname.startsWith(`${moduleClient.directory}inline:`)
 				)
 					return Reflect.apply(real.replace, real, [
-						navigateTo(new URL(this.client.location.toString())),
+						navigateTo(new URL(moduleClient.location.toString())),
 					]);
 				return Reflect.apply(real.reload, real, []);
 			},
 			// the location's own URL: the client's url is the base URLs resolve
 			// against, which a document's <base href> moves
-			toString: () => this.client.location.toString(),
+			toString: () => moduleClient.location.toString(),
 		};
 		for (const [name, own] of Object.entries(methods)) {
 			const descriptor = Reflect.getOwnPropertyDescriptor(real, name);
@@ -352,8 +353,8 @@ export default class LocationModule extends Module<DocumentClient> {
 			const descriptor = members.get(key);
 			if (descriptor) Reflect.defineProperty(proxy, key, descriptor);
 			else if (
-				key !== this.client.names.globalProxy &&
-				key !== this.client.names.globalName
+				key !== moduleClient.names.globalProxy &&
+				key !== moduleClient.names.globalName
 			)
 				Reflect.defineProperty(
 					proxy,
@@ -364,6 +365,6 @@ export default class LocationModule extends Module<DocumentClient> {
 
 		Reflect.setPrototypeOf(proxy, global.Location.prototype);
 
-		setGlobalProxy(real, 'location', proxy, this.client.names);
+		setGlobalProxy(real, 'location', proxy, moduleClient.names);
 	}
 }

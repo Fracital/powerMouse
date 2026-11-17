@@ -30,10 +30,11 @@ import type DocumentClient from '../Client';
  */
 export default class AnimationFramesModule extends Module<DocumentClient> {
 	apply() {
-		const global = this.client.global;
+		const moduleClient = this.client;
+		const global = moduleClient.global;
 		if (typeof global.requestAnimationFrame !== 'function') return;
 		if (typeof global.IntersectionObserver !== 'function') return;
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const proxyModule = moduleClient.getModule(ProxyModule)!;
 		const NativeObserver = global.IntersectionObserver;
 		const nativeRequest = global.requestAnimationFrame;
 		const nativeCancel = global.cancelAnimationFrame;
@@ -48,9 +49,9 @@ export default class AnimationFramesModule extends Module<DocumentClient> {
 			let value: boolean;
 			try {
 				value =
-					this.client.nested &&
-					(this.client.sandboxedOpaque ||
-						this.client.url.url.origin !== this.client.topOrigin);
+					moduleClient.nested &&
+					(moduleClient.sandboxedOpaque ||
+						moduleClient.url.url.origin !== moduleClient.topOrigin);
 			} catch (error) {
 				value = false;
 			}
@@ -86,7 +87,7 @@ export default class AnimationFramesModule extends Module<DocumentClient> {
 		const watch = () => {
 			if (watching) return;
 			watching = true;
-			let client: DocumentClient = this.client;
+			let client: DocumentClient = moduleClient;
 			for (let depth = 0; depth < 64 && client.nested; depth++) {
 				const frame = client.nativeFrameElement();
 				if (!frame) break;
@@ -99,7 +100,7 @@ export default class AnimationFramesModule extends Module<DocumentClient> {
 				}).observe(frame);
 				try {
 					client = (client.parent as Record<string, any>)[
-						this.client.names.client
+						moduleClient.names.client
 					] as DocumentClient;
 				} catch (error) {
 					break;

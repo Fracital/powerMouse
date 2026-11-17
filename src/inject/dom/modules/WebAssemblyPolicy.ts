@@ -17,12 +17,12 @@ import type DocumentClient from '../Client';
  */
 export default class WebAssemblyPolicyModule extends Module<DocumentClient> {
 	apply() {
-		const global = this.client.global as typeof globalThis;
+		const client = this.client;
+		const global = client.global as typeof globalThis;
 		const wasm = global.WebAssembly as
 			(typeof WebAssembly & Record<string, unknown>) | undefined;
 		if (!wasm) return;
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const client = this.client;
+		const proxyModule = client.getModule(ProxyModule)!;
 		// WebAssembly.compile rejects
 		const compile = wasm.compile as unknown;
 		if (typeof compile === 'function')

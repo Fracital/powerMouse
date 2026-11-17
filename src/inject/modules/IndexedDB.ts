@@ -4,14 +4,15 @@ import ProxyModule from './Proxy';
 
 export default class IndexedDBModule extends Module<Client> {
 	apply() {
-		const global = this.client.global;
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const client = this.client;
+		const global = client.global;
+		const proxyModule = client.getModule(ProxyModule)!;
 
 		global.IDBFactory.prototype.open = proxyModule.wrapFunction(
 			global.IDBFactory.prototype.open,
 			(target, that, args) => {
 				if (typeof args[0] === 'string') {
-					args[0] = `${args[0]}@${this.client.storageKey}`;
+					args[0] = `${args[0]}@${client.storageKey}`;
 				}
 
 				return Reflect.apply(target, that, args);
@@ -23,7 +24,7 @@ export default class IndexedDBModule extends Module<Client> {
 			global.IDBFactory.prototype.deleteDatabase,
 			(target, that, args) => {
 				if (typeof args[0] === 'string')
-					args[0] = `${args[0]}@${this.client.storageKey}`;
+					args[0] = `${args[0]}@${client.storageKey}`;
 				return Reflect.apply(target, that, args);
 			},
 		);
@@ -36,7 +37,7 @@ export default class IndexedDBModule extends Module<Client> {
 			factory.databases = proxyModule.wrapFunction(
 				factory.databases,
 				async (target, that, args) => {
-					const suffix = `@${this.client.storageKey}`;
+					const suffix = `@${client.storageKey}`;
 					const list = (await Reflect.apply(
 						target,
 						that,
@@ -58,7 +59,7 @@ export default class IndexedDBModule extends Module<Client> {
 				(target, that, args) => {
 					// `name@origin`: strip the suffix, not the prefix
 					const name = Reflect.apply(target, that, args) as string;
-					const suffix = `@${this.client.storageKey}`;
+					const suffix = `@${client.storageKey}`;
 					return name.endsWith(suffix) ? name.slice(0, -suffix.length) : name;
 				},
 			),

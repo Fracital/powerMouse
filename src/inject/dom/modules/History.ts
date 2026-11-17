@@ -51,8 +51,9 @@ export default class HistoryModule extends Module<DocumentClient> {
 	 */
 	alias: (before: object, after: object) => void = () => {};
 	apply() {
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const global = this.client.global;
+		const moduleClient = this.client;
+		const proxyModule = moduleClient.getModule(ProxyModule)!;
+		const global = moduleClient.global;
 		const prototype = global.History.prototype;
 		// taken before any page code runs
 		const navigation = (global as { navigation?: NavigationLike }).navigation;
@@ -168,7 +169,7 @@ export default class HistoryModule extends Module<DocumentClient> {
 						return Reflect.apply(target, that, args);
 					let destination: URL;
 					try {
-						destination = new URL(String(args[0]), this.client.url.toString());
+						destination = new URL(String(args[0]), moduleClient.url.toString());
 					} catch (error) {
 						// the browser's own SyntaxError
 						return Reflect.apply(target, that, args);
@@ -177,18 +178,18 @@ export default class HistoryModule extends Module<DocumentClient> {
 					const routed =
 						options?.history === 'replace'
 							? routeHTML(
-									new StompURL(destination, this.client.url),
-									this.client.url,
-									this.client.config,
+									new StompURL(destination, moduleClient.url),
+									moduleClient.url,
+									moduleClient.config,
 									false,
-									this.client.nestedRoute,
+									moduleClient.nestedRoute,
 								)
-							: this.client.navigationRoute(destination);
+							: moduleClient.navigationRoute(destination);
 					// to a fragment of this document as written (the Fragment module)
 					const live =
-						this.client
+						moduleClient
 							.getModule(FragmentModule)
-							?.live(new URL(routed, this.client.global.location.href).href) ??
+							?.live(new URL(routed, moduleClient.global.location.href).href) ??
 						routed;
 					return Reflect.apply(target, that, [live, ...args.slice(1)]);
 				},
@@ -355,12 +356,12 @@ export default class HistoryModule extends Module<DocumentClient> {
 		// keeps the frame's whole list (history.back() crosses origins
 		// natively too)
 		const own = () =>
-			this.client.opaqueRequests ? 'null' : this.client.url.url.origin;
+			moduleClient.opaqueRequests ? 'null' : moduleClient.url.url.origin;
 		const originOf = (entry: Entry): string => {
 			const raw = Reflect.apply(nativeEntryURL, entry, []) as string | null;
 			if (raw === null) return 'null';
 			try {
-				return new URL(unrouteURL(this.client, raw) ?? raw).origin;
+				return new URL(unrouteURL(moduleClient, raw) ?? raw).origin;
 			} catch (error) {
 				return 'null';
 			}

@@ -604,10 +604,11 @@ export const propertyAttribute = (property: string) =>
 
 export default class MutationObserverModule extends Module<DocumentClient> {
 	apply() {
-		const global = this.client.global;
+		const client = this.client;
+		const global = client.global;
 		const NativeObserver = global.MutationObserver;
 		if (typeof NativeObserver !== 'function') return;
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const proxyModule = client.getModule(ProxyModule)!;
 		const prototype = NativeObserver.prototype;
 		const nativeObserve = prototype.observe;
 		const nativeDisconnect = prototype.disconnect;
@@ -642,7 +643,7 @@ export default class MutationObserverModule extends Module<DocumentClient> {
 			Reflect.apply(setData, carrierNode, [flip ? '.' : '']);
 		};
 		const readback = (name: string, value: string) =>
-			name === 'style' ? unrouteCSS(this.client, value) : value;
+			name === 'style' ? unrouteCSS(client, value) : value;
 
 		global.MutationObserver = proxyModule.wrapFunction(
 			NativeObserver,

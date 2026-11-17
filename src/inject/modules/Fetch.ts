@@ -302,8 +302,9 @@ export function reportOnly(client: Client, url: URL, times: number) {
 
 export default class FetchModule extends Module<Client> {
 	apply() {
-		const realm = this.client.global;
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const client = this.client;
+		const realm = client.global;
+		const proxyModule = client.getModule(ProxyModule)!;
 
 		const eventSourceURLs = new WeakMap<EventSource, string>();
 
@@ -315,24 +316,24 @@ export default class FetchModule extends Module<Client> {
 				// a URL that does not parse: the browser's own SyntaxError, which
 				// names the URL as the page wrote it
 				const text = String(args[0]);
-				if (failsToParse(this.client, text))
+				if (failsToParse(client, text))
 					return Reflect.construct(
 						target,
 						[text, ...args.slice(1)],
 						newTarget || target,
 					);
-				const url = new URL(text, this.client.baseURL.toString());
+				const url = new URL(text, client.baseURL.toString());
 
 				// one a worker's policy refuses fails as the browser fails it
 				// (requestVerdict, which reports it with no sourceFile, as
 				// Chrome reports an EventSource's). The page's init goes with
 				// it: `withCredentials` is what makes the request one with
 				// credentials (cookies to another origin)
-				const resource = new StompURL(url, this.client.url);
+				const resource = new StompURL(url, client.url);
 				const result = Reflect.construct(
 					target,
 					[
-						requestRefused(this.client, 'connect-src', url, 1, false)
+						requestRefused(client, 'connect-src', url, 1, false)
 							? routeRefused(resource, true)
 							: routeBinary(resource),
 						...args.slice(1),
@@ -341,7 +342,7 @@ export default class FetchModule extends Module<Client> {
 				);
 
 				eventSourceURLs.set(result, url.toString());
-				reportOnly(this.client, url, 1);
+				reportOnly(client, url, 1);
 
 				return result;
 			},
@@ -351,7 +352,7 @@ export default class FetchModule extends Module<Client> {
 		Reflect.defineProperty(realm.EventSource.prototype, 'url', {
 			configurable: true,
 			enumerable: true,
-			get: this.client
+			get: client
 				.getModule(ProxyModule)!
 				.wrapFunction(
 					Reflect.getOwnPropertyDescriptor(realm.EventSource.prototype, 'url')!
@@ -410,9 +411,7 @@ export default class FetchModule extends Module<Client> {
 				// a response that came back from the Cache API or a clone the
 				// page made: its URL is the routed one it was fetched from
 				const url = Reflect.apply(<Function>target, that, args);
-				return typeof url === 'string'
-					? (unrouteURL(this.client, url) ?? url)
-					: url;
+				return typeof url === 'string' ? (unrouteURL(client, url) ?? url) : url;
 			}),
 		});
 
@@ -428,8 +427,7 @@ export default class FetchModule extends Module<Client> {
 				if (!args.length) return Reflect.apply(target, that, args);
 				let location: string;
 				try {
-					location = new URL(String(args[0]), this.client.baseURL.toString())
-						.href;
+					location = new URL(String(args[0]), client.baseURL.toString()).href;
 				} catch (error) {
 					throw new realm.TypeError(
 						"Failed to execute 'redirect' on 'Response': Invalid URL",
@@ -461,15 +459,15 @@ export default class FetchModule extends Module<Client> {
 			if (referrer === '' || referrer === 'about:client') return init;
 			let requested: URL;
 			try {
-				requested = new URL(referrer, this.client.baseURL.toString());
+				requested = new URL(referrer, client.baseURL.toString());
 			} catch (error) {
 				throw new realm.TypeError(
 					`${failed}: Referrer '${referrer}' is not a valid URL.`,
 				);
 			}
 			const taken =
-				requested.origin === this.client.url.url.origin
-					? routeXHR(new StompURL(requested, this.client.url))
+				requested.origin === client.url.url.origin
+					? routeXHR(new StompURL(requested, client.url))
 					: 'about:client';
 			return new NativeProxy(init as RequestInit & object, {
 				get: (target, key) =>
@@ -477,7 +475,7 @@ export default class FetchModule extends Module<Client> {
 			}) as T;
 		};
 		const fetchFailed = `Failed to execute 'fetch' on '${
-			this.client.isWorker ? 'WorkerGlobalScope' : 'Window'
+			client.isWorker ? 'WorkerGlobalScope' : 'Window'
 		}'`;
 
 		realm.Request = proxyModule.wrapFunction(
@@ -499,7 +497,7 @@ export default class FetchModule extends Module<Client> {
 				else {
 					const text = String(args[0]);
 					try {
-						input = new URL(text, this.client.baseURL.toString());
+						input = new URL(text, client.baseURL.toString());
 					} catch (error) {
 						// a URL that does not parse against the page's (a relative
 						// one in a data: worker, whose origin is opaque) throws
@@ -538,7 +536,7 @@ export default class FetchModule extends Module<Client> {
 						referrer === 'about:client'
 					)
 						return referrer;
-					return unrouteURL(this.client, referrer) ?? referrer;
+					return unrouteURL(client, referrer) ?? referrer;
 				},
 			),
 		});
@@ -594,9 +592,9 @@ export default class FetchModule extends Module<Client> {
 					// a URL that does not parse: the browser's own rejection, which
 					// names the URL as the page wrote it
 					const text = String(args[0]);
-					if (args.length && failsToParse(this.client, text))
+					if (args.length && failsToParse(client, text))
 						return await Reflect.apply(target, that, [text, ...args.slice(1)]);
-					url = new URL(text, this.client.baseURL.toString());
+					url = new URL(text, client.baseURL.toString());
 					// a URL with credentials is no request: the browser's own
 					// TypeError, which the route (it has none) would not get
 					if (url.username !== '' || url.password !== '')
@@ -613,8 +611,8 @@ export default class FetchModule extends Module<Client> {
 				// one a worker's policy refuses (requestVerdict, which reports it
 				// as the browser does: twice for a report-only policy alone) fails
 				// as the browser fails it, with its own TypeError
-				if (requestRefused(this.client, 'connect-src', url, 2))
-					return await fetch(routeRefused(new StompURL(url, this.client.url)));
+				if (requestRefused(client, 'connect-src', url, 2))
+					return await fetch(routeRefused(new StompURL(url, client.url)));
 				if (!ROUTE_PROTOCOLS.includes(url.protocol)) {
 					// a page-origin blob: URL is fetched as the browser's
 					const browserURL = proxyBlobURL(url.href);
@@ -626,7 +624,7 @@ export default class FetchModule extends Module<Client> {
 				}
 				// a report-only policy's refusal (an enforced one is the
 				// worker's): a fetch is judged twice natively
-				reportOnly(this.client, url, 2);
+				reportOnly(client, url, 2);
 
 				// an explicit referrer is a page URL (a Request's was taken when
 				// it was made)
@@ -638,7 +636,7 @@ export default class FetchModule extends Module<Client> {
 				const signal = init?.signal;
 				let aborted: string | null = null;
 				if (signal) aborted = add[ABORT_HEADER] = abortId();
-				if (this.client.opaqueRequests) add[OPAQUE_HEADER] = '1';
+				if (client.opaqueRequests) add[OPAQUE_HEADER] = '1';
 				// what goes out: the page's headers without the proxy's markers
 				// (the worker trusts those), the proxy's own added
 				init =
@@ -653,31 +651,27 @@ export default class FetchModule extends Module<Client> {
 							};
 				if (signal && aborted !== null) {
 					const id = aborted;
-					if (signal.aborted) this.client.abortRequest(id);
+					if (signal.aborted) client.abortRequest(id);
 					else
-						signal.addEventListener(
-							'abort',
-							() => this.client.abortRequest(id),
-							{
-								once: true,
-							},
-						);
+						signal.addEventListener('abort', () => client.abortRequest(id), {
+							once: true,
+						});
 				}
 				// [input, init]
 				//TODO: COOKIES
 				// through a controlled realm (this one, or an ancestor when this
 				// document is one no service worker controls)
-				const res = await this.client.routedFetch(
-					routeXHR(new StompURL(url, this.client.url)),
+				const res = await client.routedFetch(
+					routeXHR(new StompURL(url, client.url)),
 					init,
 				);
 				// the response may have set cookies: document.cookie reads fresh
-				this.client.notifyResponse();
+				client.notifyResponse();
 
 				// the page's URL for the routed one (unrouteURL reads the routed
 				// prefix off the client, not this bundle's free `location`)
 				const routedURL = Reflect.apply(nativeResponseURL, res, []) as string;
-				const pageURL = unrouteURL(this.client, routedURL) ?? routedURL;
+				const pageURL = unrouteURL(client, routedURL) ?? routedURL;
 				responseURLs.set(res, pageURL);
 				// an answer of the page's emulated service worker says its own
 				// type and URL (a body it made is basic, whatever the URL)
@@ -685,9 +679,7 @@ export default class FetchModule extends Module<Client> {
 
 				// another origin's response, after any redirects, or one that
 				// went through another origin (a redirect back is tainted too)
-				const own = this.client.opaqueRequests
-					? 'null'
-					: this.client.url.url.origin;
+				const own = client.opaqueRequests ? 'null' : client.url.url.origin;
 				let finalOrigin = 'null';
 				try {
 					finalOrigin = new URL(pageURL).origin;
@@ -763,7 +755,7 @@ export default class FetchModule extends Module<Client> {
 					try {
 						url = request
 							? new URL(Reflect.apply(nativeRequestURL, request, []) as string)
-							: new URL(String(args[0]), this.client.baseURL.toString());
+							: new URL(String(args[0]), client.baseURL.toString());
 					} catch (error) {
 						// the browser's own TypeError for a URL that does not parse
 						return Reflect.apply(target, that, args);

@@ -14,9 +14,10 @@ import DocumentClient, { addDocumentOpenListener } from '../Client';
  */
 export default class FormQueryModule extends Module<DocumentClient> {
 	apply() {
-		const global = this.client.global;
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const codec = this.client.codec;
+		const client = this.client;
+		const global = client.global;
+		const proxyModule = client.getModule(ProxyModule)!;
+		const codec = client.codec;
 		const NativeFormData = global.FormData;
 		const formDataProto = NativeFormData.prototype;
 		const entries = formDataProto.entries;

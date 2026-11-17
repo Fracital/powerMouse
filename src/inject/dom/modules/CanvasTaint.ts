@@ -61,14 +61,15 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 		}
 	}
 	apply() {
-		const global = this.client.global;
+		const client = this.client;
+		const global = client.global;
 		if (typeof global.CanvasRenderingContext2D !== 'function') return;
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const proxyModule = client.getModule(ProxyModule)!;
 		// What a canvas has drawn, kept for every proxied document that can
 		// reach this one, whichever bundle runs it: a page draws a frame's
 		// canvas (an srcdoc frame runs a bundle of its own) or a popup's, with
 		// either realm's methods
-		const shared = this.client.canvasTaints;
+		const shared = client.canvasTaints;
 		const {
 			canvases: taintedCanvases,
 			contexts: taintedContexts,
@@ -152,8 +153,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 			return kind;
 		};
 
-		const own = () =>
-			this.client.opaqueRequests ? 'null' : this.client.url.url.origin;
+		const own = () => (client.opaqueRequests ? 'null' : client.url.url.origin);
 		/** whether a loaded URL (as the browser has it) is another origin's */
 		const crossOrigin = (loaded: string): boolean => {
 			if (loaded === '' || loaded.startsWith('data:')) return false;
@@ -163,7 +163,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 			// for the page's URL; any other blob: URL is the page's own
 			const real = loaded.startsWith('blob:')
 				? blobLoads.get(loaded)
-				: (unrouteURL(this.client, loaded) ?? loaded);
+				: (unrouteURL(client, loaded) ?? loaded);
 			if (real === undefined || real.startsWith('blob:')) return false;
 			try {
 				const origin = new URL(real).origin;
@@ -175,9 +175,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 		// a load of the page's own URL the worker marked as another origin's
 		// (redirected through one, or answered opaque by the page's emulated
 		// service worker)
-		const opaqueLoad = this.client
-			.getModule(ResourceTimingModule)!
-			.opaqueLoads();
+		const opaqueLoad = client.getModule(ResourceTimingModule)!.opaqueLoads();
 		/**
 		 * per element: the URL it was judged by, whether that is another
 		 * origin's, the URL its marks are asked by ('' for none), and the
@@ -202,9 +200,9 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 			let crossed = true;
 			try {
 				crossed =
-					this.client
+					client
 						.getModule(SyncModule)!
-						.jsonAPI(`${this.client.directory}media/crossed`, url) !== false;
+						.jsonAPI(`${client.directory}media/crossed`, url) !== false;
 			} catch (error) {
 				// a document with no bridge
 			}
@@ -486,7 +484,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 			let pending = true;
 			const settle = (value: unknown, present: boolean) => {
 				pending = false;
-				this.client.lazyGlobals.delete(name);
+				client.lazyGlobals.delete(name);
 				if (present)
 					Reflect.defineProperty(global, name, {
 						value,
@@ -539,14 +537,14 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 			resolvers.set(name, (value) => {
 				if (pending) settle(value, true);
 			});
-			this.client.lazyGlobals.set(name, resolve);
+			client.lazyGlobals.set(name, resolve);
 			// deleted first: redefining the browser's lazy property in place
 			// makes the interface (about 85 KB a frame for the two, measured
 			// with frame-cost), deleting it does not, and the context hands it
 			// out again
 			const keys = Reflect.ownKeys(global);
 			const after = keys[keys.indexOf(name) - 1];
-			if (after !== undefined) this.client.globalKeyAfter.set(name, after);
+			if (after !== undefined) client.globalKeyAfter.set(name, after);
 			Reflect.deleteProperty(global, name);
 			Reflect.defineProperty(global, name, {
 				get: proxyModule.wrapFunction(

@@ -62,8 +62,9 @@ export default class VisitedModule extends Module<DocumentClient> {
 		url: URL,
 	) => boolean = () => false;
 	apply() {
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const global = this.client.global as typeof globalThis & {
+		const client = this.client;
+		const proxyModule = client.getModule(ProxyModule)!;
+		const global = client.global as typeof globalThis & {
 			navigation?: EventTarget;
 			NavigateEvent?: { prototype: object };
 			NavigationDestination?: { prototype: object };
@@ -73,7 +74,7 @@ export default class VisitedModule extends Module<DocumentClient> {
 		// about:blank, about:srcdoc and blob: documents have no address under
 		// the scope, and an initial about:blank fires no navigate events
 		if (!navigation || !/^https?:$/.test(location.protocol)) return;
-		const natives = this.client.getModule(HistoryModule)?.native;
+		const natives = client.getModule(HistoryModule)?.native;
 		const getter = (proto: object | undefined, name: string) =>
 			proto && Reflect.getOwnPropertyDescriptor(proto, name)?.get;
 		const eventProto = global.NavigateEvent?.prototype;
@@ -102,31 +103,29 @@ export default class VisitedModule extends Module<DocumentClient> {
 
 		const plain = (destination: URL) =>
 			routeHTML(
-				new StompURL(destination, this.client.url),
-				this.client.url,
-				this.client.config,
+				new StompURL(destination, client.url),
+				client.url,
+				client.config,
 				false,
-				this.client.nestedRoute,
+				client.nestedRoute,
 			);
-		const scope = `${location.origin}${this.client.scope}`;
+		const scope = `${location.origin}${client.scope}`;
 		const absolute = (routed: string) => new URL(routed, location.href).href;
 		/** the real URL a link route (absolute) stands for */
 		const linked = (routed: string): URL | null => {
 			if (!isLinkRoute(routed, scope)) return null;
-			const real = unrouteURL(this.client, routed);
+			const real = unrouteURL(client, routed);
 			return real === null ? null : new URL(real);
 		};
 		const link = (destination: URL) =>
-			absolute(
-				this.client.linkRoute(new StompURL(destination, this.client.url)),
-			);
+			absolute(client.linkRoute(new StompURL(destination, client.url)));
 		/**
 		 * Whether a navigation of this document to `target` stays in it,
 		 * natively: to a fragment of its URL, or to its URL as it is (which
 		 * replaces its entry)
 		 */
 		const ownURL = (target: URL): boolean => {
-			const at = this.client.location.url;
+			const at = client.location.url;
 			return (
 				target.origin === at.origin &&
 				target.pathname === at.pathname &&
@@ -139,7 +138,7 @@ export default class VisitedModule extends Module<DocumentClient> {
 		// the page's listeners on `navigation` are counted from here on (the
 		// inject's own were added before, or natively), its handler
 		// attributes read when asked
-		const tracker = this.client.getModule(XMLHttpRequestModule)?.listeners;
+		const tracker = client.getModule(XMLHttpRequestModule)?.listeners;
 		const navigationProto = Reflect.getPrototypeOf(navigation)!;
 		const handlers = HANDLERS.map((name) => getter(navigationProto, name));
 		tracker?.track(navigation);
@@ -164,11 +163,11 @@ export default class VisitedModule extends Module<DocumentClient> {
 		const observes = () => listens(false);
 		const intercepts = () => listens(true);
 
-		this.client.followsOwnLinks = true;
-		this.client.navigationRoute = (destination) =>
+		client.followsOwnLinks = true;
+		client.navigationRoute = (destination) =>
 			intercepts() || ownURL(destination)
 				? plain(destination)
-				: this.client.linkRoute(new StompURL(destination, this.client.url));
+				: client.linkRoute(new StompURL(destination, client.url));
 
 		// Chrome drops a frame's history calls past 200 in ten seconds
 		// (NavigationRateLimiter), silently: a second step that was dropped
@@ -250,7 +249,7 @@ export default class VisitedModule extends Module<DocumentClient> {
 						if (!ownURL(real)) return;
 					} else {
 						if (!push || !Reflect.apply(hashChange, event, [])) return;
-						const page = unrouteURL(this.client, routed);
+						const page = unrouteURL(client, routed);
 						if (page === null || page === routed) return;
 						real = new URL(page);
 					}
@@ -260,9 +259,8 @@ export default class VisitedModule extends Module<DocumentClient> {
 				// to a fragment of it as written (the Fragment module)
 				const routedAddress = plain(real);
 				const address = absolute(
-					this.client
-						.getModule(FragmentModule)
-						?.live(absolute(routedAddress)) ?? routedAddress,
+					client.getModule(FragmentModule)?.live(absolute(routedAddress)) ??
+						routedAddress,
 				);
 				const route = link(real);
 				const at = location.href;

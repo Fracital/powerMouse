@@ -53,7 +53,8 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 	judgeFrame: (event: Event, destination: string) => boolean | null = () =>
 		null;
 	apply() {
-		const global = this.client.global as typeof globalThis & {
+		const moduleClient = this.client;
+		const global = moduleClient.global as typeof globalThis & {
 			navigation?: EventTarget;
 		};
 		const navigation = global.navigation;
@@ -72,11 +73,11 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 		)?.get;
 		const activation = global.navigator.userActivation;
 		const voucher = (): DocumentClient | null => {
-			const own = this.client.url.url.origin;
-			const candidates = [this.client.routedClient()];
+			const own = moduleClient.url.url.origin;
+			const candidates = [moduleClient.routedClient()];
 			try {
 				const openerClient = (opener as Record<string, unknown> | null)?.[
-					this.client.names.client
+					moduleClient.names.client
 				] as DocumentClient | undefined;
 				candidates.push(openerClient?.routedClient() ?? null);
 			} catch (error) {
@@ -107,8 +108,8 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 					url,
 					activated,
 					...(allow !== undefined ? { allow } : {}),
-					nested: this.client.nestedRoute,
-					own: routed === this.client,
+					nested: moduleClient.nestedRoute,
+					own: routed === moduleClient,
 					...(csp ? { csp } : {}),
 				},
 			});
@@ -117,10 +118,10 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 		// started it; the src its parent set it judged itself
 		const judgeFrame = (this.judgeFrame = (event, destination) => {
 			const navigate = event as Event & { navigationType?: string };
-			const parent = this.client.parentClient();
+			const parent = moduleClient.parentClient();
 			// (the destination reads as the page's URL, a route's real one;
 			// a refusal URL is one already)
-			const real = parent && unrouteURL(this.client, destination);
+			const real = parent && unrouteURL(moduleClient, destination);
 			if (
 				!parent ||
 				!real ||
@@ -147,7 +148,7 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 			}
 			send(destination, undefined, {
 				policies: parent.hopPolicies('frame-src') ?? [],
-				ancestors: this.client.ancestorOrigins(),
+				ancestors: moduleClient.ancestorOrigins(),
 				parent: true,
 			});
 			return false;
@@ -163,7 +164,7 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 			const destination =
 				routed === null
 					? navigate.destination.url
-					: (unrouteURL(this.client, routed) ?? routed);
+					: (unrouteURL(moduleClient, routed) ?? routed);
 			if (judgeFrame(event, destination) === null) send(destination);
 		});
 		// a link says where it goes when activated: the navigation may be
@@ -233,17 +234,17 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 						).toString()}`,
 					);
 				if (!/^https?:$/.test(url.protocol)) return null;
-				const policies = this.client.hopPolicies('form-action');
+				const policies = moduleClient.hopPolicies('form-action');
 				if (
 					policies &&
-					this.client
+					moduleClient
 						.pageRefusals('form-action', url)
 						.some(({ policy }) => policy.disposition === 'enforce')
 				) {
 					const element: Element = own('formaction') ? submitter! : form;
 					const name = element === form ? 'action' : 'formaction';
 					const written = nativeElement.getAttribute.call(element, name);
-					const refusal = this.client.refusalURL(
+					const refusal = moduleClient.refusalURL(
 						'https',
 						url.href,
 						url.href.replace(/#.*$/s, ''),
@@ -271,7 +272,7 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 					Reflect.apply(setTimeout, global, [
 						() => {
 							if (!event?.defaultPrevented)
-								this.client.reportRefusal('form-action', url);
+								moduleClient.reportRefusal('form-action', url);
 						},
 						0,
 					]);
@@ -282,7 +283,7 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 			return null;
 		};
 		// submit() fires no submit event
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const proxyModule = moduleClient.getModule(ProxyModule)!;
 		const nativeSubmit = global.HTMLFormElement.prototype.submit;
 		global.HTMLFormElement.prototype.submit = proxyModule.wrapFunction(
 			nativeSubmit,

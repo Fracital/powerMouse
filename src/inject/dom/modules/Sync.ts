@@ -259,6 +259,7 @@ export default class SyncModule extends Module<DocumentClient> {
 		// with one, a request over it is not sent and the answer is null
 		budget?: number,
 	): SyncResponse | null {
+		const client = this.client;
 		// STomp's own API (storage, cookies, timing) from a document no
 		// worker controls that runs a bundle of its own (an <object>'s or
 		// <embed>'s document, a blob: copy): its location resolves no route
@@ -266,14 +267,14 @@ export default class SyncModule extends Module<DocumentClient> {
 		// worker controls asks for it, as one injected into an about:blank
 		// document does by running its creator's bundle. A page's own
 		// synchronous request is answered as before
-		if (loopback && !this.client.controlled) {
+		if (loopback && !client.controlled) {
 			// the bridge as a getter of that client: a bundle of its own has
 			// module classes of its own (DocumentClient.syncBridge)
-			const routed = this.client.routedClient() as {
+			const routed = client.routedClient() as {
 				syncBridge?: SyncModule;
 			} | null;
 			const sync =
-				routed && routed !== (this.client as unknown)
+				routed && routed !== (client as unknown)
 					? (routed.syncBridge ?? null)
 					: null;
 			if (sync && sync !== this)
@@ -311,11 +312,8 @@ export default class SyncModule extends Module<DocumentClient> {
 		try {
 			resolved = new URL(url, location.toString());
 		} catch (error) {
-			if (!this.client.controlled) throw error;
-			resolved = new URL(
-				url,
-				`${this.client.baseURI.origin}${this.client.scope}`,
-			);
+			if (!client.controlled) throw error;
+			resolved = new URL(url, `${client.baseURI.origin}${client.scope}`);
 		}
 		const data: ProcessData = {
 			url: resolved.toString(),
@@ -342,7 +340,7 @@ export default class SyncModule extends Module<DocumentClient> {
 		if (navigator.userAgent.includes('gecko')) {
 			const http = new XMLHttpRequest();
 
-			http.open('POST', geckoXHR(this.client.url), false);
+			http.open('POST', geckoXHR(client.url), false);
 			http.send(JSON.stringify(data));
 
 			return createResponse(JSON.parse(http.responseText));
@@ -360,7 +358,7 @@ export default class SyncModule extends Module<DocumentClient> {
 		// a beacon is refused (and never sent) when the payload is over the
 		// browser's 64 KiB beacon quota, which a large localStorage value hits;
 		// spinning for an answer that cannot come would freeze the page
-		if (!navigator.sendBeacon(queueXHR(this.client.url), payload)) {
+		if (!navigator.sendBeacon(queueXHR(client.url), payload)) {
 			if (budget !== undefined) return null;
 			throw withStack(
 				new DOMException(
@@ -389,7 +387,7 @@ export default class SyncModule extends Module<DocumentClient> {
 			if (!answer) {
 				if (kickAt && Date.now() >= kickAt) {
 					kickAt = 0;
-					kick(this.client.global as unknown as Window, this.client.directory);
+					kick(client.global as unknown as Window, client.directory);
 				}
 				continue;
 			}

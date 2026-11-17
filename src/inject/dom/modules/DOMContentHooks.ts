@@ -130,8 +130,9 @@ export function htmlName(node: Node): string {
 
 export default class DOMContentHooks extends Module<DocumentClient> {
 	apply() {
-		const realm = this.client.global;
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const client = this.client;
+		const realm = client.global;
+		const proxyModule = client.getModule(ProxyModule)!;
 
 		const compositeElements = new Map<Element, () => Element>(); // new WeakMap<Element, () => Element>();
 
@@ -181,7 +182,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			node: unknown,
 			callback: (style: StyleElement) => void,
 		) => {
-			const kind = this.client.styleKind(node);
+			const kind = client.styleKind(node);
 			if (kind === 'html')
 				usePrototype(
 					node as HTMLStyleElement,
@@ -200,14 +201,14 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			if (!text) return;
 			// the page's own style-src refuses this inline style of the markup:
 			// it applies nothing (no text) and the inject reports it (src/csp.ts)
-			if (this.client.refuseInlineStyle(style, text, true)) {
+			if (client.refuseInlineStyle(style, text, true)) {
 				style.textContent = '';
 				return;
 			}
-			const routed = this.client.prepareStyleText(text);
+			const routed = client.prepareStyleText(text);
 			// a style the page's policy lets through by the hash of its text,
 			// which the routing changed (src/csp.ts)
-			if (routed !== text) this.client.giveCodeNonce(style, null, text, true);
+			if (routed !== text) client.giveCodeNonce(style, null, text, true);
 			style.textContent = routed;
 			prewritten.add(style);
 		};
@@ -220,7 +221,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		const routeTextNode = (node: Node) =>
 			usePrototype(node, nativeCharacterData, (text) => {
 				const data = text.data;
-				const routed = this.client.prepareStyleText(data);
+				const routed = client.prepareStyleText(data);
 				if (routed !== data) text.data = routed;
 			});
 		// a node argument about to go into a style: a Text, or a fragment's
@@ -245,7 +246,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			edit: (scratch: CharacterData) => T,
 		): T => {
 			const page = unrouteCSS(
-				this.client,
+				client,
 				usePrototype(node, nativeCharacterData, (text) => text.data),
 			);
 			const scratch = Reflect.apply(nativeCreateTextNode, realm.document, [
@@ -258,7 +259,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				(text) => text.data,
 			);
 			usePrototype(node, nativeCharacterData, (text) => {
-				text.data = this.client.prepareStyleText(edited);
+				text.data = client.prepareStyleText(edited);
 			});
 			return result;
 		};
@@ -276,11 +277,11 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					// its text is rewritten already. In SVG it could not either:
 					// the parser makes the script an SVG one, which has no
 					// currentScript, and the style was lost from every page
-					if (inertClones.has(style) || this.client.styleKind(style) !== 'html')
+					if (inertClones.has(style) || client.styleKind(style) !== 'html')
 						return;
 					// a document without allow-scripts runs only the inject's
 					// nonce: the script carries it, or the style is lost
-					const nonce = this.client.scriptNonce;
+					const nonce = client.scriptNonce;
 					compositeElement(style, () => {
 						const script = realm.document.createElement('script');
 
@@ -320,9 +321,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			// the page's own style-src refuses this inline style (now connected,
 			// so the browser parsed its sheet): it applies nothing and the inject
 			// reports it (src/csp.ts). Its text is the page's own.
-			if (
-				this.client.refuseInlineStyle(style, style.textContent ?? '', false)
-			) {
+			if (client.refuseInlineStyle(style, style.textContent ?? '', false)) {
 				for (let i = style.sheet.cssRules.length - 1; i >= 0; i--)
 					style.sheet.deleteRule(i);
 				return;
@@ -331,7 +330,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			// a document no service worker controls: the routed rules' loads are
 			// copied (DOMAttributes)
 			const copied = () =>
-				this.client
+				client
 					.getModule(DOMAttributesModule)
 					?.copySheet?.(style, (rule) => ((rule as any)[rewrittenRule] = true));
 
@@ -353,7 +352,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 
 			for (let i = 0; i < rules.length; i++) {
 				const added = style.sheet!.insertRule(
-					modifyCSS(rules[i].cssText, this.client.baseURL),
+					modifyCSS(rules[i].cssText, client.baseURL),
 					i,
 				);
 				(style.sheet!.cssRules[added] as any)[rewrittenRule] = true;
@@ -364,7 +363,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// a script element runs once, so rewrite its text once: a rewritten
 		// script that is moved to another parent must not be rewritten again
 		// the rewritten text each script carries; text set later is rewritten again
-		const rewrittenScripts = this.client.rewrittenScripts;
+		const rewrittenScripts = client.rewrittenScripts;
 
 		// `willConnect`: the script is about to be inserted into a connected
 		// tree, which is the moment it runs. At that point it is not connected
@@ -384,7 +383,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			)
 				return;
 			// (the page's Trusted Types judge its text as it runs)
-			const passed = this.client.scriptPrepared(
+			const passed = client.scriptPrepared(
 				script,
 				source,
 				'SVGScriptElement text',
@@ -392,12 +391,12 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			if (passed === null) return;
 			const rewritten = modifyJS(
 				passed,
-				this.client.baseURL,
-				this.client.config,
+				client.baseURL,
+				client.config,
 				scriptType(script),
 			);
 			rewrittenScripts.set(script as HTMLScriptElement, rewritten);
-			this.client.trustedApprove?.(rewritten);
+			client.trustedApprove?.(rewritten);
 			script.textContent = rewritten;
 		};
 		// the kind is read natively: an HTML script gets the script prototype,
@@ -418,13 +417,9 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			if (script.type.trim().toLowerCase() === 'importmap') {
 				if (rewrittenScripts.has(script)) return;
 				rewrittenScripts.set(script, script.text);
-				this.client.noteImportMap(script.text);
+				client.noteImportMap(script.text);
 				script.text = trustedScript(
-					rewriteImportMap(
-						script.text,
-						this.client.baseURL,
-						this.client.config,
-					),
+					rewriteImportMap(script.text, client.baseURL, client.config),
 				);
 				return;
 			}
@@ -445,7 +440,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			// what the page's Trusted Types let run of it (judged as it runs,
 			// scriptPrepared): refused, it runs nothing (its text is cleared) and
 			// the inject already reported it
-			const passed = this.client.scriptPrepared(script, script.text);
+			const passed = client.scriptPrepared(script, script.text);
 			if (passed === null) {
 				script.text = '';
 				return;
@@ -454,8 +449,8 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			// read the text back and made a script of it): the worker's rewrite
 			const type = scriptType(script);
 			const rewritten =
-				this.client.prewrittenScript(type === 'genericModule', passed, true) ??
-				modifyJS(passed, this.client.baseURL, this.client.config, type);
+				client.prewrittenScript(type === 'genericModule', passed, true) ??
+				modifyJS(passed, client.baseURL, client.config, type);
 			// a rewrite that changed nothing leaves no mark. The mark is the
 			// rewritten text, and a script of the document's markup whose text
 			// is its own rewrite (nothing in it to rewrite, and written as the
@@ -467,12 +462,12 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			// the page's own script-src refuses this inline script: it keeps no
 			// text, so it runs nothing, and the inject reports it (src/csp.ts)
 			if (!script.hasAttribute('src')) {
-				if (this.client.refuseInlineScript(script, passed, false)) {
+				if (client.refuseInlineScript(script, passed, false)) {
 					script.text = '';
 					return;
 				}
 				// let through by the hash of the page's text where its policy says so
-				this.client.giveCodeNonce(script, null, passed, false);
+				client.giveCodeNonce(script, null, passed, false);
 			}
 			script.text = trustedScript(rewritten);
 		};
@@ -523,7 +518,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			(realm.CharacterData.prototype as any)[edit] = proxyModule.wrapFunction(
 				native as (...args: unknown[]) => unknown,
 				(target, that: CharacterData, args) => {
-					const style = this.client.styleOfText(that);
+					const style = client.styleOfText(that);
 					if (!style) return Reflect.apply(target, that, args);
 					const result = editStyleText(that, (scratch) =>
 						Reflect.apply(target, scratch, args),
@@ -547,11 +542,11 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				configurable: true,
 				get: descriptor.get,
 				set: proxyModule.wrapFunction(descriptor.set!, (target, that, args) => {
-					const style = this.client.styleOfText(that);
+					const style = client.styleOfText(that);
 					if (!style) return Reflect.apply(target, that, args);
 					// null sets the empty string, as natively
 					const text = args[0] === null ? '' : String(args[0]);
-					Reflect.apply(target, that, [this.client.prepareStyleText(text)]);
+					Reflect.apply(target, that, [client.prepareStyleText(text)]);
 					prewrote(style);
 				}),
 			});
@@ -568,8 +563,8 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			withStyle(target, rewriteStyle);
 		};
 
-		const domAttributesModule = this.client.getModule(DOMAttributesModule)!;
-		const domHooksModule = this.client.getModule(DOMHooksModule)!;
+		const domAttributesModule = client.getModule(DOMAttributesModule)!;
+		const domHooksModule = client.getModule(DOMHooksModule)!;
 		const { requireElement } = domHooksModule;
 		// the browser's own answers, called on the node: a prototype swapped
 		// in does not reach a getter the page put on the instance itself, and
@@ -619,18 +614,14 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					(element.getAttribute('type') || '').trim().toLowerCase() ===
 					'importmap'
 				) {
-					this.client.noteImportMap(text);
-					return rewriteImportMap(
-						text,
-						this.client.baseURL,
-						this.client.config,
-					);
+					client.noteImportMap(text);
+					return rewriteImportMap(text, client.baseURL, client.config);
 				}
 				if (!shouldRewriteScript(element)) return null;
 				// (the page's Trusted Types judge the text as the script runs;
 				// refused, the script holds nothing and runs nothing, the inject
 				// having reported it in scriptPrepared)
-				const passed = this.client.scriptPrepared(
+				const passed = client.scriptPrepared(
 					script,
 					text,
 					element.namespaceURI === 'http://www.w3.org/1999/xhtml'
@@ -640,12 +631,9 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				if (passed === null) return '';
 				const type = scriptType(element);
 				const output =
-					this.client.prewrittenScript(
-						type === 'genericModule',
-						passed,
-						true,
-					) ?? modifyJS(passed, this.client.baseURL, this.client.config, type);
-				this.client.trustedApprove?.(output);
+					client.prewrittenScript(type === 'genericModule', passed, true) ??
+					modifyJS(passed, client.baseURL, client.config, type);
+				client.trustedApprove?.(output);
 				return output;
 			});
 		/**
@@ -698,7 +686,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				for (const text of texts.slice(1)) setData(text, '');
 			});
 			rewrittenScripts.set(script as HTMLScriptElement, output);
-			this.client.scriptSource?.(
+			client.scriptSource?.(
 				script,
 				pieces.map(([, piece]) => piece).join(''),
 				output,
@@ -854,14 +842,14 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			// error, let through, their src is the page's again. Before the
 			// scripts are rewritten, which would take one without its src for
 			// an empty inline script
-			if (willConnect && queryable !== null && this.client.scriptsHeld) {
+			if (willConnect && queryable !== null && client.scriptsHeld) {
 				const scripts = queryIn(insert, queryable, 'script');
 				if (queryable === 1) scripts.unshift(insert as Element);
 				for (const script of scripts) {
-					const held = this.client.releaseScript(script);
+					const held = client.releaseScript(script);
 					if (!held) continue;
-					if (this.client.refuseExternalScript(script, held.url, false))
-						this.client.dispatchLoadError(script);
+					if (client.refuseExternalScript(script, held.url, false))
+						client.dispatchLoadError(script);
 					else
 						usePrototype(script, CustomElement.prototype, (element) => {
 							element.setAttribute('src', held.src);
@@ -873,7 +861,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			// we're about to render
 			const name = htmlName(insert);
 			// an HTML or an SVG <style>, inserted itself
-			const insertedStyle = this.client.styleElement(insert);
+			const insertedStyle = client.styleElement(insert);
 			// a script itself, an HTML or an SVG one (whose name is lowercase)
 			if (isScriptElement(insert)) {
 				rewriteAnyScript(insert, willConnect);
@@ -884,7 +872,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				// any element named style: an HTML one, an SVG one, or one of
 				// another namespace, which is no style (withStyle)
 				for (const element of queryIn(insert, queryable, 'style')) {
-					const style = this.client.styleElement(element);
+					const style = client.styleElement(element);
 					if (!style) continue;
 					if (willConnect) withStyle(style, rewriteStyleText);
 					styles.push(style);
@@ -897,7 +885,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			const result = insertElement();
 			// a frame that just connected is injected before the page can
 			// reach it by a literal name (IFrame's sweepFrames)
-			if (willConnect) this.client.sweepFrames?.();
+			if (willConnect) client.sweepFrames?.();
 
 			if (name === 'FORM')
 				usePrototype(insert, nativeNode, () =>
@@ -930,13 +918,13 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			strings: boolean,
 			call: () => T,
 		): T => {
-			const style = this.client.styleElement(parent);
+			const style = client.styleElement(parent);
 			if (style) {
 				for (let i = 0; i < count; i++) {
 					if (nodeTypeOf(args[i]) !== null) routeInsertedText(args[i] as Node);
 					else if (strings)
 						args[i] = Reflect.apply(nativeCreateTextNode, realm.document, [
-							this.client.prepareStyleText(String(args[i])),
+							client.prepareStyleText(String(args[i])),
 						]);
 				}
 				prewritten.add(style);
@@ -1126,7 +1114,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				if (args.length < 2) return Reflect.apply(target, that, args);
 				requireElement(that);
 				// (the page's Trusted Types judge the markup first)
-				const markup = this.client.trustedValue(
+				const markup = client.trustedValue(
 					args[1],
 					'TrustedHTML',
 					'Element insertAdjacentHTML',
@@ -1350,7 +1338,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				global.HTMLOptionsCollection?.prototype ?? {},
 				'length',
 			)?.get;
-			this.client.landIndexed = (target, value, assign) => {
+			client.landIndexed = (target, value, assign) => {
 				if (nodeTypeOf(value) === null) return assign();
 				let select: Node | null;
 				if (nodeTypeOf(target) === 1) {

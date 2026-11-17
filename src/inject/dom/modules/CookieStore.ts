@@ -31,8 +31,8 @@ type Method = CookieStoreMethod;
  */
 export default class CookieStoreModule extends Module<DocumentClient> {
 	apply() {
-		const global = this.client.global as typeof globalThis &
-			Record<string, any>;
+		const client = this.client;
+		const global = client.global as typeof globalThis & Record<string, any>;
 		const getter = Reflect.getOwnPropertyDescriptor(global, 'cookieStore');
 		const CookieStore = global.CookieStore as Function | undefined;
 		const CookieChangeEvent = global.CookieChangeEvent as
@@ -43,14 +43,14 @@ export default class CookieStoreModule extends Module<DocumentClient> {
 			typeof CookieChangeEvent !== 'function'
 		)
 			return;
-		if (!isSecureURL(this.client.url.url)) {
+		if (!isSecureURL(client.url.url)) {
 			for (const name of ['cookieStore', 'CookieStore', 'CookieChangeEvent'])
 				Reflect.deleteProperty(global, name);
 			return;
 		}
 
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const cookies = this.client.getModule(CookiesModule)!;
+		const proxyModule = client.getModule(ProxyModule)!;
+		const cookies = client.getModule(CookiesModule)!;
 		const store = Reflect.apply(getter.get, global, []) as EventTarget;
 		const prototype = CookieStore.prototype as Record<Method, Function>;
 		const nativeAdd = global.EventTarget.prototype.addEventListener;
@@ -75,12 +75,12 @@ export default class CookieStoreModule extends Module<DocumentClient> {
 		const shared = (): CookieStoreMethods =>
 			(made ??= deferred().cookieStoreMethods({
 				global,
-				base: () => this.client.url.toString(),
+				base: () => client.url.toString(),
 				refuseURL: (url) =>
-					!url || withoutHash(url) !== withoutHash(this.client.url.url)
+					!url || withoutHash(url) !== withoutHash(client.url.url)
 						? 'URL must match the document URL'
 						: null,
-				host: () => this.client.url.url.hostname,
+				host: () => client.url.url.hostname,
 				jar: () => cookies.jarCookies(),
 				store: (write) => cookies.store(write),
 				refused: (method) => opaque(method),
@@ -148,7 +148,7 @@ export default class CookieStoreModule extends Module<DocumentClient> {
 
 		/** a refusal of an opaque origin, as natively */
 		const opaque = (method: Method) =>
-			this.client.sandboxedOpaque
+			client.sandboxedOpaque
 				? withStack(
 						new global.DOMException(
 							`Failed to execute '${method}' on 'CookieStore': Access to the CookieStore API is denied in this context.`,

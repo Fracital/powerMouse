@@ -335,9 +335,9 @@ export default class UnrouteModule extends Module<Client> {
 		this.applyReports();
 	}
 	applyPerformance() {
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const global = this.client.global as typeof globalThis &
-			Record<string, any>;
+		const client = this.client;
+		const proxyModule = client.getModule(ProxyModule)!;
+		const global = client.global as typeof globalThis & Record<string, any>;
 		const { PerformanceEntry, Performance } = global;
 		if (!PerformanceEntry || !Performance) return;
 
@@ -350,9 +350,9 @@ export default class UnrouteModule extends Module<Client> {
 		// null for an entry of the proxy's own machinery, and for one the
 		// page's resource timing would not have natively (ResourceTiming)
 		const pageName = (entry: PerformanceEntry): string | null =>
-			this.client.unreportedEntry?.(entry)
+			client.unreportedEntry?.(entry)
 				? null
-				: unrouteURL(this.client, String(nativeName(entry)));
+				: unrouteURL(client, String(nativeName(entry)));
 
 		Reflect.defineProperty(PerformanceEntry.prototype, 'name', {
 			...nameDescriptor,
@@ -360,7 +360,7 @@ export default class UnrouteModule extends Module<Client> {
 				nameDescriptor.get!,
 				(target, that: PerformanceEntry, args) => {
 					const name = Reflect.apply(target, that, args);
-					return unrouteURL(this.client, String(name)) ?? name;
+					return unrouteURL(client, String(name)) ?? name;
 				},
 			),
 		});
@@ -378,7 +378,7 @@ export default class UnrouteModule extends Module<Client> {
 				(target, that, args) => {
 					const json: { name?: unknown } = Reflect.apply(target, that, args);
 					if (json && typeof json.name === 'string')
-						json.name = unrouteURL(this.client, json.name) ?? json.name;
+						json.name = unrouteURL(client, json.name) ?? json.name;
 					return json;
 				},
 			);
@@ -396,7 +396,7 @@ export default class UnrouteModule extends Module<Client> {
 		const adopted = new WeakSet<object>();
 		const madeForChild = (entry: object): boolean => {
 			if (adopted.has(entry)) return true;
-			const loads = this.client.childLoads;
+			const loads = client.childLoads;
 			if (!loads.length || !startOf) return false;
 			const name = String(nativeName(entry as PerformanceEntry));
 			const start = Reflect.apply(startOf, entry, []) as number;
@@ -412,7 +412,7 @@ export default class UnrouteModule extends Module<Client> {
 		const pageEntry = (entry: object) =>
 			pageName(entry as PerformanceEntry) !== null &&
 			!madeForChild(entry) &&
-			(this.client.admitEntry?.(entry) ?? true);
+			(client.admitEntry?.(entry) ?? true);
 		const visible = (entries: PerformanceEntry[]) => entries.filter(pageEntry);
 		const filterList = <T extends Function>(fn: T) =>
 			proxyModule.wrapFunction(fn, (target, that, args) =>
@@ -420,7 +420,7 @@ export default class UnrouteModule extends Module<Client> {
 			);
 		// the page's buffer is counted in the page's entries only, from here
 		// on (ResourceBuffer.ts)
-		const buffer = this.client.getModule(ResourceBufferModule);
+		const buffer = client.getModule(ResourceBufferModule);
 		buffer?.start(pageEntry);
 		/**
 		 * `entries` (what the browser's buffer has of the page's, by start
@@ -437,16 +437,16 @@ export default class UnrouteModule extends Module<Client> {
 		) => {
 			if (that !== global.performance) return entries;
 			let waiting = (buffer?.read() ?? []) as PerformanceEntry[];
-			if (!this.client.controlled) {
+			if (!client.controlled) {
 				// (the ancestor's count brought up to now: it gives this
 				// document its entries as it hears of them)
-				const ancestor = this.client.controlledClient();
-				if (ancestor && ancestor !== this.client)
+				const ancestor = client.controlledClient();
+				if (ancestor && ancestor !== client)
 					ancestor.getModule(ResourceBufferModule)?.read();
-				if (this.client.adoptedLoads.length)
+				if (client.adoptedLoads.length)
 					waiting = [
 						...waiting,
-						...(this.client.adoptedLoads as PerformanceEntry[]),
+						...(client.adoptedLoads as PerformanceEntry[]),
 					];
 			}
 			if (!waiting.length || (type !== undefined && type !== 'resource'))
@@ -643,14 +643,11 @@ export default class UnrouteModule extends Module<Client> {
 	 * says `crossorigin`.
 	 */
 	#muted(routed: string | null): boolean {
-		if (!routed || !this.client.isDOM) return false;
+		const client = this.client;
+		if (!routed || !client.isDOM) return false;
 		let parsed;
 		try {
-			parsed = parseRoutedURL(
-				routed,
-				this.client.codec,
-				routedPrefix(this.client),
-			);
+			parsed = parseRoutedURL(routed, client.codec, routedPrefix(client));
 		} catch (error) {
 			return false;
 		}
@@ -662,10 +659,10 @@ export default class UnrouteModule extends Module<Client> {
 		const real = parsed.url.url;
 		if (
 			!ROUTE_PROTOCOLS.includes(real.protocol) ||
-			real.origin === this.client.url.url.origin
+			real.origin === client.url.url.origin
 		)
 			return false;
-		for (const script of this.client.global.document.querySelectorAll(
+		for (const script of client.global.document.querySelectorAll(
 			'script[crossorigin]',
 		))
 			if ((script as HTMLScriptElement).src === real.href) return false;
@@ -726,9 +723,9 @@ export default class UnrouteModule extends Module<Client> {
 	 * has no error object to find it from.
 	 */
 	applyErrorReports() {
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const global = this.client.global as typeof globalThis &
-			Record<string, any>;
+		const client = this.client;
+		const proxyModule = client.getModule(ProxyModule)!;
+		const global = client.global as typeof globalThis & Record<string, any>;
 
 		const domMessage = Reflect.getOwnPropertyDescriptor(
 			global.DOMException?.prototype ?? {},
@@ -745,7 +742,7 @@ export default class UnrouteModule extends Module<Client> {
 					const quoted = UNCLONEABLE.exec(message);
 					const source = quoted && originalSource(quoted[2]!);
 					return unrouteText(
-						this.client,
+						client,
 						source ? `${quoted[1]}${source}${quoted[3]}` : message,
 					);
 				}),
@@ -903,7 +900,7 @@ export default class UnrouteModule extends Module<Client> {
 		// the first listener of a dedicated worker, before any of the page's:
 		// the message goes ahead of the browser's report on the same queue
 		const post = global.postMessage;
-		if (!this.client.isDOM && typeof post === 'function' && natives.filename)
+		if (!client.isDOM && typeof post === 'function' && natives.filename)
 			global.addEventListener('error', (event: Event) => {
 				let filename: unknown;
 				try {
@@ -938,13 +935,11 @@ export default class UnrouteModule extends Module<Client> {
 	 * in toJSON.
 	 */
 	applyReports() {
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const global = this.client.global as typeof globalThis &
-			Record<string, any>;
+		const client = this.client;
+		const proxyModule = client.getModule(ProxyModule)!;
+		const global = client.global as typeof globalThis & Record<string, any>;
 		const unroute = (value: unknown) =>
-			typeof value === 'string'
-				? (unrouteURL(this.client, value) ?? value)
-				: value;
+			typeof value === 'string' ? (unrouteURL(client, value) ?? value) : value;
 		const unrouteJSON = (json: Record<string, unknown>) => {
 			const site = Object.hasOwn(json, 'sourceFile')
 				? siteFor(json.sourceFile, json.id)
@@ -965,7 +960,7 @@ export default class UnrouteModule extends Module<Client> {
 		const pagePolicy = (value: unknown) =>
 			typeof value === 'string'
 				? ((
-						this.client as { pagePolicyText?: (text: string) => string | null }
+						client as { pagePolicyText?: (text: string) => string | null }
 					).pagePolicyText?.(value) ?? value)
 				: value;
 		// A report that names one of the inject's bundles as its source was
@@ -977,8 +972,7 @@ export default class UnrouteModule extends Module<Client> {
 		// (a synchronous request's has a place of its own: `id` is the
 		// report's)
 		const siteFor = (sourceFile: unknown, id?: unknown) =>
-			typeof sourceFile === 'string' &&
-			unrouteURL(this.client, sourceFile) === null
+			typeof sourceFile === 'string' && unrouteURL(client, sourceFile) === null
 				? (id === SYNCHRONOUS_REQUEST_REPORT && this.#synchronousSite) ||
 					this.#reportSites[0]
 				: undefined;
@@ -1098,7 +1092,7 @@ export default class UnrouteModule extends Module<Client> {
 					// (one the page opened is the page's: noteSynchronousRequest)
 					!this.#synchronousSite &&
 					typeof body.sourceFile === 'string' &&
-					unrouteURL(this.client, body.sourceFile) === null
+					unrouteURL(client, body.sourceFile) === null
 				);
 			} catch (error) {
 				return false;
@@ -1148,15 +1142,16 @@ export default class UnrouteModule extends Module<Client> {
 		);
 	}
 	applyErrorStacks() {
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const ErrorCtor = this.client.global.Error as typeof Error & {
+		const moduleClient = this.client;
+		const proxyModule = moduleClient.getModule(ProxyModule)!;
+		const ErrorCtor = moduleClient.global.Error as typeof Error & {
 			captureStackTrace?: Function;
 			prepareStackTrace?: PrepareStackTrace;
 		};
 		// a realm hooked already: its Error is the page's (below)
 		if (errorProxies.has(ErrorCtor)) return;
 		const clean = (value: unknown) =>
-			typeof value === 'string' ? unrouteText(this.client, value) : value;
+			typeof value === 'string' ? unrouteText(moduleClient, value) : value;
 
 		const protoStack = Reflect.getOwnPropertyDescriptor(
 			ErrorCtor.prototype,
@@ -1186,7 +1181,7 @@ export default class UnrouteModule extends Module<Client> {
 		const fileName = (site: CallSite): string | null | undefined => {
 			const name = scriptName(site);
 			return typeof name === 'string'
-				? (unrouteURL(this.client, name) ?? name)
+				? (unrouteURL(moduleClient, name) ?? name)
 				: name;
 		};
 		// a frame inside the inject bundle: no page URL corresponds to it
@@ -1194,13 +1189,15 @@ export default class UnrouteModule extends Module<Client> {
 		// no URL, only the source URL the Client gives it, under the scope)
 		const isInternal = (site: CallSite) => {
 			const name = site.getFileName() ?? site.getScriptNameOrSourceURL();
-			return typeof name === 'string' && unrouteURL(this.client, name) === null;
+			return (
+				typeof name === 'string' && unrouteURL(moduleClient, name) === null
+			);
 		};
 		// V8 infers a name for an anonymous function from the code around it,
 		// and around the page's is the rewriter's (a frame read
 		// `$s$j.set2.t$t.<computed>`): no name of the page's, so the frame
 		// reads as an anonymous function's
-		const { names } = this.client;
+		const { names } = moduleClient;
 		const helpers = [names.access, names.globalProxy, names.client];
 		const helperName = (name: unknown) =>
 			typeof name === 'string' &&
@@ -1217,7 +1214,7 @@ export default class UnrouteModule extends Module<Client> {
 		// frames; the page would see its own call site there (the next frame
 		// of the page's), or nothing. The bundle lives under the scope, the
 		// routes under the address below it: one prefix covers both
-		const prefix = scopePrefix(this.client);
+		const prefix = scopePrefix(moduleClient);
 		const internalURL = new RegExp(
 			`${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^\\s()'"<>,]*`,
 			'g',
@@ -1240,7 +1237,7 @@ export default class UnrouteModule extends Module<Client> {
 			return { location: '<anonymous>', name: '<anonymous>' };
 		};
 		const isInternalMatch = (match: string) =>
-			unrouteURL(this.client, match.replace(LINE_COLUMN, '')) === null;
+			unrouteURL(moduleClient, match.replace(LINE_COLUMN, '')) === null;
 		// the eval origin of a function the page made with `new Function`
 		// (the Function module made it, with the realm's eval): natively the
 		// page's call, and the frame of such a function reads `eval`
@@ -1253,7 +1250,7 @@ export default class UnrouteModule extends Module<Client> {
 			sites: CallSite[],
 		): string =>
 			unrouteText(
-				this.client,
+				moduleClient,
 				text
 					.replace(internalOrigin, (match, async, name, url) => {
 						if (!isInternalMatch(url)) return match;
@@ -1420,14 +1417,14 @@ export default class UnrouteModule extends Module<Client> {
 			}
 			return this.#pageSites.get(error);
 		};
-		this.client.callerScript = () => {
+		moduleClient.callerScript = () => {
 			const routed = this.#callerLocation?.()?.routed;
 			if (!routed) return null;
 			try {
 				const parsed = parseRoutedURL(
 					routed,
-					this.client.codec,
-					routedPrefix(this.client),
+					moduleClient.codec,
+					routedPrefix(moduleClient),
 				);
 				// a script's own route (not a document's, whose markup scripts
 				// are named for it)
@@ -1511,7 +1508,7 @@ export default class UnrouteModule extends Module<Client> {
 				return clean(result);
 			}
 			return (
-				unrouteText(this.client, header(error)) +
+				unrouteText(moduleClient, header(error)) +
 				shown
 					.map(
 						(site, index) =>
@@ -1696,7 +1693,7 @@ export default class UnrouteModule extends Module<Client> {
 		pageError = new Proxy(ErrorCtor, handler);
 		errorProxies.add(pageError);
 		proxyModule.functionStrings.set(pageError, ErrorCtor.toString());
-		const global = this.client.global as unknown as Record<string, unknown>;
+		const global = moduleClient.global as unknown as Record<string, unknown>;
 		const constructor = Reflect.getOwnPropertyDescriptor(
 			ErrorCtor.prototype,
 			'constructor',

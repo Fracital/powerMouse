@@ -17,11 +17,11 @@ const CLOSE_ANSWER_MS = 500;
 
 export default class WebSocketModule extends Module<Client> {
 	apply() {
-		const realm = this.client.global;
-		const proxyModule = this.client.getModule(ProxyModule)!;
 		const client = this.client;
+		const realm = client.global;
+		const proxyModule = client.getModule(ProxyModule)!;
 		const instances = new WeakSet();
-		const { origin } = this.client.url.url;
+		const { origin } = client.url.url;
 		const NativeWebSocket = realm.WebSocket;
 		const { CONNECTING, OPEN, CLOSING, CLOSED } = NativeWebSocket;
 

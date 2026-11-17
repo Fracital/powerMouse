@@ -16,11 +16,12 @@ type Image = { src?: unknown; sizes?: unknown; type?: unknown };
  */
 export default class MediaSessionModule extends Module<DocumentClient> {
 	apply() {
-		const global = this.client.global;
+		const client = this.client;
+		const global = client.global;
 		const NativeMetadata = (global as { MediaMetadata?: typeof MediaMetadata })
 			.MediaMetadata;
 		if (typeof NativeMetadata !== 'function') return;
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const proxyModule = client.getModule(ProxyModule)!;
 
 		// an image list with each web URL routed, resolved against the page
 		const routed = (artwork: unknown): unknown => {
@@ -30,7 +31,7 @@ export default class MediaSessionModule extends Module<DocumentClient> {
 				if (image === null || typeof image !== 'object') return image;
 				let url: URL;
 				try {
-					url = new URL(String(image.src), this.client.baseURL.toString());
+					url = new URL(String(image.src), client.baseURL.toString());
 				} catch (error) {
 					// the native constructor throws its own TypeError
 					return image;
@@ -38,7 +39,7 @@ export default class MediaSessionModule extends Module<DocumentClient> {
 				if (url.protocol !== 'http:' && url.protocol !== 'https:') return image;
 				return {
 					...image,
-					src: routeBinary(new StompURL(url, this.client.url)),
+					src: routeBinary(new StompURL(url, client.url)),
 				};
 			});
 		};
@@ -63,7 +64,7 @@ export default class MediaSessionModule extends Module<DocumentClient> {
 										...image,
 										src:
 											typeof image.src === 'string'
-												? (unrouteURL(this.client, image.src) ?? image.src)
+												? (unrouteURL(client, image.src) ?? image.src)
 												: image.src,
 									}),
 								),

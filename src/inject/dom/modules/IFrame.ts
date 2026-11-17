@@ -68,26 +68,27 @@ function sourcePolicy(source: Element | null | undefined): ReferrerPolicy {
 
 export default class IFrameModule extends Module<DocumentClient> {
 	apply() {
-		const realm = this.client.global;
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const moduleClient = this.client;
+		const realm = moduleClient.global;
+		const proxyModule = moduleClient.getModule(ProxyModule)!;
 
 		const injectContext = (context: typeof globalThis) => {
-			if (this.client.names.client in context) return;
+			if (moduleClient.names.client in context) return;
 
 			// the document is its creator's, and so is its script policy
 			// (src/csp.ts): the client takes what this one was told
 			Reflect.defineProperty(context, CSP_FACTS, {
-				value: { ...this.client.scriptFacts },
+				value: { ...moduleClient.scriptFacts },
 				configurable: true,
 			});
 			const client = new DocumentClient(
-				parseConfig(this.client.config, this.client.codec.key),
+				parseConfig(moduleClient.config, moduleClient.codec.key),
 				context,
 			);
 
 			addClientModules(client);
 
-			Reflect.defineProperty(context, this.client.names.client, {
+			Reflect.defineProperty(context, moduleClient.names.client, {
 				value: client,
 				configurable: false,
 				enumerable: false,
@@ -103,7 +104,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 		// this page is its opener (whose document it is: DocumentClient url).
 		// Only a child or such a popup of this page, so a page
 		// cannot have another document's window injected with its bundle
-		this.client.injectChild = (context) => {
+		moduleClient.injectChild = (context) => {
 			const self = realm as unknown;
 			const popup =
 				Reflect.get(context, 'parent') === (context as unknown) &&
@@ -112,14 +113,14 @@ export default class IFrameModule extends Module<DocumentClient> {
 			if (Reflect.get(context, 'parent') !== self && !popup) return;
 			injectContext(context);
 			const client = (context as Record<string, any>)[
-				this.client.names.client
+				moduleClient.names.client
 			] as DocumentClient;
 			if (client.applied) return;
-			if (popup) this.client.openedWindows.add(context);
+			if (popup) moduleClient.openedWindows.add(context);
 			client.apply();
 		};
 
-		const windowModule = this.client.getModule(ContextModule)!;
+		const windowModule = moduleClient.getModule(ContextModule)!;
 
 		// a popup the page opens without a URL (about:blank) is a document
 		// nobody fetched: inject it like a child frame, so what the page writes
@@ -133,14 +134,14 @@ export default class IFrameModule extends Module<DocumentClient> {
 			if (!opened) return opened;
 			// a window this page opened it may navigate, sandboxed or not (whether
 			// it is held as itself is decided where it is handed out)
-			this.client.openedWindows.add(opened);
+			moduleClient.openedWindows.add(opened);
 			try {
 				if (opened.location.href === 'about:blank') {
 					injectContext(opened);
 					if (
-						!(opened as Record<string, any>)[this.client.names.client]!.applied
+						!(opened as Record<string, any>)[moduleClient.names.client]!.applied
 					)
-						(opened as Record<string, any>)[this.client.names.client]!.apply();
+						(opened as Record<string, any>)[moduleClient.names.client]!.apply();
 				}
 			} catch (error) {
 				// cross-origin: not ours to inject
@@ -149,7 +150,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 			// itself, wherever it navigates later (its messages' source is
 			// this object), one of another site (an existing frame by name,
 			// or one whose next document is the URL given) restricted
-			if (!isStomp(opened, this.client.names.client)) {
+			if (!isStomp(opened, moduleClient.names.client)) {
 				windowModule.hold(opened);
 				return opened;
 			}
@@ -168,7 +169,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 			// a window this page held before the frame got a fresh context
 			// stands for the frame's window, whose document is another
 			// origin's (freshContext.ts)
-			if (reached !== view && isStomp(view, this.client.names.client))
+			if (reached !== view && isStomp(view, moduleClient.names.client))
 				return null;
 			return document;
 		};
@@ -192,7 +193,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 		// or this document is opaque itself. Never injected from this side (its
 		// own shell injects it), restricted like a frame of another origin
 		const sandboxedOpaque = (element: Element) => {
-			if (this.client.sandboxedOpaque) return true;
+			if (moduleClient.sandboxedOpaque) return true;
 			const sandbox = pageSandbox(element, MARKER);
 			return (
 				sandbox !== null && !sandboxTokens(sandbox).has('allow-same-origin')
@@ -229,12 +230,12 @@ export default class IFrameModule extends Module<DocumentClient> {
 		};
 		const sweepChild = (context: typeof globalThis) => {
 			try {
-				if (this.client.names.client in context || !initialBlank(context))
+				if (moduleClient.names.client in context || !initialBlank(context))
 					return;
 				const element = Reflect.get(context, 'frameElement') as Element | null;
 				if (
 					element &&
-					(this.client.opaqueFrames.has(element) ||
+					(moduleClient.opaqueFrames.has(element) ||
 						sandboxedOpaque(element) ||
 						// a frame on its way to a document (a src, a srcdoc) is
 						// about to leave its about:blank: the browser keeps the
@@ -252,15 +253,17 @@ export default class IFrameModule extends Module<DocumentClient> {
 				return;
 			}
 			injectContext(context);
-			const client = (context as Record<string, any>)[this.client.names.client];
+			const client = (context as Record<string, any>)[
+				moduleClient.names.client
+			];
 			if (client && !client.applied) client.apply();
 		};
 		const global = realm;
-		this.client.sweepFrames = () => {
+		moduleClient.sweepFrames = () => {
 			// a document that runs no script of the page (a sandbox without
 			// allow-scripts) has no code that could reach a child's realm, and
 			// a client in the child would guard that child's own document
-			if (!this.client.allows('allow-scripts')) return;
+			if (!moduleClient.allows('allow-scripts')) return;
 			const count = global.length;
 			for (let index = 0; index < count; index++) {
 				let child: typeof globalThis | undefined;
@@ -279,7 +282,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 		const NativeMutationObserver = global.MutationObserver;
 		if (typeof NativeMutationObserver === 'function') {
 			const observer = new NativeMutationObserver(() =>
-				this.client.sweepFrames?.(),
+				moduleClient.sweepFrames?.(),
 			);
 			const observe = () =>
 				observer.observe(global.document, { childList: true, subtree: true });
@@ -341,7 +344,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 						}
 						try {
 							const child = get.call(target) as Record<string, any> | null;
-							if (child?.[this.client.names.client]?.shellPending === true)
+							if (child?.[moduleClient.names.client]?.shellPending === true)
 								Reflect.apply(stopImmediate, event, []);
 						} catch (error) {
 							// another origin's document: not a shell of ours
@@ -371,8 +374,8 @@ export default class IFrameModule extends Module<DocumentClient> {
 					const to = (event as CustomEvent).detail;
 					if (
 						typeof to === 'string' &&
-						to.startsWith(scopePrefix(this.client)) &&
-						this.client.freshFrame?.(target, to)
+						to.startsWith(scopePrefix(moduleClient)) &&
+						moduleClient.freshFrame?.(target, to)
 					)
 						event.preventDefault();
 				},
@@ -384,15 +387,15 @@ export default class IFrameModule extends Module<DocumentClient> {
 		// A frame of this document that is to show another origin's document
 		// gets a fresh browsing context first (freshContext.ts): asked by the
 		// frame's own document, which may run another bundle
-		this.client.freshFrame = (element, routed, formData, page) => {
+		moduleClient.freshFrame = (element, routed, formData, page) => {
 			const old = frameWindow(element);
 			if (!freshFrame(element, routed, formData)) return false;
 			recordFresh(
-				this.client,
+				moduleClient,
 				element,
 				old,
 				page ??
-					(routed === null ? '' : (unrouteURL(this.client, routed) ?? routed)),
+					(routed === null ? '' : (unrouteURL(moduleClient, routed) ?? routed)),
 				(native, hook) =>
 					proxyModule.wrapFunction(native, (target, that, args) => hook(args)),
 			);
@@ -404,24 +407,24 @@ export default class IFrameModule extends Module<DocumentClient> {
 		// origin (its location set, window.open or a link or form aimed at
 		// it by name) gets its fresh context here, as the src setter does
 		// (DOMAttributes)
-		this.client.freshTo = (destination, formData, empty) => {
+		moduleClient.freshTo = (destination, formData, empty) => {
 			if (!/^(https?|data):$/.test(destination.protocol)) return false;
 			if (!initialBlank(global)) return false;
 			const origin =
 				destination.protocol === 'data:' ? null : destination.origin;
-			if (origin === this.client.originKey) return false;
-			const container = containerOf(global, this.client.names.client);
+			if (origin === moduleClient.originKey) return false;
+			const container = containerOf(global, moduleClient.names.client);
 			if (!container?.parent.freshFrame) return false;
 			return container.parent.freshFrame(
 				container.element,
 				empty
 					? null
 					: routeHTML(
-							new StompURL(destination, this.client.url),
-							this.client.url,
-							this.client.config,
+							new StompURL(destination, moduleClient.url),
+							moduleClient.url,
+							moduleClient.config,
 							false,
-							this.client.nestedRoute,
+							moduleClient.nestedRoute,
 						),
 				formData,
 				destination.href,
@@ -433,12 +436,12 @@ export default class IFrameModule extends Module<DocumentClient> {
 		// had the event (one may cancel it), as the browser does
 		const blankTarget = (name: string | null) => {
 			if (!name || name.startsWith('_')) return null;
-			const element = this.client.frameNamed(name);
+			const element = moduleClient.frameNamed(name);
 			const view = element && frameWindow(element);
 			if (!view) return null;
 			try {
 				const client = (view as unknown as Record<string, unknown>)[
-					this.client.names.client
+					moduleClient.names.client
 				] as DocumentClient | undefined;
 				return client?.freshTo ? client : null;
 			} catch (error) {
@@ -477,7 +480,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 				try {
 					url = new URL(
 						link.getAttribute('href')!,
-						this.client.baseURL.toString(),
+						moduleClient.baseURL.toString(),
 					);
 				} catch (error) {
 					// no URL: the click navigates nothing, here or in the browser
@@ -516,7 +519,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 					// (NavigationHint sends it to a refusal URL, which the
 					// browser refuses): the frame keeps its context, as natively
 					if (
-						this.client
+						moduleClient
 							.pageRefusals('form-action', url)
 							.some(({ policy }) => policy.disposition === 'enforce')
 					)
@@ -589,7 +592,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 
 				if (
 					context &&
-					(this.client.opaqueFrames.has(element) || sandboxedOpaque(element))
+					(moduleClient.opaqueFrames.has(element) || sandboxedOpaque(element))
 				)
 					// an opaque (data:) document: another origin from here, never
 					// injected by this page (its own shell injects it)
@@ -603,13 +606,16 @@ export default class IFrameModule extends Module<DocumentClient> {
 					const restricted = initialBlank(context)
 						? windowModule.pending(
 								context,
-								frameDestination(this.client, element),
+								frameDestination(moduleClient, element),
 							)
 						: windowModule.newRestricted(context);
 					if (
-						!(context as Record<string, any>)[this.client.names.client]!.applied
+						!(context as Record<string, any>)[moduleClient.names.client]!
+							.applied
 					) {
-						(context as Record<string, any>)[this.client.names.client]!.apply();
+						(context as Record<string, any>)[
+							moduleClient.names.client
+						]!.apply();
 					}
 
 					return restricted;
@@ -665,7 +671,8 @@ export default class IFrameModule extends Module<DocumentClient> {
 		return containerOf(this.client.global, this.client.names.client);
 	}
 	#guardNavigations() {
-		const global = this.client.global as typeof globalThis & {
+		const client = this.client;
+		const global = client.global as typeof globalThis & {
 			navigation?: EventTarget;
 		};
 		const navigation = global.navigation;
@@ -705,7 +712,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 				let origin: string;
 				let page: URL;
 				try {
-					page = new URL(unrouteURL(this.client, routed) ?? routed);
+					page = new URL(unrouteURL(client, routed) ?? routed);
 					if (!/^(https?|data):$/.test(page.protocol)) return;
 					origin = page.origin;
 					// a link route (src/visited.ts) takes its kind of route from
@@ -713,18 +720,18 @@ export default class IFrameModule extends Module<DocumentClient> {
 					// (its parent's): this frame's own route instead. A fresh
 					// context's first document makes no history entry, so no
 					// visit is recorded either way
-					if (isLinkRoute(routed, scopePrefix(this.client)))
+					if (isLinkRoute(routed, scopePrefix(client)))
 						routed = routeHTML(
-							new StompURL(page, this.client.url),
-							this.client.url,
-							this.client.config,
+							new StompURL(page, client.url),
+							client.url,
+							client.config,
 							false,
-							this.client.nestedRoute,
+							client.nestedRoute,
 						);
 				} catch (error) {
 					return;
 				}
-				if (origin === this.client.originKey) return;
+				if (origin === client.originKey) return;
 				const container = this.#container();
 				if (!container) return;
 				// The parent's frame-src judges the navigation before the frame
@@ -733,7 +740,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 				// refusal URL in this context, and the worker is told what
 				// judges the later hops of one that goes on
 				if (
-					this.client
+					client
 						.getModule(NavigationHintModule)
 						?.judgeFrame(event, page.href) === true
 				)
@@ -755,9 +762,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 				// controls it (an about:srcdoc document has a policy of its own),
 				// else of the routed document it is of (an about:blank one's is
 				// that document's). An opaque origin's sends no referrer at all.
-				const teller = this.client.controlled
-					? this.client
-					: this.client.routedClient();
+				const teller = client.controlled ? client : client.routedClient();
 				if (!teller) {
 					again();
 					return;
@@ -765,11 +770,11 @@ export default class IFrameModule extends Module<DocumentClient> {
 				let told: Promise<unknown>;
 				try {
 					told = teller.nativeFetch(
-						`${new URL(scopePrefix(this.client)).origin}${teller.directory}${FRESH_RETURN_ROUTE}`,
+						`${new URL(scopePrefix(client)).origin}${teller.directory}${FRESH_RETURN_ROUTE}`,
 						{
 							method: 'POST',
 							body: routed,
-							referrerPolicy: this.client.sandboxedOpaque
+							referrerPolicy: client.sandboxedOpaque
 								? 'no-referrer'
 								: sourcePolicy(navigate.sourceElement),
 						},

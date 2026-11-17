@@ -11,13 +11,14 @@ import ProxyModule, { ownerOf } from './Proxy';
  */
 export default class TimersModule extends Module<Client> {
 	apply() {
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const client = this.client;
+		const proxyModule = client.getModule(ProxyModule)!;
 
 		for (const name of ['setTimeout', 'setInterval'] as const) {
 			// (where the browser has it: the window itself, a worker scope's
 			// prototype)
 			const global = ownerOf(
-				this.client.global as unknown as Record<string, Function>,
+				client.global as unknown as Record<string, Function>,
 				name,
 			);
 			global[name] = proxyModule.wrapFunction(
@@ -27,21 +28,16 @@ export default class TimersModule extends Module<Client> {
 						// the page's Trusted Types judge the code first (trusted.ts);
 						// then its script-src, which runs nothing and throws nothing,
 						// and reports it (src/csp.ts codeEval)
-						const code = this.client.trustedValue(
+						const code = client.trustedValue(
 							args[0],
 							'TrustedScript',
-							`${this.client.isWorker ? 'WorkerGlobalScope' : 'Window'} ${name}`,
+							`${client.isWorker ? 'WorkerGlobalScope' : 'Window'} ${name}`,
 							() => Reflect.apply(target, that, args),
 						);
 						if (code === null) return 0;
-						if (this.client.codeEval('timer', code)) return 0;
+						if (client.codeEval('timer', code)) return 0;
 						args[0] = trustedScript(
-							modifyJS(
-								code,
-								this.client.baseURL,
-								this.client.config,
-								'generic',
-							),
+							modifyJS(code, client.baseURL, client.config, 'generic'),
 						);
 					}
 					return Reflect.apply(target, that, args);

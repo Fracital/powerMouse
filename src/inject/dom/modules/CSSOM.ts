@@ -26,8 +26,9 @@ export default class CSSOMModule extends Module<DocumentClient> {
 	/** @internal this realm's FontFace, before the hook */
 	nativeFontFace?: typeof FontFace;
 	apply() {
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const global = this.client.global;
+		const client = this.client;
+		const proxyModule = client.getModule(ProxyModule)!;
+		const global = client.global;
 		this.nativeFontFace = global.FontFace;
 
 		/**
@@ -39,8 +40,8 @@ export default class CSSOMModule extends Module<DocumentClient> {
 		 * never reach it.
 		 */
 		const controlledFontFace = (): typeof FontFace | undefined => {
-			const controlled = this.client.controlledClient();
-			if (controlled && controlled !== this.client)
+			const controlled = client.controlledClient();
+			if (controlled && controlled !== client)
 				return (
 					(controlled as DocumentClient).getModule?.(CSSOMModule)
 						?.nativeFontFace ?? bundleFontFace
@@ -51,10 +52,10 @@ export default class CSSOMModule extends Module<DocumentClient> {
 		const rewrite = (text: unknown) => {
 			const source = String(text);
 			try {
-				return modifyCSS(source, this.client.baseURL);
+				return modifyCSS(source, client.baseURL);
 			} catch (error) {
 				// unparsable: route what the regex can find
-				return rewriteCSSValueURLs(source, this.client.baseURL);
+				return rewriteCSSValueURLs(source, client.baseURL);
 			}
 		};
 
@@ -62,15 +63,15 @@ export default class CSSOMModule extends Module<DocumentClient> {
 		const rewriteDeclarations = (text: unknown) => {
 			const source = String(text);
 			try {
-				return modifyCSS(source, this.client.baseURL, 'declarationList');
+				return modifyCSS(source, client.baseURL, 'declarationList');
 			} catch (error) {
-				return rewriteCSSValueURLs(source, this.client.baseURL);
+				return rewriteCSSValueURLs(source, client.baseURL);
 			}
 		};
 
 		// a sheet in a document no service worker controls has its loads
 		// copied once its rules change (replace: once they are in)
-		const domAttributes = this.client.getModule(DOMAttributesModule);
+		const domAttributes = client.getModule(DOMAttributesModule);
 		const copied = (sheet: unknown) => {
 			if (domAttributes?.uncontrolled())
 				domAttributes.copyRules?.(sheet as CSSStyleSheet);
@@ -94,9 +95,7 @@ export default class CSSOMModule extends Module<DocumentClient> {
 			global.HTMLLinkElement?.prototype,
 			'crossOrigin',
 		);
-		const opaqueLoad = this.client
-			.getModule(ResourceTimingModule)
-			?.opaqueLoads();
+		const opaqueLoad = client.getModule(ResourceTimingModule)?.opaqueLoads();
 		/** per sheet of another origin's URL: whether its rules are refused */
 		const foreignSheets = new WeakMap<object, boolean>();
 		const refused = (styleSheet: unknown): boolean => {
@@ -120,12 +119,12 @@ export default class CSSOMModule extends Module<DocumentClient> {
 				if (opaqueCopies.has(href)) return true;
 				real = blobLoads.get(href);
 				if (real === undefined) return false;
-			} else real = unrouteURL(this.client, href) ?? href;
+			} else real = unrouteURL(client, href) ?? href;
 			let cross: boolean;
 			try {
 				cross =
 					new URL(real).origin !==
-					(this.client.opaqueRequests ? 'null' : this.client.url.url.origin);
+					(client.opaqueRequests ? 'null' : client.url.url.origin);
 			} catch (error) {
 				return false;
 			}
@@ -291,14 +290,14 @@ export default class CSSOMModule extends Module<DocumentClient> {
 					// a string source is a CSS `src` value; a buffer is data
 					if (typeof args[1] !== 'string')
 						return Reflect.construct(target, args, newTarget);
-					args[1] = rewriteCSSValueURLs(args[1], this.client.baseURL);
+					args[1] = rewriteCSSValueURLs(args[1], client.baseURL);
 					// in a document no worker controls, a face whose source names
 					// routes is made in a controlled realm, so it loads through the
 					// worker; it is still this realm's FontFace (its prototype
 					// comes from newTarget), and any document's font set takes it
 					const Controlled =
 						args[1].includes('url(') &&
-						this.client.getModule(DOMAttributesModule)?.uncontrolled()
+						client.getModule(DOMAttributesModule)?.uncontrolled()
 							? controlledFontFace()
 							: undefined;
 					if (!Controlled) return Reflect.construct(target, args, newTarget);

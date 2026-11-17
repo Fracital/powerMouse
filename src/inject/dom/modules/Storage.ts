@@ -37,19 +37,20 @@ interface Pending {
 
 export default class StorageModule extends Module<DocumentClient> {
 	apply() {
-		const pageGlobal = this.client.global;
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const syncModule = this.client.getModule(SyncModule)!;
+		const client = this.client;
+		const pageGlobal = client.global;
+		const proxyModule = client.getModule(ProxyModule)!;
+		const syncModule = client.getModule(SyncModule)!;
 
 		const instances = new WeakSet();
 
 		let building = true;
 
 		// keyed by the origin and its partition (src/partition.ts)
-		const getOrigin = () => this.client.storageKey;
+		const getOrigin = () => client.storageKey;
 		// this document, so it never hears its own changes
 		const sender = Math.random().toString(36).slice(2);
-		const here = () => this.client.url.toString();
+		const here = () => client.url.toString();
 
 		// Every call below is a synchronous beacon to the worker, and Chrome
 		// refuses a document's beacons once 64 KiB of them are in flight,
@@ -251,9 +252,9 @@ export default class StorageModule extends Module<DocumentClient> {
 				seq: String(seq),
 				base: String(base),
 				name,
-				origin: this.client.codec.encode(getOrigin()),
+				origin: client.codec.encode(getOrigin()),
 			};
-			if (key !== null) operation.key = this.client.codec.encode(key);
+			if (key !== null) operation.key = client.codec.encode(key);
 			post(directory, operation, args).then(settle, (error) => {
 				console.error(`Stomp: a storage write could not be stored: ${error}`);
 				settle();
@@ -626,11 +627,11 @@ export default class StorageModule extends Module<DocumentClient> {
 		};
 
 		const localStorage = storageFactory(
-			`${this.client.directory}localStorage/`,
+			`${client.directory}localStorage/`,
 			'localStorage',
 		);
 		const sessionStorage = storageFactory(
-			`${this.client.directory}sessionStorage/`,
+			`${client.directory}sessionStorage/`,
 			'sessionStorage',
 		);
 
@@ -659,7 +660,7 @@ export default class StorageModule extends Module<DocumentClient> {
 		// changes made by the other documents of this origin arrive from the
 		// service worker; the area must be our own object, which the event's
 		// dictionary would reject, so it is set on the event afterwards
-		this.client.onServiceWorkerMessage((data) => {
+		client.onServiceWorkerMessage((data) => {
 			const change = (data as Record<string, StorageChange> | null)?.[
 				STORAGE_EVENT
 			];
@@ -667,7 +668,7 @@ export default class StorageModule extends Module<DocumentClient> {
 				return;
 			// the writer changed the stamp already; this is for a writer whose
 			// stamp this document could not see
-			changed(`${this.client.directory}${change.store}/`, false);
+			changed(`${client.directory}${change.store}/`, false);
 			if (change.store !== 'localStorage') return;
 			const event = new pageGlobal.StorageEvent('storage', {
 				key: change.key,

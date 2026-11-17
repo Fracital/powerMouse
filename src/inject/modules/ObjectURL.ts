@@ -32,7 +32,8 @@ export default class ObjectURLModule extends Module<Client> {
 		});
 	}
 	apply() {
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const client = this.client;
+		const proxyModule = client.getModule(ProxyModule)!;
 		// the page's origin and the proxy's, for every routeURL call from now
 		// on. The proxy's is the realm's own as the browser has it: an
 		// about:blank or srcdoc child that the page reaches into runs this
@@ -40,8 +41,8 @@ export default class ObjectURLModule extends Module<Client> {
 		// reads "null", which set here made every blob: URL the page minted
 		// after that come out in the proxy's form (YouTube Music's and
 		// SoundCloud's MediaSource URLs, read back through currentSrc)
-		setBlobOrigins(this.client.url.url.origin, realmOrigin(this.client));
-		const URLCtor = this.client.global.URL;
+		setBlobOrigins(client.url.url.origin, realmOrigin(client));
+		const URLCtor = client.global.URL;
 		if (typeof URLCtor?.createObjectURL !== 'function') return;
 		URLCtor.createObjectURL = proxyModule.wrapFunction(
 			URLCtor.createObjectURL,
@@ -51,7 +52,7 @@ export default class ObjectURLModule extends Module<Client> {
 				// document (htmlBlobs.ts), showing the page's URL as before
 				const markup = htmlBlobs.get(args[0] as Blob);
 				if (markup !== undefined)
-					htmlBlobURLs.set(url, { markup, url: this.client.url.toString() });
+					htmlBlobURLs.set(url, { markup, url: client.url.toString() });
 				// the registry's entry, for a worker started from it (workerBlobs)
 				if (isBlob(args[0])) blobsByURL.set(url, args[0]);
 				this.#register(url);

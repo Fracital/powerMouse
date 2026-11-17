@@ -17,9 +17,9 @@ import DOMHooksModule from './DOMHooks';
  */
 export default class CSSReadbackModule extends Module<DocumentClient> {
 	apply() {
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const global = this.client.global as typeof globalThis &
-			Record<string, any>;
+		const client = this.client;
+		const proxyModule = client.getModule(ProxyModule)!;
+		const global = client.global as typeof globalThis & Record<string, any>;
 
 		const unrouteStringGetter = (
 			target: object | undefined,
@@ -40,20 +40,20 @@ export default class CSSReadbackModule extends Module<DocumentClient> {
 				}),
 			});
 		};
-		const css = (value: string) => unrouteCSS(this.client, value);
-		const url = (value: string) => unrouteURL(this.client, value) ?? value;
+		const css = (value: string) => unrouteCSS(client, value);
+		const url = (value: string) => unrouteURL(client, value) ?? value;
 
 		// rules and sheets: a rule is the browser's serialisation of what it
 		// parsed, whose url() is quoted whatever the page wrote
 		unrouteStringGetter(global.CSSRule?.prototype, 'cssText', (value) =>
-			unrouteCSS(this.client, value, true),
+			unrouteCSS(client, value, true),
 		);
 		unrouteStringGetter(global.StyleSheet?.prototype, 'href', url);
 		unrouteStringGetter(global.CSSImportRule?.prototype, 'href', url);
 
 		// a rule's declaration: the same proxy as element.style
 		const wrapDeclaration =
-			this.client.getModule(DOMAttributesModule)!.wrapDeclaration;
+			client.getModule(DOMAttributesModule)!.wrapDeclaration;
 		if (wrapDeclaration)
 			for (const name of RULE_STYLE_INTERFACES) {
 				const prototype = global[name]?.prototype;
@@ -75,11 +75,9 @@ export default class CSSReadbackModule extends Module<DocumentClient> {
 			'parentNode',
 		)!.get!;
 		const inStyle = (that: unknown): boolean => {
-			if (this.client.styleElement(that)) return true;
+			if (client.styleElement(that)) return true;
 			try {
-				return !!this.client.styleElement(
-					Reflect.apply(parentNodeGet, that, []),
-				);
+				return !!client.styleElement(Reflect.apply(parentNodeGet, that, []));
 			} catch (error) {
 				return false;
 			}
@@ -96,7 +94,7 @@ export default class CSSReadbackModule extends Module<DocumentClient> {
 
 		// serialised markup: style text and style attributes in innerHTML /
 		// outerHTML (the marker fold of DOMHooks runs first)
-		const domHooks = this.client.getModule(DOMHooksModule)!;
+		const domHooks = client.getModule(DOMHooksModule)!;
 		const serializeOriginal = domHooks.serializeOriginal;
 		domHooks.serializeOriginal = (element, outer) =>
 			css(serializeOriginal(element, outer));

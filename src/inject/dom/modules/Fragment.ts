@@ -50,8 +50,9 @@ export default class FragmentModule extends Module<DocumentClient> {
 	 */
 	live: (routed: string) => string = (routed) => routed;
 	apply() {
-		const global = this.client.global;
-		const codec = this.client.codec;
+		const client = this.client;
+		const global = client.global;
+		const codec = client.codec;
 		const navigation = (global as { navigation?: NavigationLike }).navigation;
 		const location = global.location;
 		// taken before any module or page wraps them
@@ -83,7 +84,7 @@ export default class FragmentModule extends Module<DocumentClient> {
 				NavigationHistoryEntry?: { prototype: { getState(): unknown } };
 			}
 		).NavigationHistoryEntry?.prototype.getState;
-		const history = () => this.client.getModule(HistoryModule);
+		const history = () => client.getModule(HistoryModule);
 		const getElementById = global.Document.prototype.getElementById;
 		const getAttribute = global.Element.prototype.getAttribute;
 		const setAttribute = global.Element.prototype.setAttribute;
@@ -335,8 +336,7 @@ export default class FragmentModule extends Module<DocumentClient> {
 				global.document.querySelector('base[target]')?.getAttribute('target') ||
 				''
 			).toLowerCase();
-			if (!SAME_FRAME.includes(target) && !this.client.hasFrameNamed(target))
-				return;
+			if (!SAME_FRAME.includes(target) && !client.hasFrameNamed(target)) return;
 			const routed = Reflect.apply(getAttribute, link, ['href']) as
 				string | null;
 			if (!routed || split(routed)[1] === null) return;
@@ -344,17 +344,17 @@ export default class FragmentModule extends Module<DocumentClient> {
 			// own address would name it: a link to this document only
 			let address: string;
 			try {
-				const real = unrouteURL(this.client, new URL(routed, href()).href);
+				const real = unrouteURL(client, new URL(routed, href()).href);
 				if (real === null) return;
 				const url = new URL(real);
-				if (beforeFragment(url) !== beforeFragment(this.client.url.url)) return;
+				if (beforeFragment(url) !== beforeFragment(client.url.url)) return;
 				address = new URL(
 					routeHTML(
-						new StompURL(url, this.client.url),
-						this.client.url,
-						this.client.config,
+						new StompURL(url, client.url),
+						client.url,
+						client.config,
 						false,
-						this.client.nestedRoute,
+						client.nestedRoute,
 					),
 					href(),
 				).href;

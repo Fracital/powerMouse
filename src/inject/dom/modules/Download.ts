@@ -38,8 +38,9 @@ function dispositionName(header: string | null): string | null {
  */
 export default class DownloadModule extends Module<DocumentClient> {
 	apply() {
-		const global = this.client.global;
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const client = this.client;
+		const global = client.global;
+		const proxyModule = client.getModule(ProxyModule)!;
 		const nativePreventDefault = global.Event.prototype.preventDefault;
 		// clicks this module cancelled, and which of them the page cancelled
 		const ours = new WeakSet<Event>();
@@ -102,15 +103,12 @@ export default class DownloadModule extends Module<DocumentClient> {
 			let url: URL;
 			try {
 				// the hooked getter answers with what the page wrote
-				url = new URL(
-					link.getAttribute('href')!,
-					this.client.baseURL.toString(),
-				);
+				url = new URL(link.getAttribute('href')!, client.baseURL.toString());
 			} catch (error) {
 				return;
 			}
 			if (!['http:', 'https:'].includes(url.protocol)) return;
-			if (url.origin !== this.client.url.url.origin) return;
+			if (url.origin !== client.url.url.origin) return;
 			ours.add(event);
 			Reflect.apply(nativePreventDefault, event, []);
 			const named = link.getAttribute('download')!.trim();
@@ -128,12 +126,11 @@ export default class DownloadModule extends Module<DocumentClient> {
 		addDocumentOpenListener(global, install);
 	}
 	async save(url: URL, named: string) {
+		const client = this.client;
 		const response = await loadFetch(
-			this.client,
-			new URL(
-				routeBinary(new StompURL(url, this.client.url)),
-				scopePrefix(this.client),
-			).href,
+			client,
+			new URL(routeBinary(new StompURL(url, client.url)), scopePrefix(client))
+				.href,
 			// the browser's own download, not a page's read: no CORS (a load
 			// the worker takes no metadata from)
 			'download',
@@ -147,7 +144,7 @@ export default class DownloadModule extends Module<DocumentClient> {
 			dispositionName(response.headers.get('content-disposition')) ||
 			last ||
 			'download';
-		const global = this.client.global;
+		const global = client.global;
 		const blob = await response.blob();
 		const objectURL = global.URL.createObjectURL(blob);
 		const anchor = global.document.createElement('a');

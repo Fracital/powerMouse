@@ -29,12 +29,13 @@ function done<T>(request: IDBRequest<T>): Promise<T> {
  */
 export default class StorageEstimateModule extends Module<Client> {
 	apply() {
-		const global = this.client.global;
+		const client = this.client;
+		const global = client.global;
 		if (typeof global.StorageManager !== 'function') return;
 		const manager = global.StorageManager.prototype;
 		const estimate = manager.estimate;
 		if (typeof estimate !== 'function') return;
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const proxyModule = client.getModule(ProxyModule)!;
 		// the native members, before the IndexedDB and Partition modules hook
 		// them: the stores' real names carry the key
 		const getDirectory = manager.getDirectory;
@@ -48,7 +49,7 @@ export default class StorageEstimateModule extends Module<Client> {
 		const entryKeys = global.Cache?.prototype.keys;
 		const entryMatch = global.Cache?.prototype.match;
 
-		const suffix = () => `@${this.client.storageKey}`;
+		const suffix = () => `@${client.storageKey}`;
 
 		const databaseUsage = async (idb: IDBFactory): Promise<number> => {
 			if (!databases || !openDatabase) return 0;
@@ -157,7 +158,7 @@ export default class StorageEstimateModule extends Module<Client> {
 			let own: FileSystemDirectoryHandle;
 			try {
 				own = await root.getDirectoryHandle(
-					encodeURIComponent(this.client.storageKey),
+					encodeURIComponent(client.storageKey),
 				);
 			} catch (error) {
 				// nothing stored yet

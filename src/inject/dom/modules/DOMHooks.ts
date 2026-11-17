@@ -439,17 +439,18 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 	 * page's URL); anything else is returned as it is.
 	 */
 	readbackURL(value: string): string {
-		if (!value.startsWith(scopePrefix(this.client))) return value;
-		if (value.startsWith(`${routedPrefix(this.client)}inline:`)) {
+		const client = this.client;
+		if (!value.startsWith(scopePrefix(client))) return value;
+		if (value.startsWith(`${routedPrefix(client)}inline:`)) {
 			const hash = value.indexOf('#');
-			const url = new URL(this.client.url.toString());
+			const url = new URL(client.url.toString());
 			url.hash =
 				hash === -1
 					? ''
-					: `#${openFragment(this.client.codec, value.slice(hash + 1))}`;
+					: `#${openFragment(client.codec, value.slice(hash + 1))}`;
 			return url.href;
 		}
-		return unrouteURL(this.client, value) ?? value;
+		return unrouteURL(client, value) ?? value;
 	}
 	/*useAttributes(
 		callback: (element: CustomElement) => void,
@@ -670,10 +671,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			this.#runHook(entry, element, propertyAttribute(property));
 	}
 	apply() {
-		const realm = this.client.global;
+		const moduleClient = this.client;
+		const realm = moduleClient.global;
 		// all hooks are in, now apply them
 
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const proxyModule = moduleClient.getModule(ProxyModule)!;
 		const { requireElement } = this;
 
 		/**
@@ -683,7 +685,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// native write, taken before the prototype hook below replaces it: the
 		// stream's output and a pending tail go through it
 		const nativeWrite = realm.document.write;
-		const stream = new WriteStream(this.client);
+		const stream = new WriteStream(moduleClient);
 
 		// document.open() drops every listener on the window: the modules that
 		// listen there (message filter and tagger, link and navigate hooks)
@@ -699,7 +701,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				if (typeof that === 'object' && that !== null) stream.reset(that);
 				const result = Reflect.apply(target, that, args);
 				if (that === realm.document) {
-					this.client.opened = true;
+					moduleClient.opened = true;
 					runDocumentOpenListeners(realm);
 				}
 				return result;
@@ -712,25 +714,25 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			// opened as is, injected by the IFrame module's hook
 			let destination: URL | null = null;
 			if (args[0] !== undefined && String(args[0]) !== '')
-				destination = new URL(String(args[0]), this.client.baseURL.toString());
+				destination = new URL(String(args[0]), moduleClient.baseURL.toString());
 			const routable =
 				destination !== null && /^https?:$/.test(destination.protocol);
 			// the proxied parent or top, named from a frame under the top:
 			// the URL is routed as that window's document
-			let aimed = this.client.targetWindow(name);
+			let aimed = moduleClient.targetWindow(name);
 			// from a sandboxed document, the one it may navigate (else the
 			// browser opens nothing and the page gets null)
 			const keyword = name.toLowerCase();
 			if (
-				this.client.sandboxFlags !== null &&
+				moduleClient.sandboxFlags !== null &&
 				['_top', '_parent', '_unfencedtop'].includes(keyword)
 			) {
 				const window =
-					keyword === '_parent' ? this.client.parent : this.client.proxiedTop;
+					keyword === '_parent' ? moduleClient.parent : moduleClient.proxiedTop;
 				if (window !== realm) {
-					if (!this.client.mayNavigate(window)) return null;
+					if (!moduleClient.mayNavigate(window)) return null;
 					const client = (window as Record<string, any>)[
-						this.client.names.client
+						moduleClient.names.client
 					] as DocumentClient | undefined;
 					if (client) aimed = { window, client };
 				}
@@ -739,11 +741,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			// javascript: link (routeHTML rewrites its body)
 			if (destination !== null && destination.protocol === 'javascript:')
 				args[0] = routeHTML(
-					new StompURL(destination, this.client.url),
-					this.client.url,
-					this.client.config,
+					new StompURL(destination, moduleClient.url),
+					moduleClient.url,
+					moduleClient.config,
 					false,
-					aimed ? aimed.client.nestedRoute : this.client.nestedRoute,
+					aimed ? aimed.client.nestedRoute : moduleClient.nestedRoute,
 				);
 			// a new tab: the host's to open, when it said so (then the page
 			// sees null, as with a popup blocker). Not for a sandboxed
@@ -751,9 +753,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			// without allow-popups, and opens it sandboxed like the page
 			// (the IFrame module starts it with the opener's flags)
 			const escapes =
-				this.client.sandboxFlags === null ||
-				(this.client.allows('allow-popups') &&
-					this.client.allows('allow-popups-to-escape-sandbox'));
+				moduleClient.sandboxFlags === null ||
+				(moduleClient.allows('allow-popups') &&
+					moduleClient.allows('allow-popups-to-escape-sandbox'));
 			if (
 				routable &&
 				escapes &&
@@ -761,8 +763,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					name.toLowerCase(),
 				) &&
 				// a frame of this page by that name: the browser navigates it
-				!this.client.hasFrameNamed(name) &&
-				this.client.openInHost(destination!.toString())
+				!moduleClient.hasFrameNamed(name) &&
+				moduleClient.openInHost(destination!.toString())
 			)
 				return null;
 
@@ -771,15 +773,15 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// this window itself: a navigation like location.assign's; the
 					// proxied parent or top: one of that window's own
 					name.toLowerCase() === '_self'
-						? this.client.navigationRoute(destination!)
+						? moduleClient.navigationRoute(destination!)
 						: aimed
 							? aimed.client.navigationRoute(destination!)
 							: routeHTML(
-									new StompURL(destination!, this.client.url),
-									this.client.url,
-									this.client.config,
+									new StompURL(destination!, moduleClient.url),
+									moduleClient.url,
+									moduleClient.config,
 									false,
-									this.client.nestedRoute,
+									moduleClient.nestedRoute,
 								);
 
 			// the proxied parent or top navigates from its own realm (see
@@ -797,13 +799,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			// origin gets a fresh context first, which the browser then
 			// navigates by its name
 			if (routable && destination) {
-				const element = this.client.frameNamed(name);
+				const element = moduleClient.frameNamed(name);
 				const view = element && frameWindow(element);
 				let client: DocumentClient | undefined;
 				try {
 					client = view
 						? ((view as unknown as Record<string, unknown>)[
-								this.client.names.client
+								moduleClient.names.client
 							] as DocumentClient | undefined)
 						: undefined;
 				} catch (error) {
@@ -836,7 +838,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				for (const arg of args) text += String(arg);
 				// (the page's Trusted Types: its joined text, a lone trusted value
 				// as it is, TrustedTypes.ts)
-				const passed = this.client.trustedValue(
+				const passed = moduleClient.trustedValue(
 					args.length === 1 ? args[0] : text,
 					'TrustedHTML',
 					newline ? 'Document writeln' : 'Document write',
@@ -859,7 +861,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					opens ||
 					(document === realm.document &&
 						realm.document.documentElement === null);
-				if (opens) this.client.opened = true;
+				if (opens) moduleClient.opened = true;
 				const prevState = getGlobalParsingState(realm);
 				setGlobalParsingState(realm, 'parsingBeforeWrite');
 				let markup: string;
@@ -873,9 +875,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				Reflect.apply(nativeWrite, that, [trustedHTML(markup)]);
 				// a frame the written markup made (a script it holds sweeps
 				// first, see prepareScriptText)
-				this.client.sweepFrames?.();
+				moduleClient.sweepFrames?.();
 				if (opens) runDocumentOpenListeners(realm);
-				this.client.writtenLoads?.(document as Document);
+				moduleClient.writtenLoads?.(document as Document);
 			});
 
 		// on the prototype, where the browser has them: an own property of the
@@ -896,7 +898,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				const tail = stream.take(that);
 				if (tail) Reflect.apply(nativeWrite, that, [trustedHTML(tail)]);
 				const result = Reflect.apply(target, that, args);
-				this.client.writtenLoads?.(that as Document);
+				moduleClient.writtenLoads?.(that as Document);
 				return result;
 			},
 		);
@@ -925,7 +927,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// opened on a javascript: URL, a document the page made with
 					// createHTMLDocument) has none for the page either
 					if (base === 'about:blank') return base;
-					return responseURLOf(that) ?? this.client.baseURL.toString();
+					return responseURLOf(that) ?? moduleClient.baseURL.toString();
 				},
 			),
 		});
@@ -938,10 +940,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				(target, that, args) => {
 					// (the native getter throws for what is no document)
 					const native = Reflect.apply(target, that, args) as string;
-					return this.client.documentURL(
+					return moduleClient.documentURL(
 						that,
 						native,
-						() => responseURLOf(that) ?? this.client.location.toString(),
+						() => responseURLOf(that) ?? moduleClient.location.toString(),
 					);
 				},
 			),
@@ -964,7 +966,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						string | null;
 					if (written === null) return '';
 					try {
-						return new URL(written, this.client.baseURL.toString()).href;
+						return new URL(written, moduleClient.baseURL.toString()).href;
 					} catch (error) {
 						// not a URL: as written, like the browser
 						return written;
@@ -986,7 +988,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// act on the proxy origin, and refuses in a sandboxed frame.
 		// The keying is decided now, before the page runs: an origin's first
 		// document decides it for the later ones
-		void this.client.siteKeyed;
+		void moduleClient.siteKeyed;
 		const domainDescriptor = Reflect.getOwnPropertyDescriptor(
 			realm.Document.prototype,
 			'domain',
@@ -1004,8 +1006,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// an opaque origin has no domain, nor has a removed frame's
 					// document (a document the page made without a window has
 					// its creator's, as natively)
-					if (this.client.sandboxedOpaque || realm.closed) return '';
-					return this.client.documentDomain ?? this.client.url.url.hostname;
+					if (moduleClient.sandboxedOpaque || realm.closed) return '';
+					return moduleClient.documentDomain ?? moduleClient.url.url.hostname;
 				},
 			),
 			set: proxyModule.wrapFunction(
@@ -1017,7 +1019,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					const value = String(args[0]);
 					// the effective domain: the host, or what an earlier write set
 					const host =
-						this.client.documentDomain ?? this.client.url.url.hostname;
+						moduleClient.documentDomain ?? moduleClient.url.url.hostname;
 					const refuse = (reason: string) =>
 						withStack(
 							new realm.DOMException(
@@ -1026,7 +1028,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							),
 						);
 					// a sandboxed document never sets it, allow-same-origin or not
-					if (this.client.sandboxFlags !== null)
+					if (moduleClient.sandboxFlags !== null)
 						throw refuse('Assignment is forbidden for sandboxed iframes.');
 					if (value === '') throw refuse("'' is an empty domain.");
 					let parsed: string | null = null;
@@ -1049,7 +1051,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						if (getPublicSuffix(parsed) === parsed)
 							throw refuse(`'${shown}' is a top-level domain.`);
 					}
-					if (this.client.siteKeyed) this.client.setDocumentDomain(parsed!);
+					if (moduleClient.siteKeyed) moduleClient.setDocumentDomain(parsed!);
 				},
 			),
 		});
@@ -1066,7 +1068,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				...descriptor,
 				get: proxyModule.wrapFunction(descriptor.get, (target, that, args) => {
 					Reflect.apply(target, that, args);
-					return !this.client.siteKeyed;
+					return !moduleClient.siteKeyed;
 				}),
 			});
 			break;
@@ -1100,13 +1102,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				scriptTextDescriptor.set!,
 				(target, that: HTMLScriptElement, args) => {
 					// (the page's Trusted Types: DocumentClient.scriptValue)
-					const text = this.client.scriptValue(
+					const text = moduleClient.scriptValue(
 						that,
 						args[0],
 						'HTMLScriptElement text',
 						() => Reflect.apply(target, that, args),
 					);
-					if (text === null || this.client.trustedScriptText(that, text))
+					if (text === null || moduleClient.trustedScriptText(that, text))
 						return;
 					// snapshot: removing while iterating the live list skips every
 					// other node and leaves half the old text in place
@@ -1115,7 +1117,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// the empty string leaves no text node, as natively
 					if (text === '') return;
 					that.append(
-						new realm.Text(this.client.prepareScriptText(that, text)),
+						new realm.Text(moduleClient.prepareScriptText(that, text)),
 					);
 				},
 			),
@@ -1166,7 +1168,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							return Reflect.apply(target, that, args);
 						// null is the empty string, which leaves no child (and
 						// undefined too for textContent, whose type is nullable)
-						const text = this.client.scriptValue(
+						const text = moduleClient.scriptValue(
 							that,
 							args[0],
 							`HTMLScriptElement ${name}`,
@@ -1177,7 +1179,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 									? ''
 									: String(value),
 						);
-						if (text === null || this.client.trustedScriptText(that, text))
+						if (text === null || moduleClient.trustedScriptText(that, text))
 							return;
 						usePrototype(that, nativeElement, (element) => {
 							for (const node of [...element.childNodes]) node.remove();
@@ -1208,7 +1210,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// their data (null the empty string)
 					// (null and undefined are the empty string: the type is nullable)
 					if (that.nodeType !== 1 && that.nodeType !== 11)
-						return this.client.styleOfText(that)
+						return moduleClient.styleOfText(that)
 							? Reflect.apply(hookedDataSet, that, [
 									args[0] === null || args[0] === undefined
 										? ''
@@ -1225,7 +1227,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					if (
 						!(that instanceof realm.HTMLScriptElement) &&
 						!(that instanceof realm.SVGScriptElement) &&
-						this.client.styleKind(that) === null
+						moduleClient.styleKind(that) === null
 					)
 						return Reflect.apply(target, that, args);
 
@@ -1239,7 +1241,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// a script's text set while it is connected runs at once
 					const text =
 						that instanceof realm.HTMLScriptElement
-							? this.client.prepareScriptText(that, written)
+							? moduleClient.prepareScriptText(that, written)
 							: written;
 					(that as Element).append(new realm.Text(text));
 				},
@@ -1331,7 +1333,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				(target, that: Element, args) => {
 					// null is the empty string ([LegacyNullToEmptyString]), after the
 					// page's Trusted Types judged it
-					const markup = this.client.trustedValue(
+					const markup = moduleClient.trustedValue(
 						args[0],
 						'TrustedHTML',
 						'Element innerHTML',
@@ -1339,7 +1341,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						htmlString,
 					);
 					if (markup === null) return;
-					const kind = this.client.styleKind(that);
+					const kind = moduleClient.styleKind(that);
 					if (kind === 'html') return setStyleText(that, markup);
 					// an SVG <style> parses its markup as markup (measured: an
 					// element in it stays one); what it makes goes in through the
@@ -1405,7 +1407,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						}
 					});
 					// a frame in the markup is injected as it connects
-					this.client.sweepFrames?.();
+					moduleClient.sweepFrames?.();
 				},
 			),
 		});
@@ -1436,7 +1438,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					const markup =
 						ownScripts.has(that) || isOwnInjector(written)
 							? written
-							: this.client.trustedValue(
+							: moduleClient.trustedValue(
 									args[0],
 									'TrustedHTML',
 									'Element outerHTML',
@@ -1508,7 +1510,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				),
 			]);
 			closeNoscripts(div);
-			let html = this.client.innerHTMLOf(div);
+			let html = moduleClient.innerHTMLOf(div);
 			releaseMarkup(div);
 			if (scripts) html = markupParts().settle(html, context, scripts);
 			return html;
@@ -1555,7 +1557,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					let made: string | null = null;
 					if (command === 'inserthtml') {
 						// (the page's Trusted Types judge the markup first)
-						const value = this.client.trustedValue(
+						const value = moduleClient.trustedValue(
 							args[2],
 							'TrustedHTML',
 							'Document execCommand',
@@ -1564,7 +1566,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						if (value === null) return false;
 						args[2] = trustedHTML(rewriteMarkup(value, editingContext(that)));
 						const result = Reflect.apply(target, that, args);
-						this.client.sweepFrames?.();
+						moduleClient.sweepFrames?.();
 						return result;
 					}
 					const value = String(args[2]);
@@ -1580,13 +1582,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						try {
 							made = routeHTML(
 								new StompURL(
-									new URL(value, this.client.baseURL.toString()),
-									this.client.baseURL,
+									new URL(value, moduleClient.baseURL.toString()),
+									moduleClient.baseURL,
 								),
-								this.client.baseURL,
-								this.client.config,
+								moduleClient.baseURL,
+								moduleClient.config,
 								false,
-								this.client.nestedRoute,
+								moduleClient.nestedRoute,
 							);
 							args[2] = made;
 						} catch (error) {
@@ -1612,7 +1614,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 								)
 							)
 								link.setAttribute('href', value);
-					this.client.sweepFrames?.();
+					moduleClient.sweepFrames?.();
 					return result;
 				},
 			);
@@ -1632,7 +1634,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				(target, that: Range, args) => {
 					if (!args.length) return Reflect.apply(target, that, args);
 					// (the page's Trusted Types judge the markup first)
-					const markup = this.client.trustedValue(
+					const markup = moduleClient.trustedValue(
 						args[0],
 						'TrustedHTML',
 						'Range createContextualFragment',
@@ -1664,7 +1666,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					const fragment = owner.createDocumentFragment();
 					fragment.append(cloneRawNode([...parsed.childNodes], owner));
 					// its scripts are the parser's, which run as they are
-					this.client.parsedScripts(fragment);
+					moduleClient.parsedScripts(fragment);
 					return fragment;
 				},
 			);
@@ -1732,7 +1734,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			}
 		};
 		const markupContext: MarkupContext = {
-			client: this.client,
+			client: moduleClient,
 			rewrite: rewriteMarkup,
 			natives: [],
 			ends: [],
@@ -1786,7 +1788,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						if (args.length) {
 							// (the page's Trusted Types judge the markup first; what goes
 							// on is the inject's, trusted)
-							const markup = this.client.trustedValue(
+							const markup = moduleClient.trustedValue(
 								args[0],
 								'TrustedHTML',
 								`${(that as Node).nodeType === 1 ? 'Element' : 'ShadowRoot'} setHTMLUnsafe`,
@@ -1795,7 +1797,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							if (markup === null) return;
 							args[0] = trustedHTML(markup);
 						}
-						const kind = args.length ? this.client.styleKind(that) : null;
+						const kind = args.length ? moduleClient.styleKind(that) : null;
 						if (kind === 'html')
 							return setStyleText(that as Element, String(args[0]));
 						// an SVG <style>'s markup is markup, its text routed as it
@@ -1822,7 +1824,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							);
 						const result = Reflect.apply(target, that, args);
 						if (scripts) markupParts().record(that as Node, scripts);
-						this.client.sweepFrames?.();
+						moduleClient.sweepFrames?.();
 						return result;
 					},
 				);
@@ -1884,7 +1886,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						) as Element;
 						// (a sanitizer the browser refuses throws here, as natively)
 						Reflect.apply(elementSetHTML, shell, args);
-						const kind = ofShadow ? null : this.client.styleKind(that);
+						const kind = ofShadow ? null : moduleClient.styleKind(that);
 						if (kind) {
 							// a style's markup is its text, which is routed as it goes in
 							const text = String(
@@ -1907,7 +1909,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							[...left.childNodes],
 						);
 						// a frame the sanitizer was told to keep is injected as it connects
-						this.client.sweepFrames?.();
+						moduleClient.sweepFrames?.();
 					},
 				);
 		}
@@ -1934,7 +1936,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				set: proxyModule.wrapFunction(
 					shadowInnerHTML.set,
 					(target, that: ShadowRoot, args) => {
-						const markup = this.client.trustedValue(
+						const markup = moduleClient.trustedValue(
 							args[0],
 							'TrustedHTML',
 							'ShadowRoot innerHTML',
@@ -1945,7 +1947,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						Reflect.apply(target, that, [
 							trustedHTML(rewriteMarkup(markup, that.host ?? null)),
 						]);
-						this.client.sweepFrames?.();
+						moduleClient.sweepFrames?.();
 					},
 				),
 			});
@@ -1982,7 +1984,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// a style the browser serialised from a CSSOM write, as
 					// getAttribute reads it
 					return local === 'style' && typeof value === 'string'
-						? unrouteCSS(this.client, value, true)
+						? unrouteCSS(moduleClient, value, true)
 						: value;
 				}
 				// a namespaced attribute a hook rewrote (xlink:href): the page's
@@ -2022,7 +2024,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						return nativeElement.getAttribute.call(that, marker);
 					const value = nativeElement.getAttribute.call(that, attribute);
 					return attribute === 'style' && typeof value === 'string'
-						? unrouteCSS(this.client, value, true)
+						? unrouteCSS(moduleClient, value, true)
 						: value;
 				}
 
@@ -2035,7 +2037,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// marker: its routed url()s read as the browser serialises
 					// the page's
 					return attribute === 'style' && typeof value === 'string'
-						? unrouteCSS(this.client, value, true)
+						? unrouteCSS(moduleClient, value, true)
 						: value;
 				});
 			},
@@ -2117,7 +2119,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				element.hasAttributeOG(attr.name)
 					? element.getAttributeOG(attr.name)
 					: attr.name === 'style' && typeof native === 'string'
-						? unrouteCSS(this.client, native, true)
+						? unrouteCSS(moduleClient, native, true)
 						: native,
 			);
 		};
@@ -2281,7 +2283,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				return Reflect.apply(set, owner, args);
 			};
 		}
-		const client = this.client;
+		const client = moduleClient;
 		const namedNodeMap = realm.NamedNodeMap.prototype;
 		const nativeNamedNodeMap: Record<string, unknown> = {};
 		for (const key of Reflect.ownKeys(namedNodeMap)) {
@@ -2545,7 +2547,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				foldMarkers(clone);
 				const xml = Reflect.apply(target, that, [clone]) as string;
 				releaseMarkup(clone);
-				return unrouteCSS(this.client, xml);
+				return unrouteCSS(moduleClient, xml);
 			},
 		);
 
@@ -2607,7 +2609,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 								)
 							: null;
 					if (sink) {
-						const passed = this.client.trustedValue(
+						const passed = moduleClient.trustedValue(
 							args[2],
 							TRUSTED_KINDS[sink[0]],
 							sink[1],
@@ -2705,7 +2707,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						? trustedSink(that, attribute)
 						: null;
 				if (sink) {
-					const passed = this.client.trustedValue(
+					const passed = moduleClient.trustedValue(
 						args[1],
 						TRUSTED_KINDS[sink[0]],
 						sink[1],
@@ -2727,7 +2729,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					typeof value === 'string' &&
 					value !== '' &&
 					!isParsed(that) &&
-					this.client.refuseStyleAttribute(that, value)
+					moduleClient.refuseStyleAttribute(that, value)
 				) {
 					pageWrite(that, attribute, () =>
 						usePrototype(that, CustomElement.prototype, (element) => {
@@ -2894,7 +2896,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 								// srcdoc)
 								const sink = trustedSink(that as Element, property, true);
 								const written = sink
-									? this.client.trustedValue(
+									? moduleClient.trustedValue(
 											args[0],
 											TRUSTED_KINDS[sink[0]],
 											sink[1],

@@ -33,8 +33,9 @@ export default class BlobDocumentsModule extends Module<DocumentClient> {
 	 */
 	nativeBlob!: typeof Blob;
 	apply() {
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const global = this.client.global;
+		const client = this.client;
+		const proxyModule = client.getModule(ProxyModule)!;
+		const global = client.global;
 		this.nativeBlob = global.Blob;
 
 		// the markup the last wrap() made into a shell, kept with the blob
@@ -82,11 +83,11 @@ export default class BlobDocumentsModule extends Module<DocumentClient> {
 				return [
 					modifyHTML(
 						source,
-						this.client.url,
-						this.client.config,
+						client.url,
+						client.config,
 						true,
 						undefined,
-						this.client.scriptNonce,
+						client.scriptNonce,
 					),
 				];
 			}
@@ -95,12 +96,12 @@ export default class BlobDocumentsModule extends Module<DocumentClient> {
 			// with nothing to rewrite comes back as it was too (generated the
 			// same), and stays a classic script: made a module, it would carry
 			// the module preamble a classic worker cannot run
-			let rewritten = modifyJS(source, this.client.url, this.client.config);
+			let rewritten = modifyJS(source, client.url, client.config);
 			if (rewritten === source && !parsesAsScript(source))
 				rewritten = modifyJS(
 					source,
-					this.client.url,
-					this.client.config,
+					client.url,
+					client.config,
 					'genericModule',
 				);
 			return [rewritten];
@@ -111,7 +112,7 @@ export default class BlobDocumentsModule extends Module<DocumentClient> {
 		setInlineBlobResolver((href) => {
 			const entry = htmlBlobURLs.get(proxyBlobURL(href));
 			return entry
-				? this.client.inlineDocument(entry.markup, entry.url, entry.url)
+				? client.inlineDocument(entry.markup, entry.url, entry.url)
 				: null;
 		});
 

@@ -57,10 +57,11 @@ const URL_FIELDS = ['documentURI', 'blockedURI', 'referrer', 'sourceFile'];
  */
 export default class ContentSecurityModule extends Module<DocumentClient> {
 	apply() {
-		const global = this.client.global as typeof globalThis;
+		const client = this.client;
+		const global = client.global as typeof globalThis;
 		const prototype = global.SecurityPolicyViolationEvent?.prototype;
 		if (!prototype) return;
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const proxyModule = client.getModule(ProxyModule)!;
 		const native = (key: string) =>
 			Reflect.getOwnPropertyDescriptor(prototype, key)?.get;
 		const nativePolicy = native('originalPolicy');
@@ -93,12 +94,12 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 				if (nativeTrusted && !Reflect.apply(nativeTrusted, event, []))
 					return true;
 				const text = Reflect.apply(nativePolicy!, event, []) as string;
-				const entry = this.client
+				const entry = client
 					.pagePolicies()
 					.find(({ browser }) => browser === text);
 				if (!entry) return true;
 				const blocked = Reflect.apply(nativeBlocked!, event, []) as string;
-				const refused = this.client.refusedURI(blocked);
+				const refused = client.refusedURI(blocked);
 				const directive = Reflect.apply(nativeDirective!, event, []) as string;
 				// a <base> the hooks write for a moment with the page's own URL
 				// (before its route or refusal URL) is none the page made
@@ -106,12 +107,12 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 					directive === 'base-uri' &&
 					!refused &&
 					/^https?:/.test(blocked) &&
-					unrouteURL(this.client, blocked) === blocked
+					unrouteURL(client, blocked) === blocked
 				)
 					return false;
 				const page =
 					refused?.url ??
-					(blocked.includes(':') ? unrouteURL(this.client, blocked) : null);
+					(blocked.includes(':') ? unrouteURL(client, blocked) : null);
 				if (!page || page === blocked) return true;
 				const url = new URL(page);
 				const governed = governing(entry.policy, directive);
@@ -123,7 +124,7 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 				// names the first URL)
 				return (
 					!refused &&
-					!this.client
+					!client
 						.pageRefusals(directive, url)
 						.some(({ policy }) => policy.disposition === 'enforce')
 				);
@@ -132,7 +133,7 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 			}
 		};
 		// a request the worker let through that a report-only policy refuses
-		this.client.onServiceWorkerMessage((data) => {
+		client.onServiceWorkerMessage((data) => {
 			if (typeof data !== 'object' || data === null) return;
 			const report = (data as Record<string, unknown>)[CSP_REPORT];
 			if (!Array.isArray(report)) return;
@@ -140,10 +141,7 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 			// the policy is this frame's parent's)
 			const [directive, url, blocked, times, parent] = report;
 			try {
-				(parent === true
-					? this.client.parentClient()
-					: this.client
-				)?.reportRefusal(
+				(parent === true ? client.parentClient() : client)?.reportRefusal(
 					String(directive),
 					new URL(String(url)),
 					false,
@@ -182,18 +180,15 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 			hook(key, (value) => {
 				if (!value.includes(':')) return value;
 				if (key === 'blockedURI') {
-					const refused = this.client.refusedURI(value);
+					const refused = client.refusedURI(value);
 					if (refused !== null) return refused.blocked;
 				}
-				const page = unrouteURL(this.client, value);
+				const page = unrouteURL(client, value);
 				if (page === null) return '';
 				// a report names no fragment
 				return key === 'blockedURI' ? page.replace(/#.*$/s, '') : page;
 			});
-		hook(
-			'originalPolicy',
-			(value) => this.client.pagePolicyText(value) ?? value,
-		);
+		hook('originalPolicy', (value) => client.pagePolicyText(value) ?? value);
 		// the page's code, which the rewriter changed ('report-sample'): what
 		// it evaluated, or the text the page reads back of the element
 		const nativeTarget = Reflect.getOwnPropertyDescriptor(
@@ -209,7 +204,7 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 					if (typeof value !== 'string' || !value) return value;
 					try {
 						const blocked = Reflect.apply(nativeBlocked, that, []);
-						if (blocked === 'eval') return this.client.codeSample(value);
+						if (blocked === 'eval') return client.codeSample(value);
 						if (blocked !== 'inline') return value;
 						return (
 							pageCode(
@@ -225,7 +220,7 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 		// An enforced Trusted Types violation reads back trusted, as the
 		// browser's would (the enforced csp-trusted-types cases compare
 		// isTrusted; the browser never gets require-trusted-types-for)
-		trustTaggedViolations(global, proxyModule, this.client.trustedViolations);
+		trustTaggedViolations(global, proxyModule, client.trustedViolations);
 		// A synthesised script-src/style-src violation of the page's own code
 		// (dom/Client.ts: the browser never gets those directives) is dispatched
 		// on the document so the page's listener always hears it, but names the
@@ -242,14 +237,14 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 				eventPrototype,
 				'target',
 			)!;
-			this.client.namesViolationTargets = () => {
-				this.client.namesViolationTargets = undefined;
+			client.namesViolationTargets = () => {
+				client.namesViolationTargets = undefined;
 				Reflect.defineProperty(eventPrototype, 'target', {
 					...descriptor,
 					get: proxyModule.wrapFunction(
 						nativeTarget,
 						(target, that, args) =>
-							this.client.codeViolationTarget.get(that as object) ??
+							client.codeViolationTarget.get(that as object) ??
 							Reflect.apply(target, that, args),
 					),
 				});
@@ -267,7 +262,7 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 				...descriptor,
 				get: proxyModule.wrapFunction(descriptor.get, (target, that, args) => {
 					const value = Reflect.apply(target, that, args);
-					return value !== '' && value === this.client.scriptNonce ? '' : value;
+					return value !== '' && value === client.scriptNonce ? '' : value;
 				}),
 			});
 		}

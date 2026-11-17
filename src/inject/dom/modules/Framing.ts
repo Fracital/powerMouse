@@ -27,8 +27,9 @@ import ContextModule, { reachableClients } from './Context';
  */
 export default class FramingModule extends Module<DocumentClient> {
 	apply() {
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const global = this.client.global;
+		const moduleClient = this.client;
+		const proxyModule = moduleClient.getModule(ProxyModule)!;
+		const global = moduleClient.global;
 
 		// the host's frame is never seen; a frame nested in a proxied page of the
 		// same real origin gets its element, as a browser gives it (another
@@ -42,17 +43,17 @@ export default class FramingModule extends Module<DocumentClient> {
 			configurable: true,
 			enumerable: true,
 			get: proxyModule.wrapFunction(nativeFrameElement, () => {
-				if (!this.client.nested) return null;
+				if (!moduleClient.nested) return null;
 				try {
-					const parentClient = (this.client.parent as Record<string, any>)[
-						this.client.names.client
+					const parentClient = (moduleClient.parent as Record<string, any>)[
+						moduleClient.names.client
 					] as DocumentClient;
 					// an opaque origin (a sandbox without allow-same-origin) is
 					// another origin to every other document, its parent included
 					if (
-						this.client.sandboxedOpaque ||
+						moduleClient.sandboxedOpaque ||
 						parentClient.sandboxedOpaque ||
-						!reachableClients(this.client, parentClient)
+						!reachableClients(moduleClient, parentClient)
 					)
 						return null;
 					return Reflect.apply(nativeFrameElement, global, []);
@@ -83,7 +84,7 @@ export default class FramingModule extends Module<DocumentClient> {
 					if (
 						native !== null ||
 						that !== viewport ||
-						this.client.nested ||
+						moduleClient.nested ||
 						global.closed ||
 						typeof global.DOMRect !== 'function'
 					)
@@ -107,7 +108,7 @@ export default class FramingModule extends Module<DocumentClient> {
 			relatedApps.getInstalledRelatedApps = proxyModule.wrapFunction(
 				relatedApps.getInstalledRelatedApps,
 				(target, that, args) => {
-					if (this.client.nested || !(that instanceof global.Navigator))
+					if (moduleClient.nested || !(that instanceof global.Navigator))
 						return Reflect.apply(target, that, args);
 					return global.Promise.resolve(new global.Array());
 				},
@@ -124,8 +125,8 @@ export default class FramingModule extends Module<DocumentClient> {
 				get: proxyModule.wrapFunction(openerDescriptor.get, (target, that) => {
 					const opener = Reflect.apply(target, that, []);
 					try {
-						if (opener && this.client.names.client in opener)
-							return this.client
+						if (opener && moduleClient.names.client in opener)
+							return moduleClient
 								.getModule(ContextModule)!
 								.newRestricted(opener);
 					} catch (error) {
@@ -142,7 +143,7 @@ export default class FramingModule extends Module<DocumentClient> {
 		// (`parent.frames[name]`, a link's target), as natively
 		const hostFramed = (() => {
 			try {
-				return !this.client.nested && (global.parent as unknown) !== global;
+				return !moduleClient.nested && (global.parent as unknown) !== global;
 			} catch (error) {
 				// a parent of another origin: the host's frame
 				return true;
@@ -182,7 +183,7 @@ export default class FramingModule extends Module<DocumentClient> {
 				(target, that, args) => {
 					// the browser judged the policy in proxy URL space, where every
 					// page is same-origin and the full routed URL is kept
-					const decided = this.client.referrerOf(that);
+					const decided = moduleClient.referrerOf(that);
 					if (decided !== undefined) return decided;
 					const referrer = String(Reflect.apply(target, that, args));
 					if (!referrer) return '';
@@ -193,14 +194,14 @@ export default class FramingModule extends Module<DocumentClient> {
 						// "null", and an iframe's initial about:blank has its creator's
 						// full (routed) URL as its referrer whatever the policy
 						if (
-							url.origin === new URL(routedPrefix(this.client)).origin &&
+							url.origin === new URL(routedPrefix(moduleClient)).origin &&
 							ROUTE_PROTOCOLS.includes(url.protocol) &&
-							url.pathname.startsWith(`${this.client.directory}html`)
+							url.pathname.startsWith(`${moduleClient.directory}html`)
 						) {
 							return parseRoutedURL(
 								referrer,
-								this.client.codec,
-								`${url.origin}${this.client.directory}`,
+								moduleClient.codec,
+								`${url.origin}${moduleClient.directory}`,
 							).url.toString();
 						}
 					} catch (error) {
@@ -222,7 +223,7 @@ export default class FramingModule extends Module<DocumentClient> {
 		const isStompWindow = (source: unknown) => {
 			if (!source) return true; // MessagePorts, workers: not a window
 			try {
-				return this.client.names.client in (source as unknown as object);
+				return moduleClient.names.client in (source as unknown as object);
 			} catch (error) {
 				return false; // cross-origin: the host
 			}

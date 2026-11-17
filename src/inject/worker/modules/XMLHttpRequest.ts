@@ -27,12 +27,13 @@ import WorkerClient from '../Client';
 
 export default class XMLHttpRequestModule extends Module<WorkerClient> {
 	apply() {
+		const moduleClient = this.client;
 		const instances = new WeakSet();
 		const real = Symbol();
 		// eslint-disable-next-line @typescript-eslint/no-this-alias
 		const that = this;
 
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const proxyModule = moduleClient.getModule(ProxyModule)!;
 
 		class XMLHttpRequestEventTargetProxy extends EventTarget {
 			constructor(key: symbol) {
@@ -731,7 +732,7 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			instances,
 		);
 
-		(this.client.global as any).XMLHttpRequest = globalProxy;
-		(this.client.global as any).XMLHttpRequestEventTarget = globalTargetProxy;
+		(moduleClient.global as any).XMLHttpRequest = globalProxy;
+		(moduleClient.global as any).XMLHttpRequestEventTarget = globalTargetProxy;
 	}
 }

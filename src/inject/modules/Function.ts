@@ -6,8 +6,9 @@ import ProxyModule from './Proxy';
 
 export default class FunctionModule extends Module<Client> {
 	apply() {
-		const global = this.client.global;
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const client = this.client;
+		const global = client.global;
+		const proxyModule = client.getModule(ProxyModule)!;
 
 		// the realm's own eval, as it is before any page code (Access tags it
 		// but leaves it in place)
@@ -35,7 +36,7 @@ export default class FunctionModule extends Module<Client> {
 					// Chrome's violation sample being the whole function expression
 					// it compiles, parentheses and all (src/csp.ts codeEval)
 					if (
-						this.client.trustedValue(
+						client.trustedValue(
 							`(${written})`,
 							'TrustedScript',
 							'Function',
@@ -46,18 +47,18 @@ export default class FunctionModule extends Module<Client> {
 						) === null
 					)
 						return undefined;
-					const refusal = this.client.codeEval('Function', `(${written})`);
+					const refusal = client.codeEval('Function', `(${written})`);
 					if (refusal) {
 						if (refusal.error) throw refusal.error;
 						return undefined;
 					}
 					const rewritten = modifyJS(
 						`(${written})`,
-						this.client.codeBaseURL(written),
-						this.client.config,
+						client.codeBaseURL(written),
+						client.config,
 						'generic',
 					);
-					this.client.noteCodeSample(rewritten, `(${written})`);
+					client.noteCodeSample(rewritten, `(${written})`);
 					const made = nativeEval(trustedScript(rewritten));
 					// toString shows the source the page gave, not the rewritten body
 					if (typeof made === 'function') {
@@ -92,7 +93,7 @@ export default class FunctionModule extends Module<Client> {
 		// compile either; the browser would report every attempt)
 		const ownRealm = global.Function === Function;
 		const constructorOf = (source: string): FunctionConstructor | null => {
-			if (!this.client.scriptFacts.evaluates)
+			if (!client.scriptFacts.evaluates)
 				return ownRealm
 					? (
 							Reflect.getPrototypeOf(

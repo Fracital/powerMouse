@@ -44,8 +44,9 @@ export default class WorkerModule extends Module<Client> {
 	/** the realm's Worker before the hook below: the inject's own workers (the WebRTC worker) start through it */
 	nativeWorker: typeof Worker | undefined;
 	apply() {
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const global = this.client.global;
+		const moduleClient = this.client;
+		const proxyModule = moduleClient.getModule(ProxyModule)!;
+		const global = moduleClient.global;
 		this.nativeWorker = global.Worker;
 		// the bootstrap below is our own code: a document's BlobDocuments
 		// module (it applies after this one) would rewrite it once more as a
@@ -64,7 +65,7 @@ export default class WorkerModule extends Module<Client> {
 		let lastPrivate: string | undefined;
 		const workerURL = (source: string, isModule: boolean): string => {
 			lastPrivate = undefined;
-			const url = new URL(source, this.client.baseURL.toString());
+			const url = new URL(source, moduleClient.baseURL.toString());
 			const type = isModule ? 'workerModule' : 'worker';
 			if (url.protocol === 'blob:') {
 				// resolved now, as the browser resolves it at construction: the
@@ -80,7 +81,7 @@ export default class WorkerModule extends Module<Client> {
 					!!blob &&
 					!isModule &&
 					!!(
-						this.client as {
+						moduleClient as {
 							browserRefuses?: (directive: string, scheme: string) => boolean;
 						}
 					).browserRefuses?.('script-src-elem', 'blob:');
@@ -97,19 +98,19 @@ export default class WorkerModule extends Module<Client> {
 				// against it rather than against the blob
 				// and its partition, which the client reads before the page's
 				// script runs (a routed worker's route names it)
-				const partition = this.client.partition;
+				const partition = moduleClient.partition;
 				// and its document's script policy, which a blob: worker
 				// inherits (src/csp.ts ScriptFacts), and its connect policies
 				// (WorkerPolicies), which judge the worker's own WebSockets and
 				// WebTransport sessions
 				const connect = (
-					this.client as {
+					moduleClient as {
 						connectInheritance?: () => WorkerPolicies | null;
 					}
 				).connectInheritance?.();
 				const base =
 					`globalThis[${JSON.stringify(WORKER_BASE)}] = ${JSON.stringify(
-						this.client.url.toString(),
+						moduleClient.url.toString(),
 					)};` +
 					(partition
 						? `globalThis[${JSON.stringify(WORKER_PARTITION)}] = ${JSON.stringify(partition)};`
@@ -122,16 +123,16 @@ export default class WorkerModule extends Module<Client> {
 							)};`
 						: '') +
 					// (and its Trusted Types, which a worker's own code meets too)
-					(this.client.trustedTypesRequired() && trustedTypesUsed()
+					(moduleClient.trustedTypesRequired() && trustedTypesUsed()
 						? trustedWorker(
 								JSON.stringify(CSP_FACTS),
 								JSON.stringify({
-									evaluates: this.client.scriptFacts.evaluates,
+									evaluates: moduleClient.scriptFacts.evaluates,
 									tt: useTrustedTypes(),
-									rtt: this.client.trustedTypesRequired(),
+									rtt: moduleClient.trustedTypesRequired(),
 								}),
 							)
-						: this.client.scriptFacts.evaluates
+						: moduleClient.scriptFacts.evaluates
 							? ''
 							: `globalThis[${JSON.stringify(CSP_FACTS)}] = { evaluates: false };`);
 				if (inline)
@@ -140,7 +141,7 @@ export default class WorkerModule extends Module<Client> {
 							new NativeBlob(
 								[
 									base +
-										modifyJS('', this.client.url, this.client.config, type) +
+										modifyJS('', moduleClient.url, moduleClient.config, type) +
 										'\n',
 									blob!,
 								],
@@ -155,15 +156,15 @@ export default class WorkerModule extends Module<Client> {
 							// module's body, which is what loads the client: imported
 							// once the client is in place instead, with the messages
 							// that come meanwhile held for the handlers it sets
-							modifyJS('', this.client.url, this.client.config, type) +
-							`\nawait ${this.client.names.client}.holdEvents(import(${JSON.stringify(
+							modifyJS('', moduleClient.url, moduleClient.config, type) +
+							`\nawait ${moduleClient.names.client}.holdEvents(import(${JSON.stringify(
 								proxyBlobURL(script),
 							)}));` +
 							loaded
 						: modifyJS(
 								`importScripts(${JSON.stringify(script)});`,
-								this.client.url,
-								this.client.config,
+								moduleClient.url,
+								moduleClient.config,
 								type,
 							) + loaded);
 				// the bootstrap's own blob: URL goes to the browser, so in the
@@ -179,19 +180,19 @@ export default class WorkerModule extends Module<Client> {
 			const connect =
 				url.protocol === 'data:'
 					? (
-							this.client as {
+							moduleClient as {
 								connectInheritance?: () => WorkerPolicies | null;
 							}
 						).connectInheritance?.()
 					: null;
 			return routeJS(
-				new StompURL(url, this.client.url),
-				this.client.url,
-				this.client.config,
+				new StompURL(url, moduleClient.url),
+				moduleClient.url,
+				moduleClient.config,
 				type,
-				this.client.partition,
+				moduleClient.partition,
 				connect
-					? `${this.client.names.client}.judgeConnections(${JSON.stringify({ ...connect, named: 'data' })});`
+					? `${moduleClient.names.client}.judgeConnections(${JSON.stringify({ ...connect, named: 'data' })});`
 					: '',
 			);
 		};
@@ -227,8 +228,8 @@ export default class WorkerModule extends Module<Client> {
 		 * SecurityError naming the script and the page's origin.
 		 */
 		const checkOrigin = (name: string, source: string) => {
-			const url = new URL(source, this.client.baseURL.toString());
-			const { origin } = this.client.url.url;
+			const url = new URL(source, moduleClient.baseURL.toString());
+			const { origin } = moduleClient.url.url;
 			if (['http:', 'https:'].includes(url.protocol) && url.origin !== origin)
 				throw withStack(
 					new global.DOMException(
@@ -313,7 +314,7 @@ export default class WorkerModule extends Module<Client> {
 						// a worker the page terminated says nothing more: the
 						// error is its script's, at no known place
 						const filename = filenameOf(event);
-						if (filename && unrouteURL(this.client, filename) === null)
+						if (filename && unrouteURL(moduleClient, filename) === null)
 							reportedLocations.set(event, {
 								routed: null,
 								filename: script,
@@ -323,8 +324,8 @@ export default class WorkerModule extends Module<Client> {
 					}
 					if (!terminated.has(worker)) return;
 					const bundle = new URL(
-						injectWorkerJS(this.client.url, this.client.config),
-						this.client.url.directory,
+						injectWorkerJS(moduleClient.url, moduleClient.config),
+						moduleClient.url.directory,
 					).href;
 					// the browser writes the message by reading the exception's,
 					// which the worker's own hooks unroute (Unroute): its private
@@ -358,7 +359,7 @@ export default class WorkerModule extends Module<Client> {
 					if (!newTarget) throw new TypeError(WORKER_CTOR_ERROR('Worker'));
 					catchRequiredArguments(args.length, 1, 'Worker', 'constructor');
 					// (the page's Trusted Types judge the URL first)
-					const source = this.client.trustedValue(
+					const source = moduleClient.trustedValue(
 						args[0],
 						'TrustedScriptURL',
 						'Worker constructor',
@@ -366,15 +367,15 @@ export default class WorkerModule extends Module<Client> {
 					);
 					if (source === null) return undefined;
 					// the browser's own SyntaxError
-					if (failsToParse(this.client, source))
+					if (failsToParse(moduleClient, source))
 						return Reflect.construct(target, args, newTarget);
 					checkOrigin('Worker', source);
 					// a worker a worker's worker-src refuses fails to start, as the
 					// browser fails it (requestVerdict reports it)
-					const resolved = new URL(source, this.client.baseURL.toString());
-					if (requestRefused(this.client, 'worker-src', resolved)) {
+					const resolved = new URL(source, moduleClient.baseURL.toString());
+					if (requestRefused(moduleClient, 'worker-src', resolved)) {
 						args[0] = trustedScriptURL(
-							routeRefused(new StompURL(resolved, this.client.url)),
+							routeRefused(new StompURL(resolved, moduleClient.url)),
 						);
 						return Reflect.construct(target, args, newTarget);
 					}
@@ -385,9 +386,9 @@ export default class WorkerModule extends Module<Client> {
 					watchErrors(
 						worker,
 						own,
-						new URL(source, this.client.baseURL.toString()).href,
+						new URL(source, moduleClient.baseURL.toString()).href,
 					);
-					this.client.provisionWorkerTransport(worker, blobScript(url));
+					moduleClient.provisionWorkerTransport(worker, blobScript(url));
 					if (own) releaseOnLoad(worker, own);
 					return worker;
 				},
@@ -403,14 +404,14 @@ export default class WorkerModule extends Module<Client> {
 						throw new TypeError(WORKER_CTOR_ERROR('SharedWorker'));
 					catchRequiredArguments(args.length, 1, 'SharedWorker', 'constructor');
 					// (the page's Trusted Types judge the URL first)
-					const source = this.client.trustedValue(
+					const source = moduleClient.trustedValue(
 						args[0],
 						'TrustedScriptURL',
 						'SharedWorker constructor',
 						() => Reflect.construct(target, args, newTarget),
 					);
 					if (source === null) return undefined;
-					if (failsToParse(this.client, source))
+					if (failsToParse(moduleClient, source))
 						return Reflect.construct(target, args, newTarget);
 					checkOrigin('SharedWorker', source);
 					const url = workerURL(source, isModuleOptions(args[1]));
@@ -422,7 +423,7 @@ export default class WorkerModule extends Module<Client> {
 						setTimeout(() => global.URL.revokeObjectURL(own), PRIVATE_URL_MS);
 					// shared workers are found by name within an origin: keep
 					// proxied origins, and partitions of one, apart
-					const suffix = `@${this.client.storageKey}`;
+					const suffix = `@${moduleClient.storageKey}`;
 					if (typeof args[1] === 'object' && args[1] !== null)
 						args[1] = { ...args[1], name: `${args[1].name ?? ''}${suffix}` };
 					// (null is the empty options dictionary, as undefined is)
@@ -433,7 +434,7 @@ export default class WorkerModule extends Module<Client> {
 						args,
 						newTarget,
 					);
-					this.client.provisionPortTransport(worker.port, blobScript(url));
+					moduleClient.provisionPortTransport(worker.port, blobScript(url));
 					return worker;
 				},
 				true,
@@ -450,11 +451,11 @@ export default class WorkerModule extends Module<Client> {
 					if (args.length)
 						args[0] = routeJS(
 							new StompURL(
-								new URL(String(args[0]), this.client.baseURL.toString()),
-								this.client.url,
+								new URL(String(args[0]), moduleClient.baseURL.toString()),
+								moduleClient.url,
 							),
-							this.client.url,
-							this.client.config,
+							moduleClient.url,
+							moduleClient.config,
 							'workletModule',
 						);
 					return Reflect.apply(target, that, args);

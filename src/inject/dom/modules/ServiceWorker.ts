@@ -14,10 +14,11 @@ import type { Emulated } from './serviceWorkerEmulation';
  */
 export default class ServiceWorkerModule extends Module<DocumentClient> {
 	apply() {
-		const global = this.client.global;
+		const client = this.client;
+		const global = client.global;
 		const control = Reflect.get(global, SW_CONTROL) as ControlInfo | undefined;
 		Reflect.deleteProperty(global, SW_CONTROL);
-		if (!this.client.serviceWorkers) return;
+		if (!client.serviceWorkers) return;
 		if (
 			typeof global.ServiceWorkerContainer !== 'function' ||
 			!('serviceWorker' in global.Navigator.prototype)
@@ -25,7 +26,7 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 			return;
 		// a page of a plain http site is no secure context: natively it has
 		// no service workers at all
-		if (!trustworthy(this.client.url.url)) {
+		if (!trustworthy(client.url.url)) {
 			for (const name of [
 				'ServiceWorkerContainer',
 				'ServiceWorkerRegistration',
@@ -36,19 +37,18 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 			Reflect.deleteProperty(global.Navigator.prototype, 'serviceWorker');
 			return;
 		}
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const origin = () => this.client.url.url.origin;
+		const proxyModule = client.getModule(ProxyModule)!;
+		const origin = () => client.url.url.origin;
 		// an event of this document's registrations: its origin's, in its
 		// partition (a site framed by another has registrations of its own)
 		const ownEvent = (event: PageEvent) =>
-			event.origin === origin() &&
-			(event.partition ?? '') === this.client.partition;
+			event.origin === origin() && (event.partition ?? '') === client.partition;
 		// the registration that controls this document, from its shell: only
 		// its own origin's and partition's
 		const own =
 			control &&
 			control.registration.scope.startsWith(origin()) &&
-			(control.partition ?? '') === this.client.partition
+			(control.partition ?? '') === client.partition
 				? control
 				: undefined;
 		// the objects, and the few hundred member hooks behind them, are made
@@ -60,14 +60,14 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 		let emulated: Emulated | undefined;
 		const emulate = () =>
 			(emulated ??= deferred().emulateServiceWorker(
-				this.client,
+				client,
 				own,
 				proxyModule,
 				origin,
 				ownEvent,
 			));
 		if (own) emulate();
-		this.client.onServiceWorkerEvent((message) => {
+		client.onServiceWorkerEvent((message) => {
 			const data = message.data as Record<string, unknown> | null;
 			if (typeof data !== 'object' || data === null || !(SW_EVENT in data))
 				return;
@@ -92,7 +92,7 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 					if (that !== global.navigator)
 						return Reflect.apply(target, that, args);
 					// an opaque origin has no service workers
-					if (this.client.opaqueRequests)
+					if (client.opaqueRequests)
 						throw withStack(
 							new global.DOMException(
 								"Failed to read the 'serviceWorker' property from 'Navigator': Service worker is disabled because the context is sandboxed and lacks the 'allow-same-origin' flag.",

@@ -113,10 +113,11 @@ type PatternSpec = {
 
 export default class AccessModule extends Module<Client> {
 	apply() {
-		const realm = this.client.global;
+		const moduleClient = this.client;
+		const realm = moduleClient.global;
 		const evalSnapshot = realm.eval;
 
-		const proxyModule = this.client.getModule(ProxyModule);
+		const proxyModule = moduleClient.getModule(ProxyModule);
 
 		// eval returns anything that is not a string unchanged; a TrustedScript
 		// (Trusted Types) is code, as for the browser
@@ -136,20 +137,25 @@ export default class AccessModule extends Module<Client> {
 			// script-src, which may refuse code made from a string (src/csp.ts
 			// codeEval). Both a direct eval (evalScope) and an indirect one reach
 			// here.
-			const page = this.client.trustedValue(x, 'TrustedScript', 'eval', refuse);
+			const page = moduleClient.trustedValue(
+				x,
+				'TrustedScript',
+				'eval',
+				refuse,
+			);
 			if (page === null) return null;
-			const refusal = this.client.codeEval('eval', page);
+			const refusal = moduleClient.codeEval('eval', page);
 			if (refusal) {
 				if (refusal.error) throw refusal.error;
 				return null;
 			}
 			const code = modifyJS(
 				page,
-				this.client.codeBaseURL(page),
-				this.client.config,
+				moduleClient.codeBaseURL(page),
+				moduleClient.config,
 				'generic',
 			);
-			this.client.noteCodeSample(code, page);
+			moduleClient.noteCodeSample(code, page);
 			return trustedScript(code);
 		};
 		const globalEval = (x: unknown) => {
@@ -164,7 +170,7 @@ export default class AccessModule extends Module<Client> {
 			(target, that, [code]) => globalEval(code),
 		);
 
-		setGlobalProxy(evalSnapshot, 'eval', globalEvalProxy, this.client.names);
+		setGlobalProxy(evalSnapshot, 'eval', globalEvalProxy, moduleClient.names);
 		/**
 		 * What a write of `eval` stores: a page that assigns the eval it read
 		 * (`eval = eval`, one it saved and puts back) holds the stand-in a read
@@ -196,7 +202,7 @@ export default class AccessModule extends Module<Client> {
 					if (message && typeof message.value === 'string')
 						Reflect.defineProperty(error as object, 'message', {
 							...message,
-							value: unrouteText(this.client, message.value),
+							value: unrouteText(moduleClient, message.value),
 						});
 					throw error;
 				},
@@ -228,7 +234,7 @@ export default class AccessModule extends Module<Client> {
 			// a page's service worker imports nothing so, natively: the
 			// emulated one is a worker that would
 			if (
-				(this.client as { serviceWorkerVersion?: string }).serviceWorkerVersion
+				(moduleClient as { serviceWorkerVersion?: string }).serviceWorkerVersion
 			)
 				return failing(
 					new realm.TypeError(
@@ -240,31 +246,31 @@ export default class AccessModule extends Module<Client> {
 			try {
 				resource = new URL(
 					specifier,
-					baseURL || this.client.baseURL.toString(),
+					baseURL || moduleClient.baseURL.toString(),
 				);
 			} catch (error) {
 				// no URL: the browser's import fails on it as it does natively
 				return specifier;
 			}
-			const module = new StompURL(resource, this.client.url);
+			const module = new StompURL(resource, moduleClient.url);
 			// one a worker's script-src refuses fails to load, as the browser
 			// fails it (requestVerdict reports it), and its TypeError names it
-			if (requestRefused(this.client, 'script-src-elem', resource))
+			if (requestRefused(moduleClient, 'script-src-elem', resource))
 				return routeRefused(module);
 			return routeImport(
 				module,
-				this.client.url,
-				this.client.config,
+				moduleClient.url,
+				moduleClient.config,
 				'genericModule',
 				moduleType,
 			);
 		};
 		// (the helpers below run on every computed access of a page: its names
 		// are read once)
-		const names = this.client.names;
+		const names = moduleClient.names;
 		// the errors a helper throws in the page's place, with the message V8
 		// gives the page's expression (`partial`, its source)
-		const errors = new ErrorMessages(this.client);
+		const errors = new ErrorMessages(moduleClient);
 		const nullish = (value: unknown): value is null | undefined =>
 			value === null || value === undefined;
 		/**
@@ -367,13 +373,13 @@ export default class AccessModule extends Module<Client> {
 			if (optional && nullish(method)) return undefined;
 			if (typeof method !== 'function')
 				return errors.call(method, target, args, partial);
-			if (this.client.postToWindow) {
+			if (moduleClient.postToWindow) {
 				let receiver: Client | undefined;
 				try {
 					// (asked of a window alone: a Proxy of the page's with a
 					// postMessage of its own sees no question)
 					if (isWindowObject(target))
-						receiver = target[this.client.names.client];
+						receiver = target[moduleClient.names.client];
 				} catch (error) {
 					// a cross-origin window: called as written
 				}
@@ -383,9 +389,9 @@ export default class AccessModule extends Module<Client> {
 					receiver?.nativePostMessage &&
 					method === receiver.hookedPostMessage
 				)
-					return this.client.postToWindow(target, args);
+					return moduleClient.postToWindow(target, args);
 			}
-			if (this.client.postToRestricted?.(target, args)) return undefined;
+			if (moduleClient.postToRestricted?.(target, args)) return undefined;
 			return Reflect.apply(method, target, args);
 		};
 		// the scope of a `with` whose head needs none: no name is found in it
@@ -429,7 +435,7 @@ export default class AccessModule extends Module<Client> {
 				return false;
 			}
 		};
-		this.client.isWindowObject = isWindowObject;
+		moduleClient.isWindowObject = isWindowObject;
 		// A document's own `location` is the window's (unforgeable, so an own
 		// property of each document), and Document.prototype's own
 		// `onmouseenter` getter is as lenient as the window's: it answers
@@ -538,7 +544,7 @@ export default class AccessModule extends Module<Client> {
 				got === seenValue ||
 				got === seenValueBefore ||
 				indexed(got) ||
-				!this.client.restrictForeign
+				!moduleClient.restrictForeign
 			)
 				return true;
 			if (brandless(got)) {
@@ -569,13 +575,13 @@ export default class AccessModule extends Module<Client> {
 			if (
 				(typeof target !== 'object' && typeof target !== 'function') ||
 				target === null ||
-				!this.client.liveWindow ||
+				!moduleClient.liveWindow ||
 				key === 'self' ||
 				key === 'window' ||
 				key === 'frames'
 			)
 				return target;
-			return this.client.liveWindow(target) ?? target;
+			return moduleClient.liveWindow(target) ?? target;
 		};
 		// `target[key] = righthand` and its kin (`operate`): set2 past its
 		// short path. Under set2's own name, which is the name V8 gives its
@@ -603,7 +609,7 @@ export default class AccessModule extends Module<Client> {
 						(typeof key === 'string' && !named(key))) &&
 					(typeof righthand !== 'object' ||
 						righthand === null ||
-						!this.client.landIndexed ||
+						!moduleClient.landIndexed ||
 						!indexKey(key))
 				) {
 					const maybeWindow = !noWindow(target);
@@ -625,7 +631,7 @@ export default class AccessModule extends Module<Client> {
 				}
 
 				// the client's global is not the page's to replace (see get)
-				if (key === this.client.names.client) return righthand;
+				if (key === moduleClient.names.client) return righthand;
 				// `window.eval = saved`
 				if (key === 'eval' && target === realm)
 					righthand = evalWritten(righthand);
@@ -646,7 +652,7 @@ export default class AccessModule extends Module<Client> {
 							// answers it, `w.location += u` makes it a string) and
 							// writes its href
 							const standIn = (realm.location as any)[
-								this.client.names.globalProxy
+								moduleClient.names.globalProxy
 							];
 							const property = NativeSymbol();
 							return operate(
@@ -674,7 +680,7 @@ export default class AccessModule extends Module<Client> {
 						let theirs: { set2?: unknown } | undefined;
 						try {
 							if (isWindowObject(target))
-								theirs = target[this.client.names.client]?.accessApi;
+								theirs = target[moduleClient.names.client]?.accessApi;
 						} catch (error) {
 							// a cross-origin window: nothing of ours to delegate to
 						}
@@ -683,7 +689,7 @@ export default class AccessModule extends Module<Client> {
 						// another proxied window's location: navigated as this
 						// document's navigation (Context navigateWindow), with the
 						// value the assignment makes (`w.location += '#x'` too)
-						if (foreign && key === 'location' && this.client.navigateWindow) {
+						if (foreign && key === 'location' && moduleClient.navigateWindow) {
 							let value: unknown;
 							let assigned = false;
 							const property = NativeSymbol();
@@ -703,7 +709,7 @@ export default class AccessModule extends Module<Client> {
 							if (!assigned) return result;
 							// (converted once, as the setter would)
 							const url = String(value);
-							if (this.client.navigateWindow(target, url, 'href'))
+							if (moduleClient.navigateWindow(target, url, 'href'))
 								return result;
 							righthand = url;
 							operate = (object: any, property: any, next: any) =>
@@ -728,12 +734,12 @@ export default class AccessModule extends Module<Client> {
 					righthand !== null &&
 					typeof target === 'object' &&
 					target !== null &&
-					this.client.landIndexed &&
+					moduleClient.landIndexed &&
 					indexKey(key) &&
 					!isArray(target) &&
 					'selectedIndex' in target
 				)
-					return this.client.landIndexed(target, righthand, () =>
+					return moduleClient.landIndexed(target, righthand, () =>
 						operate(api.get(target, key), key, righthand),
 					);
 
@@ -814,7 +820,7 @@ export default class AccessModule extends Module<Client> {
 					return typeof value !== 'object' ||
 						value === null ||
 						indexed(value) ||
-						!this.client.restrictForeign ||
+						!moduleClient.restrictForeign ||
 						!isWindowObject(value)
 						? value
 						: api.get(value, key, target);
@@ -838,7 +844,7 @@ export default class AccessModule extends Module<Client> {
 					return typeof value !== 'object' ||
 						value === null ||
 						indexed(value) ||
-						!this.client.restrictForeign ||
+						!moduleClient.restrictForeign ||
 						!isWindowObject(value)
 						? value
 						: api.get(value, key, target);
@@ -879,15 +885,15 @@ export default class AccessModule extends Module<Client> {
 					// which the browser names as the source
 					if (key === 'postMessage') {
 						if (container !== undefined) {
-							const own = this.client.postMessageOf?.(container);
+							const own = moduleClient.postMessageOf?.(container);
 							if (own) return own;
 						}
 					} else if (key === 'top' || key === 'eval' || key === 'location') {
 						// (the names of UNDEFINABLE, spelled out: this is asked of
 						// every other name a page reads by a computed key)
 						try {
-							if (key === 'top' && this.client.resolveTop)
-								return this.client.resolveTop(object, container);
+							if (key === 'top' && moduleClient.resolveTop)
+								return moduleClient.resolveTop(object, container);
 
 							if (
 								((typeof object === 'object' && object !== null) ||
@@ -895,8 +901,8 @@ export default class AccessModule extends Module<Client> {
 								names.globalProxy in object
 							) {
 								const standIn = object[names.globalProxy];
-								return key === 'location' && this.client.gateLocation
-									? this.client.gateLocation(object, standIn, container)
+								return key === 'location' && moduleClient.gateLocation
+									? moduleClient.gateLocation(object, standIn, container)
 									: standIn;
 							}
 						} catch (error) {
@@ -909,8 +915,8 @@ export default class AccessModule extends Module<Client> {
 				// (anything that is no object is handed back as it is)
 				if (typeof object !== 'object' || object === null) return object;
 
-				if (this.client.restrictForeign)
-					return this.client.restrictForeign(object, container);
+				if (moduleClient.restrictForeign)
+					return moduleClient.restrictForeign(object, container);
 
 				return object;
 			},
@@ -968,32 +974,32 @@ export default class AccessModule extends Module<Client> {
 					isLocation =
 						typeof target === 'object' &&
 						target !== null &&
-						target[this.client.names.globalName] === 'location';
+						target[moduleClient.names.globalName] === 'location';
 				} catch (error) {
 					// a cross-origin window: no location of ours
 				}
 				if (isLocation) {
 					// a URL that does not parse is the browser's to refuse (its
 					// SyntaxError, where resolving it here threw URL's TypeError)
-					if (failsToParse(this.client, <string>value)) {
+					if (failsToParse(moduleClient, <string>value)) {
 						set(value);
 						return result;
 					}
 					const destination = new URL(
 						<urlLike>value,
-						this.client.baseURL.toString(),
+						moduleClient.baseURL.toString(),
 					);
 					set(
 						// this document's own location: a navigation the browser's
 						// history records (another window's is that window's)
 						target === realm.location
-							? this.client.navigationRoute(destination)
+							? moduleClient.navigationRoute(destination)
 							: routeHTML(
-									new StompURL(destination, this.client.url),
-									this.client.url,
-									this.client.config,
+									new StompURL(destination, moduleClient.url),
+									moduleClient.url,
+									moduleClient.config,
 									false,
-									this.client.nestedRoute,
+									moduleClient.nestedRoute,
 								),
 					);
 				} else {
@@ -1093,7 +1099,7 @@ export default class AccessModule extends Module<Client> {
 				operate: (target: any, property: any, value: any) => any,
 				righthand: any,
 			): any => {
-				if (key === this.client.names.client) return righthand;
+				if (key === moduleClient.names.client) return righthand;
 				if (key === 'location') {
 					const real = read(key);
 					const standIn = api.get(real, key);
@@ -1159,7 +1165,7 @@ export default class AccessModule extends Module<Client> {
 					const holder = { [key]: 0 };
 					key = Reflect.ownKeys(holder)[0];
 				}
-				return this.client.hidesName?.(target, key) ? false : key in target;
+				return moduleClient.hidesName?.(target, key) ? false : key in target;
 			},
 			new2: (target: any, key: any, args: any, partial?: string): any => {
 				if (nullish(target)) throw errors.read(target, key);
@@ -1374,7 +1380,7 @@ export default class AccessModule extends Module<Client> {
 			// is called as soon as the head is entered, with nothing of the
 			// page's in between (no name is looked up to call it)
 			scope: (object: unknown): unknown => {
-				pendingScope = this.client.postScope?.(object) ?? NO_SCOPE;
+				pendingScope = moduleClient.postScope?.(object) ?? NO_SCOPE;
 				return object;
 			},
 			scoped: (): object => {
@@ -1391,7 +1397,7 @@ export default class AccessModule extends Module<Client> {
 			import: (baseURL: string | undefined, url: string): Promise<unknown> => {
 				const routed = route(baseURL, url, undefined);
 				return imported(
-					this.client.importIn(routed) ??
+					moduleClient.importIn(routed) ??
 						// @ts-ignore
 						import(/* webpackIgnore: true */ routed),
 				);
@@ -1421,14 +1427,14 @@ export default class AccessModule extends Module<Client> {
 			// appended (scriptRoutes.ts routeModulePrefix): the suffix resolves
 			// against the opened prefix, as the worker resolves it
 			resolved: (url: string): string => {
-				const real = unrouteURL(this.client, url);
+				const real = unrouteURL(moduleClient, url);
 				if (real !== null) return real;
-				const start = `${routedPrefix(this.client)}${MODULE_PREFIX_ROUTE}/`;
+				const start = `${routedPrefix(moduleClient)}${MODULE_PREFIX_ROUTE}/`;
 				if (url.startsWith(start))
 					try {
 						const rest = url.slice(start.length);
 						const slash = rest.indexOf('/');
-						const prefix = this.client.codec.decode(
+						const prefix = moduleClient.codec.decode(
 							slash === -1 ? rest : rest.slice(0, slash),
 						);
 						if (prefix)
@@ -1537,16 +1543,16 @@ export default class AccessModule extends Module<Client> {
 		// the realm's own to look at, where the bundle is another realm's
 		// (before the freeze: adopt gives the object and its functions the
 		// realm's prototypes)
-		this.client.getModule(ProxyModule)?.adopt(api);
+		moduleClient.getModule(ProxyModule)?.adopt(api);
 		// The helpers are not the page's to replace: a rewritten script hands
 		// them the arrows it writes a member with, and a page that swapped one
 		// would be handed a write nothing routes
 		Object.freeze(api);
-		this.client.accessApi = api;
+		moduleClient.accessApi = api;
 		// Where a rewritten script reaches it (src/helperNames.ts
 		// accessExpression): a property of the realm's Number.prototype, for
 		// good. A page can neither redefine it nor bind a name in its way
-		Reflect.defineProperty(realm.Number.prototype, this.client.names.access, {
+		Reflect.defineProperty(realm.Number.prototype, moduleClient.names.access, {
 			value: api,
 			configurable: false,
 			writable: false,
@@ -1556,7 +1562,7 @@ export default class AccessModule extends Module<Client> {
 		// and the global of that name, which hosts' hooks read (src/hooks.ts)
 		// and nothing of the inject's does. Not enumerable: Object.keys(window)
 		// must not name it
-		Reflect.defineProperty(realm, this.client.names.access, {
+		Reflect.defineProperty(realm, moduleClient.names.access, {
 			value: api,
 			configurable: true,
 			writable: true,

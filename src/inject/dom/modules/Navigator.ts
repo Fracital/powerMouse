@@ -155,12 +155,13 @@ export default class NavigatorModule extends Module<DocumentClient> {
 	}
 
 	apply() {
-		const global = this.client.global;
+		const client = this.client;
+		const global = client.global;
 		// with emulated service workers the ServiceWorker module answers
 		// instead (docs/service-workers.md); without, a page could register a
 		// real worker on the proxy origin, which would serve every site
 		if (
-			!this.client.serviceWorkers &&
+			!client.serviceWorkers &&
 			'serviceWorker' in global.Navigator.prototype
 		) {
 			delete (global as any).ServiceWorkerContainer;
@@ -168,7 +169,7 @@ export default class NavigatorModule extends Module<DocumentClient> {
 			delete (global.Navigator.prototype as any).serviceWorker;
 		}
 
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const proxyModule = client.getModule(ProxyModule)!;
 
 		// a protocol handler would be registered for the proxy origin, with the
 		// browser's prompt naming it: accepted silently, like a denied prompt,
@@ -266,7 +267,7 @@ export default class NavigatorModule extends Module<DocumentClient> {
 					if (args.length < 1) return Reflect.apply(target, that, args);
 					let url: URL;
 					try {
-						url = new URL(args[0], this.client.baseURL.toString());
+						url = new URL(args[0], client.baseURL.toString());
 					} catch (error) {
 						// the browser's own TypeError for a URL that does not parse
 						return Reflect.apply(target, that, args);
@@ -274,16 +275,16 @@ export default class NavigatorModule extends Module<DocumentClient> {
 					// mixed content: Chrome refuses an insecure beacon from an https
 					// page at once (sendBeacon answers false) and upgrades it under
 					// upgrade-insecure-requests
-					const mixed = this.client
+					const mixed = client
 						.getModule(MixedContentModule)
 						?.verdict(url, 'empty', 'Beacon endpoint');
 					if (mixed?.action === 'block') {
-						this.client.getModule(MixedContentModule)!.report(mixed.notices);
+						client.getModule(MixedContentModule)!.report(mixed.notices);
 						return false;
 					}
 					if (mixed?.action === 'upgrade') url = mixed.url;
-					reportOnly(this.client, url, 2);
-					args[0] = routeXHR(new StompURL(url, this.client.url));
+					reportOnly(client, url, 2);
+					args[0] = routeXHR(new StompURL(url, client.url));
 
 					// A document no service worker controls (an about:blank
 					// frame the page built, a document it wrote): Chrome hands
@@ -293,8 +294,8 @@ export default class NavigatorModule extends Module<DocumentClient> {
 					// controlled document instead (as this document's fetches
 					// do), a POST with the beacon's body, mode and credentials,
 					// counted against this document's own quota.
-					const via = this.client.controlledClient();
-					if (via && via !== this.client && that === global.navigator) {
+					const via = client.controlledClient();
+					if (via && via !== client && that === global.navigator) {
 						const payload = beaconPayload(args[1]);
 						// (a payload the browser refuses: its own TypeError, and
 						// nothing is sent)

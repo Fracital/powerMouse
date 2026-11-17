@@ -88,14 +88,15 @@ export default class EntryTimingModule extends Module<DocumentClient> {
 			: url;
 	}
 	apply() {
-		const global = this.client.global as typeof globalThis &
+		const moduleClient = this.client;
+		const global = moduleClient.global as typeof globalThis &
 			Record<string, any>;
 		if (!nativeEntryType || typeof global.Performance !== 'function') return;
 		// Every list of entries the page reads (performance.getEntries*, an
 		// observer's list, takeRecords) and whether an observer's callback
 		// runs at all are Unroute's, which asks this of each entry: a type
 		// with a handler is the handler's to admit
-		this.client.admitEntry = (entry) => {
+		moduleClient.admitEntry = (entry) => {
 			let admit: Admit | undefined;
 			try {
 				admit = this.#types.get(
@@ -123,7 +124,7 @@ export default class EntryTimingModule extends Module<DocumentClient> {
 		// long frame or task does not run their code)
 		const late = (make: (client: DocumentClient, timing: this) => Admit) => {
 			let admit: Admit | undefined;
-			return (entry: object) => (admit ??= make(this.client, this))(entry);
+			return (entry: object) => (admit ??= make(moduleClient, this))(entry);
 		};
 		this.onType('long-animation-frame', late(longFrames));
 		this.onType('longtask', late(longTasks));

@@ -32,9 +32,9 @@ export default class ReadbackModule extends Module<DocumentClient> {
 		this.applyScriptSource();
 	}
 	applyURLs() {
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const global = this.client.global as typeof globalThis &
-			Record<string, any>;
+		const client = this.client;
+		const proxyModule = client.getModule(ProxyModule)!;
+		const global = client.global as typeof globalThis & Record<string, any>;
 
 		const documentURI = Reflect.getOwnPropertyDescriptor(
 			global.Document.prototype,
@@ -45,10 +45,10 @@ export default class ReadbackModule extends Module<DocumentClient> {
 			get: proxyModule.wrapFunction(documentURI.get!, (target, that, args) => {
 				// (the native getter throws for what is no document)
 				const native = Reflect.apply(target, that, args) as string;
-				return this.client.documentURL(
+				return client.documentURL(
 					that,
 					native,
-					() => responseURLOf(that) ?? this.client.location.toString(),
+					() => responseURLOf(that) ?? client.location.toString(),
 				);
 			}),
 		});
@@ -85,7 +85,7 @@ export default class ReadbackModule extends Module<DocumentClient> {
 							return list;
 						const real = global.location.origin;
 						for (let i = 0; i < list.length; i++)
-							if (list[i] === real) list[i] = this.client.origin;
+							if (list[i] === real) list[i] = client.origin;
 						return list;
 					},
 				),
@@ -98,7 +98,7 @@ export default class ReadbackModule extends Module<DocumentClient> {
 				...origin,
 				get: proxyModule.wrapFunction(origin.get, (target, that, args) => {
 					Reflect.apply(target, that, args);
-					return this.client.origin;
+					return client.origin;
 				}),
 			});
 
@@ -109,7 +109,7 @@ export default class ReadbackModule extends Module<DocumentClient> {
 		const upgradedImage = (routed: string, page: string): string => {
 			if (!/\/binary\//.test(routed)) return page;
 			try {
-				const verdict = this.client
+				const verdict = client
 					.getModule(MixedContentModule)
 					?.verdict(new URL(page), 'image');
 				return verdict?.action === 'upgrade' ? verdict.url.href : page;
@@ -140,8 +140,8 @@ export default class ReadbackModule extends Module<DocumentClient> {
 					// refused by its parent's policy, with a refusal URL of the
 					// parent's)
 					const refused = navigation
-						? (this.client.refusedURI(value) ??
-							this.client.parentClient()?.refusedURI(value))
+						? (client.refusedURI(value) ??
+							client.parentClient()?.refusedURI(value))
 						: null;
 					if (refused) return refused.url;
 					// (no route of a page's URL, such as an inline document's:
@@ -149,9 +149,9 @@ export default class ReadbackModule extends Module<DocumentClient> {
 					// the proxy's address of anything else is not the page's to
 					// read either way)
 					const page =
-						unrouteURL(this.client, value) ??
-						(value === this.client.global.location.href
-							? this.client.location.toString()
+						unrouteURL(client, value) ??
+						(value === client.global.location.href
+							? client.location.toString()
 							: value);
 					return image ? upgradedImage(value, page) : page;
 				}),
@@ -166,8 +166,9 @@ export default class ReadbackModule extends Module<DocumentClient> {
 		unrouteGetter(global.HTMLMediaElement?.prototype, 'currentSrc');
 	}
 	applyScriptSource() {
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const global = this.client.global;
+		const client = this.client;
+		const proxyModule = client.getModule(ProxyModule)!;
+		const global = client.global;
 		const sources = new WeakMap<HTMLScriptElement, ScriptSource>();
 		// a script the hooks filled where no wrapper here sees the text go in
 		// (a child landing in a connected script, DOMContentHooks)
@@ -175,7 +176,7 @@ export default class ReadbackModule extends Module<DocumentClient> {
 		// empty, so each reads back as the piece the page gave it for as long
 		// as the script holds that text.
 		const pieces = new WeakMap<object, string>();
-		this.client.scriptSource = (script, written, rewritten, texts) => {
+		client.scriptSource = (script, written, rewritten, texts) => {
 			sources.set(script as HTMLScriptElement, { written, rewritten });
 			for (const [text, piece] of texts) pieces.set(text, piece);
 		};
@@ -314,7 +315,7 @@ export default class ReadbackModule extends Module<DocumentClient> {
 				return text === record.rewritten ? record.written : undefined;
 			// recorded before the hooks rewrote it where no wrapper here saw
 			// (markup a hook parses and inserts itself: insertAdjacentHTML)
-			const rewritten = this.client.rewrittenScripts.get(script);
+			const rewritten = client.rewrittenScripts.get(script);
 			if (
 				rewritten !== undefined &&
 				rewritten !== record.written &&

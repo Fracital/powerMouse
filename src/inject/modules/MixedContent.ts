@@ -36,23 +36,24 @@ export default class MixedContentModule extends Module<Client> {
 	}
 	/** the URL the page knows itself by (about:srcdoc for a srcdoc document) */
 	#ownURL(): string {
-		if (this.client.isDOM)
+		const client = this.client;
+		if (client.isDOM)
 			try {
-				const document = (this.client.global as { document?: Document })
-					.document;
+				const document = (client.global as { document?: Document }).document;
 				if (document) return String(document.URL);
 			} catch (error) {
 				// a document that went away: its client's URL
 			}
-		return this.client.url.toString();
+		return client.url.toString();
 	}
 	/** the URL of the outermost proxied document above this one, when this is a nested document */
 	#topURL(): string | null {
-		const top = (this.client as { proxiedTop?: typeof globalThis }).proxiedTop;
-		if (!top || top === this.client.global) return null;
+		const moduleClient = this.client;
+		const top = (moduleClient as { proxiedTop?: typeof globalThis }).proxiedTop;
+		if (!top || top === moduleClient.global) return null;
 		try {
 			const client = (top as Record<string, unknown>)[
-				this.client.names.client
+				moduleClient.names.client
 			] as Client | undefined;
 			return client ? client.url.toString() : null;
 		} catch (error) {

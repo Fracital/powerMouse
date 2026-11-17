@@ -88,8 +88,8 @@ export default class ResourceBufferModule extends Module<Client> {
 	 * before any hook of its own and before any script of the page's
 	 */
 	start(pageEntry: (entry: object) => boolean) {
-		const global = this.client.global as typeof globalThis &
-			Record<string, any>;
+		const client = this.client;
+		const global = client.global as typeof globalThis & Record<string, any>;
 		const performance = global.performance as Performance | undefined;
 		const Observer = global.PerformanceObserver;
 		const proto = global.Performance?.prototype as Performance | undefined;
@@ -108,7 +108,7 @@ export default class ResourceBufferModule extends Module<Client> {
 			!nativePhase
 		)
 			return;
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const proxyModule = client.getModule(ProxyModule)!;
 
 		/** the page's buffer size */
 		let size = DEFAULT_SIZE;
@@ -311,7 +311,7 @@ export default class ResourceBufferModule extends Module<Client> {
 				held = 0;
 				own = 0;
 				// (and the entries an ancestor's loads for this document left)
-				this.client.adoptedLoads.length = 0;
+				client.adoptedLoads.length = 0;
 				if (event) setNative(admitted());
 				// (entries wait for the task: it finds the buffer full, and its
 				// event settles them)

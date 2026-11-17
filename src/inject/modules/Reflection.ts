@@ -25,11 +25,12 @@ type Api = {
  */
 export default class ReflectionModule extends Module<Client> {
 	apply() {
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const global = this.client.global as typeof globalThis &
+		const moduleClient = this.client;
+		const proxyModule = moduleClient.getModule(ProxyModule)!;
+		const global = moduleClient.global as typeof globalThis &
 			Record<string, unknown>;
 		// (the client's own: the global of that name is the page's to write)
-		const api = () => this.client.accessApi as Api;
+		const api = () => moduleClient.accessApi as Api;
 		const document = (global as { document?: unknown }).document;
 
 		// (the names of UNDEFINABLE, asked without a method a page could have
@@ -42,10 +43,10 @@ export default class ReflectionModule extends Module<Client> {
 		// a descriptor, nor are found by the `in` operator (which the rewriter
 		// routes to the access API's `has`)
 		const hidden = new Set<PropertyKey>([
-			this.client.names.access,
-			this.client.names.client,
-			this.client.names.globalProxy,
-			this.client.names.globalName,
+			moduleClient.names.access,
+			moduleClient.names.client,
+			moduleClient.names.globalProxy,
+			moduleClient.names.globalName,
 		]);
 		// A Number.prototype with the access API on it (where rewritten code
 		// reaches it: src/helperNames.ts accessExpression): this realm's, or
@@ -115,7 +116,7 @@ export default class ReflectionModule extends Module<Client> {
 			'window',
 		)?.get;
 		const lazyOf = (target: unknown): Map<string, () => void> | undefined => {
-			if (target === global) return this.client.lazyGlobals;
+			if (target === global) return moduleClient.lazyGlobals;
 			if (!nativeWindow || typeof target !== 'object' || target === null)
 				return undefined;
 			try {
@@ -127,7 +128,7 @@ export default class ReflectionModule extends Module<Client> {
 				)
 					return undefined;
 				return (
-					Reflect.getOwnPropertyDescriptor(target, this.client.names.client)
+					Reflect.getOwnPropertyDescriptor(target, moduleClient.names.client)
 						?.value as Client | undefined
 				)?.lazyGlobals;
 			} catch (error) {
@@ -189,7 +190,7 @@ export default class ReflectionModule extends Module<Client> {
 						PropertyDescriptor | undefined;
 					if (
 						descriptor &&
-						args[1] === this.client.names.access &&
+						args[1] === moduleClient.names.access &&
 						holdsAccess(args[0])
 					)
 						return undefined;
@@ -206,7 +207,7 @@ export default class ReflectionModule extends Module<Client> {
 
 		// a global a module redefined is listed where the browser lists it
 		const inNativeOrder = (keys: PropertyKey[]) => {
-			for (const [name, after] of this.client.globalKeyAfter) {
+			for (const [name, after] of moduleClient.globalKeyAfter) {
 				const at = keys.indexOf(name);
 				const before = keys.indexOf(after);
 				if (at === -1 || before === -1 || at === before + 1) continue;
@@ -224,7 +225,7 @@ export default class ReflectionModule extends Module<Client> {
 					PropertyKey,
 					PropertyDescriptor
 				>;
-				if (args[0] === global && this.client.globalKeyAfter.size) {
+				if (args[0] === global && moduleClient.globalKeyAfter.size) {
 					const ordered: Record<PropertyKey, PropertyDescriptor> = {};
 					for (const key of inNativeOrder(Reflect.ownKeys(descriptors)))
 						ordered[key as string] = descriptors[key as string];
@@ -240,7 +241,7 @@ export default class ReflectionModule extends Module<Client> {
 				// (where rewritten code reaches the access API: src/helperNames.ts
 				// accessExpression)
 				if (holdsAccess(args[0]))
-					Reflect.deleteProperty(descriptors, this.client.names.access);
+					Reflect.deleteProperty(descriptors, moduleClient.names.access);
 				return descriptors;
 			},
 		);
@@ -357,7 +358,7 @@ export default class ReflectionModule extends Module<Client> {
 			try {
 				const tag = Reflect.getOwnPropertyDescriptor(
 					target,
-					this.client.names.globalName,
+					moduleClient.names.globalName,
 				);
 				return (
 					tag !== undefined && !tag.enumerable && typeof tag.value === 'string'
@@ -377,16 +378,16 @@ export default class ReflectionModule extends Module<Client> {
 					typeof target === 'object' &&
 					target !== null &&
 					holdsAccess(Reflect.getPrototypeOf(target)) &&
-					!Reflect.getOwnPropertyDescriptor(target, this.client.names.access)
+					!Reflect.getOwnPropertyDescriptor(target, moduleClient.names.access)
 				);
 			} catch (error) {
 				return false;
 			}
 		};
 		// the `in` operator asks the same (access API `has`)
-		this.client.hidesName = (target, key) =>
+		moduleClient.hidesName = (target, key) =>
 			hidden.has(key as PropertyKey) &&
-			(ours(target) || (key === this.client.names.access && inherits(target)));
+			(ours(target) || (key === moduleClient.names.access && inherits(target)));
 		for (const [holder, name] of [
 			[global.Object, 'getOwnPropertyNames'],
 			[global.Reflect, 'ownKeys'],
@@ -474,19 +475,19 @@ export default class ReflectionModule extends Module<Client> {
 	 * are where a window becomes the receiver.
 	 */
 	applyWindowChildren(windowLike: (target: unknown) => boolean) {
-		const global = this.client.global as typeof globalThis &
-			Record<string, any>;
+		const client = this.client;
+		const global = client.global as typeof globalThis & Record<string, any>;
 		// a scope without windows (a worker) has no children to read
 		if (!Reflect.getOwnPropertyDescriptor(global, 'window')?.get) return;
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const api = () => this.client.accessApi as Api;
+		const proxyModule = client.getModule(ProxyModule)!;
+		const api = () => client.accessApi as Api;
 		const isArray = global.Array.isArray;
 		const isWindow = (value: unknown): boolean =>
 			typeof value === 'object' &&
 			value !== null &&
 			!isArray(value) &&
-			(this.client.isWindowObject
-				? this.client.isWindowObject(value)
+			(client.isWindowObject
+				? client.isWindowObject(value)
 				: windowLike(value));
 		const isIndex = (key: unknown): key is string => {
 			if (typeof key !== 'string') return false;

@@ -19,14 +19,15 @@ const SAME_FRAME = ['', '_self', '_top', '_parent', '_unfencedtop'];
  */
 export default class OpenModule extends Module<DocumentClient> {
 	apply() {
-		const global = this.client.global;
+		const client = this.client;
+		const global = client.global;
 
 		const listener = (event: MouseEvent) => {
 			if (event.defaultPrevented) return;
 			if (event.type === 'auxclick' && event.button !== 1) return;
 			if (event.type === 'click' && event.button !== 0) return;
-			const sandboxed = this.client.sandboxFlags !== null;
-			if (!this.client.config.openTab && !sandboxed) return;
+			const sandboxed = client.sandboxFlags !== null;
+			if (!client.config.openTab && !sandboxed) return;
 			const link = event
 				.composedPath()
 				.find(
@@ -49,14 +50,11 @@ export default class OpenModule extends Module<DocumentClient> {
 				event.shiftKey;
 			if (!modifier && SAME_FRAME.includes(target)) return;
 			// a frame of this page by that name: the browser navigates it
-			if (!modifier && this.client.hasFrameNamed(link.getAttribute('target')!))
+			if (!modifier && client.hasFrameNamed(link.getAttribute('target')!))
 				return;
 			let url: URL;
 			try {
-				url = new URL(
-					link.getAttribute('href')!,
-					this.client.baseURL.toString(),
-				);
+				url = new URL(link.getAttribute('href')!, client.baseURL.toString());
 			} catch (error) {
 				// no URL: the click opens nothing, here or in the browser
 				return;
@@ -64,8 +62,8 @@ export default class OpenModule extends Module<DocumentClient> {
 			if (!['http:', 'https:'].includes(url.protocol)) return;
 			if (sandboxed) {
 				// refused by the browser, as natively
-				if (!this.client.allows('allow-popups')) return;
-				if (!this.client.allows('allow-popups-to-escape-sandbox')) {
+				if (!client.allows('allow-popups')) return;
+				if (!client.allows('allow-popups-to-escape-sandbox')) {
 					event.preventDefault();
 					const opened = global.open(url.href, target || '_blank');
 					// the link's popup has no opener (a _blank target implies
@@ -79,7 +77,7 @@ export default class OpenModule extends Module<DocumentClient> {
 						rel.includes('noopener') ||
 						rel.includes('noreferrer') ||
 						(target === '_blank' && !rel.includes('opener'));
-					if (opened && noopener && this.client.allows('allow-scripts'))
+					if (opened && noopener && client.allows('allow-scripts'))
 						try {
 							opened.opener = null;
 						} catch (error) {
@@ -87,9 +85,9 @@ export default class OpenModule extends Module<DocumentClient> {
 						}
 					return;
 				}
-				if (!this.client.config.openTab) return;
+				if (!client.config.openTab) return;
 			}
-			if (this.client.openInHost(url.toString())) event.preventDefault();
+			if (client.openInHost(url.toString())) event.preventDefault();
 		};
 		const install = () => {
 			global.addEventListener('click', listener, true);

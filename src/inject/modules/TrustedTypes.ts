@@ -25,12 +25,13 @@ const nativeSetTimeout = globalThis.setTimeout;
  */
 export default class TrustedTypesModule extends Module<Client> {
 	apply() {
-		if (!this.client.scriptFacts.ttActive) return;
-		const global = this.client.global as typeof globalThis;
+		const client = this.client;
+		if (!client.scriptFacts.ttActive) return;
+		const global = client.global as typeof globalThis;
 		const factory = (global as { trustedTypes?: object }).trustedTypes;
 		const prototype = factory && Reflect.getPrototypeOf(factory);
 		if (!prototype) return;
-		const proxyModule = this.client.getModule(ProxyModule)!;
+		const proxyModule = client.getModule(ProxyModule)!;
 		const owned = prototype as unknown as Record<string, Function>;
 		const is = [owned.isHTML, owned.isScript, owned.isScriptURL];
 		const text = TRUSTED_KINDS.map(
@@ -47,8 +48,8 @@ export default class TrustedTypesModule extends Module<Client> {
 		/** the page's own script text that reaches a sink the inject writes (a Text node), which its default policy is not asked of */
 		const approved = new Set<string>();
 
-		this.client.trustedJavascript = (page, _routed, proceed) => {
-			const required = this.client.trustedTypesRequired();
+		client.trustedJavascript = (page, _routed, proceed) => {
+			const required = client.trustedTypesRequired();
 			if (!required) return true;
 			// a javascript: navigation is async, as is its Trusted Types judgment:
 			// the inject does both after the page's call returns (so the default
@@ -70,15 +71,15 @@ export default class TrustedTypesModule extends Module<Client> {
 					}
 				if (allowed) proceed();
 				else if (required === 'enforce')
-					this.client.reportTrustedSink('Location href', page);
+					client.reportTrustedSink('Location href', page);
 				else {
-					this.client.reportTrustedTypes('Location href', page);
+					client.reportTrustedTypes('Location href', page);
 					proceed();
 				}
 			});
 			return false;
 		};
-		this.client.trustedApprove = (value) => {
+		client.trustedApprove = (value) => {
 			if (!callbacks[1]) return;
 			approved.add(`1${value}`);
 			if (approved.size > 64) approved.delete(approved.values().next().value!);
@@ -92,12 +93,12 @@ export default class TrustedTypesModule extends Module<Client> {
 			owned.createPolicy,
 			(target, that, args) => {
 				const name = `${args[0]}`;
-				const refusals = this.client.refusedTrustedPolicy(name, made);
+				const refusals = client.refusedTrustedPolicy(name, made);
 				// each refusing policy reports (trusted where it enforces); an
 				// enforced one also throws, and then the policy is not made
 				let enforced: string | null = null;
 				for (const { policy, message } of refusals) {
-					this.client.reportTrustedPolicy(policy, name);
+					client.reportTrustedPolicy(policy, name);
 					if (
 						enforced === null &&
 						(policy as { disposition?: string }).disposition === 'enforce'
@@ -121,15 +122,8 @@ export default class TrustedTypesModule extends Module<Client> {
 			},
 		);
 
-		this.client.trustedCheck = (
-			value,
-			type,
-			sink,
-			refuse,
-			convert,
-			attribute,
-		) => {
-			const required = this.client.trustedTypesRequired();
+		client.trustedCheck = (value, type, sink, refuse, convert, attribute) => {
+			const required = client.trustedTypesRequired();
 			if (!required) return convert(value);
 			const kind = TRUSTED_KINDS.indexOf(type);
 			// a trusted value of the sink's type passes as its own string
@@ -165,7 +159,7 @@ export default class TrustedTypesModule extends Module<Client> {
 				// report-only never blocks: the policy's throw still throws, else
 				// the sink goes on with the page's value and the inject reports it
 				if (threw) throw code ? this.#codeError(sink, type) : threw.error;
-				this.client.reportTrustedTypes(sink, written);
+				client.reportTrustedTypes(sink, written);
 				return written;
 			}
 			// enforce: the policy's throw propagates (no violation); otherwise
@@ -178,8 +172,8 @@ export default class TrustedTypesModule extends Module<Client> {
 				: !hadCallback && defaultMade
 					? ` and no 'default' policy for '${type}' has been defined.`
 					: '.';
-			if (event) this.client.reportTrustedSink(sink, written);
-			throw this.client.trustedTypeError(sink, type, tail, !!attribute);
+			if (event) client.reportTrustedSink(sink, written);
+			throw client.trustedTypeError(sink, type, tail, !!attribute);
 		};
 	}
 

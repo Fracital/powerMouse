@@ -34,9 +34,10 @@ const LACKS_SAME_ORIGIN =
  */
 export default class SandboxModule extends Module<DocumentClient> {
 	apply() {
-		const global = this.client.global;
-		const proxyModule = this.client.getModule(ProxyModule)!;
-		const opaque = () => this.client.sandboxedOpaque;
+		const client = this.client;
+		const global = client.global;
+		const proxyModule = client.getModule(ProxyModule)!;
+		const opaque = () => client.sandboxedOpaque;
 		const securityError = (message: string) =>
 			withStack(new global.DOMException(message, 'SecurityError'));
 
@@ -93,8 +94,6 @@ export default class SandboxModule extends Module<DocumentClient> {
 			'caches',
 			"Failed to read the 'caches' property from 'Window': Cache storage is disabled because the context is sandboxed and lacks the 'allow-same-origin' flag.",
 		);
-
-		const client = this.client;
 		const resolve = (value: unknown) =>
 			new URL(String(value), client.baseURL.toString());
 		const LOCATION_PARTS = [
@@ -131,7 +130,7 @@ export default class SandboxModule extends Module<DocumentClient> {
 		// document's own, refused or made as Chrome would (Context
 		// navigateWindow); a sandboxed document's reload, or a write of a
 		// part of the URL, is refused where it may not navigate the window
-		this.client.gateLocation = (real, standIn, container) => {
+		client.gateLocation = (real, standIn, container) => {
 			if (
 				real === global.location ||
 				typeof standIn !== 'object' ||
