@@ -10,19 +10,38 @@ import { hookDevices } from '../../deviceGrants';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { withStack } from '../../nativeErrors';
+import { OwnWeakMap } from '../../ownCollections';
 import { notificationParts, type GateContext } from '../../permissionGates';
 import WorkerClient from '../Client';
 
 // taken when the bundle loads: a device's getters are checked by their source
 const nativeToString = Function.prototype.toString;
 
+/** the permissions each site keeps (src/server/permissions.ts); push is notifications' */
+const SIMULATED = new Set([
+	'geolocation',
+	'camera',
+	'microphone',
+	'notifications',
+	'clipboard-read',
+	'midi',
+	'persistent-storage',
+	'local-fonts',
+	'idle-detection',
+	'window-management',
+	'display-capture',
+	'captured-surface-control',
+	'local-network-access',
+]);
+
 /**
  * A worker's view of its site's permissions (docs/permissions.md): the
  * worker has no navigator.serviceWorker to post to, so it asks the service
  * worker's route (messages.ts PERMISSION_ROUTE), as the site its route
- * names it by. Notification.permission reads the site's state as a worker
- * reads it natively (`granted`, else `denied`; `denied` until the answer
- * is in), a notification is shown only as the site may (the document's
+ * names it by. navigator.permissions.query() answers the site's states,
+ * Notification.permission reads the site's state as a worker reads it
+ * natively (`granted`, else `denied`; `denied` until the answer is in), a
+ * notification is shown only as the site may (the document's
  * notificationParts), and navigator.usb, .hid and .serial list the site's
  * own devices (src/inject/deviceGrants.ts).
  */
@@ -57,11 +76,62 @@ export default class WorkerPermissionsModule extends Module<WorkerClient> {
 			}
 		};
 		let states: Record<string, PermissionState> = {};
-		void ask({ op: 'states' }).then((answer) => {
+		const statesIn = ask({ op: 'states' }).then((answer) => {
 			if (answer) states = (answer as PermissionStates).states ?? {};
 		});
 		const siteState = (name: string): PermissionState =>
 			states[name] ?? 'prompt';
+
+		// navigator.permissions.query() answers the site's state, as the
+		// document's does (its Permissions module): the browser's is the proxy
+		// origin's, which another site may have been granted. The browser
+		// checks the descriptor and makes the status; a change of its own
+		// state is never the site's, so the status hears none.
+		const permissions = (global as { Permissions?: { prototype: object } })
+			.Permissions?.prototype;
+		const statusPrototype = (
+			global as { PermissionStatus?: { prototype: object } }
+		).PermissionStatus?.prototype;
+		const stateDescriptor =
+			statusPrototype &&
+			Reflect.getOwnPropertyDescriptor(statusPrototype, 'state');
+		const queryDescriptor =
+			permissions && Reflect.getOwnPropertyDescriptor(permissions, 'query');
+		if (stateDescriptor?.get && typeof queryDescriptor?.value === 'function') {
+			const shown = new OwnWeakMap<object, PermissionState>();
+			const addListener = global.EventTarget.prototype.addEventListener;
+			const stopImmediate = global.Event.prototype.stopImmediatePropagation;
+			Reflect.defineProperty(statusPrototype!, 'state', {
+				...stateDescriptor,
+				get: proxyModule.wrapFunction(
+					stateDescriptor.get,
+					(target, that, args) =>
+						shown.has(that)
+							? shown.get(that)
+							: Reflect.apply(target, that, args),
+				),
+			});
+			Reflect.defineProperty(permissions!, 'query', {
+				...queryDescriptor,
+				value: proxyModule.wrapFunction(
+					queryDescriptor.value,
+					async (target, that, args) => {
+						const status = (await Reflect.apply(target, that, args)) as object;
+						const asked = String((args[0] as { name?: string })?.name);
+						const name = asked === 'push' ? 'notifications' : asked;
+						if (SIMULATED.has(name)) {
+							await statesIn;
+							shown.set(status, siteState(name));
+							Reflect.apply(addListener, status, [
+								'change',
+								(event: Event) => Reflect.apply(stopImmediate, event, []),
+							]);
+						}
+						return status;
+					},
+				),
+			});
+		}
 
 		const Native = (global as { Notification?: Function }).Notification;
 		if (typeof Native === 'function') {

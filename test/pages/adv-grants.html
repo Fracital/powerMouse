@@ -156,6 +156,33 @@
 			setTimeout(() => resolve('no reply'), 3500);
 		});
 	});
+	A('worker permissions.query', () => {
+		const source = `
+			Promise.all(['geolocation', 'notifications', 'midi'].map((name) =>
+				navigator.permissions.query({ name }).then(
+					(status) => name + ' ' + status.state,
+					(error) => name + ' ' + error.name,
+				),
+			)).then((states) => postMessage(states.join(', ')));
+		`;
+		return new Promise((resolve) => {
+			const worker = new Worker(
+				URL.createObjectURL(new Blob([source], { type: 'text/javascript' })),
+			);
+			worker.onmessage = (event) => {
+				worker.terminate();
+				resolve(
+					/granted/.test(event.data)
+						? `LEAK: ${event.data}`
+						: event.data ===
+							  'geolocation prompt, notifications prompt, midi prompt'
+							? event.data
+							: `TELL: ${event.data}`,
+				);
+			};
+			setTimeout(() => resolve('no reply'), 3500);
+		});
+	});
 	A('storage.persist', async () =>
 		(await navigator.storage.persist()) ? 'LEAK: persisted' : 'not persisted',
 	);

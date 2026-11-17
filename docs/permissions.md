@@ -340,6 +340,7 @@ site the user never answered for got another site's grant:
 | a SpeechRecognition's `start()`                                  | listened                                 | asks the host; refused: `error` (`not-allowed`) and `end`                 |
 | `new Notification()` (window and worker)                         | shown                                    | `error`, nothing shown, the members as given                              |
 | a worker's `Notification.permission`                             | `granted`                                | the site's: `granted`, else `denied`                                      |
+| a worker's `navigator.permissions.query()`                       | the proxy origin's state (`granted`)     | the site's own state, and no `change` of the browser's                    |
 | `navigator.storage.persist()`                                    | `true`                                   | `false` unless the site may (its own grant or the browser's prompt)       |
 | `<geolocation autolocate>`                                       | the position, `permissionStatus` granted | no position, the site's own state                                         |
 | `requestMediaKeySystemAccess` with `persistentState: 'required'` | the origin's persistent CDM storage      | NotSupportedError; optional persistent state reads `not-allowed`          |
