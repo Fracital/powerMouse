@@ -58,21 +58,6 @@ ok(
 );
 
 const show = (value) => JSON.stringify(value);
-// Chrome encodes as UTF-8 again every header byte past 0x7F that a service
-// worker's Response carries (measured with no proxy: a worker that relays a
-// network response's headers unchanged hands the page c3 83 c2 a9 for c3 a9),
-// so a proxied value is compared after undoing that one encoding
-const unworkered = (fetched) =>
-	typeof fetched === 'object' && fetched !== null
-		? {
-				...fetched,
-				headers: fetched.headers.map((line) =>
-					new TextDecoder().decode(
-						Uint8Array.from(line, (unit) => unit.charCodeAt(0)),
-					),
-				),
-			}
-		: fetched;
 for (const [mode, base] of [
 	['same-origin', PROXY],
 	['isolated', HOST],
@@ -90,7 +75,7 @@ for (const [mode, base] of [
 		const got = proxied?.cases[name];
 		ok(
 			`${mode}: ${name}: fetch sees what it sees natively (status, body, headers)`,
-			show(unworkered(got?.fetch)) === show(want?.fetch),
+			show(got?.fetch) === show(want?.fetch),
 			show({ native: want?.fetch, proxied: got?.fetch }),
 		);
 		// a network error shows the browser's own error page natively and the

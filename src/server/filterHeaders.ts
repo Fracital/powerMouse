@@ -1,4 +1,6 @@
+import { pastASCII, utf8Text } from '../byteString';
 import StompURL from '../StompURL';
+import { BYTES_MARKER } from '../transport/messages';
 
 const cspHeaders: string[] = [
 	'Content-Security-Policy',
@@ -209,4 +211,115 @@ export function filterResponseHeaders(
 	}
 
 	return filteredHeaders;
+}
+
+/** the parameters of a header value, split at each `;` outside quotes */
+function parameters(value: string): string[] {
+	const parts: string[] = [];
+	let quoted = false;
+	let from = 0;
+	for (let i = 0; i < value.length; i++) {
+		const ch = value[i];
+		if (ch === '\\' && quoted) i++;
+		else if (ch === '"') quoted = !quoted;
+		else if (ch === ';' && !quoted) {
+			parts.push(value.slice(from, i));
+			from = i + 1;
+		}
+	}
+	parts.push(value.slice(from));
+	return parts;
+}
+
+/** RFC 8187's value characters, every other byte of the UTF-8 escaped */
+const extendedValue = (text: string) =>
+	encodeURIComponent(text).replace(
+		/['()*]/g,
+		(c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+	);
+
+/**
+ * The name Chrome gives a download from its URL when the response names
+ * none it can read: the last path segment, its escapes read as UTF-8, or
+ * the host for none
+ */
+function urlName(url: URL): string {
+	const segment = url.pathname.slice(url.pathname.lastIndexOf('/') + 1);
+	return (segment && (utf8Text(unescape(segment)) ?? segment)) || url.hostname;
+}
+
+/**
+ * A Content-Disposition as the browser has to read it to name a download as
+ * it does natively, or null to keep it. Chrome takes `filename*`, else
+ * reads `filename`'s bytes as UTF-8, and names a file whose bytes are not
+ * UTF-8 from its URL (net::HttpContentDisposition; measured with Chrome
+ * 157). The bytes would reach it encoded again (BYTES_MARKER), so the name
+ * goes as a `filename*` of ASCII. A navigation's with no name at all gets
+ * its URL's, or the browser would name the file after the route.
+ */
+function browserDisposition(
+	value: string,
+	url: URL,
+	navigation: boolean,
+): string | null {
+	const parts = parameters(value);
+	const key = (part: string) =>
+		part
+			.slice(0, part.indexOf('=') >>> 0)
+			.trim()
+			.toLowerCase();
+	if (parts.some((part) => key(part) === 'filename*')) {
+		// a raw filename is not read beside it
+		const kept = parts.filter(
+			(part) => key(part) !== 'filename' || !pastASCII(part),
+		);
+		return kept.length === parts.length ? null : kept.join(';');
+	}
+	const plain = parts.findIndex((part, i) => i > 0 && key(part) === 'filename');
+	let name: string;
+	if (plain !== -1) {
+		const part = parts[plain];
+		if (!pastASCII(part)) return null;
+		const raw = part
+			.slice(part.indexOf('=') + 1)
+			.trim()
+			.replace(/^"((?:[^"\\]|\\.)*)"?$/, (all, quoted: string) =>
+				quoted.replace(/\\(.)/g, '$1'),
+			);
+		name = utf8Text(raw) ?? urlName(url);
+		parts.splice(plain, 1);
+	} else if (navigation) name = urlName(url);
+	else return null;
+	return [...parts, ` filename*=UTF-8''${extendedValue(name)}`].join(';');
+}
+
+/**
+ * The response's header values with bytes past 0x7F, as the page and the
+ * browser read them natively. The transport hands each value over as a
+ * byte string, a character a byte, which is what a page reads, but Chrome
+ * encodes every header of a service worker's Response as UTF-8 again: the
+ * bytes go to the inject in a mark (BYTES_MARKER), and Content-Disposition,
+ * which the browser reads itself, as it would name the download.
+ */
+export function browserBytes(
+	headers: Headers,
+	url: URL,
+	navigation: boolean,
+): void {
+	const sent: string[] = [];
+	for (const [name, value] of [...headers]) {
+		if (name === 'content-disposition') {
+			const browser = browserDisposition(value, url, navigation);
+			if (browser !== null) {
+				headers.set(name, browser);
+				sent.push(`${name}:${escape(value)}`);
+				continue;
+			}
+		}
+		// (a site's own Server-Timing is shown without the worker's marks)
+		if (name !== 'server-timing' && /[\x80-\xff]/.test(value))
+			sent.push(`${name}:${escape(value)}`);
+	}
+	if (sent.length)
+		headers.append('server-timing', `${BYTES_MARKER};desc="${sent.join(' ')}"`);
 }

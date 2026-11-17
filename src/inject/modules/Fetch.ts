@@ -7,6 +7,7 @@ import {
 import StompURL, { urlLike } from '../../StompURL';
 import {
 	ABORT_HEADER,
+	BYTES_MARKER,
 	CORS_MARKER,
 	OPAQUE_COPY_HEADER,
 	OPAQUE_HEADER,
@@ -77,6 +78,26 @@ const nativeResponseBody = Reflect.getOwnPropertyDescriptor(
 const responseTypes = new LazyWeakMap<Response, 'basic' | 'cors' | 'opaque'>();
 /** the page's URL of a response, where the browser has the route */
 const responseURLs = new LazyWeakMap<Response, string>();
+const nativeUnescape = unescape;
+
+/**
+ * The header values the worker noted the bytes of (BYTES_MARKER), as
+ * name, bytes, name, bytes; empty for none
+ */
+function sentBytes(timing: string | null): string[] {
+	const bytes: string[] = [];
+	const lead = `${BYTES_MARKER};desc="`;
+	const at = timing === null ? -1 : timing.lastIndexOf(lead);
+	if (at === -1) return bytes;
+	const from = at + lead.length;
+	const note = timing!.slice(from, timing!.indexOf('"', from));
+	for (const pair of note.split(' ')) {
+		const colon = pair.indexOf(':');
+		bytes.push(pair.slice(0, colon), nativeUnescape(pair.slice(colon + 1)));
+	}
+	return bytes;
+}
+
 /** responses that came with RESPONSE_TYPE_HEADER, which the page never sees */
 const marked = new LazyWeakSet<Response>();
 
@@ -868,14 +889,21 @@ export default class FetchModule extends Module<Client> {
 				let shown = shownHeaders.get(that as Response);
 				if (!shown) {
 					shown = new global.Headers();
-					for (const [key, value] of entriesOf(
-						Reflect.apply(target, that, args) as Headers,
-					)) {
+					const real = Reflect.apply(target, that, args) as Headers;
+					// a value's bytes, which reached the browser encoded again
+					const bytes = sentBytes(
+						Reflect.apply(nativeHeadersGet, real, ['server-timing']),
+					);
+					for (const [key, value] of entriesOf(real)) {
 						if (key === RESPONSE_TYPE_HEADER) continue;
 						if (key === 'server-timing') {
 							const page = withoutProxyMetrics(value);
 							if (page !== null) shown.append(key, page);
-						} else shown.append(key, value);
+							continue;
+						}
+						let i = 0;
+						while (i < bytes.length && bytes[i] !== key) i += 2;
+						shown.append(key, i < bytes.length ? bytes[i + 1] : value);
 					}
 					shownHeaders.set(that as Response, shown);
 				}

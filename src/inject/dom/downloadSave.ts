@@ -2,6 +2,7 @@
 // the copy fetched through the proxy and saved from a blob: URL under the
 // name the browser would pick. A deferred part (./deferredParts.ts), made at
 // a document's first such download; its top level reads no global.
+import { utf8Text } from '../../byteString';
 import { routeBinary } from '../../routeURL';
 import StompURL from '../../StompURL';
 import { scopePrefix } from '../modules/Unroute';
@@ -19,7 +20,9 @@ function dispositionName(header: string | null): string | null {
 			// not percent-encoded after all: the plain form below
 		}
 	const plain = /filename\s*=\s*("([^"]*)"|[^;]+)/i.exec(header);
-	return plain ? (plain[2] ?? plain[1]).trim() : null;
+	// the header's bytes, which Chrome reads as UTF-8, and names the file
+	// from its URL when they are not
+	return plain ? utf8Text((plain[2] ?? plain[1]).trim()) : null;
 }
 
 /** `url` fetched through the proxy and saved as `named` (or the name it gives) */

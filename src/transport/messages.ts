@@ -313,6 +313,18 @@ export const siteMetrics = (value: string) =>
 		/("(?:[^"\\]|\\.)*")|((?:^|,)\s*stomp-)!/g,
 		(all, quoted, start) => quoted ?? start,
 	);
+/**
+ * A Server-Timing metric whose description names the header values with
+ * bytes past 0x7F, each as `<name>:<the bytes, escape()d>` and the next
+ * after a space. Chrome reads a header as a byte string, but it encodes a
+ * service worker's Response headers as UTF-8 again (its Headers hold no
+ * character past U+00FF, so the worker cannot hand it the text either): a
+ * page read c3 83 c2 a9 for the c3 a9 a server sent. The inject shows a
+ * fetch or an XMLHttpRequest these bytes instead (and Content-Disposition
+ * as the site sent it, which the worker rewrites for the browser's own
+ * reading: filterHeaders.ts browserBytes)
+ */
+export const BYTES_MARKER = 'stomp-bytes';
 /** every Server-Timing metric of the worker's own, which the page never sees */
 export const PROXY_METRICS: readonly string[] = [
 	TAO_MARKER,
@@ -331,6 +343,7 @@ export const PROXY_METRICS: readonly string[] = [
 	MEMORY_MARKER,
 	KEPT_MARKER,
 	HOPS_MARKER,
+	BYTES_MARKER,
 ];
 /**
  * On the answer of a page's emulated service worker: `<type> <url>`, the

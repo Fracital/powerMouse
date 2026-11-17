@@ -247,6 +247,7 @@ import { embedderPolicyOf, rememberEmbedderPolicy } from './embedderPolicies';
 import { DOCUMENT_DESTINATIONS, hostErrorPage } from './errorPage';
 import {
 	AdditionalFilter,
+	browserBytes,
 	filterNativeRequestHeaders,
 	filterResponseHeaders,
 	locationURL,
@@ -4174,6 +4175,9 @@ function genericForward(
 			});
 			return new Response(freshFrameDocument(to), { headers });
 		}
+
+		// values with bytes past 0x7F, which Chrome would read encoded again
+		browserBytes(responseHeaders, url.url, navigation);
 
 		let body: BodyInit | undefined;
 		/** the transform's output when it is text: a rewrite made just now */
