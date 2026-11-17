@@ -98,10 +98,22 @@ interface ObserverState {
 	/** the page's value of an attribute that carries no marker */
 	readback: (name: string, value: string) => string;
 	schedule: (callback: () => void) => void;
-	scheduled: boolean;
+	/** where the observer stands among the others, oldest first (`inOrder`) */
+	created: number;
 }
 
 const states = new WeakMap<MutationObserver, ObserverState>();
+/** how many observers were made (ObserverState.created) */
+let made = 0;
+/**
+ * `entries` in the order the browser notifies observers: the order they were
+ * made in, whichever observed first (the sets here keep that one)
+ */
+function inOrder<T>(entries: [MutationObserver, T][]): [MutationObserver, T][] {
+	if (entries.length > 1)
+		entries.sort(([a], [b]) => states.get(a)!.created - states.get(b)!.created);
+	return entries;
+}
 /** observers with a registration that sees attributes */
 const live = new Set<WeakRef<MutationObserver>>();
 /**
@@ -321,15 +333,25 @@ function enqueue(observer: MutationObserver, records: MutationRecord[]) {
 		settled.add(record);
 		state.queue.push(record);
 	}
-	if (state.scheduled) return;
-	state.scheduled = true;
 	// the browser's own delivery comes first when this observer has records
-	// left in its queue; this one covers a queue that was emptied
+	// left in its queue; this one covers a queue that was emptied. One
+	// microtask notifies every observer that waits, the oldest first, as the
+	// browser's does: one each ran them in the order their records were taken
+	waiting.add(observer);
+	if (notifying) return;
+	notifying = true;
 	state.schedule(() => {
-		state.scheduled = false;
-		deliver(observer);
+		notifying = false;
+		const due = inOrder(
+			[...waiting].map((waits): [MutationObserver, null] => [waits, null]),
+		);
+		waiting.clear();
+		for (const [waits] of due) deliver(waits);
 	});
 }
+/** the observers `enqueue` gave records to, until the microtask that notifies them */
+const waiting = new Set<MutationObserver>();
+let notifying = false;
 
 function deliver(observer: MutationObserver) {
 	const state = states.get(observer);
@@ -371,6 +393,7 @@ function visible(records: MutationRecord[]): MutationRecord[] {
 /** take every observer's pending records into the write being run */
 function drain(observers = live) {
 	const write = writes[writes.length - 1];
+	const loose: [MutationObserver, MutationRecord[]][] = [];
 	for (const ref of observers) {
 		const observer = ref.deref();
 		if (!observer) {
@@ -384,8 +407,9 @@ function drain(observers = live) {
 			if (!write.records.has(observer)) write.records.set(observer, []);
 			const list = write.records.get(observer)!;
 			for (const record of records) list.push(record);
-		} else enqueue(observer, shapeLoose(state, records));
+		} else loose.push([observer, shapeLoose(state, records)]);
 	}
+	for (const [observer, records] of inOrder(loose)) enqueue(observer, records);
 }
 
 function run<T>(write: Write, callback: () => T): T {
@@ -397,7 +421,7 @@ function run<T>(write: Write, callback: () => T): T {
 		drain();
 		writes.pop();
 		const outer = writes[writes.length - 1];
-		for (const [observer, records] of write.records) {
+		for (const [observer, records] of inOrder([...write.records])) {
 			const shaped = shapeWrite(states.get(observer)!, write, records);
 			for (const record of shaped) settled.add(record);
 			if (outer) {
@@ -588,7 +612,7 @@ export default class MutationObserverModule extends Module<DocumentClient> {
 					ref: new WeakRef(observer),
 					readback,
 					schedule: queueMicrotask,
-					scheduled: false,
+					created: made++,
 				});
 				return observer;
 			},
