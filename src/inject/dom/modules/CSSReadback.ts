@@ -3,6 +3,7 @@ import ProxyModule from '../../modules/Proxy';
 import { unrouteCSS, unrouteURL } from '../../modules/Unroute';
 import DocumentClient from '../Client';
 import { RULE_STYLE_INTERFACES } from '../cssRules';
+import { isStylesheetPI, stylesheetPIs } from '../stylesheetPIs';
 import DOMAttributesModule from './DOMAttributes';
 import DOMHooksModule from './DOMHooks';
 
@@ -82,9 +83,25 @@ export default class CSSReadbackModule extends Module<DocumentClient> {
 				return false;
 			}
 		};
-		unrouteStringGetter(global.Node.prototype, 'textContent', css, inStyle);
-		unrouteStringGetter(global.Node.prototype, 'nodeValue', css, inStyle);
-		unrouteStringGetter(global.CharacterData.prototype, 'data', css, inStyle);
+		// and an xml-stylesheet processing instruction's data, whose href
+		// is routed where it loads (../stylesheetPIs.ts)
+		for (const [prototype, key] of [
+			[global.Node.prototype, 'textContent'],
+			[global.Node.prototype, 'nodeValue'],
+			[global.CharacterData.prototype, 'data'],
+		] as const) {
+			const descriptor = Reflect.getOwnPropertyDescriptor(prototype, key);
+			if (!descriptor?.get) continue;
+			Reflect.defineProperty(prototype, key, {
+				...descriptor,
+				get: proxyModule.wrapFunction(descriptor.get, (get, that, args) => {
+					const value = Reflect.apply(get, that, args);
+					if (typeof value !== 'string') return value;
+					if (isStylesheetPI(that)) return stylesheetPIs(client).pageOf(that);
+					return inStyle(that) ? css(value) : value;
+				}),
+			});
+		}
 		unrouteStringGetter(
 			global.HTMLElement.prototype,
 			'innerText',

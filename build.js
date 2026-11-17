@@ -428,6 +428,7 @@ const DEFERRED_FILES = new Set(
 		'src/inject/dom/deferredParts.ts',
 		'src/inject/dom/downloadSave.ts',
 		'src/inject/dom/legacyEncoding.ts',
+		'src/inject/dom/instructions.ts',
 		'src/inject/dom/markupMembers.ts',
 		'src/inject/dom/openerFacts.ts',
 		'src/inject/dom/pictureWindows.ts',
@@ -455,6 +456,8 @@ const DEFERRED_FILES = new Set(
 		'src/transport/bodyPort.ts',
 		'src/transport/RemoteTransport.ts',
 		'src/transport/rpc.ts',
+		'src/xmlShell.ts',
+		'src/xmlStylesheet.ts',
 		// (as esbuild names a module: by its real path, a linked node_modules
 		// followed)
 	].map((file) => realpathSync(resolve(file))),

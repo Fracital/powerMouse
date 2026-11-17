@@ -48,6 +48,7 @@ import type { DeferredParts } from '../deferredParts';
 import { frameWindow } from '../freshContext';
 import type { MarkupContext, ScriptNotes } from '../markupMembers';
 import { responseURLOf } from '../responseDocuments';
+import { stylesheetPIs } from '../stylesheetPIs';
 import type WriteStream from '../WriteStream';
 import {
 	attributeName,
@@ -1264,7 +1265,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// their data (null the empty string)
 					// (null and undefined are the empty string: the type is nullable)
 					if (that.nodeType !== 1 && that.nodeType !== 11)
-						return moduleClient.styleOfText(that)
+						return moduleClient.styleOfText(that) || that.nodeType === 7
 							? Reflect.apply(hookedDataSet, that, [
 									args[0] === null || args[0] === undefined
 										? ''
@@ -2576,11 +2577,25 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				const node = args[0];
 				if (!(node instanceof realm.Node))
 					return Reflect.apply(target, that, args);
-				const clone = inertCopy(node as Node);
-				foldMarkers(clone);
-				const xml = Reflect.apply(target, that, [clone]) as string;
-				releaseMarkup(clone);
-				return unrouteCSS(moduleClient, xml);
+				const one = (node: Node) => {
+					const clone = inertCopy(node);
+					foldMarkers(clone);
+					const xml = Reflect.apply(target, that, [clone]) as string;
+					releaseMarkup(clone);
+					return xml;
+				};
+				// a document cannot be copied: its children are, one by one,
+				// which is how the serializer writes a document; its
+				// xml-stylesheet PIs as the page wrote them
+				const xml = unrouteCSS(
+					moduleClient,
+					node.nodeType === 9
+						? Array.from(node.childNodes, one).join('')
+						: one(node as Node),
+				);
+				return xml.includes('<?xml-stylesheet')
+					? stylesheetPIs(moduleClient).fold(xml)
+					: xml;
 			},
 		);
 

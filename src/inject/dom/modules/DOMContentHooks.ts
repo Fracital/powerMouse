@@ -25,6 +25,11 @@ import cloneRawNode, {
 	parseHTMLFragmentIn,
 	startedScripts,
 } from '../cloneNode';
+import {
+	isStylesheetPI,
+	landStylesheetPIs,
+	stylesheetPIs,
+} from '../stylesheetPIs';
 import DOMAttributesModule, {
 	scriptType,
 	shouldRewriteScript,
@@ -529,6 +534,18 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			withStyle(style, rewriteStyle);
 		};
 
+		// (an xml-stylesheet processing instruction's edits: ../stylesheetPIs.ts)
+		// a node moved within its document keeps its state, a PI included: it
+		// loads where it lands as a document's child
+		const moveBefore = (realm.Document.prototype as any).moveBefore;
+		if (typeof moveBefore === 'function')
+			(realm.Document.prototype as any).moveBefore = proxyModule.wrapFunction(
+				moveBefore,
+				(target, that, args) => {
+					landStylesheetPIs(client, args[0]);
+					return Reflect.apply(target, that, args);
+				},
+			);
 		for (const edit of [
 			'appendData',
 			'insertData',
@@ -540,6 +557,10 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			(realm.CharacterData.prototype as any)[edit] = proxyModule.wrapFunction(
 				native as (...args: unknown[]) => unknown,
 				(target, that: CharacterData, args) => {
+					if (isStylesheetPI(that))
+						return stylesheetPIs(client).edited(that, (copy) =>
+							Reflect.apply(target, copy, args),
+						);
 					const style = client.styleOfText(that);
 					if (!style) return Reflect.apply(target, that, args);
 					const result = editStyleText(that, (scratch) =>
@@ -552,7 +573,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		}
 
 		// a Text node's whole text, set: `data`, `nodeValue` (`textContent`
-		// in DOMHooks), routed when it is a style's
+		// in DOMHooks), routed when it is a style's (or a stylesheet PI's)
 		for (const [prototype, property] of <[object, string][]>[
 			[realm.CharacterData.prototype, 'data'],
 			[realm.Node.prototype, 'nodeValue'],
@@ -564,6 +585,11 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				configurable: true,
 				get: descriptor.get,
 				set: proxyModule.wrapFunction(descriptor.set!, (target, that, args) => {
+					if (isStylesheetPI(that))
+						return stylesheetPIs(client).settle(
+							that,
+							args[0] === null ? '' : String(args[0]),
+						);
 					const style = client.styleOfText(that);
 					if (!style) return Reflect.apply(target, that, args);
 					// null sets the empty string, as natively
@@ -1014,6 +1040,10 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			// a node of any realm: the page's own document made it, or the
 			// bundle did for a document its creator reaches into
 			const nodes = args.filter((arg): arg is Node => nodeTypeOf(arg) !== null);
+			// an xml-stylesheet processing instruction loads as a document's child
+			if (nodeTypeOf(parent) === 9) {
+				for (const node of nodes) landStylesheetPIs(client, node);
+			}
 			const run = (index: number): T =>
 				index < nodes.length
 					? insert(nodes[index], receiver, () => run(index + 1))

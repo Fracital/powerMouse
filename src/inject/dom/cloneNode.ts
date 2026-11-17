@@ -520,6 +520,18 @@ export default function cloneRawNode(
 					} else if (d[0].nodeType === 8) {
 						d[1].append(document.createComment(d[0].nodeValue!));
 						continue;
+					} else if (d[0].nodeType === 7) {
+						// a processing instruction (the HTML parser makes one of
+						// `<?target data>` since Chrome 150; an XML parser of any)
+						const pi = d[0] as ProcessingInstruction;
+						try {
+							d[1].append(
+								document.createProcessingInstruction(pi.target, pi.data),
+							);
+						} catch (error) {
+							// a target or data the DOM method refuses: left out
+						}
+						continue;
 					} else if (d[0].nodeType !== 1) {
 						// may be a document-fragment or CharacterData
 						console.error('skip', d[0]);

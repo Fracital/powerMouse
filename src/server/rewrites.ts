@@ -76,15 +76,15 @@ import {
 	type StyleRewrittenBy,
 } from '../rewriteCSS';
 import {
+	isXMLDocumentMime,
 	modifyHTML,
 	modifyHTMLStreamed,
 	modifyRefresh,
-	modifyXML,
 	nestedMarkOf,
 	nestedMarkOfKind,
 	nestedTopOf,
 	routeHTML,
-	XML_DOCUMENT_MIMES,
+	setXMLShell,
 } from '../rewriteHTML';
 import { modifyJS, RewrittenBy, routeJS, ScriptType } from '../rewriteJS';
 import {
@@ -150,6 +150,7 @@ import { fragmentOf, queryOf, withQuery } from '../urlShape';
 import { BUILD, REWRITE_GENERATION } from '../version';
 import { contextText, isLinkRoute, LINK_SEGMENT, linkRoute } from '../visited';
 import { scanMarkup, scannerSettled } from '../wasm/scanner';
+import { modifyXML } from '../xmlShell';
 import { badPort } from './badPorts';
 import {
 	knownOriginOf,
@@ -302,6 +303,9 @@ import { rememberVisitedHop, takeVisitedHop } from './visitedHops';
 // generation, and drops the cache on every activation anyway). A new rewriter
 // is a new key, so its output never matches the last one's. Kept the same for
 // the inline and the loaded-script paths.
+
+// a data: XML document a route names gets the XML shell
+setXMLShell(modifyXML);
 const CACHE_GENERATION = REWRITE_GENERATION || BUILD;
 
 export const statusEmpty = [101, 204, 205, 304];
@@ -4139,7 +4143,7 @@ function includesASCII(bytes: Uint8Array, text: string): boolean {
 	return false;
 }
 
-const htmlMimes = ['text/html', '', ...XML_DOCUMENT_MIMES];
+const htmlMimes = ['text/html', ''];
 
 /**
  * Rewritten outputs a document was just given, by what it asked for, so the
@@ -5173,7 +5177,10 @@ export function registerRewrites(
 				// body the worker passes through as not a document that the
 				// browser then reads as HTML would run its scripts unrewritten
 				let sniffed = false;
-				if (!htmlMimes.includes(mime) || mime === '') {
+				if (
+					(!htmlMimes.includes(mime) && !isXMLDocumentMime(mime)) ||
+					mime === ''
+				) {
 					if (!unknownMime(mime)) return false;
 					// nosniff: no sniff, and the browser is told so (it would
 					// sniff what the worker passes on)
@@ -5198,7 +5205,7 @@ export function registerRewrites(
 				// for document.characterSet. An XML shell is UTF-8.
 				const bytes = new Uint8Array(await response.arrayBuffer());
 				note.bytes = bytes.byteLength;
-				const encoding = XML_DOCUMENT_MIMES.includes(mime)
+				const encoding = isXMLDocumentMime(mime)
 					? 'utf-8'
 					: documentEncoding(bytes, contentType);
 				responseHeaders.set(
@@ -5303,7 +5310,7 @@ export function registerRewrites(
 					);
 				// an XML document (a standalone SVG, an XHTML page) keeps its mime
 				// and gets an XML shell: the HTML one is not well-formed XML
-				if (XML_DOCUMENT_MIMES.includes(mime))
+				if (isXMLDocumentMime(mime))
 					return modifyXML(
 						decoded,
 						url,

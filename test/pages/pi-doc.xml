@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet href="pi-a.css" type="text/css"?>
+<!-- an XML document with a stylesheet and a script (xml-stylesheets suite) -->
+<doc xmlns:h="http://www.w3.org/1999/xhtml">
+	<item id="a">a</item>
+	<h:script>
+		setTimeout(() => {
+			const a = document.getElementById('a');
+			window.__pi = {
+				done: true,
+				cases: {
+					xml: {
+						color: getComputedStyle(a).color,
+						contentType: document.contentType,
+						href: location.href,
+						top: top === window,
+						children: [...document.childNodes].map((node) => node.nodeType),
+						sheets: document.styleSheets.length,
+					},
+				},
+			};
+		}, 1000);
+	</h:script>
+</doc>

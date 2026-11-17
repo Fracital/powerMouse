@@ -49,6 +49,8 @@
 // (and the WebTransport stand-in, ../webTransportStandIn.ts, with what
 // carries its sessions, ../webTransport.ts, once a realm makes its first
 // session)
+// (and what routes xml-stylesheet processing instructions and an XML
+// document's prolog, ./instructions.ts, at the first one a document meets)
 //
 // (STomp's passkey provider's WebAuthn client is a deferred statement of
 // its own, ./passkeysPart.ts: few documents call WebAuthn, and every frame
@@ -82,6 +84,7 @@ import { attributeViewMethods } from './attributeViewMethods';
 import { relayBeacon } from './beaconRelay';
 import { identityFlow, relyingPartyGuard } from './credentialFlows';
 import { saveDownload } from './downloadSave';
+import { instructionData, modifyXML, xmlProlog } from './instructions';
 import { formEncoding, legacyFormQuery, legacyQuery } from './legacyEncoding';
 import { markupMembers } from './markupMembers';
 import FingerprintModule from './modules/Fingerprint';
@@ -139,6 +142,9 @@ const parts = {
 	notificationParts,
 	permissionElements,
 	hookDevices,
+	instructionData,
+	xmlProlog,
+	modifyXML,
 };
 
 export type DeferredParts = typeof parts;

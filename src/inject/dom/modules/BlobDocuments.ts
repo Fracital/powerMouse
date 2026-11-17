@@ -1,10 +1,15 @@
-import { modifyHTML, setInlineBlobResolver } from '../../../rewriteHTML';
+import {
+	modifyHTML,
+	setInlineBlobResolver,
+	setXMLShell,
+} from '../../../rewriteHTML';
 import { proxyBlobURL } from '../../../routeURL';
 import { htmlBlobs, htmlBlobURLs } from '../../htmlBlobs';
 import Module from '../../Module';
 import ProxyModule, { catchRequiredArguments } from '../../modules/Proxy';
 import { modifyJS, parsesAsScript } from '../../rewriter';
 import DocumentClient from '../Client';
+import { deferred } from '../deferred';
 
 const HTML_TYPE = /^\s*text\/html\s*(;|$)/i;
 // the JavaScript MIME type essences (HTML "JavaScript MIME type")
@@ -37,6 +42,10 @@ export default class BlobDocumentsModule extends Module<DocumentClient> {
 		const proxyModule = client.getModule(ProxyModule)!;
 		const global = client.global;
 		this.nativeBlob = global.Blob;
+		// a data: XML document gets the XML shell, a deferred part
+		setXMLShell((data, url, config, mime) =>
+			deferred().modifyXML(data, url, config, mime),
+		);
 
 		// the markup the last wrap() made into a shell, kept with the blob
 		let wrappedSource: string | undefined;

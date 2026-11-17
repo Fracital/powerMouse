@@ -5,7 +5,12 @@ import {
 	routeCSS,
 } from '../../../cssURLs';
 import { handlerMark, keepSource, sourceKey } from '../../../functionSource';
-import { modifyHTML, modifyRefresh, routeHTML } from '../../../rewriteHTML';
+import {
+	isXMLDocumentMime,
+	modifyHTML,
+	modifyRefresh,
+	routeHTML,
+} from '../../../rewriteHTML';
 import {
 	parseDataURI,
 	proxyBlobURL,
@@ -50,6 +55,7 @@ import DocumentClient, {
 } from '../Client';
 import { inertDocumentOf } from '../cloneNode';
 import { ELEMENT_STYLE_INTERFACES } from '../cssRules';
+import { deferred } from '../deferred';
 import { forgetDestination, frameWindow } from '../freshContext';
 import { loadFetch, loadSource } from '../loadGrants';
 import { responseURLOf } from '../responseDocuments';
@@ -3172,8 +3178,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				return;
 			}
 			let routed = routedOf();
-			if (!ROUTE_PROTOCOLS.includes(resource.url.protocol)) {
-				// data:, blob: and the like: as routeHTML leaves them
+			// a blob: of the page's is copied like a fetched resource: as it is
+			// it would show a document of the proxy's origin, unrewritten (an
+			// HTML one it made is an inline document's route already)
+			const fromBlob =
+				resource.url.protocol === 'blob:' && routed.startsWith('blob:');
+			if (!fromBlob && !ROUTE_PROTOCOLS.includes(resource.url.protocol)) {
+				// data: and the like: as routeHTML leaves them
 				element.setAttribute(attribute, routed);
 				return;
 			}
@@ -3181,9 +3192,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			// never reaching the worker as the element's, so the page's URL
 			// decides here. A blocked one fails to load, as natively (an object
 			// fires error); an upgraded one loads over https
-			const mixed = moduleClient
-				.getModule(MixedContentModule)
-				?.verdict(resource.url, attribute === 'data' ? 'object' : 'embed');
+			const mixed = fromBlob
+				? undefined
+				: moduleClient
+						.getModule(MixedContentModule)
+						?.verdict(resource.url, attribute === 'data' ? 'object' : 'embed');
 			if (mixed?.action === 'upgrade') {
 				resource.url = mixed.url;
 				routed = routedOf();
@@ -3225,33 +3238,60 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.setAttribute(attribute, value),
 				);
 			};
-			// the copy goes out as the load it stands for (loadGrants.ts)
-			loadFetch(
-				moduleClient,
-				new URL(routeXHR(resource), scopePrefix(moduleClient)).href,
-				// Chrome loads an object's or embed's resource as a nested
-				// context: mode navigate, destination its element
-				attribute === 'data' ? 'object navigate' : 'embed navigate',
+			// the copy goes out as the load it stands for (loadGrants.ts); a
+			// blob: is read at once, as the browser resolves it at the load
+			(fromBlob
+				? moduleClient.nativeFetch(proxyBlobURL(resource.url.href))
+				: loadFetch(
+						moduleClient,
+						new URL(routeXHR(resource), scopePrefix(moduleClient)).href,
+						// Chrome loads an object's or embed's resource as a nested
+						// context: mode navigate, destination its element
+						attribute === 'data' ? 'object navigate' : 'embed navigate',
+					)
 			)
 				.then(async (response) => {
 					if (!response.ok && response.status !== 0)
 						throw new Error(String(response.status));
 					const type = response.headers.get('content-type') ?? '';
-					const blob = /^\s*(text\/html|application\/xhtml\+xml)/i.test(type)
-						? new NativeBlob(
-								[
-									modifyHTML(
-										await response.text(),
-										resource,
-										moduleClient.config,
-										true,
-										undefined,
-										moduleClient.scriptNonce,
-									),
-								],
-								{ type: 'text/html' },
-							)
-						: await response.blob();
+					const mime = type.split(';')[0].trim().toLowerCase();
+					// an XML document (an SVG, a feed) runs its XHTML scripts too:
+					// it gets the XML shell, under its own mime
+					const blob =
+						mime === 'text/html' || mime === 'application/xhtml+xml'
+							? new NativeBlob(
+									[
+										modifyHTML(
+											await response.text(),
+											resource,
+											moduleClient.config,
+											true,
+											undefined,
+											moduleClient.scriptNonce,
+										),
+									],
+									{ type: 'text/html' },
+								)
+							: isXMLDocumentMime(mime)
+								? new NativeBlob(
+										[
+											deferred().modifyXML(
+												await response.text(),
+												resource,
+												moduleClient.config,
+												mime,
+												undefined,
+												undefined,
+												false,
+												undefined,
+												undefined,
+												undefined,
+												true,
+											),
+										],
+										{ type: `${mime};charset=utf-8` },
+									)
+								: await response.blob();
 					if (loads.get(element) !== state) return;
 					if (current?.url?.startsWith('blob:'))
 						realm.URL.revokeObjectURL(current.url);

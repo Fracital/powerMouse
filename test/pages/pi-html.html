@@ -1,0 +1,58 @@
+<!doctype html>
+<title>PI HTML</title>
+<p id="a">a</p>
+<p id="b">b</p>
+<p id="c">c</p>
+<p id="d">d</p>
+<p id="e">e</p>
+<p id="f">f</p>
+<p id="g">g</p>
+<script>
+	// xml-stylesheet processing instructions a script makes in an HTML
+	// document (xml-stylesheets suite): each one that is a child of the
+	// document loads its href as a stylesheet, natively and through the proxy
+	window.__pi = { done: false, cases: {} };
+	const cases = window.__pi.cases;
+	const other = `${location.protocol}//localhost:${location.port}/pages/pi-b.css`;
+	const color = (id) => getComputedStyle(document.getElementById(id)).color;
+	const before = (pi) => document.insertBefore(pi, document.documentElement);
+	const make = (data) =>
+		document.createProcessingInstruction('xml-stylesheet', data);
+	const read = (pi) => ({
+		data: pi.data,
+		nodeValue: pi.nodeValue,
+		textContent: pi.textContent,
+		sheet: pi.sheet ? pi.sheet.href : null,
+	});
+	const pis = {};
+	pis.a = make('href="pi-a.css" type="text/css"');
+	before(pis.a);
+	pis.b = make(`type="text/css" href="${other}"`);
+	before(pis.b);
+	pis.c = make('href="pi-c.css" type="text/foo"');
+	before(pis.c);
+	pis.c.data = 'href="pi-c.css"';
+	pis.d = make('href="pi-d.css" type="text/foo"');
+	before(pis.d);
+	pis.d.deleteData(pis.d.data.indexOf(' type'), ' type="text/foo"'.length);
+	const xml = new DOMParser().parseFromString(
+		'<?xml-stylesheet href="pi-e.css"?><r/>',
+		'text/xml',
+	);
+	pis.e = document.importNode(xml.firstChild, true);
+	before(pis.e);
+	pis.f = make('href="pi-f.css"');
+	document.body.append(pis.f);
+	pis.g = make('href="pi-g.css"');
+	before(pis.g);
+	pis.g.appendData(' media="print"');
+	setTimeout(() => {
+		for (const [id, pi] of Object.entries(pis))
+			cases[id] = { color: color(id), ...read(pi) };
+		cases.serialized = new XMLSerializer()
+			.serializeToString(document)
+			.split('<html')[0];
+		cases.attributeAPI = typeof pis.a.setAttribute;
+		window.__pi.done = true;
+	}, 1500);
+</script>

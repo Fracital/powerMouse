@@ -53,6 +53,7 @@ import {
 	provideShellFacts,
 	provideShellSyncXHR,
 	routeHTML,
+	XML_DOCUMENT_MIMES,
 } from '../../rewriteHTML';
 import type { RewriterLib } from '../../rewriterLight';
 import {
@@ -3208,25 +3209,52 @@ export default class DocumentClient extends Client {
 		}
 	}
 	/**
-	 * Load an XML document (a standalone SVG, an XHTML page) served through
-	 * the XML shell: parsed with its own mime, its scripts rewritten, its tree
-	 * re-created through the hooks in this document (namespaces kept) under
-	 * the shell's root, since an XML document has no document.write.
-	 * Scripts run as the tree lands, like a parser's would.
+	 * Load an XML document (a standalone SVG, an XHTML page, any other XML
+	 * document) served through the XML shell: parsed with its own mime, its
+	 * scripts rewritten, its tree re-created through the hooks in this
+	 * document (namespaces kept) under the shell's root, since an XML
+	 * document has no document.write. Scripts run as the tree lands, like a
+	 * parser's would. The prolog's processing instructions and comments land
+	 * around the root as natively (an xml-stylesheet one loads its sheet,
+	 * routed by ./stylesheetPIs.ts); an XSLT one transforms
+	 * the document instead, as the browser's parser does at its end.
 	 */
 	loadXML(markup: string, mime: string) {
 		const parsed = parseHTML(
 			markup,
 			this.global.document,
-			mime as DOMParserSupportedType,
+			(XML_DOCUMENT_MIMES.includes(mime)
+				? mime
+				: 'application/xml') as DOMParserSupportedType,
 		);
 		const root = parsed.documentElement;
 		const live = this.global.document.documentElement;
 		if (!root || !live) return;
+		const land = (prolog: Node[] = [], epilog: Node[] = []) =>
+			this.#landXML(root, live, prolog, epilog);
+		// a document with nothing but its root (most): no prolog to read
+		if (parsed.childNodes.length === 1) return land();
+		deferred().xmlProlog(this, parsed, root, land, (output) => {
+			const page = this.global.document;
+			this.refreshSandbox();
+			if (!this.allows('allow-scripts')) stripScripts(output);
+			setGlobalParsingState(this.global, 'parsingBeforeWrite');
+			this.rewriteInlineScripts(output, true);
+			const clone = cloneRawNode([output], page, true);
+			setGlobalParsingState(this.global);
+			page.replaceChild(clone, live);
+			runDocumentOpenListeners(this.global);
+		});
+	}
+	#landXML(root: Element, live: Element, prolog: Node[], epilog: Node[]) {
 		this.refreshSandbox();
 		if (!this.allows('allow-scripts')) stripScripts(root);
 		setGlobalParsingState(this.global, 'parsingBeforeWrite');
 		this.rewriteInlineScripts(root, true);
+		const page = this.global.document;
+		// (through the insertion hooks, which route a stylesheet PI's href)
+		for (const node of prolog) page.insertBefore(page.importNode(node), live);
+		for (const node of epilog) page.appendChild(page.importNode(node));
 		// The shell's root is the document's own start tag, so it stays (a
 		// root put in its place would not carry the title: Chrome's
 		// document.title only follows an SVG <title> that is inserted under
@@ -3243,7 +3271,7 @@ export default class DocumentClient extends Client {
 				);
 			else live.setAttribute(attribute.name, attribute.value);
 		while (live.firstChild) live.removeChild(live.firstChild);
-		const clone = cloneRawNode(root, this.global.document, true);
+		const clone = cloneRawNode(root, page, true);
 		setGlobalParsingState(this.global);
 		live.append(clone);
 		runDocumentOpenListeners(this.global);

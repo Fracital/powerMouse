@@ -63,6 +63,18 @@ export function setInlineBlobResolver(
 	inlineBlob = resolver;
 }
 
+/**
+ * The XML shell (src/xmlShell.ts modifyXML) for a data: XML document: the
+ * worker's own, a deferred part in a page (no document bundle carries it).
+ * Unset, such a document goes as it is.
+ */
+let xmlShell:
+	| ((data: string, url: StompURL, config: Config, mime: string) => string)
+	| null = null;
+export function setXMLShell(shell: typeof xmlShell) {
+	xmlShell = shell;
+}
+
 export function routeHTML(
 	resource: StompURL,
 	url: StompURL,
@@ -81,9 +93,17 @@ export function routeHTML(
 			// is data too, which the URL parser filed under `search`
 			dataBody(resource.url),
 		);
+		// a document of its mime: an XML one gets the XML shell (the HTML one
+		// is no well-formed XML), one that is no document (an image, text)
+		// runs nothing and goes as it is (no type is text/plain)
+		const essence = mime.trim().toLowerCase();
+		const xml = !!xmlShell && isXMLDocumentMime(essence);
+		if (!xml && essence !== 'text/html') return resource.url.href;
 		return createDataURI({
 			mime,
-			data: modifyHTML(data, url, config),
+			data: xml
+				? xmlShell!(data, url, config, essence)
+				: modifyHTML(data, url, config),
 			attributes,
 		});
 	}
@@ -188,7 +208,10 @@ export function nestedMarkOf(
 }
 
 /** the shell's statement that hands the client its document's referrer (none without one) */
-function referred(client: string, referrer: ReferrerInfo | undefined): string {
+export function referred(
+	client: string,
+	referrer: ReferrerInfo | undefined,
+): string {
 	if (!referrer) return '';
 	// a URL's query may hold `<`: never let it close the shell's script
 	const info = JSON.stringify(referrer).replace(/</g, '\\u003c');
@@ -208,6 +231,11 @@ export function provideShellFacts(provider: () => ScriptFacts | undefined) {
  * permissions policy is inherited (src/server/clientHints.ts)
  */
 let shellSyncXHR: (() => boolean) | null = null;
+/** the shell's script facts and sync-XHR verdict, where a provider gave them (the XML shell's) */
+export const providedShell = () => ({
+	facts: shellFacts?.(),
+	syncXHRBlocked: shellSyncXHR?.(),
+});
 export function provideShellSyncXHR(provider: () => boolean) {
 	shellSyncXHR = provider;
 }
@@ -220,7 +248,7 @@ export function provideShellSyncXHR(provider: () => boolean) {
  * window the browser kept from its initial document takes the mark of the
  * document it shows now.
  */
-function marked(client: string, url: StompURL): string {
+export function marked(client: string, url: StompURL): string {
 	const mark = url.mark ?? realmCacheMark();
 	return `\n\t${client}.cacheMark = ${JSON.stringify(CACHE_MARK_SHAPE.test(mark) ? mark : '')};`;
 }
@@ -229,7 +257,7 @@ function marked(client: string, url: StompURL): string {
  * The shell's statement that names its document's script policy for the
  * client it makes (src/csp.ts ScriptFacts), when it has one
  */
-function scriptFacts(facts: ScriptFacts | undefined): string {
+export function scriptFacts(facts: ScriptFacts | undefined): string {
 	if (!facts) return '';
 	return `Reflect.defineProperty(globalThis, ${JSON.stringify(CSP_FACTS)}, { value: ${JSON.stringify(facts)}, configurable: true });\n\t`;
 }
@@ -241,7 +269,10 @@ function scriptFacts(facts: ScriptFacts | undefined): string {
  * the document's own policy is the one its headers name, and the global
  * goes (the client took it otherwise)
  */
-function keptFacts(client: string, facts: ScriptFacts | undefined): string {
+export function keptFacts(
+	client: string,
+	facts: ScriptFacts | undefined,
+): string {
 	if (!facts) return '';
 	const key = JSON.stringify(CSP_FACTS);
 	return `\n\tif (${key} in globalThis) { ${client}.scriptFacts = globalThis[${key}]; delete globalThis[${key}]; }`;
@@ -252,7 +283,7 @@ function keptFacts(client: string, facts: ScriptFacts | undefined): string {
  * document's headers the browser applies, each with the page's text it
  * stands for (none without any)
  */
-function policyTexts(
+export function policyTexts(
 	client: string,
 	policies: PolicyText[] | undefined,
 ): string {
@@ -267,7 +298,7 @@ function policyTexts(
  * the browser would, though the served Permissions-Policy no longer disables
  * the feature (STomp's own inject needs it). Nothing when it is allowed.
  */
-function syncXHR(client: string, blocked: boolean | undefined): string {
+export function syncXHR(client: string, blocked: boolean | undefined): string {
 	if (!blocked) return '';
 	return `\t${client}.syncXHRBlocked = true;\n`;
 }
@@ -289,7 +320,7 @@ export function provideShellSites(provider: () => SiteFacts[]): void {
  * script: `<` never closes it. A bundle from before the client took them
  * (one the browser kept across an update) goes on asking the list.
  */
-function sited(client: string, sites: SiteFacts[] | undefined): string {
+export function sited(client: string, sites: SiteFacts[] | undefined): string {
 	let text = '';
 	for (const facts of sites ?? shellSites?.() ?? [])
 		text += `	${client}.learnSites?.(${JSON.stringify(facts).replace(/</g, '\\u003c')});\n`;
@@ -545,7 +576,7 @@ ${blocked}
  * and gets none of this. `attribute`: what the shell's own scripts carry (a
  * nonce, the XHTML namespace).
  */
-function libraryScripts(
+export function libraryScripts(
 	url: StompURL,
 	config: Config,
 	attribute: string,
@@ -564,69 +595,24 @@ function libraryScripts(
 }
 
 /** the mimes an XML document is served under and parsed with */
-export const XML_DOCUMENT_MIMES = ['image/svg+xml', 'application/xhtml+xml'];
+export const XML_DOCUMENT_MIMES = [
+	'image/svg+xml',
+	'application/xhtml+xml',
+	'text/xml',
+	'application/xml',
+];
 
 /**
- * The shell of an XML document (a standalone SVG, an XHTML page): the same
- * root element with its namespace declarations, holding the inject bundle
- * and the client call as XHTML script elements (which an XML parser runs),
- * the original markup in a CDATA section. The client parses it with the
- * document's own mime and replaces the root in place: an XML document has
- * no document.write.
+ * Whether the browser shows a document of this mime (an essence, lower
+ * case) as an XML document, whose XHTML scripts run and whose
+ * xml-stylesheet instructions load: Blink's IsXMLMIMEType, any `+xml` type
+ * as well (an RSS or Atom feed)
  */
-export function modifyXML(
-	script: string,
-	url: StompURL,
-	config: Config,
-	mime: string,
-	referrer?: ReferrerInfo,
-	sites?: SiteFacts[],
-	/** as modifyHTML's */
-	top = false,
-	/** as modifyHTML's */
-	policies?: PolicyText[],
-	/** as modifyHTML's */
-	facts?: ScriptFacts,
-	/** as modifyHTML's */
-	syncXHRBlocked?: boolean,
-): string {
-	facts ??= shellFacts?.();
-	syncXHRBlocked ??= shellSyncXHR?.();
-	// the root start tag, after the prolog, comments and doctype
-	const tags =
-		/<\?[^>]*\?>|<!--[\s\S]*?-->|<!DOCTYPE[^>]*>|<([A-Za-z_][\w.:-]*)(\s[^>]*?)?(\/?)>/g;
-	let root = `<svg xmlns="http://www.w3.org/2000/svg">`;
-	let name = 'svg';
-	let match: RegExpExecArray | null;
-	while ((match = tags.exec(script)) !== null) {
-		if (match[1]) {
-			name = match[1];
-			root = `<${name}${match[2] ?? ''}>`;
-			break;
-		}
-	}
-	if (mime === 'application/xhtml+xml' && !match?.[1])
-		root = `<html xmlns="http://www.w3.org/1999/xhtml">`;
-	const cdata = (text: string) =>
-		`<![CDATA[${text.split(']]>').join(']]]]><![CDATA[>')}]]>`;
-	const names = helperNames(config);
-	const inject = `if (typeof globalThis.createClient !== 'function') {
-	document.documentElement.textContent = "Stomp bundle did not load. See devtools output for more information.";
-} else {
-	${scriptFacts(facts)}if (!(${JSON.stringify(names.client)} in globalThis))
-		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
-	else {
-		delete globalThis.createClient;
-		${names.client}.takeNamedBase();
-	}${keptFacts(names.client, facts)}${marked(names.client, url)}
-${sited(names.client, sites)}${referred(names.client, referrer)}${policyTexts(names.client, policies)}${syncXHR(names.client, syncXHRBlocked)}
-	if (!${names.client}.applied) ${names.client}.apply();
-	${names.client}.loadXML(${JSON.stringify(script)}, ${JSON.stringify(mime)});
-}`;
-	const xhtml = 'http://www.w3.org/1999/xhtml';
-	const own = ` xmlns="${xhtml}"${facts?.nonce ? ` nonce="${facts.nonce.replace(/[^\w+/=-]/g, '')}"` : ''}`;
-	const loading = facts?.loadsByNonce ? own : ` xmlns="${xhtml}"`;
-	return `<?xml version="1.0" encoding="UTF-8"?>${root}${top ? libraryScripts(url, config, own, loading) : ''}<script${loading} src="${injectDocumentJS(url, config)}"></script><script${own}>${cdata(inject)}</script></${name}>`;
+export function isXMLDocumentMime(mime: string): boolean {
+	return (
+		XML_DOCUMENT_MIMES.includes(mime) ||
+		/^[\w!#$&^.-]+\/[\w!#$&^.+-]+\+xml$/.test(mime)
+	);
 }
 
 /**
