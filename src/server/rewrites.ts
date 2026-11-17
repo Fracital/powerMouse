@@ -207,6 +207,7 @@ import {
 	AdditionalFilter,
 	filterNativeRequestHeaders,
 	filterResponseHeaders,
+	locationURL,
 	RouteTransform,
 } from './filterHeaders';
 import { chromeOrderedHeaders, type RequestShape } from './headerOrder';
@@ -642,12 +643,8 @@ const notPagesHeader = (name: string) =>
 
 /** whether a redirect's Location leaves the origin of the URL it answered */
 function crossOriginLocation(location: string | null, from: StompURL): boolean {
-	if (location === null) return false;
-	try {
-		return new URL(location, from.toString()).origin !== from.url.origin;
-	} catch (error) {
-		return false;
-	}
+	const to = location === null ? null : locationURL(location, from.url);
+	return to !== null && to.origin !== from.url.origin;
 }
 
 type BodyTransform = (

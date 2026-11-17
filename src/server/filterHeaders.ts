@@ -86,6 +86,27 @@ function firstContentType(value: string): string {
 	return value.trim();
 }
 
+/**
+ * The URL a Location (or Content-Location) names, null for none. A value
+ * with bytes past ASCII is not a URL yet: Chrome escapes each such byte
+ * as it is (`%E2%98%83` for a snowman a server sent as UTF-8, `%FF` for a
+ * byte that is no text at all), where parsing the header as a string
+ * would encode each byte as a character of its own
+ */
+export function locationURL(value: string, base: URL): URL | null {
+	try {
+		return new URL(
+			value.replace(
+				/[\x80-\xff]/g,
+				(byte) => `%${byte.charCodeAt(0).toString(16).toUpperCase()}`,
+			),
+			base,
+		);
+	} catch (error) {
+		return null;
+	}
+}
+
 // native as in the browser requesting an image from /binary/ or document from /html/
 export function filterNativeRequestHeaders(
 	headers: Readonly<Headers>,
@@ -109,19 +130,21 @@ export function filterResponseHeaders(
 ): Headers {
 	const filteredHeaders = new Headers(headers);
 
-	for (const name of ['location', 'content-location'])
-		if (headers.has(name))
+	for (const name of ['location', 'content-location']) {
+		// (not a URL: left as it is)
+		const target = headers.has(name)
+			? locationURL(headers.get(name)!, url.url)
+			: null;
+		if (target)
 			try {
 				filteredHeaders.set(
 					name,
-					transformRoute(
-						new StompURL(new URL(headers.get(name)!, url.toString()), url),
-						url,
-					),
+					transformRoute(new StompURL(target, url), url),
 				);
 			} catch (error) {
-				// not a URL: leave it
+				// no route for it: left as it is
 			}
+	}
 
 	for (const header of removeHeaders) {
 		filteredHeaders.delete(header);
