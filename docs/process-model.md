@@ -6,7 +6,8 @@ a busy loop in a parent holds up its frame's timers, the frames read one
 heap, and a message round trip takes 0.03 to 0.2 ms instead of 1 to 2.
 Cloudflare Turnstile notices. This page records what plain Chrome does
 (152 and 156 alike, no proxy, a fixture answering many host names on one
-port), as the reference for emulating separate origins in one.
+port), as the reference for emulating separate origins in one. What each
+frame costs that shared renderer in memory is docs/frame-memory.md.
 
 ## Which frames get a process of their own
 
