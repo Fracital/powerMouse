@@ -367,9 +367,6 @@
 	"/websockets/multi-globals/url-parsing/url-parsing.html": {
 		"Multiple globals for base URL in WebSocket constructor": "FAIL: Stomp: no service worker controller available to obtain a transport"
 	},
-	"/websockets/opening-handshake/003.html?default": {
-		"WebSockets: origin": "FAIL: assert_equals: expected \"ws://xn--n8j6ds53lwwkrqhv28a.localhost:PORT\" but got \"ws://xn--n8j6ds53lwwkrqhv28a.localhost:PORT/origin\""
-	},
 	"/websockets/opening-handshake/005.html?default": {
 		"WebSockets: response header and close frame in same packet": "FAIL: assert_equals: expected 1001 but got 1005"
 	}

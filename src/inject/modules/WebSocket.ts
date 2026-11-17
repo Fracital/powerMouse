@@ -171,8 +171,12 @@ export default class WebSocketModule extends Module<Client> {
 						}
 					}
 
+					// the origin of the socket's URL, as natively (not the URL)
 					this.dispatchEvent(
-						new MessageEvent('message', { data, origin: this.#url }),
+						new MessageEvent('message', {
+							data,
+							origin: new URL(this.#url).origin,
+						}),
 					);
 				});
 
