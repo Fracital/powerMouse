@@ -21,7 +21,7 @@ const TEXT = /\.(md|ts|js|mjs|cjs|json|yml|yaml|html|css|txt)$/i;
 // data (an encoding table, a URL to parse), as are the subtest names in the
 // expected lists: only what is ours under test/wpt/ is held to the dash rule
 const VENDORED =
-	/^test\/wpt\/(?!README\.md$|refresh\.mjs$|lists\/|resources\/(testharnessreport|testdriver-vendor)\.js$)/;
+	/^test\/wpt\/(?!README\.md$|BACKLOG\.md$|refresh\.mjs$|lists\/|resources\/(testharnessreport|testdriver-vendor)\.js$)/;
 
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' });
 const problems = [];
