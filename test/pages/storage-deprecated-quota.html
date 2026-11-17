@@ -1,0 +1,114 @@
+<!doctype html>
+<title>DEPRECATED STORAGE QUOTA</title>
+<script>
+	// navigator.webkitTemporaryStorage and webkitPersistentStorage
+	// (storage-deprecated-quota suite): what queryUsageAndQuota and
+	// requestQuota answer and throw, and how much the usage they report grows
+	// when this page stores a cache entry. Reports to window.__quota.
+	const report = {};
+	const settle = async (fn) => {
+		try {
+			const value = await fn();
+			return value === undefined ? 'undefined' : value;
+		} catch (error) {
+			return `threw ${error?.name}: ${error?.message}`;
+		}
+	};
+	// a callback form as a promise: what the callback was called with, and
+	// whether it was called before the call returned
+	const called = (fn) =>
+		new Promise((resolve) => {
+			let returned = false;
+			const timer = setTimeout(() => resolve('no callback'), 4000);
+			const answer =
+				(kind) =>
+				(...args) => {
+					clearTimeout(timer);
+					resolve({
+						kind,
+						sync: !returned,
+						args: args.map((arg) =>
+							typeof arg === 'number' ? 'number' : String(arg),
+						),
+						values: args,
+					});
+				};
+			try {
+				fn(answer('success'), answer('error'));
+			} catch (error) {
+				clearTimeout(timer);
+				resolve(`threw ${error?.name}: ${error?.message}`);
+			}
+			returned = true;
+		});
+	(async () => {
+		const temporary = navigator.webkitTemporaryStorage;
+		const persistent = navigator.webkitPersistentStorage;
+		const proto = Object.getPrototypeOf(temporary);
+		report.tag = Object.prototype.toString.call(temporary);
+		report.members = Object.getOwnPropertyNames(proto).sort().join(',');
+		report.same = proto === Object.getPrototypeOf(persistent);
+		report.noArgs = await settle(() => temporary.queryUsageAndQuota());
+		report.notFunction = await settle(() => temporary.queryUsageAndQuota(1));
+		report.badError = await settle(() =>
+			temporary.queryUsageAndQuota(() => {}, 1),
+		);
+		report.illegal = await settle(() =>
+			proto.queryUsageAndQuota.call({}, () => {}),
+		);
+		report.requestNoArgs = await settle(() => temporary.requestQuota());
+		report.requestNoCallback = await settle(() => temporary.requestQuota(10));
+		report.requestNotFunction = await settle(() =>
+			temporary.requestQuota(10, 1),
+		);
+		const query = await called((success, error) =>
+			temporary.queryUsageAndQuota(success, error),
+		);
+		report.query = { ...query, values: undefined };
+		const small = await called((success, error) =>
+			temporary.requestQuota(1000, success, error),
+		);
+		report.requestSmall = small;
+		const large = await called((success, error) =>
+			persistent.requestQuota(1e15, success, error),
+		);
+		report.requestLarge = { ...large, values: undefined };
+		report.largeIsQuota = large.values?.[0] === query.values?.[1];
+		const negative = await called((success, error) =>
+			temporary.requestQuota(-1, success, error),
+		);
+		report.requestNegative = { ...negative, values: undefined };
+		report.negativeIsQuota = negative.values?.[0] === query.values?.[1];
+		const estimate = await navigator.storage.estimate();
+		report.sameAsEstimate =
+			estimate.usage === query.values?.[0] &&
+			estimate.quota === query.values?.[1];
+		const cache = await caches.open('quota-growth');
+		await cache.put('/quota-entry', new Response('x'.repeat(300000)));
+		const after = await called((success) =>
+			persistent.queryUsageAndQuota(success),
+		);
+		const growth = after.values[0] - query.values[0];
+		report.growth =
+			growth >= 290000 && growth < 400000 ? 'about 300 KB' : growth;
+		report.quotaKeeps =
+			Math.abs(after.values[1] - query.values[1] - growth) < 100000;
+		await caches.delete('quota-growth');
+		const worker = new Worker(
+			URL.createObjectURL(
+				new Blob(
+					[
+						'postMessage(typeof navigator.webkitTemporaryStorage + " " + typeof navigator.webkitPersistentStorage)',
+					],
+					{ type: 'text/javascript' },
+				),
+			),
+		);
+		report.worker = await new Promise((resolve) => {
+			worker.onmessage = (event) => resolve(event.data);
+			setTimeout(() => resolve('no answer'), 4000);
+		});
+	})()
+		.catch((error) => (report.failed = `${error?.name}: ${error?.message}`))
+		.finally(() => (window.__quota = report));
+</script>

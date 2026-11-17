@@ -5,7 +5,8 @@
 <script>
 	// Storage the browser keys by the real origin, reached past the
 	// per-site stand-ins: a StorageAccessHandle's members (asked in a frame
-	// of this page, as a top-level page gets no handle).
+	// of this page, as a top-level page gets no handle), and the deprecated
+	// quota objects.
 	const A = __advAsync;
 	const tag = (value) => Object.prototype.toString.call(value);
 	const frame = new Promise((resolve) => {
@@ -102,6 +103,38 @@
 		return [...databases, ...caches].map((name) =>
 			name.includes('@') ? `LEAK: ${name}` : name,
 		);
+	});
+	// navigator.webkitTemporaryStorage and webkitPersistentStorage report
+	// what estimate() does natively
+	const quota = (storage, method, ...args) =>
+		new Promise((resolve, reject) => {
+			navigator[storage][method](
+				...args,
+				(...values) => resolve(values),
+				reject,
+			);
+			setTimeout(() => reject(new Error('no callback')), 4000);
+		});
+	A('webkitTemporaryStorage usage', async () => {
+		const [usage, granted] = await quota(
+			'webkitTemporaryStorage',
+			'queryUsageAndQuota',
+		);
+		const page = await navigator.storage.estimate();
+		return usage === page.usage && granted === page.quota
+			? 'the page estimate'
+			: `LEAK: usage ${usage} quota ${granted}, the page's ${page.usage} ${page.quota}`;
+	});
+	A('webkitPersistentStorage requestQuota', async () => {
+		const [granted] = await quota(
+			'webkitPersistentStorage',
+			'requestQuota',
+			1e15,
+		);
+		const page = await navigator.storage.estimate();
+		return granted === page.quota
+			? 'the page quota'
+			: `LEAK: granted ${granted}, the page's quota ${page.quota}`;
 	});
 	__advFinish(3000);
 </script>

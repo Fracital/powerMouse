@@ -1,5 +1,6 @@
 // Storage the browser keys by the real origin, reached past the per-site
-// stand-ins (test/pages/adv-storage.html): a StorageAccessHandle's members.
+// stand-ins (test/pages/adv-storage.html): a StorageAccessHandle's members
+// and navigator.webkitTemporaryStorage / webkitPersistentStorage.
 import { runGroup } from '../adversarial.mjs';
 
 // The checks of this group that fail on purpose, each with its reason
