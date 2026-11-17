@@ -214,7 +214,7 @@ function sharedStores(scope: string, jar?: JarPort): Promise<SharedStores> {
 	let stores = shared.get(scope);
 	if (!stores) {
 		stores = (async () => ({
-			cookies: await openCookies(jar ? remoteJar : undefined),
+			cookies: await openCookies(publicSuffix, jar ? remoteJar : undefined),
 			cache: new HttpCache(),
 			rewrites: new RewriteCache(),
 			storage: await openStorage(),

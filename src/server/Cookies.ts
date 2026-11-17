@@ -1008,11 +1008,15 @@ function migrateLegacy(
  * (the site pool: a slot's worker, src/server/jarDB.ts), and a change is
  * told to the other slots' workers and heard from them.
  */
-export async function openCookies(remote?: RemoteJar): Promise<Cookies> {
-	// loaded here, not at the top: see PublicSuffix
-	const { getPublicSuffix } = await import('../suffix');
+export async function openCookies(
+	// passed in, not imported (see PublicSuffix): a dynamic import here made
+	// esbuild wrap every module of the inject bundles, which share this file,
+	// in a lazy initializer that each module called at its start
+	publicSuffix: PublicSuffix,
+	remote?: RemoteJar,
+): Promise<Cookies> {
 	if (remote) {
-		const cookies = new Cookies(remote, (host) => getPublicSuffix(host, true));
+		const cookies = new Cookies(remote, publicSuffix);
 		const heard = (domain: string) => {
 			broadcastChange(domain);
 			for (const listener of jarListeners) listener(domain);
@@ -1053,9 +1057,7 @@ export async function openCookies(remote?: RemoteJar): Promise<Cookies> {
 	// restarted whenever the browser idles it, which is not the end of the
 	// user's session
 
-	const cookies = new Cookies(db as unknown as JarDB, (host) =>
-		getPublicSuffix(host, true),
-	);
+	const cookies = new Cookies(db as unknown as JarDB, publicSuffix);
 	cookies.onChange = (domain) => {
 		broadcastChange(domain);
 		for (const listener of jarListeners) listener(domain);
