@@ -61,6 +61,8 @@ Reflect.defineProperty(globalThis, '__differential', {
 			codeEval: () => null,
 			// (the harness has no script of the page's to resolve against)
 			codeBaseURL: () => url,
+			// (the bundle's own import() is the realm's: src/inject/Client.ts)
+			importIn: () => null,
 			noteCodeSample: () => undefined,
 			resolveTop: world.resolveTop,
 			navigationRoute: world.navigationRoute,
