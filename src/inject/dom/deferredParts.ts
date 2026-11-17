@@ -85,6 +85,7 @@ import { ancestorOriginsList } from './ancestorOriginsList';
 import { attributeViewMethods } from './attributeViewMethods';
 import { relayBeacon } from './beaconRelay';
 import { identityFlow, relyingPartyGuard } from './credentialFlows';
+import { ownStoreRefusal } from './credentialStore';
 import { saveDownload } from './downloadSave';
 import { instructionData, modifyXML, xmlProlog } from './instructions';
 import { formEncoding, legacyFormQuery, legacyQuery } from './legacyEncoding';
@@ -147,6 +148,7 @@ const parts = {
 	instructionData,
 	xmlProlog,
 	modifyXML,
+	ownStoreRefusal,
 };
 
 export type DeferredParts = typeof parts;

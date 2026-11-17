@@ -403,7 +403,24 @@ export default class CredentialsModule extends Module<DocumentClient> {
 				// the browser's own, for what is not a passkey's (a request
 				// without `publicKey` reaches no authenticator), behind the guard
 				guard: withoutRelatedOrigins,
-				natives: [nativeCreate, nativeGet],
+				// a password or a federated sign-in alone is the site's own
+				// store's (below), read from the request the provider made of
+				// the page's (its own data properties: nothing the page runs)
+				natives: [
+					nativeCreate,
+					function (this: unknown, ...args: unknown[]) {
+						const asked = args[0];
+						const member = (key: string) =>
+							typeof asked === 'object' && asked
+								? Reflect.getOwnPropertyDescriptor(asked, key)?.value
+								: undefined;
+						return member('identity') === undefined &&
+							member('publicKey') === undefined &&
+							(member('password') || member('federated') !== undefined)
+							? ownStore()
+							: Reflect.apply(nativeGet, this, args);
+					},
+				],
 				PublicKeyCredential: NativePublicKeyCredential,
 				realm: {
 					Promise: PagePromise,
@@ -496,6 +513,37 @@ export default class CredentialsModule extends Module<DocumentClient> {
 				['publicKey', 'rpId'],
 				'get',
 			);
+		// --- passwords and federated sign-ins: of the site's own store ---
+
+		// The browser keeps them under the origin it sees, the proxy's, for
+		// every proxied site alike, and answers only its own top-level
+		// document: a proxied top, a frame to it, got the frames' error, and
+		// a page that reached the store would read and write every site's.
+		// Until STomp keeps a store of each site's own, a top finds none (null,
+		// as a site with nothing saved) and keeps nothing; a frame gets
+		// Chrome's errors, NotAllowedError when it is not same-origin with all
+		// of its ancestors, else NotSupportedError (../credentialStore.ts)
+		const ownStore = (): Promise<unknown> => {
+			const refusal = deferred().ownStoreRefusal(
+				client.ancestorOrigins(),
+				client.origin,
+			);
+			return refusal
+				? reject(domException(...refusal))
+				: Reflect.apply(PagePromise.resolve, PagePromise, [null]);
+		};
+		if (typeof container.store === 'function')
+			container.store = proxyModule.wrapFunction(
+				container.store,
+				(target, that, args) => {
+					const tag = Object.prototype.toString.call(args[0]);
+					return tag === '[object PasswordCredential]' ||
+						tag === '[object FederatedCredential]'
+						? ownStore().then(() => undefined)
+						: Reflect.apply(target, that, args);
+				},
+			);
+
 		container.get = proxyModule.wrapFunction(
 			container.get,
 			(target, that, args) => {
@@ -506,20 +554,40 @@ export default class CredentialsModule extends Module<DocumentClient> {
 					(typeof options !== 'object' && typeof options !== 'function')
 				)
 					return browserGet(target, that, args);
+				// the members are read once and pinned: a getter cannot hand the
+				// browser a request this never saw. A password or a federated
+				// sign-in alone is the site's own store's (above); a passkey
+				// asked for with one is the passkey's alone
 				let identity: unknown;
+				let password: unknown;
+				let federated: unknown;
+				let publicKey: unknown;
 				try {
+					federated = options.federated;
 					identity = options.identity;
+					password = options.password;
+					publicKey = options.publicKey;
 				} catch (error) {
 					return reject(error);
 				}
-				// the member is read once and pinned: a getter cannot hand the
-				// browser an identity request this never saw. No identity: the
-				// browser's own get (password, federated, NotSupportedError).
-				if (identity === undefined)
-					return browserGet(target, that, [
-						{ __proto__: options, identity: undefined },
-						...args.slice(1),
-					]);
+				const own =
+					identity === undefined && (!!password || federated !== undefined);
+				if (own && publicKey === undefined) return ownStore();
+				const pinned = [
+					{
+						__proto__: options,
+						identity,
+						publicKey,
+						...(own
+							? { password: false, federated: undefined }
+							: { password, federated }),
+					},
+					...args.slice(1),
+				];
+				const asked = (): unknown => browserGet(target, that, pinned);
+				if (own) return ownStore().then(asked);
+				// no identity: the browser's own get (a passkey, NotSupportedError)
+				if (identity === undefined) return asked();
 				let signal: unknown;
 				let mediation: unknown;
 				try {

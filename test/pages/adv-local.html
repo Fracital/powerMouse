@@ -8,8 +8,8 @@
 	// slice, a Response's, a clone, a worker's own), an embed's blob copy,
 	// a data: XML document, an xml-stylesheet processing instruction the
 	// page inserts (another site's sheet), raw XML documents and an XSLT's
-	// output. Each reports what it read of its location; a load that went
-	// past the proxy is a bypass.
+	// output; and the browser's password store. Each reports what it read of
+	// its location; a load that went past the proxy is a bypass.
 	const A = __advAsync;
 	const cross = `${location.protocol}//localhost:${location.port}`;
 	const sized = (text) => new TextEncoder().encode(text).length;
@@ -202,5 +202,14 @@
 		);
 	xmlProbe('xml document with a stylesheet', 'pi-doc.xml');
 	xmlProbe('xslt output', 'pi-xslt.xml');
+	// the browser's password store, which keeps every proxied site's under
+	// the proxy's origin
+	A('password store', async () => {
+		const got = await navigator.credentials.get({ password: true }).then(
+			(value) => String(value),
+			(error) => error.name,
+		);
+		return got === 'null' ? got : `TELL:${got}`;
+	});
 	__advFinish(9000);
 </script>
