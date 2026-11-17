@@ -18,6 +18,10 @@
 // carries its sessions, ../webTransport.ts, once a realm makes its first
 // session)
 //
+// (STomp's passkey provider's WebAuthn client is a deferred statement of
+// its own, ./passkeysPart.ts: few documents call WebAuthn, and every frame
+// that needs a part here compiles all of them)
+//
 // What belongs here: code that runs only once something has happened (a
 // first read, a first call, a surface turned on) and may then wait for one
 // synchronous evaluation, never a hook that must be in place before the

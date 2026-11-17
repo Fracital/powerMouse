@@ -282,6 +282,8 @@ async function lightLibrary(worker, define) {
 const LIGHT_FACTORY = '__stompRewriterLight';
 /** the name the deferred parts' statement assigns (src/version.ts DEFERRED_FACTORY) */
 const DEFERRED_FACTORY = '__stompDeferred';
+/** the name the passkey provider's client's statement assigns (src/version.ts PASSKEYS_FACTORY) */
+const PASSKEYS_FACTORY = '__stompPasskeys';
 
 const rewriterLib = {
 	name: 'rewriter-lib',
@@ -391,8 +393,11 @@ const DEFERRED_FILES = new Set(
 		'src/inject/dom/markupMembers.ts',
 		'src/inject/dom/modules/Fingerprint.ts',
 		'src/inject/dom/modules/serviceWorkerEmulation.ts',
+		'src/inject/dom/passkeys.ts',
+		'src/inject/dom/passkeysPart.ts',
 		'src/inject/dom/sourcePolicy.ts',
 		'src/inject/idbSize.ts',
+		'src/passkeys/types.ts',
 		'src/inject/serviceWorkerObjects.ts',
 		'src/inject/webTransport.ts',
 		'src/inject/webTransportStandIn.ts',
@@ -588,6 +593,23 @@ const deferredParts = {
 };
 
 /**
+ * The WebAuthn client of STomp's passkey provider
+ * (src/inject/dom/passkeysPart.ts), a deferred statement of its own after the
+ * parts', `__stompPasskeys=function(__stompShared){...};` (src/version.ts
+ * PASSKEYS_FACTORY): built as the parts are, with the same sharing, but not
+ * among them, so a frame that needs a part compiles none of it.
+ *
+ * @type {import('esbuild').BuildOptions}
+ */
+const passkeysPart = {
+	...deferredParts,
+	entryPoints: { passkeysPart: 'src/inject/dom/passkeysPart.ts' },
+	banner: {
+		js: `${PASSKEYS_FACTORY}=function(__stompShared){"use strict";var __stompParts={};`,
+	},
+};
+
+/**
  * `stomp:deferred-shared` in the document bundles: a function that makes,
  * when the parts are first evaluated, what they read of the bundle
  * (deferredSharing), by file and name
@@ -663,28 +685,32 @@ function outputOf(result) {
 
 /**
  * dist/rewriterLib.js: the light library's statement, then the deferred
- * parts' after a line break (src/inject/rewriter.ts fileStatements), with
- * one map of both (a sectioned source map)
+ * parts', then the passkey provider's client's, each after a line break
+ * (src/inject/rewriter.ts fileStatements), with one map of all (a sectioned
+ * source map)
  */
-async function writeLibrary(light, parts) {
-	if (
-		parts.text.includes(`\n${DEFERRED_FACTORY}=`) ||
-		light.text.includes(`\n${DEFERRED_FACTORY}=`)
-	)
-		throw new Error(
-			"rewriterLib: a line of the file starts with the deferred parts' name",
-		);
-	const head = light.text.endsWith('\n') ? light.text : `${light.text}\n`;
-	const lines = head.split('\n').length - 1;
+async function writeLibrary(light, parts, passkeys) {
+	for (const name of [DEFERRED_FACTORY, PASSKEYS_FACTORY])
+		for (const statement of [light, parts, passkeys])
+			if (statement.text.includes(`\n${name}=`))
+				throw new Error(
+					`rewriterLib: a line of the file starts with the name ${name}`,
+				);
+	const ended = (text) => (text.endsWith('\n') ? text : `${text}\n`);
+	let text = '';
+	const sections = [];
+	for (const statement of [light, parts, passkeys]) {
+		if (statement.map)
+			sections.push({
+				offset: { line: text.split('\n').length - 1, column: 0 },
+				map: statement.map,
+			});
+		text += ended(statement.text);
+	}
 	await writeFile(
 		'dist/rewriterLib.js',
-		`${head}${parts.text}${parts.text.endsWith('\n') ? '' : '\n'}//# sourceMappingURL=rewriterLib.js.map\n`,
+		`${text}//# sourceMappingURL=rewriterLib.js.map\n`,
 	);
-	const sections = [];
-	if (light.map)
-		sections.push({ offset: { line: 0, column: 0 }, map: light.map });
-	if (parts.map)
-		sections.push({ offset: { line: lines, column: 0 }, map: parts.map });
 	await writeFile(
 		'dist/rewriterLib.js.map',
 		JSON.stringify({ version: 3, file: 'rewriterLib.js', sections }),
@@ -889,13 +915,14 @@ const reporter = {
 };
 
 if (dev) {
-	// the file is the two statements: each rebuild of one writes it with the
-	// other's last output. The parts are built once first, so the document
+	// the file is the three statements: each rebuild of one writes it with the
+	// others' last output. The parts are built once first, so the document
 	// bundles know what they read (a part that imports a new name of the
 	// bundle's needs a restart of the watch)
 	const latest = {
 		light: null,
 		parts: await build(deferredParts).then(outputOf),
+		passkeys: await build(passkeysPart).then(outputOf),
 	};
 	const written = (key) => ({
 		name: 'rewriter-lib-file',
@@ -903,8 +930,8 @@ if (dev) {
 			pluginBuild.onEnd(async (result) => {
 				if (result.errors.length || !result.outputFiles) return;
 				latest[key] = outputOf(result);
-				if (latest.light && latest.parts)
-					await writeLibrary(latest.light, latest.parts);
+				if (latest.light && latest.parts && latest.passkeys)
+					await writeLibrary(latest.light, latest.parts, latest.passkeys);
 			});
 		},
 	});
@@ -917,6 +944,10 @@ if (dev) {
 			{
 				...deferredParts,
 				plugins: [...deferredParts.plugins, written('parts')],
+			},
+			{
+				...passkeysPart,
+				plugins: [...passkeysPart.plugins, written('passkeys')],
 			},
 			...bundles(`dev${Date.now().toString(36)}`),
 		].map((options) =>
@@ -936,11 +967,12 @@ if (dev) {
 	watch(ASSETS, async () => notify(await copyAssets()));
 	console.log('Watching for changes...');
 } else {
-	const [light, parts] = await Promise.all([
+	const [light, parts, passkeys] = await Promise.all([
 		build(rewriterLibrary).then(outputOf),
 		build(deferredParts).then(outputOf),
+		build(passkeysPart).then(outputOf),
 	]);
-	await writeLibrary(light, parts);
+	await writeLibrary(light, parts, passkeys);
 	const library = createHash('sha256')
 		.update(await readFile('dist/rewriterLib.js'))
 		.digest('hex')

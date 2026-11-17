@@ -1801,6 +1801,66 @@ input:focus-visible {
 	gap: 8px;
 }
 
+/* a site's passkey request (askPasskey in main.js), like Chrome's passkey
+   sheet: the key and the site, the account, then the accounts to sign in
+   with one under another and the buttons. A modal dialog: the focus stays in
+   it, and its buttons wait out a short guard before they take a click */
+.passkeyPrompt {
+	width: min(380px, calc(100% - 32px));
+	padding: 16px;
+}
+.passkeyPrompt:focus {
+	outline: none;
+}
+.passkeyPrompt .passkeyHead {
+	align-items: center;
+	gap: 10px;
+	margin-bottom: 8px;
+}
+.passkeyPrompt .passkeyHead img {
+	width: 28px;
+	height: 28px;
+	flex: none;
+}
+.passkeyPrompt p.title {
+	margin: 0;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+.passkeyPrompt #passkeyPromptDetail {
+	display: block;
+	margin-bottom: 12px;
+}
+.passkeyPrompt p.detail {
+	margin: 0 0 4px;
+	color: #b6b6b6;
+	font-size: 0.85em;
+	overflow-wrap: anywhere;
+}
+.passkeyPrompt .passkeyButtons {
+	flex-wrap: wrap;
+	justify-content: flex-end;
+}
+.passkeyPrompt .account {
+	flex: 1 0 100%;
+	overflow: hidden;
+	text-align: left;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.passkeyPrompt .account small {
+	display: block;
+	color: #b6b6b6;
+	font-size: 0.8em;
+}
+.passkeyPrompt button:disabled {
+	opacity: 0.6;
+}
+.passkeyPrompt button:focus-visible {
+	outline: 2px solid #729fcf;
+	outline-offset: 2px;
+}
+
 /* ---- bookmarks ------------------------------------------------------------ */
 /* The star: Tango's Butter when the page is bookmarked, hollow Aluminium when
    not, at the right end of the address box (the live one and every card's) */
@@ -1859,6 +1919,11 @@ input:focus-visible {
 
 .tokenbtn[hidden] {
 	display: none;
+}
+
+/* the same button for a site that waits for a passkey (askPasskey in main.js) */
+#toolPasskey {
+	background-image: url('/pm/icons/passkey.svg');
 }
 
 .tokenbtn:hover {

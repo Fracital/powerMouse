@@ -4,6 +4,11 @@ import { Config, ConfigCodec } from '../config';
 import type { HopPolicy } from '../csp';
 import { isolationResponseHeaders } from '../isolation';
 import { kindPartition, partitionSite } from '../partition';
+import {
+	forgetPasskeysOf,
+	passkeyCommand,
+	runCeremony,
+} from '../passkeys/authenticator';
 import { nestedMarkOfKind, nestedTopOf } from '../rewriteHTML';
 import { addRouteScope } from '../routeURL';
 import { SW_ROUTE, type ApiReply } from '../serviceWorkerTypes';
@@ -34,6 +39,8 @@ import {
 	LoadChannelMessage,
 	NAVIGATION_HINT,
 	NavigationHintMessage,
+	PASSKEY,
+	PasskeyMessage,
 	PERMISSION,
 	PermissionMessage,
 	postToPort,
@@ -85,6 +92,7 @@ import {
 	recordNavigationChain,
 	recordNavigationHint,
 } from './navigationHints';
+import { passkeyCeremony } from './passkeys';
 import {
 	decide,
 	deviceSalt,
@@ -265,7 +273,14 @@ function registerController(
 			},
 			forgetStorage: async (origin) => {
 				await (await server).forgetStorage(origin);
+				// a site's passkeys are its data too (docs/passkeys.md)
+				try {
+					await forgetPasskeysOf(new URL(origin).hostname);
+				} catch (error) {
+					// not an origin, or no store
+				}
 			},
+			passkeys: async (command) => [await passkeyCommand(command), []],
 			modules: async () => [await heldModules(), []],
 			suffixList: async () => {
 				await heldModules();
@@ -1031,6 +1046,82 @@ function handleMessage(event: ExtendableMessageEvent) {
 				() => reply.postMessage(null),
 			),
 		);
+	} else if (PASSKEY in data) {
+		// from a routed document of that controller, whose host asks the
+		// user about passkeys: who asks is read from the sender
+		// (src/server/passkeys.ts), never from the message
+		const message = data[PASSKEY] as PasskeyMessage;
+		const [reply] = event.ports;
+		const source = event.source instanceof Client ? event.source : null;
+		const ref =
+			message && typeof message.directory === 'string'
+				? controllers.get(message.directory)
+				: undefined;
+		const ready = ref?.ready;
+		if (
+			!reply ||
+			!ref ||
+			!ready ||
+			!ref.config.passkeys ||
+			!source?.url.startsWith(`${location.origin}${ref.directory}`)
+		) {
+			// nobody to ask: the port closes, and the page's request ends
+			reply?.close();
+			return;
+		}
+		const real = ready.realURL(source.url);
+		const work = (async () => {
+			const top =
+				nestedTopOf(new URL(source.url).pathname, ref.directory, ready.codec) ??
+				new URL(real).origin;
+			const ceremony = await passkeyCeremony(
+				message,
+				real,
+				top,
+				hintsDocument(source.id, source.url),
+				source.id,
+				ref.transport,
+			);
+			if ('error' in ceremony || !('type' in ceremony))
+				return reply.postMessage(ceremony);
+			// this worker makes and signs; the host only asks the user, and
+			// the event lives until it is asked: the user may take minutes,
+			// which the controller's keepalive covers
+			await runCeremony(
+				{
+					config: ref.config.passkeys!,
+					prompt: (request, cancel) =>
+						ref.rpc.call('passkeyPrompt', { request, port: cancel }, [cancel]),
+					// Chrome asks whether the tab is in front, not the frame: a
+					// frame that is not focused itself asks while the focus is
+					// in its top's document or another frame under that top
+					focused: async () => {
+						const windows = await self.clients.matchAll({ type: 'window' });
+						return windows.some((client) => {
+							if (
+								!(client instanceof WindowClient) ||
+								!client.focused ||
+								!client.url.startsWith(`${location.origin}${ref.directory}`)
+							)
+								return false;
+							if (client.id === source.id) return true;
+							try {
+								const { pathname } = new URL(client.url);
+								return (
+									(nestedTopOf(pathname, ref.directory, ready.codec) ??
+										new URL(ready.realURL(client.url)).origin) === top
+								);
+							} catch (error) {
+								return false;
+							}
+						});
+					},
+				},
+				ceremony,
+				reply,
+			);
+		})();
+		event.waitUntil(work.catch(() => reply.close()));
 	} else if (CLIENT_HINTS in data) {
 		// from a client of that controller: a routed document files its own
 		// view under its own client id; any other client (the controller's

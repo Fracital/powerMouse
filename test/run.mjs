@@ -78,6 +78,9 @@ const SUITE_ENV = {
 	'webtransport-live': { STOMP_TEST_TRANSPORT: '1' },
 	// a discord.com fixture host, so the "Sign in with token" gate matches
 	'demo-token': { STOMP_TEST_TRANSPORT: '1' },
+	// and the relying party's sites (test/passkeys-rp.mjs)
+	passkeys: { STOMP_TEST_TRANSPORT: '1' },
+	'adversarial-passkeys': { STOMP_TEST_TRANSPORT: '1' },
 	// the host's pages cross-origin isolated (the demo server's default)
 	'cross-origin-isolation': { STOMP_ISOLATION: 'on' },
 	// a page that isolates itself is isolated only in an isolated host

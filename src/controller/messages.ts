@@ -7,6 +7,12 @@ import type {
 import type { Assets, Config, ConfigCodec } from '../config';
 import type { HelperNames } from '../helperNames';
 import type { HookErrorInfo, InitHooks } from '../hooks';
+import type {
+	PasskeyCommand,
+	PasskeyInfo,
+	PasskeyPrompt,
+	PasskeysConfig,
+} from '../passkeys/types';
 import type { Http3DescriptorOptions } from '../transport/construct';
 import type {
 	CookieCommand,
@@ -62,6 +68,8 @@ export interface ControllerFrameInit {
 	requestLog?: boolean;
 	/** the host asks the user about a site's permission (RemoteControllerInit.onPermissionRequest) */
 	permissionPrompt?: boolean;
+	/** the host asks the user about passkeys for proxied sites (RemoteControllerInit.passkeys): what pages are told of them */
+	passkeys?: PasskeysConfig;
 	/** unparseable scripts fail instead of running raw (RemoteControllerInit.allowInvalidJs) */
 	allowInvalidJs?: boolean;
 	/** the window membrane off when false (RemoteControllerInit.membrane) */
@@ -136,6 +144,8 @@ export type FrameBound = {
 	cookies: [CookieCommand, CookieResult];
 	/** clear a site's virtualized storage (the "Forget me on close" shield) */
 	forgetStorage: [string];
+	/** the service worker's passkeys, for the host (RemoteController.passkeys) */
+	passkeys: [PasskeyCommand, PasskeyInfo[] | boolean | null];
 	/** replace the request rules */
 	rules: [RequestRule[]];
 	/** replace the per-site shields (forwarded to the inner controller) */
@@ -165,4 +175,10 @@ export type HostBound = {
 	hookError: [HookErrorInfo];
 	/** a site asks for a permission the proxy origin holds for another (see StompController.onPermissionRequest) */
 	permission: [PermissionRequestInfo, boolean | null];
+	/**
+	 * a proxied site's WebAuthn ceremony, checked by the service worker, for
+	 * the user to confirm: the host's answer or null; the port hears
+	 * PASSKEY_CANCEL when the page gives up (RemoteControllerInit.passkeys)
+	 */
+	passkeyPrompt: [{ request: PasskeyPrompt; port: MessagePort }, unknown];
 };

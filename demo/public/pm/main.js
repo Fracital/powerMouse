@@ -318,6 +318,354 @@ function askPermission({ origin, permission }) {
 	return asked;
 }
 
+// Passkeys for proxied sites (docs/passkeys.md): STomp is the passkey
+// provider, in both modes. The service worker holds the keys and signs; this
+// page is where the user is asked, in a sheet like Chrome's, about every
+// passkey a site makes and every sign-in with one. `?passkeys=` is for the
+// suites: `off` leaves the option out, `test` takes a page's timeout as given
+// (as Chrome takes it with a virtual authenticator).
+const PASSKEY_FLAGS = (
+	new URLSearchParams(location.search).get('passkeys') ?? ''
+).split(',');
+
+/** the host a relying party id or an origin names, for the sheet's text */
+const hostOf = (origin) => {
+	try {
+		return new URL(origin).host;
+	} catch (error) {
+		return origin;
+	}
+};
+
+// User verification. A site is told the user was verified only when this
+// page really verified them: with the platform's own user-verifying
+// authenticator (Windows Hello, Touch ID, the device's screen lock) in a
+// WebAuthn ceremony on this page's own origin, which no proxied page can
+// answer. That needs a platform authenticator and an origin WebAuthn takes
+// (a domain, not an address); without them the option says the host
+// verifies nobody, sites see no user-verifying authenticator and get no UV
+// flag, as natively on a machine without one.
+const UNLOCK_KEY = 'pm.passkeyUnlock';
+const hostDomain = !/^(\d+\.){3}\d+$|^\[/.test(location.hostname);
+
+/** whether this page can verify the user (asked once, before the controller starts) */
+async function hostVerifies() {
+	try {
+		return (
+			isSecureContext &&
+			hostDomain &&
+			(await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable())
+		);
+	} catch (error) {
+		return false;
+	}
+}
+
+const randomBytes = (length) => crypto.getRandomValues(new Uint8Array(length));
+const toB64URL = (bytes) =>
+	btoa(String.fromCharCode(...new Uint8Array(bytes)))
+		.replace(/\+/g, '-')
+		.replace(/\//g, '_')
+		.replace(/=+$/, '');
+const fromB64URL = (text) =>
+	Uint8Array.from(atob(text.replace(/-/g, '+').replace(/_/g, '/')), (c) =>
+		c.charCodeAt(0),
+	);
+/** the UV flag of authenticator data (WebAuthn 6.1: bit 2 of the flags byte) */
+const verifiedIn = (authData) => (new Uint8Array(authData)[32] & 0x04) !== 0;
+
+/**
+ * Verify the user with the platform authenticator, on this page's origin:
+ * the first time, a credential of this page's own ("STomp passkeys") made
+ * with user verification required, then an assertion of it with the same.
+ * True only when the browser's own authenticator says it verified the user.
+ */
+async function verifyUser() {
+	try {
+		const kept = localStorage.getItem(UNLOCK_KEY);
+		if (kept) {
+			try {
+				const assertion = await navigator.credentials.get({
+					publicKey: {
+						rpId: location.hostname,
+						challenge: randomBytes(32),
+						allowCredentials: [{ type: 'public-key', id: fromB64URL(kept) }],
+						userVerification: 'required',
+						timeout: 120000,
+					},
+				});
+				return verifiedIn(assertion.response.authenticatorData);
+			} catch (error) {
+				// a declined verification is no verification. The platform may
+				// no longer hold the credential (the user removed it), which reads
+				// the same: the next verification makes one again
+				localStorage.removeItem(UNLOCK_KEY);
+				return false;
+			}
+		}
+		const made = await navigator.credentials.create({
+			publicKey: {
+				rp: { id: location.hostname, name: 'STomp' },
+				user: {
+					id: randomBytes(16),
+					name: 'STomp passkeys',
+					displayName: 'STomp passkeys',
+				},
+				challenge: randomBytes(32),
+				pubKeyCredParams: [
+					{ type: 'public-key', alg: -7 },
+					{ type: 'public-key', alg: -257 },
+				],
+				authenticatorSelection: {
+					authenticatorAttachment: 'platform',
+					residentKey: 'discouraged',
+					userVerification: 'required',
+				},
+				attestation: 'none',
+				timeout: 120000,
+			},
+		});
+		localStorage.setItem(UNLOCK_KEY, toB64URL(made.rawId));
+		return verifiedIn(made.response.getAuthenticatorData());
+	} catch (error) {
+		return false;
+	}
+}
+
+/** how long a sheet ignores clicks and keys after it shows (Chrome's dialogs do the same), so a key meant for the page cannot confirm it */
+const SHEET_GUARD_MS = 500;
+
+/**
+ * One passkey sheet: a `title`, lines of `detail`, a button per entry of
+ * `choices` ([label, answer, className, sub]) and one that closes it.
+ * Resolves the chosen answer, or null when it was closed, Escape was
+ * pressed, or `signal` aborted (the page gave up). A modal dialog: the focus
+ * moves into it and stays there, and goes back where it was after.
+ */
+let passkeyQueue = Promise.resolve();
+function passkeyPrompt({ title, detail = [], choices, close, signal }) {
+	const asked = passkeyQueue.then(
+		() =>
+			new Promise((resolve) => {
+				if (signal.aborted) return resolve(null);
+				const opener = document.activeElement;
+				const box = document.createElement('div');
+				box.id = 'passkeyPrompt';
+				box.className = 'permissionPrompt passkeyPrompt';
+				box.setAttribute('role', 'dialog');
+				box.setAttribute('aria-modal', 'true');
+				box.setAttribute('aria-labelledby', 'passkeyPromptTitle');
+				box.setAttribute('aria-describedby', 'passkeyPromptDetail');
+				const settle = (answer) => {
+					box.remove();
+					removeEventListener('keydown', onKey, true);
+					if (opener && opener.isConnected && opener !== document.body)
+						opener.focus?.();
+					resolve(answer);
+				};
+				signal.addEventListener('abort', () => settle(null), { once: true });
+				const head = document.createElement('div');
+				head.className = 'passkeyHead';
+				const icon = document.createElement('img');
+				icon.src = '/pm/icons/passkey.svg';
+				icon.alt = '';
+				const line = document.createElement('p');
+				line.id = 'passkeyPromptTitle';
+				line.className = 'title';
+				line.textContent = title;
+				head.append(icon, line);
+				box.append(head);
+				const more = document.createElement('div');
+				more.id = 'passkeyPromptDetail';
+				for (const text of detail.filter(Boolean)) {
+					const row = document.createElement('p');
+					row.className = 'detail';
+					row.textContent = text;
+					more.append(row);
+				}
+				box.append(more);
+				const buttons = document.createElement('div');
+				buttons.className = 'passkeyButtons';
+				const all = [];
+				const button = (label, className, answer, sub) => {
+					const element = document.createElement('button');
+					element.type = 'button';
+					element.className = `btn ${className}`;
+					element.textContent = label;
+					if (sub) {
+						const small = document.createElement('small');
+						small.textContent = sub;
+						element.append(small);
+					}
+					element.disabled = true;
+					element.addEventListener('click', () => settle(answer));
+					buttons.append(element);
+					all.push(element);
+				};
+				for (const [label, answer, className, sub] of choices)
+					button(label, className ?? 'account btn-blu', answer, sub);
+				button(close, 'close', null);
+				box.append(buttons);
+				const onKey = (event) => {
+					if (!box.isConnected) return;
+					if (event.key === 'Escape') {
+						event.preventDefault();
+						event.stopPropagation();
+						settle(null);
+					} else if (event.key === 'Tab') {
+						// the focus stays in the sheet
+						const live = all.filter((element) => !element.disabled);
+						if (!live.length) return event.preventDefault();
+						const at = live.indexOf(document.activeElement);
+						const next = event.shiftKey
+							? (at <= 0 ? live.length : at) - 1
+							: (at + 1) % live.length;
+						event.preventDefault();
+						live[next].focus();
+					}
+				};
+				addEventListener('keydown', onKey, true);
+				document.body.append(box);
+				// nothing confirms before the guard has passed: a key or a click
+				// meant for the page under the sheet does not
+				setTimeout(() => {
+					for (const element of all) element.disabled = false;
+					(
+						all.find((element) => !element.classList.contains('close')) ??
+						all[0]
+					).focus();
+				}, SHEET_GUARD_MS);
+				box.tabIndex = -1;
+				box.focus();
+			}),
+	);
+	passkeyQueue = asked.catch(() => {});
+	return asked;
+}
+
+/** the line a request made in a frame of another site adds */
+const framedOn = (request) =>
+	request.topOrigin ? `Asked in a frame on ${hostOf(request.topOrigin)}.` : '';
+
+/** the account chooser of a sign-in: one button per passkey that may answer */
+function choosePasskey(request) {
+	const site = request.rpId;
+	if (!request.credentials.length)
+		return passkeyPrompt({
+			title: `You don't have a passkey for ${site} saved here`,
+			detail: [
+				'Passkeys saved in STomp are kept in this browser.',
+				framedOn(request),
+			],
+			choices: [],
+			close: 'Close',
+			signal: request.signal,
+		});
+	return passkeyPrompt({
+		title: `Use a saved passkey for ${site}`,
+		detail: [framedOn(request)],
+		choices: request.credentials.map((credential) => [
+			credential.userName || credential.userDisplayName || 'Passkey',
+			{ credential: credential.id },
+			'account btn-blu',
+			credential.userDisplayName &&
+			credential.userDisplayName !== credential.userName
+				? credential.userDisplayName
+				: '',
+		]),
+		close: 'Cancel',
+		signal: request.signal,
+	});
+}
+
+/** the answer, verified by the platform when this page can and the site wants it */
+async function withVerification(request, answer) {
+	if (!answer) return null;
+	if (!passkeysVerify || request.userVerification === 'discouraged')
+		return answer;
+	if (await verifyUser()) return { ...answer, userVerified: true };
+	// a site that requires verification gets none without it
+	return request.userVerification === 'required' ? null : answer;
+}
+
+/**
+ * A proxied site makes a passkey or asks for a sign-in with one
+ * (`passkeys.onRequest`): nothing is made or signed until the user says so
+ * here, in this page, where no proxied page can click. A site that waits in
+ * the background (conditional mediation) gets no sheet: the key button in
+ * the address bar offers its passkeys while its tab is in front.
+ */
+async function askPasskey(request) {
+	const site = request.rpId;
+	if (request.type === 'create') {
+		const account = request.user.name || request.user.displayName;
+		const answer = await passkeyPrompt(
+			request.excluded
+				? {
+						title: `A passkey for ${site} is already saved here`,
+						detail: [
+							`For ${account}. The site will be told so.`,
+							framedOn(request),
+						],
+						choices: [['OK', {}, 'allow btn-blu']],
+						close: 'Cancel',
+						signal: request.signal,
+					}
+				: {
+						title: `Create a passkey for ${site}`,
+						detail: [
+							`For ${account}.`,
+							'It is saved in this browser, for STomp only, and is not synced.',
+							framedOn(request),
+						],
+						choices: [['Create', {}, 'allow btn-blu']],
+						close: 'Cancel',
+						signal: request.signal,
+					},
+		);
+		// an excluded credential is said to the site without a verification
+		return request.excluded ? answer : withVerification(request, answer);
+	}
+	if (!request.conditional)
+		return withVerification(request, await choosePasskey(request));
+	// conditional: wait for the user to ask, for as long as the page waits
+	if (!request.credentials.length) return null;
+	const tab = tabs.find((t) => t.frame === request.frame) ?? activeTab;
+	if (!tab) return null;
+	return new Promise((resolve) => {
+		const offer = {
+			request,
+			take: async () => {
+				const answer = await choosePasskey(request);
+				if (!answer) return; // closed: the site still waits
+				if (tab.passkeyOffer === offer) tab.passkeyOffer = null;
+				syncPasskeyButton();
+				resolve(await withVerification(request, answer));
+			},
+		};
+		tab.passkeyOffer = offer;
+		syncPasskeyButton();
+		request.signal.addEventListener(
+			'abort',
+			() => {
+				if (tab.passkeyOffer === offer) tab.passkeyOffer = null;
+				syncPasskeyButton();
+				resolve(null);
+			},
+			{ once: true },
+		);
+	});
+}
+
+/** whether this page verifies users (hostVerifies, asked as the controller starts) */
+let passkeysVerify = false;
+
+/** the address bar's passkey button: there while the tab's site waits for one */
+function syncPasskeyButton() {
+	const button = $('toolPasskey');
+	if (button) button.hidden = !activeTab?.passkeyOffer;
+}
+
 // The demo's own keys (Ctrl+Shift+X, Escape, Alt+Left and Alt+Right) while
 // a proxied page has focus: its key events never reach this window, so a
 // host hook in every proxied document hands them over, as a browser's own
@@ -519,6 +867,16 @@ async function startController(name) {
 	// visit, so the browser keeps the compiled code of the scripts proxied
 	// pages load (it does so only for the same URL, and routed URLs start
 	// with the id)
+	// passkeys for proxied sites, asked about here (docs/passkeys.md), with
+	// a real user verification when this page can make one
+	if (!PASSKEY_FLAGS.includes('off')) {
+		passkeysVerify = await hostVerifies();
+		controllerCallbacks.passkeys = {
+			onRequest: askPasskey,
+			...(passkeysVerify && { userVerification: true }),
+			...(PASSKEY_FLAGS.includes('test') && { testing: true }),
+		};
+	}
 	if (ISOLATED) {
 		setStatus('Starting controller frame…');
 		controller = new StompRemoteController({
@@ -639,6 +997,7 @@ function createTab() {
 		icon: null, // the icon the page declared (NavigateInfo.icon)
 		iconPort: null, // its document's port for fetching that icon (ICON_HOOK)
 		tokenPort: null, // a Discord page's port for its login token (TOKEN_HOOK)
+		passkeyOffer: null, // a passkey sign-in its site waits for (askPasskey)
 	};
 	element.addEventListener('load', async () => {
 		// a RemoteFrame's url is polled: refresh before recording, or a redirect
@@ -736,8 +1095,10 @@ function activateTab(tab) {
 
 // "Forget me when I close this site" (shields): when the last tab on a host
 // with that toggle on closes, clear its cookie jar and its virtualized storage
-// (localStorage, sessionStorage, IndexedDB, Cache Storage). The controller
-// carries the toggle; this is the host-side half.
+// (localStorage, sessionStorage, IndexedDB, Cache Storage), and with it the
+// site's STomp passkeys (forgetStorage forgets those whose relying party id
+// is the host or a suffix of it). The controller carries the toggle; this is
+// the host-side half.
 function forgetSiteOnClose(tab) {
 	if (!controller || !controller.shields) return;
 	let origin, host;
@@ -1627,6 +1988,7 @@ function syncTokenButton() {
 	if (!button) return;
 	const tab = activeTab;
 	button.hidden = !tab || !tab.tokenPort || !isDiscordHost(pageUrl(tab));
+	syncPasskeyButton();
 }
 
 // pages report navigation through onNavigate; this is only a safety net
@@ -2886,6 +3248,10 @@ $('toolSaved').addEventListener('click', () => openBookmarks($('toolSaved')));
 $('bookmarksClose').addEventListener('click', () => closeBookmarks());
 $('bookmarksScrim').addEventListener('click', () => closeBookmarks());
 $('toolStar').addEventListener('click', () => toggleBookmark(activeTab));
+// a site that waits for a passkey in the background: its chooser
+$('toolPasskey').addEventListener('click', () => {
+	activeTab?.passkeyOffer?.take();
+});
 // "Sign in with token": the user pastes their own Discord token; it is sent
 // to the proxied page over its MessagePort and written into that page's own
 // localStorage there. The token is never sent over the network or logged; it
@@ -4128,12 +4494,16 @@ function buildGlobalPage() {
 				<div class="spSettingRow">
 					<div class="spRowText">
 						<div class="spRowLabel">Forget me when I close this site</div>
-						<div class="spRowSub">Clears cookies and other site data when you close a site.</div>
+						<div class="spRowSub">Clears cookies, passkeys and other site data when you close a site.</div>
 					</div>
 					<input type="checkbox" class="shieldsToggle small" id="spForget" ${g.forget ? 'checked' : ''} aria-label="Forget me when I close this site" />
 				</div>
 				<button class="spSettingRow nav" id="spContentFiltering" type="button">
 					<div class="spRowText"><div class="spRowLabel">Content filtering</div><div class="spRowSub">Filter lists and your own custom filters.</div></div>
+					${shieldIcon('caret', 'shieldsIcon')}
+				</button>
+				<button class="spSettingRow nav" id="spPasskeys" type="button">
+					<div class="spRowText"><div class="spRowLabel">Passkeys</div><div class="spRowSub">Passkeys saved in this browser for sites you visit through STomp.</div></div>
 					${shieldIcon('caret', 'shieldsIcon')}
 				</button>
 			</div>
@@ -4189,6 +4559,187 @@ function buildGlobalPage() {
 	q('#spContentFiltering').addEventListener('click', () =>
 		openShieldsPage('filters', 'global'),
 	);
+	q('#spPasskeys').addEventListener('click', () =>
+		openShieldsPage('passkeys', 'global'),
+	);
+}
+
+// The Passkeys page (Global Settings > Passkeys): the passkeys the service
+// worker holds for proxied sites (docs/passkeys.md), one section per relying
+// party id, each passkey with a Delete button and each site with Delete all.
+// The labels name the account and the site, so a delete asks nothing more.
+// After a delete the list is read again and the focus moves to the passkey
+// (or site) that took the deleted one's place, else to the back arrow.
+const passkeyDate = (ms) =>
+	new Date(ms).toLocaleDateString(undefined, {
+		year: 'numeric',
+		month: 'short',
+		day: 'numeric',
+	});
+
+/** every passkey the controller holds, or none when it has no passkeys */
+async function listPasskeys() {
+	if (!controller?.passkeys?.list) return [];
+	const list = await controller.passkeys.list();
+	return Array.isArray(list) ? list : [];
+}
+
+function buildPasskeysPage() {
+	shieldsPage.dataset.view = 'passkeys';
+	shieldsPage.innerHTML = `
+		<div class="spHead">
+			<button class="spBack" id="spBack" type="button" aria-label="Back">
+				${shieldIcon('caret', 'shieldsIcon')}
+			</button>
+			<h2 class="spTitle" id="shieldsPageTitle">Passkeys</h2>
+			<button class="spClose" id="spClose" type="button" aria-label="Close">×</button>
+		</div>
+		<div class="spBody">
+			<p class="spSectionNote">Passkeys STomp saved in this browser for the sites you visit through it. They are not synced. Deleting one here does not remove it from your account on the site.</p>
+			<div id="spPasskeyList" aria-busy="true"></div>
+			<div class="spStatus" id="spStatus" aria-live="polite"></div>
+		</div>`;
+	shieldsPage
+		.querySelector('#spBack')
+		.addEventListener('click', backShieldsPage);
+	shieldsPage
+		.querySelector('#spClose')
+		.addEventListener('click', closeShieldsPage);
+	renderPasskeys();
+}
+
+let passkeysRender = 0;
+/**
+ * Fill the Passkeys page from the controller. `focus` says where the focus
+ * goes once it is drawn: `{ passkey: i }` the i-th Delete button (or the
+ * last), `{ site: i }` the i-th site's first one (or the last site's).
+ */
+async function renderPasskeys(focus = null) {
+	const render = ++passkeysRender;
+	let list = [];
+	let failed = false;
+	try {
+		list = await listPasskeys();
+	} catch {
+		failed = true;
+	}
+	const box = shieldsPage.querySelector('#spPasskeyList');
+	// the page moved on (or a newer render started) while the list was read
+	if (render !== passkeysRender || !box) return;
+	box.replaceChildren();
+	box.removeAttribute('aria-busy');
+	if (failed) setShieldsPageStatus('Could not read the passkeys.', true);
+
+	const sites = new Map();
+	for (const key of list) {
+		const site = String(key.rpId ?? '');
+		if (!sites.has(site)) sites.set(site, []);
+		sites.get(site).push(key);
+	}
+	if (!sites.size) {
+		box.append(element('p', 'spSectionNote', 'No passkeys saved.'));
+	}
+	const order = [...sites.keys()].sort((a, b) => a.localeCompare(b));
+	for (const site of order) {
+		const keys = sites
+			.get(site)
+			.sort(
+				(a, b) =>
+					String(a.userName ?? '').localeCompare(String(b.userName ?? '')) ||
+					(a.created ?? 0) - (b.created ?? 0),
+			);
+		const section = element('section', 'spSection');
+		section.dataset.site = site;
+		const title = element('h3', 'spSectionTitle', site);
+		title.dir = 'ltr';
+		const rows = element('div', 'spCustomList');
+		for (const key of keys) {
+			const name = key.userName || key.userDisplayName || 'Unnamed account';
+			const row = element('div', 'spCustomRow');
+			const text = element('div', 'spRowText');
+			text.append(element('div', 'spListName', name));
+			if (key.userDisplayName && key.userDisplayName !== name)
+				text.append(element('div', 'spListSource', key.userDisplayName));
+			text.append(
+				element(
+					'div',
+					'spListSource',
+					`Created ${passkeyDate(key.created)} · ${
+						key.lastUsed == null
+							? 'Not used yet'
+							: `Last used ${passkeyDate(key.lastUsed)}`
+					}`,
+				),
+			);
+			const remove = element('button', 'spBtn ghost', 'Delete');
+			remove.type = 'button';
+			remove.dataset.passkey = key.id;
+			remove.setAttribute(
+				'aria-label',
+				`Delete the passkey for ${name} on ${site}`,
+			);
+			remove.addEventListener('click', async () => {
+				const at = [...box.querySelectorAll('[data-passkey]')].indexOf(remove);
+				let deleted = false;
+				try {
+					deleted = await controller.passkeys.delete(key.id);
+				} catch {
+					// said below, as not deleted
+				}
+				setShieldsPageStatus(
+					deleted
+						? `Deleted the passkey for ${name} on ${site}.`
+						: `Could not delete the passkey for ${name} on ${site}.`,
+					!deleted,
+				);
+				renderPasskeys({ passkey: at });
+			});
+			row.append(text, remove);
+			rows.append(row);
+		}
+		const buttons = element('div', 'spRowButtons');
+		const clear = element('button', 'spBtn ghost', 'Delete all');
+		clear.type = 'button';
+		clear.setAttribute(
+			'aria-label',
+			`Delete all ${keys.length} passkey${keys.length === 1 ? '' : 's'} for ${site}`,
+		);
+		clear.addEventListener('click', async () => {
+			const at = [...box.querySelectorAll('section[data-site]')].indexOf(
+				section,
+			);
+			let cleared = true;
+			try {
+				await controller.passkeys.clear(site);
+			} catch {
+				cleared = false;
+			}
+			setShieldsPageStatus(
+				cleared
+					? `Deleted the passkeys for ${site}.`
+					: `Could not delete the passkeys for ${site}.`,
+				!cleared,
+			);
+			renderPasskeys({ site: at });
+		});
+		buttons.append(clear);
+		section.append(title, rows, buttons);
+		box.append(section);
+	}
+
+	if (!focus) return;
+	let target = null;
+	if (focus.passkey !== undefined) {
+		const all = box.querySelectorAll('[data-passkey]');
+		target = all[Math.min(focus.passkey, all.length - 1)];
+	} else if (focus.site !== undefined) {
+		const all = box.querySelectorAll('section[data-site]');
+		target =
+			all[Math.min(focus.site, all.length - 1)]?.querySelector(
+				'[data-passkey]',
+			);
+	}
+	(target ?? shieldsPage.querySelector('#spBack')).focus();
 }
 
 // which page opened this one, so the Filter Lists back arrow returns to Global
@@ -4200,6 +4751,7 @@ function openShieldsPage(view, from = null) {
 	shieldsPageFrom = from;
 	if (!shieldsPageOpener) shieldsPageOpener = document.activeElement;
 	if (view === 'global') buildGlobalPage();
+	else if (view === 'passkeys') buildPasskeysPage();
 	else buildFilterListsPage();
 	shieldsPage.classList.remove('hidden');
 	shieldsPage.setAttribute('aria-hidden', 'false');
@@ -4211,8 +4763,11 @@ function openShieldsPage(view, from = null) {
 }
 
 function backShieldsPage() {
-	if (shieldsPageFrom === 'global') openShieldsPage('global');
-	else closeShieldsPage();
+	const view = shieldsPage.dataset.view;
+	if (shieldsPageFrom !== 'global') return closeShieldsPage();
+	openShieldsPage('global');
+	// back on Global Settings at the row that opened the Passkeys page
+	if (view === 'passkeys') shieldsPage.querySelector('#spPasskeys')?.focus();
 }
 
 function closeShieldsPage() {
@@ -4234,7 +4789,10 @@ addEventListener(
 	'keydown',
 	(event) => {
 		if (event.key !== 'Escape' || !shieldsPageOpen()) return;
-		if (shieldsPage.dataset.view === 'filters' && shieldsPageFrom === 'global')
+		if (
+			['filters', 'passkeys'].includes(shieldsPage.dataset.view) &&
+			shieldsPageFrom === 'global'
+		)
 			backShieldsPage();
 		else closeShieldsPage();
 		event.stopImmediatePropagation();

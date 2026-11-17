@@ -140,6 +140,8 @@ holyWisp is started.
    (docs/permissions.md); when a site asks for a permission the browser
    already gave the proxy for another site, `askPermission` shows the
    demo's own prompt (`#permissionPrompt`: Allow, Block, Close).
+   The controller also gets `passkeys: { onRequest: askPasskey }`
+   (docs/passkeys.md), in both modes: see [Passkeys](#passkeys).
    `wait()` resolves once the service worker has built a server for this
    controller. The controller is exposed as `window.controller` for devtools.
    No `id` is given, so the controller keeps the one the tab had last time
@@ -264,6 +266,34 @@ holyWisp is started.
 
 Errors from any step land in the status line (`Error: ...`) rather than the
 console only.
+
+## Passkeys
+
+STomp is the passkey provider for proxied sites (docs/passkeys.md), on in
+both modes. The service worker holds the keys and signs; nothing is made or
+used until the user says so in this page, which no proxied page can click:
+
+- **The sheet.** `askPasskey` asks in `#passkeyPrompt`, like Chrome's
+  passkey sheet: "Create a passkey for `<site>`", naming the account, or
+  one button per account that has a passkey for the site. A site that waits
+  for a passkey in the background (conditional mediation) gets no sheet:
+  the key button in the address bar (`#toolPasskey`) shows while its tab is
+  in front and opens the chooser.
+- **User verification.** A site is told the user was verified only when
+  this page verified them with the platform's own authenticator (Windows
+  Hello, Touch ID, the screen lock), which needs a secure context on a
+  domain; without one sites see no user-verifying authenticator.
+- **Seeing and deleting them.** Shields > Global Settings > Passkeys lists
+  the saved passkeys by site (relying party id): the account, when it was
+  made and last used, a Delete button for each and Delete all for each site
+  (`controller.passkeys.list`, `delete` and `clear`).
+- **Forget me.** "Forget me when I close this site" clears the site's
+  passkeys with its other data: `forgetStorage` forgets those whose relying
+  party id is the site's host or a suffix of it.
+
+For the suites, `?passkeys=off` leaves the option out and `?passkeys=test`
+takes a page's timeout as given, as Chrome takes it with a virtual
+authenticator.
 
 ## Transports
 

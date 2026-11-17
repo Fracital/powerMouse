@@ -5,6 +5,12 @@ import type {
 } from '@mercuryworkshop/proxy-transports';
 import type { AdblockInit, SiteShields } from '../blocker/types';
 import type { Config } from '../config';
+import type {
+	PasskeyCommand,
+	PasskeyInfo,
+	PasskeyOp,
+	PasskeyPrompt,
+} from '../passkeys/types';
 import type { PortBody } from './bodyPort';
 import type { Http3DescriptorOptions } from './construct';
 
@@ -681,6 +687,16 @@ export interface PermissionRequestInfo {
 	client?: string;
 }
 /**
+ * A proxied document's WebAuthn ceremony (docs/passkeys.md), with the port
+ * its answer comes on. The worker takes the document's origin and its
+ * top's from the sender's own routed URL and client, checks the relying
+ * party id against them, asks the controller's host to have the user
+ * confirm, and makes or signs with the key it holds: the page gets only
+ * the answer, on its port.
+ */
+export const PASSKEY = '$stomp$passkey';
+export type PasskeyMessage = { directory: string } & PasskeyOp;
+/**
  * A routed document vouches for an about:srcdoc document under it: a token
  * the srcdoc document made, which the worker binds to the routed document's
  * real origin and partition (read from its own routed URL, never from the
@@ -868,6 +884,8 @@ export type SWbound = {
 	 * this site" shield, once its last tab closes (src/server/Storage.ts)
 	 */
 	forgetStorage: [string];
+	/** the host reading or forgetting the passkeys this worker holds (docs/passkeys.md) */
+	passkeys: [PasskeyCommand, PasskeyInfo[] | boolean | null];
 	/**
 	 * whether the built-in blocker's lists block a WebSocket to `url` opened
 	 * under `source` (the Origin its handshake carries, '' when it has none):
@@ -1033,6 +1051,13 @@ export type Controllerbound = {
 	 * and permission checks (src/controller/mediaVerdict.ts); null: none
 	 */
 	mediaVerdict: [unknown, MediaVerdict | null];
+	/**
+	 * a proxied site's WebAuthn ceremony, checked by the worker, for the
+	 * host to ask the user about: its answer (PasskeyAnswer) or null. The
+	 * port hears PASSKEY_CANCEL when the page gives up
+	 * (src/passkeys/authenticator.ts)
+	 */
+	passkeyPrompt: [{ request: PasskeyPrompt; port: MessagePort }, unknown];
 };
 
 /** a transport's response on its way to a RemoteTransport: a streamed body travels on a port of its own (bodyPort.ts) */

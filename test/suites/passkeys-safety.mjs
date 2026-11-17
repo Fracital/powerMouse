@@ -1,27 +1,36 @@
-// Passkeys cannot work through an origin-rewriting proxy, and STomp does not
-// pretend to be an authenticator (docs/passkeys.md). Every proxied site shares
-// the proxy's one real origin, so a credential the browser's own WebAuthn makes
-// or asserts for a proxied page is scoped to that shared origin: one proxied
-// site could then use what another made. The rule this suite proves is that no
-// proxied page creates, lists or asserts a credential on that origin. A
-// relying party id the browser would accept (the proxy origin's own host or a
-// suffix) is handed the browser empty, which it refuses before reaching any
-// authenticator, and the refusal is reshaped into the native decline that a
-// create or get ends as, and the no-op a signal is (src/inject/dom/modules/
-// Credentials.ts).
+// The browser's own WebAuthn never acts for a proxied page (docs/passkeys.md).
+// Every proxied site shares the proxy's one real origin, so a credential the
+// browser's own authenticator made or asserted for a proxied page would be
+// scoped to that shared origin: one proxied site could then use what another
+// made, and the relying party would reject it anyway (the browser signs the
+// proxy's origin). The rule this suite proves is that no proxied page creates,
+// lists or asserts a credential on that origin, with STomp's own passkey
+// provider and without it:
+//
+// - without a provider (the host gave the controller no `passkeys` option,
+//   `?passkeys=off` in the demo), a relying party id the browser would accept
+//   (the proxy origin's own host or a suffix) is handed the browser empty,
+//   which it refuses before reaching any authenticator, and the refusal is
+//   reshaped into the native decline that a create or get ends as, and the
+//   no-op a signal is (src/inject/dom/modules/Credentials.ts);
+// - with STomp's provider (the demo's default), a publicKey request never
+//   reaches the browser: the service worker judges it from the page's own
+//   origin (here an address, as the fixture is on 127.0.0.1), so the proxy
+//   origin's host is refused as natively for a page on an address, and the
+//   browser's authenticator is never asked.
 //
 // The oracle is a real Chrome with a virtual authenticator (CDP WebAuthn): a
 // page natively on a domain makes and asserts a passkey, and the authenticator
-// holds it, which is the hole this closes on purpose. Through the demo on a
-// domain (demo.localhost, the same-origin controller, every proxied page on one
-// origin as a RemoteController's proxy origin is) the same calls are refused
-// with Chrome's own words, the authenticator stays empty, and a second proxied
-// page gets no assertion from what a first one tried to make.
+// holds it, which is the hole this closes on purpose; and a page natively on
+// the fixture's address gives Chrome's words for what an address may ask.
+// Through the demo on a domain (demo.localhost, the same-origin controller,
+// every proxied page on one origin as a RemoteController's proxy origin is)
+// the same calls are refused with Chrome's own words, the authenticator stays
+// empty, and a second proxied page gets no assertion from what a first one
+// tried to make.
 //
 // A domain is required (an address is no relying party): the suite runs on
-// demo.localhost, as webauthn-related-origins does. The deliberate divergence
-// from native (a refusal where native makes a credential) is the point; the
-// error shape is compared against native.
+// demo.localhost, as webauthn-related-origins does.
 import {
 	done,
 	FIXTURE,
@@ -35,7 +44,8 @@ import {
 
 const fixture = new URL(FIXTURE);
 // the demo under a name of its own: a domain, not an address
-const DEMO = `http://demo.localhost:${new URL(HOST).port}/`;
+const DEMO = `http://demo.localhost:${new URL(HOST).port}/?passkeys=off`;
+const DEMO_PROVIDER = `http://demo.localhost:${new URL(HOST).port}/?passkeys=test`;
 const probe = (site) => `${FIXTURE}pages/passkeys-probe.html?site=${site}`;
 const nativeProbe = (site) =>
 	`http://wk.localhost:${fixture.port}/pages/passkeys-probe.html?site=${site}`;
@@ -129,6 +139,17 @@ const signalCall = async (rpId) => {
 	}
 };
 
+const getDefaultCall = async () => {
+	try {
+		await navigator.credentials.get({
+			publicKey: { challenge: new Uint8Array(16), timeout: 5000 },
+		});
+		return { ok: true };
+	} catch (error) {
+		return { ok: false, name: error.name, message: error.message };
+	}
+};
+
 const credentialCount = async (cdp, authenticatorId) =>
 	(await cdp.send('WebAuthn.getCredentials', { authenticatorId })).credentials
 		.length;
@@ -163,6 +184,16 @@ const nativePlanted = await credentialCount(nativeCdp, nativeAuth);
 const nativeGet = await nativePage.evaluate(getCall, 'wk.localhost');
 // Chrome's own words for a ceremony the authenticator did not answer
 const nativeDecline = await nativePage.evaluate(getBogus, 'wk.localhost');
+// and for a page on an address (the fixture's, as the proxied pages' are)
+// asking for a domain's id, or for its own
+await nativePage.goto(probe('a'));
+const nativeAddress = {
+	create: await nativePage.evaluate(createCall, 'demo.localhost'),
+	get: await nativePage.evaluate(getCall, 'demo.localhost'),
+	getDefault: await nativePage.evaluate(getDefaultCall),
+	signal: await nativePage.evaluate(signalCall, 'demo.localhost'),
+};
+const nativeAddressPlanted = await credentialCount(nativeCdp, nativeAuth);
 await nativeBrowser.close();
 
 // --- through the demo on a domain: every proxied page on one real origin ---
@@ -185,16 +216,7 @@ const proxiedGet = frameA
 // an omitted relying party id defaults to the document's own domain, which is
 // the shared proxy origin: it must be refused too, not reach the authenticator
 const proxiedGetDefault = frameA
-	? await frameA.evaluate(async () => {
-			try {
-				await navigator.credentials.get({
-					publicKey: { challenge: new Uint8Array(16), timeout: 5000 },
-				});
-				return { ok: true };
-			} catch (error) {
-				return { ok: false, name: error.name, message: error.message };
-			}
-		})
+	? await frameA.evaluate(getDefaultCall)
 	: { ok: null };
 // a relying party id of another site still ends as the related-origins refusal
 // (no regression of the leak fix on master)
@@ -216,6 +238,31 @@ const proxiedSignal = frameB
 const plantedEnd = await credentialCount(cdp, auth);
 
 const errors = page.errors.slice();
+await page.close();
+
+// --- the same with STomp's provider: the browser's authenticator is never asked ---
+const providerPage = await openDemo(browser, DEMO_PROVIDER);
+const providerCdp = await providerPage.context().newCDPSession(providerPage);
+await providerCdp.send('WebAuthn.enable');
+const providerAuth = (
+	await providerCdp.send('WebAuthn.addVirtualAuthenticator', VIRTUAL)
+).authenticatorId;
+await submitLanding(providerPage, probe('a'));
+const providerFrame = await proxiedFrame(providerPage, 'a');
+const provider = providerFrame
+	? {
+			create: await providerFrame.evaluate(createCall, 'demo.localhost'),
+			get: await providerFrame.evaluate(getCall, 'demo.localhost'),
+			getDefault: await providerFrame.evaluate(getDefaultCall),
+			signal: await providerFrame.evaluate(signalCall, 'demo.localhost'),
+		}
+	: null;
+const providerPlanted = await credentialCount(providerCdp, providerAuth);
+const providerHeld = await providerPage.evaluate(() =>
+	window.controller.passkeys.list(),
+);
+const providerPrompt = await providerPage.$('#passkeyPrompt');
+errors.push(...providerPage.errors);
 
 // the oracle holds: WebAuthn works natively on a domain, which is the hole
 ok(
@@ -278,6 +325,24 @@ ok(
 		proxiedSignal.value === 'undefined' &&
 		plantedEnd === 0,
 	JSON.stringify({ proxiedSignal, plantedEnd }),
+);
+
+ok('with the provider, the demo on a domain opens site a', !!providerFrame, '');
+const shape = (result) => [result?.ok, result?.name, result?.message];
+ok(
+	"with STomp's provider, a proxied page on an address asking for the proxy origin's host, or for its own default, ends as Chrome ends it for a page on an address",
+	!!provider &&
+		JSON.stringify(Object.values(provider).map(shape)) ===
+			JSON.stringify(Object.values(nativeAddress).map(shape)),
+	JSON.stringify({ provider, nativeAddress }),
+);
+ok(
+	"with STomp's provider the browser's authenticator is never asked: it holds nothing, STomp holds nothing, and no sheet showed",
+	providerPlanted === 0 &&
+		nativeAddressPlanted === 1 &&
+		providerHeld.length === 0 &&
+		providerPrompt === null,
+	JSON.stringify({ providerPlanted, providerHeld, prompt: !!providerPrompt }),
 );
 
 await done(browser, errors);

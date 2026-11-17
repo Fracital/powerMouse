@@ -24,7 +24,7 @@ import {
 	WORKER_BASE,
 } from './transport/messages';
 import { dataBody } from './urlShape';
-import { DEFERRED_FACTORY, LIGHT_FACTORY } from './version';
+import { DEFERRED_FACTORY, LIGHT_FACTORY, PASSKEYS_FACTORY } from './version';
 
 /**
  * The route of a document. `form`: a GET form's action, whose query the
@@ -539,8 +539,8 @@ function libraryScripts(
 	loading = attribute,
 ) {
 	// the file assigns the light library's factory, and the document bundle's
-	// deferred parts' function, to these names (build.js)
-	const name = [LIGHT_FACTORY, DEFERRED_FACTORY]
+	// deferred statements' functions, to these names (build.js)
+	const name = [LIGHT_FACTORY, DEFERRED_FACTORY, PASSKEYS_FACTORY]
 		.map(
 			(factory) =>
 				`Reflect.defineProperty(globalThis, ${JSON.stringify(factory)}, { writable: true, configurable: true });`,

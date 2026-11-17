@@ -14,7 +14,10 @@
 // not be fetched. The same-origin mode on an address (127.0.0.1) asks
 // nothing either way (an address is no relying party), and the isolated
 // mode's frame has no policy for create and get; its signal statics are
-// the same hook as here.
+// the same hook as here. That is the demo without STomp's passkey provider
+// (`?passkeys=off`); with it (docs/passkeys.md) the service worker answers
+// for the proxied page's own origin, here an address, and must end every
+// request as Chrome ends it for a page on an address, asking nobody.
 import { createServer } from 'node:net';
 import {
 	done,
@@ -143,34 +146,42 @@ async function runAll(frame) {
 	return out;
 }
 
-// --- natively: a page on a domain (wk.localhost), which asks the counter ---
+// --- natively: a page on a domain (wk.localhost), which asks the counter,
+// and the same page on an address (127.0.0.1), as the proxied page's origin is ---
 const nativeBrowser = await launch(args);
 const nativePage = await nativeBrowser.newPage();
 await nativePage.goto(`http://wk.localhost:${fixture.port}/pages/fedcm.html`);
 const native = await runAll(nativePage.mainFrame());
+await nativePage.goto(`${FIXTURE}pages/fedcm.html`);
+const nativeAddress = await runAll(nativePage.mainFrame());
 await nativeBrowser.close();
 
 // --- through the demo on a domain: the same-origin controller ---
 const browser = await launch(args);
 const errors = [];
-const page = await openDemo(browser, DEMO);
-await submitLanding(page, `${FIXTURE}pages/fedcm.html`);
-let frame = null;
-for (let i = 0; i < 160 && !frame; i++) {
-	await sleep(250);
-	const found = page
-		.frames()
-		.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
-	if (
-		await found
-			?.evaluate(() => window.__fedcm?.ready === true)
-			.catch(() => false)
-	)
-		frame = found;
+/** the cases in a proxied page of the demo opened with `query` */
+async function throughDemo(query) {
+	const page = await openDemo(browser, `${DEMO}${query}`);
+	await submitLanding(page, `${FIXTURE}pages/fedcm.html`);
+	let frame = null;
+	for (let i = 0; i < 160 && !frame; i++) {
+		await sleep(250);
+		const found = page
+			.frames()
+			.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
+		if (
+			await found
+				?.evaluate(() => window.__fedcm?.ready === true)
+				.catch(() => false)
+		)
+			frame = found;
+	}
+	ok(`the demo on a domain${query} opens the page`, !!frame);
+	const out = frame ? await runAll(frame) : {};
+	errors.push(...page.errors.map((error) => `demo: ${error}`));
+	await page.close();
+	return out;
 }
-ok('the demo on a domain opens the page', !!frame);
-const proxied = frame ? await runAll(frame) : {};
-errors.push(...page.errors.map((error) => `demo: ${error}`));
 
 const nativeAsked = Object.values(native).reduce((n, r) => n + r.asked, 0);
 ok(
@@ -179,17 +190,29 @@ ok(
 		native['signalUnknownCredential other'].asked > 0,
 	JSON.stringify({ nativeAsked }),
 );
-for (const [key, value] of Object.entries(native)) {
-	const mine = proxied[key];
-	ok(
-		`${key}: through the proxy the browser asks nobody, and the request ends as natively`,
-		mine?.asked === 0 &&
-			mine.rejected === value.rejected &&
-			mine.resolved === value.resolved &&
-			mine.reads === value.reads,
-		JSON.stringify({ native: value, proxied: mine }),
-	);
-}
+const compare = (label, oracle, proxied) => {
+	for (const [key, value] of Object.entries(oracle)) {
+		const mine = proxied[key];
+		ok(
+			`${label}${key}: through the proxy the browser asks nobody, and the request ends as natively`,
+			mine?.asked === 0 &&
+				mine.rejected === value.rejected &&
+				mine.resolved === value.resolved &&
+				mine.reads === value.reads,
+			JSON.stringify({ native: value, proxied: mine }),
+		);
+	}
+};
+// without STomp's passkey provider a proxied request reaches the browser's
+// own WebAuthn behind the refusal, and ends as a page's on a domain does
+compare('', native, await throughDemo('?passkeys=off'));
+// with it STomp answers for the page's own origin (an address here, which
+// is no relying party), and the browser is asked nothing either
+compare(
+	'with the provider, ',
+	nativeAddress,
+	await throughDemo('?passkeys=test'),
+);
 
 counter.close();
 await done(browser, errors);

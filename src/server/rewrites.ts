@@ -4375,6 +4375,8 @@ export function registerRewrites(
 				...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 				// every document's inject builds the window membrane from this
 				...(init.membrane === false ? { membrane: false } : {}),
+				// the host holds passkeys: a page's WebAuthn requests go to it
+				...(init.passkeys ? { passkeys: init.passkeys } : {}),
 				// pages get emulated service workers (docs/service-workers.md)
 				...(init.serviceWorkers === false ? { serviceWorkers: false } : {}),
 				// the rewriter is the wasm core module (the only one)

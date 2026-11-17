@@ -7,6 +7,7 @@ import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import { assetName } from '../config';
 import { helperNames } from '../helperNames';
 import type { HookErrorInfo } from '../hooks';
+import type { PasskeyAnswer, PasskeyPrompt } from '../passkeys/types';
 import { constructTransport, resolveHttp3 } from '../transport/construct';
 import type { RequestInfo } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
@@ -216,6 +217,25 @@ if (window === window.parent || !origins.length) {
 										}),
 								}
 							: {}),
+						// the host asks the user: every prompt goes on to it, with
+						// the port that says the page gave up
+						...(init.passkeys
+							? {
+									passkeyRelay: {
+										config: {
+											uv: init.passkeys.uv === true,
+											testing: init.passkeys.testing === true,
+										},
+										prompt: async (
+											request: PasskeyPrompt,
+											port: MessagePort,
+										): Promise<PasskeyAnswer | null> =>
+											(await rpc.call('passkeyPrompt', { request, port }, [
+												port,
+											])) as PasskeyAnswer | null,
+									},
+								}
+							: {}),
 						// the host's request log travels SW -> here -> host
 						...(init.requestLog
 							? {
@@ -303,6 +323,10 @@ if (window === window.parent || !origins.length) {
 					if (!controller) throw new Error('Controller is not initialised');
 					await controller.forgetStorage(origin);
 				},
+				passkeys: async (command) => {
+					if (!controller) throw new Error('Controller is not initialised');
+					return [await controller.passkeyCommand(command), []];
+				},
 				goneClients: async (clients) => {
 					if (!controller) throw new Error('Controller is not initialised');
 					return [await controller.goneClients(clients), []];
@@ -327,7 +351,7 @@ if (window === window.parent || !origins.length) {
 				},
 			},
 			REMOTE_RPC,
-			(data) => window.parent.postMessage(data, hostOrigin),
+			(data, transfer) => window.parent.postMessage(data, hostOrigin, transfer),
 		);
 
 		window.addEventListener('message', (event) => {

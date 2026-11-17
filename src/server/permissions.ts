@@ -38,6 +38,12 @@ export const SIMULATED_PERMISSIONS = [
 	'local-network-access',
 ];
 
+/** the policy-controlled features of a WebAuthn request: creating a credential, asking for an assertion */
+export const PASSKEY_FEATURES = [
+	'publickey-credentials-create',
+	'publickey-credentials-get',
+];
+
 let store: Promise<IDBPDatabase | null> | null = null;
 const states = new Map<string, PermissionState>();
 let loaded: Promise<void> | null = null;
@@ -102,7 +108,18 @@ export async function documentStates(
 	return {
 		site,
 		states: out,
-		features: doc ? Object.fromEntries(doc.features) : null,
+		features: doc
+			? {
+					...Object.fromEntries(doc.features),
+					// what WebAuthn asks of the policy (the Credentials inject module)
+					...Object.fromEntries(
+						PASSKEY_FEATURES.map((feature) => [
+							feature,
+							doc.allFeatures.get(feature) !== false,
+						]),
+					),
+				}
+			: null,
 	};
 }
 

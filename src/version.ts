@@ -56,3 +56,12 @@ export const LIGHT_FACTORY = '__stompRewriterLight';
  * (build.js). Taken and deleted as LIGHT_FACTORY is (src/inject/rewriter.ts).
  */
 export const DEFERRED_FACTORY = '__stompDeferred';
+
+/**
+ * The name the WebAuthn client of STomp's passkey provider assigns its
+ * function to (src/inject/dom/passkeysPart.ts): a statement of its own after
+ * the deferred parts', `__stompPasskeys=function(__stompShared){...};`
+ * (build.js), so a frame that evaluates the deferred parts compiles none of
+ * it. Taken and deleted as LIGHT_FACTORY is (src/inject/rewriter.ts).
+ */
+export const PASSKEYS_FACTORY = '__stompPasskeys';

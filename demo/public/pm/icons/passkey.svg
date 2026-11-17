@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+	<!-- "Sign in with a passkey": a person and a Tango Butter key, the chrome
+	     button a site's background passkey request (conditional mediation)
+	     shows; told apart from the Discord token's lone key -->
+	<defs>
+		<linearGradient id="key" x1="0" y1="0" x2="0" y2="1">
+			<stop offset="0" stop-color="#fce94f" />
+			<stop offset="1" stop-color="#edd400" />
+		</linearGradient>
+		<linearGradient id="person" x1="0" y1="0" x2="0" y2="1">
+			<stop offset="0" stop-color="#888a85" />
+			<stop offset="1" stop-color="#555753" />
+		</linearGradient>
+	</defs>
+	<!-- the person: a head and shoulders, Tango Aluminium -->
+	<g fill="url(#person)" stroke="#2e3436" stroke-width="1" stroke-linejoin="round">
+		<circle cx="8.5" cy="7" r="3.7" />
+		<path d="M1.5 20.5 C1.5 15.2 4.6 12.7 8.5 12.7 C10.6 12.7 12.3 13.4 13.4 14.6 V20.5 Z" />
+	</g>
+	<!-- the key: a bow over a shaft with one tooth -->
+	<g fill="url(#key)" stroke="#c4a000" stroke-width="1" stroke-linejoin="round">
+		<path d="M18.2 13.4 H20.3 V21 L19 22.3 L17.7 21 V20 H18.7 V18.9 H17.7 V17.6 H18.2 Z" />
+		<path
+			fill-rule="evenodd"
+			d="M15.6 11.2 A3.65 3.65 0 1 1 22.9 11.2 A3.65 3.65 0 1 1 15.6 11.2 Z M18.25 9.8 A1 1 0 1 0 20.25 9.8 A1 1 0 1 0 18.25 9.8 Z"
+		/>
+	</g>
+</svg>

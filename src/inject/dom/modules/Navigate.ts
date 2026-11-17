@@ -118,8 +118,16 @@ export default class NavigateModule extends Module<DocumentClient> {
 		const start = sticky();
 		let input = false;
 		const activated = () => (start ? input : sticky());
+		// a transient activation of its own (WebAuthn's in a frame of another
+		// origin): one the host's input or another site's frame gave every
+		// proxied document of the one origin is not this document's
+		const transient = () =>
+			input &&
+			!!isActive &&
+			!!userActivation &&
+			Reflect.apply(isActive, userActivation, []) === true;
 		const token = `${Date.now().toString(36)}.${Math.random().toString(36).slice(2)}`;
-		moduleClient.historyActivation = { start, activated, token };
+		moduleClient.historyActivation = { start, activated, transient, token };
 		const onInput = (event: Event) => {
 			if (
 				event.type === 'click'

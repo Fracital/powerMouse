@@ -395,11 +395,19 @@ export async function recordRequests(context, { scope = '/stomp/' } = {}) {
 }
 
 /** a page on the demo's landing screen with the controller ready */
-export async function openDemo(browser, base = HOST, viewport = {}) {
+export async function openDemo(
+	browser,
+	base = HOST,
+	viewport = {},
+	// what to do with the new page before the demo loads in it (a virtual
+	// authenticator the host's page has when it starts)
+	before = null,
+) {
 	await waitForServer(base);
 	const page = await browser.newPage({
 		viewport: { width: 1280, height: 800, ...viewport },
 	});
+	if (before) await before(page);
 	const errors = [];
 	const stacks = [];
 	page.on('pageerror', (error) => {

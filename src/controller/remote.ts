@@ -16,6 +16,12 @@ import { assetName } from '../config';
 import type { Assets, Config, ConfigCodec } from '../config';
 import { validateNames, type HelperNames } from '../helperNames';
 import { validateHooks, type HookErrorInfo, type InitHooks } from '../hooks';
+import { askHost } from '../passkeys/host';
+import type {
+	PasskeyManager,
+	PasskeyRequest,
+	PasskeysInit,
+} from '../passkeys/types';
 import type {
 	NavigateInfo,
 	RequestInfo,
@@ -37,6 +43,7 @@ import {
 	navigateReport,
 	NAVIGATION_WAIT_MS,
 	openRequest,
+	passkeyManager,
 	REPORT_GRACE_MS,
 } from './index';
 import {
@@ -142,7 +149,22 @@ export interface RemoteControllerInit {
 	onPermissionRequest?: (
 		request: RemotePermissionRequest,
 	) => boolean | null | Promise<boolean | null>;
+	/**
+	 * Passkeys for proxied sites (docs/passkeys.md), off unless given: STomp
+	 * is the passkey provider (see StompController's ControllerInit.passkeys).
+	 * The service worker holds the keys; `onRequest`, in this page, asks the
+	 * user about every passkey made and every sign-in.
+	 */
+	passkeys?: RemotePasskeysInit;
 }
+
+/** a proxied site's passkey ceremony the host is asked about (RemoteControllerInit.passkeys) */
+export interface RemotePasskeyRequest extends PasskeyRequest {
+	/** the frame the request came from, when its page reported its client id */
+	frame: RemoteFrame | null;
+}
+/** the passkeys option (see RemoteControllerInit.passkeys) */
+export type RemotePasskeysInit = PasskeysInit<RemotePasskeyRequest>;
 
 /** a site's permission request (see StompController's PermissionRequest) */
 export interface RemotePermissionRequest {
@@ -302,6 +324,20 @@ export class RemoteController extends EventTarget {
 						return [null, []];
 					}
 				},
+				passkeyPrompt: async ({ request, port }) => {
+					const passkeys = init.passkeys;
+					// nobody here to ask: the request ends as one the user declined
+					if (!passkeys) {
+						port.close();
+						return [null, []];
+					}
+					return [
+						await askHost(passkeys, request, port, {
+							frame: this.#clients.frame(request.client),
+						}),
+						[],
+					];
+				},
 				stale: async (info) => {
 					const was = this.stale;
 					this.stale = info;
@@ -406,6 +442,14 @@ export class RemoteController extends EventTarget {
 					...(init.cache === false ? { cache: false } : {}),
 					requestLog: !!init.onRequest,
 					...(init.onPermissionRequest ? { permissionPrompt: true } : {}),
+					...(init.passkeys
+						? {
+								passkeys: {
+									uv: init.passkeys.userVerification === true,
+									testing: init.passkeys.testing === true,
+								},
+							}
+						: {}),
 					...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 					...(init.membrane === false ? { membrane: false } : {}),
 					...(init.serviceWorkers === false ? { serviceWorkers: false } : {}),
@@ -531,6 +575,11 @@ export class RemoteController extends EventTarget {
 		await this.#ready;
 		await this.#rpc.call('clearCache', undefined);
 	}
+	/** the passkeys the service worker holds for proxied sites (see StompController.passkeys) */
+	readonly passkeys: PasskeyManager = passkeyManager(async (command) => {
+		await this.#ready;
+		return this.#rpc.call('passkeys', command);
+	});
 	/** the cookie jar, for the host application only (see StompController.cookies) */
 	readonly cookies: CookieJar = cookieJar(async (command) => {
 		await this.#ready;

@@ -32,6 +32,17 @@ import {
 	type HookErrorInfo,
 	type InitHooks,
 } from '../hooks';
+import { askHost } from '../passkeys/host';
+import type {
+	PasskeyAnswer,
+	PasskeyCommand,
+	PasskeyInfo,
+	PasskeyManager,
+	PasskeyPrompt,
+	PasskeyRequest as PasskeyRequestBase,
+	PasskeysConfig,
+	PasskeysInit as PasskeysInitOf,
+} from '../passkeys/types';
 import { libraryFile } from '../routeURL';
 import { isUrlLike, urlLike } from '../StompURL';
 import { constructTransport, resolveHttp3 } from '../transport/construct';
@@ -109,7 +120,16 @@ export type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 export type { Config, ConfigCodec } from '../config';
 
 export { RemoteController, RemoteFrame, DEFAULT_SANDBOX } from './remote';
-export type { RemoteControllerInit } from './remote';
+export type {
+	RemoteControllerInit,
+	RemotePasskeyRequest,
+	RemotePasskeysInit,
+} from './remote';
+export type {
+	PasskeyAnswer,
+	PasskeyInfo,
+	PasskeyManager,
+} from '../passkeys/types';
 export type { TransportDescriptor, FrameInfo } from './messages';
 export type {
 	AdblockApplied,
@@ -213,6 +233,27 @@ export interface ControllerInit {
 	onPermissionRequest?: (
 		request: PermissionRequest,
 	) => boolean | null | Promise<boolean | null>;
+	/**
+	 * Passkeys for proxied sites (docs/passkeys.md), off unless given.
+	 * WebAuthn cannot work through a proxy (the browser checks and signs the
+	 * proxy's origin), so with this STomp is the passkey provider, as a
+	 * password manager is: the service worker keeps a key pair per passkey
+	 * (not extractable) in a store no proxied page reaches, bound to the
+	 * site's real relying party id, and `onRequest` asks the user about every
+	 * one made and every sign-in. Their safety is the inject's containment,
+	 * as that of every site's cookies and storage on the proxy origin is.
+	 * Without it a proxied page's WebAuthn requests end as they do in a
+	 * browser that holds no passkey for the site.
+	 */
+	passkeys?: PasskeysInit;
+	/** @internal the controller frame hands every prompt to its host, which asks the user */
+	passkeyRelay?: {
+		config: PasskeysConfig;
+		prompt: (
+			request: PasskeyPrompt,
+			port: MessagePort,
+		) => Promise<PasskeyAnswer | null>;
+	};
 	/**
 	 * HTTP cache in the service worker, on by default: GET/HEAD responses
 	 * with explicit freshness (max-age, Expires) are kept in a Cache API
@@ -405,6 +446,14 @@ export interface PermissionRequest {
 	client?: string;
 }
 
+/** a proxied site's passkey ceremony the host is asked about (ControllerInit.passkeys) */
+export interface PasskeyRequest extends PasskeyRequestBase {
+	/** the frame the request came from, when its page reported its client id */
+	frame: Frame | null;
+}
+/** the passkeys option (see ControllerInit.passkeys) */
+export type PasskeysInit = PasskeysInitOf<PasskeyRequest>;
+
 /** the host's view of the cookie jar (see StompController.cookies) */
 export interface CookieJar {
 	/** the Cookie header value the proxy would send to `url` */
@@ -418,6 +467,24 @@ export interface CookieJar {
 }
 
 /** @internal a CookieJar over a command function */
+/** the host's view of the service worker's passkeys, over `run` (see StompController.passkeys) */
+export function passkeyManager(
+	run: (command: PasskeyCommand) => Promise<PasskeyInfo[] | boolean | null>,
+): PasskeyManager {
+	return {
+		list: async (rpId) => {
+			const list = await run(
+				rpId === undefined ? { op: 'list' } : { op: 'list', rpId },
+			);
+			return Array.isArray(list) ? list : [];
+		},
+		delete: async (id) => (await run({ op: 'delete', id })) === true,
+		clear: async (rpId) => {
+			await run(rpId === undefined ? { op: 'clear' } : { op: 'clear', rpId });
+		},
+	};
+}
+
 export function cookieJar(
 	run: (command: CookieCommand) => Promise<CookieResult>,
 ): CookieJar {
@@ -917,6 +984,16 @@ export class StompController extends EventTarget {
 			errorPage = `${page.pathname}${page.search}`;
 		}
 
+		// passkeys: the frame's host asks the user (the relay), or this page does
+		const passkeys: PasskeysConfig | undefined =
+			init.passkeyRelay?.config ??
+			(init.passkeys
+				? {
+						uv: init.passkeys.userVerification === true,
+						testing: init.passkeys.testing === true,
+					}
+				: undefined);
+
 		this.config = {
 			codec: init.codec ?? 'xor',
 			// the address: the scope plus the id, so controllers of one scope
@@ -933,6 +1010,7 @@ export class StompController extends EventTarget {
 			...(init.onRequest || init.requestLog ? { requestLog: true } : {}),
 			...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 			...(init.membrane === false ? { membrane: false } : {}),
+			...(passkeys ? { passkeys } : {}),
 			...(init.serviceWorkers === false ? { serviceWorkers: false } : {}),
 			// the rewriter is wasm-only (the core module); every thread uses it
 			rewriter: 'wasm',
@@ -1717,6 +1795,22 @@ export class StompController extends EventTarget {
 						return [null, []];
 					}
 				},
+				passkeyPrompt: async ({ request, port }) => {
+					const relay = this.#init.passkeyRelay;
+					if (relay) return [await relay.prompt(request, port), []];
+					const init = this.#init.passkeys;
+					// nobody here to ask: the request ends as one the user declined
+					if (!init) {
+						port.close();
+						return [null, []];
+					}
+					return [
+						await askHost(init, request, port, {
+							frame: this.#clients.frame(request.client),
+						}),
+						[],
+					];
+				},
 				ready: async (info) => {
 					if (!current()) return;
 					// a worker of a build that says no hello
@@ -2202,6 +2296,13 @@ export class StompController extends EventTarget {
 		await this.#ready;
 		await this.#call('clearCache', undefined);
 	}
+	/** @internal the service worker's passkey store (the controller frame asks for its host) */
+	async passkeyCommand(
+		command: PasskeyCommand,
+	): Promise<PasskeyInfo[] | boolean | null> {
+		await this.#ready;
+		return this.#call('passkeys', command);
+	}
 	/** @internal */
 	async cookieCommand(command: CookieCommand): Promise<CookieResult> {
 		await this.#ready;
@@ -2226,9 +2327,19 @@ export class StompController extends EventTarget {
 		return result;
 	});
 	/**
+	 * The passkeys the service worker holds for proxied sites
+	 * (docs/passkeys.md), for the host application only: list them, forget
+	 * one, or forget every one (of a relying party). `forgetStorage(origin)`
+	 * forgets a site's too; `cookies.clear()` leaves them.
+	 */
+	readonly passkeys: PasskeyManager = passkeyManager((command) =>
+		this.passkeyCommand(command),
+	);
+	/**
 	 * Clear a site's virtualized storage (localStorage, sessionStorage,
-	 * IndexedDB, Cache Storage) on the proxy origin: the "Forget me when I close
-	 * this site" shield, called by the host once the site's last tab closes. The
+	 * IndexedDB, Cache Storage) on the proxy origin, and the passkeys its host
+	 * could have made (docs/passkeys.md): the "Forget me when I close this
+	 * site" shield, called by the host once the site's last tab closes. The
 	 * cookie jar is wiped through `cookies.clear(origin)`.
 	 */
 	async forgetStorage(origin: string): Promise<void> {

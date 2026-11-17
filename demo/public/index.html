@@ -181,6 +181,18 @@
 							aria-label="Login with Token"
 							hidden
 						></button>
+						<!-- A passkey sign-in the page waits for in the background
+						     (conditional mediation, docs/passkeys.md): the chooser.
+						     Hidden unless the tab's site waits and a passkey is
+						     saved for it. -->
+						<button
+							id="toolPasskey"
+							class="tokenbtn"
+							type="button"
+							title="Sign in with a passkey"
+							aria-label="Sign in with a passkey"
+							hidden
+						></button>
 						<span id="chromeStatus" class="select">…</span>
 						<!-- STomp's content blocker for this site (docs/adblock.md):
 						     the powerMouse mark, saturated when shields are up and

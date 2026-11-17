@@ -88,6 +88,12 @@ interface DeviceIds {
  * site, the host asks the user (StompController onPermissionRequest).
  */
 export default class PermissionsModule extends Module<DocumentClient> {
+	/**
+	 * Whether this document's permissions policy lets it use `feature`, as
+	 * the worker recorded the policy (the browser's own is the proxy
+	 * origin's), once the worker has answered
+	 */
+	declare documentPolicy?: (feature: string) => Promise<boolean>;
 	apply() {
 		const client = this.client;
 		const global = client.global;
@@ -229,6 +235,12 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			if (features && feature in features) return features[feature];
 			return sameOriginAsParent();
 		};
+		this.documentPolicy = (feature) =>
+			states.then(() =>
+				features && feature in features
+					? features[feature]
+					: sameOriginAsParent(),
+			);
 		const simulatedName = (name: string) =>
 			name === 'push' ? 'notifications' : name;
 		const siteState = (name: string): PermissionState =>

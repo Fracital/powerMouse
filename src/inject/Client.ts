@@ -20,6 +20,7 @@ import type {
 	HookPhase,
 	ResolvedHooks,
 } from '../hooks';
+import type { PasskeysConfig } from '../passkeys/types';
 import { routeHTML } from '../rewriteHTML';
 import {
 	addRouteScope,
@@ -168,6 +169,8 @@ export default class Client {
 	allowInvalidJs: boolean;
 	/** the window membrane is on (config.membrane, on unless false) */
 	membrane: boolean;
+	/** the host has STomp's passkey provider for proxied sites (config.passkeys, docs/passkeys.md) */
+	passkeys?: PasskeysConfig;
 	/** pages get emulated service workers (config.serviceWorkers, on unless false) */
 	serviceWorkers: boolean;
 	/** the wasm rewriters answer where this realm holds them (config.rewriter) */
@@ -685,6 +688,7 @@ export default class Client {
 		this.build = init.build;
 		this.allowInvalidJs = init.allowInvalidJs !== false;
 		this.membrane = init.membrane !== false;
+		this.passkeys = init.passkeys;
 		this.serviceWorkers = init.serviceWorkers !== false;
 		this.wasmRewriter = init.rewriter === 'wasm';
 		this.codecModule = init.codecModule !== false;
@@ -741,6 +745,7 @@ export default class Client {
 			...(this.build ? { build: this.build } : {}),
 			...(this.allowInvalidJs ? {} : { allowInvalidJs: false }),
 			...(this.membrane ? {} : { membrane: false }),
+			...(this.passkeys ? { passkeys: this.passkeys } : {}),
 			...(this.serviceWorkers ? {} : { serviceWorkers: false }),
 			...(this.wasmRewriter ? { rewriter: 'wasm' } : {}),
 			...(this.codecModule ? {} : { codecModule: false }),

@@ -370,6 +370,8 @@ export default class DocumentClient extends Client {
 	historyActivation: {
 		start: boolean;
 		activated: () => boolean;
+		/** a transient activation from this document's own input */
+		transient: () => boolean;
 		token: string;
 	} | null = null;
 	/** the window's native frameElement getter (the Framing module hooks it) */
@@ -451,9 +453,9 @@ export default class DocumentClient extends Client {
 					const top = this.#topClient();
 					return top === this ? null : top.rewriterLightText(BUILD);
 				},
-				deferredText: () => {
+				deferredText: (name) => {
 					const top = this.#topClient();
-					return top === this ? null : top.deferredPartsText(BUILD);
+					return top === this ? null : top.deferredPartsText(BUILD, name);
 				},
 				factory: (text, name) => {
 					// only where the document refuses eval: a document without
@@ -511,12 +513,12 @@ export default class DocumentClient extends Client {
 		return build === BUILD ? lightText() : null;
 	}
 	/**
-	 * The bundle's deferred parts' statement (src/inject/dom/deferred.ts) as
-	 * this top holds it, for a document under it that evaluates them; null
+	 * One of the bundle's deferred statements (src/inject/dom/deferred.ts),
+	 * by its name, as this top holds it, for a document under it that evaluates them; null
 	 * without it, or for a bundle of another `build`. @internal
 	 */
-	deferredPartsText(build: string): string | null {
-		return build === BUILD ? deferredText() : null;
+	deferredPartsText(build: string, name?: string): string | null {
+		return build === BUILD ? deferredText(name) : null;
 	}
 	/** a top's library (null: it could not make one), undefined for a frame under a top */
 	#rewriter: RewriterLib | null | undefined;

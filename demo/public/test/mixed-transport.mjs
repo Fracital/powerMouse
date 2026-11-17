@@ -24,6 +24,14 @@
 //   (https://discord.com:<port>/...), go in plain http to the fixture on
 //   127.0.0.1:<port>. No real credentials are used; it exercises the
 //   write-and-navigate path with a dummy token.
+// - the passkeys suite's relying party (test/passkeys-rp.mjs): pk<port>-a
+//   and pk<port>-b under co.uk and github.io, and any name under them, sites
+//   on https's default port (a relying party id names none), go in plain
+//   http to that server on 127.0.0.1:<port>, with the name asked for in a
+//   `pk-host` query parameter (epoxy's Host header is the address's). The
+//   bare suffixes, trailing-dot names and addresses that the passkeys
+//   suites ask about as relying party ids are refused here, so no test asks
+//   the network (or a port of this machine) for them.
 //
 // It also gives epoxy the certificate authorities of the WebRTC suites' TURN
 // server over TLS (test/turn.mjs, the certificate in turn-ca.pem here) and
@@ -37,6 +45,17 @@ const PRIVATE_SITE_HOST =
 const DISCORD_HOST = /^(?:[\w-]+\.)*discord\.com$/;
 const PLAIN = { 'https:': 'http:', 'wss:': 'ws:' };
 const PORT_HOST = /^(?:www\.)?v(\d+)\.test$/;
+const PASSKEY_HOST = /^(?:[\w-]+\.)*pk(\d+)-[ab]\.(?:co\.uk|github\.io)$/;
+// names the passkeys suites ask about that no server answers for (a public
+// suffix as a relying party id, a name with a trailing dot): never the
+// network's to answer in a test
+const NOWHERE = /^(?:uk|co\.uk|com|io|github\.io)$|\.$/;
+// and an address as a relying party id, whose /.well-known/webauthn would
+// be https on the default port of that address
+const ADDRESS = /^(?:\d+\.){3}\d+$|^\[/;
+const nowhere = (url) =>
+	NOWHERE.test(url.hostname) ||
+	(url.protocol === 'https:' && url.port === '' && ADDRESS.test(url.hostname));
 
 function fixtureURL(url) {
 	const target = new URL(url);
@@ -45,6 +64,17 @@ function fixtureURL(url) {
 	if (port && target.port === '') {
 		target.hostname = '127.0.0.1';
 		target.port = port;
+		return target;
+	}
+	const passkeyPort = PASSKEY_HOST.exec(hostname)?.[1];
+	if (passkeyPort && target.port === '') {
+		target.protocol = PLAIN[target.protocol] ?? target.protocol;
+		// that server answers by name (a related origins file is one
+		// site's) and epoxy sends the Host of the address it connects to:
+		// the name rides in the query
+		target.search += `${target.search ? '&' : '?'}pk-host=${hostname}`;
+		target.hostname = '127.0.0.1';
+		target.port = passkeyPort;
 		return target;
 	}
 	if (
@@ -72,6 +102,8 @@ export default class MixedTestTransport extends EpoxyTransport {
 		return super.init();
 	}
 	request(remote, ...rest) {
+		if (nowhere(new URL(remote)))
+			return Promise.reject(new Error('no such host in a test'));
 		return super.request(fixtureURL(remote), ...rest);
 	}
 	connect(url, ...rest) {

@@ -2,6 +2,7 @@ import type { FpSurface } from './blocker/types';
 import GenericCodec, { AESCodec, Base64Codec, XORCodec } from './Codecs';
 import type { HelperNames } from './helperNames';
 import type { ResolvedHooks } from './hooks';
+import type { PasskeysConfig } from './passkeys/types';
 
 export declare type ConfigCodec = 'generic' | 'xor' | 'aes' | 'base64';
 
@@ -79,6 +80,14 @@ export interface Config {
 	 * context has one).
 	 */
 	serviceWorkers?: boolean;
+	/**
+	 * Passkeys for proxied sites (docs/passkeys.md), set when the host gave
+	 * the controller a `passkeys` option: a page's WebAuthn requests go to
+	 * STomp's own authenticator in the service worker, and the host asks the
+	 * user. Absent, a page's requests end as they do in a browser that holds
+	 * no passkey for it.
+	 */
+	passkeys?: PasskeysConfig;
 	/**
 	 * The rewriter is the Rust wasm core module in `assets/`
 	 * (docs/rust-plan.md): the service worker, the rewrite workers and the

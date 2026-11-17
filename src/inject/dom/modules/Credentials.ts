@@ -5,7 +5,14 @@ import ProxyModule, { requiredArgumentsMessage } from '../../modules/Proxy';
 import { scopePrefix } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
 import type DocumentClient from '../Client';
+import { passkeysPart } from '../deferred';
 import { loadFetch } from '../loadGrants';
+import {
+	REALM,
+	type PasskeysContext,
+	type PasskeysInstalled,
+} from '../passkeysLazy';
+import { trustworthy } from './ServiceWorker';
 
 const GET_PREFIX = "Failed to execute 'get' on 'CredentialsContainer': ";
 const IDENTITY_READ_PREFIX = `${GET_PREFIX}Failed to read the 'identity' property from 'CredentialRequestOptions': `;
@@ -56,6 +63,13 @@ interface IdpAccount {
  *
  * IdentityCredentialError is left as the browser's own: it is constructible,
  * reads no network and so cannot leak, and reads natively already.
+ *
+ * WebAuthn (docs/passkeys.md): when the host has a passkey provider (the
+ * controller's `passkeys` option) a `publicKey` request never reaches the
+ * browser, and STomp's own client (../passkeys.ts, a deferred statement
+ * evaluated at the first call) reads it as Chrome does, for the service
+ * worker's authenticator. Without one, the browser's own authenticator
+ * still never acts for a proxied page (below).
  */
 export default class CredentialsModule extends Module<DocumentClient> {
 	apply() {
@@ -827,24 +841,88 @@ export default class CredentialsModule extends Module<DocumentClient> {
 				},
 			]) as unknown;
 		};
+		// --- WebAuthn: STomp's own passkey provider, when the host has one ---
+
+		// The hooks are in place before any page script, and the client is
+		// evaluated at a document's first call (a deferred statement): a call never
+		// reaches the browser's own WebAuthn in between. Where the site's
+		// origin has no WebAuthn (not a secure context) neither has STomp.
+		const NativePublicKeyCredential = global.PublicKeyCredential as
+			Function | undefined;
+		const nativeCreate = container.create;
+		const nativeGet = container.get;
+		let provider: (() => PasskeysInstalled | null) | null = null;
+		if (
+			client.passkeys &&
+			NativePublicKeyCredential &&
+			typeof nativeCreate === 'function' &&
+			trustworthy(client.url.url)
+		) {
+			const context: PasskeysContext = {
+				client,
+				proxyModule,
+				container: global.navigator.credentials as object,
+				// the browser's own, for what is not a passkey's (a request
+				// without `publicKey` reaches no authenticator), behind the guard
+				guard: withoutRelatedOrigins,
+				natives: [nativeCreate, nativeGet],
+				PublicKeyCredential: NativePublicKeyCredential,
+				realm: {
+					Promise: PagePromise,
+					TypeError: PageTypeError,
+					DOMException: PageDOMException,
+					Object: PageObject,
+				} as PasskeysContext['realm'],
+				signal: [
+					abortedGet!,
+					reasonGet!,
+					global.EventTarget.prototype.addEventListener,
+				],
+				identity: runIdentity,
+			};
+			for (const name of REALM)
+				(context.realm as Record<string, unknown>)[name] = global[name];
+			let made: PasskeysInstalled | null | false = null;
+			provider = () => {
+				if (made === null)
+					try {
+						made = passkeysPart().passkeys(context);
+					} catch (error) {
+						// said once; every request then ends as one the user declined
+						made = false;
+						console.error(error);
+					}
+				return made || null;
+			};
+		}
+		const declined = () => reject(domException(DECLINED, 'NotAllowedError'));
+
 		if (typeof container.create === 'function')
 			container.create = proxyModule.wrapFunction(
 				container.create,
 				(target, that, args) =>
-					withoutRelatedOrigins(
-						(called) => Reflect.apply(target, that, called),
-						args,
-						['publicKey', 'rp', 'id'],
-						'create',
-					),
+					provider
+						? (provider()?.create(that, args) ?? declined())
+						: withoutRelatedOrigins(
+								(called) => Reflect.apply(target, that, called),
+								args,
+								['publicKey', 'rp', 'id'],
+								'create',
+							),
 			);
-		const NativePublicKeyCredential = global.PublicKeyCredential as
-			object | undefined;
 		if (NativePublicKeyCredential)
 			for (const name of [
 				'signalUnknownCredential',
 				'signalAllAcceptedCredentials',
 				'signalCurrentUserDetails',
+				// the authenticator a page asks about is STomp's
+				...(provider
+					? [
+							'isUserVerifyingPlatformAuthenticatorAvailable',
+							'isConditionalMediationAvailable',
+							'getClientCapabilities',
+						]
+					: []),
 			]) {
 				const descriptor = Reflect.getOwnPropertyDescriptor(
 					NativePublicKeyCredential,
@@ -856,12 +934,14 @@ export default class CredentialsModule extends Module<DocumentClient> {
 					value: proxyModule.wrapFunction(
 						descriptor.value as Function,
 						(target, that, args) =>
-							withoutRelatedOrigins(
-								(called) => Reflect.apply(target, that, called),
-								args,
-								['rpId'],
-								'signal',
-							),
+							provider
+								? (provider()?.statics(name, target, args) ?? declined())
+								: withoutRelatedOrigins(
+										(called) => Reflect.apply(target, that, called),
+										args,
+										['rpId'],
+										'signal',
+									),
 					),
 				});
 			}
@@ -878,6 +958,7 @@ export default class CredentialsModule extends Module<DocumentClient> {
 		container.get = proxyModule.wrapFunction(
 			container.get,
 			(target, that, args) => {
+				if (provider) return provider()?.get(that, args) ?? declined();
 				const options = args[0];
 				if (
 					options === null ||

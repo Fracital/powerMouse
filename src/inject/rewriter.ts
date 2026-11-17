@@ -40,7 +40,7 @@ import { provideRewriters } from '../rewriters';
 import { blobOriginPair, routeScopeList } from '../routeURL';
 import type { ScriptType } from '../scriptRoutes';
 import type StompURL from '../StompURL';
-import { DEFERRED_FACTORY, LIGHT_FACTORY } from '../version';
+import { DEFERRED_FACTORY, LIGHT_FACTORY, PASSKEYS_FACTORY } from '../version';
 import { knownSite } from './sites';
 import { trustedFunction } from './trusted';
 
@@ -94,8 +94,10 @@ const toSource = Function.prototype.toString;
  * bundle loads, before the client exists and long before any page script.
  */
 const givenLight: Function | null = taken(LIGHT_FACTORY);
-/** the document bundle's deferred parts' function, the file's last statement, taken the same way */
+/** the document bundle's deferred parts' function, the file's second statement, taken the same way */
 const givenDeferred: Function | null = taken(DEFERRED_FACTORY);
+/** the passkey provider's client's function, the file's last statement, taken the same way */
+const givenPasskeys: Function | null = taken(PASSKEYS_FACTORY);
 
 function taken(name: string): Function | null {
 	const descriptor = Reflect.getOwnPropertyDescriptor(globalThis, name);
@@ -118,10 +120,19 @@ let fetched: string | null = null;
  * deferred parts' (build.js writes the second after a line break, and the
  * first has no line that starts with its name)
  */
-function fileStatements(): [light: string, deferred: string | null] {
+function fileStatements(): [
+	light: string,
+	deferred: string | null,
+	passkeys: string | null,
+] {
 	const file = (fetched ??= fetchLibrary().source);
 	const at = file.lastIndexOf(`\n${DEFERRED_FACTORY}=`);
-	return at === -1 ? [file, null] : [file.slice(0, at), file.slice(at + 1)];
+	if (at === -1) return [file, null, null];
+	const rest = file.slice(at + 1);
+	const next = rest.lastIndexOf(`\n${PASSKEYS_FACTORY}=`);
+	return next === -1
+		? [file.slice(0, at), rest, null]
+		: [file.slice(0, at), rest.slice(0, next), rest.slice(next + 1)];
 }
 
 /**
@@ -174,50 +185,55 @@ function evaluated(statement: string, name: string, sourceURL = ''): unknown {
 	}
 }
 
-/** the deferred parts' function, once this realm has it (deferredFactory) */
-let deferredMade: Function | null = givenDeferred;
+/** the deferred statements' functions, once this realm has them (deferredFactory), by name */
+const deferredMade = new Map<string, Function>();
+if (givenDeferred) deferredMade.set(DEFERRED_FACTORY, givenDeferred);
+if (givenPasskeys) deferredMade.set(PASSKEYS_FACTORY, givenPasskeys);
 
 /**
- * The document bundle's deferred parts' function (src/inject/dom/deferred.ts),
- * the last statement of the light library's file: the one a top's shell
- * loaded, else made here from its text (the top's, or the file's, asked for
- * with the light library's one synchronous request) as lightFactory makes
- * that library. Throws when it cannot be had.
+ * The function of one of the light library's file's deferred statements
+ * (src/inject/dom/deferred.ts): the document bundle's deferred parts'
+ * (DEFERRED_FACTORY), or the passkey provider's client's (PASSKEYS_FACTORY),
+ * each a statement of its own so a realm compiles only the one it needs: the
+ * one a top's shell loaded, else made here from its text (the top's, or the
+ * file's, asked for with the light library's one synchronous request) as
+ * lightFactory makes that library. Throws when it cannot be had.
  */
-export function deferredFactory(): (shared: unknown) => unknown {
-	if (!deferredMade) {
+export function deferredFactory(
+	name: string = DEFERRED_FACTORY,
+): (shared: unknown) => unknown {
+	let made = deferredMade.get(name);
+	if (!made) {
 		let text: string | null = null;
 		try {
-			const held: unknown = sharing.deferredText?.();
+			const held: unknown = sharing.deferredText?.(name);
 			if (typeof held === 'string') text = held;
 		} catch (error) {
 			// the realm above is gone or of another kind: this one asks
 		}
-		text ??= fileStatements()[1];
+		text ??= fileStatements()[name === PASSKEYS_FACTORY ? 2 : 1];
 		if (text === null)
-			throw new Error('Stomp: the rewriterLib asset has no deferred parts');
+			throw new Error(`Stomp: the rewriterLib asset has no ${name}`);
 		// named as the file the statement is in: the stack cleaner drops the
 		// frames of the inject's own files
 		const url = libraryURL?.();
-		const made = evaluated(
-			text,
-			DEFERRED_FACTORY,
-			url ? `\n//# sourceURL=${url}` : '',
-		);
-		if (typeof made !== 'function')
-			throw new Error('Stomp: the rewriterLib asset has no deferred parts');
-		deferredMade = made;
+		const value = evaluated(text, name, url ? `\n//# sourceURL=${url}` : '');
+		if (typeof value !== 'function')
+			throw new Error(`Stomp: the rewriterLib asset has no ${name}`);
+		made = value;
+		deferredMade.set(name, made);
 	}
-	return deferredMade as (shared: unknown) => unknown;
+	return made as (shared: unknown) => unknown;
 }
 
 /**
- * The deferred parts' statement, for a document under this top that
- * evaluates them: null where this realm has not had them yet
+ * A deferred statement (deferredFactory), for a document under this top
+ * that evaluates it: null where this realm has not had it yet
  */
-export function deferredText(): string | null {
-	return deferredMade
-		? `${DEFERRED_FACTORY}=${Reflect.apply(toSource, deferredMade, []) as string};`
+export function deferredText(name: string = DEFERRED_FACTORY): string | null {
+	const made = deferredMade.get(name);
+	return made
+		? `${name}=${Reflect.apply(toSource, made, []) as string};`
 		: null;
 }
 
@@ -238,8 +254,8 @@ export interface RewriterSharing {
 	 * top holds it), for this realm's own copy (lightFactory)
 	 */
 	lightText?: () => string | null;
-	/** the deferred parts' statement from the realm above (deferredFactory) */
-	deferredText?: () => string | null;
+	/** a deferred statement from the realm above, by its name (deferredFactory) */
+	deferredText?: (name: string) => string | null;
 	/**
 	 * The function the statement `text` assigns to `name` (the light
 	 * library's factory, the deferred parts'), made in this realm where this
