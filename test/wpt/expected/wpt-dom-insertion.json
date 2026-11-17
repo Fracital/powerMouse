@@ -33,9 +33,6 @@
 		"Adopting an orphan": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
 		"Adopting a non-orphan": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
 	},
-	"/dom/nodes/Node-cloneNode.html": {
-		"implementation.createDocument": "FAIL: assert_equals: URL value expected \"about:blank\" but got \"http://localhost:PORT/dom/nodes/Node-cloneNode.html\""
-	},
 	"/dom/nodes/Node-removeChild.html": {
 		"Passing a detached element from a frame document to removeChild should not affect it.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
 		"Passing a non-detached element from a frame document to removeChild should not affect it.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",

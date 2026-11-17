@@ -966,6 +966,36 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			),
 		});
 
+		// <q>, <blockquote>, <ins> and <del> reflect `cite` as a URL the
+		// browser resolves itself, against the document's real base: a route.
+		// No load is made from it, so the attribute stays as written and the
+		// property resolves it against the page's base
+		const nativeGetAttribute =
+			this.client.global.Element.prototype.getAttribute;
+		for (const ctor of [
+			this.client.global.HTMLQuoteElement,
+			this.client.global.HTMLModElement,
+		]) {
+			const cite = Reflect.getOwnPropertyDescriptor(ctor.prototype, 'cite');
+			if (!cite?.get) continue;
+			Reflect.defineProperty(ctor.prototype, 'cite', {
+				...cite,
+				get: proxyModule.wrapFunction(cite.get, (target, that, args) => {
+					// the native brand check first
+					Reflect.apply(target, that, args);
+					const written = Reflect.apply(nativeGetAttribute, that, ['cite']) as
+						string | null;
+					if (written === null) return '';
+					try {
+						return new URL(written, this.client.baseURL.toString()).href;
+					} catch (error) {
+						// not a URL: as written, like the browser
+						return written;
+					}
+				}),
+			});
+		}
+
 		// document.domain: the page's host, or the domain it set. The setter
 		// checks the value as Chrome does (parsed as a host, then the host
 		// itself or a parent domain of a name that is not a public suffix,
