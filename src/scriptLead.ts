@@ -5,7 +5,12 @@
 import type { Config } from './config';
 import { helperNames } from './helperNames';
 import { injectWorkerJS } from './routeURL';
-import { BARE_SPECIFIER, isModuleType, type ScriptType } from './scriptRoutes';
+import {
+	BARE_SPECIFIER,
+	isModuleType,
+	RELATIVE_SPECIFIER,
+	type ScriptType,
+} from './scriptRoutes';
 import type StompURL from './StompURL';
 import { workletAccess } from './workletLead';
 
@@ -71,11 +76,19 @@ export function scriptLead(
 						// access API its rewrite calls (src/workletLead.ts)
 						workletAccess(names.access)
 					: '') +
-		// import.meta.resolve answers with the page's URLs; a bare specifier
-		// belongs to the import map and comes back as it is
-		(isModule
+		// import.meta.resolve answers with the page's URLs: a relative
+		// specifier resolves against the module's URL, and a bare or an
+		// absolute one goes through the module's own resolve, which the page's
+		// import map (its targets routed) answers with a route, read back as
+		// the page's URL (and which throws for a bare specifier the map does
+		// not have, as natively). ToString as natively: a Symbol throws. A
+		// worklet's access API reads no routes back: there a bare specifier
+		// comes back as it is
+		(type === 'workletModule'
 			? `import.meta.url = ${JSON.stringify(url.toString())};import.meta.resolve = (s) => ${BARE_SPECIFIER}.test(s = String(s)) ? s : new URL(s, import.meta.url).href;`
-			: '') +
+			: isModule
+				? `import.meta.url = ${JSON.stringify(url.toString())};import.meta.resolve = ((r) => (s) => ${RELATIVE_SPECIFIER}.test(s = \`\${s}\`) ? new URL(s, import.meta.url).href : ${names.access}.resolved(r(s)))(import.meta.resolve);`
+				: '') +
 		preamble
 	);
 }

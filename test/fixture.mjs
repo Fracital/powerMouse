@@ -120,7 +120,7 @@ const REWRITER = `<!doctype html><title>REWRITER</title>
 <script type="module">import { a, b } from './mod-re.js'; __rw.reexport = a === 'A' && b === 'A';</script>
 <script type="module">__rw.dynBare = (await import('bare2')).default === 'B2';</script>
 <script src="/sub/dyn.js"></script>
-<script type="module">__rw.metaResolve = import.meta.resolve('./mod-a.js') === new URL('./mod-a.js', location.href).href && import.meta.resolve('bare') === 'bare';</script>
+<script type="module">__rw.metaResolve = import.meta.resolve('./mod-a.js') === new URL('./mod-a.js', location.href).href && import.meta.resolve('bare').startsWith('data:text/javascript,');</script>
 <script type="module">await new Promise((r) => setTimeout(r, 300)); __rw.done = true;</script>`;
 
 const MODULES = {

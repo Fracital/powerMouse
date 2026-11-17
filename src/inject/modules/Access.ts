@@ -2,7 +2,11 @@ import { keepEmbedded } from '../../functionSource';
 import { HelperNames } from '../../helperNames';
 import { routeHTML } from '../../rewriteHTML';
 import { routeRefused } from '../../routeURL';
-import { isBareSpecifier, routeImport } from '../../scriptRoutes';
+import {
+	isBareSpecifier,
+	MODULE_PREFIX_ROUTE,
+	routeImport,
+} from '../../scriptRoutes';
 import StompURL, { urlLike } from '../../StompURL';
 import Client from '../Client';
 import ErrorMessages from '../errorMessages';
@@ -13,7 +17,7 @@ import { requestRefused } from '../requestVerdict';
 import { modifyJS } from '../rewriter';
 import { trustedScript } from '../trusted';
 import ProxyModule from './Proxy';
-import { unrouteText } from './Unroute';
+import { routedPrefix, unrouteText, unrouteURL } from './Unroute';
 
 /*
 // why was this necessary?
@@ -1414,6 +1418,30 @@ export default class AccessModule extends Module<Client> {
 					// options that throw: the browser's import throws the same
 				}
 				return route(baseURL, url, moduleType);
+			},
+			// what a module's own import.meta.resolve answered (an import map's
+			// target is a route): the page's URL (src/scriptLead.ts). A prefix
+			// target's route is the sealed prefix and the suffix the browser
+			// appended (scriptRoutes.ts routeModulePrefix): the suffix resolves
+			// against the opened prefix, as the worker resolves it
+			resolved: (url: string): string => {
+				const real = unrouteURL(this.client, url);
+				if (real !== null) return real;
+				const start = `${routedPrefix(this.client)}${MODULE_PREFIX_ROUTE}/`;
+				if (url.startsWith(start))
+					try {
+						const rest = url.slice(start.length);
+						const slash = rest.indexOf('/');
+						const prefix = this.client.codec.decode(
+							slash === -1 ? rest : rest.slice(0, slash),
+						);
+						if (prefix)
+							return new URL(slash === -1 ? '' : rest.slice(slash + 1), prefix)
+								.href;
+					} catch (error) {
+						// not a prefix the codec sealed
+					}
+				return url;
 			},
 			// `const { top: t } = o`: a pattern cannot be rewritten key by key,
 			// so the source is wrapped and every read of an unforgeable through

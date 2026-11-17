@@ -114,6 +114,9 @@ export function routeJS(
 /** a URL-like specifier: absolute, scheme-relative, or starting with `/`, `./`, `../` */
 export const BARE_SPECIFIER = /^(?!\/|\.\.?\/|[a-z][a-z0-9+.-]*:)/i;
 
+/** a relative URL-like specifier: starting with `/`, `./`, `../` */
+export const RELATIVE_SPECIFIER = /^(?:\/|\.\.?\/)/;
+
 /** `react`, `#private`, `@scope/pkg`: not a URL, resolved by an import map */
 export function isBareSpecifier(specifier: string): boolean {
 	return BARE_SPECIFIER.test(specifier);
