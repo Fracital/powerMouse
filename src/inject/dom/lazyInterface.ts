@@ -19,7 +19,8 @@ import type ProxyModule from '../modules/Proxy';
  * reflective question about it (client.lazyGlobals) and lists it among the
  * window's keys where the browser does (client.globalKeyAfter), so a page
  * never sees the accessor. The function returned settles the name with the
- * interface when the page reached it the other way first.
+ * interface when the page reached it the other way first. A name the page
+ * deleted or defined itself before reading it stays the page's.
  */
 export function lazyInterface(
 	client: Client,
@@ -43,6 +44,11 @@ export function lazyInterface(
 	};
 	const resolve = () => {
 		if (!pending) return;
+		// a page that deleted or redefined the name has its own (asked with
+		// the name settled first: the Reflection module resolves it too)
+		pending = false;
+		client.lazyGlobals.delete(name);
+		if (Reflect.getOwnPropertyDescriptor(global, name)?.get !== get) return;
 		let found: unknown;
 		try {
 			found = make();
@@ -56,14 +62,15 @@ export function lazyInterface(
 	const after = keys[keys.indexOf(name) - 1];
 	if (after !== undefined) client.globalKeyAfter.set(name, after);
 	Reflect.deleteProperty(global, name);
+	const get = proxyModule.wrapFunction(
+		function lazyInterface() {} as () => unknown,
+		() => {
+			resolve();
+			return Reflect.get(global, name);
+		},
+	);
 	Reflect.defineProperty(global, name, {
-		get: proxyModule.wrapFunction(
-			function lazyInterface() {} as () => unknown,
-			() => {
-				resolve();
-				return Reflect.get(global, name);
-			},
-		),
+		get,
 		set: proxyModule.wrapFunction(
 			function lazyInterface(_value: unknown) {} as (value: unknown) => void,
 			(_target, _that, args) => settle(args[0], true),

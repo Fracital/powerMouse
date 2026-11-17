@@ -14,6 +14,7 @@ import {
 	parseConfig,
 	validConfigCodecKey,
 } from '../config';
+import { workerKindPartition } from '../partition';
 import { parseRoutedURL } from '../routeURL';
 import StompURL from '../StompURL';
 import { getPublicSuffix } from '../suffix';
@@ -37,6 +38,7 @@ import { hostErrorPage } from './errorPage';
 import { registerIntegrityLoads } from './integrityLoads';
 import { registerKeptLoads } from './keptLoads';
 import { registerMediaLoads } from './mediaLoads';
+import { registerPermissionRoute } from './permissions';
 import { RewriteCache } from './rewriteCache';
 import type { RewritePool } from './rewritePool';
 import { registerRewrites } from './rewrites';
@@ -370,6 +372,22 @@ export default async function createServer(
 		json(200, context?.clientId ?? null),
 	);
 	registerAssets(router, init.scope, init.assets);
+	// a worker's questions about its site's permissions, as the site its
+	// route names (its partition's top, else its own origin)
+	registerPermissionRoute(router, (url) => {
+		try {
+			const { pathname, protocol } = new URL(url);
+			if (!/^https?:$/.test(protocol) || !pathname.startsWith(init.directory))
+				return null;
+			const partition = workerKindPartition(
+				pathname.slice(init.directory.length).split('/')[0],
+				init.codec,
+			);
+			return new URL(partition ? partition.slice(1) : realURL(url)).origin;
+		} catch (error) {
+			return null;
+		}
+	});
 	// a body as the type the path names (messages.ts ECHO_ROUTE)
 	router.routes.set(new RegExp(`^/${ECHO_ROUTE}/`), async (request, url) => {
 		if (request.method !== 'POST') return new Response(null, { status: 405 });

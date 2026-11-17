@@ -1,0 +1,207 @@
+<!doctype html>
+<title>ADV GRANTS</title>
+<pre id="result">pending</pre>
+<script src="adv-harness.js"></script>
+<script>
+	// The browser holds a grant for the proxy origin (the suite gives it one
+	// for each permission, as if another proxied site had been granted), and
+	// this site was never asked: every probe that gets a position, a stream, a
+	// shown notification, a font list, the screens or persistent storage got
+	// another site's grant, and says LEAK:. A refusal reads as the browser's.
+	const A = __advAsync;
+	const refused = (error) => `${error.name}: ${error.message}`;
+	A('getScreenDetails', async () => {
+		try {
+			const details = await getScreenDetails();
+			return `LEAK: ${details.screens.length} screens`;
+		} catch (error) {
+			return refused(error);
+		}
+	});
+	A('queryLocalFonts', async () => {
+		const fonts = await queryLocalFonts();
+		return fonts.length ? `LEAK: ${fonts.length} fonts` : '0 fonts';
+	});
+	A('requestMIDIAccess', async () => {
+		try {
+			await navigator.requestMIDIAccess();
+			return 'LEAK: MIDI access';
+		} catch (error) {
+			return error.name === 'NotAllowedError'
+				? refused(error)
+				: `LEAK: ${refused(error)}`;
+		}
+	});
+	A('clipboard.readText', async () => {
+		try {
+			const text = await navigator.clipboard.readText();
+			return `LEAK: read ${JSON.stringify(text)}`;
+		} catch (error) {
+			return refused(error);
+		}
+	});
+	A('geolocation.getCurrentPosition', () => {
+		return new Promise((resolve) =>
+			navigator.geolocation.getCurrentPosition(
+				(position) => resolve(`LEAK: ${position.coords.latitude}`),
+				(error) => resolve(`error ${error.code}`),
+			),
+		);
+	});
+	A('mediaDevices.getUserMedia', async () => {
+		try {
+			const stream = await navigator.mediaDevices.getUserMedia({
+				video: true,
+			});
+			stream.getTracks().forEach((track) => track.stop());
+			return 'LEAK: a camera stream';
+		} catch (error) {
+			return refused(error);
+		}
+	});
+	for (const name of ['getUserMedia', 'webkitGetUserMedia'])
+		A(`navigator.${name}`, () => {
+			return new Promise((resolve) =>
+				navigator[name](
+					{ video: true },
+					(stream) => {
+						stream.getTracks().forEach((track) => track.stop());
+						resolve('LEAK: a camera stream');
+					},
+					(error) => resolve(refused(error)),
+				),
+			);
+		});
+	A('SpeechRecognition.start', () => {
+		const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+		return new Promise((resolve) => {
+			const recognition = new Speech();
+			const seen = [];
+			for (const type of ['start', 'audiostart', 'error', 'end'])
+				recognition.addEventListener(type, (event) => {
+					seen.push(event.error ? `${type}:${event.error}` : type);
+					if (type === 'end') resolve(seen.join(','));
+				});
+			recognition.start();
+			setTimeout(() => {
+				recognition.abort();
+				resolve(seen.join(',') || 'nothing');
+			}, 3000);
+		}).then((seen) =>
+			/audiostart|^start/.test(seen) ? `LEAK: ${seen}` : seen,
+		);
+	});
+	A(
+		'SpeechRecognition and Notification named late',
+		() => {
+			const frame = document.createElement('iframe');
+			frame.src = 'adv-grants-names.html';
+			document.body.append(frame);
+			return new Promise((resolve) =>
+				addEventListener('message', function heard(event) {
+					if (typeof event.data?.advNames !== 'string') return;
+					removeEventListener('message', heard);
+					frame.remove();
+					const got = event.data.advNames;
+					const facts =
+						'function 1 {"value":1,"writable":true,"enumerable":false,"configurable":true} true false undefined';
+					resolve(
+						/audiostart|(^| )start/.test(got.slice(facts.length))
+							? `LEAK: ${got}`
+							: got.startsWith(facts)
+								? got
+								: `TELL: ${got}`,
+					);
+				}),
+			);
+		},
+		8000,
+	);
+	A('Notification.permission', () =>
+		Notification.permission === 'granted'
+			? 'LEAK: granted'
+			: Notification.permission,
+	);
+	A('new Notification', () => {
+		return new Promise((resolve) => {
+			const notification = new Notification('adv', { tag: 'adv' });
+			notification.onshow = () => {
+				notification.close();
+				resolve('LEAK: shown');
+			};
+			notification.onerror = () => resolve('error');
+			setTimeout(() => resolve('neither'), 3000);
+		});
+	});
+	A('worker Notification', () => {
+		const source = `
+			let shown = 'neither';
+			const permission = Notification.permission;
+			try {
+				const n = new Notification('adv');
+				n.onshow = () => { n.close(); postMessage(permission + ' shown'); };
+				n.onerror = () => postMessage(permission + ' error');
+			} catch (error) { postMessage(permission + ' threw ' + error.name); }
+		`;
+		return new Promise((resolve) => {
+			const worker = new Worker(
+				URL.createObjectURL(new Blob([source], { type: 'text/javascript' })),
+			);
+			worker.onmessage = (event) => {
+				worker.terminate();
+				resolve(
+					/granted|shown/.test(event.data) ? `LEAK: ${event.data}` : event.data,
+				);
+			};
+			setTimeout(() => resolve('no reply'), 3500);
+		});
+	});
+	A('storage.persist', async () =>
+		(await navigator.storage.persist()) ? 'LEAK: persisted' : 'not persisted',
+	);
+	A('<geolocation autolocate>', () => {
+		if (!('HTMLGeolocationElement' in window)) return 'no element';
+		return new Promise((resolve) => {
+			const element = document.createElement('geolocation');
+			element.setAttribute('autolocate', '');
+			element.addEventListener('location', () =>
+				resolve(
+					element.position
+						? `LEAK: ${element.position.coords.latitude}`
+						: 'location event, no position',
+				),
+			);
+			document.body.append(element);
+			setTimeout(
+				() =>
+					resolve(
+						element.position
+							? `LEAK: ${element.position.coords.latitude}`
+							: `no position, ${element.permissionStatus}`,
+					),
+				3000,
+			);
+		});
+	});
+	A('EME persistentState required', async () => {
+		try {
+			const access = await navigator.requestMediaKeySystemAccess(
+				'com.widevine.alpha',
+				[
+					{
+						initDataTypes: ['cenc'],
+						videoCapabilities: [
+							{ contentType: 'video/mp4; codecs="avc1.42E01E"' },
+						],
+						persistentState: 'required',
+					},
+				],
+			);
+			const state = access.getConfiguration().persistentState;
+			return state === 'required' ? 'LEAK: persistent CDM state' : state;
+		} catch (error) {
+			return refused(error);
+		}
+	});
+	__advFinish(4000);
+</script>

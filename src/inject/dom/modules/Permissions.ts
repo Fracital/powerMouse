@@ -1,3 +1,5 @@
+import { routeBinary } from '../../../routeURL';
+import StompURL from '../../../StompURL';
 import {
 	PERMISSION,
 	type MediaVerdict,
@@ -11,7 +13,9 @@ import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { withStack } from '../../nativeErrors';
 import { LazyMap, LazyWeakMap, LazyWeakSet } from '../../ownCollections';
-import DocumentClient from '../Client';
+import type { Decision, GateContext, GateHooks } from '../../permissionGates';
+import DocumentClient, { addDocumentOpenListener } from '../Client';
+import { deferred } from '../deferred';
 import { lazyInterface } from '../lazyInterface';
 
 /** the permissions each site keeps (src/server/permissions.ts); push is notifications' */
@@ -338,12 +342,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		 * whether the browser's API may be called, and how to report its
 		 * outcome. `false`: refused as the site's denial
 		 */
-		const request = async (
-			names: string[],
-		): Promise<
-			| { call: true; settle: (granted: boolean | null) => Promise<void> }
-			| { call: false; dismissed: boolean }
-		> => {
+		const request = async (names: string[]): Promise<Decision> => {
 			await states;
 			const tokens: [string, string][] = [];
 			let dismissed = false;
@@ -361,7 +360,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 				}
 				if (decision === 'dismissed' || decision === 'blocked') {
 					dismissed ||= decision === 'dismissed';
-					return { call: false, dismissed };
+					return { call: false, dismissed, blocked: decision === 'blocked' };
 				}
 				if (decision === 'granted') changed(name, 'granted');
 				if (answer && answer.decision === 'browser')
@@ -502,7 +501,196 @@ export default class PermissionsModule extends Module<DocumentClient> {
 				mirror === null,
 			),
 		);
+		// what the browser holds, read with its own getter: the site's state
+		// replaces Notification.permission next
+		const BrowserNotification = (global as { Notification?: Function })
+			.Notification;
+		const browserNotifications = BrowserNotification
+			? Reflect.getOwnPropertyDescriptor(BrowserNotification, 'permission')?.get
+			: undefined;
 		this.notifications(request, allowed, siteState);
+		this.gates(() => ({
+			global,
+			wrap: (fn, wrap, construct) =>
+				proxyModule.wrapFunction(fn, wrap, construct),
+			allowed,
+			browserRefuses: (name) => !browserAllows(FEATURE[name] ?? name),
+			siteState,
+			request,
+			direct,
+			error: (message, name) =>
+				withStack(new global.DOMException(message, name)),
+			base: () => client.baseURL.toString(),
+			route: (url) => routeBinary(new StompURL(url, client.url)),
+			site,
+			onOpen: (callback) => addDocumentOpenListener(global, callback),
+			browserNotifications: () => {
+				try {
+					return Reflect.apply(
+						browserNotifications!,
+						BrowserNotification,
+						[],
+					) as string;
+				} catch (error) {
+					return 'default';
+				}
+			},
+		}));
+	}
+
+	/**
+	 * The other APIs a permission gates, each called only as its site may
+	 * (src/inject/permissionGates.ts). The work is the deferred parts':
+	 * what is here is the wrappers, in place before the page's first
+	 * script, each hooking or asking the parts at the first call or read,
+	 * and little more is kept (frame-cost): the most is the
+	 * SpeechRecognition interface (about 1.2 KB a frame), which has to be
+	 * made to be had once its names are held.
+	 */
+	gates(context: () => GateContext) {
+		const global = this.client.global;
+		// (made at the first call or read that needs it: what a frame that
+		// never uses these APIs keeps is the wrappers)
+		let made: GateContext | undefined;
+		const ctx = () => (made ??= context());
+		const proxyModule = this.client.getModule(ProxyModule)!;
+		const navigator = global.Navigator.prototype;
+		const getter = (owner: object | undefined, name: string) =>
+			owner && Reflect.getOwnPropertyDescriptor(owner, name)?.get;
+		// one body for every hooked method and one for every hooked getter,
+		// the parts' gateCall and gateGetter (which tell each by its native)
+		const hooks: GateHooks = {
+			context: ctx,
+			call: (target, that, args) =>
+				deferred().gateCall(hooks, target, that, args),
+			read: (target, that, args) =>
+				deferred().gateGetter(hooks, target, that, args),
+			navigator: global.navigator,
+			mediaDevices: getter(navigator, 'mediaDevices'),
+			storage: getter(navigator, 'storage'),
+		};
+		const hook = (owner: object | undefined, name: string, get?: boolean) => {
+			const descriptor = owner && Reflect.getOwnPropertyDescriptor(owner, name);
+			const native = get ? descriptor?.get : descriptor?.value;
+			if (typeof native !== 'function') return;
+			Reflect.defineProperty(owner!, name, {
+				...descriptor,
+				[get ? 'get' : 'value']: proxyModule.wrapFunction(
+					native,
+					get ? hooks.read : hooks.call,
+				),
+			});
+		};
+		const windowOwn = Reflect.getOwnPropertyDescriptor(
+			global,
+			'getScreenDetails',
+		)
+			? global
+			: global.Window?.prototype;
+		hook(windowOwn, 'getScreenDetails');
+		hook(windowOwn, 'queryLocalFonts');
+		hook(navigator, 'requestMIDIAccess');
+		hook(navigator, 'requestMediaKeySystemAccess');
+		hook(global.MediaDevices?.prototype, 'getDisplayMedia');
+		hook(navigator, 'getUserMedia');
+		hook(navigator, 'webkitGetUserMedia');
+		const storage = global.StorageManager?.prototype;
+		hook(storage, 'persist');
+		hook(storage, 'persisted');
+		// the clipboard's methods, the first time navigator.clipboard is read
+		hook(navigator, 'clipboard', true);
+		// SpeechRecognition's start, the first time the page names the
+		// interface (by either name: webkitSpeechRecognition is the same
+		// one), the only way to it or to a recognition: hooking its prototype
+		// cost every frame about 1.4 KB (frame-cost)
+		const Speech = (global as unknown as { SpeechRecognition?: Function })
+			.SpeechRecognition;
+		if (typeof Speech === 'function') {
+			let hooked = false;
+			const make = () => {
+				if (!hooked) {
+					hooked = true;
+					hooks.brand = getter(Speech.prototype, 'continuous');
+					hook(Speech.prototype, 'start');
+				}
+				return Speech;
+			};
+			lazyInterface(this.client, proxyModule, 'SpeechRecognition', make);
+			if ('webkitSpeechRecognition' in global)
+				lazyInterface(
+					this.client,
+					proxyModule,
+					'webkitSpeechRecognition',
+					make,
+				);
+		}
+		// a notification's tag is its site's and its images are routed; one
+		// the site may not show is never shown (the parts' notificationParts).
+		// The constructor is the wrapper from the first time the page names
+		// it, the only way to it (a registration's getNotifications() lists
+		// none): standing it in for the native cost every frame about 1.7 KB
+		const NativeNotification = (global as { Notification?: Function })
+			.Notification;
+		if (typeof NativeNotification === 'function') {
+			let construct:
+				| ((target: Function, args: unknown[], newTarget: Function) => object)
+				| null = null;
+			lazyInterface(this.client, proxyModule, 'Notification', () =>
+				proxyModule.wrapFunction(
+					NativeNotification,
+					(target, that, args, newTarget) => {
+						construct ??= deferred().notificationParts(ctx(), target);
+						return construct!(target, args, newTarget);
+					},
+					true,
+				),
+			);
+		}
+		// the permission elements, the first time one is clicked or delivers
+		if ('HTMLGeolocationElement' in global || 'HTMLCameraElement' in global) {
+			const targetOf = Reflect.getOwnPropertyDescriptor(
+				global.Event.prototype,
+				'target',
+			)!.get!;
+			const localName = Reflect.getOwnPropertyDescriptor(
+				global.Element.prototype,
+				'localName',
+			)!.get!;
+			const ELEMENTS = ['geolocation', 'camera', 'microphone', 'usermedia'];
+			let hooked = false;
+			const first = (event: Event) => {
+				if (hooked) return;
+				let name: string;
+				try {
+					name = Reflect.apply(
+						localName,
+						Reflect.apply(targetOf, event, []),
+						[],
+					) as string;
+				} catch (error) {
+					return;
+				}
+				let element = false;
+				for (let i = 0; i < ELEMENTS.length; i++)
+					if (ELEMENTS[i] === name) element = true;
+				if (!element) return;
+				hooked = true;
+				try {
+					deferred().permissionElements(ctx(), addListener, event);
+				} catch (error) {
+					// no parts: the browser's own
+				}
+			};
+			// (document.open() drops a window's listeners: again after each)
+			const addListener = global.EventTarget.prototype.addEventListener;
+			const listen = () => {
+				if (hooked) return;
+				for (const type of ['click', 'location', 'track', 'stream'])
+					Reflect.apply(addListener, global, [type, first, true]);
+			};
+			listen();
+			addDocumentOpenListener(global, listen);
+		}
 	}
 
 	/** getCurrentPosition and watchPosition ask first */

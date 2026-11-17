@@ -322,16 +322,76 @@ browser's. An id a page kept from a visit, used in `new AudioContext({
 sinkId })` before the document asked for anything else, is not known yet
 and names no device (`setSinkId` and `getUserMedia` look it up).
 
+## The other grants a site keeps
+
+The browser keeps every other grant for the proxy origin as well, and most
+of those APIs never ask once the origin holds the permission. Measured in
+Chrome 157 (permission-gates and adversarial-grants suites), before this a
+site the user never answered for got another site's grant:
+
+| A proxied page that was never asked, another site granted        | Before                                   | Now, as a refused origin natively                                         |
+| ---------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------- |
+| `getScreenDetails()`                                             | the screens                              | asks the host; refused: NotAllowedError "Permission denied."              |
+| `queryLocalFonts()`                                              | 620 fonts                                | asks the host; refused: `[]`                                              |
+| `navigator.clipboard.read()`, `readText()`                       | the clipboard                            | asks the host; refused: "Read permission denied." (unfocused: Chrome's)   |
+| `requestMIDIAccess()`                                            | (no MIDI backend in the test Chrome)     | asks the host; refused: "Permission to use Web MIDI API was not granted." |
+| `navigator.getUserMedia`, `webkitGetUserMedia`                   | a camera stream                          | gated as `mediaDevices.getUserMedia`; the error callback                  |
+| `getDisplayMedia()`                                              | the proxy origin's display-capture       | asks the host; refused: NotAllowedError "Permission denied"               |
+| a SpeechRecognition's `start()`                                  | listened                                 | asks the host; refused: `error` (`not-allowed`) and `end`                 |
+| `new Notification()` (window and worker)                         | shown                                    | `error`, nothing shown, the members as given                              |
+| a worker's `Notification.permission`                             | `granted`                                | the site's: `granted`, else `denied`                                      |
+| `navigator.storage.persist()`                                    | `true`                                   | `false` unless the site may (its own grant or the browser's prompt)       |
+| `<geolocation autolocate>`                                       | the position, `permissionStatus` granted | no position, the site's own state                                         |
+| `requestMediaKeySystemAccess` with `persistentState: 'required'` | the origin's persistent CDM storage      | NotSupportedError; optional persistent state reads `not-allowed`          |
+
+A request that asks goes through the same decision as `getUserMedia`
+(`request` in the Permissions module): the site's own state, the browser's
+prompt when nobody has decided, the host's `onPermissionRequest` when the
+browser holds it for another site, the browser's own refusal when it has
+denied the proxy origin. Each refusal is the one the browser gives a
+refused origin, word for word. The code is deferred
+(src/inject/permissionGates.ts): what runs in every document is the
+wrappers, and SpeechRecognition's and Notification's not even those until
+the page first names the interface (the only way to either; the names are
+accessors until then, which no reflection shows). The clipboard's methods
+are hooked the first time the page reads `navigator.clipboard`. Hooking on the first read of `navigator` itself would
+save nothing: the inject reads it in every frame during the page's first
+script.
+
+Notifications: a notification's `tag` is the site's own (the browser gets
+`<site> <tag>`, so one site's notification never replaces another's), and
+its `icon`, `image` and `badge` go through the proxy while reading back as
+the page gave them (resolved). A notification the site may not show while
+the browser would show it is a stand-in: a Notification with the members
+Chrome gives a refused one, its checks (actions, renotify without a tag,
+silent with vibration, `dir`) with Chrome's words, and an `error` event.
+
+The permission elements (`<geolocation>`, `<camera>`, `<microphone>`,
+`<usermedia>`): for a site that does not hold their permission, their
+`permissionStatus` reads the site's state and their result (`position`,
+`track`, `stream`) is null; a click asks as `getUserMedia` does, and what
+the browser delivers is held until the answer (a track stopped when it is
+no). When the browser's own prompt answered, its answer is the site's.
+
+Encrypted media: Chrome keeps a CDM's persistent state (licenses, the
+storage `persistentState: 'required'` opens) per real origin, so it would
+be one store for every site. A configuration that requires persistent
+state or a distinctive identifier is dropped, an optional one reads
+`not-allowed`, and with none left the request ends in NotSupportedError,
+as for a key system without the feature.
+
 ## What it covers
 
-| Permission                                                                                                                                                | Shown per site | Request gated                                        |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- | ---------------------------------------------------- |
-| geolocation                                                                                                                                               | yes            | `getCurrentPosition`, `watchPosition`                |
-| camera, microphone                                                                                                                                        | yes            | `getUserMedia`                                       |
-| notifications (and push)                                                                                                                                  | yes            | `Notification.requestPermission`                     |
-| clipboard-read, midi, persistent-storage, local-fonts, idle-detection, window-management, display-capture, captured-surface-control, local-network-access | yes            | no: the browser's API is called as the page calls it |
-| clipboard-write, screen-wake-lock                                                                                                                         | policy only    | no                                                   |
-| the rest (sensors, background-sync, payment-handler, storage-access, ...)                                                                                 | the browser's  | no                                                   |
+| Permission                                                                                | Shown per site | Request gated                                                                                                |
+| ----------------------------------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------ |
+| geolocation                                                                               | yes            | `getCurrentPosition`, `watchPosition`                                                                        |
+| camera, microphone                                                                        | yes            | `getUserMedia`                                                                                               |
+| notifications (and push)                                                                  | yes            | `Notification.requestPermission`                                                                             |
+| clipboard-read, midi, persistent-storage, local-fonts, window-management, display-capture | yes            | `read`, `readText`, `requestMIDIAccess`, `persist`, `queryLocalFonts`, `getScreenDetails`, `getDisplayMedia` |
+| speech (the microphone)                                                                   | yes            | a SpeechRecognition's `start`                                                                                |
+| idle-detection, captured-surface-control, local-network-access                            | yes            | no: the browser's API is called as the page calls it                                                         |
+| clipboard-write, screen-wake-lock                                                         | policy only    | no                                                                                                           |
+| the rest (sensors, background-sync, payment-handler, storage-access, ...)                 | the browser's  | no                                                                                                           |
 
 Before, the host's frame had no `allow` list: in isolation mode the
 browser denied the proxied page every powerful feature at once

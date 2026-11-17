@@ -443,6 +443,7 @@ const DEFERRED_FILES = new Set(
 		'src/inject/dom/writeTokenizer.ts',
 		'src/inject/dom/storageAccess.ts',
 		'src/inject/idbSize.ts',
+		'src/inject/permissionGates.ts',
 		'src/passkeys/types.ts',
 		'src/inject/serviceWorkerObjects.ts',
 		'src/inject/storageBucketMethods.ts',

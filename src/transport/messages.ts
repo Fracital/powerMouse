@@ -678,6 +678,14 @@ export type PermissionOp =
 			op: 'media';
 			constraints: unknown;
 	  };
+/**
+ * The service worker's route under an address where a worker of a proxied
+ * site asks what a document asks with PERMISSION (a worker has no
+ * navigator.serviceWorker to post to): a POST of the PermissionOp with
+ * `site`, the worker's top-level origin as its route names it. Only
+ * `states`.
+ */
+export const PERMISSION_ROUTE = 'permission';
 /** the error a getUserMedia request ends in, as its fields */
 export interface MediaVerdict {
 	name: string;

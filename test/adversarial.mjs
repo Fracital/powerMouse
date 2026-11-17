@@ -162,8 +162,10 @@ const proxiedFrame = (page) =>
  * that navigates away mid-run (an escape in itself) yields its last snapshot
  * with `navigated` set.
  */
-async function measure(browser, base, group, limit = 60000) {
+async function measure(browser, base, group, limit = 60000, before = null) {
 	const page = await openDemo(browser, base);
+	// what the browser holds for the proxy origin before the page runs
+	if (before) await before(page, browser, base);
 	const recorder = await recordRequests(page.context());
 	const host = await page.evaluate(() => {
 		window.__hostMessages = [];
@@ -260,13 +262,25 @@ async function measure(browser, base, group, limit = 60000) {
  *
  * `compare(probes, check)`: the group's checks across its probes (each
  * `check(key, condition, detail)`, in each mode, known open as above).
+ *
+ * `args` and `env`: the Chrome's (lib.mjs launch); `before(page, browser,
+ * base)`: run on the host's page before the group's page loads (what the
+ * browser holds for the proxy origin, say).
  */
 export async function runGroup(
 	group,
 	scramjet = {},
-	{ limit = 60000, bypass = 'report', knownOpen = {}, compare } = {},
+	{
+		limit = 60000,
+		bypass = 'report',
+		knownOpen = {},
+		compare,
+		args = [],
+		env = null,
+		before = null,
+	} = {},
 ) {
-	const browser = await launch();
+	const browser = await launch(args, { env });
 	const major = Number(browser.version().split('.')[0]);
 	console.log(`Chrome ${browser.version()}`);
 	const entries = Object.fromEntries(
@@ -306,7 +320,7 @@ export async function runGroup(
 			navigated,
 			errors: pageErrors,
 			raw,
-		} = await measure(browser, base, group, limit);
+		} = await measure(browser, base, group, limit, before);
 		errors.push(...pageErrors.map((e) => `${mode}: ${e}`));
 		const leak = new RegExp(
 			[

@@ -1,0 +1,36 @@
+<!doctype html>
+<title>ADV GRANTS NAMES</title>
+<script>
+	// A fresh realm where nothing has named SpeechRecognition or Notification
+	// yet (the proxy holds both behind accessors until then): the prefixed
+	// name read first is the gated interface, and a write or a delete before
+	// any read is the data property's, as natively
+	const facts = [];
+	const Prefixed = webkitSpeechRecognition;
+	const recognition = new Prefixed();
+	const seen = [];
+	window.SpeechRecognition = 1;
+	facts.push(typeof Prefixed, String(SpeechRecognition));
+	facts.push(
+		JSON.stringify(
+			Object.getOwnPropertyDescriptor(window, 'SpeechRecognition'),
+		),
+	);
+	facts.push(
+		String(delete window.Notification),
+		String('Notification' in window),
+	);
+	facts.push(String(Object.getOwnPropertyDescriptor(window, 'Notification')));
+	const report = () =>
+		parent.postMessage(
+			{ advNames: `${facts.join(' ')} ${seen.join(',') || 'nothing'}` },
+			'*',
+		);
+	for (const type of ['start', 'audiostart', 'error', 'end'])
+		recognition.addEventListener(type, (event) => {
+			seen.push(event.error ? `${type}:${event.error}` : type);
+			if (type === 'end') report();
+		});
+	recognition.start();
+	setTimeout(report, 3000);
+</script>

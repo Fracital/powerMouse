@@ -39,6 +39,9 @@
 // (and the presentation ids a site was handed, ./presentations.ts, at a
 // page's first PresentationRequest start(), reconnect() or connection)
 //
+// (and the permission gates, ../permissionGates.ts, at a page's first call
+// of a gated API; a worker's bundle has them itself)
+//
 // (and the WebTransport stand-in, ../webTransportStandIn.ts, with what
 // carries its sessions, ../webTransport.ts, once a realm makes its first
 // session)
@@ -58,6 +61,12 @@ import { compileFilter } from '../../blocker/procedural';
 import { bareClient } from '../bareClient';
 import { cookieStoreMethods } from '../cookieStoreMethods';
 import { recordSize } from '../idbSize';
+import {
+	gateCall,
+	gateGetter,
+	notificationParts,
+	permissionElements,
+} from '../permissionGates';
 import { bucketMethods } from '../storageBucketMethods';
 import { carry as carryWebTransport } from '../webTransport';
 import { standIn as webTransportStandIn } from '../webTransportStandIn';
@@ -118,6 +127,10 @@ const parts = {
 	presentationIds,
 	// a same-origin download's copy, at a document's first (modules/Download.ts)
 	saveDownload,
+	gateCall,
+	gateGetter,
+	notificationParts,
+	permissionElements,
 };
 
 export type DeferredParts = typeof parts;

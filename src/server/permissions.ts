@@ -1,10 +1,14 @@
 import { openDB, type IDBPDatabase } from 'idb';
 import type {
 	PermissionDecision,
+	PermissionOp,
 	PermissionState,
 	PermissionStates,
 } from '../transport/messages';
+import { PERMISSION_ROUTE } from '../transport/messages';
 import type { HintsDocument } from './clientHints';
+import type Router from './Router';
+import { json } from './Router';
 
 /**
  * Permissions per proxied site (docs/permissions.md). The browser keeps
@@ -244,4 +248,52 @@ export async function forgetDeviceIds(host?: string) {
 	} catch (error) {
 		// nothing was kept
 	}
+}
+
+/**
+ * A worker's questions (messages.ts PERMISSION_ROUTE): only a worker
+ * client of this origin asks, and only what it may read (its site's
+ * states). The site is the one its
+ * route named its realm by, as its storage and cookies are: `siteOf`
+ * reads it from the worker's routed URL, and a claim that is not that
+ * site is refused (a blob: or data: worker's URL names none: its claim,
+ * which its bootstrap was given, stands).
+ */
+export function registerPermissionRoute(
+	router: Router,
+	siteOf: (url: string) => string | null,
+) {
+	router.routes.set(
+		new RegExp(`^/${PERMISSION_ROUTE}$`),
+		async (request, _url, context) => {
+			const refused = () => json(403, null);
+			if (
+				request.method !== 'POST' ||
+				!context?.clientId ||
+				typeof clients === 'undefined'
+			)
+				return refused();
+			const found = await clients.get(context.clientId);
+			if (!found || (found.type !== 'worker' && found.type !== 'sharedworker'))
+				return refused();
+			let body: PermissionOp & { site?: unknown };
+			let site: string;
+			try {
+				const text = await request.text();
+				if (text.length > 4096) return refused();
+				body = JSON.parse(text);
+				site = String(body.site);
+				const url = new URL(site);
+				if (!/^https?:$/.test(url.protocol) || url.origin !== site)
+					return refused();
+				const routed = siteOf(found.url);
+				if (routed !== null && routed !== site) return refused();
+			} catch (error) {
+				return refused();
+			}
+			if (body.op === 'states')
+				return json(200, await documentStates(site, null));
+			return refused();
+		},
+	);
 }
