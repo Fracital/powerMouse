@@ -3,7 +3,7 @@ import { BLOB_MINTED } from '../../transport/messages';
 import Client from '../Client';
 import { htmlBlobs, htmlBlobURLs } from '../htmlBlobs';
 import Module from '../Module';
-import { blobsByURL, isBlob } from '../workerBlobs';
+import { blobTable, forgetBlob, isBlob, recordBlob } from '../workerBlobs';
 import ProxyModule from './Proxy';
 import { realmOrigin } from './Unroute';
 
@@ -17,6 +17,8 @@ import { realmOrigin } from './Unroute';
  * here. Both documents and workers.
  */
 export default class ObjectURLModule extends Module<Client> {
+	/** the Blobs behind the URLs this realm minted (workerBlobs) */
+	#blobs = blobTable();
 	/**
 	 * Tell the service worker about a blob: URL this realm minted, so a
 	 * worker started from it is judged as this page (BLOB_MINTED). Sent by
@@ -54,7 +56,7 @@ export default class ObjectURLModule extends Module<Client> {
 				if (markup !== undefined)
 					htmlBlobURLs.set(url, { markup, url: client.url.toString() });
 				// the registry's entry, for a worker started from it (workerBlobs)
-				if (isBlob(args[0])) blobsByURL.set(url, args[0]);
+				if (isBlob(args[0])) recordBlob(url, args[0], this.#blobs);
 				this.#register(url);
 				return pageBlobURL(url);
 			},
@@ -65,7 +67,7 @@ export default class ObjectURLModule extends Module<Client> {
 				if (args.length) {
 					args[0] = proxyBlobURL(String(args[0]));
 					htmlBlobURLs.delete(args[0] as string);
-					blobsByURL.delete(args[0] as string);
+					forgetBlob(args[0] as string);
 				}
 				return Reflect.apply(target, that, args);
 			},

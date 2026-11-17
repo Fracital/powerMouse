@@ -26,7 +26,7 @@ import {
 	trustedWorker,
 	useTrustedTypes,
 } from '../trusted';
-import { blobsByURL, PRIVATE_URL_MS, WORKER_LOADED } from '../workerBlobs';
+import { blobOf, PRIVATE_URL_MS, WORKER_LOADED } from '../workerBlobs';
 import ProxyModule, { catchRequiredArguments } from './Proxy';
 import { reportedLocations, unrouteURL, type ErrorLocation } from './Unroute';
 
@@ -77,7 +77,7 @@ export default class WorkerModule extends Module<Client> {
 				// page's revoke right after `new Worker()` does not reach
 				// (workerBlobs). A URL whose Blob is not known here is imported
 				// as it is
-				const blob = blobsByURL.get(proxyBlobURL(url.href));
+				const blob = blobOf(proxyBlobURL(url.href));
 				// a classic worker of a document whose policy refuses a blob:
 				// script (src/csp.ts) cannot import the page's: its Blob is the
 				// bootstrap's own text, after the preamble

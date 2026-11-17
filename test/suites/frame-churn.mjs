@@ -15,6 +15,9 @@
 // A frame of another site than the top kept its realm through the
 // observers it keeps on its frame elements (AnimationFrames): Blink keeps an
 // observer rooted at another document until it is disconnected.
+//
+// An about:blank frame runs its creator's bundle, whose table of the Blobs
+// behind minted blob: URLs kept the frame's Blobs, and with them its realm.
 import {
 	done,
 	FIXTURE,
@@ -59,6 +62,19 @@ const CASES = {
 			frame.src = `${cross}${child}?raf&blob&img&fn&i=${i}`;
 			frame.onload = () => setTimeout(() => (frame.remove(), resolve()), 50);
 			document.body.append(frame);
+		}),
+	'an about:blank frame, written and removed': (i) =>
+		new Promise((resolve) => {
+			const frame = document.createElement('iframe');
+			document.body.append(frame);
+			const doc = frame.contentDocument;
+			doc.open();
+			// blob: URLs it never revokes, which go with it natively
+			doc.write(
+				`<p>${i}</p><script>for (let k = 0; k < 3; k++) window['u' + k] = URL.createObjectURL(new Blob(['${i}']))</script>`,
+			);
+			doc.close();
+			setTimeout(() => (frame.remove(), resolve()), 50);
 		}),
 };
 
