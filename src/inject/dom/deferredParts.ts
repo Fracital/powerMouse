@@ -66,6 +66,7 @@ import { ancestorOriginsList } from './ancestorOriginsList';
 import { attributeViewMethods } from './attributeViewMethods';
 import { relayBeacon } from './beaconRelay';
 import { identityFlow, relyingPartyGuard } from './credentialFlows';
+import { saveDownload } from './downloadSave';
 import { formEncoding, legacyFormQuery, legacyQuery } from './legacyEncoding';
 import { markupMembers } from './markupMembers';
 import FingerprintModule from './modules/Fingerprint';
@@ -115,6 +116,8 @@ const parts = {
 	relyingPartyGuard,
 	storageAccessHandle,
 	presentationIds,
+	// a same-origin download's copy, at a document's first (modules/Download.ts)
+	saveDownload,
 };
 
 export type DeferredParts = typeof parts;

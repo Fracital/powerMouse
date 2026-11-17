@@ -1,25 +1,8 @@
-import { routeBinary } from '../../../routeURL';
-import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
-import { scopePrefix } from '../../modules/Unroute';
 import { LazyWeakSet } from '../../ownCollections';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
-import { loadFetch } from '../loadGrants';
-
-/** the name a Content-Disposition header gives, if any */
-function dispositionName(header: string | null): string | null {
-	if (!header) return null;
-	const extended = /filename\*\s*=\s*([\w-]+)''([^;]+)/i.exec(header);
-	if (extended)
-		try {
-			return decodeURIComponent(extended[2].trim());
-		} catch (error) {
-			// not percent-encoded after all: the plain form below
-		}
-	const plain = /filename\s*=\s*("([^"]*)"|[^;]+)/i.exec(header);
-	return plain ? (plain[2] ?? plain[1]).trim() : null;
-}
+import { deferred } from '../deferred';
 
 /**
  * A link with a `download` attribute. Chrome hands no download to a service
@@ -126,32 +109,8 @@ export default class DownloadModule extends Module<DocumentClient> {
 		install();
 		addDocumentOpenListener(global, install);
 	}
-	async save(url: URL, named: string) {
-		const client = this.client;
-		const response = await loadFetch(
-			client,
-			new URL(routeBinary(new StompURL(url, client.url)), scopePrefix(client))
-				.href,
-			// the browser's own download, not a page's read: no CORS (a load
-			// the worker takes no metadata from)
-			'download',
-			{ credentials: 'include' },
-		);
-		const last = decodeURIComponent(
-			url.pathname.slice(url.pathname.lastIndexOf('/') + 1),
-		);
-		const name =
-			named ||
-			dispositionName(response.headers.get('content-disposition')) ||
-			last ||
-			'download';
-		const global = client.global;
-		const blob = await response.blob();
-		const objectURL = global.URL.createObjectURL(blob);
-		const anchor = global.document.createElement('a');
-		anchor.download = name;
-		anchor.href = objectURL;
-		anchor.click();
-		global.setTimeout(() => global.URL.revokeObjectURL(objectURL), 60000);
+	/** a same-origin download's copy, saved (../downloadSave.ts, a deferred part) */
+	async save(url: URL, named: string): Promise<void> {
+		return deferred().saveDownload(this.client, url, named);
 	}
 }

@@ -425,6 +425,7 @@ const DEFERRED_FILES = new Set(
 		'src/inject/dom/beaconRelay.ts',
 		'src/inject/dom/credentialFlows.ts',
 		'src/inject/dom/deferredParts.ts',
+		'src/inject/dom/downloadSave.ts',
 		'src/inject/dom/legacyEncoding.ts',
 		'src/inject/dom/markupMembers.ts',
 		'src/inject/dom/openerFacts.ts',
