@@ -6,9 +6,6 @@
 		"(harness)": "TIMEOUT: ",
 		"An existing browsing context must be chosen if the given name is the same as its name": "TIMEOUT: Test timed out"
 	},
-	"/html/browsers/windows/embedded-opener-remove-frame.html": {
-		"(harness)": "TIMEOUT: "
-	},
 	"/html/browsers/windows/nested-browsing-contexts/frameElement.sub.html": {
 		"The window's frameElement attribute must return its container element if it is a nested browsing context": "FAIL: Failed to read a named property 'frameElement' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
 	},
