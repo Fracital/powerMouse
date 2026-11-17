@@ -626,8 +626,35 @@ export default class AccessModule extends Module<Client> {
 				// (a null or undefined target throws before the key is converted,
 				// as natively)
 				if (!nullish(target)) {
+					const given = key;
 					key = keyOf(key);
 					target = live(target, key);
+					// V8 converts an object key again for the write of a compound
+					// or update expression (`o[k] += v`, `o[k]++`, `o[k] ||= v`
+					// that assigns): the operator is handed a key whose first
+					// conversion answers the one made here and every later one
+					// converts the page's key again, so it converts as often as
+					// natively
+					if (key !== given) {
+						const converted = key;
+						let fresh = true;
+						const again = {
+							[NativeSymbol.toPrimitive]: () => {
+								if (!fresh) return keyOf(given);
+								fresh = false;
+								return converted;
+							},
+						};
+						const operator = operate;
+						// (only where it is handed the key: a stand-in's write is
+						// handed a name of its own)
+						operate = (object, property, value) =>
+							operator(
+								object,
+								property === converted ? again : property,
+								value,
+							);
+					}
 				}
 
 				// the client's global is not the page's to replace (see get)

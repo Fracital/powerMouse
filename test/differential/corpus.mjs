@@ -1444,8 +1444,6 @@ const HAND = [
 	],
 ];
 
-const KEY_ONCE =
-	'an object that is a computed key is converted once by the access API where V8 converts it for the read and again for the write (a compound write whose value does no work, an update)';
 const HOST_TOP =
 	"an update or an arithmetic compound write of a window's `top` converts the host's top to a primitive (the result is the same: NaN or a string no page tells apart)";
 const PARAMETERS =
@@ -1456,11 +1454,6 @@ const PARAMETERS =
  * case's code is its reproduction.
  */
 export const KNOWN = {
-	'write#22': KEY_ONCE,
-	'write#6.14': KEY_ONCE,
-	'write#7.14': KEY_ONCE,
-	'write#20.14': KEY_ONCE,
-	'write#21.14': KEY_ONCE,
 	'write#6.16': HOST_TOP,
 	'write#7.16': HOST_TOP,
 	'write#20.16': HOST_TOP,
