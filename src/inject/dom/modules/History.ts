@@ -455,10 +455,14 @@ export default class HistoryModule extends Module<DocumentClient> {
 		};
 		const eventProto = NavigateEvent?.prototype;
 		const destinationProto = NavigationDestination?.prototype;
+		/** the origin the latest cross-document navigation set out for (pageswap, below) */
+		let setOut: string | undefined;
 		if (eventProto && destinationProto) {
 			const destinationOf = accessor(eventProto, 'destination');
 			const typeOf = accessor(eventProto, 'navigationType');
 			const destinationKey = accessor(destinationProto, 'key');
+			const destinationHref = accessor(destinationProto, 'url');
+			const destinationSame = accessor(destinationProto, 'sameDocument');
 			const keyOf = (event: object) =>
 				Reflect.apply(
 					destinationKey,
@@ -468,6 +472,15 @@ export default class HistoryModule extends Module<DocumentClient> {
 			Reflect.apply(nativeEventTarget.addEventListener, navigation, [
 				'navigate',
 				(event: Event) => {
+					try {
+						const to = Reflect.apply(destinationOf, event, []);
+						if (!Reflect.apply(destinationSame, to, [])) {
+							const raw = String(Reflect.apply(destinationHref, to, []));
+							setOut = new URL(unrouteURL(moduleClient, raw) ?? raw).origin;
+						}
+					} catch (error) {
+						setOut = 'null';
+					}
 					try {
 						if (
 							Reflect.apply(typeOf, event, []) !== 'traverse' ||
@@ -503,7 +516,10 @@ export default class HistoryModule extends Module<DocumentClient> {
 				});
 		}
 		// what pageswap shows of a navigation to another site's document:
-		// nothing, as natively
+		// nothing, as natively, and nothing of one that set out for another
+		// site and was redirected back (Chrome's null for a cross-origin
+		// redirect: a page never reads the URL another site sent its visitor
+		// on to, an OAuth code)
 		const swapProto = (global as { PageSwapEvent?: { prototype: object } })
 			.PageSwapEvent?.prototype;
 		const swap =
@@ -519,7 +535,12 @@ export default class HistoryModule extends Module<DocumentClient> {
 					const entry =
 						activation &&
 						(Reflect.apply(activationEntry, activation, []) as Entry | null);
-					return entry && originOf(entry) !== own() ? null : activation;
+					const origin = own();
+					return entry &&
+						(originOf(entry) !== origin ||
+							(setOut !== undefined && setOut !== origin))
+						? null
+						: activation;
 				}),
 			});
 		Reflect.defineProperty(entryProto, 'index', {

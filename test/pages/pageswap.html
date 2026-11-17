@@ -1,0 +1,32 @@
+<!doctype html>
+<title>pageswap</title>
+<script>
+	// A top-level document that navigates itself where `?go` says and sends
+	// its pageswap event's activation to the fixture's log under `?k` (the
+	// pageswap suite reads it, natively and through the proxy)
+	const go = new URLSearchParams(location.search).get('go');
+	addEventListener('pageswap', (event) => {
+		const a = event.activation;
+		// (sent as the document goes; the fixture's /sop/ log keeps it)
+		fetch(`/sop/r?k=${new URLSearchParams(location.search).get('k')}`, {
+			method: 'POST',
+			keepalive: true,
+			headers: {
+				'x-custom': JSON.stringify(
+					a
+						? {
+								type: a.navigationType,
+								entry: a.entry && a.entry.url,
+								from: a.from && a.from.url,
+							}
+						: null,
+				),
+			},
+		});
+	});
+	addEventListener('load', () =>
+		setTimeout(() => {
+			location.href = go;
+		}, 50),
+	);
+</script>
