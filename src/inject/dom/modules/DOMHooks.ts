@@ -1142,6 +1142,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						// other node and leaves half the old text in place
 						for (const node of [...that.childNodes]) node.remove();
 
+						// the empty string leaves no text node, as natively
+						if (text === '') return;
 						that.append(
 							new this.client.global.Text(
 								this.client.prepareScriptText(that, text),
