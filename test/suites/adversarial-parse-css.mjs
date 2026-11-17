@@ -587,65 +587,24 @@ function build(s) {
 	return batches;
 }
 
-// The findings of this group that are open on purpose (test/parserFuzz.mjs
-// `knownOpen`): a category, the reason, and `match(case, finding)`. All that
-// remain need the CSS scanner (rust/rwcss, assets/core.wasm) and the regex
-// fallback (src/cssURLs.ts) to change together, with a REVISION bump and a
-// re-record of the rewriter parity cases, so they are held for that one
-// coordinated change rather than patched piecemeal. Escapes are listed by
-// the exact spelling that leaks, so a new spelling that escapes still fails.
-const ESC_IDENT = new Set([
-	'esc-r',
-	'esc-u',
-	'esc-6digit',
-	'esc-U-upper',
-	'esc-l-nonhex',
-	'esc-r-space',
-	'image-set-esc',
-]);
-const UPPER = new Set(['URL-bare', 'Url-dq', 'uRL-sq']);
+// The findings of this group that are open on purpose, each with its reason
+// and the cases it covers (test/parserFuzz.mjs, `knownOpen`). Every escape
+// and leak this suite found is fixed: a url(), image-set() or src() named in
+// any case or with an escape in its name, a url() left open at the end, an
+// @import named in any case or with an escape, the strings of an image-set()
+// in a custom property or a var() fallback (rust/rwcss, src/cssURLs.ts). An
+// escape or a leak is never listed, so a new one fails.
 const KNOWN_OPEN = {
-	'escaped-ident': {
-		// an escape in the url/src/image-set function name (u\72l(, \55RL(,
-		// image-se\74() is not decoded: the tokenizer compares raw bytes
-		// (rust/rwcss/src/css.rs consume_ident_like_token, marks) and the
-		// regex matches `url(` literally (src/cssURLs.ts RAW_URL), so Chrome's
-		// url() is not seen and the load goes out direct
-		why: 'CSS escapes in the url()/src()/image-set() name are not decoded (rust/rwcss css.rs + src/cssURLs.ts)',
-		match: (c) => ESC_IDENT.has(c.tags.spell),
-	},
-	'uppercase-url': {
-		// upper or mixed case url() in a value the regex routes (a custom
-		// property, an at-rule prelude, a FontFace left to the regex): the
-		// RAW regex and rust rewrite_urls match lower-case `url(` only
-		why: 'upper-case url() in a raw value is routed by the lower-case-only regex (src/cssURLs.ts RAW_URL, rust/rwcss rewrite.rs rewrite_urls)',
-		match: (c) => UPPER.has(c.tags.spell),
-	},
-	'unclosed-url': {
-		why: 'an unclosed url( in a raw value: the regex needs the closing paren (src/cssURLs.ts RAW_URL)',
-		match: (c) => c.tags.spell.startsWith('unclosed'),
-	},
-	'image-set-src': {
-		why: 'image-set()/src()/cross-fade() string and url grammar read differently from Chrome (rust/rwcss css.rs, src/cssURLs.ts)',
-		match: (c) => /image-set|cross-fade|src-fn/.test(c.tags.spell),
-	},
-	'import-atrule': {
-		// @IMPORT/@\69mport (css.rs compares the name lower-case-exact) routes
-		// the sheet as binary, and an @import/@property/@font-face target reads
-		// back routed; fidelity, and one exposes the proxy in a readback
-		why: 'at-rule name case/escape and the import/property/font-face url readback (rust/rwcss css.rs atrule)',
-		match: (c, f) => !!c.tags.at && f.kind !== 'escape',
-	},
 	'url-readback-or-boundary': {
-		// every remaining CSS breakage: the scanner and the regex end a url()
-		// token, decode its escapes, resolve backslashes/tabs/percent-encoded
-		// dots, and serialise the readback as css-tree does, which is not
-		// always where Chrome does. These mangle what the page reads back or
-		// which URL it points at (a fidelity gap, no origin escape); an
-		// escape or a leak is listed by its own category above, so a new one
-		// still fails. Held for the one coordinated rust/rwcss + cssURLs.ts
-		// change.
-		why: 'url() token boundary, escape decoding and CSSOM readback follow css-tree, not Chrome (rust/rwcss css.rs, src/cssURLs.ts)',
+		// what remains are breakages: the scanner and the regex end a url()
+		// token, decode its escapes, resolve backslashes, tabs and
+		// percent-encoded dots, and serialise the readback as css-tree did,
+		// which is not always where Chrome does (a comment or newline after a
+		// quoted url(), white space inside, an escape in the target, a bad
+		// url() in an @import prelude, a cross-fade() percentage). They change
+		// what the page reads back or which URL it points at, never past the
+		// proxy.
+		why: 'url() token boundary, escape decoding and CSSOM readback follow css-tree, not Chrome (rust/rwcss css.rs, rewrite.rs, src/cssURLs.ts)',
 		match: (c, f) => f.kind === 'breakage',
 	},
 };

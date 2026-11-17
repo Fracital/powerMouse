@@ -79,6 +79,133 @@ const SCRIPT_LANGUAGES = [
 	'text/javascript',
 ];
 
+// the sniff cases: [Content-Type (null: none), extra headers, body of the payload]
+const SNIFF_TAGS = [
+	'!DOCTYPE html',
+	'script',
+	'html',
+	'!--',
+	'head',
+	'iframe',
+	'h1',
+	'div',
+	'font',
+	'table',
+	'a',
+	'style',
+	'title',
+	'b',
+	'body',
+	'br',
+	'p',
+];
+const UNKNOWN_TYPES = [
+	null,
+	'',
+	'unknown/unknown',
+	'application/unknown',
+	'*/*',
+	'html',
+	'Unknown/Unknown',
+	' application/unknown ; charset=utf-8',
+];
+const run = (p) => `<script>${p}</script>`;
+/** a body that starts with `<tag` + `end` and then runs the payload */
+const opening =
+	(tag, end = '>', before = '') =>
+	(p) =>
+		tag === 'script'
+			? `${before}<script${end}${p}</script>`
+			: tag === '!--'
+				? `${before}<!--${end === '>' ? ' x -->' : `${end}x -->`}${run(p)}`
+				: `${before}<${tag}${end}${['style', 'title', 'iframe'].includes(tag) ? `</${tag}>` : ''}${run(p)}`;
+const NOSNIFF = { 'x-content-type-options': 'nosniff' };
+const MIME_SNIFF_CASES = [
+	// every tag of the table under every unknown type
+	...UNKNOWN_TYPES.flatMap((type) =>
+		SNIFF_TAGS.map((tag) => [type, undefined, opening(tag)]),
+	),
+	// what may follow the tag's name (the tag still closes, so its
+	// payload runs wherever it is read as HTML)
+	...[' >', '\t>', '\n>', '\f>', '\r>', '/>', 'x>', '!>', '\0>'].flatMap(
+		(end) => [
+			['unknown/unknown', undefined, opening('html', end)],
+			[null, undefined, opening('b', end)],
+			['', undefined, opening('br', end)],
+		],
+	),
+	['unknown/unknown', undefined, (p) => `<!--x-->${run(p)}`],
+	['unknown/unknown', undefined, (p) => `<!---->${run(p)}`],
+	['unknown/unknown', undefined, (p) => `<!DOCTYPE  html>${run(p)}`],
+	[null, undefined, () => ''],
+	['', undefined, () => ' '],
+	['unknown/unknown', undefined, () => ''],
+	// what may come before it, and how far into the body it may be
+	...[
+		' \t\n\r\f',
+		'\v',
+		' ',
+		'﻿',
+		'\0',
+		'x',
+		' '.repeat(500),
+		' '.repeat(506),
+		' '.repeat(507),
+		' '.repeat(508),
+		'\n'.repeat(510),
+		' '.repeat(1000),
+		' '.repeat(1030),
+	].flatMap((before) => [
+		['unknown/unknown', undefined, opening('html', '>', before)],
+		[null, undefined, opening('script', '>', before)],
+	]),
+	// case, and a doctype that is not html's
+	['unknown/unknown', undefined, (p) => `<HtMl>${run(p)}`],
+	['unknown/unknown', undefined, (p) => `<!doctype HTML>${run(p)}`],
+	['unknown/unknown', undefined, (p) => `<!DOCTYPE htmlx>${run(p)}`],
+	['unknown/unknown', undefined, (p) => `<!DOCTYPE svg>${run(p)}`],
+	['unknown/unknown', undefined, (p) => `<SCRIPT>${p}</SCRIPT>`],
+	['*/*', undefined, (p) => `<IFRAME></IFRAME>${run(p)}`],
+	// a tag not in the table
+	['unknown/unknown', undefined, (p) => `<span>${run(p)}`],
+	[null, undefined, (p) => `<svg>${run(p)}`],
+	[null, undefined, (p) => `hello ${run(p)}`],
+	// nosniff: the browser takes the type as it is
+	...[
+		null,
+		'',
+		' ',
+		'unknown/unknown',
+		'application/unknown',
+		'*/*',
+		'html',
+		';charset=utf-8',
+	].flatMap((type) => [
+		[type, NOSNIFF, opening('html')],
+		[type, NOSNIFF, opening('script')],
+	]),
+	// types the sniff leaves alone
+	['unknown/unknown', { 'x-content-type-options': 'NoSniff' }, opening('p')],
+	[null, { 'x-content-type-options': 'nosniff, x' }, opening('p')],
+	[null, { 'x-content-type-options': 'no-sniff' }, opening('p')],
+	[' ', undefined, opening('p')],
+	[';charset=utf-8', undefined, opening('p')],
+	['text/', undefined, opening('p')],
+	['/html', undefined, opening('p')],
+	// a list of types: Chrome takes the last it can parse
+	['text/plain, unknown/unknown', undefined, opening('p')],
+	['unknown/unknown, text/plain', undefined, opening('p')],
+	['text/html, */*', undefined, opening('p')],
+	['*/*, text/plain', undefined, opening('p')],
+	['text/plain, html', undefined, opening('p')],
+	['text/plain', undefined, opening('html')],
+	['text/plain', undefined, opening('script')],
+	['TEXT/PLAIN', undefined, opening('html')],
+	['text/html', undefined, opening('p')],
+	['text/html', undefined, opening('!--')],
+	['text/html', NOSNIFF, opening('p')],
+];
+
 const families = {
 	// <script type> and <script language>: Chrome runs what it takes for
 	// JavaScript; a script the rewriter takes for data runs unrewritten
@@ -832,6 +959,24 @@ const families = {
 		]);
 		return { doc, tag: doc.slice(0, 90) };
 	},
+	// a document whose Content-Type says nothing the browser can use
+	// (none, empty, unknown/unknown, application/unknown, */*, no slash),
+	// which Chrome reads as HTML when its first bytes start one of the tags
+	// of its sniff table (net/base/mime_sniffer.cc SniffForHTML), unless
+	// the answer says nosniff; text/plain never sniffs to HTML. The proxy
+	// must make the same call: a body it passes through as not a document
+	// that the browser then sniffs as one runs its scripts unrewritten.
+	// (<?xml, which sniffs to an XML document, is the misc-escapes stream's.)
+	'mime-sniff': (s, id, r) => {
+		const [type, headers, body] = r.pick(MIME_SNIFF_CASES);
+		const doc = body(payload(s, id));
+		return {
+			doc,
+			own: true,
+			served: { type, headers },
+			tag: `${type === null ? 'none' : JSON.stringify(type)}${headers ? ' nosniff' : ''} ${JSON.stringify(doc.replace(/\(function.*?\}\)\(\)/g, 'P').slice(0, 60))}`,
+		};
+	},
 	// noscript, which the inject reads with scripting off and the document
 	// with scripting on
 	noscript: (s, id, r) => {
@@ -980,7 +1125,8 @@ function build(s) {
 		for (const m of slice) {
 			Object.assign(files, m.files ?? {});
 			files[`/fz/${m.id}/doc.html`] = {
-				type: 'text/html; charset=utf-8',
+				type: m.served ? m.served.type : 'text/html; charset=utf-8',
+				headers: m.served?.headers,
 				body: caseDocument(m),
 			};
 		}
@@ -1029,6 +1175,17 @@ const KNOWN_OPEN = {
 			(f.kind === 'escape' || f.kind === 'breakage'),
 	},
 	// breakages
+	'leading-comment': {
+		// a comment before the root element is a child of the document
+		// natively; the proxied document has none there (a text/html one
+		// too: measured with the mime-sniff family's text/html control)
+		why: "a comment before the document's root element is not kept as the document's child (the shell's document, src/inject/dom/Client.ts loadHTML)",
+		match: (c, f) =>
+			f.kind === 'breakage' &&
+			f.what === 'observed shape' &&
+			/^native <!--/.test(f.detail) &&
+			!/^native <!--[^>]*--> proxied <!--/.test(f.detail),
+	},
 	'srcset-grammar': {
 		// the srcset npm parser (src/inject/dom/modules/DOMAttributes.ts)
 		// splits on Unicode whitespace (a no-break space ends the URL, which

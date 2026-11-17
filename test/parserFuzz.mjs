@@ -126,7 +126,10 @@ export async function startLogServer() {
 		if (file) {
 			res.writeHead(file.status ?? 200, {
 				...headers,
-				'content-type': file.type ?? TYPES[ext] ?? 'text/plain',
+				// a type of null sends none (the browser sniffs what it got)
+				...(file.type === null
+					? {}
+					: { 'content-type': file.type ?? TYPES[ext] ?? 'text/plain' }),
 				...file.headers,
 			});
 			res.end(file.body);

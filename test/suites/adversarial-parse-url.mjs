@@ -362,19 +362,6 @@ function build(s) {
 // call where the proxied result differs from native on an edge of URL
 // parsing. Escapes were the import-specifier and getMime cases, now fixed.
 const KNOWN_OPEN = {
-	'static-import-control-characters': {
-		// ESCAPE. A static import whose specifier has a tab, newline or CR in
-		// its scheme (`import 'ht\rtp://host/m.js'`): the URL parser strips
-		// them and reads an absolute URL, the wasm rewriter's bare-specifier
-		// test does not, so the import is left unrouted and loads direct.
-		// The dynamic import() form is fixed (src/scriptRoutes.ts
-		// stripSpecifier); the static form needs the same in rust.
-		why: 'a static import specifier with control characters counts as bare (rust/rwjs/src/walk.rs is_bare_specifier)',
-		match: (c, f) =>
-			c.tags.sink === 'module-static-import' &&
-			/in-scheme|lead-/.test(c.tags.spell) &&
-			f.kind === 'escape',
-	},
 	'embedded-credentials': {
 		// a URL with userinfo (http://u:p@host): fetch, XHR, beacon and
 		// EventSource forbid it (Chrome throws or drops), some navigations
