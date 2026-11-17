@@ -117,9 +117,24 @@ export const BARE_SPECIFIER = /^(?!\/|\.\.?\/|[a-z][a-z0-9+.-]*:)/i;
 /** a relative URL-like specifier: starting with `/`, `./`, `../` */
 export const RELATIVE_SPECIFIER = /^(?:\/|\.\.?\/)/;
 
+/**
+ * A module specifier as the URL parser reads it before deciding its shape:
+ * the parser removes every tab, newline and carriage return and trims
+ * leading and trailing C0 controls and spaces. A specifier written
+ * `ht\rtp://host/x` or `  http://host/x` is an absolute URL to the browser,
+ * which fetches it directly, so the bare-specifier test and the URL
+ * resolution must see the same stripped text, or a routed import leaks the
+ * origin.
+ */
+export function stripSpecifier(specifier: string): string {
+	return specifier
+		.replace(/[\t\n\r]/g, '')
+		.replace(/^[\0-\x20]+|[\0-\x20]+$/g, '');
+}
+
 /** `react`, `#private`, `@scope/pkg`: not a URL, resolved by an import map */
 export function isBareSpecifier(specifier: string): boolean {
-	return BARE_SPECIFIER.test(specifier);
+	return BARE_SPECIFIER.test(stripSpecifier(specifier));
 }
 
 /** the route kind whose path is a codec-sealed module prefix and a literal suffix */
