@@ -9,9 +9,10 @@ await runWpt('wpt-webstorage', {
 	roots: ['webstorage'],
 	concurrency: 1,
 	skip: [
-		// filling a store until setItem throws crashes the proxied tab, and
-		// every page after it in the run with it (the backlog of the
-		// wpt-gaps-workers stream has the row)
+		// filling a store until setItem throws, and again after a clear(),
+		// crashes the proxied tab, and every page after it in the run with it
+		// (the backlog of the wpt-gaps-workers stream has the row)
 		/^\/webstorage\/storage_(local|session)_setitem_quotaexceedederr\./,
+		/^\/webstorage\/storage_(local|session)_quota_independent_from_(local|session)\./,
 	],
 });

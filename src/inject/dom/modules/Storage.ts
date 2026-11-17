@@ -395,6 +395,14 @@ export default class StorageModule extends Module<DocumentClient> {
 		};
 
 		const realm = this.client.global;
+		// the QuotaExceededError interface where the browser has it (its
+		// `quota` and `requested` are null for a store), taken before the page
+		// runs; else the DOMException of that name it replaced
+		const QuotaExceeded = (
+			realm as unknown as {
+				QuotaExceededError?: new (message: string) => Error;
+			}
+		).QuotaExceededError;
 		class StorageProxy {
 			#directory: string;
 			constructor(directory: string) {
@@ -475,13 +483,14 @@ export default class StorageModule extends Module<DocumentClient> {
 				const value = String(args[1]);
 
 				const after = sizeAfter(directory, item, value);
-				if (after === null)
+				if (after === null) {
+					const message = `Failed to execute 'setItem' on 'Storage': Setting the value of '${item}' exceeded the quota.`;
 					throw withStack(
-						new realm.DOMException(
-							`Failed to execute 'setItem' on 'Storage': Setting the value of '${item}' exceeded the quota.`,
-							'QuotaExceededError',
-						),
+						typeof QuotaExceeded === 'function'
+							? new QuotaExceeded(message)
+							: new realm.DOMException(message, 'QuotaExceededError'),
 					);
+				}
 
 				const call = [getOrigin(), item, value, sender, here()];
 				if (

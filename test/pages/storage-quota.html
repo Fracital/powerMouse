@@ -92,6 +92,19 @@
 			// and so is one value of 6 MiB on its own; 2 MiB still fits
 			results.over = set('over', make('over', 4 * MiB, 'x'));
 			results.alone = set('alone', make('alone', 6 * MiB, 'x'));
+			// what is thrown: Chrome's QuotaExceededError interface, with its
+			// quota and requested (null for a store)
+			try {
+				localStorage.setItem('alone', make('alone', 6 * MiB, 'x'));
+				results.overError = 'stored';
+			} catch (error) {
+				results.overError = [
+					error.constructor.name,
+					error.code,
+					'quota' in error ? error.quota : 'no quota',
+					'requested' in error ? error.requested : 'no requested',
+				];
+			}
 			results.overGone = [
 				localStorage.getItem('over') === null,
 				localStorage.getItem('alone') === null,

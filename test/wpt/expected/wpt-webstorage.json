@@ -67,12 +67,6 @@
 	"/webstorage/event_setattribute.html": {
 		"sessionStorage mutations fire StorageEvents that are caught by the event listener attached via setattribute.": "FAIL: assert_unreached: Timeout: only got 0, expected 1 events Reached unreachable code"
 	},
-	"/webstorage/storage_local_quota_independent_from_session.window.html": {
-		"localStorage retains comparable quota after sessionStorage exhaustion": "FAIL: assert_throws_quotaexceedederror: function \"() => { while (true) { localStorage.setItem(\"\" + key + indexBefore, \"\" + val + indexBefore); indexBefore++; } }\" threw object \"QuotaExceededError: Failed to"
-	},
-	"/webstorage/storage_session_quota_independent_from_local.window.html": {
-		"sessionStorage retains comparable quota after localStorage exhaustion": "FAIL: assert_throws_quotaexceedederror: function \"() => { while (true) { sessionStorage.setItem(\"\" + key + indexBefore, \"\" + val + indexBefore); indexBefore++; } }\" threw object \"QuotaExceededError: Failed "
-	},
 	"/webstorage/storage_session_window_noopener.window.html": {
 		"A new noopener window to make sure there is a not copy of the previous window's sessionStorage": "FAIL: assert_equals: storage.getItem('FOO') expected (object) null but got (string) \"BAR\""
 	},

@@ -5,7 +5,9 @@
 // the writes after that threw QuotaExceededError, which natively only a write
 // past the origin's 5 MiB does. The page writes a burst in one task (with
 // overwrites of one key before and after it), a burst across tasks, a 1 MiB
-// value and two writes that natively exceed the quota, then reloads itself
+// value and two writes that natively exceed the quota (the second also says
+// what it threw: Chrome's QuotaExceededError interface, not a DOMException of
+// that name), then reloads itself
 // in the task of its last write and reads every key back. Each result is
 // compared with the page loaded natively, in both demo modes.
 //
