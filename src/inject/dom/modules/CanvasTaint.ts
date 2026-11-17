@@ -529,7 +529,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 		// canvas the browser's createElementNS made, or an OffscreenCanvas)
 		const offscreenGetContext = global.OffscreenCanvas?.prototype.getContext;
 		const lazyContext = (name: string, type: string, offscreen: boolean) => {
-			const settle = lazyInterface(client, proxyModule, name, () => {
+			const settle = lazyInterface(client, name, () => {
 				const native = offscreen ? offscreenGetContext : canvasGetContext;
 				const context =
 					typeof native === 'function'

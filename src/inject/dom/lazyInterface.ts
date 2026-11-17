@@ -1,5 +1,61 @@
 import type Client from '../Client';
-import type ProxyModule from '../modules/Proxy';
+
+/** a name held by lazyInterface: what its shared accessor and resolver are bound to */
+interface Held {
+	client: Client;
+	name: string;
+	make: (() => unknown) | null;
+	get?: Function;
+}
+
+/** the name settled as `value` (`present`), or gone; its hold is over */
+function settle(held: Held, value: unknown, present: boolean) {
+	const { client, name } = held;
+	held.make = null;
+	client.lazyGlobals.delete(name);
+	if (present)
+		Reflect.defineProperty(client.global, name, {
+			value,
+			writable: true,
+			enumerable: false,
+			configurable: true,
+		});
+	else Reflect.deleteProperty(client.global, name);
+}
+
+/**
+ * The interface made, if the name is still held and still the hold's: a
+ * page that deleted or redefined the name has its own (asked with the name
+ * settled first: the Reflection module resolves it too)
+ */
+function resolve(this: Held) {
+	const { make, client, name } = this;
+	if (!make) return;
+	this.make = null;
+	client.lazyGlobals.delete(name);
+	if (Reflect.getOwnPropertyDescriptor(client.global, name)?.get !== this.get)
+		return;
+	let found: unknown;
+	try {
+		found = make();
+	} catch (error) {
+		// (the realm cannot make one: no page has an object of it either)
+	}
+	settle(this, found, found !== undefined);
+}
+
+// One getter, one setter and one resolver for every held name, each bound
+// to the name's record: a hold is a record and three bound functions, not
+// a wrapper pair and their closures (frame-cost). The page never sees them:
+// the Reflection module resolves a held name before any reflective
+// question about it.
+function heldGet(this: Held) {
+	Reflect.apply(resolve, this, []);
+	return Reflect.get(this.client.global, this.name);
+}
+function heldSet(this: Held, value: unknown) {
+	settle(this, value, true);
+}
 
 /**
  * Hold the realm's global interface `name` behind an accessor until it is
@@ -24,61 +80,24 @@ import type ProxyModule from '../modules/Proxy';
  */
 export function lazyInterface(
 	client: Client,
-	proxyModule: ProxyModule,
 	name: string,
 	make: () => unknown,
 ): (value: unknown) => void {
 	const global = client.global;
-	let pending = true;
-	const settle = (value: unknown, present: boolean) => {
-		pending = false;
-		client.lazyGlobals.delete(name);
-		if (present)
-			Reflect.defineProperty(global, name, {
-				value,
-				writable: true,
-				enumerable: false,
-				configurable: true,
-			});
-		else Reflect.deleteProperty(global, name);
-	};
-	const resolve = () => {
-		if (!pending) return;
-		// a page that deleted or redefined the name has its own (asked with
-		// the name settled first: the Reflection module resolves it too)
-		pending = false;
-		client.lazyGlobals.delete(name);
-		if (Reflect.getOwnPropertyDescriptor(global, name)?.get !== get) return;
-		let found: unknown;
-		try {
-			found = make();
-		} catch (error) {
-			// (the realm cannot make one: no page has an object of it either)
-		}
-		settle(found, found !== undefined);
-	};
-	client.lazyGlobals.set(name, resolve);
+	const held: Held = { client, name, make };
+	held.get = heldGet.bind(held);
+	client.lazyGlobals.set(name, resolve.bind(held));
 	const keys = Reflect.ownKeys(global);
 	const after = keys[keys.indexOf(name) - 1];
 	if (after !== undefined) client.globalKeyAfter.set(name, after);
 	Reflect.deleteProperty(global, name);
-	const get = proxyModule.wrapFunction(
-		function lazyInterface() {} as () => unknown,
-		() => {
-			resolve();
-			return Reflect.get(global, name);
-		},
-	);
 	Reflect.defineProperty(global, name, {
-		get,
-		set: proxyModule.wrapFunction(
-			function lazyInterface(_value: unknown) {} as (value: unknown) => void,
-			(_target, _that, args) => settle(args[0], true),
-		),
+		get: held.get as () => unknown,
+		set: heldSet.bind(held),
 		enumerable: false,
 		configurable: true,
 	});
 	return (value) => {
-		if (pending) settle(value, true);
+		if (held.make) settle(held, value, true);
 	};
 }

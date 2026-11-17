@@ -457,7 +457,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 				}
 				return prototype;
 			};
-			const settle = lazyInterface(client, proxyModule, 'Geolocation', () => {
+			const settle = lazyInterface(client, 'Geolocation', () => {
 				const prototype = hook(
 					Reflect.apply(nativeGeolocation, global.navigator, []),
 				);
