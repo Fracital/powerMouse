@@ -1,0 +1,40 @@
+{
+	"/beacon/beacon-basic.https.window.html": {
+		"simple case: with no payload": "FAIL: assert_true: timeout expected true got false",
+		"simple case: with null payload": "FAIL: assert_true: timeout expected true got false",
+		"simple case: type = string and size = empty": "FAIL: assert_true: timeout expected true got false",
+		"simple case: type = arraybuffer and size = empty": "FAIL: assert_true: timeout expected true got false",
+		"simple case: type = form and size = empty": "FAIL: assert_true: timeout expected true got false",
+		"simple case: type = blob and size = empty": "FAIL: assert_true: timeout expected true got false",
+		"simple case: type = string and size = small": "FAIL: assert_true: timeout expected true got false",
+		"simple case: type = arraybuffer and size = small": "FAIL: assert_true: timeout expected true got false",
+		"simple case: type = form and size = small": "FAIL: assert_true: timeout expected true got false",
+		"simple case: type = blob and size = small": "FAIL: assert_true: timeout expected true got false",
+		"simple case: type = string and size = large": "FAIL: assert_true: timeout expected true got false",
+		"simple case: type = arraybuffer and size = large": "FAIL: assert_true: timeout expected true got false",
+		"simple case: type = form and size = large": "FAIL: assert_true: timeout expected true got false",
+		"simple case: type = blob and size = large": "FAIL: assert_true: timeout expected true got false",
+		"simple case: type = string and size = max": "FAIL: assert_true: timeout expected true got false",
+		"simple case: type = arraybuffer and size = max": "FAIL: assert_true: timeout expected true got false",
+		"simple case: type = blob and size = max": "FAIL: assert_true: timeout expected true got false"
+	},
+	"/beacon/beacon-cors.https.window.html": {
+		"cross-origin, CORS-safelisted: type = string": "FAIL: assert_true: timeout expected true got false",
+		"cross-origin, CORS-safelisted: type = arraybuffer": "FAIL: assert_true: timeout expected true got false",
+		"cross-origin, CORS-safelisted: type = form": "FAIL: assert_true: timeout expected true got false",
+		"cross-origin, CORS-safelisted: type = blob": "FAIL: assert_true: timeout expected true got false",
+		"cross-origin, non-CORS-safelisted: failure case (without redirect)": "FAIL: assert_true: timeout expected true got false",
+		"cross-origin, non-CORS-safelisted[credentials=true]": "FAIL: assert_true: timeout expected true got false",
+		"cross-origin, non-CORS-safelisted success-case (with redirect)": "FAIL: assert_true: timeout expected true got false"
+	},
+	"/beacon/beacon-redirect.https.window.html": {
+		"cross-origin, CORS-safelisted: status = 307, type = string": "FAIL: assert_true: timeout expected true got false",
+		"cross-origin, CORS-safelisted: status = 307, type = arraybuffer": "FAIL: assert_true: timeout expected true got false",
+		"cross-origin, CORS-safelisted: status = 307, type = form": "FAIL: assert_true: timeout expected true got false",
+		"cross-origin, CORS-safelisted: status = 307, type = blob": "FAIL: assert_true: timeout expected true got false",
+		"cross-origin, CORS-safelisted: status = 308, type = string": "FAIL: assert_true: timeout expected true got false",
+		"cross-origin, CORS-safelisted: status = 308, type = arraybuffer": "FAIL: assert_true: timeout expected true got false",
+		"cross-origin, CORS-safelisted: status = 308, type = form": "FAIL: assert_true: timeout expected true got false",
+		"cross-origin, CORS-safelisted: status = 308, type = blob": "FAIL: assert_true: timeout expected true got false"
+	}
+}
