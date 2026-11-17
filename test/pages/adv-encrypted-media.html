@@ -1,0 +1,115 @@
+<!doctype html>
+<title>ADV ENCRYPTED MEDIA</title>
+<pre id="result">pending</pre>
+<script src="adv-harness.js"></script>
+<script>
+	// The encrypted event gives the page a media's init data (its key ids)
+	// only for CORS-same-origin media: another site's media loaded without
+	// CORS, read any way here (the getters, the prototype's getters, a
+	// child realm's event class, a detached element, a redirect, a
+	// <source>), must give none. Any init data read is a LEAK:.
+	const A = __advAsync;
+	const other = location.origin.replace('127.0.0.1', 'localhost');
+	const file = `${other}/pages/encrypted-media.webm`;
+	const hex = (buffer) =>
+		buffer && buffer.byteLength
+			? 'LEAK:' +
+				[...new Uint8Array(buffer)]
+					.map((b) => b.toString(16).padStart(2, '0'))
+					.join('')
+			: `none ${buffer && buffer.byteLength}`;
+	const load = (src, { scope = window, attach = true, source = false } = {}) =>
+		new Promise((resolve, reject) => {
+			const video = scope.document.createElement('video');
+			video.muted = true;
+			video.addEventListener('encrypted', resolve);
+			video.addEventListener('error', () => reject(new Error('media error')));
+			if (source) {
+				const child = scope.document.createElement('source');
+				child.src = src;
+				video.append(child);
+			} else video.src = src;
+			if (attach) scope.document.body.append(video);
+		});
+	const read = (event) => [event.initDataType || 'none', hex(event.initData)];
+	A('encrypted another site media', async () => read(await load(file)), 12000);
+	A(
+		'encrypted prototype getters',
+		async () => {
+			const event = await load(file);
+			const proto = MediaEncryptedEvent.prototype;
+			const get = (name) =>
+				Object.getOwnPropertyDescriptor(proto, name).get.call(event);
+			return [get('initDataType') || 'none', hex(get('initData'))];
+		},
+		12000,
+	);
+	A(
+		'encrypted detached element',
+		async () => read(await load(file, { attach: false })),
+		12000,
+	);
+	A(
+		'encrypted redirected to another site',
+		async () =>
+			read(
+				await load(
+					`/sop/r?k=adv-encrypted&redirect=${encodeURIComponent(file)}`,
+				),
+			),
+		12000,
+	);
+	// read in the listener itself: the element may have nothing yet
+	// (readyState 0) when the browser fires the event
+	A(
+		'encrypted redirected to another site, read as it fires',
+		() =>
+			new Promise((resolve, reject) => {
+				const video = document.createElement('video');
+				video.muted = true;
+				video.addEventListener('encrypted', (event) =>
+					resolve([
+						video.readyState === 0 ? 'nothing' : 'data',
+						...read(event),
+					]),
+				);
+				video.addEventListener('error', () => reject(new Error('media error')));
+				video.src = `/sop/r?k=adv-encrypted-fires&redirect=${encodeURIComponent(file)}`;
+				document.body.append(video);
+			}),
+		12000,
+	);
+	A(
+		'encrypted source child',
+		async () => read(await load(file, { source: true })),
+		12000,
+	);
+	A(
+		'encrypted child realm getters',
+		async () => {
+			const frame = document.createElement('iframe');
+			document.body.append(frame);
+			const event = await load(file);
+			const proto = frame.contentWindow.MediaEncryptedEvent.prototype;
+			const get = (name) =>
+				Object.getOwnPropertyDescriptor(proto, name).get.call(event);
+			const own = await load(file, { scope: frame.contentWindow });
+			return [
+				get('initDataType') || 'none',
+				hex(get('initData')),
+				...read(own),
+			];
+		},
+		12000,
+	);
+	A(
+		'encrypted after the data is in',
+		async () => {
+			const event = await load(file);
+			await new Promise((resolve) => setTimeout(resolve, 1500));
+			return read(event);
+		},
+		12000,
+	);
+	__advFinish(3000);
+</script>

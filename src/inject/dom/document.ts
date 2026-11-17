@@ -34,6 +34,7 @@ import HistoryModule from './modules/History';
 import IFrameModule from './modules/IFrame';
 import IsolationModule from './modules/Isolation';
 import LocationModule from './modules/Location';
+import MediaEncryptedModule from './modules/MediaEncrypted';
 import MediaSessionModule from './modules/MediaSession';
 import MediaTaintModule from './modules/MediaTaint';
 import MemoryModule from './modules/Memory';
@@ -149,6 +150,7 @@ export function addClientModules(client: DocumentClient) {
 		client.addModule(FingerprintStandIn);
 	client.addModule(CanvasTaintModule);
 	client.addModule(MediaTaintModule);
+	client.addModule(MediaEncryptedModule);
 	client.addModule(MediaSessionModule);
 	client.addModule(IsolationModule);
 	// STomp's per-site performance.memory (the `performanceMemory` surface, on

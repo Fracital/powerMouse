@@ -48,8 +48,12 @@ const toStringTag = Symbol.toStringTag;
  * pays nothing.
  */
 export default class CanvasTaintModule extends Module<DocumentClient> {
-	/** whether drawing `source` taints a canvas: it holds another origin's data the page may not read */
-	taints: (source: unknown) => boolean = () => false;
+	/**
+	 * whether drawing `source` taints a canvas: it holds another origin's
+	 * data the page may not read (`hasData`: a media element known to have
+	 * had bytes, whatever its readyState says yet)
+	 */
+	taints: (source: unknown, hasData?: boolean) => boolean = () => false;
 	/**
 	 * Run `callback` when `element` fires an event of one of `types`, whatever
 	 * the page's own listeners do: one that stops the event before the
@@ -190,8 +194,15 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 		// a load, when the element first has anything to draw, hear or capture
 		const mediaReady = getter(global.HTMLMediaElement?.prototype, 'readyState');
 		const asked = new LazyWeakMap<object, { url: string; crossed: boolean }>();
-		const mediaCrossed = (element: object, url: string): boolean => {
-			if (!mediaReady || (Reflect.apply(mediaReady, element, []) as number) < 1)
+		const mediaCrossed = (
+			element: object,
+			url: string,
+			hasData: boolean,
+		): boolean => {
+			if (
+				!hasData &&
+				(!mediaReady || (Reflect.apply(mediaReady, element, []) as number) < 1)
+			)
 				return false;
 			const known = asked.get(element);
 			if (known && known.url === url) return known.crossed;
@@ -217,6 +228,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 			url: string,
 			cors: ((this: unknown) => unknown) | undefined,
 			media = false,
+			hasData = false,
 		): boolean => {
 			let last = judged.get(element);
 			if (!last || last.url !== url) {
@@ -236,11 +248,11 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 			// marked it, which is not known until it has loaded (an element
 			// drawn while it loads draws nothing, and is asked again)
 			if (opaqueLoad(last.real)) last.taints = true;
-			else if (media) return mediaCrossed(element, last.real);
+			else if (media) return mediaCrossed(element, last.real, hasData);
 			return last.taints;
 		};
 		/** whether drawing `source` taints the canvas it is drawn into */
-		const taints = (source: unknown): boolean => {
+		const taints = (source: unknown, hasData = false): boolean => {
 			if (source === null || typeof source !== 'object') return false;
 			if (taintedSources.has(source) || taintedCanvases.has(source))
 				return true;
@@ -257,6 +269,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 						String(Reflect.apply(mediaSrc!, source, [])),
 						mediaCrossOrigin,
 						true,
+						hasData,
 					);
 				case 'svgImage': {
 					const href = Reflect.apply(svgHref!, source, []) as object;

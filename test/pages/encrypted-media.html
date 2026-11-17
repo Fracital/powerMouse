@@ -1,0 +1,63 @@
+<!doctype html>
+<title>encrypted media</title>
+<body></body>
+<script>
+	// The encrypted event of a WebM whose track names a key id, as this page
+	// sees it (the encrypted-media suite runs it natively and through the
+	// proxy): its init data is the page's only for CORS-same-origin media.
+	// The media is this site's (with CORS too), another site's without CORS,
+	// this site's URL redirected to another site, and another
+	// site's named by a <source>; an event the page made keeps what it was
+	// made with.
+	const other = location.origin.replace('127.0.0.1', 'localhost');
+	const file = '/pages/encrypted-media.webm';
+	const hex = (buffer) =>
+		buffer
+			? [...new Uint8Array(buffer)]
+					.map((b) => b.toString(16).padStart(2, '0'))
+					.join('')
+			: buffer;
+	const read = (event) => ({
+		type: event.initDataType,
+		data: hex(event.initData),
+		trusted: event.isTrusted,
+	});
+	const play = (src, crossOrigin, source) =>
+		new Promise((resolve) => {
+			const video = document.createElement('video');
+			video.muted = true;
+			if (crossOrigin) video.crossOrigin = crossOrigin;
+			video.addEventListener('encrypted', (event) => resolve(read(event)));
+			video.addEventListener('error', () => resolve('error'));
+			setTimeout(() => resolve('timeout'), 8000);
+			if (source) {
+				const child = document.createElement('source');
+				child.src = src;
+				video.append(child);
+			} else video.src = src;
+			document.body.append(video);
+		});
+	window.__encrypted = (async () => {
+		const R = {};
+		R.same = await play(file);
+		R.cross = await play(other + file);
+		R.sameCors = await play(file, 'anonymous');
+		R.redirect = await play(
+			`/sop/r?k=encrypted&redirect=${encodeURIComponent(other + file)}`,
+		);
+		R.source = await play(other + file, null, true);
+		const video = document.createElement('video');
+		video.src = other + file;
+		R.made = await new Promise((resolve) => {
+			video.addEventListener('encrypted', (event) => resolve(read(event)));
+			video.dispatchEvent(
+				new MediaEncryptedEvent('encrypted', {
+					initDataType: 'webm',
+					initData: new Uint8Array([1, 2, 3]).buffer,
+				}),
+			);
+		});
+		R.done = true;
+		return R;
+	})().catch((error) => ({ failed: String(error && error.stack) }));
+</script>
