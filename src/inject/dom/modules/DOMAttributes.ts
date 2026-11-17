@@ -3202,6 +3202,23 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			[realm.HTMLVideoElement, 'poster', originalURL('poster')],
 		]);
 
+		// background on <body> and a table's parts: the legacy presentational
+		// image, which Chrome still loads. body.background reflects the
+		// attribute as the page wrote it (no URL resolution).
+		domHooksModule.useAttributes(
+			routeAttribute('background', routeBinary, true),
+			[
+				...['BODY', 'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TD', 'TH'].map(
+					(name) => [name, 'background'] as [string, string],
+				),
+				[
+					this.client.global.HTMLBodyElement,
+					'background',
+					(element) => element.getAttributeOG('background') ?? false,
+				],
+			],
+		);
+
 		// <button formaction>, <input formaction>: the form's method decides how
 		// the query travels, as for <form action>
 		domHooksModule.useAttributes(
