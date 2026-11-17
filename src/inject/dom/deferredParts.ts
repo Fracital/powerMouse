@@ -43,6 +43,9 @@
 // grants, ../deviceGrants.ts, at a page's first call of a gated API or
 // first read of a device API; a worker's bundle has them itself)
 //
+// (and the per-site legacy file system, ../legacyFileSystem.ts, at a
+// realm's first call of it)
+//
 // (and the WebTransport stand-in, ../webTransportStandIn.ts, with what
 // carries its sessions, ../webTransport.ts, once a realm makes its first
 // session)
@@ -63,6 +66,7 @@ import { bareClient } from '../bareClient';
 import { cookieStoreMethods } from '../cookieStoreMethods';
 import { hookDevices } from '../deviceGrants';
 import { recordSize } from '../idbSize';
+import { partitionLegacyFileSystem } from '../legacyFileSystem';
 import {
 	gateCall,
 	gateGetter,
@@ -103,6 +107,7 @@ const parts = {
 	attributeViewMethods,
 	sourcePolicy,
 	recordSize,
+	partitionLegacyFileSystem,
 	checkedMethod,
 	checkedHeader,
 	notOpened,

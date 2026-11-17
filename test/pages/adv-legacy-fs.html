@@ -1,0 +1,142 @@
+<!doctype html>
+<title>ADV LEGACY FS</title>
+<pre id="result">pending</pre>
+<script src="adv-harness.js"></script>
+<script>
+	// The legacy sandboxed file system is the real origin's, which every
+	// proxied site shares: a site must see its own file system only. A
+	// cross-site child (this page on localhost, `?child`) writes a file; this
+	// page then tries every way to reach it, or the real root, by path, by
+	// URL, from an about:blank child's realm and from a worker. A value
+	// naming the proxy (its origin, a site directory) or the child's file is
+	// a leak.
+	const child = new URLSearchParams(location.search).has('child');
+	const p = (f) => new Promise((resolve, reject) => f(resolve, reject));
+	const request = (scope = window) =>
+		p((s, e) => scope.webkitRequestFileSystem(TEMPORARY, 1024 * 1024, s, e));
+	const list = (directory) =>
+		p((s, e) => directory.createReader().readEntries(s, e)).then((entries) =>
+			entries.map((entry) =>
+				/childsite|^site-/.test(entry.name)
+					? `LEAK:${entry.fullPath}`
+					: entry.fullPath,
+			),
+		);
+	if (child) {
+		request()
+			.then((fs) =>
+				p((s, e) => fs.root.getFile('childsite.txt', { create: true }, s, e)),
+			)
+			.then(() => parent.postMessage({ advFsChild: 'written' }, '*'));
+	} else {
+		const A = __advAsync;
+		const written = new Promise((resolve) => {
+			addEventListener('message', (event) => {
+				if (event.data && event.data.advFsChild) resolve();
+			});
+			setTimeout(resolve, 8000);
+		});
+		const cross = document.createElement('iframe');
+		cross.src = location.href
+			.replace('127.0.0.1', 'localhost')
+			.replace(/\/pages\/.*$/, '/pages/adv-legacy-fs.html?child');
+		document.body.append(cross);
+		const fsReady = written.then(() => request());
+		A(
+			'legacy-fs name and urls',
+			async () => {
+				const fs = await fsReady;
+				const file = await p((s, e) =>
+					fs.root.getFile('own.txt', { create: true }, s, e),
+				);
+				return [fs.name, fs.root.toURL(), file.toURL(), file.fullPath];
+			},
+			12000,
+		);
+		A(
+			'legacy-fs root listing after a cross-site child wrote',
+			async () => list((await fsReady).root),
+			12000,
+		);
+		A(
+			'legacy-fs dotdot above the root',
+			async () => {
+				const fs = await fsReady;
+				const up = await p((s, e) =>
+					fs.root.getDirectory('../../..', {}, s, e),
+				);
+				const parents = [];
+				let entry = fs.root;
+				for (let i = 0; i < 3; i++) {
+					entry = await p((s, e) => entry.getParent(s, e));
+					parents.push(entry.fullPath + '|' + entry.name);
+				}
+				return [up.fullPath, await list(up), parents];
+			},
+			12000,
+		);
+		A(
+			'legacy-fs child file by url',
+			async () => {
+				await fsReady;
+				const url = `filesystem:${location.origin.replace('127.0.0.1', 'localhost')}/temporary/childsite.txt`;
+				return p((s) =>
+					webkitResolveLocalFileSystemURL(
+						url,
+						(entry) => s(`LEAK:${entry.fullPath}`),
+						(error) => s(error.name),
+					),
+				);
+			},
+			12000,
+		);
+		A(
+			'legacy-fs native getters',
+			async () => {
+				const fs = await fsReady;
+				const entryProto = Object.getPrototypeOf(
+					Object.getPrototypeOf(fs.root),
+				);
+				const get = (proto, name, that) =>
+					Object.getOwnPropertyDescriptor(proto, name).get.call(that);
+				return [
+					get(entryProto, 'fullPath', fs.root),
+					get(Object.getPrototypeOf(fs), 'name', fs),
+					entryProto.toURL.call(fs.root),
+				];
+			},
+			12000,
+		);
+		A(
+			'legacy-fs from an about:blank child realm',
+			async () => {
+				await fsReady;
+				const frame = document.createElement('iframe');
+				document.body.append(frame);
+				const fs = await request(frame.contentWindow);
+				return [fs.name, fs.root.toURL(), await list(fs.root)];
+			},
+			12000,
+		);
+		A(
+			'legacy-fs sync forms in a worker',
+			async () => {
+				await fsReady;
+				const source = `const fs = webkitRequestFileSystemSync(TEMPORARY, 1024);
+const up = fs.root.getDirectory('../..', {});
+postMessage([fs.name, fs.root.toURL(), up.fullPath,
+	up.createReader().readEntries().map((e) => /childsite|^site-/.test(e.name) ? 'LEAK:' + e.fullPath : e.fullPath),
+	fs.root.getParent().fullPath]);`;
+				const worker = new Worker(
+					URL.createObjectURL(new Blob([source], { type: 'text/javascript' })),
+				);
+				return new Promise((resolve, reject) => {
+					worker.onmessage = (event) => resolve(event.data);
+					worker.onerror = (event) => reject(new Error(event.message));
+				});
+			},
+			12000,
+		);
+		__advFinish(3000);
+	}
+</script>

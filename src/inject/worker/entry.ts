@@ -8,6 +8,8 @@ import { listenOn, messageOf, startPort } from '../../transport/ports';
 import { messageField, readModules, type HandedModules } from '../Client';
 import { recordSize } from '../idbSize';
 import { idbSizeParts } from '../idbSizeParts';
+import { partitionLegacyFileSystem } from '../legacyFileSystem';
+import { legacyFileSystemParts } from '../legacyFileSystemParts';
 import { handModules } from '../rewriter';
 import { bucketMethods } from '../storageBucketMethods';
 import { storageBucketParts } from '../storageBucketParts';
@@ -28,6 +30,8 @@ webTransportParts.standIn = () => webTransportStandIn;
 idbSizeParts.recordSize = () => recordSize;
 // and the methods behind navigator.storageBuckets' hooks
 storageBucketParts.methods = () => bucketMethods;
+// and the per-site legacy file system (../legacyFileSystemParts.ts)
+legacyFileSystemParts.partition = () => partitionLegacyFileSystem;
 /** set once the bootstrap came without a transport (a worker of a worker): nothing carries its sessions */
 let transportless = false;
 webTransportParts.carry = () =>

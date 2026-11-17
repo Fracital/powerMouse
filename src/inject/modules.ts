@@ -4,6 +4,7 @@ import ConsoleModule from './modules/Console';
 import FetchModule from './modules/Fetch';
 import FunctionModule from './modules/Function';
 import IndexedDBModule from './modules/IndexedDB';
+import LegacyFileSystemModule from './modules/LegacyFileSystem';
 import MixedContentModule from './modules/MixedContent';
 import ObjectURLModule from './modules/ObjectURL';
 import PartitionModule from './modules/Partition';
@@ -35,6 +36,7 @@ export default function baseModules(client: Client) {
 	client.addModule(StorageBucketsModule);
 	client.addModule(IndexedDBModule);
 	client.addModule(PartitionModule);
+	client.addModule(LegacyFileSystemModule);
 	client.addModule(MixedContentModule);
 	client.addModule(WebSocketModule);
 	client.addModule(WebTransportModule);

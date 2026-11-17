@@ -1,6 +1,7 @@
 import type { FpSurface } from '../../blocker/types';
 import { createClientFactory } from '../Client';
 import { idbSizeParts } from '../idbSizeParts';
+import { legacyFileSystemParts } from '../legacyFileSystemParts';
 import Module from '../Module';
 import baseModules from '../modules';
 import { storageBucketParts } from '../storageBucketParts';
@@ -70,6 +71,8 @@ webTransportParts.carry = () => deferred().carryWebTransport;
 idbSizeParts.recordSize = () => deferred().recordSize;
 // and so are the methods behind navigator.storageBuckets' hooks
 storageBucketParts.methods = () => deferred().bucketMethods;
+// and the per-site legacy file system, with its first call
+legacyFileSystemParts.partition = () => deferred().partitionLegacyFileSystem;
 
 class FingerprintStandIn extends Module<DocumentClient> {
 	apply() {

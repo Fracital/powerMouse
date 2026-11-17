@@ -1,0 +1,140 @@
+<!doctype html>
+<title>legacy file system</title>
+<script>
+	// The legacy sandboxed file system as this site sees it (the
+	// legacy-file-system suite runs it natively and through the proxy, on
+	// two sites): its name, URLs and paths, `..` at the root, errors, the
+	// Sync forms in a dedicated worker, and whether a file the other site
+	// wrote is here. `?write` writes this site's own file first.
+	const R = {};
+	const p = (f) => new Promise((resolve, reject) => f(resolve, reject));
+	const E = (e) =>
+		e && `${e.name}|${e.message}|${e.code}|${e instanceof DOMException}`;
+	const settle = (f) =>
+		p((s) =>
+			f(
+				(x) => s(`ok ${x && x.fullPath}`),
+				(e) => s(E(e)),
+			),
+		);
+	const site = location.hostname === 'localhost' ? 'b' : 'a';
+	window.__fs = (async () => {
+		const fs = await p((s, e) =>
+			webkitRequestFileSystem(TEMPORARY, 1024 * 1024, s, e),
+		);
+		const root = fs.root;
+		R.name = fs.name;
+		R.rootSame = fs.root === fs.root;
+		R.root = {
+			fullPath: root.fullPath,
+			name: root.name,
+			url: root.toURL(),
+			fsSame: root.filesystem === fs,
+			tag: String(root),
+		};
+		const parent = await p((s, e) => root.getParent(s, e));
+		R.rootParent = [parent.fullPath, parent.name, parent === root];
+		if (new URLSearchParams(location.search).has('write')) {
+			const own = await p((s, e) =>
+				root.getFile(`${site}.txt`, { create: true }, s, e),
+			);
+			await p((s, e) =>
+				own.createWriter((w) => {
+					w.onwriteend = s;
+					w.onerror = e;
+					w.write(new Blob([`written by ${site}`]));
+				}, e),
+			);
+		}
+		const d = await p((s, e) => root.getDirectory('d', { create: true }, s, e));
+		R.dir = [d.fullPath, d.name, d.toURL(), d.filesystem === fs];
+		const up = await p((s, e) =>
+			d.getFile('../../../up.txt', { create: true }, s, e),
+		);
+		R.clamp = [up.fullPath, up.toURL(), up.name];
+		R.absolute = await settle((s, e) =>
+			d.getFile('/d/./abs.txt', { create: true }, s, e),
+		);
+		R.backslash = await settle((s, e) =>
+			d.getFile('..\\x', { create: true }, s, e),
+		);
+		R.empty = await settle((s, e) => d.getDirectory('', {}, s, e));
+		R.nullPath = await settle((s, e) => d.getDirectory(null, {}, s, e));
+		R.objectPath = await settle((s, e) =>
+			root.getFile({ toString: () => '/d/../up.txt' }, {}, s, e),
+		);
+		R.missing = await settle((s, e) => root.getFile('nope.txt', {}, s, e));
+		R.removeRoot = await settle((s, e) => root.remove(s, e));
+		R.removeRootRecursively = await settle((s, e) =>
+			root.removeRecursively(s, e),
+		);
+		R.moveRoot = await settle((s, e) => root.moveTo(d, 'r', s, e));
+		R.copyRoot = await settle((s, e) => root.copyTo(d, 'r', s, e));
+		R.moveUp = await settle((s, e) => up.moveTo(root, '..', s, e));
+		const entries = await p((s, e) => root.createReader().readEntries(s, e));
+		R.list = entries.map((x) => x.fullPath).sort();
+		R.other = await settle((s, e) =>
+			root.getFile(`${site === 'a' ? 'b' : 'a'}.txt`, {}, s, e),
+		);
+		R.resolveOwn = await settle((s, e) =>
+			webkitResolveLocalFileSystemURL(up.toURL(), s, e),
+		);
+		R.resolveRoot = await p((s) =>
+			webkitResolveLocalFileSystemURL(
+				root.toURL(),
+				(x) => s([x.fullPath, x.name, x.filesystem.name]),
+				(e) => s(E(e)),
+			),
+		);
+		R.resolveUp = await settle((s, e) =>
+			webkitResolveLocalFileSystemURL(`${root.toURL()}d/../../up.txt`, s, e),
+		);
+		R.resolveForeign = await settle((s, e) =>
+			webkitResolveLocalFileSystemURL(
+				'filesystem:http://example.com/temporary/up.txt',
+				s,
+				e,
+			),
+		);
+		R.resolveOtherSite = await settle((s, e) =>
+			webkitResolveLocalFileSystemURL(
+				`filesystem:http://${site === 'a' ? 'localhost' : '127.0.0.1'}:${location.port}/temporary/${site === 'a' ? 'b' : 'a'}.txt`,
+				s,
+				e,
+			),
+		);
+		R.resolveGarbage = await settle((s, e) =>
+			webkitResolveLocalFileSystemURL('nonsense', s, e),
+		);
+		R.persistent = await p((s) =>
+			webkitRequestFileSystem(
+				PERSISTENT,
+				1024,
+				(x) => s(`${x.name} ${x.root.toURL()}`),
+				(e) => s(E(e)),
+			),
+		);
+		R.sandboxed = await new Promise((resolve) => {
+			const frame = document.createElement('iframe');
+			frame.sandbox = 'allow-scripts';
+			frame.srcdoc =
+				'<script>webkitRequestFileSystem(TEMPORARY, 1024, (fs) => parent.postMessage({ fs: "ok " + fs.name }, "*"), (e) => parent.postMessage({ fs: e.name + "|" + e.message }, "*"))<\/script>';
+			addEventListener('message', function listen(event) {
+				if (!event.data || !('fs' in event.data)) return;
+				removeEventListener('message', listen);
+				resolve(event.data.fs);
+			});
+			document.body.append(frame);
+			setTimeout(() => resolve('timeout'), 5000);
+		});
+		R.worker = await new Promise((resolve) => {
+			const worker = new Worker('legacy-fs-worker.js');
+			worker.onmessage = (event) => resolve(event.data);
+			worker.onerror = (event) => resolve(`error ${event.message}`);
+			setTimeout(() => resolve('timeout'), 8000);
+		});
+		R.done = true;
+		return R;
+	})().catch((error) => ({ failed: String(error && error.stack) }));
+</script>
+<body></body>
