@@ -213,6 +213,56 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// (the realm's own, as the page may replace it)
 		const NativeBlob = realm.Blob;
 
+		/** the page's absolute URL for a routed URL attribute, or false without one */
+		const originalURL = (attribute: string) => (element: CustomElement) =>
+			element.hasAttribute(attribute) &&
+			element.getAttribute(attribute) !== '' &&
+			moduleClient
+				.encodingParse(
+					(element.getAttributeOG(attribute) ??
+						element.getAttribute(attribute))!,
+					moduleClient.baseURL.toString(),
+					element,
+				)
+				.toString();
+		/** what the page's URL `value` names, against the document's base */
+		const pageURL = (value: string) =>
+			new StompURL(
+				moduleClient.encodingParse(value, moduleClient.baseURL.toString()),
+				moduleClient.baseURL,
+			);
+		/** route one URL attribute, keeping the page's value as the original */
+		const routeAttribute =
+			(
+				attribute: string,
+				route: (resource: StompURL) => string,
+				// a load (an image, media): copied in a document no worker controls
+				load = false,
+			) =>
+			(element: CustomElement) => {
+				element.restoreAttributesOG(attribute);
+				if (
+					element.hasAttribute(attribute) &&
+					element.getAttribute(attribute) !== ''
+				) {
+					element.setAttributeOG(attribute, element.getAttribute(attribute)!);
+					const value = route(pageURL(element.getAttribute(attribute)!));
+					if (load) placeLoad(element, attribute, value);
+					else element.setAttribute(attribute, value);
+				}
+			};
+		/** originalURL('href') of a link, against its response document's URL (../responseDocuments.ts) */
+		const linkURL = (element: CustomElement) =>
+			element.hasAttribute('href') &&
+			element.getAttribute('href') !== '' &&
+			moduleClient
+				.encodingParse(
+					(element.getAttributeOG('href') ?? element.getAttribute('href'))!,
+					responseURLOf(element) ?? moduleClient.baseURL.toString(),
+					element,
+				)
+				.toString();
+
 		// A document no service worker controls (an about:blank frame or popup
 		// the page built, a document it opened, or a blob: document: Chrome
 		// hands none to the page's worker, and an <object>'s HTML document is
@@ -1249,12 +1299,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			const value = element.getAttribute(attribute)!;
 			if (value === '' || value.startsWith('#')) return;
 			element.setAttributeOG(attribute, value);
-			const routed = routeBinary(
-				new StompURL(
-					moduleClient.encodingParse(value, moduleClient.baseURL.toString()),
-					moduleClient.baseURL,
-				),
-			);
+			const routed = routeBinary(pageURL(value));
 			if (SVG_LOADS.includes(element.localName.toLowerCase()))
 				placeLoad(element, attribute, routed);
 			else element.setAttribute(attribute, routed);
@@ -1293,10 +1338,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			if (value === '') return;
 			element.setAttributeOG(attribute, value);
 			const routed = routeJS(
-				new StompURL(
-					moduleClient.encodingParse(value, moduleClient.baseURL.toString()),
-					moduleClient.baseURL,
-				),
+				pageURL(value),
 				moduleClient.baseURL,
 				moduleClient.config,
 				'generic',
@@ -1476,11 +1518,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			},
 			[
 				['IFRAME', 'srcdoc'],
-				[
-					realm.HTMLIFrameElement,
-					'srcdoc',
-					(element) => element.getAttributeOG('srcdoc') ?? false,
-				],
+				[realm.HTMLIFrameElement, 'srcdoc', ogOrFalse('srcdoc')],
 			],
 		);
 
@@ -1494,15 +1532,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				element.setAttributeOG(attribute, element.getAttribute(attribute)!);
 				element.setAttribute(
 					attribute,
-					moduleClient.linkRoute(
-						new StompURL(
-							moduleClient.encodingParse(
-								element.getAttribute(attribute)!,
-								moduleClient.baseURL.toString(),
-							),
-							moduleClient.baseURL,
-						),
-					),
+					moduleClient.linkRoute(pageURL(element.getAttribute(attribute)!)),
 				);
 			}
 		};
@@ -1546,13 +1576,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				const trimmed = value.trim();
 				if (trimmed === '' || trimmed.startsWith('#')) return value;
 				try {
-					const url = new StompURL(
-						moduleClient.encodingParse(
-							trimmed,
-							moduleClient.baseURL.toString(),
-						),
-						moduleClient.baseURL,
-					);
+					const url = pageURL(trimmed);
 					// (a link's route rewrites a javascript: URL's code)
 					if (link === true || url.url.protocol === 'javascript:')
 						return moduleClient.linkRoute(url);
@@ -1596,37 +1620,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['A', 'href'],
 				['a', 'href'],
 				['AREA', 'href'],
-				[
-					realm.HTMLAnchorElement,
-					'href',
-					(element) =>
-						element.hasAttribute('href') &&
-						element.getAttribute('href') !== '' &&
-						moduleClient
-							.encodingParse(
-								(element.getAttributeOG('href') ??
-									element.getAttribute('href'))!,
-								responseURLOf(element) ?? moduleClient.baseURL.toString(),
-								element,
-							)
-							.toString(),
-				],
+				[realm.HTMLAnchorElement, 'href', linkURL],
 				// an image map's areas are links too
-				[
-					realm.HTMLAreaElement,
-					'href',
-					(element) =>
-						element.hasAttribute('href') &&
-						element.getAttribute('href') !== '' &&
-						moduleClient
-							.encodingParse(
-								(element.getAttributeOG('href') ??
-									element.getAttribute('href'))!,
-								responseURLOf(element) ?? moduleClient.baseURL.toString(),
-								element,
-							)
-							.toString(),
-				],
+				[realm.HTMLAreaElement, 'href', linkURL],
 			],
 			// URL attributes do not mixin with element attributes
 		);
@@ -1707,20 +1703,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				// and carries the integrity (src/sri.ts), which may come after src
 				['SCRIPT', 'integrity'],
 				[realm.HTMLScriptElement, 'integrity', () => false],
-				[
-					realm.HTMLScriptElement,
-					'src',
-					(element) =>
-						element.hasAttribute('src') &&
-						element.getAttribute('src') !== '' &&
-						moduleClient
-							.encodingParse(
-								(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-								moduleClient.baseURL.toString(),
-								element,
-							)
-							.toString(),
-				],
+				[realm.HTMLScriptElement, 'src', originalURL('src')],
 			],
 		);
 
@@ -1743,16 +1726,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['SCRIPT', 'integrity'],
 				// the page's value: the element itself has none (the browser
 				// would check the rewrite against it)
-				[
-					realm.HTMLLinkElement,
-					'integrity',
-					(element) => element.getAttributeOG('integrity') ?? false,
-				],
-				[
-					realm.HTMLScriptElement,
-					'integrity',
-					(element) => element.getAttributeOG('integrity') ?? false,
-				],
+				[realm.HTMLLinkElement, 'integrity', ogOrFalse('integrity')],
+				[realm.HTMLScriptElement, 'integrity', ogOrFalse('integrity')],
 			],
 		);
 
@@ -1774,13 +1749,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.getAttribute('rel')!.trim().toLowerCase().split(/\s+/),
 					);
 					const as = (element.getAttribute('as') || '').trim().toLowerCase();
-					const resource = new StompURL(
-						moduleClient.encodingParse(
-							element.getAttribute('href')!,
-							moduleClient.baseURL.toString(),
-						),
-						moduleClient.baseURL,
-					);
+					const resource = pageURL(element.getAttribute('href')!);
 					element.setAttributeOG('href', element.getAttribute('href')!);
 					const stylesheet =
 						rel.has('stylesheet') ||
@@ -1854,21 +1823,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['LINK', 'integrity'],
 				[realm.HTMLLinkElement, 'integrity', () => false],
 				[realm.HTMLLinkElement, 'as', () => false],
-				[
-					realm.HTMLLinkElement,
-					'href',
-					(element) =>
-						element.hasAttribute('href') &&
-						element.getAttribute('href') !== '' &&
-						moduleClient
-							.encodingParse(
-								(element.getAttributeOG('href') ??
-									element.getAttribute('href'))!,
-								responseURLOf(element) ?? moduleClient.baseURL.toString(),
-								element,
-							)
-							.toString(),
-				],
+				[realm.HTMLLinkElement, 'href', linkURL],
 				[realm.HTMLLinkElement, 'rel', () => false],
 			],
 		);
@@ -1927,7 +1882,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							[
 								this.client.global.HTMLIFrameElement,
 								'allow',
-								(element) => element.getAttributeOG('allow') ?? false,
+								ogOrFalse('allow'),
 							],
 						]);
 					}
@@ -1945,13 +1900,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 
 				if (element.hasAttribute('src') && element.getAttribute('src') !== '') {
 					element.setAttributeOG('src', element.getAttribute('src')!);
-					const resource = new StompURL(
-						moduleClient.encodingParse(
-							element.getAttribute('src')!,
-							moduleClient.baseURL.toString(),
-						),
-						moduleClient.baseURL,
-					);
+					const resource = pageURL(element.getAttribute('src')!);
 					// a javascript: URL runs in the frame, which a sandbox without
 					// allow-scripts forbids: natively nothing happens, so the frame
 					// is not navigated at all
@@ -2073,34 +2022,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				...(moduleClient.hostIsolated
 					? ([['IFRAME', 'allow']] as [string, string][])
 					: []),
-				[
-					realm.HTMLFrameElement,
-					'src',
-					(element) =>
-						element.hasAttribute('src') &&
-						element.getAttribute('src') !== '' &&
-						moduleClient
-							.encodingParse(
-								(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-								moduleClient.baseURL.toString(),
-								element,
-							)
-							.toString(),
-				],
-				[
-					realm.HTMLIFrameElement,
-					'src',
-					(element) =>
-						element.hasAttribute('src') &&
-						element.getAttribute('src') !== '' &&
-						moduleClient
-							.encodingParse(
-								(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-								moduleClient.baseURL.toString(),
-								element,
-							)
-							.toString(),
-				],
+				[realm.HTMLFrameElement, 'src', originalURL('src')],
+				[realm.HTMLIFrameElement, 'src', originalURL('src')],
 			],
 		);
 
@@ -2169,66 +2092,18 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// what the page wrote, for a refresh the hook rewrote; any
 					// other content (a token, a payload) is not a URL and reads
 					// natively
-					(element) => element.getAttributeOG('content') ?? false,
+					ogOrFalse('content'),
 				],
 				[realm.HTMLMetaElement, 'httpEquiv', () => false],
 			],
 		);
 
-		domHooksModule.useAttributes(
-			(element) => {
-				element.restoreAttributesOG('src');
-
-				if (element.hasAttribute('src') && element.getAttribute('src') !== '') {
-					element.setAttributeOG('src', element.getAttribute('src')!);
-					placeLoad(
-						element,
-						'src',
-						routeBinary(
-							new StompURL(
-								moduleClient.encodingParse(
-									element.getAttribute('src')!,
-									moduleClient.baseURL.toString(),
-								),
-								moduleClient.baseURL,
-							),
-						),
-					);
-				}
-			},
-			[
-				['IMG', 'src'],
-				['INPUT', 'src'],
-				[
-					realm.HTMLInputElement,
-					'src',
-					(element) =>
-						element.hasAttribute('src') &&
-						element.getAttribute('src') !== '' &&
-						moduleClient
-							.encodingParse(
-								(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-								moduleClient.baseURL.toString(),
-								element,
-							)
-							.toString(),
-				],
-				[
-					realm.HTMLImageElement,
-					'src',
-					(element) =>
-						element.hasAttribute('src') &&
-						element.getAttribute('src') !== '' &&
-						moduleClient
-							.encodingParse(
-								(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-								moduleClient.baseURL.toString(),
-								element,
-							)
-							.toString(),
-				],
-			],
-		);
+		domHooksModule.useAttributes(routeAttribute('src', routeBinary, true), [
+			['IMG', 'src'],
+			['INPUT', 'src'],
+			[realm.HTMLInputElement, 'src', originalURL('src')],
+			[realm.HTMLImageElement, 'src', originalURL('src')],
+		]);
 
 		domHooksModule.useAttributes(
 			(element) => {
@@ -2308,76 +2183,15 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			],
 		);
 
-		domHooksModule.useAttributes(
-			(element) => {
-				element.restoreAttributesOG('src');
-
-				if (element.hasAttribute('src') && element.getAttribute('src') !== '') {
-					element.setAttributeOG('src', element.getAttribute('src')!);
-					placeLoad(
-						element,
-						'src',
-						routeBinary(
-							new StompURL(
-								moduleClient.encodingParse(
-									element.getAttribute('src')!,
-									moduleClient.baseURL.toString(),
-								),
-								moduleClient.baseURL,
-							),
-						),
-					);
-				}
-			},
-			[
-				['AUDIO', 'src'],
-				['VIDEO', 'src'],
-				['SOURCE', 'src'],
-				['TRACK', 'src'],
-				[
-					realm.HTMLTrackElement,
-					'src',
-					(element) =>
-						element.hasAttribute('src') &&
-						element.getAttribute('src') !== '' &&
-						moduleClient
-							.encodingParse(
-								(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-								moduleClient.baseURL.toString(),
-								element,
-							)
-							.toString(),
-				],
-				[
-					realm.HTMLMediaElement,
-					'src',
-					(element) =>
-						element.hasAttribute('src') &&
-						element.getAttribute('src') !== '' &&
-						moduleClient
-							.encodingParse(
-								(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-								moduleClient.baseURL.toString(),
-								element,
-							)
-							.toString(),
-				],
-				[
-					realm.HTMLSourceElement,
-					'src',
-					(element) =>
-						element.hasAttribute('src') &&
-						element.getAttribute('src') !== '' &&
-						moduleClient
-							.encodingParse(
-								(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-								moduleClient.baseURL.toString(),
-								element,
-							)
-							.toString(),
-				],
-			],
-		);
+		domHooksModule.useAttributes(routeAttribute('src', routeBinary, true), [
+			['AUDIO', 'src'],
+			['VIDEO', 'src'],
+			['SOURCE', 'src'],
+			['TRACK', 'src'],
+			[realm.HTMLTrackElement, 'src', originalURL('src')],
+			[realm.HTMLMediaElement, 'src', originalURL('src')],
+			[realm.HTMLSourceElement, 'src', originalURL('src')],
+		]);
 
 		// An element's inline style in a document no service worker controls:
 		// once a write settles (the attribute, a CSSOM write), its routes are
@@ -3118,48 +2932,6 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			}
 		};
 
-		/** the page's absolute URL for a routed URL attribute, or false without one */
-		const originalURL = (attribute: string) => (element: CustomElement) =>
-			element.hasAttribute(attribute) &&
-			element.getAttribute(attribute) !== '' &&
-			moduleClient
-				.encodingParse(
-					(element.getAttributeOG(attribute) ??
-						element.getAttribute(attribute))!,
-					moduleClient.baseURL.toString(),
-					element,
-				)
-				.toString();
-
-		/** route one URL attribute, keeping the page's value as the original */
-		const routeAttribute =
-			(
-				attribute: string,
-				route: (resource: StompURL) => string,
-				// a load (an image, media): copied in a document no worker controls
-				load = false,
-			) =>
-			(element: CustomElement) => {
-				element.restoreAttributesOG(attribute);
-				if (
-					element.hasAttribute(attribute) &&
-					element.getAttribute(attribute) !== ''
-				) {
-					element.setAttributeOG(attribute, element.getAttribute(attribute)!);
-					const value = route(
-						new StompURL(
-							moduleClient.encodingParse(
-								element.getAttribute(attribute)!,
-								moduleClient.baseURL.toString(),
-							),
-							moduleClient.baseURL,
-						),
-					);
-					if (load) placeLoad(element, attribute, value);
-					else element.setAttribute(attribute, value);
-				}
-			};
-
 		// <object data> and <embed src>: Chrome never routes their loads through
 		// a service worker, so a routed URL would reach the proxy origin's own
 		// server. The inject fetches the resource through the proxy instead and
@@ -3197,10 +2969,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				element.removeAttribute(attribute);
 				return;
 			}
-			const resource = new StompURL(
-				moduleClient.encodingParse(written, moduleClient.baseURL.toString()),
-				moduleClient.baseURL,
-			);
+			const resource = pageURL(written);
 			const routedOf = () =>
 				routeHTML(
 					resource,
@@ -3379,17 +3148,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					for (const token of written.split(/[\t\n\f\r ]+/)) {
 						if (!token) continue;
 						try {
-							routed.push(
-								routeXHR(
-									new StompURL(
-										moduleClient.encodingParse(
-											token,
-											moduleClient.baseURL.toString(),
-										),
-										moduleClient.baseURL,
-									),
-								),
-							);
+							routed.push(routeXHR(pageURL(token)));
 						} catch (error) {
 							// not a URL
 						}
@@ -3400,16 +3159,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			[
 				['A', 'ping'],
 				['AREA', 'ping'],
-				[
-					realm.HTMLAnchorElement,
-					'ping',
-					(element) => element.getAttributeOG('ping') ?? false,
-				],
-				[
-					realm.HTMLAreaElement,
-					'ping',
-					(element) => element.getAttributeOG('ping') ?? false,
-				],
+				[realm.HTMLAnchorElement, 'ping', ogOrFalse('ping')],
+				[realm.HTMLAreaElement, 'ping', ogOrFalse('ping')],
 			],
 		);
 
@@ -3440,7 +3191,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				[
 					this.client.global.HTMLBodyElement,
 					'background',
-					(element) => element.getAttributeOG('background') ?? false,
+					ogOrFalse('background'),
 				],
 			],
 		);
@@ -3482,15 +3233,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						stringifySrcset(
 							parseSrcset(element.getAttribute('imagesrcset')!).map((src) => ({
 								...src,
-								url: routeBinary(
-									new StompURL(
-										moduleClient.encodingParse(
-											src.url,
-											moduleClient.baseURL.toString(),
-										),
-										moduleClient.baseURL,
-									),
-								),
+								url: routeBinary(pageURL(src.url)),
 							})),
 						),
 					);
@@ -3613,21 +3356,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		domHooksModule.useAttributes(this.formHook, [
 			['FORM', 'action'],
 			['FORM', 'method'],
-			[
-				realm.HTMLFormElement,
-				'action',
-				(element) =>
-					element.hasAttribute('action') &&
-					element.getAttribute('action') !== '' &&
-					moduleClient
-						.encodingParse(
-							(element.getAttributeOG('action') ??
-								element.getAttribute('action'))!,
-							moduleClient.baseURL.toString(),
-							element,
-						)
-						.toString(),
-			],
+			[realm.HTMLFormElement, 'action', originalURL('action')],
 			[realm.HTMLFormElement, 'method', () => false],
 		]);
 
