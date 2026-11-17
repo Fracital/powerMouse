@@ -268,6 +268,13 @@ import Router from './Router';
 import { applyHeaderRule, CompiledRule, compileRules } from './rules';
 import { nativeServiceWorker, serviceWorkers } from './serviceWorkers';
 import type { ShieldsStore } from './shields';
+import {
+	firstBytes,
+	nosniffType,
+	saysNosniff,
+	sniffDocument,
+	unknownMime,
+} from './sniff';
 import { boundClient } from './srcdocVouches';
 import { rememberVisitedHop, takeVisitedHop } from './visitedHops';
 
@@ -4954,7 +4961,29 @@ export function registerRewrites(
 			async (url, response, responseHeaders, referrer, request, note) => {
 				const contentType = responseHeaders.get('content-type');
 				const mime = getMime(contentType || '');
-				if (!htmlMimes.includes(mime)) return false;
+				// a type that says nothing is sniffed by the browser as it
+				// would sniff the origin's answer (src/server/sniff.ts): a
+				// body the worker passes through as not a document that the
+				// browser then reads as HTML would run its scripts unrewritten
+				let sniffed = false;
+				if (!htmlMimes.includes(mime) || mime === '') {
+					if (!unknownMime(mime)) return false;
+					// nosniff: no sniff, and the browser is told so (it would
+					// sniff what the worker passes on)
+					if (saysNosniff(response.headers)) {
+						const type = nosniffType(mime, contentType);
+						if (type !== null) responseHeaders.set('content-type', type);
+						responseHeaders.set('x-content-type-options', 'nosniff');
+						return false;
+					}
+					const head = await firstBytes(response);
+					const as = sniffDocument(head);
+					// (an answer with no type that sniffs as XML is shelled as
+					// HTML, as it always was: XML documents are another
+					// stream's)
+					if (as === null || (as === 'xml' && mime !== '')) return false;
+					sniffed = as === 'html';
+				}
 				// decode the way the browser would have (BOM, header charset,
 				// <meta charset>), then serve the shell in that encoding
 				// (encodeShell): the document has it, as natively, for what the
@@ -4967,7 +4996,7 @@ export function registerRewrites(
 					: documentEncoding(bytes, contentType);
 				responseHeaders.set(
 					'content-type',
-					documentContentType(contentType, encoding),
+					documentContentType(sniffed ? 'text/html' : contentType, encoding),
 				);
 				// what it loads that names no encoding is in its own
 				if (request.navigation)
