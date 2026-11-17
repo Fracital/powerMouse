@@ -1329,9 +1329,21 @@ function bounded(
 			? FETCH_TIMEOUT_LONG_MS
 			: FETCH_TIMEOUT_MS);
 	let timer: ReturnType<typeof setTimeout>;
+	let late = false;
 	const timeout = new Promise<Response>((resolve) => {
-		timer = setTimeout(() => resolve(timedOut(request, ms, ref)), ms);
+		timer = setTimeout(() => {
+			late = true;
+			resolve(timedOut(request, ms, ref));
+		}, ms);
 	});
+	// the answer that comes after the 504 went out is read by nobody: its
+	// body is cancelled, or the transport goes on receiving it
+	response.then(
+		(answer) => {
+			if (late) answer.body?.cancel().catch(() => {});
+		},
+		() => {},
+	);
 	return Promise.race([response.finally(() => clearTimeout(timer)), timeout]);
 }
 

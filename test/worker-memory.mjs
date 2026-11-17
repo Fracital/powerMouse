@@ -1,0 +1,129 @@
+// What the proxy's worker targets hold, over CDP (a browser session, each
+// worker through its own session): the service worker of the proxy's
+// origin (`sw`) and each transport worker (`transport`). Suites about
+// memory the page cannot see use it (abandoned-bodies, cache-walks,
+// paused-bodies). A count of objects Blink backs (a Request, a port) can
+// include some no full collection has taken yet: compare it with a margin.
+import { PROXY } from './lib.mjs';
+
+export async function workerMemory(browser) {
+	const cdp = await browser.newBrowserCDPSession();
+	let messageId = 0;
+	const replies = new Map();
+	cdp.on('Target.receivedMessageFromTarget', ({ message }) => {
+		const { id, result, error } = JSON.parse(message);
+		replies.get(id)?.(error ? null : result);
+		replies.delete(id);
+	});
+	const attached = new Map();
+	const inTarget = async (sessionId, method, params = {}) => {
+		const id = ++messageId;
+		const reply = new Promise((resolve) => {
+			replies.set(id, resolve);
+			setTimeout(() => resolve(null), 60000);
+		});
+		await cdp.send('Target.sendMessageToTarget', {
+			sessionId,
+			message: JSON.stringify({ id, method, params }),
+		});
+		return reply;
+	};
+	/** a session on each live target of the kind `label` names */
+	const sessions = async (label) => {
+		const { targetInfos } = await cdp.send('Target.getTargets');
+		const out = [];
+		for (const target of targetInfos) {
+			const kind =
+				target.type === 'service_worker' &&
+				target.url.startsWith(new URL(PROXY).origin)
+					? 'sw'
+					: target.type === 'worker' && /transportWorker/.test(target.url)
+						? 'transport'
+						: null;
+			if (kind !== label) continue;
+			let sessionId = attached.get(target.targetId);
+			if (!sessionId) {
+				({ sessionId } = await cdp.send('Target.attachToTarget', {
+					targetId: target.targetId,
+					flatten: false,
+				}));
+				attached.set(target.targetId, sessionId);
+			}
+			out.push(sessionId);
+		}
+		return out;
+	};
+	/** the live objects whose prototype is `constructor`'s, in `sessionId`, reduced by `fn` */
+	const objects = async (sessionId, constructor, fn) => {
+		const prototype = await inTarget(sessionId, 'Runtime.evaluate', {
+			expression: `${constructor}.prototype`,
+			objectGroup: 'memory',
+		});
+		const found = prototype?.result?.objectId
+			? await inTarget(sessionId, 'Runtime.queryObjects', {
+					prototypeObjectId: prototype.result.objectId,
+					objectGroup: 'memory',
+				})
+			: null;
+		const value = found?.objects?.objectId
+			? await inTarget(sessionId, 'Runtime.callFunctionOn', {
+					objectId: found.objects.objectId,
+					functionDeclaration: fn,
+					returnByValue: true,
+				})
+			: null;
+		await inTarget(sessionId, 'Runtime.releaseObjectGroup', {
+			objectGroup: 'memory',
+		});
+		return value?.result?.value ?? null;
+	};
+	return {
+		/**
+		 * Each kind's memory after a collection, summed over its targets (a
+		 * closed tab's may linger): JS heap, ArrayBuffer backing stores, wasm
+		 * memories (epoxy's, the rewriter's: the heap's figures leave them out)
+		 */
+		async memory() {
+			const out = {};
+			for (const label of ['sw', 'transport'])
+				for (const sessionId of await sessions(label)) {
+					await inTarget(sessionId, 'HeapProfiler.collectGarbage');
+					const usage = await inTarget(sessionId, 'Runtime.getHeapUsage');
+					if (!usage) continue;
+					const wasm = await objects(
+						sessionId,
+						'WebAssembly.Memory',
+						'function () { return this.reduce((sum, memory) => sum + memory.buffer.byteLength, 0); }',
+					);
+					out[label] ??= { heap: 0, buffers: 0, wasm: 0 };
+					out[label].heap += usage.usedSize;
+					out[label].buffers += usage.backingStorageSize;
+					out[label].wasm += wasm ?? 0;
+				}
+			return out;
+		},
+		/** how many objects of `constructor` the targets of `label` hold alive */
+		async count(label, constructor) {
+			let total = 0;
+			for (const sessionId of await sessions(label)) {
+				await inTarget(sessionId, 'HeapProfiler.collectGarbage');
+				total +=
+					(await objects(
+						sessionId,
+						constructor,
+						'function () { return this.length; }',
+					)) ?? 0;
+			}
+			return total;
+		},
+		detach: () => cdp.detach().catch(() => {}),
+	};
+}
+
+/** how much more `label` held in `after` than in `before`, all kinds summed; null when it is in neither */
+export function grewBy(before, after, label) {
+	const sum = (m) => m.heap + m.buffers + m.wasm;
+	return after?.[label] && before?.[label]
+		? sum(after[label]) - sum(before[label])
+		: null;
+}

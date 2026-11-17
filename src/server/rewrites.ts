@@ -906,12 +906,19 @@ function genericForward(
 		// signal in a fetch event); the signal is honoured too where it fires
 		const signal = (serverRequest as { signal?: AbortSignal }).signal;
 		const abortId = serverRequest.headers.get(ABORT_HEADER);
+		// whether the page gave the request up, by either way: an answer
+		// that arrives after it is cancelled, or the transport goes on
+		// receiving a body nobody will read
+		let aborted = false;
 		const abortedSoon = new Promise<never>((_, reject) => {
-			if (abortId) pendingAborts.set(abortId, () => reject(ABORTED));
+			const abort = () => {
+				aborted = true;
+				reject(ABORTED);
+			};
+			if (abortId) pendingAborts.set(abortId, abort);
 			if (!signal) return;
-			if (signal.aborted) reject(ABORTED);
-			else
-				signal.addEventListener('abort', () => reject(ABORTED), { once: true });
+			if (signal.aborted) abort();
+			else signal.addEventListener('abort', abort, { once: true });
 		});
 		abortedSoon.catch(() => {});
 		const reportAborted = () =>
@@ -2315,7 +2322,7 @@ function genericForward(
 			// the transport stops reading it
 			upstream.then(
 				(response) => {
-					if (signal?.aborted) response.body?.cancel().catch(() => {});
+					if (aborted) response.body?.cancel().catch(() => {});
 				},
 				() => {},
 			);
@@ -3017,7 +3024,7 @@ function genericForward(
 		// reported as aborted; an abort after the headers went out cancels the
 		// response stream the browser holds, which reaches the transport the
 		// same way
-		if (signal?.aborted) {
+		if (aborted) {
 			await response.body?.cancel().catch(() => {});
 			reportAborted();
 			return Response.error();
