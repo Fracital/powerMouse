@@ -145,6 +145,7 @@ import {
 	SEALER_ROUTE,
 	SIZE_MARKER,
 	TAO_MARKER,
+	TIMEOUT_HEADER,
 	TIMING_DENIED_MARKER,
 	TIMING_ONLY_MARKER,
 	UNREPORTED_MARKER,
@@ -4402,10 +4403,31 @@ function genericForward(
 	): Promise<Response> {
 		const started = Date.now();
 		const abortId = serverRequest.headers.get(ABORT_HEADER);
+		// an XMLHttpRequest's timeout (TIMEOUT_HEADER), on this clock, which no
+		// long task of the page's thread holds up: past it before the answer's
+		// headers, the request is given up and the page told (by the request's
+		// abort id, which no site sees)
+		const timeout = abortId?.startsWith('xhr-')
+			? Number(serverRequest.headers.get(TIMEOUT_HEADER)) || 0
+			: 0;
+		let timedOut = false;
+		const timer =
+			timeout > 0
+				? setTimeout(() => {
+						timedOut = true;
+						abortRequest(abortId);
+					}, timeout)
+				: undefined;
+		const timedOutAnswer = () =>
+			new Response(null, { headers: { [TIMEOUT_HEADER]: abortId! } });
 		try {
-			return await forward(serverRequest, resolved, context);
+			const answer = await forward(serverRequest, resolved, context);
+			if (!timedOut) return answer;
+			answer.body?.cancel().catch(() => {});
+			return timedOutAnswer();
 		} catch (error) {
-			if (error === ABORTED) return Response.error();
+			if (error === ABORTED)
+				return timedOut ? timedOutAnswer() : Response.error();
 			if (
 				!DOCUMENT_DESTINATIONS.has(serverRequest.destination) ||
 				!(error instanceof Error) ||
@@ -4452,6 +4474,7 @@ function genericForward(
 			if (page) return page;
 			throw error;
 		} finally {
+			clearTimeout(timer);
 			if (abortId) pendingAborts.delete(abortId);
 		}
 	};

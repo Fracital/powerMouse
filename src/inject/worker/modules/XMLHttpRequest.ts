@@ -4,6 +4,7 @@ import {
 	ABORT_HEADER,
 	CREDENTIALS_HEADER,
 	PREFLIGHT_HEADER,
+	TIMEOUT_HEADER,
 } from '../../../transport/messages';
 import Module from '../../Module';
 import {
@@ -23,6 +24,7 @@ import {
 	overrideMime,
 	type MimeType,
 } from '../../xhrText';
+import { armTimeout, timedOut } from '../../xhrTimer';
 import WorkerClient from '../Client';
 
 export default class XMLHttpRequestModule extends Module<WorkerClient> {
@@ -461,6 +463,8 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 					// prefix tells the worker the request is an XMLHttpRequest
 					const id = `xhr-${Date.now()}-${Math.random()}`;
 					headers[ABORT_HEADER] = id;
+					if (this.#timeout > 0)
+						headers[TIMEOUT_HEADER] = String(this.#timeout);
 					this.#abort.signal.addEventListener(
 						'abort',
 						() => that.client.abortRequest(id),
@@ -470,6 +474,14 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 					fetch(url, init)
 						.then(async (response) => {
 							if (generation !== this.#generation) return;
+							// the worker's clock says it is past its timeout
+							if (timedOut(response, id)) {
+								if (this.#readyState !== DONE) {
+									this.#abort.abort();
+									this.#end('timeout');
+								}
+								return;
+							}
 							this.#onHeaders(undefined, response, response.url);
 							const buffer = await response.arrayBuffer();
 							if (generation !== this.#generation) return;
@@ -633,11 +645,15 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 						this.#upload.dispatchEvent(new ProgressEvent('loadstart'));
 				}
 				if (this.#async && this.#timeout > 0)
-					this.#timer = setTimeout(() => {
-						if (this.#readyState === DONE) return;
-						this.#abort.abort();
-						this.#end('timeout');
-					}, this.#timeout);
+					armTimeout(
+						this.#timeout,
+						(timer) => (this.#timer = timer),
+						() => {
+							if (this.#readyState === DONE) return;
+							this.#abort.abort();
+							this.#end('timeout');
+						},
+					);
 
 				// credentials (open()'s or the URL's) go to the worker, which
 				// answers the site's challenge with them (they are never sent before

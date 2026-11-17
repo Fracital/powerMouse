@@ -363,6 +363,16 @@ export const CREDENTIALS_HEADER = 'x-stomp-credentials';
  */
 export const PREFLIGHT_HEADER = 'x-stomp-preflight';
 /**
+ * set by the inject on an asynchronous XMLHttpRequest with a timeout: the
+ * timeout in ms, which the worker keeps on its own clock from when the
+ * request reached it (dropped by the worker). Chrome keeps the timeout in
+ * its network service, so a long task on the page's thread never makes an
+ * answer that came in time lose to it. The worker's answer to a request
+ * past it carries the header with the request's ABORT_HEADER id, and the
+ * page fires the timeout.
+ */
+export const TIMEOUT_HEADER = 'x-stomp-timeout';
+/**
  * SW -> the client that made a request (or, for a navigation, its parent):
  * the console notices Chrome prints for mixed content (src/mixedContent.ts),
  * which the inject writes in Chrome's words
