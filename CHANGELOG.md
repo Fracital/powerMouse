@@ -1180,6 +1180,15 @@ window }`, `frameId` being the controller's id. It is trusted host code,
 
 ### Deployment
 
+- `.github/workflows/uptime.yml` checks production every ten minutes:
+  https://stomp.fracit.al/ (status, first byte within 5 s, and Cloudflare's
+  `cf-cache-status`, so a STALE copy served while the origin is down counts
+  as down, as does a 52x or 504), `/api/status` (cache-busted) and
+  https://holywisp.fracit.al/. A failure measured twice, 30 s apart, opens
+  one issue labelled `outage` with what it measured, later failures comment
+  on it, and it is closed when production is healthy again. Read-only token
+  plus `issues: write`, no secret; `.github/scripts/uptime.mjs --dry-run`
+  runs the same checks by hand.
 - The demo is live at https://stomp.fracit.al: `.github/workflows/deploy.yml`
   builds every push to `master` and has terp run `deploy/terp-deploy-gate.sh`
   (stage build, swap, pm2 restart, health check, rollback). The demo server

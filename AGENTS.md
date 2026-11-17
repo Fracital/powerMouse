@@ -385,6 +385,19 @@ touches it. The OpenResty
 vhost and the edge server names are managed by abulxt's ansible
 (`fracital_origin_apps`, `fracital_extra_hosts`), not by this repo.
 
+`.github/workflows/uptime.yml` checks production every ten minutes (and on
+manual dispatch) with `.github/scripts/uptime.mjs`, which reads public URLs
+only: https://stomp.fracit.al/ (2xx, first byte within 5 s, and a
+`cf-cache-status` that is not STALE, since Cloudflare keeps serving its copy
+while terp is down; a 52x or 504 is the edge failing to reach terp),
+`/api/status` with a cache-busting query, and https://holywisp.fracit.al/
+answering 200. A failing round is measured again 30 s later before it counts.
+While production is down it keeps one open issue labelled `outage` (opened,
+commented on when what fails changes and at most hourly otherwise) and closes
+it once every check passes. Its token reads contents and writes issues, nothing
+else; it has no secret and never deploys or restarts anything.
+`node .github/scripts/uptime.mjs --dry-run` runs the checks by hand.
+
 ## Verification
 
 There is no unit test suite; the browser suites in `test/` are the test

@@ -1,0 +1,47 @@
+# Production uptime check, every ten minutes and on manual dispatch.
+#
+# It reads https://stomp.fracit.al/ (status, time to first byte and
+# Cloudflare's cache status), /api/status and https://holywisp.fracit.al/,
+# and keeps one issue labelled `outage` up to date: opened when production is
+# down, commented on while it stays down, closed when it is healthy again.
+# The logic is .github/scripts/uptime.mjs, which runs by hand too
+# (`node .github/scripts/uptime.mjs --dry-run`).
+#
+# Same posture as ci.yml: pinned actions, no pull_request trigger, no secret,
+# and a read-only token whose only write is to issues. It never deploys,
+# restarts or touches anything.
+
+name: Uptime
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: production up
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Check production
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/scripts/uptime.mjs

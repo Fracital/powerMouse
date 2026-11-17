@@ -49,7 +49,7 @@
 		"build": "npm run check && node build.js && tsc -p tsconfig.types.json",
 		"dev": "node scripts/dev.mjs",
 		"check": "tsc --noEmit",
-		"lint": "eslint src build.js demo/server.js demo/public/pm/dev.js scripts test bench",
+		"lint": "eslint src build.js demo/server.js demo/public/pm/dev.js scripts test bench .github/scripts",
 		"format": "prettier --write .",
 		"check:prose": "node scripts/check-prose.mjs",
 		"demo": "node demo/server.js",
