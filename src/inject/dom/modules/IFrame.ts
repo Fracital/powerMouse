@@ -79,6 +79,20 @@ export default class IFrameModule extends Module<DocumentClient> {
 			client.apply();
 		};
 
+		// a Document Picture-in-Picture window, which Chrome opens only for a
+		// top-level document (a proxied popup the browser opened), is
+		// injected as this page's about:blank popup is (../pictureWindows.ts)
+		if (
+			(realm as unknown as Record<string, unknown>).DocumentPictureInPicture &&
+			(realm.top as unknown) === realm
+		)
+			deferred().pictureWindows(
+				realm as unknown as Record<string, any>,
+				(target, handler) => proxyModule.wrapFunction(target, handler),
+				injectContext,
+				moduleClient.names.client,
+			);
+
 		const windowModule = moduleClient.getModule(ContextModule)!;
 
 		// a popup the page opens without a URL (about:blank) is a document

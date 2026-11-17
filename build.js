@@ -400,6 +400,7 @@ const DEFERRED_FILES = new Set(
 		'src/inject/dom/legacyEncoding.ts',
 		'src/inject/dom/markupMembers.ts',
 		'src/inject/dom/openerFacts.ts',
+		'src/inject/dom/pictureWindows.ts',
 		'src/inject/dom/modules/Fingerprint.ts',
 		'src/inject/dom/modules/serviceWorkerEmulation.ts',
 		'src/inject/dom/passkeys.ts',

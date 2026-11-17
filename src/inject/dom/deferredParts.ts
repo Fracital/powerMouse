@@ -45,6 +45,7 @@ import { markupMembers } from './markupMembers';
 import FingerprintModule from './modules/Fingerprint';
 import { emulateServiceWorker } from './modules/serviceWorkerEmulation';
 import { openerFacts, opensWithoutOpener } from './openerFacts';
+import { pictureWindows } from './pictureWindows';
 import { sourcePolicy } from './sourcePolicy';
 
 const parts = {
@@ -65,6 +66,7 @@ const parts = {
 	legacyQuery,
 	formEncoding,
 	legacyFormQuery,
+	pictureWindows,
 	openerFacts,
 	opensWithoutOpener,
 };

@@ -1,0 +1,67 @@
+<!doctype html>
+<title>document pip</title>
+<button id="open" style="width: 300px; height: 100px">open</button>
+<script>
+	// What documentPictureInPicture.requestWindow() hands a page
+	// (document-pip suite): the window's document and its origin, as the
+	// opener and as the window's own code read them, its storage and
+	// cookies, and the answer from a frame (Chrome allows the window only
+	// to a top-level document). `?popup` opens this page as a popup first,
+	// which then asks for the window itself.
+	const r = {};
+	localStorage.setItem('pip-key', 'from-opener');
+	document.cookie = 'pip=1';
+	r.api = typeof documentPictureInPicture;
+	const frame = document.createElement('iframe');
+	frame.srcdoc = `<script>documentPictureInPicture.requestWindow().then(() => parent.postMessage({ framed: 'opened' }, '*'), (error) => parent.postMessage({ framed: error.name + ': ' + error.message }, '*'));<\/script>`;
+	addEventListener('message', (event) => {
+		if (event.data && event.data.framed) r.framed = event.data.framed;
+	});
+	document.body.append(frame);
+	document.getElementById('open').onclick = async () => {
+		const read = (fn) => {
+			try {
+				return fn();
+			} catch (error) {
+				return `threw ${error.name}`;
+			}
+		};
+		try {
+			const pip = await documentPictureInPicture.requestWindow({
+				width: 300,
+				height: 200,
+			});
+			r.window = {
+				same: pip === documentPictureInPicture.window,
+				href: read(() => pip.location.href),
+				origin: read(() => pip.origin === origin),
+				ownOrigin: read(() => pip.eval('location.origin')),
+				ownHref: read(() => pip.eval('location.href')),
+				opener: read(() => pip.opener === window),
+				openerNull: read(() => pip.opener === null),
+				top: read(() => pip.top === pip),
+				parent: read(() => pip.parent === pip),
+				storage: read(() => pip.localStorage.getItem('pip-key')),
+				ownStorage: read(() => pip.eval("localStorage.getItem('pip-key')")),
+				cookie: read(() => pip.document.cookie),
+				ownCookie: read(() => pip.eval('document.cookie')),
+				baseURI: read(() => pip.document.baseURI === document.baseURI),
+				ownBase: read(() => pip.eval('document.baseURI') === document.baseURI),
+				realm: read(() => pip.Function !== Function),
+				written: read(() => {
+					pip.document.body.innerHTML = '<a id="a" href="x.html">x</a>';
+					return pip.document.getElementById('a').href;
+				}),
+			};
+		} catch (error) {
+			r.window = `${error.name}: ${error.message}`;
+		}
+		r.done = true;
+		window.__pip = r;
+	};
+	window.__pipReady = true;
+	if (location.search.includes('popup')) {
+		const popup = open(location.href.replace('popup', 'opened'), '_blank');
+		window.__popup = !!popup;
+	}
+</script>
