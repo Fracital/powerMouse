@@ -1,0 +1,201 @@
+<!doctype html>
+<title>STORAGE ACCESS HANDLE</title>
+<script>
+	// The members of a StorageAccessHandle (storage-access-handle suite).
+	// `?seed`: this page is a top-level page of its site and stores its
+	// first-party data (window.__seeded once done). `?frame`: this page is a
+	// frame; it asks requestStorageAccess() for every type and reports what
+	// the handle's members hold to its parent (`{ handle: report }`). Else
+	// this page is the top: it frames `?child=<url>` and keeps the frame's
+	// report in window.__handle, and its own top-level answers in
+	// window.__handleTop.
+	const query = new URLSearchParams(location.search);
+	const settle = async (fn) => {
+		try {
+			const value = await fn();
+			return value === undefined ? 'undefined' : value;
+		} catch (error) {
+			return `threw ${error?.name}: ${error?.message}`;
+		}
+	};
+	const tag = (value) => Object.prototype.toString.call(value);
+	const done = (request) =>
+		new Promise((resolve, reject) => {
+			request.onsuccess = () => resolve(request.result);
+			request.onerror = () => reject(request.error);
+		});
+	const entries = async (directory) => {
+		const names = [];
+		for await (const name of directory.keys()) names.push(name);
+		return names.sort().join(',');
+	};
+	const BIG = 'x'.repeat(200000);
+
+	if (query.has('seed')) {
+		(async () => {
+			localStorage.setItem('sah', 'first-party');
+			sessionStorage.setItem('sah', 'first-party session');
+			const db = await done(indexedDB.open('sah-db', 1));
+			db.close();
+			const cache = await caches.open('sah-cache');
+			await cache.put('/sah-entry', new Response(BIG));
+			const root = await navigator.storage.getDirectory();
+			const file = await root.getFileHandle('sah.txt', { create: true });
+			const writable = await file.createWritable();
+			await writable.write('first-party file');
+			await writable.close();
+			window.__seeded = true;
+		})().catch((error) => (window.__seeded = `threw ${error}`));
+	} else if (query.has('frame')) {
+		const report = {};
+		(async () => {
+			report.bare = await settle(async () =>
+				tag(await document.requestStorageAccess({})),
+			);
+			report.none = await settle(async () =>
+				tag(await document.requestStorageAccess({ localStorage: false })),
+			);
+			const some = await document.requestStorageAccess({
+				localStorage: true,
+			});
+			report.some = tag(some);
+			report.unrequested = await settle(() => tag(some.sessionStorage));
+			report.unrequestedMethod = await settle(() => some.estimate());
+			report.unrequestedWorker = await settle(() =>
+				tag(some.SharedWorker('data:text/javascript,')),
+			);
+			report.someLocal = await settle(() => some.localStorage.getItem('sah'));
+			const h = await document.requestStorageAccess({ all: true });
+			report.handle = tag(h);
+			report.members = Object.getOwnPropertyNames(
+				Object.getPrototypeOf(h),
+			).join(',');
+			report.local = h.localStorage.getItem('sah');
+			report.windowLocal = localStorage.getItem('sah');
+			report.localTag = tag(h.localStorage);
+			report.localIsWindow = h.localStorage === localStorage;
+			report.localSame = h.localStorage === h.localStorage;
+			report.localStorageProto = h.localStorage instanceof Storage;
+			report.localNamed = h.localStorage.sah ?? null;
+			report.session = h.sessionStorage.getItem('sah');
+			report.windowSession = sessionStorage.getItem('sah');
+			h.localStorage.setItem('sah-written', 'by the handle');
+			report.writtenWindow = localStorage.getItem('sah-written');
+			report.writtenHandle = h.localStorage.getItem('sah-written');
+			h.localStorage.removeItem('sah-written');
+			report.idbTag = tag(h.indexedDB);
+			report.idbIsWindow = h.indexedDB === indexedDB;
+			report.idb = await settle(async () =>
+				(await h.indexedDB.databases())
+					.map((info) => info.name)
+					.filter((name) => name.startsWith('sah'))
+					.join(','),
+			);
+			report.windowIdb = await settle(async () =>
+				(await indexedDB.databases())
+					.map((info) => info.name)
+					.filter((name) => name.startsWith('sah'))
+					.join(','),
+			);
+			report.idbCmp = await settle(() => h.indexedDB.cmp(1, 2));
+			report.idbOpen = await settle(async () => {
+				const db = await done(h.indexedDB.open('sah-db'));
+				const name = db.name;
+				db.close();
+				return name;
+			});
+			report.cachesTag = tag(h.caches);
+			report.cachesIsWindow = h.caches === caches;
+			report.caches = await settle(async () =>
+				(await h.caches.keys()).filter((n) => n.startsWith('sah')).join(','),
+			);
+			report.windowCaches = await settle(async () =>
+				(await caches.keys()).filter((n) => n.startsWith('sah')).join(','),
+			);
+			report.cacheMatch = await settle(async () => {
+				const hit = await h.caches.match('/sah-entry');
+				return hit ? (await hit.text()).length : null;
+			});
+			report.locksTag = tag(h.locks);
+			report.locksIsWindow = h.locks === navigator.locks;
+			report.lock = await settle(() =>
+				h.locks.request('sah-lock', async (lock) => {
+					const held = (await h.locks.query()).held.map((l) => l.name);
+					const windowHeld = (await navigator.locks.query()).held.map(
+						(l) => l.name,
+					);
+					return `${lock.name} held ${held} window ${windowHeld}`;
+				}),
+			);
+			report.directory = await settle(async () =>
+				entries(await h.getDirectory()),
+			);
+			report.windowDirectory = await settle(async () =>
+				entries(await navigator.storage.getDirectory()),
+			);
+			report.estimate = await settle(async () => {
+				const estimate = await h.estimate();
+				return `${estimate.usage >= 200000 && estimate.usage < 2000000} ${Object.keys(estimate).join(',')} ${JSON.stringify(estimate.usageDetails)}`;
+			});
+			report.windowEstimate = await settle(async () => {
+				const estimate = await navigator.storage.estimate();
+				return `${estimate.usage >= 200000 && estimate.usage < 2000000}`;
+			});
+			report.objectURL = await settle(() => {
+				const url = h.createObjectURL(new Blob(['sah']));
+				const same = url.startsWith(`blob:${location.origin}/`);
+				h.revokeObjectURL(url);
+				return same;
+			});
+			report.objectURLType = await settle(() => h.createObjectURL('nope'));
+			report.channel = await settle(() => {
+				const channel = h.BroadcastChannel('sah-channel');
+				const result = `${tag(channel)} ${channel.name}`;
+				channel.close();
+				return result;
+			});
+			report.channelArgs = await settle(() => h.BroadcastChannel());
+			report.worker = await settle(
+				() =>
+					new Promise((resolve, reject) => {
+						const source = `onconnect = (event) => event.ports[0].postMessage(String(location.origin === ${JSON.stringify(location.origin)}))`;
+						const url = h.createObjectURL(
+							new Blob([source], { type: 'text/javascript' }),
+						);
+						const worker = h.SharedWorker(url, 'sah-worker');
+						worker.port.onmessage = (event) => resolve(event.data);
+						worker.onerror = () => reject(new Error('worker error'));
+						setTimeout(() => reject(new Error('worker timeout')), 8000);
+					}),
+			);
+			report.workerTag = await settle(() =>
+				tag(h.SharedWorker('data:text/javascript,', { name: 'sah-tag' })),
+			);
+		})()
+			.catch((error) => (report.failed = `${error?.name}: ${error?.message}`))
+			.finally(() => parent.postMessage({ handle: report }, '*'));
+	} else {
+		window.__handle = null;
+		addEventListener('message', (event) => {
+			if (event.data?.handle) window.__handle = event.data.handle;
+		});
+		(async () => {
+			const top = {};
+			top.all = await settle(async () =>
+				tag(await document.requestStorageAccess({ all: true })),
+			);
+			top.bare = await settle(async () =>
+				tag(await document.requestStorageAccess({})),
+			);
+			top.plain = await settle(async () =>
+				tag(await document.requestStorageAccess()),
+			);
+			window.__handleTop = top;
+		})();
+		addEventListener('DOMContentLoaded', () => {
+			const iframe = document.createElement('iframe');
+			iframe.src = `${query.get('child')}?frame`;
+			document.body.append(iframe);
+		});
+	}
+</script>

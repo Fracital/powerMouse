@@ -1,6 +1,7 @@
 import Client from '../Client';
 import { DATABASE_BYTES, idbSizeParts, STORE_BYTES } from '../idbSizeParts';
 import Module from '../Module';
+import { redirected, storageRedirects } from '../storageRedirect';
 import ProxyModule from './Proxy';
 
 /** values of an object store sized to estimate the rest of it */
@@ -51,11 +52,12 @@ export default class StorageEstimateModule extends Module<Client> {
 		const entryKeys = global.Cache?.prototype.keys;
 		const entryMatch = global.Cache?.prototype.match;
 
-		const suffix = () => `@${client.storageKey}`;
-
-		const databaseUsage = async (idb: IDBFactory): Promise<number> => {
+		const databaseUsage = async (
+			idb: IDBFactory,
+			key: string,
+		): Promise<number> => {
 			if (!databases || !openDatabase) return 0;
-			const own = suffix();
+			const own = `@${key}`;
 			let total = 0;
 			for (const info of await Reflect.apply(databases, idb, [])) {
 				if (!info.name?.endsWith(own)) continue;
@@ -99,9 +101,12 @@ export default class StorageEstimateModule extends Module<Client> {
 			return total;
 		};
 
-		const cacheUsage = async (storage: CacheStorage): Promise<number> => {
+		const cacheUsage = async (
+			storage: CacheStorage,
+			key: string,
+		): Promise<number> => {
 			if (!cacheKeys || !cacheOpen || !entryKeys || !entryMatch) return 0;
-			const own = suffix();
+			const own = `@${key}`;
 			let total = 0;
 			for (const name of (await Reflect.apply(
 				cacheKeys,
@@ -150,7 +155,10 @@ export default class StorageEstimateModule extends Module<Client> {
 			return total;
 		};
 
-		const fileSystemUsage = async (that: StorageManager): Promise<number> => {
+		const fileSystemUsage = async (
+			that: StorageManager,
+			key: string,
+		): Promise<number> => {
 			if (typeof getDirectory !== 'function') return 0;
 			const root = (await Reflect.apply(
 				getDirectory,
@@ -159,9 +167,7 @@ export default class StorageEstimateModule extends Module<Client> {
 			)) as FileSystemDirectoryHandle;
 			let own: FileSystemDirectoryHandle;
 			try {
-				own = await root.getDirectoryHandle(
-					encodeURIComponent(client.storageKey),
-				);
+				own = await root.getDirectoryHandle(encodeURIComponent(key));
 			} catch (error) {
 				// nothing stored yet
 				return 0;
@@ -180,7 +186,11 @@ export default class StorageEstimateModule extends Module<Client> {
 
 		manager.estimate = proxyModule.wrapFunction(
 			estimate,
-			async (target, that, args) => {
+			async (target, receiver, args) => {
+				// (a Storage Access handle's is the first-party key's, and
+				// natively details nothing)
+				const handle = storageRedirects.has(receiver);
+				const [that, key] = redirected(receiver, client.storageKey);
 				const real = (await Reflect.apply(
 					target,
 					that,
@@ -189,16 +199,16 @@ export default class StorageEstimateModule extends Module<Client> {
 				const idb = (global as { indexedDB?: IDBFactory }).indexedDB;
 				const storage = (global as { caches?: CacheStorage }).caches;
 				const [caches, fileSystem, indexedDB] = await Promise.all([
-					storage ? settled(() => cacheUsage(storage)) : 0,
-					settled(() => fileSystemUsage(that as StorageManager)),
-					idb ? settled(() => databaseUsage(idb)) : 0,
+					storage ? settled(() => cacheUsage(storage, key)) : 0,
+					settled(() => fileSystemUsage(that, key)),
+					idb ? settled(() => databaseUsage(idb, key)) : 0,
 				]);
 				const usage = caches + fileSystem + indexedDB;
 				// the dictionary's members in Chrome's order, only those in use
 				const usageDetails: Record<string, number> = {};
-				if (caches) usageDetails.caches = caches;
-				if (fileSystem) usageDetails.fileSystem = fileSystem;
-				if (indexedDB) usageDetails.indexedDB = indexedDB;
+				if (caches && !handle) usageDetails.caches = caches;
+				if (fileSystem && !handle) usageDetails.fileSystem = fileSystem;
+				if (indexedDB && !handle) usageDetails.indexedDB = indexedDB;
 				const left = Math.max(0, (real.quota ?? 0) - (real.usage ?? 0));
 				return { quota: left + usage, usage, usageDetails };
 			},

@@ -29,6 +29,8 @@
 // (and the handlers of long tasks and long animation frames,
 // ./modules/LongTasks.ts and ./modules/LongFrames.ts, at a document's first
 // such entry)
+// (and a StorageAccessHandle's members, ./storageAccess.ts, at a page's
+// first use of one)
 //
 // (and the WebTransport stand-in, ../webTransportStandIn.ts, with what
 // carries its sessions, ../webTransport.ts, once a realm makes its first
@@ -66,6 +68,7 @@ import { emulateServiceWorker } from './modules/serviceWorkerEmulation';
 import { openerFacts, opensWithoutOpener } from './openerFacts';
 import { pictureWindows } from './pictureWindows';
 import { sourcePolicy } from './sourcePolicy';
+import { storageAccessHandle } from './storageAccess';
 import { writeStream } from './WriteStream';
 
 const parts = {
@@ -99,6 +102,7 @@ const parts = {
 	// document's first such call (modules/Credentials.ts)
 	identityFlow,
 	relyingPartyGuard,
+	storageAccessHandle,
 };
 
 export type DeferredParts = typeof parts;

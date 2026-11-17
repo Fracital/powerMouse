@@ -1,5 +1,6 @@
 import Client from '../Client';
 import Module from '../Module';
+import { redirected, unsuffixed } from '../storageRedirect';
 import { adoptTypeMark, cacheableResponse } from './Fetch';
 import ProxyModule from './Proxy';
 
@@ -14,10 +15,11 @@ export default class PartitionModule extends Module<Client> {
 		const client = this.client;
 		const proxyModule = client.getModule(ProxyModule)!;
 		const global = client.global;
-		const suffix = () => `@${client.storageKey}`;
-		const scoped = (name: unknown) => `${String(name)}${suffix()}`;
+		const scoped = (name: unknown, key = client.storageKey) =>
+			`${String(name)}@${key}`;
+		// a name made through a Storage Access handle has the first-party key
 		const unscoped = (name: string) =>
-			name.endsWith(suffix()) ? name.slice(0, -suffix().length) : name;
+			unsuffixed(name, client.storageKey, client.url.url.origin);
 
 		if (typeof global.BroadcastChannel === 'function') {
 			global.BroadcastChannel = proxyModule.wrapFunction(
@@ -51,23 +53,31 @@ export default class PartitionModule extends Module<Client> {
 			manager.request = proxyModule.wrapFunction(
 				manager.request,
 				(target, that, args) => {
-					if (args.length) args[0] = scoped(args[0]);
-					return Reflect.apply(target, that, args);
+					const [locks, key] = redirected(that, client.storageKey);
+					if (args.length) args[0] = scoped(args[0], key);
+					return Reflect.apply(target, locks, args);
 				},
 			) as LockManager['request'];
 			type Info = { name?: string };
-			const own = (list: Info[] | undefined) =>
+			const own = (list: Info[] | undefined, key: string) =>
 				(list ?? [])
-					.filter((lock) => lock.name?.endsWith(suffix()))
-					.map((lock) => ({ ...lock, name: unscoped(lock.name!) }));
+					.filter((lock) => lock.name?.endsWith(`@${key}`))
+					.map((lock) => ({
+						...lock,
+						name: lock.name!.slice(0, -key.length - 1),
+					}));
 			manager.query = proxyModule.wrapFunction(
 				manager.query,
 				async (target, that, args) => {
-					const snapshot = (await Reflect.apply(target, that, args)) as {
+					const [locks, key] = redirected(that, client.storageKey);
+					const snapshot = (await Reflect.apply(target, locks, args)) as {
 						held?: Info[];
 						pending?: Info[];
 					};
-					return { held: own(snapshot.held), pending: own(snapshot.pending) };
+					return {
+						held: own(snapshot.held, key),
+						pending: own(snapshot.pending, key),
+					};
 				},
 			) as LockManager['query'];
 			const lockName = Reflect.getOwnPropertyDescriptor(
@@ -93,16 +103,19 @@ export default class PartitionModule extends Module<Client> {
 				storage[method] = proxyModule.wrapFunction(
 					storage[method],
 					(target, that, args) => {
-						if (args.length) args[0] = scoped(args[0]);
-						return Reflect.apply(target, that, args);
+						const [caches, key] = redirected(that, client.storageKey);
+						if (args.length) args[0] = scoped(args[0], key);
+						return Reflect.apply(target, caches, args);
 					},
 				) as any;
 			storage.keys = proxyModule.wrapFunction(
 				storage.keys,
-				async (target, that, args) =>
-					((await Reflect.apply(target, that, args)) as string[])
-						.filter((name) => name.endsWith(suffix()))
-						.map(unscoped),
+				async (target, that, args) => {
+					const [caches, key] = redirected(that, client.storageKey);
+					return ((await Reflect.apply(target, caches, args)) as string[])
+						.filter((name) => name.endsWith(`@${key}`))
+						.map((name) => name.slice(0, -key.length - 1));
+				},
 			) as any;
 		}
 
@@ -210,9 +223,10 @@ export default class PartitionModule extends Module<Client> {
 			const nativeHas = hasOf;
 			storage.match = proxyModule.wrapFunction(
 				storage.match,
-				async (target, that, args) => {
-					if (refused(that, global.CacheStorage, args))
-						return await Reflect.apply(target, that, args);
+				async (target, receiver, args) => {
+					if (refused(receiver, global.CacheStorage, args))
+						return await Reflect.apply(target, receiver, args);
+					const [that, key] = redirected(receiver, client.storageKey);
 					if (args.length && args[0] !== undefined)
 						args[0] =
 							args[0] instanceof global.Request
@@ -222,13 +236,13 @@ export default class PartitionModule extends Module<Client> {
 					const names =
 						options?.cacheName !== undefined
 							? (await Reflect.apply(nativeHas, that, [
-									scoped(options.cacheName),
+									scoped(options.cacheName, key),
 								]))
-								? [scoped(options.cacheName)]
+								? [scoped(options.cacheName, key)]
 								: []
 							: (
 									(await Reflect.apply(nativeKeys, that, [])) as string[]
-								).filter((name) => name.endsWith(suffix()));
+								).filter((name) => name.endsWith(`@${key}`));
 					for (const name of names) {
 						const cache = (await Reflect.apply(nativeOpen, that, [
 							name,
@@ -246,7 +260,8 @@ export default class PartitionModule extends Module<Client> {
 			if (typeof manager.getDirectory === 'function')
 				manager.getDirectory = proxyModule.wrapFunction(
 					manager.getDirectory,
-					async (target, that, args) => {
+					async (target, receiver, args) => {
+						const [that, key] = redirected(receiver, client.storageKey);
 						const root: FileSystemDirectoryHandle = await Reflect.apply(
 							target,
 							that,
@@ -254,10 +269,9 @@ export default class PartitionModule extends Module<Client> {
 						);
 						// a directory per proxied origin (and partition), under the
 						// real root
-						return root.getDirectoryHandle(
-							encodeURIComponent(client.storageKey),
-							{ create: true },
-						);
+						return root.getDirectoryHandle(encodeURIComponent(key), {
+							create: true,
+						});
 					},
 				) as any;
 		}

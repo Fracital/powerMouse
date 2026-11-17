@@ -438,6 +438,7 @@ const DEFERRED_FILES = new Set(
 		'src/inject/dom/sourcePolicy.ts',
 		'src/inject/dom/WriteStream.ts',
 		'src/inject/dom/writeTokenizer.ts',
+		'src/inject/dom/storageAccess.ts',
 		'src/inject/idbSize.ts',
 		'src/passkeys/types.ts',
 		'src/inject/serviceWorkerObjects.ts',

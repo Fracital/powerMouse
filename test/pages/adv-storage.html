@@ -1,0 +1,107 @@
+<!doctype html>
+<title>ADV STORAGE</title>
+<pre id="result">pending</pre>
+<script src="adv-harness.js"></script>
+<script>
+	// Storage the browser keys by the real origin, reached past the
+	// per-site stand-ins: a StorageAccessHandle's members (asked in a frame
+	// of this page, as a top-level page gets no handle).
+	const A = __advAsync;
+	const tag = (value) => Object.prototype.toString.call(value);
+	const frame = new Promise((resolve) => {
+		const iframe = document.createElement('iframe');
+		iframe.srcdoc = '<!doctype html><title>child</title>';
+		iframe.onload = () => resolve(iframe.contentWindow);
+		document.body.append(iframe);
+	});
+	const handle = frame.then((child) =>
+		child.document.requestStorageAccess({ all: true }),
+	);
+	A('storage access in a top-level page', async () => {
+		const result = await document.requestStorageAccess({ all: true });
+		return result === undefined
+			? 'undefined'
+			: `LEAK: a top-level page got ${tag(result)}`;
+	});
+	A('storage access handle localStorage keys', async () => {
+		const h = await handle;
+		localStorage.setItem('adv-own', '1');
+		const keys = Object.keys(h.localStorage);
+		const foreign = keys.filter((key) => key.includes('$stomp$'));
+		return foreign.length
+			? `LEAK: ${foreign.slice(0, 4).join(' ')}`
+			: `own ${h.localStorage.getItem('adv-own')}`;
+	});
+	A('storage access handle sessionStorage', async () => {
+		const h = await handle;
+		sessionStorage.setItem('adv-own', 'session');
+		return h.sessionStorage.getItem('adv-own');
+	});
+	A('storage access handle getDirectory', async () => {
+		const h = await handle;
+		const names = [];
+		for await (const name of (await h.getDirectory()).keys()) names.push(name);
+		// another site's directory is named by its encoded origin
+		const foreign = names.filter((name) => /%3A%2F%2F/i.test(name));
+		return foreign.length
+			? `LEAK: ${foreign.slice(0, 4).join(' ')}`
+			: `${names.length} entries`;
+	});
+	A('storage access handle estimate', async () => {
+		const h = await handle;
+		const [own, page] = [
+			await h.estimate(),
+			await navigator.storage.estimate(),
+		];
+		return Math.abs(own.usage - page.usage) <= Math.max(8192, page.usage / 20)
+			? 'the page usage'
+			: `LEAK: usage ${own.usage}, the page's ${page.usage}`;
+	});
+	A('storage access handle createObjectURL', async () => {
+		const h = await handle;
+		const url = h.createObjectURL(new Blob(['adv']));
+		h.revokeObjectURL(url);
+		return url;
+	});
+	A('storage access handle BroadcastChannel', async () => {
+		const h = await handle;
+		// a channel of this page's, by the name the proxy would give it
+		const page = new BroadcastChannel('adv-channel');
+		const raw = h.BroadcastChannel(`adv-channel@${location.origin}`);
+		const heard = new Promise((resolve) => {
+			raw.onmessage = (event) => resolve(`LEAK: heard ${event.data}`);
+			setTimeout(() => resolve('not heard'), 1500);
+		});
+		page.postMessage('the page channel');
+		const result = await heard;
+		page.close();
+		raw.close();
+		return result;
+	});
+	A(
+		'storage access handle SharedWorker',
+		async () => {
+			const h = await handle;
+			const source =
+				'onconnect = (event) => event.ports[0].postMessage([location.href, typeof indexedDB])';
+			const url = h.createObjectURL(
+				new Blob([source], { type: 'text/javascript' }),
+			);
+			const worker = h.SharedWorker(url, 'adv-handle-worker');
+			return await new Promise((resolve, reject) => {
+				worker.port.onmessage = (event) => resolve(event.data);
+				setTimeout(() => reject(new Error('no reply')), 6000);
+			});
+		},
+		8000,
+	);
+	A('storage access handle indexedDB and caches', async () => {
+		const h = await handle;
+		const databases = (await h.indexedDB.databases()).map((db) => db.name);
+		const caches = await h.caches.keys();
+		return [...databases, ...caches].map((name) =>
+			name.includes('@') ? `LEAK: ${name}` : name,
+		);
+	});
+	__advFinish(3000);
+</script>

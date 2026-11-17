@@ -2219,7 +2219,13 @@ export default class DocumentClient extends Client {
 	 * chain of proxied parents: a site framed by another keeps to stores of
 	 * its own from its first script on.
 	 */
+	/**
+	 * @internal while a Storage Access handle makes a channel or a shared
+	 * worker: the first-party partition's (./storageAccess.ts)
+	 */
+	firstParty = false;
 	override get partition(): string {
+		if (this.firstParty) return '';
 		const document = this.global.document;
 		const kept = this.#partition;
 		if (kept && kept.document === document) return kept.partition;

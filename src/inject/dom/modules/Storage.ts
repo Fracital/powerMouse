@@ -8,6 +8,8 @@ import ProxyModule, {
 import { withStack } from '../../nativeErrors';
 import { LazyMap } from '../../ownCollections';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import { deferred } from '../deferred';
+import type { StorageAccessTaken } from '../storageAccess';
 import SyncModule, { WRITE_BUDGET } from './Sync';
 
 /**
@@ -47,8 +49,12 @@ export default class StorageModule extends Module<DocumentClient> {
 
 		let building = true;
 
-		// keyed by the origin and its partition (src/partition.ts)
-		const getOrigin = () => client.storageKey;
+		// keyed by the origin and its partition (src/partition.ts). A
+		// Storage Access handle's area is `<directory>#<key>`, the site's
+		// first-party store (the handle's `area` below); a window's is the
+		// directory
+		const dirOf = (area: string) => area.split('#')[0];
+		const keyOf = (area: string) => area.split('#')[1] ?? client.storageKey;
 		// this document, so it never hears its own changes
 		const sender = Math.random().toString(36).slice(2);
 		const here = () => client.url.toString();
@@ -66,6 +72,8 @@ export default class StorageModule extends Module<DocumentClient> {
 		// changes the stamp, as the Cookies module does for the jar.
 		interface ReadCache {
 			store: string;
+			/** a Storage Access handle's area's key */
+			key?: string;
 			version: string;
 			values: Map<string, string | null>;
 			keys: string[] | null;
@@ -92,7 +100,7 @@ export default class StorageModule extends Module<DocumentClient> {
 			// no storage of its own (an opaque origin): every read goes out
 		}
 		const stampOf = (cache: ReadCache) =>
-			`$stomp$${cache.store}:${getOrigin()}`;
+			`$stomp$${cache.store}:${cache.key ?? client.storageKey}`;
 		/** the document's copy of a store, emptied when another document wrote */
 		const current = (directory: string): ReadCache | null => {
 			const cache = caches.get(directory);
@@ -203,7 +211,10 @@ export default class StorageModule extends Module<DocumentClient> {
 			operation: Record<string, string>,
 			args: unknown[],
 		) => {
-			const url = new URL(`${directory}ordered`, pageGlobal.location.href);
+			const url = new URL(
+				`${dirOf(directory)}ordered`,
+				pageGlobal.location.href,
+			);
 			for (const [name, value] of Object.entries(operation))
 				url.searchParams.set(name, value);
 			return fetch(url, {
@@ -253,7 +264,7 @@ export default class StorageModule extends Module<DocumentClient> {
 				seq: String(seq),
 				base: String(base),
 				name,
-				origin: client.codec.encode(getOrigin()),
+				origin: client.codec.encode(keyOf(directory)),
 			};
 			if (key !== null) operation.key = client.codec.encode(key);
 			post(directory, operation, args).then(settle, (error) => {
@@ -288,8 +299,8 @@ export default class StorageModule extends Module<DocumentClient> {
 						length: number;
 						tag: string;
 					} | null = syncModule.jsonAPI(
-						`${directory}getItemPart`,
-						getOrigin(),
+						`${dirOf(directory)}getItemPart`,
+						keyOf(directory),
 						key,
 						have,
 					);
@@ -314,7 +325,11 @@ export default class StorageModule extends Module<DocumentClient> {
 				// another document wrote between two parts: read it again, and
 				// after a few tries in one answer, which a value that fits takes
 				if (attempt >= 4)
-					return syncModule.jsonAPI(`${directory}getItem`, getOrigin(), key);
+					return syncModule.jsonAPI(
+						`${dirOf(directory)}getItem`,
+						keyOf(directory),
+						key,
+					);
 			}
 		};
 
@@ -340,10 +355,11 @@ export default class StorageModule extends Module<DocumentClient> {
 			);
 			let usage: [total: number, sizes: number[]];
 			try {
-				usage = syncModule.jsonAPI(`${directory}getUsage`, getOrigin(), [
-					key,
-					...others.map(([item]) => item),
-				]);
+				usage = syncModule.jsonAPI(
+					`${dirOf(directory)}getUsage`,
+					keyOf(directory),
+					[key, ...others.map(([item]) => item)],
+				);
 			} catch (error) {
 				// the bridge cannot ask now; a write the page made natively
 				// would not fail for that
@@ -383,7 +399,7 @@ export default class StorageModule extends Module<DocumentClient> {
 			const cache = current(directory);
 			const keys: string[] =
 				cache?.keys?.slice() ??
-				syncModule.jsonAPI(`${directory}getKeys`, getOrigin());
+				syncModule.jsonAPI(`${dirOf(directory)}getKeys`, keyOf(directory));
 			if (cache && !cache.keys) cache.keys = keys.slice();
 			if (!shadow?.values.size) return keys;
 			const merged = keys.filter(
@@ -414,10 +430,14 @@ export default class StorageModule extends Module<DocumentClient> {
 			}
 			clear(): void {
 				const directory = this.#directory;
-				const args = [getOrigin(), sender, here()];
+				const args = [keyOf(directory), sender, here()];
 				if (
 					busy(directory) ||
-					!syncModule.tryJsonAPI(WRITE_BUDGET, `${directory}clear`, ...args)
+					!syncModule.tryJsonAPI(
+						WRITE_BUDGET,
+						`${dirOf(directory)}clear`,
+						...args,
+					)
 				)
 					later(directory, 'clear', args, null, null);
 				else wrote(directory, null, null);
@@ -460,13 +480,13 @@ export default class StorageModule extends Module<DocumentClient> {
 				const item = String(args[0]);
 				const before = current(directory)?.usage ?? null;
 				const old = knownSize(directory, item);
-				const call = [getOrigin(), item, sender, here()];
+				const call = [keyOf(directory), item, sender, here()];
 
 				if (
 					busy(directory) ||
 					!syncModule.tryJsonAPI(
 						WRITE_BUDGET,
-						`${directory}removeItem`,
+						`${dirOf(directory)}removeItem`,
 						...call,
 					)
 				)
@@ -492,12 +512,16 @@ export default class StorageModule extends Module<DocumentClient> {
 					);
 				}
 
-				const call = [getOrigin(), item, value, sender, here()];
+				const call = [keyOf(directory), item, value, sender, here()];
 				if (
 					busy(directory) ||
 					// far over what the budget lets through, so not even encoded
 					value.length > WRITE_BUDGET ||
-					!syncModule.tryJsonAPI(WRITE_BUDGET, `${directory}setItem`, ...call)
+					!syncModule.tryJsonAPI(
+						WRITE_BUDGET,
+						`${dirOf(directory)}setItem`,
+						...call,
+					)
 				)
 					later(directory, 'setItem', call, item, value);
 				else wrote(directory, item, value);
@@ -545,9 +569,10 @@ export default class StorageModule extends Module<DocumentClient> {
 			}
 		}
 
-		const storageFactory = (directory: string, store: string) => {
+		const storageFactory = (directory: string, store: string, key?: string) => {
 			caches.set(directory, {
 				store,
+				key,
 				version: '',
 				values: new Map(),
 				keys: null,
@@ -638,6 +663,59 @@ export default class StorageModule extends Module<DocumentClient> {
 
 		building = false;
 
+		// a Storage Access handle's members (../storageAccess.ts): the
+		// site's first-party storage, as natively, never the proxy origin's.
+		// StorageAccessHandle has no interface object: its prototype is
+		// reached through a handle only, and the hook below patches it before
+		// the page has the first.
+		const areas = new Map<string, object>();
+		const own = (object: object, name: string) =>
+			Reflect.getOwnPropertyDescriptor(object, name)?.get;
+		const document = pageGlobal.Document.prototype as {
+			requestStorageAccess?: Function;
+		};
+		if (document.requestStorageAccess) {
+			const manager = pageGlobal.StorageManager?.prototype;
+			const taken: StorageAccessTaken = {
+				area: (store, key) => {
+					const directory = `${client.directory}${store}/#${key}`;
+					let area = areas.get(directory);
+					if (!area) {
+						building = true;
+						areas.set(
+							directory,
+							(area = storageFactory(directory, store, key)),
+						);
+						building = false;
+					}
+					return area;
+				},
+				stores: {
+					indexedDB: own(pageGlobal, 'indexedDB'),
+					caches: own(pageGlobal, 'caches'),
+					locks: own(pageGlobal.Navigator.prototype, 'locks'),
+				},
+				navigator: pageGlobal.navigator,
+				storage: pageGlobal.navigator.storage,
+				estimate: manager?.estimate,
+				getDirectory: manager?.getDirectory,
+				createObjectURL: pageGlobal.URL.createObjectURL,
+				revokeObjectURL: pageGlobal.URL.revokeObjectURL,
+				BroadcastChannel: pageGlobal.BroadcastChannel,
+				SharedWorker: pageGlobal.SharedWorker,
+			};
+			document.requestStorageAccess = proxyModule.wrapFunction(
+				document.requestStorageAccess,
+				async (target, that, args) => {
+					const handle = await Reflect.apply(target, that, args);
+					// a top-level document's request resolves with nothing
+					return client.proxiedTop === pageGlobal || !handle
+						? undefined
+						: deferred().storageAccessHandle(client, taken, handle);
+				},
+			);
+		}
+
 		// A storage event the browser fires is about the proxy origin's own
 		// storage (the read stamps above, the Cookies module's, a same-origin
 		// host's), never the page's, whose events are the ones dispatched
@@ -665,7 +743,11 @@ export default class StorageModule extends Module<DocumentClient> {
 			const change = (data as Record<string, StorageChange> | null)?.[
 				STORAGE_EVENT
 			];
-			if (!change || change.sender === sender || change.origin !== getOrigin())
+			if (
+				!change ||
+				change.sender === sender ||
+				change.origin !== client.storageKey
+			)
 				return;
 			// the writer changed the stamp already; this is for a writer whose
 			// stamp this document could not see

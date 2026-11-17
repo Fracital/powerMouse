@@ -1,5 +1,6 @@
 import Client from '../Client';
 import Module from '../Module';
+import { redirected, unsuffixed } from '../storageRedirect';
 import ProxyModule from './Proxy';
 
 export default class IndexedDBModule extends Module<Client> {
@@ -11,11 +12,9 @@ export default class IndexedDBModule extends Module<Client> {
 		global.IDBFactory.prototype.open = proxyModule.wrapFunction(
 			global.IDBFactory.prototype.open,
 			(target, that, args) => {
-				if (typeof args[0] === 'string') {
-					args[0] = `${args[0]}@${client.storageKey}`;
-				}
-
-				return Reflect.apply(target, that, args);
+				const [factory, key] = redirected(that, client.storageKey);
+				if (typeof args[0] === 'string') args[0] = `${args[0]}@${key}`;
+				return Reflect.apply(target, factory, args);
 			},
 		);
 
@@ -23,9 +22,9 @@ export default class IndexedDBModule extends Module<Client> {
 		global.IDBFactory.prototype.deleteDatabase = proxyModule.wrapFunction(
 			global.IDBFactory.prototype.deleteDatabase,
 			(target, that, args) => {
-				if (typeof args[0] === 'string')
-					args[0] = `${args[0]}@${client.storageKey}`;
-				return Reflect.apply(target, that, args);
+				const [factory, key] = redirected(that, client.storageKey);
+				if (typeof args[0] === 'string') args[0] = `${args[0]}@${key}`;
+				return Reflect.apply(target, factory, args);
 			},
 		);
 
@@ -37,10 +36,11 @@ export default class IndexedDBModule extends Module<Client> {
 			factory.databases = proxyModule.wrapFunction(
 				factory.databases,
 				async (target, that, args) => {
-					const suffix = `@${client.storageKey}`;
+					const [own, key] = redirected(that, client.storageKey);
+					const suffix = `@${key}`;
 					const list = (await Reflect.apply(
 						target,
-						that,
+						own,
 						args,
 					)) as IDBDatabaseInfo[];
 					return list
@@ -58,9 +58,11 @@ export default class IndexedDBModule extends Module<Client> {
 					.get!,
 				(target, that, args) => {
 					// `name@origin`: strip the suffix, not the prefix
-					const name = Reflect.apply(target, that, args) as string;
-					const suffix = `@${client.storageKey}`;
-					return name.endsWith(suffix) ? name.slice(0, -suffix.length) : name;
+					return unsuffixed(
+						Reflect.apply(target, that, args) as string,
+						client.storageKey,
+						client.url.url.origin,
+					);
 				},
 			),
 		});
