@@ -16,6 +16,7 @@ import {
 	openDemo,
 	PROXY,
 	sleep,
+	SLOT_PORTS,
 	submitLanding,
 } from '../lib.mjs';
 
@@ -92,7 +93,12 @@ for (const [mode, base] of [
 	])
 		for (const [name, want] of Object.entries(native ?? {})) {
 			const same = JSON.stringify(proxied?.[name]) === JSON.stringify(want);
-			const open = KNOWN_OPEN[`${label}: ${name}`];
+			// under a site pool (docs/site-pool.md) the other site's window is
+			// of another origin, restricted by the browser itself: it reads as
+			// natively
+			const open = SLOT_PORTS.length
+				? undefined
+				: KNOWN_OPEN[`${label}: ${name}`];
 			ok(
 				`${mode}: ${label}: ${name} as natively${open ? ` (known open: ${open})` : ''}`,
 				open ? !same : same,

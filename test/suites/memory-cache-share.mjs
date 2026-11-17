@@ -26,6 +26,7 @@ import {
 	openDemo,
 	PROXY,
 	sleep,
+	SLOT_PORTS,
 	submitLanding,
 } from '../lib.mjs';
 
@@ -262,7 +263,12 @@ for (const [mode, base] of [
 		);
 		ok(
 			`${mode}: ${as}: another site's document, and an opaque one, take nothing of site A's copy`,
-			seen.B1.cached === false &&
+			// (under a site pool, docs/site-pool.md, site B's document is of
+			// another slot's origin, in a renderer of its own that A's session
+			// does not see: its wait and the origin's count, compared below,
+			// say it took nothing)
+			(seen.B1.cached === false ||
+				(SLOT_PORTS.length > 0 && seen.B1.cached === null)) &&
 				seen.B1.waited &&
 				seen.opaque.cached === false &&
 				seen.opaque.waited,
