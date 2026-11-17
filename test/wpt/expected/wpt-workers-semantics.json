@@ -1,13 +1,4 @@
 {
-	"/workers/interfaces/WorkerUtils/importScripts/010.html": {
-		"importScripts(undefined)": "FAIL: assert_equals: expected \"undefined\" but got \"NetworkError: Failed to execute 'importScripts' on 'WorkerGlobalScope': The script at 'http://localhost:PORT/workers/interfaces/WorkerUtils/importScripts/u"
-	},
-	"/workers/interfaces/WorkerUtils/importScripts/011.html": {
-		"importScripts(null)": "FAIL: assert_equals: expected \"null\" but got \"NetworkError: Failed to execute 'importScripts' on 'WorkerGlobalScope': The script at 'http://localhost:PORT/workers/interfaces/WorkerUtils/importScripts/null' "
-	},
-	"/workers/interfaces/WorkerUtils/importScripts/012.html": {
-		"importScripts(1)": "FAIL: assert_equals: expected \"1\" but got \"NetworkError: Failed to execute 'importScripts' on 'WorkerGlobalScope': The script at 'http://localhost:PORT/workers/interfaces/WorkerUtils/importScripts/1' failed"
-	},
 	"/workers/interfaces/WorkerUtils/importScripts/catch.sub.any.worker.html": {
 		"Cross-origin syntax error": "FAIL: assert_throws_dom: function \"function() { importScripts(crossOrigin + \"/workers/modules/resources/syntax-error.js\"); }\" threw object \"SyntaxError: Failed to execute 'importScripts' on 'WorkerGlobalSco",
 		"Cross-origin throw": "FAIL: assert_throws_dom: function \"function() { importScripts(crossOrigin + \"/workers/modules/resources/throw.js\"); }\" threw object \"Error: custom message\" that is not a DOMException NetworkError: property ",

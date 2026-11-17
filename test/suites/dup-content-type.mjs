@@ -3,8 +3,9 @@
 // sends sw.js with "application/javascript, text/javascript" (two headers
 // the fetch Headers object joins with ", "), and the worker refused to
 // register the service worker for an unsupported MIME type. The worker now
-// keeps the first value. Compared with the page loaded natively (Chrome
-// takes one of the two), in both demo modes.
+// keeps one value, the last that is a type, as Chrome reads them: a module
+// served as text/plain and then text/javascript runs. Compared with the
+// page loaded natively, in both demo modes.
 import {
 	done,
 	FIXTURE,
@@ -40,6 +41,11 @@ ok(
 	native?.moduleRan === true && native?.swRegistered === true,
 	JSON.stringify(native),
 );
+ok(
+	'natively, the last of two Content-Types that disagree is the type',
+	native?.lastWins === true,
+	JSON.stringify(native),
+);
 
 const frameOf = (page) =>
 	page
@@ -66,6 +72,11 @@ for (const [mode, base] of [
 	ok(
 		`${mode}: the two-Content-Type module script runs`,
 		proxied?.moduleRan === true,
+		JSON.stringify(proxied),
+	);
+	ok(
+		`${mode}: the last of two Content-Types that disagree is the type, as natively`,
+		proxied?.lastWins === native?.lastWins,
 		JSON.stringify(proxied),
 	);
 	ok(

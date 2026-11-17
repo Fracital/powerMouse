@@ -32,6 +32,18 @@
 					document.head.appendChild(script);
 					setTimeout(() => resolve(false), 8000);
 				});
+				// two Content-Types that disagree: the browser reads the last one
+				// (text/plain, then text/javascript: a module, which must be
+				// JavaScript by its type, runs)
+				out.lastWins = await new Promise((resolve) => {
+					window.__dupLast = () => resolve(true);
+					const script = document.createElement('script');
+					script.type = 'module';
+					script.src = `/pages/dup-content-type-last.js?a=${bust()}`;
+					script.onerror = () => resolve(false);
+					document.head.appendChild(script);
+					setTimeout(() => resolve(false), 8000);
+				});
 				// a service worker whose script has two Content-Types must register
 				// (the exact tiktok failure)
 				try {

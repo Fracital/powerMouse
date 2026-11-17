@@ -70,10 +70,16 @@ export declare type AdditionalFilter = (
 // value a server wrote as a comma list. A resource has one Content-Type to
 // the browser, so a joined value like "application/javascript, text/javascript"
 // (seen on tiktok's sw.js) makes Chrome refuse a service worker or module
-// script for an unsupported MIME type. Keep the first value, as the browser
-// uses one type; a comma inside a quoted parameter is not a separator.
-function firstContentType(value: string): string {
+// script for an unsupported MIME type. The browser reads such a response by
+// its last value that is a type at all (Fetch, "extract a MIME type":
+// measured in Chrome 152 with application/octet-stream before
+// application/javascript, which importScripts runs), and a value that names
+// no charset keeps the one an earlier value of the same type named; a comma
+// inside a quoted parameter is not a separator.
+function singleContentType(value: string): string {
+	const values: string[] = [];
 	let quoted = false;
+	let from = 0;
 	for (let i = 0; i < value.length; i++) {
 		const ch = value[i];
 		if (ch === '\\' && quoted) {
@@ -81,9 +87,31 @@ function firstContentType(value: string): string {
 			continue;
 		}
 		if (ch === '"') quoted = !quoted;
-		else if (ch === ',' && !quoted) return value.slice(0, i).trim();
+		else if (ch === ',' && !quoted) {
+			values.push(value.slice(from, i).trim());
+			from = i + 1;
+		}
 	}
-	return value.trim();
+	values.push(value.slice(from).trim());
+	if (values.length === 1) return values[0];
+	const essenceOf = (one: string) => one.split(';')[0].trim().toLowerCase();
+	const charsetOf = (one: string) =>
+		/;\s*charset\s*=\s*("[^"]*"|[^;\s]*)/i.exec(one)?.[1] ?? null;
+	let type: string | null = null;
+	let charset: string | null = null;
+	for (const one of values) {
+		const essence = essenceOf(one);
+		if (!/^[^\s/]+\/[^\s/]+$/.test(essence) || essence === '*/*') continue;
+		const named = charsetOf(one);
+		if (type === null || essenceOf(type) !== essence) charset = named;
+		else if (named !== null) charset = named;
+		type = one;
+	}
+	// none of them is a type: the first, as it came
+	if (type === null) return values[0];
+	return charset !== null && charsetOf(type) === null
+		? `${type};charset=${charset}`
+		: type;
 }
 
 /**
@@ -152,8 +180,8 @@ export function filterResponseHeaders(
 
 	const contentType = filteredHeaders.get('content-type');
 	if (contentType !== null) {
-		const first = firstContentType(contentType);
-		if (first !== contentType) filteredHeaders.set('content-type', first);
+		const single = singleContentType(contentType);
+		if (single !== contentType) filteredHeaders.set('content-type', single);
 	}
 
 	if (additionalFilter) {
