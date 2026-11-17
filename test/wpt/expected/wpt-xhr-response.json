@@ -1,0 +1,135 @@
+{
+	"/xhr/getallresponseheaders-after-reuse.html": {
+		"getAllResponseHeaders() must not return the previous response's headers": "FAIL: promise_test: Unhandled rejection with value: object \"Error: unexpected error loading resources/headers-basic.asis\""
+	},
+	"/xhr/getallresponseheaders.htm": {
+		"XMLHttpRequest: getAllResponseHeaders()": "FAIL: assert_unreached: unexpected error Reached unreachable code",
+		"XMLHttpRequest: getAllResponseHeaders() 1": "FAIL: assert_unreached: unexpected error Reached unreachable code",
+		"XMLHttpRequest: getAllResponseHeaders() 2": "FAIL: assert_unreached: unexpected error Reached unreachable code",
+		"XMLHttpRequest: getAllResponseHeaders() 3": "FAIL: assert_unreached: unexpected error Reached unreachable code",
+		"XMLHttpRequest: getAllResponseHeaders() 4": "FAIL: assert_unreached: unexpected error Reached unreachable code",
+		"XMLHttpRequest: getAllResponseHeaders() 5": "FAIL: assert_unreached: unexpected error Reached unreachable code",
+		"XMLHttpRequest: getAllResponseHeaders() 6": "FAIL: assert_unreached: unexpected error Reached unreachable code"
+	},
+	"/xhr/getresponseheader-special-characters.htm": {
+		"XMLHttpRequest: getResponseHeader() funny characters": "FAIL: Failed to execute 'get' on 'Headers': Invalid name"
+	},
+	"/xhr/getresponseheader.any.html": {
+		"getResponseHeader('content-length') expects 0": "FAIL: assert_unreached: unexpected error Reached unreachable code",
+		"getResponseHeader('content-length') expects 0, 0": "FAIL: assert_unreached: unexpected error Reached unreachable code",
+		"getResponseHeader('double-trouble') expects , ": "FAIL: assert_unreached: unexpected error Reached unreachable code",
+		"getResponseHeader('foo-test') expects 1, 2, 3": "FAIL: assert_unreached: unexpected error Reached unreachable code",
+		"getResponseHeader('heya') expects , \u000b\f, 1, , , 2": "FAIL: assert_unreached: unexpected error Reached unreachable code",
+		"getResponseHeader('www-authenticate') expects 1, 2, 3, 4": "FAIL: assert_unreached: unexpected error Reached unreachable code"
+	},
+	"/xhr/getresponseheader.any.worker.html": {
+		"getResponseHeader('content-length') expects 0": "FAIL: assert_unreached: unexpected error Reached unreachable code",
+		"getResponseHeader('content-length') expects 0, 0": "FAIL: assert_unreached: unexpected error Reached unreachable code",
+		"getResponseHeader('double-trouble') expects , ": "FAIL: assert_unreached: unexpected error Reached unreachable code",
+		"getResponseHeader('foo-test') expects 1, 2, 3": "FAIL: assert_unreached: unexpected error Reached unreachable code",
+		"getResponseHeader('heya') expects , \u000b\f, 1, , , 2": "FAIL: assert_unreached: unexpected error Reached unreachable code",
+		"getResponseHeader('www-authenticate') expects 1, 2, 3, 4": "FAIL: assert_unreached: unexpected error Reached unreachable code"
+	},
+	"/xhr/historical.html": {
+		"Support for responseType = moz-chunked-arraybuffer": "FAIL: assert_equals: expected \"\" but got \"moz-chunked-arraybuffer\""
+	},
+	"/xhr/overridemimetype-blob.html": {
+		"Use text/xml as fallback MIME type": "FAIL: assert_equals: expected \"text/xml\" but got \"\"",
+		"Use text/xml as fallback MIME type, 2": "FAIL: assert_equals: expected \"text/xml\" but got \"\""
+	},
+	"/xhr/response-body-errors.any.worker.html": {
+		"Synchronous XMLHttpRequest should throw on bad chunk": "FAIL: assert_throws_dom: function \"() => client.send()\" did not throw"
+	},
+	"/xhr/responseXML-xml-scripting-support-disabled.html": {
+		"XMLHttpRequest responseXML, svg script, append adoptNode result": "FAIL: Failed to execute 'send' on 'XMLHttpRequest': Failed to load 'data:text/xml,<svg xmlns='http://www.w3.org/2000/svg'><script>window.mark = 1;</script></svg>'.",
+		"XMLHttpRequest responseXML, svg script, append importNode result": "FAIL: Failed to execute 'send' on 'XMLHttpRequest': Failed to load 'data:text/xml,<svg xmlns='http://www.w3.org/2000/svg'><script>window.mark = 1;</script></svg>'.",
+		"XMLHttpRequest responseXML, svg script, appendChild": "FAIL: Failed to execute 'send' on 'XMLHttpRequest': Failed to load 'data:text/xml,<svg xmlns='http://www.w3.org/2000/svg'><script>window.mark = 1;</script></svg>'.",
+		"XMLHttpRequest responseXML, xhtml script, append adoptNode result": "FAIL: Failed to execute 'send' on 'XMLHttpRequest': Failed to load 'data:application/xhtml+xml,<html xmlns='http://www.w3.org/1999/xhtml'><body><script>window.mark = 1;</script></body></html>'.",
+		"XMLHttpRequest responseXML, xhtml script, append importNode result": "FAIL: Failed to execute 'send' on 'XMLHttpRequest': Failed to load 'data:application/xhtml+xml,<html xmlns='http://www.w3.org/1999/xhtml'><body><script>window.mark = 1;</script></body></html>'."
+	},
+	"/xhr/responsetype.any.html": {
+		"Set responseType to \"nosuchtype\" when readyState is LOADING.": "FAIL: Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be set if the object's state is LOADING or DONE.",
+		"Set responseType to \"nosuchtype\" when readyState is DONE.": "FAIL: Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be set if the object's state is LOADING or DONE.",
+		"Set responseType to \"nosuchtype\" when readyState is OPENED and the sync flag is set.": "FAIL: Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be changed for synchronous requests made from a document.",
+		"Set responseType to \"nosuchtype\" when readyState is DONE and the sync flag is set.": "FAIL: Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be set if the object's state is LOADING or DONE."
+	},
+	"/xhr/responsetype.any.worker.html": {
+		"Set responseType to \"document\" when readyState is LOADING.": "FAIL: Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be set if the object's state is LOADING or DONE.",
+		"Set responseType to \"document\" when readyState is DONE.": "FAIL: Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be set if the object's state is LOADING or DONE.",
+		"Set responseType to \"document\" when readyState is DONE and the sync flag is set.": "FAIL: Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be set if the object's state is LOADING or DONE.",
+		"Set responseType to \"nosuchtype\" when readyState is LOADING.": "FAIL: Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be set if the object's state is LOADING or DONE.",
+		"Set responseType to \"nosuchtype\" when readyState is DONE.": "FAIL: Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be set if the object's state is LOADING or DONE.",
+		"Set responseType to \"nosuchtype\" when readyState is DONE and the sync flag is set.": "FAIL: Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be set if the object's state is LOADING or DONE."
+	},
+	"/xhr/responseurl-after-abort.any.html": {
+		"abort() during HEADERS_RECEIVED clears responseURL": "FAIL: assert_equals: getAllResponseHeaders() expected \"\" but got \"connection: keep-alive\\r\\ncontent-length: 127\\r\\ncontent-type: text/xml\\r\\ndate: Sun, 15 Nov 2026 23:00:28 GMT\\r\\nkeep-alive: timeout=600\\r\\",
+		"abort() during LOADING clears responseURL": "FAIL: assert_equals: getAllResponseHeaders() expected \"\" but got \"connection: keep-alive\\r\\ncontent-length: 127\\r\\ncontent-type: text/xml\\r\\ndate: Sun, 15 Nov 2026 23:00:28 GMT\\r\\nkeep-alive: timeout=600\\r\\",
+		"abort() during DONE clears responseURL (async)": "FAIL: assert_equals: expected 0 but got 4",
+		"abort() during DONE clears responseURL (sync)": "FAIL: assert_equals: expected 0 but got 4"
+	},
+	"/xhr/responseurl-after-abort.any.worker.html": {
+		"abort() during HEADERS_RECEIVED clears responseURL": "FAIL: assert_equals: getAllResponseHeaders() expected \"\" but got \"connection: keep-alive\\r\\ncontent-length: 127\\r\\ncontent-type: text/xml\\r\\ndate: Sun, 15 Nov 2026 23:00:29 GMT\\r\\nkeep-alive: timeout=600\\r\\",
+		"abort() during LOADING clears responseURL": "FAIL: assert_equals: getAllResponseHeaders() expected \"\" but got \"connection: keep-alive\\r\\ncontent-length: 127\\r\\ncontent-type: text/xml\\r\\ndate: Sun, 15 Nov 2026 23:00:29 GMT\\r\\nkeep-alive: timeout=600\\r\\",
+		"abort() during DONE clears responseURL (async)": "FAIL: assert_equals: expected 0 but got 4",
+		"abort() during DONE clears responseURL (sync)": "FAIL: assert_equals: expected 0 but got 4"
+	},
+	"/xhr/responsexml-document-properties.htm": {
+		"Test document URL properties of document with <base> after redirect": "FAIL: assert_equals: expected \"https://example.com/\" but got \"http://localhost:PORT/xhr/resources/base.xml\"",
+		"lastModified set to related HTTP header if provided": "FAIL: assert_equals: expected 1794783631000 but got 1794783370000"
+	},
+	"/xhr/responsexml-media-type.htm": {
+		"XMLHttpRequest: responseXML MIME type tests ('', should  parse)": "FAIL: Cannot read properties of null (reading 'documentElement')",
+		"XMLHttpRequest: responseXML MIME type tests ('bogus', should  parse)": "FAIL: Cannot read properties of null (reading 'documentElement')",
+		"XMLHttpRequest: responseXML MIME type tests ('bogus+xml', should  parse)": "FAIL: Cannot read properties of null (reading 'documentElement')",
+		"XMLHttpRequest: responseXML MIME type tests ('application', should  parse)": "FAIL: Cannot read properties of null (reading 'documentElement')"
+	},
+	"/xhr/status-async.htm": {
+		"XMLHttpRequest: status/statusText - various responses 1 (GET 204)": "FAIL: assert_equals: expected \"UNICORNSWIN\" but got \"No Content\"",
+		"XMLHttpRequest: status/statusText - various responses 2 (HEAD 204)": "FAIL: assert_equals: expected \"UNICORNSWIN\" but got \"No Content\"",
+		"XMLHttpRequest: status/statusText - various responses 4 (GET 401)": "FAIL: assert_equals: expected \"OH HELLO\" but got \"Unauthorized\"",
+		"XMLHttpRequest: status/statusText - various responses 5 (HEAD 401)": "FAIL: assert_equals: expected \"OH HELLO\" but got \"Unauthorized\"",
+		"XMLHttpRequest: status/statusText - various responses 7 (GET 402)": "FAIL: assert_equals: expected \"FIVE BUCKS\" but got \"Payment Required\"",
+		"XMLHttpRequest: status/statusText - various responses 8 (HEAD 402)": "FAIL: assert_equals: expected \"FIVE BUCKS\" but got \"Payment Required\"",
+		"XMLHttpRequest: status/statusText - various responses 10 (GET 402)": "FAIL: assert_equals: expected \"FREE\" but got \"Payment Required\"",
+		"XMLHttpRequest: status/statusText - various responses 11 (HEAD 402)": "FAIL: assert_equals: expected \"FREE\" but got \"Payment Required\"",
+		"XMLHttpRequest: status/statusText - various responses 13 (GET 402)": "FAIL: assert_equals: expected \"402 TEH AWESOME\" but got \"Payment Required\"",
+		"XMLHttpRequest: status/statusText - various responses 14 (HEAD 402)": "FAIL: assert_equals: expected \"402 TEH AWESOME\" but got \"Payment Required\"",
+		"XMLHttpRequest: status/statusText - various responses 16 (GET 502)": "FAIL: assert_equals: expected \"YO\" but got \"Bad Gateway\"",
+		"XMLHttpRequest: status/statusText - various responses 17 (HEAD 502)": "FAIL: assert_equals: expected \"YO\" but got \"Bad Gateway\"",
+		"XMLHttpRequest: status/statusText - various responses 19 (GET 502)": "FAIL: assert_equals: expected \"lowercase\" but got \"Bad Gateway\"",
+		"XMLHttpRequest: status/statusText - various responses 20 (HEAD 502)": "FAIL: assert_equals: expected \"lowercase\" but got \"Bad Gateway\"",
+		"XMLHttpRequest: status/statusText - various responses 22 (GET 503)": "FAIL: assert_equals: expected \"HOUSTON WE HAVE A\" but got \"Service Unavailable\"",
+		"XMLHttpRequest: status/statusText - various responses 23 (HEAD 503)": "FAIL: assert_equals: expected \"HOUSTON WE HAVE A\" but got \"Service Unavailable\"",
+		"XMLHttpRequest: status/statusText - various responses 25 (GET 699)": "FAIL: assert_equals: expected 699 but got 0",
+		"XMLHttpRequest: status/statusText - various responses 26 (HEAD 699)": "FAIL: assert_equals: expected 699 but got 0"
+	},
+	"/xhr/status-basic.htm": {
+		"XMLHttpRequest: status/statusText - various responses 1 (GET 204)": "FAIL: assert_equals: expected \"UNICORNSWIN\" but got \"No Content\"",
+		"XMLHttpRequest: status/statusText - various responses 2 (HEAD 204)": "FAIL: assert_equals: expected \"UNICORNSWIN\" but got \"No Content\"",
+		"XMLHttpRequest: status/statusText - various responses 4 (GET 401)": "FAIL: assert_equals: expected \"OH HELLO\" but got \"Unauthorized\"",
+		"XMLHttpRequest: status/statusText - various responses 5 (HEAD 401)": "FAIL: assert_equals: expected \"OH HELLO\" but got \"Unauthorized\"",
+		"XMLHttpRequest: status/statusText - various responses 7 (GET 402)": "FAIL: assert_equals: expected \"FIVE BUCKS\" but got \"Payment Required\"",
+		"XMLHttpRequest: status/statusText - various responses 8 (HEAD 402)": "FAIL: assert_equals: expected \"FIVE BUCKS\" but got \"Payment Required\"",
+		"XMLHttpRequest: status/statusText - various responses 10 (GET 402)": "FAIL: assert_equals: expected \"FREE\" but got \"Payment Required\"",
+		"XMLHttpRequest: status/statusText - various responses 11 (HEAD 402)": "FAIL: assert_equals: expected \"FREE\" but got \"Payment Required\"",
+		"XMLHttpRequest: status/statusText - various responses 13 (GET 402)": "FAIL: assert_equals: expected \"402 TEH AWESOME\" but got \"Payment Required\"",
+		"XMLHttpRequest: status/statusText - various responses 14 (HEAD 402)": "FAIL: assert_equals: expected \"402 TEH AWESOME\" but got \"Payment Required\"",
+		"XMLHttpRequest: status/statusText - various responses 16 (GET 502)": "FAIL: assert_equals: expected \"YO\" but got \"Bad Gateway\"",
+		"XMLHttpRequest: status/statusText - various responses 17 (HEAD 502)": "FAIL: assert_equals: expected \"YO\" but got \"Bad Gateway\"",
+		"XMLHttpRequest: status/statusText - various responses 19 (GET 502)": "FAIL: assert_equals: expected \"lowercase\" but got \"Bad Gateway\"",
+		"XMLHttpRequest: status/statusText - various responses 20 (HEAD 502)": "FAIL: assert_equals: expected \"lowercase\" but got \"Bad Gateway\"",
+		"XMLHttpRequest: status/statusText - various responses 22 (GET 503)": "FAIL: assert_equals: expected \"HOUSTON WE HAVE A\" but got \"Service Unavailable\"",
+		"XMLHttpRequest: status/statusText - various responses 23 (HEAD 503)": "FAIL: assert_equals: expected \"HOUSTON WE HAVE A\" but got \"Service Unavailable\"",
+		"XMLHttpRequest: status/statusText - various responses 25 (GET 699)": "FAIL: Failed to execute 'send' on 'XMLHttpRequest': Failed to load 'http://localhost:PORT/xhr/resources/status.py?code=699&text=WAY%20OUTTA%20RANGE&content=699&type=text%2Fplain'.",
+		"XMLHttpRequest: status/statusText - various responses 26 (HEAD 699)": "FAIL: Failed to execute 'send' on 'XMLHttpRequest': Failed to load 'http://localhost:PORT/xhr/resources/status.py?code=699&text=WAY%20OUTTA%20RANGE&content=699&type=text%2Fplain'."
+	},
+	"/xhr/status-error.htm": {
+		"XMLHttpRequest: status error handling GET 699": "FAIL: assert_equals: response status expected 699 but got 0",
+		"XMLHttpRequest: status error handling HEAD 699": "FAIL: assert_equals: response status expected 699 but got 0",
+		"XMLHttpRequest: status error handling POST 699": "FAIL: assert_equals: response status expected 699 but got 0",
+		"XMLHttpRequest: status error handling PUT 699": "FAIL: assert_equals: response status expected 699 but got 0"
+	},
+	"/xhr/xmlhttprequest-unsent.htm": {
+		"XMLHttpRequest: members during UNSENT": "FAIL: assert_throws_dom: setRequestHeader function \"function() { client.setRequestHeader(\"x-test\", \"test\") }\" threw object \"Error: Failed to execute 'setRequestHeader' on 'XMLHttpRequest': The object's stat"
+	}
+}

@@ -1,0 +1,116 @@
+{
+	"/xhr/abort-after-receive.any.html": {
+		"XMLHttpRequest: abort() after successful receive should not fire \"abort\" event": "FAIL: assert_equals: expected 0 but got 4"
+	},
+	"/xhr/abort-after-receive.any.worker.html": {
+		"XMLHttpRequest: abort() after successful receive should not fire \"abort\" event": "FAIL: assert_equals: expected 0 but got 4"
+	},
+	"/xhr/abort-after-stop.window.html": {
+		"XMLHttpRequest: abort event should fire when stop() method is used": "FAIL: assert_equals: expected true but got false"
+	},
+	"/xhr/abort-after-timeout.any.html": {
+		"XMLHttpRequest: abort() after a timeout should not fire \"abort\" event": "FAIL: assert_equals: expected 0 but got 4"
+	},
+	"/xhr/abort-after-timeout.any.worker.html": {
+		"XMLHttpRequest: abort() after a timeout should not fire \"abort\" event": "FAIL: assert_equals: expected 0 but got 4"
+	},
+	"/xhr/abort-during-done.window.html": {
+		"XMLHttpRequest: abort() during DONE (sync)": "FAIL: assert_equals: expected 0 but got 4",
+		"XMLHttpRequest: abort() during DONE (sync aborted in readystatechange)": "FAIL: assert_equals: expected 0 but got 4",
+		"XMLHttpRequest: abort() during DONE (async)": "FAIL: assert_equals: expected 0 but got 4"
+	},
+	"/xhr/abort-during-headers-received.window.html": {
+		"XMLHttpRequest: abort() during HEADERS_RECEIVED": "FAIL: assert_equals: expected \"\" but got \"connection: keep-alive\\r\\ncontent-length: 127\\r\\ncontent-type: text/xml\\r\\ndate: Sun, 15 Nov 2026 22:58:24 GMT\\r\\nkeep-alive: timeout=600\\r\\n\""
+	},
+	"/xhr/abort-during-loading.window.html": {
+		"XMLHttpRequest: abort() during LOADING": "FAIL: assert_equals: expected null but got Document node with 1 child"
+	},
+	"/xhr/abort-during-open.any.html": {
+		"XMLHttpRequest: abort() during OPEN": "FAIL: assert_unreached: Reached unreachable code"
+	},
+	"/xhr/abort-during-open.any.worker.html": {
+		"XMLHttpRequest: abort() during OPEN": "FAIL: assert_unreached: Reached unreachable code"
+	},
+	"/xhr/abort-during-upload.any.html": {
+		"XMLHttpRequest: abort() while sending data": "FAIL: assert_equals: expected \"upload.loadstart(0,9999,true)\" but got \"upload.loadstart(0,0,false)\""
+	},
+	"/xhr/abort-during-upload.any.worker.html": {
+		"XMLHttpRequest: abort() while sending data": "FAIL: assert_equals: expected \"upload.loadstart(0,9999,true)\" but got \"upload.loadstart(0,0,false)\""
+	},
+	"/xhr/abort-event-abort.any.html": {
+		"XMLHttpRequest: The abort() method: do not fire abort event in OPENED state when send() flag is unset.": "FAIL: assert_unreached: when abort() is called, state is OPENED with the send() flag being unset, must not fire abort event per spec Reached unreachable code"
+	},
+	"/xhr/abort-event-abort.any.worker.html": {
+		"XMLHttpRequest: The abort() method: do not fire abort event in OPENED state when send() flag is unset.": "FAIL: assert_unreached: when abort() is called, state is OPENED with the send() flag being unset, must not fire abort event per spec Reached unreachable code"
+	},
+	"/xhr/abort-event-order.htm": {
+		"XMLHttpRequest: The abort() method: abort and loadend events": "FAIL: assert_equals: state should be UNSENT expected 0 but got 4"
+	},
+	"/xhr/abort-progress-events.any.html": {
+		"Events must not fire when state is UNSENT after abort()": "FAIL: assert_equals: State should be UNSENT immediately after abort expected 0 but got 4"
+	},
+	"/xhr/abort-progress-events.any.worker.html": {
+		"Events must not fire when state is UNSENT after abort()": "FAIL: assert_equals: State should be UNSENT immediately after abort expected 0 but got 4"
+	},
+	"/xhr/event-error-order.sub.html": {
+		"XMLHttpRequest: event - error (order of events)": "FAIL: assert_equals: expected \"upload.loadstart(0,12,true)\" but got \"upload.loadstart(0,0,false)\""
+	},
+	"/xhr/event-loadstart-upload.any.html": {
+		"XMLHttpRequest: The send() method: Fire a progress event named loadstart on upload object (synchronous flag is unset)": "FAIL: assert_equals: upload.onloadstart: event.total expected 7 but got 0"
+	},
+	"/xhr/event-loadstart-upload.any.worker.html": {
+		"XMLHttpRequest: The send() method: Fire a progress event named loadstart on upload object (synchronous flag is unset)": "FAIL: assert_equals: upload.onloadstart: event.total expected 7 but got 0"
+	},
+	"/xhr/event-timeout-order.any.html": {
+		"XMLHttpRequest: event - timeout (order of events)": "FAIL: assert_equals: expected \"upload.loadstart(0,12,true)\" but got \"upload.loadstart(0,0,false)\""
+	},
+	"/xhr/event-timeout-order.any.worker.html": {
+		"XMLHttpRequest: event - timeout (order of events)": "FAIL: assert_equals: expected \"upload.loadstart(0,12,true)\" but got \"upload.loadstart(0,0,false)\""
+	},
+	"/xhr/event-upload-progress.any.html": {
+		"Upload events registered too late (http://127.0.0.1:PORT/xhr/resources/corsenabled.py)": "FAIL: assert_unreached: Reached unreachable code",
+		"Upload events registered too late (resources/redirect.py?code=307&location=http://127.0.0.1:PORT/xhr/resources/corsenabled.py)": "FAIL: assert_unreached: Reached unreachable code"
+	},
+	"/xhr/event-upload-progress.any.worker.html": {
+		"Upload events registered too late (http://127.0.0.1:PORT/xhr/resources/corsenabled.py)": "FAIL: assert_unreached: Reached unreachable code",
+		"Upload events registered too late (resources/redirect.py?code=307&location=http://127.0.0.1:PORT/xhr/resources/corsenabled.py)": "FAIL: assert_unreached: Reached unreachable code"
+	},
+	"/xhr/firing-events-http-no-content-length.html": {
+		"ProgressEvent: firing events for HTTP with no Content-Length": "FAIL: assert_false: lengthComputable expected false got true"
+	},
+	"/xhr/loadstart-and-state.html": {
+		"open() during loadstart": "FAIL: assert_throws_dom: function \"() => client.setRequestHeader(\"General\", \"Organa\")\" did not throw",
+		"abort() during loadstart": "FAIL: assert_equals: expected 0 but got 4"
+	},
+	"/xhr/open-after-abort.htm": {
+		"XMLHttpRequest: open() after abort()": "FAIL: assert_equals: expected 0 but got 4"
+	},
+	"/xhr/open-send-during-abort.htm": {
+		"(harness)": "TIMEOUT: ",
+		"XMLHttpRequest: open() during abort()": "TIMEOUT: Test timed out"
+	},
+	"/xhr/progress-events-response-data-gzip.htm": {
+		"XMLHttpRequest: progress events and GZIP encoding": "FAIL: assert_equals: if implementation can't compute event.total for gzipped content it is 0 expected 0 but got 165255"
+	},
+	"/xhr/send-response-event-order.htm": {
+		"XMLHttpRequest: The send() method: event order when synchronous flag is unset": "FAIL: assert_equals: expected \"upload.loadstart(0,12,true)\" but got \"upload.loadstart(0,0,false)\""
+	},
+	"/xhr/send-sync-no-response-event-order.htm": {
+		"XMLHttpRequest: The send() method: event order when synchronous flag is set and there is no response entity body": "FAIL: assert_array_equals: lengths differ, expected array [4, \"load\", \"loadend\"] length 3, got [\"loadstart\", 4, \"load\", \"loadend\"] length 4"
+	},
+	"/xhr/send-sync-response-event-order.htm": {
+		"XMLHttpRequest: The send() method: event order when synchronous flag is set": "FAIL: assert_equals: expected \"readystatechange(4)\" but got \"loadstart(0,0,false)\""
+	},
+	"/xhr/sync-no-progress.any.html": {
+		"progress event should not be fired by sync XHR": "FAIL: assert_unreached: progress event should not be fired Reached unreachable code"
+	},
+	"/xhr/sync-no-progress.any.worker.html": {
+		"progress event should not be fired by sync XHR": "FAIL: assert_unreached: progress event should not be fired Reached unreachable code"
+	},
+	"/xhr/xmlhttprequest-sync-block-defer-scripts.html": {
+		"Check that a sync XHR in a defer script blocks later defer scripts from running": "FAIL: assert_equals: expected 1 but got 0"
+	},
+	"/xhr/xmlhttprequest-sync-block-scripts.html": {
+		"Check that while a sync XHR is in flight async script loads don't complete and run script": "FAIL: Failed to execute 'send' on 'XMLHttpRequest': Failed to load 'data:,'."
+	}
+}

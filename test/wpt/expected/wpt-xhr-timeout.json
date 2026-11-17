@@ -1,0 +1,11 @@
+{
+	"/xhr/xmlhttprequest-timeout-overrides.html?timeout overrides load after a delay": {
+		"Timeout test: timeout overrides load after a delay, original timeout at 5000, reset at 1000 to 2000": "FAIL: assert_equals: expected \"timeout\" but got \"load\""
+	},
+	"/xhr/xmlhttprequest-timeout-overridesexpires.html?timeout set to expired value before load fires": {
+		"Timeout test: timeout set to expired value before load fires, original timeout at 5000, reset at 2000 to 1100": "FAIL: assert_equals: expected \"timeout\" but got \"load\""
+	},
+	"/xhr/xmlhttprequest-timeout-worker-overrides.html?timeout overrides load after a delay": {
+		"Timeout test: timeout overrides load after a delay, original timeout at 5000, reset at 1000 to 2000": "FAIL: assert_equals: expected \"timeout\" but got \"load\""
+	}
+}

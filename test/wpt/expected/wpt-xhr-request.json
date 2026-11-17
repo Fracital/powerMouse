@@ -1,0 +1,277 @@
+{
+	"/xhr/blob-range.any.worker.html": {
+		"Blob content with short content and a large range start": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
+		"Blob content with short content and a range start matching the content length": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
+		"Blob range end should be an ASCII digit": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
+		"Blob range request with multiple range values": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
+		"Blob range request with multiple range values and whitespace": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
+		"Blob range request with short range end": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
+		"Blob range request with trailing comma": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
+		"Blob range should have a dash": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
+		"Blob range should include '-'": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
+		"Blob range should include '='": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
+		"Blob range should include 'bytes='": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
+		"Blob range start should be an ASCII digit": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
+		"Blob range with incorrect range header": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
+		"Blob range with incorrect range header #2": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
+		"Blob range with incorrect range header #3": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
+		"Blob range with no start or end": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
+		"Blob range with no value": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw"
+	},
+	"/xhr/open-method-bogus.htm": {
+		"XMLHttpRequest: open() - bogus methods ()": "FAIL: assert_throws_dom: function \"function() { client.open(method, \"...\") }\" did not throw",
+		"XMLHttpRequest: open() - bogus methods (>)": "FAIL: assert_throws_dom: function \"function() { client.open(method, \"...\") }\" did not throw",
+		"XMLHttpRequest: open() - bogus methods ( GET)": "FAIL: assert_throws_dom: function \"function() { client.open(method, \"...\") }\" did not throw",
+		"XMLHttpRequest: open() - bogus methods (G T)": "FAIL: assert_throws_dom: function \"function() { client.open(method, \"...\") }\" did not throw",
+		"XMLHttpRequest: open() - bogus methods (@GET)": "FAIL: assert_throws_dom: function \"function() { client.open(method, \"...\") }\" did not throw",
+		"XMLHttpRequest: open() - bogus methods (G:ET)": "FAIL: assert_throws_dom: function \"function() { client.open(method, \"...\") }\" did not throw",
+		"XMLHttpRequest: open() - bogus methods (GET?)": "FAIL: assert_throws_dom: function \"function() { client.open(method, \"...\") }\" did not throw",
+		"XMLHttpRequest: open() - bogus methods (GET\n)": "FAIL: assert_throws_dom: function \"function() { client.open(method, \"...\") }\" did not throw"
+	},
+	"/xhr/open-method-insecure.htm": {
+		"XMLHttpRequest: open() - \"insecure\" methods (track)": "FAIL: assert_throws_dom: function \"function() { client.open(method, \"...\") }\" did not throw",
+		"XMLHttpRequest: open() - \"insecure\" methods (TRACK)": "FAIL: assert_throws_dom: function \"function() { client.open(method, \"...\") }\" did not throw",
+		"XMLHttpRequest: open() - \"insecure\" methods (trAck)": "FAIL: assert_throws_dom: function \"function() { client.open(method, \"...\") }\" did not throw",
+		"XMLHttpRequest: open() - \"insecure\" methods (TRACE)": "FAIL: assert_throws_dom: function \"function() { client.open(method, \"...\") }\" did not throw",
+		"XMLHttpRequest: open() - \"insecure\" methods (trace)": "FAIL: assert_throws_dom: function \"function() { client.open(method, \"...\") }\" did not throw",
+		"XMLHttpRequest: open() - \"insecure\" methods (traCE)": "FAIL: assert_throws_dom: function \"function() { client.open(method, \"...\") }\" did not throw",
+		"XMLHttpRequest: open() - \"insecure\" methods (connect)": "FAIL: assert_throws_dom: function \"function() { client.open(method, \"...\") }\" did not throw",
+		"XMLHttpRequest: open() - \"insecure\" methods (CONNECT)": "FAIL: assert_throws_dom: function \"function() { client.open(method, \"...\") }\" did not throw",
+		"XMLHttpRequest: open() - \"insecure\" methods (connECT)": "FAIL: assert_throws_dom: function \"function() { client.open(method, \"...\") }\" did not throw"
+	},
+	"/xhr/open-url-about-blank-window.htm": {
+		"XMLHttpRequest: open() resolving URLs (about:blank iframe)": "FAIL: Failed to read a named property 'XMLHttpRequest' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/xhr/open-url-base-inserted-after-open.htm": {
+		"XMLHttpRequest: open() resolving URLs - insert <base> after open()": "FAIL: assert_equals: expected \"top\\n\" but got \"bottom\\n\""
+	},
+	"/xhr/open-url-multi-window-6.htm": {
+		"(harness)": "TIMEOUT: "
+	},
+	"/xhr/request-content-length.any.html": {
+		"Fetched blob: URLs set the Content-Length header": "FAIL: assert_true: expected true got false"
+	},
+	"/xhr/request-content-length.any.worker.html": {
+		"Fetched blob: URLs set the Content-Length header": "FAIL: assert_true: expected true got false"
+	},
+	"/xhr/send-accept.htm": {
+		"XMLHttpRequest: send() - Accept": "FAIL: assert_equals: expected \"*/*\" but got \"NO\""
+	},
+	"/xhr/send-blob-with-no-mime-type.html": {
+		"Synchronous blob loading with no mime type [POST]": "FAIL: assert_equals: expected \"4\" but got \"0\"",
+		"Synchronous blob loading with no mime type [PUT]": "FAIL: assert_equals: expected \"4\" but got \"0\"",
+		"Synchronous blob loading with invalid mime type [POST]": "FAIL: assert_equals: expected \"4\" but got \"0\"",
+		"Synchronous blob loading with invalid mime type [PUT]": "FAIL: assert_equals: expected \"4\" but got \"0\""
+	},
+	"/xhr/send-conditional.htm": {
+		"XMLHttpRequest: send() - conditional requests (tag)": "FAIL: assert_equals: expected \"SUPERCOOL\" but got \"Not Modified\"",
+		"XMLHttpRequest: send() - conditional requests (date)": "FAIL: assert_equals: expected \"SUPERCOOL\" but got \"Not Modified\""
+	},
+	"/xhr/send-content-type-charset.htm": {
+		"charset given but wrong, fix it (known MIME, actual charset)": "FAIL: assert_equals: expected \"text/plain;charset=UTF-8\" but got \"text/plain;charset=shift-jis\""
+	},
+	"/xhr/send-content-type-string.htm": {
+		"XMLHttpRequest: send() - Content-Type 1": "FAIL: assert_equals: expected \"application/xml;charset=UTF-8\" but got \"NO\"",
+		"XMLHttpRequest: send() - Content-Type 2": "FAIL: assert_equals: expected \"text/html;charset=UTF-8\" but got \"NO\""
+	},
+	"/xhr/send-data-es-object.any.html": {
+		"(harness)": "TIMEOUT: ",
+		"sending a new ReadableStream instance": "TIMEOUT: Test timed out",
+		"object whose toString() returns a document, expected to throw": "FAIL: assert_throws_js: function \"function(){client.send(obj)}\" did not throw",
+		"object whose toString() throws, expected to throw": "FAIL: assert_throws_exactly: function \"function(){client.send(obj)}\" did not throw"
+	},
+	"/xhr/send-data-es-object.any.worker.html": {
+		"(harness)": "TIMEOUT: ",
+		"sending a new ReadableStream instance": "TIMEOUT: Test timed out",
+		"object whose toString() returns a document, expected to throw": "FAIL: assert_throws_js: function \"function(){client.send(obj)}\" did not throw",
+		"object whose toString() throws, expected to throw": "FAIL: assert_throws_exactly: function \"function(){client.send(obj)}\" did not throw"
+	},
+	"/xhr/send-data-sharedarraybuffer.any.html": {
+		"sending a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(buf) }\" did not throw",
+		"sending a Int8Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a Uint8Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a Uint8ClampedArray backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a Int16Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a Uint16Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a Int32Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a Uint32Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a BigInt64Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a BigUint64Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a Float16Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a Float32Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a Float64Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a DataView backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw"
+	},
+	"/xhr/send-data-sharedarraybuffer.any.worker.html": {
+		"sending a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(buf) }\" did not throw",
+		"sending a Int8Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a Uint8Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a Uint8ClampedArray backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a Int16Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a Uint16Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a Int32Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a Uint32Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a BigInt64Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a BigUint64Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a Float16Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a Float32Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a Float64Array backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw",
+		"sending a DataView backed by a SharedArrayBuffer": "FAIL: assert_throws_js: function \"function() { xhr.send(arr) }\" did not throw"
+	},
+	"/xhr/send-data-unexpected-tostring.htm": {
+		"(harness)": "TIMEOUT: ",
+		"abort() called from data stringification": "FAIL: assert_equals: expected 1 but got 4",
+		"open() called from data stringification": "TIMEOUT: Test timed out",
+		"send() called from data stringification": "FAIL: assert_throws_dom: function \"function(){ client.send(objSendsOnStringification) }\" did not throw"
+	},
+	"/xhr/send-document-lone-surrogate.html": {
+		"send() with Document containing lone surrogate should not throw": "FAIL: assert_true: Response should contain the text expected true got false"
+	},
+	"/xhr/send-entity-body-basic.htm": {
+		"XMLHttpRequest: send() - data argument (1)": "FAIL: assert_equals: expected \"1\" but got \"\"",
+		"XMLHttpRequest: send() - data argument (10000000)": "FAIL: assert_equals: expected \"10000000\" but got \"\"",
+		"XMLHttpRequest: send() - data argument (2,2)": "FAIL: assert_equals: expected \"2,2\" but got \"\"",
+		"XMLHttpRequest: send() - data argument (false)": "FAIL: assert_equals: expected \"false\" but got \"\"",
+		"XMLHttpRequest: send() - data argument (1=2&3=4)": "FAIL: assert_equals: expected \"1=2&3=4\" but got \"\""
+	},
+	"/xhr/send-entity-body-document-bogus.htm": {
+		"Serializing documents through XMLHttpRequest: ''": "FAIL: assert_equals: expected \"\" but got \"[object XMLDocument]\"",
+		"Serializing documents through XMLHttpRequest: '<test:test/>'": "FAIL: assert_equals: expected \"<test:test/>\" but got \"[object XMLDocument]\"",
+		"Serializing documents through XMLHttpRequest: '<test:test test:test=\"gee\"/>'": "FAIL: assert_equals: expected \"<test:test test:test=\\\"gee\\\"/>\" but got \"[object XMLDocument]\"",
+		"Serializing documents through XMLHttpRequest: '<test:test test:test=\"gee\" x=\"�\"/>'": "FAIL: assert_equals: expected \"<test:test test:test=\\\"gee\\\" x=\\\"\\ufffd\\\"/>\" but got \"[object XMLDocument]\""
+	},
+	"/xhr/send-entity-body-document.htm": {
+		"XML document, windows-1252": "FAIL: assert_equals: document should be serialized and sent as application/xml;charset=UTF-8 expected \"application/xml;charset=UTF-8\" but got \"NO\"",
+		"HTML document, invalid UTF-8": "FAIL: assert_equals: document should be serialized and sent as text/html;charset=UTF-8 expected \"text/html;charset=UTF-8\" but got \"NO\"",
+		"HTML document, shift-jis": "FAIL: assert_equals: document should be serialized and sent as text/html;charset=UTF-8 expected \"text/html;charset=UTF-8\" but got \"NO\"",
+		"plain text file": "FAIL: assert_equals: document should be serialized and sent as text/html;charset=UTF-8 expected \"text/html;charset=UTF-8\" but got \"NO\"",
+		"image file": "FAIL: assert_equals: document should be serialized and sent as text/html;charset=UTF-8 expected \"text/html;charset=UTF-8\" but got \"NO\"",
+		"img tag": "FAIL: assert_equals: document should be serialized and sent as text/html;charset=UTF-8 expected \"text/html;charset=UTF-8\" but got \"NO\"",
+		"empty div": "FAIL: assert_equals: document should be serialized and sent as text/html;charset=UTF-8 expected \"text/html;charset=UTF-8\" but got \"NO\""
+	},
+	"/xhr/send-redirect-no-location.htm": {
+		"XMLHttpRequest: send() - Redirects (no Location header) (301)": "FAIL: assert_equals: expected \"ABE ODDYSSEE\" but got \"Moved Permanently\"",
+		"XMLHttpRequest: send() - Redirects (no Location header) (302)": "FAIL: assert_equals: expected \"ABE ODDYSSEE\" but got \"Found\"",
+		"XMLHttpRequest: send() - Redirects (no Location header) (303)": "FAIL: assert_equals: expected \"ABE ODDYSSEE\" but got \"See Other\"",
+		"XMLHttpRequest: send() - Redirects (no Location header) (307)": "FAIL: assert_equals: expected \"ABE ODDYSSEE\" but got \"Temporary Redirect\""
+	},
+	"/xhr/send-send.any.html": {
+		"XMLHttpRequest: send() - send()": "FAIL: assert_throws_dom: function \"function() { client.send(null) }\" did not throw"
+	},
+	"/xhr/send-send.any.worker.html": {
+		"XMLHttpRequest: send() - send()": "FAIL: assert_throws_dom: function \"function() { client.send(null) }\" did not throw"
+	},
+	"/xhr/send-usp.any.html": {
+		"XMLHttpRequest.send(URLSearchParams): POST replaces the charset parameter of an author-set Content-Type": "FAIL: assert_equals: Content-Type request header expected \"text/plain;charset=UTF-8\" but got \"text/plain;charset=windows-1252\""
+	},
+	"/xhr/send-usp.any.worker.html": {
+		"XMLHttpRequest.send(URLSearchParams): POST replaces the charset parameter of an author-set Content-Type": "FAIL: assert_equals: Content-Type request header expected \"text/plain;charset=UTF-8\" but got \"text/plain;charset=windows-1252\""
+	},
+	"/xhr/setrequestheader-after-send.htm": {
+		"XMLHttpRequest: setRequestHeader() after send()": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(\"x-test\", \"test\") }\" threw object \"Error: Failed to execute 'setRequestHeader' on 'XMLHttpRequest': The object's state must be OPENED."
+	},
+	"/xhr/setrequestheader-before-open.htm": {
+		"setRequestHeader invoked before open()": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(\"x-test\", \"test\") }\" threw object \"Error: Failed to execute 'setRequestHeader' on 'XMLHttpRequest': The object's state must be OPENED."
+	},
+	"/xhr/setrequestheader-bogus-name.htm": {
+		"setRequestHeader should throw with header name \"(\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \")\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"<\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \">\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"@\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \",\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \";\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \":\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\\\\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\\"\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"/\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"[\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"]\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"?\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"=\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"{\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"}\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \" \".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"t\\rt\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"t\\nt\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"t: t\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"t:t\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"t<t\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"t t\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \" tt\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \":tt\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\ttt\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\vtt\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"t\\0t\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"t\\\"t\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"t,t\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"t;t\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"()[]{}\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"a?B\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"a=B\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\0\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x01\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x02\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x03\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x04\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x05\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x06\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x07\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\b\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\t\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\n\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\v\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\f\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\r\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x0e\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x0f\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x10\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x11\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x12\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x13\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x14\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x15\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x16\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x17\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x18\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x19\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x1a\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x1b\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x1c\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x1d\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x1e\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE",
+		"setRequestHeader should throw with header name \"\\x1f\".": "FAIL: assert_throws_dom: function \"function() { client.setRequestHeader(name, 'x-value') }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid name\" that is not a DOMException SyntaxE"
+	},
+	"/xhr/setrequestheader-bogus-value.htm": {
+		"XMLHttpRequest: setRequestHeader() value argument checks": "FAIL: assert_throws_dom: given value t\u0000t, function \"function() { client.setRequestHeader(\"x-test\", value) }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid value\" that is not a DO",
+		"XMLHttpRequest: setRequestHeader() value argument checks 1": "FAIL: assert_throws_dom: given value t t, function \"function() { client.setRequestHeader(\"x-test\", value) }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid value\" that is not a DO",
+		"XMLHttpRequest: setRequestHeader() value argument checks 2": "FAIL: assert_throws_dom: given value t t, function \"function() { client.setRequestHeader(\"x-test\", value) }\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid value\" that is not a DO",
+		"Omitted value argument": "FAIL: assert_throws_js: function \"function() { client.setRequestHeader(\"x-test\") }\" did not throw"
+	},
+	"/xhr/setrequestheader-case-insensitive.htm": {
+		"XMLHttpRequest: setRequestHeader() - headers that differ in case": "FAIL: assert_equals: expected \"x-test,\" but got \"X-Test,\"",
+		"XMLHttpRequest: setRequestHeader() - headers that differ in case 1": "FAIL: assert_array_equals: expected property 0 to be \"content-TYPE\" but got \"Content-Type\" (expected array [\"content-TYPE\"] got [\"Content-Type\"])"
+	},
+	"/xhr/setrequestheader-content-type.htm": {
+		"String request keeps setRequestHeader() Content-Type, with charset adjusted to UTF-8": "FAIL: assert_equals: expected \"Content-Type: text/javascript;charset=UTF-8\\n\" but got \"Content-Type: text/javascript;charset=ASCII\\n\"",
+		"XML Document request has correct default Content-Type of \"application/xml;charset=UTF-8\"": "FAIL: assert_equals: expected \"Content-Type: application/xml;charset=UTF-8\\n\" but got \"\"",
+		"XML Document request keeps setRequestHeader() Content-Type, with charset adjusted to UTF-8": "FAIL: assert_equals: expected \"Content-Type: application/xhtml+xml;charset=UTF-8\\n\" but got \"Content-Type: application/xhtml+xml;charset=ASCII\\n\"",
+		"HTML Document request has correct default Content-Type of \"text/html;charset=UTF-8\"": "FAIL: assert_equals: expected \"Content-Type: text/html;charset=UTF-8\\n\" but got \"\"",
+		"HTML Document request keeps setRequestHeader() Content-Type, with charset adjusted to UTF-8": "FAIL: assert_equals: expected \"Content-Type: text/html+junk;charset=UTF-8\\n\" but got \"Content-Type: text/html+junk;charset=ASCII\\n\"",
+		"Blob request with set type uses that it for Content-Type unless setRequestHeader()": "FAIL: assert_equals: expected \"Content-Type: application/xml;charset=ascii\\n\" but got \"\"",
+		"FormData request has correct default Content-Type of \"multipart/form-data; boundary=_\"": "FAIL: assert_regexp_match: expected object \"/multipart\\/form-data; boundary=(.*)/\" but got \"\"",
+		"URLSearchParams request has correct default Content-Type of \"application/x-www-form-urlencoded;charset=UTF-8\"": "FAIL: assert_equals: expected \"Content-Type: application/x-www-form-urlencoded;charset=UTF-8\\n\" but got \"\"",
+		"URLSearchParams request keeps setRequestHeader() Content-Type, with charset adjusted to UTF-8": "FAIL: assert_equals: expected \"Content-Type: application/xml;charset=UTF-8\\n\" but got \"Content-Type: application/xml;charset=ASCII\\n\""
+	},
+	"/xhr/setrequestheader-header-allowed.htm": {
+		"XMLHttpRequest: setRequestHeader() - headers that are allowed (Status-URI)": "FAIL: assert_equals: expected \"Status-URI,\" but got \"Status-Uri,\""
+	},
+	"/xhr/setrequestheader-header-forbidden.htm": {
+		"XMLHttpRequest: setRequestHeader() - headers that are forbidden 1": "FAIL: assert_equals: expected \"x-http-method-override: GETTRACE\\n\" but got \"X-Http-Method-Override: GETTRACE\\n\""
+	},
+	"/xhr/setrequestheader-open-setrequestheader.htm": {
+		"XMLHttpRequest: setRequestHeader() and open()": "FAIL: assert_equals: Set headers record should have been cleared by open. expected \"X-appended-to-this: True\\n\" but got \"X-Appended-To-This: True\\n\""
+	}
+}
