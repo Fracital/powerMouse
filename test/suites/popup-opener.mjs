@@ -3,9 +3,10 @@
 // nothing of its opener but what the browser allows across origins: its
 // about:blank was the opener's document, and the opener stayed readable to
 // the site the popup then loaded (its globals, its location, its document).
-// Every value is compared with the same pages loaded natively. Same-origin
-// mode, with a controller that has no `onOpen` (the demo's own takes popups
-// as tabs).
+// The opener of a window nobody opened is null, also read through a
+// stand-in: a climb through `opener` to the first window ends. Every value
+// is compared with the same pages loaded natively. Same-origin mode, with a
+// controller that has no `onOpen` (the demo's own takes popups as tabs).
 import { done, FIXTURE, launch, ok, PROXY, sleep } from '../lib.mjs';
 
 const target = `${FIXTURE}pages/popup-opener.html`;
@@ -93,6 +94,12 @@ ok(
 	"a popup of the opener's origin reads its globals, location and document, as natively",
 	same('same', reads),
 	shown('same', reads),
+);
+const nobody = ['openerOpener', 'hops'];
+ok(
+	"the opener's opener is null through a stand-in, and the climb from the popup of another origin ends, as natively",
+	same('cross', nobody) && same('same', ['openerOpener']),
+	shown('cross', nobody),
 );
 ok(
 	'each popup is the source of its message, as natively',

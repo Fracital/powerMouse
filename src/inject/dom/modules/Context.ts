@@ -873,8 +873,24 @@ export default class ContextModule extends Module<DocumentClient> {
 						);
 					},
 				},
+				// the window that opened it, when a proxied page did; a window
+				// nobody opened has none. It was this document's own top (the
+				// stand-in for "outside the proxied world"), so a climb through
+				// `opener.top` to the first window never ended
 				opener: {
-					get: () => this.newRestricted(<Context>(<unknown>context.opener!)),
+					get: () => {
+						let opener: Context | null = null;
+						try {
+							opener = nativeOpener
+								? (Reflect.apply(nativeOpener, context, []) as Context | null)
+								: null;
+						} catch (error) {
+							// a window being torn down
+						}
+						return opener && isStomp(opener, this.client.names.client)
+							? this.newRestricted(opener)
+							: null;
+					},
 				},
 				self: {
 					get: () => res,
