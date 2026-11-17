@@ -892,6 +892,8 @@ export default class ContextModule extends Module<DocumentClient> {
 						} catch (error) {
 							return this.newRestricted(<Context>(<unknown>context.parent!));
 						}
+						// a window whose frame was removed has none
+						if (parent === null) return null;
 						// the top of the proxied world is its own parent
 						return this.newRestricted(
 							isStomp(parent, this.client.names.client) ? parent : context,
