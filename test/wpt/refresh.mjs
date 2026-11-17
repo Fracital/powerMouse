@@ -109,8 +109,10 @@ const INCLUDE = [
 
 /** matched paths that still stay out */
 const EXCLUDE = [
-	// need https (secure-context cookie tests that must fail over http)
-	/^cookies\/.*\.https\./,
+	// need https (secure-context cookie tests that must fail over http); the
+	// directories of lists/cookies-more.mjs run theirs over http, where
+	// localhost is a secure context
+	/^cookies\/(?!samesite\/|samesite-none-secure\/|domain\/).*\.https\./,
 	// a WebSocket handshake that sets a cookie: proxy-transports does not
 	// expose those headers (CHANGELOG, Transport), and the missing wptserve
 	// handler leaves the socket hanging until the budget runs out
