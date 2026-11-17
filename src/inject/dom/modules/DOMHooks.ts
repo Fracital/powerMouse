@@ -2236,6 +2236,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 		// Element.attributes: a view of the map without the markers
 		const attributeMaps = new WeakMap<NamedNodeMap, NamedNodeMap>();
+		interface AttributeView {
+			map: NamedNodeMap;
+			owner: Element;
+			visible: () => Attr[];
+			named: (name: string) => Attr | undefined;
+		}
+		const views = new WeakMap<object, AttributeView>();
 		/** the element's hooked setAttributeNode and setAttributeNodeNS, once they are wrapped below */
 		const setNamedItems: {
 			setAttributeNode?: Element['setAttributeNode'];
@@ -2289,81 +2296,110 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						};
 						const named = (name: string) =>
 							visible().find((attr) => attr.name === name);
-						attributeMaps.set(
-							map,
-							new Proxy(map, {
-								get: (map, key) => {
-									if (key === 'length') return visible().length;
-									if (typeof key === 'string' && /^\d+$/.test(key))
-										return visible()[Number(key)];
-									if (key === 'item')
-										return (index: number) => visible()[index] ?? null;
-									if (key === 'getNamedItem')
-										return (name: string) =>
-											isMarkerOn(owner, name)
-												? null
-												: (map.getNamedItem(name) ??
-													named(attributeName(owner, String(name))) ??
-													null);
-									// an attribute node set through the map is set on the
-									// element: through its hooks, so what it loads is routed
-									if (key === 'setNamedItem' || key === 'setNamedItemNS') {
-										const set =
-											setNamedItems[
-												key === 'setNamedItem'
-													? 'setAttributeNode'
-													: 'setAttributeNodeNS'
-											];
-										if (set)
-											return (...args: unknown[]) => {
-												// the browser's own errors (no argument, not an
-												// Attr, a node in use) name the map's method
-												const attr = args[0];
-												if (
-													!(attr instanceof this.client.global.Attr) ||
-													(attr.ownerElement && attr.ownerElement !== owner)
-												)
-													return Reflect.apply(
-														Reflect.get(map, key) as Function,
-														map,
-														args,
-													);
-												return Reflect.apply(set, owner, args);
-											};
-									}
-									if (key === Symbol.iterator)
-										return function* () {
-											yield* visible();
-										};
-									if (typeof key === 'string' && isMarker(key))
-										return undefined;
-									const value = Reflect.get(map, key);
-									if (value === undefined && typeof key === 'string')
-										return named(key);
-									return typeof value === 'function' ? value.bind(map) : value;
-								},
-								has: (map, key) =>
-									typeof key === 'string' && /^\d+$/.test(key)
-										? Number(key) < visible().length
-										: typeof key === 'string' && isMarker(key)
-											? false
-											: Reflect.has(map, key) ||
-												(typeof key === 'string' && !!named(key)),
-								ownKeys: (map) => [
-									...visible().map((_, i) => String(i)),
-									...Reflect.ownKeys(map).filter(
-										(key) =>
-											typeof key !== 'string' ||
-											(!/^\d+$/.test(key) && !isMarker(key)),
-									),
-								],
-							}),
-						);
+						const view = new Proxy(map, {
+							get: (map, key) => {
+								if (key === 'length') return visible().length;
+								if (typeof key === 'string' && /^\d+$/.test(key))
+									return visible()[Number(key)];
+								if (typeof key === 'string' && isMarker(key)) return undefined;
+								// the methods are the prototype's own (map.item is
+								// NamedNodeMap.prototype.item), which act on the view
+								// when it is their receiver (viewMethods below), and
+								// the iterator is Array.prototype.values over it
+								const value = Reflect.get(map, key);
+								if (value === undefined && typeof key === 'string')
+									return named(key);
+								return value;
+							},
+							has: (map, key) =>
+								typeof key === 'string' && /^\d+$/.test(key)
+									? Number(key) < visible().length
+									: typeof key === 'string' && isMarker(key)
+										? false
+										: Reflect.has(map, key) ||
+											(typeof key === 'string' && !!named(key)),
+							ownKeys: (map) => [
+								...visible().map((_, i) => String(i)),
+								...Reflect.ownKeys(map).filter(
+									(key) =>
+										typeof key !== 'string' ||
+										(!/^\d+$/.test(key) && !isMarker(key)),
+								),
+							],
+						});
+						views.set(view, { map, owner, visible, named });
+						attributeMaps.set(map, view);
 					}
 					return attributeMaps.get(map)!;
 				},
 			),
 		});
+		// NamedNodeMap's methods called on a view: by index and by name over
+		// the attributes the page sees, an attribute node set through the map
+		// set on the element (through its hooks, so what it loads is routed),
+		// anything else on the map itself
+		const viewMethods: Record<
+			string,
+			(view: AttributeView, args: unknown[], key: string) => unknown
+		> = {
+			item: ({ visible }, args) => visible()[(args[0] as number) >>> 0] ?? null,
+			getNamedItem: ({ map, owner, named }, args) =>
+				isMarkerOn(owner, args[0])
+					? null
+					: (map.getNamedItem(String(args[0])) ??
+						named(attributeName(owner, String(args[0]))) ??
+						null),
+			setNamedItem: setNamedItemOf('setAttributeNode'),
+			setNamedItemNS: setNamedItemOf('setAttributeNodeNS'),
+		};
+		function setNamedItemOf(method: keyof typeof setNamedItems) {
+			return ({ map, owner }: AttributeView, args: unknown[], key: string) => {
+				const set = setNamedItems[method];
+				// the browser's own errors (not an Attr, a node in use) name
+				// the map's method
+				const attr = args[0];
+				if (
+					!set ||
+					!(attr instanceof client.global.Attr) ||
+					(attr.ownerElement && attr.ownerElement !== owner)
+				)
+					return Reflect.apply(
+						Reflect.get(nativeNamedNodeMap, key) as Function,
+						map,
+						args,
+					);
+				return Reflect.apply(set, owner, args);
+			};
+		}
+		const client = this.client;
+		const namedNodeMap = this.client.global.NamedNodeMap.prototype;
+		const nativeNamedNodeMap: Record<string, unknown> = {};
+		for (const key of Reflect.ownKeys(namedNodeMap)) {
+			const descriptor = Reflect.getOwnPropertyDescriptor(namedNodeMap, key)!;
+			if (
+				typeof key !== 'string' ||
+				key === 'constructor' ||
+				typeof descriptor.value !== 'function'
+			)
+				continue;
+			nativeNamedNodeMap[key] = descriptor.value;
+			const own = viewMethods[key];
+			Reflect.defineProperty(namedNodeMap, key, {
+				...descriptor,
+				value: proxyModule.wrapFunction(
+					descriptor.value,
+					(target, that, args) => {
+						const view = views.get(that);
+						// no argument: the browser's own TypeError
+						if (!view || !args.length)
+							return Reflect.apply(target, view?.map ?? that, args);
+						return own
+							? own(view, args, key)
+							: Reflect.apply(target, view.map, args);
+					},
+				),
+			});
+		}
 
 		// markup as the page wrote it: a copy with every marker folded back,
 		// template contents included (their elements are not descendants)
