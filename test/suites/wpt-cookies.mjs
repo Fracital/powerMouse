@@ -3,4 +3,9 @@
 // run. One page at a time: every test shares the jar and cleans it.
 import { runWpt } from '../wpt.mjs';
 
-await runWpt('wpt-cookies', { roots: ['cookies'], concurrency: 1 });
+await runWpt('wpt-cookies', {
+	roots: ['cookies'],
+	concurrency: 1,
+	// the directories of the wpt-cookies-more suite
+	skip: [/^\/cookies\/(samesite|samesite-none-secure|domain)\//],
+});
