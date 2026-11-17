@@ -959,15 +959,6 @@ fix).
   cross-origin isolation, and a proxied frame is isolated only when the host
   page is; the runner's host is not. A known limit.
 
-- `workers/Worker-nested-importScripts-error.html` (1): the error event of a
-  syntax error in a script imported by an imported script names the
-  importing script. Since d600d112 the importScripts hook
-  (`src/inject/worker/modules/ImportScripts.ts`) calls the browser's
-  importScripts in a `try` and rethrows what it throws, so an uncaught error
-  is reported where the hook rethrew it; without the `try` this page passes.
-  The same cause as the same-origin `report-error` pages of
-  `wpt-workers-semantics`.
-
 Cleared on the combined tree: `SharedWorker-detach-frame-in-error-event.html`
 (a frame's `document` read as cross-origin; the lead's about:blank origin
 fix, by its message).
@@ -1014,41 +1005,6 @@ The list is empty.
 
 ## wpt-workers-semantics
 
-- Errors of a script of another origin are never muted in a worker:
-  natively `importScripts()` of a cross-origin (no-cors) script rethrows
-  whatever it threw, parse errors included, as a NetworkError DOMException,
-  and the error event carries it with the importing script's position.
-  `#muted` in `src/inject/modules/Unroute.ts` returns false outside a
-  document, and `ImportScripts.ts` only routes the URL; the worker would have
-  to mark a response whose real origin (after redirects) differs.
-  `workers/interfaces/WorkerUtils/importScripts/catch.sub.any.worker.html`,
-  `workers/interfaces/WorkerUtils/importScripts/catch.sub.any.sharedworker.html`
-  (4 each), and 1 each (error: a SyntaxError for the NetworkError) on
-  `workers/interfaces/WorkerUtils/importScripts/report-error-cross-origin.sub.any.worker.html`,
-  `workers/interfaces/WorkerUtils/importScripts/report-error-cross-origin.sub.any.sharedworker.html`,
-  `workers/interfaces/WorkerUtils/importScripts/report-error-redirect-to-cross-origin.sub.any.worker.html`,
-  `workers/interfaces/WorkerUtils/importScripts/report-error-redirect-to-cross-origin.sub.any.sharedworker.html`,
-  `workers/interfaces/WorkerUtils/importScripts/report-error-setTimeout-cross-origin.sub.any.worker.html`,
-  `workers/interfaces/WorkerUtils/importScripts/report-error-setTimeout-cross-origin.sub.any.sharedworker.html`,
-  `workers/interfaces/WorkerUtils/importScripts/report-error-setTimeout-redirect-to-cross-origin.sub.any.worker.html`,
-  `workers/interfaces/WorkerUtils/importScripts/report-error-setTimeout-redirect-to-cross-origin.sub.any.sharedworker.html`.
-  Their filename and lineno pass since d600d112, by the cause of the next
-  entry: the error is reported at the hook's rethrow, which a page reads as
-  the importing script's position, as a muted error natively is.
-- `workers/interfaces/WorkerUtils/importScripts/report-error-same-origin.sub.any.worker.html`,
-  `workers/interfaces/WorkerUtils/importScripts/report-error-same-origin.sub.any.sharedworker.html`,
-  `workers/interfaces/WorkerUtils/importScripts/report-error-setTimeout-same-origin.sub.any.worker.html`,
-  `workers/interfaces/WorkerUtils/importScripts/report-error-setTimeout-same-origin.sub.any.sharedworker.html`
-  (2 each: filename and lineno): a syntax error in a same-origin imported
-  script is reported at `report-error-helper.js` line 8, where natively it is
-  `syntax-error.js` line 1. They pass at 082ac470 and fail at d600d112 with
-  or without this series: d600d112's importScripts hook calls the browser's
-  importScripts in a `try` (to put the page's URL in a NetworkError's
-  message) and rethrows every error, and an uncaught error rethrown is
-  reported where it was rethrown. Without the `try` these and
-  `Worker-nested-importScripts-error.html` pass and the 8 cross-origin pages
-  above fail their filename again (measured, Chrome 157). A fix keeps the
-  `try` only for the URLs whose error must be muted.
 - `workers/semantics/navigation/001.html`, `workers/semantics/navigation/002.html`
   (2 each: the harness TIMEOUT and "navigating"): a frame navigated to a
   `data:text/html,...` URL by a link click gets the shell, which cannot
@@ -1056,6 +1012,12 @@ The list is empty.
   take the rewriter library from, and asks for it with a synchronous XHR to a
   relative URL that does not parse against a data: base. `iframe.src = data:`
   is not affected (it gets a blob copy).
+
+Cleared by the importScripts fix (a script of another origin throws a
+NetworkError, one of the worker's own origin is not caught):
+`importScripts/catch.sub.any.worker.html` and `.sharedworker.html`, the 12
+`importScripts/report-error-*` pages, and in wpt-workers-basics
+`Worker-nested-importScripts-error.html`.
 
 ## wpt-xhr-cors
 

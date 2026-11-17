@@ -110,6 +110,29 @@ export function hasProxyMetric(entry: object, name: string): boolean {
 	}
 }
 
+/**
+ * Whether the browser's last load of `routed` went to another origin
+ * without CORS on the way (a redirect): the service worker marks the last
+ * hop of such a chain (OPAQUE_MARKER) in its resource timing entry, which a
+ * worker's importScripts() has once the call is over
+ */
+export function crossedTo(global: typeof globalThis, routed: string): boolean {
+	if (!nativeEntriesByType || !nativeEntryName) return false;
+	try {
+		const entries = Reflect.apply(nativeEntriesByType, global.performance, [
+			'resource',
+		]) as object[];
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const name = String(Reflect.apply(nativeEntryName, entries[i], []));
+			if (new URL(routed, name).href === name)
+				return hasProxyMetric(entries[i]!, OPAQUE_MARKER);
+		}
+	} catch (error) {
+		// no entries to read
+	}
+	return false;
+}
+
 /** what a resource of another origin without Timing-Allow-Origin shows as 0 */
 const RESTRICTED_TIMES = [
 	'redirectStart',
