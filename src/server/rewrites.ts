@@ -2941,6 +2941,27 @@ function genericForward(
 			await response.body?.cancel().catch(() => {});
 			return refuse('blocked by CORS policy');
 		}
+		// a cors request is not redirected to a URL with credentials, unless
+		// the whole chain and that URL are the initiator's own origin
+		// (https://fetch.spec.whatwg.org/#http-redirect-fetch). The browser
+		// follows the route, which has none
+		if (
+			fromNetwork &&
+			policyMode === 'cors' &&
+			policyOrigin !== null &&
+			REDIRECT_STATUSES.includes(response.status)
+		) {
+			const location = response.headers.get('location');
+			const to = location === null ? null : locationURL(location, url.url);
+			if (
+				to &&
+				(to.username !== '' || to.password !== '') &&
+				(crossOrigin || to.origin !== policyOrigin)
+			) {
+				await response.body?.cancel().catch(() => {});
+				return refuse('blocked: a CORS redirect to a URL with credentials');
+			}
+		}
 		if (
 			fromNetwork &&
 			crossOrigin &&
