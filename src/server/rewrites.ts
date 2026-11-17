@@ -114,6 +114,7 @@ import {
 	CORS_MARKER,
 	CREDENTIALS_HEADER,
 	ENCODING_MARKER,
+	FRESH_RETURN_ROUTE,
 	HOPS_MARKER,
 	INITIATOR_ROUTE,
 	KEPT_MARKER,
@@ -576,11 +577,15 @@ function rememberReturn(
 
 /**
  * A frame's navigation its document cancelled, made again in a fresh
- * browsing context (FRESH_RETURN): `referrer` (the document's routed URL)
- * is its referrer, under the policy the request has
+ * browsing context (FRESH_RETURN_ROUTE): `referrer` (the document's routed
+ * URL) is its referrer, under `policy`, the document's own for it
  */
-export function rememberFreshReturn(url: string, referrer: string) {
-	rememberReturn(url, { referrer, policy: '', url, fresh: true });
+function rememberFreshReturn(
+	url: string,
+	referrer: string,
+	policy: ReferrerPolicy,
+) {
+	rememberReturn(url, { referrer, policy, url, fresh: true });
 }
 
 function takeReturn(url: string) {
@@ -5190,6 +5195,60 @@ export function registerRewrites(
 			}
 		return location;
 	};
+
+	// a frame's document says its navigation goes on in a fresh browsing
+	// context (messages.ts FRESH_RETURN_ROUTE): from a routed document of
+	// this controller, for a route of it. An about:srcdoc document's URL
+	// names nothing: its referrer is its parent's address, which the browser
+	// wrote on the request under the document's own policy (in full, as the
+	// proxy's origin alone, or not at all), and is taken when it is of the
+	// origin the document was vouched for (srcdocVouches). A page that names
+	// another referrer on such a request names one of its own origin, which
+	// it could make its address anyway.
+	router.routes.set(
+		new RegExp(`^/${FRESH_RETURN_ROUTE}$`),
+		async (request, _resolved, context) => {
+			const origin = new URL(request.url).origin;
+			const prefix = `${origin}${rewriter.directory}`;
+			try {
+				const to = request.method === 'POST' ? await request.text() : '';
+				const id = context?.clientId;
+				const client =
+					id && typeof clients !== 'undefined'
+						? await clients.get(id)
+						: undefined;
+				let source: string | null = null;
+				if (client?.url.startsWith(prefix)) source = client.url;
+				else if (
+					id &&
+					client &&
+					(client.url === '' || client.url.startsWith('about:srcdoc'))
+				) {
+					const referrer =
+						request.referrer === 'about:client' ? '' : request.referrer;
+					// (none at all names nobody: no vouch is needed for it)
+					const bound = referrer === '' ? null : await boundClient(id, true);
+					if (referrer === '' || (bound && referrer === `${origin}/`))
+						source = referrer;
+					else if (
+						bound &&
+						parseRoutedURL(referrer, rewriter.codec, prefix).url.url.origin ===
+							bound.client.origin
+					)
+						source = referrer;
+				}
+				if (source !== null && to.startsWith(prefix) && to.length <= 16384)
+					rememberFreshReturn(to, source, request.referrerPolicy);
+			} catch (error) {
+				// no body, a referrer that is no route, or the client is gone:
+				// the navigation goes as its parent's
+			}
+			return new Response(null, {
+				status: 204,
+				headers: { 'cache-control': 'no-store' },
+			});
+		},
+	);
 
 	// A GET form without an action submits to the document's own address,
 	// and the browser writes its fields after the route as they are: the

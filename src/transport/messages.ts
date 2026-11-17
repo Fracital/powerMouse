@@ -546,16 +546,17 @@ export const NAVIGATION_HINT = '$stomp$navigationHint';
  * A frame's document cancelled a navigation of its own context to another
  * origin, which its parent makes again in a fresh browsing context
  * (src/inject/dom/freshContext.ts): the request comes from the parent's
- * element, with the parent's URL for its referrer. The worker takes this
- * document's own routed URL as the request's referrer (and so its
- * initiator), never anything the message says, for the routed URL named.
+ * element, with the parent's URL for its referrer and the parent's policy.
+ * The document says so first with a POST to this route under its address,
+ * whose body is the routed URL the fresh context asks for. The worker takes
+ * the request's own client (its routed URL) as the navigation's referrer
+ * and initiator, and the request's referrer policy as the navigation's:
+ * the browser gives a request of the document that document's policy, or
+ * the one the request names, which is the link's or the form's own
+ * (`referrerpolicy`, `rel=noreferrer`). Nothing the body says is either.
+ * It is answered before the frame goes, so the worker knows in time.
  */
-export const FRESH_RETURN = '$stomp$freshReturn';
-export interface FreshReturnMessage {
-	directory: string;
-	/** the routed URL the fresh context asks for */
-	url: string;
-}
+export const FRESH_RETURN_ROUTE = 'fresh';
 export interface NavigationHintMessage {
 	directory: string;
 	/** where the navigation goes, as the page sees it (the real URL; a routed one is decoded) */

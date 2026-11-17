@@ -2,11 +2,7 @@ import { parseConfig } from '../../../config';
 import { FRESH_FRAME_EVENT } from '../../../freshFrame';
 import { routeHTML } from '../../../rewriteHTML';
 import StompURL from '../../../StompURL';
-import {
-	CSP_FACTS,
-	FRESH_RETURN,
-	type FreshReturnMessage,
-} from '../../../transport/messages';
+import { CSP_FACTS, FRESH_RETURN_ROUTE } from '../../../transport/messages';
 import { isLinkRoute } from '../../../visited';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
@@ -27,6 +23,48 @@ import ContextModule, { initialBlank, isStomp } from './Context';
 import { nativeElement } from './DOMHooks';
 import { MARKER } from './MutationObserver';
 import NavigationHintModule from './NavigationHint';
+
+const REFERRER_POLICIES = [
+	'no-referrer',
+	'no-referrer-when-downgrade',
+	'origin',
+	'origin-when-cross-origin',
+	'same-origin',
+	'strict-origin',
+	'strict-origin-when-cross-origin',
+	'unsafe-url',
+];
+
+/**
+ * The referrer policy the element that started a navigation asks for
+ * itself: none at all for `rel=noreferrer` (a link's, a form's), else a
+ * link's `referrerpolicy`; '' for the document's own. The hooked getters
+ * answer with what the page wrote.
+ */
+function sourcePolicy(source: Element | null | undefined): ReferrerPolicy {
+	if (!source) return '';
+	try {
+		const link = source.nodeName === 'A' || source.nodeName === 'AREA';
+		// a form's submitter: the form's own rel counts
+		const owner = link
+			? source
+			: ((source as HTMLButtonElement).form ?? source);
+		if (
+			(owner.getAttribute('rel') ?? '')
+				.toLowerCase()
+				.split(/\s+/)
+				.includes('noreferrer')
+		)
+			return 'no-referrer';
+		const policy = link
+			? (source.getAttribute('referrerpolicy') ?? '').toLowerCase()
+			: '';
+		if (REFERRER_POLICIES.includes(policy)) return policy as ReferrerPolicy;
+	} catch (error) {
+		// an element of another kind: the document's
+	}
+	return '';
+}
 
 export default class IFrameModule extends Module<DocumentClient> {
 	apply() {
@@ -643,6 +681,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 					hashChange: boolean;
 					downloadRequest: string | null;
 					formData: FormData | null;
+					sourceElement?: Element | null;
 					destination: { url: string; sameDocument: boolean };
 				};
 				if (
@@ -702,20 +741,43 @@ export default class IFrameModule extends Module<DocumentClient> {
 				event.preventDefault();
 				event.stopImmediatePropagation();
 				const formData = navigate.formData;
-				// the request is the parent's element's now: the worker takes
-				// this document for its referrer and initiator, as it was
-				const routedClient = this.client.routedClient();
-				routedClient?.postToWorker({
-					[FRESH_RETURN]: {
-						directory: routedClient.directory,
-						url: routed,
-					} satisfies FreshReturnMessage,
-				});
 				// in the parent's realm, once this event is over: the frame is
 				// taken out of its document, this one with it
-				container.parent.global.setTimeout(() =>
-					container.parent.freshFrame?.(container.element, routed, formData),
-				);
+				const again = () =>
+					container.parent.global.setTimeout(() =>
+						container.parent.freshFrame?.(container.element, routed, formData),
+					);
+				// the request is the parent's element's now: the worker takes
+				// this document for its referrer and initiator, as it was, and
+				// the policy the browser gives a request of this document's as
+				// the navigation's (FRESH_RETURN_ROUTE), told before the frame
+				// goes. A request of this document's own realm where a worker
+				// controls it (an about:srcdoc document has a policy of its own),
+				// else of the routed document it is of (an about:blank one's is
+				// that document's). An opaque origin's sends no referrer at all.
+				const teller = this.client.controlled
+					? this.client
+					: this.client.routedClient();
+				if (!teller) {
+					again();
+					return;
+				}
+				let told: Promise<unknown>;
+				try {
+					told = teller.nativeFetch(
+						`${new URL(scopePrefix(this.client)).origin}${teller.directory}${FRESH_RETURN_ROUTE}`,
+						{
+							method: 'POST',
+							body: routed,
+							referrerPolicy: this.client.sandboxedOpaque
+								? 'no-referrer'
+								: sourcePolicy(navigate.sourceElement),
+						},
+					);
+				} catch (error) {
+					told = Promise.resolve();
+				}
+				told.then(again, again);
 			},
 			true,
 		);
