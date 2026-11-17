@@ -15,17 +15,16 @@
 		"MessageEvent.origin is the origin of the final URL after a cross-origin redirect": "FAIL: assert_equals: origin expected \"http://127.0.0.1:PORT\" but got \"http://127.0.0.1:PORT\""
 	},
 	"/eventsource/eventsource-cross-origin.window.html": {
-		"(harness)": "TIMEOUT: ",
 		"EventSource: cross-origin basic use": "FAIL: assert_equals: expected \"http://xn--lve-6lad.localhost:PORT\" but got \"http://127.0.0.1:PORT\"",
 		"EventSource: cross-origin redirect use": "FAIL: assert_equals: expected \"http://xn--lve-6lad.localhost:PORT\" but got \"http://127.0.0.1:PORT\"",
-		"EventSource: cross-origin redirect use recon": "TIMEOUT: Test timed out",
+		"EventSource: cross-origin redirect use recon": "FAIL: assert_equals: expected \"http://xn--lve-6lad.localhost:PORT\" but got \"http://127.0.0.1:PORT\"",
 		"EventSource: cross-origin allow-origin: http://example.org should fail": "FAIL: assert_equals: readyState expected 2 but got 0",
 		"EventSource: cross-origin allow-origin:'' should fail": "FAIL: assert_equals: readyState expected 2 but got 0",
 		"EventSource: cross-origin No allow-origin should fail": "FAIL: assert_equals: readyState expected 2 but got 0"
 	},
 	"/eventsource/request-credentials.window.html": {
 		"(harness)": "TIMEOUT: ",
-		"EventSource: credentials: credentials enabled": "TIMEOUT: Test timed out",
+		"EventSource: credentials: credentials enabled": "FAIL: assert_equals: cookie status expected \"first NO_COOKIE\" but got \"first COOKIE\"",
 		"EventSource: credentials: credentials disabled": "TIMEOUT: Test timed out",
 		"EventSource: credentials: credentials default": "TIMEOUT: Test timed out"
 	}

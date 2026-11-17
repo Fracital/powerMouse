@@ -315,7 +315,9 @@ export default class FetchModule extends Module<Client> {
 
 				// one a worker's policy refuses fails as the browser fails it
 				// (requestVerdict, which reports it with no sourceFile, as
-				// Chrome reports an EventSource's)
+				// Chrome reports an EventSource's). The page's init goes with
+				// it: `withCredentials` is what makes the request one with
+				// credentials (cookies to another origin)
 				const resource = new StompURL(url, this.client.url);
 				const result = Reflect.construct(
 					target,
@@ -323,6 +325,7 @@ export default class FetchModule extends Module<Client> {
 						requestRefused(this.client, 'connect-src', url, 1, false)
 							? routeRefused(resource, true)
 							: routeBinary(resource),
+						...args.slice(1),
 					],
 					newTarget || target,
 				);
