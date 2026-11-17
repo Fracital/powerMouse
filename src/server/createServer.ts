@@ -372,8 +372,8 @@ export default async function createServer(
 		json(200, context?.clientId ?? null),
 	);
 	registerAssets(router, init.scope, init.assets);
-	// a worker's questions about its site's permissions, as the site its
-	// route names (its partition's top, else its own origin)
+	// a worker's questions about its site's permissions and devices, as the
+	// site its route names (its partition's top, else its own origin)
 	registerPermissionRoute(router, (url) => {
 		try {
 			const { pathname, protocol } = new URL(url);

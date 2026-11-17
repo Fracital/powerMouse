@@ -16,7 +16,8 @@
 //
 // A deferred part in documents (src/inject/dom/deferredParts.ts), imported
 // by the worker bundle: the top level reads no global.
-import type { PermissionState } from '../transport/messages';
+import type { PermissionOp, PermissionState } from '../transport/messages';
+import { hookDevices } from './deviceGrants';
 import { OwnWeakMap, OwnWeakSet } from './ownCollections';
 
 export type Decision =
@@ -711,6 +712,8 @@ const GATE_NAMES = [
 export interface GateHooks {
 	/** the context, made the first time it is asked for */
 	context(): GateContext;
+	ask(op: PermissionOp): Promise<unknown>;
+	nativeToString: Function;
 	/** the method wrappers' body and the navigator getter wrappers' */
 	call: (target: Function, that: unknown, args: unknown[]) => unknown;
 	read: (target: Function, that: unknown, args: unknown[]) => unknown;
@@ -739,7 +742,7 @@ function gateHook(hooks: GateHooks, owner: object | undefined, name: string) {
 }
 
 /** the navigator members whose getters are hooked (gateGetter) */
-const MEMBERS = ['clipboard'];
+const MEMBERS = ['clipboard', 'usb', 'hid', 'serial', 'bluetooth'];
 
 /** a function's own name (a native the page never had: the wrapper's) */
 const ownName = (fn: Function): unknown =>
@@ -822,7 +825,7 @@ export function gateCall(
 
 /**
  * A hooked navigator getter's read: the object it hands out the first time
- * is hooked (the clipboard's methods), the member
+ * is hooked (the clipboard's methods, a device API's grants), the member
  * told by its native getter's name (hooked before the page could reach it)
  */
 export function gateGetter(
@@ -848,6 +851,20 @@ export function gateGetter(
 			const read = gateHook(hooks, prototype, 'read');
 			const readText = gateHook(hooks, prototype, 'readText');
 			hooks.clipboardNatives = [read!, readText!];
+		} else {
+			const ctx = hooks.context();
+			hookDevices(
+				{
+					global: ctx.global,
+					wrap: ctx.wrap,
+					ask: hooks.ask,
+					nativeToString: hooks.nativeToString,
+					salt: () => hooks.ask({ op: 'deviceSalt' }) as Promise<string | null>,
+					error: ctx.error,
+				},
+				name as 'usb',
+				object as EventTarget,
+			);
 		}
 	} catch (error) {
 		// the browser's own

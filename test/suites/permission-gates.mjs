@@ -1,12 +1,13 @@
-// The APIs a permission gates, per proxied site
-// (src/inject/permissionGates.ts, docs/permissions.md), against Chrome in
-// both modes. The browser keeps one grant for every proxied site, so the
-// proxied runs give the proxy origin each permission first, as if another
-// site had been granted it, and the site under test was never asked: where
-// the host is asked about it, the user blocks it (the demo's prompt).
-// Natively the same page runs on an origin that was refused each permission
-// (or never asked, where an API does not ask: a notification, persist(), the
-// permission elements), and the proxied page must read what it reads:
+// The APIs a permission gates, and the device APIs, per proxied site
+// (src/inject/permissionGates.ts, src/inject/deviceGrants.ts,
+// docs/permissions.md), against Chrome in both modes. The browser keeps one
+// grant for every proxied site, so the proxied runs give the proxy origin
+// each permission first, as if another site had been granted it, and the
+// site under test was never asked: where the host is asked about it, the
+// user blocks it (the demo's prompt). Natively the same page runs on an
+// origin that was refused each permission (or never asked, where an API
+// does not ask: a notification, persist(), the permission elements), and
+// the proxied page must read what it reads:
 //
 // - getScreenDetails, queryLocalFonts, requestMIDIAccess, Clipboard read
 //   and readText, the callback getUserMedia and webkitGetUserMedia and a
@@ -17,7 +18,11 @@
 //   the proxy origin's `granted`;
 // - navigator.storage.persist() and persisted(), on the proxy origin's;
 // - <geolocation autolocate>: delivered the position on the proxy origin's
-//   grant, with permissionStatus `granted`.
+//   grant, with permissionStatus `granted`;
+// - navigator.usb, .hid and .serial in a document and a worker (no device
+//   to choose: what is listed, and requestDevice without a gesture).
+//
+// Web Bluetooth, with its emulated adapter, is bluetooth-grants.
 import { createServer } from 'node:http';
 import {
 	done,
@@ -80,6 +85,8 @@ const RUN = {
 	notificationPermission: () => Notification.permission,
 	persist: async () => { try { return String(await navigator.storage.persist()) + ' ' + String(await navigator.storage.persisted()); } catch (e) { return E(e); } },
 	element: () => new Promise((resolve) => setTimeout(() => resolve({ events: __events.join(), position: g.position && g.position.coords.latitude, status: g.permissionStatus, initial: g.initialPermissionStatus }), 2000)),
+	// (each request once the last gesture's activation is over)
+	devices: async () => { const out = { noGesture: {} }; await new Promise((r) => setTimeout(r, 5500)); for (const [k, f] of Object.entries({ usb: () => navigator.usb.requestDevice({ filters: [] }), hid: () => navigator.hid.requestDevice({ filters: [] }), serial: () => navigator.serial.requestPort() })) { try { await late(f(), 3000); out.noGesture[k] = 'resolved'; } catch (e) { out.noGesture[k] = E(e); } } for (const [k, f] of Object.entries({ usb: () => navigator.usb.getDevices(), hid: () => navigator.hid.getDevices(), serial: () => navigator.serial.getPorts() })) { try { out[k] = (await f()).length; } catch (e) { out[k] = E(e); } } return out; },
 	worker: () => new Promise((resolve) => { const w = new Worker('/worker.js'); w.onmessage = (e) => resolve(e.data); setTimeout(() => resolve('timeout'), 8000); }),
 	// a site granted notifications: what its worker reads once its states are in
 	granted: async () => { const asked = await Notification.requestPermission(); const r = await RUN.worker(); return asked + ' ' + r.later + ' ' + r.shown; },
@@ -95,6 +102,7 @@ const E = (e) => e && (e.name + ': ' + e.message);
 	await new Promise((resolve) => setTimeout(resolve, 500));
 	r.later = Notification.permission;
 	try { const n = new Notification('w', { tag: 't', icon: 'icon.png' }); r.icon = n.icon; r.tag = n.tag; r.shown = await new Promise((res) => { n.onshow = () => res('show'); n.onerror = () => res('error'); setTimeout(() => res('pending'), 4000); }); } catch (e) { r.shown = E(e); }
+	for (const [k, f] of Object.entries({ usb: () => navigator.usb.getDevices(), hid: () => navigator.hid.getDevices(), serial: () => navigator.serial.getPorts() })) { try { r[k] = (await f()).length; } catch (e) { r[k] = E(e); } }
 	postMessage(r);
 })();`;
 
@@ -151,6 +159,7 @@ const HELD = [
 	'camera',
 ];
 const CHECKS = [
+	'devices',
 	'screen',
 	'fonts',
 	'midi',
@@ -234,6 +243,11 @@ for (const [mode, base] of MODES) {
 	await submitLanding(tab, `${A}/gates`);
 	const frame = await frameOf(tab, 'gates');
 	const proxied = {};
+	// (before the host's prompt is watched: what reads the host's page
+	// gives it an activation, which a same-origin frame shares)
+	proxied.devices = frame
+		? await frame.evaluate(() => window.run('devices')).catch(String)
+		: null;
 	// the user blocks every site the host asks about (and at the end
 	// allows its notifications)
 	let answering = true;
@@ -258,6 +272,7 @@ for (const [mode, base] of MODES) {
 		}
 	})();
 	for (const name of CHECKS) {
+		if (name === 'devices') continue;
 		// the clipboard reads a focused document's, as the native page is
 		if (/^read/.test(name))
 			await tab

@@ -1,5 +1,7 @@
 import { openDB, type IDBPDatabase } from 'idb';
 import type {
+	DeviceGrant,
+	DeviceKind,
 	PermissionDecision,
 	PermissionOp,
 	PermissionState,
@@ -251,9 +253,139 @@ export async function forgetDeviceIds(host?: string) {
 }
 
 /**
+ * The devices each site chose in the browser's chooser (WebUSB, WebHID,
+ * Web Serial, Web Bluetooth). The browser keeps a device grant per origin,
+ * and every proxied site is the proxy origin: what one site was granted,
+ * every site's getDevices() listed, and a site's forget() revoked it for
+ * all of them. So the worker keeps each site's own (by the proxied top's
+ * real origin, as the permissions above), and a page lists only what its
+ * site chose. A device is known by a key the inject makes of what the
+ * browser shows of it (a Bluetooth device's id, the others' identifying
+ * fields), and a Bluetooth device keeps the services the site named.
+ */
+export const DEVICE_KINDS: readonly DeviceKind[] = [
+	'usb',
+	'hid',
+	'serial',
+	'bluetooth',
+];
+let grantStore: Promise<IDBPDatabase | null> | null = null;
+let grantsLoaded: Promise<void> | null = null;
+const grants = new Map<string, string[]>();
+const grantKey = (site: string, kind: DeviceKind, key: string) =>
+	`${site} ${kind} ${key}`;
+
+function openGrants(): Promise<IDBPDatabase | null> {
+	grantStore ??= openDB('stompDeviceGrants', 1, {
+		upgrade: (db) => {
+			db.createObjectStore('grants');
+		},
+	}).catch(() => null);
+	return grantStore;
+}
+
+function loadGrants(): Promise<void> {
+	grantsLoaded ??= (async () => {
+		const db = await openGrants();
+		if (!db) return;
+		try {
+			const tx = db.transaction('grants', 'readonly');
+			const keys = (await tx.store.getAllKeys()) as string[];
+			const values = (await tx.store.getAll()) as string[][];
+			await tx.done;
+			keys.forEach((key, i) => {
+				if (!grants.has(key))
+					grants.set(key, Array.isArray(values[i]) ? values[i] : []);
+			});
+		} catch (error) {
+			// no store: this worker's grants only
+		}
+	})();
+	return grantsLoaded;
+}
+
+/** the devices of `kind` `site` was granted */
+export async function deviceGrants(
+	site: string,
+	kind: DeviceKind,
+): Promise<DeviceGrant[]> {
+	await loadGrants();
+	const prefix = grantKey(site, kind, '');
+	const out: DeviceGrant[] = [];
+	for (const [key, services] of grants)
+		if (key.startsWith(prefix))
+			out.push({ key: key.slice(prefix.length), services });
+	return out;
+}
+
+/** `site` chose `key`: kept, with the services it named added to the ones it had */
+export async function grantDevice(
+	site: string,
+	kind: DeviceKind,
+	key: string,
+	services: string[] = [],
+) {
+	if (!key || key.length > 1024) return;
+	await loadGrants();
+	const id = grantKey(site, kind, key);
+	const kept = new Set(grants.get(id) ?? []);
+	for (const service of services.slice(0, 256))
+		if (typeof service === 'string' && service.length <= 64) kept.add(service);
+	const value = [...kept];
+	grants.set(id, value);
+	try {
+		await (await openGrants())?.put('grants', value, id);
+	} catch (error) {
+		// kept for this worker's life only
+	}
+}
+
+/** `site` forgets `key`; whether another site still holds it */
+export async function forgetDevice(
+	site: string,
+	kind: DeviceKind,
+	key: string,
+): Promise<boolean> {
+	await loadGrants();
+	const id = grantKey(site, kind, key);
+	grants.delete(id);
+	try {
+		await (await openGrants())?.delete('grants', id);
+	} catch (error) {
+		// gone for this worker's life only
+	}
+	const suffix = ` ${kind} ${key}`;
+	for (const other of grants.keys()) if (other.endsWith(suffix)) return true;
+	return false;
+}
+
+/** a document's (or a worker's) device op for `site`; null for one that is not */
+export function deviceOp(
+	site: string,
+	message: PermissionOp,
+): Promise<DeviceGrant[] | boolean> | null {
+	if (
+		(message.op !== 'devices' &&
+			message.op !== 'grant' &&
+			message.op !== 'forget') ||
+		!DEVICE_KINDS.includes(message.kind)
+	)
+		return null;
+	if (message.op === 'devices') return deviceGrants(site, message.kind);
+	const key = String(message.key);
+	if (message.op === 'forget') return forgetDevice(site, message.kind, key);
+	return grantDevice(
+		site,
+		message.kind,
+		key,
+		Array.isArray(message.services) ? message.services : [],
+	).then(() => true);
+}
+
+/**
  * A worker's questions (messages.ts PERMISSION_ROUTE): only a worker
  * client of this origin asks, and only what it may read (its site's
- * states). The site is the one its
+ * states and devices) or forget of its own site. The site is the one its
  * route named its realm by, as its storage and cookies are: `siteOf`
  * reads it from the worker's routed URL, and a claim that is not that
  * site is refused (a blob: or data: worker's URL names none: its claim,
@@ -293,6 +425,8 @@ export function registerPermissionRoute(
 			}
 			if (body.op === 'states')
 				return json(200, await documentStates(site, null));
+			if (body.op === 'devices' || body.op === 'forget')
+				return json(200, await deviceOp(site, body));
 			return refused();
 		},
 	);

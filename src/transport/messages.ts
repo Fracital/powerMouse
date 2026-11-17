@@ -677,13 +677,38 @@ export type PermissionOp =
 			 */
 			op: 'media';
 			constraints: unknown;
+	  }
+	| {
+			/** the devices of `kind` the site was granted (src/server/permissions.ts deviceGrants) */
+			op: 'devices';
+			kind: DeviceKind;
+	  }
+	| {
+			/** the site chose `key` in the browser's chooser; `services`: a Bluetooth device's */
+			op: 'grant';
+			kind: DeviceKind;
+			key: string;
+			services?: string[];
+	  }
+	| {
+			/** the site forgets `key`; answers whether another site still holds it */
+			op: 'forget';
+			kind: DeviceKind;
+			key: string;
 	  };
+/** the device APIs whose grants each site keeps */
+export type DeviceKind = 'usb' | 'hid' | 'serial' | 'bluetooth';
+/** a device a site was granted: the key the inject made of it, and a Bluetooth device's services */
+export interface DeviceGrant {
+	key: string;
+	services: string[];
+}
 /**
  * The service worker's route under an address where a worker of a proxied
  * site asks what a document asks with PERMISSION (a worker has no
  * navigator.serviceWorker to post to): a POST of the PermissionOp with
  * `site`, the worker's top-level origin as its route names it. Only
- * `states`.
+ * `states`, `devices` and `forget`.
  */
 export const PERMISSION_ROUTE = 'permission';
 /** the error a getUserMedia request ends in, as its fields */

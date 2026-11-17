@@ -354,7 +354,8 @@ refused origin, word for word. The code is deferred
 wrappers, and SpeechRecognition's and Notification's not even those until
 the page first names the interface (the only way to either; the names are
 accessors until then, which no reflection shows). The clipboard's methods
-are hooked the first time the page reads `navigator.clipboard`. Hooking on the first read of `navigator` itself would
+and a device API's grants are hooked the first time the page reads the
+navigator member. Hooking on the first read of `navigator` itself would
 save nothing: the inject reads it in every frame during the page's first
 script.
 
@@ -380,6 +381,33 @@ state or a distinctive identifier is dropped, an optional one reads
 `not-allowed`, and with none left the request ends in NotSupportedError,
 as for a key system without the feature.
 
+### Devices: USB, HID, Serial, Bluetooth
+
+Chrome keeps the devices a user chose per origin too: one site's chosen
+device was every site's (`getDevices()`, `getPorts()`, its `connect` and
+`disconnect` events), and one site's `forget()` took it from all. Now the
+service worker keeps each site's devices (IndexedDB `stompDeviceGrants`,
+by the proxied top's origin, a dedicated or shared worker asking through
+the worker's `permission` route): a device the browser's chooser returns
+is recorded for the site that asked, `getDevices()` and `getPorts()` list
+only the site's own, the connection events of another site's device are
+not dispatched, and `forget()` forgets it for the site, and for the
+browser only when no other site holds it (else the device is closed and
+reads as forgotten to that site). A Bluetooth device's `id` is the site's
+own (a hash of the browser's with the site's salt, the browser's shape),
+and its GATT server reaches only the services the site named in
+`filters` and `optionalServices`, with Chrome's SecurityError otherwise.
+The demo's frames allow `usb`, `hid`, `serial` and `bluetooth`, which
+isolation mode refused before.
+
+What cannot be helped: the chooser names the proxy origin, and lists
+every device (the site gets only the one the user picks). USB, HID and
+Serial have no emulation in Chrome, so their per-site lists are measured
+only empty and by code; Bluetooth is measured with Chrome's emulated
+adapter (`BluetoothEmulation`), which on Linux needs
+`--enable-experimental-web-platform-features` and
+`WebBluetoothNewPermissionsBackend`.
+
 ## What it covers
 
 | Permission                                                                                | Shown per site | Request gated                                                                                                |
@@ -390,6 +418,7 @@ as for a key system without the feature.
 | clipboard-read, midi, persistent-storage, local-fonts, window-management, display-capture | yes            | `read`, `readText`, `requestMIDIAccess`, `persist`, `queryLocalFonts`, `getScreenDetails`, `getDisplayMedia` |
 | speech (the microphone)                                                                   | yes            | a SpeechRecognition's `start`                                                                                |
 | idle-detection, captured-surface-control, local-network-access                            | yes            | no: the browser's API is called as the page calls it                                                         |
+| USB, HID, Serial, Bluetooth devices                                                       | yes            | the site's own devices (above)                                                                               |
 | clipboard-write, screen-wake-lock                                                         | policy only    | no                                                                                                           |
 | the rest (sensors, background-sync, payment-handler, storage-access, ...)                 | the browser's  | no                                                                                                           |
 

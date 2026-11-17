@@ -260,6 +260,11 @@ const FRAME_ALLOW = [
 	'captured-surface-control',
 	'local-network-access',
 	'speaker-selection',
+	// each site lists only the devices it chose (docs/permissions.md)
+	'usb',
+	'hid',
+	'serial',
+	'bluetooth',
 ].join('; ');
 
 const PERMISSION_WORDS = {

@@ -6,11 +6,15 @@ import {
 	type PermissionState,
 	type PermissionStates,
 } from '../../../transport/messages';
+import { hookDevices } from '../../deviceGrants';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { withStack } from '../../nativeErrors';
 import { notificationParts, type GateContext } from '../../permissionGates';
 import WorkerClient from '../Client';
+
+// taken when the bundle loads: a device's getters are checked by their source
+const nativeToString = Function.prototype.toString;
 
 /**
  * A worker's view of its site's permissions (docs/permissions.md): the
@@ -18,8 +22,9 @@ import WorkerClient from '../Client';
  * worker's route (messages.ts PERMISSION_ROUTE), as the site its route
  * names it by. Notification.permission reads the site's state as a worker
  * reads it natively (`granted`, else `denied`; `denied` until the answer
- * is in), and a notification is shown only as the site may (the
- * document's notificationParts).
+ * is in), a notification is shown only as the site may (the document's
+ * notificationParts), and navigator.usb, .hid and .serial list the site's
+ * own devices (src/inject/deviceGrants.ts).
  */
 export default class WorkerPermissionsModule extends Module<WorkerClient> {
 	apply() {
@@ -103,6 +108,39 @@ export default class WorkerPermissionsModule extends Module<WorkerClient> {
 					},
 					true,
 				);
+		}
+
+		// navigator.usb, .hid and .serial, the first time the worker reads one
+		const navigator = (global as { WorkerNavigator?: { prototype: object } })
+			.WorkerNavigator?.prototype;
+		if (!navigator) return;
+		for (const kind of ['usb', 'hid', 'serial'] as const) {
+			const descriptor = Reflect.getOwnPropertyDescriptor(navigator, kind);
+			if (!descriptor?.get) continue;
+			let done = false;
+			Reflect.defineProperty(navigator, kind, {
+				...descriptor,
+				get: proxyModule.wrapFunction(descriptor.get, (target, that, args) => {
+					const object = Reflect.apply(target, that, args);
+					if (!done && object) {
+						done = true;
+						hookDevices(
+							{
+								global,
+								wrap: (fn, wrap) => proxyModule.wrapFunction(fn, wrap),
+								ask,
+								nativeToString,
+								salt: async () => null,
+								error: (message, name) =>
+									withStack(new global.DOMException(message, name)),
+							},
+							kind,
+							object,
+						);
+					}
+					return object;
+				}),
+			});
 		}
 	}
 }

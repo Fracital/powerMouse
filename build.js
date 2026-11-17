@@ -420,6 +420,7 @@ const DEFERRED_FILES = new Set(
 		'src/blocker/procedural.ts',
 		'src/inject/bareClient.ts',
 		'src/inject/cookieStoreMethods.ts',
+		'src/inject/deviceGrants.ts',
 		'src/inject/dom/ancestorOriginsList.ts',
 		'src/inject/dom/attributeViewMethods.ts',
 		'src/inject/dom/beaconRelay.ts',

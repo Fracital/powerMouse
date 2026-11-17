@@ -96,6 +96,7 @@ import {
 import { passkeyCeremony } from './passkeys';
 import {
 	decide,
+	deviceOp,
 	deviceSalt,
 	documentStates,
 	forgetDeviceIds,
@@ -1034,6 +1035,8 @@ function handleMessage(event: ExtendableMessageEvent) {
 					ref.rpc.call('mediaVerdict', message.constraints),
 					new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
 				]);
+			const devices = deviceOp(site, message);
+			if (devices) return devices;
 			if (!SIMULATED_PERMISSIONS.includes(name)) return null;
 			if (message.op === 'request')
 				return decide(

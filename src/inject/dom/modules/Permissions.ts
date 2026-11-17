@@ -18,6 +18,9 @@ import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { deferred } from '../deferred';
 import { lazyInterface } from '../lazyInterface';
 
+// taken when the bundle loads: a device's getters are checked by their source
+const nativeToString = Function.prototype.toString;
+
 /** the permissions each site keeps (src/server/permissions.ts); push is notifications' */
 const SIMULATED = new Set([
 	'geolocation',
@@ -509,45 +512,52 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			? Reflect.getOwnPropertyDescriptor(BrowserNotification, 'permission')?.get
 			: undefined;
 		this.notifications(request, allowed, siteState);
-		this.gates(() => ({
-			global,
-			wrap: (fn, wrap, construct) =>
-				proxyModule.wrapFunction(fn, wrap, construct),
-			allowed,
-			browserRefuses: (name) => !browserAllows(FEATURE[name] ?? name),
-			siteState,
-			request,
-			direct,
-			error: (message, name) =>
-				withStack(new global.DOMException(message, name)),
-			base: () => client.baseURL.toString(),
-			route: (url) => routeBinary(new StompURL(url, client.url)),
-			site,
-			onOpen: (callback) => addDocumentOpenListener(global, callback),
-			browserNotifications: () => {
-				try {
-					return Reflect.apply(
-						browserNotifications!,
-						BrowserNotification,
-						[],
-					) as string;
-				} catch (error) {
-					return 'default';
-				}
-			},
-		}));
+		this.gates(
+			() => ({
+				global,
+				wrap: (fn, wrap, construct) =>
+					proxyModule.wrapFunction(fn, wrap, construct),
+				allowed,
+				browserRefuses: (name) => !browserAllows(FEATURE[name] ?? name),
+				siteState,
+				request,
+				direct,
+				error: (message, name) =>
+					withStack(new global.DOMException(message, name)),
+				base: () => client.baseURL.toString(),
+				route: (url) => routeBinary(new StompURL(url, client.url)),
+				site,
+				onOpen: (callback) => addDocumentOpenListener(global, callback),
+				browserNotifications: () => {
+					try {
+						return Reflect.apply(
+							browserNotifications!,
+							BrowserNotification,
+							[],
+						) as string;
+					} catch (error) {
+						return 'default';
+					}
+				},
+			}),
+			(op) => ask(op),
+		);
 	}
 
 	/**
 	 * The other APIs a permission gates, each called only as its site may
-	 * (src/inject/permissionGates.ts). The work is the deferred parts':
-	 * what is here is the wrappers, in place before the page's first
+	 * (src/inject/permissionGates.ts), and the device APIs, which list what
+	 * the site chose (src/inject/deviceGrants.ts). The work is the deferred
+	 * parts': what is here is the wrappers, in place before the page's first
 	 * script, each hooking or asking the parts at the first call or read,
 	 * and little more is kept (frame-cost): the most is the
 	 * SpeechRecognition interface (about 1.2 KB a frame), which has to be
 	 * made to be had once its names are held.
 	 */
-	gates(context: () => GateContext) {
+	gates(
+		context: () => GateContext,
+		ask: (op: PermissionOp) => Promise<unknown>,
+	) {
 		const global = this.client.global;
 		// (made at the first call or read that needs it: what a frame that
 		// never uses these APIs keeps is the wrappers)
@@ -561,6 +571,8 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		// the parts' gateCall and gateGetter (which tell each by its native)
 		const hooks: GateHooks = {
 			context: ctx,
+			ask,
+			nativeToString,
 			call: (target, that, args) =>
 				deferred().gateCall(hooks, target, that, args),
 			read: (target, that, args) =>
@@ -597,8 +609,13 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		const storage = global.StorageManager?.prototype;
 		hook(storage, 'persist');
 		hook(storage, 'persisted');
-		// the clipboard's methods, the first time navigator.clipboard is read
+		// the clipboard's methods, and a device API's grants, the first time
+		// its navigator member is read
 		hook(navigator, 'clipboard', true);
+		hook(navigator, 'usb', true);
+		hook(navigator, 'hid', true);
+		hook(navigator, 'serial', true);
+		hook(navigator, 'bluetooth', true);
 		// SpeechRecognition's start, the first time the page names the
 		// interface (by either name: webkitSpeechRecognition is the same
 		// one), the only way to it or to a recognition: hooking its prototype
