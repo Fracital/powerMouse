@@ -13,6 +13,27 @@ export default class FunctionModule extends Module<Client> {
 		// the realm's own eval, as it is before any page code (Access tags it
 		// but leaves it in place)
 		const nativeEval = global.eval;
+		// (taken before any page code: a bound function of newTarget, below)
+		const bind = Function.prototype.bind;
+		// A newTarget whose `prototype` is no object: the function's prototype
+		// is the constructor's intrinsic of newTarget's realm
+		// (GetPrototypeFromConstructor), which only the engine knows. It is
+		// asked of the native constructor with no code, through a bound
+		// function of newTarget whose own prototype chain is empty: no
+		// `prototype` is found on it (the page's getter is not read again),
+		// and the bound function's realm is newTarget's
+		const realmPrototype = (
+			target: FunctionConstructor,
+			newTarget: Function,
+		): object | null => {
+			try {
+				const bound = Reflect.apply(bind, newTarget, []) as Function;
+				Reflect.setPrototypeOf(bound, null);
+				return Reflect.getPrototypeOf(Reflect.construct(target, [], bound));
+			} catch (error) {
+				return null;
+			}
+		};
 		const functionFactory = (
 			ctor: FunctionConstructor,
 			prefix = 'function',
@@ -69,12 +90,13 @@ export default class FunctionModule extends Module<Client> {
 						if (newTarget && newTarget !== target) {
 							const prototype = (newTarget as { prototype?: unknown })
 								.prototype;
-							if (
-								((typeof prototype === 'object' && prototype !== null) ||
-									typeof prototype === 'function') &&
-								prototype !== Reflect.getPrototypeOf(made)
-							)
-								Reflect.setPrototypeOf(made, prototype as object);
+							const wanted =
+								(typeof prototype === 'object' && prototype !== null) ||
+								typeof prototype === 'function'
+									? (prototype as object)
+									: realmPrototype(target, newTarget);
+							if (wanted && wanted !== Reflect.getPrototypeOf(made))
+								Reflect.setPrototypeOf(made, wanted);
 						}
 					}
 					return made;
