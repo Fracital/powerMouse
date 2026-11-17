@@ -4,6 +4,7 @@ import Module from '../../Module';
 import { setGlobalProxy } from '../../modules/Access';
 import ProxyModule from '../../modules/Proxy';
 import { failsToParse, withStack } from '../../nativeErrors';
+import { LazyWeakMap } from '../../ownCollections';
 import DocumentClient from '../Client';
 import { deferred } from '../deferred';
 import FragmentModule from './Fragment';
@@ -46,14 +47,25 @@ export default class LocationModule extends Module<DocumentClient> {
 		const proxy = {};
 		// the page's location, or the real one it stands for
 		const ours = (that: unknown) => that === proxy || that === real;
+		// what each member's native does for the page's location, and the one
+		// call every member's wrapper makes (a call of its own for each was a
+		// closure and its scope in every frame)
+		const owns = new LazyWeakMap<Function, (args: any[]) => unknown>();
+		const call = (target: Function, that: unknown, args: any[]) =>
+			ours(that) ? owns.get(target)!(args) : Reflect.apply(target, that, args);
 		/** `native` for the page: `own` when called on its location */
 		const member = <T extends Function>(
 			native: T,
 			own: (args: any[]) => unknown,
-		): T =>
-			proxyModule.wrapFunction(native, (target, that, args) =>
-				ours(that) ? own(args) : Reflect.apply(target, that, args),
-			);
+		): T => {
+			// (a native that is two members: each its own call)
+			if (owns.has(native))
+				return proxyModule.wrapFunction(native, (target, that, args) =>
+					ours(that) ? own(args) : Reflect.apply(target, that, args),
+				);
+			owns.set(native, own);
+			return proxyModule.wrapFunction(native, call);
+		};
 		/** a javascript: URL's code, as the browser hands it a default policy */
 		const decoded = (url: string) => {
 			// (a URL keeps no tab or line break)

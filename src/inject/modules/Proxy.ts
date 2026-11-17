@@ -709,22 +709,48 @@ export default class ProxyModule extends Module<Client> {
 			own.set(key, descriptor);
 			if (descriptor.configurable) Reflect.deleteProperty(mock, key);
 		}
-		const mirror = <T extends Function>(
-			nativeFn: T,
-			mine: Function,
-			key: PropertyKey,
-		): T =>
-			this.wrapFunction(nativeFn, (target, that, args) => {
-				if (!instances.has(that)) return Reflect.apply(target, that, args);
+		// the stand-in's member each native runs, and the one call every
+		// wrapper makes: a call of its own for each member was a closure and
+		// its scope, some 50 bytes of every frame for each of some 70 members.
+		// A member's key is its native's name (`open`, `get status`).
+		const mines = new LazyWeakMap<Function, Function>();
+		const call = (target: Function, that: unknown, args: unknown[]) => {
+			if (!instances.has(that)) return Reflect.apply(target, that, args);
+			if (args.length < target.length) {
+				const name: string = target.name;
 				catchRequiredArguments(
 					args.length,
 					target.length,
 					from.name,
-					String(key),
+					name.startsWith('get ') || name.startsWith('set ')
+						? name.slice(4)
+						: name,
 					realm,
 				);
-				return Reflect.apply(mine, that, args);
-			});
+			}
+			return Reflect.apply(mines.get(target)!, that, args);
+		};
+		const mirror = <T extends Function>(
+			nativeFn: T,
+			mine: Function,
+			key: string,
+		): T => {
+			// (a native that is two members, each its own call)
+			if (mines.has(nativeFn))
+				return this.wrapFunction(nativeFn, (target, that, args) => {
+					if (!instances.has(that)) return Reflect.apply(target, that, args);
+					catchRequiredArguments(
+						args.length,
+						target.length,
+						from.name,
+						key,
+						realm,
+					);
+					return Reflect.apply(mine, that, args);
+				});
+			mines.set(nativeFn, mine);
+			return this.wrapFunction(nativeFn, call);
+		};
 		for (const key of Reflect.ownKeys(native)) {
 			const nativeDescriptor = Reflect.getOwnPropertyDescriptor(native, key)!;
 			const mine = own.get(key);

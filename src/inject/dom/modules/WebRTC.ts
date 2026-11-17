@@ -5,6 +5,7 @@ import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import WorkerModule from '../../modules/Worker';
 import { withStack } from '../../nativeErrors';
+import { LazyWeakMap } from '../../ownCollections';
 import {
 	bindDescriptors,
 	EventSource,
@@ -292,6 +293,60 @@ export default class WebRTCModule extends Module<DocumentClient> {
 				Reflect.defineProperty(prototype, key, descriptor);
 			}
 		};
+		// each prototype not dressed yet: its stand-in's name, its table and
+		// the `constructor` the stand-in gives it, and the one handler of the
+		// proxies of all of them (a handler of its own for each was a dozen
+		// closures in every frame)
+		const pendings = new LazyWeakMap<
+			object,
+			{
+				name: keyof StandIns;
+				table: WeakMap<object, Members>;
+				own: PropertyDescriptor | undefined;
+			}
+		>();
+		const ready = (target: object) => {
+			const pending = pendings.get(target);
+			if (!pending) return;
+			pendings.delete(target);
+			dress(
+				target,
+				natives[pending.name],
+				pending.table,
+				unsupported(pending.name),
+				pending.own,
+			);
+		};
+		const lazyHandler: ProxyHandler<object> = {
+			get: (t, key, receiver) => (ready(t), Reflect.get(t, key, receiver)),
+			set: (t, key, value, receiver) => (
+				ready(t),
+				Reflect.set(t, key, value, receiver)
+			),
+			has: (t, key) => (ready(t), Reflect.has(t, key)),
+			ownKeys: (t) => (ready(t), Reflect.ownKeys(t)),
+			getOwnPropertyDescriptor: (t, key) => (
+				ready(t),
+				Reflect.getOwnPropertyDescriptor(t, key)
+			),
+			defineProperty: (t, key, descriptor) => {
+				// the stand-in's constructor, set as it is made
+				const pending = pendings.get(t);
+				if (pending && key === 'constructor') {
+					pending.own = descriptor;
+					return true;
+				}
+				ready(t);
+				return Reflect.defineProperty(t, key, descriptor);
+			},
+			deleteProperty: (t, key) => (ready(t), Reflect.deleteProperty(t, key)),
+			preventExtensions: (t) => (ready(t), Reflect.preventExtensions(t)),
+			isExtensible: (t) => (ready(t), Reflect.isExtensible(t)),
+			setPrototypeOf: (t, value) => (
+				ready(t),
+				Reflect.setPrototypeOf(t, value)
+			),
+		};
 		/**
 		 * A prototype dressed (as `dress`) the first time anything looks at
 		 * it or at an object made on it, not when the document loads: the
@@ -306,42 +361,8 @@ export default class WebRTCModule extends Module<DocumentClient> {
 			table: WeakMap<object, Members>,
 		): object => {
 			const target = objectCreate(Base) as object;
-			let pending = true;
-			let own: PropertyDescriptor | undefined;
-			const ready = () => {
-				if (!pending) return;
-				pending = false;
-				dress(target, natives[name], table, unsupported(name), own);
-			};
-			return new NativeProxy(target, {
-				get: (t, key, receiver) => (ready(), Reflect.get(t, key, receiver)),
-				set: (t, key, value, receiver) => (
-					ready(),
-					Reflect.set(t, key, value, receiver)
-				),
-				has: (t, key) => (ready(), Reflect.has(t, key)),
-				ownKeys: (t) => (ready(), Reflect.ownKeys(t)),
-				getOwnPropertyDescriptor: (t, key) => (
-					ready(),
-					Reflect.getOwnPropertyDescriptor(t, key)
-				),
-				defineProperty: (t, key, descriptor) => {
-					// the stand-in's constructor, set as it is made
-					if (pending && key === 'constructor') {
-						own = descriptor;
-						return true;
-					}
-					ready();
-					return Reflect.defineProperty(t, key, descriptor);
-				},
-				deleteProperty: (t, key) => (ready(), Reflect.deleteProperty(t, key)),
-				preventExtensions: (t) => (ready(), Reflect.preventExtensions(t)),
-				isExtensible: (t) => (ready(), Reflect.isExtensible(t)),
-				setPrototypeOf: (t, value) => (
-					ready(),
-					Reflect.setPrototypeOf(t, value)
-				),
-			});
+			pendings.set(target, { name, table, own: undefined });
+			return new NativeProxy(target, lazyHandler);
 		};
 		const standIn = (
 			name: keyof StandIns,
