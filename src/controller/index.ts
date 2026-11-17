@@ -113,6 +113,7 @@ import {
 	traverse,
 	type Direction,
 	type ReportedEntry,
+	type RunsExpectation,
 	type RunState,
 	type SiteHistoryAnswer,
 	type SiteHistoryOp,
@@ -2754,6 +2755,10 @@ export class StompController extends EventTarget {
 			? this.#sites.history(origin, index, run, op)
 			: Promise.resolve(null);
 	}
+	/** @internal the site pool: tell every slot's agent `op` of the frame at `index` of this page, unanswered */
+	siteTell(index: number, op: SiteHistoryOp) {
+		this.#sites?.tell(index, op);
+	}
 	/** @internal the site pool: what the frame at `index` of the host's page shows, asked of the agent of `origin` */
 	siteFrameInfo(origin: string, index: number): Promise<SiteFrameInfo | null> {
 		return this.#sites
@@ -2988,20 +2993,46 @@ export function entriesAcross(
 	runs: readonly { origin: string; count: number }[],
 	at: number,
 ): number {
+	return entriesBeside(runs, at, -1) + entriesBeside(runs, at, 1);
+}
+/** entriesAcross on one side of the run at `at`: before it (`step` -1) or after it (1) */
+function entriesBeside(
+	runs: readonly { origin: string; count: number }[],
+	at: number,
+	step: number,
+): number {
 	const current = runs[at];
 	if (!current) return 0;
 	let across = 0;
-	for (const step of [-1, 1]) {
-		let joined = true;
-		for (let i = at + step; i >= 0 && i < runs.length; i += step) {
-			const run = runs[i];
-			if (joined && run.count === 0) continue;
-			if (joined && run.origin === current.origin) continue;
-			joined = false;
-			across += run.count;
-		}
+	let joined = true;
+	for (let i = at + step; i >= 0 && i < runs.length; i += step) {
+		const run = runs[i];
+		if (joined && run.count === 0) continue;
+		if (joined && run.origin === current.origin) continue;
+		joined = false;
+		across += run.count;
 	}
 	return across;
+}
+/**
+ * What every agent is told of a frame's runs, for the next document of the
+ * frame (history.ts RunsExpectation), null while it has none
+ */
+export function runsExpectation(
+	runs: readonly { origin: string; count: number; index: number }[],
+	at: number,
+): RunsExpectation | null {
+	const current = runs[at];
+	return current
+		? {
+				kind: 'expect',
+				origin: current.origin,
+				before: entriesBeside(runs, at, -1),
+				index: current.index,
+				count: current.count,
+				after: entriesBeside(runs, at, 1),
+			}
+		: null;
 }
 /** a run's entries after the frame left it for a new one at `index` (a replace took that entry with it) */
 export function prunedRun(
@@ -3172,10 +3203,12 @@ export class Frame extends EventTarget {
 							if (this.#at >= index) this.#at--;
 						}
 					}
+					this.#expect();
 					this.#changed();
 				});
 			}
 			if (previous || run.state === FRESH) this.#hostNavigation = false;
+			this.#expect();
 			try {
 				// (and how many of the frame's entries are in other runs: its
 				// document's history.length counts them)
@@ -3189,6 +3222,27 @@ export class Frame extends EventTarget {
 				deliver();
 			}
 		});
+	}
+	/** what every agent was last told of the frame's runs (#expect) */
+	#expected = '';
+	/**
+	 * Tell every agent (and this realm, for a site shown without the pool)
+	 * where the frame is in its runs: the frame's next document, of any of
+	 * their origins, counts the other slots' entries from its first script
+	 * (history.ts expectRuns)
+	 */
+	#expect() {
+		const op = runsExpectation(this.#runs, this.#at);
+		const key = JSON.stringify(op);
+		if (!op || key === this.#expected) return;
+		this.#expected = key;
+		const index = this.#index();
+		const win = window[index] as Window | undefined;
+		if (!win) return;
+		answerRun(win, 0, op, helperNames(this.controller.config).client).catch(
+			() => {},
+		);
+		this.controller.siteTell(index, op);
 	}
 	/** which run a report from `origin` is of: a step under way, the current run, the one before or after it (the page's own step past its run), else a new one after the current */
 	#place(

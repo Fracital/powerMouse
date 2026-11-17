@@ -9,7 +9,9 @@
 // location, which must stay refused. Each case is one top page loaded
 // natively and then in both demo modes; for each the suite compares what
 // the script caught (class, name and message), whether the top navigated,
-// whether it made a history entry, what the next document saw as
+// whether it made a history entry (history.length as the next document
+// reads it at its first script and half a second in: with the site pool the
+// other slots' entries are counted from the first), what it saw as
 // document.referrer, the Referer, Origin and Sec-Fetch-* headers of its
 // request, the console messages Chrome printed about the navigation, and
 // the resource timing entries the initiating document has from its call on
@@ -19,7 +21,9 @@
 // compared: the frame's fresh browsing context makes none through the proxy
 // (docs/same-origin-policy.md, "A frame that is to show another origin").
 // TOP_NAV_DUMP=<file> writes every case's three answers there, and
-// TOP_NAV_ONLY=<text> runs the cases whose name has it.
+// TOP_NAV_ONLY=<text> runs the cases whose name has it. A case that lands
+// natively waits for its landing here at most 30 s (8 s once two have not
+// landed), so a mode that breaks them all still ends inside the timeout.
 import { readFileSync, writeFileSync } from 'node:fs';
 import {
 	done,
@@ -98,7 +102,7 @@ async function runCase(name, key, { open, frames, messages, settle }) {
 		await sleep(200);
 		got = await beacons(key);
 		if (got.result && resultAt === null) resultAt = Date.now();
-		if (got.result && got.landed && got.entries) break;
+		if (got.result && got.landed && got.later && got.entries) break;
 		// (the entries come as the document goes, or a moment after its call)
 		const waited = resultAt === null ? -Infinity : Date.now() - resultAt;
 		if (
@@ -128,10 +132,15 @@ async function runCase(name, key, { open, frames, messages, settle }) {
 		...(got.landed
 			? {
 					landedTop: got.landed.top,
-					// (a frame's: see the header)
+					// (a frame's: see the header) as the document reads it
+					// half a second in, and at its first script
 					...(got.landed.top
 						? {
 								entry:
+									got.top && typeof got.later?.length === 'number'
+										? got.later.length - got.top.length
+										: null,
+								entryFirst:
 									got.top && typeof got.landed.length === 'number'
 										? got.landed.length - got.top.length
 										: null,
@@ -222,6 +231,10 @@ for (const [mode, base] of [
 	const messages = [];
 	let page = null;
 	let first = true;
+	// navigations that landed natively and not here: past two, the rest get
+	// a shorter wait, so a mode that lands none fails in minutes, not by the
+	// suite's timeout
+	let misses = 0;
 	for (const name of NAMES) {
 		// a demo page of its own every few cases: its tabs share one session
 		// history, which stops at 50 entries
@@ -246,9 +259,14 @@ for (const [mode, base] of [
 				// a navigation that lands natively may take a while here; one that
 				// does not is given a few seconds to show it does not
 				settle: (result) =>
-					native.landed && result.threw === null ? 30000 : 5000,
+					native.landed && result.threw === null
+						? misses < 2
+							? 30000
+							: 8000
+						: 5000,
 			},
 		);
+		if (native.landed && !proxied.landed) misses++;
 		answers[name][mode] = proxied;
 		ok(
 			`${mode}: ${name}: as natively`,

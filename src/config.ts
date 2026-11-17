@@ -223,6 +223,17 @@ export interface SitesConfig {
  */
 export const SITE_FOCUS = '$stomp$siteFocus';
 
+/**
+ * The site pool: the property of a slot's agent window (and of the hub's,
+ * the controller frame's, for a site shown without the pool) that holds
+ * what the hub last told of each of its frames' runs of history
+ * (src/controller/history.ts expectRuns): the length a top document's
+ * history has when the browser navigated the frame to it by a push, and by
+ * a replace or reload, which it reads as it starts (the Navigate module),
+ * before the hub's count of the other slots' entries reaches it
+ */
+export const SITE_RUNS = '$stomp$siteRuns';
+
 export interface ParsedConfig extends Omit<Config, 'codec'> {
 	codec: GenericCodec;
 }

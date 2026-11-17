@@ -277,6 +277,7 @@ import {
 	recordNavigationInitiator,
 	takeNavigationHint,
 	takeNavigationInitiator,
+	type NavigationInitiator,
 } from './navigationHints';
 import {
 	ORB_SNIFF_BYTES,
@@ -676,6 +677,9 @@ export async function siteDeparture(
 	frame = false,
 ): Promise<Omit<SiteArrival, 'path'> & { refused?: string }> {
 	const returned = takeReturn(request.url);
+	// a document that started a navigation of another window made from that
+	// window's realm (INITIATOR_ROUTE) is its initiator there too
+	const initiated = takeNavigationInitiator(real);
 	const referrer = returned
 		? returned.referrer
 		: request.referrer && request.referrer !== 'about:client'
@@ -718,6 +722,16 @@ export async function siteDeparture(
 		...(hint ? { hint } : {}),
 		...(hop ? { hop } : {}),
 		...(chain ? { chain } : {}),
+		...(initiated
+			? {
+					initiator: {
+						...initiated,
+						referrer: initiated.referrer.startsWith(own)
+							? initiated.referrer.slice(own.length - 1)
+							: '',
+					},
+				}
+			: {}),
 	};
 }
 
@@ -772,6 +786,22 @@ export function siteArrived(
 	}
 	if (arrival.hint && typeof arrival.hint === 'object')
 		recordNavigationHint(real, arrival.hint as NavigationHint);
+	// (its routed path on this origin, as the referrer's)
+	const initiator = arrival.initiator as
+		Partial<NavigationInitiator> | undefined;
+	if (
+		typeof initiator?.referrer === 'string' &&
+		typeof initiator.policy === 'string' &&
+		typeof initiator.origin === 'string'
+	)
+		recordNavigationInitiator(real, {
+			referrer: initiator.referrer.startsWith('/')
+				? `${origin}${initiator.referrer}`
+				: '',
+			policy: initiator.policy,
+			origin: initiator.origin,
+			activated: initiator.activated === true,
+		});
 	// the page policies that judge the chain's later hops and the frame's
 	// real ancestors, as the documents that started it told the first slot
 	const chain = arrival.chain;
@@ -6250,7 +6280,13 @@ export function registerRewrites(
 			if (!found?.url.startsWith(prefix)) return refused();
 			let origin: string;
 			let target: URL;
-			let body: { url?: unknown; activated?: unknown; opaque?: unknown };
+			let body: {
+				url?: unknown;
+				activated?: unknown;
+				opaque?: unknown;
+				ask?: unknown;
+				initiator?: unknown;
+			};
 			try {
 				origin = parseRoutedURL(found.url, rewriter.codec, prefix).url.url
 					.origin;
@@ -6263,12 +6299,60 @@ export function registerRewrites(
 			}
 			if (!/^https?:$/.test(target.protocol)) return refused();
 			const opaque = body.opaque === true;
-			recordNavigationInitiator(target.href, {
-				referrer: opaque ? '' : found.url,
+			const referrer = opaque ? '' : found.url;
+			// the site pool: a frame about to ask a window of another slot to
+			// navigate (src/inject/dom/siteAcross.ts) asks what would be
+			// recorded of it, which goes with the request; nothing is recorded
+			// here, where the navigation does not arrive
+			if (body.ask === true)
+				return new Response(
+					JSON.stringify({ referrer, policy: serverRequest.referrerPolicy }),
+					{
+						headers: {
+							'content-type': 'application/json',
+							'cache-control': 'no-store',
+						},
+					},
+				);
+			const initiator: NavigationInitiator = {
+				referrer,
 				policy: serverRequest.referrerPolicy,
 				origin: opaque ? 'null' : origin,
 				activated: body.activated === true,
-			});
+			};
+			// and the window it asked, navigating itself for it: the frame's
+			// route (another slot's, read as the same route on this origin)
+			// and policy, as its worker answered them; a frame of another
+			// slot is of another site, so its activation counts for nothing
+			const told = body.initiator as
+				{ referrer?: unknown; policy?: unknown } | null | undefined;
+			if (told !== undefined) {
+				if (
+					typeof told?.referrer !== 'string' ||
+					typeof told.policy !== 'string' ||
+					told.policy.length > 64
+				)
+					return refused();
+				initiator.policy = told.policy as ReferrerPolicy;
+				initiator.activated = false;
+				initiator.referrer = '';
+				initiator.origin = 'null';
+				if (told.referrer)
+					try {
+						const from = new URL(told.referrer);
+						if (!proxyOrigins(rewriter.config).includes(from.origin))
+							return refused();
+						initiator.referrer = `${new URL(serverRequest.url).origin}${from.pathname}${from.search}`;
+						initiator.origin = parseRoutedURL(
+							initiator.referrer,
+							rewriter.codec,
+							prefix,
+						).url.url.origin;
+					} catch (error) {
+						return refused();
+					}
+			}
+			recordNavigationInitiator(target.href, initiator);
 			return new Response(null, {
 				status: 204,
 				headers: { 'cache-control': 'no-store' },

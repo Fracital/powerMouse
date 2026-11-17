@@ -261,12 +261,38 @@ function makeSiteWindows() {
 	 * show the sites: the frames of the real top are read from the last, then
 	 * theirs. A window of another origin refuses the read, and the agent made
 	 * the property for good before any document of its slot existed, so a
-	 * document of the slot cannot have made it first.
+	 * document of the slot cannot have made it first. `client`: the property is
+	 * one the agent changes (SITE_RUNS), read from the real top too (the hub's
+	 * own, for a site shown without the pool) and from no window that holds a
+	 * document's client under that name (a proxied page's, which may have made
+	 * it).
 	 */
-	function slotAgentShare(global: typeof globalThis, name: string): unknown {
+	function slotAgentShare(
+		global: typeof globalThis,
+		name: string,
+		client?: string,
+	): unknown {
 		try {
-			let level: object[] = [Reflect.apply(nativeTopOf!, global, []) as object];
+			const top = Reflect.apply(nativeTopOf!, global, []) as object;
+			let level: object[] = [top];
 			let read = 0;
+			const held = (window: object) => {
+				const value = Reflect.getOwnPropertyDescriptor(window, name);
+				return value &&
+					'value' in value &&
+					(client
+						? !Reflect.getOwnPropertyDescriptor(window, client)
+						: !value.configurable && !value.writable)
+					? value
+					: undefined;
+			};
+			if (client && top !== global)
+				try {
+					const value = held(top);
+					if (value) return value.value;
+				} catch (error) {
+					// another origin's
+				}
 			for (let depth = 0; depth < 2 && read < AGENT_SEARCH; depth++) {
 				const below: object[] = [];
 				for (const parent of level) {
@@ -275,16 +301,15 @@ function makeSiteWindows() {
 						read++;
 						const child = Reflect.get(parent, i) as object | undefined;
 						if (!child || child === global) continue;
-						let held: PropertyDescriptor | undefined;
+						let value: PropertyDescriptor | undefined;
 						try {
-							held = Reflect.getOwnPropertyDescriptor(child, name);
+							value = held(child);
 						} catch (error) {
 							// another origin's: the hub's controller frame, another slot's
 							below.push(child);
 							continue;
 						}
-						if (held && !held.configurable && !held.writable && 'value' in held)
-							return held.value;
+						if (value) return value.value;
 					}
 				}
 				level = below;

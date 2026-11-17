@@ -110,6 +110,8 @@ import { presentationIds } from './presentations';
 import { rtcInstall } from './rtcInstall';
 import {
 	acceptAcross,
+	ancestorAcross,
+	locationAcross,
 	navigateAcross,
 	submitAimed,
 	targetAcross,
@@ -184,6 +186,8 @@ const parts = {
 	targetAcross,
 	navigateAcross,
 	acceptAcross,
+	ancestorAcross,
+	locationAcross,
 	submitAimed,
 	judgeAcross,
 	receiveAcross,

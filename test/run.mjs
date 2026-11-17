@@ -57,6 +57,9 @@ const SUITE_TIMEOUT_MINUTES = {
 	// a dozen kinds of page, each loaded natively and in both modes, one
 	// battery of frames and workers after another
 	'cross-origin-isolation': 30,
+	// 78 cases loaded natively and in both modes, each until its landing
+	// and its reports: about eight minutes alone
+	'top-navigation': 15,
 };
 // what a suite's demo server needs beyond the defaults
 const SUITE_ENV = {

@@ -18,11 +18,11 @@ import type {
 	SiteHistoryAnswer,
 	SiteHistoryOp,
 } from './history';
-import { entriesAcross, prunedRun } from './index';
+import { entriesAcross, prunedRun, runsExpectation } from './index';
 
 /** what a frame's runs need of the frame that keeps them */
 export interface SiteRunsHost {
-	/** ask the agent of `origin` (the controller frame, for its own origin) about run `run` of the frame */
+	/** ask the agent of `origin` (the controller frame, for its own origin; every one, unanswered, for '*') about run `run` of the frame */
 	ask(
 		origin: string,
 		run: number,
@@ -143,10 +143,12 @@ export class SiteRuns {
 							if (this.#at >= index) this.#at--;
 						}
 					}
+					this.#expect();
 					this.host.changed();
 				});
 			}
 			if (previous || run.state === FRESH) this.#hostNavigation = false;
+			this.#expect();
 			try {
 				// (and how many of the frame's entries are in other runs: its
 				// document's history.length counts them)
@@ -158,6 +160,16 @@ export class SiteRuns {
 				deliver();
 			}
 		});
+	}
+	/** what every agent was last told of the frame's runs (#expect) */
+	#expected = '';
+	/** tell every agent where the frame is in its runs (see Frame #expect): `ask` of origin '*' */
+	#expect() {
+		const op = runsExpectation(this.#runs, this.#at);
+		const key = JSON.stringify(op);
+		if (!op || key === this.#expected) return;
+		this.#expected = key;
+		this.host.ask('*', 0, op).catch(() => {});
 	}
 	/** which run a report from `origin` is of (see Frame #place) */
 	#place(

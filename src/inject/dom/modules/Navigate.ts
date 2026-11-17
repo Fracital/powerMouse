@@ -1,3 +1,4 @@
+import { SITE_RUNS } from '../../../config';
 import {
 	ACTIVATED,
 	CLIENT_ID,
@@ -12,6 +13,7 @@ import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { activationState, markActivation, noteInput } from '../activation';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import { Pool } from '../pool';
 import { siteWindows } from '../siteWindows';
 import HistoryModule from './History';
 
@@ -275,6 +277,32 @@ export default class NavigateModule extends Module<DocumentClient> {
 		const navigationType = moduleClient.sites
 			? siteWindows().activationType(global)
 			: null;
+		// the site pool: the frame's entries in other slots' stretches, which
+		// the browser lists this document none of, as the hub last told the
+		// agent of its slot, for its first script (the hub's count of them
+		// comes after it); a traversal waits for that count
+		if (navigationType) {
+			const type = navigationType();
+			const run = history.ownRun?.() ?? null;
+			const told = siteWindows().slotAgentShare(
+				global,
+				SITE_RUNS,
+				moduleClient.names.client,
+			);
+			if (run && Array.isArray(told) && /^(push|replace|reload)$/.test(type))
+				for (const entry of told as {
+					frame: unknown;
+					push: unknown;
+					replace: unknown;
+				}[]) {
+					const length = type === 'push' ? entry.push : entry.replace;
+					if (entry.frame === global && typeof length === 'number') {
+						moduleClient.pool[Pool.HistoryAcross] =
+							Math.max(0, length - run[1]) || 0;
+						break;
+					}
+				}
+		}
 
 		// the icon as the page declared it: the attribute the page wrote
 		// (getAttribute hands back the original), resolved against the real URL

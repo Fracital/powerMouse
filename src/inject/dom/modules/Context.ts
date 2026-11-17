@@ -613,19 +613,23 @@ export default class ContextModule extends Module<DocumentClient> {
 			return false;
 		}
 	}
-	/** whether this document reaches `context` or one of its proxied ancestors */
+	/**
+	 * whether this document reaches `context` or one of its proxied
+	 * ancestors (by the browser's own parents: with the site pool one may be
+	 * of another slot, out of reach, and one above it of this document's)
+	 */
 	#reachesAncestor(context: unknown): boolean {
-		let current = this.#clientOf(context);
+		let current = context;
 		for (let depth = 0; current && depth < 64; depth++) {
-			if (this.#reaches(current.global)) return true;
-			let parent: Context;
+			if (this.#reaches(current)) return true;
+			let parent: unknown;
 			try {
-				parent = current.parent;
+				parent = siteWindows().nativeParentOf(current);
 			} catch (error) {
 				return false;
 			}
-			if (parent === current.global) return false;
-			current = this.#clientOf(parent);
+			if (parent === current) return false;
+			current = parent;
 		}
 		return false;
 	}
@@ -643,14 +647,19 @@ export default class ContextModule extends Module<DocumentClient> {
 	 * click long ago counts) or the destination is of the top's origin (or
 	 * registrable domain, of its scheme); Chrome's framebusting
 	 * intervention refuses the rest. A javascript: URL goes only to a
-	 * window this document reaches.
+	 * window this document reaches. `across`: the site pool's ancestor of
+	 * another slot (siteAcross.ts ancestorAcross), with no client in reach.
 	 */
-	#refusal(target: Context, destination: URL): string | null {
+	#refusal(
+		target: Context,
+		destination: URL,
+		across?: { top: boolean; origin: string },
+	): string | null {
 		const client = this.client;
 		if (target === client.global) return null;
 		if (destination.protocol === 'javascript:' && !this.#reaches(target))
 			return 'The frame attempting navigation must be same-origin with the target if navigating to a javascript: url';
-		const top = client.proxiedTop;
+		const top = across ? (across.top ? target : null) : client.proxiedTop;
 		if (client.sandboxFlags !== null) {
 			if (client.mayNavigate(target)) return null;
 			if (target !== top)
@@ -691,8 +700,17 @@ export default class ContextModule extends Module<DocumentClient> {
 				// no user activation API
 			}
 			if (active) return null;
-			const topURL = targetClient?.url.url;
-			if (topURL && !targetClient!.sandboxedOpaque) {
+			let topURL: URL | undefined;
+			try {
+				topURL = across
+					? new URL(across.origin)
+					: targetClient?.sandboxedOpaque
+						? undefined
+						: targetClient?.url.url;
+			} catch (error) {
+				// an opaque top ("null")
+			}
+			if (topURL) {
 				if (topURL.origin === destination.origin) return null;
 				const domain = registrableDomainOf(topURL.hostname);
 				if (
@@ -716,6 +734,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		reason: string,
 		member: 'href' | 'assign' | 'replace',
 		destination: URL,
+		origin = this.#clientOf(target)?.origin ?? 'null',
 	): DOMException {
 		const client = this.client;
 		let from: string;
@@ -726,7 +745,6 @@ export default class ContextModule extends Module<DocumentClient> {
 		} catch (error) {
 			from = '';
 		}
-		const origin = this.#clientOf(target)?.origin ?? 'null';
 		try {
 			Reflect.apply(nativeConsoleError, client.global.console, [
 				`Unsafe attempt to initiate navigation for frame with origin '${origin}' from frame with URL '${from}'. ${reason}\n`,
@@ -761,10 +779,30 @@ export default class ContextModule extends Module<DocumentClient> {
 			client.baseURL.toString(),
 		);
 		const targetClient = this.#clientOf(target);
-		// a window that runs nothing yet (a popup or frame still on its
-		// initial about:blank): only a sandbox decides, and the browser lets
-		// this document navigate it
 		if (!targetClient) {
+			// the site pool: an ancestor of another slot, out of reach: refused
+			// here as Chrome refuses it, else asked to navigate itself to an
+			// http(s) URL (siteAcross.ts)
+			const across =
+				client.sites && foreignWindow(target)
+					? deferred().ancestorAcross(client, target)
+					: null;
+			const reason = across && this.#refusal(target, destination, across);
+			if (reason)
+				throw this.#refuse(target, reason, member, destination, across!.origin);
+			if (across && /^https?:$/.test(destination.protocol)) {
+				deferred().locationAcross(
+					client,
+					this.#voucher(),
+					target,
+					destination.href,
+					member === 'replace',
+				);
+				return;
+			}
+			// a window that runs nothing yet (a popup or frame still on its
+			// initial about:blank): only a sandbox decides, and the browser lets
+			// this document navigate it
 			if (!client.mayNavigate(target))
 				throw client.navigationRefused(member, member !== 'href', destination);
 			target.location.replace(

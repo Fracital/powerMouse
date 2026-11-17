@@ -479,6 +479,56 @@ page is such a frame. Without the pool the popups of these two rows lose
 their opener under the isolated host too: a sandboxed frame's origin is
 opaque, so it is another origin than the top's as well.
 
+## A frame's script that navigates an ancestor of another slot
+
+A frame that sets `top.location`, `top.location.href` or
+`parent.location`, or calls `top.location.replace()`, is refused or let
+through by the Context module as Chrome's LocalFrame::CanNavigate decides
+(docs/same-origin-policy.md), and the target window then navigates itself
+through its own Location (its route, its history entry, or none for
+`replace`). When the target is an ancestor of another slot, the frame has
+no client of it to ask, and before this the call went to the browser,
+which refused it for the host's sandbox: every such case threw a
+SecurityError (or navigated nothing) where Chrome navigates the top, and
+Chrome's own console line named the slot's routed URLs.
+
+The decision stays in the frame and synchronous, from what the frame
+knows of the target without reaching it (siteAcross.ts `ancestorAcross`):
+whether it is the proxied top (`siteTop`), its origin (the top's from the
+frame's route, `topOrigin`; another ancestor's from `ancestorOrigins`),
+and whether the frame reaches it or a window above it (by the browser's
+own `parent`, which reads across origins). A sandboxed frame decides by its
+sandbox as it has it (its route's tokens when its element is of another
+slot: `mayNavigate` now takes the proxied top of another slot for the
+top), so a frame without `allow-top-navigation` is still refused, with
+Chrome's message. The refusals (the framebusting intervention, a sandbox's,
+"neither same-origin with the target...") throw Chrome's SecurityError in
+the frame, and a read of the top's `location.href` or `assign` still
+throws as the browser's own.
+
+A navigation let through goes across in the pool's envelope (`kind:
+'location'`, with `replace`): the frame first asks its own worker what it
+would record of itself as the initiator (INITIATOR_ROUTE with `ask`: its
+routed URL, '' when opaque, and the referrer policy the browser gave its
+request), the target, when the sender is a frame under it, tells its own
+worker those facts (the route read as the same route on its origin, the
+origin parsed from it; a URL off the pool's origins is refused), and then
+navigates itself. Each step is bounded at 1 s, so a worker that does not
+answer delays the navigation that long at most, and nothing starts in the
+frame's own task. A frame of another slot is another site than the
+target, so Sec-Fetch-User is never sent, as natively. When the
+destination is a site of a third slot (a frame of B sending the top of A
+to B), the target's worker hands the initiator on with the 307
+(`SiteArrival.initiator`), so the document arrives with the frame's
+Referer and Sec-Fetch-Site. Only http(s) URLs go across; another scheme
+the frame may use is refused by the browser, as before.
+
+top-navigation, with the pool on, compares with Chrome 157: none of its
+66 cases differs in either half, where 48 differed in each (the suite as
+it is now, at the commit before; the history.length a landed document
+reads at its first script among them, below under "Isolation mode's
+halves of the suites").
+
 ## What a deployment needs
 
 - The proxy's host answering on the pool's ports as it does on its own,
@@ -944,8 +994,19 @@ host-page side lacked:
   document's slot how many the other runs hold (the runs' `sync`), which
   sets it on the document's client (`historyAcross`); `history.length`
   adds it. The count reaches a document with the hub's answer to its
-  first report: a page's first script reads its own slot's stretch only
-  (not measured).
+  first report, after its first script; for that script the hub tells
+  every agent, after each report, where the frame is in its runs (the
+  entries before and after its run, its place and count in it:
+  `RunsExpectation`, src/controller/history.ts; an agent started later
+  is told once it is ready, before its slot shows anything), the agent
+  keeps on its window (SITE_RUNS) the length of the frame's history for
+  its next document of the agent's origin, after a push and after a
+  replace or reload, and the document's Navigate module counts the rest
+  as it starts.
+  A traversal is not told: its document reads its own slot's stretch
+  until the hub's count arrives. top-navigation measures both (the
+  history.length a landed document reads at its first script and half a
+  second in).
 
 The visited suite also applied its pool expectations to the same-origin
 half alone: with the pool a frame of B under A is another slot's, so its
@@ -1203,13 +1264,6 @@ suite named passes with it off (`STOMP_SITE_POOL=0`).
 - **Sites that share a slot** are as coupled as without a pool, for good:
   a site cannot move without its data. Six ports are five slots, and an ad
   page has more sites than that.
-- **A frame that navigates the tab from another slot by script**
-  (`top.location = url`, `parent.location.href = url`): the browser
-  refuses it with a SecurityError, as it does with the single-origin
-  controller (the host frames the proxied top sandboxed, and a sandboxed
-  frame navigates no ancestor); natively the top navigates. A link, a
-  form or `window.open()` aimed at `_top` or `_parent` does navigate it
-  (below).
 - **Passkeys** (docs/passkeys.md): STomp's passkey provider does not
   reach the slots yet. A slot's agent runs its controller without the
   host's `passkeys` option and its worker has no host to ask, so a slot's

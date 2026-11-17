@@ -687,6 +687,31 @@ export class SiteHub {
 			return null;
 		}
 	}
+	/** what every agent was told last of each frame of this page (tell), for an agent started since */
+	#told = new Map<Window, SiteHistoryOp>();
+	/** tell every agent `op` of the frame at `index` of this page, unanswered (AgentBound.history) */
+	tell(index: number, op: SiteHistoryOp) {
+		const win = this.#host.framesUp === 2 ? window.parent : window;
+		const frame = win[index] as Window | undefined;
+		if (frame) this.#told.set(frame, op);
+		for (const agent of this.#agents.values()) this.#tell(agent, index, op);
+	}
+	/** (once the agent is ready: the hub's first call is its `ready`) */
+	#tell(agent: Agent, index: number, op: SiteHistoryOp) {
+		agent.ready
+			.then(() => agent.rpc.call('history', { index, run: 0, op }))
+			.catch(() => {});
+	}
+	/** tell an agent started since what the others were told of the frames' runs */
+	#tellAll(agent: Agent) {
+		const page = this.#host.framesUp === 2 ? window.parent : window;
+		for (const [frame, op] of this.#told) {
+			let index = -1;
+			for (let i = 0; i < page.length; i++) if (page[i] === frame) index = i;
+			if (index === -1) this.#told.delete(frame);
+			else this.#tell(agent, index, op);
+		}
+	}
 	/** ask the agent of `origin` what the frame at `index` of the page shows (AgentBound.frameInfo) */
 	async frameInfo(
 		origin: string,
@@ -829,6 +854,7 @@ export class SiteHub {
 				),
 			]),
 		};
+		this.#tellAll(agent);
 		// the agent's frame said hello (its document runs)
 		let greeted = false;
 		agent.start = () => {

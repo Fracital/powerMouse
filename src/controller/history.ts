@@ -26,6 +26,8 @@
 // narrowed to its own origin's entries (src/inject/dom/modules/History.ts),
 // and a page can replace them.
 
+import { SITE_RUNS } from '../config';
+
 /** how long to wait for a traversal to commit before reporting it anyway */
 const COMMIT_TIMEOUT = 10000;
 /**
@@ -1117,7 +1119,53 @@ export type SiteHistoryOp =
 	| { kind: 'forward' }
 	| { kind: 'go'; delta: number }
 	| { kind: 'arrive'; state: number }
-	| { kind: 'leave'; decide: boolean; replaced?: boolean };
+	| { kind: 'leave'; decide: boolean; replaced?: boolean }
+	| RunsExpectation;
+
+/**
+ * What the hub last knew of a frame's runs (`expect`, told to every agent):
+ * the origin of the run the frame is in, its entries in the runs before and
+ * after it (src/controller/index.ts entriesBeside) and where the frame is in
+ * its own (HISTORY_RUN)
+ */
+export interface RunsExpectation {
+	kind: 'expect';
+	origin: string;
+	before: number;
+	index: number;
+	count: number;
+	after: number;
+}
+
+/** what this realm last heard of each frame's runs (expectRuns) */
+const expected = new Map<Window, { push: number; replace: number }>();
+
+/**
+ * The site pool: keep what the hub told of `win`'s runs, as the length of
+ * the history of a next document of this realm's origin in it, where a top
+ * document reads it as it starts (SITE_RUNS): a push keeps the entries up to
+ * the frame's and adds one; a replace or reload keeps them all when the
+ * frame stays in its run's origin, else (the hub's count) the ones up to
+ * the frame's. The browser lists that document its own stretch of them, and
+ * it counts the rest (the Navigate module), until the hub's count (`sync`)
+ * reaches it.
+ */
+function expectRuns(win: Window, op: RunsExpectation) {
+	const same = op.origin === location.origin;
+	expected.set(win, {
+		push: op.before + op.index + 2,
+		replace: same ? op.before + op.count + op.after : op.before + op.index + 1,
+	});
+	for (const frame of expected.keys()) if (frame.closed) expected.delete(frame);
+	Reflect.defineProperty(window, SITE_RUNS, {
+		value: Object.freeze(
+			[...expected].map(([frame, lengths]) =>
+				Object.freeze({ frame, ...lengths }),
+			),
+		),
+		configurable: true,
+	});
+}
 
 /** whether the op was done (a step there was to take), and the run's state after it */
 export interface SiteHistoryAnswer {
@@ -1137,6 +1185,10 @@ export async function answerRun(
 	op: SiteHistoryOp,
 	name: string,
 ): Promise<SiteHistoryAnswer> {
+	if (op.kind === 'expect') {
+		expectRuns(win, op);
+		return { done: true, state: null };
+	}
 	let readable = false;
 	try {
 		readable = name in win;

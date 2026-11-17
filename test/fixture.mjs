@@ -777,15 +777,17 @@ export function startFixture(port = 8084) {
 			}
 			// `&html`: a document that reports what it saw as it loaded
 			// (top-navigation suite): its referrer, whether it is the top and
-			// its history.length, as an /echo-post beacon of shape `landed`
+			// its history.length, as an /echo-post beacon of shape `landed`,
+			// and its history.length again half a second later (`later`)
 			if (query.has('html')) {
 				res.setHeader('content-type', 'text/html; charset=utf-8');
 				res.setHeader('cache-control', 'no-store');
-				const beacon = JSON.stringify(
-					`/echo-post?k=${encodeURIComponent(query.get('k') ?? '')}&shape=landed`,
-				).replace(/</g, '\\u003c');
+				const beacon = (shape) =>
+					JSON.stringify(
+						`/echo-post?k=${encodeURIComponent(query.get('k') ?? '')}&shape=${shape}`,
+					).replace(/</g, '\\u003c');
 				return res.end(
-					`<!doctype html><title>landed</title><script>navigator.sendBeacon(${beacon}, JSON.stringify({referrer: document.referrer, top: window === top, length: history.length}))</script>`,
+					`<!doctype html><title>landed</title><script>navigator.sendBeacon(${beacon('landed')}, JSON.stringify({referrer: document.referrer, top: window === top, length: history.length})); setTimeout(function () { navigator.sendBeacon(${beacon('later')}, JSON.stringify({length: history.length})); }, 500)</script>`,
 				);
 			}
 			res.setHeader('content-type', 'application/json');

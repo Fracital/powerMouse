@@ -212,13 +212,30 @@ type ParsingState = 'parsingBeforeWrite' | void;
 export type StyleElement = HTMLStyleElement | SVGStyleElement;
 
 /**
+ * The site pool: who started a navigation across slots, as the worker of
+ * the frame that did would record it (INITIATOR_ROUTE): its routed URL ('' for
+ * an opaque origin) and the referrer policy of its request
+ */
+export interface AcrossInitiator {
+	referrer: string;
+	policy: string;
+}
+
+/**
  * The site pool: a navigation a frame asks a window of another slot to
  * make of itself (DocumentClient navigateAcross): a link's or
- * window.open's URL, or a form's submission (its attributes, its action
- * and the entry list the frame's browser built)
+ * window.open's URL, a form's submission (its attributes, its action
+ * and the entry list the frame's browser built), or a script's location
+ * set or replace of an ancestor (Context module) with its initiator
  */
 export type AcrossNavigation =
 	| { kind: 'link'; url: string }
+	| {
+			kind: 'location';
+			url: string;
+			replace: boolean;
+			initiator?: AcrossInitiator;
+	  }
 	| {
 			kind: 'form';
 			action: string;
@@ -2631,7 +2648,16 @@ export default class DocumentClient extends Client {
 			if (parent === context) break;
 			context = parent;
 		}
-		if (target !== this.proxiedTop) return false;
+		// (the site pool: the top of the proxied world may be another slot's,
+		// out of reach)
+		if (
+			target !== this.proxiedTop &&
+			!(
+				this.sites &&
+				target === siteWindows().siteTop(this.global, this.sites.hub)
+			)
+		)
+			return false;
 		const activated = (activationState(this) & 1) !== 0;
 		// a document of another origin than its top's (an opaque one) needs
 		// a user activation all the same, unless its frame's attribute grants

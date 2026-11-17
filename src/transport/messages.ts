@@ -952,6 +952,12 @@ export interface SiteArrival {
 	visited?: { hop?: unknown; back?: string };
 	/** what the first worker knew of the navigation's parent and main frame (src/server/siteContext.ts) */
 	context?: SiteContext;
+	/**
+	 * the document that started the navigation from another window's realm
+	 * (src/server/navigationHints.ts NavigationInitiator, its referrer the
+	 * routed path)
+	 */
+	initiator?: unknown;
 }
 
 /**

@@ -67,6 +67,21 @@
   does, src/controller/siteRuns.ts). In both modes a page's
   `history.length` counts the frame's entries in other slots, so a link
   to a site of another slot grows it by one as natively (visited).
+- A frame's script that navigates its top or its parent shown from another
+  slot (`top.location = url`, `top.location.href = url`,
+  `top.location.replace(url)`, `parent.location.href = url`) navigates it
+  as natively, where the browser refused it with a SecurityError (the host
+  frames the proxied top sandboxed) and printed the slot's routed URLs in
+  Chrome's console. The frame decides Chrome's refusals itself (the
+  framebusting intervention, the sandbox's flags, a grandchild of a third
+  site) from what it knows of the window without reaching it, and asks the
+  window to navigate itself, with the frame as the initiator (its Referer
+  by its policy, Sec-Fetch-Site), also across a 307 to a third slot. A top
+  document's `history.length` counts the frame's entries in other slots
+  from its first script after a push, a replace or a reload (it counted
+  its own slot's until the hub's count reached it, up to ten fewer than
+  natively). top-navigation compares both halves with Chrome 157 under
+  the pool: 48 of its 66 cases differed in each, now none.
 - A slot's service worker builds no
   blocker engine of its own and asks the host page's worker's over a port
   (src/server/remoteBlocker.ts), so the pool holds one engine and builds

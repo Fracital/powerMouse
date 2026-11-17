@@ -6,9 +6,13 @@
 // runs only once a page aims a navigation there, or once a frame under this
 // window asks it to navigate, never before the page's first script, so its
 // top level reads no global.
+import { INITIATOR_ROUTE } from '../../transport/messages';
 import type DocumentClient from './Client';
-import type { AcrossNavigation } from './Client';
+import type { AcrossInitiator, AcrossNavigation } from './Client';
 import { siteWindows } from './siteWindows';
+
+/** how long a navigation across slots waits for a worker to answer of its initiator, each way */
+const INITIATOR_WAIT_MS = 1000;
 
 /** the form attributes a submission aimed at another window carries, and the submitter's attribute that overrides each */
 const FORM_OVERRIDES = [
@@ -157,6 +161,104 @@ export function navigateAcross(
 	);
 }
 
+/**
+ * The site pool: `target`, a window of another slot, as an ancestor of
+ * this document's (by the browser's own parents, below the hub's page):
+ * whether it is the top of the proxied world, and its origin as this
+ * document knows it (the ancestors its route or its worker named). Null for
+ * a window that is no ancestor of this one.
+ */
+export function ancestorAcross(
+	client: DocumentClient,
+	target: unknown,
+): { top: boolean; origin: string } | null {
+	const sites = client.sites;
+	if (!sites) return null;
+	try {
+		let context: unknown = client.global;
+		for (let depth = 0; depth < 64; depth++) {
+			const parent = siteWindows().nativeParentOf(context);
+			if (
+				!parent ||
+				parent === context ||
+				siteWindows().isHub(client.global, parent, sites.hub)
+			)
+				return null;
+			if (parent === target) {
+				const top = target === siteWindows().siteTop(client.global, sites.hub);
+				return {
+					top,
+					origin:
+						(top ? client.topOrigin : client.ancestorOrigins()[depth]) ??
+						'null',
+				};
+			}
+			context = parent;
+		}
+	} catch (error) {
+		// a window that went away
+	}
+	return null;
+}
+
+/**
+ * The site pool: navigate `window`, an ancestor of another slot
+ * (ancestorAcross), to `url` as this document's navigation, which the
+ * Context module allowed: that window is asked to navigate itself
+ * (acceptAcross), with what this document's worker would record of it as
+ * the initiator (its routed URL and the referrer policy the browser gave
+ * its request: INITIATOR_ROUTE, asked), so the request names it as natively
+ * (its Referer by its policy, Sec-Fetch-Site from its origin; a frame of
+ * another slot is of another site, so never Sec-Fetch-User). `voucher`: the
+ * routed document that speaks for this one to its worker, if any.
+ */
+export function locationAcross(
+	client: DocumentClient,
+	voucher: DocumentClient | null,
+	window: typeof globalThis,
+	url: string,
+	replace: boolean,
+) {
+	let sent = false;
+	const send = (initiator?: AcrossInitiator) => {
+		if (sent) return;
+		sent = true;
+		navigateAcross(client, window, {
+			kind: 'location',
+			url,
+			replace,
+			...(initiator ? { initiator } : {}),
+		});
+	};
+	if (!voucher) return send();
+	// bounded: a worker that does not answer delays nothing for long
+	voucher.global.setTimeout(voucher.ownCallback(send), INITIATOR_WAIT_MS);
+	voucher
+		.nativeFetch(
+			`${voucher.global.location.origin}${voucher.directory}${INITIATOR_ROUTE}`,
+			{
+				method: 'POST',
+				body: JSON.stringify({
+					url,
+					opaque: client.sandboxedOpaque,
+					ask: true,
+				}),
+				cache: 'no-store',
+			},
+		)
+		.then((response) => (response.ok ? response.json() : null))
+		.then(
+			(facts: Partial<AcrossInitiator> | null) =>
+				send(
+					typeof facts?.referrer === 'string' &&
+						typeof facts.policy === 'string'
+						? { referrer: facts.referrer, policy: facts.policy }
+						: undefined,
+				),
+			() => send(),
+		);
+}
+
 /** what acceptAcross navigates with, the Sandbox module's natives */
 export interface AcceptNatives {
 	assign: (url: string) => void;
@@ -175,6 +277,55 @@ export function acceptAcross(
 ) {
 	const global = client.global;
 	try {
+		if (request.kind === 'location') {
+			const destination = new URL(request.url);
+			if (!['http:', 'https:'].includes(destination.protocol)) return;
+			const replace = request.replace === true;
+			let started = false;
+			// through this window's own Location, as its script would: the
+			// route, the history entry (or none, for replace) and a frame's
+			// fresh browsing context are its own navigation's
+			const go = () => {
+				if (started) return;
+				started = true;
+				const standIn = (global.location as Record<string, any>)[
+					client.names.globalProxy
+				] as Location;
+				const descriptor = Reflect.getOwnPropertyDescriptor(
+					standIn,
+					replace ? 'replace' : 'href',
+				);
+				const method = replace ? descriptor?.value : descriptor?.set;
+				if (typeof method === 'function')
+					Reflect.apply(method, standIn, [destination.href]);
+			};
+			const initiator = request.initiator;
+			if (
+				typeof initiator?.referrer !== 'string' ||
+				typeof initiator.policy !== 'string'
+			)
+				return go();
+			// this window's worker is told who started it before it goes
+			// (bounded, as the frame's ask was)
+			global.setTimeout(client.ownCallback(go), INITIATOR_WAIT_MS);
+			client
+				.nativeFetch(
+					`${global.location.origin}${client.directory}${INITIATOR_ROUTE}`,
+					{
+						method: 'POST',
+						body: JSON.stringify({
+							url: destination.href,
+							initiator: {
+								referrer: initiator.referrer,
+								policy: initiator.policy,
+							},
+						}),
+						cache: 'no-store',
+					},
+				)
+				.then(go, go);
+			return;
+		}
 		if (request.kind === 'link') {
 			const destination = new URL(request.url);
 			if (!['http:', 'https:'].includes(destination.protocol)) return;

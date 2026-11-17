@@ -405,6 +405,13 @@ if (window === window.parent || !origins.length) {
 				},
 				frameHistory: async ({ index, origin, run, op }) => {
 					if (!controller) return [null, []];
+					// the site pool: what every agent (and this realm) keeps of the
+					// frame's runs
+					if (origin === '*') {
+						if (op.kind !== 'expect') return [null, []];
+						controller.siteTell(Number(index), op);
+						origin = location.origin;
+					}
 					if (controller.siteOriginKnown(origin))
 						return [
 							await controller.siteHistory(origin, Number(index), run, op),
