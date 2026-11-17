@@ -345,6 +345,19 @@ export default class Client {
 	ownCallback(callback: () => void): () => void {
 		return this.#ownCallback(callback);
 	}
+	readonly #ownImport?: (url: string) => Promise<unknown>;
+	/**
+	 * `import(url)` from this client's window's own realm, or null where the
+	 * bundle's own `import()` is that realm's (the client is its window's own,
+	 * or the window cannot make code). The browser loads and evaluates a
+	 * module in the realm of the code that imports it: a client another
+	 * realm's bundle made (a parent's, for an iframe's initial about:blank
+	 * the frame then navigates from) would run the frame's modules in the
+	 * parent's window and hand the frame the parent's promise
+	 */
+	importIn(url: string): Promise<unknown> | null {
+		return this.#ownImport ? this.#ownImport(url) : null;
+	}
 	/**
 	 * Whether this context's requests go from an opaque origin (a document
 	 * the page sandboxed without allow-same-origin): the request modules tell
@@ -624,6 +637,10 @@ export default class Client {
 				[],
 				`return function (callback) { return function () { callback(); }; };${sourceURL}`,
 			)() as (callback: () => void) => () => void;
+			if (global !== globalThis)
+				this.#ownImport = made(['url'], `return import(url);${sourceURL}`) as (
+					url: string,
+				) => Promise<unknown>;
 		} catch (error) {
 			this.#callIn = (method, that, args) => Reflect.apply(method, that, args);
 			this.#ownCallback = (callback) => () => callback();

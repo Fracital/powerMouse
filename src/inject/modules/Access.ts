@@ -1388,11 +1388,14 @@ export default class AccessModule extends Module<Client> {
 				if (!isCode(code)) return code;
 				return evaluated(code, () => evalSnapshot(code as string));
 			},
-			import: (baseURL: string | undefined, url: string): Promise<unknown> =>
-				imported(
-					// @ts-ignore
-					import(/* webpackIgnore: true */ route(baseURL, url, undefined)),
-				),
+			import: (baseURL: string | undefined, url: string): Promise<unknown> => {
+				const routed = route(baseURL, url, undefined);
+				return imported(
+					this.client.importIn(routed) ??
+						// @ts-ignore
+						import(/* webpackIgnore: true */ routed),
+				);
+			},
 			// an import the page's code makes itself (with options)
 			imported: (promise: Promise<unknown>): Promise<unknown> =>
 				imported(promise),
