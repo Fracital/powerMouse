@@ -550,11 +550,11 @@ export default function cloneRawNode(
 
 					let target = d[0] as Element;
 
+					// in the element's own namespace: an SVG in an HTML page, or
+					// any element of an XML document (where createElement would
+					// make one of no namespace)
+					const namespace = (d[0] as Element).namespaceURI;
 					try {
-						// in the element's own namespace: an SVG in an HTML page, or
-						// any element of an XML document (where createElement would
-						// make one of no namespace)
-						const namespace = (d[0] as Element).namespaceURI;
 						target =
 							namespace === 'http://www.w3.org/1999/xhtml' &&
 							document.contentType === 'text/html'
@@ -592,6 +592,20 @@ export default function cloneRawNode(
 					});
 					// (the copy may live on in the page: it keeps nothing of the markup)
 					if (base) parsedBases.delete(target);
+
+					// An XML document's external scripts ran in the order the
+					// parser met them. A script made here is not the parser's: the
+					// browser would run each as it arrives, a small file ahead of
+					// the library before it, unless it is told to keep the order
+					// (`async = false` on a script that never asked for async).
+					if (
+						runScripts &&
+						namespace === 'http://www.w3.org/1999/xhtml' &&
+						target.localName === 'script' &&
+						target.hasAttribute('src') &&
+						!target.hasAttribute('async')
+					)
+						(target as HTMLScriptElement).async = false;
 
 					if (d[3]) inertClones.add(target);
 
