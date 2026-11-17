@@ -327,25 +327,25 @@ const progress = (mode, path, report, started) =>
 		`  ${mode} ${path}: ${report.status.status}, ${report.tests.length} subtests, ${Math.round((Date.now() - started) / 1000)}s`,
 	);
 
-/** a report as a map: subtest name -> { status, message }, plus (harness) */
-function verdicts(report) {
-	const map = new Map();
-	map.set('(harness)', report.status);
-	for (const test of report.tests) map.set(test.name, test);
-	return map;
-}
-
-// ports and uuids differ between runs; the expected list stores a message
-// that stays the same
-const normalise = (message) =>
-	String(message ?? '')
+// ports and uuids differ between runs; the expected list stores a name and
+// a message that stay the same (a test may name a subtest after a URL)
+const stable = (text) =>
+	String(text ?? '')
 		.replace(/:\d{4,5}\b/g, ':PORT')
 		.replace(
 			/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g,
 			'UUID',
-		)
-		.replace(/\s+/g, ' ')
-		.slice(0, 200);
+		);
+const normalise = (message) =>
+	stable(message).replace(/\s+/g, ' ').slice(0, 200);
+
+/** a report as a map: subtest name -> { status, message }, plus (harness) */
+function verdicts(report) {
+	const map = new Map();
+	map.set('(harness)', report.status);
+	for (const test of report.tests) map.set(stable(test.name), test);
+	return map;
+}
 
 /**
  * Run the suite: `roots` are directories under test/wpt/, `concurrency` the

@@ -1288,29 +1288,6 @@ export default ({ root, stash, raw, readBodyBytes, cookiePairs }) => {
 
 	return {
 		handlers: keyed,
-		patches: {
-			// a variant with a space in it (xmlhttprequest-timeout-*.html) is
-			// reported percent-encoded and the suite asks for it as written
-			'/resources/testharnessreport.js': [
-				['search: location.search,', 'search: decodeURI(location.search),'],
-			],
-			// these name their subtests after a URL with the fixture's port, which
-			// is another one every run: the expected list needs a name that stays
-			...Object.fromEntries(
-				[
-					'/xhr/event-upload-progress.any.js',
-					'/xhr/event-upload-progress-crossorigin.any.js',
-				].map((path) => [
-					path,
-					[
-						[
-							'"Upload events registered too late (" + url + ")"',
-							'"Upload events registered too late (" + url.replace(/:\\d+/, ":PORT") + ")"',
-						],
-					],
-				]),
-			),
-		},
 		patterns: [
 			// 1.16 MB of "abcd", written here instead of vendored
 			[

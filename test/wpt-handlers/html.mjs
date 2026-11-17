@@ -281,29 +281,5 @@ export default ({ root, stash, setHeaders, cookiePairs }) => {
 		],
 	];
 
-	// The report script, as served (the harness requests of this area, until
-	// the script itself does it): a page that moves itself with pushState or
-	// replaceState still reports under the path it was loaded from, and a
-	// subtest named after location.origin does not carry the fixture's port,
-	// which changes with every run, into the expected list, and the report
-	// is posted to the page's own origin whatever its base URL has become.
-	const patches = {
-		'/resources/testharnessreport.js': [
-			[
-				'var TEST_STATUS = [',
-				'var LOADED_FROM = [location.pathname, location.search];\n\tvar TEST_STATUS = [',
-			],
-			['path: location.pathname,', 'path: LOADED_FROM[0],'],
-			['search: location.search,', 'search: LOADED_FROM[1],'],
-			// (a page that moved its <base href> to another host would post
-			// there)
-			["fetch('/_wpt/report'", "fetch(location.origin + '/_wpt/report'"],
-			[
-				'name: test.name,',
-				"name: test.name.replace(/:\\d{4,5}\\b/g, ':PORT'),",
-			],
-		],
-	};
-
-	return { handlers, patterns, upgrades: {}, patches };
+	return { handlers, patterns, upgrades: {} };
 };

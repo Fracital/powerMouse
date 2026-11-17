@@ -910,14 +910,6 @@ export default ({ root, stash, setHeaders, readBodyBytes, substitute }) => {
 			'/fetch/api/cors/cors-redirect.any.js': otherOrigin,
 			'/fetch/api/cors/cors-redirect-credentials.any.js': otherOrigin,
 			'/fetch/api/cors/cors-redirect-preflight.any.js': otherOrigin,
-			// the fixture's port is in three subtest names, and it differs on
-			// every run: the name says PORT (the assertion keeps the URL)
-			'/fetch/api/request/request-init-001.sub.html': [
-				[
-					'" init value of " + givenValue + " and',
-					'" init value of " + String(givenValue).replace(/:\\d+\\//, ":PORT/") + " and',
-				],
-			],
 		},
 	};
 };

@@ -5,12 +5,23 @@
 // (/_wpt/report, same origin as the test, so through the proxy they travel the
 // proxied path too), where test/wpt.mjs collects them.
 //
+// The report names the page by the path and query it was loaded from (a
+// page that moves itself with pushState still reports under its own), with
+// the query's escapes undone (a variant written with a space is asked for as
+// written), and goes to the page's own origin whatever its base URL became.
+//
 // The harness timeout is doubled: a page's requests go through a service
 // worker, a MessagePort and a wisp relay when proxied, and the same budget
 // applies natively so the two runs stay comparable.
 (function () {
 	setup({ timeout_multiplier: 2 });
 
+	var LOADED_FROM = [location.pathname, location.search];
+	try {
+		LOADED_FROM[1] = decodeURI(LOADED_FROM[1]);
+	} catch (e) {
+		// a query that is no escaped UTF-8 is kept as it was
+	}
 	var TEST_STATUS = [
 		'PASS',
 		'FAIL',
@@ -22,8 +33,8 @@
 
 	add_completion_callback(function (tests, status) {
 		var report = {
-			path: location.pathname,
-			search: location.search,
+			path: LOADED_FROM[0],
+			search: LOADED_FROM[1],
 			href: location.href,
 			status: {
 				status: HARNESS_STATUS[status.status] || String(status.status),
@@ -41,7 +52,7 @@
 		// no keepalive: Chrome sends keepalive requests past the service
 		// worker, so through the proxy the report would never arrive
 		try {
-			fetch('/_wpt/report', {
+			fetch(location.origin + '/_wpt/report', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(report),
