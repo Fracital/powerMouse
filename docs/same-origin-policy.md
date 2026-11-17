@@ -537,7 +537,14 @@ Filled in commit by commit; see the CHANGELOG for each.
   no bytes transferred, delivery "cache"). Scripts and stylesheets are
   rewritten and stay `no-cache`. A route without a mark (one this build's
   worker did not give, an inline document's controlled by an emulated
-  worker) is handed out as before.
+  worker) is handed out as before. A document with a policy that governs
+  these loads (img-src, font-src, media-src or default-src, report-only
+  too: `MARK_DIRECTIVES`) marks none of them, and the worker gives such a
+  client no mark: natively the renderer judges a load by the policy before
+  its memory cache answers, and here the worker judges it by the real URL,
+  which a load the renderer answers never reaches (memory-cache-share: a
+  document of the site under `img-src` of another host is refused, as
+  natively, though the renderer keeps the resource).
 - **Output reuse** (`recentOutputs`, master's speed series): the worker
   gives a document the output it just gave it for the same request only
   when everything the policy decides by is the same: the client (its

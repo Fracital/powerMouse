@@ -30,6 +30,7 @@ import type { HookContext, HookErrorInfo, HookPhase } from '../../hooks';
 import { allowDelegates } from '../../isolation';
 import {
 	CACHE_MARK_SHAPE,
+	MARK_DIRECTIVES,
 	OPAQUE_MARK,
 	setCacheMarkSource,
 } from '../../memoryMark';
@@ -915,10 +916,22 @@ export default class DocumentClient extends Client {
 	 * about:srcdoc document's maker's, the opaque one for an opaque origin (it
 	 * shares nothing with its site's documents natively: a sandboxed frame is
 	 * isolated in a renderer of its own), none for a document no shell named
-	 * one for.
+	 * one for. None either while a policy of the document's governs what
+	 * the mark goes on (MARK_DIRECTIVES): natively the renderer judges a
+	 * load by the policy before its memory cache answers it, and here the
+	 * worker judges it by the real URL, which a load the renderer answers
+	 * never reaches.
 	 */
 	get cacheMark(): string {
 		if (this.sandboxedOpaque) return OPAQUE_MARK;
+		if (
+			this.pagePolicies().some(({ policy }) =>
+				MARK_DIRECTIVES.some(
+					(directive) => governing(policy, directive) !== null,
+				),
+			)
+		)
+			return '';
 		const document = this.global.document;
 		const own = this.#cacheMark;
 		if (own && own.document === document) return own.mark;

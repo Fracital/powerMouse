@@ -13,7 +13,10 @@
 // timing) and what the renderer did (Network.requestServedFromCache) are
 // compared with the same sequence natively, in both modes. A document of
 // site B that names the route site A's document loaded gets its own load of
-// the URL, never site A's copy.
+// the URL, never site A's copy. A document of site A under a policy that
+// refuses the resource's host is refused natively before the memory cache
+// is asked: through the proxy its routes carry no mark, so its load
+// reaches the worker, which refuses it.
 import {
 	done,
 	FIXTURE,
@@ -31,19 +34,27 @@ const B = FIXTURE.replace('127.0.0.1', 'localhost');
 const ROUTE = /\/stomp\/[\w-]+\/html\//;
 /** the origin takes this long to answer: a load that takes less did not wait for it */
 const WAIT_MS = 400;
-/** the steps: who loads the resource, of which site, sandboxed or not */
+/** a policy that refuses the resource's host for images and fonts */
+const POLICY =
+	'img-src http://elsewhere.invalid; font-src http://elsewhere.invalid';
+/** the steps: who loads the resource, of which site, sandboxed or not, under which policy */
 const STEPS = [
 	['A1', A],
 	['A2', A],
 	['B1', B],
 	['B2', B],
 	['A3', A],
+	['Apolicy', A, null, POLICY],
 	['opaque', A, 'allow-scripts'],
 ];
 const resource = (run, as) =>
 	`${A}sop/r?k=${run}&type=${as === 'font' ? 'font' : 'png'}&acao=*&ms=${WAIT_MS}&cc=${encodeURIComponent('max-age=3600')}`;
-const childURL = (site, as, url, name) =>
-	`${site}pages/memory-share.html?as=${as}&r=${encodeURIComponent(url)}&n=${name}`;
+const childURL = (site, as, url, name, policy) =>
+	`${site}${
+		policy
+			? `sop/r?k=page&page=memory-share.html&csp=${encodeURIComponent(policy)}&`
+			: 'pages/memory-share.html?'
+	}as=${as}&r=${encodeURIComponent(url)}&n=${name}`;
 
 /**
  * The image and font loads the renderer of `top` served from its memory
@@ -138,11 +149,11 @@ async function run(tab, top, tag, as) {
 	const url = resource(key, as);
 	const seen = {};
 	const frameIds = {};
-	for (const [name, site, sandbox] of STEPS) {
+	for (const [name, site, sandbox, policy] of STEPS) {
 		const { frame, share } = await step(
 			tab,
 			top,
-			childURL(site, as, url, name),
+			childURL(site, as, url, name, policy),
 			sandbox,
 		);
 		await sleep(300);
@@ -196,6 +207,11 @@ for (const as of ['image', 'font']) {
 			seen.B1.reached === 2 &&
 			seen.opaque?.waited === true,
 		JSON.stringify([seen.B1, seen.opaque]),
+	);
+	ok(
+		`natively, a document of the site whose policy refuses the ${as}'s host gets nothing, though its renderer keeps it`,
+		seen.Apolicy?.loaded === false && seen.Apolicy.reached === seen.A3.reached,
+		JSON.stringify(seen.Apolicy),
 	);
 }
 
@@ -251,6 +267,11 @@ for (const [mode, base] of [
 				seen.opaque.cached === false &&
 				seen.opaque.waited,
 			JSON.stringify([seen.B1, seen.opaque]),
+		);
+		ok(
+			`${mode}: ${as}: a document of site A whose policy refuses the host is refused, never handed the renderer's copy`,
+			seen.Apolicy.loaded === false && seen.Apolicy.cached === false,
+			JSON.stringify(seen.Apolicy),
 		);
 		ok(
 			`${mode}: ${as}: the origin was asked as often as natively`,

@@ -31,6 +31,18 @@ export const MARKED_KINDS: ReadonlySet<string> = new Set([
 	'binary:set',
 ]);
 
+/**
+ * The policy directives that judge the loads of MARKED_KINDS: a document
+ * with a policy that governs one of them (directly or through default-src)
+ * marks none of its routes, and the worker hands it no route's load with the
+ * origin's caching headers. Natively the renderer judges every load by the
+ * document's policy before its memory cache answers it; here the worker
+ * judges a load by its real URL (the browser's copy of the policy cannot
+ * name the hosts), and a load the renderer's memory cache answers never
+ * reaches the worker.
+ */
+export const MARK_DIRECTIVES = ['img-src', 'font-src', 'media-src'];
+
 /** a mark as the worker makes them (base64url, never a `/`, `;` or `#`) */
 export const CACHE_MARK_SHAPE = /^[A-Za-z0-9_-]{1,64}$/;
 

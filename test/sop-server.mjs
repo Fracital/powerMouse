@@ -27,6 +27,9 @@
 //     cookie=<value>                    a Set-Cookie of the answer
 //     cc=<value>                        its Cache-Control (default no-store)
 //     ms=<n>                            the answer waits n ms (at most 3000)
+//     csp=<policy>                      its Content-Security-Policy
+//     page=<file>                       the body is test/pages/<file>, as
+//                                       text/html (a page under csp)
 //   /sop/log?k=<key>     what reached /sop/r under k, in order
 //   /sop/cookies         the names of the cookies the request carried
 //
@@ -176,6 +179,13 @@ function answer(req, res, query) {
 		return true;
 	}
 	res.statusCode = Number(query.get('status') ?? 200);
+	set('content-security-policy', query.get('csp'));
+	const shown = query.get('page');
+	if (shown && /^[\w-]+\.html$/.test(shown)) {
+		res.setHeader('content-type', 'text/html');
+		res.end(page(shown));
+		return true;
+	}
 	const type = query.get('type') ?? 'text';
 	if (type === 'js' || type === 'mjs') {
 		res.setHeader('content-type', 'text/javascript');

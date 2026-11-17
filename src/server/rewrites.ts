@@ -39,7 +39,7 @@ import {
 	topLevelIsolation,
 	type DocumentIsolation,
 } from '../isolation';
-import { MARKED_KINDS, OPAQUE_MARK } from '../memoryMark';
+import { MARK_DIRECTIVES, MARKED_KINDS, OPAQUE_MARK } from '../memoryMark';
 import {
 	insecure,
 	metaUpgradesInsecureRequests,
@@ -208,6 +208,7 @@ import {
 	integrityRefuses,
 	knowsPoliciesOf,
 	metaPolicies,
+	policiesGovern,
 	postReport,
 	refusesAncestors,
 	refusingPolicies,
@@ -2378,8 +2379,20 @@ function genericForward(
 		// routes for the request (a document's shell, a stylesheet's url()s)
 		// carries it, and a load whose route carries it is one of those
 		// documents', which the renderer may keep and hand to the next of them
-		// as natively
-		const siteMark = cacheMarkOf(requestFrameSite, controller);
+		// as natively. None for a client a policy of which governs those loads
+		// (MARK_DIRECTIVES): the renderer would answer them past the judgment
+		// of this worker (a navigation's document has its own policies, which
+		// its inject reads)
+		const siteMark =
+			!navigation &&
+			policiesGovern(
+				context?.clientId,
+				requestReferrer,
+				MARK_DIRECTIVES,
+				blobCreatorOf,
+			)
+				? ''
+				: cacheMarkOf(requestFrameSite, controller);
 		url.mark = siteMark;
 
 		// a cross-origin request the CORS protocol does not let go out as it

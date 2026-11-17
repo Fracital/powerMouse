@@ -63,6 +63,21 @@ export function rememberPolicies(
 	if (clientId) remember(`client ${clientId}`, value);
 }
 
+/**
+ * Whether a policy of the client `clientId` (or of the document at
+ * `referrer`) governs one of `directives`, report-only ones too
+ */
+export function policiesGovern(
+	clientId: string | undefined,
+	referrer: string | null | undefined,
+	directives: readonly string[],
+	creatorOf?: (client: string) => string | undefined,
+): boolean {
+	return !!policiesOf(clientId, referrer, creatorOf)?.policies.some((policy) =>
+		directives.some((directive) => governing(policy, directive) !== null),
+	);
+}
+
 /** whether the policies of the client `clientId` are known (a document's, a worker's) */
 export const knowsPoliciesOf = (clientId: string): boolean =>
 	served.has(`client ${clientId}`);
