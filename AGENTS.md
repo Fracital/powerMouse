@@ -356,7 +356,17 @@ the proxy, not a state to leave. What every proxied frame costs is gated by `fra
 which is not a measurement: a heap ceiling for one proxied frame of 20 with
 room for noise (measure-frame-memory is the full measurement) and a size
 budget for `dist/injectDocument.js`. Raise a budget only in the change that
-needs it, saying why.
+needs it, saying why. The `test262 differential` job runs test262's
+language, built-ins and annexB tests natively and rewritten in node
+(`npm run test262`, test/test262/run.mjs, about 2 minutes on the runner's 4
+cores) and gates them with `npm run test262:report` against
+`test/test262/known.txt`: an unlisted run whose verdict differs fails it, and
+so does a listed run that no longer differs, so a rewriter fix takes its rows
+off in the same change. known.txt names the test262 commit it was recorded
+at, and the job fetches that commit's `test/` and `harness/` (cached by its
+sha); moving the pin is re-recording known.txt (`--write-known`) at the new
+commit. Locally, `TEST262=<checkout> nice -n 10 npm run test262` after `npm
+run build`.
 
 Rules for touching the workflow, because a PR from anyone runs it:
 

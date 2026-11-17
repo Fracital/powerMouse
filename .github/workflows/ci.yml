@@ -96,6 +96,85 @@ jobs:
         if: steps.head.outputs.superseded != 'true'
         run: node test/corpus/check.mjs --minify test/corpus/sample
 
+  # test262 natively and rewritten (test/test262/run.mjs), gated by
+  # test/test262/known.txt, which names the test262 commit it was recorded
+  # at: that commit is the one fetched (test/ and harness/ only, cached by
+  # its sha), so a new pin is a change of known.txt.
+  test262:
+    name: test262 differential
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Still master's head?
+        id: head
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          head=$(gh api "repos/$REPO/commits/master" --jq .sha 2>/dev/null) || head=$GITHUB_SHA
+          if [[ $head != "$GITHUB_SHA" ]]; then
+            echo "::notice::superseded by $head, skipped"
+            echo superseded=true >>"$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.head.outputs.superseded != 'true'
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.head.outputs.superseded != 'true'
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: test262 commit
+        id: pin
+        if: steps.head.outputs.superseded != 'true'
+        run: |
+          sha=$(grep -m1 -oE 'test262 [0-9a-f]{40}' test/test262/known.txt | cut -d' ' -f2)
+          [[ -n $sha ]] || { echo "::error::test/test262/known.txt names no test262 commit"; exit 1; }
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cache
+        if: steps.head.outputs.superseded != 'true'
+        with:
+          path: ${{ runner.temp }}/test262
+          key: test262-${{ steps.pin.outputs.sha }}
+
+      - name: Fetch test262
+        if: steps.head.outputs.superseded != 'true' && steps.cache.outputs.cache-hit != 'true'
+        env:
+          SHA: ${{ steps.pin.outputs.sha }}
+          DIR: ${{ runner.temp }}/test262
+        run: |
+          mkdir -p "$DIR"
+          curl -fsSL --retry 3 "https://codeload.github.com/tc39/test262/tar.gz/$SHA" |
+            tar -xz -C "$DIR" --strip-components=1 \
+              "test262-$SHA/harness" "test262-$SHA/test/language" \
+              "test262-$SHA/test/built-ins" "test262-$SHA/test/annexB"
+
+      - name: Install (no lifecycle scripts)
+        if: steps.head.outputs.superseded != 'true'
+        run: npm ci --ignore-scripts
+
+      - name: Build
+        if: steps.head.outputs.superseded != 'true'
+        run: node build.js
+
+      - name: test262
+        if: steps.head.outputs.superseded != 'true'
+        env:
+          TEST262: ${{ runner.temp }}/test262
+          NO_COLOR: '1'
+        run: npm run test262 -- --jobs 4
+
+      - name: Gate (test/test262/known.txt)
+        if: steps.head.outputs.superseded != 'true'
+        run: npm run test262:report
+
   # Browser suites on the runner's Chrome. Fixture-based suites only
   # (SKIP_NETWORK leaves out the ones that drive Wikipedia); no secrets, read
   # only, not required by branch protection until it has proven stable.
