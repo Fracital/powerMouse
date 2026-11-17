@@ -1,0 +1,31 @@
+{
+	"/html/infrastructure/urls/dynamic-changes-to-base-urls/dynamic-urls.sub.html": {
+		"The 'cite' attribute of the 'q' element": "FAIL: assert_equals: The 'cite' attribute is incorrect. expected \"http://localhost:PORT/html/infrastructure/urls/dynamic-changes-to-base-urls/test.txt\" but got \"http://127.0.0.1:PORT/stomp/qkHj8byt/html/tes",
+		"The 'cite' attribute of the 'blockquote' element": "FAIL: assert_equals: The 'cite' attribute is incorrect. expected \"http://localhost:PORT/html/infrastructure/urls/dynamic-changes-to-base-urls/test.txt\" but got \"http://127.0.0.1:PORT/stomp/qkHj8byt/html/tes",
+		"The 'cite' attribute of the 'ins' element": "FAIL: assert_equals: The 'cite' attribute is incorrect. expected \"http://localhost:PORT/html/infrastructure/urls/dynamic-changes-to-base-urls/test.txt\" but got \"http://127.0.0.1:PORT/stomp/qkHj8byt/html/tes",
+		"The 'cite' attribute of the 'del' element": "FAIL: assert_equals: The 'cite' attribute is incorrect. expected \"http://localhost:PORT/html/infrastructure/urls/dynamic-changes-to-base-urls/test.txt\" but got \"http://127.0.0.1:PORT/stomp/qkHj8byt/html/tes"
+	},
+	"/html/infrastructure/urls/dynamic-changes-to-base-urls/historical.sub.xhtml": {
+		"(harness)": "TIMEOUT: ",
+		"The 'href' attribute of the 'a' element": "MISSING: the harness ended TIMEOUT before this subtest",
+		"The 'href' attribute of the 'link' element": "MISSING: the harness ended TIMEOUT before this subtest",
+		"The 'href' attribute of the 'area' element": "MISSING: the harness ended TIMEOUT before this subtest",
+		"The 'cite' attribute of the 'q' element": "MISSING: the harness ended TIMEOUT before this subtest",
+		"The 'cite' attribute of the 'blockquote' element": "MISSING: the harness ended TIMEOUT before this subtest",
+		"The 'cite' attribute of the 'ins' element": "MISSING: the harness ended TIMEOUT before this subtest",
+		"The 'cite' attribute of the 'del' element": "MISSING: the harness ended TIMEOUT before this subtest",
+		"The 'src' attribute of the 'audio' element": "MISSING: the harness ended TIMEOUT before this subtest",
+		"The 'src' attribute of the 'input' element": "MISSING: the harness ended TIMEOUT before this subtest",
+		"The 'src' attribute of the 'img' element": "MISSING: the harness ended TIMEOUT before this subtest",
+		"The 'src' attribute of the 'embed' element": "MISSING: the harness ended TIMEOUT before this subtest",
+		"The 'src' attribute of the 'video' element": "MISSING: the harness ended TIMEOUT before this subtest",
+		"The 'src' attribute of the 'iframe' element": "MISSING: the harness ended TIMEOUT before this subtest",
+		"The 'src' attribute of the 'script' element": "MISSING: the harness ended TIMEOUT before this subtest",
+		"The 'src' attribute of the 'source' element": "MISSING: the harness ended TIMEOUT before this subtest",
+		"The 'src' attribute of the 'track' element": "MISSING: the harness ended TIMEOUT before this subtest",
+		"The 'action' attribute of the 'form' element": "MISSING: the harness ended TIMEOUT before this subtest",
+		"The 'data' attribute of the 'object' element": "MISSING: the harness ended TIMEOUT before this subtest",
+		"The 'formaction' attribute of the 'button' element": "MISSING: the harness ended TIMEOUT before this subtest",
+		"Change the base URL must not effect the descendant elements": "MISSING: the harness ended TIMEOUT before this subtest"
+	}
+}
