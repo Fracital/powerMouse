@@ -34,6 +34,7 @@
 // needs when it is called.
 import { cookieStoreMethods } from '../cookieStoreMethods';
 import { recordSize } from '../idbSize';
+import { bucketMethods } from '../storageBucketMethods';
 import { carry as carryWebTransport } from '../webTransport';
 import { standIn as webTransportStandIn } from '../webTransportStandIn';
 import { checkedHeader, checkedMethod, notOpened } from '../xhrChecks';
@@ -66,6 +67,7 @@ const parts = {
 	legacyQuery,
 	formEncoding,
 	legacyFormQuery,
+	bucketMethods,
 	pictureWindows,
 	openerFacts,
 	opensWithoutOpener,

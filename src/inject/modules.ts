@@ -11,6 +11,7 @@ import ProxyModule from './modules/Proxy';
 import ReflectionModule from './modules/Reflection';
 import ResourceBufferModule from './modules/ResourceBuffer';
 import ResourceTimingModule from './modules/ResourceTiming';
+import StorageBucketsModule from './modules/StorageBuckets';
 import StorageEstimateModule from './modules/StorageEstimate';
 import TimersModule from './modules/Timers';
 import TrustedTypesModule from './modules/TrustedTypes';
@@ -31,6 +32,7 @@ export default function baseModules(client: Client) {
 	client.addModule(WorkerModule);
 	// before the IndexedDB and Partition modules: it takes their natives
 	client.addModule(StorageEstimateModule);
+	client.addModule(StorageBucketsModule);
 	client.addModule(IndexedDBModule);
 	client.addModule(PartitionModule);
 	client.addModule(MixedContentModule);

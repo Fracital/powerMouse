@@ -1,0 +1,23 @@
+<!doctype html>
+<title>storage buckets child</title>
+<script>
+	// A frame of storage-buckets.html (another site's, or sandboxed): the
+	// buckets it lists and whether the bucket `own` it opens holds the
+	// database its parent's site made there
+	(async () => {
+		const settle = (promise) =>
+			promise.then(
+				(value) => value,
+				(error) => `${error.name}: ${error.message}`,
+			);
+		const sb = navigator.storageBuckets;
+		const keys = await settle(sb.keys());
+		const opened = await settle(sb.open('own'));
+		const databases =
+			typeof opened === 'string'
+				? opened
+				: (await opened.indexedDB.databases()).map((info) => info.name);
+		const deleted = await settle(sb.delete('own'));
+		parent.postMessage({ keys, databases, deleted: String(deleted) }, '*');
+	})();
+</script>

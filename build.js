@@ -409,6 +409,7 @@ const DEFERRED_FILES = new Set(
 		'src/inject/idbSize.ts',
 		'src/passkeys/types.ts',
 		'src/inject/serviceWorkerObjects.ts',
+		'src/inject/storageBucketMethods.ts',
 		'src/inject/webTransport.ts',
 		'src/inject/webTransportStandIn.ts',
 		'src/inject/xhrChecks.ts',

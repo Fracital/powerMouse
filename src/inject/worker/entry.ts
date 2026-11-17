@@ -9,6 +9,8 @@ import { messageField, readModules, type HandedModules } from '../Client';
 import { recordSize } from '../idbSize';
 import { idbSizeParts } from '../idbSizeParts';
 import { handModules } from '../rewriter';
+import { bucketMethods } from '../storageBucketMethods';
+import { storageBucketParts } from '../storageBucketParts';
 import { carry as carryWebTransport } from '../webTransport';
 import { webTransportParts } from '../webTransportParts';
 import { standIn as webTransportStandIn } from '../webTransportStandIn';
@@ -24,6 +26,8 @@ import createWorkerClient from './worker';
 webTransportParts.standIn = () => webTransportStandIn;
 // and so is the sizing of an IndexedDB record (../idbSizeParts.ts)
 idbSizeParts.recordSize = () => recordSize;
+// and the methods behind navigator.storageBuckets' hooks
+storageBucketParts.methods = () => bucketMethods;
 /** set once the bootstrap came without a transport (a worker of a worker): nothing carries its sessions */
 let transportless = false;
 webTransportParts.carry = () =>

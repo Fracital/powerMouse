@@ -3,6 +3,7 @@ import { createClientFactory } from '../Client';
 import { idbSizeParts } from '../idbSizeParts';
 import Module from '../Module';
 import baseModules from '../modules';
+import { storageBucketParts } from '../storageBucketParts';
 import { webTransportParts } from '../webTransportParts';
 import DocumentClient from './Client';
 import { deferred } from './deferred';
@@ -67,6 +68,8 @@ import XMLHttpRequestModule from './modules/XMLHttpRequest';
 webTransportParts.standIn = () => deferred().webTransportStandIn;
 webTransportParts.carry = () => deferred().carryWebTransport;
 idbSizeParts.recordSize = () => deferred().recordSize;
+// and so are the methods behind navigator.storageBuckets' hooks
+storageBucketParts.methods = () => deferred().bucketMethods;
 
 class FingerprintStandIn extends Module<DocumentClient> {
 	apply() {

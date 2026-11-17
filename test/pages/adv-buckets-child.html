@@ -1,0 +1,65 @@
+<!doctype html>
+<title>ADV BUCKETS CHILD</title>
+<script>
+	// The frame of another site in adv-buckets.html: what it learns of its
+	// parent site's bucket `adv-secret`, plainly and with the builtins
+	// replaced (a promise's then, string and map methods, so a hook that
+	// filtered names with them would hand over the real list)
+	(async () => {
+		const sb = navigator.storageBuckets;
+		// (each round deletes the bucket it opened: what this site made of
+		// its own is not the parent's to find in the next round)
+		const found = async () => {
+			const out = [];
+			const keys = await sb.keys();
+			if (keys.length) out.push(`LEAK:listed ${JSON.stringify(keys)}`);
+			const bucket = await sb.open('adv-secret');
+			const names = (await bucket.indexedDB.databases()).map(
+				(info) => info.name,
+			);
+			if (names.length) out.push(`LEAK:databases ${JSON.stringify(names)}`);
+			await sb.delete('adv-secret');
+			return out;
+		};
+		const plain = await found().catch((error) => [`threw ${error.name}`]);
+		const seen = [];
+		const then = Promise.prototype.then;
+		const slice = String.prototype.slice;
+		const get = Map.prototype.get;
+		Promise.prototype.then = function (...args) {
+			return Reflect.apply(then, this, [
+				(value) => {
+					if (Array.isArray(value)) seen.push(...value.map(String));
+					return typeof args[0] === 'function' ? args[0](value) : value;
+				},
+				args[1],
+			]);
+		};
+		String.prototype.slice = function () {
+			return '';
+		};
+		Map.prototype.get = function () {
+			return '';
+		};
+		let tampered;
+		try {
+			tampered = await found();
+		} catch (error) {
+			tampered = [`threw ${error.name}`];
+		}
+		Promise.prototype.then = then;
+		String.prototype.slice = slice;
+		Map.prototype.get = get;
+		const raw = seen.filter((name) => name.length > 20);
+		if (raw.length) tampered.push(`LEAK:real names ${JSON.stringify(raw)}`);
+		parent.postMessage(
+			{
+				buckets: {
+					plain: plain.join(' ') || 'none',
+					tampered: tampered.join(' ') || 'none',
+				},
+			},
+			'*',
+		);
+	})();
+</script>

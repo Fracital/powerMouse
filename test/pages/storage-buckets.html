@@ -1,0 +1,128 @@
+<!doctype html>
+<title>storage buckets</title>
+<body></body>
+<script>
+	// What navigator.storageBuckets answers a page (storage-buckets suite):
+	// the names it refuses and how, the names it keeps (read back from
+	// keys() and from each bucket's name), the stores inside a bucket, and
+	// what a frame of another site, a sandboxed frame and a worker see. The
+	// bucket `own` holds a database another site must not find.
+	(async () => {
+		const r = {};
+		const t = async (key, fn) => {
+			try {
+				r[key] = await fn();
+			} catch (error) {
+				r[key] = `threw ${error.name}: ${error.message}`;
+			}
+		};
+		const settle = (promise) =>
+			promise.then(
+				(value) => (value === undefined ? 'undefined' : value),
+				(error) => `${error.name}: ${error.message}`,
+			);
+		const sb = navigator.storageBuckets;
+		const long = 'l'.repeat(63);
+		await t('invalid', async () => {
+			const out = [];
+			for (const name of ['', 'A', '_a', '-a', 'a.b', 'a@b', 'a'.repeat(64)])
+				out.push(await settle(sb.open(name)));
+			return out;
+		});
+		await t('deleteInvalid', () => settle(sb.delete('Bad')));
+		await t('noArgument', () => settle(sb.open()));
+		await t('options', async () => [
+			await settle(sb.open('o', { quota: -1 })),
+			await settle(sb.open('B', { expires: Infinity })),
+		]);
+		await t('opened', async () => {
+			const out = [];
+			for (const name of ['own', 'default', 5, long, 'x-y_z', 'a'.repeat(40)])
+				out.push((await sb.open(name)).name);
+			return out;
+		});
+		await t('keys', () => sb.keys());
+		await t('delete', async () => [
+			await settle(sb.delete('x-y_z')),
+			await settle(sb.delete('missing')),
+			await sb.keys(),
+		]);
+		await t(
+			'identity',
+			async () => (await sb.open('own')) === (await sb.open('own')),
+		);
+		await t('database', async () => {
+			const bucket = await sb.open('own');
+			const db = await new Promise((resolve, reject) => {
+				const request = bucket.indexedDB.open('db1');
+				request.onupgradeneeded = () => request.result.createObjectStore('s');
+				request.onsuccess = () => resolve(request.result);
+				request.onerror = () => reject(request.error);
+			});
+			await new Promise((resolve) => {
+				const tx = db.transaction('s', 'readwrite');
+				tx.objectStore('s').put('A-SECRET', 'k');
+				tx.oncomplete = resolve;
+			});
+			const name = db.name;
+			db.close();
+			return [
+				name,
+				(await bucket.indexedDB.databases()).map((info) => info.name),
+				(await indexedDB.databases()).map((info) => info.name),
+			];
+		});
+		await t('caches', async () => {
+			const bucket = await sb.open('own');
+			await bucket.caches.open('c1');
+			return [await bucket.caches.keys(), await caches.keys()];
+		});
+		await t('directory', async () => {
+			const bucket = await sb.open('own');
+			const root = await bucket.getDirectory();
+			await root.getFileHandle('f', { create: true });
+			const names = [];
+			for await (const name of root.keys()) names.push(name);
+			const own = [];
+			for await (const name of (await navigator.storage.getDirectory()).keys())
+				own.push(name);
+			return [root.name, names, own];
+		});
+		await t('long', async () => {
+			const bucket = await sb.open(long);
+			return [bucket.name, (await sb.keys()).includes(long)];
+		});
+		await t(
+			'worker',
+			() =>
+				new Promise((resolve) => {
+					const worker = new Worker('storage-buckets-worker.js');
+					worker.onmessage = (event) => resolve(event.data);
+					setTimeout(() => resolve('timeout'), 8000);
+				}),
+		);
+		await t('keysAfterWorker', () => sb.keys());
+		const child = (src, sandbox) =>
+			new Promise((resolve) => {
+				const frame = document.createElement('iframe');
+				if (sandbox) frame.sandbox = sandbox;
+				frame.src = src;
+				const listener = (event) => {
+					if (event.source !== frame.contentWindow) return;
+					removeEventListener('message', listener);
+					resolve(event.data);
+				};
+				addEventListener('message', listener);
+				setTimeout(() => resolve('timeout'), 10000);
+				document.body.append(frame);
+			});
+		const other = location.href
+			.replace('127.0.0.1', 'localhost')
+			.replace(/storage-buckets\.html.*$/, 'storage-buckets-child.html');
+		await t('crossSite', () => child(other));
+		await t('sandboxed', () =>
+			child('storage-buckets-child.html', 'allow-scripts'),
+		);
+		window.__buckets = r;
+	})();
+</script>

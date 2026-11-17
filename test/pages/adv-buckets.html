@@ -1,0 +1,55 @@
+<!doctype html>
+<title>ADV BUCKETS</title>
+<pre id="result">pending</pre>
+<script src="adv-harness.js"></script>
+<script>
+	// Another site's storage buckets (adversarial-buckets suite): this page
+	// keeps a bucket with a database in it, and a frame of another site
+	// (adv-buckets-child.html, served as localhost) lists the buckets it
+	// has, opens the bucket by its name, deletes it, and tries again after
+	// replacing the builtins a hook could lean on. Each finding of this
+	// page's bucket is a LEAK.
+	const A = __advAsync;
+	const ready = (async () => {
+		const bucket = await navigator.storageBuckets.open('adv-secret');
+		await new Promise((resolve, reject) => {
+			const request = bucket.indexedDB.open('secret-db');
+			request.onsuccess = () => {
+				request.result.close();
+				resolve();
+			};
+			request.onerror = () => reject(request.error);
+		});
+	})();
+	A(
+		"another site's frame finds this site's buckets",
+		async () => {
+			await ready;
+			const frame = document.createElement('iframe');
+			frame.src = location.href
+				.replace('127.0.0.1', 'localhost')
+				.replace(/\/pages\/.*$/, '/pages/adv-buckets-child.html');
+			const seen = new Promise((resolve) => {
+				addEventListener('message', (event) => {
+					if (event.data && event.data.buckets) resolve(event.data.buckets);
+				});
+			});
+			document.body.append(frame);
+			return await seen;
+		},
+		12000,
+	);
+	A(
+		"this site's bucket outlives another site's delete",
+		async () => {
+			await ready;
+			await new Promise((resolve) => setTimeout(resolve, 6000));
+			const keys = await navigator.storageBuckets.keys();
+			return keys.includes('adv-secret')
+				? 'kept'
+				: `LEAK:deleted by another site ${JSON.stringify(keys)}`;
+		},
+		12000,
+	);
+	__advFinish(9000);
+</script>
