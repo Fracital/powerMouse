@@ -2,7 +2,7 @@
 // measurement, and CI leaves measurements out). Each frame of a page
 // evaluates the document inject and runs its hooks in its own realm, and
 // ad-heavy pages keep hundreds of frames in one renderer, so a module that
-// adds a little to each frame adds it hundreds of times. Two checks:
+// adds a little to each frame adds it hundreds of times. Three checks:
 //
 // - the size of dist/injectDocument.js, against a budget: 418 KB as built,
 //   with the rewriter library a file of its own (dist/rewriterLib.js: the
@@ -68,14 +68,25 @@
 //   and kept down there (deferred parts, lazy installs, about 55 B a frame
 //   for each function made at load); when the deferred parts are split so
 //   each is evaluated alone, the ceiling comes back down.
+// - the same for FRAMES frames of another site (localhost), against a
+//   ceiling of its own. A frame of another site than its page's is not one
+//   of the page's site: the membrane hands it stand-ins, and a hook may run
+//   only there (a regression of 26 KB a frame in such frames went past the
+//   same-site check and CI). 1,152 KB with 20 frames on Chrome 157 at
+//   5bdd2289, two runs: the first frame of a site pays its site's one-off
+//   cost, which 20 frames share (with 10 it reads 1,213 to 1,217 KB, with
+//   60 in measure-frame-memory about 1,102). The ceiling, 1,172 KB, keeps
+//   the same-site one's margin: one interface made in every such frame (the
+//   SVG element interfaces, +33 KB) goes past it, and so does that 26 KB.
 import { statSync } from 'node:fs';
 import { measureFrames } from '../frame-memory.mjs';
-import { done, ok } from '../lib.mjs';
+import { done, FIXTURE, ok } from '../lib.mjs';
 
 const BUNDLE = new URL('../../dist/injectDocument.js', import.meta.url);
 const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 500;
 const FRAMES = Number(process.env.FRAMES) || 20;
 const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1170;
+const OTHER_LIMIT_KB = Number(process.env.FRAME_HEAP_OTHER_LIMIT_KB) || 1172;
 
 const bundleKB = statSync(BUNDLE).size / 1024;
 ok(
@@ -94,5 +105,21 @@ ok(
 	`a proxied frame costs at most ${HEAP_LIMIT_KB} KB of heap`,
 	result.heapKB <= HEAP_LIMIT_KB,
 	`${result.heapKB.toFixed(0)} KB, ${result.rssKB.toFixed(0)} KB RSS, ${(result.scriptMs / FRAMES).toFixed(1)} ms of script (${FRAMES} frames)`,
+);
+
+const other = await measureFrames({
+	proxied: true,
+	base: `http://localhost:${new URL(FIXTURE).port}/`,
+	frames: FRAMES,
+});
+ok(
+	`all ${FRAMES} proxied frames of another site ran their script`,
+	other.loaded === FRAMES,
+	`${other.loaded} did`,
+);
+ok(
+	`a proxied frame of another site costs at most ${OTHER_LIMIT_KB} KB of heap`,
+	other.heapKB <= OTHER_LIMIT_KB,
+	`${other.heapKB.toFixed(0)} KB, ${other.rssKB.toFixed(0)} KB RSS, ${(other.scriptMs / FRAMES).toFixed(1)} ms of script (${FRAMES} frames)`,
 );
 await done(null);
