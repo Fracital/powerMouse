@@ -337,6 +337,20 @@
 				inner.innerHTML = '<b>MARK</b>';
 				return `${inner.innerHTML} ${child.trustedTypes === trustedTypes}`;
 			}),
+		// a frame's eval given TrustedScripts this page's policy made (a value
+		// of another realm): Google's sign-in page runs its BotGuard program
+		// that way, in a frame of its own
+		'frame-trusted-eval': () =>
+			outcome(() => {
+				const node = document.createElement('iframe');
+				document.body.append(node);
+				const child = node.contentWindow;
+				listen(node.contentDocument, 'child');
+				const result = child.eval(
+					mine().createScript('var ranInFrame = 1; 3 + 4 //MARK'),
+				);
+				return `${typeof result} ${result} ${child.ranInFrame} ${window.ranInFrame}`;
+			}),
 	};
 
 	(async () => {

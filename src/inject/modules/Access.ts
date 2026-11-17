@@ -120,11 +120,29 @@ export default class AccessModule extends Module<Client> {
 		const proxyModule = moduleClient.getModule(ProxyModule);
 
 		// eval returns anything that is not a string unchanged; a TrustedScript
-		// (Trusted Types) is code, as for the browser
+		// (Trusted Types) is code, as for the browser, whichever realm's policy
+		// made it: the browser asks its brand, not its prototype. Google's
+		// sign-in page runs its BotGuard program in a frame of its own
+		// (/_/bscframe) by calling that frame's eval with TrustedScripts its
+		// own policy made; judged by `instanceof`, those were no code, eval
+		// returned them unrun and the page fell back to a string eval the
+		// frame's Trusted Types refuse.
+		const factory = (realm as { trustedTypes?: object }).trustedTypes;
+		const isScript = factory
+			? (
+					Reflect.getPrototypeOf(factory) as {
+						isScript?: (value: unknown) => boolean;
+					} | null
+				)?.isScript
+			: undefined;
 		const isCode = (x: unknown): x is string | object => {
 			if (typeof x === 'string') return true;
-			const Trusted = (realm as { TrustedScript?: unknown }).TrustedScript;
-			return typeof Trusted === 'function' && x instanceof Trusted;
+			return (
+				typeof isScript === 'function' &&
+				typeof x === 'object' &&
+				x !== null &&
+				Reflect.apply(isScript, factory, [x]) === true
+			);
 		};
 		/**
 		 * The page's code `x` that an eval runs, rewritten (null where the

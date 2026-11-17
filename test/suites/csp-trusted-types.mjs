@@ -106,6 +106,11 @@ const ENFORCED = {
 		probes: ['default-pass', 'eval', 'function', 'timeout', 'script-text'],
 	},
 	frame: { p: RTT, js: 'tt', probes: ['default-pass', 'frame-innerHTML'] },
+	// a frame's eval runs a TrustedScript of its parent's policy (Google's
+	// sign-in page runs its BotGuard program that way), with or without a
+	// policy that requires one
+	'frame eval': { p: RTT, js: 'tt', probes: ['frame-trusted-eval'] },
+	'frame eval, no policy': { js: 'tt', probes: ['frame-trusted-eval'] },
 	// policy names
 	names: {
 		p: `${RTT}; trusted-types foo bar`,
