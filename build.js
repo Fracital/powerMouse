@@ -121,6 +121,30 @@ export const ownIterable = ownIteration[0];
 export const ownItems = ownIteration[1];
 `;
 }
+/**
+ * idb, the service worker's IndexedDB wrapper, as a module without side
+ * effects in the inject bundles: src/server/Cookies.ts imports it for its jar
+ * class, which no inject bundle uses (they take the jar's parse and match
+ * functions), and its top level (three WeakMaps and the trap tables it
+ * builds) was in every proxied frame, 3 KB of each document bundle. Unused,
+ * it is left out.
+ */
+const idbPure = {
+	name: 'idb-pure',
+	setup(pluginBuild) {
+		pluginBuild.onResolve({ filter: /^idb$/ }, async (args) => {
+			if (args.pluginData === 'idb-pure') return undefined;
+			const found = await pluginBuild.resolve(args.path, {
+				kind: args.kind,
+				importer: args.importer,
+				resolveDir: args.resolveDir,
+				pluginData: 'idb-pure',
+			});
+			return found.errors.length ? undefined : { ...found, sideEffects: false };
+		});
+	},
+};
+
 const ownIteration = ownIterationPlugin(
 	[snapshot, domSnapshot, ownIterableFile],
 	false,
@@ -859,7 +883,7 @@ const bundles = (library, generation = '') =>
 			noSourceMaps,
 			...(options.plugins ?? []),
 			...(options.inject?.includes(snapshot)
-				? [withOwnIterable, ownIteration]
+				? [idbPure, withOwnIterable, ownIteration]
 				: []),
 		],
 	}));
