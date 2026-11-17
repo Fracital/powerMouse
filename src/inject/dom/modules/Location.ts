@@ -203,8 +203,10 @@ export default class LocationModule extends Module<DocumentClient> {
 						.parent as typeof globalThis;
 					if (parent === context || !(this.client.names.client in parent))
 						break;
+					// its origin as a page sees it: "null" for an opaque one (a
+					// frame sandboxed without allow-same-origin, a data: document)
 					origins.push(
-						(parent as any)[this.client.names.client].url.url.origin as string,
+						(parent as any)[this.client.names.client].origin as string,
 					);
 					context = parent;
 				} catch (error) {
@@ -223,7 +225,10 @@ export default class LocationModule extends Module<DocumentClient> {
 		// `item`, `contains` and an iterator of its own, frozen: four keys and
 		// three function sources the browser's list does not have.
 		const lists = new WeakMap<object, string[]>();
-		let list: object | null = null;
+		// the same list every time, as natively, until the ancestors change
+		// (a removed frame's location has none, and a new list)
+		let kept: { origins: string; list: object } | null = null;
+		const hooked = new WeakSet<object>();
 		// (the prototype of the browser's own list: a removed frame's window
 		// has no DOMStringList of its own any more, and still lists)
 		const listPrototype = () =>
@@ -231,6 +236,8 @@ export default class LocationModule extends Module<DocumentClient> {
 				Reflect.apply(ancestorDescriptor!.get!, real, []) as object,
 			) as object;
 		const hookListPrototype = (prototype: object) => {
+			if (hooked.has(prototype)) return;
+			hooked.add(prototype);
 			const proxyModule = this.client.getModule(ProxyModule)!;
 			const answers: Record<
 				string,
@@ -265,8 +272,9 @@ export default class LocationModule extends Module<DocumentClient> {
 			}
 		};
 		const ancestorList = () => {
-			if (list) return list;
 			const origins = ancestorOrigins();
+			const key = origins.join(' ');
+			if (kept && kept.origins === key) return kept.list;
 			const prototype = listPrototype();
 			hookListPrototype(prototype);
 			const descriptors: PropertyDescriptorMap = {};
@@ -277,8 +285,9 @@ export default class LocationModule extends Module<DocumentClient> {
 					configurable: true,
 				};
 			});
-			list = Object.create(prototype, descriptors) as object;
+			const list = Object.create(prototype, descriptors) as object;
 			lists.set(list, origins);
+			kept = { origins: key, list };
 			return list;
 		};
 		const ancestorDescriptor = Reflect.getOwnPropertyDescriptor(

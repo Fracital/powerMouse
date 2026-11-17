@@ -8,9 +8,6 @@
 	"/html/browsers/history/the-location-interface/location-ancestor-origins-referrerpolicy-unsupported-elements.html": {
 		"<frame> with referrerpolicy='no-referrer' does not mask initial about:blank ancestorOrigins": "FAIL: Cannot read properties of null (reading 'contentWindow')"
 	},
-	"/html/browsers/history/the-location-interface/location-ancestor-origins.sub.html": {
-		"test sandboxed iframe in A1, A1 iframe attribute sandbox -> C1 -> B1 -> C2": "FAIL: assert_array_equals: expected property 0 to be \"null\" but got \"http://www.localhost:PORT\" (expected array [\"null\", \"http://localhost:PORT\"] got [\"http://www.localhost:PORT\", \"http://localhost:PORT\"])"
-	},
 	"/html/browsers/history/the-location-interface/location-getters-about-blank.html": {
 		"Location properties on an about:blank page": "FAIL: Failed to read a named property 'href' from 'Location': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
 	},
@@ -38,9 +35,6 @@
 	},
 	"/html/browsers/history/the-location-interface/location_reload_javascript_url.html": {
 		"location_reload_javascript_url": "FAIL: assert_equals: iframe url (2) expected \"http://localhost:PORT/common/blank.html#foo\" but got \"http://localhost:PORT/common/blank.html#~JHIC\""
-	},
-	"/html/browsers/history/the-location-interface/no-browsing-context.window.html": {
-		"Getting `ancestorOrigins` of a `Location` object sans browsing context should be []": "FAIL: Cannot read properties of undefined (reading 'prototype')"
 	},
 	"/html/browsers/history/the-location-interface/same-hash.html": {
 		"Using location.hash = \"#te<st\" must not reset scroll position": "FAIL: assert_equals: Reassigning the same hash must not change the scroll position expected 0 but got 166",
