@@ -829,22 +829,75 @@ export default class UnrouteModule extends Module<Client> {
 				}
 				return Reflect.apply(handler, global, args);
 			};
+			const windowSet = onerror.set;
+			/** the window's handler becomes `value`, called through `call` */
+			const assign = (value: unknown) => {
+				handler =
+					typeof value === 'function' ||
+					(typeof value === 'object' && value !== null)
+						? value
+						: null;
+				Reflect.apply(windowSet, global, [handler === null ? null : call]);
+			};
+			// what the browser holds is `call` only while the page's handler came
+			// through here: one a <body onerror> attribute compiled is the
+			// browser's own function, and the page reads that
+			const shown = (native: unknown) => (native === call ? handler : native);
 			Reflect.defineProperty(owner, 'onerror', {
 				...onerror,
 				get: proxyModule.wrapFunction(onerror.get, (target, that, args) =>
-					that === global ? handler : Reflect.apply(target, that, args),
+					shown(Reflect.apply(target, that, args)),
 				),
 				set: proxyModule.wrapFunction(onerror.set, (target, that, args) => {
 					if (that !== global) return Reflect.apply(target, that, args);
-					const value = args[0];
-					handler =
-						typeof value === 'function' ||
-						(typeof value === 'object' && value !== null)
-							? value
-							: null;
-					Reflect.apply(target, that, [handler === null ? null : call]);
+					assign(args[0]);
 				}),
 			});
+			// A body's and a frameset's onerror are the window's (the HTML
+			// "window-reflecting" handlers): read there, the page got the inject's
+			// wrapper where it had set a function on the window, and one set
+			// there was not the window's to read
+			const ownerDocument = Reflect.getOwnPropertyDescriptor(
+				global.Node?.prototype ?? {},
+				'ownerDocument',
+			)?.get;
+			const defaultView = Reflect.getOwnPropertyDescriptor(
+				global.Document?.prototype ?? {},
+				'defaultView',
+			)?.get;
+			for (const name of ['HTMLBodyElement', 'HTMLFrameSetElement']) {
+				const reflecting = global[name]?.prototype as object | undefined;
+				const descriptor =
+					reflecting && Reflect.getOwnPropertyDescriptor(reflecting, 'onerror');
+				if (
+					!reflecting ||
+					!descriptor?.get ||
+					!descriptor.set ||
+					!ownerDocument ||
+					!defaultView
+				)
+					continue;
+				Reflect.defineProperty(reflecting, 'onerror', {
+					...descriptor,
+					get: proxyModule.wrapFunction(descriptor.get, (target, that, args) =>
+						shown(Reflect.apply(target, that, args)),
+					),
+					set: proxyModule.wrapFunction(
+						descriptor.set,
+						(target, that, args) => {
+							// the native getter first: it throws for anything but a body
+							Reflect.apply(descriptor.get!, that, []);
+							const view = Reflect.apply(
+								defaultView,
+								Reflect.apply(ownerDocument, that, []),
+								[],
+							);
+							if (view !== global) return Reflect.apply(target, that, args);
+							assign(args[0]);
+						},
+					),
+				});
+			}
 		}
 
 		// the first listener of a dedicated worker, before any of the page's:

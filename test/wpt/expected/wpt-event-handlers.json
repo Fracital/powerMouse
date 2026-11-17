@@ -3,12 +3,8 @@
 		"(harness)": "TIMEOUT: ",
 		"The entry settings object while executing the compiled callback via Web IDL's invoke must be that of the node document": "TIMEOUT: Test timed out"
 	},
-	"/html/webappapis/scripting/events/event-handler-attributes-body-alt.html": {
-		"shadowed error (document.createElement(\"body\"))": "FAIL: assert_equals: window should reflect expected (function) function \"() => 0\" but got (object) null"
-	},
 	"/html/webappapis/scripting/events/event-handler-attributes-body-window.html": {
 		"(harness)": "ERROR: Uncaught TypeError: Illegal invocation",
-		"shadowed error (document.body)": "FAIL: assert_equals: window should reflect expected (function) function \"() => 0\" but got (object) null",
 		"shadowed messageerror on body fires when event dispatched on window": "MISSING: the harness ended ERROR before this subtest",
 		"shadowed offline on body fires when event dispatched on window": "MISSING: the harness ended ERROR before this subtest",
 		"shadowed online on body fires when event dispatched on window": "MISSING: the harness ended ERROR before this subtest",
@@ -18,24 +14,11 @@
 		"shadowed storage on body fires when event dispatched on window": "MISSING: the harness ended ERROR before this subtest",
 		"shadowed unload on body fires when event dispatched on window": "MISSING: the harness ended ERROR before this subtest"
 	},
-	"/html/webappapis/scripting/events/event-handler-attributes-frameset-alt.html": {
-		"shadowed error (document.createElement(\"frameset\"))": "FAIL: assert_equals: window should reflect expected (function) function \"() => 0\" but got (object) null"
-	},
 	"/html/webappapis/scripting/events/event-handler-attributes-frameset-window.html": {
-		"(harness)": "ERROR: Uncaught TypeError: Illegal invocation",
-		"shadowed error (document.body)": "FAIL: assert_equals: window should reflect expected (function) function \"() => 0\" but got (object) null"
-	},
-	"/html/webappapis/scripting/events/event-handler-attributes-window-frameset.html": {
-		"shadowed error (window)": "FAIL: assert_equals: body should reflect expected function \"() => 0\" but got function \"(...g)=>{if(typeof p==\"function\"){if(g.length>1){let w=this.#o({message:g[0],filename:g[1],lineno:g[2],colno:g[3],error"
-	},
-	"/html/webappapis/scripting/events/event-handler-attributes-window.html": {
-		"shadowed error (window)": "FAIL: assert_equals: body should reflect expected function \"() => 0\" but got function \"(...g)=>{if(typeof p==\"function\"){if(g.length>1){let w=this.#o({message:g[0],filename:g[1],lineno:g[2],colno:g[3],error"
+		"(harness)": "ERROR: Uncaught TypeError: Illegal invocation"
 	},
 	"/html/webappapis/scripting/events/event-handler-processing-algorithm-error/workerglobalscope-synthetic-event.worker.html": {
 		"error event is normal (return true does not cancel; one arg) on WorkerGlobalScope, with a synthetic Event": "FAIL: assert_equals: expected 1 but got 5"
-	},
-	"/html/webappapis/scripting/events/event-handler-sourcetext.html": {
-		"error event handler on connected body, reflected to Window": "FAIL: Cannot read properties of null (reading 'toString')"
 	},
 	"/html/webappapis/scripting/events/eventhandler-cancellation.html": {
 		"event handler cancellation behavior": "FAIL: Failed to set a named property 'onerror' on 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
