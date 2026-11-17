@@ -919,6 +919,13 @@ export default class FetchModule extends Module<Client> {
 					),
 				),
 		};
+		// (a text stream is the browser's own of an empty body: a stream
+		// that ends at once, as natively for an opaque response)
+		const EmptyResponse = global.Response;
+		const textStream = (proto as unknown as Record<string, unknown>).textStream;
+		if (typeof textStream === 'function')
+			emptyBody.textStream = () =>
+				Reflect.apply(textStream, new EmptyResponse(), []);
 		const bodyMethod = (target: Function, that: unknown, args: unknown[]) =>
 			types.get(that as Response) === 'opaque'
 				? emptyBody[target.name]()

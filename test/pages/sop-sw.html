@@ -75,6 +75,8 @@
 				read(via('own', r(B).url)),
 			"sw/the worker's own read of another site with ACAO": async () =>
 				read(via('own', r(B, { acao: '*' }).url)),
+			"sw/the worker's own no-cors read of another site as a text stream":
+				async () => read(via('stream', r(B).url)),
 			'sw/an image of another site the worker answers opaque': async () => {
 				const image = new Image();
 				await new Promise((resolve) => {

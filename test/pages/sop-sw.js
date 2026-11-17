@@ -60,6 +60,17 @@ self.addEventListener('fetch', (event) => {
 				),
 			);
 			break;
+		// the worker's own no-cors read of another origin as a text stream:
+		// an opaque body is none, however it is read
+		case 'stream':
+			event.respondWith(
+				fetch(target, { mode: 'no-cors' }).then(async (response) => {
+					let text = '';
+					for await (const chunk of response.textStream()) text += chunk;
+					return new Response(`${response.type} ${text}`);
+				}),
+			);
+			break;
 		// the page's request as it came
 		case 'pass':
 			event.respondWith(fetch(event.request));
