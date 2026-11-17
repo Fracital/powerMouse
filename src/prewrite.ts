@@ -97,7 +97,7 @@ export function packRewrite(
 }
 
 /** the MIME types a classic script may name, as Chrome takes them (DOMAttributes' scriptKind) */
-const JS_MIME_TYPES = new Set([
+export const JS_MIME_TYPES = new Set([
 	'application/ecmascript',
 	'application/javascript',
 	'application/x-ecmascript',

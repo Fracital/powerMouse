@@ -38,19 +38,17 @@ import DOMHooksModule, {
 	CustomElement,
 	nativeElement,
 	nativeGetter,
+	nativeHTMLElement,
 	nativeNode,
 } from './DOMHooks';
 import { hiddenMove, hiddenMutation } from './MutationObserver';
 
-export const nativeHTMLElement: HTMLElement = Object.create(nativeElement);
 export const nativeHTMLStyleElement: HTMLStyleElement =
 	Object.create(nativeHTMLElement);
 // an SVG <style> (inline SVG in an HTML page applies its CSS like an HTML
 // one): its own `sheet`, which HTMLStyleElement's throws on
 export const nativeSVGStyleElement: SVGStyleElement =
 	Object.create(nativeElement);
-export const nativeHTMLFormElement: HTMLFormElement =
-	Object.create(nativeHTMLElement);
 export const nativeHTMLScriptElement: HTMLScriptElement =
 	Object.create(nativeHTMLElement);
 export const nativeCharacterData: CharacterData = Object.create(nativeNode);
@@ -60,12 +58,10 @@ export const nativeDocumentFragment: DocumentFragment =
 applyDescriptors(nativeCharacterData, CharacterData.prototype);
 applyDescriptors(nativeCharacterData, Text.prototype);
 applyDescriptors(nativeDocumentFragment, DocumentFragment.prototype);
-applyDescriptors(nativeHTMLElement, HTMLElement.prototype);
 applyDescriptors(nativeHTMLStyleElement, HTMLStyleElement.prototype);
 applyDescriptors(nativeSVGStyleElement, SVGElement.prototype);
 applyDescriptors(nativeSVGStyleElement, SVGStyleElement.prototype);
 applyDescriptors(nativeHTMLScriptElement, HTMLScriptElement.prototype);
-applyDescriptors(nativeHTMLFormElement, HTMLFormElement.prototype);
 const nativeCreateTextNode = Document.prototype.createTextNode;
 const nodeTypeGet = Reflect.getOwnPropertyDescriptor(
 	Node.prototype,
@@ -146,8 +142,6 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		const realm = client.global;
 		const proxyModule = client.getModule(ProxyModule)!;
 
-		const compositeElements = new Map<Element, () => Element>(); // new WeakMap<Element, () => Element>();
-
 		/*const observer = new MutationObserver((mutations) => {
 			for (const mutation of mutations) {
 				for (const node of [...mutation.addedNodes, ...mutation.removedNodes]) {
@@ -178,11 +172,6 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			createComposite: () => Element,
 		) {
 			element.replaceWith(createComposite());
-			Reflect.defineProperty(element, Symbol.toStringTag, {
-				value: 'abc' + Math.random().toString(36).slice(2),
-			});
-			element.setAttribute((element as any)[Symbol.toStringTag], 'TEST');
-			compositeElements.set(element, createComposite);
 		}
 
 		// `node` read through its own kind's native accessors, if it is a

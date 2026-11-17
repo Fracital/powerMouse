@@ -1,6 +1,6 @@
 import { decodeBase64, encodeBase64 } from '../../../base64';
 import { decodeCookie, joinAnswer } from '../../../encodeCookie';
-import { geckoXHR, queueXHR } from '../../../routeURL';
+import { queueXHR } from '../../../routeURL';
 import { urlLike } from '../../../StompURL';
 import { ProcessData, SerializableRequestInit, SyncBody } from '../../../sync';
 import { headersRecord } from '../../../syncHeaders';
@@ -359,15 +359,6 @@ export default class SyncModule extends Module<DocumentClient> {
 			Reflect.apply(objectTag, body, []) === '[object ArrayBuffer]'
 		) {
 			data.bodyBase64 = encodeBase64(new Uint8Array(body as ArrayBuffer));
-		}
-
-		if (navigator.userAgent.includes('gecko')) {
-			const http = new XMLHttpRequest();
-
-			http.open('POST', geckoXHR(client.url), false);
-			http.send(JSON.stringify(data));
-
-			return createResponse(JSON.parse(http.responseText));
 		}
 
 		const id = 'sync-request-' + Math.random().toString(16).slice(2);

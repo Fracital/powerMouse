@@ -628,8 +628,6 @@ export default function cloneRawNode(
 					} catch (err) {
 						// d[0].nodeName may be HTMLUnknownElement
 						console.error(err);
-						// eslint-disable-next-line no-debugger
-						debugger;
 					}
 
 					const base = d[0].nodeName === 'BASE';
