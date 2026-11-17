@@ -131,20 +131,6 @@
 		"Redirect 308 from remote to another remote with user": "FAIL: assert_unreached: Should have rejected: undefined Reached unreachable code",
 		"Redirect 308 from remote to another remote with password": "FAIL: assert_unreached: Should have rejected: undefined Reached unreachable code"
 	},
-	"/fetch/api/cors/cors-redirect.any.html": {
-		"Redirect 301: cors to same origin": "FAIL: assert_equals: Origin is correctly set after redirect expected \"null\" but got \"\"",
-		"Redirect 302: cors to same origin": "FAIL: assert_equals: Origin is correctly set after redirect expected \"null\" but got \"\"",
-		"Redirect 303: cors to same origin": "FAIL: assert_equals: Origin is correctly set after redirect expected \"null\" but got \"\"",
-		"Redirect 307: cors to same origin": "FAIL: assert_equals: Origin is correctly set after redirect expected \"null\" but got \"\"",
-		"Redirect 308: cors to same origin": "FAIL: assert_equals: Origin is correctly set after redirect expected \"null\" but got \"\""
-	},
-	"/fetch/api/cors/cors-redirect.any.worker.html": {
-		"Redirect 301: cors to same origin": "FAIL: assert_equals: Origin is correctly set after redirect expected \"null\" but got \"\"",
-		"Redirect 302: cors to same origin": "FAIL: assert_equals: Origin is correctly set after redirect expected \"null\" but got \"\"",
-		"Redirect 303: cors to same origin": "FAIL: assert_equals: Origin is correctly set after redirect expected \"null\" but got \"\"",
-		"Redirect 307: cors to same origin": "FAIL: assert_equals: Origin is correctly set after redirect expected \"null\" but got \"\"",
-		"Redirect 308: cors to same origin": "FAIL: assert_equals: Origin is correctly set after redirect expected \"null\" but got \"\""
-	},
 	"/fetch/api/cors/data-url-shared-worker.html": {
 		"fetching \"top.txt\" with CORS allowing null origin should be allowed.": "FAIL: assert_equals: expected \"allowed\" but got \"rejected\""
 	},

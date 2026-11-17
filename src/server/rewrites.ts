@@ -1541,9 +1541,12 @@ function genericForward(
 		// the browser sends Origin on cross-origin CORS requests and on every
 		// request with a body; Chrome also on a module script's, same-origin
 		// or not
+		// (a chain that went from another origin to a third is no origin's any
+		// more, its own included: "null", below)
 		if (
 			(initiator || opaque) &&
-			((!sameOrigin && serverRequest.mode === 'cors') ||
+			(((!sameOrigin || previousHop?.tainted) &&
+				serverRequest.mode === 'cors') ||
 				(serverRequest.mode === 'cors' && destination === 'script') ||
 				!BODY_ILLEGAL.includes(serverRequest.method))
 		)
