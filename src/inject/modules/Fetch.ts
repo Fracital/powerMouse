@@ -400,6 +400,8 @@ export default class FetchModule extends Module<Client> {
 			},
 			true,
 		);
+		// (the fetch hook makes its own, whatever the page puts on the window)
+		const PageRequest = this.client.global.Request;
 
 		// a Request's own URL: the browser fetches that, whatever `url` the
 		// page has defined on the object (YouTube shadows a data: Request's
@@ -443,7 +445,12 @@ export default class FetchModule extends Module<Client> {
 				let init: RequestInit;
 				let url: urlLike;
 
-				const request = args[0] instanceof Request ? args[0] : null;
+				let request = args[0] instanceof Request ? args[0] : null;
+				// fetch(request, init) is a fetch of `new Request(request, init)`:
+				// what the init names replaces the request's (its method, body,
+				// headers, signal), which reading the request alone would drop
+				if (request && args[1] !== undefined && args[1] !== null)
+					request = new PageRequest(request, args[1]);
 				if (request) {
 					url = new URL(Reflect.apply(nativeRequestURL, request, []) as string);
 					init = request;
@@ -457,11 +464,9 @@ export default class FetchModule extends Module<Client> {
 					init = args[1];
 				}
 				// the request's mode, which decides the response's type
-				const mode =
-					(args[1] as RequestInit | undefined)?.mode ??
-					(request
-						? (Reflect.apply(nativeRequestMode, request, []) as RequestMode)
-						: 'cors');
+				const mode = request
+					? (Reflect.apply(nativeRequestMode, request, []) as RequestMode)
+					: ((args[1] as RequestInit | undefined)?.mode ?? 'cors');
 
 				// one a worker's policy refuses (requestVerdict, which reports it
 				// as the browser does: twice for a report-only policy alone) fails
@@ -474,8 +479,7 @@ export default class FetchModule extends Module<Client> {
 					// a Request of a URL the browser can fetch as it is goes as
 					// itself: as an init its members would be read through the
 					// getters the page may have put on it
-					if (request && browserURL === url.href)
-						return await fetch(request, args[1]);
+					if (request && browserURL === url.href) return await fetch(request);
 					return await fetch(browserURL, init);
 				}
 				// a report-only policy's refusal (an enforced one is the
