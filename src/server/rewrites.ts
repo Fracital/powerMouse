@@ -411,6 +411,12 @@ interface RedirectHop {
 	grant?: { token: string; load: string };
 	/** the routed URL the chain began at */
 	first?: string;
+	/**
+	 * the chain went from one origin to another: the Authorization header
+	 * the page set stays behind from here on (the browser follows the chain
+	 * in proxy URL space, where it never crosses, and sends it on every hop)
+	 */
+	unauthorized?: boolean;
 }
 
 /** the destinations and modes a LOAD_HEADER may name: a page's subresource loads, never a navigation */
@@ -1468,6 +1474,10 @@ function genericForward(
 			requestReferrer,
 			returned?.url ?? serverRequest.url,
 		);
+		// an earlier hop of the chain was of another origin than the one
+		// before it: the page's Authorization went no further than that
+		const unauthorized = !!previousHop?.unauthorized;
+		if (unauthorized) requestHeaders.delete('authorization');
 		const carried = previousHop?.referer;
 		// (a document of an opaque origin, one the page sandboxed without
 		// allow-same-origin, is no referrer of anything)
@@ -2244,7 +2254,11 @@ function genericForward(
 		// that are not safelisted, without credentials; its answer must allow
 		// both, and is kept for its max-age
 		if (corsChecked && !fromWorker) {
-			const unsafe = unsafeHeaderNames(serverRequest.headers, notPagesHeader);
+			const unsafe = unsafeHeaderNames(
+				serverRequest.headers,
+				(name) =>
+					notPagesHeader(name) || (unauthorized && name === 'authorization'),
+			);
 			// kept per network partition, as Chrome keeps its preflight cache
 			const preflightPartition = `${topSite ?? ''} ${requestFrameSite ?? ''}`;
 			if (
@@ -3421,6 +3435,10 @@ function genericForward(
 						? { tainted: true }
 						: {}),
 					...(chainCrossed ? { crossed: true } : {}),
+					...(unauthorized ||
+					crossOriginLocation(response.headers.get('location'), url)
+						? { unauthorized: true }
+						: {}),
 					...(timingDenied ? { timingDenied: true } : {}),
 					...(granted !== null && loadToken !== null
 						? { grant: { token: loadToken, load: granted } }
