@@ -6,6 +6,7 @@ import { withQuery } from '../../../urlShape';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
+import { activationState } from '../activation';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { deferred } from '../deferred';
 import { destinationURL } from '../freshContext';
@@ -77,11 +78,6 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 				return null;
 			}
 		})();
-		const isActive = Object.getOwnPropertyDescriptor(
-			global.UserActivation?.prototype ?? {},
-			'isActive',
-		)?.get;
-		const activation = global.navigator.userActivation;
 		const routedClients = (): (DocumentClient | null)[] => {
 			const candidates = [moduleClient.routedClient()];
 			try {
@@ -137,12 +133,8 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 				});
 				return;
 			}
-			let activated = false;
-			try {
-				activated = !!(activation && isActive?.call(activation));
-			} catch (error) {
-				// no user activation API
-			}
+			// the document's own, as natively (./activation.ts)
+			const activated = (activationState(moduleClient) & 1) !== 0;
 			routed.postToWorker({
 				[NAVIGATION_HINT]: {
 					directory: routed.directory,

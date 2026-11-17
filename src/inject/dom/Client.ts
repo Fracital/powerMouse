@@ -88,6 +88,11 @@ import {
 } from '../rewriter';
 import { learnSites, siteAnswers } from '../sites';
 import { trustedHTML, trustedScript } from '../trusted';
+import {
+	activationState,
+	type ActivationNote,
+	type markActivation,
+} from './activation';
 import cloneRawNode, {
 	inertDocumentOf,
 	nativeAttributes,
@@ -392,7 +397,16 @@ export default class DocumentClient extends Client {
 		/** a transient activation from this document's own input */
 		transient: () => boolean;
 		token: string;
+		/** the native UserActivation getters (isActive, hasBeenActive) and the navigator's object */
+		natives?: [() => boolean, () => boolean, object];
 	} | null = null;
+	/**
+	 * @internal the activations that reached this document, once one did
+	 * that the browser gave it only through the proxy (./activation.ts)
+	 */
+	activation: ActivationNote | null = null;
+	/** @internal ./activation.ts markActivation, of this document's realm */
+	markActivation: typeof markActivation | null = null;
 	/** the window's native frameElement getter (the Framing module hooks it) */
 	#frameElementGet: (() => Element | null) | undefined;
 	/** whether this window's opener was an opaque origin when it was created */
@@ -2500,7 +2514,7 @@ export default class DocumentClient extends Client {
 			context = parent;
 		}
 		if (target !== this.proxiedTop) return false;
-		const activated = this.global.navigator.userActivation?.isActive === true;
+		const activated = (activationState(this) & 1) !== 0;
 		// a document of another origin than its top's (an opaque one) needs
 		// a user activation all the same, unless its frame's attribute grants
 		// the flag: a policy's sandbox does not lift Chrome's framebusting

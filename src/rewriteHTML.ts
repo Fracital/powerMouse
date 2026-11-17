@@ -25,7 +25,12 @@ import {
 	WORKER_BASE,
 } from './transport/messages';
 import { dataBody } from './urlShape';
-import { DEFERRED_FACTORY, LIGHT_FACTORY, PASSKEYS_FACTORY } from './version';
+import {
+	ACTIVATION_FACTORY,
+	DEFERRED_FACTORY,
+	LIGHT_FACTORY,
+	PASSKEYS_FACTORY,
+} from './version';
 
 /**
  * The route of a document. `form`: a GET form's action, whose query the
@@ -585,7 +590,12 @@ export function libraryScripts(
 ) {
 	// the file assigns the light library's factory, and the document bundle's
 	// deferred statements' functions, to these names (build.js)
-	const name = [LIGHT_FACTORY, DEFERRED_FACTORY, PASSKEYS_FACTORY]
+	const name = [
+		LIGHT_FACTORY,
+		DEFERRED_FACTORY,
+		PASSKEYS_FACTORY,
+		ACTIVATION_FACTORY,
+	]
 		.map(
 			(factory) =>
 				`Reflect.defineProperty(globalThis, ${JSON.stringify(factory)}, { writable: true, configurable: true });`,

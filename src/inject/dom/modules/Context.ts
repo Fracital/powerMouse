@@ -19,6 +19,7 @@ import {
 	OwnWeakSet,
 } from '../../ownCollections';
 import { getPublicSuffix } from '../../rewriter';
+import { activationState } from '../activation';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { frameDestination, frameOfHeld, heldBefore } from '../freshContext';
 
@@ -640,7 +641,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		if (target === top) {
 			let active = false;
 			try {
-				active = client.global.navigator.userActivation?.hasBeenActive === true;
+				active = (activationState(client) & 2) !== 0;
 			} catch (error) {
 				// no user activation API
 			}
@@ -770,7 +771,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		}
 		let active = false;
 		try {
-			active = client.global.navigator.userActivation?.isActive === true;
+			active = (activationState(client) & 1) !== 0;
 		} catch (error) {
 			// no user activation API
 		}

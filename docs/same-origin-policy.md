@@ -876,6 +876,42 @@ Filled in commit by commit; see the CHANGELOG for each.
     images of another site loads in 48 ms (median of 9; 47 to 62 before,
     44 to 55 natively: no difference outside the runs' noise), one worker
     for the fifty.
+- **User activation** (user-activation, against the same pages loaded
+  natively, both modes, Chrome 157). Natively an input event activates its
+  frame, every ancestor and every frame of its origin
+  (`Frame::NotifyUserActivationInFrameTree`): a click in a frame of another
+  site activates it, its frames of its own origin and the top, never the
+  top's other frames. Every proxied frame is of one real origin, so a
+  click activated every frame of the page, and in same-origin mode the
+  host's own clicks (address bar, toolbar) activated all of them: a frame
+  of another site, or an opaque one, could open a popup, go fullscreen,
+  lock the pointer, start a presentation, play sound, vibrate, copy, show
+  a picker or the file picker and navigate the top
+  (`allow-top-navigation-by-user-activation`) on a click in the top. Now
+  each input event in a proxied document walks the page's frames
+  (`src/inject/dom/activation.ts`) and notes in each document whether the
+  activation is natively its own; the controller notes the host's input
+  as foreign to all (`src/controller/hostActivation.ts`). A document a
+  foreign activation reached gets, in its realm and only then (no cost to
+  the others), gates on `navigator.userActivation`, fullscreen, pointer
+  lock, `PresentationRequest.start`, the file pickers, `showPicker`,
+  `vibrate`, `navigator.share`, `EyeDropper.open`, `execCommand` copy and
+  cut, the Clipboard writes, a popup's `window.open`, the device choosers,
+  picture-in-picture and media `play()`, each refusing with Chrome's error
+  while the browser's activation is explained only by the foreign one;
+  the browser's own stays necessary. A document that starts with a sticky
+  activation carried from a document of another origin (a link of another
+  site, a URL typed in the address bar) drops it. A popup's `window.open`
+  is refused only for an activation an input event elsewhere gave: one a
+  document starts with keeps the browser's decision (its popup blocker
+  cannot be asked without an activation, and with the blocker off, as
+  Playwright runs Chrome, every popup opens natively). Left: a consumed
+  activation given back through the proxy within five seconds of one of
+  the document's own; an evaluation's activation (no input event) is the
+  browser's; the autoplay attribute, a file input's `click()`,
+  `AudioContext`, `requestStorageAccess`, `getDisplayMedia` and
+  `PaymentRequest.show` are not gated; a native the page took before the
+  first foreign activation keeps the browser's answer.
 
 ## Visited links
 

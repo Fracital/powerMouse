@@ -54,7 +54,9 @@
 //
 // (STomp's passkey provider's WebAuthn client is a deferred statement of
 // its own, ./passkeysPart.ts: few documents call WebAuthn, and every frame
-// that needs a part here compiles all of them)
+// that needs a part here compiles all of them; and so are the gates of the
+// gesture-gated calls, ./activationPart.ts, which every frame a click
+// elsewhere reaches through the proxy needs and little else)
 //
 // What belongs here: code that runs only once something has happened (a
 // first read, a first call, a surface turned on) and may then wait for one

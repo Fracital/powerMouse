@@ -1,0 +1,202 @@
+<!doctype html>
+<title>UA</title>
+<style>
+	html,
+	body {
+		margin: 0;
+		padding: 0;
+		width: 100%;
+		height: 100%;
+	}
+	iframe {
+		position: absolute;
+		border: 0;
+		padding: 0;
+		margin: 0;
+	}
+	a {
+		position: absolute;
+		left: 20px;
+		width: 160px;
+		height: 30px;
+		display: block;
+		background: #ddd;
+	}
+</style>
+<body>
+	<script>
+		// The frames of a page and the activation each has (user-activation
+		// suite): P, the top, frames `same` of its origin, `opaque` (sandboxed
+		// without allow-same-origin) and `cross` of another site, which frames
+		// `cross-x` (of P's origin) and `cross-y` (of its own). Each says on
+		// the console when navigator.userActivation changes. The frame named
+		// `battery` makes the gesture-gated call `api` once a frame of the
+		// page saw a pointer go down (or, with trigger=move, moved), and logs
+		// what it answered. `links` shows links that navigate the top (of its
+		// origin, of another site). The suite only moves and clicks the mouse:
+		// nothing evaluates in a page.
+		const query = new URLSearchParams(location.search);
+		const name = query.get('name') || 'P';
+		const other = query.get('other');
+		const self = query.get('self');
+		const battery = query.get('battery') || '';
+		const api = query.get('api') || '';
+		const trigger = query.get('trigger') || 'click';
+		const log = (text) => console.log(`ua ${text}`);
+		const ua = navigator.userActivation;
+		log(`start ${name} ${ua.isActive}/${ua.hasBeenActive}`);
+		let last = null;
+		const poll = () => {
+			const state = `${ua.isActive}/${ua.hasBeenActive}`;
+			if (state !== last) log(`state ${name} ${state}`);
+			last = state;
+		};
+		poll();
+		setInterval(poll, 20);
+		const ALLOW =
+			'fullscreen; clipboard-read; clipboard-write; picture-in-picture; storage-access';
+		const page = (child, origin, extra = '') =>
+			`${origin}pages/user-activation.html?name=${child}&other=${encodeURIComponent(other)}&self=${encodeURIComponent(self)}&battery=${battery}&api=${api}&trigger=${trigger}${extra}`;
+		const add = (child, origin, box, sandbox) => {
+			const frame = document.createElement('iframe');
+			if (sandbox) frame.setAttribute('sandbox', sandbox);
+			frame.allow = ALLOW;
+			frame.src = page(child, origin);
+			const [x, y, w, h] = box;
+			frame.style.cssText = `left:${x}px;top:${y}px;width:${w}px;height:${h}px`;
+			document.body.append(frame);
+		};
+		if (name === 'P' && !query.has('links')) {
+			add('same', self, [20, 20, 160, 100]);
+			add(
+				'opaque',
+				self,
+				[200, 20, 160, 100],
+				'allow-scripts allow-popups allow-presentation allow-pointer-lock allow-top-navigation-by-user-activation',
+			);
+			add('cross', other, [380, 20, 300, 220]);
+		}
+		if (name === 'cross') {
+			add('cross-x', self, [10, 10, 120, 80]);
+			add('cross-y', other, [150, 10, 120, 80]);
+		}
+		if (query.has('links'))
+			for (const [id, origin, y] of [
+				['same-next', self, 300],
+				['cross-next', other, 340],
+			]) {
+				const link = document.createElement('a');
+				link.href = page(id, origin);
+				link.textContent = id;
+				link.style.top = `${y}px`;
+				document.body.append(link);
+			}
+		// every window of the page (indexed access works across origins)
+		const all = (win = top, out = []) => {
+			out.push(win);
+			for (let i = 0; i < win.length; i++) all(win[i], out);
+			return out;
+		};
+		const broadcast = () => {
+			for (const win of all()) win.postMessage({ ua: 'run' }, '*');
+		};
+		addEventListener(
+			'pointermove',
+			(event) => {
+				log(`move ${name} ${event.clientX} ${event.clientY}`);
+				if (trigger === 'move') broadcast();
+			},
+			{ once: true },
+		);
+		addEventListener(
+			'pointerdown',
+			() => {
+				log(`down ${name}`);
+				if (trigger === 'click') broadcast();
+			},
+			true,
+		);
+		const settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+		const promised = async (run) => {
+			try {
+				const value = await Promise.race([
+					run(),
+					settle(2000).then(() => 'pending'),
+				]);
+				return `resolved ${value === undefined ? '' : typeof value === 'object' && value !== null ? value.constructor.name : value}`;
+			} catch (error) {
+				return `rejected ${error && error.name}: ${error && error.message}`;
+			}
+		};
+		const returned = (run) => {
+			try {
+				const value = run();
+				return `returned ${value === null ? 'null' : typeof value === 'object' ? value.constructor.name : value}`;
+			} catch (error) {
+				return `threw ${error && error.name}: ${error && error.message}`;
+			}
+		};
+		const CALLS = {
+			userActivation: () => `${ua.isActive}/${ua.hasBeenActive}`,
+			vibrate: () => returned(() => navigator.vibrate(1)),
+			execCopy: () => returned(() => document.execCommand('copy')),
+			showPicker: () => {
+				const input = document.createElement('input');
+				input.type = 'color';
+				document.body.append(input);
+				const answer = returned(() => input.showPicker());
+				input.remove();
+				return answer;
+			},
+			eyeDropper: () =>
+				typeof EyeDropper === 'function'
+					? promised(() =>
+							new EyeDropper().open({ signal: AbortSignal.timeout(300) }),
+						)
+					: 'absent',
+			media: () =>
+				promised(() =>
+					new Audio(
+						'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=',
+					).play(),
+				),
+			pointerLock: () =>
+				promised(async () => {
+					await document.body.requestPointerLock();
+					document.exitPointerLock();
+					return 'locked';
+				}),
+			presentation: () =>
+				promised(() => new PresentationRequest('https://example.com/').start()),
+			fullscreen: () =>
+				promised(async () => {
+					await document.documentElement.requestFullscreen();
+					await document.exitFullscreen();
+					return 'entered';
+				}),
+			filePicker: () =>
+				typeof showOpenFilePicker === 'function'
+					? promised(() => showOpenFilePicker())
+					: 'absent',
+			open: () =>
+				returned(() => {
+					const opened = open('about:blank', '_blank');
+					if (opened) opened.close();
+					return opened ? 'a window' : null;
+				}),
+			topNavigation: () =>
+				returned(() => {
+					top.location.href = page('landed', self);
+					return 'set';
+				}),
+		};
+		let ran = false;
+		addEventListener('message', async (event) => {
+			if (event.data?.ua !== 'run' || name !== battery || ran) return;
+			ran = true;
+			const answer = await CALLS[api]();
+			log(`answer ${name} ${api} ${JSON.stringify(answer)}`);
+		});
+		setTimeout(() => log(`ready ${name}`), 1000);
+	</script>
+</body>

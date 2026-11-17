@@ -315,6 +315,8 @@ const LIGHT_FACTORY = '__stompRewriterLight';
 const DEFERRED_FACTORY = '__stompDeferred';
 /** the name the passkey provider's client's statement assigns (src/version.ts PASSKEYS_FACTORY) */
 const PASSKEYS_FACTORY = '__stompPasskeys';
+/** the name the activation gates' statement assigns (src/version.ts ACTIVATION_FACTORY) */
+const ACTIVATION_FACTORY = '__stompActivation';
 
 const rewriterLib = {
 	name: 'rewriter-lib',
@@ -421,6 +423,8 @@ const DEFERRED_FILES = new Set(
 		'src/inject/bareClient.ts',
 		'src/inject/cookieStoreMethods.ts',
 		'src/inject/deviceGrants.ts',
+		'src/inject/dom/activationGates.ts',
+		'src/inject/dom/activationPart.ts',
 		'src/inject/dom/ancestorOriginsList.ts',
 		'src/inject/dom/attributeViewMethods.ts',
 		'src/inject/dom/beaconRelay.ts',
@@ -668,6 +672,24 @@ const passkeysPart = {
 };
 
 /**
+ * The gates of a document's gesture-gated calls
+ * (src/inject/dom/activationPart.ts), a deferred statement of its own after
+ * the passkey provider's, `__stompActivation=function(__stompShared){...};`
+ * (src/version.ts ACTIVATION_FACTORY), built as the passkey provider's is: a
+ * document that gets an activation only through the proxy compiles it, and
+ * none of the parts.
+ *
+ * @type {import('esbuild').BuildOptions}
+ */
+const activationPart = {
+	...deferredParts,
+	entryPoints: { activationPart: 'src/inject/dom/activationPart.ts' },
+	banner: {
+		js: `${ACTIVATION_FACTORY}=function(__stompShared){"use strict";var __stompParts={};`,
+	},
+};
+
+/**
  * `stomp:deferred-shared` in the document bundles: a function that makes,
  * when the parts are first evaluated, what they read of the bundle
  * (deferredSharing), by file and name
@@ -743,13 +765,14 @@ function outputOf(result) {
 
 /**
  * dist/rewriterLib.js: the light library's statement, then the deferred
- * parts', then the passkey provider's client's, each after a line break
+ * parts', then the passkey provider's client's, then the activation
+ * gates', each after a line break
  * (src/inject/rewriter.ts fileStatements), with one map of all (a sectioned
  * source map)
  */
-async function writeLibrary(light, parts, passkeys) {
-	for (const name of [DEFERRED_FACTORY, PASSKEYS_FACTORY])
-		for (const statement of [light, parts, passkeys])
+async function writeLibrary(light, parts, passkeys, activation) {
+	for (const name of [DEFERRED_FACTORY, PASSKEYS_FACTORY, ACTIVATION_FACTORY])
+		for (const statement of [light, parts, passkeys, activation])
 			if (statement.text.includes(`\n${name}=`))
 				throw new Error(
 					`rewriterLib: a line of the file starts with the name ${name}`,
@@ -757,7 +780,7 @@ async function writeLibrary(light, parts, passkeys) {
 	const ended = (text) => (text.endsWith('\n') ? text : `${text}\n`);
 	let text = '';
 	const sections = [];
-	for (const statement of [light, parts, passkeys]) {
+	for (const statement of [light, parts, passkeys, activation]) {
 		if (statement.map)
 			sections.push({
 				offset: { line: text.split('\n').length - 1, column: 0 },
@@ -974,7 +997,7 @@ const reporter = {
 };
 
 if (dev) {
-	// the file is the three statements: each rebuild of one writes it with the
+	// the file is the four statements: each rebuild of one writes it with the
 	// others' last output. The parts are built once first, so the document
 	// bundles know what they read (a part that imports a new name of the
 	// bundle's needs a restart of the watch)
@@ -982,6 +1005,7 @@ if (dev) {
 		light: null,
 		parts: await build(deferredParts).then(outputOf),
 		passkeys: await build(passkeysPart).then(outputOf),
+		activation: await build(activationPart).then(outputOf),
 	};
 	const written = (key) => ({
 		name: 'rewriter-lib-file',
@@ -989,8 +1013,18 @@ if (dev) {
 			pluginBuild.onEnd(async (result) => {
 				if (result.errors.length || !result.outputFiles) return;
 				latest[key] = outputOf(result);
-				if (latest.light && latest.parts && latest.passkeys)
-					await writeLibrary(latest.light, latest.parts, latest.passkeys);
+				if (
+					latest.light &&
+					latest.parts &&
+					latest.passkeys &&
+					latest.activation
+				)
+					await writeLibrary(
+						latest.light,
+						latest.parts,
+						latest.passkeys,
+						latest.activation,
+					);
 			});
 		},
 	});
@@ -1007,6 +1041,10 @@ if (dev) {
 			{
 				...passkeysPart,
 				plugins: [...passkeysPart.plugins, written('passkeys')],
+			},
+			{
+				...activationPart,
+				plugins: [...activationPart.plugins, written('activation')],
 			},
 			...bundles(`dev${Date.now().toString(36)}`),
 		].map((options) =>
@@ -1026,12 +1064,13 @@ if (dev) {
 	watch(ASSETS, async () => notify(await copyAssets()));
 	console.log('Watching for changes...');
 } else {
-	const [light, parts, passkeys] = await Promise.all([
+	const [light, parts, passkeys, activation] = await Promise.all([
 		build(rewriterLibrary).then(outputOf),
 		build(deferredParts).then(outputOf),
 		build(passkeysPart).then(outputOf),
+		build(activationPart).then(outputOf),
 	]);
-	await writeLibrary(light, parts, passkeys);
+	await writeLibrary(light, parts, passkeys, activation);
 	const library = createHash('sha256')
 		.update(await readFile('dist/rewriterLib.js'))
 		.digest('hex')

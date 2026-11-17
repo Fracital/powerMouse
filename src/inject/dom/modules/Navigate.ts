@@ -7,6 +7,7 @@ import {
 } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
+import { activationState, markActivation, noteInput } from '../activation';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import HistoryModule from './History';
 
@@ -117,17 +118,53 @@ export default class NavigateModule extends Module<DocumentClient> {
 			Reflect.apply(hasBeenActive, userActivation, []) === true;
 		const start = sticky();
 		let input = false;
-		const activated = () => (start ? input : sticky());
+		// the document's activation as natively (../activation.ts): every
+		// input event in it tells the page's documents whose it is
+		moduleClient.markActivation = markActivation;
+		const activated = () =>
+			(start ? input : sticky()) && (activationState(moduleClient) & 2) !== 0;
 		// a transient activation of its own (WebAuthn's in a frame of another
 		// origin): one the host's input or another site's frame gave every
 		// proxied document of the one origin is not this document's
-		const transient = () =>
-			input &&
-			!!isActive &&
-			!!userActivation &&
-			Reflect.apply(isActive, userActivation, []) === true;
+		const transient = () => input && (activationState(moduleClient) & 1) !== 0;
 		const token = `${Date.now().toString(36)}.${Math.random().toString(36).slice(2)}`;
-		moduleClient.historyActivation = { start, activated, transient, token };
+		moduleClient.historyActivation = {
+			start,
+			activated,
+			transient,
+			token,
+			natives:
+				isActive && hasBeenActive && userActivation
+					? [isActive, hasBeenActive, userActivation]
+					: undefined,
+		};
+		// a sticky activation it starts with is carried over from the
+		// frame's last document: natively only from one of its origin (its
+		// referrer, the document that navigated, as the worker decided it)
+		if (start) {
+			let carried = false;
+			try {
+				const referrer = moduleClient.referrerOf(global.document);
+				carried =
+					!moduleClient.sandboxedOpaque &&
+					!!referrer &&
+					new URL(referrer).origin === moduleClient.origin;
+			} catch (error) {
+				// no referrer to read
+			}
+			const now = Date.now();
+			const active =
+				!!isActive &&
+				!!userActivation &&
+				Reflect.apply(isActive, userActivation, []) === true;
+			// a transient one is carried too where the browser keeps the
+			// frame (a frame's navigation, natively the same), not to a top:
+			// natively a new page, here a frame of the host's
+			const top = moduleClient.proxiedTop === global;
+			if (carried) markActivation(moduleClient, false, -Infinity);
+			if (!carried || (active && top))
+				markActivation(moduleClient, true, now, !active, false);
+		}
 		const onInput = (event: Event) => {
 			if (
 				event.type === 'click'
@@ -146,8 +183,22 @@ export default class NavigateModule extends Module<DocumentClient> {
 				)
 			)
 				return;
+			// an input event that activates: the page's documents are told
+			// whose activation it is (a click is none)
+			if (
+				event.isTrusted &&
+				(event.type === 'keydown' ||
+					event.type === 'mousedown' ||
+					event.type === 'touchend' ||
+					(event.type === 'pointerdown' &&
+						(event as PointerEvent).pointerType === 'mouse') ||
+					(event.type === 'pointerup' &&
+						(event as PointerEvent).pointerType !== 'mouse'))
+			)
+				noteInput(moduleClient);
 			if (input) return;
 			input = true;
+			if (moduleClient.activation) moduleClient.activation.ownSticky = true;
 			// a frame of the host's own page (same-origin mode) is told at once:
 			// a message from a document that is navigating can wait behind the
 			// next document's loading for longer than the host can

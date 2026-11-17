@@ -99,6 +99,7 @@ import {
 	noteBrowserNavigation,
 	traverse,
 } from './history';
+import { watchHostInput } from './hostActivation';
 import { hostReload } from './hostReload';
 import {
 	controllerId,
@@ -1116,6 +1117,10 @@ export class StompController extends EventTarget {
 				this.#standIn(),
 			);
 		});
+
+		// the host's own input gives its proxied documents no activation of
+		// their own (./hostActivation.ts)
+		watchHostInput(helperNames(this.config).client);
 
 		window.addEventListener('message', (event) => {
 			// only our own frames, same origin as this page in this mode

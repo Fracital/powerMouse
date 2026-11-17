@@ -12,8 +12,9 @@
 // snapshots taken before any page script ran, the client and every hook's
 // helpers with the bundle.
 import shared from 'stomp:deferred-shared';
-import { PASSKEYS_FACTORY } from '../../version';
+import { ACTIVATION_FACTORY, PASSKEYS_FACTORY } from '../../version';
 import { deferredFactory } from '../rewriter';
+import type { ActivationPart } from './activationPart';
 import type { DeferredParts } from './deferredParts';
 import type { PasskeysPart } from './passkeysPart';
 
@@ -45,5 +46,21 @@ export function passkeysPart(): PasskeysPart {
 	if (passkeys) return passkeys;
 	const made = deferredFactory(PASSKEYS_FACTORY)(shared()) as PasskeysPart;
 	passkeys = made;
+	return made;
+}
+
+/** the activation gates, once this bundle has evaluated them */
+let activation: ActivationPart | null = null;
+
+/**
+ * The gates of a document's gesture-gated calls (./activationPart.ts), a
+ * deferred statement of its own, evaluated the first time a document gets
+ * an activation only through the proxy (./activation.ts), as deferred() is.
+ * Throws when it cannot be had.
+ */
+export function activationPart(): ActivationPart {
+	if (activation) return activation;
+	const made = deferredFactory(ACTIVATION_FACTORY)(shared()) as ActivationPart;
+	activation = made;
 	return made;
 }

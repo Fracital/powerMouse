@@ -65,3 +65,13 @@ export const DEFERRED_FACTORY = '__stompDeferred';
  * it. Taken and deleted as LIGHT_FACTORY is (src/inject/rewriter.ts).
  */
 export const PASSKEYS_FACTORY = '__stompPasskeys';
+
+/**
+ * The name the gates of a document's gesture-gated calls assign their
+ * function to (src/inject/dom/activationPart.ts): a statement of its own
+ * after the passkey provider's, `__stompActivation=function(__stompShared){...};`
+ * (build.js), so a frame that gets an activation only through the proxy
+ * compiles none of the deferred parts for it. Taken and deleted as
+ * LIGHT_FACTORY is (src/inject/rewriter.ts).
+ */
+export const ACTIVATION_FACTORY = '__stompActivation';

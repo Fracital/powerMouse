@@ -41,7 +41,12 @@ import { provideRewriters } from '../rewriters';
 import { blobOriginPair, routeScopeList } from '../routeURL';
 import type { ScriptType } from '../scriptRoutes';
 import type StompURL from '../StompURL';
-import { DEFERRED_FACTORY, LIGHT_FACTORY, PASSKEYS_FACTORY } from '../version';
+import {
+	ACTIVATION_FACTORY,
+	DEFERRED_FACTORY,
+	LIGHT_FACTORY,
+	PASSKEYS_FACTORY,
+} from '../version';
 import { knownSite } from './sites';
 import { trustedFunction } from './trusted';
 
@@ -97,8 +102,10 @@ const toSource = Function.prototype.toString;
 const givenLight: Function | null = taken(LIGHT_FACTORY);
 /** the document bundle's deferred parts' function, the file's second statement, taken the same way */
 const givenDeferred: Function | null = taken(DEFERRED_FACTORY);
-/** the passkey provider's client's function, the file's last statement, taken the same way */
+/** the passkey provider's client's function, the file's third statement, taken the same way */
 const givenPasskeys: Function | null = taken(PASSKEYS_FACTORY);
+/** the activation gates' function, the file's last statement, taken the same way */
+const givenActivation: Function | null = taken(ACTIVATION_FACTORY);
 
 function taken(name: string): Function | null {
 	const descriptor = Reflect.getOwnPropertyDescriptor(globalThis, name);
@@ -116,24 +123,37 @@ let light: Factory | null =
 /** the light library file's text, once this realm asked for it (lightFactory, deferredFactory) */
 let fetched: string | null = null;
 
+/** the file's deferred statements, in the order build.js writes them */
+const DEFERRED_STATEMENTS = [
+	DEFERRED_FACTORY,
+	PASSKEYS_FACTORY,
+	ACTIVATION_FACTORY,
+];
+
 /**
  * The file's statements: the light library's, then the document bundle's
- * deferred parts' (build.js writes the second after a line break, and the
- * first has no line that starts with its name)
+ * deferred ones in DEFERRED_STATEMENTS' order (build.js writes each after a
+ * line break, and no line of another starts with its name), null for one
+ * the file does not have
  */
-function fileStatements(): [
-	light: string,
-	deferred: string | null,
-	passkeys: string | null,
-] {
+function fileStatements(): (string | null)[] {
 	const file = (fetched ??= fetchLibrary().source);
-	const at = file.lastIndexOf(`\n${DEFERRED_FACTORY}=`);
-	if (at === -1) return [file, null, null];
-	const rest = file.slice(at + 1);
-	const next = rest.lastIndexOf(`\n${PASSKEYS_FACTORY}=`);
-	return next === -1
-		? [file.slice(0, at), rest, null]
-		: [file.slice(0, at), rest.slice(0, next), rest.slice(next + 1)];
+	const starts = DEFERRED_STATEMENTS.map((name) =>
+		file.lastIndexOf(`\n${name}=`),
+	);
+	const statements: (string | null)[] = [];
+	let end = file.length;
+	for (let index = starts.length - 1; index >= 0; index--) {
+		const at = starts[index];
+		if (at === -1 || at >= end) {
+			statements[index + 1] = null;
+			continue;
+		}
+		statements[index + 1] = file.slice(at + 1, end);
+		end = at;
+	}
+	statements[0] = file.slice(0, end);
+	return statements;
 }
 
 /**
@@ -155,7 +175,7 @@ export function lightFactory(): Factory {
 	} catch (error) {
 		// the realm above is gone or of another kind: this one asks
 	}
-	if (text === null) text = fileStatements()[0];
+	if (text === null) text = fileStatements()[0]!;
 	const made = evaluated(text, LIGHT_FACTORY);
 	if (typeof made !== 'function')
 		throw new Error('Stomp: the rewriterLib asset has no light library');
@@ -190,11 +210,13 @@ function evaluated(statement: string, name: string, sourceURL = ''): unknown {
 const deferredMade = new Map<string, Function>();
 if (givenDeferred) deferredMade.set(DEFERRED_FACTORY, givenDeferred);
 if (givenPasskeys) deferredMade.set(PASSKEYS_FACTORY, givenPasskeys);
+if (givenActivation) deferredMade.set(ACTIVATION_FACTORY, givenActivation);
 
 /**
  * The function of one of the light library's file's deferred statements
  * (src/inject/dom/deferred.ts): the document bundle's deferred parts'
- * (DEFERRED_FACTORY), or the passkey provider's client's (PASSKEYS_FACTORY),
+ * (DEFERRED_FACTORY), the passkey provider's client's (PASSKEYS_FACTORY) or
+ * the activation gates' (ACTIVATION_FACTORY),
  * each a statement of its own so a realm compiles only the one it needs: the
  * one a top's shell loaded, else made here from its text (the top's, or the
  * file's, asked for with the light library's one synchronous request) as
@@ -212,7 +234,8 @@ export function deferredFactory(
 		} catch (error) {
 			// the realm above is gone or of another kind: this one asks
 		}
-		text ??= fileStatements()[name === PASSKEYS_FACTORY ? 2 : 1];
+		const index = DEFERRED_STATEMENTS.indexOf(name);
+		if (index !== -1) text ??= fileStatements()[index + 1] ?? null;
 		if (text === null)
 			throw new Error(`Stomp: the rewriterLib asset has no ${name}`);
 		// named as the file the statement is in: the stack cleaner drops the
