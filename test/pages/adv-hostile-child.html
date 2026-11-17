@@ -278,12 +278,39 @@
 				// (the next call goes on)
 			}
 		}
-		// (what went in the parent's document leaves it, so the parent's
-		// markup reads as natively: markup-parity)
-		setTimeout(() => {
-			for (let i = 0; i < runs.length; i++) runs[i][3].remove();
-			done(spoil, 'done');
-		}, 800);
+		// The frame is done once the markup's scripts of the kinds that run
+		// later (module, data: src) have had their turn: a module and a data:
+		// src script of the frame's own, inserted after all the calls, have
+		// loaded (no fixed wait: on a loaded machine the markup's ran past
+		// one), and at least 800 ms went by. A deadline stands in for a frame
+		// whose own scripts the spoil kept from loading. (Plain calls only:
+		// the spoils may have replaced the iterators and the array methods.)
+		let waiting = 3;
+		const settled = () => {
+			if (--waiting) return;
+			clearTimeout(deadline);
+			// (what went in the parent's document leaves it, so the parent's
+			// markup reads as natively: markup-parity)
+			setTimeout(() => {
+				for (let i = 0; i < runs.length; i++) runs[i][3].remove();
+				done(spoil, 'done');
+			}, 200);
+		};
+		const deadline = setTimeout(() => {
+			waiting = 1;
+			settled();
+		}, 6000);
+		setTimeout(settled, 800);
+		const last = (type) => {
+			const script = document.createElement('script');
+			script.setAttribute('type', type);
+			script.addEventListener('load', settled);
+			script.addEventListener('error', settled);
+			script.setAttribute('src', 'data:text/javascript,0');
+			document.body.appendChild(script);
+		};
+		last('module');
+		last('text/javascript');
 	} catch (error) {
 		done(spoil, 'threw ' + error);
 	}
