@@ -1,0 +1,37 @@
+<!doctype html>
+<title>PRESENTATION RECONNECT</title>
+<script>
+	// PresentationRequest's start and reconnect as a page without a display
+	// sees them (presentation-reconnect suite): what each rejects with, and
+	// that the members are where they are natively. Reports to
+	// window.__presentation.
+	const settle = async (fn) => {
+		try {
+			const value = await fn();
+			return `resolved ${Object.prototype.toString.call(value)}`;
+		} catch (error) {
+			return `threw ${error?.name}: ${error?.message}`;
+		}
+	};
+	(async () => {
+		// start() answers by whether the page has a user gesture: through the
+		// proxy the address bar's Enter may have handed it one, which lasts a
+		// few seconds; a native tab opened by the suite has none
+		for (let i = 0; i < 40 && navigator.userActivation?.isActive; i++)
+			await new Promise((resolve) => setTimeout(resolve, 250));
+		const request = new PresentationRequest('presentation-reconnect.html');
+		const proto = PresentationRequest.prototype;
+		window.__presentation = {
+			members: Object.getOwnPropertyNames(proto).join(','),
+			reconnect: await settle(() => request.reconnect('a-presentation')),
+			reconnectNoArgs: await settle(() => request.reconnect()),
+			reconnectIllegal: await settle(() => proto.reconnect.call({}, 'x')),
+			start: await settle(() => request.start()),
+			startIllegal: await settle(() => proto.start.call({})),
+			connectionGetter: typeof Object.getOwnPropertyDescriptor(
+				PresentationConnectionAvailableEvent.prototype,
+				'connection',
+			).get,
+		};
+	})();
+</script>

@@ -9,6 +9,7 @@ import { withStack } from '../../nativeErrors';
 import { LazyMap } from '../../ownCollections';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { deferred } from '../deferred';
+import type { PresentationIds } from '../presentations';
 import type { StorageAccessTaken } from '../storageAccess';
 import SyncModule, { WRITE_BUDGET } from './Sync';
 
@@ -714,6 +715,57 @@ export default class StorageModule extends Module<DocumentClient> {
 						: deferred().storageAccessHandle(client, taken, handle);
 				},
 			);
+		}
+
+		// PresentationRequest.reconnect(id) joins only a presentation the
+		// site's documents were handed (../presentations.ts)
+		const presentations = (
+			pageGlobal as { PresentationRequest?: { prototype: any } }
+		).PresentationRequest?.prototype;
+		if (presentations) {
+			let part: PresentationIds | undefined;
+			const ids = () => {
+				try {
+					return (part ??= deferred().presentationIds(client, {
+						stamps: stamps!,
+						getItem: nativeGetItem!,
+						setItem: nativeSetItem!,
+					}));
+				} catch (error) {
+					return undefined;
+				}
+			};
+			const learn = <T>(connection: T): T =>
+				ids()?.learn(connection) ?? connection;
+			presentations.start = proxyModule.wrapFunction(
+				presentations.start,
+				async (target, that, args) =>
+					learn(await Reflect.apply(target, that, args)),
+			);
+			presentations.reconnect = proxyModule.wrapFunction(
+				presentations.reconnect,
+				async (target, that, args) =>
+					learn(
+						await Reflect.apply(
+							target,
+							that,
+							args.length && !ids()?.known(String(args[0])) ? [''] : args,
+						),
+					),
+			);
+			const available = (
+				pageGlobal as {
+					PresentationConnectionAvailableEvent?: { prototype: object };
+				}
+			).PresentationConnectionAvailableEvent?.prototype;
+			const connection = available && own(available, 'connection');
+			if (connection)
+				Reflect.defineProperty(available, 'connection', {
+					...Reflect.getOwnPropertyDescriptor(available, 'connection'),
+					get: proxyModule.wrapFunction(connection, (target, that, args) =>
+						learn(Reflect.apply(target, that, args)),
+					),
+				});
 		}
 
 		// A storage event the browser fires is about the proxy origin's own
