@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+	<head>
+		<title>PARSER SCRIPTS</title>
+		<script>
+			window.__ran = ['head'];
+		</script>
+	</head>
+	<body>
+		<p>a page whose Trusted Types are enforced, with inline scripts</p>
+		<script>
+			window.__ran.push('body');
+		</script>
+		<div>
+			<script>
+				window.__ran.push('nested');
+			</script>
+		</div>
+		<script type="module">
+			window.__ran.push('module');
+		</script>
+	</body>
+</html>

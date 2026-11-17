@@ -3272,6 +3272,15 @@ export default class DocumentClient extends Client {
 			(this.#scriptSlots.get(script) ?? '') === text
 		)
 			return text;
+		// a script of markup the parser is making (the document's own, which
+		// loadHTML copies, or a write's): its text is the parser's, which
+		// runs as it is. Judged as a sink's, every inline script of a page
+		// whose Trusted Types are enforced (Google's sign-in page) was
+		// reported to the page as a trusted-types-sink violation of its own
+		if (getGlobalParsingState(this.global) === 'parsingBeforeWrite') {
+			this.#scriptSlots.set(script, text);
+			return text;
+		}
 		// text that reached the script any other way (a Text node, a clone) is
 		// judged as the script runs: refused, the script runs nothing and the
 		// inject reports it, with no throw (the browser would not throw either)
