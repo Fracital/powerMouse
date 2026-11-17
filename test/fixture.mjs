@@ -12,7 +12,7 @@ import { perf } from './perf-server.mjs';
 import { shapes } from './shapes-server.mjs';
 import { sop } from './sop-server.mjs';
 import { visited } from './visited-server.mjs';
-import { wpt } from './wpt-server.mjs';
+import { wpt, wptUpgrade } from './wpt-server.mjs';
 
 // /pages/<file> serves test/pages/<file> as is; a `<file>.headers.json`
 // next to it adds response headers (Set-Cookie, a Content-Type charset).
@@ -893,6 +893,8 @@ export function startFixture(port = 8084) {
 	// (bypass-relative suite)
 	const sockets = new WebSocketServer({ noServer: true });
 	server.on('upgrade', (req, socket, head) => {
+		// the web-platform-tests' own endpoints (test/wpt-handlers/)
+		if (wptUpgrade(req, socket, head, port)) return;
 		if (!new URL(req.url, 'http://x').pathname.endsWith('/ws-echo'))
 			return socket.destroy();
 		// `?k=<key>`: the handshake's headers kept, as /echo-headers keeps a

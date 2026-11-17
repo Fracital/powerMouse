@@ -8,9 +8,11 @@
 !/test/wpt/README.md
 !/test/wpt/refresh.mjs
 !/test/wpt/expected
+!/test/wpt/lists
 !/test/wpt/resources
-/test/wpt/resources/testharness.js
-/test/wpt/resources/testdriver.js
+/test/wpt/resources/*
+!/test/wpt/resources/testharnessreport.js
+!/test/wpt/resources/testdriver-vendor.js
 test/pages/vendor-*.js
 # minified shapes of real sites' bundles (test/corpus/check.mjs): kept as minified
 /test/corpus/sample

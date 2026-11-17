@@ -22,6 +22,9 @@ export default defineConfig([
 			// scripts of ours in test/wpt/resources/ run in a page too
 			'test/wpt/**/*.html',
 			'test/wpt/**/*.js',
+			'test/wpt/**/*.mjs',
+			'!test/wpt/refresh.mjs',
+			'!test/wpt/lists/*.mjs',
 			// benchmark output, the contenders it builds, and the pages it
 			// serves (host pages and fixtures run in the browser with their
 			// own globals)

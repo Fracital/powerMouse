@@ -27,7 +27,7 @@ import {
 } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { done, FIXTURE, launch, ok, PROXY, sleep } from './lib.mjs';
-import { SAME_ORIGIN_HOST } from './wpt-server.mjs';
+import { metaOf, SAME_ORIGIN_HOST } from './wpt-server.mjs';
 
 const root = fileURLToPath(new URL('./wpt/', import.meta.url));
 const expectedDir = `${root}expected/`;
@@ -36,7 +36,8 @@ const expectedDir = `${root}expected/`;
 // still waiting on a subresource (a `timeout=long` page allows 120 s) or
 // never loaded. The pages that take longer than this through the proxy are a
 // finding in themselves, and a run of hundreds of pages has to end.
-const PAGE_BUDGET_MS = 30000;
+// (a suite's `budget` option changes it for its pages)
+let PAGE_BUDGET_MS = 30000;
 const POLL_MS = 250;
 
 /** the test's origin on the fixture: {{host}} in the substitutions */
@@ -46,29 +47,91 @@ const origin = (() => {
 	return url.origin;
 })();
 
+/** the globals a `// META: global=` value names (wptserve's sets) */
+function globalsOf(value) {
+	const sets = {
+		default: ['window', 'dedicatedworker'],
+		worker: ['dedicatedworker', 'sharedworker', 'serviceworker'],
+	};
+	const globals = new Set(value === null ? sets.default : []);
+	for (const item of (value ?? '').split(',').map((part) => part.trim())) {
+		if (!item) continue;
+		const names = sets[item.replace(/^!/, '')] ?? [item.replace(/^!/, '')];
+		for (const name of names)
+			if (item.startsWith('!')) globals.delete(name);
+			else globals.add(name);
+	}
+	return globals;
+}
+
+// the wrapper page of an .any.js test, by the global it runs in
+const ANY_PAGES = {
+	window: '.any.html',
+	dedicatedworker: '.any.worker.html',
+	sharedworker: '.any.sharedworker.html',
+};
+
+/** the tests whose report is taken by path and query (they declare variants) */
+const exactQuery = new Set();
+
 /**
  * Every test page under `roots` (paths relative to test/wpt/): an .html file
- * that loads testharness.js, or an .any.js / .window.js test (served
- * wrapped as .any.html / .window.html). Helper pages under resources/ and
- * support/ are not tests.
+ * that loads testharness.js, or an .any.js / .window.js / .worker.js test
+ * (served wrapped, an .any.js once per global of `globals` it is exposed
+ * in). A test that declares variants (`// META: variant=?x`, or the meta
+ * element of that name) is one page per variant. Helper pages under
+ * resources/ and support/ are not tests, nor are manual tests and crash
+ * tests.
  */
-export function discover(roots) {
+export function discover(roots, globals = ['window']) {
 	const tests = [];
+	const add = (path, variants) => {
+		if (!variants.length) return tests.push(path);
+		for (const variant of variants) {
+			tests.push(path + variant);
+			exactQuery.add(path + variant);
+		}
+	};
 	const walk = (dir) => {
 		for (const name of readdirSync(dir).sort()) {
 			const full = `${dir}${name}`;
 			if (statSync(full).isDirectory()) {
-				if (name !== 'resources' && name !== 'support') walk(`${full}/`);
+				if (!['resources', 'support', 'crashtests'].includes(name))
+					walk(`${full}/`);
 				continue;
 			}
+			if (/-manual\./.test(name)) continue;
 			const path = `/${full.slice(root.length)}`;
-			if (/\.(any|window)\.js$/.test(name))
-				tests.push(path.replace(/\.js$/, '.html'));
-			else if (
-				name.endsWith('.html') &&
-				readFileSync(full, 'utf8').includes('/resources/testharness.js')
-			)
-				tests.push(path);
+			if (/\.(any|window|worker)\.js$/.test(name)) {
+				const meta = metaOf(readFileSync(full, 'utf8'));
+				const variants = meta
+					.filter(([key]) => key === 'variant')
+					.map(([, value]) => value);
+				if (name.endsWith('.window.js'))
+					add(path.replace(/\.js$/, '.html'), variants);
+				else if (name.endsWith('.worker.js')) {
+					if (globals.includes('dedicatedworker'))
+						add(path.replace(/\.js$/, '.html'), variants);
+				} else {
+					const exposed = globalsOf(
+						meta.find(([key]) => key === 'global')?.[1] ?? null,
+					);
+					for (const global of globals)
+						if (exposed.has(global) && ANY_PAGES[global])
+							add(path.replace(/\.any\.js$/, ANY_PAGES[global]), variants);
+				}
+			} else if (/\.(html|htm|xhtml)$/.test(name)) {
+				const source = readFileSync(full, 'utf8');
+				if (!source.includes('/resources/testharness.js')) continue;
+				add(
+					path,
+					[
+						...source.matchAll(
+							/<meta\s+name=["']?variant["']?\s+content=["']([^"']*)["']/g,
+						),
+					].map(([, value]) => value),
+				);
+			}
 		}
 	};
 	for (const dir of roots) walk(`${root}${dir}/`);
@@ -77,7 +140,9 @@ export function discover(roots) {
 
 async function takeReport(path) {
 	const response = await fetch(
-		`${FIXTURE}_wpt/results?take&path=${encodeURIComponent(path)}`,
+		`${FIXTURE}_wpt/results?take&path=${encodeURIComponent(path)}${
+			exactQuery.has(path) ? '' : '&anyquery'
+		}`,
 	);
 	return response.status === 200 ? response.json() : null;
 }
@@ -190,7 +255,7 @@ async function runProxied(browser, tests, concurrency) {
 				const direct = await frame
 					?.evaluate(() => window.__wptResults)
 					.catch(() => null);
-				return direct?.path === path ? direct : null;
+				return direct?.path === path.split('?')[0] ? direct : null;
 			};
 			while (queue.length) {
 				const path = queue.shift();
@@ -255,13 +320,22 @@ const normalise = (message) =>
 /**
  * Run the suite: `roots` are directories under test/wpt/, `concurrency` the
  * number of pages loading at once in each mode (1 where the tests share
- * the cookie jar).
+ * the cookie jar or other state of the origin), `globals` the globals an
+ * .any.js test runs in (of `window`, `dedicatedworker`, `sharedworker`),
+ * `skip` the pages left out (RegExps over the path and query; the README
+ * says why for each), `budget` the milliseconds a page has to report.
  */
-export async function runWpt(suite, { roots, concurrency = 1 }) {
+export async function runWpt(
+	suite,
+	{ roots, concurrency = 1, globals = ['window'], skip = [], budget },
+) {
 	const only = process.env.WPT_ONLY && new RegExp(process.env.WPT_ONLY);
 	if (process.env.WPT_CONCURRENCY)
 		concurrency = Number(process.env.WPT_CONCURRENCY) || 1;
-	const tests = discover(roots).filter((path) => !only || only.test(path));
+	if (budget) PAGE_BUDGET_MS = budget;
+	const tests = discover(roots, globals)
+		.filter((path) => !skip.some((rule) => rule.test(path)))
+		.filter((path) => !only || only.test(path));
 	const expectedFile = `${expectedDir}${suite}.json`;
 	const expected = existsSync(expectedFile)
 		? JSON.parse(readFileSync(expectedFile, 'utf8'))

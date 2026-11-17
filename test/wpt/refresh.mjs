@@ -9,8 +9,14 @@
 //     resources cookies fetch/metadata referrer-policy common
 //   node test/wpt/refresh.mjs /tmp/wpt
 //
-// Then run the three wpt-* suites with UPDATE_EXPECTED=1 and review the
+// Then run the wpt-* suites with UPDATE_EXPECTED=1 and review the
 // expected-failure lists they rewrite.
+//
+// The lists of the first three areas (cookies, fetch/metadata,
+// referrer-policy) are below; every other area keeps its own in
+// lists/<area>.mjs, a module exporting `include` and `exclude` in the same
+// form and `sparse`, the upstream directories its files come from.
+// `node test/wpt/refresh.mjs --sparse` prints every directory to check out.
 import {
 	copyFileSync,
 	existsSync,
@@ -25,6 +31,29 @@ import { fileURLToPath } from 'node:url';
 
 const here = fileURLToPath(new URL('./', import.meta.url));
 const source = process.argv[2];
+
+/** the areas of lists/: what each adds to INCLUDE, EXCLUDE and the checkout */
+const areas = [];
+if (existsSync(join(here, 'lists')))
+	for (const name of readdirSync(join(here, 'lists')).sort())
+		if (name.endsWith('.mjs'))
+			areas.push(await import(new URL(`./lists/${name}`, import.meta.url)));
+
+if (source === '--sparse') {
+	console.log(
+		[
+			...new Set([
+				'resources',
+				'cookies',
+				'fetch/metadata',
+				'referrer-policy',
+				'common',
+				...areas.flatMap((area) => area.sparse ?? []),
+			]),
+		].join(' '),
+	);
+	process.exit(0);
+}
 if (!source || !existsSync(join(source, 'resources/testharness.js'))) {
 	console.error('usage: node test/wpt/refresh.mjs <path to a wpt checkout>');
 	process.exit(2);
@@ -75,6 +104,7 @@ const INCLUDE = [
 	new RegExp(
 		`^referrer-policy/gen/(top\\.http-rp|top\\.meta|req\\.attr)/[^/]+/${REFERRER_SUBRESOURCES}\\.http\\.html(\\.headers)?$`,
 	),
+	...areas.flatMap((area) => area.include ?? []),
 ];
 
 /** matched paths that still stay out */
@@ -97,6 +127,7 @@ const EXCLUDE = [
 	/^referrer-policy\/generic\/inheritance\/popup-/,
 	// the generic worker inheritance test registers a service worker
 	'referrer-policy/generic/inheritance/workers.html',
+	...areas.flatMap((area) => area.exclude ?? []),
 ];
 
 const matches = (rules, path) =>
@@ -115,7 +146,11 @@ function* walk(dir) {
 
 // start over so a removed upstream file does not linger
 for (const name of readdirSync(here)) {
-	if (['refresh.mjs', 'README.md', 'expected', 'resources'].includes(name))
+	if (
+		['refresh.mjs', 'README.md', 'expected', 'lists', 'resources'].includes(
+			name,
+		)
+	)
 		continue;
 	rmSync(join(here, name), { recursive: true });
 }

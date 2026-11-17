@@ -23,6 +23,7 @@
 	add_completion_callback(function (tests, status) {
 		var report = {
 			path: location.pathname,
+			search: location.search,
 			href: location.href,
 			status: {
 				status: HARNESS_STATUS[status.status] || String(status.status),

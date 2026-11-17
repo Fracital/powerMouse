@@ -1,45 +1,79 @@
 // The web-platform-tests side of the fixture: serves test/wpt/ at the WPT
-// paths the tests hard-code (/resources/, /common/, /cookies/, /fetch/,
-// /referrer-policy/) and ports the few wptserve features they need.
+// paths the tests hard-code (every directory vendored there: /resources/,
+// /common/, /cookies/, /fetch/, /referrer-policy/, ...) and ports the few
+// wptserve features they need.
 //
-// - `.sub.` files get the template substitutions wptserve would do, with
-//   our two host names standing in for the WPT domains: {{host}} is
-//   localhost, the same-site hosts are www.localhost, the cross-site hosts
-//   are 127.0.0.1, every port is the fixture's and https collapses to http
-//   (localhost is a secure context, so the trustworthy-origin tests still
-//   mean something).
+// - `.sub.` files (and `?pipe=sub`) get the template substitutions wptserve
+//   would do, with our two host names standing in for the WPT domains:
+//   {{host}} is localhost, the same-site hosts are www.localhost, the
+//   cross-site hosts are 127.0.0.1, every port is the fixture's and https
+//   collapses to http (localhost is a secure context, so the
+//   trustworthy-origin tests still mean something).
 // - `<file>.headers` and `<file>.sub.headers` sidecars (WPT's format, one
-//   `Name: value` per line) are sent with the file.
-// - `<name>.any.html` and `<name>.window.html` wrap the matching .js the way
-//   wptserve does, honouring its `// META:` lines.
+//   `Name: value` per line) are sent with the file, after the directory's
+//   `__dir__.headers`.
+// - `<name>.any.html`, `.any.worker.html`, `.any.sharedworker.html`,
+//   `.window.html` and `.worker.html` wrap the matching .js the way wptserve
+//   does, honouring its `// META:` lines.
+// - `?pipe=` runs wptserve's `header`, `status`, `sub`, `slice`, `gzip` and
+//   `trickle` pipes over a file (trickle as one delay before the body).
+// - `.asis` files are written to the socket as they are.
 // - The python handlers the vendored tests call are small functions in
-//   HANDLERS, keyed by the .py path.
+//   HANDLERS, keyed by the .py path. The ones of the first three suites are
+//   below; every other area keeps its own in test/wpt-handlers/<area>.mjs
+//   (see `tools` for what such a module is handed).
 // - The report script (test/wpt/resources/testharnessreport.js) posts each
 //   page's results to /_wpt/report; a suite reads them from /_wpt/results.
 //
-// test/fixture.mjs calls `wpt(req, res, port)` first and serves the rest.
+// test/fixture.mjs calls `wpt(req, res, port)` first and serves the rest,
+// and hands a WebSocket upgrade to `wptUpgrade` first.
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
 
 const root = fileURLToPath(new URL('./wpt/', import.meta.url));
-const PREFIXES = [
-	'/resources/',
-	'/common/',
-	'/cookies/',
-	'/fetch/',
-	'/referrer-policy/',
-];
+// ours, not WPT directories: the expected-failure lists and what
+// refresh.mjs copies
+const NOT_SERVED = new Set(['expected', 'lists']);
+const PREFIXES = readdirSync(root)
+	.filter(
+		(name) => !NOT_SERVED.has(name) && statSync(root + name).isDirectory(),
+	)
+	.map((name) => `/${name}/`);
 const TYPES = {
 	html: 'text/html; charset=utf-8',
+	htm: 'text/html; charset=utf-8',
+	xhtml: 'application/xhtml+xml',
+	xht: 'application/xhtml+xml',
+	xml: 'text/xml',
 	js: 'text/javascript; charset=utf-8',
 	mjs: 'text/javascript; charset=utf-8',
 	css: 'text/css; charset=utf-8',
 	json: 'application/json',
 	svg: 'image/svg+xml',
 	png: 'image/png',
+	gif: 'image/gif',
+	jpg: 'image/jpeg',
+	jpeg: 'image/jpeg',
+	ico: 'image/x-icon',
+	webp: 'image/webp',
+	bmp: 'image/bmp',
 	txt: 'text/plain; charset=utf-8',
 	md: 'text/plain; charset=utf-8',
+	wasm: 'application/wasm',
+	mp4: 'video/mp4',
+	webm: 'video/webm',
+	ogv: 'video/ogg',
+	oga: 'audio/ogg',
+	mp3: 'audio/mpeg',
+	wav: 'audio/wav',
+	woff: 'font/woff',
+	woff2: 'font/woff2',
+	ttf: 'font/ttf',
+	otf: 'font/otf',
+	manifest: 'text/cache-manifest',
+	webmanifest: 'application/manifest+json',
 };
 
 export const SAME_ORIGIN_HOST = 'localhost';
@@ -53,23 +87,56 @@ const stash = new Map();
 
 const md5 = (text) => createHash('md5').update(text).digest('hex');
 
+/** wptserve's `{{domains[<name>]}}` / `{{hosts[<set>][<name>]}}`, by subdomain */
+function domain(name, alt) {
+	if (alt) return CROSS_SITE_HOST;
+	if (name === '') return SAME_ORIGIN_HOST;
+	if (name === 'www') return SAME_SITE_HOST;
+	if (name === 'www1') return CROSS_SITE_HOST;
+	if (/^www2(\.www)?$/.test(name)) return `www2.${SAME_ORIGIN_HOST}`;
+	// the IDN ones: more subdomains of localhost
+	return `${name}.${SAME_ORIGIN_HOST}`;
+}
+
 function substitute(text, req, port) {
-	const query = new URL(req.url, 'http://x').searchParams;
+	const url = new URL(req.url, `http://${req.headers.host || 'x'}`);
+	const query = url.searchParams;
+	const location = {
+		server: url.origin,
+		scheme: 'http',
+		host: url.host,
+		hostname: url.hostname,
+		port: String(port),
+		path: url.pathname + url.search,
+		pathname: url.pathname,
+		query: url.search,
+	};
+	// `{{$id:uuid()}}` names a value that `{{$id}}` repeats
+	const named = new Map();
 	return text
 		.replace(/https:\/\/(?=\{\{)/g, 'http://')
 		.replace(/wss:\/\/(?=\{\{)/g, 'ws://')
+		.replace(/\{\{\$(\w+):uuid\(\)\}\}/g, (_, name) => {
+			named.set(name, randomUUID());
+			return named.get(name);
+		})
+		.replace(/\{\{\$(\w+)\}\}/g, (all, name) => named.get(name) ?? all)
 		.replace(/\{\{host\}\}/g, SAME_ORIGIN_HOST)
-		.replace(/\{\{(domains\[www\]|hosts\[\]\[www\])\}\}/g, SAME_SITE_HOST)
-		.replace(/\{\{domains\[www2(\.www)?\]\}\}/g, `www2.${SAME_ORIGIN_HOST}`)
-		.replace(
-			/\{\{(domains\[www1\]|hosts\[alt\]\[[\w.]*\])\}\}/g,
-			CROSS_SITE_HOST,
+		.replace(/\{\{domains\[([^\]]*)\]\}\}/g, (_, name) => domain(name, false))
+		.replace(/\{\{hosts\[(\w*)\]\[([^\]]*)\]\}\}/g, (_, set, name) =>
+			domain(name, set === 'alt'),
 		)
 		.replace(/\{\{ports\[[\w-]+\]\[\d\]\}\}/g, String(port))
 		.replace(/\{\{uuid\(\)\}\}/g, () => randomUUID())
-		.replace(/\{\{GET\[(\w+)\]\}\}/g, (_, name) => query.get(name) ?? '')
+		.replace(/\{\{url_base\}\}/g, '/')
+		.replace(/\{\{location\[(\w+)\]\}\}/g, (all, part) => location[part] ?? all)
+		.replace(/\{\{GET\[([\w-]+)\]\}\}/g, (_, name) => query.get(name) ?? '')
 		.replace(
-			/\{\{header_or_default\((\w+), ?([^)]*)\)\}\}/g,
+			/\{\{headers\[([\w-]+)\]\}\}/g,
+			(_, name) => req.headers[name.toLowerCase()] ?? '',
+		)
+		.replace(
+			/\{\{header_or_default\(([\w-]+), ?([^)]*)\)\}\}/g,
 			(_, name, fallback) => req.headers[name.toLowerCase()] ?? fallback,
 		);
 }
@@ -77,10 +144,16 @@ function substitute(text, req, port) {
 /** WPT's `.headers` sidecar format: one `Name: value` per line */
 function sidecarHeaders(file, req, port) {
 	const headers = [];
-	for (const suffix of ['.headers', '.sub.headers']) {
-		if (!existsSync(file + suffix)) continue;
-		let text = readFileSync(file + suffix, 'utf8');
-		if (suffix === '.sub.headers') text = substitute(text, req, port);
+	const dir = `${file.slice(0, file.lastIndexOf('/') + 1)}__dir__`;
+	for (const sidecar of [
+		`${dir}.headers`,
+		`${dir}.sub.headers`,
+		`${file}.headers`,
+		`${file}.sub.headers`,
+	]) {
+		if (!existsSync(sidecar)) continue;
+		let text = readFileSync(sidecar, 'utf8');
+		if (sidecar.endsWith('.sub.headers')) text = substitute(text, req, port);
 		for (const line of text.split('\n')) {
 			const colon = line.indexOf(':');
 			if (colon > 0)
@@ -104,26 +177,160 @@ function setHeaders(res, headers) {
 		res.setHeader(name, values.length === 1 ? values[0] : values);
 }
 
-/** the wrapper wptserve generates for a .any.js / .window.js test */
-function wrapper(script, source) {
-	const meta = [...source.matchAll(/^\/\/ META: (\w+)=(.*)$/gm)];
-	const title = meta.find(([, k]) => k === 'title')?.[2] ?? script;
-	const lines = [
-		'<!doctype html>',
-		'<meta charset=utf-8>',
-		`<title>${title.replace(/</g, '&lt;')}</title>`,
-	];
-	for (const [, key, value] of meta)
-		if (key === 'timeout')
-			lines.push(`<meta name="timeout" content="${value}">`);
-	lines.push(
-		'<script src="/resources/testharness.js"></script>',
-		'<script src="/resources/testharnessreport.js"></script>',
-	);
-	for (const [, key, value] of meta)
-		if (key === 'script') lines.push(`<script src="${value}"></script>`);
-	lines.push('<div id=log></div>', `<script src="${script}"></script>`);
-	return lines.join('\n');
+/** a test script's `// META: key=value` lines, in order */
+export const metaOf = (source) =>
+	[...source.matchAll(/^\/\/ META: *(\w+)=(.*)$/gm)].map(([, key, value]) => [
+		key,
+		value.trim(),
+	]);
+
+const GLOBAL = (worker) => `self.GLOBAL = {
+  isWindow: function() { return ${!worker}; },
+  isWorker: function() { return ${worker}; },
+  isShadowRealm: function() { return false; },
+};`;
+
+// the wrappers wptserve generates (tools/serve/serve.py), by the suffix of
+// the URL asked for: the suffix of the file behind it, and the document
+const WRAPPERS = [
+	{
+		suffix: '.any.html',
+		file: '.any.js',
+		body: (script, meta) => [
+			`<script>\n${GLOBAL(false)}\n</script>`,
+			'<script src="/resources/testharness.js"></script>',
+			'<script src="/resources/testharnessreport.js"></script>',
+			...meta
+				.filter(([key]) => key === 'script')
+				.map(
+					([, value]) =>
+						`<script src="${value.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></script>`,
+				),
+			'<div id=log></div>',
+			`<script src="${script}"></script>`,
+		],
+	},
+	{
+		suffix: '.window.html',
+		file: '.window.js',
+		body: (script, meta) => [
+			'<script src="/resources/testharness.js"></script>',
+			'<script src="/resources/testharnessreport.js"></script>',
+			...meta
+				.filter(([key]) => key === 'script')
+				.map(
+					([, value]) =>
+						`<script src="${value.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></script>`,
+				),
+			'<div id=log></div>',
+			`<script src="${script}"></script>`,
+		],
+	},
+	...[
+		['.any.worker.html', '.any.js', '.any.worker.js', 'Worker'],
+		['.any.sharedworker.html', '.any.js', '.any.worker.js', 'SharedWorker'],
+		['.worker.html', '.worker.js', '.worker.js', 'Worker'],
+	].map(([suffix, file, loaded, kind]) => ({
+		suffix,
+		file,
+		body: (script, meta, query) => [
+			'<script src="/resources/testharness.js"></script>',
+			'<script src="/resources/testharnessreport.js"></script>',
+			'<div id=log></div>',
+			'<script>',
+			`fetch_tests_from_worker(new ${kind}("${script.slice(0, -file.length)}${loaded}${query}"));`,
+			'</script>',
+		],
+	})),
+];
+
+/** the document wptserve generates for a wrapped test, null when `path` is none */
+function wrapper(path, query) {
+	for (const { suffix, file, body } of WRAPPERS) {
+		if (!path.endsWith(suffix)) continue;
+		const script = path.slice(0, -suffix.length) + file;
+		if (!existsSync(root + script.slice(1))) continue;
+		const meta = metaOf(readFileSync(root + script.slice(1), 'utf8'));
+		const title = meta.find(([key]) => key === 'title')?.[1] ?? script;
+		const text = [
+			'<!doctype html>',
+			'<meta charset=utf-8>',
+			`<title>${title.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</title>`,
+			...meta
+				.filter(([key]) => key === 'timeout')
+				.map(([, value]) => `<meta name="timeout" content="${value}">`),
+			...body(script, meta, query),
+		].join('\n');
+		return { script, text };
+	}
+	return null;
+}
+
+/** the script wptserve generates for `<name>.any.worker.js`: the .any.js in a worker */
+function workerWrapper(path) {
+	if (!path.endsWith('.any.worker.js')) return null;
+	const script = `${path.slice(0, -'.any.worker.js'.length)}.any.js`;
+	if (!existsSync(root + script.slice(1))) return null;
+	const meta = metaOf(readFileSync(root + script.slice(1), 'utf8'));
+	const quoted = (value) => value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+	const text = [
+		...meta
+			.filter(([key]) => key === 'title')
+			.map(([, value]) => `self.META_TITLE = "${quoted(value)}";`),
+		GLOBAL(true),
+		'importScripts("/resources/testharness.js");',
+		...meta
+			.filter(([key]) => key === 'script')
+			.map(([, value]) => `importScripts("${quoted(value)}")`),
+		`importScripts("${script}");`,
+		'done();',
+		'',
+	].join('\n');
+	return { script, text };
+}
+
+/**
+ * wptserve's pipes (`?pipe=header(a,b)|status(404)`), applied to a file's
+ * response: returns what is left to send. `trickle` is its delays only, as
+ * one wait before the body.
+ */
+async function pipes(spec, req, port, response) {
+	for (const [, name, args] of spec.matchAll(
+		/(\w+)(?:\(((?:\\.|[^)])*)\))?/g,
+	)) {
+		const list = (args ?? '')
+			.split(/(?<!\\),/)
+			.map((arg) => arg.replace(/\\(.)/g, '$1').trim());
+		if (name === 'header') {
+			if (list[2] !== 'True' && list[2] !== 'true')
+				response.headers = response.headers.filter(
+					([key]) => key.toLowerCase() !== list[0].toLowerCase(),
+				);
+			response.headers.push([list[0], list[1] ?? '']);
+		} else if (name === 'status') response.status = Number(list[0]) || 200;
+		else if (name === 'sub')
+			response.body = substitute(
+				Buffer.from(response.body).toString('utf8'),
+				req,
+				port,
+			);
+		else if (name === 'slice') {
+			const body = Buffer.from(response.body);
+			response.body = body.subarray(
+				list[0] && list[0] !== 'null' ? Number(list[0]) : 0,
+				list[1] && list[1] !== 'null' ? Number(list[1]) : body.length,
+			);
+		} else if (name === 'gzip') {
+			response.body = gzipSync(Buffer.from(response.body));
+			response.headers.push(['Content-Encoding', 'gzip']);
+		} else if (name === 'trickle') {
+			let wait = 0;
+			for (const part of (args ?? '').split(':'))
+				if (part.startsWith('d')) wait += Number(part.slice(1)) || 0;
+			await new Promise((resolve) => setTimeout(resolve, wait * 1000));
+		}
+	}
+	return response;
 }
 
 const cors = (req) => [
@@ -175,6 +382,15 @@ function readBody(req) {
 		let body = '';
 		req.on('data', (chunk) => (body += chunk));
 		req.on('end', () => resolve(body));
+	});
+}
+
+/** the request body as it arrived, for a handler that echoes bytes */
+function readBodyBytes(req) {
+	return new Promise((resolve) => {
+		const chunks = [];
+		req.on('data', (chunk) => chunks.push(chunk));
+		req.on('end', () => resolve(Buffer.concat(chunks)));
 	});
 }
 
@@ -540,6 +756,63 @@ for (const [name, spec] of Object.entries(SUBRESOURCE))
 				)
 			: subresource(req, res, url, spec);
 
+// What a module of test/wpt-handlers/ is handed: its default export is a
+// function of these that returns `{ handlers, patterns, upgrades, patches }`.
+// `handlers` are keyed by the .py path like HANDLERS and called with (req,
+// res, url, port); `patterns` are [RegExp, handler] pairs for the paths no
+// exact key names; `upgrades` are WebSocket endpoints by path, called with
+// (req, socket, head, url, port); `patches` are [from, to] text replacements
+// by the path of a vendored file, applied as it is served (after the
+// substitutions), for a constant that names something the fixture has not
+// (an https origin, a second port).
+const tools = {
+	root,
+	stash,
+	md5,
+	cors,
+	json,
+	raw,
+	setHeaders,
+	readBody,
+	readBodyBytes,
+	substitute,
+	cookiePairs,
+	hosts: { SAME_ORIGIN_HOST, SAME_SITE_HOST, CROSS_SITE_HOST },
+};
+const PATTERNS = [];
+const UPGRADES = {};
+const PATCHES = {
+	// common.sub.js builds the https origins from these constants; the
+	// fixture only speaks http
+	'/common/security-features/resources/common.sub.js': [
+		['const httpsProtocol = "https";', 'const httpsProtocol = "http";'],
+		['const wssProtocol = "wss";', 'const wssProtocol = "ws";'],
+	],
+};
+const handlerDir = new URL('./wpt-handlers/', import.meta.url);
+if (existsSync(handlerDir))
+	for (const name of readdirSync(handlerDir).sort()) {
+		if (!name.endsWith('.mjs')) continue;
+		const area = (await import(new URL(name, handlerDir))).default(tools);
+		Object.assign(HANDLERS, area.handlers);
+		PATTERNS.push(...(area.patterns ?? []));
+		Object.assign(UPGRADES, area.upgrades);
+		for (const [path, list] of Object.entries(area.patches ?? {}))
+			PATCHES[path] = [...(PATCHES[path] ?? []), ...list];
+	}
+
+/** a WebSocket upgrade for one of the WPT endpoints; false when it is none */
+export function wptUpgrade(req, socket, head, port) {
+	const url = new URL(req.url, `http://${req.headers.host || 'x'}`);
+	const upgrade = UPGRADES[url.pathname];
+	if (!upgrade) return false;
+	upgrade(req, socket, head, url, port);
+	return true;
+}
+
+/** the key a page's report is kept under: its path and query */
+const reportKey = (path, search) => path + (search || '');
+
 /**
  * Serve a WPT request; returns false when the path is not one of ours.
  * `port` is the fixture's own port, for the template substitutions.
@@ -550,7 +823,7 @@ export async function wpt(req, res, port) {
 	if (path === '/_wpt/report' && req.method === 'POST') {
 		try {
 			const body = JSON.parse(await readBody(req));
-			reports.set(body.path, body);
+			reports.set(reportKey(body.path, body.search), body);
 			json(res, 200, cors(req), '{"ok": true}');
 		} catch (error) {
 			json(res, 400, cors(req), JSON.stringify({ error: String(error) }));
@@ -558,7 +831,15 @@ export async function wpt(req, res, port) {
 		return true;
 	}
 	if (path === '/_wpt/results') {
-		const key = url.searchParams.get('path');
+		// `path` is the test as the suite names it, query included. A test
+		// without variants may have changed its own query on the way
+		// (`anyquery`): the report of that path under any query is its
+		let key = url.searchParams.get('path');
+		if (!reports.has(key) && url.searchParams.has('anyquery'))
+			key =
+				[...reports.keys()].find(
+					(known) => known.split('?')[0] === key.split('?')[0],
+				) ?? key;
 		const report = reports.get(key);
 		if (url.searchParams.has('take')) reports.delete(key);
 		if (!report) {
@@ -573,10 +854,11 @@ export async function wpt(req, res, port) {
 		json(res, 200, [], '{"ok": true}');
 		return true;
 	}
-	if (!PREFIXES.some((prefix) => path.startsWith(prefix))) return false;
-	if (HANDLERS[path]) {
+	const handler =
+		HANDLERS[path] ?? PATTERNS.find(([pattern]) => pattern.test(path))?.[1];
+	if (handler) {
 		try {
-			await HANDLERS[path](req, res, url);
+			await handler(req, res, url, port);
 		} catch (error) {
 			// a handler bug must not take the fixture down with it
 			console.error(`wpt handler ${path}: ${error.stack || error}`);
@@ -585,12 +867,18 @@ export async function wpt(req, res, port) {
 		}
 		return true;
 	}
+	if (!PREFIXES.some((prefix) => path.startsWith(prefix))) return false;
 	if (path.includes('..')) {
 		res.statusCode = 400;
 		res.end();
 		return true;
 	}
-	const file = root + path.slice(1);
+	let file;
+	try {
+		file = root + decodeURIComponent(path.slice(1));
+	} catch (error) {
+		file = root + path.slice(1);
+	}
 	// wptserve lists a directory; cookie-test.js reads the cookie off that
 	// listing when a redirect lands on one
 	if (existsSync(file) && statSync(file).isDirectory()) {
@@ -603,42 +891,59 @@ export async function wpt(req, res, port) {
 		);
 		return true;
 	}
-	const wrapped = /\.(any|window)\.html$/.exec(path);
-	if (wrapped && !existsSync(file)) {
-		const script = path.replace(/\.html$/, '.js');
-		if (!existsSync(root + script.slice(1))) return false;
-		res.statusCode = 200;
-		res.setHeader('content-type', TYPES.html);
-		res.end(wrapper(script, readFileSync(root + script.slice(1), 'utf8')));
-		return true;
-	}
-	if (!existsSync(file)) {
+	const response = { status: 200, headers: [], body: null };
+	const wrapped = existsSync(file)
+		? null
+		: (wrapper(path, url.search) ?? workerWrapper(path));
+	if (wrapped !== null) {
+		response.headers = [
+			['Content-Type', path.endsWith('.js') ? TYPES.js : TYPES.html],
+			...sidecarHeaders(root + wrapped.script.slice(1), req, port),
+		];
+		response.body = wrapped.text;
+	} else if (!existsSync(file)) {
 		res.statusCode = 404;
 		res.setHeader('content-type', 'text/plain');
 		res.end(`not vendored: ${path}`);
 		return true;
+	} else if (path.endsWith('.asis')) {
+		// the whole response, status line and headers included
+		res.socket.write(readFileSync(file));
+		res.socket.end();
+		res.detachSocket(res.socket);
+		return true;
+	} else {
+		const ext = path.slice(path.lastIndexOf('.') + 1);
+		response.headers = [
+			['Content-Type', TYPES[ext] || 'application/octet-stream'],
+			...sidecarHeaders(file, req, port),
+		];
+		response.body = readFileSync(file);
+		if (path.includes('.sub.') || PATCHES[path]) {
+			let text = response.body.toString('utf8');
+			if (path.includes('.sub.')) text = substitute(text, req, port);
+			for (const [from, to] of PATCHES[path] ?? [])
+				text = text.replaceAll(from, to);
+			response.body = text;
+		}
 	}
-	const ext = path.slice(path.lastIndexOf('.') + 1);
-	const headers = [
-		['Content-Type', TYPES[ext] || 'application/octet-stream'],
-		...sidecarHeaders(file, req, port),
-	];
-	let body = readFileSync(file);
-	if (path.includes('.sub.')) {
-		let text = substitute(body.toString('utf8'), req, port);
-		// common.sub.js builds the https origins from these constants; the
-		// fixture only speaks http
-		if (path.endsWith('/common.sub.js'))
-			text = text
-				.replace(
-					'const httpsProtocol = "https";',
-					'const httpsProtocol = "http";',
-				)
-				.replace('const wssProtocol = "wss";', 'const wssProtocol = "ws";');
-		body = text;
+	if (url.searchParams.has('pipe'))
+		await pipes(url.searchParams.get('pipe'), req, port, response);
+	res.statusCode = response.status;
+	try {
+		setHeaders(res, response.headers);
+	} catch (error) {
+		// a header value node refuses (a control character a test asked for)
+		if (error.code !== 'ERR_INVALID_CHAR') throw error;
+		for (const name of res.getHeaderNames()) res.removeHeader(name);
+		raw(
+			res,
+			response.status,
+			response.headers,
+			Buffer.from(response.body).toString('latin1'),
+		);
+		return true;
 	}
-	res.statusCode = 200;
-	setHeaders(res, headers);
-	res.end(body);
+	res.end(response.body);
 	return true;
 }

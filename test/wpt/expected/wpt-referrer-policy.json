@@ -1,24 +1,23 @@
 {
-	"/referrer-policy/generic/inheritance/iframe-inheritance-srcdoc-child.html": {
-		"iframes srcdoc child correctly inherit the ancestor's referrer policy": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
-	"/referrer-policy/generic/inheritance/iframe-inheritance-srcdoc.html": {
-		"Srcdoc iframe inherits referrer policy from parent on creation.": "FAIL: assert_equals: Referrer policy should be inherited from parent. expected \"http://localhost:PORT/\" but got \"FAILURE\""
-	},
 	"/referrer-policy/generic/refresh-cross-origin.sub.html": {
-		"cross-origin meta refresh with referrer policy \"origin\" refreshes with origin as referrer": "NOTRUN: ",
-		"cross-origin header refresh with referrer policy \"origin\" refreshes with origin as referrer": "NOTRUN: ",
-		"cross-origin meta refresh with referrer policy \"strict-origin\" refreshes with origin as referrer": "NOTRUN: ",
-		"cross-origin header refresh with referrer policy \"strict-origin\" refreshes with origin as referrer": "NOTRUN: "
+		"cross-origin meta refresh with referrer policy \"no-referrer\" refreshes with the empty string as referrer": "FAIL: assert_equals: referrer header is previous page expected \"\" but got \"http://localhost:PORT/\"",
+		"cross-origin header refresh with referrer policy \"no-referrer\" refreshes with the empty string as referrer": "FAIL: assert_equals: referrer header is previous page expected \"\" but got \"http://localhost:PORT/\"",
+		"cross-origin meta refresh with referrer policy \"no-referrer-when-downgrade\" refreshes with full url as referrer": "FAIL: assert_equals: referrer header is previous page expected \"http://localhost:PORT/referrer-policy/generic/resources/refresh-policy.sub.html?url=http%3A%2F%2F127.0.0.1%3A35347%2Freferrer-policy%2Fgeneric",
+		"cross-origin header refresh with referrer policy \"no-referrer-when-downgrade\" refreshes with full url as referrer": "FAIL: assert_equals: referrer header is previous page expected \"http://localhost:PORT/referrer-policy/generic/resources/refresh-policy.py?url=http%3A%2F%2F127.0.0.1%3A35347%2Freferrer-policy%2Fgeneric%2Fres",
+		"cross-origin meta refresh with referrer policy \"same-origin\" refreshes with the empty string as referrer": "FAIL: assert_equals: referrer header is previous page expected \"\" but got \"http://localhost:PORT/\"",
+		"cross-origin header refresh with referrer policy \"same-origin\" refreshes with the empty string as referrer": "FAIL: assert_equals: referrer header is previous page expected \"\" but got \"http://localhost:PORT/\"",
+		"cross-origin meta refresh with referrer policy \"unsafe-url\" refreshes with full url as referrer": "FAIL: assert_equals: referrer header is previous page expected \"http://localhost:PORT/referrer-policy/generic/resources/refresh-policy.sub.html?url=http%3A%2F%2F127.0.0.1%3A35347%2Freferrer-policy%2Fgeneric",
+		"cross-origin header refresh with referrer policy \"unsafe-url\" refreshes with full url as referrer": "FAIL: assert_equals: referrer header is previous page expected \"http://localhost:PORT/referrer-policy/generic/resources/refresh-policy.py?url=http%3A%2F%2F127.0.0.1%3A35347%2Freferrer-policy%2Fgeneric%2Fres"
 	},
 	"/referrer-policy/generic/refresh-same-origin.html": {
-		"same-origin meta refresh with referrer policy \"origin\" refreshes with origin as referrer": "MISSING: the harness ended TIMEOUT before this subtest",
-		"same-origin header refresh with referrer policy \"origin\" refreshes with origin as referrer": "MISSING: the harness ended TIMEOUT before this subtest",
-		"same-origin meta refresh with referrer policy \"strict-origin\" refreshes with origin as referrer": "MISSING: the harness ended TIMEOUT before this subtest",
-		"same-origin header refresh with referrer policy \"strict-origin\" refreshes with origin as referrer": "MISSING: the harness ended TIMEOUT before this subtest"
+		"same-origin meta refresh with referrer policy \"origin\" refreshes with origin as referrer": "FAIL: assert_equals: referrer header is previous page expected \"http://localhost:PORT/\" but got \"\"",
+		"same-origin header refresh with referrer policy \"origin\" refreshes with origin as referrer": "FAIL: assert_equals: referrer header is previous page expected \"http://localhost:PORT/\" but got \"\"",
+		"same-origin meta refresh with referrer policy \"strict-origin\" refreshes with origin as referrer": "FAIL: assert_equals: referrer header is previous page expected \"http://localhost:PORT/\" but got \"\"",
+		"same-origin header refresh with referrer policy \"strict-origin\" refreshes with origin as referrer": "FAIL: assert_equals: referrer header is previous page expected \"http://localhost:PORT/\" but got \"\""
 	},
 	"/referrer-policy/generic/sandboxed-iframe-with-opaque-origin.html": {
-		"Sandboxed iframe with opaque origin doesn't send referrers to subresources": "FAIL: assert_equals: expected (undefined) undefined but got (string) \"FAILURE\"",
-		"Sandboxed iframe with opaque origin doesn't send referrers on navigation": "FAIL: assert_equals: expected \"\" but got \"http://localhost:PORT/referrer-policy/generic/sandboxed-iframe-with-opaque-origin.html\""
+		"Sandboxed iframe with opaque origin doesn't send referrers to subresources": "FAIL: assert_equals: expected (undefined) undefined but got (string) \"http://localhost:PORT/referrer-policy/generic/sandboxed-iframe-with-opaque-origin.html\"",
+		"Sandboxed iframe with opaque origin doesn't send referrers on navigation": "FAIL: assert_equals: expected \"\" but got \"http://localhost:PORT/\"",
+		"Sandboxed iframe with tuple origin sends referrers on navigation": "FAIL: assert_equals: expected \"http://localhost:PORT/referrer-policy/generic/sandboxed-iframe-with-opaque-origin.html\" but got \"http://localhost:PORT/\""
 	}
 }

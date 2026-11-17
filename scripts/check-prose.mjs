@@ -17,6 +17,11 @@ const RULE_FILES = new Set([
 	'scripts/check-prose.mjs',
 ]);
 const TEXT = /\.(md|ts|js|mjs|cjs|json|yml|yaml|html|css|txt)$/i;
+// the vendored web-platform-tests are upstream's text, and some of it is test
+// data (an encoding table, a URL to parse), as are the subtest names in the
+// expected lists: only what is ours under test/wpt/ is held to the dash rule
+const VENDORED =
+	/^test\/wpt\/(?!README\.md$|refresh\.mjs$|lists\/|resources\/(testharnessreport|testdriver-vendor)\.js$)/;
 
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' });
 const problems = [];
@@ -51,7 +56,11 @@ if (mode === '--commits') {
 			continue;
 		}
 		text.split('\n').forEach((line, i) => {
-			if (file !== 'scripts/check-prose.mjs' && line.includes(EM_DASH))
+			if (
+				file !== 'scripts/check-prose.mjs' &&
+				!VENDORED.test(file) &&
+				line.includes(EM_DASH)
+			)
 				problems.push(`${file}:${i + 1}: em dash`);
 			// the rule files and this script quote the forbidden trailer on purpose
 			if (!RULE_FILES.has(file) && ATTRIBUTION.test(line))
