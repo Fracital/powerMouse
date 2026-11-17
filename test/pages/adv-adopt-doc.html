@@ -1,0 +1,22 @@
+<!doctype html>
+<title>adv adopt document</title>
+<img
+	src="x:"
+	onerror="
+		__advHit(
+			'XHR document img onerror adoptNode',
+			top === window ? 'self' : 'OTHER-WINDOW',
+			location.href,
+		)
+	"
+/>
+<img
+	src="x:"
+	onerror="
+		__advHit(
+			'XHR document img onerror importNode',
+			top === window ? 'self' : 'OTHER-WINDOW',
+			location.href,
+		)
+	"
+/>

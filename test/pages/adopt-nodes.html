@@ -1,0 +1,115 @@
+<!doctype html>
+<title>adopt nodes</title>
+<script>
+	// Elements another parser made (DOMParser, Document.parseHTMLUnsafe, an
+	// XHR's document), adopted or imported into this document and never
+	// inserted. Each URL is marked ?w=<way> and answers 404, so a load the
+	// browser starts shows as a request and an element with an error handler
+	// runs it; the suite compares both with the page loaded natively. What a
+	// moved image reads back is recorded too.
+	const state = (window.__adopt = { ran: [], read: {}, done: false });
+	window.__adoptRan = (way) => state.ran.push(way);
+	const url = (way) => 'adopt-nodes-missing?w=' + encodeURIComponent(way);
+	const handler = (way) => ' onerror="__adoptRan(\'' + way + '\')"';
+	const KINDS = {
+		img: (w) => '<img src="' + url(w) + '"' + handler(w) + '>',
+		'img srcset': (w) => '<img srcset="' + url(w) + ' 1x"' + handler(w) + '>',
+		picture: (w) =>
+			'<picture><source srcset="' +
+			url(w) +
+			'"><img' +
+			handler(w) +
+			'></picture>',
+		'video poster': (w) => '<video poster="' + url(w) + '"></video>',
+		'video src': (w) =>
+			'<video src="' + url(w) + '"' + handler(w) + '></video>',
+		'video source': (w) =>
+			'<video><source src="' + url(w) + '"' + handler(w) + '></video>',
+		'audio src': (w) =>
+			'<audio src="' + url(w) + '"' + handler(w) + '></audio>',
+		track: (w) =>
+			'<video><track default src="' + url(w) + '"' + handler(w) + '></video>',
+		'input image': (w) =>
+			'<input type="image" src="' + url(w) + '"' + handler(w) + '>',
+		'link stylesheet': (w) =>
+			'<link rel="stylesheet" href="' + url(w) + '"' + handler(w) + '>',
+		object: (w) => '<object data="' + url(w) + '"' + handler(w) + '></object>',
+		embed: (w) => '<embed src="' + url(w) + '">',
+		iframe: (w) => '<iframe src="' + url(w) + '"></iframe>',
+		script: (w) => '<script src="' + url(w) + '"' + handler(w) + '><\/script>',
+		'svg image': (w) =>
+			'<svg><image href="' + url(w) + '"' + handler(w) + '></image></svg>',
+		'svg use': (w) => '<svg><use href="' + url(w) + '#a"></use></svg>',
+		'svg script': (w) => '<svg><script href="' + url(w) + '"><\/script></svg>',
+		'template content': (w) =>
+			'<template><img src="' + url(w) + '"' + handler(w) + '></template>',
+		'open shadow root': (w) =>
+			'<div><template shadowrootmode="open"><img src="' +
+			url(w) +
+			'"' +
+			handler(w) +
+			'></template></div>',
+	};
+	const SOURCES = {
+		DOMParser: (markup) => new DOMParser().parseFromString(markup, 'text/html'),
+		parseHTMLUnsafe: (markup) => Document.parseHTMLUnsafe(markup),
+	};
+	const keep = (window.__adoptKeep = []);
+	for (const [source, parse] of Object.entries(SOURCES))
+		for (const how of ['adoptNode', 'importNode'])
+			for (const [kind, markup] of Object.entries(KINDS)) {
+				const way = source + ' ' + how + ' ' + kind;
+				try {
+					let node = parse('<body>' + markup(way)).body.firstChild;
+					if (kind === 'template content') node = node.content;
+					keep.push(
+						how === 'adoptNode'
+							? document.adoptNode(node)
+							: document.importNode(node, true),
+					);
+				} catch (error) {
+					state.ran.push(way + ' threw ' + error.name);
+				}
+			}
+	// what a moved image and its handler read back
+	const read = (name, img) => {
+		state.read[name] = {
+			src: img.getAttribute('src'),
+			property: img.src,
+			onerror: img.getAttribute('onerror'),
+			handler: String(img.onerror),
+			names: img.getAttributeNames(),
+			html: img.outerHTML,
+			connected: img.isConnected,
+		};
+	};
+	const parsed = (way) =>
+		new DOMParser()
+			.parseFromString(KINDS.img(way), 'text/html')
+			.querySelector('img');
+	const adopted = document.adoptNode(parsed('read adoptNode'));
+	const source = parsed('read importNode');
+	const imported = document.importNode(source, true);
+	keep.push(adopted, imported);
+	read('adopted', adopted);
+	read('imported', imported);
+	read('import source', source);
+	// an XHR's document, async
+	const xhr = new XMLHttpRequest();
+	xhr.open('GET', 'adopt-nodes-doc.html');
+	xhr.responseType = 'document';
+	xhr.onloadend = () => {
+		const images = xhr.response?.querySelectorAll('img') ?? [];
+		if (images.length === 2)
+			keep.push(
+				document.adoptNode(images[0]),
+				document.importNode(images[1], true),
+			);
+		else state.ran.push('XHR document had ' + images.length + ' images');
+		setTimeout(() => {
+			state.ran.sort();
+			state.done = true;
+		}, 2500);
+	};
+	xhr.send();
+</script>

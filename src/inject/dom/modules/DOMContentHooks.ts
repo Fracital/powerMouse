@@ -19,6 +19,8 @@ import DocumentClient, {
 } from '../Client';
 import cloneRawNode, {
 	inertClones,
+	inertDocumentOf,
+	isHTMLTemplate,
 	isScriptElement,
 	parseHTMLFragmentIn,
 	startedScripts,
@@ -592,6 +594,12 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// Polymer logging getters threw from appendChild)
 		const nativeIsConnected = nativeGetter(nativeNode, 'isConnected');
 		const nativeGetAttributeNames = nativeElement.getAttributeNames;
+		const shadowRootGet = nativeGetter(nativeElement, 'shadowRoot');
+		const ownerDocumentGet = nativeGetter(nativeNode, 'ownerDocument');
+		const contentGet = Reflect.getOwnPropertyDescriptor(
+			HTMLTemplateElement.prototype,
+			'content',
+		)!.get!;
 		// the elements in an element (1) or a fragment (11) that match, found
 		// by the browser's own query on the node, with no prototype swap: the
 		// swaps cost more than the queries on a Google keystroke. A node with
@@ -612,6 +620,78 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 							selector,
 						]) as NodeListOf<Element>),
 					];
+
+		// The elements of `root` (an element, 1, or a fragment, 11) whose
+		// attributes no hook saw get them routed and their handlers rewritten
+		// where they stand. `deep`: a tree from another document, whose open
+		// shadow roots (a declarative one, Document.parseHTMLUnsafe) and
+		// templates' content come along with it
+		const routeUnseen = (root: Node, type: 1 | 11, deep: boolean) => {
+			const pending: [Node, 1 | 11][] = [[root, type]];
+			for (let next = pending.pop(); next; next = pending.pop()) {
+				const elements = queryIn(next[0], next[1], '*');
+				if (next[1] === 1) elements.unshift(next[0] as Element);
+				for (const element of elements) {
+					if (deep) {
+						const shadow = Reflect.apply(shadowRootGet, element, []) as Node;
+						if (shadow) pending.push([shadow, 11]);
+						if (isHTMLTemplate(element))
+							pending.push([
+								Reflect.apply(contentGet, element, []) as Node,
+								11,
+							]);
+					}
+					// read natively first: an element none of whose attributes a
+					// hook watches is left alone, without the prototype swap
+					// (Polymer stamps thousands of such elements on YouTube)
+					const names = Reflect.apply(
+						nativeGetAttributeNames,
+						element,
+						[],
+					) as string[];
+					if (
+						!names.some(
+							(name) =>
+								!name.startsWith('s_o:') && domHooksModule.hooksAttribute(name),
+						)
+					)
+						continue;
+					usePrototype(element, CustomElement.prototype, (element) => {
+						for (const name of element.getAttributeNames())
+							if (!name.startsWith('s_o:') && !element.hasAttributeOG(name))
+								domHooksModule.updateAttributeHooks(element, name);
+					});
+					// a style the hooks saw elsewhere (a clone, an element of
+					// another document) names routes: in a document no service
+					// worker controls its loads are copied here
+					if (names.includes('style'))
+						domAttributesModule.copyInline?.(element);
+				}
+			}
+		};
+		// the document a node (or a document) belongs to; null for no node
+		const documentOf = (node: unknown): Document | null => {
+			const type = nodeTypeOf(node);
+			if (type === null) return null;
+			return type === 9
+				? (node as Document)
+				: (Reflect.apply(ownerDocumentGet, node, []) as Document);
+		};
+		// the documents whose nodes the hooks wrote: this realm's and the one
+		// its templates' content lives in (whatever enters it from elsewhere
+		// is routed on the way in, so the page's own templates, which a
+		// framework imports for every copy it stamps, are not walked again)
+		let templates: [Document, Document] | null = null;
+		const ownDocument = (document: Document | null): boolean => {
+			const own = realm.document;
+			if (document === own) return true;
+			if (templates?.[0] !== own) templates = [own, inertDocumentOf(own)];
+			return document === templates[1];
+		};
+		// whether `node` comes from another document (a parser's, an XHR's:
+		// none has a window) into one of this realm's, where it loads
+		const foreignNode = (node: Node, into: unknown): boolean =>
+			ownDocument(documentOf(into)) && !ownDocument(documentOf(node));
 
 		// A connected script that has not run yet runs the moment a child
 		// lands in it: the browser prepares it again at every child insertion,
@@ -826,37 +906,12 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			const queryable = nodeType === 1 || nodeType === 11 ? nodeType : null;
 
 			// nodes the hooks never saw (DOMParser, createContextualFragment,
-			// importNode, another document): route their attributes now
-			if (willConnect && queryable !== null) {
-				const elements = queryIn(insert, queryable, '*');
-				if (queryable === 1) elements.unshift(insert as Element);
-				for (const element of elements) {
-					// read natively first: an element none of whose attributes a
-					// hook watches is left alone, without the prototype swap
-					// (Polymer stamps thousands of such elements on YouTube)
-					const names = Reflect.apply(
-						nativeGetAttributeNames,
-						element,
-						[],
-					) as string[];
-					if (
-						!names.some(
-							(name) =>
-								!name.startsWith('s_o:') && domHooksModule.hooksAttribute(name),
-						)
-					)
-						continue;
-					usePrototype(element, CustomElement.prototype, (element) => {
-						for (const name of element.getAttributeNames())
-							if (!name.startsWith('s_o:') && !element.hasAttributeOG(name))
-								domHooksModule.updateAttributeHooks(element, name);
-					});
-					// a style the hooks saw elsewhere (a clone, an element of
-					// another document) names routes: in a document no service
-					// worker controls its loads are copied here
-					if (names.includes('style'))
-						domAttributesModule.copyInline?.(element);
-				}
+			// importNode, another document): route their attributes now. A node
+			// of another document is adopted into this one on the way in, where
+			// its images load at once, connected or not
+			if (queryable !== null) {
+				const foreign = foreignNode(insert, that);
+				if (willConnect || foreign) routeUnseen(insert, queryable, foreign);
 			}
 
 			// scripts the page's script-src refused before they connected, which
@@ -1391,6 +1446,18 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				return landing(select, select, [value], 1, false, assign);
 			};
 		}
+
+		// adoptNode and importNode put a node of another document in this one
+		// without inserting it: its images and media load there at once and
+		// its handlers run when they fire (an img's onerror). It is routed
+		// where it stands first, in its own document, where nothing loads
+		for (const name of ['adoptNode', 'importNode'])
+			wrapMethod(global.Document.prototype, name, (target, that, args) => {
+				const type = nodeTypeOf(args[0]);
+				if ((type === 1 || type === 11) && foreignNode(args[0], that))
+					routeUnseen(args[0], type, true);
+				return Reflect.apply(target, that, args);
+			});
 
 		// does not insert element
 		realm.Node.prototype.removeChild = proxyModule.wrapFunction(

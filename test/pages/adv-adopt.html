@@ -1,0 +1,181 @@
+<!doctype html>
+<title>ADV ADOPT</title>
+<pre id="result">pending</pre>
+<script src="adv-harness.js"></script>
+<script>
+	// Nodes another parser made (DOMParser, Document.parseHTMLUnsafe, an
+	// XHR's document), moved or copied into this document by adoptNode or
+	// importNode and never inserted. The browser starts their loads at once
+	// (an image, a video's poster, an SVG use) and runs their handlers when
+	// they fire (an img's onerror for a src that does not load), so each
+	// handler's payload must see this page's top and URL, and every load,
+	// whose URL names this page's site and the probe, must go through the
+	// proxy (the suite fails on any request past it).
+	const R = __advRecord;
+	const A = __advAsync;
+	const C = __advPayload;
+	const keep = [];
+	const route = (name, fn) => {
+		R(name, 'did-not-run');
+		try {
+			keep.push(fn(C(name)));
+		} catch (error) {
+			R(name, undefined, error);
+		}
+	};
+	const html = (markup) => new DOMParser().parseFromString(markup, 'text/html');
+	const failing = (p) => '<img src="x:" onerror=\'' + p + "'>";
+	route('DOMParser img onerror adoptNode', (p) =>
+		document.adoptNode(html(failing(p)).body.firstChild),
+	);
+	route('DOMParser img onerror importNode', (p) =>
+		document.importNode(html(failing(p)).body.firstChild, true),
+	);
+	route('parseHTMLUnsafe img onerror adoptNode', (p) =>
+		document.adoptNode(Document.parseHTMLUnsafe(failing(p)).body.firstChild),
+	);
+	route('parseHTMLUnsafe img onerror importNode', (p) =>
+		document.importNode(
+			Document.parseHTMLUnsafe(failing(p)).body.firstChild,
+			true,
+		),
+	);
+	route('DOMParser xhtml img onerror adoptNode', (p) =>
+		document.adoptNode(
+			new DOMParser()
+				.parseFromString(
+					'<html xmlns="http://www.w3.org/1999/xhtml"><body><img src="x:" onerror=\'' +
+						p +
+						"'/></body></html>",
+					'application/xhtml+xml',
+				)
+				.querySelector('img'),
+		),
+	);
+	route('DOMParser svg image onerror importNode', (p) =>
+		document.importNode(
+			new DOMParser().parseFromString(
+				'<svg xmlns="http://www.w3.org/2000/svg"><image href="x:" onerror=\'' +
+					p +
+					"'/></svg>",
+				'image/svg+xml',
+			).documentElement,
+			true,
+		),
+	);
+	route('DOMParser template content img onerror adoptNode', (p) =>
+		document.adoptNode(
+			html('<template>' + failing(p) + '</template>').querySelector('template')
+				.content,
+		),
+	);
+	route('DOMParser template content img onerror importNode', (p) =>
+		document.importNode(
+			html('<template>' + failing(p) + '</template>').querySelector('template')
+				.content,
+			true,
+		),
+	);
+	// the template is copied first, its content (in this document's
+	// template document now) only then
+	route('DOMParser template imported, then its content', (p) =>
+		document.importNode(
+			document.importNode(
+				html('<template>' + failing(p) + '</template>').querySelector(
+					'template',
+				),
+				true,
+			).content,
+			true,
+		),
+	);
+	route('parseHTMLUnsafe open shadow root img onerror adoptNode', (p) =>
+		document.adoptNode(
+			Document.parseHTMLUnsafe(
+				'<div><template shadowrootmode="open">' +
+					failing(p) +
+					'</template></div>',
+			).body.firstChild,
+		),
+	);
+	// put under an element that is not connected: adopted on the way in
+	route('DOMParser img onerror into a detached element', (p) => {
+		const holder = document.createElement('div');
+		holder.append(html(failing(p)).body.firstChild);
+		return holder;
+	});
+	route('DOMParser video onerror adoptNode', (p) =>
+		document.adoptNode(
+			html('<video src="x:" onerror=\'' + p + "'></video>").body.firstChild,
+		),
+	);
+	// an XHR's document (adv-adopt-doc.html), whose two images' handlers
+	// report under these names
+	for (const name of [
+		'XHR document img onerror adoptNode',
+		'XHR document img onerror importNode',
+	])
+		R(name, 'did-not-run');
+	A('XHR document loaded', async () => {
+		const xhr = new XMLHttpRequest();
+		xhr.open('GET', 'adv-adopt-doc.html');
+		xhr.responseType = 'document';
+		await new Promise((resolve, reject) => {
+			xhr.onload = resolve;
+			xhr.onerror = reject;
+			xhr.send();
+		});
+		const images = xhr.response.querySelectorAll('img');
+		keep.push(
+			document.adoptNode(images[0]),
+			document.importNode(images[1], true),
+		);
+		await new Promise((resolve) => setTimeout(resolve, 1000));
+		return images.length + ' images';
+	});
+
+	// loads: an absolute URL of this site per probe, which natively loads
+	// the moment the node is in this document
+	const LOADS = {
+		'img src': (u) => '<img src="' + u + '">',
+		'img srcset': (u) => '<img srcset="' + u + ' 1x">',
+		'picture source srcset': (u) =>
+			'<picture><source srcset="' + u + '"><img></picture>',
+		'video poster': (u) => '<video poster="' + u + '"></video>',
+		'video src': (u) => '<video src="' + u + '"></video>',
+		'audio src': (u) => '<audio src="' + u + '"></audio>',
+		'track src': (u) => '<video><track default src="' + u + '"></video>',
+		'input type=image src': (u) => '<input type="image" src="' + u + '">',
+		'svg image href': (u) => '<svg><image href="' + u + '"></image></svg>',
+		'svg use href': (u) => '<svg><use href="' + u + '#a"></use></svg>',
+		'svg image xlink:href': (u) =>
+			'<svg><image xlink:href="' + u + '"></image></svg>',
+	};
+	const SOURCES = {
+		DOMParser: (markup) => html(markup).body.firstChild,
+		parseHTMLUnsafe: (markup) =>
+			Document.parseHTMLUnsafe(markup).body.firstChild,
+	};
+	for (const [kind, markup] of Object.entries(LOADS))
+		for (const [source, parse] of Object.entries(SOURCES))
+			for (const how of ['adoptNode', 'importNode']) {
+				const name = source + ' ' + kind + ' ' + how;
+				const url = new URL(
+					'adv-adopt-missing?w=' + encodeURIComponent(name),
+					location.href,
+				).href;
+				R(name, 'made');
+				try {
+					const node = parse(markup(url));
+					keep.push(
+						how === 'adoptNode'
+							? document.adoptNode(node)
+							: document.importNode(node, true),
+					);
+				} catch (error) {
+					R(name, undefined, error);
+				}
+			}
+	window.__advAdoptKeep = keep;
+	__advFinish(2500);
+</script>

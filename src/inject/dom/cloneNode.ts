@@ -74,6 +74,7 @@ const nativeTemplateContent = Reflect.getOwnPropertyDescriptor(
 	HTMLTemplateElement.prototype,
 	'content',
 )!.get!;
+const nativeAdoptNode = Document.prototype.adoptNode;
 const nativeNodeType = Reflect.getOwnPropertyDescriptor(
 	Node.prototype,
 	'nodeType',
@@ -532,7 +533,11 @@ export default function cloneRawNode(
 					// an HTML one: re-created, it ran the moment the markup landed,
 					// which no browser does, and ran as the page wrote it
 					if (!runScripts && isScriptElement(d[0])) {
-						const script = document.adoptNode(d[0]) as Element;
+						// (by the browser's own adoptNode: the hooked one routes a
+						// node of another document, which the copy does below)
+						const script = Reflect.apply(nativeAdoptNode, document, [
+							d[0],
+						]) as Element;
 						startedScripts.add(script);
 						// attributes first, on an empty element (the type hook reads the
 						// text), then the source back, like a fresh clone would
