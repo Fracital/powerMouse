@@ -2025,13 +2025,45 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				),
 			});
 
-		// the null namespace is the attribute itself: the page's value
 		this.client.global.Element.prototype.getAttributeNS =
 			proxyModule.wrapFunction(
 				this.client.global.Element.prototype.getAttributeNS,
 				(target, that: Element, args) => {
-					if (args.length >= 2 && (args[0] === null || args[0] === ''))
-						return that.getAttribute(String(args[1]));
+					if (
+						args.length >= 2 &&
+						(args[0] === null || args[0] === '') &&
+						that instanceof this.client.global.Element
+					) {
+						// the attribute of no namespace by exactly that local name
+						// (getAttribute lowercases on an HTML element and finds the
+						// first of any namespace by its qualified name): the page's
+						// value when a hook rewrote it or dropped it
+						const value = Reflect.apply(target, that, args) as string | null;
+						const local = String(args[1]);
+						if (isMarker(local)) return null;
+						// a marker is named as the hooks name the attribute
+						// (lowercased on an HTML element), and a name taken by an
+						// attribute of a namespace is not one a hook dropped
+						if (
+							attributeName(that, local) !== local ||
+							(value === null && nativeElement.hasAttribute.call(that, local))
+						)
+							return value;
+						const original = pendingAttributes(that)
+							? usePrototype(that, CustomElement.prototype, (element) =>
+									element.getAttributeOG(local),
+								)
+							: nativeElement.getAttribute.call(
+									that,
+									ORIGINAL_ATTRIBUTE + local,
+								);
+						if (original !== null) return original;
+						// a style the browser serialised from a CSSOM write, as
+						// getAttribute reads it
+						return local === 'style' && typeof value === 'string'
+							? unrouteCSS(this.client, value, true)
+							: value;
+					}
 					// a namespaced attribute a hook rewrote (xlink:href): the page's
 					// value, by the attribute's qualified name, or by the xlink prefix
 					// while a load's copy is on its way and the attribute is gone
