@@ -87,19 +87,10 @@
 		"Setting location.href of a cross-site iframe": "FAIL: assert_equals: expected 44 but got 43",
 		"Setting location.href of a cross-site popup": "FAIL: assert_equals: expected 2 but got 1"
 	},
-	"/html/browsers/history/the-location-interface/location_assign.html": {
-		"URL that fails to parse": "FAIL: assert_throws_dom: function \"function() { location.assign(\"http://:\"); }\" threw object \"TypeError: Failed to construct 'URL': Invalid URL\" that is not a DOMException SYNTAX_ERR: property \"code\" is equ"
-	},
 	"/html/browsers/history/the-location-interface/location_reload_javascript_url.html": {
 		"location_reload_javascript_url": "FAIL: assert_equals: iframe url (2) expected \"http://localhost:PORT/common/blank.html#foo\" but got \"http://localhost:PORT/common/blank.html#~JHIC\""
 	},
-	"/html/browsers/history/the-location-interface/location_replace.html": {
-		"URL that fails to parse": "FAIL: assert_throws_dom: function \"function() { location.replace(\"//\"); }\" threw object \"TypeError: Failed to construct 'URL': Invalid URL\" that is not a DOMException SYNTAX_ERR: property \"code\" is equal to"
-	},
 	"/html/browsers/history/the-location-interface/no-browsing-context.window.html": {
-		"Setting `href` to `http://test:test/` of a `Location` object sans browsing context is a no-op": "FAIL: Failed to construct 'URL': Invalid URL",
-		"Invoking `assign` with `http://test:test/` on a `Location` object sans browsing context is a no-op": "FAIL: Failed to construct 'URL': Invalid URL",
-		"Invoking `replace` with `http://test:test/` on a `Location` object sans browsing context is a no-op": "FAIL: Failed to construct 'URL': Invalid URL",
 		"Getting `ancestorOrigins` of a `Location` object sans browsing context should be []": "FAIL: Cannot read properties of undefined (reading 'prototype')"
 	},
 	"/html/browsers/history/the-location-interface/same-hash.html": {

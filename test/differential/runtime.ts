@@ -51,6 +51,10 @@ Reflect.defineProperty(globalThis, '__differential', {
 			config: host.config,
 			url,
 			baseURL: url,
+			// a document's: a URL the page writes is resolved against the
+			// document's base, as src/inject/nativeErrors.ts failsToParse asks
+			isDOM: true,
+			baseURI: new URL(host.base),
 			scriptFacts: { evaluates: true },
 			getModule: (Module: unknown) => modules.get(Module),
 			trustedValue: (value: unknown) => value,

@@ -7,6 +7,7 @@ import StompURL, { urlLike } from '../../StompURL';
 import Client from '../Client';
 import ErrorMessages from '../errorMessages';
 import Module from '../Module';
+import { failsToParse } from '../nativeErrors';
 import { OwnWeakSet } from '../ownCollections';
 import { requestRefused } from '../requestVerdict';
 import { modifyJS } from '../rewriter';
@@ -972,6 +973,12 @@ export default class AccessModule extends Module<Client> {
 					// a cross-origin window: no location of ours
 				}
 				if (isLocation) {
+					// a URL that does not parse is the browser's to refuse (its
+					// SyntaxError, where resolving it here threw URL's TypeError)
+					if (failsToParse(this.client, <string>value)) {
+						set(value);
+						return result;
+					}
 					const destination = new URL(
 						<urlLike>value,
 						this.client.baseURL.toString(),
