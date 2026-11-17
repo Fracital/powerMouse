@@ -76,20 +76,6 @@
 		"replaceState should not actually load the new URL": "MISSING: the harness ended TIMEOUT before this subtest",
 		"reloading a replaced state should actually load the new URL": "MISSING: the harness ended TIMEOUT before this subtest"
 	},
-	"/html/browsers/history/the-history-interface/004.html": {
-		"history position should be calculated when executing, not when calling the .go command": "FAIL: assert_equals: expected \"\" but got \"bar\""
-	},
-	"/html/browsers/history/the-history-interface/history_back_cross_realm_method.html": {
-		"history.back() uses this's associated document's browsing context to determine if navigation is allowed": "FAIL: Illegal invocation"
-	},
-	"/html/browsers/history/the-history-interface/history_forward_cross_realm_method.html": {
-		"(harness)": "TIMEOUT: ",
-		"history.forward() uses this's associated document's browsing context to determine if navigation is allowed": "TIMEOUT: Test timed out"
-	},
-	"/html/browsers/history/the-history-interface/history_go_cross_realm_method.html": {
-		"(harness)": "TIMEOUT: ",
-		"history.go() uses this's associated document's browsing context to determine if navigation is allowed": "TIMEOUT: Test timed out"
-	},
 	"/html/browsers/history/the-history-interface/history_properties_only_fully_active.html": {
 		"history properties should throw SecurityError when not in a fully active Document": "FAIL: Failed to read a named property 'history' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
 	},

@@ -208,49 +208,72 @@ export default class HistoryModule extends Module<DocumentClient> {
 			return index >= 0 && index < allEntries().length;
 		};
 
-		// (a receiver that is not this window's history is the browser's to
-		// answer: its Illegal invocation for anything that is no History)
-		const history = global.history;
-		prototype.back = proxyModule.wrapFunction(
-			prototype.back,
-			(target, that, args) => {
-				if (that !== history) return Reflect.apply(target, that, args);
-				const index = indexOf(currentEntry()!);
-				if (index > 0) quiet(traverse(allEntries()[index - 1].key));
-			},
+		const lengthDescriptor = Reflect.getOwnPropertyDescriptor(
+			prototype,
+			'length',
+		)!;
+		// The browser applies a step when its task runs, from wherever the
+		// steps queued before it leave the history: history.back() twice in
+		// one task goes back two entries. Counted from the current entry at
+		// the call, both went to the same one, so a step still under way is
+		// counted on. (A step to another document never settles here; that
+		// document is gone with its count.)
+		let queued = 0;
+		let landing = -1;
+		const step = (
+			that: History,
+			delta: number,
+			name: 'back' | 'forward' | 'go',
+		) => {
+			// the native getter first: it throws for anything but a History, and
+			// for the History of a document that is not fully active (a removed
+			// frame's), as the browser's own back, forward and go do
+			Reflect.apply(lengthDescriptor.get!, that, []);
+			// another window's History, the method borrowed across realms
+			// (`frame.contentWindow.history.back.call(history)`): the step is
+			// that window's, as natively, made by that window's own method
+			if (that !== global.history) {
+				const own = (Reflect.getPrototypeOf(that) as History | null)?.[name];
+				if (typeof own === 'function' && own !== prototype[name])
+					Reflect.apply(own, that, name === 'go' ? [delta] : []);
+				return;
+			}
+			const current = currentEntry();
+			// a frame's initial about:blank has no entries to step
+			if (!current) return;
+			const entries = allEntries();
+			const index = (queued > 0 ? landing : indexOf(current)) + delta;
+			if (index < 0 || index >= entries.length) return;
+			const result = traverse(entries[index].key);
+			queued++;
+			landing = index;
+			const settled = () => {
+				if (--queued === 0) landing = -1;
+			};
+			result.finished.then(settled, settled);
+			quiet(result);
+		};
+
+		prototype.back = proxyModule.wrapFunction(prototype.back, (target, that) =>
+			step(that, -1, 'back'),
 		);
 
 		prototype.forward = proxyModule.wrapFunction(
 			prototype.forward,
-			(target, that, args) => {
-				if (that !== history) return Reflect.apply(target, that, args);
-				const entries = allEntries();
-				const index = indexOf(currentEntry()!);
-				if (index >= 0 && index < entries.length - 1)
-					quiet(traverse(entries[index + 1].key));
-			},
+			(target, that) => step(that, 1, 'forward'),
 		);
 
 		prototype.go = proxyModule.wrapFunction(
 			prototype.go,
 			(target, that, args) => {
-				if (that !== history) return Reflect.apply(target, that, args);
 				// go() and go(0) reload the document
 				const delta = args.length ? Number(args[0]) : 0;
 				if (delta === 0 || Number.isNaN(delta))
 					return Reflect.apply(target, that, [0]);
-				const entries = allEntries();
-				const current = currentEntry();
-				const index = (current ? indexOf(current) : -1) + Math.trunc(delta);
-				if (index < 0 || index >= entries.length) return;
-				quiet(traverse(entries[index].key));
+				step(that, Math.trunc(delta), 'go');
 			},
 		);
 
-		const lengthDescriptor = Reflect.getOwnPropertyDescriptor(
-			prototype,
-			'length',
-		)!;
 		Reflect.defineProperty(prototype, 'length', {
 			...lengthDescriptor,
 			get: proxyModule.wrapFunction(lengthDescriptor.get!, (target, that) => {
