@@ -157,18 +157,6 @@ function nonceOf(element: Element): string {
 		}
 	return '';
 }
-/** the Trusted Types sink members Chrome names with "execute '<member>'" (not a property set), by their sink member name */
-const TT_METHOD_SINKS = new Set([
-	'insertAdjacentHTML',
-	'setHTMLUnsafe',
-	'parseHTMLUnsafe',
-	'parseFromString',
-	'createContextualFragment',
-	'write',
-	'writeln',
-	'setTimeout',
-	'setInterval',
-]);
 const nativeQuerySelectorAll = Element.prototype.querySelectorAll;
 const nativeGetAttribute = Element.prototype.getAttribute;
 const nativeParent = Reflect.getOwnPropertyDescriptor(
@@ -1451,26 +1439,23 @@ export default class DocumentClient extends Client {
 				? url.origin
 				: url.href.replace(/#.*$/s, ''));
 		const document = global.document;
-		for (const { policy } of reporting)
-			for (let time = 0; time < times; time++)
-				Reflect.apply(global.EventTarget.prototype.dispatchEvent, document, [
-					new Event('securitypolicyviolation', {
-						bubbles: true,
-						composed: true,
-						blockedURI: blocked,
-						documentURI: this.url.url.href.replace(/#.*$/s, ''),
-						referrer: this.referrerOf(document) ?? '',
-						violatedDirective: directive,
-						effectiveDirective: directive,
-						originalPolicy: policy.text,
-						disposition: 'report',
-						sourceFile: '',
-						statusCode: 200,
-						lineNumber: 0,
-						columnNumber: 0,
-						sample: '',
-					}),
-				]);
+		try {
+			const dispatchViolation = deferred('dispatchViolation');
+			for (const { policy } of reporting)
+				for (let time = 0; time < times; time++)
+					dispatchViolation(
+						this,
+						Event,
+						document,
+						policy,
+						directive,
+						blocked,
+						'',
+						null,
+					);
+		} catch (error) {
+			// the part cannot be had: the load went out all the same
+		}
 	}
 	override trustedTypesRequired(): 'enforce' | 'report' | null {
 		return trustedTypesRequired(
@@ -1511,40 +1496,16 @@ export default class DocumentClient extends Client {
 		blockedURI: string,
 		sample: string,
 	) {
-		const global = this.global as typeof globalThis;
-		const Event = global.SecurityPolicyViolationEvent;
-		if (typeof Event !== 'function') return;
-		const document = global.document;
 		const { documentURI, statusCode } = this.#violationDocument();
-		nativeSetTimeout(() => {
-			try {
-				const event = new Event('securitypolicyviolation', {
-					bubbles: true,
-					composed: true,
-					blockedURI,
-					documentURI,
-					violatedDirective: effectiveDirective,
-					effectiveDirective,
-					originalPolicy: policy.text,
-					disposition: policy.disposition,
-					statusCode,
-					sample,
-				});
-				// an enforced Trusted Types violation reads back trusted, as the
-				// browser's would (the enforced csp-trusted-types cases compare
-				// isTrusted; the browser never gets require-trusted-types-for, so
-				// the inject tags its own). isTrusted is an own, non-configurable
-				// accessor Chrome puts on every event, so it cannot be set here;
-				// ContentSecurity hands the page's listeners a view that reads it
-				// true for a tagged event.
-				if (policy.disposition === 'enforce') this.trustedViolations.add(event);
-				Reflect.apply(global.EventTarget.prototype.dispatchEvent, document, [
-					event,
-				]);
-			} catch (error) {
-				// the document is gone
-			}
-		});
+		this.#dispatchViolation(
+			policy,
+			effectiveDirective,
+			blockedURI,
+			sample,
+			null,
+			documentURI,
+			statusCode,
+		);
 	}
 	/** the page's value at a sink as a violation's sample (Function's without the source's head, measured) */
 	#sinkSample(sink: string, value: string): string {
@@ -1600,34 +1561,11 @@ export default class DocumentClient extends Client {
 		const policies = this.pagePolicies()
 			.map(({ policy }) => policy)
 			.filter((policy) => policy.directives.has('trusted-types'));
-		const factory = "'createPolicy' on 'TrustedTypePolicyFactory'";
-		const disallowed = `Failed to execute ${factory}: Policy "${name}" disallowed.`;
-		const exists = `Failed to execute ${factory}: Policy with name "${name}" already exists.`;
-		const refusals: { policy: Policy; message: string }[] = [];
-		for (const policy of policies) {
-			const tokens = policy.directives.get('trusted-types')!;
-			const lower = tokens.map((token) => token.toLowerCase());
-			const names = tokens.filter(
-				(token) => !token.startsWith("'") && token !== '*',
-			);
-			if (
-				lower.includes("'none'") ||
-				(!tokens.includes('*') && !names.includes(name))
-			)
-				refusals.push({ policy, message: disallowed });
-		}
-		if (refusals.length) return refusals;
-		// allowed by every policy by name: a duplicate is refused by each policy
-		// that does not allow them
-		if (made.has(name))
-			for (const policy of policies) {
-				const lower = policy.directives
-					.get('trusted-types')!
-					.map((token) => token.toLowerCase());
-				if (!lower.includes("'allow-duplicates'"))
-					refusals.push({ policy, message: exists });
-			}
-		return refusals;
+		// no trusted-types directive: the part is not made (most pages that
+		// create a policy have none)
+		return policies.length
+			? deferred('refusedTrustedPolicy')(policies, name, made)
+			: [];
 	}
 	/** the exact error Chrome throws at a refused Trusted Types `sink` (src/inject/modules/TrustedTypes.ts) */
 	trustedTypeError(
@@ -1636,24 +1574,18 @@ export default class DocumentClient extends Client {
 		tail: string,
 		attribute: boolean,
 	): Error {
-		const global = this.global as typeof globalThis;
-		if (sink === 'eval' || sink === 'Function')
-			return new global.EvalError(
-				"Evaluating a string as JavaScript violates this document's Trusted Type assignment requirements.",
+		try {
+			return deferred('trustedTypeError')(
+				this.global as typeof globalThis,
+				sink,
+				type,
+				tail,
+				attribute,
 			);
-		const space = sink.indexOf(' ');
-		const iface = sink.slice(0, space);
-		const member = sink.slice(space + 1);
-		const operation = attribute
-			? "execute 'setAttribute' on 'Element'"
-			: sink === 'Worker constructor'
-				? "construct 'Worker'"
-				: TT_METHOD_SINKS.has(member)
-					? `execute '${member}' on '${iface}'`
-					: `set the '${member}' property on '${iface}'`;
-		return new global.TypeError(
-			`Failed to ${operation}: This document requires '${type}' assignment${tail}`,
-		);
+		} catch (error) {
+			// the part cannot be had: the sink still refuses, with its error
+			return error as Error;
+		}
 	}
 	/**
 	 * A synthesised script/style violation of `policy`, dispatched where the
@@ -1676,12 +1608,19 @@ export default class DocumentClient extends Client {
 	 * (ContentSecurity sets it; gone once it ran)
 	 */
 	namesViolationTargets?: () => void;
-	#dispatchCodeViolation(
+	/**
+	 * Fire a violation of `policy` on the document in a timer, so it does not
+	 * re-enter the page mid-mutation, its part made there (./violations.ts):
+	 * a code one without `documentURI`, a Trusted Types one with it
+	 */
+	#dispatchViolation(
 		policy: Policy,
 		directive: string,
 		blocked: string,
 		sample: string,
 		node: Node | null,
+		documentURI?: string,
+		statusCode?: number,
 	) {
 		const global = this.global as typeof globalThis;
 		const Event = global.SecurityPolicyViolationEvent;
@@ -1689,38 +1628,20 @@ export default class DocumentClient extends Client {
 		const document = global.document;
 		nativeSetTimeout(() => {
 			try {
-				const event = new Event('securitypolicyviolation', {
-					bubbles: true,
-					composed: true,
-					blockedURI: blocked,
-					documentURI: this.url.url.href.replace(/#.*$/s, ''),
-					referrer: this.referrerOf(document) ?? '',
-					violatedDirective: directive,
-					effectiveDirective: directive,
-					originalPolicy: policy.text,
-					disposition: policy.disposition,
-					sourceFile: '',
-					statusCode: 200,
-					lineNumber: 0,
-					columnNumber: 0,
+				deferred('dispatchViolation')(
+					this,
+					Event,
+					document,
+					policy,
+					directive,
+					blocked,
 					sample,
-				});
-				// the browser names an element (an inline script, a handler's
-				// element, a style); fire on the document all the same, where the
-				// page's listener always hears it, and read the target back there
-				if (node && node !== document) {
-					this.namesViolationTargets?.();
-					this.codeViolationTarget.set(event, node);
-				}
-				// an enforced one reads back trusted, as the browser's does: a
-				// Trusted Types case that also sends a script-src (csp-trusted-types)
-				// compares isTrusted; csp-scripts does not, so this is harmless there
-				if (policy.disposition === 'enforce') this.trustedViolations.add(event);
-				Reflect.apply(global.EventTarget.prototype.dispatchEvent, document, [
-					event,
-				]);
+					node,
+					documentURI,
+					statusCode,
+				);
 			} catch (error) {
-				// the document is gone
+				// the document is gone, or the part cannot be had
 			}
 		});
 	}
@@ -1766,7 +1687,7 @@ export default class DocumentClient extends Client {
 				)
 					? item.sample.slice(0, 40)
 					: '';
-			this.#dispatchCodeViolation(policy, directive, blocked, sample, node);
+			this.#dispatchViolation(policy, directive, blocked, sample, node);
 			if (policy.disposition === 'enforce') refused = true;
 		}
 		return refused;
@@ -1795,30 +1716,25 @@ export default class DocumentClient extends Client {
 				)
 					? sample.slice(0, 40)
 					: '';
-			this.#dispatchCodeViolation(policy, 'script-src', blocked, shown, null);
+			this.#dispatchViolation(policy, 'script-src', blocked, shown, null);
 			// the first enforced policy that refuses it names the thrown error
 			if (policy.disposition === 'enforce' && directive === null)
 				directive = `${governed.name} ${governed.sources.join(' ')}`;
 		}
 		if (directive === null) return null;
 		if (kind === 'timer') return { error: null };
-		const global = this.global as typeof globalThis;
-		if (wasm) {
-			const CompileError = (
-				global as unknown as { WebAssembly: { CompileError: ErrorConstructor } }
-			).WebAssembly.CompileError;
-			const fn = kind === 'wasm-compile' ? 'compile' : 'Module';
+		try {
 			return {
-				error: new CompileError(
-					`WebAssembly.${fn}(): Compiling or instantiating WebAssembly module violates the following Content Security policy directive because 'unsafe-eval' is not an allowed source of script in the following Content Security Policy directive: "${directive}".`,
+				error: deferred('evalError')(
+					this.global as typeof globalThis,
+					kind,
+					directive,
 				),
 			};
+		} catch (error) {
+			// the part cannot be had: the code is refused all the same
+			return { error: error as Error };
 		}
-		return {
-			error: new global.EvalError(
-				`Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: ${directive}".\n`,
-			),
-		};
 	}
 	/** the nonce the page gave a script or style element of its own (not the document's, which the inject gives: ContentSecurity's nonce getter) */
 	#elementNonce(element: Element): string | null {

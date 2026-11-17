@@ -132,6 +132,12 @@ import {
 } from './siteEvents';
 import { sourcePolicy } from './sourcePolicy';
 import { storageAccessHandle } from './storageAccess';
+import {
+	dispatchViolation,
+	evalError,
+	refusedTrustedPolicy,
+	trustedTypeError,
+} from './violations';
 import { writeStream } from './WriteStream';
 import { xhrMessage } from './xhrMessages';
 import { responseParser } from './xhrParse';
@@ -168,6 +174,12 @@ export const parts = {
 	// a document's navigation of another window, refused as Chrome refuses
 	// it, at its first (./navigateOther.ts; modules/Context.ts)
 	navigateOther,
+	// the violations and errors of the page's own policy the inject makes
+	// itself, the first time it refuses something (./violations.ts; Client.ts)
+	dispatchViolation,
+	refusedTrustedPolicy,
+	trustedTypeError,
+	evalError,
 	navigationRefusal,
 	precommitRedirect,
 	webTransportStandIn,
