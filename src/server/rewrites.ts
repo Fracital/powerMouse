@@ -4320,7 +4320,11 @@ function utf8Length(text: string): number {
 }
 
 export function getMime(contentType: string): string {
-	return contentType.split(';')[0];
+	// the browser selects a parser by the MIME essence, which it lowercases
+	// and trims (Fetch "extract a MIME type"): a document served `Text/HTML`
+	// or ` text/html ` is parsed as HTML, so the shell must stand in for it,
+	// or its scripts run unrewritten on the proxy origin
+	return contentType.split(';')[0].trim().toLowerCase();
 }
 
 /**
