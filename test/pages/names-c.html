@@ -1,0 +1,42 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>names-c</title>
+<body></body>
+<script>
+	// another tab, of another site, that the first never opened: the names
+	// of the first tab's frames are not its to find
+	const reach = (w) => {
+		if (w === null) return 'null';
+		try {
+			return `readable ${w.document.title}`;
+		} catch (error) {
+			return `blocked ${error.name}`;
+		}
+	};
+	(async () => {
+		const cases = {};
+		for (const name of ['kidb', 'kida', 'gb']) {
+			const w = window.open('', name);
+			let fresh = 'no window';
+			try {
+				fresh =
+					w && w.location.href === 'about:blank' ? 'new window' : 'existing';
+			} catch (error) {
+				fresh = `existing (${error.name})`;
+			}
+			cases[`open ${name}`] = [fresh, reach(w)];
+			try {
+				if (fresh === 'new window') w.close();
+			} catch (error) {}
+		}
+		// and navigations aimed at them by name
+		const leaf = `${location.protocol}//127.0.0.1:${location.port}/pages/names-leaf.html`;
+		window.open(`${leaf}?by-c-open`, 'kida');
+		const link = document.createElement('a');
+		link.target = 'kidb';
+		link.href = `${leaf}?by-c-link`;
+		document.body.append(link);
+		link.click();
+		window.__pi = { done: true, page: 'c', cases };
+	})();
+</script>

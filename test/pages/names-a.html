@@ -1,0 +1,81 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>names-a</title>
+<body></body>
+<script>
+	// Browsing context names a page reaches: its own cross-site child and
+	// that child's frame, a same-site child, and (from the child) its
+	// sibling. A window found by name is the one the browser has; another
+	// site's stays out of reach
+	const cross = `${location.protocol}//localhost:${location.port}`;
+	const reach = (w) => {
+		if (w === null) return 'null';
+		try {
+			return `readable ${w.document.title}`;
+		} catch (error) {
+			return `blocked ${error.name}`;
+		}
+	};
+	const frame = (name, src) =>
+		new Promise((resolve) => {
+			const element = document.createElement('iframe');
+			element.name = name;
+			element.src = src;
+			element.onload = () => resolve(element);
+			document.body.append(element);
+		});
+	(async () => {
+		const cases = {};
+		window.__pi = { done: false, page: 'a', cases };
+		const fromChild = new Promise((resolve) =>
+			addEventListener('message', (event) => {
+				if (event.data?.names) resolve(event.data.names);
+			}),
+		);
+		const kidb = await frame('kidb', `${cross}/pages/names-b.html`);
+		const kida = await frame('kida', 'names-leaf.html?kida');
+		// read by the suite once another tab aimed at these names
+		window.__named = () =>
+			[kida, kidb].map((element) => {
+				try {
+					return element.contentWindow.location.search;
+				} catch (error) {
+					return `blocked ${error.name}`;
+				}
+			});
+		const child = await Promise.race([
+			fromChild,
+			new Promise((resolve) => setTimeout(() => resolve('none'), 8000)),
+		]);
+		const b = window.open('', 'kidb');
+		cases['open kidb'] = [b === kidb.contentWindow, reach(b)];
+		const gb = window.open('', 'gb');
+		cases['open gb'] = [gb === kidb.contentWindow.frames[0], reach(gb)];
+		const a = window.open('', 'kida');
+		cases['open kida'] = [a === kida.contentWindow, reach(a)];
+		cases['document named kidb'] = [
+			document.kidb === kidb.contentWindow,
+			reach(document.kidb),
+		];
+		cases['window named kidb'] = [
+			window.kidb === kidb.contentWindow,
+			reach(window.kidb),
+		];
+		cases['document named kida'] = [
+			document.kida === kida.contentWindow,
+			reach(document.kida),
+		];
+		cases['from cross-site child'] = child;
+		await new Promise((resolve) => setTimeout(resolve, 2000));
+		cases['kida after the child aimed at it'] = (() => {
+			try {
+				return kida.contentWindow.location.search;
+			} catch (error) {
+				return `blocked ${error.name}`;
+			}
+		})();
+		window.__pi = { done: true, page: 'a', cases };
+	})().catch((error) => {
+		window.__pi = { done: true, page: 'a', cases: { threw: String(error) } };
+	});
+</script>

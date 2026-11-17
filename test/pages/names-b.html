@@ -1,0 +1,42 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>names-b</title>
+<body></body>
+<script>
+	// the cross-site child: its own frame, and its parent's other child by
+	// name
+	const reach = (w) => {
+		if (w === null) return 'null';
+		try {
+			return `readable ${w.document.title}`;
+		} catch (error) {
+			return `blocked ${error.name}`;
+		}
+	};
+	const element = document.createElement('iframe');
+	element.name = 'gb';
+	element.src = 'names-leaf.html?gb';
+	element.onload = () =>
+		setTimeout(() => {
+			const sibling = window.open('', 'kida');
+			const own = window.open('', 'gb');
+			parent.postMessage(
+				{
+					names: {
+						'open kida': [sibling === parent.frames[1], reach(sibling)],
+						'open gb': [own === element.contentWindow, reach(own)],
+					},
+				},
+				'*',
+			);
+			// and navigations aimed at the sibling by its name
+			const leaf = `${location.protocol}//127.0.0.1:${location.port}/pages/names-leaf.html`;
+			window.open(`${leaf}?by-b-open`, 'kida');
+			const link = document.createElement('a');
+			link.target = 'kida';
+			link.href = `${leaf}?by-b-link`;
+			document.body.append(link);
+			link.click();
+		}, 500);
+	document.body.append(element);
+</script>
