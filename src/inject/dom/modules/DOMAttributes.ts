@@ -2363,14 +2363,17 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			};
 			this.copyInline = (element) => copyInlineSoon(element);
 
-			// One property's value. A url() token is found as it stands; a URL
-			// named any other way (a string of image-set() or src(), a url(
-			// spelled with an escape) takes the parser, which reads the value
-			// as a declaration's
+			// One property's value. A URL named any way but a plain lower-case
+			// url() token (a string of image-set() or src(), a url( spelled
+			// with an escape, in upper case, or left unclosed) takes the
+			// parser, which reads the value as a declaration's: the fast regex
+			// below finds only a lower-case, closed url(, and the browser loads
+			// the rest all the same (background-image:URL(...) and an unclosed
+			// url( at the end of a value both fetch).
 			const AS_DECLARATION = 'content:';
 			const rewriteValue = (value: unknown) => {
 				if (typeof value !== 'string') return value;
-				if (/image-set|src\(|\\/i.test(value))
+				if (/url\(|image-set|src\(|\\/i.test(value))
 					try {
 						const routed = modifyCSS(
 							AS_DECLARATION + value,

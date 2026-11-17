@@ -59,6 +59,27 @@ export default class CSSOMModule extends Module<DocumentClient> {
 			}
 		};
 
+		// a FontFace source is a `src` descriptor value, not a sheet: a url()
+		// in it is routed like any declaration's, through the parser, so an
+		// upper-case URL(), an unclosed url(, or a local() before the url load
+		// the font from the proxy if the regex (which finds only a plain
+		// lower-case url()) were used alone
+		const AS_SRC = 'src:';
+		const rewriteSource = (value: string) => {
+			if (/url\(|image-set|src\(|\\/i.test(value))
+				try {
+					const routed = modifyCSS(
+						AS_SRC + value,
+						client.baseURL,
+						'declarationList',
+					);
+					if (routed.startsWith(AS_SRC)) return routed.slice(AS_SRC.length);
+				} catch (error) {
+					// not a value the parser takes: the url() tokens the regex has
+				}
+			return rewriteCSSValueURLs(value, client.baseURL);
+		};
+
 		// what addRule takes for a rule's body: a declaration list
 		const rewriteDeclarations = (text: unknown) => {
 			const source = String(text);
@@ -290,7 +311,7 @@ export default class CSSOMModule extends Module<DocumentClient> {
 					// a string source is a CSS `src` value; a buffer is data
 					if (typeof args[1] !== 'string')
 						return Reflect.construct(target, args, newTarget);
-					args[1] = rewriteCSSValueURLs(args[1], client.baseURL);
+					args[1] = rewriteSource(args[1]);
 					// in a document no worker controls, a face whose source names
 					// routes is made in a controlled realm, so it loads through the
 					// worker; it is still this realm's FontFace (its prototype
