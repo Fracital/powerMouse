@@ -1,7 +1,7 @@
 import { governing, sourcesMatch } from '../../../csp';
 import { CSP_REPORT } from '../../../transport/messages';
 import Module from '../../Module';
-import ProxyModule from '../../modules/Proxy';
+import ProxyModule, { memberName } from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
 import { trustTaggedViolations } from '../../violationViews';
 import type DocumentClient from '../Client';
@@ -165,30 +165,44 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 			register();
 			addDocumentOpenListener(global, register);
 		}
-		const hook = (key: string, read: (value: string) => string) => {
+		// a getter's call that hands what the browser read to `read`, with the
+		// member it is (one call for all the URL fields, which read which one
+		// they are from the native getter they wrap)
+		const reading =
+			(read: (value: string, key: string) => string) =>
+			(target: Function, that: unknown, args: unknown[]) => {
+				const value = Reflect.apply(target, that, args);
+				return typeof value === 'string'
+					? read(value, memberName(target))
+					: value;
+			};
+		const hook = (
+			key: string,
+			call: (target: Function, that: unknown, args: unknown[]) => unknown,
+		) => {
 			const descriptor = Reflect.getOwnPropertyDescriptor(prototype, key);
 			if (!descriptor?.get) return;
 			Reflect.defineProperty(prototype, key, {
 				...descriptor,
-				get: proxyModule.wrapFunction(descriptor.get, (target, that, args) => {
-					const value = Reflect.apply(target, that, args);
-					return typeof value === 'string' ? read(value) : value;
-				}),
+				get: proxyModule.wrapFunction(descriptor.get, call),
 			});
 		};
-		for (const key of URL_FIELDS)
-			hook(key, (value) => {
-				if (!value.includes(':')) return value;
-				if (key === 'blockedURI') {
-					const refused = client.refusedURI(value);
-					if (refused !== null) return refused.blocked;
-				}
-				const page = unrouteURL(client, value);
-				if (page === null) return '';
-				// a report names no fragment
-				return key === 'blockedURI' ? page.replace(/#.*$/s, '') : page;
-			});
-		hook('originalPolicy', (value) => client.pagePolicyText(value) ?? value);
+		const urlField = reading((value, key) => {
+			if (!value.includes(':')) return value;
+			if (key === 'blockedURI') {
+				const refused = client.refusedURI(value);
+				if (refused !== null) return refused.blocked;
+			}
+			const page = unrouteURL(client, value);
+			if (page === null) return '';
+			// a report names no fragment
+			return key === 'blockedURI' ? page.replace(/#.*$/s, '') : page;
+		});
+		for (const key of URL_FIELDS) hook(key, urlField);
+		hook(
+			'originalPolicy',
+			reading((value) => client.pagePolicyText(value) ?? value),
+		);
 		// the page's code, which the rewriter changed ('report-sample'): what
 		// it evaluated, or the text the page reads back of the element
 		const nativeTarget = Reflect.getOwnPropertyDescriptor(

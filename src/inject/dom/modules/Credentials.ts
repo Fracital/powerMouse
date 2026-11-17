@@ -1,5 +1,8 @@
 import Module from '../../Module';
-import ProxyModule, { requiredArgumentsMessage } from '../../modules/Proxy';
+import ProxyModule, {
+	memberName,
+	requiredArgumentsMessage,
+} from '../../modules/Proxy';
 import { withStack } from '../../nativeErrors';
 import type DocumentClient from '../Client';
 import { deferred, passkeysPart } from '../deferred';
@@ -127,10 +130,16 @@ export default class CredentialsModule extends Module<DocumentClient> {
 		// a getter of a native prototype, wrapped so it reads as the browser's
 		// (name, length, [native code]) and returns this document's own data for
 		// an object it made, or throws the browser's Illegal invocation
+		// (one call for all of them, which reads which member it is from the
+		// native getter it wraps)
+		const credentialGetter = (target: Function, that: object) => {
+			const data = credentialData.get(that);
+			if (!data) return Reflect.apply(target, that, []);
+			return data[memberName(target) as keyof CredentialData];
+		};
 		const wrappedGetter = (
 			nativePrototype: object,
 			key: string,
-			table: WeakMap<object, any>,
 		): PropertyDescriptor => {
 			const descriptor = Reflect.getOwnPropertyDescriptor(
 				nativePrototype,
@@ -138,11 +147,7 @@ export default class CredentialsModule extends Module<DocumentClient> {
 			)!;
 			return {
 				...descriptor,
-				get: proxyModule.wrapFunction(descriptor.get!, (target, that) => {
-					const data = table.get(that);
-					if (!data) return Reflect.apply(target, that, []);
-					return data[key];
-				}),
+				get: proxyModule.wrapFunction(descriptor.get!, credentialGetter),
 			};
 		};
 		const copyStringTag = (proto: object, nativeProto: object) => {
@@ -191,13 +196,13 @@ export default class CredentialsModule extends Module<DocumentClient> {
 			Reflect.defineProperty(
 				icPrototype,
 				key,
-				wrappedGetter(NativeIdentityCredential.prototype, key, credentialData),
+				wrappedGetter(NativeIdentityCredential.prototype, key),
 			);
 		for (const key of ['id', 'type'] as const)
 			Reflect.defineProperty(
 				NativeCredential.prototype,
 				key,
-				wrappedGetter(NativeCredential.prototype, key, credentialData),
+				wrappedGetter(NativeCredential.prototype, key),
 			);
 		copyStringTag(icPrototype, NativeIdentityCredential.prototype);
 		const IdentityCredential = standInClass(
@@ -443,6 +448,17 @@ export default class CredentialsModule extends Module<DocumentClient> {
 								'create',
 							),
 			);
+		// (one call for every static, which reads which one it is from the
+		// native it wraps)
+		const keyStatic = (target: Function, that: unknown, args: unknown[]) =>
+			provider
+				? (provider()?.statics(target.name, target, args) ?? declined())
+				: withoutRelatedOrigins(
+						(called) => Reflect.apply(target, that, called),
+						args,
+						['rpId'],
+						'signal',
+					);
 		if (NativePublicKeyCredential)
 			for (const name of [
 				'signalUnknownCredential',
@@ -466,15 +482,7 @@ export default class CredentialsModule extends Module<DocumentClient> {
 					...descriptor,
 					value: proxyModule.wrapFunction(
 						descriptor.value as Function,
-						(target, that, args) =>
-							provider
-								? (provider()?.statics(name, target, args) ?? declined())
-								: withoutRelatedOrigins(
-										(called) => Reflect.apply(target, that, called),
-										args,
-										['rpId'],
-										'signal',
-									),
+						keyStatic,
 					),
 				});
 			}

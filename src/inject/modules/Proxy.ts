@@ -150,6 +150,20 @@ export function onEventTarget(target: any, event: string) {
 }
 
 /**
+ * The member a native function of a prototype is, by its name: a method's
+ * is its key, an accessor's (`get status`, `set src`) is its key after the
+ * prefix. A hook that wraps several members with one call reads which one
+ * it was called as from the native it wraps (a call of its own for each
+ * member was a closure and its scope in every frame).
+ */
+export function memberName(target: Function): string {
+	const name: string = target.name;
+	return name.startsWith('get ') || name.startsWith('set ')
+		? name.slice(4)
+		: name;
+}
+
+/**
  * The message of the browser's error for a call with too few arguments, as
  * Blink words it ("1 argument required", "2 arguments required").
  */
@@ -716,18 +730,14 @@ export default class ProxyModule extends Module<Client> {
 		const mines = new LazyWeakMap<Function, Function>();
 		const call = (target: Function, that: unknown, args: unknown[]) => {
 			if (!instances.has(that)) return Reflect.apply(target, that, args);
-			if (args.length < target.length) {
-				const name: string = target.name;
+			if (args.length < target.length)
 				catchRequiredArguments(
 					args.length,
 					target.length,
 					from.name,
-					name.startsWith('get ') || name.startsWith('set ')
-						? name.slice(4)
-						: name,
+					memberName(target),
 					realm,
 				);
-			}
 			return Reflect.apply(mines.get(target)!, that, args);
 		};
 		const mirror = <T extends Function>(

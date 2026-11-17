@@ -23,7 +23,7 @@ import {
 import Client from '../Client';
 import Module from '../Module';
 import { LazyMap, LazySet, LazyWeakMap, LazyWeakSet } from '../ownCollections';
-import ProxyModule from './Proxy';
+import ProxyModule, { memberName } from './Proxy';
 import UnrouteModule, { unrouteURL } from './Unroute';
 
 // the browser's own members, taken when the bundle runs
@@ -767,88 +767,100 @@ export default class ResourceTimingModule extends Module<Client> {
 			'requestStart',
 		];
 
-		for (const name of RESTRICTED_TIMES)
-			hook(name, (target, entry, args) => {
-				const result = Reflect.apply(target, entry, args);
-				const verdict = judge(entry);
-				if (verdict.local) return result;
-				if (verdict.restricted) return 0;
-				if (name === 'redirectStart' || name === 'redirectEnd') {
-					if (result === 0 || siteRedirects(entry) === 0) return 0;
-					// (a navigation's are the browser's: it starts at 0, its
-					// redirects after it)
-					return name === 'redirectStart' && isResource(entry)
-						? read(entry, 'startTime')
-						: result;
-				}
-				if (CONNECTION_TIMES.includes(name)) {
-					if (result === 0) return 0;
-					const [page, own] = fetchStarts(entry);
-					return result === own ? page : Math.max(result as number, page);
-				}
-				// The browser has no final headers' time for a service worker's
-				// answer and gives the response's start as an interim one's.
-				// Natively that is how an answer from the HTTP cache reads; one
-				// from the network (a revalidation too) has no interim response
-				// and its headers at the response's start (measured in Chrome
-				// 152 and 156).
-				if (
-					name === 'firstInterimResponseStart' ||
-					name === 'finalResponseHeadersStart'
-				) {
-					if (!answered(entry)) return result;
-					// (a dedicated worker's script has neither: measured)
-					if (hasProxyMetric(entry, WORKER_SCRIPT_MARKER)) return 0;
-					const how = delivery(entry);
-					// (nor has what the renderer's memory cache answers)
-					if (how === 'memory') return 0;
-					return (how === 'cache') === (name === 'firstInterimResponseStart')
-						? read(entry, 'responseStart')
-						: 0;
-				}
-				const sizes = name.endsWith('BodySize') ? toldSizes(entry) : null;
-				if (name === 'encodedBodySize') return sizes ? sizes[0] : result;
-				if (name === 'decodedBodySize') return sizes?.[1] ?? result;
-				if (name !== 'transferSize' || result !== 0 || !bodySize) return result;
-				// (nothing came of a load that was aborted or refused)
-				if (!answered(entry)) return 0;
+		// one call for every time (and every string) it hooks, which reads
+		// which one it is from the native getter it wraps
+		const restrictedTime = (
+			target: Function,
+			entry: object,
+			args: unknown[],
+		) => {
+			const name = memberName(target);
+			const result = Reflect.apply(target, entry, args);
+			const verdict = judge(entry);
+			if (verdict.local) return result;
+			if (verdict.restricted) return 0;
+			if (name === 'redirectStart' || name === 'redirectEnd') {
+				if (result === 0 || siteRedirects(entry) === 0) return 0;
+				// (a navigation's are the browser's: it starts at 0, its
+				// redirects after it)
+				return name === 'redirectStart' && isResource(entry)
+					? read(entry, 'startTime')
+					: result;
+			}
+			if (CONNECTION_TIMES.includes(name)) {
+				if (result === 0) return 0;
+				const [page, own] = fetchStarts(entry);
+				return result === own ? page : Math.max(result as number, page);
+			}
+			// The browser has no final headers' time for a service worker's
+			// answer and gives the response's start as an interim one's.
+			// Natively that is how an answer from the HTTP cache reads; one
+			// from the network (a revalidation too) has no interim response
+			// and its headers at the response's start (measured in Chrome
+			// 152 and 156).
+			if (
+				name === 'firstInterimResponseStart' ||
+				name === 'finalResponseHeadersStart'
+			) {
+				if (!answered(entry)) return result;
+				// (a dedicated worker's script has neither: measured)
+				if (hasProxyMetric(entry, WORKER_SCRIPT_MARKER)) return 0;
 				const how = delivery(entry);
-				return how === 'cache' || how === 'memory'
-					? 0
-					: how === 'network'
-						? (toldSizes(entry)?.[0] ??
-								(Reflect.apply(bodySize, entry, []) as number)) + 300
-						: 300;
-			});
-		for (const name of RESTRICTED_STRINGS)
-			hook(name, (target, entry, args) => {
-				const result = Reflect.apply(target, entry, args);
-				const verdict = judge(entry);
-				if (verdict.local) return result;
-				if (verdict.restricted) return '';
-				const how = delivery(entry);
-				if (name === 'nextHopProtocol')
-					// (the HTTP cache's answer has none, nor has a load nothing
-					// answered)
-					return result !== '' ||
-						how === 'cache' ||
-						how === 'revalidated' ||
-						!answered(entry)
-						? result
-						: verdict.protocol === 'https:'
-							? 'h2'
-							: verdict.protocol === 'http:'
-								? 'http/1.1'
-								: '';
-				// deliveryType: a cache's answer is the cache's, but for what the
-				// renderer revalidated; the worker's own way of answering (its
-				// Cache API entry for a kept script) is not the page's to see
-				return how !== 'network' && how !== 'memory-revalidated'
-					? 'cache'
-					: result === 'cache' || result === 'cache-storage'
-						? ''
-						: result;
-			});
+				// (nor has what the renderer's memory cache answers)
+				if (how === 'memory') return 0;
+				return (how === 'cache') === (name === 'firstInterimResponseStart')
+					? read(entry, 'responseStart')
+					: 0;
+			}
+			const sizes = name.endsWith('BodySize') ? toldSizes(entry) : null;
+			if (name === 'encodedBodySize') return sizes ? sizes[0] : result;
+			if (name === 'decodedBodySize') return sizes?.[1] ?? result;
+			if (name !== 'transferSize' || result !== 0 || !bodySize) return result;
+			// (nothing came of a load that was aborted or refused)
+			if (!answered(entry)) return 0;
+			const how = delivery(entry);
+			return how === 'cache' || how === 'memory'
+				? 0
+				: how === 'network'
+					? (toldSizes(entry)?.[0] ??
+							(Reflect.apply(bodySize, entry, []) as number)) + 300
+					: 300;
+		};
+		for (const name of RESTRICTED_TIMES) hook(name, restrictedTime);
+		const restrictedString = (
+			target: Function,
+			entry: object,
+			args: unknown[],
+		) => {
+			const name = memberName(target);
+			const result = Reflect.apply(target, entry, args);
+			const verdict = judge(entry);
+			if (verdict.local) return result;
+			if (verdict.restricted) return '';
+			const how = delivery(entry);
+			if (name === 'nextHopProtocol')
+				// (the HTTP cache's answer has none, nor has a load nothing
+				// answered)
+				return result !== '' ||
+					how === 'cache' ||
+					how === 'revalidated' ||
+					!answered(entry)
+					? result
+					: verdict.protocol === 'https:'
+						? 'h2'
+						: verdict.protocol === 'http:'
+							? 'http/1.1'
+							: '';
+			// deliveryType: a cache's answer is the cache's, but for what the
+			// renderer revalidated; the worker's own way of answering (its
+			// Cache API entry for a kept script) is not the page's to see
+			return how !== 'network' && how !== 'memory-revalidated'
+				? 'cache'
+				: result === 'cache' || result === 'cache-storage'
+					? ''
+					: result;
+		};
+		for (const name of RESTRICTED_STRINGS) hook(name, restrictedString);
 		hook('workerStart', (target, entry, args) => {
 			Reflect.apply(target, entry, args);
 			return 0;

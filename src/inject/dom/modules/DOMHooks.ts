@@ -2309,6 +2309,28 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		];
 		const namedNodeMap = realm.NamedNodeMap.prototype;
 		const nativeNamedNodeMap: Record<string, unknown> = {};
+		// one call for every method, which reads which one it is from the
+		// native it wraps
+		const namedNodeMapMethod = (
+			target: Function,
+			that: any,
+			args: unknown[],
+		) => {
+			const view = views.get(that);
+			// no argument: the browser's own TypeError
+			if (!view || !args.length)
+				return Reflect.apply(target, view?.map ?? that, args);
+			const key: string = target.name;
+			return VIEW_METHODS.includes(key)
+				? (viewMethods ??= deferred().attributeViewMethods({
+						isMarkerOn,
+						attributeName,
+						Attr: realm.Attr,
+						nativeNamedNodeMap,
+						setNamedItems,
+					}))[key](view, args, key)
+				: Reflect.apply(target, view.map, args);
+		};
 		for (const key of Reflect.ownKeys(namedNodeMap)) {
 			const descriptor = Reflect.getOwnPropertyDescriptor(namedNodeMap, key)!;
 			if (
@@ -2318,27 +2340,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			)
 				continue;
 			nativeNamedNodeMap[key] = descriptor.value;
-			const own = VIEW_METHODS.includes(key);
 			Reflect.defineProperty(namedNodeMap, key, {
 				...descriptor,
-				value: proxyModule.wrapFunction(
-					descriptor.value,
-					(target, that, args) => {
-						const view = views.get(that);
-						// no argument: the browser's own TypeError
-						if (!view || !args.length)
-							return Reflect.apply(target, view?.map ?? that, args);
-						return own
-							? (viewMethods ??= deferred().attributeViewMethods({
-									isMarkerOn,
-									attributeName,
-									Attr: realm.Attr,
-									nativeNamedNodeMap,
-									setNamedItems,
-								}))[key](view, args, key)
-							: Reflect.apply(target, view.map, args);
-					},
-				),
+				value: proxyModule.wrapFunction(descriptor.value, namedNodeMapMethod),
 			});
 		}
 
@@ -2594,6 +2598,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					return `:is([${marker}${name}${rest}],[${name}${rest}]:not([${marker}${name}]))`;
 				},
 			);
+		const selectorCall = (target: Function, that: unknown, args: unknown[]) => {
+			if (args.length) args[0] = rewriteSelector(args[0]);
+			return Reflect.apply(target, that, args);
+		};
 		for (const proto of [
 			realm.Element.prototype,
 			realm.Document.prototype,
@@ -2607,13 +2615,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			] as const) {
 				const native = (proto as any)[method];
 				if (typeof native !== 'function') continue;
-				(proto as any)[method] = proxyModule.wrapFunction(
-					native,
-					(target, that, args) => {
-						if (args.length) args[0] = rewriteSelector(args[0]);
-						return Reflect.apply(target, that, args);
-					},
-				);
+				(proto as any)[method] = proxyModule.wrapFunction(native, selectorCall);
 			}
 
 		// the other ways to set an attribute all end in the same hooks

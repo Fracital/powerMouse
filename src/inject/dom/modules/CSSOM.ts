@@ -202,6 +202,24 @@ export default class CSSOMModule extends Module<DocumentClient> {
 				},
 			) as any;
 		}
+		// one call for the four methods, which reads which one it is called
+		// as from the native it wraps
+		const sheetMethod = (
+			target: Function,
+			that: CSSStyleSheet,
+			args: unknown[],
+		) => {
+			const method = target.name;
+			if ((method === 'insertRule' || method === 'deleteRule') && refused(that))
+				throw refuse(
+					`Failed to execute '${method}' on 'CSSStyleSheet': Cannot access StyleSheet to ${method}`,
+				);
+			if (method !== 'deleteRule' && args.length) args[0] = rewrite(args[0]);
+			const result = Reflect.apply(target, that, args);
+			if (method !== 'replace') copied(that);
+			else Reflect.apply(promiseThen, result, [() => copied(that), () => {}]);
+			return result;
+		};
 		for (const method of [
 			'insertRule',
 			'replace',
@@ -211,22 +229,7 @@ export default class CSSOMModule extends Module<DocumentClient> {
 			if (typeof sheet[method] !== 'function') continue;
 			sheet[method] = proxyModule.wrapFunction(
 				sheet[method] as Function,
-				(target, that, args) => {
-					if (
-						(method === 'insertRule' || method === 'deleteRule') &&
-						refused(that)
-					)
-						throw refuse(
-							`Failed to execute '${method}' on 'CSSStyleSheet': Cannot access StyleSheet to ${method}`,
-						);
-					if (method !== 'deleteRule' && args.length)
-						args[0] = rewrite(args[0]);
-					const result = Reflect.apply(target, that, args);
-					if (method !== 'replace') copied(that);
-					else
-						Reflect.apply(promiseThen, result, [() => copied(that), () => {}]);
-					return result;
-				},
+				sheetMethod,
 			) as any;
 		}
 
@@ -239,6 +242,19 @@ export default class CSSOMModule extends Module<DocumentClient> {
 			global.CSSRule?.prototype,
 			'parentStyleSheet',
 		);
+		// (one call for every rule's three methods, as for a sheet's)
+		const ruleMethod = (target: Function, that: unknown, args: unknown[]) => {
+			if (target.name !== 'deleteRule' && args.length)
+				args[0] = rewrite(args[0]);
+			const result = Reflect.apply(target, that, args);
+			try {
+				const owner = parentSheet && Reflect.apply(parentSheet, that, []);
+				if (owner) copied(owner);
+			} catch (error) {
+				// not a rule: the native method threw already
+			}
+			return result;
+		};
 		for (const name of RULE_METHOD_INTERFACES) {
 			const rule = (global as unknown as Record<string, any>)[name]?.prototype;
 			if (!rule) continue;
@@ -247,18 +263,7 @@ export default class CSSOMModule extends Module<DocumentClient> {
 				if (typeof descriptor?.value !== 'function') continue;
 				rule[method] = proxyModule.wrapFunction(
 					descriptor.value as Function,
-					(target, that, args) => {
-						if (method !== 'deleteRule' && args.length)
-							args[0] = rewrite(args[0]);
-						const result = Reflect.apply(target, that, args);
-						try {
-							const owner = parentSheet && Reflect.apply(parentSheet, that, []);
-							if (owner) copied(owner);
-						} catch (error) {
-							// not a rule: the native method threw already
-						}
-						return result;
-					},
+					ruleMethod,
 				);
 			}
 		}

@@ -54,6 +54,8 @@ export default class CSSReadbackModule extends Module<DocumentClient> {
 		// a rule's declaration: the same proxy as element.style
 		const wrapDeclaration =
 			client.getModule(DOMAttributesModule)!.wrapDeclaration;
+		const ruleStyle = (get: Function, that: unknown, args: unknown[]) =>
+			wrapDeclaration!(Reflect.apply(get, that, args));
 		if (wrapDeclaration)
 			for (const name of RULE_STYLE_INTERFACES) {
 				const prototype = global[name]?.prototype;
@@ -62,9 +64,7 @@ export default class CSSReadbackModule extends Module<DocumentClient> {
 				if (!descriptor?.get) continue;
 				Reflect.defineProperty(prototype, 'style', {
 					...descriptor,
-					get: proxyModule.wrapFunction(descriptor.get, (get, that, args) =>
-						wrapDeclaration(Reflect.apply(get, that, args)),
-					),
+					get: proxyModule.wrapFunction(descriptor.get, ruleStyle),
 				});
 			}
 

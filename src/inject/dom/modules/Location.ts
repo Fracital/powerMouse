@@ -2,7 +2,7 @@ import { routeHTML } from '../../../rewriteHTML';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import { setGlobalProxy } from '../../modules/Access';
-import ProxyModule from '../../modules/Proxy';
+import ProxyModule, { memberName } from '../../modules/Proxy';
 import { failsToParse, withStack } from '../../nativeErrors';
 import { LazyWeakMap } from '../../ownCollections';
 import DocumentClient from '../Client';
@@ -50,18 +50,23 @@ export default class LocationModule extends Module<DocumentClient> {
 		// what each member's native does for the page's location, and the one
 		// call every member's wrapper makes (a call of its own for each was a
 		// closure and its scope in every frame)
-		const owns = new LazyWeakMap<Function, (args: any[]) => unknown>();
+		const owns = new LazyWeakMap<
+			Function,
+			(args: any[], target: Function) => unknown
+		>();
 		const call = (target: Function, that: unknown, args: any[]) =>
-			ours(that) ? owns.get(target)!(args) : Reflect.apply(target, that, args);
+			ours(that)
+				? owns.get(target)!(args, target)
+				: Reflect.apply(target, that, args);
 		/** `native` for the page: `own` when called on its location */
 		const member = <T extends Function>(
 			native: T,
-			own: (args: any[]) => unknown,
+			own: (args: any[], target: Function) => unknown,
 		): T => {
 			// (a native that is two members: each its own call)
 			if (owns.has(native))
 				return proxyModule.wrapFunction(native, (target, that, args) =>
-					ours(that) ? own(args) : Reflect.apply(target, that, args),
+					ours(that) ? own(args, target) : Reflect.apply(target, that, args),
 				);
 			owns.set(native, own);
 			return proxyModule.wrapFunction(native, call);
@@ -132,6 +137,65 @@ export default class LocationModule extends Module<DocumentClient> {
 		const members = new Map<string | symbol, PropertyDescriptor>();
 
 		// both URL.prototype and location share these descriptors
+		// each part's URL descriptor, and one getter and one setter call for
+		// all of them, which read which part they are from the native they wrap
+		const urlParts: Record<string, PropertyDescriptor> = Object.create(null);
+		const partGet = (args: any[], target: Function) => {
+			const temp = new URL(moduleClient.location.toString());
+
+			return Reflect.apply(urlParts[memberName(target)].get!, temp, args);
+		};
+		const partSet = (args: any[], target: Function) => {
+			const common = memberName(target);
+			const urlDescriptor = urlParts[common];
+			const temp = new URL(moduleClient.location.toString());
+
+			if (common === 'href') {
+				// one that does not parse: the browser's own SyntaxError,
+				// which names it as the page wrote it, and no navigation
+				const url = String(args[0]);
+				if (failsToParse(moduleClient, url))
+					return Reflect.apply(target, real, [url]);
+				args[0] = moduleClient.encodingParse(
+					url,
+					moduleClient.baseURL.toString(),
+				);
+			}
+
+			// Location's own: a value that is no scheme throws, where
+			// URL's setter leaves the URL as it is (and the page then
+			// navigated to its own address: a reload). Chrome takes
+			// the value up to its first colon as written, a tab or a
+			// line break in it too, and names it so in the message
+			// (measured, 152)
+			if (
+				common === 'protocol' &&
+				!/^[a-z][a-z\d+.-]*$/i.test(String(args[0]).split(':')[0])
+			)
+				throw withStack(
+					new PageDOMException(
+						`Failed to set the 'protocol' property on 'Location': '${String(args[0])}' is an invalid protocol.`,
+						'SyntaxError',
+					),
+				);
+
+			if (common === 'hash') {
+				// Location's own: '' is an empty fragment (`page#`), and
+				// the fragment the document is at already is no navigation
+				// (nor is '' where it has none: measured, url-shapes).
+				// The document's own address: an about:srcdoc document's
+				// `url` is its parent's
+				const input = String(args[0]).replace(/^#/, '');
+				const at = temp.href;
+				if (!input && !at.includes('#')) return;
+				if (input) Reflect.apply(urlDescriptor.set!, temp, [input]);
+				else temp.href = `${temp.href.split('#')[0]}#`;
+				if (temp.href === at) return;
+			} else Reflect.apply(urlDescriptor.set!, temp, args);
+
+			moduleClient.getModule(NavigationHintModule)?.hint(temp.href);
+			go(temp, 'assign');
+		};
 		for (const common of URL_PARTS) {
 			const urlDescriptor = Reflect.getOwnPropertyDescriptor(
 				global.URL.prototype,
@@ -147,65 +211,14 @@ export default class LocationModule extends Module<DocumentClient> {
 				continue;
 			}
 
+			urlParts[common] = urlDescriptor;
 			members.set(common, {
 				...locationDescriptor,
 				get: locationDescriptor.get
-					? member(locationDescriptor.get, (args) => {
-							const temp = new URL(moduleClient.location.toString());
-
-							return Reflect.apply(urlDescriptor.get!, temp, args);
-						})
+					? member(locationDescriptor.get, partGet)
 					: undefined,
 				set: locationDescriptor.set
-					? member(locationDescriptor.set, (args) => {
-							const temp = new URL(moduleClient.location.toString());
-
-							if (common === 'href') {
-								// one that does not parse: the browser's own SyntaxError,
-								// which names it as the page wrote it, and no navigation
-								const url = String(args[0]);
-								if (failsToParse(moduleClient, url))
-									return Reflect.apply(locationDescriptor.set!, real, [url]);
-								args[0] = moduleClient.encodingParse(
-									url,
-									moduleClient.baseURL.toString(),
-								);
-							}
-
-							// Location's own: a value that is no scheme throws, where
-							// URL's setter leaves the URL as it is (and the page then
-							// navigated to its own address: a reload). Chrome takes
-							// the value up to its first colon as written, a tab or a
-							// line break in it too, and names it so in the message
-							// (measured, 152)
-							if (
-								common === 'protocol' &&
-								!/^[a-z][a-z\d+.-]*$/i.test(String(args[0]).split(':')[0])
-							)
-								throw withStack(
-									new PageDOMException(
-										`Failed to set the 'protocol' property on 'Location': '${String(args[0])}' is an invalid protocol.`,
-										'SyntaxError',
-									),
-								);
-
-							if (common === 'hash') {
-								// Location's own: '' is an empty fragment (`page#`), and
-								// the fragment the document is at already is no navigation
-								// (nor is '' where it has none: measured, url-shapes).
-								// The document's own address: an about:srcdoc document's
-								// `url` is its parent's
-								const input = String(args[0]).replace(/^#/, '');
-								const at = temp.href;
-								if (!input && !at.includes('#')) return;
-								if (input) Reflect.apply(urlDescriptor.set!, temp, [input]);
-								else temp.href = `${temp.href.split('#')[0]}#`;
-								if (temp.href === at) return;
-							} else Reflect.apply(urlDescriptor.set!, temp, args);
-
-							moduleClient.getModule(NavigationHintModule)?.hint(temp.href);
-							go(temp, 'assign');
-						})
+					? member(locationDescriptor.set, partSet)
 					: undefined,
 			});
 		}

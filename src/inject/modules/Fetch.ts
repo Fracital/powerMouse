@@ -22,7 +22,11 @@ import Module from '../Module';
 import { failsToParse, withStack } from '../nativeErrors';
 import { LazyWeakMap, LazyWeakSet } from '../ownCollections';
 import { requestRefused } from '../requestVerdict';
-import ProxyModule, { catchRequiredArguments, ownerOf } from './Proxy';
+import ProxyModule, {
+	catchRequiredArguments,
+	memberName,
+	ownerOf,
+} from './Proxy';
 import { unrouteURL } from './Unroute';
 
 /**
@@ -846,37 +850,45 @@ export default class FetchModule extends Module<Client> {
 				return headers;
 			},
 		};
+		// one getter call for the type and every opaque member, which reads
+		// which it is from the native getter it wraps
+		const responseGetter = (
+			target: Function,
+			that: unknown,
+			args: unknown[],
+		) => {
+			const name = memberName(target);
+			const type = types.get(that as Response);
+			if (type !== undefined) {
+				if (name === 'type') return type;
+				if (type === 'opaque') return opaque[name](that as Response);
+			}
+			// the proxy's mark of what a response is: never the page's
+			if (name === 'headers' && marked.has(that as Response)) {
+				let shown = shownHeaders.get(that as Response);
+				if (!shown) {
+					shown = new global.Headers();
+					for (const [key, value] of entriesOf(
+						Reflect.apply(target, that, args) as Headers,
+					)) {
+						if (key === RESPONSE_TYPE_HEADER) continue;
+						if (key === 'server-timing') {
+							const page = withoutProxyMetrics(value);
+							if (page !== null) shown.append(key, page);
+						} else shown.append(key, value);
+					}
+					shownHeaders.set(that as Response, shown);
+				}
+				return shown;
+			}
+			return Reflect.apply(target, that, args);
+		};
 		for (const name of ['type', ...Object.keys(opaque)]) {
 			const descriptor = Reflect.getOwnPropertyDescriptor(proto, name);
 			if (!descriptor?.get) continue;
 			Reflect.defineProperty(proto, name, {
 				...descriptor,
-				get: proxyModule.wrapFunction(descriptor.get, (target, that, args) => {
-					const type = types.get(that as Response);
-					if (type !== undefined) {
-						if (name === 'type') return type;
-						if (type === 'opaque') return opaque[name](that as Response);
-					}
-					// the proxy's mark of what a response is: never the page's
-					if (name === 'headers' && marked.has(that as Response)) {
-						let shown = shownHeaders.get(that as Response);
-						if (!shown) {
-							shown = new global.Headers();
-							for (const [key, value] of entriesOf(
-								Reflect.apply(target, that, args) as Headers,
-							)) {
-								if (key === RESPONSE_TYPE_HEADER) continue;
-								if (key === 'server-timing') {
-									const page = withoutProxyMetrics(value);
-									if (page !== null) shown.append(key, page);
-								} else shown.append(key, value);
-							}
-							shownHeaders.set(that as Response, shown);
-						}
-						return shown;
-					}
-					return Reflect.apply(target, that, args);
-				}),
+				get: proxyModule.wrapFunction(descriptor.get, responseGetter),
 			});
 		}
 		proto.clone = proxyModule.wrapFunction(
@@ -907,15 +919,15 @@ export default class FetchModule extends Module<Client> {
 					),
 				),
 		};
+		const bodyMethod = (target: Function, that: unknown, args: unknown[]) =>
+			types.get(that as Response) === 'opaque'
+				? emptyBody[target.name]()
+				: Reflect.apply(target, that, args);
 		for (const name of Object.keys(emptyBody)) {
 			const native = (proto as unknown as Record<string, unknown>)[name];
 			if (typeof native !== 'function') continue;
 			(proto as unknown as Record<string, unknown>)[name] =
-				proxyModule.wrapFunction(native, (target, that, args) =>
-					types.get(that as Response) === 'opaque'
-						? emptyBody[name]()
-						: Reflect.apply(target, that, args),
-				);
+				proxyModule.wrapFunction(native as Function, bodyMethod);
 		}
 	}
 }
