@@ -1,0 +1,119 @@
+{
+	"/html/browsers/history/the-location-interface/assign_after_load.html": {
+		"Assignment to location after document is completely loaded": "FAIL: assert_equals: expected 6 but got 5"
+	},
+	"/html/browsers/history/the-location-interface/location-ancestor-origins-new-object.html": {
+		"location.ancestorOrigins new object semantics": "FAIL: Failed to read a named property 'ancestorOrigins' from 'Location': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/html/browsers/history/the-location-interface/location-ancestor-origins-referrerpolicy-unsupported-elements.html": {
+		"<frame> with referrerpolicy='no-referrer' does not mask initial about:blank ancestorOrigins": "FAIL: Cannot read properties of null (reading 'contentWindow')"
+	},
+	"/html/browsers/history/the-location-interface/location-ancestor-origins.sub.html": {
+		"test sandboxed iframe in A1, A1 iframe attribute sandbox -> C1 -> B1 -> C2": "FAIL: assert_array_equals: expected property 0 to be \"null\" but got \"http://www.localhost:PORT\" (expected array [\"null\", \"http://localhost:PORT\"] got [\"http://www.localhost:PORT\", \"http://localhost:PORT\"])"
+	},
+	"/html/browsers/history/the-location-interface/location-getters-about-blank.html": {
+		"Location properties on an about:blank page": "FAIL: Failed to read a named property 'href' from 'Location': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/html/browsers/history/the-location-interface/location-hash-about-blank.html": {
+		"Setting hash on an about:blank iframe location": "FAIL: Failed to read a named property 'href' from 'Location': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/html/browsers/history/the-location-interface/location-protocol-setter.html": {
+		"(harness)": "TIMEOUT: timeout: no report within 30 s",
+		"%00 (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%01 (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%09 (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%0A (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%0C (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%0D (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%20 (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"! (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%7F (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%C2%80 (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%C3%BF (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		": (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%E2%80%A0 (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%00x (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%01x (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%20x (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"!x (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%7Fx (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%C2%80x (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%C3%BFx (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		":x (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%E2%80%A0x (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%00X (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%01X (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%20X (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"!X (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%7FX (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%C2%80X (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%C3%BFX (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		":X (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"%E2%80%A0X (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"x%00 (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"x%01 (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"x%20 (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"x! (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"x%7F (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"x%C2%80 (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"x%C3%BF (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"x%E2%80%A0 (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"X%00 (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"X%01 (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"X%20 (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"X! (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"X%7F (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"X%C2%80 (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"X%C3%BF (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"X%E2%80%A0 (percent-encoded here for clarity) is not a scheme": "MISSING: the harness ended TIMEOUT before this subtest",
+		"Equivalent tests for data URL and srcdoc <iframe>s": "MISSING: the harness ended TIMEOUT before this subtest"
+	},
+	"/html/browsers/history/the-location-interface/location-prototype-setting-cross-origin-domain.sub.html": {
+		"Cross-origin via document.domain: setting the prototype to an empty object via Object.setPrototypeOf should throw a TypeError": "FAIL: assert_throws_js: function \"() => { Object.setPrototypeOf(target, newValue); }\" did not throw",
+		"Cross-origin via document.domain: setting the prototype to an empty object via Reflect.setPrototypeOf should return false": "FAIL: assert_false: expected false got true",
+		"Cross-origin via document.domain: the prototype must still be its original value": "FAIL: assert_equals: expected object \"[object Location]\" but got object \"[object Object]\""
+	},
+	"/html/browsers/history/the-location-interface/location-prototype-setting-goes-cross-origin-domain.sub.html": {
+		"Became cross-origin via document.domain: setting the prototype to an empty object via Object.setPrototypeOf should throw a TypeError": "FAIL: assert_throws_js: function \"() => { Object.setPrototypeOf(target, newValue); }\" did not throw",
+		"Became cross-origin via document.domain: setting the prototype to an empty object via Reflect.setPrototypeOf should return false": "FAIL: assert_false: expected false got true"
+	},
+	"/html/browsers/history/the-location-interface/location-prototype-setting-same-origin.html": {
+		"Same-origin: setting the prototype to an empty object via Object.setPrototypeOf should throw a TypeError": "FAIL: assert_throws_js: function \"() => { Object.setPrototypeOf(target, newValue); }\" did not throw",
+		"Same-origin: setting the prototype to an empty object via __proto__ should throw a TypeError": "FAIL: assert_throws_js: function \"function() { target.__proto__ = newValue; }\" did not throw",
+		"Same-origin: setting the prototype to an empty object via Reflect.setPrototypeOf should return false": "FAIL: assert_false: expected false got true",
+		"Same-origin: the prototype must still be its original value": "FAIL: assert_equals: expected object \"[object Location]\" but got object \"[object Object]\""
+	},
+	"/html/browsers/history/the-location-interface/location-replace-cross-site.html": {
+		"Setting location.href of a cross-site iframe": "FAIL: assert_equals: expected 44 but got 43",
+		"Setting location.href of a cross-site popup": "FAIL: assert_equals: expected 2 but got 1"
+	},
+	"/html/browsers/history/the-location-interface/location_assign.html": {
+		"URL that fails to parse": "FAIL: assert_throws_dom: function \"function() { location.assign(\"http://:\"); }\" threw object \"TypeError: Failed to construct 'URL': Invalid URL\" that is not a DOMException SYNTAX_ERR: property \"code\" is equ"
+	},
+	"/html/browsers/history/the-location-interface/location_reload_javascript_url.html": {
+		"location_reload_javascript_url": "FAIL: assert_equals: iframe url (2) expected \"http://localhost:PORT/common/blank.html#foo\" but got \"http://localhost:PORT/common/blank.html#~JHIC\""
+	},
+	"/html/browsers/history/the-location-interface/location_replace.html": {
+		"URL that fails to parse": "FAIL: assert_throws_dom: function \"function() { location.replace(\"//\"); }\" threw object \"TypeError: Failed to construct 'URL': Invalid URL\" that is not a DOMException SYNTAX_ERR: property \"code\" is equal to"
+	},
+	"/html/browsers/history/the-location-interface/no-browsing-context.window.html": {
+		"Setting `href` to `http://test:test/` of a `Location` object sans browsing context is a no-op": "FAIL: Failed to construct 'URL': Invalid URL",
+		"Invoking `assign` with `http://test:test/` on a `Location` object sans browsing context is a no-op": "FAIL: Failed to construct 'URL': Invalid URL",
+		"Invoking `replace` with `http://test:test/` on a `Location` object sans browsing context is a no-op": "FAIL: Failed to construct 'URL': Invalid URL",
+		"Getting `ancestorOrigins` of a `Location` object sans browsing context should be []": "FAIL: Cannot read properties of undefined (reading 'prototype')"
+	},
+	"/html/browsers/history/the-location-interface/same-hash.html": {
+		"Using location.hash = \"#te<st\" must not reset scroll position": "FAIL: assert_equals: Reassigning the same hash must not change the scroll position expected 0 but got 166",
+		"Using location.hash = \"te<st\" must not reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166",
+		"Using location.hash = \"#te%3Cst\" must not reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166",
+		"Using location.hash = \"te%3Cst\" must not reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166",
+		"Using location.hash = \"#te%3cst\" must reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166",
+		"Using location.hash = \"te%3cst\" must reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166",
+		"Using location.href = \"about:srcdoc#te<st\" must reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166",
+		"Using location.assign(\"about:srcdoc#te<st\") must reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166",
+		"Using location.href = \"about:srcdoc#te%3cst\" must reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166",
+		"Using location.assign(\"about:srcdoc#te%3cst\") must reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166",
+		"Using location.href = \"about:srcdoc#te%3Cst\" must reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166",
+		"Using location.assign(\"about:srcdoc#te%3Cst\") must reset scroll position": "FAIL: assert_equals: Setup: iframe starts at top expected 0 but got 166"
+	}
+}

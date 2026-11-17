@@ -1,0 +1,142 @@
+{
+	"/html/browsers/history/the-history-interface/001.html": {
+		"(harness)": "TIMEOUT: ",
+		"history.length should update when loading pages in an iframe": "FAIL: assert_equals: make sure that you loaded the test in a new tab/window expected 2 but got 1",
+		"history.length should update when setting location.hash": "FAIL: assert_equals: make sure that you loaded the test in a new tab/window expected 2 but got 1",
+		"history.length should update when pushing a state": "FAIL: assert_equals: expected 2 but got 1",
+		"history.length should not decrease after going back": "MISSING: the harness ended TIMEOUT before this subtest",
+		"traversing history must traverse pushed states": "MISSING: the harness ended TIMEOUT before this subtest",
+		"traversing history must also traverse hash changes": "MISSING: the harness ended TIMEOUT before this subtest",
+		"pushState must not be allowed to create invalid URLs": "MISSING: the harness ended TIMEOUT before this subtest",
+		"pushState must not be allowed to create cross-origin URLs": "MISSING: the harness ended TIMEOUT before this subtest",
+		"pushState must not be allowed to create cross-origin URLs (about:blank)": "MISSING: the harness ended TIMEOUT before this subtest",
+		"pushState must not be allowed to create cross-origin URLs (data:URI)": "MISSING: the harness ended TIMEOUT before this subtest",
+		"security errors are expected to be thrown in the context of the document that owns the history object": "MISSING: the harness ended TIMEOUT before this subtest",
+		"location.hash must be allowed to change (part 1)": "MISSING: the harness ended TIMEOUT before this subtest",
+		"location.hash must be allowed to change (part 2)": "MISSING: the harness ended TIMEOUT before this subtest",
+		"pushState must not alter location.hash when no URL is provided": "MISSING: the harness ended TIMEOUT before this subtest",
+		"pushState must remove all history after the current state": "MISSING: the harness ended TIMEOUT before this subtest",
+		"pushState must be able to set location.hash": "MISSING: the harness ended TIMEOUT before this subtest",
+		"pushState must not remove tasks queued by the history traversal task source": "MISSING: the harness ended TIMEOUT before this subtest",
+		"pushState must not fire hashchange events": "MISSING: the harness ended TIMEOUT before this subtest",
+		"pushState must be able to set location.pathname": "MISSING: the harness ended TIMEOUT before this subtest",
+		"pushState must be able to set absolute URLs to the same host": "MISSING: the harness ended TIMEOUT before this subtest",
+		"pushState must not be able to use a function as data": "MISSING: the harness ended TIMEOUT before this subtest",
+		"pushState must not be able to use a DOM node as data": "MISSING: the harness ended TIMEOUT before this subtest",
+		"pushState must be able to use an error object as data": "MISSING: the harness ended TIMEOUT before this subtest",
+		"security errors are expected to be thrown in the context of the document that owns the history object (2)": "MISSING: the harness ended TIMEOUT before this subtest",
+		"pushState must be able to make structured clones of complex objects": "MISSING: the harness ended TIMEOUT before this subtest",
+		"history.state should also reference a clone of the original object": "MISSING: the harness ended TIMEOUT before this subtest",
+		"history.state should be a clone of the original object, not a reference to it": "MISSING: the harness ended TIMEOUT before this subtest",
+		"popstate event should fire when navigation occurs": "MISSING: the harness ended TIMEOUT before this subtest",
+		"popstate event should pass the state data": "MISSING: the harness ended TIMEOUT before this subtest",
+		"state data should cope with circular object references": "MISSING: the harness ended TIMEOUT before this subtest",
+		"state data should be a clone of the original object, not a reference to it": "MISSING: the harness ended TIMEOUT before this subtest",
+		"history.state should also reference a clone of the original object (2)": "MISSING: the harness ended TIMEOUT before this subtest",
+		"history.state should be a clone of the original object, not a reference to it (2)": "MISSING: the harness ended TIMEOUT before this subtest",
+		"history.state should be identical to the object passed to the event handler unless history.state is updated": "MISSING: the harness ended TIMEOUT before this subtest",
+		"pushState should not actually load the new URL": "MISSING: the harness ended TIMEOUT before this subtest",
+		"reloading a pushed state should actually load the new URL": "MISSING: the harness ended TIMEOUT before this subtest"
+	},
+	"/html/browsers/history/the-history-interface/002.html": {
+		"(harness)": "TIMEOUT: ",
+		"history.length should update when loading pages in an iframe": "FAIL: assert_equals: make sure that you loaded the test in a new tab/window expected 2 but got 1",
+		"history.length should update when setting location.hash": "FAIL: assert_equals: make sure that you loaded the test in a new tab/window expected 2 but got 1",
+		"history.length should not update when replacing a state with no URL": "MISSING: the harness ended TIMEOUT before this subtest",
+		"history.state should update after a state is pushed": "MISSING: the harness ended TIMEOUT before this subtest",
+		"hash should not change when replaceState is called without a URL": "MISSING: the harness ended TIMEOUT before this subtest",
+		"history.length should not update when replacing a state with a URL": "MISSING: the harness ended TIMEOUT before this subtest",
+		"hash should change when replaceState is called with a URL": "MISSING: the harness ended TIMEOUT before this subtest",
+		"replaceState must replace the existing state and not add an extra one": "MISSING: the harness ended TIMEOUT before this subtest",
+		"replaceState must replace the existing state without altering the forward history": "MISSING: the harness ended TIMEOUT before this subtest",
+		"replaceState must not be allowed to create invalid URLs": "MISSING: the harness ended TIMEOUT before this subtest",
+		"replaceState must not be allowed to create cross-origin URLs": "MISSING: the harness ended TIMEOUT before this subtest",
+		"replaceState must not be allowed to create cross-origin URLs (about:blank)": "MISSING: the harness ended TIMEOUT before this subtest",
+		"replaceState must not be allowed to create cross-origin URLs (data:URI)": "MISSING: the harness ended TIMEOUT before this subtest",
+		"security errors are expected to be thrown in the context of the document that owns the history object": "MISSING: the harness ended TIMEOUT before this subtest",
+		"replaceState must be able to set location.pathname": "MISSING: the harness ended TIMEOUT before this subtest",
+		"replaceState must be able to set absolute URLs to the same host": "MISSING: the harness ended TIMEOUT before this subtest",
+		"replaceState must not remove any tasks queued by the history traversal task source": "MISSING: the harness ended TIMEOUT before this subtest",
+		".go must queue a task with the history traversal task source (run asynchronously)": "MISSING: the harness ended TIMEOUT before this subtest",
+		"replaceState must not fire hashchange events": "MISSING: the harness ended TIMEOUT before this subtest",
+		"replaceState must not be able to use a function as data": "MISSING: the harness ended TIMEOUT before this subtest",
+		"replaceState must not be able to use a DOM node as data": "MISSING: the harness ended TIMEOUT before this subtest",
+		"replaceState must be able to use an error object as data": "MISSING: the harness ended TIMEOUT before this subtest",
+		"security errors are expected to be thrown in the context of the document that owns the history object (2)": "MISSING: the harness ended TIMEOUT before this subtest",
+		"replaceState must be able to make structured clones of complex objects": "MISSING: the harness ended TIMEOUT before this subtest",
+		"history.state should also reference a clone of the original object": "MISSING: the harness ended TIMEOUT before this subtest",
+		"history.state should be a clone of the original object, not a reference to it": "MISSING: the harness ended TIMEOUT before this subtest",
+		"popstate event should fire when navigation occurs": "MISSING: the harness ended TIMEOUT before this subtest",
+		"popstate event should pass the state data": "MISSING: the harness ended TIMEOUT before this subtest",
+		"state data should cope with circular object references": "MISSING: the harness ended TIMEOUT before this subtest",
+		"state data should be a clone of the original object, not a reference to it": "MISSING: the harness ended TIMEOUT before this subtest",
+		"history.state should also reference a clone of the original object (2)": "MISSING: the harness ended TIMEOUT before this subtest",
+		"history.state should be a clone of the original object, not a reference to it (2)": "MISSING: the harness ended TIMEOUT before this subtest",
+		"history.state should be identical to the object passed to the event handler unless history.state is updated": "MISSING: the harness ended TIMEOUT before this subtest",
+		"replaceState should not actually load the new URL": "MISSING: the harness ended TIMEOUT before this subtest",
+		"reloading a replaced state should actually load the new URL": "MISSING: the harness ended TIMEOUT before this subtest"
+	},
+	"/html/browsers/history/the-history-interface/004.html": {
+		"history position should be calculated when executing, not when calling the .go command": "FAIL: assert_equals: expected \"\" but got \"bar\""
+	},
+	"/html/browsers/history/the-history-interface/history_back_cross_realm_method.html": {
+		"history.back() uses this's associated document's browsing context to determine if navigation is allowed": "FAIL: Illegal invocation"
+	},
+	"/html/browsers/history/the-history-interface/history_forward_cross_realm_method.html": {
+		"(harness)": "TIMEOUT: ",
+		"history.forward() uses this's associated document's browsing context to determine if navigation is allowed": "TIMEOUT: Test timed out"
+	},
+	"/html/browsers/history/the-history-interface/history_go_cross_realm_method.html": {
+		"(harness)": "TIMEOUT: ",
+		"history.go() uses this's associated document's browsing context to determine if navigation is allowed": "TIMEOUT: Test timed out"
+	},
+	"/html/browsers/history/the-history-interface/history_properties_only_fully_active.html": {
+		"history properties should throw SecurityError when not in a fully active Document": "FAIL: Failed to read a named property 'history' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/html/browsers/history/the-history-interface/history_pushstate_url.html": {
+		"(harness)": "ERROR: Uncaught Error: assert_equals: history traversal restores old url expected \"http://localhost:PORT/html/browsers/history/the-history-interface/history_pushstate_url.html#hash\" but got \"http://localhost"
+	},
+	"/html/browsers/history/the-history-interface/history_pushstate_url_rewriting.html": {
+		"http://localhost:PORT/common/blank.html to http://username:password@localhost:PORT/common/blank.html should not work": "FAIL: assert_throws_dom: function \"() => { iframe.contentWindow.history.pushState(null, \"\", to); }\" did not throw",
+		"blob:(a blob URL for this origin) to blob:(a blob URL for this origin) should  work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to execute 'pushState' on 'History': A history state object with URL 'blob:http://localhost:PORT/UUID' cannot be created in ",
+		"blob:(a blob URL for this origin) to blob:(a blob URL for this origin)#newhash should  work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to execute 'pushState' on 'History': A history state object with URL 'blob:http://localhost:PORT/UUID#newhash' cannot be cre",
+		"about:blank to about:blank should  work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to execute 'pushState' on 'History': A history state object with URL 'about:blank' cannot be created in a document with orig",
+		"about:blank to about:blank#newhash should  work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to execute 'pushState' on 'History': A history state object with URL 'about:blank#newhash' cannot be created in a document w",
+		"javascript:'foo' to javascript:'foo' should not work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'DOMException' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a ",
+		"javascript:'foo' to javascript:'foo'?newsearch should not work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'DOMException' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a ",
+		"javascript:'foo' to javascript:'foo'#newhash should not work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'DOMException' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a ",
+		"about:srcdoc to about:srcdoc should  work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to execute 'pushState' on 'History': A history state object with URL 'about:srcdoc' cannot be created in a document with ori",
+		"about:srcdoc to about:srcdoc#newhash should  work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to execute 'pushState' on 'History': A history state object with URL 'about:srcdoc#newhash' cannot be created in a document ",
+		"sandboxed http://localhost:PORT/html/browsers/history/the-history-interface/resources/url-rewriting-helper.html to http://username:password@localhost:PORT/html/browsers/history/the-history-interface/resources/url-rewriting-helper.html should not work": "FAIL: assert_equals: expected \"exception\" but got \"no exception\"",
+		"data:(script to run this test) to data:(script to run this test) should  work": "FAIL: assert_equals: expected \"no exception\" but got \"exception\"",
+		"data:(script to run this test) to data:(script to run this test)#newhash should  work": "FAIL: assert_equals: expected \"no exception\" but got \"exception\""
+	},
+	"/html/browsers/history/the-history-interface/joint_session_history/001.html": {
+		"(harness)": "TIMEOUT: ",
+		"Navigating second iframe": "FAIL: assert_equals: expected 2 but got 1",
+		"Traversing history back (1)": "NOTRUN: ",
+		"Navigating first iframe": "NOTRUN: ",
+		"Traversing history back (2)": "NOTRUN: ",
+		"Traversing history forward": "NOTRUN: "
+	},
+	"/html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/pushstate-base.html": {
+		"history.pushState() with an empty string URL and base URL different from document's URL": "FAIL: assert_equals: expected \"/html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/pushstate-base.html\" but got \"/the-base\""
+	},
+	"/html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/pushstate.html": {
+		"history.pushState() with an empty string URL": "FAIL: assert_equals: expected \"#test\" but got \"\""
+	},
+	"/html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/replacestate-base.html": {
+		"history.replaceState() with an empty string URL and base URL different from document's URL": "FAIL: assert_equals: expected \"/html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/replacestate-base.html\" but got \"/the-base\""
+	},
+	"/html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/replacestate.html": {
+		"history.replaceState() with an empty string URL": "FAIL: assert_equals: expected \"#test\" but got \"\""
+	},
+	"/html/browsers/history/the-history-interface/traverse-during-beforeunload.html": {
+		"(harness)": "TIMEOUT: ",
+		"Traversing the history during beforeunload": "TIMEOUT: Test timed out"
+	},
+	"/html/browsers/history/the-history-interface/traverse-during-unload.html": {
+		"(harness)": "TIMEOUT: ",
+		"Traversing the history during unload": "TIMEOUT: Test timed out"
+	}
+}
