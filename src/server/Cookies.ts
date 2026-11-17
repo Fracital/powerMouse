@@ -11,7 +11,7 @@
 // be checked in node (cookie-rules suite).
 import { openDB } from 'idb';
 import parseSetCookie, { Cookie as ParserCookie } from 'set-cookie-parser';
-import { registrableDomain } from '../partition';
+import { ephemeralKey, registrableDomain } from '../partition';
 import {
 	CookieRecord,
 	COOKIES_CHANGED,
@@ -211,12 +211,20 @@ function cookieID(
 		: `${id}@@partitioned@@${JSON.stringify(partitionKey)}`;
 }
 
-/** a Partitioned cookie is sent in its own partition only */
+/**
+ * A Partitioned cookie is sent in its own partition only, and so is every
+ * cookie of a credentialless frame's partition (partition.ts ephemeralKey),
+ * which is sent no other cookie
+ */
 function partitionAllows(
 	cookie: JarCookie,
 	context: CookieRequestContext,
 ): boolean {
-	return !cookie.partitioned || cookie.partitionKey === context.partitionKey;
+	return cookie.partitioned ||
+		ephemeralKey(cookie.partitionKey) ||
+		ephemeralKey(context.partitionKey)
+		? cookie.partitionKey === context.partitionKey
+		: true;
 }
 
 /** the stored cookie's domain covers `host` (RFC 6265bis 5.8.3 step 1) */
@@ -389,7 +397,7 @@ export function parseCookie(
 	// Chrome refuses a Partitioned cookie that is not Secure
 	const partitioned = !!parsed.partitioned;
 	if (partitioned && !secure) return null;
-	if (!partitioned) partitionKey = undefined;
+	if (!partitioned && !ephemeralKey(partitionKey)) partitionKey = undefined;
 
 	let expires: number | undefined;
 	if (typeof parsed.maxAge === 'number' && !Number.isNaN(parsed.maxAge)) {
@@ -405,7 +413,13 @@ export function parseCookie(
 		expires = now + MAX_AGE_MS;
 
 	return {
-		id: cookieID(domain, path, name, partitioned, partitionKey),
+		id: cookieID(
+			domain,
+			path,
+			name,
+			partitioned || partitionKey !== undefined,
+			partitionKey,
+		),
 		name,
 		value,
 		domain,
@@ -480,9 +494,10 @@ export function storeCookie(
 	// in a partition, as for a script's Set-Cookie string (parseCookie)
 	if (partitionKey !== undefined && sameSite !== 'none') return null;
 	const partitioned = !!write.partitioned;
-	const key = partitioned ? partitionKey : undefined;
+	const key =
+		partitioned || ephemeralKey(partitionKey) ? partitionKey : undefined;
 	return {
-		id: cookieID(domain, path, name, partitioned, key),
+		id: cookieID(domain, path, name, key !== undefined || partitioned, key),
 		name,
 		value,
 		domain,
@@ -749,7 +764,11 @@ export default class Cookies {
 		for (const cookie of (await this.db.getAll(STORE)) as JarCookie[]) {
 			if (cookie.domain !== site && !cookie.domain.endsWith(`.${site}`))
 				continue;
-			if (cookie.partitioned && cookie.partitionKey !== partitionKey) continue;
+			if (
+				(cookie.partitioned || cookie.partitionKey !== undefined) &&
+				cookie.partitionKey !== partitionKey
+			)
+				continue;
 			await this.db.delete(STORE, cookie.id);
 			changed = true;
 		}

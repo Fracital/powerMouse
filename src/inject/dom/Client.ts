@@ -35,6 +35,7 @@ import {
 	setCacheMarkSource,
 } from '../../memoryMark';
 import {
+	credentiallessPartition,
 	nestedMark,
 	parseNestedMark,
 	partitionOf,
@@ -2413,13 +2414,15 @@ export default class DocumentClient extends Client {
 		}
 		return context;
 	}
-	#partition?: { document: Document; partition: string };
+	#partition?: { document: Document; partition: string; nonce: string | null };
 	/**
 	 * This document's storage partition: its top-level document's site when
 	 * that is another site than its own, or when a frame between them is of
-	 * another site (src/partition.ts). Decided once per document, from the
-	 * chain of proxied parents: a site framed by another keeps to stores of
-	 * its own from its first script on.
+	 * another site (src/partition.ts), and a nonce of its top-level
+	 * document's in a credentialless frame (credentiallessPartition).
+	 * Decided once per document, from its route and the chain of proxied
+	 * parents: a site framed by another keeps to stores of its own from its
+	 * first script on.
 	 */
 	/**
 	 * @internal while a Storage Access handle makes a channel or a shared
@@ -2427,13 +2430,47 @@ export default class DocumentClient extends Client {
 	 */
 	firstParty = false;
 	override get partition(): string {
-		if (this.firstParty) return '';
+		return this.firstParty ? '' : this.#partitionFacts().partition;
+	}
+	/**
+	 * The nonce of this document's credentialless partition, null for a
+	 * document that is not in a credentialless frame: a routed document's
+	 * route names it, one no response made (about:blank, srcdoc, blob:) is
+	 * its parent's
+	 */
+	get credentiallessNonce(): string | null {
+		return this.#partitionFacts().nonce;
+	}
+	#partitionFacts() {
 		const document = this.global.document;
 		const kept = this.#partition;
-		if (kept && kept.document === document) return kept.partition;
+		if (kept && kept.document === document) return kept;
 		let partition = '';
+		let nonce: string | null = null;
 		try {
-			if (this.proxiedTop !== this.global || this.slotMark)
+			const { pathname } = new URL(this.#documentURL());
+			nonce = pathname.startsWith(this.directory)
+				? (parseNestedMark(
+						nestedMarkOf(pathname, this.directory, this.codec) ?? '',
+					)?.nonce ?? null)
+				: this.nested
+					? (
+							(this.parent as Record<string, any>)[
+								this.names.client
+							] as DocumentClient
+						).credentiallessNonce
+					: null;
+		} catch (error) {
+			// a parent of another origin: none in reach
+		}
+		try {
+			if (nonce !== null)
+				partition = credentiallessPartition(
+					this.topOrigin,
+					nonce,
+					getPublicSuffix,
+				);
+			else if (this.proxiedTop !== this.global || this.slotMark)
 				partition = partitionOf(
 					this.url.url.origin,
 					this.topOrigin,
@@ -2443,9 +2480,10 @@ export default class DocumentClient extends Client {
 		} catch (error) {
 			// an origin without a site (opaque): it has no storage to key
 		}
-		this.#partition = { document, partition };
-		return partition;
+		return (this.#partition = { document, partition, nonce });
 	}
+	/** the nonce of the credentialless frames under this top-level document, made when the first is */
+	ownNonce?: string;
 	/**
 	 * Whether this document's document.cookie reads "" and its writes do
 	 * nothing, as Chrome has it for a document whose URL is not http(s): a
@@ -2513,12 +2551,20 @@ export default class DocumentClient extends Client {
 		credentialless: boolean,
 		sandbox: Set<string> | null = null,
 	): string {
+		let nonce = this.credentiallessNonce;
+		if (nonce === null && credentialless) {
+			const top = (this.proxiedTop as Record<string, any>)[
+				this.names.client
+			] as DocumentClient;
+			nonce = top.ownNonce ??= Math.random().toString(36).slice(2, 12);
+		}
 		return nestedMark(
 			this.topOrigin,
 			this.partition !== '',
 			this.#embedder(allow, src, credentialless),
 			sandbox,
 			this.sites !== null && siteWindows().topOpenerSameOrigin(this),
+			nonce,
 		);
 	}
 	/**
@@ -2697,6 +2743,7 @@ export default class DocumentClient extends Client {
 					this.#ownEmbedder(),
 					this.sites ? this.pool[Pool.FrameFlags] : null,
 					this.sites !== null && siteWindows().topOpenerSameOrigin(this),
+					this.credentiallessNonce,
 				)
 			: false;
 	}

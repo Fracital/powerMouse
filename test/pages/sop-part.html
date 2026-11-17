@@ -244,6 +244,14 @@
 		} catch (error) {
 			out.error = `${error.name}: ${error.message}`;
 		}
+		out.credentialless = window.credentialless;
+		// (the credentialless suite) whether a popup has this window for its
+		// opener: Chrome opens a credentialless frame's without one
+		if (query.get('popup')) {
+			const popup = open('', `${tag}-${role}-popup`);
+			out.popup = popup === null ? 'none' : 'opened';
+			popup?.close();
+		}
 		out.done = true;
 		window.__part = out;
 		if (parent !== window) parent.postMessage({ sopPart: out }, '*');

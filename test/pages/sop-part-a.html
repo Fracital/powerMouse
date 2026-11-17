@@ -9,8 +9,23 @@
 		addEventListener('message', (event) => {
 			if (event.data?.sopPart) window.__part = event.data.sopPart;
 		});
-		const frame = document.createElement('iframe');
-		frame.src = query.get('src');
-		document.body.append(frame);
+		// `?cl=1`: the frames are credentialless ones (the credentialless
+		// suite), set by the property, which reads back what it was given.
+		// Each further `src` is framed once the one before it reported
+		const sources = query.getAll('src');
+		window.__attribute = [];
+		window.__framing = location.href;
+		const frameNext = () => {
+			const frame = document.createElement('iframe');
+			if (query.get('cl')) frame.credentialless = true;
+			window.__attribute.push(frame.credentialless);
+			frame.src = sources.shift();
+			document.body.append(frame);
+		};
+		if (sources.length > 1)
+			addEventListener('message', (event) => {
+				if (event.data?.sopPart && sources.length) frameNext();
+			});
+		frameNext();
 	</script>
 </body>

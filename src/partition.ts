@@ -70,6 +70,27 @@ export function partitionOf(
 	return site === siteOf(own, publicSuffix) ? '' : `^${site}`;
 }
 
+/**
+ * The partition of a credentialless frame's documents (`<iframe
+ * credentialless>`, and every frame under one): Chrome keys their storage,
+ * cookies and network state by a nonce of the top-level document, so the
+ * credentialless frames under one top-level document share a partition no
+ * other context has, gone with that document. Its site part is the top's
+ * site, then `!` and the nonce, which no site has.
+ */
+export function credentiallessPartition(
+	topOrigin: string,
+	nonce: string,
+	publicSuffix: PublicSuffix,
+): string {
+	return `^${siteOf(topOrigin, publicSuffix)}!${nonce}`;
+}
+
+/** a cookie partition key (partitionSite) of a credentialless frame's partition */
+export function ephemeralKey(key: string | undefined): boolean {
+	return key !== undefined && key.includes('!');
+}
+
 /** the top-level site a partition names, or null for a first-party one */
 export function partitionSite(partition: string): string | null {
 	return partition.startsWith('^') ? partition.slice(1) : null;
@@ -145,7 +166,9 @@ export interface NestedEmbedder {
  * `o`, whatever the host's page, when the top-level document sent COOP
  * `same-origin`: a frame of another origin than it opens its popups
  * without an opener (dom/openerFacts.ts opensWithoutOpener), which the frame
- * cannot ask a top of another slot. The query, when
+ * cannot ask a top of another slot. A path segment `!` and a nonce when
+ * the frame is credentialless, or a frame above it is: its partition is
+ * that nonce's (credentiallessPartition). The query, when
  * there is one, is the embedder's origin (empty when it is the top's) and
  * the other origins the permission reaches. Read as an origin, the marker
  * is the top origin either way, and without an embedder it is what it was
@@ -157,7 +180,9 @@ export function nestedMark(
 	embedder?: NestedEmbedder | null,
 	sandbox: Iterable<string> | null = null,
 	topOpenerSameOrigin = false,
+	nonce: string | null = null,
 ): string {
+	const nonced = nonce === null ? '' : `/!${nonce}`;
 	const sandboxed =
 		sandbox === null
 			? ''
@@ -184,8 +209,8 @@ export function nestedMark(
 	const query = origins.some((origin) => origin)
 		? `?${origins.map(encodeURIComponent).join('&')}`
 		: '';
-	return flags || query || sandboxed
-		? `${topOrigin}/${flags}${sandboxed}${query}`
+	return flags || query || sandboxed || nonced
+		? `${topOrigin}/${flags}${sandboxed}${nonced}${query}`
 		: topOrigin;
 }
 
@@ -197,10 +222,14 @@ export function parseNestedMark(mark: string): {
 	topOpenerSameOrigin: boolean;
 	/** the frame's sandbox tokens, null for a frame without a sandbox or a mark without them */
 	sandbox: string[] | null;
+	/** the credentialless partition's nonce, null for a frame that is none */
+	nonce: string | null;
 } | null {
 	try {
 		const url = new URL(mark);
-		const [flags = '', sandboxed] = url.pathname.slice(1).split('/');
+		const [flags = '', ...segments] = url.pathname.slice(1).split('/');
+		const sandboxed = segments.find((segment) => segment.startsWith('~'));
+		const nonce = segments.find((segment) => segment.startsWith('!'));
 		const [parent = '', ...others] = url.search.slice(1).split('&');
 		const originOf = (text: string): string | null => {
 			try {
@@ -214,6 +243,7 @@ export function parseNestedMark(mark: string): {
 			top: url.origin,
 			crossAncestor: flags.includes('x'),
 			topOpenerSameOrigin: flags.includes('o'),
+			nonce: nonce ? nonce.slice(1) : null,
 			sandbox: sandboxed?.startsWith('~')
 				? sandboxed
 						.slice(1)
@@ -261,7 +291,8 @@ export function kindPartition(
 	} catch (error) {
 		return '';
 	}
-	return mark
-		? partitionOf(origin, mark.top, publicSuffix, mark.crossAncestor)
-		: '';
+	if (!mark) return '';
+	return mark.nonce
+		? credentiallessPartition(mark.top, mark.nonce, publicSuffix)
+		: partitionOf(origin, mark.top, publicSuffix, mark.crossAncestor);
 }

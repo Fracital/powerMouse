@@ -51,6 +51,7 @@ import {
 	upgradesInsecureRequests,
 } from '../mixedContent';
 import {
+	ephemeralKey,
 	kindPartition,
 	nestedMark,
 	parseNestedMark,
@@ -1559,6 +1560,7 @@ function genericForward(
 						},
 						parsed.sandbox,
 						parsed.topOpenerSameOrigin,
+						parsed.nonce,
 					),
 				)}${oURL.pathname.slice(rewriter.directory.length + kind.length)}`;
 				rememberReturn(back.href, {
@@ -1994,6 +1996,13 @@ function genericForward(
 		const cookieSite = partitionKey !== undefined ? 'cross-site' : nestedSite;
 		const crossSiteSet =
 			cookieSite === 'cross-site' && !(navigation && topLevel);
+		// a credentialless frame's requests are in its partition
+		// (partition.ts credentiallessPartition), which Chrome's network
+		// state treats as transient: the preflight cache keys by it, and
+		// nothing of them is kept in the HTTP cache (measured in Chrome 157:
+		// each load goes to the network, and no entry another load made is
+		// asked; the credentialless suite), nor in the rewrite cache
+		const transient = ephemeralKey(partitionKey);
 
 		// the chain's earlier hops count for the site (Sec-Fetch-Site only:
 		// the browser's site for cookies does not follow redirects)
@@ -2698,7 +2707,7 @@ function genericForward(
 					notPagesHeader(name) || (unauthorized && name === 'authorization'),
 			);
 			// kept per network partition, as Chrome keeps its preflight cache
-			const preflightPartition = `${topSite ?? ''} ${requestFrameSite ?? ''}`;
+			const preflightPartition = `${transient ? partitionKey : (topSite ?? '')} ${requestFrameSite ?? ''}`;
 			if (
 				(forcePreflight || needsPreflight(serverRequest.method, unsafe)) &&
 				!preflightCached(
@@ -2787,7 +2796,7 @@ function genericForward(
 		// as for its other loads, src/memoryMark.ts)
 		const frameSite = routeMark === OPAQUE_MARK ? null : requestFrameSite;
 		const cacheKey =
-			frameSite === null
+			frameSite === null || transient
 				? null
 				: partitionedKey(url.toString(), topSite ?? frameSite, frameSite);
 		const cache = cacheKey === null ? undefined : rewriter.cache;
@@ -4195,7 +4204,7 @@ function genericForward(
 												.filter(([directive]) => directive === 'frame-src')
 										: null,
 								partition:
-									frameSite === null
+									frameSite === null || transient
 										? null
 										: JSON.stringify([
 												topSite ?? frameSite,

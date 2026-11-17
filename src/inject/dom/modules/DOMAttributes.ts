@@ -1937,7 +1937,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		if (slotAllow)
 			domHooksModule.useAttributes(slotAllow, [['IFRAME', 'allow']]);
 		domHooksModule.useAttributes(
-			(element) => {
+			(element, attribute) => {
+				// Chrome takes a frame's credentialless attribute at its next
+				// navigation: one in a document is not sent again for it
+				if (attribute === 'credentialless' && element.isConnected) return;
 				element.restoreAttributesOG('src');
 
 				if (element.hasAttribute('src') && element.getAttribute('src') !== '') {
@@ -2007,32 +2010,25 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							moduleClient.baseURL,
 							moduleClient.config,
 							false,
-							// with the host's page cross-origin isolated, the
-							// route says whom the frame's `allow` lets be, and
-							// whether the frame is a credentialless one (the
-							// attribute itself is kept from the browser, below)
-							// (the site pool: and the frame's sandbox, which a frame
-							// of another slot cannot read)
-							moduleClient.hostIsolated
-								? moduleClient.childRouteFor(
-										element.hasAttributeOG('allow')
-											? element.getAttributeOG('allow')
-											: element.getAttribute('allow'),
-										resource.url.origin,
-										element.hasAttributeOG('credentialless') ||
-											element.hasAttribute('credentialless'),
-										this.client.sites
-											? siteWindows().frameSandbox(this.client, element)
-											: null,
-									)
-								: moduleClient.childRouteFor(
-										null,
-										null,
-										false,
-										moduleClient.sites
-											? siteWindows().frameSandbox(moduleClient, element)
-											: null,
-									),
+							// the route says whether the frame is a credentialless
+							// one (its partition's nonce; the attribute itself is
+							// kept from the browser, below), and with the host's
+							// page cross-origin isolated whom the frame's `allow`
+							// lets be (the site pool: and the frame's sandbox,
+							// which a frame of another slot cannot read)
+							moduleClient.childRouteFor(
+								moduleClient.hostIsolated
+									? element.hasAttributeOG('allow')
+										? element.getAttributeOG('allow')
+										: element.getAttribute('allow')
+									: null,
+								moduleClient.hostIsolated ? resource.url.origin : null,
+								element.hasAttributeOG('credentialless') ||
+									element.hasAttribute('credentialless'),
+								moduleClient.sites
+									? siteWindows().frameSandbox(moduleClient, element)
+									: null,
+							),
 						);
 					// a frame that shows a document of another origin than the
 					// one it is sent to gets a fresh browsing context first
@@ -2072,12 +2068,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			[
 				['IFRAME', 'src'],
 				['FRAME', 'src'],
-				// what the route says of the frame (an isolated host only)
+				// what the route says of the frame (`allow`: an isolated host only)
+				['IFRAME', 'credentialless'],
 				...(moduleClient.hostIsolated
-					? ([
-							['IFRAME', 'allow'],
-							['IFRAME', 'credentialless'],
-						] as [string, string][])
+					? ([['IFRAME', 'allow']] as [string, string][])
 					: []),
 				[
 					realm.HTMLFrameElement,
@@ -3527,8 +3521,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		const iframePrototype = realm.HTMLIFrameElement.prototype;
 		for (const [attribute, property, getter] of [
 			['csp', 'csp', (element) => element.getAttributeOG('csp') ?? ''],
-			['credentialless', 'credentialless', () => false],
-		] as [string, string, (element: CustomElement) => string | false][])
+			[
+				'credentialless',
+				'credentialless',
+				(element) => element.hasAttributeOG('credentialless'),
+			],
+		] as [string, string, (element: CustomElement) => string | boolean][])
 			domHooksModule.useAttributes(
 				(element) => {
 					element.restoreAttributesOG(attribute);

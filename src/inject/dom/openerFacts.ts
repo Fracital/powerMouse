@@ -44,6 +44,8 @@ export function opensWithoutOpener(client: DocumentClient): boolean {
 	// reach, is of another origin, and its route says what that top sent
 	// (partition.ts nestedMark)
 	if (client.nested && client.slotMark?.topOpenerSameOrigin) return true;
+	// Chrome opens a credentialless frame's popups without an opener
+	if (client.credentiallessNonce !== null) return true;
 	const top = clientOf(client, client.proxiedTop);
 	return (
 		!!top &&

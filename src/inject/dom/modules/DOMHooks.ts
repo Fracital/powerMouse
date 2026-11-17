@@ -408,7 +408,8 @@ type AttributeHook = [
 /**
  * This function is called when the property is accessed on the specified element ctor. If false, the next property hook getter will be called until the result is a string.
  */
-type PropertyHookGetter = (element: CustomElement) => string | false;
+/** the property's value (`true`: a boolean one's), or false for the browser's */
+type PropertyHookGetter = (element: CustomElement) => string | boolean;
 
 type PropertyHook = [
 	ctor: ElementCtor,
@@ -1162,22 +1163,29 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		});
 
 		// window.originAgentCluster: whether this document's agent cluster is
-		// keyed by origin (DocumentClient.siteKeyed), not the proxy origin's
-		for (const owner of [realm, realm.Window.prototype] as object[]) {
-			const descriptor = Reflect.getOwnPropertyDescriptor(
-				owner,
-				'originAgentCluster',
-			);
-			if (!descriptor?.get) continue;
-			Reflect.defineProperty(owner, 'originAgentCluster', {
-				...descriptor,
-				get: proxyModule.wrapFunction(descriptor.get, (target, that, args) => {
-					Reflect.apply(target, that, args);
-					return !moduleClient.siteKeyed;
-				}),
-			});
-			break;
-		}
+		// keyed by origin (DocumentClient.siteKeyed), not the proxy origin's;
+		// window.credentialless, in a credentialless frame's documents only
+		for (const [name, answer] of [
+			['originAgentCluster', () => !moduleClient.siteKeyed],
+			...(moduleClient.credentiallessNonce === null
+				? []
+				: [['credentialless', () => true]]),
+		] as [string, () => boolean][])
+			for (const owner of [realm, realm.Window.prototype] as object[]) {
+				const descriptor = Reflect.getOwnPropertyDescriptor(owner, name);
+				if (!descriptor?.get) continue;
+				Reflect.defineProperty(owner, name, {
+					...descriptor,
+					get: proxyModule.wrapFunction(
+						descriptor.get,
+						(target, that, args) => {
+							Reflect.apply(target, that, args);
+							return answer();
+						},
+					),
+				});
+				break;
+			}
 
 		/**
 		 * Make sure hooks are triggered instead of unhooked elements being generated.
@@ -2932,7 +2940,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			if (!inherits(that, ctor)) Reflect.apply(target, that, args);
 			return usePrototype(that, CustomElement.prototype, (element) => {
 				for (const entry of this.#propertyHooks(property)) {
-					let result: string | false;
+					let result: string | boolean;
 					try {
 						result = (entry.hook as PropertyHook)[2](element);
 					} catch (error) {

@@ -478,6 +478,37 @@ Filled in commit by commit; see the CHANGELOG for each.
   isolation key (measured: another top-level site, or another frame site
   under the same top, fetches again; B in A in B gets B's top-level
   entry); a request of an opaque or unknown client is not cached.
+- **Credentialless frames** (credentialless suite, both modes, against
+  native: 204 of 325 checks differed before). Natively a frame with the
+  `credentialless` attribute, and every frame under it, is in a partition
+  of its own keyed by a nonce of the top-level document: the credentialless
+  frames under one top-level document share it, a new top-level document
+  starts another, empty one, and it shares nothing with the site's
+  first-party stores or its partition under that top-level site (B framed
+  credentialless by B is apart from B too). Its requests carry none of the
+  site's cookies, what it sets lives in that partition only, its loads are
+  never kept in the HTTP cache (measured in Chrome 157: each fetch of a
+  resource kept for an hour goes to the network, within one nonce too, and
+  a no-cache entry's validator is never sent), the preflight cache keys by
+  it, `window.credentialless` reads true and its popups open without an
+  opener. The proxy kept the attribute from the browser and did none of
+  it: the frame read the site's cookies and its first-party or
+  third-party stores, and `iframe.credentialless` read false. Now the top's
+  inject draws the nonce when its first credentialless frame is routed,
+  the frame's route says it (a `!<nonce>` segment of `nestedMark`, kept by
+  the frame's own navigations, the frames it makes and a redirect), and
+  the partition is `^<top-level site>!<nonce>`
+  (`credentiallessPartition`), which every store, worker and registration
+  keys by as for any partition. A document without a route (about:blank,
+  srcdoc, blob:) takes its parent's. The jar keeps every cookie set in such
+  a partition under it, Partitioned or not, and sends such a context no
+  other (`ephemeralKey`); the worker keeps none of its loads in the HTTP
+  cache or the rewrite cache. `iframe.credentialless` reads the attribute,
+  `window.credentialless` is answered true in those documents only (no
+  other frame gets a wrapper), and window.open in them opens without an
+  opener (`opensWithoutOpener`). Setting the attribute on a frame in a
+  document takes effect at its next navigation, as natively, where it
+  used to navigate the frame again under an isolated host.
 - **The renderer's memory cache** (sop-partitions: 3 cases per mode).
   Natively each site's documents are in a renderer process of their own,
   whose memory cache hands a fresh image, script, stylesheet, font or text
@@ -1363,22 +1394,22 @@ run a demo server whose pages send the headers.
 
 What a page sees, by its own headers:
 
-| The page                                                                                                   | Chrome     | STomp, isolated host                         | STomp, host not isolated |
-| ---------------------------------------------------------------------------------------------------------- | ---------- | -------------------------------------------- | ------------------------ |
-| COOP `same-origin` and COEP (either value, parameters or not)                                              | isolated   | isolated                                     | not                      |
-| The same and `Permissions-Policy: cross-origin-isolated=()`                                                | not        | not                                          | not                      |
-| No headers, one of the two, another COOP value, a Report-Only form, a malformed value                      | not        | not                                          | not                      |
-| A Document-Isolation-Policy                                                                                | isolated   | isolated                                     | not                      |
-| Its dedicated workers (script with COEP, `blob:`, nested)                                                  | as it is   | as it is                                     | not                      |
-| Its dedicated worker whose script has no COEP, when it has one                                             | `error`    | `error`                                      | runs, not isolated       |
-| Its shared workers                                                                                         | not        | not                                          | not                      |
-| Its frame without COEP (or, from another origin, CORP), when it has COEP                                   | no load    | no load                                      | loads, not isolated      |
-| Its same-origin frame with COEP; another origin's with COEP, CORP and `allow`; about:blank, `srcdoc`       | as it is   | as it is                                     | not                      |
-| Its frame the permission does not reach (another origin without `allow`, `allow` `'none'`, its own header) | not        | not                                          | not                      |
-| Its credentialless frame                                                                                   | as above   | as above (with the site's cookies, see Left) | not                      |
-| A frame with a Document-Isolation-Policy in a page that is not isolated                                    | isolated   | not                                          | not                      |
-| `require-corp`: its no-cors load of another origin without CORP                                            | fails      | fails                                        | loads                    |
-| `credentialless`: the same load                                                                            | no cookies | no cookies                                   | with cookies             |
+| The page                                                                                                   | Chrome     | STomp, isolated host | STomp, host not isolated |
+| ---------------------------------------------------------------------------------------------------------- | ---------- | -------------------- | ------------------------ |
+| COOP `same-origin` and COEP (either value, parameters or not)                                              | isolated   | isolated             | not                      |
+| The same and `Permissions-Policy: cross-origin-isolated=()`                                                | not        | not                  | not                      |
+| No headers, one of the two, another COOP value, a Report-Only form, a malformed value                      | not        | not                  | not                      |
+| A Document-Isolation-Policy                                                                                | isolated   | isolated             | not                      |
+| Its dedicated workers (script with COEP, `blob:`, nested)                                                  | as it is   | as it is             | not                      |
+| Its dedicated worker whose script has no COEP, when it has one                                             | `error`    | `error`              | runs, not isolated       |
+| Its shared workers                                                                                         | not        | not                  | not                      |
+| Its frame without COEP (or, from another origin, CORP), when it has COEP                                   | no load    | no load              | loads, not isolated      |
+| Its same-origin frame with COEP; another origin's with COEP, CORP and `allow`; about:blank, `srcdoc`       | as it is   | as it is             | not                      |
+| Its frame the permission does not reach (another origin without `allow`, `allow` `'none'`, its own header) | not        | not                  | not                      |
+| Its credentialless frame                                                                                   | as above   | as above             | not                      |
+| A frame with a Document-Isolation-Policy in a page that is not isolated                                    | isolated   | not                  | not                      |
+| `require-corp`: its no-cors load of another origin without CORP                                            | fails      | fails                | loads                    |
+| `credentialless`: the same load                                                                            | no cookies | no cookies           | with cookies             |
 
 ### What a host does
 
@@ -1522,10 +1553,20 @@ suites' known lists with the same reason.
      window. Half of that is worse than the difference it removes (the
      partition above), so it stays on the cross-origin-isolation suite's
      known list until it is done whole.
-   - A credentialless frame has its site's cookies and stored data, where
-     Chrome gives it none, and `iframe.credentialless` reads false: the
-     attribute never reaches the browser (as before; the frame would lose
-     the service worker's client otherwise).
+   - A credentialless frame's partition (Fix status, Credentialless
+     frames) is emulated, the attribute still never reaches the browser
+     (the frame would lose the service worker's client otherwise). What
+     differs: what it stored is not deleted when its top-level document
+     goes (no document reaches it again, since every top-level document
+     draws a nonce of its own, but the worker's stores and the jar keep it
+     until the site's data is cleared); a script's SameSite=Lax or Strict
+     cookie in a credentialless frame of the top's own site is dropped, as
+     in any partition, where Chrome keeps it; under the site pool the
+     nonce is drawn by the outermost proxied document in reach, so the
+     credentialless frames of one top-level page in two slots are in two
+     partitions; an image's renderer memory cache entry is the site's, as
+     for any frame (the memory cache bullet in Fix status). Not measured:
+     a link with `rel=opener` and a form aimed at `_blank` in such a frame.
    - No COOP or COEP report is sent (`report-to`, the Report-Only forms):
      nothing of the Reporting API is simulated.
    - Under an isolated host every popup is served COOP `same-origin` to

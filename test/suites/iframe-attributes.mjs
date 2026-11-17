@@ -8,12 +8,9 @@
 // same page loaded natively. Same-origin mode.
 import { done, FIXTURE, launch, ok, PROXY, sleep } from '../lib.mjs';
 
-// Open: a credentialless frame's documents still send and read their
-// site's cookies and storage, and read window.credentialless as false. Its
-// emulation is an ephemeral partition (keyed by the top-level document,
-// gone with it) through every store, the cookie jar, workers and the
-// frame's own frames. Reported, not failed, until then.
-const KNOWN_OPEN = new Set(['credentialless', 'credentiallessSent']);
+// (a credentialless frame's partition, through every store, is measured by
+// the credentialless suite)
+const KNOWN_OPEN = new Set();
 
 const target = `${FIXTURE}pages/hdr-frame-attrs.html`;
 
