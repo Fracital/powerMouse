@@ -1,0 +1,376 @@
+{
+	"/websockets/Close-1005.any.html?default": {
+		"Create WebSocket - Close the Connection - close(1005) - see '7.1.5.  The WebSocket Connection Close Code' in http://www.ietf.org/rfc/rfc6455.txt": "FAIL: assert_throws_dom: function \"function() { wsocket.close(1005, \"1005 - reserved code\") }\" threw object \"Error: Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 an"
+	},
+	"/websockets/Close-1005.any.worker.html?default": {
+		"Create WebSocket - Close the Connection - close(1005) - see '7.1.5.  The WebSocket Connection Close Code' in http://www.ietf.org/rfc/rfc6455.txt": "FAIL: assert_throws_dom: function \"function() { wsocket.close(1005, \"1005 - reserved code\") }\" threw object \"Error: Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 an"
+	},
+	"/websockets/Close-2999-reason.any.html?default": {
+		"Create WebSocket - Close the Connection - close(2999, reason) - INVALID_ACCESS_ERR is thrown": "FAIL: assert_throws_dom: function \"function() { wsocket.close(2999, \"Close not in range 3000-4999\") }\" threw object \"Error: Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between"
+	},
+	"/websockets/Close-2999-reason.any.worker.html?default": {
+		"Create WebSocket - Close the Connection - close(2999, reason) - INVALID_ACCESS_ERR is thrown": "FAIL: assert_throws_dom: function \"function() { wsocket.close(2999, \"Close not in range 3000-4999\") }\" threw object \"Error: Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between"
+	},
+	"/websockets/Close-Reason-124Bytes.any.html?default": {
+		"Create WebSocket - Close the Connection - close(code, 'reason more than 123 bytes') - SYNTAX_ERR is thrown": "FAIL: assert_throws_dom: function \"function() { wsocket.close(1000, reason) }\" did not throw"
+	},
+	"/websockets/Close-Reason-124Bytes.any.worker.html?default": {
+		"Create WebSocket - Close the Connection - close(code, 'reason more than 123 bytes') - SYNTAX_ERR is thrown": "FAIL: assert_throws_dom: function \"function() { wsocket.close(1000, reason) }\" did not throw"
+	},
+	"/websockets/Close-delayed.any.html?default": {
+		"Create WebSocket - Close the Connection - close should not emit until handshake completes - Connection should be closed": "FAIL: assert_greater_than_equal: one second should have elapsed expected a number greater than or equal to 900 but got 500.39999997615814"
+	},
+	"/websockets/Close-delayed.any.worker.html?default": {
+		"Create WebSocket - Close the Connection - close should not emit until handshake completes - Connection should be closed": "FAIL: assert_greater_than_equal: one second should have elapsed expected a number greater than or equal to 900 but got 503.5"
+	},
+	"/websockets/Close-onlyReason.any.html?default": {
+		"Create WebSocket - Close the Connection - close(only reason) - INVALID_ACCESS_ERR is thrown": "FAIL: assert_throws_dom: function \"function() { wsocket.close(\"Close with only reason\") }\" threw object \"Error: Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 49"
+	},
+	"/websockets/Close-onlyReason.any.worker.html?default": {
+		"Create WebSocket - Close the Connection - close(only reason) - INVALID_ACCESS_ERR is thrown": "FAIL: assert_throws_dom: function \"function() { wsocket.close(\"Close with only reason\") }\" threw object \"Error: Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 49"
+	},
+	"/websockets/Close-reason-unpaired-surrogates.any.html?default": {
+		"Create WebSocket - Close the Connection - close(reason with unpaired surrogates) - connection should get closed": "FAIL: assert_equals: reason replaced with replacement character expected \"\\ufffd\" but got \"U+d807\""
+	},
+	"/websockets/Close-reason-unpaired-surrogates.any.worker.html?default": {
+		"Create WebSocket - Close the Connection - close(reason with unpaired surrogates) - connection should get closed": "FAIL: assert_equals: reason replaced with replacement character expected \"\\ufffd\" but got \"U+d807\""
+	},
+	"/websockets/Create-asciiSep-protocol-string.any.html?default": {
+		"Create WebSocket - Pass a valid URL and a protocol string with an ascii separator character - SYNTAX_ERR is thrown": "FAIL: assert_throws_dom: function \"function() { wsocket = CreateWebSocketWithAsciiSep(asciiWithSep) }\" threw object \"Error: Failed to construct 'WebSocket': The subprotocol '/echo' is invalid.\" that is not "
+	},
+	"/websockets/Create-asciiSep-protocol-string.any.worker.html?default": {
+		"Create WebSocket - Pass a valid URL and a protocol string with an ascii separator character - SYNTAX_ERR is thrown": "FAIL: assert_throws_dom: function \"function() { wsocket = CreateWebSocketWithAsciiSep(asciiWithSep) }\" threw object \"Error: Failed to construct 'WebSocket': The subprotocol '/echo' is invalid.\" that is not "
+	},
+	"/websockets/Create-nonAscii-protocol-string.any.html?default": {
+		"Create WebSocket - Pass a valid URL and a protocol string with non-ascii values - SYNTAX_ERR is thrown": "FAIL: assert_throws_dom: function \"function() { wsocket = CreateWebSocketNonAsciiProtocol(nonAsciiProtocol) }\" threw object \"Error: Failed to construct 'WebSocket': The subprotocol 'echo' is invalid.\" that"
+	},
+	"/websockets/Create-nonAscii-protocol-string.any.worker.html?default": {
+		"Create WebSocket - Pass a valid URL and a protocol string with non-ascii values - SYNTAX_ERR is thrown": "FAIL: assert_throws_dom: function \"function() { wsocket = CreateWebSocketNonAsciiProtocol(nonAsciiProtocol) }\" threw object \"Error: Failed to construct 'WebSocket': The subprotocol 'echo' is invalid.\" that"
+	},
+	"/websockets/Create-on-worker-shutdown.any.html": {
+		"WebSocket created after a worker self.close()": "FAIL: assert_equals: Closed WebSocket created on worker shutdown is in closing state. expected 2 but got 0"
+	},
+	"/websockets/Create-on-worker-shutdown.any.worker.html": {
+		"WebSocket created after a worker self.close()": "FAIL: assert_equals: Closed WebSocket created on worker shutdown is in closing state. expected 2 but got 0"
+	},
+	"/websockets/Create-protocol-with-space.any.html?default": {
+		"Create WebSocket - Pass a valid URL and a protocol string with a space in it - SYNTAX_ERR is thrown": "FAIL: assert_throws_dom: function \"function() { wsocket = CreateWebSocketWithSpaceInProtocol(\"ec ho\") }\" threw object \"Error: Failed to construct 'WebSocket': The subprotocol 'ec ho' is invalid.\" that is no"
+	},
+	"/websockets/Create-protocol-with-space.any.worker.html?default": {
+		"Create WebSocket - Pass a valid URL and a protocol string with a space in it - SYNTAX_ERR is thrown": "FAIL: assert_throws_dom: function \"function() { wsocket = CreateWebSocketWithSpaceInProtocol(\"ec ho\") }\" threw object \"Error: Failed to construct 'WebSocket': The subprotocol 'ec ho' is invalid.\" that is no"
+	},
+	"/websockets/Create-protocols-repeated.any.html?default": {
+		"Create WebSocket - Pass a valid URL and an array of protocol strings with repeated values - SYNTAX_ERR is thrown": "FAIL: assert_throws_dom: function \"function() { wsocket = CreateWebSocketWithRepeatedProtocols() }\" did not throw"
+	},
+	"/websockets/Create-protocols-repeated.any.worker.html?default": {
+		"Create WebSocket - Pass a valid URL and an array of protocol strings with repeated values - SYNTAX_ERR is thrown": "FAIL: assert_throws_dom: function \"function() { wsocket = CreateWebSocketWithRepeatedProtocols() }\" did not throw"
+	},
+	"/websockets/Send-65K-data.any.html?default": {
+		"Send 65K data on a WebSocket - Connection should be closed": "FAIL: assert_equals: expected 0 but got 65000"
+	},
+	"/websockets/Send-65K-data.any.worker.html?default": {
+		"Send 65K data on a WebSocket - Connection should be closed": "FAIL: assert_equals: expected 0 but got 65000"
+	},
+	"/websockets/Send-before-open.any.html?default": {
+		"Send data on a WebSocket before connection is opened - INVALID_STATE_ERR is returned": "FAIL: assert_throws_dom: function \"function() { wsocket.send(\"Message to send\") }\" threw object \"Error: Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.\" that is not a DOMException INVALI"
+	},
+	"/websockets/Send-before-open.any.worker.html?default": {
+		"Send data on a WebSocket before connection is opened - INVALID_STATE_ERR is returned": "FAIL: assert_throws_dom: function \"function() { wsocket.send(\"Message to send\") }\" threw object \"Error: Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.\" that is not a DOMException INVALI"
+	},
+	"/websockets/Send-data.any.html?default": {
+		"Send data on a WebSocket - Connection should be closed": "FAIL: assert_equals: expected 0 but got 15"
+	},
+	"/websockets/Send-data.any.worker.html?default": {
+		"Send data on a WebSocket - Connection should be closed": "FAIL: assert_equals: expected 0 but got 15"
+	},
+	"/websockets/Send-paired-surrogates.any.html?default": {
+		"Send paired surrogates data on a WebSocket - Connection should be closed": "FAIL: assert_equals: expected 0 but got 4"
+	},
+	"/websockets/Send-paired-surrogates.any.worker.html?default": {
+		"Send paired surrogates data on a WebSocket - Connection should be closed": "FAIL: assert_equals: expected 0 but got 4"
+	},
+	"/websockets/Send-unicode-data.any.html?default": {
+		"Send unicode data on a WebSocket - Connection should be closed": "FAIL: assert_equals: expected 0 but got 12"
+	},
+	"/websockets/Send-unicode-data.any.worker.html?default": {
+		"Send unicode data on a WebSocket - Connection should be closed": "FAIL: assert_equals: expected 0 but got 12"
+	},
+	"/websockets/bufferedAmount-unchanged-by-sync-xhr.any.html?default": {
+		"bufferedAmount should not be updated during a sync XHR": "FAIL: assert_equals: expected 5 but got 0"
+	},
+	"/websockets/bufferedAmount-unchanged-by-sync-xhr.any.worker.html?default": {
+		"bufferedAmount should not be updated during a sync XHR": "FAIL: assert_equals: expected 5 but got 0"
+	},
+	"/websockets/close-invalid.any.html?default": {
+		"0 on a websocket": "FAIL: assert_throws_dom: function \"function() { ws.close(t[0]); }\" threw object \"Error: Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 4999. 0 is neither.\" that ",
+		"500 on a websocket": "FAIL: assert_throws_dom: function \"function() { ws.close(t[0]); }\" threw object \"Error: Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 4999. 500 is neither.\" tha",
+		"NaN on a websocket": "FAIL: assert_throws_dom: function \"function() { ws.close(t[0]); }\" did not throw",
+		"String on a websocket": "FAIL: assert_throws_dom: function \"function() { ws.close(t[0]); }\" threw object \"Error: Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 4999. 0 is neither.\" that ",
+		"null on a websocket": "FAIL: assert_throws_dom: function \"function() { ws.close(t[0]); }\" threw object \"Error: Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 4999. 0 is neither.\" that ",
+		"2**16+1000 on a websocket": "FAIL: assert_throws_dom: function \"function() { ws.close(t[0]); }\" threw object \"Error: Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 4999. 66536 is neither.\" t"
+	},
+	"/websockets/close-invalid.any.worker.html?default": {
+		"0 on a websocket": "FAIL: assert_throws_dom: function \"function() { ws.close(t[0]); }\" threw object \"Error: Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 4999. 0 is neither.\" that ",
+		"500 on a websocket": "FAIL: assert_throws_dom: function \"function() { ws.close(t[0]); }\" threw object \"Error: Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 4999. 500 is neither.\" tha",
+		"NaN on a websocket": "FAIL: assert_throws_dom: function \"function() { ws.close(t[0]); }\" did not throw",
+		"String on a websocket": "FAIL: assert_throws_dom: function \"function() { ws.close(t[0]); }\" threw object \"Error: Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 4999. 0 is neither.\" that ",
+		"null on a websocket": "FAIL: assert_throws_dom: function \"function() { ws.close(t[0]); }\" threw object \"Error: Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 4999. 0 is neither.\" that ",
+		"2**16+1000 on a websocket": "FAIL: assert_throws_dom: function \"function() { ws.close(t[0]); }\" threw object \"Error: Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 4999. 66536 is neither.\" t"
+	},
+	"/websockets/constructor/004.html?default": {
+		"WebSockets: new WebSocket(url, invalid protocol)": "FAIL: assert_throws_dom: function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"\") }\" did not throw",
+		"WebSockets: new WebSocket(url, invalid protocol) 1": "FAIL: assert_throws_dom: char code 1 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The ",
+		"WebSockets: new WebSocket(url, invalid protocol) 2": "FAIL: assert_throws_dom: char code 2 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The ",
+		"WebSockets: new WebSocket(url, invalid protocol) 3": "FAIL: assert_throws_dom: char code 3 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The ",
+		"WebSockets: new WebSocket(url, invalid protocol) 4": "FAIL: assert_throws_dom: char code 4 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The ",
+		"WebSockets: new WebSocket(url, invalid protocol) 5": "FAIL: assert_throws_dom: char code 5 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The ",
+		"WebSockets: new WebSocket(url, invalid protocol) 6": "FAIL: assert_throws_dom: char code 6 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The ",
+		"WebSockets: new WebSocket(url, invalid protocol) 7": "FAIL: assert_throws_dom: char code 7 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The ",
+		"WebSockets: new WebSocket(url, invalid protocol) 8": "FAIL: assert_throws_dom: char code 8 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The ",
+		"WebSockets: new WebSocket(url, invalid protocol) 9": "FAIL: assert_throws_dom: char code 9 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The ",
+		"WebSockets: new WebSocket(url, invalid protocol) 10": "FAIL: assert_throws_dom: char code 10 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 11": "FAIL: assert_throws_dom: char code 11 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 12": "FAIL: assert_throws_dom: char code 12 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 13": "FAIL: assert_throws_dom: char code 13 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 14": "FAIL: assert_throws_dom: char code 14 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 15": "FAIL: assert_throws_dom: char code 15 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 16": "FAIL: assert_throws_dom: char code 16 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 17": "FAIL: assert_throws_dom: char code 17 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 18": "FAIL: assert_throws_dom: char code 18 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 19": "FAIL: assert_throws_dom: char code 19 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 20": "FAIL: assert_throws_dom: char code 20 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 21": "FAIL: assert_throws_dom: char code 21 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 22": "FAIL: assert_throws_dom: char code 22 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 23": "FAIL: assert_throws_dom: char code 23 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 24": "FAIL: assert_throws_dom: char code 24 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 25": "FAIL: assert_throws_dom: char code 25 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 26": "FAIL: assert_throws_dom: char code 26 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 27": "FAIL: assert_throws_dom: char code 27 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 28": "FAIL: assert_throws_dom: char code 28 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 29": "FAIL: assert_throws_dom: char code 29 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 30": "FAIL: assert_throws_dom: char code 30 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 31": "FAIL: assert_throws_dom: char code 31 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': The",
+		"WebSockets: new WebSocket(url, invalid protocol) 32": "FAIL: assert_throws_dom: char code 127 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 33": "FAIL: assert_throws_dom: char code 128 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 34": "FAIL: assert_throws_dom: char code 129 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 35": "FAIL: assert_throws_dom: char code 130 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 36": "FAIL: assert_throws_dom: char code 131 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 37": "FAIL: assert_throws_dom: char code 132 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 38": "FAIL: assert_throws_dom: char code 133 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 39": "FAIL: assert_throws_dom: char code 134 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 40": "FAIL: assert_throws_dom: char code 135 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 41": "FAIL: assert_throws_dom: char code 136 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 42": "FAIL: assert_throws_dom: char code 137 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 43": "FAIL: assert_throws_dom: char code 138 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 44": "FAIL: assert_throws_dom: char code 139 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 45": "FAIL: assert_throws_dom: char code 140 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 46": "FAIL: assert_throws_dom: char code 141 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 47": "FAIL: assert_throws_dom: char code 142 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 48": "FAIL: assert_throws_dom: char code 143 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 49": "FAIL: assert_throws_dom: char code 144 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 50": "FAIL: assert_throws_dom: char code 145 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 51": "FAIL: assert_throws_dom: char code 146 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 52": "FAIL: assert_throws_dom: char code 147 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 53": "FAIL: assert_throws_dom: char code 148 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 54": "FAIL: assert_throws_dom: char code 149 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 55": "FAIL: assert_throws_dom: char code 150 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 56": "FAIL: assert_throws_dom: char code 151 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 57": "FAIL: assert_throws_dom: char code 152 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 58": "FAIL: assert_throws_dom: char code 153 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 59": "FAIL: assert_throws_dom: char code 154 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 60": "FAIL: assert_throws_dom: char code 155 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 61": "FAIL: assert_throws_dom: char code 156 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 62": "FAIL: assert_throws_dom: char code 157 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 63": "FAIL: assert_throws_dom: char code 158 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 64": "FAIL: assert_throws_dom: char code 159 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 65": "FAIL: assert_throws_dom: char code 160 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 66": "FAIL: assert_throws_dom: char code 161 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 67": "FAIL: assert_throws_dom: char code 162 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 68": "FAIL: assert_throws_dom: char code 163 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 69": "FAIL: assert_throws_dom: char code 164 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 70": "FAIL: assert_throws_dom: char code 165 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 71": "FAIL: assert_throws_dom: char code 166 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 72": "FAIL: assert_throws_dom: char code 167 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 73": "FAIL: assert_throws_dom: char code 168 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 74": "FAIL: assert_throws_dom: char code 169 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 75": "FAIL: assert_throws_dom: char code 170 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 76": "FAIL: assert_throws_dom: char code 171 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 77": "FAIL: assert_throws_dom: char code 172 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 78": "FAIL: assert_throws_dom: char code 173 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 79": "FAIL: assert_throws_dom: char code 174 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 80": "FAIL: assert_throws_dom: char code 175 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 81": "FAIL: assert_throws_dom: char code 176 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 82": "FAIL: assert_throws_dom: char code 177 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 83": "FAIL: assert_throws_dom: char code 178 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 84": "FAIL: assert_throws_dom: char code 179 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 85": "FAIL: assert_throws_dom: char code 180 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 86": "FAIL: assert_throws_dom: char code 181 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 87": "FAIL: assert_throws_dom: char code 182 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 88": "FAIL: assert_throws_dom: char code 183 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 89": "FAIL: assert_throws_dom: char code 184 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 90": "FAIL: assert_throws_dom: char code 185 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 91": "FAIL: assert_throws_dom: char code 186 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 92": "FAIL: assert_throws_dom: char code 187 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 93": "FAIL: assert_throws_dom: char code 188 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 94": "FAIL: assert_throws_dom: char code 189 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 95": "FAIL: assert_throws_dom: char code 190 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 96": "FAIL: assert_throws_dom: char code 191 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 97": "FAIL: assert_throws_dom: char code 192 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 98": "FAIL: assert_throws_dom: char code 193 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 99": "FAIL: assert_throws_dom: char code 194 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 100": "FAIL: assert_throws_dom: char code 195 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 101": "FAIL: assert_throws_dom: char code 196 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 102": "FAIL: assert_throws_dom: char code 197 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 103": "FAIL: assert_throws_dom: char code 198 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 104": "FAIL: assert_throws_dom: char code 199 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 105": "FAIL: assert_throws_dom: char code 200 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 106": "FAIL: assert_throws_dom: char code 201 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 107": "FAIL: assert_throws_dom: char code 202 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 108": "FAIL: assert_throws_dom: char code 203 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 109": "FAIL: assert_throws_dom: char code 204 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 110": "FAIL: assert_throws_dom: char code 205 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 111": "FAIL: assert_throws_dom: char code 206 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 112": "FAIL: assert_throws_dom: char code 207 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 113": "FAIL: assert_throws_dom: char code 208 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 114": "FAIL: assert_throws_dom: char code 209 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 115": "FAIL: assert_throws_dom: char code 210 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 116": "FAIL: assert_throws_dom: char code 211 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 117": "FAIL: assert_throws_dom: char code 212 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 118": "FAIL: assert_throws_dom: char code 213 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 119": "FAIL: assert_throws_dom: char code 214 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 120": "FAIL: assert_throws_dom: char code 215 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 121": "FAIL: assert_throws_dom: char code 216 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 122": "FAIL: assert_throws_dom: char code 217 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 123": "FAIL: assert_throws_dom: char code 218 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 124": "FAIL: assert_throws_dom: char code 219 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 125": "FAIL: assert_throws_dom: char code 220 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 126": "FAIL: assert_throws_dom: char code 221 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 127": "FAIL: assert_throws_dom: char code 222 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 128": "FAIL: assert_throws_dom: char code 223 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 129": "FAIL: assert_throws_dom: char code 224 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 130": "FAIL: assert_throws_dom: char code 225 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 131": "FAIL: assert_throws_dom: char code 226 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 132": "FAIL: assert_throws_dom: char code 227 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 133": "FAIL: assert_throws_dom: char code 228 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 134": "FAIL: assert_throws_dom: char code 229 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 135": "FAIL: assert_throws_dom: char code 230 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 136": "FAIL: assert_throws_dom: char code 231 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 137": "FAIL: assert_throws_dom: char code 232 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 138": "FAIL: assert_throws_dom: char code 233 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 139": "FAIL: assert_throws_dom: char code 234 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 140": "FAIL: assert_throws_dom: char code 235 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 141": "FAIL: assert_throws_dom: char code 236 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 142": "FAIL: assert_throws_dom: char code 237 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 143": "FAIL: assert_throws_dom: char code 238 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 144": "FAIL: assert_throws_dom: char code 239 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 145": "FAIL: assert_throws_dom: char code 240 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 146": "FAIL: assert_throws_dom: char code 241 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 147": "FAIL: assert_throws_dom: char code 242 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 148": "FAIL: assert_throws_dom: char code 243 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 149": "FAIL: assert_throws_dom: char code 244 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 150": "FAIL: assert_throws_dom: char code 245 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 151": "FAIL: assert_throws_dom: char code 246 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 152": "FAIL: assert_throws_dom: char code 247 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 153": "FAIL: assert_throws_dom: char code 248 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 154": "FAIL: assert_throws_dom: char code 249 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 155": "FAIL: assert_throws_dom: char code 250 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 156": "FAIL: assert_throws_dom: char code 251 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 157": "FAIL: assert_throws_dom: char code 252 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 158": "FAIL: assert_throws_dom: char code 253 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 159": "FAIL: assert_throws_dom: char code 254 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th",
+		"WebSockets: new WebSocket(url, invalid protocol) 160": "FAIL: assert_throws_dom: char code 255 function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', \"a\"+String.fromCharCode(i)+\"b\") }\" threw object \"Error: Failed to construct 'WebSocket': Th"
+	},
+	"/websockets/constructor/007.html?default": {
+		"WebSockets: new WebSocket(url, null char)": "FAIL: assert_throws_dom: function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', 'a' + String.fromCharCode(0) + 'b') }\" threw object \"Error: Failed to construct 'WebSocket': The subproto"
+	},
+	"/websockets/constructor/021.html?default": {
+		"WebSockets: Same sub protocol twice": "FAIL: assert_throws_dom: function \"function(){new WebSocket(\"ws://certo2.oslo.osa/protocol_array\",[\"foobar, foobar\"])}\" threw object \"Error: Failed to construct 'WebSocket': The subprotocol 'foobar, foobar'"
+	},
+	"/websockets/eventhandlers.any.html?default": {
+		"Event handler for open should have [TreatNonCallableAsNull]": "FAIL: assert_equals: expected (object) null but got (function) function \"function() {}\"",
+		"Event handler for error should have [TreatNonCallableAsNull]": "FAIL: assert_equals: expected (object) null but got (function) function \"function() {}\"",
+		"Event handler for close should have [TreatNonCallableAsNull]": "FAIL: assert_equals: expected (object) null but got (function) function \"function() {}\"",
+		"Event handler for message should have [TreatNonCallableAsNull]": "FAIL: assert_equals: expected (object) null but got (function) function \"function() {}\""
+	},
+	"/websockets/eventhandlers.any.worker.html?default": {
+		"Event handler for open should have [TreatNonCallableAsNull]": "FAIL: assert_equals: expected (object) null but got (function) function \"function() {}\"",
+		"Event handler for error should have [TreatNonCallableAsNull]": "FAIL: assert_equals: expected (object) null but got (function) function \"function() {}\"",
+		"Event handler for close should have [TreatNonCallableAsNull]": "FAIL: assert_equals: expected (object) null but got (function) function \"function() {}\"",
+		"Event handler for message should have [TreatNonCallableAsNull]": "FAIL: assert_equals: expected (object) null but got (function) function \"function() {}\""
+	},
+	"/websockets/interfaces/WebSocket/bufferedAmount/bufferedAmount-getting.html?default": {
+		"WebSockets: bufferedAmount after send()ing": "FAIL: assert_equals: bufferedAmount after sent \"x\" expected 1 but got 0"
+	},
+	"/websockets/interfaces/WebSocket/bufferedAmount/bufferedAmount-large.html?default": {
+		"WebSockets: bufferedAmount for 65K data": "FAIL: assert_equals: expected 0 but got 65000"
+	},
+	"/websockets/interfaces/WebSocket/bufferedAmount/bufferedAmount-unicode.html?default": {
+		"WebSockets: bufferedAmount for unicode data": "FAIL: assert_equals: expected 0 but got 12"
+	},
+	"/websockets/interfaces/WebSocket/close/close-basic.html?default": {
+		"WebSockets: close()": "FAIL: assert_equals: expected 2 but got 0"
+	},
+	"/websockets/interfaces/WebSocket/close/close-connecting-async.any.html?default": {
+		"close event should be fired asynchronously when WebSocket is connecting": "FAIL: assert_equals: readyState should be CLOSING expected 2 but got 0"
+	},
+	"/websockets/interfaces/WebSocket/close/close-connecting-async.any.worker.html?default": {
+		"close event should be fired asynchronously when WebSocket is connecting": "FAIL: assert_equals: readyState should be CLOSING expected 2 but got 0"
+	},
+	"/websockets/interfaces/WebSocket/close/close-connecting.html?default": {
+		"WebSockets: close() when connecting": "FAIL: assert_equals: expected 2 but got 0"
+	},
+	"/websockets/interfaces/WebSocket/close/close-nested.html?default": {
+		"WebSockets: close() in close event handler": "FAIL: assert_equals: expected 2 but got 0"
+	},
+	"/websockets/interfaces/WebSocket/events/010.html?default": {
+		"WebSockets: setting event handlers to undefined": "FAIL: assert_equals: onclose expected (object) null but got (function) function \"function() {}\"",
+		"WebSockets: setting event handlers to undefined 1": "FAIL: assert_equals: onopen expected (object) null but got (function) function \"function() {}\"",
+		"WebSockets: setting event handlers to undefined 2": "FAIL: assert_equals: onerror expected (object) null but got (function) function \"function() {}\"",
+		"WebSockets: setting event handlers to undefined 3": "FAIL: assert_equals: onmessage expected (object) null but got (function) function \"function() {}\""
+	},
+	"/websockets/interfaces/WebSocket/events/013.html?default": {
+		"onclose": "FAIL: assert_equals: expected object \"[object Object]\" but got null",
+		"onopen": "FAIL: assert_equals: expected object \"[object Object]\" but got null",
+		"onerror": "FAIL: assert_equals: expected object \"[object Object]\" but got null",
+		"onmessage": "FAIL: assert_equals: expected object \"[object Object]\" but got null"
+	},
+	"/websockets/interfaces/WebSocket/events/014.html?default": {
+		"Setting event handlers to null onclose": "FAIL: assert_equals: onclose expected (object) null but got (function) function \"function() {}\"",
+		"Setting event handlers to null onopen": "FAIL: assert_equals: onopen expected (object) null but got (function) function \"function() {}\"",
+		"Setting event handlers to null onerror": "FAIL: assert_equals: onerror expected (object) null but got (function) function \"function() {}\"",
+		"Setting event handlers to null onmessage": "FAIL: assert_equals: onmessage expected (object) null but got (function) function \"function() {}\""
+	},
+	"/websockets/interfaces/WebSocket/readyState/003.html?default": {
+		"WebSockets: delete readyState": "FAIL: assert_equals: delete ws.readyState expected 2 but got 0"
+	},
+	"/websockets/interfaces/WebSocket/send/001.html?default": {
+		"WebSockets: send() with no args": "FAIL: assert_throws_js: function \"function(){ws.send()}\" threw object \"Error: Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.\" (\"Error\") expected instance of function \"function TypeError"
+	},
+	"/websockets/interfaces/WebSocket/send/003.html?default": {
+		"WebSockets: send() when readyState is CONNECTING": "FAIL: assert_throws_dom: function \"function(){ws.send('a')}\" threw object \"Error: Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.\" that is not a DOMException INVALID_STATE_ERR: property "
+	},
+	"/websockets/interfaces/WebSocket/send/004.html?default": {
+		"lone low surrogate": "FAIL: assert_throws_dom: function \"function(){ws.send('a\\uDC00x')}\" threw object \"Error: Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.\" that is not a DOMException INVALID_STATE_ERR: pr",
+		"lone high surrogate": "FAIL: assert_throws_dom: function \"function(){ws.send('a\\uD800x')}\" threw object \"Error: Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.\" that is not a DOMException INVALID_STATE_ERR: pr",
+		"surrogates in wrong order": "FAIL: assert_throws_dom: function \"function(){ws.send('a\\uDC00\\uD800x')}\" threw object \"Error: Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.\" that is not a DOMException INVALID_STATE_E"
+	},
+	"/websockets/interfaces/WebSocket/send/007.html?default": {
+		"WebSockets: close() followed by send()": "FAIL: assert_unreached: Reached unreachable code"
+	},
+	"/websockets/interfaces/WebSocket/send/012.html?default": {
+		"WebSockets: sending null": "FAIL: assert_unreached: Reached unreachable code"
+	},
+	"/websockets/multi-globals/message-received.html": {
+		"ArrayBuffer should be created in the relevant realm of the WebSocket": "FAIL: Stomp: no service worker controller available to obtain a transport",
+		"Blob should be created in the relevant realm of the WebSocket": "FAIL: Stomp: no service worker controller available to obtain a transport"
+	},
+	"/websockets/multi-globals/url-parsing/url-parsing.html": {
+		"Multiple globals for base URL in WebSocket constructor": "FAIL: Stomp: no service worker controller available to obtain a transport"
+	},
+	"/websockets/opening-handshake/003.html?default": {
+		"WebSockets: origin": "FAIL: assert_equals: expected \"ws://xn--n8j6ds53lwwkrqhv28a.localhost:PORT\" but got \"ws://xn--n8j6ds53lwwkrqhv28a.localhost:PORT/origin\""
+	},
+	"/websockets/opening-handshake/005.html?default": {
+		"WebSockets: response header and close frame in same packet": "FAIL: assert_equals: expected 1001 but got 1005"
+	}
+}
