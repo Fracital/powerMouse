@@ -388,7 +388,7 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 	let offsets = Utf16Offsets::new(source);
 	// the rewrite's walk drives the early-error check (src/early.rs): one
 	// walk of the tree for both
-	let mut walker = Walker::new(source, text, options, &offsets, route, mode, &allocator);
+	let mut walker = Walker::new(source, text, &program, options, &offsets, route, mode, &allocator);
 	walker.visit_program(&program);
 	// a walk that declined may have left a part unwalked: the check then
 	// walks the tree on its own, as it does for the parse questions, and the

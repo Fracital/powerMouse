@@ -187,9 +187,29 @@ pub fn apply_range(source: &str, range: Span, mut edits: Vec<Edit>) -> Result<St
 	edits.sort_by(order);
 	check_nesting(&edits)?;
 
-	// the output grows by what the edits add; a rewrite rarely doubles
-	let size = range.len() as usize;
-	let mut out = String::with_capacity(size + size / 2 + 64);
+	// the output's length, so it is allocated once: the part, less what
+	// the replaces take out (nothing is inside one, check_nesting), plus
+	// every piece written
+	let pieces = |pieces: &[Piece]| -> usize {
+		pieces
+			.iter()
+			.map(|piece| match piece {
+				Piece::Text(text) => text.len(),
+				Piece::Source(span) => span.len() as usize,
+			})
+			.sum()
+	};
+	let mut size = range.len() as usize;
+	for edit in &edits {
+		match &edit.kind {
+			Kind::Wrap { before, after } => size += pieces(before) + pieces(after),
+			// (the replaced spans are apart and inside the part, so what
+			// they take out is never more than its length)
+			Kind::Replace { text } => size = size - edit.span.len() as usize + pieces(text),
+			Kind::Insert { text, .. } => size += pieces(text),
+		}
+	}
+	let mut out = String::with_capacity(size);
 	let mut cursor = range.start;
 	// the wraps whose `after` is still to be written, innermost last
 	let mut open: Vec<(u32, &[Piece])> = Vec::new();
