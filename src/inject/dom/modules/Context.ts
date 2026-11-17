@@ -313,14 +313,25 @@ export default class ContextModule extends Module<DocumentClient> {
 	#brand(): symbol {
 		return Symbol.for(`${this.client.names.client}$standIn`);
 	}
+	/**
+	 * Windows of another real origin, which refused the brand's read: no
+	 * stand-in is one, and a window keeps its identity. Kept so that a read
+	 * of such a window's `top` (every one with the site pool, from a frame of
+	 * another slot) throws once, not on every read (an exception costs some
+	 * 3 us; frame-walk's 5000 reads took 64 to 72 ms, 2 natively). Made at
+	 * the first refusal: most documents never meet one.
+	 */
+	#notStandIns?: WeakSet<object>;
 	/** whether `value` is a stand-in, this module's or another document's */
 	#standIn(value: unknown): boolean {
 		if (typeof value !== 'object' || value === null) return false;
 		if (this.restrictedContexts.has(value as Context)) return true;
+		if (this.#notStandIns?.has(value)) return false;
 		try {
 			return (value as Record<symbol, unknown>)[this.#brand()] === true;
 		} catch (error) {
 			// a window of another real origin
+			(this.#notStandIns ??= new OwnWeakSet()).add(value);
 			return false;
 		}
 	}
