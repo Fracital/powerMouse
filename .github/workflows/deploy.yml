@@ -1,10 +1,22 @@
-# Build every push to master, then deploy it to terp (5.188.124.62) as https://stomp.fracit.al/.
+# Build every push to master, then deploy it to terp as https://stomp.fracit.al/.
+#
+# terp is VM 116 on the Proxmox host divide (since 2026-11-16), on divide's private network
+# (172.16.5.62) with no public address. The deploy job runs on the self-hosted runner
+# divide-deploy (CT 204 on divide, 172.16.5.204, labels divide + deploy), the only guest divide's
+# firewall lets reach terp's tcp/22. Its runner group (deploy) admits only this repository and
+# only .github/workflows/deploy.yml at refs/heads/master, so a fork's pull request can never
+# get a job onto it. The other jobs stay on GitHub's runners.
 #
 # TERP_DEPLOY_KEY is an SSH key that terp pins to /usr/local/sbin/stomp-deploy-gate (source:
 # deploy/terp-deploy-gate.sh, installed by hand, CI never updates it). The only command it accepts
 # is `deploy <sha>`: terp fetches that commit from GitHub, runs npm ci + build in /opt/stomp/stage,
 # swaps /opt/stomp/repo to it, restarts pm2 `stomp`, health-checks :8081 and rolls back on failure.
 # It refuses to deploy if the live checkout has commits or edits not on GitHub.
+#
+# The runner is persistent, so the key lives only in the job's $RUNNER_TEMP, beside its own
+# known_hosts, and is removed when the job ends however it ends; the runner user's ~/.ssh is
+# never touched. The runner has git, curl, jq and ssh (no Node, no gh): the job needs nothing
+# else.
 #
 # Same posture as ci.yml: read-only token, pinned actions, no pull_request trigger, so a PR can
 # never reach the deploy key.
@@ -25,7 +37,7 @@ permissions:
   contents: read
 
 env:
-  TERP_HOST: 5.188.124.62
+  TERP_HOST: 172.16.5.62
   TERP_HOST_KEY: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIObUWrM7CxDC8VuXpP9FGykhelefOxfFj+cthroe5/c8
 
 jobs:
@@ -67,16 +79,23 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, deploy]
+    timeout-minutes: 15
+    outputs:
+      superseded: ${{ steps.head.outputs.superseded || steps.ship.outputs.superseded }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
     steps:
+      # master's head by the REST API (no gh on the runner); any failure to ask
+      # counts as "still the head", as before
       - name: Still master's head?
         id: head
         if: github.event_name == 'push'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
         run: |
-          head=$(gh api "repos/$REPO/commits/master" --jq .sha 2>/dev/null) || head=$GITHUB_SHA
+          head=$(curl -fsS -m 20 -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/$REPO/commits/master" | jq -er .sha) || head=$GITHUB_SHA
           if [[ $head != "$GITHUB_SHA" ]]; then
             echo "::notice::superseded by $head, skipped"
             echo superseded=true >>"$GITHUB_OUTPUT"
@@ -91,27 +110,40 @@ jobs:
             echo "::error::TERP_DEPLOY_KEY secret is not set"
             exit 1
           fi
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$TERP_DEPLOY_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          echo "$TERP_HOST $TERP_HOST_KEY" > ~/.ssh/known_hosts
+          dir="$RUNNER_TEMP/terp-ssh"
+          install -d -m 700 "$dir"
+          (umask 077 && printf '%s\n' "$TERP_DEPLOY_KEY" >"$dir/key")
+          echo "$TERP_HOST $TERP_HOST_KEY" >"$dir/known_hosts"
 
       - name: Deploy ${{ github.sha }} to terp
+        id: ship
         if: steps.head.outputs.superseded != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
         run: |
-          ssh -o BatchMode=yes "root@$TERP_HOST" deploy "$GITHUB_SHA" && exit 0
+          dir="$RUNNER_TEMP/terp-ssh"
+          ssh -F /dev/null -i "$dir/key" -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o ConnectTimeout=20 -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$dir/known_hosts" \
+            "root@$TERP_HOST" deploy "$GITHUB_SHA" && exit 0
           rc=$?
-          head=$(gh api "repos/$REPO/commits/master" --jq .sha 2>/dev/null) || exit $rc
+          head=$(curl -fsS -m 20 -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/$REPO/commits/master" | jq -er .sha) || exit $rc
           [[ $head != "$GITHUB_SHA" ]] || exit $rc
           echo "::notice::superseded by $head; the gate refused this older commit"
-          echo superseded=true >>"$GITHUB_ENV"
+          echo superseded=true >>"$GITHUB_OUTPUT"
 
-      # terp's :443 only admits the edge fleet; the gate already health-checked :8081 locally.
+      - name: Remove the deploy key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/terp-ssh"
+
+  # From GitHub's side, as a visitor sees it (Cloudflare to terp); the gate
+  # already health-checked :8081 on terp itself.
+  verify:
+    needs: deploy
+    if: needs.deploy.outputs.superseded != 'true'
+    runs-on: ubuntu-latest
+    steps:
       - name: Verify site responds
-        if: steps.head.outputs.superseded != 'true' && env.superseded != 'true'
         run: |
           curl -fsS -m 20 -o /dev/null -w 'site %{http_code}\n' https://stomp.fracit.al/
           curl -fsS -m 20 https://stomp.fracit.al/api/status
