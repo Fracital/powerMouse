@@ -1,0 +1,47 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>blank frames</title>
+<script src="blank-frame-origin.js"></script>
+<iframe id="kid" src="about:blank" style="width: 50px"></iframe>
+<script>
+	const result = {};
+	const kid = document.getElementById('kid');
+	document.cookie = 'blank_frame=1; path=/';
+	try {
+		const inner = kid.contentDocument;
+		result.document = String(inner);
+		result.cookie = inner.cookie.includes('blank_frame=1');
+		result.origin = kid.contentWindow.origin === origin;
+		result.href = kid.contentWindow.location.href;
+		result.parent = kid.contentWindow.parent === window;
+	} catch (error) {
+		result.error = error.name;
+	}
+	// a srcset in the frame whose smallest candidate is missing: the image
+	// fails at first, and loads the other candidate once the frame is wider
+	const image = kid.contentDocument.createElement('img');
+	kid.contentDocument.body.appendChild(image);
+	image.setAttribute('srcset', 'blank-pixel.svg?wide 100w, missing.png 1w');
+	image.setAttribute(
+		'sizes',
+		'(max-width: 100px) 1px, (min-width: 150px) 123px',
+	);
+	const next = (ms) =>
+		Promise.race([
+			new Promise((resolve) => {
+				image.onload = image.onerror = (event) => resolve(event.type);
+			}),
+			new Promise((resolve) => setTimeout(() => resolve('nothing'), ms)),
+		]);
+	next(8000)
+		.then((first) => {
+			result.narrow = first;
+			kid.style.width = '200px';
+			return next(8000);
+		})
+		.then((second) => {
+			result.wide = second;
+			result.shown = image.currentSrc.replace(/^.*\//, '');
+			window.__result = result;
+		});
+</script>

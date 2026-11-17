@@ -2789,14 +2789,22 @@ export default class DocumentClient extends Client {
 		// own address, the proxy's, which is no page's origin
 		return new StompURL(location, this.codec, prefix);
 	}
-	/** the client of the document an about:blank or about:srcdoc document is of: its parent's, else its opener's */
+	/**
+	 * The client of the document an about:blank or about:srcdoc document is
+	 * of: its parent's, else its opener's. Read with the browser's own
+	 * accessors: the page-facing `parent` hands out a stand-in for a window
+	 * of another origin, which asks for this document's origin, which is
+	 * what is being worked out here (a frame whose about:blank was loaded a
+	 * second time, by its `src`, came out as an opaque origin's: its parent
+	 * could not reach it, and it read no cookie)
+	 */
 	#creatorClient(): DocumentClient | null {
-		for (const read of [
-			() => this.global.parent,
-			() => (this.global as unknown as { opener: unknown }).opener,
-		])
+		for (const get of [nativeParentGet, nativeOpenerGet])
 			try {
-				const window = read() as Record<string, unknown> | null;
+				const window = Reflect.apply(get, this.global, []) as Record<
+					string,
+					unknown
+				> | null;
 				if (!window || window === (this.global as unknown)) continue;
 				const client = window[this.names.client] as DocumentClient | undefined;
 				if (client && client !== this && client.isDOM) return client;

@@ -7,9 +7,6 @@
 		"(non-secure) Ignore cookie with __Secure- prefix and without Secure": "MISSING: the harness ended OK before this subtest",
 		"(non-secure) Cookie returned with __%53ecure- prefix and without Secure": "MISSING: the harness ended OK before this subtest"
 	},
-	"/cookies/navigated-away.html": {
-		"document.cookie behavior on documents without browser context": "FAIL: Cannot read properties of null (reading 'cookie')"
-	},
 	"/cookies/ordering/ordering.sub.html": {
 		"Test cookie ordering": "FAIL: Cannot read properties of null (reading 'postMessage')",
 		"Cookies with longer paths are listed before cookies with shorter paths": "MISSING: the harness ended OK before this subtest"
