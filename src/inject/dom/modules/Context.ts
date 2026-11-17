@@ -738,6 +738,21 @@ export default class ContextModule extends Module<DocumentClient> {
 			}
 		};
 		if (!/^https?:$/.test(destination.protocol)) return go();
+		// a navigation to a fragment of the target's document is synchronous
+		// and sends no request, as natively (a navigation the page makes
+		// after it, or a javascript: URL's document, sees the fragment)
+		// (a URL that ends in `#` has an empty one)
+		if (destination.href.includes('#')) {
+			try {
+				const at = new URL(targetClient.location.toString());
+				at.hash = '';
+				const to = new URL(destination.href);
+				to.hash = '';
+				if (at.href === to.href) return go();
+			} catch (error) {
+				// no URL to compare: navigated as any other
+			}
+		}
 		let active = false;
 		try {
 			active = client.global.navigator.userActivation?.isActive === true;
