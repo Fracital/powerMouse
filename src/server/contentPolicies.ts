@@ -382,6 +382,54 @@ export function hopRefusal(
 	return null;
 }
 
+/** a source the way two lists are compared: a keyword in lower case */
+const sourceToken = (source: string) =>
+	/^'(?!nonce-|sha)/i.test(source) ? source.toLowerCase() : source;
+
+/**
+ * CSP Embedded Enforcement: what a frame's document whose response has
+ * `headers` makes of the policy its frame's csp attribute requires of it
+ * (`required`), its parent being of the origin `parent`, as Chrome decides
+ * (measured, Chrome 157): `apply` when its Allow-CSP-From is `*` or that
+ * origin (the policy is enforced on it), `accept` when one of its own
+ * enforced header policies is as strict for each of the required policy's
+ * directives (each of that policy's sources is one of the required
+ * directive's, or it allows none), else `refuse` (the browser's error page).
+ * A report-only or meta policy counts for nothing.
+ */
+export function embeddingVerdict(
+	headers: Headers,
+	required: string,
+	parent: string | undefined,
+): 'apply' | 'accept' | 'refuse' {
+	const allow = headers.get('allow-csp-from')?.trim();
+	if (allow === '*' || (allow !== undefined && allow === parent))
+		return 'apply';
+	const [wanted] = parsePolicies(required, 'enforce', 'header');
+	if (!wanted) return 'accept';
+	const own = parsePolicies(
+		headers.get('content-security-policy'),
+		'enforce',
+		'header',
+	);
+	const none = (sources: string[]) =>
+		sources.every((source) => sourceToken(source) === "'none'");
+	for (const [directive, sources] of wanted.directives) {
+		const allowed = new Set(sources.map(sourceToken));
+		const strict = own.some((policy) => {
+			const governed = governing(policy, directive);
+			if (!governed) return false;
+			if (none(governed.sources)) return true;
+			if (none(sources)) return false;
+			return governed.sources.every((source) =>
+				allowed.has(sourceToken(source)),
+			);
+		});
+		if (!strict) return 'refuse';
+	}
+	return 'accept';
+}
+
 /**
  * Whether a document's response `headers` (it is at `url`) refuse one of
  * its real `ancestors`' origins: the enforced frame-ancestors, or, when no

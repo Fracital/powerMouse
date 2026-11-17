@@ -1,7 +1,9 @@
 // Documents that used to escape the rewrite: a child iframe's csp attribute
-// (a policy the service worker cannot serve) is dropped and its sandbox
-// (an origin it cannot serve) is replaced by one it can, both read back as
-// written; an import map's URLs are routed, so bare specifiers resolve to
+// (a policy the service worker cannot serve) is kept from the browser and its
+// sandbox (an origin it cannot serve) is replaced by one it can, both read
+// back as written, and the child, which does not take on the required
+// policy, is refused as natively (CSP Embedded Enforcement,
+// iframe-attributes); an import map's URLs are routed, so bare specifiers resolve to
 // proxied modules; an about:blank popup the page writes into is injected
 // like a child frame, so what it writes is routed. Same-origin mode (the
 // host realm reads the frame's real attributes).
@@ -47,13 +49,16 @@ const sandbox = await page.evaluate(() => {
 	};
 });
 // the real sandbox keeps the frame reachable by the service worker and lets
-// the inject run: the page's flags plus allow-same-origin and allow-scripts
+// the inject run: the page's flags plus allow-same-origin and allow-scripts.
+// The child sends no Allow-CSP-From and no policy of its own, so the browser
+// shows its error page in the frame (whose location no page can read), as
+// it does natively
 ok(
-	"iframe csp is dropped, the sandbox is the proxy's and the child loads through the proxy",
+	"iframe csp is kept from the browser, the sandbox is the proxy's and the child is refused",
 	sandbox.sandbox === 'allow-same-origin allow-scripts' &&
 		sandbox.csp === null &&
 		typeof sandbox.child === 'string' &&
-		/\/stomp\/[\w-]+\/html/.test(sandbox.child),
+		sandbox.child.startsWith('error '),
 	JSON.stringify(sandbox),
 );
 const seen = await frame.evaluate(() => {

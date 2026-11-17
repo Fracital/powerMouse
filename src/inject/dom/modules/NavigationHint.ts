@@ -150,6 +150,7 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 				policies: parent.hopPolicies('frame-src') ?? [],
 				ancestors: moduleClient.ancestorOrigins(),
 				parent: true,
+				required: parent.requiredCSP(moduleClient.nativeFrameElement()),
 			});
 			return false;
 		});

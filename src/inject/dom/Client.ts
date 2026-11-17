@@ -776,6 +776,27 @@ export default class DocumentClient extends Client {
 			return null;
 		}
 	}
+	/**
+	 * The policy a frame element's csp attribute requires of its documents
+	 * (CSP Embedded Enforcement), as the page wrote it (the browser never
+	 * has the attribute, DOMAttributes), else undefined. Chrome ignores a
+	 * value that is no single policy, or one that reports.
+	 */
+	requiredCSP(element: Element | null): string | undefined {
+		if (!element || element.nodeName !== 'IFRAME') return undefined;
+		const value =
+			Reflect.apply(nativeGetAttribute, element, [`${MARKER}csp`]) ??
+			Reflect.apply(nativeGetAttribute, element, ['csp']);
+		if (
+			typeof value !== 'string' ||
+			value.trim() === '' ||
+			value.length > 4096 ||
+			value.includes(',') ||
+			/(?:^|;)\s*report-(?:uri|to)\b/i.test(value)
+		)
+			return undefined;
+		return value;
+	}
 	/** whether this document's frame's sandbox attribute grants allow-top-navigation */
 	#frameTopNavigation = false;
 	/** decide this document's sandbox again: a new document of this window starts */

@@ -1889,6 +1889,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 										moduleClient.origin,
 										...moduleClient.ancestorOrigins(),
 									],
+									required: moduleClient.requiredCSP(element),
 								},
 							);
 					const routed =
@@ -3363,15 +3364,16 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// a child frame's csp or credentialless attribute would put its
 		// document outside what the service worker can serve or rewrite:
 		// dropped, read back as written. Setting the property
-		// (`iframe.credentialless = true`) drops it at once too, so it is not
-		// dropped later on insertion, behind attributes the page set after it.
-		// Not `csp`: the property hook applies a string property's value again,
-		// which would bring the attribute back
+		// (`iframe.credentialless = true`, `iframe.csp = policy`) drops it at
+		// once too, so it is not dropped later on insertion, behind attributes
+		// the page set after it, and the browser never asks the document for
+		// the policy (the worker does: the frame's hints say it, and
+		// DocumentClient.requiredCSP reads it); `csp` reads back as written
 		const iframePrototype = realm.HTMLIFrameElement.prototype;
-		for (const [attribute, property] of [
-			['csp', ''],
-			['credentialless', 'credentialless'],
-		])
+		for (const [attribute, property, getter] of [
+			['csp', 'csp', (element) => element.getAttributeOG('csp') ?? ''],
+			['credentialless', 'credentialless', () => false],
+		] as [string, string, (element: CustomElement) => string | false][])
 			domHooksModule.useAttributes(
 				(element) => {
 					element.restoreAttributesOG(attribute);
@@ -3382,13 +3384,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				},
 				[
 					['IFRAME', attribute],
-					...(property &&
-					Reflect.getOwnPropertyDescriptor(iframePrototype, property)?.set
+					...(Reflect.getOwnPropertyDescriptor(iframePrototype, property)?.set
 						? [
-								[realm.HTMLIFrameElement, property, () => false] as [
+								[realm.HTMLIFrameElement, property, getter] as [
 									typeof HTMLIFrameElement,
 									string,
-									() => false,
+									typeof getter,
 								],
 							]
 						: []),

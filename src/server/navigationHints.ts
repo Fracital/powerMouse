@@ -110,6 +110,11 @@ export interface NavigationChain {
 	}[];
 	/** a frame's: its real ancestors' origins, nearest first */
 	ancestors?: string[];
+	/**
+	 * a frame's: the policy its element's csp attribute requires of the
+	 * document it ends in (CSP Embedded Enforcement), when it has one
+	 */
+	required?: string;
 }
 
 const chains = new Map<string, NavigationChain & { at: number }>();
@@ -121,6 +126,7 @@ export function recordNavigationChain(
 	ancestors: string[] | undefined,
 	client: string | undefined,
 	parent: boolean,
+	required?: string,
 ) {
 	const key = keyOf(url);
 	const known = navigationChain(url);
@@ -133,6 +139,8 @@ export function recordNavigationChain(
 			...policies.map((policy) => ({ policy, client, parent })),
 		],
 		ancestors: ancestors ?? known?.ancestors,
+		// (told with the ancestors: a frame's hint says it, or that it has none)
+		required: ancestors ? required : known?.required,
 		at: Date.now(),
 	});
 	if (chains.size > KEPT) chains.delete(chains.keys().next().value!);

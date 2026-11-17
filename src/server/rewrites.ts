@@ -192,6 +192,7 @@ import {
 } from './clientHints';
 import {
 	directiveOf,
+	embeddingVerdict,
 	hopRefusal,
 	integrityPolicyDestinations,
 	integrityRefuses,
@@ -691,6 +692,8 @@ type BodyTransform = (
 		upgradeInsecure: boolean;
 		/** a frame's navigation: the real origins of the frame's ancestors, nearest first */
 		ancestors?: string[] | null;
+		/** a frame's navigation: the policy its csp attribute requires (navigationHints) */
+		requiredCSP?: string | null;
 		/** the request's destination and mode (a worker's own script is `same-origin`, what it imports `cors`) */
 		destination?: RequestDestination;
 		mode?: RequestMode;
@@ -1995,6 +1998,12 @@ function genericForward(
 			} catch (error) {
 				// not a route of this controller's: nothing was told of it
 			}
+		// a frame's csp attribute asks every navigation of the frame for its
+		// policy (CSP Embedded Enforcement); the browser never has the
+		// attribute (the inject keeps it), so it is said here
+		requestHeaders.delete('sec-required-csp');
+		if (navigation && nestedRoute !== null && chain?.required)
+			requestHeaders.set('sec-required-csp', chain.required);
 		// The page's form-action (a form's) and a frame's parent's frame-src
 		// judge every hop of the navigation natively. A hop one refuses goes
 		// on to a URL the browser's copy refuses too: the browser refuses it
@@ -3765,6 +3774,10 @@ function genericForward(
 									navigation && nestedRoute !== null
 										? (chain?.ancestors ?? [new URL(nestedRoute).origin])
 										: null,
+								requiredCSP:
+									navigation && nestedRoute !== null
+										? (chain?.required ?? null)
+										: null,
 								partition:
 									frameSite === null
 										? null
@@ -5004,15 +5017,32 @@ export function registerRewrites(
 			async (url, response, responseHeaders, referrer, request, note) => {
 				// a frame whose own frame-ancestors or X-Frame-Options refuses one
 				// of its real ancestors is refused by the browser, which shows its
-				// error page as natively (no event anywhere), whatever its type
+				// error page as natively (no event anywhere), whatever its type;
+				// so is one that does not take on the policy its frame's csp
+				// attribute requires (CSP Embedded Enforcement). One that lets its
+				// parent's origin set that policy (Allow-CSP-From) is held to it
+				// as to a policy of its own
+				const embedded = request.requiredCSP
+					? embeddingVerdict(
+							response.headers,
+							request.requiredCSP,
+							request.ancestors?.[0],
+						)
+					: 'accept';
 				if (
-					request.ancestors &&
-					refusesAncestors(response.headers, url.url, request.ancestors)
+					(request.ancestors &&
+						refusesAncestors(response.headers, url.url, request.ancestors)) ||
+					embedded === 'refuse'
 				)
 					responseHeaders.append(
 						'content-security-policy',
 						"frame-ancestors 'none'",
 					);
+				let pageHeaders = response.headers;
+				if (embedded === 'apply') {
+					pageHeaders = new Headers(pageHeaders);
+					pageHeaders.append('content-security-policy', request.requiredCSP!);
+				}
 				const contentType = responseHeaders.get('content-type');
 				const mime = getMime(contentType || '');
 				// a type that says nothing is sniffed by the browser as it
@@ -5071,11 +5101,7 @@ export function registerRewrites(
 				// nonce, which the browser's script policies name; a worker of
 				// the document imports the inject by its URL)
 				const nonce = policyNonce();
-				const policies = browserHeaders(
-					response.headers,
-					policyMark(),
-					url.url,
-				);
+				const policies = browserHeaders(pageHeaders, policyMark(), url.url);
 				// "Block scripts" shield: the inject enforces script-src 'none'
 				// against the page's own code (src/csp.ts stage 2; the inject's own
 				// scripts are exempt by design). It rides as a page policy with no
@@ -5158,7 +5184,7 @@ export function registerRewrites(
 				const upgradeInsecure =
 					request.upgradeInsecure ||
 					upgradesInsecureRequests(
-						response.headers.get('content-security-policy'),
+						pageHeaders.get('content-security-policy'),
 					) ||
 					metaUpgradesInsecureRequests(markup);
 				if (upgradeInsecure && request.navigation)
@@ -5172,20 +5198,18 @@ export function registerRewrites(
 						url.url,
 						[
 							...parsePolicies(
-								response.headers.get('content-security-policy'),
+								pageHeaders.get('content-security-policy'),
 								'enforce',
 								'header',
 							),
 							...parsePolicies(
-								response.headers.get('content-security-policy-report-only'),
+								pageHeaders.get('content-security-policy-report-only'),
 								'report',
 								'header',
 							),
 							...metaPolicies(markup),
 						],
-						integrityPolicyDestinations(
-							response.headers.get('integrity-policy'),
-						),
+						integrityPolicyDestinations(pageHeaders.get('integrity-policy')),
 					);
 				// the blocker's side of the document (docs/adblock.md): the
 				// lists' `$csp=` policies the proxy can enforce, beside its own,
@@ -5248,7 +5272,9 @@ export function registerRewrites(
 						requestHeaders: request.headers,
 						status: response.status,
 						responseHeaders: response.headers,
-					})
+					}) &&
+						// (a policy its frame set on it is not the document's)
+						embedded !== 'apply'
 						? request.partition
 						: null,
 				);

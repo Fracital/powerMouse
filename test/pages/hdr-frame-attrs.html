@@ -1,0 +1,183 @@
+<!doctype html>
+<title>iframe csp and credentialless</title>
+<pre id="result">pending</pre>
+<script>
+	// A frame's csp attribute (CSP Embedded Enforcement: the document must
+	// accept the policy, by Allow-CSP-From or a policy of its own at least
+	// as strict, or it is refused) and credentialless attribute (no cookies
+	// on its requests, no storage of its site's own). Each child runs an
+	// inline script that posts what it saw; a refused one posts nothing, a
+	// child whose scripts the policy stops posts nothing either, which its
+	// parent tells apart by reading its title.
+	const other = location.origin.replace('127.0.0.1', 'localhost');
+	// (the fixture's log outlives the page: each load keys its own)
+	const run = Math.random().toString(36).slice(2);
+	const child = (origin, k, headers = []) =>
+		`${origin}/hdr/doc?k=${k}.${run}&` +
+		[...headers, 'content-type:text/html']
+			.map((h) => `h=${encodeURIComponent(h)}`)
+			.join('&') +
+		'&body=' +
+		encodeURIComponent(`<!doctype html><title>child ${k}</title><script>
+			parent.postMessage({ k: ${JSON.stringify(k)}, ran: true,
+				cookie: document.cookie, local: localStorage.getItem('attrs'),
+				credentialless: window.credentialless }, '*');
+		<\/script>`);
+	const NONE = "script-src 'none'";
+	const CASES = {
+		'csp-plain': [child(location.origin, 'csp-plain'), NONE],
+		'csp-allow-from': [
+			child(location.origin, 'csp-allow-from', ['allow-csp-from:*']),
+			NONE,
+		],
+		'csp-own-same': [
+			child(location.origin, 'csp-own-same', [
+				`content-security-policy:${NONE}`,
+			]),
+			NONE,
+		],
+		'csp-own-weaker': [
+			child(location.origin, 'csp-own-weaker', [
+				"content-security-policy:script-src 'self'",
+			]),
+			NONE,
+		],
+		'csp-cross': [child(other, 'csp-cross'), NONE],
+		'csp-cross-allow-from': [
+			child(other, 'csp-cross-allow-from', [
+				`allow-csp-from:${location.origin}`,
+			]),
+			NONE,
+		],
+		'csp-img': [child(location.origin, 'csp-img'), "img-src 'none'"],
+		'csp-allow-from-origin': [
+			child(location.origin, 'csp-allow-from-origin', [
+				`allow-csp-from:${location.origin}`,
+			]),
+			NONE,
+		],
+		'csp-cross-allow-from-any': [
+			child(other, 'csp-cross-allow-from-any', ['allow-csp-from:*']),
+			NONE,
+		],
+		'csp-own-more': [
+			child(location.origin, 'csp-own-more', [
+				`content-security-policy:${NONE}; img-src *`,
+			]),
+			NONE,
+		],
+		'csp-own-default': [
+			child(location.origin, 'csp-own-default', [
+				"content-security-policy:default-src 'none'",
+			]),
+			NONE,
+		],
+		'csp-own-stricter': [
+			child(location.origin, 'csp-own-stricter', [
+				"content-security-policy:script-src 'self'",
+			]),
+			"script-src 'self' 'unsafe-inline'",
+		],
+		'csp-own-two': [
+			child(location.origin, 'csp-own-two', [
+				"content-security-policy:img-src 'none'",
+				`content-security-policy:${NONE}`,
+			]),
+			NONE,
+		],
+		'csp-cross-own': [
+			child(other, 'csp-cross-own', [`content-security-policy:${NONE}`]),
+			NONE,
+		],
+		'csp-report-only': [
+			child(location.origin, 'csp-report-only', [
+				`content-security-policy-report-only:${NONE}`,
+			]),
+			NONE,
+		],
+	};
+	const seen = {};
+	addEventListener('message', (event) => {
+		if (event.data && event.data.k) seen[event.data.k] = event.data;
+	});
+	const frames = {};
+	const load = (frame) =>
+		new Promise((resolve) => {
+			frame.addEventListener('load', resolve, { once: true });
+			setTimeout(resolve, 8000);
+		});
+	(async () => {
+		document.cookie = 'attrs=1; path=/';
+		localStorage.setItem('attrs', 'parent');
+		const loads = [];
+		for (const [k, [src, csp]] of Object.entries(CASES)) {
+			const frame = document.createElement('iframe');
+			frame.csp = csp;
+			frame.src = src;
+			frames[k] = frame;
+			loads.push(load(frame));
+			document.body.append(frame);
+		}
+		const credentialless = document.createElement('iframe');
+		credentialless.credentialless = true;
+		credentialless.src = child(location.origin, 'credentialless');
+		loads.push(load(credentialless));
+		document.body.append(credentialless);
+		const plain = document.createElement('iframe');
+		plain.src = child(location.origin, 'plain');
+		loads.push(load(plain));
+		document.body.append(plain);
+		await Promise.all(loads);
+		await new Promise((resolve) => setTimeout(resolve, 1500));
+		const outcome = (k) => {
+			if (seen[k]) return 'ran';
+			let title = null;
+			try {
+				title = frames[k].contentDocument?.title ?? null;
+			} catch (error) {
+				title = null;
+			}
+			return title === `child ${k}` ? 'loaded, no script' : 'refused';
+		};
+		const probe = document.createElement('iframe');
+		probe.setAttribute('csp', "default-src 'self'");
+		const property = document.createElement('iframe');
+		property.csp = "img-src 'none'";
+		const log = async (k) =>
+			(await (await fetch(`/hdr/log?k=${k}.${run}`)).json())
+				.map((entry) => entry.requiredCSP)
+				.join();
+		window.__result = {
+			...Object.fromEntries(Object.keys(CASES).map((k) => [k, outcome(k)])),
+			required: await log('csp-plain'),
+			requiredCross: await (
+				await fetch(`${other}/hdr/log?k=csp-cross.${run}`)
+			)
+				.json()
+				.then((list) => list.map((entry) => entry.requiredCSP).join()),
+			attribute: [probe.csp, property.getAttribute('csp'), property.csp],
+			credentialless: seen.credentialless
+				? {
+						cookie: seen.credentialless.cookie,
+						local: seen.credentialless.local,
+						flag: seen.credentialless.credentialless,
+					}
+				: 'no report',
+			credentiallessSent: await (
+				await fetch(`/hdr/log?k=credentialless.${run}`)
+			)
+				.json()
+				.then((list) => list.map((entry) => entry.cookie).join()),
+			plain: seen.plain
+				? {
+						cookie: seen.plain.cookie,
+						local: seen.plain.local,
+						flag: seen.plain.credentialless,
+					}
+				: 'no report',
+		};
+		document.getElementById('result').textContent = JSON.stringify(
+			window.__result,
+		);
+	})();
+</script>

@@ -955,6 +955,9 @@ function handleMessage(event: ExtendableMessageEvent) {
 						: undefined,
 					(event.source as Client).id,
 					csp.parent === true,
+					typeof csp.required === 'string' && csp.required.length <= 4096
+						? csp.required
+						: undefined,
 				);
 			recordNavigationHint(target.href, {
 				origin: new URL(real).origin,

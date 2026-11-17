@@ -595,12 +595,15 @@ export interface NavigationHintMessage {
 	 * form-action, a frame's parent's frame-src; src/csp.ts HopPolicy), and
 	 * a frame's real ancestors' origins, nearest first (the frame-ancestors
 	 * of the document it ends in). `parent`: the policies are the parent's,
-	 * and the frame that navigates sends them
+	 * and the frame that navigates sends them. `required`: the policy the
+	 * frame's csp attribute requires of that document (CSP Embedded
+	 * Enforcement)
 	 */
 	csp?: {
 		policies: [string, string[], 'enforce' | 'report', string][];
 		ancestors?: string[];
 		parent?: boolean;
+		required?: string;
 	};
 }
 /**
