@@ -1,0 +1,97 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>frame referrers</title>
+<script>
+	// frames that navigate themselves, and the Referer each navigation (or
+	// request) carried, as the fixture recorded it (frame-referrers suite)
+	const other = location.origin.includes('127.0.0.1')
+		? location.origin.replace('127.0.0.1', 'localhost')
+		: location.origin.replace('localhost', '127.0.0.1');
+	const run = Math.random().toString(36).slice(2);
+	const echo = (origin, name) =>
+		`${origin}/echo-headers?k=frame-referrers-${run}-${name}`;
+	const child = (name, origin, options) =>
+		`frame-referrers-child.html?${new URLSearchParams({
+			...options,
+			to: echo(origin, name),
+		})}`;
+	const srcdoc = (name, script) =>
+		`<meta name="referrer" content="unsafe-url"><script>onload = () => { ${script(
+			echo(other, name),
+		)} }<\/script>`;
+	const cases = {
+		// the document's own policy, sent across origins
+		'refresh no-referrer': {
+			src: child('a', other, { policy: 'no-referrer', how: 'refresh' }),
+		},
+		'refresh unsafe-url': {
+			src: child('b', other, { policy: 'unsafe-url', how: 'refresh' }),
+		},
+		'location origin': {
+			src: child('c', other, { policy: 'origin', how: 'location' }),
+		},
+		'location default': {
+			src: child('d', other, { policy: '', how: 'location' }),
+		},
+		// the origin-only policies, within the origin
+		'same-origin location origin': {
+			src: child('e', location.origin, { policy: 'origin', how: 'location' }),
+		},
+		'same-origin refresh strict-origin': {
+			src: child('f', location.origin, {
+				policy: 'strict-origin',
+				how: 'refresh',
+			}),
+		},
+		// the link's own policy
+		'link rel=noreferrer': {
+			src: child('g', other, { policy: '', how: 'link', rel: 'noreferrer' }),
+		},
+		'link referrerpolicy=unsafe-url': {
+			src: child('h', other, { policy: '', how: 'link', attr: 'unsafe-url' }),
+		},
+		// a srcdoc document's policy is its own, its referrer its parent's address
+		'srcdoc unsafe-url location': {
+			srcdoc: srcdoc('i', (to) => `location.href = ${JSON.stringify(to)};`),
+		},
+		// a document sandboxed to an opaque origin is no referrer
+		'opaque srcdoc location': {
+			sandbox: 'allow-scripts',
+			srcdoc: srcdoc('j', (to) => `location.href = ${JSON.stringify(to)};`),
+		},
+		'opaque srcdoc fetch': {
+			sandbox: 'allow-scripts',
+			srcdoc: srcdoc('k', (to) => `fetch(${JSON.stringify(to)});`),
+		},
+	};
+	const names = 'abcdefghijk';
+	const recorded = async (origin, name) => {
+		for (let i = 0; i < 40; i++) {
+			const headers = await (
+				await fetch(
+					`${location.origin}/echo-headers/recorded?k=frame-referrers-${run}-${name}`,
+				)
+			).json();
+			if (headers) return headers.referer ?? null;
+			await new Promise((resolve) => setTimeout(resolve, 250));
+		}
+		return 'no request';
+	};
+	addEventListener('load', async () => {
+		const result = {};
+		let index = 0;
+		for (const [label, { src, srcdoc, sandbox }] of Object.entries(cases)) {
+			const frame = document.createElement('iframe');
+			if (sandbox !== undefined) frame.setAttribute('sandbox', sandbox);
+			if (srcdoc !== undefined) frame.srcdoc = srcdoc;
+			else frame.src = src;
+			document.body.append(frame);
+			const referer = await recorded(location.origin, names[index++]);
+			// as the page's address reads: the port is the fixture's
+			result[label] =
+				typeof referer === 'string' ? referer.replace(/\?.*$/, '?') : referer;
+			frame.remove();
+		}
+		window.__result = result;
+	});
+</script>

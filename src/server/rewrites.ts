@@ -229,6 +229,7 @@ import { takeLoadGrant } from './loadGrants';
 import { recordCrossedMedia } from './mediaLoads';
 import {
 	awaitNavigationHint,
+	awaitNavigationHintPeek,
 	NavigationChain,
 	navigationChain,
 	NavigationHint,
@@ -1326,6 +1327,25 @@ function genericForward(
 		let refererSource = referrer ? decode(referrer) : null;
 		if (!refererSource && referrer === `${oURL.origin}/`)
 			refererSource = client;
+		// A navigation under `origin` or `strict-origin` has no client to
+		// stand in: the document that started it told the worker it did
+		// (NAVIGATION_HINT; its origin is the sender's own route's, never
+		// what the message says), and an origin is all these two policies
+		// send. Its message may trail the request a little. Only under these
+		// two: the host's own page at the proxy origin's root is that same
+		// referrer in full, under the default policy.
+		if (
+			navigation &&
+			!refererSource &&
+			referrer === `${oURL.origin}/` &&
+			(policy === 'origin' || policy === 'strict-origin')
+		) {
+			const told = await awaitNavigationHintPeek(
+				url.url.href,
+				rewriter.config.navigationHintWait ?? NAVIGATION_HINT_WAIT_MS,
+			);
+			if (told) refererSource = new URL(told.origin);
+		}
 
 		// the real document this request belongs to, which the blocker reads as
 		// its source and the per-site shields are keyed by (a navigation's: the

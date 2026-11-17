@@ -1,0 +1,33 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>navigates</title>
+<script>
+	// ?policy=<the document's referrer policy>&how=refresh|location|link
+	// &rel=<the link's rel>&attr=<the link's referrerpolicy>&to=<where>
+	const query = new URLSearchParams(location.search);
+	const meta = (attributes) => {
+		const element = document.createElement('meta');
+		for (const [name, value] of Object.entries(attributes))
+			element.setAttribute(name, value);
+		document.head.append(element);
+	};
+	if (query.get('policy'))
+		meta({ name: 'referrer', content: query.get('policy') });
+	const to = query.get('to');
+	addEventListener('load', () => {
+		if (query.get('how') === 'refresh')
+			meta({ 'http-equiv': 'refresh', content: `0; url=${to}` });
+		else if (query.get('how') === 'location') location.href = to;
+		else {
+			const link = document.createElement('a');
+			link.href = to;
+			if (query.get('rel')) link.rel = query.get('rel');
+			if (query.get('attr'))
+				link.setAttribute('referrerpolicy', query.get('attr'));
+			link.textContent = 'go';
+			document.body.append(link);
+			link.click();
+		}
+	});
+</script>
+<body></body>
