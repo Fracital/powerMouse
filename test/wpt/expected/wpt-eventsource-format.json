@@ -16,17 +16,5 @@
 	},
 	"/eventsource/format-field-id.any.worker.html": {
 		"EventSource: Last-Event-ID": "FAIL: assert_equals: expected \"hello\" but got \"…\""
-	},
-	"/eventsource/format-mime-bogus.any.html": {
-		"EventSource: bogus MIME type": "FAIL: assert_unreached: Reached unreachable code"
-	},
-	"/eventsource/format-mime-bogus.any.worker.html": {
-		"EventSource: bogus MIME type": "FAIL: assert_unreached: Reached unreachable code"
-	},
-	"/eventsource/format-mime-valid-bogus.any.html": {
-		"EventSource: incorrect valid MIME type": "FAIL: assert_unreached: Reached unreachable code"
-	},
-	"/eventsource/format-mime-valid-bogus.any.worker.html": {
-		"EventSource: incorrect valid MIME type": "FAIL: assert_unreached: Reached unreachable code"
 	}
 }

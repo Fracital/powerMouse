@@ -3560,13 +3560,6 @@ function genericForward(
 				),
 			);
 
-		// an EventSource must get its MIME type even from a server that
-		// forgot it, or the browser drops the stream
-		if (
-			(serverRequest.headers.get('accept') || '').includes('text/event-stream')
-		)
-			responseHeaders.set('content-type', 'text/event-stream');
-
 		for (const [header, value] of response.rawHeaders ?? []) {
 			if (header.toLowerCase() === 'set-cookie') {
 				// a response to a request without credentials sets nothing
