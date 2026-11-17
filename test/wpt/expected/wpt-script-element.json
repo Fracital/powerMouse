@@ -2,9 +2,6 @@
 	"/html/semantics/scripting-1/the-script-element/microtasks/checkpoint-after-workerglobalscope-onerror-module.html": {
 		"Promise resolved during event handlers other than error": "FAIL: assert_array_equals: expected property 1 to be \"handler 1 promise\" but got \"handler 2\" (expected array [\"handler 1\", \"handler 1 promise\", \"handler 2\", \"handler 2 promise\"] got [\"handler 1\", \"handler 2"
 	},
-	"/html/semantics/scripting-1/the-script-element/muted-errors.sub.html": {
-		"Errors for same-origin scripts redirected to a cross-origin url and redirected back to same-origin should be muted": "FAIL: assert_equals: expected \"Script error.\" but got \"Uncaught fox\""
-	},
 	"/html/semantics/scripting-1/the-script-element/script-defer-xhtml.xhtml": {
 		"(harness)": "ERROR: Uncaught ReferenceError: t is not defined"
 	},

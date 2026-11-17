@@ -613,14 +613,6 @@ The list is empty.
   calling each) would run them with no checkpoint between. (The harness
   ERROR `Cannot read properties of undefined (reading 'releaseHeld')` it
   had, with two MISSING, went with the module worker's one shared boot.)
-- `html/semantics/scripting-1/the-script-element/muted-errors.sub.html` (1:
-  "Errors for same-origin scripts redirected to a cross-origin url and
-  redirected back to same-origin should be muted"): `Uncaught fox` for
-  `Script error.`. A classic script whose fetch crossed origins in its
-  redirect chain is opaque natively; the worker follows the redirects, and
-  the inject's error relabelling (`src/inject/modules/Unroute.ts`) knows only
-  the final, same-origin URL. The worker would have to report a cross-origin
-  hop in the chain.
 - `html/semantics/scripting-1/the-script-element/script-text-modifications.html`,
   `html/semantics/scripting-1/the-script-element/script-text-modifications-csp.html`
   (1 each: "Modify inline script element's text after prepare-a-script before
@@ -635,6 +627,9 @@ Cleared on the combined tree: `fetch-src/failure.html`,
 hooks for a `src` that does not parse; the unparsable URL attribute fix), and
 `script-charset-01.html` (the response's `charset=windows-1250` now wins over
 the element's `charset="utf-8"`; the script charset fix).
+
+Cleared since: `muted-errors.sub.html` (a classic script whose redirects went
+through another origin and came back is muted, as natively; df5409bc).
 
 ## wpt-script-timing
 
