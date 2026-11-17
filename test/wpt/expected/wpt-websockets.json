@@ -77,11 +77,31 @@
 	"/websockets/Send-before-open.any.worker.html?default": {
 		"Send data on a WebSocket before connection is opened - INVALID_STATE_ERR is returned": "FAIL: assert_throws_dom: function \"function() { wsocket.send(\"Message to send\") }\" threw object \"Error: Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.\" that is not a DOMException INVALI"
 	},
+	"/websockets/Send-binary-65K-arraybuffer.any.html?default": {
+		"Send 65K binary data on a WebSocket - ArrayBuffer - Connection should be closed": "FAIL: assert_equals: expected 0 but got 65000"
+	},
+	"/websockets/Send-binary-65K-arraybuffer.any.worker.html?default": {
+		"Send 65K binary data on a WebSocket - ArrayBuffer - Connection should be closed": "FAIL: assert_equals: expected 0 but got 65000"
+	},
+	"/websockets/Send-binary-arraybuffer.any.html?default": {
+		"Send binary data on a WebSocket - ArrayBuffer - Connection should be closed": "FAIL: assert_equals: expected 0 but got 15"
+	},
+	"/websockets/Send-binary-arraybuffer.any.worker.html?default": {
+		"Send binary data on a WebSocket - ArrayBuffer - Connection should be closed": "FAIL: assert_equals: expected 0 but got 15"
+	},
 	"/websockets/Send-data.any.html?default": {
 		"Send data on a WebSocket - Connection should be closed": "FAIL: assert_equals: expected 0 but got 15"
 	},
 	"/websockets/Send-data.any.worker.html?default": {
 		"Send data on a WebSocket - Connection should be closed": "FAIL: assert_equals: expected 0 but got 15"
+	},
+	"/websockets/Send-null.any.html?default": {
+		"(harness)": "TIMEOUT: ",
+		"Send null data on a WebSocket - Connection should be closed": "TIMEOUT: Test timed out"
+	},
+	"/websockets/Send-null.any.worker.html?default": {
+		"(harness)": "TIMEOUT: ",
+		"Send null data on a WebSocket - Connection should be closed": "TIMEOUT: Test timed out"
 	},
 	"/websockets/Send-paired-surrogates.any.html?default": {
 		"Send paired surrogates data on a WebSocket - Connection should be closed": "FAIL: assert_equals: expected 0 but got 4"
@@ -283,6 +303,10 @@
 	"/websockets/constructor/007.html?default": {
 		"WebSockets: new WebSocket(url, null char)": "FAIL: assert_throws_dom: function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', 'a' + String.fromCharCode(0) + 'b') }\" threw object \"Error: Failed to construct 'WebSocket': The subproto"
 	},
+	"/websockets/constructor/013.html?default": {
+		"(harness)": "TIMEOUT: timeout: no report within 30 s",
+		"WebSockets: multiple WebSocket objects": "MISSING: the harness ended TIMEOUT before this subtest"
+	},
 	"/websockets/constructor/021.html?default": {
 		"WebSockets: Same sub protocol twice": "FAIL: assert_throws_dom: function \"function(){new WebSocket(\"ws://certo2.oslo.osa/protocol_array\",[\"foobar, foobar\"])}\" threw object \"Error: Failed to construct 'WebSocket': The subprotocol 'foobar, foobar'"
 	},
@@ -340,11 +364,11 @@
 		"Setting event handlers to null onerror": "FAIL: assert_equals: onerror expected (object) null but got (function) function \"function() {}\"",
 		"Setting event handlers to null onmessage": "FAIL: assert_equals: onmessage expected (object) null but got (function) function \"function() {}\""
 	},
+	"/websockets/interfaces/WebSocket/events/018.html?default": {
+		"open, message, error and close events": "FAIL: assert_true: error event should fire expected true got false"
+	},
 	"/websockets/interfaces/WebSocket/readyState/003.html?default": {
 		"WebSockets: delete readyState": "FAIL: assert_equals: delete ws.readyState expected 2 but got 0"
-	},
-	"/websockets/interfaces/WebSocket/send/001.html?default": {
-		"WebSockets: send() with no args": "FAIL: assert_throws_js: function \"function(){ws.send()}\" threw object \"Error: Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.\" (\"Error\") expected instance of function \"function TypeError"
 	},
 	"/websockets/interfaces/WebSocket/send/003.html?default": {
 		"WebSockets: send() when readyState is CONNECTING": "FAIL: assert_throws_dom: function \"function(){ws.send('a')}\" threw object \"Error: Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.\" that is not a DOMException INVALID_STATE_ERR: property "
@@ -356,6 +380,20 @@
 	},
 	"/websockets/interfaces/WebSocket/send/007.html?default": {
 		"WebSockets: close() followed by send()": "FAIL: assert_unreached: Reached unreachable code"
+	},
+	"/websockets/interfaces/WebSocket/send/010.html?default": {
+		"(harness)": "TIMEOUT: timeout: no report within 30 s",
+		"Constructor succeeds": "MISSING: the harness ended TIMEOUT before this subtest",
+		"WebSockets: sending non-strings (null)": "MISSING: the harness ended TIMEOUT before this subtest",
+		"WebSockets: sending non-strings (undefined)": "MISSING: the harness ended TIMEOUT before this subtest",
+		"WebSockets: sending non-strings (1)": "MISSING: the harness ended TIMEOUT before this subtest",
+		"WebSockets: sending non-strings ([object Window])": "MISSING: the harness ended TIMEOUT before this subtest",
+		"WebSockets: sending non-strings ([object HTMLBodyElement])": "MISSING: the harness ended TIMEOUT before this subtest",
+		"WebSockets: sending non-strings ([object Object])": "MISSING: the harness ended TIMEOUT before this subtest",
+		"WebSockets: sending non-strings ()": "MISSING: the harness ended TIMEOUT before this subtest",
+		"WebSockets: sending non-strings ([object WebSocket])": "MISSING: the harness ended TIMEOUT before this subtest",
+		"WebSockets: sending non-strings (function(){})": "MISSING: the harness ended TIMEOUT before this subtest",
+		"WebSockets: sending non-strings (Error)": "MISSING: the harness ended TIMEOUT before this subtest"
 	},
 	"/websockets/interfaces/WebSocket/send/012.html?default": {
 		"WebSockets: sending null": "FAIL: assert_unreached: Reached unreachable code"
@@ -369,5 +407,9 @@
 	},
 	"/websockets/opening-handshake/005.html?default": {
 		"WebSockets: response header and close frame in same packet": "FAIL: assert_equals: expected 1001 but got 1005"
+	},
+	"/websockets/security/001.html?default": {
+		"(harness)": "TIMEOUT: ",
+		"WebSockets: wrong accept key": "TIMEOUT: Test timed out"
 	}
 }

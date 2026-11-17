@@ -390,22 +390,16 @@ Skipped (`test/suites/wpt-websockets.mjs`):
   HTTP/2.
 - `keeping-connection-open/`: 20 s on an idle socket, past the harness
   natively.
-- every page that waits for a message the server sends in answer to one
-  send (Send-0byte-data, Send-binary-\*, Send-null, Send-unpaired-surrogates,
-  Send-data.worker, `binary/`, Close-server-initiated-close,
-  `closing-handshake/002` and `004`, `constructor/006` and `013`,
-  extended-payload-length, `CloseEvent/clean-close`,
-  bufferedAmount-arraybuffer and -blob, `events/015` to `018`, `send/006` and
-  `008` to `011`, `security/001`, send-data-isolation). epoxy, the transport
-  the suites browse with, hands an incoming WebSocket frame to the page only
-  when the next outgoing one is written (measured with the transport alone,
-  no STomp in the path: eight sockets of eight stall on epoxy, none on
-  libcurl), so each of these times out or passes by a race
-  (bufferedAmount-blob went TIMEOUT, PASS, TIMEOUT in three runs). They come
-  back when the transport delivers frames as they arrive. libcurl cannot
-  carry the whole suite (it answers nothing for an HTTP request to a loopback
-  server through wisp); a split transport for this suite (HTTP on epoxy,
-  `connect()` on libcurl) would measure STomp instead of epoxy.
+
+The pages that wait for a message the server sends in answer to one send
+(Send-\*, `binary/`, Close-server-initiated-close, `closing-handshake/`,
+`events/015` to `018`, `send/006` to `011`, `security/001`,
+send-data-isolation and others) run: epoxy-transport hands an incoming
+frame to the page as it arrives since its 0061 patch (deploy/epoxy). Before
+it, epoxy held each incoming frame until the next outgoing one was written,
+and those pages timed out or passed by a race, so they were skipped. The
+ten of them that still fail are listed, each for its own reason (BACKLOG,
+wpt-websockets).
 
 ### workers, webstorage, IndexedDB
 

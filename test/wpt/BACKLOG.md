@@ -719,8 +719,9 @@ URL fix hands such a URL to the browser's own setter).
 ## wpt-websockets
 
 The stand-in is `src/inject/modules/WebSocket.ts` (`MockWebSocket`). The
-pages that need the server's answer to a message are in the suite's `skip`
-(README, websockets), so the list measures only what needs no answer.
+pages that need the server's answer to a message run since epoxy-transport
+delivers a frame as it arrives (README, websockets); the ten of them that
+still fail are the last group below.
 
 - Argument checks and errors of the stand-in (S each):
   - the constructor never validates the subprotocols (token, no separators,
@@ -756,8 +757,6 @@ pages that need the server's answer to a message are in the suite's `skip`
     InvalidStateError: `websockets/Send-before-open.any.html?default`,
     `websockets/Send-before-open.any.worker.html?default`,
     `websockets/interfaces/WebSocket/send/003.html?default` (1 each);
-  - `send()` has no argument count check:
-    `websockets/interfaces/WebSocket/send/001.html?default` (1);
   - lone surrogates throw (from the transport's encoder) where they go as
     U+FFFD: `websockets/interfaces/WebSocket/send/004.html?default` (3);
   - `send()` after `close()` must drop the data and count it in
@@ -819,6 +818,30 @@ pages that need the server's answer to a message are in the suite's `skip`
   `websockets/Create-on-worker-shutdown.any.worker.html` (1 each: "WebSocket
   created after a worker self.close()"): the stand-in does not know the
   worker is closing (natively the socket is born failing).
+- Pages that wait for the server's answer, run since the transport's frame
+  flush (epoxy 0061), failing for their own reasons (measured identical in
+  six runs on Chrome 152 and 156 with the fixed transport):
+  - bufferedAmount reads 0 right after `send()` (the bufferedAmount group
+    above): `websockets/Send-binary-arraybuffer.any.html?default`,
+    `websockets/Send-binary-arraybuffer.any.worker.html?default`,
+    `websockets/Send-binary-65K-arraybuffer.any.html?default`,
+    `websockets/Send-binary-65K-arraybuffer.any.worker.html?default`;
+  - `send()` hands a value that is neither a string nor binary (null, a
+    number, an object) to the transport, which throws "Invalid websocket
+    payload: JsValue(..)" where the browser sends `String(value)` (the
+    send/012 row above): `websockets/Send-null.any.html?default`,
+    `websockets/Send-null.any.worker.html?default`,
+    `websockets/interfaces/WebSocket/send/010.html?default`,
+    `websockets/constructor/013.html?default` (013 sends `this.id`, a
+    number; 25 sockets at once work);
+  - a frame with a reserved opcode after open fires no error event through
+    the proxy (epoxy's read loop errors; not traced where the error is lost:
+    the transport's connect, the transport worker or the stand-in):
+    `websockets/interfaces/WebSocket/events/018.html?default`;
+  - a handshake answer with a wrong Sec-WebSocket-Accept is taken: epoxy's
+    `verify()` (client/src/websocket.rs) never checks the accept key, so the
+    socket opens where Chrome fails it:
+    `websockets/security/001.html?default`.
 
 ## wpt-webstorage
 
