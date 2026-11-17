@@ -158,7 +158,8 @@ for (const name of readdirSync(here)) {
 }
 for (const name of readdirSync(join(here, 'resources'))) {
 	if (!['testharnessreport.js', 'testdriver-vendor.js'].includes(name))
-		rmSync(join(here, 'resources', name));
+		// (recursive: a list may vendor a directory, resources/webidl2/)
+		rmSync(join(here, 'resources', name), { recursive: true });
 }
 
 const counts = new Map();
