@@ -854,6 +854,54 @@ const parses = (code) => {
 		module.includes('#STomp_could_not_rewrite_this_script'),
 		module,
 	);
+	// A module's end is refused once the module has parsed, as the engine
+	// checks its exports, so a module V8 refuses for one of its own
+	// module-level early errors is refused with V8's message for it; one V8
+	// takes, or one a page left a comment, template or string open in, is
+	// refused all the same (compiled here in node's V8, never run)
+	const modules = [
+		['a() = 1;\nglobalThis.ran = 1;', /^Export 'eval' is not defined/],
+		['export var z;\nexport { z };', /^Duplicate export of 'z'$/],
+		['export { Number };', /^Export 'Number' is not defined in module$/],
+		['var a; export { a as b, a as b };', /^Duplicate export of 'b'$/],
+		['export { x as eval }; var x;', /^Duplicate export of 'eval'$/],
+		['export { unresolvable };', /^Export 'eval' is not defined/],
+		['globalThis.ran = 1; /* open', /./],
+		['globalThis.ran = 1; `open', /./],
+		["globalThis.ran = 1; var s = 'open\\", /./],
+		['globalThis.ran = 1; label:', /./],
+	].map(([text, want]) => [
+		text,
+		want,
+		cannotRewrite(text, url, config, 'genericModule', 'a test'),
+	]);
+	const compiled = spawnSync(
+		process.execPath,
+		[
+			'--experimental-vm-modules',
+			'--no-warnings',
+			'--input-type=module',
+			'-e',
+			`import vm from 'node:vm';
+const answers = [];
+for (const text of JSON.parse(process.argv[1]))
+	try { new vm.SourceTextModule(text); answers.push(null); }
+	catch (error) { answers.push(String(error.message)); }
+console.log(JSON.stringify(answers));`,
+			JSON.stringify(modules.map(([, , out]) => out)),
+		],
+		{ encoding: 'utf8' },
+	);
+	const answers = JSON.parse(compiled.stdout || '[]');
+	const wrong = modules.filter(
+		([, want], index) =>
+			typeof answers[index] !== 'string' || !want.test(answers[index]),
+	);
+	ok(
+		'a declined module is refused with its own early error, and is refused where V8 would run it',
+		answers.length === modules.length && wrong.length === 0,
+		`${compiled.stderr} ${wrong.map(([text]) => `${JSON.stringify(text)}: ${answers[modules.findIndex(([t]) => t === text)]}`).join(' | ')}`,
+	);
 	ok(
 		'one the browser refuses goes as it came',
 		cannotRewrite('var 1 = 2;', url, config, 'generic', 'a test') ===

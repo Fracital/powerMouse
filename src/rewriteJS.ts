@@ -134,11 +134,30 @@ export const UNREWRITTEN_END =
 	'\n;this.#STomp_could_not_rewrite_this_script;\n';
 
 /**
+ * The end of a module this rewriter cannot rewrite: an export of `eval`, a
+ * name no module can declare (strict code binds neither `eval` nor
+ * `arguments`), which the engine refuses only once the module has parsed,
+ * as it checks the module's exports. So a module the browser refuses for
+ * one of its own module-level early errors is refused with the browser's
+ * message for it, which it reports first: a duplicate export always, an
+ * export of a name the module does not declare when the name sorts before
+ * `eval` (V8 checks the names in order), where the private name of
+ * UNREWRITTEN_END is refused while the module is parsed, before them. A
+ * module that compiles natively is refused all the same. The end holds no
+ * quote, backtick or comment closer: one in it could close a string, a
+ * template or a comment the page left open, and the page's text would
+ * compile and run.
+ */
+export const UNREWRITTEN_MODULE_END =
+	'\n;export { eval }; // #STomp_could_not_rewrite_this_script\n';
+
+/**
  * What a script this rewriter cannot rewrite (its parser refuses it, or
  * the rewrite failed) is answered with. One the browser refuses goes as it
  * came, and the page reads the browser's own SyntaxError. One it would run
  * must not run unrewritten, where its code would reach the real globals:
- * it goes with an end no browser compiles (UNREWRITTEN_END).
+ * it goes with an end no browser compiles (UNREWRITTEN_END, or
+ * UNREWRITTEN_MODULE_END for a module).
  */
 export function cannotRewrite(
 	script: string,
@@ -149,7 +168,9 @@ export function cannotRewrite(
 ): string {
 	const output = unrewritten(script, url, config, why);
 	if (output !== script || refusedHere(script, type)) return output;
-	return script + UNREWRITTEN_END;
+	return (
+		script + (isModuleType(type) ? UNREWRITTEN_MODULE_END : UNREWRITTEN_END)
+	);
 }
 
 /**

@@ -54,12 +54,14 @@ const NEVER_RUN = new Set([
 ]);
 // A script the rewriter cannot rewrite and the browser would run goes with an
 // end no browser compiles (src/rewriteJS.ts UNREWRITTEN_END): refused, with
-// the name in this message, where natively it compiles. The wasm rewriter's
+// the name in this message, where natively it compiles; a module's end
+// (UNREWRITTEN_MODULE_END) is an export of `eval`, refused after the
+// module's own early errors. The wasm rewriter's
 // parser refuses a few shapes V8 takes (an accessor field and other unshipped
 // syntax, `import.defer`, a decorator); those are counted here, not named,
 // since refusing is the safe answer.
 const STOMP_REFUSES =
-	/Private field '#STomp_could_not_rewrite_this_script' must be declared/;
+	/Private field '#STomp_could_not_rewrite_this_script' must be declared|Export 'eval' is not defined in module/;
 // The wasm rewriter splices its edits into the script's own text and keeps
 // the page's escapes and parentheses, so the JavaScript rewriter's printer
 // defects (parentheses dropped around a loop head's target or a class
@@ -250,11 +252,12 @@ for (const [mode, base] of [
 				refusedForStomp++;
 				return;
 			}
-			// a module the rewriter declines that the browser also refuses (an
-			// invalid or duplicate export the rewriter will not rewrite): both
-			// refuse, so nothing of it runs, but STomp's early error is the one
-			// the browser reports instead of the native SyntaxError. Counted,
-			// not a divergence that matters
+			// a script the rewriter declines that the browser also refuses:
+			// both refuse, so nothing of it runs, but STomp's early error is
+			// the one the browser reports instead of the native SyntaxError.
+			// (A module's own export errors come before its end's, so this is
+			// a module whose undeclared export the engine checks after
+			// `eval`.) Counted, not a divergence that matters
 			if (/SyntaxError/.test(said(want)) && STOMP_REFUSES.test(said(have))) {
 				refusedForStomp++;
 				return;

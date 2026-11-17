@@ -178,7 +178,7 @@ const entry = `${OUT}${tag}-entry.mjs`;
 const bundle = `${OUT}${tag}-rewriter.mjs`;
 writeFileSync(
 	entry,
-	`export { modifyJS, UNREWRITTEN_END } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
+	`export { modifyJS, UNREWRITTEN_END, UNREWRITTEN_MODULE_END } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
 export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
 export { parseConfig } from ${JSON.stringify(`${root}src/config.ts`)};
 export { scriptPreamble } from ${JSON.stringify(`${root}src/prewrite.ts`)};
@@ -428,6 +428,7 @@ while (queue.length) {
 		}
 		if (
 			output === text + lib.UNREWRITTEN_END ||
+			output === text + lib.UNREWRITTEN_MODULE_END ||
 			(output === text && warned.length)
 		) {
 			result.verdict = 'declined';
