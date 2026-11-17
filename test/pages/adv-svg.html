@@ -1,0 +1,247 @@
+<!doctype html>
+<title>ADV SVG</title>
+<pre id="result">pending</pre>
+<script src="adv-harness.js"></script>
+<script>
+	// SVG's legacy xlink:href under any prefix bound to the xlink namespace
+	// (setAttributeNS with x:href, an attribute node, an XML document's own
+	// prefix), and SMIL animations whose attributeName is a link's href:
+	// natively an SVG script loads and runs the URL, an SVG link runs a
+	// javascript: URL or navigates on click, and an animated href reaches
+	// its target even when the target appears later. A payload that ran
+	// with another top is a leak; a load or navigation whose URL names this
+	// page's site and the probe must go through the proxy (the suite fails
+	// on any request past it).
+	const R = __advRecord;
+	const A = __advAsync;
+	const C = __advPayload;
+	const SVG = 'http://www.w3.org/2000/svg';
+	const XLINK = 'http://www.w3.org/1999/xlink';
+	const XMLNS = 'http://www.w3.org/2000/xmlns/';
+	const route = (name, fn) => {
+		R(name, 'did-not-run');
+		try {
+			fn(C(name));
+		} catch (error) {
+			R(name, undefined, error);
+		}
+	};
+	const data = (p) => 'data:text/javascript,' + encodeURIComponent(p);
+	// a page of this site that reports under the probe's name, where a link
+	// takes its frame
+	const landing = (name) =>
+		new URL('adv-svg-landed.html?w=' + encodeURIComponent(name), location.href)
+			.href;
+	// an absolute URL of this site that names the probe
+	const away = (name) =>
+		new URL('adv-svg-missing?w=' + encodeURIComponent(name), location.href)
+			.href;
+	// an <svg> in `doc` with the q prefix bound to xlink, connected
+	const svgIn = (doc = document) => {
+		const svg = doc.createElementNS(SVG, 'svg');
+		svg.setAttributeNS(XMLNS, 'xmlns:q', XLINK);
+		doc.body.append(svg);
+		return svg;
+	};
+	const el = (doc, name, attributes = {}) => {
+		const element = doc.createElementNS(SVG, name);
+		for (const [key, value] of Object.entries(attributes))
+			element.setAttribute(key, value);
+		return element;
+	};
+	const click = (element) =>
+		element.dispatchEvent(
+			new MouseEvent('click', { bubbles: true, cancelable: true }),
+		);
+	// a frame of this page to navigate, so the page itself stays
+	const frame = () => {
+		const f = document.createElement('iframe');
+		document.body.append(f);
+		return f.contentDocument;
+	};
+	const qhref = (value) => {
+		const attribute = document.createAttributeNS(XLINK, 'q:href');
+		attribute.value = value;
+		return attribute;
+	};
+
+	// (a) an SVG script's xlink:href by another prefix
+	route('svg script setAttributeNS(xlink, x:href, data:)', (p) => {
+		const s = el(document, 'script');
+		s.setAttributeNS(XLINK, 'x:href', data(p));
+		svgIn().append(s);
+	});
+	route('svg script setAttributeNodeNS(q:href data:)', (p) => {
+		const s = el(document, 'script');
+		s.setAttributeNodeNS(qhref(data(p)));
+		svgIn().append(s);
+	});
+	route('svg script attributes.setNamedItemNS(q:href data:)', (p) => {
+		const s = el(document, 'script');
+		s.attributes.setNamedItemNS(qhref(data(p)));
+		svgIn().append(s);
+	});
+	route('svg script q:href attribute node value = data:', (p) => {
+		const s = el(document, 'script');
+		s.setAttributeNS(XLINK, 'q:href', 'data:,');
+		s.getAttributeNodeNS(XLINK, 'href').value = data(p);
+		svgIn().append(s);
+	});
+	route('svg script x:href set connected', (p) => {
+		const s = el(document, 'script');
+		svgIn().append(s);
+		s.setAttributeNS(XLINK, 'x:href', data(p));
+	});
+	route('DOMParser svg script q:href imported', (p) => {
+		const parsed = new DOMParser().parseFromString(
+			'<svg xmlns="http://www.w3.org/2000/svg" xmlns:q="http://www.w3.org/1999/xlink"><script q:href="' +
+				data(p).replace(/&/g, '&amp;').replace(/"/g, '&quot;') +
+				'"/></svg>',
+			'image/svg+xml',
+		);
+		document.body.append(document.importNode(parsed.documentElement, true));
+	});
+	route('svg script x:href absolute URL', () => {
+		const s = el(document, 'script');
+		s.setAttributeNS(XLINK, 'x:href', away('svg script x:href'));
+		svgIn().append(s);
+	});
+	// a standalone SVG document whose own prefix for xlink is q
+	R('svg document script q:href', 'did-not-run');
+	R('svg document a q:href javascript: click', 'did-not-run');
+	{
+		const f = document.createElement('iframe');
+		f.src = 'adv-svg-doc.svg';
+		document.body.append(f);
+	}
+
+	// (b) an SVG link's xlink:href by another prefix
+	route('svg a setAttributeNS(xlink, x:href, javascript:) click', (p) => {
+		const a = el(document, 'a');
+		a.setAttributeNS(XLINK, 'x:href', 'javascript:' + p);
+		svgIn().append(a);
+		click(a);
+	});
+	route('svg a setAttributeNodeNS(q:href javascript:) click', (p) => {
+		const a = el(document, 'a');
+		a.setAttributeNodeNS(qhref('javascript:' + p));
+		svgIn().append(a);
+		click(a);
+	});
+	route('DOMParser svg a q:href javascript: imported click', (p) => {
+		const parsed = new DOMParser().parseFromString(
+			'<svg xmlns="http://www.w3.org/2000/svg" xmlns:q="http://www.w3.org/1999/xlink"><a q:href="javascript:' +
+				p.replace(/&/g, '&amp;').replace(/"/g, '&quot;') +
+				'"/></svg>',
+			'image/svg+xml',
+		);
+		const svg = document.importNode(parsed.documentElement, true);
+		document.body.append(svg);
+		click(svg.firstChild);
+	});
+	route('svg a x:href absolute URL click', () => {
+		const doc = frame();
+		const a = el(doc, 'a');
+		a.setAttributeNS(
+			XLINK,
+			'x:href',
+			landing('svg a x:href absolute URL click'),
+		);
+		svgIn(doc).append(a);
+		click(a);
+	});
+
+	// (c) animations of a link's or an image's href
+	route('svg set attributeName=q:href to=javascript: click', (p) => {
+		const a = el(document, 'a');
+		a.append(
+			el(document, 'set', { attributeName: 'q:href', to: 'javascript:' + p }),
+		);
+		svgIn().append(a);
+		setTimeout(() => click(a), 300);
+	});
+	route('svg set late a target to=javascript: click', (p) => {
+		const svg = svgIn();
+		svg.append(
+			el(document, 'set', {
+				attributeName: 'href',
+				href: '#adv-late-js',
+				to: 'javascript:' + p,
+			}),
+		);
+		setTimeout(() => {
+			const a = el(document, 'a', { id: 'adv-late-js' });
+			svg.append(a);
+			setTimeout(() => click(a), 300);
+		}, 100);
+	});
+	route('svg set late a target to=absolute URL click', () => {
+		const doc = frame();
+		const svg = svgIn(doc);
+		svg.append(
+			el(doc, 'set', {
+				attributeName: 'href',
+				href: '#late',
+				to: landing('svg set late a target to=absolute URL click'),
+			}),
+		);
+		setTimeout(() => {
+			const a = el(doc, 'a', { id: 'late' });
+			svg.append(a);
+			setTimeout(() => click(a), 300);
+		}, 100);
+	});
+	const lateImage = (name, animation) =>
+		route(name, () => {
+			const svg = svgIn();
+			const id = 'adv-' + name.replace(/\W+/g, '-');
+			svg.append(
+				el(document, animation[0], {
+					...animation[1](away(name)),
+					href: '#' + id,
+				}),
+			);
+			setTimeout(
+				() => svg.append(el(document, 'image', { id, width: 1, height: 1 })),
+				100,
+			);
+		});
+	lateImage('svg set late image target to=absolute URL', [
+		'set',
+		(u) => ({ attributeName: 'href', to: u }),
+	]);
+	lateImage('svg animate late image target values=absolute URL', [
+		'animate',
+		(u) => ({ attributeName: 'href', values: u, dur: '100s' }),
+	]);
+	lateImage('svg set late image target attributeName=q:href', [
+		'set',
+		(u) => ({ attributeName: 'q:href', to: u }),
+	]);
+	route('svg set retargeted to an image', () => {
+		const name = 'svg set retargeted to an image';
+		const svg = svgIn();
+		svg.append(el(document, 'rect', { id: 'adv-retarget-1' }));
+		const set = el(document, 'set', {
+			attributeName: 'href',
+			href: '#adv-retarget-1',
+			to: away(name),
+		});
+		svg.append(set);
+		setTimeout(() => {
+			svg.append(
+				el(document, 'image', { id: 'adv-retarget-2', width: 1, height: 1 }),
+			);
+			set.setAttribute('href', '#adv-retarget-2');
+		}, 100);
+	});
+	route('svg set image attributeName=q:href', () => {
+		const name = 'svg set image attributeName=q:href';
+		const image = el(document, 'image', { width: 1, height: 1 });
+		image.append(
+			el(document, 'set', { attributeName: 'q:href', to: away(name) }),
+		);
+		svgIn().append(image);
+	});
+	__advFinish(3000);
+</script>

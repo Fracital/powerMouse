@@ -1,0 +1,146 @@
+<!doctype html>
+<title>svg xlink</title>
+<svg id="root" width="200" height="50" xmlns="http://www.w3.org/2000/svg"></svg>
+<script>
+	// SVG's legacy xlink:href under another prefix (x:href, q:href) and SMIL
+	// animations of an href, set every way a page can: what each element
+	// reads back, which scripts run, and which loads start (each URL marked
+	// ?w=<way>, answering 404). The suite compares all of it with the page
+	// loaded natively.
+	const SVG = 'http://www.w3.org/2000/svg';
+	const XLINK = 'http://www.w3.org/1999/xlink';
+	const XMLNS = 'http://www.w3.org/2000/xmlns/';
+	const state = (window.__svgXlink = { ran: [], read: {}, done: false });
+	window.__svgXlinkRan = (way) => state.ran.push(way);
+	const root = document.getElementById('root');
+	root.setAttributeNS(XMLNS, 'xmlns:q', XLINK);
+	const url = (way) => 'svg-xlink-missing?w=' + encodeURIComponent(way);
+	const el = (name, attributes = {}) => {
+		const element = document.createElementNS(SVG, name);
+		for (const [key, value] of Object.entries(attributes))
+			element.setAttribute(key, value);
+		return element;
+	};
+	const script = (way) =>
+		'data:text/javascript,' +
+		encodeURIComponent('__svgXlinkRan(' + JSON.stringify(way) + ')');
+	const qhref = (value) => {
+		const attribute = document.createAttributeNS(XLINK, 'q:href');
+		attribute.value = value;
+		return attribute;
+	};
+	const read = (name, element) => {
+		state.read[name] = {
+			names: element.getAttributeNames(),
+			baseVal: element.href.baseVal,
+			ns: element.getAttributeNS(XLINK, 'href'),
+			x: element.getAttribute('x:href'),
+			q: element.getAttribute('q:href'),
+			href: element.getAttribute('href'),
+			html: element.outerHTML,
+		};
+	};
+	// scripts by each way of setting an xlink:href of another prefix
+	{
+		const s = el('script');
+		s.setAttributeNS(XLINK, 'x:href', script('setAttributeNS x:href'));
+		root.append(s);
+		read('script setAttributeNS x:href', s);
+	}
+	{
+		const s = el('script');
+		s.setAttributeNodeNS(qhref(script('setAttributeNodeNS q:href')));
+		root.append(s);
+	}
+	{
+		const s = el('script');
+		s.attributes.setNamedItemNS(qhref(script('setNamedItemNS q:href')));
+		root.append(s);
+	}
+	{
+		// of no namespace, q:href is no reference: nothing runs
+		const s = el('script');
+		s.setAttribute('q:href', script('setAttribute q:href'));
+		root.append(s);
+		read('script setAttribute q:href', s);
+	}
+	// an image by x:href, and its href.baseVal written
+	{
+		const image = el('image', { width: 1, height: 1 });
+		image.setAttributeNS(XLINK, 'x:href', url('image x:href'));
+		root.append(image);
+		read('image x:href', image);
+		image.href.baseVal = url('image x:href baseVal');
+		read('image x:href after baseVal', image);
+	}
+	{
+		const use = el('use');
+		use.setAttributeNS(XLINK, 'xlink:href', '#a');
+		root.append(use);
+		use.href.baseVal = '#b';
+		read('use xlink:href after baseVal', use);
+	}
+	// animations: a link's href by q:href, values, a late target, a
+	// retarget, an image's href by q:href
+	const links = {};
+	{
+		const a = el('a');
+		a.append(
+			el('set', { attributeName: 'q:href', to: url('link set q:href') }),
+		);
+		root.append(a);
+		links['set q:href'] = a;
+	}
+	{
+		const a = el('a', { href: url('link base') });
+		a.append(
+			el('animate', {
+				attributeName: 'href',
+				values: url('link values 1') + ';' + url('link values 2'),
+				dur: '100s',
+			}),
+		);
+		root.append(a);
+		links['animate values'] = a;
+	}
+	root.append(
+		el('set', { attributeName: 'href', href: '#late-a', to: url('late a') }),
+	);
+	root.append(
+		el('set', {
+			attributeName: 'href',
+			href: '#late-image',
+			to: url('late image'),
+		}),
+	);
+	const retarget = el('set', {
+		attributeName: 'href',
+		href: '#retarget-1',
+		to: url('retarget'),
+	});
+	root.append(el('rect', { id: 'retarget-1' }), retarget);
+	{
+		const image = el('image', { x: 100, width: 1, height: 1 });
+		image.append(
+			el('set', { attributeName: 'q:href', to: url('image set q:href') }),
+		);
+		root.append(image);
+	}
+	setTimeout(() => {
+		const a = el('a', { id: 'late-a' });
+		root.append(a);
+		links['late target'] = a;
+		root.append(el('image', { id: 'late-image', x: 100, width: 1, height: 1 }));
+		root.append(el('image', { id: 'retarget-2', x: 100, width: 1, height: 1 }));
+		retarget.setAttribute('href', '#retarget-2');
+	}, 200);
+	setTimeout(() => {
+		for (const [name, a] of Object.entries(links))
+			state.read['animVal ' + name] = {
+				animVal: a.href.animVal,
+				baseVal: a.href.baseVal,
+			};
+		state.ran.sort();
+		state.done = true;
+	}, 1500);
+</script>

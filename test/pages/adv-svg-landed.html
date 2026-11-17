@@ -1,0 +1,12 @@
+<!doctype html>
+<title>ADV SVG LANDED</title>
+<script>
+	// where adv-svg.html's SVG links take their frame: the probe named in
+	// the query reports what this document saw (its top should be the page
+	// that made the frame)
+	parent.__advChild(
+		new URLSearchParams(location.search).get('w'),
+		top === parent ? 'parent' : top === window ? 'self' : 'OTHER-WINDOW',
+		location.href,
+	);
+</script>

@@ -4531,16 +4531,38 @@ export function registerRewrites(
 		bare: new BareCompatibleClient(transport),
 	};
 
-	// binary:set is a srcset candidate (routeImageSet), loaded the same way
+	// binary:set is a srcset candidate (routeImageSet), loaded the same way.
+	// A file's route hands on the body as the site sent it: a frame that
+	// navigates to one (an SVG animation's value, routed as a file before
+	// its target was known, reaching a link) would show markup as written,
+	// its scripts running unrewritten on the proxy's origin. Such a
+	// navigation goes on to the document's own address, as a link's does
+	const files = genericForward(
+		rewriter,
+		undefined,
+		(resource) => routeBinary(resource),
+		undefined,
+		undefined,
+	);
 	router.routes.set(
 		/^\/binary(?::set)?\//,
-		genericForward(
-			rewriter,
-			undefined,
-			(resource) => routeBinary(resource),
-			undefined,
-			undefined,
-		),
+		(serverRequest, resolved, context) => {
+			if (
+				serverRequest.mode !== 'navigate' ||
+				!DOCUMENT_DESTINATIONS.has(serverRequest.destination)
+			)
+				return files(serverRequest, resolved, context);
+			const oURL = new URL(serverRequest.url);
+			const { url } = parseRoutedURL(
+				serverRequest.url,
+				rewriter.codec,
+				`${oURL.origin}${rewriter.directory}`,
+			);
+			return new Response(undefined, {
+				headers: { location: formLocation(serverRequest, oURL, url) },
+				status: 307,
+			});
+		},
 	);
 
 	// used by the controller (over RPC) to turn a URL into a frame destination

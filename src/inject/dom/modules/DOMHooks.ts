@@ -127,6 +127,12 @@ const MARKUP_INSERTS = [
 ] as const;
 const XLINK_NAMESPACE = 'http://www.w3.org/1999/xlink';
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+/** an href by a prefix other than xlink (x:href), which may be xlink's */
+const otherXlinkPrefix = (name: string) =>
+	name.endsWith(':href') &&
+	name !== 'xlink:href' &&
+	!name.startsWith(ORIGINAL_ATTRIBUTE) &&
+	name.indexOf(':') === name.length - 5;
 
 /**
  * Whether the hooks are working on `element` (inside usePrototype with the
@@ -563,7 +569,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		}
 		return (
 			this.#hookedNames.has(attribute) ||
-			this.#hookedSets.some((names) => names.has(attribute))
+			this.#hookedSets.some((names) => names.has(attribute)) ||
+			otherXlinkPrefix(attribute)
 		);
 	}
 	/** the attribute hooks of `attribute` on `element` */
@@ -572,6 +579,22 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		attribute: string,
 	): readonly HookEntry[] {
 		if (!this.hooksAttribute(attribute)) return NO_HOOKS;
+		// the browser finds an xlink:href by its namespace, whatever its
+		// prefix (x:href, an XML document's own): its hooks are xlink:href's,
+		// called with the name it has. A q:href of no namespace is no link
+		if (otherXlinkPrefix(attribute)) {
+			const node = nativeElement.getAttributeNode.call(element, attribute);
+			if (
+				node
+					? node.namespaceURI !== XLINK_NAMESPACE
+					: !nativeElement.hasAttribute.call(
+							element,
+							ORIGINAL_ATTRIBUTE + attribute,
+						)
+			)
+				return NO_HOOKS;
+			attribute = 'xlink:href';
+		}
 		// HTML hooks are keyed by the uppercase nodeName of an HTML document;
 		// an XHTML document's elements carry the same names in lowercase
 		const name =
@@ -2627,7 +2650,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					if (
 						args.length < 3 ||
 						!(that instanceof realm.Element) ||
-						!this.attributeHooks(that, name).length
+						!(
+							this.attributeHooks(that, name).length ||
+							(args[0] === XLINK_NAMESPACE && otherXlinkPrefix(name))
+						)
 					) {
 						Reflect.apply(target, that, args);
 						usePrototype(that, CustomElement.prototype, (element) =>

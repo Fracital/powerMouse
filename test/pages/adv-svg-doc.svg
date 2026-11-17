@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- adv-svg.html: a standalone SVG document whose own prefix for the
+     xlink namespace is q; its script and its link name their URLs by it -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:q="http://www.w3.org/1999/xlink" width="10" height="10">
+	<script q:href="data:text/javascript,parent.__advChild(%22svg%20document%20script%20q%3Ahref%22%2C%20top%20%3D%3D%3D%20parent%20%3F%20%22parent%22%20%3A%20top%20%3D%3D%3D%20window%20%3F%20%22self%22%20%3A%20%22OTHER-WINDOW%22%2C%20location.href)"/>
+	<a id="link" q:href="javascript:parent.__advChild(&quot;svg document a q:href javascript: click&quot;, top === parent ? &quot;parent&quot; : top === window ? &quot;self&quot; : &quot;OTHER-WINDOW&quot;, location.href)"><rect width="10" height="10"/></a>
+	<script>
+		document.getElementById(&apos;link&apos;).dispatchEvent(
+			new MouseEvent(&apos;click&apos;, { bubbles: true, cancelable: true }),
+		);
+	</script>
+</svg>

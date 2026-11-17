@@ -81,6 +81,15 @@ function containerPolicy(element: Element): string {
 
 const HTML_NAMESPACE = 'http://www.w3.org/1999/xhtml';
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+const XLINK_NAMESPACE = 'http://www.w3.org/1999/xlink';
+/** the name of `element`'s xlink:href, whatever its prefix (x:href), else xlink:href */
+const xlinkName = (element: Element): string =>
+	(
+		Reflect.apply(nativeElement.getAttributeNodeNS, element, [
+			XLINK_NAMESPACE,
+			'href',
+		]) as Attr | null
+	)?.name ?? 'xlink:href';
 
 /** the JavaScript MIME type essences (HTML "JavaScript MIME type") */
 const JS_MIME_TYPES = new Set([
@@ -1222,7 +1231,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// sprite, an <feImage>) are copied in a document no worker controls,
 		// the fragment kept on the copy
 		const SVG_LOADS = ['image', 'use', 'feimage'];
-		const svgHook = (attribute: string) => (element: CustomElement) => {
+		// (each is called with the attribute's own name: an xlink:href by
+		// another prefix, x:href, is the same attribute)
+		const svgHook = (element: CustomElement, attribute: string) => {
 			element.restoreAttributesOG(attribute);
 			if (!element.hasAttribute(attribute)) return;
 			const value = element.getAttribute(attribute)!;
@@ -1240,7 +1251,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		};
 		for (const attribute of ['href', 'xlink:href'])
 			domHooksModule.useAttributes(
-				svgHook(attribute),
+				svgHook,
 				// live SVG elements keep their case; the page loader clones them as
 				// HTML elements first, whose nodeName is upper case
 				[
@@ -1265,7 +1276,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			);
 
 		// an SVG script loads its source by href (or xlink:href), like src
-		const svgScriptHook = (attribute: string) => (element: CustomElement) => {
+		const svgScriptHook = (element: CustomElement, attribute: string) => {
 			element.restoreAttributesOG(attribute);
 			if (!element.hasAttribute(attribute)) return;
 			const value = element.getAttribute(attribute)!;
@@ -1286,11 +1297,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			else element.setAttribute(attribute, routed);
 		};
 		for (const attribute of ['href', 'xlink:href'])
-			domHooksModule.useAttributes(svgScriptHook(attribute), [
+			domHooksModule.useAttributes(svgScriptHook, [
 				['script', attribute],
 				['SCRIPT', attribute],
 			]);
 
+		// the values the animations' hooks routed, by route: what an animated
+		// href's animVal reads back
+		const animatedValues = new Map<string, string>();
 		// an SVG reference's `href` is an SVGAnimatedString: its baseVal and
 		// animVal read the attribute the page wrote (the hooked getAttribute),
 		// setting baseVal writes through the hooked setAttribute, so it routes
@@ -1316,6 +1330,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				});
 			}
 			const animated = global.SVGAnimatedString?.prototype;
+			const createSVG = global.Document.prototype.createElementNS;
+			const routedBases = new WeakMap<Element, [string, string]>();
+			const baseGet =
+				animated && Reflect.getOwnPropertyDescriptor(animated, 'baseVal')?.get;
 			if (animated)
 				for (const property of ['baseVal', 'animVal']) {
 					const descriptor = Reflect.getOwnPropertyDescriptor(
@@ -1330,9 +1348,24 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							(target, that, args) => {
 								const owner = owners.get(that);
 								if (!owner) return Reflect.apply(target, that, args);
+								// an animation running on the href: the value it set,
+								// as the page wrote it (animatedValues)
+								if (property === 'animVal' && baseGet) {
+									const live = Reflect.apply(target, that, args) as string;
+									if (live !== Reflect.apply(baseGet, that, []))
+										return animatedValues.get(live) ?? live;
+								}
+								// a baseVal set where only an xlink:href is (below)
+								const set = routedBases.get(owner);
+								if (
+									set &&
+									baseGet &&
+									Reflect.apply(baseGet, that, []) === set[0]
+								)
+									return set[1];
 								return (
 									owner.getAttribute(
-										owner.hasAttribute('href') ? 'href' : 'xlink:href',
+										owner.hasAttribute('href') ? 'href' : xlinkName(owner),
 									) ?? ''
 								);
 							},
@@ -1343,7 +1376,27 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 									(target, that, args) => {
 										const owner = owners.get(that);
 										if (!owner) return Reflect.apply(target, that, args);
-										owner.setAttribute('href', String(args[0]));
+										const value = String(args[0]);
+										if (
+											!owner.hasAttribute('href') &&
+											owner.hasAttribute(xlinkName(owner))
+										) {
+											// where only an xlink:href is, Chrome sets the
+											// property alone: the attribute reads as it was and
+											// the element loads the new value, routed as on an
+											// element of its kind (made where nothing loads)
+											const scratch = Reflect.apply(
+												createSVG,
+												inertDocumentOf(realm.document),
+												['http://www.w3.org/2000/svg', owner.localName],
+											) as Element;
+											scratch.setAttribute('href', value);
+											const routed =
+												nativeElement.getAttribute.call(scratch, 'href') ?? '';
+											routedBases.set(owner, [routed, value]);
+											return Reflect.apply(target, that, [routed]);
+										}
+										owner.setAttribute('href', value);
 									},
 								)
 							: undefined,
@@ -1421,7 +1474,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			],
 		);
 
-		const linkHook = (attribute: string) => (element: CustomElement) => {
+		const linkHook = (element: CustomElement, attribute: string) => {
 			element.restoreAttributesOG(attribute);
 
 			if (
@@ -1445,19 +1498,26 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		};
 		// an SVG link's legacy xlink:href is a link as much as its href: a
 		// javascript: URL in it ran as the page wrote it
-		domHooksModule.useAttributes(linkHook('xlink:href'), [['a', 'xlink:href']]);
+		domHooksModule.useAttributes(linkHook, [['a', 'xlink:href']]);
 		// An SVG animation of a link's href (<set attributeName="href"
 		// to="javascript:...">, <animate values="...">) makes its values the
 		// link's while it runs: they are routed the way the attribute itself
 		// is, the link's as a link (which rewrites a javascript: URL's code),
 		// any other reference's as the file it loads. The animation's target is
 		// the element its own href names, else its parent; a value written
-		// before either is known is routed when it is a javascript: URL (no
-		// reference runs one unrewritten).
+		// before either is known (the element its href names appears later,
+		// and SMIL finds it then) is routed as a file, which is what an image
+		// or a use takes (a link that takes it navigates to the file); a
+		// javascript: URL as a link's always (no reference runs one
+		// unrewritten). The attribute is href by any prefix: the browser
+		// looks the prefix up (q:href, with q bound to xlink), and a prefix
+		// it finds no namespace for animates nothing, whatever its values.
+		// A change of the animation's own href retargets it: routed again.
 		const ANIMATED = ['to', 'from', 'by', 'values'];
 		const animatedTarget = (element: CustomElement): Element | null => {
 			const reference =
-				element.getAttribute('href') ?? element.getAttribute('xlink:href');
+				element.getAttribute('href') ??
+				element.getAttribute(xlinkName(element));
 			if (reference?.startsWith('#'))
 				return (
 					(element.getRootNode() as Document | ShadowRoot).getElementById?.(
@@ -1469,7 +1529,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		const animatedHook = (element: CustomElement) => {
 			element.restoreAttributesOG(...ANIMATED);
 			const name = element.getAttribute('attributeName');
-			if (name !== 'href' && name !== 'xlink:href') return;
+			if (name === null || !/^(?:[^:]+:)?href$/.test(name)) return;
 			const target = animatedTarget(element);
 			const link = target ? target.localName === 'a' : null;
 			const route = (value: string): string => {
@@ -1486,7 +1546,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// (a link's route rewrites a javascript: URL's code)
 					if (link === true || url.url.protocol === 'javascript:')
 						return moduleClient.linkRoute(url);
-					return link === false ? routeBinary(url) : value;
+					return routeBinary(url);
 				} catch (error) {
 					// no URL: the browser makes nothing of it either
 					return value;
@@ -1501,6 +1561,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						? value.split(';').map(route).join(';')
 						: route(value);
 				if (routed === value) continue;
+				if (attribute === 'values') {
+					const written = value.split(';');
+					routed
+						.split(';')
+						.forEach((part, i) => animatedValues.set(part, written[i]));
+				} else animatedValues.set(routed, value);
 				element.setAttributeOG(attribute, value);
 				element.setAttribute(attribute, routed);
 			}
@@ -1508,15 +1574,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		domHooksModule.useAttributes(
 			animatedHook,
 			['set', 'animate'].flatMap((tag) =>
-				[...ANIMATED, 'attributeName'].map((attribute): [string, string] => [
-					tag,
-					attribute,
-				]),
+				[...ANIMATED, 'attributeName', 'href', 'xlink:href'].map(
+					(attribute): [string, string] => [tag, attribute],
+				),
 			),
 		);
 
 		domHooksModule.useAttributes(
-			linkHook('href'),
+			linkHook,
 			[
 				['A', 'href'],
 				['a', 'href'],
