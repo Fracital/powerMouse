@@ -21,6 +21,9 @@ declare const __stompRtcSnap: {
 	postMessage: typeof globalThis.postMessage;
 	ownIterable: typeof import('../../ownIterable').ownIterable;
 	isArray: typeof globalThis.Array.isArray;
+	// (the bundle's String and Array method helpers: build.js appends their
+	// names here, scripts/ownMethods.mjs)
+	ownMethods: Record<string, Function>;
 };
 export const Reflect = __stompRtcSnap.Reflect;
 export const Function = __stompRtcSnap.Function;

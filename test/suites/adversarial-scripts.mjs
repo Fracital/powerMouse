@@ -6,12 +6,9 @@
 import { runGroup } from '../adversarial.mjs';
 
 // The checks of this group that fail on purpose, each with its reason
-// (test/adversarial.mjs, `knownOpen`). A new failure is a regression to fix,
-// or an entry here that says why not.
-const KNOWN_OPEN = {
-	'hostile toLowerCase: as many scripts run as where nothing was replaced':
-		"the inject asks String.prototype.toLowerCase of the page's realm on its way to running markup's scripts, so a page that replaced it has some of them not run (2026-11-16)",
-};
+// (test/adversarial.mjs, `knownOpen`): none on Chrome 157 (2026-11-17).
+// A new failure is a regression to fix, or an entry here that says why not.
+const KNOWN_OPEN = {};
 
 // A hostile frame (adv-hostile-child.html) replaces builtins the browser
 // never asks when it parses markup and runs its scripts: natively as many of

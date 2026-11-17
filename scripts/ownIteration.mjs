@@ -13,6 +13,7 @@
 // syntax is the point: the error message probes of src/inject/errorMessages.ts).
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
+import { ownMethods } from './ownMethods.mjs';
 
 const NAME = 'ownIterable';
 const ITEMS = 'ownItems';
@@ -300,15 +301,21 @@ export function ownIteration(text, file, { topLevel = true } = {}) {
  *   before any page script (a constant table there stays one esbuild can
  *   drop when nothing reads it); in the deferred parts, which may be
  *   evaluated after the page's scripts ran
+ * @param {boolean} methods whether the String and Array method calls of
+ *   the repository's own files go to the snapshot's helpers too
+ *   (scripts/ownMethods.mjs): in the bundles that inject the snapshot
+ *   (esbuild asks only the first onLoad that answers, so both are here)
  * @returns {import('esbuild').Plugin}
  */
-export const ownIterationPlugin = (skip, topLevel) => ({
+export const ownIterationPlugin = (skip, topLevel, methods = false) => ({
 	name: 'own-iteration',
 	setup(pluginBuild) {
 		pluginBuild.onLoad({ filter: /\.(ts|js|mjs)$/ }, async (args) => {
 			if (skip.includes(args.path)) return undefined;
 			const text = await readFile(args.path, 'utf8');
-			const out = ownIteration(text, args.path, { topLevel });
+			let out = ownIteration(text, args.path, { topLevel });
+			if (methods && !args.path.includes('/node_modules/'))
+				out = ownMethods(out ?? text, args.path, { topLevel }) ?? out;
 			if (out === null) return undefined;
 			return {
 				contents: out,

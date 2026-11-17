@@ -28,11 +28,14 @@
 // loops, spreads, destructuring and collections added would be a call the
 // page could have answered otherwise.
 //
-// What this does not cover: the natives the rest of the inject calls. A
-// page that replaces `Array.prototype.includes` (`?case=includes`, which the
-// fixture knows and this suite does not run) still reads its real location,
-// and the inject's other collections and arrays still call the page's
-// methods: open.
+// The String and Array methods the inject calls are its own too
+// (scripts/ownMethods.mjs): `?case=includes` replaces
+// `Array.prototype.includes` (with it the page once read its real
+// location), `stringMethods` and `arrayMethods` replace a dozen of each with
+// methods that answer what they never would.
+//
+// What this does not cover: the natives the rest of the inject calls (the
+// collections' methods, a RegExp's own Symbol.replace and Symbol.split).
 import {
 	done,
 	FIXTURE,
@@ -48,6 +51,9 @@ import {
 
 const CASES = [
 	'none',
+	'includes',
+	'stringMethods',
+	'arrayMethods',
 	'isArrayFalse',
 	'isArrayTrue',
 	'isInteger',

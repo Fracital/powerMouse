@@ -13,6 +13,7 @@ import { build, context, formatMessages } from 'esbuild';
 import { rimraf } from 'rimraf';
 import ts from 'typescript';
 import { ownIterationPlugin } from './scripts/ownIteration.mjs';
+import { ownMethodsFrom, ownMethodsSource } from './scripts/ownMethods.mjs';
 
 const pkg = JSON.parse(await readFile('package.json', 'utf8'));
 const dev = process.argv.includes('--dev');
@@ -91,13 +92,18 @@ const withOwnIterable = {
 	},
 };
 const libGlobals = resolve('src/libGlobals.ts');
-const OWN_ITERABLE_INTO = [snapshot, libGlobals];
+const rtcStackGlobals = resolve('src/inject/dom/rtcStackGlobals.ts');
+const OWN_ITERABLE_INTO = [snapshot, libGlobals, rtcStackGlobals];
 /** a source file's text as the bundles evaluate it (withOwnIterable) */
 function sourceText(file) {
 	const text = readFileSync(file, 'utf8');
 	if (!OWN_ITERABLE_INTO.includes(file)) return text;
+	// (the WebRTC library's String and Array method helpers are the
+	// bundle's, handed over with its other globals)
+	if (file === rtcStackGlobals)
+		return `${text}\n${ownMethodsFrom('__stompRtcSnap.ownMethods')}`;
 	const helper = readFileSync(ownIterableFile, 'utf8');
-	if (file === snapshot) return `${text}\n${helper}`;
+	if (file === snapshot) return `${text}\n${helper}\n${ownMethodsSource()}`;
 	// The light library's is the inject's when it is made for one (its
 	// `realm`, src/inject/rewriter.ts): a copy may be evaluated after the
 	// page's scripts ran, in the page's realm, and the inject took the
@@ -118,6 +124,7 @@ export const ownItems = ownIteration[1];
 const ownIteration = ownIterationPlugin(
 	[snapshot, domSnapshot, ownIterableFile],
 	false,
+	true,
 );
 // (the rewriter library's module statements run when it is evaluated, which
 // may be after the page's scripts ran, in the page's realm: a worker's, a
@@ -587,7 +594,7 @@ const deferredParts = {
 		noSourceMaps,
 		deferredSharing,
 		withOwnIterable,
-		ownIterationPlugin([snapshot, domSnapshot, ownIterableFile], true),
+		ownIterationPlugin([snapshot, domSnapshot, ownIterableFile], true, true),
 	],
 	write: false,
 	metafile: true,
@@ -815,9 +822,10 @@ const builds = [
 		// running after the page's scripts
 		entryPoints: { rtcStack: 'src/inject/dom/rtcStackEntry.ts' },
 		format: 'iife',
-		inject: [resolve('src/inject/dom/rtcStackGlobals.ts')],
+		inject: [rtcStackGlobals],
 		plugins: [
-			ownIterationPlugin([resolve('src/inject/dom/rtcStackGlobals.ts')], true),
+			withOwnIterable,
+			ownIterationPlugin([rtcStackGlobals], true, true),
 		],
 	},
 	{

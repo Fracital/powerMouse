@@ -38,6 +38,59 @@
 					Array.prototype.includes = function () {
 						return false;
 					};
+				// methods of the strings and arrays the helpers make or are
+				// handed, each answering what it never would (put back once
+				// the page read everything: the driver's own code reads the
+				// report with them)
+				var restore = [];
+				var liars = function (proto, answers) {
+					Object.keys(answers).forEach(function (name) {
+						var answer = answers[name];
+						restore[restore.length] = [proto, name, proto[name]];
+						proto[name] = function () {
+							return typeof answer === 'function' ? answer() : answer;
+						};
+					});
+				};
+				if (which === 'stringMethods')
+					liars(String.prototype, {
+						toLowerCase: 'text/plain',
+						toUpperCase: 'TEXT/PLAIN',
+						trim: '',
+						slice: '',
+						substring: '',
+						replace: '',
+						startsWith: false,
+						endsWith: false,
+						includes: false,
+						indexOf: -1,
+						lastIndexOf: -1,
+						charCodeAt: 0,
+						split: function () {
+							return [];
+						},
+					});
+				if (which === 'arrayMethods')
+					liars(Array.prototype, {
+						includes: false,
+						indexOf: -1,
+						lastIndexOf: -1,
+						push: 0,
+						join: '',
+						some: false,
+						every: true,
+						find: undefined,
+						forEach: undefined,
+						slice: function () {
+							return [];
+						},
+						map: function () {
+							return [];
+						},
+						filter: function () {
+							return [];
+						},
+					});
 				if (which === 'isArrayFalse')
 					Array.isArray = function () {
 						return false;
@@ -107,6 +160,8 @@
 				note('landedString', function () {
 					return landed('0');
 				});
+				for (var i = 0; i < restore.length; i++)
+					restore[i][0][restore[i][1]] = restore[i][2];
 				report.done = true;
 				window.__tamper = report;
 			})();

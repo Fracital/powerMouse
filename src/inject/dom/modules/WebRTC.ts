@@ -126,6 +126,10 @@ const snapshot = {
 	postMessage,
 	ownIterable,
 	isArray,
+	// (its String and Array method calls, scripts/ownMethods.mjs)
+	get ownMethods() {
+		return ownMethodHelpers();
+	},
 };
 
 /** the client of a document that has the tables */

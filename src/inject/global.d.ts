@@ -8,3 +8,6 @@ declare var createClient:
 declare var ownIterable: typeof import('../ownIterable').ownIterable;
 declare var ownItems: typeof import('../ownIterable').ownItems;
 declare var isArray: typeof import('../ownIterable').isArray;
+// the String and Array method helpers (scripts/ownMethods.mjs), given the
+// bundles with their snapshot: the table the WebRTC library is handed
+declare var ownMethodHelpers: () => Record<string, Function>;
