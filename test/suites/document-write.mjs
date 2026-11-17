@@ -3,6 +3,8 @@
 // as the browser's own parser would see it: one element, with the inline
 // script and the URLs rewritten. The fixture's /pages/docwrite.html writes
 // each shape and records what the document ended up with.
+// A page that replaced Set and Map before its first write is compared with
+// the page loaded natively (/pages/docwrite-replaced.html).
 import {
 	done,
 	FIXTURE,
@@ -121,5 +123,37 @@ const errors = [
 	...page.errors.filter((e) => !/max cycles/.test(e)),
 ];
 ok('no script errors', errors.length === 0, JSON.stringify(errors));
+
+// a page that replaced Set and Map before its first write: the stream the
+// inject parses writes with is made then (a deferred part), and none of
+// its own state may be the page's classes, as the browser asks neither
+const REPLACED = `${FIXTURE}pages/docwrite-replaced.html`;
+const record = async (frames) => {
+	for (let i = 0; i < 60; i++) {
+		for (const frame of frames()) {
+			const value = await frame
+				.evaluate(() => window.__replaced ?? null)
+				.catch(() => null);
+			if (value) return value;
+		}
+		await sleep(250);
+	}
+	return null;
+};
+const nativeTab = await browser.newPage();
+await nativeTab.goto(REPLACED);
+const nativeReplaced = await record(() => [nativeTab.mainFrame()]);
+await nativeTab.close();
+const replacedTab = await openDemo(browser);
+await submitLanding(replacedTab, REPLACED);
+const proxiedReplaced = await record(() =>
+	replacedTab.frames().filter((f) => /\/stomp\/[\w-]+\/html\//.test(f.url())),
+);
+ok(
+	'a page that replaced Set and Map writes as natively, its classes asked nothing',
+	!!nativeReplaced &&
+		JSON.stringify(proxiedReplaced) === JSON.stringify(nativeReplaced),
+	`native ${JSON.stringify(nativeReplaced)} proxied ${JSON.stringify(proxiedReplaced)}`,
+);
 
 await done(browser);

@@ -33,19 +33,12 @@ const enum State {
 }
 
 // elements whose content the tokenizer takes as text up to the matching end
-// tag (RAWTEXT, RCDATA, script data; noscript counts, scripting being on)
-const RAW_TEXT = new Set([
-	'script',
-	'style',
-	'xmp',
-	'iframe',
-	'noembed',
-	'noframes',
-	'noscript',
-	'textarea',
-	'title',
-	'plaintext',
-]);
+// tag (RAWTEXT, RCDATA, script data; noscript counts, scripting being on),
+// each between spaces. (A string: this is a deferred part, evaluated after
+// the page's scripts, whose top level makes nothing of a global the page
+// may have replaced.)
+const RAW_TEXT =
+	' script style xmp iframe noembed noframes noscript textarea title plaintext ';
 
 const isSpace = (c: string) =>
 	c === ' ' || c === '\t' || c === '\n' || c === '\f' || c === '\r';
@@ -81,7 +74,7 @@ export function completeLength(text: string): number {
 	// the state after the tag just closed by `>`: a raw text element's start
 	// tag switches the tokenizer (plaintext never switches back: held whole)
 	const afterTag = (): State | null => {
-		if (endTag || !RAW_TEXT.has(tagName)) return State.Data;
+		if (endTag || !RAW_TEXT.includes(` ${tagName} `)) return State.Data;
 		if (tagName === 'plaintext') return null;
 		rawTag = tagName;
 		escaped = false;

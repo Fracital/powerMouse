@@ -48,7 +48,7 @@ import type { DeferredParts } from '../deferredParts';
 import { frameWindow } from '../freshContext';
 import type { MarkupContext, ScriptNotes } from '../markupMembers';
 import { responseURLOf } from '../responseDocuments';
-import WriteStream from '../WriteStream';
+import type WriteStream from '../WriteStream';
 import {
 	attributeName,
 	hookWrite,
@@ -705,7 +705,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// native write, taken before the prototype hook below replaces it: the
 		// stream's output and a pending tail go through it
 		const nativeWrite = realm.document.write;
-		const stream = new WriteStream(moduleClient);
+		// the stream (../WriteStream.ts), a deferred part made at a document's
+		// first write: until then nothing is pending to drop or take
+		let stream: WriteStream | undefined;
 
 		// document.open() drops every listener on the window: the modules that
 		// listen there (message filter and tagger, link and navigate hooks)
@@ -718,7 +720,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				if (args.length >= 3) return Reflect.apply(realm.open, realm, args);
 				// a fresh parser with an empty input stream: whatever an earlier
 				// write left unfinished went with the old one
-				if (typeof that === 'object' && that !== null) stream.reset(that);
+				if (typeof that === 'object' && that !== null) stream?.reset(that);
 				const result = Reflect.apply(target, that, args);
 				if (that === realm.document) {
 					moduleClient.opened = true;
@@ -889,6 +891,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				setGlobalParsingState(realm, 'parsingBeforeWrite');
 				let markup: string;
 				try {
+					stream ??= deferred().writeStream(moduleClient);
 					markup = stream.write(document, text, fresh);
 				} finally {
 					setGlobalParsingState(realm, prevState);
@@ -918,7 +921,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		realm.Document.prototype.close = proxyModule.wrapFunction(
 			realm.Document.prototype.close,
 			(target, that, args) => {
-				const tail = stream.take(that);
+				const tail = stream?.take(that);
 				if (tail) Reflect.apply(nativeWrite, that, [trustedHTML(tail)]);
 				const result = Reflect.apply(target, that, args);
 				moduleClient.writtenLoads?.(that as Document);
@@ -931,7 +934,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// into it any more: a write now would open a new document. A tail
 		// left behind is stale, like the browser's at its end of input.
 		const dropAtParserEnd = () => {
-			if (realm.document.readyState !== 'loading') stream.reset(realm.document);
+			if (realm.document.readyState !== 'loading')
+				stream?.reset(realm.document);
 		};
 		const listen = () =>
 			realm.document.addEventListener('readystatechange', dropAtParserEnd);

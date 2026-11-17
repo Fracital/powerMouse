@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>DOCWRITE REPLACED</title>
+	</head>
+	<body>
+		<script>
+			// A page that replaced Set and Map with classes of its own before
+			// its first document.write: the browser's parser asks neither, so
+			// natively the page's classes see no call, and a script written
+			// in two writes runs once. The suite compares the record with the
+			// page loaded natively.
+			const calls = [];
+			const OwnSet = Set;
+			const OwnMap = Map;
+			window.Set = class extends OwnSet {
+				has(value) {
+					calls.push('Set.has ' + value);
+					return super.has(value);
+				}
+			};
+			window.Map = class extends OwnMap {
+				get(key) {
+					calls.push('Map.get ' + key);
+					return super.get(key);
+				}
+			};
+			window.__ran = 0;
+			document.write('<scr');
+			document.write('ipt>window.__ran++;</scr');
+			document.write('ipt><textarea id="t"><b>x</b></text');
+			document.write('area>');
+			window.Set = OwnSet;
+			window.Map = OwnMap;
+		</script>
+		<script>
+			window.__replaced = {
+				ran: window.__ran,
+				textarea: document.getElementById('t')?.value ?? null,
+				calls: calls.join(', '),
+			};
+		</script>
+	</body>
+</html>

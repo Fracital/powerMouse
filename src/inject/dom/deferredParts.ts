@@ -20,6 +20,9 @@
 // (and the client a document opens its WebSockets with, ../bareClient.ts,
 // with the transport it talks over, at its first WebSocket)
 //
+// (and the document.write stream, ./WriteStream.ts with its tokenizer, at a
+// document's first write)
+//
 // (and the handlers of long tasks and long animation frames,
 // ./modules/LongTasks.ts and ./modules/LongFrames.ts, at a document's first
 // such entry)
@@ -58,6 +61,7 @@ import { emulateServiceWorker } from './modules/serviceWorkerEmulation';
 import { openerFacts, opensWithoutOpener } from './openerFacts';
 import { pictureWindows } from './pictureWindows';
 import { sourcePolicy } from './sourcePolicy';
+import { writeStream } from './WriteStream';
 
 const parts = {
 	bareClient,
@@ -84,6 +88,7 @@ const parts = {
 	pictureWindows,
 	openerFacts,
 	opensWithoutOpener,
+	writeStream,
 };
 
 export type DeferredParts = typeof parts;

@@ -247,3 +247,8 @@ export default class WriteStream {
 		return html;
 	}
 }
+
+/** a document's stream, made at its first write (a deferred part) */
+export function writeStream(client: DocumentClient): WriteStream {
+	return new WriteStream(client);
+}
