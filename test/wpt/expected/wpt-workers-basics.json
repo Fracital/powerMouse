@@ -6,10 +6,6 @@
 		"(harness)": "ERROR: Uncaught ReferenceError: SharedArrayBuffer is not defined",
 		"Tests that calling \"worker.postMessage()\" will occur truly in parallel to the main JS thread": "TIMEOUT: Test timed out"
 	},
-	"/workers/Worker_NosniffErr.htm": {
-		"(harness)": "TIMEOUT: ",
-		" Worker with nosniff X-Content-Type-Options header ": "TIMEOUT: Test timed out"
-	},
 	"/workers/dedicated-worker-from-blob-url.window.html": {
 		"Blob URLs should not resolve relative to document base URL.": "FAIL: assert_equals: Should not be able to resolve request with relative file path in blob expected false but got true"
 	},

@@ -4697,6 +4697,13 @@ export function registerRewrites(
 				for (const header of integrityHeaders) {
 					filteredHeaders.delete(header);
 				}
+				// a script keeps the type it came with, so the browser refuses
+				// one whose server says nosniff and names no script type, as
+				// it does natively (a worker's script fires `error`, an
+				// element's too, importScripts throws)
+				const sniffing = headers.get('x-content-type-options');
+				if (sniffing !== null)
+					filteredHeaders.set('x-content-type-options', sniffing);
 			},
 		);
 
