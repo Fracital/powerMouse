@@ -1,24 +1,24 @@
 // snapshots of classes that are replaced/modified during module apply time
 // exports automatically provided to modules in bundle
 
+// (the realm's Reflect, named once: each method is bound to it)
+const nativeReflect = globalThis.Reflect;
+
 export const Reflect: typeof globalThis.Reflect = {
-	apply: globalThis.Reflect.apply.bind(globalThis.Reflect),
-	construct: globalThis.Reflect.construct.bind(globalThis.Reflect),
-	defineProperty: globalThis.Reflect.defineProperty.bind(globalThis.Reflect),
-	deleteProperty: globalThis.Reflect.deleteProperty.bind(globalThis.Reflect),
-	get: globalThis.Reflect.get.bind(globalThis.Reflect),
-	has: globalThis.Reflect.has.bind(globalThis.Reflect),
-	getOwnPropertyDescriptor: globalThis.Reflect.getOwnPropertyDescriptor.bind(
-		globalThis.Reflect,
-	),
-	getPrototypeOf: globalThis.Reflect.getPrototypeOf.bind(globalThis.Reflect),
-	isExtensible: globalThis.Reflect.isExtensible.bind(globalThis.Reflect),
-	ownKeys: globalThis.Reflect.ownKeys.bind(globalThis.Reflect),
-	preventExtensions: globalThis.Reflect.preventExtensions.bind(
-		globalThis.Reflect,
-	),
-	set: globalThis.Reflect.set.bind(globalThis.Reflect),
-	setPrototypeOf: globalThis.Reflect.setPrototypeOf.bind(globalThis.Reflect),
+	apply: nativeReflect.apply.bind(nativeReflect),
+	construct: nativeReflect.construct.bind(nativeReflect),
+	defineProperty: nativeReflect.defineProperty.bind(nativeReflect),
+	deleteProperty: nativeReflect.deleteProperty.bind(nativeReflect),
+	get: nativeReflect.get.bind(nativeReflect),
+	has: nativeReflect.has.bind(nativeReflect),
+	getOwnPropertyDescriptor:
+		nativeReflect.getOwnPropertyDescriptor.bind(nativeReflect),
+	getPrototypeOf: nativeReflect.getPrototypeOf.bind(nativeReflect),
+	isExtensible: nativeReflect.isExtensible.bind(nativeReflect),
+	ownKeys: nativeReflect.ownKeys.bind(nativeReflect),
+	preventExtensions: nativeReflect.preventExtensions.bind(nativeReflect),
+	set: nativeReflect.set.bind(nativeReflect),
+	setPrototypeOf: nativeReflect.setPrototypeOf.bind(nativeReflect),
 };
 
 // The same methods under names of their own: build.js defines each
