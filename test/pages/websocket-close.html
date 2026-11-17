@@ -11,7 +11,9 @@
 			// on), a server that closes with no status, with a code and a
 			// reason (4000, 1000, 1001 with none, a UTF-8 reason, a 123-byte
 			// one) and without a close frame at all, and the page closing with
-			// no code and with one.
+			// no code and with one. First, a page that replaced EventTarget
+			// before its first WebSocket (?port /code): natively the socket's
+			// events go through none of the page's class.
 			const params = new URLSearchParams(location.search);
 			const base = 'ws://127.0.0.1:' + params.get('port');
 			const run = (url, onopen) =>
@@ -33,6 +35,25 @@
 				});
 			(async () => {
 				const results = {};
+				const OwnEventTarget = EventTarget;
+				const calls = [];
+				window.EventTarget = class extends OwnEventTarget {
+					constructor() {
+						super();
+						calls.push('construct');
+					}
+					addEventListener(...args) {
+						calls.push('listen ' + args[0]);
+						return super.addEventListener(...args);
+					}
+					dispatchEvent(event) {
+						calls.push('dispatch ' + event.type);
+						return super.dispatchEvent(event);
+					}
+				};
+				results.replacedEventTarget =
+					(await run(base + '/code')) + '; page class: ' + calls.join(' ');
+				window.EventTarget = OwnEventTarget;
 				results.refused = await run(
 					'ws://127.0.0.1:' + params.get('refused') + '/',
 				);

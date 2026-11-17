@@ -12,6 +12,7 @@ import { workerKindPartition } from '../../partition';
 import type { EmulateInfo } from '../../serviceWorkerTypes';
 import { CSP_WORKER, WORKER_PARTITION } from '../../transport/messages';
 import { replayOf } from '../../transport/ports';
+import { bareClient } from '../bareClient';
 import Client, { type HandedModules } from '../Client';
 import ProxyModule from '../modules/Proxy';
 import { trustTaggedViolations } from '../violationViews';
@@ -353,6 +354,9 @@ export default class WorkerClient extends Client {
 	/** the `sw:` route's postamble: the script's top level ran to its end */
 	serviceWorkerEvaluated() {
 		this.getModule(ServiceWorkerGlobalModule)!.evaluated();
+	}
+	protected override makeBare(port: MessagePort | Promise<MessagePort>) {
+		return bareClient(port);
 	}
 	protected override ownTransportPort(): MessagePort | Promise<MessagePort> {
 		if (!transportPort)

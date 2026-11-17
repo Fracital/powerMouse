@@ -1,6 +1,6 @@
 import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync, watch } from 'node:fs';
+import { readFileSync, realpathSync, watch } from 'node:fs';
 import {
 	copyFile,
 	mkdir,
@@ -416,6 +416,8 @@ const rewriterLibrary = {
  */
 const DEFERRED_FILES = new Set(
 	[
+		'node_modules/@mercuryworkshop/proxy-transports/dist/index.mjs',
+		'src/inject/bareClient.ts',
 		'src/inject/cookieStoreMethods.ts',
 		'src/inject/dom/ancestorOriginsList.ts',
 		'src/inject/dom/attributeViewMethods.ts',
@@ -437,7 +439,12 @@ const DEFERRED_FILES = new Set(
 		'src/inject/webTransport.ts',
 		'src/inject/webTransportStandIn.ts',
 		'src/inject/xhrChecks.ts',
-	].map((file) => resolve(file)),
+		'src/transport/bodyPort.ts',
+		'src/transport/RemoteTransport.ts',
+		'src/transport/rpc.ts',
+		// (as esbuild names a module: by its real path, a linked node_modules
+		// followed)
+	].map((file) => realpathSync(resolve(file))),
 );
 const DEFERRED_ENTRY = 'src/inject/dom/deferredParts.ts';
 /** what the parts read of the bundle: by file (from the root), the names */

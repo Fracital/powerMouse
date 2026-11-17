@@ -703,6 +703,9 @@ export default class DocumentClient extends Client {
 	 * top to reach (sandboxed to an opaque origin) is its own, and holds
 	 * none.
 	 */
+	protected override makeBare(port: MessagePort | Promise<MessagePort>) {
+		return deferred().bareClient(port);
+	}
 	protected override moduleHolder(): Client | null {
 		return this.#topClient();
 	}

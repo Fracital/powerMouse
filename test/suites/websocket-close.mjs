@@ -9,6 +9,9 @@
 // by remote" (it never read the frame), so a page saw 1000 for 4000 "srv",
 // 1001 and a connection that ended without a close frame alike (fixed by
 // deploy/epoxy/patches, which pass the frame's status and reason on).
+// A page that replaced EventTarget before its first WebSocket sees the
+// socket's events go through none of its class, as natively (the client
+// the inject opens sockets with is evaluated at that first socket).
 // Compared with the page loaded natively, in both modes, against a server
 // of the suite's own.
 import { createServer } from 'node:net';
@@ -86,6 +89,7 @@ for (const [mode, base] of [
 		page.frames().filter((f) => /\/stomp\/[\w-]+\/html\//.test(f.url())),
 	);
 	for (const name of [
+		'replacedEventTarget',
 		'refused',
 		'serverNoStatus',
 		'serverCode',

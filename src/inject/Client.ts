@@ -1,4 +1,4 @@
-import { BareCompatibleClient } from '@mercuryworkshop/proxy-transports';
+import type { BareCompatibleClient } from '@mercuryworkshop/proxy-transports';
 import {
 	FP_DEFAULT_ON_SURFACES,
 	sameSurfaceSet,
@@ -52,7 +52,6 @@ import {
 	privateChannel,
 	startPort,
 } from '../transport/ports';
-import RemoteTransport from '../transport/RemoteTransport';
 import { fragmentOf } from '../urlShape';
 import { BUILD } from '../version';
 import { LINK_SEGMENT } from '../visited';
@@ -784,12 +783,19 @@ export default class Client {
 	 * don't hold a port.
 	 */
 	get bare(): BareCompatibleClient {
-		if (!this.#bare)
-			this.#bare = new BareCompatibleClient(
-				new RemoteTransport(this.ownTransportPort()),
-			);
+		if (!this.#bare) this.#bare = this.makeBare(this.ownTransportPort());
 
 		return this.#bare;
+	}
+	/**
+	 * The client over `port` (src/inject/bareClient.ts): a document's bundle
+	 * has it as a deferred part, a worker's carries it
+	 */
+	protected makeBare(
+		port: MessagePort | Promise<MessagePort>,
+	): BareCompatibleClient {
+		void port;
+		throw new TypeError('Stomp: no transport client here');
 	}
 	/**
 	 * The port this context's own transport talks over.

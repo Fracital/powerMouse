@@ -54,6 +54,10 @@ export const EventSource = globalThis.EventSource;
 
 export const WebSocket = globalThis.WebSocket;
 
+// (the transport client's WebSocket class extends it, src/inject/bareClient.ts:
+// a deferred part, evaluated after the page's scripts)
+export const EventTarget = globalThis.EventTarget;
+
 export const Function = globalThis.Function;
 
 export function bindDescriptors<T extends object>(

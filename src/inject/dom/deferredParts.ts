@@ -17,6 +17,9 @@
 // (and what a legacy-encoded document encodes a URL's query and a form's
 // submission with, ./legacyEncoding.ts, at its first such URL or form)
 //
+// (and the client a document opens its WebSockets with, ../bareClient.ts,
+// with the transport it talks over, at its first WebSocket)
+//
 // (and the WebTransport stand-in, ../webTransportStandIn.ts, with what
 // carries its sessions, ../webTransport.ts, once a realm makes its first
 // session)
@@ -32,6 +35,7 @@
 // have run, so their top level reads no global (a page may have replaced
 // it): constants and functions only, as the bundle's code reads what it
 // needs when it is called.
+import { bareClient } from '../bareClient';
 import { cookieStoreMethods } from '../cookieStoreMethods';
 import { recordSize } from '../idbSize';
 import { bucketMethods } from '../storageBucketMethods';
@@ -50,6 +54,7 @@ import { pictureWindows } from './pictureWindows';
 import { sourcePolicy } from './sourcePolicy';
 
 const parts = {
+	bareClient,
 	cookieStoreMethods,
 	relayBeacon,
 	ancestorOriginsList,
