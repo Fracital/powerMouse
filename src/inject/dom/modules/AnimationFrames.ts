@@ -2,6 +2,7 @@ import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { LazyMap, LazySet } from '../../ownCollections';
 import type DocumentClient from '../Client';
+import { addDocumentOpenListener } from '../Client';
 
 /**
  * Chrome stops updating the rendering of a frame that is cross-origin to the
@@ -28,6 +29,13 @@ import type DocumentClient from '../Client';
  * never the parent's layout. A ResizeObserver would not do: a shown frame of
  * 0x0 (Google Sign-In's, until it has measured) reports the size a hidden one
  * does.
+ *
+ * An observer rooted at another document is that document's to keep: Blink
+ * holds it, with its callback and so the realm that made it, until it is
+ * disconnected, whatever became of the frame. The observers are
+ * disconnected when the document is left (its frame removed or navigated),
+ * or every frame of another site the page ever had stayed in memory with
+ * its whole realm, about a megabyte each, for as long as the page.
  */
 export default class AnimationFramesModule extends Module<DocumentClient> {
 	apply() {
@@ -37,6 +45,9 @@ export default class AnimationFramesModule extends Module<DocumentClient> {
 		if (typeof global.IntersectionObserver !== 'function') return;
 		const proxyModule = moduleClient.getModule(ProxyModule)!;
 		const NativeObserver = global.IntersectionObserver;
+		const nativeObserve = NativeObserver.prototype.observe;
+		const nativeDisconnect = NativeObserver.prototype.disconnect;
+		const nativeAdd = global.EventTarget.prototype.addEventListener;
 		const nativeRequest = global.requestAnimationFrame;
 		const nativeCancel = global.cancelAnimationFrame;
 		const reportError = global.reportError;
@@ -66,6 +77,7 @@ export default class AnimationFramesModule extends Module<DocumentClient> {
 		// frame counts as shown (Chrome too runs a hidden frame's first frames)
 		const unrendered = new LazySet<Element>();
 		let watching = false;
+		const observers: IntersectionObserver[] = [];
 		// One observer per element, which its callback names from here, never
 		// by `entry.target`: an entry is an object of this realm, and its
 		// target getter makes the element's wrapper in this realm when the
@@ -95,10 +107,12 @@ export default class AnimationFramesModule extends Module<DocumentClient> {
 				// each element against its own document: the observer of this
 				// realm, so a page that replaced its IntersectionObserver
 				// changes nothing
-				new NativeObserver(observed(frame), {
+				const observer = new NativeObserver(observed(frame), {
 					root: frame.ownerDocument,
 					rootMargin: '100000px',
-				}).observe(frame);
+				});
+				Reflect.apply(nativeObserve, observer, [frame]);
+				observers.push(observer);
 				try {
 					client = (client.parent as Record<string, any>)[
 						moduleClient.names.client
@@ -176,6 +190,22 @@ export default class AnimationFramesModule extends Module<DocumentClient> {
 				return Reflect.apply(target, that, args);
 			},
 		);
+		// the document is left: no observer outlives it. A document the
+		// back-forward cache restores is watched again from its next
+		// callback (it decides again)
+		const unwatch = () => {
+			for (const observer of observers)
+				Reflect.apply(nativeDisconnect, observer, []);
+			observers.length = 0;
+			unrendered.clear();
+			watching = false;
+			decided = undefined;
+		};
+		const listen = () =>
+			Reflect.apply(nativeAdd, global, ['pagehide', unwatch]);
+		listen();
+		// document.open() drops a window's listeners
+		addDocumentOpenListener(global, listen);
 		// watched from the start, so the observers have reported before the
 		// page's first callbacks come due after it starts (Chrome decides as
 		// the document starts too)

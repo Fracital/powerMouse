@@ -11,6 +11,10 @@
 // WebRTC's tables (shared by a frame and its parent) kept every frame's
 // realm: each document's entry was a WeakRef made by its own realm, and an
 // object keeps the realm that made it.
+//
+// A frame of another site than the top kept its realm through the
+// observers it keeps on its frame elements (AnimationFrames): Blink keeps an
+// observer rooted at another document until it is disconnected.
 import {
 	done,
 	FIXTURE,
@@ -48,6 +52,13 @@ const CASES = {
 			}
 			frame.onload = () => setTimeout(resolve, 50);
 			frame.src = `${same}${child}?img&n=${i}`;
+		}),
+	'a frame of another site, added and removed': (i, same, cross, child) =>
+		new Promise((resolve) => {
+			const frame = document.createElement('iframe');
+			frame.src = `${cross}${child}?raf&blob&img&fn&i=${i}`;
+			frame.onload = () => setTimeout(() => (frame.remove(), resolve()), 50);
+			document.body.append(frame);
 		}),
 };
 
