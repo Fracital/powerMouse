@@ -220,6 +220,10 @@
 					link.click();
 					return 'clicked';
 				});
+				// whether the frame meets the calls below that need a user
+				// gesture with one: natively it has none, nothing clicks in
+				// it or evaluates there (or in a frame of its origin) first
+				report.activeBeforeGated = navigator.userActivation.isActive;
 				await ta('pointerLock', async () => {
 					await document.body.requestPointerLock();
 					document.exitPointerLock();

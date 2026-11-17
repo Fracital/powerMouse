@@ -76,6 +76,7 @@ const PROBE_KEYS = [
 	'prompt',
 	'print',
 	'prints',
+	'activeBeforeGated',
 	'pointerLock',
 	'presentation',
 	'orientation',
@@ -185,31 +186,33 @@ const within = (frame, run, arg, fallback, ms = 3000) =>
 		sleep(ms).then(() => fallback),
 	]);
 
+const TAG = 'sandbox-restrictions ';
 /**
- * The harness frame of `page` once its `global` says done, polled: the page
- * itself natively, the proxied top through the proxy (only those: a probe
- * frame may sit in a modal dialog, and an evaluation there never returns)
+ * The main harness's report, as the harness logs it once done (any frame of
+ * `context`), or null after `ms`. Never polled: Playwright evaluates with a
+ * user gesture, which the probe frames of the harness's origin would meet
+ * at their pointer lock and presentation calls, in whichever runs a busy
+ * machine let the gesture still be fresh.
  */
-async function frameWith(page, global, tries = 600) {
-	for (let i = 0; i < tries; i++) {
-		for (const frame of page.frames()) {
-			if (
-				frame !== page.mainFrame() &&
-				!(ROUTED.test(frame.url()) && frame.parentFrame() === page.mainFrame())
-			)
-				continue;
-			const found = await within(
-				frame,
-				(name) => !!window[name]?.done,
-				global,
-				false,
-			);
-			if (found) return frame;
-		}
-		await sleep(250);
-	}
-	return null;
-}
+const harnessReport = (context, ms = 180000) =>
+	new Promise((resolve) => {
+		const finish = (value) => {
+			clearTimeout(timer);
+			context.off('console', listen);
+			resolve(value);
+		};
+		const listen = (message) => {
+			const text = message.text();
+			if (!text.startsWith(TAG)) return;
+			try {
+				finish(JSON.parse(text.slice(TAG.length)));
+			} catch (error) {
+				finish(null);
+			}
+		};
+		const timer = setTimeout(() => finish(null), ms);
+		context.on('console', listen);
+	});
 
 /** watch dialogs and downloads of every page of `context` */
 function watch(context) {
@@ -239,13 +242,11 @@ async function measure(label, context, load, topTitle, reportKeys) {
 	const result = { run };
 
 	step(`${label}: main harness`);
+	const report = harnessReport(context);
 	const page = await load(
 		`${FIXTURE}pages/sandbox-restrictions.html?run=${run}`,
 	);
-	const harness = await frameWith(page, '__sr');
-	result.sr = harness
-		? await within(harness, () => window.__sr, undefined, null, 10000)
-		: null;
+	result.sr = await report;
 	await clickIn(page, '#jslink');
 	await sleep(1500);
 
@@ -340,6 +341,18 @@ ok(
 	'natively every case reported',
 	nativeMissing.length === 0,
 	nativeMissing.join(' '),
+);
+// the pointer lock and presentation probes measure a frame without a user
+// gesture, as a page meets them at load: one the suite gave (an evaluation
+// in the frame or one of its origin is a gesture) measures nothing
+ok(
+	'natively no probe meets its gesture-gated calls with a user activation',
+	PROBES.every(
+		(name) => native.sr?.reports?.[name]?.activeBeforeGated === false,
+	),
+	PROBES.map(
+		(name) => `${name}: ${native.sr?.reports?.[name]?.activeBeforeGated}`,
+	).join(' '),
 );
 /** compare `name` only when both sides reported it; say which did not */
 /** a pointer lock answer, kept only when it is the sandbox's own refusal */

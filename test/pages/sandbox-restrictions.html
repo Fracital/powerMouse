@@ -195,6 +195,10 @@
 				};
 			}
 			__sr.done = true;
+			// the suite reads the report here, never by polling the page: an
+			// evaluation is a user gesture to this page and the frames of its
+			// origin, whose pointer lock and presentation probes would meet it
+			console.log(`sandbox-restrictions ${JSON.stringify(__sr)}`);
 		};
 		setTimeout(finish, 1000);
 	</script>
