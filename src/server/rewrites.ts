@@ -1828,6 +1828,19 @@ function genericForward(
 			});
 			return Response.error();
 		};
+		/**
+		 * a request the CORS protocol refuses. An EventSource is closed for
+		 * good by a failed access check (Chrome: an error event, readyState
+		 * CLOSED), where any other network error makes it connect again a few
+		 * seconds later, forever: it is answered as the mixed-content refusal
+		 * is, with a status that fails the connection
+		 */
+		const refuseAccess = (error: string, method = serverRequest.method) => {
+			const refused = refuse(error, method);
+			return requestTypeOf(serverRequest) === 'EventSource endpoint'
+				? new Response(null, { status: 204 })
+				: refused;
+		};
 		if (crossOrigin && policyMode === 'same-origin')
 			return refuse('blocked: a same-origin request to another origin');
 		// a no-cors request to another origin follows its redirects or is
@@ -2336,7 +2349,7 @@ function genericForward(
 					}
 				}
 				if (!allowed)
-					return refuse(
+					return refuseAccess(
 						'blocked by CORS policy: the preflight failed',
 						'OPTIONS',
 					);
@@ -2954,7 +2967,7 @@ function genericForward(
 			!corsCheck(response.headers, corsOrigin!, credentialsIncluded)
 		) {
 			await response.body?.cancel().catch(() => {});
-			return refuse('blocked by CORS policy');
+			return refuseAccess('blocked by CORS policy');
 		}
 		// a cors request is not redirected to a URL with credentials, unless
 		// the whole chain and that URL are the initiator's own origin

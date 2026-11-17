@@ -5,11 +5,6 @@
 	"/eventsource/eventsource-cross-origin-redirect-origin.any.worker.html": {
 		"MessageEvent.origin is the origin of the final URL after a cross-origin redirect": "FAIL: assert_equals: origin expected \"http://127.0.0.1:PORT\" but got \"http://localhost:PORT\""
 	},
-	"/eventsource/eventsource-cross-origin.window.html": {
-		"EventSource: cross-origin allow-origin: http://example.org should fail": "FAIL: assert_equals: readyState expected 2 but got 0",
-		"EventSource: cross-origin allow-origin:'' should fail": "FAIL: assert_equals: readyState expected 2 but got 0",
-		"EventSource: cross-origin No allow-origin should fail": "FAIL: assert_equals: readyState expected 2 but got 0"
-	},
 	"/eventsource/request-credentials.window.html": {
 		"(harness)": "TIMEOUT: ",
 		"EventSource: credentials: credentials enabled": "FAIL: assert_equals: cookie status expected \"first NO_COOKIE\" but got \"first COOKIE\"",
