@@ -881,6 +881,8 @@ export default class AccessModule extends Module<Client> {
 			}
 			return copy;
 		};
+		// the holders this realm's scripts handed over (`src` below)
+		const holders: Function[] = [];
 		const api = {
 			get2: (
 				target: any,
@@ -1652,9 +1654,14 @@ export default class AccessModule extends Module<Client> {
 			// `top` is the real one and reaches every proxied window
 			isEval: (fn: unknown): boolean => fn === evalSnapshot,
 			// the text a script the service worker rewrote hands over, for its
-			// functions' sources (src/functionSource.ts)
-			src: (key: unknown, subs: unknown, holder: unknown): void =>
-				keepEmbedded(key, subs, holder),
+			// functions' sources (src/functionSource.ts). The table is the
+			// bundle's, which an about:blank frame shares with its creator, and
+			// holds the holder weakly: this realm keeps its own, so a frame's
+			// holders, and with them its realm, go with the frame
+			src: (key: unknown, subs: unknown, holder: unknown): void => {
+				if (keepEmbedded(key, subs, holder))
+					holders[holders.length] = holder as Function;
+			},
 		};
 
 		// the realm's own to look at, where the bundle is another realm's

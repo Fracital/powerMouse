@@ -22,6 +22,10 @@
 // A frame navigated from site to site is given a fresh browsing context
 // each time, and the registry of the windows it showed before kept them all
 // (freshContext).
+//
+// The table of the texts scripts hand over for their functions' sources is
+// the bundle's too, and it held each script's holder, a function of the
+// realm that ran the script (functionSource).
 import {
 	done,
 	FIXTURE,
@@ -90,6 +94,28 @@ const CASES = {
 			);
 			doc.close();
 			setTimeout(() => (frame.remove(), resolve()), 50);
+		}),
+	'an about:blank frame that loads a script, removed': (i) =>
+		new Promise((resolve, reject) => {
+			const frame = document.createElement('iframe');
+			document.body.append(frame);
+			const doc = frame.contentDocument;
+			doc.open();
+			// a script of its own, with a function in it
+			const extra = encodeURIComponent('window.__f = function f() {};');
+			doc.write(
+				`<script src="/rewrite-js?name=churn-${i}&extra=${extra}"></script>`,
+			);
+			doc.close();
+			const started = Date.now();
+			const ran = () => {
+				if (typeof frame.contentWindow.__f === 'function')
+					setTimeout(() => (frame.remove(), resolve()), 50);
+				else if (Date.now() - started > 10000)
+					reject(new Error('the frame never ran its script'));
+				else setTimeout(ran, 20);
+			};
+			ran();
 		}),
 };
 

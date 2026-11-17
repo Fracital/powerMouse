@@ -106,8 +106,11 @@ interface Kept {
 	text?: string;
 	/** what the text's stand-ins stand for, when it came from a holder */
 	subs?: string;
-	/** holders handed over and not yet read, with their stand-ins */
-	holders?: [Function, string][];
+	/**
+	 * holders handed over and not yet read, with their stand-ins, held
+	 * weakly: the realm that ran the script keeps its own (keepEmbedded)
+	 */
+	holders?: [WeakRef<Function>, string][];
 }
 
 // one table for every realm a bundle hooks (a frame it injected reads its
@@ -117,6 +120,12 @@ const kept = new Map<string, Kept>();
 const nativeToString = Function.prototype.toString;
 // holders a key takes before one is read (the page can hand some over too)
 const MAX_HOLDERS = 4;
+// the bundle's own, taken when it loads: a ref made by another realm's
+// WeakRef would keep that realm alive
+const NativeWeakRef = WeakRef;
+const weakDeref = WeakRef.prototype.deref;
+const holderOf = (ref: WeakRef<Function>) =>
+	Reflect.apply(weakDeref, ref, []) as Function | undefined;
 
 /** keep a script's text the inject rewrote (it rewrote that very text) */
 export function keepSource(key: string, text: string) {
@@ -131,21 +140,32 @@ export function keepSource(key: string, text: string) {
  * read: a function marked with a key exists only once the script ran and
  * handed its own holder over, so a key with one holder has the script's,
  * and of several the one whose text hashes to the key is believed (once,
- * when a function of the script is first read: 50 ms for 13 MB)
+ * when a function of the script is first read: 50 ms for 13 MB). True
+ * when it took the holder, which it holds weakly: the caller keeps it
  */
-export function keepEmbedded(key: unknown, subs: unknown, holder: unknown) {
+export function keepEmbedded(
+	key: unknown,
+	subs: unknown,
+	holder: unknown,
+): boolean {
 	if (
 		typeof key !== 'string' ||
 		typeof subs !== 'string' ||
 		subs.length !== CARRIED.length ||
 		typeof holder !== 'function'
 	)
-		return;
+		return false;
 	let entry = kept.get(key);
 	if (!entry) kept.set(key, (entry = {}));
-	if (entry.text !== undefined) return;
-	entry.holders ??= [];
-	if (entry.holders.length < MAX_HOLDERS) entry.holders.push([holder, subs]);
+	if (entry.text !== undefined) return false;
+	// (the holders of realms that are gone make room)
+	const live: [WeakRef<Function>, string][] = [];
+	for (const held of entry.holders ?? [])
+		if (holderOf(held[0])) live.push(held);
+	const took = live.length < MAX_HOLDERS;
+	if (took) live.push([new NativeWeakRef(holder), subs]);
+	entry.holders = live;
+	return took;
 }
 
 /** the key of a holder's text, its stand-ins read as what they stand for */
@@ -160,7 +180,10 @@ function encodedKey(encoded: string, subs: string): string {
 function textOf(key: string, entry: Kept): string | null {
 	const contested = (entry.holders?.length ?? 0) > 1;
 	while (entry.text === undefined && entry.holders?.length) {
-		const [holder, subs] = entry.holders.shift()!;
+		const [ref, subs] = entry.holders.shift()!;
+		const holder = holderOf(ref);
+		// a holder of a realm that is gone, whose functions are gone with it
+		if (!holder) continue;
 		let source: string;
 		try {
 			source = Reflect.apply(nativeToString, holder, []);
