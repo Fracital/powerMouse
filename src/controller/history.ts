@@ -135,7 +135,11 @@ let documentIds = 0;
  * count on the browser's traversal leaving the other frame alone
  */
 let clock = 0;
-const frames = new Set<FrameHistory>();
+// held weakly: a frame's history is its window's (`histories`), and a tab
+// the host closed took its window with it. Held here, every tab ever
+// closed kept its window, and the window its last document's whole realm
+// (the page and the inject), for the host page's life
+const frames = new Set<WeakRef<FrameHistory>>();
 
 function entryOf(entry: object): Entry {
 	return {
@@ -652,9 +656,10 @@ class FrameHistory {
 
 	/** whether another live frame changed the joint history after `at` */
 	crossed(at: number) {
-		for (const other of frames) {
+		for (const ref of frames) {
+			const other = ref.deref();
 			if (other === this) continue;
-			if (other.win.closed) frames.delete(other);
+			if (!other || other.win.closed) frames.delete(ref);
 			else if (other.touched > at) return true;
 		}
 		return false;
@@ -691,7 +696,7 @@ function historyOf(win: Window) {
 	let history = histories.get(win);
 	if (!history) {
 		histories.set(win, (history = new FrameHistory(win)));
-		frames.add(history);
+		frames.add(new WeakRef(history));
 	}
 	return history;
 }
