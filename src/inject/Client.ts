@@ -240,7 +240,7 @@ export default class Client {
 	hideSharedArrayBuffer() {}
 	#bare?: BareCompatibleClient;
 	/** set by the Context module: maps the real `top` to the proxied world's top */
-	resolveTop?: (value: unknown) => unknown;
+	resolveTop?: (value: unknown, container?: unknown) => unknown;
 	/** set by the Context module: a window of another proxied origin, read through the access API (`frames[i]`, `window[name]`), becomes its restricted stand-in */
 	restrictForeign?: (value: unknown, container?: unknown) => unknown;
 	/**

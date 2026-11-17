@@ -886,7 +886,7 @@ export default class AccessModule extends Module<Client> {
 						// every other name a page reads by a computed key)
 						try {
 							if (key === 'top' && this.client.resolveTop)
-								return this.client.resolveTop(object);
+								return this.client.resolveTop(object, container);
 
 							if (
 								((typeof object === 'object' && object !== null) ||

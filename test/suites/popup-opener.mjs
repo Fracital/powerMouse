@@ -3,9 +3,10 @@
 // nothing of its opener but what the browser allows across origins: its
 // about:blank was the opener's document, and the opener stayed readable to
 // the site the popup then loaded (its globals, its location, its document).
-// The opener of a window nobody opened is null, also read through a
-// stand-in: a climb through `opener` to the first window ends. Every value
-// is compared with the same pages loaded natively. Same-origin mode, with a
+// The opener's `top` is the opener, never the popup that reads it, and the
+// opener of a window nobody opened is null, also read through a stand-in: a
+// climb through `opener.top` to the first window ends. Every value is
+// compared with the same pages loaded natively. Same-origin mode, with a
 // controller that has no `onOpen` (the demo's own takes popups as tabs).
 import { done, FIXTURE, launch, ok, PROXY, sleep } from '../lib.mjs';
 
@@ -100,6 +101,17 @@ ok(
 	"the opener's opener is null through a stand-in, and the climb from the popup of another origin ends, as natively",
 	same('cross', nobody) && same('same', ['openerOpener']),
 	shown('cross', nobody),
+);
+const tops = ['top', 'topIsPopup', 'frameTop'];
+ok(
+	"a popup's opener.top is its opener, never the popup, and so is its frame's top, as natively",
+	same('cross', tops) && same('same', tops),
+	JSON.stringify({ cross: shown('cross', tops), same: shown('same', tops) }),
+);
+ok(
+	"the climb through opener.top from the popup of the opener's origin ends at the first window, as natively",
+	same('same', ['hops']),
+	shown('same', ['hops']),
 );
 ok(
 	'each popup is the source of its message, as natively',

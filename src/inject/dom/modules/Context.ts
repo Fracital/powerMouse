@@ -243,6 +243,29 @@ export default class ContextModule extends Module<DocumentClient> {
 	hold(context: Context) {
 		this.#holds().add(context);
 	}
+	/**
+	 * What every stand-in answers `true` under, whichever document's module
+	 * made it: a frame is handed its same-origin parent's stand-ins as they
+	 * are (the parent's `opener`, read by the frame), and one this module
+	 * did not make is a stand-in all the same, never a window outside the
+	 * proxied world (which reads as this page's own top). A registered
+	 * symbol, so every realm's bundle finds it, named by the client's name;
+	 * answered by the stand-in's read alone, so it is no property of it.
+	 */
+	#brand(): symbol {
+		return Symbol.for(`${this.client.names.client}$standIn`);
+	}
+	/** whether `value` is a stand-in, this module's or another document's */
+	#standIn(value: unknown): boolean {
+		if (typeof value !== 'object' || value === null) return false;
+		if (this.restrictedContexts.has(value as Context)) return true;
+		try {
+			return (value as Record<symbol, unknown>)[this.#brand()] === true;
+		} catch (error) {
+			// a window of another real origin
+			return false;
+		}
+	}
 	restrictObject(
 		// the interface the browser names in its errors
 		name: 'Window' | 'Location',
@@ -316,8 +339,10 @@ export default class ContextModule extends Module<DocumentClient> {
 			Reflect.defineProperty(restricted, key, descriptor);
 		}
 
+		const brand = this.#brand();
 		const proxy = new Proxy(restricted, {
 			get: (target, prop, receiver) => {
+				if (prop === brand) return true;
 				const descriptor = Reflect.getOwnPropertyDescriptor(target, prop);
 
 				if (
@@ -1022,6 +1047,10 @@ export default class ContextModule extends Module<DocumentClient> {
 			: (this.#handle(context) ?? restricted);
 	}
 	#restrict(context: Context): RestrictedContext {
+		// another document's stand-in (a same-origin parent's getter handed
+		// it over): restricted already
+		if (!this.restrictedContexts.has(context) && this.#standIn(context))
+			return context;
 		// a cross-origin window (the host application in isolation mode) throws
 		// on the `in` check; it is never a STomp context
 		if (!isStomp(context, this.client.names.client))
@@ -1326,18 +1355,26 @@ export default class ContextModule extends Module<DocumentClient> {
 			return true;
 		};
 
-		this.client.resolveTop = (value) => {
+		this.client.resolveTop = (value, container) => {
 			if (!isWindow(value)) return value;
 			// a stand-in answers with its own `top` (the top of its world, as
 			// this page may see it), never with this page's top
-			if (this.restrictedContexts.has(value as Context))
-				return Reflect.get(value, 'top');
+			if (this.#standIn(value)) return Reflect.get(value, 'top');
 
 			try {
-				if (value === this.client.top || !(this.client.names.client in value))
-					return this.newRestricted(
-						findTop(this.client.global, this.client.names.client),
-					);
+				if (value === this.client.top || !(this.client.names.client in value)) {
+					// the top of the world the window it was read off is in: this
+					// page's own, unless that window is in another tab (a popup
+					// reads `opener.top`, which was the popup itself)
+					const from =
+						container !== undefined &&
+						container !== this.client.global &&
+						isWindow(container) &&
+						this.client.names.client in container
+							? container
+							: this.client.global;
+					return this.newRestricted(findTop(from, this.client.names.client));
+				}
 			} catch (error) {
 				// cross-origin top
 			}
