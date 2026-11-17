@@ -247,12 +247,30 @@ export default class CredentialsModule extends Module<DocumentClient> {
 				makeCredential,
 				IdentityCredentialError: NativeIdentityCredentialError,
 			}));
-		const disconnect = (options: unknown) => identityFlow().disconnect(options);
+		// both answer with a promise: a part that cannot be had (one of
+		// another build, a failed load) is a rejection, never a throw
+		const disconnect = (options: unknown) => {
+			let flow: ReturnType<typeof identityFlow>;
+			try {
+				flow = identityFlow();
+			} catch (error) {
+				return reject(error);
+			}
+			return flow.disconnect(options);
+		};
 		const runIdentity = (
 			identity: unknown,
 			signal: unknown,
 			mediation: unknown,
-		) => identityFlow().runIdentity(identity, signal, mediation);
+		) => {
+			let flow: ReturnType<typeof identityFlow>;
+			try {
+				flow = identityFlow();
+			} catch (error) {
+				return reject(error);
+			}
+			return flow.runIdentity(identity, signal, mediation);
+		};
 
 		// --- the statics, each reading as the browser's and routing/emulating ---
 

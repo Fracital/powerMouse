@@ -133,7 +133,11 @@ on every save (use a `git worktree`).
   only). A part is code that runs after something happened (a first read, a
   first call, a surface turned on), never a hook the page's first script
   must meet; moving one there is the cheap way to add a feature without
-  growing every frame (`frame-cost`).
+  growing every frame (`frame-cost`). A hook makes its part before it
+  calls anything of the browser's, in the same turn, and when the part
+  cannot be had it refuses (throws, or rejects where the call answers with
+  a promise), never calls the browser's own function in its place
+  (`deferred-refusals`).
 - **Classic-script globals use `Reflect.defineProperty`, not `globalName`.**
   The inject bundles delete `createClient` after use; a top-level `var` from
   esbuild's `globalName` can't be deleted. See `src/*/entry.ts`.
