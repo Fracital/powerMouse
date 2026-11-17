@@ -156,7 +156,15 @@ export default class ViewTransitionModule extends Module<DocumentClient> {
 			PageSwap && getter(PageSwap.prototype, 'viewTransition');
 		if (!viewTransitionGet || !inFrame(global)) return;
 		const onSwap = (event: Event) => {
-			const transition = Reflect.apply(viewTransitionGet, event, []);
+			let transition: unknown;
+			try {
+				transition = Reflect.apply(viewTransitionGet, event, []);
+			} catch (error) {
+				// an event the page made (`dispatchEvent(new Event('pageswap'))`)
+				// is no PageSwapEvent: the getter's throw reached the page's
+				// onerror as an error of its own
+				return;
+			}
 			if (transition) skip(transition);
 		};
 		const install = () =>
