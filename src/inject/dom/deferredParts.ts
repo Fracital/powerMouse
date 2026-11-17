@@ -73,6 +73,7 @@
 // needs when it is called.
 import { compileFilter } from '../../blocker/procedural';
 import { noticeText } from '../../mixedContentNotices';
+import { accessFailures } from '../accessFailures';
 import { bareClient } from '../bareClient';
 import { cookieStoreMethods } from '../cookieStoreMethods';
 import { hookDevices } from '../deviceGrants';
@@ -147,6 +148,9 @@ export const parts = {
 	// a mixed content notice's text, at a document's first notice
 	// (../../mixedContentNotices.ts; ../modules/MixedContent.ts)
 	noticeText,
+	// the wording of the access API's errors, at a document's first
+	// (../accessFailures.ts; ../errorMessages.ts)
+	accessFailures,
 	compileFilter,
 	longFrames,
 	longTasks,

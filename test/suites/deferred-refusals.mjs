@@ -6,7 +6,9 @@
 // XHR's misuse and its response document, an identity credential's get and
 // disconnect (FedCM), a same-origin download link's click, a form a
 // frame submits to its proxied parent, a frame's navigation of another
-// window (`w.location = url`). A part is made
+// window (`w.location = url`); and a call of no function through the
+// access API throws the TypeError the call threw (only its wording is a
+// part, src/inject/accessFailures.ts). A part is made
 // synchronously within the call that needs it, so no page code runs between
 // the hook and the part (a download's copy is made after the click went
 // through the page, which the browser's own download had been cancelled
@@ -165,7 +167,14 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 	const from = downloads.length;
 	const answer = await top.evaluate(
 		(calls) => window.__child(calls),
-		['getSettings', 'xmlDocument', 'identity', 'disconnect', 'download'],
+		[
+			'getSettings',
+			'xmlDocument',
+			'identity',
+			'disconnect',
+			'download',
+			'notFunction',
+		],
 	);
 	ok(
 		'with the parts, the counting stand-ins see the calls that reach the browser',
@@ -174,6 +183,11 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			answer.reached?.includes('getSettings') &&
 			answer.reached?.includes('xhrDocument'),
 		JSON.stringify(answer),
+	);
+	ok(
+		"with the parts, a call of no function names the page's expression",
+		answer.out?.notFunction?.threw === 'o[k] is not a function',
+		JSON.stringify(answer.out?.notFunction),
 	);
 	const navigated = await top.evaluate(
 		(calls) => window.__child(calls),
@@ -229,7 +243,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 				Reflect.deleteProperty(client, 'deferredPartsText');
 			}
 		},
-		{ name, calls: [...REFUSING, 'foreignStats'] },
+		{ name, calls: [...REFUSING, 'foreignStats', 'notFunction'] },
 	);
 	const out = answer.out ?? {};
 	// the parts' own error; an identity get with STomp's passkey provider
@@ -280,6 +294,14 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		'without the parts, a navigation of another window throws and navigates nothing',
 		out.navigateOther?.threw === 'no parts' && out.navigateOther?.at === '',
 		JSON.stringify(out.navigateOther),
+	);
+	// the part only words the error: without it, the error the call threw
+	ok(
+		'without the parts, a call of no function throws the TypeError of the call',
+		typeof out.notFunction?.threw === 'string' &&
+			out.notFunction.threw !== 'no parts' &&
+			/not a function|was called on/.test(out.notFunction.threw),
+		JSON.stringify(out.notFunction),
 	);
 	const saved = await downloadsSince(from);
 	ok(

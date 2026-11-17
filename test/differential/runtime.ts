@@ -7,6 +7,8 @@
 // (test/differential/world.js).
 import { parseConfig } from '../../src/config';
 import { helperNames } from '../../src/helperNames';
+import { accessFailureParts } from '../../src/inject/accessFailureParts';
+import { accessFailures } from '../../src/inject/accessFailures';
 import AccessModule from '../../src/inject/modules/Access';
 import FunctionModule from '../../src/inject/modules/Function';
 import ProxyModule from '../../src/inject/modules/Proxy';
@@ -25,6 +27,10 @@ interface Host {
 	config: object;
 	base: string;
 }
+
+// the wording of the access API's errors, which each bundle's entry says
+// where it has (src/inject/accessFailureParts.ts): here, its own
+accessFailureParts.failures = () => accessFailures;
 
 Reflect.defineProperty(globalThis, '__differential', {
 	configurable: true,

@@ -1,4 +1,5 @@
 import type { FpSurface } from '../../blocker/types';
+import { accessFailureParts } from '../accessFailureParts';
 import { createClientFactory } from '../Client';
 import { idbSizeParts } from '../idbSizeParts';
 import { legacyFileSystemParts } from '../legacyFileSystemParts';
@@ -78,6 +79,8 @@ legacyFileSystemParts.partition = () => deferred('partitionLegacyFileSystem');
 legacyFileSystemParts.drop = () => deferred('dropLegacyFileSystem');
 // and the text of a mixed content notice, with a document's first notice
 mixedContentParts.noticeText = () => deferred('noticeText');
+// and the wording of the access API's errors, with a document's first
+accessFailureParts.failures = () => deferred('accessFailures');
 
 class FingerprintStandIn extends Module<DocumentClient> {
 	apply() {

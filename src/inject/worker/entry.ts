@@ -6,6 +6,8 @@ import {
 	WORKER_MODULES,
 } from '../../transport/messages';
 import { listenOn, messageOf, startPort } from '../../transport/ports';
+import { accessFailureParts } from '../accessFailureParts';
+import { accessFailures } from '../accessFailures';
 import { messageField, readModules, type HandedModules } from '../Client';
 import { recordSize } from '../idbSize';
 import { idbSizeParts } from '../idbSizeParts';
@@ -36,6 +38,8 @@ storageBucketParts.methods = () => bucketMethods;
 legacyFileSystemParts.partition = () => partitionLegacyFileSystem;
 // and the text of a mixed content notice (../mixedContentParts.ts)
 mixedContentParts.noticeText = () => noticeText;
+// and the wording of the access API's errors (../accessFailureParts.ts)
+accessFailureParts.failures = () => accessFailures;
 /** set once the bootstrap came without a transport (a worker of a worker): nothing carries its sessions */
 let transportless = false;
 webTransportParts.carry = () =>

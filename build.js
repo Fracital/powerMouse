@@ -473,6 +473,7 @@ const DEFERRED_FILES = new Set(
 		'src/inject/webTransportStandIn.ts',
 		'src/inject/xhrChecks.ts',
 		'src/mixedContentNotices.ts',
+		'src/inject/accessFailures.ts',
 		'src/inject/dom/siteAcross.ts',
 		'src/inject/dom/siteEvents.ts',
 		'src/transport/bodyPort.ts',

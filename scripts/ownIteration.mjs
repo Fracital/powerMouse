@@ -10,7 +10,7 @@
 // plugin cannot read that way (a rest element) and an array destructuring
 // whose value is used fail the build, at their place. A statement whose
 // comment says `own-iteration: as written` is left as it is (code whose
-// syntax is the point: the error message probes of src/inject/errorMessages.ts).
+// syntax is the point: the error message probes of src/inject/accessFailures.ts).
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 import { ownMethods } from './ownMethods.mjs';
