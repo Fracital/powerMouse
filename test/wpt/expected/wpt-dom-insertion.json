@@ -1,0 +1,72 @@
+{
+	"/dom/nodes/Element-removeAttribute.html": {
+		"removeAttribute should remove the first attribute, irrespective of namespace, when the first attribute is not in a namespace": "FAIL: assert_equals: expected (object) null but got (string) \"second\""
+	},
+	"/dom/nodes/Element-setAttribute.html": {
+		"setAttribute should lowercase before setting": "FAIL: assert_equals: expected (object) null but got (string) \"bar\""
+	},
+	"/dom/nodes/MutationObserver-callback-order.window.html": {
+		"Mutation observers are notified in the order they were created": "FAIL: assert_array_equals: expected property 0 to be \"first\" but got \"second\" (expected array [\"first\", \"second\"] got [\"second\", \"first\"])"
+	},
+	"/dom/nodes/MutationObserver-childList.html": {
+		"childList Node.textContent: replace content mutation": "FAIL: assert_equals: mutation records must match expected 1 but got 2"
+	},
+	"/dom/nodes/MutationObserver-cross-realm-callback-report-exception.html": {
+		"(harness)": "TIMEOUT: ",
+		"MutationObserver reports the exception from its callback in the callback's global object": "MISSING: the harness ended TIMEOUT before this subtest"
+	},
+	"/dom/nodes/MutationObserver-inner-outer.html": {
+		"innerHTML mutation": "FAIL: assert_equals: mutation records must match expected 2 but got 3",
+		"innerHTML with 2 children mutation": "FAIL: assert_equals: mutation records must match expected 1 but got 2"
+	},
+	"/dom/nodes/MutationObserver-textContent.html": {
+		"Setting Element.textContent to the same value": "FAIL: assert_equals: Should have one record expected 1 but got 2",
+		"Setting Element.textContent to a different value": "FAIL: assert_equals: Should have one record expected 1 but got 2",
+		"Setting Element.textContent to the same value when the old node is a CDATASection": "FAIL: assert_equals: Should have one record expected 1 but got 2"
+	},
+	"/dom/nodes/MutationObserver-transient-registered-observers.window.html": {
+		"A removed subtree is no longer observed after mutation observers are notified": "FAIL: assert_array_equals: lengths differ, expected array [\"childList parent -child\", \"childList child +before\"] length 2, got [\"childList parent -child\"] length 1",
+		"Removing a node from an observed subtree queues the mutation observer microtask": "FAIL: assert_array_equals: expected property 0 to be \"observer\" but got \"promise\" (expected array [\"observer\", \"promise\"] got [\"promise\", \"observer\"])"
+	},
+	"/dom/nodes/Node-appendChild.html": {
+		"Appending a document": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
+		"Adopting an orphan": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
+		"Adopting a non-orphan": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/dom/nodes/Node-cloneNode.html": {
+		"implementation.createDocument": "FAIL: assert_equals: URL value expected \"about:blank\" but got \"http://localhost:PORT/dom/nodes/Node-cloneNode.html\""
+	},
+	"/dom/nodes/Node-removeChild.html": {
+		"Passing a detached element from a frame document to removeChild should not affect it.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
+		"Passing a non-detached element from a frame document to removeChild should not affect it.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
+		"Calling removeChild on a element from a frame document with no children should throw NOT_FOUND_ERR.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
+		"Passing a detached text from a frame document to removeChild should not affect it.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
+		"Passing a non-detached text from a frame document to removeChild should not affect it.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
+		"Calling removeChild on a text from a frame document with no children should throw NOT_FOUND_ERR.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
+		"Passing a detached comment from a frame document to removeChild should not affect it.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
+		"Passing a non-detached comment from a frame document to removeChild should not affect it.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
+		"Calling removeChild on a comment from a frame document with no children should throw NOT_FOUND_ERR.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/dom/nodes/Node-textContent.html": {
+		"Element without children set to undefined": "FAIL: assert_equals: expected \"\" but got \"undefined\"",
+		"Element with empty text node as child set to undefined": "FAIL: assert_equals: expected \"\" but got \"undefined\"",
+		"Element with children set to undefined": "FAIL: assert_equals: expected \"\" but got \"undefined\"",
+		"Element with descendants set to undefined": "FAIL: assert_equals: expected \"\" but got \"undefined\"",
+		"DocumentFragment without children set to undefined": "FAIL: assert_equals: expected \"\" but got \"undefined\"",
+		"DocumentFragment with empty text node as child set to undefined": "FAIL: assert_equals: expected \"\" but got \"undefined\"",
+		"DocumentFragment with children set to undefined": "FAIL: assert_equals: expected \"\" but got \"undefined\"",
+		"DocumentFragment with descendants set to undefined": "FAIL: assert_equals: expected \"\" but got \"undefined\""
+	},
+	"/dom/nodes/attributes-namednodemap.html": {
+		"setNamedItem and removeNamedItem on `attributes` should not interfere with existing method names": "FAIL: assert_equals: expected function \"function item() { [native code] }\" but got function \"zt=>et()[zt]??null\""
+	},
+	"/dom/nodes/attributes.html": {
+		"When qualifiedName does not match the Name production, an INVALID_CHARACTER_ERR exception is to be thrown. (setAttribute)": "FAIL: assert_throws_dom: function \"function() { el.setAttribute(invalid_names[i], \"test\") }\" did not throw",
+		"setAttribute should lowercase its name argument (upper case attribute)": "FAIL: assert_equals: expected (object) null but got (string) \"left\"",
+		"setAttribute should lowercase its name argument (mixed case attribute)": "FAIL: assert_equals: expected (object) null but got (string) \"tasty\"",
+		"First set attribute is returned by getAttribute": "FAIL: assert_equals: expected (object) null but got (string) \"t1\"",
+		"Only lowercase attributes are returned on HTML elements (upper case attribute)": "FAIL: assert_equals: expected (string) \"left\" but got (object) null",
+		"Only lowercase attributes are returned on HTML elements (mixed case attribute)": "FAIL: assert_equals: expected (string) \"tasty\" but got (object) null",
+		"First set attribute is returned with mapped attribute set later": "FAIL: assert_equals: expected \"left\" but got \"right\""
+	}
+}
