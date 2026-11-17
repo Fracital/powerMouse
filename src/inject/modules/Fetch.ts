@@ -367,6 +367,40 @@ export default class FetchModule extends Module<Client> {
 				),
 		});
 
+		// A message of an EventSource names the origin of the stream's URL,
+		// and every routed stream's is the proxy's: the page reads the real
+		// one, in documents and workers alike. (After a redirect the browser
+		// names the last URL's origin, which only the worker knows: this is
+		// the first one's.) An event the page made itself and dispatched on
+		// the source keeps what the page gave it.
+		const messageOrigin = Reflect.getOwnPropertyDescriptor(
+			this.client.global.MessageEvent.prototype,
+			'origin',
+		);
+		const nativeEventTarget = Reflect.getOwnPropertyDescriptor(
+			this.client.global.Event.prototype,
+			'target',
+		)?.get;
+		if (messageOrigin?.get && nativeEventTarget)
+			Reflect.defineProperty(
+				this.client.global.MessageEvent.prototype,
+				'origin',
+				{
+					...messageOrigin,
+					get: proxyModule.wrapFunction(
+						messageOrigin.get,
+						(target, that: MessageEvent, args) => {
+							const origin = Reflect.apply(target, that, args);
+							if (!that.isTrusted) return origin;
+							const url = eventSourceURLs.get(
+								Reflect.apply(nativeEventTarget, that, []) as EventSource,
+							);
+							return url === undefined ? origin : new URL(url).origin;
+						},
+					),
+				},
+			);
+
 		const nativeResponseURL = Reflect.getOwnPropertyDescriptor(
 			this.client.global.Response.prototype,
 			'url',

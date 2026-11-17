@@ -1,14 +1,11 @@
 {
 	"/eventsource/eventsource-cross-origin-redirect-origin.any.html": {
-		"MessageEvent.origin is the origin of the final URL after a cross-origin redirect": "FAIL: assert_equals: origin expected \"http://127.0.0.1:PORT\" but got \"http://127.0.0.1:PORT\""
+		"MessageEvent.origin is the origin of the final URL after a cross-origin redirect": "FAIL: assert_equals: origin expected \"http://127.0.0.1:PORT\" but got \"http://localhost:PORT\""
 	},
 	"/eventsource/eventsource-cross-origin-redirect-origin.any.worker.html": {
-		"MessageEvent.origin is the origin of the final URL after a cross-origin redirect": "FAIL: assert_equals: origin expected \"http://127.0.0.1:PORT\" but got \"http://127.0.0.1:PORT\""
+		"MessageEvent.origin is the origin of the final URL after a cross-origin redirect": "FAIL: assert_equals: origin expected \"http://127.0.0.1:PORT\" but got \"http://localhost:PORT\""
 	},
 	"/eventsource/eventsource-cross-origin.window.html": {
-		"EventSource: cross-origin basic use": "FAIL: assert_equals: expected \"http://xn--lve-6lad.localhost:PORT\" but got \"http://127.0.0.1:PORT\"",
-		"EventSource: cross-origin redirect use": "FAIL: assert_equals: expected \"http://xn--lve-6lad.localhost:PORT\" but got \"http://127.0.0.1:PORT\"",
-		"EventSource: cross-origin redirect use recon": "FAIL: assert_equals: expected \"http://xn--lve-6lad.localhost:PORT\" but got \"http://127.0.0.1:PORT\"",
 		"EventSource: cross-origin allow-origin: http://example.org should fail": "FAIL: assert_equals: readyState expected 2 but got 0",
 		"EventSource: cross-origin allow-origin:'' should fail": "FAIL: assert_equals: readyState expected 2 but got 0",
 		"EventSource: cross-origin No allow-origin should fail": "FAIL: assert_equals: readyState expected 2 but got 0"
