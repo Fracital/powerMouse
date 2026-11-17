@@ -37,8 +37,17 @@
 //   unchanged). The budget went to 508 KB for it, and back to 500 KB once
 //   the deferred parts (build.js DEFERRED_FILES) took the stand-in and other
 //   code most frames never run out of the bundle (about 454 KB with the
-//   stand-in deferred). Raise the budget in the same change as code that has
-//   to grow the bundle, and say why; first see whether it can be deferred.
+//   stand-in deferred). The web-platform-tests fixes took it from 496.8 to
+//   507.4 KB; a module's hook installer reading its client and the client's
+//   global once, where each use read the property chain again, took it to
+//   491.5 KB, and the fixes' parts a page reaches only by a rare call (a
+//   beacon of an uncontrolled document, XMLHttpRequest's argument checks,
+//   location.ancestorOrigins, NamedNodeMap's methods on an element's
+//   attributes, a fresh context's referrer policy) and the sizing of an
+//   IndexedDB record for navigator.storage.estimate() went to the deferred
+//   parts (485.9 KB). Raise the budget in the same change as code
+//   that has to grow the bundle, and say why; first see whether it can be
+//   deferred.
 // - the JS heap one proxied frame adds (test/frame-memory.mjs, FRAMES frames
 //   of a small ad-like page, same site), against a ceiling above what this
 //   build measures: 1,094 to 1,100 KB with 20 frames on Chrome 152 and 156

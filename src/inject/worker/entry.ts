@@ -6,6 +6,8 @@ import {
 } from '../../transport/messages';
 import { listenOn, messageOf, startPort } from '../../transport/ports';
 import { messageField, readModules, type HandedModules } from '../Client';
+import { recordSize } from '../idbSize';
+import { idbSizeParts } from '../idbSizeParts';
 import { handModules } from '../rewriter';
 import { carry as carryWebTransport } from '../webTransport';
 import { webTransportParts } from '../webTransportParts';
@@ -20,6 +22,8 @@ import createWorkerClient from './worker';
 // a worker's WebTransport stand-in and what carries its sessions are the
 // bundle's own code
 webTransportParts.standIn = () => webTransportStandIn;
+// and so is the sizing of an IndexedDB record (../idbSizeParts.ts)
+idbSizeParts.recordSize = () => recordSize;
 /** set once the bootstrap came without a transport (a worker of a worker): nothing carries its sessions */
 let transportless = false;
 webTransportParts.carry = () =>

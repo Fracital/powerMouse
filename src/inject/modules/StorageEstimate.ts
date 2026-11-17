@@ -1,10 +1,12 @@
 import Client from '../Client';
-import { DATABASE_BYTES, recordSize, STORE_BYTES } from '../idbSize';
+import { DATABASE_BYTES, idbSizeParts, STORE_BYTES } from '../idbSizeParts';
 import Module from '../Module';
 import ProxyModule from './Proxy';
 
 /** values of an object store sized to estimate the rest of it */
 const SAMPLE = 64;
+// taken before the page runs (the sizing reads each value's tag with it)
+const tagOf = Object.prototype.toString;
 /** a request's result, or its error */
 function done<T>(request: IDBRequest<T>): Promise<T> {
 	return new Promise((resolve, reject) => {
@@ -84,7 +86,7 @@ export default class StorageEstimateModule extends Module<Client> {
 								const at = cursor.result;
 								if (!at || sampled >= SAMPLE) return resolve();
 								sampled++;
-								size += recordSize(at.key, at.value);
+								size += idbSizeParts.recordSize!()(at.key, at.value, tagOf);
 								at.continue();
 							};
 						});

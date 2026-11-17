@@ -7,17 +7,17 @@
 // off-the-record profile counts in pages instead, which no estimate here
 // follows.
 
-export const DATABASE_BYTES = 592;
-export const STORE_BYTES = 352;
-export const RECORD_BYTES = 210;
+// (the figures are ./idbSizeParts.ts's; this file is a deferred part of
+// the document bundle, ../dom/deferred.ts, at a realm's first estimate, and
+// its top level reads no global)
+import { RECORD_BYTES } from './idbSizeParts';
+
 /** values serialized to more than this are compressed */
 const COMPRESS_OVER = 64 * 1024;
 /** how deep the sizing walks into a value */
 const DEPTH = 8;
 /** the most bytes of one value read to estimate its compression; the rest is scaled */
 const SCAN_BYTES = 4 * 1024 * 1024;
-
-const tagOf = Object.prototype.toString;
 
 /** the bytes of a part of a value: a view of binary data, or a string's code units */
 type Bytes = { length: number; at(index: number): number };
@@ -139,6 +139,7 @@ function measure(
 	parts: Bytes[],
 	seen: Set<object>,
 	depth: number,
+	tagOf: typeof Object.prototype.toString,
 ): number {
 	switch (typeof value) {
 		case 'string': {
@@ -196,28 +197,37 @@ function measure(
 	if (tag === '[object Map]')
 		for (const [key, entry] of value as Map<unknown, unknown>)
 			size +=
-				measure(key, parts, seen, depth + 1) +
-				measure(entry, parts, seen, depth + 1);
+				measure(key, parts, seen, depth + 1, tagOf) +
+				measure(entry, parts, seen, depth + 1, tagOf);
 	else if (tag === '[object Set]')
 		for (const entry of value as Set<unknown>)
-			size += measure(entry, parts, seen, depth + 1);
+			size += measure(entry, parts, seen, depth + 1, tagOf);
 	else
 		for (const key of Object.keys(value))
 			size +=
-				measure(key, parts, seen, depth + 1) +
+				measure(key, parts, seen, depth + 1, tagOf) +
 				measure(
 					(value as Record<string, unknown>)[key],
 					parts,
 					seen,
 					depth + 1,
+					tagOf,
 				);
 	return size;
 }
 
-/** what one record takes: its overhead, its key, and its value, compressed when large */
-export function recordSize(key: unknown, value: unknown): number {
+/**
+ * What one record takes: its overhead, its key, and its value, compressed
+ * when large. `tagOf` is Object.prototype.toString as taken before the page
+ * ran.
+ */
+export function recordSize(
+	key: unknown,
+	value: unknown,
+	tagOf: typeof Object.prototype.toString,
+): number {
 	const parts: Bytes[] = [];
-	const serialized = measure(value, parts, new Set(), 0);
+	const serialized = measure(value, parts, new Set(), 0, tagOf);
 	let size = serialized;
 	if (serialized > COMPRESS_OVER) {
 		let raw = 0;
@@ -228,5 +238,5 @@ export function recordSize(key: unknown, value: unknown): number {
 		}
 		size = serialized - raw + packed;
 	}
-	return RECORD_BYTES + measure(key, [], new Set(), 0) + size;
+	return RECORD_BYTES + measure(key, [], new Set(), 0, tagOf) + size;
 }

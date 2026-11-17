@@ -20,7 +20,6 @@ import UnrouteModule, { unrouteURL } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
 import { trustedHTML } from '../../trusted';
 import { trackUploadListeners } from '../../uploadListeners';
-import { checkedHeader, checkedMethod, notOpened } from '../../xhrChecks';
 import {
 	decodeText,
 	finalMime,
@@ -29,6 +28,7 @@ import {
 	type MimeType,
 } from '../../xhrText';
 import DocumentClient from '../Client';
+import { deferred } from '../deferred';
 import { responseURLs } from '../responseDocuments';
 import BlobDocumentsModule from './BlobDocuments';
 import DOMAttributesModule from './DOMAttributes';
@@ -707,7 +707,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				password: string | void,
 			) {
 				// a method the browser refuses changes nothing of the request
-				const checked = checkedMethod(that.client.global, method);
+				const checked = deferred().checkedMethod(that.client.global, method);
 				// a document may not make a synchronous request with a response
 				// type or a timeout set beforehand
 				if (!async && (this.#timeout !== 0 || this.#responseType !== ''))
@@ -783,7 +783,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				}
 			}
 			setRequestHeader(header: string, value: string) {
-				[header, value] = checkedHeader(
+				[header, value] = deferred().checkedHeader(
 					that.client.global,
 					// eslint-disable-next-line prefer-rest-params
 					arguments,
@@ -796,7 +796,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 			}
 			send(body: string) {
 				if (this.#readyState !== OPENED || this.#sent)
-					throw notOpened(that.client.global, 'send');
+					throw deferred().notOpened(that.client.global, 'send');
 				this.#sent = true;
 
 				// a document whose permissions policy turns `sync-xhr` off (the

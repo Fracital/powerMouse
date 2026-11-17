@@ -8,6 +8,7 @@ import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { scopePrefix, unrouteURL } from '../../modules/Unroute';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import { deferred } from '../deferred';
 import { addClientModules } from '../document';
 import {
 	containerOf,
@@ -23,48 +24,6 @@ import ContextModule, { initialBlank, isStomp } from './Context';
 import { nativeElement } from './DOMHooks';
 import { MARKER } from './MutationObserver';
 import NavigationHintModule from './NavigationHint';
-
-const REFERRER_POLICIES = [
-	'no-referrer',
-	'no-referrer-when-downgrade',
-	'origin',
-	'origin-when-cross-origin',
-	'same-origin',
-	'strict-origin',
-	'strict-origin-when-cross-origin',
-	'unsafe-url',
-];
-
-/**
- * The referrer policy the element that started a navigation asks for
- * itself: none at all for `rel=noreferrer` (a link's, a form's), else a
- * link's `referrerpolicy`; '' for the document's own. The hooked getters
- * answer with what the page wrote.
- */
-function sourcePolicy(source: Element | null | undefined): ReferrerPolicy {
-	if (!source) return '';
-	try {
-		const link = source.nodeName === 'A' || source.nodeName === 'AREA';
-		// a form's submitter: the form's own rel counts
-		const owner = link
-			? source
-			: ((source as HTMLButtonElement).form ?? source);
-		if (
-			(owner.getAttribute('rel') ?? '')
-				.toLowerCase()
-				.split(/\s+/)
-				.includes('noreferrer')
-		)
-			return 'no-referrer';
-		const policy = link
-			? (source.getAttribute('referrerpolicy') ?? '').toLowerCase()
-			: '';
-		if (REFERRER_POLICIES.includes(policy)) return policy as ReferrerPolicy;
-	} catch (error) {
-		// an element of another kind: the document's
-	}
-	return '';
-}
 
 export default class IFrameModule extends Module<DocumentClient> {
 	apply() {
@@ -776,7 +735,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 							body: routed,
 							referrerPolicy: client.sandboxedOpaque
 								? 'no-referrer'
-								: sourcePolicy(navigate.sourceElement),
+								: deferred().sourcePolicy(navigate.sourceElement),
 						},
 					);
 				} catch (error) {

@@ -1,5 +1,6 @@
 import type { FpSurface } from '../../blocker/types';
 import { createClientFactory } from '../Client';
+import { idbSizeParts } from '../idbSizeParts';
 import Module from '../Module';
 import baseModules from '../modules';
 import { webTransportParts } from '../webTransportParts';
@@ -65,6 +66,7 @@ import XMLHttpRequestModule from './modules/XMLHttpRequest';
 // deferred parts, evaluated with its realm's first session
 webTransportParts.standIn = () => deferred().webTransportStandIn;
 webTransportParts.carry = () => deferred().carryWebTransport;
+idbSizeParts.recordSize = () => deferred().recordSize;
 
 class FingerprintStandIn extends Module<DocumentClient> {
 	apply() {

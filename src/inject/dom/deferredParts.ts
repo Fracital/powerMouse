@@ -11,6 +11,9 @@
 // (and Chrome 157's markup insertion members, ./markupMembers.ts, at a
 // page's first call of one)
 //
+// (and XMLHttpRequest's argument checks, ../xhrChecks.ts, at a document's
+// first open(); a worker's bundle has them itself)
+//
 // (and the WebTransport stand-in, ../webTransportStandIn.ts, with what
 // carries its sessions, ../webTransport.ts, once a realm makes its first
 // session)
@@ -23,14 +26,28 @@
 // it): constants and functions only, as the bundle's code reads what it
 // needs when it is called.
 import { cookieStoreMethods } from '../cookieStoreMethods';
+import { recordSize } from '../idbSize';
 import { carry as carryWebTransport } from '../webTransport';
 import { standIn as webTransportStandIn } from '../webTransportStandIn';
+import { checkedHeader, checkedMethod, notOpened } from '../xhrChecks';
+import { ancestorOriginsList } from './ancestorOriginsList';
+import { attributeViewMethods } from './attributeViewMethods';
+import { relayBeacon } from './beaconRelay';
 import { markupMembers } from './markupMembers';
 import FingerprintModule from './modules/Fingerprint';
 import { emulateServiceWorker } from './modules/serviceWorkerEmulation';
+import { sourcePolicy } from './sourcePolicy';
 
 const parts = {
 	cookieStoreMethods,
+	relayBeacon,
+	ancestorOriginsList,
+	attributeViewMethods,
+	sourcePolicy,
+	recordSize,
+	checkedMethod,
+	checkedHeader,
+	notOpened,
 	FingerprintModule,
 	emulateServiceWorker,
 	markupMembers,

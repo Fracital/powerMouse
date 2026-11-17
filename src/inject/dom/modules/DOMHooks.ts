@@ -25,6 +25,7 @@ import {
 	trustedOf,
 	trustedSink,
 } from '../../trusted';
+import type { AttributeView, ViewMethod } from '../attributeViewMethods';
 import DocumentClient, {
 	addDocumentOpenListener,
 	getGlobalParsingState,
@@ -2149,12 +2150,6 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 		// Element.attributes: a view of the map without the markers
 		const attributeMaps = new WeakMap<NamedNodeMap, NamedNodeMap>();
-		interface AttributeView {
-			map: NamedNodeMap;
-			owner: Element;
-			visible: () => Attr[];
-			named: (name: string) => Attr | undefined;
-		}
 		const views = new WeakMap<object, AttributeView>();
 		/** the element's hooked setAttributeNode and setAttributeNodeNS, once they are wrapped below */
 		const setNamedItems: {
@@ -2246,44 +2241,16 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				},
 			),
 		});
-		// NamedNodeMap's methods called on a view: by index and by name over
-		// the attributes the page sees, an attribute node set through the map
-		// set on the element (through its hooks, so what it loads is routed),
+		// NamedNodeMap's methods called on a view: the view's own
+		// (../attributeViewMethods.ts, a deferred part, at the first call),
 		// anything else on the map itself
-		const viewMethods: Record<
-			string,
-			(view: AttributeView, args: unknown[], key: string) => unknown
-		> = {
-			item: ({ visible }, args) => visible()[(args[0] as number) >>> 0] ?? null,
-			getNamedItem: ({ map, owner, named }, args) =>
-				isMarkerOn(owner, args[0])
-					? null
-					: (map.getNamedItem(String(args[0])) ??
-						named(attributeName(owner, String(args[0]))) ??
-						null),
-			setNamedItem: setNamedItemOf('setAttributeNode'),
-			setNamedItemNS: setNamedItemOf('setAttributeNodeNS'),
-		};
-		function setNamedItemOf(method: keyof typeof setNamedItems) {
-			return ({ map, owner }: AttributeView, args: unknown[], key: string) => {
-				const set = setNamedItems[method];
-				// the browser's own errors (not an Attr, a node in use) name
-				// the map's method
-				const attr = args[0];
-				if (
-					!set ||
-					!(attr instanceof client.global.Attr) ||
-					(attr.ownerElement && attr.ownerElement !== owner)
-				)
-					return Reflect.apply(
-						Reflect.get(nativeNamedNodeMap, key) as Function,
-						map,
-						args,
-					);
-				return Reflect.apply(set, owner, args);
-			};
-		}
-		const client = moduleClient;
+		let viewMethods: Record<string, ViewMethod> | null = null;
+		const VIEW_METHODS = [
+			'item',
+			'getNamedItem',
+			'setNamedItem',
+			'setNamedItemNS',
+		];
 		const namedNodeMap = realm.NamedNodeMap.prototype;
 		const nativeNamedNodeMap: Record<string, unknown> = {};
 		for (const key of Reflect.ownKeys(namedNodeMap)) {
@@ -2295,7 +2262,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			)
 				continue;
 			nativeNamedNodeMap[key] = descriptor.value;
-			const own = viewMethods[key];
+			const own = VIEW_METHODS.includes(key);
 			Reflect.defineProperty(namedNodeMap, key, {
 				...descriptor,
 				value: proxyModule.wrapFunction(
@@ -2306,7 +2273,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						if (!view || !args.length)
 							return Reflect.apply(target, view?.map ?? that, args);
 						return own
-							? own(view, args, key)
+							? (viewMethods ??= deferred().attributeViewMethods({
+									isMarkerOn,
+									attributeName,
+									Attr: realm.Attr,
+									nativeNamedNodeMap,
+									setNamedItems,
+								}))[key](view, args, key)
 							: Reflect.apply(target, view.map, args);
 					},
 				),

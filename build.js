@@ -258,13 +258,19 @@ const rewriterLibrary = {
 const DEFERRED_FILES = new Set(
 	[
 		'src/inject/cookieStoreMethods.ts',
+		'src/inject/dom/ancestorOriginsList.ts',
+		'src/inject/dom/attributeViewMethods.ts',
+		'src/inject/dom/beaconRelay.ts',
 		'src/inject/dom/deferredParts.ts',
 		'src/inject/dom/markupMembers.ts',
 		'src/inject/dom/modules/Fingerprint.ts',
 		'src/inject/dom/modules/serviceWorkerEmulation.ts',
+		'src/inject/dom/sourcePolicy.ts',
+		'src/inject/idbSize.ts',
 		'src/inject/serviceWorkerObjects.ts',
 		'src/inject/webTransport.ts',
 		'src/inject/webTransportStandIn.ts',
+		'src/inject/xhrChecks.ts',
 	].map((file) => resolve(file)),
 );
 const DEFERRED_ENTRY = 'src/inject/dom/deferredParts.ts';
