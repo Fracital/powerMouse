@@ -8,5 +8,13 @@ import { runWpt } from '../wpt.mjs';
 await runWpt('wpt-script-element', {
 	roots: ['html/semantics/scripting-1/the-script-element'],
 	concurrency: 2,
-	skip: [/\/the-script-element\/(execution-timing|module)\//],
+	skip: [
+		/\/the-script-element\/(execution-timing|module)\//,
+		// proxied, its verdict flips from run to run: an XHTML document is
+		// re-created through the hooks, where an inline script runs before
+		// the external testharness.js ahead of it has loaded (the XML parser
+		// waits for it), so the page passes or reports nothing depending on
+		// which arrives first (README, XHTML scripts)
+		/\/script-type-and-language-js-xhtml\.xhtml$/,
+	],
 });
