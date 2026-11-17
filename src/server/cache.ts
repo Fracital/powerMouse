@@ -409,6 +409,20 @@ function seconds(control: Map<string, string>, name: string): number | null {
 export class HttpCache {
 	private cache?: Promise<Cache>;
 	private bytes = -1;
+	/** the bytes every write added, from the start: what an eviction's walk did not list */
+	private added = 0;
+	/**
+	 * The walk of the store in flight (a measure or an eviction), one at a
+	 * time: each lists every entry and reads each one's headers, and a write
+	 * that started one of its own whenever the store was over budget made a
+	 * page full of cacheable loads start one per load. They overlapped by the
+	 * hundred, each holding a Request and a Response for every entry while
+	 * it read them one by one (a 30-site browse held 1.4 million Requests and
+	 * 1.3 GB in the worker), and each load's entry waited for its walk.
+	 */
+	private walking: Promise<void> | null = null;
+	/** a write found the store over budget during a walk: an eviction follows it */
+	private walkAgain = false;
 	private open(): Promise<Cache> {
 		return (this.cache ??= caches.open(STORE));
 	}
@@ -563,9 +577,31 @@ export class HttpCache {
 				headers,
 			}),
 		);
-		if (this.bytes < 0) await this.measure();
+		if (this.bytes < 0) await (this.walking ?? this.walk(() => this.measure()));
 		this.bytes += size;
-		if (this.bytes > BUDGET) await this.evict();
+		this.added += size;
+		// (the write is done: the entry is not held back while the store is walked)
+		if (this.bytes > BUDGET) this.evictSoon();
+	}
+	/** run `walk` as the one walk of the store */
+	private walk(walk: () => Promise<void>): Promise<void> {
+		const running: Promise<void> = walk()
+			.catch(() => {})
+			.finally(() => {
+				if (this.walking !== running) return;
+				this.walking = null;
+				if (this.walkAgain) {
+					this.walkAgain = false;
+					if (this.bytes > BUDGET) this.evictSoon();
+				}
+			});
+		this.walking = running;
+		return running;
+	}
+	/** an eviction, unless a walk is running already (then one after it, if still over budget) */
+	private evictSoon() {
+		if (this.walking) this.walkAgain = true;
+		else void this.walk(() => this.evict());
 	}
 	/**
 	 * a 304: keep the body, take the fresher headers, start the clock again.
@@ -719,6 +755,7 @@ export class HttpCache {
 		const cache = await this.open();
 		const entries: [Request, number, number][] = [];
 		let bytes = 0;
+		const added = this.added;
 		for (const request of await cache.keys()) {
 			const stored = await cache.match(request);
 			const size = Number(stored?.headers.get(SIZE)) || 0;
@@ -729,7 +766,8 @@ export class HttpCache {
 				size,
 			]);
 		}
-		this.bytes = bytes;
+		// (with what was written since the listing, which it does not hold)
+		this.bytes = bytes + (this.added - added);
 		entries.sort((a, b) => a[1] - b[1]);
 		for (const [request, , size] of entries) {
 			if (this.bytes <= BUDGET * EVICT_TO) break;
