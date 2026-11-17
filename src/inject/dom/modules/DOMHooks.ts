@@ -32,6 +32,8 @@ import DocumentClient, {
 	setGlobalParsingState,
 } from '../Client';
 import cloneRawNode, {
+	closeNoscripts,
+	createElementIn,
 	inertDocumentOf,
 	isHTMLTemplate,
 	isScriptElement,
@@ -39,7 +41,10 @@ import cloneRawNode, {
 	releaseMarkup,
 	templateContentDocument,
 } from '../cloneNode';
+import { deferred } from '../deferred';
+import type { DeferredParts } from '../deferredParts';
 import { frameWindow } from '../freshContext';
+import type { MarkupContext, ScriptNotes } from '../markupMembers';
 import { responseURLOf } from '../responseDocuments';
 import WriteStream from '../WriteStream';
 import {
@@ -64,7 +69,8 @@ const ORIGINAL_ATTRIBUTE = MARKER;
 /**
  * the markup members of Node, Element, ShadowRoot, CharacterData,
  * DocumentFragment and Document the inject hooks (or that only serialize);
- * any other member named with HTML is taken off those prototypes
+ * any other member named with HTML is taken off those prototypes, except
+ * the insertion members below on the three prototypes they are hooked on
  */
 const HOOKED_MARKUP_MEMBERS = new Set([
 	'innerHTML',
@@ -74,6 +80,31 @@ const HOOKED_MARKUP_MEMBERS = new Set([
 	'setHTMLUnsafe',
 	'setHTML',
 ]);
+type Fn = (...args: unknown[]) => unknown;
+/**
+ * Chrome 157's markup insertion members the inject hooks (../markupMembers.ts).
+ * Their stream* forms (streamHTML(Unsafe), streamAppendHTML and the rest) are
+ * not: they stay off the prototypes with every other unhooked markup member.
+ * A stream form's chunks go to the browser's own WritableStream through its
+ * writer, and the only writer methods a hook could call are the ones the
+ * realm has when the page first streams (taken as the bundle loads, each
+ * frame made the WritableStream interfaces, which cost every frame's heap):
+ * a page that replaced the writer's `write` or the stream's `getWriter` by
+ * then would be handed the browser's own writer, and could write its markup
+ * into the browser's parser unrewritten. No check of what it installed tells
+ * a native from a bound or planted one well enough. They can be hooked once
+ * the writer's natives are taken at load at a cost a frame can carry.
+ */
+const MARKUP_INSERTION =
+	/^(?:append|prepend|before|after|replaceWith)HTML(?:Unsafe)?$/;
+/** the insertion methods the safe members put nodes in with (as the hooks made them) */
+const MARKUP_INSERTS = [
+	'append',
+	'prepend',
+	'before',
+	'after',
+	'replaceWith',
+] as const;
 const XLINK_NAMESPACE = 'http://www.w3.org/1999/xlink';
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 
@@ -1412,15 +1443,23 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// hands over the serialisation, markers included. The fragment parser
 		// never runs a script, so none is rewritten here. The copy is made in
 		// an inert document (see inertDocumentOf).
+		// A <noscript> whose markup would end early in the page (where
+		// scripting is on, and its markup is text up to the first
+		// `</noscript`) is emptied first (closeNoscripts). (`scripts`: the
+		// markup's scripts may run, runScripts, so they are rewritten as a
+		// written page's are, ../markupMembers.ts settle, which may turn
+		// runScripts off.)
 		const rewriteMarkup = (
 			markup: unknown,
 			context: Element | null,
+			scripts?: ScriptNotes,
 		): string => {
 			const inert = inertDocumentOf(this.client.global.document);
-			const div = inert.createElement('div');
+			const div = createElementIn(inert, 'div');
 			// parsed in the context the browser parses it in next, so the
 			// serialisation keeps what that context keeps (a section's rows)
-			div.append(
+			// (put in by the insertion hook, as the page's own nodes are)
+			Reflect.apply(markupContext.inserts[0], div, [
 				cloneRawNode(
 					parseHTMLFragmentIn(
 						String(markup),
@@ -1429,9 +1468,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					),
 					inert,
 				),
-			);
-			const html = this.client.innerHTMLOf(div);
+			]);
+			closeNoscripts(div);
+			let html = this.client.innerHTMLOf(div);
 			releaseMarkup(div);
+			if (scripts) html = markupParts().settle(html, context, scripts);
 			return html;
 		};
 		// execCommand edits the document from inside the browser: the markup
@@ -1596,42 +1637,106 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		const shadowRootPrototype = (
 			this.client.global as { ShadowRoot?: typeof ShadowRoot }
 		).ShadowRoot?.prototype;
-		const withoutRunScripts = (options: unknown): unknown => {
-			if (
-				options === null ||
-				(typeof options !== 'object' && typeof options !== 'function')
-			)
-				return options;
-			const view = options as { runScripts?: unknown; sanitizer?: unknown };
-			void view.runScripts;
-			const sanitizer = view.sanitizer;
-			return sanitizer === undefined ? {} : { sanitizer };
-		};
 		// Markup insertion members the inject does not hook are taken off the
-		// page's prototypes: Chrome 157 added appendHTML(Unsafe), prependHTML,
-		// beforeHTML, afterHTML, replaceWithHTML and their stream* forms on
-		// Element, ShadowRoot and CharacterData, which parse markup with no hook
-		// in the way (an `<img onerror>` or, with runScripts, a `<script>` in it
-		// ran as the page wrote it, and its loads went out unrouted). A page
-		// sees the browser without them, as a Chrome before 157, until each is
-		// hooked; one a later Chrome adds is taken off the same way.
-		for (const proto of [
-			this.client.global.Element.prototype,
+		// page's prototypes, so markup never reaches the browser's parser with
+		// no hook in the way (an `<img onerror>` or, with runScripts, a
+		// `<script>` in it ran as the page wrote it, and its loads went out
+		// unrouted): a member a later Chrome adds reads as absent until it is
+		// hooked. Chrome 157's insertion members on Element, ShadowRoot and
+		// CharacterData are hooked below.
+		const global = this.client.global;
+		const characterDataPrototype = (
+			global as { CharacterData?: typeof CharacterData }
+		).CharacterData?.prototype;
+		const insertionPrototypes: (object | undefined)[] = [
+			global.Element.prototype,
 			shadowRootPrototype,
-			(this.client.global as { CharacterData?: typeof CharacterData })
-				.CharacterData?.prototype,
-			this.client.global.DocumentFragment.prototype,
-			this.client.global.Document.prototype,
-			this.client.global.Node.prototype,
+			characterDataPrototype,
+		];
+		for (const proto of [
+			...insertionPrototypes,
+			global.DocumentFragment.prototype,
+			global.Document.prototype,
+			global.Node.prototype,
 		]) {
 			if (!proto) continue;
+			const insertions = insertionPrototypes.includes(proto);
 			for (const name of Reflect.ownKeys(proto))
 				if (
 					typeof name === 'string' &&
 					name.includes('HTML') &&
-					!HOOKED_MARKUP_MEMBERS.has(name)
+					!HOOKED_MARKUP_MEMBERS.has(name) &&
+					!(insertions && MARKUP_INSERTION.test(name))
 				)
 					Reflect.deleteProperty(proto, name);
+		}
+		// appendHTML(Unsafe), prependHTML, beforeHTML, afterHTML,
+		// replaceWithHTML and their stream* forms: the Unsafe ones as
+		// setHTMLUnsafe (the markup rewritten, then the browser's parser), the
+		// safe ones as setHTML (sanitized by the browser in an inert copy, what
+		// it leaves put in through the insertion hooks). The work is a deferred
+		// part of the bundle (../markupMembers.ts), made at the page's first
+		// call; what it needs that a page could replace is taken now, before
+		// any page script ran, in as little code as can take it (a frame
+		// compiles what runs here: each kilobyte of it was a kilobyte of every
+		// frame's heap).
+		// the element markup is parsed in for a setHTMLUnsafe: the element,
+		// a shadow root's host (by the browser's own getters)
+		const nodeTypeOf = nativeGetter(nativeNode, 'nodeType');
+		const markupContextOf = (that: unknown): Element | null => {
+			try {
+				if (Reflect.apply(nodeTypeOf, that, []) === 1) return that as Element;
+				return markupContext.shadowHost
+					? (Reflect.apply(markupContext.shadowHost, that, []) as Element)
+					: null;
+			} catch (error) {
+				// not a node: the browser's error, after
+				return null;
+			}
+		};
+		const markupContext: MarkupContext = {
+			client: this.client,
+			rewrite: rewriteMarkup,
+			natives: [],
+			ends: [],
+			inserts: [],
+			shadowHost:
+				shadowRootPrototype &&
+				Reflect.getOwnPropertyDescriptor(shadowRootPrototype, 'host')?.get,
+			contentOf: nativeGetter(nativeHTMLTemplateElement, 'content'),
+			importNode: global.Document.prototype.importNode,
+			nativeNode,
+			nativeElement,
+		};
+		for (const proto of [
+			global.Element.prototype,
+			global.DocumentFragment.prototype,
+			global.CharacterData.prototype,
+		])
+			for (const name of MARKUP_INSERTS)
+				markupContext.inserts.push(
+					(proto as unknown as Record<string, Fn>)[name],
+				);
+		let made: ReturnType<DeferredParts['markupMembers']> | null = null;
+		const markupParts = () =>
+			(made ??= deferred().markupMembers(markupContext));
+		// one call for every wrapper: the native it wraps says which member it
+		// is (its name), and its place in `natives` whose interface (`ends`:
+		// where each prototype's natives end)
+		const markupCall = (target: Fn, that: unknown, args: unknown[]) =>
+			markupParts().member(target, that as Node, args);
+		for (const proto of insertionPrototypes) {
+			if (proto)
+				for (const name of Reflect.ownKeys(proto)) {
+					if (typeof name !== 'string' || !MARKUP_INSERTION.test(name))
+						continue;
+					const native = (proto as unknown as Record<string, unknown>)[name];
+					if (typeof native !== 'function') continue;
+					markupContext.natives.push(native as Fn);
+					(proto as unknown as Record<string, unknown>)[name] =
+						proxyModule.wrapFunction(native as Fn, markupCall);
+				}
+			markupContext.ends.push(markupContext.natives.length);
 		}
 		for (const proto of [
 			this.client.global.Element.prototype,
@@ -1668,22 +1773,21 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						// script runs: rewritten as it goes in, by the same setter
 						if (args.length && isScriptElement(that))
 							return Reflect.apply(hookedInnerHTMLSet, that, [args[0]]);
+						// (runScripts: the scripts are rewritten, ../markupMembers.ts
+						// parserOptions; the context, by the browser's own getters)
+						let scripts: ScriptNotes | undefined;
+						if (args.length > 1) {
+							const parsed = markupParts().parserOptions(args[1]);
+							args[1] = parsed.options;
+							if (parsed.scripts)
+								scripts = markupParts().notes(that as Node, parsed.options);
+						}
 						if (args.length)
 							args[0] = trustedHTML(
-								rewriteMarkup(
-									args[0],
-									(that as Node).nodeType === 1
-										? (that as Element)
-										: ((that as ShadowRoot).host ?? null),
-								),
+								rewriteMarkup(args[0], markupContextOf(that), scripts),
 							);
-						// `runScripts: true` runs the markup's scripts as the parser
-						// made them, which the rewrite above leaves as the page wrote
-						// them (they are inert in any other markup): the option is
-						// not passed on, so they stay inert (its members are read as
-						// the browser reads them, in order, a throwing one throwing)
-						if (args.length > 1) args[1] = withoutRunScripts(args[1]);
 						const result = Reflect.apply(target, that, args);
+						if (scripts) markupParts().record(that as Node, scripts);
 						this.client.sweepFrames?.();
 						return result;
 					},

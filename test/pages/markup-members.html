@@ -1,0 +1,372 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>MARKUP MEMBERS</title>
+	</head>
+	<body>
+		<script>
+			// Chrome 157's markup insertion members (appendHTML(Unsafe),
+			// prependHTML, beforeHTML, afterHTML, replaceWithHTML, their stream*
+			// forms) and setHTMLUnsafe's runScripts, each read back by shape:
+			// the nodes they insert and where, the URLs as the page reads them,
+			// the scripts that ran (and their text), a declarative shadow root,
+			// what the safe forms leave, a stream's nodes after each chunk (a
+			// tag and an attribute split between two), and the errors of a bad
+			// receiver, argument, option or parent. A member the browser lacks
+			// reads "absent". test/suites/markup-members.mjs compares it with
+			// the page loaded natively.
+			const r = {};
+			window.__ran = [];
+			const shape = (node) =>
+				[...node.childNodes]
+					.map((child) =>
+						child.nodeType === 1
+							? `${child.namespaceURI.split('/').pop()}:${child.localName}[${child
+									.getAttributeNames()
+									.map(
+										(name) =>
+											`${name}=${JSON.stringify(child.getAttribute(name))}`,
+									)
+									.join(
+										' ',
+									)}](${shape(child.localName === 'template' ? child.content : child)})${
+									child.shadowRoot ? `{${shape(child.shadowRoot)}}` : ''
+								}`
+							: child.nodeType === 3
+								? JSON.stringify(child.data)
+								: child.nodeType === 8
+									? `<!--${child.data}-->`
+									: `#${child.nodeType}`,
+					)
+					.join(',');
+			// the URLs as the page reads them, and its scripts' text
+			const reads = (root) =>
+				[...root.querySelectorAll('a, img, script')]
+					.map((element) =>
+						element.localName === 'a'
+							? `a ${element.href}`
+							: element.localName === 'img'
+								? `img ${element.src}`
+								: `script ${JSON.stringify(element.text)}`,
+					)
+					.join(' | ');
+			const outcome = (run) => {
+				try {
+					const value = run();
+					return value === undefined
+						? 'undefined'
+						: value === null
+							? 'null'
+							: Object.prototype.toString.call(value);
+				} catch (e) {
+					return `${e.name}: ${e.message}`;
+				}
+			};
+			const MARKUP =
+				'<a href="/x?q=1" id=l>l</a><img src="/pages/none.png" alt=ALT onerror="__ran.push(\'error \' + this.alt)">' +
+				'<b title=t>b<i>i</i></b><tr><td>c</td></tr>' +
+				'<script id=s>__ran.push("script " + (document.currentScript && document.currentScript.id))<\/script>' +
+				'<div><template shadowrootmode=open><p>shadow</p><script>__ran.push("declarative " + (document.currentScript === null))<\/script></template></div>';
+			const CHUNKS = [
+				'<a hr',
+				'ef="/x?q=2">l</a><b tit',
+				'le=t>b',
+				'</b><img src="/pages/none.png" alt=ALT',
+				' onerror="__ran.push(\'error \' + this.alt)"><scr',
+				// (a raw text element shows natively as soon as its start tag
+				// is in, its text growing; proxied, once its end tag is: the
+				// chunk that starts its text ends it here)
+				'ipt id=s2>__ran.push("stream " + (document.currentScript && document.currentScript.id))<\/script><div><templ',
+				'ate shadowrootmode=open><i>in</i><script>__ran.push("stream declarative " + (document.currentScript === null))<\/script>',
+				'</template></div><p>open',
+				' text',
+			];
+			const MEMBERS = {
+				Element: ['append', 'prepend', 'before', 'after', 'replaceWith'],
+				ShadowRoot: ['append', 'prepend'],
+				CharacterData: ['before', 'after', 'replaceWith'],
+			};
+			const STREAMS = {
+				Element: ['', 'Append', 'Prepend', 'Before', 'After', 'ReplaceWith'],
+				ShadowRoot: ['', 'Append', 'Prepend'],
+				CharacterData: ['Before', 'After', 'ReplaceWith'],
+			};
+			// a fresh case: a section in the body, and the receiver of the
+			// interface in it among siblings
+			const setup = (iface) => {
+				const section = document.createElement('section');
+				section.innerHTML =
+					'<span id=first>1</span><span id=r>r</span><em>e</em>';
+				document.body.append(section);
+				const span = section.querySelector('#r');
+				if (iface === 'Element') return { root: section, node: span };
+				if (iface === 'CharacterData')
+					return { root: section, node: span.firstChild };
+				const root = span.attachShadow({ mode: 'open' });
+				root.innerHTML = '<i>0</i>';
+				return { root, node: root, section };
+			};
+			const alt = (markup, name) => markup.replaceAll('ALT', name);
+			// the members' own shapes, and which a prototype has
+			for (const iface of Object.keys(MEMBERS)) {
+				const proto = window[iface].prototype;
+				r[`${iface} members`] = Object.getOwnPropertyNames(proto)
+					.filter((name) => name.includes('HTML'))
+					.join(',');
+				for (const name of Object.getOwnPropertyNames(proto)) {
+					if (!/HTML/.test(name)) continue;
+					const d = Object.getOwnPropertyDescriptor(proto, name);
+					const fn = d.value ?? d.get;
+					r[`${iface}.${name} shape`] =
+						`${typeof fn} ${fn.length} ${fn.name} ${Function.prototype.toString.call(fn)} ${d.writable} ${d.enumerable} ${d.configurable}`;
+				}
+			}
+			for (const [iface, kinds] of Object.entries(MEMBERS))
+				for (const kind of kinds)
+					for (const unsafe of ['', 'Unsafe']) {
+						const name = `${kind}HTML${unsafe}`;
+						const key = `${iface}.${name}`;
+						if (typeof window[iface].prototype[name] !== 'function') {
+							r[key] = 'absent';
+							continue;
+						}
+						const variants = unsafe
+							? [
+									['', undefined],
+									[' runScripts', { runScripts: true }],
+									[' runScripts false', { runScripts: false }],
+								]
+							: [
+									['', undefined],
+									[' sanitizer', { sanitizer: { elements: ['a', 'b', 'p'] } }],
+								];
+						for (const [label, options] of variants) {
+							const { root, node, section } = setup(iface);
+							r[`${key}${label} returns`] = outcome(() =>
+								options === undefined
+									? node[name](alt(MARKUP, key + label))
+									: node[name](alt(MARKUP, key + label), options),
+							);
+							r[`${key}${label}`] = shape(root);
+							r[`${key}${label} reads`] = reads(root);
+							(section ?? root).remove();
+						}
+						const { root, node, section } = setup(iface);
+						const proto = window[iface].prototype;
+						r[`${key} no arguments`] = outcome(() => node[name]());
+						r[`${key} bad receiver`] = outcome(() => proto[name].call({}, 'x'));
+						r[`${key} symbol`] = outcome(() => node[name](Symbol('s')));
+						r[`${key} bad options`] = outcome(() => node[name]('x', 5));
+						r[`${key} bad sanitizer`] = outcome(() =>
+							node[name]('x', { sanitizer: 5 }),
+						);
+						r[`${key} null`] =
+							outcome(() => node[name](null)) + ' ' + shape(root);
+						(section ?? root).remove();
+						if (kind !== 'append' && kind !== 'prepend') {
+							const lone =
+								iface === 'Element'
+									? document.createElement('div')
+									: document.createTextNode('t');
+							r[`${key} no parent`] = outcome(() => lone[name]('<b>x</b>'));
+							const fragment = document.createDocumentFragment();
+							fragment.append(lone);
+							r[`${key} fragment parent`] =
+								outcome(() => lone[name]('<b>x</b>')) + ' ' + shape(fragment);
+							const holder = document.createElement('table');
+							const body = holder.createTBody();
+							const row = body.insertRow();
+							const cell =
+								iface === 'Element'
+									? row
+									: row.appendChild(document.createTextNode('t'));
+							r[`${key} in a table`] =
+								outcome(() => cell[name]('<tr><td>x</td></tr>')) +
+								' ' +
+								shape(holder);
+							const host = document.createElement('div');
+							const shadow = host.attachShadow({ mode: 'open' });
+							const child =
+								iface === 'Element'
+									? document.createElement('i')
+									: document.createTextNode('t');
+							shadow.append(child);
+							r[`${key} in a shadow root`] =
+								outcome(() => child[name]('<b>x</b>')) + ' ' + shape(shadow);
+						}
+						if (iface === 'Element') {
+							const template = document.createElement('template');
+							const tchild = template.appendChild(document.createElement('i'));
+							const target =
+								kind === 'append' || kind === 'prepend' ? template : tchild;
+							r[`${key} template`] =
+								outcome(() => target[name]('<b>t</b><tr><td>c</td></tr>')) +
+								' ' +
+								template.childNodes.length +
+								' ' +
+								shape(template.content);
+							const style = document.createElement('style');
+							style.textContent = 'a{}';
+							const into =
+								kind === 'append' || kind === 'prepend'
+									? style
+									: style.appendChild(document.createElement('i'));
+							r[`${key} style`] =
+								outcome(() => into[name]('<b>x</b>b{color:red}')) +
+								' ' +
+								JSON.stringify(style.textContent);
+							const table = document.createElement('table');
+							table.innerHTML = '<tbody><tr><td>a</td></tr></tbody>';
+							const tbody = table.tBodies[0];
+							const at =
+								kind === 'append' || kind === 'prepend' ? tbody : tbody.rows[0];
+							r[`${key} table context`] =
+								outcome(() => at[name]('<tr><td>x</td></tr>')) +
+								' ' +
+								shape(table);
+						}
+					}
+			// setHTMLUnsafe's runScripts (Chrome 156 and later)
+			for (const [label, options] of [
+				['', undefined],
+				[' runScripts', { runScripts: true }],
+			]) {
+				const host = document.createElement('div');
+				document.body.append(host);
+				host.setHTMLUnsafe(alt(MARKUP, `setHTMLUnsafe${label}`), options);
+				r[`setHTMLUnsafe${label}`] = shape(host) + ' ' + reads(host);
+				host.remove();
+				const shadowHost = document.createElement('div');
+				document.body.append(shadowHost);
+				const shadow = shadowHost.attachShadow({ mode: 'open' });
+				shadow.setHTMLUnsafe(
+					alt(MARKUP, `shadow setHTMLUnsafe${label}`),
+					options,
+				);
+				r[`ShadowRoot setHTMLUnsafe${label}`] =
+					shape(shadow) + ' ' + reads(shadow);
+				shadowHost.remove();
+			}
+			// a script inserted with runScripts that is not connected yet runs
+			// when it is
+			if (typeof Element.prototype.appendHTMLUnsafe === 'function') {
+				const loose = document.createElement('div');
+				loose.appendHTMLUnsafe('<script>__ran.push("loose")<\/script>', {
+					runScripts: true,
+				});
+				r['loose script before connecting'] = __ran.includes('loose');
+				document.body.append(loose);
+				r['loose script once connected'] = __ran.includes('loose');
+				loose.remove();
+			}
+			const streams = async () => {
+				for (const [iface, kinds] of Object.entries(STREAMS))
+					for (const kind of kinds)
+						for (const unsafe of ['', 'Unsafe']) {
+							const name = `stream${kind}HTML${unsafe}`;
+							const key = `${iface}.${name}`;
+							if (typeof window[iface].prototype[name] !== 'function') {
+								r[key] = 'absent';
+								continue;
+							}
+							const variants = unsafe
+								? [
+										['', undefined],
+										[' runScripts', { runScripts: true }],
+									]
+								: [['', undefined]];
+							for (const [label, options] of variants) {
+								const { root, node, section } = setup(iface);
+								let stream;
+								r[`${key}${label} returns`] = outcome(
+									() =>
+										(stream =
+											options === undefined
+												? node[name]()
+												: node[name](options)),
+								);
+								r[`${key}${label} at once`] = shape(root);
+								const steps = [];
+								const writer = stream.getWriter();
+								r[`${key}${label} desiredSize`] = writer.desiredSize;
+								for (const chunk of CHUNKS) {
+									await writer.write(alt(chunk, key + label));
+									steps.push(shape(root));
+								}
+								await writer.close();
+								steps.push(shape(root));
+								r[`${key}${label}`] = steps.join(' // ');
+								r[`${key}${label} reads`] = reads(root);
+								r[`${key}${label} write after close`] = await writer
+									.write('x')
+									.then(
+										() => 'written',
+										(e) => `${e.name}: ${e.message}`,
+									);
+								(section ?? root).remove();
+							}
+							const { root, node, section } = setup(iface);
+							const proto = window[iface].prototype;
+							r[`${key} bad receiver`] = outcome(() => proto[name].call({}));
+							r[`${key} bad options`] = outcome(() => node[name](5));
+							// the page puts a node in between two chunks
+							const parent = iface === 'ShadowRoot' ? root : node.parentNode;
+							const writer = node[name]().getWriter();
+							await writer.write('<b>1</b><p>open');
+							parent.append(document.createElement('x-page'));
+							await writer.write('<b>2</b></p><b>3</b>');
+							await writer.write(5);
+							await writer.close();
+							r[`${key} interleaved`] = shape(root);
+							(section ?? root).remove();
+							if (
+								iface !== 'ShadowRoot' &&
+								kind !== '' &&
+								kind !== 'Append' &&
+								kind !== 'Prepend'
+							) {
+								const lone =
+									iface === 'Element'
+										? document.createElement('div')
+										: document.createTextNode('t');
+								r[`${key} no parent`] = outcome(() => lone[name]());
+								const fragment = document.createDocumentFragment();
+								fragment.append(lone);
+								r[`${key} fragment parent`] = outcome(() => lone[name]());
+							}
+							const aborted = document.createElement('div');
+							const target =
+								iface === 'Element'
+									? aborted.appendChild(document.createElement('i'))
+									: iface === 'CharacterData'
+										? aborted.appendChild(document.createTextNode('t'))
+										: aborted.attachShadow({ mode: 'open' });
+							const abortWriter = target[name]().getWriter();
+							await abortWriter.write('<b>ab');
+							await abortWriter.abort('why');
+							r[`${key} aborted`] =
+								shape(iface === 'ShadowRoot' ? target : aborted) +
+								' ' +
+								(await abortWriter.closed.then(
+									() => 'closed',
+									(e) => `rejects ${e}`,
+								));
+						}
+			};
+			streams()
+				.catch((e) => {
+					r.error = `${e.name}: ${e.message} ${e.stack}`;
+				})
+				.then(
+					() =>
+						// the images' errors fire late
+						new Promise((resolve) => setTimeout(resolve, 1500)),
+				)
+				.then(() => {
+					r.ran = [...__ran].sort().join(' | ');
+					window.__members = r;
+				});
+		</script>
+	</body>
+</html>

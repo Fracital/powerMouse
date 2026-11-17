@@ -2898,6 +2898,20 @@ export default class DocumentClient extends Client {
 		return new URL(this.baseURIDescriptor.get!.call(this.global.document));
 	}
 	/**
+	 * An inline script's rewrite with `preamble` in front, as the client
+	 * makes it, with nothing the page could have replaced asked on the way
+	 * there (no table: markupMembers.ts, whose markup's scripts run)
+	 */
+	markupScript(source: string, isModule: boolean, preamble: string): string {
+		return modifyJS(
+			source,
+			this.baseURL,
+			this.config,
+			isModule ? 'genericModule' : 'generic',
+			preamble,
+		);
+	}
+	/**
 	 * Rewrite every inline script under `root` the way the parser will run it
 	 * (a classic script gets the currentScript preamble, a module none, an
 	 * import map its routed targets): the written page (loadHTML) and

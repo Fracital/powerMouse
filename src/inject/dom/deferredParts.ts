@@ -8,6 +8,9 @@
 // `__stompShared` (the snapshots, the client, the Proxy module): only the
 // files build.js lists in DEFERRED_FILES are the parts' own.
 //
+// (and Chrome 157's markup insertion members, ./markupMembers.ts, at a
+// page's first call of one)
+//
 // (and the WebTransport stand-in, ../webTransportStandIn.ts, with what
 // carries its sessions, ../webTransport.ts, once a realm makes its first
 // session)
@@ -22,6 +25,7 @@
 import { cookieStoreMethods } from '../cookieStoreMethods';
 import { carry as carryWebTransport } from '../webTransport';
 import { standIn as webTransportStandIn } from '../webTransportStandIn';
+import { markupMembers } from './markupMembers';
 import FingerprintModule from './modules/Fingerprint';
 import { emulateServiceWorker } from './modules/serviceWorkerEmulation';
 
@@ -29,6 +33,7 @@ const parts = {
 	cookieStoreMethods,
 	FingerprintModule,
 	emulateServiceWorker,
+	markupMembers,
 	webTransportStandIn,
 	carryWebTransport,
 };

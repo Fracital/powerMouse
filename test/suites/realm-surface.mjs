@@ -141,17 +141,14 @@ const EXCLUDED = [
 	],
 	[
 		/./,
-		/^G\.(Element|ShadowRoot|CharacterData)\.prototype(:keys$|\.(?!(?:innerHTML|outerHTML|getHTML|insertAdjacentHTML|setHTMLUnsafe|setHTML)(?:$|[.:~]))[A-Za-z]*HTML[A-Za-z]*($|[.:~]))/,
-		"the markup insertion members Chrome 157 added (appendHTMLUnsafe and its kin) are taken off the page's prototypes until the inject hooks them (src/inject/dom/modules/DOMHooks.ts HOOKED_MARKUP_MEMBERS): a page reads them as a Chrome before 157 has them, absent",
+		/^G\.(Element|ShadowRoot|CharacterData)\.prototype(:keys$|\.stream[A-Za-z]*HTML[A-Za-z]*($|[.:~]))/,
+		"the stream forms of the markup insertion members Chrome 157 added (streamHTML(Unsafe), streamAppendHTML and their kin) are taken off the page's prototypes, as every markup member the inject does not hook (src/inject/dom/modules/DOMHooks.ts MARKUP_INSERTION says why): a page reads them as a Chrome before 157 has them, absent",
 		null,
 		(native, proxied) => {
 			if (proxied === undefined) return true;
 			const strip = (value) =>
 				String(value)
-					.replace(
-						/(^|[,:])(?!(?:innerHTML|outerHTML|getHTML|insertAdjacentHTML|setHTMLUnsafe|setHTML)(?=,|$))[A-Za-z]*HTML[A-Za-z]*(?=,|$)/g,
-						'$1',
-					)
+					.replace(/(^|[,:])stream[A-Za-z]*HTML[A-Za-z]*(?=,|$)/g, '$1')
 					.replace(/,{2,}/g, ',')
 					.replace(/,$/, '');
 			return strip(proxied) === strip(native);

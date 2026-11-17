@@ -1220,6 +1220,46 @@ yyyymmddhhmm>.g<commit>`, only once CI passed on that commit and only when
 
 ### Fidelity
 
+- Chrome 157's markup insertion members are there for a page and do what
+  they do natively: `appendHTML(Unsafe)`, `prependHTML(Unsafe)`,
+  `beforeHTML(Unsafe)`, `afterHTML(Unsafe)` and `replaceWithHTML(Unsafe)` on
+  Element, ShadowRoot and CharacterData. They were taken off the page's
+  prototypes, so a page that looked for them saw a Chrome without them. An
+  Unsafe member's markup is rewritten and handed to the browser's own, as
+  `setHTMLUnsafe`'s is (a declarative shadow root is made, the page's
+  Trusted Types are asked with Chrome's sink names); a safe one sanitizes in
+  an inert copy and what it leaves goes in through the insertion hooks, as
+  `setHTML`'s does. Their `stream*` forms stay off the prototypes: their
+  chunks go to the browser's parser through a WritableStream writer, and the
+  only writer the inject could call is the one the realm has when the page
+  first streams, which a page can replace before then and so be handed the
+  browser's own writer.
+  `runScripts: true` (on these and `setHTMLUnsafe`, Chrome 156) runs the
+  markup's scripts again, rewritten first, those of a declarative shadow
+  root too (which run natively), and each reads back the text the page
+  wrote. What decides what runs asks no builtin a page can replace: the
+  page's options are read once into a record of no prototype that the
+  browser is handed (a getter or a Proxy that answers otherwise the second
+  time decides nothing), and the rewritten markup is parsed again by the
+  browser's own parser in an inert copy of its context (its name, an
+  `annotation-xml`'s encoding, a `<form>` around it, its document's mode)
+  until every script that parse makes is one rewritten, else runScripts is
+  turned off. With a sanitizer, or a TrustedHTMLParserOptions (which keeps
+  its runScripts to itself), the scripts do not run: what a sanitizer takes
+  off (a data block's type) makes running scripts of ones that were not.
+  A `<noscript>` whose markup would end early in the page (scripting is on
+  there, not in the inert copy: `<noscript><style></noscript><script>`) is
+  emptied before any markup the browser parses itself, `setHTMLUnsafe`'s
+  and a shadow root's `innerHTML`'s too, where it let out an `<img
+onerror>` or a `<script>` no hook saw. The work is a deferred part of the
+  bundle (src/inject/dom/markupMembers.ts). markup-members compares every
+  member natively and proxied (the nodes, the URLs as read, the scripts
+  that ran, errors, shapes, Trusted Types); it failed on 734 of 748 cases
+  before. adversarial-scripts gains a page that replaces the builtins the
+  inject could ask (Array and String methods, the query and script
+  getters, the node type) or passes options that answer otherwise each
+  time, in a same-origin child frame, and markup the browser parses
+  otherwise than an inert copy.
 - Resource timing reads as the page loaded natively reads it, entry by
   entry, measured against native Chrome on a fixture of every kind of load
   (docs/performance.md, performance-resources suite). The service worker

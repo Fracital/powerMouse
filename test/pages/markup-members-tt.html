@@ -1,0 +1,83 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>MARKUP MEMBERS TRUSTED TYPES</title>
+	</head>
+	<body>
+		<script>
+			// The markup members of Chrome 157 under the page's Trusted Types
+			// (require-trusted-types-for 'script', this page's header): an
+			// Unsafe one hands a string to the default policy as natively (its
+			// sink named `Element appendHTMLUnsafe`, `ShadowRoot
+			// appendHTMLUnsafe`, `Node afterHTMLUnsafe`) and inserts what the
+			// policy made of it; a safe one asks no policy. (The stream forms
+			// are left out: natively they want a TrustedHTMLParserOptions,
+			// which the inject does not judge.)
+			const r = {};
+			const log = [];
+			trustedTypes.createPolicy('default', {
+				createHTML: (value, type, sink) => {
+					log.push(`${type} ${sink} ${value}`);
+					return value.replace('X', 'Y');
+				},
+			});
+			const shape = (node) =>
+				[...node.childNodes]
+					.map((child) =>
+						child.nodeType === 1
+							? `${child.localName}(${shape(child)})`
+							: JSON.stringify(child.data),
+					)
+					.join(',');
+			const outcome = (run) => {
+				try {
+					run();
+					return 'ok';
+				} catch (e) {
+					return `${e.name}: ${e.message}`;
+				}
+			};
+			for (const [iface, kinds] of Object.entries({
+				Element: ['append', 'prepend', 'before', 'after', 'replaceWith'],
+				ShadowRoot: ['append', 'prepend'],
+				CharacterData: ['before', 'after', 'replaceWith'],
+			}))
+				for (const kind of kinds)
+					for (const unsafe of ['', 'Unsafe']) {
+						const name = `${kind}HTML${unsafe}`;
+						if (typeof window[iface].prototype[name] !== 'function') {
+							r[`${iface}.${name}`] = 'absent';
+							continue;
+						}
+						const section = document.createElement('section');
+						section.innerHTML = '<span>r</span>';
+						const span = section.firstChild;
+						const root =
+							iface === 'ShadowRoot'
+								? span.attachShadow({ mode: 'open' })
+								: section;
+						const node =
+							iface === 'Element'
+								? span
+								: iface === 'CharacterData'
+									? span.firstChild
+									: root;
+						log.length = 0;
+						const result = outcome(() => node[name]('<b>X</b>'));
+						r[`${iface}.${name}`] =
+							`${result} ${shape(root)} [${log.join(' | ')}]`;
+					}
+			for (const label of ['Element', 'ShadowRoot']) {
+				const host = document.createElement('div');
+				const target =
+					label === 'Element' ? host : host.attachShadow({ mode: 'open' });
+				log.length = 0;
+				const result = outcome(() => target.setHTMLUnsafe('<b>X</b>'));
+				r[`${label}.setHTMLUnsafe`] =
+					`${result} ${shape(target)} [${log.join(' | ')}]`;
+			}
+			window.__members = r;
+		</script>
+	</body>
+</html>

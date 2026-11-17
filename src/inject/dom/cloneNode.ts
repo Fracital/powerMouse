@@ -163,8 +163,13 @@ export function templateContentDocument(template: Element): Document {
  */
 export function inertDocumentOf(document: Document): Document {
 	// in the HTML namespace, so it is a template in an SVG document too
+	// (by the browser's own createElementNS: the page's could hand back an
+	// element of its own)
 	return templateContentDocument(
-		document.createElementNS('http://www.w3.org/1999/xhtml', 'template'),
+		Reflect.apply(nativeCreateElementNS, document, [
+			'http://www.w3.org/1999/xhtml',
+			'template',
+		]) as Element,
 	);
 }
 
@@ -178,6 +183,42 @@ const nativeChildNodes = Reflect.getOwnPropertyDescriptor(
 	Node.prototype,
 	'childNodes',
 )!.get!;
+
+const nativeCreateElement = Document.prototype.createElement;
+/** an element of `name` made by `document`'s createElement, the browser's own */
+export const createElementIn = (document: Document, name: string) =>
+	Reflect.apply(nativeCreateElement, document, [name]) as Element;
+/** an HTML element of `name` in `document`, by the browser's own createElementNS */
+export const createHTMLElement = (document: Document, name: string) =>
+	Reflect.apply(nativeCreateElementNS, document, [
+		'http://www.w3.org/1999/xhtml',
+		name,
+	]) as Element;
+
+const MATHML_NAMESPACE = 'http://www.w3.org/1998/Math/MathML';
+const nativeGetAttribute = Element.prototype.getAttribute;
+const nativeSetAttribute = Element.prototype.setAttribute;
+/**
+ * An element of `context`'s name and namespace in `inert`, to parse markup
+ * in as the browser parses it in `context`: a MathML <annotation-xml> with
+ * its `encoding` too, which makes it a place HTML goes in (an
+ * `encoding="text/html"` one's <script> is an HTML script, of none a
+ * MathML one). By the browser's own members.
+ */
+export function holderLike(inert: Document, context: Element): Element {
+	const namespace = Reflect.apply(nativeNamespace, context, []);
+	const name = Reflect.apply(nativeLocalName, context, []);
+	const holder = Reflect.apply(nativeCreateElementNS, inert, [
+		namespace,
+		name,
+	]) as Element;
+	if (namespace === MATHML_NAMESPACE && name === 'annotation-xml') {
+		const encoding = Reflect.apply(nativeGetAttribute, context, ['encoding']);
+		if (encoding !== null)
+			Reflect.apply(nativeSetAttribute, holder, ['encoding', encoding]);
+	}
+	return holder;
+}
 
 /**
  * Parse markup as the browser parses it into `context` (innerHTML, the
@@ -195,11 +236,7 @@ export function parseHTMLFragmentIn(
 	document: Document = globalThis.document,
 ): Node[] {
 	if (context === null) return parseHTMLFragment(script, document);
-	const inert = inertDocumentOf(document);
-	const holder = Reflect.apply(nativeCreateElementNS, inert, [
-		Reflect.apply(nativeNamespace, context, []),
-		Reflect.apply(nativeLocalName, context, []),
-	]) as Element;
+	const holder = holderLike(inertDocumentOf(document), context);
 	Reflect.apply(nativeInnerHTMLSet, holder, [trustedHTML(script)]);
 	// a template's markup lands in its content
 	const parent = isHTMLTemplate(holder)
@@ -261,6 +298,143 @@ export function releaseMarkup(root: Node | null | undefined): void {
 	} catch (error) {
 		// not a node of any realm: nothing to let go of
 	}
+}
+
+const nativeFirstChild = Reflect.getOwnPropertyDescriptor(
+	Node.prototype,
+	'firstChild',
+)!.get!;
+const nativeNextSibling = Reflect.getOwnPropertyDescriptor(
+	Node.prototype,
+	'nextSibling',
+)!.get!;
+const nativeInnerHTMLGet = Reflect.getOwnPropertyDescriptor(
+	Element.prototype,
+	'innerHTML',
+)!.get!;
+const nativeTextContentSet = Reflect.getOwnPropertyDescriptor(
+	Node.prototype,
+	'textContent',
+)!.set!;
+const nativeElementQuery = Element.prototype.querySelector;
+const nativeFragmentQuery = DocumentFragment.prototype.querySelector;
+// (in either case, letter by letter)
+const NOSCRIPT_END = '</noscript';
+const NOSCRIPT_END_UPPER = '</NOSCRIPT';
+/** `</noscript` in `text`, in any ASCII case, by the language alone (no String method the page may have replaced) */
+function endsNoscript(text: string): boolean {
+	const length = NOSCRIPT_END.length;
+	for (let at = 0; at + length <= text.length; at++) {
+		let i = 0;
+		while (
+			i < length &&
+			(text[at + i] === NOSCRIPT_END[i] ||
+				text[at + i] === NOSCRIPT_END_UPPER[i])
+		)
+			i++;
+		if (i === length) return true;
+	}
+	return false;
+}
+
+/**
+ * Empty every HTML <noscript> under `root` (an inert copy of markup the
+ * browser parses next, in the page) whose markup would not end where it
+ * ends in the copy, and say whether there was one. The copy is parsed and
+ * serialized with scripting off, where a noscript's markup is markup; the
+ * page parses with scripting on, where it is text up to the first
+ * `</noscript`. So one that holds a `</noscript` (a <style>'s text, a
+ * comment's, an attribute's) ends there in the page, and the rest of its
+ * markup is the page's markup, which no hook saw: `<noscript><style>
+ * </noscript><img src=x onerror=...>` made an image with its raw handler,
+ * and with runScripts a raw <script>. Natively nothing of a noscript shows
+ * (scripting is on), so only what it would have let out is lost. In
+ * template contents too; read by the browser's own getters, so a page that
+ * replaced them decides nothing of it.
+ */
+export function closeNoscripts(root: Node): boolean {
+	let closed = false;
+	try {
+		const type = Reflect.apply(nativeNodeType, root, []) as number;
+		const query =
+			type === 1
+				? nativeElementQuery
+				: type === 11
+					? nativeFragmentQuery
+					: null;
+		if (!query || Reflect.apply(query, root, ['noscript, template']) === null)
+			return false;
+	} catch (error) {
+		// not a node
+		return false;
+	}
+	let node = Reflect.apply(nativeFirstChild, root, []) as Node | null;
+	while (node) {
+		let descend = true;
+		if (Reflect.apply(nativeNodeType, node, []) === 1) {
+			const name = Reflect.apply(nativeLocalName, node, []);
+			const html =
+				Reflect.apply(nativeNamespace, node, []) ===
+				'http://www.w3.org/1999/xhtml';
+			if (html && name === 'template') {
+				if (
+					closeNoscripts(Reflect.apply(nativeTemplateContent, node, []) as Node)
+				)
+					closed = true;
+			} else if (html && name === 'noscript') {
+				descend = false;
+				if (endsNoscript(Reflect.apply(nativeInnerHTMLGet, node, []))) {
+					Reflect.apply(nativeTextContentSet, node, ['']);
+					closed = true;
+				}
+			}
+		}
+		const first = descend
+			? (Reflect.apply(nativeFirstChild, node, []) as Node | null)
+			: null;
+		if (first) {
+			node = first;
+			continue;
+		}
+		// the next node after this one's subtree, up to `root`
+		while (node && node !== root) {
+			const next = Reflect.apply(nativeNextSibling, node, []) as Node | null;
+			if (next) break;
+			node = Reflect.apply(nativeParentNode, node, []) as Node | null;
+		}
+		node =
+			node && node !== root
+				? (Reflect.apply(nativeNextSibling, node, []) as Node | null)
+				: null;
+	}
+	return closed;
+}
+
+// the browser's DOMParser as the bundle loaded, for the documents below
+const NativeDOMParser = typeof DOMParser === 'function' ? DOMParser : null;
+const nativeCompatMode = Reflect.getOwnPropertyDescriptor(
+	Document.prototype,
+	'compatMode',
+)?.get;
+// (not an array: an index the page put on Array.prototype is no document)
+let noQuirksDocument: Document | undefined;
+let quirksDocument: Document | undefined;
+/**
+ * An inert HTML document (a DOMParser's: no window, nothing loads, no
+ * script runs) in the mode of `like` (quirks or not: a quirks document's
+ * parser keeps a <p> open around a <table>), made once each by the
+ * browser's own constructor and parser as the bundle loaded
+ */
+export function inertHTMLDocument(like: Document): Document | null {
+	if (!NativeDOMParser || !nativeParseFromString || !nativeCompatMode)
+		return null;
+	const quirks = Reflect.apply(nativeCompatMode, like, []) === 'BackCompat';
+	const make = () =>
+		Reflect.apply(nativeParseFromString, new NativeDOMParser(), [
+			trustedHTML(quirks ? '' : '<!doctype html>'),
+			'text/html',
+		]) as Document;
+	return quirks ? (quirksDocument ??= make()) : (noQuirksDocument ??= make());
 }
 
 /**

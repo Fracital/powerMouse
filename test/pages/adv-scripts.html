@@ -20,6 +20,12 @@
 			__advPayload('document.write img onerror') +
 			"'>",
 	);
+	// a declarative shadow root's script runs as the parser makes it
+	document.write(
+		'<div><template shadowrootmode=open><script>' +
+			__advPayload('document.write declarative script') +
+			'<\/script></template></div>',
+	);
 </script>
 <script>
 	// Every route by which text becomes running script: script element text
@@ -374,11 +380,96 @@
 			route(`${where}.${name} img onerror`, (p) =>
 				call('<img src="x:" onerror=\'' + p + "'>"),
 			);
-			if (name.endsWith('Unsafe'))
+			if (name.endsWith('Unsafe')) {
 				route(`${where}.${name} runScripts script`, (p) =>
 					call('<script>' + p + '<\/script>', { runScripts: true }),
 				);
+				// a declarative shadow root's scripts run with runScripts too
+				route(`${where}.${name} runScripts declarative script`, (p) =>
+					call(
+						'<div><template shadowrootmode=open><script>' +
+							p +
+							'<\/script></template></div>',
+						{ runScripts: true },
+					),
+				);
+			}
 		}
+	route('setHTMLUnsafe runScripts declarative script', (p) => {
+		const d = document.createElement('div');
+		document.body.append(d);
+		if (!d.setHTMLUnsafe) throw new Error('no setHTMLUnsafe');
+		try {
+			d.setHTMLUnsafe(
+				'<div><template shadowrootmode=open><script>' +
+					p +
+					'<\/script></template></div>',
+				{ runScripts: true },
+			);
+		} finally {
+			d.remove();
+		}
+	});
+	// their stream forms (Chrome 157), the markup in chunks that split its
+	// tags; what they inserted is taken out once the stream is closed
+	for (const name of [
+		'streamHTML',
+		'streamAppendHTML',
+		'streamPrependHTML',
+		'streamBeforeHTML',
+		'streamAfterHTML',
+		'streamReplaceWithHTML',
+	])
+		for (const unsafe of ['', 'Unsafe'])
+			for (const [where, make] of [
+				['element', (d) => d.appendChild(document.createElement('div'))],
+				['shadowRoot', (d) => d.attachShadow({ mode: 'open' })],
+				[
+					'text',
+					(d) => {
+						const t = document.createTextNode('t');
+						d.append(t);
+						return t;
+					},
+				],
+			]) {
+				const member = name + unsafe;
+				const stream = (chunks, options) => {
+					const d = document.createElement('div');
+					document.body.append(d);
+					const node = make(d);
+					if (typeof node[member] !== 'function') {
+						d.remove();
+						throw new Error('no ' + member);
+					}
+					const writer = (
+						options ? node[member](options) : node[member]()
+					).getWriter();
+					(async () => {
+						for (const chunk of chunks) await writer.write(chunk);
+						await writer.close();
+					})().finally(() => d.remove());
+				};
+				route(`${where}.${member} img onerror`, (p) =>
+					stream(['<img src="x:" oner', "ror='" + p + "'>"]),
+				);
+				if (unsafe) {
+					route(`${where}.${member} runScripts script`, (p) =>
+						stream(['<scr', 'ipt>' + p + '<\/scr', 'ipt>'], {
+							runScripts: true,
+						}),
+					);
+					route(`${where}.${member} runScripts declarative script`, (p) =>
+						stream(
+							[
+								'<div><template shadowrootmode=open><scr',
+								'ipt>' + p + '<\/script></template></div>',
+							],
+							{ runScripts: true },
+						),
+					);
+				}
+			}
 	route('shadowRoot.innerHTML img onerror', (p) => {
 		const host = document.createElement('div');
 		const root = host.attachShadow({ mode: 'open' });
@@ -1560,5 +1651,59 @@
 		document.body.append(f);
 		setTimeout(() => startNav(i + 1), 300);
 	};
+	// A page that replaced the builtins the inject might ask on its way to
+	// running markup's scripts (runScripts), or that hands it options that
+	// answer otherwise each time, or markup the browser parses otherwise than
+	// an inert copy of it: each in a same-origin child frame of its own
+	// (adv-hostile-child.html?spoil=<group>, its own inject), whose scripts
+	// report here under their own names ("hostile <group>: <call> <kind>").
+	// A script that ran as the page wrote it saw the proxy's real top.
+	const HOSTILE = [
+		'none',
+		'slice',
+		'map',
+		'forEach',
+		'indexOf',
+		'iterator',
+		'toLowerCase',
+		'trim',
+		'includes',
+		'replace',
+		'split',
+		'querySelectorAll',
+		'getElementsByTagName',
+		'children',
+		'text',
+		'textContent',
+		'innerHTML',
+		'type',
+		'src',
+		'index',
+		'nodeType',
+		'flip',
+		'proxy',
+	];
+	// (each frame leaves once it is done, so the page's markup reads as
+	// natively: markup-parity)
+	const hostileDone = {};
+	window.__hostileDone = (spoil, how) => hostileDone[spoil]?.(how);
+	HOSTILE.forEach((spoil, i) =>
+		A(
+			`hostile ${spoil} [frame]`,
+			() =>
+				new Promise((resolve) => {
+					const f = document.createElement('iframe');
+					hostileDone[spoil] = (how) => {
+						f.remove();
+						resolve(how);
+					};
+					setTimeout(() => {
+						f.src = 'adv-hostile-child.html?spoil=' + spoil;
+						document.body.append(f);
+					}, i * 150);
+				}),
+			12000 + i * 150,
+		),
+	);
 	startNav(0);
 </script>

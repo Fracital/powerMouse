@@ -259,6 +259,7 @@ const DEFERRED_FILES = new Set(
 	[
 		'src/inject/cookieStoreMethods.ts',
 		'src/inject/dom/deferredParts.ts',
+		'src/inject/dom/markupMembers.ts',
 		'src/inject/dom/modules/Fingerprint.ts',
 		'src/inject/dom/modules/serviceWorkerEmulation.ts',
 		'src/inject/serviceWorkerObjects.ts',

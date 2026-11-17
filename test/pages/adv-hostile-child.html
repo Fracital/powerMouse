@@ -1,0 +1,291 @@
+<!doctype html>
+<title>ADV HOSTILE CHILD</title>
+<body></body>
+<script>
+	// A same-origin child frame of adv-scripts.html that loads as a page of
+	// its own, so the inject's code in it is this realm's: it replaces one
+	// group of the builtins the inject's own code might call (or passes
+	// options that answer otherwise each time they are read), then inserts
+	// markup with scripts of every kind through appendHTMLUnsafe (with
+	// runScripts, and with no options at all) and setHTMLUnsafe (with
+	// runScripts), in a div, an annotation-xml and an svg, with a sanitizer,
+	// and through the parent's appendHTMLUnsafe. Each script reports to the parent under its own name who
+	// `top` was: one that ran as the page wrote it saw the proxy's real top.
+	// ?spoil=<group>. Every script's name is recorded as "did-not-run"
+	// first, before anything is replaced: one that ran records over it.
+	// Besides the builtins, markup the browser itself parses otherwise than
+	// an inert copy does: a <noscript> that ends early where scripting is on,
+	// a data block a sanitizer takes the type off, a context the markup
+	// depends on (an <annotation-xml encoding="text/html">, an <svg>).
+	const spoil = new URLSearchParams(location.search).get('spoil');
+	const done = parent.__hostileDone;
+	const record = parent.__advRecord;
+	const payload = (name) =>
+		'parent.__advChild(' +
+		JSON.stringify(name) +
+		', top === parent ? "parent" : top === window ? "self" : "OTHER-WINDOW", location.href)';
+	const SCRIPTS = {
+		inline: (p) => '<script>' + p + '<\/script>',
+		typed: (p) => '<script type="TEXT/JavaScript ">' + p + '<\/script>',
+		module: (p) => '<script type="module">' + p + '<\/script>',
+		'declarative open': (p) =>
+			'<div><template shadowrootmode=open><script>' +
+			p +
+			'<\/script></template></div>',
+		'declarative closed': (p) =>
+			'<div><template shadowrootmode=closed><script>' +
+			p +
+			'<\/script></template></div>',
+		'data: src': (p) =>
+			'<script src="data:text/javascript,' +
+			encodeURIComponent(p) +
+			'"><\/script>',
+		// natively, with scripting on, the noscript ends at its style's text
+		// and the script after it runs
+		'noscript breakout': (p) =>
+			'<noscript><style></noscript><script>' +
+			p +
+			'<\/script></style></noscript>',
+		// runs only where a sanitizer takes its type off
+		'data block': (p) => '<script type="text/x-stomp-data">' + p + '<\/script>',
+		// a style's text in HTML; in an SVG one, markup whose div leaves the
+		// SVG, and the script and the image after it are HTML ones
+		'style breakout': (p) =>
+			'<style><div><script>' + p + '<\/script></div></style>',
+		'style breakout img': (p) =>
+			"<style><div><img src='x:' onerror='" + p + "'></div></style>",
+		// a comment in an HTML script; in an SVG one its references are
+		// decoded, and the payload stands between two comments
+		'entity comment': (p) => '<script>/* &#42;/ ' + p + ' /&#42; */<\/script>',
+	};
+	const div = () => document.createElement('div');
+	const append = (node, markup, options) =>
+		node.appendHTMLUnsafe(markup, options);
+	const set = (node, markup, options) => node.setHTMLUnsafe(markup, options);
+	const CALLS = {
+		'appendHTMLUnsafe runScripts': [div, append],
+		appendHTMLUnsafe: [div, (node, markup) => node.appendHTMLUnsafe(markup)],
+		'setHTMLUnsafe runScripts': [div, set],
+		'appendHTMLUnsafe runScripts in annotation-xml': [
+			() => {
+				const math = document.createElementNS(
+					'http://www.w3.org/1998/Math/MathML',
+					'math',
+				);
+				const annotation = document.createElementNS(
+					'http://www.w3.org/1998/Math/MathML',
+					'annotation-xml',
+				);
+				annotation.setAttribute('encoding', 'text/html');
+				math.append(annotation);
+				return [math, annotation];
+			},
+			append,
+		],
+		'setHTMLUnsafe runScripts in svg': [
+			() => document.createElementNS('http://www.w3.org/2000/svg', 'svg'),
+			set,
+		],
+		'setHTMLUnsafe runScripts sanitizer': [
+			div,
+			(node, markup) =>
+				node.setHTMLUnsafe(markup, {
+					runScripts: true,
+					sanitizer: { removeAttributes: ['type'] },
+				}),
+		],
+		// the parent's member, called from here with this frame's options
+		'parent appendHTMLUnsafe runScripts': [
+			() => parent.document.createElement('div'),
+			append,
+		],
+	};
+	// what each call's options are (the same object every call is handed)
+	let options = { runScripts: true };
+	// the nodes the calls are made on (the nodeType spoil lies about them)
+	let lies = [];
+	const emptyCollection = () => document.createElement('template').children;
+	const getter = (proto, key, get) => {
+		const own = Object.getOwnPropertyDescriptor(proto, key);
+		Object.defineProperty(proto, key, {
+			configurable: true,
+			enumerable: own ? own.enumerable : false,
+			get,
+			set: own && own.set,
+		});
+	};
+	const spoils = {
+		none() {},
+		slice() {
+			Array.prototype.slice = function () {
+				return [{ runScripts: true }];
+			};
+		},
+		map() {
+			Array.prototype.map = function () {
+				return [];
+			};
+		},
+		forEach() {
+			Array.prototype.forEach = function () {};
+		},
+		indexOf() {
+			Array.prototype.indexOf = function () {
+				return -1;
+			};
+		},
+		iterator() {
+			const values = Array.prototype[Symbol.iterator];
+			const extra = { runScripts: true };
+			Array.prototype[Symbol.iterator] = function () {
+				const list = [];
+				for (let i = 0; i < this.length; i++) list[i] = this[i];
+				// nothing of an array of nodes, options after a lone string (a
+				// markup argument)
+				if (this.length && this[0] instanceof Node) list.length = 0;
+				else if (this.length === 1 && typeof this[0] === 'string')
+					list[1] = extra;
+				return values.call(list);
+			};
+			NodeList.prototype[Symbol.iterator] = function* () {};
+		},
+		toLowerCase() {
+			String.prototype.toLowerCase = () => 'text/plain';
+		},
+		trim() {
+			String.prototype.trim = () => 'text/plain';
+		},
+		includes() {
+			String.prototype.includes = () => false;
+		},
+		replace() {
+			String.prototype.replace = function () {
+				return String(this);
+			};
+		},
+		split() {
+			String.prototype.split = () => [];
+		},
+		querySelectorAll() {
+			const all = DocumentFragment.prototype.querySelectorAll;
+			const empty = document.createDocumentFragment();
+			const none = function () {
+				return all.call(empty, '*');
+			};
+			Element.prototype.querySelectorAll = none;
+			DocumentFragment.prototype.querySelectorAll = none;
+			Document.prototype.querySelectorAll = none;
+		},
+		getElementsByTagName() {
+			const none = () => emptyCollection();
+			Element.prototype.getElementsByTagName = none;
+			Document.prototype.getElementsByTagName = none;
+		},
+		children() {
+			for (const proto of [
+				Element.prototype,
+				DocumentFragment.prototype,
+				Document.prototype,
+			])
+				getter(proto, 'children', () => emptyCollection());
+		},
+		text() {
+			getter(HTMLScriptElement.prototype, 'text', () => '');
+		},
+		textContent() {
+			getter(Node.prototype, 'textContent', () => '');
+		},
+		innerHTML() {
+			getter(Element.prototype, 'innerHTML', () => '');
+		},
+		type() {
+			getter(HTMLScriptElement.prototype, 'type', () => 'text/plain');
+		},
+		src() {
+			getter(HTMLScriptElement.prototype, 'src', () => '');
+		},
+		// an index past an array's end that answers options (`args[1]` of a
+		// call given one argument)
+		index() {
+			Object.defineProperty(Array.prototype, 1, {
+				configurable: true,
+				get: () => ({ runScripts: true }),
+				set(value) {
+					Object.defineProperty(this, 1, {
+						value,
+						writable: true,
+						enumerable: true,
+						configurable: true,
+					});
+				},
+			});
+		},
+		// the nodes the calls are made on read as no element, so a context
+		// taken from the page's getter is none (a body's)
+		nodeType() {
+			const own = Object.getOwnPropertyDescriptor(Node.prototype, 'nodeType');
+			getter(Node.prototype, 'nodeType', function () {
+				for (let i = 0; i < lies.length; i++) if (lies[i] === this) return 0;
+				return own.get.call(this);
+			});
+		},
+		// options whose runScripts reads false the first time and true after
+		flip() {
+			let reads = 0;
+			options = {
+				get runScripts() {
+					return ++reads > 1;
+				},
+			};
+		},
+		// the same as a Proxy's trap
+		proxy() {
+			let reads = 0;
+			options = new Proxy(
+				{},
+				{
+					get: (target, key) =>
+						key === 'runScripts' ? ++reads > 1 : undefined,
+				},
+			);
+		},
+	};
+	try {
+		const runs = [];
+		for (const [call, [make, insert]] of Object.entries(CALLS)) {
+			let markup = '';
+			for (const [kind, write] of Object.entries(SCRIPTS)) {
+				const name = `hostile ${spoil}: ${call} ${kind}`;
+				record(name, 'did-not-run');
+				markup += write(payload(name));
+			}
+			// (the node made, and what goes in the document: the node or its root)
+			const made = make();
+			const [root, node] = Array.isArray(made) ? made : [made, made];
+			(root.ownerDocument === document
+				? document
+				: parent.document
+			).body.append(root);
+			runs.push([insert, node, markup, root]);
+		}
+		lies = runs.map((run) => run[1]);
+		spoils[spoil]();
+		for (let i = 0; i < runs.length; i++) {
+			// (by index: the spoils may have replaced the iterator)
+			const run = runs[i];
+			try {
+				run[0](run[1], run[2], options);
+			} catch (error) {
+				// (the next call goes on)
+			}
+		}
+		// (what went in the parent's document leaves it, so the parent's
+		// markup reads as natively: markup-parity)
+		setTimeout(() => {
+			for (let i = 0; i < runs.length; i++) runs[i][3].remove();
+			done(spoil, 'done');
+		}, 800);
+	} catch (error) {
+		done(spoil, 'threw ' + error);
+	}
+</script>
