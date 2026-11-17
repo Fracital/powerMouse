@@ -1,0 +1,50 @@
+<!doctype html>
+<title>ADV HEADERS</title>
+<pre id="result">pending</pre>
+<script src="adv-harness.js"></script>
+<script>
+	// A site's own protection that rides in its response headers, which the
+	// proxy must not lose: one proxied site framing another that refuses to
+	// be framed (X-Frame-Options, frame-ancestors) would be clickjacking
+	// with that site's cookies. A frame the browser lets in posts its tag;
+	// one that loaded reports TELL:.
+	const A = __advAsync;
+	const other = location.origin.includes('127.0.0.1')
+		? location.origin.replace('127.0.0.1', 'localhost')
+		: location.origin.replace('localhost', '127.0.0.1');
+	const framed = (tag, headers) =>
+		new Promise((resolve) => {
+			const frame = document.createElement('iframe');
+			frame.src =
+				`${other}/hdr/doc?post=${tag}&` +
+				headers.map((h) => `h=${encodeURIComponent(h)}`).join('&');
+			addEventListener('message', (event) => {
+				if (event.data && event.data.hdr === tag) resolve('TELL:framed');
+			});
+			frame.addEventListener('load', () =>
+				setTimeout(() => resolve('refused'), 1500),
+			);
+			document.body.append(frame);
+		});
+	A(
+		'x-frame-options deny of another site',
+		() => framed('xfo-deny', ['x-frame-options:DENY']),
+		9000,
+	);
+	A(
+		'x-frame-options sameorigin of another site',
+		() => framed('xfo-sameorigin', ['x-frame-options:SAMEORIGIN']),
+		9000,
+	);
+	A(
+		'x-frame-options conflict of another site',
+		() => framed('xfo-conflict', ['x-frame-options:allowall, deny']),
+		9000,
+	);
+	A(
+		"frame-ancestors 'self' of another site",
+		() => framed('fa-self', ["content-security-policy:frame-ancestors 'self'"]),
+		9000,
+	);
+	__advFinish(2000);
+</script>

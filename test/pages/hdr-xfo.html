@@ -1,0 +1,100 @@
+<!doctype html>
+<title>X-Frame-Options</title>
+<pre id="result">pending</pre>
+<script>
+	// Each case frames a document whose X-Frame-Options (and Content Security
+	// Policy) the query names; one the browser lets in posts its tag to the
+	// top. What reached the top after the frames settled is the result: a
+	// refused frame shows the browser's error page and posts nothing.
+	const other = location.origin.includes('127.0.0.1')
+		? location.origin.replace('127.0.0.1', 'localhost')
+		: location.origin.replace('localhost', '127.0.0.1');
+	const doc = (origin, tag, headers) =>
+		`${origin}/hdr/doc?post=${tag}&` +
+		headers.map((h) => `h=${encodeURIComponent(h)}`).join('&');
+	const xfo = (value) => `x-frame-options:${value}`;
+	const CASES = {
+		deny: doc(location.origin, 'deny', [xfo('DENY')]),
+		sameorigin: doc(location.origin, 'sameorigin', [xfo('SAMEORIGIN')]),
+		'sameorigin-cross': doc(other, 'sameorigin-cross', [xfo('sameorigin')]),
+		'deny-cross': doc(other, 'deny-cross', [xfo('deny')]),
+		allowall: doc(other, 'allowall', [xfo('ALLOWALL')]),
+		'allow-from': doc(other, 'allow-from', [
+			xfo(`ALLOW-FROM ${location.origin}`),
+		]),
+		invalid: doc(location.origin, 'invalid', [xfo('nonsense')]),
+		conflict: doc(location.origin, 'conflict', [xfo('DENY, SAMEORIGIN')]),
+		'conflict-headers': doc(location.origin, 'conflict-headers', [
+			xfo('SAMEORIGIN'),
+			xfo('DENY'),
+		]),
+		'same-twice': doc(location.origin, 'same-twice', [
+			xfo('sameorigin, SAMEORIGIN'),
+		]),
+		'deny-padded': doc(location.origin, 'deny-padded', [xfo('  deny  ')]),
+		'deny-with-frame-ancestors': doc(other, 'deny-with-frame-ancestors', [
+			xfo('DENY'),
+			'content-security-policy:frame-ancestors *',
+		]),
+		'deny-with-report-only': doc(other, 'deny-with-report-only', [
+			xfo('DENY'),
+			'content-security-policy-report-only:frame-ancestors *',
+		]),
+		'deny-with-other-csp': doc(other, 'deny-with-other-csp', [
+			xfo('DENY'),
+			"content-security-policy:img-src 'self'",
+		]),
+	};
+	// a document of this origin under one of another origin: SAMEORIGIN
+	// judges every ancestor
+	const inner = doc(location.origin, 'sameorigin-under-cross', [
+		xfo('SAMEORIGIN'),
+	]);
+	CASES['sameorigin-under-cross'] =
+		`${other}/hdr/doc?body=` +
+		encodeURIComponent(`<!doctype html><iframe src="${inner}"></iframe>`);
+	// a document that runs no script (plain text): its parent reads it
+	const TEXT = {
+		'deny-text': `${location.origin}/hdr/doc?ct=text/plain&body=TEXT&h=${encodeURIComponent(xfo('DENY'))}`,
+		'frame-ancestors-text': `${location.origin}/hdr/doc?ct=text/plain&body=TEXT&h=${encodeURIComponent("content-security-policy:frame-ancestors 'none'")}`,
+	};
+	Object.assign(CASES, TEXT);
+	const seen = {};
+	addEventListener('message', (event) => {
+		if (event.data && typeof event.data.hdr === 'string')
+			seen[event.data.hdr] = 'loaded';
+	});
+	const loads = Object.entries(CASES).map(
+		([tag, src]) =>
+			new Promise((resolve) => {
+				const frame = document.createElement('iframe');
+				frame.src = src;
+				frame.addEventListener(
+					'load',
+					() => {
+						if (tag in TEXT)
+							try {
+								if (frame.contentDocument?.body?.textContent === 'TEXT')
+									seen[tag] = 'loaded';
+							} catch (error) {
+								// refused: the error page is no document of this origin
+							}
+						resolve();
+					},
+					{ once: true },
+				);
+				setTimeout(resolve, 8000);
+				document.body.append(frame);
+			}),
+	);
+	Promise.all(loads).then(() =>
+		setTimeout(() => {
+			window.__result = Object.fromEntries(
+				Object.keys(CASES).map((tag) => [tag, seen[tag] ?? 'refused']),
+			);
+			document.getElementById('result').textContent = JSON.stringify(
+				window.__result,
+			);
+		}, 1500),
+	);
+</script>

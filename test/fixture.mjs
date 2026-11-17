@@ -8,6 +8,7 @@ import { WebSocketServer } from 'ws';
 import { readCases, STRICT } from '../rust/host/early-lib.mjs';
 import { coi } from './coi-server.mjs';
 import { csp } from './csp-server.mjs';
+import { headersFixture } from './headers-server.mjs';
 import { perf } from './perf-server.mjs';
 import { shapes } from './shapes-server.mjs';
 import { sop } from './sop-server.mjs';
@@ -231,6 +232,7 @@ export function startFixture(port = 8084) {
 		if (visited(req, res)) return;
 		if (coi(req, res)) return;
 		if (csp(req, res)) return;
+		if (headersFixture(req, res)) return;
 		if (shapes(req, res)) return;
 		if (perf(req, res)) return;
 		if (await wpt(req, res, port)) return;

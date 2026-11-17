@@ -344,23 +344,39 @@ export function hopRefusal(
 }
 
 /**
- * Whether the enforced frame-ancestors of a document's response `headers`
- * (it is at `url`) refuses one of its real `ancestors`' origins
+ * Whether a document's response `headers` (it is at `url`) refuse one of
+ * its real `ancestors`' origins: the enforced frame-ancestors, or, when no
+ * enforced policy of the headers has one, X-Frame-Options as HTML's "check
+ * a navigation response's adherence" reads it (Chrome's too, measured: a
+ * list of more than one value refuses when it names a known one, DENY
+ * refuses, SAMEORIGIN judges every ancestor, anything else lets it in)
  */
 export function refusesAncestors(
 	headers: Headers,
 	url: URL,
 	ancestors: string[],
 ): boolean {
-	return parsePolicies(
+	const policies = parsePolicies(
 		headers.get('content-security-policy'),
 		'enforce',
 		'header',
-	).some((policy) => {
+	);
+	let framed = false;
+	for (const policy of policies) {
 		const sources = policy.directives.get('frame-ancestors');
-		return (
-			sources !== undefined &&
-			ancestors.some((origin) => !ancestorAllowed(sources, origin, url))
-		);
-	});
+		if (sources === undefined) continue;
+		framed = true;
+		if (ancestors.some((origin) => !ancestorAllowed(sources, origin, url)))
+			return true;
+	}
+	if (framed) return false;
+	const raw = headers.get('x-frame-options');
+	if (raw === null) return false;
+	const values = new Set(
+		raw.split(',').map((value) => value.trim().toLowerCase()),
+	);
+	const known = ['deny', 'allowall', 'sameorigin'];
+	if (values.size > 1) return known.some((value) => values.has(value));
+	if (values.has('deny')) return true;
+	return values.has('sameorigin') && ancestors.some((o) => o !== url.origin);
 }

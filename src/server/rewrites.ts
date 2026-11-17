@@ -4964,6 +4964,17 @@ export function registerRewrites(
 		genericForward(
 			rewriter,
 			async (url, response, responseHeaders, referrer, request, note) => {
+				// a frame whose own frame-ancestors or X-Frame-Options refuses one
+				// of its real ancestors is refused by the browser, which shows its
+				// error page as natively (no event anywhere), whatever its type
+				if (
+					request.ancestors &&
+					refusesAncestors(response.headers, url.url, request.ancestors)
+				)
+					responseHeaders.append(
+						'content-security-policy',
+						"frame-ancestors 'none'",
+					);
 				const contentType = responseHeaders.get('content-type');
 				const mime = getMime(contentType || '');
 				// a type that says nothing is sniffed by the browser as it
@@ -5068,17 +5079,6 @@ export function registerRewrites(
 				const syncBlocked = hints ? syncXHRBlocked(hints) : false;
 				if (policies.enforce)
 					responseHeaders.append('content-security-policy', policies.enforce);
-				// a frame whose own frame-ancestors refuses one of its real
-				// ancestors is refused by the browser, which shows its error page
-				// as natively (no event anywhere)
-				if (
-					request.ancestors &&
-					refusesAncestors(response.headers, url.url, request.ancestors)
-				)
-					responseHeaders.append(
-						'content-security-policy',
-						"frame-ancestors 'none'",
-					);
 				if (policies.report)
 					responseHeaders.append(
 						'content-security-policy-report-only',
@@ -5287,9 +5287,10 @@ export function registerRewrites(
 				),
 			undefined,
 			(headers, filteredHeaders, url) => {
-				if (headers.has('x-frame-options')) {
-					filteredHeaders.delete('x-frame-options');
-				}
+				// the page's X-Frame-Options would refuse the proxy's own frame:
+				// the worker judges it against the frame's real ancestors
+				// (refusesAncestors)
+				filteredHeaders.delete('x-frame-options');
 
 				// the worker keeps the site's client hints for its real origin
 				// (clientHints.ts); the browser would keep them for the proxy
