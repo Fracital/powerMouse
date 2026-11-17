@@ -1,4 +1,5 @@
 import { helperNames } from '../../helperNames';
+import { noticeText } from '../../mixedContentNotices';
 import {
 	SW_PORT,
 	TRANSPORT_INIT,
@@ -10,6 +11,7 @@ import { recordSize } from '../idbSize';
 import { idbSizeParts } from '../idbSizeParts';
 import { partitionLegacyFileSystem } from '../legacyFileSystem';
 import { legacyFileSystemParts } from '../legacyFileSystemParts';
+import { mixedContentParts } from '../mixedContentParts';
 import { handModules } from '../rewriter';
 import { bucketMethods } from '../storageBucketMethods';
 import { storageBucketParts } from '../storageBucketParts';
@@ -32,6 +34,8 @@ idbSizeParts.recordSize = () => recordSize;
 storageBucketParts.methods = () => bucketMethods;
 // and the per-site legacy file system (../legacyFileSystemParts.ts)
 legacyFileSystemParts.partition = () => partitionLegacyFileSystem;
+// and the text of a mixed content notice (../mixedContentParts.ts)
+mixedContentParts.noticeText = () => noticeText;
 /** set once the bootstrap came without a transport (a worker of a worker): nothing carries its sessions */
 let transportless = false;
 webTransportParts.carry = () =>

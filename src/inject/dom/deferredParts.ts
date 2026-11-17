@@ -72,6 +72,7 @@
 // it): constants and functions only, as the bundle's code reads what it
 // needs when it is called.
 import { compileFilter } from '../../blocker/procedural';
+import { noticeText } from '../../mixedContentNotices';
 import { bareClient } from '../bareClient';
 import { cookieStoreMethods } from '../cookieStoreMethods';
 import { hookDevices } from '../deviceGrants';
@@ -136,6 +137,9 @@ import { responseParser } from './xhrParse';
 
 export const parts = {
 	bareClient,
+	// a mixed content notice's text, at a document's first notice
+	// (../../mixedContentNotices.ts; ../modules/MixedContent.ts)
+	noticeText,
 	compileFilter,
 	longFrames,
 	longTasks,

@@ -1,13 +1,13 @@
 import {
 	mixedContentVerdict,
 	noticeNamesTop,
-	noticeText,
 	restrictsMixedContent,
 	type MixedContentNotice,
 	type MixedContentVerdict,
 } from '../../mixedContent';
 import { MIXED_CONTENT_NOTICE } from '../../transport/messages';
 import Client from '../Client';
+import { mixedContentParts } from '../mixedContentParts';
 import Module from '../Module';
 
 /**
@@ -77,6 +77,13 @@ export default class MixedContentModule extends Module<Client> {
 		if (!console) return;
 		for (const notice of notices) {
 			if (typeof notice !== 'object' || notice === null) continue;
+			// (a document's text is a deferred part: without it, no line)
+			let noticeText;
+			try {
+				noticeText = mixedContentParts.noticeText!();
+			} catch (error) {
+				return;
+			}
 			const top = noticeNamesTop(notice) ? this.#topURL() : null;
 			const page = top && restrictsMixedContent(top) ? top : this.#ownURL();
 			const { level, text } = noticeText(notice, page);

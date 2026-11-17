@@ -2,6 +2,7 @@ import type { FpSurface } from '../../blocker/types';
 import { createClientFactory } from '../Client';
 import { idbSizeParts } from '../idbSizeParts';
 import { legacyFileSystemParts } from '../legacyFileSystemParts';
+import { mixedContentParts } from '../mixedContentParts';
 import Module from '../Module';
 import baseModules from '../modules';
 import { storageBucketParts } from '../storageBucketParts';
@@ -75,6 +76,8 @@ storageBucketParts.methods = () => deferred('bucketMethods');
 // and the per-site legacy file system, with its first call
 legacyFileSystemParts.partition = () => deferred('partitionLegacyFileSystem');
 legacyFileSystemParts.drop = () => deferred('dropLegacyFileSystem');
+// and the text of a mixed content notice, with a document's first notice
+mixedContentParts.noticeText = () => deferred('noticeText');
 
 class FingerprintStandIn extends Module<DocumentClient> {
 	apply() {
