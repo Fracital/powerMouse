@@ -68,10 +68,14 @@ export default class HistoryModule extends Module<DocumentClient> {
 				that: History,
 				args: any[],
 			) {
-				if (args[2] !== undefined && args[2] !== null) {
+				// no URL, or the empty string, keeps the entry's URL as it is, its
+				// fragment too (the browser's own rule: resolved like any other
+				// URL, '' would be the base URL without one)
+				if (args[2] !== undefined && args[2] !== null && args[2] !== '') {
 					// the browser refuses a URL of another origin (every proxied URL
 					// looks same-origin to it, so the check is made here on the real
-					// origins) and one that does not parse, with a SecurityError
+					// origins), one that names other credentials than the document's
+					// and one that does not parse, with a SecurityError
 					const page = this.client.url.url;
 					// converted once, as the browser does, and with no call of the
 					// inject's own between the page's toString and its caller
@@ -83,7 +87,12 @@ export default class HistoryModule extends Module<DocumentClient> {
 					} catch (error) {
 						url = null;
 					}
-					if (!url || url.origin !== page.origin)
+					if (
+						!url ||
+						url.origin !== page.origin ||
+						url.username !== page.username ||
+						url.password !== page.password
+					)
 						throw withStack(
 							new this.client.global.DOMException(
 								`Failed to execute '${name}' on 'History': A history state object with URL '${text}' cannot be created in a document with origin '${page.origin}' and URL '${page.href}'.`,

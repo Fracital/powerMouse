@@ -83,7 +83,6 @@
 		"(harness)": "ERROR: Uncaught Error: assert_equals: history traversal restores old url expected \"http://localhost:PORT/html/browsers/history/the-history-interface/history_pushstate_url.html#hash\" but got \"http://localhost"
 	},
 	"/html/browsers/history/the-history-interface/history_pushstate_url_rewriting.html": {
-		"http://localhost:PORT/common/blank.html to http://username:password@localhost:PORT/common/blank.html should not work": "FAIL: assert_throws_dom: function \"() => { iframe.contentWindow.history.pushState(null, \"\", to); }\" did not throw",
 		"blob:(a blob URL for this origin) to blob:(a blob URL for this origin) should  work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to execute 'pushState' on 'History': A history state object with URL 'blob:http://localhost:PORT/UUID' cannot be created in ",
 		"blob:(a blob URL for this origin) to blob:(a blob URL for this origin)#newhash should  work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to execute 'pushState' on 'History': A history state object with URL 'blob:http://localhost:PORT/UUID#newhash' cannot be cre",
 		"about:blank to about:blank should  work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to execute 'pushState' on 'History': A history state object with URL 'about:blank' cannot be created in a document with orig",
@@ -93,7 +92,6 @@
 		"javascript:'foo' to javascript:'foo'#newhash should not work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'DOMException' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a ",
 		"about:srcdoc to about:srcdoc should  work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to execute 'pushState' on 'History': A history state object with URL 'about:srcdoc' cannot be created in a document with ori",
 		"about:srcdoc to about:srcdoc#newhash should  work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to execute 'pushState' on 'History': A history state object with URL 'about:srcdoc#newhash' cannot be created in a document ",
-		"sandboxed http://localhost:PORT/html/browsers/history/the-history-interface/resources/url-rewriting-helper.html to http://username:password@localhost:PORT/html/browsers/history/the-history-interface/resources/url-rewriting-helper.html should not work": "FAIL: assert_equals: expected \"exception\" but got \"no exception\"",
 		"data:(script to run this test) to data:(script to run this test) should  work": "FAIL: assert_equals: expected \"no exception\" but got \"exception\"",
 		"data:(script to run this test) to data:(script to run this test)#newhash should  work": "FAIL: assert_equals: expected \"no exception\" but got \"exception\""
 	},
@@ -104,18 +102,6 @@
 		"Navigating first iframe": "NOTRUN: ",
 		"Traversing history back (2)": "NOTRUN: ",
 		"Traversing history forward": "NOTRUN: "
-	},
-	"/html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/pushstate-base.html": {
-		"history.pushState() with an empty string URL and base URL different from document's URL": "FAIL: assert_equals: expected \"/html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/pushstate-base.html\" but got \"/the-base\""
-	},
-	"/html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/pushstate.html": {
-		"history.pushState() with an empty string URL": "FAIL: assert_equals: expected \"#test\" but got \"\""
-	},
-	"/html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/replacestate-base.html": {
-		"history.replaceState() with an empty string URL and base URL different from document's URL": "FAIL: assert_equals: expected \"/html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/replacestate-base.html\" but got \"/the-base\""
-	},
-	"/html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/replacestate.html": {
-		"history.replaceState() with an empty string URL": "FAIL: assert_equals: expected \"#test\" but got \"\""
 	},
 	"/html/browsers/history/the-history-interface/traverse-during-beforeunload.html": {
 		"(harness)": "TIMEOUT: ",
