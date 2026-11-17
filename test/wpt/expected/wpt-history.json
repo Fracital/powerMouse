@@ -76,17 +76,11 @@
 		"replaceState should not actually load the new URL": "MISSING: the harness ended TIMEOUT before this subtest",
 		"reloading a replaced state should actually load the new URL": "MISSING: the harness ended TIMEOUT before this subtest"
 	},
-	"/html/browsers/history/the-history-interface/history_properties_only_fully_active.html": {
-		"history properties should throw SecurityError when not in a fully active Document": "FAIL: Failed to read a named property 'history' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
-	},
 	"/html/browsers/history/the-history-interface/history_pushstate_url_rewriting.html": {
 		"blob:(a blob URL for this origin) to blob:(a blob URL for this origin) should  work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to execute 'pushState' on 'History': A history state object with URL 'blob:http://localhost:PORT/UUID' cannot be created in ",
 		"blob:(a blob URL for this origin) to blob:(a blob URL for this origin)#newhash should  work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to execute 'pushState' on 'History': A history state object with URL 'blob:http://localhost:PORT/UUID#newhash' cannot be cre",
 		"about:blank to about:blank should  work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to execute 'pushState' on 'History': A history state object with URL 'about:blank' cannot be created in a document with orig",
 		"about:blank to about:blank#newhash should  work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to execute 'pushState' on 'History': A history state object with URL 'about:blank#newhash' cannot be created in a document w",
-		"javascript:'foo' to javascript:'foo' should not work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'DOMException' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a ",
-		"javascript:'foo' to javascript:'foo'?newsearch should not work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'DOMException' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a ",
-		"javascript:'foo' to javascript:'foo'#newhash should not work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'DOMException' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a ",
 		"about:srcdoc to about:srcdoc should  work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to execute 'pushState' on 'History': A history state object with URL 'about:srcdoc' cannot be created in a document with ori",
 		"about:srcdoc to about:srcdoc#newhash should  work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to execute 'pushState' on 'History': A history state object with URL 'about:srcdoc#newhash' cannot be created in a document ",
 		"data:(script to run this test) to data:(script to run this test) should  work": "FAIL: assert_equals: expected \"no exception\" but got \"exception\"",
@@ -99,13 +93,5 @@
 		"Navigating first iframe": "NOTRUN: ",
 		"Traversing history back (2)": "NOTRUN: ",
 		"Traversing history forward": "NOTRUN: "
-	},
-	"/html/browsers/history/the-history-interface/traverse-during-beforeunload.html": {
-		"(harness)": "TIMEOUT: ",
-		"Traversing the history during beforeunload": "TIMEOUT: Test timed out"
-	},
-	"/html/browsers/history/the-history-interface/traverse-during-unload.html": {
-		"(harness)": "TIMEOUT: ",
-		"Traversing the history during unload": "TIMEOUT: Test timed out"
 	}
 }

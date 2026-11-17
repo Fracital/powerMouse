@@ -1,31 +1,6 @@
 {
-	"/xhr/blob-range.any.worker.html": {
-		"Blob content with short content and a large range start": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
-		"Blob content with short content and a range start matching the content length": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
-		"Blob range end should be an ASCII digit": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
-		"Blob range request with multiple range values": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
-		"Blob range request with multiple range values and whitespace": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
-		"Blob range request with short range end": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
-		"Blob range request with trailing comma": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
-		"Blob range should have a dash": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
-		"Blob range should include '-'": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
-		"Blob range should include '='": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
-		"Blob range should include 'bytes='": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
-		"Blob range start should be an ASCII digit": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
-		"Blob range with incorrect range header": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
-		"Blob range with incorrect range header #2": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
-		"Blob range with incorrect range header #3": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
-		"Blob range with no start or end": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw",
-		"Blob range with no value": "FAIL: assert_throws_dom: function \"() => xhr.send()\" did not throw"
-	},
-	"/xhr/open-url-about-blank-window.htm": {
-		"XMLHttpRequest: open() resolving URLs (about:blank iframe)": "FAIL: Failed to read a named property 'XMLHttpRequest' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
-	},
 	"/xhr/open-url-base-inserted-after-open.htm": {
 		"XMLHttpRequest: open() resolving URLs - insert <base> after open()": "FAIL: assert_equals: expected \"top\\n\" but got \"bottom\\n\""
-	},
-	"/xhr/open-url-multi-window-6.htm": {
-		"(harness)": "TIMEOUT: "
 	},
 	"/xhr/request-content-length.any.html": {
 		"Fetched blob: URLs set the Content-Length header": "FAIL: assert_true: expected true got false"

@@ -1,26 +1,9 @@
 {
 	"/dom/nodes/MutationObserver-cross-realm-callback-report-exception.html": {
-		"(harness)": "TIMEOUT: ",
-		"MutationObserver reports the exception from its callback in the callback's global object": "MISSING: the harness ended TIMEOUT before this subtest"
+		"MutationObserver reports the exception from its callback in the callback's global object": "FAIL: assert_array_equals: expected property 0 to be \"frame1\" but got \"top\" (expected array [\"frame1\"] got [\"top\"])"
 	},
 	"/dom/nodes/MutationObserver-transient-registered-observers.window.html": {
 		"A removed subtree is no longer observed after mutation observers are notified": "FAIL: assert_array_equals: lengths differ, expected array [\"childList parent -child\", \"childList child +before\"] length 2, got [\"childList parent -child\"] length 1",
 		"Removing a node from an observed subtree queues the mutation observer microtask": "FAIL: assert_array_equals: expected property 0 to be \"observer\" but got \"promise\" (expected array [\"observer\", \"promise\"] got [\"promise\", \"observer\"])"
-	},
-	"/dom/nodes/Node-appendChild.html": {
-		"Appending a document": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
-		"Adopting an orphan": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
-		"Adopting a non-orphan": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
-	},
-	"/dom/nodes/Node-removeChild.html": {
-		"Passing a detached element from a frame document to removeChild should not affect it.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
-		"Passing a non-detached element from a frame document to removeChild should not affect it.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
-		"Calling removeChild on a element from a frame document with no children should throw NOT_FOUND_ERR.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
-		"Passing a detached text from a frame document to removeChild should not affect it.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
-		"Passing a non-detached text from a frame document to removeChild should not affect it.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
-		"Calling removeChild on a text from a frame document with no children should throw NOT_FOUND_ERR.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
-		"Passing a detached comment from a frame document to removeChild should not affect it.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
-		"Passing a non-detached comment from a frame document to removeChild should not affect it.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
-		"Calling removeChild on a comment from a frame document with no children should throw NOT_FOUND_ERR.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
 	}
 }

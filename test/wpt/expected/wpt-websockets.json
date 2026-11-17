@@ -18,10 +18,10 @@
 		"Create WebSocket - Close the Connection - close(code, 'reason more than 123 bytes') - SYNTAX_ERR is thrown": "FAIL: assert_throws_dom: function \"function() { wsocket.close(1000, reason) }\" did not throw"
 	},
 	"/websockets/Close-delayed.any.html?default": {
-		"Create WebSocket - Close the Connection - close should not emit until handshake completes - Connection should be closed": "FAIL: assert_greater_than_equal: one second should have elapsed expected a number greater than or equal to 900 but got 500.39999997615814"
+		"Create WebSocket - Close the Connection - close should not emit until handshake completes - Connection should be closed": "FAIL: assert_greater_than_equal: one second should have elapsed expected a number greater than or equal to 900 but got 500.5"
 	},
 	"/websockets/Close-delayed.any.worker.html?default": {
-		"Create WebSocket - Close the Connection - close should not emit until handshake completes - Connection should be closed": "FAIL: assert_greater_than_equal: one second should have elapsed expected a number greater than or equal to 900 but got 503.5"
+		"Create WebSocket - Close the Connection - close should not emit until handshake completes - Connection should be closed": "FAIL: assert_greater_than_equal: one second should have elapsed expected a number greater than or equal to 900 but got 500.39999997615814"
 	},
 	"/websockets/Close-onlyReason.any.html?default": {
 		"Create WebSocket - Close the Connection - close(only reason) - INVALID_ACCESS_ERR is thrown": "FAIL: assert_throws_dom: function \"function() { wsocket.close(\"Close with only reason\") }\" threw object \"Error: Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 49"

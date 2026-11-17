@@ -1,10 +1,1 @@
-{
-	"/fetch/api/headers/header-values-normalize.any.html": {
-		"XMLHttpRequest with value %00": "FAIL: assert_throws_dom: function \"() => xhr.setRequestHeader(\"val1\", val1)\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid value\" that is not a DOMException SyntaxError: property"
-	},
-	"/fetch/api/headers/header-values.any.html": {
-		"XMLHttpRequest with value x%00x needs to throw": "FAIL: assert_throws_dom: function \"() => xhr.setRequestHeader(\"value-test\", val)\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid value\" that is not a DOMException SyntaxError: pro",
-		"XMLHttpRequest with value x%0Ax needs to throw": "FAIL: assert_throws_dom: function \"() => xhr.setRequestHeader(\"value-test\", val)\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid value\" that is not a DOMException SyntaxError: pro",
-		"XMLHttpRequest with value x%0Dx needs to throw": "FAIL: assert_throws_dom: function \"() => xhr.setRequestHeader(\"value-test\", val)\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid value\" that is not a DOMException SyntaxError: pro"
-	}
-}
+{}

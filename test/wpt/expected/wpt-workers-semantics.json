@@ -12,44 +12,44 @@
 		"Redirect-to-Cross-origin throw": "FAIL: assert_throws_dom: function \"function() { importScripts(redirectToCrossOrigin + \"/workers/modules/resources/throw.js\"); }\" threw object \"Error: custom message\" that is not a DOMException NetworkError:"
 	},
 	"/workers/interfaces/WorkerUtils/importScripts/report-error-cross-origin.sub.any.worker.html": {
-		"WorkerGlobalScope error event: error": "FAIL: assert_equals: e.error should be a DOMException expected function \"function DOMException() { [native code] }\" but got function \"function SyntaxError() { [native code] }\"",
-		"WorkerGlobalScope error event: filename": "FAIL: assert_equals: expected \"http://localhost:PORT/workers/interfaces/WorkerUtils/importScripts/report-error-helper.js\" but got \"http://127.0.0.1:PORT/workers/modules/resources/syntax-error.js\"",
-		"WorkerGlobalScope error event: lineno": "FAIL: assert_equals: expected 8 but got 1"
+		"WorkerGlobalScope error event: error": "FAIL: assert_equals: e.error should be a DOMException expected function \"function DOMException() { [native code] }\" but got function \"function SyntaxError() { [native code] }\""
 	},
 	"/workers/interfaces/WorkerUtils/importScripts/report-error-cross-origin.sub.any.sharedworker.html": {
-		"WorkerGlobalScope error event: error": "FAIL: assert_equals: e.error should be a DOMException expected function \"function DOMException() { [native code] }\" but got function \"function SyntaxError() { [native code] }\"",
-		"WorkerGlobalScope error event: filename": "FAIL: assert_equals: expected \"http://localhost:PORT/workers/interfaces/WorkerUtils/importScripts/report-error-helper.js\" but got \"http://127.0.0.1:PORT/workers/modules/resources/syntax-error.js\"",
-		"WorkerGlobalScope error event: lineno": "FAIL: assert_equals: expected 8 but got 1"
+		"WorkerGlobalScope error event: error": "FAIL: assert_equals: e.error should be a DOMException expected function \"function DOMException() { [native code] }\" but got function \"function SyntaxError() { [native code] }\""
 	},
 	"/workers/interfaces/WorkerUtils/importScripts/report-error-redirect-to-cross-origin.sub.any.worker.html": {
-		"WorkerGlobalScope error event: error": "FAIL: assert_equals: e.error should be a DOMException expected function \"function DOMException() { [native code] }\" but got function \"function SyntaxError() { [native code] }\"",
-		"WorkerGlobalScope error event: filename": "FAIL: assert_equals: expected \"http://localhost:PORT/workers/interfaces/WorkerUtils/importScripts/report-error-helper.js\" but got \"http://localhost:PORT/common/redirect.py?location=http://127.0.0.1:PORT/wor",
-		"WorkerGlobalScope error event: lineno": "FAIL: assert_equals: expected 8 but got 1"
+		"WorkerGlobalScope error event: error": "FAIL: assert_equals: e.error should be a DOMException expected function \"function DOMException() { [native code] }\" but got function \"function SyntaxError() { [native code] }\""
 	},
 	"/workers/interfaces/WorkerUtils/importScripts/report-error-redirect-to-cross-origin.sub.any.sharedworker.html": {
-		"WorkerGlobalScope error event: error": "FAIL: assert_equals: e.error should be a DOMException expected function \"function DOMException() { [native code] }\" but got function \"function SyntaxError() { [native code] }\"",
-		"WorkerGlobalScope error event: filename": "FAIL: assert_equals: expected \"http://localhost:PORT/workers/interfaces/WorkerUtils/importScripts/report-error-helper.js\" but got \"http://localhost:PORT/common/redirect.py?location=http://127.0.0.1:PORT/wor",
-		"WorkerGlobalScope error event: lineno": "FAIL: assert_equals: expected 8 but got 1"
+		"WorkerGlobalScope error event: error": "FAIL: assert_equals: e.error should be a DOMException expected function \"function DOMException() { [native code] }\" but got function \"function SyntaxError() { [native code] }\""
+	},
+	"/workers/interfaces/WorkerUtils/importScripts/report-error-same-origin.sub.any.worker.html": {
+		"WorkerGlobalScope error event: filename": "FAIL: assert_equals: expected \"http://localhost:PORT/workers/modules/resources/syntax-error.js\" but got \"http://localhost:PORT/workers/interfaces/WorkerUtils/importScripts/report-error-helper.js\"",
+		"WorkerGlobalScope error event: lineno": "FAIL: assert_equals: expected 1 but got 8"
+	},
+	"/workers/interfaces/WorkerUtils/importScripts/report-error-same-origin.sub.any.sharedworker.html": {
+		"WorkerGlobalScope error event: filename": "FAIL: assert_equals: expected \"http://localhost:PORT/workers/modules/resources/syntax-error.js\" but got \"http://localhost:PORT/workers/interfaces/WorkerUtils/importScripts/report-error-helper.js\"",
+		"WorkerGlobalScope error event: lineno": "FAIL: assert_equals: expected 1 but got 8"
 	},
 	"/workers/interfaces/WorkerUtils/importScripts/report-error-setTimeout-cross-origin.sub.any.worker.html": {
-		"WorkerGlobalScope error event: error": "FAIL: assert_equals: e.error should be a DOMException expected function \"function DOMException() { [native code] }\" but got function \"function SyntaxError() { [native code] }\"",
-		"WorkerGlobalScope error event: filename": "FAIL: assert_equals: expected \"http://localhost:PORT/workers/interfaces/WorkerUtils/importScripts/report-error-helper.js\" but got \"http://127.0.0.1:PORT/workers/modules/resources/syntax-error.js\"",
-		"WorkerGlobalScope error event: lineno": "FAIL: assert_equals: expected 8 but got 1"
+		"WorkerGlobalScope error event: error": "FAIL: assert_equals: e.error should be a DOMException expected function \"function DOMException() { [native code] }\" but got function \"function SyntaxError() { [native code] }\""
 	},
 	"/workers/interfaces/WorkerUtils/importScripts/report-error-setTimeout-cross-origin.sub.any.sharedworker.html": {
-		"WorkerGlobalScope error event: error": "FAIL: assert_equals: e.error should be a DOMException expected function \"function DOMException() { [native code] }\" but got function \"function SyntaxError() { [native code] }\"",
-		"WorkerGlobalScope error event: filename": "FAIL: assert_equals: expected \"http://localhost:PORT/workers/interfaces/WorkerUtils/importScripts/report-error-helper.js\" but got \"http://127.0.0.1:PORT/workers/modules/resources/syntax-error.js\"",
-		"WorkerGlobalScope error event: lineno": "FAIL: assert_equals: expected 8 but got 1"
+		"WorkerGlobalScope error event: error": "FAIL: assert_equals: e.error should be a DOMException expected function \"function DOMException() { [native code] }\" but got function \"function SyntaxError() { [native code] }\""
 	},
 	"/workers/interfaces/WorkerUtils/importScripts/report-error-setTimeout-redirect-to-cross-origin.sub.any.worker.html": {
-		"WorkerGlobalScope error event: error": "FAIL: assert_equals: e.error should be a DOMException expected function \"function DOMException() { [native code] }\" but got function \"function SyntaxError() { [native code] }\"",
-		"WorkerGlobalScope error event: filename": "FAIL: assert_equals: expected \"http://localhost:PORT/workers/interfaces/WorkerUtils/importScripts/report-error-helper.js\" but got \"http://localhost:PORT/common/redirect.py?location=http://127.0.0.1:PORT/wor",
-		"WorkerGlobalScope error event: lineno": "FAIL: assert_equals: expected 8 but got 1"
+		"WorkerGlobalScope error event: error": "FAIL: assert_equals: e.error should be a DOMException expected function \"function DOMException() { [native code] }\" but got function \"function SyntaxError() { [native code] }\""
 	},
 	"/workers/interfaces/WorkerUtils/importScripts/report-error-setTimeout-redirect-to-cross-origin.sub.any.sharedworker.html": {
-		"WorkerGlobalScope error event: error": "FAIL: assert_equals: e.error should be a DOMException expected function \"function DOMException() { [native code] }\" but got function \"function SyntaxError() { [native code] }\"",
-		"WorkerGlobalScope error event: filename": "FAIL: assert_equals: expected \"http://localhost:PORT/workers/interfaces/WorkerUtils/importScripts/report-error-helper.js\" but got \"http://localhost:PORT/common/redirect.py?location=http://127.0.0.1:PORT/wor",
-		"WorkerGlobalScope error event: lineno": "FAIL: assert_equals: expected 8 but got 1"
+		"WorkerGlobalScope error event: error": "FAIL: assert_equals: e.error should be a DOMException expected function \"function DOMException() { [native code] }\" but got function \"function SyntaxError() { [native code] }\""
+	},
+	"/workers/interfaces/WorkerUtils/importScripts/report-error-setTimeout-same-origin.sub.any.worker.html": {
+		"WorkerGlobalScope error event: filename": "FAIL: assert_equals: expected \"http://localhost:PORT/workers/modules/resources/syntax-error.js\" but got \"http://localhost:PORT/workers/interfaces/WorkerUtils/importScripts/report-error-helper.js\"",
+		"WorkerGlobalScope error event: lineno": "FAIL: assert_equals: expected 1 but got 8"
+	},
+	"/workers/interfaces/WorkerUtils/importScripts/report-error-setTimeout-same-origin.sub.any.sharedworker.html": {
+		"WorkerGlobalScope error event: filename": "FAIL: assert_equals: expected \"http://localhost:PORT/workers/modules/resources/syntax-error.js\" but got \"http://localhost:PORT/workers/interfaces/WorkerUtils/importScripts/report-error-helper.js\"",
+		"WorkerGlobalScope error event: lineno": "FAIL: assert_equals: expected 1 but got 8"
 	},
 	"/workers/semantics/navigation/001.html": {
 		"(harness)": "TIMEOUT: ",

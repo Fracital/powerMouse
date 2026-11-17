@@ -37,15 +37,12 @@
 		"Use text/xml as fallback MIME type": "FAIL: assert_equals: expected \"text/xml\" but got \"\"",
 		"Use text/xml as fallback MIME type, 2": "FAIL: assert_equals: expected \"text/xml\" but got \"\""
 	},
-	"/xhr/response-body-errors.any.worker.html": {
-		"Synchronous XMLHttpRequest should throw on bad chunk": "FAIL: assert_throws_dom: function \"() => client.send()\" did not throw"
-	},
 	"/xhr/responseXML-xml-scripting-support-disabled.html": {
-		"XMLHttpRequest responseXML, svg script, append adoptNode result": "FAIL: Failed to execute 'send' on 'XMLHttpRequest': Failed to load 'data:text/xml,<svg xmlns='http://www.w3.org/2000/svg'><script>window.mark = 1;</script></svg>'.",
-		"XMLHttpRequest responseXML, svg script, append importNode result": "FAIL: Failed to execute 'send' on 'XMLHttpRequest': Failed to load 'data:text/xml,<svg xmlns='http://www.w3.org/2000/svg'><script>window.mark = 1;</script></svg>'.",
 		"XMLHttpRequest responseXML, svg script, appendChild": "FAIL: Failed to execute 'send' on 'XMLHttpRequest': Failed to load 'data:text/xml,<svg xmlns='http://www.w3.org/2000/svg'><script>window.mark = 1;</script></svg>'.",
-		"XMLHttpRequest responseXML, xhtml script, append adoptNode result": "FAIL: Failed to execute 'send' on 'XMLHttpRequest': Failed to load 'data:application/xhtml+xml,<html xmlns='http://www.w3.org/1999/xhtml'><body><script>window.mark = 1;</script></body></html>'.",
-		"XMLHttpRequest responseXML, xhtml script, append importNode result": "FAIL: Failed to execute 'send' on 'XMLHttpRequest': Failed to load 'data:application/xhtml+xml,<html xmlns='http://www.w3.org/1999/xhtml'><body><script>window.mark = 1;</script></body></html>'."
+		"XMLHttpRequest responseXML, svg script, append importNode result": "FAIL: Failed to execute 'send' on 'XMLHttpRequest': Failed to load 'data:text/xml,<svg xmlns='http://www.w3.org/2000/svg'><script>window.mark = 1;</script></svg>'.",
+		"XMLHttpRequest responseXML, svg script, append adoptNode result": "FAIL: Failed to execute 'send' on 'XMLHttpRequest': Failed to load 'data:text/xml,<svg xmlns='http://www.w3.org/2000/svg'><script>window.mark = 1;</script></svg>'.",
+		"XMLHttpRequest responseXML, xhtml script, append importNode result": "FAIL: Failed to execute 'send' on 'XMLHttpRequest': Failed to load 'data:application/xhtml+xml,<html xmlns='http://www.w3.org/1999/xhtml'><body><script>window.mark = 1;</script></body></html>'.",
+		"XMLHttpRequest responseXML, xhtml script, append adoptNode result": "FAIL: Failed to execute 'send' on 'XMLHttpRequest': Failed to load 'data:application/xhtml+xml,<html xmlns='http://www.w3.org/1999/xhtml'><body><script>window.mark = 1;</script></body></html>'."
 	},
 	"/xhr/responsetype.any.html": {
 		"Set responseType to \"nosuchtype\" when readyState is LOADING.": "FAIL: Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be set if the object's state is LOADING or DONE.",
@@ -62,20 +59,20 @@
 		"Set responseType to \"nosuchtype\" when readyState is DONE and the sync flag is set.": "FAIL: Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be set if the object's state is LOADING or DONE."
 	},
 	"/xhr/responseurl-after-abort.any.html": {
-		"abort() during HEADERS_RECEIVED clears responseURL": "FAIL: assert_equals: getAllResponseHeaders() expected \"\" but got \"connection: keep-alive\\r\\ncontent-length: 127\\r\\ncontent-type: text/xml\\r\\ndate: Sun, 15 Nov 2026 23:00:28 GMT\\r\\nkeep-alive: timeout=600\\r\\",
-		"abort() during LOADING clears responseURL": "FAIL: assert_equals: getAllResponseHeaders() expected \"\" but got \"connection: keep-alive\\r\\ncontent-length: 127\\r\\ncontent-type: text/xml\\r\\ndate: Sun, 15 Nov 2026 23:00:28 GMT\\r\\nkeep-alive: timeout=600\\r\\",
+		"abort() during HEADERS_RECEIVED clears responseURL": "FAIL: assert_equals: getAllResponseHeaders() expected \"\" but got \"connection: keep-alive\\r\\ncontent-length: 127\\r\\ncontent-type: text/xml\\r\\ndate: Tue, 17 Nov 2026 01:34:27 GMT\\r\\nkeep-alive: timeout=600\\r\\",
+		"abort() during LOADING clears responseURL": "FAIL: assert_equals: getAllResponseHeaders() expected \"\" but got \"connection: keep-alive\\r\\ncontent-length: 127\\r\\ncontent-type: text/xml\\r\\ndate: Tue, 17 Nov 2026 01:34:27 GMT\\r\\nkeep-alive: timeout=600\\r\\",
 		"abort() during DONE clears responseURL (async)": "FAIL: assert_equals: expected 0 but got 4",
 		"abort() during DONE clears responseURL (sync)": "FAIL: assert_equals: expected 0 but got 4"
 	},
 	"/xhr/responseurl-after-abort.any.worker.html": {
-		"abort() during HEADERS_RECEIVED clears responseURL": "FAIL: assert_equals: getAllResponseHeaders() expected \"\" but got \"connection: keep-alive\\r\\ncontent-length: 127\\r\\ncontent-type: text/xml\\r\\ndate: Sun, 15 Nov 2026 23:00:29 GMT\\r\\nkeep-alive: timeout=600\\r\\",
-		"abort() during LOADING clears responseURL": "FAIL: assert_equals: getAllResponseHeaders() expected \"\" but got \"connection: keep-alive\\r\\ncontent-length: 127\\r\\ncontent-type: text/xml\\r\\ndate: Sun, 15 Nov 2026 23:00:29 GMT\\r\\nkeep-alive: timeout=600\\r\\",
+		"abort() during HEADERS_RECEIVED clears responseURL": "FAIL: assert_equals: getAllResponseHeaders() expected \"\" but got \"connection: keep-alive\\r\\ncontent-length: 127\\r\\ncontent-type: text/xml\\r\\ndate: Tue, 17 Nov 2026 01:34:28 GMT\\r\\nkeep-alive: timeout=600\\r\\",
+		"abort() during LOADING clears responseURL": "FAIL: assert_equals: getAllResponseHeaders() expected \"\" but got \"connection: keep-alive\\r\\ncontent-length: 127\\r\\ncontent-type: text/xml\\r\\ndate: Tue, 17 Nov 2026 01:34:28 GMT\\r\\nkeep-alive: timeout=600\\r\\",
 		"abort() during DONE clears responseURL (async)": "FAIL: assert_equals: expected 0 but got 4",
 		"abort() during DONE clears responseURL (sync)": "FAIL: assert_equals: expected 0 but got 4"
 	},
 	"/xhr/responsexml-document-properties.htm": {
 		"Test document URL properties of document with <base> after redirect": "FAIL: assert_equals: expected \"https://example.com/\" but got \"http://localhost:PORT/xhr/resources/base.xml\"",
-		"lastModified set to related HTTP header if provided": "FAIL: assert_equals: expected 1794783631000 but got 1794783370000"
+		"lastModified set to related HTTP header if provided": "FAIL: assert_equals: expected 1794879269000 but got 1794874083000"
 	},
 	"/xhr/responsexml-media-type.htm": {
 		"XMLHttpRequest: responseXML MIME type tests ('', should  parse)": "FAIL: Cannot read properties of null (reading 'documentElement')",

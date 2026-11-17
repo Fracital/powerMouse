@@ -1,16 +1,4 @@
 {
-	"/xhr/access-control-and-redirects-async.any.html": {
-		"Request with user info is redirected to a response with Access-Control-Allow-Origin=*": "FAIL: assert_true: expected true got false"
-	},
-	"/xhr/access-control-and-redirects-async.any.worker.html": {
-		"Request with user info is redirected to a response with Access-Control-Allow-Origin=*": "FAIL: assert_true: expected true got false"
-	},
-	"/xhr/access-control-and-redirects.any.html": {
-		"Remote sync redirect to local origin": "FAIL: Failed to execute 'send' on 'XMLHttpRequest': Failed to load 'http://127.0.0.1:PORT/xhr/resources/redirect-cors.py?location=http://localhost:PORT/xhr/resources/access-control-basic-allow.py&allow_orig"
-	},
-	"/xhr/access-control-and-redirects.any.worker.html": {
-		"Remote sync redirect to local origin": "FAIL: assert_equals: expected \"PASS: Cross-domain access allowed.\" but got \"\""
-	},
 	"/xhr/access-control-preflight-credential-async.htm": {
 		"CORS async request with URL credentials": "FAIL: assert_equals: Request raises HTTP 401: Unauthorized error. expected 401 but got 200"
 	},

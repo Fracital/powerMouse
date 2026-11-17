@@ -26,15 +26,9 @@
 		"iso-2022-jp encoder: Katakana U+FFFD": "FAIL: assert_equals: expected \"%1B$B!%23%1B(B%26%2365533%3B\" but got \"%EF%BD%A1%EF%BF%BD\"",
 		"iso-2022-jp encoder: jis0208 U+FFFD": "FAIL: assert_equals: expected \"%1B$B&%23%1B(B%26%2365533%3B\" but got \"%CE%93%EF%BF%BD\""
 	},
-	"/encoding/legacy-mb-japanese/iso-2022-jp/iso2022jp-decode.html?7001-last": {
-		"U+FA10 ��� 塚 1B 24 42 79 60 1B 28 42": "MISSING: the harness ended OK before this subtest"
-	},
 	"/encoding/legacy-mb-japanese/iso-2022-jp/iso2022jp-encode-form-errors-stateful.html": {
 		"(harness)": "TIMEOUT: ",
 		"Form submission using ISO-2022-JP correctly replaces unencodables": "TIMEOUT: Test timed out"
-	},
-	"/encoding/legacy-mb-japanese/shift_jis/sjis-decode.html?7001-last": {
-		"U+FF1B ； �� 81 47": "MISSING: the harness ended OK before this subtest"
 	},
 	"/encoding/legacy-mb-korean/euc-kr/euckr-encode-form.html?17001-last": {
 		"U+FF35 Ｕ %A3%D5": "FAIL: assert_equals: expected \"%A3%D5\" but got \"%EF%BC%B5\"",

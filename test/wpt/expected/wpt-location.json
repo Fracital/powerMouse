@@ -2,17 +2,8 @@
 	"/html/browsers/history/the-location-interface/assign_after_load.html": {
 		"Assignment to location after document is completely loaded": "FAIL: assert_equals: expected 6 but got 5"
 	},
-	"/html/browsers/history/the-location-interface/location-ancestor-origins-new-object.html": {
-		"location.ancestorOrigins new object semantics": "FAIL: Failed to read a named property 'ancestorOrigins' from 'Location': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
-	},
 	"/html/browsers/history/the-location-interface/location-ancestor-origins-referrerpolicy-unsupported-elements.html": {
 		"<frame> with referrerpolicy='no-referrer' does not mask initial about:blank ancestorOrigins": "FAIL: Cannot read properties of null (reading 'contentWindow')"
-	},
-	"/html/browsers/history/the-location-interface/location-getters-about-blank.html": {
-		"Location properties on an about:blank page": "FAIL: Failed to read a named property 'href' from 'Location': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
-	},
-	"/html/browsers/history/the-location-interface/location-hash-about-blank.html": {
-		"Setting hash on an about:blank iframe location": "FAIL: Failed to read a named property 'href' from 'Location': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
 	},
 	"/html/browsers/history/the-location-interface/location-prototype-setting-cross-origin-domain.sub.html": {
 		"Cross-origin via document.domain: setting the prototype to an empty object via Object.setPrototypeOf should throw a TypeError": "FAIL: assert_throws_js: function \"() => { Object.setPrototypeOf(target, newValue); }\" did not throw",
@@ -30,7 +21,6 @@
 		"Same-origin: the prototype must still be its original value": "FAIL: assert_equals: expected object \"[object Location]\" but got object \"[object Object]\""
 	},
 	"/html/browsers/history/the-location-interface/location-replace-cross-site.html": {
-		"Setting location.href of a cross-site iframe": "FAIL: assert_equals: expected 44 but got 43",
-		"Setting location.href of a cross-site popup": "FAIL: assert_equals: expected 2 but got 1"
+		"Setting location.href of a cross-site iframe": "FAIL: assert_equals: expected 36 but got 35"
 	}
 }

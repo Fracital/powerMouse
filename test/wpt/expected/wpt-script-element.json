@@ -1,17 +1,9 @@
 {
-	"/html/semantics/scripting-1/the-script-element/fetch-src/failure.html": {
-		"Script src with an invalid URL": "FAIL: Failed to construct 'URL': Invalid URL"
-	},
 	"/html/semantics/scripting-1/the-script-element/microtasks/checkpoint-after-workerglobalscope-onerror-module.html": {
-		"(harness)": "ERROR: Uncaught TypeError: Cannot read properties of undefined (reading 'releaseHeld')",
-		"Promise resolved during #report-the-error": "MISSING: the harness ended ERROR before this subtest",
-		"Promise resolved during event handlers other than error": "MISSING: the harness ended ERROR before this subtest"
+		"Promise resolved during event handlers other than error": "FAIL: assert_array_equals: expected property 1 to be \"handler 1 promise\" but got \"handler 2\" (expected array [\"handler 1\", \"handler 1 promise\", \"handler 2\", \"handler 2 promise\"] got [\"handler 1\", \"handler 2"
 	},
 	"/html/semantics/scripting-1/the-script-element/muted-errors.sub.html": {
 		"Errors for same-origin scripts redirected to a cross-origin url and redirected back to same-origin should be muted": "FAIL: assert_equals: expected \"Script error.\" but got \"Uncaught fox\""
-	},
-	"/html/semantics/scripting-1/the-script-element/script-charset-01.html": {
-		"Script @type: unknown parameters 1": "FAIL: assert_equals: expected \"śćążź\" but got \"ďż˝ćążďż˝\""
 	},
 	"/html/semantics/scripting-1/the-script-element/script-defer-xhtml.xhtml": {
 		"(harness)": "ERROR: Uncaught ReferenceError: t is not defined"
@@ -21,12 +13,8 @@
 		"Scripts with for and event attributes should not run.": "MISSING: the harness ended TIMEOUT before this subtest"
 	},
 	"/html/semantics/scripting-1/the-script-element/script-noembed-noframes-iframe.xhtml": {
-		"(harness)": "TIMEOUT: timeout: no report within 30 s",
-		"Script inside noembed, noframes and iframe": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
-	"/html/semantics/scripting-1/the-script-element/script-onerror-insertion-point-2.html": {
 		"(harness)": "TIMEOUT: ",
-		"Test that the insertion point is not defined in the error event of a\n  parser-inserted script that has an unparseable URL": "NOTRUN: "
+		"Script inside noembed, noframes and iframe": "MISSING: the harness ended TIMEOUT before this subtest"
 	},
 	"/html/semantics/scripting-1/the-script-element/script-text-modifications-csp.html": {
 		"Modify inline script element's text after prepare-a-script before evaluation (CSP)": "FAIL: assert_equals: <script>'s textContent should be already modified expected \"t.unreached_func(\\\"CSP check was done against the original text but the updated text was evaluated\\\")();\" but got \"\\nt.step(("
@@ -37,9 +25,5 @@
 	"/html/semantics/scripting-1/the-script-element/script-text-xhtml.xhtml": {
 		"(harness)": "TIMEOUT: ",
 		"Getter with CDATA section": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
-	"/html/semantics/scripting-1/the-script-element/src-empty-or-invalid-error-event-queued.html": {
-		"classic script with invalid src fires error event asynchronously": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to construct 'URL': Invalid URL\"",
-		"module script with invalid src fires error event asynchronously": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to construct 'URL': Invalid URL\""
 	}
 }

@@ -1,6 +1,6 @@
 {
-	"/workers/SharedWorker-detach-frame-in-error-event.html": {
-		"Test frame detach in shared worker's error handler": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	"/workers/Worker-nested-importScripts-error.html": {
+		"Tests that errors from the import scripts come from the expected file.": "FAIL: assert_true: expected true got false"
 	},
 	"/workers/Worker-postMessage-happens-in-parallel.https.html": {
 		"(harness)": "ERROR: Uncaught ReferenceError: SharedArrayBuffer is not defined",

@@ -20,7 +20,7 @@
 		"XMLHttpRequest: abort() during DONE (async)": "FAIL: assert_equals: expected 0 but got 4"
 	},
 	"/xhr/abort-during-headers-received.window.html": {
-		"XMLHttpRequest: abort() during HEADERS_RECEIVED": "FAIL: assert_equals: expected \"\" but got \"connection: keep-alive\\r\\ncontent-length: 127\\r\\ncontent-type: text/xml\\r\\ndate: Sun, 15 Nov 2026 22:58:24 GMT\\r\\nkeep-alive: timeout=600\\r\\n\""
+		"XMLHttpRequest: abort() during HEADERS_RECEIVED": "FAIL: assert_equals: expected \"\" but got \"connection: keep-alive\\r\\ncontent-length: 127\\r\\ncontent-type: text/xml\\r\\ndate: Mon, 16 Nov 2026 02:31:27 GMT\\r\\nkeep-alive: timeout=600\\r\\n\""
 	},
 	"/xhr/abort-during-loading.window.html": {
 		"XMLHttpRequest: abort() during LOADING": "FAIL: assert_equals: expected null but got Document node with 1 child"
@@ -67,14 +67,14 @@
 		"ProgressEvent: firing events for HTTP with no Content-Length": "FAIL: assert_false: lengthComputable expected false got true"
 	},
 	"/xhr/loadstart-and-state.html": {
-		"open() during loadstart": "FAIL: assert_throws_dom: function \"() => client.setRequestHeader(\"General\", \"Organa\")\" did not throw",
+		"open() during loadstart": "FAIL: Maximum call stack size exceeded.",
 		"abort() during loadstart": "FAIL: assert_equals: expected 0 but got 4"
 	},
 	"/xhr/open-after-abort.htm": {
 		"XMLHttpRequest: open() after abort()": "FAIL: assert_equals: expected 0 but got 4"
 	},
 	"/xhr/open-send-during-abort.htm": {
-		"XMLHttpRequest: open() during abort()": "TIMEOUT: Test timed out"
+		"XMLHttpRequest: open() during abort()": "FAIL: Failed to execute 'send' on 'XMLHttpRequest': The object's state must be OPENED."
 	},
 	"/xhr/progress-events-response-data-gzip.htm": {
 		"XMLHttpRequest: progress events and GZIP encoding": "FAIL: assert_equals: if implementation can't compute event.total for gzipped content it is 0 expected 0 but got 165255"

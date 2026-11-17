@@ -14,7 +14,8 @@
 		"Defining data property with toString for key x on sessionStorage": "FAIL: assert_equals: expected (undefined) undefined but got (string) \"value\""
 	},
 	"/webstorage/document-domain.html": {
-		"localStorage and document.domain": "FAIL: Failed to read a named property 'addEventListener' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+		"(harness)": "TIMEOUT: ",
+		"localStorage and document.domain": "TIMEOUT: Test timed out"
 	},
 	"/webstorage/event_basic.html": {
 		"sessionStorage mutations fire StorageEvents that are caught by the event listener set via window.onstorage.": "FAIL: assert_unreached: Timeout: only got 0, expected 1 events Reached unreachable code"
