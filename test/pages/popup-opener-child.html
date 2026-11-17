@@ -1,0 +1,38 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>popup</title>
+<script>
+	// what this popup reads of the window that opened it
+	const read = (get) => {
+		try {
+			const value = get();
+			return typeof value === 'object' ? String(value) : value;
+		} catch (error) {
+			return `throws ${error.name}`;
+		}
+	};
+	const result = { who: location.search.slice(1) };
+	result.has = read(() => 'marker' in opener);
+	result.marker = read(() => opener.marker);
+	result.href = read(() => typeof opener.location.href);
+	result.document = read(() => typeof opener.document);
+	// the opener is its own top, was opened by nobody, and its frame's top
+	// is the opener
+	result.top = read(() => opener.top === opener);
+	result.topIsPopup = read(() => opener.top === window);
+	result.openerOpener = read(() => opener.opener === null);
+	result.frameTop = read(() => opener.frames[0].top === opener);
+	// the climb to the first window (WPT cookie-test.js), bounded
+	let first = window.top;
+	let hops = 0;
+	try {
+		while (first.opener && !first.opener.closed && hops < 10) {
+			first = first.opener.top;
+			hops++;
+		}
+	} catch (error) {
+		hops = `throws ${error.name}`;
+	}
+	result.hops = hops;
+	opener.postMessage(result, '*');
+</script>

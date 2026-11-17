@@ -69,6 +69,12 @@ export function reachableClients(
 
 // taken before the page runs: a page may replace the global
 const NativeWeakRef = WeakRef;
+// a window's opener as the browser has it: a window's own accessor answers
+// for any window
+const nativeOpener = Reflect.getOwnPropertyDescriptor(
+	globalThis,
+	'opener',
+)?.get;
 // Chrome's console message for a navigation it refuses is the browser's own:
 // printed with the console's native method, which no page hook sees
 const nativeConsoleError = console.error;
@@ -206,6 +212,8 @@ export default class ContextModule extends Module<DocumentClient> {
 	 * that object already; handing it out again gives it nothing new.
 	 */
 	held: WeakSet<Context>;
+	/** the document the holds were made in, and its origin */
+	#heldIn: { document: Document; key: string | null } | null = null;
 	constructor(client: DocumentClient) {
 		super(client);
 		// (asked through natives the page cannot replace: what they answer
@@ -214,9 +222,26 @@ export default class ContextModule extends Module<DocumentClient> {
 		this.restrictedContexts = new OwnWeakMap();
 		this.held = new OwnWeakSet();
 	}
+	/**
+	 * The holds, which are a document's: the browser keeps a window for the
+	 * document that follows its initial about:blank, and this module with
+	 * it. A popup's about:blank is its opener's document and holds the
+	 * opener as itself; the site the popup was opened to is another origin's
+	 * document in a window that natively is a new one, holding nothing (it
+	 * read its opener's globals, document and location through the hold)
+	 */
+	#holds(): WeakSet<Context> {
+		const document = this.client.global.document;
+		if (this.#heldIn?.document !== document) {
+			const key = this.client.originKey;
+			if (this.#heldIn && this.#heldIn.key !== key) this.held = new WeakSet();
+			this.#heldIn = { document, key };
+		}
+		return this.held;
+	}
 	/** a window this realm now holds as itself (see `held`) */
 	hold(context: Context) {
-		this.held.add(context);
+		this.#holds().add(context);
 	}
 	restrictObject(
 		// the interface the browser names in its errors
@@ -560,9 +585,14 @@ export default class ContextModule extends Module<DocumentClient> {
 		// whose opener this document reaches
 		if (targetClient && targetClient.proxiedTop === target) {
 			try {
-				const opener = client.global.opener;
-				if (opener === target) return null;
-				const theirs = target.opener;
+				// (openers as the browser has them: a window's own `opener`
+				// answers one of another origin as a stand-in)
+				const openerOf = (window: Context): unknown =>
+					nativeOpener
+						? Reflect.apply(nativeOpener, window, [])
+						: window.opener;
+				if (openerOf(client.global) === target) return null;
+				const theirs = openerOf(target);
 				if (theirs && this.#reachesAncestor(theirs)) return null;
 			} catch (error) {
 				// an opener of another real origin
@@ -949,12 +979,12 @@ export default class ContextModule extends Module<DocumentClient> {
 	 */
 	#handle(context: Context): Context | null {
 		for (const old of heldBefore(this.client, context))
-			if (old !== context && this.held.has(old as Context))
+			if (old !== context && this.#holds().has(old as Context))
 				return old as Context;
 		return null;
 	}
 	#pending(context: Context, url: unknown): RestrictedContext {
-		if (this.held.has(context)) return context;
+		if (this.#holds().has(context)) return context;
 		let target: URL | undefined;
 		try {
 			target = new URL(String(url), this.client.baseURL.toString());
@@ -984,7 +1014,7 @@ export default class ContextModule extends Module<DocumentClient> {
 			// another origin gets its stand-in, as for `top`)
 			context = findTop(this.client.global, this.client.names.client);
 
-		if (this.held.has(context)) return context;
+		if (this.#holds().has(context)) return context;
 
 		const other = (context as any)[this.client.names.client] as DocumentClient;
 		// a window this realm holds a stand-in of: its own again once the two
@@ -1002,7 +1032,7 @@ export default class ContextModule extends Module<DocumentClient> {
 				// a window being torn down
 			}
 			if (!reach) return this.restricted.get(context)!;
-			this.held.add(context);
+			this.#holds().add(context);
 			return context;
 		}
 
@@ -1029,7 +1059,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		// walking the frame tree, keep the renderer's main thread busy for
 		// good. An opaque URL (a data: document) has none, and reaches nothing.
 		if (!opaque && reachableClients(this.client, other)) {
-			this.held.add(context);
+			this.#holds().add(context);
 			return context;
 		}
 
@@ -1262,7 +1292,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		// read or write of another origin's window) is done to the frame's
 		// window now, as this realm has it (freshContext.ts)
 		this.client.liveWindow = (target) => {
-			if (!this.held.has(target as Context)) return undefined;
+			if (!this.#holds().has(target as Context)) return undefined;
 			const frame = frameOfHeld(this.client, target);
 			if (!frame?.now || (frame.now as unknown) === target) return undefined;
 			return this.#restrict(frame.now as unknown as Context);

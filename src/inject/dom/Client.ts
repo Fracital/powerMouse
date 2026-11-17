@@ -2780,10 +2780,15 @@ export default class DocumentClient extends Client {
 			return new StompURL(named, this.codec, prefix);
 		if (ROUTE_PROTOCOLS.includes(own.protocol))
 			return parseRoutedURL(location, this.codec, prefix).url;
-		// about:blank, about:srcdoc: of the document that made it
+		// about:blank, about:srcdoc: of the document that made it. A window
+		// whose document was of one origin never becomes another's this way:
+		// an opener that has gone to another site since is not the maker of
+		// the about:blank its popup loads next
 		if (own.protocol === 'about:') {
 			const creator = this.#creatorClient();
-			if (creator) return creator.url;
+			const was = this.#originKey?.key ?? null;
+			if (creator && (was === null || was === creator.originKey))
+				return creator.url;
 		}
 		// anything else (a blob: copy no shell named, an <object>'s SVG): its
 		// own address, the proxy's, which is no page's origin

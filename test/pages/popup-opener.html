@@ -1,0 +1,32 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>popup opener</title>
+<iframe src="popup-opener-frame.html"></iframe>
+<script>
+	// a popup of another origin and one of this origin, each reporting what
+	// it reads of this window (popup-opener suite)
+	const result = {};
+	window.marker = 1;
+	const other = location.origin.includes('127.0.0.1')
+		? location.origin.replace('127.0.0.1', 'localhost')
+		: location.origin.replace('localhost', '127.0.0.1');
+	const popups = {};
+	addEventListener('message', (event) => {
+		const { who } = event.data || {};
+		if (who !== 'cross' && who !== 'same') return;
+		result[who] = event.data;
+		result[`${who}Source`] = event.source === popups[who];
+		try {
+			popups[who].close();
+		} catch (error) {
+			// closed already
+		}
+		if (result.cross && result.same) window.__result = result;
+	});
+	addEventListener('load', () => {
+		popups.cross = window.open(`${other}/pages/popup-opener-child.html?cross`);
+		popups.same = window.open('popup-opener-child.html?same');
+		result.opened =
+			typeof popups.cross === 'object' && typeof popups.same === 'object';
+	});
+</script>
