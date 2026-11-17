@@ -2,7 +2,7 @@
 #
 # terp is VM 116 on the Proxmox host divide (since 2026-11-16), on divide's private network
 # (172.16.5.62) with no public address. The deploy job runs on the self-hosted runner
-# divide-deploy (CT 204 on divide, 172.16.5.204, labels divide + deploy), the only guest divide's
+# divide-deploy (CT 204 on divide, 172.16.5.204, labels divide + deploy only), the only guest divide's
 # firewall lets reach terp's tcp/22. Its runner group (deploy) admits only this repository and
 # only .github/workflows/deploy.yml at refs/heads/master, so a fork's pull request can never
 # get a job onto it. The other jobs stay on GitHub's runners.
@@ -79,7 +79,9 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: [self-hosted, deploy]
+    # the runner's own labels: it is registered without the default ones
+    # (self-hosted, linux, x64), so a job asking for those would never start
+    runs-on: [divide, deploy]
     timeout-minutes: 15
     outputs:
       superseded: ${{ steps.head.outputs.superseded || steps.ship.outputs.superseded }}
