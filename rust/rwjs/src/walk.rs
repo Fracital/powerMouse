@@ -1816,12 +1816,22 @@ fn reads_first(a: &AssignmentExpression) -> bool {
 }
 
 /// a URL-like specifier is absolute, scheme-relative, or starts with `/`,
-/// `./`, `../`; anything else is bare (`BARE_SPECIFIER`)
+/// `./`, `../`; anything else is bare (`BARE_SPECIFIER`). It is tested as the
+/// URL parser reads it (`stripSpecifier` in src/scriptRoutes.ts): every tab,
+/// newline and carriage return removed, leading and trailing C0 controls and
+/// spaces trimmed, so `ht\rtp://h/x` and `  http://h/x` are the absolute
+/// URLs Chrome fetches, not bare names
 fn is_bare_specifier(specifier: &str) -> bool {
-	if specifier.starts_with('/') || specifier.starts_with("./") || specifier.starts_with("../") {
+	let stripped: Vec<u8> = specifier
+		.bytes()
+		.filter(|&byte| !matches!(byte, b'\t' | b'\n' | b'\r'))
+		.collect();
+	let start = stripped.iter().position(|&byte| byte > 0x20).unwrap_or(stripped.len());
+	let end = stripped.iter().rposition(|&byte| byte > 0x20).map_or(start, |at| at + 1);
+	let bytes = &stripped[start..end.max(start)];
+	if bytes.starts_with(b"/") || bytes.starts_with(b"./") || bytes.starts_with(b"../") {
 		return false;
 	}
-	let bytes = specifier.as_bytes();
 	if !bytes.first().is_some_and(u8::is_ascii_alphabetic) {
 		return true;
 	}

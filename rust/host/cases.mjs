@@ -44,6 +44,11 @@ export const families = {
 			'const a = 1; export { a }; export default function () {}; export const b = location',
 		),
 		m('import.meta.url; import.meta.resolve("./x")'),
+		// what the URL parser strips (a tab, newline or carriage return
+		// anywhere, C0 controls and spaces around) leaves an absolute URL
+		m(
+			'import a from "ht\\rtp://e.example/a.js"; import b from " https://e.example/b.js"; import c from "h\\ttps://e.example/c.js"',
+		),
 	],
 
 	identifiers: [
