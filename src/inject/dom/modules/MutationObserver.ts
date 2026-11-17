@@ -97,7 +97,10 @@ interface ObserverState {
 	ref: WeakRef<MutationObserver>;
 	/** the page's value of an attribute that carries no marker */
 	readback: (name: string, value: string) => string;
+	/** runs `callback` in the browser's mutation observer microtask */
 	schedule: (callback: () => void) => void;
+	/** runs `callback` in a microtask queued now */
+	later: (callback: () => void) => void;
 	/** where the observer stands among the others, oldest first (`inOrder`) */
 	created: number;
 }
@@ -326,28 +329,64 @@ function shapeWrite(
 	return out;
 }
 
-function enqueue(observer: MutationObserver, records: MutationRecord[]) {
+/**
+ * Records `enqueue` gives the page's observers are handed over from a
+ * microtask that notifies every observer that waits, the oldest first, as
+ * the browser's mutation observer microtask does. When the browser's is
+ * queued for the page already (records were on an observer's queue before
+ * the hooks took them: it was queued when they were made, ahead of any
+ * promise the page queued since), they go in that one (state.schedule);
+ * otherwise in one queued now (state.later), as the browser queues it for
+ * a record made now. (The inject's own observers of the document keep the
+ * browser's queued far more often than the page's records would: that
+ * alone does not tell.)
+ */
+function enqueue(
+	observer: MutationObserver,
+	records: MutationRecord[],
+	queued = false,
+) {
 	if (!records.length) return;
 	const state = states.get(observer)!;
 	for (const record of records) {
 		settled.add(record);
 		state.queue.push(record);
 	}
-	// the browser's own delivery comes first when this observer has records
-	// left in its queue; this one covers a queue that was emptied. One
-	// microtask notifies every observer that waits, the oldest first, as the
-	// browser's does: one each ran them in the order their records were taken
 	waiting.add(observer);
 	if (notifying) return;
 	notifying = true;
-	state.schedule(() => {
+	const notify = () => {
 		notifying = false;
+		takeQueued();
 		const due = inOrder(
 			[...waiting].map((waits): [MutationObserver, null] => [waits, null]),
 		);
 		waiting.clear();
 		for (const [waits] of due) deliver(waits);
-	});
+	};
+	if (takeQueued() || queued) state.schedule(notify);
+	else state.later(notify);
+}
+/**
+ * The records still on the browser's queues of the page's observers, taken
+ * to be handed over with the rest: whether there were any
+ */
+function takeQueued(): boolean {
+	let any = false;
+	for (const ref of observing) {
+		const observer = ref.deref();
+		const state = observer && states.get(observer);
+		if (!state) continue;
+		const records = visible(Reflect.apply(state.take, observer, []));
+		if (!records.length) continue;
+		for (const record of shapeLoose(state, records)) {
+			settled.add(record);
+			state.queue.push(record);
+		}
+		waiting.add(observer);
+		any = true;
+	}
+	return any;
 }
 /** the observers `enqueue` gave records to, until the microtask that notifies them */
 const waiting = new Set<MutationObserver>();
@@ -409,7 +448,8 @@ function drain(observers = live) {
 			for (const record of records) list.push(record);
 		} else loose.push([observer, shapeLoose(state, records)]);
 	}
-	for (const [observer, records] of inOrder(loose)) enqueue(observer, records);
+	for (const [observer, records] of inOrder(loose))
+		enqueue(observer, records, true);
 }
 
 function run<T>(write: Write, callback: () => T): T {
@@ -572,7 +612,35 @@ export default class MutationObserverModule extends Module<DocumentClient> {
 		const nativeObserve = prototype.observe;
 		const nativeDisconnect = prototype.disconnect;
 		const nativeTakeRecords = prototype.takeRecords;
+		// The browser's mutation observer microtask, reached for records the
+		// hooks took off an observer's queue when it is queued for them
+		// already (enqueue): a write to a detached text node that an
+		// observer of the inject's watches joins it, where a microtask of
+		// the inject's own would come after any promise the page queued
+		// since. Made before any of the page's observers, it is notified
+		// first.
+		const carried: (() => void)[] = [];
+		const carrierNode = new global.Text('');
 		const queueMicrotask = global.queueMicrotask.bind(global);
+		const setData = Reflect.getOwnPropertyDescriptor(
+			global.CharacterData.prototype,
+			'data',
+		)!.set!;
+		let flip = false;
+		Reflect.apply(
+			nativeObserve,
+			Reflect.construct(NativeObserver, [
+				() => {
+					for (const callback of carried.splice(0)) callback();
+				},
+			]),
+			[carrierNode, { characterData: true }],
+		);
+		const schedule = (callback: () => void) => {
+			carried.push(callback);
+			flip = !flip;
+			Reflect.apply(setData, carrierNode, [flip ? '.' : '']);
+		};
 		const readback = (name: string, value: string) =>
 			name === 'style' ? unrouteCSS(this.client, value) : value;
 
@@ -611,7 +679,8 @@ export default class MutationObserverModule extends Module<DocumentClient> {
 					anyOldValue: false,
 					ref: new WeakRef(observer),
 					readback,
-					schedule: queueMicrotask,
+					schedule,
+					later: queueMicrotask,
 					created: made++,
 				});
 				return observer;
