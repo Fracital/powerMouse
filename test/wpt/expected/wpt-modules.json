@@ -1,0 +1,97 @@
+{
+	"/html/semantics/scripting-1/the-script-element/module/dynamic-import/alpha/base-url-worker-importScripts.html": {
+		"Relative URL-like from cross-origin importScripts()": "FAIL: assert_equals: Relative URL-like specifier resolution should fail expected \"(unreached)\" but got \"gamma/import.js\""
+	},
+	"/html/semantics/scripting-1/the-script-element/module/dynamic-import/alpha/base-url.sub.html": {
+		"Relative URL-like from cross origin classic <script> without crossorigin attribute": "FAIL: assert_equals: Relative URL-like specifier resolution should fail expected \"(unreached)\" but got \"gamma/import.js\""
+	},
+	"/html/semantics/scripting-1/the-script-element/module/dynamic-import/code-cache-base-url.html": {
+		"alpha - Function": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/the-script-element/module/dynamic-import/",
+		"alpha - eval": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/the-script-element/module/dynamic-import/",
+		"beta - eval": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/the-script-element/module/dynamic-import/",
+		"gamma - eval": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/the-script-element/module/dynamic-import/"
+	},
+	"/html/semantics/scripting-1/the-script-element/module/dynamic-import/dynamic-imports-credentials-setTimeout.sub.html": {
+		"Same-origin dynamic import from setTimeout(string) from classic script (crossOrigin not specified)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined",
+		"Cross-origin dynamic import from setTimeout(string) from classic script (crossOrigin not specified)": "FAIL: assert_equals: cookie expected (string) \"not found\" but got (undefined) undefined",
+		"Same-origin dynamic import from setTimeout(string) from classic script (crossOrigin=anonymous)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined",
+		"Cross-origin dynamic import from setTimeout(string) from classic script (crossOrigin=anonymous)": "FAIL: assert_equals: cookie expected (string) \"not found\" but got (undefined) undefined",
+		"Same-origin dynamic import from setTimeout(string) from classic script (crossOrigin=use-credentials)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined",
+		"Same-origin dynamic import from setTimeout(string) from module script (crossOrigin not specified)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined",
+		"Cross-origin dynamic import from setTimeout(string) from module script (crossOrigin not specified)": "FAIL: assert_equals: cookie expected (string) \"not found\" but got (undefined) undefined",
+		"Same-origin dynamic import from setTimeout(string) from module script (crossOrigin=anonymous)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined",
+		"Cross-origin dynamic import from setTimeout(string) from module script (crossOrigin=anonymous)": "FAIL: assert_equals: cookie expected (string) \"not found\" but got (undefined) undefined",
+		"Same-origin dynamic import from setTimeout(string) from module script (crossOrigin=use-credentials)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined"
+	},
+	"/html/semantics/scripting-1/the-script-element/module/dynamic-import/dynamic-imports-credentials.sub.html": {
+		"Same-origin dynamic import from classic script (crossOrigin not specified)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined",
+		"Cross-origin dynamic import from classic script (crossOrigin not specified)": "FAIL: assert_equals: cookie expected (string) \"not found\" but got (undefined) undefined",
+		"Same-origin dynamic import from classic script (crossOrigin=anonymous)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined",
+		"Cross-origin dynamic import from classic script (crossOrigin=anonymous)": "FAIL: assert_equals: cookie expected (string) \"not found\" but got (undefined) undefined",
+		"Same-origin dynamic import from classic script (crossOrigin=use-credentials)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined",
+		"Same-origin dynamic import from module script (crossOrigin not specified)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined",
+		"Cross-origin dynamic import from module script (crossOrigin not specified)": "FAIL: assert_equals: cookie expected (string) \"not found\" but got (undefined) undefined",
+		"Same-origin dynamic import from module script (crossOrigin=anonymous)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined",
+		"Cross-origin dynamic import from module script (crossOrigin=anonymous)": "FAIL: assert_equals: cookie expected (string) \"not found\" but got (undefined) undefined",
+		"Same-origin dynamic import from module script (crossOrigin=use-credentials)": "FAIL: assert_equals: cookie expected (string) \"found\" but got (undefined) undefined"
+	},
+	"/html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-base-url-external-classic.html": {
+		"eval should successfully import": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/imports-a.js?label=eval\"",
+		"Function should successfully import": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/imports-a.js?label=Function\""
+	},
+	"/html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-base-url-external-module.html": {
+		"eval should successfully import": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/imports-a.js?label=eval\"",
+		"Function should successfully import": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/imports-a.js?label=Function\""
+	},
+	"/html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-base-url-inline-classic.html": {
+		"eval should successfully import": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/imports-a.js?label=eval\"",
+		"the Function constructor should successfully import": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/imports-a.js?label=the%20Function%20constructor\""
+	},
+	"/html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-base-url-inline-module.html": {
+		"eval should successfully import": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/imports-a.js?label=eval\"",
+		"the Function constructor should successfully import": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/imports-a.js?label=the%20Function%20constructor\""
+	},
+	"/html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-nonce-classic.html": {
+		"reflected inline event handlers must not inherit the nonce from the triggering script, thus fail": "FAIL: assert_unreached: Should have rejected: undefined Reached unreachable code",
+		"inline event handlers triggered via UA code must not inherit the nonce from the triggering script, thus fail": "FAIL: assert_unreached: Should have rejected: undefined Reached unreachable code"
+	},
+	"/html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-nonce-module.html": {
+		"reflected inline event handlers must not inherit the nonce from the triggering script, thus fail": "FAIL: assert_unreached: Should have rejected: undefined Reached unreachable code",
+		"inline event handlers triggered via UA code must not inherit the nonce from the triggering script, thus fail": "FAIL: assert_unreached: Should have rejected: undefined Reached unreachable code"
+	},
+	"/html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-other-document.html": {
+		"eval should successfully import": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/the-script-element/module/dynamic-import/",
+		"the Function constructor should successfully import": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/the-script-element/module/dynamic-import/"
+	},
+	"/html/semantics/scripting-1/the-script-element/module/evaluation-error-5.html": {
+		"Test for the inline module script error that reports wrong line\n": "FAIL: assert_equals: expected 16 but got 1"
+	},
+	"/html/semantics/scripting-1/the-script-element/module/import-meta/import-meta-resolve-importmap.html": {
+		"import.meta.resolve() given an import mapped bare specifier": "FAIL: assert_equals: expected \"https://example.com/\" but got \"bare\"",
+		"import.meta.resolve() given an import mapped  URL-like specifier": "FAIL: assert_equals: expected \"https://example.com/rewritten\" but got \"https://example.com/rewrite\"",
+		"Testing the ToString() step of import.meta.resolve() via import maps": "FAIL: assert_equals: no-arg case expected \"https://example.com/PASS-undefined\" but got \"undefined\"",
+		"import(import.meta.resolve(x)) can be different from import(x)": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/the-script-element/module/import-meta/sta"
+	},
+	"/html/semantics/scripting-1/the-script-element/module/inactive-context-import.html": {
+		"dynamic import from inactive context should not crash": "FAIL: Failed to read a named property 'eval' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/html/semantics/scripting-1/the-script-element/module/integrity.html": {
+		"The integrity attribute must be verified on the top-level of a module and not allow it to execute when there's a mismatch": "FAIL: assert_array_equals: The module and its dependency must not have executed lengths differ, expected array [] length 0, got [\"integrity-mismatches-inner\", \"integrity-mismatches\"] length 2"
+	},
+	"/html/semantics/scripting-1/the-script-element/module/module-import-referrer.html": {
+		"Dynamic imports from inline modules in the HTML document": "FAIL: assert_equals: Referrer should be the document URL expected \"http://localhost:PORT/html/semantics/scripting-1/the-script-element/module/module-import-referrer.html\" but got \"\"",
+		"Dynamic imports from external modules": "FAIL: assert_equals: Referrer should be the document URL expected \"http://localhost:PORT/html/semantics/scripting-1/the-script-element/module/module-import-referrer.js\" but got \"\""
+	},
+	"/html/semantics/scripting-1/the-script-element/module/module-in-xhtml.xhtml": {
+		"(harness)": "TIMEOUT: "
+	},
+	"/html/semantics/scripting-1/the-script-element/module/referrer-origin.sub.html": {
+		"Importing a remote-origin descendant script from a remote-origin top-level script with the origin policy.": "FAIL: assert_equals: Referrer should be sent for the remote-origin descendant script. expected \"http://127.0.0.1:PORT/\" but got \"http://localhost:PORT/\"",
+		"Importing a same-origin descendant script from a remote-origin top-level script with the origin policy.": "FAIL: assert_equals: Referrer should be sent for the same-origin descendant script. expected \"http://127.0.0.1:PORT/\" but got \"http://localhost:PORT/\""
+	},
+	"/html/semantics/scripting-1/the-script-element/module/referrer-policy-for-descendants.sub.html": {
+		"Remote parent module delivered with `origin-when-cross-origin` policy importing a same-origin-to-parent-module descendant script.": "FAIL: assert_equals: Same-origin descendant referrer should be the parent's full URL. expected \"http://127.0.0.1:PORT/html/semantics/scripting-1/the-script-element/module/resources/import-referrer-checker.s",
+		"Remote parent module delivered with `same-origin` policy importing a same-origin-to-parent-module descendant script.": "FAIL: assert_equals: Same-origin descendant referrer should be the parent's full URL. expected \"http://127.0.0.1:PORT/html/semantics/scripting-1/the-script-element/module/resources/import-referrer-checker.s",
+		"Remote parent module delivered with `origin-when-cross-origin` policy importing a cross-origin-to-parent-module descendant script.": "FAIL: assert_equals: Remote-origin descendant referrer should be the parent's origin. expected \"http://127.0.0.1:PORT/\" but got \"\""
+	}
+}

@@ -1,0 +1,77 @@
+{
+	"/html/semantics/scripting-1/the-script-element/execution-timing/070.html": {
+		"(harness)": "ERROR: Uncaught TypeError: Cannot read properties of null (reading 'open')",
+		" scheduler: document.write into IFRAME a script that adds a SCRIPT through DOM": "MISSING: the harness ended ERROR before this subtest"
+	},
+	"/html/semantics/scripting-1/the-script-element/execution-timing/071.html": {
+		"(harness)": "ERROR: Uncaught TypeError: Cannot read properties of null (reading 'open')",
+		" scheduler: document.write several scripts into IFRAME ": "MISSING: the harness ended ERROR before this subtest"
+	},
+	"/html/semantics/scripting-1/the-script-element/execution-timing/072.html": {
+		"(harness)": "ERROR: Uncaught TypeError: Cannot read properties of null (reading 'open')",
+		" scheduler: document.write into IFRAME a script that creates new inline script in parent ": "MISSING: the harness ended ERROR before this subtest"
+	},
+	"/html/semantics/scripting-1/the-script-element/execution-timing/073.html": {
+		"(harness)": "ERROR: Uncaught TypeError: Cannot read properties of null (reading 'open')",
+		" scheduler: document.write into IFRAME a script that creates new external script in parent ": "MISSING: the harness ended ERROR before this subtest"
+	},
+	"/html/semantics/scripting-1/the-script-element/execution-timing/074.html": {
+		"(harness)": "ERROR: Uncaught TypeError: Cannot read properties of null (reading 'open')",
+		" scheduler: document.write into IFRAME a script that creates new inline script in parent that again adds script to IFRAME ": "MISSING: the harness ended ERROR before this subtest"
+	},
+	"/html/semantics/scripting-1/the-script-element/execution-timing/075.html": {
+		"(harness)": "ERROR: Uncaught TypeError: Cannot read properties of null (reading 'open')",
+		"dispatchEvent from child frame during document.write :-o ": "MISSING: the harness ended ERROR before this subtest"
+	},
+	"/html/semantics/scripting-1/the-script-element/execution-timing/083.html": {
+		"(harness)": "ERROR: Uncaught SecurityError: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
+		" scheduler: event listener defined by script in a document in history": "MISSING: the harness ended ERROR before this subtest"
+	},
+	"/html/semantics/scripting-1/the-script-element/execution-timing/084.html": {
+		"(harness)": "ERROR: Uncaught SecurityError: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
+		" scheduler: event listener defined by script in a removed IFRAME": "MISSING: the harness ended ERROR before this subtest"
+	},
+	"/html/semantics/scripting-1/the-script-element/execution-timing/094.html": {
+		" scheduler: parser-created defer script after document load": "FAIL: Cannot read properties of null (reading 'open')"
+	},
+	"/html/semantics/scripting-1/the-script-element/execution-timing/101.html": {
+		" scheduler: defer script after initial onload event": "FAIL: Cannot read properties of null (reading 'open')"
+	},
+	"/html/semantics/scripting-1/the-script-element/execution-timing/106-import-xhtml.xhtml": {
+		"(harness)": "TIMEOUT: ",
+		"Stylesheet in XHTML HEAD with @import blocking scripts": "MISSING: the harness ended TIMEOUT before this subtest"
+	},
+	"/html/semantics/scripting-1/the-script-element/execution-timing/106-noimport-xhtml.xhtml": {
+		"(harness)": "TIMEOUT: ",
+		"Stylesheet in XHTML HEAD blocking scripts": "MISSING: the harness ended TIMEOUT before this subtest"
+	},
+	"/html/semantics/scripting-1/the-script-element/execution-timing/123.html": {
+		"scheduler: altering the type attribute and adding/removing external script with async=false ": "FAIL: assert_array_equals: expected property 0 to be \"external script #1\" but got \"external script #2\" (expected array [\"external script #1\", \"external script #2\"] got [\"external script #2\", \"external scrip"
+	},
+	"/html/semantics/scripting-1/the-script-element/execution-timing/126.html": {
+		"scheduler: altering the type attribute and changing script data external script async=false ": "FAIL: assert_array_equals: expected property 0 to be \"external script #1\" but got \"external script #2\" (expected array [\"external script #1\", \"external script #2\"] got [\"external script #2\", \"external scrip"
+	},
+	"/html/semantics/scripting-1/the-script-element/execution-timing/138.html": {
+		"(harness)": "ERROR: Uncaught SyntaxError: Unexpected token '.'",
+		"scheduler: SVG script nested inlines": "FAIL: assert_array_equals: lengths differ, expected array [\"inline script #1\", \"inline script #2\", \"end inline script #2\"] length 3, got [] length 0"
+	},
+	"/html/semantics/scripting-1/the-script-element/execution-timing/139.html": {
+		"(harness)": "ERROR: Uncaught SyntaxError: Unexpected token '.'",
+		"scheduler: SVG script nested external in inline": "FAIL: assert_array_equals: lengths differ, expected array [\"external script #1\", \"inline script #1\", \"end inline script #1\"] length 3, got [] length 0"
+	},
+	"/html/semantics/scripting-1/the-script-element/execution-timing/140.html": {
+		"scheduler: SVG script nested inline in external": "FAIL: assert_array_equals: lengths differ, expected array [\"inline script #1\", \"external script #1\"] length 2, got [\"external script #1\"] length 1"
+	},
+	"/html/semantics/scripting-1/the-script-element/execution-timing/143.html": {
+		"(harness)": "ERROR: Uncaught SyntaxError: Unexpected token ':'",
+		"scheduler: SVG nested inline script that document.writes inline script ": "FAIL: assert_array_equals: lengths differ, expected array [\"inline script #1\", \"inline script #2\", \"inline script #3\"] length 3, got [] length 0"
+	},
+	"/html/semantics/scripting-1/the-script-element/execution-timing/150-import-xhtml.xhtml": {
+		"(harness)": "TIMEOUT: ",
+		"Stylesheet in XHTML BODY with @import blocking scripts": "MISSING: the harness ended TIMEOUT before this subtest"
+	},
+	"/html/semantics/scripting-1/the-script-element/execution-timing/150-noimport-xhtml.xhtml": {
+		"(harness)": "TIMEOUT: ",
+		"Stylesheet in XHTML BODY blocking scripts": "MISSING: the harness ended TIMEOUT before this subtest"
+	}
+}
