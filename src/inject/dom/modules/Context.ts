@@ -1535,9 +1535,17 @@ export default class ContextModule extends Module<DocumentClient> {
 					isMessageData(event.data, this.client.names.globalName)
 				);*/
 				usePrototype(event, nativeMessageEvent, (event) => {
-					if (!isMessageData(event.data, this.client.names.globalName)) return;
+					let data: unknown;
+					try {
+						data = event.data;
+					} catch (error) {
+						// an event the page made that is no MessageEvent
+						// (`dispatchEvent(new Event('message'))`): it carries no data
+						return;
+					}
+					if (!isMessageData(data, this.client.names.globalName)) return;
 
-					messageData.set(event, event.data);
+					messageData.set(event, data);
 
 					/* else {
 						console.warn('Unknown message', event.data);

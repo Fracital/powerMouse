@@ -5,20 +5,12 @@
 	},
 	"/html/webappapis/scripting/events/event-handler-attributes-body-window.html": {
 		"(harness)": "ERROR: Uncaught TypeError: Illegal invocation",
-		"shadowed messageerror on body fires when event dispatched on window": "MISSING: the harness ended ERROR before this subtest",
-		"shadowed offline on body fires when event dispatched on window": "MISSING: the harness ended ERROR before this subtest",
-		"shadowed online on body fires when event dispatched on window": "MISSING: the harness ended ERROR before this subtest",
-		"shadowed pagehide on body fires when event dispatched on window": "MISSING: the harness ended ERROR before this subtest",
-		"shadowed pageshow on body fires when event dispatched on window": "MISSING: the harness ended ERROR before this subtest",
 		"shadowed popstate on body fires when event dispatched on window": "MISSING: the harness ended ERROR before this subtest",
 		"shadowed storage on body fires when event dispatched on window": "MISSING: the harness ended ERROR before this subtest",
 		"shadowed unload on body fires when event dispatched on window": "MISSING: the harness ended ERROR before this subtest"
 	},
 	"/html/webappapis/scripting/events/event-handler-attributes-frameset-window.html": {
 		"(harness)": "ERROR: Uncaught TypeError: Illegal invocation"
-	},
-	"/html/webappapis/scripting/events/event-handler-processing-algorithm-error/workerglobalscope-synthetic-event.worker.html": {
-		"error event is normal (return true does not cancel; one arg) on WorkerGlobalScope, with a synthetic Event": "FAIL: assert_equals: expected 1 but got 5"
 	},
 	"/html/webappapis/scripting/events/eventhandler-cancellation.html": {
 		"event handler cancellation behavior": "FAIL: Failed to set a named property 'onerror' on 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",

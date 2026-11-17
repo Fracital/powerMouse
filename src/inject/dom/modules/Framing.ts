@@ -233,11 +233,14 @@ export default class FramingModule extends Module<DocumentClient> {
 			global.addEventListener(
 				'message',
 				(event) => {
-					const source = Reflect.apply(
-						nativeSource,
-						event,
-						[],
-					) as Window | null;
+					let source: Window | null;
+					try {
+						source = Reflect.apply(nativeSource, event, []) as Window | null;
+					} catch (error) {
+						// an event the page made that is no MessageEvent
+						// (`dispatchEvent(new Event('message'))`): it has no source
+						return;
+					}
 					if (
 						typeof source?.postMessage === 'function' &&
 						!isStompWindow(source)

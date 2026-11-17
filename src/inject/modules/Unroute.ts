@@ -905,7 +905,17 @@ export default class UnrouteModule extends Module<Client> {
 		const post = global.postMessage;
 		if (!this.client.isDOM && typeof post === 'function' && natives.filename)
 			global.addEventListener('error', (event: Event) => {
-				if (!this.#isInternal(read(event, 'filename'))) return;
+				let filename: unknown;
+				try {
+					filename = read(event, 'filename');
+				} catch (error) {
+					// an event the page made that is no ErrorEvent
+					// (`dispatchEvent(new Event('error'))`): it names no file, and
+					// the throw here was reported to the page's onerror as an
+					// error of its own
+					return;
+				}
+				if (!this.#isInternal(filename)) return;
 				const location = this.pageLocation(read(event, 'error')) ?? NO_LOCATION;
 				try {
 					Reflect.apply(post, global, [
