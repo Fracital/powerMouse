@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+	<head>
+		<title>churn child</title>
+	</head>
+	<body>
+		<script>
+			// what a rotating ad or embed frame does: per query flag, animation
+			// frames, blob URLs it never revokes, an image, generated code, and a
+			// frame of its own (?nest=<url>)
+			const query = new URLSearchParams(location.search);
+			if (query.has('raf'))
+				requestAnimationFrame(() => requestAnimationFrame(() => {}));
+			if (query.has('blob'))
+				for (let i = 0; i < 3; i++)
+					window['blob' + i] = URL.createObjectURL(
+						new Blob(['x'.repeat(10000)]),
+					);
+			if (query.has('img')) {
+				const image = new Image(1, 1);
+				image.src = '/pages/frame-memory.html?child=' + Math.random();
+				document.body.append(image);
+			}
+			if (query.has('fn')) new Function('return ' + Math.random())();
+			if (query.has('nest')) {
+				const inner = document.createElement('iframe');
+				inner.src = query.get('nest');
+				document.body.append(inner);
+			}
+			window.__ranAt = performance.now();
+		</script>
+	</body>
+</html>

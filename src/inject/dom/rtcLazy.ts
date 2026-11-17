@@ -24,6 +24,14 @@ export interface SharedTables {
 	text?: string;
 	/** each document's install, run for all once one of them installs */
 	installs: Set<WeakRef<() => void>>;
+	/**
+	 * The WeakRef of the document that made the tables, which makes every
+	 * entry of `installs`: an object keeps the realm that made it alive, so
+	 * an entry a frame made with its own WeakRef kept the frame's whole
+	 * realm for as long as the tables lived, every removed or navigated
+	 * frame of the page one more
+	 */
+	weakRef: typeof WeakRef;
 	[table: string]: unknown;
 }
 

@@ -94,6 +94,7 @@ const REALM = [
 const NativeWeakRef = WeakRef;
 const NativeProxy = Proxy;
 const setAdd = Set.prototype.add;
+const setDelete = Set.prototype.delete;
 const setValues = Set.prototype.values;
 const setIteratorNext = (
 	Reflect.getPrototypeOf(new Set().values()) as { next: Function }
@@ -217,6 +218,7 @@ export default class WebRTCModule extends Module<DocumentClient> {
 				channelEvents: new WeakMap(),
 				reports: new WeakMap(),
 				installs: new Set(),
+				weakRef: NativeWeakRef,
 			};
 		bundleShared ??= shared;
 		(client as unknown as Linked).rtc = shared;
@@ -407,7 +409,22 @@ export default class WebRTCModule extends Module<DocumentClient> {
 			return installed;
 		};
 		const installNow = () => void install();
-		Reflect.apply(setAdd, shared.installs, [new NativeWeakRef(installNow)]);
+		// the entries of documents that are gone go first, then this one's,
+		// made by the tables' own realm: one made by this document's WeakRef
+		// would keep this document alive with the tables
+		const entries = Reflect.apply(setValues, shared.installs, []);
+		for (;;) {
+			const step = Reflect.apply(setIteratorNext, entries, []) as {
+				done: boolean;
+				value: WeakRef<() => void>;
+			};
+			if (step.done) break;
+			if (!Reflect.apply(captures.weakDeref, step.value, []))
+				Reflect.apply(setDelete, shared.installs, [step.value]);
+		}
+		Reflect.apply(setAdd, shared.installs, [
+			Reflect.construct(shared.weakRef, [installNow]),
+		]);
 
 		const standIns: StandIns = {
 			RTCPeerConnection: standIn(
