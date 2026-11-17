@@ -1,3 +1,4 @@
+import { parsedSpeculationRules } from '../../../scriptRoutes';
 import Module from '../../Module';
 import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule from '../../modules/Proxy';
@@ -346,9 +347,25 @@ export default class ReadbackModule extends Module<DocumentClient> {
 					[],
 				) as HTMLScriptElement | null;
 				if (parent && sources.has(parent)) return parent;
+				if (client.speculationMarked)
+					return markedRules(that) ?? markedRules(parent);
 			} catch (error) {
 				// not a node
 			}
+		};
+		// speculation rules of the page's markup, which the parser made with
+		// the page's text marked (scriptRoutes.ts markedSpeculationRules)
+		const markedRules = (node: unknown): HTMLScriptElement | undefined => {
+			if (
+				!isScriptNode(node) ||
+				Reflect.apply(nativeNamespace, node, []) !== HTML
+			)
+				return;
+			const text = nativeText(node);
+			const written = parsedSpeculationRules(text);
+			if (written === null) return;
+			sources.set(node, { written, rewritten: text });
+			return node;
 		};
 		const wrapTextGetter = (prototype: object, key: string) => {
 			const descriptor = Reflect.getOwnPropertyDescriptor(prototype, key);

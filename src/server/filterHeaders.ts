@@ -44,6 +44,9 @@ const bindingHeaders: string[] = [
 	'Feature-Policy',
 	'X-Content-Type-Options',
 	'Set-Cookie',
+	// the browser would fetch the rules it names by itself, past the worker,
+	// and act on none (src/scriptRoutes.ts NO_SPECULATION)
+	'Speculation-Rules',
 ];
 
 const removeHeaders: string[] = [

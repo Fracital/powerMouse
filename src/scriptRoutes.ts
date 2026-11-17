@@ -169,6 +169,47 @@ export function routeModulePrefix(prefix: URL, url: StompURL): string {
  * stays inert (the rewritten body would never match it). Invalid JSON is left
  * alone too.
  */
+/**
+ * What the browser is given of a speculation rules script: no rule. The
+ * browser would prefetch and prerender an absolute URL of the page's rules
+ * by itself, past the worker (the user's address reaching the site), and a
+ * relative one against the proxy origin; through the worker a prefetch of
+ * another site would carry the jar's cookies, which Chrome never sends
+ * with it, and a prerendered route is not the one a link navigates to. A
+ * proxied top is a frame of the host, where Chrome acts on no rules at all:
+ * every proxied document does as natively a frame does. `{}` is a rule set
+ * with nothing in it, so the script has started, as the page's had.
+ */
+export const NO_SPECULATION = '{}';
+
+// taken as the bundle loads, before any page script: the text it makes is
+// the browser's, which a stringify of the page's could break out of
+const stringify = JSON.stringify;
+
+/**
+ * Rules in markup (the page's own, or markup it writes) are given to the
+ * browser as a rule set whose one key the browser does not know, holding
+ * the page's text, which the inject reads back for the page from the
+ * element the parser made of it (`parsedSpeculationRules`)
+ */
+export const markedSpeculationRules = (text: string) =>
+	`{"":${stringify(text)}}`;
+
+/** the page's text of a script the browser holds `text` for (markedSpeculationRules), or null */
+export function parsedSpeculationRules(text: string): string | null {
+	if (!text.startsWith('{"":"')) return null;
+	try {
+		const value = JSON.parse(text)[''];
+		return typeof value === 'string' ? value : null;
+	} catch (error) {
+		return null;
+	}
+}
+
+/** whether a script's `type` makes it speculation rules */
+export const isSpeculationRules = (type: string | null) =>
+	(type || '').trim().toLowerCase() === 'speculationrules';
+
 export function rewriteImportMap(
 	json: string,
 	url: StompURL,

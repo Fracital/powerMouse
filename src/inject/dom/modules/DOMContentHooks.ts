@@ -1,4 +1,8 @@
-import { rewriteImportMap } from '../../../scriptRoutes';
+import {
+	isSpeculationRules,
+	NO_SPECULATION,
+	rewriteImportMap,
+} from '../../../scriptRoutes';
 import Module from '../../Module';
 import ProxyModule, {
 	applyDescriptors,
@@ -431,6 +435,14 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				);
 				return;
 			}
+			// speculation rules: none reach the browser (scriptRoutes.ts)
+			if (isSpeculationRules(script.getAttribute('type'))) {
+				if (!script.text || rewrittenScripts.get(script) === script.text)
+					return;
+				rewrittenScripts.set(script, NO_SPECULATION);
+				script.text = trustedScript(NO_SPECULATION);
+				return;
+			}
 			if (
 				!shouldRewriteScript(script) ||
 				rewrittenScripts.get(script) === script.text ||
@@ -625,6 +637,8 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					client.noteImportMap(text);
 					return rewriteImportMap(text, client.baseURL, client.config);
 				}
+				if (isSpeculationRules(element.getAttribute('type')))
+					return NO_SPECULATION;
 				if (!shouldRewriteScript(element)) return null;
 				// (the page's Trusted Types judge the text as the script runs;
 				// refused, the script holds nothing and runs nothing, the inject
@@ -672,6 +686,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				return null;
 			return usePrototype(node, nativeElement, (element) =>
 				shouldRewriteScript(element) ||
+				isSpeculationRules(element.getAttribute('type')) ||
 				(element.getAttribute('type') || '').trim().toLowerCase() ===
 					'importmap'
 					? node

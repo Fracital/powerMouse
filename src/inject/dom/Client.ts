@@ -55,7 +55,12 @@ import {
 	ROUTE_PROTOCOLS,
 	unwrapRoute,
 } from '../../routeURL';
-import { rewriteImportMap } from '../../scriptRoutes';
+import {
+	isSpeculationRules,
+	markedSpeculationRules,
+	NO_SPECULATION,
+	rewriteImportMap,
+} from '../../scriptRoutes';
 import { IMPORT_MAP_ROUTE } from '../../sri';
 import StompURL from '../../StompURL';
 import { HOOK_ERROR, OPEN_TAB } from '../../transport/messages';
@@ -3066,6 +3071,13 @@ export default class DocumentClient extends Client {
 				write(rewriteImportMap(read(), this.baseURL, this.config));
 				continue;
 			}
+			// (scriptRoutes.ts NO_SPECULATION), with the text marked for the page
+			// to read back
+			if (isSpeculationRules(script.getAttribute('type'))) {
+				this.speculationMarked = true;
+				write(markedSpeculationRules(read()));
+				continue;
+			}
 			if (!shouldRewriteScript(script)) continue;
 			const source = read();
 			// the client's own (a style's stand-in, DOMContentHooks)
@@ -3144,6 +3156,8 @@ export default class DocumentClient extends Client {
 	}
 	/** @internal the rewritten text each script element carries (DOMContentHooks, DOMHooks) */
 	readonly rewrittenScripts = new WeakMap<HTMLScriptElement, string>();
+	/** @internal whether the page's markup had speculation rules, which hold its text marked (Readback) */
+	speculationMarked = false;
 	/**
 	 * @internal set by the Readback module: `script` holds `rewritten` for the
 	 * text `written` the page gave it, which is what the page reads back; in
@@ -3258,7 +3272,13 @@ export default class DocumentClient extends Client {
 			this.sweepFrames?.();
 			return text;
 		}
-		if (!this.isConnected(script) || !shouldRewriteScript(script)) return text;
+		if (!this.isConnected(script)) return text;
+		// (scriptRoutes.ts NO_SPECULATION)
+		if (text && isSpeculationRules(script.getAttribute('type'))) {
+			this.rewrittenScripts.set(script, NO_SPECULATION);
+			return NO_SPECULATION;
+		}
+		if (!shouldRewriteScript(script)) return text;
 		const passed = this.scriptPrepared(script, text);
 		// refused by the page's Trusted Types as the script runs: it runs nothing
 		// (the inject reported it in scriptPrepared), where the browser's own
