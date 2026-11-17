@@ -1,7 +1,4 @@
 {
-	"/workers/constructors/SharedWorker/null-arguments.html": {
-		"Test constructing a shared worker with null": "FAIL: assert_equals: second arg (worker name) expected \"\" but got \"null\""
-	},
 	"/workers/constructors/Worker/constructor-utf16-bom.html": {
 		"(harness)": "ERROR: Uncaught SyntaxError: Invalid or unexpected token"
 	}

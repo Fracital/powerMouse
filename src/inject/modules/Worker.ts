@@ -425,8 +425,9 @@ export default class WorkerModule extends Module<Client> {
 					const suffix = `@${this.client.storageKey}`;
 					if (typeof args[1] === 'object' && args[1] !== null)
 						args[1] = { ...args[1], name: `${args[1].name ?? ''}${suffix}` };
+					// (null is the empty options dictionary, as undefined is)
 					else
-						args[1] = `${args[1] === undefined ? '' : String(args[1])}${suffix}`;
+						args[1] = `${args[1] === undefined || args[1] === null ? '' : String(args[1])}${suffix}`;
 					const worker: SharedWorker = Reflect.construct(
 						target,
 						args,
