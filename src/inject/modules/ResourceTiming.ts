@@ -384,17 +384,18 @@ export default class ResourceTimingModule extends Module<Client> {
 			judged.set(entry, verdict);
 			return verdict;
 		};
+		// (`value` is the wrapper's hook itself, called with the native getter
+		// and the entry: a hook made around it cost a frame a function and a
+		// context for each getter)
 		const hook = (
 			name: string,
-			value: (entry: object, native: () => unknown) => unknown,
+			value: (target: Function, entry: object, args: unknown[]) => unknown,
 		) => {
 			const descriptor = Reflect.getOwnPropertyDescriptor(proto, name);
 			if (!descriptor?.get) return;
 			Reflect.defineProperty(proto, name, {
 				...descriptor,
-				get: proxyModule.wrapFunction(descriptor.get, (target, that, args) =>
-					value(that as object, () => Reflect.apply(target, that, args)),
-				),
+				get: proxyModule.wrapFunction(descriptor.get, value),
 			});
 		};
 
@@ -711,8 +712,8 @@ export default class ResourceTimingModule extends Module<Client> {
 				native,
 			];
 		};
-		hook('fetchStart', (entry, native) => {
-			const result = native();
+		hook('fetchStart', (target, entry, args) => {
+			const result = Reflect.apply(target, entry, args);
 			const verdict = judge(entry);
 			if (verdict.local) return result;
 			if (verdict.restricted)
@@ -728,8 +729,8 @@ export default class ResourceTimingModule extends Module<Client> {
 		];
 
 		for (const name of RESTRICTED_TIMES)
-			hook(name, (entry, native) => {
-				const result = native();
+			hook(name, (target, entry, args) => {
+				const result = Reflect.apply(target, entry, args);
 				const verdict = judge(entry);
 				if (verdict.local) return result;
 				if (verdict.restricted) return 0;
@@ -781,8 +782,8 @@ export default class ResourceTimingModule extends Module<Client> {
 						: 300;
 			});
 		for (const name of RESTRICTED_STRINGS)
-			hook(name, (entry, native) => {
-				const result = native();
+			hook(name, (target, entry, args) => {
+				const result = Reflect.apply(target, entry, args);
 				const verdict = judge(entry);
 				if (verdict.local) return result;
 				if (verdict.restricted) return '';
@@ -809,14 +810,14 @@ export default class ResourceTimingModule extends Module<Client> {
 						? ''
 						: result;
 			});
-		hook('workerStart', (entry, native) => {
-			native();
+		hook('workerStart', (target, entry, args) => {
+			Reflect.apply(target, entry, args);
 			return 0;
 		});
 		// the encoding of another origin's cors answer is not a header the
 		// browser was given (ENCODING_MARKER)
-		hook('contentEncoding', (entry, native) => {
-			const result = native();
+		hook('contentEncoding', (target, entry, args) => {
+			const result = Reflect.apply(target, entry, args);
 			const verdict = judge(entry);
 			if (verdict.local) return result;
 			// (shown with the status, whatever the timing: measured)
@@ -842,14 +843,14 @@ export default class ResourceTimingModule extends Module<Client> {
 			['responseStatus', 0],
 			['contentType', ''],
 		] as const)
-			hook(name, (entry, native) => {
-				const result = native();
+			hook(name, (target, entry, args) => {
+				const result = Reflect.apply(target, entry, args);
 				return judge(entry).statusShown ? result : empty;
 			});
 		// (a frozen array, a new one at each read, as the browser's is; made
 		// from the browser's own, so it is the entry's realm's)
-		hook('serverTiming', (entry, native) => {
-			const metrics = native() as object[];
+		hook('serverTiming', (target, entry, args) => {
+			const metrics = Reflect.apply(target, entry, args) as object[];
 			const restricted = judge(entry).restricted;
 			return Object.freeze(
 				metrics.filter(
@@ -883,8 +884,8 @@ export default class ResourceTimingModule extends Module<Client> {
 		}
 		// an XMLHttpRequest goes as a fetch() of the inject's: the worker
 		// marks its answer (XHR_MARKER)
-		hook('initiatorType', (entry, native) => {
-			const result = native();
+		hook('initiatorType', (target, entry, args) => {
+			const result = Reflect.apply(target, entry, args);
 			return result === 'fetch' && hasProxyMetric(entry, XHR_MARKER)
 				? 'xmlhttprequest'
 				: result;
