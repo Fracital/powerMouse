@@ -152,26 +152,6 @@ const PAGES = {
 	'/rewriter': REWRITER,
 };
 
-// how often each /pages/ file was requested, and how many of those were
-// answered 304 (cache suite); /hits returns the counters
-const hits = new Map();
-// what the http-cache suite's requests asked, by run then by name
-const httpCacheLog = new Map();
-// the body version of each /rewrite-js script, by name
-const scriptVersions = new Map();
-// how many /rewrite-js responses said which they were (`st`)
-let scriptResponses = 0;
-// every path served, in order (/requests returns it; the assets suite checks
-// that no served URL carries the package name)
-const served = [];
-// request headers kept by key (/echo-headers?k=<key>), for the requests whose
-// response a page cannot read back: images, scripts, navigations
-const recorded = new Map();
-// what each step of a FedCM flow saw, by run id `k` (fedcm suite): the mock
-// identity provider records the Sec-Fetch-Dest and cookie of each endpoint and
-// the token POST's body, so a suite can prove every step went through the proxy
-// with the right destination and credentials
-const fedcmLog = new Map();
 // the dist bundle under neutral names (assets suite): /neutral/<name>
 const distDir = fileURLToPath(new URL('../dist/', import.meta.url));
 const NEUTRAL = {
@@ -220,6 +200,31 @@ const transportSibling = (name, pkg) =>
 	);
 
 export function startFixture(port = 8084) {
+	// What this fixture saw, its own: test/run.mjs starts one for each suite
+	// in one process, and a counter of the module's would carry another
+	// suite's requests (request-viewer's fetches of fresh.json once failed
+	// the cache suite that ran after it in the same shard).
+	//
+	// how often each /pages/ file was requested, and how many of those were
+	// answered 304 (cache suite); /hits returns the counters
+	const hits = new Map();
+	// what the http-cache suite's requests asked, by run then by name
+	const httpCacheLog = new Map();
+	// the body version of each /rewrite-js script, by name
+	const scriptVersions = new Map();
+	// how many /rewrite-js responses said which they were (`st`)
+	let scriptResponses = 0;
+	// every path served, in order (/requests returns it; the assets suite
+	// checks that no served URL carries the package name)
+	const served = [];
+	// request headers kept by key (/echo-headers?k=<key>), for the requests
+	// whose response a page cannot read back: images, scripts, navigations
+	const recorded = new Map();
+	// what each step of a FedCM flow saw, by run id `k` (fedcm suite): the
+	// mock identity provider records the Sec-Fetch-Dest and cookie of each
+	// endpoint and the token POST's body, so a suite can prove every step went
+	// through the proxy with the right destination and credentials
+	const fedcmLog = new Map();
 	const server = createServer(async (req, res) => {
 		const path = new URL(req.url, 'http://x').pathname;
 		if (sop(req, res)) return;

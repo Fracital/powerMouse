@@ -21,7 +21,7 @@
 // real sites (Wikipedia, example.com) through the demo's own wisp, so the
 // machine needs network access.
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { availableParallelism } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -158,10 +158,15 @@ const isMeasurement = (name) =>
 	name.startsWith('wpt-') || name.startsWith('measure-');
 const SKIP_MEASUREMENT = process.env.SKIP_MEASUREMENT === '1';
 // SUITES=<prefix> runs only the suites named with it, SUITES=!<prefix> all
-// but those; SHARD=<k>/<n> then keeps every n-th of what is left, from the
-// k-th (1-based, by name). GitHub CI runs the adversarial corpus as a job of
-// its own and the rest as four shards beside it: the rest alone took 64 to 69
-// of the job's 70 minutes.
+// but those; SHARD=<k>/<n> then keeps the k-th (1-based) of n shards of what
+// is left. GitHub CI runs the adversarial corpus as a job of its own and the
+// rest as four shards beside it: the rest alone took 64 to 69 of the job's 70
+// minutes. The shards are cut by how long each suite took on CI
+// (test/suite-seconds.json, the seconds column of a green run's summary
+// tables; a suite it does not name counts as its median), longest first, each
+// to the shard with the least so far (ties to the lower shard, equal seconds
+// by name), so every machine cuts the same shards and they end together: cut
+// every n-th by name, they took 12 to 31 minutes.
 const GROUP = process.env.SUITES ?? '';
 const SHARD = /^(\d+)\/(\d+)$/.exec(process.env.SHARD ?? '');
 if (process.env.SHARD && (!SHARD || +SHARD[1] < 1 || +SHARD[1] > +SHARD[2])) {
@@ -211,10 +216,30 @@ const suites = readdirSync(suitesDir)
 		return true;
 	});
 
+const recorded = JSON.parse(
+	readFileSync(`${root}test/suite-seconds.json`, 'utf8'),
+);
+const recordedValues = Object.values(recorded).sort((a, b) => a - b);
+const defaultSeconds = recordedValues[recordedValues.length >> 1] ?? 1;
+const expectedSeconds = (name) => recorded[name] ?? defaultSeconds;
+
 if (SHARD && !wanted.length) {
 	const [, k, n] = SHARD.map(Number);
-	const kept = suites.filter((_, index) => index % n === k - 1);
-	console.log(`SHARD ${k}/${n}: ${kept.length} of ${suites.length} suites`);
+	const totals = new Array(n).fill(0);
+	const shardOf = new Map();
+	for (const name of [...suites].sort(
+		(a, b) =>
+			expectedSeconds(b) - expectedSeconds(a) || (a < b ? -1 : a > b ? 1 : 0),
+	)) {
+		const shard = totals.indexOf(Math.min(...totals));
+		totals[shard] += expectedSeconds(name);
+		shardOf.set(name, shard);
+	}
+	const kept = suites.filter((name) => shardOf.get(name) === k - 1);
+	console.log(
+		`SHARD ${k}/${n}: ${kept.length} of ${suites.length} suites, ` +
+			`${totals[k - 1]} of ${totals.join(' / ')} recorded seconds`,
+	);
 	suites.splice(0, suites.length, ...kept);
 }
 
@@ -404,10 +429,13 @@ async function runOne(name) {
 const failedRun = (result) => result.fail > 0 || result.code !== 0;
 
 const results = [];
+// the slow suites first, then the longest by the record, so no lane is left
+// with a long suite started last
 const queue = [...suites].sort(
 	(a, b) =>
 		(SLOW.includes(a) ? SLOW.indexOf(a) : SLOW.length) -
-		(SLOW.includes(b) ? SLOW.indexOf(b) : SLOW.length),
+			(SLOW.includes(b) ? SLOW.indexOf(b) : SLOW.length) ||
+		expectedSeconds(b) - expectedSeconds(a),
 );
 const workers = Array.from(
 	{ length: Math.min(PARALLEL, suites.length) },
