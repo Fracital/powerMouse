@@ -86,7 +86,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 			(realm as unknown as Record<string, unknown>).DocumentPictureInPicture &&
 			(realm.top as unknown) === realm
 		)
-			deferred().pictureWindows(
+			deferred('pictureWindows')(
 				realm as unknown as Record<string, any>,
 				(target, handler) => proxyModule.wrapFunction(target, handler),
 				injectContext,
@@ -117,7 +117,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 			// same-origin opens every popup without an opener (../openerFacts.ts)
 			let alone = false;
 			try {
-				alone = deferred().opensWithoutOpener(moduleClient);
+				alone = deferred('opensWithoutOpener')(moduleClient);
 			} catch (error) {
 				// a top of another real origin: none of the proxy's
 			}
@@ -786,7 +786,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 							body: routed,
 							referrerPolicy: client.sandboxedOpaque
 								? 'no-referrer'
-								: deferred().sourcePolicy(navigate.sourceElement),
+								: deferred('sourcePolicy')(navigate.sourceElement),
 						},
 					);
 				} catch (error) {

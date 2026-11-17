@@ -123,13 +123,16 @@ on every save (use a `git worktree`).
   and what carries its sessions, the site pool's code that runs on an
   event, the Permissions module's requests and device ids, the WebRTC
   library's install, an XHR response's document and XHR's misuse messages)
-  are the last statement of
-  `dist/rewriterLib.js`, evaluated by a document the first time it calls
-  `deferred()` (`src/inject/dom/deferred.ts`): a top's shell loaded it, a
-  frame takes its top's text, and only a realm with no top to take it from
-  reads the file (the light library's one request). Every other module they
-  import is the bundle's own, read from `__stompShared` once, when the parts
-  are evaluated: build.js refuses a `let`/`var` import and a namespace import,
+  are a statement of `dist/rewriterLib.js`, a switch with a case for each
+  group of parts (the parts `src/inject/dom/deferredParts.ts` imports from
+  one file, joined with any file that reaches one module with it). A
+  document compiles the statement the first time it calls `deferred(name)`
+  (`src/inject/dom/deferred.ts`) and runs only that part's group: a top's
+  shell loaded it, a frame takes its top's text, and only a realm with no
+  top to take it from reads the file (the light library's one request).
+  Every other module they import is the bundle's own, read from
+  `__stompShared` once, when a group is evaluated: build.js refuses a
+  `let`/`var` import and a namespace import,
   and fails when a listed file reaches a document bundle or a file only the
   parts import is not listed. A listed file can be evaluated after page
   scripts ran, so its top level reads no global (constants and functions

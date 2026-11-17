@@ -509,7 +509,7 @@ function makeSiteWindows() {
 		const name = (keyword ?? '').toLowerCase();
 		if (name !== '_parent' && name !== '_top' && name !== '_unfencedtop')
 			return null;
-		return deferred().targetAcross(client, name);
+		return deferred('targetAcross')(client, name);
 	}
 
 	/**

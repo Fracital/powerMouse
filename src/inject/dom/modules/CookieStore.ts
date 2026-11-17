@@ -73,7 +73,7 @@ export default class CookieStoreModule extends Module<DocumentClient> {
 		// bundle (../deferred.ts), made at the page's first call
 		let made: CookieStoreMethods | null = null;
 		const shared = (): CookieStoreMethods =>
-			(made ??= deferred().cookieStoreMethods({
+			(made ??= deferred('cookieStoreMethods')({
 				global,
 				base: () => client.url.toString(),
 				refuseURL: (url) =>

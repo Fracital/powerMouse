@@ -347,7 +347,7 @@ function start(
 		rules.push(`${selector}{display:none!important}`);
 	for (const json of page.procedural) {
 		// (a deferred part: most sites have no procedural filter)
-		const filter = deferred().compileFilter(json);
+		const filter = deferred('compileFilter')(json);
 		if (!filter) continue;
 		if (filter.css) rules.push(filter.css);
 		else if (!foreign) filters.push(filter);

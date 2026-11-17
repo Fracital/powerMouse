@@ -359,7 +359,7 @@ export default class VisitedModule extends Module<DocumentClient> {
 						return Reflect.apply(target, that, args);
 					}
 					if (refused)
-						throw deferred().navigationRefusal(
+						throw deferred('navigationRefusal')(
 							client,
 							false,
 							client.refusedURI(routed)?.url ??
@@ -384,7 +384,7 @@ export default class VisitedModule extends Module<DocumentClient> {
 				precommit.redirect as (...args: unknown[]) => unknown,
 				(target, that, args) =>
 					args.length
-						? deferred().precommitRedirect(
+						? deferred('precommitRedirect')(
 								client,
 								[target, that, args],
 								rewritable,

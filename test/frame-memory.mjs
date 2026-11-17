@@ -206,6 +206,7 @@ async function addFrames(
 	evaluator,
 	act = () => {},
 	first = 0,
+	child = page,
 ) {
 	const started = Date.now();
 	const old = new Set(await evaluator.children(frame));
@@ -225,7 +226,7 @@ async function addFrames(
 			}
 			return at;
 		},
-		[count, new URL(page, base).href, first],
+		[count, new URL(child, base).href, first],
 	);
 	const { times, ranAt } = await waitForChildren(
 		evaluator,
@@ -265,6 +266,9 @@ async function addFrames(
  * hub starts the next spare a moment later, SiteHub.warm), before the
  * baseline: what that cost once is `first` (the child and any agent it
  * started), and the per-frame figures leave it out.
+ *
+ * `child`: the page the children load (from the fixture's root), the
+ * frame-memory page by default.
  */
 export async function measureFrames({
 	proxied,
@@ -272,6 +276,7 @@ export async function measureFrames({
 	frames,
 	click = null,
 	warm = false,
+	child = page,
 }) {
 	const browser = await launch([
 		// natively a frame of another site runs in a process of its own; the
@@ -342,6 +347,8 @@ export async function measureFrames({
 			frames,
 			evaluator,
 			click === 'before' ? clickTop : undefined,
+			0,
+			child,
 		);
 		if (click === 'refresh') {
 			await sleep(1000);
@@ -356,7 +363,7 @@ export async function measureFrames({
 						children[i].src = `${src}?i=${i}&next`;
 					return at;
 				},
-				[new URL(page, base).href, frames],
+				[new URL(child, base).href, frames],
 			);
 			const { times } = await waitForChildren(
 				evaluator,

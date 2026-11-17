@@ -112,7 +112,7 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 			try {
 				const top = global.top as unknown as Record<string, unknown> | null;
 				if (opens || (top && moduleClient.names.client in top))
-					coop = deferred().openerFacts(moduleClient, opens, nativeOpener);
+					coop = deferred('openerFacts')(moduleClient, opens, nativeOpener);
 			} catch (error) {
 				// a document going away, or the host's top of another origin
 			}
@@ -196,7 +196,7 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 			? (event: Event, destination: string) =>
 					this.client.scriptFacts.framed &&
 					(global.parent as unknown) !== global
-						? deferred().judgeAcross(this.client, event, destination, send)
+						? deferred('judgeAcross')(this.client, event, destination, send)
 						: null
 			: null;
 		navigation.addEventListener('navigate', (event) => {

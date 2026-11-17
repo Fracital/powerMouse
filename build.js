@@ -1,6 +1,12 @@
 import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync, realpathSync, watch } from 'node:fs';
+import {
+	existsSync,
+	readFileSync,
+	realpathSync,
+	statSync,
+	watch,
+} from 'node:fs';
 import {
 	copyFile,
 	mkdir,
@@ -8,7 +14,7 @@ import {
 	readFile,
 	writeFile,
 } from 'node:fs/promises';
-import { relative, resolve, sep } from 'node:path';
+import { dirname, relative, resolve, sep } from 'node:path';
 import { build, context, formatMessages } from 'esbuild';
 import { rimraf } from 'rimraf';
 import ts from 'typescript';
@@ -398,9 +404,11 @@ const rewriterLibrary = {
 /**
  * The document bundles' deferred parts (src/inject/dom/deferredParts.ts,
  * src/inject/dom/deferred.ts): code most frames never run, which no
- * document bundle carries. They are the last statement of the rewriter
- * library's file, `__stompDeferred=function(__stompShared){...};`
- * (src/version.ts DEFERRED_FACTORY), after the light library's: a proxied
+ * document bundle carries. They are a statement of the rewriter library's
+ * file, `__stompDeferred=function(__stompShared,__stompPart){...};`
+ * (src/version.ts DEFERRED_FACTORY; partsStatement), after the light
+ * library's, each group of them a case a realm runs at its first need of one
+ * of the group's parts (partGroups): a proxied
  * top's shell loads that file already, the controller fetched it when it
  * started, and a realm with no top to take them from reads them from the one
  * request its light library makes. No host serves a new file.
@@ -626,11 +634,17 @@ const deferredSharing = {
 		});
 		pluginBuild.onLoad({ filter: /.*/, namespace: SHARED }, (args) => {
 			const { id, names } = args.pluginData;
+			// pure, so a group's build keeps only the reads it uses (each
+			// group is built on its own and given every name of a snapshot:
+			// partGroups); esbuild makes each read a plain one again
 			const values = names.map(
-				(name, index) => `v${index} = m[${JSON.stringify(name)}]`,
+				(name, index) =>
+					`v${index} = /* @__PURE__ */ (() => m[${JSON.stringify(name)}])()`,
 			);
+			// the module's number: its place in the table (deferredTable)
+			const number = [...deferredShared.keys()].indexOf(id);
 			return {
-				contents: `const m = __stompShared[${JSON.stringify(id)}];\n${
+				contents: `const m = /* @__PURE__ */ __stompShared(${number});\n${
 					values.length ? `const ${values.join(', ')};\n` : ''
 				}export { ${names.map((name, index) => `v${index} as ${name}`).join(', ')} };\n`,
 				loader: 'js',
@@ -639,18 +653,18 @@ const deferredSharing = {
 	},
 };
 
-/** @type {import('esbuild').BuildOptions} */
-const deferredParts = {
+/**
+ * How the parts' groups and the passkey provider's client are built: as an
+ * IIFE whose free names are the statement's (`__stompShared`, the bundle's
+ * table, and `__stompParts`, which the group's entry sets `made` on)
+ *
+ * @type {import('esbuild').BuildOptions}
+ */
+const partBuild = {
 	...common,
 	define: { ...common.define, ...reflectDefines },
-	entryPoints: { deferredParts: DEFERRED_ENTRY },
 	format: 'iife',
 	inject: [snapshot, domSnapshot],
-	// (src/inject/dom/deferredParts.ts sets `made`)
-	banner: {
-		js: `${DEFERRED_FACTORY}=function(__stompShared){"use strict";var __stompParts={};`,
-	},
-	footer: { js: 'return __stompParts.made;};' },
 	plugins: [
 		noSourceMaps,
 		deferredSharing,
@@ -660,6 +674,185 @@ const deferredParts = {
 	write: false,
 	metafile: true,
 };
+
+/** a file an import of `from` names (`specifier`, relative), as esbuild resolves a TypeScript one */
+function importedFile(from, specifier) {
+	const base = resolve(dirname(from), specifier);
+	for (const file of [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`])
+		if (existsSync(file) && statSync(file).isFile()) return realpathSync(file);
+	throw new Error(`${fileId(from)}: cannot find '${specifier}'`);
+}
+
+/**
+ * The parts deferredParts.ts lists, by the file each is imported from: the
+ * import's clause, and the names it gives (which `parts` lists, shorthand)
+ */
+function partFiles() {
+	const file = resolve(DEFERRED_ENTRY);
+	const source = parsedSource(file);
+	const files = new Map();
+	let listed = null;
+	for (const node of source.statements) {
+		if (ts.isImportDeclaration(node)) {
+			const clause = node.importClause;
+			if (!clause || clause.isTypeOnly) continue;
+			const imported = importedFile(file, node.moduleSpecifier.text);
+			if (!DEFERRED_FILES.has(imported))
+				throw new Error(
+					`${DEFERRED_ENTRY}: '${node.moduleSpecifier.text}' is not a deferred file (build.js DEFERRED_FILES)`,
+				);
+			const names = [];
+			if (clause.name) names.push(clause.name.text);
+			if (clause.namedBindings && ts.isNamespaceImport(clause.namedBindings))
+				throw new Error(
+					`${DEFERRED_ENTRY}: '${node.moduleSpecifier.text}' is imported as a namespace; import its names`,
+				);
+			for (const element of clause.namedBindings?.elements ?? [])
+				if (!element.isTypeOnly) names.push(element.name.text);
+			const entry = files.get(imported) ?? {
+				file: imported,
+				imports: [],
+				names: [],
+			};
+			entry.imports.push(
+				`import ${clause.getText(source)} from ${JSON.stringify(imported)};`,
+			);
+			entry.names.push(...names);
+			files.set(imported, entry);
+		} else if (ts.isVariableStatement(node))
+			for (const declaration of node.declarationList.declarations)
+				if (
+					ts.isIdentifier(declaration.name) &&
+					declaration.name.text === 'parts' &&
+					declaration.initializer &&
+					ts.isObjectLiteralExpression(declaration.initializer)
+				)
+					listed = declaration.initializer.properties.map((property) => {
+						if (!ts.isShorthandPropertyAssignment(property))
+							throw new Error(
+								`${DEFERRED_ENTRY}: list each part in \`parts\` by its name alone`,
+							);
+						return property.name.text;
+					});
+	}
+	const imported = [...files.values()].flatMap((entry) => entry.names);
+	if (
+		!listed ||
+		listed.length !== imported.length ||
+		!imported.every((name) => listed.includes(name))
+	)
+		throw new Error(
+			`${DEFERRED_ENTRY}: \`parts\` lists every name the file imports, and no other`,
+		);
+	return [...files.values()];
+}
+
+/**
+ * A group's build: the imports of its files, `made` the object of their parts
+ * (handed over that way and not as the entry's exports, which esbuild would
+ * build with helpers of its own that read Object's methods when the group is
+ * evaluated: a page's by then)
+ */
+function groupBuild(files) {
+	const names = files.flatMap((entry) => entry.names);
+	return {
+		...partBuild,
+		stdin: {
+			contents: `${files.flatMap((entry) => entry.imports).join('\n')}\n__stompParts.made = { ${names.join(', ')} };\n`,
+			loader: 'ts',
+			resolveDir: resolve(dirname(DEFERRED_ENTRY)),
+			sourcefile: DEFERRED_ENTRY,
+		},
+	};
+}
+
+/** the deferred files a build of the parts reached */
+function reachedFiles(metafile) {
+	const reached = new Set();
+	for (const input of Object.keys(metafile.inputs)) {
+		// (the group's entry, stdin, is no file; a module the bundle shares
+		// is in a namespace of its own)
+		if (input.includes(':') || !existsSync(resolve(input))) continue;
+		const file = realpathSync(resolve(input));
+		if (DEFERRED_FILES.has(file)) reached.add(file);
+	}
+	return reached;
+}
+
+/**
+ * The parts' groups, each evaluated on its own the first time a document
+ * needs one of its parts (src/inject/dom/deferred.ts): a file deferredParts.ts
+ * imports parts from is a group, and two that reach one deferred file are one
+ * group, so every module is evaluated once in a realm (one WebSocket
+ * transport, one tokenizer). Each with its parts' names, its build and that
+ * build's output.
+ */
+async function partGroups() {
+	const files = partFiles();
+	const alone = await Promise.all(
+		files.map(async (entry) => {
+			const options = groupBuild([entry]);
+			const result = await build(options);
+			return {
+				files: [entry],
+				reached: reachedFiles(result.metafile),
+				options,
+				result,
+			};
+		}),
+	);
+	const groups = [];
+	for (const item of alone) {
+		const joined = groups.filter((group) =>
+			[...item.reached].some((file) => group.reached.has(file)),
+		);
+		const into = joined[0];
+		if (!into) {
+			groups.push({ ...item, reached: new Set(item.reached) });
+			continue;
+		}
+		for (const other of [item, ...joined.slice(1)]) {
+			into.files.push(...other.files);
+			for (const file of other.reached) into.reached.add(file);
+			into.result = null;
+			if (other !== item) groups.splice(groups.indexOf(other), 1);
+		}
+	}
+	return Promise.all(
+		groups.map(async (group) => {
+			const options = group.result ? group.options : groupBuild(group.files);
+			const result = group.result ?? (await build(options));
+			return {
+				names: group.files.flatMap((entry) => entry.names),
+				options,
+				output: outputOf(result),
+			};
+		}),
+	);
+}
+
+/**
+ * The deferred parts' statement, `__stompDeferred=function(__stompShared,
+ * __stompPart){...};` (src/version.ts DEFERRED_FACTORY): a switch on the
+ * part's name whose case is the group that has it, run the first time a
+ * document needs one of its parts, which returns the group's parts. A
+ * document compiles the statement (one compilation its realms share), but
+ * makes only the groups it runs: their functions, classes and tables.
+ * Every group's map, by the line it starts at.
+ */
+function partsStatement(groups, outputs = groups.map((group) => group.output)) {
+	let text = `${DEFERRED_FACTORY}=function(__stompShared,__stompPart){"use strict";var __stompParts={};switch(__stompPart){\n`;
+	const sections = [];
+	groups.forEach((group, index) => {
+		const output = outputs[index];
+		text += `${group.names.map((name) => `case ${JSON.stringify(name)}:`).join('')}{\n`;
+		if (output.map)
+			sections.push({ line: text.split('\n').length - 1, map: output.map });
+		text += `${output.text.endsWith('\n') ? output.text : `${output.text}\n`}}break;\n`;
+	});
+	text += '}return __stompParts.made;};';
+	return { raw: text, text, map: null, sections };
+}
 
 /**
  * The WebAuthn client of STomp's passkey provider
@@ -671,11 +864,12 @@ const deferredParts = {
  * @type {import('esbuild').BuildOptions}
  */
 const passkeysPart = {
-	...deferredParts,
+	...partBuild,
 	entryPoints: { passkeysPart: 'src/inject/dom/passkeysPart.ts' },
 	banner: {
 		js: `${PASSKEYS_FACTORY}=function(__stompShared){"use strict";var __stompParts={};`,
 	},
+	footer: { js: 'return __stompParts.made;};' },
 };
 
 /**
@@ -689,11 +883,12 @@ const passkeysPart = {
  * @type {import('esbuild').BuildOptions}
  */
 const activationPart = {
-	...deferredParts,
+	...partBuild,
 	entryPoints: { activationPart: 'src/inject/dom/activationPart.ts' },
 	banner: {
 		js: `${ACTIVATION_FACTORY}=function(__stompShared){"use strict";var __stompParts={};`,
 	},
+	footer: { js: 'return __stompParts.made;};' },
 };
 
 /**
@@ -716,11 +911,13 @@ const deferredTable = {
 				if (!list.length) return;
 				imports += `import { ${list.map((name, at) => `${name} as s${index}_${at}`).join(', ')} } from ${JSON.stringify(resolve(id))};\n`;
 				entries.push(
-					`${JSON.stringify(id)}: { ${list.map((name, at) => `${JSON.stringify(name)}: s${index}_${at}`).join(', ')} }`,
+					`case ${index}: return { ${list.map((name, at) => `${JSON.stringify(name)}: s${index}_${at}`).join(', ')} };`,
 				);
 			});
+			// by the module's number (deferredSharing), made only for a
+			// statement that reads it
 			return {
-				contents: `${imports}export default () => ({ ${entries.join(', ')} });\n`,
+				contents: `${imports}export default (module) => { switch (module) { ${entries.join(' ')} } };\n`,
 				loader: 'js',
 				resolveDir: resolve('.'),
 			};
@@ -788,10 +985,14 @@ async function writeLibrary(light, parts, passkeys, activation) {
 	let text = '';
 	const sections = [];
 	for (const statement of [light, parts, passkeys, activation]) {
+		const line = text.split('\n').length - 1;
 		if (statement.map)
+			sections.push({ offset: { line, column: 0 }, map: statement.map });
+		// (the parts' statement: a map for each group, by its line)
+		for (const section of statement.sections ?? [])
 			sections.push({
-				offset: { line: text.split('\n').length - 1, column: 0 },
-				map: statement.map,
+				offset: { line: line + section.line, column: 0 },
+				map: section.map,
 			});
 		text += ended(statement.text);
 	}
@@ -1014,27 +1215,26 @@ if (dev) {
 	// others' last output. The parts are built once first, so the document
 	// bundles know what they read (a part that imports a new name of the
 	// bundle's needs a restart of the watch)
+	// (the parts' groups are the ones the watch started with: a part that
+	// joins or splits a group needs a restart too)
+	const groups = await partGroups();
 	const latest = {
 		light: null,
-		parts: await build(deferredParts).then(outputOf),
+		parts: groups.map((group) => group.output),
 		passkeys: await build(passkeysPart).then(outputOf),
 		activation: await build(activationPart).then(outputOf),
 	};
-	const written = (key) => ({
+	const written = (key, index) => ({
 		name: 'rewriter-lib-file',
 		setup(pluginBuild) {
 			pluginBuild.onEnd(async (result) => {
 				if (result.errors.length || !result.outputFiles) return;
-				latest[key] = outputOf(result);
-				if (
-					latest.light &&
-					latest.parts &&
-					latest.passkeys &&
-					latest.activation
-				)
+				if (index === undefined) latest[key] = outputOf(result);
+				else latest[key][index] = outputOf(result);
+				if (latest.light && latest.passkeys && latest.activation)
 					await writeLibrary(
 						latest.light,
-						latest.parts,
+						partsStatement(groups, latest.parts),
 						latest.passkeys,
 						latest.activation,
 					);
@@ -1047,10 +1247,10 @@ if (dev) {
 				...rewriterLibrary,
 				plugins: [...rewriterLibrary.plugins, written('light')],
 			},
-			{
-				...deferredParts,
-				plugins: [...deferredParts.plugins, written('parts')],
-			},
+			...groups.map((group, index) => ({
+				...group.options,
+				plugins: [...group.options.plugins, written('parts', index)],
+			})),
 			{
 				...passkeysPart,
 				plugins: [...passkeysPart.plugins, written('passkeys')],
@@ -1079,7 +1279,7 @@ if (dev) {
 } else {
 	const [light, parts, passkeys, activation] = await Promise.all([
 		build(rewriterLibrary).then(outputOf),
-		build(deferredParts).then(outputOf),
+		partGroups().then((groups) => partsStatement(groups)),
 		build(passkeysPart).then(outputOf),
 		build(activationPart).then(outputOf),
 	]);

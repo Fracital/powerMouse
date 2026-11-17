@@ -1932,7 +1932,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						]);
 					}
 					element.setAttributeOG('allow', allow);
-					element.setAttribute('allow', deferred().slotContainerPolicy(allow));
+					element.setAttribute('allow', deferred('slotContainerPolicy')(allow));
 				};
 		if (slotAllow)
 			domHooksModule.useAttributes(slotAllow, [['IFRAME', 'allow']]);
@@ -3325,7 +3325,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							: isXMLDocumentMime(mime)
 								? new NativeBlob(
 										[
-											deferred().modifyXML(
+											deferred('modifyXML')(
 												await response.text(),
 												resource,
 												moduleClient.config,

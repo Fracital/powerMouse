@@ -171,7 +171,7 @@ export default class NavigatorModule extends Module<DocumentClient> {
 						// TypeError, and nothing is sent). The relay is a
 						// deferred part (../deferred.ts): most documents send no
 						// beacon, and few of those are uncontrolled
-						const sent = deferred().relayBeacon({
+						const sent = deferred('relayBeacon')({
 							own: this.#beacons,
 							relayed: relayedBytes,
 							via,

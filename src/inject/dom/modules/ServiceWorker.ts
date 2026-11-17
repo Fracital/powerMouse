@@ -59,7 +59,7 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 		// that never reads it does not evaluate that code either
 		let emulated: Emulated | undefined;
 		const emulate = () =>
-			(emulated ??= deferred().emulateServiceWorker(
+			(emulated ??= deferred('emulateServiceWorker')(
 				client,
 				own,
 				proxyModule,

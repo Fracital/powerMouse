@@ -272,7 +272,7 @@ export default class LocationModule extends Module<DocumentClient> {
 			members.set('ancestorOrigins', {
 				...ancestorDescriptor,
 				get: member(ancestorDescriptor.get, () =>
-					(ancestorList ??= deferred().ancestorOriginsList({
+					(ancestorList ??= deferred('ancestorOriginsList')({
 						origins: ancestorOrigins,
 						// (the prototype of the browser's own list: a removed
 						// frame's window has no DOMStringList of its own any

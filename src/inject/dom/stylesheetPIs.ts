@@ -66,7 +66,7 @@ const cores = new WeakMap<
 export function stylesheetPIs(client: DocumentClient) {
 	let core = cores.get(client);
 	if (!core)
-		cores.set(client, (core = deferred().instructionData(client, natives)));
+		cores.set(client, (core = deferred('instructionData')(client, natives)));
 	return core;
 }
 

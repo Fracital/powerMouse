@@ -2,7 +2,7 @@
 // measurement, and CI leaves measurements out). Each frame of a page
 // evaluates the document inject and runs its hooks in its own realm, and
 // ad-heavy pages keep hundreds of frames in one renderer, so a module that
-// adds a little to each frame adds it hundreds of times. Four checks:
+// adds a little to each frame adds it hundreds of times. Five checks:
 //
 // - the size of dist/injectDocument.js, against a budget: 418 KB as built,
 //   with the rewriter library a file of its own (dist/rewriterLib.js: the
@@ -66,8 +66,9 @@
 //   interfaces (+33 KB) still go past it from any master under about
 //   1,137 KB. Each change's own cost is measured and stated in its message,
 //   and kept down there (deferred parts, lazy installs, about 55 B a frame
-//   for each function made at load); when the deferred parts are split so
-//   each is evaluated alone, the ceiling comes back down.
+//   for each function made at load). The deferred parts' split (each group
+//   evaluated alone, the last check below) left these frames as they were:
+//   they need no part.
 // - the same for FRAMES frames of another site (localhost), against a
 //   ceiling of its own. A frame of another site than its page's is not one
 //   of the page's site: the membrane hands it stand-ins, and a hook may run
@@ -89,6 +90,18 @@
 //   1,133.8 KB (two runs) with the statement the proxied top evaluates
 //   once. The ceiling, 1,149 KB, keeps the others' margin (about 15 KB):
 //   that regression and an interface in every frame go past it.
+// - the same for FRAMES frames of the page's site that open a first
+//   XMLHttpRequest (test/pages/frame-memory-xhr.html), which makes the
+//   document's first deferred part (XHR's argument checks): an ad frame's
+//   first request, a write, a WebSocket or a postMessage across slots each
+//   needs one. The deferred parts are one statement with a case for each
+//   group of them (build.js partsStatement), and a frame runs only the
+//   group it needs: 1,132.2 to 1,133.7 KB with 20 frames on Chrome 157 at
+//   aa07538e with the split, 1,167.5 to 1,169.0 KB before it, when a frame
+//   evaluated every part at its first need of one (1,119.5 to 1,121.5 KB
+//   for the plain frames, the same with and without). The ceiling, 1,144
+//   KB, is about 10 KB over that: every part evaluated in such a frame
+//   again (+35 KB) goes past it.
 //
 // None of these evaluates with a user gesture or with Playwright in the
 // frames (test/frame-memory.mjs says why). Until 2026-11-17 the fixture
@@ -108,6 +121,7 @@ const FRAMES = Number(process.env.FRAMES) || 20;
 const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1134;
 const OTHER_LIMIT_KB = Number(process.env.FRAME_HEAP_OTHER_LIMIT_KB) || 1136;
 const CLICK_LIMIT_KB = Number(process.env.FRAME_HEAP_CLICK_LIMIT_KB) || 1149;
+const PART_LIMIT_KB = Number(process.env.FRAME_HEAP_PART_LIMIT_KB) || 1144;
 // With the site pool on (STOMP_SITE_POOL) a frame of another site is a
 // slot's: its first one takes the pool's spare and the hub starts the next,
 // about 3.4 MB once, which 20 frames would read as 170 KB each, so the
@@ -168,5 +182,21 @@ ok(
 	`a proxied frame of another site that loads its next document right after a click costs at most ${CLICK_LIMIT_KB} KB of heap`,
 	clicked.heapKB <= CLICK_LIMIT_KB,
 	`${clicked.heapKB.toFixed(0)} KB, ${clicked.rssKB.toFixed(0)} KB RSS (${FRAMES} frames)`,
+);
+
+const parted = await measureFrames({
+	proxied: true,
+	frames: FRAMES,
+	child: 'pages/frame-memory-xhr.html',
+});
+ok(
+	`all ${FRAMES} proxied frames that open an XMLHttpRequest ran their script`,
+	parted.loaded === FRAMES,
+	`${parted.loaded} did`,
+);
+ok(
+	`a proxied frame that opens an XMLHttpRequest (a deferred part's first need) costs at most ${PART_LIMIT_KB} KB of heap`,
+	parted.heapKB <= PART_LIMIT_KB,
+	`${parted.heapKB.toFixed(0)} KB, ${parted.rssKB.toFixed(0)} KB RSS (${FRAMES} frames)`,
 );
 await done(null);

@@ -111,6 +111,6 @@ export default class DownloadModule extends Module<DocumentClient> {
 	}
 	/** a same-origin download's copy, saved (../downloadSave.ts, a deferred part) */
 	async save(url: URL, named: string): Promise<void> {
-		return deferred().saveDownload(this.client, url, named);
+		return deferred('saveDownload')(this.client, url, named);
 	}
 }

@@ -103,7 +103,10 @@ export default class FormQueryModule extends Module<DocumentClient> {
 			if (encoding === 'other') return;
 			let serialized: string;
 			if (encoding === 'document')
-				serialized = deferred().legacyFormQuery(pairs, client.legacyEncoder()!);
+				serialized = deferred('legacyFormQuery')(
+					pairs,
+					client.legacyEncoder()!,
+				);
 			else {
 				const query = new global.URLSearchParams();
 				for (const [name, value] of pairs) query.append(name, value);

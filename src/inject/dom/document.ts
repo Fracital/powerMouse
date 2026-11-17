@@ -67,18 +67,18 @@ import XMLHttpRequestModule from './modules/XMLHttpRequest';
  */
 // a document's WebTransport stand-in and what carries its sessions are
 // deferred parts, evaluated with its realm's first session
-webTransportParts.standIn = () => deferred().webTransportStandIn;
-webTransportParts.carry = () => deferred().carryWebTransport;
-idbSizeParts.recordSize = () => deferred().recordSize;
+webTransportParts.standIn = () => deferred('webTransportStandIn');
+webTransportParts.carry = () => deferred('carryWebTransport');
+idbSizeParts.recordSize = () => deferred('recordSize');
 // and so are the methods behind navigator.storageBuckets' hooks
-storageBucketParts.methods = () => deferred().bucketMethods;
+storageBucketParts.methods = () => deferred('bucketMethods');
 // and the per-site legacy file system, with its first call
-legacyFileSystemParts.partition = () => deferred().partitionLegacyFileSystem;
-legacyFileSystemParts.drop = () => deferred().dropLegacyFileSystem;
+legacyFileSystemParts.partition = () => deferred('partitionLegacyFileSystem');
+legacyFileSystemParts.drop = () => deferred('dropLegacyFileSystem');
 
 class FingerprintStandIn extends Module<DocumentClient> {
 	apply() {
-		const Fingerprint = deferred().FingerprintModule;
+		const Fingerprint = deferred('FingerprintModule');
 		new Fingerprint(this.client).apply();
 	}
 }

@@ -364,7 +364,7 @@ export default class WebRTCModule extends Module<DocumentClient> {
 		let installed: Installed | null = null;
 		const install = (): Installed =>
 			installed ??
-			deferred().rtcInstall(
+			deferred('rtcInstall')(
 				{
 					client,
 					realm,

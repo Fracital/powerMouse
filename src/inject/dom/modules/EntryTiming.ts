@@ -127,7 +127,7 @@ export default class EntryTimingModule extends Module<DocumentClient> {
 		const late = (name: 'longFrames' | 'longTasks') => {
 			let admit: Admit | undefined;
 			return (entry: object) =>
-				(admit ??= deferred()[name](moduleClient, this))(entry);
+				(admit ??= deferred(name)(moduleClient, this))(entry);
 		};
 		this.onType('long-animation-frame', late('longFrames'));
 		this.onType('longtask', late('longTasks'));

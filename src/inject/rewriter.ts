@@ -224,7 +224,7 @@ if (givenActivation) deferredMade.set(ACTIVATION_FACTORY, givenActivation);
  */
 export function deferredFactory(
 	name: string = DEFERRED_FACTORY,
-): (shared: unknown) => unknown {
+): (shared: unknown, part?: string) => unknown {
 	let made = deferredMade.get(name);
 	if (!made) {
 		let text: string | null = null;
@@ -247,7 +247,7 @@ export function deferredFactory(
 		made = value;
 		deferredMade.set(name, made);
 	}
-	return made as (shared: unknown) => unknown;
+	return made as (shared: unknown, part?: string) => unknown;
 }
 
 /**

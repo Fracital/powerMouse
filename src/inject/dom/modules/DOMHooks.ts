@@ -813,7 +813,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					: siteWindows().targetAcross(moduleClient, name);
 			if (across) {
 				if (routable)
-					deferred().navigateAcross(moduleClient, across, {
+					deferred('navigateAcross')(moduleClient, across, {
 						kind: 'link',
 						url: destination!.href,
 					});
@@ -961,7 +961,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				setGlobalParsingState(realm, 'parsingBeforeWrite');
 				let markup: string;
 				try {
-					stream ??= deferred().writeStream(moduleClient);
+					stream ??= deferred('writeStream')(moduleClient);
 					markup = stream.write(document, text, fresh);
 				} finally {
 					setGlobalParsingState(realm, prevState);
@@ -1861,7 +1861,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				);
 		let made: ReturnType<DeferredParts['markupMembers']> | null = null;
 		const markupParts = () =>
-			(made ??= deferred().markupMembers(markupContext));
+			(made ??= deferred('markupMembers')(markupContext));
 		// one call for every wrapper: the native it wraps says which member it
 		// is (its name), and its place in `natives` whose interface (`ends`:
 		// where each prototype's natives end)
@@ -2368,7 +2368,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				return Reflect.apply(target, view?.map ?? that, args);
 			const key: string = target.name;
 			return VIEW_METHODS.includes(key)
-				? (viewMethods ??= deferred().attributeViewMethods({
+				? (viewMethods ??= deferred('attributeViewMethods')({
 						isMarkerOn,
 						attributeName,
 						Attr: realm.Attr,

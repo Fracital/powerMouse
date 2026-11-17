@@ -119,7 +119,7 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 								// (the site pool: read on this document's own slot,
 								// ../siteEvents.ts onOwnSlot)
 								client.sites
-									? deferred().onOwnSlot(client, blocked).value
+									? deferred('onOwnSlot')(client, blocked).value
 									: blocked,
 							)
 						: null);
@@ -206,7 +206,7 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 			// (the site pool: a route of another slot is read as this one's,
 			// and what is no route there names no URL of the page's)
 			const slotted = client.sites
-				? deferred().onOwnSlot(client, value)
+				? deferred('onOwnSlot')(client, value)
 				: { value, slot: false };
 			const page = unrouteURL(client, slotted.value);
 			if (page === null || (slotted.slot && page === slotted.value)) return '';

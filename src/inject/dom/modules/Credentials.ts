@@ -238,7 +238,7 @@ export default class CredentialsModule extends Module<DocumentClient> {
 
 		let flows: ReturnType<DeferredParts['identityFlow']> | null = null;
 		const identityFlow = () =>
-			(flows ??= deferred().identityFlow({
+			(flows ??= deferred('identityFlow')({
 				client,
 				PagePromise,
 				domException,
@@ -391,7 +391,7 @@ export default class CredentialsModule extends Module<DocumentClient> {
 		) =>
 			!onDomain || !args.length
 				? call(args)
-				: (guard ??= deferred().relyingPartyGuard({
+				: (guard ??= deferred('relyingPartyGuard')({
 						documentHost,
 						PagePromise,
 						PageDOMException,
@@ -542,7 +542,7 @@ export default class CredentialsModule extends Module<DocumentClient> {
 		// Chrome's errors, NotAllowedError when it is not same-origin with all
 		// of its ancestors, else NotSupportedError (../credentialStore.ts)
 		const ownStore = (): Promise<unknown> => {
-			const refusal = deferred().ownStoreRefusal(
+			const refusal = deferred('ownStoreRefusal')(
 				client.ancestorOrigins(),
 				client.origin,
 			);

@@ -1,12 +1,17 @@
 // The document bundle's deferred parts (./deferred.ts): code most frames
-// never run, which no document bundle carries. build.js bundles this file on
-// its own as the last statement of the rewriter library's file
-// (`__stompDeferred=function(__stompShared){...};`, src/version.ts
-// DEFERRED_FACTORY), which a proxied top's shell loads already; a frame
-// evaluates the statement the first time it needs a part. Every module these
-// import that a document bundle has too is the bundle's own, handed over in
-// `__stompShared` (the snapshots, the client, the Proxy module): only the
-// files build.js lists in DEFERRED_FILES are the parts' own.
+// never run, which no document bundle carries. build.js builds them as the
+// last statement of the rewriter library's file but one
+// (`__stompDeferred=function(__stompShared,__stompPart){...};`, src/version.ts
+// DEFERRED_FACTORY), which a proxied top's shell loads already: a switch with
+// a case for each group of parts, a group being the parts this file imports
+// from one file (and from every other file that reaches one module with it,
+// so a module is evaluated once in a realm). A frame compiles the statement
+// the first time it needs a part and runs only that part's group. Every
+// module these import that a document bundle has too is the bundle's own,
+// handed over by `__stompShared` (the snapshots, the client, the Proxy
+// module): only the files build.js lists in DEFERRED_FILES are the parts'
+// own. This file is not built itself: build.js reads its imports, and
+// `parts` names each of them once.
 //
 // (and Chrome 157's markup insertion members, ./markupMembers.ts, at a
 // page's first call of one)
@@ -54,7 +59,8 @@
 //
 // (STomp's passkey provider's WebAuthn client is a deferred statement of
 // its own, ./passkeysPart.ts: few documents call WebAuthn, and every frame
-// that needs a part here compiles all of them; and so are the gates of the
+// that needs a part here compiles the statement of all of them; and so are
+// the gates of the
 // gesture-gated calls, ./activationPart.ts, which every frame a click
 // elsewhere reaches through the proxy needs and little else)
 //
@@ -128,7 +134,7 @@ import { writeStream } from './WriteStream';
 import { xhrMessage } from './xhrMessages';
 import { responseParser } from './xhrParse';
 
-const parts = {
+export const parts = {
 	bareClient,
 	compileFilter,
 	longFrames,
@@ -196,10 +202,3 @@ const parts = {
 };
 
 export type DeferredParts = typeof parts;
-
-// what the statement's function returns (build.js: its banner makes the
-// object, its footer returns `made`). Handed over this way and not as the
-// module's exports, which esbuild would build with helpers of its own that
-// read Object's methods when the parts are evaluated: a page's by then
-declare const __stompParts: { made?: DeferredParts };
-__stompParts.made = parts;

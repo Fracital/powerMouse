@@ -722,7 +722,7 @@ export default class StorageModule extends Module<DocumentClient> {
 					return (client.proxiedTop === pageGlobal && !client.slotMark) ||
 						!handle
 						? undefined
-						: deferred().storageAccessHandle(client, taken, handle);
+						: deferred('storageAccessHandle')(client, taken, handle);
 				},
 			);
 		}
@@ -736,7 +736,7 @@ export default class StorageModule extends Module<DocumentClient> {
 			let part: PresentationIds | undefined;
 			const ids = () => {
 				try {
-					return (part ??= deferred().presentationIds(client, {
+					return (part ??= deferred('presentationIds')(client, {
 						stamps: stamps!,
 						getItem: nativeGetItem!,
 						setItem: nativeSetItem!,

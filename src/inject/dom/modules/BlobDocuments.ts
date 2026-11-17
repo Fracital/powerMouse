@@ -22,7 +22,7 @@ export default class BlobDocumentsModule extends Module<DocumentClient> {
 		this.nativeBlob = this.client.global.Blob;
 		// a data: XML document gets the XML shell, a deferred part
 		setXMLShell((data, url, config, mime) =>
-			deferred().modifyXML(data, url, config, mime),
+			deferred('modifyXML')(data, url, config, mime),
 		);
 	}
 }

@@ -796,13 +796,13 @@ export default class ContextModule extends Module<DocumentClient> {
 			// http(s) URL (siteAcross.ts)
 			const across =
 				client.sites && foreignWindow(target)
-					? deferred().ancestorAcross(client, target)
+					? deferred('ancestorAcross')(client, target)
 					: null;
 			const reason = across && this.#refusal(target, destination, across);
 			if (reason)
 				throw this.#refuse(target, reason, member, destination, across!.origin);
 			if (across && /^https?:$/.test(destination.protocol)) {
-				deferred().locationAcross(
+				deferred('locationAcross')(
 					client,
 					this.#voucher(),
 					target,
@@ -1771,7 +1771,7 @@ export default class ContextModule extends Module<DocumentClient> {
 						Reflect.apply(stopImmediate, event, []);
 						const request = data as Record<string, unknown>;
 						if (sites && request.token === sites.token)
-							deferred().receiveAcross(
+							deferred('receiveAcross')(
 								moduleClient,
 								event.source,
 								request.request as AcrossNavigation,

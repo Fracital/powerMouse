@@ -810,7 +810,7 @@ export default class DocumentClient extends Client {
 	 * none.
 	 */
 	protected override makeBare(port: MessagePort | Promise<MessagePort>) {
-		return deferred().bareClient(port);
+		return deferred('bareClient')(port);
 	}
 	protected override moduleHolder(): Client | null {
 		return this.#topClient();
@@ -3197,14 +3197,14 @@ export default class DocumentClient extends Client {
 				this.global.document,
 		);
 		if (encoder === null) return url;
-		const query = deferred().legacyQuery(input, encoder);
+		const query = deferred('legacyQuery')(input, encoder);
 		return query === null ? url : new URL(query, base);
 	}
 	/** which encoding a form's submission is in (src/inject/dom/legacyEncoding.ts formEncoding) */
 	formEncoding(acceptCharset: string | null): 'utf-8' | 'document' | 'other' {
 		const encoder = this.legacyEncoder();
 		if (acceptCharset === null) return encoder ? 'document' : 'utf-8';
-		return deferred().formEncoding(acceptCharset, encoder);
+		return deferred('formEncoding')(acceptCharset, encoder);
 	}
 	/**
 	 * What a URL this document's page writes resolves against: its base URL
@@ -3406,7 +3406,7 @@ export default class DocumentClient extends Client {
 			this.#landXML(root, live, prolog, epilog);
 		// a document with nothing but its root (most): no prolog to read
 		if (parsed.childNodes.length === 1) return land();
-		deferred().xmlProlog(this, parsed, root, land, (output) => {
+		deferred('xmlProlog')(this, parsed, root, land, (output) => {
 			const page = this.global.document;
 			this.refreshSandbox();
 			if (!this.allows('allow-scripts')) stripScripts(output);

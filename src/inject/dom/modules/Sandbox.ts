@@ -279,7 +279,7 @@ export default class SandboxModule extends Module<DocumentClient> {
 				event.preventDefault();
 				if (!aimed) {
 					if (destination.protocol !== 'javascript:')
-						deferred().navigateAcross(client, across!, {
+						deferred('navigateAcross')(client, across!, {
 							kind: 'link',
 							url: destination.href,
 						});
@@ -387,13 +387,13 @@ export default class SandboxModule extends Module<DocumentClient> {
 			// whose part cannot be had goes nowhere (never the browser's own,
 			// which lands in this frame: the form's target reads `_self` to
 			// the browser)
-			let parts: DeferredParts;
+			let submitAcross: DeferredParts['submitAimed'];
 			try {
-				parts = deferred();
+				submitAcross = deferred('submitAimed');
 			} catch (error) {
 				return true;
 			}
-			parts.submitAimed(
+			submitAcross(
 				client,
 				form,
 				submitter,
@@ -409,7 +409,7 @@ export default class SandboxModule extends Module<DocumentClient> {
 		// navigation: a document routed as its own, a form submitted from a
 		// copy in its document
 		client.pool[Pool.AcceptAcross] = (request) =>
-			deferred().acceptAcross(client, request, {
+			deferred('acceptAcross')(client, request, {
 				assign: nativeAssign,
 				submit: nativeSubmit,
 			});

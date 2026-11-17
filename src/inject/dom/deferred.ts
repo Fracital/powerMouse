@@ -1,5 +1,5 @@
 // The document bundle's deferred parts (./deferredParts.ts), the first time
-// a document needs one. They are the last statement of the rewriter
+// a document needs one, a group at a time. They are the last statement of the rewriter
 // library's file: a proxied top's shell loads it before this bundle, which
 // takes the statement's function as it loads (src/inject/rewriter.ts
 // deferredFactory). A document under that top evaluates the function's text
@@ -20,19 +20,29 @@ import type { ActivationPart } from './activationPart';
 import type { DeferredParts } from './deferredParts';
 import type { PasskeysPart } from './passkeysPart';
 
-/** the parts, once this bundle has evaluated them */
-let parts: DeferredParts | null = null;
+/** the parts this bundle has evaluated, by name */
+const parts = { __proto__: null } as unknown as Partial<DeferredParts>;
 
 /**
- * The deferred parts, evaluated the first time this is called (in the
- * bundle's realm, so a part makes its objects and errors as the bundle's
- * own code does). Throws when they cannot be had.
+ * The deferred part `name`, evaluated with the other parts of its group
+ * (build.js partGroups: those of its file, and of files that share a module
+ * with it) the first time this realm needs one of them, in the bundle's
+ * realm, so a part makes its objects and errors as the bundle's own code
+ * does. The statement is one function every group is a case of: a realm
+ * compiles it once and makes only the groups it runs. Throws when it cannot
+ * be had.
  */
-export function deferred(): DeferredParts {
-	if (parts) return parts;
-	const made = deferredFactory()(shared()) as DeferredParts;
-	parts = made;
-	return made;
+export function deferred<Name extends keyof DeferredParts>(
+	name: Name,
+): DeferredParts[Name] {
+	const part = parts[name];
+	if (part !== undefined) return part as DeferredParts[Name];
+	const group = deferredFactory()(shared, name) as
+		Partial<DeferredParts> | undefined;
+	if (!group) throw new Error(`Stomp: the deferred parts have no ${name}`);
+	for (const key of Reflect.ownKeys(group) as (keyof DeferredParts)[])
+		(parts as Record<string, unknown>)[key] = group[key];
+	return group[name] as DeferredParts[Name];
 }
 
 /** the passkey provider's client, once this bundle has evaluated it */
@@ -41,12 +51,12 @@ let passkeys: PasskeysPart | null = null;
 /**
  * The WebAuthn client of STomp's passkey provider (./passkeysPart.ts), a
  * deferred statement of its own, evaluated the first time a document makes
- * a WebAuthn call or asks a PublicKeyCredential static, as deferred() is.
+ * a WebAuthn call or asks a PublicKeyCredential static, as a part is.
  * Throws when it cannot be had.
  */
 export function passkeysPart(): PasskeysPart {
 	if (passkeys) return passkeys;
-	const made = deferredFactory(PASSKEYS_FACTORY)(shared()) as PasskeysPart;
+	const made = deferredFactory(PASSKEYS_FACTORY)(shared) as PasskeysPart;
 	passkeys = made;
 	return made;
 }
@@ -57,12 +67,12 @@ let activation: ActivationPart | null = null;
 /**
  * The gates of a document's gesture-gated calls (./activationPart.ts), a
  * deferred statement of its own, evaluated the first time a document gets
- * an activation only through the proxy (./activation.ts), as deferred() is.
+ * an activation only through the proxy (./activation.ts), as a part is.
  * Throws when it cannot be had.
  */
 export function activationPart(): ActivationPart {
 	if (activation) return activation;
-	const made = deferredFactory(ACTIVATION_FACTORY)(shared()) as ActivationPart;
+	const made = deferredFactory(ACTIVATION_FACTORY)(shared) as ActivationPart;
 	activation = made;
 	return made;
 }

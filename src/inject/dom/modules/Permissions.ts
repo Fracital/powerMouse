@@ -576,9 +576,9 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			ask,
 			nativeToString,
 			call: (target, that, args) =>
-				deferred().gateCall(hooks, target, that, args),
+				deferred('gateCall')(hooks, target, that, args),
 			read: (target, that, args) =>
-				deferred().gateGetter(hooks, target, that, args),
+				deferred('gateGetter')(hooks, target, that, args),
 			navigator: global.navigator,
 			mediaDevices: getter(navigator, 'mediaDevices'),
 			storage: getter(navigator, 'storage'),
@@ -649,7 +649,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 				proxyModule.wrapFunction(
 					NativeNotification,
 					(target, that, args, newTarget) => {
-						construct ??= deferred().notificationParts(ctx(), target);
+						construct ??= deferred('notificationParts')(ctx(), target);
 						return construct!(target, args, newTarget);
 					},
 					true,
@@ -685,7 +685,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 				if (!element) return;
 				hooked = true;
 				try {
-					deferred().permissionElements(ctx(), addListener, event);
+					deferred('permissionElements')(ctx(), addListener, event);
 				} catch (error) {
 					// no parts: the browser's own
 				}
@@ -724,7 +724,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		// the request itself: a deferred part (./permissionCalls.ts)
 		let made: ReturnType<DeferredParts['positionCall']> | undefined;
 		const run: ReturnType<DeferredParts['positionCall']> = (...call) =>
-			(made ??= deferred().positionCall({
+			(made ??= deferred('positionCall')({
 				global,
 				ErrorType,
 				request,
@@ -931,7 +931,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		// track, a sink, getUserMedia), which a default page never makes
 		let turned: DeviceConstraints | undefined;
 		const constraints = () =>
-			(turned ??= deferred().deviceConstraints({
+			(turned ??= deferred('deviceConstraints')({
 				global,
 				isArray,
 				LITERAL,
@@ -1241,7 +1241,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 				prototype.getUserMedia,
 				(target, that, args) => {
 					try {
-						call ??= deferred().userMediaCall({
+						call ??= deferred('userMediaCall')({
 							global,
 							mediaDevices,
 							enumerate,
@@ -1309,7 +1309,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 					// (a deferred part, ./permissionCalls.ts; without it, the
 					// promise rejects with why)
 					try {
-						return deferred().notificationCall({
+						return deferred('notificationCall')({
 							request,
 							allowed,
 							siteState,

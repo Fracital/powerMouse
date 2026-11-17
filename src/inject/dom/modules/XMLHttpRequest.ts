@@ -77,7 +77,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 		// part (../xhrMessages.ts): the exception is made here, in the
 		// hook's own frame
 		const message = (key: XhrMessage, detail?: string) =>
-			deferred().xhrMessage(key, detail);
+			deferred('xhrMessage')(key, detail);
 
 		// whether the document's permissions policy lets the guest make a
 		// synchronous request (Chrome's `sync-xhr`). The served
@@ -117,7 +117,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 		// never read an XML response as a document
 		let parser: ResponseParser | undefined;
 		const parseResponse: ResponseParser = (...args) =>
-			(parser ??= deferred().responseParser({
+			(parser ??= deferred('responseParser')({
 				client: that.client,
 				RealmXHR,
 				realmOpen,
@@ -598,7 +598,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				password: string | void,
 			) {
 				// a method the browser refuses changes nothing of the request
-				const checked = deferred().checkedMethod(that.client.global, method);
+				const checked = deferred('checkedMethod')(that.client.global, method);
 				// a document may not make a synchronous request with a response
 				// type or a timeout set beforehand
 				if (!async && (this.#timeout !== 0 || this.#responseType !== ''))
@@ -671,7 +671,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				}
 			}
 			setRequestHeader(header: string, value: string) {
-				[header, value] = deferred().checkedHeader(
+				[header, value] = deferred('checkedHeader')(
 					that.client.global,
 					// eslint-disable-next-line prefer-rest-params
 					arguments,
@@ -684,7 +684,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 			}
 			send(body: string) {
 				if (this.#readyState !== OPENED || this.#sent)
-					throw deferred().notOpened(that.client.global, 'send');
+					throw deferred('notOpened')(that.client.global, 'send');
 				this.#sent = true;
 
 				// a document whose permissions policy turns `sync-xhr` off (the
