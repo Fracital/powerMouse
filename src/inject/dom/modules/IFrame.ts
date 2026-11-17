@@ -437,7 +437,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 			afterPage(event, () => {
 				let url: URL;
 				try {
-					url = new URL(
+					url = moduleClient.encodingParse(
 						link.getAttribute('href')!,
 						moduleClient.baseURL.toString(),
 					);

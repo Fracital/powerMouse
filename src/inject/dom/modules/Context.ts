@@ -698,7 +698,10 @@ export default class ContextModule extends Module<DocumentClient> {
 		member: 'href' | 'assign' | 'replace',
 	) {
 		const client = this.client;
-		const destination = new URL(value, client.baseURL.toString());
+		const destination = client.encodingParse(
+			String(value),
+			client.baseURL.toString(),
+		);
 		const targetClient = this.#clientOf(target);
 		// a window that runs nothing yet (a popup or frame still on its
 		// initial about:blank): only a sandbox decides, and the browser lets
@@ -1051,7 +1054,10 @@ export default class ContextModule extends Module<DocumentClient> {
 		if (this.#holds().has(context)) return context;
 		let target: URL | undefined;
 		try {
-			target = new URL(String(url), this.client.baseURL.toString());
+			target = this.client.encodingParse(
+				String(url),
+				this.client.baseURL.toString(),
+			);
 		} catch (error) {
 			// no URL: the window's own document decides
 		}

@@ -83,6 +83,8 @@ import cloneRawNode, {
 	releaseMarkup,
 	startedScripts,
 } from './cloneNode';
+import { deferred } from './deferred';
+import type { LegacyEncoder } from './legacyEncoding';
 import { initLoads, loadSource, type LoadSource } from './loadGrants';
 import DOMAttributesModule, {
 	scriptKind,
@@ -318,6 +320,10 @@ const nativeOpenerGet = Reflect.getOwnPropertyDescriptor(
 	'opener',
 )!.get!;
 
+/** whether `text` holds a byte ISO-2022-JP cannot encode as itself (SO, SI, ESC) */
+const hasISO2022Escape = (text: string) =>
+	text.includes('\u000e') || text.includes('\u000f') || text.includes('\u001b');
+
 export default class DocumentClient extends Client {
 	private write: typeof document.write;
 	// native document.open: the hooked one runs the open listeners, which
@@ -382,8 +388,31 @@ export default class DocumentClient extends Client {
 	#inheritedFlags: Set<string> | null = null;
 	/** the nonce the shell script that made this client carried, in its document (guardScripts) */
 	#shellNonce: { document: Document; nonce: string } | null = null;
+	/** the native characterSet, createElement, a link's href and a node's ownerDocument (legacyEncoder) */
+	readonly #encodingNatives: [
+		() => string,
+		(name: string) => Element,
+		(value: string) => void,
+		() => string,
+		() => Document | null,
+	];
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
+		const documentProto = this.global.Document.prototype;
+		const href = Reflect.getOwnPropertyDescriptor(
+			this.global.HTMLAnchorElement.prototype,
+			'href',
+		)!;
+		this.#encodingNatives = [
+			Reflect.getOwnPropertyDescriptor(documentProto, 'characterSet')!.get!,
+			documentProto.createElement,
+			href.set!,
+			href.get!,
+			Reflect.getOwnPropertyDescriptor(
+				this.global.Node.prototype,
+				'ownerDocument',
+			)!.get!,
+		];
 		// the bundle's own realm's client: its load channel opens now
 		if (global === globalThis) initLoads(this);
 		this.#setTimeout = this.global.setTimeout;
@@ -2827,6 +2856,82 @@ export default class DocumentClient extends Client {
 	 */
 	#locationHref(location: Location): string {
 		return location.href;
+	}
+	/**
+	 * The document's encoding when it is a legacy one, which the browser
+	 * encodes a URL's query and a form's submission with (the HTML
+	 * standard's output encoding: UTF-8 for UTF-16 and replacement), or
+	 * null for UTF-8. The worker serves each document in its own encoding
+	 * (src/server/charset.ts encodeShell), so the browser's answer is the
+	 * page's.
+	 */
+	#legacyEncoding(document: Document = this.global.document): string | null {
+		const encoding = Reflect.apply(
+			this.#encodingNatives[0],
+			document,
+			[],
+		) as string;
+		return /^(utf-8|utf-16(le|be)|replacement)$/i.test(encoding)
+			? null
+			: encoding;
+	}
+	/**
+	 * The document's legacy encoding with the browser's encoder for it, a
+	 * link of the document, which encodes its query in the document's
+	 * encoding (src/inject/dom/legacyEncoding.ts); null for UTF-8
+	 */
+	legacyEncoder(document = this.global.document): LegacyEncoder | null {
+		const encoding = this.#legacyEncoding(document);
+		if (encoding === null) return null;
+		const [, createElement, hrefSet, hrefGet] = this.#encodingNatives;
+		return {
+			encoding,
+			encode: (text, fragment) => {
+				const link = Reflect.apply(createElement, document, ['a']);
+				Reflect.apply(hrefSet, link, [
+					`http://h/?${text}${fragment ? '#' : ''}`,
+				]);
+				const href = Reflect.apply(hrefGet, link, []) as string;
+				return href.slice(
+					href.indexOf('?') + 1,
+					fragment ? href.lastIndexOf('#') : href.length,
+				);
+			},
+		};
+	}
+	/**
+	 * `owner`: the element whose URL it is, when the URL is read back (as
+	 * the browser reads it, in its node document's encoding: an inert
+	 * document's is UTF-8); a URL routed is in the document's
+	 */
+	override encodingParse(value: string, base?: string, owner?: Node): URL {
+		// the page's value made a string once, as new URL makes it (a
+		// TrustedScriptURL, an object with a toString of its own)
+		const input = `${value}`;
+		const url = new URL(input, base);
+		if (
+			!(/[^\0-\x7f]/.test(input) || hasISO2022Escape(input)) ||
+			(url.protocol !== 'http:' && url.protocol !== 'https:')
+		)
+			return url;
+		const encoder = this.legacyEncoder(
+			(owner &&
+				(Reflect.apply(
+					this.#encodingNatives[4],
+					owner,
+					[],
+				) as Document | null)) ||
+				this.global.document,
+		);
+		if (encoder === null) return url;
+		const query = deferred().legacyQuery(input, encoder);
+		return query === null ? url : new URL(query, base);
+	}
+	/** which encoding a form's submission is in (src/inject/dom/legacyEncoding.ts formEncoding) */
+	formEncoding(acceptCharset: string | null): 'utf-8' | 'document' | 'other' {
+		const encoder = this.legacyEncoder();
+		if (acceptCharset === null) return encoder ? 'document' : 'utf-8';
+		return deferred().formEncoding(acceptCharset, encoder);
 	}
 	/**
 	 * What a URL this document's page writes resolves against: its base URL

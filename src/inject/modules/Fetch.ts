@@ -322,7 +322,7 @@ export default class FetchModule extends Module<Client> {
 						[text, ...args.slice(1)],
 						newTarget || target,
 					);
-				const url = new URL(text, client.baseURL.toString());
+				const url = client.encodingParse(text, client.baseURL.toString());
 
 				// one a worker's policy refuses fails as the browser fails it
 				// (requestVerdict, which reports it with no sourceFile, as

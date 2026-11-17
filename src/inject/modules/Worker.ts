@@ -65,7 +65,10 @@ export default class WorkerModule extends Module<Client> {
 		let lastPrivate: string | undefined;
 		const workerURL = (source: string, isModule: boolean): string => {
 			lastPrivate = undefined;
-			const url = new URL(source, moduleClient.baseURL.toString());
+			const url = moduleClient.encodingParse(
+				source,
+				moduleClient.baseURL.toString(),
+			);
 			const type = isModule ? 'workerModule' : 'worker';
 			if (url.protocol === 'blob:') {
 				// resolved now, as the browser resolves it at construction: the
@@ -372,7 +375,10 @@ export default class WorkerModule extends Module<Client> {
 					checkOrigin('Worker', source);
 					// a worker a worker's worker-src refuses fails to start, as the
 					// browser fails it (requestVerdict reports it)
-					const resolved = new URL(source, moduleClient.baseURL.toString());
+					const resolved = moduleClient.encodingParse(
+						source,
+						moduleClient.baseURL.toString(),
+					);
 					if (requestRefused(moduleClient, 'worker-src', resolved)) {
 						args[0] = trustedScriptURL(
 							routeRefused(new StompURL(resolved, moduleClient.url)),
@@ -386,7 +392,8 @@ export default class WorkerModule extends Module<Client> {
 					watchErrors(
 						worker,
 						own,
-						new URL(source, moduleClient.baseURL.toString()).href,
+						moduleClient.encodingParse(source, moduleClient.baseURL.toString())
+							.href,
 					);
 					moduleClient.provisionWorkerTransport(worker, blobScript(url));
 					if (own) releaseOnLoad(worker, own);

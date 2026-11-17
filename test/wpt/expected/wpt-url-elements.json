@@ -398,15 +398,5 @@
 	},
 	"/url/javascript-urls.window.html": {
 		"javascript: URL without an opaque path": "FAIL: assert_equals: Property is 1 once the navigation happened expected (number) 1 but got (undefined) undefined"
-	},
-	"/url/percent-encoding.window.html": {
-		"Input † with encoding big5": "FAIL: assert_equals: query expected \"?%26%238224%3B\" but got \"?%E2%80%A0\"",
-		"Input † with encoding euc-kr": "FAIL: assert_equals: query expected \"?%A2%D3\" but got \"?%E2%80%A0\"",
-		"Input † with encoding windows-1252": "FAIL: assert_equals: query expected \"?%86\" but got \"?%E2%80%A0\"",
-		"Input \u000eA with encoding iso-2022-jp": "FAIL: assert_equals: query expected \"?%26%2365533%3BA\" but got \"?%0EA\"",
-		"Input ‾\\ with encoding iso-2022-jp": "FAIL: assert_equals: query expected \"?%1B(J~%1B(B\\\\\" but got \"?%E2%80%BE\\\\\"",
-		"Input  with encoding gb18030": "FAIL: assert_equals: query expected \"?%26%2358853%3B\" but got \"?%EE%97%A5\"",
-		"Input − with encoding shift_jis": "FAIL: assert_equals: query expected \"?%81|\" but got \"?%E2%88%92\"",
-		"Input ¢ with encoding iso-8859-2": "FAIL: assert_equals: query expected \"?%26%23162%3B\" but got \"?%C2%A2\""
 	}
 }

@@ -1,0 +1,72 @@
+<!doctype html>
+<meta charset="Shift_JIS">
+<title>document encoding</title>
+<!-- document-encoding suite: a page in Shift_JIS, its text in its own bytes -->
+<a id="link" href="/pages/document-encoding-landing.html?q=あい日本&amp;r=%41+b">あい日本</a>
+<form id="form" action="/pages/document-encoding-landing.html" accept-charset="Shift_JIS">
+<input name="q" value="あい日本 &amp;+%">
+<input name="r" value="&#x20AC;&#x2603;">
+</form>
+<form id="utf8" action="/pages/document-encoding-landing.html" accept-charset="utf-8">
+<input name="q" value="あい日本">
+</form>
+<img id="img" alt="" src="/pages/document-encoding-landing.html?img=あい日本">
+<script>
+	const out = {};
+	const read = (name, f) => {
+		try {
+			out[name] = f();
+		} catch (error) {
+			out[name] = 'threw ' + error.name;
+		}
+	};
+	read('characterSet', () => document.characterSet);
+	read('charset', () => document.charset);
+	read('inputEncoding', () => document.inputEncoding);
+	read('text', () => document.getElementById('link').textContent);
+	read('linkSearch', () => document.getElementById('link').search);
+	read('imgSrc', () => new URL(document.getElementById('img').src).search);
+	read('madeLink', () => {
+		const a = document.createElement('a');
+		a.href = '/x?\u3042\u3044\u65e5\u672c\u00df\u2603#\u3042\u3044\u65e5\u672c';
+		return a.search + a.hash;
+	});
+	read('formAction', () => {
+		const form = document.createElement('form');
+		form.action = '/x?\u3042\u3044\u65e5\u672c';
+		return new URL(form.action).search;
+	});
+	read('newURL', () => new URL('/x?\u3042\u3044\u65e5\u672c', location.href).search);
+	read('inert', () => {
+		const doc = new DOMParser().parseFromString('<a href="http://h/?\u3042\u3044\u65e5\u672c">', 'text/html');
+		return doc.querySelector('a').search;
+	});
+	read('xhr', () => {
+		const xhr = new XMLHttpRequest();
+		xhr.open('GET', '/pages/document-encoding-landing.html?xhr=\u3042\u3044\u65e5\u672c', false);
+		xhr.send();
+		return new URL(xhr.responseURL).search;
+	});
+	const worker = new Worker('/pages/document-encoding-worker.js?w=\u3042\u3044\u65e5\u672c');
+	worker.onmessage = (event) => {
+		out.worker = event.data;
+		out.done = true;
+	};
+	worker.onerror = () => {
+		out.worker = 'error';
+		out.done = true;
+	};
+	window.__encodingOut = out;
+	// how the suite navigates the page: the page's own code, which the proxy
+	// rewrites (a script the test evaluates is not)
+	window.__navigate = {
+		link: () => document.getElementById('link').click(),
+		form: () => document.getElementById('form').submit(),
+		utf8Form: () => document.getElementById('utf8').submit(),
+		assign: () =>
+			location.assign(
+				'/pages/document-encoding-landing.html?a=' +
+					document.getElementById('link').textContent,
+			),
+	};
+</script>

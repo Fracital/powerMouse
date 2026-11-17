@@ -932,7 +932,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			const targets = urls ?? [
 				{
 					routed,
-					page: new URL(
+					page: moduleClient.encodingParse(
 						element.getAttributeOG(attribute) ?? routed,
 						moduleClient.baseURL.toString(),
 					).href,
@@ -1229,7 +1229,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			element.setAttributeOG(attribute, value);
 			const routed = routeBinary(
 				new StompURL(
-					new URL(value, moduleClient.baseURL.toString()),
+					moduleClient.encodingParse(value, moduleClient.baseURL.toString()),
 					moduleClient.baseURL,
 				),
 			);
@@ -1272,7 +1272,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			element.setAttributeOG(attribute, value);
 			const routed = routeJS(
 				new StompURL(
-					new URL(value, moduleClient.baseURL.toString()),
+					moduleClient.encodingParse(value, moduleClient.baseURL.toString()),
 					moduleClient.baseURL,
 				),
 				moduleClient.baseURL,
@@ -1432,7 +1432,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					attribute,
 					moduleClient.linkRoute(
 						new StompURL(
-							new URL(
+							moduleClient.encodingParse(
 								element.getAttribute(attribute)!,
 								moduleClient.baseURL.toString(),
 							),
@@ -1476,7 +1476,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				if (trimmed === '' || trimmed.startsWith('#')) return value;
 				try {
 					const url = new StompURL(
-						new URL(trimmed, moduleClient.baseURL.toString()),
+						moduleClient.encodingParse(
+							trimmed,
+							moduleClient.baseURL.toString(),
+						),
 						moduleClient.baseURL,
 					);
 					// (a link's route rewrites a javascript: URL's code)
@@ -1523,10 +1526,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					(element) =>
 						element.hasAttribute('href') &&
 						element.getAttribute('href') !== '' &&
-						new URL(
-							(element.getAttributeOG('href') ?? element.getAttribute('href'))!,
-							responseURLOf(element) ?? moduleClient.baseURL.toString(),
-						).toString(),
+						moduleClient
+							.encodingParse(
+								(element.getAttributeOG('href') ??
+									element.getAttribute('href'))!,
+								responseURLOf(element) ?? moduleClient.baseURL.toString(),
+								element,
+							)
+							.toString(),
 				],
 				// an image map's areas are links too
 				[
@@ -1535,10 +1542,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					(element) =>
 						element.hasAttribute('href') &&
 						element.getAttribute('href') !== '' &&
-						new URL(
-							(element.getAttributeOG('href') ?? element.getAttribute('href'))!,
-							responseURLOf(element) ?? moduleClient.baseURL.toString(),
-						).toString(),
+						moduleClient
+							.encodingParse(
+								(element.getAttributeOG('href') ??
+									element.getAttribute('href'))!,
+								responseURLOf(element) ?? moduleClient.baseURL.toString(),
+								element,
+							)
+							.toString(),
 				],
 			],
 			// URL attributes do not mixin with element attributes
@@ -1565,7 +1576,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					shouldRewriteScript(element)
 				) {
 					element.setAttributeOG('src', element.getAttribute('src')!);
-					const url = new URL(
+					const url = moduleClient.encodingParse(
 						element.getAttribute('src')!,
 						moduleClient.baseURL.toString(),
 					);
@@ -1626,10 +1637,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					(element) =>
 						element.hasAttribute('src') &&
 						element.getAttribute('src') !== '' &&
-						new URL(
-							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							moduleClient.baseURL.toString(),
-						).toString(),
+						moduleClient
+							.encodingParse(
+								(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
+								moduleClient.baseURL.toString(),
+								element,
+							)
+							.toString(),
 				],
 			],
 		);
@@ -1685,7 +1699,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					);
 					const as = (element.getAttribute('as') || '').trim().toLowerCase();
 					const resource = new StompURL(
-						new URL(
+						moduleClient.encodingParse(
 							element.getAttribute('href')!,
 							moduleClient.baseURL.toString(),
 						),
@@ -1702,7 +1716,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						stylesheet &&
 						moduleClient.refuseExternalStyle(
 							element,
-							new URL(
+							moduleClient.encodingParse(
 								element.getAttribute('href')!,
 								moduleClient.baseURL.toString(),
 							),
@@ -1770,10 +1784,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					(element) =>
 						element.hasAttribute('href') &&
 						element.getAttribute('href') !== '' &&
-						new URL(
-							(element.getAttributeOG('href') ?? element.getAttribute('href'))!,
-							responseURLOf(element) ?? moduleClient.baseURL.toString(),
-						).toString(),
+						moduleClient
+							.encodingParse(
+								(element.getAttributeOG('href') ??
+									element.getAttribute('href'))!,
+								responseURLOf(element) ?? moduleClient.baseURL.toString(),
+								element,
+							)
+							.toString(),
 				],
 				[realm.HTMLLinkElement, 'rel', () => false],
 			],
@@ -1816,7 +1834,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				if (element.hasAttribute('src') && element.getAttribute('src') !== '') {
 					element.setAttributeOG('src', element.getAttribute('src')!);
 					const resource = new StompURL(
-						new URL(
+						moduleClient.encodingParse(
 							element.getAttribute('src')!,
 							moduleClient.baseURL.toString(),
 						),
@@ -1942,10 +1960,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					(element) =>
 						element.hasAttribute('src') &&
 						element.getAttribute('src') !== '' &&
-						new URL(
-							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							moduleClient.baseURL.toString(),
-						).toString(),
+						moduleClient
+							.encodingParse(
+								(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
+								moduleClient.baseURL.toString(),
+								element,
+							)
+							.toString(),
 				],
 				[
 					realm.HTMLIFrameElement,
@@ -1953,10 +1974,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					(element) =>
 						element.hasAttribute('src') &&
 						element.getAttribute('src') !== '' &&
-						new URL(
-							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							moduleClient.baseURL.toString(),
-						).toString(),
+						moduleClient
+							.encodingParse(
+								(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
+								moduleClient.baseURL.toString(),
+								element,
+							)
+							.toString(),
 				],
 			],
 		);
@@ -2043,7 +2067,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						'src',
 						routeBinary(
 							new StompURL(
-								new URL(
+								moduleClient.encodingParse(
 									element.getAttribute('src')!,
 									moduleClient.baseURL.toString(),
 								),
@@ -2062,10 +2086,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					(element) =>
 						element.hasAttribute('src') &&
 						element.getAttribute('src') !== '' &&
-						new URL(
-							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							moduleClient.baseURL.toString(),
-						).toString(),
+						moduleClient
+							.encodingParse(
+								(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
+								moduleClient.baseURL.toString(),
+								element,
+							)
+							.toString(),
 				],
 				[
 					realm.HTMLImageElement,
@@ -2073,10 +2100,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					(element) =>
 						element.hasAttribute('src') &&
 						element.getAttribute('src') !== '' &&
-						new URL(
-							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							moduleClient.baseURL.toString(),
-						).toString(),
+						moduleClient
+							.encodingParse(
+								(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
+								moduleClient.baseURL.toString(),
+								element,
+							)
+							.toString(),
 				],
 			],
 		);
@@ -2099,7 +2129,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// browser keeps it in the list and fails it if it picks it
 					const pages = parsed.map((src) => {
 						try {
-							return new URL(src.url, moduleClient.baseURL.toString());
+							return moduleClient.encodingParse(
+								src.url,
+								moduleClient.baseURL.toString(),
+							);
 						} catch (error) {
 							return null;
 						}
@@ -2167,7 +2200,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						'src',
 						routeBinary(
 							new StompURL(
-								new URL(
+								moduleClient.encodingParse(
 									element.getAttribute('src')!,
 									moduleClient.baseURL.toString(),
 								),
@@ -2188,10 +2221,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					(element) =>
 						element.hasAttribute('src') &&
 						element.getAttribute('src') !== '' &&
-						new URL(
-							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							moduleClient.baseURL.toString(),
-						).toString(),
+						moduleClient
+							.encodingParse(
+								(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
+								moduleClient.baseURL.toString(),
+								element,
+							)
+							.toString(),
 				],
 				[
 					realm.HTMLMediaElement,
@@ -2199,10 +2235,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					(element) =>
 						element.hasAttribute('src') &&
 						element.getAttribute('src') !== '' &&
-						new URL(
-							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							moduleClient.baseURL.toString(),
-						).toString(),
+						moduleClient
+							.encodingParse(
+								(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
+								moduleClient.baseURL.toString(),
+								element,
+							)
+							.toString(),
 				],
 				[
 					realm.HTMLSourceElement,
@@ -2210,10 +2249,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					(element) =>
 						element.hasAttribute('src') &&
 						element.getAttribute('src') !== '' &&
-						new URL(
-							(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
-							moduleClient.baseURL.toString(),
-						).toString(),
+						moduleClient
+							.encodingParse(
+								(element.getAttributeOG('src') ?? element.getAttribute('src'))!,
+								moduleClient.baseURL.toString(),
+								element,
+							)
+							.toString(),
 				],
 			],
 		);
@@ -2908,10 +2950,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			 */
 			let action: string;
 			try {
-				action = new URL(
-					(element.getAttributeOG('action') ?? element.getAttribute('action'))!,
-					moduleClient.baseURL.toString(),
-				).toString();
+				action = moduleClient
+					.encodingParse(
+						(element.getAttributeOG('action') ??
+							element.getAttribute('action'))!,
+						moduleClient.baseURL.toString(),
+					)
+					.toString();
 			} catch (error) {
 				// no URL at all (`https://[`): the form keeps it as written and
 				// its submission goes nowhere, as natively (the insertion pass
@@ -2957,10 +3002,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		const originalURL = (attribute: string) => (element: CustomElement) =>
 			element.hasAttribute(attribute) &&
 			element.getAttribute(attribute) !== '' &&
-			new URL(
-				(element.getAttributeOG(attribute) ?? element.getAttribute(attribute))!,
-				moduleClient.baseURL.toString(),
-			).toString();
+			moduleClient
+				.encodingParse(
+					(element.getAttributeOG(attribute) ??
+						element.getAttribute(attribute))!,
+					moduleClient.baseURL.toString(),
+					element,
+				)
+				.toString();
 
 		/** route one URL attribute, keeping the page's value as the original */
 		const routeAttribute =
@@ -2979,7 +3028,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.setAttributeOG(attribute, element.getAttribute(attribute)!);
 					const value = route(
 						new StompURL(
-							new URL(
+							moduleClient.encodingParse(
 								element.getAttribute(attribute)!,
 								moduleClient.baseURL.toString(),
 							),
@@ -3029,7 +3078,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				return;
 			}
 			const resource = new StompURL(
-				new URL(written, moduleClient.baseURL.toString()),
+				moduleClient.encodingParse(written, moduleClient.baseURL.toString()),
 				moduleClient.baseURL,
 			);
 			const routedOf = () =>
@@ -3147,7 +3196,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		const writtenURL = (attribute: string) => (element: CustomElement) => {
 			const written = element.getAttributeOG(attribute);
 			return written !== null && written !== ''
-				? new URL(written, moduleClient.baseURL.toString()).toString()
+				? moduleClient
+						.encodingParse(written, moduleClient.baseURL.toString(), element)
+						.toString()
 				: false;
 		};
 		domHooksModule.useAttributes(proxiedLoad('data'), [
@@ -3179,7 +3230,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							routed.push(
 								routeXHR(
 									new StompURL(
-										new URL(token, moduleClient.baseURL.toString()),
+										moduleClient.encodingParse(
+											token,
+											moduleClient.baseURL.toString(),
+										),
 										moduleClient.baseURL,
 									),
 								),
@@ -3269,7 +3323,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								...src,
 								url: routeBinary(
 									new StompURL(
-										new URL(src.url, moduleClient.baseURL.toString()),
+										moduleClient.encodingParse(
+											src.url,
+											moduleClient.baseURL.toString(),
+										),
 										moduleClient.baseURL,
 									),
 								),
@@ -3397,11 +3454,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				(element) =>
 					element.hasAttribute('action') &&
 					element.getAttribute('action') !== '' &&
-					new URL(
-						(element.getAttributeOG('action') ??
-							element.getAttribute('action'))!,
-						moduleClient.baseURL.toString(),
-					).toString(),
+					moduleClient
+						.encodingParse(
+							(element.getAttributeOG('action') ??
+								element.getAttribute('action'))!,
+							moduleClient.baseURL.toString(),
+							element,
+						)
+						.toString(),
 			],
 			[realm.HTMLFormElement, 'method', () => false],
 		]);

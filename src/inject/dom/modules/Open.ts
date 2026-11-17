@@ -54,7 +54,10 @@ export default class OpenModule extends Module<DocumentClient> {
 				return;
 			let url: URL;
 			try {
-				url = new URL(link.getAttribute('href')!, client.baseURL.toString());
+				url = client.encodingParse(
+					link.getAttribute('href')!,
+					client.baseURL.toString(),
+				);
 			} catch (error) {
 				// no URL: the click opens nothing, here or in the browser
 				return;

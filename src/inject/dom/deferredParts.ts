@@ -14,6 +14,9 @@
 // (and XMLHttpRequest's argument checks, ../xhrChecks.ts, at a document's
 // first open(); a worker's bundle has them itself)
 //
+// (and what a legacy-encoded document encodes a URL's query and a form's
+// submission with, ./legacyEncoding.ts, at its first such URL or form)
+//
 // (and the WebTransport stand-in, ../webTransportStandIn.ts, with what
 // carries its sessions, ../webTransport.ts, once a realm makes its first
 // session)
@@ -37,6 +40,7 @@ import { checkedHeader, checkedMethod, notOpened } from '../xhrChecks';
 import { ancestorOriginsList } from './ancestorOriginsList';
 import { attributeViewMethods } from './attributeViewMethods';
 import { relayBeacon } from './beaconRelay';
+import { formEncoding, legacyFormQuery, legacyQuery } from './legacyEncoding';
 import { markupMembers } from './markupMembers';
 import FingerprintModule from './modules/Fingerprint';
 import { emulateServiceWorker } from './modules/serviceWorkerEmulation';
@@ -57,6 +61,9 @@ const parts = {
 	markupMembers,
 	webTransportStandIn,
 	carryWebTransport,
+	legacyQuery,
+	formEncoding,
+	legacyFormQuery,
 };
 
 export type DeferredParts = typeof parts;

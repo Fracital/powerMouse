@@ -715,7 +715,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			// opened as is, injected by the IFrame module's hook
 			let destination: URL | null = null;
 			if (args[0] !== undefined && String(args[0]) !== '')
-				destination = new URL(String(args[0]), moduleClient.baseURL.toString());
+				destination = moduleClient.encodingParse(
+					String(args[0]),
+					moduleClient.baseURL.toString(),
+				);
 			const routable =
 				destination !== null && /^https?:$/.test(destination.protocol);
 			// the proxied parent or top, named from a frame under the top:
@@ -967,7 +970,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						string | null;
 					if (written === null) return '';
 					try {
-						return new URL(written, moduleClient.baseURL.toString()).href;
+						return moduleClient.encodingParse(
+							written,
+							moduleClient.baseURL.toString(),
+							that,
+						).href;
 					} catch (error) {
 						// not a URL: as written, like the browser
 						return written;
@@ -1583,7 +1590,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						try {
 							made = routeHTML(
 								new StompURL(
-									new URL(value, moduleClient.baseURL.toString()),
+									moduleClient.encodingParse(
+										value,
+										moduleClient.baseURL.toString(),
+									),
 									moduleClient.baseURL,
 								),
 								moduleClient.baseURL,

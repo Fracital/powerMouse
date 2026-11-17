@@ -167,7 +167,11 @@ import {
 import {
 	decodeDocument,
 	decodeScript,
+	documentContentType,
+	documentEncoding,
+	encodeShell,
 	scriptEncoding,
+	stylesheetEncoding,
 	utf8ContentType,
 } from './charset';
 import {
@@ -4621,6 +4625,16 @@ export function registerRewrites(
 				const contentType = headers.get('content-type');
 				if (contentType !== null)
 					headers.set('content-type', utf8ContentType(contentType));
+				// a classic script that names no type at all would be decoded
+				// with its document's encoding (a legacy one is served as it is,
+				// src/server/charset.ts encodeShell); the type it gets is the one
+				// the browser assumed (under nosniff the browser refuses it
+				// without one, so that one keeps none)
+				else if (
+					type === 'generic' &&
+					!response.headers.has('x-content-type-options')
+				)
+					headers.set('content-type', 'text/javascript; charset=utf-8');
 				const isModuleType =
 					type === 'genericModule' ||
 					type === 'workerModule' ||
@@ -4800,12 +4814,21 @@ export function registerRewrites(
 		/^\/css\//,
 		genericForward(
 			rewriter,
-			async (url, response, _headers, _referrer, _request, note) => {
+			async (url, response, headers, _referrer, _request, note) => {
 				if (!response.ok) return false;
-				// as Response.text() decodes (a BOM goes, bad bytes are U+FFFD)
+				// decoded as the browser would have (a byte order mark, the
+				// Content-Type charset, an @charset rule), and the rewrite goes
+				// out as UTF-8 and says so: a sheet that names none would be
+				// decoded with its document's encoding, which is a legacy one
+				// for a legacy page (src/server/charset.ts encodeShell)
 				const read = new Uint8Array(await response.arrayBuffer());
 				note.bytes = read.byteLength;
-				const text = new TextDecoder().decode(read);
+				const contentType = headers.get('content-type');
+				if (contentType !== null)
+					headers.set('content-type', utf8ContentType(contentType));
+				const text = new TextDecoder(
+					stylesheetEncoding(read, contentType),
+				).decode(read);
 				try {
 					// the wasm scanner rewrites the sheet (waited for when this
 					// worker has only just been handed the module), and the request
@@ -4916,10 +4939,19 @@ export function registerRewrites(
 				const mime = getMime(contentType || '');
 				if (!htmlMimes.includes(mime)) return false;
 				// decode the way the browser would have (BOM, header charset,
-				// <meta charset>), then serve the rewritten document as UTF-8
+				// <meta charset>), then serve the shell in that encoding
+				// (encodeShell): the document has it, as natively, for what the
+				// browser encodes with it (an element's URL, a form's query) and
+				// for document.characterSet. An XML shell is UTF-8.
 				const bytes = new Uint8Array(await response.arrayBuffer());
 				note.bytes = bytes.byteLength;
-				responseHeaders.set('content-type', utf8ContentType(contentType));
+				const encoding = XML_DOCUMENT_MIMES.includes(mime)
+					? 'utf-8'
+					: documentEncoding(bytes, contentType);
+				responseHeaders.set(
+					'content-type',
+					documentContentType(contentType, encoding),
+				);
 				// a proxied top (not a document a page routed as nested): its
 				// shell loads the rewriter library
 				const top =
@@ -4951,7 +4983,11 @@ export function registerRewrites(
 					policies.texts.push(['', "script-src 'none'", 'enforce']);
 				// whether code made from a string runs, under the headers' policies
 				// and the metas' of the head (src/csp.ts ScriptFacts)
-				const decoded = decodeDocument(bytes, contentType);
+				const decoded = decodeDocument(
+					bytes,
+					contentType,
+					documentEncoding(bytes, contentType),
+				);
 				const texts = [
 					...policies.texts.map(([browser]) => browser).filter(Boolean),
 					...metaPolicies(decoded)
@@ -5116,8 +5152,8 @@ export function registerRewrites(
 						? request.partition
 						: null,
 				);
-				if (!job)
-					return modifyHTML(
+				if (!job) {
+					const shell = modifyHTML(
 						markup,
 						url,
 						shellConfig,
@@ -5136,6 +5172,8 @@ export function registerRewrites(
 						facts,
 						syncBlocked,
 					);
+					return encoding === 'utf-8' ? shell : encodeShell(shell, encoding);
+				}
 				// The page does not wait for the rewrite workers: the shell's
 				// first part (the inject bundle's script and the markup) goes out
 				// as soon as they have the scripts, and the browser loads and
@@ -5161,7 +5199,7 @@ export function registerRewrites(
 					facts,
 					syncBlocked,
 				);
-				const first = UTF8.encode(head);
+				const first = encodeShell(head, encoding);
 				return new ReadableStream<Uint8Array>({
 					start(controller) {
 						controller.enqueue(first);
@@ -5175,7 +5213,7 @@ export function registerRewrites(
 								console.warn('Stomp: no prewritten table:', error);
 							}
 							try {
-								controller.enqueue(UTF8.encode(tail(table)));
+								controller.enqueue(encodeShell(tail(table), encoding));
 								controller.close();
 							} catch (error) {
 								// the page went away

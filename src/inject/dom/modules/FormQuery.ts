@@ -2,6 +2,7 @@ import { FORM_QUERY_NAME } from '../../../routeURL';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import { deferred } from '../deferred';
 
 /**
  * A GET form's fields go after its action's route as the browser writes
@@ -86,13 +87,32 @@ export default class FormQueryModule extends Module<DocumentClient> {
 				>),
 			];
 			// the application/x-www-form-urlencoded serializer: a file is its name
-			const query = new global.URLSearchParams();
-			for (const [name, value] of list)
-				query.append(name, value instanceof File ? value.name : value);
+			const pairs = list.map(([name, value]): [string, string] => [
+				name,
+				value instanceof File ? value.name : value,
+			]);
+			const acceptCharset = Reflect.apply(hasAttribute, form, [
+				'accept-charset',
+			])
+				? (Reflect.apply(getAttribute, form, ['accept-charset']) as string)
+				: null;
+			// a legacy encoding the form names that is not its document's has no
+			// encoder but the browser's own submission, which writes the fields
+			// after the route as they are (the worker takes them so)
+			const encoding = client.formEncoding(acceptCharset);
+			if (encoding === 'other') return;
+			let serialized: string;
+			if (encoding === 'document')
+				serialized = deferred().legacyFormQuery(pairs, client.legacyEncoder()!);
+			else {
+				const query = new global.URLSearchParams();
+				for (const [name, value] of pairs) query.append(name, value);
+				serialized = query.toString();
+			}
 			for (const [name] of list) Reflect.apply(deleteEntry, data, [name]);
 			Reflect.apply(appendEntry, data, [
 				FORM_QUERY_NAME,
-				codec.encode(query.toString()),
+				codec.encode(serialized),
 			]);
 		};
 		const arm = (form: HTMLFormElement, submitter: Element | null) => {

@@ -154,7 +154,10 @@ export default class LocationModule extends Module<DocumentClient> {
 								const url = String(args[0]);
 								if (failsToParse(moduleClient, url))
 									return Reflect.apply(locationDescriptor.set!, real, [url]);
-								args[0] = new URL(url, moduleClient.baseURL.toString());
+								args[0] = moduleClient.encodingParse(
+									url,
+									moduleClient.baseURL.toString(),
+								);
 							}
 
 							// Location's own: a value that is no scheme throws, where
@@ -255,7 +258,10 @@ export default class LocationModule extends Module<DocumentClient> {
 			const url = args.length ? String(args[0]) : '';
 			if (!args.length || failsToParse(moduleClient, url))
 				return Reflect.apply(real[method], real, args.length ? [url] : []);
-			const destination = new URL(url, moduleClient.baseURL.toString());
+			const destination = moduleClient.encodingParse(
+				url,
+				moduleClient.baseURL.toString(),
+			);
 			moduleClient.getModule(NavigationHintModule)?.hint(destination.href);
 			return go(destination, method);
 		};

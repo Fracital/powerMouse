@@ -809,10 +809,16 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 					!this.#async &&
 					(!syncAllowed() ||
 						that.client.connectRefusal(
-							new URL(this.#url, that.client.baseURL.toString()),
+							that.client.encodingParse(
+								this.#url,
+								that.client.baseURL.toString(),
+							),
 						))
 				) {
-					const failed = new URL(this.#url, that.client.baseURL.toString());
+					const failed = that.client.encodingParse(
+						this.#url,
+						that.client.baseURL.toString(),
+					);
 					failed.hash = '';
 					failed.username = '';
 					failed.password = '';
@@ -853,7 +859,10 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				// credentials (open()'s or the URL's) go to the worker, which
 				// answers the site's challenge with them (they are never sent before
 				// one); the route is of the URL without them
-				const target = new URL(this.#url, that.client.baseURL.toString());
+				const target = that.client.encodingParse(
+					this.#url,
+					that.client.baseURL.toString(),
+				);
 				if (this.#username !== null) target.username = this.#username;
 				if (this.#password !== null) target.password = this.#password;
 				this.#credentialed = null;

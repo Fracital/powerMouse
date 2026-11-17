@@ -394,6 +394,15 @@ export default class Client {
 		return this.url;
 	}
 	/**
+	 * `input` against `base` as the browser parses the URL of an element, an
+	 * XMLHttpRequest, a beacon, an EventSource, a worker or a navigation: a
+	 * document's query in the document's encoding (DocumentClient), a
+	 * worker's in UTF-8, as `new URL` does
+	 */
+	encodingParse(input: string, base?: string, _owner?: Node): URL {
+		return new URL(input, base);
+	}
+	/**
 	 * @internal set by the Unroute module: the URL of the external script or
 	 * module whose code called into the inject, null for any other caller (a
 	 * script of the markup, code made from a string, none to be found)

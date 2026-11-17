@@ -23,8 +23,5 @@
 		"Connecting to shared worker with different options should be blocked: module to default": "FAIL: promise_test: Unhandled rejection with value: \"Worker loaded succesfully\"",
 		"Connecting to shared worker with different options should be blocked: classic to module": "FAIL: promise_test: Unhandled rejection with value: \"Worker loaded succesfully\"",
 		"Connecting to shared worker with different options should be blocked: module to classic": "FAIL: promise_test: Unhandled rejection with value: \"Worker loaded succesfully\""
-	},
-	"/workers/worker-url-encoding.html": {
-		"Worker URL is parsed using document encoding": "FAIL: assert_equals: expected \"?%DF\" but got \"?%C3%9F\""
 	}
 }
