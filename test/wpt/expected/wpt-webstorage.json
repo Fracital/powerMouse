@@ -67,18 +67,6 @@
 	"/webstorage/event_setattribute.html": {
 		"sessionStorage mutations fire StorageEvents that are caught by the event listener attached via setattribute.": "FAIL: assert_unreached: Timeout: only got 0, expected 1 events Reached unreachable code"
 	},
-	"/webstorage/storage_key.window.html": {
-		"localStorage.key(4294967296) should return the right thing.": "FAIL: assert_not_equals: got disallowed value null",
-		"localStorage.key(4294967297) should return the right thing.": "FAIL: assert_not_equals: got disallowed value null",
-		"localStorage.key(4294967298) should return the right thing.": "FAIL: assert_not_equals: got disallowed value null",
-		"localStorage.key(4294967299) should return the right thing.": "FAIL: assert_not_equals: got disallowed value null",
-		"localStorage.key() should return null for out-of-range arguments.": "FAIL: assert_equals: storage.key(-1) expected (object) null but got (undefined) undefined",
-		"sessionStorage.key(4294967296) should return the right thing.": "FAIL: assert_not_equals: got disallowed value null",
-		"sessionStorage.key(4294967297) should return the right thing.": "FAIL: assert_not_equals: got disallowed value null",
-		"sessionStorage.key(4294967298) should return the right thing.": "FAIL: assert_not_equals: got disallowed value null",
-		"sessionStorage.key(4294967299) should return the right thing.": "FAIL: assert_not_equals: got disallowed value null",
-		"sessionStorage.key() should return null for out-of-range arguments.": "FAIL: assert_equals: storage.key(-1) expected (object) null but got (undefined) undefined"
-	},
 	"/webstorage/storage_local_quota_independent_from_session.window.html": {
 		"localStorage retains comparable quota after sessionStorage exhaustion": "FAIL: assert_throws_quotaexceedederror: function \"() => { while (true) { localStorage.setItem(\"\" + key + indexBefore, \"\" + val + indexBefore); indexBefore++; } }\" threw object \"QuotaExceededError: Failed to"
 	},

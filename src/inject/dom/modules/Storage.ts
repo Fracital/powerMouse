@@ -434,7 +434,9 @@ export default class StorageModule extends Module<DocumentClient> {
 			key(...args: [unknown]): string | null {
 				catchRequiredArguments(args.length, 1, 'Storage', 'key');
 
-				const index = Number(args[0]);
+				// an unsigned long, as WebIDL converts it: 2 ** 32 is 0 again, -1
+				// is past the end
+				const index = +(args[0] as number) >>> 0;
 
 				const result = storageKeys(this.#directory);
 
