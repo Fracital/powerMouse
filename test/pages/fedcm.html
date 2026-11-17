@@ -126,6 +126,18 @@
 			}
 			case 'flow':
 				return { identity: { providers: [provider()] }, mediation };
+			// a provider whose config is missing, then a real one: the first
+			// fails quietly and the second answers
+			case 'secondProvider':
+				return {
+					identity: {
+						providers: [
+							{ configURL: params.missing, clientId, nonce },
+							provider(),
+						],
+					},
+					mediation,
+				};
 			default:
 				throw new Error(`unknown scenario ${name}`);
 		}
@@ -139,6 +151,19 @@
 		return true;
 	};
 	window.readPending = () => window.__pending;
+	// a scenario run as a page's first identity request made after it put a
+	// Symbol of its own in place (restored once the request settles)
+	window.runWithOwnSymbol = async (name, params = {}) => {
+		const real = Symbol;
+		window.Symbol = function Symbol() {
+			return null;
+		};
+		try {
+			return await settleGet(optionsFor(name, params));
+		} finally {
+			window.Symbol = real;
+		}
+	};
 
 	// the IdP-side statics and navigator.login.setStatus, settled the same way
 	const settle = async (call) => {

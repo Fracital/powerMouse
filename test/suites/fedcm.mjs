@@ -145,6 +145,27 @@ for (const [mode, base] of [
 		JSON.stringify({ proxied: detect, native: ref.detect }).slice(0, 2000),
 	);
 
+	// 1b. the page's first identity request, made after it replaced Symbol:
+	//     the flow (made at that request) keeps none of the page's globals,
+	//     so a provider that fails quietly still hands on to the next
+	{
+		const run = `own-symbol-${mode}-${Date.now()}`;
+		await frame.evaluate((o) => window.signIn(o), sameOrigin);
+		const got = await frame.evaluate(
+			(a) => window.runWithOwnSymbol('secondProvider', a),
+			{
+				configURL: configOf(sameOrigin, run),
+				missing: `${sameOrigin}/pages/fedcm-missing.json`,
+				mediation: 'optional',
+			},
+		);
+		ok(
+			`${mode}: a first identity request after the page replaced Symbol passes a failed provider on to the next`,
+			got.kind === 'token' && got.token === 'idtok.acct-1.true.n0',
+			JSON.stringify(got),
+		);
+	}
+
 	// 2. malformed input rejects with Chrome's own errors
 	const validation = {};
 	for (const name of VALIDATION)

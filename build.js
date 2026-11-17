@@ -423,6 +423,7 @@ const DEFERRED_FILES = new Set(
 		'src/inject/dom/ancestorOriginsList.ts',
 		'src/inject/dom/attributeViewMethods.ts',
 		'src/inject/dom/beaconRelay.ts',
+		'src/inject/dom/credentialFlows.ts',
 		'src/inject/dom/deferredParts.ts',
 		'src/inject/dom/legacyEncoding.ts',
 		'src/inject/dom/markupMembers.ts',

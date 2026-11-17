@@ -56,6 +56,7 @@ import { checkedHeader, checkedMethod, notOpened } from '../xhrChecks';
 import { ancestorOriginsList } from './ancestorOriginsList';
 import { attributeViewMethods } from './attributeViewMethods';
 import { relayBeacon } from './beaconRelay';
+import { identityFlow, relyingPartyGuard } from './credentialFlows';
 import { formEncoding, legacyFormQuery, legacyQuery } from './legacyEncoding';
 import { markupMembers } from './markupMembers';
 import FingerprintModule from './modules/Fingerprint';
@@ -94,6 +95,10 @@ const parts = {
 	openerFacts,
 	opensWithoutOpener,
 	writeStream,
+	// the FedCM flow and the guard of the browser's WebAuthn calls, at a
+	// document's first such call (modules/Credentials.ts)
+	identityFlow,
+	relyingPartyGuard,
 };
 
 export type DeferredParts = typeof parts;
