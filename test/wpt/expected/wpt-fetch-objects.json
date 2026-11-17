@@ -6,8 +6,5 @@
 		"XMLHttpRequest with value x%00x needs to throw": "FAIL: assert_throws_dom: function \"() => xhr.setRequestHeader(\"value-test\", val)\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid value\" that is not a DOMException SyntaxError: pro",
 		"XMLHttpRequest with value x%0Ax needs to throw": "FAIL: assert_throws_dom: function \"() => xhr.setRequestHeader(\"value-test\", val)\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid value\" that is not a DOMException SyntaxError: pro",
 		"XMLHttpRequest with value x%0Dx needs to throw": "FAIL: assert_throws_dom: function \"() => xhr.setRequestHeader(\"value-test\", val)\" threw object \"TypeError: Failed to execute 'append' on 'Headers': Invalid value\" that is not a DOMException SyntaxError: pro"
-	},
-	"/fetch/api/response/multi-globals/url-parsing.html": {
-		"should parse the redirect Location URL relative to the current settings object": "FAIL: assert_equals: expected \"http://localhost:PORT/fetch/api/response/multi-globals/current/success/url\" but got \"http://127.0.0.1:PORT/stomp/Hf1LjRYn/html:nested:z_i5KbKTPVfK8Jvt9QwanRbK4gzpVw/url\""
 	}
 }

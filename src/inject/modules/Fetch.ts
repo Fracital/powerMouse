@@ -378,6 +378,26 @@ export default class FetchModule extends Module<Client> {
 		// over the URL's readback above
 		this.hookResponses();
 
+		// Response.redirect(url) resolves a relative URL against the page's
+		// own, where the browser's base is the route (its Location header
+		// would name the proxy)
+		this.client.global.Response.redirect = proxyModule.wrapFunction(
+			this.client.global.Response.redirect,
+			(target, that, args) => {
+				if (!args.length) return Reflect.apply(target, that, args);
+				let location: string;
+				try {
+					location = new URL(String(args[0]), this.client.baseURL.toString())
+						.href;
+				} catch (error) {
+					throw new this.client.global.TypeError(
+						"Failed to execute 'redirect' on 'Response': Invalid URL",
+					);
+				}
+				return Reflect.apply(target, that, [location, ...args.slice(1)]);
+			},
+		);
+
 		/**
 		 * An init whose `referrer` the browser can take. The page names a URL
 		 * of its own: one of its origin goes as its route (same-origin to the
