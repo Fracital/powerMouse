@@ -140,6 +140,7 @@ function applyAttribute(
 	element: Element,
 	attribute: string,
 	value: string | null,
+	page = false,
 ) {
 	try {
 		if (value === null) {
@@ -180,6 +181,8 @@ function applyAttribute(
 		if (!appliedTab.has(element)) appliedTab.set(element, new Map());
 		appliedTab.get(element)!.set(attribute, value);
 	} catch (error) {
+		// the page's own write throws what the browser throws at it
+		if (page) throw error;
 		console.warn('bad attribute', attribute, value, error);
 	}
 }
@@ -2805,7 +2808,27 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							!pendingAttributes(that) &&
 							!this.hooksAttribute(attribute)
 						)
-							return applyAttribute(that, attribute, value);
+							try {
+								return applyAttribute(that, attribute, value, true);
+							} catch (error) {
+								// an invalid name: the browser's own error, which names
+								// the attribute as the page wrote it, not lowercased. It
+								// is asked of an element of an inert document (and with
+								// no value, which the page's object would be read for):
+								// a name the browser takes writes nothing there, and the
+								// page's value is never written unrewritten on its own
+								// element when the failure was not its name (a builtin
+								// the page replaced and the hooks asked)
+								Reflect.apply(
+									target,
+									createElementIn(
+										inertDocumentOf(this.client.global.document),
+										'div',
+									),
+									[args[0], ''],
+								);
+								return;
+							}
 						usePrototype(that, CustomElement.prototype, (element) => {
 							element.setAttribute(attribute, value);
 
