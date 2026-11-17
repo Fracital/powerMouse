@@ -82,6 +82,8 @@ export function workletAccess(access: string): string {
 		Object.create(null, { [Symbol.toPrimitive]: { value: () => '[object Object]' } }),
 	);
 	const write = (object, property, value) => (object[property] = value);
+	// (the options importRoute was given, for the import it routed)
+	let pendingOptions;
 	const api = {
 		get2: (target, key, partial, optional) =>
 			nullish(target) && optional ? undefined : target[keyOf(key)],
@@ -207,7 +209,15 @@ export function workletAccess(access: string): string {
 		isEval: () => false,
 		import: (baseURL, url) => import(url),
 		imported: (promise) => promise,
-		importRoute: (baseURL, url) => url,
+		importRoute: (baseURL, url, options) => {
+			pendingOptions = options;
+			return url;
+		},
+		importOptions: () => {
+			const options = pendingOptions;
+			pendingOptions = undefined;
+			return options;
+		},
 		pattern: (object) => object,
 		source: (value) => value,
 		src: () => {},

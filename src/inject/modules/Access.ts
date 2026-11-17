@@ -219,6 +219,49 @@ export default class AccessModule extends Module<Client> {
 				throw error;
 			},
 		});
+		/**
+		 * `import(url, options)`'s options, read once in the order the import
+		 * reads them (options.with, then each of its own enumerable string
+		 * keys' descriptor and value): the copy the import is handed instead
+		 * reads nothing of the page's, and what the read threw is thrown
+		 * again by the copy, so the import rejects with it. What is not an
+		 * object (options, its `with`) is handed on as it is, for the import
+		 * to refuse. `type`: the module type the attributes name.
+		 */
+		let pendingOptions: unknown;
+		const readImportOptions = (
+			options: unknown,
+		): { options: unknown; type: unknown } => {
+			if (!isObject(options)) return { options, type: undefined };
+			const throwing = (error: unknown) => ({
+				options: {
+					get with() {
+						throw error;
+					},
+				},
+				type: undefined,
+			});
+			let attributes: unknown;
+			try {
+				attributes = (options as { with?: unknown }).with;
+			} catch (error) {
+				return throwing(error);
+			}
+			if (!isObject(attributes))
+				return { options: { with: attributes }, type: undefined };
+			const copy = create(null) as Record<string, unknown>;
+			try {
+				for (const key of Reflect.ownKeys(attributes)) {
+					if (typeof key !== 'string') continue;
+					const descriptor = Reflect.getOwnPropertyDescriptor(attributes, key);
+					if (!descriptor?.enumerable) continue;
+					copy[key] = Reflect.get(attributes, key);
+				}
+			} catch (error) {
+				return throwing(error);
+			}
+			return { options: { with: copy }, type: copy.type };
+		};
 		const route = (
 			baseURL: string | undefined,
 			url: unknown,
@@ -1433,20 +1476,32 @@ export default class AccessModule extends Module<Client> {
 			imported: (promise: Promise<unknown>): Promise<unknown> =>
 				imported(promise),
 			// the URL `import(url, options)` loads: the rewriter keeps the import
-			// itself, with its options, in the page (see modifyJS)
+			// itself in the page (see modifyJS), handed the routed URL and the
+			// options as this read them (`importOptions`)
 			importRoute: (
 				baseURL: string | undefined,
 				url: string,
 				options: unknown,
 			): string => {
-				let moduleType: unknown;
+				// the specifier is converted first, and options that its
+				// conversion threw for are not read, as the import does
+				let specifier: string;
 				try {
-					moduleType = (options as { with?: { type?: unknown } } | undefined)
-						?.with?.type;
+					specifier = `${url as string}`;
 				} catch (error) {
-					// options that throw: the browser's import throws the same
+					pendingOptions = undefined;
+					return failing(error) as unknown as string;
 				}
-				return route(baseURL, url, moduleType);
+				const read = readImportOptions(options);
+				pendingOptions = read.options;
+				return route(baseURL, specifier, read.type);
+			},
+			// the options importRoute read, for the import it routed (called
+			// right after it, with nothing of the page's in between)
+			importOptions: (): unknown => {
+				const options = pendingOptions;
+				pendingOptions = undefined;
+				return options;
 			},
 			// what a module's own import.meta.resolve answered (an import map's
 			// target is a route): the page's URL (src/scriptLead.ts). A prefix
