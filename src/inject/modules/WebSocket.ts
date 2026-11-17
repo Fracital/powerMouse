@@ -8,6 +8,7 @@ import { SOCKET_PARTITION } from '../../transport/messages';
 import Client from '../Client';
 import Module from '../Module';
 import { failsToParse, withStack } from '../nativeErrors';
+import { LazyWeakSet } from '../ownCollections';
 import MixedContentModule from './MixedContent';
 import ProxyModule, { classConstant, onEventTarget } from './Proxy';
 
@@ -20,7 +21,7 @@ export default class WebSocketModule extends Module<Client> {
 		const client = this.client;
 		const realm = client.global;
 		const proxyModule = client.getModule(ProxyModule)!;
-		const instances = new WeakSet();
+		const instances = new LazyWeakSet();
 		const { origin } = client.url.url;
 		const NativeWebSocket = realm.WebSocket;
 		const { CONNECTING, OPEN, CLOSING, CLOSED } = NativeWebSocket;
@@ -317,7 +318,7 @@ export default class WebSocketModule extends Module<Client> {
 			realm as { WebSocketStream?: new (...args: any[]) => any }
 		).WebSocketStream;
 		if (typeof nativeStream === 'function') {
-			const streamInstances = new WeakSet();
+			const streamInstances = new LazyWeakSet();
 			const networkError = (message: string) =>
 				withStack(new DOMException(message, 'NetworkError'));
 			class MockWebSocketStream {

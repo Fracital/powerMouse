@@ -1,4 +1,5 @@
 import type Client from './Client';
+import { LazyMap } from './ownCollections';
 import { printExpression } from './rewriter';
 
 /**
@@ -146,8 +147,8 @@ export default class ErrorMessages {
 	#client: Client;
 	#TypeError: ErrorConstructor;
 	/** the template of each kind, `[before, after]` the printed expression */
-	#templates = new Map<Probe, [string, string] | null>();
-	#printed = new Map<string, string | null>();
+	#templates = new LazyMap<Probe, [string, string] | null>();
+	#printed = new LazyMap<string, string | null>();
 	constructor(client: Client) {
 		this.#client = client;
 		this.#TypeError = (client.global as unknown as typeof globalThis)

@@ -14,6 +14,7 @@ import {
 	unrouteURL,
 } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
+import { LazyMap, LazyWeakMap } from '../../ownCollections';
 import { getPublicSuffix } from '../../rewriter';
 import {
 	isOwnInjector,
@@ -64,7 +65,7 @@ const appliedTab = new WeakMap<Element, Map<string, string | null>>();
 // the namespace ('' for none) of each prefixed attribute a hook removed
 // (xlink:href, while a load's copy is on its way): set again, it is the same
 // attribute, not one of no namespace that the element ignores
-const removedNamespaces = new WeakMap<Element, Map<string, string>>();
+const removedNamespaces = new LazyWeakMap<Element, Map<string, string>>();
 
 const ORIGINAL_ATTRIBUTE = MARKER;
 /**
@@ -520,7 +521,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		this.#writeHooks.clear();
 	}
 	/** the attribute hooks by element name and attribute (attributeHooks) */
-	#hooksByName = new Map<string, Map<string, readonly HookEntry[]>>();
+	#hooksByName = new LazyMap<string, Map<string, readonly HookEntry[]>>();
 	/** every attribute name an attribute hook watches, on any element */
 	#hookedNames: Set<string> | null = null;
 	/** the sets of names a hook watches (AttributeHook) */
@@ -636,7 +637,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 	 * by constructor and property (a write's), in the hooks' order, until
 	 * useAttributes adds any: each read and write looked at every hook
 	 */
-	#readHooks = new Map<string, readonly HookEntry[]>();
+	#readHooks = new LazyMap<string, readonly HookEntry[]>();
 	#writeHooks = new Map<ElementCtor, Map<string, readonly HookEntry[]>>();
 	#propertyHooks(property: string): readonly HookEntry[] {
 		let entries = this.#readHooks.get(property);
@@ -2159,14 +2160,14 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		}
 
 		// Element.attributes: a view of the map without the markers
-		const attributeMaps = new WeakMap<NamedNodeMap, NamedNodeMap>();
-		const views = new WeakMap<object, AttributeView>();
+		const attributeMaps = new LazyWeakMap<NamedNodeMap, NamedNodeMap>();
+		const views = new LazyWeakMap<object, AttributeView>();
 		/** the element's hooked setAttributeNode and setAttributeNodeNS, once they are wrapped below */
 		const setNamedItems: {
 			setAttributeNode?: Element['setAttributeNode'];
 			setAttributeNodeNS?: Element['setAttributeNodeNS'];
 		} = {};
-		const standIns = new WeakMap<Attr, Attr>();
+		const standIns = new LazyWeakMap<Attr, Attr>();
 		const nativeCreateAttribute = realm.Document.prototype.createAttribute;
 		const nativeOwnerDocument = Reflect.getOwnPropertyDescriptor(
 			realm.Node.prototype,

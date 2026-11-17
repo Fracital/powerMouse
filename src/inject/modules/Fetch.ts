@@ -20,6 +20,7 @@ import {
 import Client from '../Client';
 import Module from '../Module';
 import { failsToParse, withStack } from '../nativeErrors';
+import { LazyWeakMap, LazyWeakSet } from '../ownCollections';
 import { requestRefused } from '../requestVerdict';
 import ProxyModule, { catchRequiredArguments, ownerOf } from './Proxy';
 import { unrouteURL } from './Unroute';
@@ -70,11 +71,11 @@ const nativeResponseBody = Reflect.getOwnPropertyDescriptor(
  * preload) is `basic`. Kept for every realm of the bundle (a service
  * worker's answer, a response out of the Cache API)
  */
-const responseTypes = new WeakMap<Response, 'basic' | 'cors' | 'opaque'>();
+const responseTypes = new LazyWeakMap<Response, 'basic' | 'cors' | 'opaque'>();
 /** the page's URL of a response, where the browser has the route */
-const responseURLs = new WeakMap<Response, string>();
+const responseURLs = new LazyWeakMap<Response, string>();
 /** responses that came with RESPONSE_TYPE_HEADER, which the page never sees */
-const marked = new WeakSet<Response>();
+const marked = new LazyWeakSet<Response>();
 
 /** the names of a Server-Timing value's metrics */
 const metricNames = (value: string) =>
@@ -306,7 +307,7 @@ export default class FetchModule extends Module<Client> {
 		const realm = client.global;
 		const proxyModule = client.getModule(ProxyModule)!;
 
-		const eventSourceURLs = new WeakMap<EventSource, string>();
+		const eventSourceURLs = new LazyWeakMap<EventSource, string>();
 
 		realm.EventSource = proxyModule.wrapFunction(
 			realm.EventSource,
@@ -732,7 +733,7 @@ export default class FetchModule extends Module<Client> {
 			const nativeRemove = global.EventTarget.prototype.removeEventListener;
 			const failed = (message: string) =>
 				`Failed to execute 'fetchLater' on 'Window': ${message}`;
-			const deferred = new WeakMap<object, { activated: boolean }>();
+			const deferred = new LazyWeakMap<object, { activated: boolean }>();
 			Reflect.defineProperty(resultPrototype, 'activated', {
 				...Reflect.getOwnPropertyDescriptor(resultPrototype, 'activated'),
 				get: proxyModule.wrapFunction(activatedGetter, (target, that, args) => {
@@ -827,8 +828,8 @@ export default class FetchModule extends Module<Client> {
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const global = this.client.global;
 		const proto = global.Response.prototype;
-		const emptyHeaders = new WeakMap<Response, Headers>();
-		const shownHeaders = new WeakMap<Response, Headers>();
+		const emptyHeaders = new LazyWeakMap<Response, Headers>();
+		const shownHeaders = new LazyWeakMap<Response, Headers>();
 		const opaque: Record<string, (that: Response) => unknown> = {
 			status: () => 0,
 			ok: () => false,

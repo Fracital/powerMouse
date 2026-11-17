@@ -2,6 +2,7 @@ import Module from '../../Module';
 import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
+import { LazyWeakMap } from '../../ownCollections';
 import { blobLoads } from '../blobLoads';
 import DocumentClient from '../Client';
 import { responseURLOf } from '../responseDocuments';
@@ -175,7 +176,7 @@ export default class ReadbackModule extends Module<DocumentClient> {
 		// The rewritten text stands in the first text node and the others are
 		// empty, so each reads back as the piece the page gave it for as long
 		// as the script holds that text.
-		const pieces = new WeakMap<object, string>();
+		const pieces = new LazyWeakMap<object, string>();
 		client.scriptSource = (script, written, rewritten, texts) => {
 			sources.set(script as HTMLScriptElement, { written, rewritten });
 			for (const [text, piece] of texts) pieces.set(text, piece);

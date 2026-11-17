@@ -1,3 +1,5 @@
+import { LazyWeakMap } from '../ownCollections';
+
 /**
  * The page's iframe sandbox, as the proxy applies it. The page's value is kept
  * in the frame's marker attribute (read back as written) and the real
@@ -50,7 +52,7 @@ export function scriptPolicy(nonce: string): string {
 // the nonce of each document whose policy is in place: a frame's about:blank
 // guarded by its parent (DOMAttributes) keeps it for the client the parent
 // injects there later, which builds its shells with it
-const nonces = new WeakMap<Document, string>();
+const nonces = new LazyWeakMap<Document, string>();
 
 /** the nonce of `document`'s script policy, or null when it has none */
 export function documentNonce(document: Document): string | null {

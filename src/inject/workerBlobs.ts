@@ -1,3 +1,5 @@
+import { LazyMap } from './ownCollections';
+
 // The Blob behind each blob: URL this realm minted (the browser's form), as
 // the URL registry holds it: recorded by createObjectURL, dropped by
 // revokeObjectURL. The browser resolves a worker's blob: URL when the
@@ -6,7 +8,7 @@
 // own that imports the page's script a moment later, inside the worker: it
 // imports a private URL of the same Blob instead (WorkerModule), and the
 // page's revoke stays native and immediate.
-export const blobsByURL = new Map<string, Blob>();
+export const blobsByURL = new LazyMap<string, Blob>();
 
 /** what a worker's bootstrap posts once it has imported its private URL (released then) */
 export const WORKER_LOADED = '$stomp$workerLoaded';

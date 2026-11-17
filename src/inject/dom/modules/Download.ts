@@ -3,6 +3,7 @@ import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { scopePrefix } from '../../modules/Unroute';
+import { LazyWeakSet } from '../../ownCollections';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { loadFetch } from '../loadGrants';
 
@@ -43,8 +44,8 @@ export default class DownloadModule extends Module<DocumentClient> {
 		const proxyModule = client.getModule(ProxyModule)!;
 		const nativePreventDefault = global.Event.prototype.preventDefault;
 		// clicks this module cancelled, and which of them the page cancelled
-		const ours = new WeakSet<Event>();
-		const cancelledByPage = new WeakSet<Event>();
+		const ours = new LazyWeakSet<Event>();
+		const cancelledByPage = new LazyWeakSet<Event>();
 		global.Event.prototype.preventDefault = proxyModule.wrapFunction(
 			nativePreventDefault,
 			(target, that, args) => {

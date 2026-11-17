@@ -1,3 +1,5 @@
+import { LazyWeakMap } from '../ownCollections';
+
 /**
  * The documents an XMLHttpRequest made of a response, by the URL they read
  * back: the response's, as natively (`document.URL`, `documentURI`, a
@@ -8,7 +10,7 @@
  * client of this bundle: a document is one realm's or another's, never
  * both.
  */
-export const responseURLs = new WeakMap<Document, string>();
+export const responseURLs = new LazyWeakMap<Document, string>();
 
 /** the URL `node`'s document reads back when it is a response's, else null */
 export function responseURLOf(node: Node | null | undefined): string | null {

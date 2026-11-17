@@ -1,5 +1,6 @@
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
+import { LazyWeakMap } from '../../ownCollections';
 import type DocumentClient from '../Client';
 import { nativeElement } from './DOMHooks';
 
@@ -62,7 +63,7 @@ export default class TokenListsModule extends Module<DocumentClient> {
 		const pageSetAttribute = global.Element.prototype.setAttribute;
 
 		// the detached copy behind each element's list, as [copy, attribute]
-		const copies = new WeakMap<Element, [Element, string]>();
+		const copies = new LazyWeakMap<Element, [Element, string]>();
 		const sync = (element: Element, value: string | null) => {
 			const entry = copies.get(element);
 			if (!entry) return;
@@ -77,7 +78,7 @@ export default class TokenListsModule extends Module<DocumentClient> {
 		this.sync = sync;
 
 		// each hooked list is the same object every time its getter answers
-		const owners = new WeakMap<object, [Element, string, string]>();
+		const owners = new LazyWeakMap<object, [Element, string, string]>();
 		for (const [ctor, property, attribute] of HOOKED_LISTS) {
 			const prototype = (global as any)[ctor]?.prototype;
 			const descriptor =

@@ -1,6 +1,7 @@
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { unrouteCSS } from '../../modules/Unroute';
+import { LazySet, LazyWeakMap, LazyWeakSet } from '../../ownCollections';
 import type DocumentClient from '../Client';
 
 /**
@@ -105,7 +106,7 @@ interface ObserverState {
 	created: number;
 }
 
-const states = new WeakMap<MutationObserver, ObserverState>();
+const states = new LazyWeakMap<MutationObserver, ObserverState>();
 /** how many observers were made (ObserverState.created) */
 let made = 0;
 /**
@@ -118,22 +119,23 @@ function inOrder<T>(entries: [MutationObserver, T][]): [MutationObserver, T][] {
 	return entries;
 }
 /** observers with a registration that sees attributes */
-const live = new Set<WeakRef<MutationObserver>>();
+const live = new LazySet<WeakRef<MutationObserver>>();
 /**
  * Observers with a registration of any kind (hiddenMutation). A collected
  * observer's entry goes when the set is next walked, or when it has doubled
  * (observers that are made, used and dropped without a disconnect).
  */
-const observing = new Set<WeakRef<MutationObserver>>();
+const observing = new LazySet<WeakRef<MutationObserver>>();
 let observingSweep = 64;
 function observes(ref: WeakRef<MutationObserver>) {
 	observing.add(ref);
 	if (observing.size < observingSweep) return;
-	for (const entry of observing) if (!entry.deref()) observing.delete(entry);
+	for (const entry of observing.values())
+		if (!entry.deref()) observing.delete(entry);
 	observingSweep = Math.max(64, observing.size * 2);
 }
 /** records already shaped for the page (an inner write's result) */
-const settled = new WeakSet<object>();
+const settled = new LazyWeakSet<object>();
 
 interface Write {
 	target: Element;
@@ -359,7 +361,10 @@ function enqueue(
 		notifying = false;
 		takeQueued();
 		const due = inOrder(
-			[...waiting].map((waits): [MutationObserver, null] => [waits, null]),
+			[...waiting.values()].map((waits): [MutationObserver, null] => [
+				waits,
+				null,
+			]),
 		);
 		waiting.clear();
 		for (const [waits] of due) deliver(waits);
@@ -373,7 +378,7 @@ function enqueue(
  */
 function takeQueued(): boolean {
 	let any = false;
-	for (const ref of observing) {
+	for (const ref of observing.values()) {
 		const observer = ref.deref();
 		const state = observer && states.get(observer);
 		if (!state) continue;
@@ -389,7 +394,7 @@ function takeQueued(): boolean {
 	return any;
 }
 /** the observers `enqueue` gave records to, until the microtask that notifies them */
-const waiting = new Set<MutationObserver>();
+const waiting = new LazySet<MutationObserver>();
 let notifying = false;
 
 function deliver(observer: MutationObserver) {
@@ -433,7 +438,7 @@ function visible(records: MutationRecord[]): MutationRecord[] {
 function drain(observers = live) {
 	const write = writes[writes.length - 1];
 	const loose: [MutationObserver, MutationRecord[]][] = [];
-	for (const ref of observers) {
+	for (const ref of observers.values()) {
 		const observer = ref.deref();
 		if (!observer) {
 			observers.delete(ref);
@@ -565,7 +570,7 @@ export function hiddenMutation<T>(callback: () => T): T {
 		return callback();
 	} finally {
 		hiding = false;
-		for (const ref of observing) {
+		for (const ref of observing.values()) {
 			const observer = ref.deref();
 			if (observer) Reflect.apply(states.get(observer)!.take, observer, []);
 		}

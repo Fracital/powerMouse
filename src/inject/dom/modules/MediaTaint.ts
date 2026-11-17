@@ -1,6 +1,7 @@
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { withStack } from '../../nativeErrors';
+import { LazyWeakMap } from '../../ownCollections';
 import type DocumentClient from '../Client';
 import CanvasTaintModule from './CanvasTaint';
 
@@ -97,7 +98,7 @@ export default class MediaTaintModule extends Module<DocumentClient> {
 
 		// the tracks the inject disabled while their element loads, and what
 		// the page set them to: the page reads and writes its own value
-		const held = new WeakMap<object, boolean>();
+		const held = new LazyWeakMap<object, boolean>();
 		Reflect.defineProperty(trackProto, 'enabled', {
 			...enabled,
 			get: proxyModule.wrapFunction(enabled.get!, (target, that, args) => {
@@ -141,7 +142,7 @@ export default class MediaTaintModule extends Module<DocumentClient> {
 		// --- media elements ---------------------------------------------------
 		const readyState = getter(mediaProto, 'readyState');
 		/** per element: its captured streams and its source nodes' gates */
-		const followed = new WeakMap<
+		const followed = new LazyWeakMap<
 			object,
 			{ streams: Set<object>; gates: Set<object> }
 		>();
@@ -229,7 +230,7 @@ export default class MediaTaintModule extends Module<DocumentClient> {
 		// (the gate is a gain node left at 1, open while the source node is
 		// connected to it: the GainNode and AudioParam interfaces cost a frame
 		// heap, and are not made for a page that has no such source)
-		const sources = new WeakMap<object, { node: object; open: boolean }>();
+		const sources = new LazyWeakMap<object, { node: object; open: boolean }>();
 		gating.set = (gate, open) => {
 			const source = sources.get(gate)!;
 			if (source.open === open) return;

@@ -2,6 +2,7 @@ import { keepSourcesHere, originalSource } from '../../functionSource';
 import Client from '../Client';
 import Module from '../Module';
 import { isNative } from '../nativeUtil';
+import { LazyWeakMap } from '../ownCollections';
 
 // import { getOwnPropertyDescriptors, mirror_attributes } from './rewriteUtil.js';
 
@@ -121,7 +122,7 @@ export function classConstant(target: any, key: string, value: any) {
 
 export function onEventTarget(target: any, event: string) {
 	const property = `on${event}`;
-	const listeners = new WeakMap();
+	const listeners = new LazyWeakMap();
 
 	Reflect.defineProperty(target, property, {
 		enumerable: true,
@@ -698,7 +699,7 @@ export default class ProxyModule extends Module<Client> {
 	 * message), and so is a call with fewer arguments than the native takes
 	 * (its wording, as a TypeError of this realm).
 	 */
-	mirrorClass(from: any, to: any, instances: WeakSet<any>) {
+	mirrorClass(from: any, to: any, instances: { has(value: unknown): boolean }) {
 		const native = from.prototype as object;
 		const mock = to.prototype as object;
 		const realm = this.client.global;

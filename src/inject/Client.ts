@@ -58,6 +58,7 @@ import { BUILD } from '../version';
 import { LINK_SEGMENT } from '../visited';
 import { forbidCodecModule } from '../wasm/codec';
 import Module from './Module';
+import { LazyMap } from './ownCollections';
 import { coreModuleAt, rewriteCounts, rewriterLibraryAt } from './rewriter';
 import {
 	trustedFunction,
@@ -1411,7 +1412,7 @@ export default class Client {
 	 * first 40 characters, with 'report-sample'): what the rewriter made of
 	 * the last strings the page evaluated, by the start of each
 	 */
-	readonly #codeSamples = new Map<string, string>();
+	readonly #codeSamples = new LazyMap<string, string>();
 	/** note that the page's code `page` was evaluated as `native` (codeSample) */
 	noteCodeSample(native: string, page: string) {
 		if (native === page) return;
@@ -1432,7 +1433,7 @@ export default class Client {
 	codeSample(sample: string): string {
 		const direct = this.#codeSamples.get(sample);
 		if (direct !== undefined) return direct;
-		for (const [key, page] of this.#codeSamples)
+		for (const [key, page] of this.#codeSamples.entries())
 			if (key.startsWith(sample)) return page;
 		return sample;
 	}

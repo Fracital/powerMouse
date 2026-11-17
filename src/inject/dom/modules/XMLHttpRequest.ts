@@ -18,6 +18,7 @@ import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule, { classConstant, onEventTarget } from '../../modules/Proxy';
 import UnrouteModule, { unrouteURL } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
+import { LazyWeakSet } from '../../ownCollections';
 import { trustedHTML } from '../../trusted';
 import { trackUploadListeners } from '../../uploadListeners';
 import {
@@ -39,7 +40,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 	listeners?: ReturnType<typeof trackUploadListeners>;
 	apply() {
 		const moduleClient = this.client;
-		const instances = new WeakSet();
+		const instances = new LazyWeakSet();
 		const real = Symbol();
 		// eslint-disable-next-line @typescript-eslint/no-this-alias
 		const that = this;

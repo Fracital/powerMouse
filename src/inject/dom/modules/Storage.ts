@@ -6,6 +6,7 @@ import ProxyModule, {
 	usePrototype,
 } from '../../modules/Proxy';
 import { withStack } from '../../nativeErrors';
+import { LazyMap } from '../../ownCollections';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import SyncModule, { WRITE_BUDGET } from './Sync';
 
@@ -178,7 +179,7 @@ export default class StorageModule extends Module<DocumentClient> {
 		// page unloaded first. Reads of such a key answer from here until the
 		// write landed, which is what the page expects of its own writes;
 		// other documents see the value once it is stored.
-		const pending = new Map<string, Pending>();
+		const pending = new LazyMap<string, Pending>();
 		const pendingOf = (directory: string) => {
 			let shadow = pending.get(directory);
 			if (!shadow) {

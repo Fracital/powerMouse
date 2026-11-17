@@ -98,7 +98,10 @@ export interface BeaconRelay {
 	/** the beacon bytes the document has in flight through an ancestor */
 	own: { bytes: number };
 	/** the bytes in flight through each controlled ancestor, by its client */
-	relayed: WeakMap<object, number>;
+	relayed: {
+		get(key: object): number | undefined;
+		set(key: object, value: number): unknown;
+	};
 	/** the nearest controlled ancestor's client */
 	via: object;
 	url: string;

@@ -12,7 +12,12 @@ import ProxyModule, {
 import { routedPrefix } from '../../modules/Unroute';
 import { failsToParse, withStack } from '../../nativeErrors';
 import { nativeFunction } from '../../nativeUtil';
-import { OwnWeakMap, OwnWeakSet } from '../../ownCollections';
+import {
+	LazySet,
+	LazyWeakMap,
+	OwnWeakMap,
+	OwnWeakSet,
+} from '../../ownCollections';
 import { getPublicSuffix } from '../../rewriter';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { frameDestination, frameOfHeld, heldBefore } from '../freshContext';
@@ -1187,7 +1192,7 @@ export default class ContextModule extends Module<DocumentClient> {
 	exposeNames(proxyModule: ProxyModule) {
 		const moduleClient = this.client;
 		const global = moduleClient.global;
-		const exposed = new Set<string>();
+		const exposed = new LazySet<string>();
 		const accessor = (
 			name: string,
 			get: (that: unknown) => unknown,
@@ -1471,7 +1476,7 @@ export default class ContextModule extends Module<DocumentClient> {
 
 		this.exposeNames(proxyModule);
 
-		const messageData = new WeakMap<MessageEvent, MessageData>();
+		const messageData = new LazyWeakMap<MessageEvent, MessageData>();
 
 		// a BroadcastChannel message carries the sender's origin, which is the
 		// proxy's for every document of this site: the page's own is the real one
@@ -1623,7 +1628,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		const nativePost = realm.postMessage;
 		// (the scope a `with` over another window reads the name through
 		// stands for that window: see postScope)
-		const scopes = new WeakMap<object, object>();
+		const scopes = new LazyWeakMap<object, object>();
 		const poster = (home: Context) =>
 			proxyModule.wrapFunction(nativePost, (target, that, args) => {
 				const receiver: unknown =
@@ -1668,7 +1673,7 @@ export default class ContextModule extends Module<DocumentClient> {
 			});
 		realm.postMessage = poster(realm as Context);
 		moduleClient.hookedPostMessage = realm.postMessage;
-		const posters = new WeakMap<object, unknown>();
+		const posters = new LazyWeakMap<object, unknown>();
 		moduleClient.postMessageOf = (target) => {
 			if (target === realm) return undefined;
 			try {

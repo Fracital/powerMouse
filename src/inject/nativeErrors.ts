@@ -1,5 +1,6 @@
 import type Client from './Client';
 import type DocumentClient from './dom/Client';
+import { LazyWeakMap } from './ownCollections';
 
 // taken when the bundle loads, before any page code could replace it
 const captureStackTrace = (
@@ -26,7 +27,7 @@ export function withStack<T extends object>(error: T, skip = 0): T {
  * that made the access (measured), and a stand-in throwing in its place
  * runs inside that function.
  */
-export const skippedFrames = new WeakMap<object, number>();
+export const skippedFrames = new LazyWeakMap<object, number>();
 
 const parses = (input: string, base: string) => {
 	try {

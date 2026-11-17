@@ -65,6 +65,7 @@ import { contextText, linkRoute, opaqueContext } from '../../visited';
 import { ownCodec, shareCodec, type CodecBackend } from '../../wasm/codec';
 import Client from '../Client';
 import { withStack } from '../nativeErrors';
+import { LazyMap, LazySet, LazyWeakMap, LazyWeakSet } from '../ownCollections';
 import {
 	deferredText,
 	getPublicSuffix,
@@ -1025,7 +1026,7 @@ export default class DocumentClient extends Client {
 		return value;
 	}
 	/** what metaPolicy made of each content: the browser's, and each policy's texts */
-	readonly #metaPolicies = new Map<
+	readonly #metaPolicies = new LazyMap<
 		string,
 		{ value: string | null; texts: PolicyText[] }
 	>();
@@ -1036,7 +1037,7 @@ export default class DocumentClient extends Client {
 	 * counts for nothing), by the content the page wrote. Each is looked for
 	 * whenever the policies are read.
 	 */
-	readonly #appliedMetas = new Map<string, PolicyText[]>();
+	readonly #appliedMetas = new LazyMap<string, PolicyText[]>();
 	#metaTexts(): PolicyText[] {
 		try {
 			const head = this.global.document.head;
@@ -1276,7 +1277,7 @@ export default class DocumentClient extends Client {
 	 * (ContentSecurity); a report-only one is left untrusted (the suite does
 	 * not compare isTrusted for the report-only cases).
 	 */
-	readonly trustedViolations = new WeakSet<object>();
+	readonly trustedViolations = new LazyWeakSet<object>();
 	/**
 	 * How a violation names the document it is reported from. A loaded http(s)
 	 * document is named by the page's URL with status 200; a document the
@@ -1461,7 +1462,7 @@ export default class DocumentClient extends Client {
 	 * reaches the page's listener, and ContentSecurity reads this back
 	 * (src/inject/dom/modules/ContentSecurity.ts).
 	 */
-	readonly codeViolationTarget = new WeakMap<object, Node>();
+	readonly codeViolationTarget = new LazyWeakMap<object, Node>();
 	/**
 	 * Hooks the getter that reads them back, the first time one is recorded
 	 * (ContentSecurity sets it; gone once it ran)
@@ -1632,7 +1633,7 @@ export default class DocumentClient extends Client {
 		);
 	}
 	/** each element a code violation was already reported for, and its verdict (so a second pass neither re-fires nor changes it) */
-	readonly #codeVerdict = new WeakMap<object, boolean>();
+	readonly #codeVerdict = new LazyWeakMap<object, boolean>();
 	#refuseOnce(
 		element: Element,
 		directive: string,
@@ -1700,7 +1701,7 @@ export default class DocumentClient extends Client {
 	 * (DOMContentHooks). One that reaches a document any other way stays
 	 * refused, as it was judged.
 	 */
-	readonly #heldScripts = new WeakMap<Element, { url: URL; src: string }>();
+	readonly #heldScripts = new LazyWeakMap<Element, { url: URL; src: string }>();
 	#heldCount = 0;
 	/**
 	 * Whether a script by `url` the page gives a src to before it connects is
@@ -1894,7 +1895,7 @@ export default class DocumentClient extends Client {
 			Reflect.apply(nativeSetAttribute, element, ['nonce', nonce]);
 	}
 	/** the URLs refusalURL made, by their host: the URL each stands for, and what a report names it by */
-	readonly refusals = new Map<string, { url: string; blocked: string }>();
+	readonly refusals = new LazyMap<string, { url: string; blocked: string }>();
 	/**
 	 * A URL the browser's copy of every page policy refuses (src/csp.ts),
 	 * for a load of the page's that its own policy refuses where no worker
@@ -2365,7 +2366,7 @@ export default class DocumentClient extends Client {
 		).url.url.origin;
 	}
 	/** the windows this document opened (a sandboxed document may navigate them) */
-	readonly openedWindows = new WeakSet<object>();
+	readonly openedWindows = new LazyWeakSet<object>();
 	/** tell the worker an Accept-CH meta named these hints (the ClientHints module sets it) */
 	reportAcceptCH: (hints: string[]) => void = () => {};
 	/**
@@ -2622,9 +2623,9 @@ export default class DocumentClient extends Client {
 	 * @internal the stand-in every document of an origin (`originKey` in the
 	 * Context module) gets for this window when it is of another origin
 	 */
-	readonly standIns = new Map<string, WeakRef<typeof globalThis>>();
+	readonly standIns = new LazyMap<string, WeakRef<typeof globalThis>>();
 	/** @internal frame elements showing an opaque (data:) document: never injected from this page (DOMAttributes, IFrame) */
-	readonly opaqueFrames = new WeakSet<Element>();
+	readonly opaqueFrames = new LazyWeakSet<Element>();
 	/**
 	 * The document a javascript: URL's string value becomes, in the shell
 	 * with this page as its URL (as a blob document gets it), so its scripts
@@ -3170,7 +3171,7 @@ export default class DocumentClient extends Client {
 	 * text that reached it any other way (a Text node it was given, a clone)
 	 * is judged as it runs (scriptPrepared)
 	 */
-	readonly #scriptSlots = new WeakMap<Element, string>();
+	readonly #scriptSlots = new LazyWeakMap<Element, string>();
 	/**
 	 * What a script's text sink named `sink` takes of the page's `value`,
 	 * under the page's Trusted Types (Client.trustedValue), or null where it
@@ -3320,7 +3321,7 @@ export default class DocumentClient extends Client {
 		return output;
 	}
 	/** large routed style texts this client made, the oldest out first */
-	readonly #styleOutputs = new Set<string>();
+	readonly #styleOutputs = new LazySet<string>();
 	#styleOutputChars = 0;
 	/** @internal the worker's rewrite of an inline script of this document's markup (PrewrittenTable.script) */
 	prewrittenScript(
@@ -3348,14 +3349,14 @@ export default class DocumentClient extends Client {
 	 */
 	shellPending = false;
 	/** large style texts and their routed text, the oldest out first */
-	readonly #styleMemo = new Map<string, string>();
+	readonly #styleMemo = new LazyMap<string, string>();
 	#styleMemoChars = 0;
 	#rememberStyle(text: string, output: string) {
 		if (output.length > STYLE_MEMO_CHARS / 4) return;
 		if (!this.#styleOutputs.has(output)) {
 			this.#styleOutputs.add(output);
 			this.#styleOutputChars += output.length;
-			for (const kept of this.#styleOutputs) {
+			for (const kept of this.#styleOutputs.values()) {
 				if (this.#styleOutputChars <= STYLE_MEMO_CHARS) break;
 				this.#styleOutputs.delete(kept);
 				this.#styleOutputChars -= kept.length;
@@ -3364,7 +3365,7 @@ export default class DocumentClient extends Client {
 		if (this.#styleMemo.has(text)) return;
 		this.#styleMemo.set(text, output);
 		this.#styleMemoChars += text.length + output.length;
-		for (const [key, value] of this.#styleMemo) {
+		for (const [key, value] of this.#styleMemo.entries()) {
 			if (this.#styleMemoChars <= STYLE_MEMO_CHARS) break;
 			this.#styleMemo.delete(key);
 			this.#styleMemoChars -= key.length + value.length;

@@ -3,6 +3,7 @@ import ProxyModule from '../../modules/Proxy';
 import ResourceTimingModule from '../../modules/ResourceTiming';
 import { unrouteURL } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
+import { LazyWeakMap, LazyWeakSet } from '../../ownCollections';
 import { blobLoads, opaqueCopies } from '../blobLoads';
 import type DocumentClient from '../Client';
 import type { CanvasTaints } from '../Client';
@@ -123,7 +124,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 		);
 
 		/** an object's kind, by the native getters it answers (once per object) */
-		const kinds = new WeakMap<object, Kind>();
+		const kinds = new LazyWeakMap<object, Kind>();
 		const answers = (
 			get: ((this: unknown) => unknown) | undefined,
 			value: object,
@@ -181,7 +182,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 		 * origin's, the URL its marks are asked by ('' for none), and the
 		 * verdict
 		 */
-		const judged = new WeakMap<
+		const judged = new LazyWeakMap<
 			object,
 			{ url: string; cross: boolean; real: string; taints: boolean }
 		>();
@@ -190,7 +191,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 		// whether it came through another origin (server/mediaLoads.ts), once
 		// a load, when the element first has anything to draw, hear or capture
 		const mediaReady = getter(global.HTMLMediaElement?.prototype, 'readyState');
-		const asked = new WeakMap<object, { url: string; crossed: boolean }>();
+		const asked = new LazyWeakMap<object, { url: string; crossed: boolean }>();
 		const mediaCrossed = (element: object, url: string): boolean => {
 			if (!mediaReady || (Reflect.apply(mediaReady, element, []) as number) < 1)
 				return false;
@@ -446,7 +447,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 		};
 		// the context prototypes looked at already: each is hooked (or not) on
 		// the first context of it a getContext hands out
-		const seen = new WeakSet<object>();
+		const seen = new LazyWeakSet<object>();
 		// a lazy WebGL global the page's first context of its kind settles
 		const resolvers = new Map<string, (value: unknown) => void>();
 		const hookGetContext = (proto: object | undefined) => {

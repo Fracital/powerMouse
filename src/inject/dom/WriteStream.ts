@@ -1,3 +1,4 @@
+import { LazyWeakMap } from '../ownCollections';
 import type DocumentClient from './Client';
 import cloneRawNode, {
 	inertDocumentOf,
@@ -19,7 +20,7 @@ interface WriteState {
 	script: Element | null;
 }
 
-const STATES = new WeakMap<object, WriteState>();
+const STATES = new LazyWeakMap<object, WriteState>();
 
 // the comment appended to the markup before it is parsed: the open elements
 // at the end of the write are its ancestors, and everything the serializer

@@ -84,6 +84,6 @@ ok(
 ok(
 	`a proxied frame costs at most ${HEAP_LIMIT_KB} KB of heap`,
 	result.heapKB <= HEAP_LIMIT_KB,
-	`${result.heapKB.toFixed(0)} KB, ${result.rssKB.toFixed(0)} KB RSS (${FRAMES} frames)`,
+	`${result.heapKB.toFixed(0)} KB, ${result.rssKB.toFixed(0)} KB RSS, ${(result.scriptMs / FRAMES).toFixed(1)} ms of script (${FRAMES} frames)`,
 );
 await done(null);

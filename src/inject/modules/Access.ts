@@ -12,7 +12,7 @@ import Client from '../Client';
 import ErrorMessages from '../errorMessages';
 import Module from '../Module';
 import { failsToParse } from '../nativeErrors';
-import { OwnWeakSet } from '../ownCollections';
+import { LazyWeakMap, OwnWeakSet } from '../ownCollections';
 import { requestRefused } from '../requestVerdict';
 import { modifyJS } from '../rewriter';
 import { trustedScript } from '../trusted';
@@ -343,7 +343,7 @@ export default class AccessModule extends Module<Client> {
 		// what a pattern's source was wrapped in, by the wrapper: the value of
 		// an assignment is its source (`r = ({ top: t } = o)`, access API
 		// `source`)
-		const wrapped = new WeakMap<object, unknown>();
+		const wrapped = new LazyWeakMap<object, unknown>();
 		const wraps = <T extends object>(wrapper: T, source: unknown): T => {
 			wrapped.set(wrapper, source);
 			return wrapper;

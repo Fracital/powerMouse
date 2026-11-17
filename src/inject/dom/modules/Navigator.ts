@@ -5,6 +5,7 @@ import { reportOnly } from '../../modules/Fetch';
 import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule from '../../modules/Proxy';
 import { withStack } from '../../nativeErrors';
+import { LazyWeakMap } from '../../ownCollections';
 import DocumentClient from '../Client';
 import { deferred } from '../deferred';
 
@@ -18,7 +19,7 @@ const tagOf = (value: unknown) =>
  * their beacons go out as that document's keepalive requests, which share
  * its quota
  */
-const relayedBytes = new WeakMap<object, number>();
+const relayedBytes = new LazyWeakMap<object, number>();
 
 export default class NavigatorModule extends Module<DocumentClient> {
 	/** the beacon bytes this document has in flight through an ancestor */

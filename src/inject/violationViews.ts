@@ -1,4 +1,5 @@
 import type ProxyModule from './modules/Proxy';
+import { LazyWeakMap } from './ownCollections';
 
 /**
  * Hand the realm's securitypolicyviolation listeners a view of each event
@@ -18,7 +19,7 @@ export function trustTaggedViolations(
 	tagged: { has(event: object): boolean },
 ) {
 	const Proxy = global.Proxy;
-	const views = new WeakMap<object, object>();
+	const views = new LazyWeakMap<object, object>();
 	const view = (event: object): object => {
 		let proxy = views.get(event);
 		if (!proxy) {
@@ -37,7 +38,7 @@ export function trustTaggedViolations(
 		}
 		return proxy;
 	};
-	const wraps = new WeakMap<object, EventListener>();
+	const wraps = new LazyWeakMap<object, EventListener>();
 	const wrap = (listener: EventListener): EventListener => {
 		let wrapped = wraps.get(listener as unknown as object);
 		if (!wrapped) {

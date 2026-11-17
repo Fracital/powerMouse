@@ -21,6 +21,7 @@ import {
 } from '../../transport/messages';
 import Client from '../Client';
 import Module from '../Module';
+import { LazyMap, LazySet, LazyWeakMap, LazyWeakSet } from '../ownCollections';
 import ProxyModule from './Proxy';
 import { unrouteURL } from './Unroute';
 
@@ -195,7 +196,7 @@ export default class ResourceTimingModule extends Module<Client> {
 	opaqueLoads(): (loaded: string) => boolean {
 		if (this.#opaqueLoads) return this.#opaqueLoads;
 		const global = this.client.global;
-		const marked = new Set<string>();
+		const marked = new LazySet<string>();
 		const realOf = (loaded: string) =>
 			withoutFragment(unrouteURL(this.client, loaded) ?? loaded);
 		const noteEntries = (entries: object[]) => {
@@ -262,7 +263,7 @@ export default class ResourceTimingModule extends Module<Client> {
 	): (entry: object) => boolean {
 		const global = this.client.global as typeof globalThis &
 			Record<string, any>;
-		const hidden = new WeakSet<object>();
+		const hidden = new LazyWeakSet<object>();
 		const examined = new WeakSet<object>();
 		/** what this document loaded, by the names the browser has */
 		const loaded = new Set<string>();
@@ -345,7 +346,7 @@ export default class ResourceTimingModule extends Module<Client> {
 			local: boolean;
 			protocol: string;
 		}
-		const judged = new WeakMap<object, Verdict>();
+		const judged = new LazyWeakMap<object, Verdict>();
 		const judge = (entry: object) => {
 			let verdict = judged.get(entry);
 			if (verdict) return verdict;
@@ -422,7 +423,7 @@ export default class ResourceTimingModule extends Module<Client> {
 		// for every such entry it can read now. An entry with no note (a
 		// worker's, which hears nothing and has no bridge) reads as the HTTP
 		// cache's, which a kept response most often is.
-		const keptNotes = new Map<string, KeptLoad[]>();
+		const keptNotes = new LazyMap<string, KeptLoad[]>();
 		let keptNoted = 0;
 		const noteKept = (url: string, load: KeptLoad) => {
 			const list = keptNotes.get(url);
@@ -474,7 +475,7 @@ export default class ResourceTimingModule extends Module<Client> {
 			}
 			return found;
 		};
-		const keptDeliveries = new WeakMap<object, Delivery>();
+		const keptDeliveries = new LazyWeakMap<object, Delivery>();
 		const keptDelivery = (entry: object): Delivery => {
 			const known = keptDeliveries.get(entry);
 			if (known) return known;

@@ -15,6 +15,7 @@ import { blobLoads } from '../dom/blobLoads';
 import type DocumentClient from '../dom/Client';
 import Module from '../Module';
 import { skippedFrames } from '../nativeErrors';
+import { LazyWeakMap, LazyWeakSet } from '../ownCollections';
 import ProxyModule from './Proxy';
 import ResourceBufferModule from './ResourceBuffer';
 
@@ -296,7 +297,7 @@ const NO_LOCATION: ErrorLocation = {
  * page's call site (the Worker module keys them): the browser located it in
  * the inject, and an event there carries no error object to tell from.
  */
-export const reportedLocations = new WeakMap<object, ErrorLocation>();
+export const reportedLocations = new LazyWeakMap<object, ErrorLocation>();
 
 /** what an uncaught error's report carries (ErrorEvent, onerror) */
 interface ErrorReport {
@@ -411,7 +412,7 @@ export default class UnrouteModule extends Module<Client> {
 		// document's natively, entry and all: the entry of it here goes to
 		// the document it was made for, which shows it as its own, and is
 		// none of this page's
-		const adopted = new WeakSet<object>();
+		const adopted = new LazyWeakSet<object>();
 		const madeForChild = (entry: object): boolean => {
 			if (adopted.has(entry)) return true;
 			const loads = client.childLoads;
@@ -594,7 +595,7 @@ export default class UnrouteModule extends Module<Client> {
 		);
 	}
 	/** the first of the page's frames in each error's stack, once formatted */
-	#pageSites = new WeakMap<object, ErrorLocation>();
+	#pageSites = new LazyWeakMap<object, ErrorLocation>();
 	/**
 	 * Where the page's code threw `error`: the first frame of its stack that
 	 * is not the inject's. The stack is formatted here if nothing has read it
@@ -807,7 +808,7 @@ export default class UnrouteModule extends Module<Client> {
 			global.Event.prototype,
 			'target',
 		)?.get;
-		const reports = new WeakMap<object, ErrorReport>();
+		const reports = new LazyWeakMap<object, ErrorReport>();
 		const reportOf = (event: object): ErrorReport => {
 			const known = reports.get(event);
 			if (known) return known;
@@ -1028,7 +1029,7 @@ export default class UnrouteModule extends Module<Client> {
 				return undefined;
 			}
 		};
-		const hooked = new WeakSet<object>();
+		const hooked = new LazyWeakSet<object>();
 		const hook = (prototype: any) => {
 			if (!prototype || hooked.has(prototype)) return;
 			hooked.add(prototype);
@@ -1310,7 +1311,7 @@ export default class UnrouteModule extends Module<Client> {
 		// what a page's own formatter sees: the same frame, naming page URLs
 		// the sites a page's formatter is given, to tell its own call of this
 		// formatter from V8's
-		const cleanedSites = new WeakSet<object>();
+		const cleanedSites = new LazyWeakSet<object>();
 		const cleanSite = (
 			site: CallSite,
 			index: number,

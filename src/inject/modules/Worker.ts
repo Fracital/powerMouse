@@ -17,6 +17,7 @@ import {
 import Client from '../Client';
 import Module from '../Module';
 import { failsToParse, withStack } from '../nativeErrors';
+import { LazyWeakSet } from '../ownCollections';
 import { requestRefused } from '../requestVerdict';
 import { modifyJS } from '../rewriter';
 import {
@@ -277,7 +278,7 @@ export default class WorkerModule extends Module<Client> {
 		 * and nothing is reported. An import of the page's own reports as
 		 * natively.
 		 */
-		const terminated = new WeakSet<object>();
+		const terminated = new LazyWeakSet<object>();
 		/**
 		 * The worker's first listeners, before any of the page's. An error the
 		 * browser located in the inject (a hook called the native API that

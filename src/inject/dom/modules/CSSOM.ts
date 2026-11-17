@@ -4,6 +4,7 @@ import ProxyModule from '../../modules/Proxy';
 import ResourceTimingModule from '../../modules/ResourceTiming';
 import { unrouteURL } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
+import { LazyWeakMap, LazyWeakSet } from '../../ownCollections';
 import { modifyCSS } from '../../rewriter';
 import { blobLoads, opaqueCopies } from '../blobLoads';
 import DocumentClient from '../Client';
@@ -118,7 +119,7 @@ export default class CSSOMModule extends Module<DocumentClient> {
 		);
 		const opaqueLoad = client.getModule(ResourceTimingModule)?.opaqueLoads();
 		/** per sheet of another origin's URL: whether its rules are refused */
-		const foreignSheets = new WeakMap<object, boolean>();
+		const foreignSheets = new LazyWeakMap<object, boolean>();
 		const refused = (styleSheet: unknown): boolean => {
 			if (styleSheet === null || typeof styleSheet !== 'object') return false;
 			const known = foreignSheets.get(styleSheet);
@@ -264,8 +265,8 @@ export default class CSSOMModule extends Module<DocumentClient> {
 
 		// a face made in another realm settles that realm's promises: the page
 		// gets one of its own for each, the same one every time
-		const foreign = new WeakSet<object>();
-		const promises = new WeakMap<object, Promise<unknown>>();
+		const foreign = new LazyWeakSet<object>();
+		const promises = new LazyWeakMap<object, Promise<unknown>>();
 		const ownPromise = (promise: unknown) => {
 			if (!promise || typeof promise !== 'object') return promise;
 			if (!promises.has(promise))

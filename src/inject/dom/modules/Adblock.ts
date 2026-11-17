@@ -6,6 +6,7 @@ import {
 import type { AdblockPage } from '../../../blocker/types';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
+import { LazyWeakSet } from '../../ownCollections';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 
 /**
@@ -456,7 +457,7 @@ function start(
 
 	// the procedural filters: every match is hidden (inline, the only way to
 	// name one element) or given the filter's action, once
-	const handled = new WeakSet<Element>();
+	const handled = new LazyWeakSet<Element>();
 	let proceduralAt = 0;
 	let proceduralArmed = false;
 	const procedural = () => {

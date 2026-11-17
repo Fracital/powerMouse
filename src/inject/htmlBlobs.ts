@@ -1,3 +1,5 @@
+import { LazyMap, LazyWeakMap } from './ownCollections';
+
 /**
  * The page's text/html blobs, so a navigation to one of them can be served
  * by the worker as an inline document (controlled, its subresources
@@ -7,7 +9,10 @@
  */
 
 /** blob -> the markup the page put in it (before the shell wrapped it) */
-export const htmlBlobs = new WeakMap<Blob, string>();
+export const htmlBlobs = new LazyWeakMap<Blob, string>();
 
 /** proxy-form blob: URL -> its markup and the URL its document shows */
-export const htmlBlobURLs = new Map<string, { markup: string; url: string }>();
+export const htmlBlobURLs = new LazyMap<
+	string,
+	{ markup: string; url: string }
+>();

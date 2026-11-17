@@ -1,3 +1,4 @@
+import { LazyWeakMap, LazyWeakSet } from '../ownCollections';
 import { asParsed, trustedHTML } from '../trusted';
 
 // the native parser call, taken before the Trusted Types parse wrap
@@ -445,7 +446,7 @@ export function inertHTMLDocument(like: Document): Document | null {
  * replaces itself from a script (DOMContentHooks' parsed <style>) must land
  * as itself there.
  */
-export const inertClones = new WeakSet<Node>();
+export const inertClones = new LazyWeakSet<Node>();
 
 /**
  * The parsed <base> a copy is being made from, while its attributes are
@@ -454,7 +455,7 @@ export const inertClones = new WeakSet<Node>();
  * the markup has it (the metas before it are the policies that judge it,
  * DocumentClient baseRefused).
  */
-export const parsedBases = new WeakMap<Element, Element>();
+export const parsedBases = new LazyWeakMap<Element, Element>();
 
 const STACK_ITERATE = Symbol();
 const STACK_FINALIZE = Symbol();

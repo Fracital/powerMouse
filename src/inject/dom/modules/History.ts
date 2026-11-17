@@ -4,6 +4,7 @@ import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
+import { LazyWeakMap } from '../../ownCollections';
 import DocumentClient from '../Client';
 import FragmentModule from './Fragment';
 import VisitedModule from './Visited';
@@ -304,8 +305,8 @@ export default class HistoryModule extends Module<DocumentClient> {
 		if (!entryProto || !nativeEntryURL) return;
 
 		// the entries the page holds for the ones the proxy re-wrote (alias)
-		const toPage = new WeakMap<object, Entry>();
-		const toReal = new WeakMap<object, Entry>();
+		const toPage = new LazyWeakMap<object, Entry>();
+		const toReal = new LazyWeakMap<object, Entry>();
 		const pageOf = <T>(entry: T): T =>
 			(entry && (toPage.get(entry as object) as T)) ?? entry;
 		const realOf = <T>(entry: T): T =>

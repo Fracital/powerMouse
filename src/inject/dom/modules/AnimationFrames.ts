@@ -1,5 +1,6 @@
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
+import { LazyMap, LazySet } from '../../ownCollections';
 import type DocumentClient from '../Client';
 
 /**
@@ -63,7 +64,7 @@ export default class AnimationFramesModule extends Module<DocumentClient> {
 		// the frame elements, from this window's up to the proxied top's
 		// child, that are not rendered now; until an observer has reported, a
 		// frame counts as shown (Chrome too runs a hidden frame's first frames)
-		const unrendered = new Set<Element>();
+		const unrendered = new LazySet<Element>();
 		let watching = false;
 		// One observer per element, which its callback names from here, never
 		// by `entry.target`: an entry is an object of this realm, and its
@@ -111,7 +112,7 @@ export default class AnimationFramesModule extends Module<DocumentClient> {
 		// the page's callbacks by the id it was given (the native id of their
 		// first request), and the ids parked while the frame is not rendered,
 		// in the order they came due
-		const callbacks = new Map<number, Function>();
+		const callbacks = new LazyMap<number, Function>();
 		let parked: number[] = [];
 		let flushing = false;
 		const run = (id: number, time: number) => {

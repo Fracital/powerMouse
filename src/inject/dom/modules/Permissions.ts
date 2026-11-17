@@ -10,6 +10,7 @@ import { closePort, onPort, privateChannel } from '../../../transport/ports';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { withStack } from '../../nativeErrors';
+import { LazyMap, LazyWeakMap, LazyWeakSet } from '../../ownCollections';
 import DocumentClient from '../Client';
 
 /** the permissions each site keeps (src/server/permissions.ts); push is notifications' */
@@ -260,9 +261,9 @@ export default class PermissionsModule extends Module<DocumentClient> {
 
 		// the statuses the page holds, each showing its site's state; a
 		// change of the browser's own state is never theirs
-		const shown = new WeakMap<object, PermissionState>();
-		const live = new Map<string, Set<WeakRef<EventTarget>>>();
-		const ours = new WeakSet<Event>();
+		const shown = new LazyWeakMap<object, PermissionState>();
+		const live = new LazyMap<string, Set<WeakRef<EventTarget>>>();
+		const ours = new LazyWeakSet<Event>();
 		const track = (
 			status: EventTarget,
 			name: string,
@@ -729,7 +730,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		// what the page named that is no id of its site, by what the browser
 		// was told: read back (a track's constraints, a sinkId) as the page
 		// wrote it
-		const written = new Map<string, string>();
+		const written = new LazyMap<string, string>();
 		// an id the browser gave that was never shown is not shown as it is
 		const toShown = (key: IdKey, real: unknown): unknown =>
 			typeof real !== 'string' || LITERAL.has(real)
@@ -921,7 +922,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		const dispatch = global.EventTarget.prototype.dispatchEvent;
 		const stopImmediate = global.Event.prototype.stopImmediatePropagation;
 		const EventType = global.Event;
-		const ours = new WeakSet<Event>();
+		const ours = new LazyWeakSet<Event>();
 		const watch = (media: object) => {
 			const reads = async () => {
 				try {

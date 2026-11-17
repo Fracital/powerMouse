@@ -13,6 +13,7 @@ import { COOKIES_CHANGED, CookiesChange } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule, { invokeGlobal } from '../../modules/Proxy';
 import { routedPrefix } from '../../modules/Unroute';
+import { LazyMap, LazySet } from '../../ownCollections';
 import { getDomain, getPublicSuffix } from '../../rewriter';
 import DocumentClient from '../Client';
 import SyncModule, { BEACON_QUOTA, WRITE_BUDGET } from './Sync';
@@ -75,8 +76,8 @@ export class CookiesModule extends Module<DocumentClient> {
 	// reads answer with it applied over what the jar says.
 	#sender = Math.random().toString(36).slice(2);
 	#seq = 0;
-	#inflight = new Set<number>();
-	#unsettled = new Map<string, Unsettled>();
+	#inflight = new LazySet<number>();
+	#unsettled = new LazyMap<string, Unsettled>();
 	// the proxy origin's real localStorage, taken before the Storage module
 	// hands the page its own
 	#versions: Storage | null = null;
@@ -201,7 +202,7 @@ export class CookiesModule extends Module<DocumentClient> {
 		const seq = this.#seq++;
 		this.#inflight.add(seq);
 		let base = seq;
-		for (const other of this.#inflight) base = Math.min(base, other);
+		for (const other of this.#inflight.values()) base = Math.min(base, other);
 		if (cookie) {
 			this.#unsettled.set(cookie.id, { cookie, seq });
 			if (this.#known) applyWrite(this.#known, cookie, now);
@@ -210,7 +211,7 @@ export class CookiesModule extends Module<DocumentClient> {
 		this.#restamp();
 		const settle = () => {
 			this.#inflight.delete(seq);
-			for (const [id, entry] of this.#unsettled)
+			for (const [id, entry] of this.#unsettled.entries())
 				if (entry.seq === seq) this.#unsettled.delete(id);
 			// in the jar now: a document that read before the worker heard of
 			// it reads again
@@ -251,7 +252,7 @@ export class CookiesModule extends Module<DocumentClient> {
 		const seq = this.#seq++;
 		this.#inflight.add(seq);
 		let base = seq;
-		for (const other of this.#inflight) base = Math.min(base, other);
+		for (const other of this.#inflight.values()) base = Math.min(base, other);
 		const url = new URL(`${routedPrefix(client)}cookies/ordered`);
 		url.searchParams.set('sender', this.#sender);
 		url.searchParams.set('seq', String(seq));

@@ -1,5 +1,6 @@
 import Client from '../Client';
 import Module from '../Module';
+import { LazyWeakMap } from '../ownCollections';
 import { accessHolders } from './Access';
 import ProxyModule from './Proxy';
 
@@ -497,10 +498,9 @@ export default class ReflectionModule extends Module<Client> {
 		// a window as the page may read it: a child as `window[i]` hands it
 		// out, any other key the window's own (`length` included). It is
 		// handed to concat only once the window was found spreadable.
-		const views = new WeakMap<object, object>();
+		const views = new LazyWeakMap<object, object>();
 		const viewOf = (window: any): object => {
-			let view = Reflect.apply(weakMapGet, views, [window]) as
-				object | undefined;
+			let view = views.get(window);
 			if (!view) {
 				view = new Proxy(Object.create(null) as object, {
 					get: (_, key) =>
@@ -509,7 +509,7 @@ export default class ReflectionModule extends Module<Client> {
 							: key === SPREADABLE || Reflect.get(window, key),
 					has: (_, key) => Reflect.has(window, key),
 				});
-				Reflect.apply(weakMapSet, views, [window, view]);
+				views.set(window, view);
 			}
 			return view;
 		};
@@ -566,17 +566,16 @@ export default class ReflectionModule extends Module<Client> {
 			return Reflect.apply(native, viewOf(window), args);
 		};
 		// a method bound to a window
-		const routers = new WeakMap<Function, Function>();
+		const routers = new LazyWeakMap<Function, Function>();
 		const routerOf = (native: Function) => {
-			let router = Reflect.apply(weakMapGet, routers, [native]) as
-				Function | undefined;
+			let router = routers.get(native);
 			if (!router) {
 				router = proxyModule.wrapFunction(native, (target, that, args) =>
 					isWindow(that)
 						? route(target, readerOf(target)!, that, args)
 						: Reflect.apply(target, that, args),
 				);
-				Reflect.apply(weakMapSet, routers, [native, router]);
+				routers.set(native, router);
 			}
 			return router;
 		};

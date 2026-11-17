@@ -41,6 +41,7 @@ import {
 	unrouteCSS,
 	unrouteURL,
 } from '../../modules/Unroute';
+import { LazyMap, LazyWeakMap, LazyWeakSet } from '../../ownCollections';
 import { modifyCSS, modifyJS } from '../../rewriter';
 import { blobLoads, opaqueCopies } from '../blobLoads';
 import DocumentClient, {
@@ -357,7 +358,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			}
 			setTimeout(end, 30_000);
 		};
-		const copies = new WeakMap<object, Map<string, Copy>>();
+		const copies = new LazyWeakMap<object, Map<string, Copy>>();
 		// a route inside a url(): the worker's rewritten CSS writes them whole,
 		// then the marker that keeps the page's token
 		const routePattern = () => {
@@ -463,7 +464,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				: withCopies(text, await copiesOf(text, state, depth - 1));
 		// the latest pass per owner and key: an earlier one that ends later
 		// gives way
-		const passes = new WeakMap<object, Map<string, number>>();
+		const passes = new LazyWeakMap<object, Map<string, number>>();
 		let passCount = 0;
 		/**
 		 * The CSS `owner` shows under `key` (its inline style, a <style>'s
@@ -782,7 +783,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			realm.HTMLScriptElement.prototype,
 			'async',
 		)?.get;
-		const inOrder = new WeakMap<
+		const inOrder = new LazyWeakMap<
 			object,
 			{ value?: string; apply: (value: string) => void }[]
 		>();
@@ -829,7 +830,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		 * integrity hook leaves the attribute on them, and a new load of theirs
 		 * takes it back (releaseIntegrity)
 		 */
-		const givenIntegrity = new WeakSet<Element>();
+		const givenIntegrity = new LazyWeakSet<Element>();
 		/** before a script or a link routes a new load: the integrity it gave the browser goes back to the page's copy */
 		const releaseIntegrity = (element: CustomElement) => {
 			if (!givenIntegrity.delete(element)) return;
@@ -1150,7 +1151,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// its page never writes. A custom element's own property makes no
 		// handler of its attribute.
 		const createElementNS = g.Document.prototype.createElementNS;
-		const ownHandlers = new Map<string, boolean>();
+		const ownHandlers = new LazyMap<string, boolean>();
 		const isHandler = (element: Element, name: string): boolean => {
 			if (handlerNames.has(name)) return true;
 			const namespace = element.namespaceURI;
@@ -1296,7 +1297,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		{
 			const proxyModule = moduleClient.getModule(ProxyModule)!;
 			const global = realm as unknown as Record<string, any>;
-			const owners = new WeakMap<object, Element>();
+			const owners = new LazyWeakMap<object, Element>();
 			for (const name of SVG_HREF_INTERFACES) {
 				const prototype = global[name]?.prototype;
 				const descriptor =
@@ -2331,8 +2332,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			const proxyModule = moduleClient.getModule(ProxyModule)!;
 
 			// the element each page-facing declaration belongs to
-			const owners = new WeakMap<CSSStyleDeclaration, Element>();
-			const pending = new WeakSet<Element>();
+			const owners = new LazyWeakMap<CSSStyleDeclaration, Element>();
+			const pending = new LazyWeakSet<Element>();
 			copyInlineSoon = (element) => {
 				if (!uncontrolled() || pending.has(element)) return;
 				pending.add(element);
@@ -2448,13 +2449,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			// Chromium implements the named properties (style.backgroundImage = ...)
 			// as per-instance named setters, so the only way to see those writes
 			// is to hand the page a Proxy from the `style` getter.
-			const declarationProxies = new WeakMap<
+			const declarationProxies = new LazyWeakMap<
 				CSSStyleDeclaration,
 				CSSStyleDeclaration
 			>();
 			// a computed style's url() is absolute, natively: the real URL its
 			// route stands for
-			const computedDeclarations = new WeakSet<CSSStyleDeclaration>();
+			const computedDeclarations = new LazyWeakSet<CSSStyleDeclaration>();
 			const restore = (target: CSSStyleDeclaration, value: string) =>
 				computedDeclarations.has(target)
 					? restoreCSSValueURLs(value, (routed) =>
@@ -2582,7 +2583,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			// the element each page-facing attributeStyleMap belongs to: a write
 			// there changes its inline style, whose loads are copied in a
 			// document no worker controls (and released by a delete or clear)
-			const mapOwners = new WeakMap<object, Element>();
+			const mapOwners = new LazyWeakMap<object, Element>();
 			for (const ctor of styleInterfaces) {
 				const descriptor = Reflect.getOwnPropertyDescriptor(
 					ctor.prototype,
@@ -2603,7 +2604,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				});
 			}
 			// a style rule's styleMap: a write there changes the rule
-			const mapRules = new WeakMap<object, object>();
+			const mapRules = new LazyWeakMap<object, object>();
 			{
 				const descriptor = Reflect.getOwnPropertyDescriptor(
 					realm.CSSStyleRule.prototype,
@@ -2827,7 +2828,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			realm.StyleSheet.prototype,
 			'ownerNode',
 		)!.get!;
-		const changedSheets = new WeakSet<CSSStyleSheet>();
+		const changedSheets = new LazyWeakSet<CSSStyleSheet>();
 		this.copyRules = (sheet) => {
 			if (!uncontrolled() || changedSheets.has(sheet)) return;
 			changedSheets.add(sheet);
@@ -3054,7 +3055,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// insertion hooks re-run every attribute hook) keeps the load and its
 		// blob instead of starting over, which would reset a document the
 		// element is already showing
-		const loads = new WeakMap<
+		const loads = new LazyWeakMap<
 			Element,
 			{ written: string; generation: number; url?: string }
 		>();
@@ -3475,7 +3476,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// applies): once, for the document's first base, a task later as
 		// natively, and for the markup's own once it is parsed (the hook ran
 		// on its copy, before the page's scripts could listen)
-		const reported = new WeakSet<Element>();
+		const reported = new LazyWeakSet<Element>();
 		const reportBase = (element: Element, url: URL) => {
 			const global = realm;
 			const owner = element.ownerDocument;
@@ -3502,7 +3503,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// the refusal URL each base was given, for the page's href: a hook
 		// that runs again (the base inserted) leaves it, as a write would be
 		// another check of the base, and another violation
-		const refusedBases = new WeakMap<Element, [string, string]>();
+		const refusedBases = new LazyWeakMap<Element, [string, string]>();
 		domHooksModule.useAttributes(
 			(element) => {
 				const refused = refusedBases.get(element);

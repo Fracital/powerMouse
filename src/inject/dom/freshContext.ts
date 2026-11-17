@@ -1,3 +1,4 @@
+import { LazyWeakSet } from '../ownCollections';
 import type DocumentClient from './Client';
 import { appliedAttribute } from './modules/DOMHooks';
 import { hiddenMutation } from './modules/MutationObserver';
@@ -79,7 +80,7 @@ const natives = (() => {
 })();
 
 /** the frame elements being given a fresh context: their next load event is the empty one's */
-export const swappingFrames = new WeakSet<Element>();
+export const swappingFrames = new LazyWeakSet<Element>();
 
 /** the window a frame element shows, as the browser has it */
 export function frameWindow(element: Element): Window | null {

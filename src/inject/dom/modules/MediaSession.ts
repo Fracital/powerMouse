@@ -3,6 +3,7 @@ import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
+import { LazyWeakMap } from '../../ownCollections';
 import type DocumentClient from '../Client';
 
 type Image = { src?: unknown; sizes?: unknown; type?: unknown };
@@ -49,7 +50,7 @@ export default class MediaSessionModule extends Module<DocumentClient> {
 		if (descriptor?.get && descriptor.set) {
 			// the page's view of each native frozen array, made once: the
 			// getter answers with the same object every time, as natively
-			const views = new WeakMap<object, readonly Image[]>();
+			const views = new LazyWeakMap<object, readonly Image[]>();
 			Reflect.defineProperty(prototype, 'artwork', {
 				...descriptor,
 				get: proxyModule.wrapFunction(descriptor.get, (target, that, args) => {

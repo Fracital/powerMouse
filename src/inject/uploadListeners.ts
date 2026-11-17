@@ -1,4 +1,5 @@
 import type ProxyModule from './modules/Proxy';
+import { LazyWeakMap } from './ownCollections';
 
 /**
  * The listeners each XMLHttpRequestUpload stand-in has (the page's and the
@@ -23,7 +24,7 @@ export function trackUploadListeners(
 ) {
 	/** per upload object: its listeners, by type, capture and callback */
 	const listeners = new WeakMap<object, Set<string>>();
-	const callbackIds = new WeakMap<object, number>();
+	const callbackIds = new LazyWeakMap<object, number>();
 	let nextCallback = 0;
 	const optionOf = (options: unknown, name: string): unknown =>
 		typeof options === 'object' && options !== null

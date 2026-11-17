@@ -6,6 +6,7 @@ import ProxyModule, {
 } from '../../modules/Proxy';
 import { unrouteCSS } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
+import { LazyWeakMap } from '../../ownCollections';
 import { modifyCSS, modifyJS } from '../../rewriter';
 import { markOwnInjector, ownScripts, trustedScript } from '../../trusted';
 import DocumentClient, {
@@ -1310,7 +1311,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		);
 		// an options collection does not say whose it is: the select that
 		// handed it out is remembered
-		const selects = new WeakMap<object, Node>();
+		const selects = new LazyWeakMap<object, Node>();
 		{
 			const prototype = global.HTMLSelectElement?.prototype;
 			const descriptor =
