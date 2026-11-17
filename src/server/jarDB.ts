@@ -17,6 +17,7 @@ export interface JarDB {
 		key: string,
 	): Promise<unknown[]>;
 	getAll(store: string): Promise<unknown[]>;
+	getAllKeys(store: string): Promise<unknown[]>;
 	get(store: string, key: string): Promise<unknown>;
 	put(store: string, value: unknown, key?: string): Promise<unknown>;
 	delete(store: string, key: string): Promise<void>;
@@ -34,6 +35,15 @@ export const JAR_STORE = 'cookies';
  */
 export const PERMISSIONS_DATABASE = 'stompPermissions';
 export const PERMISSIONS_STORE = 'states';
+/**
+ * The devices each site chose (src/server/permissions.ts deviceGrants),
+ * asked the same way: the browser keeps a device grant per top-level
+ * origin, which is the host's for every slot, so one slot's forget() is
+ * every slot's, and only the one store knows whether another site still
+ * holds the device (keyed out of line too)
+ */
+export const DEVICE_GRANTS_DATABASE = 'stompDeviceGrants';
+export const DEVICE_GRANTS_STORE = 'grants';
 
 export type JarOp = keyof JarDB;
 /** slot worker -> host: one request of the jar */
@@ -181,6 +191,9 @@ export class RemoteJar implements JarDB {
 	}
 	getAll(store: string) {
 		return this.#ask('getAll', [store]) as Promise<unknown[]>;
+	}
+	getAllKeys(store: string) {
+		return this.#ask('getAllKeys', [store]) as Promise<unknown[]>;
 	}
 	get(store: string, key: string) {
 		return this.#ask('get', [store, key]);

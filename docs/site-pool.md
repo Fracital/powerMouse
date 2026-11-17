@@ -377,9 +377,14 @@ host's origins with them. The sites' permission states are the host
 origin's one database, asked over the jar's port as the cookie jar is
 (src/server/jarDB.ts `PERMISSIONS_STORE`), read anew for each question: a
 frame's permission is its top's, and the frame may be shown from another
-slot. The hub's own worker keeps its copy in memory, so a site shown from
-the hub's origin (a page that fell back to single origin) reads what it
-read last.
+slot. The devices a site chose are kept there too (`DEVICE_GRANTS_STORE`):
+Chrome keeps a chosen device for the top-level origin, which is the
+host's for every slot, so one slot's `forget()` takes the device from
+every slot, and only the one store knows whether another site still holds
+it (bluetooth-grants: with a store of each slot's own, site B's `forget()`
+took site A's device away). The hub's own worker keeps its copy in memory,
+so a site shown from the hub's origin (a page that fell back to single
+origin) reads what it read last.
 
 **The request log.** An agent's worker reports each request to the hub,
 which gives it its frame as for its own (the documents tell the hub which

@@ -9,7 +9,13 @@ import type {
 } from '../transport/messages';
 import { PERMISSION_ROUTE } from '../transport/messages';
 import type { HintsDocument } from './clientHints';
-import { PERMISSIONS_DATABASE, PERMISSIONS_STORE, type JarDB } from './jarDB';
+import {
+	DEVICE_GRANTS_DATABASE,
+	DEVICE_GRANTS_STORE,
+	PERMISSIONS_DATABASE,
+	PERMISSIONS_STORE,
+	type JarDB,
+} from './jarDB';
 import type Router from './Router';
 import { json } from './Router';
 
@@ -55,13 +61,14 @@ let store: Promise<IDBPDatabase | null> | null = null;
 const states = new Map<string, PermissionState>();
 let loaded: Promise<void> | null = null;
 /**
- * the site pool: a slot's worker keeps the states in the host origin's
- * database, which every slot's worker asks (src/server/jarDB.ts), and
- * reads each one anew: another slot's worker may have changed it
+ * the site pool: a slot's worker keeps the states and the device grants in
+ * the host origin's databases, which every slot's worker asks
+ * (src/server/jarDB.ts), and reads each one anew: another slot's worker
+ * may have changed it
  */
 let remote: JarDB | null = null;
 
-/** the site pool: ask the host's database for the states, over the jar's port */
+/** the site pool: ask the host's databases for the states and the devices, over the jar's port */
 export function usePermissionsRemote(db: JarDB) {
 	remote = db;
 }
@@ -295,6 +302,9 @@ export async function forgetDeviceIds(host?: string) {
  * site chose. A device is known by a key the inject makes of what the
  * browser shows of it (a Bluetooth device's id, the others' identifying
  * fields), and a Bluetooth device keeps the services the site named.
+ * With the site pool they are the host origin's one store (asked over the
+ * jar's port): Chrome keeps the browser's grant for the top-level origin,
+ * the host's for every slot.
  */
 export const DEVICE_KINDS: readonly DeviceKind[] = [
 	'usb',
@@ -309,9 +319,9 @@ const grantKey = (site: string, kind: DeviceKind, key: string) =>
 	`${site} ${kind} ${key}`;
 
 function openGrants(): Promise<IDBPDatabase | null> {
-	grantStore ??= openDB('stompDeviceGrants', 1, {
+	grantStore ??= openDB(DEVICE_GRANTS_DATABASE, 1, {
 		upgrade: (db) => {
-			db.createObjectStore('grants');
+			db.createObjectStore(DEVICE_GRANTS_STORE);
 		},
 	}).catch(() => null);
 	return grantStore;
@@ -322,7 +332,7 @@ function loadGrants(): Promise<void> {
 		const db = await openGrants();
 		if (!db) return;
 		try {
-			const tx = db.transaction('grants', 'readonly');
+			const tx = db.transaction(DEVICE_GRANTS_STORE, 'readonly');
 			const keys = (await tx.store.getAllKeys()) as string[];
 			const values = (await tx.store.getAll()) as string[][];
 			await tx.done;
@@ -337,14 +347,48 @@ function loadGrants(): Promise<void> {
 	return grantsLoaded;
 }
 
+/**
+ * the site pool: the grants' keys in the host's store, null when its page
+ * is gone (what this worker last heard then)
+ */
+async function remoteGrantKeys(db: JarDB): Promise<string[] | null> {
+	try {
+		const keys = await db.getAllKeys(DEVICE_GRANTS_STORE);
+		return keys.filter((key): key is string => typeof key === 'string');
+	} catch (error) {
+		return null;
+	}
+}
+
+/** the site pool: the services the host's store keeps for `id`, null when its page is gone */
+async function remoteServices(db: JarDB, id: string): Promise<string[] | null> {
+	try {
+		const services = await db.get(DEVICE_GRANTS_STORE, id);
+		return Array.isArray(services) ? services : [];
+	} catch (error) {
+		return null;
+	}
+}
+
 /** the devices of `kind` `site` was granted */
 export async function deviceGrants(
 	site: string,
 	kind: DeviceKind,
 ): Promise<DeviceGrant[]> {
-	await loadGrants();
 	const prefix = grantKey(site, kind, '');
 	const out: DeviceGrant[] = [];
+	const keys = remote ? await remoteGrantKeys(remote) : null;
+	if (remote && keys) {
+		for (const key of keys)
+			if (key.startsWith(prefix))
+				out.push({
+					key: key.slice(prefix.length),
+					services:
+						(await remoteServices(remote, key)) ?? grants.get(key) ?? [],
+				});
+		return out;
+	}
+	if (!remote) await loadGrants();
 	for (const [key, services] of grants)
 		if (key.startsWith(prefix))
 			out.push({ key: key.slice(prefix.length), services });
@@ -359,36 +403,48 @@ export async function grantDevice(
 	services: string[] = [],
 ) {
 	if (!key || key.length > 1024) return;
-	await loadGrants();
 	const id = grantKey(site, kind, key);
-	const kept = new Set(grants.get(id) ?? []);
+	let had: string[] | undefined;
+	if (remote) had = (await remoteServices(remote, id)) ?? grants.get(id);
+	else {
+		await loadGrants();
+		had = grants.get(id);
+	}
+	const kept = new Set(had ?? []);
 	for (const service of services.slice(0, 256))
 		if (typeof service === 'string' && service.length <= 64) kept.add(service);
 	const value = [...kept];
 	grants.set(id, value);
 	try {
-		await (await openGrants())?.put('grants', value, id);
+		if (remote) await remote.put(DEVICE_GRANTS_STORE, value, id);
+		else await (await openGrants())?.put(DEVICE_GRANTS_STORE, value, id);
 	} catch (error) {
 		// kept for this worker's life only
 	}
 }
 
-/** `site` forgets `key`; whether another site still holds it */
+/**
+ * `site` forgets `key`; whether another site still holds it (with the site
+ * pool, a site of any slot: the browser's grant is the host's for all)
+ */
 export async function forgetDevice(
 	site: string,
 	kind: DeviceKind,
 	key: string,
 ): Promise<boolean> {
-	await loadGrants();
+	if (!remote) await loadGrants();
 	const id = grantKey(site, kind, key);
 	grants.delete(id);
 	try {
-		await (await openGrants())?.delete('grants', id);
+		if (remote) await remote.delete(DEVICE_GRANTS_STORE, id);
+		else await (await openGrants())?.delete(DEVICE_GRANTS_STORE, id);
 	} catch (error) {
 		// gone for this worker's life only
 	}
 	const suffix = ` ${kind} ${key}`;
-	for (const other of grants.keys()) if (other.endsWith(suffix)) return true;
+	const keys = remote ? await remoteGrantKeys(remote) : null;
+	for (const other of keys ?? grants.keys())
+		if (other.endsWith(suffix)) return true;
 	return false;
 }
 

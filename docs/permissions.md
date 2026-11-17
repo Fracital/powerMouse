@@ -394,7 +394,10 @@ is recorded for the site that asked, `getDevices()` and `getPorts()` list
 only the site's own, the connection events of another site's device are
 not dispatched, and `forget()` forgets it for the site, and for the
 browser only when no other site holds it (else the device is closed and
-reads as forgotten to that site). A Bluetooth device's `id` is the site's
+reads as forgotten to that site). With the site pool every slot's worker
+keeps them in the host origin's one store (docs/site-pool.md), as Chrome
+keeps the browser's grant for the host's origin, the top of every slot.
+A Bluetooth device's `id` is the site's
 own (a hash of the browser's with the site's salt, the browser's shape),
 and its GATT server reaches only the services the site named in
 `filters` and `optionalServices`, with Chrome's SecurityError otherwise.
