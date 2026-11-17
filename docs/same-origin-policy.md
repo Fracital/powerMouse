@@ -1324,7 +1324,11 @@ suites' known lists with the same reason.
      and `parent.location.href`, `frameElement` null; `postMessage` both
      ways (`event.source` is the window, `origin` the page's), a
      BroadcastChannel, localStorage and cookies are shared as for any
-     same-origin frame. Serving the page's own header was measured too (the
+     same-origin frame. The reach is emulated under any host (Chrome 157,
+     the document-isolation suite): a document whose own policy isolates
+     it and one of its origin that none isolates are other origins to each
+     other's inject (`reachableClients`), so what stays open is the
+     isolation alone. Serving the page's own header was measured too (the
      worker passing it on, Chrome 152): Chrome isolates the frame
      (`crossOriginIsolated` true, SharedArrayBuffer), and every proxied
      document around it can no longer reach it, nor it them. STomp's inject
@@ -1356,9 +1360,11 @@ suites' known lists with the same reason.
      the service worker's client otherwise).
    - No COOP or COEP report is sent (`report-to`, the Report-Only forms):
      nothing of the Reporting API is simulated.
-   - COOP's own effect is not simulated, as before: a popup without the
-     headers that an isolated page opens keeps its opener, where Chrome
-     severs it.
+   - COOP's own effect is not simulated under an isolated host (every
+     popup is served COOP `same-origin` to stay in the host's group): a
+     popup without the headers that an isolated page opens keeps its
+     opener, where Chrome severs it. Under a host that is not isolated the
+     worker severs a popup as Chrome does (`src/coop.ts`, the coop suite).
    - A `blob:` worker's loads are not judged by the embedder policy it
      inherits; an origin named in an iframe's `allow` is not the proxy's
      real one, for this feature as for every other (the feature reaches a

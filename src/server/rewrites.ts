@@ -7,6 +7,13 @@ import { FP_DEFAULT_ON_SURFACES, FP_SEEDED_SURFACES } from '../blocker/types';
 import GenericCodec from '../Codecs';
 import { codecType, Config, ParsedConfig } from '../config';
 import {
+	openerPolicy,
+	realPolicy,
+	switchesGroup,
+	trustworthy,
+	type OpenerFacts,
+} from '../coop';
+import {
 	browserPolicy as browserContentPolicy,
 	browserHeaders,
 	parsePolicies,
@@ -21,6 +28,7 @@ import { rewriteLinkHeader } from '../headers';
 import { helperNames } from '../helperNames';
 import {
 	delegatedTo,
+	documentIsolates,
 	embedderPolicy,
 	embedderPolicyBlocks,
 	embedderRefuses,
@@ -694,6 +702,12 @@ type BodyTransform = (
 		ancestors?: string[] | null;
 		/** a frame's navigation: the policy its csp attribute requires (navigationHints) */
 		requiredCSP?: string | null;
+		/**
+		 * a top-level navigation's: whether it is a top-level window's (a
+		 * popup's, which the browser sees as top-level), and what the
+		 * documents that started it told of its opener policy (src/coop.ts)
+		 */
+		opener?: { window: boolean; facts: OpenerFacts | null } | null;
 		/** the request's destination and mode (a worker's own script is `same-origin`, what it imports `cors`) */
 		destination?: RequestDestination;
 		mode?: RequestMode;
@@ -3778,6 +3792,13 @@ function genericForward(
 									navigation && nestedRoute !== null
 										? (chain?.required ?? null)
 										: null,
+								opener:
+									navigation && topLevel
+										? {
+												window: destination === 'document',
+												facts: chain?.coop ?? null,
+											}
+										: null,
 								partition:
 									frameSite === null
 										? null
@@ -5133,6 +5154,36 @@ export function registerRewrites(
 					...metaPolicies(decoded),
 				];
 				const facts = scriptFacts(texts, nonce, ownPolicies);
+				// a top-level document's opener policy, which the browser never
+				// gets as the page sent it: a popup's window leaves its browsing
+				// context group when Chrome's rule says it does, by a policy of
+				// the worker's own (src/coop.ts). Under an isolated host every
+				// popup keeps the host's (src/isolation.ts)
+				if (request.opener) {
+					const own = openerPolicy(
+						response.headers.get('cross-origin-opener-policy'),
+						url.url.origin,
+					);
+					let real = '';
+					if (request.opener.window && !rewriter.isolated) {
+						const told = request.opener.facts;
+						real = told
+							? realPolicy(told[3], switchesGroup(told, own, url.url.origin))
+							: '';
+						if (real) responseHeaders.set('cross-origin-opener-policy', real);
+					}
+					facts.coop = [own, real];
+				}
+				// a document its own Document-Isolation-Policy isolates is in an
+				// agent cluster apart from its origin's documents that none
+				// isolates: they do not reach each other (Context.ts
+				// reachableClients). Chrome ignores the policy where the origin
+				// is not potentially trustworthy
+				if (
+					documentIsolates(response.headers.get('document-isolation-policy')) &&
+					trustworthy(url.url.origin)
+				)
+					facts.dip = true;
 				// the document the hints machinery recorded for this response
 				// (its permissions policy, under its parent's): whether its real
 				// `sync-xhr` is off, which the served Permissions-Policy no longer

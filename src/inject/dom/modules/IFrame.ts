@@ -88,6 +88,34 @@ export default class IFrameModule extends Module<DocumentClient> {
 		// tab to the host and returned null).
 		realm.open = proxyModule.wrapFunction(realm.open, (target, that, args) => {
 			const page = args[0];
+			// the popup's first navigation is decided by this document's
+			// opener policy facts (src/coop.ts), told before it starts
+			try {
+				const url = new URL(String(page), moduleClient.baseURL.toString());
+				if (page !== undefined && /^https?:$/.test(url.protocol))
+					moduleClient
+						.getModule(NavigationHintModule)
+						?.hint(url.href, undefined, undefined, true);
+			} catch (error) {
+				// no URL: nothing navigates
+			}
+			// a document of another origin than a top-level page with COOP
+			// same-origin opens every popup without an opener (../openerFacts.ts)
+			let alone = false;
+			try {
+				alone = deferred().opensWithoutOpener(moduleClient);
+			} catch (error) {
+				// a top of another real origin: none of the proxy's
+			}
+			if (alone) {
+				const features =
+					args[2] === undefined || args[2] === null ? '' : String(args[2]);
+				args = [
+					args[0],
+					args[1],
+					features ? `${features},noopener` : 'noopener',
+				];
+			}
 			const opened = Reflect.apply(target, that, args) as
 				typeof globalThis | null;
 			if (!opened) return opened;

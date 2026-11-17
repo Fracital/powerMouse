@@ -1,3 +1,4 @@
+import type { OpenerFacts } from '../coop';
 import type { HopPolicy } from '../csp';
 
 // What documents told the worker about the navigations they started
@@ -115,6 +116,8 @@ export interface NavigationChain {
 	 * document it ends in (CSP Embedded Enforcement), when it has one
 	 */
 	required?: string;
+	/** a top-level navigation's opener policy facts (src/coop.ts) */
+	coop?: OpenerFacts;
 }
 
 const chains = new Map<string, NavigationChain & { at: number }>();
@@ -127,6 +130,7 @@ export function recordNavigationChain(
 	client: string | undefined,
 	parent: boolean,
 	required?: string,
+	coop?: OpenerFacts,
 ) {
 	const key = keyOf(url);
 	const known = navigationChain(url);
@@ -141,6 +145,7 @@ export function recordNavigationChain(
 		ancestors: ancestors ?? known?.ancestors,
 		// (told with the ancestors: a frame's hint says it, or that it has none)
 		required: ancestors ? required : known?.required,
+		coop: coop ?? known?.coop,
 		at: Date.now(),
 	});
 	if (chains.size > KEPT) chains.delete(chains.keys().next().value!);

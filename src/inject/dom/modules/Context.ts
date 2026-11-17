@@ -52,12 +52,19 @@ export function sameOrigin(first: string, second: string): boolean {
  * DOMHooks), so it never joins two sites. Each document's origin is its own
  * URL's (DocumentClient.url), never its base URL's; an opaque one (a
  * sandbox without allow-same-origin, a data: document) reaches nothing.
+ * A document its Document-Isolation-Policy isolates reaches only the
+ * documents of its origin that theirs isolates (measured in Chrome 157,
+ * the document-isolation suite).
  */
 export function reachableClients(
 	first: DocumentClient,
 	second: DocumentClient,
 ): boolean {
 	if (first === second) return true;
+	// one isolated by its Document-Isolation-Policy and one not are in two
+	// agent clusters, whatever their origins
+	if ((first.scriptFacts.dip === true) !== (second.scriptFacts.dip === true))
+		return false;
 	const mine = first.originKey;
 	const theirs = second.originKey;
 	if (mine === null || theirs === null) return false;

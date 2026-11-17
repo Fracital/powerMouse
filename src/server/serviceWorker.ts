@@ -1,6 +1,7 @@
 import type { SiteShields } from '../blocker/types';
 import type GenericCodec from '../Codecs';
 import { Config, ConfigCodec } from '../config';
+import type { OpenerFacts } from '../coop';
 import type { HopPolicy } from '../csp';
 import { isolationResponseHeaders } from '../isolation';
 import { kindPartition, partitionSite } from '../partition';
@@ -931,16 +932,29 @@ function handleMessage(event: ExtendableMessageEvent) {
 			// readback); a routed one is decoded to it
 			const target = new URL(ready.realURL(message.url));
 			if (!/^https?:$/.test(target.protocol)) return;
-			const csp = message.csp;
-			if (
-				csp &&
-				Array.isArray(csp.policies) &&
-				csp.policies.length <= 32 &&
-				JSON.stringify(csp).length <= 65536
-			)
+			const csp =
+				message.coopOnly !== true &&
+				message.csp &&
+				Array.isArray(message.csp.policies) &&
+				message.csp.policies.length <= 32 &&
+				JSON.stringify(message.csp).length <= 65536
+					? message.csp
+					: undefined;
+			// a top-level navigation's opener policy facts (src/coop.ts)
+			const coop = message.coop;
+			const opener: OpenerFacts | undefined =
+				Array.isArray(coop) &&
+				coop.length === 4 &&
+				typeof coop[0] === 'boolean' &&
+				coop
+					.slice(1)
+					.every((part) => typeof part === 'string' && part.length <= 2048)
+					? (coop as OpenerFacts)
+					: undefined;
+			if (csp || opener)
 				recordNavigationChain(
 					target.href,
-					csp.policies.filter(
+					(csp?.policies ?? []).filter(
 						(policy): policy is HopPolicy =>
 							Array.isArray(policy) &&
 							typeof policy[0] === 'string' &&
@@ -949,16 +963,19 @@ function handleMessage(event: ExtendableMessageEvent) {
 							(policy[2] === 'enforce' || policy[2] === 'report') &&
 							typeof policy[3] === 'string',
 					),
-					Array.isArray(csp.ancestors) &&
+					Array.isArray(csp?.ancestors) &&
 						csp.ancestors.every((origin) => typeof origin === 'string')
 						? csp.ancestors
 						: undefined,
 					(event.source as Client).id,
-					csp.parent === true,
-					typeof csp.required === 'string' && csp.required.length <= 4096
+					csp?.parent === true,
+					typeof csp?.required === 'string' && csp.required.length <= 4096
 						? csp.required
 						: undefined,
+					opener,
 				);
+			// carried by another site's document: the window's facts only
+			if (message.coopOnly === true) return;
 			recordNavigationHint(target.href, {
 				origin: new URL(real).origin,
 				activated: message.activated === true,

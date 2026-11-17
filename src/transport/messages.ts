@@ -605,6 +605,17 @@ export interface NavigationHintMessage {
 		parent?: boolean;
 		required?: string;
 	};
+	/**
+	 * A top-level navigation's opener policy facts (src/coop.ts
+	 * OpenerFacts): the active document's, or for a popup's first
+	 * navigation its creator's
+	 */
+	coop?: [boolean, string, string, string];
+	/**
+	 * the hint is another site's document carrying `coop` for a window no
+	 * worker controls: nothing else of it is the initiator's
+	 */
+	coopOnly?: boolean;
 }
 /**
  * What a proxied document (or the controller) sees that its requests'

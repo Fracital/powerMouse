@@ -7,9 +7,13 @@ import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import { deferred } from '../deferred';
 import { destinationURL } from '../freshContext';
 import { nativeElement } from './DOMHooks';
 import { hookWrite } from './MutationObserver';
+
+// a window's opener as the browser has it, taken when the bundle runs
+const nativeOpener = Reflect.getOwnPropertyDescriptor(window, 'opener')!.get!;
 
 /**
  * Tells the service worker, before a document's navigation leaves it, who
@@ -39,6 +43,12 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 		url: string,
 		allow?: string,
 		csp?: NavigationHintMessage['csp'],
+		/**
+		 * the navigation may open a window (a popup) this document makes:
+		 * true for window.open, a link's or a form's target and whether a
+		 * modifier key opens a new window
+		 */
+		opens?: true | [target: string | null, modifier: boolean],
 	) => void = () => {};
 	/** the real URL a frame's src was set to by its parent, which judged it (set by the parent on this document's module) */
 	judged: string | null = null;
@@ -72,8 +82,7 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 			'isActive',
 		)?.get;
 		const activation = global.navigator.userActivation;
-		const voucher = (): DocumentClient | null => {
-			const own = moduleClient.url.url.origin;
+		const routedClients = (): (DocumentClient | null)[] => {
 			const candidates = [moduleClient.routedClient()];
 			try {
 				const openerClient = (opener as Record<string, unknown> | null)?.[
@@ -83,19 +92,51 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 			} catch (error) {
 				// an opener of another origin: not ours
 			}
+			return candidates as (DocumentClient | null)[];
+		};
+		const voucher = (): DocumentClient | null => {
+			const own = moduleClient.url.url.origin;
 			return (
-				(candidates.find(
+				routedClients().find(
 					(client) => client && client.url.url.origin === own,
-				) as DocumentClient | undefined) ?? null
+				) ?? null
 			);
 		};
 		const send = (this.hint = (
 			url: string,
 			allow?: string,
 			csp?: NavigationHintMessage['csp'],
+			opens?: true | [string | null, boolean],
 		) => {
 			const routed = voucher();
-			if (!routed) return;
+			// what the worker decides a top-level navigation's opener policy
+			// by (../openerFacts.ts): only for a window this document opens,
+			// or a navigation of a real top the proxy has
+			let coop: NavigationHintMessage['coop'];
+			try {
+				const top = global.top as unknown as Record<string, unknown> | null;
+				if (opens || (top && moduleClient.names.client in top))
+					coop = deferred().openerFacts(moduleClient, opens, nativeOpener);
+			} catch (error) {
+				// a document going away, or the host's top of another origin
+			}
+			if (!routed) {
+				// a popup of another site than its opener's that no worker
+				// controls (in Chrome 157 a popup that stays in its opener's
+				// group has no controller): the opener's routed document
+				// carries the opener policy facts alone, which are the
+				// window's, not the initiator's
+				const carrier = coop && routedClients().find(Boolean);
+				carrier?.postToWorker({
+					[NAVIGATION_HINT]: {
+						directory: carrier.directory,
+						url,
+						coopOnly: true,
+						coop,
+					},
+				});
+				return;
+			}
 			let activated = false;
 			try {
 				activated = !!(activation && isActive?.call(activation));
@@ -111,6 +152,7 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 					nested: moduleClient.nestedRoute,
 					own: routed === moduleClient,
 					...(csp ? { csp } : {}),
+					...(coop ? { coop } : {}),
 				},
 			});
 		});
@@ -184,7 +226,15 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 			if (!link) return;
 			// the page's view: the real URL
 			const url = link.href;
-			if (/^https?:/.test(url)) send(url);
+			const mouse = event as MouseEvent;
+			if (/^https?:/.test(url))
+				send(url, undefined, undefined, [
+					link.getAttribute('target'),
+					event.type === 'auxclick' ||
+						mouse.ctrlKey ||
+						mouse.metaKey ||
+						mouse.shiftKey,
+				]);
 		};
 		// a form's submission, wherever it goes (a named popup or frame
 		// navigates for this document, under this document's activation): its
@@ -277,7 +327,12 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 						},
 						0,
 					]);
-				send(url.href, undefined, policies ? { policies } : undefined);
+				send(url.href, undefined, policies ? { policies } : undefined, [
+					own('formtarget')
+						? submitter!.getAttribute('formtarget')
+						: form.getAttribute('target'),
+					false,
+				]);
 			} catch (error) {
 				// an action that is no URL submits nowhere
 			}

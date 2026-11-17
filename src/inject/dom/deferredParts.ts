@@ -44,6 +44,7 @@ import { formEncoding, legacyFormQuery, legacyQuery } from './legacyEncoding';
 import { markupMembers } from './markupMembers';
 import FingerprintModule from './modules/Fingerprint';
 import { emulateServiceWorker } from './modules/serviceWorkerEmulation';
+import { openerFacts, opensWithoutOpener } from './openerFacts';
 import { sourcePolicy } from './sourcePolicy';
 
 const parts = {
@@ -64,6 +65,8 @@ const parts = {
 	legacyQuery,
 	formEncoding,
 	legacyFormQuery,
+	openerFacts,
+	opensWithoutOpener,
 };
 
 export type DeferredParts = typeof parts;

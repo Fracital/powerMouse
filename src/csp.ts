@@ -994,6 +994,17 @@ export interface ScriptFacts {
 	rtt?: Policy['disposition'];
 	/** a worker's: the policy of that name its bootstrap made (src/inject/trusted.ts) */
 	policy?: unknown;
+	/**
+	 * A top-level document's opener policy (src/coop.ts): its own, as the
+	 * page sent it ('' for none), and the one the browser got for its
+	 * window ('' or 'same-origin')
+	 */
+	coop?: [string, string];
+	/**
+	 * the document's own Document-Isolation-Policy isolates it: an agent
+	 * cluster apart from the documents of its origin that none isolates
+	 */
+	dip?: boolean;
 }
 
 /**

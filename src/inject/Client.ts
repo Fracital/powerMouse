@@ -646,6 +646,12 @@ export default class Client {
 						ttActive: facts.ttActive,
 						rtt: facts.rtt,
 						policy: facts.policy,
+						...(Array.isArray(facts.coop) &&
+						facts.coop.length === 2 &&
+						facts.coop.every((part) => typeof part === 'string')
+							? { coop: [facts.coop[0], facts.coop[1]] as [string, string] }
+							: {}),
+						...(facts.dip === true ? { dip: true } : {}),
 					}
 				: { evaluates: true };
 		// built now, before any page script runs, from the window's own
