@@ -1420,6 +1420,22 @@ export default class UnrouteModule extends Module<Client> {
 			}
 			return this.#pageSites.get(error);
 		};
+		this.client.callerScript = () => {
+			const routed = this.#callerLocation?.()?.routed;
+			if (!routed) return null;
+			try {
+				const parsed = parseRoutedURL(
+					routed,
+					this.client.codec,
+					routedPrefix(this.client),
+				);
+				// a script's own route (not a document's, whose markup scripts
+				// are named for it)
+				return parsed.resource.startsWith('js:') ? parsed.url.url.href : null;
+			} catch (error) {
+				return null;
+			}
+		};
 		const prepare: PrepareStackTrace = (error, sites) => {
 			// V8 passes the error and its call sites. A page that calls the
 			// formatter it read, to hand off to the one installed before its own,

@@ -52,7 +52,7 @@ export default class FunctionModule extends Module<Client> {
 					}
 					const rewritten = modifyJS(
 						`(${written})`,
-						this.client.baseURL,
+						this.client.codeBaseURL(written),
 						this.client.config,
 						'generic',
 					);

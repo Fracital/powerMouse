@@ -391,6 +391,31 @@ export default class Client {
 		return this.url;
 	}
 	/**
+	 * @internal set by the Unroute module: the URL of the external script or
+	 * module whose code called into the inject, null for any other caller (a
+	 * script of the markup, code made from a string, none to be found)
+	 */
+	callerScript?: () => string | null;
+	/**
+	 * What `import()` in code the page makes with eval or Function resolves
+	 * against: natively the base URL of the active script, which for an
+	 * external script or a module is its own URL, and for a script of the
+	 * markup the document's base URL. Asked only of code that may import (the
+	 * caller is found on a stack). Chrome resolves a timer's string against
+	 * the document's base URL whichever script set the timer, and so does
+	 * the Timers module.
+	 */
+	codeBaseURL(code: string): StompURL {
+		if (!code.includes('import')) return this.baseURL;
+		const script = this.callerScript?.();
+		if (!script) return this.baseURL;
+		try {
+			return new StompURL(new URL(script), this.url);
+		} catch (error) {
+			return this.baseURL;
+		}
+	}
+	/**
 	 * The location of the context
 	 * May not match the context URL
 	 */

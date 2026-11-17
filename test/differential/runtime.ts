@@ -59,6 +59,8 @@ Reflect.defineProperty(globalThis, '__differential', {
 			getModule: (Module: unknown) => modules.get(Module),
 			trustedValue: (value: unknown) => value,
 			codeEval: () => null,
+			// (the harness has no script of the page's to resolve against)
+			codeBaseURL: () => url,
 			noteCodeSample: () => undefined,
 			resolveTop: world.resolveTop,
 			navigationRoute: world.navigationRoute,

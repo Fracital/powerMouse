@@ -141,7 +141,7 @@ export default class AccessModule extends Module<Client> {
 			}
 			const code = modifyJS(
 				page,
-				this.client.baseURL,
+				this.client.codeBaseURL(page),
 				this.client.config,
 				'generic',
 			);
