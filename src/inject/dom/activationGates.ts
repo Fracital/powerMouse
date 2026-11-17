@@ -18,6 +18,7 @@ import {
 } from './activation';
 import type DocumentClient from './Client';
 import { reachableClients } from './modules/Context';
+import { siteWindows } from './siteWindows';
 
 /** what one document's input walks the frames for at most, in a burst of input */
 const WALK_GAP = 100;
@@ -566,6 +567,25 @@ export function walkInput(client: DocumentClient) {
 		if (parent === current.global) break;
 		current = clientOf(parent);
 	}
+	// (the site pool: an ancestor of another slot's origin is one too, and
+	// so are those past it, which this document reaches by the browser's
+	// own parent of each)
+	const sites = client.sites;
+	if (sites)
+		for (let context: unknown = client.global, depth = 0; depth < 64; depth++) {
+			const parent = siteWindows().nativeParentOf(context);
+			if (!parent || parent === context) break;
+			ancestors.add(parent);
+			context = parent;
+		}
+	// the top of the proxied world a document of another slot's frame tree
+	// is in (the site pool: a frame of another slot, between, hides the
+	// proxied top from a document under it)
+	const worldOf = (other: DocumentClient) =>
+		sites
+			? siteWindows().siteTop(other.global, sites.hub, client.global)
+			: other.proxiedTop;
+	const world = sites ? worldOf(client) : proxiedTop;
 	const opaque = client.sandboxedOpaque;
 	let budget = 2000;
 	const visit = (context: Window) => {
@@ -578,7 +598,7 @@ export function walkInput(client: DocumentClient) {
 					own =
 						!opaque &&
 						!other.sandboxedOpaque &&
-						other.proxiedTop === proxiedTop &&
+						(other.proxiedTop === proxiedTop || worldOf(other) === world) &&
 						reachableClients(client, other);
 				} catch (error) {
 					// no origin to compare: another origin's

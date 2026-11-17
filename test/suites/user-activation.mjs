@@ -37,6 +37,7 @@ import {
 	openDemo,
 	PROXY,
 	sleep,
+	SLOT_PORTS,
 	submitLanding,
 } from '../lib.mjs';
 
@@ -317,11 +318,24 @@ for (const [mode, base] of [
 		);
 	same('the frames a click in the host page activates are', [], proxied.host);
 	for (const api of Object.keys(CALLS))
-		same(
-			`${api} in ${CALLS[api]}, after a click in the top, answers`,
-			native.calls[api],
-			proxied.calls[api],
-		);
+		if (api === 'fullscreen' && mode === 'isolated' && SLOT_PORTS.length)
+			// the site pool in isolation mode: the frame of another site is a
+			// slot's, which the click in the top gives no activation, as
+			// natively, so the browser answers its request, and refuses it for
+			// the permissions policy of the host's frame, which does not allow
+			// fullscreen (the demo's FRAME_ALLOW): refused either way
+			ok(
+				`${mode}: ${api} in ${CALLS[api]}, after a click in the top, is refused as natively`,
+				/^rejected TypeError: /.test(native.calls[api]) &&
+					/^rejected TypeError: /.test(proxied.calls[api]),
+				`native ${JSON.stringify(native.calls[api])} proxied ${JSON.stringify(proxied.calls[api])}`,
+			);
+		else
+			same(
+				`${api} in ${CALLS[api]}, after a click in the top, answers`,
+				native.calls[api],
+				proxied.calls[api],
+			);
 	for (const api of OWN)
 		same(
 			`${api} in cross, after a click in it, answers`,
