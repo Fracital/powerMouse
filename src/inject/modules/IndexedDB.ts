@@ -4,10 +4,11 @@ import ProxyModule from './Proxy';
 
 export default class IndexedDBModule extends Module<Client> {
 	apply() {
+		const global = this.client.global;
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
-		this.client.global.IDBFactory.prototype.open = proxyModule.wrapFunction(
-			this.client.global.IDBFactory.prototype.open,
+		global.IDBFactory.prototype.open = proxyModule.wrapFunction(
+			global.IDBFactory.prototype.open,
 			(target, that, args) => {
 				if (typeof args[0] === 'string') {
 					args[0] = `${args[0]}@${this.client.storageKey}`;
@@ -18,18 +19,17 @@ export default class IndexedDBModule extends Module<Client> {
 		);
 
 		// deleting a database is deleting the page's own
-		this.client.global.IDBFactory.prototype.deleteDatabase =
-			proxyModule.wrapFunction(
-				this.client.global.IDBFactory.prototype.deleteDatabase,
-				(target, that, args) => {
-					if (typeof args[0] === 'string')
-						args[0] = `${args[0]}@${this.client.storageKey}`;
-					return Reflect.apply(target, that, args);
-				},
-			);
+		global.IDBFactory.prototype.deleteDatabase = proxyModule.wrapFunction(
+			global.IDBFactory.prototype.deleteDatabase,
+			(target, that, args) => {
+				if (typeof args[0] === 'string')
+					args[0] = `${args[0]}@${this.client.storageKey}`;
+				return Reflect.apply(target, that, args);
+			},
+		);
 
 		// the page's own databases, by their own names
-		const factory = this.client.global.IDBFactory.prototype as IDBFactory & {
+		const factory = global.IDBFactory.prototype as IDBFactory & {
 			databases?: () => Promise<IDBDatabaseInfo[]>;
 		};
 		if (typeof factory.databases === 'function')
@@ -51,12 +51,10 @@ export default class IndexedDBModule extends Module<Client> {
 				},
 			);
 
-		Reflect.defineProperty(this.client.global.IDBDatabase.prototype, 'name', {
+		Reflect.defineProperty(global.IDBDatabase.prototype, 'name', {
 			get: proxyModule.wrapFunction(
-				Reflect.getOwnPropertyDescriptor(
-					this.client.global.IDBDatabase.prototype,
-					'name',
-				)!.get!,
+				Reflect.getOwnPropertyDescriptor(global.IDBDatabase.prototype, 'name')!
+					.get!,
 				(target, that, args) => {
 					// `name@origin`: strip the suffix, not the prefix
 					const name = Reflect.apply(target, that, args) as string;

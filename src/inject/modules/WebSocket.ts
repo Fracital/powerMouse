@@ -17,11 +17,12 @@ const CLOSE_ANSWER_MS = 500;
 
 export default class WebSocketModule extends Module<Client> {
 	apply() {
+		const realm = this.client.global;
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const client = this.client;
 		const instances = new WeakSet();
 		const { origin } = this.client.url.url;
-		const NativeWebSocket = this.client.global.WebSocket;
+		const NativeWebSocket = realm.WebSocket;
 		const { CONNECTING, OPEN, CLOSING, CLOSED } = NativeWebSocket;
 
 		/**
@@ -307,17 +308,13 @@ export default class WebSocketModule extends Module<Client> {
 		classConstant(globalWebSocketProxy, 'OPEN', OPEN);
 		classConstant(globalWebSocketProxy, 'CLOSING', CLOSING);
 		classConstant(globalWebSocketProxy, 'CLOSED', CLOSED);
-		proxyModule.mirrorClass(
-			this.client.global.WebSocket,
-			globalWebSocketProxy,
-			instances,
-		);
+		proxyModule.mirrorClass(realm.WebSocket, globalWebSocketProxy, instances);
 
 		// WebSocketStream (Chrome): the same connection through the proxied
 		// WebSocket, with the streams API the page expects. Only where the
 		// browser has it, so feature detection stays truthful.
 		const nativeStream = (
-			this.client.global as { WebSocketStream?: new (...args: any[]) => any }
+			realm as { WebSocketStream?: new (...args: any[]) => any }
 		).WebSocketStream;
 		if (typeof nativeStream === 'function') {
 			const streamInstances = new WeakSet();
@@ -451,11 +448,9 @@ export default class WebSocketModule extends Module<Client> {
 				nativeStream,
 			);
 			proxyModule.mirrorClass(nativeStream, streamProxy, streamInstances);
-			(this.client.global as { WebSocketStream?: unknown }).WebSocketStream =
-				streamProxy;
+			(realm as { WebSocketStream?: unknown }).WebSocketStream = streamProxy;
 		}
 
-		this.client.global.WebSocket =
-			globalWebSocketProxy as unknown as typeof WebSocket;
+		realm.WebSocket = globalWebSocketProxy as unknown as typeof WebSocket;
 	}
 }

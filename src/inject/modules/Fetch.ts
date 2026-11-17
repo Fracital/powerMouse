@@ -302,12 +302,13 @@ export function reportOnly(client: Client, url: URL, times: number) {
 
 export default class FetchModule extends Module<Client> {
 	apply() {
+		const realm = this.client.global;
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
 		const eventSourceURLs = new WeakMap<EventSource, string>();
 
-		this.client.global.EventSource = proxyModule.wrapFunction(
-			this.client.global.EventSource,
+		realm.EventSource = proxyModule.wrapFunction(
+			realm.EventSource,
 			(target, that, args, newTarget) => {
 				catchRequiredArguments(args.length, 1, 'EventSource', 'constructor');
 
@@ -347,16 +348,14 @@ export default class FetchModule extends Module<Client> {
 			true,
 		);
 
-		Reflect.defineProperty(this.client.global.EventSource.prototype, 'url', {
+		Reflect.defineProperty(realm.EventSource.prototype, 'url', {
 			configurable: true,
 			enumerable: true,
 			get: this.client
 				.getModule(ProxyModule)!
 				.wrapFunction(
-					Reflect.getOwnPropertyDescriptor(
-						this.client.global.EventSource.prototype,
-						'url',
-					)!.get!,
+					Reflect.getOwnPropertyDescriptor(realm.EventSource.prototype, 'url')!
+						.get!,
 					(target, that, args) => {
 						if (eventSourceURLs.has(that)) {
 							return eventSourceURLs.get(that);
@@ -374,38 +373,34 @@ export default class FetchModule extends Module<Client> {
 		// the first one's.) An event the page made itself and dispatched on
 		// the source keeps what the page gave it.
 		const messageOrigin = Reflect.getOwnPropertyDescriptor(
-			this.client.global.MessageEvent.prototype,
+			realm.MessageEvent.prototype,
 			'origin',
 		);
 		const nativeEventTarget = Reflect.getOwnPropertyDescriptor(
-			this.client.global.Event.prototype,
+			realm.Event.prototype,
 			'target',
 		)?.get;
 		if (messageOrigin?.get && nativeEventTarget)
-			Reflect.defineProperty(
-				this.client.global.MessageEvent.prototype,
-				'origin',
-				{
-					...messageOrigin,
-					get: proxyModule.wrapFunction(
-						messageOrigin.get,
-						(target, that: MessageEvent, args) => {
-							const origin = Reflect.apply(target, that, args);
-							if (!that.isTrusted) return origin;
-							const url = eventSourceURLs.get(
-								Reflect.apply(nativeEventTarget, that, []) as EventSource,
-							);
-							return url === undefined ? origin : new URL(url).origin;
-						},
-					),
-				},
-			);
+			Reflect.defineProperty(realm.MessageEvent.prototype, 'origin', {
+				...messageOrigin,
+				get: proxyModule.wrapFunction(
+					messageOrigin.get,
+					(target, that: MessageEvent, args) => {
+						const origin = Reflect.apply(target, that, args);
+						if (!that.isTrusted) return origin;
+						const url = eventSourceURLs.get(
+							Reflect.apply(nativeEventTarget, that, []) as EventSource,
+						);
+						return url === undefined ? origin : new URL(url).origin;
+					},
+				),
+			});
 
 		const nativeResponseURL = Reflect.getOwnPropertyDescriptor(
-			this.client.global.Response.prototype,
+			realm.Response.prototype,
 			'url',
 		)!.get!;
-		Reflect.defineProperty(this.client.global.Response.prototype, 'url', {
+		Reflect.defineProperty(realm.Response.prototype, 'url', {
 			configurable: true,
 			enumerable: true,
 			get: proxyModule.wrapFunction(nativeResponseURL, (target, that, args) => {
@@ -427,8 +422,8 @@ export default class FetchModule extends Module<Client> {
 		// Response.redirect(url) resolves a relative URL against the page's
 		// own, where the browser's base is the route (its Location header
 		// would name the proxy)
-		this.client.global.Response.redirect = proxyModule.wrapFunction(
-			this.client.global.Response.redirect,
+		realm.Response.redirect = proxyModule.wrapFunction(
+			realm.Response.redirect,
 			(target, that, args) => {
 				if (!args.length) return Reflect.apply(target, that, args);
 				let location: string;
@@ -436,7 +431,7 @@ export default class FetchModule extends Module<Client> {
 					location = new URL(String(args[0]), this.client.baseURL.toString())
 						.href;
 				} catch (error) {
-					throw new this.client.global.TypeError(
+					throw new realm.TypeError(
 						"Failed to execute 'redirect' on 'Response': Invalid URL",
 					);
 				}
@@ -468,7 +463,7 @@ export default class FetchModule extends Module<Client> {
 			try {
 				requested = new URL(referrer, this.client.baseURL.toString());
 			} catch (error) {
-				throw new this.client.global.TypeError(
+				throw new realm.TypeError(
 					`${failed}: Referrer '${referrer}' is not a valid URL.`,
 				);
 			}
@@ -485,12 +480,12 @@ export default class FetchModule extends Module<Client> {
 			this.client.isWorker ? 'WorkerGlobalScope' : 'Window'
 		}'`;
 
-		this.client.global.Request = proxyModule.wrapFunction(
-			this.client.global.Request,
+		realm.Request = proxyModule.wrapFunction(
+			realm.Request,
 			(target, _that, args, newTarget) => {
 				if (args.length === 0) {
 					throw withStack(
-						new this.client.global.DOMException(
+						new realm.DOMException(
 							"Failed to construct 'Request': 1 argument required, but only 0 present.'",
 						),
 					);
@@ -509,7 +504,7 @@ export default class FetchModule extends Module<Client> {
 						// a URL that does not parse against the page's (a relative
 						// one in a data: worker, whose origin is opaque) throws
 						// Request's own error, not URL's
-						throw new this.client.global.TypeError(
+						throw new realm.TypeError(
 							`Failed to construct 'Request': Failed to parse URL from ${text}`,
 						);
 					}
@@ -523,15 +518,15 @@ export default class FetchModule extends Module<Client> {
 			true,
 		);
 		// (the fetch hook makes its own, whatever the page puts on the window)
-		const PageRequest = this.client.global.Request;
+		const PageRequest = realm.Request;
 
 		// a Request's referrer is a route to the browser (pageReferrer): the
 		// page reads the URL it gave
 		const referrerDescriptor = Reflect.getOwnPropertyDescriptor(
-			this.client.global.Request.prototype,
+			realm.Request.prototype,
 			'referrer',
 		)!;
-		Reflect.defineProperty(this.client.global.Request.prototype, 'referrer', {
+		Reflect.defineProperty(realm.Request.prototype, 'referrer', {
 			...referrerDescriptor,
 			get: proxyModule.wrapFunction(
 				referrerDescriptor.get!,
@@ -552,34 +547,30 @@ export default class FetchModule extends Module<Client> {
 		// page has defined on the object (YouTube shadows a data: Request's
 		// url and method to see whether fetch reads them)
 		const nativeRequestURL = Reflect.getOwnPropertyDescriptor(
-			this.client.global.Request.prototype,
+			realm.Request.prototype,
 			'url',
 		)!.get!;
 		const nativeRequestMode = Reflect.getOwnPropertyDescriptor(
-			this.client.global.Request.prototype,
+			realm.Request.prototype,
 			'mode',
 		)!.get!;
 
 		const nativeResponseType = Reflect.getOwnPropertyDescriptor(
-			this.client.global.Response.prototype,
+			realm.Response.prototype,
 			'type',
 		)!.get!;
 
 		// (where the browser has it: the window itself, a worker scope's
 		// prototype)
-		ownerOf(this.client.global, 'fetch').fetch = proxyModule.wrapFunction(
-			this.client.global.fetch,
+		ownerOf(realm, 'fetch').fetch = proxyModule.wrapFunction(
+			realm.fetch,
 			async (target, that, args) => {
 				// nothing to fetch: the browser's own rejection
 				if (!args.length) return await Reflect.apply(target, that, args);
 				// called on something that is not this scope (fetch.call(o)):
 				// the browser says whether it takes the receiver, asked with
 				// no argument, which fetches nothing and rejects either way
-				if (
-					that !== undefined &&
-					that !== null &&
-					that !== this.client.global
-				) {
+				if (that !== undefined && that !== null && that !== realm) {
 					const refusal = (await Reflect.apply(target, that, []).then(
 						() => null,
 						(error: unknown) => error,
@@ -609,7 +600,7 @@ export default class FetchModule extends Module<Client> {
 					// a URL with credentials is no request: the browser's own
 					// TypeError, which the route (it has none) would not get
 					if (url.username !== '' || url.password !== '')
-						throw new this.client.global.TypeError(
+						throw new realm.TypeError(
 							`${fetchFailed}: Request cannot be constructed from a URL that includes credentials: ${url.href}`,
 						);
 					init = args[1];
@@ -729,7 +720,7 @@ export default class FetchModule extends Module<Client> {
 		// as it is unloaded or put in the back/forward cache), unless its
 		// signal aborted first. The page gets a FetchLaterResult whose
 		// `activated` says whether it was sent.
-		const global = this.client.global as typeof globalThis & {
+		const global = realm as typeof globalThis & {
 			fetchLater?: (...args: unknown[]) => unknown;
 			FetchLaterResult?: { prototype: object };
 		};

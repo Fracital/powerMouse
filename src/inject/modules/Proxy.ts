@@ -602,9 +602,10 @@ export default class ProxyModule extends Module<Client> {
 	/** the constructors the page has in place of the realm's own, by the native */
 	#standIns = new Map<Function, Function>();
 	apply() {
+		const global = this.client.global;
 		// what this bundle rewrites keeps its text here, for the hook below
 		keepSourcesHere();
-		const ownPrototype = this.client.global.Function.prototype;
+		const ownPrototype = global.Function.prototype;
 		// a function of another realm (a same-origin frame that loaded its own
 		// copy of the inject): that realm's toString, hooked by its copy, knows
 		// its wrappers, which this copy never made. One hop at most: the other
@@ -640,8 +641,8 @@ export default class ProxyModule extends Module<Client> {
 			}
 		};
 		let delegating = false;
-		this.client.global.Function.prototype.toString = this.wrapFunction(
-			this.client.global.Function.prototype.toString,
+		global.Function.prototype.toString = this.wrapFunction(
+			global.Function.prototype.toString,
 			(target, that, args) => {
 				const known = this.functionStrings.get(that);
 				if (known !== undefined) return sourceOf(known);

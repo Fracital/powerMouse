@@ -113,7 +113,8 @@ type PatternSpec = {
 
 export default class AccessModule extends Module<Client> {
 	apply() {
-		const evalSnapshot = this.client.global.eval;
+		const realm = this.client.global;
+		const evalSnapshot = realm.eval;
 
 		const proxyModule = this.client.getModule(ProxyModule);
 
@@ -121,8 +122,7 @@ export default class AccessModule extends Module<Client> {
 		// (Trusted Types) is code, as for the browser
 		const isCode = (x: unknown): x is string | object => {
 			if (typeof x === 'string') return true;
-			const Trusted = (this.client.global as { TrustedScript?: unknown })
-				.TrustedScript;
+			const Trusted = (realm as { TrustedScript?: unknown }).TrustedScript;
 			return typeof Trusted === 'function' && x instanceof Trusted;
 		};
 		/**
@@ -231,7 +231,7 @@ export default class AccessModule extends Module<Client> {
 				(this.client as { serviceWorkerVersion?: string }).serviceWorkerVersion
 			)
 				return failing(
-					new this.client.global.TypeError(
+					new realm.TypeError(
 						'import() is disallowed on ServiceWorkerGlobalScope by the HTML specification. See https://github.com/w3c/ServiceWorker/issues/1356.',
 					),
 				) as unknown as string;
@@ -402,10 +402,7 @@ export default class AccessModule extends Module<Client> {
 		// of the page's would see: the browser's own getter of `window` (an
 		// unforgeable property, so no hook's and no page's) answers for a
 		// window and throws for anything else. A worker has no windows.
-		const windowGetter = Reflect.getOwnPropertyDescriptor(
-			this.client.global,
-			'window',
-		)?.get;
+		const windowGetter = Reflect.getOwnPropertyDescriptor(realm, 'window')?.get;
 		// The browser's own `onmouseenter` getter answers a receiver that is
 		// no window with undefined instead of throwing ([LegacyLenientThis]),
 		// and asks nothing of it either: a window's is its handler or null
@@ -415,7 +412,7 @@ export default class AccessModule extends Module<Client> {
 		// costs about 3 us, which made a loop over an array of objects about
 		// sixty times slower)
 		const lenient = Reflect.getOwnPropertyDescriptor(
-			this.client.global,
+			realm,
 			'onmouseenter',
 		)?.get;
 		const isWindowObject = (value: unknown): boolean => {
@@ -437,12 +434,11 @@ export default class AccessModule extends Module<Client> {
 		// property of each document), and Document.prototype's own
 		// `onmouseenter` getter is as lenient as the window's: it answers
 		// undefined for anything that is no document and asks nothing of it
-		const documentLenient = (
-			this.client.global as { Document?: { prototype: object } }
-		).Document
+		const documentLenient = (realm as { Document?: { prototype: object } })
+			.Document
 			? Reflect.getOwnPropertyDescriptor(
-					(this.client.global as unknown as { Document: { prototype: object } })
-						.Document.prototype,
+					(realm as unknown as { Document: { prototype: object } }).Document
+						.prototype,
 					'onmouseenter',
 				)?.get
 			: undefined;
@@ -631,7 +627,7 @@ export default class AccessModule extends Module<Client> {
 				// the client's global is not the page's to replace (see get)
 				if (key === this.client.names.client) return righthand;
 				// `window.eval = saved`
-				if (key === 'eval' && target === this.client.global)
+				if (key === 'eval' && target === realm)
 					righthand = evalWritten(righthand);
 
 				// (asked of these two names alone: reading the document is a
@@ -641,15 +637,15 @@ export default class AccessModule extends Module<Client> {
 					const isDocument =
 						typeof target === 'object' &&
 						target !== null &&
-						target === (this.client.global as any).document;
-					if (target === this.client.global || isDocument) {
+						target === (realm as any).document;
+					if (target === realm || isDocument) {
 						if (key === 'location') {
 							// this client's location: an about:blank child runs its
 							// creator's bundle, whose free `location` is the creator's.
 							// The operator reads the Location (`w.location ||= u`
 							// answers it, `w.location += u` makes it a string) and
 							// writes its href
-							const standIn = (this.client.global.location as any)[
+							const standIn = (realm.location as any)[
 								this.client.names.globalProxy
 							];
 							const property = NativeSymbol();
@@ -990,7 +986,7 @@ export default class AccessModule extends Module<Client> {
 					set(
 						// this document's own location: a navigation the browser's
 						// history records (another window's is that window's)
-						target === this.client.global.location
+						target === realm.location
 							? this.client.navigationRoute(destination)
 							: routeHTML(
 									new StompURL(destination, this.client.url),
@@ -1550,16 +1546,17 @@ export default class AccessModule extends Module<Client> {
 		// Where a rewritten script reaches it (src/helperNames.ts
 		// accessExpression): a property of the realm's Number.prototype, for
 		// good. A page can neither redefine it nor bind a name in its way
-		Reflect.defineProperty(
-			this.client.global.Number.prototype,
-			this.client.names.access,
-			{ value: api, configurable: false, writable: false, enumerable: false },
-		);
-		accessHolders.add(this.client.global.Number.prototype);
+		Reflect.defineProperty(realm.Number.prototype, this.client.names.access, {
+			value: api,
+			configurable: false,
+			writable: false,
+			enumerable: false,
+		});
+		accessHolders.add(realm.Number.prototype);
 		// and the global of that name, which hosts' hooks read (src/hooks.ts)
 		// and nothing of the inject's does. Not enumerable: Object.keys(window)
 		// must not name it
-		Reflect.defineProperty(this.client.global, this.client.names.access, {
+		Reflect.defineProperty(realm, this.client.names.access, {
 			value: api,
 			configurable: true,
 			writable: true,

@@ -188,8 +188,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		return nativeElement.getAttribute.call(this.#scratch, 'style') ?? '';
 	}
 	apply() {
+		const realm = this.client.global;
 		// before the BlobDocuments module wraps it (it applies after this one)
-		const NativeBlob = this.client.global.Blob;
+		const NativeBlob = realm.Blob;
 
 		// A document no service worker controls (an about:blank frame or popup
 		// the page built, a document it opened, or a blob: document: Chrome
@@ -206,9 +207,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		const uncontrolled = () =>
 			!this.client.controlled &&
 			(this.client.opened ||
-				this.client.global.location.href === 'about:blank' ||
-				this.client.global.location.href === 'about:srcdoc' ||
-				this.client.global.location.protocol === 'blob:');
+				realm.location.href === 'about:blank' ||
+				realm.location.href === 'about:srcdoc' ||
+				realm.location.protocol === 'blob:');
 		this.uncontrolled = uncontrolled;
 		// the proxy origin from the base URL: an about:blank document's own
 		// origin reads "null"
@@ -224,8 +225,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// blob: URL once it is in (a hook that runs again for the same value
 		// keeps the copy)
 		// taken now: a page that replaces them later sees none of the copies
-		const createObjectURL = this.client.global.URL.createObjectURL;
-		const revokeObjectURL = this.client.global.URL.revokeObjectURL;
+		const createObjectURL = realm.URL.createObjectURL;
+		const revokeObjectURL = realm.URL.revokeObjectURL;
 		/**
 		 * One value's copies: the routed value, what was set, the blobs made.
 		 * `kept` are the images that hold a sealed copy's cache entry
@@ -242,20 +243,18 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			live?: string[];
 			retried?: boolean;
 		};
-		const createElement = this.client.global.Document.prototype.createElement;
+		const createElement = realm.Document.prototype.createElement;
 		const isConnected = Reflect.getOwnPropertyDescriptor(
-			this.client.global.Node.prototype,
+			realm.Node.prototype,
 			'isConnected',
 		)!.get!;
 		/** an image the inject keeps, loading `url` in this document; whether it loaded */
 		const keep = (url: string, state: Copy): Promise<boolean> =>
 			new Promise((resolve) => {
 				try {
-					const keeper = Reflect.apply(
-						createElement,
-						this.client.global.document,
-						['img'],
-					) as HTMLImageElement;
+					const keeper = Reflect.apply(createElement, realm.document, [
+						'img',
+					]) as HTMLImageElement;
 					for (const type of ['load', 'error'])
 						nativeElement.addEventListener.call(
 							keeper,
@@ -308,12 +307,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				return dead;
 			}
 			const url = proxyBlobURL(
-				Reflect.apply(createObjectURL, this.client.global.URL, [
-					body,
-				]) as string,
+				Reflect.apply(createObjectURL, realm.URL, [body]) as string,
 			);
 			if (!(await keep(url, state)))
-				Reflect.apply(revokeObjectURL, this.client.global.URL, [url]);
+				Reflect.apply(revokeObjectURL, realm.URL, [url]);
 			return url;
 		};
 		/**
@@ -332,7 +329,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			state.live = undefined;
 			const revoke = (urls: string[]) => {
 				for (const url of urls)
-					Reflect.apply(revokeObjectURL, this.client.global.URL, [url]);
+					Reflect.apply(revokeObjectURL, realm.URL, [url]);
 			};
 			if (
 				placed !== undefined &&
@@ -495,7 +492,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						else {
 							blobLoads.delete(url);
 							opaqueCopies.delete(url);
-							Reflect.apply(revokeObjectURL, this.client.global.URL, [url]);
+							Reflect.apply(revokeObjectURL, realm.URL, [url]);
 						}
 					// the images that hold the copies still shown stay with them
 					if (previous.kept?.length && state.made.length)
@@ -520,7 +517,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			});
 		};
 		// a declaration block's own methods, before the hooks wrap them
-		const declarationProto = this.client.global.CSSStyleDeclaration.prototype;
+		const declarationProto = realm.CSSStyleDeclaration.prototype;
 		const nativeDeclaration = {
 			setProperty: declarationProto.setProperty,
 			getPropertyValue: declarationProto.getPropertyValue,
@@ -676,9 +673,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				);
 			else {
 				url = proxyBlobURL(
-					Reflect.apply(createObjectURL, this.client.global.URL, [
-						body,
-					]) as string,
+					Reflect.apply(createObjectURL, realm.URL, [body]) as string,
 				);
 				if (opaque && (kind === 'script' || kind === 'style'))
 					(state.live ??= []).push(url);
@@ -723,7 +718,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				);
 				if (!response.ok) return null;
 				const url = proxyBlobURL(
-					Reflect.apply(createObjectURL, this.client.global.URL, [
+					Reflect.apply(createObjectURL, realm.URL, [
 						new NativeBlob([response.rawArrayBuffer], {
 							type: response.headers.get('content-type') ?? 'text/javascript',
 						}),
@@ -745,14 +740,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			for (const url of state.made.splice(0)) {
 				blobLoads.delete(url);
 				opaqueCopies.delete(url);
-				Reflect.apply(revokeObjectURL, this.client.global.URL, [url]);
+				Reflect.apply(revokeObjectURL, realm.URL, [url]);
 			}
 			state.kept = undefined;
 			state.live = undefined;
 		};
-		const stopImmediate =
-			this.client.global.Event.prototype.stopImmediatePropagation;
-		const nativeQuery = this.client.global.Document.prototype.querySelector;
+		const stopImmediate = realm.Event.prototype.stopImmediatePropagation;
+		const nativeQuery = realm.Document.prototype.querySelector;
 		/**
 		 * A script the page wrote got its copy during the write (syncCopyOf),
 		 * in the markup: the element the parser makes from it loads the URL.
@@ -763,13 +757,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		const endWritten = (state: Copy, url: string) => {
 			if (!state.live?.includes(url)) return;
 			state.live = state.live.filter((live) => live !== url);
-			const revoke = () =>
-				Reflect.apply(revokeObjectURL, this.client.global.URL, [url]);
+			const revoke = () => Reflect.apply(revokeObjectURL, realm.URL, [url]);
 			const waits = [0, 50, 250, 1000, 5000, 24_000];
 			const look = () => {
 				let found: Element | null = null;
 				try {
-					found = Reflect.apply(nativeQuery, this.client.global.document, [
+					found = Reflect.apply(nativeQuery, realm.document, [
 						`script[src="${url}"],script[href="${url}"]`,
 					]) as Element | null;
 				} catch (error) {
@@ -785,7 +778,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// list of scripts that execute in order follows when each gets its
 		// src): a copy is applied once every earlier one of its document's is
 		const scriptAsync = Reflect.getOwnPropertyDescriptor(
-			this.client.global.HTMLScriptElement.prototype,
+			realm.HTMLScriptElement.prototype,
 			'async',
 		)?.get;
 		const inOrder = new WeakMap<
@@ -853,7 +846,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// and the browser refuses them itself, with the error and the console
 		// message it gives natively.
 		{
-			const global = this.client.global as typeof globalThis;
+			const global = realm as typeof globalThis;
 			const targetOf = Reflect.getOwnPropertyDescriptor(
 				global.Event.prototype,
 				'target',
@@ -1116,7 +1109,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				],
 				{ type: 'text/html' },
 			);
-			return proxyBlobURL(this.client.global.URL.createObjectURL(blob));
+			return proxyBlobURL(realm.URL.createObjectURL(blob));
 		};
 		const domHooksModule = this.client.getModule(DOMHooksModule)!;
 		// whether a document in this frame may run scripts: its own sandbox (as
@@ -1133,7 +1126,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// would reach the real top. Every `on*` the platform knows about, from
 		// the prototypes that carry them; one hook watches them all
 		const handlerNames = new Set<string>();
-		const g = this.client.global;
+		const g = realm;
 		for (const owner of [
 			g,
 			g.Document.prototype,
@@ -1301,7 +1294,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// setting baseVal writes through the hooked setAttribute, so it routes
 		{
 			const proxyModule = this.client.getModule(ProxyModule)!;
-			const global = this.client.global as unknown as Record<string, any>;
+			const global = realm as unknown as Record<string, any>;
 			const owners = new WeakMap<object, Element>();
 			for (const name of SVG_HREF_INTERFACES) {
 				const prototype = global[name]?.prototype;
@@ -1383,24 +1376,16 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			['AREA', 'target'],
 			['FORM', 'target'],
 			['BASE', 'target'],
-			[this.client.global.HTMLAnchorElement, 'target', ogOrFalse('target')],
-			[this.client.global.HTMLAreaElement, 'target', ogOrFalse('target')],
-			[this.client.global.HTMLFormElement, 'target', ogOrFalse('target')],
-			[this.client.global.HTMLBaseElement, 'target', ogOrFalse('target')],
+			[realm.HTMLAnchorElement, 'target', ogOrFalse('target')],
+			[realm.HTMLAreaElement, 'target', ogOrFalse('target')],
+			[realm.HTMLFormElement, 'target', ogOrFalse('target')],
+			[realm.HTMLBaseElement, 'target', ogOrFalse('target')],
 		]);
 		domHooksModule.useAttributes(targetHook('formtarget'), [
 			['BUTTON', 'formtarget'],
 			['INPUT', 'formtarget'],
-			[
-				this.client.global.HTMLButtonElement,
-				'formTarget',
-				ogOrFalse('formtarget'),
-			],
-			[
-				this.client.global.HTMLInputElement,
-				'formTarget',
-				ogOrFalse('formtarget'),
-			],
+			[realm.HTMLButtonElement, 'formTarget', ogOrFalse('formtarget')],
+			[realm.HTMLInputElement, 'formTarget', ogOrFalse('formtarget')],
 		]);
 
 		// <iframe srcdoc>: the inline document gets the same shell a fetched
@@ -1427,7 +1412,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			[
 				['IFRAME', 'srcdoc'],
 				[
-					this.client.global.HTMLIFrameElement,
+					realm.HTMLIFrameElement,
 					'srcdoc',
 					(element) => element.getAttributeOG('srcdoc') ?? false,
 				],
@@ -1532,7 +1517,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['a', 'href'],
 				['AREA', 'href'],
 				[
-					this.client.global.HTMLAnchorElement,
+					realm.HTMLAnchorElement,
 					'href',
 					(element) =>
 						element.hasAttribute('href') &&
@@ -1544,7 +1529,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				],
 				// an image map's areas are links too
 				[
-					this.client.global.HTMLAreaElement,
+					realm.HTMLAreaElement,
 					'href',
 					(element) =>
 						element.hasAttribute('href') &&
@@ -1633,9 +1618,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['SCRIPT', 'type'],
 				// and carries the integrity (src/sri.ts), which may come after src
 				['SCRIPT', 'integrity'],
-				[this.client.global.HTMLScriptElement, 'integrity', () => false],
+				[realm.HTMLScriptElement, 'integrity', () => false],
 				[
-					this.client.global.HTMLScriptElement,
+					realm.HTMLScriptElement,
 					'src',
 					(element) =>
 						element.hasAttribute('src') &&
@@ -1668,12 +1653,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				// the page's value: the element itself has none (the browser
 				// would check the rewrite against it)
 				[
-					this.client.global.HTMLLinkElement,
+					realm.HTMLLinkElement,
 					'integrity',
 					(element) => element.getAttributeOG('integrity') ?? false,
 				],
 				[
-					this.client.global.HTMLScriptElement,
+					realm.HTMLScriptElement,
 					'integrity',
 					(element) => element.getAttributeOG('integrity') ?? false,
 				],
@@ -1776,10 +1761,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				// the route carries the integrity (src/sri.ts), which markup and
 				// pages may give after href
 				['LINK', 'integrity'],
-				[this.client.global.HTMLLinkElement, 'integrity', () => false],
-				[this.client.global.HTMLLinkElement, 'as', () => false],
+				[realm.HTMLLinkElement, 'integrity', () => false],
+				[realm.HTMLLinkElement, 'as', () => false],
 				[
-					this.client.global.HTMLLinkElement,
+					realm.HTMLLinkElement,
 					'href',
 					(element) =>
 						element.hasAttribute('href') &&
@@ -1789,7 +1774,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							responseURLOf(element) ?? this.client.baseURL.toString(),
 						).toString(),
 				],
-				[this.client.global.HTMLLinkElement, 'rel', () => false],
+				[realm.HTMLLinkElement, 'rel', () => false],
 			],
 		);
 
@@ -1820,7 +1805,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		};
 
 		const contentWindowOf = Reflect.getOwnPropertyDescriptor(
-			this.client.global.HTMLIFrameElement.prototype,
+			realm.HTMLIFrameElement.prototype,
 			'contentWindow',
 		)!.get!;
 		domHooksModule.useAttributes(
@@ -1951,7 +1936,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						] as [string, string][])
 					: []),
 				[
-					this.client.global.HTMLFrameElement,
+					realm.HTMLFrameElement,
 					'src',
 					(element) =>
 						element.hasAttribute('src') &&
@@ -1962,7 +1947,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						).toString(),
 				],
 				[
-					this.client.global.HTMLIFrameElement,
+					realm.HTMLIFrameElement,
 					'src',
 					(element) =>
 						element.hasAttribute('src') &&
@@ -2035,14 +2020,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['META', 'content'],
 				['META', 'http-equiv'],
 				[
-					this.client.global.HTMLMetaElement,
+					realm.HTMLMetaElement,
 					'content',
 					// what the page wrote, for a refresh the hook rewrote; any
 					// other content (a token, a payload) is not a URL and reads
 					// natively
 					(element) => element.getAttributeOG('content') ?? false,
 				],
-				[this.client.global.HTMLMetaElement, 'httpEquiv', () => false],
+				[realm.HTMLMetaElement, 'httpEquiv', () => false],
 			],
 		);
 
@@ -2071,7 +2056,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['IMG', 'src'],
 				['INPUT', 'src'],
 				[
-					this.client.global.HTMLInputElement,
+					realm.HTMLInputElement,
 					'src',
 					(element) =>
 						element.hasAttribute('src') &&
@@ -2082,7 +2067,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						).toString(),
 				],
 				[
-					this.client.global.HTMLImageElement,
+					realm.HTMLImageElement,
 					'src',
 					(element) =>
 						element.hasAttribute('src') &&
@@ -2150,7 +2135,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['IMG', 'srcset'],
 				['SOURCE', 'srcset'],
 				[
-					this.client.global.HTMLImageElement,
+					realm.HTMLImageElement,
 					'srcset',
 					(element) =>
 						element.hasAttribute('srcset') &&
@@ -2159,7 +2144,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							element.getAttribute('srcset'))!,
 				],
 				[
-					this.client.global.HTMLSourceElement,
+					realm.HTMLSourceElement,
 					'srcset',
 					(element) =>
 						element.hasAttribute('srcset') &&
@@ -2197,7 +2182,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['SOURCE', 'src'],
 				['TRACK', 'src'],
 				[
-					this.client.global.HTMLTrackElement,
+					realm.HTMLTrackElement,
 					'src',
 					(element) =>
 						element.hasAttribute('src') &&
@@ -2208,7 +2193,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						).toString(),
 				],
 				[
-					this.client.global.HTMLMediaElement,
+					realm.HTMLMediaElement,
 					'src',
 					(element) =>
 						element.hasAttribute('src') &&
@@ -2219,7 +2204,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						).toString(),
 				],
 				[
-					this.client.global.HTMLSourceElement,
+					realm.HTMLSourceElement,
 					'src',
 					(element) =>
 						element.hasAttribute('src') &&
@@ -2293,13 +2278,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			},
 			[
 				['*', 'style'],
-				[this.client.global.HTMLElement, 'style', () => false],
+				[realm.HTMLElement, 'style', () => false],
 			],
 		);
 
 		// CSSStyleDeclaration: element.style.x = ..., setProperty(), cssText
 		{
-			const styleProto = this.client.global.CSSStyleDeclaration.prototype;
+			const styleProto = realm.CSSStyleDeclaration.prototype;
 			const proxyModule = this.client.getModule(ProxyModule)!;
 
 			// the element each page-facing declaration belongs to
@@ -2350,7 +2335,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				'parentRule',
 			)!.get!;
 			const parentSheet = Reflect.getOwnPropertyDescriptor(
-				this.client.global.CSSRule.prototype,
+				realm.CSSRule.prototype,
 				'parentStyleSheet',
 			)!.get!;
 			const ruleWritten = (rule: unknown) => {
@@ -2474,9 +2459,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			// every element interface with an inline style of its own (a
 			// MathML element's, too)
 			const styleInterfaces = ELEMENT_STYLE_INTERFACES.flatMap((name) => {
-				const ctor = (this.client.global as unknown as Record<string, unknown>)[
-					name
-				];
+				const ctor = (realm as unknown as Record<string, unknown>)[name];
 				return typeof ctor === 'function' ? [ctor as typeof HTMLElement] : [];
 			});
 
@@ -2516,8 +2499,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			}
 
 			// computed styles read back the page's URLs too
-			this.client.global.getComputedStyle = proxyModule.wrapFunction(
-				this.client.global.getComputedStyle,
+			realm.getComputedStyle = proxyModule.wrapFunction(
+				realm.getComputedStyle,
 				(target, that, args) => {
 					const declaration = Reflect.apply(target, that, args);
 					if (declaration && typeof declaration === 'object')
@@ -2528,7 +2511,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 
 			// the Typed OM: values stringify with the page's URLs; what the page
 			// parses or sets is routed
-			const typed = this.client.global as unknown as Record<string, any>;
+			const typed = realm as unknown as Record<string, any>;
 			if (typeof typed.CSSStyleValue === 'function') {
 				for (const name of ['parse', 'parseAll'])
 					if (typeof typed.CSSStyleValue[name] === 'function')
@@ -2576,25 +2559,21 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			const mapRules = new WeakMap<object, object>();
 			{
 				const descriptor = Reflect.getOwnPropertyDescriptor(
-					this.client.global.CSSStyleRule.prototype,
+					realm.CSSStyleRule.prototype,
 					'styleMap',
 				);
 				if (descriptor?.get)
-					Reflect.defineProperty(
-						this.client.global.CSSStyleRule.prototype,
-						'styleMap',
-						{
-							...descriptor,
-							get: proxyModule.wrapFunction(
-								descriptor.get,
-								(target, that, args) => {
-									const map = Reflect.apply(target, that, args);
-									if (map && typeof map === 'object') mapRules.set(map, that);
-									return map;
-								},
-							),
-						},
-					);
+					Reflect.defineProperty(realm.CSSStyleRule.prototype, 'styleMap', {
+						...descriptor,
+						get: proxyModule.wrapFunction(
+							descriptor.get,
+							(target, that, args) => {
+								const map = Reflect.apply(target, that, args);
+								if (map && typeof map === 'object') mapRules.set(map, that);
+								return map;
+							},
+						),
+					});
 			}
 			if (typeof typed.StylePropertyMap === 'function')
 				for (const name of ['set', 'append', 'delete', 'clear'])
@@ -2638,7 +2617,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			const protos = [
 				styleProto,
 				(
-					this.client.global as unknown as {
+					realm as unknown as {
 						CSSStyleProperties?: typeof CSSStyleDeclaration;
 					}
 				).CSSStyleProperties?.prototype,
@@ -2686,17 +2665,17 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// the rules' own text and methods, before the readback and CSSOM
 		// modules (which apply later) wrap them
 		const ruleText = Reflect.getOwnPropertyDescriptor(
-			this.client.global.CSSRule.prototype,
+			realm.CSSRule.prototype,
 			'cssText',
 		)!.get!;
 		const nativeRules = {
 			sheet: {
-				insert: this.client.global.CSSStyleSheet.prototype.insertRule,
-				delete: this.client.global.CSSStyleSheet.prototype.deleteRule,
+				insert: realm.CSSStyleSheet.prototype.insertRule,
+				delete: realm.CSSStyleSheet.prototype.deleteRule,
 			},
 			group: {
-				insert: this.client.global.CSSGroupingRule.prototype.insertRule,
-				delete: this.client.global.CSSGroupingRule.prototype.deleteRule,
+				insert: realm.CSSGroupingRule.prototype.insertRule,
+				delete: realm.CSSGroupingRule.prototype.deleteRule,
 			},
 		};
 		const textOf = (rule: CSSRule) =>
@@ -2705,11 +2684,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// readback module (which applies later) hands out: the native
 		// methods putCopies calls refuse that view
 		const ruleStyle = Reflect.getOwnPropertyDescriptor(
-			this.client.global.CSSStyleRule.prototype,
+			realm.CSSStyleRule.prototype,
 			'style',
 		)!.get!;
 		const keyframeStyle = Reflect.getOwnPropertyDescriptor(
-			this.client.global.CSSKeyframeRule?.prototype ?? {},
+			realm.CSSKeyframeRule?.prototype ?? {},
 			'style',
 		)?.get;
 		const sheetText = (sheet: CSSStyleSheet | null | undefined) => {
@@ -2726,7 +2705,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			mark: (rule: CSSRule) => void,
 		) => {
 			const methods =
-				container instanceof this.client.global.CSSStyleSheet
+				container instanceof realm.CSSStyleSheet
 					? nativeRules.sheet
 					: nativeRules.group;
 			const rules = container.cssRules;
@@ -2798,7 +2777,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// for the writes of a task: a page that builds a sheet rule by rule
 		// has it read once.
 		const ownerNode = Reflect.getOwnPropertyDescriptor(
-			this.client.global.StyleSheet.prototype,
+			realm.StyleSheet.prototype,
 			'ownerNode',
 		)!.get!;
 		const changedSheets = new WeakSet<CSSStyleSheet>();
@@ -2836,8 +2815,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// hooks, so the page's observers see nothing. A script is not one: it
 		// got its copy during the write, or (the transport in the page) does
 		// not run.
-		const nativeQueryAll =
-			this.client.global.Document.prototype.querySelectorAll;
+		const nativeQueryAll = realm.Document.prototype.querySelectorAll;
 		const LOADS = [
 			...['src', 'href', 'xlink:href', 'srcset', 'poster', 'data'],
 			'imagesrcset',
@@ -3028,7 +3006,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			// real element from the markup serialized from it, which gets its
 			// copy after the write (writtenLoads). A copy settled here would
 			// land on the clone, and the real one would load nothing
-			if (element.ownerDocument !== this.client.global.document) {
+			if (element.ownerDocument !== realm.document) {
 				loads.delete(element);
 				element.removeAttribute(attribute);
 				return;
@@ -3138,8 +3116,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						: await response.blob();
 					if (loads.get(element) !== state) return;
 					if (current?.url?.startsWith('blob:'))
-						this.client.global.URL.revokeObjectURL(current.url);
-					settle(proxyBlobURL(this.client.global.URL.createObjectURL(blob)));
+						realm.URL.revokeObjectURL(current.url);
+					settle(proxyBlobURL(realm.URL.createObjectURL(blob)));
 				})
 				.catch(() => settle(routed));
 		};
@@ -3153,11 +3131,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		};
 		domHooksModule.useAttributes(proxiedLoad('data'), [
 			['OBJECT', 'data'],
-			[this.client.global.HTMLObjectElement, 'data', writtenURL('data')],
+			[realm.HTMLObjectElement, 'data', writtenURL('data')],
 		]);
 		domHooksModule.useAttributes(proxiedLoad('src'), [
 			['EMBED', 'src'],
-			[this.client.global.HTMLEmbedElement, 'src', writtenURL('src')],
+			[realm.HTMLEmbedElement, 'src', writtenURL('src')],
 		]);
 
 		// <a ping>, <area ping>: a list of URLs the browser posts to when the
@@ -3196,12 +3174,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['A', 'ping'],
 				['AREA', 'ping'],
 				[
-					this.client.global.HTMLAnchorElement,
+					realm.HTMLAnchorElement,
 					'ping',
 					(element) => element.getAttributeOG('ping') ?? false,
 				],
 				[
-					this.client.global.HTMLAreaElement,
+					realm.HTMLAreaElement,
 					'ping',
 					(element) => element.getAttributeOG('ping') ?? false,
 				],
@@ -3211,7 +3189,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// <video poster>
 		domHooksModule.useAttributes(routeAttribute('poster', routeBinary, true), [
 			['VIDEO', 'poster'],
-			[this.client.global.HTMLVideoElement, 'poster', originalURL('poster')],
+			[realm.HTMLVideoElement, 'poster', originalURL('poster')],
 		]);
 
 		// <button formaction>, <input formaction>: the form's method decides how
@@ -3229,16 +3207,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			[
 				['BUTTON', 'formaction'],
 				['INPUT', 'formaction'],
-				[
-					this.client.global.HTMLButtonElement,
-					'formAction',
-					originalURL('formaction'),
-				],
-				[
-					this.client.global.HTMLInputElement,
-					'formAction',
-					originalURL('formaction'),
-				],
+				[realm.HTMLButtonElement, 'formAction', originalURL('formaction')],
+				[realm.HTMLInputElement, 'formAction', originalURL('formaction')],
 			],
 		);
 
@@ -3273,7 +3243,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			[
 				['LINK', 'imagesrcset'],
 				[
-					this.client.global.HTMLLinkElement,
+					realm.HTMLLinkElement,
 					'imageSrcset',
 					(element) =>
 						element.hasAttribute('imagesrcset') &&
@@ -3291,7 +3261,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// dropped later on insertion, behind attributes the page set after it.
 		// Not `csp`: the property hook applies a string property's value again,
 		// which would bring the attribute back
-		const iframePrototype = this.client.global.HTMLIFrameElement.prototype;
+		const iframePrototype = realm.HTMLIFrameElement.prototype;
 		for (const [attribute, property] of [
 			['csp', ''],
 			['credentialless', 'credentialless'],
@@ -3309,11 +3279,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					...(property &&
 					Reflect.getOwnPropertyDescriptor(iframePrototype, property)?.set
 						? [
-								[
-									this.client.global.HTMLIFrameElement,
-									property,
+								[realm.HTMLIFrameElement, property, () => false] as [
+									typeof HTMLIFrameElement,
+									string,
 									() => false,
-								] as [typeof HTMLIFrameElement, string, () => false],
+								],
 							]
 						: []),
 				],
@@ -3370,11 +3340,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['IFRAME', 'sandbox'],
 				...(Reflect.getOwnPropertyDescriptor(iframePrototype, 'sandbox')?.set
 					? [
-							[
-								this.client.global.HTMLIFrameElement,
-								'sandbox',
+							[realm.HTMLIFrameElement, 'sandbox', () => false] as [
+								typeof HTMLIFrameElement,
+								string,
 								() => false,
-							] as [typeof HTMLIFrameElement, string, () => false],
+							],
 						]
 					: []),
 			],
@@ -3384,7 +3354,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			['FORM', 'action'],
 			['FORM', 'method'],
 			[
-				this.client.global.HTMLFormElement,
+				realm.HTMLFormElement,
 				'action',
 				(element) =>
 					element.hasAttribute('action') &&
@@ -3395,7 +3365,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						this.client.baseURL.toString(),
 					).toString(),
 			],
-			[this.client.global.HTMLFormElement, 'method', () => false],
+			[realm.HTMLFormElement, 'method', () => false],
 		]);
 
 		// a base's href resolves against the document's URL, not against the
@@ -3408,7 +3378,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// on its copy, before the page's scripts could listen)
 		const reported = new WeakSet<Element>();
 		const reportBase = (element: Element, url: URL) => {
-			const global = this.client.global;
+			const global = realm;
 			const owner = element.ownerDocument;
 			const first = owner.querySelector('base[href]');
 			if (reported.has(element) || (first !== element && first !== null))
@@ -3494,7 +3464,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			[
 				['BASE', 'href'],
 				[
-					this.client.global.HTMLBaseElement,
+					realm.HTMLBaseElement,
 					'href',
 					(element) =>
 						element.hasAttribute('href') &&

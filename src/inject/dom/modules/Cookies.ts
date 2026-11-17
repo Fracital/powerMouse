@@ -381,6 +381,7 @@ export class CookiesModule extends Module<DocumentClient> {
 		this.#changed();
 	}
 	apply() {
+		const global = this.client.global;
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
 		this.client.responseListeners.add(() => this.invalidate());
@@ -401,14 +402,14 @@ export class CookiesModule extends Module<DocumentClient> {
 			}
 		});
 
-		Reflect.defineProperty(this.client.global.Document.prototype, 'cookie', {
+		Reflect.defineProperty(global.Document.prototype, 'cookie', {
 			configurable: true,
 			enumerable: true,
 			get: proxyModule.wrapFunction(
 				this.cookieDescriptor.get!,
 				(target, that) => {
 					if (this.#cookieAverse(that)) return Reflect.apply(target, that, []);
-					invokeGlobal(that, this.client.global.document);
+					invokeGlobal(that, global.document);
 					if (this.client.cookieAverse) return '';
 					return this.pageCookies;
 				},
@@ -417,7 +418,7 @@ export class CookiesModule extends Module<DocumentClient> {
 				this.cookieDescriptor.set!,
 				(target, that, args) => {
 					if (this.#cookieAverse(that)) return;
-					invokeGlobal(that, this.client.global.document);
+					invokeGlobal(that, global.document);
 					if (this.client.cookieAverse) return;
 					this.pageCookies = String(args[0]);
 				},

@@ -33,12 +33,13 @@ const URL_PARTS = [
  */
 export default class LocationModule extends Module<DocumentClient> {
 	apply() {
+		const global = this.client.global;
 		const proxyModule = this.client.getModule(ProxyModule)!;
-		const real = this.client.global.location;
+		const real = global.location;
 
 		// the realm's own, kept: a window that lost its browsing context (a
 		// removed frame's) has none of its interfaces any more
-		const PageDOMException = this.client.global.DOMException;
+		const PageDOMException = global.DOMException;
 
 		const proxy = {};
 		// the page's location, or the real one it stands for
@@ -87,7 +88,7 @@ export default class LocationModule extends Module<DocumentClient> {
 			// a frame still on its initial about:blank fires no navigate event:
 			// one sent to another origin gets a fresh context first (IFrame)
 			if (this.client.freshTo?.(destination)) return;
-			const loading = this.client.global.document.readyState !== 'complete';
+			const loading = global.document.readyState !== 'complete';
 			const how = loading ? 'replace' : method;
 			// a javascript: URL's code is the page's Trusted Types' to judge
 			// (as Chrome does: the default policy's sink `Location href`, the
@@ -119,7 +120,7 @@ export default class LocationModule extends Module<DocumentClient> {
 		// both URL.prototype and location share these descriptors
 		for (const common of URL_PARTS) {
 			const urlDescriptor = Reflect.getOwnPropertyDescriptor(
-				this.client.global.URL.prototype,
+				global.URL.prototype,
 				common,
 			);
 
@@ -198,7 +199,7 @@ export default class LocationModule extends Module<DocumentClient> {
 		// getter, so define own properties rather than assigning.
 		const ancestorOrigins = (): string[] => {
 			const origins: string[] = [];
-			let context: typeof globalThis = this.client.global;
+			let context: typeof globalThis = global;
 			while (true) {
 				try {
 					const parent = (context as any)[this.client.names.client]
@@ -265,7 +266,7 @@ export default class LocationModule extends Module<DocumentClient> {
 						if (!origins || args.length < target.length)
 							return Reflect.apply(
 								target,
-								origins ? this.client.global.location.ancestorOrigins : that,
+								origins ? global.location.ancestorOrigins : that,
 								args,
 							);
 						return answers[key](origins, args);
@@ -361,7 +362,7 @@ export default class LocationModule extends Module<DocumentClient> {
 				);
 		}
 
-		Reflect.setPrototypeOf(proxy, this.client.global.Location.prototype);
+		Reflect.setPrototypeOf(proxy, global.Location.prototype);
 
 		setGlobalProxy(real, 'location', proxy, this.client.names);
 	}

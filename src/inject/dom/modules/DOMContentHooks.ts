@@ -130,6 +130,7 @@ export function htmlName(node: Node): string {
 
 export default class DOMContentHooks extends Module<DocumentClient> {
 	apply() {
+		const realm = this.client.global;
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
 		const compositeElements = new Map<Element, () => Element>(); // new WeakMap<Element, () => Element>();
@@ -247,11 +248,9 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				this.client,
 				usePrototype(node, nativeCharacterData, (text) => text.data),
 			);
-			const scratch = Reflect.apply(
-				nativeCreateTextNode,
-				this.client.global.document,
-				[page],
-			) as Text;
+			const scratch = Reflect.apply(nativeCreateTextNode, realm.document, [
+				page,
+			]) as Text;
 			const result = edit(scratch);
 			const edited = usePrototype(
 				scratch,
@@ -265,7 +264,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		};
 
 		const rewriteStyle = (style: StyleElement) => {
-			if (getGlobalParsingState(this.client.global) === 'parsingBeforeWrite') {
+			if (getGlobalParsingState(realm) === 'parsingBeforeWrite') {
 				// once everything is finalized and off the alternative parse stack
 
 				if (style.textContent) {
@@ -283,7 +282,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					// nonce: the script carries it, or the style is lost
 					const nonce = this.client.scriptNonce;
 					compositeElement(style, () => {
-						const script = this.client.global.document.createElement('script');
+						const script = realm.document.createElement('script');
 
 						usePrototype(script, nativeHTMLScriptElement, (script) => {
 							if (nonce) script.setAttribute('nonce', nonce);
@@ -381,7 +380,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				rewrittenScripts.get(script as HTMLScriptElement) === source ||
 				(!script.isConnected &&
 					!willConnect &&
-					getGlobalParsingState(this.client.global) !== 'parsingBeforeWrite')
+					getGlobalParsingState(realm) !== 'parsingBeforeWrite')
 			)
 				return;
 			// (the page's Trusted Types judge its text as it runs)
@@ -434,7 +433,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				rewrittenScripts.get(script) === script.text ||
 				(!script.isConnected &&
 					!willConnect &&
-					getGlobalParsingState(this.client.global) !== 'parsingBeforeWrite')
+					getGlobalParsingState(realm) !== 'parsingBeforeWrite')
 			) {
 				// eventually we'll catch a connected script
 				return;
@@ -485,9 +484,9 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		}
 
 		for (const triggersRender of ['replaceWith', 'remove']) {
-			(this.client.global.CharacterData.prototype as any)[triggersRender] =
+			(realm.CharacterData.prototype as any)[triggersRender] =
 				proxyModule.wrapFunction(
-					(this.client.global.CharacterData.prototype as any)[triggersRender],
+					(realm.CharacterData.prototype as any)[triggersRender],
 					(target, that: CharacterData, args) => {
 						// will be null after remove()
 						const parent = usePrototype(
@@ -519,28 +518,27 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			'replaceData',
 			'deleteData',
 		] as const) {
-			const native = this.client.global.CharacterData.prototype[edit];
+			const native = realm.CharacterData.prototype[edit];
 			if (typeof native !== 'function') continue;
-			(this.client.global.CharacterData.prototype as any)[edit] =
-				proxyModule.wrapFunction(
-					native as (...args: unknown[]) => unknown,
-					(target, that: CharacterData, args) => {
-						const style = this.client.styleOfText(that);
-						if (!style) return Reflect.apply(target, that, args);
-						const result = editStyleText(that, (scratch) =>
-							Reflect.apply(target, scratch, args),
-						);
-						prewrote(style);
-						return result;
-					},
-				);
+			(realm.CharacterData.prototype as any)[edit] = proxyModule.wrapFunction(
+				native as (...args: unknown[]) => unknown,
+				(target, that: CharacterData, args) => {
+					const style = this.client.styleOfText(that);
+					if (!style) return Reflect.apply(target, that, args);
+					const result = editStyleText(that, (scratch) =>
+						Reflect.apply(target, scratch, args),
+					);
+					prewrote(style);
+					return result;
+				},
+			);
 		}
 
 		// a Text node's whole text, set: `data`, `nodeValue` (`textContent`
 		// in DOMHooks), routed when it is a style's
 		for (const [prototype, property] of <[object, string][]>[
-			[this.client.global.CharacterData.prototype, 'data'],
-			[this.client.global.Node.prototype, 'nodeValue'],
+			[realm.CharacterData.prototype, 'data'],
+			[realm.Node.prototype, 'nodeValue'],
 		]) {
 			const descriptor = Reflect.getOwnPropertyDescriptor(prototype, property)!;
 
@@ -611,7 +609,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// through here, and the text the script will run is rewritten before
 		// the browser reads it.
 		const currentScriptGet = nativeGetter(
-			this.client.global.Document.prototype,
+			realm.Document.prototype,
 			'currentScript',
 		);
 		/** what the browser should run for `text` in `script`; null when its type names nothing the hooks rewrite */
@@ -661,10 +659,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			if (!isScriptElement(node)) return null;
 			if (startedScripts.has(node)) return null;
 			if (!Reflect.apply(nativeIsConnected, node, [])) return null;
-			if (
-				node ===
-				Reflect.apply(currentScriptGet, this.client.global.document, [])
-			) {
+			if (node === Reflect.apply(currentScriptGet, realm.document, [])) {
 				startedScripts.add(node);
 				return null;
 			}
@@ -780,11 +775,9 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				if (type === 3 || type === 4) texts.push(args[i] as CharacterData);
 				else if (type === 11) texts.push(...textChildren(args[i] as Node));
 				else if (type === null && strings) {
-					args[i] = Reflect.apply(
-						nativeCreateTextNode,
-						this.client.global.document,
-						[String(args[i])],
-					);
+					args[i] = Reflect.apply(nativeCreateTextNode, realm.document, [
+						String(args[i]),
+					]);
 					texts.push(args[i] as CharacterData);
 				}
 			}
@@ -942,11 +935,9 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				for (let i = 0; i < count; i++) {
 					if (nodeTypeOf(args[i]) !== null) routeInsertedText(args[i] as Node);
 					else if (strings)
-						args[i] = Reflect.apply(
-							nativeCreateTextNode,
-							this.client.global.document,
-							[this.client.prepareStyleText(String(args[i]))],
-						);
+						args[i] = Reflect.apply(nativeCreateTextNode, realm.document, [
+							this.client.prepareStyleText(String(args[i])),
+						]);
 				}
 				prewritten.add(style);
 			}
@@ -984,14 +975,14 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				),
 			);
 
-		this.client.global.Node.prototype.appendChild = willInsertNode(
-			this.client.global.Node.prototype.appendChild,
+		realm.Node.prototype.appendChild = willInsertNode(
+			realm.Node.prototype.appendChild,
 		);
-		this.client.global.Node.prototype.insertBefore = willInsertNode(
-			this.client.global.Node.prototype.insertBefore,
+		realm.Node.prototype.insertBefore = willInsertNode(
+			realm.Node.prototype.insertBefore,
 		);
-		this.client.global.Node.prototype.replaceChild = willInsertNode(
-			this.client.global.Node.prototype.replaceChild,
+		realm.Node.prototype.replaceChild = willInsertNode(
+			realm.Node.prototype.replaceChild,
 		);
 		// ParentNode and ChildNode methods, on each prototype that has its own
 		// copy: a shadow root (a DocumentFragment) connected through its host
@@ -999,11 +990,11 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// (a Text's before, after and replaceWith put text into its style)
 		// (a doctype's before, after and replaceWith put nodes into its document)
 		for (const proto of [
-			this.client.global.Element.prototype,
-			this.client.global.DocumentFragment.prototype,
-			this.client.global.Document.prototype,
-			this.client.global.CharacterData.prototype,
-			this.client.global.DocumentType.prototype,
+			realm.Element.prototype,
+			realm.DocumentFragment.prototype,
+			realm.Document.prototype,
+			realm.CharacterData.prototype,
+			realm.DocumentType.prototype,
 		])
 			for (const method of [
 				'append',
@@ -1031,7 +1022,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// it as for any insertion), what Chrome returns. insertAdjacentHTML
 		// parses in the context the browser would: the element, or the parent
 		// for a sibling position (a fragment's or the root's is the body's)
-		const hookedInsertBefore = this.client.global.Node.prototype.insertBefore;
+		const hookedInsertBefore = realm.Node.prototype.insertBefore;
 		const nativeFirstChild = Reflect.getOwnPropertyDescriptor(
 			Node.prototype,
 			'firstChild',
@@ -1050,7 +1041,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			const position = given.replace(/[A-Z]/g, (c) => c.toLowerCase());
 			if (!POSITIONS.includes(position))
 				throw withStack(
-					new this.client.global.DOMException(
+					new realm.DOMException(
 						`Failed to execute '${api}' on 'Element': The value provided ('${given}') is not one of 'beforeBegin', 'afterBegin', 'beforeEnd', or 'afterEnd'.`,
 						'SyntaxError',
 					),
@@ -1091,91 +1082,88 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			}
 		};
 
-		this.client.global.Element.prototype.insertAdjacentText =
-			proxyModule.wrapFunction(
-				this.client.global.Element.prototype.insertAdjacentText,
-				(target, that: Element, args) => {
-					// the browser's own refusals first: of the receiver, then of
-					// the count
-					if (args.length < 2) return Reflect.apply(target, that, args);
-					requireElement(that);
-					const position = adjacentPosition(args[0], 'insertAdjacentText');
-					const text = Reflect.apply(
-						nativeCreateTextNode,
-						Reflect.apply(nativeOwnerDocument, that, []),
-						[String(args[1])],
-					) as Text;
-					insertAdjacent(that, position, text);
-				},
-			);
+		realm.Element.prototype.insertAdjacentText = proxyModule.wrapFunction(
+			realm.Element.prototype.insertAdjacentText,
+			(target, that: Element, args) => {
+				// the browser's own refusals first: of the receiver, then of
+				// the count
+				if (args.length < 2) return Reflect.apply(target, that, args);
+				requireElement(that);
+				const position = adjacentPosition(args[0], 'insertAdjacentText');
+				const text = Reflect.apply(
+					nativeCreateTextNode,
+					Reflect.apply(nativeOwnerDocument, that, []),
+					[String(args[1])],
+				) as Text;
+				insertAdjacent(that, position, text);
+			},
+		);
 
-		this.client.global.Element.prototype.insertAdjacentElement =
-			proxyModule.wrapFunction(
-				this.client.global.Element.prototype.insertAdjacentElement,
-				(target, that: Element, args) => {
-					// the browser's own refusals first: of the receiver, then of
-					// the count
-					if (args.length < 2) return Reflect.apply(target, that, args);
-					requireElement(that);
-					// an element of any realm (instanceof knows only one)
-					if (nodeTypeOf(args[1]) !== 1)
-						throw new this.client.global.TypeError(
-							`Failed to execute 'insertAdjacentElement' on 'Element': parameter 2 is not of type 'Element'.`,
-						);
-					const position = adjacentPosition(args[0], 'insertAdjacentElement');
-					return insertAdjacent(that, position, args[1] as Element)
-						? args[1]
-						: null;
-				},
-			);
-
-		this.client.global.Element.prototype.insertAdjacentHTML =
-			proxyModule.wrapFunction(
-				this.client.global.Element.prototype.insertAdjacentHTML,
-				(target, that: Element, args) => {
-					// the browser's own refusals first: of the receiver, then of
-					// the count
-					if (args.length < 2) return Reflect.apply(target, that, args);
-					requireElement(that);
-					// (the page's Trusted Types judge the markup first)
-					const markup = this.client.trustedValue(
-						args[1],
-						'TrustedHTML',
-						'Element insertAdjacentHTML',
-						() => Reflect.apply(target, that, args),
+		realm.Element.prototype.insertAdjacentElement = proxyModule.wrapFunction(
+			realm.Element.prototype.insertAdjacentElement,
+			(target, that: Element, args) => {
+				// the browser's own refusals first: of the receiver, then of
+				// the count
+				if (args.length < 2) return Reflect.apply(target, that, args);
+				requireElement(that);
+				// an element of any realm (instanceof knows only one)
+				if (nodeTypeOf(args[1]) !== 1)
+					throw new realm.TypeError(
+						`Failed to execute 'insertAdjacentElement' on 'Element': parameter 2 is not of type 'Element'.`,
 					);
-					if (markup === null) return;
-					const position = adjacentPosition(args[0], 'insertAdjacentHTML');
-					let context: Node | null = that;
-					if (position === 'beforebegin' || position === 'afterend') {
-						context = parentOf(that);
-						if (context === null || nodeTypeOf(context) === 9)
-							throw withStack(
-								new this.client.global.DOMException(
-									"Failed to execute 'insertAdjacentHTML' on 'Element': The element has no parent.",
-									'NoModificationAllowedError',
-								),
-							);
-					}
-					const document = this.client.global.document;
-					const fragment = cloneRawNode(
-						parseHTMLFragmentIn(
-							markup,
-							nodeTypeOf(context) === 1 &&
-								!(
-									(context as Element).localName === 'html' &&
-									(context as Element).namespaceURI ===
-										'http://www.w3.org/1999/xhtml'
-								)
-								? (context as Element)
-								: null,
-							document,
-						),
+				const position = adjacentPosition(args[0], 'insertAdjacentElement');
+				return insertAdjacent(that, position, args[1] as Element)
+					? args[1]
+					: null;
+			},
+		);
+
+		realm.Element.prototype.insertAdjacentHTML = proxyModule.wrapFunction(
+			realm.Element.prototype.insertAdjacentHTML,
+			(target, that: Element, args) => {
+				// the browser's own refusals first: of the receiver, then of
+				// the count
+				if (args.length < 2) return Reflect.apply(target, that, args);
+				requireElement(that);
+				// (the page's Trusted Types judge the markup first)
+				const markup = this.client.trustedValue(
+					args[1],
+					'TrustedHTML',
+					'Element insertAdjacentHTML',
+					() => Reflect.apply(target, that, args),
+				);
+				if (markup === null) return;
+				const position = adjacentPosition(args[0], 'insertAdjacentHTML');
+				let context: Node | null = that;
+				if (position === 'beforebegin' || position === 'afterend') {
+					context = parentOf(that);
+					if (context === null || nodeTypeOf(context) === 9)
+						throw withStack(
+							new realm.DOMException(
+								"Failed to execute 'insertAdjacentHTML' on 'Element': The element has no parent.",
+								'NoModificationAllowedError',
+							),
+						);
+				}
+				const document = realm.document;
+				const fragment = cloneRawNode(
+					parseHTMLFragmentIn(
+						markup,
+						nodeTypeOf(context) === 1 &&
+							!(
+								(context as Element).localName === 'html' &&
+								(context as Element).namespaceURI ===
+									'http://www.w3.org/1999/xhtml'
+							)
+							? (context as Element)
+							: null,
 						document,
-					) as DocumentFragment;
-					insertAdjacent(that, position, fragment);
-				},
-			);
+					),
+					document,
+				) as DocumentFragment;
+				insertAdjacent(that, position, fragment);
+			},
+		);
 
 		// The other ways one node of the page's reaches a tree: a range puts
 		// it at its start (insertNode) or around its contents
@@ -1185,7 +1173,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// could have called itself, so each is run through the hooks here: a
 		// script in the node ran as the page wrote it, and a node another
 		// parser made kept the handlers and URLs of its markup.
-		const global = this.client.global;
+		const global = realm;
 		const wrapMethod = (
 			prototype: object | undefined,
 			name: string,
@@ -1386,8 +1374,8 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		}
 
 		// does not insert element
-		this.client.global.Node.prototype.removeChild = proxyModule.wrapFunction(
-			this.client.global.Node.prototype.removeChild,
+		realm.Node.prototype.removeChild = proxyModule.wrapFunction(
+			realm.Node.prototype.removeChild,
 			(target, that, args) => {
 				const result = Reflect.apply(target, that, args);
 

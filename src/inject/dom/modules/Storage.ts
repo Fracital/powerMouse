@@ -37,6 +37,7 @@ interface Pending {
 
 export default class StorageModule extends Module<DocumentClient> {
 	apply() {
+		const pageGlobal = this.client.global;
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		const syncModule = this.client.getModule(SyncModule)!;
 
@@ -78,7 +79,7 @@ export default class StorageModule extends Module<DocumentClient> {
 		let nativeGetItem: Storage['getItem'] | undefined;
 		let nativeSetItem: Storage['setItem'] | undefined;
 		try {
-			const global = this.client.global;
+			const global = pageGlobal;
 			stamps =
 				(Reflect.getOwnPropertyDescriptor(global, 'localStorage')?.get?.call(
 					global,
@@ -200,10 +201,7 @@ export default class StorageModule extends Module<DocumentClient> {
 			operation: Record<string, string>,
 			args: unknown[],
 		) => {
-			const url = new URL(
-				`${directory}ordered`,
-				this.client.global.location.href,
-			);
+			const url = new URL(`${directory}ordered`, pageGlobal.location.href);
 			for (const [name, value] of Object.entries(operation))
 				url.searchParams.set(name, value);
 			return fetch(url, {
@@ -394,7 +392,7 @@ export default class StorageModule extends Module<DocumentClient> {
 			return merged;
 		};
 
-		const realm = this.client.global;
+		const realm = pageGlobal;
 		// the QuotaExceededError interface where the browser has it (its
 		// `quota` and `requested` are null for a store), taken before the page
 		// runs; else the DOMException of that name it replaced
@@ -507,18 +505,14 @@ export default class StorageModule extends Module<DocumentClient> {
 
 		const globalStorageProxy = proxyModule.standInClass(
 			StorageProxy,
-			this.client.global.Storage,
+			pageGlobal.Storage,
 			true,
 		);
 
 		const natives = new WeakMap<object, StorageProxy>();
 
 		proxyModule.bindNatives(globalStorageProxy.prototype, natives);
-		proxyModule.mirrorClass(
-			this.client.global.Storage,
-			globalStorageProxy,
-			instances,
-		);
+		proxyModule.mirrorClass(pageGlobal.Storage, globalStorageProxy, instances);
 
 		function isStorageKey(
 			target: StorageProxy,
@@ -648,7 +642,7 @@ export default class StorageModule extends Module<DocumentClient> {
 		// below: those are dropped before any page listener. document.open()
 		// drops every listener on the window, so it is registered again after
 		// each open.
-		const global = this.client.global;
+		const global = pageGlobal;
 		const addListener = global.addEventListener;
 		const stopImmediate = global.Event.prototype.stopImmediatePropagation;
 		const dropBrowserEvents = () =>
@@ -675,7 +669,7 @@ export default class StorageModule extends Module<DocumentClient> {
 			// stamp this document could not see
 			changed(`${this.client.directory}${change.store}/`, false);
 			if (change.store !== 'localStorage') return;
-			const event = new this.client.global.StorageEvent('storage', {
+			const event = new pageGlobal.StorageEvent('storage', {
 				key: change.key,
 				oldValue: change.oldValue,
 				newValue: change.newValue,
@@ -685,22 +679,21 @@ export default class StorageModule extends Module<DocumentClient> {
 				value: localStorage,
 				configurable: true,
 			});
-			this.client.global.dispatchEvent(event);
+			pageGlobal.dispatchEvent(event);
 		});
 
 		// constructor becomes equivalent to constructor() when building = false
-		this.client.global.Storage = <{ new (): StorageProxy }>globalStorageProxy;
+		pageGlobal.Storage = <{ new (): StorageProxy }>globalStorageProxy;
 
-		Reflect.defineProperty(this.client.global, 'localStorage', {
+		Reflect.defineProperty(pageGlobal, 'localStorage', {
 			get: proxyModule.wrapFunction(
-				Reflect.getOwnPropertyDescriptor(this.client.global, 'localStorage')!
-					.get!,
+				Reflect.getOwnPropertyDescriptor(pageGlobal, 'localStorage')!.get!,
 				(target, that) => {
-					if (contextThis(that, this.client.global) !== this.client.global) {
+					if (contextThis(that, pageGlobal) !== pageGlobal) {
 						throw new TypeError('Illegal invocation');
 					}
 					// a removed frame's window has no storage (null), as natively
-					if (this.client.global.closed) return null;
+					if (pageGlobal.closed) return null;
 
 					return localStorage;
 				},
@@ -709,16 +702,15 @@ export default class StorageModule extends Module<DocumentClient> {
 			configurable: true,
 		});
 
-		Reflect.defineProperty(this.client.global, 'sessionStorage', {
+		Reflect.defineProperty(pageGlobal, 'sessionStorage', {
 			get: proxyModule.wrapFunction(
-				Reflect.getOwnPropertyDescriptor(this.client.global, 'sessionStorage')!
-					.get!,
+				Reflect.getOwnPropertyDescriptor(pageGlobal, 'sessionStorage')!.get!,
 				(target, that) => {
-					if (contextThis(that, this.client.global) !== this.client.global) {
+					if (contextThis(that, pageGlobal) !== pageGlobal) {
 						throw new TypeError('Illegal invocation');
 					}
 					// a removed frame's window has no storage (null), as natively
-					if (this.client.global.closed) return null;
+					if (pageGlobal.closed) return null;
 
 					return sessionStorage;
 				},

@@ -837,6 +837,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		);
 	}
 	restrictContext(context: Context): RestrictedContext {
+		const global = this.client.global;
 		const proxyModule = this.client.getModule(ProxyModule)!;
 		// a child that runs no STomp yet (an iframe still on its initial
 		// about:blank) is still that child, of the frame's origin: never the
@@ -850,14 +851,14 @@ export default class ContextModule extends Module<DocumentClient> {
 			replace: {
 				// (the browser's own count check first)
 				value: proxyModule.wrapFunction(
-					this.client.global.location.replace,
+					global.location.replace,
 					(target, that, args) => {
 						catchRequiredArguments(
 							args.length,
 							1,
 							'Location',
 							'replace',
-							this.client.global,
+							global,
 						);
 						this.#navigate(context, String(args[0]), 'replace');
 					},
@@ -951,14 +952,14 @@ export default class ContextModule extends Module<DocumentClient> {
 				},
 				postMessage: {
 					value: proxyModule.wrapFunction(
-						this.client.global.postMessage,
+						global.postMessage,
 						(target, that, args) => {
 							catchRequiredArguments(
 								args.length,
 								1,
 								'Window',
 								'postMessage',
-								this.client.global,
+								global,
 							);
 							// the browser serializes the message before it looks at the
 							// target origin
@@ -1049,6 +1050,7 @@ export default class ContextModule extends Module<DocumentClient> {
 			: (this.#handle(context) ?? restricted);
 	}
 	#restrict(context: Context): RestrictedContext {
+		const global = this.client.global;
 		// another document's stand-in (a same-origin parent's getter handed
 		// it over): restricted already
 		if (!this.restrictedContexts.has(context) && this.#standIn(context))
@@ -1059,7 +1061,7 @@ export default class ContextModule extends Module<DocumentClient> {
 			// the proxied world ends here (the host, or anything it opened):
 			// present ourselves as the top, as this page sees it (a frame of
 			// another origin gets its stand-in, as for `top`)
-			context = findTop(this.client.global, this.client.names.client);
+			context = findTop(global, this.client.names.client);
 
 		if (this.#holds().has(context)) return context;
 
@@ -1071,7 +1073,7 @@ export default class ContextModule extends Module<DocumentClient> {
 			let reach = false;
 			try {
 				reach =
-					context !== this.client.global &&
+					context !== global &&
 					!this.client.sandboxedOpaque &&
 					!other.sandboxedOpaque &&
 					reachableClients(this.client, other);
@@ -1089,7 +1091,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		let opaque = false;
 		try {
 			opaque =
-				context !== this.client.global &&
+				context !== global &&
 				(this.client.sandboxedOpaque ||
 					(
 						(context as Record<string, any>)[
@@ -1275,14 +1277,12 @@ export default class ContextModule extends Module<DocumentClient> {
 			});
 	}
 	apply() {
+		const realm = this.client.global;
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
-		const parentDescriptor = Reflect.getOwnPropertyDescriptor(
-			this.client.global,
-			'parent',
-		)!;
+		const parentDescriptor = Reflect.getOwnPropertyDescriptor(realm, 'parent')!;
 
-		Reflect.defineProperty(this.client.global, 'parent', {
+		Reflect.defineProperty(realm, 'parent', {
 			get: proxyModule.wrapFunction(
 				parentDescriptor.get!,
 				(target, that, args) => {
@@ -1304,7 +1304,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		// a read off it; nothing for anything else
 		const windowClient = (container: unknown): DocumentClient | undefined => {
 			if (typeof container !== 'object' || container === null) return;
-			if (container === this.client.global) return this.client;
+			if (container === realm) return this.client;
 			try {
 				const client = (container as Record<string, any>)[
 					this.client.names.client
@@ -1370,11 +1370,11 @@ export default class ContextModule extends Module<DocumentClient> {
 					// reads `opener.top`, which was the popup itself)
 					const from =
 						container !== undefined &&
-						container !== this.client.global &&
+						container !== realm &&
 						isWindow(container) &&
 						this.client.names.client in container
 							? container
-							: this.client.global;
+							: realm;
 					return this.newRestricted(findTop(from, this.client.names.client));
 				}
 			} catch (error) {
@@ -1444,44 +1444,40 @@ export default class ContextModule extends Module<DocumentClient> {
 		// a BroadcastChannel message carries the sender's origin, which is the
 		// proxy's for every document of this site: the page's own is the real one
 		const eventTarget = Reflect.getOwnPropertyDescriptor(
-			this.client.global.Event.prototype,
+			realm.Event.prototype,
 			'target',
 		)!.get!;
 		const fromBroadcastChannel = (event: MessageEvent): boolean => {
 			try {
 				return (
 					Reflect.apply(eventTarget, event, []) instanceof
-					this.client.global.BroadcastChannel
+					realm.BroadcastChannel
 				);
 			} catch (error) {
 				return false;
 			}
 		};
 
-		Reflect.defineProperty(
-			this.client.global.MessageEvent.prototype,
-			'origin',
-			{
-				configurable: true,
-				enumerable: true,
-				get: proxyModule.wrapFunction(
-					Reflect.getOwnPropertyDescriptor(
-						this.client.global.MessageEvent.prototype,
-						'origin',
-					)!.get!,
-					(target, that: MessageEvent, args) => {
-						if (messageData.has(that)) {
-							return messageData.get(that)!.origin;
-						}
+		Reflect.defineProperty(realm.MessageEvent.prototype, 'origin', {
+			configurable: true,
+			enumerable: true,
+			get: proxyModule.wrapFunction(
+				Reflect.getOwnPropertyDescriptor(
+					realm.MessageEvent.prototype,
+					'origin',
+				)!.get!,
+				(target, that: MessageEvent, args) => {
+					if (messageData.has(that)) {
+						return messageData.get(that)!.origin;
+					}
 
-						const origin = Reflect.apply(target, that, args);
-						if (origin !== '' && fromBroadcastChannel(that))
-							return this.client.origin;
-						return origin;
-					},
-				),
-			},
-		);
+					const origin = Reflect.apply(target, that, args);
+					if (origin !== '' && fromBroadcastChannel(that))
+						return this.client.origin;
+					return origin;
+				},
+			),
+		});
 
 		// the sender's window as the page may see it: its own real origin's
 		// windows as they are, another proxied origin's restricted (every
@@ -1489,32 +1485,26 @@ export default class ContextModule extends Module<DocumentClient> {
 		// page the whole window), anything outside the proxied world as the
 		// top; ports and workers as they are
 		const sourceDescriptor = Reflect.getOwnPropertyDescriptor(
-			this.client.global.MessageEvent.prototype,
+			realm.MessageEvent.prototype,
 			'source',
 		)!;
-		Reflect.defineProperty(
-			this.client.global.MessageEvent.prototype,
-			'source',
-			{
-				...sourceDescriptor,
-				get: proxyModule.wrapFunction(
-					sourceDescriptor.get!,
-					(target, that: MessageEvent, args) => {
-						const source = Reflect.apply(target, that, args);
-						return isWindow(source) ? this.newRestricted(source) : source;
-					},
-				),
-			},
-		);
+		Reflect.defineProperty(realm.MessageEvent.prototype, 'source', {
+			...sourceDescriptor,
+			get: proxyModule.wrapFunction(
+				sourceDescriptor.get!,
+				(target, that: MessageEvent, args) => {
+					const source = Reflect.apply(target, that, args);
+					return isWindow(source) ? this.newRestricted(source) : source;
+				},
+			),
+		});
 
-		Reflect.defineProperty(this.client.global.MessageEvent.prototype, 'data', {
+		Reflect.defineProperty(realm.MessageEvent.prototype, 'data', {
 			configurable: true,
 			enumerable: true,
 			get: proxyModule.wrapFunction(
-				Reflect.getOwnPropertyDescriptor(
-					this.client.global.MessageEvent.prototype,
-					'data',
-				)!.get!,
+				Reflect.getOwnPropertyDescriptor(realm.MessageEvent.prototype, 'data')!
+					.get!,
 				(target, that: MessageEvent, args) => {
 					if (messageData.has(that)) {
 						return messageData.get(that)!.data;
@@ -1530,7 +1520,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		// Registered now and again after every document.open(), which drops
 		// window listeners.
 		const tagMessages = () => {
-			this.client.global.addEventListener('message', (event) => {
+			realm.addEventListener('message', (event) => {
 				/*console.error(
 					this.client.url.url.toString(),
 					event.data,
@@ -1556,12 +1546,12 @@ export default class ContextModule extends Module<DocumentClient> {
 			});
 		};
 		tagMessages();
-		addDocumentOpenListener(this.client.global, tagMessages);
+		addDocumentOpenListener(realm, tagMessages);
 
 		// another context posting to this window calls this native from its
 		// own realm (access API `post`), so it is the incumbent the browser
 		// reports as the source
-		this.client.nativePostMessage = this.client.global.postMessage;
+		this.client.nativePostMessage = realm.postMessage;
 		// `x.postMessage()` on a stand-in this page holds: posted from this
 		// realm, since the browser names the realm that calls postMessage as
 		// the event's source, and the stand-in may be one another document of
@@ -1569,13 +1559,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		this.client.postToRestricted = (target, args) => {
 			const context = this.restrictedContexts.get(target as Context);
 			if (!context) return false;
-			catchRequiredArguments(
-				args.length,
-				1,
-				'Window',
-				'postMessage',
-				this.client.global,
-			);
+			catchRequiredArguments(args.length, 1, 'Window', 'postMessage', realm);
 			this.#cloneCheck(args);
 			if (this.targetAllows(args, context)) this.#postFromHere(context, args);
 			return true;
@@ -1604,7 +1588,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		// invocation. It posted to its own window whatever it was called on.
 		// The message goes from this realm, which the browser names as the
 		// source.
-		const nativePost = this.client.global.postMessage;
+		const nativePost = realm.postMessage;
 		// (the scope a `with` over another window reads the name through
 		// stands for that window: see postScope)
 		const scopes = new WeakMap<object, object>();
@@ -1614,19 +1598,19 @@ export default class ContextModule extends Module<DocumentClient> {
 					that === undefined || that === null || that === scopes.get(home)
 						? home
 						: that;
-				if (receiver === this.client.global) {
+				if (receiver === realm) {
 					catchRequiredArguments(
 						args.length,
 						1,
 						'Window',
 						'postMessage',
-						this.client.global,
+						realm,
 					);
 					this.#cloneCheck(args);
 					return Reflect.apply(
 						target,
-						this.client.global,
-						this.postMessage(<any>args, this.client.global as Context),
+						realm,
+						this.postMessage(<any>args, realm as Context),
 					);
 				}
 				let stomp: Client | undefined;
@@ -1641,25 +1625,18 @@ export default class ContextModule extends Module<DocumentClient> {
 				} catch (error) {
 					// a window of another origin: the browser's own call
 				}
-				if (!window)
-					throw new this.client.global.TypeError('Illegal invocation');
-				catchRequiredArguments(
-					args.length,
-					1,
-					'Window',
-					'postMessage',
-					this.client.global,
-				);
+				if (!window) throw new realm.TypeError('Illegal invocation');
+				catchRequiredArguments(args.length, 1, 'Window', 'postMessage', realm);
 				if (stomp?.nativePostMessage)
 					return this.client.postToWindow!(receiver as object, args);
 				if (this.client.postToRestricted!(receiver, args)) return undefined;
 				return Reflect.apply(target, receiver, args);
 			});
-		this.client.global.postMessage = poster(this.client.global as Context);
-		this.client.hookedPostMessage = this.client.global.postMessage;
+		realm.postMessage = poster(realm as Context);
+		this.client.hookedPostMessage = realm.postMessage;
 		const posters = new WeakMap<object, unknown>();
 		this.client.postMessageOf = (target) => {
-			if (target === this.client.global) return undefined;
+			if (target === realm) return undefined;
 			try {
 				if (
 					typeof target !== 'object' ||

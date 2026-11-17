@@ -670,6 +670,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			this.#runHook(entry, element, propertyAttribute(property));
 	}
 	apply() {
+		const realm = this.client.global;
 		// all hooks are in, now apply them
 
 		const proxyModule = this.client.getModule(ProxyModule)!;
@@ -681,157 +682,146 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 		// native write, taken before the prototype hook below replaces it: the
 		// stream's output and a pending tail go through it
-		const nativeWrite = this.client.global.document.write;
+		const nativeWrite = realm.document.write;
 		const stream = new WriteStream(this.client);
 
 		// document.open() drops every listener on the window: the modules that
 		// listen there (message filter and tagger, link and navigate hooks)
 		// register again. With three arguments it is window.open, which the
 		// hook below handles.
-		const documentOpen = this.client.global.Document.prototype.open;
-		this.client.global.Document.prototype.open = proxyModule.wrapFunction(
+		const documentOpen = realm.Document.prototype.open;
+		realm.Document.prototype.open = proxyModule.wrapFunction(
 			documentOpen,
 			(target, that, args) => {
-				if (args.length >= 3)
-					return Reflect.apply(
-						this.client.global.open,
-						this.client.global,
-						args,
-					);
+				if (args.length >= 3) return Reflect.apply(realm.open, realm, args);
 				// a fresh parser with an empty input stream: whatever an earlier
 				// write left unfinished went with the old one
 				if (typeof that === 'object' && that !== null) stream.reset(that);
 				const result = Reflect.apply(target, that, args);
-				if (that === this.client.global.document) {
+				if (that === realm.document) {
 					this.client.opened = true;
-					runDocumentOpenListeners(this.client.global);
+					runDocumentOpenListeners(realm);
 				}
 				return result;
 			},
 		);
 
-		this.client.global.open = proxyModule.wrapFunction(
-			this.client.global.open,
-			(target, that, args) => {
-				const name = args[1] === undefined ? '_blank' : String(args[1]);
-				// about:blank (or no URL) is a document the page writes itself:
-				// opened as is, injected by the IFrame module's hook
-				let destination: URL | null = null;
-				if (args[0] !== undefined && String(args[0]) !== '')
-					destination = new URL(
-						String(args[0]),
-						this.client.baseURL.toString(),
-					);
-				const routable =
-					destination !== null && /^https?:$/.test(destination.protocol);
-				// the proxied parent or top, named from a frame under the top:
-				// the URL is routed as that window's document
-				let aimed = this.client.targetWindow(name);
-				// from a sandboxed document, the one it may navigate (else the
-				// browser opens nothing and the page gets null)
-				const keyword = name.toLowerCase();
-				if (
-					this.client.sandboxFlags !== null &&
-					['_top', '_parent', '_unfencedtop'].includes(keyword)
-				) {
-					const window =
-						keyword === '_parent' ? this.client.parent : this.client.proxiedTop;
-					if (window !== this.client.global) {
-						if (!this.client.mayNavigate(window)) return null;
-						const client = (window as Record<string, any>)[
-							this.client.names.client
-						] as DocumentClient | undefined;
-						if (client) aimed = { window, client };
-					}
+		realm.open = proxyModule.wrapFunction(realm.open, (target, that, args) => {
+			const name = args[1] === undefined ? '_blank' : String(args[1]);
+			// about:blank (or no URL) is a document the page writes itself:
+			// opened as is, injected by the IFrame module's hook
+			let destination: URL | null = null;
+			if (args[0] !== undefined && String(args[0]) !== '')
+				destination = new URL(String(args[0]), this.client.baseURL.toString());
+			const routable =
+				destination !== null && /^https?:$/.test(destination.protocol);
+			// the proxied parent or top, named from a frame under the top:
+			// the URL is routed as that window's document
+			let aimed = this.client.targetWindow(name);
+			// from a sandboxed document, the one it may navigate (else the
+			// browser opens nothing and the page gets null)
+			const keyword = name.toLowerCase();
+			if (
+				this.client.sandboxFlags !== null &&
+				['_top', '_parent', '_unfencedtop'].includes(keyword)
+			) {
+				const window =
+					keyword === '_parent' ? this.client.parent : this.client.proxiedTop;
+				if (window !== realm) {
+					if (!this.client.mayNavigate(window)) return null;
+					const client = (window as Record<string, any>)[
+						this.client.names.client
+					] as DocumentClient | undefined;
+					if (client) aimed = { window, client };
 				}
-				// a javascript: URL runs in the opened window: rewritten, like a
-				// javascript: link (routeHTML rewrites its body)
-				if (destination !== null && destination.protocol === 'javascript:')
-					args[0] = routeHTML(
-						new StompURL(destination, this.client.url),
-						this.client.url,
-						this.client.config,
-						false,
-						aimed ? aimed.client.nestedRoute : this.client.nestedRoute,
-					);
-				// a new tab: the host's to open, when it said so (then the page
-				// sees null, as with a popup blocker). Not for a sandboxed
-				// document's popup that keeps its sandbox: the browser refuses it
-				// without allow-popups, and opens it sandboxed like the page
-				// (the IFrame module starts it with the opener's flags)
-				const escapes =
-					this.client.sandboxFlags === null ||
-					(this.client.allows('allow-popups') &&
-						this.client.allows('allow-popups-to-escape-sandbox'));
-				if (
-					routable &&
-					escapes &&
-					!['_self', '_top', '_parent', '_unfencedtop'].includes(
-						name.toLowerCase(),
-					) &&
-					// a frame of this page by that name: the browser navigates it
-					!this.client.hasFrameNamed(name) &&
-					this.client.openInHost(destination!.toString())
-				)
-					return null;
+			}
+			// a javascript: URL runs in the opened window: rewritten, like a
+			// javascript: link (routeHTML rewrites its body)
+			if (destination !== null && destination.protocol === 'javascript:')
+				args[0] = routeHTML(
+					new StompURL(destination, this.client.url),
+					this.client.url,
+					this.client.config,
+					false,
+					aimed ? aimed.client.nestedRoute : this.client.nestedRoute,
+				);
+			// a new tab: the host's to open, when it said so (then the page
+			// sees null, as with a popup blocker). Not for a sandboxed
+			// document's popup that keeps its sandbox: the browser refuses it
+			// without allow-popups, and opens it sandboxed like the page
+			// (the IFrame module starts it with the opener's flags)
+			const escapes =
+				this.client.sandboxFlags === null ||
+				(this.client.allows('allow-popups') &&
+					this.client.allows('allow-popups-to-escape-sandbox'));
+			if (
+				routable &&
+				escapes &&
+				!['_self', '_top', '_parent', '_unfencedtop'].includes(
+					name.toLowerCase(),
+				) &&
+				// a frame of this page by that name: the browser navigates it
+				!this.client.hasFrameNamed(name) &&
+				this.client.openInHost(destination!.toString())
+			)
+				return null;
 
-				if (routable)
-					args[0] =
-						// this window itself: a navigation like location.assign's; the
-						// proxied parent or top: one of that window's own
-						name.toLowerCase() === '_self'
-							? this.client.navigationRoute(destination!)
-							: aimed
-								? aimed.client.navigationRoute(destination!)
-								: routeHTML(
-										new StompURL(destination!, this.client.url),
-										this.client.url,
-										this.client.config,
-										false,
-										this.client.nestedRoute,
-									);
+			if (routable)
+				args[0] =
+					// this window itself: a navigation like location.assign's; the
+					// proxied parent or top: one of that window's own
+					name.toLowerCase() === '_self'
+						? this.client.navigationRoute(destination!)
+						: aimed
+							? aimed.client.navigationRoute(destination!)
+							: routeHTML(
+									new StompURL(destination!, this.client.url),
+									this.client.url,
+									this.client.config,
+									false,
+									this.client.nestedRoute,
+								);
 
-				// the proxied parent or top navigates from its own realm (see
-				// DocumentClient targetWindow), and a javascript: URL's code runs
-				// there; the caller gets that window
-				if (aimed)
-					return aimed.client.callIn(target, aimed.window, [
-						args[0],
-						'_self',
-						...args.slice(2),
-					]);
+			// the proxied parent or top navigates from its own realm (see
+			// DocumentClient targetWindow), and a javascript: URL's code runs
+			// there; the caller gets that window
+			if (aimed)
+				return aimed.client.callIn(target, aimed.window, [
+					args[0],
+					'_self',
+					...args.slice(2),
+				]);
 
-				// a frame of this document by that name still on its initial
-				// about:blank fires no navigate event: one sent to another
-				// origin gets a fresh context first, which the browser then
-				// navigates by its name
-				if (routable && destination) {
-					const element = this.client.frameNamed(name);
-					const view = element && frameWindow(element);
-					let client: DocumentClient | undefined;
-					try {
-						client = view
-							? ((view as unknown as Record<string, unknown>)[
-									this.client.names.client
-								] as DocumentClient | undefined)
-							: undefined;
-					} catch (error) {
-						// another real origin's
-					}
-					client?.freshTo?.(destination, null, true);
+			// a frame of this document by that name still on its initial
+			// about:blank fires no navigate event: one sent to another
+			// origin gets a fresh context first, which the browser then
+			// navigates by its name
+			if (routable && destination) {
+				const element = this.client.frameNamed(name);
+				const view = element && frameWindow(element);
+				let client: DocumentClient | undefined;
+				try {
+					client = view
+						? ((view as unknown as Record<string, unknown>)[
+								this.client.names.client
+							] as DocumentClient | undefined)
+						: undefined;
+				} catch (error) {
+					// another real origin's
 				}
+				client?.freshTo?.(destination, null, true);
+			}
 
-				// a top-level page is its own top and parent: navigate the frame
-				// (a sandboxed frame's too)
-				if (
-					args[1] !== undefined &&
-					['_top', '_parent', '_unfencedtop'].includes(name.toLowerCase())
-				)
-					args[1] = '_self';
+			// a top-level page is its own top and parent: navigate the frame
+			// (a sandboxed frame's too)
+			if (
+				args[1] !== undefined &&
+				['_top', '_parent', '_unfencedtop'].includes(name.toLowerCase())
+			)
+				args[1] = '_self';
 
-				return Reflect.apply(target, that, args);
-			},
-		);
+			return Reflect.apply(target, that, args);
+		});
 
 		// the written markup is tokenized across calls (WriteStream): a tag,
 		// comment or script a call leaves unfinished waits for the call that
@@ -857,28 +847,26 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				text = passed;
 				if (newline) text += '\n';
 				const document =
-					typeof that === 'object' && that !== null
-						? that
-						: this.client.global.document;
+					typeof that === 'object' && that !== null ? that : realm.document;
 				// a write once the document has loaded opens it again (the page
 				// never called open()): known before the markup is rewritten, the
 				// listeners after, once the browser has dropped the window's own
 				const opens =
-					document === this.client.global.document &&
-					this.client.global.document.readyState === 'complete';
+					document === realm.document &&
+					realm.document.readyState === 'complete';
 				// a document just opened (no root yet), or one this write opens
 				const fresh =
 					opens ||
-					(document === this.client.global.document &&
-						this.client.global.document.documentElement === null);
+					(document === realm.document &&
+						realm.document.documentElement === null);
 				if (opens) this.client.opened = true;
-				const prevState = getGlobalParsingState(this.client.global);
-				setGlobalParsingState(this.client.global, 'parsingBeforeWrite');
+				const prevState = getGlobalParsingState(realm);
+				setGlobalParsingState(realm, 'parsingBeforeWrite');
 				let markup: string;
 				try {
 					markup = stream.write(document, text, fresh);
 				} finally {
-					setGlobalParsingState(this.client.global, prevState);
+					setGlobalParsingState(realm, prevState);
 				}
 				// an empty write still reaches the parser: after the document
 				// has loaded it opens a new one, as the page's own call would
@@ -886,7 +874,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				// a frame the written markup made (a script it holds sweeps
 				// first, see prepareScriptText)
 				this.client.sweepFrames?.();
-				if (opens) runDocumentOpenListeners(this.client.global);
+				if (opens) runDocumentOpenListeners(realm);
 				this.client.writtenLoads?.(document as Document);
 			});
 
@@ -895,15 +883,15 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// window that keeps its realm across documents hands each new one the
 		// hook. A popup's document finds its own realm's prototype, and so
 		// that realm's client.
-		const documentProto = this.client.global.Document.prototype;
+		const documentProto = realm.Document.prototype;
 		documentProto.write = writeFactory(documentProto.write, false);
 		documentProto.writeln = writeFactory(documentProto.writeln, true);
 
 		// document.close() ends the input: the unfinished tail goes to the
 		// parser as it is, which meets it at the end of its input the way the
 		// browser's would
-		this.client.global.Document.prototype.close = proxyModule.wrapFunction(
-			this.client.global.Document.prototype.close,
+		realm.Document.prototype.close = proxyModule.wrapFunction(
+			realm.Document.prototype.close,
 			(target, that, args) => {
 				const tail = stream.take(that);
 				if (tail) Reflect.apply(nativeWrite, that, [trustedHTML(tail)]);
@@ -918,25 +906,18 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// into it any more: a write now would open a new document. A tail
 		// left behind is stale, like the browser's at its end of input.
 		const dropAtParserEnd = () => {
-			if (this.client.global.document.readyState !== 'loading')
-				stream.reset(this.client.global.document);
+			if (realm.document.readyState !== 'loading') stream.reset(realm.document);
 		};
 		const listen = () =>
-			this.client.global.document.addEventListener(
-				'readystatechange',
-				dropAtParserEnd,
-			);
+			realm.document.addEventListener('readystatechange', dropAtParserEnd);
 		listen();
-		addDocumentOpenListener(this.client.global, listen);
+		addDocumentOpenListener(realm, listen);
 
-		Reflect.defineProperty(this.client.global.Node.prototype, 'baseURI', {
+		Reflect.defineProperty(realm.Node.prototype, 'baseURI', {
 			enumerable: true,
 			configurable: true,
 			get: proxyModule.wrapFunction(
-				Reflect.getOwnPropertyDescriptor(
-					this.client.global.Node.prototype,
-					'baseURI',
-				)!.get!,
+				Reflect.getOwnPropertyDescriptor(realm.Node.prototype, 'baseURI')!.get!,
 				(target, that, args) => {
 					// only side effect this getter has is the potential to throw an illegal invocation error
 					const base = Reflect.apply(target, that, args);
@@ -949,14 +930,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			),
 		});
 
-		Reflect.defineProperty(this.client.global.Document.prototype, 'URL', {
+		Reflect.defineProperty(realm.Document.prototype, 'URL', {
 			enumerable: true,
 			configurable: true,
 			get: proxyModule.wrapFunction(
-				Reflect.getOwnPropertyDescriptor(
-					this.client.global.Document.prototype,
-					'URL',
-				)!.get!,
+				Reflect.getOwnPropertyDescriptor(realm.Document.prototype, 'URL')!.get!,
 				(target, that, args) => {
 					// (the native getter throws for what is no document)
 					const native = Reflect.apply(target, that, args) as string;
@@ -973,12 +951,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// browser resolves itself, against the document's real base: a route.
 		// No load is made from it, so the attribute stays as written and the
 		// property resolves it against the page's base
-		const nativeGetAttribute =
-			this.client.global.Element.prototype.getAttribute;
-		for (const ctor of [
-			this.client.global.HTMLQuoteElement,
-			this.client.global.HTMLModElement,
-		]) {
+		const nativeGetAttribute = realm.Element.prototype.getAttribute;
+		for (const ctor of [realm.HTMLQuoteElement, realm.HTMLModElement]) {
 			const cite = Reflect.getOwnPropertyDescriptor(ctor.prototype, 'cite');
 			if (!cite?.get) continue;
 			Reflect.defineProperty(ctor.prototype, 'cite', {
@@ -1014,12 +988,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// document decides it for the later ones
 		void this.client.siteKeyed;
 		const domainDescriptor = Reflect.getOwnPropertyDescriptor(
-			this.client.global.Document.prototype,
+			realm.Document.prototype,
 			'domain',
 		)!;
 		const isIP = (host: string) =>
 			host.startsWith('[') || /^\d+\.\d+\.\d+\.\d+$/.test(host);
-		Reflect.defineProperty(this.client.global.Document.prototype, 'domain', {
+		Reflect.defineProperty(realm.Document.prototype, 'domain', {
 			enumerable: true,
 			configurable: true,
 			get: proxyModule.wrapFunction(
@@ -1030,8 +1004,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// an opaque origin has no domain, nor has a removed frame's
 					// document (a document the page made without a window has
 					// its creator's, as natively)
-					if (this.client.sandboxedOpaque || this.client.global.closed)
-						return '';
+					if (this.client.sandboxedOpaque || realm.closed) return '';
 					return this.client.documentDomain ?? this.client.url.url.hostname;
 				},
 			),
@@ -1047,7 +1020,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						this.client.documentDomain ?? this.client.url.url.hostname;
 					const refuse = (reason: string) =>
 						withStack(
-							new this.client.global.DOMException(
+							new realm.DOMException(
 								`Failed to set the 'domain' property on 'Document': ${reason}`,
 								'SecurityError',
 							),
@@ -1083,10 +1056,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 		// window.originAgentCluster: whether this document's agent cluster is
 		// keyed by origin (DocumentClient.siteKeyed), not the proxy origin's
-		for (const owner of [
-			this.client.global,
-			this.client.global.Window.prototype,
-		] as object[]) {
+		for (const owner of [realm, realm.Window.prototype] as object[]) {
 			const descriptor = Reflect.getOwnPropertyDescriptor(
 				owner,
 				'originAgentCluster',
@@ -1118,51 +1088,45 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		 */
 
 		const scriptTextDescriptor = Reflect.getOwnPropertyDescriptor(
-			this.client.global.HTMLScriptElement.prototype,
+			realm.HTMLScriptElement.prototype,
 			'text',
 		)!;
 
-		Reflect.defineProperty(
-			this.client.global.HTMLScriptElement.prototype,
-			'text',
-			{
-				enumerable: true,
-				configurable: true,
-				get: scriptTextDescriptor.get,
-				set: proxyModule.wrapFunction(
-					scriptTextDescriptor.set!,
-					(target, that: HTMLScriptElement, args) => {
-						// (the page's Trusted Types: DocumentClient.scriptValue)
-						const text = this.client.scriptValue(
-							that,
-							args[0],
-							'HTMLScriptElement text',
-							() => Reflect.apply(target, that, args),
-						);
-						if (text === null || this.client.trustedScriptText(that, text))
-							return;
-						// snapshot: removing while iterating the live list skips every
-						// other node and leaves half the old text in place
-						for (const node of [...that.childNodes]) node.remove();
+		Reflect.defineProperty(realm.HTMLScriptElement.prototype, 'text', {
+			enumerable: true,
+			configurable: true,
+			get: scriptTextDescriptor.get,
+			set: proxyModule.wrapFunction(
+				scriptTextDescriptor.set!,
+				(target, that: HTMLScriptElement, args) => {
+					// (the page's Trusted Types: DocumentClient.scriptValue)
+					const text = this.client.scriptValue(
+						that,
+						args[0],
+						'HTMLScriptElement text',
+						() => Reflect.apply(target, that, args),
+					);
+					if (text === null || this.client.trustedScriptText(that, text))
+						return;
+					// snapshot: removing while iterating the live list skips every
+					// other node and leaves half the old text in place
+					for (const node of [...that.childNodes]) node.remove();
 
-						// the empty string leaves no text node, as natively
-						if (text === '') return;
-						that.append(
-							new this.client.global.Text(
-								this.client.prepareScriptText(that, text),
-							),
-						);
-					},
-				),
-			},
-		);
+					// the empty string leaves no text node, as natively
+					if (text === '') return;
+					that.append(
+						new realm.Text(this.client.prepareScriptText(that, text)),
+					);
+				},
+			),
+		});
 
 		// An HTML style's markup is its text: the browser parses what
 		// innerHTML or setHTMLUnsafe give an HTML <style> as raw text, so it
 		// is set as the text, through the insertion hook of DOMContentHooks
 		// (applied before this module), which routes text going into a style
 		// before it lands
-		const hookedAppend = this.client.global.Element.prototype.append;
+		const hookedAppend = realm.Element.prototype.append;
 		const setStyleText = (style: Element, text: string) => {
 			usePrototype(style, nativeElement, (element) => {
 				for (const node of [...element.childNodes]) node.remove();
@@ -1172,12 +1136,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		};
 		// and a Text's `data`, which DOMContentHooks routes in a style
 		const hookedDataSet = Reflect.getOwnPropertyDescriptor(
-			this.client.global.CharacterData.prototype,
+			realm.CharacterData.prototype,
 			'data',
 		)!.set!;
 
 		const textContentDescriptor = Reflect.getOwnPropertyDescriptor(
-			this.client.global.Node.prototype,
+			realm.Node.prototype,
 			'textContent',
 		)!;
 
@@ -1189,55 +1153,50 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// elements between its lines, which are no part of a script's text).
 		for (const name of ['textContent', 'innerText'] as const) {
 			const own = Reflect.getOwnPropertyDescriptor(
-				this.client.global.HTMLScriptElement.prototype,
+				realm.HTMLScriptElement.prototype,
 				name,
 			);
 			if (!own?.set) continue;
-			Reflect.defineProperty(
-				this.client.global.HTMLScriptElement.prototype,
-				name,
-				{
-					...own,
-					set: proxyModule.wrapFunction(
-						own.set,
-						(target, that: HTMLScriptElement, args) => {
-							if (!isScriptElement(that))
-								return Reflect.apply(target, that, args);
-							// null is the empty string, which leaves no child (and
-							// undefined too for textContent, whose type is nullable)
-							const text = this.client.scriptValue(
-								that,
-								args[0],
-								`HTMLScriptElement ${name}`,
-								() => Reflect.apply(target, that, args),
-								(value) =>
-									value === null ||
-									(value === undefined && name === 'textContent')
-										? ''
-										: String(value),
-							);
-							if (text === null || this.client.trustedScriptText(that, text))
-								return;
-							usePrototype(that, nativeElement, (element) => {
-								for (const node of [...element.childNodes]) node.remove();
-							});
-							if (text === '') return;
-							const lines =
-								name === 'innerText' ? text.split(/\r\n|\r|\n/) : [text];
-							const nodes: (string | Node)[] = [];
-							for (const [index, line] of lines.entries()) {
-								if (index)
-									nodes.push(this.client.global.document.createElement('br'));
-								if (line !== '') nodes.push(line);
-							}
-							Reflect.apply(hookedAppend, that, nodes);
-						},
-					),
-				},
-			);
+			Reflect.defineProperty(realm.HTMLScriptElement.prototype, name, {
+				...own,
+				set: proxyModule.wrapFunction(
+					own.set,
+					(target, that: HTMLScriptElement, args) => {
+						if (!isScriptElement(that))
+							return Reflect.apply(target, that, args);
+						// null is the empty string, which leaves no child (and
+						// undefined too for textContent, whose type is nullable)
+						const text = this.client.scriptValue(
+							that,
+							args[0],
+							`HTMLScriptElement ${name}`,
+							() => Reflect.apply(target, that, args),
+							(value) =>
+								value === null ||
+								(value === undefined && name === 'textContent')
+									? ''
+									: String(value),
+						);
+						if (text === null || this.client.trustedScriptText(that, text))
+							return;
+						usePrototype(that, nativeElement, (element) => {
+							for (const node of [...element.childNodes]) node.remove();
+						});
+						if (text === '') return;
+						const lines =
+							name === 'innerText' ? text.split(/\r\n|\r|\n/) : [text];
+						const nodes: (string | Node)[] = [];
+						for (const [index, line] of lines.entries()) {
+							if (index) nodes.push(realm.document.createElement('br'));
+							if (line !== '') nodes.push(line);
+						}
+						Reflect.apply(hookedAppend, that, nodes);
+					},
+				),
+			});
 		}
 
-		Reflect.defineProperty(this.client.global.Node.prototype, 'textContent', {
+		Reflect.defineProperty(realm.Node.prototype, 'textContent', {
 			enumerable: true,
 			configurable: true,
 			get: textContentDescriptor.get,
@@ -1264,8 +1223,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// where natively it gets one, `undefined` was written out as
 					// text, and every such write paid for the loop
 					if (
-						!(that instanceof this.client.global.HTMLScriptElement) &&
-						!(that instanceof this.client.global.SVGScriptElement) &&
+						!(that instanceof realm.HTMLScriptElement) &&
+						!(that instanceof realm.SVGScriptElement) &&
 						this.client.styleKind(that) === null
 					)
 						return Reflect.apply(target, that, args);
@@ -1279,71 +1238,62 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					if (written === '') return;
 					// a script's text set while it is connected runs at once
 					const text =
-						that instanceof this.client.global.HTMLScriptElement
+						that instanceof realm.HTMLScriptElement
 							? this.client.prepareScriptText(that, written)
 							: written;
-					(that as Element).append(new this.client.global.Text(text));
+					(that as Element).append(new realm.Text(text));
 				},
 			),
 		});
 
 		const innerTextDescriptor = Reflect.getOwnPropertyDescriptor(
-			this.client.global.HTMLElement.prototype,
+			realm.HTMLElement.prototype,
 			'innerText',
 		)!;
 
-		Reflect.defineProperty(
-			this.client.global.HTMLElement.prototype,
-			'innerText',
-			{
-				enumerable: true,
-				configurable: true,
-				get: innerTextDescriptor.get,
-				set: proxyModule.wrapFunction(
-					innerTextDescriptor.set!,
-					(target, that: Element, args) => {
-						// snapshot: removing while iterating the live list skips every
-						// other node and leaves half the old text in place
-						for (const node of [...that.childNodes]) node.remove();
+		Reflect.defineProperty(realm.HTMLElement.prototype, 'innerText', {
+			enumerable: true,
+			configurable: true,
+			get: innerTextDescriptor.get,
+			set: proxyModule.wrapFunction(
+				innerTextDescriptor.set!,
+				(target, that: Element, args) => {
+					// snapshot: removing while iterating the live list skips every
+					// other node and leaves half the old text in place
+					for (const node of [...that.childNodes]) node.remove();
 
-						// as the browser builds it: null is the empty string, which
-						// leaves nothing, and each line break is a <br> between
-						// the text of the lines
-						const text = args[0] === null ? '' : String(args[0]);
-						if (text === '') return;
-						const nodes: Node[] = [];
-						for (const [index, line] of text.split(/\r\n|\r|\n/).entries()) {
-							if (index)
-								nodes.push(this.client.global.document.createElement('br'));
-							if (line !== '') nodes.push(new this.client.global.Text(line));
-						}
-						that.append(...nodes);
-					},
-				),
-			},
-		);
+					// as the browser builds it: null is the empty string, which
+					// leaves nothing, and each line break is a <br> between
+					// the text of the lines
+					const text = args[0] === null ? '' : String(args[0]);
+					if (text === '') return;
+					const nodes: Node[] = [];
+					for (const [index, line] of text.split(/\r\n|\r|\n/).entries()) {
+						if (index) nodes.push(realm.document.createElement('br'));
+						if (line !== '') nodes.push(new realm.Text(line));
+					}
+					that.append(...nodes);
+				},
+			),
+		});
 
 		const outerTextDescriptor = Reflect.getOwnPropertyDescriptor(
-			this.client.global.HTMLElement.prototype,
+			realm.HTMLElement.prototype,
 			'outerText',
 		)!;
 
-		Reflect.defineProperty(
-			this.client.global.HTMLElement.prototype,
-			'outerText',
-			{
-				enumerable: true,
-				configurable: true,
-				get: outerTextDescriptor.get,
-				set: proxyModule.wrapFunction(
-					outerTextDescriptor.set!,
-					(target, that: Element, args) => {
-						requireElement(that);
-						that.replaceWith(new this.client.global.Text(args[0]));
-					},
-				),
-			},
-		);
+		Reflect.defineProperty(realm.HTMLElement.prototype, 'outerText', {
+			enumerable: true,
+			configurable: true,
+			get: outerTextDescriptor.get,
+			set: proxyModule.wrapFunction(
+				outerTextDescriptor.set!,
+				(target, that: Element, args) => {
+					requireElement(that);
+					that.replaceWith(new realm.Text(args[0]));
+				},
+			),
+		});
 
 		/**
 		 * inner and outer HTML need to have their getters hooked
@@ -1352,23 +1302,21 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		 * Element.prototype.getInnerHTML
 		 */
 
-		if ('getInnerHTML' in this.client.global.Element.prototype) {
-			(this.client.global.Element.prototype as any).getInnerHTML =
-				proxyModule.wrapFunction(
-					(this.client.global.Element.prototype as any)
-						.getInnerHTML as () => string,
-					(target, that) => {
-						return that.innerHTML;
-					},
-				);
+		if ('getInnerHTML' in realm.Element.prototype) {
+			(realm.Element.prototype as any).getInnerHTML = proxyModule.wrapFunction(
+				(realm.Element.prototype as any).getInnerHTML as () => string,
+				(target, that) => {
+					return that.innerHTML;
+				},
+			);
 		}
 
 		const innerHTMLDescriptor = Reflect.getOwnPropertyDescriptor(
-			this.client.global.Element.prototype,
+			realm.Element.prototype,
 			'innerHTML',
 		)!;
 
-		Reflect.defineProperty(this.client.global.Element.prototype, 'innerHTML', {
+		Reflect.defineProperty(realm.Element.prototype, 'innerHTML', {
 			enumerable: true,
 			configurable: true,
 			get: proxyModule.wrapFunction(
@@ -1398,8 +1346,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// insertion hook, which routes the text going into a style
 					if (kind === 'svg') {
 						const nodes = cloneRawNode(
-							parseHTMLFragmentIn(markup, that, this.client.global.document),
-							this.client.global.document,
+							parseHTMLFragmentIn(markup, that, realm.document),
+							realm.document,
 						);
 						usePrototype(that, nativeElement, (element) => {
 							for (const node of [...element.childNodes]) node.remove();
@@ -1420,11 +1368,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 								// in it is constructed
 								element.content.append(
 									cloneRawNode(
-										parseHTMLFragmentIn(
-											markup,
-											that,
-											this.client.global.document,
-										),
+										parseHTMLFragmentIn(markup, that, realm.document),
 										templateContentDocument(element),
 									),
 								);
@@ -1440,12 +1384,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 								element.nodeName === 'SCRIPT'
 									? markup
 									: cloneRawNode(
-											parseHTMLFragmentIn(
-												markup,
-												that,
-												this.client.global.document,
-											),
-											this.client.global.document,
+											parseHTMLFragmentIn(markup, that, realm.document),
+											realm.document,
 										);
 							if (nodes !== '') Reflect.apply(hookedAppend, that, [nodes]);
 						} else {
@@ -1458,12 +1398,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							// or its prototype ran for each
 							element.replaceChildren(
 								cloneRawNode(
-									parseHTMLFragmentIn(
-										markup,
-										that,
-										this.client.global.document,
-									),
-									this.client.global.document,
+									parseHTMLFragmentIn(markup, that, realm.document),
+									realm.document,
 								),
 							);
 						}
@@ -1475,11 +1411,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		});
 
 		const outerHTMLDescriptor = Reflect.getOwnPropertyDescriptor(
-			this.client.global.Element.prototype,
+			realm.Element.prototype,
 			'outerHTML',
 		)!;
 
-		Reflect.defineProperty(this.client.global.Element.prototype, 'outerHTML', {
+		Reflect.defineProperty(realm.Element.prototype, 'outerHTML', {
 			enumerable: true,
 			configurable: true,
 			get: proxyModule.wrapFunction(
@@ -1524,7 +1460,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					);
 					if (parentType === 9)
 						throw withStack(
-							new this.client.global.DOMException(
+							new realm.DOMException(
 								"Failed to set the 'outerHTML' property on 'Element': This element's parent is a Document, which may not be modified.",
 								'NoModificationAllowedError',
 							),
@@ -1534,9 +1470,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							parseHTMLFragmentIn(
 								markup,
 								parentType === 1 ? (parent as Element) : null,
-								this.client.global.document,
+								realm.document,
 							),
-							this.client.global.document,
+							realm.document,
 						),
 					);
 				},
@@ -1560,18 +1496,14 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			context: Element | null,
 			scripts?: ScriptNotes,
 		): string => {
-			const inert = inertDocumentOf(this.client.global.document);
+			const inert = inertDocumentOf(realm.document);
 			const div = createElementIn(inert, 'div');
 			// parsed in the context the browser parses it in next, so the
 			// serialisation keeps what that context keeps (a section's rows)
 			// (put in by the insertion hook, as the page's own nodes are)
 			Reflect.apply(markupContext.inserts[0], div, [
 				cloneRawNode(
-					parseHTMLFragmentIn(
-						String(markup),
-						context,
-						this.client.global.document,
-					),
+					parseHTMLFragmentIn(String(markup), context, realm.document),
 					inert,
 				),
 			]);
@@ -1590,12 +1522,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// command makes; a link's URL is routed, and the links the command
 		// made are then given the URL through the hook, which keeps what the
 		// page wrote for it to read back.
-		const nativeExecCommand = this.client.global.Document.prototype.execCommand;
+		const nativeExecCommand = realm.Document.prototype.execCommand;
 		if (typeof nativeExecCommand === 'function') {
-			const nativeGetSelection =
-				this.client.global.Document.prototype.getSelection;
-			const nativeQuerySelectorAll =
-				this.client.global.Document.prototype.querySelectorAll;
+			const nativeGetSelection = realm.Document.prototype.getSelection;
+			const nativeQuerySelectorAll = realm.Document.prototype.querySelectorAll;
 			// the element the selection starts in: the context the browser
 			// parses inserted markup in
 			const editingContext = (document: Document): Element | null => {
@@ -1616,8 +1546,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			};
 			const escapeAttribute = (value: string) =>
 				value.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-			this.client.global.Document.prototype.execCommand =
-				proxyModule.wrapFunction(nativeExecCommand, (target, that, args) => {
+			realm.Document.prototype.execCommand = proxyModule.wrapFunction(
+				nativeExecCommand,
+				(target, that, args) => {
 					const command = String(args[0]).toLowerCase();
 					if (args.length < 3 || args[2] === undefined || args[2] === null)
 						return Reflect.apply(target, that, args);
@@ -1683,7 +1614,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 								link.setAttribute('href', value);
 					this.client.sweepFrames?.();
 					return result;
-				});
+				},
+			);
 		}
 		// Range.createContextualFragment parses in the page's document, so an
 		// element in the fragment starts its load as it is parsed, inserted or
@@ -1693,7 +1625,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// for a table section parses as one), and the nodes are made in the
 		// page's document through the hooks. Scripts in it run when the page
 		// inserts them, rewritten then, as natively.
-		const RangeProto = this.client.global.Range?.prototype;
+		const RangeProto = realm.Range?.prototype;
 		if (typeof RangeProto?.createContextualFragment === 'function')
 			RangeProto.createContextualFragment = proxyModule.wrapFunction(
 				RangeProto.createContextualFragment,
@@ -1737,12 +1669,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				},
 			);
 		const hookedInnerHTMLSet = Reflect.getOwnPropertyDescriptor(
-			this.client.global.Element.prototype,
+			realm.Element.prototype,
 			'innerHTML',
 		)!.set!;
-		const shadowRootPrototype = (
-			this.client.global as { ShadowRoot?: typeof ShadowRoot }
-		).ShadowRoot?.prototype;
+		const shadowRootPrototype = (realm as { ShadowRoot?: typeof ShadowRoot })
+			.ShadowRoot?.prototype;
 		// Markup insertion members the inject does not hook are taken off the
 		// page's prototypes, so markup never reaches the browser's parser with
 		// no hook in the way (an `<img onerror>` or, with runScripts, a
@@ -1750,7 +1681,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// unrouted): a member a later Chrome adds reads as absent until it is
 		// hooked. Chrome 157's insertion members on Element, ShadowRoot and
 		// CharacterData are hooked below.
-		const global = this.client.global;
+		const global = realm;
 		const characterDataPrototype = (
 			global as { CharacterData?: typeof CharacterData }
 		).CharacterData?.prototype;
@@ -1844,10 +1775,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				}
 			markupContext.ends.push(markupContext.natives.length);
 		}
-		for (const proto of [
-			this.client.global.Element.prototype,
-			shadowRootPrototype,
-		]) {
+		for (const proto of [realm.Element.prototype, shadowRootPrototype]) {
 			const native = (proto as { setHTMLUnsafe?: unknown } | undefined)
 				?.setHTMLUnsafe;
 			if (typeof native !== 'function') continue;
@@ -1907,29 +1835,25 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// it drops. So the browser sanitizes into a copy of the element in the
 		// inert document, where nothing loads, and what it leaves goes in
 		// through the insertion hook, like the nodes of any other parser.
-		const elementSetHTML = (
-			this.client.global.Element.prototype as { setHTML?: unknown }
-		).setHTML;
+		const elementSetHTML = (realm.Element.prototype as { setHTML?: unknown })
+			.setHTML;
 		const shadowHost =
 			shadowRootPrototype &&
 			Reflect.getOwnPropertyDescriptor(shadowRootPrototype, 'host')?.get;
 		const contentOf = Reflect.getOwnPropertyDescriptor(
-			this.client.global.HTMLTemplateElement.prototype,
+			realm.HTMLTemplateElement.prototype,
 			'content',
 		)!.get!;
-		const importNode = this.client.global.Document.prototype.importNode;
+		const importNode = realm.Document.prototype.importNode;
 		const hookedReplaceChildren = {
-			element: this.client.global.Element.prototype.replaceChildren,
-			fragment: this.client.global.DocumentFragment.prototype.replaceChildren,
+			element: realm.Element.prototype.replaceChildren,
+			fragment: realm.DocumentFragment.prototype.replaceChildren,
 		};
 		const hookedTextContent = Reflect.getOwnPropertyDescriptor(
-			this.client.global.Node.prototype,
+			realm.Node.prototype,
 			'textContent',
 		)!;
-		for (const proto of [
-			this.client.global.Element.prototype,
-			shadowRootPrototype,
-		]) {
+		for (const proto of [realm.Element.prototype, shadowRootPrototype]) {
 			const native = (proto as { setHTML?: unknown } | undefined)?.setHTML;
 			if (typeof native !== 'function' || typeof elementSetHTML !== 'function')
 				continue;
@@ -1955,7 +1879,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							return Reflect.apply(target, that, args);
 						const shell = Reflect.apply(
 							importNode,
-							inertDocumentOf(this.client.global.document),
+							inertDocumentOf(realm.document),
 							[context, false],
 						) as Element;
 						// (a sanitizer the browser refuses throws here, as natively)
@@ -1999,9 +1923,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						// as the page wrote it: the children copied under an element
 						// of the inert document (see inertCopy) and their markers
 						// folded back
-						const div = this.inertCopy(
-							this.client.global.document.createElement('div'),
-						);
+						const div = this.inertCopy(realm.document.createElement('div'));
 						for (const child of that.childNodes)
 							div.append(this.inertCopy(child));
 						const html = this.serializeOriginal(div, false);
@@ -2028,102 +1950,96 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				),
 			});
 
-		this.client.global.Element.prototype.getAttributeNS =
-			proxyModule.wrapFunction(
-				this.client.global.Element.prototype.getAttributeNS,
-				(target, that: Element, args) => {
+		realm.Element.prototype.getAttributeNS = proxyModule.wrapFunction(
+			realm.Element.prototype.getAttributeNS,
+			(target, that: Element, args) => {
+				if (
+					args.length >= 2 &&
+					(args[0] === null || args[0] === '') &&
+					that instanceof realm.Element
+				) {
+					// the attribute of no namespace by exactly that local name
+					// (getAttribute lowercases on an HTML element and finds the
+					// first of any namespace by its qualified name): the page's
+					// value when a hook rewrote it or dropped it
+					const value = Reflect.apply(target, that, args) as string | null;
+					const local = String(args[1]);
+					if (isMarker(local)) return null;
+					// a marker is named as the hooks name the attribute
+					// (lowercased on an HTML element), and a name taken by an
+					// attribute of a namespace is not one a hook dropped
 					if (
-						args.length >= 2 &&
-						(args[0] === null || args[0] === '') &&
-						that instanceof this.client.global.Element
-					) {
-						// the attribute of no namespace by exactly that local name
-						// (getAttribute lowercases on an HTML element and finds the
-						// first of any namespace by its qualified name): the page's
-						// value when a hook rewrote it or dropped it
-						const value = Reflect.apply(target, that, args) as string | null;
-						const local = String(args[1]);
-						if (isMarker(local)) return null;
-						// a marker is named as the hooks name the attribute
-						// (lowercased on an HTML element), and a name taken by an
-						// attribute of a namespace is not one a hook dropped
-						if (
-							attributeName(that, local) !== local ||
-							(value === null && nativeElement.hasAttribute.call(that, local))
-						)
-							return value;
-						const original = pendingAttributes(that)
-							? usePrototype(that, CustomElement.prototype, (element) =>
-									element.getAttributeOG(local),
-								)
-							: nativeElement.getAttribute.call(
-									that,
-									ORIGINAL_ATTRIBUTE + local,
-								);
-						if (original !== null) return original;
-						// a style the browser serialised from a CSSOM write, as
-						// getAttribute reads it
-						return local === 'style' && typeof value === 'string'
-							? unrouteCSS(this.client, value, true)
-							: value;
-					}
-					// a namespaced attribute a hook rewrote (xlink:href): the page's
-					// value, by the attribute's qualified name, or by the xlink prefix
-					// while a load's copy is on its way and the attribute is gone
-					const value = Reflect.apply(target, that, args);
-					if (args.length < 2 || !(that instanceof this.client.global.Element))
+						attributeName(that, local) !== local ||
+						(value === null && nativeElement.hasAttribute.call(that, local))
+					)
 						return value;
-					const node = Reflect.apply(
-						nativeElement.getAttributeNodeNS,
-						that,
-						args.slice(0, 2),
-					) as Attr | null;
-					const name =
-						node?.name ??
-						(args[0] === XLINK_NAMESPACE ? `xlink:${args[1]}` : null);
-					if (name === null) return value;
-					return usePrototype(that, CustomElement.prototype, (element) =>
-						element.hasAttributeOG(name) ? element.getAttributeOG(name) : value,
-					);
-				},
-			);
+					const original = pendingAttributes(that)
+						? usePrototype(that, CustomElement.prototype, (element) =>
+								element.getAttributeOG(local),
+							)
+						: nativeElement.getAttribute.call(that, ORIGINAL_ATTRIBUTE + local);
+					if (original !== null) return original;
+					// a style the browser serialised from a CSSOM write, as
+					// getAttribute reads it
+					return local === 'style' && typeof value === 'string'
+						? unrouteCSS(this.client, value, true)
+						: value;
+				}
+				// a namespaced attribute a hook rewrote (xlink:href): the page's
+				// value, by the attribute's qualified name, or by the xlink prefix
+				// while a load's copy is on its way and the attribute is gone
+				const value = Reflect.apply(target, that, args);
+				if (args.length < 2 || !(that instanceof realm.Element)) return value;
+				const node = Reflect.apply(
+					nativeElement.getAttributeNodeNS,
+					that,
+					args.slice(0, 2),
+				) as Attr | null;
+				const name =
+					node?.name ??
+					(args[0] === XLINK_NAMESPACE ? `xlink:${args[1]}` : null);
+				if (name === null) return value;
+				return usePrototype(that, CustomElement.prototype, (element) =>
+					element.hasAttributeOG(name) ? element.getAttributeOG(name) : value,
+				);
+			},
+		);
 
-		this.client.global.Element.prototype.getAttribute =
-			proxyModule.wrapFunction(
-				this.client.global.Element.prototype.getAttribute,
-				(target, that: Element, args) => {
-					// only side effect this getter has is the potential to throw an illegal invocation error
-					Reflect.apply(target, that, args);
+		realm.Element.prototype.getAttribute = proxyModule.wrapFunction(
+			realm.Element.prototype.getAttribute,
+			(target, that: Element, args) => {
+				// only side effect this getter has is the potential to throw an illegal invocation error
+				Reflect.apply(target, that, args);
 
-					const attribute = attributeName(that, String(args[0]));
-					if (isMarker(attribute)) return null;
+				const attribute = attributeName(that, String(args[0]));
+				if (isMarker(attribute)) return null;
 
-					// no hook is working on the element: the DOM is the hooks'
-					// view, read natively without a prototype swap
-					if (!pendingAttributes(that)) {
-						const marker = ORIGINAL_ATTRIBUTE + attribute;
-						if (nativeElement.hasAttribute.call(that, marker))
-							return nativeElement.getAttribute.call(that, marker);
-						const value = nativeElement.getAttribute.call(that, attribute);
-						return attribute === 'style' && typeof value === 'string'
-							? unrouteCSS(this.client, value, true)
-							: value;
+				// no hook is working on the element: the DOM is the hooks'
+				// view, read natively without a prototype swap
+				if (!pendingAttributes(that)) {
+					const marker = ORIGINAL_ATTRIBUTE + attribute;
+					if (nativeElement.hasAttribute.call(that, marker))
+						return nativeElement.getAttribute.call(that, marker);
+					const value = nativeElement.getAttribute.call(that, attribute);
+					return attribute === 'style' && typeof value === 'string'
+						? unrouteCSS(this.client, value, true)
+						: value;
+				}
+
+				return usePrototype(that, CustomElement.prototype, (element) => {
+					if (element.hasAttributeOG(attribute)) {
+						return element.getAttributeOG(attribute);
 					}
-
-					return usePrototype(that, CustomElement.prototype, (element) => {
-						if (element.hasAttributeOG(attribute)) {
-							return element.getAttributeOG(attribute);
-						}
-						const value = element.getAttribute(attribute);
-						// a style the browser serialised from a CSSOM write carries no
-						// marker: its routed url()s read as the browser serialises
-						// the page's
-						return attribute === 'style' && typeof value === 'string'
-							? unrouteCSS(this.client, value, true)
-							: value;
-					});
-				},
-			);
+					const value = element.getAttribute(attribute);
+					// a style the browser serialised from a CSSOM write carries no
+					// marker: its routed url()s read as the browser serialises
+					// the page's
+					return attribute === 'style' && typeof value === 'string'
+						? unrouteCSS(this.client, value, true)
+						: value;
+				});
+			},
+		);
 
 		// What the page reads back must be what it wrote: the marker attributes
 		// (`s_o:*`) never show, values come from the markers, and markup is
@@ -2135,35 +2051,33 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		const isMarkerOn = (element: unknown, name: unknown) =>
 			typeof name === 'string' && isMarker(attributeName(element, name));
 
-		this.client.global.Element.prototype.hasAttribute =
-			proxyModule.wrapFunction(
-				this.client.global.Element.prototype.hasAttribute,
-				(target, that, args) => {
-					const native = Reflect.apply(target, that, args);
-					if (isMarkerOn(that, args[0])) return false;
-					// an attribute a hook dropped (iframe sandbox, an object's data)
-					// is still there for the page
-					if (native) return native;
-					const attribute = attributeName(that, String(args[0]));
-					if (!pendingAttributes(that))
-						return nativeElement.hasAttribute.call(
-							that,
-							ORIGINAL_ATTRIBUTE + attribute,
-						);
-					return usePrototype(that, CustomElement.prototype, (element) =>
-						element.hasAttributeOG(attribute),
+		realm.Element.prototype.hasAttribute = proxyModule.wrapFunction(
+			realm.Element.prototype.hasAttribute,
+			(target, that, args) => {
+				const native = Reflect.apply(target, that, args);
+				if (isMarkerOn(that, args[0])) return false;
+				// an attribute a hook dropped (iframe sandbox, an object's data)
+				// is still there for the page
+				if (native) return native;
+				const attribute = attributeName(that, String(args[0]));
+				if (!pendingAttributes(that))
+					return nativeElement.hasAttribute.call(
+						that,
+						ORIGINAL_ATTRIBUTE + attribute,
 					);
-				},
-			);
+				return usePrototype(that, CustomElement.prototype, (element) =>
+					element.hasAttributeOG(attribute),
+				);
+			},
+		);
 
-		this.client.global.Element.prototype.getAttributeNode =
-			proxyModule.wrapFunction(
-				this.client.global.Element.prototype.getAttributeNode,
-				(target, that, args) => {
-					const node = Reflect.apply(target, that, args);
-					return isMarkerOn(that, args[0]) ? null : node;
-				},
-			);
+		realm.Element.prototype.getAttributeNode = proxyModule.wrapFunction(
+			realm.Element.prototype.getAttributeNode,
+			(target, that, args) => {
+				const node = Reflect.apply(target, that, args);
+				return isMarkerOn(that, args[0]) ? null : node;
+			},
+		);
 
 		/**
 		 * The attribute names in the order the page sees them: a marker stands
@@ -2188,12 +2102,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			return result;
 		};
 
-		this.client.global.Element.prototype.getAttributeNames =
-			proxyModule.wrapFunction(
-				this.client.global.Element.prototype.getAttributeNames,
-				(target, that, args) =>
-					visibleNames(Reflect.apply(target, that, args) as string[]),
-			);
+		realm.Element.prototype.getAttributeNames = proxyModule.wrapFunction(
+			realm.Element.prototype.getAttributeNames,
+			(target, that, args) =>
+				visibleNames(Reflect.apply(target, that, args) as string[]),
+		);
 
 		// Attr.value: the page's value when the element keeps one for it, and
 		// a style the CSSOM wrote as getAttribute reads it
@@ -2209,23 +2122,21 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			);
 		};
 		for (const [proto, property] of [
-			[this.client.global.Attr.prototype, 'value'],
-			[this.client.global.Node.prototype, 'nodeValue'],
-			[this.client.global.Node.prototype, 'textContent'],
+			[realm.Attr.prototype, 'value'],
+			[realm.Node.prototype, 'nodeValue'],
+			[realm.Node.prototype, 'textContent'],
 		] as const) {
 			const descriptor = Reflect.getOwnPropertyDescriptor(proto, property)!;
 			Reflect.defineProperty(proto, property, {
 				...descriptor,
 				get: proxyModule.wrapFunction(descriptor.get!, (target, that, args) => {
 					const native = Reflect.apply(target, that, args);
-					return that instanceof this.client.global.Attr
-						? attrValue(that, native)
-						: native;
+					return that instanceof realm.Attr ? attrValue(that, native) : native;
 				}),
 				// writing an attribute node is writing the attribute: through the
 				// owner's hooked setAttribute, so src, on* and srcdoc are rewritten
 				set: proxyModule.wrapFunction(descriptor.set!, (target, that, args) => {
-					if (that instanceof this.client.global.Attr && that.ownerElement) {
+					if (that instanceof realm.Attr && that.ownerElement) {
 						that.ownerElement.setAttribute(that.name, String(args[0]));
 						return;
 					}
@@ -2249,17 +2160,16 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			setAttributeNodeNS?: Element['setAttributeNodeNS'];
 		} = {};
 		const standIns = new WeakMap<Attr, Attr>();
-		const nativeCreateAttribute =
-			this.client.global.Document.prototype.createAttribute;
+		const nativeCreateAttribute = realm.Document.prototype.createAttribute;
 		const nativeOwnerDocument = Reflect.getOwnPropertyDescriptor(
-			this.client.global.Node.prototype,
+			realm.Node.prototype,
 			'ownerDocument',
 		)!.get!;
 		const attributesDescriptor = Reflect.getOwnPropertyDescriptor(
-			this.client.global.Element.prototype,
+			realm.Element.prototype,
 			'attributes',
 		)!;
-		Reflect.defineProperty(this.client.global.Element.prototype, 'attributes', {
+		Reflect.defineProperty(realm.Element.prototype, 'attributes', {
 			...attributesDescriptor,
 			get: proxyModule.wrapFunction(
 				attributesDescriptor.get!,
@@ -2372,7 +2282,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			};
 		}
 		const client = this.client;
-		const namedNodeMap = this.client.global.NamedNodeMap.prototype;
+		const namedNodeMap = realm.NamedNodeMap.prototype;
 		const nativeNamedNodeMap: Record<string, unknown> = {};
 		for (const key of Reflect.ownKeys(namedNodeMap)) {
 			const descriptor = Reflect.getOwnPropertyDescriptor(namedNodeMap, key)!;
@@ -2405,8 +2315,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// template contents included (their elements are not descendants)
 		const nativeQueryAll = {
 			element: nativeElement.querySelectorAll,
-			document: this.client.global.Document.prototype.querySelectorAll,
-			fragment: this.client.global.DocumentFragment.prototype.querySelectorAll,
+			document: realm.Document.prototype.querySelectorAll,
+			fragment: realm.DocumentFragment.prototype.querySelectorAll,
 		};
 		const querySelectorAllOf = (root: Node): Element[] => {
 			const native =
@@ -2425,7 +2335,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			}
 		};
 		const templateContent = Reflect.getOwnPropertyDescriptor(
-			this.client.global.HTMLTemplateElement.prototype,
+			realm.HTMLTemplateElement.prototype,
 			'content',
 		)!.get!;
 		const foldMarkers = (root: Node) => {
@@ -2468,12 +2378,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// puts back (the page's raw URLs, past the proxy). HTML markup in an
 		// HTML document, XML (an SVG, an XHTML page) in an XML one, so it
 		// serializes as before.
-		const nativeImportNode = this.client.global.Document.prototype.importNode;
+		const nativeImportNode = realm.Document.prototype.importNode;
 		const nativeContentType = Reflect.getOwnPropertyDescriptor(
-			this.client.global.Document.prototype,
+			realm.Document.prototype,
 			'contentType',
 		)!.get!;
-		const implementation = this.client.global.document.implementation;
+		const implementation = realm.document.implementation;
 		const inertDocuments: { html?: Document; xml?: Document } = {};
 		const inertDocumentFor = (node: Node) => {
 			const owner = (
@@ -2483,12 +2393,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				!owner || Reflect.apply(nativeContentType, owner, []) === 'text/html';
 			return html
 				? (inertDocuments.html ??= Reflect.apply(
-						this.client.global.DOMImplementation.prototype.createHTMLDocument,
+						realm.DOMImplementation.prototype.createHTMLDocument,
 						implementation,
 						[''],
 					) as Document)
 				: (inertDocuments.xml ??= Reflect.apply(
-						this.client.global.DOMImplementation.prototype.createDocument,
+						realm.DOMImplementation.prototype.createDocument,
 						implementation,
 						[null, null, null],
 					) as Document);
@@ -2577,13 +2487,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				return copy;
 			});
 		this.foldMarkup = (html: string): string => html;
-		const elementGetHTML = (
-			this.client.global.Element.prototype as { getHTML?: unknown }
-		).getHTML as ((options?: ShadowOptions) => string) | undefined;
+		const elementGetHTML = (realm.Element.prototype as { getHTML?: unknown })
+			.getHTML as ((options?: ShadowOptions) => string) | undefined;
 		for (const proto of [
-			this.client.global.Element.prototype,
-			(this.client.global as { ShadowRoot?: typeof ShadowRoot }).ShadowRoot
-				?.prototype,
+			realm.Element.prototype,
+			(realm as { ShadowRoot?: typeof ShadowRoot }).ShadowRoot?.prototype,
 		]) {
 			const getHTML = (proto as { getHTML?: unknown } | undefined)?.getHTML;
 			if (typeof getHTML !== 'function') continue;
@@ -2601,7 +2509,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					];
 					// every copy made, the shadow roots' too, for releaseMarkup
 					const made: Node[] = [];
-					if (that instanceof this.client.global.Element) {
+					if (that instanceof realm.Element) {
 						const copy = copyWithShadows(that, options, listed, made);
 						const html = Reflect.apply(target, copy, call()) as string;
 						for (const node of made) releaseMarkup(node);
@@ -2609,9 +2517,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					}
 					// a shadow root cannot be copied: its children are, under a
 					// holder in the inert document, serialized as the root's
-					const holder = inertCopy(
-						this.client.global.document.createElement('div'),
-					);
+					const holder = inertCopy(realm.document.createElement('div'));
 					for (const child of (that as ShadowRoot).childNodes)
 						holder.append(
 							child.nodeType === 1
@@ -2628,19 +2534,20 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		}
 
 		// XMLSerializer: the same folded copy, serialised as XML
-		const serializeToString =
-			this.client.global.XMLSerializer.prototype.serializeToString;
-		this.client.global.XMLSerializer.prototype.serializeToString =
-			proxyModule.wrapFunction(serializeToString, (target, that, args) => {
+		const serializeToString = realm.XMLSerializer.prototype.serializeToString;
+		realm.XMLSerializer.prototype.serializeToString = proxyModule.wrapFunction(
+			serializeToString,
+			(target, that, args) => {
 				const node = args[0];
-				if (!(node instanceof this.client.global.Node))
+				if (!(node instanceof realm.Node))
 					return Reflect.apply(target, that, args);
 				const clone = inertCopy(node as Node);
 				foldMarkers(clone);
 				const xml = Reflect.apply(target, that, [clone]) as string;
 				releaseMarkup(clone);
 				return unrouteCSS(this.client, xml);
-			});
+			},
+		);
 
 		// attribute selectors match the page's values: `[href="/x"]` is
 		// `[s_o:href="/x"]` on a rewritten element, `[href="/x"]` on one that
@@ -2657,9 +2564,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				},
 			);
 		for (const proto of [
-			this.client.global.Element.prototype,
-			this.client.global.Document.prototype,
-			this.client.global.DocumentFragment.prototype,
+			realm.Element.prototype,
+			realm.Document.prototype,
+			realm.DocumentFragment.prototype,
 		])
 			for (const method of [
 				'querySelector',
@@ -2684,80 +2591,78 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// lands, before a hook could route it, and against the document's
 		// route. The namespaced attribute is made empty (no reference), then
 		// the value is written through the hooks, as setAttribute does
-		this.client.global.Element.prototype.setAttributeNS =
-			proxyModule.wrapFunction(
-				this.client.global.Element.prototype.setAttributeNS,
-				(target, that: Element, args) =>
-					pageWrite(that, String(args[1]), () => {
-						const name = String(args[1]);
-						// (the page's Trusted Types judge an SVG script's href)
-						const sink =
-							args.length > 2 && !isParsed(that)
-								? trustedSink(
-										that,
-										name.slice(name.indexOf(':') + 1),
-										false,
-										args[0] === null ? null : String(args[0]),
-									)
-								: null;
-						if (sink) {
-							const passed = this.client.trustedValue(
-								args[2],
-								TRUSTED_KINDS[sink[0]],
-								sink[1],
-								() => Reflect.apply(target, that, args),
-							);
-							if (passed === null) return;
-							args[2] = trustedOf(sink[0], passed);
-						}
-						if (
-							args.length < 3 ||
-							!(that instanceof this.client.global.Element) ||
-							!this.attributeHooks(that, name).length
-						) {
-							Reflect.apply(target, that, args);
-							usePrototype(that, CustomElement.prototype, (element) =>
-								this.updateAttributeHooks(element, name),
-							);
-							return;
-						}
-						Reflect.apply(target, that, [args[0], name, '']);
-						// an attribute that was there keeps its own prefix
-						const actual =
-							(
-								Reflect.apply(nativeElement.getAttributeNodeNS, that, [
-									args[0],
+		realm.Element.prototype.setAttributeNS = proxyModule.wrapFunction(
+			realm.Element.prototype.setAttributeNS,
+			(target, that: Element, args) =>
+				pageWrite(that, String(args[1]), () => {
+					const name = String(args[1]);
+					// (the page's Trusted Types judge an SVG script's href)
+					const sink =
+						args.length > 2 && !isParsed(that)
+							? trustedSink(
+									that,
 									name.slice(name.indexOf(':') + 1),
-								]) as Attr | null
-							)?.name ?? name;
-						usePrototype(that, CustomElement.prototype, (element) => {
-							element.setAttribute(actual, String(args[2]));
-							this.updateAttributeHooks(element, actual);
-						});
-					}),
-			);
-		this.client.global.Element.prototype.toggleAttribute =
-			proxyModule.wrapFunction(
-				this.client.global.Element.prototype.toggleAttribute,
-				(target, that: Element, args) =>
-					pageWrite(that, String(args[0]), () => {
-						const result = Reflect.apply(target, that, args);
-						usePrototype(that, CustomElement.prototype, (element) =>
-							this.updateAttributeHooks(
-								element,
-								attributeName(that, String(args[0])),
-							),
+									false,
+									args[0] === null ? null : String(args[0]),
+								)
+							: null;
+					if (sink) {
+						const passed = this.client.trustedValue(
+							args[2],
+							TRUSTED_KINDS[sink[0]],
+							sink[1],
+							() => Reflect.apply(target, that, args),
 						);
-						return result;
-					}),
-			);
+						if (passed === null) return;
+						args[2] = trustedOf(sink[0], passed);
+					}
+					if (
+						args.length < 3 ||
+						!(that instanceof realm.Element) ||
+						!this.attributeHooks(that, name).length
+					) {
+						Reflect.apply(target, that, args);
+						usePrototype(that, CustomElement.prototype, (element) =>
+							this.updateAttributeHooks(element, name),
+						);
+						return;
+					}
+					Reflect.apply(target, that, [args[0], name, '']);
+					// an attribute that was there keeps its own prefix
+					const actual =
+						(
+							Reflect.apply(nativeElement.getAttributeNodeNS, that, [
+								args[0],
+								name.slice(name.indexOf(':') + 1),
+							]) as Attr | null
+						)?.name ?? name;
+					usePrototype(that, CustomElement.prototype, (element) => {
+						element.setAttribute(actual, String(args[2]));
+						this.updateAttributeHooks(element, actual);
+					});
+				}),
+		);
+		realm.Element.prototype.toggleAttribute = proxyModule.wrapFunction(
+			realm.Element.prototype.toggleAttribute,
+			(target, that: Element, args) =>
+				pageWrite(that, String(args[0]), () => {
+					const result = Reflect.apply(target, that, args);
+					usePrototype(that, CustomElement.prototype, (element) =>
+						this.updateAttributeHooks(
+							element,
+							attributeName(that, String(args[0])),
+						),
+					);
+					return result;
+				}),
+		);
 		// setAttributeNode and setAttributeNodeNS are one algorithm, and an
 		// attribute map's setNamedItem and setNamedItemNS are the same one
 		// again (setNamedItems, read by the attributes view)
 		for (const method of ['setAttributeNode', 'setAttributeNodeNS'] as const)
-			this.client.global.Element.prototype[method] = setNamedItems[method] =
+			realm.Element.prototype[method] = setNamedItems[method] =
 				proxyModule.wrapFunction(
-					this.client.global.Element.prototype[method],
+					realm.Element.prototype[method],
 					(target, that: Element, args) => {
 						const name = (args[0] as Attr)?.name;
 						const write = () => {
@@ -2772,140 +2677,131 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					},
 				);
 
-		this.client.global.Element.prototype.setAttribute =
-			proxyModule.wrapFunction(
-				this.client.global.Element.prototype.setAttribute,
-				(target, that: Element, args) => {
-					// the native's side effects are the hooks' to decide, so it is
-					// not called first; what it would refuse is: a call without
-					// both arguments (the browser's own error, for the receiver or
-					// for the count, whichever it checks first) and a receiver
-					// that is no element
-					if (args.length < 2) return Reflect.apply(target, that, args);
-					requireElement(that);
+		realm.Element.prototype.setAttribute = proxyModule.wrapFunction(
+			realm.Element.prototype.setAttribute,
+			(target, that: Element, args) => {
+				// the native's side effects are the hooks' to decide, so it is
+				// not called first; what it would refuse is: a call without
+				// both arguments (the browser's own error, for the receiver or
+				// for the count, whichever it checks first) and a receiver
+				// that is no element
+				if (args.length < 2) return Reflect.apply(target, that, args);
+				requireElement(that);
 
-					// the hooks are keyed by the name the attribute gets:
-					// `setAttribute('HREF', x)` writes `href`.
-					// The value is the string the browser makes of it (an object's
-					// toString, a TrustedScriptURL): the hooks compare it with '' and
-					// resolve it, and an object that reads as '' was taken for a URL,
-					// the document's own, which an image then loaded
-					let value = args.length < 2 ? args[1] : `${args[1]}`;
-					const attribute =
-						typeof args[0] === 'string'
-							? attributeName(that, args[0])
-							: args[0];
-					// the page's Trusted Types judge a handler, a script's src, a
-					// frame's srcdoc (its value went to a string once, above:
-					// a trusted value's string is its own)
-					const sink =
-						args.length > 1 && typeof attribute === 'string' && !isParsed(that)
-							? trustedSink(that, attribute)
-							: null;
-					if (sink) {
-						const passed = this.client.trustedValue(
-							args[1],
-							TRUSTED_KINDS[sink[0]],
-							sink[1],
-							() => Reflect.apply(target, that, args),
-							() => value as string,
-							true,
-						);
-						if (passed === null) return;
-						value = passed;
-					}
+				// the hooks are keyed by the name the attribute gets:
+				// `setAttribute('HREF', x)` writes `href`.
+				// The value is the string the browser makes of it (an object's
+				// toString, a TrustedScriptURL): the hooks compare it with '' and
+				// resolve it, and an object that reads as '' was taken for a URL,
+				// the document's own, which an image then loaded
+				let value = args.length < 2 ? args[1] : `${args[1]}`;
+				const attribute =
+					typeof args[0] === 'string' ? attributeName(that, args[0]) : args[0];
+				// the page's Trusted Types judge a handler, a script's src, a
+				// frame's srcdoc (its value went to a string once, above:
+				// a trusted value's string is its own)
+				const sink =
+					args.length > 1 && typeof attribute === 'string' && !isParsed(that)
+						? trustedSink(that, attribute)
+						: null;
+				if (sink) {
+					const passed = this.client.trustedValue(
+						args[1],
+						TRUSTED_KINDS[sink[0]],
+						sink[1],
+						() => Reflect.apply(target, that, args),
+						() => value as string,
+						true,
+					);
+					if (passed === null) return;
+					value = passed;
+				}
 
-					// the page's style-src-attr refuses a style attribute the page
-					// sets as a string (a CSSOM write that serialises into the
-					// attribute is the browser's to allow, and never calls
-					// setAttribute): apply nothing and report it (src/csp.ts)
-					if (
-						attribute === 'style' &&
-						args.length > 1 &&
-						typeof value === 'string' &&
-						value !== '' &&
-						!isParsed(that) &&
-						this.client.refuseStyleAttribute(that, value)
-					) {
-						pageWrite(that, attribute, () =>
-							usePrototype(that, CustomElement.prototype, (element) => {
-								element.removeAttribute('style');
-								element.removeAttributeOG('style');
-							}),
-						);
-						return;
-					}
-
-					pageWrite(that, attribute, () => {
-						// an attribute no hook watches (class, aria-*, data-*) is
-						// written as the hooks' view would write it, with no swap
-						if (
-							typeof attribute === 'string' &&
-							!pendingAttributes(that) &&
-							!this.hooksAttribute(attribute)
-						)
-							try {
-								return applyAttribute(that, attribute, value, true);
-							} catch (error) {
-								// an invalid name: the browser's own error, which names
-								// the attribute as the page wrote it, not lowercased. It
-								// is asked of an element of an inert document (and with
-								// no value, which the page's object would be read for):
-								// a name the browser takes writes nothing there, and the
-								// page's value is never written unrewritten on its own
-								// element when the failure was not its name (a builtin
-								// the page replaced and the hooks asked)
-								Reflect.apply(
-									target,
-									createElementIn(
-										inertDocumentOf(this.client.global.document),
-										'div',
-									),
-									[args[0], ''],
-								);
-								return;
-							}
+				// the page's style-src-attr refuses a style attribute the page
+				// sets as a string (a CSSOM write that serialises into the
+				// attribute is the browser's to allow, and never calls
+				// setAttribute): apply nothing and report it (src/csp.ts)
+				if (
+					attribute === 'style' &&
+					args.length > 1 &&
+					typeof value === 'string' &&
+					value !== '' &&
+					!isParsed(that) &&
+					this.client.refuseStyleAttribute(that, value)
+				) {
+					pageWrite(that, attribute, () =>
 						usePrototype(that, CustomElement.prototype, (element) => {
-							element.setAttribute(attribute, value);
+							element.removeAttribute('style');
+							element.removeAttributeOG('style');
+						}),
+					);
+					return;
+				}
 
-							this.updateAttributeHooks(element, attribute);
-						});
-					});
-				},
-			);
-
-		this.client.global.Element.prototype.removeAttribute =
-			proxyModule.wrapFunction(
-				this.client.global.Element.prototype.removeAttribute,
-				(target, that: Element, args) => {
-					// (as setAttribute: the browser's own refusals first)
-					if (args.length < 1) return Reflect.apply(target, that, args);
-					requireElement(that);
-
-					const attribute =
-						typeof args[0] === 'string'
-							? attributeName(that, args[0])
-							: args[0];
-
-					pageWrite(that, attribute, () => {
-						if (
-							typeof attribute === 'string' &&
-							!pendingAttributes(that) &&
-							!this.hooksAttribute(attribute)
-						) {
-							// in the order the hooks' view applies them
-							applyAttribute(that, attribute, null);
-							applyAttribute(that, ORIGINAL_ATTRIBUTE + attribute, null);
+				pageWrite(that, attribute, () => {
+					// an attribute no hook watches (class, aria-*, data-*) is
+					// written as the hooks' view would write it, with no swap
+					if (
+						typeof attribute === 'string' &&
+						!pendingAttributes(that) &&
+						!this.hooksAttribute(attribute)
+					)
+						try {
+							return applyAttribute(that, attribute, value, true);
+						} catch (error) {
+							// an invalid name: the browser's own error, which names
+							// the attribute as the page wrote it, not lowercased. It
+							// is asked of an element of an inert document (and with
+							// no value, which the page's object would be read for):
+							// a name the browser takes writes nothing there, and the
+							// page's value is never written unrewritten on its own
+							// element when the failure was not its name (a builtin
+							// the page replaced and the hooks asked)
+							Reflect.apply(
+								target,
+								createElementIn(inertDocumentOf(realm.document), 'div'),
+								[args[0], ''],
+							);
 							return;
 						}
-						usePrototype(that, CustomElement.prototype, (element) => {
-							element.removeAttribute(attribute);
-							element.removeAttributeOG(attribute);
-							this.updateAttributeHooks(element, attribute);
-						});
+					usePrototype(that, CustomElement.prototype, (element) => {
+						element.setAttribute(attribute, value);
+
+						this.updateAttributeHooks(element, attribute);
 					});
-				},
-			);
+				});
+			},
+		);
+
+		realm.Element.prototype.removeAttribute = proxyModule.wrapFunction(
+			realm.Element.prototype.removeAttribute,
+			(target, that: Element, args) => {
+				// (as setAttribute: the browser's own refusals first)
+				if (args.length < 1) return Reflect.apply(target, that, args);
+				requireElement(that);
+
+				const attribute =
+					typeof args[0] === 'string' ? attributeName(that, args[0]) : args[0];
+
+				pageWrite(that, attribute, () => {
+					if (
+						typeof attribute === 'string' &&
+						!pendingAttributes(that) &&
+						!this.hooksAttribute(attribute)
+					) {
+						// in the order the hooks' view applies them
+						applyAttribute(that, attribute, null);
+						applyAttribute(that, ORIGINAL_ATTRIBUTE + attribute, null);
+						return;
+					}
+					usePrototype(that, CustomElement.prototype, (element) => {
+						element.removeAttribute(attribute);
+						element.removeAttributeOG(attribute);
+						this.updateAttributeHooks(element, attribute);
+					});
+				});
+			},
+		);
 
 		const trackProperties = new Map<ElementCtor, Set<string>>();
 
@@ -3043,7 +2939,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 									typeof value === 'string' &&
 									written !== '' &&
 									value !== '' &&
-									ctor !== this.client.global.HTMLBaseElement
+									ctor !== realm.HTMLBaseElement
 								)
 									Reflect.apply(target, that, [
 										sink ? trustedOf(sink[0], value) : value,

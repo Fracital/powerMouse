@@ -4,15 +4,16 @@ import DocumentClient from '../Client';
 
 export default class AudioModule extends Module<DocumentClient> {
 	apply() {
+		const global = this.client.global;
 		const proxyModule = this.client.getModule(ProxyModule)!;
-		const prototype = this.client.global.HTMLAudioElement.prototype;
+		const prototype = global.HTMLAudioElement.prototype;
 		const elementConstructor = Reflect.getOwnPropertyDescriptor(
 			prototype,
 			'constructor',
 		)!;
 
-		this.client.global.Audio = proxyModule.wrapFunction(
-			this.client.global.Audio,
+		global.Audio = proxyModule.wrapFunction(
+			global.Audio,
 			(target, that, args, newTarget) => {
 				// the source goes through the element's src property as the page
 				// would set it, so it is routed and reads back as written: routed
@@ -22,7 +23,7 @@ export default class AudioModule extends Module<DocumentClient> {
 				if (args.length && args[0] !== undefined)
 					Reflect.apply(
 						Reflect.getOwnPropertyDescriptor(
-							this.client.global.HTMLMediaElement.prototype,
+							global.HTMLMediaElement.prototype,
 							'src',
 						)!.set!,
 						audio,

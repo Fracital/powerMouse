@@ -68,6 +68,7 @@ function sourcePolicy(source: Element | null | undefined): ReferrerPolicy {
 
 export default class IFrameModule extends Module<DocumentClient> {
 	apply() {
+		const realm = this.client.global;
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
 		const injectContext = (context: typeof globalThis) => {
@@ -103,7 +104,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 		// Only a child or such a popup of this page, so a page
 		// cannot have another document's window injected with its bundle
 		this.client.injectChild = (context) => {
-			const self = this.client.global as unknown;
+			const self = realm as unknown;
 			const popup =
 				Reflect.get(context, 'parent') === (context as unknown) &&
 				Reflect.get(context, 'opener') === self &&
@@ -125,41 +126,35 @@ export default class IFrameModule extends Module<DocumentClient> {
 		// into it is rewritten; the page gets the window as a top-level page
 		// would. Wraps the DOMHooks hook, which routed the URL (or handed a
 		// tab to the host and returned null).
-		this.client.global.open = proxyModule.wrapFunction(
-			this.client.global.open,
-			(target, that, args) => {
-				const page = args[0];
-				const opened = Reflect.apply(target, that, args) as
-					typeof globalThis | null;
-				if (!opened) return opened;
-				// a window this page opened it may navigate, sandboxed or not (whether
-				// it is held as itself is decided where it is handed out)
-				this.client.openedWindows.add(opened);
-				try {
-					if (opened.location.href === 'about:blank') {
-						injectContext(opened);
-						if (
-							!(opened as Record<string, any>)[this.client.names.client]!
-								.applied
-						)
-							(opened as Record<string, any>)[
-								this.client.names.client
-							]!.apply();
-					}
-				} catch (error) {
-					// cross-origin: not ours to inject
+		realm.open = proxyModule.wrapFunction(realm.open, (target, that, args) => {
+			const page = args[0];
+			const opened = Reflect.apply(target, that, args) as
+				typeof globalThis | null;
+			if (!opened) return opened;
+			// a window this page opened it may navigate, sandboxed or not (whether
+			// it is held as itself is decided where it is handed out)
+			this.client.openedWindows.add(opened);
+			try {
+				if (opened.location.href === 'about:blank') {
+					injectContext(opened);
+					if (
+						!(opened as Record<string, any>)[this.client.names.client]!.applied
+					)
+						(opened as Record<string, any>)[this.client.names.client]!.apply();
 				}
-				// the window as the page may hold it: one of its own origin as
-				// itself, wherever it navigates later (its messages' source is
-				// this object), one of another site (an existing frame by name,
-				// or one whose next document is the URL given) restricted
-				if (!isStomp(opened, this.client.names.client)) {
-					windowModule.hold(opened);
-					return opened;
-				}
-				return windowModule.pending(opened, page);
-			},
-		);
+			} catch (error) {
+				// cross-origin: not ours to inject
+			}
+			// the window as the page may hold it: one of its own origin as
+			// itself, wherever it navigates later (its messages' source is
+			// this object), one of another site (an existing frame by name,
+			// or one whose next document is the URL given) restricted
+			if (!isStomp(opened, this.client.names.client)) {
+				windowModule.hold(opened);
+				return opened;
+			}
+			return windowModule.pending(opened, page);
+		});
 
 		// the document an embedding element hands out, as its window is: the
 		// document of a window this page may hold as itself, null for one of
@@ -187,7 +182,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 				),
 			});
 		// <embed> has no contentWindow, only this
-		const embed = this.client.global.HTMLEmbedElement?.prototype as
+		const embed = realm.HTMLEmbedElement?.prototype as
 			{ getSVGDocument?: unknown } | undefined;
 		if (embed && typeof embed.getSVGDocument === 'function')
 			hookSVGDocument(embed, embed.getSVGDocument);
@@ -251,8 +246,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 						loadsDocument(element))
 				)
 					return;
-				if (Reflect.get(context, 'parent') !== (this.client.global as unknown))
-					return;
+				if (Reflect.get(context, 'parent') !== (realm as unknown)) return;
 			} catch (error) {
 				// a window of another real origin, or one being torn down
 				return;
@@ -261,7 +255,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 			const client = (context as Record<string, any>)[this.client.names.client];
 			if (client && !client.applied) client.apply();
 		};
-		const global = this.client.global;
+		const global = realm;
 		this.client.sweepFrames = () => {
 			// a document that runs no script of the page (a sandbox without
 			// allow-scripts) has no code that could reach a child's realm, and
@@ -308,9 +302,9 @@ export default class IFrameModule extends Module<DocumentClient> {
 		// the frameset's frame, and object with an HTML or SVG document (embed
 		// exposes none of this)
 		const embedders = [
-			this.client.global.HTMLIFrameElement,
-			this.client.global.HTMLFrameElement,
-			this.client.global.HTMLObjectElement,
+			realm.HTMLIFrameElement,
+			realm.HTMLFrameElement,
+			realm.HTMLObjectElement,
 		].filter((ctor) => typeof ctor === 'function');
 
 		// A frame's load event for the shell its document still is: the

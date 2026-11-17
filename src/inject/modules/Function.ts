@@ -6,11 +6,12 @@ import ProxyModule from './Proxy';
 
 export default class FunctionModule extends Module<Client> {
 	apply() {
+		const global = this.client.global;
 		const proxyModule = this.client.getModule(ProxyModule)!;
 
 		// the realm's own eval, as it is before any page code (Access tags it
 		// but leaves it in place)
-		const nativeEval = this.client.global.eval;
+		const nativeEval = global.eval;
 		const functionFactory = (
 			ctor: FunctionConstructor,
 			prefix = 'function',
@@ -89,7 +90,7 @@ export default class FunctionModule extends Module<Client> {
 		// its own realm's constructors from the bundle's own functions, which
 		// are its realm's, and none for another realm's, whose page cannot
 		// compile either; the browser would report every attempt)
-		const ownRealm = this.client.global.Function === Function;
+		const ownRealm = global.Function === Function;
 		const constructorOf = (source: string): FunctionConstructor | null => {
 			if (!this.client.scriptFacts.evaluates)
 				return ownRealm
@@ -106,8 +107,7 @@ export default class FunctionModule extends Module<Client> {
 			try {
 				return (
 					(
-						trustedFunction(this.client.global, [], source) ??
-						new this.client.global.Function(source)
+						trustedFunction(global, [], source) ?? new global.Function(source)
 					)() as () => unknown
 				).constructor as FunctionConstructor;
 			} catch (error) {
@@ -130,7 +130,7 @@ export default class FunctionModule extends Module<Client> {
 		// the frame's Function.prototype and Object.prototype above them),
 		// so `api.constructor.constructor` is the frame's Function
 		// (helper-seal suite).
-		const proxyFunction = functionFactory(this.client.global.Function);
+		const proxyFunction = functionFactory(global.Function);
 		// the generator constructors are reachable the same way
 		const GeneratorFunction = constructorOf('return function* () {}');
 		const AsyncGeneratorFunction = constructorOf(
@@ -143,6 +143,6 @@ export default class FunctionModule extends Module<Client> {
 		] as const)
 			if (ctor) functionFactory(ctor, prefix);
 
-		this.client.global.Function = proxyFunction;
+		global.Function = proxyFunction;
 	}
 }
