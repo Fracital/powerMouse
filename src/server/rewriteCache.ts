@@ -59,12 +59,21 @@ export class RewriteCache {
 	}
 	/** puts not finished yet, by key: a match for one of them waits for it */
 	#pending = new Map<string, Promise<void>>();
-	/** the digest the output for `body` (its bytes as they came) is kept under, given everything else it depends on */
-	async key(parts: string[], body: Uint8Array): Promise<string> {
+	/**
+	 * the digest the output for `body` (its bytes as they came) is kept
+	 * under, given everything else it depends on: of the parts and the
+	 * body's own digest, so the body is never copied to be joined to them
+	 * (that was one more copy of every script the worker loads, hit or
+	 * miss, for its collector)
+	 */
+	async key(parts: string[], body: Uint8Array<ArrayBuffer>): Promise<string> {
 		const head = new TextEncoder().encode(`${parts.join('\u0000')}\u0000`);
-		const bytes = new Uint8Array(head.length + body.length);
+		const bodyDigest = new Uint8Array(
+			await crypto.subtle.digest('SHA-256', body),
+		);
+		const bytes = new Uint8Array(head.length + bodyDigest.length);
 		bytes.set(head);
-		bytes.set(body, head.length);
+		bytes.set(bodyDigest, head.length);
 		const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
 		let hex = '';
 		for (const byte of digest) hex += byte.toString(16).padStart(2, '0');

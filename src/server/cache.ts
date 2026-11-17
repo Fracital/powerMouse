@@ -835,7 +835,14 @@ interface MemoryEntry {
 	status: number;
 	statusText: string;
 	headers: [string, string][];
-	body: ArrayBuffer;
+	/**
+	 * a Blob, whose bytes the browser keeps: each match is a Response of it
+	 * as it is. As an ArrayBuffer the entries (up to MEMORY_BUDGET) were the
+	 * worker's memory, in the renderer the frames share in same-origin mode,
+	 * and each match copied the entry into a Response of its own, which
+	 * stayed there until the worker's next collection
+	 */
+	body: Blob;
 	storedAt: number;
 	/** seconds it stays fresh */
 	lifetime: number;
@@ -920,12 +927,7 @@ export class MemoryCache {
 			}
 			chunks.push(value);
 		}
-		const bytes = new Uint8Array(size);
-		let offset = 0;
-		for (const chunk of chunks) {
-			bytes.set(chunk, offset);
-			offset += chunk.byteLength;
-		}
+		const bytes = new Blob(chunks as Uint8Array<ArrayBuffer>[]);
 		const headers = new Headers(response.headers);
 		headers.delete('set-cookie');
 		const old = this.#entries.get(key);
@@ -934,7 +936,7 @@ export class MemoryCache {
 			status: response.status,
 			statusText: response.statusText,
 			headers: [...headers],
-			body: bytes.buffer,
+			body: bytes,
 			storedAt: Date.now(),
 			// what is left of it: an HTTP cache hit has aged already
 			lifetime:
@@ -951,7 +953,7 @@ export class MemoryCache {
 	}
 	#drop(key: string, entry: MemoryEntry) {
 		this.#entries.delete(key);
-		this.#bytes -= entry.body.byteLength;
+		this.#bytes -= entry.body.size;
 	}
 	clear() {
 		this.#entries.clear();

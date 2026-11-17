@@ -3935,9 +3935,14 @@ function genericForward(
 			}
 			// text goes out as its UTF-8 bytes, encoded once, natively: the
 			// length is theirs (counting it in JS took 0.2 s for YouTube's 20 MB
-			// bundle) and the Response has nothing left to encode
+			// bundle) and the Response has nothing left to encode. A Blob of
+			// them, which the page's Response, the rewrite cache's and the
+			// same document's repeat (recentOutputs) share as they are, where
+			// each copied the encoded bytes again and the bytes themselves
+			// were an ArrayBuffer of the worker's, kept 30 s and then left to
+			// its collector, in the renderer the frames share
 			if (typeof output === 'string') rewritten = output;
-			const encoded = typeof output === 'string' ? UTF8.encode(output) : null;
+			const encoded = typeof output === 'string' ? new Blob([output]) : null;
 			const transformed = encoded ?? output;
 
 			body = transformed !== false ? transformed : response.body!;
@@ -4173,7 +4178,6 @@ const RECENT_MS = 30 * 1000;
 const outputSize = (body: Uint8Array<ArrayBuffer> | Blob) =>
 	body instanceof Blob ? body.size : body.byteLength;
 const RECENT_BYTES = 64 * 1024 * 1024;
-const UTF8 = new TextEncoder();
 const recentOutputs = new Map<string, RecentOutput & { at: number }>();
 let recentBytes = 0;
 
