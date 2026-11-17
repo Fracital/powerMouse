@@ -478,13 +478,19 @@ export default class IFrameModule extends Module<DocumentClient> {
 			if (!link || link.hasAttribute('download')) return;
 			const target = blankTarget(link.getAttribute('target') || baseTarget());
 			if (!target) return;
-			afterPage(event, () =>
-				target.freshTo!(
-					new URL(link.getAttribute('href')!, this.client.baseURL.toString()),
-					null,
-					true,
-				),
-			);
+			afterPage(event, () => {
+				let url: URL;
+				try {
+					url = new URL(
+						link.getAttribute('href')!,
+						this.client.baseURL.toString(),
+					);
+				} catch (error) {
+					// no URL: the click navigates nothing, here or in the browser
+					return;
+				}
+				target.freshTo!(url, null, true);
+			});
 		};
 		// a form's submission (its submit event, or submit(), which fires none)
 		const submission = (

@@ -2109,17 +2109,24 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					const updated: { url: string; width?: number; density?: number }[] =
 						[];
 
-					for (const src of parsed) {
+					// a candidate that is no URL (`https://[`) stays as written: the
+					// browser keeps it in the list and fails it if it picks it
+					const pages = parsed.map((src) => {
+						try {
+							return new URL(src.url, this.client.baseURL.toString());
+						} catch (error) {
+							return null;
+						}
+					});
+					parsed.forEach((src, index) => {
+						const page = pages[index];
 						updated.push({
 							...src,
-							url: routeImageSet(
-								new StompURL(
-									new URL(src.url, this.client.baseURL.toString()),
-									this.client.baseURL,
-								),
-							),
+							url: page
+								? routeImageSet(new StompURL(page, this.client.baseURL))
+								: src.url,
 						});
-					}
+					});
 
 					placeLoad(
 						element,
@@ -2127,8 +2134,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						stringifySrcset(updated),
 						updated.map((candidate, index) => ({
 							routed: candidate.url,
-							page: new URL(parsed[index].url, this.client.baseURL.toString())
-								.href,
+							page: pages[index]?.href ?? parsed[index].url,
 						})),
 						(copied) =>
 							stringifySrcset(
@@ -2905,10 +2911,18 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			/**
 			 * Absolute URL
 			 */
-			const action = new URL(
-				(element.getAttributeOG('action') ?? element.getAttribute('action'))!,
-				this.client.baseURL.toString(),
-			).toString();
+			let action: string;
+			try {
+				action = new URL(
+					(element.getAttributeOG('action') ?? element.getAttribute('action'))!,
+					this.client.baseURL.toString(),
+				).toString();
+			} catch (error) {
+				// no URL at all (`https://[`): the form keeps it as written and
+				// its submission goes nowhere, as natively (the insertion pass
+				// calls this outside the attribute hooks' own guard)
+				return;
+			}
 
 			const methodIndex = validMethods.indexOf(
 				element.getAttribute('method')?.toUpperCase() || '',

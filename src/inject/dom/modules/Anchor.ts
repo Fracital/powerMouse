@@ -63,8 +63,15 @@ export default class AnchorModule extends Module<DocumentClient> {
 								linkDescriptor.get,
 								(target, that: HTMLAnchorElement, args) => {
 									const url = linkURL(that);
-									// no href, or not a URL: what the browser says
-									if (!url) return Reflect.apply(target, that, args);
+									if (!url) {
+										// (the browser's own check of what it is called on)
+										Reflect.apply(target, that, args);
+										// No href, or one that is no URL for the page: the
+										// browser's answer for either. Its own reading of the
+										// element would be of the attribute against the
+										// document's real address, where `http:` is a URL.
+										return common === 'protocol' ? ':' : '';
+									}
 									return Reflect.apply(urlDescriptor.get!, url, args);
 								},
 							)
@@ -74,7 +81,11 @@ export default class AnchorModule extends Module<DocumentClient> {
 								linkDescriptor.set,
 								(target, that: HTMLAnchorElement, args) => {
 									const url = linkURL(that);
-									if (!url) return Reflect.apply(target, that, args);
+									if (!url) {
+										// nothing to set a part of, as in the browser
+										Reflect.apply(linkDescriptor.get!, that, []);
+										return;
+									}
 									Reflect.apply(urlDescriptor.set!, url, args);
 									// the hooked setAttribute: routed, with the page's value kept
 									that.setAttribute('href', url.href);

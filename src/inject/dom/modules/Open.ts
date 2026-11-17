@@ -51,10 +51,16 @@ export default class OpenModule extends Module<DocumentClient> {
 			// a frame of this page by that name: the browser navigates it
 			if (!modifier && this.client.hasFrameNamed(link.getAttribute('target')!))
 				return;
-			const url = new URL(
-				link.getAttribute('href')!,
-				this.client.baseURL.toString(),
-			);
+			let url: URL;
+			try {
+				url = new URL(
+					link.getAttribute('href')!,
+					this.client.baseURL.toString(),
+				);
+			} catch (error) {
+				// no URL: the click opens nothing, here or in the browser
+				return;
+			}
 			if (!['http:', 'https:'].includes(url.protocol)) return;
 			if (sandboxed) {
 				// refused by the browser, as natively

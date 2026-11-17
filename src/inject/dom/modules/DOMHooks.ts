@@ -577,7 +577,54 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 	}
 	updateAttributeHooks(element: CustomElement, attribute: string) {
 		for (const entry of this.attributeHooks(element, attribute))
+			this.#runHook(entry, element, attribute);
+	}
+	/**
+	 * The value the page gave `attribute` when it is no URL at all (it does
+	 * not parse against the page's base: `https://[`, `//[]`, a port out of
+	 * range, any relative URL under `<base href="about:blank">`), else null.
+	 * The browser keeps such a value as written: nothing throws, the property
+	 * reads back as the attribute, and the load it names fails as any other
+	 * does (a script's error event, from a task).
+	 */
+	#unparsed(element: CustomElement, attribute: string): string | null {
+		const value =
+			element.getAttributeOG(attribute) ?? element.getAttribute(attribute);
+		if (value === null) return null;
+		try {
+			new URL(value, this.client.baseURL.toString());
+			return null;
+		} catch (error) {
+			return value;
+		}
+	}
+	/**
+	 * One hook of a written attribute. A hook resolves the page's value to
+	 * route it, and a value that is no URL made that throw out of the page's
+	 * `img.src = value`, `setAttribute` or `appendChild`, where the browser
+	 * throws nothing (a link made only to take a URL apart,
+	 * `a.href = input; a.hostname`, is given anything). The hooks' view
+	 * already holds the value as written, which is what the element keeps
+	 * (it names nothing the browser can load either). The hook of one
+	 * attribute reads others (a script's `type` its `src`, a link's `rel` its
+	 * `href`), so any of the element's may be the one that did not parse.
+	 * Anything else a hook throws still propagates.
+	 */
+	#runHook(entry: HookEntry, element: CustomElement, attribute: string) {
+		try {
 			entry.callback(element, attribute);
+		} catch (error) {
+			if (
+				!String((error as Error | null)?.message).includes('Invalid URL') ||
+				// (the written one first: it may be in the hooks' view only)
+				![attribute, ...element.getAttributeNames()].some(
+					(name) =>
+						!name.startsWith(ORIGINAL_ATTRIBUTE) &&
+						this.#unparsed(element, name) !== null,
+				)
+			)
+				throw error;
+		}
 	}
 	/**
 	 * The property hooks by property (a read asks every constructor's), and
@@ -617,7 +664,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			byProperty.set(property, entries);
 		}
 		for (const entry of entries)
-			entry.callback(element, propertyAttribute(property));
+			this.#runHook(entry, element, propertyAttribute(property));
 	}
 	apply() {
 		// all hooks are in, now apply them
@@ -2748,7 +2795,20 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							if (!inherits(that, ctor)) Reflect.apply(target, that, args);
 							return usePrototype(that, CustomElement.prototype, (element) => {
 								for (const entry of this.#propertyHooks(property)) {
-									const result = (entry.hook as PropertyHook)[2](element);
+									let result: string | false;
+									try {
+										result = (entry.hook as PropertyHook)[2](element);
+									} catch (error) {
+										// the page's value is no URL (`http://a:b/`, a
+										// relative one under `<base href="about:blank">`):
+										// the property is then the attribute as written
+										const written = this.#unparsed(
+											element,
+											propertyAttribute(property),
+										);
+										if (written === null) throw error;
+										return written;
+									}
 
 									if (result === false) continue;
 
