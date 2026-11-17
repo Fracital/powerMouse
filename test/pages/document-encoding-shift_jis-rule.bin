@@ -1,0 +1,5 @@
+@charset "EUC-KR";
+/* a sheet in another encoding, by its @charset */
+#encoding-rule::after {
+	content: "ÇÑ±Û";
+}

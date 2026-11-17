@@ -1,15 +1,18 @@
-// A document keeps its encoding through the proxy. The worker decodes a
+// A document keeps its encoding through the proxy. The worker decoded a
 // page with the encoding the browser would pick and served it as UTF-8, so
 // the browser encoded the query of the page's links, its GET forms, its
 // XMLHttpRequests and its workers' URLs as UTF-8 (a search reached the
 // server as other bytes than natively), and document.characterSet read
-// UTF-8. A Shift_JIS and an EUC-KR page, their text in their own bytes,
-// each read what the page sees (the three getters, a link's, an image's, a
-// made link's and a form's URL, new URL and an inert document's link, which
-// are UTF-8 natively too, an XMLHttpRequest's and a worker's URL) and then
-// navigate by a link, by a form in the page's encoding, by a form that names
-// UTF-8 and by location.assign; each landing's query is compared with the
-// page loaded natively, in both demo modes.
+// UTF-8; and a classic script or a stylesheet that names no encoding, which
+// takes its document's, was read as UTF-8. A Shift_JIS and an EUC-KR page,
+// their text in their own bytes, each read what the page sees (the three
+// getters, a link's, an image's, a made link's and a form's URL, new URL and
+// an inert document's link, which are UTF-8 natively too, an
+// XMLHttpRequest's and a worker's URL, the text of a script and a sheet
+// that name no encoding and of a sheet in the other encoding by its
+// @charset) and then navigate by a link, by a form in the page's encoding,
+// by a form that names UTF-8 and by location.assign; each landing's query is
+// compared with the page loaded natively, in both demo modes.
 import {
 	done,
 	FIXTURE,

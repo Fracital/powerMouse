@@ -140,14 +140,16 @@ export function encodeShell(
  * windows-1252, which latin1, iso-8859-1 and us-ascii do too: Chrome 152
  * and 157 read a module served as windows-1250 or shift_jis as UTF-8),
  * else UTF-8 (measured for classic and module scripts of an element and a
- * dedicated worker's script, script-charset suite). A
- * classic script with neither would take its element's charset attribute or
- * the document's encoding.
+ * dedicated worker's script, script-charset suite). A classic script of a
+ * document with neither takes the document's encoding (`environment`,
+ * src/server/documentEncodings.ts; its element's charset attribute, which
+ * would come first, is not known here).
  */
 export function scriptEncoding(
 	bytes: Uint8Array,
 	contentType: string | null,
 	module: boolean,
+	environment = 'utf-8',
 ): string {
 	if (
 		bytes.length >= 3 &&
@@ -170,7 +172,7 @@ export function scriptEncoding(
 		} catch {
 			// not an encoding: as if none were named
 		}
-	return 'utf-8';
+	return module ? 'utf-8' : environment;
 }
 
 /** a script as text, decoded as the browser would have (scriptEncoding) */
@@ -178,10 +180,11 @@ export function decodeScript(
 	bytes: Uint8Array,
 	contentType: string | null,
 	module: boolean,
+	environment?: string,
 ): string {
-	return new TextDecoder(scriptEncoding(bytes, contentType, module)).decode(
-		bytes,
-	);
+	return new TextDecoder(
+		scriptEncoding(bytes, contentType, module, environment),
+	).decode(bytes);
 }
 
 /** the encoding a byte order mark names, or null without one */

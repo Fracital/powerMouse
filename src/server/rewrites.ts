@@ -211,6 +211,10 @@ import {
 	timingAllowed,
 	unsafeHeaderNames,
 } from './cors';
+import {
+	documentEncodingOf,
+	rememberDocumentEncoding,
+} from './documentEncodings';
 import { embedderPolicyOf, rememberEmbedderPolicy } from './embedderPolicies';
 import { DOCUMENT_DESTINATIONS, hostErrorPage } from './errorPage';
 import {
@@ -4639,6 +4643,10 @@ export function registerRewrites(
 					type === 'genericModule' ||
 					type === 'workerModule' ||
 					type === 'workletModule';
+				// an element's classic script that names no encoding is in its
+				// document's (a worker's script is UTF-8)
+				const environment =
+					type === 'generic' ? documentEncodingOf(request.clientId) : 'utf-8';
 				const rewrites = rewriter.rewrites;
 				const partition = request.partition;
 				if (
@@ -4655,7 +4663,7 @@ export function registerRewrites(
 					const read = new Uint8Array(await response.arrayBuffer());
 					note.bytes = read.byteLength;
 					return rewriteScript(
-						decodeScript(read, contentType, isModuleType),
+						decodeScript(read, contentType, isModuleType, environment),
 						url,
 						type,
 						note,
@@ -4669,7 +4677,12 @@ export function registerRewrites(
 				// every load).
 				const bytes = new Uint8Array(await response.arrayBuffer());
 				note.bytes = bytes.byteLength;
-				const encoding = scriptEncoding(bytes, contentType, isModuleType);
+				const encoding = scriptEncoding(
+					bytes,
+					contentType,
+					isModuleType,
+					environment,
+				);
 				const key = await rewrites.key(
 					[
 						CACHE_GENERATION,
@@ -4814,20 +4827,24 @@ export function registerRewrites(
 		/^\/css\//,
 		genericForward(
 			rewriter,
-			async (url, response, headers, _referrer, _request, note) => {
+			async (url, response, headers, _referrer, request, note) => {
 				if (!response.ok) return false;
 				// decoded as the browser would have (a byte order mark, the
-				// Content-Type charset, an @charset rule), and the rewrite goes
-				// out as UTF-8 and says so: a sheet that names none would be
-				// decoded with its document's encoding, which is a legacy one
-				// for a legacy page (src/server/charset.ts encodeShell)
+				// Content-Type charset, an @charset rule, else its document's
+				// encoding), and the rewrite goes out as UTF-8 and says so: the
+				// browser would decode a sheet that names none with the
+				// document's encoding (src/server/charset.ts encodeShell)
 				const read = new Uint8Array(await response.arrayBuffer());
 				note.bytes = read.byteLength;
 				const contentType = headers.get('content-type');
 				if (contentType !== null)
 					headers.set('content-type', utf8ContentType(contentType));
 				const text = new TextDecoder(
-					stylesheetEncoding(read, contentType),
+					stylesheetEncoding(
+						read,
+						contentType,
+						documentEncodingOf(request.clientId),
+					),
 				).decode(read);
 				try {
 					// the wasm scanner rewrites the sheet (waited for when this
@@ -4952,6 +4969,9 @@ export function registerRewrites(
 					'content-type',
 					documentContentType(contentType, encoding),
 				);
+				// what it loads that names no encoding is in its own
+				if (request.navigation)
+					rememberDocumentEncoding(request.clientId, encoding);
 				// a proxied top (not a document a page routed as nested): its
 				// shell loads the rewriter library
 				const top =

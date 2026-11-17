@@ -1,6 +1,9 @@
 <!doctype html>
 <meta charset="EUC-KR">
 <title>document encoding</title>
+<link rel="stylesheet" href="/pages/document-encoding-euc-kr-style.bin">
+<link rel="stylesheet" href="/pages/document-encoding-euc-kr-rule.bin">
+<script src="/pages/document-encoding-euc-kr-script.bin"></script>
 <!-- document-encoding suite: a page in EUC-KR, its text in its own bytes -->
 <a id="link" href="/pages/document-encoding-landing.html?q=한글&amp;r=%41+b">한글</a>
 <form id="form" action="/pages/document-encoding-landing.html" accept-charset="EUC-KR">
@@ -10,6 +13,8 @@
 <form id="utf8" action="/pages/document-encoding-landing.html" accept-charset="utf-8">
 <input name="q" value="한글">
 </form>
+<div id="encoding-style"></div>
+<div id="encoding-rule"></div>
 <img id="img" alt="" src="/pages/document-encoding-landing.html?img=한글">
 <script>
 	const out = {};
@@ -50,6 +55,16 @@
 	const worker = new Worker('/pages/document-encoding-worker.js?w=\ud55c\uae00');
 	worker.onmessage = (event) => {
 		out.worker = event.data;
+		read('script', () => window.__scriptText);
+		for (const sheet of ['style', 'rule'])
+			read(
+				sheet,
+				() =>
+					getComputedStyle(
+						document.getElementById('encoding-' + sheet),
+						'::after',
+					).content,
+			);
 		out.done = true;
 	};
 	worker.onerror = () => {

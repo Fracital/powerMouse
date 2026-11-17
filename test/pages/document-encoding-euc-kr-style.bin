@@ -1,0 +1,4 @@
+/* a sheet that names no encoding: its document's */
+#encoding-style::after {
+	content: "ÇÑ±Û";
+}

@@ -1,6 +1,9 @@
 <!doctype html>
 <meta charset="Shift_JIS">
 <title>document encoding</title>
+<link rel="stylesheet" href="/pages/document-encoding-shift_jis-style.bin">
+<link rel="stylesheet" href="/pages/document-encoding-shift_jis-rule.bin">
+<script src="/pages/document-encoding-shift_jis-script.bin"></script>
 <!-- document-encoding suite: a page in Shift_JIS, its text in its own bytes -->
 <a id="link" href="/pages/document-encoding-landing.html?q=あい日本&amp;r=%41+b">あい日本</a>
 <form id="form" action="/pages/document-encoding-landing.html" accept-charset="Shift_JIS">
@@ -10,6 +13,8 @@
 <form id="utf8" action="/pages/document-encoding-landing.html" accept-charset="utf-8">
 <input name="q" value="あい日本">
 </form>
+<div id="encoding-style"></div>
+<div id="encoding-rule"></div>
 <img id="img" alt="" src="/pages/document-encoding-landing.html?img=あい日本">
 <script>
 	const out = {};
@@ -50,6 +55,16 @@
 	const worker = new Worker('/pages/document-encoding-worker.js?w=\u3042\u3044\u65e5\u672c');
 	worker.onmessage = (event) => {
 		out.worker = event.data;
+		read('script', () => window.__scriptText);
+		for (const sheet of ['style', 'rule'])
+			read(
+				sheet,
+				() =>
+					getComputedStyle(
+						document.getElementById('encoding-' + sheet),
+						'::after',
+					).content,
+			);
 		out.done = true;
 	};
 	worker.onerror = () => {
