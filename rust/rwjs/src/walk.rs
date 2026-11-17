@@ -118,6 +118,9 @@ pub struct Walker<'a, 'c, 'h> {
 	/// the function visited next is a method's value: whether it may call
 	/// `super` (a derived class's constructor), for the check
 	pending_method: Option<(Span, bool)>,
+	/// the value of the setter being walked: it takes one parameter and no
+	/// rest (`slot_parameters` cannot add one)
+	setter_value: Option<Span>,
 	/// what a pattern that is no plain one is parsed in (src/pattern.rs)
 	allocator: &'c Allocator,
 	/// a regular expression's pattern does not compile: the parser's error
@@ -148,8 +151,13 @@ fn ident_byte(byte: u8) -> bool {
 }
 
 impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
+	/// `src` is the script's text, `parsed` the text the tree was parsed
+	/// from: the same, or a copy with the same positions (src/rewrite.rs
+	/// parse_targets), which the check reads where it asks the parser's
+	/// own slices
 	pub fn new(
 		src: &'a str,
+		parsed: &'a str,
 		options: &'c Options<'c>,
 		offsets: &'c Utf16Offsets,
 		route: &'c mut Route<'h>,
@@ -177,8 +185,9 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			marks: 0,
 			key: options.params.key.clone(),
 			declined: None,
-			early: Checker::new(src, mode),
+			early: Checker::new(parsed, mode),
 			pending_method: None,
+			setter_value: None,
 			allocator,
 			bad_pattern: false,
 			rebound: std::collections::HashSet::new(),
@@ -726,12 +735,14 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		format!("{prop} => super[{prop}], ({prop}, {value}) => super[{prop}] = {value}")
 	}
 
-	/// `(t$p => $s$j.get(super[t$p], t$p))($s$j.key(`, for a key known only
-	/// when it runs
+	/// `(t$p => $s$j.get(super[t$p], t$p))($s$j.key((this, `, for a key
+	/// known only when it runs: `this` first, as `super[k]` asks for the
+	/// this binding before it evaluates `k` (a derived constructor's
+	/// `super[super()]` throws the ReferenceError and calls nothing)
 	fn super_computed_read(&self) -> String {
 		let api = self.api();
 		let prop = &self.options.config.temps[1];
-		format!("({prop} => {api}.get(super[{prop}], {prop}))({api}.key(")
+		format!("({prop} => {api}.get(super[{prop}], {prop}))({api}.key((this, ")
 	}
 
 	/// `super.top` as a value: `$s$j.get(super.top, "top")`
@@ -754,7 +765,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 				let read = self.super_computed_read();
 				self.replace(span.start, k.span().start, format!("{open}{}", &read[1..]));
 				self.operand(k);
-				self.replace(k.span().end, span.end, "))".into());
+				self.replace(k.span().end, span.end, ")))".into());
 			}
 			SuperKey::Leave => {}
 		}
@@ -785,7 +796,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 				let read = self.super_computed_read();
 				self.replace(span.start, k.span().start, format!("{head}{read}"));
 				self.operand(k);
-				self.replace(k.span().end, span.end, format!(")){after}"));
+				self.replace(k.span().end, span.end, format!("))){after}"));
 			}
 			SuperKey::Leave => {}
 		}
@@ -797,7 +808,10 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 
 	/// `super.location = v`, `super[k] += v`, `super[k]++`:
 	/// `$s$j.sset(key, this, read, write, operate, value)`, where `operate`
-	/// is the operator as for set2; false for a member left as written
+	/// is the operator as for set2; false for a member left as written. A
+	/// computed key is handed over as it is, after `this` (`(this, k)`):
+	/// `sset` converts it where the write would, after the value (and
+	/// before the read of a compound one, again)
 	fn super_write(
 		&mut self,
 		span: Span,
@@ -811,7 +825,6 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			return false;
 		}
 		self.early.super_property();
-		let api = self.api();
 		let rest = format!(", this, {}, {operate}, ", self.super_arrows());
 		if value.is_some() {
 			// (the value is the assignment's last operand)
@@ -831,7 +844,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 				None
 			}
 			SuperKey::Computed(k) => {
-				self.replace(span.start, k.span().start, format!("{head}{api}.key("));
+				self.replace(span.start, k.span().start, format!("{head}(this, "));
 				self.operand(k);
 				Some(k.span().end)
 			}
@@ -855,7 +868,6 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 	fn super_ref(&mut self, m: Mem<'_, 'a>) -> bool {
 		let key = self.super_key(m);
 		let span = m.span();
-		let api = self.api();
 		let rest = format!(", this, {}).value", self.super_arrows());
 		let head = self.head(span.start, "sref");
 		if !matches!(key, SuperKey::Leave) {
@@ -867,7 +879,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 				self.replace(span.start, span.end, format!("{head}{}{rest}", quote(name)))
 			}
 			SuperKey::Computed(k) => {
-				self.replace(span.start, k.span().start, format!("{head}{api}.key("));
+				self.replace(span.start, k.span().start, format!("{head}(this, "));
 				self.operand(k);
 				self.replace(k.span().end, span.end, format!("){rest}"));
 			}
@@ -1508,6 +1520,92 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		}
 	}
 
+	/// whether a parameter list can take the rest parameter
+	/// `slot_parameters` adds: it has none of its own, and its closing
+	/// parenthesis is where the list ends
+	fn slots(&self, params: &FormalParameters<'a>) -> bool {
+		params.rest.is_none() && params.span.end > 0 && self.src.as_bytes().get(params.span.end as usize - 1) == Some(&b')')
+	}
+
+	/// `function f({ top: t }, u = t) {}`: a parameter pattern has no source
+	/// to wrap, so the parameter becomes a plain one and the pattern is
+	/// bound from it in a rest parameter added at the end of the list, as a
+	/// default of a property no array has:
+	/// `f($s$ja0, u = void 0, ...{ $s$jp0: { top: t } = $s$j.pattern($s$ja0, ...), $s$jp1: u = ... })`.
+	/// So it is bound where the page's pattern is, in the parameters' own
+	/// scope, when the function is called (a generator's body runs at its
+	/// first `next()`, too late for a TypeError of the pattern or a getter
+	/// it reads); every later parameter that evaluates anything (a default,
+	/// a pattern) is moved after it in the same way, so they run in the
+	/// page's order. A rest parameter counts in no function's length, and
+	/// each moved parameter keeps its place and its default, so the length
+	/// is what it was. (A list that has a rest of its own, or a setter's,
+	/// takes no other: those are bound at the top of the body,
+	/// `hoist_parameters`.)
+	fn slot_parameters(&mut self, params: &FormalParameters<'a>) {
+		let access = self.access();
+		let mut slots: Vec<String> = Vec::new();
+		for (index, param) in params.items.iter().enumerate() {
+			// (its names are declared before it is walked, a parameter at a
+			// time, as the check's own walk does)
+			self.early.param(param);
+			let (target, default) = match (&param.pattern, param.initializer.as_deref()) {
+				(BindingPattern::AssignmentPattern(ap), _) => (&ap.left, Some(&ap.right)),
+				(pattern, initializer) => (pattern, initializer),
+			};
+			let mut rests = Vec::new();
+			let spec = self.binding_spec(target, &mut rests);
+			let moving = !slots.is_empty();
+			// before the first pattern moved, and after it a name with no
+			// default (it evaluates nothing), the parameter stays as it is
+			if spec.is_none()
+				&& (!moving || (default.is_none() && matches!(target, BindingPattern::BindingIdentifier(_))))
+			{
+				self.visit_formal_parameter(param);
+				continue;
+			}
+			let temp = format!("{access}a{index}");
+			let span = target.span();
+			let page = self.slice(span);
+			let moved = self.moved_pattern(target, &rests);
+			let source = match default {
+				// the first: its default stays on the parameter, which is
+				// evaluated in its place
+				Some(default) if !moving => {
+					self.replace(span.start, span.end, temp.clone());
+					self.cx = Cx::default();
+					self.under(false, |walker| walker.visit_expression(default));
+					temp.clone()
+				}
+				// a later one: the default is taken in the rest, in order
+				Some(default) => {
+					let right = self.render(default.span(), |walker| {
+						walker.cx = Cx::default();
+						walker.under(true, |walker| walker.visit_expression(default));
+					});
+					self.replace(span.start, default.span().end, format!("{temp} = void 0"));
+					format!("{temp} === void 0 ? {right} : {temp}")
+				}
+				None => {
+					self.replace(span.start, span.end, temp.clone());
+					temp.clone()
+				}
+			};
+			let declarator = self.moved_declarator(&moved, page, &source, spec.as_deref(), false);
+			slots.push(format!("{access}p{}: {declarator}", slots.len()));
+		}
+		if slots.is_empty() {
+			return;
+		}
+		// before the closing parenthesis, after a trailing comma of the
+		// page's if there is one
+		let close = params.span.end - 1;
+		let from = params.items.last().map_or(params.span.start + 1, |param| param.span.end) as usize;
+		let comma = trailing_comma(&self.src[from..close as usize]);
+		let lead = if comma { " " } else { ", " };
+		self.edits.push(Edit::insert(close, text(format!("{lead}...{{ {} }}", slots.join(", "))), 0));
+	}
+
 	/// `function f({ top: t }) {}`: a parameter pattern has no source to
 	/// wrap, so the parameter becomes a plain one and the pattern a `var`
 	/// at the top of the body, from it. A later parameter that mentions a
@@ -1752,6 +1850,25 @@ impl<'a> Visit<'a> for Patterns<'_, '_> {
 			self.bad = true;
 		}
 	}
+}
+
+/// whether the text between a list's last item and its closing token holds
+/// the list's trailing comma (outside its comments)
+fn trailing_comma(between: &str) -> bool {
+	let bytes = between.as_bytes();
+	let mut at = 0;
+	while at < bytes.len() {
+		if bytes[at..].starts_with(b"/*") {
+			at = between[at + 2..].find("*/").map_or(bytes.len(), |end| at + 2 + end + 2);
+		} else if bytes[at..].starts_with(b"//") {
+			at = between[at..].find(['\n', '\r', '\u{2028}', '\u{2029}']).map_or(bytes.len(), |end| at + end);
+		} else if bytes[at] == b',' {
+			return true;
+		} else {
+			at += 1;
+		}
+	}
+	false
 }
 
 /// whether a parameter names any of `names` anywhere in it, as the
@@ -2050,7 +2167,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 					// them, so the import stays the page's own, given the
 					// routed URL: the specifier first, then the options
 					Some(_) => format!(
-						"{}(s, o) => {api}.imported(import({api}.importRoute({base}, s, o), o)))(",
+						"{}(s, o) => {api}.imported(import({api}.importRoute({base}, s, o), {api}.importOptions())))(",
 						self.open_paren(i.span.start)
 					),
 				};
@@ -2169,6 +2286,9 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 			self.method_value = Some(it.value.span());
 			self.pending_method = Some((it.value.span(), false));
 		}
+		if it.kind == PropertyKind::Set {
+			self.setter_value = Some(it.value.span());
+		}
 		self.cx = Cx::default();
 		self.under(false, |walker| walker.visit_expression(&it.value));
 		self.method_value = None;
@@ -2185,6 +2305,9 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 			walker.visit_property_key(&it.key);
 			walker.method_value = Some(it.value.span);
 			walker.pending_method = Some((it.value.span, calls_super));
+			if it.kind == MethodDefinitionKind::Set {
+				walker.setter_value = Some(it.value.span);
+			}
 			walker.visit_function(&it.value, it.kind.scope_flags());
 			walker.method_value = None;
 		});
@@ -2201,6 +2324,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 			.take()
 			.filter(|(span, _)| *span == it.span)
 			.map(|(_, calls_super)| calls_super);
+		let setter = self.setter_value.take() == Some(it.span);
 		self.functions += 1;
 		self.own_arguments.push(!self.rebound.contains(&it.span.start));
 		let saved = self.early.function_enter(it, method);
@@ -2208,7 +2332,12 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 		match (&it.body, self.rewriting) {
 			(Some(body), true) => {
 				self.parents.push(false);
-				let hoisted = self.hoist_parameters(&it.params);
+				let hoisted = if !setter && self.slots(&it.params) {
+					self.slot_parameters(&it.params);
+					String::new()
+				} else {
+					self.hoist_parameters(&it.params)
+				};
 				self.early.params_leave(&it.params, method.is_some(), directives);
 				self.function_body(body, hoisted);
 				self.parents.pop();
@@ -2237,7 +2366,12 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 		let saved = self.early.arrow_enter(it);
 		if self.rewriting {
 			self.parents.push(false);
-			let hoisted = self.hoist_parameters(&it.params);
+			let hoisted = if self.slots(&it.params) {
+				self.slot_parameters(&it.params);
+				String::new()
+			} else {
+				self.hoist_parameters(&it.params)
+			};
 			self.early.arrow_params_leave(it);
 			match &it.body {
 				ArrowFunctionBody::FunctionBody(body) => self.function_body(body, hoisted),

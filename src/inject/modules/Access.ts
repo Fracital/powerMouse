@@ -1169,6 +1169,9 @@ export default class AccessModule extends Module<Client> {
 				operate: (target: any, property: any, value: any) => any,
 				righthand: any,
 			): any => {
+				// a computed key comes as the page's value: it is converted
+				// where `super[k]` converts it, at the read of a compound write
+				// and again at the write, which is after the value
 				if (key === moduleClient.names.client) return righthand;
 				if (key === 'location') {
 					const real = read(key);
@@ -1179,12 +1182,25 @@ export default class AccessModule extends Module<Client> {
 				return operate(
 					{
 						get [property]() {
-							return api.get(read(key), key);
+							const converted = keyOf(key);
+							return api.get(read(converted), converted);
 						},
 						set [property](value: unknown) {
+							const converted = keyOf(key);
+							// (`super[k] = v` for a key that converts to one of the
+							// helpers' names writes nothing, as `super.$P$s = v` does)
+							if (converted === moduleClient.names.client) return;
+							if (converted === 'location' && converted !== key) {
+								const real = read(converted);
+								const standIn = api.get(real, converted);
+								if (standIn !== real) {
+									(standIn as { href: unknown }).href = value;
+									return;
+								}
+							}
 							write(
-								key,
-								key === 'eval' && that === this.client.global
+								converted,
+								converted === 'eval' && that === realm
 									? evalWritten(value)
 									: value,
 							);
@@ -1203,7 +1219,8 @@ export default class AccessModule extends Module<Client> {
 			) => ({
 				// (`super[k] ||= f()`: read as `super[k]` is)
 				get value() {
-					return api.get(read(key), key);
+					const converted = keyOf(key);
+					return api.get(read(converted), converted);
 				},
 				set value(value: unknown) {
 					api.sset(

@@ -4,7 +4,8 @@
 use edits::{Edit, Piece, Span as EditSpan, apply};
 use oxc::allocator::Allocator;
 use oxc::ast_visit::Visit;
-use oxc::parser::{ParseOptions, Parser};
+use oxc::ast::ast::{Expression, Statement};
+use oxc::parser::{ParseOptions, Parser, ParserReturn};
 use oxc::span::SourceType;
 
 use crate::config::Config;
@@ -88,7 +89,7 @@ pub struct Output {
 /// an older module's text and the glue never drives a module it was not
 /// written for (src/wasm/rewriter.ts holds the same number).
 /// rust/host/parity.mjs --cases holds it to the outputs (cases.revision).
-pub const REVISION: &str = "14";
+pub const REVISION: &str = "15";
 
 /// Why the rewriter hands a script back to the JavaScript one
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,6 +144,160 @@ fn after_close_comments(source: &str) -> usize {
 	}
 }
 
+/// The text the parser is handed for `source`, and what it made of it.
+///
+/// V8 compiles a call as the target of an assignment, an update or a
+/// for-in/of head (`f() = 1`, `f() += 1`, `f()++`, `--f()`,
+/// `for (f() in o)`), sloppy and strict, and throws a ReferenceError when
+/// the target is reached, after the call and before the right side: annex
+/// B's web compatibility, which pages have. oxc refuses it. So each such
+/// target found is given, in a copy of the text, an operator of the same
+/// length that assigns nothing (`f() , 1`, `f()  `, `for (f() ;; o)`), and
+/// the copy is parsed again: every position is the source's, the walk reads
+/// the source's own text, and the rewrite keeps the page's target as it
+/// wrote it, for the browser to throw as it does natively. A target V8
+/// refuses too (an optional call, `new f()`, `import(x)`, a tagged template,
+/// a logical assignment, a pattern) is left to the parser's refusal.
+fn parse_targets<'a>(
+	allocator: &'a Allocator,
+	source: &'a str,
+	source_type: SourceType,
+	options: &ParseOptions,
+) -> (&'a str, ParserReturn<'a>, bool) {
+	let mut text = source;
+	let mut changed = false;
+	for _ in 0..64 {
+		let parsed = Parser::new(allocator, text, source_type).with_options(options.clone()).parse();
+		if !parsed.fatal_error {
+			return (text, parsed, changed);
+		}
+		let Some(span) = parsed
+			.diagnostics
+			.iter()
+			.find(|diagnostic| diagnostic.message == "Cannot assign to this expression")
+			.and_then(|diagnostic| diagnostic.labels.first())
+			.map(|label| label.span())
+		else {
+			return (text, parsed, changed);
+		};
+		let Some(copy) = target_freed(allocator, text, span.start as usize, span.end as usize) else {
+			return (text, parsed, changed);
+		};
+		text = allocator.alloc_str(&copy);
+		changed = true;
+	}
+	let parsed = Parser::new(allocator, text, source_type).with_options(options.clone()).parse();
+	(text, parsed, changed)
+}
+
+/// `text` with the operator that makes the call at `start..end` a target
+/// turned into one of the same length that assigns nothing, or None when
+/// the call is no target V8 compiles
+fn target_freed(allocator: &Allocator, text: &str, start: usize, end: usize) -> Option<String> {
+	// a plain call (V8 refuses an optional one, `new`, `import()`, a tag)
+	// (asked as a script of the one statement: the parser the rewrite runs
+	// already, no other entry of it in the module)
+	let call = text.get(start..end)?;
+	let alone = Parser::new(allocator, call, SourceType::cjs()).parse();
+	if alone.fatal_error || alone.diagnostics.has_errors() || !alone.program.directives.is_empty() {
+		return None;
+	}
+	let [Statement::ExpressionStatement(statement)] = alone.program.body.as_slice() else {
+		return None;
+	};
+	let Expression::CallExpression(found) = &statement.expression else {
+		return None;
+	};
+	if found.optional || matches!(found.callee, Expression::Super(_)) {
+		return None;
+	}
+	let bytes = text.as_bytes();
+	// (a parenthesized target: `(f()) = 1`)
+	let mut opened = 0;
+	let mut before = text[..start].trim_end();
+	while let Some(rest) = before.strip_suffix('(') {
+		opened += 1;
+		before = rest.trim_end();
+	}
+	let mut after = skip_trivia(bytes, end);
+	let mut closed = 0;
+	while closed < opened && bytes.get(after) == Some(&b')') {
+		closed += 1;
+		after = skip_trivia(bytes, after + 1);
+	}
+	let rest = &text[after..];
+	let mut copy = text.as_bytes().to_vec();
+	let blank = |copy: &mut Vec<u8>, at: usize, length: usize, with: &[u8]| {
+		for index in 0..length {
+			copy[at + index] = *with.get(index).unwrap_or(&b' ');
+		}
+	};
+	if rest.starts_with("++") || rest.starts_with("--") {
+		blank(&mut copy, after, 2, b"");
+	} else if let Some(operator) = ["=", "+=", "-=", "*=", "/=", "%=", "**=", "<<=", ">>=", ">>>=", "&=", "|=", "^="]
+		.iter()
+		.filter(|operator| rest.starts_with(**operator))
+		.max_by_key(|operator| operator.len())
+	{
+		// (`==` and `=>` are no assignment, and `&&=`, `||=`, `??=` take no
+		// call: V8 refuses them)
+		if rest[operator.len()..].starts_with(['=', '>']) {
+			return None;
+		}
+		blank(&mut copy, after, operator.len(), b",");
+	} else if (rest.starts_with("in") || rest.starts_with("of"))
+		&& !rest[2..].starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '$')
+	{
+		// the head of a for-in or for-of loop (not `for await`); a for-of
+		// head may not start with `let`
+		if rest.starts_with("of")
+			&& call.starts_with("let")
+			&& !call[3..].starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '$')
+		{
+			return None;
+		}
+		let mut head = text[..start].trim_end();
+		for _ in 0..=closed {
+			head = head.strip_suffix('(')?.trim_end();
+		}
+		if !head.ends_with("for") || head[..head.len() - 3].ends_with(|c: char| c.is_alphanumeric() || c == '_' || c == '$') {
+			return None;
+		}
+		blank(&mut copy, after, 2, b";;");
+	} else {
+		let mut before = text[..start].trim_end();
+		for _ in 0..closed {
+			before = before.strip_suffix('(')?.trim_end();
+		}
+		if !(before.ends_with("++") || before.ends_with("--")) {
+			return None;
+		}
+		blank(&mut copy, before.len() - 2, 2, b"");
+	}
+	String::from_utf8(copy).ok()
+}
+
+/// where the next token is from `at`: past white space and comments
+fn skip_trivia(bytes: &[u8], mut at: usize) -> usize {
+	loop {
+		while at < bytes.len() && (bytes[at].is_ascii_whitespace()) {
+			at += 1;
+		}
+		if bytes[at..].starts_with(b"//") {
+			while at < bytes.len() && bytes[at] != b'\n' && bytes[at] != b'\r' {
+				at += 1;
+			}
+		} else if bytes[at..].starts_with(b"/*") {
+			match bytes[at + 2..].windows(2).position(|pair| pair == b"*/") {
+				Some(found) => at += 2 + found + 2,
+				None => return bytes.len(),
+			}
+		} else {
+			return at;
+		}
+	}
+}
+
 /// Whether a browser compiles `source` as a classic script (`single`: one of
 /// a single expression statement, with no `return` at its top level), for
 /// the callers that ask no rewrite (src/rewriteJS.ts singleExpression,
@@ -157,13 +312,12 @@ pub fn parses(source: &str, single: bool) -> bool {
 		.with_module(false)
 		.with_script(true)
 		.with_standard(true);
-	let parsed = Parser::new(&allocator, source, source_type)
-		.with_options(ParseOptions {
-			allow_return_outside_function: !single,
-			parse_regular_expression: true,
-			..ParseOptions::default()
-		})
-		.parse();
+	let parse_options = ParseOptions {
+		allow_return_outside_function: !single,
+		parse_regular_expression: true,
+		..ParseOptions::default()
+	};
+	let (text, parsed, _) = parse_targets(&allocator, source, source_type, &parse_options);
 	if parsed.fatal_error || parsed.diagnostics.has_errors() {
 		return false;
 	}
@@ -173,7 +327,7 @@ pub fn parses(source: &str, single: bool) -> bool {
 		lenient: false,
 		top_return: !single,
 	};
-	if early::check(&program, source, mode) != Verdict::Compiles {
+	if early::check(&program, text, mode) != Verdict::Compiles {
 		return false;
 	}
 	if !single {
@@ -205,20 +359,21 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 		.with_module(options.module)
 		.with_commonjs(!options.module)
 		.with_standard(true);
-	let parsed = Parser::new(&allocator, source, source_type)
-		.with_options(ParseOptions {
-			// a classic script may `return` at its top level in a browser
-			// (meriyah's globalReturn), and V8 intrinsics parse
-			allow_return_outside_function: true,
-			allow_v8_intrinsics: true,
-			preserve_parens: true,
-			// (a pattern is asked of the regular expression parser by the
-			// walk, src/pattern.rs: one V8 refuses is a parse error here, the
-			// JavaScript rewriter decides, and the literal reaches V8 as
-			// written)
-			..ParseOptions::default()
-		})
-		.parse();
+	let parse_options = ParseOptions {
+		// a classic script may `return` at its top level in a browser
+		// (meriyah's globalReturn), and V8 intrinsics parse
+		allow_return_outside_function: true,
+		allow_v8_intrinsics: true,
+		preserve_parens: true,
+		// (a pattern is asked of the regular expression parser by the
+		// walk, src/pattern.rs: one V8 refuses is a parse error here, the
+		// JavaScript rewriter decides, and the literal reaches V8 as
+		// written)
+		..ParseOptions::default()
+	};
+	// (`text` is what the parser read: `source`, or a copy of it with the
+	// same positions, parse_targets)
+	let (text, parsed, freed) = parse_targets(&allocator, source, source_type, &parse_options);
 	if parsed.fatal_error || parsed.diagnostics.has_errors() {
 		return Err(Decline::Parse);
 	}
@@ -233,7 +388,7 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 	let offsets = Utf16Offsets::new(source);
 	// the rewrite's walk drives the early-error check (src/early.rs): one
 	// walk of the tree for both
-	let mut walker = Walker::new(source, options, &offsets, route, mode, &allocator);
+	let mut walker = Walker::new(source, text, options, &offsets, route, mode, &allocator);
 	walker.visit_program(&program);
 	// a walk that declined may have left a part unwalked: the check then
 	// walks the tree on its own, as it does for the parse questions, and the
@@ -246,7 +401,7 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 				bad: false,
 			};
 			patterns.visit_program(&program);
-			(early::check(&program, source, mode), patterns.bad)
+			(early::check(&program, text, mode), patterns.bad)
 		}
 		None => (walker.verdict(), walker.bad_pattern()),
 	};
@@ -254,7 +409,7 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 	// crate's tests hold it to that)
 	#[cfg(test)]
 	{
-		let parsed = Parser::new(&allocator, source, source_type)
+		let parsed = Parser::new(&allocator, text, source_type)
 			.with_options(ParseOptions {
 				allow_return_outside_function: true,
 				allow_v8_intrinsics: true,
@@ -277,7 +432,7 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 	// text to it, in every place it is tried)
 	#[cfg(test)]
 	if walker.declined().is_none() {
-		let alone = early::check(&program, source, mode);
+		let alone = early::check(&program, text, mode);
 		if verdict != alone {
 			tests::DIFFER.with(|differ| differ.borrow_mut().push(format!("{source:?}: walk {verdict:?}, alone {alone:?}")));
 		}
@@ -365,6 +520,15 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 	}
 
 	let text = apply(source, edits).map_err(|_| Decline::Edits)?;
+	// a call kept as a target must still be a call the browser takes as
+	// one (the walk may have made a direct eval of it a conditional)
+	if freed {
+		let check = Allocator::default();
+		let (_, reparsed, _) = parse_targets(&check, &text, source_type, &parse_options);
+		if reparsed.fatal_error || reparsed.diagnostics.has_errors() {
+			return Err(Decline::Parse);
+		}
+	}
 	Ok(Output {
 		text,
 		marks,
@@ -744,7 +908,7 @@ pub(crate) mod tests {
 		assert_eq!(plain("o = { m() { super.top } }"), "o = { m() { 0..$s$j.get(super.top, \"top\") } }");
 		assert_eq!(
 			plain("o = { m() { super[k] } }"),
-			"o = { m() { (t$p => 0..$s$j.get(super[t$p], t$p))(0..$s$j.key(k)) } }"
+			"o = { m() { (t$p => 0..$s$j.get(super[t$p], t$p))(0..$s$j.key((this, k))) } }"
 		);
 		assert_eq!(
 			plain("o = { m() { super.eval(c) } }"),
@@ -756,7 +920,7 @@ pub(crate) mod tests {
 		);
 		assert_eq!(
 			plain("o = { m() { [super[k]] = a } }"),
-			"o = { m() { [0..$s$j.sref(0..$s$j.key(k), this, t$p => super[t$p], (t$p, t$v) => super[t$p] = t$v).value] = a } }"
+			"o = { m() { [0..$s$j.sref((this, k), this, t$p => super[t$p], (t$p, t$v) => super[t$p] = t$v).value] = a } }"
 		);
 		assert_eq!(plain("o = { m() { super.x; super.top`t` } }"), "o = { m() { super.x; super.top`t` } }");
 		// computed keys, heritage, a target whose key is known when it runs
@@ -810,7 +974,7 @@ pub(crate) mod tests {
 		);
 		assert_eq!(
 			plain("function f({ top: t }, b = t) {}"),
-			"function f($s$ja0, $s$ja1 = void 0) {var { top: t } = 0..$s$j.pattern($s$ja0, {\"top\":true}, \"{ top: t }=$s$ja0\"), b = $s$ja1 === void 0 ? t : $s$ja1;}"
+			"function f($s$ja0, $s$ja1 = void 0, ...{ $s$jp0: { top: t } = 0..$s$j.pattern($s$ja0, {\"top\":true}, \"{ top: t }=$s$ja0\"), $s$jp1: b = $s$ja1 === void 0 ? t : $s$ja1 }) {}"
 		);
 		// `eval` as a pattern's target is a reference whose write keeps it the eval
 		assert_eq!(plain("[eval] = [e]"), "[0..$s$j.ref1(eval, t$v => eval = t$v, \"eval\").value] = [e]");
@@ -821,6 +985,47 @@ pub(crate) mod tests {
 		assert_eq!(plain("[location] = a"), "[0..$s$j.ref1(location, t$v => location = t$v).value] = a");
 		// a parenthesised string stays an expression
 		assert_eq!(plain("('use strict'); top"), "('use strict'); 0..$s$j.get(top, \"top\")");
+	}
+
+	#[test]
+	fn calls_as_targets() {
+		// V8 compiles a call as a target and throws when it is reached: the
+		// page's target is kept, its own parts rewritten
+		for case in ["f(top) = 1", "f() += top", "f()++; --g()", "for (f() in o) top; for (g() of o);", "(f()) = 1; f() /* c */ = 1", "'use strict'; f() = 1"] {
+			assert!(run(case, false).is_ok(), "{case}");
+		}
+		assert_eq!(plain("f(top) = 1"), "f(0..$s$j.get(top, \"top\")) = 1");
+		assert_eq!(plain("f() += top"), "f() += 0..$s$j.get(top, \"top\")");
+		assert_eq!(plain("f()++; --g()"), "f()++; --g()");
+		assert_eq!(plain("for (f() in o) top; for (g() of o);"), "for (f() in o) 0..$s$j.get(top, \"top\"); for (g() of o);");
+		assert_eq!(plain("(f()) = 1; f() /* c */ = 1"), "(f()) = 1; f() /* c */ = 1");
+		assert_eq!(plain("'use strict'; f() = 1"), "'use strict'; f() = 1");
+		// what V8 refuses stays refused
+		for refused in ["f?.() = 1", "new f() = 1", "f()`t` = 1", "f() &&= 1", "[f()] = a", "({ a: f() } = a)", "for (let() of a);", "(f() = 1) => 0"] {
+			assert!(run(refused, false).is_err(), "{refused}");
+		}
+	}
+
+	#[test]
+	fn parameter_patterns_bind_in_the_parameters() {
+		// bound in a rest the list ends with, when the function is called
+		assert_eq!(
+			plain("function* g({ top: t }, u = t, v) {}"),
+			"function* g($s$ja0, $s$ja1 = void 0, v, ...{ $s$jp0: { top: t } = 0..$s$j.pattern($s$ja0, {\"top\":true}, \"{ top: t }=$s$ja0\"), $s$jp1: u = $s$ja1 === void 0 ? t : $s$ja1 }) {}"
+		);
+		assert_eq!(
+			plain("({ location }, ) => location"),
+			"($s$ja0,  ...{ $s$jp0: { location } = 0..$s$j.pattern($s$ja0, {\"location\":true}, \"{ location }=$s$ja0\") }) => 0..$s$j.get(location, \"location\")"
+		);
+		// a list with a rest of its own, and a setter's, bind at the top of the body
+		assert_eq!(
+			plain("function f({ top: t }, ...r) {}"),
+			"function f($s$ja0, ...r) {var { top: t } = 0..$s$j.pattern($s$ja0, {\"top\":true}, \"{ top: t }=$s$ja0\");}"
+		);
+		assert_eq!(
+			plain("o = { set x({ top: t }) {} }"),
+			"o = { set x($s$ja0) {var { top: t } = 0..$s$j.pattern($s$ja0, {\"top\":true}, \"{ top: t }=$s$ja0\");} }"
+		);
 	}
 
 	#[test]
@@ -841,7 +1046,7 @@ pub(crate) mod tests {
 		);
 		assert_eq!(
 			plain("o = { m() { super[k] += f() } }"),
-			"o = { m() { 0..$s$j.sref(0..$s$j.key(k), this, t$p => super[t$p], (t$p, t$v) => super[t$p] = t$v).value += f() } }"
+			"o = { m() { 0..$s$j.sref((this, k), this, t$p => super[t$p], (t$p, t$v) => super[t$p] = t$v).value += f() } }"
 		);
 		// (one whose value does none keeps the one helper)
 		assert!(plain("o[k] ||= 1").starts_with("0..$s$j.set2(o, k, "));

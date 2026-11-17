@@ -276,6 +276,10 @@ pub(crate) struct Checker<'a, 's> {
 	exports: Vec<&'a str>,
 	/// the open classes' private names, a class's in a run
 	privates: Vec<Private<'a>>,
+	/// where each of them is in `privates`, by its name and the start of
+	/// its class's run: a class with thousands of private names is checked
+	/// in a time that grows with them, not with their square
+	private_at: std::collections::HashMap<(&'a str, usize), usize>,
 	/// the private names used and not declared by a class closed so far
 	private_uses: Vec<&'a str>,
 	/// the open classes: whether each extends another
@@ -582,6 +586,7 @@ impl<'a, 's> Checker<'a, 's> {
 			default_export: false,
 			exports: Vec::new(),
 			privates: Vec::new(),
+			private_at: std::collections::HashMap::new(),
 			private_uses: Vec::new(),
 			classes: Vec::new(),
 			protos: 0,
@@ -1115,12 +1120,15 @@ impl<'a, 's> Checker<'a, 's> {
 			let mut kept = body.uses;
 			for at in body.uses..self.private_uses.len() {
 				let name = self.private_uses[at];
-				if !self.privates[body.privates..].iter().any(|private| private.name == name) {
+				if !self.private_at.contains_key(&(name, body.privates)) {
 					self.private_uses[kept] = name;
 					kept += 1;
 				}
 			}
 			self.private_uses.truncate(kept);
+			for private in &self.privates[body.privates..] {
+				self.private_at.remove(&(private.name, body.privates));
+			}
 			self.privates.truncate(body.privates);
 		}
 		if saved.live {
@@ -1457,7 +1465,8 @@ impl<'a, 's> Checker<'a, 's> {
 			return;
 		};
 		let name = id.name.as_str();
-		if let Some(existing) = self.privates[start..].iter_mut().find(|private| private.name == name) {
+		if let Some(&at) = self.private_at.get(&(name, start)) {
+			let existing = &mut self.privates[at];
 			if accessor != 0
 				&& existing.accessors != 0
 				&& existing.accessors & accessor == 0
@@ -1469,6 +1478,7 @@ impl<'a, 's> Checker<'a, 's> {
 			}
 			return;
 		}
+		self.private_at.insert((name, start), self.privates.len());
 		self.privates.push(Private {
 			name,
 			is_static,

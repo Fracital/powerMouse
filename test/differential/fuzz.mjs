@@ -11,8 +11,8 @@
 // What the generator leaves out is what the rewriter is known to answer
 // otherwise than V8 (corpus.mjs KNOWN names a case of each, with why): an
 // object as a computed key, an update or an arithmetic
-// compound write of a window's `top` or `eval`, `arguments` beside a
-// destructured parameter, a binding named `eval`, and a routed link behind
+// compound write of a window's `top` or `eval`, a destructured parameter
+// beside a rest parameter, a binding named `eval`, and a routed link behind
 // an optional one in the same chain (`a?.b[k]`).
 
 /** mulberry32: the generator's only source of choices */

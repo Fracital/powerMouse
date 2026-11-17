@@ -5,8 +5,9 @@
 # more. None of it is a script V8 refuses that runs rewritten, or one V8
 # takes that goes out unrewritten: those have no kind to be named as.
 
-# parser: V8 takes the text and the module's parser refuses it (a call as
-# an assignment target, which V8 compiles to a ReferenceError at run time;
+# parser: V8 takes the text and the module's parser refuses it (`super()`
+# as an assignment target, which V8 compiles to a ReferenceError at run
+# time: any other call as one is parsed, src/rewrite.rs parse_targets;
 # `async (...a)` as a call; `yield` as a for-of target; `let (a) = 1`; an
 # optional chain to a private name assigned to; a quantifier past 2^53).
 # The module declines it (status 4) and the JavaScript rewriter decides;
@@ -14,35 +15,10 @@
 parser /a{99999999999999999999}/
 parser class A extends B { constructor() { super() = 1 } }
 parser class A extends B { constructor() { super()++ } }
-parser a()++
-parser ++a()
-parser a()--
-parser (a())++
-parser a.b()++
-parser a() = 1
-parser a.b() = 1
-parser (a()) = 1
-parser a()() = 1
-parser a() += 1
-parser a() -= 1
-parser a() **= 1
-parser for (a() in b);
-parser for (a() of b);
-parser for ((a()) in b);
-parser for (a.b() in c);
-parser for (a() = 0;;);
-parser a() = b() = 1
-parser async() = 1
-parser async()++
-parser for (async() in a);
-parser eval() = 1
-parser eval()++
 parser async (...a)
 parser async (...a, )
 parser async function f() { for await (a() of b); }
-parser for (async() of a);
 parser for (yield of a);
-parser let (a) = 1
 parser class A { #a; m() { this?.#a = 1 } }
 parser for (yi\u0065ld of a);
 

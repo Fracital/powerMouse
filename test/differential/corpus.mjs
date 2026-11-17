@@ -1442,12 +1442,35 @@ const HAND = [
 		'found',
 		'log(String(Function.prototype)); var g = function h() { return 1; }; Object.setPrototypeOf(g, Object.prototype); log(Function.prototype.toString.call(g), String(g))',
 	],
+	// a parameter pattern beside a rest parameter (KNOWN: REST_PATTERNS)
+	[
+		'found',
+		'function f({ top: t }, t2 = () => t, ...r) { var t = 5; { function t() {} } return [t2() === top, typeof t]; } log(f(window))',
+	],
+	// a call as an assignment target: V8 calls it, then throws a
+	// ReferenceError before the right side runs (test262 annexB
+	// assignmenttargettype/callexpression*)
+	[
+		'found',
+		'function f() { log("called"); return {}; } try { f() = (log("rhs"), top); } catch (e) { log(e.constructor.name); } try { f()++; } catch (e) { log(e.constructor.name); } try { for (f() in { a: 1 }) log("body"); } catch (e) { log(e.constructor.name); } try { (f()) += top; } catch (e) { log(e.constructor.name); }',
+	],
+	// super[k]: this is checked before k is evaluated, and the key of a
+	// write is converted after the right side runs (test262
+	// target-super-computed-reference*)
+	[
+		'found',
+		'var seen = [], k = { toString() { seen.push("key"); return "top"; } }; class A {} class B extends A { constructor() { try { super[(seen.push("k"), k)] = 1; } catch (e) { seen.push(e.constructor.name); } super(); super[(seen.push("k2"), k)] = (seen.push("rhs"), 2); super[k] += (seen.push("rhs2"), 3); log(seen, this.top); } } new B()',
+	],
+	[
+		'found',
+		'var seen = [], k = { toString() { seen.push("specifier"); return "./x.js"; } }; var o = { get with() { seen.push("with"); return { get type() { seen.push("type"); return "json"; } }; } }; import(k, o).catch(function () {}); log(seen)',
+	],
 ];
 
 const HOST_TOP =
 	"an update or an arithmetic compound write of a window's `top` converts the host's top to a primitive (the result is the same: NaN or a string no page tells apart)";
-const PARAMETERS =
-	'a parameter pattern that reads through the access API is declared at the top of the body: the parameter list becomes a simple one (a sloppy `arguments` object is mapped), and its names share the scope of the body';
+const REST_PATTERNS =
+	'a parameter pattern that reads through the access API in a function with a rest parameter is declared at the top of the body (the slot that keeps the others in the parameter list can only stand last, where the rest is): its names share the scope of the body';
 /**
  * The cases known to differ, by name, each with why. A case named here that
  * leaves the same trace again fails the suite (rewriter-differential); the
@@ -1460,12 +1483,9 @@ export const KNOWN = {
 	'write#21.16': HOST_TOP,
 	'eval#12':
 		"a binding named `eval` that holds the page's eval: the page holds the stand-in a read answers, whose call is no direct eval",
-	'source#19': PARAMETERS,
-	'source#20': PARAMETERS,
-	'source#24': PARAMETERS,
-	'source#25': PARAMETERS,
 	'text#7':
 		'the value of a direct eval called when it is no function: V8 names `eval(...)`, the rewritten call is a conditional',
+	'found#20': REST_PATTERNS,
 	'found#16':
 		'a routed link behind an optional one (`a?.[k][k]`): the helper is handed the value of the chain before it, undefined whether `a` short-circuited or `a[k]` is undefined, and answers undefined for both (the error-messages suite records the same as EARLIER_LINK)',
 };

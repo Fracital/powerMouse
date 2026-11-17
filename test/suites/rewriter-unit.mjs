@@ -788,11 +788,14 @@ const parses = (code) => {
 	);
 }
 {
+	// it stays in the parameter list: a rest slot after the last parameter
+	// binds the pattern from the parameter, in the parameters' own scope, so
+	// the body's declarations and the function's length are as written
 	const out = rewrite('const f = ({ top: t }, b) => t;');
 	ok(
-		'a destructured parameter moves into the body as var',
-		/\(\$s\$ja0, b\) => \{\s*var \{\s*top: t\s*\} = 0\.\.\$s\$j\.pattern\(\$s\$ja0/.test(
-			out,
+		'a destructured parameter is bound in a rest slot of the parameter list',
+		out.includes(
+			'($s$ja0, b, ...{ $s$jp0: { top: t } = 0..$s$j.pattern($s$ja0, {"top":true}, "{ top: t }=$s$ja0") }) => t',
 		) && parses(out),
 		out,
 	);
@@ -950,12 +953,48 @@ console.log(JSON.stringify(answers));`,
 			out,
 		);
 	}
+	// a call as an assignment target is no early error in V8 (it calls, then
+	// throws a ReferenceError before the right side runs): the target is kept
+	// as written and the rest is rewritten
+	for (const [what, source, kept, type = 'generic'] of [
+		[
+			'a call assigned to in strict code',
+			'"use strict"; f() = top;',
+			'f() = 0..$s$j.get(top, "top");',
+		],
+		[
+			'a call updated in a module',
+			'a()++;\nx = top;',
+			'a()++;',
+			'genericModule',
+		],
+		[
+			'a parenthesized call',
+			'(f()) += top;',
+			'(f()) += 0..$s$j.get(top, "top");',
+		],
+		[
+			'a call as a loop head target',
+			'for (f() of top);',
+			'for (f() of 0..$s$j.get(top, "top"))',
+		],
+		['a call prefix-updated', 'x = top; --f();', '--f();'],
+	]) {
+		const out = rewrite(source, type);
+		ok(
+			`a call as a target is kept, the rest rewritten: ${what}`,
+			!out.includes('STomp_could_not_rewrite') &&
+				out.includes(kept) &&
+				!/\btop\b(?!")/.test(
+					out.replace(/0\.\.\$s\$j\.get\(top, "top"\)/g, ''),
+				),
+			out,
+		);
+	}
 	// a script with an invalid assignment target is an early error no browser
 	// runs; the wasm rewriter's parser declines it, and cannotRewrite ends it
 	// so it cannot run unrewritten where its code would reach the real globals
 	for (const [what, source, type = 'generic'] of [
-		['a call assigned to in strict code', '"use strict"; f() = top;'],
-		['a call assigned to in a module', 'a()++;\nx = top;', 'genericModule'],
 		[
 			'super() assigned to',
 			'class A extends B { constructor() { super() = 1 } }\nx = top;',
@@ -1517,7 +1556,7 @@ console.warn = warn;
 				'[0..$s$j.ref2(o, 0..$s$j.get(location, "location"), (t$t, t$p, t$v) => t$t[t$p] = t$v).value] = l;',
 			) &&
 			count(keys, '0..$s$j.get(location, "location")') === 7 &&
-			keys.includes('(0..$s$j.key(0..$s$j.get(location, "location")))') &&
+			keys.includes('0..$s$j.key((this, 0..$s$j.get(location, "location")))') &&
 			keys.includes('extends 0..$s$j.get(top, "top") {') &&
 			keys.includes('location: 2') &&
 			keys.includes('location = 2;') &&
@@ -1560,13 +1599,13 @@ console.warn = warn;
 	ok(
 		'super.top, super[k] and super.eval() go through the access API',
 		has(
-			`return [0..$s$j.get(super.top, "top"), (t$p => (0..$s$j.get(super[t$p], t$p)))(0..$s$j.key(k)), 0..$s$j.get(super["location"], "location"), super.x, super[0]];`,
+			`return [0..$s$j.get(super.top, "top"), (t$p => (0..$s$j.get(super[t$p], t$p)))(0..$s$j.key((this, k))), 0..$s$j.get(super["location"], "location"), super.x, super[0]];`,
 		) &&
 			has(
 				`0..$s$j.smethod(0..$s$j.get(super.eval, "eval"), this, "super.eval(0)")(c)`,
 			) &&
 			has(
-				`0..$s$j.smethod((t$p => (0..$s$j.get(super[t$p], t$p)))(0..$s$j.key(k)), this, "super[k](0, 0)")(a, 0..$s$j.get(top, "top"))`,
+				`0..$s$j.smethod((t$p => (0..$s$j.get(super[t$p], t$p)))(0..$s$j.key((this, k))), this, "super[k](0, 0)")(a, 0..$s$j.get(top, "top"))`,
 			) &&
 			has(
 				`0..$s$j.smethod(0..$s$j.get(super.top, "top"), this, "super.top?.(0)", true)?.(a)`,
@@ -1581,11 +1620,11 @@ console.warn = warn;
 			`0..$s$j.sset("location", this, t$p => super[t$p], (t$p, t$v) => (super[t$p] = t$v), (t$t, t$p, t$v) => (t$t[t$p] = t$v), u);`,
 		) &&
 			has(
-				`0..$s$j.sset(0..$s$j.key(k), this, t$p => super[t$p], (t$p, t$v) => (super[t$p] = t$v), (t$t, t$p, t$v) => (t$t[t$p] += t$v), 0..$s$j.get(top, "top"));`,
+				`0..$s$j.sset((this, k), this, t$p => super[t$p], (t$p, t$v) => (super[t$p] = t$v), (t$t, t$p, t$v) => (t$t[t$p] += t$v), 0..$s$j.get(top, "top"));`,
 			) &&
 			has('(t$t, t$p, t$v) => t$t[t$p]++, undefined);') &&
 			has(
-				`[0..$s$j.sref("location", this, t$p => super[t$p], (t$p, t$v) => (super[t$p] = t$v)).value, 0..$s$j.sref(0..$s$j.key(k), this,`,
+				`[0..$s$j.sref("location", this, t$p => super[t$p], (t$p, t$v) => (super[t$p] = t$v)).value, 0..$s$j.sref((this, k), this,`,
 			) &&
 			has('super.x = 0..$s$j.get(top, "top");') &&
 			has('return super.top`x`;') &&
@@ -1637,7 +1676,7 @@ console.warn = warn;
 		],
 		[
 			'function f([{ top: t }]) {}',
-			`function f($s$ja0) {var [{ top: t }] = 0..$s$j.pattern(0..$s$j.iter($s$ja0, "array", "$s$ja0"), {"[]":[{"top":true}]});}`,
+			`function f($s$ja0, ...{ $s$jp0: [{ top: t }] = 0..$s$j.pattern(0..$s$j.iter($s$ja0, "array", "$s$ja0"), {"[]":[{"top":true}]}) }) {}`,
 		],
 		// nothing to wrap: left as written
 		['for (const [k, v] of a) f(k);', 'for (const [k, v] of a) f(k);'],
