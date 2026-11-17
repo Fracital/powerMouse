@@ -169,10 +169,11 @@ pub fn string_decode(str: &[u8]) -> Vec<u8> {
 	decode_range(str, quoted as usize, end)
 }
 
-/// url.js `decode`: the value of a url token
+/// url.js `decode`: the value of a url token, from after its `(` (the name
+/// before it may be spelled with escapes, `u\72l(`)
 pub fn url_decode(str: &[u8]) -> Vec<u8> {
 	let len = str.len() as isize;
-	let mut start: isize = 4;
+	let mut start: isize = str.iter().position(|&byte| byte == b'(').map_or(4, |at| at as isize + 1);
 	let mut end = if str.last() == Some(&b')') {
 		len - 2
 	} else {
@@ -383,13 +384,13 @@ fn line_terminator(text: &[u8], at: usize) -> bool {
 	}
 }
 
-/// `/url\(\s*(['"]?)(.*?)\1\s*\)/` tried at the `url(` at `found`: where
-/// group 2 stands and where the match ends. The expression backtracks in a
+/// `RAW_URL` (src/cssURLs.ts) tried at the `url(` whose `(` is at `paren`:
+/// where group 2 stands and where the match ends. The expression backtracks in a
 /// fixed order: all the white space, then a quote when one is there (group
 /// 2 as short as it can be, the same quote after it), then no quote; fewer
 /// white space cannot match where those did not.
-fn url_at(text: &[u8], found: usize) -> Option<(usize, usize, usize)> {
-	let start = skip_spaces(text, found + 4);
+fn url_at(text: &[u8], paren: usize) -> Option<(usize, usize, usize)> {
+	let start = skip_spaces(text, paren + 1);
 	if let Some(&quote) = text.get(start)
 		&& (quote == b'"' || quote == b'\'')
 	{
@@ -428,6 +429,30 @@ fn url_at(text: &[u8], found: usize) -> Option<(usize, usize, usize)> {
 	}
 }
 
+/// The page's url() token as it is kept after `#`: its name written
+/// `url`, however the page spelled it (`URL(`, `u\72l(`), and closed where
+/// the page left it open at the end of the text (Chrome closes it there:
+/// the quote, then the parenthesis), so a value routed again finds it
+/// (`original_of`) and a readback restores it
+fn kept_token(token: &[u8]) -> Vec<u8> {
+	let paren = token.iter().position(|&byte| byte == b'(').unwrap_or(0);
+	let mut kept = Vec::with_capacity(token.len() + 6);
+	kept.extend_from_slice(b"url(");
+	let rest = &token[(paren + 1).min(token.len())..];
+	kept.extend_from_slice(rest);
+	if rest.last() != Some(&b')') {
+		let start = skip_spaces(rest, 0);
+		if let Some(&quote) = rest.get(start)
+			&& (quote == b'"' || quote == b'\'')
+			&& (rest.len() == start + 1 || rest.last() != Some(&quote))
+		{
+			kept.push(quote);
+		}
+		kept.push(b')');
+	}
+	kept
+}
+
 /// `rewriteCSSValueURLs`: every url() of a raw value routed as binary, the
 /// page's token kept after `#`. Appends to `output`.
 pub fn rewrite_urls(value: &[u8], route: &mut Route, output: &mut Vec<u8>) -> Parsed {
@@ -435,8 +460,8 @@ pub fn rewrite_urls(value: &[u8], route: &mut Route, output: &mut Vec<u8>) -> Pa
 	let mut at = 0;
 	let mut answer = Vec::new();
 	let mut preserved = Vec::new();
-	while let Some(found) = find(value, at, b"url(") {
-		let Some((target_start, target_end, end)) = url_at(value, found) else {
+	while let Some((found, paren)) = find_url(value, at) {
+		let Some((target_start, target_end, end)) = url_at(value, paren) else {
 			at = found + 1;
 			continue;
 		};
@@ -449,9 +474,13 @@ pub fn rewrite_urls(value: &[u8], route: &mut Route, output: &mut Vec<u8>) -> Pa
 		output.extend_from_slice(&value[copied..found]);
 		if route(QUIET, original, &mut answer)? {
 			// routed already: the page's token as it was kept
+			let written;
 			let kept = match &routed {
 				Some((token, _)) => token.as_slice(),
-				None => &value[found..end],
+				None => {
+					written = kept_token(&value[found..end]);
+					written.as_slice()
+				}
 			};
 			preserved.clear();
 			preserve_value(&answer, kept, &mut preserved);
@@ -471,7 +500,7 @@ pub fn rewrite_urls(value: &[u8], route: &mut Route, output: &mut Vec<u8>) -> Pa
 /// A single value (`rewriteCSSValueURLs`), or None when it comes back as
 /// it was
 pub fn rewrite_value(value: &[u8], route: &mut Route) -> Result<Option<Vec<u8>>, Fail> {
-	if find(value, 0, b"url(").is_none() {
+	if find_url(value, 0).is_none() {
 		return Ok(None);
 	}
 	let mut output = Vec::with_capacity(value.len() + value.len() / 8);
@@ -479,9 +508,14 @@ pub fn rewrite_value(value: &[u8], route: &mut Route) -> Result<Option<Vec<u8>>,
 	Ok(if output == value { None } else { Some(output) })
 }
 
+/// how many var() fallbacks deep `deep` parses a fallback as a value of its
+/// own; deeper ones are raw text to the regex
+const MAX_VALUE_DEPTH: u32 = 16;
+
 /// the walk of one sheet: its edits and what routes its URLs
 struct Walk<'a, 'r, 's> {
 	source: &'a [u8],
+	depth: u32,
 	edits: Edits<'a>,
 	route: &'r mut Route<'s>,
 	answer: Vec<u8>,
@@ -492,7 +526,7 @@ struct Walk<'a, 'r, 's> {
 impl Walk<'_, '_, '_> {
 	/// a `Raw` node from `start` to `end`: its url()s by the regex
 	fn raw(&mut self, start: usize, end: usize, value: &[u8]) -> Parsed {
-		if find(value, 0, b"url(").is_none() {
+		if find_url(value, 0).is_none() {
 			return Ok(());
 		}
 		self.generated.clear();
@@ -521,10 +555,8 @@ impl Walk<'_, '_, '_> {
 		buffers: Buffers,
 	) -> Result<Buffers, Fail> {
 		let text = slice(self.source, start, end);
-		let atrule = match context {
-			Context::AtrulePrelude(name) => Some(name),
-			_ => None,
-		};
+		// the at-rule's name as Chrome reads it: any case, escapes resolved
+		let import = matches!(context, Context::AtrulePrelude(name) if ident_is(name, b"import"));
 		let mut parser = Parser::recycled(text, buffers)?;
 		match parser.parse_context(context) {
 			Err(Fail::Decline) => return Err(Fail::Decline),
@@ -539,7 +571,18 @@ impl Walk<'_, '_, '_> {
 			let leaf = parser.leaves[index];
 			let (from, to) = (start + leaf.start, start + leaf.end);
 			if leaf.kind == RAW_LEAF {
-				self.raw(from, to, parser.text(leaf.value))?;
+				let raw = parser.text(leaf.value);
+				if self.depth < MAX_VALUE_DEPTH && names_url_list(raw) {
+					// a var() fallback that holds an image-set() or src():
+					// its strings are URLs, so it is parsed as a value of
+					// its own (and taken as raw text if it does not parse)
+					self.depth += 1;
+					let inner = self.deep(from, to, Context::Value, Buffers::default());
+					self.depth -= 1;
+					inner?;
+				} else {
+					self.raw(from, to, raw)?;
+				}
 				continue;
 			}
 			let token = &text[leaf.value.0..leaf.value.1];
@@ -549,9 +592,9 @@ impl Walk<'_, '_, '_> {
 				} else {
 					parser.text(leaf.function)
 				};
-				if function.eq_ignore_ascii_case(b"image-set")
-					|| function.eq_ignore_ascii_case(b"-webkit-image-set")
-					|| function.eq_ignore_ascii_case(b"src")
+				if ident_is(function, b"image-set")
+					|| ident_is(function, b"-webkit-image-set")
+					|| ident_is(function, b"src")
 				{
 					// a string inside image-set() or src() is a URL: routed
 					// as a url() token
@@ -563,7 +606,7 @@ impl Walk<'_, '_, '_> {
 						kept.push(b')');
 						self.url(from, to, &kept);
 					}
-				} else if atrule == Some(b"import") {
+				} else if import {
 					let value = string_decode(token);
 					if (self.route)(IMPORT, &value, &mut self.answer)? {
 						self.generated.clear();
@@ -583,7 +626,7 @@ impl Walk<'_, '_, '_> {
 				Some((token, url)) => &token[url.0..url.1],
 				None => value.as_slice(),
 			};
-			let kind = if atrule == Some(b"import") {
+			let kind = if import {
 				STYLE
 			} else {
 				BINARY
@@ -591,7 +634,10 @@ impl Walk<'_, '_, '_> {
 			if (self.route)(kind, original, &mut self.answer)? {
 				match &routed {
 					Some((token, _)) => self.url(from, to, token),
-					None => self.url(from, to, slice(self.source, from, to)),
+					None => {
+						let kept = kept_token(slice(self.source, from, to));
+						self.url(from, to, &kept);
+					}
 				}
 			}
 		}
@@ -609,6 +655,7 @@ pub fn rewrite(
 	let pieces = scan(source, declaration_list)?;
 	let mut walk = Walk {
 		source,
+		depth: 0,
 		edits: Edits {
 			text: source,
 			output: Vec::new(),
@@ -687,8 +734,16 @@ mod tests {
 			sheet("a{b:image-set(\"c\" 1x)}"),
 			"a{b:image-set(url(/1/c#url\\(\\\"c\\\"\\)) 1x)}"
 		);
-		// the name is compared as the sheet wrote it
-		assert_eq!(sheet("@IMPORT 'a.css';"), "@IMPORT 'a.css';");
+		// the name is read as Chrome reads it: any case, escapes resolved
+		assert_eq!(sheet("@IMPORT 'a.css';"), "@IMPORT \"/4/a.css\";");
+		assert_eq!(
+			sheet("@\\69mport url(b.css);"),
+			"@\\69mport url(/3/b.css#url\\(b.css\\));"
+		);
+		assert_eq!(
+			sheet("a{b:image-se\\74(\"c\" 1x)}"),
+			"a{b:image-se\\74(url(/1/c#url\\(\\\"c\\\"\\)) 1x)}"
+		);
 	}
 
 	#[test]
@@ -703,6 +758,52 @@ mod tests {
 		);
 		assert_eq!(value("url('a\nb')"), "url('a\nb')");
 		assert_eq!(value("url(\"a' ) x"), "url(\"/1/\\\"a'#url(\\\"a' )\") x");
+	}
+
+	#[test]
+	fn a_url_named_in_any_case_or_with_escapes_is_routed() {
+		// the page's token is kept with its name written `url`, so the value
+		// routed again finds it and a readback restores it
+		assert_eq!(
+			sheet("a{b:URL(c);d:u\\72l(\"e\")}"),
+			"a{b:url(/2/c#url\\(c\\));d:url(/2/e#url\\(\\\"e\\\"\\))}"
+		);
+		assert_eq!(
+			value("URL(a) u\\72 l( 'b' ) \\55RL(c)"),
+			"url(\"/1/a#url(a)\") url(\"/1/b#url( 'b' )\") url(\"/1/c#url(c)\")"
+		);
+		assert_eq!(sheet("a{--b:Url(c)}"), "a{--b:url(\"/1/c#url(c)\")}");
+		assert_eq!(url_decode(b"u\\72l( a )"), b"a".to_vec());
+		// a token left open at the end is kept closed
+		assert_eq!(
+			sheet("a{b:url(c"),
+			"a{b:url(/2/c#url\\(c\\))"
+		);
+		assert_eq!(
+			sheet("a{b:url(\"c"),
+			"a{b:url(/2/c#url\\(\\\"c\\\"\\))"
+		);
+		// an image-set() in a custom property or a var() fallback: its
+		// strings are URLs
+		assert_eq!(
+			sheet("a{--b:-webkit-image-set(\"c\" 1x);d:var(--e,image-se\\74('f' 1x))}"),
+			"a{--b:-webkit-image-set(url(/1/c#url\\(\\\"c\\\"\\)) 1x);d:var(--e,image-se\\74(url(/1/f#url\\(\\\"f\\\"\\)) 1x))}"
+		);
+		// an @namespace's url() is a name, not a load
+		assert_eq!(
+			sheet("@namespace x url(http://www.w3.org/1999/xhtml);@NAMESPACE URL(y);"),
+			"@namespace x url(http://www.w3.org/1999/xhtml);@NAMESPACE URL(y);"
+		);
+		// a block left open at the end holds declarations
+		assert_eq!(
+			sheet("@property --p{initial-value:url(c}"),
+			"@property --p{initial-value:url(/2/c}#url\\(c}\\))"
+		);
+		// routed twice, the same
+		let once = value("URL(a)");
+		assert_eq!(value(&once), once);
+		let once = sheet("a{b:U\\52L(c)}");
+		assert_eq!(sheet(&once), once);
 	}
 
 	#[test]

@@ -117,6 +117,13 @@ impl<'a> Parser<'a> {
 	fn token_is(&self, reference: &[u8]) -> bool {
 		cmp_str(self.source, self.start, self.end, reference)
 	}
+	/// the token is a function whose name, its escapes resolved, is
+	/// `reference` (`ident_is`)
+	fn function_is(&self, reference: &[u8]) -> bool {
+		self.kind == FUNCTION
+			&& self.end > self.start
+			&& ident_is(&self.source[self.start..self.end - 1], reference)
+	}
 	fn lookup_type_non_sc(&self, mut idx: usize) -> u8 {
 		for &kind in self.kinds.iter().take(self.count).skip(self.index) {
 			if kind != WHITESPACE && kind != COMMENT {
@@ -232,10 +239,12 @@ impl<'a> Parser<'a> {
 
 	// leaves
 
-	/// a `Raw` node; the walk routes it only when it holds a `url(`
+	/// a `Raw` node; the walk routes it only when it holds a `url(`, or an
+	/// image-set() or src() whose strings are URLs
 	fn raw_leaf(&mut self, stop: impl Fn(u8) -> u8, exclude_white_space: bool) {
 		let range = self.raw(stop, exclude_white_space);
-		if find(self.text(range), 0, b"url(").is_some() {
+		let text = self.text(range);
+		if find_url(text, 0).is_some() || names_url_list(text) {
 			self.leaves.push(Leaf {
 				kind: RAW_LEAF,
 				start: range.0,
@@ -266,7 +275,7 @@ impl<'a> Parser<'a> {
 				value
 			}
 			FUNCTION => {
-				if !self.token_is(b"url(") {
+				if !self.function_is(b"url") {
 					return Err(Fail::Syntax);
 				}
 				self.eat(FUNCTION)?;
@@ -340,7 +349,7 @@ impl<'a> Parser<'a> {
 			PERCENTAGE => self.eat(PERCENTAGE)?,
 			NUMBER => self.eat(NUMBER)?,
 			FUNCTION => {
-				if self.token_is(b"url(") {
+				if self.function_is(b"url") {
 					self.url()?
 				} else {
 					self.function_node(scope)?
@@ -501,7 +510,7 @@ impl<'a> Parser<'a> {
 				}
 			}
 			self.condition(Kind::Container)?;
-		} else if lower_is(name, b"import") {
+		} else if lower_is(name, b"import") || ident_is(name, b"import") {
 			self.import_prelude()?;
 		} else if lower_is(name, b"layer") {
 			self.layer_list()?;
@@ -532,11 +541,11 @@ impl<'a> Parser<'a> {
 		self.skip_sc();
 		if self.kind == IDENT && self.token_is(b"layer") {
 			self.eat(IDENT)?;
-		} else if self.kind == FUNCTION && self.token_is(b"layer(") {
+		} else if self.function_is(b"layer") {
 			self.import_function(false)?;
 		}
 		self.skip_sc();
-		if self.kind == FUNCTION && self.token_is(b"supports(") {
+		if self.function_is(b"supports") {
 			self.import_function(true)?;
 		}
 		if matches!(self.lookup_non_ws_type(0), IDENT | LEFT_PAREN) {

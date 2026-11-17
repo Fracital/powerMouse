@@ -2427,7 +2427,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					} catch (error) {
 						// not a value the parser takes: the url() tokens it has
 					}
-				return value.includes('url(')
+				// a url( in any case or spelled with an escape
+				return /url\(|\\/i.test(value)
 					? rewriteCSSValueURLs(value, moduleClient.baseURL)
 					: value;
 			};

@@ -185,15 +185,6 @@ impl Tokenizer<'_> {
 		}
 		code == reference
 	}
-	fn cmp_str(&self, start: usize, end: usize, reference: &[u8]) -> bool {
-		if end < start || end - start != reference.len() || end > self.len() {
-			return false;
-		}
-		self.source[start..end]
-			.iter()
-			.zip(reference)
-			.all(|(&byte, &wanted)| byte.to_ascii_lowercase() == wanted)
-	}
 	fn white_space_end(&self, mut offset: usize) -> usize {
 		while offset < self.len() && class(self.source[offset]) & SPACE != 0 {
 			offset += 1;
@@ -300,11 +291,13 @@ impl Tokenizer<'_> {
 	fn consume_ident_like_token(&mut self) {
 		let name_start = self.offset;
 		self.offset = self.consume_name(self.offset);
-		if self.cmp_str(name_start, self.offset, b"url") && self.code(self.offset) == 0x28 {
+		// the name with its escapes resolved, as Chrome reads it
+		if self.code(self.offset) == 0x28 && ident_is(&self.source[name_start..self.offset], b"url") {
+			let paren = self.offset;
 			self.offset = self.white_space_end(self.offset + 1);
 			if self.code(self.offset) == 0x22 || self.code(self.offset) == 0x27 {
 				self.kind = FUNCTION;
-				self.offset = name_start + 4;
+				self.offset = paren + 1;
 				return;
 			}
 			self.consume_url_token();
@@ -486,6 +479,120 @@ impl Tokenizer<'_> {
 	}
 }
 
+/// Whether the ident sequence `name`, as the sheet wrote it, is `reference`
+/// (lower case ASCII) with ASCII case ignored: CSS Syntax's "consume an
+/// ident sequence" resolves its escapes (a backslash and a character that
+/// is no hex digit for that character, one to six hex digits and the one
+/// white space after them for a code point) before Chrome compares a
+/// function's or an at-rule's name, so `u\72l`, `\55RL` and `image-se\74`
+/// are `url`, `URL` and `image-set` to it.
+pub(crate) fn ident_is(name: &[u8], reference: &[u8]) -> bool {
+	if !name.contains(&b'\\') {
+		return name.eq_ignore_ascii_case(reference);
+	}
+	let mut at = 0;
+	let mut index = 0;
+	while at < name.len() {
+		let code = if name[at] == b'\\' && at + 1 < name.len() && !is_newline(name[at + 1] as u32) {
+			let next = name[at + 1];
+			if is_hex_digit(next as u32) {
+				let mut end = at + 1;
+				let mut value: u32 = 0;
+				while end < name.len() && end < at + 7 && is_hex_digit(name[end] as u32) {
+					value = value * 16 + (name[end] as char).to_digit(16).unwrap_or(0);
+					end += 1;
+				}
+				match name.get(end) {
+					Some(b'\r') if name.get(end + 1) == Some(&b'\n') => end += 2,
+					Some(&byte) if is_white_space(byte as u32) => end += 1,
+					_ => {}
+				}
+				at = end;
+				value
+			} else {
+				at += 2;
+				next as u32
+			}
+		} else {
+			at += 1;
+			name[at - 1] as u32
+		};
+		let Some(&wanted) = reference.get(index) else {
+			return false;
+		};
+		let lowered = if is_uppercase(code) { code | 32 } else { code };
+		if lowered != wanted as u32 {
+			return false;
+		}
+		index += 1;
+	}
+	index == reference.len()
+}
+
+/// One letter of `url` (lower case `letter`) at `at` as a sheet may spell it
+/// so that Chrome still reads the name: the letter in either case, a
+/// backslash and the letter, or a backslash, up to four zeros and the two
+/// hex digits of the letter in either case, and the one white space that
+/// may end that escape. Where the letter ends, or None. The expression of
+/// src/cssURLs.ts (`RAW_URL`) matches the same.
+fn url_letter_at(text: &[u8], at: usize, letter: u8) -> Option<usize> {
+	let byte = *text.get(at)?;
+	if byte.to_ascii_lowercase() == letter {
+		return Some(at + 1);
+	}
+	if byte != b'\\' {
+		return None;
+	}
+	let next = *text.get(at + 1)?;
+	if next.to_ascii_lowercase() == letter {
+		return Some(at + 2);
+	}
+	let mut end = at + 1;
+	while end < at + 5 && text.get(end) == Some(&b'0') {
+		end += 1;
+	}
+	let high = (*text.get(end)? as char).to_digit(16)?;
+	let low = (*text.get(end + 1)? as char).to_digit(16)?;
+	let value = high * 16 + low;
+	if value != letter as u32 && value != (letter - 32) as u32 {
+		return None;
+	}
+	end += 2;
+	match text.get(end) {
+		Some(b'\r') if text.get(end + 1) == Some(&b'\n') => end += 2,
+		Some(b' ' | b'\t' | b'\r' | b'\n' | 0x0C) => end += 1,
+		_ => {}
+	}
+	Some(end)
+}
+
+/// a `url(` at `at`, spelled any way `url_letter_at` takes: where its `(`
+/// stands
+pub(crate) fn url_name_at(text: &[u8], at: usize) -> Option<usize> {
+	let mut end = at;
+	for letter in [b'u', b'r', b'l'] {
+		end = url_letter_at(text, end, letter)?;
+	}
+	(text.get(end) == Some(&b'(')).then_some(end)
+}
+
+/// the first `url(` (`url_name_at`) at or after `from`: where it starts and
+/// where its `(` stands
+pub(crate) fn find_url(text: &[u8], from: usize) -> Option<(usize, usize)> {
+	let mut at = from;
+	while at < text.len() {
+		let offset = text[at..]
+			.iter()
+			.position(|&byte| matches!(byte, b'u' | b'U' | b'\\'))?;
+		at += offset;
+		if let Some(paren) = url_name_at(text, at) {
+			return Some((at, paren));
+		}
+		at += 1;
+	}
+	None
+}
+
 /// the first `needle` in `source` at or after `from`
 pub(crate) fn find(source: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
 	if from > source.len() {
@@ -499,14 +606,85 @@ pub(crate) fn find(source: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
 
 /// What a piece must hold for the rewriter to change anything in it: a
 /// `url(` (a Url node, or a raw fallback the URL regex rewrites), or an
-/// `image-set` or `src(` (whose strings are URLs), ASCII case ignored. The
-/// JavaScript side looks into more (its MAY_ROUTE also takes `import` and a
-/// backslash), but none of those can lead to an edit without one of these:
-/// css-tree compares the raw text of a name, so an escaped `url` is not a
-/// url() to it. This is where each of them stands in `source`, start and
-/// end, found in one pass: in source order, and no two overlap (none of the
-/// three has a `(` before its last byte), so the ends are in order as well.
+/// `image-set` or `src(` (whose strings are URLs), ASCII case ignored, and
+/// each of those spelled with an escape in its name (`u\72l(`,
+/// `image-se\74(`), which Chrome reads as the name. This is where each of
+/// them stands in `source`, start and end: in source order, and no two
+/// overlap, so the ends are in order as well.
 fn marks(source: &[u8]) -> Vec<(u32, u32)> {
+	let mut found = plain_marks(source);
+	if source.contains(&b'\\') {
+		let escaped = escaped_marks(source);
+		if !escaped.is_empty() {
+			found.extend(escaped);
+			found.sort_unstable();
+			// a name found both ways, or one inside another: the first stands
+			let mut kept: Vec<(u32, u32)> = Vec::with_capacity(found.len());
+			for mark in found {
+				if kept.last().is_none_or(|last| last.1 <= mark.0) {
+					kept.push(mark);
+				}
+			}
+			found = kept;
+		}
+	}
+	found
+}
+
+/// whether the mark at `mark` is a `url(` (`url_name_at`), not an
+/// image-set or a src()
+pub(crate) fn is_url_mark(source: &[u8], mark: (u32, u32)) -> bool {
+	let text = &source[mark.0 as usize..mark.1 as usize];
+	text.last() == Some(&b'(') && url_name_at(text, 0) == Some(text.len() - 1)
+}
+
+/// whether `text` names an image-set(), a -webkit-image-set() or a src(),
+/// whose strings are URLs, in any spelling `marks` finds
+pub(crate) fn names_url_list(text: &[u8]) -> bool {
+	marks(text).into_iter().any(|mark| !is_url_mark(text, mark))
+}
+
+/// the names `marks` looks for that hold an escape: from each backslash,
+/// back to where the name it is in starts (before the first escape of a
+/// name there are only name characters), then the name read as the
+/// tokenizer reads it; one a `(` follows that resolves to `url`, `src`,
+/// `image-set` or `-webkit-image-set` is a mark, its `(` included
+fn escaped_marks(source: &[u8]) -> Vec<(u32, u32)> {
+	let tokens = Tokenizer {
+		source,
+		offset: 0,
+		kind: 0,
+	};
+	let mut found = Vec::new();
+	let mut after = 0;
+	for (at, &byte) in source.iter().enumerate() {
+		if byte != b'\\' || at < after {
+			continue;
+		}
+		let mut start = at;
+		while start > 0 && class(source[start - 1]) & NAME != 0 {
+			start -= 1;
+		}
+		let end = tokens.consume_name(start);
+		after = end.max(at + 1);
+		if source.get(end) != Some(&b'(') {
+			continue;
+		}
+		let name = &source[start..end];
+		if ident_is(name, b"url")
+			|| ident_is(name, b"src")
+			|| ident_is(name, b"image-set")
+			|| ident_is(name, b"-webkit-image-set")
+		{
+			found.push((start as u32, (end + 1) as u32));
+		}
+	}
+	found
+}
+
+/// the marks of names written without an escape, found in one pass (none of
+/// the three has a `(` before its last byte, so no two overlap)
+fn plain_marks(source: &[u8]) -> Vec<(u32, u32)> {
 	let mut found = Vec::new();
 	for (at, &byte) in source.iter().enumerate() {
 		if byte == b'(' {
@@ -913,14 +1091,11 @@ impl<'a> Parser<'a> {
 			name,
 		});
 	}
-	/// text no parse shaped: the walk routes its url()s by the regex
+	/// text no parse shaped: the walk routes its url()s by the regex, which
+	/// finds them in any case and with escapes in the name (`find_url`)
 	fn raw_piece(&mut self, range: (usize, usize)) {
-		// `includes('url(')`: in lower case only
 		let source = self.source;
-		if self
-			.marked(range)
-			.any(|mark| &source[mark.0 as usize..mark.1 as usize] == b"url(")
-		{
+		if self.marked(range).any(|mark| is_url_mark(source, *mark)) {
 			self.piece(RAW, range, (0, 0));
 		}
 	}
@@ -996,8 +1171,9 @@ impl<'a> Parser<'a> {
 		let mut offset = 1;
 		loop {
 			match self.lookup_type(offset) {
-				EOF => return false,
-				RIGHT_CURLY => return true,
+				// a block the sheet leaves open is closed where it ends, as
+				// Chrome closes it: what it holds are declarations
+				EOF | RIGHT_CURLY => return true,
 				LEFT_CURLY | AT_KEYWORD => return false,
 				_ => offset += 1,
 			}
@@ -1010,7 +1186,12 @@ impl<'a> Parser<'a> {
 		self.skip_sc();
 		if !self.eof && self.kind != LEFT_CURLY && self.kind != SEMICOLON {
 			let prelude = self.raw(until_left_curly_or_semicolon, true);
-			if self.text(name) == b"import" || self.may_route(prelude) {
+			// an @namespace names a namespace, not a resource: its url() is
+			// no load, and routing it would change which elements the
+			// sheet's selectors match
+			if ident_is(self.text(name), b"import")
+				|| (self.may_route(prelude) && !ident_is(self.text(name), b"namespace"))
+			{
 				self.piece(PRELUDE, prelude, name);
 			}
 			self.skip_sc();
@@ -1115,7 +1296,13 @@ impl<'a> Parser<'a> {
 			self.skip_sc();
 		}
 		let value = self.raw(until_exclamation_or_semicolon, !custom);
-		if custom {
+		let source = self.source;
+		if custom && self.marked(value).any(|mark| !is_url_mark(source, *mark)) {
+			// a custom property that holds an image-set() or src(): its
+			// strings are URLs wherever var() puts it, so it is parsed as a
+			// value (and taken as raw text again if it does not parse)
+			self.piece(VALUE, value, (0, 0));
+		} else if custom {
 			self.raw_piece(value);
 		} else if self.may_route(value) {
 			self.piece(VALUE, value, (0, 0));
@@ -1207,6 +1394,38 @@ mod tests {
 		let found = pieces(&deep, false);
 		assert_eq!(found.len(), 1);
 		assert_eq!(found[0], ('R', "@media x{@media x{@media x{a{b:url(c)}"));
+	}
+
+	#[test]
+	fn names_are_read_with_their_escapes_resolved() {
+		assert!(ident_is(b"u\\72l", b"url"));
+		assert!(ident_is(b"\\55RL", b"url"));
+		assert!(ident_is(b"u\\72 l", b"url"));
+		assert!(ident_is(b"\\000075\\r\\l", b"url"));
+		assert!(ident_is(b"image-se\\74", b"image-set"));
+		assert!(ident_is(b"\\69mport", b"import"));
+		assert!(ident_is(b"IMPORT", b"import"));
+		assert!(!ident_is(b"u\\7572l", b"url"));
+		assert!(!ident_is(b"ur", b"url"));
+		assert!(!ident_is(b"urll", b"url"));
+		assert_eq!(find_url(b"a URL(b)", 0), Some((2, 5)));
+		assert_eq!(find_url(b"a u\\72 l(b)", 0), Some((2, 8)));
+		assert_eq!(find_url(b"a \\55\\52\\4C(b)", 0), Some((2, 11)));
+		assert_eq!(find_url(b"a u\\7572l(b)", 0), None);
+		// an escaped url() is a url() to the scan, in a value, a custom
+		// property and an at-rule prelude
+		assert_eq!(
+			pieces(
+				"a { b: u\\72l(c); --d: URL(e); f: image-se\\74('g' 1x) } @\\69mport 'h.css';",
+				false
+			),
+			vec![
+				('V', "u\\72l(c)"),
+				('R', " URL(e)"),
+				('V', "image-se\\74('g' 1x)"),
+				('P', "'h.css'"),
+			]
+		);
 	}
 
 	#[test]

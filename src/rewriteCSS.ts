@@ -39,7 +39,7 @@ export function rewriteCSSValueURLs(
 	url: StompURL,
 	told?: StyleRewrittenBy,
 ): string {
-	if (told && value.includes('url(')) {
+	if (told && /url\(|\\/i.test(value)) {
 		const output = rewriteValueURLs(value, url);
 		told.by = 'wasm';
 		if (output !== null) return output;

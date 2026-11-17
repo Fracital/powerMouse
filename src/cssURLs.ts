@@ -59,7 +59,25 @@ function restoreValue(url: string, asWritten = false) {
 	return asWritten ? decoded : serializeCSSURL(decoded);
 }
 
-const RAW_URL = /url\(\s*(['"]?)(.*?)\1\s*\)/g;
+/**
+ * One letter of `url` as a page may spell it so that the browser still
+ * reads the name (CSS Syntax resolves a name's escapes before comparing
+ * it): the letter in either case, a backslash and the letter, or a
+ * backslash, up to four zeros and the letter's two hex digits in either
+ * case, with the one white space that may end that escape. rust/rwcss
+ * (`url_letter_at` in css.rs) matches the same.
+ */
+const letter = (char: string, hex: string) => {
+	const both = `${char}${char.toUpperCase()}`;
+	return String.raw`(?:[${both}]|\\[${both}]|\\0{0,4}${hex}(?:\r\n|[ \t\r\n\f])?)`;
+};
+/** a `url(` however it is spelled (`URL(`, `u\72l(`, `\55RL(`) */
+export const URL_NAME = `${letter('u', '[57]5')}${letter('r', '[57]2')}${letter('l', '[46][cC]')}\\(`;
+const RAW_URL = new RegExp(`${URL_NAME}\\s*(['"]?)(.*?)\\1\\s*\\)`, 'g');
+
+/** the page's url() token as it is kept after `#`: its name written `url` */
+const keptToken = (token: string) =>
+	`url(${token.slice(token.indexOf('(') + 1)}`;
 
 /**
  * The page's URL from a value that may already be routed: a routed url()
@@ -94,7 +112,7 @@ export function rewriteCSSValueURLs(value: string, url: StompURL): string {
 			const resolved = new StompURL(new URL(original, url.toString()), url);
 			// routed already: the page's token as it was kept, so text routed
 			// twice still reads back as the page wrote it
-			if (routed) match = routed.token;
+			match = routed ? routed.token : keptToken(match);
 			// keep the page's own token after '#', so reads can give it back
 			return `url(${JSON.stringify(
 				preserveValue(routeBinary(resolved), match),
