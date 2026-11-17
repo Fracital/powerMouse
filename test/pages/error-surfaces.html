@@ -190,6 +190,20 @@
 		await run('pushStateCrossOrigin', () =>
 			history.pushState(null, '', `${cross}pages/elsewhere.html`),
 		);
+		// the refusal quotes the URL resolved, and a long one elided
+		await run('pushStateProtocolRelative', () =>
+			history.pushState(
+				null,
+				'',
+				`${cross.replace(/^[a-z]+:/, '')}pages/else where.html?q#h`,
+			),
+		);
+		await run('pushStateMixedCase', () =>
+			history.replaceState(null, '', `${cross.toUpperCase()}Pages/X`),
+		);
+		await run('pushStateLong', () =>
+			history.pushState(null, '', `${cross}pages/${'x'.repeat(1100)}`),
+		);
 		await run('workerCrossOrigin', () => {
 			new Worker(`${cross}pages/error-surfaces-worker.js`).terminate();
 		});

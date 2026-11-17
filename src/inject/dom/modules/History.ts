@@ -26,6 +26,13 @@ interface NavigationLike {
 	};
 }
 
+// a URL as the browser quotes it in a message (KURL::ElidedString): one
+// over 1024 characters as its first 511, "..." and its last 510
+const elided = (value: string) =>
+	value.length <= 1024
+		? value
+		: `${value.slice(0, 511)}...${value.slice(-510)}`;
+
 /**
  * The page sees a history that is its own, as a top-level page would:
  * pushState/replaceState URLs are routed, `length` counts the frame's
@@ -76,7 +83,8 @@ export default class HistoryModule extends Module<DocumentClient> {
 					// the browser refuses a URL of another origin (every proxied URL
 					// looks same-origin to it, so the check is made here on the real
 					// origins), one that names other credentials than the document's
-					// and one that does not parse, with a SecurityError
+					// and one that does not parse, with a SecurityError quoting the
+					// URL resolved (the text itself when it does not parse)
 					const page = this.client.url.url;
 					// converted once, as the browser does, and with no call of the
 					// inject's own between the page's toString and its caller
@@ -96,7 +104,7 @@ export default class HistoryModule extends Module<DocumentClient> {
 					)
 						throw withStack(
 							new this.client.global.DOMException(
-								`Failed to execute '${name}' on 'History': A history state object with URL '${text}' cannot be created in a document with origin '${page.origin}' and URL '${page.href}'.`,
+								`Failed to execute '${name}' on 'History': A history state object with URL '${elided(url ? url.href : text)}' cannot be created in a document with origin '${page.origin}' and URL '${elided(page.href)}'.`,
 								'SecurityError',
 							),
 						);

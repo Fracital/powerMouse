@@ -104,7 +104,7 @@ const native = distinct(await measure(() => nativePage.mainFrame()));
 await nativePage.close();
 ok(
 	'natively: every case ran',
-	Object.keys(native.cases).length === 38,
+	Object.keys(native.cases).length === 41,
 	Object.keys(native.cases).join(','),
 );
 console.log(`natively: cases tried again: ${tries(native)}`);
