@@ -98,7 +98,7 @@
 	"foreign-sw": 7,
 	"fragment-context": 3,
 	"fragments": 30,
-	"frame-cost": 7,
+	"frame-cost": 18,
 	"frame-features": 3,
 	"frame-reuse": 12,
 	"frame-storage": 3,

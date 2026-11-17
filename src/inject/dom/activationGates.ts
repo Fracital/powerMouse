@@ -1,21 +1,78 @@
 // The gesture-gated calls of a document's realm, answering as with no
 // activation while the browser's is explained only by one the document got
-// through the proxy (./activation.ts, which makes them the first time one
-// reaches it). A deferred statement (./activationPart.ts): most documents
-// never get such an activation. Its top level reads no global (./deferredParts.ts).
-import ProxyModule from '../modules/Proxy';
+// through the proxy, and the walk of the page's frames an input event
+// makes (./activation.ts). A deferred statement (./activationPart.ts),
+// evaluated in the proxied top's realm, once a tab: a document under it
+// calls the top's functions with its own client, which make and answer
+// with its realm's objects (its DOMException, its Promise, its Proxy
+// module's wrappers, the wrappers' bodies of its own bundle), so they keep
+// nothing of the top's realm. Its top level reads no global
+// (./deferredParts.ts).
+import type ProxyModule from '../modules/Proxy';
 import { withStack } from '../nativeErrors';
-import { activationState, LIFESPAN, nativeLength } from './activation';
+import {
+	activationState,
+	LIFESPAN,
+	nativeLength,
+	type GateBody,
+} from './activation';
 import type DocumentClient from './Client';
 import { reachableClients } from './modules/Context';
 
 /** what one document's input walks the frames for at most, in a burst of input */
 const WALK_GAP = 100;
 
-/** makes `client`'s realm's gates (once: ./activation.ts markActivation) */
-export function activationGates(client: DocumentClient) {
+/**
+ * One gated member: `member` of the prototype of the realm's interface
+ * `owner` (of the window itself when `owner` is ''), refused (`refused`
+ * answers) when `when` holds; `kind` says what makes its wrapper ask: 1 a
+ * transient activation the browser has and the document has not, 2 likewise
+ * a sticky one, 0 any call. The interface is named, not read: a realm makes
+ * an interface the first time anything reads its name (about half a KB
+ * each)
+ */
+type Gate = (
+	owner: string,
+	member: string,
+	when: (that: any, args: any[]) => boolean,
+	refused: (that: any, args: any[]) => unknown,
+	own?: boolean,
+	kind?: number,
+) => void;
+
+/** the navigator member a page reaches the interface `owner`'s object by, if that is the only way */
+const navigatorMember = (owner: string) =>
+	owner === 'Clipboard'
+		? 'clipboard'
+		: owner === 'USB'
+			? 'usb'
+			: owner === 'HID'
+				? 'hid'
+				: owner === 'Serial'
+					? 'serial'
+					: owner === 'Bluetooth'
+						? 'bluetooth'
+						: '';
+
+/** the interface whose object navigator member `member` is */
+const interfaceOf = (member: string) =>
+	member === 'clipboard'
+		? 'Clipboard'
+		: member === 'usb'
+			? 'USB'
+			: member === 'hid'
+				? 'HID'
+				: member === 'serial'
+					? 'Serial'
+					: 'Bluetooth';
+
+/** where `owner`'s gated members are in `global` (the window itself for '') */
+const targetOf = (global: Record<string, any>, owner: string) =>
+	owner ? global[owner]?.prototype : global;
+
+/** the gated members of `client`'s realm, each handed to `gate` */
+function rules(client: DocumentClient, gate: Gate) {
 	const global = client.global as typeof globalThis & Record<string, any>;
-	const proxyModule = client.getModule(ProxyModule)!;
 	// from the proxy alone: a transient activation the browser has and the
 	// document has not natively, a sticky one likewise
 	const transient = () => (activationState(client) & 5) === 4;
@@ -27,356 +84,438 @@ export function activationGates(client: DocumentClient) {
 		withStack(new global.DOMException(message, name));
 	const failed = (member: string, owner: string, message: string) =>
 		`Failed to execute '${member}' on '${owner}': ${message}`;
-	/**
-	 * `owner.prototype[member]` refusing (`refused` answers) when `when`
-	 * holds, for a receiver that inherits from the prototype (anything else,
-	 * the prototype itself included, meets the native's own brand check
-	 * first, as natively)
-	 */
-	const gate = (
-		owner:
-			{ prototype?: Record<string, any> } | Record<string, any> | undefined,
-		member: string,
-		when: (that: any, args: any[]) => boolean,
-		refused: (that: any, args: any[]) => unknown,
-		own = false,
-	) => {
-		const target = own ? owner : (owner as { prototype?: object })?.prototype;
-		const native = (target as Record<string, any> | undefined)?.[member];
-		if (typeof native !== 'function') return;
-		const branded = (that: unknown) => {
-			if (own) return true;
-			try {
-				for (
-					let proto =
-							typeof that === 'object' && that !== null
-								? Reflect.getPrototypeOf(that)
-								: null,
-						depth = 0;
-					proto !== null && depth < 64;
-					proto = Reflect.getPrototypeOf(proto), depth++
-				)
-					if (proto === target) return true;
-			} catch (error) {
-				// a proxy's trap threw: the native's
-			}
-			return false;
-		};
-		(target as Record<string, any>)[member] = proxyModule.wrapFunction(
-			native,
-			(fn, that, args) =>
-				branded(that) && when(that, args)
-					? refused(that, args)
-					: Reflect.apply(fn, that, args),
+	// Element.requestFullscreen() (Chrome rejects with no activation as it
+	// does where a policy refuses it), and the prefixed names
+	gate('Element', 'requestFullscreen', transient, () =>
+		reject(withStack(new global.TypeError('Permissions check failed'))),
+	);
+	for (const name of ['webkitRequestFullscreen', 'webkitRequestFullScreen'])
+		gate('Element', name, transient, () => undefined);
+	// pointer lock (a sandbox without allow-pointer-lock refuses first)
+	gate(
+		'Element',
+		'requestPointerLock',
+		() =>
+			transient() &&
+			(client.sandboxFlags === null || client.allows('allow-pointer-lock')),
+		() =>
+			reject(
+				domException(
+					'A user gesture is required to request Pointer Lock.',
+					'NotAllowedError',
+				),
+			),
+	);
+	gate('PresentationRequest', 'start', transient, () =>
+		reject(
+			domException(
+				failed(
+					'start',
+					'PresentationRequest',
+					'PresentationRequest::start() requires user gesture.',
+				),
+				'InvalidAccessError',
+			),
+		),
+	);
+	// the file pickers: a sandboxed document's and a frame of another
+	// origin than its top's are refused before the activation is looked
+	// at (the browser sees one origin), then one with no activation
+	const opaque = client.sandboxedOpaque;
+	const crossFrame = () =>
+		client.proxiedTop !== global && client.origin !== client.topOrigin;
+	for (const name of [
+		'showOpenFilePicker',
+		'showSaveFilePicker',
+		'showDirectoryPicker',
+	])
+		gate(
+			'',
+			name,
+			() => opaque || crossFrame() || (activationState(client) & 1) === 0,
+			() =>
+				reject(
+					domException(
+						failed(
+							name,
+							'Window',
+							opaque
+								? "Sandboxed documents aren't allowed to show a file picker."
+								: crossFrame()
+									? "Cross origin sub frames aren't allowed to show a file picker."
+									: 'Must be handling a user gesture to show a file picker.',
+						),
+						'SecurityError',
+					),
+				),
+			true,
+			0,
 		);
+	gate(
+		'HTMLInputElement',
+		'showPicker',
+		(that: HTMLInputElement) => transient() && !that.disabled && !that.readOnly,
+		() => {
+			throw domException(
+				failed(
+					'showPicker',
+					'HTMLInputElement',
+					'HTMLInputElement::showPicker() requires user activation.',
+				),
+				'NotAllowedError',
+			);
+		},
+	);
+	// navigator.vibrate() needs a sticky activation
+	gate(
+		'Navigator',
+		'vibrate',
+		(_that, args) => args.length > 0 && sticky(),
+		() => false,
+		false,
+		2,
+	);
+	gate('Navigator', 'share', transient, () =>
+		reject(
+			domException(
+				failed(
+					'share',
+					'Navigator',
+					'Must be handling a user gesture to perform a share request.',
+				),
+				'NotAllowedError',
+			),
+		),
+	);
+	gate('EyeDropper', 'open', transient, () =>
+		reject(
+			domException(
+				failed(
+					'open',
+					'EyeDropper',
+					'EyeDropper::open() requires user gesture.',
+				),
+				'NotAllowedError',
+			),
+		),
+	);
+	// copying and cutting by a command need a transient activation
+	gate(
+		'Document',
+		'execCommand',
+		(_that, args) => /^(copy|cut)$/i.test(String(args[0])) && transient(),
+		() => false,
+	);
+	for (const name of ['writeText', 'write'])
+		gate(
+			'Clipboard',
+			name,
+			(_that, args) =>
+				args.length > 0 && transient() && global.document.hasFocus(),
+			() =>
+				reject(
+					domException(
+						failed(name, 'Clipboard', 'Write permission denied.'),
+						'NotAllowedError',
+					),
+				),
+		);
+	// a popup the browser opens: its blocker refuses one with no
+	// activation. Not a URL the host opens as a tab (DOMHooks' open):
+	// that is the host's to decide
+	gate(
+		'',
+		'open',
+		(_that, args) => {
+			// an activation an input event elsewhere gave (a document that
+			// starts with one, after a typed URL or a link of another site,
+			// keeps the browser's popup decision: its blocker cannot be
+			// asked without an activation, and with no blocker every popup
+			// opens natively)
+			if (
+				!transient() ||
+				Date.now() - (client.activation?.input ?? -Infinity) >= LIFESPAN
+			)
+				return false;
+			const name = args[1] === undefined ? '' : String(args[1]);
+			// a window or frame named (an existing one natively needs no
+			// activation), and the targets of the document's own: the
+			// browser's
+			if (name !== '' && name.toLowerCase() !== '_blank') return false;
+			let routable = false;
+			try {
+				routable =
+					args[0] !== undefined &&
+					String(args[0]) !== '' &&
+					/^https?:$/.test(
+						client.encodingParse(String(args[0]), client.baseURL.toString())
+							.protocol,
+					);
+			} catch (error) {
+				// no URL: the browser's
+			}
+			const tab =
+				client.config.openTab &&
+				routable &&
+				(client.sandboxFlags === null ||
+					(client.allows('allow-popups') &&
+						client.allows('allow-popups-to-escape-sandbox')));
+			return !tab;
+		},
+		() => null,
+		true,
+	);
+	// the device choosers
+	// (a missing argument is the bindings' TypeError first)
+	for (const [owner, name, label, arity] of [
+		['USB', 'requestDevice', 'USB', 1],
+		['HID', 'requestDevice', 'HID', 1],
+		['Serial', 'requestPort', 'Serial', 0],
+		['Bluetooth', 'requestDevice', 'Bluetooth', 0],
+	] as const)
+		gate(
+			owner,
+			name,
+			(_that, args) => args.length >= arity && transient(),
+			() =>
+				reject(
+					domException(
+						failed(
+							name,
+							label,
+							'Must be handling a user gesture to show a permission request.',
+						),
+						'SecurityError',
+					),
+				),
+		);
+	// picture-in-picture: a video without metadata is refused first
+	gate(
+		'HTMLVideoElement',
+		'requestPictureInPicture',
+		(that: HTMLVideoElement) =>
+			transient() &&
+			that.readyState !== 0 &&
+			!that.hasAttribute('disablepictureinpicture'),
+		() =>
+			reject(
+				domException(
+					failed(
+						'requestPictureInPicture',
+						'HTMLVideoElement',
+						"Must be handling a user gesture if there isn't already an element in Picture-in-Picture.",
+					),
+					'NotAllowedError',
+				),
+			),
+	);
+	gate(
+		'DocumentPictureInPicture',
+		'requestWindow',
+		() => transient() && client.proxiedTop === global,
+		() =>
+			reject(
+				domException(
+					failed(
+						'requestWindow',
+						'DocumentPictureInPicture',
+						'Document PiP requires user activation',
+					),
+					'NotAllowedError',
+				),
+			),
+	);
+	// autoplay with sound: natively the document, or one above it that
+	// it may play for (of its origin, or framed with allow="autoplay"),
+	// must have had an activation
+	const playsFor = () => {
+		for (
+			let current: DocumentClient | undefined = client, depth = 0;
+			current && depth < 64;
+			depth++
+		) {
+			if (activationState(current) & 2) return true;
+			let element: Element | null = null;
+			let parent: DocumentClient | undefined;
+			try {
+				element = current.nativeFrameElement();
+				parent = (current.parent as Record<string, any>)[
+					client.names.client
+				] as DocumentClient | undefined;
+			} catch (error) {
+				// a parent of another real origin: the host's
+			}
+			if (!element || !parent || parent === current) return false;
+			if (
+				!/\bautoplay\b/i.test(element.getAttribute('allow') ?? '') &&
+				(current.sandboxedOpaque ||
+					parent.sandboxedOpaque ||
+					parent.origin !== current.origin)
+			)
+				return false;
+			current = parent;
+		}
+		return false;
+	};
+	gate(
+		'HTMLMediaElement',
+		'play',
+		(that: HTMLMediaElement) => !that.muted && sticky() && !playsFor(),
+		() =>
+			reject(
+				domException(
+					"play() failed because the user didn't interact with the document first. https://goo.gl/xX8pDD",
+					'NotAllowedError',
+				),
+			),
+		false,
+		2,
+	);
+}
+
+/** whether `that` inherits from `target` (the native's own brand check answers anything else) */
+function branded(that: unknown, target: object) {
+	try {
+		for (
+			let proto =
+					typeof that === 'object' && that !== null
+						? Reflect.getPrototypeOf(that)
+						: null,
+				depth = 0;
+			proto !== null && depth < 64;
+			proto = Reflect.getPrototypeOf(proto), depth++
+		)
+			if (proto === target) return true;
+	} catch (error) {
+		// a proxy's trap threw: the native's
+	}
+	return false;
+}
+
+/**
+ * Hooks `client`'s realm's gated members (once: ./activation.ts
+ * markActivation) with `proxyModule`'s wrappers (the realm's) whose bodies
+ * `body` makes in the realm: each calls the native unless the activation
+ * its kind asks about is the proxy's alone, and then `gated`. A member of
+ * an interface a page reaches only by a navigator member (the clipboard,
+ * the device APIs) it was not handed yet is hooked when it is: the
+ * navigator member's getter is, and the object's prototype's members then
+ */
+export function activationGates(
+	client: DocumentClient,
+	proxyModule: ProxyModule,
+	bodies: GateBody[],
+) {
+	const global = client.global as typeof globalThis & Record<string, any>;
+	const note = client.activation;
+	if (note) note.wrap = [proxyModule, bodies];
+	const wrap = (target: any, member: string, kind: number) => {
+		const native = target?.[member];
+		if (typeof native === 'function')
+			target[member] = proxyModule.wrapFunction(native, bodies[kind]);
 	};
 	try {
 		// navigator.userActivation answers as natively
 		const proto = global.UserActivation?.prototype;
-		for (const [name, bit] of [
-			['isActive', 1],
-			['hasBeenActive', 2],
-		] as const) {
+		for (const name of ['isActive', 'hasBeenActive']) {
 			const descriptor = proto && Reflect.getOwnPropertyDescriptor(proto, name);
 			if (!descriptor?.get) continue;
 			Reflect.defineProperty(proto, name, {
 				...descriptor,
-				get: proxyModule.wrapFunction(descriptor.get, (fn, that, args) => {
-					const value = Reflect.apply(fn, that, args);
-					return value === true &&
-						that === client.historyActivation?.natives?.[2]
-						? (activationState(client) & bit) !== 0
-						: value;
-				}),
+				get: proxyModule.wrapFunction(
+					descriptor.get,
+					bodies[name === 'isActive' ? 1 : 2],
+				),
 			});
 		}
-		// Element.requestFullscreen() (Chrome rejects with no activation as it
-		// does where a policy refuses it), and the prefixed names
-		gate(global.Element, 'requestFullscreen', transient, () =>
-			reject(withStack(new global.TypeError('Permissions check failed'))),
-		);
-		for (const name of ['webkitRequestFullscreen', 'webkitRequestFullScreen'])
-			gate(global.Element, name, transient, () => undefined);
-		// pointer lock (a sandbox without allow-pointer-lock refuses first)
-		gate(
-			global.Element,
-			'requestPointerLock',
-			() =>
-				transient() &&
-				(client.sandboxFlags === null || client.allows('allow-pointer-lock')),
-			() =>
-				reject(
-					domException(
-						'A user gesture is required to request Pointer Lock.',
-						'NotAllowedError',
-					),
-				),
-		);
-		gate(global.PresentationRequest, 'start', transient, () =>
-			reject(
-				domException(
-					failed(
-						'start',
-						'PresentationRequest',
-						'PresentationRequest::start() requires user gesture.',
-					),
-					'InvalidAccessError',
-				),
-			),
-		);
-		// the file pickers: a sandboxed document's and a frame of another
-		// origin than its top's are refused before the activation is looked
-		// at (the browser sees one origin), then one with no activation
-		const opaque = client.sandboxedOpaque;
-		const crossFrame = () =>
-			client.proxiedTop !== global && client.origin !== client.topOrigin;
-		for (const name of [
-			'showOpenFilePicker',
-			'showSaveFilePicker',
-			'showDirectoryPicker',
-		])
-			gate(
-				global,
-				name,
-				() => opaque || crossFrame() || (activationState(client) & 1) === 0,
-				() =>
-					reject(
-						domException(
-							failed(
-								name,
-								'Window',
-								opaque
-									? "Sandboxed documents aren't allowed to show a file picker."
-									: crossFrame()
-										? "Cross origin sub frames aren't allowed to show a file picker."
-										: 'Must be handling a user gesture to show a file picker.',
-							),
-							'SecurityError',
-						),
-					),
-				true,
-			);
-		gate(
-			global.HTMLInputElement,
-			'showPicker',
-			(that: HTMLInputElement) =>
-				transient() && !that.disabled && !that.readOnly,
-			() => {
-				throw domException(
-					failed(
-						'showPicker',
-						'HTMLInputElement',
-						'HTMLInputElement::showPicker() requires user activation.',
-					),
-					'NotAllowedError',
-				);
-			},
-		);
-		// navigator.vibrate() needs a sticky activation
-		gate(
-			global.Navigator,
-			'vibrate',
-			(_that, args) => args.length > 0 && sticky(),
-			() => false,
-		);
-		gate(global.Navigator, 'share', transient, () =>
-			reject(
-				domException(
-					failed(
-						'share',
-						'Navigator',
-						'Must be handling a user gesture to perform a share request.',
-					),
-					'NotAllowedError',
-				),
-			),
-		);
-		if (typeof global.EyeDropper === 'function')
-			gate(global.EyeDropper, 'open', transient, () =>
-				reject(
-					domException(
-						failed(
-							'open',
-							'EyeDropper',
-							'EyeDropper::open() requires user gesture.',
-						),
-						'NotAllowedError',
-					),
-				),
-			);
-		// copying and cutting by a command need a transient activation
-		gate(
-			global.Document,
-			'execCommand',
-			(_that, args) => /^(copy|cut)$/i.test(String(args[0])) && transient(),
-			() => false,
-		);
-		for (const name of ['writeText', 'write'])
-			gate(
-				global.Clipboard,
-				name,
-				(_that, args) =>
-					args.length > 0 && transient() && global.document.hasFocus(),
-				() =>
-					reject(
-						domException(
-							failed(name, 'Clipboard', 'Write permission denied.'),
-							'NotAllowedError',
-						),
-					),
-			);
-		// a popup the browser opens: its blocker refuses one with no
-		// activation. Not a URL the host opens as a tab (DOMHooks' open):
-		// that is the host's to decide
-		gate(
-			global,
-			'open',
-			(_that, args) => {
-				// an activation an input event elsewhere gave (a document that
-				// starts with one, after a typed URL or a link of another site,
-				// keeps the browser's popup decision: its blocker cannot be
-				// asked without an activation, and with no blocker every popup
-				// opens natively)
-				if (
-					!transient() ||
-					Date.now() - (client.activation?.input ?? -Infinity) >= LIFESPAN
-				)
-					return false;
-				const name = args[1] === undefined ? '' : String(args[1]);
-				// a window or frame named (an existing one natively needs no
-				// activation), and the targets of the document's own: the
-				// browser's
-				if (name !== '' && name.toLowerCase() !== '_blank') return false;
-				let routable = false;
-				try {
-					routable =
-						args[0] !== undefined &&
-						String(args[0]) !== '' &&
-						/^https?:$/.test(
-							client.encodingParse(String(args[0]), client.baseURL.toString())
-								.protocol,
-						);
-				} catch (error) {
-					// no URL: the browser's
-				}
-				const tab =
-					client.config.openTab &&
-					routable &&
-					(client.sandboxFlags === null ||
-						(client.allows('allow-popups') &&
-							client.allows('allow-popups-to-escape-sandbox')));
-				return !tab;
-			},
-			() => null,
-			true,
-		);
-		// the device choosers
-		// (a missing argument is the bindings' TypeError first)
-		for (const [owner, name, label, arity] of [
-			[global.USB, 'requestDevice', 'USB', 1],
-			[global.HID, 'requestDevice', 'HID', 1],
-			[global.Serial, 'requestPort', 'Serial', 0],
-			[global.Bluetooth, 'requestDevice', 'Bluetooth', 0],
-		] as const)
-			gate(
-				owner,
-				name,
-				(_that, args) => args.length >= arity && transient(),
-				() =>
-					reject(
-						domException(
-							failed(
-								name,
-								label,
-								'Must be handling a user gesture to show a permission request.',
-							),
-							'SecurityError',
-						),
-					),
-			);
-		// picture-in-picture: a video without metadata is refused first
-		gate(
-			global.HTMLVideoElement,
-			'requestPictureInPicture',
-			(that: HTMLVideoElement) =>
-				transient() &&
-				that.readyState !== 0 &&
-				!that.hasAttribute('disablepictureinpicture'),
-			() =>
-				reject(
-					domException(
-						failed(
-							'requestPictureInPicture',
-							'HTMLVideoElement',
-							"Must be handling a user gesture if there isn't already an element in Picture-in-Picture.",
-						),
-						'NotAllowedError',
-					),
-				),
-		);
-		gate(
-			global.DocumentPictureInPicture,
-			'requestWindow',
-			() => transient() && client.proxiedTop === global,
-			() =>
-				reject(
-					domException(
-						failed(
-							'requestWindow',
-							'DocumentPictureInPicture',
-							'Document PiP requires user activation',
-						),
-						'NotAllowedError',
-					),
-				),
-		);
-		// autoplay with sound: natively the document, or one above it that
-		// it may play for (of its origin, or framed with allow="autoplay"),
-		// must have had an activation
-		const playsFor = () => {
-			for (
-				let current: DocumentClient | undefined = client, depth = 0;
-				current && depth < 64;
-				depth++
-			) {
-				if (activationState(current) & 2) return true;
-				let element: Element | null = null;
-				let parent: DocumentClient | undefined;
-				try {
-					element = current.nativeFrameElement();
-					parent = (current.parent as Record<string, any>)[
-						client.names.client
-					] as DocumentClient | undefined;
-				} catch (error) {
-					// a parent of another real origin: the host's
-				}
-				if (!element || !parent || parent === current) return false;
-				if (
-					!/\bautoplay\b/i.test(element.getAttribute('allow') ?? '') &&
-					(current.sandboxedOpaque ||
-						parent.sandboxedOpaque ||
-						parent.origin !== current.origin)
-				)
-					return false;
-				current = parent;
+		const handed = client.permissionHooks?.done;
+		const navigator = global.Navigator?.prototype;
+		const reaching: string[] = [];
+		rules(client, (owner, member, _when, _refused, _own, kind = 1) => {
+			// a frame's Document Picture-in-Picture request is the browser's
+			// to refuse (only a top opens one)
+			if (owner === 'DocumentPictureInPicture' && client.proxiedTop !== global)
+				return;
+			const via = navigatorMember(owner);
+			if (via && !handed?.includes(via)) {
+				if (reaching.includes(via)) return;
+				reaching.push(via);
+				const descriptor =
+					navigator && Reflect.getOwnPropertyDescriptor(navigator, via);
+				if (descriptor?.get)
+					Reflect.defineProperty(navigator, via, {
+						...descriptor,
+						get: proxyModule.wrapFunction(descriptor.get, bodies[0]),
+					});
+				return;
 			}
-			return false;
-		};
-		gate(
-			global.HTMLMediaElement,
-			'play',
-			(that: HTMLMediaElement) => !that.muted && sticky() && !playsFor(),
-			() =>
-				reject(
-					domException(
-						"play() failed because the user didn't interact with the document first. https://goo.gl/xX8pDD",
-						'NotAllowedError',
-					),
-				),
-		);
+			wrap(targetOf(global, owner), member, kind);
+		});
 	} catch (error) {
 		// a realm going away
 	}
+}
+
+/** the members of the interface of `object`, navigator member `via` of `client`'s page, hooked once */
+function reached(client: DocumentClient, via: string, object: object) {
+	const note = client.activation;
+	if (!note?.wrap || note.reached?.includes(via)) return;
+	(note.reached ??= []).push(via);
+	const [proxyModule, bodies] = note.wrap;
+	const owner = interfaceOf(via);
+	const target = Reflect.getPrototypeOf(object) as Record<string, any> | null;
+	rules(client, (name, member, _when, _refused, _own, kind = 1) => {
+		if (name !== owner || !target) return;
+		const native = target[member];
+		if (typeof native === 'function')
+			target[member] = proxyModule.wrapFunction(native, bodies[kind]);
+	});
+}
+
+/**
+ * A call of a gated member (`fn` its native, told by its name and the
+ * receiver's interface) in `client`'s realm while the activation it needs
+ * is the proxy's alone: Chrome's refusal where its rule says so, else the
+ * native's answer (and for a navigator member's getter, the object, its
+ * interface's members hooked)
+ */
+export function gated(
+	client: DocumentClient,
+	fn: Function,
+	that: unknown,
+	args: unknown[],
+) {
+	const name = String(Reflect.getOwnPropertyDescriptor(fn, 'name')?.value);
+	if (name.startsWith('get ')) {
+		const value = Reflect.apply(fn, that, args) as unknown;
+		const member = name.slice(4);
+		if (member === 'isActive' || member === 'hasBeenActive')
+			return value === true && that === client.historyActivation?.natives?.[2]
+				? (activationState(client) & (member === 'isActive' ? 1 : 2)) !== 0
+				: value;
+		try {
+			if (typeof value === 'object' && value !== null)
+				reached(client, member, value);
+		} catch (error) {
+			// a realm going away
+		}
+		return value;
+	}
+	const global = client.global as typeof globalThis & Record<string, any>;
+	// a call on the window (or with none) is a window member's
+	const onWindow = that === undefined || that === null || that === global;
+	let refusal: ((that: any, args: any[]) => unknown) | null = null;
+	let found = false;
+	rules(client, (owner, member, when, refused) => {
+		if (found || member !== name || (owner === '') !== onWindow) return;
+		const target = targetOf(global, owner);
+		if (!target || (owner && !branded(that, target))) return;
+		found = true;
+		if (when(that, args)) refusal = refused;
+	});
+	return refusal
+		? (refusal as (that: unknown, args: unknown[]) => unknown)(that, args)
+		: Reflect.apply(fn, that, args);
 }
 
 /**

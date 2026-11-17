@@ -6,6 +6,15 @@
 // `frames` is the cost of one frame. Same-origin mode puts every proxied
 // frame in the host's renderer, so a page with hundreds of such frames
 // (imgur keeps about a thousand) pays this hundreds of times.
+//
+// Nothing here evaluates with a user gesture: Playwright's evaluate gives
+// one (Runtime.callFunctionOn with userGesture), and through the proxy it
+// reaches every proxied frame of the page, so the frames the page appended
+// started with an activation no page load gives them. The page is driven
+// by Runtime.evaluate in each frame's main world without one (pageEval).
+// `click` measures frames a real click in the top reached: 'before', frames
+// the page appends right after it; 'refresh', frames that load their next
+// document right after it (an ad frame's next ad).
 import { readFileSync } from 'node:fs';
 import {
 	FIXTURE,
@@ -71,12 +80,105 @@ async function durations(tab) {
 	return { read, stop: () => cdp.detach().catch(() => {}) };
 }
 
+/**
+ * Evaluation in the frames of `tab` without a user gesture: `run(frame, fn,
+ * arg)` calls `fn(arg)` in `frame`'s main world and answers its value (by
+ * value), `children(frame)` lists its child frames' CDP ids, `runIn(id, fn,
+ * arg)` the same by id; `stop()` ends it. Frames are matched to the
+ * DevTools protocol's by URL.
+ */
+async function pageEval(tab) {
+	const cdp = await tab.context().newCDPSession(tab);
+	const contexts = new Map();
+	cdp.on('Runtime.executionContextCreated', ({ context }) => {
+		if (context.auxData?.isDefault)
+			contexts.set(context.auxData.frameId, context.id);
+	});
+	cdp.on('Runtime.executionContextDestroyed', ({ executionContextId }) => {
+		for (const [frameId, id] of contexts)
+			if (id === executionContextId) contexts.delete(frameId);
+	});
+	await cdp.send('Runtime.enable');
+	const tree = async () => (await cdp.send('Page.getFrameTree')).frameTree;
+	const find = (node, url) => {
+		if (node.frame.url === url) return node;
+		for (const child of node.childFrames ?? []) {
+			const found = find(child, url);
+			if (found) return found;
+		}
+		return null;
+	};
+	const runIn = async (frameId, fn, arg) => {
+		const contextId = contexts.get(frameId);
+		if (contextId === undefined) return undefined;
+		const { result, exceptionDetails } = await cdp.send('Runtime.evaluate', {
+			expression: `(${fn})(${JSON.stringify(arg)})`,
+			contextId,
+			returnByValue: true,
+			awaitPromise: true,
+			userGesture: false,
+		});
+		if (exceptionDetails) throw new Error(exceptionDetails.text);
+		return result.value;
+	};
+	const idOf = async (frame) => find(await tree(), frame.url())?.frame.id;
+	return {
+		run: async (frame, fn, arg) => runIn(await idOf(frame), fn, arg),
+		runIn,
+		children: async (frame) =>
+			(find(await tree(), frame.url())?.childFrames ?? []).map(
+				(child) => child.frame.id,
+			),
+		stop: () => cdp.detach().catch(() => {}),
+	};
+}
+
+/**
+ * Wait until every child of `frame` ran its script (`count` of them; with
+ * `since`, a document's whose script ran after that time, ms since the
+ * epoch): their times
+ */
+async function waitForChildren(evaluator, frame, count, since = 0) {
+	let times = [];
+	let ranAt = [];
+	for (let i = 0; i < 240; i++) {
+		const children = await evaluator.children(frame);
+		const ran = (
+			await Promise.all(
+				children.map((id) =>
+					Promise.race([
+						evaluator
+							.runIn(
+								id,
+								(since) =>
+									typeof window.__ranAt === 'number' &&
+									performance.timeOrigin + window.__ranAt > since
+										? [window.__ranAt, performance.timeOrigin + window.__ranAt]
+										: undefined,
+								since,
+							)
+							.catch(() => undefined),
+						sleep(2000),
+					]),
+				),
+			)
+		).filter((time) => Array.isArray(time));
+		times = ran.map(([time]) => time);
+		ranAt = ran.map(([, at]) => at);
+		if (times.length >= count) break;
+		await sleep(250);
+	}
+	return { times, ranAt };
+}
+
 /** append `count` children of `base` to `frame`, wait until each ran its script */
-async function addFrames(tab, frame, base, count) {
+async function addFrames(tab, frame, base, count, evaluator, act = () => {}) {
 	const started = Date.now();
 	const spent = await durations(tab);
 	const before = await spent.read();
-	const appended = await frame.evaluate(
+	await act();
+	const appended = await evaluator.run(
+		frame,
 		([count, src]) => {
 			const at = performance.timeOrigin + performance.now();
 			for (let i = 0; i < count; i++) {
@@ -90,31 +192,7 @@ async function addFrames(tab, frame, base, count) {
 		},
 		[count, new URL(page, base).href],
 	);
-	let times = [];
-	let ranAt = [];
-	for (let i = 0; i < 240; i++) {
-		const children = tab.frames().filter((f) => f.parentFrame() === frame);
-		const ran = (
-			await Promise.all(
-				children.map((child) =>
-					Promise.race([
-						child
-							.evaluate(() =>
-								typeof window.__ranAt === 'number'
-									? [window.__ranAt, performance.timeOrigin + window.__ranAt]
-									: undefined,
-							)
-							.catch(() => undefined),
-						sleep(2000),
-					]),
-				),
-			)
-		).filter((time) => Array.isArray(time));
-		times = ran.map(([time]) => time);
-		ranAt = ran.map(([, at]) => at);
-		if (times.length >= count) break;
-		await sleep(250);
-	}
+	const { times, ranAt } = await waitForChildren(evaluator, frame, count);
 	const after = await spent.read();
 	await spent.stop();
 	times.sort((a, b) => a - b);
@@ -136,8 +214,17 @@ async function addFrames(tab, frame, base, count) {
  * long all of them took (`loadMs`, as this process saw it; `wallMs`, from
  * the page appending them to the last one's script) and the script and
  * task time the page's main thread spent meanwhile (`scriptMs`, `taskMs`).
+ * `click` (see the top): 'before', the children appended right after a
+ * real click in the top; 'refresh', the children, once loaded, loading
+ * their next document right after one (the heap is then the next
+ * documents', `loaded` how many loaded theirs).
  */
-export async function measureFrames({ proxied, base = FIXTURE, frames }) {
+export async function measureFrames({
+	proxied,
+	base = FIXTURE,
+	frames,
+	click = null,
+}) {
 	const browser = await launch([
 		// natively a frame of another site runs in a process of its own; the
 		// proxy's are all same-origin, so compare in one renderer
@@ -157,19 +244,59 @@ export async function measureFrames({ proxied, base = FIXTURE, frames }) {
 					.frames()
 					.findLast((f) => !before.has(f) && ROUTE.test(f.url()));
 			}
-			await frame?.waitForFunction(() => typeof window.__ranAt === 'number', {
-				timeout: 30000,
-			});
 		} else {
 			tab = await browser.newPage();
 			await tab.goto(new URL(`${page}?top`, FIXTURE).href);
 			frame = tab.mainFrame();
 		}
+		const evaluator = await pageEval(tab);
+		for (
+			let i = 0;
+			i < 120 &&
+			frame &&
+			!(await evaluator
+				.run(frame, () => typeof window.__ranAt === 'number')
+				.catch(() => false));
+			i++
+		)
+			await sleep(250);
+		// a real click in the top, where no frame is
+		const clickTop = async () => {
+			const box = proxied
+				? await (await frame.frameElement()).boundingBox()
+				: { x: 0, y: 0, ...tab.viewportSize() };
+			await tab.mouse.click(box.x + box.width - 5, box.y + box.height - 5);
+		};
 		await sleep(1000);
 		const empty = await sample(browser, tab);
-		const load = await addFrames(tab, frame, base, frames);
+		let load = await addFrames(
+			tab,
+			frame,
+			base,
+			frames,
+			evaluator,
+			click === 'before' ? clickTop : undefined,
+		);
+		if (click === 'refresh') {
+			await sleep(1000);
+			await clickTop();
+			const since = await evaluator.run(
+				frame,
+				(src) => {
+					const at = performance.timeOrigin + performance.now();
+					const children = document.querySelectorAll('iframe');
+					for (let i = 0; i < children.length; i++)
+						children[i].src = `${src}?i=${i}&next`;
+					return at;
+				},
+				new URL(page, base).href,
+			);
+			const { times } = await waitForChildren(evaluator, frame, frames, since);
+			load = { ...load, loaded: times.length };
+		}
 		await sleep(1000);
 		const full = await sample(browser, tab);
+		await evaluator.stop();
 		return {
 			...load,
 			heapKB: ((full.heap - empty.heap) * 1024) / frames,

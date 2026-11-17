@@ -14,8 +14,9 @@ frame of 150 links, a frame that loads a 190 KB script by URL).
 ## Where the bytes go
 
 - **The inject, per realm.** Each frame evaluates the document inject and
-  runs its hooks in its own realm: about 1150 KB of JS heap per frame
-  (frame-cost gates it, measure-frame-memory measures it), where a native
+  runs its hooks in its own realm: about 1,075 KB of JS heap per frame
+  (measure-frame-memory, 60 frames; frame-cost gates it, about 1,120 KB
+  with its 20, which share the page's one-off costs less), where a native
   frame of the same page has its own script's heap only. It is the largest
   share for a small frame, and it is live, not garbage.
 - **The markup, three times.** loadHTML parses the page's markup
@@ -75,6 +76,18 @@ now.
   too. Releasing buffers early (`transfer(0)`) does the same. Judge a
   change by the renderer's total, without forced collections, never by
   the one figure it was meant to move.
+- **Measure without the harness in the frames.** Playwright's
+  `frame.evaluate` sets up what it evaluates with in that frame's realm,
+  about 33 KB of heap a frame natively and through the proxy alike, and
+  evaluates with a user gesture, which through the proxy reaches every
+  proxied frame of the page (all are of one real origin), so frames the
+  page appends then start with an activation no page load gives them,
+  and a frame of another site hooks its gated calls at its start. Until
+  2026-11-17 test/frame-memory.mjs polled every frame that way: its
+  numbers held the 33 KB, and its frames of another site the hooks. It
+  now evaluates with the DevTools protocol's Runtime.evaluate in each
+  frame's main world, without a gesture, and measures frames a real click
+  reached as cases of their own (`click`).
 - **Prefer a deterministic count to a heap size.** Committed Oilpan and
   partition sizes swing by tens of KB per frame from run to run. A node
   count across one frame's load after a full collection

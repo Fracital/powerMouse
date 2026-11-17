@@ -892,20 +892,31 @@ Filled in commit by commit; see the CHANGELOG for each.
   (`src/inject/dom/activation.ts`) and notes in each document whether the
   activation is natively its own; the controller notes the host's input
   as foreign to all (`src/controller/hostActivation.ts`). A document a
-  foreign activation reached gets, in its realm and only then (no cost to
-  the others), gates on `navigator.userActivation`, fullscreen, pointer
-  lock, `PresentationRequest.start`, the file pickers, `showPicker`,
-  `vibrate`, `navigator.share`, `EyeDropper.open`, `execCommand` copy and
-  cut, the Clipboard writes, a popup's `window.open`, the device choosers,
+  foreign activation reached (from an input event elsewhere, or at its
+  start: an ad frame that loads its next ad right after a click in the
+  top) gets, in its realm and only then, wrappers on
+  `navigator.userActivation`, fullscreen, pointer lock,
+  `PresentationRequest.start`, the file pickers, `showPicker`, `vibrate`,
+  `navigator.share`, `EyeDropper.open`, `execCommand` copy and cut, the
+  Clipboard writes, a popup's `window.open`, the device choosers,
   picture-in-picture and media `play()`, each refusing with Chrome's error
   while the browser's activation is explained only by the foreign one;
-  the browser's own stays necessary. A document that starts with a sticky
-  activation carried from a document of another origin (a link of another
-  site, a URL typed in the address bar) drops it. A popup's `window.open`
-  is refused only for an activation an input event elsewhere gave: one a
-  document starts with keeps the browser's decision (its popup blocker
-  cannot be asked without an activation, and with the blocker off, as
-  Playwright runs Chrome, every popup opens natively). Left: a consumed
+  the browser's own stays necessary. The rules and the frame walk are a
+  deferred statement the proxied top evaluates once for the documents
+  under it, so a hooked frame keeps only its wrappers, and the Clipboard
+  and the device choosers are hooked when the page reaches them through
+  `navigator` (the Permissions module's getters), not made by the hook.
+  measure-frame-memory, 60 frames, Chrome 157, a frame of another site
+  that loads its next document right after a click in the top: 1,102.6 KB
+  with the statement evaluated in each, 1,084.7 KB now, 1,079.5 KB before
+  the gates; a frame no activation reached, 1,075.8 KB now, 1,073.6 KB
+  before. A document that starts with a sticky activation carried from a
+  document of another origin (a link of another site, a URL typed in the
+  address bar) drops it. A popup's `window.open` is refused only for an
+  activation an input event elsewhere gave: one a document starts with
+  keeps the browser's decision (its popup blocker cannot be asked without
+  an activation, and with the blocker off, as Playwright runs Chrome,
+  every popup opens natively). Left: a consumed
   activation given back through the proxy within five seconds of one of
   the document's own; an evaluation's activation (no input event) is the
   browser's; the autoplay attribute, a file input's `click()`,

@@ -2,7 +2,7 @@
 // measurement, and CI leaves measurements out). Each frame of a page
 // evaluates the document inject and runs its hooks in its own realm, and
 // ad-heavy pages keep hundreds of frames in one renderer, so a module that
-// adds a little to each frame adds it hundreds of times. Three checks:
+// adds a little to each frame adds it hundreds of times. Four checks:
 //
 // - the size of dist/injectDocument.js, against a budget: 418 KB as built,
 //   with the rewriter library a file of its own (dist/rewriterLib.js: the
@@ -78,6 +78,26 @@
 //   60 in measure-frame-memory about 1,102). The ceiling, 1,172 KB, keeps
 //   the same-site one's margin: one interface made in every such frame (the
 //   SVG element interfaces, +33 KB) goes past it, and so does that 26 KB.
+// - the same for FRAMES frames of another site that load their next
+//   document right after a real click in the top (test/frame-memory.mjs
+//   `click: 'refresh'`), as an ad frame loads its next ad: through the
+//   proxy the click reaches every frame, and one of another site starts
+//   with an activation only the proxy gave it, so it hooks its gated calls
+//   at its start (src/inject/dom/activation.ts). This is where that 26 KB
+//   was (the gates' statement evaluated in each such frame): 1,151.7 to
+//   1,151.8 KB at 460d3f07, 1,126.2 to 1,126.5 KB before the gates, and
+//   1,133.8 KB (two runs) with the statement the proxied top evaluates
+//   once. The ceiling, 1,149 KB, keeps the others' margin (about 15 KB):
+//   that regression and an interface in every frame go past it.
+//
+// None of these evaluates with a user gesture or with Playwright in the
+// frames (test/frame-memory.mjs says why). Until 2026-11-17 the fixture
+// did both: every number above until then held about 36 KB a frame of
+// Playwright's (20 frames: 1,155.3 KB same site and 1,157.6 KB another
+// site then, 1,118.9 and 1,120.9 KB without, at the same build, Chrome
+// 157), so the two ceilings above came down by as much, to 1,134 KB and
+// 1,136 KB, keeping their margins: the SVG element interfaces (+33 KB) go
+// past both.
 import { statSync } from 'node:fs';
 import { measureFrames } from '../frame-memory.mjs';
 import { done, FIXTURE, ok } from '../lib.mjs';
@@ -85,8 +105,9 @@ import { done, FIXTURE, ok } from '../lib.mjs';
 const BUNDLE = new URL('../../dist/injectDocument.js', import.meta.url);
 const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 500;
 const FRAMES = Number(process.env.FRAMES) || 20;
-const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1170;
-const OTHER_LIMIT_KB = Number(process.env.FRAME_HEAP_OTHER_LIMIT_KB) || 1172;
+const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1134;
+const OTHER_LIMIT_KB = Number(process.env.FRAME_HEAP_OTHER_LIMIT_KB) || 1136;
+const CLICK_LIMIT_KB = Number(process.env.FRAME_HEAP_CLICK_LIMIT_KB) || 1149;
 
 const bundleKB = statSync(BUNDLE).size / 1024;
 ok(
@@ -107,9 +128,10 @@ ok(
 	`${result.heapKB.toFixed(0)} KB, ${result.rssKB.toFixed(0)} KB RSS, ${(result.scriptMs / FRAMES).toFixed(1)} ms of script (${FRAMES} frames)`,
 );
 
+const otherSite = `http://localhost:${new URL(FIXTURE).port}/`;
 const other = await measureFrames({
 	proxied: true,
-	base: `http://localhost:${new URL(FIXTURE).port}/`,
+	base: otherSite,
 	frames: FRAMES,
 });
 ok(
@@ -121,5 +143,22 @@ ok(
 	`a proxied frame of another site costs at most ${OTHER_LIMIT_KB} KB of heap`,
 	other.heapKB <= OTHER_LIMIT_KB,
 	`${other.heapKB.toFixed(0)} KB, ${other.rssKB.toFixed(0)} KB RSS, ${(other.scriptMs / FRAMES).toFixed(1)} ms of script (${FRAMES} frames)`,
+);
+
+const clicked = await measureFrames({
+	proxied: true,
+	base: otherSite,
+	frames: FRAMES,
+	click: 'refresh',
+});
+ok(
+	`all ${FRAMES} proxied frames of another site loaded their next document after a click`,
+	clicked.loaded === FRAMES,
+	`${clicked.loaded} did`,
+);
+ok(
+	`a proxied frame of another site that loads its next document right after a click costs at most ${CLICK_LIMIT_KB} KB of heap`,
+	clicked.heapKB <= CLICK_LIMIT_KB,
+	`${clicked.heapKB.toFixed(0)} KB, ${clicked.rssKB.toFixed(0)} KB RSS (${FRAMES} frames)`,
 );
 await done(null);

@@ -93,6 +93,7 @@ import {
 	type ActivationNote,
 	type markActivation,
 } from './activation';
+import type { ActivationPart } from './activationPart';
 import cloneRawNode, {
 	inertDocumentOf,
 	nativeAttributes,
@@ -101,7 +102,7 @@ import cloneRawNode, {
 	releaseMarkup,
 	startedScripts,
 } from './cloneNode';
-import { deferred } from './deferred';
+import { activationPart, deferred } from './deferred';
 import type { LegacyEncoder } from './legacyEncoding';
 import { initLoads, loadSource, type LoadSource } from './loadGrants';
 import DOMAttributesModule, {
@@ -407,6 +408,8 @@ export default class DocumentClient extends Client {
 	activation: ActivationNote | null = null;
 	/** @internal ./activation.ts markActivation, of this document's realm */
 	markActivation: typeof markActivation | null = null;
+	/** @internal the Permissions module's gate hooks: `done` lists the navigator members a page was handed */
+	permissionHooks: { done?: string[] } | null = null;
 	/** the window's native frameElement getter (the Framing module hooks it) */
 	#frameElementGet: (() => Element | null) | undefined;
 	/** whether this window's opener was an opaque origin when it was created */
@@ -571,6 +574,20 @@ export default class DocumentClient extends Client {
 	 */
 	rewriterLightText(build: string): string | null {
 		return build === BUILD ? lightText() : null;
+	}
+	/**
+	 * The activation gates' statement (./activationPart.ts) this document
+	 * uses: its top's, which the top evaluates once for every document under
+	 * it, or its own where it has no top of this build to reach. Throws when
+	 * it cannot be had. @internal
+	 */
+	activationGatesPart(): ActivationPart {
+		const top = this.#topClient();
+		return (top !== this && top.activationPartOf(BUILD)) || activationPart();
+	}
+	/** this bundle's activation gates, for a document under this top of `build` @internal */
+	activationPartOf(build: string): ActivationPart | null {
+		return build === BUILD ? activationPart() : null;
 	}
 	/**
 	 * One of the bundle's deferred statements (src/inject/dom/deferred.ts),

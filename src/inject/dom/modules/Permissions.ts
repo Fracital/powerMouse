@@ -581,6 +581,9 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			mediaDevices: getter(navigator, 'mediaDevices'),
 			storage: getter(navigator, 'storage'),
 		};
+		// (the activation gates read which navigator members a page was
+		// handed: ../activationGates.ts)
+		this.client.permissionHooks = hooks;
 		const hook = (owner: object | undefined, name: string, get?: boolean) => {
 			const descriptor = owner && Reflect.getOwnPropertyDescriptor(owner, name);
 			const native = get ? descriptor?.get : descriptor?.value;

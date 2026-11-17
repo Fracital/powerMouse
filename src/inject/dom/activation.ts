@@ -20,9 +20,12 @@
 // The browser's own activation stays necessary: nothing is granted that the
 // browser would not grant. A document no foreign activation ever reached
 // keeps the browser's answers and none of the hooks: they are made in its
-// realm the first time it gets one (./activationGates.ts, a deferred
-// statement; its page's code may have taken a native before, and then calls it
-// with the browser's answer).
+// realm the first time it gets one (an input event elsewhere, or its
+// start: an ad frame a click reached that loads its next ad), with bodies
+// that ask the rules (./activationGates.ts, a deferred statement the
+// proxied top evaluates once) only while the activation is the proxy's
+// alone; its page's code may have taken a native before, and then calls
+// it with the browser's answer.
 //
 // The browser carries a sticky activation over to the next document of the
 // same origin in a frame (measured: a link of the origin, a script's
@@ -36,8 +39,8 @@
 // the activation automation gives without an input event (an evaluation)
 // is the browser's, whoever it reaches; a media element's autoplay
 // attribute plays as the browser decides it.
+import ProxyModule from '../modules/Proxy';
 import type DocumentClient from './Client';
-import { activationPart } from './deferred';
 
 /** Chrome's transient activation lasts five seconds (kActivationLifespan) */
 export const LIFESPAN = 5000;
@@ -58,7 +61,18 @@ export interface ActivationNote {
 	walked: number;
 	/** whether the hooks are in its realm */
 	hooked: boolean;
+	/** what makes its realm's wrappers (its Proxy module, the bodies of its bundle by kind), once hooked */
+	wrap?: [ProxyModule, GateBody[]];
+	/** the interfaces whose members were hooked when the page reached them */
+	reached?: string[];
 }
+
+/** a gated member's wrapper's body */
+export type GateBody = (
+	fn: Function,
+	that: unknown,
+	args: unknown[],
+) => unknown;
 
 /** taken before the page runs: a window's own accessor answers for any window */
 export const nativeLength = Reflect.getOwnPropertyDescriptor(
@@ -106,7 +120,7 @@ export function activationState(client: DocumentClient): number {
  */
 export function noteInput(client: DocumentClient) {
 	try {
-		activationPart().walkInput(client);
+		client.activationGatesPart().walkInput(client);
 	} catch (error) {
 		// no deferred statement: the browser's activation
 	}
@@ -146,11 +160,33 @@ export function markActivation(
 	if (!note.ownSticky) note.foreignSticky = true;
 	if (note.hooked) return;
 	note.hooked = true;
-	// the gates are a deferred statement (./activationPart.ts): most
-	// documents never get an activation from the proxy
+	// the hooks' rules are a deferred statement (./activationPart.ts), the
+	// top's: only the wrappers and their bodies are this realm's
 	try {
-		activationPart().activationGates(client);
+		client
+			.activationGatesPart()
+			.activationGates(client, client.getModule(ProxyModule)!, [
+				gateBody(client, 0),
+				gateBody(client, 1),
+				gateBody(client, 2),
+			]);
 	} catch (error) {
-		// no deferred parts: the browser's answers
+		// no deferred statement: the browser's answers
 	}
+}
+
+/**
+ * The body of the wrappers of the gated members of a `kind` in `client`'s
+ * realm (one for all of them: the rules tell each by its native): the
+ * native's call, unless the activation `kind` asks about (1 transient, 2
+ * sticky, 0 any call) is the browser's and not the document's, and then the
+ * rule's (./activationGates.ts gated)
+ */
+function gateBody(client: DocumentClient, kind: number): GateBody {
+	return (fn: Function, that: unknown, args: unknown[]) => {
+		const state = activationState(client);
+		return kind === 0 || (state & (kind | (kind << 2))) === kind << 2
+			? client.activationGatesPart().gated(client, fn, that, args)
+			: Reflect.apply(fn, that, args);
+	};
 }

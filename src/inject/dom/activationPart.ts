@@ -5,13 +5,14 @@
 // light rewriter library's file. A statement of its own and not one of the
 // deferred parts (./deferredParts.ts): a click reaches every frame of the
 // page through the proxy, so every frame of another site a click elsewhere
-// reaches needs the gates, and evaluating all the parts for that would cost
-// each such frame several times what the gates do. It shares the bundle's
+// reaches needs the gates. The proxied top evaluates it, once, for every
+// document under it (DocumentClient activationGatesPart): evaluated in each
+// such frame it cost each about 15 KB of heap. It shares the bundle's
 // modules as the parts do (build.js DEFERRED_FILES), with the same rules:
 // its top level reads no global.
-import { activationGates, walkInput } from './activationGates';
+import { activationGates, gated, walkInput } from './activationGates';
 
-const part = { activationGates, walkInput };
+const part = { activationGates, gated, walkInput };
 
 export type ActivationPart = typeof part;
 
