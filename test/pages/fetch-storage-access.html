@@ -1,0 +1,38 @@
+<!doctype html>
+<title>STORAGE ACCESS HEADER</title>
+<body>
+	<script>
+		// ?run=<run>: requests of each kind to another site and to its own,
+		// recorded by the fixture as fsa<run>-<kind>; &nested: the frame of
+		// another site the top page makes, which asks its own origin
+		const query = new URLSearchParams(location.search);
+		const run = query.get('run');
+		const at = (host, kind) => {
+			const url = new URL(`/echo-headers?k=fsa${run}-${kind}`, location.href);
+			url.hostname = host;
+			return url.href;
+		};
+		const own = location.hostname;
+		const other = own === 'localhost' ? '127.0.0.1' : 'localhost';
+		if (query.has('nested')) {
+			fetch(at(own, 'nested-own'), { credentials: 'include' }).catch(() => {});
+		} else {
+			new Image().src = at(other, 'image');
+			fetch(at(other, 'fetch-include'), { credentials: 'include' }).catch(
+				() => {},
+			);
+			fetch(at(other, 'fetch-omit'), { credentials: 'omit' }).catch(() => {});
+			fetch(at(other, 'fetch-no-cors'), { mode: 'no-cors' }).catch(() => {});
+			fetch(at(own, 'own'), { credentials: 'include' }).catch(() => {});
+			const frame = document.createElement('iframe');
+			frame.src = at(other, 'frame');
+			document.body.append(frame);
+			const nested = document.createElement('iframe');
+			const page = new URL(location.href);
+			page.hostname = other;
+			page.search = `?run=${run}&nested`;
+			nested.src = page.href;
+			document.body.append(nested);
+		}
+	</script>
+</body>

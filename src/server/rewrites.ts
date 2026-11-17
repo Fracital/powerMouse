@@ -364,6 +364,7 @@ const FETCH_METADATA = [
 	'sec-fetch-mode',
 	'sec-fetch-site',
 	'sec-fetch-user',
+	'sec-fetch-storage-access',
 ];
 
 // Chrome sends fetch metadata to potentially trustworthy URLs only: https
@@ -1770,6 +1771,26 @@ function genericForward(
 				: '';
 		if (cookie) requestHeaders.set('cookie', cookie);
 		else requestHeaders.delete('cookie');
+		// Sec-Fetch-Storage-Access (Chrome 133): a request that may carry
+		// credentials and whose site for cookies is another site (it has a
+		// partition key: a third-party context, or another site than its
+		// top's) says whether it has unpartitioned cookie access, whether
+		// or not it has a cookie to send. Measured: Chrome 157 with its
+		// default cookie settings sends `active` on every such request (a
+		// cross-site image, fetch with credentials, a frame's navigation;
+		// Google's sign-in page sends it on its gstatic loads and its
+		// CheckConnection frame) and none on a first-party request or one
+		// without credentials. Where the shields withhold the cookies of the
+		// request, it has no such access: `none`.
+		if (
+			potentiallyTrustworthy(url.url) &&
+			credentials &&
+			partitionKey !== undefined
+		)
+			requestHeaders.set(
+				'sec-fetch-storage-access',
+				shieldBlocksCookie ? 'none' : 'active',
+			);
 
 		// client hints between the real origins (clientHints.ts): a
 		// subresource by its document's accepted set and policy; a frame's
