@@ -433,6 +433,7 @@ const DEFERRED_FILES = new Set(
 		'src/inject/dom/modules/LongFrames.ts',
 		'src/inject/dom/modules/LongTasks.ts',
 		'src/inject/dom/modules/serviceWorkerEmulation.ts',
+		'src/inject/dom/navigationRefusal.ts',
 		'src/inject/dom/passkeys.ts',
 		'src/inject/dom/passkeysPart.ts',
 		'src/inject/dom/presentations.ts',

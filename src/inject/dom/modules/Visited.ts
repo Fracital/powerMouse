@@ -6,6 +6,7 @@ import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import { deferred } from '../deferred';
 import { nativeElement, nativeEventTarget } from './DOMHooks';
 import FragmentModule from './Fragment';
 import HistoryModule from './History';
@@ -289,6 +290,50 @@ export default class VisitedModule extends Module<DocumentClient> {
 			},
 		]);
 
+		// A navigation can be intercepted only when its URL could be this
+		// document's (the browser's rule: scheme, credentials, host and port
+		// as the document's), on the real URLs: every route is same-origin to
+		// the browser, so a navigation to another site said it could, and
+		// intercept() committed that site's URL in this document. Refused as
+		// natively, with the browser's SecurityError
+		const rewritable = (url: URL) => {
+			const at = client.url.url;
+			return (
+				url.protocol === at.protocol &&
+				url.host === at.host &&
+				url.username === at.username &&
+				url.password === at.password
+			);
+		};
+		const routedOf = (event: unknown) =>
+			String(
+				Reflect.apply(
+					destinationURL,
+					Reflect.apply(destinationOf, event, []),
+					[],
+				),
+			);
+		const canInterceptGetter = getter(eventProto, 'canIntercept')!;
+		const canIntercept = (event: unknown): boolean => {
+			if (!Reflect.apply(canInterceptGetter, event, [])) return false;
+			// (no route: the browser's answer is the page's)
+			const real = unrouteURL(client, routedOf(event));
+			try {
+				return real === null || rewritable(new URL(real));
+			} catch (error) {
+				return false;
+			}
+		};
+		Reflect.defineProperty(eventProto, 'canIntercept', {
+			...Reflect.getOwnPropertyDescriptor(eventProto, 'canIntercept')!,
+			get: proxyModule.wrapFunction(canInterceptGetter, (target, that) =>
+				canIntercept(that),
+			),
+		});
+		const defaultPrevented = getter(
+			global.Event.prototype,
+			'defaultPrevented',
+		)!;
 		// an interception commits the URL the navigation names: never a link
 		// route's (the navigation goes on as a document load instead)
 		const prototype = eventProto as Record<string, unknown>;
@@ -296,23 +341,56 @@ export default class VisitedModule extends Module<DocumentClient> {
 			prototype.intercept = proxyModule.wrapFunction(
 				prototype.intercept as (...args: unknown[]) => unknown,
 				(target, that, args) => {
-					let names = false;
+					let routed: string;
+					let refused: boolean;
 					try {
-						names = isLinkRoute(
-							String(
-								Reflect.apply(
-									destinationURL,
-									Reflect.apply(destinationOf, that, []),
-									[],
-								),
-							),
-							scope,
-						);
+						routed = routedOf(that);
+						// the browser's own checks of the event come first
+						refused =
+							!canIntercept(that) &&
+							Reflect.apply(
+								Reflect.getOwnPropertyDescriptor(that, 'isTrusted')!.get!,
+								that,
+								[],
+							) &&
+							!Reflect.apply(defaultPrevented, that, []);
 					} catch (error) {
 						// not a navigate event: the native call says so
+						return Reflect.apply(target, that, args);
 					}
-					return names ? undefined : Reflect.apply(target, that, args);
+					if (refused)
+						throw deferred().navigationRefusal(
+							client,
+							false,
+							client.refusedURI(routed)?.url ??
+								unrouteURL(client, routed) ??
+								routed,
+						);
+					return isLinkRoute(routed, scope)
+						? undefined
+						: Reflect.apply(target, that, args);
 				},
+			);
+		// A precommit handler's redirect goes to the page's URL, resolved
+		// against its own address and routed, and only to one this document
+		// may have (the browser resolved it against the route and judged it
+		// by the proxy's origin): ../navigationRefusal.ts, as it is rare
+		const precommit = (
+			global as { NavigationPrecommitController?: { prototype: object } }
+		).NavigationPrecommitController?.prototype as
+			Record<string, unknown> | undefined;
+		if (typeof precommit?.redirect === 'function')
+			precommit.redirect = proxyModule.wrapFunction(
+				precommit.redirect as (...args: unknown[]) => unknown,
+				(target, that, args) =>
+					args.length
+						? deferred().precommitRedirect(
+								client,
+								[target, that, args],
+								rewritable,
+								plain,
+							)
+						: Reflect.apply(target, that, args),
 			);
 
 		// a link followed on a page that listens: the document's address

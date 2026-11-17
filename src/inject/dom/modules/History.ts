@@ -6,7 +6,10 @@ import { unrouteURL } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
 import { LazyWeakMap } from '../../ownCollections';
 import DocumentClient from '../Client';
+import { destinationURL } from '../freshContext';
+import { nativeEventTarget } from './DOMHooks';
 import FragmentModule from './Fragment';
+import NavigationHintModule from './NavigationHint';
 import VisitedModule from './Visited';
 
 /**
@@ -213,6 +216,7 @@ export default class HistoryModule extends Module<DocumentClient> {
 		const entryProto = global.NavigationHistoryEntry?.prototype;
 		const nativeIndex = entryProto && accessor(entryProto, 'index');
 		const nativeEntryURL = entryProto && accessor(entryProto, 'url');
+		const nativeKey = entryProto && accessor(entryProto, 'key');
 		const indexOf = (entry: Entry) =>
 			Reflect.apply(nativeIndex!, entry, []) as number;
 		const traverse = (key: string) =>
@@ -375,6 +379,16 @@ export default class HistoryModule extends Module<DocumentClient> {
 				return 'null';
 			}
 		};
+		/** a traversal the browser refuses: both of its promises reject */
+		const failed = (message: string) => {
+			const error = withStack(
+				new global.DOMException(message, 'InvalidStateError'),
+			);
+			const committed = global.Promise.reject(error);
+			const finished = global.Promise.reject(error);
+			finished.catch(() => {});
+			return { committed, finished };
+		};
 		/** the run of entries of this document's origin around the current one */
 		const visible = (): Entry[] => {
 			const entries = allEntries();
@@ -415,6 +429,99 @@ export default class HistoryModule extends Module<DocumentClient> {
 				return visible().map(pageOf);
 			},
 		);
+		const visibleKeys = () =>
+			visible().map((entry) => Reflect.apply(nativeKey!, entry, []) as string);
+		// a key of an entry outside that run is as unknown as natively: the
+		// browser's list has every site's entries of the frame, and
+		// traverseTo() went into another site's document
+		navigationProto.traverseTo = proxyModule.wrapFunction(
+			nativeTraverseTo,
+			(target, that, args) => {
+				if (that !== navigation || !args.length)
+					return Reflect.apply(target, that, args);
+				const key = `${args[0]}`;
+				return visibleKeys().includes(key)
+					? Reflect.apply(target, that, [key, ...args.slice(1)])
+					: failed('Invalid key');
+			},
+		);
+		// A traversal to an entry outside the run is not heard of in this
+		// document, as natively: its navigate event showed the other site's
+		// URL and state. Heard first (captured), before the page's listeners;
+		// the worker still hears where it goes (NavigationHint)
+		const { NavigateEvent, NavigationDestination } = global as {
+			NavigateEvent?: { prototype: object };
+			NavigationDestination?: { prototype: object };
+		};
+		const eventProto = NavigateEvent?.prototype;
+		const destinationProto = NavigationDestination?.prototype;
+		if (eventProto && destinationProto) {
+			const destinationOf = accessor(eventProto, 'destination');
+			const typeOf = accessor(eventProto, 'navigationType');
+			const destinationKey = accessor(destinationProto, 'key');
+			const keyOf = (event: object) =>
+				Reflect.apply(
+					destinationKey,
+					Reflect.apply(destinationOf, event, []),
+					[],
+				) as string;
+			Reflect.apply(nativeEventTarget.addEventListener, navigation, [
+				'navigate',
+				(event: Event) => {
+					try {
+						if (
+							Reflect.apply(typeOf, event, []) !== 'traverse' ||
+							visibleKeys().includes(keyOf(event))
+						)
+							return;
+						const routed = destinationURL(
+							Reflect.apply(destinationOf, event, []),
+						);
+						if (routed !== null)
+							moduleClient
+								.getModule(NavigationHintModule)
+								?.hint(unrouteURL(moduleClient, routed) ?? routed);
+					} catch (error) {
+						return;
+					}
+					event.stopImmediatePropagation();
+				},
+				true,
+			]);
+			// its index is the entry's in that run
+			const index = Reflect.getOwnPropertyDescriptor(destinationProto, 'index');
+			if (index?.get)
+				Reflect.defineProperty(destinationProto, 'index', {
+					...index,
+					get: proxyModule.wrapFunction(index.get, (target, that, args) => {
+						const at = Reflect.apply(target, that, args) as number;
+						if (at < 0) return at;
+						return visibleKeys().indexOf(
+							Reflect.apply(destinationKey, that, []) as string,
+						);
+					}),
+				});
+		}
+		// what pageswap shows of a navigation to another site's document:
+		// nothing, as natively
+		const swapProto = (global as { PageSwapEvent?: { prototype: object } })
+			.PageSwapEvent?.prototype;
+		const swap =
+			swapProto && Reflect.getOwnPropertyDescriptor(swapProto, 'activation');
+		const activationEntry =
+			activationProto &&
+			Reflect.getOwnPropertyDescriptor(activationProto, 'entry')?.get;
+		if (swapProto && swap?.get && activationEntry)
+			Reflect.defineProperty(swapProto, 'activation', {
+				...swap,
+				get: proxyModule.wrapFunction(swap.get, (target, that, args) => {
+					const activation = Reflect.apply(target, that, args) as object | null;
+					const entry =
+						activation &&
+						(Reflect.apply(activationEntry, activation, []) as Entry | null);
+					return entry && originOf(entry) !== own() ? null : activation;
+				}),
+			});
 		Reflect.defineProperty(entryProto, 'index', {
 			...Reflect.getOwnPropertyDescriptor(entryProto, 'index')!,
 			get: proxyModule.wrapFunction(nativeIndex!, (target, that, args) => {
@@ -460,14 +567,11 @@ export default class HistoryModule extends Module<DocumentClient> {
 					const index = current ? entries.indexOf(current) : -1;
 					const next = entries[index + step];
 					if (index >= 0 && next)
-						return Reflect.apply(nativeTraverseTo, that, [next.key, ...args]);
-					const error = withStack(
-						new global.DOMException(message, 'InvalidStateError'),
-					);
-					const committed = global.Promise.reject(error);
-					const finished = global.Promise.reject(error);
-					finished.catch(() => {});
-					return { committed, finished };
+						return Reflect.apply(nativeTraverseTo, that, [
+							Reflect.apply(nativeKey!, next, []),
+							...args,
+						]);
+					return failed(message);
 				},
 			);
 		}

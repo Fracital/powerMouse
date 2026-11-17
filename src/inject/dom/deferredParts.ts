@@ -11,6 +11,10 @@
 // (and Chrome 157's markup insertion members, ./markupMembers.ts, at a
 // page's first call of one)
 //
+// (and the SecurityError of a navigation a page may not intercept, with a
+// precommit handler's redirect, ./navigationRefusal.ts, when one is refused
+// or redirected)
+//
 // (and XMLHttpRequest's argument checks, ../xhrChecks.ts, at a document's
 // first open(); a worker's bundle has them itself)
 //
@@ -68,6 +72,7 @@ import FingerprintModule from './modules/Fingerprint';
 import { longFrames } from './modules/LongFrames';
 import { longTasks } from './modules/LongTasks';
 import { emulateServiceWorker } from './modules/serviceWorkerEmulation';
+import { navigationRefusal, precommitRedirect } from './navigationRefusal';
 import { openerFacts, opensWithoutOpener } from './openerFacts';
 import { pictureWindows } from './pictureWindows';
 import { presentationIds } from './presentations';
@@ -92,6 +97,8 @@ const parts = {
 	FingerprintModule,
 	emulateServiceWorker,
 	markupMembers,
+	navigationRefusal,
+	precommitRedirect,
 	webTransportStandIn,
 	carryWebTransport,
 	legacyQuery,

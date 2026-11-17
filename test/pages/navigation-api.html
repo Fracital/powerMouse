@@ -1,0 +1,221 @@
+<!doctype html>
+<title>NAVIGATION API</title>
+<script>
+	// The Navigation API across two sites (test/suites/navigation-api.mjs):
+	// A1 (?s=1) -> A2 (?s=2) -> B (?s=3, the other site) -> A3 (?s=4), then
+	// back to B, back to A2 and navigation.back() into A1. Each document
+	// tells the suite what it sees on the console ("NAVAPI [step, value]"):
+	// whether a navigation to the other site can be intercepted, the
+	// entries, the keys it may traverse to, the traversals it hears of and
+	// what pageswap shows of the navigation away.
+	const A = location.origin.replace('localhost', '127.0.0.1');
+	const B = location.origin.replace('127.0.0.1', 'localhost');
+	const PAGE = '/pages/navigation-api.html';
+	const s = new URLSearchParams(location.search).get('s');
+	const log = (step, value) =>
+		console.log('NAVAPI ' + JSON.stringify([step, value]));
+	const fmt = (error) =>
+		error && error.name ? `${error.name}: ${error.message}` : String(error);
+	const attempt = (fn) => {
+		try {
+			const value = fn();
+			return value === undefined ? 'undefined' : value;
+		} catch (error) {
+			return 'threw ' + fmt(error);
+		}
+	};
+	const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+	const settled = (promise, ms = 1500) =>
+		Promise.race([
+			promise.then(
+				() => 'fulfilled',
+				(error) => 'rejected ' + fmt(error),
+			),
+			wait(ms).then(() => 'pending'),
+		]);
+	const entries = () => navigation.entries().map((entry) => entry.url);
+	const view = () => ({
+		entries: entries(),
+		index: navigation.currentEntry.index,
+		canGoBack: navigation.canGoBack,
+		canGoForward: navigation.canGoForward,
+		from:
+			(navigation.activation &&
+				navigation.activation.from &&
+				navigation.activation.from.url) ||
+			null,
+	});
+	const visit = (() => {
+		const key = 'navapi-visit-' + s;
+		const count = Number(sessionStorage.getItem(key) || 0) + 1;
+		sessionStorage.setItem(key, String(count));
+		return count;
+	})();
+	// what a navigate event shows (and what intercept() makes of it)
+	let watch = null;
+	const event = (e) => ({
+		type: e.navigationType,
+		url: e.destination.url,
+		sameDocument: e.destination.sameDocument,
+		index: e.destination.index,
+		key: e.destination.key === sessionStorage.getItem('navapi-key-1'),
+		state: attempt(() => e.destination.getState()),
+		cancelable: e.cancelable,
+		canIntercept: e.canIntercept,
+	});
+	navigation.addEventListener('navigate', (e) => {
+		if (watch) watch(e);
+		else log(`${s}-${visit} heard`, event(e));
+	});
+	// what the document sees of the navigation away (read by the next
+	// document of this site)
+	addEventListener('pageswap', (e) => {
+		const a = e.activation;
+		sessionStorage.setItem(
+			`navapi-swap-${s}-${visit}`,
+			JSON.stringify(
+				a && {
+					entry: a.entry && a.entry.url,
+					from: a.from && a.from.url,
+					type: a.navigationType,
+				},
+			),
+		);
+	});
+	const swapOf = (step, n = 1) =>
+		JSON.parse(sessionStorage.getItem(`navapi-swap-${step}-${n}`) || '"none"');
+	/** a navigation the listener tries to intercept, then stops */
+	const tryIntercept = async (start) => {
+		let seen = null;
+		watch = (e) => {
+			seen = event(e);
+			seen.intercept = attempt(() => e.intercept());
+			if (e.cancelable) e.preventDefault();
+		};
+		const result = start();
+		const outcome = result ? await settled(result.committed) : 'no result';
+		await wait(100);
+		watch = null;
+		return { seen, outcome, href: location.href };
+	};
+	/** a precommit handler's redirect to `url` */
+	const precommit = async (url) => {
+		if (typeof NavigationPrecommitController === 'undefined')
+			return 'unsupported';
+		let thrown = null;
+		watch = (e) => {
+			e.intercept({
+				precommitHandler: (controller) => {
+					try {
+						controller.redirect(url);
+					} catch (error) {
+						thrown = fmt(error);
+						throw error;
+					}
+				},
+			});
+		};
+		const result = navigation.navigate('?s=1&pre', { history: 'replace' });
+		const outcome = await settled(result.committed);
+		await wait(100);
+		watch = null;
+		const out = { thrown, outcome, href: location.href };
+		history.replaceState(null, '', '?s=1');
+		return out;
+	};
+	const run = async () => {
+		await wait(150);
+		if (s === '1' && visit === 1) {
+			const out = {};
+			out.crossNavigate = await tryIntercept(() =>
+				navigation.navigate(`${B}${PAGE}?s=x`),
+			);
+			out.crossAssign = await tryIntercept(() => {
+				location.href = `${B}${PAGE}?s=y`;
+			});
+			out.sameIntercept = await (async () => {
+				watch = (e) => e.intercept({ handler: () => Promise.resolve() });
+				const result = navigation.navigate('?s=1&same', {
+					history: 'replace',
+				});
+				const outcome = await settled(result.committed);
+				watch = null;
+				const done = { outcome, href: location.href, entries: entries() };
+				history.replaceState(null, '', '?s=1');
+				return done;
+			})();
+			out.precommitCross = await precommit(`${B}${PAGE}?s=z`);
+			out.precommitRelative = await precommit('?s=1&redirected');
+			out.precommitAbsolute = await precommit(`${A}${PAGE}?s=1&absolute`);
+			out.traverseBogus = await settled(
+				navigation.traverseTo('nope').committed,
+			);
+			navigation.updateCurrentEntry({ state: 'state of A1' });
+			sessionStorage.setItem('navapi-key-1', navigation.currentEntry.key);
+			out.view = view();
+			log('1-1', out);
+			await wait(200);
+			location.href = '?s=2';
+		} else if (s === '2' && visit === 1) {
+			navigation.updateCurrentEntry({ state: 'state of A2' });
+			log('2-1', { ...view(), swap: swapOf(1) });
+			await wait(200);
+			location.href = `${B}${PAGE}?s=3`;
+		} else if (s === '3' && visit === 1) {
+			navigation.updateCurrentEntry({ state: 'state of B' });
+			log('3-1', {
+				...view(),
+				activation: navigation.activation && {
+					entry: navigation.activation.entry.url,
+					type: navigation.activation.navigationType,
+				},
+			});
+			await wait(200);
+			location.href = `${A}${PAGE}?s=4`;
+		} else if (s === '4' && visit === 1) {
+			log('4-1', {
+				...view(),
+				swap: swapOf(2),
+				traverseToA1: await settled(
+					navigation.traverseTo(sessionStorage.getItem('navapi-key-1'))
+						.committed,
+				),
+				// a traversal within the document: its destination's index is
+				// the entry's in this site's run
+				back: await (async () => {
+					let seen = null;
+					watch = (e) => (seen = event(e));
+					history.pushState(null, '', '#part');
+					const outcome = await settled(navigation.back().finished);
+					watch = null;
+					// (whether it is cancelable is left out: a frame's traversal
+					// never is, in Chrome, and the proxied top is a frame)
+					if (seen) delete seen.cancelable;
+					return { ...seen, outcome, href: location.href };
+				})(),
+			});
+			await wait(200);
+			history.back();
+		} else if (s === '3' && visit === 2) {
+			log('3-2', view());
+			await wait(200);
+			history.back();
+		} else if (s === '2' && visit === 2) {
+			log('2-2', view());
+			watch = (e) => {
+				const seen = event(e);
+				seen.intercept = attempt(() => e.intercept());
+				sessionStorage.setItem('navapi-traverse', JSON.stringify(seen));
+			};
+			await wait(200);
+			navigation.back();
+		} else if (s === '1' && visit === 2) {
+			log('1-2', {
+				...view(),
+				traverse: JSON.parse(sessionStorage.getItem('navapi-traverse')),
+			});
+			log('end', null);
+		} else log('unexpected', { s, visit, href: location.href });
+	};
+	addEventListener('pageshow', run);
+</script>

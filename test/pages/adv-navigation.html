@@ -1,0 +1,191 @@
+<!doctype html>
+<title>ADV NAVIGATION</title>
+<pre id="result">pending</pre>
+<script src="adv-harness.js"></script>
+<script>
+	// The Navigation API across sites (adversarial-navigation): every
+	// proxied site is the proxy's origin to the browser, so a navigation to
+	// another site could be intercepted (canIntercept true, intercept()
+	// committing that site's URL in this document, a precommit handler
+	// redirecting to it), and in a window that went to another site and
+	// back, a document saw the other site's entries: their URLs and state
+	// in a traversal's navigate event, and traverseTo() of their keys. A
+	// popup walks A -> B -> A and back (`?walk=`), telling this page what
+	// each of its documents saw.
+	const A = location.origin.replace('localhost', '127.0.0.1');
+	const B = location.origin.replace('127.0.0.1', 'localhost');
+	const PAGE = '/pages/adv-navigation.html';
+	const walk = new URLSearchParams(location.search).get('walk');
+	const fmt = (error) =>
+		error && error.name ? `${error.name}: ${error.message}` : String(error);
+	const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+	const settled = (promise, ms = 1500) =>
+		Promise.race([
+			promise.then(
+				() => 'fulfilled',
+				(error) => 'rejected ' + fmt(error),
+			),
+			wait(ms).then(() => 'pending'),
+		]);
+	if (walk) {
+		// this site's documents tell the page on a channel (the demo opens
+		// a popup as a tab of its own, with no opener); the other site's
+		// tell the next one of this site, in its URL
+		const channel = new BroadcastChannel('adv-navigation');
+		const tell = (name, value) => channel.postMessage({ name, value });
+		const params = new URLSearchParams(location.search);
+		const state = navigation.currentEntry.getState();
+		const key = params.get('k');
+		const TRAVERSE_TO = "traverseTo() of an entry past another site's";
+		let traversing = false;
+		// A3's run of entries is itself: no traversal from it is heard of
+		if (walk === '3')
+			navigation.addEventListener('navigate', (e) => {
+				if (e.navigationType !== 'traverse') return;
+				if (traversing) tell(TRAVERSE_TO, 'LEAK:traversed');
+				let seen;
+				try {
+					seen = e.destination.getState();
+				} catch (error) {
+					seen = fmt(error);
+				}
+				tell('traversal heard past another site', {
+					url: 'LEAK:' + e.destination.url,
+					state: seen,
+				});
+			});
+		const run = async () => {
+			await wait(150);
+			if (walk === '1' && state === undefined) {
+				navigation.updateCurrentEntry({ state: 'state of A' });
+				location.href = `${B}${PAGE}?walk=2&k=${navigation.currentEntry.key}`;
+			} else if (walk === '2' && state === undefined) {
+				navigation.updateCurrentEntry({ state: 'state of B' });
+				const seen = navigation
+					.entries()
+					.map((entry) =>
+						new URL(entry.url).origin === location.origin
+							? entry.url
+							: 'LEAK:' + entry.url,
+					);
+				location.href = `${A}${PAGE}?walk=3&k=${key}&b=${encodeURIComponent(JSON.stringify(seen))}`;
+			} else if (walk === '3') {
+				tell('entries seen by another site', JSON.parse(params.get('b')));
+				traversing = true;
+				const outcome = await settled(navigation.traverseTo(key).committed);
+				traversing = false;
+				tell(
+					TRAVERSE_TO,
+					outcome.startsWith('rejected') ? outcome : 'LEAK:' + outcome,
+				);
+				await wait(200);
+				history.back();
+			} else if (walk === '2') history.back();
+			else tell('walk done', 'done');
+		};
+		addEventListener('pageshow', run);
+	} else {
+		const Async = __advAsync;
+		// the probes navigate this document, one after the other
+		let chain = Promise.resolve();
+		const step = (name, fn, ms = 8000) => {
+			const result = chain.then(fn);
+			chain = result.catch(() => {});
+			Async(name, () => result, ms);
+		};
+		const cross = `${B}${PAGE}?cross`;
+		step('canIntercept of a navigation to another site', async () => {
+			let seen = 'no navigate event';
+			const listener = (e) => {
+				seen = {
+					canIntercept: e.canIntercept ? 'LEAK:true' : false,
+					intercept: (() => {
+						try {
+							e.intercept();
+							return 'LEAK:intercepted';
+						} catch (error) {
+							return fmt(error);
+						}
+					})(),
+				};
+				e.preventDefault();
+			};
+			navigation.addEventListener('navigate', listener);
+			await settled(navigation.navigate(cross).committed);
+			navigation.removeEventListener('navigate', listener);
+			return seen;
+		});
+		step("a precommit handler's redirect to another site", async () => {
+			if (typeof NavigationPrecommitController === 'undefined')
+				return 'unsupported';
+			let thrown = 'did not throw';
+			const listener = (e) =>
+				e.intercept({
+					precommitHandler: (controller) => {
+						try {
+							controller.redirect(cross);
+							thrown = 'LEAK:redirected';
+						} catch (error) {
+							thrown = fmt(error);
+							throw error;
+						}
+					},
+				});
+			navigation.addEventListener('navigate', listener);
+			const before = location.href;
+			await settled(
+				navigation.navigate('?pre', { history: 'replace' }).committed,
+			);
+			navigation.removeEventListener('navigate', listener);
+			const after = location.href;
+			history.replaceState(null, '', before);
+			return {
+				thrown,
+				href: after.startsWith(B) ? 'LEAK:' + after : after,
+			};
+		});
+		step("intercept() commits another site's URL", async () => {
+			const before = location.href;
+			const listener = (e) => {
+				try {
+					e.intercept();
+				} catch (error) {
+					e.preventDefault();
+				}
+			};
+			navigation.addEventListener('navigate', listener);
+			await settled(navigation.navigate(cross).committed);
+			navigation.removeEventListener('navigate', listener);
+			const after = location.href;
+			if (!after.startsWith(B)) return after;
+			// (back to this site's URL for the probes after this one)
+			navigation.addEventListener('navigate', (e) => e.intercept(), {
+				once: true,
+			});
+			await settled(
+				navigation.navigate(before, { history: 'replace' }).committed,
+			);
+			return 'LEAK:' + after;
+		});
+		step(
+			'popup walk to another site and back',
+			() =>
+				new Promise((resolve) => {
+					const popup = window.open(`${PAGE}?walk=1`, '_blank');
+					const finish = (value) => {
+						channel.close();
+						popup && popup.close();
+						resolve(value);
+					};
+					const channel = new BroadcastChannel('adv-navigation');
+					channel.onmessage = ({ data }) => {
+						if (data.name === 'walk done') finish('done');
+						else __advRecord(data.name, data.value);
+					};
+					setTimeout(() => finish('walk timed out'), 20000);
+				}),
+			25000,
+		);
+		chain.then(() => __advFinish(500));
+	}
+</script>
