@@ -139,6 +139,7 @@ import { fragmentOf, queryOf, withQuery } from '../urlShape';
 import { BUILD, REWRITE_GENERATION } from '../version';
 import { contextText, isLinkRoute, LINK_SEGMENT, linkRoute } from '../visited';
 import { scanMarkup, scannerSettled } from '../wasm/scanner';
+import { badPort } from './badPorts';
 import {
 	knownOriginOf,
 	knownTopSiteOf,
@@ -1841,6 +1842,8 @@ function genericForward(
 			return refuse(
 				'blocked: a no-cors request to another origin that does not follow redirects',
 			);
+		// a port the browser connects to for no request (badPorts.ts)
+		if (!navigation && badPort(url.url)) return refuse('blocked: unsafe port');
 
 		// the built-in blocker (docs/adblock.md), on the real request and the
 		// real document that makes it (a navigation's: the page that frames
