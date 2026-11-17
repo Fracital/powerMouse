@@ -1198,13 +1198,18 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						(target, that: HTMLScriptElement, args) => {
 							if (!isScriptElement(that))
 								return Reflect.apply(target, that, args);
-							// null is the empty string, which leaves no child
+							// null is the empty string, which leaves no child (and
+							// undefined too for textContent, whose type is nullable)
 							const text = this.client.scriptValue(
 								that,
 								args[0],
 								`HTMLScriptElement ${name}`,
 								() => Reflect.apply(target, that, args),
-								(value) => (value === null ? '' : String(value)),
+								(value) =>
+									value === null ||
+									(value === undefined && name === 'textContent')
+										? ''
+										: String(value),
 							);
 							if (text === null || this.client.trustedScriptText(that, text))
 								return;
@@ -1237,18 +1242,35 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// only elements and fragments have children to hook (and an
 					// `append`); YouTube sets textContent on Text nodes, which is
 					// their data (null the empty string)
+					// (null and undefined are the empty string: the type is nullable)
 					if (that.nodeType !== 1 && that.nodeType !== 11)
 						return this.client.styleOfText(that)
 							? Reflect.apply(hookedDataSet, that, [
-									args[0] === null ? '' : String(args[0]),
+									args[0] === null || args[0] === undefined
+										? ''
+										: String(args[0]),
 								])
 							: Reflect.apply(target, that, args);
 
+					// Only a script's text and a style's are the proxy's to
+					// rewrite. Any other element's is set by the browser, in one
+					// step: taken apart here (each child removed, then a text node
+					// appended), a page's MutationObserver got a record per child
+					// where natively it gets one, `undefined` was written out as
+					// text, and every such write paid for the loop
+					if (
+						!(that instanceof this.client.global.HTMLScriptElement) &&
+						!(that instanceof this.client.global.SVGScriptElement) &&
+						this.client.styleKind(that) === null
+					)
+						return Reflect.apply(target, that, args);
+
 					for (const node of [...that.childNodes]) node.remove();
 
-					// null is the empty string, which leaves no text node, as
-					// natively (it left a text node reading "null")
-					const written = args[0] === null ? '' : String(args[0]);
+					// the empty string leaves no text node, as natively (null left
+					// a text node reading "null")
+					const written =
+						args[0] === null || args[0] === undefined ? '' : String(args[0]);
 					if (written === '') return;
 					// a script's text set while it is connected runs at once
 					const text =
@@ -1402,41 +1424,43 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 									),
 								);
 							});
-						else {
+						else if (isScriptElement(that)) {
 							for (const node of [...element.childNodes]) node.remove();
 
-							if (isScriptElement(that)) {
-								// a script's markup is its text (an HTML script's as it
-								// is written, an SVG script's parsed), and a connected
-								// script that has not run runs it: it goes in through
-								// the insertion hook, which rewrites what will run
-								const nodes =
-									element.nodeName === 'SCRIPT'
-										? markup
-										: cloneRawNode(
-												parseHTMLFragmentIn(
-													markup,
-													that,
-													this.client.global.document,
-												),
+							// a script's markup is its text (an HTML script's as it
+							// is written, an SVG script's parsed), and a connected
+							// script that has not run runs it: it goes in through
+							// the insertion hook, which rewrites what will run
+							const nodes =
+								element.nodeName === 'SCRIPT'
+									? markup
+									: cloneRawNode(
+											parseHTMLFragmentIn(
+												markup,
+												that,
 												this.client.global.document,
-											);
-								if (nodes !== '') Reflect.apply(hookedAppend, that, [nodes]);
-							} else {
-								// parsed in the element's context, as the browser does:
-								// a table section's rows, an <svg>'s SVG, a <textarea>'s
-								// text
-								element.append(
-									cloneRawNode(
-										parseHTMLFragmentIn(
-											markup,
-											that,
+											),
 											this.client.global.document,
-										),
+										);
+							if (nodes !== '') Reflect.apply(hookedAppend, that, [nodes]);
+						} else {
+							// parsed in the element's context, as the browser does (a
+							// table section's rows, an <svg>'s SVG, a <textarea>'s text),
+							// and put in the children's place in one step, as the browser
+							// replaces them: a page's MutationObserver gets one record.
+							// Removed one by one, it got a record per child and one more
+							// for the new nodes, and a `remove` the page had put on a child
+							// or its prototype ran for each
+							element.replaceChildren(
+								cloneRawNode(
+									parseHTMLFragmentIn(
+										markup,
+										that,
 										this.client.global.document,
 									),
-								);
-							}
+									this.client.global.document,
+								),
+							);
 						}
 					});
 					// a frame in the markup is injected as it connects

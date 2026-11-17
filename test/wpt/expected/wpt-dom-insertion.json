@@ -5,21 +5,9 @@
 	"/dom/nodes/Element-setAttribute.html": {
 		"setAttribute should lowercase before setting": "FAIL: assert_equals: expected (object) null but got (string) \"bar\""
 	},
-	"/dom/nodes/MutationObserver-childList.html": {
-		"childList Node.textContent: replace content mutation": "FAIL: assert_equals: mutation records must match expected 1 but got 2"
-	},
 	"/dom/nodes/MutationObserver-cross-realm-callback-report-exception.html": {
 		"(harness)": "TIMEOUT: ",
 		"MutationObserver reports the exception from its callback in the callback's global object": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
-	"/dom/nodes/MutationObserver-inner-outer.html": {
-		"innerHTML mutation": "FAIL: assert_equals: mutation records must match expected 2 but got 3",
-		"innerHTML with 2 children mutation": "FAIL: assert_equals: mutation records must match expected 1 but got 2"
-	},
-	"/dom/nodes/MutationObserver-textContent.html": {
-		"Setting Element.textContent to the same value": "FAIL: assert_equals: Should have one record expected 1 but got 2",
-		"Setting Element.textContent to a different value": "FAIL: assert_equals: Should have one record expected 1 but got 2",
-		"Setting Element.textContent to the same value when the old node is a CDATASection": "FAIL: assert_equals: Should have one record expected 1 but got 2"
 	},
 	"/dom/nodes/MutationObserver-transient-registered-observers.window.html": {
 		"A removed subtree is no longer observed after mutation observers are notified": "FAIL: assert_array_equals: lengths differ, expected array [\"childList parent -child\", \"childList child +before\"] length 2, got [\"childList parent -child\"] length 1",
@@ -40,16 +28,6 @@
 		"Passing a detached comment from a frame document to removeChild should not affect it.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
 		"Passing a non-detached comment from a frame document to removeChild should not affect it.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
 		"Calling removeChild on a comment from a frame document with no children should throw NOT_FOUND_ERR.": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
-	},
-	"/dom/nodes/Node-textContent.html": {
-		"Element without children set to undefined": "FAIL: assert_equals: expected \"\" but got \"undefined\"",
-		"Element with empty text node as child set to undefined": "FAIL: assert_equals: expected \"\" but got \"undefined\"",
-		"Element with children set to undefined": "FAIL: assert_equals: expected \"\" but got \"undefined\"",
-		"Element with descendants set to undefined": "FAIL: assert_equals: expected \"\" but got \"undefined\"",
-		"DocumentFragment without children set to undefined": "FAIL: assert_equals: expected \"\" but got \"undefined\"",
-		"DocumentFragment with empty text node as child set to undefined": "FAIL: assert_equals: expected \"\" but got \"undefined\"",
-		"DocumentFragment with children set to undefined": "FAIL: assert_equals: expected \"\" but got \"undefined\"",
-		"DocumentFragment with descendants set to undefined": "FAIL: assert_equals: expected \"\" but got \"undefined\""
 	},
 	"/dom/nodes/attributes-namednodemap.html": {
 		"setNamedItem and removeNamedItem on `attributes` should not interfere with existing method names": "FAIL: assert_equals: expected function \"function item() { [native code] }\" but got function \"zt=>et()[zt]??null\""

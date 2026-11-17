@@ -397,7 +397,8 @@ export default class ReadbackModule extends Module<DocumentClient> {
 						sources.set(that, {
 							// (textContent's null is the empty string)
 							written:
-								key === 'textContent' && args[0] === null
+								key === 'textContent' &&
+								(args[0] === null || args[0] === undefined)
 									? ''
 									: String(args[0]),
 							rewritten: nativeText(that),
