@@ -1,0 +1,83 @@
+{
+	"/workers/modules/dedicated-worker-import-blob-url.any.html": {
+		"eval(import()).": "FAIL: assert_array_equals: value is \"Failed to do dynamic import: TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/workers/modules/export-on-load-script.js\", expected array"
+	},
+	"/workers/modules/dedicated-worker-import-blob-url.any.worker.html": {
+		"(harness)": "ERROR: Error in remote blob:http://localhost:PORT/UUID: Uncaught TypeError: Failed to fetch dynamically imported module: blob:http://localhost:PORT/UUID",
+		"Static import.": "FAIL: promise_test: Unhandled rejection with value: \"Uncaught TypeError: Failed to fetch dynamically imported module: blob:http://localhost:PORT/UUID\"",
+		"Static import (cross-origin).": "FAIL: promise_test: Unhandled rejection with value: \"Uncaught TypeError: Failed to fetch dynamically imported module: blob:http://localhost:PORT/UUID\"",
+		"Static import (redirect).": "FAIL: promise_test: Unhandled rejection with value: \"Uncaught TypeError: Failed to fetch dynamically imported module: blob:http://localhost:PORT/UUID\"",
+		"Nested static import.": "FAIL: promise_test: Unhandled rejection with value: \"Uncaught TypeError: Failed to fetch dynamically imported module: blob:http://localhost:PORT/UUID\"",
+		"Static import and then dynamic import.": "FAIL: promise_test: Unhandled rejection with value: \"Uncaught TypeError: Failed to fetch dynamically imported module: blob:http://localhost:PORT/UUID\"",
+		"Dynamic import.": "FAIL: promise_test: Unhandled rejection with value: \"Uncaught TypeError: Failed to fetch dynamically imported module: blob:http://localhost:PORT/UUID\"",
+		"Nested dynamic import.": "FAIL: promise_test: Unhandled rejection with value: \"Uncaught TypeError: Failed to fetch dynamically imported module: blob:http://localhost:PORT/UUID\"",
+		"Dynamic import and then static import.": "FAIL: promise_test: Unhandled rejection with value: \"Uncaught TypeError: Failed to fetch dynamically imported module: blob:http://localhost:PORT/UUID\"",
+		"eval(import()).": "FAIL: promise_test: Unhandled rejection with value: \"Uncaught TypeError: Failed to fetch dynamically imported module: blob:http://localhost:PORT/UUID\""
+	},
+	"/workers/modules/dedicated-worker-import-csp.html": {
+		"worker-src 'self' directive should disallow cross origin static import.": "FAIL: assert_array_equals: expected property 0 to be \"ERROR\" but got \"export-on-load-script.js\" (expected array [\"ERROR\"] got [\"export-on-load-script.js\"])",
+		"script-src 'self' directive should disallow cross origin static import.": "FAIL: assert_array_equals: expected property 0 to be \"ERROR\" but got \"export-on-load-script.js\" (expected array [\"ERROR\"] got [\"export-on-load-script.js\"])",
+		"worker-src 'self' directive should override script-src * directive and disallow cross origin static import.": "FAIL: assert_array_equals: expected property 0 to be \"ERROR\" but got \"export-on-load-script.js\" (expected array [\"ERROR\"] got [\"export-on-load-script.js\"])",
+		"script-src 'self' directive should disallow cross origin dynamic import.": "FAIL: assert_array_equals: expected property 0 to be \"ERROR\" but got \"export-on-load-script.js\" (expected array [\"ERROR\"] got [\"export-on-load-script.js\"])",
+		"script-src-elem 'self' directive should disallow cross origin dynamic import.": "FAIL: assert_array_equals: expected property 0 to be \"ERROR\" but got \"export-on-load-script.js\" (expected array [\"ERROR\"] got [\"export-on-load-script.js\"])"
+	},
+	"/workers/modules/dedicated-worker-import-data-url-cross-origin.html": {
+		"(harness)": "ERROR: Uncaught TypeError: Failed to fetch",
+		"static import data url from data: URL should be allowed.": "FAIL: assert_true: expected true got false",
+		"static import script from data: URL should be allowed.": "FAIL: assert_true: expected true got false",
+		"dynamic import data url from data: URL should be allowed.": "FAIL: assert_true: expected true got false",
+		"dynamic import script from data: URL should be blocked.": "FAIL: assert_true: expected true got false"
+	},
+	"/workers/modules/dedicated-worker-import-data-url.any.html": {
+		"(harness)": "ERROR: Uncaught TypeError: Failed to fetch",
+		"Static import.": "FAIL: assert_true: expected true got false",
+		"Static import (cross-origin).": "FAIL: assert_true: expected true got false",
+		"Static import (redirect).": "FAIL: assert_true: expected true got false",
+		"Nested static import.": "FAIL: assert_true: expected true got false",
+		"Static import and then dynamic import.": "FAIL: assert_true: expected true got false",
+		"Dynamic import.": "FAIL: assert_true: expected true got false",
+		"Nested dynamic import.": "FAIL: assert_true: expected true got false",
+		"Dynamic import and then static import.": "FAIL: assert_true: expected true got false",
+		"eval(import()).": "FAIL: assert_true: expected true got false"
+	},
+	"/workers/modules/dedicated-worker-import-data-url.any.worker.html": {
+		"(harness)": "ERROR: Error in remote data:text/javascript,if%20(!(%22%24oWKnidhwnqKIQiEo%22%20in%20globalThis))%20%7B%20let%20held%3B%20if%20(!globalThis.createClient)%20%7B%20held%20%3D%20%5B%5D%3B%20const%20hold%20%3D%2",
+		"Static import.": "FAIL: assert_true: expected true got false",
+		"Static import (cross-origin).": "FAIL: assert_true: expected true got false",
+		"Static import (redirect).": "FAIL: assert_true: expected true got false",
+		"Nested static import.": "FAIL: assert_true: expected true got false",
+		"Static import and then dynamic import.": "FAIL: assert_true: expected true got false",
+		"Dynamic import.": "FAIL: assert_true: expected true got false",
+		"Nested dynamic import.": "FAIL: assert_true: expected true got false",
+		"Dynamic import and then static import.": "FAIL: assert_true: expected true got false",
+		"eval(import()).": "FAIL: assert_true: expected true got false"
+	},
+	"/workers/modules/shared-worker-import-blob-url.window.html": {
+		"eval(import()).": "FAIL: assert_array_equals: value is \"Failed to do dynamic import: TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/workers/modules/export-on-load-script.js\", expected array"
+	},
+	"/workers/modules/shared-worker-import-csp.html": {
+		"worker-src 'self' directive should disallow cross origin static import.": "FAIL: assert_array_equals: expected property 0 to be \"ERROR\" but got \"export-on-load-script.js\" (expected array [\"ERROR\"] got [\"export-on-load-script.js\"])",
+		"script-src 'self' directive should disallow cross origin static import.": "FAIL: assert_array_equals: expected property 0 to be \"ERROR\" but got \"export-on-load-script.js\" (expected array [\"ERROR\"] got [\"export-on-load-script.js\"])",
+		"worker-src 'self' directive should override script-src * directive and disallow cross origin static import.": "FAIL: assert_array_equals: expected property 0 to be \"ERROR\" but got \"export-on-load-script.js\" (expected array [\"ERROR\"] got [\"export-on-load-script.js\"])",
+		"script-src 'self' directive should disallow cross origin dynamic import.": "FAIL: assert_array_equals: expected property 0 to be \"ERROR\" but got \"export-on-load-script.js\" (expected array [\"ERROR\"] got [\"export-on-load-script.js\"])"
+	},
+	"/workers/modules/shared-worker-import-data-url-cross-origin.html": {
+		"(harness)": "TIMEOUT: ",
+		"static import data url from data: URL should be allowed.": "TIMEOUT: Test timed out",
+		"static import script from data: URL should be allowed.": "NOTRUN: ",
+		"dynamic import data url from data: URL should be allowed.": "NOTRUN: ",
+		"dynamic import script from data: URL should be blocked.": "NOTRUN: "
+	},
+	"/workers/modules/shared-worker-import-data-url.window.html": {
+		"(harness)": "TIMEOUT: ",
+		"Static import.": "TIMEOUT: Test timed out",
+		"Static import (cross-origin).": "NOTRUN: ",
+		"Static import (redirect).": "NOTRUN: ",
+		"Nested static import.": "NOTRUN: ",
+		"Static import and then dynamic import.": "NOTRUN: ",
+		"Dynamic import.": "NOTRUN: ",
+		"Nested dynamic import.": "NOTRUN: ",
+		"Dynamic import and then static import.": "NOTRUN: ",
+		"eval(import()).": "NOTRUN: "
+	}
+}

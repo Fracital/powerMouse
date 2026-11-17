@@ -1,0 +1,43 @@
+{
+	"/workers/SharedWorker-detach-frame-in-error-event.html": {
+		"Test frame detach in shared worker's error handler": "FAIL: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/workers/Worker-constructor-proto.any.worker.html": {
+		"Tests that setting the proto of a built in constructor is not reset.": "FAIL: assert_equals: expected \"function () { [native code] }\" but got \"[object Function]\""
+	},
+	"/workers/Worker-postMessage-happens-in-parallel.https.html": {
+		"(harness)": "ERROR: Uncaught ReferenceError: SharedArrayBuffer is not defined",
+		"Tests that calling \"worker.postMessage()\" will occur truly in parallel to the main JS thread": "TIMEOUT: Test timed out"
+	},
+	"/workers/Worker_ErrorEvent_lineno.htm": {
+		" AbstractWorker ErrorEvent.lineno ": "FAIL: assert_equals: expected 3 but got 10"
+	},
+	"/workers/Worker_NosniffErr.htm": {
+		"(harness)": "TIMEOUT: ",
+		" Worker with nosniff X-Content-Type-Options header ": "TIMEOUT: Test timed out"
+	},
+	"/workers/dedicated-worker-from-blob-url.window.html": {
+		"Blob URLs should not resolve relative to document base URL.": "FAIL: assert_equals: Should not be able to resolve request with relative file path in blob expected false but got true"
+	},
+	"/workers/dedicated-worker-in-data-url-context.window.html": {
+		"Create a data url dedicated worker in a data url dedicated worker": "FAIL: promise_test: Unhandled rejection with value: \"Uncaught SyntaxError: Failed to execute 'open' on 'XMLHttpRequest': Invalid URL\""
+	},
+	"/workers/opaque-origin.html": {
+		"Worker has an opaque origin.": "FAIL: assert_equals: expected \"http://127.0.0.1:PORT\" but got \"null\""
+	},
+	"/workers/shared-worker-from-blob-url.window.html": {
+		"(harness)": "TIMEOUT: ",
+		"Creating a shared worker from a blob URL works.": "FAIL: assert_equals: expected \"worker_OK_2\" but got \"worker_OK_1\"",
+		"Connecting to a shared worker on a revoked blob URL works.": "TIMEOUT: Test timed out",
+		"Blob URLs should not resolve relative to document base URL.": "NOTRUN: "
+	},
+	"/workers/shared-worker-options-mismatch.html": {
+		"Connecting to shared worker with different options should be blocked: default to module": "FAIL: promise_test: Unhandled rejection with value: \"Worker loaded succesfully\"",
+		"Connecting to shared worker with different options should be blocked: module to default": "FAIL: promise_test: Unhandled rejection with value: \"Worker loaded succesfully\"",
+		"Connecting to shared worker with different options should be blocked: classic to module": "FAIL: promise_test: Unhandled rejection with value: \"Worker loaded succesfully\"",
+		"Connecting to shared worker with different options should be blocked: module to classic": "FAIL: promise_test: Unhandled rejection with value: \"Worker loaded succesfully\""
+	},
+	"/workers/worker-url-encoding.html": {
+		"Worker URL is parsed using document encoding": "FAIL: assert_equals: expected \"?%DF\" but got \"?%C3%9F\""
+	}
+}
