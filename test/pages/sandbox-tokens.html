@@ -31,6 +31,20 @@
 			])
 				if (element.sandbox.supports(token)) element.sandbox.add(token);
 		});
+		// Google's sign-in page and its CheckConnection frame: an empty
+		// attribute, then one add per flag
+		frame('google', (element) => {
+			element.setAttribute('sandbox', '');
+			for (const token of [
+				'allow-same-origin',
+				'allow-scripts',
+				'allow-forms',
+				'allow-popups',
+				'allow-popups-to-escape-sandbox',
+				'allow-storage-access-by-user-activation',
+			])
+				element.sandbox.add(token);
+		});
 		// a sandbox that is only ever a token list
 		frame('added', (element) => element.sandbox.add('allow-scripts'));
 		frame('value', (element) => {
@@ -77,7 +91,7 @@
 			records: observer
 				.takeRecords()
 				.map((record) => [record.attributeName, record.oldValue]),
-			frames: ['recaptcha', 'added', 'value'].map((name) =>
+			frames: ['recaptcha', 'google', 'added', 'value'].map((name) =>
 				document.getElementById(name).getAttribute('sandbox'),
 			),
 		};

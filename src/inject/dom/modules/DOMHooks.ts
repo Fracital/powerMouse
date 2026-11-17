@@ -53,7 +53,7 @@ import {
 	attributeName,
 	hookWrite,
 	MARKER,
-	pageWrite,
+	pageWrite as observedPageWrite,
 	propertyAttribute,
 } from './MutationObserver';
 
@@ -61,6 +61,24 @@ const attributeTab = new WeakMap<CustomElement, Map<string, string | null>>();
 // the value last applied to each hooked attribute (the routed one), so a
 // hook can tell an attribute it wrote from one the page changed since
 const appliedTab = new WeakMap<Element, Map<string, string | null>>();
+
+/**
+ * A page's write of attribute `name` (every way of setting one comes here):
+ * what the hooks last applied no longer describes the attribute, even when
+ * the page's value is the same string. Google's sign-in page builds its
+ * CheckConnection frame's sandbox one token at a time (`setAttribute('sandbox',
+ * '')`, then `sandbox.add(flag)` per flag), and its `allow-same-origin
+ * allow-scripts` step wrote exactly what the hook had made real of the step
+ * before, so restoreAttributesOG took it for the hook's own value and put
+ * the page's earlier one back: allow-scripts was lost and the frame's
+ * scripts were refused.
+ */
+function pageWrite<T>(element: Element, name: string, callback: () => T): T {
+	// (a name the page gave that is no string is the browser's to refuse)
+	if (typeof name === 'string')
+		appliedTab.get(element)?.delete(attributeName(element, name));
+	return observedPageWrite(element, name, callback);
+}
 
 // the namespace ('' for none) of each prefixed attribute a hook removed
 // (xlink:href, while a load's copy is on its way): set again, it is the same

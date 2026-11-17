@@ -18,7 +18,7 @@ import {
 	submitLanding,
 } from '../lib.mjs';
 
-const NAMES = ['recaptcha', 'added', 'value'];
+const NAMES = ['recaptcha', 'google', 'added', 'value'];
 const PAGE = `${FIXTURE}pages/sandbox-tokens.html`;
 
 /** the page's report once every child has reported or the wait ran out */
