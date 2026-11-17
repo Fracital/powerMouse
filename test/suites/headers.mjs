@@ -1,9 +1,9 @@
 // Response headers that would bind the page to the proxy origin (HSTS,
-// COEP, reporting, Set-Cookie, Clear-Site-Data) are stripped, Link and
-// Content-Location are rewritten, and the request headers the proxy sends
-// follow the browser's defaults: Origin and `strict-origin-when-cross-origin`
-// referrers for cross-origin fetches, fetch metadata computed from the real
-// origins.
+// COEP, reporting, Set-Cookie, Clear-Site-Data) are stripped, a fetch reads
+// Link and Content-Location as the server sent them, and the request
+// headers the proxy sends follow the browser's defaults: Origin and
+// `strict-origin-when-cross-origin` referrers for cross-origin fetches,
+// fetch metadata computed from the real origins.
 import { networkInterfaces } from 'node:os';
 import {
 	done,
@@ -60,15 +60,16 @@ ok(
 	response['x-custom'] === 'kept',
 	JSON.stringify(response['x-custom']),
 );
+// Chrome acts on neither for a fetch's response (link-readback)
 ok(
-	'Link header URLs are rewritten',
-	/\/stomp\/[\w-]+\/css\//.test(response.link || '') &&
-		/\/stomp\/[\w-]+\/js:genericModule\//.test(response.link || ''),
+	'the Link header reads as the server sent it',
+	response.link ===
+		'</pages/imp.css>; rel=preload; as=style, </pages/modworker.js>; rel=modulepreload',
 	JSON.stringify(response.link),
 );
 ok(
-	'Content-Location is rewritten',
-	/\/stomp\//.test(response['content-location'] || ''),
+	'Content-Location reads as the server sent it',
+	response['content-location'] === '/pages/hdr.json',
 	JSON.stringify(response['content-location']),
 );
 const same = hdr.same || {};

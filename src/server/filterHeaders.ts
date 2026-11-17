@@ -129,11 +129,11 @@ function singleContentType(value: string): string {
 }
 
 /**
- * The URL a Location (or Content-Location) names, null for none. A value
- * with bytes past ASCII is not a URL yet: Chrome escapes each such byte
- * as it is (`%E2%98%83` for a snowman a server sent as UTF-8, `%FF` for a
- * byte that is no text at all), where parsing the header as a string
- * would encode each byte as a character of its own
+ * The URL a Location names, null for none. A value with bytes past ASCII
+ * is not a URL yet: Chrome escapes each such byte as it is (`%E2%98%83`
+ * for a snowman a server sent as UTF-8, `%FF` for a byte that is no text
+ * at all), where parsing the header as a string would encode each byte as
+ * a character of its own
  */
 export function locationURL(value: string, base: URL): URL | null {
 	try {
@@ -164,29 +164,35 @@ export function filterNativeRequestHeaders(
 	return filteredHeaders;
 }
 
+/** the statuses whose Location the browser follows */
+export const REDIRECT_STATUSES = [301, 302, 303, 307, 308];
+
 export function filterResponseHeaders(
 	headers: Readonly<Headers>,
+	status: number,
 	url: StompURL,
 	transformRoute: RouteTransform,
 	additionalFilter: AdditionalFilter | void,
 ): Headers {
 	const filteredHeaders = new Headers(headers);
 
-	for (const name of ['location', 'content-location']) {
-		// (not a URL: left as it is)
-		const target = headers.has(name)
-			? locationURL(headers.get(name)!, url.url)
+	// Chrome follows a Location only for a redirect, and does nothing with
+	// a Content-Location: a 201's Location, a 200's and every
+	// Content-Location reach fetch() and XHR as the server sent them
+	// (link-readback). A redirect's that is not a URL is left as it is
+	const target =
+		REDIRECT_STATUSES.includes(status) && headers.has('location')
+			? locationURL(headers.get('location')!, url.url)
 			: null;
-		if (target)
-			try {
-				filteredHeaders.set(
-					name,
-					transformRoute(new StompURL(target, url), url),
-				);
-			} catch (error) {
-				// no route for it: left as it is
-			}
-	}
+	if (target)
+		try {
+			filteredHeaders.set(
+				'location',
+				transformRoute(new StompURL(target, url), url),
+			);
+		} catch (error) {
+			// no route for it: left as it is
+		}
 
 	for (const header of removeHeaders) {
 		filteredHeaders.delete(header);

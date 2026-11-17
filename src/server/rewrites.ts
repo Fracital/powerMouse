@@ -244,6 +244,7 @@ import {
 	filterNativeRequestHeaders,
 	filterResponseHeaders,
 	locationURL,
+	REDIRECT_STATUSES,
 	RouteTransform,
 } from './filterHeaders';
 import { chromeOrderedHeaders, type RequestShape } from './headerOrder';
@@ -544,7 +545,6 @@ function requestTypeOf(request: Request): string | undefined {
 const NAVIGATION_HINT_WAIT_MS = 100;
 const redirectHops = new Map<string, RedirectHop & { at: number }>();
 const REDIRECT_HOP_TTL = 60_000;
-const REDIRECT_STATUSES = [301, 302, 303, 307, 308];
 
 function redirectKey(client: string, referrer: string, target: string): string {
 	const url = new URL(target);
@@ -3669,6 +3669,7 @@ function genericForward(
 
 		let responseHeaders = filterResponseHeaders(
 			response.headers,
+			response.status,
 			url,
 			// a redirect keeps the integrity its load carries: the browser
 			// checks the response at the end of the chain
@@ -4005,8 +4006,13 @@ function genericForward(
 			}
 		}
 
-		// preloads announced by the server fetch through the proxy too
-		if (responseHeaders.has('link'))
+		// preloads announced by the server fetch through the proxy too. Chrome
+		// acts on a Link header only for a document's own response (measured,
+		// Chrome 157: a script's, a stylesheet's, an image's, a fetch's and an
+		// XHR's announce nothing), and no page reads a document's headers; so
+		// only a navigation's is rewritten, and fetch() and XHR read every
+		// other one as the server sent it (link-readback)
+		if (navigation && responseHeaders.has('link'))
 			responseHeaders.set(
 				'link',
 				rewriteLinkHeader(
