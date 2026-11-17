@@ -191,6 +191,8 @@ export default class VisitedModule extends Module<DocumentClient> {
 		};
 
 		const history = global.history;
+		/** the calls under way are the module's own steps of one navigation */
+		let stepping = false;
 		const call = (
 			method: 'pushState' | 'replaceState',
 			state: unknown,
@@ -200,14 +202,22 @@ export default class VisitedModule extends Module<DocumentClient> {
 			if (that !== history || observes() || !spare()) return false;
 			const route = link(url);
 			if (!isLinkRoute(route, scope)) return false;
-			Reflect.apply(native, that, [args[0], args[1], route]);
-			Reflect.apply(natives.replaceState, that, args);
+			// the two calls are the proxy's own steps: the navigate listener
+			// below took the first, to a fragment of this document, for a
+			// link's navigation to it and made it one, with the popstate, the
+			// hashchange and the scroll no pushState makes
+			stepping = true;
+			try {
+				Reflect.apply(native, that, [args[0], args[1], route]);
+				Reflect.apply(natives.replaceState, that, args);
+			} finally {
+				stepping = false;
+			}
 			return true;
 		};
 
 		// a fragment navigation that makes an entry, by a link (which names
 		// its link route) or by script (which names the document's address)
-		let stepping = false;
 		Reflect.apply(nativeEventTarget.addEventListener, navigation, [
 			'navigate',
 			(event: Event) => {

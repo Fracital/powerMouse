@@ -79,9 +79,6 @@
 	"/html/browsers/history/the-history-interface/history_properties_only_fully_active.html": {
 		"history properties should throw SecurityError when not in a fully active Document": "FAIL: Failed to read a named property 'history' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
 	},
-	"/html/browsers/history/the-history-interface/history_pushstate_url.html": {
-		"(harness)": "ERROR: Uncaught Error: assert_equals: history traversal restores old url expected \"http://localhost:PORT/html/browsers/history/the-history-interface/history_pushstate_url.html#hash\" but got \"http://localhost"
-	},
 	"/html/browsers/history/the-history-interface/history_pushstate_url_rewriting.html": {
 		"blob:(a blob URL for this origin) to blob:(a blob URL for this origin) should  work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to execute 'pushState' on 'History': A history state object with URL 'blob:http://localhost:PORT/UUID' cannot be created in ",
 		"blob:(a blob URL for this origin) to blob:(a blob URL for this origin)#newhash should  work": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to execute 'pushState' on 'History': A history state object with URL 'blob:http://localhost:PORT/UUID#newhash' cannot be cre",
