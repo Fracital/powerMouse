@@ -352,13 +352,13 @@ browser holds it for another site, the browser's own refusal when it has
 denied the proxy origin. Each refusal is the one the browser gives a
 refused origin, word for word. The code is deferred
 (src/inject/permissionGates.ts): what runs in every document is the
-wrappers, and SpeechRecognition's and Notification's not even those until
-the page first names the interface (the only way to either; the names are
-accessors until then, which no reflection shows). The clipboard's methods
-and a device API's grants are hooked the first time the page reads the
-navigator member. Hooking on the first read of `navigator` itself would
-save nothing: the inject reads it in every frame during the page's first
-script.
+wrappers (SpeechRecognition's start and the Notification constructor among
+them: the interfaces have no other way to them, so holding their names
+until the page first reads one would only add accessors to interfaces made
+anyway). The clipboard's methods and a device API's grants are hooked the
+first time the page reads the navigator member. Hooking on the first read
+of `navigator` itself would save nothing: the inject reads it in every
+frame during the page's first script.
 
 Notifications: a notification's `tag` is the site's own (the browser gets
 `<site> <tag>`, so one site's notification never replaces another's), and

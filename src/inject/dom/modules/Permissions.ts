@@ -540,7 +540,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 					}
 				},
 			}),
-			(op) => ask(op),
+			ask,
 		);
 	}
 
@@ -551,8 +551,8 @@ export default class PermissionsModule extends Module<DocumentClient> {
 	 * parts': what is here is the wrappers, in place before the page's first
 	 * script, each hooking or asking the parts at the first call or read,
 	 * and little more is kept (frame-cost): the most is the
-	 * SpeechRecognition interface (about 1.2 KB a frame), which has to be
-	 * made to be had once its names are held.
+	 * SpeechRecognition interface (about 1.7 KB a frame), which has to be
+	 * made to hook its start.
 	 */
 	gates(
 		context: () => GateContext,
@@ -616,43 +616,31 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		hook(navigator, 'hid', true);
 		hook(navigator, 'serial', true);
 		hook(navigator, 'bluetooth', true);
-		// SpeechRecognition's start, the first time the page names the
-		// interface (by either name: webkitSpeechRecognition is the same
-		// one), the only way to it or to a recognition: hooking its prototype
-		// cost every frame about 1.4 KB (frame-cost)
+		// SpeechRecognition's start (webkitSpeechRecognition is the same
+		// interface), the only way to a recognition. The interface is made in
+		// every frame (about 1.7 KB, frame-cost): holding its names behind
+		// accessors does not spare it, as no other way to it is left once both
+		// are deleted, so the accessors would only add to it
 		const Speech = (global as unknown as { SpeechRecognition?: Function })
 			.SpeechRecognition;
 		if (typeof Speech === 'function') {
-			let hooked = false;
-			const make = () => {
-				if (!hooked) {
-					hooked = true;
-					hooks.brand = getter(Speech.prototype, 'continuous');
-					hook(Speech.prototype, 'start');
-				}
-				return Speech;
-			};
-			lazyInterface(this.client, proxyModule, 'SpeechRecognition', make);
-			if ('webkitSpeechRecognition' in global)
-				lazyInterface(
-					this.client,
-					proxyModule,
-					'webkitSpeechRecognition',
-					make,
-				);
+			hooks.brand = getter(Speech.prototype, 'continuous');
+			hook(Speech.prototype, 'start');
 		}
 		// a notification's tag is its site's and its images are routed; one
 		// the site may not show is never shown (the parts' notificationParts).
-		// The constructor is the wrapper from the first time the page names
-		// it, the only way to it (a registration's getNotifications() lists
-		// none): standing it in for the native cost every frame about 1.7 KB
+		// The constructor is the wrapper, the only way to a notification (a
+		// registration's getNotifications() lists none). The interface is
+		// made in every frame anyway (Notification.permission is the site's),
+		// so the wrapper is in place from the start: holding the name behind
+		// accessors cost more than it
 		const NativeNotification = (global as { Notification?: Function })
 			.Notification;
 		if (typeof NativeNotification === 'function') {
 			let construct:
 				| ((target: Function, args: unknown[], newTarget: Function) => object)
 				| null = null;
-			lazyInterface(this.client, proxyModule, 'Notification', () =>
+			(global as { Notification?: Function }).Notification =
 				proxyModule.wrapFunction(
 					NativeNotification,
 					(target, that, args, newTarget) => {
@@ -660,8 +648,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 						return construct!(target, args, newTarget);
 					},
 					true,
-				),
-			);
+				);
 		}
 		// the permission elements, the first time one is clicked or delivers
 		if ('HTMLGeolocationElement' in global || 'HTMLCameraElement' in global) {

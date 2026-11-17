@@ -2,9 +2,8 @@
 <title>ADV GRANTS NAMES</title>
 <script>
 	// A fresh realm where nothing has named SpeechRecognition or Notification
-	// yet (the proxy holds both behind accessors until then): the prefixed
-	// name read first is the gated interface, and a write or a delete before
-	// any read is the data property's, as natively
+	// yet: the prefixed name read first is the gated interface, and a write
+	// or a delete before any read is the data property's, as natively
 	const facts = [];
 	const Prefixed = webkitSpeechRecognition;
 	const recognition = new Prefixed();
