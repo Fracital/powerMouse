@@ -110,6 +110,7 @@ import {
 	userMediaCall,
 } from './modules/permissionCalls';
 import { emulateServiceWorker } from './modules/serviceWorkerEmulation';
+import { navigateOther } from './navigateOther';
 import { navigationRefusal, precommitRedirect } from './navigationRefusal';
 import { openerFacts, opensWithoutOpener } from './openerFacts';
 import { pictureWindows } from './pictureWindows';
@@ -164,6 +165,9 @@ export const parts = {
 	xhrMessage,
 	emulateServiceWorker,
 	markupMembers,
+	// a document's navigation of another window, refused as Chrome refuses
+	// it, at its first (./navigateOther.ts; modules/Context.ts)
+	navigateOther,
 	navigationRefusal,
 	precommitRedirect,
 	webTransportStandIn,

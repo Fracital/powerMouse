@@ -128,6 +128,30 @@
 						document.body.append(frame);
 						setTimeout(() => resolve({ stayed: true }), 2000);
 					}),
+				// a navigation of another window of the page's (a frame of its
+				// own, by `w.location = url`): where the frame is after it
+				navigateOther: () =>
+					new Promise((resolve) => {
+						const frame = document.createElement('iframe');
+						frame.onload = async () => {
+							frame.onload = null;
+							const result = await outcome(() => {
+								frame.contentWindow.location =
+									'deferred-refusals-landed.html?moved';
+							});
+							setTimeout(() => {
+								let at;
+								try {
+									at = frame.contentWindow.location.search;
+								} catch (error) {
+									at = String(error && error.message);
+								}
+								resolve({ ...result, at });
+							}, 2000);
+						};
+						frame.src = 'deferred-refusals-landed.html';
+						document.body.append(frame);
+					}),
 				// a same-origin download link's click: the copy is saved after
 				// the click went through the page (the suite counts downloads)
 				download: () =>

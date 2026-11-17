@@ -5,7 +5,8 @@
 // constraints, setSinkId, an AudioContext's sinkId, RTCPeerConnection, an
 // XHR's misuse and its response document, an identity credential's get and
 // disconnect (FedCM), a same-origin download link's click, a form a
-// frame submits to its proxied parent. A part is made
+// frame submits to its proxied parent, a frame's navigation of another
+// window (`w.location = url`). A part is made
 // synchronously within the call that needs it, so no page code runs between
 // the hook and the part (a download's copy is made after the click went
 // through the page, which the browser's own download had been cancelled
@@ -61,6 +62,7 @@ const REFUSING = [
 	'disconnect',
 	'download',
 	'formAimed',
+	'navigateOther',
 ];
 /** the calls that answer with a promise, which rejects */
 const PROMISED = [
@@ -173,6 +175,15 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			answer.reached?.includes('xhrDocument'),
 		JSON.stringify(answer),
 	);
+	const navigated = await top.evaluate(
+		(calls) => window.__child(calls),
+		['navigateOther'],
+	);
+	ok(
+		'with the parts, a frame navigates a window of its own',
+		navigated.out?.navigateOther?.at === '?moved',
+		JSON.stringify(navigated.out?.navigateOther),
+	);
 	const aimed = await top.evaluate(
 		(calls) => window.__child(calls),
 		['formAimed'],
@@ -234,7 +245,8 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 	const refused = (call) =>
 		out[call]?.threw === 'no parts' || refusedPromise(call);
 	for (const call of REFUSING.filter(
-		(call) => !['xmlDocument', 'download', 'formAimed'].includes(call),
+		(call) =>
+			!['xmlDocument', 'download', 'formAimed', 'navigateOther'].includes(call),
 	))
 		ok(
 			`without the parts, ${call} refuses${
@@ -263,6 +275,11 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		'without the parts, a form a frame aims at its parent navigates nothing, neither the copy nor the browser',
 		out.formAimed?.stayed === true,
 		JSON.stringify(out.formAimed),
+	);
+	ok(
+		'without the parts, a navigation of another window throws and navigates nothing',
+		out.navigateOther?.threw === 'no parts' && out.navigateOther?.at === '',
+		JSON.stringify(out.navigateOther),
 	);
 	const saved = await downloadsSince(from);
 	ok(

@@ -453,6 +453,7 @@ const DEFERRED_FILES = new Set(
 		'src/inject/dom/xhrMessages.ts',
 		'src/inject/dom/xhrParse.ts',
 		'src/inject/dom/modules/serviceWorkerEmulation.ts',
+		'src/inject/dom/navigateOther.ts',
 		'src/inject/dom/navigationRefusal.ts',
 		'src/inject/dom/passkeys.ts',
 		'src/inject/dom/passkeysPart.ts',
