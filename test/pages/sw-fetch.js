@@ -2,8 +2,20 @@
 // (a body, a script, a redirect, a stream, an image, an echo of a POST, a
 // network error, a value that is no Response), passes one to the network
 // with fetch(event.request), leaves the rest alone, and remembers how each
-// request looked to it.
+// request looked to it. Three streams keep their chunks (one chunk, several
+// at once, and a response it cloned, whose twin it reads only later): what
+// the browser read of them leaves them as they were.
 const seen = {};
+const kept = {};
+const encoded = (...parts) =>
+	parts.map((part) => new TextEncoder().encode(part));
+const streamOf = (chunks) =>
+	new ReadableStream({
+		start(controller) {
+			for (const chunk of chunks) controller.enqueue(chunk);
+			controller.close();
+		},
+	});
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil(clients.claim()));
 self.addEventListener('fetch', (event) => {
@@ -57,6 +69,32 @@ self.addEventListener('fetch', (event) => {
 			);
 			break;
 		}
+		case 'kept-one':
+			kept.one = encoded('one');
+			event.respondWith(new Response(streamOf(kept.one)));
+			break;
+		case 'kept-many':
+			kept.many = encoded('a', 'bb', 'ccc');
+			event.respondWith(new Response(streamOf(kept.many)));
+			break;
+		case 'kept-twin': {
+			const original = new Response(streamOf(encoded('x', 'yy', 'zzz')));
+			kept.twin = original.clone();
+			event.respondWith(original);
+			break;
+		}
+		case 'kept-check':
+			event.respondWith(
+				(async () =>
+					new Response(
+						JSON.stringify({
+							one: kept.one?.map((chunk) => chunk.byteLength),
+							many: kept.many?.map((chunk) => chunk.byteLength),
+							twin: await kept.twin?.text(),
+						}),
+					))(),
+			);
+			break;
 		case 'sw-fetch-data.json':
 			event.respondWith(fetch(request));
 			break;

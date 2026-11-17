@@ -1722,7 +1722,8 @@ export class ServiceWorkers {
 				if (!preload || !response?.body || preload.taken) return [null, []];
 				preload.taken = true;
 				this.#preloads.delete(event);
-				const body = sendBody(response.body);
+				// the proxy's own fetch, which no one else reads
+				const body = sendBody(response.body, true);
 				return [body, [body.$stompBodyPort]];
 			},
 			respond: async ({ event, answer }) => {

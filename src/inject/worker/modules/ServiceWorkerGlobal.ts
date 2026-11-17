@@ -1244,7 +1244,7 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 				// its bytes go on (an image the page shows); the page reads
 				// nothing of them
 				const stream = nativeBodyOf(response);
-				const opaqueBody = stream ? sendBody(stream) : null;
+				const opaqueBody = stream ? sendBody(stream, false) : null;
 				return [
 					{
 						kind: 'response',
@@ -1292,7 +1292,7 @@ export default class ServiceWorkerGlobalModule extends Module<WorkerClient> {
 					},
 					[],
 				];
-			const body = response.body ? sendBody(response.body) : null;
+			const body = response.body ? sendBody(response.body, false) : null;
 			const wire: WireServiceWorkerResponse = {
 				status: response.status,
 				statusText: response.statusText,

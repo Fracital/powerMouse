@@ -102,6 +102,20 @@ export async function workerMemory(browser) {
 				}
 			return out;
 		},
+		/**
+		 * The ArrayBuffer backing stores the targets of `label` hold as they
+		 * stand, summed: live and dead, with no collection first (after a
+		 * `memory()`, what grows is what the work since left to the
+		 * collector, or kept); null when there is no such target
+		 */
+		async uncollected(label) {
+			let total = null;
+			for (const sessionId of await sessions(label)) {
+				const usage = await inTarget(sessionId, 'Runtime.getHeapUsage');
+				if (usage) total = (total ?? 0) + usage.backingStorageSize;
+			}
+			return total;
+		},
 		/** how many objects of `constructor` the targets of `label` hold alive */
 		async count(label, constructor) {
 			let total = 0;

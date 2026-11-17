@@ -7,8 +7,14 @@
 // decoded body, as natively (the transport decodes once; the worker's
 // Response is not decoded again). A page that cancels the body stops the
 // origin's response, and a body the page leaves unread for a while flows
-// again when it reads. The bodies come from a server this suite runs
-// itself, so it can watch what the origin wrote.
+// again when it reads. The transport's worker hands the body on as the
+// transport made it: its chunks' buffers are transferred, not joined into
+// buffers of its own, which were one more copy of every body for the
+// worker's collector (its ArrayBuffer memory grew by about the body's size,
+// 11 MB for this one, and the renderer's with it: the frames' renderer in
+// same-origin mode). The
+// bodies come from a server this suite runs itself, so it can watch what
+// the origin wrote.
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { brotliCompressSync, constants, gzipSync } from 'node:zlib';
@@ -22,6 +28,7 @@ import {
 	sleep,
 	submitLanding,
 } from '../lib.mjs';
+import { workerMemory } from '../worker-memory.mjs';
 
 const SIZE = 12 * 1000 * 1000;
 
@@ -141,6 +148,7 @@ const readCut = async (url) => {
 };
 
 const browser = await launch();
+const workers = await workerMemory(browser);
 
 const nativePage = await browser.newPage();
 await nativePage.goto(`${ORIGIN}page.html`);
@@ -189,9 +197,24 @@ for (const [mode, base] of [
 		continue;
 	}
 	for (const encoding of Object.keys(variants)) {
+		// what the transport's worker is left with in ArrayBuffers after the
+		// plain body, none of it collected: the transferred chunks leave it,
+		// a copy of its own would stay (about 11 MB; 2 MB without)
+		await workers.memory();
+		const held =
+			encoding === 'identity' ? await workers.uncollected('transport') : null;
 		const proxied = await frame
 			.evaluate(readAll, `${ORIGIN}big.js?enc=${encoding}`)
 			.catch((error) => ({ error: String(error).slice(0, 200) }));
+		if (encoding === 'identity') {
+			const left = await workers.uncollected('transport');
+			const grew = held === null || left === null ? null : left - held;
+			ok(
+				`${mode}: the transport's worker passes the 12 MB body on without a copy of its own`,
+				grew !== null && grew < SIZE / 2,
+				JSON.stringify({ grewMB: grew === null ? null : grew / 1e6 }),
+			);
+		}
 		ok(
 			`${mode}: ${encoding}: the page reads the same 12 MB with the same Content-Encoding and Content-Length as natively`,
 			proxied.status === 200 &&
@@ -315,6 +338,7 @@ for (const [mode, base] of [
 	await page.close();
 }
 
+await workers.detach();
 server.close();
 server.closeAllConnections();
 await done(browser);

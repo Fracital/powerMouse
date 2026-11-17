@@ -11,11 +11,13 @@
 // tasks, and the bundle took 1.4 s to read where the transport had all of it
 // in 0.4 s.
 //
-// Here the sender reads the body as fast as the transport gives it, joins
-// what arrived within one task into one message (its buffer transferred, not
-// copied) and keeps up to BODY_WINDOW bytes in flight; the receiver grants
-// more as its reader takes them, so a reader that stops still stops the
-// transport, and a cancelled stream cancels the transport's body.
+// Here the sender reads the body as fast as the transport gives it, sends
+// what arrived within one task as one message (the chunks' buffers
+// transferred, not copied, nor joined into a new buffer, which would be one
+// more body's worth of garbage in the renderer's worker) and keeps up to
+// BODY_WINDOW bytes in flight; the receiver grants more as its reader takes
+// them, so a reader that stops still stops the transport, and a cancelled
+// stream cancels the transport's body.
 
 import { postToPort } from './messages';
 import { closePort, onPort, privateChannel } from './ports';
@@ -27,7 +29,7 @@ const MESSAGE_MAX = 1024 * 1024;
 
 /** sender to receiver */
 type BodyMessage =
-	| { type: 'data'; data: Uint8Array }
+	| { type: 'data'; data: Uint8Array | Uint8Array[] }
 	| { type: 'end' }
 	| { type: 'error'; error: unknown };
 
@@ -59,8 +61,18 @@ function ownsBuffer(chunk: Uint8Array): boolean {
 	);
 }
 
-/** the sending end: reads `body` and pushes it to the port it returns */
-export function sendBody(body: ReadableStream<Uint8Array>): PortBody {
+/**
+ * the sending end: reads `body` and pushes it to the port it returns.
+ * `owned`: no one else holds the stream's chunks (the transport's, a
+ * response the proxy fetched), so their buffers are transferred; a page's
+ * own stream (a response its service worker made, or one it may have
+ * cloned, whose twin shares the chunks) is copied, as the browser copies
+ * what it reads from it, so the page's buffers are never detached
+ */
+export function sendBody(
+	body: ReadableStream<Uint8Array>,
+	owned: boolean,
+): PortBody {
 	// the browser's own channel, listened to with its own methods: in a
 	// page's realm the page may have replaced them (src/transport/ports.ts)
 	const [port, port2] = privateChannel();
@@ -91,21 +103,31 @@ export function sendBody(body: ReadableStream<Uint8Array>): PortBody {
 	const flush = () => {
 		scheduled = false;
 		if (stopped || batched === 0) return;
-		let data: Uint8Array;
-		if (batch.length === 1 && ownsBuffer(batch[0])) data = batch[0];
-		else {
-			data = new Uint8Array(batched);
-			let at = 0;
-			for (const part of batch) {
-				data.set(part, at);
-				at += part.byteLength;
-			}
+		// a chunk that is part of a larger buffer (or shares one with
+		// another chunk) is copied: transferring it would move all of that
+		// buffer, and the structured clone would copy all of it. A chunk
+		// that is not ours is left to the structured clone, which copies it
+		// straight into the receiver's buffer
+		const transfer: ArrayBuffer[] = [];
+		const data: Uint8Array[] = [];
+		for (let i = 0; i < batch.length; i++) {
+			const chunk = batch[i];
+			const whole =
+				ownsBuffer(chunk) && !transfer.includes(chunk.buffer as ArrayBuffer);
+			const sent = whole ? chunk : new Uint8Array(chunk);
+			if (owned || !whole) transfer.push(sent.buffer as ArrayBuffer);
+			data.push(sent);
 		}
 		batch = [];
 		batched = 0;
-		postToPort(port, { type: 'data', data } satisfies BodyMessage, [
-			data.buffer as ArrayBuffer,
-		]);
+		postToPort(
+			port,
+			{
+				type: 'data',
+				data: data.length === 1 ? data[0] : data,
+			} satisfies BodyMessage,
+			transfer,
+		);
 	};
 
 	const pump = async () => {
@@ -165,8 +187,12 @@ export function receiveBody({
 					const data = message as BodyMessage;
 					if (!open) return;
 					if (data.type === 'data') {
-						received += data.data.byteLength;
-						controller.enqueue(data.data);
+						for (const chunk of Array.isArray(data.data)
+							? data.data
+							: [data.data]) {
+							received += chunk.byteLength;
+							controller.enqueue(chunk);
+						}
 					} else if (data.type === 'end') {
 						close();
 						controller.close();

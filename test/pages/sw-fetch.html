@@ -68,6 +68,18 @@
 		);
 		await settle('redirect', () => text('redirect'));
 		await settle('stream', () => text('stream'));
+		await settle('a stream of one chunk the worker keeps', () =>
+			text('kept-one'),
+		);
+		await settle('a stream of chunks the worker keeps', () =>
+			text('kept-many'),
+		);
+		await settle('a response whose clone the worker keeps', () =>
+			text('kept-twin'),
+		);
+		await settle('what the worker kept', async () =>
+			JSON.parse((await text('kept-check'))[4]),
+		);
 		await settle('passed through', () => text('sw-fetch-data.json'));
 		await settle('left alone', () => text('sw-fetch-target.txt?alone'));
 		await settle('network error', () => text('error'));

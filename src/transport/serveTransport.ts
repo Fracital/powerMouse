@@ -247,6 +247,7 @@ export default function serveTransport(
 				if (response.body instanceof ReadableStream) {
 					const pushed = sendBody(
 						resumableBody(transport, url, method, sent, response),
+						true,
 					);
 					return [{ ...response, body: pushed }, [pushed.$stompBodyPort]];
 				}

@@ -4,7 +4,10 @@
 // outside its scope and one of another origin (a controlled page's requests
 // all go to its worker), a script (rewritten like the origin's: it reads
 // the page's real location), Response.redirect with a relative URL, a
-// stream, fetch(event.request) passed through, a request it leaves alone, a
+// stream, streams whose chunks the worker keeps (one chunk, several, a
+// response whose clone it reads later: the proxy copies them as the browser
+// does, and never takes their buffers from the worker), fetch(event.request)
+// passed through, a request it leaves alone, a
 // network error, a value that is no Response, a POST it echoes, an image;
 // and the mode, destination, credentials, redirect and referrer each request
 // showed the worker. Then every service worker is stopped, and the next
