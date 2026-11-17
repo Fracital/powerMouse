@@ -1,0 +1,22 @@
+{
+	"/html/browsers/windows/browsing-context-names/choose-_parent-002.html": {
+		"choosing _parent context: multiple nested contexts": "FAIL: assert_equals: expected (string) \"iframeParent\" but got (undefined) undefined"
+	},
+	"/html/browsers/windows/browsing-context-names/choose-existing-001.html": {
+		"(harness)": "TIMEOUT: ",
+		"An existing browsing context must be chosen if the given name is the same as its name": "TIMEOUT: Test timed out"
+	},
+	"/html/browsers/windows/embedded-opener-remove-frame.html": {
+		"(harness)": "TIMEOUT: "
+	},
+	"/html/browsers/windows/nested-browsing-contexts/frameElement.sub.html": {
+		"The window's frameElement attribute must return its container element if it is a nested browsing context": "FAIL: Failed to read a named property 'frameElement' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/html/browsers/windows/nested-browsing-contexts/window-parent-null.html": {
+		"`window.parent` is null when browsing context container element removed": "FAIL: assert_equals: expected null but got object \"[object Window]\"",
+		"`window.parent` null when parent browsing context container removed": "FAIL: assert_equals: expected null but got object \"[object Window]\""
+	},
+	"/html/browsers/windows/noreferrer-window-name.html": {
+		"Targeting a rel=noreferrer link at an existing named window should work": "FAIL: assert_equals: expected \"blob:http://localhost:PORT/UUID\" but got \"http://localhost:PORT/html/browsers/windows/noreferrer-window-name.html\""
+	}
+}
