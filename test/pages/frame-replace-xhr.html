@@ -1,0 +1,56 @@
+<!doctype html>
+<title>FRAME REPLACE XHR</title>
+<body></body>
+<script>
+	// bankofamerica.com's fraud-detection frame (porte.js): the page makes a
+	// hidden frame with src about:blank, appends it, and sends the frame to a
+	// page of another origin from its contentWindow's location in the same
+	// turn, while the page's other scripts keep changing the document. The
+	// frame posts to its own origin with a header that is not safelisted
+	// (X-Embedding-Uri): the request is the frame's own, so natively it is
+	// same-origin and asks nothing first. Each way is made with the child's
+	// answer on time and late (`delay`); the result of each is kept by name
+	// in window.__record.
+	const child = '/pages/frame-replace-xhr-child.html';
+	const other = location.origin.replace('www.', 'dull.');
+	window.__record = {};
+	const ways = [];
+	for (const way of ['src', 'replace', 'assign', 'porte'])
+		for (const delay of [0, 300]) ways.push(`${way}-${delay}`);
+	// the page's other scripts: an insertion every few milliseconds
+	const churn = setInterval(() => {
+		const node = document.createElement('div');
+		document.body.appendChild(node);
+		node.remove();
+	}, 4);
+	addEventListener('message', (event) => {
+		if (!event.data || !event.data.replaceFrame) return;
+		__record[event.data.replaceFrame] = event.data.result;
+		if (ways.every((way) => way in __record)) {
+			clearInterval(churn);
+			__record.done = true;
+		}
+	});
+	for (const way of ways) {
+		const [how, delay] = way.split('-');
+		const url = `${other}${child}?way=${way}&delay=${delay}#e=${encodeURIComponent(location.origin)}`;
+		const frame = document.createElement('iframe');
+		frame.style.display = 'none';
+		if (how === 'src') {
+			frame.src = url;
+			document.body.appendChild(frame);
+			continue;
+		}
+		frame.src = 'about:blank';
+		document.body.appendChild(frame);
+		const view = frame.contentWindow;
+		if (how === 'replace') view.location.replace(url);
+		else if (how === 'assign') view.location.href = url;
+		else {
+			// porte.js: names the frame and checks its document first
+			view.name = `porte${delay}`;
+			if (view.document && view.document.readyState == 'complete')
+				view.location.replace(url);
+		}
+	}
+</script>

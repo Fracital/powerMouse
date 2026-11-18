@@ -1,0 +1,21 @@
+<!doctype html>
+<title>replaced frame</title>
+<script>
+	// iconnectmx.html's post to its own origin: a form body with
+	// X-Embedding-Uri, a header that is not safelisted
+	const xhr = new XMLHttpRequest();
+	xhr.open('POST', '/echo-body?cid=19');
+	xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+	xhr.setRequestHeader('X-Embedding-Uri', 'https://www.example.com/');
+	const report = (result) =>
+		parent.postMessage(
+			{
+				replaceFrame: new URLSearchParams(location.search).get('way'),
+				result,
+			},
+			'*',
+		);
+	xhr.onload = () => report(`${xhr.status} ${xhr.responseText.trim()}`);
+	xhr.onerror = () => report('error');
+	xhr.send('d=abcd');
+</script>

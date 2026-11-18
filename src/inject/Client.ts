@@ -78,6 +78,32 @@ const nativeQueueMicrotask =
 	typeof queueMicrotask === 'function' ? queueMicrotask : undefined;
 
 /**
+ * A frame's element and its attributes as the browser has them, taken when
+ * the bundle runs (navigationPending). By the time a frame's client checks,
+ * the hooks answer for the page: the window's frameElement is null for a
+ * frame of another origin than its parent, and the element's src reads back
+ * the page's own value, about:blank for a frame the page sent on from its
+ * initial about:blank by its location (a fresh context, whose real src is
+ * the route: freshContext.ts).
+ */
+const frameNatives = (() => {
+	try {
+		const frameElement = Reflect.getOwnPropertyDescriptor(
+			globalThis,
+			'frameElement',
+		)?.get;
+		if (!frameElement || typeof Element !== 'function') return null;
+		return {
+			frameElement,
+			getAttribute: Element.prototype.getAttribute,
+			hasAttribute: Element.prototype.hasAttribute,
+		};
+	} catch (error) {
+		return null;
+	}
+})();
+
+/**
  * Whether the frame of `global`, an initial about:blank, has a document to
  * navigate to (a src or srcdoc): Chrome keeps the window for that document
  * (the same origin), and once the about:blank's
@@ -85,15 +111,23 @@ const nativeQueueMicrotask =
  * a controller, though the worker answers all its requests (measured,
  * Chrome 157). Its inject would take it for a document no worker controls
  * and send its requests through its parent's realm, judged by the parent's
- * policies and named as the parent's.
+ * policies and named as the parent's. The frame and its attributes are
+ * read as the browser has them (frameNatives).
  */
 function navigationPending(global: typeof globalThis): boolean {
+	if (!frameNatives) return false;
 	try {
-		const frame = Reflect.get(global, 'frameElement') as Element | null;
+		const frame = Reflect.apply(
+			frameNatives.frameElement,
+			global,
+			[],
+		) as Element | null;
+		if (!frame) return false;
+		const src = Reflect.apply(frameNatives.getAttribute, frame, ['src']) as
+			string | null;
 		return (
-			!!frame &&
-			(frame.hasAttribute('srcdoc') ||
-				!/^\s*(about:blank)?\s*$/.test(frame.getAttribute('src') ?? ''))
+			Reflect.apply(frameNatives.hasAttribute, frame, ['srcdoc']) ||
+			!/^\s*(about:blank)?\s*$/.test(src ?? '')
 		);
 	} catch (error) {
 		return false;
