@@ -148,9 +148,60 @@ async function takeReport(path) {
 	return response.status === 200 ? response.json() : null;
 }
 
-/** wait for the page at `path` to report, or give up with a TIMEOUT */
 /** how long a page's posted report is waited for before its window is read instead */
 const FALLBACK_AFTER_MS = 10000;
+
+/**
+ * A frame's window.__wptResults, read with no user gesture. Playwright
+ * evaluates with one (a string as well as a function), and a gesture gives
+ * the page transient activation, in Chrome as through the proxy: a
+ * navigation the page starts within five seconds sends Sec-Fetch-User, and
+ * a page that is still running when its window is read is measured with
+ * activations the other run never had. A proxied page that runs past
+ * FALLBACK_AFTER_MS and not natively, wpt-fetch-metadata's
+ * window-location page (17 s against 7 to 10 s), was read every POLL_MS
+ * while it ran, and one of its four navigations that expect none sent
+ * Sec-Fetch-User now and then. CDP's Runtime.evaluate without
+ * `userGesture` gives none (measured in Chrome 157: `hasBeenActive` stays
+ * false). Null when the frame is gone or has no copy.
+ */
+async function readResults(frame) {
+	let session;
+	try {
+		const page = frame.page();
+		session = await page.context().newCDPSession(page);
+		const { frameTree } = await session.send('Page.getFrameTree');
+		const unfragmented = frame.url().replace(/#.*$/s, '');
+		const find = (node) =>
+			node.frame.url === unfragmented &&
+			(frame.parentFrame() === null) === !node.frame.parentId
+				? node.frame.id
+				: (node.childFrames ?? []).map(find).find(Boolean);
+		const frameId = find(frameTree);
+		if (!frameId) return null;
+		const contexts = new Map();
+		session.on('Runtime.executionContextCreated', ({ context }) => {
+			if (context.auxData?.isDefault)
+				contexts.set(context.auxData.frameId, context.id);
+		});
+		// (reports the contexts there are now, before it answers)
+		await session.send('Runtime.enable');
+		const contextId = contexts.get(frameId);
+		if (contextId === undefined) return null;
+		const { result } = await session.send('Runtime.evaluate', {
+			expression: 'window.__wptResults',
+			contextId,
+			returnByValue: true,
+		});
+		return result.value ?? null;
+	} catch (error) {
+		return null;
+	} finally {
+		await session?.detach().catch(() => {});
+	}
+}
+
+/** wait for the page at `path` to report, or give up with a TIMEOUT */
 
 async function awaitReport(path, fallback) {
 	const started = Date.now();
@@ -159,9 +210,8 @@ async function awaitReport(path, fallback) {
 		const report = await takeReport(path);
 		if (report) return report;
 		// the page's own report (posted to the fixture) is what counts; reading
-		// the window is the fallback for a page that cannot post, and only
-		// late: Playwright evaluates with a user gesture, which gives the page
-		// transient activation and so Sec-Fetch-User on its next navigation
+		// the window (readResults, with no user gesture) is the fallback for
+		// a page that cannot post, and only late
 		if (Date.now() - started < FALLBACK_AFTER_MS) continue;
 		const direct = await fallback?.();
 		if (direct) return direct;
@@ -204,7 +254,7 @@ async function runNative(browser, tests, concurrency) {
 				}
 				const started = Date.now();
 				const report = await awaitReport(path, () =>
-					page.evaluate(() => window.__wptResults).catch(() => null),
+					readResults(page.mainFrame()),
 				);
 				results.set(path, report);
 				progress('native', path, report, started);
@@ -283,9 +333,7 @@ async function runProxied(browser, tests, concurrency, native, expected) {
 							f.parentFrame() === page.mainFrame() &&
 							/\/stomp\/[\w-]+\/html\//.test(f.url()),
 					);
-				const direct = await frame
-					?.evaluate(() => window.__wptResults)
-					.catch(() => null);
+				const direct = frame ? await readResults(frame) : null;
 				return direct?.path === path.split('?')[0] ? direct : null;
 			};
 			while (queue.length) {
