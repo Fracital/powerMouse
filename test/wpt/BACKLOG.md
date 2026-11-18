@@ -546,9 +546,8 @@ makes a history entry there since 211f4cc3).
 - `html/semantics/scripting-1/the-script-element/module/module-import-referrer.html`
   (2: dynamic imports from inline and from external modules, Referer ""),
   `html/semantics/scripting-1/the-script-element/module/referrer-origin.sub.html`
-  (2: the localhost origin where the importing module's is wanted),
-  `html/semantics/scripting-1/the-script-element/module/referrer-policy-for-descendants.sub.html`
-  (3): an import's Referer is the document's, or none. A static or dynamic
+  (2: the localhost origin where the importing module's is wanted): an
+  import's Referer is the document's, or none. A static or dynamic
   import's referrer must be the importing module's URL under its
   Referrer-Policy response header; the worker computes it for a
   `js:genericModule` request from the document (the lead's referrer area).

@@ -42,11 +42,6 @@
 		"Importing a remote-origin descendant script from a remote-origin top-level script with the origin policy.": "FAIL: assert_equals: Referrer should be sent for the remote-origin descendant script. expected \"http://127.0.0.1:PORT/\" but got \"http://localhost:PORT/\"",
 		"Importing a same-origin descendant script from a remote-origin top-level script with the origin policy.": "FAIL: assert_equals: Referrer should be sent for the same-origin descendant script. expected \"http://127.0.0.1:PORT/\" but got \"http://localhost:PORT/\""
 	},
-	"/html/semantics/scripting-1/the-script-element/module/referrer-policy-for-descendants.sub.html": {
-		"Remote parent module delivered with `origin-when-cross-origin` policy importing a same-origin-to-parent-module descendant script.": "FAIL: assert_equals: Same-origin descendant referrer should be the parent's full URL. expected \"http://127.0.0.1:PORT/html/semantics/scripting-1/the-script-element/module/resources/import-referrer-checker.s",
-		"Remote parent module delivered with `same-origin` policy importing a same-origin-to-parent-module descendant script.": "FAIL: assert_equals: Same-origin descendant referrer should be the parent's full URL. expected \"http://127.0.0.1:PORT/html/semantics/scripting-1/the-script-element/module/resources/import-referrer-checker.s",
-		"Remote parent module delivered with `origin-when-cross-origin` policy importing a cross-origin-to-parent-module descendant script.": "FAIL: assert_equals: Remote-origin descendant referrer should be the parent's origin. expected \"http://127.0.0.1:PORT/\" but got \"\""
-	},
 	"/html/semantics/scripting-1/the-script-element/module/dynamic-import/repeated-imports.any.html": {
 		"An import should succeed even if the same specifier/type attribute pair previously failed due to a MIME type mismatch": "FAIL: assert_equals: expected \"2\" but got \"1\""
 	},
