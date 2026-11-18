@@ -42,6 +42,10 @@ const { RevivingTransport } = await import(`${bundle}?${Date.now()}`);
 // throttled stream (holyWisp per_ws_streams), measured against the real server
 const CONNECT_REFUSED =
 	'Hyper client: hyper_util::client::legacy::Error(Connect, Io(Custom { kind: UnexpectedEof, error: "tls handshake eof" }))';
+// a request on a live wisp connection whose server closed it before the
+// response (measured, idle-close-retry suite)
+const INCOMPLETE =
+	'Hyper client: hyper_util::client::legacy::Error(SendRequest, hyper::Error(IncompleteMessage)) (client error (connection closed before message completed))';
 const MUX_ENDED =
 	'Hyper client: hyper_util::client::legacy::Error(Connect, Wisp(MuxTaskEnded) (Multiplexor task ended))';
 
@@ -234,6 +238,30 @@ function makeFactory(plan) {
 		'a genuine response error is not retried, it surfaces at once',
 		/rejected/.test(String(r)) && calls === 1,
 		JSON.stringify({ result: r, calls }),
+	);
+}
+
+// 6) a GET whose connection closed under it while the wisp connection stays
+// up is the page's: epoxy already sent it again if Chrome would (a kept
+// connection the server closed as it arrived), so the wrapper does not
+// (idle-close-retry suite)
+{
+	let calls = 0;
+	const { factory, builds } = makeFactory(() => {
+		calls++;
+		return new Error(INCOMPLETE);
+	});
+	const transport = new RevivingTransport(factory);
+	const r = await transport
+		.request(new URL('https://example.com/'), 'GET', null, [], undefined)
+		.then(
+			(res) => res.status,
+			(error) => `rejected ${error.message}`,
+		);
+	ok(
+		'a GET that lost a live connection before its response is not sent again',
+		/rejected/.test(String(r)) && calls === 1 && builds() === 1,
+		JSON.stringify({ result: r, calls, builds: builds() }),
 	);
 }
 

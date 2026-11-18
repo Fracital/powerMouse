@@ -14,11 +14,16 @@
 // again the requests that cannot have reached the server or that Chrome
 // would send again itself: one whose connection was lost while it was being
 // opened (its stream or its TLS handshake), and a GET, HEAD or OPTIONS
-// without a body that lost its connection before the response head (Chrome
-// retries those when a reused connection closes under them). Such a request
-// still waiting on the old transport when the new one is up is sent again
-// too, since nothing will ever answer it there. A response whose body was
-// cut off is the page's, as in Chrome.
+// without a body that the lost wisp connection took before its response
+// head. Such a request still waiting on the old transport when the new one
+// is up is sent again too, since nothing will ever answer it there. A
+// response whose body was cut off is the page's, as in Chrome. Over a live
+// wisp connection, a request the server's close took is epoxy's to send
+// again, as Chrome does (a kept connection the server closed as the request
+// reached it, whatever the method; a refused HTTP/2 stream; not a fresh
+// connection's, nor one whose response had begun: deploy/epoxy patches
+// hyper 0052, hyper-util-wasm 0052, epoxy-tls 0073), so what reaches this
+// wrapper then is the page's (idle-close-retry suite).
 import type {
 	ProxyTransport,
 	RawHeaders,
@@ -33,7 +38,7 @@ const UNSENT = /Error\(Connect,/;
 /** the connection closed under a request before its response head */
 const LOST =
 	/SendRequest|IncompleteMessage|BrokenPipe|broken pipe|connection closed|ConnectionReset|UnexpectedEof/;
-/** sent again when their connection is lost, as Chrome does (no body) */
+/** sent again when the wisp connection is lost under them (no body) */
 const REPLAYABLE = new Set(['GET', 'HEAD', 'OPTIONS']);
 /**
  * A lost connection, a dead multiplexor found on the way, then the new one,
@@ -181,7 +186,8 @@ export default class RevivingTransport implements ProxyTransport {
 				const gone = wispGone(error);
 				if (!gone && !LOST.test(message)) throw error;
 				if (gone && !(await this.revive(generation))) throw error;
-				if (!(UNSENT.test(message) && resendable) && !replayable) throw error;
+				if (!(UNSENT.test(message) && resendable) && !(gone && replayable))
+					throw error;
 				// The connection is still up and the request never went out (a wisp
 				// server throttling a burst refuses the extra streams: the stream, and
 				// so epoxy's TLS over it, ends before the request is sent). Trying again

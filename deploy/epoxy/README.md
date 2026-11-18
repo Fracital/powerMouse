@@ -31,6 +31,9 @@ stream for the next write, so a server answering the page looked silent
 (see the `websocket-frames` suite).
 And each response says which HTTP version it came over, so STomp keeps
 Chrome's six connections to an HTTP/1 server (`connection-limits` suite).
+And a request whose kept-alive connection the server closed as the request
+reached it goes again on another connection, as Chrome sends it (see the
+`idle-close-retry` suite).
 The build also carries stomp-h3, HTTP/3 over wisp
 UDP for STomp's `http3` option (`h3/`, below), whose QUIC ClientHello and
 transport parameters are Chrome's too.
@@ -96,6 +99,9 @@ fails the build at `git apply --check`.
 | r58Playz/h2-wasm                                               | `0053` | A request's Cookie goes out as its crumbs, one field per cookie split at `;` (quiche's `HpackEncoder::CookieToCrumbs`, RFC 9113 8.2.3), in the Cookie field's place; it went out as one joined field. HTTP/1 keeps one line.                                                                                                                                                      |
 | r58Playz/h2-wasm                                               | `0054` | HPACK as Chrome's encoder writes it: every field but the pseudo-headers other than `:authority` goes into the dynamic table (Content-Length and Cookie were left out, a `:method` the static table names only was put in), and a string is Huffman coded only when that is shorter.                                                                                               |
 | MercuryWorkshop/epoxy-tls                                      | `0072` | RSA keys of every size Chrome 157 takes: 1024 to 16384 bits, counted exactly, at any place in the chain and under any root. _ring_ verifies 2048 to 8192 bits; RustCrypto `rsa` verifies the others, and RSA key exchange takes the same sizes. Carries a Cargo.lock line (sha2).                                                                                                 |
+| hyperium/hyper                                                 | `0052` | `Error::is_empty_response()`: the request's connection ended before any byte of its response (HTTP/1: none read since its head was written; HTTP/2: GOAWAY or a closed connection before its head), and `Error::is_refused_stream()`: an HTTP/2 `REFUSED_STREAM` reset. A kept connection the server closed as a request reached it read as any other IncompleteMessage.          |
+| r58Playz/hyper-util-wasm                                       | `0052` | `Error::is_reused_connection()`: a request that went out and then lost its connection says whether the pool had kept that connection (it came back as `SendRequest` with no record of it), and a response over a kept connection carries a `ReusedConnection` extension.                                                                                                          |
+| MercuryWorkshop/epoxy-tls                                      | `0073` | A request goes again when Chrome sends it again (`ShouldResendRequest`): a kept connection that ended before any byte of a response, whatever the method; a 408 on a kept HTTP/1 connection; a refused HTTP/2 stream, twice at most. Not a fresh connection's, one whose response had begun, or a streaming body (`idle-close-retry` suite).                                      |
 
 ## stomp-h3 (`h3/`)
 

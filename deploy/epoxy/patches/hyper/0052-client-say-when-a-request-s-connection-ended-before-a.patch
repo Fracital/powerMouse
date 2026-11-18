@@ -1,0 +1,283 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Wed, 18 Nov 2026 15:17:45 -0500
+Subject: [PATCH] client: say when a request's connection ended before any
+ byte of its response
+
+A server that closes an idle keep-alive connection as a request reaches
+it answers nothing, and the client cannot tell that from a server that
+read the request and then failed: both end as "connection closed before
+message completed" (IncompleteMessage), and so does a response whose head
+was cut off. Chrome sends such a request again when the connection was a
+kept one and no byte of a response came (HttpNetworkTransaction's
+ShouldResendRequest), whatever the method, so a client needs to know which
+it was.
+
+`Error::is_empty_response()` says the request's connection ended before
+any byte of its response arrived. HTTP/1: the connection counts the bytes
+it reads, and an error handed to the request's callback is marked when
+none came since its head was written (an informational response counts;
+a cut-off head or body does not qualify). HTTP/2: a stream that failed
+before its response head because its connection went away (the server's
+GOAWAY, or the connection closed or failed); a reset stream does not
+qualify.
+
+`Error::is_refused_stream()` says the server reset the HTTP/2 stream with
+REFUSED_STREAM, which RFC 9113 8.7 says it did not process; Chrome sends
+such a request again from any connection.
+---
+ src/error.rs             |  63 ++++++++++++++++++++++++++++++++++++++++-
+ src/client/dispatch.rs   |   1 +
+ src/proto/h1/conn.rs     |  10 ++++++++++
+ src/proto/h1/dispatch.rs |  13 +++++++++++++
+ src/proto/h1/io.rs       |   9 +++++++++
+ src/proto/h2/client.rs   |   4 ++--
+ 6 files changed, 97 insertions(+), 3 deletions(-)
+
+diff --git a/src/error.rs b/src/error.rs
+--- a/src/error.rs
++++ b/src/error.rs
+@@ -35,6 +35,8 @@
+ struct ErrorImpl {
+     kind: Kind,
+     cause: Option<Cause>,
++    /// the request's connection ended before any byte of its response
++    empty_response: bool,
+ }
+ 
+ #[derive(Debug)]
+@@ -223,6 +225,37 @@
+         matches!(self.inner.kind, Kind::IncompleteMessage)
+     }
+ 
++    /// Returns true if the request's connection ended before any byte of its
++    /// response arrived.
++    ///
++    /// HTTP/1: the connection closed, was reset, or failed to read or write
++    /// once the request was handed to it, and no byte of a response (an
++    /// informational one included) had come. HTTP/2: the server sent GOAWAY,
++    /// or the connection closed or failed, before the stream's response
++    /// head. The server may have read the request, but it answered nothing:
++    /// a client that sent it on a connection that had carried a request
++    /// before can send it again, as browsers do (a server closing an idle
++    /// connection as the request reaches it).
++    pub fn is_empty_response(&self) -> bool {
++        self.inner.empty_response
++    }
++
++    /// Returns true if the server reset the request's HTTP/2 stream with
++    /// `REFUSED_STREAM`: it did no processing of the request (RFC 9113,
++    /// section 8.7), which can be sent again.
++    pub fn is_refused_stream(&self) -> bool {
++        #[cfg(not(all(any(feature = "client", feature = "server"), feature = "http2")))]
++        return false;
++
++        #[cfg(all(any(feature = "client", feature = "server"), feature = "http2"))]
++        {
++            matches!(self.inner.kind, Kind::Http2)
++                && self.find_source::<h2::Error>().map_or(false, |e| {
++                    e.is_reset() && e.is_remote() && e.reason() == Some(h2::Reason::REFUSED_STREAM)
++                })
++        }
++    }
++
+     /// Returns true if the body write was aborted.
+     pub fn is_body_write_aborted(&self) -> bool {
+         #[cfg(not(any(
+@@ -249,7 +282,11 @@
+ 
+     pub(super) fn new(kind: Kind) -> Error {
+         Error {
+-            inner: Box::new(ErrorImpl { kind, cause: None }),
++            inner: Box::new(ErrorImpl {
++                kind,
++                cause: None,
++                empty_response: false,
++            }),
+         }
+     }
+ 
+@@ -258,6 +295,30 @@
+         self
+     }
+ 
++    /// the request's connection ended before any byte of its response
++    #[cfg(any(feature = "http1", all(feature = "client", feature = "http2")))]
++    pub(crate) fn into_empty_response(mut self) -> Error {
++        self.inner.empty_response = true;
++        self
++    }
++
++    /// An HTTP/2 request's stream failed before its response head: an empty
++    /// response when its connection went away (the server's GOAWAY, or the
++    /// connection closed or failed), not when the stream itself was reset
++    #[cfg(all(feature = "client", feature = "http2"))]
++    pub(crate) fn h2_unanswered(self) -> Error {
++        let lost = matches!(self.inner.kind, Kind::Io)
++            || (matches!(self.inner.kind, Kind::Http2)
++                && self
++                    .find_source::<h2::Error>()
++                    .map_or(false, |e| e.is_go_away() && e.is_remote()));
++        if lost {
++            self.into_empty_response()
++        } else {
++            self
++        }
++    }
++
+     #[cfg(any(all(feature = "http1", feature = "server"), feature = "ffi"))]
+     pub(super) fn kind(&self) -> &Kind {
+         &self.inner.kind
+diff --git a/src/client/dispatch.rs b/src/client/dispatch.rs
+--- a/src/client/dispatch.rs
++++ b/src/client/dispatch.rs
+@@ -355,6 +355,7 @@
+                 Poll::Ready(())
+             }
+             Poll::Ready(Err((error, message))) => {
++                let error = error.h2_unanswered();
+                 call_back.send(Err(TrySendError { error, message }));
+                 Poll::Ready(())
+             }
+diff --git a/src/proto/h1/conn.rs b/src/proto/h1/conn.rs
+--- a/src/proto/h1/conn.rs
++++ b/src/proto/h1/conn.rs
+@@ -83,6 +83,7 @@
+                 // If they tell us otherwise, we'll downgrade in `read_head`.
+                 version: Version::HTTP_11,
+                 allow_trailer_fields: false,
++                read_at_head: 0,
+             },
+             _marker: PhantomData,
+         }
+@@ -569,6 +570,12 @@
+         self.maybe_notify(cx);
+     }
+ 
++    /// A client's request was written and not one byte came back since: an
++    /// error now ended the connection before any of its response
++    pub(crate) fn is_unanswered(&self) -> bool {
++        !T::should_read_first() && self.io.read_count() == self.state.read_at_head
++    }
++
+     pub(crate) fn can_write_head(&self) -> bool {
+         if !T::should_read_first() && matches!(self.state.reading, Reading::Closed) {
+             return false;
+@@ -592,6 +599,7 @@
+     }
+ 
+     pub(crate) fn write_head(&mut self, head: MessageHead<T::Outgoing>, body: Option<BodyLength>) {
++        self.state.read_at_head = self.io.read_count();
+         if let Some(encoder) = self.encode_head(head, body) {
+             self.state.writing = if !encoder.is_eof() {
+                 Writing::Body(encoder)
+@@ -957,6 +965,8 @@
+     version: Version,
+     /// Flag to track if trailer fields are allowed to be sent
+     allow_trailer_fields: bool,
++    /// the transport's read count when the last head was written
++    read_at_head: usize,
+ }
+ 
+ #[derive(Debug)]
+diff --git a/src/proto/h1/dispatch.rs b/src/proto/h1/dispatch.rs
+--- a/src/proto/h1/dispatch.rs
++++ b/src/proto/h1/dispatch.rs
+@@ -120,6 +120,17 @@
+         })
+     }
+ 
++    /// Says on a client's error whether nothing of the response had come:
++    /// a request the server never answered (it closed the connection as the
++    /// request arrived) can be sent again
++    fn unanswered(&self, e: crate::Error) -> crate::Error {
++        if self.conn.is_unanswered() {
++            e.into_empty_response()
++        } else {
++            e
++        }
++    }
++
+     fn poll_catch(
+         &mut self,
+         cx: &mut Context<'_>,
+@@ -134,6 +145,7 @@
+             // We just try to give the error to the user,
+             // and close the connection with an Ok. If we
+             // cannot give it to the user, then return the Err.
++            let e = self.unanswered(e);
+             self.dispatch.recv_msg(Err(e))?;
+             Ok(Dispatched::Shutdown)
+         }))
+@@ -305,6 +317,7 @@
+             }
+             Some(Err(err)) => {
+                 debug!("read_head error: {}", err);
++                let err = self.unanswered(err);
+                 self.dispatch.recv_msg(Err(err))?;
+                 // if here, the dispatcher gave the user the error
+                 // somewhere else. we still need to shutdown, but
+diff --git a/src/proto/h1/io.rs b/src/proto/h1/io.rs
+--- a/src/proto/h1/io.rs
++++ b/src/proto/h1/io.rs
+@@ -36,6 +36,8 @@
+     read_blocked: bool,
+     read_buf: BytesMut,
+     read_buf_strategy: ReadStrategy,
++    /// every byte read from `io`, wrapping
++    read_count: usize,
+     write_buf: WriteBuf<B>,
+ }
+ 
+@@ -70,6 +72,7 @@
+             read_blocked: false,
+             read_buf: BytesMut::with_capacity(0),
+             read_buf_strategy: ReadStrategy::default(),
++            read_count: 0,
+             write_buf,
+         }
+     }
+@@ -242,6 +245,7 @@
+                     self.read_buf.advance_mut(n);
+                 }
+                 self.read_buf_strategy.record(n);
++                self.read_count = self.read_count.wrapping_add(n);
+                 Poll::Ready(Ok(n))
+             }
+             Poll::Pending => {
+@@ -252,6 +256,11 @@
+         }
+     }
+ 
++    /// how many bytes were read from the transport so far (wrapping)
++    pub(crate) fn read_count(&self) -> usize {
++        self.read_count
++    }
++
+     pub(crate) fn into_inner(self) -> (T, Bytes) {
+         (self.io, self.read_buf.freeze())
+     }
+diff --git a/src/proto/h2/client.rs b/src/proto/h2/client.rs
+--- a/src/proto/h2/client.rs
++++ b/src/proto/h2/client.rs
+@@ -693,7 +693,7 @@
+                         Err(err) => {
+                             debug!("client send request error: {}", err);
+                             cb.send(Err(TrySendError {
+-                                error: crate::Error::new_h2(err),
++                                error: crate::Error::new_h2(err).h2_unanswered(),
+                                 message: None,
+                             }));
+                             continue;
+@@ -721,7 +721,7 @@
+                         Poll::Ready(Ok(())) => (),
+                         Poll::Ready(Err(err)) => {
+                             f.cb.send(Err(TrySendError {
+-                                error: crate::Error::new_h2(err),
++                                error: crate::Error::new_h2(err).h2_unanswered(),
+                                 message: None,
+                             }));
+                             continue;
+-- 
+2.54.0
+

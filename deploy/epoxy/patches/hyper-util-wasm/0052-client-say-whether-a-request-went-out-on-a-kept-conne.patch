@@ -1,0 +1,107 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Wed, 18 Nov 2026 15:17:45 -0500
+Subject: [PATCH] client: say whether a request went out on a kept connection
+
+A request that went out and then lost its connection comes back as
+`Error(SendRequest, ..)` with no record of the connection it used, so its
+sender cannot tell a kept connection the server closed as the request
+reached it (Chrome sends the request again) from a fresh connection that
+failed (Chrome does not).
+
+`Error::is_reused_connection()` says the request went out on a connection
+the pool kept, and a response that came over one carries a
+`ReusedConnection` extension (Chrome sends a request again after a 408 on
+a reused HTTP/1 connection).
+---
+ src/client/legacy/client.rs |  29 ++++++++++++++++++++++++++++-
+ src/client/legacy/mod.rs    |   2 +-
+ 2 files changed, 29 insertions(+), 2 deletions(-)
+
+diff --git a/src/client/legacy/client.rs b/src/client/legacy/client.rs
+--- a/src/client/legacy/client.rs
++++ b/src/client/legacy/client.rs
+@@ -55,8 +55,14 @@
+ pub struct Error {
+     kind: ErrorKind,
+     source: Option<Box<dyn StdError + Send + Sync>>,
++    connection_reused: bool,
+ }
+ 
++/// In a response's extensions when it came over a connection that had
++/// carried a request before (one the pool kept, not a fresh one).
++#[derive(Clone, Copy, Debug)]
++pub struct ReusedConnection;
++
+ #[derive(Debug)]
+ enum ErrorKind {
+     Canceled,
+@@ -73,12 +79,14 @@
+         Error {
+             kind: ErrorKind::$kind,
+             source: None,
++            connection_reused: false,
+         }
+     };
+     ($kind:ident, $src:expr) => {
+         Error {
+             kind: ErrorKind::$kind,
+             source: Some($src.into()),
++            connection_reused: false,
+         }
+     };
+ }
+@@ -336,11 +344,21 @@
+                         req,
+                     })
+                 } else {
+-                    Err(TrySendError::Nope(e!(SendRequest, err.into_error())))
++                    // the request went out, so only its sender can send it
++                    // again: it needs to know whether the connection was a
++                    // kept one
++                    Err(TrySendError::Nope(Error {
++                        connection_reused: pooled.is_reused(),
++                        ..e!(SendRequest, err.into_error())
++                    }))
+                 }
+             }
+         };
+ 
++        if pooled.is_reused() {
++            res.extensions_mut().insert(ReusedConnection);
++        }
++
+         // If the Connector included 'extra' info, add to Response...
+         if let Some(extra) = &pooled.conn_info.extra {
+             extra.set(res.extensions_mut());
+@@ -1588,6 +1606,15 @@
+         matches!(self.kind, ErrorKind::Connect)
+     }
+ 
++    /// Returns true if the request went out on a connection that had carried
++    /// a request before (one the pool kept). With a `hyper::Error` source
++    /// whose `is_empty_response()` is true, the server closed that kept
++    /// connection as the request reached it, and the request can be sent
++    /// again (browsers do).
++    pub fn is_reused_connection(&self) -> bool {
++        self.connection_reused
++    }
++
+     fn is_canceled(&self) -> bool {
+         matches!(self.kind, ErrorKind::Canceled)
+     }
+diff --git a/src/client/legacy/mod.rs b/src/client/legacy/mod.rs
+--- a/src/client/legacy/mod.rs
++++ b/src/client/legacy/mod.rs
+@@ -1,7 +1,7 @@
+ #[cfg(any(feature = "http1", feature = "http2"))]
+ mod client;
+ #[cfg(any(feature = "http1", feature = "http2"))]
+-pub use client::{Builder, Client, Error, ResponseFuture};
++pub use client::{Builder, Client, Error, ResponseFuture, ReusedConnection};
+ 
+ pub mod connect;
+ #[doc(hidden)]
+-- 
+2.54.0
+
