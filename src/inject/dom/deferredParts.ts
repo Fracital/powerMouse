@@ -90,6 +90,7 @@ import {
 } from '../permissionGates';
 import { reportsSeen } from '../reportsSeen';
 import { bucketMethods } from '../storageBucketMethods';
+import { storageUsage } from '../storageUsage';
 import { carry as carryWebTransport } from '../webTransport';
 import { standIn as webTransportStandIn } from '../webTransportStandIn';
 import { checkedHeader, checkedMethod, notOpened } from '../xhrChecks';
@@ -167,6 +168,9 @@ export const parts = {
 	attributeViewMethods,
 	sourcePolicy,
 	recordSize,
+	// the usage walk behind navigator.storage.estimate(), at a realm's
+	// first (../storageUsage.ts; ../modules/StorageEstimate.ts)
+	storageUsage,
 	partitionLegacyFileSystem,
 	dropLegacyFileSystem,
 	checkedMethod,

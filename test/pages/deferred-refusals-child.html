@@ -132,6 +132,9 @@
 				// own, by `w.location = url`): where the frame is after it
 				// a call of no function through the access API: V8's message names
 				// the page's expression (a part words it, src/inject/accessFailures.ts)
+				// the usage walk behind navigator.storage.estimate()
+				// (src/inject/storageUsage.ts)
+				estimate: () => outcome(() => navigator.storage.estimate()),
 				notFunction: () =>
 					outcome(() => {
 						const o = {};

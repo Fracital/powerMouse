@@ -5,6 +5,7 @@
 // worker bundle's is its own. Each bundle's entry says which
 // (dom/document.ts, worker/entry.ts).
 import type { recordSize } from './idbSize';
+import type { storageUsage } from './storageUsage';
 
 export const DATABASE_BYTES = 592;
 export const STORE_BYTES = 352;
@@ -12,4 +13,6 @@ export const RECORD_BYTES = 210;
 
 export const idbSizeParts: {
 	recordSize?: () => typeof recordSize;
+	/** the usage walk behind estimate() (./storageUsage.ts), a part as well */
+	storageUsage?: () => typeof storageUsage;
 } = {};

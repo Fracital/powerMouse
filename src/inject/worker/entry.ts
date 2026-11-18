@@ -19,6 +19,7 @@ import { reportsSeen } from '../reportsSeen';
 import { handModules } from '../rewriter';
 import { bucketMethods } from '../storageBucketMethods';
 import { storageBucketParts } from '../storageBucketParts';
+import { storageUsage } from '../storageUsage';
 import { carry as carryWebTransport } from '../webTransport';
 import { webTransportParts } from '../webTransportParts';
 import { standIn as webTransportStandIn } from '../webTransportStandIn';
@@ -34,6 +35,7 @@ import createWorkerClient from './worker';
 webTransportParts.standIn = () => webTransportStandIn;
 // and so is the sizing of an IndexedDB record (../idbSizeParts.ts)
 idbSizeParts.recordSize = () => recordSize;
+idbSizeParts.storageUsage = () => storageUsage;
 // and the methods behind navigator.storageBuckets' hooks
 storageBucketParts.methods = () => bucketMethods;
 // and the per-site legacy file system (../legacyFileSystemParts.ts)

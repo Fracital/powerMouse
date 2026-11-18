@@ -8,7 +8,8 @@
 // frame submits to its proxied parent, a frame's navigation of another
 // window (`w.location = url`); and a call of no function through the
 // access API throws the TypeError the call threw (only its wording is a
-// part, src/inject/accessFailures.ts). A part is made
+// part, src/inject/accessFailures.ts); navigator.storage.estimate()
+// rejects before the browser is asked (src/inject/storageUsage.ts). A part is made
 // synchronously within the call that needs it, so no page code runs between
 // the hook and the part (a download's copy is made after the click went
 // through the page, which the browser's own download had been cancelled
@@ -65,6 +66,7 @@ const REFUSING = [
 	'download',
 	'formAimed',
 	'navigateOther',
+	'estimate',
 ];
 /** the calls that answer with a promise, which rejects */
 const PROMISED = [
@@ -74,6 +76,7 @@ const PROMISED = [
 	'applyConstraints',
 	'identity',
 	'disconnect',
+	'estimate',
 ];
 
 /** counting stand-ins for the browser's functions, in every document */
@@ -119,6 +122,10 @@ function countNatives() {
 		const prototype = MediaStreamTrack.prototype;
 		for (const name of ['getSettings', 'applyConstraints'])
 			prototype[name] = counted(name, prototype[name]);
+	}
+	if (window.StorageManager) {
+		const prototype = StorageManager.prototype;
+		prototype.estimate = counted('estimate', prototype.estimate);
 	}
 	if (window.RTCPeerConnection)
 		window.RTCPeerConnection = constructs(
@@ -174,6 +181,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			'disconnect',
 			'download',
 			'notFunction',
+			'estimate',
 		],
 	);
 	ok(
@@ -183,6 +191,12 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			answer.reached?.includes('getSettings') &&
 			answer.reached?.includes('xhrDocument'),
 		JSON.stringify(answer),
+	);
+	ok(
+		'with the parts, an estimate answers, through the browser',
+		answer.out?.estimate?.promise === 'resolved' &&
+			answer.reached?.includes('estimate'),
+		JSON.stringify({ out: answer.out?.estimate, reached: answer.reached }),
 	);
 	ok(
 		"with the parts, a call of no function names the page's expression",

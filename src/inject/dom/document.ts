@@ -73,6 +73,7 @@ import XMLHttpRequestModule from './modules/XMLHttpRequest';
 webTransportParts.standIn = () => deferred('webTransportStandIn');
 webTransportParts.carry = () => deferred('carryWebTransport');
 idbSizeParts.recordSize = () => deferred('recordSize');
+idbSizeParts.storageUsage = () => deferred('storageUsage');
 // and so are the methods behind navigator.storageBuckets' hooks
 storageBucketParts.methods = () => deferred('bucketMethods');
 // and the per-site legacy file system, with its first call
