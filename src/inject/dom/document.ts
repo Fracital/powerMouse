@@ -7,6 +7,7 @@ import { mixedContentParts } from '../mixedContentParts';
 import Module from '../Module';
 import baseModules from '../modules';
 import { reportParts } from '../reportParts';
+import { socketParts } from '../socketParts';
 import { storageBucketParts } from '../storageBucketParts';
 import { webTransportParts } from '../webTransportParts';
 import { workerStartParts } from '../workerStartParts';
@@ -88,6 +89,9 @@ accessFailureParts.failures = () => deferred('accessFailures');
 reportParts.seen = () => deferred('reportsSeen');
 // and what a worker's construction does past its checks, with the first
 workerStartParts.start = () => deferred('workerStart');
+// and what a WebSocket stand-in does, with the client a document opens
+// its first WebSocket with
+socketParts.standIns = () => deferred('socketStandIns');
 
 class FingerprintStandIn extends Module<DocumentClient> {
 	apply() {

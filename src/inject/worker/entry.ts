@@ -8,6 +8,7 @@ import {
 import { listenOn, messageOf, startPort } from '../../transport/ports';
 import { accessFailureParts } from '../accessFailureParts';
 import { accessFailures } from '../accessFailures';
+import { socketStandIns } from '../bareClient';
 import { messageField, readModules, type HandedModules } from '../Client';
 import { recordSize } from '../idbSize';
 import { idbSizeParts } from '../idbSizeParts';
@@ -17,6 +18,7 @@ import { mixedContentParts } from '../mixedContentParts';
 import { reportParts } from '../reportParts';
 import { reportsSeen } from '../reportsSeen';
 import { handModules } from '../rewriter';
+import { socketParts } from '../socketParts';
 import { bucketMethods } from '../storageBucketMethods';
 import { storageBucketParts } from '../storageBucketParts';
 import { storageUsage } from '../storageUsage';
@@ -50,6 +52,8 @@ accessFailureParts.failures = () => accessFailures;
 reportParts.seen = () => reportsSeen;
 // and what a worker's construction does past its checks (../workerStartParts.ts)
 workerStartParts.start = () => workerStart;
+// and what a WebSocket stand-in does (../socketParts.ts)
+socketParts.standIns = () => socketStandIns;
 /** set once the bootstrap came without a transport (a worker of a worker): nothing carries its sessions */
 let transportless = false;
 webTransportParts.carry = () =>

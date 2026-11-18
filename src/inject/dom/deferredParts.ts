@@ -28,7 +28,8 @@
 // submission with, ./legacyEncoding.ts, at its first such URL or form)
 //
 // (and the client a document opens its WebSockets with, ../bareClient.ts,
-// with the transport it talks over, at its first WebSocket)
+// with the transport it talks over and what the WebSocket stand-ins do, at
+// its first WebSocket)
 //
 // (and the blocker's procedural cosmetic filters, ../../blocker/procedural.ts,
 // at a document whose lists have one for its site)
@@ -87,7 +88,7 @@
 import { compileFilter, proceduralRunner } from '../../blocker/procedural';
 import { noticeText } from '../../mixedContentNotices';
 import { accessFailures } from '../accessFailures';
-import { bareClient } from '../bareClient';
+import { bareClient, socketStandIns } from '../bareClient';
 import { cookieStoreMethods } from '../cookieStoreMethods';
 import { hookDevices } from '../deviceGrants';
 import { recordSize } from '../idbSize';
@@ -170,6 +171,9 @@ import { responseParser } from './xhrParse';
 
 export const parts = {
 	bareClient,
+	// what the WebSocket and WebSocketStream stand-ins do, with the client
+	// (../bareClient.ts; ../socketParts.ts, ../modules/WebSocket.ts)
+	socketStandIns,
 	// a mixed content notice's text, at a document's first notice
 	// (../../mixedContentNotices.ts; ../modules/MixedContent.ts)
 	noticeText,
