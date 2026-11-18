@@ -393,6 +393,15 @@ for (const name of Object.keys(SCENARIOS)) {
 				mine.recv?.ssrcs[0] === theirs.send?.ssrcs[0],
 			JSON.stringify({ mine, theirs }),
 		);
+		// Chrome dates a sent frame from its first 10 ms block, so it comes
+		// to the transform about 10 ms after its capture time (median)
+		ok(
+			`${page.label}, discord: the page's send transform gets each frame as long after its capture time as natively`,
+			typeof mine.send?.captureLag === 'number' &&
+				typeof natives.send?.captureLag === 'number' &&
+				Math.abs(mine.send.captureLag - natives.send.captureLag) <= 4,
+			`${mine.send?.captureLag} ms | natively ${natives.send?.captureLag}`,
+		);
 		// (natively about 19 of every 21 frames of a silence)
 		ok(
 			`${page.label}, discord: the page's send transform is handed the silence it leaves out as empty frames, and the far end's gets the byte that says so, as natively`,

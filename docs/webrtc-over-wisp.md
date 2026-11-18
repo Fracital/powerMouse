@@ -1153,9 +1153,14 @@ inputs say (so a jump in the track's timestamps starts a new encoder, and
 the RTP time jumps with it); and with `usedtx` it makes nothing during a
 silence and does not count the frames it left out (so there the RTP time
 follows what was fed, once that is five frames past the last frame sent).
-Every frame carries its level (RFC 6464, from the power of what went into
-it), the first after a break is marked as a talkspurt, and `age` is
-counted from when the frame's first sample was read.
+Every frame carries its level (RFC 6464, from the power of what went
+into it), the first after a break is marked as a talkspurt, and `age` is
+counted from when the track's block that holds the frame's first sample
+was delivered, as Chrome dates a frame: from its first 10 ms block (a
+frame reaches a sender's transform 10 ms after its `captureTime`,
+natively and here, where it was 20 when the age was counted from the
+first sample; measured on 157), and the sender reports' clock pairs the
+frame's RTP time with that.
 
 What `usedtx` leaves out is not quite nothing. libopus makes a frame of
 silence a packet of one byte, its table of contents alone, and Chrome's

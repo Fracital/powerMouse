@@ -191,6 +191,8 @@ export class AudioSender {
 	/** how far the run has been fed, on the encoder's count, and when */
 	#fedUs = 0;
 	#fedAt = 0;
+	/** how long the track's blocks are (10 ms, from Chrome's capture), in microseconds */
+	#blockUs = 10000;
 	/** the power of what was fed since the last frame went out */
 	#squares = 0;
 	#count = 0;
@@ -386,6 +388,7 @@ export class AudioSender {
 		const payload = this.#payload;
 		if (!this.#active || !payload) return;
 		const duration = (data.numberOfFrames / data.sampleRate) * 1e6;
+		this.#blockUs = duration;
 		// the track stopped for a while (muted, a source that paused): what
 		// comes now is a new run, at its own time
 		if (
@@ -494,8 +497,7 @@ export class AudioSender {
 		if (this.#fedUs < end + DTX_WAIT_US || now - this.#gapDue < DTX_SETTLE_MS)
 			return;
 		const time = this.#gap;
-		const age =
-			now - this.#fedAt + (this.#fedUs - epoch - index * FRAME_US) / 1000;
+		const age = this.#ageOf(epoch + index * FRAME_US);
 		this.#gap += OPUS_FRAME;
 		this.#gapDue = 0;
 		if (this.#gapFirst) {
@@ -527,6 +529,21 @@ export class AudioSender {
 				Math.max(0, age),
 			);
 		}
+	}
+
+	/**
+	 * How long ago, in ms, a frame whose first sample is at `start` (on the
+	 * track's time, in microseconds) was captured, as Chrome dates it: when
+	 * the block of the track that holds that sample was delivered (Chrome's
+	 * sender stamps a frame with its first 10 ms block's capture time, so
+	 * its frames reach a transform 10 ms after it, measured on 157)
+	 */
+	#ageOf(start: number): number {
+		const epoch = this.#epoch ?? start;
+		const block = this.#blockUs;
+		const delivered =
+			epoch + (Math.floor((start - epoch) / block + 1e-6) + 1) * block;
+		return performance.now() - this.#fedAt + (this.#fedUs - delivered) / 1000;
 	}
 
 	#start(payload: Payload, rate: number, channels: number) {
@@ -608,9 +625,7 @@ export class AudioSender {
 			Math.round(this.#epoch * OPUS_UNITS) + counted,
 			Math.round((chunk.duration ?? FRAME_US) * OPUS_UNITS),
 			bytes,
-			performance.now() -
-				this.#fedAt +
-				(this.#fedUs - this.#epoch - counted / OPUS_UNITS) / 1000,
+			this.#ageOf(this.#epoch + counted / OPUS_UNITS),
 		);
 		if (this.#dtx && bytes.length) {
 			// (a frame that follows the last: its place on the track is known)
@@ -658,8 +673,10 @@ export class AudioSender {
 			this.#fill = 0;
 			const time =
 				Math.round((this.#epoch * rate) / 1e6) + this.#made++ * frame;
-			// the packet's first sample was read 20 ms before its last
-			const age = 20 + ((narrow.length - at) * 1000) / rate;
+			// the packet's first sample was read 20 ms before its last, its
+			// first block a block after that (Chrome dates a frame from it)
+			const age =
+				20 + ((narrow.length - at) * 1000) / rate - this.#blockUs / 1000;
 			const decided = this.#decide(pcm, time, rate);
 			if (decided === 'speech')
 				this.#send(

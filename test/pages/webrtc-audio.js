@@ -115,7 +115,7 @@
 			const send = options.operation === 'send';
 			const mine = (seen[options.operation] = {
 				frames: 0, dropped: 0, audio: 0, ssrcs: [], types: [], keys: [],
-				times: [], empty: 0, tiny: 0,
+				times: [], empty: 0, tiny: 0, lags: [],
 			});
 			readable.pipeThrough(new TransformStream({
 				transform(frame, controller) {
@@ -135,6 +135,9 @@
 					// silence left out, and the packets that say so (a byte, and the mark)
 					if (!bytes.length) mine.empty++;
 					else if (bytes.length <= 3) mine.tiny++;
+					// how long after its capture time a frame of sound comes here
+					if (send && bytes.length > 3 && mine.lags.length < 400)
+						mine.lags.push(performance.now() - meta.captureTime);
 					// an empty frame (silence left out) passes as it is, as DAVE's
 					// does: Chrome sends nothing for it
 					if (!bytes.length) {
@@ -162,7 +165,15 @@
 			})).pipeTo(writable);
 		};
 		onmessage = (event) => { self.keepTimes = event.data === 'keep'; };
-		setInterval(() => postMessage(seen), 250);`;
+		setInterval(() => {
+			for (const mine of Object.values(seen)) {
+				const lags = [...mine.lags].sort((a, b) => a - b);
+				mine.captureLag = lags.length
+					? Math.round(lags[lags.length >> 1] * 10) / 10
+					: null;
+			}
+			postMessage(seen);
+		}, 250);`;
 	let keepTimes = false;
 	const scrambler = (entry) => {
 		if (!entry.worker) {
