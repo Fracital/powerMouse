@@ -210,6 +210,18 @@ ok(
 		),
 	JSON.stringify(eventsNative),
 );
+ok(
+	"natively, the page's rules of an object's type see the one it wrote last",
+	eventsNative?.['typeDocument.style'] === 'html' &&
+		eventsNative?.['typeImage.style'] === 'png' &&
+		eventsNative?.['heldImage.style'] === '',
+	JSON.stringify(eventsNative),
+);
+// what the proxy reads otherwise, as measured (changes/object-image-by-
+// extension.md, Known limitations): a type the page wrote once the object
+// was in the document with one of its own stays in its marker, and the
+// page's rules see the one Chrome went by
+const KNOWN = { 'typeSpaceLate.style': 'any' };
 for (const [mode, base] of [
 	['same-origin', PROXY],
 	['isolated', HOST],
@@ -218,12 +230,14 @@ for (const [mode, base] of [
 	await submitLanding(page, eventsTarget);
 	const proxied = await eventsReport(page);
 	const keys = Object.keys(eventsNative ?? {}).filter((key) => key !== 'done');
-	const differ = keys.filter((key) => proxied?.[key] !== eventsNative[key]);
+	const differ = keys.filter(
+		(key) => proxied?.[key] !== (KNOWN[key] ?? eventsNative[key]),
+	);
 	for (const key of differ)
 		ok(
-			`${mode}: an object's ${key} as natively`,
+			`${mode}: an object's ${key} as natively${key in KNOWN ? ' (or as known)' : ''}`,
 			false,
-			`native ${JSON.stringify(eventsNative[key])} proxied ${JSON.stringify(proxied?.[key])}`,
+			`native ${JSON.stringify(eventsNative[key])} known ${JSON.stringify(KNOWN[key])} proxied ${JSON.stringify(proxied?.[key])}`,
 		);
 	ok(
 		`${mode}: what a page reads of an object as it loads and after, all ${keys.length} readings as natively`,

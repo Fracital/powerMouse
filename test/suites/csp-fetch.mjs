@@ -97,6 +97,8 @@ const CASES = {
 			'media-blob',
 			'object-self',
 			'object-data',
+			'object-untyped',
+			'object-untyped-late',
 			'frame-self',
 			'frame-data',
 			'frame-blob',

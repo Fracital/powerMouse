@@ -212,6 +212,26 @@
 		);
 	const object = (data, type) =>
 		element('object', type ? { data, type } : { data }, ['load', 'error']);
+	const untypedObject = (late) =>
+		settle(
+			new Promise((resolve) => {
+				const sheet = new CSSStyleSheet();
+				sheet.replaceSync(
+					"object[type] { --type: any } object[type='text/html'] { --type: html }",
+				);
+				document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+				const node = document.createElement('object');
+				node.addEventListener('error', () => resolve('error'));
+				node.addEventListener('load', () =>
+					resolve(
+						`load ${node.clientWidth} ${getComputedStyle(node).getPropertyValue('--type').trim() || 'none'}`,
+					),
+				);
+				node.setAttribute('data', '/csp/img.png');
+				document.body.append(node);
+				if (late) node.setAttribute('type', late);
+			}),
+		);
 	/** what a script element that sets a global does */
 	const script = (attributes, text) =>
 		settle(
@@ -478,6 +498,12 @@
 		'object-data': () => object('data:text/html,<p>object</p>', 'text/html'),
 		'object-blob': () =>
 			object(blob('<p>object</p>', 'text/html'), 'text/html'),
+		// one of an image with no type (and one given a type once it is in
+		// the document, which changes nothing), under a policy that refuses
+		// data:: its load, its box, and the page's rules of its type then
+		// (a sheet the policy does not govern)
+		'object-untyped': () => untypedObject(null),
+		'object-untyped-late': () => untypedObject('text/html'),
 		// frame-src / child-src
 		'frame-self': () => frame('/csp/frame.html'),
 		'frame-other': () => frame(`${other}/csp/frame.html`),

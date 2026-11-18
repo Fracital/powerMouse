@@ -1,5 +1,21 @@
 <!doctype html>
 <title>OBJECT EVENTS</title>
+<!-- the page's own rules of an object's type, read at the end -->
+<style>
+	object[type],
+	embed[type] {
+		--type: any;
+	}
+	object[type=''] {
+		--type: blank;
+	}
+	object[type='image/png'] {
+		--type: png;
+	}
+	object[type='text/html'] {
+		--type: html;
+	}
+</style>
 <body>
 	<!-- an <object>'s HTML document as the parser makes it, with a type -->
 	<object
@@ -289,6 +305,9 @@
 		setTimeout(() => {
 			for (const [name, object] of Object.entries(objects)) {
 				report[`${name}.end`] = read(object);
+				report[`${name}.style`] = getComputedStyle(object)
+					.getPropertyValue('--type')
+					.trim();
 				report[`${name}.events`] = report[`${name}.events`].join(' | ');
 			}
 			for (const [key, list] of Object.entries(records))
