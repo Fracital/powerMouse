@@ -1,14 +1,15 @@
 // The network side of a proxied page's RTCPeerConnection
 // (docs/webrtc-over-wisp.md, sections 5 and 15): what the wisp streams of
 // a connection do over its life, TURN servers over TCP and TLS
-// (test/turn.mjs), an ICE restart the peer starts, and ICE-TCP.
-// test/pages/webrtc-peer.html is the page,
+// (test/turn.mjs), an ICE restart the peer starts, ICE-TCP, and a far end
+// that vanishes. test/pages/webrtc-peer.html is the page,
 // natively (the control) and through the proxy in both demo modes; the far
 // end is a peer in this process (werift, bound to loopback), and the
 // remote candidates nothing answers at are UDP sinks of this process.
 // A stream is a socket of the demo's wisp server connected to one remote
 // (test/sockets.mjs counts them); the browser's own sockets never are.
 import { createSocket } from 'node:dgram';
+import { readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { RTCPeerConnection } from 'werift';
 import {
@@ -147,6 +148,8 @@ function nodeEnd(options = {}) {
 				}
 			);
 		},
+		/** what the channel received so far */
+		heard: (name) => channels.get(name)?.messages ?? [],
 		close: () => pc.close(),
 	};
 	return { call: async (step, ...args) => steps[step](...args) };
@@ -192,6 +195,8 @@ const tlsTurn = await startTurn({
 });
 const browser = await launch([
 	`--ignore-certificate-errors-spki-list=${tlsTurn.spki}`,
+	// the tone a page sends, from an AudioContext no gesture started
+	'--autoplay-policy=no-user-gesture-required',
 ]);
 const pages = [];
 
@@ -847,6 +852,274 @@ for (const [label, base] of probes) {
 			result.owner === (base ? 'server' : 'browser') &&
 			result.pair?.local?.protocol === 'tcp',
 		failure ?? JSON.stringify(result),
+	);
+}
+
+// --- the far end vanishes: consent freshness (RFC 7675, section 5.3) ---
+//
+// The page sends a tone and a message every 200 ms to the peer through a
+// relay of this process, which then drops every datagram both ways, or
+// closes the page's side so that the wisp server's socket is refused.
+// Chrome 157, measured: its checks go unanswered, the connection reads
+// disconnected 5 s after the first of them (iceConnectionState too) and
+// sends nothing but checks from then on, and 10 s later it reads failed
+// (iceConnectionState stays disconnected) and sends nothing at all. A
+// check of the peer's that gets through again makes it disconnected, then
+// connected; so does an ICE restart; and what the page sent meanwhile is
+// sent again within 3 s (its SCTP timers back off to 3 s at most; with
+// werift as the peer a message sent then arrived 1.3 to 15 s later). The
+// stack's agent used to decide for itself, 22 s on, never failed, and went
+// on sending media and retransmissions, opening a stream again now and
+// then (10 s apart at the soonest) to a remote the wisp server refused.
+
+const kindOf = (bytes) =>
+	bytes[0] < 4 ? (bytes[0] === 1 ? 'answer' : 'check') : 'traffic';
+
+/** a relay between the page (at its socket `a`) and the peer, which can drop everything or close */
+async function relay() {
+	const a = createSocket('udp4');
+	const b = createSocket('udp4');
+	await new Promise((resolve) => a.bind(0, '127.0.0.1', resolve));
+	await new Promise((resolve) => b.bind(0, '127.0.0.1', resolve));
+	const state = { pass: true, peer: 0, page: null, sent: [], open: true };
+	a.on('message', (message, from) => {
+		state.sent.push({ at: Date.now(), kind: kindOf(message) });
+		state.page = from;
+		if (state.pass && state.peer) b.send(message, state.peer, '127.0.0.1');
+	});
+	b.on('message', (message) => {
+		if (state.pass && state.page && state.open)
+			a.send(message, state.page.port, state.page.address);
+	});
+	const { port } = a.address();
+	return {
+		port,
+		state,
+		/** the peer's description, with its UDP candidates moved here */
+		through(sdp) {
+			const found = / udp \d+ 127\.0\.0\.1 (\d+) typ host/.exec(sdp);
+			if (found) state.peer = Number(found[1]);
+			return sdp
+				.split('\r\n')
+				.filter((line) => !/^a=candidate:\S+ \d+ tcp /i.test(line))
+				.map((line) =>
+					line.replace(
+						/ udp (\d+) 127\.0\.0\.1 \d+ typ/,
+						` udp $1 127.0.0.1 ${port} typ`,
+					),
+				)
+				.join('\r\n');
+		},
+		/** the page's side goes: its port is closed */
+		refuse() {
+			state.open = false;
+			a.close();
+		},
+		close() {
+			if (state.open) a.close();
+			b.close();
+		},
+	};
+}
+
+/** the sockets connected to 127.0.0.1:`port` until `stop()`, each by when it was first seen (ms after `start`) */
+async function streamsTo(port, start, stop) {
+	const remote = `0100007F:${port.toString(16).toUpperCase().padStart(4, '0')}`;
+	const seen = new Map();
+	while (!stop()) {
+		for (const line of readFileSync('/proc/net/udp', 'utf8').split('\n')) {
+			const fields = line.trim().split(/\s+/);
+			if (fields[2] === remote && !seen.has(fields[9]))
+				seen.set(fields[9], Date.now() - start);
+		}
+		await sleep(5);
+	}
+	return [...seen.values()];
+}
+
+/** the page's state transitions from `start` on, at their times after it */
+const transitionsSince = (timeline, start) =>
+	timeline
+		.filter(([at]) => at >= start)
+		.map(([at, what]) => ({ at: at - start, what }));
+const named = (list) => list.map((entry) => entry.what).join();
+const when = (list, what) => list.find((entry) => entry.what === what)?.at;
+
+/**
+ * A connection through a relay to the peer, whose far end goes: `vanish`
+ * (then an ICE restart once it failed), `revive` (the relay passes again
+ * 20 s on, no restart) or `refuse`
+ */
+async function farEndGone(opened, how) {
+	const own = pageEnd(opened.frame);
+	const peer = nodeEnd();
+	const path = await relay();
+	const result = { how };
+	let watching = true;
+	try {
+		await own.call('open', { iceServers: [] });
+		await own.call('channels', [['chat', {}]]);
+		await own.call('tone');
+		await peer.call('open');
+		const offer = await own.call('offer');
+		await own.call('accept', path.through(await peer.call('answer', offer)));
+		await own.call('opened', 'chat');
+		await peer.call('opened', 'chat');
+		await own.call('pulse', 'chat', 200);
+		await sleep(3000);
+		const start = Date.now();
+		if (how === 'refuse') path.refuse();
+		else path.state.pass = false;
+		const streams =
+			how === 'refuse' && streamsTo(path.port, start, () => !watching);
+		if (how === 'revive') {
+			await sleep(20000);
+			path.state.pass = true;
+			result.resumed = Date.now() - start;
+			await own.call('state', 'connected', 15000);
+		} else {
+			await until(
+				async () =>
+					named(transitionsSince(await own.call('timeline'), start)).includes(
+						'connection:failed',
+					),
+				30000,
+				'failed',
+			).catch(() => {});
+			// and what goes out once it failed
+			await sleep(how === 'refuse' ? 10000 : 5000);
+		}
+		watching = false;
+		result.gone = transitionsSince(await own.call('timeline'), start);
+		const disconnected =
+			when(result.gone, 'connection:disconnected') ?? Infinity;
+		const failed = when(result.gone, 'connection:failed') ?? Infinity;
+		const sent = path.state.sent
+			.filter((packet) => packet.at >= start)
+			.map((packet) => ({ ...packet, at: packet.at - start }));
+		result.lastTraffic = Math.max(
+			0,
+			...sent.filter((p) => p.kind === 'traffic').map((p) => p.at),
+		);
+		result.lastAny = Math.max(0, ...sent.map((p) => p.at));
+		result.trafficAfterDisconnected = sent.filter(
+			(p) =>
+				p.kind === 'traffic' &&
+				p.at > disconnected + 300 &&
+				p.at < (result.resumed ?? Infinity),
+		).length;
+		result.anyAfterFailed = sent.filter(
+			(p) => p.at > failed + 300 && p.at < (result.resumed ?? Infinity),
+		).length;
+		if (streams) result.streams = await streams;
+		let since = start + (result.resumed ?? 0);
+		if (how === 'vanish') {
+			since = Date.now();
+			path.state.pass = true;
+			const restart = await own.call('offer', { iceRestart: true });
+			await own.call(
+				'accept',
+				path.through(await peer.call('answer', restart)),
+			);
+			await own.call('state', 'connected', 15000);
+		}
+		if (how !== 'refuse') {
+			const back = Date.now();
+			await own.call('send', 'chat', { text: 'back' });
+			await until(
+				async () => (await peer.call('heard', 'chat')).includes('back'),
+				15000,
+				'the message after',
+			).catch(() => {});
+			result.heardAfter = Date.now() - back;
+			result.after = named(
+				transitionsSince(await own.call('timeline'), since),
+			).replace(
+				/^(ice:disconnected,connection:disconnected,connection:failed,)/,
+				'',
+			);
+		}
+		result.ice = (await own.call('read')).ice;
+	} catch (error) {
+		result.failure = String(error).slice(0, 300);
+	}
+	watching = false;
+	await own.call('close').catch(() => {});
+	await peer.call('close').catch(() => {});
+	path.close();
+	return result;
+}
+
+const gone = await Promise.all(
+	probes.flatMap(([label, base]) =>
+		['vanish', 'revive', 'refuse'].map(async (how) => {
+			const opened = await page(browser, base);
+			pages.push(opened);
+			const result = await farEndGone(opened, how);
+			await opened.page.close();
+			return { label, base, ...result };
+		}),
+	),
+);
+for (const result of gone) {
+	const { label, base, how } = result;
+	const native = gone.find((one) => one.base === null && one.how === how);
+	const story = `${JSON.stringify(result)}${base ? ` natively ${JSON.stringify(native)}` : ''}`;
+	const disconnected = when(result.gone ?? [], 'connection:disconnected');
+	const failed = when(result.gone ?? [], 'connection:failed');
+	const far = how === 'refuse' ? 'refused' : 'gone';
+	// disconnected 5 s after the first check that went unanswered (the
+	// last was answered up to a few seconds before), failed 10 s later
+	const states =
+		!result.failure &&
+		named(result.gone.slice(0, 3)) ===
+			'ice:disconnected,connection:disconnected,connection:failed' &&
+		disconnected >= 4000 &&
+		disconnected <= 10000 &&
+		failed - disconnected >= 9000 &&
+		failed - disconnected <= 11000;
+	const quiet =
+		result.trafficAfterDisconnected === 0 && result.anyAfterFailed === 0;
+	if (!base) {
+		ok(
+			`natively, the far end ${far}: disconnected about 5 s after the first unanswered check and failed 10 s later, nothing but checks sent between and nothing after`,
+			states && quiet,
+			story,
+		);
+		console.log(
+			`note: natively, the far end ${far} (${how}): disconnected ${disconnected} ms and failed ${failed} ms after, the last traffic sent ${result.lastTraffic} ms and the last packet ${result.lastAny} ms after${result.heardAfter === undefined ? '' : `; a message sent once it was back arrived in ${result.heardAfter} ms (${result.after})`}`,
+		);
+		continue;
+	}
+	ok(
+		`${label}, the far end ${far}: the connection reads disconnected about 5 s after its first unanswered check and failed 10 s later, iceConnectionState staying disconnected, as natively`,
+		states && native && result.ice === native.ice,
+		story,
+	);
+	ok(
+		`${label}, the far end ${far}: from disconnected on nothing but checks goes out, and from failed on nothing`,
+		!result.failure && quiet,
+		story,
+	);
+	if (how === 'refuse')
+		ok(
+			`${label}: a remote the wisp server refused gets no stream again once the connection failed`,
+			!result.failure &&
+				result.streams.length <= 2 &&
+				result.streams.every((at) => at < failed),
+			story,
+		);
+	else
+		ok(
+			`${label}: ${how === 'vanish' ? 'an ICE restart after it failed' : 'a check of the peer that gets through after it failed'} connects it again as natively, and a message then arrives within 4 s`,
+			!result.failure &&
+				native &&
+				result.after === native.after &&
+				result.heardAfter < 4000,
+			story,
+		);
+	console.log(
+		`note: ${label}, the far end ${far} (${how}): disconnected ${disconnected} ms and failed ${failed} ms after, the last traffic sent ${result.lastTraffic} ms and the last packet ${result.lastAny} ms after${result.streams ? `, streams seen at ${result.streams.join(', ')} ms` : ''}${result.heardAfter === undefined ? '' : `; a message sent once it was back arrived in ${result.heardAfter} ms (${result.after})`}`,
 	);
 }
 

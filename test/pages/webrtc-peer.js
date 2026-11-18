@@ -108,14 +108,17 @@
 				gatherings: 0,
 				gatheringsThen: 0,
 				describedAt: 0,
+				timeline: [],
 			};
 			peers.set(name, entry);
-			pc.addEventListener('iceconnectionstatechange', () =>
-				entry.log.push(`ice:${pc.iceConnectionState}`),
-			);
-			pc.addEventListener('connectionstatechange', () =>
-				entry.log.push(`connection:${pc.connectionState}`),
-			);
+			pc.addEventListener('iceconnectionstatechange', () => {
+				entry.log.push(`ice:${pc.iceConnectionState}`);
+				entry.timeline.push([Date.now(), `ice:${pc.iceConnectionState}`]);
+			});
+			pc.addEventListener('connectionstatechange', () => {
+				entry.log.push(`connection:${pc.connectionState}`);
+				entry.timeline.push([Date.now(), `connection:${pc.connectionState}`]);
+			});
 			pc.addEventListener('icegatheringstatechange', () => {
 				entry.log.push(`gathering:${pc.iceGatheringState}`);
 				if (pc.iceGatheringState === 'gathering') entry.gatherings++;
@@ -319,6 +322,28 @@
 		},
 		restart(name) {
 			peer(name).pc.restartIce();
+		},
+		/** the state changes so far, each at the time it was told (Date.now()) */
+		timeline(name) {
+			return peer(name).timeline;
+		},
+		/** a tone sent on a track of its own */
+		tone(name) {
+			const context = new AudioContext();
+			const oscillator = context.createOscillator();
+			const out = context.createMediaStreamDestination();
+			oscillator.connect(out);
+			oscillator.start();
+			const [track] = out.stream.getAudioTracks();
+			peer(name).pc.addTrack(track, out.stream);
+		},
+		/** a message on `label` every `ms` while it is open, to keep data flowing */
+		pulse(name, label, ms) {
+			const { channel } = channelOf(name, label);
+			const timer = setInterval(() => {
+				if (channel.readyState === 'open') channel.send('pulse');
+				else clearInterval(timer);
+			}, ms);
 		},
 		async read(name) {
 			const { pc, log, channels } = peer(name);

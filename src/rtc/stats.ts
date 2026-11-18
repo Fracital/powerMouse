@@ -277,6 +277,12 @@ export class TransportStats {
 	#pairs = new Map<string, Pair>();
 	#selected: Pair | null = null;
 	#selectedChanges = 0;
+	/**
+	 * When the first check on the selected pair that is not answered yet
+	 * was sent (performance.now()), null when the last was answered: what
+	 * Chrome's consent freshness counts from (RFC 7675)
+	 */
+	unanswered: number | null = null;
 	#asked = new Map<string, { pair: Pair; at: number; nominates: boolean }>();
 	/** checks of the peer's that nominate their pair, until answered */
 	#nominating = new Map<string, Pair>();
@@ -425,6 +431,7 @@ export class TransportStats {
 		if (stun) {
 			if (stun.type === BINDING_REQUEST) {
 				pair.requestsSent++;
+				if (pair === this.#selected) this.unanswered ??= performance.now();
 				if (pair.writable) pair.consentRequestsSent++;
 				else pair.state = 'in-progress';
 				if (stun.role) this.#iceRole = stun.role;
@@ -488,6 +495,7 @@ export class TransportStats {
 		if (this.#selected === pair) return;
 		if (this.#selected) this.#selected.nominated = false;
 		this.#selected = pair;
+		this.unanswered = null;
 		this.#selectedChanges++;
 		pair.nominated = true;
 		this.#onSelect({ local: pair.local.line, remote: pair.remote.line });
@@ -516,6 +524,7 @@ export class TransportStats {
 				asked.pair.currentRoundTripTime = seconds;
 				asked.pair.state = 'succeeded';
 				asked.pair.writable = true;
+				if (asked.pair === this.#selected) this.unanswered = null;
 				// this side nominated the pair, and the peer answered
 				if (asked.nominates) this.#select(asked.pair);
 			}

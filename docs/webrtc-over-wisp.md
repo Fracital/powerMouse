@@ -690,8 +690,9 @@ TURN server.
   DTLS at once, which dropped the SHUTDOWN: the peer heard only the
   close_notify, and werift kept its channels open (the str0m and sctp-proto
   patches of `rust/patches`). When the peer closes, the page's channels
-  close at once and the connection reads `disconnected` 5 s later (Chrome:
-  5.05 s measured).
+  close at once and the connection reads `disconnected` 5 s later and
+  `failed` 10 s after that (Chrome: 5.05 s with Chrome as the peer; 157
+  with werift, which stops answering checks, 6.8 s and 16.8 s).
 - ICE: a host candidate at a `<uuid>.local` name, a `srflx` per STUN or TURN
   server (UDP) from a Binding request on a wisp stream, a `relay` per TURN
   server over UDP, TCP or TLS (long-term credentials, permissions and a
@@ -923,9 +924,30 @@ TURN server.
   answers is given up about 16 s after its first check (Chrome: 15 s,
   measured with the same three silent candidates), and the wisp server's
   socket for it closes then rather than with the connection. One the wisp
-  server refuses or closes is not asked for again for 10 s.
+  server refuses or closes is not asked for again for 10 s, and once the
+  connection failed (below) nothing is sent to it, so no stream is opened
+  to it again.
 - **States.** The agent has no "failed": a connection that is disconnected
   before it ever connected reads `failed`.
+- **Consent freshness** (RFC 7675) is the worker's, as Chrome keeps it, not
+  the agent's (which said `disconnected` some 22 s after the far end went,
+  never failed, and sent media and SCTP retransmissions over the dead path
+  all along). Measured on Chrome 157 with a relay that drops everything:
+  the connection reads `disconnected` (both states) 5 s after the first
+  check on the selected pair that went unanswered, and from then on sends
+  nothing but checks; 10 s later `connectionState` reads `failed` while
+  `iceConnectionState` stays `disconnected`, and nothing at all is sent,
+  checks included, while the answers to the peer's checks still are. A
+  check of the peer's that arrives then reads `disconnected`, and the
+  answer to the connection's own check `connected` again; an ICE restart
+  of either side does as much (no `checking` on the way, as in Chrome).
+  The worker counts the checks and answers of the selected pair
+  (`TransportStats.unanswered`), withholds what is not STUN without
+  consent, and when the peer closes its end runs the same clock from then.
+  Chrome checks the selected pair every 2.7 s once it is stable and every
+  60 ms or so once nothing has come for 2.5 s; the agent checks every 3 s,
+  so the first unanswered check and with it both steps fall up to a few
+  seconds earlier or later than Chrome's.
 - **SCTP timers** back off to 3 s at most, as Chrome's dcSCTP (157,
   measured: its retransmissions 3.0 s apart through an outage), not
   sctp-proto's 60 s (a line of the str0m patch): what a page sent during an

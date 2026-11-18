@@ -107,8 +107,16 @@ export async function loadStack(
 	return new Stack(instance);
 }
 
-/** how long after the peer closed the connection reads disconnected (Chrome: about 5 s) */
-const PEER_GONE_MS = 5000;
+/**
+ * Consent freshness as Chrome keeps it (RFC 7675; 157, measured with a far
+ * end that vanished): this long after the first check on the selected pair
+ * that goes unanswered the pair is not writable, and the connection reads
+ * disconnected and sends nothing but checks; this long it is given up, the
+ * connection reads failed (iceConnectionState stays disconnected) and
+ * sends nothing at all until the peer checks it again or ICE restarts
+ */
+const CONSENT_LOST_MS = 5000;
+const CONSENT_EXPIRED_MS = 15000;
 /** Chrome's gathering, its TCP step included, when no server keeps it longer */
 const GATHER_STEPS_MS = 120;
 /** how long a closed connection's stack is driven on, to say goodbye */
@@ -548,6 +556,10 @@ export class Connection {
 	#iceState: RTCIceConnectionState = 'new';
 	#connectionState: RTCPeerConnectionState = 'new';
 	#connected = false;
+	/** the selected pair's consent: 0 fresh, 1 lost (disconnected), 2 expired (failed) */
+	#consent = 0;
+	#consentDue = 0;
+	#consentTimer: ReturnType<typeof setTimeout> | undefined;
 	/** the stack's bandwidth estimate, and what it was last told the encoders want */
 	#estimate = START_BITRATE;
 	#told = '';
@@ -1349,7 +1361,14 @@ export class Connection {
 
 	#transmit(payload: Uint8Array) {
 		const transmit = decodeTransmit(payload);
+		// without consent only checks go out (what is not STUN is the
+		// connection's own traffic), and once it expired only the answers
+		// to the peer's checks (a STUN response's first byte is 1)
+		const first = transmit.payload[0];
+		if (this.#consent && (first > 3 || (this.#consent > 1 && first !== 1)))
+			return;
 		this.#stats.sent(transmit.source, transmit.destination, transmit.payload);
+		if (this.#stats.unanswered !== null) this.#watchConsent();
 		// from a relayed address: through that allocation's TURN server
 		const relay = this.#relays.get(transmit.source);
 		if (relay) {
@@ -1481,12 +1500,62 @@ export class Connection {
 	) {
 		this.#stats.received(local, remote, bytes);
 		if (this.#ended) return;
+		// a check of the peer's after consent expired: Chrome makes a pair
+		// of it again, which reads disconnected until its own check is
+		// answered
+		if (this.#consent > 1 && bytes[0] === 0 && bytes[1] === 1)
+			this.#consentRestart();
 		this.#stack.input(
 			this.#id,
 			IN_DATAGRAM,
 			encodeDatagram(proto, remote, local, bytes),
 		);
 		this.#drain();
+		this.#consentBack();
+	}
+
+	/** a check on the selected pair was answered: consent is fresh again */
+	#consentBack() {
+		if (!this.#consent || this.#stats.unanswered !== null) return;
+		this.#consent = 0;
+		this.#setIce('connected');
+		this.#setConnection('connected');
+	}
+
+	/** the next step of consent, when the selected pair's checks go unanswered */
+	#watchConsent() {
+		const since = this.#stats.unanswered;
+		if (since === null || !this.#connected || this.#consent > 1) return;
+		const due = since + (this.#consent ? CONSENT_EXPIRED_MS : CONSENT_LOST_MS);
+		if (due === this.#consentDue) return;
+		this.#consentDue = due;
+		clearTimeout(this.#consentTimer);
+		this.#consentTimer = setTimeout(() => {
+			this.#consentDue = 0;
+			if (this.#ended || this.#stats.unanswered !== since) return;
+			if (this.#consent) {
+				this.#consent = 2;
+				this.#setConnection('failed');
+				return;
+			}
+			this.#consent = 1;
+			this.#setIce('disconnected');
+			this.#setConnection('disconnected');
+			this.#watchConsent();
+		}, due - performance.now());
+	}
+
+	/**
+	 * An ICE restart, or a check of the peer's after consent expired
+	 * (Chrome makes a pair of it again): the connection checks again, and
+	 * reads disconnected until a check of its own is answered
+	 */
+	#consentRestart() {
+		if (this.#consent < 2) return;
+		this.#consent = 1;
+		this.#stats.unanswered = performance.now();
+		this.#setConnection('disconnected');
+		this.#watchConsent();
 	}
 
 	#openBridge(): BroadcastChannel {
@@ -1618,9 +1687,9 @@ export class Connection {
 					this.#event({ ev: 'channelLow', channel: Number(fields.index) });
 				break;
 			// the peer closed its end (a DTLS close_notify, an SCTP abort):
-			// every channel closes at once, and the connection reads
-			// disconnected when the browser's would, once its checks have
-			// gone unanswered for a while
+			// every channel closes at once, and the connection's consent runs
+			// out from now, as the browser's checks go unanswered (Chrome:
+			// disconnected about 5 s later, failed 10 s after that)
 			case 'closed': {
 				const abort =
 					fields.abort === undefined
@@ -1635,12 +1704,10 @@ export class Connection {
 				if (!this.#connected) {
 					this.#setIce('failed');
 					this.#setConnection('failed');
-				} else
-					setTimeout(() => {
-						if (this.#closed) return;
-						this.#setIce('disconnected');
-						this.#setConnection('disconnected');
-					}, PEER_GONE_MS);
+				} else {
+					this.#stats.unanswered ??= performance.now();
+					this.#watchConsent();
+				}
 				break;
 			}
 			case 'error':
@@ -1658,6 +1725,8 @@ export class Connection {
 			this.#setConnection('failed');
 			return;
 		}
+		// once consent is lost, it alone says when the connection is back
+		if (this.#consent) return;
 		// Chrome's agent never says "completed" (its ICE transport has no
 		// such state, measured on 152 and 156, end-of-candidates both ways
 		// or not): connected is as far as it goes
@@ -1756,6 +1825,7 @@ export class Connection {
 		const ufrag = own('ice-ufrag');
 		const pwd = own('ice-pwd');
 		if (ufrag && ufrag !== this.#ufrag) {
+			if (this.#ufrag) this.#consentRestart();
 			this.#ufrag = ufrag;
 			// each restart's candidates are of the next generation, as Chrome numbers them
 			this.#generation++;
@@ -2317,8 +2387,10 @@ export class Connection {
 							}
 						else this.#heldRemotes.push(candidate);
 					const ufrag = /^a=ice-ufrag:(.*)$/m.exec(request.sdp)?.[1].trim();
-					if (ufrag && this.#remoteUfrag && ufrag !== this.#remoteUfrag)
+					if (ufrag && this.#remoteUfrag && ufrag !== this.#remoteUfrag) {
 						this.#keepRemotes();
+						this.#consentRestart();
+					}
 					this.#remoteUfrag = ufrag ?? this.#remoteUfrag;
 					this.#stats.offered(request.type !== 'offer');
 					this.#remoteSet = true;
@@ -2678,6 +2750,7 @@ export class Connection {
 		this.#ended = true;
 		this.#resetGathering();
 		if (this.#timer !== null) clearTimeout(this.#timer);
+		clearTimeout(this.#consentTimer);
 		for (const stream of this.#streams.values()) stream.close();
 		this.#streams.clear();
 		this.#bridge?.close();
