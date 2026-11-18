@@ -558,6 +558,7 @@ const DEFERRED_FILES = new Set(
 		'src/inject/permissionGates.ts',
 		'src/passkeys/types.ts',
 		'src/refresh.ts',
+		'src/wasm/codecBytes.ts',
 		'src/inject/serviceWorkerObjects.ts',
 		'src/inject/storageBucketMethods.ts',
 		'src/inject/webTransport.ts',
@@ -1204,6 +1205,9 @@ const stubCrypto = {
 /** the document bundles, built before the others (`bundles`) */
 const DOCUMENT_BUNDLES = ['injectDocument', 'injectDocumentFull'];
 
+// (a document bundle's codec module is a deferred part, src/wasm/codecBytes.ts)
+const documentDefine = { 'process.env.STOMP_CODEC_WASM': 'undefined' };
+
 const builds = [
 	{
 		entryPoints: { injectDocument: 'src/inject/dom/entry.ts' },
@@ -1211,12 +1215,14 @@ const builds = [
 		alias: stubCrypto,
 		inject: [snapshot, domSnapshot],
 		plugins: [rewriterLib, deferredTable],
+		define: documentDefine,
 	},
 	{
 		entryPoints: { injectDocumentFull: 'src/inject/dom/entry.ts' },
 		format: 'iife',
 		inject: [snapshot, domSnapshot],
 		plugins: [rewriterLib, deferredTable],
+		define: documentDefine,
 	},
 	{
 		entryPoints: { injectWorker: 'src/inject/worker/entry.ts' },
@@ -1318,6 +1324,7 @@ const bundles = (library, generation = '', core = library, documents = {}) =>
 			),
 			'process.env.STOMP_REWRITE_GENERATION': JSON.stringify(generation),
 			...(options.inject?.includes(snapshot) ? reflectDefines : {}),
+			...options.define,
 		},
 		plugins: [
 			noSourceMaps,

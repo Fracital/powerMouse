@@ -16,7 +16,7 @@
 // client and every hook's helpers with the bundle.
 import shared from 'stomp:deferred-shared';
 import { ACTIVATION_FACTORY, PASSKEYS_FACTORY } from '../../version';
-import { deferredFactory } from '../rewriter';
+import { deferredFactory, deferredHeld } from '../rewriter';
 import type { ActivationPart } from './activationPart';
 import type { DeferredParts } from './deferredParts';
 import type { PasskeysPart } from './passkeysPart';
@@ -44,6 +44,17 @@ export function deferred<Name extends keyof DeferredParts>(
 	for (const key of Reflect.ownKeys(group) as (keyof DeferredParts)[])
 		(parts as Record<string, unknown>)[key] = group[key];
 	return group[name] as DeferredParts[Name];
+}
+
+/**
+ * The deferred part `name` where this realm has it at hand (evaluated
+ * already, or the parts' function a proxied top's shell loaded), else
+ * undefined: never a request for the file, nor a text from another realm
+ */
+export function heldPart<Name extends keyof DeferredParts>(
+	name: Name,
+): DeferredParts[Name] | undefined {
+	return parts[name] ?? (deferredHeld() ? deferred(name) : undefined);
 }
 
 /** the passkey provider's client, once this bundle has evaluated it */

@@ -1,20 +1,25 @@
 // The codec module (rust/codec, `codec.wasm`) as a realm runs it: the xor
 // codec's seal and open (src/xorWire.ts says what they are), in wasm. Unlike
-// the other modules it is neither fetched nor handed over: its 1.4 KB ride
-// in every bundle as text (build.js defines STOMP_CODEC_WASM from
-// assets/codec.wasm) and a realm compiles them where it stands, the first
-// time it seals or opens a URL, because that first time comes before
-// anything asynchronous can have finished: a document's client reads its
-// own address before the page's first script. The module is one page of
-// memory with two buffers at fixed places, no import and no allocator.
+// the other modules it is never fetched: its 1.4 KB ride as text (build.js
+// defines STOMP_CODEC_WASM from assets/codec.wasm) and a realm compiles
+// them where it stands, the first time it seals or opens a URL, because
+// that first time comes before anything asynchronous can have finished: a
+// document's client reads its own address before the page's first script.
+// The worker bundles and the service worker carry the text; the document
+// bundle's is a deferred part (./codecBytes.ts, `codecParts`), which a
+// proxied top's shell loaded before the bundle, so only a top compiles one
+// and no frame carries the text. The module is one page of memory with two
+// buffers at fixed places, no import and no allocator.
 //
 // Where a realm holds no instance the JavaScript in src/xorWire.ts writes
 // the same bytes: a bundle built without the module (the rewriter
-// library's copies, whose bundle carries it already), a realm that may not
-// compile one (`forbidCodecModule`), an instance that trapped. A document
-// under a proxied top does not compile its own: it asks its top's bundle
-// (`shareCodec`), so a page of forty frames holds one instance, not forty
-// memories.
+// library's copies, whose bundle carries it already), a document whose
+// realm does not hold the parts already (a frame of another slot, a top
+// whose shell did not load them: it asks for no file for this), a realm
+// that may not compile one (`forbidCodecModule`), an instance that trapped.
+// A document under a proxied top does not compile its own: it asks its
+// top's bundle (`shareCodec`), so a page of forty frames holds one
+// instance, not forty memories.
 import { BUILD } from '../version';
 import {
 	asciiInto,
@@ -76,12 +81,19 @@ const bufferOf =
 	Object.getOwnPropertyDescriptor(wasm.Memory.prototype, 'buffer')?.get;
 const Bytes = Uint8Array;
 
+/**
+ * Where a bundle built without the module's bytes takes them: the document
+ * bundle's deferred part, where its realm holds the parts already
+ * (src/inject/dom/document.ts); undefined for none
+ */
+export const codecParts: { bytes?: () => string | undefined } = {};
+
 /** the module's bytes as this bundle carries them, or undefined for a bundle without */
 function carried(): string | undefined {
 	try {
-		return process.env.STOMP_CODEC_WASM || undefined;
+		return process.env.STOMP_CODEC_WASM || codecParts.bytes?.() || undefined;
 	} catch (error) {
-		// neither a build's define nor Node
+		// neither a build's define nor Node, or a part that could not be had
 		return undefined;
 	}
 }

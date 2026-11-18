@@ -14,6 +14,10 @@
 // own. This file is not built itself: build.js reads its imports, and
 // `parts` names each of them once.
 //
+// (and the codec module's bytes, ../../wasm/codecBytes.ts, which a
+// proxied top compiles at its first seal from the parts its shell loaded:
+// the frames under it seal in its instance)
+//
 // (and Chrome 157's markup insertion members, ./markupMembers.ts, at a
 // page's first call of one)
 //
@@ -108,6 +112,7 @@ import { compileFilter, proceduralRunner } from '../../blocker/procedural';
 import { modifyHTML } from '../../htmlShell';
 import { noticeText } from '../../mixedContentNotices';
 import { integrityHoldsSync } from '../../sriDigest';
+import { codecBytes } from '../../wasm/codecBytes';
 import { modifyXML } from '../../xmlShell';
 import { accessFailures } from '../accessFailures';
 import { bareClient, socketStandIns } from '../bareClient';
@@ -203,6 +208,9 @@ import { xhrMessage } from './xhrMessages';
 import { responseParser } from './xhrParse';
 
 export const parts = {
+	// the codec module's bytes, at a top's first seal (../../wasm/codecBytes.ts;
+	// ../../wasm/codec.ts)
+	codecBytes,
 	bareClient,
 	// what the WebSocket and WebSocketStream stand-ins do, with the client
 	// (../bareClient.ts; ../socketParts.ts, ../modules/WebSocket.ts)

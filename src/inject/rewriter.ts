@@ -224,6 +224,12 @@ if (givenPasskeys) deferredMade.set(PASSKEYS_FACTORY, givenPasskeys);
 if (givenActivation) deferredMade.set(ACTIVATION_FACTORY, givenActivation);
 
 /**
+ * Whether this realm holds the deferred parts' whole function already (a
+ * proxied top's shell loaded it), so a part costs no request and no text
+ */
+export const deferredHeld = (): boolean => deferredMade.has(DEFERRED_FACTORY);
+
+/**
  * The function of one of the light library's file's deferred statements
  * (src/inject/dom/deferred.ts): the document bundle's deferred parts'
  * (DEFERRED_FACTORY), the passkey provider's client's (PASSKEYS_FACTORY) or

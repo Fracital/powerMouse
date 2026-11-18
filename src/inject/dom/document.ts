@@ -1,5 +1,6 @@
 import type { FpSurface } from '../../blocker/types';
 import { setDocumentShells } from '../../rewriteHTML';
+import { codecParts } from '../../wasm/codec';
 import { accessFailureParts } from '../accessFailureParts';
 import { createClientFactory } from '../Client';
 import { idbSizeParts } from '../idbSizeParts';
@@ -13,7 +14,7 @@ import { storageBucketParts } from '../storageBucketParts';
 import { webTransportParts } from '../webTransportParts';
 import { workerStartParts } from '../workerStartParts';
 import DocumentClient from './Client';
-import { deferred } from './deferred';
+import { deferred, heldPart } from './deferred';
 import AdblockModule from './modules/Adblock';
 import AnchorModule from './modules/Anchor';
 import AnimationFramesModule from './modules/AnimationFrames';
@@ -88,6 +89,10 @@ mixedContentParts.noticeText = () => deferred('noticeText');
 accessFailureParts.failures = () => deferred('accessFailures');
 // and the un-routing of ReportingObserver's reports, with the first
 reportParts.seen = () => deferred('reportsSeen');
+// and the codec module's bytes, which a top compiles at its first seal from
+// the parts its shell loaded (a document without them seals in JavaScript,
+// with no request: ../../wasm/codec.ts)
+codecParts.bytes = () => heldPart('codecBytes')?.();
 // and what a worker's construction does past its checks, with the first
 workerStartParts.start = () => deferred('workerStart');
 // and what a WebSocket stand-in does, with the client a document opens

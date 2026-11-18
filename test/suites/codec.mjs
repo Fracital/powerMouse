@@ -3,7 +3,8 @@
 // text for every input and key and refuse what is no seal alike, checked in
 // node over a corpus of URLs, long and wide texts and broken seals
 // (rust/host/codec.mjs runs the large one); every bundle that seals a URL
-// carries the module once. In a browser: a proxied top seals in its own
+// carries the module once, the document bundles' in their deferred parts.
+// In a browser: a proxied top seals in its own
 // instance and a frame under it in its top's; no routed address of a page,
 // a nested frame or a worker names the site, its path, its fragment or a
 // form field in clear, and a GET form without an action lands at a sealed
@@ -66,16 +67,24 @@ ok(
 }
 
 // carried as text, once in each bundle that seals (the rewriter library
-// inside the document bundle is handed it, not given a copy)
+// inside the document bundle is handed it, not given a copy); the document
+// bundles' is a deferred part (src/wasm/codecBytes.ts), in the rewriter
+// library's file, which a proxied top's shell loads: no frame carries it
 const carried = readFileSync(`${root}assets/codec.wasm`).toString('base64url');
-for (const name of [
-	'serviceWorker.js',
-	'injectDocument.js',
-	'injectWorker.js',
+for (const [name, times] of [
+	['serviceWorker.js', 1],
+	['injectWorker.js', 1],
+	['injectDocument.js', 0],
+	['injectDocumentFull.js', 0],
+	['rewriterLib.js', 1],
 ]) {
 	const text = readFileSync(`${root}dist/${name}`, 'utf8');
 	const count = text.split(carried).length - 1;
-	ok(`${name} carries the codec module once`, count === 1, String(count));
+	ok(
+		`${name} carries the codec module ${times ? 'once' : 'not at all'}`,
+		count === times,
+		String(count),
+	);
 }
 
 // the route kinds that name a site: sealed, and read back

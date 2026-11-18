@@ -109,16 +109,20 @@ re-wrote gets no `dispose` when the page later prunes it.
 
 `rust/codec` builds `assets/codec.wasm` (1,449 bytes: no import, one page
 of memory, two 16 KiB buffers at fixed places, exports `i o e d`). The
-build carries it in every bundle that seals a URL as text
-(`process.env.STOMP_CODEC_WASM`, `build.js`), because a document's client
-reads its own address before any page script and before anything
-asynchronous could have finished; `src/wasm/codec.ts` compiles it
+build carries it as text (`process.env.STOMP_CODEC_WASM`, `build.js`) in
+the worker bundles and the service worker, and as a deferred part of the
+document bundles (`src/wasm/codecBytes.ts`, in the rewriter library's
+file, which a proxied top's shell loads before its bundle), because a
+document's client reads its own address before any page script and before
+anything asynchronous could have finished; `src/wasm/codec.ts` compiles it
 synchronously the first time a realm seals or opens a URL. A proxied top
 holds the instance and the frames under it seal in their top's (one
-instance per page). `src/xorWire.ts` writes the same bytes in JavaScript
+instance per page), so no frame carries the text. `src/xorWire.ts` writes the same bytes in JavaScript
 wherever a realm holds no instance: the rewriter library and the light
 library (a file of their own, built without the module, which the bundle
-that loads it carries already; the JavaScript is as fast), a document under a blocking list's `$csp=` policy
+that loads it carries already; the JavaScript is as fast), a document whose realm does not hold the deferred parts already (a frame
+of another slot, a top whose shell did not load them: it asks for no file
+for the module), a document under a blocking list's `$csp=` policy
 (`Config.codecModule`, which may refuse the compile and would report it to
 the page), a bundle built without the module, an instance that trapped.
 
@@ -130,7 +134,8 @@ the page), a bundle built without the module, an instance that trapped.
   sites), texts across the module's buffers up to 200 KB, every length up
   to 600 of random text, and what is no seal; `--bench` times both.
 - The `codec` suite runs that over a smaller corpus, checks the documented
-  vectors and that each bundle carries the module once, and in a browser
+  vectors and that each bundle carries the module once (a document
+  bundle not at all, the rewriter library's file once), and in a browser
   that a top seals in its own instance and its frames in its top's, that no
   routed address the browser loads names the site, its path, a fragment or
   a form field, and that a GET form without an action lands at its sealed
