@@ -111,7 +111,7 @@ import { relayBeacon } from './beaconRelay';
 import { identityFlow, relyingPartyGuard } from './credentialFlows';
 import { ownStoreRefusal } from './credentialStore';
 import { saveDownload } from './downloadSave';
-import { instructionData, modifyXML, xmlProlog } from './instructions';
+import { instructionData, loadXML, modifyXML, xmlProlog } from './instructions';
 import { lazyFonts } from './lazyFonts';
 import { formEncoding, legacyFormQuery, legacyQuery } from './legacyEncoding';
 import { markupMembers } from './markupMembers';
@@ -256,6 +256,9 @@ export const parts = {
 	hookDevices,
 	instructionData,
 	xmlProlog,
+	// the loading of an XML document, at the XML shell's call
+	// (./instructions.ts; Client.loadXML)
+	loadXML,
 	modifyXML,
 	ownStoreRefusal,
 	targetAcross,

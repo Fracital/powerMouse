@@ -13,7 +13,9 @@
 // Worker's construction throws before the browser's
 // (src/inject/workerStart.ts); an image in a frame no service worker
 // controls keeps its route and loads nothing (its copy is a part,
-// src/inject/dom/uncontrolledCopies.ts). A part is made
+// src/inject/dom/uncontrolledCopies.ts); an XML document a frame loads
+// lands none of its tree (its load is a part,
+// src/inject/dom/instructions.ts). A part is made
 // synchronously within the call that needs it, so no page code runs between
 // the hook and the part (a download's copy is made after the click went
 // through the page, which the browser's own download had been cancelled
@@ -190,6 +192,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			'estimate',
 			'worker',
 			'blankCopy',
+			'xmlLoad',
 		],
 	);
 	ok(
@@ -204,6 +207,11 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		'with the parts, an image in a frame no service worker controls loads its copy',
 		answer.out?.blankCopy?.loaded === true,
 		JSON.stringify(answer.out?.blankCopy),
+	);
+	ok(
+		'with the parts, an XML document a frame loads lands its tree',
+		answer.out?.xmlLoad?.root === 'svg' && answer.out.xmlLoad.landed === true,
+		JSON.stringify(answer.out?.xmlLoad),
 	);
 	ok(
 		'with the parts, a worker starts, through the browser',
@@ -278,7 +286,13 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		},
 		{
 			name,
-			calls: [...REFUSING, 'foreignStats', 'notFunction', 'blankCopy'],
+			calls: [
+				...REFUSING,
+				'foreignStats',
+				'notFunction',
+				'blankCopy',
+				'xmlLoad',
+			],
 		},
 	);
 	const out = answer.out ?? {};
@@ -337,6 +351,12 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		'without the parts, an image in a frame no service worker controls loads nothing',
 		out.blankCopy?.loaded === false,
 		JSON.stringify(out.blankCopy),
+	);
+	// the shell's call throws: none of the document's tree lands
+	ok(
+		'without the parts, an XML document a frame loads lands nothing',
+		out.xmlLoad?.root === 'svg' && out.xmlLoad.landed === false,
+		JSON.stringify(out.xmlLoad),
 	);
 	// the part only words the error: without it, the error the call threw
 	ok(

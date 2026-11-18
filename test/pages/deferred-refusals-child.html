@@ -146,6 +146,27 @@
 						}
 						setTimeout(() => resolve({ pending: true }), 5000);
 					}),
+				// an XML document a frame loads through the XML shell (its load
+				// is a part, src/inject/dom/instructions.ts loadXML): whether
+				// its root's children landed
+				xmlLoad: () =>
+					new Promise((resolve) => {
+						const frame = document.createElement('iframe');
+						frame.onload = () => {
+							try {
+								const root = frame.contentDocument.documentElement;
+								resolve({
+									root: root.localName,
+									landed: !!root.querySelector('symbol rect'),
+								});
+							} catch (error) {
+								resolve({ threw: String(error && error.message) });
+							}
+						};
+						frame.src = 'blank-sprite.svg';
+						document.body.append(frame);
+						setTimeout(() => resolve({ pending: true }), 5000);
+					}),
 				// a navigation of another window of the page's (a frame of its
 				// own, by `w.location = url`): where the frame is after it
 				// a call of no function through the access API: V8's message names

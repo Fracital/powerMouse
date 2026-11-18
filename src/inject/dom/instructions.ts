@@ -1,9 +1,11 @@
 // The deferred side of xml-stylesheet processing instructions
 // (./stylesheetPIs.ts) and of an XML document's prolog
 // (Client.loadXML): what routes, reads back and edits a PI's data, and the
-// XSLT an XML document's prolog names. A deferred part (./deferredParts.ts):
-// most documents never meet a stylesheet PI.
+// XSLT an XML document's prolog names; and the loading of an XML document
+// itself (loadXML). A deferred part (./deferredParts.ts): most documents
+// never meet a stylesheet PI, and few are XML.
 import { routeCSS } from '../../cssURLs';
+import { XML_DOCUMENT_MIMES } from '../../rewriteHTML';
 import { routeURL } from '../../routeURL';
 import StompURL from '../../StompURL';
 import {
@@ -14,6 +16,9 @@ import {
 import ProxyModule from '../modules/Proxy';
 import { unrouteURL } from '../modules/Unroute';
 import type DocumentClient from './Client';
+import { runDocumentOpenListeners, setGlobalParsingState } from './Client';
+import cloneRawNode, { nativeAttributes, parseHTML } from './cloneNode';
+import { stripScripts } from './sandbox';
 import { isStylesheetPI, type InstructionNatives } from './stylesheetPIs';
 
 export { modifyXML } from '../../xmlShell';
@@ -187,4 +192,73 @@ export function xmlProlog(
 		if (!output) throw new Error('no output');
 		replace(output);
 	})().catch(() => land(prolog, epilog));
+}
+
+/**
+ * Load an XML document (a standalone SVG, an XHTML page, any other XML
+ * document) served through the XML shell (src/xmlShell.ts, which calls the
+ * client's loadXML): parsed with its own mime, its scripts rewritten, its
+ * tree re-created through the hooks in this document (namespaces kept)
+ * under the shell's root, since an XML document has no document.write.
+ * Scripts run as the tree lands, like a parser's would. The prolog's
+ * processing instructions and comments land around the root as natively (an
+ * xml-stylesheet one loads its sheet, routed by ./stylesheetPIs.ts); an XSLT
+ * one transforms the document instead, as the browser's parser does at its
+ * end.
+ */
+export function loadXML(client: DocumentClient, markup: string, mime: string) {
+	const global = client.global;
+	const parsed = parseHTML(
+		markup,
+		global.document,
+		(XML_DOCUMENT_MIMES.includes(mime)
+			? mime
+			: 'application/xml') as DOMParserSupportedType,
+	);
+	const root = parsed.documentElement;
+	const live = global.document.documentElement;
+	if (!root || !live) return;
+	const land = (prolog: Node[] = [], epilog: Node[] = []) => {
+		client.refreshSandbox();
+		if (!client.allows('allow-scripts')) stripScripts(root);
+		setGlobalParsingState(global, 'parsingBeforeWrite');
+		client.rewriteInlineScripts(root, true);
+		const page = global.document;
+		// (through the insertion hooks, which route a stylesheet PI's href)
+		for (const node of prolog) page.insertBefore(page.importNode(node), live);
+		for (const node of epilog) page.appendChild(page.importNode(node));
+		// The shell's root is the document's own start tag, so it stays (a
+		// root put in its place would not carry the title: Chrome's
+		// document.title only follows an SVG <title> that is inserted under
+		// the connected root). Its attributes are set again, through the
+		// hooks, and the shell's scripts give way to the page's children.
+		for (const attribute of Array.from(
+			Reflect.apply(nativeAttributes, live, []) as NamedNodeMap,
+		))
+			if (attribute.namespaceURI)
+				live.setAttributeNS(
+					attribute.namespaceURI,
+					attribute.name,
+					attribute.value,
+				);
+			else live.setAttribute(attribute.name, attribute.value);
+		while (live.firstChild) live.removeChild(live.firstChild);
+		const clone = cloneRawNode(root, page, true);
+		setGlobalParsingState(global);
+		live.append(clone);
+		runDocumentOpenListeners(global);
+	};
+	// a document with nothing but its root (most): no prolog to read
+	if (parsed.childNodes.length === 1) return land();
+	xmlProlog(client, parsed, root, land, (output) => {
+		const page = global.document;
+		client.refreshSandbox();
+		if (!client.allows('allow-scripts')) stripScripts(output);
+		setGlobalParsingState(global, 'parsingBeforeWrite');
+		client.rewriteInlineScripts(output, true);
+		const clone = cloneRawNode([output], page, true);
+		setGlobalParsingState(global);
+		page.replaceChild(clone, live);
+		runDocumentOpenListeners(global);
+	});
 }
