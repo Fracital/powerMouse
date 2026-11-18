@@ -38,6 +38,9 @@
 // download's copy is made after the click went through the page, which the
 // browser's own download had been cancelled for as it started); what is
 // left to check is the part that throws instead.
+// (performance.measureUserAgentSpecificMemory(), which only a cross-origin
+// isolated page has, is checked the same way by measured-memory, under an
+// isolated host.)
 //
 // The tab's documents get, before any script of theirs (and so before the
 // inject takes the browser's functions), counting stand-ins for the

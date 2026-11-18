@@ -12,6 +12,9 @@
 // the page wrote it, its own element's (in its parent) as its frame's. A
 // counting stand-in every document gets for the browser's function before
 // any script of its own (so before the inject takes it) sees the one call.
+// Then the proxied top hands the next frame a parts statement that throws
+// (deferred-refusals' `without`): the frame's call rejects with the parts'
+// error, and the stand-in never sees a call.
 import {
 	done,
 	FIXTURE,
@@ -95,13 +98,15 @@ for (const [mode, base] of [
 	await page.addInitScript(countNatives);
 	await submitLanding(page, pageURL(mode));
 	const top = await waitActive(page, `window.__ready === true`, 60000);
+	const name = await page.evaluate(() => window.controller.config.names.client);
 
+	// with the parts: as natively
 	const proxied = await top.evaluate(() => window.__child('measuring'));
 	if (nativeOk) {
 		const wanted = shape(native);
 		const got = shape(proxied);
 		ok(
-			`${mode}, the result has the native shape, through the browser`,
+			`${mode}, with the parts, the result has the native shape, through the browser`,
 			SHAPE.every((key) => wanted[key] === got[key]),
 			JSON.stringify(
 				SHAPE.filter((key) => wanted[key] !== got[key]).map(
@@ -110,7 +115,7 @@ for (const [mode, base] of [
 			),
 		);
 		ok(
-			`${mode}, the attribution names what it does natively`,
+			`${mode}, with the parts, the attribution names what it does natively`,
 			JSON.stringify(proxied.attribution) ===
 				JSON.stringify(native.attribution),
 			JSON.stringify({
@@ -120,7 +125,7 @@ for (const [mode, base] of [
 		);
 	}
 	ok(
-		`${mode}, no URL of the result is the proxy's`,
+		`${mode}, with the parts, no URL of the result is the proxy's`,
 		Array.isArray(proxied.raw) &&
 			proxied.raw.length > 0 &&
 			!proxied.raw.some((url) =>
@@ -133,10 +138,37 @@ for (const [mode, base] of [
 	const written = { measuring: proxied.written, inner: proxied.innerWritten };
 	const named = containers(proxied);
 	ok(
-		`${mode}, a frame's src is the one the page wrote`,
+		`${mode}, with the parts, a frame's src is the one the page wrote`,
 		named.length > 0 &&
 			named.every((container) => container.src === written[container.id]),
 		JSON.stringify({ named, written }),
+	);
+
+	// without them: the call rejects, and the browser is never asked
+	const without = await top.evaluate(async (name) => {
+		const client = window[name];
+		Reflect.defineProperty(client, 'deferredPartsText', {
+			configurable: true,
+			value: () => '__stompDeferred=function(){throw new Error("no parts")};',
+		});
+		try {
+			return await window.__child('without');
+		} finally {
+			Reflect.deleteProperty(client, 'deferredPartsText');
+		}
+	}, name);
+	ok(
+		`${mode}, without the parts, the frame's call rejects with the parts' error`,
+		without.isolated === true &&
+			without.type === 'function' &&
+			without.returned === '[object Promise]' &&
+			without.promise === 'rejected: no parts',
+		JSON.stringify(without),
+	);
+	ok(
+		`${mode}, without the parts, the browser's measureUserAgentSpecificMemory is never called`,
+		Array.isArray(without.reached) && without.reached.length === 0,
+		JSON.stringify(without.reached),
 	);
 	await page.close();
 }
