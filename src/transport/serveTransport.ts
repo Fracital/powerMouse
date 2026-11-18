@@ -219,6 +219,7 @@ async function openStream(
  * kept: the next caller tries again.
  */
 const initializing = new WeakMap<ProxyTransport, Promise<void>>();
+
 function initOnce(transport: ProxyTransport): Promise<void> {
 	let pending = initializing.get(transport);
 	if (!pending) {
@@ -228,6 +229,45 @@ function initOnce(transport: ProxyTransport): Promise<void> {
 		initializing.set(transport, pending);
 	}
 	return pending;
+}
+
+/** what a transport's wrappers (Http3Transport, RevivingTransport) keep under them: epoxy's client, which opens its wisp connection on demand */
+interface WispClient {
+	replace_stream_provider?: () => Promise<unknown>;
+}
+
+function wispClient(transport: ProxyTransport): WispClient | null {
+	const held = transport as { client?: unknown; base?: ProxyTransport };
+	if (held.client && typeof held.client === 'object')
+		return held.client as WispClient;
+	return held.base ? wispClient(held.base) : null;
+}
+
+/**
+ * Load the transport and open its wisp connection now, before anything asks
+ * for them. A transport did both on its first request: the first navigation
+ * waited for epoxy's wasm module to load and compile and for the WebSocket
+ * to the wisp server and its handshake (40 to 70 ms on loopback, round
+ * trips more to a wisp server over the internet). A request that comes
+ * meanwhile waits for it as it would for init(), so no request opens a
+ * connection of its own beside it; a connection that cannot be opened now
+ * is left to the first request, as before. A transport without epoxy's
+ * client is only loaded.
+ */
+export function warmTransport(transport: ProxyTransport): void {
+	if (transport.ready || initializing.has(transport)) return;
+	const pending = Promise.resolve(transport.init())
+		.then(() => wispClient(transport)?.replace_stream_provider?.())
+		.then(
+			() => {},
+			(error) => {
+				// not loaded: the next request tries again (initOnce)
+				if (!transport.ready) throw error;
+			},
+		)
+		.finally(() => initializing.delete(transport));
+	pending.catch(() => {});
+	initializing.set(transport, pending);
 }
 
 /**
@@ -253,7 +293,9 @@ export default function serveTransport(
 
 	const readyTransport = async () => {
 		const transport = getTransport();
-		if (!transport.ready) await initOnce(transport);
+		// (a transport warmTransport is still connecting is ready already)
+		if (!transport.ready || initializing.has(transport))
+			await initOnce(transport);
 		return transport;
 	};
 

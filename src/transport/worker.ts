@@ -17,7 +17,7 @@ import {
 	WorkerToController,
 } from './messages';
 import { RpcHelper } from './rpc';
-import serveTransport from './serveTransport';
+import serveTransport, { warmTransport } from './serveTransport';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -42,10 +42,12 @@ const rpc = new RpcHelper<WorkerBound, WorkerToController>(
 	{
 		init: async (descriptor) => {
 			transport = await construct(descriptor);
+			warmTransport(transport);
 			first();
 		},
 		setTransport: async (descriptor) => {
 			transport = await construct(descriptor);
+			warmTransport(transport);
 		},
 		serve: async (port) => {
 			await ready;
