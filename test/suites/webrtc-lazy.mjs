@@ -98,5 +98,54 @@ for (const [label, base] of [
 	await page.close();
 }
 
+// A document's first connection installs the library for the documents
+// that share its tables, and not for the windows of frames that are gone:
+// each of those cost ~20 ms in that one task while it was still collectable,
+// and a page that went through thousands of frames (adversarial-sinks made
+// a connection after ~2500) stalled for most of a minute.
+for (const [label, base] of [
+	['same-origin', PROXY],
+	['isolated', HOST],
+]) {
+	const page = await openDemo(browser, base);
+	await submitLanding(page, target);
+	const frame = () =>
+		page.frames().findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
+	for (let i = 0; i < 160; i++) {
+		await sleep(250);
+		if (
+			await frame()
+				?.evaluate(() => window.__lazyReady)
+				.catch(() => false)
+		)
+			break;
+	}
+	const cost = await frame().evaluate(() => {
+		// a ring of twelve live frames, the oldest removed as each is made,
+		// each document read once (adversarial-sinks' pool), then a
+		// connection of a new frame's, as the sinks page's was
+		const live = [];
+		const make = () => {
+			const element = document.createElement('iframe');
+			document.body.append(element);
+			live.push(element);
+			if (live.length > 12) live.shift().remove();
+			return element.contentWindow;
+		};
+		const read = [];
+		for (let i = 0; i < 300; i++) read.push(make().document.URL);
+		const view = make();
+		const start = performance.now();
+		new view.RTCPeerConnection().close();
+		return performance.now() - start;
+	});
+	ok(
+		`${label}: a first connection after 300 frames came and went installs nothing for them`,
+		cost < 1500,
+		`${Math.round(cost)} ms`,
+	);
+	await page.close();
+}
+
 await browser.close();
 await done();

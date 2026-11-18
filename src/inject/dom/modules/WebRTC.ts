@@ -54,6 +54,10 @@ import { DOMParser, navigator, postMessage } from '../snapshot';
 
 // taken before any hook or page script, in the bundle's own realm
 const openerGet = Reflect.getOwnPropertyDescriptor(globalThis, 'opener')?.get;
+const defaultViewGet = Reflect.getOwnPropertyDescriptor(
+	Document.prototype,
+	'defaultView',
+)!.get!;
 const objectCreate = Object.create;
 const captures: RtcContext['captures'] = {
 	mapEntries: Map.prototype.entries,
@@ -378,7 +382,30 @@ export default class WebRTCModule extends Module<DocumentClient> {
 				},
 				(made) => (installed = made),
 			);
-		const installNow = () => void install();
+		// a window whose frame is gone (removed, or navigated to another
+		// origin) makes no connection and is handed no object, but its install
+		// cost as much as a live one's: a page that went through thousands of
+		// frames (ad slots, a fuzzer's) paid ~20 ms for each in the one task
+		// of its first connection, as long as its collector had not got to
+		// them. (Its window's document, read again: a window that shows a
+		// new document of its origin keeps its prototypes, and needs them.)
+		const documentGet = Reflect.getOwnPropertyDescriptor(
+			global,
+			'document',
+		)?.get;
+		const gone = () => {
+			try {
+				const document = documentGet && Reflect.apply(documentGet, global, []);
+				return (
+					!document || Reflect.apply(defaultViewGet, document, []) === null
+				);
+			} catch (error) {
+				return true;
+			}
+		};
+		const installNow = () => {
+			if (!gone()) void install();
+		};
 		// the entries of documents that are gone go first, then this one's,
 		// made by the tables' own realm: one made by this document's WeakRef
 		// would keep this document alive with the tables

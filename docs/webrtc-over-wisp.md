@@ -815,7 +815,10 @@ TURN server.
   it loaded; the page reads no report and no resource entry of that
   request. What loads and installs it is a deferred part of the bundle
   (`src/inject/dom/rtcInstall.ts`, AGENTS.md), made at that first
-  connection too. What the library uses of the document is taken before any page
+  connection too. It installs the library for every document that shares
+  the document's tables (they hand each other objects), but not for the
+  window of a frame that is gone, which would cost ~20 ms each in that one
+  task until the collector took it (`webrtc-lazy`). What the library uses of the document is taken before any page
   script: the module takes the realm's constructors and objects it needs
   (`Promise`, `Worker`, `MessageEvent`, `setTimeout` and the like) when
   the document starts, and the members it calls (`postMessage` of ports
