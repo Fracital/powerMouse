@@ -1,0 +1,39 @@
+From 539821cb1e2a9af9f6aee0c952cc7598443826d1 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 17 Nov 2026 18:00:00 -0500
+Subject: [PATCH] client: chrome_hello offers its first groups' key shares
+ every time
+
+rustls remembers the group each server name last agreed on (the session
+store's kx_hint) and its next ClientHello to that name carried a key share
+for that group alone. Chrome remembers no group: every first hello carries
+its X25519MLKEM768 and X25519 shares. Measured with Chrome 157 against
+loopback servers: after an x25519-only server, the next hello to 127.0.0.1
+(any port) offered only an x25519 share, and after a P-384 server only a
+P-384 one, which cost an X25519MLKEM768-only server a HelloRetryRequest
+Chrome never needs. With chrome_hello the hint is ignored.
+---
+ src/client/tls13.rs | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/client/tls13.rs b/src/client/tls13.rs
+index 65bc500..d05adc8 100644
+--- a/src/client/tls13.rs
++++ b/src/client/tls13.rs
+@@ -311,10 +311,13 @@ pub(super) fn initial_key_share(
+     server_name: &ServerName<'_>,
+     kx_state: &mut KxState,
+ ) -> Result<Box<dyn ActiveKeyExchange>, Error> {
++    // Chrome remembers no server's group: its first key shares are always
++    // its first groups', whatever an earlier handshake with the host agreed
+     let group = config
+         .resumption
+         .store
+         .kx_hint(server_name)
++        .filter(|_| !config.chrome_hello)
+         .and_then(|group_name| config.find_kx_group(group_name, ProtocolVersion::TLSv1_3))
+         .unwrap_or_else(|| {
+             config
+-- 
+2.54.0
+

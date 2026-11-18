@@ -1,0 +1,285 @@
+From 74cbc4046d516c7481ebb4400bc117d082b54baf Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 17 Nov 2026 18:00:00 -0500
+Subject: [PATCH] client: TLS sessions are kept as Chrome keeps them, by host
+ and port, 1024 in all
+
+rustls keyed its session cache by server name alone. So a connection to
+another port of a host offered that port's TLS 1.3 PSK or TLS 1.2 ticket,
+and a TLS 1.3 ticket from one port took the place of the TLS 1.2 session
+another port's server would have resumed. Chrome's SSLClientSessionCache
+is keyed by host and port, so its hello to a port it has not met carries
+an empty ticket and no PSK.
+
+Each provider (each network partition) now keeps one cache, shared by its
+HTTP, WebSocket and raw TLS connections, of Chrome's size:
+- at most 1024 host and port keys, the least recently used dropped first;
+- at most two TLS 1.3 tickets and one TLS 1.2 session per key.
+Each connection gets a view of it for its own port. Nothing is held for a
+port until it gives a session or a key share hint, so a page that reaches
+thousands of ports leaves at most 1024 entries behind.
+---
+ client/src/stream_provider.rs |   8 +-
+ client/src/utils/mod.rs       |   1 +
+ client/src/utils/sessions.rs  | 190 ++++++++++++++++++++++++++++++++++
+ 3 files changed, 198 insertions(+), 1 deletion(-)
+ create mode 100644 client/src/utils/sessions.rs
+
+diff --git a/client/src/stream_provider.rs b/client/src/stream_provider.rs
+index 2156eac..b32071d 100644
+--- a/client/src/stream_provider.rs
++++ b/client/src/stream_provider.rs
+@@ -31,7 +31,7 @@ use wisp_mux::{
+ 
+ use crate::{
+ 	console_error, console_log,
+-	utils::{IgnoreCloseNotify, NoCertificateVerification},
++	utils::{sessions::SessionCache, IgnoreCloseNotify, NoCertificateVerification},
+ 	EpoxyClientOptions, EpoxyError,
+ };
+ 
+@@ -83,6 +83,9 @@ pub struct StreamProvider {
+ 	/// asked for a host's ECH config list (the `ech` of its HTTPS DNS
+ 	/// record) before a TLS connection to it opens
+ 	ech_resolver: Option<SendWrapper<Function>>,
++
++	/// the TLS sessions to resume, by host and port (utils::sessions)
++	sessions: Arc<SessionCache>,
+ }
+ 
+ /// What a TLS handshake that offered ECH ended with when the server
+@@ -250,6 +253,7 @@ impl StreamProvider {
+ 			ech_resolver: options.ech_resolver.clone().map(SendWrapper::new),
+ 			#[cfg(not(feature = "full"))]
+ 			ech_resolver: None,
++			sessions: Arc::new(SessionCache::default()),
+ 		})
+ 	}
+ 
+@@ -274,6 +278,7 @@ impl StreamProvider {
+ 			ws_config: fresh(&self.ws_config),
+ 			client_config: fresh(&self.client_config),
+ 			ech_resolver: self.ech_resolver.clone(),
++			sessions: Arc::new(SessionCache::default()),
+ 		}
+ 	}
+ 
+@@ -363,6 +368,7 @@ impl StreamProvider {
+ 			TlsAlpn::WebSocket => &self.ws_config,
+ 			TlsAlpn::None => &self.client_config,
+ 		};
++		let config = &self.sessions.config(config, port);
+ 		// Chrome reads a name's HTTPS record next to its addresses and
+ 		// offers real ECH when the record carries a config list; the lookup
+ 		// runs while the wisp stream opens
+diff --git a/client/src/utils/mod.rs b/client/src/utils/mod.rs
+index 3646c4a..4e8ec94 100644
+--- a/client/src/utils/mod.rs
++++ b/client/src/utils/mod.rs
+@@ -4,6 +4,7 @@ mod rustls;
+ pub mod legacy_tls;
+ #[cfg(feature = "full")]
+ pub mod mlkem;
++pub mod sessions;
+ pub use js::*;
+ use js_sys::Uint8Array;
+ pub use rustls::*;
+diff --git a/client/src/utils/sessions.rs b/client/src/utils/sessions.rs
+new file mode 100644
+index 0000000..c900bc7
+--- /dev/null
++++ b/client/src/utils/sessions.rs
+@@ -0,0 +1,190 @@
++//! The TLS session cache, as Chrome keeps it.
++//!
++//! rustls keys sessions by server name alone, so a connection to another port
++//! of a host offered that port's ticket or PSK. Chrome's
++//! SSLClientSessionCache is keyed by host and port, holds at most 1024 keys
++//! in all (the least recently used goes first) and at most two sessions per
++//! key. Each network partition has one of these, shared by its HTTP,
++//! WebSocket and raw TLS connections; a connection sees it through a
++//! [`PortSessions`] for its port.
++
++use std::{
++	collections::{HashMap, VecDeque},
++	sync::{Arc, Mutex, PoisonError},
++};
++
++use futures_rustls::rustls::{
++	client::{ClientSessionStore, Resumption, Tls12ClientSessionValue, Tls13ClientSessionValue},
++	pki_types::ServerName,
++	ClientConfig, NamedGroup,
++};
++
++/// Chrome's `SSLClientSessionCache` size
++const MAX_KEYS: usize = 1024;
++/// Chrome's sessions per key (TLS 1.3 tickets are used once each)
++const TLS13_TICKETS_PER_KEY: usize = 2;
++
++type Key = (u16, ServerName<'static>);
++
++#[derive(Default)]
++struct Entry {
++	kx_hint: Option<NamedGroup>,
++	tls12: Option<Tls12ClientSessionValue>,
++	tls13: VecDeque<Tls13ClientSessionValue>,
++	/// when the key was last used, on `Inner::clock`
++	used: u64,
++}
++
++#[derive(Default)]
++struct Inner {
++	entries: HashMap<Key, Entry>,
++	clock: u64,
++}
++
++impl Inner {
++	/// the entry for `key`, made (the least recently used one dropped for it
++	/// when the cache is full) if `make`
++	fn entry(&mut self, key: Key, make: bool) -> Option<&mut Entry> {
++		self.clock += 1;
++		let now = self.clock;
++		if make && !self.entries.contains_key(&key) && self.entries.len() >= MAX_KEYS {
++			let oldest = self
++				.entries
++				.iter()
++				.min_by_key(|(_, entry)| entry.used)
++				.map(|(key, _)| key.clone());
++			if let Some(oldest) = oldest {
++				self.entries.remove(&oldest);
++			}
++		}
++		let entry = match make {
++			true => self.entries.entry(key).or_default(),
++			false => self.entries.get_mut(&key)?,
++		};
++		entry.used = now;
++		Some(entry)
++	}
++}
++
++/// One network partition's sessions.
++#[derive(Default)]
++pub struct SessionCache(Mutex<Inner>);
++
++impl SessionCache {
++	/// `config` resuming from, and storing into, the sessions of `port`
++	pub fn config(self: &Arc<Self>, config: &Arc<ClientConfig>, port: u16) -> Arc<ClientConfig> {
++		let mut config = ClientConfig::clone(config);
++		// rustls's default otherwise: TLS 1.2 by session id or ticket
++		config.resumption = Resumption::store(Arc::new(PortSessions {
++			port,
++			cache: self.clone(),
++		}));
++		Arc::new(config)
++	}
++
++	fn with<T>(
++		&self,
++		port: u16,
++		name: &ServerName<'_>,
++		make: bool,
++		f: impl FnOnce(&mut Entry) -> T,
++	) -> Option<T> {
++		let mut inner = self.0.lock().unwrap_or_else(PoisonError::into_inner);
++		inner.entry((port, name.to_owned()), make).map(f)
++	}
++}
++
++/// The [`SessionCache`] as one port's connections see it.
++pub struct PortSessions {
++	port: u16,
++	cache: Arc<SessionCache>,
++}
++
++impl std::fmt::Debug for PortSessions {
++	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++		f.debug_struct("PortSessions")
++			.field("port", &self.port)
++			.finish_non_exhaustive()
++	}
++}
++
++impl ClientSessionStore for PortSessions {
++	fn set_kx_hint(&self, server_name: ServerName<'static>, group: NamedGroup) {
++		self.cache.with(self.port, &server_name, true, |entry| {
++			entry.kx_hint = Some(group)
++		});
++	}
++
++	fn kx_hint(&self, server_name: &ServerName<'_>) -> Option<NamedGroup> {
++		self.cache
++			.with(self.port, server_name, false, |entry| entry.kx_hint)
++			.flatten()
++	}
++
++	fn set_tls12_session(&self, server_name: ServerName<'static>, value: Tls12ClientSessionValue) {
++		self.cache.with(self.port, &server_name, true, |entry| {
++			entry.tls12 = Some(value)
++		});
++	}
++
++	fn tls12_session(&self, server_name: &ServerName<'_>) -> Option<Tls12ClientSessionValue> {
++		self.cache
++			.with(self.port, server_name, false, |entry| entry.tls12.clone())
++			.flatten()
++	}
++
++	fn remove_tls12_session(&self, server_name: &ServerName<'static>) {
++		self.cache
++			.with(self.port, server_name, false, |entry| entry.tls12 = None);
++	}
++
++	fn insert_tls13_ticket(
++		&self,
++		server_name: ServerName<'static>,
++		value: Tls13ClientSessionValue,
++	) {
++		self.cache.with(self.port, &server_name, true, |entry| {
++			if entry.tls13.len() >= TLS13_TICKETS_PER_KEY {
++				entry.tls13.pop_front();
++			}
++			entry.tls13.push_back(value);
++		});
++	}
++
++	fn take_tls13_ticket(
++		&self,
++		server_name: &ServerName<'static>,
++	) -> Option<Tls13ClientSessionValue> {
++		self.cache
++			.with(self.port, server_name, false, |entry| {
++				entry.tls13.pop_back()
++			})
++			.flatten()
++	}
++}
++
++#[cfg(test)]
++mod tests {
++	use super::*;
++
++	#[test]
++	fn bounded_and_least_recently_used_first() {
++		let cache = Arc::new(SessionCache::default());
++		let name = ServerName::try_from("example.com").unwrap();
++		let hint = |port| PortSessions {
++			port,
++			cache: cache.clone(),
++		};
++		for port in 0..(MAX_KEYS as u16 + 100) {
++			hint(port).set_kx_hint(name.clone(), NamedGroup::X25519);
++			// port 0 stays in use
++			let _ = hint(0).kx_hint(&name);
++		}
++		assert_eq!(cache.0.lock().unwrap().entries.len(), MAX_KEYS);
++		assert!(hint(0).kx_hint(&name).is_some());
++		assert!(hint(1).kx_hint(&name).is_none());
++		assert!(hint(MAX_KEYS as u16 + 99).kx_hint(&name).is_some());
++		// another port of the same name is another key
++		assert!(hint(MAX_KEYS as u16 + 100).kx_hint(&name).is_none());
++	}
++}
+-- 
+2.54.0
+
