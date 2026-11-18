@@ -135,7 +135,12 @@ on and an origin offers h3 (docs/http3.md).
   source connection ids, an 8-byte first destination id, no greased
   fixed bit, every Initial padded to 1250 bytes and no path MTU probes, as
   Chrome's client, and seeds fastrand (h3's GREASE source, a fixed seed on
-  wasm32-unknown-unknown otherwise).
+  wasm32-unknown-unknown otherwise). A request's fields go out in the
+  caller's order, Accept-Encoding saying Chrome's `gzip, deflate, br, zstd`
+  (in the caller's place, or before Accept-Language, Cookie and Priority
+  when the caller has none) and a Cookie as its crumbs, one field per
+  cookie, as Chrome's QPACK encoder sends it; a response body is decoded
+  from gzip, deflate, br or zstd.
 - `connect_webtransport` (`src/wt.rs`) opens a WebTransport (draft 02)
   session as Chrome does, on a QUIC connection of its own with the same
   transport parameters and ClientHello as `connect` but no TLS session

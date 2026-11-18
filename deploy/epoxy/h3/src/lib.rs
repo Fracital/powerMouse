@@ -9,7 +9,7 @@ use std::{
 	time::Duration,
 };
 
-use async_compression::futures::bufread::{BrotliDecoder, GzipDecoder};
+use async_compression::futures::bufread::{BrotliDecoder, GzipDecoder, ZlibDecoder, ZstdDecoder};
 use bytes::{Buf, Bytes};
 use futures_util::{
 	future::{select, Either},
@@ -326,9 +326,44 @@ fn skip_request_header(name: &str) -> bool {
 	)
 }
 
+/// What this build decodes, as Chrome offers it
+const ACCEPT_ENCODING: &str = "gzip, deflate, br, zstd";
+
+/// A Cookie value's crumbs as Chrome's QPACK and HPACK encoders make them
+/// (quiche's ValueSplittingHeaderList and HpackEncoder::CookieToCrumbs,
+/// RFC 9114 4.2.1): the value without leading and trailing spaces and tabs,
+/// split at each `;`, one space after the `;` dropped.
+fn cookie_crumbs(value: &[u8]) -> Vec<&[u8]> {
+	let Some(start) = value.iter().position(|b| *b != b' ' && *b != b'\t') else {
+		return vec![&value[..0]];
+	};
+	let end = value.iter().rposition(|b| *b != b' ' && *b != b'\t').unwrap() + 1;
+	let value = &value[start..end];
+	let mut out = Vec::new();
+	let mut pos = 0;
+	loop {
+		match value[pos..].iter().position(|b| *b == b';') {
+			None => {
+				out.push(&value[pos..]);
+				return out;
+			}
+			Some(at) => {
+				out.push(&value[pos..pos + at]);
+				pos += at + 1;
+				if pos < value.len() && value[pos] == b' ' {
+					pos += 1;
+				}
+			}
+		}
+	}
+}
+
 enum Coding {
 	Gzip,
 	Brotli,
+	/// HTTP's deflate is the zlib format
+	Deflate,
+	Zstd,
 }
 
 #[wasm_bindgen]
@@ -370,7 +405,7 @@ impl H3Connection {
 	/// `body` is null, a Uint8Array, or a ReadableStream of Uint8Array.
 	/// Resolves to `{ status, headers: [name, value][], body: ReadableStream | null }`
 	/// once the response head arrives; the body streams after that, decoded
-	/// from gzip or br the way epoxy decodes it.
+	/// from gzip, deflate, br or zstd the way epoxy decodes it.
 	pub async fn request(
 		&self,
 		method: String,
@@ -382,7 +417,12 @@ impl H3Connection {
 		let method = Method::from_bytes(method.as_bytes()).map_err(js_error)?;
 		let mut builder = Request::builder().method(method.clone()).uri(uri);
 		let map = builder.headers_mut().ok_or_else(|| js_error("bad request"))?;
-		let mut has_encoding = false;
+		// The fields go out in the caller's order, as epoxy sends them over
+		// HTTP/1 and HTTP/2 (deploy/epoxy patches/epoxy-tls 0052):
+		// Accept-Encoding always says what this build decodes, Chrome's
+		// list, in the caller's place or, when the caller left it out, where
+		// Chrome puts it (before Accept-Language, Cookie and Priority).
+		let mut fields: Vec<(HeaderName, HeaderValue)> = Vec::new();
 		for entry in headers.iter() {
 			let entry: Array = entry.unchecked_into();
 			let name = entry.get(0).as_string().unwrap_or_default().to_ascii_lowercase();
@@ -393,16 +433,35 @@ impl H3Connection {
 			if name == "te" && !value.eq_ignore_ascii_case("trailers") {
 				continue;
 			}
-			has_encoding |= name == "accept-encoding";
-			let bytes: Vec<u8> = value.chars().map(|c| c as u32 as u8).collect();
-			map.append(
-				HeaderName::from_bytes(name.as_bytes()).map_err(js_error)?,
-				HeaderValue::from_bytes(&bytes).map_err(js_error)?,
-			);
+			let name = HeaderName::from_bytes(name.as_bytes()).map_err(js_error)?;
+			let value = if name == http::header::ACCEPT_ENCODING {
+				HeaderValue::from_static(ACCEPT_ENCODING)
+			} else {
+				let bytes: Vec<u8> = value.chars().map(|c| c as u32 as u8).collect();
+				HeaderValue::from_bytes(&bytes).map_err(js_error)?
+			};
+			if fields.iter().any(|(n, _)| *n == http::header::ACCEPT_ENCODING) && name == http::header::ACCEPT_ENCODING {
+				continue;
+			}
+			fields.push((name, value));
 		}
-		if !has_encoding {
-			// what epoxy asks for, so either transport gets the same bytes
-			map.insert(http::header::ACCEPT_ENCODING, HeaderValue::from_static("gzip, br"));
+		if !fields.iter().any(|(n, _)| *n == http::header::ACCEPT_ENCODING) {
+			let at = fields
+				.iter()
+				.position(|(n, _)| matches!(n.as_str(), "accept-language" | "cookie" | "priority"))
+				.unwrap_or(fields.len());
+			fields.insert(at, (http::header::ACCEPT_ENCODING, HeaderValue::from_static(ACCEPT_ENCODING)));
+		}
+		for (name, value) in fields {
+			// Chrome's QPACK encoder sends a Cookie as its crumbs (quiche's
+			// ValueSplittingHeaderList), one field per cookie
+			if name == http::header::COOKIE {
+				for crumb in cookie_crumbs(value.as_bytes()) {
+					map.append(name.clone(), HeaderValue::from_bytes(crumb).map_err(js_error)?);
+				}
+			} else {
+				map.append(name, value);
+			}
 		}
 		let req = builder.body(()).map_err(js_error)?;
 
@@ -466,8 +525,10 @@ impl H3Connection {
 		for (name, value) in response.headers() {
 			if name == http::header::CONTENT_ENCODING {
 				coding = match value.as_bytes() {
-					b"gzip" => Some(Coding::Gzip),
+					b"gzip" | b"x-gzip" => Some(Coding::Gzip),
 					b"br" => Some(Coding::Brotli),
+					b"deflate" => Some(Coding::Deflate),
+					b"zstd" => Some(Coding::Zstd),
 					_ => None,
 				};
 			}
@@ -493,6 +554,8 @@ impl H3Connection {
 			let decoded: std::pin::Pin<Box<dyn AsyncRead>> = match coding {
 				Some(Coding::Gzip) => Box::pin(GzipDecoder::new(reader)),
 				Some(Coding::Brotli) => Box::pin(BrotliDecoder::new(reader)),
+				Some(Coding::Deflate) => Box::pin(ZlibDecoder::new(reader)),
+				Some(Coding::Zstd) => Box::pin(ZstdDecoder::new(reader)),
 				None => Box::pin(reader),
 			};
 			let chunks = stream::unfold(decoded, |mut r| async move {
