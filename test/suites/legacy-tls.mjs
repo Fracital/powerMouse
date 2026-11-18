@@ -21,13 +21,16 @@
 // rows answer the hello with handshake_failure, as a 3DES-only server does to
 // a client that offers none.
 //
-// The SHA-1-signed leaf is refused by Chrome as a certificate error, which the
-// key list would overlook, so its native answer is read only with a test NSS
-// database trusting the CA (certutil present); without one the row checks
-// that STomp refuses it. The RSA leaves of 1023 to 2048 bits are the same
-// kind of question (Chrome 157's verifier refuses a key under 1024 bits with
-// ERR_CERT_WEAK_KEY, and takes 1024 for a local root): their native answer is
-// the NSS one, and without certutil they are skipped.
+// Some rows are decided by Chrome's certificate verifier, which the key list
+// overlooks: the SHA-1-signed leaf, and RSA key sizes. Chrome 157 refuses an
+// RSA key under 1024 bits anywhere in the verified chain, the trust anchor
+// included (ERR_CERT_WEAK_KEY), and BoringSSL parses none over 16384 bits
+// (a decode_error), whatever the root. Those rows' native answer comes from a
+// Chrome that trusts the test CAs in its own trust store (the profile's
+// ServerCertificate database, as a user's added certificate is kept), so its
+// real verifier answers with no system tool needed. The leaves of 8192 to
+// 16392 bits are made per run with several primes each, which is quick, and
+// only the suite's own server below uses them; a client sees just n and e.
 //
 // The hello-* rows are a TLS 1.2 server of the suite's own, written on
 // node:crypto, whose ServerHello breaks one rule a client may check: a
@@ -52,6 +55,8 @@ import {
 	createPublicKey,
 	diffieHellman,
 	generateKeyPairSync,
+	generatePrime,
+	privateDecrypt,
 	randomBytes,
 	sign,
 	X509Certificate,
@@ -68,7 +73,8 @@ import { createServer as createHttps } from 'node:https';
 import { createServer as createNet, connect as netConnect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { done, launch, ok, OUT, PROXY } from '../lib.mjs';
+import { chromium } from 'playwright-core';
+import { CHROME, done, launch, ok, OUT, PROXY } from '../lib.mjs';
 
 const NATIVE_MS = 10000;
 const PROXIED_MS = 15000;
@@ -100,7 +106,7 @@ function caCert(name, keyArgs) {
 	);
 }
 
-function leaf(name, ca, keyArgs, keyUsage) {
+function leaf(name, ca, keyArgs, keyUsage, extensions = null) {
 	openssl(
 		'req',
 		'-newkey',
@@ -115,12 +121,14 @@ function leaf(name, ca, keyArgs, keyUsage) {
 	);
 	writeFileSync(
 		join(work, `${name}.ext`),
-		[
-			'subjectAltName=IP:127.0.0.1',
-			'basicConstraints=CA:false',
-			'extendedKeyUsage=serverAuth',
-			...(keyUsage ? [`keyUsage=critical,${keyUsage}`] : []),
-		].join('\n'),
+		(
+			extensions ?? [
+				'subjectAltName=IP:127.0.0.1',
+				'basicConstraints=CA:false',
+				'extendedKeyUsage=serverAuth',
+				...(keyUsage ? [`keyUsage=critical,${keyUsage}`] : []),
+			]
+		).join('\n'),
 	);
 	openssl(
 		'x509',
@@ -180,6 +188,164 @@ for (const bits of RSA_BITS) {
 		'digitalSignature',
 	);
 }
+
+// Chains around Chrome's 1024-bit floor, which holds for every key in the
+// chain: an RSA intermediate of 1023 or 1024 bits under the P-256 CA, and an
+// RSA root of 1023 or 1024 bits (trusted itself), each over a 2048-bit leaf
+const CA_EXTENSIONS = [
+	'basicConstraints=critical,CA:true',
+	'keyUsage=critical,keyCertSign,cRLSign',
+];
+const CHAIN_BITS = [1023, 1024];
+const ROOTS = {};
+for (const bits of CHAIN_BITS) {
+	const inter = leaf(`int${bits}`, 'ca', [`rsa:${bits}`], null, CA_EXTENSIONS);
+	const leafUnder = leaf(
+		`int${bits}Leaf`,
+		`int${bits}`,
+		RSA,
+		'digitalSignature',
+	);
+	certs[`int${bits}Leaf`] = {
+		key: leafUnder.key,
+		cert: leafUnder.cert + inter.cert,
+	};
+	caCert(`root${bits}`, [`rsa:${bits}`]);
+	ROOTS[bits] = readFileSync(join(work, `root${bits}.pem`), 'utf8');
+	certs[`root${bits}Leaf`] = leaf(
+		`root${bits}Leaf`,
+		`root${bits}`,
+		RSA,
+		'digitalSignature',
+	);
+}
+
+// --- RSA keys of 8192 to 16392 bits, quickly ---------------------------------
+// openssl takes minutes for a 16384-bit key (and gives 16384 bits when asked
+// for 16385), so these are products of 1024-bit primes and a last one that
+// makes the size exact. Only the suite's own server holds them, doing its
+// RSA operations by the Chinese remainder theorem on BigInts.
+const bitLength = (x) => x.toString(2).length;
+const modPow = (base, exponent, modulus) => {
+	let result = 1n;
+	for (base %= modulus; exponent > 0n; exponent >>= 1n) {
+		if (exponent & 1n) result = (result * base) % modulus;
+		base = (base * base) % modulus;
+	}
+	return result;
+};
+const modInverse = (a, m) => {
+	let [r0, r1, s0, s1] = [a % m, m, 1n, 0n];
+	while (r1) {
+		const q = r0 / r1;
+		[r0, r1, s0, s1] = [r1, r0 - q * r1, s1, s0 - q * s1];
+	}
+	return ((s0 % m) + m) % m;
+};
+const toBytes = (x, length) =>
+	Buffer.from(x.toString(16).padStart(length * 2, '0'), 'hex');
+const toBig = (bytes) => BigInt(`0x${Buffer.from(bytes).toString('hex') || 0}`);
+const prime = (bits) =>
+	new Promise((resolve, reject) =>
+		generatePrime(bits, { bigint: true }, (error, p) =>
+			error ? reject(error) : resolve(p),
+		),
+	);
+
+async function bigRsaKey(bits) {
+	const e = 65537n;
+	for (;;) {
+		const count = Math.floor(bits / 1024) - 1;
+		const primes = await Promise.all(
+			Array.from({ length: count }, () => prime(1024)),
+		);
+		const product = primes.reduce((a, b) => a * b, 1n);
+		primes.push(await prime(bits - bitLength(product) + 1));
+		const n = product * primes.at(-1);
+		if (
+			bitLength(n) !== bits ||
+			new Set(primes).size !== primes.length ||
+			primes.some((p) => (p - 1n) % e === 0n)
+		)
+			continue;
+		const parts = primes.map((p) => ({
+			p,
+			d: modInverse(e, p - 1n),
+			c: (n / p) * modInverse((n / p) % p, p),
+		}));
+		const length = Math.ceil(bits / 8);
+		return {
+			bits,
+			length,
+			n,
+			e,
+			/** x^d mod n */
+			private: (x) =>
+				parts.reduce((m, { p, d, c }) => (m + modPow(x % p, d, p) * c) % n, 0n),
+			publicPem: createPublicKey({
+				key: {
+					kty: 'RSA',
+					n: toBytes(n, length).toString('base64url'),
+					e: toBytes(e, 3).toString('base64url'),
+				},
+				format: 'jwk',
+			}).export({ type: 'spki', format: 'pem' }),
+		};
+	}
+}
+
+/** a leaf under the P-256 CA for `key`, with no CSR (OpenSSL checks none over 16384 bits) */
+function bigLeaf(name, key, keyUsage) {
+	writeFileSync(join(work, `${name}.pub`), key.publicPem);
+	writeFileSync(
+		join(work, `${name}.ext`),
+		[
+			'subjectAltName=IP:127.0.0.1',
+			'basicConstraints=CA:false',
+			'extendedKeyUsage=serverAuth',
+			`keyUsage=critical,${keyUsage}`,
+		].join('\n'),
+	);
+	openssl(
+		'x509',
+		'-new',
+		'-force_pubkey',
+		`${name}.pub`,
+		'-subj',
+		`/CN=${name}`,
+		'-CA',
+		'ca.pem',
+		'-CAkey',
+		'ca.key',
+		'-out',
+		`${name}.pem`,
+		'-days',
+		'2',
+		'-sha256',
+		'-extfile',
+		`${name}.ext`,
+	);
+	return { key, cert: readFileSync(join(work, `${name}.pem`), 'utf8') };
+}
+
+// either side of Chrome's 16384-bit ceiling, and 8192 and 8200 bits
+const BIG_BITS = [8192, 8200, 16384, 16385, 16392];
+const bigStarted = performance.now();
+for (const key of await Promise.all(BIG_BITS.map(bigRsaKey))) {
+	certs[`big${key.bits}Encipher`] = bigLeaf(
+		`big${key.bits}Encipher`,
+		key,
+		'keyEncipherment',
+	);
+	certs[`big${key.bits}Sign`] = bigLeaf(
+		`big${key.bits}Sign`,
+		key,
+		'digitalSignature',
+	);
+}
+console.log(
+	`RSA keys of ${BIG_BITS.join(', ')} bits made in ${Math.round(performance.now() - bigStarted)} ms`,
+);
 
 /**
  * The same leaf signed by the RSA CA with SHA-1: the openssl CLI of some
@@ -294,8 +460,7 @@ const ROWS = {
 	'cert-sha1': {
 		cert: 'sha1',
 		options: { ciphers: 'DEFAULT:@SECLEVEL=0' },
-		nss: true,
-		withoutNss: 'refuses',
+		verified: true,
 	},
 	// RSA leaf key sizes, for RSA key exchange (009c, keyEncipherment) and for
 	// ECDHE_RSA (c02f, digitalSignature); the server takes any size
@@ -305,7 +470,7 @@ const ROWS = {
 				`rsa${bits}-rsa-kx`,
 				{
 					...suite12('AES128-GCM-SHA256:@SECLEVEL=0', `rsa${bits}Encipher`),
-					nss: true,
+					verified: true,
 				},
 			],
 			[
@@ -315,10 +480,44 @@ const ROWS = {
 						'ECDHE-RSA-AES128-GCM-SHA256:@SECLEVEL=0',
 						`rsa${bits}Sign`,
 					),
-					nss: true,
+					verified: true,
 				},
 			],
 		]),
+	),
+	// RSA leaves at Chrome's ceiling, on the suite's own server (Node's takes
+	// no ClientKeyExchange over 2048 bytes, a 16384-bit RSA key exchange's)
+	...Object.fromEntries(
+		BIG_BITS.flatMap((bits) => [
+			[
+				`rsa${bits}-rsa-kx`,
+				{
+					cert: `big${bits}Encipher`,
+					hello: 'control',
+					kx: 'rsa',
+					verified: true,
+				},
+			],
+			[
+				`rsa${bits}-ecdhe`,
+				{ cert: `big${bits}Sign`, hello: 'control', verified: true },
+			],
+		]),
+	),
+	// a 1023- or 1024-bit RSA intermediate, or root, over a 2048-bit leaf
+	...Object.fromEntries(
+		CHAIN_BITS.flatMap((bits) =>
+			['int', 'root'].map((at) => [
+				`chain-${at}${bits}`,
+				{
+					...suite12(
+						'ECDHE-RSA-AES128-GCM-SHA256:@SECLEVEL=0',
+						`${at}${bits}Leaf`,
+					),
+					verified: true,
+				},
+			]),
+		),
 	),
 	// the suite's own TLS 1.2 server, its ServerHello varied
 	'hello-control': { cert: 'rsa', hello: 'control' },
@@ -515,12 +714,60 @@ const SENTINELS = {
 	'downgrade-jdk11': 'edbfb4a8c24710ff',
 };
 
+/** MGF1 over SHA-256 (RFC 8017) */
+function mgf1(seed, length) {
+	const blocks = [];
+	for (let i = 0; i * 32 < length; i++) {
+		const counter = Buffer.alloc(4);
+		counter.writeUInt32BE(i);
+		blocks.push(sha256Of([seed, counter]));
+	}
+	return Buffer.concat(blocks).subarray(0, length);
+}
+
+/** an rsa_pss_rsae_sha256 signature by a PEM key or one of the big keys */
+function signPss(key, data) {
+	if (!key.private)
+		return sign('sha256', data, {
+			key,
+			padding: constants.RSA_PKCS1_PSS_PADDING,
+			saltLength: 32,
+		});
+	// EMSA-PSS (RFC 8017 9.1.1), emBits = modBits - 1, a 32-byte salt
+	const emBits = key.bits - 1;
+	const emLength = Math.ceil(emBits / 8);
+	const salt = randomBytes(32);
+	const h = sha256Of([Buffer.alloc(8), sha256Of([data]), salt]);
+	const db = Buffer.concat([
+		Buffer.alloc(emLength - 32 - 32 - 2),
+		Buffer.from([1]),
+		salt,
+	]);
+	const mask = mgf1(h, db.length);
+	for (let i = 0; i < db.length; i++) db[i] ^= mask[i];
+	db[0] &= 0xff >> (8 * emLength - emBits);
+	const encoded = Buffer.concat([db, h, Buffer.from([0xbc])]);
+	return toBytes(key.private(toBig(encoded)), key.length);
+}
+
+/** an RSA decryption with no padding removed, by a PEM key or a big key */
+const rsaRaw = (key, data) =>
+	key.private
+		? toBytes(key.private(toBig(data)), key.length)
+		: privateDecrypt({ key, padding: constants.RSA_NO_PADDING }, data);
+
 /**
  * One connection. `report` gets one entry: the handshake's (when the
  * client's Finished checks out) or { error } (the client's alert, or what
- * went wrong).
+ * went wrong). `kx: 'rsa'` makes it TLS_RSA_WITH_AES_128_GCM_SHA256 instead:
+ * Node's OpenSSL server takes no ClientKeyExchange over 2048 bytes, so a
+ * 16384-bit RSA key exchange needs this one.
  */
-function serveTls12(socket, { key, cert, variant, body, report }) {
+function serveTls12(
+	socket,
+	{ key, cert, variant, kx = 'ecdhe', body, report },
+) {
+	const rsaKx = kx === 'rsa';
 	const certDer = Buffer.from(new X509Certificate(cert).raw);
 	let reported = false;
 	const once = (entry) => {
@@ -606,6 +853,30 @@ function serveTls12(socket, { key, cert, variant, body, report }) {
 			extensions.push(extension(0xff01, Buffer.from([0])));
 		if (ems) extensions.push(extension(0x0017, Buffer.alloc(0)));
 		const block = Buffer.concat(extensions);
+		const serverHello = handshakeMessage(
+			2,
+			Buffer.concat([
+				Buffer.from([3, 3]),
+				serverRandom,
+				Buffer.from([0]),
+				u16(rsaKx ? 0x009c : 0xc02f),
+				Buffer.from([0]),
+				u16(block.length),
+				block,
+			]),
+		);
+		const certificate = handshakeMessage(
+			11,
+			Buffer.concat([u24(certDer.length + 3), u24(certDer.length), certDer]),
+		);
+		const helloDone = handshakeMessage(14, Buffer.alloc(0));
+		if (rsaKx) {
+			transcript.push(serverHello, certificate, helloDone);
+			socket.write(
+				record(22, Buffer.concat([serverHello, certificate, helloDone])),
+			);
+			return;
+		}
 		let group = 0x0017;
 		let share;
 		if (groups.includes(0x001d)) {
@@ -634,33 +905,18 @@ function serveTls12(socket, { key, cert, variant, body, report }) {
 			Buffer.from([share.length]),
 			share,
 		]);
-		const signature = sign(
-			'sha256',
+		const signature = signPss(
+			key,
 			Buffer.concat([clientRandom, serverRandom, params]),
-			{ key, padding: constants.RSA_PKCS1_PSS_PADDING, saltLength: 32 },
 		);
 		const flight = [
-			handshakeMessage(
-				2,
-				Buffer.concat([
-					Buffer.from([3, 3]),
-					serverRandom,
-					Buffer.from([0]),
-					u16(0xc02f),
-					Buffer.from([0]),
-					u16(block.length),
-					block,
-				]),
-			),
-			handshakeMessage(
-				11,
-				Buffer.concat([u24(certDer.length + 3), u24(certDer.length), certDer]),
-			),
+			serverHello,
+			certificate,
 			handshakeMessage(
 				12,
 				Buffer.concat([params, u16(0x0804), u16(signature.length), signature]),
 			),
-			handshakeMessage(14, Buffer.alloc(0)),
+			helloDone,
 		];
 		transcript.push(...flight);
 		socket.write(record(22, Buffer.concat(flight)));
@@ -668,7 +924,20 @@ function serveTls12(socket, { key, cert, variant, body, report }) {
 
 	function onClientKeyExchange(message) {
 		const exchange = message.subarray(4);
-		const premaster = agree(exchange.subarray(1, 1 + exchange[0]));
+		let premaster;
+		if (rsaKx) {
+			// PKCS #1 v1.5 unpadded by hand, whatever Node's rules for
+			// RSA_PKCS1_PADDING decryption: 00 02, nonzero bytes, 00, the premaster
+			const encoded = rsaRaw(
+				key,
+				exchange.subarray(2, 2 + exchange.readUInt16BE(0)),
+			);
+			const at = encoded.length - 49;
+			premaster =
+				encoded[0] === 0 && encoded[1] === 2 && encoded[at] === 0
+					? encoded.subarray(at + 1)
+					: randomBytes(48);
+		} else premaster = agree(exchange.subarray(1, 1 + exchange[0]));
 		master = ems
 			? prf(premaster, 'extended master secret', sha256Of(transcript), 48)
 			: prf(
@@ -700,7 +969,9 @@ function serveTls12(socket, { key, cert, variant, body, report }) {
 		finished = true;
 		once({
 			version: 'TLSv1.2',
-			cipher: 'TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256',
+			cipher: rsaKx
+				? 'TLS_RSA_WITH_AES_128_GCM_SHA256'
+				: 'TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256',
 			reused: false,
 			ems,
 		});
@@ -787,6 +1058,12 @@ const listen = (server) =>
 		server.listen(0, '127.0.0.1', () => resolve(server.address().port));
 	});
 
+// a ServerHello with this random is a HelloRetryRequest (RFC 8446 4.1.3)
+const HRR_RANDOM = Buffer.from(
+	'cf21ad74e59a6111be1d8c021e65b891c2a211167abb8c5e079e09e2c8a8339c',
+	'hex',
+);
+
 const ALERT_HANDSHAKE_FAILURE = Buffer.from([
 	0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28,
 ]);
@@ -803,6 +1080,7 @@ async function startRow(id, row) {
 			serveTls12(socket, {
 				...certs[row.cert],
 				variant: row.hello,
+				kx: row.kx,
 				body: `<!doctype html><title>LT ${id}</title><p>${id}</p>`,
 				report: (entry) => log[phase].handshakes.push(entry),
 			}),
@@ -881,6 +1159,18 @@ async function startRow(id, row) {
 			read(chunk);
 			backend.write(chunk);
 		});
+		// the server's first record says whether it asked for a second hello
+		let first = Buffer.alloc(0);
+		backend.on('data', (chunk) => {
+			if (!first) return;
+			first = Buffer.concat([first, chunk]);
+			if (first.length < 43) return;
+			connection.hrr =
+				first[0] === 22 &&
+				first[5] === 2 &&
+				first.subarray(11, 43).equals(HRR_RANDOM);
+			first = null;
+		});
 		backend.pipe(socket);
 	});
 	const port = await listen(front);
@@ -896,9 +1186,20 @@ for (const [id, row] of Object.entries(ROWS))
 const netError = (error) =>
 	/net::(ERR_\w+)/.exec(String(error))?.[1] ?? String(error).slice(0, 80);
 
-async function nativeRun(ids, args, env = null, phaseOf = () => 'native') {
-	const browser = await launch(args, env ? { env } : {});
-	const context = await browser.newContext();
+/** `profile`: a user data directory to launch with (Chrome's trust store) */
+async function nativeRun(ids, args, profile = null, phaseOf = () => 'native') {
+	const browser = profile ? null : await launch(args);
+	const context = profile
+		? await chromium.launchPersistentContext(profile, {
+				executablePath: CHROME,
+				headless: true,
+				args: [
+					'--no-sandbox',
+					'--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1',
+					...args,
+				],
+			})
+		: await browser.newContext();
 	const out = {};
 	// a page of its own for each row: a navigation that follows a refused
 	// one in the same page was interrupted by the error page's
@@ -919,7 +1220,7 @@ async function nativeRun(ids, args, env = null, phaseOf = () => 'native') {
 		}
 		out[id] = loads;
 	}
-	await browser.close();
+	await (browser ?? context).close();
 	return out;
 }
 
@@ -938,43 +1239,45 @@ const native = {};
 const nativeSpki = {};
 for (const [id, loads] of Object.entries(
 	await nativeRun(keyed, [SPKI_LIST], null, (id) =>
-		ROWS[id].nss ? 'spki' : 'native',
+		ROWS[id].verified ? 'spki' : 'native',
 	),
 ))
-	(ROWS[id].nss ? nativeSpki : native)[id] = loads;
+	(ROWS[id].verified ? nativeSpki : native)[id] = loads;
 phase = 'native';
 
-// the rows a certificate error decides: a home whose NSS database trusts the
-// RSA CA, when certutil is here
-const nssNative = (() => {
-	try {
-		execFileSync('certutil', ['-H'], { stdio: 'ignore' });
-		return true;
-	} catch (error) {
-		// certutil -H exits 1 after printing its help; ENOENT: no certutil
-		return error.code !== 'ENOENT';
+// The rows a certificate error decides: Chrome with the test CAs trusted in
+// its own trust store, the profile's ServerCertificate database (sqlite), as
+// Chrome keeps a certificate a user adds. Its trust_settings are a
+// CertificateMetadata protobuf whose trust (field 1) holds trust_type (field
+// 1) 3, which Chrome 152 and 157 take as a trust anchor (measured 2026-11-17).
+// A row of its own checks that they do.
+const TRUSTED_CAS = [CA, RSA_CA, ...Object.values(ROOTS)];
+const verifiedIds = Object.keys(ROWS).filter((id) => ROWS[id].verified);
+const sqlite = await import('node:sqlite').catch(() => null);
+if (sqlite) {
+	const profile = join(work, 'profile');
+	mkdirSync(join(profile, 'Default'), { recursive: true });
+	const db = new sqlite.DatabaseSync(
+		join(profile, 'Default', 'ServerCertificate'),
+	);
+	db.exec(`CREATE TABLE meta(key LONGVARCHAR NOT NULL UNIQUE PRIMARY KEY, value LONGVARCHAR);
+		INSERT INTO meta VALUES ('mmap_status', '-1'), ('version', '1'), ('last_compatible_version', '1');
+		CREATE TABLE certificates(sha256hash_hex TEXT PRIMARY KEY, der_cert BLOB NOT NULL, trust_settings BLOB NOT NULL);`);
+	const insert = db.prepare('INSERT INTO certificates VALUES (?, ?, ?)');
+	for (const pem of TRUSTED_CAS) {
+		const der = Buffer.from(new X509Certificate(pem).raw);
+		insert.run(
+			createHash('sha256').update(der).digest('hex'),
+			der,
+			Buffer.from([0x0a, 0x02, 0x08, 0x03]),
+		);
 	}
-})();
-if (nssNative) {
-	const home = join(work, 'home');
-	const db = join(home, '.pki', 'nssdb');
-	mkdirSync(db, { recursive: true });
-	execFileSync('certutil', ['-N', '-d', `sql:${db}`, '--empty-password']);
-	for (const ca of ['rsaca', 'ca'])
-		execFileSync('certutil', [
-			'-A',
-			'-d',
-			`sql:${db}`,
-			'-n',
-			`stomp-legacy-${ca}`,
-			'-t',
-			'C,,',
-			'-i',
-			join(work, `${ca}.pem`),
-		]);
-	const nssIds = Object.keys(ROWS).filter((id) => ROWS[id].nss);
-	Object.assign(native, await nativeRun(nssIds, [], { HOME: home }));
-}
+	db.close();
+	Object.assign(native, await nativeRun(verifiedIds, [], profile));
+} else
+	console.log(
+		`SKIP ${verifiedIds.join(' ')}: this Node has no node:sqlite to write Chrome's trust store, so they have no native answer`,
+	);
 
 // --- the TLS session cache: native Chrome's ------------------------------------
 // TLS 1.3 servers on ports of their own, one request a connection, fetched in
@@ -1158,7 +1461,7 @@ const proxied = await page.evaluate(
 		return out;
 	},
 	{
-		cas: [CA, RSA_CA],
+		cas: TRUSTED_CAS,
 		rows: Object.keys(ROWS).map((id) => [
 			id,
 			urls[id],
@@ -1293,23 +1596,10 @@ const settled = (side) =>
 	side.handshakes.find((h) => !h.error) ?? side.handshakes[0];
 const reusedLater = (side) =>
 	side.handshakes.slice(1).some((handshake) => handshake.reused === true);
-const hrr = (side) => side.connections.some((c) => c.hellos.length > 1);
-
-/**
- * Why a row's outcome differs from native Chrome's for a reason outside this
- * suite's scope, or null. ECDHE_RSA with a 1024- to 2047-bit leaf: native
- * Chrome checks the ServerKeyExchange signature, while webpki verifies it
- * with ring, which takes RSA keys of 2048 to 8192 bits only, counted in
- * whole bytes (so a 2041-bit key passes, measured 2026-11-17 on EpoxyTransport
- * 410d3e5b, before the legacy-TLS work), and STomp refuses the 1024- to
- * 2040-bit ones. Logged, not asserted.
- */
-function knownDivergence(id, nativeOk, stompOk) {
-	const bits = Number(/^rsa(\d+)-ecdhe$/.exec(id)?.[1]);
-	if (bits && bits >= 1024 && bits < 2048 && nativeOk && !stompOk)
-		return 'ring verifies signatures of 2048- to 8192-bit RSA keys only';
-	return null;
-}
+// From the server's side: counting second ClientHellos misread a resumed
+// TLS 1.2 handshake, whose client sends no ClientKeyExchange, so its CBC
+// Finished record (a random IV first) read as a ClientHello one time in 256.
+const hrr = (side) => side.connections.some((c) => c.hrr);
 
 const table = {};
 for (const id of Object.keys(ROWS)) {
@@ -1361,25 +1651,14 @@ for (const id of Object.keys(ROWS)) {
 	const stomp = table[id].stomp;
 	const stompOk = stomp.page === 'ok' && stomp.raw.every((r) => r === 'ok');
 	const detail = `native ${JSON.stringify(native[id])}, STomp ${JSON.stringify(stomp)}, server ${JSON.stringify(table[id].stompServer)}`;
-	if (!native[id]) {
-		if (ROWS[id].withoutNss === 'refuses')
-			ok(
-				`${id}: STomp refuses it (no native answer without certutil)`,
-				!stompOk,
-				detail,
-			);
-		else console.log(`SKIP ${id}: no native answer without certutil`);
-		continue;
-	}
+	// no native answer: a verified row without node:sqlite (logged above)
+	if (!native[id]) continue;
 	const nativeOk = native[id].every((r) => r === 'ok');
-	const known = knownDivergence(id, nativeOk, stompOk);
-	if (known) console.log(`KNOWN ${id}: ${known} - ${detail}`);
-	else
-		ok(
-			`${id}: STomp ${nativeOk ? 'connects' : 'refuses'} as native Chrome 157 does`,
-			nativeOk === stompOk,
-			detail,
-		);
+	ok(
+		`${id}: STomp ${nativeOk ? 'connects' : 'refuses'} as native Chrome 157 does`,
+		nativeOk === stompOk,
+		detail,
+	);
 	if (nativeOk && stompOk)
 		ok(
 			`${id}: the server settles on the version and suite it gives native Chrome`,
@@ -1407,6 +1686,16 @@ for (const id of Object.keys(ROWS)) {
 		);
 }
 
+if (sqlite)
+	ok(
+		'native Chrome trusts the test CAs in its own trust store and its verifier answers: a 2048-bit leaf loads, a 1023-bit one is a weak key',
+		native['rsa2048-ecdhe']?.[0] === 'ok' &&
+			native['rsa1023-ecdhe']?.[0] === 'ERR_CERT_WEAK_KEY',
+		JSON.stringify({
+			'rsa2048-ecdhe': native['rsa2048-ecdhe'],
+			'rsa1023-ecdhe': native['rsa1023-ecdhe'],
+		}),
+	);
 ok(
 	"native Chrome loads the control row of the suite's own TLS 1.2 server",
 	native['hello-control']?.[0] === 'ok' &&
