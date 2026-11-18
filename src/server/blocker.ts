@@ -44,6 +44,55 @@ const MEMORY_LIMIT = 160 * 1024 * 1024;
 const FIRST_BUILD_WAIT_MS = 5_000;
 /** scriptlet rewrites kept, by their lines (a site's pages share theirs) */
 const SCRIPT_MEMO = 64;
+/**
+ * how long after this worker's first navigation is answered a start's list
+ * downloads begin: the page's first requests for its subresources go out
+ * in that time, and their names reach the wisp server's resolver before the
+ * lists' hosts
+ */
+const LIST_AFTER_MS = 250;
+/** how long a start's list downloads wait for a first navigation at the most */
+const LIST_WAIT_MS = 2_000;
+
+let navigationAnswered: () => void;
+const firstNavigation = new Promise<void>((resolve) => {
+	navigationAnswered = resolve;
+});
+let navigated = false;
+
+/**
+ * This worker's first navigation went to the transport (src/server/rewrites.ts).
+ * A start's list downloads wait for it (listTurn): the transport opens a
+ * connection to each list's host, and the wisp server resolves the names of
+ * a burst of connections on a few threads (four on holyWisp), so a page asked
+ * for in the same moment waited behind 6 to 8 lookups for its own (43 to 95
+ * ms, 3 s and more when a lookup stalled).
+ */
+export function navigationUpstream(answer: Promise<unknown>) {
+	if (navigated) return;
+	navigated = true;
+	answer
+		.catch(() => {})
+		.then(() => setTimeout(navigationAnswered, LIST_AFTER_MS));
+}
+
+/** the host a list is downloaded from, as the transport connects to it */
+function listHost(url: string): string {
+	try {
+		const { protocol, host } = new URL(url, globalThis.location?.href);
+		return `${protocol}//${host}`;
+	} catch (error) {
+		return url;
+	}
+}
+
+/** a start's list downloads may begin (navigationUpstream) */
+function listTurn(): Promise<void> {
+	return Promise.race([
+		firstNavigation,
+		new Promise<void>((resolve) => setTimeout(resolve, LIST_WAIT_MS)),
+	]);
+}
 /** a blocker that is on by default and cannot be had says so once a thread */
 let saidOff = false;
 
@@ -313,12 +362,12 @@ export class Blocker implements BlockerLike {
 			if (loaded && !stale) return true;
 			if (loaded) {
 				// serve the stored engine while a fresh one is fetched
-				this.#refresh();
+				this.#refresh(true);
 				return true;
 			}
 		}
 		this.#tried();
-		await this.#refresh();
+		await this.#refresh(!!this.#init.byDefault);
 		return this.#ready;
 	}
 
@@ -422,19 +471,26 @@ export class Blocker implements BlockerLike {
 		}
 	}
 
-	/** fetch the lists and the resources, build, store and swap in the engine */
-	#refresh(): Promise<void> {
+	/**
+	 * fetch the lists and the resources, build, store and swap in the engine;
+	 * with `turn` (a start's: a stored engine serves meanwhile, or the blocker
+	 * is on by default and no navigation waits for it) the downloads wait for
+	 * the worker's first navigation to go first (listTurn)
+	 */
+	#refresh(turn = false): Promise<void> {
 		if (!this.#building)
-			this.#building = this.#build().finally(() => {
+			this.#building = this.#build(turn).finally(() => {
 				this.#building = null;
 			});
 		return this.#building;
 	}
-	async #build(): Promise<void> {
+	async #build(turn: boolean): Promise<void> {
 		// the lists in force when this build began: if `reconfigure` changes them
 		// while this build is fetching, its engine is stale and must be discarded
 		// rather than loaded over the newer lists (see #generation)
 		const generation = this.#generation;
+		if (turn) await listTurn();
+		if (generation !== this.#generation) return;
 		// the resources (Brave's resources.json) are needed to load the engine,
 		// not to compile it, so fetch them alongside the lists (or the prebuilt
 		// engine) rather than before: their round trip then overlaps the list
@@ -458,13 +514,29 @@ export class Blocker implements BlockerLike {
 			}
 		} else {
 			let missed = '';
+			// the first list of each host opens its connection, and the others
+			// of that host go once it has answered, over it: asked together,
+			// each opened a connection of its own, so the wisp server looked
+			// the host up once for each (two to four times for the default
+			// lists' two hosts), on the threads a page's lookups wait for
+			const opened = new Map<string, Promise<unknown>>();
 			const lists = await Promise.all(
 				this.#init.lists.map(async (list) => {
 					// an inline list (the custom-filters editor) is its own text:
 					// compiled in place, never fetched (docs/adblock.md)
 					if (list.filters !== undefined) return { list, text: list.filters };
 					try {
-						return { list, text: await this.#fetchText(list.url) };
+						const host = listHost(list.url);
+						const first = opened.get(host);
+						const response = first
+							? first.then(() => this.#fetchOk(list.url))
+							: this.#fetchOk(list.url);
+						if (!first)
+							opened.set(
+								host,
+								response.catch(() => {}),
+							);
+						return { list, text: await (await response).text() };
 					} catch (error) {
 						missed ||= String(error);
 						// a list the host named is the host's to hear of; one of

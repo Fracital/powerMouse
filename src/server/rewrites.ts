@@ -174,7 +174,7 @@ import {
 	knownTopSiteOf,
 	recordInlineOrigin,
 } from './blobOrigins';
-import type { BlockerLike } from './blocker';
+import { navigationUpstream, type BlockerLike } from './blocker';
 import {
 	askedRange,
 	byteRange,
@@ -2808,6 +2808,8 @@ function genericForward(
 					),
 				}),
 			);
+			// a start's list downloads wait for the first navigation's answer
+			if (shape.navigation) navigationUpstream(upstream);
 			if (image) {
 				const answered = () => {
 					imageClients.delete(id);

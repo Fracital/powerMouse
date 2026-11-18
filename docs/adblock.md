@@ -91,6 +91,17 @@ load`); no list is asked for and the inject installs nothing for the
 - No navigation waits for the list servers, only for the engine the browser
   stored (milliseconds). With none stored yet (a first visit, or cleared site
   data) documents load unfiltered until the engine is built.
+- The lists are downloaded after the worker's first navigation has been
+  answered (and 250 ms more, for the page's first subresources), or 2 s
+  after the start when no page is asked for; a refresh of a stored engine
+  waits the same way. The wisp server looks up the name of every
+  connection on a few threads (four on holyWisp), and the lists' hosts
+  asked for at the same moment as the user's first page held them: the
+  page's own lookup waited, up to 1.5 s in the bench with a cold DNS
+  cache. The lists of one host are asked for once its first list has
+  answered, over the same connection, so each host is looked up once.
+  With `true` or an object the first navigation waits for the engine
+  instead, and the lists are downloaded at once.
 
 The first handshake waits for `blocker.wasm` either way (fetched beside the
 transport's module), so serve it with the cache headers of the other files,
