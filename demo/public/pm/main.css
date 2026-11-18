@@ -2095,7 +2095,8 @@ input:focus-visible {
 	display: none;
 }
 
-/* one row per bookmark, like a commit's: icon, title, the URL below */
+/* one row per bookmark, like a commit's: icon, title, the description
+   and the URL below */
 .bookmark {
 	display: flex;
 	align-items: center;
@@ -2186,6 +2187,7 @@ input:focus-visible {
 }
 
 .bookmarkTitle,
+.bookmarkDescription,
 .bookmarkUrl {
 	display: block;
 	white-space: nowrap;
@@ -2196,6 +2198,13 @@ input:focus-visible {
 .bookmarkTitle {
 	font-size: 15px;
 	line-height: 22px;
+}
+
+/* the page's description, muted, between the title and the URL */
+.bookmarkDescription {
+	color: #9a9a9a;
+	font-size: 12px;
+	line-height: 16px;
 }
 
 .bookmarkUrl {

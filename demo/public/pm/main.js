@@ -736,7 +736,9 @@ function isFrameOf(element, source) {
 // <img> whose src the inject routes (so neither the page's CSP nor a
 // cross-origin icon host's missing CORS headers stop it), read back with
 // createImageBitmap as it was before the inject's hooks (the route is the
-// page's own origin to the browser), at 64 px at the most
+// page's own origin to the browser), at 64 px at the most. The same port
+// gives a page's description (its meta description, else its og:description)
+// when the user bookmarks it, and at no other time
 const ICON_MESSAGE = '$stompDemo$icon';
 const ICON_HOOK = `
 if (stomp.kind === 'document' && stomp.isTop && stomp.window.top !== stomp.window) {
@@ -744,9 +746,36 @@ if (stomp.kind === 'document' && stomp.isTop && stomp.window.top !== stomp.windo
 	const apply = win.Reflect.apply;
 	const bitmap = win.createImageBitmap;
 	const Image = win.Image;
+	const query = win.Document.prototype.querySelector;
+	const read = win.Element.prototype.getAttribute;
+	const document = win.document;
 	const channel = new win.MessageChannel();
+	const describe = () => {
+		for (const selector of [
+			'meta[name="description" i]',
+			'meta[property="og:description" i]',
+		]) {
+			const meta = apply(query, document, [selector]);
+			const content = meta && apply(read, meta, ['content']);
+			if (content && content.trim()) return content;
+		}
+		return null;
+	};
 	channel.port1.onmessage = async (event) => {
 		const { id, url } = event.data || {};
+		if (event.data && event.data.describe) {
+			// the head is parsed by then
+			if (document.readyState === 'loading')
+				await new win.Promise((resolve) =>
+					document.addEventListener('DOMContentLoaded', resolve, { once: true }),
+				);
+			let description = null;
+			try {
+				description = describe();
+			} catch {}
+			channel.port1.postMessage({ id, description });
+			return;
+		}
 		let picture = null;
 		try {
 			const image = new Image();
@@ -771,6 +800,7 @@ addEventListener('message', (event) => {
 	if (!tab) return;
 	tab.iconPort = event.ports[0];
 	fillIcons(); // a bookmark that waited for a page to ask through
+	fillDescriptions();
 });
 
 // "Sign in with token" for Discord, mirroring the well-known community
@@ -868,6 +898,7 @@ const controllerCallbacks = {
 		if (tab === activeTab) syncOmnibox();
 		syncCardBar(tab); // its card in the switcher, if there is one
 		fillIcons(); // its page may have declared an icon a bookmark lacks
+		fillDescriptions(); // or be the page a new bookmark waits for
 	},
 };
 
@@ -2691,9 +2722,10 @@ addEventListener(
 // ---- bookmarks --------------------------------------------------------------
 // Kept in localStorage beside the demo's other choices, one list for every
 // window of the demo (the storage event brings another window's changes):
-// the real URL (what the address bar shows, never a route), the title and
-// the icon as a small PNG data URL, newest first, one per URL. The stars in
-// the address bar and on the cards and the sidebar all draw from it.
+// the real URL (what the address bar shows, never a route), the title, the
+// page's description where it gave one and the icon as a small PNG data URL,
+// newest first, one per URL. The stars in the address bar and on the cards
+// and the sidebar all draw from it.
 
 const BOOKMARKS_KEY = 'stomp-demo:bookmarks';
 // The defaults' icons and tile colours are curated, as Fracital's quick
@@ -2701,7 +2733,12 @@ const BOOKMARKS_KEY = 'stomp-demo:bookmarks';
 // public/icon.svg, estro.svg and krunker.png (Apache-2.0, the same owner),
 // vibeOS (which declares none) has the Tango computer from vibeOS's own
 // icon set, and globe.png, the Tango web browser from the same set, stands
-// in for a page whose icon could not be had
+// in for a page whose icon could not be had. The quick links follow them,
+// at the URLs their tiles open, in their tiles' colours: their titles,
+// descriptions and icons are what their pages gave the public demo
+// (2026-11; reddit.png, google.png and discord.png are the icons the pages
+// declared, at 64 px). Reddit answered with its bot wall, so its name only;
+// Google's page declares no description, nor do Fracital's and vibeOS's
 const DEFAULT_BOOKMARKS = [
 	{
 		title: 'Fracital',
@@ -2718,14 +2755,47 @@ const DEFAULT_BOOKMARKS = [
 	{
 		title: 'Estro',
 		url: 'https://estro.help/',
+		description: 'Estro: three coding models, one key.',
 		icon: '/pm/icons/estro.svg',
 		color: '#9a5ae7',
 	},
 	{
 		title: 'Krunk',
 		url: 'https://krunk.io/',
+		description:
+			'Play Krunker Box Office: the Krunker FPS rebuilt as a native engine. Free fast-paced multiplayer in your browser or as a desktop client. No download required.',
 		icon: '/pm/icons/krunker.png',
 		color: '#ffd95c',
+	},
+	{
+		title: 'Reddit',
+		url: 'https://www.reddit.com/',
+		icon: '/pm/icons/reddit.png',
+		color: '#d2612a',
+	},
+	{
+		title: 'Google',
+		url: 'https://www.google.com/',
+		icon: '/pm/icons/google.png',
+		// its many-coloured G on white, as Fracital's link cards draw it: on
+		// the tile's green its own green would be lost
+		color: '#ffffff',
+	},
+	{
+		title: 'YouTube',
+		url: 'https://www.youtube.com/',
+		description:
+			'Enjoy the videos and music you love, upload original content, and share it all with friends, family, and the world on YouTube.',
+		icon: '/pm/icons/youtube.svg',
+		color: '#ff0000',
+	},
+	{
+		title: 'Discord',
+		url: 'https://discord.com/login',
+		description:
+			'Discord is great for playing games and chilling with friends, or even building a worldwide community. Customize your own space to talk, play, and hang out.',
+		icon: '/pm/icons/discord.png',
+		color: '#2a4cd2',
 	},
 ];
 const GLOBE_ICON = '/pm/icons/globe.png';
@@ -2744,6 +2814,10 @@ const FULL_TILE_ICONS = new Set([
 const bookmarksPanel = $('bookmarks');
 const bookmarksList = $('bookmarksList');
 const bookmarksTab = $('bookmarksTab');
+
+/** a page's description as a bookmark keeps it: one line, at most 300 characters */
+const cleanDescription = (text) =>
+	String(text).replace(/\s+/g, ' ').trim().slice(0, 300);
 
 function loadBookmarks() {
 	let list = [];
@@ -2768,9 +2842,15 @@ function loadBookmarks() {
 			typeof entry.color === 'string' && /^#[0-9a-f]{3,8}$/i.test(entry.color)
 				? entry.color
 				: curated?.color || null;
+		const description =
+			(typeof entry.description === 'string' &&
+				cleanDescription(entry.description)) ||
+			curated?.description ||
+			null;
 		kept.push({
 			url: entry.url,
 			title: typeof entry.title === 'string' ? entry.title : '',
+			...(description && { description }),
 			icon,
 			...(color && { color }),
 		});
@@ -2845,6 +2925,8 @@ async function toggleBookmark(tab) {
 	const title = tab.goingTo ? shown : tabTitle(tab);
 	bookmarks.unshift({ url, title: title === shown ? '' : title, icon: null });
 	saveBookmarks();
+	describing.add(url);
+	fillDescriptions();
 	fillIcons();
 }
 
@@ -2936,14 +3018,11 @@ async function fillIcons() {
 }
 
 let iconRequest = 0;
-/**
- * The icon at `url` through the tab's page, as a 64 px PNG data URL; null
- * when the page answered without a picture, undefined when it did not answer
- */
-async function fetchIcon(tab, url) {
+/** what a tab's page answers over its port, undefined when it does not */
+function askPage(tab, message) {
 	const port = tab.iconPort;
 	const id = ++iconRequest;
-	const reply = await new Promise((resolve) => {
+	return new Promise((resolve) => {
 		const timer = setTimeout(() => resolve(undefined), 8000);
 		port.addEventListener('message', function answer(event) {
 			if (event.data?.id !== id) return;
@@ -2952,8 +3031,66 @@ async function fetchIcon(tab, url) {
 			resolve(event.data);
 		});
 		port.start();
-		port.postMessage({ id, url });
+		port.postMessage({ ...message, id });
 	});
+}
+
+// A bookmark the user makes keeps its page's description where the page
+// gives one: the page its tab shows is asked once it is there (a bookmark
+// made while it is on its way waits for it), over the port the icons come
+// through. A kept bookmark is never asked again.
+const describing = new Set(); // bookmark URLs whose page is still to ask
+let describeRunning = false;
+let describeAgain = false;
+
+async function fillDescriptions() {
+	if (describeRunning) {
+		describeAgain = true;
+		return;
+	}
+	describeRunning = true;
+	try {
+		do {
+			describeAgain = false;
+			for (const url of [...describing]) {
+				if (!bookmarkOf(url)) {
+					describing.delete(url); // removed meanwhile
+					continue;
+				}
+				const tab = tabs.find(
+					(other) =>
+						other.iconPort &&
+						!other.goingTo &&
+						pageOf(pageUrl(other)) === pageOf(url),
+				);
+				if (!tab) continue; // its page arriving runs this again
+				const reply = await askPage(tab, { describe: true });
+				if (reply === undefined) continue; // unanswered: next time
+				describing.delete(url);
+				const description =
+					typeof reply.description === 'string' &&
+					cleanDescription(reply.description);
+				if (!description) continue;
+				// the list may have changed meanwhile, here or in another window
+				bookmarks = loadBookmarks();
+				const kept = bookmarkOf(url);
+				if (kept && !kept.description) {
+					kept.description = description;
+					saveBookmarks();
+				}
+			}
+		} while (describeAgain);
+	} finally {
+		describeRunning = false;
+	}
+}
+
+/**
+ * The icon at `url` through the tab's page, as a 64 px PNG data URL; null
+ * when the page answered without a picture, undefined when it did not answer
+ */
+async function fetchIcon(tab, url) {
+	const reply = await askPage(tab, { url });
 	if (!reply) return undefined;
 	const picture = reply.picture;
 	if (!(picture instanceof ImageBitmap)) return null;
@@ -3013,8 +3150,18 @@ function bookmarkRow(entry) {
 	const text = element('span', 'bookmarkText');
 	text.append(
 		element('span', 'bookmarkTitle', entry.title || host || entry.url),
-		element('span', 'bookmarkUrl', entry.url),
 	);
+	// the page's description, muted, on a line of its own (whole on hover)
+	if (entry.description) {
+		const description = element(
+			'span',
+			'bookmarkDescription',
+			entry.description,
+		);
+		description.title = entry.description;
+		text.append(description);
+	}
+	text.append(element('span', 'bookmarkUrl', entry.url));
 	open.append(text);
 	// a click opens it in the current tab; Ctrl, Cmd or the middle button in
 	// a new one, as a browser's links do
@@ -3322,20 +3469,33 @@ document.addEventListener(
 	},
 	true,
 );
-// The maker's sites and two friends' are bookmarked once, on the first visit
-// (after the user's own, for a list from before they were): a marker beside
-// the list remembers it, so one the user removes stays removed.
+// Each default is bookmarked once, on the first visit after it became one
+// (after the user's own): a marker beside the list keeps the URLs already
+// offered, so one the user removes stays removed and a default added later
+// still comes to a list seeded before it. The marker was '1' while the
+// defaults were the first four.
 const SEEDED_KEY = 'stomp-demo:bookmarks-seeded';
 {
-	let seeded = false;
+	let seeded = [];
 	try {
-		seeded = localStorage.getItem(SEEDED_KEY) === '1';
+		const marker = localStorage.getItem(SEEDED_KEY);
+		seeded =
+			marker === '1'
+				? DEFAULT_BOOKMARKS.slice(0, 4).map((entry) => entry.url)
+				: JSON.parse(marker || '[]');
 	} catch {}
-	if (!seeded) {
-		for (const entry of DEFAULT_BOOKMARKS)
+	if (!Array.isArray(seeded)) seeded = [];
+	const fresh = DEFAULT_BOOKMARKS.filter(
+		(entry) => !seeded.includes(entry.url),
+	);
+	if (fresh.length) {
+		for (const entry of fresh)
 			if (!bookmarkOf(entry.url)) bookmarks.push({ ...entry });
 		try {
-			localStorage.setItem(SEEDED_KEY, '1');
+			localStorage.setItem(
+				SEEDED_KEY,
+				JSON.stringify([...seeded, ...fresh.map((entry) => entry.url)]),
+			);
 		} catch {}
 		saveBookmarks();
 	}

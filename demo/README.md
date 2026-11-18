@@ -232,8 +232,9 @@ holyWisp is started.
 12. **Bookmarks.** The star in the address bar (and on each tab card)
     toggles the tab's page in a list kept in `localStorage`
     (`stomp-demo:bookmarks`): the real URL the address bar shows (a routed
-    one goes through `controller.unroute`), the title and the page's icon
-    (`NavigateInfo.icon`, else the site's `/favicon.ico`). The host page
+    one goes through `controller.unroute`), the title, the page's
+    description and its icon (`NavigateInfo.icon`, else the site's
+    `/favicon.ico`). The host page
     never loads that icon itself: it is outside the service worker's
     scope, so the request would leave the proxy. A host hook in every
     proxied top document (`ICON_HOOK`, `hooks.init.pre`) posts the host a
@@ -244,13 +245,21 @@ holyWisp is started.
     icon is filled in whenever a page can ask (a port arriving, a page
     reporting, the list changing, on load), so one kept without an icon
     mends itself; the Tango globe stays only where the site has none. The
+    same port answers the page's description (its meta description, else
+    its `og:description`) when the user bookmarks it, and at no other time;
+    it shows as a muted line under the title. The
     star tab on the home page's card, or Saved pages after Reload in the
     address bar, opens a sidebar listing the bookmarks; a click opens one
     in the current tab, the middle button or Ctrl in a new one, and a drag
     (a long press with a finger) or Alt+Up/Down reorders them. The
-    first visit bookmarks Fracital, vibeOS, Estro and Krunk, once
-    (`stomp-demo:bookmarks-seeded`), so one the user removes stays removed,
-    with curated icons and tile colours bundled in `pm/icons/`.
+    first visit bookmarks Fracital, vibeOS, Estro and Krunk, then the quick
+    links Reddit, Google, YouTube and Discord at the URLs their tiles open,
+    each once: `stomp-demo:bookmarks-seeded` keeps the URLs already offered
+    (it was `1` when the defaults were the first four), so one the user
+    removes stays removed and a default added later still comes to a list
+    seeded before it. They carry curated icons and tile colours bundled in
+    `pm/icons/`, and the titles and descriptions their pages gave the public
+    demo.
 
 13. **Sign in with token (Discord).** A key button in the address bar, to the
     left of the status ticker, shows only on a discord.com page (its real

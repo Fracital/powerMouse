@@ -1,5 +1,7 @@
-// The demo's bookmarks: the four it starts with, once (a removed one stays
-// removed); the home page's star tab in its own band between the
+// The demo's bookmarks: the eight it starts with (the maker's four and the
+// quick links), each once (a removed one stays removed, and a list seeded
+// with the first four before the quick links joined gets those once); the
+// page's description where it gives one, under the title; the home page's star tab in its own band between the
 // status line and the commits, hanging off the card's left edge; the
 // sidebar it opens (empty state, rows, open, remove, Escape); the address
 // bar's star and every tab card's, in step with each other, the sidebar and
@@ -40,9 +42,50 @@ const DEFAULTS = [
 		url: 'https://vibeos.fracit.al/',
 		icon: '/pm/icons/vibeos.png',
 	},
-	{ title: 'Estro', url: 'https://estro.help/', icon: '/pm/icons/estro.svg' },
-	{ title: 'Krunk', url: 'https://krunk.io/', icon: '/pm/icons/krunker.png' },
+	{
+		title: 'Estro',
+		url: 'https://estro.help/',
+		icon: '/pm/icons/estro.svg',
+		description: 'Estro: three coding models, one key.',
+	},
+	{
+		title: 'Krunk',
+		url: 'https://krunk.io/',
+		icon: '/pm/icons/krunker.png',
+		description:
+			'Play Krunker Box Office: the Krunker FPS rebuilt as a native engine. Free fast-paced multiplayer in your browser or as a desktop client. No download required.',
+	},
+	// the quick links, at the URLs their tiles open
+	{
+		title: 'Reddit',
+		url: 'https://www.reddit.com/',
+		icon: '/pm/icons/reddit.png',
+	},
+	{
+		title: 'Google',
+		url: 'https://www.google.com/',
+		icon: '/pm/icons/google.png',
+	},
+	{
+		title: 'YouTube',
+		url: 'https://www.youtube.com/',
+		icon: '/pm/icons/youtube.svg',
+		description:
+			'Enjoy the videos and music you love, upload original content, and share it all with friends, family, and the world on YouTube.',
+	},
+	{
+		title: 'Discord',
+		url: 'https://discord.com/login',
+		icon: '/pm/icons/discord.png',
+		description:
+			'Discord is great for playing games and chilling with friends, or even building a worldwide community. Customize your own space to talk, play, and hang out.',
+	},
 ];
+const N = DEFAULTS.length;
+// the defaults a list seeded before the quick links joined has
+const FIRST_FOUR = DEFAULTS.slice(0, 4);
+const SEEDED_KEY = 'stomp-demo:bookmarks-seeded';
+const A_DESCRIPTION = 'The first page to bookmark.';
 const DEFAULT_URLS = DEFAULTS.map((entry) => entry.url);
 const urlsOf = (list) => JSON.stringify(list.map((entry) => entry.url));
 
@@ -84,6 +127,10 @@ const rows = (page) =>
 				.querySelector('img.bookmarkIcon')
 				.getAttribute('src')
 				.replace(/^(data:image\/png;base64,).*/, '$1'),
+			// the page's description, where the bookmark has one
+			...(row.querySelector('.bookmarkDescription') && {
+				description: row.querySelector('.bookmarkDescription').textContent,
+			}),
 		})),
 	);
 const sidebarOpen = (page) =>
@@ -249,7 +296,7 @@ async function run(mode, base) {
 			(await page.getAttribute('#bookmarksTab', 'aria-expanded')) === 'true',
 	);
 	ok(
-		`${mode}: the first visit starts with Fracital, vibeOS, Estro and Krunk, each with its bundled icon`,
+		`${mode}: the first visit starts with Fracital, vibeOS, Estro, Krunk and the quick links Reddit, Google, YouTube and Discord, each with its bundled icon and the description its page gave`,
 		JSON.stringify(await rows(page)) === JSON.stringify(DEFAULTS) &&
 			(await until(
 				page,
@@ -260,7 +307,7 @@ async function run(mode, base) {
 				Boolean,
 				5000,
 			)) === true &&
-			(await page.textContent('#bookmarksCount')) === '4' &&
+			(await page.textContent('#bookmarksCount')) === String(N) &&
 			urlsOf(await stored(page)) === JSON.stringify(DEFAULT_URLS),
 		JSON.stringify(await rows(page)),
 	);
@@ -288,12 +335,7 @@ async function run(mode, base) {
 	ok(
 		`${mode}: Estro's and Krunk's icons fill their 34 px tiles, vibeOS's shows at its natural 22 px`,
 		JSON.stringify(tiles.map((t) => t.tile)) ===
-			JSON.stringify([
-				[34, 34],
-				[34, 34],
-				[34, 34],
-				[34, 34],
-			]) &&
+			JSON.stringify(DEFAULTS.map(() => [34, 34])) &&
 			JSON.stringify(tiles[2].image) === '[0,0,34,34]' &&
 			JSON.stringify(tiles[3].image) === '[0,0,34,34]' &&
 			JSON.stringify(tiles[1].image.slice(2)) === '[22,22]' &&
@@ -369,6 +411,22 @@ async function run(mode, base) {
 		/^data:image\/png;base64,/.test(list?.[0]?.icon || '') &&
 			JSON.stringify(picture) === '[64,64]',
 		`${JSON.stringify(picture)} ${JSON.stringify(list).slice(0, 160)}`,
+	);
+	// the description A's page gives, on one line, asked of the page when
+	// the star was pressed
+	ok(
+		`${mode}: A keeps the description its page gives, on one line`,
+		(await until(
+			page,
+			(a) =>
+				JSON.parse(localStorage.getItem('stomp-demo:bookmarks') || '[]').find(
+					(entry) => entry.url === a,
+				)?.description,
+			Boolean,
+			15000,
+			A,
+		)) === A_DESCRIPTION,
+		JSON.stringify((await stored(page))[0]),
 	);
 
 	// a second tab; its card's star in the tab manager
@@ -487,9 +545,10 @@ async function run(mode, base) {
 		(await until(
 			other,
 			() => document.querySelectorAll('#bookmarksList .bookmark').length,
-			(n) => n === 6,
+			(n) => n === N + 2,
 			5000,
-		)) === 6,
+		)) ===
+			N + 2,
 	);
 
 	// the sidebar: rows, remove, and the stars follow
@@ -499,16 +558,21 @@ async function run(mode, base) {
 	await until(
 		page,
 		() => document.querySelectorAll('#bookmarksList .bookmark').length,
-		(n) => n === 6,
+		(n) => n === N + 2,
 		5000,
 	);
 	const shown = await rows(page);
 	ok(
-		`${mode}: the sidebar lists both with title, real URL and icon (B's the globe), the defaults with theirs`,
+		`${mode}: the sidebar lists both with title, real URL and icon (B's the globe) and A's description (B gives none), the defaults with theirs`,
 		JSON.stringify(shown) ===
 			JSON.stringify([
 				{ title: 'Bookmark B', url: B, icon: '/pm/icons/globe.png' },
-				{ title: 'Bookmark A', url: A, icon: 'data:image/png;base64,' },
+				{
+					title: 'Bookmark A',
+					url: A,
+					icon: 'data:image/png;base64,',
+					description: A_DESCRIPTION,
+				},
 				...DEFAULTS,
 			]),
 		JSON.stringify(shown),
@@ -525,9 +589,10 @@ async function run(mode, base) {
 		(await until(
 			other,
 			() => document.querySelectorAll('#bookmarksList .bookmark').length,
-			(n) => n === 5,
+			(n) => n === N + 1,
 			5000,
-		)) === 5,
+		)) ===
+			N + 1,
 	);
 	await other.close();
 	await page.keyboard.press('Escape');
@@ -716,7 +781,7 @@ async function run(mode, base) {
 	await until(
 		page,
 		() => document.querySelectorAll('#bookmarksList .bookmark').length,
-		(n) => n === 4,
+		(n) => n === N,
 		5000,
 	);
 	await page.click('#bookmarksList .bookmark:last-child .bookmarkRemove');
@@ -737,12 +802,12 @@ async function run(mode, base) {
 	await reopen();
 	await page.click('#bookmarksTab');
 	ok(
-		`${mode}: Krunk, removed, does not come back on a reload`,
-		urlsOf(await rows(page)) === JSON.stringify(DEFAULT_URLS.slice(0, 3)) &&
-			urlsOf(await stored(page)) === JSON.stringify(DEFAULT_URLS.slice(0, 3)),
+		`${mode}: Discord, removed, does not come back on a reload`,
+		urlsOf(await rows(page)) === JSON.stringify(DEFAULT_URLS.slice(0, -1)) &&
+			urlsOf(await stored(page)) === JSON.stringify(DEFAULT_URLS.slice(0, -1)),
 		urlsOf(await rows(page)),
 	);
-	for (let i = 0; i < 3; i++) {
+	for (let i = 0; i < N - 1; i++) {
 		await page.click('#bookmarksList .bookmark:first-child .bookmarkRemove');
 		await sleep(100);
 	}
@@ -770,6 +835,112 @@ async function run(mode, base) {
 			3000,
 		)) === true && (await stored(page)).length === 0,
 		JSON.stringify(await stored(page)),
+	);
+
+	// a list seeded before the quick links joined the defaults (its marker
+	// '1'), the user's own bookmark first and Krunk removed: the quick links
+	// come once, after the list, and Krunk stays away
+	await page.evaluate(
+		([key, seededKey, list]) => {
+			localStorage.setItem(key, JSON.stringify(list));
+			localStorage.setItem(seededKey, '1');
+		},
+		[
+			KEY,
+			SEEDED_KEY,
+			[
+				{ url: A, title: 'Bookmark A', icon: null },
+				...FIRST_FOUR.slice(0, 3).map(({ title, url, icon }) => ({
+					title,
+					url,
+					icon,
+				})),
+			],
+		],
+	);
+	await page.keyboard.press('Escape');
+	await reopen();
+	const migrated = [A, ...DEFAULT_URLS.slice(0, 3), ...DEFAULT_URLS.slice(4)];
+	await page.click('#bookmarksTab');
+	ok(
+		`${mode}: a list seeded with the first four gets the quick links once, after it, and a removed default stays away`,
+		urlsOf(
+			await until(
+				page,
+				() =>
+					[...document.querySelectorAll('#bookmarksList .bookmark')].map(
+						(row) => ({ url: row.dataset.url }),
+					),
+				(v) => v?.length > 1,
+				5000,
+			),
+		) === JSON.stringify(migrated) &&
+			urlsOf(await stored(page)) === JSON.stringify(migrated) &&
+			JSON.stringify(
+				await page.evaluate(
+					(seededKey) => JSON.parse(localStorage.getItem(seededKey)),
+					SEEDED_KEY,
+				),
+			) === JSON.stringify(DEFAULT_URLS),
+		urlsOf(await stored(page)),
+	);
+	ok(
+		`${mode}: the defaults seeded before descriptions get theirs, shown under the title in a muted line`,
+		JSON.stringify(
+			(await rows(page))
+				.filter((row) => row.description)
+				.map((row) => [row.url, row.description]),
+		) ===
+			JSON.stringify(
+				DEFAULTS.filter((entry) => entry.description)
+					.filter((entry) => migrated.includes(entry.url))
+					.map((entry) => [entry.url, entry.description]),
+			) &&
+			(await page.evaluate(() => {
+				const row = document.querySelector(
+					'#bookmarksList .bookmark:nth-child(4)',
+				); // Estro
+				const title = row
+					.querySelector('.bookmarkTitle')
+					.getBoundingClientRect();
+				const line = row.querySelector('.bookmarkDescription');
+				const box = line.getBoundingClientRect();
+				const url = row.querySelector('.bookmarkUrl').getBoundingClientRect();
+				return (
+					box.top >= title.bottom &&
+					url.top >= box.bottom &&
+					line.title === line.textContent &&
+					getComputedStyle(line).color === 'rgb(154, 154, 154)' &&
+					getComputedStyle(line).whiteSpace === 'nowrap'
+				);
+			})),
+		JSON.stringify(await rows(page)),
+	);
+	// a quick link removed stays removed too
+	await page.click(
+		'#bookmarksList .bookmark[data-url="https://www.reddit.com/"] .bookmarkRemove',
+	);
+	await page.keyboard.press('Escape');
+	await reopen();
+	await page.click('#bookmarksTab');
+	const withoutReddit = migrated.filter(
+		(url) => url !== 'https://www.reddit.com/',
+	);
+	ok(
+		`${mode}: Reddit, removed, does not come back on a reload`,
+		urlsOf(
+			await until(
+				page,
+				() =>
+					[...document.querySelectorAll('#bookmarksList .bookmark')].map(
+						(row) => ({ url: row.dataset.url }),
+					),
+				(v) => v?.length > 1,
+				5000,
+			),
+		) === JSON.stringify(withoutReddit) &&
+			urlsOf(await stored(page)) === JSON.stringify(withoutReddit),
+		urlsOf(await stored(page)),
 	);
 
 	// YouTube has its curated icon, white on its red, whatever picture its
@@ -967,7 +1138,7 @@ async function run(mode, base) {
 	await until(
 		phone,
 		() => document.querySelectorAll('#bookmarksList .bookmark').length,
-		(n) => n === 4,
+		(n) => n === N,
 		5000,
 	);
 	const cdp = await touch.newCDPSession(phone);
@@ -985,7 +1156,7 @@ async function run(mode, base) {
 				DEFAULT_URLS[1],
 				DEFAULT_URLS[2],
 				DEFAULT_URLS[0],
-				DEFAULT_URLS[3],
+				...DEFAULT_URLS.slice(3),
 			]) &&
 			(await phone.evaluate(
 				() => document.querySelectorAll('.frames .frame').length,
