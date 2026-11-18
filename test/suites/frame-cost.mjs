@@ -45,7 +45,12 @@
 //   location.ancestorOrigins, NamedNodeMap's methods on an element's
 //   attributes, a fresh context's referrer policy) and the sizing of an
 //   IndexedDB record for navigator.storage.estimate() went to the deferred
-//   parts (485.9 KB). Raise the budget in the same change as code
+//   parts (485.9 KB). The client hints' table made from its names, the
+//   parts' shared table keyed by place and more rare paths in parts (an XML
+//   document's load, the WebSocket stand-ins, the page's own CSP checks,
+//   the HTML shell, window.open(), links and forms aimed at another
+//   window, among others) took it to 448.8 KB, and the budget to 465 KB,
+//   about the margin it had. Raise the budget in the same change as code
 //   that has to grow the bundle, and say why; first see whether it can be
 //   deferred.
 // - the JS heap one proxied frame adds (test/frame-memory.mjs, FRAMES frames
@@ -121,7 +126,7 @@ import { measureFrames } from '../frame-memory.mjs';
 import { done, FIXTURE, ok, SLOT_PORTS } from '../lib.mjs';
 
 const BUNDLE = new URL('../../dist/injectDocument.js', import.meta.url);
-const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 500;
+const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 465;
 const FRAMES = Number(process.env.FRAMES) || 20;
 const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1134;
 const OTHER_LIMIT_KB = Number(process.env.FRAME_HEAP_OTHER_LIMIT_KB) || 1136;
