@@ -4004,7 +4004,20 @@ function genericForward(
 			(!!previousHop?.timingDenied ||
 				(crossOrigin && !timingAllowed(response.headers, policyOrigin!)));
 		const timingShown = fromNetwork && chainCrossed && !timingDenied;
-		if ((fromNetwork && corsChecked) || opaqueFetch) {
+		// (only script reads them: the page's own fetch or XMLHttpRequest, or
+		// its emulated service worker's fetch of an element's request; an
+		// element's own cors load is the whole response to the browser, whose
+		// media element needs a 206's Content-Range, amazon.com's videos)
+		if (
+			(fromNetwork &&
+				corsChecked &&
+				(serverRequest.destination === '' ||
+					serviceWorkers.isEmulated(
+						context?.clientId,
+						clientRoute ?? undefined,
+					))) ||
+			opaqueFetch
+		) {
 			const location = responseHeaders.get('location');
 			const serverTiming = responseHeaders.get('server-timing');
 			const encoding = responseHeaders.get('content-encoding')?.trim();

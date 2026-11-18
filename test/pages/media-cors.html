@@ -1,0 +1,55 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>media-cors</title>
+<script>
+	// Another origin's video and sound, loaded with crossorigin=anonymous
+	// (Amazon's homepage videos) and without, from a server that allows any
+	// origin and answers the media element's Range request with a 206. The
+	// element reads the whole response (its Content-Range), whatever the
+	// page's own fetch of the same URL may read of its headers.
+	window.__record = { done: false };
+	addEventListener('load', async () => {
+		const cross = `${location.protocol}//localhost:${location.port}/pages/`;
+		const record = {};
+		const media = (tag, file, crossOrigin) =>
+			new Promise((resolve) => {
+				const element = document.createElement(tag);
+				element.muted = true;
+				if (crossOrigin !== null) element.crossOrigin = crossOrigin;
+				element.onloadedmetadata = () =>
+					resolve(`metadata ${element.duration.toFixed(2)}`);
+				element.onerror = () => resolve(`error ${element.error?.code}`);
+				setTimeout(() => resolve('timeout'), 15000);
+				element.src = `${cross}${file}`;
+				document.body.append(element);
+			});
+		for (const [tag, file] of [
+			['video', 'media-cors.webm'],
+			['audio', 'media-cors.wav'],
+		])
+			for (const crossOrigin of [null, 'anonymous'])
+				record[`${tag} ${crossOrigin ?? 'no-cors'}`] = await media(
+					tag,
+					file,
+					crossOrigin,
+				);
+		// the page's own read of a 206 of another origin: the status, and only
+		// the headers CORS exposes (no Content-Range)
+		try {
+			const response = await fetch(`${cross}media-cors.webm`, {
+				headers: { range: 'bytes=0-99' },
+			});
+			record.fetch = [
+				response.status,
+				response.type,
+				response.headers.get('content-range'),
+				response.headers.get('content-type'),
+				(await response.arrayBuffer()).byteLength,
+			].join(' ');
+		} catch (error) {
+			record.fetch = `threw ${error.name}`;
+		}
+		record.done = true;
+		window.__record = record;
+	});
+</script>
