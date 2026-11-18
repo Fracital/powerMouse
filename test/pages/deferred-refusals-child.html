@@ -128,6 +128,24 @@
 						document.body.append(frame);
 						setTimeout(() => resolve({ stayed: true }), 2000);
 					}),
+				// an image in a new frame's about:blank, which no service worker
+				// controls: its load is a copy (src/inject/dom/uncontrolledCopies.ts)
+				blankCopy: () =>
+					new Promise((resolve) => {
+						const frame = document.createElement('iframe');
+						document.body.append(frame);
+						const blank = frame.contentDocument;
+						const image = blank.createElement('img');
+						image.onload = () => resolve({ loaded: true });
+						image.onerror = () => resolve({ loaded: false });
+						try {
+							image.src = 'blank-sprite.svg';
+							blank.body.append(image);
+						} catch (error) {
+							resolve({ threw: String(error && error.message) });
+						}
+						setTimeout(() => resolve({ pending: true }), 5000);
+					}),
 				// a navigation of another window of the page's (a frame of its
 				// own, by `w.location = url`): where the frame is after it
 				// a call of no function through the access API: V8's message names

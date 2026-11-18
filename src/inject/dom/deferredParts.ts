@@ -137,6 +137,7 @@ import {
 } from './siteEvents';
 import { sourcePolicy } from './sourcePolicy';
 import { storageAccessHandle } from './storageAccess';
+import { uncontrolledCopies } from './uncontrolledCopies';
 import {
 	dispatchViolation,
 	evalError,
@@ -194,6 +195,9 @@ export const parts = {
 	// a document's navigation of another window, refused as Chrome refuses
 	// it, at its first (./navigateOther.ts; modules/Context.ts)
 	navigateOther,
+	// the copies a document no service worker controls makes of its loads,
+	// at its first (./uncontrolledCopies.ts; ./modules/DOMAttributes.ts)
+	uncontrolledCopies,
 	// the violations and errors of the page's own policy the inject makes
 	// itself, the first time it refuses something (./violations.ts; Client.ts)
 	dispatchViolation,

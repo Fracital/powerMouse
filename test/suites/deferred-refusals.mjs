@@ -11,7 +11,9 @@
 // part, src/inject/accessFailures.ts); navigator.storage.estimate()
 // rejects before the browser is asked (src/inject/storageUsage.ts); a
 // Worker's construction throws before the browser's
-// (src/inject/workerStart.ts). A part is made
+// (src/inject/workerStart.ts); an image in a frame no service worker
+// controls keeps its route and loads nothing (its copy is a part,
+// src/inject/dom/uncontrolledCopies.ts). A part is made
 // synchronously within the call that needs it, so no page code runs between
 // the hook and the part (a download's copy is made after the click went
 // through the page, which the browser's own download had been cancelled
@@ -187,6 +189,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			'notFunction',
 			'estimate',
 			'worker',
+			'blankCopy',
 		],
 	);
 	ok(
@@ -196,6 +199,11 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			answer.reached?.includes('getSettings') &&
 			answer.reached?.includes('xhrDocument'),
 		JSON.stringify(answer),
+	);
+	ok(
+		'with the parts, an image in a frame no service worker controls loads its copy',
+		answer.out?.blankCopy?.loaded === true,
+		JSON.stringify(answer.out?.blankCopy),
 	);
 	ok(
 		'with the parts, a worker starts, through the browser',
@@ -268,7 +276,10 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 				Reflect.deleteProperty(client, 'deferredPartsText');
 			}
 		},
-		{ name, calls: [...REFUSING, 'foreignStats', 'notFunction'] },
+		{
+			name,
+			calls: [...REFUSING, 'foreignStats', 'notFunction', 'blankCopy'],
+		},
 	);
 	const out = answer.out ?? {};
 	// the parts' own error; an identity get with STomp's passkey provider
@@ -319,6 +330,13 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		'without the parts, a navigation of another window throws and navigates nothing',
 		out.navigateOther?.threw === 'no parts' && out.navigateOther?.at === '',
 		JSON.stringify(out.navigateOther),
+	);
+	// no copy: the image keeps its route, which fails from the proxy
+	// origin's own server, as a failed copy does, and nothing is thrown
+	ok(
+		'without the parts, an image in a frame no service worker controls loads nothing',
+		out.blankCopy?.loaded === false,
+		JSON.stringify(out.blankCopy),
 	);
 	// the part only words the error: without it, the error the call threw
 	ok(
