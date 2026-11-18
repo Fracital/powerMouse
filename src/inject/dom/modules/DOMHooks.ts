@@ -2187,6 +2187,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			querySelectorAll: nativeQueryAll.document,
 			foldMarkers,
 			querySelectorAllOf,
+			inertDocumentFor,
 		};
 		const getHTMLCall = (target: Fn, that: unknown, args: unknown[]) =>
 			sinks().getHTML(target, that, args);

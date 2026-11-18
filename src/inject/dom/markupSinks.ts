@@ -58,6 +58,8 @@ export interface SinkContext {
 	foldMarkers: (root: Node) => void;
 	/** every element under `root` */
 	querySelectorAllOf: (root: Node) => Element[];
+	/** the module's document of no window for `node`'s kind of markup (inertCopy's) */
+	inertDocumentFor: (node: Node) => Document;
 }
 
 /** getHTML's options, as the page gave them */
@@ -96,6 +98,10 @@ export function markupSinks(context: SinkContext) {
 			return null;
 		}
 	};
+	const ownerDocumentOf = Reflect.getOwnPropertyDescriptor(
+		nativeNode,
+		'ownerDocument',
+	)!.get!;
 	// a host's shadow root by the browser's own getter: the copy's host is
 	// read on the browser's Node prototype (usePrototype), which has none
 	const shadowRootOf = Reflect.getOwnPropertyDescriptor(
@@ -351,9 +357,21 @@ export function markupSinks(context: SinkContext) {
 				// no shadow root: the native call throws what the browser does
 			}
 			if (!element || !args.length) return Reflect.apply(target, that, args);
+			// the copy is made in a document with no window, where nothing
+			// loads: for an element of this realm's document one the insertion
+			// hooks take as another's, so what the sanitizer leaves is routed
+			// all through as it goes in (a declarative shadow root's, a
+			// template's content: the page's own template document was taken
+			// as seen and left them as written); for an element of another
+			// realm (the creator's member on its frame's) the inert document
+			// of the element's own, so the nodes are of the element's realm,
+			// as natively
+			const owner = Reflect.apply(ownerDocumentOf, element, []) as Document;
 			const shell = Reflect.apply(
 				markup.importNode,
-				inertDocumentOf(realm.document),
+				owner === realm.document
+					? context.inertDocumentFor(element)
+					: inertDocumentOf(owner),
 				[element, false],
 			) as Element;
 			// (a sanitizer the browser refuses throws here, as natively)
