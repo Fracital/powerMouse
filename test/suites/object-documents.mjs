@@ -173,6 +173,16 @@ ok(
 		'imageUntyped',
 		'embedImage',
 		'embedImageUntyped',
+		'parsedImage',
+		'heldImage',
+		'heldImageClone',
+		'typeImage',
+		'typeDocument',
+		'typeBlank',
+		'typeBlankRemoved',
+		'typeToggled',
+		'typeProperty',
+		'typeNode',
 	].every((name) =>
 		/^load shown=null [^|]* width=1$/.test(
 			eventsNative?.[`${name}.events`] ?? '',
@@ -180,17 +190,6 @@ ok(
 	),
 	JSON.stringify(eventsNative),
 );
-// What differs from native and stays so (changes/object-image-by-extension.md,
-// Known limitations): the reading, its native and proxied values (the rest
-// of the reading as natively), and why. One that matches native again
-// fails the suite, to be taken off this list.
-const EXPECTED = {
-	'imageUntyped.sync': {
-		native: 'width=0',
-		proxied: 'width=300',
-		why: 'an untyped object of an image URL has no URL while its copy is on its way, which Chrome boxes as a document (300x150); natively it is the image, 0x0 until the image is in',
-	},
-};
 for (const [mode, base] of [
 	['same-origin', PROXY],
 	['isolated', HOST],
@@ -198,23 +197,7 @@ for (const [mode, base] of [
 	const page = await openDemo(browser, base);
 	await submitLanding(page, eventsTarget);
 	const proxied = await eventsReport(page);
-	const keys = Object.keys(eventsNative ?? {}).filter(
-		(key) => key !== 'done' && !EXPECTED[key],
-	);
-	for (const [key, { native, proxied: wrong, why }] of Object.entries(
-		EXPECTED,
-	)) {
-		const nativeValue = eventsNative?.[key] ?? '';
-		const proxiedValue = proxied?.[key] ?? '';
-		ok(
-			`${mode}: an object's ${key} differs from native as known (${why})`,
-			nativeValue.endsWith(` ${native}`) &&
-				proxiedValue.endsWith(` ${wrong}`) &&
-				nativeValue.slice(0, -native.length) ===
-					proxiedValue.slice(0, -wrong.length),
-			`native ${JSON.stringify(nativeValue)} proxied ${JSON.stringify(proxiedValue)}${proxiedValue === nativeValue ? ': as natively now, take it off EXPECTED' : ''}`,
-		);
-	}
+	const keys = Object.keys(eventsNative ?? {}).filter((key) => key !== 'done');
 	const differ = keys.filter((key) => proxied?.[key] !== eventsNative[key]);
 	for (const key of differ)
 		ok(

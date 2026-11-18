@@ -7,6 +7,8 @@
 		data="object-events-doc.html?parsed"
 		type="text/html"
 	></object>
+	<!-- one of an image with no type, as the parser makes it -->
+	<object id="parsedImage" data="object-events.png?parsedImage"></object>
 	<script>
 		// What a page reads of an <object> while its HTML document loads and
 		// once it has: the events it fires (each load with what the object
@@ -79,8 +81,169 @@
 			report[`${name}.sync`] = read(object);
 			return object;
 		};
+		const parsedImage = document.getElementById('parsedImage');
+		watch('parsedImage', parsedImage);
+		report['parsedImage.sync'] = read(parsedImage);
+		// What else a page reads of an untyped object of an image while its
+		// image loads, as its only child: its attributes every way the DOM
+		// lists them, the ways to remove a type it has none of, its markup,
+		// the selectors that name its type, its copies; and its observers'
+		// records, of every attribute and of its type alone, with the old
+		// values. Then the page's own type writes while it loads, each on an
+		// object of its own: its type then, and the box it gets
+		const records = {};
+		const observe = (name, object) => {
+			for (const [key, options] of [
+				['records', { attributes: true, attributeOldValue: true }],
+				['typeRecords', { attributeFilter: ['type'], attributeOldValue: true }],
+			]) {
+				const list = (records[`${name}.${key}`] = []);
+				new MutationObserver((batch) => {
+					for (const record of batch)
+						list.push(`${record.attributeName}:${record.oldValue}`);
+				}).observe(object, options);
+			}
+		};
+		const held = (name, write) => {
+			const holder = document.createElement('div');
+			const object = document.createElement('object');
+			watch(name, object);
+			observe(name, object);
+			object.setAttribute('data', `object-events.png?${name}`);
+			holder.append(object);
+			document.body.append(holder);
+			const at = (key, ...values) =>
+				(report[`${name}.${key}`] = values.map(String).join(' | '));
+			if (write) {
+				write(object);
+				at(
+					'written',
+					object.getAttribute('type'),
+					object.type,
+					object.hasAttribute('type'),
+					object.getAttributeNames(),
+					object.outerHTML,
+					object.matches('[type]'),
+				);
+			}
+			report[`${name}.sync`] = read(object);
+			if (write) return object;
+			const attributes = object.attributes;
+			at(
+				'attributes',
+				attributes.length,
+				[...attributes].map((attr) => `${attr.name}=${attr.value}`),
+				attributes.item(0)?.name,
+				attributes.item(1),
+				attributes.type,
+				attributes.getNamedItem('type'),
+				attributes.getNamedItemNS(null, 'type'),
+				'type' in attributes,
+				Object.getOwnPropertyNames(attributes),
+			);
+			at(
+				'names',
+				object.getAttributeNames(),
+				object.getAttributeNode('type'),
+				object.getAttributeNodeNS(null, 'type'),
+				object.getAttributeNS(null, 'type'),
+				object.hasAttributeNS(null, 'type'),
+				object.hasAttributes(),
+			);
+			let removed;
+			try {
+				removed = attributes.removeNamedItem('type');
+			} catch (error) {
+				removed = error.name;
+			}
+			let removedNS;
+			try {
+				removedNS = attributes.removeNamedItemNS(null, 'type');
+			} catch (error) {
+				removedNS = error.name;
+			}
+			at(
+				'removals',
+				removed,
+				removedNS,
+				object.removeAttribute('type'),
+				object.removeAttributeNS(null, 'type'),
+				object.toggleAttribute('type', false),
+				object.hasAttribute('type'),
+			);
+			at(
+				'markup',
+				object.outerHTML,
+				holder.innerHTML,
+				new XMLSerializer().serializeToString(object),
+				holder.getHTML(),
+			);
+			at(
+				'selectors',
+				holder.querySelector('[type]'),
+				holder.querySelector(':not([type])')?.localName,
+				holder.querySelectorAll('[type], [TYPE="image/png"]').length,
+				holder.matches(':has(> [type])'),
+				holder.matches(':has(> :not([type]))'),
+				object.matches(':is([type], [type=""])'),
+				object.matches(':not([type])'),
+				object.closest('[type]'),
+				object.webkitMatchesSelector('[type]'),
+				object.webkitMatchesSelector('[data]'),
+				object.matches('[data]'),
+			);
+			const clone = object.cloneNode(true);
+			const imported = document.importNode(object, true);
+			const adopted = document.implementation
+				.createHTMLDocument('')
+				.adoptNode(object.cloneNode(true));
+			at(
+				'copies',
+				clone.outerHTML,
+				clone.getAttributeNames(),
+				clone.hasAttribute('type'),
+				clone.type,
+				imported.getAttributeNames(),
+				imported.attributes.length,
+				adopted.outerHTML,
+				adopted.getAttributeNames(),
+			);
+			// the copy put in the document, which loads the image of its own
+			watch(`${name}Clone`, clone);
+			holder.append(clone);
+			report[`${name}Clone.sync`] = read(clone);
+			return [object, clone];
+		};
+		const [heldImage, heldClone] = held('heldImage');
 		const objects = {
 			parsed,
+			parsedImage,
+			heldImage,
+			heldImageClone: heldClone,
+			typeImage: held('typeImage', (object) =>
+				object.setAttribute('type', 'image/png'),
+			),
+			typeDocument: held('typeDocument', (object) =>
+				object.setAttribute('type', 'text/html'),
+			),
+			typeBlank: held('typeBlank', (object) => object.setAttribute('type', '')),
+			typeBlankRemoved: held('typeBlankRemoved', (object) => {
+				object.setAttribute('type', '');
+				object.removeAttribute('type');
+			}),
+			typeToggled: held('typeToggled', (object) =>
+				object.toggleAttribute('type'),
+			),
+			typeProperty: held('typeProperty', (object) => {
+				object.type = 'image/png';
+			}),
+			typeNode: held('typeNode', (object) => {
+				const attr = document.createAttribute('type');
+				attr.value = 'image/png';
+				report['typeNode.replaced'] = String(
+					object.attributes.setNamedItem(attr),
+				);
+			}),
 			typed: made('typed', true),
 			untyped: made('untyped', false),
 			image: image('image', 'before'),
@@ -94,6 +257,8 @@
 				report[`${name}.end`] = read(object);
 				report[`${name}.events`] = report[`${name}.events`].join(' | ');
 			}
+			for (const [key, list] of Object.entries(records))
+				report[key] = list.join(' ');
 			report.done = true;
 		}, 4000);
 	</script>
