@@ -13,7 +13,8 @@
 		// shows then), and right after it is put in the document, then at the
 		// end, its type and data as the property and the attribute read them
 		// and the title of the document it shows (null for none). With a type
-		// and without, made by the parser and by a script.
+		// and without, made by the parser and by a script, and two of an
+		// image.
 		const report = (window.__objectEvents = { done: false });
 		const read = (object) => {
 			let shown;
@@ -32,6 +33,7 @@
 				`hasType=${object.hasAttribute('type')}`,
 				`data=${object.getAttribute('data')}`,
 				`matches=${object.matches('[type="text/html"]')}`,
+				`width=${object.clientWidth}`,
 			].join(' ');
 		};
 		const watch = (name, object) => {
@@ -59,10 +61,26 @@
 			report[`${name}.sync`] = read(object);
 			return object;
 		};
+		// one Chrome shows as an image (its type says so): it has no
+		// context while the image loads. Its type set after its data, as a
+		// page sets them one by one, before it is put in the document and
+		// after
+		const image = (name, late) => {
+			const object = document.createElement('object');
+			watch(name, object);
+			object.setAttribute('data', `object-events.png?${name}`);
+			if (!late) object.setAttribute('type', 'image/png');
+			document.body.append(object);
+			if (late) object.setAttribute('type', 'image/png');
+			report[`${name}.sync`] = read(object);
+			return object;
+		};
 		const objects = {
 			parsed,
 			typed: made('typed', true),
 			untyped: made('untyped', false),
+			image: image('image', false),
+			imageLate: image('imageLate', true),
 		};
 		setTimeout(() => {
 			for (const [name, object] of Object.entries(objects)) {

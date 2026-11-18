@@ -4,5 +4,7 @@
   as natively: one with a `type` fired `load` twice (first for an empty
   document of its type), where Chrome fires it once, and an object's
   `contentDocument` and `contentWindow` were null until the document
-  came, where Chrome shows its initial about:blank (object-documents,
-  deferred-refusals).
+  came, where Chrome shows its initial about:blank. One Chrome shows as
+  an image (an image `type`, or none and an image's extension) has no
+  context while its image loads, as natively (object-documents,
+  deferred-refusals, csp-fetch).

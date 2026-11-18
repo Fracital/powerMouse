@@ -2262,10 +2262,42 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				attribute === 'data' ? revoked! : 'blob:null/failed',
 			);
 		};
+		// One Chrome shows as an image has no context while its image loads,
+		// and fails on about:blank# (Chrome 157: error, where natively it
+		// loads): a type of an image (an SVG is a document), or without a
+		// type a URL whose extension names one. It is held with no URL,
+		// which it loads nothing for, again when its type changes while the
+		// copy is on its way (a type set after the data)
+		const IMAGE_TYPE = /^image\/(?!svg\+xml\s*(;|$))/i;
+		const IMAGE_PATH =
+			/\.(png|jpe?g|jfif|pjp(eg)?|gif|webp|avif|apng|bmp|ico|cur)$/i;
 		const hold = (element: CustomElement, attribute: string) => {
-			element.setAttribute(attribute, HELD);
-			queueMicrotask(() => heldBlank(element));
+			const type = element.getAttribute('type')?.trim();
+			const held = (
+				type
+					? IMAGE_TYPE.test(type)
+					: IMAGE_PATH.test(new URL(loads.get(element)!.written).pathname)
+			)
+				? null
+				: HELD;
+			if (element.getAttribute(attribute) === held) return;
+			if (held === null) element.removeAttribute(attribute);
+			else {
+				element.setAttribute(attribute, held);
+				queueMicrotask(() => heldBlank(element));
+			}
 		};
+		domHooksModule.useAttributes(
+			(element) => {
+				const state = loads.get(element);
+				if (state && !state.url)
+					hold(element, element.localName === 'object' ? 'data' : 'src');
+			},
+			[
+				['OBJECT', 'type'],
+				['EMBED', 'type'],
+			],
+		);
 		const proxiedLoad = (attribute: string) => (element: CustomElement) => {
 			element.restoreAttributesOG(attribute);
 			if (
@@ -2339,8 +2371,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					});
 					moduleClient.getModule(MixedContentModule)!.report(mixed.notices);
 				}
-				// a load that fails as the blocked one does
+				// a load that fails as the blocked one does (no copy on its way)
 				fail(element, attribute);
+				loads.get(element)!.url = element.getAttribute(attribute)!;
 				return;
 			}
 			const current = loads.get(element);

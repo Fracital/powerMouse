@@ -165,6 +165,13 @@ ok(
 	),
 	JSON.stringify(eventsNative),
 );
+ok(
+	'natively, each object of an image fires load once, with no document shown',
+	['image', 'imageLate'].every((name) =>
+		/^load shown=null [^|]*$/.test(eventsNative?.[`${name}.events`] ?? ''),
+	),
+	JSON.stringify(eventsNative),
+);
 for (const [mode, base] of [
 	['same-origin', PROXY],
 	['isolated', HOST],
