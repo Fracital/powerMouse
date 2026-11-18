@@ -14,6 +14,11 @@
   or its observers' records. A `type` the page writes once the object is
   in the document with its URL changes nothing, as natively; one written
   before decides, as natively (object-documents).
+- An `<object>` of a `type` Chrome knows none of (whitespace alone or
+  around an image's, such as `" "` or `" image/png"`, or an unknown one
+  such as `application/x-foo`) fires error once and loads nothing, at a
+  document's 300x150 box, as natively, where it showed the image (a
+  `type` of whitespace) or fired error twice (object-documents).
 
 ### Known limitations
 

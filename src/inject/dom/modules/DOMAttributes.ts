@@ -404,7 +404,18 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				const target = Reflect.apply(targetOf, event, []) as Element | null;
 				let href: string | null;
 				try {
-					if (Reflect.apply(localNameOf, target, []) !== 'link') return;
+					const name = Reflect.apply(localNameOf, target, []);
+					// an object held on about:blank# (see HELD) of a type Chrome
+					// knows none of: its copy fires the error, as natively once
+					if (name === 'object') {
+						if (
+							loads.get(target!)?.url === undefined &&
+							Reflect.apply(read, target, ['data']) === HELD
+						)
+							Reflect.apply(stop, event, []);
+						return;
+					}
+					if (name !== 'link') return;
 					href = Reflect.apply(read, target, ['href']) as string | null;
 				} catch (error) {
 					// not an element
@@ -2273,7 +2284,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// One Chrome shows as an image has no context while its image loads,
 		// and fails on about:blank# (Chrome 157: error, where natively it
 		// loads): a type of an image (an SVG is a document), or without a
-		// type a URL whose extension names one. It is held with no URL,
+		// type a URL whose extension names one. Chrome reads the type as
+		// written: one with whitespace around it names none it knows. It is held with no URL,
 		// which it loads nothing for, again when its type changes while the
 		// copy is on its way (a type set after the data)
 		const IMAGE_TYPE = /^image\/(?!svg\+xml\s*(;|$))/i;
@@ -2290,7 +2302,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				? (Reflect.apply(nativeElement.getAttribute, element, ['type']) as
 						string | null)
 				: (element.getAttributeOG('type') ?? element.getAttribute('type'));
-			const type = !real && isHiddenValue(written) ? null : written?.trim();
+			const type = !real && isHiddenValue(written) ? null : written;
 			return type
 				? IMAGE_TYPE.test(type)
 				: IMAGE_PATH.test(new URL(loads.get(element)!.written).pathname) &&
