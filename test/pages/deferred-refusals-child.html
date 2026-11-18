@@ -448,6 +448,31 @@
 					outcome(() =>
 						document.createRange().createContextualFragment('<b>x</b>'),
 					),
+				// the sanitizing and parsing members on an element of a frame on
+				// its initial about:blank, which its creator's bundle hooks
+				// (src/inject/dom/markupSinks.ts): what each did, and whether
+				// anything was parsed into the element
+				blankSetHTML: () => {
+					const frame = document.createElement('iframe');
+					document.body.append(frame);
+					const element = frame.contentDocument.createElement('div');
+					frame.contentDocument.body.append(element);
+					const out = {};
+					for (const name of ['setHTML', 'setHTMLUnsafe'])
+						try {
+							element[name]('<b>x</b><img src="blank-sprite.svg">');
+							out[name] = { returned: true };
+						} catch (error) {
+							out[name] = { threw: String(error && error.message) };
+						}
+					try {
+						out.getHTML = { returned: typeof element.getHTML() };
+					} catch (error) {
+						out.getHTML = { threw: String(error && error.message) };
+					}
+					out.parsed = frame.contentDocument.querySelectorAll('b, img').length;
+					return out;
+				},
 				// window.open(), routed by a deferred part
 				// (src/inject/dom/windowOpen.ts)
 				open: () => outcome(() => window.open('', '_blank')),

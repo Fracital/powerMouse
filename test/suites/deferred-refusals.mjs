@@ -23,7 +23,9 @@
 // src/inject/dom/instructions.ts); a protocol handler's registration throws
 // (its checks are a part, src/inject/dom/protocolHandlers.ts); execCommand's
 // insertHTML and Range's createContextualFragment throw before the browser
-// parses the markup (src/inject/dom/markupSinks.ts); window.open() throws
+// parses the markup, and so do setHTML, setHTMLUnsafe and getHTML on an
+// element of a frame on its initial about:blank, which its creator's
+// bundle hooks (src/inject/dom/markupSinks.ts); window.open() throws
 // and opens nothing (src/inject/dom/windowOpen.ts); under a policy of the
 // page's own that allows them, an eval throws, and an inline script and an
 // inline style the page inserts run and apply nothing, and a frame it
@@ -291,6 +293,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			'fetchLater',
 			'execCommand',
 			'contextualFragment',
+			'blankSetHTML',
 			'open',
 			...POLICED,
 		],
@@ -397,6 +400,17 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			contextualFragment: answer.out?.contextualFragment,
 			reached: answer.reached,
 		}),
+	);
+	// (the default sanitizer leaves the <b>; setHTMLUnsafe the <b> and the
+	// <img>. The frame's initial about:blank gets no counting stand-ins: the
+	// parsed nodes are what reached the browser's parser)
+	ok(
+		'with the parts, setHTML, setHTMLUnsafe and getHTML on an element of a frame on its initial about:blank parse and serialize',
+		answer.out?.blankSetHTML?.setHTML?.returned === true &&
+			answer.out.blankSetHTML.setHTMLUnsafe?.returned === true &&
+			answer.out.blankSetHTML.getHTML?.returned === 'string' &&
+			answer.out.blankSetHTML.parsed === 2,
+		JSON.stringify(answer.out?.blankSetHTML),
 	);
 	ok(
 		'with the parts, window.open() reaches the browser',
@@ -524,6 +538,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		'notFunction',
 		'blankCopy',
 		'xmlLoad',
+		'blankSetHTML',
 		...POLICED,
 	]);
 	const documents = await without(DOCUMENTS);
@@ -595,6 +610,14 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		'without the parts, a data: frame is refused: it is not navigated',
 		out.dataFrame?.ran === false,
 		JSON.stringify(out.dataFrame),
+	);
+	ok(
+		'without the parts, setHTML, setHTMLUnsafe and getHTML on an element of a frame on its initial about:blank throw, and nothing is parsed',
+		out.blankSetHTML?.setHTML?.threw === 'no parts' &&
+			out.blankSetHTML.setHTMLUnsafe?.threw === 'no parts' &&
+			out.blankSetHTML.getHTML?.threw === 'no parts' &&
+			out.blankSetHTML.parsed === 0,
+		JSON.stringify(out.blankSetHTML),
 	);
 	ok(
 		'without the parts, a refresh meta is refused: its frame stays',
