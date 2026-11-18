@@ -6,6 +6,10 @@
 // recorder of the suite's own, on another origin than the fixture's,
 // keeps the field names as they arrived; compared with the page loaded
 // natively, in both modes, without Host and Connection (the transport's).
+// The fields a page sets itself sit in Blink's header map, in its hash order:
+// an Accept, an Accept-Language, a Cache-Control or a Pragma the page wrote
+// went where the browser's own defaults of those names go (walmart's and
+// bestbuy's graphql calls write all of them).
 import { createServer } from 'node:http';
 import {
 	done,
@@ -55,7 +59,18 @@ await new Promise((resolve) => recorder.listen(0, resolve));
 // localhost is another origin than the fixture's 127.0.0.1, and secure
 // (fetch metadata goes to it)
 const R = `http://localhost:${recorder.address().port}`;
-const KINDS = ['fetch', 'post', 'xhr', 'module', 'image'];
+const KINDS = [
+	'fetch',
+	'post',
+	'xhr',
+	'module',
+	'image',
+	'page-accept',
+	'page-language',
+	'page-cache',
+	'page-many',
+	'page-xhr',
+];
 const page = (run) => `${FIXTURE}pages/field-order.html?r=${R}&run=${run}`;
 
 async function wait(frames) {

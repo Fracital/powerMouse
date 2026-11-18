@@ -37,6 +37,11 @@ export interface RequestShape {
 	method: string;
 	/** the request's cache mode, which Chrome's network stack spells as fields */
 	cache?: RequestCache;
+	/**
+	 * the page set Accept-Language itself (the worker saw it), where the
+	 * network stack would otherwise add the user's
+	 */
+	pageLanguage?: boolean;
 }
 
 // fields that lead, before either group
@@ -135,6 +140,32 @@ export function chromeOrderedHeaders(
 ): RawHeaders {
 	const fields = new Map<string, string>();
 	for (const [name, value] of headers) fields.set(name, value);
+	// A subresource's fields that the page set itself sit in Blink's map
+	// with its other fields, where the defaults of the same names come later
+	// (measured, Chrome 152 to 157 over HTTP/2): its own Accept (any value,
+	// but a fetch's or an XHR's default is */*, which the worker cannot tell
+	// from one the page wrote), its Accept-Language, and its Cache-Control
+	// and Pragma unless the cache mode has the network stack write those
+	const own = new Set<string>();
+	if (!shape.navigation) {
+		const writesCacheControl =
+			shape.cache === 'no-cache' ||
+			shape.cache === 'reload' ||
+			shape.cache === 'no-store';
+		const writesPragma = shape.cache === 'reload' || shape.cache === 'no-store';
+		if (fields.has('cache-control') && !writesCacheControl)
+			own.add('cache-control');
+		if (fields.has('pragma') && !writesPragma) own.add('pragma');
+		if (shape.pageLanguage && fields.has('accept-language'))
+			own.add('accept-language');
+		const accept = fields.get('accept');
+		if (
+			accept !== undefined &&
+			accept !== '*/*' &&
+			(shape.destination === 'empty' || shape.destination === '')
+		)
+			own.add('accept');
+	}
 	fields.set('accept-encoding', CHROME_ACCEPT_ENCODING);
 	// a revalidating load (fetch's no-cache, a reload, a form's POST
 	// navigation) asks for max-age=0; one that bypasses the cache (a hard
@@ -161,7 +192,7 @@ export function chromeOrderedHeaders(
 		fields.delete(name);
 	};
 	const network = new Set(NETWORK);
-	LEAD.forEach(take);
+	for (const name of LEAD) if (!own.has(name)) take(name);
 	if (shape.navigation) {
 		NAVIGATION_FIRST.forEach(take);
 		// anything else, before the network stack's fields
@@ -180,11 +211,12 @@ export function chromeOrderedHeaders(
 		if (blinkOrigin && fields.has('origin')) mapped.push('origin');
 		for (const name of fields.keys())
 			if (
-				!network.has(name) &&
-				name !== 'origin' &&
-				name !== 'accept' &&
-				name !== 'user-agent' &&
-				!isHintName(name)
+				own.has(name) ||
+				(!network.has(name) &&
+					name !== 'origin' &&
+					name !== 'accept' &&
+					name !== 'user-agent' &&
+					!isHintName(name))
 			)
 				mapped.push(name);
 		for (const name of SUBRESOURCE_HINT_ORDER)

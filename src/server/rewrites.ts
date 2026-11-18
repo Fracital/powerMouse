@@ -1447,8 +1447,10 @@ function genericForward(
 
 		requestHeaders.set('user-agent', navigator.userAgent);
 		// the browser's network stack adds it after this worker, so no request
-		// here carries it: from the user's languages, as Chrome writes it
-		if (!requestHeaders.has('accept-language')) {
+		// here carries it: from the user's languages, as Chrome writes it. One
+		// the worker sees is the page's own (headerOrder.ts places it)
+		const pageLanguage = requestHeaders.has('accept-language');
+		if (!pageLanguage) {
 			const languages = acceptLanguage(navigator.languages);
 			if (languages) requestHeaders.set('accept-language', languages);
 		}
@@ -2657,6 +2659,7 @@ function genericForward(
 				(serverRequest.mode || (destination === 'empty' ? 'cors' : 'no-cors')),
 			method: serverRequest.method,
 			cache: serverRequest.cache,
+			pageLanguage,
 		};
 		const fetchUpstream = (headers: Headers) => {
 			const upstream = upload.then((body) =>

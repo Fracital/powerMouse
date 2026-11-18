@@ -224,8 +224,9 @@ async function h3Body(body: BodyInit | null): Promise<{
 }
 
 /**
- * The request header list stomp-h3 sends: the caller's, lowercased, with
- * User-Agent and (for a typed body) Content-Type added as epoxy adds them,
+ * The request header list stomp-h3 sends: the caller's, lowercased, without
+ * the base transport's Accept-Encoding (stomp-h3 adds the one it decodes),
+ * with User-Agent and (for a typed body) Content-Type added as epoxy adds them,
  * and Content-Length for a body whose length stomp-h3 has measured. Chrome
  * sends Content-Length over HTTP/3 for every body it has in hand; HTTP/1 and
  * HTTP/2 through hyper add it for a buffered body on their own, but stomp-h3
@@ -249,6 +250,9 @@ export function h3RequestHeaders(
 		// the worker's word for the partition (Http3Transport.request), never
 		// the server's
 		if (lower === NETWORK_PARTITION) continue;
+		// the base transport's, which stomp-h3 cannot decode all of: it names
+		// what it decodes itself
+		if (lower === 'accept-encoding') continue;
 		agent ||= lower === 'user-agent';
 		type ||= lower === 'content-type';
 		length ||= lower === 'content-length';
@@ -318,13 +322,17 @@ export default class Http3Transport implements ProxyTransport {
 	 * What the host may send (serveTransport's fitHeaders): Priority when the
 	 * base keeps it to HTTP/2, which stomp-h3 sends over HTTP/3 as Chrome
 	 * does (without this the field was dropped from every request of a host
-	 * that turned HTTP/3 on); no Accept-Encoding, since stomp-h3 decodes gzip
-	 * and br only and names them itself
+	 * that turned HTTP/3 on), and the base's Accept-Encoding, in the host's
+	 * place among the fields: the base put its own before Accept-Language,
+	 * which is not where Chrome sends it when the page set that field.
+	 * stomp-h3 decodes gzip and br only and names them itself, so a request
+	 * that goes over HTTP/3 leaves the host's out (h3RequestHeaders)
 	 */
 	get fieldSupport(): {
 		priority?: boolean;
 		partition?: string;
 		httpVersion?: boolean;
+		acceptEncoding?: string;
 	} {
 		const base = (
 			this.base as {
@@ -332,6 +340,7 @@ export default class Http3Transport implements ProxyTransport {
 					priority?: boolean;
 					partition?: string;
 					httpVersion?: boolean;
+					acceptEncoding?: string;
 				};
 			}
 		).fieldSupport;
@@ -340,6 +349,7 @@ export default class Http3Transport implements ProxyTransport {
 			...(base?.partition && { partition: base.partition }),
 			// an HTTP/3 response says so itself (#viaH3)
 			...(base?.httpVersion && { httpVersion: true }),
+			...(base?.acceptEncoding && { acceptEncoding: base.acceptEncoding }),
 		};
 	}
 

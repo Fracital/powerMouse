@@ -31,6 +31,39 @@
 					xhr.onloadend = resolve;
 					xhr.send();
 				});
+				// fields the page sets itself: Blink keeps them in its header map
+				// with the page's others, where the defaults come later (Accept
+				// after the map, Accept-Language from the network stack,
+				// Cache-Control and Pragma first for a cache mode)
+				await fetch(at('page-accept'), {
+					headers: { accept: 'application/json' },
+				}).catch(() => {});
+				await fetch(at('page-language'), {
+					headers: { 'accept-language': 'de' },
+				}).catch(() => {});
+				await fetch(at('page-cache'), {
+					headers: { 'cache-control': 'no-cache', pragma: 'no-cache' },
+				}).catch(() => {});
+				await fetch(at('page-many'), {
+					headers: {
+						'x-o-mart': 'B2C',
+						'x-o-segment': 'oaoh',
+						traceparent: '00-18e8f5f8-00',
+						'content-type': 'application/json',
+						'tenant-id': 'elh9ie',
+						'x-o-platform': 'rweb',
+						accept: 'application/json',
+						'x-request-id': 'r-1',
+					},
+				}).catch(() => {});
+				await new Promise((resolve) => {
+					const xhr = new XMLHttpRequest();
+					xhr.open('GET', at('page-xhr'));
+					xhr.setRequestHeader('Accept', 'application/json');
+					xhr.setRequestHeader('Accept-Language', 'de');
+					xhr.onloadend = resolve;
+					xhr.send();
+				});
 				await load('script', { type: 'module', src: at('module') });
 				await load('img', { crossorigin: 'anonymous', src: at('image') });
 				window.__fieldOrder = true;
