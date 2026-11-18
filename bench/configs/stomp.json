@@ -26,7 +26,15 @@
 	},
 	"cacheControl": {
 		"default": "no-cache",
-		"rewriterLibByHash": "public, max-age=31536000, immutable",
+		"keptByHash": {
+			"files": [
+				"rewriterLib.js",
+				"core.wasm",
+				"injectDocument.js",
+				"injectDocumentFull.js"
+			],
+			"value": "public, max-age=31536000, immutable"
+		},
 		"/bench-config.js": "no-store"
 	},
 	"serviceWorker": {
@@ -141,7 +149,7 @@
 		"HTTP/3 on for origins that offer it (demo default; QUIC over wisp UDP)",
 		"ECH: epoxy asks Cloudflare DoH for HTTPS records (demo default)",
 		"cross-origin isolation headers on the host (COOP same-origin, COEP credentialless), as the demo server sends by default",
-		"rewriterLib.js is served immutable (max-age one year) when asked for by its content hash, as the demo server does; every other host file is no-cache",
+		"rewriterLib.js, core.wasm and the document bundles are served immutable (max-age one year) when asked for by their content hash, as the demo server does; every other host file is no-cache",
 		"content blocker on by default (rows stomp-js, stomp-wasm); stomp-noadblock turns it off"
 	]
 }

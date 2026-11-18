@@ -129,27 +129,33 @@ export async function start(ctx, options = {}) {
 	const fresh = {
 		setHeaders: (res) => res.set('Cache-Control', cacheControl.default),
 	};
-	// the demo serves the rewriter library immutable when asked for by hash
-	let libraryHash = '';
-	try {
-		libraryHash = createHash('sha256')
-			.update(readFileSync(join(dist, 'rewriterLib.js')))
-			.digest('hex')
-			.slice(0, 16);
-	} catch {
-		// no library in this build
-	}
+	// the demo serves the files STomp asks for by the hash of their bytes
+	// immutable when asked for by that hash (demo/server.js keptFiles)
+	const hashes = new Map();
+	for (const name of cacheControl.keptByHash.files)
+		try {
+			hashes.set(
+				name,
+				createHash('sha256')
+					.update(readFileSync(join(dist, name)))
+					.digest('hex')
+					.slice(0, 16),
+			);
+		} catch {
+			// not in this build
+		}
 	app.use(
 		CONFIG.controller.directory,
 		express.static(dist, {
-			setHeaders: (res, path) =>
+			setHeaders: (res, path) => {
+				const hash = hashes.get(basename(path));
 				res.set(
 					'Cache-Control',
-					basename(path) === 'rewriterLib.js' &&
-						res.req.originalUrl.endsWith(`?${libraryHash}`)
-						? cacheControl.rewriterLibByHash
+					hash && res.req.originalUrl.endsWith(`?${hash}`)
+						? cacheControl.keptByHash.value
 						: cacheControl.default,
-				),
+				);
+			},
 		}),
 	);
 	app.use(TRANSPORT_PATH, express.static(transportDir(ctx.repoRoot), fresh));
