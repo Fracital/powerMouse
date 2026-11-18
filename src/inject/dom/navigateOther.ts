@@ -2,10 +2,12 @@
 // = url`, a restricted stand-in's location, Sandbox's gated Location):
 // refused as Chrome refuses it, with its console message and SecurityError,
 // else made from that window's own realm once the service worker heard of
-// its initiator. A deferred part of the document bundle (./deferredParts.ts),
-// made by the Context module's hook before it calls anything of the
-// browser's: without it the navigation throws and nothing navigates. Its top
-// level reads no global (constants and functions only).
+// its initiator (at once for a window on its initial about:blank whose
+// client is of this document's realm). A deferred part of the document
+// bundle (./deferredParts.ts), made by the Context module's hook before it
+// calls anything of the browser's: without it the navigation throws and
+// nothing navigates. Its top level reads no global (constants and functions
+// only).
 import { siteOf } from '../../partition';
 import { routeHTML } from '../../rewriteHTML';
 import StompURL, { type urlLike } from '../../StompURL';
@@ -14,7 +16,11 @@ import { getPublicSuffix } from '../rewriter';
 import { activationState } from './activation';
 import type DocumentClient from './Client';
 import { deferred } from './deferred';
-import { nativeConsoleError, nativeOpener } from './modules/Context';
+import {
+	initialBlank,
+	nativeConsoleError,
+	nativeOpener,
+} from './modules/Context';
 import { foreignWindow, siteWindows } from './siteWindows';
 
 type Context = typeof globalThis;
@@ -201,9 +207,11 @@ function refuse(
  * the service worker it started it (INITIATOR_ROUTE): its Referer by its
  * referrer policy, Sec-Fetch-Site from its origin, and Sec-Fetch-User
  * only when it had activation and is of the target document's site
- * (measured: a click in a frame of another site sends none). The
- * navigation starts a moment later, as natively (a navigation is never
- * synchronous).
+ * (measured: a click in a frame of another site sends none). It starts
+ * a moment later (natively it starts in the call, cancelling one under
+ * way, and commits later), but for a window on its initial about:blank
+ * whose client is of this document's realm, which starts in the call and
+ * needs no announcement.
  */
 export function navigateOther(
 	nav: OtherNavigation,
@@ -289,6 +297,27 @@ export function navigateOther(
 			// no URL to compare: navigated as any other
 		}
 	}
+	// a window still on its initial about:blank (a frame whose src is on
+	// its way, a popup opened with no URL): natively the navigation starts
+	// in the call and cancels the one under way, whose request is aborted
+	// and whose document never commits (wpt-location's nested-iframe
+	// pages). Announced first, it started after the frame's src had
+	// committed, and when it started before that document's markup was
+	// written in, loadHTML's document.open() aborted it. Such a window's
+	// client is its creator's, code of the creator's realm, which the
+	// browser takes for the initiator of what it navigates (the Referer,
+	// under that document's policy): when that is this document's realm,
+	// the navigation is made now and the worker needs no announcement. An
+	// opaque document's navigation (no Referer, Origin null) is the
+	// worker's to know only from one.
+	if (
+		initialBlank(target) &&
+		!client.sandboxedOpaque &&
+		!targetClient.sandboxedOpaque &&
+		Reflect.getPrototypeOf(targetClient.callIn) ===
+			Reflect.getPrototypeOf(client.ownCallback(() => {}))
+	)
+		return go();
 	let active = false;
 	try {
 		active = (activationState(client) & 1) !== 0;

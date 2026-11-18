@@ -511,21 +511,6 @@ its changes made it pass was not narrowed.
   after the write (`getElementById('testFrame')` is null), so the write
   stream does not parse it synchronously. Not reproduced further.
 
-The suite skips `assign-with-nested-iframe.html` and
-`replace-with-nested-iframe.html`, whose proxied verdict flips (one or the
-other timed out in 4 of 8 runs, at a020670b and at 5616d7cd
-alike; natively both pass every time). The page's frame calls
-`location.assign()` (`replace()`) on its own child while that child is on
-its initial about:blank and its `src` (`/resources/blank.html`) is about to
-commit. Natively the call starts at once and cancels the src navigation.
-Proxied, `navigateOther` (src/inject/dom/navigateOther.ts) first posts the
-initiator to the service worker (INITIATOR_ROUTE) and navigates on a timer
-of the target's realm after it: by then the child is on blank.html, and the
-late navigation lands in most runs but in some is lost (the stand-in's
-setter was called, traced with a probe, and no navigation followed). Making
-a navigation of a frame on its initial about:blank start at once, with the
-initiator known by the time the request arrives, would close it.
-
 Cleared on the combined tree: `location-getters-about-blank.html`,
 `location-hash-about-blank.html` and `location-ancestor-origins-new-object.html`
 (an about:blank child's location read as cross-origin; the lead's
