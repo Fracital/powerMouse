@@ -1,0 +1,101 @@
+<!doctype html>
+<title>POOL REFUSALS</title>
+<body>
+	<a id="aimed" href="about:blank" target="_top">aimed</a>
+	<form id="form" method="get" action="about:blank" target="_top">
+		<input name="field" value="value" />
+		<button id="send">send</button>
+	</form>
+	<iframe id="child" src="about:blank"></iframe>
+	<script>
+		// The site-pool-refusals suite drives it: the page is of one site,
+		// `?role=child` of the other, in its #child; `?to=<url>` is where the
+		// link and the form aimed at the top go. `__spr` holds what each
+		// document saw (the messages that reached it, by key and origin) and
+		// the calls the suite makes, each answering what it did or what it
+		// threw.
+		const params = new URLSearchParams(location.search);
+		const role = params.get('role') || 'top';
+		const report = { role, search: location.search, messages: [] };
+		window.__spr = report;
+		const to = params.get('to');
+		if (to) {
+			document.getElementById('aimed').href = to;
+			const form = document.getElementById('form');
+			form.action = to;
+			// (a GET's entry list is the URL's query: the destination's own
+			// parameters go with it)
+			for (const [name, value] of new URL(to).searchParams) {
+				const input = document.createElement('input');
+				input.type = 'hidden';
+				input.name = name;
+				input.value = value;
+				form.append(input);
+			}
+		}
+		addEventListener('message', (event) => {
+			const data = event.data;
+			if (typeof data === 'object' && data !== null && 'spr' in data)
+				report.messages.push({ key: data.spr, origin: event.origin });
+		});
+		const attempt = (call) => {
+			try {
+				return call();
+			} catch (error) {
+				return `threw ${error.name}: ${error.message}`;
+			}
+		};
+		// the top's side: the frame's window, held while it is on its
+		// initial about:blank (of this page's origin), then posted to and
+		// navigated once it shows the other site
+		report.hold = () =>
+			attempt(() => {
+				report.held = frames[0];
+				return typeof report.held;
+			});
+		report.show = (url) => {
+			document.getElementById('child').src = url;
+		};
+		// a frame of this page's site sandboxed with its scripts and its
+		// origin (`?role=sandboxed`), which holds and navigates its own
+		// frame as the top does
+		report.sandbox = (url) => {
+			const frame = document.createElement('iframe');
+			frame.id = 'sandboxed';
+			frame.sandbox = 'allow-scripts allow-same-origin';
+			frame.src = url;
+			document.body.append(frame);
+		};
+		report.postHeld = (key) =>
+			attempt(() => {
+				report.held.postMessage({ spr: key }, '*');
+				return 'posted';
+			});
+		report.navigateHeld = (url) =>
+			attempt(() => {
+				report.held.location = url;
+				return 'navigated';
+			});
+		report.readFrame = () =>
+			attempt(() => {
+				const frame = frames[0];
+				return `${typeof frame} ${frame.length} ${frame === frame.window}`;
+			});
+		// the frame's side: its parent, of the other site
+		report.readParent = () =>
+			attempt(() => {
+				const above = parent;
+				return `${typeof above} ${above === top} ${above.length}`;
+			});
+		report.postParent = (key) =>
+			attempt(() => {
+				parent.postMessage({ spr: key }, '*');
+				return 'posted';
+			});
+		report.submit = () =>
+			attempt(() => {
+				document.getElementById('form').submit();
+				return 'submitted';
+			});
+	</script>
+</body>
