@@ -130,10 +130,11 @@ pub struct Walker<'a, 'c, 'h> {
 	bad_pattern: bool,
 	/// the tree walked, for the question src/args.rs answers
 	program: &'c Program<'a>,
-	/// the functions whose `arguments` something may rebind (src/args.rs),
-	/// asked of the whole tree the first time a read of `arguments` by a
-	/// computed key needs it (most scripts have none)
-	rebound: Option<std::collections::HashSet<u32>>,
+	/// whether something may rebind a function's `arguments` (src/args.rs),
+	/// by the function's start: asked of the function's part of the tree the
+	/// first time a read of `arguments` by a computed key in it needs it
+	/// (most scripts have none, and most functions)
+	rebound: std::collections::HashMap<u32, bool>,
 	/// for each function, field initializer and static block around (not
 	/// arrows), innermost last: the function's start, None where
 	/// `arguments` is no arguments object of its own
@@ -200,7 +201,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			allocator,
 			bad_pattern: false,
 			program,
-			rebound: None,
+			rebound: std::collections::HashMap::new(),
 			own_arguments: Vec::new(),
 		}
 	}
@@ -520,8 +521,7 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 		let Some(&Some(start)) = self.own_arguments.last() else {
 			return false;
 		};
-		let program = self.program;
-		!self.rebound.get_or_insert_with(|| crate::args::rebound(program)).contains(&start)
+		!crate::args::rebound_at(self.program, start, &mut self.rebound)
 	}
 
 	// ---- marks ----
