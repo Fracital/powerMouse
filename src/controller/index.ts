@@ -44,7 +44,7 @@ import type {
 	PasskeysConfig,
 	PasskeysInit as PasskeysInitOf,
 } from '../passkeys/types';
-import { injectDocumentFile, libraryFile } from '../routeURL';
+import { coreFile, injectDocumentFile, libraryFile } from '../routeURL';
 import { isUrlLike, urlLike } from '../StompURL';
 import { constructTransport, resolveHttp3 } from '../transport/construct';
 import { jarChanged, serveJar } from '../transport/jarServer';
@@ -1856,8 +1856,15 @@ export class StompController extends EventTarget {
 		await Promise.all(
 			names.map(async (name) => {
 				try {
+					// the core module by the URL a page's synchronous fetch of it
+					// asks (routeURL.ts coreWasm), which the HTTP cache answers
 					const response = await fetch(
-						new URL(assetName(this.config.assets, name), this.directory),
+						new URL(
+							name === 'core'
+								? coreFile(this.config.assets)
+								: assetName(this.config.assets, name),
+							this.directory,
+						),
 					);
 					if (!response.ok) throw new Error(`HTTP ${response.status}`);
 					const bytes = await response.arrayBuffer();

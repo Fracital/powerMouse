@@ -573,29 +573,37 @@ const cached = { maxAge: '1d', immutable: false };
 app.use(
 	express.static(fileURLToPath(new URL('./public/', import.meta.url)), fresh),
 );
-// One STomp file is not revalidated: the rewriter library, which no inject
-// bundle carries. A proxied page whose rewrite needs it and has no copy (a
-// worker, a sandboxed frame, any page of `rewriter: 'wasm'` whose module
-// declined a script) loads it with a synchronous request, and a
+// Two STomp files are not revalidated. One is the rewriter library, which
+// no inject bundle carries. A proxied page whose rewrite needs it and has no
+// copy (a worker, a sandboxed frame, any page of `rewriter: 'wasm'` whose
+// module declined a script) loads it with a synchronous request, and a
 // revalidation there is a round trip the page's script waits for. STomp
 // asks for the file as `rewriterLib.js?<hash of its bytes>`, so one URL is
-// one file and browsers and CDNs may keep it for good. Only when the hash
-// is this file's: a page of the build before a deploy asks by the old
-// hash and must not be told to keep the new file under it. The watch build
-// has no hash (its files change under one name): nothing is kept.
-let libraryHash = { mtimeMs: -1, hash: '' };
-function libraryHashOf(path) {
+// one file and browsers and CDNs may keep it for good. The other is the
+// rewriter's wasm core module, asked for the same way
+// (`core.wasm?<hash of its bytes>`): a proxied top whose first task
+// rewrites before the controller's compiled module reaches it fetches the
+// module with a synchronous request too. Only when the hash is the file's:
+// a page of the build before a deploy asks by the old hash and must not be
+// told to keep the new file under it. The watch build has no hash (its
+// files change under one name): nothing is kept.
+const keptFiles = ['rewriterLib.js', 'core.wasm'];
+const fileHashes = new Map();
+function hashOf(path) {
 	try {
 		const { mtimeMs } = statSync(path);
-		if (mtimeMs !== libraryHash.mtimeMs)
-			libraryHash = {
+		let known = fileHashes.get(path);
+		if (known?.mtimeMs !== mtimeMs) {
+			known = {
 				mtimeMs,
 				hash: createHash('sha256')
 					.update(readFileSync(path))
 					.digest('hex')
 					.slice(0, 16),
 			};
-		return libraryHash.hash;
+			fileHashes.set(path, known);
+		}
+		return known.hash;
 	} catch (error) {
 		return '';
 	}
@@ -605,8 +613,8 @@ const stompFiles = {
 		res.set(
 			'Cache-Control',
 			!dev &&
-				basename(path) === 'rewriterLib.js' &&
-				res.req.originalUrl.endsWith(`?${libraryHashOf(path)}`)
+				keptFiles.includes(basename(path)) &&
+				res.req.originalUrl.endsWith(`?${hashOf(path)}`)
 				? 'public, max-age=31536000, immutable'
 				: 'no-cache',
 		),

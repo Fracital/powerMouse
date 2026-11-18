@@ -83,6 +83,7 @@ export { printInWasm } from ${JSON.stringify(`${root}src/wasm/rewriter.ts`)};
 			'process.env.STOMP_BUILD': '"differential"',
 			'process.env.NODE_ENV': '"production"',
 			'process.env.STOMP_LIBRARY': '""',
+			'process.env.STOMP_CORE': '""',
 			'process.env.STOMP_REWRITE_GENERATION': '""',
 			'process.env.STOMP_CODEC_WASM': 'undefined',
 		},

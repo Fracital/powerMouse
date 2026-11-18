@@ -39,6 +39,16 @@ export const LIBRARY: string =
 	(process.env.STOMP_LIBRARY as string | undefined) || BUILD;
 
 /**
+ * What the rewriter's wasm core module is asked for by, after a `?`: the
+ * hash of the module this build ships (build.js), as the library is (LIBRARY).
+ * A top whose first task rewrites before the controller's compiled module
+ * arrives fetches it with a synchronous request (src/inject/rewriter.ts
+ * provideModule), which must not wait for a revalidation either.
+ */
+export const CORE: string =
+	(process.env.STOMP_CORE as string | undefined) || BUILD;
+
+/**
  * The name the light rewriter library asset assigns its factory to (build.js
  * writes the file as
  * `__stompRewriterLight=function(__stompRealm,__stompLibApi){...};`).

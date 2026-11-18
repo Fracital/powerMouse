@@ -184,6 +184,9 @@ const common = {
 		// what the rewriter library asset is asked for by: known once that
 		// file is built (see `bundles` below)
 		'process.env.STOMP_LIBRARY': '""',
+		// what the rewriter's wasm core module is asked for by: the hash of
+		// assets/core.wasm (see `bundles` below)
+		'process.env.STOMP_CORE': '""',
 		// the rewriter's generation (src/version.ts REWRITE_GENERATION): a
 		// digest of the bytes a rewrite's output depends on, known once the
 		// wasm artifacts are copied and the library is built (see `bundles`
@@ -1143,13 +1146,14 @@ const builds = [
  * good. The watch build has no bytes to hash before it starts: its files
  * are asked for by the time it started, and the dev server caches nothing.
  */
-const bundles = (library, generation = '') =>
+const bundles = (library, generation = '', core = library) =>
 	builds.map((options) => ({
 		...common,
 		...options,
 		define: {
 			...common.define,
 			'process.env.STOMP_LIBRARY': JSON.stringify(library),
+			'process.env.STOMP_CORE': JSON.stringify(core),
 			'process.env.STOMP_REWRITE_GENERATION': JSON.stringify(generation),
 			...(options.inject?.includes(snapshot) ? reflectDefines : {}),
 		},
@@ -1320,8 +1324,14 @@ if (dev) {
 		.update(light.raw)
 		.digest('hex')
 		.slice(0, 16);
+	// what the wasm core module is asked for by (src/version.ts CORE), as the
+	// library is by its bytes' hash
+	const core = createHash('sha256')
+		.update(await readFile('assets/core.wasm'))
+		.digest('hex')
+		.slice(0, 16);
 	await Promise.all(
-		bundles(library, generation).map(async (options) => {
+		bundles(library, generation, core).map(async (options) => {
 			const result = await build({
 				...options,
 				metafile: options.plugins.includes(deferredTable) || options.metafile,

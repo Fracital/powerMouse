@@ -9,7 +9,7 @@ import {
 import { splitIntegrityMark } from './sri';
 import StompURL, { openFragment, sealedFragmentText } from './StompURL';
 import { withQuery } from './urlShape';
-import { BUILD, LIBRARY } from './version';
+import { BUILD, CORE, LIBRARY } from './version';
 import { decodeLinkRoute, LINK_SEGMENT } from './visited';
 
 export { openFragment, sealedFragmentText };
@@ -344,7 +344,17 @@ export function rewriterLibJS(url: StompURL, config?: Config) {
  * rewrite (src/inject/rewriter.ts) is answered from the HTTP cache
  */
 export function coreWasm(url: StompURL, config?: Config) {
-	return `${assetBase(url, config)}${assetName(config?.assets, 'core')}`;
+	return `${assetBase(url, config)}${coreFile(config?.assets)}`;
+}
+
+/**
+ * The core module's file as it is asked for: its name and its hash
+ * (version.ts CORE), so that a host may let browsers keep it for good and
+ * a top's synchronous fetch of it is answered by the HTTP cache without a
+ * revalidation round trip to the host
+ */
+export function coreFile(assets?: Assets) {
+	return `${assetName(assets, 'core')}?${encodeURIComponent(CORE)}`;
 }
 
 /** the rewriter library's file as it is asked for: its name and its build's hash */
