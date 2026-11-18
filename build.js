@@ -842,10 +842,12 @@ async function partGroups() {
  * The deferred parts' statement, `__stompDeferred=function(__stompShared,
  * __stompPart){...};` (src/version.ts DEFERRED_FACTORY): a switch on the
  * part's name whose case is the group that has it, run the first time a
- * document needs one of its parts, which returns the group's parts. A
- * document compiles the statement (one compilation its realms share), but
- * makes only the groups it runs: their functions, classes and tables.
- * Every group's map, by the line it starts at.
+ * document needs one of its parts, which returns the group's parts. A top
+ * has the statement from its shell's script (one compilation every top
+ * shares); a frame evaluates the group it needs alone, cut out of the text
+ * (src/inject/rewriter.ts partGroup) at its case line and the `}break;`
+ * that ends it, so neither may be anywhere else. Every group's map, by the
+ * line it starts at.
  */
 function partsStatement(groups, outputs = groups.map((group) => group.output)) {
 	let text = `${DEFERRED_FACTORY}=function(__stompShared,__stompPart){"use strict";var __stompParts={};switch(__stompPart){\n`;
@@ -858,6 +860,11 @@ function partsStatement(groups, outputs = groups.map((group) => group.output)) {
 		text += `${output.text.endsWith('\n') ? output.text : `${output.text}\n`}}break;\n`;
 	});
 	text += '}return __stompParts.made;};';
+	for (const name of groups.flatMap((group) => group.names))
+		if (text.split(`case ${JSON.stringify(name)}:`).length !== 2)
+			throw new Error(`build: the parts' statement has case "${name}" twice`);
+	if (text.split('\n}break;').length !== groups.length + 1)
+		throw new Error("build: a deferred part's code has a line `}break;`");
 	return { raw: text, text, map: null, sections };
 }
 

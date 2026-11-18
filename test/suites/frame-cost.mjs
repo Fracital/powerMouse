@@ -99,9 +99,14 @@
 //   group it needs: 1,132.2 to 1,133.7 KB with 20 frames on Chrome 157 at
 //   aa07538e with the split, 1,167.5 to 1,169.0 KB before it, when a frame
 //   evaluated every part at its first need of one (1,119.5 to 1,121.5 KB
-//   for the plain frames, the same with and without). The ceiling, 1,144
-//   KB, is about 10 KB over that: every part evaluated in such a frame
-//   again (+35 KB) goes past it.
+//   for the plain frames, the same with and without). Making the whole
+//   statement's function was still some 11 KB of the frame (about 8 to
+//   make it, 3 to call it), though it ran one group: a frame evaluates the
+//   group it needs alone (src/inject/rewriter.ts partGroup), 1,121.0 to 1,121.5 KB
+//   at 7dd1b6d7 with it, 1,131.3 to 1,133.4 KB without (1,118.3 to
+//   1,120.2 KB for the plain frames). The ceiling, 1,130 KB, is about 9 KB
+//   over that: the whole statement made in such a frame again (+11 KB)
+//   goes past it.
 //
 // None of these evaluates with a user gesture or with Playwright in the
 // frames (test/frame-memory.mjs says why). Until 2026-11-17 the fixture
@@ -121,7 +126,7 @@ const FRAMES = Number(process.env.FRAMES) || 20;
 const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1134;
 const OTHER_LIMIT_KB = Number(process.env.FRAME_HEAP_OTHER_LIMIT_KB) || 1136;
 const CLICK_LIMIT_KB = Number(process.env.FRAME_HEAP_CLICK_LIMIT_KB) || 1149;
-const PART_LIMIT_KB = Number(process.env.FRAME_HEAP_PART_LIMIT_KB) || 1144;
+const PART_LIMIT_KB = Number(process.env.FRAME_HEAP_PART_LIMIT_KB) || 1130;
 // With the site pool on (STOMP_SITE_POOL) a frame of another site is a
 // slot's: its first one takes the pool's spare and the hub starts the next,
 // about 3.4 MB once, which 20 frames would read as 170 KB each, so the

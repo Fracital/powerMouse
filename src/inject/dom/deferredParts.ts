@@ -5,8 +5,9 @@
 // DEFERRED_FACTORY), which a proxied top's shell loads already: a switch with
 // a case for each group of parts, a group being the parts this file imports
 // from one file (and from every other file that reaches one module with it,
-// so a module is evaluated once in a realm). A frame compiles the statement
-// the first time it needs a part and runs only that part's group. Every
+// so a module is evaluated once in a realm). A frame evaluates the case of
+// a part's group alone, cut out of the statement's text, the first time it
+// needs one of its parts (../rewriter.ts partGroup). Every
 // module these import that a document bundle has too is the bundle's own,
 // handed over by `__stompShared` (the snapshots, the client, the Proxy
 // module): only the files build.js lists in DEFERRED_FILES are the parts'
@@ -58,8 +59,8 @@
 // document's prolog, ./instructions.ts, at the first one a document meets)
 //
 // (STomp's passkey provider's WebAuthn client is a deferred statement of
-// its own, ./passkeysPart.ts: few documents call WebAuthn, and every frame
-// that needs a part here compiles the statement of all of them; and so are
+// its own, ./passkeysPart.ts: few documents call WebAuthn, and a top that
+// needs a part here has the statement of all of them; and so are
 // the gates of the
 // gesture-gated calls, ./activationPart.ts, which every frame a click
 // elsewhere reaches through the proxy needs and little else)

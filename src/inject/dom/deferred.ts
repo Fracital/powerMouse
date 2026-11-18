@@ -37,7 +37,7 @@ export function deferred<Name extends keyof DeferredParts>(
 ): DeferredParts[Name] {
 	const part = parts[name];
 	if (part !== undefined) return part as DeferredParts[Name];
-	const group = deferredFactory()(shared, name) as
+	const group = deferredFactory(undefined, name)(shared, name) as
 		Partial<DeferredParts> | undefined;
 	if (!group) throw new Error(`Stomp: the deferred parts have no ${name}`);
 	for (const key of Reflect.ownKeys(group) as (keyof DeferredParts)[])

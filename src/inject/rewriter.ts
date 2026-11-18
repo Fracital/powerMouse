@@ -168,15 +168,7 @@ function fileStatements(): (string | null)[] {
  */
 export function lightFactory(): Factory {
 	if (light) return light;
-	let text: string | null = null;
-	try {
-		const held: unknown = sharing.lightText?.();
-		if (typeof held === 'string') text = held;
-	} catch (error) {
-		// the realm above is gone or of another kind: this one asks
-	}
-	if (text === null) text = fileStatements()[0]!;
-	const made = evaluated(text, LIGHT_FACTORY);
+	const made = evaluated(statementText(LIGHT_FACTORY)!, LIGHT_FACTORY);
 	if (typeof made !== 'function')
 		throw new Error('Stomp: the rewriterLib asset has no light library');
 	light = made as Factory;
@@ -206,6 +198,25 @@ function evaluated(statement: string, name: string, sourceURL = ''): unknown {
 	}
 }
 
+/**
+ * The parts' statement with the group (build.js partsStatement) that has
+ * `part` its only case, null where no group has it: the function of the
+ * whole statement, made from its text, was some 11 KB of each frame that
+ * needed one part, though it ran one group (a top's shell loaded the whole
+ * statement as a script)
+ */
+function partGroup(text: string, part: string): string | null {
+	const at = text.indexOf(`case "${part}":`);
+	return at === -1
+		? null
+		: text.slice(0, text.indexOf('\n')) +
+				text.slice(
+					text.lastIndexOf('\n', at),
+					text.indexOf('\n}break;', at) + 8,
+				) +
+				'}return __stompParts.made;};';
+}
+
 /** the deferred statements' functions, once this realm has them (deferredFactory), by name */
 const deferredMade = new Map<string, Function>();
 if (givenDeferred) deferredMade.set(DEFERRED_FACTORY, givenDeferred);
@@ -220,45 +231,58 @@ if (givenActivation) deferredMade.set(ACTIVATION_FACTORY, givenActivation);
  * each a statement of its own so a realm compiles only the one it needs: the
  * one a top's shell loaded, else made here from its text (the top's, or the
  * file's, asked for with the light library's one synchronous request) as
- * lightFactory makes that library. Throws when it cannot be had.
+ * lightFactory makes that library. Given a `part`, a realm without the
+ * parts' function makes that part's group alone (partGroup). Throws when it
+ * cannot be had.
  */
 export function deferredFactory(
 	name: string = DEFERRED_FACTORY,
+	part?: string,
 ): (shared: unknown, part?: string) => unknown {
 	let made = deferredMade.get(name);
 	if (!made) {
-		let text: string | null = null;
-		try {
-			const held: unknown = sharing.deferredText?.(name);
-			if (typeof held === 'string') text = held;
-		} catch (error) {
-			// the realm above is gone or of another kind: this one asks
-		}
-		const index = DEFERRED_STATEMENTS.indexOf(name);
-		if (index !== -1) text ??= fileStatements()[index + 1] ?? null;
-		if (text === null)
-			throw new Error(`Stomp: the rewriterLib asset has no ${name}`);
+		const text = statementText(name);
+		const group = text !== null && part ? partGroup(text, part) : null;
 		// named as the file the statement is in: the stack cleaner drops the
 		// frames of the inject's own files
 		const url = libraryURL?.();
-		const value = evaluated(text, name, url ? `\n//# sourceURL=${url}` : '');
+		const value =
+			text === null
+				? null
+				: evaluated(group ?? text, name, url ? `\n//# sourceURL=${url}` : '');
 		if (typeof value !== 'function')
 			throw new Error(`Stomp: the rewriterLib asset has no ${name}`);
+		if (group !== null) return value as (shared: unknown) => unknown;
 		made = value;
 		deferredMade.set(name, made);
 	}
 	return made as (shared: unknown, part?: string) => unknown;
 }
 
+/** one of the file's statements (fileStatements), by its name: the top's, or the file's */
+function statementText(name: string): string | null {
+	try {
+		const held: unknown =
+			name === LIGHT_FACTORY
+				? sharing.lightText?.()
+				: sharing.deferredText?.(name);
+		if (typeof held === 'string') return held;
+	} catch (error) {
+		// the realm above is gone or of another kind: this one asks
+	}
+	return fileStatements()[DEFERRED_STATEMENTS.indexOf(name) + 1] ?? null;
+}
+
 /**
  * A deferred statement (deferredFactory), for a document under this top
- * that evaluates it: null where this realm has not had it yet
+ * that evaluates it: null where this realm has not had it yet. A realm that
+ * made only groups of the parts' asks for it again where it had it (a copy
+ * of the top's text would be one of its own)
  */
 export function deferredText(name: string = DEFERRED_FACTORY): string | null {
 	const made = deferredMade.get(name);
-	return made
-		? `${name}=${Reflect.apply(toSource, made, []) as string};`
-		: null;
+	if (made) return `${name}=${Reflect.apply(toSource, made, []) as string};`;
+	return name === DEFERRED_FACTORY ? statementText(name) : null;
 }
 
 /**
