@@ -6,22 +6,28 @@
 // blankSubmission, for a frame still on its initial about:blank), a link, a
 // form or window.open() a frame aims at `_top` or `_parent` when that window
 // shows a document of another slot, and the copy of a form a frame submits
-// to its proxied parent or top (of its slot or another). A deferred part of
-// the document bundle (./deferredParts.ts): it runs only once a page aims a
-// navigation there, or once a frame under this window asks it to navigate,
-// never before the page's first script, so its top level reads no global.
-// Without it the link or the submit event navigates nothing (its default is
-// prevented) and submit() throws, never the browser's own navigation in its
-// place (for `_top` or `_parent` it lands in the frame: the hooks made its
-// target `_self` to the browser).
+// to its proxied parent or top (of its slot or another), and a post to a
+// window of another slot and the stand-in of one (siteWindows' postAcross
+// and restrictAcross, past their checks). A deferred part of the document
+// bundle (./deferredParts.ts): it runs only once a page aims a navigation
+// there, posts to or reaches a window of another slot, or once a frame
+// under this window asks it to navigate, never before the page's first
+// script, so its top level reads no global. Without it the link or the
+// submit event navigates nothing (its default is prevented), submit()
+// throws, never the browser's own navigation in its place (for `_top` or
+// `_parent` it lands in the frame: the hooks made its target `_self` to
+// the browser), and so do the post and the read of the other slot's window.
 import { routeHTML } from '../../rewriteHTML';
 import StompURL from '../../StompURL';
 import { INITIATOR_ROUTE } from '../../transport/messages';
+import { catchRequiredArguments } from '../modules/Proxy';
 import type DocumentClient from './Client';
 import type { AcrossInitiator, AcrossNavigation } from './Client';
 import { frameWindow } from './freshContext';
+import type ContextModule from './modules/Context';
 import type { OtherSubmission } from './navigateOther';
-import { siteWindows } from './siteWindows';
+import type { Pool } from './pool';
+import { NativeWeakRef, siteWindows } from './siteWindows';
 
 /** how long a navigation across slots waits for a worker to answer of its initiator, each way */
 const INITIATOR_WAIT_MS = 1000;
@@ -702,4 +708,127 @@ export function blankSubmission(
 	};
 	if (event) afterPage(client, event, go);
 	else go();
+}
+
+/**
+ * The site pool: post to `target`, a window of another site's origin
+ * (siteWindows' postAcross checked it), as `client`. The message goes to
+ * any origin, in an envelope that names this page's origin, the one it is
+ * for and the hub's token; the receiver's inject delivers it as from that
+ * origin when it is for its own, and drops it otherwise, as the browser
+ * does with the real origins
+ */
+export function postAcross(
+	client: DocumentClient,
+	target: object,
+	args: unknown[],
+	cloneCheck: (args: unknown[]) => void,
+): true {
+	catchRequiredArguments(args.length, 1, 'Window', 'postMessage');
+	cloneCheck(args);
+	const second = args[1];
+	const options =
+		typeof second === 'object' && second !== null
+			? (second as WindowPostMessageOptions)
+			: null;
+	const requested = options ? options.targetOrigin : second;
+	const transfer = options
+		? Array.isArray(options.transfer)
+			? options.transfer
+			: []
+		: Array.isArray(args[2])
+			? (args[2] as Transferable[])
+			: [];
+	let to = requested === undefined ? '/' : String(requested);
+	if (to === '/') to = client.origin;
+	else if (to !== '*')
+		try {
+			to = new URL(to).origin;
+		} catch (error) {
+			throw new client.global.DOMException(
+				"Failed to execute 'postMessage' on 'Window': Invalid target origin '" +
+					to +
+					"' in a call to 'postMessage'.",
+				'SyntaxError',
+			);
+		}
+	// the window's own (cross-origin) postMessage: this realm's would post
+	// to this window, whatever it is called on
+	Reflect.apply(
+		Reflect.get(target, 'postMessage') as Window['postMessage'],
+		target,
+		[
+			{
+				[client.names.globalName]: 'stompMessage',
+				data: args[0],
+				origin: client.origin,
+				to,
+				token: client.sites!.token,
+			},
+			{ targetOrigin: '*', transfer },
+		],
+	);
+	return true;
+}
+
+/**
+ * The site pool: ContextModule's stand-in for `context`, a window of
+ * another slot's origin, one for every document of the module's origin in
+ * its frame tree, as for a proxied window of another origin without a pool
+ * (`standIns`, kept by the window itself, which this origin cannot reach
+ * here): a frame hands its same-origin parent's windows to its own code as
+ * they are, so `parent.parent` and `top` must be one object. siteWindows'
+ * restrictAcross answers for a window the module holds a stand-in of.
+ */
+export function restrictAcross(
+	client: DocumentClient,
+	module: ContextModule,
+	context: typeof globalThis,
+): typeof globalThis {
+	const domain = client.documentDomain;
+	const key =
+		client.sandboxFlags === null
+			? domain !== null
+				? `${client.url.url.protocol}domain:${domain}`
+				: client.originKey
+			: null;
+	// the outermost document of this origin above this one
+	let keeper: DocumentClient = client;
+	for (let depth = 0; key !== null && depth < 64; depth++) {
+		try {
+			const parent = siteWindows().nativeParentOf(
+				keeper.global,
+			) as typeof globalThis;
+			if (parent === keeper.global) break;
+			const above = (parent as Record<string, any>)[client.names.client] as
+				DocumentClient | undefined;
+			if (
+				!above ||
+				!('pool' in above) ||
+				above.sandboxFlags !== null ||
+				above.originKey !== client.originKey ||
+				above.documentDomain !== domain
+			)
+				break;
+			keeper = above;
+		} catch (error) {
+			// a parent of another origin
+			break;
+		}
+	}
+	const pool = keeper.pool;
+	let kept =
+		key === null ? undefined : pool[8 satisfies Pool.AcrossStandIns]?.get(key);
+	if (key !== null && !kept) {
+		kept = new WeakMap();
+		(pool[8 satisfies Pool.AcrossStandIns] ??= new Map()).set(key, kept);
+	}
+	let restricted = kept?.get(context)?.deref();
+	if (!restricted) {
+		restricted = module.restrictContext(context);
+		kept?.set(context, new NativeWeakRef(restricted));
+	}
+	module.restricted.set(context, restricted);
+	module.restrictedContexts.set(restricted, context);
+	return restricted;
 }

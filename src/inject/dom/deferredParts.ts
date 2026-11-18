@@ -173,6 +173,8 @@ import {
 	linkAimed,
 	locationAcross,
 	navigateAcross,
+	postAcross,
+	restrictAcross,
 	submitAimed,
 	targetAcross,
 } from './siteAcross';
@@ -343,6 +345,10 @@ export const parts = {
 	submitAimed,
 	blankLink,
 	blankSubmission,
+	// the site pool: a post to a window of another slot, and the stand-in of
+	// one, at a document's first (./siteWindows.ts)
+	postAcross,
+	restrictAcross,
 	judgeAcross,
 	receiveAcross,
 	onOwnSlot,
