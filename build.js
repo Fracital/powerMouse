@@ -713,6 +713,17 @@ function valueExports(file) {
 }
 
 const SHARED = 'deferred-shared';
+/**
+ * The key a shared module's value has in the table (deferredTable) and in
+ * the parts' reads of it (deferredSharing): its place among the file's
+ * exports, which every build reads alike, so a frame's table names no
+ * export (2 KB of every document bundle was the names); the name itself
+ * for one the file re-exports whole
+ */
+function sharedKey(id, name) {
+	const at = [...valueExports(resolve(id)).exports.keys()].indexOf(name);
+	return at < 0 ? JSON.stringify(name) : String(at);
+}
 /** the parts' imports of the bundle's modules (see DEFERRED_FILES) */
 const deferredSharing = {
 	name: 'deferred-sharing',
@@ -764,7 +775,7 @@ const deferredSharing = {
 			// partGroups); esbuild makes each read a plain one again
 			const values = names.map(
 				(name, index) =>
-					`v${index} = /* @__PURE__ */ (() => m[${JSON.stringify(name)}])()`,
+					`v${index} = /* @__PURE__ */ (() => m[${sharedKey(id, name)}])()`,
 			);
 			// the module's number while building (SHARED_FIRST)
 			const number = SHARED_FIRST + [...deferredShared.keys()].indexOf(id);
@@ -1052,7 +1063,7 @@ const deferredTable = {
 				if (!list.length) return;
 				imports += `import { ${list.map((name, at) => `${name} as s${index}_${at}`).join(', ')} } from ${JSON.stringify(`./${id}`)};\n`;
 				entries.push(
-					`case ${index}: return { ${list.map((name, at) => `${JSON.stringify(name)}: s${index}_${at}`).join(', ')} };`,
+					`case ${index}: return { ${list.map((name, at) => `${sharedKey(id, name)}: s${index}_${at}`).join(', ')} };`,
 				);
 			});
 			// by the module's number (deferredSharing), made only for a
