@@ -1095,6 +1095,23 @@ for (const [mode, base, uv] of [
 			`${mode}: the host's prompt closes with the request it asked about`,
 			(await page.$('#passkeyPrompt')) === null,
 		);
+		// Chrome checks the focus for create() only: a get() while the focus
+		// is in the host's address bar waits as one from the frame does (it
+		// was refused at once, and so was one asked while the host's sheet of
+		// the request before still held the focus: getAbort above and the
+		// getRefused group's conditionalAllowAborted, now and then)
+		await page.focus('#omni input');
+		const unfocused = await run(top, 'login', { abortAfter: 400 });
+		same(
+			`${mode}: a get() while the focus is in the host's address bar waits for the user, as in Chrome`,
+			pick({ getAbort: nativeUnanswered.getAbort }),
+			pick({ getAbort: unfocused }),
+		);
+		ok(
+			`${mode}: it ends at the abort`,
+			Math.abs(unfocused.ms - 400) < 300,
+			show(unfocused.ms),
+		);
 		answers.mode = 'accept';
 	}
 

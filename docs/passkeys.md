@@ -45,8 +45,9 @@ every proxied site on a secure origin:
   `evalByCredential`), the `appid` extension's origin check;
 - timeouts and `AbortSignal`, one request at a time per document ("A request
   is already pending."), the user activation a frame of another origin needs
-  to create, the focus check (of the tab, as Chrome's: a frame asks while the
-  focus is anywhere in its top's page);
+  to create, the focus check of `create()` (of the tab, as Chrome's: a frame
+  asks while the focus is anywhere in its top's page; Chrome checks none for
+  `get()`, and neither does STomp);
 - `PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable`,
   `isConditionalMediationAvailable`, `getClientCapabilities` (answered for
   STomp's authenticator, in a later task as Chrome answers them),

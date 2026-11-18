@@ -584,7 +584,9 @@ export function runCeremony(
 		// a refusal a conditional request never hears: it waits for the user
 		const waits = (): Promise<PasskeyReply> =>
 			new Promise<PasskeyReply>(() => {});
-		if (!(await host.focused())) return refused();
+		// (no focus check: Chrome makes one for create() only, at its start
+		// and its end, and a get() of a page that is not in front waits for
+		// the user like any other)
 		if (
 			options.mediation === 'silent' ||
 			(options.userVerification === 'required' && host.config.uv !== true)
