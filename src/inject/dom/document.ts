@@ -1,4 +1,5 @@
 import type { FpSurface } from '../../blocker/types';
+import { setDocumentShells } from '../../rewriteHTML';
 import { accessFailureParts } from '../accessFailureParts';
 import { createClientFactory } from '../Client';
 import { idbSizeParts } from '../idbSizeParts';
@@ -92,6 +93,9 @@ workerStartParts.start = () => deferred('workerStart');
 // and what a WebSocket stand-in does, with the client a document opens
 // its first WebSocket with
 socketParts.standIns = () => deferred('socketStandIns');
+// and the shells of a data: document a route names (../../rewriteHTML.ts
+// routeHTML), with the first
+setDocumentShells((name) => deferred(name));
 
 class FingerprintStandIn extends Module<DocumentClient> {
 	apply() {

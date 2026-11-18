@@ -4,10 +4,10 @@ import {
 	routeCSS,
 } from '../../../cssURLs';
 import { handlerMark, keepSource, sourceKey } from '../../../functionSource';
+import type { modifyHTML } from '../../../htmlShell';
 import { JS_MIME_TYPES } from '../../../prewrite';
 import {
 	isXMLDocumentMime,
-	modifyHTML,
 	modifyRefresh,
 	routeHTML,
 } from '../../../rewriteHTML';
@@ -531,7 +531,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			if (inline) return inline;
 			const blob = new NativeBlob(
 				[
-					modifyHTML(
+					deferred('modifyHTML')(
 						data,
 						resource,
 						moduleClient.config,
@@ -864,10 +864,19 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				element.restoreAttributesOG('srcdoc');
 				if (element.hasAttribute('srcdoc')) {
 					const source = element.getAttribute('srcdoc')!;
+					// the shell is a deferred part: without it the frame gets no
+					// srcdoc at all, never the page's markup unrewritten
+					let shell: typeof modifyHTML;
+					try {
+						shell = deferred('modifyHTML');
+					} catch (error) {
+						element.removeAttribute('srcdoc');
+						return;
+					}
 					element.setAttributeOG('srcdoc', source);
 					element.setAttribute(
 						'srcdoc',
-						modifyHTML(
+						shell(
 							source,
 							moduleClient.baseURL,
 							moduleClient.config,
@@ -1286,7 +1295,16 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.setAttribute('src', refused);
 						return;
 					}
-					const opaque = opaqueDocument(resource);
+					let opaque: string | null;
+					try {
+						opaque = opaqueDocument(resource);
+					} catch (error) {
+						// its shell is a deferred part: without it the frame is
+						// not navigated, never to the page's markup unrewritten
+						moduleClient.opaqueFrames.delete(element);
+						element.removeAttribute('src');
+						return;
+					}
 					if (opaque) moduleClient.opaqueFrames.add(element);
 					else moduleClient.opaqueFrames.delete(element);
 					// the frame navigates for this document, under its activation,
@@ -2358,7 +2376,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						mime === 'text/html' || mime === 'application/xhtml+xml'
 							? new NativeBlob(
 									[
-										modifyHTML(
+										deferred('modifyHTML')(
 											await response.text(),
 											resource,
 											moduleClient.config,

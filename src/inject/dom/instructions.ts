@@ -21,8 +21,6 @@ import cloneRawNode, { nativeAttributes, parseHTML } from './cloneNode';
 import { stripScripts } from './sandbox';
 import { isStylesheetPI, type InstructionNatives } from './stylesheetPIs';
 
-export { modifyXML } from '../../xmlShell';
-
 type Method = (this: unknown, ...args: unknown[]) => unknown;
 
 /** how many routed data strings are remembered for their readback */

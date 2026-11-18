@@ -21,7 +21,12 @@ const entry = `${OUT}rewriter-unit-entry.mjs`;
 writeFileSync(
 	entry,
 	`export { cannotRewrite, modifyJS, postMessageMethod, routeJS } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
-export { routeHTML, modifyHTML, modifyRefresh, parseRefresh } from ${JSON.stringify(`${root}src/rewriteHTML.ts`)};
+export { routeHTML, modifyRefresh, parseRefresh } from ${JSON.stringify(`${root}src/rewriteHTML.ts`)};
+export { modifyHTML } from ${JSON.stringify(`${root}src/htmlShell.ts`)};
+import { setDocumentShells } from ${JSON.stringify(`${root}src/rewriteHTML.ts`)};
+import { modifyHTML } from ${JSON.stringify(`${root}src/htmlShell.ts`)};
+// a data: document's shell, as the worker's bundles have it
+setDocumentShells((name) => (name === 'modifyHTML' ? modifyHTML : undefined));
 export { parseDataURI, createDataURI } from ${JSON.stringify(`${root}src/routeURL.ts`)};
 export { modifyCSS } from ${JSON.stringify(`${root}src/rewriteCSS.ts`)};
 export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
