@@ -225,6 +225,30 @@
 			),
 		);
 		await readBack(`${kind}.acrossInsertAdjacentHTML`, frame, acrossAdjacent);
+		// the creator's outerHTML setter on a child of the frame's: the
+		// markup replaces it, read in its parent
+		const acrossOuter = fresh(`${kind}-across-outer`);
+		const replaced = doc.createElement('span');
+		acrossOuter.append(replaced);
+		step(`${kind}.acrossOuterHTML`, () =>
+			Reflect.getOwnPropertyDescriptor(Element.prototype, 'outerHTML').set.call(
+				replaced,
+				MARKUP,
+			),
+		);
+		await readBack(`${kind}.acrossOuterHTML`, frame, acrossOuter);
+		// the creator's ShadowRoot innerHTML setter on a shadow root of the
+		// frame's
+		const acrossShadow = fresh(`${kind}-across-shadow`).attachShadow({
+			mode: 'open',
+		});
+		step(`${kind}.acrossShadowInnerHTML`, () =>
+			Reflect.getOwnPropertyDescriptor(
+				ShadowRoot.prototype,
+				'innerHTML',
+			).set.call(acrossShadow, MARKUP),
+		);
+		await readBack(`${kind}.acrossShadowInnerHTML`, frame, acrossShadow);
 		// nodes across realms: an image of the creator's put in the frame by
 		// the frame's member, and one of the frame's by the creator's
 		const adopted = document.createElement('img');
