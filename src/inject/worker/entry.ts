@@ -17,6 +17,8 @@ import { idbSizeParts } from '../idbSizeParts';
 import { partitionLegacyFileSystem } from '../legacyFileSystem';
 import { legacyFileSystemParts } from '../legacyFileSystemParts';
 import { mixedContentParts } from '../mixedContentParts';
+import { originFrom } from '../originFrom';
+import { originFromParts } from '../originFromParts';
 import { reportParts } from '../reportParts';
 import { reportsSeen } from '../reportsSeen';
 import { handModules } from '../rewriter';
@@ -48,6 +50,8 @@ storageBucketParts.methods = () => bucketMethods;
 legacyFileSystemParts.partition = () => partitionLegacyFileSystem;
 // and the text of a mixed content notice (../mixedContentParts.ts)
 mixedContentParts.noticeText = () => noticeText;
+// and what Origin.from() answers (../originFromParts.ts)
+originFromParts.answer = () => originFrom;
 // and the wording of the access API's errors (../accessFailureParts.ts)
 accessFailureParts.failures = () => accessFailures;
 // and the un-routing of ReportingObserver's reports (../reportParts.ts)

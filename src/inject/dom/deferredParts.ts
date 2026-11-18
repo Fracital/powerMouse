@@ -14,6 +14,9 @@
 // own. This file is not built itself: build.js reads its imports, and
 // `parts` names each of them once.
 //
+// (and what Origin.from() answers a page, ../originFrom.ts, at a realm's
+// first call; a worker's bundle has it itself)
+//
 // (and what reads a window as an array method or as a list of arguments
 // does, ../windowArrays.ts, at a document's first such call: a worker's
 // scope has none)
@@ -127,6 +130,7 @@ import {
 	dropLegacyFileSystem,
 	partitionLegacyFileSystem,
 } from '../legacyFileSystem';
+import { originFrom } from '../originFrom';
 import {
 	gateCall,
 	gateGetter,
@@ -226,6 +230,9 @@ export const parts = {
 	// the wording of the access API's errors, at a document's first
 	// (../accessFailures.ts; ../errorMessages.ts)
 	accessFailures,
+	// what Origin.from() answers a page, at a realm's first call
+	// (../originFrom.ts; ../modules/OriginFrom.ts)
+	originFrom,
 	// what reads a window as an array method or a list of arguments does,
 	// at a document's first such call (../windowArrays.ts;
 	// ../modules/Reflection.ts)

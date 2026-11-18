@@ -561,6 +561,7 @@ const DEFERRED_FILES = new Set(
 		'src/refusalName.ts',
 		'src/wasm/codecBytes.ts',
 		'src/inject/serviceWorkerObjects.ts',
+		'src/inject/originFrom.ts',
 		'src/inject/storageBucketMethods.ts',
 		'src/inject/windowArrays.ts',
 		'src/inject/webTransport.ts',

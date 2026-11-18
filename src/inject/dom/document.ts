@@ -8,6 +8,7 @@ import { legacyFileSystemParts } from '../legacyFileSystemParts';
 import { mixedContentParts } from '../mixedContentParts';
 import Module from '../Module';
 import baseModules from '../modules';
+import { originFromParts } from '../originFromParts';
 import { reportParts } from '../reportParts';
 import { socketParts } from '../socketParts';
 import { storageBucketParts } from '../storageBucketParts';
@@ -94,6 +95,8 @@ reportParts.seen = () => deferred('reportsSeen');
 // the parts its shell loaded (a document without them seals in JavaScript,
 // with no request: ../../wasm/codec.ts)
 codecParts.bytes = () => heldPart('codecBytes')?.();
+// and what Origin.from() answers, with a realm's first call
+originFromParts.answer = () => deferred('originFrom');
 // and what reads a window as an array method or a list of arguments does,
 // with a document's first such call
 windowArrayParts.make = () => deferred('windowArrays');
