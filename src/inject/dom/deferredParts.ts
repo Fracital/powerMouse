@@ -89,7 +89,7 @@ import { compileFilter, proceduralRunner } from '../../blocker/procedural';
 import { noticeText } from '../../mixedContentNotices';
 import { accessFailures } from '../accessFailures';
 import { bareClient, socketStandIns } from '../bareClient';
-import { cookieStoreMethods } from '../cookieStoreMethods';
+import { cookieChanges, cookieStoreMethods } from '../cookieStoreMethods';
 import { hookDevices } from '../deviceGrants';
 import { recordSize } from '../idbSize';
 import {
@@ -199,6 +199,9 @@ export const parts = {
 	longFrames,
 	longTasks,
 	cookieStoreMethods,
+	// the change events of a document's cookieStore, at the first change
+	// after the page looked (../cookieStoreMethods.ts; modules/CookieStore.ts)
+	cookieChanges,
 	relayBeacon,
 	// fetchLater's call, at a document's first (./fetchLater.ts;
 	// modules/Navigator.ts)

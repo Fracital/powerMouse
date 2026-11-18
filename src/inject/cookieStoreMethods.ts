@@ -2,7 +2,9 @@
 // answers them (results, dictionaries and errors), for a document's
 // cookieStore (dom/modules/CookieStore.ts) and an emulated service worker's
 // (worker/modules/ServiceWorkerGlobal.ts). What differs between the two is
-// passed in: which `url` a call may name, and how the jar is reached.
+// passed in: which `url` a call may name, and how the jar is reached. And
+// what a change of the jar changed of what a document's page has seen of
+// it (cookieChanges), the change events of its cookieStore.
 import { utf8Text } from '../byteString';
 import {
 	domainMatches,
@@ -331,4 +333,105 @@ export function cookieStoreMethods(
 			delete: (args) => write('delete', () => deleteWrite(args)),
 		},
 	};
+}
+
+/** what a document's page has seen of the jar, from its first look at its cookieStore */
+export interface CookieView {
+	seen: Map<string, JarCookie> | null;
+	/** the first look's read of the jar */
+	watching: Promise<void> | null;
+	refreshing: boolean;
+	again: boolean;
+}
+
+/** what the CookieStore module hands cookieChanges */
+export interface CookieChangeContext {
+	view: CookieView;
+	shared(): CookieStoreMethods;
+	cookies: {
+		takeWrites(): [string, JarCookie | null][];
+		jarCookies(): Promise<JarCookie[]>;
+	};
+	/** the document's cookieStore, and the browser's own to dispatch on it */
+	store: EventTarget;
+	ChangeEvent: new (type: string, init: object) => Event;
+	dispatchEvent: Function;
+}
+
+const differs = (a: JarCookie, b: JarCookie) =>
+	a.value !== b.value ||
+	a.expires !== b.expires ||
+	a.secure !== b.secure ||
+	a.sameSite !== b.sameSite ||
+	a.hostOnly !== b.hostOnly;
+
+/**
+ * A change of the jar (dom/modules/CookieStore.ts): each cookie it changed
+ * of what the page has seen, a change event of the document's cookieStore
+ */
+export async function cookieChanges({
+	view,
+	shared,
+	cookies,
+	store,
+	ChangeEvent,
+	dispatchEvent,
+}: CookieChangeContext) {
+	const dispatch = (changed: object[], deleted: object[]) =>
+		Reflect.apply(dispatchEvent, store, [
+			new ChangeEvent('change', { changed, deleted }),
+		]);
+	if (!view.watching) return;
+	if (view.refreshing) {
+		view.again = true;
+		return;
+	}
+	view.refreshing = true;
+	try {
+		await view.watching;
+		do {
+			view.again = false;
+			if (!view.seen) return;
+			// this document's own writes first, each an event of its own in
+			// the order written, as natively (taken before the jar is
+			// asked, which has them all); then what else changed
+			const writes = cookies.takeWrites();
+			const list = await cookies.jarCookies();
+			const before = new Map(view.seen);
+			// a write made here and the jar's copy of it: the same
+			// cookie, its Max-Age counted a moment apart
+			const logged = new Set<string>();
+			for (const [id, cookie] of writes) {
+				logged.add(id);
+				const old = before.get(id);
+				if (cookie) {
+					if (!old || differs(old, cookie))
+						dispatch([shared().item(cookie)], []);
+					before.set(id, cookie);
+				} else if (old) {
+					dispatch([], [shared().deletedItem(old)]);
+					before.delete(id);
+				}
+			}
+			const now = new Map(list.map((cookie) => [cookie.id, cookie]));
+			view.seen = now;
+			for (const [id, cookie] of before)
+				if (!now.has(id)) dispatch([], [shared().deletedItem(cookie)]);
+			for (const cookie of list) {
+				const old = before.get(cookie.id);
+				if (
+					!old ||
+					(logged.has(cookie.id)
+						? differs({ ...old, expires: cookie.expires }, cookie) ||
+							Math.abs((old.expires ?? 0) - (cookie.expires ?? 0)) > 2000
+						: differs(old, cookie))
+				)
+					dispatch([shared().item(cookie)], []);
+			}
+		} while (view.again);
+	} catch (error) {
+		// the jar did not answer: the next change reads it again
+	} finally {
+		view.refreshing = false;
+	}
 }

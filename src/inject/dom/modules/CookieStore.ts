@@ -1,7 +1,8 @@
-import { isSecureURL, type JarCookie } from '../../../server/Cookies';
+import { isSecureURL } from '../../../server/Cookies';
 import type {
 	CookieStoreMethod,
 	CookieStoreMethods,
+	CookieView,
 } from '../../cookieStoreMethods';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
@@ -101,89 +102,44 @@ export default class CookieStoreModule extends Module<DocumentClient> {
 			}));
 
 		// what the page has seen of the jar, from its first look at the API
-		let seen: Map<string, JarCookie> | null = null;
-		let watching: Promise<void> | null = null;
-		let refreshing = false;
-		let again = false;
+		const view: CookieView = {
+			seen: null,
+			watching: null,
+			refreshing: false,
+			again: false,
+		};
 		const watch = () => {
 			cookies.recordWrites();
-			return (watching ??= cookies.jarCookies().then(
+			return (view.watching ??= cookies.jarCookies().then(
 				(list) => {
-					seen = new Map(list.map((cookie) => [cookie.id, cookie]));
+					view.seen = new Map(list.map((cookie) => [cookie.id, cookie]));
 				},
 				() => {
 					// the jar did not answer: the next look asks again, and
 					// nothing is reported until it has
-					watching = null;
+					view.watching = null;
 				},
 			));
 		};
-		const differs = (a: JarCookie, b: JarCookie) =>
-			a.value !== b.value ||
-			a.expires !== b.expires ||
-			a.secure !== b.secure ||
-			a.sameSite !== b.sameSite ||
-			a.hostOnly !== b.hostOnly;
-		const dispatch = (changed: object[], deleted: object[]) =>
-			Reflect.apply(nativeDispatch, store, [
-				new CookieChangeEvent('change', { changed, deleted }),
-			]);
-		const refresh = async () => {
-			if (!watching) return;
-			if (refreshing) {
-				again = true;
-				return;
-			}
-			refreshing = true;
+		// a change of the jar, once the page has looked: what it changed of
+		// what the page has seen is a deferred part (../../cookieStoreMethods.ts
+		// cookieChanges), made at the first change after that look; without
+		// it no event is dispatched
+		cookies.changeListeners.add(() => {
+			if (!view.watching) return;
 			try {
-				await watching;
-				do {
-					again = false;
-					if (!seen) return;
-					// this document's own writes first, each an event of its own in
-					// the order written, as natively (taken before the jar is
-					// asked, which has them all); then what else changed
-					const writes = cookies.takeWrites();
-					const list = await cookies.jarCookies();
-					const before = new Map(seen);
-					// a write made here and the jar's copy of it: the same
-					// cookie, its Max-Age counted a moment apart
-					const logged = new Set<string>();
-					for (const [id, cookie] of writes) {
-						logged.add(id);
-						const old = before.get(id);
-						if (cookie) {
-							if (!old || differs(old, cookie))
-								dispatch([shared().item(cookie)], []);
-							before.set(id, cookie);
-						} else if (old) {
-							dispatch([], [shared().deletedItem(old)]);
-							before.delete(id);
-						}
-					}
-					const now = new Map(list.map((cookie) => [cookie.id, cookie]));
-					seen = now;
-					for (const [id, cookie] of before)
-						if (!now.has(id)) dispatch([], [shared().deletedItem(cookie)]);
-					for (const cookie of list) {
-						const old = before.get(cookie.id);
-						if (
-							!old ||
-							(logged.has(cookie.id)
-								? differs({ ...old, expires: cookie.expires }, cookie) ||
-									Math.abs((old.expires ?? 0) - (cookie.expires ?? 0)) > 2000
-								: differs(old, cookie))
-						)
-							dispatch([shared().item(cookie)], []);
-					}
-				} while (again);
+				void deferred('cookieChanges')({
+					view,
+					shared,
+					cookies,
+					store,
+					ChangeEvent: CookieChangeEvent,
+					dispatchEvent: nativeDispatch,
+				});
 			} catch (error) {
-				// the jar did not answer: the next change reads it again
-			} finally {
-				refreshing = false;
+				// no parts: no change events
 			}
-		};
-		cookies.changeListeners.add(() => void refresh());
+		});
 
 		/** a refusal of an opaque origin, as natively */
 		const opaque = (method: Method) =>
