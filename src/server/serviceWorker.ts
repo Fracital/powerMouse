@@ -16,7 +16,7 @@ import {
 	runCeremony,
 } from '../passkeys/authenticator';
 import { nestedMarkOfKind, nestedTopOf } from '../rewriteHTML';
-import { addRouteScope, proxyOrigins } from '../routeURL';
+import { addRouteScope, proxyOrigins, unwrapRoute } from '../routeURL';
 import { SW_ROUTE, type ApiReply } from '../serviceWorkerTypes';
 import { getPublicSuffix } from '../suffix';
 import {
@@ -1820,8 +1820,13 @@ async function leaveSlot(
 	// sending it there would only turn a live document into the error page.
 	if (/^inline:/.test(routed.resource)) return here();
 	// a route of a route of the proxy (a double route): the router answers it
-	// here with a redirect to the inner route, on its own origin already
-	if (proxyOrigins(ref.config).includes(new URL(routed.url).origin))
+	// here with a redirect to the inner route, on its own origin already.
+	// Any other URL of the proxy's origins is a site like another
+	// (proxy-ception), shown from a slot of its own
+	if (
+		proxyOrigins(ref.config).includes(new URL(routed.url).origin) &&
+		unwrapRoute(new URL(routed.url), server.codec, ref.directory)
+	)
 		return here();
 	let slot = ref.slots!.get(target);
 	if (slot === undefined) {

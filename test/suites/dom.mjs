@@ -16,7 +16,19 @@ import {
 
 const browser = await launch();
 const page = await openDemo(browser);
-await submitLanding(page, `${FIXTURE}pages/dom.html`);
+// the marker prefix the controller's access name makes (src/helperNames.ts
+// attributeMarker), for the page to ask hasAttribute about
+const access = await page.evaluate(
+	() => window.controller.config.names?.access ?? '$s$j',
+);
+const marker =
+	access === '$s$j'
+		? 's_o:'
+		: `s${[...access].map((char) => char.charCodeAt(0).toString(36)).join('')}:`;
+await submitLanding(
+	page,
+	`${FIXTURE}pages/dom.html?marker=${encodeURIComponent(marker)}`,
+);
 
 let dom = {};
 for (let i = 0; i < 60; i++) {

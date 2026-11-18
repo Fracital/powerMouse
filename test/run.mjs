@@ -92,8 +92,6 @@ const SUITE_ENV = {
 	'sop-escapes': { STOMP_ISOLATION: 'on' },
 	// production's host page (its second server runs one without)
 	'popup-openers': { STOMP_ISOLATION: 'on' },
-	// proxy-ception: the proxy forwards its own origin (the demo through itself)
-	'self-proxy': { STOMP_ALLOW_SELF_PROXY: '1' },
 	// the pool's slots (a sixth for the spare check), also in a run that
 	// turns the pool off for the rest
 	'site-pool': { STOMP_SITE_POOL: '6' },

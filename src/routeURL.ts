@@ -24,28 +24,77 @@ export const ROUTE_PROTOCOLS = ['http:', 'https:'];
  * bundle by the client; the service worker never sees a blob: URL. A blob:
  * URL of another real origin stays as it is and does not resolve, as the
  * browser refuses a blob: URL across origins.
+ *
+ * A page of the proxy's own origin (proxy-ception, docs/proxyception.md)
+ * would have the two forms alike, and every blob: URL of the real origin
+ * (the host's, another site's private copies) would resolve for it as one
+ * it was shown. So its form differs in the UUID instead: each hex digit
+ * but the version's is flipped by a stream drawn from the codec's key
+ * (`flip`, its own inverse), and a URL of the browser's form it hands back
+ * names a Blob that is not there, as another origin's does.
  */
-let blobOrigins: { page: string; proxy: string } | null = null;
+let blobOrigins: { page: string; proxy: string; flip?: string } | null = null;
 
-export function setBlobOrigins(page: string, proxy: string) {
-	blobOrigins = page === proxy ? null : { page, proxy };
+export function setBlobOrigins(page: string, proxy: string, key = '') {
+	blobOrigins =
+		page !== proxy
+			? { page, proxy }
+			: key && page
+				? { page, proxy, flip: key }
+				: null;
 }
 
-/** the origins setBlobOrigins took, `[page, proxy]`, or null (the rewriter library is told them per call) */
-export function blobOriginPair(): [string, string] | null {
-	return blobOrigins ? [blobOrigins.page, blobOrigins.proxy] : null;
+/** what setBlobOrigins took, `[page, proxy]` and the key of a page of the proxy's origin, or null (the rewriter library is told them per call) */
+export function blobOriginPair(): [string, string, string?] | null {
+	if (!blobOrigins) return null;
+	const { page, proxy, flip } = blobOrigins;
+	return flip ? [page, proxy, flip] : [page, proxy];
+}
+
+/** the UUID of a blob: URL's path (`/<uuid>...`) flipped by `key`, the rest as it is */
+function flipUUID(rest: string, key: string): string {
+	if (!/^\/[\da-f]{8}-([\da-f]{4}-){3}[\da-f]{12}/.test(rest)) return rest;
+	// FNV-1a of the key, then a xorshift stream: a nibble a digit
+	let state = 0x811c9dc5;
+	for (let i = 0; i < key.length; i++)
+		state = Math.imul(state ^ key.charCodeAt(i), 0x01000193);
+	let out = '/';
+	for (let i = 1; i < 37; i++) {
+		const char = rest[i];
+		state ^= state << 13;
+		state ^= state >>> 17;
+		state ^= state << 5;
+		// the version digit (4) stays, the variant keeps its two top bits
+		const mask = char === '-' || i === 15 ? 0 : i === 20 ? 3 : 15;
+		// never the digit itself everywhere: one flip at least
+		const flip = (state >>> 4) & mask || (i === 1 ? 1 : 0);
+		out += char === '-' ? char : (parseInt(char, 16) ^ flip).toString(16);
+	}
+	return out + rest.slice(37);
 }
 
 /** a page-origin blob: URL as the proxy's; anything else as it is */
 export function proxyBlobURL(url: string): string {
 	if (!blobOrigins || !url.startsWith(`blob:${blobOrigins.page}/`)) return url;
-	return `blob:${blobOrigins.proxy}${url.slice(blobOrigins.page.length + 5)}`;
+	const rest = url.slice(blobOrigins.page.length + 5);
+	return `blob:${blobOrigins.proxy}${blobOrigins.flip ? flipUUID(rest, blobOrigins.flip) : rest}`;
 }
 
 /** a proxy-origin blob: URL as the page's; anything else as it is */
 export function pageBlobURL(url: string): string {
 	if (!blobOrigins || !url.startsWith(`blob:${blobOrigins.proxy}/`)) return url;
-	return `blob:${blobOrigins.page}${url.slice(blobOrigins.proxy.length + 5)}`;
+	const rest = url.slice(blobOrigins.proxy.length + 5);
+	return `blob:${blobOrigins.page}${blobOrigins.flip ? flipUUID(rest, blobOrigins.flip) : rest}`;
+}
+
+/** the browser's UUID of a blob: URL a page of `origin` names by `uuid` (the service worker: BLOB_ROUTE) */
+export function proxyBlobUUID(
+	uuid: string,
+	origin: string,
+	proxy: string,
+	key: string,
+): string {
+	return origin === proxy ? flipUUID(`/${uuid}`, key).slice(1) : uuid;
 }
 
 /**
@@ -104,8 +153,19 @@ export function setRouteScopes(scopes: string[]) {
  * `url` is not a route. Any controller id and any kind of the scope; decoded
  * with `codec`, so a foreign controller's route with another codec stays as
  * it is. An inline document's address names a token, not a URL.
+ *
+ * A codec without a key (plain, base64) decodes every controller's routes
+ * alike, a STomp's the page runs among them (proxy-ception,
+ * docs/proxyception.md), whose routes are of the proxy's origin too: given
+ * `own`, the caller's address (`/stomp/<id>/`, or with its origin), such a
+ * codec takes only routes of that id for its own, and leaves another id's
+ * (and a link's route, which names none) to the STomp that made them.
  */
-export function unwrapRoute(url: URL, codec: GenericCodec): URL | null {
+export function unwrapRoute(
+	url: URL,
+	codec: GenericCodec,
+	own?: string,
+): URL | null {
 	let real: URL | null = null;
 	let href = url.href;
 	for (let depth = 0; depth < 8; depth++) {
@@ -114,6 +174,18 @@ export function unwrapRoute(url: URL, codec: GenericCodec): URL | null {
 			if (href.startsWith(candidate)) scope = candidate;
 		if (!scope) break;
 		const rest = href.slice(scope.length);
+		// (a link's route names no controller: with such a codec it is the
+		// inner STomp's as likely as this one's, and a link of this one's
+		// reaches its worker by its own route, never as a route of a route)
+		if (!codec.key && own !== undefined) {
+			const ownId = addressId(own, scope);
+			const id = /^([\w-]+)\//.exec(rest)?.[1];
+			if (
+				ownId &&
+				(rest.startsWith(`${LINK_SEGMENT}/`) || (id && id !== ownId))
+			)
+				break;
+		}
 		// a link's route (src/visited.ts): the context, a space, the URL
 		if (rest.startsWith(`${LINK_SEGMENT}/`)) {
 			const link = linkRouteURL(rest.slice(LINK_SEGMENT.length + 1), codec);
@@ -144,6 +216,19 @@ export function unwrapRoute(url: URL, codec: GenericCodec): URL | null {
 		href = next.href;
 	}
 	return real;
+}
+
+/** the controller id of the address `own` under `scope` (`<origin><scope>`), or null */
+function addressId(own: string, scope: string): string | null {
+	let path: string;
+	try {
+		path = new URL(own, scope).pathname;
+	} catch {
+		return null;
+	}
+	const scopePath = new URL(scope).pathname;
+	if (!path.startsWith(scopePath)) return null;
+	return /^([\w-]+)\/$/.exec(path.slice(scopePath.length))?.[1] ?? null;
 }
 
 /**
@@ -185,8 +270,10 @@ export function routeURL(resourceType: string, url: StompURL) {
 
 	// a URL that is already a route (the page read its raw proxy URL through
 	// a path the rewriter missed) is routed as the real URL it stands for:
-	// routed again it would decode to the proxy's own origin, refused
-	const real = routeScopes.size ? unwrapRoute(url.url, url.codec) : null;
+	// routed again it would be the proxy's own route fetched as a site's
+	const real = routeScopes.size
+		? unwrapRoute(url.url, url.codec, url.directory)
+		: null;
 	if (real) url = new StompURL(real, url);
 
 	// what a renderer's memory cache keeps carries its document's site's

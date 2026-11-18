@@ -22,7 +22,7 @@ import {
 import { pageSandbox, sandboxTokens } from '../sandbox';
 import ContextModule, { initialBlank, isStomp } from './Context';
 import { nativeElement } from './DOMHooks';
-import { MARKER } from './MutationObserver';
+import { markerPrefix } from './MutationObserver';
 import NavigationHintModule from './NavigationHint';
 
 export default class IFrameModule extends Module<DocumentClient> {
@@ -195,7 +195,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 		// own shell injects it), restricted like a frame of another origin
 		const sandboxedOpaque = (element: Element) => {
 			if (moduleClient.sandboxedOpaque) return true;
-			const sandbox = pageSandbox(element, MARKER);
+			const sandbox = pageSandbox(element, markerPrefix());
 			return (
 				sandbox !== null && !sandboxTokens(sandbox).has('allow-same-origin')
 			);

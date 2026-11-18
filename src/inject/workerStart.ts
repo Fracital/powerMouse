@@ -18,8 +18,8 @@ import {
 	CSP_FACTS,
 	CSP_WORKER,
 	WORKER_BASE,
-	WORKER_ERROR,
 	WORKER_PARTITION,
+	workerErrorKey,
 } from '../transport/messages';
 import type Client from './Client';
 import {
@@ -257,10 +257,11 @@ export function watchErrors(
 ) {
 	const { client: moduleClient, terminated, messageOf, filenameOf } = start;
 	const located: (ErrorLocation & { message: string })[] = [];
+	const key = workerErrorKey(moduleClient.names.globalName);
 	worker.addEventListener(
 		'message',
 		(event) => {
-			const report = (event as MessageEvent).data?.[WORKER_ERROR];
+			const report = (event as MessageEvent).data?.[key];
 			if (!report) return;
 			event.stopImmediatePropagation();
 			located.push(report);

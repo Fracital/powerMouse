@@ -1,9 +1,10 @@
 // The host's error page: a controller given `errorPage` shows that document,
 // under the frame's URL and with the failure's status, for a document the
-// proxy itself failed to produce (a blocked rule, the refusal to proxy its own
-// origin, an unreachable origin), with globalThis.stompError describing the
-// failure; the request report carries `kind`. It is never cached: once the
-// rule is gone the real page loads. Same-origin mode, a controller of our own.
+// proxy itself failed to produce (a blocked rule, an unreachable origin), with
+// globalThis.stompError describing the failure; the request report carries
+// `kind`. It is never cached: once the rule is gone the real page loads. A
+// page of the proxy's own origin is no failure: it loads as the page it is
+// (docs/proxyception.md). Same-origin mode, a controller of our own.
 import { done, FIXTURE, HOST, launch, ok, PROXY } from '../lib.mjs';
 
 const browser = await launch();
@@ -83,7 +84,10 @@ const result = await page.evaluate(
 		}
 		const blocked = await show(`${fixture}pages/hist-1.html`);
 		out.blocked = { ...blocked, element: undefined };
-		out.refused = { ...(await show(`${proxy}/`)), element: undefined };
+		// the proxy's own page, proxied: the demo, as it reads natively (this
+		// very document is that page, loaded natively)
+		out.own = { ...(await show(`${proxy}/`)), element: undefined };
+		out.nativeTitle = document.title;
 		out.transport = {
 			...(await show('http://127.0.0.1:9/down.html')),
 			element: undefined,
@@ -121,9 +125,12 @@ ok(
 	JSON.stringify(result.blocked),
 );
 ok(
-	'the refusal to proxy the proxy origin shows the host page',
-	shows(result.refused, 'refused', 403),
-	JSON.stringify(result.refused),
+	"a page of the proxy's own origin loads as the page it is, not the host's error page",
+	result.own?.url === `${proxy}/` &&
+		result.own.title === result.nativeTitle &&
+		result.own.error === null &&
+		result.own.retry === false,
+	JSON.stringify([result.own, result.nativeTitle]),
 );
 ok(
 	'an unreachable origin shows the host page with the transport error',
@@ -135,7 +142,6 @@ ok(
 	JSON.stringify(result.kinds) ===
 		JSON.stringify([
 			['blocked', 403, 'hist-1.html'],
-			['refused', 403, ''],
 			['transport', 0, 'down.html'],
 		]),
 	JSON.stringify(result.kinds),

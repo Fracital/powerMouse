@@ -11,8 +11,8 @@
 import { done, FIXTURE, launch, ok, PORT } from '../lib.mjs';
 
 const WISP = `ws://127.0.0.1:${PORT}/wisp/`;
-// the probe pages are proxied from the fixture's other host name (the proxy
-// refuses its own origin, which the host page is on)
+// the probe pages are proxied from the fixture's other host name, a site of
+// another origin than the host page's
 const ORIGIN = new URL(FIXTURE).origin.replace('127.0.0.1', 'localhost');
 const browser = await launch();
 const errors = [];

@@ -43,7 +43,7 @@ import DOMHooksModule, {
 	nativeNode,
 	pendingAttributes,
 } from './DOMHooks';
-import { hiddenMove, hiddenMutation } from './MutationObserver';
+import { hiddenMove, hiddenMutation, markerPrefix } from './MutationObserver';
 
 export const nativeHTMLStyleElement: HTMLStyleElement =
 	Object.create(nativeHTMLElement);
@@ -675,7 +675,8 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					if (
 						!names.some(
 							(name) =>
-								!name.startsWith('s_o:') && domHooksModule.hooksAttribute(name),
+								!name.startsWith(markerPrefix()) &&
+								domHooksModule.hooksAttribute(name),
 						)
 					)
 						continue;
@@ -690,10 +691,10 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					if (
 						names.some(
 							(name) =>
-								!name.startsWith('s_o:') &&
+								!name.startsWith(markerPrefix()) &&
 								domHooksModule.hooksAttribute(name) &&
 								(working ||
-									(!names.includes(`s_o:${name}`) &&
+									(!names.includes(`${markerPrefix()}${name}`) &&
 										(name !== 'style' ||
 											MAY_ROUTE.test(
 												Reflect.apply(nativeGetAttribute, element, [
@@ -704,7 +705,10 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					)
 						usePrototype(element, CustomElement.prototype, (element) => {
 							for (const name of element.getAttributeNames())
-								if (!name.startsWith('s_o:') && !element.hasAttributeOG(name))
+								if (
+									!name.startsWith(markerPrefix()) &&
+									!element.hasAttributeOG(name)
+								)
 									domHooksModule.updateAttributeHooks(element, name);
 						});
 					// a style the hooks saw elsewhere (a clone, an element of

@@ -60,7 +60,7 @@ import DOMHooksModule, {
 	nativeRead,
 	pendingAttributes,
 } from './DOMHooks';
-import { hiddenMutation, MARKER } from './MutationObserver';
+import { hiddenMutation, markerPrefix } from './MutationObserver';
 import NavigationHintModule from './NavigationHint';
 import TokenListsModule from './TokenLists';
 
@@ -411,7 +411,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				)
 					return;
 				const metadata =
-					(Reflect.apply(read, target, [`${MARKER}integrity`]) as
+					(Reflect.apply(read, target, [`${markerPrefix()}integrity`]) as
 						string | null) ??
 					(Reflect.apply(read, target, ['integrity']) as string | null);
 				if (metadata === null) return;
@@ -419,7 +419,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				const again = href.replace(/#.*$/s, '') + REFUSED_FRAGMENT;
 				hiddenMutation(() => {
 					Reflect.apply(write, target, ['integrity', metadata]);
-					Reflect.apply(remove, target, [`${MARKER}integrity`]);
+					Reflect.apply(remove, target, [`${markerPrefix()}integrity`]);
 					// the network error gave the link an empty sheet, which a new
 					// load that fails does not take away: no href first
 					Reflect.apply(remove, target, ['href']);
@@ -1637,7 +1637,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				// most writes: no marker to drop, known without a prototype swap
 				if (
 					!pendingAttributes(element) &&
-					!nativeElement.hasAttribute.call(element, `${MARKER}style`)
+					!nativeElement.hasAttribute.call(element, `${markerPrefix()}style`)
 				)
 					return;
 				usePrototype(element, CustomElement.prototype, (element) => {
@@ -2076,8 +2076,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			...['src', 'href', 'xlink:href', 'srcset', 'poster', 'data'],
 			'imagesrcset',
 		];
+		const marker = markerPrefix().replace(':', '\\:');
 		const written = LOADS.map((name) => name.replace(':', '\\:'))
-			.map((name) => `[s_o\\:${name}]:not([${name}]):not(script)`)
+			.map((name) => `[${marker}${name}]:not([${name}]):not(script)`)
 			.join(',');
 		// a document a worker controls loads its elements itself, but for an
 		// <object>'s data and an <embed>'s src: Chrome sends no such load
@@ -2087,7 +2088,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			['embed', 'src'],
 		];
 		const writtenObjects = OBJECT_LOADS.map(
-			([tag, name]) => `${tag}[s_o\\:${name}]:not([${name}])`,
+			([tag, name]) => `${tag}[${marker}${name}]:not([${name}])`,
 		).join(',');
 		moduleClient.writtenLoads = (document) => {
 			const all = uncontrolled();

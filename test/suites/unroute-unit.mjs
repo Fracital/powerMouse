@@ -26,6 +26,7 @@ writeFileSync(
 	`export { unrouteText } from ${JSON.stringify(`${root}src/inject/modules/Unroute.ts`)};
 export { default as GenericCodec, XORCodec, AESCodec, Base64Codec } from ${JSON.stringify(`${root}src/Codecs.ts`)};
 export { linkRoute, parseLinkRoute, opaqueContext } from ${JSON.stringify(`${root}src/visited.ts`)};
+export { addRouteScope, unwrapRoute } from ${JSON.stringify(`${root}src/routeURL.ts`)};
 `,
 );
 const bundle = `${OUT}unroute-unit.mjs`;
@@ -47,6 +48,8 @@ const {
 	linkRoute,
 	parseLinkRoute,
 	opaqueContext,
+	addRouteScope,
+	unwrapRoute,
 } = await import(`${bundle}?${Date.now()}`);
 
 const codec = new XORCodec('0123456789abcdef');
@@ -177,4 +180,53 @@ ok(
 			suffix,
 		) === null,
 );
+
+// A route of a route is the route it stands for (unwrapRoute), and with a
+// keyed codec a route of another key (a STomp the page runs: proxy-ception,
+// docs/proxyception.md) does not decode. A codec without a key decodes
+// every controller's routes alike: told the caller's address, it takes only
+// its own id's (and no link route, which names none), and leaves the rest
+// to the STomp that made them; untold, as before, any id's.
+addRouteScope(origin, '/stomp/');
+const real = 'https://example.com/a?b=c';
+const routeOf = (routeCodec, id) =>
+	new URL(`${origin}/stomp/${id}/html/${routeCodec.encode(real)}`);
+for (const [name, ownCodec, innerCodec] of [
+	['plain', new GenericCodec(''), new GenericCodec('')],
+	['base64', new Base64Codec(''), new Base64Codec('')],
+	['xor', new XORCodec('0123456789abcdef'), new XORCodec('fedcba9876543210')],
+]) {
+	const own = unwrapRoute(routeOf(ownCodec, 'abc'), ownCodec, '/stomp/abc/');
+	const inner = unwrapRoute(
+		routeOf(innerCodec, 'inner1'),
+		ownCodec,
+		'/stomp/abc/',
+	);
+	const innerLink = unwrapRoute(
+		new URL(
+			linkRoute(
+				`${origin}/stomp/`,
+				innerCodec,
+				'https://a.example',
+				new URL(real),
+			),
+		),
+		ownCodec,
+		'/stomp/abc/',
+	);
+	const untold = unwrapRoute(routeOf(ownCodec, 'other'), ownCodec);
+	ok(
+		`${name}: a route of the caller's own id unwraps, an inner STomp's route and link route do not`,
+		own?.href === real &&
+			inner === null &&
+			(name === 'xor' || innerLink === null) &&
+			untold?.href === real,
+		JSON.stringify({
+			own: own?.href,
+			inner: inner?.href,
+			innerLink: innerLink?.href,
+			untold: untold?.href,
+		}),
+	);
+}
 await done();

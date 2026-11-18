@@ -3,7 +3,7 @@ import ProxyModule from '../../modules/Proxy';
 import { scopePrefix, unrouteURL } from '../../modules/Unroute';
 import type DocumentClient from '../Client';
 import { nativeElement } from './DOMHooks';
-import { MARKER } from './MutationObserver';
+import { markerPrefix } from './MutationObserver';
 
 const FEATURE = 'cross-origin-isolated';
 
@@ -54,7 +54,7 @@ export default class IsolationModule extends Module<DocumentClient> {
 							string | null;
 					const name = element.localName === 'object' ? 'data' : 'src';
 					if (get(name) !== routed || (get('id') ?? '') !== id) continue;
-					const marked = get(`${MARKER}${name}`);
+					const marked = get(`${markerPrefix()}${name}`);
 					if (marked !== null) return marked;
 				}
 			} catch (error) {

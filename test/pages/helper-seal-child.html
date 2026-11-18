@@ -71,11 +71,15 @@
 			return found.join(';') || 'none';
 		});
 		// the access API's name: a rewritten function's source showed it once
-		// (it reads as the page wrote it now), and the default is public
+		// (it reads as the page wrote it now), and the suite names the one the
+		// controller minted (?access, the default otherwise), as a page that
+		// learned it would know it
 		const source = (() => location.href).toString();
+		const knownAccess =
+			new URLSearchParams(location.search).get('access') || '$s$j';
 		const accessName =
 			(source.match(/([A-Za-z_$][\w$]*)\.get2?\(/) || [])[1] ??
-			(typeof window['$s$j'] === 'object' ? '$s$j' : undefined);
+			(typeof window[knownAccess] === 'object' ? knownAccess : undefined);
 		paths.accessNamed = String(!!accessName);
 		paths.sourceShowsAccess = String(source !== '() => location.href');
 		const api = accessName ? window[accessName] : undefined;

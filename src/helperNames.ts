@@ -51,6 +51,23 @@ export const DEFAULT_NAMES: Readonly<HelperNames> = Object.freeze({
  */
 export const accessExpression = (access: string) => `0..${access}`;
 
+/**
+ * The prefix of the marker attributes the inject keeps a page's own value
+ * of a routed attribute in (`s_o:href` next to the routed `href`), made from
+ * the access name, so two controllers with two access names (one proxied
+ * through the other) keep their markers apart. An HTML attribute name is
+ * lower case, so each character of the name is its code in two base-36
+ * digits (every identifier character is past 35): no two names make one
+ * prefix, and none is the start of another. The default name keeps the
+ * prefix it always had.
+ */
+export function attributeMarker(access: string): string {
+	if (access === DEFAULT_NAMES.access) return 's_o:';
+	let marker = 's';
+	for (const char of access) marker += char.charCodeAt(0).toString(36);
+	return `${marker}:`;
+}
+
 /** the names a config asks for, the defaults for the rest */
 export function helperNames(config?: object | null): HelperNames {
 	const names: HelperNames = { ...DEFAULT_NAMES };

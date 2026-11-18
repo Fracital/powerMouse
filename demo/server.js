@@ -359,11 +359,6 @@ const pageConfig = {
 			? null
 			: process.env.STOMP_ECH_DNS || 'https://cloudflare-dns.com/dns-query',
 	...(process.env.STOMP_TEST_TRANSPORT === '1' && { testTransport: true }),
-	// proxy-ception (exploratory): the controller's allowSelfProxy forwards the
-	// proxy's own origin instead of refusing it, so the demo can be loaded
-	// through itself. Off unless STOMP_ALLOW_SELF_PROXY=1; never set in
-	// production, where this server is the proxy origin.
-	...(process.env.STOMP_ALLOW_SELF_PROXY === '1' && { allowSelfProxy: true }),
 	...(process.env.STOMP_REWRITER === 'wasm' && { rewriter: 'wasm' }),
 	// the protective shields are on by default for every site (the demo seeds a
 	// '*' default entry, src/controller/shields.ts DEFAULT_SHIELDS). The native-

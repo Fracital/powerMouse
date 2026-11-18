@@ -130,9 +130,11 @@ does one of its own origin, a
 navigation to a route of a route (a page's raw slot URL routed on the
 hub's origin) is redirected by the worker that gets it to the inner route,
 on the inner route's origin, and `controller.unroute()` reads a route of
-any slot (a host reading `frame`'s routed URL off a slot). A route that
-decodes to one of them is refused like the worker's own origin: a slot's
-port serves the whole app, the host's page included. None of this makes
+any slot (a host reading `frame`'s routed URL off a slot). Any other URL
+of them is a site like another (docs/proxyception.md): it goes out over the
+transport, so what answers is the host's server as any client sees it,
+never a worker or a page of the pool, and a navigation to it is shown from
+a slot of its own (leaveSlot). None of this makes
 another slot same-origin to a document: the emulated same-origin policy
 still compares the real origins.
 
@@ -1228,16 +1230,16 @@ first. A slot's worker and its documents then read a URL of the proxy
 origin as a site's: `fetch(<proxy origin>/stomp/serviceWorker.js)` from a
 slot's document went out over the transport, which does not reach the
 proxy's own host, and the page saw `TypeError: Failed to fetch` where the
-pool off answers the 403 refusal; a frame sent to `<proxy origin>/` showed
-nothing. `proxyOrigins` names `sites.home` too now, so the route is
-refused on the slot as on the hub, and a navigation to it stays on its
-origin (leaveSlot's double route). The demo's isolated page has used the
+pool off answered the 403 refusal; a frame sent to `<proxy origin>/` showed
+nothing. `proxyOrigins` names `sites.home` too now, so a route of it is
+unwrapped on the slot as on the hub. The demo's isolated page has used the
 pool by default since 4ab3d5df, which is when fetch-credentials started
-to fail. Proxy-ception (`allowSelfProxy`) was never handed to the slots'
-agents either, so the demo loaded through itself showed "Page
-unavailable" from the slot that took the site; the agents get it now, and
-self-proxy shows the inner demo and its controller "Ready" as with the
-pool off.
+to fail. Proxy-ception was then an option (`allowSelfProxy`) the slots'
+agents were never handed, so the demo loaded through itself showed "Page
+unavailable" from the slot that took the site. It is no option now: a URL
+of the proxy origin that is no route is a site like another on every
+thread (docs/proxyception.md), and the proxyception suite loads the demo
+through itself with the pool on.
 
 ## An agent's frame that never commits
 

@@ -1,3 +1,4 @@
+import { attributeMarker } from '../../../helperNames';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { unrouteCSS } from '../../modules/Unroute';
@@ -27,10 +28,22 @@ import type DocumentClient from '../Client';
  * touch) is the browser's record, in the browser's order. A callback left
  * with no record is not called.
  */
-export const MARKER = 's_o:';
+let marker = 's_o:';
+/** the prefix of this controller's marker attributes (useMarker) */
+export const markerPrefix = () => marker;
+/**
+ * The marker prefix of the controller whose access API is `access`
+ * (attributeMarker), taken before any hook: a STomp loaded through this one
+ * (proxy-ception, docs/proxyception.md) hooks the same elements, and with
+ * one prefix its markers were this one's, so each read the other's original
+ * of an attribute as its own.
+ */
+export function useMarker(access: string) {
+	marker = attributeMarker(access);
+}
 
 const isMarker = (name: string | null): name is string =>
-	name !== null && name.startsWith(MARKER);
+	name !== null && name.startsWith(markerPrefix());
 
 // native accessors, taken when the bundle is evaluated, before any hook:
 // interface checks are not realm checks, so they serve every realm the
@@ -200,7 +213,7 @@ function pageOldValue(
 	const record = records[index];
 	const target = recordTarget(record);
 	const name = recordName(record)!;
-	const marker = MARKER + name;
+	const marker = markerPrefix() + name;
 	let markerValue: string | null | undefined;
 	for (let i = index + 1; i < records.length; i++) {
 		const next = records[i];
@@ -263,7 +276,7 @@ function shapeWrite(
 		const attribute = recordName(record)!;
 		const node = recordTarget(record);
 		if (isMarker(attribute)) {
-			const base = attribute.slice(MARKER.length);
+			const base = attribute.slice(markerPrefix().length);
 			if (!rerouted.has(node)) rerouted.set(node, new Set());
 			rerouted.get(node)!.add(base);
 			if (node === target && write.markers.has(base)) firstMarker ??= record;
@@ -277,7 +290,7 @@ function shapeWrite(
 		if (firstMarker) marker = recordOldValue(firstMarker);
 		else
 			for (const base of write.markers) {
-				marker = attributeOf(target, MARKER + base);
+				marker = attributeOf(target, markerPrefix() + base);
 				if (marker !== null) break;
 			}
 		if (marker !== null) return marker;
@@ -302,7 +315,7 @@ function shapeWrite(
 			node === target &&
 			(attribute === name ||
 				(isMarker(attribute) &&
-					write.markers.has(attribute.slice(MARKER.length))));
+					write.markers.has(attribute.slice(markerPrefix().length))));
 		if (own) {
 			// one record for the page's write, where its first native one was
 			if (!emitted)
@@ -543,7 +556,7 @@ export function hookWrite<T>(
 			// a prefixed attribute's records (xlink:href) carry its local name
 			written: new Set(
 				[...names()].flatMap((name) =>
-					!name.startsWith(MARKER) && name.includes(':')
+					!name.startsWith(markerPrefix()) && name.includes(':')
 						? [name, name.slice(name.indexOf(':') + 1)]
 						: [name],
 				),
@@ -741,7 +754,7 @@ export default class MutationObserverModule extends Module<DocumentClient> {
 					const names = Array.from(filter, String);
 					copy.attributeFilter = [
 						...names,
-						...names.map((name) => MARKER + name),
+						...names.map((name) => markerPrefix() + name),
 					];
 				}
 				const result = Reflect.apply(target, that, [args[0], copy]);

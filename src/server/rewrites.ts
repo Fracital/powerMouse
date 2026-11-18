@@ -94,6 +94,7 @@ import {
 	formQuery,
 	linkRouteURL,
 	parseRoutedURL,
+	proxyBlobUUID,
 	proxyOrigins,
 	REFUSED_ROUTE,
 	REFUSED_SOURCE_ROUTE,
@@ -1088,8 +1089,6 @@ interface Rewriter {
 	hostReload?: { mode: HostReload; until: number; loads: Map<string, number> };
 	/** the host's page is cross-origin isolated (config.isolated) */
 	isolated: boolean;
-	/** proxy-ception: forward the proxy's own origin instead of refusing it (config.allowSelfProxy) */
-	allowSelfProxy: boolean;
 }
 
 /** how long after a reloaded host's word a top-level navigation is one it restores */
@@ -1448,7 +1447,9 @@ function genericForward(
 		// the single route of it, a document and a subresource alike, on the
 		// inner route's origin (with the site pool, a slot's route routed on
 		// the hub's origin goes back to the slot that shows its site)
-		const unwrapped = proxyOwn ? unwrapRoute(url.url, rewriter.codec) : null;
+		const unwrapped = proxyOwn
+			? unwrapRoute(url.url, rewriter.codec, rewriter.directory)
+			: null;
 		if (unwrapped) {
 			const single = `${url.url.origin}${rewriter.directory}${resource}/${new StompURL(
 				unwrapped,
@@ -1460,41 +1461,16 @@ function genericForward(
 			});
 		}
 
-		// a route that decodes to the proxy's own origin would make the proxy
-		// fetch itself (its host page, its worker): a loop and an exposure
-		// of the host, so it is refused, like a blocked request. Proxy-ception
-		// on (config.allowSelfProxy) forwards it like any other origin, so the
-		// demo can be loaded through itself; off in production.
-		if (proxyOwn && !rewriter.allowSelfProxy) {
-			const page = DOCUMENT_DESTINATIONS.has(serverRequest.destination)
-				? await hostErrorPage(rewriter, {
-						url: reportURL(url),
-						status: 403,
-						error: 'refused: the proxy does not proxy its own origin',
-						kind: 'refused',
-					})
-				: null;
-			rewriter.log?.({
-				url: reportURL(url),
-				method: serverRequest.method,
-				destination: serverRequest.destination || 'fetch',
-				status: 403,
-				ms: Date.now() - started,
-				cached: false,
-				bytes: 0,
-				error: 'refused: the proxy does not proxy its own origin',
-				kind: 'refused',
-				// the host's page never reports a client id: no attribution to wait for
-				...(page ? {} : { client: context?.clientId }),
-			});
-			return (
-				page ??
-				new Response('Stomp does not proxy its own origin', {
-					status: 403,
-					headers: { 'content-type': 'text/plain; charset=utf-8' },
-				})
-			);
-		}
+		// Anything else of the proxy's own origin is one more site
+		// (proxy-ception, docs/proxyception.md): the demo, its examples, a
+		// STomp of its own that proxies a third site. It goes out over the
+		// transport as every site does, so what answers is the host's server
+		// as any client sees it, never this worker, its controllers or the
+		// host's page, and its cookies, storage and service workers are the
+		// emulated partition of that origin, as another site's are. (This was
+		// a 403 refusal, from before a page of the proxy's origin could be
+		// told apart from the host's own: docs/proxyception.md says what each
+		// part of it kept and what keeps it now.)
 
 		const requestHeaders = filterNativeRequestHeaders(
 			serverRequest.headers,
@@ -5159,7 +5135,6 @@ export function registerRewrites(
 		shields,
 		storage,
 		isolated: !!init.isolated,
-		allowSelfProxy: !!init.allowSelfProxy,
 		codec: init.codec,
 		directory: init.directory,
 		errorPage: init.errorPage,
@@ -5676,7 +5651,12 @@ export function registerRewrites(
 		const uuid = at ?? inner.slice(inner.lastIndexOf('/') + 1);
 		if (page.url.protocol !== 'blob:' || !/^[\da-f-]{36}$/.test(uuid))
 			return Response.error();
-		const blobURL = `blob:${location.origin}/${uuid}`;
+		// (a page of the proxy's own origin names it in its form, whose UUID
+		// differs: routeURL.ts setBlobOrigins)
+		const blobURL = `blob:${location.origin}/${
+			at ??
+			proxyBlobUUID(uuid, page.url.origin, location.origin, rewriter.codec.key)
+		}`;
 		const minter = await knownOriginOf(blobURL);
 		if (minter && minter.origin !== page.url.origin) return Response.error();
 		let response: Response;

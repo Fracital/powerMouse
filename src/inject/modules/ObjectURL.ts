@@ -58,7 +58,7 @@ export default class ObjectURLModule extends Module<Client> {
 		// after that come out in the proxy's form (YouTube Music's and
 		// SoundCloud's MediaSource URLs, read back through currentSrc)
 		const proxy = realmOrigin(client);
-		setBlobOrigins(client.url.url.origin, proxy);
+		setBlobOrigins(client.url.url.origin, proxy, client.url.codec.key);
 		const URLCtor = client.global.URL;
 		if (typeof URLCtor?.createObjectURL !== 'function') return;
 		const create = URLCtor.createObjectURL;

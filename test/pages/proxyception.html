@@ -1,0 +1,84 @@
+<!doctype html>
+<title>PROXYCEPTION</title>
+<pre id="result">pending</pre>
+<script>
+	// What a page reads of itself, loaded natively and through a STomp that
+	// is itself loaded through STomp (the proxyception suite compares them).
+	// The eval and Function reads go through the inner STomp's rewriter,
+	// which the page's first task needs before its controller handed it over.
+	const r = {};
+	window.__pc = r;
+	const t = (k, f) => {
+		try {
+			r[k] = f();
+		} catch (e) {
+			r[k] = 'threw ' + e.name + ': ' + e.message;
+		}
+	};
+	t('href', () => location.href);
+	t('origin', () => location.origin);
+	t('windowOrigin', () => window.origin);
+	t('documentURL', () => document.URL);
+	t('evalHref', () => eval('location.href'));
+	t('functionHref', () => new Function('return location.href')());
+	t('topIsSelf', () => window.top === window);
+	t('cookie', () => {
+		document.cookie = 'pc=page; path=/';
+		return document.cookie;
+	});
+	t('storage', () => {
+		localStorage.setItem('pc', 'page');
+		return JSON.stringify(Object.keys(localStorage));
+	});
+	(async () => {
+		const res = await fetch('/pages/echo.json');
+		r.fetch = [res.status, res.url, (await res.text()).length > 0];
+		const blob = URL.createObjectURL(new Blob(['blobbed']));
+		r.blobOrigin = new URL(blob).origin;
+		r.blobText = await (await fetch(blob)).text();
+		const frame = document.createElement('iframe');
+		frame.src = '/pages/hist-1.html';
+		document.body.append(frame);
+		await new Promise((resolve) => (frame.onload = resolve));
+		r.frameTitle = frame.contentDocument.title;
+		r.frameHref = frame.contentWindow.location.href;
+		// a dedicated worker, an error it throws, and a shared worker: each
+		// takes its transport from the STomp that proxies the page
+		const settle = (promise) =>
+			Promise.race([
+				promise,
+				new Promise((resolve) => setTimeout(resolve, 15000, 'timeout')),
+			]);
+		const worker = new Worker('/pages/proxyception-worker.js');
+		r.worker = await settle(
+			new Promise((resolve) => {
+				worker.onmessage = (event) => resolve(event.data);
+				worker.postMessage('go');
+			}),
+		);
+		r.workerError = await settle(
+			new Promise((resolve) => {
+				worker.onerror = (event) => {
+					event.preventDefault();
+					resolve([event.message, event.filename, event.lineno]);
+				};
+				worker.postMessage('throw');
+			}),
+		);
+		worker.terminate();
+		const shared = new SharedWorker('/pages/shared.js');
+		r.shared = await settle(
+			new Promise((resolve) => {
+				shared.port.onmessage = (event) => resolve(event.data);
+				shared.port.start();
+			}),
+		);
+	})()
+		.catch((e) => {
+			r.error = String(e);
+		})
+		.finally(() => {
+			r.done = true;
+			document.getElementById('result').textContent = JSON.stringify(r);
+		});
+</script>

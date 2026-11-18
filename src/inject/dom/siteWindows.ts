@@ -18,7 +18,7 @@ import type DocumentClient from './Client';
 import { deferred } from './deferred';
 import type ContextModule from './modules/Context';
 import { isWindow } from './modules/Context';
-import { MARKER } from './modules/MutationObserver';
+import { markerPrefix } from './modules/MutationObserver';
 import { Pool } from './pool';
 import { pageSandbox, sandboxTokens } from './sandbox';
 
@@ -521,7 +521,7 @@ function makeSiteWindows() {
 		client: DocumentClient,
 		element: Element,
 	): Set<string> | null {
-		const sandbox = pageSandbox(element, MARKER);
+		const sandbox = pageSandbox(element, markerPrefix());
 		const own = client.sandboxFlags;
 		if (sandbox === null) return own && new Set(own);
 		const tokens = sandboxTokens(sandbox);

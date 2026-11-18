@@ -18,7 +18,7 @@ type Context = [
 	key: string,
 	directory: string,
 	config: Config | null,
-	blob: [page: string, proxy: string] | null,
+	blob: [page: string, proxy: string, key?: string] | null,
 	scopes: string[],
 	mark?: string,
 ];
@@ -33,7 +33,7 @@ export function enter(text: string): { url: StompURL; config: Config } {
 	const full: Config = config ?? { codec: codecName, directory, scope: '' };
 	const { codec } = parseConfig({ ...full, codec: codecName }, key);
 	// the module state the rewriters read is the caller's
-	if (blob) setBlobOrigins(blob[0], blob[1]);
+	if (blob) setBlobOrigins(blob[0], blob[1], blob[2]);
 	else setBlobOrigins('', '');
 	setRouteScopes(scopes);
 	const cacheMark = typeof mark === 'string' ? mark : '';

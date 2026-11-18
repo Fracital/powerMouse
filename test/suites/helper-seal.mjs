@@ -65,16 +65,20 @@ for (const [mode, base] of [
 		clientNames.push(
 			await page.evaluate(() => window.controller.config.names?.client),
 		);
-		await submitLanding(
-			page,
-			`${FIXTURE}pages/helper-seal.html${early ? '?early' : ''}`,
+		// the access API's name, which the controller mints: the child hunts
+		// with it, as a page that learned it would
+		const access = await page.evaluate(
+			() => window.controller.config.names?.access ?? '$s$j',
 		);
+		const query = new URLSearchParams({ access });
+		if (early) query.set('early', '');
+		await submitLanding(page, `${FIXTURE}pages/helper-seal.html?${query}`);
 		const report = await collect(page.context());
 		ok(`${label}: the child reports`, !!report, '');
 		const paths = report?.paths ?? {};
 		const detail = JSON.stringify(paths);
 		ok(
-			`${label}: the access API is found by its default name, and a function's source no longer shows it`,
+			`${label}: the access API is found by its name, and a function's source no longer shows it`,
 			paths.accessNamed === 'true' && paths.sourceShowsAccess === 'false',
 			detail,
 		);

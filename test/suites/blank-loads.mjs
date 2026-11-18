@@ -231,7 +231,7 @@ for (const [host, transport] of [
 	await page.evaluate(async (fixture) => {
 		const element = document.createElement('iframe');
 		document.body.append(element);
-		// the proxy refuses its own origin, the host page's
+		// a site of another origin than the host page's
 		const origin = new URL(fixture).origin.replace('127.0.0.1', 'localhost');
 		await window.controller
 			.createFrame(element)

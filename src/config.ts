@@ -28,17 +28,6 @@ export interface Config {
 	 */
 	frameAncestors?: string[];
 	/**
-	 * Proxy-ception, off unless `true`. A route that decodes to the proxy's
-	 * own origin (`oURL.origin`) is normally refused with 403, so a page cannot
-	 * make the proxy fetch its own host page, controller or worker. `true`
-	 * forwards the proxy origin like any other, so the demo can be loaded
-	 * through itself (the inner controller boots and its proxy works one level
-	 * deep). Exploratory and security-sensitive: it lets proxied content reach
-	 * the proxy origin, the wisp endpoint among it, so leave it off in
-	 * production. See the self-origin guard in src/server/rewrites.ts.
-	 */
-	allowSelfProxy?: boolean;
-	/**
 	 * The host application handles `window.open` and `target="_blank"`
 	 * (`onOpen` on the controller): pages post the URL to it instead of
 	 * opening a popup, and `window.open` returns null like a popup blocker.
@@ -179,8 +168,8 @@ export interface Config {
 	hooks?: ResolvedHooks;
 	/**
 	 * The host's own page for a document the proxy failed to produce (a
-	 * transport failure, the timeout, a routing error, a blocked rule, the
-	 * refusal to proxy its own origin): a path on the service worker's origin,
+	 * transport failure, the timeout, a routing error, a blocked rule): a
+	 * path on the service worker's origin,
 	 * which in origin-isolation mode is the proxy host, not the host page's.
 	 * Served with the failure's status and `globalThis.stompError`
 	 * (`{ url, status, error, kind }`), never cached. Without it the built-in

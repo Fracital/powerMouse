@@ -55,7 +55,7 @@ import ContextModule from './Context';
 import {
 	attributeName,
 	hookWrite,
-	MARKER,
+	markerPrefix,
 	pageWrite as observedPageWrite,
 	propertyAttribute,
 } from './MutationObserver';
@@ -88,7 +88,6 @@ function pageWrite<T>(element: Element, name: string, callback: () => T): T {
 // attribute, not one of no namespace that the element ignores
 const removedNamespaces = new LazyWeakMap<Element, Map<string, string>>();
 
-const ORIGINAL_ATTRIBUTE = MARKER;
 /**
  * the markup members of Node, Element, ShadowRoot, CharacterData,
  * DocumentFragment and Document the inject hooks (or that only serialize);
@@ -134,7 +133,7 @@ const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 const otherXlinkPrefix = (name: string) =>
 	name.endsWith(':href') &&
 	name !== 'xlink:href' &&
-	!name.startsWith(ORIGINAL_ATTRIBUTE) &&
+	!name.startsWith(markerPrefix()) &&
 	name.indexOf(':') === name.length - 5;
 
 /**
@@ -308,7 +307,7 @@ export class CustomElement extends Element {
 		Reflect.apply(CustomElement.prototype.applyAttributes, this, []);
 	}
 	getAttributeOG(attribute: string): string | null {
-		const og = `${ORIGINAL_ATTRIBUTE}${attribute}`;
+		const og = `${markerPrefix()}${attribute}`;
 
 		if (this.hasAttribute(og)) {
 			return this.getAttribute(og)!;
@@ -320,23 +319,23 @@ export class CustomElement extends Element {
 		const names: string[] = [];
 
 		for (const name of this.getAttributeNames())
-			if (name.startsWith(ORIGINAL_ATTRIBUTE))
-				names.push(name.slice(ORIGINAL_ATTRIBUTE.length));
+			if (name.startsWith(markerPrefix()))
+				names.push(name.slice(markerPrefix().length));
 
 		return names;
 	}
 	setAttributeOG(attribute: string, value: string) {
-		const og = `${ORIGINAL_ATTRIBUTE}${attribute}`;
+		const og = `${markerPrefix()}${attribute}`;
 
 		this.setAttribute(og, value);
 	}
 	hasAttributeOG(attribute: string): boolean {
-		const og = `${ORIGINAL_ATTRIBUTE}${attribute}`;
+		const og = `${markerPrefix()}${attribute}`;
 
 		return this.hasAttribute(og);
 	}
 	removeAttributeOG(attribute: string) {
-		const og = `${ORIGINAL_ATTRIBUTE}${attribute}`;
+		const og = `${markerPrefix()}${attribute}`;
 
 		this.removeAttribute(og);
 	}
@@ -626,7 +625,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				node
 					? node.namespaceURI !== XLINK_NAMESPACE
 					: !Reflect.apply(nativeElement.hasAttribute, element, [
-							ORIGINAL_ATTRIBUTE + attribute,
+							markerPrefix() + attribute,
 						])
 			)
 				return NO_HOOKS;
@@ -703,7 +702,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				// (the written one first: it may be in the hooks' view only)
 				![attribute, ...element.getAttributeNames()].some(
 					(name) =>
-						!name.startsWith(ORIGINAL_ATTRIBUTE) &&
+						!name.startsWith(markerPrefix()) &&
 						this.#unparsed(element, name) !== null,
 				)
 			)
@@ -2131,7 +2130,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 								element.getAttributeOG(local),
 							)
 						: Reflect.apply(nativeElement.getAttribute, that, [
-								ORIGINAL_ATTRIBUTE + local,
+								markerPrefix() + local,
 							]);
 					if (original !== null) return original;
 					// a style the browser serialised from a CSSOM write, as
@@ -2172,7 +2171,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				// no hook is working on the element: the DOM is the hooks'
 				// view, read natively without a prototype swap
 				if (!pendingAttributes(that)) {
-					const marker = ORIGINAL_ATTRIBUTE + attribute;
+					const marker = markerPrefix() + attribute;
 					if (Reflect.apply(nativeElement.hasAttribute, that, [marker]))
 						return Reflect.apply(nativeElement.getAttribute, that, [marker]);
 					const value = Reflect.apply(nativeElement.getAttribute, that, [
@@ -2202,7 +2201,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// (`s_o:*`) never show, values come from the markers, and markup is
 		// serialised from a copy with the markers folded back in.
 		const isMarker = (name: unknown) =>
-			typeof name === 'string' && name.startsWith(ORIGINAL_ATTRIBUTE);
+			typeof name === 'string' && name.startsWith(markerPrefix());
 		// the name a call acts on is lowercased on an HTML element, so
 		// `S_O:HREF` names a marker there too
 		const isMarkerOn = (element: unknown, name: unknown) =>
@@ -2219,7 +2218,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				const attribute = attributeName(that, String(args[0]));
 				if (!pendingAttributes(that))
 					return Reflect.apply(nativeElement.hasAttribute, that, [
-						ORIGINAL_ATTRIBUTE + attribute,
+						markerPrefix() + attribute,
 					]);
 				return usePrototype(that, CustomElement.prototype, (element) =>
 					element.hasAttributeOG(attribute),
@@ -2247,12 +2246,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			const result: string[] = [];
 			names.forEach((name, index) => {
 				if (!isMarker(name)) {
-					const marker = names.indexOf(`${ORIGINAL_ATTRIBUTE}${name}`);
+					const marker = names.indexOf(`${markerPrefix()}${name}`);
 					if (marker === -1 || marker > index) result.push(name);
 				} else {
-					const base = names.indexOf(name.slice(ORIGINAL_ATTRIBUTE.length));
+					const base = names.indexOf(name.slice(markerPrefix().length));
 					if (base === -1 || base > index)
-						result.push(name.slice(ORIGINAL_ATTRIBUTE.length));
+						result.push(name.slice(markerPrefix().length));
 				}
 			});
 			return result;
@@ -2338,7 +2337,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 									result.push(attr);
 									continue;
 								}
-								const base = attr.name.slice(ORIGINAL_ATTRIBUTE.length);
+								const base = attr.name.slice(markerPrefix().length);
 								if (names.includes(base)) continue;
 								let standIn = standIns.get(attr);
 								if (!standIn) {
@@ -2484,7 +2483,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						let dropped = false;
 						for (const name of names)
 							if (isMarker(name)) {
-								const base = name.slice(ORIGINAL_ATTRIBUTE.length);
+								const base = name.slice(markerPrefix().length);
 								const at = names.indexOf(base);
 								if (at === -1 || at > names.indexOf(name)) dropped = true;
 								node.setAttribute(base, node.getAttribute(name)!);
@@ -2700,7 +2699,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// was never rewritten
 		const SELECTOR_ATTRIBUTE =
 			/\[\s*([A-Za-z_][\w-]*)\s*(?:([~|^$*]?=)\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\]\s]+)\s*([isIS])?)?\s*\]/g;
-		const marker = ORIGINAL_ATTRIBUTE.replace(':', '\\:');
+		const marker = markerPrefix().replace(':', '\\:');
 		const rewriteSelector = (selector: unknown): string =>
 			String(selector).replace(
 				SELECTOR_ATTRIBUTE,
@@ -2938,7 +2937,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					) {
 						// in the order the hooks' view applies them
 						applyAttribute(that, attribute, null);
-						applyAttribute(that, ORIGINAL_ATTRIBUTE + attribute, null);
+						applyAttribute(that, markerPrefix() + attribute, null);
 						return;
 					}
 					usePrototype(that, CustomElement.prototype, (element) => {

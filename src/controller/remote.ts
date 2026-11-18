@@ -125,8 +125,6 @@ export interface RemoteControllerInit {
 	rewriteTimeout?: number;
 	/** request rules run in the service worker (see StompController) */
 	rules?: RequestRule[];
-	/** proxy-ception: forward the proxy's own origin, off unless `true` (see StompController) */
-	allowSelfProxy?: boolean;
 	/** per-site shields the controller starts with (see StompController.shields) */
 	shields?: SiteShields[];
 	/** called after `controller.shields.set(...)` to persist the change (see StompController) */
@@ -517,7 +515,6 @@ export class RemoteController extends EventTarget {
 						? { rewriteTimeout: init.rewriteTimeout }
 						: {}),
 					...(init.rules ? { rules: init.rules } : {}),
-					...(init.allowSelfProxy ? { allowSelfProxy: true } : {}),
 					...(init.assets ? { assets: init.assets } : {}),
 					...(init.adblock !== undefined ? { adblock: init.adblock } : {}),
 					...(init.adblockLists ? { adblockLists: init.adblockLists } : {}),

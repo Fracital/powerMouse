@@ -1,3 +1,4 @@
+import { JAR_TURN_COOKIE } from '../../../encodeCookie';
 import { partitionSite } from '../../../partition';
 import {
 	BrowserCookieArray,
@@ -54,6 +55,8 @@ interface View {
 	known: JarCookie[] | null;
 	fresh: boolean;
 	version: string;
+	/** JAR_TURN_COOKIE as the jar was read */
+	turn: string;
 }
 const views = new LazyMap<string, View>();
 
@@ -81,7 +84,10 @@ export class CookiesModule extends Module<DocumentClient> {
 		const key = `${this.client.url}\n${this.#partitionKey}`;
 		let view = views.get(key);
 		if (!view)
-			views.set(key, (view = { known: null, fresh: false, version: '' }));
+			views.set(
+				key,
+				(view = { known: null, fresh: false, version: '', turn: '' }),
+			);
 		return view;
 	}
 	// The writes the synchronous bridge could not carry: its beacon was
@@ -165,6 +171,24 @@ export class CookiesModule extends Module<DocumentClient> {
 	#version(): string {
 		try {
 			return this.#getItem?.call(this.#versions, this.#versionKey) ?? '';
+		} catch (error) {
+			return '';
+		}
+	}
+	/** JAR_TURN_COOKIE in the real jar ('' where there is none) */
+	#turn(): string {
+		try {
+			const real = String(
+				Reflect.apply(
+					this.cookieDescriptor.get!,
+					this.client.global.document,
+					[],
+				),
+			);
+			const at = real.indexOf(`${JAR_TURN_COOKIE}=`);
+			if (at === -1) return '';
+			const end = real.indexOf(';', at);
+			return real.slice(at, end === -1 ? undefined : end);
 		} catch (error) {
 			return '';
 		}
@@ -335,7 +359,15 @@ export class CookiesModule extends Module<DocumentClient> {
 		const client = this.client;
 		const version = this.#version();
 		const view = this.#view;
-		if (view.known && view.fresh && version === view.version)
+		// and the real jar's turn, which an emulated service worker's write
+		// moves (JAR_TURN_COOKIE)
+		const turn = this.#turn();
+		if (
+			view.known &&
+			view.fresh &&
+			version === view.version &&
+			turn === view.turn
+		)
 			return this.#show(view.known);
 
 		const syncModule = client.getModule(SyncModule)!;
@@ -353,6 +385,7 @@ export class CookiesModule extends Module<DocumentClient> {
 			);
 			view.fresh = true;
 			view.version = version;
+			view.turn = turn;
 			return this.#show(view.known);
 		}
 		// The bridge cannot ask now (the page's own beacons hold the quota),

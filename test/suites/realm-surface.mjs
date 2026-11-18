@@ -48,6 +48,8 @@ const ONLY = process.env.REALM_SURFACE_ONLY;
 // Facts that are not compared, each with the reason it differs for a page
 // that is where a proxied page is: [realm pattern, fact pattern, reason].
 // One marked OPEN is a difference the proxy makes and has yet to unmake.
+const escape = (text) => text.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+
 const EXCLUDED = [
 	[
 		/^(top|popup-)/,
@@ -156,13 +158,18 @@ const EXCLUDED = [
 	],
 	[
 		/^(audio|paint)-worklet$/,
-		/^G\.Number\.prototype(:keys$|\.\$s\$j($|[.:~]))/,
-		"OPEN: a worklet's rewritten module reaches the access API on the worklet's Number.prototype (0..$s$j), where no hook of the inject hides it from reflection",
+		// (the access name is the controller's, minted per origin)
+		(access) =>
+			new RegExp(
+				`^G\\.Number\\.prototype(:keys$|\\.${escape(access)}($|[.:~]))`,
+			),
+		"OPEN: a worklet's rewritten module reaches the access API on the worklet's Number.prototype (0..<access name>), where no hook of the inject hides it from reflection",
 		null,
-		(native, proxied) =>
+		(native, proxied, access) =>
 			native === undefined ||
 			(typeof proxied === 'string' &&
-				proxied.replace(/,\$s\$j(?=,|$)/, '') === native),
+				proxied.replace(new RegExp(`,${escape(access)}(?=,|$)`), '') ===
+					native),
 	],
 	[
 		/^(worker-|shared-worker$)/,
@@ -313,7 +320,7 @@ const same = (a, b) =>
  * What differs between the native record of a realm and the proxied one:
  * facts the two native loads agree on, less what EXCLUDED lists
  */
-function compare(realm, first, second, proxied, mode) {
+function compare(realm, first, second, proxied, mode, access) {
 	const a = facts(first, realm);
 	const b = facts(second, realm);
 	const p = facts(proxied, realm);
@@ -329,9 +336,9 @@ function compare(realm, first, second, proxied, mode) {
 		EXCLUDED.find(
 			([realms, pattern, , only, when]) =>
 				realms.test(realm) &&
-				pattern.test(key) &&
+				(typeof pattern === 'function' ? pattern(access) : pattern).test(key) &&
 				(!only || only === mode) &&
-				(!when || when(native, through)),
+				(!when || when(native, through, access)),
 		);
 	const differ = (key, native, through) => {
 		const rule = excluded(key, native, through);
@@ -393,6 +400,10 @@ async function through(set, base) {
 		null,
 		{ timeout: 45000 },
 	);
+	// the access name this demo origin's controller minted
+	const access = await page.evaluate(
+		() => window.controller?.config?.names?.access ?? '$s$j',
+	);
 	await submitLanding(page, target(set));
 	const state = await collect(
 		async () =>
@@ -400,7 +411,7 @@ async function through(set, base) {
 		paint,
 	);
 	await context.close();
-	return { state, raised };
+	return { state, raised, access };
 }
 
 const MODES = [
@@ -433,7 +444,7 @@ for (const set of SETS) {
 	);
 	if (!first || !second) continue;
 	for (const [index, [mode]] of MODES.entries()) {
-		const { state, raised } = proxied[index];
+		const { state, raised, access } = proxied[index];
 		dump(`${set}-${mode}`, state);
 		if (
 			!ok(
@@ -468,7 +479,7 @@ for (const set of SETS) {
 					);
 				continue;
 			}
-			const result = compare(realm, first, second, state, mode);
+			const result = compare(realm, first, second, state, mode, access);
 			// a difference of the realm's base is the base's to report
 			const baseDifferences = all[state.bases[realm]];
 			if (baseDifferences) {

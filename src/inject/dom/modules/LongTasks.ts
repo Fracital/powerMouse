@@ -9,7 +9,7 @@ import {
 } from '../longEntryNatives';
 import type EntryTimingModule from './EntryTiming';
 import type { Admit } from './EntryTiming';
-import { MARKER } from './MutationObserver';
+import { markerPrefix } from './MutationObserver';
 
 /** what a long task's culprit says of the frame it ran in */
 const CONTAINER = [
@@ -130,7 +130,7 @@ export function longTasks(
 	};
 	/** the `src` of a frame element as its page wrote it */
 	const writtenSource = (element: Element): string =>
-		attribute(element, `${MARKER}src`) ??
+		attribute(element, `${markerPrefix()}src`) ??
 		(timing.pageURL(attribute(element, 'src') ?? '') as string);
 
 	const view = (task: object): TaskView => {

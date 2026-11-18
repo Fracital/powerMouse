@@ -189,8 +189,7 @@ first; each item has its suite and its CHANGELOG bullet.
   after the 30 s limit (measured). Use the descriptor.
 - **Error page.** `init.errorPage`: the host's own page, a path on the service
   worker's origin, for a document the proxy failed to produce (unreachable
-  origin, timeout, routing error, blocked rule, the refusal to proxy its own
-  origin, and soon a gone controller). Served with the failure's status and
+  origin, timeout, routing error, blocked rule, and soon a gone controller). Served with the failure's status and
   `globalThis.stompError` (`{ url, status, error, kind }`), never cached.
 - **Helper names.** `init.names` replaces the four globals the rewriter and
   the inject bundles rendezvous on (`access`, `client`, `globalProxy`,

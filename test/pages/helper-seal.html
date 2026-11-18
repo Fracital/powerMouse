@@ -8,12 +8,18 @@
 		// the access API). With ?early the page reads the frame's contentWindow
 		// before the child's document arrives, which injects this page's client
 		// into the frame's initial about:blank (the child's document reuses it).
+		// ?access names the access API (the controller mints it): the child
+		// hunts with it as a page that learned it would
 		window.sealSecret = 'SEAL-SECRET';
+		const query = new URLSearchParams(location.search);
+		const childQuery = new URLSearchParams();
+		if (query.has('early')) childQuery.set('early', '');
+		if (query.has('access')) childQuery.set('access', query.get('access'));
 		const frame = document.createElement('iframe');
 		frame.src = refsCross(
-			`helper-seal-child.html${location.search.includes('early') ? '?early' : ''}`,
+			`helper-seal-child.html${childQuery.size ? `?${childQuery}` : ''}`,
 		);
 		document.body.append(frame);
-		if (location.search.includes('early')) window.__early = frame.contentWindow;
+		if (query.has('early')) window.__early = frame.contentWindow;
 	</script>
 </body>

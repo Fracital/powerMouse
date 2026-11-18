@@ -111,7 +111,7 @@ import DOMAttributesModule, {
 	scriptKind,
 	shouldRewriteScript,
 } from './modules/DOMAttributes';
-import { MARKER } from './modules/MutationObserver';
+import { markerPrefix, useMarker } from './modules/MutationObserver';
 import SyncModule from './modules/Sync';
 import { Pool, type PoolState } from './pool';
 import { createRewriterRealm, libraryFactoryFromScript } from './rewriterRealm';
@@ -482,6 +482,8 @@ export default class DocumentClient extends Client {
 	];
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
+		// (before any hook: its markers are its own, MutationObserver.ts useMarker)
+		useMarker(this.names.access);
 		const documentProto = this.global.Document.prototype;
 		const href = Reflect.getOwnPropertyDescriptor(
 			this.global.HTMLAnchorElement.prototype,
@@ -875,7 +877,7 @@ export default class DocumentClient extends Client {
 				) as Element | null);
 			this.#frameTopNavigation = false;
 			if (frame) {
-				const sandbox = pageSandbox(frame, MARKER);
+				const sandbox = pageSandbox(frame, markerPrefix());
 				if (sandbox !== null) {
 					const tokens = sandboxTokens(sandbox);
 					frameFlags = narrowed(frameFlags, tokens);
@@ -920,7 +922,7 @@ export default class DocumentClient extends Client {
 	requiredCSP(element: Element | null): string | undefined {
 		if (!element || element.nodeName !== 'IFRAME') return undefined;
 		const value =
-			Reflect.apply(nativeGetAttribute, element, [`${MARKER}csp`]) ??
+			Reflect.apply(nativeGetAttribute, element, [`${markerPrefix()}csp`]) ??
 			Reflect.apply(nativeGetAttribute, element, ['csp']);
 		if (
 			typeof value !== 'string' ||
@@ -1270,7 +1272,7 @@ export default class DocumentClient extends Client {
 					)
 						continue;
 					const content = Reflect.apply(nativeGetAttribute, meta, [
-						`${MARKER}content`,
+						`${markerPrefix()}content`,
 					]) as string | null;
 					if (content === null || this.#appliedMetas.has(content)) continue;
 					const made = this.#metaPolicies.get(content);
@@ -2736,7 +2738,9 @@ export default class DocumentClient extends Client {
 		if (context === null || !ROUTE_PROTOCOLS.includes(resource.url.protocol))
 			return plain();
 		// a URL that is a route already is the real URL it stands for
-		const target = unwrapRoute(resource.url, resource.codec) ?? resource.url;
+		const target =
+			unwrapRoute(resource.url, resource.codec, resource.directory) ??
+			resource.url;
 		if (!this.followsOwnLinks) {
 			// (parsed once per address: only read here)
 			const href = this.locationHref;

@@ -588,6 +588,12 @@ export const SHELL_MARKUP = '$stomp$shellMarkup';
  */
 export const WORKER_ERROR = '$stomp$workerError';
 /**
+ * WORKER_ERROR keyed by a controller's `globalName`: a STomp the page runs
+ * (proxy-ception) sends its own, which this one's Worker hook lets through
+ */
+export const workerErrorKey = (globalName: string) =>
+	`${WORKER_ERROR}:${globalName}`;
+/**
  * proxied page -> SW, with [replyPort]: a call of the page's emulated
  * `navigator.serviceWorker` (docs/service-workers.md); the reply on the port
  * is `{ value }` or `{ error: { name, message } }`
@@ -1221,10 +1227,10 @@ export type CookieCommand =
 
 export type CookieResult = string | CookieRecord[] | undefined;
 
-/** a failure the proxy produced: the transport could not reach the origin, the worker's timeout, a routing error, a blocked rule, the refusal to proxy its own origin */
+/** a failure the proxy produced: the transport could not reach the origin, the worker's timeout, a routing error, a blocked rule */
 /** `controller`: the address names a controller that is gone and no live one of its codec can take over */
 export type RequestErrorKind =
-	'transport' | 'timeout' | 'routing' | 'blocked' | 'refused' | 'controller';
+	'transport' | 'timeout' | 'routing' | 'blocked' | 'controller';
 
 /** one completed (or failed) proxied request, for the host's request log */
 export interface RequestInfo {

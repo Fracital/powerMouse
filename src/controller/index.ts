@@ -125,6 +125,7 @@ import {
 	fingerprintSeed,
 	forgetControllerIds,
 	keptControllerId,
+	keptHelperNames,
 } from './id';
 import { mediaVerdict } from './mediaVerdict';
 import type { StaleInfo, TransportDescriptor } from './messages';
@@ -339,15 +340,6 @@ export interface ControllerInit {
 	 */
 	rules?: RequestRule[];
 	/**
-	 * Proxy-ception, off unless `true`. A route that decodes to the proxy's
-	 * own origin is normally refused with 403 (the proxy will not fetch its own
-	 * host page, controller or worker). `true` forwards the proxy origin like
-	 * any other, so the demo can be loaded through itself. Exploratory and
-	 * security-sensitive (proxied content reaches the proxy origin, the wisp
-	 * endpoint among it); leave it off in production. See `Config.allowSelfProxy`.
-	 */
-	allowSelfProxy?: boolean;
-	/**
 	 * Per-site shields the controller starts with (the demo's content-blocker
 	 * UI, docs/adblock.md): a host-keyed state the host persisted. They travel
 	 * to the service worker with the handshake, and `controller.shields` reads
@@ -399,8 +391,8 @@ export interface ControllerInit {
 	/**
 	 * The host's own page for a document the proxy failed to produce (the
 	 * transport could not reach the origin, the worker's timeout, a routing
-	 * error, a blocked rule, the refusal to proxy its own origin): a URL on
-	 * this origin, resolved against the page. Served under the frame's routed
+	 * error, a blocked rule): a URL on this origin, resolved against the
+	 * page. Served under the frame's routed
 	 * URL with the failure's status, never cached, with
 	 * `globalThis.stompError = { url, status, error, kind }` in its head;
 	 * `location.reload()` retries. Without it the built-in pages answer.
@@ -1133,12 +1125,12 @@ export class StompController extends EventTarget {
 				: {}),
 			...(init.assets ? { assets: init.assets } : {}),
 			...(init.adblock !== false ? { adblock: true } : {}),
-			// proxy-ception: the worker forwards its own origin (src/server/rewrites.ts)
-			...(init.allowSelfProxy ? { allowSelfProxy: true } : {}),
 			// the client's name is this controller's own unless the host chose
 			// one: a page that could name it would reach the real windows it
-			// holds (see mintClientName)
+			// holds (see mintClientName). The others are the host origin's own
+			// (keptHelperNames), so a STomp this one proxies does not meet them
 			names: {
+				...keptHelperNames(Object.getOwnPropertyNames(globalThis)),
 				...init.names,
 				client:
 					init.names?.client ??
@@ -2901,9 +2893,6 @@ export class StompController extends EventTarget {
 			...(config.openTab ? { openTab: true } : {}),
 			...(config.requestLog ? { requestLog: true } : {}),
 			...(config.errorPage ? { errorPage: config.errorPage } : {}),
-			// proxy-ception: a slot's worker forwards the proxy's own origin
-			// as this one's does
-			...(config.allowSelfProxy ? { allowSelfProxy: true } : {}),
 			...(config.names ? { names: config.names } : {}),
 			...(hooks
 				? {

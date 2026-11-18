@@ -11,6 +11,7 @@
 // be checked in node (cookie-rules suite).
 import { openDB } from 'idb';
 import { pastASCII, utf8Bytes, utf8Text } from '../byteString';
+import { JAR_TURN_COOKIE } from '../encodeCookie';
 import { ephemeralKey, registrableDomain } from '../partition';
 import {
 	CookieRecord,
@@ -23,6 +24,27 @@ import Router, { json, jsonAPI } from './Router';
 import { windowURL } from './windowURLs';
 
 export type SameSite = 'lax' | 'strict' | 'none';
+
+/** how an emulated service worker's writes name their sender (src/inject/worker/modules/ServiceWorkerGlobal.ts) */
+const WORKER_SENDER = 'sw-';
+
+/** a new value of JAR_TURN_COOKIE, in the real jar of the proxy origin */
+async function turnJar(): Promise<void> {
+	if (typeof cookieStore === 'undefined') return;
+	try {
+		// as the bridge's answers are set: a frame of the proxy origin in
+		// isolation mode is a cross-site embed, which sees no other
+		await cookieStore.set({
+			name: JAR_TURN_COOKIE,
+			value: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+			expires: Date.now() + 10 * 60e3,
+			path: '/',
+			sameSite: 'none',
+		});
+	} catch (error) {
+		// no real jar to tell: documents hear of it by message, as before
+	}
+}
 
 /** a cookie as the jar stores it (and hands to the page through /cookies/get) */
 export interface JarCookie {
@@ -710,6 +732,10 @@ export default class Cookies {
 		finished.then(forget, forget);
 		try {
 			await finished;
+			// an emulated service worker's write: every document reads the jar
+			// again at its next document.cookie, even one spinning on the
+			// bridge (JAR_TURN_COOKIE)
+			if (sender.startsWith(WORKER_SENDER)) await turnJar();
 			return json(200, null);
 		} catch (error) {
 			return json(500, String(error));

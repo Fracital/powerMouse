@@ -89,6 +89,18 @@ export function splitAnswer(id: string, encoded: string): [string, string][] {
 }
 
 /**
+ * A real cookie of the proxy origin the worker sets to a new value each time
+ * an emulated service worker wrote the jar (its Cookie Store API). A
+ * document's emulated document.cookie keeps what it read until something
+ * says the jar changed, and the worker's word for other changes is a message
+ * a page spinning on the bridge never hears; this one a read sees at once,
+ * as natively a cookie a service worker set is in document.cookie at once.
+ * A STomp loaded through this one waits on exactly that: its bridge's
+ * answers are cookies its service worker sets.
+ */
+export const JAR_TURN_COOKIE = 'sync-jar-turn';
+
+/**
  * The answer `splitAnswer` left in `cookies` (a `document.cookie` string) and
  * the names of the cookies that carried it, or null while it is not all there.
  */

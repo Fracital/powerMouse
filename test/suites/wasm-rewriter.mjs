@@ -44,6 +44,8 @@ const controller = (id, options = {}) =>
 			element.id = 'wasm-rewriter-frame';
 			document.body.append(element);
 			window.__frame = controller.createFrame(element);
+			// the access name the controller minted for this origin
+			return controller.config.names.access;
 		},
 		{ id, options },
 	);
@@ -105,7 +107,10 @@ const SCRIPT =
 const WRITTEN = 'function reads(a)  { return a ? top : location.href }';
 const show = (value) => JSON.stringify(value);
 
-await controller('wasm-rewriter', { rewriter: 'wasm', rewriteWorkers: 1 });
+const access = await controller('wasm-rewriter', {
+	rewriter: 'wasm',
+	rewriteWorkers: 1,
+});
 ok('every thread holds the rewriter', await settled(1));
 {
 	const result = await load('p', SCRIPT);
@@ -123,8 +128,8 @@ ok('every thread holds the rewriter', await settled(1));
 	ok(
 		'what no rewrite touches comes back as written, and the reads go through the access API',
 		body?.includes('/* kept */ function') &&
-			body.includes('(a)  { return a ? 0..$s$j.get(top, "top") : ') &&
-			body.includes('0..$s$j.get(location, "location").href }'),
+			body.includes(`(a)  { return a ? 0..${access}.get(top, "top") : `) &&
+			body.includes(`0..${access}.get(location, "location").href }`),
 		show(body?.slice(0, 600)),
 	);
 	ok(
@@ -193,7 +198,9 @@ ok('the service worker holds the rewriter', await settled(0));
 
 // a controller given no rewriter option: the wasm module all the same, the
 // only rewriter (the public rewriter option is gone)
-await controller('wasm-rewriter-default', { rewriteWorkers: 0 });
+const defaultAccess = await controller('wasm-rewriter-default', {
+	rewriteWorkers: 0,
+});
 {
 	const result = await load('j', SCRIPT);
 	const [body] = bodiesOf('j');
@@ -203,7 +210,7 @@ await controller('wasm-rewriter-default', { rewriteWorkers: 0 });
 			result.seen?.[0] === WRITTEN &&
 			body !== undefined &&
 			body.includes('/* kept */') &&
-			body.includes('0..$s$j.get(top, "top")'),
+			body.includes(`0..${defaultAccess}.get(top, "top")`),
 		show([result, body?.slice(0, 300)]),
 	);
 	ok(

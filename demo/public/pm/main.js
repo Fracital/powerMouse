@@ -912,7 +912,6 @@ async function startController(name) {
 			serviceWorkerTimeout: SERVICE_WORKER_TIMEOUT,
 			serviceWorkerEventDelay: SERVICE_WORKER_EVENT_DELAY,
 			...(REWRITER && { rewriter: REWRITER }),
-			...(CFG.allowSelfProxy && { allowSelfProxy: true }),
 			...(SITE_POOL && { sitePool: { origins: SITE_POOL } }),
 			...ADBLOCK,
 			...controllerCallbacks,
@@ -934,7 +933,6 @@ async function startController(name) {
 			serviceWorkerTimeout: SERVICE_WORKER_TIMEOUT,
 			serviceWorkerEventDelay: SERVICE_WORKER_EVENT_DELAY,
 			...(REWRITER && { rewriter: REWRITER }),
-			...(CFG.allowSelfProxy && { allowSelfProxy: true }),
 			...ADBLOCK,
 			...controllerCallbacks,
 		});

@@ -1,3 +1,5 @@
+import { DEFAULT_NAMES, type HelperNames } from '../helperNames';
+
 // A controller's id names its address under the scope (`/stomp/<id>/`), so
 // two host tabs on one scope do not replace each other in the service worker.
 // A host may give one; without, the controller keeps one from visit to visit
@@ -146,6 +148,85 @@ export function fingerprintSeed(): number {
 	return seed;
 }
 
+/**
+ * Where the host origin's helper names are kept (localStorage), a fixed,
+ * project-neutral name like the others here
+ */
+const NAMES_KEY = 'kept-names';
+const NAME_ALPHABET =
+	'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_$';
+/** characters after the `$` of a kept access name: 64^4 names, as short as a rewritten script can afford */
+const ACCESS_LENGTH = 4;
+/** and of the two tags, which no rewritten script spells out */
+const TAG_LENGTH = 12;
+type KeptNames = Pick<HelperNames, 'access' | 'globalProxy' | 'globalName'>;
+
+function mintName(length: number): string {
+	let name = '$';
+	for (const byte of crypto.getRandomValues(new Uint8Array(length)))
+		name += NAME_ALPHABET[byte % NAME_ALPHABET.length];
+	return name;
+}
+
+/**
+ * The access API's and the stand-in tags' names of a controller whose host
+ * named none (helperNames.ts): the host origin's own, minted once and kept
+ * in its localStorage, so they repeat from visit to visit as the id does
+ * (a rewritten script spells the access name, and the rewrite cache and
+ * the browser's code cache keep it by its routed URL). Not the defaults:
+ * a STomp loaded through this one (proxy-ception, docs/proxyception.md)
+ * is page code here and defines its own access API on Number.prototype,
+ * where this one's already is for good. With the same name its rewritten
+ * scripts called this one's API, and the inner proxy's hooks saw nothing.
+ * The inner one keeps its names in its origin's emulated storage, so the
+ * two mint theirs apart (one chance in 16.7 million to meet). None is a
+ * global of this page (`taken`) or a default. Where storage refuses, fresh
+ * ones serve this page alone, as an id does then; they go with the site
+ * data (forgetControllerIds).
+ */
+export function keptHelperNames(taken: Iterable<string> = []): KeptNames {
+	const unusable = new Set([...taken, ...Object.values(DEFAULT_NAMES)]);
+	const usable = (names: unknown): names is KeptNames => {
+		if (!names || typeof names !== 'object') return false;
+		const values = ['access', 'globalProxy', 'globalName'].map(
+			(key) => (names as Record<string, unknown>)[key],
+		);
+		return (
+			values.every(
+				(value) =>
+					typeof value === 'string' &&
+					/^\$[\w$]+$/.test(value) &&
+					!unusable.has(value),
+			) && new Set(values).size === values.length
+		);
+	};
+	try {
+		const kept: unknown = JSON.parse(localStorage.getItem(NAMES_KEY) ?? 'null');
+		if (usable(kept))
+			return {
+				access: kept.access,
+				globalProxy: kept.globalProxy,
+				globalName: kept.globalName,
+			};
+	} catch (error) {
+		// no storage, or a value that is not ours: new ones below
+	}
+	let names: KeptNames;
+	do
+		names = {
+			access: mintName(ACCESS_LENGTH),
+			globalProxy: mintName(TAG_LENGTH),
+			globalName: mintName(TAG_LENGTH),
+		};
+	while (!usable(names));
+	try {
+		localStorage.setItem(NAMES_KEY, JSON.stringify(names));
+	} catch (error) {
+		// not kept: they still serve this page
+	}
+	return names;
+}
+
 export function keptControllerId(): Promise<string> {
 	const place = claims++;
 	return claimKeptId(place).catch(() => mintId());
@@ -245,8 +326,10 @@ export async function forgetControllerIds(): Promise<void> {
 		try {
 			localStorage.removeItem(KEY);
 			sessionStorage.removeItem(KEY);
-			// the farbling seed goes with the site data too, so it re-seeds
+			// the farbling seed goes with the site data too, so it re-seeds,
+			// and the helper names, which are kept as the ids are
 			localStorage.removeItem(SEED_KEY);
+			localStorage.removeItem(NAMES_KEY);
 		} catch (error) {
 			// no storage: nothing was kept
 		}

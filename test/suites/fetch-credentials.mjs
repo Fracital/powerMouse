@@ -1,8 +1,9 @@
 // A fetch's credentials mode reaches the jar the way the browser applies its
 // own: `omit` sends no cookies and stores none from the response, `same-origin`
 // sends them only when the real origins agree, `include` and the default send
-// them. And a route that decodes to the proxy's own origin is refused with a
-// 403 instead of making the proxy fetch itself.
+// them. And the proxy's own origin is one more site (proxy-ception,
+// docs/proxyception.md): a fetch of it answers what it answers natively, and
+// a frame of it shows the proxied demo, never the host's own page.
 import {
 	done,
 	FIXTURE,
@@ -15,12 +16,23 @@ import {
 } from '../lib.mjs';
 
 const browser = await launch();
-const page = await openDemo(browser);
 const proxy = new URL(PROXY).origin;
-await submitLanding(
-	page,
-	`${FIXTURE}pages/credentials.html?proxy=${encodeURIComponent(proxy)}`,
-);
+const target = `${FIXTURE}pages/credentials.html?proxy=${encodeURIComponent(proxy)}`;
+// the page's reads of the proxy origin, loaded natively
+const native = await (async () => {
+	const context = await browser.newContext();
+	const page = await context.newPage();
+	await page.goto(target);
+	let value = {};
+	for (let i = 0; i < 60 && !value.done; i++) {
+		await sleep(250);
+		value = (await page.evaluate(() => window.__cred)) || {};
+	}
+	await context.close();
+	return value;
+})();
+const page = await openDemo(browser);
+await submitLanding(page, target);
 let cred = {};
 for (let i = 0; i < 60; i++) {
 	await sleep(250);
@@ -54,27 +66,35 @@ ok(
 	JSON.stringify(cred.afterOmitSet),
 );
 ok(
-	'a route to the proxy origin itself is refused with 403',
-	cred.self?.status === 403 && /own origin/.test(cred.self?.text || ''),
-	JSON.stringify(cred.self),
+	'a fetch of the proxy origin answers what it answers natively',
+	native.done &&
+		JSON.stringify(cred.self) === JSON.stringify(native.self) &&
+		cred.selfFrame === native.selfFrame,
+	JSON.stringify({
+		proxied: [cred.self, cred.selfFrame],
+		native: [native.self, native.selfFrame],
+	}),
 );
-// the refused document is one the proxy never injected, so the page sees it
-// like a cross-origin frame (contentDocument null); its text is the refusal
+// the frame is the proxied demo (its route unrouted is the proxy origin's
+// own page), a document the proxy injected, not the host's real page
 const nested = page.frames().find((f) => f.url().includes('html:nested'));
-const nestedText = nested
+const nestedRead = nested
 	? await nested
-			.evaluate(() => [document.contentType, document.body?.textContent])
+			.evaluate(() => ({
+				title: document.title,
+				landing: !!document.getElementById('landing'),
+			}))
 			.catch((error) => String(error))
 	: 'no frame';
+const nestedReal = nested
+	? await page.evaluate((u) => window.controller.unroute(u), nested.url())
+	: null;
 ok(
-	'a frame navigated to the proxy origin shows the refusal, not the host page',
-	// the built-in plain refusal, or the host's error page when the demo
-	// configures one (errorPage): both name the refusal
-	Array.isArray(nestedText) &&
-		/^text\/(plain|html)$/.test(nestedText[0]) &&
-		/own origin/.test(nestedText[1] || '') &&
-		cred.selfFrame === 'unreadable',
-	JSON.stringify([nestedText, cred.selfFrame]),
+	'a frame navigated to the proxy origin shows the proxied demo, not the host page',
+	nestedReal === `${proxy}/` &&
+		nestedRead?.landing === true &&
+		/powerMouse/i.test(nestedRead.title),
+	JSON.stringify([nestedReal, nestedRead]),
 );
 ok(
 	'the fixture ran to completion',

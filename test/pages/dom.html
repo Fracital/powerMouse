@@ -18,7 +18,9 @@
 	).content;
 	const a = document.getElementById('a');
 	__dom.names = a.getAttributeNames();
-	__dom.hasMarker = a.hasAttribute('s_o:href');
+	// (the suite names the controller's marker prefix)
+	const marker = new URLSearchParams(location.search).get('marker') || 's_o:';
+	__dom.hasMarker = a.hasAttribute(`${marker}href`);
 	__dom.attributesLength = a.attributes.length;
 	__dom.attrValue = a.attributes[0] && a.attributes[0].value;
 	__dom.attrNode =

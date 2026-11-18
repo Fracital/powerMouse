@@ -3,7 +3,7 @@ import type DocumentClient from '../Client';
 import { nativeGetAttribute, nativeQuery } from '../longEntryNatives';
 import type EntryTimingModule from './EntryTiming';
 import type { Admit } from './EntryTiming';
-import { MARKER } from './MutationObserver';
+import { markerPrefix } from './MutationObserver';
 
 /** what the page reads of one script of a long animation frame */
 interface ScriptView {
@@ -100,7 +100,7 @@ export function longFrames(
 			]) as Iterable<Element>)
 				if (Reflect.apply(nativeGetAttribute!, element, ['src']) === routed) {
 					const written = Reflect.apply(nativeGetAttribute!, element, [
-						`${MARKER}src`,
+						`${markerPrefix()}src`,
 					]) as string | null;
 					if (written !== null) return written;
 					break;

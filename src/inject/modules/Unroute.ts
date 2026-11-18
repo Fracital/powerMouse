@@ -7,7 +7,7 @@ import {
 	parseRoutedURL,
 	ROUTE_PROTOCOLS,
 } from '../../routeURL';
-import { WORKER_ERROR } from '../../transport/messages';
+import { workerErrorKey } from '../../transport/messages';
 import { beforeFragment, fragmentOf } from '../../urlShape';
 import { LINK_SEGMENT } from '../../visited';
 import Client from '../Client';
@@ -963,7 +963,7 @@ export default class UnrouteModule extends Module<Client> {
 				try {
 					Reflect.apply(post, global, [
 						{
-							[WORKER_ERROR]: {
+							[workerErrorKey(client.names.globalName)]: {
 								message: read(event, 'message'),
 								...location,
 							},

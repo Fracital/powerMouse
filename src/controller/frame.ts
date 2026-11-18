@@ -211,7 +211,6 @@ if (window === window.parent || !origins.length) {
 						...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 						...(init.membrane === false ? { membrane: false } : {}),
 						...(init.serviceWorkers === false ? { serviceWorkers: false } : {}),
-						...(init.allowSelfProxy ? { allowSelfProxy: true } : {}),
 						...(typeof init.serviceWorkerTimeout === 'number'
 							? { serviceWorkerTimeout: init.serviceWorkerTimeout }
 							: {}),
