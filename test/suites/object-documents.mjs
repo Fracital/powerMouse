@@ -3,6 +3,10 @@
 // document.write) and in a srcdoc frame. Each
 // shows its image as natively, and one that names its own <base href>
 // resolves the image by it (test/pages/object-kinds*.html). Both modes.
+// And what a page reads of an object while its document loads and after
+// (test/pages/object-events.html: the events it fires, its type and data
+// by property, attribute and selector, the document it shows), with a type
+// and without, made by the parser and by a script: as natively.
 import {
 	done,
 	FIXTURE,
@@ -131,6 +135,55 @@ for (const [mode, base] of [
 		`${mode}: an object document read while its bundle is late keeps its URL, and its script its query`,
 		held > 0 && JSON.stringify(late) === JSON.stringify(lateNative),
 		JSON.stringify({ held, native: lateNative, proxied: late }),
+	);
+	await page.context().close();
+}
+const eventsTarget = `${FIXTURE}pages/object-events.html`;
+/** the events page's report, from whichever frame has it, once it is done */
+async function eventsReport(page) {
+	for (let i = 0; i < 80; i++) {
+		await sleep(250);
+		for (const frame of page.frames()) {
+			const value = await frame
+				.evaluate(() => window.__objectEvents ?? null)
+				.catch(() => null);
+			if (value?.done) return value;
+		}
+	}
+	return null;
+}
+const eventsNativePage = await browser.newPage();
+await eventsNativePage.goto(eventsTarget);
+const eventsNative = await eventsReport(eventsNativePage);
+await eventsNativePage.close();
+ok(
+	'natively, each object fires load once, with its document shown',
+	['parsed', 'typed', 'untyped'].every(
+		(name) =>
+			eventsNative?.[`${name}.events`]?.split(' | ').length === 1 &&
+			/^load shown="OBJECT EVENTS DOC"/.test(eventsNative[`${name}.events`]),
+	),
+	JSON.stringify(eventsNative),
+);
+for (const [mode, base] of [
+	['same-origin', PROXY],
+	['isolated', HOST],
+]) {
+	const page = await openDemo(browser, base);
+	await submitLanding(page, eventsTarget);
+	const proxied = await eventsReport(page);
+	const keys = Object.keys(eventsNative ?? {}).filter((key) => key !== 'done');
+	const differ = keys.filter((key) => proxied?.[key] !== eventsNative[key]);
+	for (const key of differ)
+		ok(
+			`${mode}: an object's ${key} as natively`,
+			false,
+			`native ${JSON.stringify(eventsNative[key])} proxied ${JSON.stringify(proxied?.[key])}`,
+		);
+	ok(
+		`${mode}: what a page reads of an object as it loads and after, all ${keys.length} readings as natively`,
+		proxied?.done === true && keys.length > 0 && differ.length === 0,
+		`${differ.length} differ`,
 	);
 	await page.context().close();
 }

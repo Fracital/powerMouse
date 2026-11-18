@@ -563,6 +563,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 					return windowModule.restrictOpaque(context);
 
 				if (context) {
+					moduleClient.heldBlank?.(element, context);
 					injectContext(context);
 
 					// still on its initial about:blank while the document its src

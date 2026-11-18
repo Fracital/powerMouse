@@ -122,10 +122,10 @@ const REFUSING = [
  */
 const DOCUMENTS = ['srcdoc', 'javascriptDocument', 'dataFrame', 'refresh'];
 /**
- * an <object>'s HTML document, in a child of its own (it waits a while for
- * the object)
+ * an <object>'s HTML document, untyped and typed, in a child of its own (it
+ * waits a while for each object)
  */
-const OBJECT = ['objectDocument'];
+const OBJECT = ['objectDocument', 'typedObjectDocument'];
 /**
  * the refusing calls that navigate the child itself unless refused, each
  * made in a child of its own: one let through would answer for the others
@@ -421,15 +421,19 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		JSON.stringify(answer.out?.blankSetHTML),
 	);
 	// as natively: its script runs, one load, the document shown
-	ok(
-		"with the parts, an <object>'s HTML document loads in its shell, as natively",
-		object.out?.objectDocument?.landed === '?object' &&
-			object.out.objectDocument.events?.join() === 'load' &&
-			object.out.objectDocument.shown === 'deferred refusals landed' &&
-			Array.isArray(object.reached) &&
-			object.reached.length === 0,
-		JSON.stringify(object),
-	);
+	for (const [call, landed] of [
+		['objectDocument', '?object'],
+		['typedObjectDocument', '?typed-object'],
+	])
+		ok(
+			`with the parts, an <object>'s HTML document loads in its shell, as natively (${call})`,
+			object.out?.[call]?.landed === landed &&
+				object.out[call].events?.join() === 'load' &&
+				object.out[call].shown === 'deferred refusals landed' &&
+				Array.isArray(object.reached) &&
+				object.reached.length === 0,
+			JSON.stringify(object),
+		);
 	ok(
 		'with the parts, window.open() reaches the browser',
 		answer.out?.open?.returned === 'object' && answer.reached?.includes('open'),
@@ -633,13 +637,14 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 	// as a failed fetch natively: an error, no document, nothing of the
 	// page's markup run (never the markup as written, never one without
 	// its shell)
-	ok(
-		"without the parts, an <object>'s HTML document is refused: an error and no document, as a failed fetch",
-		out.objectDocument?.landed === null &&
-			out.objectDocument.events?.join() === 'error' &&
-			out.objectDocument.shown === null,
-		JSON.stringify(out.objectDocument),
-	);
+	for (const call of ['objectDocument', 'typedObjectDocument'])
+		ok(
+			`without the parts, an <object>'s HTML document is refused: an error and no document, as a failed fetch (${call})`,
+			out[call]?.landed === null &&
+				out[call].events?.join() === 'error' &&
+				out[call].shown === null,
+			JSON.stringify(out[call]),
+		);
 	ok(
 		'without the parts, setHTML, setHTMLUnsafe and getHTML on an element of a frame on its initial about:blank throw, and nothing is parsed',
 		out.blankSetHTML?.setHTML?.threw === 'no parts' &&

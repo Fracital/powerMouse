@@ -203,6 +203,37 @@
 						3000,
 					);
 				});
+			// an <object>'s HTML document, which the page's frame shows as a
+			// copy in its shell (src/htmlShell.ts, the object branch of
+			// src/inject/dom/modules/DOMAttributes.ts): whether its script ran
+			// (it posts where it landed), the events the object fired, and the
+			// title of the document it shows (one the page can read: the copy is
+			// of the page's origin)
+			const objectDocument = (typed) =>
+				new Promise((resolve) => {
+					const object = document.createElement('object');
+					const events = [];
+					let landed = null;
+					addEventListener('message', (event) => {
+						if (event.source === object.contentWindow && event.data?.landed)
+							landed = event.data.landed;
+					});
+					object.onload = () => events.push('load');
+					object.onerror = () => events.push('error');
+					object.data = `deferred-refusals-landed.html?${typed ? 'typed-' : ''}object`;
+					if (typed) object.type = 'text/html';
+					document.body.append(object);
+					setTimeout(() => {
+						let shown;
+						try {
+							const inner = object.contentDocument;
+							shown = inner ? inner.title : null;
+						} catch (error) {
+							shown = String(error && error.message);
+						}
+						resolve({ landed, events, shown });
+					}, 4000);
+				});
 			const CALLS = {
 				...CSP_CALLS,
 				srcdoc: () =>
@@ -473,36 +504,11 @@
 					out.parsed = frame.contentDocument.querySelectorAll('b, img').length;
 					return out;
 				},
-				// an <object>'s HTML document, which the page's frame shows as a
-				// copy in its shell (src/htmlShell.ts, the object branch of
-				// src/inject/dom/modules/DOMAttributes.ts): whether its script
-				// ran (it posts where it landed), the events the object fired,
-				// and the title of the document it shows (one the page can
-				// read: the copy is of the page's origin)
-				objectDocument: () =>
-					new Promise((resolve) => {
-						const object = document.createElement('object');
-						const events = [];
-						let landed = null;
-						addEventListener('message', (event) => {
-							if (event.source === object.contentWindow && event.data?.landed)
-								landed = event.data.landed;
-						});
-						object.onload = () => events.push('load');
-						object.onerror = () => events.push('error');
-						object.data = 'deferred-refusals-landed.html?object';
-						document.body.append(object);
-						setTimeout(() => {
-							let shown;
-							try {
-								const inner = object.contentDocument;
-								shown = inner ? inner.title : null;
-							} catch (error) {
-								shown = String(error && error.message);
-							}
-							resolve({ landed, events, shown });
-						}, 4000);
-					}),
+				// an <object>'s HTML document (objectDocument)
+				objectDocument: () => objectDocument(false),
+				// the same with a type, which shows an empty document of its own
+				// without a URL
+				typedObjectDocument: () => objectDocument(true),
 				// window.open(), routed by a deferred part
 				// (src/inject/dom/windowOpen.ts)
 				open: () => outcome(() => window.open('', '_blank')),

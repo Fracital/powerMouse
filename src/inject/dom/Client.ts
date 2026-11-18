@@ -2619,6 +2619,8 @@ export default class DocumentClient extends Client {
 	) => boolean;
 	/** @internal give the loads the parser made from markup the page wrote their copies, under a document, an element or a shadow root (DOMAttributes; DOMHooks' write calls it) */
 	writtenLoads?: (root: Node) => void;
+	/** @internal an object whose copy is on its way: its context's URL put back to the about:blank it stands for (DOMAttributes; IFrame's contentWindow calls it) */
+	heldBlank?: (element: Element, context?: typeof globalThis | null) => void;
 	/**
 	 * @internal this client's synchronous bridge, for a client of another
 	 * bundle: a blob: document runs a bundle of its own, whose module classes

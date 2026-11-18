@@ -1,0 +1,75 @@
+<!doctype html>
+<title>OBJECT EVENTS</title>
+<body>
+	<!-- an <object>'s HTML document as the parser makes it, with a type -->
+	<object
+		id="parsed"
+		data="object-events-doc.html?parsed"
+		type="text/html"
+	></object>
+	<script>
+		// What a page reads of an <object> while its HTML document loads and
+		// once it has: the events it fires (each load with what the object
+		// shows then), and right after it is put in the document, then at the
+		// end, its type and data as the property and the attribute read them
+		// and the title of the document it shows (null for none). With a type
+		// and without, made by the parser and by a script.
+		const report = (window.__objectEvents = { done: false });
+		const read = (object) => {
+			let shown;
+			try {
+				const shownDocument = object.contentDocument;
+				shown = shownDocument
+					? `${JSON.stringify(shownDocument.title)} at ${shownDocument.URL}`
+					: 'null';
+			} catch (error) {
+				shown = error.name;
+			}
+			return [
+				`shown=${shown}`,
+				`type=${object.type}`,
+				`typeAttribute=${object.getAttribute('type')}`,
+				`hasType=${object.hasAttribute('type')}`,
+				`data=${object.getAttribute('data')}`,
+				`matches=${object.matches('[type="text/html"]')}`,
+			].join(' ');
+		};
+		const watch = (name, object) => {
+			const events = (report[`${name}.events`] = []);
+			object.addEventListener('load', () =>
+				events.push(`load ${read(object)}`),
+			);
+			object.addEventListener('error', () => events.push('error'));
+		};
+		const parsed = document.getElementById('parsed');
+		watch('parsed', parsed);
+		report['parsed.sync'] = read(parsed);
+		const made = (name, typed) => {
+			const object = document.createElement('object');
+			watch(name, object);
+			object.data = `object-events-doc.html?${name}`;
+			if (typed) object.type = 'text/html';
+			document.body.append(object);
+			// its window as the page's frames list holds it, read first
+			try {
+				report[`${name}.frame`] = frames[frames.length - 1].location.href;
+			} catch (error) {
+				report[`${name}.frame`] = error.name;
+			}
+			report[`${name}.sync`] = read(object);
+			return object;
+		};
+		const objects = {
+			parsed,
+			typed: made('typed', true),
+			untyped: made('untyped', false),
+		};
+		setTimeout(() => {
+			for (const [name, object] of Object.entries(objects)) {
+				report[`${name}.end`] = read(object);
+				report[`${name}.events`] = report[`${name}.events`].join(' | ');
+			}
+			report.done = true;
+		}, 4000);
+	</script>
+</body>

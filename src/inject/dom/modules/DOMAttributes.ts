@@ -2214,6 +2214,40 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			{ written: string; generation: number; url?: string }
 		>();
 		let generations = 0;
+		// The element stands on about:blank# while its copy is on its way: a
+		// fragment of its context's initial about:blank, which Chrome goes to
+		// at once and fires no load for, as natively while the document loads
+		// (no URL with a type shows an empty document of that type and fires
+		// load, and so does about:blank: Chrome 157 fired load twice, natively
+		// once). Before the page reads the context, its URL is put back to
+		// the about:blank it is natively
+		const HELD = 'about:blank#';
+		const objectWindow = Reflect.getOwnPropertyDescriptor(
+			realm.HTMLObjectElement.prototype,
+			'contentWindow',
+		)!.get!;
+		const heldBlank = (moduleClient.heldBlank = (
+			element,
+			context = element instanceof realm.HTMLObjectElement
+				? (Reflect.apply(objectWindow, element, []) as typeof globalThis | null)
+				: null,
+		) => {
+			const state = loads.get(element);
+			try {
+				if (state && !state.url && context?.location.href === HELD)
+					Reflect.apply(
+						context.History.prototype.replaceState,
+						context.history,
+						[null, '', 'about:blank'],
+					);
+			} catch (error) {
+				// another context already
+			}
+		});
+		const hold = (element: CustomElement, attribute: string) => {
+			element.setAttribute(attribute, HELD);
+			queueMicrotask(() => heldBlank(element));
+		};
 		const proxiedLoad = (attribute: string) => (element: CustomElement) => {
 			element.restoreAttributesOG(attribute);
 			if (
@@ -2296,7 +2330,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			const current = loads.get(element);
 			if (current?.written === resource.url.href) {
 				if (current.url) element.setAttribute(attribute, current.url);
-				else element.removeAttribute(attribute);
+				else hold(element, attribute);
 				return;
 			}
 			const generation = ++generations;
@@ -2305,9 +2339,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				generation,
 			};
 			loads.set(element, state);
-			// no URL at all until the proxied copy is in (an empty one makes an
-			// object show its fallback and not load again)
-			element.removeAttribute(attribute);
+			// nothing to load until the proxied copy is in (an empty URL makes
+			// an object show its fallback and not load again)
+			hold(element, attribute);
 			const settle = (value: string) => {
 				if (loads.get(element) !== state) return;
 				state.url = value;
