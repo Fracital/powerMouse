@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>measure hooks</title>
+	</head>
+	<body>
+		<!--
+			The top of test/suites/measure-hooks.mjs: it frames the same page on
+			the other site of the fixture (localhost and 127.0.0.1 on its port)
+			with ?frame=1, and that frame, with two frames of its own site below
+			it, runs the kernels of measure-hooks.js.
+		-->
+		<script>
+			(() => {
+				const query = new URLSearchParams(location.search);
+				if (query.has('frame')) {
+					for (let i = 0; i < 2; i++) {
+						const child = document.createElement('iframe');
+						child.src = 'measure-hooks-target.html';
+						document.body.append(child);
+					}
+					const script = document.createElement('script');
+					script.src = 'measure-hooks.js';
+					document.body.append(script);
+					return;
+				}
+				query.set('frame', '1');
+				const other =
+					location.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+				const frame = document.createElement('iframe');
+				frame.src = `${location.protocol}//${other}:${location.port}${location.pathname}?${query}`;
+				document.body.append(frame);
+			})();
+		</script>
+	</body>
+</html>
