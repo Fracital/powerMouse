@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>device reads</title>
+	</head>
+	<body>
+		<script>
+			// A frame of another origin, which the usb, hid and serial features
+			// are refused to (no allow), reads navigator.usb, hid and serial
+			// and reports what its ReportingObserver heard: natively a read is
+			// no violation (Cloudflare's script does this in figma.com's Vimeo
+			// player). The top (?to=<other origin>) frames this page as its
+			// child and keeps what the child posts.
+			const query = new URLSearchParams(location.search);
+			if (query.has('child')) {
+				const reports = [];
+				const observer = new ReportingObserver(
+					(list) => {
+						for (const report of list)
+							reports.push(`${report.type} ${report.body?.featureId}`);
+					},
+					{ buffered: true },
+				);
+				observer.observe();
+				const read = ['usb', 'hid', 'serial'].map(
+					(name) => `${name} ${typeof navigator[name]}`,
+				);
+				setTimeout(() => {
+					for (const report of observer.takeRecords())
+						reports.push(`${report.type} ${report.body?.featureId}`);
+					parent.postMessage({ deviceReads: { read, reports } }, '*');
+				}, 1000);
+			} else {
+				addEventListener('message', (event) => {
+					if (event.data?.deviceReads) window.__done = event.data.deviceReads;
+				});
+				const frame = document.createElement('iframe');
+				frame.src = `${query.get('to')}pages/device-reads.html?child=1`;
+				document.body.append(frame);
+			}
+		</script>
+	</body>
+</html>

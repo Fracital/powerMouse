@@ -42,6 +42,8 @@ export interface DeviceHooks {
 	salt: () => Promise<string | null>;
 	/** an exception as the browser throws it */
 	error: (message: string, name: string) => Error;
+	/** the browser's own policy refuses the feature `name` to this document */
+	browserRefuses?: (name: string) => boolean;
 }
 
 interface Kind {
@@ -380,8 +382,13 @@ export function hookDevices(
 			}),
 		});
 
-	// connect and disconnect of the site's devices only
-	if (kind !== 'bluetooth') {
+	// connect and disconnect of the site's devices only. Where the browser's
+	// policy refuses the feature none comes, and a listener added is a
+	// violation the browser reports (a console message, and a report to the
+	// page's ReportingObserver) for a read the page never saw one for
+	// natively: Cloudflare's script in a frame of another origin reads
+	// navigator.usb, hid and serial (figma.com's Vimeo player)
+	if (kind !== 'bluetooth' && !hooks.browserRefuses?.(kind)) {
 		const stop = global.Event.prototype.stopImmediatePropagation;
 		const target = own(global.Event.prototype, 'target')?.get;
 		const listen = (type: string) =>

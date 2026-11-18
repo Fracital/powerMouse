@@ -861,6 +861,7 @@ export function gateGetter(
 					nativeToString: hooks.nativeToString,
 					salt: () => hooks.ask({ op: 'deviceSalt' }) as Promise<string | null>,
 					error: ctx.error,
+					browserRefuses: ctx.browserRefuses,
 				},
 				name as 'usb',
 				object as EventTarget,
