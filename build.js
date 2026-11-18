@@ -526,6 +526,7 @@ const DEFERRED_FILES = new Set(
 		'src/inject/dom/modules/LongTasks.ts',
 		'src/inject/dom/modules/permissionCalls.ts',
 		'src/inject/dom/rtcInstall.ts',
+		'src/inject/dom/sealedCopies.ts',
 		'src/inject/dom/seenImages.ts',
 		'src/inject/dom/xhrMessages.ts',
 		'src/inject/dom/xhrParse.ts',

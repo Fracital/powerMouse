@@ -49,7 +49,7 @@ import { forgetDestination, frameWindow } from '../freshContext';
 import { loadFetch } from '../loadGrants';
 import { responseURLOf } from '../responseDocuments';
 import { guardDocument, realSandbox, sandboxTokens } from '../sandbox';
-import { sealedURL } from '../sealedCopies';
+import { sealerNatives } from '../sealerNatives';
 import { siteWindows } from '../siteWindows';
 import { SVG_HREF_INTERFACES } from '../svgReferences';
 import type { UncontrolledCopies } from '../uncontrolledCopies';
@@ -299,7 +299,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				uncontrolled,
 				isRoute,
 				placeLoad,
-				sealedURL,
+				sealerNatives,
 				sheetMarks,
 				natives: {
 					createObjectURL,

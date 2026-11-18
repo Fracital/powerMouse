@@ -26,7 +26,8 @@ import type { DeferredParts } from './deferredParts';
 import { loadFetch, loadSource } from './loadGrants';
 import { CustomElement, nativeElement } from './modules/DOMHooks';
 import { hookWrite } from './modules/MutationObserver';
-import type { sealedURL } from './sealedCopies';
+import { sealedURL } from './sealedCopies';
+import type { SealerNatives } from './sealerNatives';
 
 const HTML_NAMESPACE = 'http://www.w3.org/1999/xhtml';
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
@@ -80,7 +81,8 @@ export interface CopyContext {
 	uncontrolled: () => boolean;
 	isRoute: (value: string) => boolean;
 	placeLoad: PlaceLoad;
-	sealedURL: typeof sealedURL;
+	/** what a sealed copy's URL is made with (./sealerNatives.ts) */
+	sealerNatives: SealerNatives;
 	/** how the CSSOM pass of each <style> marks a rule it need not redo (DOMAttributes keeps it: it is set whether or not the document is uncontrolled) */
 	sheetMarks: WeakMap<StyleElement, (rule: CSSRule) => void>;
 	natives: CopyNatives;
@@ -94,7 +96,7 @@ export function uncontrolledCopies(ctx: CopyContext) {
 		uncontrolled,
 		isRoute,
 		placeLoad,
-		sealedURL,
+		sealerNatives,
 		sheetMarks,
 		natives: {
 			createObjectURL,
@@ -168,6 +170,7 @@ export function uncontrolledCopies(ctx: CopyContext) {
 		// the memory cache keeps a blob: URL's fragment in its key: one
 		// kept image for each form the value names the copy by
 		const dead = await sealedURL(
+			sealerNatives,
 			body,
 			async (url) => {
 				primed = (
