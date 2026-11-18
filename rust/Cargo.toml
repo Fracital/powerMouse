@@ -16,6 +16,17 @@ panic = "abort"
 debug = false
 strip = true
 
+# oxc's parser (with its lexer, a third of a script's rewrite at opt-level
+# z) is built for speed, everything else for size: on the bench corpus a
+# rewrite takes about 11% less time for 123 KB more of core.wasm (25 KB
+# more brotli). Building the rewriter's walk (rwjs) at "s" as well is
+# about 7% less time again for 82 KB more (15 KB brotli), but V8 compiles
+# a module's functions on their first call, and its larger functions add
+# 3 to 8 ms to each thread's first rewrite after a compile (a top
+# document's, the service worker's) against about 1 ms for the parser's.
+[profile.release.package.oxc_parser]
+opt-level = 3
+
 # str0m-rust-crypto 0.7.0 as published, minus dimpl's `rcgen` feature: it
 # generates the DTLS certificate with rcgen on aws-lc-rs (C, no wasm build);
 # the WebRTC worker generates the certificate with WebCrypto instead and

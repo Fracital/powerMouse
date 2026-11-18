@@ -20,8 +20,9 @@ image and every pin). The `sources` hash is of what that crate's build
 takes in and nothing else (`inputs.sh`, run in the container): the crate's
 own files, those of the workspace crates it depends on by path (`rwjs`
 builds `rust/edits` in), the dependency set cargo resolves for it
-(`cargo tree -p <crate> --locked`, with features), the release profile,
-`pins.env` and the build scripts. So an artifact's line changes when its
+(`cargo tree -p <crate> --locked`, with features), the release profile
+and its overrides for the packages the crate builds in, `pins.env` and the
+build scripts. So an artifact's line changes when its
 bytes could, and adding a crate to the workspace or touching another
 crate's sources or dependencies leaves it alone.
 `ONLY_SOURCES=1 deploy/rust/build.sh <crate> <name>` builds nothing and
@@ -109,7 +110,9 @@ its `lib.rs` documents; it depends on nothing.
 the standard library rebuilt (`-Z build-std=std,panic_abort`, optimized for
 size) under `-Zlocation-detail=none -Zfmt-debug=none`, so no panic location,
 source path or Debug formatting reaches the bytes; the workspace profile is
-`opt-level = "z"`, `lto`, one codegen unit, `panic = "abort"`, stripped.
+`opt-level = "z"`, `lto`, one codegen unit, `panic = "abort"`, stripped,
+with oxc's parser, where a rewrite spends a third of its time, built for
+speed at `opt-level = 3` (`rust/Cargo.toml` says what it costs and gains).
 Then `wasm-opt -Oz --converge` (the passes rerun until the bytes stop
 shrinking) with the debug, producers and target-features sections stripped.
 

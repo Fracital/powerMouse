@@ -8,7 +8,8 @@
 # - the dependency set cargo resolved for it from Cargo.lock, with features
 #   (`cargo tree -p <crate> --locked`): a crate added to the workspace, or a
 #   dependency of another crate that moves in the lockfile, is not in it;
-# - the release profile of the workspace's Cargo.toml.
+# - the release profile of the workspace's Cargo.toml, and its overrides
+#   for the packages the crate builds in.
 #
 # So an artifact's line changes when its bytes could, and not when another
 # crate of the workspace is touched. Argument: crate name.
@@ -47,4 +48,20 @@ done
 echo dependencies
 sed 's|(/work/rust/|(rust/|' <<< "$resolved"
 echo profile
-awk '/^\[profile\.release\]/ { on = 1; print; next } /^\[/ { on = 0 } on && NF' Cargo.toml
+# the release profile, and its overrides for the packages this crate builds
+# in (`[profile.release.package.<name>]`: another crate's do not reach it)
+names=$(awk '{ print $1 }' <<< "$resolved" | sort -u)
+awk -v names="$names" '
+	BEGIN { n = split(names, list, "\n"); for (i = 1; i <= n; i++) built[list[i]] = 1 }
+	/^\[profile\.release\]/ { on = 1; print; next }
+	/^\[profile\.release\.package\./ {
+		name = $0
+		sub(/^\[profile\.release\.package\./, "", name)
+		sub(/\].*$/, "", name)
+		gsub(/"/, "", name)
+		on = (name in built)
+		if (on) print
+		next
+	}
+	/^\[/ { on = 0 }
+	on && NF' Cargo.toml
