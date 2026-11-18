@@ -1,0 +1,61 @@
+<!doctype html>
+<title>late navigation</title>
+<body>
+	<script>
+		// A navigation another window starts in a window whose document has
+		// just committed (nested-frames suite), by `c`: `sibling`, a frame of
+		// this page sends this page's fresh frame on as its src commits;
+		// `popup`, it sends on a popup this page opened without a URL and then
+		// sent to a document (finding it by its name) as that document commits
+		// (`popup-document` by its document's location, `popup-assign` by a
+		// write of its location); `loaded`, this page sends on a frame whose
+		// first document had loaded as the src it was given next commits. The
+		// window lands on echo-headers, which reports its referrer (a beacon
+		// keyed by `k`).
+		const query = new URLSearchParams(location.search);
+		const c = query.get('c');
+		const k = query.get('k');
+		const dest = `${location.origin}/echo-headers?k=${k}&html`;
+		const next = 'late-navigation-frame.html?next';
+		// this page's own copy of the frame's watch, for `loaded`
+		window.watch = (target, dest) => {
+			const first = target.document;
+			const poll = () => {
+				let now = null;
+				try {
+					now = target.document;
+				} catch (error) {
+					// between documents
+				}
+				if (now && now !== first) target.location.replace(dest);
+				else setTimeout(poll, 0);
+			};
+			setTimeout(poll, 0);
+		};
+		const sibling = document.createElement('iframe');
+		sibling.src = 'late-navigation-frame.html';
+		sibling.onload = () => {
+			sibling.onload = null;
+			const watch = sibling.contentWindow.watch;
+			if (c === 'sibling') {
+				const frame = document.createElement('iframe');
+				frame.src = next;
+				document.body.append(frame);
+				watch(frame.contentWindow, dest);
+			} else if (c.startsWith('popup')) {
+				open('', 'late-popup').location.href = next;
+				sibling.contentWindow.watchNamed('late-popup', dest, c.slice(6));
+			} else if (c === 'loaded') {
+				const frame = document.createElement('iframe');
+				frame.src = 'late-navigation-frame.html?first';
+				frame.onload = () => {
+					frame.onload = null;
+					frame.src = next;
+					window.watch(frame.contentWindow, dest);
+				};
+				document.body.append(frame);
+			}
+		};
+		document.body.append(sibling);
+	</script>
+</body>

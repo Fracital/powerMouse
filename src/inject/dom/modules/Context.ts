@@ -1292,8 +1292,29 @@ export default class ContextModule extends Module<DocumentClient> {
 		// (Sandbox's gated Location, the access API's `w.location = url`)
 		// (false for a URL that does not parse: the location's own setter or
 		// method throws the browser's error for it)
+		// (and a window of this real origin that runs nothing of ours yet:
+		// a popup whose next document committed before its bundle ran. Its
+		// own Location navigated raw would take it to the site itself,
+		// outside the proxy, with the proxy's address for its Referer)
+		moduleClient.unclaimedWindow = (target) => {
+			try {
+				return (
+					isWindow(moduleClient, target) &&
+					target !== realm &&
+					!foreignWindow(target) &&
+					!(moduleClient.names.client in target) &&
+					(target as Context).document !== null
+				);
+			} catch (error) {
+				// a window of another real origin
+				return false;
+			}
+		};
 		moduleClient.navigateWindow = (target, value, member) => {
-			if (!isWindow(moduleClient, target) || !this.#clientOf(target))
+			if (
+				!isWindow(moduleClient, target) ||
+				(!this.#clientOf(target) && !moduleClient.unclaimedWindow!(target))
+			)
 				return false;
 			const url = String(value);
 			if (failsToParse(moduleClient, url)) return false;

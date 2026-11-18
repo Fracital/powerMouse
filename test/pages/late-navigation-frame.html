@@ -1,0 +1,30 @@
+<!doctype html>
+<title>late navigation frame</title>
+<body>
+	<script>
+		// a frame of late-navigation.html (and the document it sends windows
+		// to): it navigates the window it is handed to `dest` as soon as that
+		// window's next document has committed, by `how`: a replace() of the
+		// window's location (the default), of its document's (`document`), or a
+		// write of the window's location (`assign`)
+		window.watch = (target, dest, how) => {
+			const first = target.document;
+			const poll = () => {
+				let now = null;
+				try {
+					now = target.document;
+				} catch (error) {
+					// between documents
+				}
+				if (!now || now === first) setTimeout(poll, 0);
+				else if (how === 'document') now.location.replace(dest);
+				else if (how === 'assign') target.location = dest;
+				else target.location.replace(dest);
+			};
+			setTimeout(poll, 0);
+		};
+		// the window of that name, as this document reaches it
+		window.watchNamed = (name, dest, how) =>
+			window.watch(open('', name), dest, how);
+	</script>
+</body>

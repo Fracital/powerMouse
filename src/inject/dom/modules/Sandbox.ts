@@ -140,7 +140,11 @@ export default class SandboxModule extends Module<DocumentClient> {
 				standIn === null
 			)
 				return standIn;
-			const known = gated.get(real as object);
+			// (a window that runs nothing of ours yet, unclaimedWindow: gated
+			// over its own Location, and not kept, since its client gives the
+			// Location a stand-in when its bundle runs)
+			const unclaimed = standIn === real;
+			const known = unclaimed ? undefined : gated.get(real as object);
 			if (known) return known;
 			// the window it was read off (`w.location`, `w.document.location`),
 			// else found by a walk of the proxied world's frames
@@ -158,7 +162,8 @@ export default class SandboxModule extends Module<DocumentClient> {
 				// a window of another real origin
 			}
 			target ??= windowOf(real);
-			if (!target) return standIn;
+			if (!target || (unclaimed && !client.unclaimedWindow?.(target)))
+				return standIn;
 			const location = standIn as Location;
 			const check = (member: string, call: boolean, destination: URL) => {
 				if (client.sandboxFlags !== null && !client.mayNavigate(target))
@@ -222,7 +227,7 @@ export default class SandboxModule extends Module<DocumentClient> {
 				Reflect.defineProperty(view, key, descriptor);
 			}
 			Reflect.setPrototypeOf(view, Reflect.getPrototypeOf(location));
-			gated.set(real as object, view);
+			if (!unclaimed) gated.set(real as object, view);
 			return view;
 		};
 

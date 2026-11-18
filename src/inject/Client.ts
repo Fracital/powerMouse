@@ -297,7 +297,9 @@ export default class Client {
 	 * @internal set by the Sandbox module: what a read of another window's
 	 * location (`real`, its stand-in `standIn`, read off `container`) gives
 	 * this document, whose navigation of that window is its own
-	 * (navigateWindow)
+	 * (navigateWindow). `standIn` is `real` for a window of this real origin
+	 * that runs nothing of ours yet (unclaimedWindow): its own Location,
+	 * gated all the same
 	 */
 	gateLocation?: (
 		real: unknown,
@@ -311,6 +313,13 @@ export default class Client {
 	 * with this document as the navigation's initiator. False when `target`
 	 * is no window of the proxied world (the caller does what it did)
 	 */
+	/**
+	 * @internal set by the Context module: whether `target` is a window of
+	 * this real origin that runs nothing of ours yet (its document has
+	 * committed and its shell's bundle has not run, or nothing injected its
+	 * about:blank), and is not this document's
+	 */
+	unclaimedWindow?: (target: unknown) => boolean;
 	navigateWindow?: (
 		target: unknown,
 		value: unknown,

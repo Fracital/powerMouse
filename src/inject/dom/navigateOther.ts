@@ -10,12 +10,14 @@
 // only).
 import { siteOf } from '../../partition';
 import { routeHTML } from '../../rewriteHTML';
+import { injectDocumentJS } from '../../routeURL';
 import StompURL, { type urlLike } from '../../StompURL';
 import { INITIATOR_ROUTE } from '../../transport/messages';
 import { getPublicSuffix } from '../rewriter';
 import { activationState } from './activation';
 import type DocumentClient from './Client';
 import { deferred } from './deferred';
+import { nativeContentType, nativeQuery } from './longEntryNatives';
 import {
 	initialBlank,
 	nativeConsoleError,
@@ -38,6 +40,60 @@ export interface OtherNavigation {
 
 /** how long a navigation of another window waits for the worker to hear of its initiator */
 const INITIATOR_WAIT_MS = 1000;
+
+/** how long a navigation of another window waits for that window's document to be written in */
+const SHELL_WAIT_MS = 5000;
+
+/**
+ * Whether `target`'s document is a proxied shell its markup is not written
+ * into yet: committed, with nothing parsed or with the shell's bundle
+ * script still in it. The client's loadHTML writes the page with
+ * document.open(), which aborts a navigation of the window that started a
+ * moment before it (measured: one started 2 ms before was lost, one
+ * started a few hundred before was not), where natively the page never
+ * opens its document and the navigation always lands. (The browser's own
+ * methods, taken before any page script ran: the target's page may have
+ * replaced its own.)
+ */
+function unwritten(client: DocumentClient, target: Context): boolean {
+	if (!nativeQuery || initialBlank(target)) return false;
+	const document = target.document;
+	if (
+		nativeContentType &&
+		Reflect.apply(nativeContentType, document, []) !== 'text/html'
+	)
+		return false;
+	return (
+		Reflect.apply(nativeQuery, document, ['body']).length === 0 ||
+		Reflect.apply(nativeQuery, document, [
+			`script[src="${injectDocumentJS(client.url, client.config)}"]`,
+		]).length > 0
+	);
+}
+
+/**
+ * `then` once `target`'s document is written in (unwritten), at once
+ * when it is, bounded (SHELL_WAIT_MS). On this document's timers: the
+ * target's next page may replace its own.
+ */
+function afterShell(client: DocumentClient, target: Context, then: () => void) {
+	const until = Date.now() + SHELL_WAIT_MS;
+	const poll = () => {
+		let waiting = false;
+		try {
+			waiting = unwritten(client, target);
+		} catch (error) {
+			// the window went away, or is of another real origin now
+		}
+		if (waiting && Date.now() < until)
+			Reflect.apply(client.global.setTimeout, client.global, [
+				client.ownCallback(poll),
+				4,
+			]);
+		else then();
+	};
+	poll();
+}
 
 /** Chrome's reason for refusing a frame's navigation of its top (its framebusting intervention) */
 const FRAMEBUSTING =
@@ -218,6 +274,8 @@ export function navigateOther(
 	target: Context,
 	value: urlLike,
 	member: 'href' | 'assign' | 'replace',
+	/** (once it has waited for the target's document: afterShell) */
+	waited = false,
 ) {
 	const client = nav.client;
 	const destination = client.encodingParse(
@@ -246,6 +304,26 @@ export function navigateOther(
 			);
 			return;
 		}
+		// a window whose next document has committed and runs nothing yet
+		// (its shell's bundle has not run): decided and made once it does
+		// (the page's call has returned by then, and a refusal throws
+		// nowhere)
+		let waits = false;
+		try {
+			waits = !waited && unwritten(client, target);
+		} catch (error) {
+			// a window of another real origin
+		}
+		if (waits) {
+			afterShell(client, target, () => {
+				try {
+					navigateOther(nav, target, value, member, true);
+				} catch (error) {
+					// refused, or the window went away
+				}
+			});
+			return;
+		}
 		// a window that runs nothing yet (a popup or frame still on its
 		// initial about:blank): only a sandbox decides, and the browser lets
 		// this document navigate it
@@ -265,7 +343,15 @@ export function navigateOther(
 	const reason = refusal(nav, target, destination);
 	if (reason !== null) throw refuse(nav, target, reason, member, destination);
 	const replace = member === 'replace';
-	const go = () => {
+	// (made once the target's document is written in: started while it is
+	// still the shell, the navigation is aborted when it is, as above)
+	const go = (late = waited) => {
+		try {
+			if (!late && unwritten(client, target))
+				return afterShell(client, target, () => go(true));
+		} catch (error) {
+			// the window went away, or is of another real origin now
+		}
 		try {
 			const standIn = (target.location as Record<string, any>)[
 				client.names.globalProxy
@@ -275,8 +361,12 @@ export function navigateOther(
 				replace ? 'replace' : 'href',
 			);
 			const method = replace ? descriptor?.value : descriptor?.set;
+			// (the window's client now: the target's document may have been
+			// replaced since the call)
 			if (typeof method === 'function')
-				targetClient.callIn(method, standIn, [destination.href]);
+				(nav.clientOf(target) ?? targetClient).callIn(method, standIn, [
+					destination.href,
+				]);
 		} catch (error) {
 			// the window went away
 		}
@@ -340,7 +430,10 @@ export function navigateOther(
 		if (started) return;
 		started = true;
 		// (in the target's realm: this document may be gone by then)
-		targetClient.global.setTimeout(targetClient.ownCallback(go), 0);
+		targetClient.global.setTimeout(
+			targetClient.ownCallback(() => go()),
+			0,
+		);
 	};
 	if (!routed) return start();
 	// bounded: a worker that does not answer delays nothing for long

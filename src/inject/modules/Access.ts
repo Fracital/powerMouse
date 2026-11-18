@@ -494,6 +494,25 @@ export default class AccessModule extends Module<Client> {
 			}
 		};
 		moduleClient.isWindowObject = isWindowObject;
+		// the window of a document (`w.document.location`), by the browser's
+		// own getter: nothing of the page's runs, and anything that is no
+		// document answers undefined
+		const defaultView = (realm as { Document?: { prototype: object } }).Document
+			? Reflect.getOwnPropertyDescriptor(
+					(realm as unknown as { Document: { prototype: object } }).Document
+						.prototype,
+					'defaultView',
+				)?.get
+			: undefined;
+		const windowOfContainer = (container: unknown): unknown => {
+			if (isWindowObject(container)) return container;
+			if (!defaultView || !isObject(container)) return undefined;
+			try {
+				return Reflect.apply(defaultView, container, []);
+			} catch (error) {
+				return undefined;
+			}
+		};
 		// A document's own `location` is the window's (unforgeable, so an own
 		// property of each document), and Document.prototype's own
 		// `onmouseenter` getter is as lenient as the window's: it answers
@@ -773,8 +792,25 @@ export default class AccessModule extends Module<Client> {
 							typeof theirs?.set2 === 'function' && theirs.set2 !== api.set2;
 						// another proxied window's location: navigated as this
 						// document's navigation (Context navigateWindow), with the
-						// value the assignment makes (`w.location += '#x'` too)
-						if (foreign && key === 'location' && moduleClient.navigateWindow) {
+						// value the assignment makes (`w.location += '#x'` too),
+						// and one of a window that runs nothing of ours yet
+						// (Context unclaimedWindow), or of its document, which no
+						// API of its own writes
+						const navigated =
+							key === 'location' &&
+							moduleClient.navigateWindow &&
+							!foreign &&
+							theirs === undefined
+								? windowOfContainer(target)
+								: undefined;
+						const unclaimed =
+							navigated !== undefined &&
+							!!moduleClient.unclaimedWindow?.(navigated);
+						if (
+							key === 'location' &&
+							moduleClient.navigateWindow &&
+							(foreign || unclaimed)
+						) {
 							let value: unknown;
 							let assigned = false;
 							const property = NativeSymbol();
@@ -794,7 +830,13 @@ export default class AccessModule extends Module<Client> {
 							if (!assigned) return result;
 							// (converted once, as the setter would)
 							const url = String(value);
-							if (moduleClient.navigateWindow(target, url, 'href'))
+							if (
+								moduleClient.navigateWindow(
+									unclaimed ? navigated : target,
+									url,
+									'href',
+								)
+							)
 								return result;
 							righthand = url;
 							operate = (object: any, property: any, next: any) =>
@@ -992,6 +1034,18 @@ export default class AccessModule extends Module<Client> {
 									? moduleClient.gateLocation(object, standIn, container)
 									: standIn;
 							}
+							// the Location of a window of this real origin that runs
+							// nothing of ours yet (Context unclaimedWindow), read off
+							// it or its document, gated over itself: a navigation of
+							// it made raw would leave the proxy
+							if (
+								key === 'location' &&
+								moduleClient.gateLocation &&
+								typeof object === 'object' &&
+								object !== null &&
+								moduleClient.unclaimedWindow?.(windowOfContainer(container))
+							)
+								return moduleClient.gateLocation(object, object, container);
 						} catch (error) {
 							// error was thrown during an accessor
 							// should not be introduced into normal execution
