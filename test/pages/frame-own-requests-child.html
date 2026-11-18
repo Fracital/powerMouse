@@ -1,0 +1,53 @@
+<!doctype html>
+<title>frame-own-requests child</title>
+<script>
+	// Cloudflare's challenge frame: its page, a worker it starts from a blob:
+	// URL and a frame it makes on about:blank each ask its own origin for a
+	// resource answered 401 with no CORS headers (the challenge's pat
+	// request), and the XMLHttpRequest sends a header that is not safelisted
+	// (cf-chl). All are the frame's own: natively same-origin, read as 401.
+	const way = new URLSearchParams(location.search).get('way');
+	const report = (result) =>
+		parent.postMessage({ ownRequests: way, result }, '*');
+	if (way === 'first') report('first');
+	else {
+		const pat = new URL('/pages/frame-own-requests.json', location.href).href;
+		const results = {};
+		const add = (name, value) => {
+			results[name] = value;
+			if (Object.keys(results).length === 4)
+				report(
+					['fetch', 'xhr', 'worker', 'nested']
+						.map((key) => `${key} ${results[key]}`)
+						.join(', '),
+				);
+		};
+		const answer = (name, promise) =>
+			promise.then(
+				(response) => add(name, response.status),
+				(error) => add(name, `threw ${error.name}`),
+			);
+		answer('fetch', fetch(pat));
+		const xhr = new XMLHttpRequest();
+		xhr.open('GET', pat);
+		xhr.setRequestHeader('cf-chl', 'abcd');
+		xhr.onload = () => add('xhr', xhr.status);
+		xhr.onerror = () => add('xhr', 'error');
+		xhr.send();
+		const worker = new Worker(
+			URL.createObjectURL(
+				new Blob(
+					[
+						`fetch(${JSON.stringify(pat)}).then((r) => postMessage(r.status), (e) => postMessage('threw ' + e.name));`,
+					],
+					{ type: 'text/javascript' },
+				),
+			),
+		);
+		worker.onmessage = (event) => add('worker', event.data);
+		worker.onerror = () => add('worker', 'error');
+		const nested = document.createElement('iframe');
+		document.documentElement.appendChild(nested);
+		answer('nested', nested.contentWindow.fetch(pat));
+	}
+</script>

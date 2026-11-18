@@ -1,0 +1,66 @@
+<!doctype html>
+<title>FRAME OWN REQUESTS</title>
+<body></body>
+<script>
+	// A page frames another origin of its site, and reads the frame's window
+	// as Cloudflare's Turnstile does with its challenge frame (vimeo.com,
+	// figma.com): it sets the frame's src and sandbox, appends it, and then
+	// reads its contentWindow and posts to it every few milliseconds,
+	// before and after the frame's document arrives. Each frame asks its own
+	// origin from its page, a worker and a frame of its own
+	// (frame-own-requests-child.html). The result of each way is kept by
+	// name in window.__record:
+	// - untouched: the page never reads the frame's window;
+	// - polled: Turnstile's polling, from the frame's initial about:blank on;
+	// - sentOn: the frame shows a first document, and the page sends it to a
+	//   second one and reads its window in every task until that one reports
+	//   (so once after it arrived and before anything ran in it).
+	const other = location.origin.replace('www.', 'dull.');
+	const child = (way) =>
+		`${other}/pages/frame-own-requests-child.html?way=${way}`;
+	const ways = ['untouched', 'polled', 'sentOn'];
+	window.__record = {};
+	const frames = {};
+	const make = (way) => {
+		const frame = document.createElement('iframe');
+		frame.setAttribute('src', child(way === 'sentOn' ? 'first' : way));
+		frame.setAttribute(
+			'sandbox',
+			'allow-same-origin allow-scripts allow-popups',
+		);
+		document.body.appendChild(frame);
+		return (frames[way] = frame);
+	};
+	const polled = make('polled');
+	const poll = setInterval(() => {
+		const view = polled.contentWindow;
+		if (view) view.postMessage({ ping: 1 }, '*');
+	}, 2);
+	make('untouched');
+	make('sentOn');
+	// every task, as a MessageChannel's messages come
+	let watching = false;
+	const watch = () => {
+		const channel = new MessageChannel();
+		channel.port1.onmessage = () => {
+			void frames.sentOn.contentWindow;
+			if (watching) channel.port2.postMessage(0);
+		};
+		watching = true;
+		channel.port2.postMessage(0);
+	};
+	addEventListener('message', (event) => {
+		const data = event.data;
+		if (!data || !data.ownRequests) return;
+		if (data.result === 'first') {
+			frames.sentOn.setAttribute('src', child('sentOn'));
+			return watch();
+		}
+		if (data.ownRequests === 'sentOn') watching = false;
+		__record[data.ownRequests] = data.result;
+		if (ways.every((way) => way in __record)) {
+			clearInterval(poll);
+			__record.done = true;
+		}
+	});
+</script>

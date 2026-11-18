@@ -500,6 +500,16 @@ export default class Client {
 		controller: (this: ServiceWorkerContainer) => ServiceWorker | null;
 		waiting?: ((container: ServiceWorkerContainer) => void)[];
 	};
+	/**
+	 * Made by another realm's bundle for a window that shows a document of
+	 * its own (not its initial about:blank): the window's fetch, taken before
+	 * anything hooked it. A page that reads a frame's window after the
+	 * frame's document committed and before that document's shell ran has
+	 * its bundle inject it (IFrame, Context), and the shell then keeps this
+	 * client: this bundle's fetch would make the document's requests in the
+	 * realm of the page that read it, judged as that page's (#ownFetch).
+	 */
+	#windowFetch?: typeof fetch;
 	#portPostMessage?: PostMessage;
 	#serviceWorkerPostMessage?: PostMessage;
 	#workerPostMessage?: PostMessage;
@@ -983,7 +993,11 @@ export default class Client {
 					if (read) for (const listen of waiting) listen(read);
 				},
 			]);
-		} else this.#serviceWorkerContainer = navigator?.serviceWorker;
+		} else {
+			this.#serviceWorkerContainer = navigator?.serviceWorker;
+			if (global !== globalThis && typeof global.fetch === 'function')
+				this.#windowFetch = global.fetch;
+		}
 		this.#serviceWorkerPostMessage = (
 			global.ServiceWorker as typeof ServiceWorker | undefined
 		)?.prototype.postMessage as PostMessage | undefined;
@@ -1061,14 +1075,21 @@ export default class Client {
 	/** whether a service worker controls this realm (its routed requests reach the worker) */
 	get controlled(): boolean {
 		try {
-			return !!this.#serviceWorkerContainer?.controller;
+			return !!this.#container()?.controller;
 		} catch (error) {
 			return false;
 		}
 	}
-	/** @internal this bundle's native fetch, which runs in this client's realm */
+	/**
+	 * @internal a native fetch that runs in this client's realm: this
+	 * bundle's, or the window's own when another realm's bundle made this
+	 * client (#ownFetch)
+	 */
 	nativeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-		return fetch(input, init);
+		const own = this.#ownFetch();
+		return own
+			? Reflect.apply(own, this.global, [input, init])
+			: fetch(input, init);
 	}
 	/**
 	 * The nearest client whose document a service worker controls: this one,
@@ -1193,11 +1214,14 @@ export default class Client {
 	 * initial about:blank and the window now shows the document the frame
 	 * navigated to, which a worker controls: the page's requests reach this
 	 * client's hooks, and are that document's (its client, its policies, its
-	 * referrer), not this client's ancestor's. Null otherwise.
+	 * referrer), not this client's ancestor's. And when another realm's
+	 * bundle made this client for a document a worker controls
+	 * (#windowFetch). Null otherwise.
 	 */
 	#ownFetch(): typeof fetch | null {
 		const blank = this.#blank;
-		if (!blank) return null;
+		if (!blank)
+			return this.#windowFetch && this.controlled ? this.#windowFetch : null;
 		try {
 			if (Reflect.get(this.global, 'document') === blank.document) return null;
 			const container = Reflect.apply(
@@ -1240,7 +1264,7 @@ export default class Client {
 		transfer: Transferable[] = [],
 		throws = false,
 	): boolean {
-		const controller = this.#serviceWorkerContainer?.controller;
+		const controller = this.#container()?.controller;
 		if (!controller || !this.#serviceWorkerPostMessage) return false;
 		try {
 			this.#serviceWorkerPostMessage.call(controller, message, transfer);
@@ -1354,7 +1378,7 @@ export default class Client {
 	 * worker stops waiting for the origin and reports the request as aborted.
 	 */
 	abortRequest(id: string) {
-		const controller = this.#serviceWorkerContainer?.controller;
+		const controller = this.#container()?.controller;
 		if (!controller || !this.#serviceWorkerPostMessage) return;
 		try {
 			this.#serviceWorkerPostMessage.call(
@@ -1372,7 +1396,7 @@ export default class Client {
 	 * worker it is for starts from (InitRemoteTransportMessage).
 	 */
 	requestTransportPort(worker?: string): MessagePort {
-		const controller = this.#serviceWorkerContainer?.controller;
+		const controller = this.#container()?.controller;
 
 		if (!controller || !this.#serviceWorkerPostMessage)
 			throw new Error(
@@ -1409,7 +1433,7 @@ export default class Client {
 	 * rewriter, as every document does until the answer is in.
 	 */
 	requestModules(adopt: (name: string, module: WebAssembly.Module) => void) {
-		const controller = this.#serviceWorkerContainer?.controller;
+		const controller = this.#container()?.controller;
 		if (!controller || !this.#serviceWorkerPostMessage) return;
 		// made, started, listened to and closed with what the page cannot
 		// replace (src/transport/ports.ts), and only a message the browser
@@ -1592,9 +1616,39 @@ export default class Client {
 	}
 	/** `listen` on this context's container, now or once it is read (#blank) */
 	#onContainer(listen: (container: ServiceWorkerContainer) => void) {
+		const container = this.#container();
 		const waiting = this.#blank?.waiting;
 		if (waiting) waiting.push(listen);
-		else if (this.#serviceWorkerContainer) listen(this.#serviceWorkerContainer);
+		else if (container) listen(container);
+	}
+	/**
+	 * This context's service worker container. A client made for a frame's
+	 * initial about:blank whose frame had a document to navigate to never
+	 * read the about:blank's (navigationPending), and the browser keeps the
+	 * window, with this client, for that document: once the window shows it,
+	 * the container is that document's, read then (and what waited for it
+	 * listens on it).
+	 */
+	#container(): ServiceWorkerContainer | undefined {
+		const blank = this.#blank;
+		if (!blank?.waiting) return this.#serviceWorkerContainer;
+		try {
+			if (Reflect.get(this.global, 'document') === blank.document) return;
+			const container = Reflect.apply(
+				blank.container,
+				Reflect.get(this.global, 'navigator'),
+				[],
+			);
+			if (!container) return;
+			this.#serviceWorkerContainer = container;
+			const waiting = blank.waiting;
+			blank.waiting = undefined;
+			for (const listen of waiting) listen(container);
+			return container;
+		} catch (error) {
+			// a window being torn down, an opaque origin's: none
+			return;
+		}
 	}
 	/**
 	 * Hand a freshly constructed dedicated worker its own transport port.

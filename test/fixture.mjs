@@ -16,7 +16,8 @@ import { visited } from './visited-server.mjs';
 import { wpt, wptUpgrade } from './wpt-server.mjs';
 
 // /pages/<file> serves test/pages/<file> as is; a `<file>.headers.json`
-// next to it adds response headers (Set-Cookie, a Content-Type charset).
+// next to it adds response headers (Set-Cookie, a Content-Type charset), and
+// its `:status` is the response's status.
 // New fixtures go there, so suites never need to touch this file. The
 // web-platform-tests paths (/resources/, /common/, /cookies/, /fetch/,
 // /referrer-policy/ and /_wpt/) are served by test/wpt-server.mjs,
@@ -844,7 +845,8 @@ export function startFixture(port = 8084) {
 				? JSON.parse(readFileSync(sidecar, 'utf8'))
 				: {};
 			for (const [name, value] of Object.entries(extra))
-				res.setHeader(name, value);
+				if (name === ':status') res.statusCode = value;
+				else res.setHeader(name, value);
 			const count = hits.get(file) || { requests: 0, notModified: 0 };
 			count.requests++;
 			hits.set(file, count);
