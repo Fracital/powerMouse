@@ -7,9 +7,13 @@
 // (./deferredParts.ts): only a page whose policy refuses something reaches
 // it, and an event's part is made in the timer that fires it, never while a
 // document boots. The decisions stay in the client, so a refusal is made
-// whether or not the part can be had.
-import type { Policy } from '../../csp';
+// whether or not the part can be had. The part also reads the browser's own
+// violations back as the page sees them (./modules/ContentSecurity.ts), from
+// the first one that reaches the page.
+import { governing, sourcesMatch, type Policy } from '../../csp';
+import { unrouteURL } from '../modules/Unroute';
 import type DocumentClient from './Client';
+import { deferred } from './deferred';
 
 /**
  * Fire a violation of `policy` on `document` as the browser would. Without
@@ -165,4 +169,134 @@ export function evalError(
 	return new global.EvalError(
 		`Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-eval' is not an allowed source of script: ${directive}".\n`,
 	);
+}
+
+/** the natives ContentSecurity takes at load that reading a violation needs */
+export interface ViolationNatives {
+	policy: Function;
+	blocked: Function;
+	directive: Function;
+	localName: Function;
+	attributeNames: Function;
+	getAttribute: Function;
+}
+
+/** how much of the code a violation's sample shows (measured) */
+const SAMPLE_LENGTH = 40;
+
+/**
+ * Whether a trusted violation `event` of the browser's reaches the page
+ * (ContentSecurity's capture listener stops it where not). The browser
+ * reports a refusal against each of its policies that refuses the URL it
+ * was given (a refusal URL, the proxy origin's route of a refused hop): one
+ * of the page's that allows the page's URL natively reports nothing.
+ */
+export function violationShows(
+	client: DocumentClient,
+	natives: ViolationNatives,
+	event: Event,
+): boolean {
+	try {
+		const text = Reflect.apply(natives.policy, event, []) as string;
+		const entry = client.pagePolicies().find(({ browser }) => browser === text);
+		if (!entry) return true;
+		const blocked = Reflect.apply(natives.blocked, event, []) as string;
+		const refused = client.refusedURI(blocked);
+		const directive = Reflect.apply(natives.directive, event, []) as string;
+		// a <base> the hooks write for a moment with the page's own URL
+		// (before its route or refusal URL) is none the page made
+		if (
+			directive === 'base-uri' &&
+			!refused &&
+			/^https?:/.test(blocked) &&
+			unrouteURL(client, blocked) === blocked
+		)
+			return false;
+		const page =
+			refused?.url ??
+			(blocked.includes(':')
+				? unrouteURL(
+						client,
+						// (the site pool: read on this document's own slot,
+						// ../siteEvents.ts onOwnSlot)
+						client.sites
+							? deferred('onOwnSlot')(client, blocked).value
+							: blocked,
+					)
+				: null);
+		if (!page || page === blocked) return true;
+		const url = new URL(page);
+		const governed = governing(entry.policy, directive);
+		if (!governed || !sourcesMatch(governed.sources, url, entry.self))
+			return true;
+		// allowed here: a refusal URL is this policy's to report only where it
+		// refuses the load; a refused route is shown for a refusal no policy
+		// explains (a later hop of a redirect, which names the first URL)
+		return (
+			!refused &&
+			!client
+				.pageRefusals(directive, url)
+				.some(({ policy }) => policy.disposition === 'enforce')
+		);
+	} catch (error) {
+		return true;
+	}
+}
+
+/** what a violation's URL field `key` that the browser read as `value` (a URL) reads as to the page */
+export function violationURL(
+	client: DocumentClient,
+	value: string,
+	key: string,
+): string {
+	if (key === 'blockedURI') {
+		const refused = client.refusedURI(value);
+		if (refused !== null) return refused.blocked;
+	}
+	// (the site pool: a route of another slot is read as this one's, and
+	// what is no route there names no URL of the page's)
+	const slotted = client.sites
+		? deferred('onOwnSlot')(client, value)
+		: { value, slot: false };
+	const page = unrouteURL(client, slotted.value);
+	if (page === null || (slotted.slot && page === slotted.value)) return '';
+	// a report names no fragment
+	return key === 'blockedURI' ? page.replace(/#.*$/s, '') : page;
+}
+
+/**
+ * The page's code an inline violation's `sample` (the browser's, of the
+ * rewritten code) stands for: the text the page reads back of the script
+ * or the style element, or of the attribute of `element` whose rewritten
+ * value starts with it (a handler, a style attribute); null for none
+ */
+export function violationPageCode(
+	natives: ViolationNatives,
+	target: unknown,
+	sample: string,
+): string | null {
+	const element = target as Element;
+	let local: unknown;
+	try {
+		local = Reflect.apply(natives.localName, element, []);
+	} catch (error) {
+		// the document, or no node at all
+		return null;
+	}
+	if (local === 'script' || local === 'style')
+		return (element.textContent ?? '').slice(0, SAMPLE_LENGTH);
+	for (const name of Reflect.apply(
+		natives.attributeNames,
+		element,
+		[],
+	) as string[])
+		if (
+			(name === 'style' || name.startsWith('on')) &&
+			(
+				(Reflect.apply(natives.getAttribute, element, [name]) as
+					string | null) ?? ''
+			).startsWith(sample)
+		)
+			return (element.getAttribute(name) ?? '').slice(0, SAMPLE_LENGTH);
+	return null;
 }

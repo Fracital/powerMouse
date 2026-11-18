@@ -1,41 +1,12 @@
-import { governing, sourcesMatch } from '../../../csp';
 import { CSP_REPORT } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule, { memberName } from '../../modules/Proxy';
-import { unrouteURL } from '../../modules/Unroute';
 import { trustTaggedViolations } from '../../violationViews';
 import type DocumentClient from '../Client';
 import { addDocumentOpenListener } from '../Client';
 import { deferred } from '../deferred';
+import type { ViolationNatives } from '../violations';
 
-/** how much of the code a violation's sample shows (measured) */
-const SAMPLE_LENGTH = 40;
-
-/**
- * The page's code an inline violation's `sample` (the browser's, of the
- * rewritten code) stands for: the text the page reads back of the script
- * or the style element, or of the attribute of `element` whose rewritten
- * value starts with it (a handler, a style attribute); null for none
- */
-function pageCode(target: unknown, sample: string): string | null {
-	const element = target as Element;
-	let local: unknown;
-	try {
-		local = Reflect.apply(nativeLocalName, element, []);
-	} catch (error) {
-		// the document, or no node at all
-		return null;
-	}
-	if (local === 'script' || local === 'style')
-		return (element.textContent ?? '').slice(0, SAMPLE_LENGTH);
-	for (const name of nativeAttributeNames.call(element))
-		if (
-			(name === 'style' || name.startsWith('on')) &&
-			(nativeGetAttribute.call(element, name) ?? '').startsWith(sample)
-		)
-			return (element.getAttribute(name) ?? '').slice(0, SAMPLE_LENGTH);
-	return null;
-}
 const nativeAttributeNames = Element.prototype.getAttributeNames;
 const nativeLocalName = Reflect.getOwnPropertyDescriptor(
 	Element.prototype,
@@ -84,62 +55,38 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 		}
 		const stop = global.Event.prototype.stopImmediatePropagation;
 		const listen = global.EventTarget.prototype.addEventListener;
-		// The browser reports a refusal against each of its policies that
-		// refuses the URL it was given (a refusal URL, the proxy origin's
-		// route of a refused hop): one of the page's that allows the page's
-		// URL natively reports nothing. Its event goes no further than the
-		// window's capture, where this listener comes first (the browser's
-		// events of the page's scripts' own refusals are untouched).
+		const nativeTarget = Reflect.getOwnPropertyDescriptor(
+			global.Event.prototype,
+			'target',
+		)?.get;
+		const natives: ViolationNatives = {
+			policy: nativePolicy!,
+			blocked: nativeBlocked!,
+			directive: nativeDirective!,
+			localName: nativeLocalName,
+			attributeNames: nativeAttributeNames,
+			getAttribute: nativeGetAttribute,
+		};
+		// Whether one of the browser's events reaches the page: its event goes
+		// no further than the window's capture, where this listener comes first
+		// (the browser's events of the page's scripts' own refusals are
+		// untouched, and the inject's own, untrusted, always do). The reading is
+		// a deferred part (../violations.ts), made at the first; without it the
+		// event is stopped, so no proxy URL reaches the page.
 		const shows = (event: Event): boolean => {
 			try {
 				if (nativeTrusted && !Reflect.apply(nativeTrusted, event, []))
 					return true;
-				const text = Reflect.apply(nativePolicy!, event, []) as string;
-				const entry = client
-					.pagePolicies()
-					.find(({ browser }) => browser === text);
-				if (!entry) return true;
-				const blocked = Reflect.apply(nativeBlocked!, event, []) as string;
-				const refused = client.refusedURI(blocked);
-				const directive = Reflect.apply(nativeDirective!, event, []) as string;
-				// a <base> the hooks write for a moment with the page's own URL
-				// (before its route or refusal URL) is none the page made
-				if (
-					directive === 'base-uri' &&
-					!refused &&
-					/^https?:/.test(blocked) &&
-					unrouteURL(client, blocked) === blocked
-				)
-					return false;
-				const page =
-					refused?.url ??
-					(blocked.includes(':')
-						? unrouteURL(
-								client,
-								// (the site pool: read on this document's own slot,
-								// ../siteEvents.ts onOwnSlot)
-								client.sites
-									? deferred('onOwnSlot')(client, blocked).value
-									: blocked,
-							)
-						: null);
-				if (!page || page === blocked) return true;
-				const url = new URL(page);
-				const governed = governing(entry.policy, directive);
-				if (!governed || !sourcesMatch(governed.sources, url, entry.self))
-					return true;
-				// allowed here: a refusal URL is this policy's to report only
-				// where it refuses the load; a refused route is shown for a
-				// refusal no policy explains (a later hop of a redirect, which
-				// names the first URL)
-				return (
-					!refused &&
-					!client
-						.pageRefusals(directive, url)
-						.some(({ policy }) => policy.disposition === 'enforce')
-				);
+				// none of the page's policies: a policy of the browser's alone
+				// (no part is made for it)
+				if (!client.pagePolicies().length) return true;
 			} catch (error) {
 				return true;
+			}
+			try {
+				return deferred('violationShows')(client, natives, event);
+			} catch (error) {
+				return false;
 			}
 		};
 		// a request the worker let through that a report-only policy refuses
@@ -197,22 +144,12 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 				get: proxyModule.wrapFunction(descriptor.get, call),
 			});
 		};
-		const urlField = reading((value, key) => {
-			if (!value.includes(':')) return value;
-			if (key === 'blockedURI') {
-				const refused = client.refusedURI(value);
-				if (refused !== null) return refused.blocked;
-			}
-			// (the site pool: a route of another slot is read as this one's,
-			// and what is no route there names no URL of the page's)
-			const slotted = client.sites
-				? deferred('onOwnSlot')(client, value)
-				: { value, slot: false };
-			const page = unrouteURL(client, slotted.value);
-			if (page === null || (slotted.slot && page === slotted.value)) return '';
-			// a report names no fragment
-			return key === 'blockedURI' ? page.replace(/#.*$/s, '') : page;
-		});
+		// (a deferred part, ../violations.ts: the getter throws without it)
+		const urlField = reading((value, key) =>
+			value.includes(':')
+				? deferred('violationURL')(client, value, key)
+				: value,
+		);
 		for (const key of URL_FIELDS) hook(key, urlField);
 		hook(
 			'originalPolicy',
@@ -220,10 +157,6 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 		);
 		// the page's code, which the rewriter changed ('report-sample'): what
 		// it evaluated, or the text the page reads back of the element
-		const nativeTarget = Reflect.getOwnPropertyDescriptor(
-			global.Event.prototype,
-			'target',
-		)?.get;
 		const sample = Reflect.getOwnPropertyDescriptor(prototype, 'sample');
 		if (sample?.get && nativeBlocked && nativeTarget)
 			Reflect.defineProperty(prototype, 'sample', {
@@ -231,12 +164,21 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 				get: proxyModule.wrapFunction(sample.get, (target, that, args) => {
 					const value = Reflect.apply(target, that, args);
 					if (typeof value !== 'string' || !value) return value;
+					let blocked: unknown;
 					try {
-						const blocked = Reflect.apply(nativeBlocked, that, []);
+						blocked = Reflect.apply(nativeBlocked, that, []);
 						if (blocked === 'eval') return client.codeSample(value);
 						if (blocked !== 'inline') return value;
+					} catch (error) {
+						return value;
+					}
+					// an inline one's: a deferred part (../violations.ts), the getter
+					// throws without it
+					const pageCode = deferred('violationPageCode');
+					try {
 						return (
 							pageCode(
+								natives,
 								Reflect.apply(nativeTarget, that, []) as unknown,
 								value,
 							) ?? value

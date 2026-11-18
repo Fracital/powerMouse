@@ -138,6 +138,9 @@ import {
 	evalError,
 	refusedTrustedPolicy,
 	trustedTypeError,
+	violationPageCode,
+	violationShows,
+	violationURL,
 } from './violations';
 import { writeStream } from './WriteStream';
 import { xhrMessage } from './xhrMessages';
@@ -184,6 +187,11 @@ export const parts = {
 	refusedTrustedPolicy,
 	trustedTypeError,
 	evalError,
+	// and the reading of the browser's own violations, at the first that
+	// reaches the page (./modules/ContentSecurity.ts)
+	violationShows,
+	violationURL,
+	violationPageCode,
 	navigationRefusal,
 	precommitRedirect,
 	webTransportStandIn,
