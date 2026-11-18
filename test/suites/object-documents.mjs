@@ -190,6 +190,26 @@ ok(
 	),
 	JSON.stringify(eventsNative),
 );
+ok(
+	"natively, an object of a type with whitespace in it or an unknown one fires error, an embed nothing, at a document's box",
+	[
+		'typeSpace',
+		'typeTab',
+		'typePadded',
+		'typeLeading',
+		'typeSpaceLate',
+		'typeUnknown',
+		'typeImageUnknown',
+	].every((name) => eventsNative?.[`${name}.events`] === 'error') &&
+		['embedTypeSpace', 'embedTypePadded', 'embedTypeUnknown'].every(
+			(name) => eventsNative?.[`${name}.events`] === '',
+		) &&
+		/width=300$/.test(eventsNative?.['typeSpace.end'] ?? '') &&
+		/^load shown=null [^|]* width=1$/.test(
+			eventsNative?.['typeSpaceFixed.events'] ?? '',
+		),
+	JSON.stringify(eventsNative),
+);
 for (const [mode, base] of [
 	['same-origin', PROXY],
 	['isolated', HOST],

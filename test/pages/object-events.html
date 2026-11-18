@@ -215,6 +215,25 @@
 			return [object, clone];
 		};
 		const [heldImage, heldClone] = held('heldImage');
+		// One of a type Chrome knows none of (whitespace alone or around an
+		// image's, an unknown one): an object fires error once and an embed
+		// nothing, neither loads; one that names an image instead before it
+		// is put in the document is the image, one that does after changes
+		// nothing
+		const spaced = (name, type, tag = 'object', fixed = null) => {
+			const object = document.createElement(tag);
+			watch(name, object);
+			object.setAttribute('type', type);
+			object.setAttribute(
+				tag === 'object' ? 'data' : 'src',
+				`object-events.png?${name}`,
+			);
+			if (fixed === 'before') object.setAttribute('type', 'image/png');
+			document.body.append(object);
+			if (fixed === 'after') object.setAttribute('type', 'image/png');
+			report[`${name}.sync`] = read(object);
+			return object;
+		};
 		const objects = {
 			parsed,
 			parsedImage,
@@ -251,6 +270,21 @@
 			imageUntyped: image('imageUntyped', null),
 			embedImage: image('embedImage', 'before', 'embed'),
 			embedImageUntyped: image('embedImageUntyped', null, 'embed'),
+			typeSpace: spaced('typeSpace', ' '),
+			typeTab: spaced('typeTab', '\t'),
+			typePadded: spaced('typePadded', 'image/png '),
+			typeLeading: spaced('typeLeading', ' image/png'),
+			embedTypeSpace: spaced('embedTypeSpace', ' ', 'embed'),
+			embedTypePadded: spaced('embedTypePadded', 'image/png ', 'embed'),
+			typeSpaceFixed: spaced('typeSpaceFixed', ' ', 'object', 'before'),
+			typeSpaceLate: spaced('typeSpaceLate', ' ', 'object', 'after'),
+			typeUnknown: spaced('typeUnknown', 'application/x-foo'),
+			typeImageUnknown: spaced('typeImageUnknown', 'image/x-foo'),
+			embedTypeUnknown: spaced(
+				'embedTypeUnknown',
+				'application/x-foo',
+				'embed',
+			),
 		};
 		setTimeout(() => {
 			for (const [name, object] of Object.entries(objects)) {
