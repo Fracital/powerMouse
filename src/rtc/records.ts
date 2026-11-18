@@ -59,6 +59,7 @@ export interface StackExports {
 	o(id: number): number;
 	p(): number;
 	d(id: number): void;
+	l(ptr: number, len: number): number;
 }
 
 const encoder = new TextEncoder();

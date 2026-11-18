@@ -1330,3 +1330,50 @@ fn video_with_dependency_descriptors() {
 	assert_eq!(b.frames[9].described, None);
 	assert_eq!(b.frames[9].data, plain);
 }
+
+/// Packets of libopus 1.5.2 (narrowband, mediumband, wideband: the copy
+/// decodes bit for bit as libopus's decode_fec does) and of Chrome 156
+/// (wideband SILK and fullband hybrid), each with the copy made of its LBRR
+/// frame, none from a packet without one or a CELT packet
+/// (test/fixtures/rtc/opus-lbrr.json, which rtc-media-unit also reads
+/// through the artifact)
+const LBRR: [(&str, Option<&str>); 13] = [
+	("08c2e1f323ac6d71238b591b42f4e6b78689f380cce8c3e1ec78d10ecb6d7ca5afa62d4fc51c4363f7d0a6fd14f939d8bb9d49c90b107e50649b6f0219bf56bb453806ed752062b348", Some("0882e1f323ac6d71238b591b42f4e6b78689f380cce8c3e1ec78d10ecb6d7ca4")),
+	("08eafa09d2b3520404be95bb168415dd8d138318f1ad81fc46c8fb8ad21d73872aa4b6d898168fd47e699d682bca91d9fbac3c50fffcef649c9cf5ce66e1d75ff630", Some("08aafa09d2b3520404be95bb168415dd8d138318f1ad81fc46c8fb8ad1")),
+	("28c2e30b5ca11a9a8fa4a42ad2d3c20bfbf1a3ad56dbc63fde57b6e1f800715ad0cb9677841affe1707215cadd3ae1dd43d73189e094456cbabea9c9017de81cedd3e9afe436fbfa9a29a89c47826954dca1952560", Some("2882e30b5ca11a9a8fa4a42ad2d3c20bfbf1a3ad56dbc63fde57b6e1f80070")),
+	("28eafd32606350644f54a2127ca29c928493ef479c8027963b77d6b031c68ae41fe2a450bfc72856a93ca1d1779fb76ebcac55a908dbdfbc35cc7043bdb302689f7a5b0e6eb6ec6f2d9d518993abc69da0", Some("28aafd32606350644f54a2127ca29c928493ef479c8027963b77d6b031c68ae380")),
+	("48c33fddd0efe0dd29571f24dfa29b91a246a076c212b146247e4d5936fa54d862b2ac3c4cecc236f3917a09960cc63bbeda2a09964c6c779a73c365463980", Some("48833fddd0efe0dd29571f24dfa29b91a246a076c212b146247e4d58")),
+	("48eebad1961a00c596a2a1eabc6a3ff5334d9ed4569e005c92bb29442b4b32c7f255bcac0eb11894cae84a62a8150555e6aed5b7c60c266f20e078eedd60", Some("48aebad1961a00c596a2a1eabc6a3ff5334d9ed4569e005c92b8")),
+	("48c507ee77ed7b5be1d502da31b1fea89c15e835338529cb946b4a0539c3f94463a1301a47af61474173bce612edaba3bdd9ab46df236eee5c8f2192", Some("488507ee77ed7b5be1d502da31b1fea0")),
+	("48d3a1e9c5be1955f5e56405f33f18a7abd5f34ee1cd69023dfd227c0162ff3cb89da022f000563036fe08b90a9ad2d5a21cfe21072c783ae202f930fbbba08c98cc869920110f07ca789ff41b875ab756f27ddec79af3a47f30ccb1e584534e0dc43ee5cdce0e01cd3c", Some("4893a1e9c5be1955f5e56405f33f18a7abd5f34ee1cd69023dfd227c0162ff3cb89da022f000563036fe08b90a9ad2d5a21cfe21072c783ae202f930fbbba08c98cc869920110f07ca789ff41b875ab756f27ddea0")),
+	("48eb4235cd566ecd9cbb37d807cc07e38fa2a6c0b793a05f4c56435851853c3438ee6eb5090f2778bf71012cc7e35ff9ad95e49374e4fea4d437e455312cd0f9d1b85e26680cec64476b5a2fc1c561a9bb60", Some("48ab4235cd566ecd9cbb37d807cc07e38fa2a6c0b793a05f4c56435851853c3438ee6c")),
+	("78c30ba21ac77562b31482b341b33f8de8c3e0d99b399d4c55ae40a389705620f5ed72a28823d2c253b6468aa2aa5e08fc08d16da5336d24d50e749ecd4d076ded4e8e54b1270b3b497465dac4a5b972", Some("48830ba21ac77562b31482b341b33f8de8c3e0d99b399d4c55ae4080")),
+	("78e518cb5eeddedc89963278ae3a2fc26432c98a25292a1de2ac7dba5c9b69d9e32d1fc66b0056baecb7f9eb6f12fffc8bfcf3c91e20c55d98978aae3a193c2c19bd93ae", Some("48a518cb5eeddedc89963278ae3a2fc26432c98a")),
+	("7882b4da8bb7697c7c378b2c076c6af47b8ac9e824c0d5189a3f3338037d90e756e06816b2c45934ffb43e316bc15cede5695f9df317ff529e3890cbc733c1fb2235e510eac85aabb02893c892439db3fbaa9a00fe7d8c34b309ff67535784", None),
+	("f843b12c5b984f11cd4f3e814a16e621166bc2d92a5ae826e3f99150e93ec12e3c0945405a7702bc7abf91f5150dbdce1d5c301ad769b484c6793490a6ae38e89a1e28a04b526f2de4cd9ae31d490ece1d", None),
+];
+
+#[test]
+fn lbrr_copies_become_packets_of_their_own() {
+	let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let copy_of = |packet: &[u8]| {
+		let (ptr, len) = give(packet);
+		match unsafe { l(ptr, len) } {
+			0 => None,
+			len => Some(unsafe { std::slice::from_raw_parts(p(), len) }.to_vec()),
+		}
+	};
+	for (packet, copy) in LBRR {
+		let packet = unhex(packet).unwrap();
+		let made = copy_of(&packet);
+		assert_eq!(made, copy.map(|copy| unhex(copy).unwrap()), "{packet:02x?}");
+		if let Some(made) = made {
+			// the copy's symbols are the LBRR frame's, in one mono frame
+			assert_eq!(lbrr::symbols(&made, false), lbrr::symbols(&packet, true));
+			assert_eq!(made[0] & 7, 0);
+		}
+	}
+	// nothing, or one byte, carries no copy
+	assert_eq!(copy_of(&[]), None);
+	assert_eq!(copy_of(&[8]), None);
+}

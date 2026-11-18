@@ -18,6 +18,10 @@
 //! - `o(id) -> len` moves the connection's next output record into the
 //!   scratch `p()` points at and answers its length, 0 when there is none.
 //! - `d(id)` drops the connection.
+//! - `l(ptr, len) -> len` moves the copy an Opus packet (owned from then on)
+//!   carries of the packet before it (in-band FEC, `lbrr`), as a packet of
+//!   its own, into the scratch `p()` points at and answers its length, 0
+//!   when it carries none.
 //!
 //! Records are a tag byte (output) or kind (input) and a payload. Control
 //! calls and events are text: `key=value` fields separated by 0x1f. Datagrams,
@@ -48,6 +52,7 @@ use str0m::rtp::{FramePosition, VideoOrientation};
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
 
 mod dd;
+mod lbrr;
 mod media;
 mod size;
 #[cfg(test)]
@@ -1562,4 +1567,12 @@ pub unsafe extern "C" fn d(id: i32) {
 	if let Some(slot) = state().conns.get_mut(id as usize) {
 		*slot = None;
 	}
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn l(ptr: *mut u8, len: usize) -> usize {
+	let packet = unsafe { take(ptr, len) };
+	let state = state();
+	state.out = lbrr::repack(&packet).unwrap_or_default();
+	state.out.len()
 }

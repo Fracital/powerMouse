@@ -31,7 +31,6 @@ export * from ${from('g722.ts')};
 export { AudioSender, AudioReceiver, levelOf } from ${from('audio.ts')};
 export { ToneSender, eventPayload, TONES } from ${from('dtmf.ts')};
 export { ComfortNoise, parseNoise } from ${from('cn.ts')};
-export { hasLbrr, repackLbrr, silkSymbols } from ${from('lbrr.ts')};
 export { stackFormats, parsePayloads, parseParameters } from ${from('formats.ts')};
 export * as records from ${from('records.ts')};
 export { Stack } from ${from('connection.ts')};
@@ -1349,6 +1348,20 @@ function tonePackets(ms, rate, step, { frames = 40, start = 1000 } = {}) {
 
 // --- Opus in-band FEC ---
 
+const wasm = await WebAssembly.compile(readFileSync(`${root}assets/rtc.wasm`));
+async function stack() {
+	let exports = null;
+	const instance = await WebAssembly.instantiate(
+		wasm,
+		m.wasiImports(() => exports.memory),
+	);
+	exports = instance.exports;
+	return new m.Stack(instance);
+}
+/** the copy the stack makes of an Opus packet's LBRR frame (rust/rtc/src/lbrr.rs) */
+const copies = await stack();
+const copyOf = (packet) => copies.copyOf(packet);
+
 {
 	// Packets of libopus 1.5.2 (narrowband, mediumband, wideband: the copy
 	// decodes bit for bit as libopus's decode_fec does, stomp-work's
@@ -1360,19 +1373,13 @@ function tonePackets(ms, rate, step, { frames = 40, start = 1000 } = {}) {
 	const bytes = (text) => Uint8Array.from(Buffer.from(text, 'base64'));
 	const wrong = [];
 	for (const [packet, copy] of fixture) {
-		const made = m.repackLbrr(bytes(packet));
+		const made = copyOf(bytes(packet));
 		const text = made && Buffer.from(made).toString('base64');
-		const symbols = m.silkSymbols(bytes(packet), true).join();
-		if (
-			text !== copy ||
-			m.hasLbrr(bytes(packet)) !== (copy !== null) ||
-			(copy && m.silkSymbols(made, false).join() !== symbols) ||
-			(copy && (made[0] & 7) !== 0)
-		)
+		if (text !== copy || (copy && (made[0] & 7) !== 0))
 			wrong.push(packet.slice(0, 12));
 	}
 	ok(
-		'the LBRR copy a packet carries becomes a packet of its own, with the same symbols (narrowband to fullband hybrid; none from a packet without one or a CELT packet)',
+		'the stack makes the LBRR copy a packet carries a packet of its own (narrowband to fullband hybrid; none from a packet without one or a CELT packet; that it has the same symbols is a test of the crate)',
 		fixture.length === 13 && !wrong.length,
 		wrong.join(),
 	);
@@ -1412,7 +1419,7 @@ function tonePackets(ms, rate, step, { frames = 40, start = 1000 } = {}) {
 	}
 	globalThis.AudioDecoder = FakeDecoder;
 	globalThis.EncodedAudioChunk = FakeChunk;
-	const receiver = new m.AudioReceiver();
+	const receiver = new m.AudioReceiver(copyOf);
 	receiver.setTrack(new WritableStream({ write() {} }));
 	const silk = bytes(fixture[4][0]);
 	const copy = bytes(fixture[4][1]);
@@ -1585,16 +1592,6 @@ function tonePackets(ms, rate, step, { frames = 40, start = 1000 } = {}) {
 
 // --- two stacks back to back ---
 
-const wasm = await WebAssembly.compile(readFileSync(`${root}assets/rtc.wasm`));
-async function stack() {
-	let exports = null;
-	const instance = await WebAssembly.instantiate(
-		wasm,
-		m.wasiImports(() => exports.memory),
-	);
-	exports = instance.exports;
-	return new m.Stack(instance);
-}
 const certificate = await m.generateCertificate();
 const formats = m.stackFormats(template('152'));
 

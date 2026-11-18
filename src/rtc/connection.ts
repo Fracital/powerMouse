@@ -167,7 +167,13 @@ export class Stack {
 	}
 	/** the next output record, copied out; null when there is none */
 	output(id: number): Uint8Array | null {
-		const len = this.#exports.o(id);
+		return this.#scratch(this.#exports.o(id));
+	}
+	/** the copy an Opus packet carries of the one before (in-band FEC), as a packet of its own; null for none */
+	copyOf(packet: Uint8Array): Uint8Array | null {
+		return this.#scratch(this.#exports.l(...this.#give(packet)));
+	}
+	#scratch(len: number): Uint8Array | null {
 		if (!len) return null;
 		const ptr = this.#exports.p();
 		return new Uint8Array(this.#exports.memory.buffer, ptr, len).slice();
@@ -746,7 +752,9 @@ export class Connection {
 		};
 		if (kind === 'audio') {
 			state.sender = new AudioSender(index, this.#writeFrame);
-			state.receiver = new AudioReceiver();
+			state.receiver = new AudioReceiver((packet) =>
+				this.#stack.copyOf(packet),
+			);
 		} else {
 			state.sender = new VideoSender(index, this.#writeFrame);
 			const receiver = new VideoReceiver();

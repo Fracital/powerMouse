@@ -133,6 +133,7 @@ asks for records out, and tells the stack when its next timer is due.
 | `o`    | `output(id) -> len`: the next output record into the scratch (`p()` its pointer), 0 when there is none                    |
 | `d`    | `destroy(id)`                                                                                                             |
 | `p`    | the scratch pointer the output records are written at                                                                     |
+| `l`    | `lbrr(ptr, len) -> len`: the copy an Opus packet carries of the one before it, as a packet, into the scratch (section 16) |
 
 Input records (`kind`): `datagram` (stream handle, bytes), `stream-open`
 (handle, the address it was opened to), `stream-closed` (handle, why), and
@@ -1471,7 +1472,9 @@ packet after a lost one read as contiguous a third of the time).
 - In-band FEC: a sender with `useinbandfec=1` (Chrome's default) that
   hears of loss puts a second, coarser copy of each SILK frame (LBRR, RFC
   6716 4.2.4) into the next packet. NetEq decodes it with libopus's
-  `decode_fec`, which WebCodecs cannot ask for, so `src/rtc/lbrr.ts`
+  `decode_fec`, which WebCodecs cannot ask for, so the stack
+  (`rust/rtc/src/lbrr.rs`, asked with its `l` export for each Opus packet
+  the receiver takes, after a page's encoded transform has had it)
   rewrites the copy as a packet of its own: an LBRR frame is coded with
   the syntax of a first frame coded independently, so its symbols are
   read with libopus's iCDF tables and written again with the same ones

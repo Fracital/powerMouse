@@ -12,7 +12,6 @@ import { eventPayload, TONES, ToneSender } from './dtmf';
 import type { Payload } from './formats';
 import { Downsampler, g711Decode, g711Encode } from './g711';
 import { g722Decode, G722Decoder, g722Encode, G722Encoder } from './g722';
-import { hasLbrr, repackLbrr } from './lbrr';
 import {
 	AudioLevel,
 	channelsOf,
@@ -978,6 +977,14 @@ export interface ReceiverStats extends PlayoutStats {
  * on the receiver's own clock, with silence where one is missing.
  */
 export class AudioReceiver {
+	/**
+	 * The copy an Opus packet carries of the one before it (in-band FEC,
+	 * rust/rtc/src/lbrr.rs), as a packet of its own, or null
+	 */
+	#copyOf: (packet: Uint8Array) => Uint8Array | null;
+	constructor(copyOf: (packet: Uint8Array) => Uint8Array | null = () => null) {
+		this.#copyOf = copyOf;
+	}
 	#playout = new Playout<Sound>({ rate: 48 });
 	#writer: WritableStreamDefaultWriter<AudioData> | null = null;
 	#decoder: AudioDecoder | null = null;
@@ -1145,7 +1152,13 @@ export class AudioReceiver {
 		const time = Number(BigInt.asIntN(64, frame.time));
 		if (frame.codec === 'opus') {
 			this.#speak('opus');
-			this.#take(frame.payload, time, now, frame.flags ?? FLAG_CONTIGUOUS);
+			this.#take(
+				frame.payload,
+				frame.payload.length ? this.#copyOf(frame.payload) : null,
+				time,
+				now,
+				frame.flags ?? FLAG_CONTIGUOUS,
+			);
 		} else if (frame.codec === 'PCMU' || frame.codec === 'PCMA') {
 			this.#speak('G711');
 			// 8 kHz on the wire, 48 kHz on the track
@@ -1247,6 +1260,7 @@ export class AudioReceiver {
 	 */
 	#reorder: {
 		payload: Uint8Array;
+		copy: Uint8Array | null;
 		time: number;
 		now: number;
 		flags: number;
@@ -1260,11 +1274,11 @@ export class AudioReceiver {
 	 * where its FEC copy rebuilds that: NetEq puts the copy in its buffer
 	 * when the packet comes)
 	 */
-	#holeBefore(time: number, flags: number, payload: Uint8Array): boolean {
+	#holeBefore(time: number, flags: number, copy: Uint8Array | null): boolean {
 		const last = this.#lastOpus;
 		if (!last || flags & FLAG_TALKSPURT) return false;
 		const missing = (time - last.time) / OPUS_FRAME - 1;
-		if (missing === 1 && last.toc >> 3 < 16 && hasLbrr(payload)) return false;
+		if (missing === 1 && last.toc >> 3 < 16 && copy) return false;
 		return (
 			Number.isInteger(missing) && missing >= 1 && missing <= CONCEAL_FRAMES
 		);
@@ -1279,7 +1293,13 @@ export class AudioReceiver {
 	 * concealed only then (measured: Chrome conceals nothing of packets
 	 * that swap places within what its buffer holds).
 	 */
-	#take(payload: Uint8Array, time: number, now: number, flags: number) {
+	#take(
+		payload: Uint8Array,
+		copy: Uint8Array | null,
+		time: number,
+		now: number,
+		flags: number,
+	) {
 		// (its arrival, in the order they came, is what NetEq's delay
 		// manager takes; a packet after a hole that carries a copy of the
 		// packet before it counts that copy first, as a packet of the lost
@@ -1296,7 +1316,7 @@ export class AudioReceiver {
 				missing >= 1 &&
 				missing <= CONCEAL_FRAMES &&
 				heard.toc >> 3 < 16 &&
-				hasLbrr(payload)
+				copy
 			)
 				this.#playout.arrived(time - OPUS_FRAME, now);
 			this.#playout.arrived(time, now);
@@ -1310,16 +1330,16 @@ export class AudioReceiver {
 		const queue = this.#reorder;
 		if (
 			!queue.length &&
-			(!payload.length || !this.#holeBefore(time, flags, payload))
+			(!payload.length || !this.#holeBefore(time, flags, copy))
 		) {
-			this.#opus(payload, time, now, flags);
+			this.#opus(payload, copy, time, now, flags);
 			return;
 		}
 		if (!payload.length) return;
 		let at = queue.length;
 		while (at > 0 && queue[at - 1].time > time) at--;
 		if (at > 0 && queue[at - 1].time === time) return;
-		queue.splice(at, 0, { payload, time, now, flags });
+		queue.splice(at, 0, { payload, copy, time, now, flags });
 		this.#drain(false);
 	}
 
@@ -1328,10 +1348,10 @@ export class AudioReceiver {
 		const queue = this.#reorder;
 		while (queue.length) {
 			const next = queue[0];
-			if (!due && this.#holeBefore(next.time, next.flags, next.payload)) break;
+			if (!due && this.#holeBefore(next.time, next.flags, next.copy)) break;
 			due = false;
 			queue.shift();
-			this.#opus(next.payload, next.time, next.now, next.flags);
+			this.#opus(next.payload, next.copy, next.time, next.now, next.flags);
 		}
 		if (this.#reorderTimer !== null) clearTimeout(this.#reorderTimer);
 		this.#reorderTimer = null;
@@ -1357,7 +1377,13 @@ export class AudioReceiver {
 		);
 	}
 
-	#opus(payload: Uint8Array, time: number, now: number, flags: number) {
+	#opus(
+		payload: Uint8Array,
+		copy: Uint8Array | null,
+		time: number,
+		now: number,
+		flags: number,
+	) {
 		if (!payload.length) return;
 		const last = this.#lastOpus;
 		this.#lastOpus = { time, toc: payload[0] };
@@ -1386,7 +1412,6 @@ export class AudioReceiver {
 			}
 		}
 		if (decoder.decodeQueueSize > MAX_QUEUE) return;
-		const copy = hasLbrr(payload);
 		if (copy) this.#fec.received++;
 		// Packets were lost before this one: their time is made up when it
 		// is due (the playout buffer has nothing for it), as NetEq's expand
@@ -1412,7 +1437,7 @@ export class AudioReceiver {
 			missing <= CONCEAL_FRAMES
 		) {
 			const at = time - OPUS_FRAME;
-			const rebuilt = copy && last.toc >> 3 < 16 ? repackLbrr(payload) : null;
+			const rebuilt = last.toc >> 3 < 16 ? copy : null;
 			this.#concealed += rebuilt ? missing - 1 : missing;
 			if (rebuilt) {
 				// decoded, not concealed, in Chrome's counts (its arrival was
