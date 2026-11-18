@@ -1,0 +1,84 @@
+From 09ea1e0fa2bde7b53f5c2d4aa23498e51db4234b Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 17 Nov 2026 17:50:05 -0500
+Subject: [PATCH 54/54] hpack: index and Huffman code fields as Chrome's
+ encoder does
+
+Chrome's HPACK encoder (quiche's HpackEncoder) adds every request field
+to the dynamic table except the pseudo-headers other than :authority,
+and Huffman codes a string only when the code is shorter than the
+string. h2 followed nghttp2's policy, which leaves Content-Length,
+Cookie, Authorization and a few response fields out of the table, added
+a :method the static table names only (PUT, OPTIONS) to it, and Huffman
+coded every string, so the representations a server decodes differed
+from Chrome's on most requests. They now follow Chrome's encoder.
+---
+ src/hpack/encoder.rs | 10 ++++++++++
+ src/hpack/header.rs  | 28 ++++++++++++----------------
+ 2 files changed, 22 insertions(+), 16 deletions(-)
+
+diff --git a/src/hpack/encoder.rs b/src/hpack/encoder.rs
+index 06ccda4..97e88ed 100644
+--- a/src/hpack/encoder.rs
++++ b/src/hpack/encoder.rs
+@@ -225,6 +225,16 @@ fn encode_str(val: &[u8], dst: &mut BytesMut) {
+ 
+         let huff_len = position(dst) - (idx + 1);
+ 
++        // Chrome's encoder (quiche's HpackEncoder::EmitString) Huffman codes
++        // a string only when that makes it shorter: "?0", "1" and the like
++        // go out as they are
++        if huff_len >= val.len() {
++            dst.truncate(idx);
++            encode_int(val.len(), 7, 0, dst);
++            dst.put_slice(val);
++            return;
++        }
++
+         if encode_int_one_byte(huff_len, 7) {
+             // Write the string head
+             dst[idx] = 0x80 | huff_len as u8;
+diff --git a/src/hpack/header.rs b/src/hpack/header.rs
+index 0b5d1fd..4d023e7 100644
+--- a/src/hpack/header.rs
++++ b/src/hpack/header.rs
+@@ -186,24 +186,20 @@ impl Header {
+         }
+     }
+ 
++    /// Chrome's HPACK encoder (quiche's `HpackEncoder::DefaultPolicy`)
++    /// adds every field to the table but the pseudo-headers, of which it
++    /// adds only `:authority`: a `:method` the static table does not hold
++    /// whole (PUT, OPTIONS) and every `:path` go out without indexing.
++    /// h2 followed nghttp2, which also left out Content-Length, Cookie and
++    /// a few response fields.
+     pub fn skip_value_index(&self) -> bool {
+-        use http::header;
+-
+         match *self {
+-            Header::Field { ref name, .. } => matches!(
+-                *name,
+-                header::AGE
+-                    | header::AUTHORIZATION
+-                    | header::CONTENT_LENGTH
+-                    | header::ETAG
+-                    | header::IF_MODIFIED_SINCE
+-                    | header::IF_NONE_MATCH
+-                    | header::LOCATION
+-                    | header::COOKIE
+-                    | header::SET_COOKIE
+-            ),
+-            Header::Path(..) => true,
+-            _ => false,
++            Header::Field { .. } | Header::Authority(..) => false,
++            Header::Method(..)
++            | Header::Scheme(..)
++            | Header::Path(..)
++            | Header::Protocol(..)
++            | Header::Status(..) => true,
+         }
+     }
+ }
+-- 
+2.54.0
+
