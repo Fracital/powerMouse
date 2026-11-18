@@ -29,6 +29,7 @@ import {
 	type Frame,
 } from './records';
 import { Resampler } from './resample';
+import { stretch } from './stretch';
 
 /** hands an encoded frame to the stack; `age` is how long ago it was captured, in ms */
 export type FrameWriter = (frame: Frame, age: number) => void;
@@ -72,10 +73,14 @@ const DTX_SETTLE_MS = 10;
 const DTX_QUIET_LEVEL = 40;
 const DTX_QUIET_FRAMES = 8;
 /**
- * The longest run of lost Opus packets the decoder conceals: past it the
+ * The longest run of lost Opus packets made up as lost: past it the
  * gap is a pause (a sender that left silence out), not a loss
  */
 const CONCEAL_FRAMES = 5;
+/** the longest a packet after a hole waits for the hole's packets */
+const REORDER_MS = 100;
+/** how long before a frame plays its packet is decoded at the latest */
+const DECODE_MS = 10;
 /** a G.711 packet: 20 ms at 8 kHz */
 const G711_FRAME = 160;
 /**
@@ -836,9 +841,8 @@ interface Sound {
 	samples: Float32Array<ArrayBuffer>;
 	frames: number;
 	channels: number;
-	/** when its packet came (performance.now()), and whether it stands for a lost one */
+	/** when its packet came (performance.now()) */
 	arrived?: number;
-	lost?: boolean;
 	/** a comfort noise packet: from its time on, noise plays until speech does */
 	noise?: NoiseDescription;
 	/** a telephone event's tones */
@@ -890,6 +894,14 @@ const LAG_HIGH = 960;
 const MERGE = 120;
 /** where a frame played after made-up sound starts is found over this many samples */
 const ALIGN = 240;
+/**
+ * and starts at most this far in (2.5 ms): each loss shortens the delay by
+ * about what NetEq's expand and merge take off it (measured with a tenth
+ * of the packets lost and no copies: Chrome's 850 to 900 samples made up
+ * a loss, its buffer kept at its lower limit; skipping up to a whole
+ * period, 10 to 20 ms, held it 5 ms under Chrome's)
+ */
+const SKIP = 120;
 
 /**
  * How much of its level made-up sound loses a frame: little for a sound
@@ -932,6 +944,8 @@ const IDLE_MS = 2000;
 const LAG_MS = 200;
 /** written frames nobody has taken before more are not written */
 const BACKLOG = 25;
+/** a frame of the track, in samples at 48 kHz */
+const TRACK_FRAME = 960;
 
 /** a received frame, as the stack hands it over */
 export interface Received {
@@ -950,7 +964,7 @@ export interface ReceiverStats extends PlayoutStats {
 	bytes: number;
 	/** frames written to the track, silence among them */
 	written: number;
-	/** lost Opus packets the decoder concealed */
+	/** lost Opus packets made up (not rebuilt from a copy) */
 	concealed: number;
 	/** Opus packets that carried a copy of the one before (in-band FEC), as Chrome counts them */
 	fecPacketsReceived: number;
@@ -968,7 +982,7 @@ export class AudioReceiver {
 	#writer: WritableStreamDefaultWriter<AudioData> | null = null;
 	#decoder: AudioDecoder | null = null;
 	/** the frames the decoder has not answered yet: it answers in order */
-	#waiting: { time: number; arrived: number; lost?: boolean }[] = [];
+	#waiting: { time: number; arrived: number }[] = [];
 	/** a frame with two channels was seen: the track carries two from then on */
 	#stereo = false;
 	#timer: ReturnType<typeof setTimeout> | null = null;
@@ -976,6 +990,9 @@ export class AudioReceiver {
 	#due = 0;
 	/** the track's own time, in microseconds: a steady count of what was written */
 	#clock: number | null = null;
+	/** sound decoded or made up and not yet written (NetEq's sync buffer), planar */
+	#pending: { samples: Float32Array; frames: number; channels: number }[] = [];
+	#pendingFrames = 0;
 	#heard = 0;
 	#started = false;
 	/** the last G.711 or G.722 sample, which the next packet's first is drawn from */
@@ -983,7 +1000,7 @@ export class AudioReceiver {
 	/** G.722 decodes from its own reconstruction: one state for the stream */
 	#g722 = new G722Decoder();
 	#counts = { frames: 0, bytes: 0, written: 0 };
-	/** lost Opus packets the decoder concealed */
+	/** lost Opus packets made up (not rebuilt from a copy) */
 	#concealed = 0;
 	/** Opus packets with an FEC copy, and those whose copy rebuilt a lost one */
 	#fec = { received: 0, used: 0 };
@@ -1045,10 +1062,12 @@ export class AudioReceiver {
 		fecPacketsDiscarded: number;
 	} {
 		const stats = this.#played.stats;
-		const { dropped, late } = this.#playout.stats;
-		// a frame given up to shorten the delay is 20 ms of the decoder's
-		stats.removedSamplesForAcceleration = Math.round(
-			(dropped * NOISE_RATES[this.#speech]) / 50,
+		const { removedMs, insertedMs, late } = this.#playout.stats;
+		// (at the decoder's rate)
+		const rate = NOISE_RATES[this.#speech];
+		stats.removedSamplesForAcceleration = Math.round((removedMs * rate) / 1000);
+		stats.insertedSamplesForDeceleration = Math.round(
+			(insertedMs * rate) / 1000,
 		);
 		return {
 			...stats,
@@ -1077,6 +1096,12 @@ export class AudioReceiver {
 		this.#timer = null;
 		this.#playout.clear();
 		this.#expansion = null;
+		this.#pending = [];
+		this.#pendingFrames = 0;
+		this.#reorder = [];
+		this.#lastHeard = null;
+		if (this.#reorderTimer !== null) clearTimeout(this.#reorderTimer);
+		this.#reorderTimer = null;
 		if (writable) this.#writer = writable.getWriter();
 	}
 
@@ -1107,7 +1132,7 @@ export class AudioReceiver {
 		const time = Number(BigInt.asIntN(64, frame.time));
 		if (frame.codec === 'opus') {
 			this.#speak('opus');
-			this.#opus(frame.payload, time, now, frame.flags ?? FLAG_CONTIGUOUS);
+			this.#take(frame.payload, time, now, frame.flags ?? FLAG_CONTIGUOUS);
 		} else if (frame.codec === 'PCMU' || frame.codec === 'PCMA') {
 			this.#speak('G711');
 			// 8 kHz on the wire, 48 kHz on the track
@@ -1200,6 +1225,124 @@ export class AudioReceiver {
 
 	/** the last Opus packet decoded: its time and its first byte */
 	#lastOpus: { time: number; toc: number } | null = null;
+	/** the newest Opus packet that came, likewise */
+	#lastHeard: { time: number; toc: number } | null = null;
+	/**
+	 * Packets that came after a hole, waiting for the packets of the hole
+	 * (which may come out of order), and when they must be decoded at the
+	 * latest
+	 */
+	#reorder: {
+		payload: Uint8Array;
+		time: number;
+		now: number;
+		flags: number;
+	}[] = [];
+	#reorderTimer: ReturnType<typeof setTimeout> | null = null;
+
+	/**
+	 * A hole before a packet of `time`: the packets the decoder has not
+	 * had and that would be concealed (not a talkspurt's start, or a
+	 * silence an Opus DTX sender left out, or the one packet before it
+	 * where its FEC copy rebuilds that: NetEq puts the copy in its buffer
+	 * when the packet comes)
+	 */
+	#holeBefore(time: number, flags: number, payload: Uint8Array): boolean {
+		const last = this.#lastOpus;
+		if (!last || flags & FLAG_TALKSPURT) return false;
+		const missing = (time - last.time) / OPUS_FRAME - 1;
+		if (missing === 1 && last.toc >> 3 < 16 && hasLbrr(payload)) return false;
+		return (
+			Number.isInteger(missing) && missing >= 1 && missing <= CONCEAL_FRAMES
+		);
+	}
+
+	/**
+	 * An Opus packet from the stack. NetEq decodes a packet when it is to
+	 * be played, so one that comes after the packet after it (out of order
+	 * on the way) is played in its place; here the decoder takes them in
+	 * order, so a packet after a hole waits for the hole's packets until
+	 * they would have to be decoded to play in time, and the hole is
+	 * concealed only then (measured: Chrome conceals nothing of packets
+	 * that swap places within what its buffer holds).
+	 */
+	#take(payload: Uint8Array, time: number, now: number, flags: number) {
+		// (its arrival, in the order they came, is what NetEq's delay
+		// manager takes; a packet after a hole that carries a copy of the
+		// packet before it counts that copy first, as a packet of the lost
+		// one's time that came now, a packet late: where losses are rebuilt
+		// the target is a packet longer, measured 40 ms against 20 with the
+		// same loss and no copies)
+		if (payload.length) {
+			const heard = this.#lastHeard;
+			const missing = heard ? (time - heard.time) / OPUS_FRAME - 1 : 0;
+			if (
+				heard &&
+				!(flags & FLAG_TALKSPURT) &&
+				Number.isInteger(missing) &&
+				missing >= 1 &&
+				missing <= CONCEAL_FRAMES &&
+				heard.toc >> 3 < 16 &&
+				hasLbrr(payload)
+			)
+				this.#playout.arrived(time - OPUS_FRAME, now);
+			this.#playout.arrived(time, now);
+			if (!heard || time > heard.time)
+				this.#lastHeard = { time, toc: payload[0] };
+		}
+		// (one no newer than what was decoded came too late, or twice:
+		// NetEq drops it)
+		const last = this.#lastOpus;
+		if (payload.length && last && time <= last.time) return;
+		const queue = this.#reorder;
+		if (
+			!queue.length &&
+			(!payload.length || !this.#holeBefore(time, flags, payload))
+		) {
+			this.#opus(payload, time, now, flags);
+			return;
+		}
+		if (!payload.length) return;
+		let at = queue.length;
+		while (at > 0 && queue[at - 1].time > time) at--;
+		if (at > 0 && queue[at - 1].time === time) return;
+		queue.splice(at, 0, { payload, time, now, flags });
+		this.#drain(false);
+	}
+
+	/** what waits and has no hole before it, in order; past its time, the first in any case */
+	#drain(due: boolean) {
+		const queue = this.#reorder;
+		while (queue.length) {
+			const next = queue[0];
+			if (!due && this.#holeBefore(next.time, next.flags, next.payload)) break;
+			due = false;
+			queue.shift();
+			this.#opus(next.payload, next.time, next.now, next.flags);
+		}
+		if (this.#reorderTimer !== null) clearTimeout(this.#reorderTimer);
+		this.#reorderTimer = null;
+		if (!queue.length) return;
+		// the first packet of the hole is decoded, made up, in time to play:
+		// the buffer is pulled at the track's next frame that the sound
+		// waiting to be written does not fill
+		const missing = (this.#lastOpus?.time ?? queue[0].time) + OPUS_FRAME;
+		const now = performance.now();
+		const pulling =
+			Math.max(now, this.#due) +
+			Math.floor(this.#pendingFrames / TRACK_FRAME) * (TRACK_FRAME / 48);
+		const wait = Math.min(
+			REORDER_MS,
+			this.#playout.dueIn(missing, now, pulling) - DECODE_MS,
+		);
+		this.#reorderTimer = setTimeout(
+			() => {
+				this.#reorderTimer = null;
+				this.#drain(true);
+			},
+			Math.max(0, wait),
+		);
+	}
 
 	#opus(payload: Uint8Array, time: number, now: number, flags: number) {
 		if (!payload.length) return;
@@ -1232,14 +1375,13 @@ export class AudioReceiver {
 		if (decoder.decodeQueueSize > MAX_QUEUE) return;
 		const copy = hasLbrr(payload);
 		if (copy) this.#fec.received++;
-		// Packets were lost before this one: the decoder conceals each, as
-		// Chrome's does, rather than leave silence there. A frame of one byte
-		// (the last packet's first byte, one frame of its mode) is what
-		// libopus takes for a lost packet, and Chrome's AudioDecoder hands
-		// it to libopus as one (docs/webrtc-over-wisp.md, section 16). The
+		// Packets were lost before this one: their time is made up when it
+		// is due (the playout buffer has nothing for it), as NetEq's expand
+		// makes it up rather than ask the decoder (libopus's concealment is
+		// behind a field trial: docs/webrtc-over-wisp.md, section 16). The
 		// last of them is rebuilt from this packet's copy of it when it
 		// carries one, as NetEq does with libopus's FEC decode: only the
-		// packet just before (a longer loss is concealed up to it), and not
+		// packet just before (a longer loss is made up up to it), and not
 		// after a CELT-only packet, where libopus conceals instead. A loss
 		// is a hole in the RTP times, as NetEq reads one, whatever the
 		// sequence numbers say: Chrome's padding packets share the audio's
@@ -1255,30 +1397,21 @@ export class AudioReceiver {
 			Number.isInteger(missing) &&
 			missing >= 1 &&
 			missing <= CONCEAL_FRAMES
-		)
-			for (let lost = 1; lost <= missing; lost++) {
-				const at = last.time + lost * OPUS_FRAME;
-				const rebuilt =
-					lost === missing && copy && last.toc >> 3 < 16
-						? repackLbrr(payload)
-						: null;
-				// a packet rebuilt from its FEC copy is decoded, not
-				// concealed, in Chrome's counts
-				this.#waiting.push({ time: at, arrived: now, lost: !rebuilt });
-				// NetEq counts the copy as a packet of the lost one's time
-				// that came now, a packet late: where losses are rebuilt the
-				// target is a packet longer (measured: 40 ms against 20 with
-				// the same loss and no copies), so the next is there in time
-				if (rebuilt) {
-					this.#playout.arrived(at, now);
-					this.#fec.used++;
-				} else this.#concealed++;
+		) {
+			const at = time - OPUS_FRAME;
+			const rebuilt = copy && last.toc >> 3 < 16 ? repackLbrr(payload) : null;
+			this.#concealed += rebuilt ? missing - 1 : missing;
+			if (rebuilt) {
+				// decoded, not concealed, in Chrome's counts (its arrival was
+				// counted when this packet came)
+				this.#fec.used++;
+				this.#waiting.push({ time: at, arrived: now });
 				try {
 					decoder.decode(
 						new EncodedAudioChunk({
 							type: 'key',
 							timestamp: Math.round(at / OPUS_UNITS),
-							data: rebuilt ?? Uint8Array.of(last.toc & 0xfc),
+							data: rebuilt,
 						}),
 					);
 				} catch (error) {
@@ -1286,8 +1419,8 @@ export class AudioReceiver {
 					return;
 				}
 			}
+		}
 		this.#waiting.push({ time, arrived: now });
-		this.#playout.arrived(time, now);
 		try {
 			decoder.decode(
 				new EncodedAudioChunk({
@@ -1310,7 +1443,6 @@ export class AudioReceiver {
 				planes(data, channels),
 				channels,
 				waiting.arrived,
-				waiting.lost,
 				true,
 			);
 		}
@@ -1335,7 +1467,6 @@ export class AudioReceiver {
 		samples: Float32Array<ArrayBuffer>,
 		channels: number,
 		arrived: number,
-		lost = false,
 		counted = false,
 	) {
 		const frames = samples.length / channels;
@@ -1346,11 +1477,10 @@ export class AudioReceiver {
 		this.#playout.push(
 			time,
 			frames,
-			{ samples, frames, channels, arrived, lost },
+			{ samples, frames, channels, arrived },
 			arrived,
 			power(samples) / samples.length,
 			counted,
-			lost,
 		);
 	}
 
@@ -1360,58 +1490,21 @@ export class AudioReceiver {
 		if (!writer) return;
 		const now = performance.now();
 		if (now - this.#due > LAG_MS) this.#due = now;
+		// A frame of the track every 20 ms, as NetEq hands the sound card
+		// one every 10, from what was decoded and not played yet (its sync
+		// buffer): a frame made shorter or longer moves when the frames
+		// after it play, not when the track's frames are written
 		while (this.#due <= now) {
-			const sound = this.#playout.pull(now);
-			let ms = sound ? sound.frames / 48 : this.#playout.frameMs;
-			// a buffer that fills plays its first frame when NetEq's would,
-			// which is seldom on the 20 ms of what played before: what is
-			// made up meanwhile ends then
-			const starts = sound ? null : this.#playout.startsAt;
-			if (starts !== null && starts > this.#due && starts < this.#due + ms)
-				// (in eighths of a millisecond: whole samples at each rate
-				// comfort noise is made at)
-				ms = Math.max(1, Math.round((starts - this.#due) * 8)) / 8;
-			if (sound?.noise) this.#noise.update(sound.noise);
-			else if (sound) this.#noise.stop();
-			const channels = this.#stereo ? 2 : 1;
-			// made-up sound ends where comfort noise takes over
-			if (sound?.noise || (!sound && this.#noise.active))
-				this.#expansion = null;
-			if (sound && !sound.noise) {
-				const merged = this.#merge(
-					sound.samples,
-					sound.frames,
-					sound.channels,
-					!!sound.tone,
-				);
-				const frames = merged.length / sound.channels;
-				this.#emit(writer, merged, frames, sound.channels, {
-					concealed: !!sound.lost,
-					waited: now - (sound.arrived ?? now),
-				});
-				this.#playing = true;
-				ms = frames / 48;
+			// before anything has played, the first frame plays when NetEq's
+			// would, not on this clock's 20 ms
+			const starts = this.#playing ? null : this.#playout.startsAt;
+			if (starts !== null && starts > this.#due) {
+				this.#due = starts;
+				if (starts > now) break;
 			}
-			// the peer said what its silence sounds like: that, until it
-			// speaks again (as Chrome's NetEq plays comfort noise)
-			else if (this.#noise.active)
-				this.#emit(writer, this.#noiseOf(ms, channels), ms * 48, channels, {
-					concealed: true,
-					waited: 0,
-				});
-			// A frame that has not come once the stream plays (late, from a
-			// delay the buffer did not cover, or a pause) is made up from
-			// the sound before it, as NetEq's expand makes it up, fading to
-			// silence; before anything has played nothing is written.
-			else if (this.#playing)
-				this.#emit(
-					writer,
-					this.#expand(Math.round(ms * 48), channels),
-					Math.round(ms * 48),
-					channels,
-					{ concealed: true, waited: 0 },
-				);
-			this.#due += ms;
+			while (this.#pendingFrames < TRACK_FRAME && this.#produce(writer, now));
+			if (this.#pendingFrames) this.#write(writer);
+			this.#due += TRACK_FRAME / 48;
 		}
 		// a stream that went quiet stops the clock until it is heard again
 		if (
@@ -1421,6 +1514,8 @@ export class AudioReceiver {
 		) {
 			this.#playing = false;
 			this.#expansion = null;
+			this.#pending = [];
+			this.#pendingFrames = 0;
 			return;
 		}
 		this.#timer = setTimeout(
@@ -1428,6 +1523,83 @@ export class AudioReceiver {
 			Math.max(0, this.#due - performance.now()),
 		);
 	};
+
+	/**
+	 * What plays after what is waiting to be written: the next frame,
+	 * comfort noise, or sound made up for a frame that has not come
+	 * (false once nothing is, before anything has played)
+	 */
+	#produce(
+		writer: WritableStreamDefaultWriter<AudioData>,
+		now: number,
+	): boolean {
+		const sound = this.#playout.pull(now, this.#noise.active);
+		let ms = this.#playout.frameMs;
+		// a buffer that fills again plays its first frame when NetEq's
+		// would: what is made up meanwhile ends then
+		const at = this.#due + this.#pendingFrames / 48;
+		const starts = sound ? null : this.#playout.startsAt;
+		if (starts !== null && starts > at && starts < at + ms)
+			// (in eighths of a millisecond: whole samples at each rate
+			// comfort noise is made at)
+			ms = Math.max(1, Math.round((starts - at) * 8)) / 8;
+		if (sound?.noise) this.#noise.update(sound.noise);
+		else if (sound) this.#noise.stop();
+		const channels = this.#stereo ? 2 : 1;
+		// made-up sound ends where comfort noise takes over
+		if (sound?.noise || (!sound && this.#noise.active)) this.#expansion = null;
+		if (sound && !sound.noise) {
+			// a pitch period out or in, where NetEq's decision logic would
+			// take one out or put one in (and where its sound repeats well
+			// enough; if not, the next frame is tried)
+			const decision = this.#playout.decision;
+			let { samples, frames: length } = sound;
+			if (decision && !sound.tone) {
+				const changed = stretch(
+					samples,
+					length,
+					sound.channels,
+					decision === 'expand',
+					decision === 'fast',
+				);
+				if (changed) {
+					this.#playout.stretched((changed.frames - length) / 48, now);
+					({ samples, frames: length } = changed);
+				}
+			}
+			const merged = this.#merge(samples, length, sound.channels, !!sound.tone);
+			const frames = merged.length / sound.channels;
+			this.#emit(writer, merged, frames, sound.channels, {
+				concealed: false,
+				// (to when it is decoded, as Chrome counts it)
+				waited: now - (sound.arrived ?? now),
+			});
+			this.#playing = true;
+			return true;
+		}
+		// the peer said what its silence sounds like: that, until it speaks
+		// again (as Chrome's NetEq plays comfort noise)
+		if (this.#noise.active) {
+			this.#emit(writer, this.#noiseOf(ms, channels), ms * 48, channels, {
+				concealed: true,
+				waited: 0,
+			});
+			return true;
+		}
+		// A frame that has not come once the stream plays (late, from a
+		// delay the buffer did not cover, or a pause) is made up from the
+		// sound before it, as NetEq's expand makes it up, fading to silence;
+		// before anything has played nothing is written.
+		if (!this.#playing) return false;
+		this.#emit(
+			writer,
+			this.#expand(Math.round(ms * 48), channels),
+			Math.round(ms * 48),
+			channels,
+			{ concealed: true, waited: 0 },
+		);
+		return true;
+	}
 
 	/**
 	 * `frames` samples made up for a frame that did not come: the last
@@ -1496,7 +1668,11 @@ export class AudioReceiver {
 			const lag = period.length;
 			if (!this.#faded() && expansion.alike > 0.7) {
 				let best = -Infinity;
-				for (let at = 0; at < lag && at + ALIGN <= frames; at++) {
+				for (
+					let at = 0;
+					at < Math.min(lag, SKIP) && at + ALIGN <= frames;
+					at++
+				) {
 					let cross = 0;
 					let power = 0;
 					for (let k = 0; k < ALIGN; k++) {
@@ -1571,8 +1747,6 @@ export class AudioReceiver {
 		channels: number,
 		played: { concealed: boolean; waited: number },
 	) {
-		// nobody takes them (a track without a sink keeps none): not piled up
-		if ((writer.desiredSize ?? 0) < -BACKLOG) return;
 		this.#played.wrote(
 			frames,
 			samples &&
@@ -1584,18 +1758,68 @@ export class AudioReceiver {
 			played.waited,
 			this.#playout.stats.targetMs,
 		);
+		this.#pending.push({
+			samples: samples ?? new Float32Array(frames * channels),
+			frames,
+			channels,
+		});
+		this.#pendingFrames += frames;
+	}
+
+	/** a track frame of what is waiting: `TRACK_FRAME` of it, or what there is of one channel count */
+	#write(writer: WritableStreamDefaultWriter<AudioData>) {
+		const pending = this.#pending;
+		const channels = pending[0].channels;
+		let frames = 0;
+		for (const chunk of pending) {
+			if (chunk.channels !== channels || frames >= TRACK_FRAME) break;
+			frames += chunk.frames;
+		}
+		frames = Math.min(frames, TRACK_FRAME);
+		const data = new Float32Array(frames * channels);
+		let filled = 0;
+		while (filled < frames) {
+			const chunk = pending[0];
+			const take = Math.min(chunk.frames, frames - filled);
+			for (let channel = 0; channel < channels; channel++)
+				data.set(
+					chunk.samples.subarray(
+						channel * chunk.frames,
+						channel * chunk.frames + take,
+					),
+					channel * frames + filled,
+				);
+			filled += take;
+			if (take === chunk.frames) pending.shift();
+			else {
+				const rest = chunk.frames - take;
+				const left = new Float32Array(rest * channels);
+				for (let channel = 0; channel < channels; channel++)
+					left.set(
+						chunk.samples.subarray(
+							channel * chunk.frames + take,
+							(channel + 1) * chunk.frames,
+						),
+						channel * rest,
+					);
+				pending[0] = { samples: left, frames: rest, channels };
+			}
+		}
+		this.#pendingFrames -= frames;
+		// nobody takes them (a track without a sink keeps none): not piled up
+		if ((writer.desiredSize ?? 0) < -BACKLOG) return;
 		this.#clock ??= performance.now() * 1000;
-		const data = new AudioData({
+		const audio = new AudioData({
 			format: 'f32-planar',
 			sampleRate: 48000,
 			numberOfFrames: frames,
 			numberOfChannels: channels,
 			timestamp: Math.round(this.#clock),
-			data: samples ?? new Float32Array(frames * channels),
+			data,
 		});
 		this.#clock += (frames / 48000) * 1e6;
 		this.#counts.written++;
-		writer.write(data).catch(() => {
+		writer.write(audio).catch(() => {
 			// the track ended
 			if (this.#writer === writer) this.#writer = null;
 		});

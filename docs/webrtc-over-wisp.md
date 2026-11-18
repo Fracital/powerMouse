@@ -1221,58 +1221,80 @@ late), makes up sound while the frame due is not there (below) and lets
 its time stand still, so the frame plays when it comes and the delay grows
 by what was made up (with the spread of the arrival times too), jumps over
 a hole longer than 200 ms (a sender that left a silence out), drops a
-frame that comes after one later than it has played, and, when it has
-held a frame more than that wait asks for over a hundred frames, gives up
-the quietest of the next few frames without a gap. The track's time is a steady count of what was written.
+frame that comes after one later than it has played, and makes a frame a
+pitch period shorter or longer where NetEq's decision logic would
+(below). The track's time is a steady count of what was written.
 
 The target is NetEq's (its delay manager, as Chrome 157 runs it): a
 packet's delay is how much later it came than the packet of the last 2 s
 that came soonest for its media time; the longest delay of each 500 ms
 goes into a histogram of 20 ms buckets that forgets 1.7 % an entry
 (faster at first), and the target is the bucket 95 % of the delays fit
-in, and one more, a packet at least. Comfort noise and telephone events
-do not count, a packet that came out of order does not count toward it,
-and a lost packet rebuilt from the next one's FEC copy counts as a
-packet of its own time that came with that one, a packet late. Measured
-natively with the far end's Opus through a relay (`jb-probe` kit),
-Chrome's target is 20 ms for a steady stream and with a tenth of the
-packets lost and no copies, 40 with copies rebuilding them, 40 with each
-packet delayed by 0 to 20 ms, 60 by 0 to 40 ms; the worker's is now 20,
-20, 40, 20 to 40 and 40 to 60 (a bucket under Chrome's in some runs
-where the relay's delays end at a bucket's edge: how much the arrivals
-vary besides decides it), where it was 60 for a steady stream and 64 to
-100 for the others (a floor of 40, the arrivals' spread and a frame, and
-20 ms more for Opus whether or not its packets carried copies).
+in, and one more, a packet at least. NetEq's clock is its 10 ms ticks,
+so a packet's arrival is the tick it came in. Comfort noise and
+telephone events do not count, and a lost packet rebuilt from the next
+one's FEC copy counts as a packet of its own time that came with that
+one, a packet late. A packet that came out of order does not count
+toward that target but goes into NetEq's reorder optimizer: a histogram
+of how late such packets came (every other packet an entry of none) that
+forgets 0.07 % an entry, and the target is at least its bucket that
+costs least, a bucket costing the delay it adds and 20 ms for each in a
+hundred packets that would come after it. Measured natively with the far
+end's Opus through a relay (`jb-probe` kit), Chrome's target is 20 ms for
+a steady stream and with a tenth of the packets lost and no copies, 40
+with copies rebuilding them, 40 with each packet delayed by 0 to 20 ms,
+60 by 0 to 40 ms (some swapping places); the worker's is the same in each
+run, where it was a bucket under Chrome's in some (its arrivals counted
+to the millisecond, not the tick, and the late packets that swapped
+places left out), and before that 60 for a steady stream and 64 to 100
+for the others (a floor of 40, the arrivals' spread and a frame, and 20
+ms more for Opus whether or not its packets carried copies).
 
 How long a packet waits is not the target: NetEq lets its buffer be
 anywhere between three quarters of its target (85 ms less, for a long
 one) and the higher of the target and that and 20 ms (15 to 35 ms for a
-target of 20), and shortens or stretches it a pitch period at a time
-while it is outside, so a packet waits about the middle of that:
-natively 29 to 31 ms of `jitterBufferDelay` for a target of 20, which
-counts each 10 ms of a packet to when it is played, 5 ms more than to
-when it starts. The worker's first frame plays that middle after it came
-(25 ms for a target of 20, 40 for the 40 a stream starts at), not at the
-next 20 ms of its clock, and a frame is given up when the frames of the
-last 2 s all waited longer than NetEq's buffer may be and would still
-wait at least its lower limit without it. A frame lost on the way, where
-nothing was held when it was due, is the one frame of sound made up
-then, as NetEq goes on from the packet after it, not two (the made-up
-frame libopus gives for it comes with that packet and is dropped). With
-the target alone a steady call's sound came 12 to 15 ms sooner than
-natively (16 to 25 ms of `jitterBufferDelay`, a loaded machine then
-making it conceal some 1,000 to 2,000 samples a call, natively none);
-holding whole frames instead, 8 ms later; now 24 to 29 ms against 29
-to 31. Measured with the relay (Chrome 157, `jb-probe` kit),
-`jitterBufferDelay` proxied and natively: a steady stream 24 and 29 to
-31; a tenth of the packets lost with FEC copies 27 to 41 and 30 to 37;
-delayed by 0 to 20 ms 33 to 34 and 31 to 36; by 0 to 40 ms 22 to 38 and
-45, with 3,000 to 6,000 samples concealed every 4 s (natively none:
-NetEq stretches its buffer before a packet is late, which the worker
-does not). The worker gives up at most a frame every 2 s where NetEq
-shortens its buffer within a second, so a delay that a held-up burst or
-a run of losses lengthened comes down slower: a tenth of the packets
-lost and no copies, 9 to 71 ms against natively 13 to 19.
+target of 20), so a packet waits about the middle of that: natively 29
+to 31 ms of `jitterBufferDelay` for a target of 20, which counts each 10
+ms of a packet to when it is played, 5 ms more than to when it starts.
+The worker's first frame plays that middle after it came (25 ms for a
+target of 20, 40 for the 40 a stream starts at), not at the next 20 ms
+of its clock. From then on it decides as NetEq's decision logic does,
+on NetEq's filtered level of its buffer (how long the frame due has
+waited, or the sound held behind it after a burst, averaged over the
+frames with a weight of 251 to 254 in 256 by the target): a frame is
+made a pitch period shorter where the level is at the upper limit or
+above (accelerate), as many periods as fit in half the frame where it
+is four times that (fast accelerate), and a period longer where it is
+under the lower limit (preemptive expand), at most once each 60 ms and
+not right after a frame was made up, where the frame's sound repeats
+well enough (periods 2.5 to 10 ms that correlate at 0.9, or quiet),
+the two periods at the cut faded into each other (`src/rtc/stretch.ts`).
+The frames go to the track through a sync buffer, as NetEq's do: the
+track takes 20 ms every 20 ms, and a frame made shorter or longer moves
+when the next is pulled, which is how the delay moves. The track's
+`removedSamplesForAcceleration` and `insertedSamplesForDeceleration`
+count what was taken out and put in. A first try stretched on the
+shortest wait of the last 500 ms instead of the filtered level, which
+held a clean call's sound longer than natively: the level is what keeps
+it put.
+
+Measured with the relay (Chrome 157, `jb-probe` kit, two runs of three
+4 s windows), `jitterBufferDelay` and the samples concealed a window,
+proxied and natively: a steady stream 24 to 25 ms and 30, none concealed
+either way; a tenth of the packets lost with FEC copies 41 to 43 and 33
+to 38 (where the far end made copies: its encoder stopped now and then,
+natively too); delayed by 0 to 20 ms 28 to 34 and 33 to 36, none
+concealed; by 0 to 40 ms 38 to 54 and 44 to 46, none concealed either
+way (it was 3,000 to 6,000 samples every 4 s proxied, below); a tenth
+lost and no copies 20 to 28 and 14 to 18, with 0 to 1,500 samples
+inserted a window and 150 to 1,600 natively (it climbed after some 16 s,
+to 71 ms, when the worker could only give up a frame every 2 s). A burst
+held up 300 ms comes down a little sooner than natively: the target 259
+and 258, `jitterBufferDelay` 246 to 259 and 282 to 284 over the window
+of the burst, 152 to 153 and 206 to 230 over the next, with 11,554 to
+11,772 and 7,258 to 9,292 samples taken out in it (natively NetEq
+shortens its buffer within about a second: 300, 202, 137, 119, 98 and
+78 ms at each 500 ms).
 
 A frame that has not come when it is due (a delay longer than the buffer
 covers: the wisp server or the worker held up on a loaded machine) is made
@@ -1280,8 +1302,16 @@ up as NetEq's expand makes it up, not left silent: the last period of what
 was played (the lag between 10 and 20 ms its repeats correlate best at) is
 repeated, in phase, fading by a twentieth a frame where it repeats well
 and by nearly half where it does not, to silence; the frame that comes
-then starts where it fits the made-up sound best (skipping up to one of
-its periods) and fades in from it over 2.5 ms, as NetEq merges. Once the
+then starts where it fits the made-up sound best (skipping at most 2.5
+ms of it) and fades in from it over 2.5 ms, as NetEq merges. A lost
+packet's time is made up so too, not by libopus: NetEq does not ask the
+decoder to conceal (libopus's concealment, `GeneratePlc`, is behind the
+field trial `WebRTC-Audio-OpusGeneratePlc`), and each loss shortens the
+delay by what the merge skips, as natively, where NetEq's buffer stays
+at its lower limit with a tenth of the packets lost (Chrome makes up 850
+to 900 samples a loss; skipping up to a whole period, 10 to 20 ms, held
+the worker's 5 ms under Chrome's, and libopus's frame of concealment 5
+ms over it). Once the
 stream has played, the track has a frame every 20 ms, made up or silent,
 until the stream has been quiet for 2 s, as NetEq hands the sound card
 sound every 10 ms. After a telephone event what is missing stays silent.
@@ -1298,8 +1328,8 @@ hold-up, depending on how deep its buffer was then, and 141 to 164 ms for
 a 300 ms one; the worker, whose buffer held 60 ms of Opus where the
 arrivals are steady, 120 to 140 ms and 160 ms. Chrome's NetEq also
 stretches and squeezes sound to move its delay (`insertedSamplesForDeceleration`,
-`removedSamplesForAcceleration`), where the worker gives
-up a quiet frame now and then and inserts nothing.
+`removedSamplesForAcceleration`), and so does the worker now (above),
+where it gave up a quiet frame now and then and inserted nothing.
 Measured with the far end's tone held up four times for 80 ms on its way
 (a relay of the suite's in `webrtc-media`): Chrome's receiver plays it on
 with 0 to 1 dips of its 5 ms windows and 0 to 6 breaks of phase, and so
@@ -1452,21 +1482,33 @@ packet after a lost one read as contiguous a third of the time).
   the copy is used only for the packet just before the one that carries
   it (the last of a burst; the others are concealed) and not after a
   CELT-only packet, where `decode_fec` conceals instead.
-- Otherwise the receiver hands the decoder a frame of one byte for each
-  lost packet (the last packet's first byte, code 0), which libopus
-  takes for a lost packet, and Chrome's `AudioDecoder` passes it to
-  libopus as one. Measured against libopus's own concealment, the output
-  is the same.
+- Otherwise its time is made up as NetEq's expand makes it up (above),
+  and the decoder is not told of it, as NetEq does not tell libopus. It
+  used to be handed a frame of one byte for each lost packet (the last
+  packet's first byte, code 0), which libopus takes for a lost packet and
+  conceals, which Chrome runs only behind a field trial.
 
 The copy comes a packet after the packet it rebuilds, which NetEq counts
 as a packet of the lost one's time that came a packet late: where losses
 are rebuilt the target is a packet longer (40 ms against 20, natively and
 here), so the next rebuilt packet is there before its time.
-The stack hands a packet after a lost one on at once (str0m would hold
-the packets after a loss until 15 had come, 300 ms of Opus, waiting for
-the lost one: `set_reordering_size_audio(1)`), and drops one that comes
-after a later one was handed on, where NetEq would still play it in
-time.
+The stack hands each packet on as it comes (`set_reordering_size_audio(0)`):
+str0m would hold the packets after a loss until 15 had come, 300 ms of
+Opus, waiting for the lost one, and with a hold of one it drops a packet
+that comes after a later one was handed on, where NetEq still plays it
+in its place. The receiver puts such a packet back in its place: a
+packet after a hole waits for the hole's packets until the first of
+them would have to be decoded to play (10 ms before the track's next
+frame that what is waiting to be written does not fill), and is decoded
+then with the hole made up; one with a copy that rebuilds the one
+packet missing before it does not wait, as NetEq puts the copy in its
+buffer when the packet comes; and one no newer than the last decoded
+(it came after its time, or twice) is dropped. With the far end's
+packets delayed by 0 to 40 ms, some swapping places, the worker made up
+3,000 to 6,000 samples every 4 s for the packets the stack dropped,
+natively none; now none. In `webrtc-media` five pairs of the far end's
+packets swap places on the way: natively nothing is concealed, and the
+page concealed five events of 960 samples before.
 
 The stack's receiver reports carry the loss (RFC 3550's fraction lost
 since the last report, every 5 s as Chrome's), which is what has Chrome's
@@ -1547,7 +1589,9 @@ clock, with the audio frames of that time dropped. The `webrtc-media`
 suite has Chrome play `159` to the page with Opus, and the page hears the
 three digits in order, as the browser's own connection does (which plays
 Chrome's events on telephone-event/8000 in pieces, their durations being
-counted at 48 kHz). Where nothing else arrives (a pause in the audio, or
+counted at 48 kHz), with at most a 20 ms window between them where a
+tone's edge meets the far end's 660 Hz, natively too: the track's frames
+are cut from a sync buffer, so an edge can fall inside one. Where nothing else arrives (a pause in the audio, or
 comfort noise) Chrome plays an event for 40 ms at most; here it plays all
 of it.
 
@@ -1606,8 +1650,7 @@ playout is counted at 48 kHz, where Chrome counts at its output device's
 rate (44.1 kHz with the fake device); what a receiver plays is counted as
 long as its track takes the sound, whether or not anything plays it
 (Chrome counts nothing for a track no element or context plays, and reads
-no level behind a muted element), with no samples inserted to slow down
-and the processing delay taken as the buffer's; a video section has no
+no level behind a muted element), with the processing delay taken as the buffer's; a video section has no
 entries yet; and after the only media section is stopped and
 renegotiated Chrome drops the transport from the report and the
 connection reads `new` again, where here the transport stays.

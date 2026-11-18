@@ -1306,16 +1306,18 @@ pub unsafe extern "C" fn c(ptr: *mut u8, len: usize) -> i32 {
 	}
 	// the send buffer and the message size are Chrome's: 16 MiB queued
 	// before a send fails, messages of up to 256 KiB
-	// An audio packet after a lost one is handed on at once, as Chrome's
-	// NetEq takes it: the host fills the lost one's time from the copy the
-	// next packet carries (Opus in-band FEC) or conceals it, and holds a
-	// packet's worth of sound for that. str0m would hold the frames after
-	// a loss until 15 had come (300 ms of Opus) waiting for the lost one;
-	// one that comes after a later one has been handed on is dropped.
+	// An audio packet is handed on as it comes, as Chrome's NetEq takes
+	// it: after a lost one at once (the host fills the lost one's time
+	// from the copy the next packet carries, Opus in-band FEC, or conceals
+	// it), and one that comes after a later one too, which the host puts
+	// back in its place if it is still in time (NetEq plays a packet that
+	// swapped places on the way). str0m would hold the frames after a loss
+	// until 15 had come (300 ms of Opus) waiting for the lost one, and with
+	// a hold of one drops a packet that comes after a later one.
 	let mut builder = Rtc::builder()
 		.set_sctp_max_buffered_amount(16 * 1024 * 1024)
 		.set_sctp_max_message_size(262144)
-		.set_reordering_size_audio(1);
+		.set_reordering_size_audio(0);
 	if field(&fields, "ice_lite") == Some("1") {
 		builder = builder.set_ice_lite(true);
 	}

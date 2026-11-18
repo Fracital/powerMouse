@@ -470,7 +470,9 @@ async function tones(own, far, prefer) {
  * them when the receiver's reports say packets are lost). Without `lossy`
  * it loses nothing, and `pause(ms)` holds what the far end sends for `ms`
  * and then lets it all through: a delay the jitter buffer has to ride out;
- * `dropNext` packets of Opus from now on are lost.
+ * `dropNext` packets of Opus from now on are lost, and of the next
+ * `swapNext` pairs of them each comes after the one after it (held until
+ * that one has gone through).
  */
 async function lossyRelay(lossy) {
 	const near = createSocket('udp4');
@@ -522,11 +524,27 @@ async function lossyRelay(lossy) {
 			return;
 		}
 		if (!relay.own) return;
+		if (
+			(relay.swapNext > 0 || relay.swapping) &&
+			message.length > 12 &&
+			(message[1] & 0x7f) === 111
+		) {
+			if (!relay.swapping) {
+				relay.swapping = message;
+				return;
+			}
+			near.send(message, relay.own.port, relay.own.address);
+			message = relay.swapping;
+			relay.swapping = null;
+			relay.swapNext--;
+		}
 		if (relay.held) relay.held.push(message);
 		else near.send(message, relay.own.port, relay.own.address);
 	});
 	relay.held = null;
 	relay.dropNext = 0;
+	relay.swapNext = 0;
+	relay.swapping = null;
 	relay.pause = (ms) => {
 		relay.held ??= [];
 		setTimeout(() => {
@@ -618,8 +636,9 @@ async function lossy(own, far, spikes = false) {
 /**
  * What the receiver's inbound-rtp counts of packets that come after their
  * time and of packets that never come: the far end's tone through the
- * relay, held up for 150 ms, then for 300 ms, then one packet lost, the
- * entry read before and 2.5 s after each
+ * relay, held up for 150 ms, then for 300 ms, then one packet lost, then
+ * five pairs of packets that swap places on the way, the entry read
+ * before and 2.5 s after each
  */
 async function late(own, far) {
 	const record = { failure: null, steps: [] };
@@ -650,9 +669,10 @@ async function late(own, far) {
 		await far.call('connected');
 		await own.call('muted', 0, false);
 		await sleep(2000);
-		for (const step of ['hold150', 'hold300', 'drop1']) {
+		for (const step of ['hold150', 'hold300', 'drop1', 'swap5']) {
 			const before = await own.call('inbound');
 			if (step.startsWith('hold')) relay.pause(Number(step.slice(4)));
+			else if (step.startsWith('swap')) relay.swapNext = 5;
 			else relay.dropNext = 1;
 			await sleep(2500);
 			const after = await own.call('inbound');
@@ -877,13 +897,13 @@ natively.lossy = await lossy(end(control), end(native, 'the far end'));
 natively.spikes = await lossy(end(control), end(native, 'the far end'), true);
 natively.late = await late(end(control), end(native, 'the far end'));
 ok(
-	"natively: a packet that comes after its time is played late, not lost or discarded, and one that never comes is lost: each is one concealment event, and the track's sound goes on",
+	"natively: a packet that comes after its time is played late, not lost or discarded, and one that never comes is lost: each is one concealment event, and the track's sound goes on; packets that swap places on the way are played in order, nothing concealed",
 	!natively.late.failure &&
-		natively.late.steps.map((step) => step.packetsLost).join() === '0,0,1' &&
+		natively.late.steps.map((step) => step.packetsLost).join() === '0,0,1,0' &&
 		natively.late.steps.every(
 			(step) =>
 				step.packetsDiscarded === 0 &&
-				step.concealmentEvents === 1 &&
+				step.concealmentEvents === (step.step === 'swap5' ? 0 : 1) &&
 				Math.abs(step.totalSamplesReceived - 120000) <= 2400,
 		),
 	JSON.stringify(natively.late),
@@ -1099,6 +1119,15 @@ for (const proxied of pages) {
 			`${JSON.stringify(events(got.heard))} | natively ${JSON.stringify(events(want.heard))} (${got.owner})`,
 		);
 		const keys = (record) => record.keys?.map(([key]) => key).join('') ?? '';
+		// The tones, and between them at most single 20 ms windows where a
+		// tone's edge meets the far end's 660 Hz (read as the 697 Hz row:
+		// 1, 2 or 3), as natively: the track's frames are cut from a sync
+		// buffer as NetEq's are, so an edge falls inside a window
+		const tonesOf = (record) =>
+			record.keys
+				?.filter(([key, count]) => count > 1 || !'123'.includes(key))
+				.map(([key]) => key)
+				.join('') ?? '';
 		// Chrome's receiver plays Opus's events on telephone-event/8000
 		// (Chrome's own durations, counted at 48 kHz) in pieces, which read
 		// as more digits than were sent; the three come in order all the
@@ -1110,7 +1139,7 @@ for (const proxied of pages) {
 		if (!prefer)
 			ok(
 				`${label} (${key}): the page plays the far end's tones as Chrome's receiver plays them, and its sound after them as it was`,
-				keys(got) === '159' &&
+				tonesOf(got) === '159' &&
 					/1.*5.*9/.test(keys(want)) &&
 					!!got.after &&
 					sounds(got.after, want.after),
@@ -1212,13 +1241,15 @@ for (const proxied of pages) {
 				]),
 			);
 		ok(
-			`${label}: inbound-rtp counts packets held up 150 and 300 ms as received and played late (not lost, not discarded) and a packet that never comes as lost, each one concealment event, and the track's sound goes on through them, as Chrome's receiver counts them`,
+			`${label}: inbound-rtp counts packets held up 150 and 300 ms as received and played late (not lost, not discarded) and a packet that never comes as lost, each one concealment event, and the track's sound goes on through them, and packets that swap places on the way as played in their places (nothing concealed), as Chrome's receiver counts them`,
 			!got.failure &&
 				counts(got) === counts(want) &&
 				got.steps.every(
 					(step) =>
 						Math.abs(step.totalSamplesReceived - 120000) <= 2400 &&
-						step.concealedSamples > 0 &&
+						(step.step === 'swap5'
+							? step.concealedSamples === 0
+							: step.concealedSamples > 0) &&
 						step.silentConcealedSamples === 0,
 				),
 			JSON.stringify([got, want]),
