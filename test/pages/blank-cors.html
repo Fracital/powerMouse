@@ -1,0 +1,62 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>blank-cors</title>
+<script>
+	// A frame's initial about:blank document, which no service worker
+	// controls, loading another origin's CORS resources that allow any origin
+	// (`Access-Control-Allow-Origin: *`, as Google Fonts and most CDNs send):
+	// a stylesheet's font face, an anonymous CORS image, an anonymous CORS
+	// script. Natively each is a CORS load that sends credentials to its own
+	// origin only, and each loads.
+	window.__record = { done: false };
+	addEventListener('load', async () => {
+		const cross = `${location.protocol}//localhost:${location.port}/pages/`;
+		const frame = document.createElement('iframe');
+		document.body.append(frame);
+		const doc = frame.contentDocument;
+		const record = {};
+		const loaded = (element) =>
+			new Promise((resolve) => {
+				element.onload = () => resolve('load');
+				element.onerror = () => resolve('error');
+				setTimeout(() => resolve('timeout'), 15000);
+			});
+
+		const link = doc.createElement('link');
+		link.rel = 'stylesheet';
+		link.href = `${cross}blank-cors.css`;
+		const sheet = loaded(link);
+		doc.head.append(link);
+		record.sheet = await sheet;
+		const probe = doc.createElement('span');
+		probe.style.fontFamily = 'BlankCors';
+		probe.textContent = 'x';
+		doc.body.append(probe);
+		try {
+			const faces = await Promise.race([
+				doc.fonts.load('16px BlankCors'),
+				new Promise((resolve) => setTimeout(() => resolve(null), 15000)),
+			]);
+			record.font = faces ? faces.map((face) => face.status).join() : 'timeout';
+		} catch (error) {
+			record.font = `threw ${error.name}`;
+		}
+
+		const image = doc.createElement('img');
+		image.crossOrigin = 'anonymous';
+		image.src = `${cross}blank-cors-image.svg`;
+		const imageLoad = loaded(image);
+		doc.body.append(image);
+		record.image = `${await imageLoad} ${image.naturalWidth}`;
+
+		const script = doc.createElement('script');
+		script.crossOrigin = 'anonymous';
+		script.src = `${cross}blank-cors.js`;
+		const scriptLoad = loaded(script);
+		doc.body.append(script);
+		record.script = `${await scriptLoad} ${frame.contentWindow.__blankCors ?? 'not run'}`;
+
+		window.__record = { ...record, done: true };
+	});
+</script>
+<body></body>

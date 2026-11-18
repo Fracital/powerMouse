@@ -680,6 +680,30 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				? 'font cors'
 				: 'image no-cors';
 		};
+		/**
+		 * A copy's credentials, as the load it stands for has them: a no-cors
+		 * load and a `crossorigin=use-credentials` one send them, any other
+		 * CORS load (an anonymous one, a font, a module script) only to its
+		 * own origin, so an answer that allows any origin (`*`, as Google
+		 * Fonts and most CDNs send) passes its CORS check
+		 */
+		const loadCredentials = (
+			load: string | null,
+			element: Element | null = null,
+		): RequestCredentials => {
+			let owner = element;
+			if (element?.localName === 'source') {
+				const parent = element.parentElement;
+				owner =
+					parent?.localName === 'picture'
+						? parent.querySelector('img')
+						: parent;
+			}
+			return load?.endsWith(' cors') &&
+				owner?.getAttribute('crossorigin')?.toLowerCase() !== 'use-credentials'
+				? 'same-origin'
+				: 'include';
+		};
 		/** a routed URL's copy, as a blob: URL (the proxy's form) */
 		const copyOf = async (
 			routed: string,
@@ -688,6 +712,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			depth = 4,
 			load: string | null = null,
 			fragments: string[] | null = null,
+			credentials = loadCredentials(load),
 		): Promise<string> => {
 			// an SVG reference's fragment names the element in the copy
 			const hash = routed.indexOf('#');
@@ -701,7 +726,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				// the copy stands for the element's load, never a page's read
 				// (a load the worker takes no metadata from is `copy`)
 				load ?? 'copy',
-				{ credentials: 'include' },
+				{ credentials },
 			);
 			if (!response.ok && response.status !== 0)
 				throw new Error(String(response.status));
@@ -747,6 +772,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			page: string,
 			state: Copy,
 			load: string | null = null,
+			credentials: RequestCredentials = 'include',
 		): string | null => {
 			if (!moduleClient.workerTransport) return null;
 			// the bridge of the client the grant is announced through (it may
@@ -761,7 +787,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				const response = sync.fetch(
 					target,
 					{
-						credentials: 'include',
+						credentials,
 						// a Headers: the bridge passes on no other kind
 						headers: new Headers({ [LOAD_HEADER]: token }),
 					},
@@ -1025,11 +1051,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				moduleClient.writing &&
 				targets.length === 1
 			) {
+				const load = loadKind(element, attribute);
 				const url = syncCopyOf(
 					routed,
 					targets[0].page,
 					state,
-					loadKind(element, attribute),
+					load,
+					loadCredentials(load, element),
 				);
 				if (url) {
 					state.url = url;
@@ -1101,7 +1129,15 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			Promise.allSettled(
 				targets.map(({ routed, page }) =>
 					isRoute(routed)
-						? copyOf(routed, page, state, 4, loadKind(element, attribute))
+						? copyOf(
+								routed,
+								page,
+								state,
+								4,
+								loadKind(element, attribute),
+								null,
+								loadCredentials(loadKind(element, attribute), element),
+							)
 						: routed,
 				),
 			).then((results) => {
