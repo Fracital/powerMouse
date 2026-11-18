@@ -1,0 +1,653 @@
+From 7e709a286a4937c16ed59f78d18196317b344f30 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 17 Nov 2026 18:00:00 -0500
+Subject: [PATCH] client: TLS 1.2 RSA key transport, for the TLS_RSA_WITH_*
+ suites
+
+Chrome's ClientHello (chrome_hello) offers TLS_RSA_WITH_AES_128_GCM_SHA256,
+TLS_RSA_WITH_AES_256_GCM_SHA384, TLS_RSA_WITH_AES_128_CBC_SHA and
+TLS_RSA_WITH_AES_256_CBC_SHA, and servers that prefer them pick them
+(pro.ip-api.com picks TLS_RSA_WITH_AES_256_CBC_SHA from Chrome's list).
+rustls has no static RSA key exchange, so the handshake failed with
+SelectedUnofferedCipherSuite.
+
+KeyExchangeAlgorithm gets an RSA variant, client side only. A suite with
+it expects no ServerKeyExchange: after the Certificate (and a stapled
+CertificateStatus, if any) comes a CertificateRequest or the
+ServerHelloDone. Once the config's verifier has verified the chain, the
+client makes a 48-byte pre-master secret (the ClientHello's version, TLS
+1.2, then 46 random bytes from the provider), has the config's new
+`rsa_key_transport` (a `RsaKeyTransport`, supplied by the application)
+encrypt it to the end entity's key, sends it as the ClientKeyExchange's
+EncryptedPreMasterSecret and derives the master secret from it, with the
+extended master secret when the server agreed to it. Nothing is signed:
+the server proves it holds the key by decrypting the secret, without which
+its Finished does not verify. Whether the ServerKeyExchange signature is
+checked is decided by the suite's key exchange, and a ServerKeyExchange
+that does not match the suite is an error, so no suite that signs can skip
+the check. The pre-master secret lives on the heap, so moving it copies
+nothing, and is zeroized when dropped, and the key block is zeroized once
+the record keys are made.
+
+A config with no `rsa_key_transport` fails such a handshake as before. The
+server side never selects an RSA suite (ServerKeyExchangeParams::new
+treats an RSA group as unreachable). A provider may list RSA suites with
+no key exchange group for them. make_cipher_pair's comment says how a CBC
+suite's Tls12AeadAlgorithm receives its MAC and cipher keys from the key
+block as it is cut today.
+---
+ src/builder.rs            |   5 +-
+ src/client/builder.rs     |   2 +
+ src/client/client_conn.rs |  26 ++++
+ src/client/tls12.rs       | 250 ++++++++++++++++++++++++++++----------
+ src/lib.rs                |   2 +-
+ src/msgs/handshake.rs     |  17 ++-
+ src/server/hs.rs          |   2 +
+ src/tls12/mod.rs          |  49 +++++++-
+ 8 files changed, 281 insertions(+), 72 deletions(-)
+
+diff --git a/src/builder.rs b/src/builder.rs
+index f8ff614..05c95e6 100644
+--- a/src/builder.rs
++++ b/src/builder.rs
+@@ -6,7 +6,7 @@ use core::marker::PhantomData;
+ use crate::client::EchMode;
+ use crate::crypto::CryptoProvider;
+ use crate::error::Error;
+-use crate::msgs::handshake::ALL_KEY_EXCHANGE_ALGORITHMS;
++use crate::msgs::handshake::{ALL_KEY_EXCHANGE_ALGORITHMS, KeyExchangeAlgorithm};
+ use crate::sync::Arc;
+ use crate::time_provider::TimeProvider;
+ use crate::versions;
+@@ -240,9 +240,10 @@ impl<S: ConfigSide> ConfigBuilder<S, WantsVersions> {
+ 
+         for cs in self.provider.cipher_suites.iter() {
+             let cs_kx = cs.key_exchange_algorithms();
++            // RSA key transport uses no group
+             if cs_kx
+                 .iter()
+-                .any(|kx| supported_kx_algos.contains(kx))
++                .any(|kx| *kx == KeyExchangeAlgorithm::RSA || supported_kx_algos.contains(kx))
+             {
+                 continue;
+             }
+diff --git a/src/client/builder.rs b/src/client/builder.rs
+index 3e4ae79..d4fd0a9 100644
+--- a/src/client/builder.rs
++++ b/src/client/builder.rs
+@@ -182,6 +182,8 @@ impl ConfigBuilder<ClientConfig, WantsClientCert> {
+             cert_decompressors: compress::default_cert_decompressors().to_vec(),
+             ech_mode: self.state.client_ech_mode,
+             chrome_hello: false,
++            #[cfg(feature = "tls12")]
++            rsa_key_transport: None,
+         }
+     }
+ }
+diff --git a/src/client/client_conn.rs b/src/client/client_conn.rs
+index b78aeba..f29ba0e 100644
+--- a/src/client/client_conn.rs
++++ b/src/client/client_conn.rs
+@@ -93,6 +93,26 @@ pub trait ClientSessionStore: fmt::Debug + Send + Sync {
+     ) -> Option<persist::Tls13ClientSessionValue>;
+ }
+ 
++/// Encrypts a TLS 1.2 pre-master secret to the RSA key in a server's
++/// certificate, for the cipher suites whose key exchange is
++/// [`KeyExchangeAlgorithm::RSA`](crate::crypto::KeyExchangeAlgorithm::RSA)
++/// (RFC 5246 section 7.4.7.1).
++///
++/// It is asked only after the server's certificate chain was verified by the
++/// config's verifier, exactly as for an ECDHE suite. An implementation checks
++/// that the key may be used for key encipherment and that it is an RSA key
++/// of a size it accepts, and returns an error otherwise.
++pub trait RsaKeyTransport: fmt::Debug + Send + Sync {
++    /// Returns `pre_master_secret` encrypted with RSAES-PKCS1-v1_5 to the
++    /// public key of `end_entity` (the ClientKeyExchange's
++    /// `EncryptedPreMasterSecret` without its length prefix).
++    fn encrypt_pre_master_secret(
++        &self,
++        end_entity: &pki_types::CertificateDer<'_>,
++        pre_master_secret: &[u8],
++    ) -> Result<Vec<u8>, Error>;
++}
++
+ /// A trait for the ability to choose a certificate chain and
+ /// private key for the purposes of client authentication.
+ pub trait ResolvesClientCert: fmt::Debug + Send + Sync {
+@@ -293,6 +313,12 @@ pub struct ClientConfig {
+     /// as are its certificate decompressors (Chrome's is brotli). Not used
+     /// for QUIC. The default is `false`.
+     pub chrome_hello: bool,
++
++    /// How to encrypt a pre-master secret to a server's RSA key, for a TLS 1.2
++    /// cipher suite with RSA key transport. A server that picks such a suite
++    /// when this is `None` fails the handshake. The default is `None`.
++    #[cfg(feature = "tls12")]
++    pub rsa_key_transport: Option<Arc<dyn RsaKeyTransport>>,
+ }
+ 
+ impl ClientConfig {
+diff --git a/src/client/tls12.rs b/src/client/tls12.rs
+index 0fc5ace..6656ccc 100644
+--- a/src/client/tls12.rs
++++ b/src/client/tls12.rs
+@@ -6,6 +6,7 @@ use alloc::vec::Vec;
+ use pki_types::ServerName;
+ pub(super) use server_hello::CompleteServerHelloHandling;
+ use subtle::ConstantTimeEq;
++use zeroize::Zeroizing;
+ 
+ use super::client_conn::ClientConnectionData;
+ use super::hs::ClientContext;
+@@ -21,8 +22,9 @@ use crate::enums::{AlertDescription, ContentType, HandshakeType, ProtocolVersion
+ use crate::error::{Error, InvalidMessage, PeerIncompatible, PeerMisbehaved};
+ use crate::hash_hs::HandshakeHash;
+ use crate::log::{debug, trace, warn};
+-use crate::msgs::base::{Payload, PayloadU8, PayloadU16};
++use crate::msgs::base::{NonEmpty, Payload, PayloadU8, PayloadU16};
+ use crate::msgs::ccs::ChangeCipherSpecPayload;
++use crate::msgs::codec::Codec;
+ use crate::msgs::handshake::{
+     CertificateChain, ClientDhParams, ClientEcdhParams, ClientKeyExchangeParams,
+     HandshakeMessagePayload, HandshakePayload, NewSessionTicketPayload,
+@@ -341,6 +343,21 @@ impl State<ClientConnectionData> for ExpectCertificateStatusOrServerKx<'_> {
+                 must_issue_new_ticket: self.must_issue_new_ticket,
+             })
+             .handle(cx, m),
++            // RSA key transport: no ServerKeyExchange follows, and the server
++            // stapled nothing; ExpectServerKx passes the message on
++            _ if self.suite.kx == KeyExchangeAlgorithm::RSA => Box::new(ExpectServerKx {
++                config: self.config,
++                resuming_session: self.resuming_session,
++                session_id: self.session_id,
++                server_name: self.server_name,
++                randoms: self.randoms,
++                using_ems: self.using_ems,
++                transcript: self.transcript,
++                suite: self.suite,
++                server_cert: ServerCertDetails::new(self.server_cert_chain, vec![]),
++                must_issue_new_ticket: self.must_issue_new_ticket,
++            })
++            .handle(cx, m),
+             payload => Err(inappropriate_handshake_message(
+                 &payload,
+                 &[ContentType::Handshake],
+@@ -457,6 +474,27 @@ impl State<ClientConnectionData> for ExpectServerKx<'_> {
+     where
+         Self: 'm,
+     {
++        if self.suite.kx == KeyExchangeAlgorithm::RSA {
++            // RSA key transport (RFC 5246 section 7.4.3): the server sends no
++            // ServerKeyExchange; the pre-master secret is encrypted to the key
++            // in its certificate, so what comes next is a CertificateRequest
++            // or the ServerHelloDone
++            return Box::new(ExpectServerDoneOrCertReq {
++                config: self.config,
++                resuming_session: self.resuming_session,
++                session_id: self.session_id,
++                server_name: self.server_name,
++                randoms: self.randoms,
++                using_ems: self.using_ems,
++                transcript: self.transcript,
++                suite: self.suite,
++                server_cert: self.server_cert,
++                server_kx: None,
++                must_issue_new_ticket: self.must_issue_new_ticket,
++            })
++            .handle(cx, m);
++        }
++
+         let opaque_kx = require_handshake_msg!(
+             m,
+             HandshakeType::ServerKeyExchange,
+@@ -500,7 +538,7 @@ impl State<ClientConnectionData> for ExpectServerKx<'_> {
+             transcript: self.transcript,
+             suite: self.suite,
+             server_cert: self.server_cert,
+-            server_kx,
++            server_kx: Some(server_kx),
+             must_issue_new_ticket: self.must_issue_new_ticket,
+         }))
+     }
+@@ -551,8 +589,17 @@ fn emit_client_kx(
+         KeyExchangeAlgorithm::DHE => ClientKeyExchangeParams::Dh(ClientDhParams {
+             public: PayloadU16::new(pub_key.to_vec()),
+         }),
++        // RFC 5246 section 7.4.7.1: `opaque EncryptedPreMasterSecret<0..2^16-1>`
++        KeyExchangeAlgorithm::RSA => {
++            PayloadU16::<NonEmpty>::new(pub_key.to_vec()).encode(&mut buf);
++            return emit_client_kx_body(transcript, common, buf);
++        }
+     }
+     .encode(&mut buf);
++    emit_client_kx_body(transcript, common, buf);
++}
++
++fn emit_client_kx_body(transcript: &mut HandshakeHash, common: &mut CommonState, buf: Vec<u8>) {
+     let pubkey = Payload::new(buf);
+ 
+     let ckx = Message {
+@@ -647,7 +694,8 @@ struct ExpectServerDoneOrCertReq<'a> {
+     transcript: HandshakeHash,
+     suite: &'static Tls12CipherSuite,
+     server_cert: ServerCertDetails<'a>,
+-    server_kx: ServerKxDetails,
++    /// `None` for RSA key transport, which has no ServerKeyExchange
++    server_kx: Option<ServerKxDetails>,
+     must_issue_new_ticket: bool,
+ }
+ 
+@@ -729,7 +777,8 @@ struct ExpectCertificateRequest<'a> {
+     transcript: HandshakeHash,
+     suite: &'static Tls12CipherSuite,
+     server_cert: ServerCertDetails<'a>,
+-    server_kx: ServerKxDetails,
++    /// `None` for RSA key transport, which has no ServerKeyExchange
++    server_kx: Option<ServerKxDetails>,
+     must_issue_new_ticket: bool,
+ }
+ 
+@@ -811,7 +860,8 @@ struct ExpectServerDone<'a> {
+     transcript: HandshakeHash,
+     suite: &'static Tls12CipherSuite,
+     server_cert: ServerCertDetails<'a>,
+-    server_kx: ServerKxDetails,
++    /// `None` for RSA key transport, which has no ServerKeyExchange
++    server_kx: Option<ServerKxDetails>,
+     client_auth: Option<ClientAuthDetails>,
+     must_issue_new_ticket: bool,
+ }
+@@ -888,14 +938,32 @@ impl State<ClientConnectionData> for ExpectServerDone<'_> {
+         // 2.
+         // Build up the contents of the signed message.
+         // It's ClientHello.random || ServerHello.random || ServerKeyExchange.params
+-        let sig_verified = {
++        //
++        // RSA key transport signs nothing: the server shows it holds the
++        // certificate's key by decrypting the pre-master secret, without which
++        // its Finished cannot verify.
++        //
++        // Which of the two is keyed on the suite, and a ServerKeyExchange
++        // that does not match it is an error, so no path can skip the
++        // signature of a suite that has one.
++        let server_kx = match (st.suite.kx == KeyExchangeAlgorithm::RSA, &st.server_kx) {
++            (false, Some(server_kx)) => Some(server_kx),
++            (true, None) => None,
++            _ => {
++                return Err(cx.common.send_fatal_alert(
++                    AlertDescription::InternalError,
++                    Error::General("key exchange does not match the suite".into()),
++                ));
++            }
++        };
++        let sig_verified = if let Some(server_kx) = server_kx {
+             let mut message = Vec::new();
+             message.extend_from_slice(&st.randoms.client);
+             message.extend_from_slice(&st.randoms.server);
+-            message.extend_from_slice(&st.server_kx.kx_params);
++            message.extend_from_slice(&server_kx.kx_params);
+ 
+             // Check the signature is compatible with the ciphersuite.
+-            let sig = &st.server_kx.kx_sig;
++            let sig = &server_kx.kx_sig;
+             if !SupportedCipherSuite::from(suite)
+                 .usable_for_signature_algorithm(sig.scheme.algorithm())
+             {
+@@ -914,6 +982,37 @@ impl State<ClientConnectionData> for ExpectServerDone<'_> {
+                     cx.common
+                         .send_cert_verify_error_alert(err)
+                 })?
++        } else {
++            verify::HandshakeSignatureValid::assertion()
++        };
++        // RSA key transport: the pre-master secret, encrypted to the verified
++        // end entity's key before the chain is moved out of the state
++        let kx_route = match server_kx {
++            Some(server_kx) => Ok(server_kx),
++            None => {
++                let Some(transport) = st.config.rsa_key_transport.as_ref() else {
++                    return Err(cx.common.send_fatal_alert(
++                        AlertDescription::HandshakeFailure,
++                        Error::General("no RSA key transport for an RSA suite".into()),
++                    ));
++                };
++                // RFC 5246 section 7.4.7.1: the version the ClientHello offered
++                // (its legacy_version, TLS 1.2), then 46 random bytes
++                // (on the heap, so moving it copies no secret; zeroized on drop)
++                let mut pms = Zeroizing::new(vec![0u8; 48]);
++                pms[..2].copy_from_slice(&ProtocolVersion::TLSv1_2.to_array());
++                st.config
++                    .provider
++                    .secure_random
++                    .fill(&mut pms[2..])?;
++                let encrypted = transport
++                    .encrypt_pre_master_secret(end_entity, &pms)
++                    .map_err(|err| {
++                        cx.common
++                            .send_cert_verify_error_alert(err)
++                    })?;
++                Err((pms, encrypted))
++            }
+         };
+         cx.common.peer_certificates = Some(st.server_cert.cert_chain.into_owned());
+ 
+@@ -926,64 +1025,89 @@ impl State<ClientConnectionData> for ExpectServerDone<'_> {
+             emit_certificate(&mut st.transcript, certs, cx.common);
+         }
+ 
+-        // 4a.
+-        let kx_params = tls12::decode_kx_params::<ServerKeyExchangeParams>(
+-            st.suite.kx,
+-            cx.common,
+-            &st.server_kx.kx_params,
+-        )?;
+-        let maybe_skxg = match &kx_params {
+-            ServerKeyExchangeParams::Ecdh(ecdh) => st
+-                .config
+-                .find_kx_group(ecdh.curve_params.named_group, ProtocolVersion::TLSv1_2),
+-            ServerKeyExchangeParams::Dh(dh) => {
+-                let ffdhe_group = dh.as_ffdhe_group();
++        let (mut transcript, secrets) = match kx_route {
++            Err((pms, encrypted)) => {
++                // 4b. for RSA key transport: the encrypted pre-master secret
++                let mut transcript = st.transcript;
++                emit_client_kx(&mut transcript, st.suite.kx, cx.common, &encrypted);
++                // Note: EMS handshake hash only runs up to ClientKeyExchange.
++                let ems_seed = st
++                    .using_ems
++                    .then(|| transcript.current_hash());
++
++                // 4c.
++                if let Some(ClientAuthDetails::Verify { signer, .. }) = &st.client_auth {
++                    emit_certverify(&mut transcript, signer.as_ref(), cx.common)?;
++                }
+ 
+-                st.config
+-                    .provider
+-                    .kx_groups
+-                    .iter()
+-                    .find(|kxg| kxg.ffdhe_group() == Some(ffdhe_group))
+-                    .copied()
++                // 4d.
++                let secrets =
++                    ConnectionSecrets::from_pre_master_secret(&pms, ems_seed, st.randoms, suite);
++                drop(pms);
++                (transcript, secrets)
+             }
+-        };
+-        let Some(skxg) = maybe_skxg else {
+-            return Err(cx.common.send_fatal_alert(
+-                AlertDescription::IllegalParameter,
+-                PeerMisbehaved::SelectedUnofferedKxGroup,
+-            ));
+-        };
+-        cx.common.kx_state = KxState::Start(skxg);
+-        let kx = skxg.start()?;
+-
+-        // 4b.
+-        let mut transcript = st.transcript;
+-        emit_client_kx(&mut transcript, st.suite.kx, cx.common, kx.pub_key());
+-        // Note: EMS handshake hash only runs up to ClientKeyExchange.
+-        let ems_seed = st
+-            .using_ems
+-            .then(|| transcript.current_hash());
+-
+-        // 4c.
+-        if let Some(ClientAuthDetails::Verify { signer, .. }) = &st.client_auth {
+-            emit_certverify(&mut transcript, signer.as_ref(), cx.common)?;
+-        }
++            Ok(server_kx) => {
++                // 4a.
++                let kx_params = tls12::decode_kx_params::<ServerKeyExchangeParams>(
++                    st.suite.kx,
++                    cx.common,
++                    &server_kx.kx_params,
++                )?;
++                let maybe_skxg = match &kx_params {
++                    ServerKeyExchangeParams::Ecdh(ecdh) => st
++                        .config
++                        .find_kx_group(ecdh.curve_params.named_group, ProtocolVersion::TLSv1_2),
++                    ServerKeyExchangeParams::Dh(dh) => {
++                        let ffdhe_group = dh.as_ffdhe_group();
++
++                        st.config
++                            .provider
++                            .kx_groups
++                            .iter()
++                            .find(|kxg| kxg.ffdhe_group() == Some(ffdhe_group))
++                            .copied()
++                    }
++                };
++                let Some(skxg) = maybe_skxg else {
++                    return Err(cx.common.send_fatal_alert(
++                        AlertDescription::IllegalParameter,
++                        PeerMisbehaved::SelectedUnofferedKxGroup,
++                    ));
++                };
++                cx.common.kx_state = KxState::Start(skxg);
++                let kx = skxg.start()?;
++
++                // 4b.
++                let mut transcript = st.transcript;
++                emit_client_kx(&mut transcript, st.suite.kx, cx.common, kx.pub_key());
++                // Note: EMS handshake hash only runs up to ClientKeyExchange.
++                let ems_seed = st
++                    .using_ems
++                    .then(|| transcript.current_hash());
++
++                // 4c.
++                if let Some(ClientAuthDetails::Verify { signer, .. }) = &st.client_auth {
++                    emit_certverify(&mut transcript, signer.as_ref(), cx.common)?;
++                }
+ 
+-        // 4d. Derive secrets.
+-        // An alert at this point will be sent in plaintext.  That must happen
+-        // prior to the CCS, or else the peer will try to decrypt it.
+-        let secrets = ConnectionSecrets::from_key_exchange(
+-            kx,
+-            kx_params.pub_key(),
+-            ems_seed,
+-            st.randoms,
+-            suite,
+-        )
+-        .map_err(|err| {
+-            cx.common
+-                .send_fatal_alert(AlertDescription::IllegalParameter, err)
+-        })?;
+-        cx.common.kx_state.complete();
++                // 4d. Derive secrets.
++                // An alert at this point will be sent in plaintext.  That must happen
++                // prior to the CCS, or else the peer will try to decrypt it.
++                let secrets = ConnectionSecrets::from_key_exchange(
++                    kx,
++                    kx_params.pub_key(),
++                    ems_seed,
++                    st.randoms,
++                    suite,
++                )
++                .map_err(|err| {
++                    cx.common
++                        .send_fatal_alert(AlertDescription::IllegalParameter, err)
++                })?;
++                cx.common.kx_state.complete();
++                (transcript, secrets)
++            }
++        };
+ 
+         // 4e. CCS. We are definitely going to switch on encryption.
+         emit_ccs(cx.common);
+diff --git a/src/lib.rs b/src/lib.rs
+index 4fd8e37..d5dee3f 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -595,7 +595,7 @@ pub mod client {
+     pub use builder::WantsClientCert;
+     pub use client_conn::{
+         ClientConfig, ClientConnectionData, ClientSessionStore, EarlyDataError, ResolvesClientCert,
+-        Resumption, Tls12Resumption, UnbufferedClientConnection,
++        Resumption, RsaKeyTransport, Tls12Resumption, UnbufferedClientConnection,
+     };
+     #[cfg(feature = "std")]
+     pub use client_conn::{ClientConnection, WriteEarlyData};
+diff --git a/src/msgs/handshake.rs b/src/msgs/handshake.rs
+index 7c0bf51..bff3fd9 100644
+--- a/src/msgs/handshake.rs
++++ b/src/msgs/handshake.rs
+@@ -1193,7 +1193,8 @@ impl ClientExtensions<'_> {
+                 // for, with no GREASE share
+                 if !chrome.retry && !chrome.quic {
+                     grease(list.buf, Grease::Group);
+-                    list.buf.extend_from_slice(&[0x00, 0x01, 0x00]);
++                    list.buf
++                        .extend_from_slice(&[0x00, 0x01, 0x00]);
+                 }
+                 for share in self.key_shares.iter().flatten() {
+                     share.encode(list.buf);
+@@ -1488,7 +1489,8 @@ impl ClientHelloPayload {
+         self.compression_methods.encode(bytes);
+ 
+         // a Chrome-shaped inner hello compresses as BoringSSL's does
+-        if let (Encoding::EchInnerHello { .. }, Some(chrome)) = (&purpose, &self.extensions.chrome) {
++        if let (Encoding::EchInnerHello { .. }, Some(chrome)) = (&purpose, &self.extensions.chrome)
++        {
+             if chrome.ech_inner {
+                 return self
+                     .extensions
+@@ -2054,6 +2056,12 @@ pub enum KeyExchangeAlgorithm {
+     DHE,
+     /// Key exchange performed via elliptic curve Diffie-Hellman.
+     ECDHE,
++    /// Static RSA key transport ([RFC 5246 section 7.4.7.1]): the client encrypts the
++    /// pre-master secret to the key in the server's certificate. Client side only, and
++    /// only with a [`crate::client::RsaKeyTransport`] in the config.
++    ///
++    /// [RFC 5246 section 7.4.7.1]: https://www.rfc-editor.org/rfc/rfc5246#section-7.4.7.1
++    RSA,
+ }
+ 
+ pub(crate) static ALL_KEY_EXCHANGE_ALGORITHMS: &[KeyExchangeAlgorithm] =
+@@ -2126,6 +2134,8 @@ impl KxDecode<'_> for ClientKeyExchangeParams {
+         Ok(match algo {
+             ECDHE => Self::Ecdh(ClientEcdhParams::read(r)?),
+             DHE => Self::Dh(ClientDhParams::read(r)?),
++            // a server never picks a suite with RSA key transport
++            RSA => return Err(InvalidMessage::UnsupportedKeyExchangeAlgorithm(RSA)),
+         })
+     }
+ }
+@@ -2266,6 +2276,7 @@ impl ServerKeyExchangeParams {
+         match kx.group().key_exchange_algorithm() {
+             KeyExchangeAlgorithm::DHE => Self::Dh(ServerDhParams::new(kx)),
+             KeyExchangeAlgorithm::ECDHE => Self::Ecdh(ServerEcdhParams::new(kx)),
++            KeyExchangeAlgorithm::RSA => unreachable!("a group's algorithm is DHE or ECDHE"),
+         }
+     }
+ 
+@@ -2292,6 +2303,8 @@ impl KxDecode<'_> for ServerKeyExchangeParams {
+         Ok(match algo {
+             ECDHE => Self::Ecdh(ServerEcdhParams::read(r)?),
+             DHE => Self::Dh(ServerDhParams::read(r)?),
++            // RSA key transport has no ServerKeyExchange
++            RSA => return Err(InvalidMessage::UnsupportedKeyExchangeAlgorithm(RSA)),
+         })
+     }
+ }
+diff --git a/src/server/hs.rs b/src/server/hs.rs
+index d98336e..6434291 100644
+--- a/src/server/hs.rs
++++ b/src/server/hs.rs
+@@ -563,6 +563,8 @@ impl ExpectClientHello {
+                 KeyExchangeAlgorithm::ECDHE => {
+                     ecdhe_possible |= supported.is_some();
+                 }
++                // a group's algorithm is DHE or ECDHE, never RSA
++                KeyExchangeAlgorithm::RSA => {}
+             }
+ 
+             supported_groups.push(supported);
+diff --git a/src/tls12/mod.rs b/src/tls12/mod.rs
+index c927185..2351481 100644
+--- a/src/tls12/mod.rs
++++ b/src/tls12/mod.rs
+@@ -137,6 +137,40 @@ impl ConnectionSecrets {
+         Ok(ret)
+     }
+ 
++    /// The secrets of a handshake whose key exchange made `pre_master_secret`
++    /// itself: RSA key transport, where the client chose it and sent it
++    /// encrypted to the server's key.
++    pub(crate) fn from_pre_master_secret(
++        pre_master_secret: &[u8],
++        ems_seed: Option<hash::Output>,
++        randoms: ConnectionRandoms,
++        suite: &'static Tls12CipherSuite,
++    ) -> Self {
++        let mut ret = Self {
++            randoms,
++            suite,
++            master_secret: [0u8; 48],
++        };
++
++        let (label, seed) = match ems_seed {
++            Some(seed) => ("extended master secret", Seed::Ems(seed)),
++            None => (
++                "master secret",
++                Seed::Randoms(join_randoms(&ret.randoms.client, &ret.randoms.server)),
++            ),
++        };
++
++        // `pre_master_secret`, `label` and `seed` are all non-empty, as
++        // for_secret requires.
++        ret.suite.prf_provider.for_secret(
++            &mut ret.master_secret,
++            pre_master_secret,
++            label.as_bytes(),
++            seed.as_ref(),
++        );
++        ret
++    }
++
+     pub(crate) fn new_resume(
+         randoms: ConnectionRandoms,
+         suite: &'static Tls12CipherSuite,
+@@ -157,10 +191,15 @@ impl ConnectionSecrets {
+     pub(crate) fn make_cipher_pair(&self, side: Side) -> MessageCipherPair {
+         // Make a key block, and chop it up.
+         // Note: we don't implement any ciphersuites with nonzero mac_key_len.
+-        let key_block = self.make_key_block();
++        // (A CBC suite's `Tls12AeadAlgorithm` can still be one: RFC 5246's
++        // key block is the two MAC keys, then the two encryption keys, and no
++        // IVs in TLS 1.1 and later, so a shape with the MAC key length as
++        // `enc_key_len` and the cipher key length as `fixed_iv_len` hands it
++        // each MAC key as `key` and each cipher key as `iv`.)
++        let mut key_block_buf = self.make_key_block();
+         let shape = self.suite.aead_alg.key_block_shape();
+ 
+-        let (client_write_key, key_block) = key_block.split_at(shape.enc_key_len);
++        let (client_write_key, key_block) = key_block_buf.split_at(shape.enc_key_len);
+         let (server_write_key, key_block) = key_block.split_at(shape.enc_key_len);
+         let (client_write_iv, key_block) = key_block.split_at(shape.fixed_iv_len);
+         let (server_write_iv, extra) = key_block.split_at(shape.fixed_iv_len);
+@@ -180,14 +219,16 @@ impl ConnectionSecrets {
+             ),
+         };
+ 
+-        (
++        let pair = (
+             self.suite
+                 .aead_alg
+                 .decrypter(AeadKey::new(read_key), read_iv),
+             self.suite
+                 .aead_alg
+                 .encrypter(AeadKey::new(write_key), write_iv, extra),
+-        )
++        );
++        key_block_buf.zeroize();
++        pair
+     }
+ 
+     fn make_key_block(&self) -> Vec<u8> {
+-- 
+2.54.0
+

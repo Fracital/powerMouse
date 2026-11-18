@@ -1,0 +1,1420 @@
+From 8367da2720735d4a16e4af23f1626e72e925f639 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 17 Nov 2026 18:00:00 -0500
+Subject: [PATCH] client: Chrome's TLS 1.2 CBC and RSA key exchange suites, and
+ its keyUsage checks
+
+Chrome 157's ClientHello offers, after its AEAD ECDHE suites,
+TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA, TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
+TLS_RSA_WITH_AES_128_GCM_SHA256, TLS_RSA_WITH_AES_256_GCM_SHA384,
+TLS_RSA_WITH_AES_128_CBC_SHA and TLS_RSA_WITH_AES_256_CBC_SHA. Epoxy sent
+the same list (chrome_hello) but rustls implements none of them, so a
+server that picked one failed with SelectedUnofferedCipherSuite:
+pro.ip-api.com (geoguessr's geolocation), cs.pgammedia.com,
+sync.pinklion.io and cs.playdigo.com pick AES256-SHA or AES128-SHA from
+Chrome's offer.
+
+The provider now has those six suites, in Chrome's order after its own.
+The RSA ones use rustls's RSA key transport (rustls 0053) with
+RSAES-PKCS1-v1_5 from RustCrypto's `rsa` (keys of 2048 to 8192 bits, the
+sizes webpki takes for an ECDHE_RSA signature). The CBC records are TLS
+1.2's MAC-then-encrypt with HMAC-SHA1 and an explicit random IV per record
+(RustCrypto `aes`, constant time), opened in constant time as BoringSSL
+opens them (tls_cbc.cc): the padding check, the HMAC over a secret length
+(on the `sha1` crate's compression function) and the MAC's extraction take
+the same time whatever the padding says. Nothing Chrome does not offer is
+added: no 3DES, no other CBC or DHE suite, no SHA-256 MAC, no
+encrypt_then_mac.
+
+It also checks the end entity's keyUsage as BoringSSL does, which webpki
+does not: a key that signs the handshake (an ECDHE suite, TLS 1.3) must
+allow digitalSignature and one the pre-master secret is encrypted to must
+allow keyEncipherment. Chrome refuses either mismatch with
+ERR_SSL_KEY_USAGE_INCOMPATIBLE, and epoxy connected. The chain and name
+verification is webpki's, unchanged, for every suite.
+---
+ Cargo.lock                            | 204 ++++++++++++-
+ client/Cargo.toml                     |   7 +-
+ client/src/stream_provider.rs         |  36 ++-
+ client/src/utils/legacy_tls/der.rs    | 183 ++++++++++++
+ client/src/utils/legacy_tls/mod.rs    | 291 ++++++++++++++++++
+ client/src/utils/legacy_tls/record.rs | 405 ++++++++++++++++++++++++++
+ client/src/utils/mod.rs               |   2 +
+ 7 files changed, 1120 insertions(+), 8 deletions(-)
+ create mode 100644 client/src/utils/legacy_tls/der.rs
+ create mode 100644 client/src/utils/legacy_tls/mod.rs
+ create mode 100644 client/src/utils/legacy_tls/record.rs
+
+diff --git a/Cargo.lock b/Cargo.lock
+index f1751b3..8f8c8d6 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -17,6 +17,18 @@ version = "2.0.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+ 
++[[package]]
++name = "aes"
++version = "0.8.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "b169f7a6d4742236a0a00c541b845991d0ac43e546831af1249753ab4c3aa3a0"
++dependencies = [
++ "cfg-if",
++ "cipher",
++ "cpufeatures",
++ "zeroize",
++]
++
+ [[package]]
+ name = "aho-corasick"
+ version = "1.1.3"
+@@ -109,6 +121,8 @@ dependencies = [
+  "futures-io",
+  "memchr",
+  "pin-project-lite",
++ "zstd",
++ "zstd-safe",
+ ]
+ 
+ [[package]]
+@@ -332,6 +346,16 @@ version = "0.2.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
+ 
++[[package]]
++name = "cipher"
++version = "0.4.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
++dependencies = [
++ "crypto-common",
++ "inout",
++]
++
+ [[package]]
+ name = "clap"
+ version = "4.5.41"
+@@ -632,6 +656,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
+ dependencies = [
+  "block-buffer",
++ "const-oid",
+  "crypto-common",
+ ]
+ 
+@@ -749,6 +774,7 @@ dependencies = [
+ name = "epoxy-client"
+ version = "2.1.20"
+ dependencies = [
++ "aes",
+  "async-compression",
+  "bytes",
+  "cfg-if",
+@@ -765,13 +791,18 @@ dependencies = [
+  "hyper-util-wasm",
+  "instant",
+  "js-sys",
++ "ml-kem",
+  "parking_lot_core",
+  "pin-project-lite",
++ "rand_core 0.6.4",
+  "ring",
++ "rsa",
++ "rustls",
+  "rustls-pemfile",
+  "rustls-pki-types",
+  "rustls-webpki",
+  "send_wrapper",
++ "sha1",
+  "thiserror 2.0.12",
+  "tokio",
+  "wasm-bindgen",
+@@ -780,6 +811,7 @@ dependencies = [
+  "web-sys",
+  "webpki-roots",
+  "wisp-mux",
++ "zeroize",
+ ]
+ 
+ [[package]]
+@@ -1112,7 +1144,6 @@ dependencies = [
+ [[package]]
+ name = "h2"
+ version = "0.4.7"
+-source = "git+https://github.com/r58Playz/h2-wasm#2852a7c94b92f0433a1e2e5107ff4fe56db09cc7"
+ dependencies = [
+  "atomic-waker",
+  "bytes",
+@@ -1257,11 +1288,18 @@ version = "2.2.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "9b112acc8b3adf4b107a8ec20977da0273a8c386765a3ec0229bd500a1443f9f"
+ 
++[[package]]
++name = "hybrid-array"
++version = "0.2.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f2d35805454dc9f8662a98d6d61886ffe26bd465f5960e0e55345c70d5c0d2a9"
++dependencies = [
++ "typenum",
++]
++
+ [[package]]
+ name = "hyper"
+ version = "1.6.0"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "cc2b571658e38e0c01b1fdca3bbbe93c00d3d71693ff2770043f8c29bc7d6f80"
+ dependencies = [
+  "bytes",
+  "futures-channel",
+@@ -1315,7 +1353,6 @@ dependencies = [
+ [[package]]
+ name = "hyper-util-wasm"
+ version = "0.1.7"
+-source = "git+https://github.com/r58Playz/hyper-util-wasm?rev=07117dd90174688341c27df2fdeb023c71015e4a#07117dd90174688341c27df2fdeb023c71015e4a"
+ dependencies = [
+  "bytes",
+  "futures-channel",
+@@ -1461,6 +1498,15 @@ dependencies = [
+  "hashbrown 0.15.4",
+ ]
+ 
++[[package]]
++name = "inout"
++version = "0.1.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
++dependencies = [
++ "generic-array",
++]
++
+ [[package]]
+ name = "instant"
+ version = "0.1.13"
+@@ -1567,11 +1613,33 @@ dependencies = [
+  "wasm-bindgen",
+ ]
+ 
++[[package]]
++name = "keccak"
++version = "0.1.6"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "cb26cec98cce3a3d96cbb7bced3c4b16e3d13f27ec56dbd62cbc8f39cfb9d653"
++dependencies = [
++ "cpufeatures",
++]
++
++[[package]]
++name = "kem"
++version = "0.3.0-pre.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "2b8645470337db67b01a7f966decf7d0bafedbae74147d33e641c67a91df239f"
++dependencies = [
++ "rand_core 0.6.4",
++ "zeroize",
++]
++
+ [[package]]
+ name = "lazy_static"
+ version = "1.5.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
++dependencies = [
++ "spin",
++]
+ 
+ [[package]]
+ name = "libc"
+@@ -1591,6 +1659,12 @@ dependencies = [
+  "pkg-config",
+ ]
+ 
++[[package]]
++name = "libm"
++version = "0.2.16"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
++
+ [[package]]
+ name = "libz-sys"
+ version = "1.1.22"
+@@ -1700,6 +1774,18 @@ dependencies = [
+  "windows-sys 0.59.0",
+ ]
+ 
++[[package]]
++name = "ml-kem"
++version = "0.2.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "8de49b3df74c35498c0232031bb7e85f9389f913e2796169c8ab47a53993a18f"
++dependencies = [
++ "hybrid-array",
++ "kem",
++ "rand_core 0.6.4",
++ "sha3",
++]
++
+ [[package]]
+ name = "moka"
+ version = "0.12.10"
+@@ -1783,12 +1869,47 @@ dependencies = [
+  "winapi",
+ ]
+ 
++[[package]]
++name = "num-bigint-dig"
++version = "0.8.6"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "e661dda6640fad38e827a6d4a310ff4763082116fe217f279885c97f511bb0b7"
++dependencies = [
++ "lazy_static",
++ "libm",
++ "num-integer",
++ "num-iter",
++ "num-traits",
++ "rand 0.8.5",
++ "smallvec",
++ "zeroize",
++]
++
+ [[package]]
+ name = "num-conv"
+ version = "0.1.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "51d515d32fb182ee37cda2ccdcb92950d6a3c2893aa280e540671c2cd0f3b1d9"
+ 
++[[package]]
++name = "num-integer"
++version = "0.1.47"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "7ce2d95d4b3734dc35aa2f45e1aa22cd416814592a4f9d9205e11affd5b8e10b"
++dependencies = [
++ "num-traits",
++]
++
++[[package]]
++name = "num-iter"
++version = "0.1.46"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c92800bd69a1eac91786bcfe9da64a897eb72911b8dc3095decbd07429e8048b"
++dependencies = [
++ "num-integer",
++ "num-traits",
++]
++
+ [[package]]
+ name = "num-traits"
+ version = "0.2.19"
+@@ -1796,6 +1917,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
+ dependencies = [
+  "autocfg",
++ "libm",
+ ]
+ 
+ [[package]]
+@@ -1986,6 +2108,17 @@ version = "0.1.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
+ 
++[[package]]
++name = "pkcs1"
++version = "0.7.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c8ffb9f10fa047879315e6625af03c164b16962a5368d724ed16323b68ace47f"
++dependencies = [
++ "der",
++ "pkcs8",
++ "spki",
++]
++
+ [[package]]
+ name = "pkcs8"
+ version = "0.10.2"
+@@ -2248,6 +2381,26 @@ dependencies = [
+  "windows-sys 0.52.0",
+ ]
+ 
++[[package]]
++name = "rsa"
++version = "0.9.10"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "b8573f03f5883dcaebdfcf4725caa1ecb9c15b2ef50c43a07b816e06799bb12d"
++dependencies = [
++ "const-oid",
++ "digest",
++ "num-bigint-dig",
++ "num-integer",
++ "num-traits",
++ "pkcs1",
++ "pkcs8",
++ "rand_core 0.6.4",
++ "signature",
++ "spki",
++ "subtle",
++ "zeroize",
++]
++
+ [[package]]
+ name = "rustc-demangle"
+ version = "0.1.25"
+@@ -2285,9 +2438,9 @@ dependencies = [
+ [[package]]
+ name = "rustls"
+ version = "0.23.29"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "2491382039b29b9b11ff08b76ff6c97cf287671dbb74f0be44bda389fffe9bd1"
+ dependencies = [
++ "brotli",
++ "brotli-decompressor",
+  "once_cell",
+  "ring",
+  "rustls-pki-types",
+@@ -2479,6 +2632,16 @@ dependencies = [
+  "digest",
+ ]
+ 
++[[package]]
++name = "sha3"
++version = "0.10.9"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "77fd7028345d415a4034cf8777cd4f8ab1851274233b45f84e3d955502d93874"
++dependencies = [
++ "digest",
++ "keccak",
++]
++
+ [[package]]
+ name = "sharded-slab"
+ version = "0.1.7"
+@@ -2515,6 +2678,7 @@ version = "2.2.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
+ dependencies = [
++ "digest",
+  "rand_core 0.6.4",
+ ]
+ 
+@@ -3920,3 +4084,31 @@ dependencies = [
+  "quote",
+  "syn",
+ ]
++
++[[package]]
++name = "zstd"
++version = "0.13.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "50adf04cf3ec914b0b9905c9dde90c80fe74bfd701e331fc80a39c512c525278"
++dependencies = [
++ "zstd-safe",
++]
++
++[[package]]
++name = "zstd-safe"
++version = "7.4.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "498d94ad68720c89b4fbe41b9090850651e68cb2dd9210ce7ffbff3a94653819"
++dependencies = [
++ "zstd-sys",
++]
++
++[[package]]
++name = "zstd-sys"
++version = "2.1.3+zstd.1.5.7"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f729a06d0257428fd9d997ac8db7e1407bd0262ab016b085b36bc52957c0052d"
++dependencies = [
++ "cc",
++ "pkg-config",
++]
+diff --git a/client/Cargo.toml b/client/Cargo.toml
+index 20dac3b..e41e824 100644
+--- a/client/Cargo.toml
++++ b/client/Cargo.toml
+@@ -38,6 +38,11 @@ webpki-roots = "1.0.10"
+ wisp-mux = { version = "*", path = "../wisp", features = ["wasm"], default-features = false }
+ 
+ ml-kem = { version = "0.2.1", optional = true }
++# TLS 1.2 CBC records and RSA key transport (src/utils/legacy_tls/)
++aes = { version = "=0.8.4", features = ["zeroize"], optional = true }
++sha1 = { version = "=0.10.6", default-features = false, features = ["compress"], optional = true }
++rsa = { version = "=0.9.10", default-features = false, optional = true }
++zeroize = { version = "1", optional = true }
+ rand_core = { version = "0.6.4", features = ["getrandom"], optional = true }
+ rustls = { version = "0.23.29", default-features = false, features = ["brotli"], optional = true }
+ 
+@@ -63,5 +68,5 @@ features = ["wasm-bindgen"]
+ 
+ [features]
+ default = ["full"]
+-full = ["dep:fastwebsockets", "dep:async-compression", "dep:rustls-webpki", "dep:rustls-pemfile", "hyper-util-wasm/http2", "dep:ml-kem", "dep:rand_core", "dep:rustls"]
++full = ["dep:fastwebsockets", "dep:async-compression", "dep:rustls-webpki", "dep:rustls-pemfile", "hyper-util-wasm/http2", "dep:ml-kem", "dep:rand_core", "dep:rustls", "dep:aes", "dep:sha1", "dep:rsa", "dep:zeroize"]
+ 
+diff --git a/client/src/stream_provider.rs b/client/src/stream_provider.rs
+index c93e433..2156eac 100644
+--- a/client/src/stream_provider.rs
++++ b/client/src/stream_provider.rs
+@@ -150,6 +150,13 @@ impl StreamProvider {
+ 				kx_group::SECP256R1,
+ 				kx_group::SECP384R1,
+ 			];
++			// the TLS 1.2 suites Chrome offers after these, CBC and RSA key
++			// exchange: a server that picks one from Chrome's hello connects
++			// as it does in Chrome (pro.ip-api.com picks
++			// TLS_RSA_WITH_AES_256_CBC_SHA)
++			provider
++				.cipher_suites
++				.extend(crate::utils::legacy_tls::LEGACY_SUITES.iter().copied());
+ 			Arc::new(provider)
+ 		};
+ 		#[cfg(not(feature = "full"))]
+@@ -178,9 +185,36 @@ impl StreamProvider {
+ 					let certstore: RootCertStore = TLS_SERVER_ROOTS.iter().cloned().collect();
+ 				}
+ 			}
+-			client_config.with_root_certificates(certstore)
++			cfg_if! {
++				if #[cfg(feature = "full")] {
++					// webpki's verifier as with_root_certificates makes it,
++					// wrapped in KeyUsageVerifier, which checks the end
++					// entity's keyUsage against the handshake's use of its
++					// key as Chrome does (webpki checks no end entity's
++					// keyUsage)
++					let webpki = futures_rustls::rustls::client::WebPkiServerVerifier::builder_with_provider(
++						Arc::new(certstore),
++						provider.clone(),
++					)
++					.allow_unknown_revocation_status()
++					.build()
++					.map_err(|err| futures_rustls::rustls::Error::General(err.to_string()))?;
++					client_config
++						.dangerous()
++						.with_custom_certificate_verifier(Arc::new(crate::utils::legacy_tls::KeyUsageVerifier(webpki)))
++				} else {
++					client_config.with_root_certificates(certstore)
++				}
++			}
+ 		}
+ 		.with_no_client_auth();
++		// TLS_RSA_* suites encrypt the pre-master secret to the verified
++		// certificate's key
++		#[cfg(feature = "full")]
++		{
++			client_config.rsa_key_transport =
++				Some(Arc::new(crate::utils::legacy_tls::Pkcs1KeyTransport));
++		}
+ 		let no_alpn_client_config = Arc::new(client_config.clone());
+ 		#[cfg(feature = "full")]
+ 		{
+diff --git a/client/src/utils/legacy_tls/der.rs b/client/src/utils/legacy_tls/der.rs
+new file mode 100644
+index 0000000..d9d1daf
+--- /dev/null
++++ b/client/src/utils/legacy_tls/der.rs
+@@ -0,0 +1,183 @@
++//! The few certificate fields read here, by a DER walk that follows
++//! BoringSSL's (`ssl_cert_skip_to_spki`, `ssl_cert_check_key_usage`). The
++//! certificate is one the verifier took or is about to take.
++
++use super::{CertificateError, Error};
++
++/// RFC 5280 section 4.2.1.3 bit numbers
++pub const KEY_USAGE_DIGITAL_SIGNATURE: usize = 0;
++pub const KEY_USAGE_KEY_ENCIPHERMENT: usize = 2;
++
++const SEQUENCE: u8 = 0x30;
++const INTEGER: u8 = 0x02;
++const BIT_STRING: u8 = 0x03;
++const OCTET_STRING: u8 = 0x04;
++const NULL: u8 = 0x05;
++const OID: u8 = 0x06;
++const BOOLEAN: u8 = 0x01;
++const VERSION: u8 = 0xa0;
++const ISSUER_UID: u8 = 0x81;
++const SUBJECT_UID: u8 = 0x82;
++const EXTENSIONS: u8 = 0xa3;
++
++/// id-ce-keyUsage, 2.5.29.15
++const KEY_USAGE_OID: &[u8] = &[0x55, 0x1d, 0x0f];
++/// rsaEncryption, 1.2.840.113549.1.1.1
++const RSA_OID: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
++
++struct Reader<'a>(&'a [u8]);
++
++impl<'a> Reader<'a> {
++	fn peek(&self) -> Option<u8> {
++		self.0.first().copied()
++	}
++
++	/// One TLV with tag `tag`; its contents.
++	fn read(&mut self, tag: u8) -> Option<&'a [u8]> {
++		let (&t, rest) = self.0.split_first()?;
++		if t != tag {
++			return None;
++		}
++		let (&first, mut rest) = rest.split_first()?;
++		let len = if first < 0x80 {
++			first as usize
++		} else {
++			let n = (first & 0x7f) as usize;
++			if n == 0 || n > 3 || rest.len() < n {
++				return None;
++			}
++			let mut len = 0usize;
++			for &b in &rest[..n] {
++				len = (len << 8) | b as usize;
++			}
++			// DER: the shortest form
++			if len < 0x80 || rest[0] == 0 {
++				return None;
++			}
++			rest = &rest[n..];
++			len
++		};
++		if rest.len() < len {
++			return None;
++		}
++		let (contents, rest) = rest.split_at(len);
++		self.0 = rest;
++		Some(contents)
++	}
++
++	fn read_optional(&mut self, tag: u8) -> Option<Option<&'a [u8]>> {
++		match self.peek() {
++			Some(t) if t == tag => self.read(tag).map(Some),
++			_ => Some(None),
++		}
++	}
++
++	fn is_empty(&self) -> bool {
++		self.0.is_empty()
++	}
++}
++
++pub struct Certificate<'a> {
++	spki: &'a [u8],
++	extensions: Option<&'a [u8]>,
++}
++
++impl<'a> Certificate<'a> {
++	pub fn parse(der: &'a [u8]) -> Option<Self> {
++		let mut cert = Reader(Reader(der).read(SEQUENCE)?);
++		let mut tbs = Reader(cert.read(SEQUENCE)?);
++		tbs.read_optional(VERSION)?;
++		tbs.read(INTEGER)?; // serialNumber
++		tbs.read(SEQUENCE)?; // signature
++		tbs.read(SEQUENCE)?; // issuer
++		tbs.read(SEQUENCE)?; // validity
++		tbs.read(SEQUENCE)?; // subject
++		let spki = tbs.read(SEQUENCE)?;
++		tbs.read_optional(ISSUER_UID)?;
++		tbs.read_optional(SUBJECT_UID)?;
++		let extensions = tbs.read_optional(EXTENSIONS)?;
++		Some(Self { spki, extensions })
++	}
++
++	/// Whether the keyUsage extension, when there is one, has `bit` set.
++	/// A malformed extension list or keyUsage refuses the certificate, as
++	/// BoringSSL does (SSL_R_CANNOT_PARSE_LEAF_CERT).
++	pub fn key_usage_allows(&self, bit: usize) -> Result<bool, Error> {
++		let bad = Error::InvalidCertificate(CertificateError::BadEncoding);
++		let Some(outer) = self.extensions else {
++			return Ok(true);
++		};
++		let mut outer = Reader(outer);
++		let mut extensions = Reader(outer.read(SEQUENCE).ok_or(bad.clone())?);
++		while !extensions.is_empty() {
++			let mut extension = Reader(extensions.read(SEQUENCE).ok_or(bad.clone())?);
++			let oid = extension.read(OID).ok_or(bad.clone())?;
++			extension.read_optional(BOOLEAN).ok_or(bad.clone())?;
++			let contents = extension.read(OCTET_STRING).ok_or(bad.clone())?;
++			if !extension.is_empty() {
++				return Err(bad);
++			}
++			if oid != KEY_USAGE_OID {
++				continue;
++			}
++			let mut contents = Reader(contents);
++			let bits = contents.read(BIT_STRING).ok_or(bad.clone())?;
++			if !contents.is_empty() {
++				return Err(bad);
++			}
++			// CBS_is_valid_asn1_bitstring: an unused-bit count of 0 to 7,
++			// none with no bytes, and the unused bits zero
++			let (&unused, bytes) = bits.split_first().ok_or(bad.clone())?;
++			let valid = match bytes.last() {
++				None => unused == 0,
++				Some(&last) => unused < 8 && last & ((1u8 << unused) - 1) == 0,
++			};
++			if !valid {
++				return Err(bad);
++			}
++			// CBS_asn1_bitstring_has_bit: bit 0 is the first byte's top bit
++			let (byte, shift) = (bit / 8, 7 - bit % 8);
++			return Ok(byte < bytes.len() && (bytes[byte] >> shift) & 1 == 1);
++		}
++		Ok(true)
++	}
++
++	/// The modulus and exponent of an rsaEncryption key.
++	pub fn rsa_public_key(&self) -> Option<(&'a [u8], &'a [u8])> {
++		let mut spki = Reader(self.spki);
++		let mut algorithm = Reader(spki.read(SEQUENCE)?);
++		if algorithm.read(OID)? != RSA_OID {
++			return None;
++		}
++		// parameters: NULL (RFC 3279 section 2.3.1), which BoringSSL
++		// also takes left out
++		if !algorithm.is_empty() && (algorithm.read(NULL)? != [] || !algorithm.is_empty()) {
++			return None;
++		}
++		let key = spki.read(BIT_STRING)?;
++		if !spki.is_empty() {
++			return None;
++		}
++		let (&0, key) = key.split_first()? else {
++			return None;
++		};
++		let mut key = Reader(Reader(key).read(SEQUENCE)?);
++		let n = positive(key.read(INTEGER)?)?;
++		let e = positive(key.read(INTEGER)?)?;
++		if !key.is_empty() {
++			return None;
++		}
++		Some((n, e))
++	}
++}
++
++/// A positive INTEGER's magnitude, its one leading zero byte dropped.
++fn positive(int: &[u8]) -> Option<&[u8]> {
++	match int {
++		[] => None,
++		[0, rest @ ..] if rest.first().is_some_and(|b| b & 0x80 != 0) => Some(rest),
++		[0, ..] => None,
++		[first, ..] if first & 0x80 != 0 => None,
++		_ => Some(int),
++	}
++}
+diff --git a/client/src/utils/legacy_tls/mod.rs b/client/src/utils/legacy_tls/mod.rs
+new file mode 100644
+index 0000000..81452b9
+--- /dev/null
++++ b/client/src/utils/legacy_tls/mod.rs
+@@ -0,0 +1,291 @@
++//! The TLS 1.2 cipher suites Chrome offers that rustls has no implementation
++//! of, so that a server which picks one from Chrome's ClientHello (which
++//! `chrome_hello` sends) completes the handshake instead of failing it with
++//! `SelectedUnofferedCipherSuite`:
++//!
++//! - TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA, TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
++//! - TLS_RSA_WITH_AES_128_GCM_SHA256, TLS_RSA_WITH_AES_256_GCM_SHA384
++//! - TLS_RSA_WITH_AES_128_CBC_SHA, TLS_RSA_WITH_AES_256_CBC_SHA
++//!
++//! These are exactly the ones in Chrome 157's list after its AEAD ECDHE
++//! suites; nothing Chrome does not offer (3DES, other CBC or DHE suites,
++//! SHA-256 MACs, encrypt-then-MAC) is added.
++//!
++//! RSA key exchange goes through rustls's `RsaKeyTransport` (the pre-master
++//! secret encrypted to the verified certificate's key, RSAES-PKCS1-v1_5). The
++//! CBC records are MAC-then-encrypt with HMAC-SHA1 and an explicit IV per
++//! record (RFC 5246 section 6.2.3.2), opened in constant time the way
++//! BoringSSL does it (crypto/cipher/tls_cbc.cc): the padding check, the MAC
++//! over a secret length and the MAC's extraction never branch or index on
++//! decrypted data, so a record's timing says nothing about its padding
++//! (Lucky Thirteen, POODLE).
++//!
++//! It also enforces the end entity's keyUsage as BoringSSL does: a key that
++//! signs the handshake (ECDHE, TLS 1.3) must allow digitalSignature, and one
++//! the pre-master secret is encrypted to must allow keyEncipherment. Chrome
++//! refuses either mismatch (ERR_SSL_KEY_USAGE_INCOMPATIBLE); webpki checks
++//! no end entity's keyUsage.
++
++mod der;
++mod record;
++
++use std::sync::{Arc, LazyLock};
++
++use futures_rustls::rustls::{
++	client::{
++		danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
++		RsaKeyTransport,
++	},
++	crypto::{
++		cipher::{
++			make_tls12_aad, AeadKey, InboundOpaqueMessage, InboundPlainMessage, KeyBlockShape,
++			MessageDecrypter, MessageEncrypter, OutboundOpaqueMessage, OutboundPlainMessage,
++			PrefixedPayload, Tls12AeadAlgorithm, UnsupportedOperationError,
++		},
++		ring::cipher_suite,
++		CipherSuiteCommon, KeyExchangeAlgorithm,
++	},
++	pki_types::{CertificateDer, ServerName, UnixTime},
++	CertificateError, CipherSuite, ConnectionTrafficSecrets, DigitallySignedStruct,
++	DistinguishedName, Error, SignatureScheme, SupportedCipherSuite, Tls12CipherSuite,
++};
++
++/// The suites, in Chrome's order. They go after the provider's own: Chrome
++/// lists them after its AEAD ECDHE suites, and `chrome_hello` sends Chrome's
++/// list whatever the provider's order is.
++pub static LEGACY_SUITES: LazyLock<[SupportedCipherSuite; 6]> = LazyLock::new(|| {
++	use CipherSuite as S;
++	use KeyExchangeAlgorithm::{ECDHE, RSA};
++	// the PRF, transcript hash, limit and signature schemes of the
++	// ECDHE_RSA GCM suite with the same hash: TLS 1.2's PRF is SHA-256 for
++	// every suite not named _SHA384
++	let sha256 = cipher_suite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256;
++	let sha384 = cipher_suite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384;
++	[
++		suite(S::TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA, sha256, ECDHE, &AES_128_CBC_SHA),
++		suite(S::TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA, sha256, ECDHE, &AES_256_CBC_SHA),
++		suite(S::TLS_RSA_WITH_AES_128_GCM_SHA256, sha256, RSA, tls12(sha256).aead_alg),
++		suite(S::TLS_RSA_WITH_AES_256_GCM_SHA384, sha384, RSA, tls12(sha384).aead_alg),
++		suite(S::TLS_RSA_WITH_AES_128_CBC_SHA, sha256, RSA, &AES_128_CBC_SHA),
++		suite(S::TLS_RSA_WITH_AES_256_CBC_SHA, sha256, RSA, &AES_256_CBC_SHA),
++	]
++});
++
++fn tls12(suite: SupportedCipherSuite) -> &'static Tls12CipherSuite {
++	match suite {
++		SupportedCipherSuite::Tls12(suite) => suite,
++		SupportedCipherSuite::Tls13(_) => unreachable!("a TLS 1.2 suite"),
++	}
++}
++
++fn suite(
++	id: CipherSuite,
++	like: SupportedCipherSuite,
++	kx: KeyExchangeAlgorithm,
++	aead_alg: &'static dyn Tls12AeadAlgorithm,
++) -> SupportedCipherSuite {
++	let like = tls12(like);
++	// made once per realm (LEGACY_SUITES is lazy), so leaking is a static
++	SupportedCipherSuite::Tls12(Box::leak(Box::new(Tls12CipherSuite {
++		common: CipherSuiteCommon {
++			suite: id,
++			hash_provider: like.common.hash_provider,
++			confidentiality_limit: like.common.confidentiality_limit,
++		},
++		prf_provider: like.prf_provider,
++		kx,
++		sign: like.sign,
++		aead_alg,
++	})))
++}
++
++// --- CBC records ----------------------------------------------------------
++
++static AES_128_CBC_SHA: AesCbcSha1 = AesCbcSha1 { key_len: 16 };
++static AES_256_CBC_SHA: AesCbcSha1 = AesCbcSha1 { key_len: 32 };
++
++/// AES-CBC with HMAC-SHA1, TLS 1.2's MAC-then-encrypt.
++struct AesCbcSha1 {
++	key_len: usize,
++}
++
++impl Tls12AeadAlgorithm for AesCbcSha1 {
++	fn encrypter(&self, mac_key: AeadKey, key: &[u8], _extra: &[u8]) -> Box<dyn MessageEncrypter> {
++		Box::new(CbcEncrypter(record::Sealer::new(mac_key.as_ref(), key)))
++	}
++
++	fn decrypter(&self, mac_key: AeadKey, key: &[u8]) -> Box<dyn MessageDecrypter> {
++		Box::new(CbcDecrypter(record::Opener::new(mac_key.as_ref(), key)))
++	}
++
++	/// RFC 5246 section 6.3: the key block is client_write_MAC_key,
++	/// server_write_MAC_key, client_write_key, server_write_key, and no IVs
++	/// for a CBC suite (each record carries its own). rustls cuts it as two
++	/// `enc_key_len` keys and two `fixed_iv_len` IVs, so with these lengths
++	/// the MAC key arrives as `key` and the cipher key as `iv`.
++	fn key_block_shape(&self) -> KeyBlockShape {
++		KeyBlockShape {
++			enc_key_len: record::MAC_LEN,
++			fixed_iv_len: self.key_len,
++			explicit_nonce_len: 0,
++		}
++	}
++
++	fn extract_keys(
++		&self,
++		_key: AeadKey,
++		_iv: &[u8],
++		_explicit: &[u8],
++	) -> Result<ConnectionTrafficSecrets, UnsupportedOperationError> {
++		Err(UnsupportedOperationError)
++	}
++}
++
++struct CbcEncrypter(record::Sealer);
++
++impl MessageEncrypter for CbcEncrypter {
++	fn encrypt(&mut self, msg: OutboundPlainMessage<'_>, seq: u64) -> Result<OutboundOpaqueMessage, Error> {
++		let len = msg.payload.len();
++		let mut payload = PrefixedPayload::with_capacity(record::sealed_len(len));
++		let mut iv = [0u8; record::BLOCK];
++		ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut iv)
++			.map_err(|_| Error::EncryptError)?;
++		payload.extend_from_slice(&iv);
++		payload.extend_from_chunks(&msg.payload);
++		let header = make_tls12_aad(seq, msg.typ, msg.version, len);
++		let trailer = self.0.trailer(&header, &payload.as_ref()[record::BLOCK..]);
++		payload.extend_from_slice(&trailer);
++		self.0.encrypt(payload.as_mut());
++		Ok(OutboundOpaqueMessage::new(msg.typ, msg.version, payload))
++	}
++
++	fn encrypted_payload_len(&self, payload_len: usize) -> usize {
++		record::sealed_len(payload_len)
++	}
++}
++
++struct CbcDecrypter(record::Opener);
++
++/// RFC 5246 section 6.2.1: 2^14 bytes of plaintext at most
++const MAX_FRAGMENT_LEN: usize = 16384;
++
++impl MessageDecrypter for CbcDecrypter {
++	fn decrypt<'a>(&mut self, mut msg: InboundOpaqueMessage<'a>, seq: u64) -> Result<InboundPlainMessage<'a>, Error> {
++		// the 11 bytes before the length; the length is the plaintext's,
++		// which only opening finds
++		let header = make_tls12_aad(seq, msg.typ, msg.version, 0);
++		let len = self
++			.0
++			.open(&header[..11], &mut msg.payload)
++			.ok_or(Error::DecryptError)?;
++		if len > MAX_FRAGMENT_LEN {
++			return Err(Error::PeerSentOversizedRecord);
++		}
++		Ok(msg.into_plain_message_range(record::BLOCK..record::BLOCK + len))
++	}
++}
++
++// --- RSA key transport ------------------------------------------------------
++
++/// RSAES-PKCS1-v1_5 to the end entity's key (RustCrypto `rsa`), after the
++/// keyUsage check BoringSSL makes for RSA key exchange.
++#[derive(Debug)]
++pub struct Pkcs1KeyTransport;
++
++/// Chrome takes an RSA key of 1024 bits or more, exactly counted, for key
++/// transport: its certificate verifier refuses a smaller one
++/// (ERR_CERT_WEAK_KEY) and BoringSSL sets no floor of its own (measured with
++/// Chrome 157 against a local trust anchor). Its 2048-bit floor for
++/// publicly trusted roots needs no check here: no such leaf below 2048 bits
++/// is still valid. The ceiling is webpki's for an RSA signature (8192 bits);
++/// Chrome's was not measured.
++const RSA_MIN_BITS: usize = 1024;
++const RSA_MAX_BITS: usize = 8192;
++
++impl RsaKeyTransport for Pkcs1KeyTransport {
++	fn encrypt_pre_master_secret(
++		&self,
++		end_entity: &CertificateDer<'_>,
++		pre_master_secret: &[u8],
++	) -> Result<Vec<u8>, Error> {
++		use rsa::{BigUint, Pkcs1v15Encrypt, RsaPublicKey};
++
++		let bad = || Error::InvalidCertificate(CertificateError::BadEncoding);
++		let cert = der::Certificate::parse(end_entity.as_ref()).ok_or_else(bad)?;
++		if !cert.key_usage_allows(der::KEY_USAGE_KEY_ENCIPHERMENT)? {
++			return Err(Error::InvalidCertificate(CertificateError::InvalidPurpose));
++		}
++		// an end entity whose key is no RSA key cannot carry an RSA suite
++		let (n, e) = cert.rsa_public_key().ok_or_else(bad)?;
++		let n = BigUint::from_bytes_be(n);
++		let bits = n.bits();
++		if !(RSA_MIN_BITS..=RSA_MAX_BITS).contains(&bits) {
++			return Err(Error::InvalidCertificate(CertificateError::BadEncoding));
++		}
++		let key = RsaPublicKey::new_with_max_size(n, BigUint::from_bytes_be(e), RSA_MAX_BITS)
++			.map_err(|_| bad())?;
++		key.encrypt(&mut rand_core::OsRng, Pkcs1v15Encrypt, pre_master_secret)
++			.map_err(|_| Error::EncryptError)
++	}
++}
++
++/// The verifier `inner`, which also refuses a handshake signature by a key
++/// whose keyUsage leaves out digitalSignature (BoringSSL's
++/// `ssl_cert_check_key_usage` for an ECDHE suite and for TLS 1.3).
++#[derive(Debug)]
++pub struct KeyUsageVerifier(pub Arc<dyn ServerCertVerifier>);
++
++fn may_sign(cert: &CertificateDer<'_>) -> Result<(), Error> {
++	let parsed = der::Certificate::parse(cert.as_ref())
++		.ok_or(Error::InvalidCertificate(CertificateError::BadEncoding))?;
++	match parsed.key_usage_allows(der::KEY_USAGE_DIGITAL_SIGNATURE)? {
++		true => Ok(()),
++		false => Err(Error::InvalidCertificate(CertificateError::InvalidPurpose)),
++	}
++}
++
++impl ServerCertVerifier for KeyUsageVerifier {
++	fn verify_server_cert(
++		&self,
++		end_entity: &CertificateDer<'_>,
++		intermediates: &[CertificateDer<'_>],
++		server_name: &ServerName<'_>,
++		ocsp_response: &[u8],
++		now: UnixTime,
++	) -> Result<ServerCertVerified, Error> {
++		self.0
++			.verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
++	}
++
++	fn verify_tls12_signature(
++		&self,
++		message: &[u8],
++		cert: &CertificateDer<'_>,
++		dss: &DigitallySignedStruct,
++	) -> Result<HandshakeSignatureValid, Error> {
++		may_sign(cert)?;
++		self.0.verify_tls12_signature(message, cert, dss)
++	}
++
++	fn verify_tls13_signature(
++		&self,
++		message: &[u8],
++		cert: &CertificateDer<'_>,
++		dss: &DigitallySignedStruct,
++	) -> Result<HandshakeSignatureValid, Error> {
++		may_sign(cert)?;
++		self.0.verify_tls13_signature(message, cert, dss)
++	}
++
++	fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
++		self.0.supported_verify_schemes()
++	}
++
++	fn requires_raw_public_keys(&self) -> bool {
++		self.0.requires_raw_public_keys()
++	}
++
++	fn root_hint_subjects(&self) -> Option<&[DistinguishedName]> {
++		self.0.root_hint_subjects()
++	}
++}
+diff --git a/client/src/utils/legacy_tls/record.rs b/client/src/utils/legacy_tls/record.rs
+new file mode 100644
+index 0000000..b206348
+--- /dev/null
++++ b/client/src/utils/legacy_tls/record.rs
+@@ -0,0 +1,405 @@
++//! The CBC record layer's arithmetic, free of rustls types so that it can be
++//! tested on its own.
++
++use aes::cipher::{generic_array::GenericArray, BlockDecrypt, BlockEncrypt, KeyInit};
++use sha1::digest::consts::U64;
++use zeroize::Zeroize;
++
++pub const BLOCK: usize = 16;
++pub const MAC_LEN: usize = 20;
++const SHA1_BLOCK: usize = 64;
++
++/// The fragment's length for `len` bytes of plaintext: the IV, then
++/// the plaintext, its MAC and 1 to 16 bytes of padding, whole blocks.
++pub fn sealed_len(len: usize) -> usize {
++	BLOCK + ((len + MAC_LEN) / BLOCK + 1) * BLOCK
++}
++
++enum Aes {
++	A128(aes::Aes128),
++	A256(aes::Aes256),
++}
++
++impl Aes {
++	fn new(key: &[u8]) -> Self {
++		match key.len() {
++			16 => Self::A128(aes::Aes128::new(GenericArray::from_slice(key))),
++			32 => Self::A256(aes::Aes256::new(GenericArray::from_slice(key))),
++			n => unreachable!("an AES key of {n} bytes"),
++		}
++	}
++
++	fn encrypt(&self, block: &mut aes::Block) {
++		match self {
++			Self::A128(aes) => aes.encrypt_block(block),
++			Self::A256(aes) => aes.encrypt_block(block),
++		}
++	}
++
++	fn decrypt(&self, blocks: &mut [aes::Block]) {
++		match self {
++			Self::A128(aes) => aes.decrypt_blocks(blocks),
++			Self::A256(aes) => aes.decrypt_blocks(blocks),
++		}
++	}
++}
++
++/// HMAC-SHA1's two padded keys, each one compressed block in.
++struct MacKey {
++	inner: [u32; 5],
++	outer: [u32; 5],
++}
++
++impl MacKey {
++	fn new(key: &[u8]) -> Self {
++		assert!(key.len() <= SHA1_BLOCK);
++		let mut pad = [0u8; SHA1_BLOCK];
++		pad[..key.len()].copy_from_slice(key);
++		let start = |xor: u8| {
++			let mut block = pad;
++			block.iter_mut().for_each(|b| *b ^= xor);
++			let mut sha = Sha1::new();
++			sha.update(&block);
++			block.fill(0);
++			sha.state
++		};
++		let mac = Self { inner: start(0x36), outer: start(0x5c) };
++		pad.fill(0);
++		mac
++	}
++
++	fn inner(&self) -> Sha1 {
++		Sha1 { state: self.inner, buf: [0; SHA1_BLOCK], num: 0, len: SHA1_BLOCK as u64 }
++	}
++
++	fn finish(&self, inner: [u8; MAC_LEN]) -> [u8; MAC_LEN] {
++		let mut sha = Sha1 { state: self.outer, buf: [0; SHA1_BLOCK], num: 0, len: SHA1_BLOCK as u64 };
++		sha.update(&inner);
++		sha.finish()
++	}
++}
++
++/// The padded keys are as good as the MAC key itself.
++impl Drop for MacKey {
++	fn drop(&mut self) {
++		self.inner.zeroize();
++		self.outer.zeroize();
++	}
++}
++
++/// SHA-1 over the sha1 crate's compression function, with the state
++/// visible, as BoringSSL's SHA_CTX is to tls_cbc.cc.
++struct Sha1 {
++	state: [u32; 5],
++	buf: [u8; SHA1_BLOCK],
++	num: usize,
++	/// bytes hashed so far
++	len: u64,
++}
++
++/// A context that starts from a [`MacKey`] holds its key's state.
++impl Drop for Sha1 {
++	fn drop(&mut self) {
++		self.state.zeroize();
++		self.buf.zeroize();
++	}
++}
++
++fn compress(state: &mut [u32; 5], block: &[u8; SHA1_BLOCK]) {
++	sha1::compress(state, &[*GenericArray::<u8, U64>::from_slice(block)]);
++}
++
++impl Sha1 {
++	const INIT: [u32; 5] = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0];
++
++	fn new() -> Self {
++		Self { state: Self::INIT, buf: [0; SHA1_BLOCK], num: 0, len: 0 }
++	}
++
++	fn update(&mut self, mut data: &[u8]) {
++		self.len += data.len() as u64;
++		if self.num > 0 {
++			let take = (SHA1_BLOCK - self.num).min(data.len());
++			self.buf[self.num..self.num + take].copy_from_slice(&data[..take]);
++			self.num += take;
++			data = &data[take..];
++			if self.num < SHA1_BLOCK {
++				return;
++			}
++			let block = self.buf;
++			compress(&mut self.state, &block);
++			self.num = 0;
++		}
++		let mut blocks = data.chunks_exact(SHA1_BLOCK);
++		for block in &mut blocks {
++			compress(&mut self.state, block.try_into().unwrap());
++		}
++		let rest = blocks.remainder();
++		self.buf[..rest.len()].copy_from_slice(rest);
++		self.num = rest.len();
++	}
++
++	fn finish(mut self) -> [u8; MAC_LEN] {
++		let bits = self.len * 8;
++		self.update(&[0x80]);
++		while self.num != SHA1_BLOCK - 8 {
++			self.update(&[0]);
++		}
++		self.update(&bits.to_be_bytes());
++		debug_assert_eq!(self.num, 0);
++		let mut out = [0u8; MAC_LEN];
++		for (out, word) in out.chunks_exact_mut(4).zip(self.state) {
++			out.copy_from_slice(&word.to_be_bytes());
++		}
++		out
++	}
++
++	/// BoringSSL's `EVP_sha1_final_with_secret_suffix`: finishes the hash of
++	/// what was hashed so far plus `data[..len]`, where `len` is secret and
++	/// at most `data.len()`, computing every block `data.len()` could need
++	/// and keeping the right one by mask.
++	fn finish_secret_suffix(self, data: &[u8], len: usize) -> [u8; MAC_LEN] {
++		let max_len = data.len();
++		let num = self.num;
++		let num_blocks = (num + len + 1 + 8 + SHA1_BLOCK - 1) / SHA1_BLOCK;
++		let last_block = num_blocks - 1;
++		let max_blocks = (num + max_len + 1 + 8 + SHA1_BLOCK - 1) / SHA1_BLOCK;
++		let total_bits = (self.len + len as u64) * 8;
++		let length_bytes = total_bits.to_be_bytes();
++
++		let mut state = self.state;
++		let mut result = [0u32; 5];
++		let mut input_idx = 0usize;
++		for i in 0..max_blocks {
++			let mut block = [0u8; SHA1_BLOCK];
++			let mut block_start = 0;
++			if i == 0 {
++				block[..num].copy_from_slice(&self.buf[..num]);
++				block_start = num;
++			}
++			if input_idx < max_len {
++				let to_copy = (SHA1_BLOCK - block_start).min(max_len - input_idx);
++				block[block_start..block_start + to_copy]
++					.copy_from_slice(&data[input_idx..input_idx + to_copy]);
++			}
++			// zero what is past `len` and put the 0x80 at `len`
++			for (j, byte) in block.iter_mut().enumerate().skip(block_start) {
++				let idx = input_idx + j - block_start;
++				let in_bounds = ct::lt(idx, len) as u8;
++				let is_pad = ct::eq(idx, len) as u8;
++				*byte &= in_bounds;
++				*byte |= 0x80 & is_pad;
++			}
++			input_idx += SHA1_BLOCK - block_start;
++			// the length goes in the last block
++			let is_last = ct::eq(i, last_block);
++			for j in 0..8 {
++				block[SHA1_BLOCK - 8 + j] |= (is_last as u8) & length_bytes[j];
++			}
++			compress(&mut state, &block);
++			for (out, word) in result.iter_mut().zip(state) {
++				*out |= (is_last as u32) & word;
++			}
++		}
++		state.zeroize();
++		let mut out = [0u8; MAC_LEN];
++		for (out, word) in out.chunks_exact_mut(4).zip(result) {
++			out.copy_from_slice(&word.to_be_bytes());
++		}
++		result.zeroize();
++		out
++	}
++}
++
++/// Constant-time helpers: each returns all ones for true, zero for false,
++/// with no branch on its arguments.
++mod ct {
++	use core::hint::black_box;
++
++	/// `usize::MAX` if `a < b`
++	pub fn lt(a: usize, b: usize) -> usize {
++		let (a, b) = (black_box(a), black_box(b));
++		// the borrow of a - b, from the top bit of (a ^ ((a ^ b) | ((a - b) ^ b)))
++		let x = a ^ ((a ^ b) | (a.wrapping_sub(b) ^ b));
++		// the barrier on the result too: without it LLVM reads the mask back
++		// as an i1 and may branch on it (tls_cbc.cc's value_barrier_w)
++		black_box(0usize.wrapping_sub(x >> (usize::BITS - 1)))
++	}
++
++	pub fn ge(a: usize, b: usize) -> usize {
++		!lt(a, b)
++	}
++
++	pub fn is_zero(a: usize) -> usize {
++		let a = black_box(a);
++		black_box(0usize.wrapping_sub((!a & a.wrapping_sub(1)) >> (usize::BITS - 1)))
++	}
++
++	pub fn eq(a: usize, b: usize) -> usize {
++		is_zero(a ^ b)
++	}
++
++	pub fn select_u8(mask: u8, a: u8, b: u8) -> u8 {
++		// constant_time_select_8 puts value_barrier on the mask
++		let mask = black_box(mask);
++		(mask & a) | (!mask & b)
++	}
++}
++
++pub struct Sealer {
++	mac: MacKey,
++	aes: Aes,
++}
++
++impl Sealer {
++	pub fn new(mac_key: &[u8], key: &[u8]) -> Self {
++		Self { mac: MacKey::new(mac_key), aes: Aes::new(key) }
++	}
++
++	/// The MAC of `header` (the 13 bytes of seq, type, version and length)
++	/// and `data`, then the padding.
++	pub fn trailer(&self, header: &[u8; 13], data: &[u8]) -> Vec<u8> {
++		let mut inner = self.mac.inner();
++		inner.update(header);
++		inner.update(data);
++		let mut out = self.mac.finish(inner.finish()).to_vec();
++		let pad = BLOCK - 1 - (data.len() + MAC_LEN) % BLOCK;
++		out.extend(std::iter::repeat_n(pad as u8, pad + 1));
++		out
++	}
++
++	/// Encrypts `fragment` (IV, then whole blocks) in place.
++	pub fn encrypt(&self, fragment: &mut [u8]) {
++		debug_assert_eq!(fragment.len() % BLOCK, 0);
++		let (iv, blocks) = fragment.split_at_mut(BLOCK);
++		let mut chain = aes::Block::clone_from_slice(iv);
++		for block in blocks.chunks_exact_mut(BLOCK) {
++			chain.iter_mut().zip(block.iter()).for_each(|(c, p)| *c ^= p);
++			self.aes.encrypt(&mut chain);
++			block.copy_from_slice(&chain);
++		}
++	}
++}
++
++pub struct Opener {
++	mac: MacKey,
++	aes: Aes,
++}
++
++impl Opener {
++	pub fn new(mac_key: &[u8], key: &[u8]) -> Self {
++		Self { mac: MacKey::new(mac_key), aes: Aes::new(key) }
++	}
++
++	/// Decrypts and checks `fragment` (IV, then the ciphertext) in place
++	/// and returns the plaintext's length; the plaintext starts at
++	/// `fragment[BLOCK]`. `header` is the record's 8 byte sequence number,
++	/// type and version. `None` for a record that does not open, with
++	/// nothing in the time taken that depends on why.
++	pub fn open(&self, header: &[u8], fragment: &mut [u8]) -> Option<usize> {
++		// public lengths: these may branch
++		if fragment.len() < BLOCK || (fragment.len() - BLOCK) % BLOCK != 0 {
++			return None;
++		}
++		let in_len = fragment.len() - BLOCK;
++		let overhead = MAC_LEN + 1;
++		if in_len < overhead {
++			return None;
++		}
++
++		// CBC: P[i] = D(C[i]) ^ C[i - 1], with C[-1] the IV
++		let mut blocks: Vec<aes::Block> = fragment[BLOCK..]
++			.chunks_exact(BLOCK)
++			.map(aes::Block::clone_from_slice)
++			.collect();
++		self.aes.decrypt(&mut blocks);
++		for (i, plain) in blocks.iter().enumerate().rev() {
++			let (before, at) = fragment.split_at_mut(BLOCK * (i + 1));
++			let prev = &before[BLOCK * i..];
++			for ((out, d), c) in at[..BLOCK].iter_mut().zip(plain.iter()).zip(prev) {
++				*out = d ^ c;
++			}
++		}
++		blocks.iter_mut().for_each(|b| b.fill(0));
++		let plain = &fragment[BLOCK..];
++
++		// The plaintext ends with MAC_LEN bytes of MAC and at most 256 of
++		// padding: the trailer is what can hold the end of the data
++		let trailer_len = in_len.min(MAC_LEN + 256);
++		let (prefix, trailer) = plain.split_at(in_len - trailer_len);
++
++		// EVP_tls_cbc_remove_padding, on the trailer
++		let padding_length = trailer[trailer_len - 1] as usize;
++		let mut good = ct::ge(trailer_len, overhead + padding_length);
++		for i in 0..trailer_len.min(256) {
++			let mask = ct::ge(padding_length, i) as u8;
++			let b = trailer[trailer_len - 1 - i];
++			good &= !((mask & (padding_length as u8 ^ b)) as usize);
++		}
++		let padding_ok = ct::eq(0xff, good & 0xff);
++		let padding = padding_ok & (padding_length + 1);
++		let trailer_minus_padding = trailer_len - padding;
++
++		let data_in_trailer = trailer_minus_padding - MAC_LEN;
++		let data_len = prefix.len() + data_in_trailer;
++
++		// the MAC over a data length that is secret
++		let mut inner = self.mac.inner();
++		inner.update(header);
++		inner.update(&(data_len as u16).to_be_bytes());
++		inner.update(prefix);
++		let mac = self
++			.mac
++			.finish(inner.finish_secret_suffix(&trailer[..trailer_len - MAC_LEN], data_in_trailer));
++
++		// EVP_tls_cbc_copy_mac: the record's MAC, wherever it sits
++		let record_mac = copy_mac(trailer, trailer_minus_padding);
++
++		let mut diff = 0u8;
++		for (a, b) in mac.iter().zip(record_mac.iter()) {
++			diff |= a ^ b;
++		}
++		let good = ct::is_zero(diff as usize) & padding_ok;
++		// end of the timing-sensitive part
++		if core::hint::black_box(good) != usize::MAX {
++			return None;
++		}
++		Some(data_len)
++	}
++}
++
++/// BoringSSL's `EVP_tls_cbc_copy_mac`: the MAC_LEN bytes of `trailer`
++/// before `mac_end` (secret), read without an index that depends on it.
++fn copy_mac(trailer: &[u8], mac_end: usize) -> [u8; MAC_LEN] {
++	let orig_len = trailer.len();
++	let mac_start = mac_end - MAC_LEN;
++	let scan_start = orig_len.saturating_sub(MAC_LEN + 255 + 1);
++	let mut rotated = [0u8; MAC_LEN];
++	let mut rotate_offset = 0usize;
++	let mut mac_started = 0u8;
++	let mut j = 0usize;
++	for (i, &byte) in trailer.iter().enumerate().skip(scan_start) {
++		if j >= MAC_LEN {
++			j -= MAC_LEN;
++		}
++		let is_mac_start = ct::eq(i, mac_start);
++		mac_started |= is_mac_start as u8;
++		let mac_ended = ct::ge(i, mac_end) as u8;
++		rotated[j] |= byte & mac_started & !mac_ended;
++		rotate_offset |= j & is_mac_start;
++		j += 1;
++	}
++	// rotate left by rotate_offset, one step per bit of it
++	let mut offset = 1;
++	while offset < MAC_LEN {
++		let skip = ((rotate_offset & 1) as u8).wrapping_sub(1);
++		let mut tmp = [0u8; MAC_LEN];
++		for (i, out) in tmp.iter_mut().enumerate() {
++			*out = ct::select_u8(skip, rotated[i], rotated[(i + offset) % MAC_LEN]);
++		}
++		rotated = tmp;
++		offset <<= 1;
++		rotate_offset >>= 1;
++	}
++	rotated
++}
+diff --git a/client/src/utils/mod.rs b/client/src/utils/mod.rs
+index eb0421e..3646c4a 100644
+--- a/client/src/utils/mod.rs
++++ b/client/src/utils/mod.rs
+@@ -1,6 +1,8 @@
+ mod js;
+ mod rustls;
+ #[cfg(feature = "full")]
++pub mod legacy_tls;
++#[cfg(feature = "full")]
+ pub mod mlkem;
+ pub use js::*;
+ use js_sys::Uint8Array;
+-- 
+2.54.0
+

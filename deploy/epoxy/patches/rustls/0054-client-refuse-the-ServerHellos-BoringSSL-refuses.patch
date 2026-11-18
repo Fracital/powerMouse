@@ -1,0 +1,167 @@
+From c8785b527eb8d419244fa4f9f23230018de64628 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 17 Nov 2026 21:00:00 -0500
+Subject: [PATCH] client: refuse the ServerHellos BoringSSL refuses
+
+Chrome's TLS stack refuses some ServerHellos that rustls accepted.
+
+- A suite the hello did not offer. rustls checked the server's choice
+  against the provider's suites. With `chrome_hello` the hello sends
+  Chrome's list instead, so a suite the provider has but Chrome's list
+  lacks would have been taken. The choice is now checked against the
+  cipher_suites the hello sent, as BoringSSL checks it.
+- A non-empty renegotiation_info in a TLS 1.2 ServerHello. An initial
+  handshake has no previous Finished messages, so renegotiated_connection
+  must be empty (RFC 5746 section 3.4). BoringSSL aborts with
+  RENEGOTIATION_MISMATCH. The alert is handshake_failure, and the error is
+  the new PeerMisbehaved::RenegotiationInfoNotEmpty.
+- The TLS 1.1 downgrade sentinel (DOWNGRD\x00) as the end of a TLS 1.2
+  server random, when the client offered TLS 1.3. RFC 8446 section 4.1.3
+  says a TLS 1.3 client must refuse it as it refuses DOWNGRD\x01. With
+  `chrome_hello`, JDK 11's mistaken sentinel (ed bf b4 a8 c2 47 10 ff) is
+  refused too, as BoringSSL refuses it.
+---
+ src/client/common.rs |  5 ++++-
+ src/client/hs.rs     | 10 ++++++++++
+ src/client/tls12.rs  | 23 ++++++++++++++++++++++-
+ src/error.rs         |  1 +
+ src/tls12/mod.rs     | 10 ++++++++++
+ 5 files changed, 47 insertions(+), 2 deletions(-)
+
+diff --git a/src/client/common.rs b/src/client/common.rs
+index 9afa0c3..a02b05e 100644
+--- a/src/client/common.rs
++++ b/src/client/common.rs
+@@ -6,7 +6,7 @@ use crate::log::{debug, trace};
+ use crate::msgs::enums::ExtensionType;
+ use crate::msgs::handshake::{CertificateChain, DistinguishedName, ProtocolName, ServerExtensions};
+ use crate::sync::Arc;
+-use crate::{SignatureScheme, compress, sign};
++use crate::{CipherSuite, SignatureScheme, compress, sign};
+ 
+ #[derive(Debug)]
+ pub(super) struct ServerCertDetails<'a> {
+@@ -39,6 +39,8 @@ pub(super) struct ClientHelloDetails {
+     pub(super) sent_extensions: Vec<ExtensionType>,
+     pub(super) extension_order_seed: u16,
+     pub(super) offered_cert_compression: bool,
++    /// the hello's cipher_suites, as sent
++    pub(super) offered_cipher_suites: Vec<CipherSuite>,
+ }
+ 
+ impl ClientHelloDetails {
+@@ -48,6 +50,7 @@ impl ClientHelloDetails {
+             sent_extensions: Vec::new(),
+             extension_order_seed,
+             offered_cert_compression: false,
++            offered_cipher_suites: Vec::new(),
+         }
+     }
+ 
+diff --git a/src/client/hs.rs b/src/client/hs.rs
+index 727a386..d6cb405 100644
+--- a/src/client/hs.rs
++++ b/src/client/hs.rs
+@@ -466,6 +466,7 @@ fn emit_client_hello_for_retry(
+ 
+     // Note what extensions we sent.
+     input.hello.sent_extensions = chp_payload.collect_used();
++    input.hello.offered_cipher_suites = chp_payload.cipher_suites.clone();
+     if let Some(chrome) = &input.chrome {
+         input
+             .hello
+@@ -816,8 +817,17 @@ impl State<ClientConnectionData> for ExpectServerHello {
+             }
+         }
+ 
++        // A suite the provider has but the hello did not offer is refused
++        // as BoringSSL refuses it: with `chrome_hello` the hello's list is
++        // Chrome's, not the provider's.
+         let suite = config
+             .find_cipher_suite(server_hello.cipher_suite)
++            .filter(|_| {
++                self.input
++                    .hello
++                    .offered_cipher_suites
++                    .contains(&server_hello.cipher_suite)
++            })
+             .ok_or_else(|| {
+                 cx.common.send_fatal_alert(
+                     AlertDescription::HandshakeFailure,
+diff --git a/src/client/tls12.rs b/src/client/tls12.rs
+index 6656ccc..429833a 100644
+--- a/src/client/tls12.rs
++++ b/src/client/tls12.rs
+@@ -64,7 +64,14 @@ mod server_hello {
+             // Look for TLS1.3 downgrade signal in server random
+             // both the server random and TLS12_DOWNGRADE_SENTINEL are
+             // public values and don't require constant time comparison
+-            let has_downgrade_marker = self.randoms.server[24..] == tls12::DOWNGRADE_SENTINEL;
++            //
++            // A TLS 1.3 client must also refuse the TLS 1.1 one in a TLS 1.2
++            // hello (RFC 8446 section 4.1.3), and with `chrome_hello` also
++            // JDK 11's, as BoringSSL does.
++            let suffix = &self.randoms.server[24..];
++            let has_downgrade_marker = suffix == tls12::DOWNGRADE_SENTINEL
++                || suffix == tls12::DOWNGRADE_SENTINEL_TLS11
++                || (self.input.chrome.is_some() && suffix == tls12::DOWNGRADE_SENTINEL_JDK11);
+             if tls13_supported && has_downgrade_marker {
+                 return Err({
+                     cx.common.send_fatal_alert(
+@@ -74,6 +81,20 @@ mod server_hello {
+                 });
+             }
+ 
++            // An initial handshake has no previous Finished messages, so the
++            // server's renegotiated_connection must be empty (RFC 5746
++            // section 3.4).
++            if server_hello
++                .renegotiation_info
++                .as_ref()
++                .is_some_and(|ri| !ri.0.is_empty())
++            {
++                return Err(cx.common.send_fatal_alert(
++                    AlertDescription::HandshakeFailure,
++                    PeerMisbehaved::RenegotiationInfoNotEmpty,
++                ));
++            }
++
+             // If we didn't have an input session to resume, and we sent a session ID,
+             // that implies we sent a TLS 1.3 legacy_session_id for compatibility purposes.
+             // In this instance since we're now continuing a TLS 1.2 handshake the server
+diff --git a/src/error.rs b/src/error.rs
+index 3aaf3bb..d3fae4c 100644
+--- a/src/error.rs
++++ b/src/error.rs
+@@ -278,6 +278,7 @@ pub enum PeerMisbehaved {
+     PskExtensionWithMismatchedIdsAndBinders,
+     RefusedToFollowHelloRetryRequest,
+     RejectedEarlyDataInterleavedWithHandshakeMessage,
++    RenegotiationInfoNotEmpty,
+     ResumptionAttemptedWithVariedEms,
+     ResumptionOfferedWithVariedCipherSuite,
+     ResumptionOfferedWithVariedEms,
+diff --git a/src/tls12/mod.rs b/src/tls12/mod.rs
+index 2351481..003c230 100644
+--- a/src/tls12/mod.rs
++++ b/src/tls12/mod.rs
+@@ -379,6 +379,16 @@ pub(crate) fn decode_kx_params<'a, T: KxDecode<'a>>(
+ 
+ pub(crate) const DOWNGRADE_SENTINEL: [u8; 8] = [0x44, 0x4f, 0x57, 0x4e, 0x47, 0x52, 0x44, 0x01];
+ 
++/// The last 8 bytes of a TLS 1.3 server's random when it negotiates TLS 1.1
++/// or below (RFC 8446 section 4.1.3)
++pub(crate) const DOWNGRADE_SENTINEL_TLS11: [u8; 8] =
++    [0x44, 0x4f, 0x57, 0x4e, 0x47, 0x52, 0x44, 0x00];
++
++/// The value JDK 11 servers sent in place of [`DOWNGRADE_SENTINEL`] when
++/// negotiating TLS 1.2; BoringSSL refuses it as a downgrade too
++pub(crate) const DOWNGRADE_SENTINEL_JDK11: [u8; 8] =
++    [0xed, 0xbf, 0xb4, 0xa8, 0xc2, 0x47, 0x10, 0xff];
++
+ #[cfg(test)]
+ #[macro_rules_attribute::apply(test_for_each_provider)]
+ mod tests {
+-- 
+2.54.0
+
