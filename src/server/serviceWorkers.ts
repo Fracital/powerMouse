@@ -184,6 +184,14 @@ const JS_MIMES = new Set([
 const IDLE_MS = 30_000;
 /** what the timeouts are when the controller sets none (docs/service-workers.md) */
 const DEFAULT_TIMEOUT_MS = 5_000;
+/**
+ * How long Chrome lets a fetch event's respondWith go unsettled before the
+ * request is a network error: 5 minutes (measured on Chrome 157: failed at
+ * 310 s, its timer's granularity on top; the network was not asked). The
+ * page waits for an emulated worker's answer as long, and then fails the
+ * same way.
+ */
+const FETCH_EVENT_MS = 300_000;
 /** the steps a page may have missed are not worth keeping past this many controlled-client records */
 const CONTROLLED_KEPT = 4096;
 
@@ -246,6 +254,8 @@ type Change =
 /** a fetch event in flight, waiting for the emulated worker's answer */
 interface PendingFetch {
 	resolve: (answer: FetchAnswer) => void;
+	/** the instance the event went to */
+	instance: Instance;
 }
 
 /**
@@ -1570,7 +1580,13 @@ export class ServiceWorkers {
 
 	#timeouts(host: WorkerHost) {
 		const base = host.timeout ?? DEFAULT_TIMEOUT_MS;
-		return { start: base * 2, ack: base, response: base * 6 };
+		return {
+			start: base * 2,
+			ack: base,
+			// a respondWith may take as long as Chrome lets a fetch event
+			// run (scaled down with the rest when a test sets the timeout)
+			response: host.timeout ? base * 6 : FETCH_EVENT_MS,
+		};
 	}
 
 	/** the running instance of a version, started in `host` when there is none */
@@ -1668,6 +1684,11 @@ export class ServiceWorkers {
 		instance.dead = true;
 		if (instance.idle) clearTimeout(instance.idle);
 		instance.rpc.abort('The worker stopped');
+		// its events in flight go to the network at once: the instance went
+		// with its controller (or was stuck), which no worker does natively,
+		// and the page is not kept waiting for Chrome's fetch event limit
+		for (const pending of this.#fetches.values())
+			if (pending.instance === instance) pending.resolve({ kind: 'network' });
 		instance.port?.close();
 		instance.host.stop(instance.id);
 		if (this.#instances.get(instance.version) === instance)
@@ -2177,7 +2198,7 @@ export class ServiceWorkers {
 		}
 		let resolve!: (answer: FetchAnswer) => void;
 		const answered = new Promise<FetchAnswer>((done) => (resolve = done));
-		this.#fetches.set(id, { resolve });
+		this.#fetches.set(id, { resolve, instance });
 		try {
 			return await this.#event(instance, async () => {
 				const responded = await withTimeout(
@@ -2191,7 +2212,14 @@ export class ServiceWorkers {
 					throw error;
 				});
 				if (!responded) return null;
-				const answer = await withTimeout(answered, answerWait, 'respondWith');
+				// a respondWith Chrome would have given up on is a network
+				// error, as natively, not the network's answer
+				const answer = await withTimeout(
+					answered,
+					answerWait,
+					'respondWith',
+				).catch(() => null);
+				if (!answer) return Response.error();
 				if (answer.kind === 'network') return null;
 				if (answer.kind === 'preload') return USE_PRELOAD;
 				if (answer.kind === 'error') return Response.error();

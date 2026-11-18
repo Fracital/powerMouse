@@ -80,7 +80,7 @@ fetch('/api') or <img>, or a navigation
                                                dispatch fetch over the port  ---------------> emulated worker: FetchEvent on self
                                                                                                 respondWith(p) / nothing
                                                <------------------------------------------------ "responded" or "fallback" (5 s)
-                                               <------------------------------------------------ the Response (30 s): status,
+                                               <------------------------------------------------ the Response (5 min): status,
                                                                                                 headers, body as a body port
                                                fallback, timeout or dead port --> HTTP cache, transport (network)
                                                response --> header filter, body rewrite
@@ -262,11 +262,21 @@ denied`, `getSubscription()` resolves `null`. `showNotification()`
 
 ## Timeouts
 
-A worker that does not start in 10 s, does not say within 5 s whether
-`respondWith` was called, or whose `respondWith` promise does not settle in
-30 s, is treated as absent for that request: the request goes to the network.
-A dead port (the hosting controller went) is noticed by the same timers. The
-page never waits on a worker longer than that.
+A worker that does not start in 10 s, or does not say within 5 s whether
+`respondWith` was called, is treated as absent for that request: the request
+goes to the network. A worker whose instance stops while a `respondWith` is
+pending (its hosting controller went) sends that request to the network at
+once. A `respondWith` promise may take as long as Chrome lets a fetch event
+run, 5 minutes; past that the request is a network error, as natively
+(measured on Chrome 157: the page's fetch failed at 310 s and the network
+was never asked). `serviceWorkerTimeout` scales all of them down for tests
+(the answer's time is six times it).
+
+STomp's own worker puts no time limit on a routed request: Chrome has none
+on a request's headers, so a server that holds them for minutes is waited
+for. Chrome's fetch event limit applies to STomp's worker as to any, so a
+routed request whose headers take more than 5 minutes is a network error
+where Chrome without a worker in between waits on.
 
 ## Status and tests
 

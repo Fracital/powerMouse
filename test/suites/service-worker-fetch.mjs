@@ -13,9 +13,10 @@
 // showed the worker. Then every service worker is stopped, and the next
 // requests start the worker again. All of it against the same page
 // natively, both demo modes. sw-slow.html then has a worker that never
-// settles a respondWith and one that blocks: the requests go to the
-// network once the worker's time is up (`?sw=1000`: 1 s to say, 6 s to
-// answer), instead of hanging the page.
+// settles a respondWith, which is a network error once the answer's time is
+// up (Chrome's fetch event limit, 5 minutes, scaled down by `?sw=1000` to
+// 6 s), and one that blocks, whose requests go to the network once its time
+// to say is up (1 s), instead of hanging the page.
 import {
 	done,
 	FIXTURE,
@@ -105,9 +106,13 @@ for (const [mode, base] of [
 		const ms = Number(line?.split(' ').pop());
 		return !!line?.includes('target from the network') && ms < within;
 	};
+	// (Chrome fails such a request once its fetch event limit, 5 minutes,
+	// is up, and never asks the network: measured on 157 at 310 s)
+	const neverLine = log.find((entry) => entry.startsWith('never answers '));
 	ok(
-		`${mode}: a respondWith that never settles goes to the network once the answer's time (6 s) is up`,
-		answered('never answers', 15000),
+		`${mode}: a respondWith that never settles is a network error once the answer's time (6 s) is up, as natively at Chrome's limit`,
+		!!neverLine?.includes('TypeError: Failed to fetch') &&
+			Number(neverLine.split(' ').pop()) < 15000,
 		JSON.stringify(log),
 	);
 	ok(

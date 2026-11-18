@@ -122,7 +122,7 @@ export interface Config {
 	slotOrigins?: string[];
 	/** @internal build id of the service worker that serves the page (src/version.ts) */
 	build?: string;
-	/** @internal ms a routed request may take before the service worker answers 504 (tests; default by destination) */
+	/** @internal ms a routed request may take before the service worker answers 504 (tests; none by default, as natively) */
 	fetchTimeout?: number;
 	/** @internal ms a navigation with no referrer waits for its document's hint (tests; default 100) */
 	navigationHintWait?: number;

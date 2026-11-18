@@ -2,8 +2,10 @@
 <title>SW SLOW</title>
 <script>
 	// A page whose worker (sw-slow.js) never answers one request and hangs on
-	// the next: through the proxy each goes to the network once the worker's
-	// time is up, instead of hanging the page. Under /pages/deep/sws/.
+	// the next: through the proxy the first is a network error once the
+	// answer's time is up (as Chrome's fetch event limit), the next goes to
+	// the network once the worker's time to say is up, instead of hanging
+	// the page. Under /pages/deep/sws/.
 	const log = [];
 	window.__sw = { log, done: false };
 	const push = (...parts) =>

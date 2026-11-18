@@ -1514,24 +1514,18 @@ function handleMessage(event: ExtendableMessageEvent) {
 }
 
 /**
- * How long a routed request may take before the worker answers 504 instead.
- * A transport request that never settles (epoxy ignores abort) would
- * otherwise keep its fetch event, and with it this worker, alive for good,
- * and a waiting worker of a newer build could never activate. Documents and
- * media get longer; `config.fetchTimeout` overrides both (tests).
+ * A routed request takes as long as its origin takes, as natively: Chrome
+ * puts no time limit on a request's headers (a server that holds them for
+ * minutes, a long poll, is answered when it answers). What bounds it is
+ * Chrome's own limit on a service worker's fetch event, which applies to
+ * this worker as to any site's: a respondWith not settled in 5 minutes is
+ * a network error (measured on Chrome 157: 310 s, against 330 s answered
+ * with no worker in between), and a worker of a newer build activates
+ * after the same while however long a request of this one hangs. The
+ * worker used to answer 504 after 60 s (120 s for documents and media),
+ * which cut short every slow answer Chrome waits for (office.com's scripts
+ * behind a slow transport). `config.fetchTimeout` sets a bound (tests).
  */
-const FETCH_TIMEOUT_MS = 60000;
-const FETCH_TIMEOUT_LONG_MS = 120000;
-const LONG_DESTINATIONS = new Set([
-	'document',
-	'iframe',
-	'frame',
-	'embed',
-	'object',
-	'video',
-	'audio',
-	'track',
-]);
 const DOCUMENT_DESTINATIONS = new Set(['document', 'iframe', 'frame']);
 
 const escapeHTML = (text: string) =>
@@ -1566,17 +1560,14 @@ async function timedOut(
 	return new Response(null, { status: 504 });
 }
 
-/** the response, or a 504 when it takes longer than the destination allows */
+/** the response, or a 504 when it takes longer than a bound set by config.fetchTimeout (tests) */
 function bounded(
 	request: Request,
 	response: Promise<Response>,
 	ref: ControllerRef,
 ): Promise<Response> {
-	const ms =
-		ref.config.fetchTimeout ??
-		(LONG_DESTINATIONS.has(request.destination)
-			? FETCH_TIMEOUT_LONG_MS
-			: FETCH_TIMEOUT_MS);
+	const ms = ref.config.fetchTimeout;
+	if (!ms) return response;
 	let timer: ReturnType<typeof setTimeout>;
 	let late = false;
 	const timeout = new Promise<Response>((resolve) => {
