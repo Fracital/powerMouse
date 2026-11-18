@@ -661,18 +661,36 @@ export default class Client {
 	 * keeps by origin.
 	 */
 	#namedBase: string | undefined;
+	/** the document #namedBase was taken in (none in a worker) */
+	#namedIn: unknown;
 	get namedBase(): string | undefined {
 		return this.#namedBase;
 	}
 	/**
 	 * Takes what the shell named for the document that is loading now (a
 	 * window this client already hooked, showing a new document), or
-	 * nothing where its shell named none.
+	 * nothing where its shell named none. A client made in that document
+	 * while its shell waited for the bundle took the name already: the page
+	 * that made the document read it then (an <object>'s contentDocument,
+	 * polled), and its parent's bundle injected the window. The shell's own
+	 * call then finds none, and the name stays: it was cleared, and the
+	 * document read as its blob: address, to the page and to its own
+	 * script, whose location had no query (sop-escapes csp/an object
+	 * document, under load, when the bundle came late).
 	 */
 	takeNamedBase(global: object = this.global) {
-		const named = Reflect.getOwnPropertyDescriptor(global, WORKER_BASE)?.value;
+		const own = Reflect.getOwnPropertyDescriptor(global, WORKER_BASE);
 		Reflect.deleteProperty(global, WORKER_BASE);
-		this.#namedBase = typeof named === 'string' ? named : undefined;
+		let document: unknown;
+		try {
+			const get = Reflect.getOwnPropertyDescriptor(global, 'document')?.get;
+			document = get && Reflect.apply(get, global, []);
+		} catch (error) {
+			// no document to tell
+		}
+		if (own === undefined && document && document === this.#namedIn) return;
+		this.#namedBase = typeof own?.value === 'string' ? own.value : undefined;
+		this.#namedIn = document;
 	}
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		this.takeNamedBase(global);

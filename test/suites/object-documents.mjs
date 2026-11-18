@@ -70,4 +70,68 @@ for (const [mode, base] of [
 		);
 	await page.context().close();
 }
+
+// An object document its page reads while the document's bundle is still
+// on its way (the bundle held here; a loaded machine's is late too): the
+// read injects the window from the page's bundle, and the document's
+// shell then finds its client made. The document keeps the URL its shell
+// named, and its script reads its query, as natively. It read as its
+// blob: copy's address, its script's query was empty and its image had
+// none (sop-escapes csp/an object document, under load).
+const lateObject = async (frame, url) =>
+	frame.evaluate(async (url) => {
+		const object = document.createElement('object');
+		object.type = 'text/html';
+		object.data = url;
+		document.body.append(object);
+		for (let i = 0; i < 400; i++) {
+			const image = object.contentDocument?.getElementById('o');
+			if (image)
+				return {
+					src: image.getAttribute('src'),
+					url: object.contentDocument.URL,
+				};
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+		return null;
+	}, url);
+const lateURL = `${FIXTURE}pages/gate-csp-object.html?img=late.png`;
+const lateHost = `${FIXTURE}pages/blank-css.html`;
+const lateNativePage = await browser.newPage();
+await lateNativePage.goto(lateHost);
+const lateNative = await lateObject(lateNativePage.mainFrame(), lateURL);
+await lateNativePage.close();
+ok(
+	'natively, an object document read as it loads has its URL and its query',
+	lateNative?.src === 'late.png' && lateNative.url === lateURL,
+	JSON.stringify(lateNative),
+);
+for (const [mode, base] of [
+	['same-origin', PROXY],
+	['isolated', HOST],
+]) {
+	const page = await openDemo(browser, base);
+	await submitLanding(page, lateHost);
+	let frame;
+	for (let i = 0; i < 80 && !frame; i++) {
+		await sleep(250);
+		frame = page
+			.frames()
+			.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
+	}
+	await frame.waitForLoadState('load');
+	let held = 0;
+	await page.context().route(/\/injectDocument\.js(\?|$)/, async (route) => {
+		held++;
+		await sleep(1500);
+		await route.continue();
+	});
+	const late = await lateObject(frame, lateURL);
+	ok(
+		`${mode}: an object document read while its bundle is late keeps its URL, and its script its query`,
+		held > 0 && JSON.stringify(late) === JSON.stringify(lateNative),
+		JSON.stringify({ held, native: lateNative, proxied: late }),
+	);
+	await page.context().close();
+}
 await done(browser);
