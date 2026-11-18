@@ -384,7 +384,42 @@ export class Blocker implements BlockerLike {
 		this.#instance = instance;
 		this.#resources = resources;
 		this.#ready = true;
+		setTimeout(() => this.#warm(instance), 0);
 		return true;
+	}
+	/**
+	 * Ask a fresh instance what a page's first loads ask, about an address
+	 * no list names, once the worker has nothing else to do: the first
+	 * questions an instance is asked compile the parts of the module that
+	 * answer them, 5 to 7 ms each of the first navigation's and its first
+	 * subresources' time otherwise. The answers are dropped; asking changes
+	 * nothing an engine answers later.
+	 */
+	#warm(instance: BlockerInstance) {
+		if (this.#instance !== instance) return;
+		const page = 'https://warm.stomp.invalid/';
+		const other = 'https://other.stomp.invalid/a.js';
+		try {
+			for (const type of [
+				'document',
+				'subdocument',
+				'script',
+				'stylesheet',
+				'image',
+				'font',
+				'xmlhttprequest',
+				'media',
+				'other',
+			])
+				instance.call(
+					`${type === 'document' ? page : other}\t${page}\t${type}\tget`,
+					OP.check,
+				);
+			instance.call(`${page}\t${page}\tdocument\tget`, OP.csp);
+			instance.call(page, OP.cosmetic);
+		} catch (error) {
+			// a trap: the instance is replaced the first time a page asks it
+		}
 	}
 
 	/** fetch the lists and the resources, build, store and swap in the engine */
