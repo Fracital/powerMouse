@@ -239,7 +239,12 @@ export default class SandboxModule extends Module<DocumentClient> {
 			};
 			const check = (member: string, call: boolean, destination: URL) => {
 				if (client.sandboxFlags !== null && !client.mayNavigate(target))
-					throw client.navigationRefused(member, call, destination);
+					throw deferred('navigationRefused')(
+						client,
+						member,
+						call,
+						destination,
+					);
 			};
 			const navigate = (
 				member: 'href' | 'assign' | 'replace',

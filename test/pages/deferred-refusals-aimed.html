@@ -8,7 +8,8 @@
 		<!-- a frame of the suite deferred-refusals' child: as it loads, its
 		form or link, aimed at the child, is submitted or clicked (`?form`: the
 		form's submit event; `?submit`: its submit(), answering with what that
-		threw; `?link`: a link's click) -->
+		threw; `?link`: a link's click; `?hash`, in a sandboxed frame: a write
+		of the child's location hash, answering with what it threw) -->
 		<form target="_parent" action="deferred-refusals-landed.html">
 			<input />
 		</form>
@@ -30,6 +31,13 @@
 					parent.postMessage({ threw: String(error && error.message) }, '*');
 				}
 			} else if (location.search === '?link') document.links[0].click();
+			else if (location.search === '?hash')
+				try {
+					parent.location.hash = 'moved';
+					parent.postMessage({ threw: null }, '*');
+				} catch (error) {
+					parent.postMessage({ threw: `${error.name}: ${error.message}` }, '*');
+				}
 		</script>
 	</body>
 </html>

@@ -208,7 +208,16 @@ export function linkAimed(
 	if (top === client.global) return;
 	const destination = resolve();
 	if (!['http:', 'https:'].includes(destination.protocol)) return;
-	if (!client.mayNavigate(top)) return;
+	// (a deferred part of its own, ./navigateOther.ts: without it the link
+	// navigates nothing, the browser's navigation included)
+	let may: boolean;
+	try {
+		may = client.mayNavigate(top);
+	} catch (error) {
+		event.preventDefault();
+		return;
+	}
+	if (!may) return;
 	event.preventDefault();
 	const topClient = (top as Record<string, any>)[client.names.client] as
 		DocumentClient | undefined;

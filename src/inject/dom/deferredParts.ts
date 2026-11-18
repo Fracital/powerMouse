@@ -155,7 +155,7 @@ import {
 	userMediaCall,
 } from './modules/permissionCalls';
 import { emulateServiceWorker } from './modules/serviceWorkerEmulation';
-import { navigateOther } from './navigateOther';
+import { mayNavigate, navigateOther, navigationRefused } from './navigateOther';
 import { navigationRefusal, precommitRedirect } from './navigationRefusal';
 import { openerFacts, opensWithoutOpener } from './openerFacts';
 import { pictureWindows } from './pictureWindows';
@@ -267,6 +267,11 @@ export const parts = {
 	// a document's navigation of another window, refused as Chrome refuses
 	// it, at its first (./navigateOther.ts; modules/Context.ts)
 	navigateOther,
+	// and whether a sandboxed document may navigate another window, with the
+	// SecurityError it gets when it may not, at its first such navigation
+	// (DocumentClient.mayNavigate; modules/Sandbox.ts)
+	mayNavigate,
+	navigationRefused,
 	// the copies a document no service worker controls makes of its loads,
 	// at its first (./uncontrolledCopies.ts; ./modules/DOMAttributes.ts)
 	uncontrolledCopies,

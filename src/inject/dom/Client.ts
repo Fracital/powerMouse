@@ -62,7 +62,6 @@ import { BUILD } from '../../version';
 import { contextText, linkRoute, opaqueContext } from '../../visited';
 import { ownCodec, shareCodec, type CodecBackend } from '../../wasm/codec';
 import Client from '../Client';
-import { withStack } from '../nativeErrors';
 import { LazyMap, LazySet, LazyWeakMap, LazyWeakSet } from '../ownCollections';
 import {
 	deferredText,
@@ -75,11 +74,7 @@ import {
 } from '../rewriter';
 import { learnSites, siteAnswers } from '../sites';
 import { trustedHTML, trustedScript } from '../trusted';
-import {
-	activationState,
-	type ActivationNote,
-	type markActivation,
-} from './activation';
+import type { ActivationNote, markActivation } from './activation';
 import type { ActivationPart } from './activationPart';
 import cloneRawNode, {
 	inertDocumentOf,
@@ -2252,62 +2247,14 @@ export default class DocumentClient extends Client {
 	 * document may navigate any. The real frame cannot say no here: the
 	 * proxied top is not the browser's top, and a navigation the target
 	 * window's own inject makes is the target's, which the browser allows.
+	 * A sandboxed document's decision is a deferred part (./navigateOther.ts
+	 * mayNavigate): without it the call throws.
 	 */
 	mayNavigate(target: unknown): boolean {
-		if (this.sandboxFlags === null || target === this.global) return true;
-		if (typeof target !== 'object' || target === null) return true;
-		if (this.openedWindows.has(target)) return true;
-		// a descendant: its chain of parents reaches this window
-		let context = target as typeof globalThis;
-		for (let depth = 0; depth < 64; depth++) {
-			let parent: typeof globalThis;
-			try {
-				parent = Reflect.apply(this.parentDescriptor.get!, context, []);
-			} catch (error) {
-				break;
-			}
-			if (parent === this.global) return true;
-			if (parent === context) break;
-			context = parent;
-		}
-		// (the site pool: the top of the proxied world may be another slot's,
-		// out of reach)
-		if (
-			target !== this.proxiedTop &&
-			!(
-				this.sites &&
-				target === siteWindows().siteTop(this.global, this.sites.hub)
-			)
-		)
-			return false;
-		const activated = (activationState(this) & 1) !== 0;
-		// a document of another origin than its top's (an opaque one) needs
-		// a user activation all the same, unless its frame's attribute grants
-		// the flag: a policy's sandbox does not lift Chrome's framebusting
-		// intervention (csp-sandbox suite, measured)
-		if (this.allows('allow-top-navigation'))
-			return (
-				activated ||
-				this.#frameTopNavigation ||
-				(!this.sandboxedOpaque && this.origin === this.topOrigin)
-			);
-		return this.allows('allow-top-navigation-by-user-activation') && activated;
-	}
-	/**
-	 * The SecurityError a sandboxed document gets for navigating a window it
-	 * may not (`member` of Location, set or called), naming the URL as the
-	 * page wrote it
-	 */
-	navigationRefused(
-		member: string,
-		call: boolean,
-		url: URL | string,
-	): DOMException {
-		return withStack(
-			new this.global.DOMException(
-				`${call ? `Failed to execute '${member}' on` : `Failed to set a named property '${member}' on`} 'Location': The current window does not have permission to navigate the target frame to '${String(url)}'.`,
-				'SecurityError',
-			),
+		return (
+			this.sandboxFlags === null ||
+			target === this.global ||
+			deferred('mayNavigate')(this, target, this.#frameTopNavigation)
 		);
 	}
 	/** what a navigation from this context routes as: the top origin when nested, else a top-level document */
