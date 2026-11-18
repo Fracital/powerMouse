@@ -89,7 +89,14 @@ Ours, not upstream:
   a page that moves itself with pushState or replaceState still reports under
   its own path, and a variant written with a space is the variant the runner
   asked for. It sends no keepalive request (Chrome sends those past the
-  service worker, so through the proxy the report would never arrive).
+  service worker, so through the proxy the report would never arrive). The
+  names of the subtests that have finished are kept on
+  `window.__wptFinished` as they finish: for a page that times out through
+  the proxy and not natively, and whose harness timeout is not on the
+  expected list, the runner prints a `stalled` line per frame
+  (its URL, its readyState and the native run's subtests that never
+  finished), so a stall seen only on a loaded runner is told apart in the
+  log of the run it happened in.
 - `resources/testdriver-vendor.js` has no WebDriver: `delete_all_cookies`
   expires what `document.cookie` can see (own path, ancestors, root; a
   nameless cookie with a placeholder value, since `=` alone is ignored) and

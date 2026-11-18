@@ -1,4 +1,4 @@
-/* global add_completion_callback, setup */
+/* global add_completion_callback, add_result_callback, setup */
 
 // STomp's testharnessreport.js: when a page's tests finish, keep the results
 // on the window (window.__wptResults) and post them to the fixture
@@ -30,6 +30,13 @@
 		'PRECONDITION_FAILED',
 	];
 	var HARNESS_STATUS = ['OK', 'ERROR', 'TIMEOUT', 'PRECONDITION_FAILED'];
+
+	// the subtests that have finished so far, by name: what the suite reads
+	// of a page that never reports (test/wpt.mjs, stalled)
+	var finished = (self.__wptFinished = []);
+	add_result_callback(function (test) {
+		finished.push(test.name);
+	});
 
 	add_completion_callback(function (tests, status) {
 		var report = {

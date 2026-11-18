@@ -14,9 +14,10 @@
 // runs only the matching pages (for a quick look, not for updating the list).
 //
 // Output: one PASS/FAIL line per test page, `native-fail` and `proxied-fail`
-// lines for the excluded and the expected failures, and a `summary` line
-// with the counts. This file is a library; run by test/run.mjs it prints
-// nothing and exits 0.
+// lines for the excluded and the expected failures, `stalled` lines for a
+// page that timed out through the proxy only and is not expected to (what
+// each of its frames was doing), and a `summary` line with the counts. This file is a library;
+// run by test/run.mjs it prints nothing and exits 0.
 import {
 	existsSync,
 	mkdirSync,
@@ -222,7 +223,7 @@ async function runNative(browser, tests, concurrency) {
  * per worker, not one page with several frames: two frames loading at once
  * in one controller page stall each other (measured, not fixed here).
  */
-async function runProxied(browser, tests, concurrency) {
+async function runProxied(browser, tests, concurrency, native, expected) {
 	const errors = [];
 	const results = new Map();
 	const queue = [...tests];
@@ -311,6 +312,12 @@ async function runProxied(browser, tests, concurrency) {
 				const report = await awaitReport(path, fallback(path));
 				results.set(path, report);
 				progress('proxied', path, report, started);
+				if (
+					report.status.status === 'TIMEOUT' &&
+					native.get(path)?.status.status !== 'TIMEOUT' &&
+					!('(harness)' in (expected[path] || {}))
+				)
+					await stalled(page, path, native.get(path));
 				await page
 					.evaluate(() => window.__wptFrame.go('about:blank'))
 					.catch(() => {});
@@ -319,6 +326,38 @@ async function runProxied(browser, tests, concurrency) {
 		}),
 	);
 	return { results, errors };
+}
+
+/**
+ * What each frame of a proxied page that timed out (and did not natively,
+ * and whose expected list does not name the harness) was doing: its URL, its readyState and, in the test's own frame, the
+ * subtests the native run had that never finished, one line a frame. A page
+ * that stalls only on a loaded runner says so in the log of the run it
+ * stalled in. Read after the verdict is taken, since an evaluation is a
+ * user gesture.
+ */
+async function stalled(page, path, native) {
+	for (const frame of page.frames()) {
+		const state = await frame
+			.evaluate(() => ({
+				url: location.href,
+				readyState: document.readyState,
+				finished: Array.isArray(window.__wptFinished)
+					? [...window.__wptFinished]
+					: null,
+			}))
+			.catch((error) => ({ error: String(error).slice(0, 120) }));
+		if (state.finished) {
+			const finished = new Set(state.finished.map(stable));
+			state.unfinished = (native?.tests ?? [])
+				.map((test) => stable(test.name))
+				.filter((name) => !finished.has(name));
+		}
+		delete state.finished;
+		console.log(
+			`  stalled ${path}: ${frame.url().slice(0, 120)}: ${JSON.stringify(state).slice(0, 2000)}`,
+		);
+	}
 }
 
 /** one line per page and mode as it finishes, so a long run shows progress */
@@ -384,6 +423,8 @@ export async function runWpt(
 			browser,
 			tests,
 			concurrency,
+			native,
+			expected,
 		));
 	} catch (error) {
 		// the browser is the only thing a suite spawns; never leave it behind
