@@ -1,0 +1,477 @@
+From 157d9f0a522b4295060647c3585ff63562d206b7 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 17 Nov 2026 21:10:08 -0500
+Subject: [PATCH] client: RSA keys of every size Chrome takes
+
+Chrome 157 takes an RSA key of 1024 to 16384 bits, counted exactly,
+anywhere in a verified chain and under any root. A key under 1024 bits
+is weak (ERR_CERT_WEAK_KEY) and a key over 16384 bits does not parse in
+BoringSSL. A root of the Chrome Root Store sets no higher floor.
+
+ring verifies RSA signatures by keys of 2048 to 8192 bits only (rounded
+up to whole bytes, so from 2041), so a chain or handshake signature by
+a key of 1024 to 2040 or of 8193 to 16384 bits was refused.
+
+The RSA PKCS#1 and PSS algorithms the certificate verifier uses are now
+wrapped. A key in ring's range still goes to ring; RustCrypto rsa
+verifies the others, with the same hashes and paddings (PSS salt as long
+as the hash). Every key is held to BoringSSL's rsa_check_public_key (n
+and e odd, e of 2 to 33 bits) and to Chrome's floor and ceiling. RSA key
+exchange takes the same sizes; it took 1024 to 8192 bits.
+
+Adds sha2 =0.10.9 with its oid feature. It was already in the lock, for
+other crates.
+---
+ Cargo.lock                           |   1 +
+ client/Cargo.toml                    |   4 +-
+ client/src/stream_provider.rs        |  14 +-
+ client/src/utils/legacy_tls/der.rs   |  36 +++-
+ client/src/utils/legacy_tls/mod.rs   |  30 ++-
+ client/src/utils/legacy_tls/trust.rs | 270 +++++++++++++++++++++++++++
+ 6 files changed, 322 insertions(+), 33 deletions(-)
+ create mode 100644 client/src/utils/legacy_tls/trust.rs
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 8f8c8d6..76372d9 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -803,6 +803,7 @@ dependencies = [
+  "rustls-webpki",
+  "send_wrapper",
+  "sha1",
++ "sha2",
+  "thiserror 2.0.12",
+  "tokio",
+  "wasm-bindgen",
+diff --git a/client/Cargo.toml b/client/Cargo.toml
+index e41e824..06c84fc 100644
+--- a/client/Cargo.toml
++++ b/client/Cargo.toml
+@@ -43,6 +43,8 @@ aes = { version = "=0.8.4", features = ["zeroize"], optional = true }
+ sha1 = { version = "=0.10.6", default-features = false, features = ["compress"], optional = true }
+ rsa = { version = "=0.9.10", default-features = false, optional = true }
+ zeroize = { version = "1", optional = true }
++# RSA signatures by keys outside ring's 2048 to 8192 bits (src/utils/legacy_tls/trust.rs)
++sha2 = { version = "=0.10.9", default-features = false, features = ["oid"], optional = true }
+ rand_core = { version = "0.6.4", features = ["getrandom"], optional = true }
+ rustls = { version = "0.23.29", default-features = false, features = ["brotli"], optional = true }
+ 
+@@ -68,5 +70,5 @@ features = ["wasm-bindgen"]
+ 
+ [features]
+ default = ["full"]
+-full = ["dep:fastwebsockets", "dep:async-compression", "dep:rustls-webpki", "dep:rustls-pemfile", "hyper-util-wasm/http2", "dep:ml-kem", "dep:rand_core", "dep:rustls", "dep:aes", "dep:sha1", "dep:rsa", "dep:zeroize"]
++full = ["dep:fastwebsockets", "dep:async-compression", "dep:rustls-webpki", "dep:rustls-pemfile", "hyper-util-wasm/http2", "dep:ml-kem", "dep:rand_core", "dep:rustls", "dep:aes", "dep:sha1", "dep:rsa", "dep:zeroize", "dep:sha2"]
+ 
+diff --git a/client/src/stream_provider.rs b/client/src/stream_provider.rs
+index b32071d..054973d 100644
+--- a/client/src/stream_provider.rs
++++ b/client/src/stream_provider.rs
+@@ -191,13 +191,17 @@ impl StreamProvider {
+ 			cfg_if! {
+ 				if #[cfg(feature = "full")] {
+ 					// webpki's verifier as with_root_certificates makes it,
+-					// wrapped in KeyUsageVerifier, which checks the end
+-					// entity's keyUsage against the handshake's use of its
+-					// key as Chrome does (webpki checks no end entity's
+-					// keyUsage)
++					// with RSA algorithms for every key size Chrome takes
++					// (utils::legacy_tls::trust), wrapped in KeyUsageVerifier,
++					// which checks the end entity's keyUsage against the
++					// handshake's use of its key as Chrome does (webpki
++					// checks no end entity's keyUsage)
+ 					let webpki = futures_rustls::rustls::client::WebPkiServerVerifier::builder_with_provider(
+ 						Arc::new(certstore),
+-						provider.clone(),
++						Arc::new(futures_rustls::rustls::crypto::CryptoProvider {
++							signature_verification_algorithms: *crate::utils::legacy_tls::ALGORITHMS,
++							..futures_rustls::rustls::crypto::CryptoProvider::clone(&provider)
++						}),
+ 					)
+ 					.allow_unknown_revocation_status()
+ 					.build()
+diff --git a/client/src/utils/legacy_tls/der.rs b/client/src/utils/legacy_tls/der.rs
+index d9d1daf..ac1bccf 100644
+--- a/client/src/utils/legacy_tls/der.rs
++++ b/client/src/utils/legacy_tls/der.rs
+@@ -142,8 +142,8 @@ impl<'a> Certificate<'a> {
+ 		Ok(true)
+ 	}
+ 
+-	/// The modulus and exponent of an rsaEncryption key.
+-	pub fn rsa_public_key(&self) -> Option<(&'a [u8], &'a [u8])> {
++	/// The subjectPublicKey of an rsaEncryption key: an RSAPublicKey.
++	pub fn rsa_public_key_bits(&self) -> Option<&'a [u8]> {
+ 		let mut spki = Reader(self.spki);
+ 		let mut algorithm = Reader(spki.read(SEQUENCE)?);
+ 		if algorithm.read(OID)? != RSA_OID {
+@@ -161,13 +161,31 @@ impl<'a> Certificate<'a> {
+ 		let (&0, key) = key.split_first()? else {
+ 			return None;
+ 		};
+-		let mut key = Reader(Reader(key).read(SEQUENCE)?);
+-		let n = positive(key.read(INTEGER)?)?;
+-		let e = positive(key.read(INTEGER)?)?;
+-		if !key.is_empty() {
+-			return None;
+-		}
+-		Some((n, e))
++		Some(key)
++	}
++}
++
++/// The modulus and exponent of an RSAPublicKey (RFC 8017 appendix A.1.1),
++/// a subjectPublicKey's contents.
++pub fn rsa_public_key(key: &[u8]) -> Option<(&[u8], &[u8])> {
++	let mut outer = Reader(key);
++	let mut key = Reader(outer.read(SEQUENCE)?);
++	if !outer.is_empty() {
++		return None;
++	}
++	let n = positive(key.read(INTEGER)?)?;
++	let e = positive(key.read(INTEGER)?)?;
++	if !key.is_empty() {
++		return None;
++	}
++	Some((n, e))
++}
++
++/// The exact bit length of a big-endian magnitude.
++pub fn bits(magnitude: &[u8]) -> usize {
++	match magnitude.iter().position(|&b| b != 0) {
++		Some(i) => (magnitude.len() - i) * 8 - magnitude[i].leading_zeros() as usize,
++		None => 0,
+ 	}
+ }
+ 
+diff --git a/client/src/utils/legacy_tls/mod.rs b/client/src/utils/legacy_tls/mod.rs
+index 81452b9..0907bbc 100644
+--- a/client/src/utils/legacy_tls/mod.rs
++++ b/client/src/utils/legacy_tls/mod.rs
+@@ -28,6 +28,9 @@
+ 
+ mod der;
+ mod record;
++mod trust;
++
++pub use trust::ALGORITHMS;
+ 
+ use std::sync::{Arc, LazyLock};
+ 
+@@ -192,16 +195,6 @@ impl MessageDecrypter for CbcDecrypter {
+ #[derive(Debug)]
+ pub struct Pkcs1KeyTransport;
+ 
+-/// Chrome takes an RSA key of 1024 bits or more, exactly counted, for key
+-/// transport: its certificate verifier refuses a smaller one
+-/// (ERR_CERT_WEAK_KEY) and BoringSSL sets no floor of its own (measured with
+-/// Chrome 157 against a local trust anchor). Its 2048-bit floor for
+-/// publicly trusted roots needs no check here: no such leaf below 2048 bits
+-/// is still valid. The ceiling is webpki's for an RSA signature (8192 bits);
+-/// Chrome's was not measured.
+-const RSA_MIN_BITS: usize = 1024;
+-const RSA_MAX_BITS: usize = 8192;
+-
+ impl RsaKeyTransport for Pkcs1KeyTransport {
+ 	fn encrypt_pre_master_secret(
+ 		&self,
+@@ -216,14 +209,15 @@ impl RsaKeyTransport for Pkcs1KeyTransport {
+ 			return Err(Error::InvalidCertificate(CertificateError::InvalidPurpose));
+ 		}
+ 		// an end entity whose key is no RSA key cannot carry an RSA suite
+-		let (n, e) = cert.rsa_public_key().ok_or_else(bad)?;
+-		let n = BigUint::from_bytes_be(n);
+-		let bits = n.bits();
+-		if !(RSA_MIN_BITS..=RSA_MAX_BITS).contains(&bits) {
+-			return Err(Error::InvalidCertificate(CertificateError::BadEncoding));
+-		}
+-		let key = RsaPublicKey::new_with_max_size(n, BigUint::from_bytes_be(e), RSA_MAX_BITS)
+-			.map_err(|_| bad())?;
++		let key = cert.rsa_public_key_bits().ok_or_else(bad)?;
++		// the sizes Chrome takes for any RSA key (see trust)
++		let (n, e) = trust::usable_key(key).ok_or_else(bad)?;
++		let key = RsaPublicKey::new_with_max_size(
++			BigUint::from_bytes_be(n),
++			BigUint::from_bytes_be(e),
++			trust::MAX_BITS,
++		)
++		.map_err(|_| bad())?;
+ 		key.encrypt(&mut rand_core::OsRng, Pkcs1v15Encrypt, pre_master_secret)
+ 			.map_err(|_| Error::EncryptError)
+ 	}
+diff --git a/client/src/utils/legacy_tls/trust.rs b/client/src/utils/legacy_tls/trust.rs
+new file mode 100644
+index 0000000..a5560c4
+--- /dev/null
++++ b/client/src/utils/legacy_tls/trust.rs
+@@ -0,0 +1,270 @@
++//! RSA signature algorithms for keys of every size Chrome takes.
++//!
++//! *ring* verifies RSA signatures by keys of 2048 to 8192 bits only. Chrome
++//! 157 takes an RSA key of 1024 to 16384 bits, counted exactly, anywhere in
++//! the chain and whatever the root:
++//! - net/cert/cert_verify_proc.cc calls a key under 1024 bits weak
++//!   (ERR_CERT_WEAK_KEY); a root of the Chrome Root Store sets no higher
++//!   floor (`is_issued_by_known_root` only feeds histograms);
++//! - BoringSSL's `rsa_check_public_key` parses no modulus over 16384 bits.
++//!
++//! The provider's RSA algorithms are wrapped so that a key in *ring*'s range
++//! still goes to *ring*, and RustCrypto `rsa` takes the others. Each key of
++//! a chain signs something the verifier checks (the issuers their
++//! certificates, the end entity the handshake), so each one meets the
++//! floor and the ceiling; the RSA key transport holds the end entity's key
++//! to the same ones.
++
++use std::sync::LazyLock;
++
++use futures_rustls::rustls::{
++	crypto::{ring::default_provider, WebPkiSupportedAlgorithms},
++	pki_types::{AlgorithmIdentifier, InvalidSignature, SignatureVerificationAlgorithm},
++	SignatureScheme,
++};
++
++use super::der;
++
++/// Chrome's floor for an RSA key
++pub const MIN_BITS: usize = 1024;
++/// BoringSSL's ceiling for an RSA key (`OPENSSL_RSA_MAX_MODULUS_BITS`)
++pub const MAX_BITS: usize = 16384;
++
++/// *ring*'s range (it rounds up to whole bytes, so its own floor is lower)
++const RING_BITS: std::ops::RangeInclusive<usize> = 2048..=8192;
++
++#[derive(Clone, Copy, Debug)]
++enum Hash {
++	Sha256,
++	Sha384,
++	Sha512,
++}
++
++#[derive(Clone, Copy, Debug)]
++enum Padding {
++	Pkcs1,
++	Pss,
++}
++
++/// An RSA signature algorithm of *ring*'s (`inner`, whose identifiers it
++/// keeps) for keys of [`MIN_BITS`] to [`MAX_BITS`].
++#[derive(Debug)]
++struct Rsa {
++	inner: &'static dyn SignatureVerificationAlgorithm,
++	hash: Hash,
++	padding: Padding,
++}
++
++/// `(n, e)` of an RSA public key (an RSAPublicKey) Chrome takes:
++/// BoringSSL's `rsa_check_public_key` (n and e odd, e above 1 and of at
++/// most 33 bits, n of at most 16384 bits) and Chrome's floor.
++pub fn usable_key(key: &[u8]) -> Option<(&[u8], &[u8])> {
++	let (n, e) = der::rsa_public_key(key)?;
++	let n_bits = der::bits(n);
++	let e_bits = der::bits(e);
++	let odd = |int: &[u8]| int.last().is_some_and(|b| b & 1 == 1);
++	(odd(n) && odd(e) && (2..=33).contains(&e_bits) && (MIN_BITS..=MAX_BITS).contains(&n_bits))
++		.then_some((n, e))
++}
++
++impl SignatureVerificationAlgorithm for Rsa {
++	fn public_key_alg_id(&self) -> AlgorithmIdentifier {
++		self.inner.public_key_alg_id()
++	}
++
++	fn signature_alg_id(&self) -> AlgorithmIdentifier {
++		self.inner.signature_alg_id()
++	}
++
++	fn verify_signature(
++		&self,
++		public_key: &[u8],
++		message: &[u8],
++		signature: &[u8],
++	) -> Result<(), InvalidSignature> {
++		use rsa::{pss::Pss, BigUint, Pkcs1v15Sign, RsaPublicKey};
++		use sha2::{Digest, Sha256, Sha384, Sha512};
++
++		let (n, e) = usable_key(public_key).ok_or(InvalidSignature)?;
++		if RING_BITS.contains(&der::bits(n)) {
++			return self.inner.verify_signature(public_key, message, signature);
++		}
++		let key = RsaPublicKey::new_with_max_size(
++			BigUint::from_bytes_be(n),
++			BigUint::from_bytes_be(e),
++			MAX_BITS,
++		)
++		.map_err(|_| InvalidSignature)?;
++		let result = match (self.padding, self.hash) {
++			(Padding::Pkcs1, Hash::Sha256) => key.verify(
++				Pkcs1v15Sign::new::<Sha256>(),
++				&Sha256::digest(message),
++				signature,
++			),
++			(Padding::Pkcs1, Hash::Sha384) => key.verify(
++				Pkcs1v15Sign::new::<Sha384>(),
++				&Sha384::digest(message),
++				signature,
++			),
++			(Padding::Pkcs1, Hash::Sha512) => key.verify(
++				Pkcs1v15Sign::new::<Sha512>(),
++				&Sha512::digest(message),
++				signature,
++			),
++			// the salt as long as the hash, as TLS (RFC 8446 section
++			// 4.2.3) and *ring*'s PSS algorithms require
++			(Padding::Pss, Hash::Sha256) => {
++				key.verify(Pss::new::<Sha256>(), &Sha256::digest(message), signature)
++			}
++			(Padding::Pss, Hash::Sha384) => {
++				key.verify(Pss::new::<Sha384>(), &Sha384::digest(message), signature)
++			}
++			(Padding::Pss, Hash::Sha512) => {
++				key.verify(Pss::new::<Sha512>(), &Sha512::digest(message), signature)
++			}
++		};
++		result.map_err(|_| InvalidSignature)
++	}
++}
++
++/// The provider's algorithms, the RSA ones taking every size Chrome takes.
++fn algorithms() -> WebPkiSupportedAlgorithms {
++	let ring = default_provider().signature_verification_algorithms;
++	let leak = |alg: &'static dyn SignatureVerificationAlgorithm| -> &'static dyn SignatureVerificationAlgorithm {
++		let id = alg.signature_alg_id();
++		let rsa = |hash, padding| -> &'static dyn SignatureVerificationAlgorithm {
++			Box::leak(Box::new(Rsa { inner: alg, hash, padding }))
++		};
++		use futures_rustls::rustls::pki_types::alg_id as a;
++		// `base`, or `base` with its NULL parameters left out (*ring*'s
++		// `_ABSENT_PARAMS` algorithms)
++		let is = |base: AlgorithmIdentifier| {
++			let (id, base) = (id.as_ref(), base.as_ref());
++			id == base || base.strip_suffix(&[0x05, 0x00]) == Some(id)
++		};
++		match () {
++			_ if is(a::RSA_PKCS1_SHA256) => rsa(Hash::Sha256, Padding::Pkcs1),
++			_ if is(a::RSA_PKCS1_SHA384) => rsa(Hash::Sha384, Padding::Pkcs1),
++			_ if is(a::RSA_PKCS1_SHA512) => rsa(Hash::Sha512, Padding::Pkcs1),
++			_ if is(a::RSA_PSS_SHA256) => rsa(Hash::Sha256, Padding::Pss),
++			_ if is(a::RSA_PSS_SHA384) => rsa(Hash::Sha384, Padding::Pss),
++			_ if is(a::RSA_PSS_SHA512) => rsa(Hash::Sha512, Padding::Pss),
++			_ => alg,
++		}
++	};
++	let all: Vec<_> = ring.all.iter().map(|alg| leak(*alg)).collect();
++	let mapping: Vec<(
++		SignatureScheme,
++		&'static [&'static dyn SignatureVerificationAlgorithm],
++	)> = ring
++		.mapping
++		.iter()
++		.map(|(scheme, algs)| {
++			let algs: Vec<_> = algs.iter().map(|alg| leak(*alg)).collect();
++			(*scheme, &*Box::leak(algs.into_boxed_slice()))
++		})
++		.collect();
++	WebPkiSupportedAlgorithms {
++		all: Box::leak(all.into_boxed_slice()),
++		mapping: Box::leak(mapping.into_boxed_slice()),
++	}
++}
++
++/// The provider's signature verification algorithms, with RSA keys of every
++/// size Chrome takes
++pub static ALGORITHMS: LazyLock<WebPkiSupportedAlgorithms> = LazyLock::new(algorithms);
++
++#[cfg(test)]
++mod tests {
++	use rsa::{
++		pkcs1::EncodeRsaPublicKey,
++		pss::BlindedSigningKey,
++		signature::{RandomizedSigner, SignatureEncoding},
++		BigUint, RsaPrivateKey, RsaPublicKey,
++	};
++	use sha2::Sha256;
++
++	use super::*;
++
++	fn der(n: &BigUint, e: u64) -> Vec<u8> {
++		RsaPublicKey::new_unchecked(n.clone(), BigUint::from(e))
++			.to_pkcs1_der()
++			.unwrap()
++			.into_vec()
++	}
++
++	#[test]
++	fn usable_keys_are_chromes() {
++		let n = |bits: usize| (BigUint::from(1u8) << (bits - 1)) + BigUint::from(1u8);
++		let ok = |n: &BigUint, e| usable_key(&der(n, e)).is_some();
++		assert!(!ok(&n(1023), 65537));
++		assert!(ok(&n(1024), 65537));
++		assert!(ok(&n(2047), 65537));
++		assert!(ok(&n(8193), 65537));
++		assert!(ok(&n(16384), 65537));
++		assert!(!ok(&n(16385), 65537));
++		// an even modulus, an even, too small or too long exponent
++		assert!(!ok(&(n(2048) + BigUint::from(1u8)), 65537));
++		assert!(!ok(&n(2048), 65536));
++		assert!(!ok(&n(2048), 1));
++		assert!(ok(&n(2048), 3));
++		assert!(ok(&n(2048), (1 << 33) - 1));
++		assert!(!ok(&n(2048), (1 << 33) + 1));
++	}
++
++	fn alg(
++		algs: &WebPkiSupportedAlgorithms,
++		scheme: SignatureScheme,
++	) -> &'static dyn SignatureVerificationAlgorithm {
++		algs.mapping.iter().find(|(s, _)| *s == scheme).unwrap().1[0]
++	}
++
++	#[test]
++	fn signatures_of_every_size() {
++		let mut rng = rand_core::OsRng;
++		let algs = algorithms();
++		let message = b"ClientHello.random || ServerHello.random || params";
++		for bits in [1024, 2047, 2048] {
++			let key = RsaPrivateKey::new(&mut rng, bits).unwrap();
++			let public_key = key.to_public_key().to_pkcs1_der().unwrap().into_vec();
++			let pkcs1 = rsa::pkcs1v15::SigningKey::<Sha256>::new(key.clone())
++				.sign_with_rng(&mut rng, message)
++				.to_vec();
++			let pss = BlindedSigningKey::<Sha256>::new(key)
++				.sign_with_rng(&mut rng, message)
++				.to_vec();
++			for (scheme, sig) in [
++				(SignatureScheme::RSA_PKCS1_SHA256, &pkcs1),
++				(SignatureScheme::RSA_PSS_SHA256, &pss),
++			] {
++				let verify = |algs, sig: &[u8]| {
++					alg(algs, scheme).verify_signature(&public_key, message, sig)
++				};
++				assert!(verify(&algs, sig).is_ok(), "{bits} {scheme:?}");
++				let mut bad = sig.clone();
++				bad[10] ^= 1;
++				assert!(verify(&algs, &bad).is_err(), "{bits} {scheme:?} tampered");
++				// the other padding's algorithm refuses it
++				let other = match scheme {
++					SignatureScheme::RSA_PSS_SHA256 => SignatureScheme::RSA_PKCS1_SHA256,
++					_ => SignatureScheme::RSA_PSS_SHA256,
++				};
++				assert!(alg(&algs, other)
++					.verify_signature(&public_key, message, sig)
++					.is_err());
++			}
++		}
++	}
++
++	#[test]
++	fn the_other_algorithms_are_rings() {
++		let ring = default_provider().signature_verification_algorithms;
++		let ours = algorithms();
++		assert_eq!(ring.all.len(), ours.all.len());
++		assert_eq!(ring.mapping.len(), ours.mapping.len());
++		for (ring, ours) in ring.all.iter().zip(ours.all) {
++			assert_eq!(ring.signature_alg_id(), ours.signature_alg_id());
++			assert_eq!(ring.public_key_alg_id(), ours.public_key_alg_id());
++		}
++	}
++}
