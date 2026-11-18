@@ -59,7 +59,13 @@ import DOMHooksModule, {
 	nativeRead,
 	pendingAttributes,
 } from './DOMHooks';
-import { hiddenMutation, markerPrefix } from './MutationObserver';
+import {
+	hiddenMutation,
+	hiddenSuffix,
+	isHiddenValue,
+	markerPrefix,
+	unseenWrite,
+} from './MutationObserver';
 import NavigationHintModule from './NavigationHint';
 import TokenListsModule from './TokenLists';
 
@@ -2211,7 +2217,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// element is already showing
 		const loads = new LazyWeakMap<
 			Element,
-			{ written: string; generation: number; url?: string }
+			{ written: string; generation: number; url?: string; attached?: boolean }
 		>();
 		let generations = 0;
 		// The element stands on about:blank# while its copy is on its way: a
@@ -2257,6 +2263,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				realm.URL.revokeObjectURL(minted);
 				revoked = proxyBlobURL(minted);
 			}
+			// (as the document of no type it is natively, before the URL)
+			release(element);
 			element.setAttribute(
 				attribute,
 				attribute === 'data' ? revoked! : 'blob:null/failed',
@@ -2272,8 +2280,17 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		const IMAGE_PATH =
 			/\.(png|jpe?g|jfif|pjp(eg)?|gif|webp|avif|apng|bmp|ico|cur)$/i;
 		/** whether Chrome shows the element as an image: by its type, by its URL ('untyped'), or not (false) */
-		const imageShown = (element: CustomElement): boolean | 'untyped' => {
-			const type = element.getAttribute('type')?.trim();
+		const imageShown = (
+			element: CustomElement,
+			real = false,
+		): boolean | 'untyped' => {
+			// the page's type (the one it wrote, none for one it has none of),
+			// or with `real` the one Chrome goes by
+			const written = real
+				? (Reflect.apply(nativeElement.getAttribute, element, ['type']) as
+						string | null)
+				: (element.getAttributeOG('type') ?? element.getAttribute('type'));
+			const type = !real && isHiddenValue(written) ? null : written?.trim();
 			return type
 				? IMAGE_TYPE.test(type)
 				: IMAGE_PATH.test(new URL(loads.get(element)!.written).pathname) &&
@@ -2281,42 +2298,109 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		};
 		const toBase64 = realm.btoa.bind(realm);
 		// Chrome lays an object out as an image or as an embedded document
-		// when it is attached, by its type or its URL then: one attached
-		// while its copy was on its way (no URL) keeps the document's box,
-		// 300x150, for the image it is given (Chrome 157, natively the image's
-		// size). Hidden for a layout, no observer hearing of it, it is laid
-		// out again as the image
-		const offsetWidth = Reflect.getOwnPropertyDescriptor(
-			realm.HTMLElement.prototype,
-			'offsetWidth',
-		)!.get!;
-		const relayout = (element: Element) => {
-			if (Reflect.apply(nativeElement.hasAttribute, element, ['hidden']))
-				return;
-			hiddenMutation(() => {
-				Reflect.apply(nativeElement.setAttribute, element, ['hidden', '']);
-				Reflect.apply(offsetWidth, element, []);
-				Reflect.apply(nativeElement.removeAttribute, element, ['hidden']);
-			});
+		// when it is attached, by its type or its URL then: one held with no
+		// URL is a document (300x150) for the image it is given. One shown as
+		// an image by its URL is held with a type of an image the page does
+		// not see (hiddenSuffix, DOMHooks isHidden), a blank one of the page's
+		// in its marker, which is taken off once its copy is in (Chrome 157:
+		// no context and no event while held, the image's size and one load
+		// after, as natively). Its URL comes first: with no type and no URL
+		// Chrome lays it out as a document again
+		const heldType = () => `image/png${hiddenSuffix()}`;
+		const hide = (element: CustomElement) => {
+			const type = element.getAttribute('type');
+			if (isHiddenValue(type)) return;
+			if (type !== null) element.setAttributeOG('type', type);
+			unseenWrite(element, 'type');
+			element.setAttribute('type', heldType());
 		};
-		const hold = (element: CustomElement, attribute: string) => {
-			const held = imageShown(element) ? null : HELD;
+		// (a type the page wrote once Chrome had gone by the held one stays
+		// in its marker: the held one stands, as natively the type Chrome went
+		// by does)
+		const release = (element: CustomElement) => {
+			const page = element.getAttributeOG('type');
+			if (element.getAttribute('type') !== heldType() || page) return;
+			unseenWrite(element, 'type');
+			element.removeAttributeOG('type');
+			if (page === null) element.removeAttribute('type');
+			else element.setAttribute('type', page);
+		};
+		const connected = Reflect.getOwnPropertyDescriptor(
+			realm.Node.prototype,
+			'isConnected',
+		)!.get!;
+		/**
+		 * Whether Chrome went by the element's type and URL already: natively
+		 * it does when the element is put in the document with its URL (one
+		 * given its URL there decides later)
+		 */
+		const decided = (element: Element) => {
+			const state = loads.get(element);
+			return (
+				!!state &&
+				!state.url &&
+				!state.attached &&
+				element.localName === 'object' &&
+				(Reflect.apply(connected, element, []) as boolean)
+			);
+		};
+		/** with `kept`, by the type Chrome went by (decided), which stays */
+		const hold = (element: CustomElement, attribute: string, kept = false) => {
+			const shown = imageShown(element, kept);
+			if (!kept)
+				if (shown === 'untyped' && attribute === 'data') hide(element);
+				else release(element);
+			const held = shown ? null : HELD;
 			if (element.getAttribute(attribute) === held) return;
+			unseenWrite(element, attribute);
+			// (after the type: one of an image fails on about:blank#)
+			element.attributeTab.delete(attribute);
 			if (held === null) element.removeAttribute(attribute);
 			else {
 				element.setAttribute(attribute, held);
 				queueMicrotask(() => heldBlank(element));
 			}
 		};
+		// The page's type, while the copy is on its way. Natively one written
+		// once the object was put in the document with its URL changes
+		// nothing (Chrome went by the one it had then): the page's goes in
+		// the marker, the one Chrome went by stays (hidden when the page
+		// removed it). Before, it decides, and the element is held again by
+		// it. After the copy is in, the page's stands.
 		domHooksModule.useAttributes(
 			(element) => {
+				// (a page's write; an insertion's pass writes none)
+				if (!element.attributeTab.has('type')) return;
 				const state = loads.get(element);
+				const type = Reflect.apply(nativeElement.getAttribute, element, [
+					'type',
+				]) as string | null;
+				if (decided(element)) {
+					const page = element.getAttribute('type');
+					if (page !== null) element.setAttributeOG('type', page);
+					const kept =
+						page !== null || type === null || isHiddenValue(type)
+							? type
+							: type + hiddenSuffix();
+					if (kept === null) element.removeAttribute('type');
+					else element.setAttribute('type', kept);
+					return;
+				}
+				element.removeAttributeOG('type');
 				if (state && !state.url)
 					hold(element, element.localName === 'object' ? 'data' : 'src');
 			},
 			[
 				['OBJECT', 'type'],
 				['EMBED', 'type'],
+				// (the property reflects the page's type: none for a held one)
+				[
+					realm.HTMLObjectElement,
+					'type',
+					(element) =>
+						element.getAttributeOG('type') ??
+						(isHiddenValue(element.getAttribute('type')) ? '' : false),
+				],
 			],
 		);
 		const proxiedLoad = (attribute: string) => (element: CustomElement) => {
@@ -2332,8 +2416,16 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			// document's, see Client.load and WriteStream): the parser makes the
 			// real element from the markup serialized from it, which gets its
 			// copy after the write (writtenLoads). A copy settled here would
-			// land on the clone, and the real one would load nothing
+			// land on the clone, and the real one would load nothing. One
+			// shown as an image by its URL is written held as one (hide), so
+			// the parser lays the real one out as the image
 			if (element.ownerDocument !== realm.document) {
+				loads.set(element, {
+					written: pageURL(written).url.href,
+					generation: 0,
+				});
+				if (attribute === 'data' && imageShown(element) === 'untyped')
+					hide(element);
 				loads.delete(element);
 				element.removeAttribute(attribute);
 				return;
@@ -2400,23 +2492,36 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			const current = loads.get(element);
 			if (current?.written === resource.url.href) {
 				if (current.url) element.setAttribute(attribute, current.url);
-				else hold(element, attribute);
+				else hold(element, attribute, decided(element));
 				return;
 			}
 			const generation = ++generations;
-			const state: { written: string; generation: number; url?: string } = {
+			const state: {
+				written: string;
+				generation: number;
+				url?: string;
+				attached?: boolean;
+			} = {
 				written: resource.url.href,
 				generation,
+				attached: Reflect.apply(connected, element, []),
 			};
 			loads.set(element, state);
 			// nothing to load until the proxied copy is in (an empty URL makes
 			// an object show its fallback and not load again)
 			hold(element, attribute);
+			let blobImage = false;
 			const settle = (value: string | null) => {
 				if (loads.get(element) !== state) return;
 				usePrototype(element, CustomElement.prototype, (element) => {
 					if (value === null) fail(element, attribute);
-					else element.setAttribute(attribute, value);
+					else {
+						element.setAttribute(attribute, value);
+						// (after the URL, which Chrome goes by then: an image's
+						// blob: copy, under a policy that refuses its data: URL,
+						// keeps the type)
+						if (!blobImage) release(element);
+					}
 					// (the hooks' view: the URL the element was given)
 					state.url = element.getAttribute(attribute)!;
 				});
@@ -2517,9 +2622,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					if (loads.get(element) !== state) return;
 					if (current?.url?.startsWith('blob:'))
 						realm.URL.revokeObjectURL(current.url);
+					blobImage = shown === 'untyped' && !url && !!imageMime;
 					settle(url ?? proxyBlobURL(realm.URL.createObjectURL(blob)));
-					if (shown === 'untyped' && url && attribute === 'data')
-						relayout(element);
 				})
 				.catch(() => settle(partless ? null : routed));
 		};
