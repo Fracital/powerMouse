@@ -199,6 +199,14 @@
 				// the usage walk behind navigator.storage.estimate()
 				// (src/inject/storageUsage.ts)
 				estimate: () => outcome(() => navigator.storage.estimate()),
+				// markup the browser parses, rewritten first by a deferred part
+				// (src/inject/dom/markupSinks.ts)
+				execCommand: () =>
+					outcome(() => document.execCommand('insertHTML', false, '<b>x</b>')),
+				contextualFragment: () =>
+					outcome(() =>
+						document.createRange().createContextualFragment('<b>x</b>'),
+					),
 				notFunction: () =>
 					outcome(() => {
 						const o = {};
