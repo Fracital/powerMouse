@@ -197,22 +197,33 @@ for (const [mode, base] of [
 		continue;
 	}
 	for (const encoding of Object.keys(variants)) {
-		// what the transport's worker is left with in ArrayBuffers after the
-		// plain body, none of it collected: the transferred chunks leave it,
-		// a copy of its own would stay (about 11 MB; 2 MB without)
+		// what the transport's worker kept of the chunks the plain body came
+		// to it in: the transferred chunks leave it, a copy of its own would
+		// leave them there (all 12 MB). Its ArrayBuffer memory that no
+		// collection took (uncollected) is not the measure: the wisp
+		// WebSocket's messages the body came in on are dropped as epoxy takes
+		// them, and how many of them a body leaves, or a collection had
+		// freed and V8 still counted, is when its collector last ran (none
+		// or about 8 MB, under load), whether or not the worker copied
 		await workers.memory();
+		if (encoding === 'identity') await workers.watchChunks('transport');
 		const held =
 			encoding === 'identity' ? await workers.uncollected('transport') : null;
 		const proxied = await frame
 			.evaluate(readAll, `${ORIGIN}big.js?enc=${encoding}`)
 			.catch((error) => ({ error: String(error).slice(0, 200) }));
 		if (encoding === 'identity') {
+			const chunks = await workers.keptChunks('transport');
 			const left = await workers.uncollected('transport');
 			const grew = held === null || left === null ? null : left - held;
 			ok(
 				`${mode}: the transport's worker passes the 12 MB body on without a copy of its own`,
-				grew !== null && grew < SIZE / 2,
-				JSON.stringify({ grewMB: grew === null ? null : grew / 1e6 }),
+				chunks !== null && chunks.enqueued >= SIZE && chunks.kept < SIZE / 2,
+				JSON.stringify({
+					enqueuedMB: chunks && chunks.enqueued / 1e6,
+					keptMB: chunks && chunks.kept / 1e6,
+					uncollectedMB: grew === null ? null : grew / 1e6,
+				}),
 			);
 		}
 		ok(

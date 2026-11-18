@@ -6,6 +6,51 @@
 // include some no full collection has taken yet: compare it with a margin.
 import { PROXY } from './lib.mjs';
 
+/**
+ * Run in a worker, for `keptChunks`: the `enqueue` of a stream's controller
+ * (a default stream's, as epoxy's response bodies and every stream the
+ * worker passes them through are, or a transform's) notes the buffer of
+ * each chunk enqueued, and holds it: what the worker did with it is still
+ * there to see whenever the collector ran. Installed once; run again, it
+ * notes afresh.
+ */
+const WATCH_CHUNKS = `(() => {
+	const key = Symbol.for('stomp.test.chunks');
+	if (globalThis[key]) return void (globalThis[key].noted = new Map());
+	const watch = { noted: new Map() };
+	for (const name of [
+		'ReadableStreamDefaultController',
+		'TransformStreamDefaultController',
+	]) {
+		const prototype = globalThis[name]?.prototype;
+		const enqueue = prototype?.enqueue;
+		if (!enqueue) continue;
+		prototype.enqueue = function (chunk) {
+			const buffer = ArrayBuffer.isView(chunk) ? chunk.buffer : chunk;
+			if (watch.noted && buffer instanceof ArrayBuffer && !watch.noted.has(buffer))
+				watch.noted.set(buffer, buffer.byteLength);
+			return Reflect.apply(enqueue, this, arguments);
+		};
+	}
+	globalThis[key] = watch;
+})()`;
+
+/**
+ * in a worker: the bytes the noted buffers held when enqueued, and those
+ * they hold now; the watch ends (nothing more is noted or held)
+ */
+const KEPT_CHUNKS = `(() => {
+	const watch = globalThis[Symbol.for('stomp.test.chunks')];
+	let enqueued = 0;
+	let kept = 0;
+	for (const [buffer, bytes] of watch?.noted ?? []) {
+		enqueued += bytes;
+		kept += buffer.byteLength;
+	}
+	if (watch) watch.noted = null;
+	return { enqueued, kept };
+})()`;
+
 export async function workerMemory(browser) {
 	const cdp = await browser.newBrowserCDPSession();
 	let messageId = 0;
@@ -113,6 +158,41 @@ export async function workerMemory(browser) {
 			for (const sessionId of await sessions(label)) {
 				const usage = await inTarget(sessionId, 'Runtime.getHeapUsage');
 				if (usage) total = (total ?? 0) + usage.backingStorageSize;
+			}
+			return total;
+		},
+		/**
+		 * From now on, each target of `label` notes the buffer of each chunk
+		 * a stream there is given (WATCH_CHUNKS), for `keptChunks`. What it
+		 * noted before is forgotten.
+		 */
+		async watchChunks(label) {
+			for (const sessionId of await sessions(label))
+				await inTarget(sessionId, 'Runtime.evaluate', {
+					expression: WATCH_CHUNKS,
+				});
+		},
+		/**
+		 * Of the chunks the targets of `label` enqueued since `watchChunks`,
+		 * the bytes they held (`enqueued`) and the bytes their buffers still
+		 * hold (`kept`), summed: a chunk passed on by transfer keeps none,
+		 * one the worker copied and passed the copy of keeps all of its.
+		 * Unlike `uncollected`, it is not a matter of when the collector
+		 * ran. The watch ends. Null when there is no such target.
+		 */
+		async keptChunks(label) {
+			let total = null;
+			for (const sessionId of await sessions(label)) {
+				const value = (
+					await inTarget(sessionId, 'Runtime.evaluate', {
+						expression: KEPT_CHUNKS,
+						returnByValue: true,
+					})
+				)?.result?.value;
+				if (!value) continue;
+				total ??= { enqueued: 0, kept: 0 };
+				total.enqueued += value.enqueued;
+				total.kept += value.kept;
 			}
 			return total;
 		},
