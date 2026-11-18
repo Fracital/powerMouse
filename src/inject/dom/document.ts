@@ -9,6 +9,7 @@ import baseModules from '../modules';
 import { reportParts } from '../reportParts';
 import { storageBucketParts } from '../storageBucketParts';
 import { webTransportParts } from '../webTransportParts';
+import { workerStartParts } from '../workerStartParts';
 import DocumentClient from './Client';
 import { deferred } from './deferred';
 import AdblockModule from './modules/Adblock';
@@ -85,6 +86,8 @@ mixedContentParts.noticeText = () => deferred('noticeText');
 accessFailureParts.failures = () => deferred('accessFailures');
 // and the un-routing of ReportingObserver's reports, with the first
 reportParts.seen = () => deferred('reportsSeen');
+// and what a worker's construction does past its checks, with the first
+workerStartParts.start = () => deferred('workerStart');
 
 class FingerprintStandIn extends Module<DocumentClient> {
 	apply() {

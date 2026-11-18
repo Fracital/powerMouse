@@ -23,6 +23,8 @@ import { storageUsage } from '../storageUsage';
 import { carry as carryWebTransport } from '../webTransport';
 import { webTransportParts } from '../webTransportParts';
 import { standIn as webTransportStandIn } from '../webTransportStandIn';
+import { workerStart } from '../workerStart';
+import { workerStartParts } from '../workerStartParts';
 import WorkerClient, {
 	setServiceWorkerPort,
 	setWorkerModules,
@@ -46,6 +48,8 @@ mixedContentParts.noticeText = () => noticeText;
 accessFailureParts.failures = () => accessFailures;
 // and the un-routing of ReportingObserver's reports (../reportParts.ts)
 reportParts.seen = () => reportsSeen;
+// and what a worker's construction does past its checks (../workerStartParts.ts)
+workerStartParts.start = () => workerStart;
 /** set once the bootstrap came without a transport (a worker of a worker): nothing carries its sessions */
 let transportless = false;
 webTransportParts.carry = () =>

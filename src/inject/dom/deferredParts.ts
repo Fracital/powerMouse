@@ -93,6 +93,7 @@ import { bucketMethods } from '../storageBucketMethods';
 import { storageUsage } from '../storageUsage';
 import { carry as carryWebTransport } from '../webTransport';
 import { standIn as webTransportStandIn } from '../webTransportStandIn';
+import { workerStart } from '../workerStart';
 import { checkedHeader, checkedMethod, notOpened } from '../xhrChecks';
 import { ancestorOriginsList } from './ancestorOriginsList';
 import { attributeViewMethods } from './attributeViewMethods';
@@ -159,6 +160,9 @@ export const parts = {
 	// the un-routing of ReportingObserver's reports, at the first
 	// (../reportsSeen.ts; ../modules/Unroute.ts)
 	reportsSeen,
+	// what a worker's construction does past its checks, at a document's
+	// first (../workerStart.ts; ../modules/Worker.ts)
+	workerStart,
 	compileFilter,
 	longFrames,
 	longTasks,
