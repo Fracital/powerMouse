@@ -54,7 +54,6 @@ import {
 	provideShellFacts,
 	provideShellSyncXHR,
 	routeHTML,
-	XML_DOCUMENT_MIMES,
 } from '../../rewriteHTML';
 import type { RewriterLib } from '../../rewriterLight';
 import {
@@ -98,7 +97,6 @@ import {
 import type { ActivationPart } from './activationPart';
 import cloneRawNode, {
 	inertDocumentOf,
-	nativeAttributes,
 	parsedBases,
 	parseHTML,
 	releaseMarkup,
@@ -122,7 +120,6 @@ import {
 	runningNonce,
 	sandboxTokens,
 	serializeScripted,
-	stripScripts,
 	textifyNoscript,
 	unwrapNoscript,
 } from './sandbox';
@@ -3467,61 +3464,9 @@ export default class DocumentClient extends Client {
 	 * the document instead, as the browser's parser does at its end.
 	 */
 	loadXML(markup: string, mime: string) {
-		const parsed = parseHTML(
-			markup,
-			this.global.document,
-			(XML_DOCUMENT_MIMES.includes(mime)
-				? mime
-				: 'application/xml') as DOMParserSupportedType,
-		);
-		const root = parsed.documentElement;
-		const live = this.global.document.documentElement;
-		if (!root || !live) return;
-		const land = (prolog: Node[] = [], epilog: Node[] = []) =>
-			this.#landXML(root, live, prolog, epilog);
-		// a document with nothing but its root (most): no prolog to read
-		if (parsed.childNodes.length === 1) return land();
-		deferred('xmlProlog')(this, parsed, root, land, (output) => {
-			const page = this.global.document;
-			this.refreshSandbox();
-			if (!this.allows('allow-scripts')) stripScripts(output);
-			setGlobalParsingState(this.global, 'parsingBeforeWrite');
-			this.rewriteInlineScripts(output, true);
-			const clone = cloneRawNode([output], page, true);
-			setGlobalParsingState(this.global);
-			page.replaceChild(clone, live);
-			runDocumentOpenListeners(this.global);
-		});
-	}
-	#landXML(root: Element, live: Element, prolog: Node[], epilog: Node[]) {
-		this.refreshSandbox();
-		if (!this.allows('allow-scripts')) stripScripts(root);
-		setGlobalParsingState(this.global, 'parsingBeforeWrite');
-		this.rewriteInlineScripts(root, true);
-		const page = this.global.document;
-		// (through the insertion hooks, which route a stylesheet PI's href)
-		for (const node of prolog) page.insertBefore(page.importNode(node), live);
-		for (const node of epilog) page.appendChild(page.importNode(node));
-		// The shell's root is the document's own start tag, so it stays (a
-		// root put in its place would not carry the title: Chrome's
-		// document.title only follows an SVG <title> that is inserted under
-		// the connected root). Its attributes are set again, through the
-		// hooks, and the shell's scripts give way to the page's children.
-		for (const attribute of Array.from(
-			Reflect.apply(nativeAttributes, live, []) as NamedNodeMap,
-		))
-			if (attribute.namespaceURI)
-				live.setAttributeNS(
-					attribute.namespaceURI,
-					attribute.name,
-					attribute.value,
-				);
-			else live.setAttribute(attribute.name, attribute.value);
-		while (live.firstChild) live.removeChild(live.firstChild);
-		const clone = cloneRawNode(root, page, true);
-		setGlobalParsingState(this.global);
-		live.append(clone);
-		runDocumentOpenListeners(this.global);
+		// (a deferred part, ./instructions.ts: without it the document does
+		// not load)
+		deferred('loadXML')(this, markup, mime);
 	}
 	/** @internal the rewritten text each script element carries (DOMContentHooks, DOMHooks) */
 	readonly rewrittenScripts = new WeakMap<HTMLScriptElement, string>();
