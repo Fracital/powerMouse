@@ -1336,6 +1336,12 @@ export type Controllerbound = {
 	 */
 	passkeyPrompt: [{ request: PasskeyPrompt; port: MessagePort }, unknown];
 	/**
+	 * the site pool: whether the focus is in the page of the frame the
+	 * document `client` is in (a ceremony's focus check, whose top may be a
+	 * document of another slot)
+	 */
+	passkeyFocused: [string, boolean];
+	/**
 	 * the site pool: the slot `site` is shown from (its origin), given one
 	 * now when it has none; null without a pool
 	 */

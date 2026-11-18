@@ -1275,11 +1275,17 @@ for (const [mode, base, uv] of [
 		const a = await host.open(HOSTS.a);
 		await run(a, 'register', { server: { user: 'key' } });
 		// the proxy origin itself, outside every inject: the host's page in
-		// the same-origin mode, the controller frame in the isolated one
-		const own =
-			mode === 'isolated'
-				? page.frames().find((frame) => /controllerFrame/.test(frame.url()))
-				: page.mainFrame();
+		// the same-origin mode, the controller frame in the isolated one; with
+		// the site pool, the agent of the slot the site is shown from (its
+		// worker is the site's authenticator, docs/site-pool.md)
+		const origin = new URL(a.url()).origin;
+		const own = page
+			.frames()
+			.find(
+				(frame) =>
+					new URL(frame.url()).origin === origin &&
+					(frame === page.mainFrame() || /controllerFrame/.test(frame.url())),
+			);
 		const names = (context) =>
 			context
 				.evaluate(async () =>
@@ -1320,6 +1326,7 @@ for (const [mode, base, uv] of [
 									.getAll();
 								all.onsuccess = async () => {
 									const held = all.result[0];
+									if (!held) return resolve(null);
 									resolve({
 										type: held.privateKey.type,
 										extractable: held.privateKey.extractable,

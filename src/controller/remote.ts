@@ -362,6 +362,15 @@ export class RemoteController extends EventTarget {
 						[],
 					];
 				},
+				passkeyFocused: async (client) => {
+					const frame = this.#clients.frame(client);
+					return [
+						!!frame &&
+							document.hasFocus() &&
+							document.activeElement === frame.element,
+						[],
+					];
+				},
 				stale: async (info) => {
 					const was = this.stale;
 					this.stale = info;

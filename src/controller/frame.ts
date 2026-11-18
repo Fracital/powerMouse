@@ -263,6 +263,8 @@ if (window === window.parent || !origins.length) {
 											(await rpc.call('passkeyPrompt', { request, port }, [
 												port,
 											])) as PasskeyAnswer | null,
+										focused: async (client: string): Promise<boolean> =>
+											(await rpc.call('passkeyFocused', client)) === true,
 									},
 								}
 							: {}),

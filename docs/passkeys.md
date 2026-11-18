@@ -123,6 +123,11 @@ response. What the worker writes:
 - attestation `none` (`fmt: "none"`, an empty `attStmt`) and an AAGUID of
   zeros, as Chrome gives for providers that do not attest.
 
+**With the site pool** (docs/site-pool.md, Passkeys), each slot's worker
+is the authenticator of the sites that slot shows, with its own
+`stompPasskeys` on the slot's origin, and the hub's host asks the user for
+every slot. `controller.passkeys` and `forgetStorage` reach every slot's.
+
 ## User verification: real or none
 
 A site is told the user was verified (the UV flag, and

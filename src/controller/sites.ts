@@ -10,6 +10,13 @@
 // the hub's origin's (src/server/jarDB.ts).
 import type { SitesConfig } from '../config';
 import type {
+	PasskeyAnswer,
+	PasskeyCommand,
+	PasskeyInfo,
+	PasskeyPrompt,
+	PasskeysConfig,
+} from '../passkeys/types';
+import type {
 	PermissionRequestInfo,
 	RequestInfo,
 	SiteArrival,
@@ -65,6 +72,12 @@ export interface SiteAgentInit {
 	slots: number;
 	/** the controller's options, as the hub's own were given (no functions) */
 	controller: Partial<ControllerInit>;
+	/**
+	 * the hub's passkeys (Config.passkeys): the slot's worker is the
+	 * authenticator of the sites it shows, and the hub's host asks the user
+	 * (HubBound.passkeyPrompt)
+	 */
+	passkeys?: PasskeysConfig;
 }
 
 /** implemented by the hub, called by an agent */
@@ -85,6 +98,13 @@ export type HubBound = {
 	request: [RequestInfo];
 	/** a site asks for a permission (ControllerInit.onPermissionRequest) */
 	permission: [PermissionRequestInfo, boolean | null];
+	/** a site's passkey ceremony asks the user (ControllerInit.passkeys), with the port that says the page gave up */
+	passkeyPrompt: [
+		{ request: PasskeyPrompt; port: MessagePort },
+		PasskeyAnswer | null,
+	];
+	/** whether the focus is in the page of the frame that shows the document `client` (a ceremony's focus check) */
+	passkeyFocused: [string, boolean];
 	/** replace the transport (the agent's setTransport) */
 	setTransport: [TransportModule];
 };
@@ -114,6 +134,8 @@ export type AgentBound = {
 	focus: [number];
 	/** which of these service worker clients the slot's worker does not know (the hub's ClientFrames) */
 	goneClients: [string[], string[]];
+	/** the host's command to the passkeys the slot's worker holds (StompController.passkeys) */
+	passkeys: [PasskeyCommand, PasskeyInfo[] | boolean | null];
 	history: [
 		{ index: number; run: number; op: SiteHistoryOp },
 		SiteHistoryAnswer | null,
@@ -170,6 +192,8 @@ export interface SiteAgentHooks {
 	blocker: () => MessagePort;
 	request(info: RequestInfo): void;
 	permission(info: PermissionRequestInfo): Promise<boolean | null>;
+	/** HubBound.passkeyFocused */
+	passkeyFocused(client: string): Promise<boolean>;
 	/** the controller's keep-alive, for the hub's clock */
 	keepAlive?: () => void;
 	/** the slot's worker took the controller's handshake (its hello): it is STomp's */
@@ -317,6 +341,15 @@ export interface HubHost {
 	arrive(arrival: SiteArrival): Promise<void>;
 	request(info: RequestInfo): void;
 	permission(info: PermissionRequestInfo): Promise<boolean | null>;
+	/** the host's passkeys, once its controller is ready (Config.passkeys) */
+	passkeys(): PasskeysConfig | undefined;
+	/** a slot's site's passkey ceremony: the host asks the user */
+	passkeyPrompt(
+		request: PasskeyPrompt,
+		port: MessagePort,
+	): Promise<PasskeyAnswer | null>;
+	/** HubBound.passkeyFocused */
+	passkeyFocused(client: string): Promise<boolean>;
 	setTransport(descriptor: TransportModule): Promise<void>;
 }
 
@@ -764,6 +797,28 @@ export class SiteHub {
 		}
 	}
 	/**
+	 * The host's passkey command (StompController.passkeys) for every slot's
+	 * worker, each the authenticator of the sites it shows and their store:
+	 * their answers, null for a slot that could not answer. Every slot's,
+	 * started for it: a slot no site of this page uses holds what sites it
+	 * showed before
+	 */
+	passkeys(
+		command: PasskeyCommand,
+	): Promise<(PasskeyInfo[] | boolean | null)[]> {
+		return Promise.all(
+			this.#slots.origins.map(async (origin) => {
+				const agent = this.#agent(origin);
+				try {
+					await agent.ready;
+					return await agent.rpc.call('passkeys', command);
+				} catch (error) {
+					return null;
+				}
+			}),
+		);
+	}
+	/**
 	 * which of `clients` no slot's worker knows either: a document shown
 	 * from a slot is a client of that slot's worker, which the hub's own
 	 * worker never knows of. An agent that cannot answer keeps its clients
@@ -821,6 +876,14 @@ export class SiteHub {
 				blocker: async (port) => host.blocker(port),
 				request: async (info) => host.request(info),
 				permission: async (info) => [await host.permission(info), []],
+				passkeyPrompt: async ({ request, port }) => [
+					await host.passkeyPrompt(request, port),
+					[],
+				],
+				passkeyFocused: async (client) => [
+					await host.passkeyFocused(client),
+					[],
+				],
 				setTransport: async (descriptor) => host.setTransport(descriptor),
 			},
 			SITE_RPC,
@@ -864,6 +927,7 @@ export class SiteHub {
 			agent.port = undefined;
 			Promise.all([host.codecKey(), host.agentOptions()]).then(
 				([codecKey, controller]) => {
+					const passkeys = host.passkeys();
 					const init: SiteAgentInit = {
 						codecKey,
 						pool: host.poolSize(),
@@ -874,6 +938,7 @@ export class SiteHub {
 						origins: [...this.#slots.origins],
 						slots: this.#slots.origins.length,
 						controller,
+						...(passkeys ? { passkeys } : {}),
 					};
 					element.contentWindow?.postMessage({ [SITE_INIT]: init }, origin, [
 						port,

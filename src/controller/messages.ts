@@ -219,4 +219,6 @@ export type HostBound = {
 	 * PASSKEY_CANCEL when the page gives up (RemoteControllerInit.passkeys)
 	 */
 	passkeyPrompt: [{ request: PasskeyPrompt; port: MessagePort }, unknown];
+	/** the site pool: whether the focus is in the frame that shows the document `client` (a ceremony's focus check) */
+	passkeyFocused: [string, boolean];
 };

@@ -399,6 +399,28 @@ quarter of their requests (request-clients, 200 visits: 150 to 152 with
 their frame) and every later fetch of a page's service worker reached the
 log late or with no frame.
 
+**Passkeys** (docs/passkeys.md). A slot's worker is the passkey
+authenticator of the sites it shows, as the hub's is of its own: it checks
+who asks from the sender's route, makes and signs, and keeps the keys in
+`stompPasskeys` on the slot's origin. A site keeps its slot, so its
+passkeys stay with the rest of its data there, each site's under its
+relying party ids as on one origin. The hub hands each agent its passkeys
+option (`SiteAgentInit.passkeys`), and the agent's controller gives every
+prompt to the hub (`passkeyRelay`, `HubBound.passkeyPrompt`), whose host
+asks the user with the frame the document is in, as for its own sites.
+Chrome lets a frame ask while the focus is anywhere in its top's page, and
+a slot's worker has no client of a top shown from another slot: when none
+of its own clients has the focus it asks the hub
+(`passkeyFocused`), which answers whether the focus is in the frame of the
+host's page that shows the document (through its host in isolation mode).
+`controller.passkeys` lists, deletes and clears across the hub's worker
+and every slot's (an agent is started for a slot that has none yet: it
+may hold the passkeys of sites it showed before), and `forgetStorage`
+forgets a site's passkeys in every slot with its storage. The passkeys
+suite passes with the pool on, in both modes (site-pool-passkeys runs it
+so). A site that loses its slot (the pool's kept assignments are bounded,
+`KEPT_SITES`) loses its passkeys with its storage.
+
 ## Popups under the isolated host
 
 With the pool every proxied page is a frame of another origin than the
@@ -1275,17 +1297,6 @@ suite named passes with it off (`STOMP_SITE_POOL=0`).
 - **Sites that share a slot** are as coupled as without a pool, for good:
   a site cannot move without its data. Six ports are five slots, and an ad
   page has more sites than that.
-- **Passkeys** (docs/passkeys.md): STomp's passkey provider does not
-  reach the slots yet. A slot's agent runs its controller without the
-  host's `passkeys` option and its worker has no host to ask, so a slot's
-  documents have none: a site's registrations and sign-ins end as the
-  browser's own decline, before any authenticator (the relying party
-  guard, src/inject/dom/credentialFlows.ts), as every proxied page's did
-  before the provider, where with the pool off they go to STomp's. The
-  passkeys suite fails with the pool on and passes with it off. The
-  follow-up hands each agent the option and the host's prompt, as
-  isolation mode's frame does (`passkeyRelay`, src/controller/frame.ts),
-  and lists and forgets a site's passkeys across slots.
 - **The initiator of a navigation a frame aims at another slot's window**:
   the frame's inject asks that window's to navigate itself (an envelope
   with the hub's token, taken only from a frame under the receiver), so

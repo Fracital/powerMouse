@@ -285,6 +285,8 @@ export interface ControllerInit {
 			request: PasskeyPrompt,
 			port: MessagePort,
 		) => Promise<PasskeyAnswer | null>;
+		/** whether the focus is in the host's frame that shows the document `client` (#passkeyFocused) */
+		focused?: (client: string) => Promise<boolean>;
 	};
 	/**
 	 * HTTP cache in the service worker, on by default: GET/HEAD responses
@@ -1317,6 +1319,9 @@ export class StompController extends EventTarget {
 					arrive: (arrival) => this.siteArrive(arrival),
 					request: (info) => this.#reportRequest(info),
 					permission: (info) => this.#askPermission(info),
+					passkeys: () => this.config.passkeys,
+					passkeyPrompt: (request, port) => this.#passkeyPrompt(request, port),
+					passkeyFocused: (client) => this.#passkeyFocused(client),
 					setTransport: (descriptor) =>
 						this.setTransport(descriptor as TransportDescriptor),
 				},
@@ -2068,22 +2073,14 @@ export class StompController extends EventTarget {
 					const blocker = this.#init.agent?.blocker?.() ?? null;
 					return [blocker, blocker ? [blocker] : []];
 				},
-				passkeyPrompt: async ({ request, port }) => {
-					const relay = this.#init.passkeyRelay;
-					if (relay) return [await relay.prompt(request, port), []];
-					const init = this.#init.passkeys;
-					// nobody here to ask: the request ends as one the user declined
-					if (!init) {
-						port.close();
-						return [null, []];
-					}
-					return [
-						await askHost(init, request, port, {
-							frame: this.#clients.frame(request.client),
-						}),
-						[],
-					];
-				},
+				passkeyPrompt: async ({ request, port }) => [
+					await this.#passkeyPrompt(request, port),
+					[],
+				],
+				passkeyFocused: async (client) => [
+					await this.#passkeyFocused(client),
+					[],
+				],
 				crossSite: async (args) => [
 					this.#init.agent
 						? await this.#init.agent.crossSite(args)
@@ -2317,6 +2314,38 @@ export class StompController extends EventTarget {
 		const event: RequestEvent = { ...info, frame };
 		this.#onRequest?.(event);
 		this.dispatchEvent(new CustomEvent('request', { detail: event }));
+	}
+	/** a site's passkey ceremony (its worker's, or a slot's worker's through its agent): the host asks the user */
+	async #passkeyPrompt(
+		request: PasskeyPrompt,
+		port: MessagePort,
+	): Promise<PasskeyAnswer | null> {
+		const relay = this.#init.passkeyRelay;
+		if (relay) return relay.prompt(request, port);
+		const init = this.#init.passkeys;
+		// nobody here to ask: the request ends as one the user declined
+		if (!init) {
+			port.close();
+			return null;
+		}
+		return askHost(init, request, port, {
+			frame: this.#clients.frame(request.client),
+		});
+	}
+	/**
+	 * whether the focus is in the page of the frame that shows the document
+	 * `client`, a slot's (the site pool's ceremony focus check): the frame
+	 * has it in the hub's page
+	 */
+	async #passkeyFocused(client: string): Promise<boolean> {
+		if (this.#init.agent) return this.#init.agent.passkeyFocused(client);
+		// the controller frame: its host's page has the frames
+		const relay = this.#init.passkeyRelay?.focused;
+		if (relay) return relay(client);
+		const frame = this.#clients.frame(client);
+		return (
+			!!frame && document.hasFocus() && document.activeElement === frame.element
+		);
 	}
 	/** a site asks for a permission: the host's onPermissionRequest answers */
 	async #askPermission(info: PermissionRequestInfo): Promise<boolean | null> {
@@ -2623,7 +2652,13 @@ export class StompController extends EventTarget {
 		command: PasskeyCommand,
 	): Promise<PasskeyInfo[] | boolean | null> {
 		await this.#ready;
-		return this.#call('passkeys', command);
+		const own = this.#call('passkeys', command);
+		if (!this.#sites) return own;
+		// the site pool: each slot's worker holds the passkeys of its sites
+		const all = [await own, ...(await this.#sites.passkeys(command))];
+		if (command.op === 'list')
+			return all.flatMap((answer) => (Array.isArray(answer) ? answer : []));
+		return command.op === 'delete' ? all.includes(true) : null;
 	}
 	/**
 	 * @internal A command to the jar, from `cookies` or from the controller

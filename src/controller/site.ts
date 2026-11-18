@@ -179,6 +179,10 @@ function start(init: SiteAgentInit, port: MessagePort, host: string) {
 						return [await traverse(win, command), []];
 				}
 			},
+			passkeys: async (command) => {
+				await ready;
+				return [await controller!.passkeyCommand(command), []];
+			},
 			history: async ({ index, run, op }) => {
 				const win = frameWindow(index, framesUp);
 				if (!win) return [null, []];
@@ -236,6 +240,7 @@ function start(init: SiteAgentInit, port: MessagePort, host: string) {
 				hub.call('request', info).catch(() => {});
 			},
 			permission: (info) => hub.call('permission', info),
+			passkeyFocused: (client) => hub.call('passkeyFocused', client),
 			heard: () => heard(),
 		};
 		let heard!: () => void;
@@ -254,6 +259,20 @@ function start(init: SiteAgentInit, port: MessagePort, host: string) {
 			// unused: the agent's transport is the hub's
 			transport: { module: 'about:blank' },
 			agent,
+			// the hub's host asks the user about a ceremony of a site this
+			// slot shows; the slot's worker makes and signs (docs/passkeys.md)
+			...(init.passkeys
+				? {
+						passkeyRelay: {
+							config: {
+								uv: init.passkeys.uv === true,
+								testing: init.passkeys.testing === true,
+							},
+							prompt: (request, port) =>
+								hub.call('passkeyPrompt', { request, port }, [port]),
+						},
+					}
+				: {}),
 		});
 		try {
 			await Promise.race([helloed, silent]);

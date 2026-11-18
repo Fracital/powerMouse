@@ -1251,7 +1251,7 @@ function handleMessage(event: ExtendableMessageEvent) {
 					// in its top's document or another frame under that top
 					focused: async () => {
 						const windows = await self.clients.matchAll({ type: 'window' });
-						return windows.some((client) => {
+						const here = windows.some((client) => {
 							if (
 								!(client instanceof WindowClient) ||
 								!client.focused ||
@@ -1269,6 +1269,16 @@ function handleMessage(event: ExtendableMessageEvent) {
 								return false;
 							}
 						});
+						// the site pool: its top may be a document of another slot,
+						// which is no client of this worker; the hub knows where
+						// the focus is in the host's page
+						return (
+							here ||
+							(!!ref.config.sites &&
+								(await ref.rpc
+									.call('passkeyFocused', source.id)
+									.catch(() => false)) === true)
+						);
 					},
 				},
 				ceremony,
