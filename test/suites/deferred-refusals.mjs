@@ -18,7 +18,9 @@
 // WebSocketStream's (src/inject/bareClient.ts socketStandIns) and a
 // fetchLater() call (src/inject/dom/fetchLater.ts), and an array method
 // called with a window as its receiver (src/inject/windowArrays.ts) and
-// Origin.from() (src/inject/originFrom.ts); an
+// Origin.from() (src/inject/originFrom.ts), and caches.match() and a
+// cache's add() reject before the browser's caches are asked
+// (src/inject/cacheCalls.ts); an
 // image in a frame
 // no service worker controls keeps its route and loads nothing (its copy
 // is a part, src/inject/dom/uncontrolledCopies.ts); an XML document a
@@ -172,6 +174,8 @@ const REFUSING = [
 	'fetchLater',
 	'windowArray',
 	'originFrom',
+	'cacheMatch',
+	'cacheAdd',
 	'execCommand',
 	'contextualFragment',
 	'open',
@@ -200,6 +204,8 @@ const PROMISED = [
 	'identity',
 	'disconnect',
 	'estimate',
+	'cacheMatch',
+	'cacheAdd',
 ];
 
 /** counting stand-ins for the browser's functions, in every document */
@@ -262,6 +268,13 @@ function countNatives() {
 		window.fetchLater = counted('fetchLater', window.fetchLater);
 	Array.prototype.at = counted('arrayAt', Array.prototype.at);
 	if (window.Origin?.from) Origin.from = counted('originFrom', Origin.from);
+	if (window.CacheStorage) {
+		CacheStorage.prototype.keys = counted(
+			'cacheKeys',
+			CacheStorage.prototype.keys,
+		);
+		Cache.prototype.put = counted('cachePut', Cache.prototype.put);
+	}
 	Document.prototype.execCommand = counted(
 		'execCommand',
 		Document.prototype.execCommand,
@@ -362,6 +375,8 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			'fetchLater',
 			'windowArray',
 			'originFrom',
+			'cacheMatch',
+			'cacheAdd',
 			'execCommand',
 			'contextualFragment',
 			'blankSetHTML',
@@ -480,6 +495,18 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		answer.out?.originFrom?.returned === 'object' &&
 			answer.reached?.includes('originFrom'),
 		JSON.stringify({ out: answer.out?.originFrom, reached: answer.reached }),
+	);
+	ok(
+		"with the parts, caches.match() and a cache's add() answer, through the browser's caches",
+		answer.out?.cacheMatch?.promise === 'resolved' &&
+			answer.out?.cacheAdd?.promise === 'resolved' &&
+			answer.reached?.includes('cacheKeys') &&
+			answer.reached?.includes('cachePut'),
+		JSON.stringify({
+			match: answer.out?.cacheMatch,
+			add: answer.out?.cacheAdd,
+			reached: answer.reached,
+		}),
 	);
 	ok(
 		"with the parts, execCommand's insertHTML and createContextualFragment reach the browser",

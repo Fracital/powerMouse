@@ -14,6 +14,10 @@
 // own. This file is not built itself: build.js reads its imports, and
 // `parts` names each of them once.
 //
+// (and what a page's Cache API add(), addAll() and caches.match() do past
+// their hooks' checks, ../cacheCalls.ts, at a realm's first; a worker's
+// bundle has it itself)
+//
 // (and what Origin.from() answers a page, ../originFrom.ts, at a realm's
 // first call; a worker's bundle has it itself)
 //
@@ -123,6 +127,7 @@ import { codecBytes } from '../../wasm/codecBytes';
 import { modifyXML } from '../../xmlShell';
 import { accessFailures } from '../accessFailures';
 import { bareClient, socketStandIns } from '../bareClient';
+import { cacheCalls } from '../cacheCalls';
 import { cookieChanges, cookieStoreMethods } from '../cookieStoreMethods';
 import { hookDevices } from '../deviceGrants';
 import { recordSize } from '../idbSize';
@@ -230,6 +235,9 @@ export const parts = {
 	// the wording of the access API's errors, at a document's first
 	// (../accessFailures.ts; ../errorMessages.ts)
 	accessFailures,
+	// what a page's add(), addAll() and caches.match() do past their hooks'
+	// checks, at a realm's first (../cacheCalls.ts; ../modules/Partition.ts)
+	cacheCalls,
 	// what Origin.from() answers a page, at a realm's first call
 	// (../originFrom.ts; ../modules/OriginFrom.ts)
 	originFrom,

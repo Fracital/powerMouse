@@ -506,6 +506,7 @@ const DEFERRED_FILES = new Set(
 		'src/blocker/procedural.ts',
 		'src/cspJudge.ts',
 		'src/inject/bareClient.ts',
+		'src/inject/cacheCalls.ts',
 		'src/inject/cookieStoreMethods.ts',
 		'src/inject/deviceGrants.ts',
 		'src/inject/dom/activationGates.ts',

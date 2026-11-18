@@ -1,3 +1,5 @@
+import { cacheCallParts } from '../cacheCallParts';
+import type { CacheCalls } from '../cacheCalls';
 import Client from '../Client';
 import Module from '../Module';
 import { redirected, unsuffixed } from '../storageRedirect';
@@ -137,12 +139,28 @@ export default class PartitionModule extends Module<Client> {
 			typeof that !== 'object' ||
 			that === null ||
 			!Reflect.apply(isPrototypeOf, C.prototype, [that]);
+		const asRequest = (input: unknown): Request =>
+			input instanceof global.Request
+				? input
+				: new global.Request(input as RequestInfo);
+		// what add() and addAll() fetch and keep, and caches.match()'s walk
+		// of this origin's caches (../cacheCalls.ts), made at a realm's first
+		// such call, before the browser is asked anything
+		const nativePut = global.Cache?.prototype.put;
+		let calls: CacheCalls | undefined;
+		const cacheCalls = () =>
+			(calls ??= cacheCallParts.calls!()({
+				global,
+				asRequest,
+				put: nativePut,
+				keys: keysOf,
+				open: openOf,
+				has: hasOf,
+				client,
+				scoped,
+			}));
 		if (typeof global.Cache === 'function') {
 			const cache = global.Cache.prototype;
-			const asRequest = (input: unknown): Request =>
-				input instanceof global.Request
-					? input
-					: new global.Request(input as RequestInfo);
 			for (const method of ['delete', 'keys'] as const)
 				cache[method] = proxyModule.wrapFunction(
 					cache[method] as Function,
@@ -187,24 +205,10 @@ export default class PartitionModule extends Module<Client> {
 			});
 			const addAll = (cache.addAll = proxyModule.wrapFunction(
 				cache.addAll,
-				async (target, that, args) => {
-					if (refused(that, global.Cache, args))
-						return await Reflect.apply(target, that, args);
-					const requests = [...(args[0] as Iterable<unknown>)].map(asRequest);
-					const responses = await Promise.all(
-						requests.map((request) => global.fetch(request)),
-					);
-					for (const [index, response] of responses.entries()) {
-						if (!response.ok)
-							throw new TypeError(
-								`Failed to execute 'addAll' on 'Cache': Request failed`,
-							);
-						await Reflect.apply(put, that, [
-							requests[index],
-							cacheableResponse(response),
-						]);
-					}
-				},
+				async (target, that, args) =>
+					refused(that, global.Cache, args)
+						? await Reflect.apply(target, that, args)
+						: await cacheCalls().addAll(that as Cache, args[0]),
 			));
 			cache.add = proxyModule.wrapFunction(cache.add, (target, that, args) =>
 				refused(that, global.Cache, args)
@@ -218,40 +222,12 @@ export default class PartitionModule extends Module<Client> {
 		// entries are keyed by the real URLs and hold the origin's raw bodies
 		if (typeof global.CacheStorage === 'function') {
 			const storage = global.CacheStorage.prototype;
-			const nativeKeys = keysOf;
-			const nativeOpen = openOf;
-			const nativeHas = hasOf;
 			storage.match = proxyModule.wrapFunction(
 				storage.match,
-				async (target, receiver, args) => {
-					if (refused(receiver, global.CacheStorage, args))
-						return await Reflect.apply(target, receiver, args);
-					const [that, key] = redirected(receiver, client.storageKey);
-					if (args.length && args[0] !== undefined)
-						args[0] =
-							args[0] instanceof global.Request
-								? args[0]
-								: new global.Request(args[0] as RequestInfo);
-					const options = args[1] as MultiCacheQueryOptions | undefined;
-					const names =
-						options?.cacheName !== undefined
-							? (await Reflect.apply(nativeHas, that, [
-									scoped(options.cacheName, key),
-								]))
-								? [scoped(options.cacheName, key)]
-								: []
-							: (
-									(await Reflect.apply(nativeKeys, that, [])) as string[]
-								).filter((name) => name.endsWith(`@${key}`));
-					for (const name of names) {
-						const cache = (await Reflect.apply(nativeOpen, that, [
-							name,
-						])) as Cache;
-						const hit = await cache.match(args[0] as RequestInfo, options);
-						if (hit) return hit;
-					}
-					return undefined;
-				},
+				async (target, receiver, args) =>
+					refused(receiver, global.CacheStorage, args)
+						? await Reflect.apply(target, receiver, args)
+						: await cacheCalls().match(receiver, args),
 			);
 		}
 

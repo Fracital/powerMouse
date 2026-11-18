@@ -11,6 +11,8 @@ import { listenOn, messageOf, startPort } from '../../transport/ports';
 import { accessFailureParts } from '../accessFailureParts';
 import { accessFailures } from '../accessFailures';
 import { socketStandIns } from '../bareClient';
+import { cacheCallParts } from '../cacheCallParts';
+import { cacheCalls } from '../cacheCalls';
 import { messageField, readModules, type HandedModules } from '../Client';
 import { recordSize } from '../idbSize';
 import { idbSizeParts } from '../idbSizeParts';
@@ -50,6 +52,8 @@ storageBucketParts.methods = () => bucketMethods;
 legacyFileSystemParts.partition = () => partitionLegacyFileSystem;
 // and the text of a mixed content notice (../mixedContentParts.ts)
 mixedContentParts.noticeText = () => noticeText;
+// and what a page's add(), addAll() and caches.match() do (../cacheCallParts.ts)
+cacheCallParts.calls = () => cacheCalls;
 // and what Origin.from() answers (../originFromParts.ts)
 originFromParts.answer = () => originFrom;
 // and the wording of the access API's errors (../accessFailureParts.ts)

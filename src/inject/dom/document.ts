@@ -2,6 +2,7 @@ import type { FpSurface } from '../../blocker/types';
 import { setDocumentShells } from '../../rewriteHTML';
 import { codecParts } from '../../wasm/codec';
 import { accessFailureParts } from '../accessFailureParts';
+import { cacheCallParts } from '../cacheCallParts';
 import { createClientFactory } from '../Client';
 import { idbSizeParts } from '../idbSizeParts';
 import { legacyFileSystemParts } from '../legacyFileSystemParts';
@@ -95,6 +96,8 @@ reportParts.seen = () => deferred('reportsSeen');
 // the parts its shell loaded (a document without them seals in JavaScript,
 // with no request: ../../wasm/codec.ts)
 codecParts.bytes = () => heldPart('codecBytes')?.();
+// and what a page's add(), addAll() and caches.match() do, with the first
+cacheCallParts.calls = () => deferred('cacheCalls');
 // and what Origin.from() answers, with a realm's first call
 originFromParts.answer = () => deferred('originFrom');
 // and what reads a window as an array method or a list of arguments does,

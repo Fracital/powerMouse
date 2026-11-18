@@ -486,6 +486,17 @@
 					outcome(() => new WebSocketStream('wss://socket.invalid/#x')),
 				// fetchLater (src/inject/dom/fetchLater.ts): a URL it cannot defer
 				fetchLater: () => outcome(() => fetchLater('data:,x')),
+				// the Cache API's calls past their hooks' checks
+				// (src/inject/cacheCalls.ts): a match in this origin's caches,
+				// and an add(), which fetches and keeps what came back
+				cacheMatch: () =>
+					outcome(() => caches.match('deferred-refusals-landed.html')),
+				cacheAdd: () =>
+					outcome(() =>
+						caches
+							.open('deferred-refusals')
+							.then((cache) => cache.add('deferred-refusals-landed.html')),
+					),
 				// Origin.from() of this window (src/inject/originFrom.ts)
 				originFrom: () => outcome(() => Origin.from(window)),
 				// an array method called with a window as its receiver
