@@ -4,6 +4,7 @@ import ProxyModule from '../../modules/Proxy';
 import { unrouteCSS } from '../../modules/Unroute';
 import { LazySet, LazyWeakMap, LazyWeakSet } from '../../ownCollections';
 import type DocumentClient from '../Client';
+import { HTML_NAMESPACE } from '../namespaces';
 
 /**
  * The DOM hooks keep the value the page wrote for a routed attribute in a
@@ -509,8 +510,7 @@ function run<T>(write: Write, callback: () => T): T {
 export function attributeName(element: unknown, name: string): string {
 	try {
 		if (
-			Reflect.apply(nativeNamespaceURI, element, []) ===
-				'http://www.w3.org/1999/xhtml' &&
+			Reflect.apply(nativeNamespaceURI, element, []) === HTML_NAMESPACE &&
 			Reflect.apply(
 				nativeContentType,
 				Reflect.apply(nativeOwnerDocument, element, []),

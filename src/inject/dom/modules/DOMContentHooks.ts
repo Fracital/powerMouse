@@ -26,6 +26,7 @@ import cloneRawNode, {
 	parseHTMLFragmentIn,
 	startedScripts,
 } from '../cloneNode';
+import { HTML_NAMESPACE } from '../namespaces';
 import {
 	isStylesheetPI,
 	landStylesheetPIs,
@@ -132,8 +133,7 @@ export function htmlName(node: Node): string {
 	if (nodeTypeOf(node) !== 1)
 		return Reflect.apply(nodeNameGet, node, []) as string;
 	const name = Reflect.apply(nodeNameGet, node, []) as string;
-	return Reflect.apply(namespaceGet, node, []) ===
-		'http://www.w3.org/1999/xhtml'
+	return Reflect.apply(namespaceGet, node, []) === HTML_NAMESPACE
 		? name.toUpperCase()
 		: name;
 }
@@ -413,7 +413,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// an SVG one (inline SVG, an SVG document) the element's
 		const rewriteAnyScript = (node: Node, willConnect: boolean) => {
 			const namespace = Reflect.apply(namespaceGet, node, []);
-			if (namespace === 'http://www.w3.org/1999/xhtml')
+			if (namespace === HTML_NAMESPACE)
 				usePrototype(node, nativeHTMLScriptElement, (script) =>
 					rewriteScript(script, willConnect),
 				);
@@ -788,7 +788,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				const passed = client.scriptPrepared(
 					script,
 					text,
-					element.namespaceURI === 'http://www.w3.org/1999/xhtml'
+					element.namespaceURI === HTML_NAMESPACE
 						? undefined
 						: 'SVGScriptElement text',
 				);
@@ -817,8 +817,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			}
 			if (
 				Reflect.apply(nativeHasAttribute, node, ['src']) ||
-				(Reflect.apply(namespaceGet, node, []) !==
-					'http://www.w3.org/1999/xhtml' &&
+				(Reflect.apply(namespaceGet, node, []) !== HTML_NAMESPACE &&
 					(Reflect.apply(nativeHasAttribute, node, ['href']) ||
 						Reflect.apply(nativeHasAttributeNS, node, [
 							'http://www.w3.org/1999/xlink',
@@ -1308,8 +1307,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						nodeTypeOf(context) === 1 &&
 							!(
 								(context as Element).localName === 'html' &&
-								(context as Element).namespaceURI ===
-									'http://www.w3.org/1999/xhtml'
+								(context as Element).namespaceURI === HTML_NAMESPACE
 							)
 							? (context as Element)
 							: null,

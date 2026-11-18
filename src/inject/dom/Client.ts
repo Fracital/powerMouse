@@ -92,6 +92,7 @@ import DOMAttributesModule, {
 } from './modules/DOMAttributes';
 import { markerPrefix, useMarker } from './modules/MutationObserver';
 import SyncModule from './modules/Sync';
+import { HTML_NAMESPACE, SVG_NAMESPACE } from './namespaces';
 import type { PolicyChecks } from './policyChecks';
 import { Pool, type PoolState } from './pool';
 import { createRewriterRealm, libraryFactoryFromScript } from './rewriterRealm';
@@ -3361,9 +3362,9 @@ export default class DocumentClient extends Client {
 			)
 				return null;
 			const namespace = Reflect.apply(namespaceGet, node, []);
-			return namespace === 'http://www.w3.org/1999/xhtml'
+			return namespace === HTML_NAMESPACE
 				? 'html'
-				: namespace === 'http://www.w3.org/2000/svg'
+				: namespace === SVG_NAMESPACE
 					? 'svg'
 					: null;
 		} catch (error) {

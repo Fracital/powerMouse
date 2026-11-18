@@ -1,5 +1,6 @@
 import { LazyWeakMap, LazyWeakSet } from '../ownCollections';
 import { asParsed, trustedHTML } from '../trusted';
+import { HTML_NAMESPACE, SVG_NAMESPACE } from './namespaces';
 
 // the native parser call, taken before the Trusted Types parse wrap
 // (src/inject/dom/modules/TrustedParse.ts): STomp's own parses are never
@@ -144,8 +145,7 @@ export function isHTMLTemplate(node: unknown): node is HTMLTemplateElement {
 		return (
 			Reflect.apply(nativeNodeType, node, []) === 1 &&
 			Reflect.apply(nativeLocalName, node, []) === 'template' &&
-			Reflect.apply(nativeNamespace, node, []) ===
-				'http://www.w3.org/1999/xhtml'
+			Reflect.apply(nativeNamespace, node, []) === HTML_NAMESPACE
 		);
 	} catch (error) {
 		// not a node
@@ -174,10 +174,7 @@ export function isScriptElement(node: unknown): node is Element {
 		)
 			return false;
 		const namespace = Reflect.apply(nativeNamespace, node, []);
-		return (
-			namespace === 'http://www.w3.org/1999/xhtml' ||
-			namespace === 'http://www.w3.org/2000/svg'
-		);
+		return namespace === HTML_NAMESPACE || namespace === SVG_NAMESPACE;
 	} catch (error) {
 		// not a node
 		return false;
@@ -213,7 +210,7 @@ export function inertDocumentOf(document: Document): Document {
 	// element of its own)
 	return templateContentDocument(
 		Reflect.apply(nativeCreateElementNS, document, [
-			'http://www.w3.org/1999/xhtml',
+			HTML_NAMESPACE,
 			'template',
 		]) as Element,
 	);
@@ -237,7 +234,7 @@ export const createElementIn = (document: Document, name: string) =>
 /** an HTML element of `name` in `document`, by the browser's own createElementNS */
 export const createHTMLElement = (document: Document, name: string) =>
 	Reflect.apply(nativeCreateElementNS, document, [
-		'http://www.w3.org/1999/xhtml',
+		HTML_NAMESPACE,
 		name,
 	]) as Element;
 
@@ -423,9 +420,7 @@ export function closeNoscripts(root: Node): boolean {
 		let descend = true;
 		if (Reflect.apply(nativeNodeType, node, []) === 1) {
 			const name = Reflect.apply(nativeLocalName, node, []);
-			const html =
-				Reflect.apply(nativeNamespace, node, []) ===
-				'http://www.w3.org/1999/xhtml';
+			const html = Reflect.apply(nativeNamespace, node, []) === HTML_NAMESPACE;
 			if (html && name === 'template') {
 				if (
 					closeNoscripts(Reflect.apply(nativeTemplateContent, node, []) as Node)
@@ -622,7 +617,7 @@ export default function cloneRawNode(
 					const namespace = (d[0] as Element).namespaceURI;
 					try {
 						target =
-							namespace === 'http://www.w3.org/1999/xhtml' &&
+							namespace === HTML_NAMESPACE &&
 							document.contentType === 'text/html'
 								? document.createElement(d[0].nodeName)
 								: document.createElementNS(
@@ -660,7 +655,7 @@ export default function cloneRawNode(
 					// (`async = false` on a script that never asked for async).
 					if (
 						runScripts &&
-						namespace === 'http://www.w3.org/1999/xhtml' &&
+						namespace === HTML_NAMESPACE &&
 						target.localName === 'script' &&
 						target.hasAttribute('src') &&
 						!target.hasAttribute('async')

@@ -7,6 +7,7 @@ import { unrouteURL } from '../../modules/Unroute';
 import { LazyWeakMap } from '../../ownCollections';
 import { blobLoads } from '../blobLoads';
 import DocumentClient from '../Client';
+import { HTML_NAMESPACE, SVG_NAMESPACE } from '../namespaces';
 import { responseURLOf } from '../responseDocuments';
 import {
 	nativeDocumentFragment,
@@ -186,8 +187,8 @@ export default class ReadbackModule extends Module<DocumentClient> {
 			for (const [text, piece] of texts) pieces.set(text, piece);
 		};
 
-		const HTML = 'http://www.w3.org/1999/xhtml';
-		const SVG = 'http://www.w3.org/2000/svg';
+		const HTML = HTML_NAMESPACE;
+		const SVG = SVG_NAMESPACE;
 		// Every insertion reads its nodes here, so they are read through the
 		// browser's accessors called on the node rather than with a prototype
 		// swapped in (usePrototype): the swaps were the largest part of the
