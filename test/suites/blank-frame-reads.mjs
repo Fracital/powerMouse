@@ -5,6 +5,7 @@
 // shows, the page's and the slots' reads after one slot's writes and a
 // removal included. Compared with the page loaded natively; both demo modes.
 import {
+	bridgeRequests,
 	done,
 	FIXTURE,
 	HOST,
@@ -51,20 +52,25 @@ for (const [mode, base] of [
 	page.on('console', (message) => {
 		if (message.text().startsWith('STEP ')) step = message.text().slice(5);
 	});
+	const sent = [];
 	page.context().on('request', (request) => {
 		if (!step || !/\/xhr$/.test(new URL(request.url()).pathname)) return;
-		try {
-			const route = new URL(JSON.parse(request.postData()).data.url).pathname
-				.split('/')
-				.slice(-2)
-				.join('/');
-			(calls[step] ??= []).push(route);
-		} catch (error) {
-			// not the bridge's
-		}
+		sent.push([step, request]);
 	});
 	await submitLanding(page, target);
 	const proxied = await report(page);
+	// the bridge's request rides in the beacon's URL, sealed, or in its body
+	const carried = await bridgeRequests(
+		page,
+		sent.map(([, request]) => request),
+	);
+	for (const [at, [step]] of sent.entries()) {
+		const url = carried[at]?.data?.url;
+		if (!url) continue;
+		(calls[step] ??= []).push(
+			new URL(url).pathname.split('/').slice(-2).join('/'),
+		);
+	}
 	ok(
 		`${mode}: the page ran to the end`,
 		proxied?.done && !proxied.error,

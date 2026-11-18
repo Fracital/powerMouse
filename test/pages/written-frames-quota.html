@@ -1,0 +1,42 @@
+<!doctype html>
+<title>WRITTEN FRAMES QUOTA</title>
+<body>
+	<script>
+		// An ad page's slots, written in one task: 32 frames with no src whose
+		// initial about:blank documents get an ad library and a creative from
+		// long ad server URLs, each of which reads localStorage and the
+		// cookies. Natively every script runs, in order, and no read throws;
+		// the suite compares what each frame saw with native Chrome.
+		const out = { frames: [], errors: [] };
+		window.__wfq = out;
+		localStorage.setItem('wfq', 'v');
+		document.cookie = 'wfq=1; path=/';
+		window.__ran = (slot, name, read) => out.frames[slot].push([name, read]);
+		window.__error = (slot, message) => out.errors.push([slot, message]);
+		// an ad server's query string: ids, sizes, targeting
+		const query = Array.from(
+			{ length: 24 },
+			(_, i) => `k${i}=${(i * 7919).toString(36).repeat(6)}`,
+		).join('&');
+		const src = (slot, name) =>
+			`/perf/r?t=js&n=${name}${slot}&${query}&body=${encodeURIComponent(
+				`parent.__ran(${slot}, '${name}', [localStorage.getItem('wfq'), document.cookie.includes('wfq=1')]);`,
+			)}`;
+		for (let slot = 0; slot < 32; slot++) {
+			out.frames.push([]);
+			const frame = document.createElement('iframe');
+			document.body.append(frame);
+			const doc = frame.contentDocument;
+			doc.open();
+			doc.write(
+				`<script>onerror = (message) => parent.__error(${slot}, String(message));<\/script>` +
+					`<script src="${src(slot, 'lib')}"><\/script>` +
+					`<script src="${src(slot, 'ad')}"><\/script>`,
+			);
+			doc.close();
+		}
+		addEventListener('load', () => {
+			out.done = true;
+		});
+	</script>
+</body>

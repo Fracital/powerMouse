@@ -595,6 +595,43 @@ export async function watchFrameTargets(page, enable, onEvent) {
 	return () => cdp.detach().catch(() => {});
 }
 
+/**
+ * The requests the synchronous bridge carried in `requests` (the browser's
+ * requests to a controller's `/xhr`), each as the page sent it (`{ id, data
+ * }`) or null for one that is not the bridge's: in the beacon's URL, sealed
+ * with the controller's codec (`?r=`), or in its body. A seal is opened by
+ * the client of a proxied document of `page`'s controller (`name`: the
+ * client's global, when that is not the demo's controller).
+ */
+export async function bridgeRequests(page, requests, name) {
+	name ??= await page.evaluate(() => window.controller.config.names.client);
+	const sealed = requests.map((request) =>
+		new URL(request.url()).searchParams.get('r'),
+	);
+	let opened = null;
+	for (const frame of page.frames()) {
+		opened = await frame
+			.evaluate(
+				({ name, list }) =>
+					window[name]?.codec
+						? list.map((text) =>
+								text === null ? null : window[name].codec.decode(text),
+							)
+						: null,
+				{ name, list: sealed },
+			)
+			.catch(() => null);
+		if (opened) break;
+	}
+	return requests.map((request, at) => {
+		try {
+			return JSON.parse(opened?.[at] ?? request.postData());
+		} catch (error) {
+			return null;
+		}
+	});
+}
+
 /** a page on the demo's landing screen with the controller ready */
 export async function openDemo(
 	browser,

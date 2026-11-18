@@ -543,7 +543,7 @@ export default async function createServer(
 	registerMediaLoads(router);
 	registerKeptLoads(router);
 	registerIntegrityLoads(router);
-	registerXhr(router);
+	registerXhr(router, init.codec);
 
 	return {
 		router,

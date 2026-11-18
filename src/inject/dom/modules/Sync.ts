@@ -28,9 +28,23 @@ const encoder = new TextEncoder();
 export const BEACON_QUOTA = 64 * 1024;
 
 /**
+ * The longest request sent in the beacon's URL. Chrome counts only a
+ * beacon's body against the quota, so a request in the URL takes none of it:
+ * a page that writes 24 ad frames in one task made 48 copies of their
+ * scripts through the bridge, about 1.3 KB each in the body, and the quota
+ * was spent before any frame ran; every read after threw QuotaExceededError
+ * and every script written after was dropped, where natively nothing has a
+ * quota to meet. A longer request (a large storage value) goes in the body,
+ * as before; Chrome takes URLs of up to 2 MB. The limit is of the request
+ * as sealed (the codec's text is URL-safe, and longer than the request).
+ */
+const URL_REQUEST = 1024 * 1024;
+
+/**
  * The beacons in flight a write may bring the document to (the bridge counts
- * every beacon it sent, reads included); the rest of the quota is kept for
- * reads, which cannot go another way.
+ * the body of every beacon it sent, reads included; a request in the URL has
+ * none); the rest of the quota is kept for reads, which cannot go another
+ * way.
  */
 export const WRITE_BUDGET = BEACON_QUOTA - 24 * 1024;
 
@@ -369,13 +383,23 @@ export default class SyncModule extends Module<DocumentClient> {
 			id,
 			data,
 		});
-		const bytes = byteLength(payload, BEACON_QUOTA);
+		// sealed with the controller's codec, as a route is: the request
+		// names the site, its path and what the page sends, and the URL is
+		// one every log of addresses shows
+		const query =
+			payload.length <= URL_REQUEST ? client.codec.encode(payload) : '';
+		const inURL = query !== '' && query.length <= URL_REQUEST;
+		const bytes = inURL ? 0 : byteLength(payload, BEACON_QUOTA);
 		if (budget !== undefined && inflight + bytes > budget) return null;
 
 		// a beacon is refused (and never sent) when the payload is over the
 		// browser's 64 KiB beacon quota, which a large localStorage value hits;
 		// spinning for an answer that cannot come would freeze the page
-		if (!navigator.sendBeacon(queueXHR(client.url), payload)) {
+		if (
+			!(inURL
+				? navigator.sendBeacon(`${queueXHR(client.url)}?r=${query}`)
+				: navigator.sendBeacon(queueXHR(client.url), payload))
+		) {
 			if (budget !== undefined) return null;
 			throw withStack(
 				new DOMException(
@@ -384,10 +408,12 @@ export default class SyncModule extends Module<DocumentClient> {
 				),
 			);
 		}
-		inflight += bytes;
-		nativeSetTimeout(() => {
-			inflight -= bytes;
-		}, RELEASE_MS);
+		if (bytes) {
+			inflight += bytes;
+			nativeSetTimeout(() => {
+				inflight -= bytes;
+			}, RELEASE_MS);
+		}
 
 		const timeout = limit ?? (loopback ? LOOPBACK_TIMEOUT : TIMEOUT);
 		const deadline = Date.now() + timeout;

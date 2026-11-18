@@ -1,4 +1,5 @@
 import { decodeBase64, encodeBase64 } from '../base64';
+import type GenericCodec from '../Codecs';
 import { encodeCookie, splitAnswer, SYNC_CHUNK } from '../encodeCookie';
 import { ProcessData, ProcessResult, SyncBody } from '../sync';
 import { RouteContext } from '../transport/messages';
@@ -102,7 +103,7 @@ async function process(
 	}
 }
 
-export function registerXhr(router: Router) {
+export function registerXhr(router: Router, codec: GenericCodec) {
 	// a part of a body kept for a page (see ANSWER_COOKIES), from `at`: as
 	// much as one answer carries, never a surrogate pair split (a part
 	// travels as UTF-8)
@@ -129,7 +130,12 @@ export function registerXhr(router: Router) {
 	});
 
 	router.routes.set(/\/xhr/, async (request, _url, context) => {
-		const { id, data } = await request.json();
+		// the request rides in the beacon's URL, which takes none of the
+		// page's beacon quota, unless it is too long for one; sealed with the
+		// codec, as a route is (a seal it cannot open is no request)
+		const inURL = new URL(request.url).searchParams.get('r');
+		const { id, data } =
+			inURL === null ? await request.json() : JSON.parse(codec.decode(inURL));
 
 		const response = await process(router, data, context);
 		// counted from the answer, not from the request: an answer that took

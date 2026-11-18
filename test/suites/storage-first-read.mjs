@@ -5,6 +5,7 @@
 // keys, and two frames' writes, removals and a clear seen by the other frame
 // at once. Compared with the page loaded natively; both demo modes.
 import {
+	bridgeRequests,
 	done,
 	FIXTURE,
 	HOST,
@@ -52,20 +53,20 @@ for (const [mode, base] of [
 	page.on('console', (message) => {
 		if (message.text().startsWith('STEP ')) step = message.text().slice(5);
 	});
+	const sent = [];
 	page.context().on('request', (request) => {
 		if (step !== 'reads' || !/\/xhr$/.test(new URL(request.url()).pathname))
 			return;
-		try {
-			const route = new URL(JSON.parse(request.postData()).data.url).pathname
-				.split('/')
-				.at(-1);
-			if (READS.includes(route)) calls.push(route);
-		} catch (error) {
-			// not the bridge's
-		}
+		sent.push(request);
 	});
 	await submitLanding(page, target);
 	const proxied = await report(page);
+	// the bridge's request rides in the beacon's URL, sealed, or in its body
+	for (const request of await bridgeRequests(page, sent)) {
+		const url = request?.data?.url;
+		const route = url && new URL(url).pathname.split('/').at(-1);
+		if (READS.includes(route)) calls.push(route);
+	}
 	ok(
 		`${mode}: the page ran to the end`,
 		proxied?.done && !proxied.error,

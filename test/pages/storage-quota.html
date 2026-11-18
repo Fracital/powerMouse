@@ -61,7 +61,9 @@
 		results.late = [
 			set('orderLate', make('late-first', 20 * KiB)),
 			set('orderLate', make('late-second', 20 * KiB)),
-			set('orderMixed', make('mixed-second', 20 * KiB)),
+			// over what the bridge takes at once (WRITE_BUDGET), so always sent
+			// asynchronously: the suite's lost write
+			set('orderMixed', make('mixed-second', 48 * KiB)),
 			set('orderGone', make('gone', 20 * KiB)),
 		];
 		localStorage.removeItem('orderGone');
