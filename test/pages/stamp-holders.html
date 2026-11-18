@@ -1,0 +1,74 @@
+<!doctype html>
+<title>STAMP HOLDERS</title>
+<body>
+	<script>
+		// The page writes localStorage and cookies alone, then with a frame of
+		// its own origin (a document of its own) that reads and writes them
+		// too, then alone again once the frame is gone. Every read is recorded
+		// for the suite, which compares them with native Chrome and, through
+		// the proxy, counts the stamps the writes leave for other documents.
+		const p = `sh${Date.now().toString(36)}_`;
+		const out = { steps: [] };
+		window.__sh = out;
+		const record = (name, value) => out.steps.push([name, value]);
+		const has = (cookies, cookie) => cookies.split('; ').includes(p + cookie);
+		const mark = (step) => console.log(`STEP ${step} ${Date.now()}`);
+		(async () => {
+			try {
+				mark('alone');
+				for (let i = 0; i < 30; i++) localStorage.setItem(`${p}x`, String(i));
+				for (let i = 0; i < 10; i++) document.cookie = `${p}c=${i}; path=/`;
+				record('the page reads its own writes', [
+					localStorage.getItem(`${p}x`),
+					has(document.cookie, 'c=9'),
+				]);
+				await new Promise((resolve) => setTimeout(resolve, 500));
+				mark('frame');
+				const frame = document.createElement('iframe');
+				frame.src = 'stamp-holders-frame.html';
+				const loaded = new Promise((resolve) => (frame.onload = resolve));
+				document.body.append(frame);
+				await loaded;
+				const w = frame.contentWindow;
+				record("the frame reads the page's writes", [
+					w.localStorage.getItem(`${p}x`),
+					has(w.document.cookie, 'c=9'),
+				]);
+				localStorage.setItem(`${p}x`, 'next');
+				document.cookie = `${p}c=next; path=/`;
+				const page = has(document.cookie, 'c=next');
+				record("the frame reads the page's next writes at once", [
+					w.localStorage.getItem(`${p}x`),
+					page,
+					has(w.document.cookie, 'c=next'),
+				]);
+				w.localStorage.setItem(`${p}y`, 'frame');
+				w.document.cookie = `${p}d=1; path=/`;
+				const writer = has(w.document.cookie, 'd=1');
+				record("the page reads the frame's writes at once", [
+					localStorage.getItem(`${p}y`),
+					writer,
+					has(document.cookie, 'd=1'),
+				]);
+				w.localStorage.removeItem(`${p}y`);
+				record("the page reads the frame's removal at once", [
+					localStorage.getItem(`${p}y`),
+				]);
+				frame.remove();
+				await new Promise((resolve) => setTimeout(resolve, 500));
+				mark('gone');
+				for (let i = 0; i < 20; i++) localStorage.setItem(`${p}x`, `g${i}`);
+				for (let i = 0; i < 5; i++) document.cookie = `${p}c=g${i}; path=/`;
+				record('the page alone again reads its own writes', [
+					localStorage.getItem(`${p}x`),
+					has(document.cookie, 'c=g4'),
+				]);
+				await new Promise((resolve) => setTimeout(resolve, 500));
+			} catch (error) {
+				out.error = String(error);
+			}
+			mark('end');
+			out.done = true;
+		})();
+	</script>
+</body>

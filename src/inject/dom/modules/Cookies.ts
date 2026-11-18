@@ -17,6 +17,7 @@ import { routedPrefix } from '../../modules/Unroute';
 import { LazyMap, LazySet } from '../../ownCollections';
 import { getDomain, getPublicSuffix } from '../../rewriter';
 import DocumentClient from '../Client';
+import { hold, onLeave, othersHold, StampStore } from '../stampHolders';
 import SyncModule, { BEACON_QUOTA, WRITE_BUDGET } from './Sync';
 
 const publicSuffix = (host: string) => getPublicSuffix(host);
@@ -59,6 +60,10 @@ interface View {
 	turn: string;
 }
 const views = new LazyMap<string, View>();
+/** this realm leaves the stamps' lists (stampHolders): its views read again */
+const dropViews = () => {
+	for (const view of views.values()) view.fresh = false;
+};
 
 /** a script write sent asynchronously that may not be in the jar yet */
 interface Unsettled {
@@ -105,6 +110,7 @@ export class CookiesModule extends Module<DocumentClient> {
 	#versions: Storage | null = null;
 	#getItem?: Storage['getItem'];
 	#setItem?: Storage['setItem'];
+	#store: StampStore | null = null;
 	/**
 	 * called when the jar may have changed for this document: its own
 	 * writes, and the worker's broadcast of any change of its site's cookies
@@ -136,6 +142,14 @@ export class CookiesModule extends Module<DocumentClient> {
 				(descriptor?.get?.call(global) as Storage | undefined) ?? null;
 			this.#getItem = global.Storage.prototype.getItem;
 			this.#setItem = global.Storage.prototype.setItem;
+			if (this.#versions)
+				this.#store = {
+					storage: this.#versions,
+					getItem: this.#getItem,
+					setItem: this.#setItem,
+					removeItem: global.Storage.prototype.removeItem,
+				};
+			onLeave(dropViews);
 		} catch (error) {
 			// no storage (an opaque origin): every read goes to the jar
 		}
@@ -198,11 +212,22 @@ export class CookiesModule extends Module<DocumentClient> {
 		this.#view.fresh = false;
 		this.#stamp();
 	}
-	/** a new version for this site; null when there is no storage for one */
+	/**
+	 * A new version for this site; null when there is no storage for one.
+	 * The version stays when no other realm holds a view of the jar
+	 * (stampHolders): this document's view has the change applied or is
+	 * dropped, and the realm's other views are dropped.
+	 */
 	#stamp(): string | null {
 		const version = `${Date.now()}:${Math.random()}`;
 		try {
 			if (!this.#setItem) return null;
+			if (this.#store && !othersHold(this.#store, this.#versionKey)) {
+				// the realm's other views (documents of other URLs) read again
+				const own = this.#view;
+				for (const view of views.values()) if (view !== own) view.fresh = false;
+				return this.#version();
+			}
 			this.#setItem.call(this.#versions, this.#versionKey, version);
 			return version;
 		} catch (error) {
@@ -372,6 +397,9 @@ export class CookiesModule extends Module<DocumentClient> {
 
 		const syncModule = client.getModule(SyncModule)!;
 		client.cookieReads++;
+		// on the stamp's list before the copy is taken: a write by another
+		// realm from now on stamps
+		if (this.#store) hold(this.#store, this.#versionKey);
 		// the jar answers without its HttpOnly cookies (the route filters)
 		const answer = syncModule.tryJsonAPI(
 			BEACON_QUOTA,

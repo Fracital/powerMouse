@@ -17,6 +17,7 @@ import { LazyMap } from '../../ownCollections';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { deferred } from '../deferred';
 import type { PresentationIds } from '../presentations';
+import { hold, onLeave, othersHold, StampStore } from '../stampHolders';
 import type { StorageAccessTaken } from '../storageAccess';
 import SyncModule, { WRITE_BUDGET } from './Sync';
 
@@ -48,6 +49,13 @@ interface Pending {
 
 /** the read caches of this bundle's documents, by store (storageFactory) */
 const readCaches = new LazyMap<string, unknown>();
+/** a version no stamp has: the copy is read again */
+const LEFT = '\0';
+/** this realm leaves the stamps' lists (stampHolders): its copies read again */
+const dropCaches = () => {
+	for (const cache of readCaches.values())
+		(cache as { version: string }).version = LEFT;
+};
 
 export default class StorageModule extends Module<DocumentClient> {
 	apply() {
@@ -104,6 +112,7 @@ export default class StorageModule extends Module<DocumentClient> {
 		let stamps: Storage | null = null;
 		let nativeGetItem: Storage['getItem'] | undefined;
 		let nativeSetItem: Storage['setItem'] | undefined;
+		let stampStore: StampStore | null = null;
 		try {
 			const global = pageGlobal;
 			stamps =
@@ -112,6 +121,14 @@ export default class StorageModule extends Module<DocumentClient> {
 				) as Storage | undefined) ?? null;
 			nativeGetItem = global.Storage.prototype.getItem;
 			nativeSetItem = global.Storage.prototype.setItem;
+			if (stamps)
+				stampStore = {
+					storage: stamps,
+					getItem: nativeGetItem,
+					setItem: nativeSetItem,
+					removeItem: global.Storage.prototype.removeItem,
+				};
+			onLeave(dropCaches);
 		} catch (error) {
 			// no storage of its own (an opaque origin): every read goes out
 		}
@@ -123,6 +140,9 @@ export default class StorageModule extends Module<DocumentClient> {
 			if (!cache || !stamps || !nativeGetItem) return null;
 			let version: string;
 			try {
+				// on the stamp's list before the copy is filled: a write by
+				// another realm from now on stamps
+				if (stampStore) hold(stampStore, stampOf(cache));
 				version = Reflect.apply(nativeGetItem, stamps, [stampOf(cache)]) ?? '';
 			} catch (error) {
 				return null;
@@ -136,10 +156,22 @@ export default class StorageModule extends Module<DocumentClient> {
 			}
 			return cache;
 		};
-		/** the store changed: every document reads it fresh */
+		/**
+		 * The store changed: every document reads it fresh. The version stays
+		 * when no other realm holds a copy (stampHolders): this document's has
+		 * the change applied or is emptied, and the realm's other copies of
+		 * the store (a Storage Access handle's) are emptied.
+		 */
 		const stamp = (cache: ReadCache): string | null => {
 			const version = `${Date.now()}:${Math.random()}`;
 			try {
+				const key = stampOf(cache);
+				if (stampStore && !othersHold(stampStore, key)) {
+					for (const other of readCaches.values())
+						if (other !== cache && (other as ReadCache).store === cache.store)
+							(other as ReadCache).version = LEFT;
+					return Reflect.apply(nativeGetItem!, stamps, [key]) ?? '';
+				}
 				Reflect.apply(nativeSetItem!, stamps, [stampOf(cache), version]);
 				return version;
 			} catch (error) {
