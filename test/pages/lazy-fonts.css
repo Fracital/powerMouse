@@ -1,0 +1,25 @@
+@font-face {
+	font-family: Lazy;
+	src: url(lazy-fonts-latin.ttf) format('truetype');
+	unicode-range: U+0000-00FF, U+2000-206F;
+}
+@font-face {
+	font-family: Lazy;
+	src: url(lazy-fonts-cyrillic.ttf) format('truetype');
+	unicode-range: U+0400-045F, U+0490-0491;
+}
+@font-face {
+	font-family: Lazy;
+	src: url(lazy-fonts-greek.ttf) format('truetype');
+	unicode-range: U+0370-03FF;
+}
+@font-face {
+	font-family: Lazy;
+	font-weight: 700;
+	src: url(lazy-fonts-bold.ttf) format('truetype');
+	unicode-range: U+0000-00FF;
+}
+@font-face {
+	font-family: Unused;
+	src: url(lazy-fonts-unused.ttf) format('truetype');
+}

@@ -36,6 +36,9 @@
 // (and the document.write stream, ./WriteStream.ts with its tokenizer, at a
 // document's first write)
 //
+// (and the font faces of a sheet copied for a document no service worker
+// controls, ./lazyFonts.ts, at the first such face)
+//
 // (and the handlers of long tasks and long animation frames,
 // ./modules/LongTasks.ts and ./modules/LongFrames.ts, at a document's first
 // such entry)
@@ -106,6 +109,7 @@ import { identityFlow, relyingPartyGuard } from './credentialFlows';
 import { ownStoreRefusal } from './credentialStore';
 import { saveDownload } from './downloadSave';
 import { instructionData, modifyXML, xmlProlog } from './instructions';
+import { lazyFonts } from './lazyFonts';
 import { formEncoding, legacyFormQuery, legacyQuery } from './legacyEncoding';
 import { markupMembers } from './markupMembers';
 import FingerprintModule from './modules/Fingerprint';
@@ -233,6 +237,9 @@ export const parts = {
 	presentationIds,
 	// a same-origin download's copy, at a document's first (modules/Download.ts)
 	saveDownload,
+	// a copied sheet's font faces, at the first a document no service worker
+	// controls copies (./uncontrolledCopies.ts)
+	lazyFonts,
 	gateCall,
 	gateGetter,
 	notificationParts,

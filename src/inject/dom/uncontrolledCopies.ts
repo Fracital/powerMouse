@@ -21,6 +21,8 @@ import { LazyWeakMap, LazyWeakSet } from '../ownCollections';
 import { blobLoads, opaqueCopies } from './blobLoads';
 import type DocumentClient from './Client';
 import type { StyleElement } from './Client';
+import { deferred } from './deferred';
+import type { DeferredParts } from './deferredParts';
 import { loadFetch, loadSource } from './loadGrants';
 import { CustomElement, nativeElement } from './modules/DOMHooks';
 import { hookWrite } from './modules/MutationObserver';
@@ -308,21 +310,39 @@ export function uncontrolledCopies(ctx: CopyContext) {
 				fragments.get(target)!.add(named.slice(target.length));
 		}
 		await Promise.allSettled(
-			routesIn(text).map(async (target) =>
+			routesIn(text).map(async (target) => {
+				const load = kinds.get(target) ?? null;
+				const page = unrouteURL(moduleClient, target) ?? target;
+				const copy = () =>
+					copyOf(target, page, state, depth, load, [
+						...(fragments.get(target) ?? []),
+					]);
+				// a font face's source is copied when the browser needs it
 				copied.set(
 					target,
-					await copyOf(
-						target,
-						unrouteURL(moduleClient, target) ?? target,
-						state,
-						depth,
-						kinds.get(target) ?? null,
-						[...(fragments.get(target) ?? [])],
-					),
-				),
-			),
+					(load === 'font cors' && lazyFont(target, page, copy)) ||
+						(await copy()),
+				);
+			}),
 		);
 		return copied;
+	};
+	// the part that makes them (./lazyFonts.ts), with what it puts a face
+	// back with
+	let sentinels: ReturnType<DeferredParts['lazyFonts']> | undefined;
+	const lazyFont = (
+		...args: Parameters<ReturnType<DeferredParts['lazyFonts']>>
+	) => {
+		try {
+			return (sentinels ??= deferred('lazyFonts')(moduleClient, {
+				textOf,
+				rules: nativeRules,
+				marks: sheetMarks,
+			}))(...args);
+		} catch (error) {
+			// no part: copied at once
+			return null;
+		}
 	};
 	/**
 	 * A copied stylesheet's text with its own loads copied too: every route

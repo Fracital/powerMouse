@@ -1,0 +1,132 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>lazy-fonts</title>
+<script>
+	// A stylesheet's font faces load only as the text needs them: natively
+	// Chrome fetches a face when text in its unicode-range is shown in its
+	// family, weight and style, never the others (a Google Fonts sheet has a
+	// face per subset and weight). In this document, in an about:blank frame
+	// that a page writes markup into (a <link> and text, as an ad frame is
+	// written), and in one that takes the faces from a <style>: each reads
+	// the fixture's request log before and after, and records which faces
+	// were fetched and how the faces stand.
+	window.__record = { done: false };
+	const FILES = ['latin', 'cyrillic', 'greek', 'bold', 'unused'];
+	async function fetched() {
+		const served = await (
+			await fetch('/requests', { cache: 'no-store' })
+		).json();
+		const counts = {};
+		for (const name of FILES)
+			counts[name] = served.filter(
+				(path) => path === `/pages/lazy-fonts-${name}.ttf`,
+			).length;
+		return counts;
+	}
+	const settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+	async function measure(record, name, doc, run) {
+		const before = await fetched();
+		await run();
+		await Promise.race([doc.fonts.ready, settle(10000)]);
+		await settle(1500);
+		await Promise.race([doc.fonts.ready, settle(10000)]);
+		const after = await fetched();
+		record[`${name} fetched`] = FILES.filter(
+			(file) => after[file] > before[file],
+		).join(' ');
+		record[`${name} faces`] = [...doc.fonts]
+			.map(
+				(face) =>
+					`${face.family} ${face.weight} ${face.unicodeRange} ${face.status}`,
+			)
+			.sort()
+			.join(', ');
+		record[`${name} check`] = doc.fonts.check('16px Lazy', 'Hello');
+		record[`${name} drawn`] = drawn(doc);
+	}
+	// whether text is drawn with the face (the fixture's fonts have an `x`
+	// of their own) or with the next family
+	function drawn(doc) {
+		const width = (family) => {
+			const span = doc.createElement('span');
+			span.style.font = `40px ${family}`;
+			span.textContent = 'xxxxxxxxxx';
+			doc.body.append(span);
+			const measured = span.getBoundingClientRect().width;
+			span.remove();
+			return measured;
+		};
+		return width('Lazy, monospace') === width('monospace')
+			? 'fallback'
+			: 'face';
+	}
+	const TEXT = '<p style="font-family: Lazy, monospace">Hello</p>';
+	addEventListener('load', async () => {
+		const record = {};
+		const css = await (await fetch('lazy-fonts.css')).text();
+		await measure(record, 'page', document, async () => {
+			const link = document.createElement('link');
+			link.rel = 'stylesheet';
+			link.href = 'lazy-fonts.css?page';
+			const loaded = new Promise(
+				(resolve) => (link.onload = link.onerror = resolve),
+			);
+			document.head.append(link);
+			document.body.insertAdjacentHTML('beforeend', TEXT);
+			await loaded;
+		});
+		const written = document.createElement('iframe');
+		document.body.append(written);
+		await measure(record, 'written', written.contentDocument, async () => {
+			const doc = written.contentDocument;
+			doc.open();
+			doc.write(
+				`<!doctype html><html><head><link rel="stylesheet" href="${location.origin}/pages/lazy-fonts.css?written"></head><body>${TEXT}</body></html>`,
+			);
+			doc.close();
+			await settle(500);
+		});
+		const styled = document.createElement('iframe');
+		document.body.append(styled);
+		await measure(record, 'style', styled.contentDocument, async () => {
+			const doc = styled.contentDocument;
+			const style = doc.createElement('style');
+			style.textContent = css.replace(
+				/url\(lazy-fonts-/g,
+				`url(${location.origin}/pages/lazy-fonts-`,
+			);
+			doc.head.append(style);
+			doc.body.insertAdjacentHTML('beforeend', TEXT);
+			await settle(500);
+		});
+		// a page that asks for the face (as a font loader does) and draws with
+		// it once the set says it is in
+		const asked = document.createElement('iframe');
+		document.body.append(asked);
+		{
+			const doc = asked.contentDocument;
+			const before = await fetched();
+			const link = doc.createElement('link');
+			link.rel = 'stylesheet';
+			link.href = `${location.origin}/pages/lazy-fonts.css?asked`;
+			const loaded = new Promise(
+				(resolve) => (link.onload = link.onerror = resolve),
+			);
+			doc.head.append(link);
+			await loaded;
+			const faces = await doc.fonts.load('40px Lazy', 'x').then(
+				(faces) => faces.map((face) => face.status).join(),
+				(error) => `rejected ${error.name}`,
+			);
+			record['asked load'] = faces;
+			record['asked drawn'] = drawn(doc);
+			await settle(1500);
+			const after = await fetched();
+			record['asked fetched'] = FILES.filter(
+				(file) => after[file] > before[file],
+			).join(' ');
+		}
+		window.__record = { ...record, done: true };
+	});
+</script>
+<body></body>
