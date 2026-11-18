@@ -422,9 +422,10 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 	);
 	const based = await top.evaluate(() => window.__baseIn());
 	ok(
-		'with the parts, a base a report-only base-uri refuses applies and is reported',
+		'with the parts, a base a report-only base-uri refuses applies and is reported once',
 		based.baseURI === 'https://base.example/based/' &&
-			based.events?.includes('base-uri https://base.example/based/ report'),
+			based.events?.length === 1 &&
+			based.events[0] === 'base-uri https://base.example/based/ report',
 		JSON.stringify(based),
 	);
 	ok(

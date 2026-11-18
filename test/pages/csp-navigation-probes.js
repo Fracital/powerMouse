@@ -25,6 +25,11 @@
 		'documentURI',
 		'statusCode',
 		'sample',
+		// (`source`: where the browser says the code that made it is, and
+		// whether the event is its own)
+		...(query.has('source')
+			? ['sourceFile', 'lineNumber', 'columnNumber', 'isTrusted']
+			: []),
 	];
 	const events = [];
 	document.addEventListener('securitypolicyviolation', (event) => {

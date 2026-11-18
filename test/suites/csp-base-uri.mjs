@@ -18,6 +18,12 @@
 // /csp/doc?s=nav page (test/csp-server.mjs, test/pages/csp-navigation-probes.js),
 // its markup carrying a <base href> for each `b`; the base-parsed probe reads
 // the base URL and a relative link, so a base the browser ignores shows up.
+//
+// A base each kind of base-uri refuses (report-only and enforced, by header
+// and by meta, where a report-only meta is ignored natively) is compared
+// with every field of its violations Chrome sets, where it says the code
+// that inserted the base is and whether the event is its own among them,
+// and how many the page sees.
 import { report } from '../csp-lib.mjs';
 import {
 	done,
@@ -37,14 +43,30 @@ const OTHER = FIXTURE.includes('127.0.0.1')
 	: FIXTURE.replace('localhost', '127.0.0.1');
 
 /** a /csp/doc navigation page whose markup carries a <base href> for each `b` */
-function navURL(name, { p = [], b = [] }) {
+function navURL(
+	name,
+	{
+		p = [],
+		ro = [],
+		m = [],
+		mro = [],
+		b = [],
+		probes = ['base-parsed'],
+		source,
+	},
+) {
 	const query = new URLSearchParams();
 	for (const policy of [].concat(p)) query.append('p', policy);
+	for (const policy of [].concat(ro)) query.append('ro', policy);
+	for (const policy of [].concat(m)) query.append('m', policy);
+	for (const policy of [].concat(mro)) query.append('mro', policy);
+	// (the probes record where the browser says the code was, and isTrusted)
+	if (source) query.set('source', '1');
 	// the navigation page (its probe script, the metas, then a <base> per `b`);
 	// built here directly, not through csp-lib's caseURL
 	query.set('s', 'nav');
 	for (const href of [].concat(b)) query.append('b', href);
-	query.set('probes', 'base-parsed');
+	query.set('probes', probes.join(','));
 	query.set('case', name);
 	return `${FIXTURE}csp/doc?${query}`;
 }
@@ -65,6 +87,50 @@ const CASES = {
 		p: "base-uri 'self'",
 		b: `${OTHER}x/`,
 	},
+	// Under a report-only base-uri 'none' the page saw two violations of one
+	// base: the inject's report (src/inject/dom/rareAttributes.ts reportBase)
+	// and the browser's, of its own report-only copy of 'none', which refuses
+	// the base's route too (src/csp.ts browserPolicy)
+	"a report-only base-uri 'none' by header, a parsed base": {
+		ro: "base-uri 'none'",
+		b: `${FIXTURE}x/`,
+		source: true,
+	},
+	"a report-only base-uri 'none' by header, bases a script inserts": {
+		ro: "base-uri 'none'",
+		probes: ['base-self', 'base-other', 'base-change'],
+		source: true,
+	},
+	'a report-only base-uri self by header, a cross-origin base': {
+		ro: "base-uri 'self'",
+		b: `${OTHER}x/`,
+		probes: ['base-parsed', 'base-other'],
+		source: true,
+	},
+	"a report-only base-uri 'none' by meta, ignored": {
+		mro: "base-uri 'none'",
+		b: `${FIXTURE}x/`,
+		probes: ['base-parsed', 'base-self'],
+		source: true,
+	},
+	"an enforced base-uri 'none' by header": {
+		p: "base-uri 'none'",
+		b: `${FIXTURE}x/`,
+		probes: ['base-parsed', 'base-self'],
+		source: true,
+	},
+	"an enforced base-uri 'none' by meta": {
+		m: "base-uri 'none'",
+		b: `${FIXTURE}x/`,
+		probes: ['base-parsed', 'base-self'],
+		source: true,
+	},
+	"an enforced and a report-only base-uri 'none' by header": {
+		p: "base-uri 'none'",
+		ro: "base-uri 'none'",
+		probes: ['base-self'],
+		source: true,
+	},
 };
 
 /** base-uri console violations ("Setting the document's base URI to ...") */
@@ -78,10 +144,34 @@ function trackBaseConsole(page) {
 }
 
 /** a case's probe outcomes and the violations the page saw, native or proxied */
-const events = (value) =>
+/**
+ * Where Chrome says the code that made a violation was: through the proxy
+ * the browser's names the inject's hook, or the shell's markup, and the
+ * inject's names nothing (docs/csp.md, Not yet as natively)
+ */
+const POSITION = ['sourceFile', 'lineNumber', 'columnNumber'];
+/** whether the inject's own violation reads as trusted (the next change) */
+const UNCOMPARED = ['isTrusted'];
+/**
+ * A case's violations as compared: with `source`, every field the probes
+ * recorded but `left` (`positions`: only where the code was)
+ */
+const events = (value, source, positions = false) =>
 	(value?.events ?? [])
 		.map((event) =>
-			[event.effectiveDirective, event.blockedURI, event.disposition].join(' '),
+			source
+				? JSON.stringify(
+						Object.fromEntries(
+							Object.entries(event).filter(([field]) =>
+								positions
+									? POSITION.includes(field)
+									: !POSITION.includes(field) && !UNCOMPARED.includes(field),
+							),
+						),
+					)
+				: [event.effectiveDirective, event.blockedURI, event.disposition].join(
+						' ',
+					),
 		)
 		.sort();
 
@@ -127,14 +217,24 @@ for (const [mode, base] of [
 				500,
 			),
 		);
-		const wanted = events(want);
-		const got = events(value);
+		const wanted = events(want, spec.source);
+		const got = events(value, spec.source);
 		ok(
 			`${mode}: ${name}: the violations the page sees are the native ones`,
 			wanted.length === got.length &&
 				wanted.every((event, index) => event === got[index]),
 			JSON.stringify({ native: wanted, proxied: got }),
 		);
+		// (a known difference: the suite fails once it is as natively, and
+		// the line in docs/csp.md goes)
+		const placed = events(want, spec.source, true);
+		if (spec.source && placed.length)
+			ok(
+				`${mode}: ${name}: where the code was is still the known difference`,
+				JSON.stringify(placed) !==
+					JSON.stringify(events(value, spec.source, true)),
+				JSON.stringify(placed),
+			);
 		// where the page's base-uri accepts its own base, the proxy must not
 		// make the browser log a base-uri violation the native page never sees
 		if (spec.baseConsole)

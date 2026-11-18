@@ -256,7 +256,18 @@ export const policyChecks = {
 		// an enforced refusal is the browser's to report, every policy's
 		if (refusals.some(({ policy }) => policy.disposition === 'enforce')) return;
 		const reporting = refusals.filter(
-			({ policy }) => policy.disposition === 'report',
+			({ policy }) =>
+				policy.disposition === 'report' &&
+				// a base-uri that allows nothing is the browser's as written
+				// (src/csp.ts browserPolicy): its report-only copy refuses the
+				// base's route as well, and reports it itself, trusted, as
+				// natively (a second event here was one too many)
+				!(
+					directive === 'base-uri' &&
+					policy.directives
+						.get('base-uri')!
+						.every((source) => source.toLowerCase() === "'none'")
+				),
 		);
 		if (!reporting.length) return;
 		const global = client.global as typeof globalThis;

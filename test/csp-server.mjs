@@ -7,6 +7,8 @@
 //     ro: a Content-Security-Policy-Report-Only header (repeatable)
 //     m:  a <meta http-equiv="Content-Security-Policy"> in the head
 //         (repeatable)
+//     mro: a <meta http-equiv="Content-Security-Policy-Report-Only"> in the
+//         head (repeatable; the browser ignores it)
 //     probes: the names of test/pages/csp-probes.js's probes to run
 //     s:  styles in the head, one carrying nonce="probes" (markup-styles)
 //     js: `tt` for test/pages/csp-tt-probes.js's (Trusted Types) instead,
@@ -322,13 +324,18 @@ function policies(res, query) {
 		res.appendHeader('content-security-policy-report-only', policy);
 	for (const policy of query.getAll('pp'))
 		res.appendHeader('permissions-policy', policy);
-	return query
-		.getAll('m')
-		.map(
-			(policy) =>
-				`<meta http-equiv="Content-Security-Policy" content="${attribute(policy)}">`,
-		)
-		.join('');
+	const meta = (name, equiv) =>
+		query
+			.getAll(name)
+			.map(
+				(policy) =>
+					`<meta http-equiv="${equiv}" content="${attribute(policy)}">`,
+			)
+			.join('');
+	return (
+		meta('m', 'Content-Security-Policy') +
+		meta('mro', 'Content-Security-Policy-Report-Only')
+	);
 }
 
 // The `sandbox` directive's pages (csp-sandbox suite):
