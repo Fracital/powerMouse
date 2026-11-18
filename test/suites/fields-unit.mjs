@@ -1,8 +1,8 @@
 // The request fields a transport is handed (serveTransport's fitHeaders),
 // checked in node: epoxy keeps Chrome's Priority (to HTTP/2) and its
 // Accept-Encoding, a transport that says nothing gets neither, and the
-// HTTP/3 wrapper keeps Priority and Accept-Encoding when its base does
-// (leaving Accept-Encoding out of what goes over HTTP/3). The wrapper declared
+// HTTP/3 wrapper keeps Priority and Accept-Encoding when its base does,
+// over HTTP/3 as well. The wrapper declared
 // nothing, so a host that turned HTTP/3 on (the live demo) sent no
 // Priority on any request, where Chrome sends one on every request but a
 // script's (browserleaks' IP page showed it missing). Skips when esbuild
@@ -72,11 +72,12 @@ ok(
 );
 // the base's Accept-Encoding stays where the host put it (epoxy inserted its
 // own before Accept-Language, which a page's own Accept-Language moves into
-// Blink's map); stomp-h3 decodes less and names its own
+// Blink's map), over HTTP/3 too: stomp-h3 writes the codings it decodes into
+// that field in its place (it used to append its own at the end)
 ok(
-	'a request over HTTP/3 leaves the base Accept-Encoding to stomp-h3',
+	'a request over HTTP/3 keeps the Accept-Encoding in its place',
 	names(h3RequestHeaders('GET', fields, null, null)) ===
-		'user-agent accept priority',
+		'user-agent accept accept-encoding priority',
 	names(h3RequestHeaders('GET', fields, null, null)),
 );
 ok(
