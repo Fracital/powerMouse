@@ -573,9 +573,11 @@ export default class DocumentClient extends Client {
 				},
 				deferredText: (name) => {
 					const top = this.#topClient();
+					// (the slot's agent's, by name: src/slotShare.ts)
 					return top === this
-						? ((this.sites ? siteWindows().slotShared(this) : null)?.deferred ??
-								null)
+						? ((this.sites ? siteWindows().slotShared(this) : null)?.deferred?.[
+								name
+							] ?? null)
 						: top.deferredPartsText(BUILD, name);
 				},
 				factory: (text, name) => {

@@ -14,6 +14,11 @@ export interface SlotShare {
 	rewriter: RewriterLib;
 	/** the light library's statement, for a document's own copy (src/inject/rewriter.ts lightFactory) */
 	light: string | null;
-	/** the document bundle's deferred parts' statement (src/inject/dom/deferred.ts) */
-	deferred: string | null;
+	/**
+	 * the document bundle's deferred statements (src/inject/dom/deferred.ts),
+	 * each by its name (src/version.ts DEFERRED_FACTORY, PASSKEYS_FACTORY,
+	 * ACTIVATION_FACTORY): a document asks for one by its name, and a text
+	 * that ran on into the others would assign them as its realm's globals
+	 */
+	deferred: Readonly<Record<string, string>> | null;
 }

@@ -672,8 +672,12 @@ the frames under it: before it tells the hub it is ready, so before any
 document of the slot exists, from the library's file its controller reads
 anyway, in a realm of its own document made with the browser's methods
 and removed again. It keeps a frozen object of that library and the file's
-two statements on its window under a name made of the client's, which it
-makes for good. A frame of another slot finds it among the frames of the
+statements on its window under a name made of the client's, which it
+makes for good: the light library's, and the deferred ones each by its
+name (the parts', the passkey client's, the activation gates'), which a
+frame asks for by name. (A frame took the text from the parts' statement
+to the file's end for any of them before, and the statements
+after the one it asked for became globals of its page's.) A frame of another slot finds it among the frames of the
 real top, read with the browser's own getters, from the last (the agents
 come after the frames that show sites), rewrites in it, and the first one
 handed the controller's compiled module gives it to that library. A frame

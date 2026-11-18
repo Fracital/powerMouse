@@ -19,16 +19,34 @@ import { helperNames } from '../helperNames';
 import { createRewriterRealm } from '../inject/dom/rewriterRealm';
 import type { RewriterLib } from '../rewriterLight';
 import { slotLibraryName, type SlotShare } from '../slotShare';
-import { BUILD, DEFERRED_FACTORY, LIGHT_FACTORY } from '../version';
+import {
+	ACTIVATION_FACTORY,
+	BUILD,
+	DEFERRED_FACTORY,
+	LIGHT_FACTORY,
+	PASSKEYS_FACTORY,
+} from '../version';
 
 /**
- * The light library and the deferred parts' statements of the library's
- * file (build.js writes the second after a line break, and the first has no
- * line that starts with its name)
+ * The light library's statement and the deferred ones of the library's
+ * file, each by its name (build.js writes each deferred one after a line
+ * break, in this order, and no line of another starts with its name)
  */
-function statements(file: string): [light: string, deferred: string | null] {
-	const at = file.lastIndexOf(`\n${DEFERRED_FACTORY}=`);
-	return at === -1 ? [file, null] : [file.slice(0, at), file.slice(at + 1)];
+function statements(
+	file: string,
+): [light: string, deferred: Record<string, string> | null] {
+	const deferred: Record<string, string> = Object.create(null);
+	let end = file.length;
+	for (const name of [ACTIVATION_FACTORY, PASSKEYS_FACTORY, DEFERRED_FACTORY]) {
+		const at = file.lastIndexOf(`\n${name}=`, end);
+		if (at === -1) continue;
+		deferred[name] = file.slice(at + 1, end);
+		end = at;
+	}
+	return [
+		file.slice(0, end),
+		DEFERRED_FACTORY in deferred ? Object.freeze(deferred) : null,
+	];
 }
 
 /**

@@ -1106,4 +1106,61 @@ ok(
 	JSON.stringify(blockedRevived),
 );
 
+// A document of another slot than its page's has no proxied top to take the
+// deferred statements from: it takes them from its slot's agent, each by
+// its name (src/inject/dom/Client.ts deferredText, src/slotShare.ts). The
+// text of the file from the parts' statement on holds the passkey client's
+// and the activation gates' too, which a realm that evaluated it assigned
+// as globals of its page's. A part (an XMLHttpRequest's checks) and the
+// activation gates (a document that starts with the activation of the click
+// in the document before it, of another origin to it) each make their own
+// alone, and natively the page has no such global. (The passkey client is
+// the third, which a slot's documents do not make yet: docs/site-pool.md)
+const stompGlobals = (frame) =>
+	asPage(
+		frame,
+		"return Object.getOwnPropertyNames(window).filter((name) => name.startsWith('__stomp'))",
+	);
+const parted = await show(
+	'pool',
+	`${A}${PAGE}?parted&child=${encodeURIComponent(
+		`${B}${PAGE}?parted-b&to=${encodeURIComponent(`${B}${PAGE}?parted-to`)}`,
+	)}`,
+	inPool(POOL),
+);
+const partedChild = await childOf(
+	parted.frame,
+	(url) => inPool(POOL)(url) && url.includes('parted-b'),
+);
+ok(
+	'the frame of another site is of another slot than its page',
+	slotOf(partedChild.url()) !== slotOf(parted.frame.url()),
+	`${slotOf(partedChild.url())} under ${slotOf(parted.frame.url())}`,
+);
+await asPage(
+	partedChild,
+	"new XMLHttpRequest().open('GET', location.href); return null",
+);
+const afterPart = await stompGlobals(partedChild);
+ok(
+	'a frame of another slot that makes a deferred part writes no global, as natively',
+	afterPart.length === 0,
+	JSON.stringify(afterPart),
+);
+// its link, with no referrer: the sticky activation the browser carries
+// over to the next document is its own only from a document of its origin
+// (src/inject/dom/activation.ts)
+await asPage(
+	partedChild,
+	"document.getElementById('to').rel = 'noreferrer'; return null",
+);
+await click(partedChild, '#to');
+const arrived = await childOf(parted.frame, (url) => url.includes('parted-to'));
+const afterGates = await stompGlobals(arrived);
+ok(
+	'a frame of another slot that starts with the activation of the click before it writes no global, as natively',
+	afterGates.length === 0,
+	JSON.stringify(afterGates),
+);
+
 await done(browser, errors);
