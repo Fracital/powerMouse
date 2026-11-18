@@ -178,6 +178,16 @@ function withoutDirective(url: URL): URL {
 	return kept;
 }
 
+/** what `Client.location` decoded, and from what (`#readLocation`) */
+interface LocationMemo {
+	native: string;
+	named: string | undefined;
+	directory: string;
+	codec: GenericCodec;
+	href: string;
+	prefix: string;
+}
+
 export default class Client {
 	modules: Map<ModuleCtor, Module<any>>;
 	global: typeof globalThis;
@@ -478,6 +488,46 @@ export default class Client {
 	 * May not match the context URL
 	 */
 	get location(): StompURL {
+		const memo = this.#readLocation();
+		return new StompURL(memo.href, this.codec, memo.prefix);
+	}
+	/**
+	 * `location.toString()` without a copy: what every read of the page's
+	 * `location.href`, `location.pathname` and `document.URL` starts from
+	 */
+	get locationHref(): string {
+		return this.#readLocation().href;
+	}
+	/**
+	 * The location is a function of the address the browser has, the name the
+	 * shell gave the page and the controller's address, so it is decoded again
+	 * only when one of them changed. Decoding it on every read was 5 us per
+	 * `location.href` (20,000 reads took 100 ms, 5 natively).
+	 */
+	#locationMemo?: LocationMemo;
+	#readLocation(): LocationMemo {
+		const named = this.namedBase;
+		const native = this.global.location.href;
+		const memo = this.#locationMemo;
+		if (
+			memo &&
+			memo.native === native &&
+			memo.named === named &&
+			memo.directory === this.directory &&
+			memo.codec === this.codec
+		)
+			return memo;
+		const url = this.#decodeLocation();
+		return (this.#locationMemo = {
+			native,
+			named,
+			directory: this.directory,
+			codec: this.codec,
+			href: url.url.href,
+			prefix: url.directory,
+		});
+	}
+	#decodeLocation(): StompURL {
 		// a document the page made, or an inline document the worker served:
 		// its shell named the URL it shows (with the live fragment)
 		const named = this.namedBase;

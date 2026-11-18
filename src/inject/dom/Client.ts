@@ -2317,9 +2317,7 @@ export default class DocumentClient extends Client {
 				(Reflect.getOwnPropertyDescriptor(view, this.names.client)?.value as
 					DocumentClient | undefined);
 			if (other && other !== this)
-				return other.documentURL(document, native, () =>
-					other.location.toString(),
-				);
+				return other.documentURL(document, native, () => other.locationHref);
 			if (!view && native === 'about:blank') return native;
 		} catch (error) {
 			// not a document this realm may read: the page's answer

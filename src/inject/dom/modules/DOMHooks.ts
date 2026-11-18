@@ -1065,7 +1065,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					return moduleClient.documentURL(
 						that,
 						native,
-						() => responseURLOf(that) ?? moduleClient.location.toString(),
+						() => responseURLOf(that) ?? moduleClient.locationHref,
 					);
 				},
 			),

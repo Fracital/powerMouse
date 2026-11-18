@@ -141,15 +141,24 @@ export default class LocationModule extends Module<DocumentClient> {
 		// each part's URL descriptor, and one getter and one setter call for
 		// all of them, which read which part they are from the native they wrap
 		const urlParts: Record<string, PropertyDescriptor> = Object.create(null);
+		// the location's URL, parsed once per address: the part getters only
+		// read it, and a parse on every `location.pathname` was a third of
+		// its cost
+		let parsed: URL | undefined;
+		let parsedHref: string | undefined;
 		const partGet = (args: any[], target: Function) => {
-			const temp = new URL(moduleClient.location.toString());
+			const href = moduleClient.locationHref;
+			if (parsed === undefined || parsedHref !== href) {
+				parsed = new URL(href);
+				parsedHref = href;
+			}
 
-			return Reflect.apply(urlParts[memberName(target)].get!, temp, args);
+			return Reflect.apply(urlParts[memberName(target)].get!, parsed, args);
 		};
 		const partSet = (args: any[], target: Function) => {
 			const common = memberName(target);
 			const urlDescriptor = urlParts[common];
-			const temp = new URL(moduleClient.location.toString());
+			const temp = new URL(moduleClient.locationHref);
 
 			if (common === 'href') {
 				// one that does not parse: the browser's own SyntaxError,
@@ -323,7 +332,7 @@ export default class LocationModule extends Module<DocumentClient> {
 			},
 			// the location's own URL: the client's url is the base URLs resolve
 			// against, which a document's <base href> moves
-			toString: () => moduleClient.location.toString(),
+			toString: () => moduleClient.locationHref,
 		};
 		for (const [name, own] of Object.entries(methods)) {
 			const descriptor = Reflect.getOwnPropertyDescriptor(real, name);

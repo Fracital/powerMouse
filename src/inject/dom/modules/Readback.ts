@@ -50,7 +50,7 @@ export default class ReadbackModule extends Module<DocumentClient> {
 				return client.documentURL(
 					that,
 					native,
-					() => responseURLOf(that) ?? client.location.toString(),
+					() => responseURLOf(that) ?? client.locationHref,
 				);
 			}),
 		});
@@ -154,7 +154,7 @@ export default class ReadbackModule extends Module<DocumentClient> {
 					const page =
 						unrouteURL(client, value) ??
 						(value === client.global.location.href
-							? client.location.toString()
+							? client.locationHref
 							: value);
 					return image ? upgradedImage(value, page) : page;
 				}),
