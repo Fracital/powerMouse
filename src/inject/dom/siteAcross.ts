@@ -1,14 +1,25 @@
-// The site pool's navigations across slots (docs/site-pool.md, "Windows and
-// messages"): a link, a form or window.open() a frame aims at `_top` or
-// `_parent` when that window shows a document of another slot, and the copy
-// of a form a frame submits to its proxied parent or top (of its slot or
-// another). A deferred part of the document bundle (./deferredParts.ts): it
-// runs only once a page aims a navigation there, or once a frame under this
-// window asks it to navigate, never before the page's first script, so its
-// top level reads no global.
+// Links and forms aimed at another window than their own, and the site
+// pool's navigations across slots (docs/site-pool.md, "Windows and
+// messages"): a link or a form whose target (or its document's base target)
+// is `_top`, `_parent`, `_unfencedtop` or a name (the Sandbox module's
+// linkAimed and submitAimed; the IFrame module's blankLink and
+// blankSubmission, for a frame still on its initial about:blank), a link, a
+// form or window.open() a frame aims at `_top` or `_parent` when that window
+// shows a document of another slot, and the copy of a form a frame submits
+// to its proxied parent or top (of its slot or another). A deferred part of
+// the document bundle (./deferredParts.ts): it runs only once a page aims a
+// navigation there, or once a frame under this window asks it to navigate,
+// never before the page's first script, so its top level reads no global.
+// Without it the link or the submit event navigates nothing (its default is
+// prevented) and submit() throws, never the browser's own navigation in its
+// place (for `_top` or `_parent` it lands in the frame: the hooks made its
+// target `_self` to the browser).
+import { routeHTML } from '../../rewriteHTML';
+import StompURL from '../../StompURL';
 import { INITIATOR_ROUTE } from '../../transport/messages';
 import type DocumentClient from './Client';
 import type { AcrossInitiator, AcrossNavigation } from './Client';
+import { frameWindow } from './freshContext';
 import type { OtherSubmission } from './navigateOther';
 import { siteWindows } from './siteWindows';
 
@@ -76,7 +87,7 @@ function formParts(
  * that the window submits from its document when it is called. `submit`:
  * HTMLFormElement's own submit.
  */
-export function formSubmission(
+function formSubmission(
 	client: DocumentClient,
 	form: HTMLFormElement,
 	submitter: HTMLElement | null,
@@ -96,22 +107,205 @@ export function formSubmission(
 	};
 }
 
+/** `destination`, a javascript: URL, routed to run in `aimed`'s window, the proxied parent or top */
+const javascriptIn = (
+	client: DocumentClient,
+	destination: URL,
+	aimed: DocumentClient,
+) =>
+	routeHTML(
+		new StompURL(destination, client.url),
+		client.url,
+		client.config,
+		false,
+		aimed.nestedRoute,
+	);
+
 /**
- * A form's submission to `destination`, an http(s) URL, aimed at the
- * proxied parent or top (the Sandbox module's submitAimed, which judged it):
- * `aimed`, a window in reach, submits a copy of the form as its own; else
- * `across`, a window of another slot, is asked to (navigateAcross).
- * `submit`: HTMLFormElement's own submit.
+ * The Sandbox module's: a click on `link`, whose target (or its document's
+ * base target: `aim`, as the page wrote it) may name another window than
+ * its own. A link to the top (or to the parent, when the parent is the
+ * top) in a sandboxed document: the hooks leave its target as the page
+ * wrote it (DOMAttributes), so the browser refuses it, unless the sandbox
+ * allows top navigation; then the proxied top goes there, from its own
+ * realm (the browser would not let this frame navigate it).
+ *
+ * And a link to the parent or the top in a frame under the proxied top,
+ * sandboxed or not: the hooks made its target the frame itself (the
+ * browser's `_parent` and `_top` are not the page's: the host frames the
+ * proxied top sandboxed, and its top is the host), so the window the page
+ * means is navigated here, from its own realm, with the URL routed as its
+ * document. A javascript: URL runs there. `assign`: Location's own.
+ */
+export function linkAimed(
+	client: DocumentClient,
+	event: MouseEvent,
+	link: HTMLAnchorElement | HTMLAreaElement,
+	aim: string,
+	assign: (url: string) => void,
+) {
+	const target = aim.toLowerCase();
+	const resolve = () =>
+		new URL(String(link.getAttribute('href')), client.baseHref);
+	if (client.sandboxFlags === null) {
+		const aimed = client.targetWindow(target);
+		// the site pool: the window is another slot's, asked to go there
+		// itself; a javascript: URL runs in no window of another origin, as
+		// natively
+		const across =
+			aimed || !client.sites
+				? null
+				: siteWindows().targetAcross(client, target);
+		if (!aimed && !across) {
+			// a window by that name the browser would not navigate for this
+			// frame (DocumentClient namedWindow; the hooked getter answers
+			// with what the page wrote): this document's navigation of it
+			const named = client.namedWindow?.(aim);
+			if (!named) return;
+			const destination = resolve();
+			if (!['http:', 'https:'].includes(destination.protocol)) return;
+			// (its navigate event shows the link, and the user's click as the
+			// user's)
+			if (
+				client.navigateWindow?.(named, destination.href, 'href', {
+					source: link,
+					user: event.isTrusted,
+				})
+			)
+				event.preventDefault();
+			return;
+		}
+		const destination = resolve();
+		if (!['http:', 'https:', 'javascript:'].includes(destination.protocol))
+			return;
+		event.preventDefault();
+		if (!aimed) {
+			if (destination.protocol !== 'javascript:')
+				navigateAcross(client, across!, {
+					kind: 'link',
+					url: destination.href,
+				});
+			return;
+		}
+		aimed.client.callIn(assign, aimed.window.location, [
+			// a document is one of that window's own navigations; a
+			// javascript: URL's code is rewritten to run there
+			destination.protocol === 'javascript:'
+				? javascriptIn(client, destination, aimed.client)
+				: aimed.client.navigationRoute(destination),
+		]);
+		return;
+	}
+	const top = client.proxiedTop;
+	if (!(target === '_top' || (target === '_parent' && client.parent === top)))
+		return;
+	if (top === client.global) return;
+	const destination = resolve();
+	if (!['http:', 'https:'].includes(destination.protocol)) return;
+	if (!client.mayNavigate(top)) return;
+	event.preventDefault();
+	const topClient = (top as Record<string, any>)[client.names.client] as
+		DocumentClient | undefined;
+	if (!topClient) return;
+	topClient.callIn(assign, top.location, [
+		routeHTML(new StompURL(destination, client.url), client.url, client.config),
+	]);
+}
+
+/**
+ * The Sandbox module's: a form of an unsandboxed document, submitted (by
+ * `submitter`; the user's own submission when `user`) with a target (its
+ * submitter's, its own or its document's base target: `keyword`, as the
+ * page wrote it) that may name another window than its own. Aimed at the
+ * proxied parent or top, from a frame under the top: a javascript: action
+ * runs in that window. Any other is submitted by that window, from a copy
+ * of the form made in its document with the form's entry list (the
+ * browser builds it once, here, as it would have for the submission this
+ * stands in for), so the action is routed as that window's document and
+ * the response lands there; a window of another slot (the site pool) is
+ * asked to (navigateAcross). `assign` and `submit`: Location's and
+ * HTMLFormElement's own. Returns whether it took the submission.
  */
 export function submitAimed(
 	client: DocumentClient,
 	form: HTMLFormElement,
 	submitter: HTMLElement | null,
-	destination: URL,
-	aimed: { window: typeof globalThis; client: DocumentClient } | null,
-	across: typeof globalThis | null,
+	keyword: string,
+	user: boolean,
+	assign: (url: string) => void,
 	submit: () => void,
-) {
+): boolean {
+	const aimed = client.targetWindow(keyword);
+	// the site pool: a window of another slot (see linkAimed)
+	const across =
+		aimed || !client.sites ? null : siteWindows().targetAcross(client, keyword);
+	// a window by that name the browser would not navigate for this frame
+	// (DocumentClient namedWindow): the submission is this document's
+	// navigation of it, a GET by its URL, a POST by a copy of the form the
+	// window submits (Context navigateWindow, which waits for the window's
+	// document to be written in: a copy submitted in its shell was taken
+	// out of the document, and its navigation aborted, by the
+	// document.open() that writes it)
+	const named = aimed || across ? null : client.namedWindow?.(keyword);
+	if (!aimed && !across && !named) return false;
+	const method = (
+		submitter?.getAttribute('formmethod') ??
+		form.getAttribute('method') ??
+		''
+	).toLowerCase();
+	// (a dialog's form navigates nothing)
+	if (method === 'dialog') return false;
+	// a form with no action submits to its document
+	const destination = new URL(
+		String(
+			submitter?.getAttribute('formaction') ??
+				form.getAttribute('action') ??
+				'',
+		),
+		client.baseHref,
+	);
+	// what the form's document's form-action refuses is left to the
+	// browser, which refuses it as natively (NavigationHint)
+	if (
+		client
+			.pageRefusals('form-action', destination)
+			.some(({ policy }) => policy.disposition === 'enforce')
+	)
+		return false;
+	if (destination.protocol === 'javascript:') {
+		// (a named window's javascript: action: the browser's, as before)
+		if (named) return false;
+		if (aimed)
+			aimed.client.callIn(assign, aimed.window.location, [
+				javascriptIn(client, destination, aimed.client),
+			]);
+		return true;
+	}
+	if (!['http:', 'https:'].includes(destination.protocol)) return false;
+	// (what the window's navigate event shows of it: the submitter, else
+	// the form)
+	const source = submitter ?? form;
+	if (named) {
+		let submission: OtherSubmission | undefined;
+		// (the entry list the browser builds: the URL's query for a GET)
+		try {
+			if (method === 'post')
+				submission = formSubmission(client, form, submitter, submit);
+			else
+				destination.search = new client.global.URLSearchParams(
+					new client.global.FormData(form, submitter ?? undefined) as any,
+				).toString();
+		} catch (error) {
+			return method === 'post';
+		}
+		return !!client.navigateWindow?.(named, destination.href, 'href', {
+			...(submission ? { submission } : {}),
+			source,
+			user,
+		});
+	}
+	// the copy of the form that window submits, or the ask of a window of
+	// another slot
 	if (aimed) {
 		formSubmission(
 			client,
@@ -119,7 +313,7 @@ export function submitAimed(
 			submitter,
 			submit,
 		)(aimed.window, aimed.client, destination.href);
-		return;
+		return true;
 	}
 	const { attributes, entries } = formParts(client, form, submitter);
 	navigateAcross(client, across!, {
@@ -128,6 +322,7 @@ export function submitAimed(
 		attributes,
 		entries,
 	});
+	return true;
 }
 
 /**
@@ -397,4 +592,114 @@ export function acceptAcross(
 	} catch (error) {
 		// a request this window cannot carry out: nothing navigates
 	}
+}
+
+/**
+ * The client of `element`'s window, a frame of `client`'s document still on
+ * its initial about:blank (one with a freshTo), else null
+ */
+function blankClient(
+	client: DocumentClient,
+	element: Element,
+): DocumentClient | null {
+	const view = frameWindow(element);
+	if (!view) return null;
+	try {
+		const other = (view as unknown as Record<string, unknown>)[
+			client.names.client
+		] as DocumentClient | undefined;
+		return other?.freshTo ? other : null;
+	} catch (error) {
+		return null;
+	}
+}
+
+/**
+ * `then`, once the page's own listeners had `event` (one may cancel it),
+ * as the browser decides a link or a form aimed at a frame: the frame gets
+ * its fresh context, still empty, and the browser goes on with the link or
+ * form as natively (its ping, its request)
+ */
+const afterPage = (client: DocumentClient, event: Event, then: () => unknown) =>
+	client.global.addEventListener(
+		event.type,
+		(late) => {
+			if (late === event && !event.defaultPrevented) then();
+		},
+		{ once: true },
+	);
+
+/**
+ * The IFrame module's: a click on `link` of `client`'s document, aimed by
+ * name at `element`, a frame of it (the one that name finds): when the
+ * frame is still on its initial about:blank, its fresh context, for a URL
+ * of another origin, once the page had the click
+ */
+export function blankLink(
+	client: DocumentClient,
+	event: Event,
+	link: HTMLAnchorElement | HTMLAreaElement,
+	element: Element,
+) {
+	const target = blankClient(client, element);
+	if (!target) return;
+	afterPage(client, event, () => {
+		let url: URL;
+		try {
+			url = client.encodingParse(link.getAttribute('href')!, client.baseHref);
+		} catch (error) {
+			// no URL: the click navigates nothing, here or in the browser
+			return;
+		}
+		target.freshTo!(url, null, true);
+	});
+}
+
+/**
+ * The IFrame module's: a form of `client`'s document submitted by
+ * `submitter` (its submit `event`, or none for submit(), which fires none),
+ * aimed by name at `element`, a frame of it: when the frame is still on
+ * its initial about:blank, its fresh context, for an action of another
+ * origin, at once for submit() and once the page had the event otherwise
+ */
+export function blankSubmission(
+	client: DocumentClient,
+	form: HTMLFormElement,
+	submitter: HTMLButtonElement | HTMLInputElement | null,
+	element: Element,
+	event: Event | null,
+) {
+	const target = blankClient(client, element);
+	if (!target) return;
+	const own = (name: string) => !!submitter?.hasAttribute(name);
+	const method = (
+		(own('formmethod') ? submitter!.formMethod : form.method) || 'get'
+	).toLowerCase();
+	if (method !== 'get' && method !== 'post') return;
+	const go = () => {
+		try {
+			const url = new URL(
+				own('formaction') ? submitter!.formAction : form.action,
+			);
+			const data = new client.global.FormData(form, submitter ?? undefined);
+			if (method === 'get')
+				url.search = new URLSearchParams(
+					data as unknown as Record<string, string>,
+				).toString();
+			// a submission the page's form-action refuses goes nowhere
+			// (NavigationHint sends it to a refusal URL, which the browser
+			// refuses): the frame keeps its context, as natively
+			if (
+				client
+					.pageRefusals('form-action', url)
+					.some(({ policy }) => policy.disposition === 'enforce')
+			)
+				return;
+			target.freshTo!(url, null, true);
+		} catch (error) {
+			// no URL, or a form the browser cannot build an entry list of
+		}
+	};
+	if (event) afterPage(client, event, go);
+	else go();
 }

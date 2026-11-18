@@ -6,13 +6,12 @@
 	</head>
 	<body>
 		<script>
-			// Where the suite deferred-refusals' child goes when a form a frame
-			// of it aimed at it was submitted: it answers for the child.
+			// Where the suite deferred-refusals' child goes when a link or a form
+			// a frame of it aimed at it navigated it, or where a frame of the
+			// child goes when the child's own link or form aimed at it by name
+			// did: it answers for the window it landed in, to its parent.
 			parent.postMessage(
-				{
-					out: { formAimed: { landed: location.search } },
-					reached: window.__nativeReached ?? null,
-				},
+				{ landed: location.search, reached: window.__nativeReached ?? null },
 				'*',
 			);
 		</script>

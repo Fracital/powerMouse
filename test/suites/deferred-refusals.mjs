@@ -5,7 +5,9 @@
 // constraints, setSinkId, an AudioContext's sinkId, RTCPeerConnection, an
 // XHR's misuse and its response document, an identity credential's get and
 // disconnect (FedCM), a same-origin download link's click, a form a
-// frame submits to its proxied parent, a frame's navigation of another
+// frame submits to its proxied parent (its submit event, or submit()) and
+// a link it clicks aimed there, a link and a form's submit() aimed by name
+// at a frame on its initial about:blank, a frame's navigation of another
 // window (`w.location = url`); and a call of no function through the
 // access API throws the TypeError the call threw (only its wording is a
 // part, src/inject/accessFailures.ts); navigator.storage.estimate()
@@ -92,7 +94,8 @@ const REFUSING = [
 	'identity',
 	'disconnect',
 	'download',
-	'formAimed',
+	'blankLink',
+	'blankSubmit',
 	'navigateOther',
 	'estimate',
 	'worker',
@@ -109,6 +112,11 @@ const REFUSING = [
  * on their own (each waits a while for what does not come)
  */
 const DOCUMENTS = ['srcdoc', 'javascriptDocument', 'dataFrame', 'refresh'];
+/**
+ * the refusing calls that navigate the child itself unless refused, each
+ * made in a child of its own: one let through would answer for the others
+ */
+const AIMED = ['formAimed', 'submitAimed', 'linkAimed'];
 /** the calls that answer with a promise, which rejects */
 const PROMISED = [
 	'getUserMedia',
@@ -418,14 +426,29 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		navigated.out?.navigateOther?.at === '?moved',
 		JSON.stringify(navigated.out?.navigateOther),
 	);
-	const aimed = await top.evaluate(
+	// (each navigates the child: the page it lands on answers)
+	for (const [call, landed, what] of [
+		['formAimed', '?x=1', 'a form a frame aims at its parent'],
+		['submitAimed', '?y=2', 'a form a frame aims at its parent, by submit(),'],
+		['linkAimed', '?link', 'a link a frame aims at its parent'],
+	]) {
+		const aimed = await top.evaluate((calls) => window.__child(calls), [call]);
+		ok(
+			`with the parts, ${what} lands there`,
+			aimed.landed === landed,
+			JSON.stringify(aimed),
+		);
+	}
+	const blank = await top.evaluate(
 		(calls) => window.__child(calls),
-		['formAimed'],
+		['blankLink', 'blankSubmit'],
 	);
 	ok(
-		'with the parts, a form a frame aims at its parent lands there',
-		aimed.out?.formAimed?.landed === '?x=1',
-		JSON.stringify(aimed),
+		'with the parts, a link and a form aimed by name at a frame on its initial about:blank land there',
+		blank.out?.blankLink?.inFrame === '?blank' &&
+			blank.out?.blankSubmit?.inFrame === '?z=3' &&
+			blank.out.blankSubmit.threw === null,
+		JSON.stringify(blank.out),
 	);
 	// FedCM's protocol answers (the browser's get is never asked for an
 	// identity, with the parts or without)
@@ -493,6 +516,11 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 	]);
 	const documents = await without(DOCUMENTS);
 	const out = { ...answer.out, ...documents.out };
+	// (a child that was navigated answers with the page it landed on)
+	for (const call of AIMED) {
+		const aimed = await without([call]);
+		out[call] = aimed.out?.[call] ?? aimed;
+	}
 	// the parts' own error; an identity get with STomp's passkey provider
 	// in place goes to it, whose part is missing too: it ends as one the
 	// user declined (Credentials DECLINED), never at the browser's get
@@ -507,7 +535,13 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		out[call]?.threw === 'no parts' || refusedPromise(call);
 	for (const call of REFUSING.filter(
 		(call) =>
-			!['xmlDocument', 'download', 'formAimed', 'navigateOther'].includes(call),
+			![
+				'xmlDocument',
+				'download',
+				'blankLink',
+				'blankSubmit',
+				'navigateOther',
+			].includes(call),
 	))
 		ok(
 			`without the parts, ${call} refuses${
@@ -568,6 +602,28 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		'without the parts, a form a frame aims at its parent navigates nothing, neither the copy nor the browser',
 		out.formAimed?.stayed === true,
 		JSON.stringify(out.formAimed),
+	);
+	ok(
+		"without the parts, a frame's submit() of a form aimed at its parent throws and navigates nothing",
+		out.submitAimed?.stayed === true && out.submitAimed.threw === 'no parts',
+		JSON.stringify(out.submitAimed),
+	);
+	ok(
+		'without the parts, a link a frame aims at its parent navigates nothing, neither the window nor the browser',
+		out.linkAimed?.stayed === true,
+		JSON.stringify(out.linkAimed),
+	);
+	ok(
+		'without the parts, a link aimed by name at a frame on its initial about:blank navigates nothing',
+		out.blankLink?.stayed === true && out.blankLink.at === 'about:blank',
+		JSON.stringify(out.blankLink),
+	);
+	ok(
+		'without the parts, a submit() aimed by name at a frame on its initial about:blank throws and navigates nothing',
+		out.blankSubmit?.stayed === true &&
+			out.blankSubmit.threw === 'no parts' &&
+			out.blankSubmit.at === 'about:blank',
+		JSON.stringify(out.blankSubmit),
 	);
 	ok(
 		'without the parts, a navigation of another window throws and navigates nothing',

@@ -29,6 +29,50 @@
 					return { threw: String(error && error.message) };
 				}
 			};
+			// A frame of this one, deferred-refusals-aimed.html, whose `kind` of
+			// form or link it aims at this window as it loads (a fetched
+			// document: an srcdoc's shell is a part too): where it lands (deferred-refusals-landed.html answers for
+			// the window it lands in, to its parent: for this window, to the
+			// suite, when it lands here; to this window when it lands in the
+			// frame, the browser's own navigation, since the form's or link's
+			// target reads `_self` to the browser), or that it stayed, and what
+			// the frame's submit() threw
+			const aimedFrom = (kind) =>
+				new Promise((resolve) => {
+					const frame = document.createElement('iframe');
+					let threw;
+					addEventListener('message', (event) => {
+						if (event.source !== frame.contentWindow) return;
+						if ('threw' in event.data) threw = event.data.threw;
+						else resolve({ inFrame: event.data.landed });
+					});
+					frame.src = `deferred-refusals-aimed.html?${kind}`;
+					document.body.append(frame);
+					setTimeout(() => resolve({ stayed: true, threw }), 2000);
+				});
+			// A frame of this one named `name`, on its initial about:blank, that
+			// `aim(name)` aims a link or a form of this document at: where the
+			// frame is after it, and what `aim` returned
+			const aimedAt = (name, aim) =>
+				new Promise((resolve) => {
+					const frame = document.createElement('iframe');
+					frame.name = name;
+					document.body.append(frame);
+					addEventListener('message', (event) => {
+						if (event.source === frame.contentWindow)
+							resolve({ inFrame: event.data.landed, threw });
+					});
+					const threw = aim(name);
+					setTimeout(() => {
+						let at;
+						try {
+							at = frame.contentWindow.location.href;
+						} catch (error) {
+							at = String(error && error.message);
+						}
+						resolve({ stayed: true, threw, at });
+					}, 2000);
+				});
 			const track = () =>
 				document.createElement('canvas').captureStream().getVideoTracks()[0];
 			const xmlDocument = () =>
@@ -177,7 +221,7 @@
 						const frame = document.createElement('iframe');
 						addEventListener('message', (event) => {
 							if (event.source !== frame.contentWindow) return;
-							const landed = event.data?.out?.formAimed?.landed;
+							const landed = event.data?.landed;
 							if (landed === '?refreshed') resolve({ refreshed: true });
 							if (landed !== '?first') return;
 							const meta = frame.contentDocument.createElement('meta');
@@ -263,17 +307,42 @@
 				// for this window when it lands here, to this window when it
 				// lands in the frame (the browser's own submission: the form's
 				// target reads `_self` to the browser)
-				formAimed: () =>
-					new Promise((resolve) => {
-						const frame = document.createElement('iframe');
-						addEventListener('message', (event) => {
-							if (event.source === frame.contentWindow)
-								resolve({ inFrame: event.data.out.formAimed.landed });
-						});
-						// (a fetched document: an srcdoc's shell is a part too)
-						frame.src = 'deferred-refusals-aimed.html';
-						document.body.append(frame);
-						setTimeout(() => resolve({ stayed: true }), 2000);
+				formAimed: () => aimedFrom('form'),
+				// the same, by submit(), which throws without the part
+				submitAimed: () => aimedFrom('submit'),
+				// and a link a frame of this one clicks, aimed at its parent
+				linkAimed: () => aimedFrom('link'),
+				// a link of this document aimed by name at a frame of it still on
+				// its initial about:blank: where the frame is after it (the
+				// browser's own navigation, with the parts)
+				blankLink: () =>
+					aimedAt('blank-link', (name) => {
+						const link = document.createElement('a');
+						link.target = name;
+						link.href = 'deferred-refusals-landed.html?blank';
+						document.body.append(link);
+						link.click();
+						link.remove();
+					}),
+				// the same, a form's submit(), which throws without the part
+				blankSubmit: () =>
+					aimedAt('blank-submit', (name) => {
+						const form = document.createElement('form');
+						form.target = name;
+						form.action = 'deferred-refusals-landed.html';
+						const input = document.createElement('input');
+						input.name = 'z';
+						input.value = '3';
+						form.append(input);
+						document.body.append(form);
+						try {
+							form.submit();
+							return null;
+						} catch (error) {
+							return String(error && error.message);
+						} finally {
+							form.remove();
+						}
 					}),
 				// an image in a new frame's about:blank, which no service worker
 				// controls: its load is a copy (src/inject/dom/uncontrolledCopies.ts)

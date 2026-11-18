@@ -121,7 +121,8 @@ on every save (use a `git worktree`).
   build.js lists in `DEFERRED_FILES` (the service worker container's objects,
   the Cookie Store methods, the Fingerprint module, the WebTransport stand-in
   and what carries its sessions, the site pool's code that runs on an
-  event, the Permissions module's requests and device ids, the WebRTC
+  event, a link's or a form's navigation of another window, the
+  Permissions module's requests and device ids, the WebRTC
   library's install, an XHR response's document and XHR's misuse messages)
   are a statement of `dist/rewriterLib.js`, a switch with a case for each
   group of parts (the parts `src/inject/dom/deferredParts.ts` imports from
