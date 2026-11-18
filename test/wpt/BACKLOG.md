@@ -800,8 +800,7 @@ still fail are the last group below.
   `websockets/eventhandlers.any.worker.html?default`,
   `websockets/interfaces/WebSocket/events/010.html?default`,
   `websockets/interfaces/WebSocket/events/014.html?default` (4 each).
-- `websockets/multi-globals/message-received.html` (2),
-  `websockets/multi-globals/url-parsing/url-parsing.html` (1):
+- `websockets/multi-globals/message-received.html` (2):
   `Stomp: no service worker controller available to obtain a transport`. The
   WebSocket
   of an about:blank frame asks `src/inject/Client.ts` for a transport and
