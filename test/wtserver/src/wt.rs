@@ -15,12 +15,17 @@ use std::{
 };
 
 use futures_channel::oneshot;
-use futures_util::future::{self, Either, FutureExt, Shared};
+use futures_util::{
+	future::{self, Either, FutureExt, Shared},
+	StreamExt,
+};
+use js_sys::Date;
+use wasm_bindgen::JsValue;
 use quinn::{Connection, ReadError, RecvStream, SendStream, VarInt, WriteError};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::{
-	emit,
+	bridge, emit,
 	h3::{
 		decode_fields, encode_fields, frame, get_varint, h3_to_wt, put_varint, wt_to_h3, FRAME_DATA, FRAME_HEADERS,
 		FRAME_SETTINGS,
@@ -250,6 +255,20 @@ pub async fn serve(conn: Connection) {
 	}
 	spawn_local(uni_loop(c.clone()));
 	spawn_local(datagram_loop(c.clone()));
+	// how the connection ended, for the measurements of what Chrome sends
+	// after a close (no path: the suites' per-run event lists leave it out)
+	let watched = conn.clone();
+	spawn_local(async move {
+		let e = watched.closed().await;
+		emit(
+			Obj::new()
+				.s("event", "connection")
+				.s("error", &e.to_string())
+				.s("debug", &format!("{e:?}"))
+				.raw("at", format!("{}", Date::now()))
+				.done(),
+		);
+	});
 	while let Ok((send, recv)) = conn.accept_bi().await {
 		spawn_local(bidi(c.clone(), send, recv));
 	}
@@ -322,6 +341,11 @@ async fn datagram_loop(c: Rc<Conn>) {
 		};
 		let session = c.sessions.borrow().get(&id).cloned().flatten();
 		if let Some(s) = session {
+			if s.route == Route::Bridge {
+				let start = get_varint(&d).map(|(_, n)| n).unwrap_or(0);
+				bridge::tell("datagram", s.bridge.get(), bridge::bytes(&d[start..]));
+				continue;
+			}
 			// what the Go fixture echoes: the datagram back, under the same
 			// quarter stream id; /reset and /slow read none
 			if !s.ended.get() && s.route.echoes() {
@@ -553,6 +577,7 @@ async fn request(c: Rc<Conn>, id: u64, mut send: SendStream, mut rd: Rd) {
 		"/close" => Route::Close,
 		"/reset" => Route::Reset,
 		"/slow" => Route::Slow,
+		"/bridge" => Route::Bridge,
 		"/refuse" => {
 			request_event(403);
 			emit(
@@ -631,10 +656,12 @@ async fn request(c: Rc<Conn>, id: u64, mut send: SendStream, mut rd: Rd) {
 		.map(|(_, v)| v.as_str())
 		.collect::<Vec<_>>()
 		.join(", ");
-	let selected = sf_strings(&offered)
-		.unwrap_or_default()
-		.into_iter()
-		.find(|p| PROTOCOLS.contains(&p.as_str()));
+	let offered_list = sf_strings(&offered).unwrap_or_default();
+	// /bridge takes the first protocol offered, as holyWisp's listener does
+	let selected = offered_list
+		.iter()
+		.find(|p| route == Route::Bridge || PROTOCOLS.contains(&p.as_str()))
+		.cloned();
 
 	let (gone_tx, gone_rx) = oneshot::channel();
 	let session = Rc::new(Session {
@@ -648,14 +675,32 @@ async fn request(c: Rc<Conn>, id: u64, mut send: SendStream, mut rd: Rd) {
 		cause: RefCell::new(String::new()),
 		gone_tx: RefCell::new(Some(gone_tx)),
 		gone: gone_rx.shared(),
+		bridge: Cell::new(0),
+		closed_at: Cell::new(0.0),
 	});
 	c.sessions.borrow_mut().insert(id, Some(session.clone()));
 	c.sessions_changed.wake();
 
-	let wt_protocol = selected.as_deref().map(sf_string);
+	// ?wtp= answers with that wt-protocol value as it is (empty: none), and
+	// each ?resp=name:value adds a field to the answer, for the
+	// measurements of which answers Chrome takes
+	let wt_protocol = match session.param("wtp") {
+		Some(v) if v.is_empty() => None,
+		Some(v) => Some(v),
+		None => selected.as_deref().map(sf_string),
+	};
+	let extra: Vec<(String, String)> = session
+		.query
+		.iter()
+		.filter(|(k, _)| k == "resp")
+		.filter_map(|(_, v)| v.split_once(':').map(|(a, b)| (a.to_string(), b.to_string())))
+		.collect();
 	let mut response = vec![(":status", "200")];
 	if let Some(p) = &wt_protocol {
 		response.push(("wt-protocol", p.as_str()));
+	}
+	for (k, v) in &extra {
+		response.push((k.as_str(), v.as_str()));
 	}
 	request_event(200);
 	let _ = send.write_all(&frame(FRAME_HEADERS, &encode_fields(&response))).await;
@@ -665,6 +710,37 @@ async fn request(c: Rc<Conn>, id: u64, mut send: SendStream, mut rd: Rd) {
 		None => event,
 	};
 	emit(event.done());
+
+	if route == Route::Bridge {
+		let weak = Rc::downgrade(&session);
+		let handle = bridge::add_session(
+			c.conn.clone(),
+			id,
+			Box::new(move |code, reason| {
+				if let Some(s) = weak.upgrade() {
+					s.close_local(code, reason, false);
+				}
+			}),
+		);
+		session.bridge.set(handle);
+		let info = Obj::new()
+			.s("path", &path)
+			.raw("fields", fields_json.clone())
+			.raw("offered", json::array(offered_list.iter().map(|p| json::string(p))))
+			.raw(
+				"protocol",
+				match &selected {
+					Some(p) => json::string(p),
+					None => "null".into(),
+				},
+			)
+			.raw(
+				"maxDatagram",
+				format!("{}", bridge::max_datagram(handle)),
+			)
+			.done();
+		bridge::tell("session", handle, JsValue::from_str(&info));
+	}
 
 	match route {
 		Route::Push => {
@@ -715,7 +791,7 @@ async fn request(c: Rc<Conn>, id: u64, mut send: SendStream, mut rd: Rd) {
 	};
 	match outcome {
 		Some(end) => {
-			let (closed, connect_code, cause) = match end {
+			let (closed, connect_code, cause) = match end.clone() {
 				End::Close(code, reason) => (
 					Obj::new()
 						.s("event", "closed")
@@ -733,8 +809,29 @@ async fn request(c: Rc<Conn>, id: u64, mut send: SendStream, mut rd: Rd) {
 					cause,
 				),
 			};
+			// what ended the CONNECT stream, as JSON: the peer's capsule, a FIN
+			// ("EOF") or a reset
+			let seen = match &end {
+				End::Close(code, reason) => Obj::new().n("code", *code as u64).s("reason", reason).done(),
+				End::Lost(cause) => Obj::new().s("cause", cause).done(),
+			};
 			// (after a close of the server's own, the session has ended
 			// already: this is the peer's answer to it)
+			if session.ended.get() && session.observe() {
+				emit(
+					Obj::new()
+						.s("event", "answer")
+						.s("path", &path)
+						.s("on", "connect stream")
+						.raw("seen", seen.clone())
+						.raw("ms", session.since_close())
+						.done(),
+				);
+			}
+			if session.route == Route::Bridge {
+				bridge::tell("closed", session.bridge.get(), JsValue::from_str(&seen));
+				bridge::remove_session(session.bridge.get());
+			}
 			if session.end(cause) {
 				if let Some(s) = session.send.borrow_mut().as_mut() {
 					let _ = s.reset(vi(connect_code));
@@ -768,6 +865,7 @@ async fn teardown(send: &mut SendStream, rd: &mut Rd) {
 	let _ = send.reset(vi(SESSION_GONE));
 }
 
+#[derive(Clone)]
 enum End {
 	Close(u32, String),
 	Lost(String),
@@ -827,6 +925,7 @@ enum Route {
 	Close,
 	Reset,
 	Slow,
+	Bridge,
 }
 
 impl Route {
@@ -848,6 +947,10 @@ struct Session {
 	cause: RefCell<String>,
 	gone_tx: RefCell<Option<oneshot::Sender<()>>>,
 	gone: Shared<oneshot::Receiver<()>>,
+	/// the session's handle on the host's side (/bridge), else 0
+	bridge: Cell<u32>,
+	/// when the server closed the session (Date.now()), else 0
+	closed_at: Cell<f64>,
 }
 
 impl Session {
@@ -857,6 +960,20 @@ impl Session {
 
 	fn param(&self, key: &str) -> Option<String> {
 		self.query.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+	}
+
+	/// ?observe=1: say what the peer does after the server's close (the
+	/// "answer" events), for the measurements in docs/webtransport.md
+	fn observe(&self) -> bool {
+		self.param("observe").is_some()
+	}
+
+	/// ms since the server's close, as a JSON number (null before it)
+	fn since_close(&self) -> String {
+		match self.closed_at.get() {
+			t if t > 0.0 => format!("{}", Date::now() - t),
+			_ => "null".into(),
+		}
 	}
 
 	/// the first call ends the session (and says so)
@@ -901,6 +1018,7 @@ impl Session {
 		if !self.end(reason.clone()) {
 			return;
 		}
+		self.closed_at.set(Date::now());
 		if gone {
 			self.release();
 		}
@@ -923,6 +1041,29 @@ impl Session {
 					let _ = send.reset(vi(SESSION_GONE));
 				}
 				let _ = send.finish();
+				if s.observe() {
+					// a STOP_SENDING of the peer's on the CONNECT stream, or
+					// every byte of it (capsule and FIN) acknowledged
+					let stopped = send.stopped();
+					let o = s.clone();
+					spawn_local(async move {
+						let seen = match stopped.await {
+							Ok(Some(code)) => Obj::new().s("stopSending", &format!("0x{:x}", code.into_inner())).done(),
+							Ok(None) => Obj::new().b("acked", true).done(),
+							Err(e) => Obj::new().s("error", &e.to_string()).done(),
+						};
+						emit(
+							Obj::new()
+								.s("event", "answer")
+								.s("path", &o.path)
+								.s("on", "connect send side")
+								.raw("seen", seen)
+								.raw("ms", o.since_close())
+								.done(),
+						);
+						drop(send);
+					});
+				}
 			}
 			emit(
 				Obj::new()
@@ -942,6 +1083,7 @@ impl Session {
 			Route::Echo | Route::Push | Route::Close => self.echo_bidi(send, rd).await,
 			Route::Reset => self.reset_bidi(send, rd).await,
 			Route::Slow => self.slow_bidi(send, rd).await,
+			Route::Bridge => self.bridge_bidi(send, rd).await,
 		}
 	}
 
@@ -957,7 +1099,7 @@ impl Session {
 				}
 			}
 			// never accepted: left unread until the session ends
-			Route::Slow => {
+			Route::Slow | Route::Bridge => {
 				let _ = self.gone().await;
 				rd.stop(SESSION_GONE);
 			}
@@ -966,6 +1108,58 @@ impl Session {
 
 	fn stream_event(&self, kind: &str, bytes: u64) -> Obj {
 		Obj::new().s("event", kind).s("path", &self.path).n("bytes", bytes)
+	}
+
+	/// /bridge: the stream is the host's (bridge.rs). What arrives is told
+	/// to it as it arrives; what it writes goes out in order, until it
+	/// finishes or resets the stream or the session ends.
+	async fn bridge_bidi(self: Rc<Self>, mut send: SendStream, mut rd: Rd) {
+		let (handle, mut rx) = bridge::add_stream();
+		bridge::tell("bidi", handle, JsValue::from(self.bridge.get()));
+		let gone = self.gone();
+		spawn_local(async move {
+			loop {
+				match future::select(rx.next(), gone.clone()).await {
+					Either::Left((Some(bridge::Cmd::Write(b)), _)) => {
+						if send.write_all(&b).await.is_err() {
+							break;
+						}
+					}
+					Either::Left((Some(bridge::Cmd::Finish), _)) => {
+						let _ = send.finish();
+						break;
+					}
+					Either::Left((Some(bridge::Cmd::Reset(code)), _)) => {
+						let _ = send.reset(vi(wt_to_h3(code)));
+						break;
+					}
+					Either::Left((None, _)) => break,
+					Either::Right(_) => {
+						let _ = send.reset(vi(SESSION_GONE));
+						break;
+					}
+				}
+			}
+			bridge::remove_stream(handle);
+		});
+		loop {
+			match self.until_gone(rd.chunk(65536)).await {
+				Some(Ok(Some(b))) => bridge::tell("data", handle, bridge::bytes(&b)),
+				Some(Ok(None)) => {
+					bridge::tell("fin", handle, JsValue::NULL);
+					break;
+				}
+				Some(Err(e)) => {
+					bridge::tell("reset", handle, JsValue::from_str(&read_error(&e).0));
+					break;
+				}
+				None => {
+					rd.stop(SESSION_GONE);
+					bridge::tell("reset", handle, JsValue::from_str("the session ended"));
+					break;
+				}
+			}
+		}
 	}
 
 	async fn echo_bidi(self: Rc<Self>, mut send: SendStream, mut rd: Rd) {

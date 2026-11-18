@@ -22,6 +22,15 @@
 //   /slow?delay=   each bidi stream is left unread for `delay` ms, then read
 //             to its end and answered with the byte count
 //   /refuse   403; any other path 404
+//   /bridge   the session's bidi streams and datagrams are the host's
+//             (`bridge()` below; test/wisp-wt.mjs relays Wisp on them)
+//
+// On any session route, ?wtp= answers with that wt-protocol value as it is
+// (empty for none) and each ?resp=name:value adds a field to the 200;
+// ?observe=1 logs what the client does after the server's close ("answer"
+// events: how its CONNECT stream ended, a STOP_SENDING on it or every byte
+// acknowledged, each with `ms` since the close). Every connection logs a
+// "connection" event (no path) with how it ended.
 //
 // `wt-available-protocols` gets `wt-protocol` for echo-v1 or echo-v2. A session
 // that ends any other way (the page closes it, the connection goes) has the
@@ -270,6 +279,33 @@ export async function startWebTransportServer({
 		certPem: `-----BEGIN CERTIFICATE-----\n${leaf.cert.toString('base64').replace(/.{64}/g, '$&\n')}\n-----END CERTIFICATE-----\n`,
 		caPem,
 		events,
+		/**
+		 * Serves /bridge sessions with `handler(kind, id, value)` (kinds in
+		 * test/wtserver/src/bridge.rs): what arrives on their bidirectional
+		 * streams and datagrams, answered with the methods below.
+		 */
+		bridge(handler) {
+			server.set_bridge((kind, id, value) => {
+				try {
+					handler(
+						kind,
+						id,
+						kind === 'session' || kind === 'closed' ? JSON.parse(value) : value,
+					);
+				} catch (error) {
+					console.error('wtserver bridge handler:', error);
+				}
+			});
+			return {
+				write: (stream, bytes) => server.bridge_write(stream, bytes),
+				finish: (stream) => server.bridge_finish(stream),
+				reset: (stream, code = 0) => server.bridge_reset(stream, code),
+				datagram: (session, bytes) => server.bridge_datagram(session, bytes),
+				maxDatagram: (session) => server.bridge_max_datagram(session),
+				close: (session, code = 0, reason = '') =>
+					server.bridge_close(session, code, reason),
+			};
+		},
 		waitFor(predicate, ms = 5000) {
 			const seen = events.find(predicate);
 			if (seen) return Promise.resolve(seen);

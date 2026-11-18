@@ -4,6 +4,7 @@
 //! every datagram it receives with its source, and two functions: `send`
 //! for each datagram out and `emit` for each event (one JSON object).
 
+mod bridge;
 mod h3;
 mod json;
 mod runtime;
@@ -113,6 +114,42 @@ impl Server {
 		if let Ok(ip) = address.parse() {
 			let _ = self.inbox.unbounded_send((data.to_vec(), SocketAddr::new(ip, port)));
 		}
+	}
+
+	/// the host's function for /bridge sessions: `bridge(kind, id, value)`
+	/// (src/bridge.rs)
+	pub fn set_bridge(&self, f: Function) {
+		bridge::set(f);
+	}
+
+	/// writes `data` on a /bridge stream (in order with the earlier writes)
+	pub fn bridge_write(&self, stream: u32, data: &[u8]) {
+		bridge::command(stream, bridge::Cmd::Write(data.to_vec()));
+	}
+
+	/// finishes a /bridge stream once what was written went out
+	pub fn bridge_finish(&self, stream: u32) {
+		bridge::command(stream, bridge::Cmd::Finish);
+	}
+
+	/// resets a /bridge stream with WebTransport code `code`
+	pub fn bridge_reset(&self, stream: u32, code: u32) {
+		bridge::command(stream, bridge::Cmd::Reset(code));
+	}
+
+	/// sends a datagram on a /bridge session; false when it was not sent
+	pub fn bridge_datagram(&self, session: u32, data: &[u8]) -> bool {
+		bridge::datagram(session, data)
+	}
+
+	/// what a datagram of a /bridge session can carry, -1 for none
+	pub fn bridge_max_datagram(&self, session: u32) -> i32 {
+		bridge::max_datagram(session)
+	}
+
+	/// closes a /bridge session with its capsule and FIN
+	pub fn bridge_close(&self, session: u32, code: u32, reason: &str) {
+		bridge::close(session, code, reason.to_string());
 	}
 
 	/// closes every connection (CONNECTION_CLOSE, code 0)

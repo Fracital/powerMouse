@@ -115,13 +115,6 @@ function makeMutClosure(arg0, arg1, dtor, f) {
 
 let WASM_VECTOR_LEN = 0;
 
-function passArray8ToWasm0(arg, malloc) {
-	const ptr = malloc(arg.length * 1, 1) >>> 0;
-	getUint8ArrayMemory0().set(arg, ptr / 1);
-	WASM_VECTOR_LEN = arg.length;
-	return ptr;
-}
-
 const cachedTextEncoder =
 	typeof TextEncoder !== 'undefined'
 		? new TextEncoder('utf-8')
@@ -185,6 +178,13 @@ function passStringToWasm0(arg, malloc, realloc) {
 	return ptr;
 }
 
+function passArray8ToWasm0(arg, malloc) {
+	const ptr = malloc(arg.length * 1, 1) >>> 0;
+	getUint8ArrayMemory0().set(arg, ptr / 1);
+	WASM_VECTOR_LEN = arg.length;
+	return ptr;
+}
+
 let cachedDataViewMemory0 = null;
 
 function getDataViewMemory0() {
@@ -222,6 +222,80 @@ export class Server {
 	free() {
 		const ptr = this.__destroy_into_raw();
 		wasm.__wbg_server_free(ptr, 0);
+	}
+	/**
+	 * the host's function for /bridge sessions: `bridge(kind, id, value)`
+	 * (src/bridge.rs)
+	 * @param {Function} f
+	 */
+	set_bridge(f) {
+		wasm.server_set_bridge(this.__wbg_ptr, addHeapObject(f));
+	}
+	/**
+	 * closes a /bridge session with its capsule and FIN
+	 * @param {number} session
+	 * @param {number} code
+	 * @param {string} reason
+	 */
+	bridge_close(session, code, reason) {
+		const ptr0 = passStringToWasm0(
+			reason,
+			wasm.__wbindgen_export_2,
+			wasm.__wbindgen_export_3,
+		);
+		const len0 = WASM_VECTOR_LEN;
+		wasm.server_bridge_close(this.__wbg_ptr, session, code, ptr0, len0);
+	}
+	/**
+	 * resets a /bridge stream with WebTransport code `code`
+	 * @param {number} stream
+	 * @param {number} code
+	 */
+	bridge_reset(stream, code) {
+		wasm.server_bridge_reset(this.__wbg_ptr, stream, code);
+	}
+	/**
+	 * writes `data` on a /bridge stream (in order with the earlier writes)
+	 * @param {number} stream
+	 * @param {Uint8Array} data
+	 */
+	bridge_write(stream, data) {
+		const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_export_2);
+		const len0 = WASM_VECTOR_LEN;
+		wasm.server_bridge_write(this.__wbg_ptr, stream, ptr0, len0);
+	}
+	/**
+	 * finishes a /bridge stream once what was written went out
+	 * @param {number} stream
+	 */
+	bridge_finish(stream) {
+		wasm.server_bridge_finish(this.__wbg_ptr, stream);
+	}
+	/**
+	 * sends a datagram on a /bridge session; false when it was not sent
+	 * @param {number} session
+	 * @param {Uint8Array} data
+	 * @returns {boolean}
+	 */
+	bridge_datagram(session, data) {
+		const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_export_2);
+		const len0 = WASM_VECTOR_LEN;
+		const ret = wasm.server_bridge_datagram(
+			this.__wbg_ptr,
+			session,
+			ptr0,
+			len0,
+		);
+		return ret !== 0;
+	}
+	/**
+	 * what a datagram of a /bridge session can carry, -1 for none
+	 * @param {number} session
+	 * @returns {number}
+	 */
+	bridge_max_datagram(session) {
+		const ret = wasm.server_bridge_max_datagram(this.__wbg_ptr, session);
+		return ret;
 	}
 	/**
 	 * `cert`: the leaf's DER; `key`: its PKCS#8 DER; `address`/`port`: the
@@ -483,12 +557,12 @@ function __wbg_get_imports() {
 		const ret = false;
 		return ret;
 	};
-	imports.wbg.__wbindgen_closure_wrapper240 = function (arg0, arg1, arg2) {
-		const ret = makeMutClosure(arg0, arg1, 7, __wbg_adapter_26);
+	imports.wbg.__wbindgen_closure_wrapper270 = function (arg0, arg1, arg2) {
+		const ret = makeMutClosure(arg0, arg1, 9, __wbg_adapter_26);
 		return addHeapObject(ret);
 	};
-	imports.wbg.__wbindgen_closure_wrapper3003 = function (arg0, arg1, arg2) {
-		const ret = makeMutClosure(arg0, arg1, 124, __wbg_adapter_29);
+	imports.wbg.__wbindgen_closure_wrapper3098 = function (arg0, arg1, arg2) {
+		const ret = makeMutClosure(arg0, arg1, 132, __wbg_adapter_29);
 		return addHeapObject(ret);
 	};
 	imports.wbg.__wbindgen_error_new = function (arg0, arg1) {

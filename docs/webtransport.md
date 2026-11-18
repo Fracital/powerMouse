@@ -157,6 +157,50 @@ Measured the same way against a WebTransport server on the machine
 - A session is open until it is closed: Chrome's keep-alive holds an idle
   one past the server's idle timeout.
 
+### What a server's answer and close draw from Chrome 157
+
+Measured on Chrome 157.0.8103.50 headless against test/wtserver.mjs (its
+`resp`, `wtp` and `observe` parameters), each case twice, a page on
+`http://127.0.0.1` pinning the server's hash. What a server written for
+Wisp over WebTransport (holyWisp's listener) may send and what it hears back:
+
+- Chrome reads nothing of the 200 but `:status` and `wt-protocol`. A
+  `sec-webtransport-http3-draft` field (`draft02`, `draft03`, `foo`, `1`,
+  empty, or two of them) is neither needed nor checked: the session is
+  ready and its streams and datagrams work with any of them or none.
+- `wt-protocol` sets `protocol` only when it is one structured-field string
+  that is one of the page's `protocols` (any of them, not only the first; a
+  parameter after it, `"a";q=1`, is taken and dropped). Anything else is
+  ignored and leaves `protocol` `''` with the session up: a string the page
+  did not offer, a bare token (`echo-v1` without quotes), a list of two
+  offered strings, two `wt-protocol` fields, one sent when the page offered
+  none. A server that echoes the first token offered (`"wisp-v2"` for
+  `['wisp-v2', 'other']`) gets `protocol` `'wisp-v2'`.
+- After the server's CLOSE_WEBTRANSPORT_SESSION capsule and FIN on the
+  CONNECT stream, Chrome answers within a millisecond on loopback with a
+  FIN of its own on the CONNECT stream and nothing else on it: no capsule,
+  no RESET_STREAM, no STOP_SENDING, and it acknowledges the server's capsule
+  and FIN. Each stream the page had open is reset by Chrome with the HTTP/3
+  code 0x10f (H3_CONNECT_ERROR, no WebTransport code), a bidirectional one
+  and a unidirectional one alike. The page's `closed` fulfills with the
+  server's code and reason, and its writables reject with "The session is
+  closed." (source `'session'`). A close sent right behind the 200 lands
+  before the page's first `createBidirectionalStream()`, which rejects with
+  "The WebTransport connection is not open.".
+- With webtransport-go's close (`style=gone`: the data streams stopped and
+  reset with WEBTRANSPORT_SESSION_GONE, and the CONNECT stream stopped,
+  then the capsule and FIN), the page reads "Connection lost." where it
+  read the code and reason, its bidirectional writer "The stream was
+  aborted by the remote server" and its unidirectional one "Received
+  STOP_SENDING." (code 0), and Chrome never acknowledges the capsule (the
+  server's send side ends with the connection).
+- Chrome never sends CONNECTION_CLOSE after a session ends, whether the
+  page stays open or its tab is closed 2 s later: it sends nothing more on
+  the connection (no PING either, where a live session is kept alive) and
+  leaves it to the server's idle timeout (quinn's 30 s, counted from the
+  close). A server has to reap such connections itself, at once after the
+  CONNECT stream's FIN if it allows one session per connection.
+
 ## The stand-in
 
 The page's `WebTransport` is the browser's function wrapped
