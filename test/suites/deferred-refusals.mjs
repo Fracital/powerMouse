@@ -11,10 +11,11 @@
 // part, src/inject/accessFailures.ts); navigator.storage.estimate()
 // rejects before the browser is asked (src/inject/storageUsage.ts); a
 // Worker's construction throws before the browser's
-// (src/inject/workerStart.ts); an image in a frame no service worker
-// controls keeps its route and loads nothing (its copy is a part,
-// src/inject/dom/uncontrolledCopies.ts); an XML document a frame loads
-// lands none of its tree (its load is a part,
+// (src/inject/workerStart.ts), and so do a WebSocket's and a
+// WebSocketStream's (src/inject/bareClient.ts socketStandIns); an image
+// in a frame no service worker controls keeps its route and loads nothing
+// (its copy is a part, src/inject/dom/uncontrolledCopies.ts); an XML
+// document a frame loads lands none of its tree (its load is a part,
 // src/inject/dom/instructions.ts); a protocol handler's registration throws
 // (its checks are a part, src/inject/dom/protocolHandlers.ts). A part is made
 // synchronously within the call that needs it, so no page code runs between
@@ -76,6 +77,8 @@ const REFUSING = [
 	'estimate',
 	'worker',
 	'protocolHandler',
+	'webSocket',
+	'webSocketStream',
 ];
 /** the calls that answer with a promise, which rejects */
 const PROMISED = [
@@ -137,6 +140,13 @@ function countNatives() {
 		Navigator.prototype.registerProtocolHandler = function () {
 			reached.push('registerProtocolHandler');
 		};
+	if (window.WebSocket)
+		window.WebSocket = constructs('WebSocket', window.WebSocket);
+	if (window.WebSocketStream)
+		window.WebSocketStream = constructs(
+			'WebSocketStream',
+			window.WebSocketStream,
+		);
 	if (window.StorageManager) {
 		const prototype = StorageManager.prototype;
 		prototype.estimate = counted('estimate', prototype.estimate);
@@ -200,6 +210,8 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			'blankCopy',
 			'xmlLoad',
 			'protocolHandler',
+			'webSocket',
+			'webSocketStream',
 		],
 	);
 	ok(
@@ -234,6 +246,24 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		answer.out?.worker?.returned === 'object' &&
 			answer.reached?.includes('Worker'),
 		JSON.stringify({ out: answer.out?.worker, reached: answer.reached }),
+	);
+	// a URL the browser refuses (a fragment): its own SyntaxError, from its
+	// own constructor, through the stand-in's part
+	ok(
+		"with the parts, a WebSocket and a WebSocketStream to a URL the browser refuses get the browser's error, from its constructor",
+		/SyntaxError|is invalid|fragment/i.test(
+			answer.out?.webSocket?.threw ?? '',
+		) &&
+			/SyntaxError|is invalid|fragment/i.test(
+				answer.out?.webSocketStream?.threw ?? '',
+			) &&
+			answer.reached?.filter((name) => name === 'WebSocket').length === 2 &&
+			!answer.reached?.includes('WebSocketStream'),
+		JSON.stringify({
+			ws: answer.out?.webSocket,
+			stream: answer.out?.webSocketStream,
+			reached: answer.reached,
+		}),
 	);
 	ok(
 		'with the parts, an estimate answers, through the browser',

@@ -187,6 +187,13 @@
 							`${location.origin}/?%s`,
 						),
 					),
+				// a WebSocket's and a WebSocketStream's construction
+				// (src/inject/bareClient.ts socketStandIns): a URL with a fragment,
+				// which the browser's own constructor refuses
+				webSocket: () =>
+					outcome(() => new WebSocket('wss://socket.invalid/#x')),
+				webSocketStream: () =>
+					outcome(() => new WebSocketStream('wss://socket.invalid/#x')),
 				// the usage walk behind navigator.storage.estimate()
 				// (src/inject/storageUsage.ts)
 				estimate: () => outcome(() => navigator.storage.estimate()),
