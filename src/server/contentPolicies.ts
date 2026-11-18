@@ -5,7 +5,6 @@ import {
 	governing,
 	governsWorkerRequests,
 	hopRefusals,
-	namedRefusal,
 	parsePolicies,
 	REFUSED_URL,
 	sourcesMatch,
@@ -13,6 +12,7 @@ import {
 	type WorkerPolicies,
 } from '../csp';
 import { hostsApply } from '../cspJudge';
+import { namedRefusal } from '../refusalName';
 import { CSP_REPORT } from '../transport/messages';
 import type { NavigationChain } from './navigationHints';
 

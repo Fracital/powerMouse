@@ -376,39 +376,12 @@ export function enforcesCode(policies: Policy[]): boolean {
 	);
 }
 
-const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
-const NAMED_REFUSAL = '.u.refused.invalid';
+/** the letters of a refused URL's host (./refusalName.ts namedRefusal) */
+export const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
+/** what ends such a host */
+export const NAMED_REFUSAL = '.u.refused.invalid';
 
-/**
- * A URL like REFUSED_URL whose host names `url` (its origin alone when the
- * whole does not fit in a host name): where the worker sends a frame's
- * redirect its parent's frame-src refuses. Chrome names a refused
- * navigation by the URL it refused, its origin only when it is another
- * origin than the policy's document's, and the inject reads the host back
- * (refusalNamed) as the page's URL.
- */
-export function namedRefusal(url: string): string {
-	const encode = (text: string) => {
-		let bits = 0;
-		let value = 0;
-		let out = '';
-		for (const byte of new TextEncoder().encode(text)) {
-			value = (value << 8) | byte;
-			bits += 8;
-			while (bits >= 5) {
-				out += BASE32[(value >>> (bits - 5)) & 31];
-				bits -= 5;
-			}
-		}
-		if (bits) out += BASE32[(value << (5 - bits)) & 31];
-		return out;
-	};
-	let name = encode(url.replace(/#.*$/s, ''));
-	if (name.length > 220) name = encode(new URL(url).origin);
-	return `https://${name.replace(/.{1,60}/g, '$&.').slice(0, -1)}${NAMED_REFUSAL}:1/`;
-}
-
-/** the URL a host of namedRefusal's names, or null for another host */
+/** the URL a host of namedRefusal's (./refusalName.ts) names, or null for another host */
 export function refusalNamed(host: string): string | null {
 	if (!host.endsWith(NAMED_REFUSAL)) return null;
 	const name = host.slice(0, -NAMED_REFUSAL.length).replace(/\./g, '');

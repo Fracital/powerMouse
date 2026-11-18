@@ -558,6 +558,7 @@ const DEFERRED_FILES = new Set(
 		'src/inject/permissionGates.ts',
 		'src/passkeys/types.ts',
 		'src/refresh.ts',
+		'src/refusalName.ts',
 		'src/wasm/codecBytes.ts',
 		'src/inject/serviceWorkerObjects.ts',
 		'src/inject/storageBucketMethods.ts',

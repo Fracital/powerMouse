@@ -6,7 +6,8 @@
 // The hooks that call these stay in the bundle, and decide there whether a
 // call is the pool's at all, so a document that never meets another slot
 // never evaluates the parts.
-import { namedRefusal, sourcesMatch } from '../../csp';
+import { sourcesMatch } from '../../csp';
+import { namedRefusal } from '../../refusalName';
 import type { NavigationHintMessage } from '../../transport/messages';
 import { routedPrefix, unrouteURL } from '../modules/Unroute';
 import type DocumentClient from './Client';
