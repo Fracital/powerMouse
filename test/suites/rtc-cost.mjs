@@ -41,8 +41,15 @@ const FILES = /\/(rtcStack\.js|rtcWorker\.js|rtc\.wasm)(\?|$)/;
 // comfort noise. Only a document's first use of WebRTC fetches it, once,
 // and from the HTTP cache after that; a module of its own for video would
 // save those 3.5 KB compressed at the cost of a fetch when a call's first
-// video section comes
-const SIZE_KB = { 'rtcStack.js': 80, 'rtcWorker.js': 128, 'rtc.wasm': 1700 };
+// video section comes.
+// rtcStack.js went from 80 KB to 88 KB with the older encoded insertable
+// streams (createEncodedStreams()) and the document's end of the encoded
+// frames (src/inject/encodedFrames.ts: copies, clones and posted frames):
+// from 71519 bytes (21903 with brotli) to 85394 (26232), 13875 more
+// (4329). The document's frames have to be there when the page's call
+// to createEncodedStreams() or its worker's message comes, which is no
+// time to fetch them
+const SIZE_KB = { 'rtcStack.js': 88, 'rtcWorker.js': 128, 'rtc.wasm': 1700 };
 // measured on Chrome 152 and 156 here, at loads of 15 to 50: the first
 // offer 55 to 172 ms (natively 3 to 188: Chrome's own first offer starts
 // its WebRTC threads), a later one 10 to 60 ms (natively 0.7 to 4), the

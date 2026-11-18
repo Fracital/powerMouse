@@ -289,9 +289,18 @@ interface MediaState {
 	ridsDeclined: Set<string>;
 	sender: AudioSender | VideoSender | null;
 	receiver: AudioReceiver | VideoReceiver | null;
-	/** the page's encoded transforms (RTCRtpScriptTransform): the ports to their workers */
+	/**
+	 * Where the frames go, the sender's and the receiver's: the port to
+	 * the worker of the page's encoded transform (RTCRtpScriptTransform),
+	 * or else the one to its createEncodedStreams() streams
+	 */
 	sendTransform: MessagePort | null;
 	receiveTransform: MessagePort | null;
+	/** the two, each kept while the other is given and taken away */
+	ports: {
+		send: { script: MessagePort | null; streams: MessagePort | null };
+		receive: { script: MessagePort | null; streams: MessagePort | null };
+	};
 	/** the section's streams as its transforms' frames name them, and when they were asked */
 	ssrcs: { tx?: number; rx?: number; at: number } | null;
 	/** the sent video frames' ids */
@@ -725,6 +734,10 @@ export class Connection {
 			receiver: null,
 			sendTransform: null,
 			receiveTransform: null,
+			ports: {
+				send: { script: null, streams: null },
+				receive: { script: null, streams: null },
+			},
 			ssrcs: null,
 			frameId: 0,
 		};
@@ -881,19 +894,32 @@ export class Connection {
 		} else state.receiver?.frame(frame as Frame & { codec: string });
 	}
 
-	/** the page gave a sender or a receiver of the section a transform, or took it away */
+	/**
+	 * The page gave a sender or a receiver of the section a transform, or
+	 * took it away, or made its encoded streams (`streams`): a transform
+	 * has the frames while it is given (Chrome 157), the streams otherwise
+	 */
 	#setTransform(
 		state: MediaState,
 		side: 'send' | 'receive',
 		port: MessagePort | null,
+		streams = false,
 	) {
-		const old = side === 'send' ? state.sendTransform : state.receiveTransform;
-		old?.close();
-		if (side === 'send') state.sendTransform = port;
-		else state.receiveTransform = port;
+		const ports = state.ports[side];
+		const role = streams ? 'streams' : 'script';
+		if (ports[role] !== port) ports[role]?.close();
+		ports[role] = port;
+		const now = ports.script ?? ports.streams;
+		if (side === 'send') state.sendTransform = now;
+		else state.receiveTransform = now;
 		if (!port) return;
 		port.onmessage = (event) =>
 			this.#transformed(state, side, port, event.data as TransformFrame);
+	}
+	#dropTransforms(state: MediaState) {
+		for (const side of ['send', 'receive'] as const)
+			for (const streams of [false, true])
+				this.#setTransform(state, side, null, streams);
 	}
 
 	/** what a section negotiated, as the stack has it now: its direction, and the payload to send */
@@ -1150,8 +1176,7 @@ export class Connection {
 		state.stopped = true;
 		state.sender?.close();
 		state.receiver?.close();
-		this.#setTransform(state, 'send', null);
-		this.#setTransform(state, 'receive', null);
+		this.#dropTransforms(state);
 	}
 
 	/**
@@ -2468,7 +2493,12 @@ export class Connection {
 						request.port?.close();
 						throw 'no such media section';
 					}
-					this.#setTransform(state, request.side, request.port);
+					this.#setTransform(
+						state,
+						request.side,
+						request.port,
+						request.streams === true,
+					);
 					reply(null);
 					break;
 				}
@@ -2617,8 +2647,7 @@ export class Connection {
 		for (const state of this.#medias.values()) {
 			state.sender?.close();
 			state.receiver?.close();
-			this.#setTransform(state, 'send', null);
-			this.#setTransform(state, 'receive', null);
+			this.#dropTransforms(state);
 		}
 		this.#control({ op: 'close' });
 		setTimeout(() => this.#end(), CLOSE_LINGER_MS);

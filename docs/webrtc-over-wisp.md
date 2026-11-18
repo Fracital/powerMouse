@@ -356,7 +356,7 @@ native prototypes, as the Location stand-in's does).
 | `RTCDTMFSender`                                              | `insertDTMF`, `toneBuffer`, `canInsertDTMF`, `tonechange`: RFC 4733 telephone-event packets as Chrome's sender writes them (section 16)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | events                                                       | `RTCPeerConnectionIceEvent`, `RTCPeerConnectionIceErrorEvent`, `RTCTrackEvent`, `RTCDataChannelEvent`, `RTCDTMFToneChangeEvent`, `RTCErrorEvent` with `RTCError` (`errorDetail`, `sdpLineNumber`, `sctpCauseCode`, `receivedAlert`, `sentAlert`, `httpRequestStatusCode`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `getStats`                                                   | an `RTCStatsReport` (a real `Map` subclass with the native prototype shape) of Chrome's report types with Chrome's fields and ids: `peer-connection`, `transport`, `candidate-pair`, `local-candidate`, `remote-candidate`, `certificate`, `codec`, `inbound-rtp`, `outbound-rtp`, `remote-inbound-rtp`, `remote-outbound-rtp`, `media-source`, `media-playout`, `data-channel`; the numbers from str0m's `PeerStats`, `MediaIngressStats` and `MediaEgressStats` and the worker's encoder and decoder counters. Candidate addresses in the report are the edge's or empty, as in 5.1                                                                                                                                                                                                                                                     |
-| out of scope, left as the browser leaves them in a worker    | encoded insertable streams (`createEncodedStreams`; `RTCRtpScriptTransform` is carried, section 16), `RTCIceTransport.getStats`, `RTCIdentityAssertion`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| out of scope, left as the browser leaves them in a worker    | encoded insertable streams (`createEncodedStreams` and `RTCRtpScriptTransform` are carried, section 16), `RTCIceTransport.getStats`, `RTCIdentityAssertion`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 Errors and their texts are copied from Chrome 152 and 156 as the suite
 records them, the way `src/inject/errorMessages.ts` and the
@@ -1979,11 +1979,43 @@ them, and the frames between it have 0 by 0. The stack's VP9 packetizer
 as libwebrtc's does: a browser receiving the page's VP9 reads its
 keyframes' size from there, and read 0 by 0 before.
 
-Limits: `createEncodedStreams()` (the older encoded insertable streams)
-still fails with NotSupportedError; a frame is the browser's class but
-not the browser's object, so `new RTCEncodedAudioFrame(frame)` and
-posting a frame to another context fail; `sendKeyFrameRequest()` is the
-browser's (an unattached transformer's refusal); a sent picture's
+The older encoded insertable streams are carried too: a stand-in's
+sender or receiver answers `createEncodedStreams()` as Chrome 157 does
+(a plain object of an unlocked `readable` and `writable`, once, and,
+without the connection's `encodedInsertableStreams`, only in the task
+that made the sender or receiver or told the page of it: "Too late to
+create encoded streams" after, "Encoded streams already created" the
+second time). The streams are the document's, on a port of their own to
+the rtc worker (`#setTransform` with `streams`), which sends the frames
+to them whenever no transform is given; a transform given has them while
+it is given, and taken away leaves neither, the frames going nowhere, as
+in Chrome. A connection with `encodedInsertableStreams` sends and plays
+nothing of a sender or receiver whose streams the page never made.
+
+A frame is an object of the inject's on the browser's prototype, which
+the browser cannot copy or clone, so src/inject/encodedFrames.ts (the
+worker inject's, and the document's once a transform or the streams are
+made) makes it act as Chrome's does wherever a page takes one:
+`new RTCEncodedAudioFrame(frame)` and `new RTCEncodedVideoFrame(frame,
+{ metadata })` copy it with Chrome's checks and words for what a copy
+may change (a sent sound's payload type, capture time and level, a
+received one's level, a picture's id and dependencies, any frame's RTP
+time; the whole dictionary or none); `structuredClone` and
+`postMessage` on a port, a worker or a worker's global carry it (and the
+streams, transferred) as a marker the receiving realm's
+`MessageEvent.data` turns back into a frame, the same frame where the
+message has it twice; a frame in the transfer list is Chrome's
+DataCloneError; a received picture's copies and clones lose their
+`receiveTime`, as Chrome's do. webrtc-transform compares each with what
+Chrome does to its own frames, natively, and calls a page whose sound
+goes through both ends' streams, the receiver's transferred to a worker.
+
+Limits: a frame posted with a window's `postMessage` (to a frame or
+another window) or on a `BroadcastChannel` is not carried (the browser
+clones the inject's object as an empty one), and a document of the page that
+made neither a transform nor the streams takes posted frames as such
+markers; `sendKeyFrameRequest()` is the browser's (an unattached
+transformer's refusal); a sent picture's
 `spatialIndex` and `temporalIndex` are 0 and simulcast layers share one
 count of ids; the empty frames Chrome gives a receiver's transform for
 padding packets are not given; and a receiver's transform is given every

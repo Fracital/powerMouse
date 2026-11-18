@@ -18,6 +18,7 @@ import type {
 	WorkerMessage,
 } from '../../rtc/protocol';
 import { isReply, TRANSFORM_KEY } from '../../rtc/protocol';
+import { frameRealm, type FrameRealm } from '../encodedFrames';
 import {
 	candidateLine,
 	channelChecked,
@@ -959,6 +960,17 @@ export default class WebRTCStack {
 			/** the sender's and the receiver's encoded transforms */
 			sendTransform: object | null;
 			receiveTransform: object | null;
+			/** the sender's and the receiver's createEncodedStreams() answers, once made */
+			sendStreams: object | null;
+			receiveStreams: object | null;
+			/** the ports their frames come on from the worker (streamsPort) */
+			streamPorts: { send?: MessagePort; receive?: MessagePort };
+			/**
+			 * Still in the task that made it, or that told the page of it:
+			 * without encodedInsertableStreams, createEncodedStreams() is too
+			 * late after (Chrome 157)
+			 */
+			fresh: boolean;
 			/** its track's media-source number in the stats (SA<n>), 0 for none */
 			source: number;
 		}
@@ -1155,6 +1167,29 @@ export default class WebRTCStack {
 			if (port) shared.transformPorts.delete(transform as object);
 			// a transform made where the inject took no port carries nothing
 			if (transform !== null && !port) return;
+			// a transform taken from a sender or a receiver whose encoded
+			// streams were made leaves it with neither, its frames going
+			// nowhere (Chrome 157, with encodedInsertableStreams or without)
+			if (
+				transform === null &&
+				slot[side === 'send' ? 'sendStreams' : 'receiveStreams']
+			) {
+				const [kept, handed] = privateChannel();
+				onPort(kept, 'message', () => {});
+				slot.streamPorts[side] = kept;
+				slot.pc
+					.call(
+						{
+							op: 'transform',
+							handle: slot.handle,
+							side,
+							port: handed,
+							streams: true,
+						},
+						[handed],
+					)
+					.catch(() => {});
+			}
 			slot.pc
 				.call(
 					{ op: 'transform', handle: slot.handle, side, port },
@@ -1163,7 +1198,114 @@ export default class WebRTCStack {
 				.catch(() => {});
 		};
 
+		/** the document's encoded frames (../encodedFrames.ts), made when it first needs them */
+		let frames: FrameRealm | null | undefined;
+		const framesOf = () => {
+			if (frames !== undefined) return frames;
+			// the interfaces the realm's frames are made of: the document's
+			// own, and the ones read now (see live)
+			const natives = objectCreate(null) as Record<string, unknown>;
+			for (const name of [
+				'Array',
+				'DOMException',
+				'EventTarget',
+				'Map',
+				'MessageEvent',
+				'Object',
+				'Promise',
+				'TypeError',
+				'Worker',
+				'performance',
+			])
+				natives[name] = global[name];
+			for (const name of [
+				'ArrayBuffer',
+				'MessageChannel',
+				'MessagePort',
+				'Performance',
+				'RTCEncodedAudioFrame',
+				'RTCEncodedVideoFrame',
+				'ReadableStream',
+				'ReadableStreamDefaultController',
+				'ReadableStreamDefaultReader',
+				'Set',
+				'WritableStream',
+				'WritableStreamDefaultWriter',
+			])
+				natives[name] = live[name];
+			try {
+				frames = frameRealm(live, natives, (fn, wrap, construct) =>
+					proxyModule.wrapFunction(fn, wrap, construct),
+				);
+			} catch (error) {
+				frames = null;
+			}
+			return frames;
+		};
+		/** the slot is new to the page until the next task */
+		const freshFor = (slot: MediaSlot) => {
+			slot.fresh = true;
+			Reflect.apply(realmTimeout, live, [
+				() => {
+					slot.fresh = false;
+				},
+				0,
+			]);
+		};
+		/** the port of a sender's or a receiver's encoded streams: made, and given to the worker, once */
+		const streamsPort = (slot: MediaSlot, side: 'send' | 'receive') => {
+			const known = slot.streamPorts[side];
+			if (known) return known;
+			const [kept, handed] = privateChannel();
+			slot.streamPorts[side] = kept;
+			slot.pc
+				.call(
+					{
+						op: 'transform',
+						handle: slot.handle,
+						side,
+						port: handed,
+						streams: true,
+					},
+					[handed],
+				)
+				.catch(() => {});
+			return kept;
+		};
+		/**
+		 * `createEncodedStreams()` (Chrome 157): once per sender or receiver,
+		 * and without the connection's encodedInsertableStreams only in the
+		 * task that made it; `{ readable, writable }` of its frames, which
+		 * go through them whenever it has no transform
+		 */
+		const createEncodedStreams = (
+			slot: MediaSlot,
+			side: 'send' | 'receive',
+		) => {
+			const on = side === 'send' ? 'RTCRtpSender' : 'RTCRtpReceiver';
+			const key = side === 'send' ? 'sendStreams' : 'receiveStreams';
+			const refuse = (message: string, name = 'InvalidStateError') =>
+				domException(
+					`Failed to execute 'createEncodedStreams' on '${on}': ${message}`,
+					name,
+				);
+			if (slot[key]) throw refuse('Encoded streams already created');
+			if (!slot.pc.config.encodedInsertableStreams && !slot.fresh)
+				throw refuse('Too late to create encoded streams');
+			const realm = framesOf();
+			if (!realm) throw refuse('Not supported', 'NotSupportedError');
+			const { readable, writable } = realm.streams(streamsPort(slot, side));
+			const made = new global.Object() as Record<string, unknown>;
+			made.readable = readable;
+			made.writable = writable;
+			slot[key] = made;
+			return made;
+		};
+
 		class SenderMembers {
+			createEncodedStreams() {
+				return createEncodedStreams(slotOf(this), 'send');
+			}
 			get transform() {
 				return slotOf(this).sendTransform;
 			}
@@ -1342,6 +1484,9 @@ export default class WebRTCStack {
 			}
 		}
 		class ReceiverMembers {
+			createEncodedStreams() {
+				return createEncodedStreams(slotOf(this), 'receive');
+			}
 			get transform() {
 				return slotOf(this).receiveTransform;
 			}
@@ -1945,8 +2090,13 @@ export default class WebRTCStack {
 				dtmf: null,
 				sendTransform: null,
 				receiveTransform: null,
+				sendStreams: null,
+				receiveStreams: null,
+				streamPorts: {},
+				fresh: false,
 				source: track ? ++sourceSerial : 0,
 			};
+			freshFor(slot);
 			mediaSlots.set(slot.transceiver, slot);
 			mediaSlots.set(slot.sender, slot);
 			mediaSlots.set(slot.receiver, slot);
@@ -1967,6 +2117,12 @@ export default class WebRTCStack {
 			state
 				.call({ op: 'receiveTrack', handle, writable }, [writable])
 				.catch(() => {});
+			// a connection with encodedInsertableStreams sends and plays
+			// nothing of a sender or receiver whose streams the page has not
+			// made: its frames go to a port that lets them go until then
+			if (state.config.encodedInsertableStreams)
+				for (const side of ['send', 'receive'] as const)
+					onPort(streamsPort(slot, side), 'message', () => {});
 			return slot;
 		};
 		/** the sender's track to the worker: a stream of its frames, or none */
@@ -2212,6 +2368,7 @@ export default class WebRTCStack {
 						streams: Object.freeze(streams),
 						transceiver: slot.transceiver,
 					});
+					freshFor(slot);
 					state.target.dispatchEvent(event);
 					// media that came before the description did
 					if (slot.live) queue(() => setMuted(slot, false));
@@ -4421,6 +4578,8 @@ export default class WebRTCStack {
 			const transfer = args[2];
 			if (transfer !== undefined && !isArray(transfer))
 				return Reflect.construct(target, args, newTarget) as object;
+			// the worker may post its frames to the document
+			framesOf();
 			const [kept, handed] = privateChannel();
 			const list: unknown[] = [];
 			if (transfer)

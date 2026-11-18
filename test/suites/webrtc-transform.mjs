@@ -273,5 +273,236 @@ for (const codec of ['video/VP8', 'video/VP9', 'video/H264', 'video/AV1']) {
 	);
 }
 
+// ---- frames copied, cloned and posted on, as Chrome's are ---------------------
+/** a call whose page's transforms copy, clone and post their sixth frame (COPIES): what each context made of it */
+async function copiesCall(proxied, kind, codec) {
+	const near = await open(proxied ? 'proxied' : 'natively', proxied);
+	const far = await open('far end', false);
+	const own = end(near);
+	const other = end(far);
+	try {
+		await own.call('open', {});
+		await other.call('open', {});
+		await own.call('copies', kind, codec);
+		await other.call('media', kind, { codec });
+		await other.call('remote', 'offer', await own.call('local', 'offer'));
+		await own.call('remote', 'answer', await other.call('local', 'answer'));
+		await own.call('connected');
+		return await own.call('copied');
+	} catch (error) {
+		return { failure: error.message };
+	} finally {
+		await own.call('close').catch(() => {});
+		await other.call('close').catch(() => {});
+		await near.page.close().catch(() => {});
+		await far.page.close().catch(() => {});
+	}
+}
+/** the entries of `got` that are not `want`'s */
+const unlike = (got, want) =>
+	Object.keys({ ...want, ...got })
+		.filter((key) => JSON.stringify(got?.[key]) !== JSON.stringify(want?.[key]))
+		.map(
+			(key) =>
+				`${key}: ${JSON.stringify(got?.[key])} (natively ${JSON.stringify(want?.[key])})`,
+		);
+for (const [kind, codec] of [
+	['audio', null],
+	['video', 'video/VP8'],
+]) {
+	const want = await copiesCall(false, kind, codec);
+	const got = await copiesCall(true, kind, codec);
+	ok(
+		`natively, ${kind}: each context made something of the frames`,
+		!want.failure &&
+			Object.keys(want.worker ?? {}).length === 2 &&
+			Object.keys(want.page ?? {}).length === 2 &&
+			Object.keys(want.other ?? {}).length === 2,
+		want.failure ?? JSON.stringify(want),
+	);
+	if (want.failure) continue;
+	for (const op of [`send ${kind}`, `recv ${kind}`]) {
+		const off = unlike(got.worker?.[op], want.worker[op]);
+		ok(
+			`proxied, ${op}: a frame's copies, its changed copies and its clones read as Chrome's`,
+			!got.failure && got.worker?.[op] && !off.length,
+			got.failure ?? off.join('; '),
+		);
+		ok(
+			`proxied, ${op}: a frame posted to the page and through a port to another worker arrives as Chrome's`,
+			!got.failure &&
+				got.page?.[op] === want.page[op] &&
+				got.other?.[op] === want.other[op],
+			got.failure ??
+				`page ${got.page?.[op]} (natively ${want.page[op]}); other ${got.other?.[op]} (natively ${want.other[op]})`,
+		);
+	}
+}
+
+// ---- createEncodedStreams() ----------------------------------------------------
+{
+	const rules = async (proxied) => {
+		const page = await open(proxied ? 'proxied' : 'natively', proxied);
+		try {
+			return await end(page).call('streamRules');
+		} catch (error) {
+			return { failure: error.message };
+		} finally {
+			await page.page.close().catch(() => {});
+		}
+	};
+	const want = await rules(false);
+	const got = await rules(true);
+	const off = unlike(got, want);
+	ok(
+		'proxied: createEncodedStreams() answers, refuses and reads its configuration as Chrome does',
+		!want.failure && !got.failure && !off.length,
+		got.failure ?? want.failure ?? off.join('; '),
+	);
+}
+
+/**
+ * A call whose sound goes through both ends' createEncodedStreams() (each
+ * frame scrambled and marked on the way out, checked and unscrambled on the
+ * way in, the receiver's streams transferred to a worker): `transform`, the
+ * page's sender is also given a transform for a while
+ */
+async function streamsCall(proxied, { transform = false, flag = false } = {}) {
+	const near = await open(proxied ? 'proxied' : 'natively', proxied);
+	const far = await open('far end', false);
+	const own = end(near);
+	const other = end(far);
+	try {
+		await own.call('open', flag ? { encodedInsertableStreams: true } : {});
+		await other.call('open', {});
+		await own.call('streamsCall', { transform });
+		await other.call('streamsCall', {});
+		await other.call('remote', 'offer', await own.call('local', 'offer'));
+		await own.call('remote', 'answer', await other.call('local', 'answer'));
+		await own.call('connected');
+		await other.call('connected');
+		const first = {
+			mine: await own.call('streamsSeen', 4000),
+			theirs: await other.call('streamsSeen', 0),
+		};
+		if (!transform) return first;
+		await own.call('untransform');
+		await own.call('streamsSeen', 1000);
+		const before = await other.call('streamsSeen', 0);
+		const later = {
+			mine: await own.call('streamsSeen', 3000),
+			theirs: await other.call('streamsSeen', 0),
+		};
+		return { first, before, later };
+	} catch (error) {
+		return { failure: error.message };
+	} finally {
+		await own.call('close').catch(() => {});
+		await other.call('close').catch(() => {});
+		await near.page.close().catch(() => {});
+		await far.page.close().catch(() => {});
+	}
+}
+{
+	const want = await streamsCall(false);
+	const got = await streamsCall(true);
+	const flows = (seen) =>
+		seen?.mine?.sent?.frames > 20 &&
+		seen.mine.received?.frames > 20 &&
+		seen.mine.received.dropped === 0 &&
+		seen.theirs?.received?.frames > 20 &&
+		seen.theirs.received.dropped === 0;
+	ok(
+		'natively: the sound goes both ways through the encoded streams, transferred to a worker',
+		!want.failure && flows(want),
+		want.failure ?? JSON.stringify(want),
+	);
+	ok(
+		"proxied: the page's sound goes both ways through its encoded streams, the receiver's transferred to a worker, none dropped",
+		!got.failure &&
+			flows(got) &&
+			got.mine.transferred === want.mine?.transferred &&
+			got.mine.sent.audio === got.mine.sent.frames &&
+			got.mine.received.audio === got.mine.received.frames,
+		got.failure ?? JSON.stringify(got),
+	);
+	ok(
+		'proxied: the frames of the encoded streams have the metadata Chrome gives',
+		got.mine?.sent?.keys === want.mine?.sent?.keys &&
+			got.mine?.received?.keys === want.mine?.received?.keys,
+		`${got.mine?.sent?.keys} / ${got.mine?.received?.keys} (natively ${want.mine?.sent?.keys} / ${want.mine?.received?.keys})`,
+	);
+}
+// a transform has the frames while it is given; taken away, the streams
+// have them again with encodedInsertableStreams, and nothing does without
+for (const flag of [false, true]) {
+	const want = await streamsCall(false, { transform: true, flag });
+	const got = await streamsCall(true, { transform: true, flag });
+	const shape = (seen) =>
+		seen?.first
+			? [
+					seen.first.mine.byTransform > 20,
+					seen.first.mine.sent.frames === 0,
+					seen.first.theirs.received?.dropped > 0,
+					seen.later.mine.byTransform === seen.first.mine.byTransform ||
+						seen.later.mine.byTransform < seen.first.mine.byTransform + 60,
+					seen.later.mine.sent.frames > 20,
+					seen.later.theirs.received?.frames >
+						(seen.before.received?.frames ?? 0) + 20,
+					seen.later.theirs.received?.dropped === seen.before.received?.dropped,
+				].join()
+			: null;
+	const config = flag ? ' with encodedInsertableStreams' : '';
+	ok(
+		`natively${config}: a transform given a sender with encoded streams has its frames until it is taken away`,
+		!want.failure && /^true,true,true,true,/.test(shape(want) ?? ''),
+		want.failure ?? `${shape(want)} ${JSON.stringify(want)}`,
+	);
+	ok(
+		`proxied${config}: a transform given a sender with encoded streams has its frames until it is taken away, and then where Chrome sends them`,
+		!got.failure && shape(got) === shape(want),
+		got.failure ??
+			`${shape(got)} (natively ${shape(want)}) ${JSON.stringify(got)}`,
+	);
+}
+{
+	// encodedInsertableStreams, the streams never made: nothing is sent
+	const silent = async (proxied) => {
+		const near = await open(proxied ? 'proxied' : 'natively', proxied);
+		const far = await open('far end', false);
+		const own = end(near);
+		const other = end(far);
+		try {
+			await own.call('open', { encodedInsertableStreams: true });
+			await other.call('open', {});
+			await own.call('plain', 'audio');
+			await other.call('media', 'audio', {});
+			await other.call('remote', 'offer', await own.call('local', 'offer'));
+			await own.call('remote', 'answer', await other.call('local', 'answer'));
+			await own.call('connected');
+			await other.call('connected');
+			await sleep(3000);
+			const seen = await other.call('seen', 0, 0);
+			return { frames: seen?.['recv audio']?.length ?? 0 };
+		} catch (error) {
+			return { failure: error.message };
+		} finally {
+			await own.call('close').catch(() => {});
+			await other.call('close').catch(() => {});
+			await near.page.close().catch(() => {});
+			await far.page.close().catch(() => {});
+		}
+	};
+	const want = await silent(false);
+	const got = await silent(true);
+	ok(
+		'proxied: with encodedInsertableStreams a sender whose streams the page never made sends nothing, as natively',
+		!want.failure && !got.failure && got.frames === want.frames,
+		got.failure ??
+			want.failure ??
+			`${got.frames} frames (natively ${want.frames})`,
+	);
+}
+
 gate.close();
 await done(browser);

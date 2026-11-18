@@ -222,7 +222,9 @@ export type Request =
 	 * receiver: the port of its RTCRtpScriptTransform (transferred), which
 	 * reaches the transform's worker, or null for none. Each encoded frame
 	 * goes to it as a TransformFrame and is packetized or decoded as it
-	 * comes back.
+	 * comes back. `streams`: the port is the one of the sender's or the
+	 * receiver's createEncodedStreams() (in the document), which has the
+	 * frames whenever no transform is given.
 	 */
 	| {
 			seq: number;
@@ -230,6 +232,7 @@ export type Request =
 			handle: number;
 			side: 'send' | 'receive';
 			port: MessagePort | null;
+			streams?: boolean;
 	  }
 	/** a tone of the sender's RTCDTMFSender, one of 0-9, A-D, * and #, for `duration` ms */
 	| {
