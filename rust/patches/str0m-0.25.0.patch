@@ -759,6 +759,19 @@
          // TODO, remove Bytes in sctp and just use &[u8].
          let data = data.to_vec().into();
          let r = self.endpoint.handle(now, self.fake_addr, None, None, data);
+--- a/src/sctp/snap.rs
++++ b/src/sctp/snap.rs
+@@ -26,6 +26,10 @@
+         TransportConfig::default()
+             .with_max_init_retransmits(None)
+             .with_max_data_retransmits(None)
++            // Chrome's dcSCTP backs its timers off to 3 s at most, so an
++            // association that lost its path for a while sends again
++            // within 3 s of it coming back (measured on Chrome 157)
++            .with_rto_max_ms(3000)
+             .with_max_receive_buffer_size(max_receive_buffer_size)
+             .with_max_receive_message_size(max_receive_message_size),
+     )
 --- a/src/streams/mod.rs
 +++ b/src/streams/mod.rs
 @@ -19,7 +19,9 @@

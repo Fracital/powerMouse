@@ -926,6 +926,11 @@ TURN server.
   server refuses or closes is not asked for again for 10 s.
 - **States.** The agent has no "failed": a connection that is disconnected
   before it ever connected reads `failed`.
+- **SCTP timers** back off to 3 s at most, as Chrome's dcSCTP (157,
+  measured: its retransmissions 3.0 s apart through an outage), not
+  sctp-proto's 60 s (a line of the str0m patch): what a page sent during an
+  outage is sent again within 3 s of the path coming back, after an ICE
+  restart too, where it took up to a minute.
 - **The peers in the suite** are signalled by the suite itself (it holds
   both ends), not by a WebSocket relay in the fixture. werift cannot resolve
   a `.local` name, so the suite takes those candidates out of what it hands

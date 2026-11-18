@@ -94,6 +94,8 @@ struct Peer {
 	address: String,
 	events: Vec<Fields>,
 	frames: Vec<Received>,
+	/// what its channels received
+	messages: Vec<Vec<u8>>,
 	/// datagrams waiting to cross to the other peer
 	outbox: Vec<Vec<u8>>,
 }
@@ -129,6 +131,7 @@ impl Peer {
 			address: address.to_string(),
 			events: Vec::new(),
 			frames: Vec::new(),
+			messages: Vec::new(),
 			outbox: Vec::new(),
 		}
 	}
@@ -155,6 +158,7 @@ impl Peer {
 				}
 				OUT_EVENT => self.events.push(owned(&bytes[1..])),
 				OUT_RESULT => result = Some(owned(&bytes[1..])),
+				OUT_CHANNEL_DATA => self.messages.push(bytes[4..].to_vec()),
 				OUT_MEDIA_DATA => {
 					let rid_len = bytes[21] as usize;
 					let half = |at: usize| u16::from_be_bytes([bytes[at], bytes[at + 1]]);
@@ -1109,6 +1113,43 @@ fn a_remote_whose_pair_is_given_up_leaves_the_list() {
 	assert_eq!(checks, before, "checks went on to the given up remote");
 	// b was told of a by a's checks alone (a peer reflexive candidate)
 	assert!(lists(&b).last().is_some_and(|list| list.starts_with("udp/10.0.0.1:5000")), "{:?}", lists(&b));
+}
+
+/// A message sent while the path is gone (every datagram lost, both ways,
+/// for 10 s) arrives within 3 s of the path coming back: Chrome's dcSCTP
+/// backs its retransmission timer off to 3 s at most (157, measured);
+/// sctp-proto's own limit of 60 s sent it again 3, 9, 21 and 45 s after
+/// it was written, so 11 s after this outage
+#[test]
+fn a_message_sent_into_an_outage_arrives_soon_after_it() {
+	let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let mut a = Peer::new("10.0.0.1:5000", &[]);
+	let mut b = Peer::new("10.0.0.2:5000", &[]);
+	let index: u16 = get(&a.control(&[("op", "channel"), ("label", "data")]), "index").parse().unwrap();
+	negotiate(&mut a, &mut b, &[]);
+	pump(&mut a, &mut b, "the channel", |a, b| a.event("channel_open").is_some() && b.event("channel_open").is_some());
+	let mut message = index.to_be_bytes().to_vec();
+	message.push(0);
+	message.extend_from_slice(b"held");
+	let (ptr, len) = give(&message);
+	assert_eq!(unsafe { i(a.id, IN_CHANNEL_SEND, ptr, len) }, STATUS_OK);
+	a.drain();
+	let lost = Instant::now();
+	while lost.elapsed() < Duration::from_secs(10) {
+		a.outbox.clear();
+		b.outbox.clear();
+		a.tick();
+		b.tick();
+		std::thread::sleep(Duration::from_millis(5));
+	}
+	a.outbox.clear();
+	b.outbox.clear();
+	assert!(b.messages.is_empty());
+	let back = Instant::now();
+	pump(&mut a, &mut b, "the message", |_, b| !b.messages.is_empty());
+	let took = back.elapsed();
+	assert_eq!(b.messages, vec![b"held".to_vec()]);
+	assert!(took < Duration::from_millis(3500), "arrived {took:?} after the path came back");
 }
 
 #[test]
