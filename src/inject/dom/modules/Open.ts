@@ -49,8 +49,14 @@ export default class OpenModule extends Module<DocumentClient> {
 				event.metaKey ||
 				event.shiftKey;
 			if (!modifier && SAME_FRAME.includes(target)) return;
-			// a frame of this page by that name: the browser navigates it
-			if (!modifier && client.hasFrameNamed(link.getAttribute('target')!))
+			// a frame of this page by that name: the browser navigates it; a
+			// frame of the tab by that name: the Sandbox module does; a popup
+			// the tab opened: the browser does (DocumentClient namedWindow)
+			if (
+				!modifier &&
+				(client.hasFrameNamed(link.getAttribute('target')!) ||
+					client.namedWindow?.(link.getAttribute('target'), true))
+			)
 				return;
 			let url: URL;
 			try {

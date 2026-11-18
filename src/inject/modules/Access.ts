@@ -794,8 +794,12 @@ export default class AccessModule extends Module<Client> {
 						// document's navigation (Context navigateWindow), with the
 						// value the assignment makes (`w.location += '#x'` too),
 						// and one of a window that runs nothing of ours yet
-						// (Context unclaimedWindow), or of its document, which no
-						// API of its own writes
+						// (Context unclaimedWindow), which no API of its own
+						// writes. Another window's document
+						// (`frame.contentDocument.location = url`, Reflect.set,
+						// Object.assign, the descriptor's setter) writes its
+						// window's: made raw, it went to the site itself, or was
+						// refused in a sibling frame
 						const navigated =
 							key === 'location' &&
 							moduleClient.navigateWindow &&
@@ -803,13 +807,17 @@ export default class AccessModule extends Module<Client> {
 							theirs === undefined
 								? windowOfContainer(target)
 								: undefined;
-						const unclaimed =
+						const through =
 							navigated !== undefined &&
-							!!moduleClient.unclaimedWindow?.(navigated);
+							(navigated === target
+								? !!moduleClient.unclaimedWindow?.(navigated)
+								: navigated !== realm && isWindowObject(navigated))
+								? navigated
+								: undefined;
 						if (
 							key === 'location' &&
 							moduleClient.navigateWindow &&
-							(foreign || unclaimed)
+							(foreign || through !== undefined)
 						) {
 							let value: unknown;
 							let assigned = false;
@@ -830,13 +838,7 @@ export default class AccessModule extends Module<Client> {
 							if (!assigned) return result;
 							// (converted once, as the setter would)
 							const url = String(value);
-							if (
-								moduleClient.navigateWindow(
-									unclaimed ? navigated : target,
-									url,
-									'href',
-								)
-							)
+							if (moduleClient.navigateWindow(through ?? target, url, 'href'))
 								return result;
 							righthand = url;
 							operate = (object: any, property: any, next: any) =>
@@ -1125,6 +1127,23 @@ export default class AccessModule extends Module<Client> {
 					if (failsToParse(moduleClient, <string>value)) {
 						set(value);
 						return result;
+					}
+					// another window's location (`with (frame.document) location =
+					// url`): navigated as this document's navigation, through its
+					// gated Location (Sandbox gateLocation). Written raw, the
+					// routed URL went in a frame this one may not navigate itself
+					if (target !== realm.location && name === 'location') {
+						const gated = api.get(target, 'location') as {
+							href?: unknown;
+						};
+						if (
+							isObject(gated) &&
+							gated !== target &&
+							gated !== target[moduleClient.names.globalProxy]
+						) {
+							gated.href = value;
+							return result;
+						}
 					}
 					const destination = new URL(<urlLike>value, moduleClient.baseHref);
 					set(
@@ -1668,8 +1687,12 @@ export default class AccessModule extends Module<Client> {
 								Reflect.get(target, key),
 								key,
 								// (`{ postMessage } = parent`: a read of the window's, as
-								// `{ 0: w } = window` is of a child it injects first)
-								key === 'postMessage' || indexKey(key) ? target : undefined,
+								// `{ 0: w } = window` is of a child it injects first, and
+								// `{ location } = popup.document`, whose window no walk of
+								// this page's frames finds)
+								key === 'postMessage' || key === 'location' || indexKey(key)
+									? target
+									: undefined,
 							);
 							const nested = ordered
 								? ordered[position++]

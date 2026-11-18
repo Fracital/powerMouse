@@ -803,7 +803,7 @@ that Chrome 157 run:
 | `wpt-referrer-policy`            | 276       | 0            | 0              |
 | `wpt-history`                    | 65        | 4            | 87             |
 | `wpt-location`                   | 66        | 6            | 12             |
-| `wpt-windows`                    | 48        | 4            | 5              |
+| `wpt-windows`                    | 48        | 3            | 3              |
 | `wpt-script-element`             | 74        | 8            | 11             |
 | `wpt-script-timing`              | 156       | 10           | 17             |
 | `wpt-modules`                    | 109       | 16           | 25             |

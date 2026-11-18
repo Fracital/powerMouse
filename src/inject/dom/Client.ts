@@ -2860,6 +2860,27 @@ export default class DocumentClient extends Client {
 	hasFrameNamed(name: string): boolean {
 		return this.frameNamed(name) !== null;
 	}
+	/**
+	 * @internal set by the Sandbox module: the window a link, a form or
+	 * window.open() of this document aims at by `name` that the browser
+	 * would not navigate for it, the host framing the proxied top
+	 * sandboxed: a window of this tab's proxied frames other than this one
+	 * and its own. With `popups`, also a popup the tab opened (tabPopups),
+	 * which the browser navigates itself, but which no frame of this
+	 * document names, so it is no new tab for the host. Null for a keyword,
+	 * for this window and its own frames (the browser finds those) and for
+	 * a name nothing in reach has
+	 */
+	namedWindow?: (
+		name: string | null | undefined,
+		popups?: boolean,
+	) => typeof globalThis | null;
+	/**
+	 * the windows this tab's documents opened (window.open), kept on the
+	 * proxied top's client for namedWindow, which reads their names when
+	 * it is asked
+	 */
+	tabPopups?: WeakRef<typeof globalThis>[];
 	/** the frame element of this document named `name` (`target`, window.open), if any */
 	frameNamed(name: string): Element | null {
 		if (!name || name.startsWith('_')) return null;

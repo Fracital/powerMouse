@@ -2,10 +2,6 @@
 	"/html/browsers/windows/browsing-context-names/choose-_parent-002.html": {
 		"choosing _parent context: multiple nested contexts": "FAIL: assert_equals: expected (string) \"iframeParent\" but got (undefined) undefined"
 	},
-	"/html/browsers/windows/browsing-context-names/choose-existing-001.html": {
-		"(harness)": "TIMEOUT: ",
-		"An existing browsing context must be chosen if the given name is the same as its name": "TIMEOUT: Test timed out"
-	},
 	"/html/browsers/windows/embedded-opener-remove-frame.html": {
 		"(harness)": "TIMEOUT: "
 	},

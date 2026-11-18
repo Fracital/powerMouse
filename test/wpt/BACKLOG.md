@@ -900,11 +900,6 @@ workers, webstorage, IndexedDB).
   of the page passes). Inference, not traced: a message other than the
   page's own, probably one of the proxy's, reaches the popup page's `message`
   listener, which relays it to the opener.
-- `html/browsers/windows/browsing-context-names/choose-existing-001.html` (2:
-  the harness TIMEOUT and its subtest): `window.open(url, "iExist")` from one
-  iframe naming its sibling. The window.open hook knows only frames of the
-  opener's own document and the proxied parent and top, so a sibling's name
-  goes to the browser with a route of the opener's. Not traced.
 - `html/browsers/windows/embedded-opener-remove-frame.html` (1: the harness
   TIMEOUT): timing dependent, cause not yet known. It also fails alone at
   8d040b33 and at 5bd9c474 with this harness, where the sub-streams' own

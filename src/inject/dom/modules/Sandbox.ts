@@ -2,6 +2,7 @@ import { routeHTML } from '../../../rewriteHTML';
 import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
+import { unrouteURL } from '../../modules/Unroute';
 import { failsToParse, withStack } from '../../nativeErrors';
 import { OwnWeakMap } from '../../ownCollections';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
@@ -126,6 +127,66 @@ export default class SandboxModule extends Module<DocumentClient> {
 			}
 			return null;
 		};
+		// Browsing context names (DocumentClient namedWindow), read by the
+		// browser's own getter, taken before any page script. The browser
+		// looks for a name in this window and its frames, then in the rest
+		// of the tab, then in the windows the tab opened; for a frame under
+		// the sandboxed host frame it navigates no frame of the second
+		const nativeName = Reflect.getOwnPropertyDescriptor(global, 'name')?.get;
+		const nameOf = (context: unknown): string | null => {
+			try {
+				return String(Reflect.apply(nativeName!, context, []));
+			} catch (error) {
+				// a window of another real origin, or one going away
+				return null;
+			}
+		};
+		const framesOf = (root: typeof globalThis): (typeof globalThis)[] => {
+			const found: (typeof globalThis)[] = [];
+			const queue = [root];
+			while (queue.length && found.length < 256) {
+				const context = queue.shift()!;
+				found.push(context);
+				try {
+					for (let index = 0; index < context.length; index++)
+						queue.push(
+							(context as unknown as Record<number, typeof globalThis>)[index],
+						);
+				} catch (error) {
+					// a window being torn down
+				}
+			}
+			return found;
+		};
+		client.namedWindow = (name, popups = false) => {
+			if (!name || name.startsWith('_') || !nativeName) return null;
+			if (client.sandboxFlags !== null) return null;
+			const own = framesOf(global);
+			if (own.some((context) => nameOf(context) === name)) return null;
+			const top = client.proxiedTop;
+			for (const context of framesOf(top))
+				if (!own.includes(context) && nameOf(context) === name) return context;
+			if (!popups) return null;
+			let opened: WeakRef<typeof globalThis>[] | undefined;
+			try {
+				opened = (
+					(top as Record<string, any>)[client.names.client] as
+						DocumentClient | undefined
+				)?.tabPopups;
+			} catch (error) {
+				// the proxied top went away
+			}
+			for (const reference of opened ?? []) {
+				const context = reference.deref();
+				try {
+					if (context && !context.closed && nameOf(context) === name)
+						return context;
+				} catch (error) {
+					// a window going away
+				}
+			}
+			return null;
+		};
 		// one gated location per window, so a page comparing two reads sees one
 		const gated = new OwnWeakMap<object, object>();
 		// Another window's location, as this document reads it: its
@@ -165,6 +226,20 @@ export default class SandboxModule extends Module<DocumentClient> {
 			if (!target || (unclaimed && !client.unclaimedWindow?.(target)))
 				return standIn;
 			const location = standIn as Location;
+			// (a window that runs nothing of ours yet: its own Location's URL
+			// is the route of its document, which reads as the URL it routes,
+			// as the browser shows the document that committed)
+			const hrefGetter = unclaimed
+				? Reflect.getOwnPropertyDescriptor(location, 'href')?.get
+				: undefined;
+			const shown = (): URL | null => {
+				try {
+					const href = String(Reflect.apply(hrefGetter!, location, []));
+					return new URL(unrouteURL(client, href) ?? href);
+				} catch (error) {
+					return null;
+				}
+			};
 			const check = (member: string, call: boolean, destination: URL) => {
 				if (client.sandboxFlags !== null && !client.mayNavigate(target))
 					throw client.navigationRefused(member, call, destination);
@@ -200,10 +275,24 @@ export default class SandboxModule extends Module<DocumentClient> {
 							return Reflect.apply(value, location, [url]);
 						} else if (key === 'reload')
 							check(key, true, new URL(location.href));
+						else if (key === 'toString' && hrefGetter) {
+							const url = shown();
+							if (url) return url.href;
+						}
 						return Reflect.apply(value, location, args);
 					});
 				if (get)
-					descriptor.get = wrap(get, () => Reflect.apply(get, location, []));
+					descriptor.get = wrap(get, () => {
+						if (
+							hrefGetter &&
+							typeof key === 'string' &&
+							(key === 'origin' || LOCATION_PARTS.includes(key))
+						) {
+							const url = shown();
+							if (url) return url[key as 'href'];
+						}
+						return Reflect.apply(get, location, []);
+					});
 				if (set)
 					descriptor.set = wrap(set, (args) => {
 						if (key === 'href') {
@@ -221,6 +310,13 @@ export default class SandboxModule extends Module<DocumentClient> {
 							const destination = new URL(location.href);
 							Reflect.set(destination, key, String(args[0]));
 							check(key, false, destination);
+							// (the part of the URL the window's document routes: set
+							// on its route, it went past the proxy, to another host)
+							const url = hrefGetter && shown();
+							if (url) {
+								Reflect.set(url, key, String(args[0]));
+								if (navigate('href', url.href)) return;
+							}
 						}
 						Reflect.apply(set, location, args);
 					});
@@ -276,7 +372,24 @@ export default class SandboxModule extends Module<DocumentClient> {
 					aimed || !client.sites
 						? null
 						: siteWindows().targetAcross(client, target);
-				if (!aimed && !across) return;
+				if (!aimed && !across) {
+					// a window by that name the browser would not navigate for
+					// this frame (DocumentClient namedWindow; the hooked getter
+					// answers with what the page wrote): this document's
+					// navigation of it
+					const named = client.namedWindow?.(
+						link.getAttribute('target') ||
+							global.document
+								.querySelector('base[target]')
+								?.getAttribute('target'),
+					);
+					if (!named) return;
+					const destination = resolve(link.getAttribute('href'));
+					if (!['http:', 'https:'].includes(destination.protocol)) return;
+					if (client.navigateWindow?.(named, destination.href, 'href'))
+						event.preventDefault();
+					return;
+				}
 				const destination = resolve(link.getAttribute('href'));
 				if (!['http:', 'https:', 'javascript:'].includes(destination.protocol))
 					return;
@@ -350,7 +463,13 @@ export default class SandboxModule extends Module<DocumentClient> {
 				aimed || !client.sites
 					? null
 					: siteWindows().targetAcross(client, keyword);
-			if (!aimed && !across) return false;
+			// a window by that name the browser would not navigate for this
+			// frame (DocumentClient namedWindow): a GET is this document's
+			// navigation of it. Any other is the browser's, as before (a
+			// sibling frame's copy of the form, as for the proxied parent,
+			// is disconnected before it submits: measured)
+			const named = aimed || across ? null : client.namedWindow?.(keyword);
+			if (!aimed && !across && !named) return false;
 			const method = (
 				submitter?.getAttribute('formmethod') ??
 				form.getAttribute('method') ??
@@ -372,6 +491,14 @@ export default class SandboxModule extends Module<DocumentClient> {
 					.some(({ policy }) => policy.disposition === 'enforce')
 			)
 				return false;
+			// (a named window's javascript: action or non-GET form: the
+			// browser's, as before)
+			if (
+				named &&
+				(destination.protocol === 'javascript:' ||
+					!(method === '' || method === 'get'))
+			)
+				return false;
 			if (destination.protocol === 'javascript:') {
 				if (aimed)
 					aimed.client.callIn(nativeAssign, aimed.window.location, [
@@ -386,6 +513,20 @@ export default class SandboxModule extends Module<DocumentClient> {
 				return true;
 			}
 			if (!['http:', 'https:'].includes(destination.protocol)) return false;
+			if (named) {
+				// (the entry list the browser builds, as the URL's query)
+				let query: URLSearchParams;
+				try {
+					query = new global.URLSearchParams(
+						new global.FormData(form, submitter ?? undefined) as any,
+					);
+				} catch (error) {
+					return false;
+				}
+				destination.search = query.toString();
+				return !!client.navigateWindow?.(named, destination.href, 'href');
+			}
+			if (!aimed && !across) return false;
 			// the copy of the form that window submits, or the ask of a window
 			// of another slot (a deferred part, ../siteAcross.ts); a submission
 			// whose part cannot be had goes nowhere (never the browser's own,

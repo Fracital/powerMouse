@@ -4,14 +4,21 @@
 	<script>
 		// A navigation another window starts in a window whose document has
 		// just committed (nested-frames suite), by `c`: `sibling`, a frame of
-		// this page sends this page's fresh frame on as its src commits;
+		// this page sends this page's fresh frame on as its src commits
+		// (`sibling-src` by a write of the frame element's src,
+		// `sibling-link`, `sibling-form` and `sibling-open` by a link, a
+		// form and an open() aiming at the frame's name);
 		// `popup`, it sends on a popup this page opened without a URL and then
 		// sent to a document (finding it by its name) as that document commits
 		// (`popup-document` by its document's location, `popup-assign` by a
-		// write of its location); `loaded`, this page sends on a frame whose
+		// write of its location, `popup-read` once it has told what the
+		// popup's location reads, `popup-link`, `popup-form`, `popup-post`
+		// and `popup-open` by a link, a GET and a POST form and an open()
+		// aiming at its name); `loaded`, this page sends on a frame whose
 		// first document had loaded as the src it was given next commits. The
 		// window lands on echo-headers, which reports its referrer (a beacon
-		// keyed by `k`).
+		// keyed by `k`). A `c` ending in `+` aims at the window once its
+		// document has loaded.
 		const query = new URLSearchParams(location.search);
 		const c = query.get('c');
 		const k = query.get('k');
@@ -37,11 +44,12 @@
 		sibling.onload = () => {
 			sibling.onload = null;
 			const watch = sibling.contentWindow.watch;
-			if (c === 'sibling') {
+			if (c.startsWith('sibling')) {
 				const frame = document.createElement('iframe');
+				frame.name = 'late-frame';
 				frame.src = next;
 				document.body.append(frame);
-				watch(frame.contentWindow, dest);
+				watch(frame.contentWindow, dest, c.slice(8), 'late-frame');
 			} else if (c.startsWith('popup')) {
 				open('', 'late-popup').location.href = next;
 				sibling.contentWindow.watchNamed('late-popup', dest, c.slice(6));

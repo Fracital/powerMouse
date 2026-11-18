@@ -2,6 +2,7 @@
 <title>ADV NAVIGATION</title>
 <pre id="result">pending</pre>
 <script src="adv-harness.js"></script>
+<script src="doc-location.js"></script>
 <script>
 	// The Navigation API across sites (adversarial-navigation): every
 	// proxied site is the proxy's origin to the browser, so a navigation to
@@ -167,6 +168,69 @@
 			);
 			return 'LEAK:' + after;
 		});
+		// Another window's document navigates that window
+		// (`frame.contentDocument.location = url` and its kin), from this page
+		// and from a sibling frame: made by the proxy, the frame lands on this
+		// site's page. Written raw, the navigation went to the site itself
+		// (the frame's document is then another origin's, null here), or was
+		// refused in the sibling (the frame stays where it was)
+		const frameLoaded = (src) =>
+			new Promise((resolve) => {
+				const frame = document.createElement('iframe');
+				frame.src = src;
+				frame.onload = () => resolve(frame);
+				document.body.append(frame);
+			});
+		for (const by of ['page', 'sibling'])
+			for (const form of [
+				'set',
+				'computed',
+				'reflect',
+				'object-assign',
+				'setter',
+				'with',
+				'destructure',
+			])
+				step(
+					`a ${by}'s write of a frame's document.location (${form})`,
+					async () => {
+						const writer =
+							by === 'sibling'
+								? await frameLoaded('doc-location-frame.html?w')
+								: null;
+						const frame = await frameLoaded('doc-location-frame.html?t');
+						const loaded = new Promise((resolve) => {
+							frame.onload = resolve;
+							setTimeout(resolve, 3000);
+						});
+						let thrown = null;
+						try {
+							(writer ? writer.contentWindow : window).writeDocLocation(
+								frame.contentDocument,
+								form,
+								`${A}/pages/doc-location-frame.html?landed`,
+							);
+						} catch (error) {
+							thrown = fmt(error);
+						}
+						await loaded;
+						let seen;
+						try {
+							const landed = frame.contentDocument;
+							seen =
+								landed === null
+									? 'LEAK:navigated past the proxy'
+									: landed.URL.endsWith('?landed')
+										? 'landed'
+										: `TELL:not navigated (${thrown})`;
+						} catch (error) {
+							seen = 'LEAK:' + fmt(error);
+						}
+						frame.remove();
+						if (writer) writer.remove();
+						return seen;
+					},
+				);
 		step(
 			'popup walk to another site and back',
 			() =>

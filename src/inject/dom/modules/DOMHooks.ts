@@ -449,6 +449,9 @@ function isAttributeHook(
 /**
  * Provides a framework for hooking elements
  */
+// taken when the bundle loads, before any page script
+const NativeWeakRef = WeakRef;
+
 export default class DOMHooksModule extends Module<DocumentClient> {
 	#namespaceURI?: () => unknown;
 	/**
@@ -800,6 +803,23 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		);
 		const openHook = realm.Document.prototype.open;
 
+		// a window this document opened, for a link, form or open() of the
+		// tab that names it later (DocumentClient namedWindow, tabPopups
+		// of the proxied top's client; the last 64)
+		const rememberOpened = (opened: unknown) => {
+			if (typeof opened !== 'object' || opened === null) return;
+			try {
+				const top = (moduleClient.proxiedTop as Record<string, any>)[
+					moduleClient.names.client
+				] as DocumentClient | undefined;
+				if (!top) return;
+				const list = (top.tabPopups ??= []);
+				if (list.length >= 64) list.shift();
+				list.push(new NativeWeakRef(opened as typeof globalThis));
+			} catch (error) {
+				// the proxied top went away
+			}
+		};
 		realm.open = proxyModule.wrapFunction(realm.open, (target, that, args) => {
 			const name = args[1] === undefined ? '_blank' : String(args[1]);
 			// about:blank (or no URL) is a document the page writes itself:
@@ -851,6 +871,17 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					across,
 				);
 			}
+			// a frame of the tab by that name, which the browser would not
+			// navigate for this frame (DocumentClient namedWindow): this
+			// document's navigation of it, and the caller gets it
+			if (!aimed && routable) {
+				const named = moduleClient.namedWindow?.(name);
+				if (
+					named &&
+					moduleClient.navigateWindow?.(named, destination!.href, 'href')
+				)
+					return named;
+			}
 			// a javascript: URL runs in the opened window: rewritten, like a
 			// javascript: link (routeHTML rewrites its body)
 			if (destination !== null && destination.protocol === 'javascript:')
@@ -876,8 +907,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				!['_self', '_top', '_parent', '_unfencedtop'].includes(
 					name.toLowerCase(),
 				) &&
-				// a frame of this page by that name: the browser navigates it
+				// a frame of this page by that name: the browser navigates it,
+				// and a popup the tab opened (DocumentClient namedWindow)
 				!moduleClient.hasFrameNamed(name) &&
+				!moduleClient.namedWindow?.(name, true) &&
 				moduleClient.openInHost(destination!.toString())
 			)
 				return null;
@@ -936,7 +969,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			)
 				args[1] = '_self';
 
-			return Reflect.apply(target, that, args);
+			const opened = Reflect.apply(target, that, args);
+			rememberOpened(opened);
+			return opened;
 		});
 
 		// the written markup is tokenized across calls (WriteStream): a tag,

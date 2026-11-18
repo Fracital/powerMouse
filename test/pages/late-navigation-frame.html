@@ -5,10 +5,17 @@
 		// a frame of late-navigation.html (and the document it sends windows
 		// to): it navigates the window it is handed to `dest` as soon as that
 		// window's next document has committed, by `how`: a replace() of the
-		// window's location (the default), of its document's (`document`), or a
-		// write of the window's location (`assign`)
-		window.watch = (target, dest, how) => {
+		// window's location (the default), of its document's (`document`), a
+		// write of the window's location (`assign`), a replace() once what
+		// the window's location reads is told (`read`), a write of its frame
+		// element's src (`src`), or a link (`link`), a form (`form`, a POST
+		// one `post`) or an open() (`open`) of this document aiming at the
+		// window by its `name`
+		window.watch = (target, dest, how, name) => {
 			const first = target.document;
+			// (a `how` ending in `+`: once that document has loaded)
+			const settled = !!how && how.endsWith('+');
+			if (settled) how = how.slice(0, -1);
 			const poll = () => {
 				let now = null;
 				try {
@@ -16,8 +23,59 @@
 				} catch (error) {
 					// between documents
 				}
-				if (!now || now === first) setTimeout(poll, 0);
-				else if (how === 'document') now.location.replace(dest);
+				if (!now || now === first || (settled && now.readyState !== 'complete'))
+					setTimeout(poll, 0);
+				else if (how === 'read') {
+					// what the window's location reads as its document commits,
+					// as a beacon of shape `read`, then the navigation
+					const read = {};
+					for (const key of [
+						'href',
+						'origin',
+						'protocol',
+						'host',
+						'hostname',
+						'port',
+						'pathname',
+						'search',
+						'hash',
+					])
+						read[key] = target.location[key];
+					read.string = String(target.location);
+					read.ancestors = [...target.location.ancestorOrigins];
+					// (not the document's own URL: until its bundle runs, its
+					// getters are the browser's, which read the route)
+					const k = new URL(dest).searchParams.get('k');
+					navigator.sendBeacon(
+						`/echo-post?k=${encodeURIComponent(k)}&shape=read`,
+						JSON.stringify(read),
+					);
+					target.location.replace(dest);
+				} else if (how === 'src') target.frameElement.src = dest;
+				else if (how === 'open') open(dest, name);
+				else if (how === 'link') {
+					const link = document.createElement('a');
+					link.href = dest;
+					link.target = name;
+					document.body.append(link);
+					link.click();
+				} else if (how === 'form' || how === 'post') {
+					// (a GET form's fields are its URL's query; a POST keeps the
+					// query in its action and sends the fields as its body)
+					const url = new URL(dest);
+					const form = document.createElement('form');
+					if (how === 'post') form.method = 'post';
+					form.action = how === 'post' ? dest : url.origin + url.pathname;
+					form.target = name;
+					for (const [key, value] of url.searchParams) {
+						const input = document.createElement('input');
+						input.name = key;
+						input.value = value;
+						form.append(input);
+					}
+					document.body.append(form);
+					form.submit();
+				} else if (how === 'document') now.location.replace(dest);
 				else if (how === 'assign') target.location = dest;
 				else target.location.replace(dest);
 			};
@@ -25,6 +83,6 @@
 		};
 		// the window of that name, as this document reaches it
 		window.watchNamed = (name, dest, how) =>
-			window.watch(open('', name), dest, how);
+			window.watch(open('', name), dest, how, name);
 	</script>
 </body>
