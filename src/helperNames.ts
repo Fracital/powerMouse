@@ -52,6 +52,17 @@ export const DEFAULT_NAMES: Readonly<HelperNames> = Object.freeze({
 export const accessExpression = (access: string) => `0..${access}`;
 
 /**
+ * The access API as a worklet module's rewrite reaches it: a call of the
+ * module's own function of that name, which its lead declares
+ * (src/workletLead.ts). A worklet scope holds no inject to hide a property
+ * of Number.prototype from reflection; a module's binding is in no object a
+ * page can list, a module has no `with` and no sloppy eval to stand in for
+ * it, and a function declaration is there before the module runs (a module
+ * of an import cycle can be called first).
+ */
+export const workletAccessExpression = (access: string) => `${access}()`;
+
+/**
  * The prefix of the marker attributes the inject keeps a page's own value
  * of a routed attribute in (`s_o:href` next to the routed `href`), made from
  * the access name, so two controllers with two access names (one proxied

@@ -52,15 +52,16 @@ const STAND_INS: [u8; 29] = [
 	29, 30, 31, 127,
 ];
 
-/// The statement that hands a script's text to the access API
-/// (`holderStatement`): None when the text holds every stand-in character
-pub fn holder_statement(access: &str, key: &str, text: &str) -> Option<String> {
+/// The statement that hands a script's text to the access API, `api` as
+/// the script reaches it (`holderStatement`): None when the text holds
+/// every stand-in character
+pub fn holder_statement(api: &str, key: &str, text: &str) -> Option<String> {
 	// nearly every script holds none of the first stand-ins, which are then
 	// the ones taken: written so in one pass, which finds whether they were
 	// right, and written again after the general way's look at the text if
 	// not
 	let first: [u8; 6] = STAND_INS[..CARRIED.len()].try_into().unwrap();
-	let (out, clean) = holder_with(access, key, text, first);
+	let (out, clean) = holder_with(api, key, text, first);
 	if clean {
 		return Some(out);
 	}
@@ -71,7 +72,7 @@ pub fn holder_statement(access: &str, key: &str, text: &str) -> Option<String> {
 		}
 	}
 	let subs: Vec<u8> = STAND_INS.iter().copied().filter(|code| !present[*code as usize]).take(CARRIED.len()).collect();
-	Some(holder_with(access, key, text, subs.try_into().ok()?).0)
+	Some(holder_with(api, key, text, subs.try_into().ok()?).0)
 }
 
 /// what each byte is to the holder's copy of a text: 0 copied as it is,
@@ -95,12 +96,11 @@ const HOLDER_BYTES: [u8; 256] = {
 
 /// the holder of `text` with `subs` standing for the carried characters,
 /// and whether the text holds none of the first stand-ins
-fn holder_with(access: &str, key: &str, text: &str, subs: [u8; 6]) -> (String, bool) {
+fn holder_with(api: &str, key: &str, text: &str, subs: [u8; 6]) -> (String, bool) {
 	let mut out = String::with_capacity(text.len() + 96);
 	// (an optional call of the API where it is, as the walk's own calls
 	// reach it: config.rs `api`; a realm without the inject has none)
-	out.push_str("0..");
-	out.push_str(access);
+	out.push_str(api);
 	out.push_str("?.src(");
 	out.push_str(&quote(key));
 	out.push(',');
@@ -314,11 +314,11 @@ mod tests {
 	#[test]
 	fn holders_match_the_typescript() {
 		assert_eq!(
-			holder_statement("$s$j", "k", "a*b<c\nd").unwrap(),
+			holder_statement("0..$s$j", "k", "a*b<c\nd").unwrap(),
 			"0..$s$j?.src(\"k\",\"\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\",function(){/*a\u{1}b\u{2}c\u{3}d*/});"
 		);
 		let all: String = STAND_INS.iter().map(|code| *code as char).collect();
-		assert!(holder_statement("$s$j", "k", &all).is_none());
+		assert!(holder_statement("0..$s$j", "k", &all).is_none());
 	}
 
 	#[test]
@@ -403,7 +403,7 @@ mod tests {
 			}
 			assert_eq!(quote(&text), quote_chars(&text), "{text:?}");
 			assert_eq!(source_key(&text), key_units(&text), "{text:?}");
-			if let Some(holder) = holder_statement("$s$j", "k", &text) {
+			if let Some(holder) = holder_statement("0..$s$j", "k", &text) {
 				let body = &holder[holder.find(",function(){/*").unwrap() + 14..holder.len() - 5];
 				let subs_text = &holder[holder.find("\",\"").unwrap() + 3..holder.find(",function").unwrap() - 1];
 				let subs: Vec<char> = subs_text

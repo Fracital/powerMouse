@@ -28,7 +28,10 @@ pub struct Config {
 	/// inject defines it and nothing redefines it. A name (`<access>` as a
 	/// global) is whatever the page's scopes make of it: a parameter, a
 	/// `with` object or an eval'd `var` of that name would be handed every
-	/// value a rewritten read was meant to route
+	/// value a rewritten read was meant to route. Where no inject defines it
+	/// (a worklet's module, src/workletLead.ts) the host names a call of the
+	/// module's own function instead (`api`): a module's scope has no `with`
+	/// and no sloppy eval, and the name is one no page knows
 	pub api: String,
 	/// the script's real URL, for `import()` of a classic script and routing
 	pub url: String,
@@ -63,6 +66,7 @@ impl Config {
 	pub fn parse(text: &str) -> Result<Self, String> {
 		let mut config = Self::default();
 		let mut client_named = false;
+		let mut api = None;
 		for line in text.lines() {
 			if line.is_empty() {
 				continue;
@@ -79,6 +83,7 @@ impl Config {
 					config.names.client = value.to_owned();
 					client_named = true;
 				}
+				"api" => api = Some(value.to_owned()),
 				"globalProxy" => config.names.global_proxy = value.to_owned(),
 				"globalName" => config.names.global_name = value.to_owned(),
 				"url" => config.url = value.to_owned(),
@@ -87,6 +92,9 @@ impl Config {
 				"tempValue" => config.temps[2] = value.to_owned(),
 				_ => {}
 			}
+		}
+		if let Some(api) = api {
+			config.api = api;
 		}
 		if client_named {
 			config.routed = vec![
@@ -138,6 +146,13 @@ mod tests {
 		assert!(config.routes("$Abc123") && !config.routes("$P$s"));
 		assert_eq!(config.url, "https://a.example/x.js");
 		assert!(config.is_helper_key("qz") && !config.is_helper_key("$P$s"));
+	}
+
+	#[test]
+	fn an_api_line_names_the_expression_whatever_the_order() {
+		let config = Config::parse("api\tqz()\naccess\tqz\n").unwrap();
+		assert_eq!(config.names.access, "qz");
+		assert_eq!(config.api, "qz()");
 	}
 
 	#[test]

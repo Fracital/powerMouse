@@ -2,9 +2,10 @@
 // walks its own realm with realm-walker.js, then every other kind of realm a
 // page can make, one after the other, and keeps each record on
 // `__realmSurface`. `?set=` picks the kinds: `frames` (documents in frames,
-// documents without a window, identities across realms), `popups`, or
-// `workers` (workers and worklets). A window realm's record is kept as what
-// differs from the top document's, a worker's as what differs from the
+// documents without a window, identities across realms), `popups`,
+// `workers` (workers and worklets) or `worklets` (the worklets behind a
+// blink feature). A window realm's record is kept as what differs from the
+// top document's, a worker's as what differs from the
 // first dedicated worker's: the suite compares the base in full and the
 // others by their differences.
 (async () => {
@@ -112,7 +113,7 @@
 
 	// the top document, in full: every other window realm is kept against it
 	let top = null;
-	if (set !== 'workers')
+	if (set !== 'workers' && set !== 'worklets')
 		try {
 			top = await walker.walkSettled(window, options());
 			keep('top', { lines: walker.lines(top), counts: top.counts }, true);
@@ -512,6 +513,35 @@
 			// collects it
 			state.realms['paint-worklet'] = { console: true };
 			await sleep(1500);
+		});
+	}
+
+	// the worklets a Chrome has only with a blink feature on (CSSLayoutAPI,
+	// AnimationWorklet), which the suite walks in a browser of their own;
+	// each record leaves through the worklet's console
+	if (set === 'worklets') {
+		await step('layout-worklet', async () => {
+			if (!CSS.layoutWorklet) throw new Error('no layout worklet');
+			await CSS.layoutWorklet.addModule('realm-surface-layout-worklet.js');
+			const laid = document.createElement('div');
+			laid.style.cssText = 'display: layout(realm-surface)';
+			document.body.append(laid);
+			state.realms['layout-worklet'] = { console: true };
+		});
+		await step('animation-worklet', async () => {
+			if (!CSS.animationWorklet) throw new Error('no animation worklet');
+			await CSS.animationWorklet.addModule(
+				'realm-surface-animation-worklet.js',
+			);
+			const animated = document.createElement('div');
+			document.body.append(animated);
+			new WorkletAnimation(
+				'realm-surface',
+				new KeyframeEffect(animated, [{ opacity: 0 }, { opacity: 1 }], {
+					duration: 1000,
+				}),
+			).play();
+			state.realms['animation-worklet'] = { console: true };
 		});
 	}
 	state.done = true;

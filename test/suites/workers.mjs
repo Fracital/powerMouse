@@ -63,7 +63,7 @@ ok(
 );
 
 ok(
-	"an audio worklet's module runs as natively (its imports, computed members, its port, its errors)",
+	"an audio worklet's module runs as natively (its imports, an import cycle, computed members, its port, its errors)",
 	typeof natively.audio === 'object' &&
 		JSON.stringify(wk.audio) === JSON.stringify(natively.audio),
 	`native ${JSON.stringify(natively.audio)} proxied ${JSON.stringify(wk.audio)}`,

@@ -89,7 +89,7 @@ pub struct Output {
 /// an older module's text and the glue never drives a module it was not
 /// written for (src/wasm/rewriter.ts holds the same number).
 /// rust/host/parity.mjs --cases holds it to the outputs (cases.revision).
-pub const REVISION: &str = "16";
+pub const REVISION: &str = "17";
 
 /// Why the rewriter hands a script back to the JavaScript one
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -484,7 +484,7 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 	let key = key.or_else(|| options.params.key.clone());
 	if options.holder && marks > 0 {
 		let key = key.clone().unwrap_or_else(|| source_key(source));
-		if let Some(holder) = holder_statement(&options.config.names.access, &key, source) {
+		if let Some(holder) = holder_statement(&options.config.api, &key, source) {
 			pre.push_str(&holder);
 		}
 	}

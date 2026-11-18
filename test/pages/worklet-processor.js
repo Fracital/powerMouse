@@ -2,7 +2,12 @@
 // another by a relative specifier, reads and writes members by computed
 // keys, calls through optional chains and its port, and reports what a call
 // of no function throws. What it posts is compared with the native answer.
-import { scale, table } from './worklet-helper.js';
+import { early, scale, table } from './worklet-helper.js';
+
+// a computed read, called by worklet-helper.js before this module has run
+export function cycled(object, key) {
+	return object[key];
+}
 
 registerProcessor(
 	'workers-probe',
@@ -15,6 +20,7 @@ registerProcessor(
 			report[key] = 0;
 			for (let i = 0; i < values.length; i++) report[key] += values[i] * scale;
 			report.table = table[1];
+			report.early = early;
 			report.option = options.processorOptions?.['tag'];
 			report.missing = this.port?.nothing?.(1) ?? 'skipped';
 			const name = 'nothing';

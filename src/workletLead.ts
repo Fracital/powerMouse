@@ -1,27 +1,32 @@
-// The access API of a worklet's module (an AudioWorklet's or a paint
-// worklet's). The rewriter routes a module's member reads, writes and calls
-// through the access API (`$s$j.get2(...)`), which the inject bundle puts on
-// a window or a worker scope. A worklet scope holds no inject: nothing of
-// ours can load there (no importScripts, no fetch, no dynamic import), and
-// there is nothing in one to stand in for (no location, no window, no
-// eval stand-in, no other realm to post to). So a worklet's module defines
-// the API itself where rewritten code reaches it (`0..<access>`, the
-// realm's Number.prototype, as the inject defines it: src/helperNames.ts
-// accessExpression), once per worklet scope, and every helper does what the
-// page's expression does. Nothing is added to the scope's global.
+// The access API of a worklet's module (an AudioWorklet's, a paint, layout or
+// animation worklet's). The rewriter routes a module's member reads, writes
+// and calls through the access API, which the inject bundle puts on a
+// window's or a worker scope's Number.prototype (`0..$s$j.get2(...)`). A
+// worklet scope holds no inject: nothing of ours can load there (no
+// importScripts, no fetch, no dynamic import), and there is nothing in one
+// to stand in for (no location, no window, no eval stand-in, no other realm
+// to post to). So a worklet's module declares the API itself, as a function
+// of the module's own scope that its rewrite calls for it (`$s$j().get2(...)`:
+// src/helperNames.ts workletAccessExpression), and every helper does what
+// the page's expression does. Nothing is added to the scope's global or to
+// any prototype: with no inject in the scope to hide a property of
+// Number.prototype from reflection, one there was a property a page could
+// list, describe and find by its keys' order. Each module of the scope
+// declares its own, a function declaration, so it is there before the
+// module runs: a module of an import cycle calls a function of another
+// before that one ran, as natively.
 // What V8 names in the error of a call of no function is the page's
 // expression, which the helper prints back from the source the rewriter
 // hands it; anything else fails on the page's own operation.
 
 /**
- * The statement a worklet module's rewrite starts with: the access API
- * `access` names, one that does what the page's code does with no hooks,
- * defined on the realm's Number.prototype unless a module of the scope did
- * so already.
+ * The statement a worklet module's rewrite starts with: the function of the
+ * module's scope `access` names, which answers the access API, one that does
+ * what the page's code does with no hooks, made on the first call.
  */
 export function workletAccess(access: string): string {
-	const name = JSON.stringify(access);
-	return `Object.hasOwn(Number.prototype, ${name}) || (() => {
+	return `function ${access}() {
+	return (${access}.api ??= (() => {
 	const { apply, construct, ownKeys } = Reflect;
 	const NativeProxy = Proxy;
 	const NativeTypeError = TypeError;
@@ -222,13 +227,8 @@ export function workletAccess(access: string): string {
 		source: (value) => value,
 		src: () => {},
 	};
-	Object.freeze(api);
-	Object.defineProperty(Number.prototype, ${name}, {
-		value: api,
-		configurable: false,
-		writable: false,
-		enumerable: false,
-	});
-})();
+	return Object.freeze(api);
+})());
+}
 `;
 }

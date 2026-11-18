@@ -14,7 +14,7 @@ import {
 	keepsSourcesHere,
 	sourceKey,
 } from '../functionSource';
-import { helperNames } from '../helperNames';
+import { helperNames, workletAccessExpression } from '../helperNames';
 import { cannotRewrite } from '../rewriteJS';
 import { routeBinary } from '../routeURL';
 import { isModuleType, routeImport, type ScriptType } from '../scriptRoutes';
@@ -83,7 +83,7 @@ export function rewriterRevision(): string | null {
  * the page wrote it, and a revision 1 module takes the flags of the parse
  * questions for a rewrite.
  */
-export const REVISION = '16';
+export const REVISION = '17';
 
 /** whether an instance answered REVISION, asked once of each */
 const speaks = new WeakMap<BufferInstance, boolean>();
@@ -244,10 +244,19 @@ export function unrewritten(
 	return script;
 }
 
-/** the configuration the module takes (rust/rwjs/src/config.rs) */
-export function rewriterConfig(config: Config): string {
+/**
+ * The configuration the module takes (rust/rwjs/src/config.rs): for a
+ * worklet's module, the access API as the module's own binding
+ * (src/helperNames.ts workletAccessExpression)
+ */
+export function rewriterConfig(config: Config, type?: ScriptType): string {
 	const names = helperNames(config);
-	return `access\t${names.access}\nclient\t${names.client}\nglobalProxy\t${names.globalProxy}\nglobalName\t${names.globalName}\n`;
+	return (
+		`access\t${names.access}\nclient\t${names.client}\nglobalProxy\t${names.globalProxy}\nglobalName\t${names.globalName}\n` +
+		(type === 'workletModule'
+			? `api\t${workletAccessExpression(names.access)}\n`
+			: '')
+	);
 }
 
 /**
@@ -284,15 +293,24 @@ export function rewriteWith(
 		// whether or not a function of its own is marked
 		key ??= sourceKey(script);
 		if (here) keepSource(key, source.text);
-		else if (source.embed !== false)
+		else if (source.embed !== false) {
+			const { access } = helperNames(config);
 			lead +=
-				holderStatement(helperNames(config).access, key, source.text) ?? '';
+				holderStatement(
+					access,
+					key,
+					source.text,
+					type === 'workletModule'
+						? workletAccessExpression(access)
+						: undefined,
+				) ?? '';
+		}
 	}
 	const params = `${url.toString()}\n${key ?? ''}\n${(source?.shifts ?? []).join(',')}\n${lead}`;
 	const cross =
 		loose || !params.isWellFormed() ? standIns(script, params) : PLAIN;
 	if (!cross) return null;
-	instance.configure(rewriterConfig(config));
+	instance.configure(rewriterConfig(config, type));
 	const given = instance.call(cross.out(params), FLAG_PARAMS);
 	if (!('output' in given)) return null;
 	const around = crossing;

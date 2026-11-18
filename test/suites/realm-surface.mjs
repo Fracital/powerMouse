@@ -18,10 +18,13 @@
 // <embed> documents, documents without a window (createHTMLDocument,
 // DOMParser, a template's), popups (about:blank and a URL), workers
 // (classic and module, by URL and by blob:, a worker's worker, shared,
-// service) and the audio and paint worklets' scopes.
+// service), the audio and paint worklets' scopes, and the layout and
+// animation worklets', which a Chrome has only with a blink feature on
+// (CSSLayoutAPI, AnimationWorklet): the `worklets` set is walked in a
+// browser of its own with both on, natively and through the proxy alike.
 //
 // REALM_SURFACE_DUMP=<directory> writes every record and the differences.
-// REALM_SURFACE_SETS=frames,popups,workers picks the sets.
+// REALM_SURFACE_SETS=frames,popups,workers,worklets picks the sets.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import {
 	done,
@@ -37,9 +40,9 @@ import {
 } from '../lib.mjs';
 
 const DUMP = process.env.REALM_SURFACE_DUMP;
-const SETS = (process.env.REALM_SURFACE_SETS || 'frames,popups,workers').split(
-	',',
-);
+const SETS = (
+	process.env.REALM_SURFACE_SETS || 'frames,popups,workers,worklets'
+).split(',');
 const AVOID = (process.env.REALM_SURFACE_AVOID || '')
 	.split(' ')
 	.filter(Boolean);
@@ -48,8 +51,6 @@ const ONLY = process.env.REALM_SURFACE_ONLY;
 // Facts that are not compared, each with the reason it differs for a page
 // that is where a proxied page is: [realm pattern, fact pattern, reason].
 // One marked OPEN is a difference the proxy makes and has yet to unmake.
-const escape = (text) => text.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
-
 const EXCLUDED = [
 	[
 		/^(top|popup-)/,
@@ -157,21 +158,6 @@ const EXCLUDED = [
 		},
 	],
 	[
-		/^(audio|paint)-worklet$/,
-		// (the access name is the controller's, minted per origin)
-		(access) =>
-			new RegExp(
-				`^G\\.Number\\.prototype(:keys$|\\.${escape(access)}($|[.:~]))`,
-			),
-		"OPEN: a worklet's rewritten module reaches the access API on the worklet's Number.prototype (0..<access name>), where no hook of the inject hides it from reflection",
-		null,
-		(native, proxied, access) =>
-			native === undefined ||
-			(typeof proxied === 'string' &&
-				proxied.replace(new RegExp(`,${escape(access)}(?=,|$)`), '') ===
-					native),
-	],
-	[
 		/^(worker-|shared-worker$)/,
 		/^G\.WorkerGlobalScope\.prototype\.fetch$/,
 		"OPEN: fetch called on what is no scope rejects with the browser's own error a turn late, so its stack is not the call's",
@@ -246,18 +232,24 @@ const REALMS = {
 		'audio-worklet',
 		'paint-worklet',
 	],
+	worklets: ['layout-worklet', 'animation-worklet'],
 };
 
 const target = (set) =>
 	`${FIXTURE}pages/realm-surface.html?set=${set}${ONLY ? `&only=${ONLY}` : ''}&avoid=${encodeURIComponent(JSON.stringify(AVOID))}`;
 
-/** the paint worklet's record, from the console lines it leaves as */
-function paintRecords(page) {
+/**
+ * The records of the worklets that send nothing but their console (paint,
+ * layout, animation), from the lines each leaves as: `realm-surface-<kind>
+ * <id> <index> <count> <part>`. `heard` takes a line from elsewhere than the
+ * page's console (workletConsoles).
+ */
+function workletRecords(page) {
 	const parts = new Map();
-	const records = [];
-	page.on('console', (message) => {
-		const text = message.text();
-		if (!text.startsWith('realm-surface-paint ')) return;
+	const records = { paint: [], layout: [], animation: [] };
+	const heard = (text) => {
+		const kind = /^realm-surface-(paint|layout|animation) /.exec(text)?.[1];
+		if (!kind) return;
 		const [prefix, id, index, count] = text.split(' ', 4);
 		const body = text.slice(`${prefix} ${id} ${index} ${count} `.length);
 		const list = parts.get(id) ?? [];
@@ -265,16 +257,63 @@ function paintRecords(page) {
 		list[Number(index)] = body;
 		if (list.filter((part) => part !== undefined).length === Number(count))
 			try {
-				records.push(JSON.parse(list.join('')));
+				records[kind].push(JSON.parse(list.join('')));
 			} catch (error) {
-				records.push({ error: `unreadable record: ${error.message}` });
+				records[kind].push({ error: `unreadable record: ${error.message}` });
 			}
-	});
-	return records;
+	};
+	page.on('console', (message) => heard(message.text()));
+	return { records, heard };
+}
+
+/**
+ * An animation worklet's console reaches no page: its lines are read from
+ * the worklet's DevTools target, attached wherever the worklet is made (the
+ * page, or a frame of another process, and that frame's frames), each
+ * target told to go on once it is watched.
+ */
+async function workletConsoles(page, heard) {
+	const session = await page.context().newCDPSession(page);
+	let ids = 0;
+	const watch = (send, on) => {
+		const children = new Map();
+		on('Target.attachedToTarget', ({ sessionId, targetInfo }) => {
+			const listeners = new Map();
+			children.set(sessionId, (message) => {
+				if (message.method) listeners.get(message.method)?.(message.params);
+			});
+			const childSend = (method, params = {}) =>
+				send('Target.sendMessageToTarget', {
+					sessionId,
+					message: JSON.stringify({ id: ++ids, method, params }),
+				});
+			const childOn = (method, listener) => listeners.set(method, listener);
+			if (targetInfo.type === 'worklet') {
+				childOn('Runtime.consoleAPICalled', ({ args }) =>
+					heard(args.map((arg) => arg.value).join(' ')),
+				);
+				childSend('Runtime.enable');
+			} else watch(childSend, childOn);
+			childSend('Runtime.runIfWaitingForDebugger');
+		});
+		on('Target.receivedMessageFromTarget', ({ sessionId, message }) =>
+			children.get(sessionId)?.(JSON.parse(message)),
+		);
+		send('Target.setAutoAttach', {
+			autoAttach: true,
+			waitForDebuggerOnStart: true,
+			flatten: false,
+			filter: [{ type: 'iframe' }, { type: 'worklet' }],
+		});
+	};
+	watch(
+		(method, params) => session.send(method, params).catch(() => {}),
+		(method, listener) => session.on(method, listener),
+	);
 }
 
 /** the page's state once it is done, from the frame `find` picks */
-async function collect(find, paint) {
+async function collect(find, records) {
 	for (let i = 0; i < 1200; i++) {
 		await sleep(250);
 		const frame = await find();
@@ -292,10 +331,15 @@ async function collect(find, paint) {
 			continue;
 		}
 		const state = JSON.parse(text);
-		if (state.realms['paint-worklet']?.console)
-			state.realms['paint-worklet'] = paint[0] ?? {
+		for (const kind in records) {
+			const realm = `${kind}-worklet`;
+			if (!state.realms[realm]?.console) continue;
+			// (a worklet walks for seconds after its module is added)
+			for (let j = 0; j < 120 && !records[kind].length; j++) await sleep(250);
+			state.realms[realm] = records[kind][0] ?? {
 				error: 'no console record',
 			};
+		}
 		return state;
 	}
 	return null;
@@ -320,7 +364,7 @@ const same = (a, b) =>
  * What differs between the native record of a realm and the proxied one:
  * facts the two native loads agree on, less what EXCLUDED lists
  */
-function compare(realm, first, second, proxied, mode, access) {
+function compare(realm, first, second, proxied, mode) {
 	const a = facts(first, realm);
 	const b = facts(second, realm);
 	const p = facts(proxied, realm);
@@ -336,9 +380,9 @@ function compare(realm, first, second, proxied, mode, access) {
 		EXCLUDED.find(
 			([realms, pattern, , only, when]) =>
 				realms.test(realm) &&
-				(typeof pattern === 'function' ? pattern(access) : pattern).test(key) &&
+				pattern.test(key) &&
 				(!only || only === mode) &&
-				(!when || when(native, through, access)),
+				(!when || when(native, through)),
 		);
 	const differ = (key, native, through) => {
 		const rule = excluded(key, native, through);
@@ -365,6 +409,11 @@ const show = (difference) =>
 	`${difference.key}: ${String(difference.native).slice(0, 160)} -> ${String(difference.proxied).slice(0, 160)}`;
 
 const browser = await launch();
+// the browser the worklets behind a blink feature are walked in
+const flagged = SETS.includes('worklets')
+	? await launch(['--enable-blink-features=CSSLayoutAPI,AnimationWorklet'])
+	: null;
+const browserOf = (set) => (set === 'worklets' ? flagged : browser);
 if (DUMP) mkdirSync(DUMP, { recursive: true });
 const dump = (name, value) => {
 	if (DUMP) writeFileSync(`${DUMP}/${name}.json`, JSON.stringify(value));
@@ -375,13 +424,14 @@ const errors = [];
 async function native(set) {
 	// (nothing of one load, a registration or storage, is there for the
 	// next; and no emulated viewport, which makes the screen the viewport)
-	const context = await browser.newContext({ viewport: null });
+	const context = await browserOf(set).newContext({ viewport: null });
 	const page = await context.newPage();
-	const paint = paintRecords(page);
+	const { records, heard } = workletRecords(page);
+	if (set === 'worklets') await workletConsoles(page, heard);
 	const raised = [];
 	page.on('pageerror', (error) => raised.push(error.message));
 	await page.goto(target(set));
-	const state = await collect(async () => page.mainFrame(), paint);
+	const state = await collect(async () => page.mainFrame(), records);
 	await context.close();
 	return { state, raised };
 }
@@ -389,29 +439,34 @@ async function native(set) {
 /** the page loaded through the proxy in one demo mode */
 async function through(set, base) {
 	await waitForServer(base);
-	const context = await browser.newContext({ viewport: null });
+	const context = await browserOf(set).newContext({ viewport: null });
 	const page = await context.newPage();
 	const raised = [];
 	page.on('pageerror', (error) => raised.push(error.message));
-	const paint = paintRecords(page);
+	const { records, heard } = workletRecords(page);
+	if (set === 'worklets') await workletConsoles(page, heard);
 	await page.goto(base);
 	await page.waitForFunction(
 		() => /^(Ready|Error)/.test(document.getElementById('logMsg').textContent),
 		null,
 		{ timeout: 45000 },
 	);
-	// the access name this demo origin's controller minted
-	const access = await page.evaluate(
-		() => window.controller?.config?.names?.access ?? '$s$j',
-	);
+	// what the worker served (Playwright reports no worklet's module request)
+	await page.evaluate(() => {
+		window.__served = [];
+		window.controller.addEventListener('request', (event) =>
+			window.__served.push(event.detail.url),
+		);
+	});
 	await submitLanding(page, target(set));
 	const state = await collect(
 		async () =>
 			page.frames().find((f) => /\/stomp\/[\w-]+\/html\//.test(f.url())),
-		paint,
+		records,
 	);
+	const served = await page.evaluate(() => window.__served).catch(() => []);
 	await context.close();
-	return { state, raised, access };
+	return { state, raised, served };
 }
 
 const MODES = [
@@ -444,7 +499,7 @@ for (const set of SETS) {
 	);
 	if (!first || !second) continue;
 	for (const [index, [mode]] of MODES.entries()) {
-		const { state, raised, access } = proxied[index];
+		const { state, raised, served } = proxied[index];
 		dump(`${set}-${mode}`, state);
 		if (
 			!ok(
@@ -453,6 +508,16 @@ for (const set of SETS) {
 			)
 		)
 			continue;
+		if (set === 'worklets' && !ONLY)
+			ok(
+				`${mode}: the layout and animation worklets' modules went through the proxy`,
+				['layout', 'animation'].every((kind) =>
+					served.some((url) =>
+						url.endsWith(`/pages/realm-surface-${kind}-worklet.js`),
+					),
+				),
+				JSON.stringify(served.filter((url) => /worklet|walker/.test(url))),
+			);
 		const all = {};
 		for (const realm of REALMS[set]) {
 			if (ONLY && !ONLY.split(',').includes(realm) && realm !== 'top') continue;
@@ -479,7 +544,7 @@ for (const set of SETS) {
 					);
 				continue;
 			}
-			const result = compare(realm, first, second, state, mode, access);
+			const result = compare(realm, first, second, state, mode);
 			// a difference of the realm's base is the base's to report
 			const baseDifferences = all[state.bases[realm]];
 			if (baseDifferences) {
@@ -550,4 +615,5 @@ for (const set of SETS) {
 		);
 	}
 }
+await flagged?.close();
 await done(browser, errors);

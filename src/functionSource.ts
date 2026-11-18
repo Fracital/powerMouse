@@ -66,7 +66,12 @@ export const handlerMark = (key: string) => `/*${key}*/`;
  * rewriter that runs where no page does (the service worker, a rewrite
  * worker): null when the text holds every stand-in character
  */
-export function holderStatement(access: string, key: string, text: string) {
+export function holderStatement(
+	access: string,
+	key: string,
+	text: string,
+	api = accessExpression(access),
+) {
 	const subs: string[] = [];
 	for (const candidate of STAND_INS) {
 		if (subs.length === CARRIED.length) break;
@@ -79,7 +84,7 @@ export function holderStatement(access: string, key: string, text: string) {
 	});
 	// (an optional call of the API where a rewritten script reaches it,
 	// src/helperNames.ts accessExpression; a realm without the inject has none)
-	return `${accessExpression(access)}?.src(${JSON.stringify(key)},${JSON.stringify(subs.join(''))},${HOLDER_HEAD}${encoded}${HOLDER_TAIL});`;
+	return `${api}?.src(${JSON.stringify(key)},${JSON.stringify(subs.join(''))},${HOLDER_HEAD}${encoded}${HOLDER_TAIL});`;
 }
 
 let here = false;
