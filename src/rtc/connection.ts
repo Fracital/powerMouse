@@ -960,7 +960,10 @@ export class Connection {
 					);
 			}
 		state.sender?.configure(payloads);
-		state.receiver?.configure(payloads);
+		// (the video receiver reads its payloads' formats; the audio
+		// receiver's telephone events are timed on the audio's clock)
+		if (state.receiver instanceof VideoReceiver)
+			state.receiver.configure(payloads);
 		// what the wire's payload types are, for the streams' counts: G.722
 		// is stamped at 8000 Hz whatever the stack counts it at
 		this.#stats.payloads(

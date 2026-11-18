@@ -842,8 +842,6 @@ interface Expansion {
 	at: number;
 	made: number;
 	alike: number;
-	/** made from nothing (after a telephone event, whose tones are not made longer) */
-	silent: boolean;
 }
 
 interface Sound {
@@ -1045,8 +1043,6 @@ export class AudioReceiver {
 	#speech: 'opus' | 'G711' | 'G722' = 'G711';
 	/** the noise a comfort noise packet described */
 	#noise = new ComfortNoise(8000);
-	/** the clock of each telephone-event payload the section negotiated */
-	#eventClocks = new Map<number, number>();
 	/** the telephone event playing: where it starts on the track's count, how much is made */
 	#tone: {
 		start: number;
@@ -1113,14 +1109,6 @@ export class AudioReceiver {
 			fecPacketsReceived: this.#fec.received,
 			fecPacketsDiscarded: this.#fec.received - this.#fec.used,
 		};
-	}
-
-	/** what the section negotiated: the telephone-event payloads' clocks */
-	configure(payloads: Payload[]) {
-		this.#eventClocks.clear();
-		for (const payload of payloads)
-			if (payload.name.toLowerCase() === 'telephone-event')
-				this.#eventClocks.set(payload.pt, payload.clock);
 	}
 
 	/** the track's sink (a MediaStreamTrackGenerator's writable), or null */
@@ -1241,8 +1229,9 @@ export class AudioReceiver {
 		if (bytes.length < 4 || bytes[0] >= TONES.length) return;
 		const start = time * this.#scale();
 		const end = (bytes[1] & 0x80) !== 0;
-		const clock = this.#eventClocks.get(frame.pt ?? -1) ?? 8000;
-		const length = Math.round((((bytes[2] << 8) | bytes[3]) * 48000) / clock);
+		// its duration on the audio's clock, as its time is (Chrome's sender
+		// counts it there, and NetEq reads it there: 960 is 20 ms with Opus)
+		const length = ((bytes[2] << 8) | bytes[3]) * this.#scale();
 		let tone = this.#tone;
 		if (!tone || tone.start !== start || tone.code !== bytes[0])
 			tone = this.#tone = {
@@ -1721,30 +1710,11 @@ export class AudioReceiver {
 				);
 			this.#future = [];
 			this.#futureFrames = 0;
-		} else if (toned || expansion?.silent) {
-			// after a telephone event: the tones play out, the silence made
-			// up after them and not played yet gives way to the frame, and
-			// a frame of sound comes in from silence over its length (Chrome's
-			// receiver brings the sound back after tones over 10 to 15 ms,
-			// measured)
-			if (expansion) {
-				const dropped = Math.min(this.#futureFrames, expansion.made);
-				const keep = this.#futureFrames - dropped;
-				this.#future = this.#future.map((plane) => plane.subarray(0, keep));
-				this.#futureFrames = keep;
-				this.#played.correct(-dropped, NOISE_RATES[this.#speech]);
-			}
-			if (!sound.tone)
-				for (const plane of planes)
-					for (let at = 0; at < frames; at++) plane[at] *= at / frames;
 		} else if (expansion) {
 			if (op === 'merge') this.#merge(expansion, planes, frames);
 			else this.#rampIn(expansion, planes, frames, NORMAL_FADE, 0);
 		}
 		this.#append(planes, frames, { concealed: false, waited });
-		// a telephone event's tones are not made longer: what is missing
-		// after them stays silent, as before (unmeasured natively)
-		if (sound.tone) for (const history of this.#history) history.fill(0);
 	}
 
 	/** how loud made-up sound still is (NetEq's mute factor) */
@@ -1762,7 +1732,6 @@ export class AudioReceiver {
 				at: 0,
 				made: 0,
 				alike,
-				silent: this.#history[0].every((value) => value === 0),
 			};
 		}
 		const lag = expansion.period[0].length;

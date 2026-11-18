@@ -1492,7 +1492,12 @@ const copyOf = (packet) => copies.copyOf(packet);
  * played from 8 s on (its stats then less its stats at 8 s) and how long
  * after the first packet its first sound was written.
  */
-async function receiving({ lost = 0, copies = false, ms = 20000 }) {
+async function receiving({
+	lost = 0,
+	copies = false,
+	ms = 20000,
+	event = false,
+}) {
 	const realTimeout = globalThis.setTimeout;
 	const realClear = globalThis.clearTimeout;
 	const realNow = performance.now;
@@ -1564,11 +1569,21 @@ async function receiving({ lost = 0, copies = false, ms = 20000 }) {
 	);
 	let firstPacket = null;
 	let firstSound = null;
+	// (with `event`: how many of the 10 ms written hold the tone's 1209 Hz)
+	let toneBlocks = 0;
 	receiver.setTrack(
 		new WritableStream({
 			write(data) {
 				if (firstSound === null && data.data.some((x) => Math.abs(x) > 0.02))
 					firstSound = clock;
+				if (!event) return;
+				let I = 0;
+				let Q = 0;
+				for (let k = 0; k < data.numberOfFrames; k++) {
+					I += data.data[k] * Math.cos((2 * Math.PI * 1209 * k) / 48000);
+					Q += data.data[k] * Math.sin((2 * Math.PI * 1209 * k) / 48000);
+				}
+				if (Math.hypot(I, Q) / (data.numberOfFrames / 2) > 0.05) toneBlocks++;
 			},
 		}),
 	);
@@ -1582,6 +1597,21 @@ async function receiving({ lost = 0, copies = false, ms = 20000 }) {
 					gap = true;
 					return;
 				}
+				// as Chrome sends a 100 ms '1' with Opus: three copies of its
+				// last report, duration 960 on the audio's clock, in place of
+				// two packets of audio
+				if (event && index === 100) {
+					for (let copy = 0; copy < 3; copy++)
+						receiver.frame({
+							codec: 'telephone-event',
+							pt: 126,
+							time: BigInt(index * 960),
+							payload: Uint8Array.of(1, 138, 3, 192),
+							flags: copy ? 0 : records.FLAG_TALKSPURT,
+						});
+					return;
+				}
+				if (event && index === 101) return;
 				firstPacket ??= clock;
 				receiver.frame({
 					codec: 'opus',
@@ -1640,6 +1670,7 @@ async function receiving({ lost = 0, copies = false, ms = 20000 }) {
 			after.removedSamplesForAcceleration -
 			before.removedSamplesForAcceleration,
 		startMs: firstSound - firstPacket,
+		toneMs: toneBlocks * 10,
 	};
 }
 {
@@ -1680,6 +1711,17 @@ async function receiving({ lost = 0, copies = false, ms = 20000 }) {
 			rebuilt.delayMs >= 33 &&
 			rebuilt.delayMs <= 39,
 		all,
+	);
+	// Natively (Chrome 157, the dtmf-probe kit) a 100 ms tone Chrome sends
+	// with Opus (an event of 960 on the audio's clock in place of 40 ms of
+	// audio) plays for 30 to 50 ms: its 20 ms, then made up from them until
+	// the audio comes. The receiver played 120, reading the 960 on the
+	// event payload's 8 kHz clock.
+	const toned = await receiving({ event: true, ms: 9000 });
+	ok(
+		"a telephone event Chrome sends with Opus plays for as long as in Chrome's NetEq (its duration on the audio's clock, the rest of its time made up from it)",
+		toned.toneMs >= 20 && toned.toneMs <= 50,
+		JSON.stringify(toned),
 	);
 }
 
@@ -2263,7 +2305,10 @@ receiver.close();
 		}
 		return Math.hypot(I, Q) / 480;
 	};
-	// 20 ms windows every 5 ms: a tone of 100 ms fills 17 of them
+	// 20 ms windows every 5 ms: a tone of 100 ms fills 17 of them, and
+	// the 20 ms or so after it, which nothing comes for, is made up from it
+	// as NetEq's expand makes it up from its sync buffer (a tone fades a
+	// twentieth each 20 ms there, so up to 8 more within 1 dB)
 	const windows = [];
 	for (let from = 0; from + 960 <= all.length; from += 240)
 		windows.push([amplitude(from, 852), amplitude(from, 1209)]);
@@ -2273,11 +2318,11 @@ receiver.close();
 			Math.abs(20 * Math.log10(high) + 16.2) < 1,
 	);
 	ok(
-		"the receiver plays the event as its two tones, at Chrome's levels, for its 100 ms",
+		"the receiver plays the event as its two tones, at Chrome's levels, for its 100 ms (its duration on PCMU's clock) and what is made up after it",
 		toneReceiver.stats.frames === frames.length &&
 			heard.every((data) => data.sampleRate === 48000) &&
 			toned.length >= 14 &&
-			toned.length <= 20,
+			toned.length <= 25,
 		`${toned.length} windows of the tones; ${JSON.stringify(toneReceiver.stats)}`,
 	);
 }

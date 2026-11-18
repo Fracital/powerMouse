@@ -1330,15 +1330,13 @@ the made-up sound, which made the sound later with each loss. Once the
 stream has played, the track has 10 ms every 10 ms, made up or silent,
 until the stream has been quiet for 2 s, as NetEq hands the sound card
 sound every 10 ms. A telephone event's tones take the track from its
-next 10 ms frame, as Chrome's do (measured: its tones start and stop on
-the track's 10 ms frames): what is left of the sound before them is not
-played, nor merged or faded into them. After them what is missing stays
-silent, the silence made up and not played yet gives way to the next
-frame, and that frame comes in from silence over its 20 ms, as Chrome
-brings the far end's sound back over about 10 to 15 ms. Cut in at a
-sample of the sync buffer's own, or at full level after the tones, the
-edge clicked, and the click read as a digit of the next row in
-`webrtc-media`.
+next 10 ms frame, as Chrome's do (measured: its tones start on the
+track's 10 ms frames): what is left of the sound before them is not
+played, nor merged or faded into them. Cut in at a sample of the sync
+buffer's own, the edge clicked, and the click read as a digit of the
+next row in `webrtc-media`. After them what is missing is made up from
+them, as NetEq's expand makes it up from its sync buffer, and the next
+frame is merged in.
 
 Measured with the relay (Chrome 157, `jb-probe` kit, two runs of three
 4 s windows on a machine loaded by other work, so Chrome's own numbers
@@ -1631,16 +1629,23 @@ receiver (NetEq) plays an event as its two tones in place of the sound of
 its time, the column's tone 3 dB louder (-9.2 and -6.2 dBFS less the
 event's volume: -19.2 and -16.2 for Chrome's 10), even where audio packets
 go on arriving beside it; the receiver here does the same, a 20 ms frame of
-the tones for each 20 ms the event's duration has grown, on the duration's
-clock, with the audio frames of that time dropped. The `webrtc-media`
-suite has Chrome play `159` to the page with Opus, and the page hears the
-three digits in order, as the browser's own connection does (which plays
-Chrome's events on telephone-event/8000 in pieces, their durations being
-counted at 48 kHz), with at most a 20 ms window between them where a
-tone's edge meets the far end's 660 Hz, natively too: the track's frames
-are cut from a sync buffer, so an edge can fall inside one. Where nothing else arrives (a pause in the audio, or
-comfort noise) Chrome plays an event for 40 ms at most; here it plays all
-of it.
+the tones for each 20 ms the event's duration has grown, with the audio
+frames of that time dropped. The duration is read on the audio's clock, as
+NetEq reads it (it compares it with the audio's timestamps), not on the
+event payload's. Chrome counts it there too: a 100 ms tone sent with Opus
+comes as three copies of one report, end bit set, duration 960, in place
+of two 20 ms audio packets (measured with the `dtmf-probe` kit's relay on
+Chrome 157). NetEq plays its 20 ms and makes the other 20 ms up from them,
+so the tone lasts 30 to 50 ms on the track, natively and here; read on the
+event's 8 kHz clock, the 960 was 120 ms, and the page heard each tone for
+5 to 7 windows of 20 ms where Chrome's own connection hears 2 to 4.
+The `webrtc-media` suite has Chrome play `159` to the page with Opus, and
+the page hears the three digits in order and each for as long as the
+browser's own connection does, with at most a 20 ms window between them
+where a tone's edge meets the far end's 660 Hz, natively too: the track's
+frames are cut from a sync buffer, so an edge can fall inside one. Where
+nothing else arrives (a pause in the audio, or comfort noise) Chrome plays
+an event for 40 ms at most; here it plays all of it.
 
 ### Statistics of the sound
 

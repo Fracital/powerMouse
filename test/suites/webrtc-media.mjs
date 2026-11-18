@@ -1151,6 +1151,25 @@ for (const proxied of pages) {
 					sounds(got.after, want.after),
 				JSON.stringify([got.keys, want.keys, got.after, want.after]),
 			);
+		// and each for as long: Chrome sends a 100 ms tone with Opus as one
+		// event of 960 (20 ms on the audio's clock) in place of 40 ms of
+		// audio, and its receiver plays the 20 ms and makes the rest up from
+		// them (measured: 2 to 4 windows of 20 ms; the page played 5 to 7
+		// while it read the 960 on the event's 8 kHz clock, 120 ms)
+		const windowsOf = (record, key) =>
+			(record.keys ?? [])
+				.filter(([at]) => at === key)
+				.reduce((sum, [, count]) => sum + count, 0);
+		if (!prefer)
+			ok(
+				`${label} (${key}): each tone plays for as long as Chrome's receiver plays it`,
+				[...'159'].every(
+					(digit) =>
+						windowsOf(got, digit) >= 1 &&
+						windowsOf(got, digit) <= Math.max(2, windowsOf(want, digit)) + 1,
+				),
+				JSON.stringify([got.keys, want.keys]),
+			);
 		if (want.quiet !== undefined)
 			ok(
 				`${label} (${key}): in the far end's quiet the page plays Chrome's comfort noise at Chrome's level`,
