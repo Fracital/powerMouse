@@ -1,16 +1,20 @@
 // The Permissions module's calls a page rarely makes (./Permissions.ts):
 // getUserMedia's request, the ids in a device's constraints, a request for
-// the position and for notifications. A deferred part of the document
-// bundle (../deferredParts.ts): the hooks stay in the bundle, in place
-// before the page's first script, and hand over what they took then; this
-// runs only once a page asks for a device, an output, the position or
-// notifications, so its top level reads no global.
+// the position and for notifications, and the requests every one of them
+// (and the gated APIs, ../../permissionGates.ts) makes. A deferred part of
+// the document bundle (../deferredParts.ts): the hooks stay in the bundle,
+// in place before the page's first script, and hand over what they took
+// then; this runs only once a page asks for a device, an output, the
+// position or notifications, so its top level reads no global.
 import type {
 	MediaVerdict,
+	PermissionDecision,
+	PermissionOp,
 	PermissionState,
 } from '../../../transport/messages';
 import { withStack } from '../../nativeErrors';
-import type { LazyMap } from '../../ownCollections';
+import type { LazyMap, LazyWeakMap, LazyWeakSet } from '../../ownCollections';
+import type { Decision } from '../../permissionGates';
 import { isObject, type DeviceIds } from './Permissions';
 
 type Request = (
@@ -609,3 +613,137 @@ export function notificationCall({
 		});
 	};
 }
+
+/** what the module hands permissionRequests, taken before the page ran */
+export interface RequestRealm {
+	/** the worker's first answer of the site's states */
+	states: Promise<unknown>;
+	ask: (message: PermissionOp) => Promise<unknown>;
+	remember: (name: string, state: PermissionState) => void;
+	refresh: () => Promise<void>;
+	allowed: (name: string) => boolean;
+	siteState: (name: string) => PermissionState;
+	/** the statuses the page holds, the state each shows, and their events */
+	shown: LazyWeakMap<object, PermissionState>;
+	live: LazyMap<string, Set<WeakRef<EventTarget>>>;
+	ours: LazyWeakSet<Event>;
+	EventType: typeof Event;
+	dispatch: Function;
+	nativeQuery: Function;
+	nativePermissions: Permissions;
+	nativeState: Function;
+}
+
+/**
+ * The Permissions module's requests (PermissionsModule.apply): `request`
+ * asks for `names` (camera and microphone together for getUserMedia),
+ * whether the browser's API may be called and how to report its outcome
+ * (`call: false`, refused as the site's denial); `direct`, whether a
+ * request for `names` reaches the browser's own call without this module
+ * refusing it or the host being asked (the site holds the permission, or
+ * neither it nor the browser has decided and the browser's own prompt
+ * asks)
+ */
+export function permissionRequests({
+	states,
+	ask,
+	remember,
+	refresh,
+	allowed,
+	siteState,
+	shown,
+	live,
+	ours,
+	EventType,
+	dispatch,
+	nativeQuery,
+	nativePermissions,
+	nativeState,
+}: RequestRealm) {
+	// the browser's own state for the proxy origin
+	const realState = async (name: string): Promise<PermissionState> => {
+		try {
+			const status = await Reflect.apply(nativeQuery, nativePermissions, [
+				{ name },
+			]);
+			return Reflect.apply(nativeState, status, []) as PermissionState;
+		} catch (error) {
+			return 'prompt';
+		}
+	};
+	// a state the site now has, shown by every status the page holds of it
+	const changed = (name: string, state: PermissionState) => {
+		remember(name, state);
+		for (const shownName of name === 'notifications'
+			? ['notifications', 'push']
+			: [name])
+			for (const ref of live.get(shownName) ?? []) {
+				const status = ref.deref();
+				if (!status) {
+					live.get(shownName)!.delete(ref);
+					continue;
+				}
+				if (shown.get(status) === state) continue;
+				shown.set(status, state);
+				const event = new EventType('change');
+				ours.add(event);
+				Reflect.apply(dispatch, status, [event]);
+			}
+	};
+	const request = async (names: string[]): Promise<Decision> => {
+		await states;
+		const tokens: [string, string][] = [];
+		let dismissed = false;
+		for (const name of names) {
+			const real = await realState(name);
+			const answer = (await ask({
+				op: 'request',
+				name,
+				real,
+			})) as PermissionDecision | null;
+			const decision = answer?.decision ?? 'blocked';
+			if (decision === 'denied') {
+				changed(name, 'denied');
+				return { call: false, dismissed: false };
+			}
+			if (decision === 'dismissed' || decision === 'blocked') {
+				dismissed ||= decision === 'dismissed';
+				return { call: false, dismissed, blocked: decision === 'blocked' };
+			}
+			if (decision === 'granted') changed(name, 'granted');
+			if (answer && answer.decision === 'browser')
+				tokens.push([name, answer.token]);
+		}
+		return {
+			call: true,
+			// how the browser's prompt ended: granted on success, else the
+			// browser's own state now (still prompt when it was dismissed)
+			settle: async (granted) => {
+				for (const [name, token] of tokens) {
+					const state =
+						granted === true
+							? 'granted'
+							: granted === false
+								? await realState(name)
+								: 'prompt';
+					void ask({ op: 'result', name, token, state });
+					if (state !== 'prompt') changed(name, state);
+				}
+			},
+		};
+	};
+	const direct = async (names: string[]) => {
+		await refresh();
+		for (const name of names) {
+			if (!allowed(name)) return false;
+			const state = siteState(name);
+			if (state === 'granted') continue;
+			if (state !== 'prompt' || (await realState(name)) !== 'prompt')
+				return false;
+		}
+		return true;
+	};
+	return { request, direct };
+}
+
+export type PermissionRequests = ReturnType<typeof permissionRequests>;

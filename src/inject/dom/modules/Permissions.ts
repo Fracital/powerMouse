@@ -3,7 +3,6 @@ import StompURL from '../../../StompURL';
 import {
 	PERMISSION,
 	type MediaVerdict,
-	type PermissionDecision,
 	type PermissionOp,
 	type PermissionState,
 	type PermissionStates,
@@ -18,7 +17,7 @@ import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { deferred } from '../deferred';
 import type { DeferredParts } from '../deferredParts';
 import { lazyInterface } from '../lazyInterface';
-import type { DeviceConstraints } from './permissionCalls';
+import type { DeviceConstraints, PermissionRequests } from './permissionCalls';
 
 // taken when the bundle loads: a device's getters are checked by their source
 const nativeToString = Function.prototype.toString;
@@ -257,18 +256,6 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		const siteState = (name: string): PermissionState =>
 			known[simulatedName(name)] ?? 'prompt';
 
-		// the browser's own state for the proxy origin
-		const realState = async (name: string): Promise<PermissionState> => {
-			try {
-				const status = await Reflect.apply(nativeQuery, nativePermissions, [
-					{ name },
-				]);
-				return Reflect.apply(nativeState, status, []) as PermissionState;
-			} catch (error) {
-				return 'prompt';
-			}
-		};
-
 		// the statuses the page holds, each showing its site's state; a
 		// change of the browser's own state is never theirs
 		const shown = new LazyWeakMap<object, PermissionState>();
@@ -289,25 +276,6 @@ export default class PermissionsModule extends Module<DocumentClient> {
 				},
 			]);
 		};
-		const changed = (name: string, state: PermissionState) => {
-			remember(name, state);
-			for (const shownName of name === 'notifications'
-				? ['notifications', 'push']
-				: [name])
-				for (const ref of live.get(shownName) ?? []) {
-					const status = ref.deref();
-					if (!status) {
-						live.get(shownName)!.delete(ref);
-						continue;
-					}
-					if (shown.get(status) === state) continue;
-					shown.set(status, state);
-					const event = new EventType('change');
-					ours.add(event);
-					Reflect.apply(dispatch, status, [event]);
-				}
-		};
-
 		Reflect.defineProperty(statusPrototype, 'state', {
 			...stateDescriptor,
 			get: proxyModule.wrapFunction(nativeState, (target, that, args) =>
@@ -342,54 +310,6 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			),
 		});
 
-		/**
-		 * Ask for `names` (camera and microphone together for getUserMedia):
-		 * whether the browser's API may be called, and how to report its
-		 * outcome. `false`: refused as the site's denial
-		 */
-		const request = async (names: string[]): Promise<Decision> => {
-			await states;
-			const tokens: [string, string][] = [];
-			let dismissed = false;
-			for (const name of names) {
-				const real = await realState(name);
-				const answer = await ask<PermissionDecision>({
-					op: 'request',
-					name,
-					real,
-				});
-				const decision = answer?.decision ?? 'blocked';
-				if (decision === 'denied') {
-					changed(name, 'denied');
-					return { call: false, dismissed: false };
-				}
-				if (decision === 'dismissed' || decision === 'blocked') {
-					dismissed ||= decision === 'dismissed';
-					return { call: false, dismissed, blocked: decision === 'blocked' };
-				}
-				if (decision === 'granted') changed(name, 'granted');
-				if (answer && answer.decision === 'browser')
-					tokens.push([name, answer.token]);
-			}
-			return {
-				call: true,
-				// how the browser's prompt ended: granted on success, else the
-				// browser's own state now (still prompt when it was dismissed)
-				settle: async (granted) => {
-					for (const [name, token] of tokens) {
-						const state =
-							granted === true
-								? 'granted'
-								: granted === false
-									? await realState(name)
-									: 'prompt';
-						void ask({ op: 'result', name, token, state });
-						if (state !== 'prompt') changed(name, state);
-					}
-				},
-			};
-		};
-
 		// the site's states as the worker has them now: another document of
 		// the site may have been answered since this one loaded
 		const refresh = async () => {
@@ -399,6 +319,33 @@ export default class PermissionsModule extends Module<DocumentClient> {
 				remember(name, state);
 			features = answer.features;
 		};
+		// the requests themselves are a deferred part (./permissionCalls.ts),
+		// made at a page's first, before the browser is asked: without it the
+		// request rejects. `request` asks for `names` (camera and microphone
+		// together for getUserMedia), `direct` says whether a request reaches
+		// the browser's own call without this module refusing it or the host
+		// being asked
+		let made: PermissionRequests | undefined;
+		const requests = () =>
+			(made ??= deferred('permissionRequests')({
+				states,
+				ask,
+				remember,
+				refresh,
+				allowed,
+				siteState,
+				shown,
+				live,
+				ours,
+				EventType,
+				dispatch,
+				nativeQuery,
+				nativePermissions,
+				nativeState,
+			}));
+		const request = async (names: string[]): Promise<Decision> =>
+			requests().request(names);
+		const direct = async (names: string[]) => requests().direct(names);
 		const mayRead = (name: string) =>
 			allowed(name) && siteState(name) === 'granted';
 		// whether the document may choose an AudioContext's output. Chrome
@@ -477,21 +424,6 @@ export default class PermissionsModule extends Module<DocumentClient> {
 				),
 			});
 		} else this.geolocation(request, allowed, global.Geolocation?.prototype);
-		// whether a request for `names` reaches the browser's own call without
-		// this module refusing it or the host being asked: the site holds the
-		// permission, or neither it nor the browser has decided and the
-		// browser's own prompt asks
-		const direct = async (names: string[]) => {
-			await refresh();
-			for (const name of names) {
-				if (!allowed(name)) return false;
-				const state = siteState(name);
-				if (state === 'granted') continue;
-				if (state !== 'prompt' || (await realState(name)) !== 'prompt')
-					return false;
-			}
-			return true;
-		};
 		this.userMedia(
 			request,
 			allowed,
