@@ -1,0 +1,139 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Wed, 18 Nov 2026 15:17:45 -0500
+Subject: [PATCH] client: send a request again when Chrome would, after its
+ kept connection ended unanswered
+
+A request whose kept-alive connection the server closed as the request
+reached it failed ("connection closed before message completed"); Chrome
+sends it again on another connection. Measured in Chrome 157 (STomp's
+idle-close-retry suite), Chrome sends a request again when:
+
+- the connection was a kept one and it ended (closed or reset) before any
+  byte of a response, whatever the method (GET, POST, PUT and DELETE
+  alike, a body in memory goes again), on each kept connection it finds
+  and then on a fresh one (six kept connections that each drop it: seven
+  arrivals);
+- a reused HTTP/1 connection answered 408 Request Timeout;
+- an HTTP/2 server reset the stream with REFUSED_STREAM, from a kept or a
+  fresh connection, twice at most (kMaxRetryAttempts: three arrivals);
+- an HTTP/2 connection that had carried a request went away under the
+  stream (GOAWAY below it, or the connection closed) before its head.
+
+It does not when the connection was fresh, when part of the response (its
+head, or its head and part of its body) had come, for a 408 over HTTP/2,
+or for a GOAWAY on a fresh HTTP/2 connection.
+
+send_req_inner now does the same for a request whose body is in memory (a
+streaming body cannot be read twice and is not sent again), with hyper's
+`is_empty_response()` and `is_refused_stream()` and hyper-util's
+`is_reused_connection()` and `ReusedConnection`. A connection that ended
+leaves the pool, so the resends over kept connections end by themselves;
+16 bounds them besides.
+---
+ client/src/lib.rs |  73 ++++++++++++++++++++++++++++++++++++++++--------
+ 1 file changed, 65 insertions(+), 8 deletions(-)
+
+diff --git a/client/src/lib.rs b/client/src/lib.rs
+--- a/client/src/lib.rs
++++ b/client/src/lib.rs
+@@ -19,7 +19,7 @@
+ use http_body::Body;
+ use http_body_util::{BodyDataStream, Full};
+ use hyper::{body::Incoming, Uri};
+-use hyper_util_wasm::client::legacy::Client;
++use hyper_util_wasm::client::legacy::{Client, ReusedConnection};
+ use io_stream::{iostream_from_asyncrw, iostream_from_stream};
+ use js_sys::{Array, ArrayBuffer, Function, Object, Promise, Uint8Array};
+ use send_wrapper::SendWrapper;
+@@ -232,6 +232,49 @@
+ 	Redirect((Response<Incoming>, http::Request<StreamingBody>)),
+ }
+ 
++/// Chrome's kMaxRetryAttempts: how many times a refused HTTP/2 stream is
++/// sent again (net/http/http_network_transaction.cc HasExceededMaxRetries)
++const MAX_REFUSED_RESENDS: usize = 2;
++/// A bound of our own on resends over kept connections, which end by
++/// themselves (a connection the server closed leaves the pool, so the
++/// request ends on a fresh one); Chrome keeps six to a server
++const MAX_RESENDS: usize = 16;
++
++/// Whether Chrome would send the request again after this, as
++/// HttpNetworkTransaction does (its `resends` so far): a connection it
++/// reused that ended before any byte of a response (the server closed it
++/// for idling as the request reached it; ShouldResendRequest), whatever the
++/// method; a 408 on a reused HTTP/1 connection; a stream the HTTP/2 server
++/// refused, twice at most. A fresh connection ending so is an error, as are
++/// a response that had begun and every other reset.
++fn should_resend(
++	result: &Result<Response<Incoming>, hyper_util_wasm::client::legacy::Error>,
++	resends: usize,
++) -> bool {
++	if resends >= MAX_RESENDS {
++		return false;
++	}
++	match result {
++		Ok(resp) => {
++			resp.status() == http::StatusCode::REQUEST_TIMEOUT
++				&& resp.version() <= http::Version::HTTP_11
++				&& resp.extensions().get::<ReusedConnection>().is_some()
++		}
++		Err(err) => {
++			let Some(cause) = err
++				.source()
++				.and_then(|x| x.downcast_ref::<hyper::Error>())
++			else {
++				return false;
++			};
++			if cause.is_refused_stream() {
++				return resends < MAX_REFUSED_RESENDS;
++			}
++			err.is_reused_connection() && cause.is_empty_response()
++		}
++	}
++}
++
+ #[cfg(feature = "full")]
+ enum EpoxyCompression {
+ 	Brotli,
+@@ -621,16 +664,30 @@
+ 
+ 	async fn send_req_inner(
+ 		&self,
+-		req: http::Request<StreamingBody>,
++		mut req: http::Request<StreamingBody>,
+ 		should_redirect: bool,
+ 	) -> Result<EpoxyResponse, EpoxyError> {
+-		let new_req = if should_redirect {
+-			Some(req.clone())
+-		} else {
+-			None
++		let mut resends = 0;
++		let (resp, new_req) = loop {
++			// a body in memory can go again; a stream cannot be read twice,
++			// and a request that streams its body is not sent again
++			let again =
++				matches!(req.body(), http_body_util::Either::Right(_)).then(|| req.clone());
++			let new_req = if should_redirect {
++				Some(req.clone())
++			} else {
++				None
++			};
++
++			let resp = self.client.request(req).await;
++			match again {
++				Some(again) if should_resend(&resp, resends) => {
++					resends += 1;
++					req = again;
++				}
++				_ => break (resp, new_req),
++			}
+ 		};
+-
+-		let resp = self.client.request(req).await;
+ 		match resp {
+ 			Ok(resp) => {
+ 				if is_redirect(resp.status().as_u16())
+-- 
+2.54.0
+

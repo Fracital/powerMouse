@@ -42,6 +42,10 @@ const { RevivingTransport } = await import(`${bundle}?${Date.now()}`);
 // throttled stream (holyWisp per_ws_streams), measured against the real server
 const CONNECT_REFUSED =
 	'Hyper client: hyper_util::client::legacy::Error(Connect, Io(Custom { kind: UnexpectedEof, error: "tls handshake eof" }))';
+// a request on a live wisp connection whose server closed it before the
+// response (measured, idle-close-retry suite)
+const INCOMPLETE =
+	'Hyper client: hyper_util::client::legacy::Error(SendRequest, hyper::Error(IncompleteMessage)) (client error (connection closed before message completed))';
 const MUX_ENDED =
 	'Hyper client: hyper_util::client::legacy::Error(Connect, Wisp(MuxTaskEnded) (Multiplexor task ended))';
 
@@ -55,13 +59,16 @@ const response = () => ({
 // A fake ProxyTransport. `plan(call)` returns an Error to throw for that request
 // (1-based per this transport instance) or null to answer 200. `builds` counts
 // how many transports were made (RevivingTransport builds a new one on revive).
-function makeFactory(plan) {
+// `udp(build)`, when given, is that transport's `client.connect_udp`, which
+// the wrapper asks for a stream to learn whether the wisp connection is up.
+function makeFactory(plan, udp) {
 	let builds = 0;
 	const factory = () => {
 		builds++;
 		let calls = 0;
 		return {
 			ready: true,
+			...(udp && { client: { connect_udp: udp(builds) } }),
 			async init() {
 				this.ready = true;
 			},
@@ -234,6 +241,90 @@ function makeFactory(plan) {
 		'a genuine response error is not retried, it surfaces at once',
 		/rejected/.test(String(r)) && calls === 1,
 		JSON.stringify({ result: r, calls }),
+	);
+}
+
+// 6) a GET whose connection closed under it while the wisp connection stays
+// up is the page's: epoxy already sent it again if Chrome would (a kept
+// connection the server closed as it arrived), so the wrapper does not
+// (idle-close-retry suite)
+{
+	let calls = 0;
+	const { factory, builds } = makeFactory(() => {
+		calls++;
+		return new Error(INCOMPLETE);
+	});
+	const transport = new RevivingTransport(factory);
+	const r = await transport
+		.request(new URL('https://example.com/'), 'GET', null, [], undefined)
+		.then(
+			(res) => res.status,
+			(error) => `rejected ${error.message}`,
+		);
+	ok(
+		'a GET that lost a live connection before its response is not sent again',
+		/rejected/.test(String(r)) && calls === 1 && builds() === 1,
+		JSON.stringify({ result: r, calls, builds: builds() }),
+	);
+}
+
+// 7) the same GET when the wisp connection went with it: the first
+// transport's multiplexor opens no stream (MuxTaskEnded), so the GET goes
+// again over a new transport and answers (wisp-reconnect suite)
+{
+	const asked = [];
+	let lost = false;
+	const { factory, builds } = makeFactory(
+		() => (lost ? null : ((lost = true), new Error(INCOMPLETE))),
+		(build) => async (url) => {
+			asked.push(`${build} ${url}`);
+			throw new Error(MUX_ENDED);
+		},
+	);
+	const transport = new RevivingTransport(factory);
+	const r = await transport
+		.request(new URL('https://example.com:8443/a'), 'GET', null, [], undefined)
+		.then(
+			(res) => res.status,
+			(error) => `rejected ${error.message}`,
+		);
+	ok(
+		'a GET whose wisp connection went before its response is sent again over a new one and answers',
+		r === 200 && builds() === 2 && asked.join() === '1 udp://example.com:8443',
+		JSON.stringify({ result: r, builds: builds(), asked }),
+	);
+}
+
+// 8) a wisp connection that still opens a stream was not the cause: the GET
+// is the page's, and the probe's stream is closed at once both ways
+{
+	let calls = 0;
+	const closed = [];
+	const { factory, builds } = makeFactory(
+		() => {
+			calls++;
+			return new Error(INCOMPLETE);
+		},
+		() => async () => ({
+			read: new ReadableStream({ cancel: () => void closed.push('read') }),
+			write: new WritableStream({ abort: () => void closed.push('write') }),
+		}),
+	);
+	const transport = new RevivingTransport(factory);
+	const r = await transport
+		.request(new URL('https://example.com/'), 'GET', null, [], undefined)
+		.then(
+			(res) => res.status,
+			(error) => `rejected ${error.message}`,
+		);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	ok(
+		'a GET that lost its connection while the wisp connection opens streams is not sent again',
+		/rejected/.test(String(r)) &&
+			calls === 1 &&
+			builds() === 1 &&
+			closed.sort().join() === 'read,write',
+		JSON.stringify({ result: r, calls, builds: builds(), closed }),
 	);
 }
 
