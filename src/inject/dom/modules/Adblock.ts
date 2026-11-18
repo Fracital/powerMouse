@@ -2,7 +2,7 @@ import type { CompiledFilter, Dom } from '../../../blocker/procedural';
 import type { AdblockPage } from '../../../blocker/types';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
-import { LazyWeakSet } from '../../ownCollections';
+import { LazyWeakMap, LazyWeakSet } from '../../ownCollections';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { deferred } from '../deferred';
 
@@ -495,23 +495,41 @@ function start(
 	// slices, held weakly: a subtree the page writes and drops again (an
 	// innerHTML it reads back, a list it rebuilds) is the page's to free
 	// before the queue reaches it, and its classes are nobody's then. `deep`:
-	// an added element, whose subtree is read too
-	const queue: { element: WeakRef<Element>; deep: boolean }[] = [];
+	// an added element, whose subtree is read too. An element is queued once
+	// until a slice reads it (`queued`: whether it waits as an added one),
+	// and the slice reads what it is then: a page that set an element's
+	// class 20,000 times queued it 20,000 times, and taking each entry off
+	// the front of the list moved all the others (a second of main thread)
+	let queue: { element: WeakRef<Element>; deep: boolean }[] = [];
+	let head = 0;
+	const queued = new LazyWeakMap<Element, boolean>();
+	const enqueue = (element: Element, deep: boolean) => {
+		const waiting = queued.get(element);
+		if (waiting === true || (waiting === false && !deep)) return;
+		queued.set(element, deep);
+		queue.push({ element: new NativeWeakRef(element), deep });
+	};
 	let armed = false;
 	let first = true;
 	const drain = () => {
 		armed = false;
 		let budget = SLICE_ELEMENTS;
-		while (queue.length && budget > 0) {
-			const { element, deep } = queue.shift()!;
+		while (head < queue.length && budget > 0) {
+			const { element, deep } = queue[head++];
 			const target = element.deref();
 			if (!target) continue;
+			queued.delete(target);
 			note(target);
 			budget--;
 			if (!deep) continue;
 			const inside = dom.queryAll(target, '[class],[id]');
 			for (const element of inside) note(element);
 			budget -= inside.length;
+		}
+		if (head * 2 >= queue.length) {
+			// (what the slices read goes, once it is half the queue)
+			queue = queue.slice(head);
+			head = 0;
 		}
 		if (queue.length) arm();
 		if (generic) ask();
@@ -527,18 +545,16 @@ function start(
 		if (generic)
 			for (const record of records) {
 				if (Reflect.apply(natives.recordType, record, []) === 'attributes')
-					queue.push({
-						element: new NativeWeakRef(
-							Reflect.apply(natives.recordTarget, record, []) as Element,
-						),
-						deep: false,
-					});
+					enqueue(
+						Reflect.apply(natives.recordTarget, record, []) as Element,
+						false,
+					);
 				else
 					for (const added of elements(
 						Reflect.apply(natives.recordAdded, record, []),
 					))
 						if (Reflect.apply(natives.nodeType, added, []) === 1)
-							queue.push({ element: new NativeWeakRef(added), deep: true });
+							enqueue(added as Element, true);
 			}
 		arm();
 	});
