@@ -26,6 +26,10 @@ export const FLAG_CONTIGUOUS = 2;
 export const FLAG_TALKSPURT = 4;
 /** the audio level says a voice is speaking */
 export const FLAG_VOICE = 8;
+/** a picture's dependency descriptor goes with it (`Frame.svc`) */
+export const FLAG_DESCRIBED = 16;
+/** a received picture's next layer follows in another frame */
+export const FLAG_PART = 32;
 /** "none" for a frame's level and orientation */
 export const ABSENT = 255;
 
@@ -170,22 +174,44 @@ export interface Frame {
 	payload: Uint8Array;
 	/** a received frame's RTP sequence number (its first packet's) */
 	seq?: number;
-	/** a sent picture's size, as the encoder was given it (for the page's encoded transform) */
+	/** a picture's size for the page's encoded transform: a sent one's as encoded, a received one's as the stack read it */
 	width?: number;
 	height?: number;
+	/** what a picture's dependency descriptor says, with FLAG_DESCRIBED */
+	svc?: Svc;
 }
 
 /**
- * `[media u8][pt u8][flags u8][level u8][orientation u8][colour u32][age ms u16][time u64][rid len u8][rid][bytes]`:
- * `age` is how long ago the frame was captured
+ * A picture's place among the others (its dependency descriptor): its id
+ * (a received one's counted on past the wire's 16 bits), the ids of the
+ * pictures it depends on, its layers; a sent one's temporal layers and
+ * how many pictures back the base layer's last one is (its chain)
+ */
+export interface Svc {
+	id: number;
+	deps: number[];
+	spatial?: number;
+	temporal: number;
+	layers?: number;
+	chain?: number;
+}
+
+/**
+ * `[media u8][pt u8][flags u8][level u8][orientation u8][colour u32][age ms u16][time u64][rid len u8][rid][svc][bytes]`:
+ * `age` is how long ago the frame was captured; `svc` (FLAG_DESCRIBED) is
+ * `[temporal layers u8][temporal u8][id u16][chain u8][count u8][how far back each dependency is, u8...][width u16][height u16]`
+ * (the size the structure states)
  */
 export function encodeFrame(frame: Frame, age: number): Uint8Array {
 	const rid = encoder.encode(frame.rid);
-	const out = new Uint8Array(20 + rid.length + frame.payload.length);
+	const svc = frame.flags & FLAG_DESCRIBED ? frame.svc : undefined;
+	const deps = svc ? svc.deps : [];
+	const head = 20 + rid.length + (svc ? 10 + deps.length : 0);
+	const out = new Uint8Array(head + frame.payload.length);
 	const view = new DataView(out.buffer);
 	out[0] = frame.media;
 	out[1] = frame.pt;
-	out[2] = frame.flags;
+	out[2] = svc ? frame.flags : frame.flags & ~FLAG_DESCRIBED;
 	out[3] = frame.level;
 	out[4] = frame.orientation;
 	view.setUint32(5, frame.colour ?? 0);
@@ -193,17 +219,46 @@ export function encodeFrame(frame: Frame, age: number): Uint8Array {
 	view.setBigUint64(11, frame.time);
 	out[19] = rid.length;
 	out.set(rid, 20);
-	out.set(frame.payload, 20 + rid.length);
+	if (svc) {
+		let at = 20 + rid.length;
+		out[at++] = svc.layers ?? 1;
+		out[at++] = svc.temporal;
+		view.setUint16(at, svc.id & 0xffff);
+		out[at + 2] = Math.min(255, svc.chain ?? 0);
+		out[at + 3] = deps.length;
+		at += 4;
+		for (const dep of deps)
+			out[at++] = Math.max(1, Math.min(255, svc.id - dep));
+		view.setUint16(at, frame.width ?? 0);
+		view.setUint16(at + 2, frame.height ?? 0);
+	}
+	out.set(frame.payload, head);
 	return out;
 }
 
 /**
  * the payload of an OUT_MEDIA_DATA record (after its tag):
- * `[media u8][pt u8][codec u8][flags u8][level u8][orientation u8][colour u32][time u64][seq u16][rid len u8][rid][bytes]`
+ * `[media u8][pt u8][codec u8][flags u8][level u8][orientation u8][colour u32][time u64][seq u16][rid len u8][rid][width u16][height u16][svc][bytes]`,
+ * the size the one Chrome reads (0 by 0 for none), `svc` (FLAG_DESCRIBED)
+ * `[id u32][spatial u8][temporal u8][count u8][dependencies u32...]`
  */
 export function decodeMediaData(bytes: Uint8Array): Frame & { codec: string } {
 	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 	const ridLen = bytes[20];
+	let at = 25 + ridLen;
+	let svc: Svc | undefined;
+	if (bytes[3] & FLAG_DESCRIBED) {
+		const deps = [];
+		for (let n = 0; n < bytes[at + 6]; n++)
+			deps.push(view.getUint32(at + 7 + 4 * n));
+		svc = {
+			id: view.getUint32(at),
+			deps,
+			spatial: bytes[at + 4],
+			temporal: bytes[at + 5],
+		};
+		at += 7 + 4 * deps.length;
+	}
 	return {
 		media: bytes[0],
 		pt: bytes[1],
@@ -215,7 +270,10 @@ export function decodeMediaData(bytes: Uint8Array): Frame & { codec: string } {
 		time: view.getBigUint64(10),
 		seq: view.getUint16(18),
 		rid: decoder.decode(bytes.subarray(21, 21 + ridLen)),
-		payload: bytes.subarray(21 + ridLen),
+		width: view.getUint16(21 + ridLen),
+		height: view.getUint16(23 + ridLen),
+		payload: bytes.subarray(at),
+		...(svc && { svc }),
 	};
 }
 

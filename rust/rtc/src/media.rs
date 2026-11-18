@@ -11,7 +11,10 @@
 
 use str0m::format::{Codec, CodecConfig, FormatParams, PayloadParams};
 use str0m::media::{Direction, Frequency, MediaData, MediaKind, Mid};
-use str0m::rtp::{Extension, ExtensionMap};
+use str0m::rtp::{Extension, ExtensionMap, FrameParts};
+
+use crate::dd;
+use crate::size;
 
 /// A media section, as the host knows it: the index into the connection's
 /// list is its name on both sides of the boundary.
@@ -34,6 +37,8 @@ pub struct MediaSlot {
 	pub stop: bool,
 	/// the host has been told the stack has the section
 	pub announced: bool,
+	/// the dependency descriptors received, for each stream by its rid
+	pub described: Vec<(Option<String>, dd::Track)>,
 }
 
 // frame flags, both ways
@@ -45,6 +50,10 @@ pub const FLAG_CONTIGUOUS: u8 = 2;
 pub const FLAG_TALKSPURT: u8 = 4;
 /// the audio level says a voice is speaking
 pub const FLAG_VOICE: u8 = 8;
+/// a dependency descriptor goes with the frame (`Described`, `Frame::described`)
+pub const FLAG_DESCRIBED: u8 = 16;
+/// a received picture's next layer follows in another record (received frames only)
+pub const FLAG_PART: u8 = 32;
 
 /// "none" for the level and orientation bytes
 pub const ABSENT: u8 = 255;
@@ -358,13 +367,19 @@ pub fn extensions(list: &str) -> Result<ExtensionMap, String> {
 		let id: u8 = id.parse().map_err(|_| format!("bad extension {entry}"))?;
 		if let Some(extension) = known.iter().find(|e| e.as_uri() == uri) {
 			map.set(id, extension.clone());
+		} else if uri == dd::URI {
+			map.set(id, Extension::with_serializer(uri, dd::Serializer));
+		} else if uri == dd::LAYERS_URI {
+			map.set(id, Extension::with_serializer(uri, str0m::rtp::vla::Serializer));
 		}
 	}
 	Ok(map)
 }
 
 /// A frame the host sends:
-/// `[media u8][pt u8][flags u8][level u8][orientation u8][colour 4][age ms u16][time u64][rid len u8][rid][bytes]`
+/// `[media u8][pt u8][flags u8][level u8][orientation u8][colour 4][age ms u16][time u64][rid len u8][rid][described][bytes]`,
+/// `described` (with `FLAG_DESCRIBED`) a picture's dependency descriptor:
+/// `[temporal layers u8][temporal u8][number u16][chain u8][fdiff count u8][fdiffs u8...][width u16][height u16]`
 pub struct Frame<'a> {
 	pub media: usize,
 	pub pt: u8,
@@ -383,13 +398,45 @@ pub struct Frame<'a> {
 	/// the frame's time in units of its payload's clock
 	pub time: u64,
 	pub rid: Option<&'a str>,
+	pub described: Option<Described>,
 	pub data: &'a [u8],
+}
+
+/// What the host says of a picture it sends, for its dependency descriptor
+pub struct Described {
+	pub layers: u8,
+	pub temporal: u8,
+	pub number: u16,
+	pub chain: u8,
+	pub fdiffs: Vec<u16>,
+	pub size: (u16, u16),
+}
+
+fn u16_at(bytes: &[u8], at: usize) -> Option<u16> {
+	Some(u16::from_be_bytes(bytes.get(at..at + 2)?.try_into().ok()?))
 }
 
 pub fn parse_frame(bytes: &[u8]) -> Option<Frame<'_>> {
 	let head = bytes.get(..20)?;
 	let rid_len = head[19] as usize;
 	let rid = bytes.get(20..20 + rid_len)?;
+	let mut at = 20 + rid_len;
+	let mut described = None;
+	if head[2] & FLAG_DESCRIBED != 0 {
+		let d = bytes.get(at..at + 6)?;
+		let count = d[5] as usize;
+		let fdiffs = bytes.get(at + 6..at + 6 + count)?.iter().filter(|&&f| f > 0).map(|&f| f as u16).collect();
+		at += 6 + count;
+		described = Some(Described {
+			layers: d[0],
+			temporal: d[1],
+			number: u16::from_be_bytes([d[2], d[3]]),
+			chain: d[4],
+			fdiffs,
+			size: (u16_at(bytes, at)?, u16_at(bytes, at + 2)?),
+		});
+		at += 4;
+	}
 	Some(Frame {
 		media: head[0] as usize,
 		pt: head[1],
@@ -404,18 +451,25 @@ pub fn parse_frame(bytes: &[u8]) -> Option<Frame<'_>> {
 		} else {
 			Some(std::str::from_utf8(rid).ok()?)
 		},
-		data: &bytes[20 + rid_len..],
+		described,
+		data: &bytes[at..],
 	})
 }
 
 /// A frame the stack received, after the tag:
-/// `[media u8][pt u8][codec u8][flags u8][level u8][orientation u8][colour 4][time u64][seq u16][rid len u8][rid][bytes]`,
-/// `seq` the RTP sequence number of its first packet.
-/// None for a payload of no codec the host knows.
-pub fn data_record(tag: u8, media: u8, data: &MediaData) -> Option<Vec<u8>> {
+/// `[media u8][pt u8][codec u8][flags u8][level u8][orientation u8][colour 4][time u64][seq u16][rid len u8][rid][width u16][height u16][described][bytes]`,
+/// `seq` the RTP sequence number of its first packet, the size the one
+/// Chrome reads for a receiver's transform (its dependency descriptor's,
+/// else a keyframe's own, 0 by 0 for none), `described` (with
+/// `FLAG_DESCRIBED`) what its dependency descriptor says:
+/// `[id u32][spatial u8][temporal u8][dependency count u8][dependencies u32...]`.
+/// A picture of more than one layer, each with its
+/// own descriptor, is a record for each layer, all but the last with
+/// `FLAG_PART`. None for a payload of no codec the host knows.
+pub fn data_records(tag: u8, media: u8, data: &MediaData, track: &mut dd::Track) -> Vec<Vec<u8>> {
 	let codec = codec_id(data.params.spec().codec);
 	if codec == 0 {
-		return None;
+		return Vec::new();
 	}
 	let mut flags = 0;
 	if data.is_keyframe() {
@@ -439,19 +493,65 @@ pub fn data_record(tag: u8, media: u8, data: &MediaData) -> Option<Vec<u8>> {
 		None => ABSENT,
 	};
 	let rid = data.rid.as_ref().map(|rid| rid.as_bytes()).unwrap_or(&[]);
-	let mut out = Vec::with_capacity(23 + rid.len() + data.data.len());
-	out.push(tag);
-	out.push(media);
-	out.push(*data.pt);
-	out.push(codec);
-	out.push(flags);
-	out.push(level);
-	out.push(orientation);
-	out.extend_from_slice(&data.ext_vals.color_space.unwrap_or([0; 4]));
-	out.extend_from_slice(&data.time.numer().to_be_bytes());
-	out.extend_from_slice(&(**data.seq_range.start() as u16).to_be_bytes());
-	out.push(rid.len() as u8);
-	out.extend_from_slice(rid);
-	out.extend_from_slice(&data.data);
-	Some(out)
+	// the picture's layers, each with its descriptor: one part without them
+	let parts = data.ext_vals.user_values.get::<FrameParts>();
+	let count = parts.map_or(1, |p| p.0.len().max(1));
+	let mut records = Vec::with_capacity(count);
+	let mut from = 0;
+	for index in 0..count {
+		let part = parts.and_then(|p| p.0.get(index));
+		let last = index + 1 == count;
+		let end = if last { data.data.len() } else { part.map_or(data.data.len(), |p| p.end.min(data.data.len())) };
+		let bytes = &data.data[from.min(end)..end];
+		from = end;
+		let mut flags = if index == 0 { flags } else { (flags & !FLAG_KEYFRAME) | FLAG_CONTIGUOUS };
+		if !last {
+			flags |= FLAG_PART;
+		}
+		let described = part
+			.and_then(|p| p.values.get::<dd::Received>())
+			.and_then(|received| dd::read(&received.0, &mut track.structure));
+		if described.is_some() {
+			flags |= FLAG_DESCRIBED;
+		}
+		// the size Chrome reads: the descriptor's (none of H.264's), else a
+		// keyframe's own
+		let key = flags & FLAG_KEYFRAME != 0;
+		let (width, height) = described
+			.as_ref()
+			.filter(|_| codec != 12)
+			.and_then(|d| d.size)
+			.filter(|size| size.0 != 0)
+			.or_else(|| if key { size::picture_size(codec, bytes) } else { None })
+			.unwrap_or((0, 0));
+		let seq = part.map_or(**data.seq_range.start(), |p| p.seq) as u16;
+		let mut out = Vec::with_capacity(40 + rid.len() + bytes.len());
+		out.push(tag);
+		out.push(media);
+		out.push(*data.pt);
+		out.push(codec);
+		out.push(flags);
+		out.push(level);
+		out.push(orientation);
+		out.extend_from_slice(&data.ext_vals.color_space.unwrap_or([0; 4]));
+		out.extend_from_slice(&data.time.numer().to_be_bytes());
+		out.extend_from_slice(&seq.to_be_bytes());
+		out.push(rid.len() as u8);
+		out.extend_from_slice(rid);
+		out.extend_from_slice(&width.to_be_bytes());
+		out.extend_from_slice(&height.to_be_bytes());
+		if let Some(d) = described {
+			let id = track.id(d.number);
+			out.extend_from_slice(&(id as u32).to_be_bytes());
+			out.push(d.spatial);
+			out.push(d.temporal);
+			out.push(d.fdiffs.len() as u8);
+			for fdiff in d.fdiffs {
+				out.extend_from_slice(&((id - fdiff as i64) as u32).to_be_bytes());
+			}
+		}
+		out.extend_from_slice(bytes);
+		records.push(out);
+	}
+	records
 }

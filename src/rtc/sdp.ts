@@ -184,7 +184,16 @@ export interface SectionStyle {
 	 */
 	rids?: string[];
 	paused?: Set<string>;
+	/** an offer before any answer has the layer extensions (LAYER_EXTENSIONS) only for this */
+	layered?: boolean;
 }
+
+/**
+ * The header extensions Chrome 157 offers for a video sender made with
+ * simulcast layers or a scalabilityMode and for no other, and answers
+ * when offered: the dependency descriptor and the video layers allocation
+ */
+const LAYER_EXTENSIONS = /dependency-descriptor|layers-allocation/;
 
 const CRLF = '\r\n';
 
@@ -518,7 +527,12 @@ function shaped(
 	for (const value of all(model.attributes, 'extmap')) {
 		const uri = value.split(' ')[1];
 		const id = ids.get(uri);
-		if (id !== undefined && (!style.exts || style.exts.has(uri)))
+		if (
+			id !== undefined &&
+			(style.exts
+				? style.exts.has(uri)
+				: offered || style.layered || !LAYER_EXTENSIONS.test(uri))
+		)
 			lines.push(`a=extmap:${id} ${uri}`);
 	}
 	lines.push(`a=${style.direction}`);

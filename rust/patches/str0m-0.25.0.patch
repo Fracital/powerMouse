@@ -247,7 +247,15 @@
      /// For translating sctp stream id to ChannelId. Any event out of sctp goes via this.
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -924,6 +924,8 @@
+@@ -788,6 +788,7 @@
+     /// Video Layers Allocation RTP Header Extension
+     pub mod vla;
+     pub use crate::rtp_::{AbsCaptureTime, ExtensionValues, UserExtensionValues};
++    pub use crate::rtp_::{FramePart, FrameParts, FramePosition};
+     pub use crate::rtp_::{Extension, ExtensionMap, ExtensionSerializer};
+ 
+     pub use crate::packet::{
+@@ -924,6 +925,8 @@
      stats: Option<Stats>,
      session: Session,
      remote_fingerprint: Option<Fingerprint>,
@@ -256,7 +264,7 @@
      remote_addrs: Vec<SocketAddr>,
      send_addr: Option<SendAddr>,
      need_init_time: bool,
-@@ -1201,6 +1203,16 @@
+@@ -1201,6 +1204,16 @@
      BweProbeEstimator,
  }
  
@@ -273,7 +281,7 @@
  impl Rtc {
      /// Creates a new instance with default settings.
      ///
-@@ -1247,7 +1259,9 @@
+@@ -1247,7 +1260,9 @@
          // Capture before any partial moves of `config` below.
          let mtu = config.mtu.clone();
  
@@ -284,7 +292,7 @@
          let mut ice = IceAgent::with_hmac(local_creds, crypto_provider.sha1_hmac_provider);
          if config.ice_lite {
              ice.set_ice_lite(config.ice_lite);
-@@ -1302,6 +1316,7 @@
+@@ -1302,6 +1317,7 @@
              chan: ChannelHandler::default(),
              stats: config.stats_interval.map(Stats::new),
              remote_fingerprint: None,
@@ -292,7 +300,7 @@
              remote_addrs: vec![],
              send_addr: None,
              need_init_time: true,
-@@ -1712,6 +1727,7 @@
+@@ -1712,6 +1728,7 @@
                  }
                  DtlsOutput::PeerCert(der) => {
                      debug!("DTLS verify remote fingerprint");
@@ -300,7 +308,7 @@
                      // Compute the fingerprint of the peer's DER certificate with the hash
                      // function of the expected one (RFC 8122 §5): sha-256, or sha-1 as some
                      // endpoints still announce. sha-256 when there is none to compare with.
-@@ -2064,7 +2080,15 @@
+@@ -2064,7 +2081,15 @@
  
          if self.state != RtcState::Closing {
              self.session.close_rtp();
@@ -353,6 +361,70 @@
      /// Set absolute capture time for this frame.
      pub fn abs_capture_time(mut self, capture_time: AbsCaptureTime) -> Self {
          self.ext_vals.abs_capture_time = Some(capture_time);
+--- a/src/packet/buffer_rx.rs
++++ b/src/packet/buffer_rx.rs
+@@ -5,7 +5,8 @@
+ use std::time::{Duration, Instant};
+ 
+ use crate::rtp::vla::VideoLayersAllocation;
+-use crate::rtp_::{ExtensionValues, MediaTime, RtpHeader, SenderInfo, SeqNo};
++use crate::rtp_::{ExtensionValues, FramePart, FrameParts, FramePosition};
++use crate::rtp_::{MediaTime, RtpHeader, SenderInfo, SeqNo};
+ 
+ use super::contiguity::Contiguity;
+ use super::contiguity_vp8::Vp8Contiguity;
+@@ -593,11 +594,29 @@
+         let time = self.queue.get(start).expect("first index exist").meta.time;
+         let mut meta = Vec::with_capacity(stop - start + 1);
+ 
++        // the parts of a frame whose packets say where they sit (FramePosition)
++        let mut parts: Vec<FramePart> = Vec::new();
+         for entry in self.queue.range_mut(start..=stop) {
+             self.depack
+                 .depacketize(entry.remaining(), &mut data, &mut codec_extra)?;
++            let values = &entry.meta.header.ext_vals.user_values;
++            if let Some(position) = values.get::<FramePosition>() {
++                match parts.last_mut() {
++                    Some(part) if !position.first => part.end = data.len(),
++                    _ => parts.push(FramePart {
++                        end: data.len(),
++                        seq: *entry.meta.seq_no,
++                        values: values.clone(),
++                    }),
++                }
++            }
+             meta.push(entry.meta.clone());
+         }
++        if !parts.is_empty() {
++            if let Some(last) = meta.last_mut() {
++                last.header.ext_vals.user_values.set(FrameParts(parts));
++            }
++        }
+ 
+         Ok(Depacketized {
+             time,
+--- a/src/packet/payload.rs
++++ b/src/packet/payload.rs
+@@ -3,7 +3,7 @@
+ use crate::format::{CodecSpec, Vp9PacketizerMode};
+ use crate::media::ToPayload;
+ use crate::rtp::vla::VideoLayersAllocation;
+-use crate::rtp_::{ExtensionValues, Frequency, Pt, SeqNo};
++use crate::rtp_::{ExtensionValues, FramePosition, Frequency, Pt, SeqNo};
+ use crate::streams::{RtpWrite, StreamTx};
+ 
+ use super::PacketError;
+@@ -95,6 +95,10 @@
+ 
+             let mut pkt_ext_vals = ext_vals.clone();
+ 
++            if pkt_ext_vals.user_values.get::<FramePosition>().is_some() {
++                pkt_ext_vals.user_values.set(FramePosition { first, last });
++            }
++
+             if !first {
+                 pkt_ext_vals.abs_capture_time = None;
+                 pkt_ext_vals.user_values.remove::<VideoLayersAllocation>();
 --- a/src/packet/vp9.rs
 +++ b/src/packet/vp9.rs
 @@ -4,8 +4,8 @@
@@ -503,7 +575,51 @@
  
      /// User values for [`ExtensionSerializer`] to parse into and write from.
      pub user_values: UserExtensionValues,
-@@ -1118,6 +1127,9 @@
+@@ -956,6 +965,43 @@
+     }
+ }
+ 
++/// Where a packet sits in its frame. A frame written with this among its user values
++/// has it set on each of its packets, for a user extension that differs on a frame's
++/// first and last packets (the dependency descriptor); a user extension that reads it
++/// off a received packet has the frame's parts kept ([`FrameParts`]).
++#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
++pub struct FramePosition {
++    /// The packet starts the frame.
++    pub first: bool,
++    /// The packet ends the frame.
++    pub last: bool,
++}
++
++/// The parts of a received frame whose packets said where they sit ([`FramePosition`]):
++/// a picture of more than one layer has one part for each.
++#[derive(Debug, Clone)]
++pub struct FrameParts(pub Vec<FramePart>);
++
++/// A part of a received frame ([`FrameParts`]).
++#[derive(Clone)]
++pub struct FramePart {
++    /// Where the part's bytes end in the frame's data.
++    pub end: usize,
++    /// The sequence number of its first packet.
++    pub seq: u64,
++    /// The user values of its first packet.
++    pub values: UserExtensionValues,
++}
++
++impl fmt::Debug for FramePart {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("FramePart")
++            .field("end", &self.end)
++            .field("seq", &self.seq)
++            .finish()
++    }
++}
++
+ /// Space for storing user extension values via [`ExtensionSerializer`].
+ #[derive(Clone, Default)]
+ pub struct UserExtensionValues {
+@@ -1118,6 +1164,9 @@
          if let Some(t) = self.transport_cc {
              write!(f, " transport_cc: {t}")?;
          }
@@ -513,6 +629,16 @@
          if let Some(t) = self.play_delay_min {
              write!(f, " play_delay_min: {}", t.as_seconds())?;
          }
+--- a/src/rtp/mod.rs
++++ b/src/rtp/mod.rs
+@@ -7,6 +7,7 @@
+ 
+ mod ext;
+ pub use ext::{AbsCaptureTime, UserExtensionValues, VideoOrientation};
++pub use ext::{FramePart, FrameParts, FramePosition};
+ pub use ext::{Extension, ExtensionMap, ExtensionSerializer, ExtensionValues};
+ 
+ mod dir;
 --- a/src/sctp/mod.rs
 +++ b/src/sctp/mod.rs
 @@ -54,6 +54,8 @@

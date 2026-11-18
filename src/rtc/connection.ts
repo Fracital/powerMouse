@@ -10,7 +10,6 @@ import { peerAbort } from './abort';
 import { AudioReceiver, AudioSender } from './audio';
 import { hex, type Certificate } from './certificate';
 import { parseParameters, parsePayloads, type Formats } from './formats';
-import { pictureSize } from './pictureSize';
 import type {
 	CandidateInit,
 	ChannelOptions,
@@ -283,6 +282,12 @@ interface MediaState {
 	rejected: boolean;
 	/** the simulcast layers it sends, by rid; none without simulcast */
 	rids: string[];
+	/**
+	 * The page made it with simulcast layers or a scalabilityMode of more
+	 * than one layer: its offers have the dependency descriptor (Chrome
+	 * 157 offers it for no other)
+	 */
+	layered: boolean;
 	/** the layers the page has turned off (setParameters), which an offer marks paused */
 	ridsOff: Set<string>;
 	/** the layers the peer's description did not take, which an offer marks paused too */
@@ -303,8 +308,6 @@ interface MediaState {
 	};
 	/** the section's streams as its transforms' frames name them, and when they were asked */
 	ssrcs: { tx?: number; rx?: number; at: number } | null;
-	/** the sent video frames' ids */
-	frameId: number;
 }
 
 const sends = (direction: Direction) =>
@@ -739,7 +742,7 @@ export class Connection {
 				receive: { script: null, streams: null },
 			},
 			ssrcs: null,
-			frameId: 0,
+			layered: false,
 		};
 		if (kind === 'audio') {
 			state.sender = new AudioSender(index, this.#writeFrame);
@@ -843,19 +846,21 @@ export class Connection {
 			if (side === 'receive' && frame.seq !== undefined)
 				meta.sequenceNumber = frame.seq;
 		} else {
-			// a sent picture's size as encoded; a received one's as its
-			// keyframe states it, 0 on the frames between
-			let size: [number, number] | null = null;
-			if (side === 'send') {
-				const id = ++state.frameId;
-				meta.dependencies = key ? [] : [id - 1];
-				meta.frameId = id;
-				if (frame.width && frame.height) size = [frame.width, frame.height];
-			} else if (key) size = pictureSize(frame.codec ?? '', frame.payload);
-			meta.height = size ? size[1] : 0;
-			meta.spatialIndex = 0;
-			meta.temporalIndex = 0;
-			meta.width = size ? size[0] : 0;
+			// a sent picture's id, layers and dependencies as the encoder
+			// made them, its size as encoded; a received one's as its
+			// dependency descriptor says, and its size as the stack read it
+			// (the descriptor's, else its keyframe's: rust/rtc/src/size.rs),
+			// 0 by 0 for none
+			const svc = frame.svc;
+			if (svc) {
+				meta.dependencies = svc.deps;
+				meta.frameId = svc.id;
+			}
+			const sized = frame.width && frame.height;
+			meta.height = sized ? frame.height : 0;
+			meta.spatialIndex = svc?.spatial ?? 0;
+			meta.temporalIndex = svc?.temporal ?? 0;
+			meta.width = sized ? frame.width : 0;
 		}
 		const data = frame.payload.slice().buffer;
 		// the frame as it was, but its bytes
@@ -1165,6 +1170,8 @@ export class Connection {
 			}
 			if (state.stopped) section.stopped = true;
 			if (state.sender?.canTone) section.dtmf = true;
+			if (state.sender instanceof VideoSender && state.sender.codecName)
+				section.codec = state.sender.codecName;
 			medias.push(section);
 		}
 		return { medias };
@@ -1299,6 +1306,7 @@ export class Connection {
 				legacy: state.legacyCodecs,
 				rids: state.rids,
 				paused: new Set([...state.ridsOff, ...state.ridsDeclined]),
+				layered: state.layered,
 			});
 		}
 		this.#styles = styles;
@@ -2397,6 +2405,7 @@ export class Connection {
 						request.byTrack,
 					);
 					added.rids = request.rids ?? [];
+					added.layered = !!request.layered || added.rids.length > 1;
 					reply(null);
 					break;
 				}

@@ -7,7 +7,14 @@
 // with their RTP time on the 90 kHz clock.
 import type { FrameWriter, Received, SenderStats } from './audio';
 import type { Payload } from './formats';
-import { ABSENT, FLAG_CONTIGUOUS, FLAG_KEYFRAME } from './records';
+import {
+	ABSENT,
+	FLAG_CONTIGUOUS,
+	FLAG_DESCRIBED,
+	FLAG_KEYFRAME,
+	FLAG_PART,
+	type Svc,
+} from './records';
 
 /** video RTP time: 90 kHz, units a microsecond */
 const VIDEO_UNITS = 0.09;
@@ -194,6 +201,8 @@ export interface EncodingLimits {
 	maxFramerate: number | null;
 	/** what the picture's sides are divided by */
 	scale: number;
+	/** the page's scalabilityMode, as Chrome takes it for the codec; null for none */
+	mode?: string | null;
 }
 
 /** one encoding's encoder: its own size, bitrate, keyframes and frame rate */
@@ -222,6 +231,11 @@ class Layer {
 	target: number | null = null;
 	/** when each picture under way was read, by its timestamp */
 	readAt = new Map<number, number>();
+	/** the temporal layers it encodes, and its last picture's id in each (0 for none) */
+	temporal = 1;
+	lastOf = [0, 0, 0];
+	/** an encoder failed with layers: the next ones are made without */
+	flat = false;
 
 	constructor(limits: EncodingLimits) {
 		this.limits = limits;
@@ -265,6 +279,8 @@ export class VideoSender {
 	];
 	/** RTP times start at a number of the sender's own */
 	#offset = crypto.getRandomValues(new Uint32Array(1))[0];
+	/** the pictures' ids, counted across the layers (a transform's frameId) */
+	#frameId = 0;
 	/**
 	 * The sender's own time, in microseconds: a track's timestamps start
 	 * anywhere (a track the page writes itself starts at zero), so a run
@@ -314,6 +330,11 @@ export class VideoSender {
 		this.#restart();
 	}
 
+	/** the name of the payload it sends with, null before it has one */
+	get codecName(): string | null {
+		return this.#payload?.name ?? null;
+	}
+
 	/** a video sender has no RTCDTMFSender */
 	get canTone(): boolean {
 		return false;
@@ -360,6 +381,7 @@ export class VideoSender {
 				old.scale !== limits.scale
 			)
 				layer.keyframe = true;
+			// (a new mode makes a new encoder: `made` names its layers)
 		});
 		this.#share();
 		for (const layer of this.#layers) this.#retune(layer, true);
@@ -389,6 +411,35 @@ export class VideoSender {
 	setAccepted(rids: string[]) {
 		this.#accepted = rids;
 		this.#share();
+	}
+
+	/** a simulcast sender none of whose encodings has a scalabilityMode */
+	#unmoded(): boolean {
+		return (
+			this.#layers.length > 1 &&
+			!(this.#accepted !== null && !this.#accepted.length) &&
+			this.#layers.every((layer) => !layer.limits.mode)
+		);
+	}
+
+	/**
+	 * A layer's temporal layers: its mode's, which WebCodecs encodes with
+	 * each of Chrome's codecs (L1T2 and L1T3, measured on 157; a spatial
+	 * mode keeps its temporal layers, the page's rtcStack having made one
+	 * VP8 or H.264 cannot do L1T2). Measured on 157, a simulcast sender
+	 * with no modes sends VP8 in three and VP9 (its first encoding) in
+	 * three, and H.264 sends every encoding in the first one's.
+	 */
+	#temporal(layer: Layer, codec: string): number {
+		const mode = this.#unmoded()
+			? /^(vp8|vp09)/.test(codec) && 'T3'
+			: (this.#layers.length > 1 && codec.startsWith('avc1.')
+					? this.#layers[0]
+					: layer
+				).limits.mode;
+		return layer.flat
+			? 1
+			: Math.min(3, Number(/T(\d)/.exec(mode || '')?.[1] ?? 1));
 	}
 
 	/** a layer goes out as a stream without a rid: the first, to a peer that takes no simulcast */
@@ -426,6 +477,11 @@ export class VideoSender {
 	#sendable(): Layer[] {
 		if (this.#layers.length === 1)
 			return this.#layers.filter((layer) => layer.limits.active);
+		// VP9 and AV1 have no simulcast without a mode: Chrome sends the
+		// first encoding alone (VP9's as spatial layers in one stream,
+		// measured)
+		if (this.#unmoded() && /^(vp09|av01)/.test(this.#codec ?? ''))
+			return this.#layers[0].limits.active ? [this.#layers[0]] : [];
 		// what the peer takes: the layers it named, or the first alone
 		if (this.#accepted !== null) {
 			const accepted = this.#accepted;
@@ -624,10 +680,11 @@ export class VideoSender {
 			layer.pixels = outWidth * outHeight;
 			this.#share();
 		}
-		const made = `${codec}/${width}x${height}/${outWidth}x${outHeight}`;
+		const layers = this.#temporal(layer, codec);
+		const made = `${codec}/${width}x${height}/${outWidth}x${outHeight}/${layers}`;
 		if (!layer.encoder || layer.made !== made) {
 			layer.restart();
-			this.#start(layer, codec, outWidth, outHeight, made);
+			this.#start(layer, codec, outWidth, outHeight, made, layers);
 		}
 		const encoder = layer.encoder;
 		// a picture the encoder cannot take now is let go: the next one is
@@ -664,6 +721,7 @@ export class VideoSender {
 		width: number,
 		height: number,
 		made: string,
+		layers: number,
 	) {
 		if (layer.refused === made) return;
 		try {
@@ -672,10 +730,18 @@ export class VideoSender {
 					// what the encoder encoded in, told with its keyframes
 					const space = metadata?.decoderConfig?.colorSpace;
 					if (space) layer.colour = colourBytes(space);
-					this.#chunk(layer, encoder, chunk);
+					this.#chunk(
+						layer,
+						encoder,
+						chunk,
+						(metadata as { svc?: { temporalLayerId?: number } } | undefined)
+							?.svc?.temporalLayerId ?? 0,
+					);
 				},
 				error: () => {
-					if (layer.encoder === encoder) layer.restart();
+					if (layer.encoder !== encoder) return;
+					layer.flat ||= layers > 1;
+					layer.restart();
 				},
 			});
 			const config: VideoEncoderConfig = {
@@ -688,19 +754,47 @@ export class VideoSender {
 					? { avc: { format: 'annexb' as const } }
 					: {}),
 			};
+			if (layers > 1) config.scalabilityMode = `L1T${layers}`;
 			encoder.configure(config);
+			layer.temporal = layers;
 			layer.config = config;
 			layer.tunedAt = performance.now();
 			layer.encoder = encoder;
 			layer.made = made;
 		} catch (error) {
-			layer.refused = made;
+			// (one the browser refuses with layers is made without them)
+			if (layers > 1) layer.flat = true;
+			else layer.refused = made;
 		}
 	}
 
-	#chunk(layer: Layer, encoder: VideoEncoder, chunk: EncodedVideoChunk) {
+	/**
+	 * A picture encoded: its id, and the pictures it depends on as the
+	 * temporal structure has it (WebRTC's L1T2 and L1T3, which WebCodecs'
+	 * layers follow): a keyframe none, a base picture the base's last,
+	 * one above the last of the layers below
+	 */
+	#chunk(
+		layer: Layer,
+		encoder: VideoEncoder,
+		chunk: EncodedVideoChunk,
+		temporal: number,
+	) {
 		const payload = this.#payload;
 		if (encoder !== layer.encoder || !payload || this.#shift === null) return;
+		const id = ++this.#frameId;
+		const key = chunk.type === 'key';
+		const last = layer.lastOf;
+		if (key) last.fill(0);
+		const dep = Math.max(...last.slice(0, temporal || 1));
+		const svc = {
+			id,
+			deps: dep ? [dep] : [],
+			temporal,
+			layers: layer.temporal,
+			chain: last[0] && id - last[0],
+		};
+		last[temporal] = id;
 		const readAt = layer.readAt.get(chunk.timestamp);
 		layer.readAt.delete(chunk.timestamp);
 		const bytes = new Uint8Array(chunk.byteLength);
@@ -717,7 +811,7 @@ export class VideoSender {
 			{
 				media: this.media,
 				pt: payload.pt,
-				flags: chunk.type === 'key' ? FLAG_KEYFRAME : 0,
+				flags: (key ? FLAG_KEYFRAME : 0) | FLAG_DESCRIBED,
 				level: ABSENT,
 				orientation: ABSENT,
 				colour: chunk.type === 'key' ? layer.colour : 0,
@@ -726,6 +820,7 @@ export class VideoSender {
 				payload: bytes,
 				width: layer.config?.width,
 				height: layer.config?.height,
+				svc,
 			},
 			readAt === undefined ? 0 : Math.max(0, now - readAt),
 		);
@@ -762,6 +857,12 @@ export class VideoReceiver {
 	#colour = 0;
 	/** nothing can be decoded before a keyframe */
 	#needKey = true;
+	/**
+	 * A picture's layers so far (FLAG_PART: a peer's spatial layers, each
+	 * its own frame to a transform), decoded as one once its last comes,
+	 * as Chrome decodes them
+	 */
+	#held: { time: bigint; flags: number; data: Uint8Array } | null = null;
 	#askedAt = -Infinity;
 	/** the pictures' timestamps: when they arrived, in microseconds, always growing */
 	#lastUs = 0;
@@ -825,7 +926,10 @@ export class VideoReceiver {
 	}
 
 	/** a frame from the stack */
-	frame(frame: Received & { colour?: number }, now = performance.now()) {
+	frame(
+		frame: Received & { colour?: number; svc?: Svc },
+		now = performance.now(),
+	) {
 		this.#counts.frames++;
 		this.#counts.bytes += frame.payload.length;
 		if (!this.#started) {
@@ -833,7 +937,21 @@ export class VideoReceiver {
 			this.onStart?.();
 		}
 		if (!this.#writer) return;
-		const flags = frame.flags ?? 0;
+		let flags = frame.flags ?? 0;
+		let data = frame.payload;
+		// (layers of a picture whose last one never came are let go)
+		const held = this.#held;
+		this.#held = null;
+		if (held?.time === frame.time) {
+			flags = held.flags;
+			data = new Uint8Array(held.data.length + data.length);
+			data.set(held.data);
+			data.set(frame.payload, held.data.length);
+		}
+		if (frame.flags! & FLAG_PART) {
+			this.#held = { time: frame.time, flags, data };
+			return;
+		}
 		const key = (flags & FLAG_KEYFRAME) !== 0;
 		const payload =
 			frame.pt === undefined ? undefined : this.#payloads.get(frame.pt);
@@ -880,7 +998,7 @@ export class VideoReceiver {
 				new EncodedVideoChunk({
 					type: key ? 'key' : 'delta',
 					timestamp: us,
-					data: frame.payload,
+					data,
 				}),
 			);
 			this.#needKey = false;

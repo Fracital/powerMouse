@@ -121,6 +121,8 @@ export interface MediaSection {
 	 * the first encoding is sent and listed
 	 */
 	layers?: string[];
+	/** the codec a video section sends with (its payload's name), once it has one */
+	codec?: string;
 }
 
 /** a codec as RTCRtpSender.getCapabilities() names one */
@@ -181,6 +183,8 @@ export type Request =
 			byTrack: boolean;
 			/** the simulcast layers it sends, by rid, the page's order (none without simulcast) */
 			rids?: string[];
+			/** made with a scalabilityMode of more than one layer (MediaState.layered) */
+			layered?: boolean;
 	  }
 	| { seq: number; op: 'mediaDirection'; handle: number; direction: Direction }
 	| { seq: number; op: 'mediaStreams'; handle: number; streams: string[] }

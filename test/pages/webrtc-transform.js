@@ -56,6 +56,8 @@
 							deps: meta.dependencies ?? null,
 							width: meta.width ?? null,
 							height: meta.height ?? null,
+							spatial: meta.spatialIndex ?? null,
+							temporal: meta.temporalIndex ?? null,
 						});
 					}
 					controller.enqueue(frame);
@@ -130,13 +132,23 @@
 		/**
 		 * A track of `kind` sent and one received on a transceiver, each
 		 * through the worker's transform, given with the transceiver;
-		 * `codec` (a video mimeType) the only one it takes
+		 * `codec` (a video mimeType) the only one it takes, `mode` the
+		 * sender's scalabilityMode (the transceiver made with it)
 		 */
-		media(name, kind, { width = 320, height = 180, codec = null } = {}) {
+		media(
+			name,
+			kind,
+			{ width = 320, height = 180, codec = null, mode = null } = {},
+		) {
 			const entry = peer(name);
 			const track = source(entry, kind, width, height);
 			// (addTrack: the offer's section takes the far end's transceiver)
-			const sender = entry.pc.addTrack(track, new MediaStream([track]));
+			const sender = mode
+				? entry.pc.addTransceiver(track, {
+						streams: [new MediaStream([track])],
+						sendEncodings: [{ scalabilityMode: mode }],
+					}).sender
+				: entry.pc.addTrack(track, new MediaStream([track]));
 			const transceiver = entry.pc
 				.getTransceivers()
 				.find((made) => made.sender === sender);
@@ -192,6 +204,20 @@
 			).catch(() => {});
 			return entry.seen ?? null;
 		},
+		/** the video sender's scalabilityMode set (setParameters) */
+		async mode(name, mode) {
+			const { pc } = peer(name);
+			const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
+			const parameters = sender.getParameters();
+			parameters.encodings[0].scalabilityMode = mode;
+			await sender.setParameters(parameters);
+		},
+		/** the size of the pictures each received video plays at */
+		played(name) {
+			return peer(name)
+				.players.filter((player) => player.tagName === 'VIDEO')
+				.map((player) => [player.videoWidth, player.videoHeight]);
+		},
 		/** the empty frames the transforms were given, `ms` from now */
 		async empty(name, ms) {
 			await wait(ms);
@@ -207,6 +233,160 @@
 			peers.delete(name);
 		},
 	};
+	// ---- scalabilityMode: what is taken, read back and offered ----
+
+	/**
+	 * What a page reads of scalabilityMode without a call: the modes
+	 * addTransceiver takes and refuses (and in which order its errors
+	 * come), what getParameters reads back before and after a description
+	 * (a codec that cannot do the mode), what setParameters takes, and
+	 * which offers have the layer extensions
+	 */
+	window.__transform.svcRules = async () => {
+		const out = {};
+		const err = (e) => `${e.name}: ${e.message}`;
+		const encodings = (sender) =>
+			JSON.stringify(sender.getParameters().encodings);
+		const MODES = [
+			'L1T1',
+			'L1T3',
+			'L2T2_KEY_SHIFT',
+			'L3T3h',
+			'S3T3h',
+			'S2T2',
+			'L1T3h',
+			'L4T1',
+			'S1T2',
+			'foo',
+			'',
+			'l1t2',
+			null,
+			5,
+		];
+		for (const mode of MODES) {
+			const pc = new RTCPeerConnection();
+			try {
+				out[`add ${mode}`] = encodings(
+					pc.addTransceiver('video', {
+						sendEncodings: [{ scalabilityMode: mode }],
+					}).sender,
+				);
+			} catch (e) {
+				out[`add ${mode}`] = err(e);
+			}
+			pc.close();
+		}
+		for (const [label, given] of [
+			['scale first', [{ scaleResolutionDownBy: 0.5, scalabilityMode: 'foo' }]],
+			['rid first', [{ rid: 'a!', scalabilityMode: 'foo' }, { rid: 'b' }]],
+			[
+				'layers',
+				[
+					{ rid: 'a', scalabilityMode: 'L1T3' },
+					{ rid: 'b', scalabilityMode: 'L3T3' },
+				],
+			],
+			['undefined', [{ scalabilityMode: undefined }]],
+		]) {
+			const pc = new RTCPeerConnection();
+			try {
+				out[label] = encodings(
+					pc.addTransceiver('video', { sendEncodings: given }).sender,
+				);
+			} catch (e) {
+				out[label] = err(e);
+			}
+			pc.close();
+		}
+		{
+			const pc = new RTCPeerConnection();
+			const t = pc.addTransceiver('audio', {
+				sendEncodings: [{ scalabilityMode: 'foo' }],
+			});
+			out.audio = encodings(t.sender);
+			pc.close();
+		}
+		// setParameters before a description: any of the modes, or none
+		for (const [from, to] of [
+			[null, 'L3T3'],
+			['L1T2', null],
+			['L1T2', 'foo'],
+			[null, 'S2T1'],
+		]) {
+			const pc = new RTCPeerConnection();
+			const t = pc.addTransceiver('video', {
+				sendEncodings: [from ? { scalabilityMode: from } : {}],
+			});
+			const p = t.sender.getParameters();
+			if (to === null) delete p.encodings[0].scalabilityMode;
+			else p.encodings[0].scalabilityMode = to;
+			try {
+				await t.sender.setParameters(p);
+				out[`set ${from}>${to}`] = encodings(t.sender);
+			} catch (e) {
+				out[`set ${from}>${to}`] = err(e);
+			}
+			pc.close();
+		}
+		// the offers' layer extensions; and after a description, the mode a
+		// codec cannot do, and what setParameters takes of that codec
+		const layerExts = (sdp) =>
+			sdp
+				.split('\r\n')
+				.filter((l) => /dependency-descriptor|video-layers-allocation/.test(l))
+				.map((l) => l.replace(/^a=extmap:\d+ /, ''))
+				.join(' ');
+		for (const [mime, given, later] of [
+			['video/VP8', [{}]],
+			['video/VP8', [{ scalabilityMode: 'L1T1' }]],
+			['video/VP8', [{ scalabilityMode: 'L3T3' }], 'L1T3'],
+			['video/VP9', [{ scalabilityMode: 'L3T3_KEY' }], 'S2T3'],
+			['video/H264', [{ scalabilityMode: 'S2T1' }], 'L2T1'],
+			['video/AV1', [{ rid: 'a' }, { rid: 'b' }]],
+			['video/VP8', [{}], 'L1T2'],
+		]) {
+			const a = new RTCPeerConnection();
+			const b = new RTCPeerConnection();
+			const label = `${mime} ${JSON.stringify(given)}`;
+			try {
+				const t = a.addTransceiver('video', {
+					direction: 'sendrecv',
+					sendEncodings: given,
+				});
+				t.setCodecPreferences(
+					RTCRtpSender.getCapabilities('video').codecs.filter(
+						(c) => c.mimeType === mime,
+					),
+				);
+				const offer = await a.createOffer();
+				await a.setLocalDescription(offer);
+				await b.setRemoteDescription(offer);
+				const answer = await b.createAnswer();
+				await b.setLocalDescription(answer);
+				await a.setRemoteDescription(answer);
+				out[`${label} offer`] = layerExts(offer.sdp);
+				out[`${label} answer`] = layerExts(answer.sdp);
+				out[`${label} after`] = encodings(t.sender);
+				if (later) {
+					const p = t.sender.getParameters();
+					p.encodings[0].scalabilityMode = later;
+					try {
+						await t.sender.setParameters(p);
+						out[`${label} later`] = encodings(t.sender);
+					} catch (e) {
+						out[`${label} later`] = err(e);
+					}
+					out[`${label} reoffer`] = layerExts((await a.createOffer()).sdp);
+				}
+			} catch (e) {
+				out[label] = err(e);
+			}
+			a.close();
+			b.close();
+		}
+		return out;
+	};
+
 	// ---- what a page does with frames: copies, clones, posting them on ----
 
 	/**
@@ -629,6 +809,100 @@
 		).catch(() => {});
 		await wait(1500);
 		return entry.posts;
+	};
+	/**
+	 * A simulcast sender of `mime` with these modes (null for none) to a
+	 * second connection of the page that takes the layers: what
+	 * getParameters reads after the description, and per picture width
+	 * the highest temporal layer the sender's transform saw
+	 */
+	window.__transform.simulcastLayers = async (name, mime, modes) => {
+		const worker = new Worker(
+			URL.createObjectURL(
+				new Blob([
+					`const out = {};
+					onrtctransform = (event) => {
+						const t = event.transformer;
+						t.readable.pipeThrough(new TransformStream({ transform(frame, controller) {
+							const meta = frame.getMetadata();
+							const seen = (out[meta.width] ??= { width: meta.width, temporal: 0, frames: 0 });
+							seen.frames++;
+							seen.temporal = Math.max(seen.temporal, meta.temporalIndex ?? 0);
+							controller.enqueue(frame);
+						} })).pipeTo(t.writable);
+					};
+					onmessage = () => postMessage(out);`,
+				]),
+			),
+		);
+		const canvas = document.createElement('canvas');
+		canvas.width = 1280;
+		canvas.height = 720;
+		const g = canvas.getContext('2d');
+		let n = 0;
+		const draw = setInterval(() => {
+			g.fillStyle = `hsl(${(n += 37) % 360} 60% 50%)`;
+			g.fillRect(0, 0, 1280, 720);
+		}, 33);
+		const track = canvas.captureStream(30).getVideoTracks()[0];
+		const a = new RTCPeerConnection();
+		const b = new RTCPeerConnection();
+		a.onicecandidate = (e) => e.candidate && b.addIceCandidate(e.candidate);
+		b.onicecandidate = (e) => e.candidate && a.addIceCandidate(e.candidate);
+		try {
+			const rids = modes.map((m, at) => `r${at}`);
+			const t = a.addTransceiver(track, {
+				direction: 'sendonly',
+				sendEncodings: modes.map((mode, at) => ({
+					rid: rids[at],
+					scaleResolutionDownBy: 2 ** (modes.length - 1 - at),
+					...(mode ? { scalabilityMode: mode } : {}),
+				})),
+			});
+			t.setCodecPreferences(
+				RTCRtpSender.getCapabilities('video').codecs.filter(
+					(c) => c.mimeType === mime,
+				),
+			);
+			t.sender.transform = new RTCRtpScriptTransform(worker, {});
+			const offer = await a.createOffer();
+			await a.setLocalDescription(offer);
+			await b.setRemoteDescription(offer);
+			const answer = await b.createAnswer();
+			await b.setLocalDescription(answer);
+			// the answer takes the layers, as an SFU's does
+			const sdp = answer.sdp.replace(
+				/(m=video[^]*?)(a=rtcp-mux\r\n)/,
+				(all, head, mux) =>
+					head +
+					rids.map((rid) => `a=rid:${rid} recv\r\n`).join('') +
+					`a=simulcast:recv ${rids.join(';')}\r\n` +
+					mux,
+			);
+			await a.setRemoteDescription({ type: 'answer', sdp });
+			const params = t.sender
+				.getParameters()
+				.encodings.map((e) => [e.rid, e.scalabilityMode ?? null]);
+			// (the largest layer waits on the estimate: 9 s for 1280x720)
+			await wait(9000);
+			const seen = await new Promise((resolve) => {
+				worker.onmessage = (e) => resolve(e.data);
+				worker.postMessage(0);
+			});
+			const streams = Object.values(seen)
+				.filter((one) => one.frames >= 10)
+				.map((one) => `${one.width}:T${one.temporal + 1}`)
+				.sort();
+			return { params, streams };
+		} catch (e) {
+			return { failure: `${e.name}: ${e.message}` };
+		} finally {
+			clearInterval(draw);
+			track.stop();
+			a.close();
+			b.close();
+			worker.terminate();
+		}
 	};
 	window.__transformReady = true;
 })();

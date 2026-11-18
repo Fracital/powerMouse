@@ -1908,15 +1908,66 @@ layer alone at 160x90, listed alone, the others offered paused.
 `dist/rtcWorker.js` grew by 3252 bytes more for it (1165 with brotli),
 `dist/rtcStack.js` by 1489 (523).
 
+Scalability modes. Measured on Chrome 157, against Chrome on both ends:
+
+- `addTransceiver` and `setParameters` take a video encoding's
+  `scalabilityMode` as a string (null is "null") and take WebRTC's 34
+  modes: L1T1 to L1T3; L2 and L3 with T1 to T3, each also with `h` or
+  `_KEY`; L2T2_KEY_SHIFT; S2 and S3 with T1 to T3, each also with `h`.
+  Another is refused after the rid errors and the scale and frame rate
+  RangeErrors: an OperationError from `addTransceiver`, an
+  InvalidModificationError from `setParameters`, both "Attempted to set
+  RtpParameters scalabilityMode to an unsupported value for the current
+  codecs." A sound's encodings leave the member out.
+- Once a description is set, the codec sent with limits the modes: VP8
+  and H.264 take L1T1 to L1T3, and an encoding with another mode reads as
+  L1T2 from then on (`setParameters` to one is refused); VP9 and AV1 take
+  all 34. An encoding without a mode beside one with a mode reads as
+  L1T2 and is sent so.
+- The offer lists the dependency descriptor and the video layers
+  allocation extensions only for a sender made with a mode other than
+  L1T1 or with several encodings; a mode set later adds neither. An
+  answer takes them when they are offered.
+- A mode's temporal layers are sent with each codec, and a spatial one
+  with VP9 and AV1 as its spatial layers in one stream, one frame per
+  layer to a transform. A simulcast sender with no modes sends each VP8
+  layer in three temporal layers and each H.264 layer in one, and with
+  VP9 and AV1 its first encoding alone (VP9's in three temporal layers,
+  and as spatial layers where its size allows); H.264 sends every layer
+  in the first one's temporal layers.
+
+The worker encodes with WebCodecs' `scalabilityMode` (L1T2 and L1T3,
+which Chrome 157's VP8, VP9, AV1 and H.264 encoders take; they take no
+spatial mode), each chunk's `metadata.svc.temporalLayerId` being the
+frame's layer, and works out a frame's id (counted across the layers, as
+Chrome's), its dependencies (the last frame of each lower layer, as
+WebRTC's templates have them) and its chain. The stack writes the
+dependency descriptor (`rust/rtc/src/dd.rs`) with WebRTC's L1T1, L1T2
+and L1T3 template structures: the structure on a keyframe's first
+packet, and a frame's own differences where no template has them. It
+reads a far end's, the structure kept per stream and the 16-bit frame
+number unwrapped. str0m (patched) gives the writer each packet's place
+in its frame and, receiving, keeps the parts of a picture that each
+layer's frame is, which the worker joins before it decodes. A
+transform's metadata takes `frameId`, `dependencies`, `spatialIndex` and
+`temporalIndex` from the descriptor, and a received frame's size from
+its structure, else from a keyframe's bytes (Chrome reads none of an
+H.264 structure, and the stack writes none). The stack reads a received
+frame's size (`rust/rtc/src/size.rs`, a port of what was
+`src/rtc/pictureSize.ts`) and gives it in the frame's record, which
+keeps `dist/rtcWorker.js` within its budget: with the descriptor it is
+237 bytes smaller than before. webrtc-transform holds the page's API to Chrome's,
+calls Chrome at L1T3 both ways with each codec and from Chrome's VP9 and
+AV1 at L2T2, and compares both ends' transforms with Chrome's: the
+temporal pattern, the ids and dependencies, each picture's layers and
+the size it plays at.
+
 Limits of video so far: H.264 is not sent in packetization mode 0 and
 VP9 of profiles 1 and 3 not at all (Chrome offers neither to send);
-`scalabilityMode` and `degradationPreference` are not kept, and each
-layer is a single temporal layer where Chrome sends simulcast layers as
-L1T3 (three temporal layers each, measured) and temporal layers when
-asked; Chrome's offer with simulcast also lists the dependency descriptor
-and the video layers allocation extensions, which the stack does not
-know, so they are left out; a simulcast sender only sends (a section that
-receives simulcast is not taken apart);
+`degradationPreference` is not kept; a spatial `scalabilityMode` is
+sent as its temporal layers alone, and the video layers allocation
+extension is offered and never sent (below); a simulcast sender only
+sends (a section that receives simulcast is not taken apart);
 the estimate is shared equally where Chrome weighs each stream's
 `priority`. The descriptions
 leave out Chrome's video RED, its rtx and ULPFEC (118, 119 and 120 in
@@ -2013,11 +2064,13 @@ A frame's metadata is Chrome's (Chrome 157, measured per codec with
 webrtc-transform against Chrome's own on both ends): a received sound's
 `sequenceNumber` is its packet's (the stack's record carries it); a sent
 picture is numbered from 1 (`frameId`), a keyframe depending on none and
-any other frame on the one before, and has the size it was encoded at;
+any other frame on the one before (in more temporal layers, as its mode
+has it: above), and has the size it was encoded at;
 a received keyframe has the size its bytes state (VP8's keyframe header,
-VP9's uncompressed header, H.264's sequence parameter set, cropped, in
-`src/rtc/pictureSize.ts`), AV1's none, as Chrome's depacketizers read
-them, and the frames between it have 0 by 0. The stack's VP9 packetizer
+VP9's uncompressed header, H.264's sequence parameter set, cropped, read
+by the stack in `rust/rtc/src/size.rs` and carried in its record), AV1's
+none, as Chrome's depacketizers read them, and the frames between it
+have 0 by 0. The stack's VP9 packetizer
 (str0m, patched) states a keyframe's size in its scalability structure,
 as libwebrtc's does: a browser receiving the page's VP9 reads its
 keyframes' size from there, and read 0 by 0 before.
@@ -2077,10 +2130,12 @@ frame's content and finds it emptied if the transform writes the frame
 before the message is read; the stack's sender sends no padding of its
 own, so a far end's transform has no empty frames from the page;
 `sendKeyFrameRequest()` is the browser's (an unattached transformer's
-refusal); a sent picture's `spatialIndex` and `temporalIndex` are 0,
-the encodings' `scalabilityMode` is not taken (Chrome's temporal and
-spatial layers, with the dependency descriptor that carries a frame's
-id, dependencies and layer, are not made or read), and simulcast layers
-share one count of ids; and a receiver's transform is given every frame
+refusal); a sent spatial mode is its temporal layers alone (WebCodecs
+makes no spatial layers), VP8's dependencies are WebRTC's templates'
+where Chrome's own VP8 has some frames on the two before them, and a
+transform's change to a sent frame's `frameId` or `dependencies` leaves
+its descriptor as it was; a simulcast sender's frames all have one
+stream id, where Chrome's have their layer's; and a
+receiver's transform is given every frame
 from the first, where Chrome gives none to one set as late as the track
 event.

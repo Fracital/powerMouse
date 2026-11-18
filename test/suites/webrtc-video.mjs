@@ -87,14 +87,6 @@ async function open(browser, label, base) {
 	return { label, page: opened, frame };
 }
 
-/**
- * The header extensions Chrome offers with simulcast that the stack does
- * not know: the dependency descriptor and the layers allocation
- */
-const UNKNOWN_EXTENSIONS = [
-	'https://aomediacodec.github.io/av1-rtp-spec/#dependency-descriptor-rtp-header-extension',
-	'http://www.webrtc.org/experiments/rtp-hdrext/video-layers-allocation00',
-].map((uri) => uri.replace(/[.*+?^${}()|[\]\\/#]/g, '\\$&'));
 /** the payloads of Chrome's video section the stack does not carry: video RED, its rtx, ULPFEC */
 const UNCARRIED = ['118', '119', '120'];
 /**
@@ -107,7 +99,7 @@ const UNCARRIED = ['118', '119', '120'];
  */
 function shape(sdp) {
 	const uncarried = new RegExp(
-		`^a=(rtpmap|fmtp|rtcp-fb):(${UNCARRIED.join('|')}) |^a=extmap:\\d+ (${UNKNOWN_EXTENSIONS.join('|')})$`,
+		`^a=(rtpmap|fmtp|rtcp-fb):(${UNCARRIED.join('|')}) `,
 	);
 	const seen = new Map();
 	const nth = (kind, value) => {

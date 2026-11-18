@@ -82,6 +82,11 @@ struct Received {
 	rid: String,
 	data: Vec<u8>,
 	colour: [u8; 4],
+	/// the size the record states (a keyframe's, or its descriptor's)
+	size: (u16, u16),
+	/// what its dependency descriptor said: id, spatial and temporal
+	/// layer, size, dependencies
+	described: Option<(u32, u8, u8, (u16, u16), Vec<u32>)>,
 }
 
 struct Peer {
@@ -152,6 +157,17 @@ impl Peer {
 				OUT_RESULT => result = Some(owned(&bytes[1..])),
 				OUT_MEDIA_DATA => {
 					let rid_len = bytes[21] as usize;
+					let half = |at: usize| u16::from_be_bytes([bytes[at], bytes[at + 1]]);
+					let size = (half(22 + rid_len), half(24 + rid_len));
+					let mut at = 26 + rid_len;
+					let mut described = None;
+					if bytes[4] & media::FLAG_DESCRIBED != 0 {
+						let word = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
+						let count = bytes[at + 6] as usize;
+						let deps = (0..count).map(|n| word(at + 7 + 4 * n)).collect();
+						described = Some((word(at), bytes[at + 4], bytes[at + 5], size, deps));
+						at += 7 + 4 * count;
+					}
 					self.frames.push(Received {
 						media: bytes[1],
 						pt: bytes[2],
@@ -163,7 +179,9 @@ impl Peer {
 						time: u64::from_be_bytes(bytes[11..19].try_into().unwrap()),
 						seq: u16::from_be_bytes([bytes[19], bytes[20]]),
 						rid: String::from_utf8(bytes[22..22 + rid_len].to_vec()).unwrap(),
-						data: bytes[22 + rid_len..].to_vec(),
+						data: bytes[at..].to_vec(),
+						size,
+						described,
 					});
 				}
 				_ => {}
@@ -224,12 +242,32 @@ impl Peer {
 		rid: &str,
 		data: &[u8],
 	) -> i32 {
+		self.write_described(media, pt, flags, level, orientation, colour, time, rid, &[], data)
+	}
+
+	/// a frame with a dependency descriptor block (`media::Frame`), with
+	/// `FLAG_DESCRIBED` in `flags`
+	#[allow(clippy::too_many_arguments)]
+	fn write_described(
+		&mut self,
+		media: u8,
+		pt: u8,
+		flags: u8,
+		level: u8,
+		orientation: u8,
+		colour: [u8; 4],
+		time: u64,
+		rid: &str,
+		described: &[u8],
+		data: &[u8],
+	) -> i32 {
 		let mut bytes = vec![media, pt, flags, level, orientation];
 		bytes.extend_from_slice(&colour);
 		bytes.extend_from_slice(&[0, 5]);
 		bytes.extend_from_slice(&time.to_be_bytes());
 		bytes.push(rid.len() as u8);
 		bytes.extend_from_slice(rid.as_bytes());
+		bytes.extend_from_slice(described);
 		bytes.extend_from_slice(data);
 		let (ptr, len) = give(&bytes);
 		let status = unsafe { i(self.id, IN_MEDIA_WRITE, ptr, len) };
@@ -1139,4 +1177,146 @@ fn bad_configurations_are_refused() {
 		let (ptr, len) = give(&record(&[("cert", CERT), ("key", KEY), (key, value)]));
 		assert_eq!(unsafe { c(ptr, len) }, -1, "{key}={value} made a connection");
 	}
+}
+
+/// a picture's descriptor block as the host writes it (`media::Frame`)
+fn described(layers: u8, temporal: u8, number: u16, chain: u8, fdiffs: &[u8], size: (u16, u16)) -> Vec<u8> {
+	let mut out = vec![layers, temporal];
+	out.extend_from_slice(&number.to_be_bytes());
+	out.push(chain);
+	out.push(fdiffs.len() as u8);
+	out.extend_from_slice(fdiffs);
+	out.extend_from_slice(&size.0.to_be_bytes());
+	out.extend_from_slice(&size.1.to_be_bytes());
+	out
+}
+
+#[test]
+fn dependency_descriptors_written_and_read() {
+	use str0m::rtp::FramePosition;
+	use std::sync::Arc;
+	let both = FramePosition { first: true, last: true };
+	// L1T3 as WebCodecs encodes it: T0 T2 T1 T2 from a keyframe, each
+	// picture on its template; the keyframe's first packet has the structure
+	let structure = Arc::new(dd::temporal_structure(3, (640, 360)));
+	let pattern: [(u8, &[u16], u8); 6] = [(0, &[], 0), (2, &[1], 1), (1, &[2], 2), (2, &[1], 3), (0, &[4], 4), (2, &[1], 1)];
+	let mut known = None;
+	for (n, (temporal, fdiffs, chain)) in pattern.iter().enumerate() {
+		let sent = dd::Sent {
+			structure: structure.clone(),
+			attach: n == 0,
+			number: 65534u16.wrapping_add(n as u16),
+			temporal: *temporal,
+			fdiffs: fdiffs.to_vec(),
+			chain: *chain,
+		};
+		let bytes = dd::write(&sent, both);
+		// a picture on its template needs no more than the three bytes
+		assert_eq!(bytes.len() == 3, n != 0, "picture {n}: {bytes:02x?}");
+		assert_eq!(bytes[0] & 0xc0, 0xc0);
+		let read = dd::read(&bytes, &mut known).expect("read");
+		assert_eq!(known.as_deref(), Some(&*structure), "picture {n}");
+		assert_eq!(read.temporal, *temporal, "picture {n}");
+		assert_eq!(read.spatial, 0);
+		assert_eq!(read.fdiffs, fdiffs.to_vec(), "picture {n}");
+		assert_eq!(read.size, Some((640, 360)));
+		assert_eq!(read.number, 65534u16.wrapping_add(n as u16));
+		// the keyframe's later packets go without the structure
+		if n == 0 {
+			let later = dd::write(&sent, FramePosition { first: false, last: true });
+			assert_eq!(later.len(), 3);
+			assert_eq!(later[0] & 0xc0, 0x40);
+		}
+	}
+	// a picture off its template (simulcast layers share the ids): custom
+	// dependencies and chain
+	let off = dd::Sent { structure: structure.clone(), attach: false, number: 9, temporal: 0, fdiffs: vec![8], chain: 8 };
+	let read = dd::read(&dd::write(&off, both), &mut known).unwrap();
+	assert_eq!((read.temporal, read.fdiffs), (0, vec![8]));
+	let far = dd::Sent { structure: structure.clone(), attach: false, number: 10, temporal: 2, fdiffs: vec![300, 2], chain: 200 };
+	assert_eq!(dd::read(&dd::write(&far, both), &mut known).unwrap().fdiffs, vec![300, 2]);
+	// without a structure no picture can be read
+	assert!(dd::read(&dd::write(&off, both), &mut None).is_none());
+	// a structure of two spatial layers with their sizes, as a Chrome VP9
+	// or AV1 sender's L2T2 has one: each layer's picture reads its own
+	let t = |spatial, temporal, dtis: &[u8], fdiffs: &[u16], chains: &[u8]| dd::Template {
+		spatial,
+		temporal,
+		dtis: dtis.to_vec(),
+		fdiffs: fdiffs.to_vec(),
+		chains: chains.to_vec(),
+	};
+	let spatial = Arc::new(dd::Structure {
+		offset: 5,
+		targets: 4,
+		templates: vec![
+			t(0, 0, &[2, 2, 2, 2], &[], &[0, 0]),
+			t(0, 0, &[2, 2, 2, 2], &[4], &[4, 3]),
+			t(0, 1, &[0, 2, 0, 2], &[2], &[2, 1]),
+			t(1, 0, &[0, 0, 2, 2], &[1], &[1, 1]),
+			t(1, 0, &[0, 0, 2, 2], &[4, 1], &[1, 1]),
+			t(1, 1, &[0, 0, 0, 2], &[2, 1], &[3, 2]),
+		],
+		protected_by: vec![0, 0, 1, 1],
+		chain_count: 2,
+		sizes: vec![(320, 180), (640, 360)],
+	});
+	let mut known = None;
+	// written with the general writer: the structure, then a picture of the
+	// upper layer on its template
+	let mut w = Vec::new();
+	let key = dd::Sent { structure: spatial.clone(), attach: true, number: 1, temporal: 0, fdiffs: vec![], chain: 0 };
+	w.push(dd::write(&key, both));
+	let read = dd::read(&w[0], &mut known).unwrap();
+	assert_eq!(known.as_deref(), Some(&*spatial));
+	assert_eq!((read.spatial, read.size), (0, Some((320, 180))));
+	// template 3 + offset 5 = id 8: spatial 1, depends on the picture before
+	let upper = [0xc0 | 8, 0, 2];
+	let read = dd::read(&upper, &mut known).unwrap();
+	assert_eq!((read.spatial, read.temporal, read.fdiffs.clone(), read.size), (1, 0, vec![1], Some((640, 360))));
+	// ids count on past 16 bits, back and forward
+	let mut track = dd::Track::default();
+	assert_eq!(track.id(65535), 65535);
+	assert_eq!(track.id(1), 65537);
+	assert_eq!(track.id(65534), 65534);
+}
+
+#[test]
+fn video_with_dependency_descriptors() {
+	let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let exts = format!("{EXTS}|7:{}|9:{}", dd::URI, dd::LAYERS_URI);
+	let mut a = Peer::new("10.0.0.1:5000", &[("codecs", CODECS), ("exts", &exts), ("bwe", "300000")]);
+	let mut b = Peer::new("10.0.0.2:5000", &[("codecs", CODECS), ("exts", &exts), ("bwe", "300000")]);
+	a.control(&[("op", "media"), ("kind", "video"), ("dir", "sendrecv"), ("stream", "s"), ("track", "v")]);
+	let (offer, answer) = negotiate(&mut a, &mut b, &["sendrecv"]);
+	let line = format!("a=extmap:7 {}", dd::URI);
+	assert!(has(&section(&offer, 0), &line), "{offer}");
+	assert!(has(&section(&answer, 0), &line), "{answer}");
+	assert!(has(&section(&answer, 0), &format!("a=extmap:9 {}", dd::LAYERS_URI)), "{answer}");
+	pump(&mut a, &mut b, "the connection", |a, b| a.connected() && b.connected());
+
+	// L1T3 from a keyframe of several packets: each picture comes with what
+	// its descriptor said, ids counted on and dependencies as ids
+	let pattern: [(u8, &[u8], u8); 9] = [(0, &[], 0), (2, &[1], 1), (1, &[2], 2), (2, &[1], 3), (0, &[4], 4), (2, &[1], 1), (1, &[2], 2), (2, &[1], 3), (0, &[4], 4)];
+	for (n, (temporal, fdiffs, chain)) in pattern.iter().enumerate() {
+		let key = n == 0;
+		let data = vp8(key, if key { 5000 } else { 700 + n }, n as u8);
+		let flags = media::FLAG_DESCRIBED | if key { media::FLAG_KEYFRAME } else { 0 };
+		let block = described(3, *temporal, 65535u16.wrapping_add(n as u16), *chain, fdiffs, (640, 360));
+		let status = a.write_described(0, 96, flags, media::ABSENT, media::ABSENT, [0; 4], 3000 * n as u64, "", &block, &data);
+		assert_eq!(status, STATUS_OK);
+		pump(&mut a, &mut b, "a described picture", |_, b| b.frames.len() > n);
+		let got = &b.frames[n];
+		assert_eq!(got.data, data, "picture {n}");
+		assert!(got.flags & media::FLAG_PART == 0, "picture {n}");
+		let id = 65535 + n as u32;
+		let deps: Vec<u32> = fdiffs.iter().map(|&f| id - f as u32).collect();
+		assert_eq!(got.described, Some((id, 0, *temporal, (640, 360), deps)), "picture {n}");
+	}
+	// without the block a picture goes without a descriptor
+	let plain = vp8(false, 800, 1);
+	a.write(0, 96, 0, media::ABSENT, media::ABSENT, 3000 * 9, "", &plain);
+	pump(&mut a, &mut b, "a plain picture", |_, b| b.frames.len() > 9);
+	assert_eq!(b.frames[9].described, None);
+	assert_eq!(b.frames[9].data, plain);
 }

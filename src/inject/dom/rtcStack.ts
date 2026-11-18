@@ -281,7 +281,17 @@ export default class WebRTCStack {
 			};
 			try {
 				probe.addTransceiver('audio');
-				probe.addTransceiver('video');
+				// with a mode of layers, so the offer has the extensions
+				// Chrome offers for those (the dependency descriptor)
+				try {
+					probe.addTransceiver('video', {
+						sendEncodings: [
+							{ scalabilityMode: 'L1T2' } as RTCRtpEncodingParameters,
+						],
+					});
+				} catch (error) {
+					probe.addTransceiver('video');
+				}
 				probe.createOffer().then(
 					(offer) => template(offer.sdp ?? ''),
 					() => template(''),
@@ -950,6 +960,8 @@ export default class WebRTCStack {
 			encodings: Record<string, unknown>[];
 			/** the simulcast layers the peer took, null before it has said */
 			layers: string[] | null;
+			/** the codec a picture's sender sends with, once a description has said */
+			sendCodec?: string;
 			/** the transactionId getParameters last gave */
 			transaction: string | null;
 			jitter: unknown;
@@ -1418,6 +1430,17 @@ export default class WebRTCStack {
 				if (refusal)
 					return RealmPromise.reject(
 						new RealmRangeError(onSender('setParameters', refusal)),
+					);
+				if (
+					slot.kind === 'video' &&
+					encodings?.some(
+						(encoding) =>
+							!goodMode(encoding as Record<string, unknown>, slot.sendCodec),
+					)
+				)
+					return rejected(
+						onSender('setParameters', BAD_MODE),
+						'InvalidModificationError',
 					);
 				slot.transaction = null;
 				if (encodings) {
@@ -1921,10 +1944,27 @@ export default class WebRTCStack {
 				encoding.maxFramerate = Number(given.maxFramerate);
 			encoding.networkPriority = given.networkPriority ?? 'low';
 			encoding.priority = given.priority ?? 'low';
+			if (video && given.scalabilityMode !== undefined)
+				encoding.scalabilityMode = String(given.scalabilityMode);
 			if (video && given.scaleResolutionDownBy !== undefined)
 				encoding.scaleResolutionDownBy = Number(given.scaleResolutionDownBy);
 			return encoding;
 		};
+		/**
+		 * Whether a video encoding's scalabilityMode is one Chrome 157 takes:
+		 * one of WebRTC's 34 for some codec it encodes, and once a
+		 * description has said what the sender sends with, one of that
+		 * codec's (VP8 and H.264 have L1T1 to L1T3, VP9 and AV1 all of
+		 * them), measured
+		 */
+		const goodMode = (given: Record<string, unknown>, codec?: string) =>
+			given.scalabilityMode === undefined ||
+			(/^(VP8|H264)$/i.test(codec ?? '')
+				? /^L1T[1-3]$/
+				: /^(L1T[1-3]|L[23]T[1-3](h|_KEY)?|L2T2_KEY_SHIFT|S[23]T[1-3]h?)$/
+			).test(String(given.scalabilityMode));
+		const BAD_MODE =
+			'Attempted to set RtpParameters scalabilityMode to an unsupported value for the current codecs.';
 		/** what Chrome refuses in a video encoding (a RangeError), or null */
 		const badEncoding = (given: Record<string, unknown>) => {
 			if (
@@ -2007,6 +2047,9 @@ export default class WebRTCStack {
 						!(video && bitrate === 0 && !isLegacy()),
 					maxBitrate: bitrate ? bitrate : null,
 					maxFramerate: video && rate ? rate : null,
+					mode: video
+						? ((encoding.scalabilityMode as string | undefined) ?? null)
+						: null,
 					scale: video
 						? ((encoding.scaleResolutionDownBy as number | undefined) ??
 							(rid ? 2 ** (count - 1 - at) : 1))
@@ -2039,6 +2082,7 @@ export default class WebRTCStack {
 				id: string;
 				byTrack: boolean;
 				rids?: string[];
+				layered?: boolean;
 			} | null,
 			remoteId?: string,
 		): MediaSlot => {
@@ -2116,6 +2160,7 @@ export default class WebRTCStack {
 						track: added.id,
 						byTrack: added.byTrack,
 						...(added.rids?.length ? { rids: added.rids } : {}),
+						...(added.layered ? { layered: true } : {}),
 					})
 					.catch(() => {});
 			state
@@ -2277,6 +2322,23 @@ export default class WebRTCStack {
 				// alone when it took none (as Chrome does, measured)
 				if (remote && section.layers && slot.encodings.length > 1)
 					slot.layers = section.layers;
+				// a mode the codec sent with cannot do is L1T2 from here, as
+				// Chrome has it once the description is set, and so is an
+				// encoding without one beside one with one (measured)
+				if (section.codec && section.codec !== slot.sendCodec) {
+					slot.sendCodec = section.codec;
+					const moded = slot.encodings.some(
+						(encoding) => encoding.scalabilityMode !== undefined,
+					);
+					const bad = (encoding: Record<string, unknown>) =>
+						!goodMode(encoding, section.codec) ||
+						(moded && encoding.scalabilityMode === undefined);
+					if (slot.encodings.some(bad)) {
+						for (const encoding of slot.encodings)
+							if (bad(encoding)) encoding.scalabilityMode = 'L1T2';
+						sendEncoding(slot);
+					}
+				}
 				if (section.mid === null) continue;
 				if (section.stopped) {
 					if (!slot.stopping) {
@@ -3467,6 +3529,11 @@ export default class WebRTCStack {
 					for (const encoding of given) refusal ??= badEncoding(encoding);
 				if (refusal)
 					throw new RealmRangeError(method('addTransceiver', refusal));
+				if (kind === 'video' && !given.every((encoding) => goodMode(encoding)))
+					throw domException(
+						method('addTransceiver', BAD_MODE),
+						'OperationError',
+					);
 				// a sound has one encoding, and so has a picture with one
 				// layer; a picture has three layers at most
 				if (kind === 'audio' || given.length < 2) given = given.slice(0, 1);
@@ -3488,6 +3555,14 @@ export default class WebRTCStack {
 							: uuid(),
 						byTrack: false,
 						rids: [...new Set(rids)],
+						// Chrome offers the layer extensions for these
+						layered:
+							kind === 'video' &&
+							given.some(
+								(encoding) =>
+									encoding.scalabilityMode !== undefined &&
+									String(encoding.scalabilityMode) !== 'L1T1',
+							),
 					},
 				);
 				// Chrome 156 lists a picture's scale from the start for a

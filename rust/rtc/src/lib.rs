@@ -32,20 +32,24 @@ use std::alloc::{Layout, alloc, dealloc};
 use std::cell::UnsafeCell;
 use std::collections::VecDeque;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use str0m::bwe::{Bitrate, BweKind};
 use str0m::change::{SdpAnswer, SdpOffer, SdpPendingOffer};
 use str0m::channel::{ChannelConfig, ChannelId, Reliability};
 use str0m::config::DtlsCert;
+use str0m::format::Codec;
 use str0m::media::{
 	Direction, KeyframeRequestKind, MediaKind, MediaTime, Mid, Simulcast, SimulcastLayer,
 };
 use str0m::net::{Protocol, Receive, TcpType};
-use str0m::rtp::VideoOrientation;
+use str0m::rtp::{FramePosition, VideoOrientation};
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
 
+mod dd;
 mod media;
+mod size;
 #[cfg(test)]
 mod tests;
 
@@ -76,7 +80,7 @@ const OUT_CHANNEL_DATA: u8 = 3;
 const OUT_TIMEOUT: u8 = 4;
 /// text: the result of the last control call
 const OUT_RESULT: u8 = 5;
-/// a frame received on a media section (`media::data_record`)
+/// a frame received on a media section (`media::data_records`)
 const OUT_MEDIA_DATA: u8 = 6;
 
 // input record kinds
@@ -347,6 +351,7 @@ impl Conn {
 			rids: Vec::new(),
 			stop: false,
 			announced: false,
+			described: Vec::new(),
 		});
 		self.medias.len() - 1
 	}
@@ -487,11 +492,11 @@ impl Conn {
 		if !self.rtc.media(mid).is_some_and(|m| m.remote_pts().contains(&pt)) {
 			return STATUS_FAILED;
 		}
-		let Some(clock) = self
+		let Some((clock, codec)) = self
 			.rtc
 			.codec_config()
 			.find(|p| p.pt() == pt)
-			.map(|p| p.spec().clock_rate)
+			.map(|p| (p.spec().clock_rate, p.spec().codec))
 		else {
 			return STATUS_FAILED;
 		};
@@ -513,6 +518,22 @@ impl Conn {
 		}
 		if frame.colour != [0; 4] {
 			writer = writer.color_space(frame.colour);
+		}
+		// a picture's dependency descriptor, on each of its packets (where
+		// the peer took the extension), with the structure on a keyframe's
+		// first (which states no size of H.264, as Chrome's does not)
+		if let Some(d) = &frame.described {
+			let size = if codec == Codec::H264 { (0, 0) } else { d.size };
+			writer = writer
+				.user_extension_value(FramePosition::default())
+				.user_extension_value(dd::Sent {
+					structure: Arc::new(dd::temporal_structure(d.layers, size)),
+					attach: frame.flags & media::FLAG_KEYFRAME != 0,
+					number: d.number,
+					temporal: d.temporal,
+					fdiffs: d.fdiffs.clone(),
+					chain: d.chain,
+				});
 		}
 		// when the frame was captured: the sender reports pair this with
 		// the frame's RTP time, which is what lines audio up with video
@@ -741,7 +762,18 @@ impl Conn {
 			}
 			Event::MediaData(data) => {
 				if let Some(index) = self.medias.iter().position(|m| m.mid == Some(data.mid)) {
-					if let Some(record) = media::data_record(OUT_MEDIA_DATA, index as u8, &data) {
+					// the stream's descriptors so far, by its rid
+					let rid = data.rid.map(|rid| rid.to_string());
+					let described = &mut self.medias[index].described;
+					let at = match described.iter().position(|(r, _)| *r == rid) {
+						Some(at) => at,
+						None => {
+							described.push((rid, dd::Track::default()));
+							described.len() - 1
+						}
+					};
+					let track = &mut described[at].1;
+					for record in media::data_records(OUT_MEDIA_DATA, index as u8, &data, track) {
 						self.push(record);
 					}
 				}
@@ -854,6 +886,7 @@ impl Conn {
 						.unwrap_or_default(),
 					stop: false,
 					announced: false,
+					described: Vec::new(),
 				});
 				self.media_to_add.push(index);
 				let index = index.to_string();

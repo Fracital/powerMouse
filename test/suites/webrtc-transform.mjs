@@ -611,5 +611,272 @@ async function paddingCall(proxied, seconds) {
 	);
 }
 
+// ---- scalabilityMode and the dependency descriptor -----------------------------
+{
+	const rules = async (proxied) => {
+		const page = await open(proxied ? 'proxied' : 'natively', proxied);
+		try {
+			return await end(page).call('svcRules');
+		} catch (error) {
+			return { failure: error.message };
+		} finally {
+			await page.page.close().catch(() => {});
+		}
+	};
+	const want = await rules(false);
+	const got = await rules(true);
+	ok(
+		'natively: scalabilityMode is taken, refused and offered for',
+		!want.failure &&
+			/^OperationError/.test(want['add L1T3h']) &&
+			/scalabilityMode":"L1T2"/.test(
+				want['video/VP8 [{"scalabilityMode":"L3T3"}] after'],
+			) &&
+			/dependency/.test(
+				want['video/VP9 [{"scalabilityMode":"L3T3_KEY"}] offer'],
+			),
+		want.failure ?? JSON.stringify(want),
+	);
+	const off = unlike(got, want);
+	ok(
+		'proxied: addTransceiver, getParameters, setParameters and the offers take, refuse, read back, fall back on and offer for scalabilityMode as Chrome does',
+		!want.failure && !got.failure && !off.length,
+		got.failure ?? off.join('; '),
+	);
+}
+
+// Simulcast senders' modes: with none, VP8 sends each layer in three
+// temporal layers, H.264 in one, and VP9 and AV1 send their first encoding
+// alone; an encoding without a mode beside one with one reads and sends
+// as L1T2, and H.264 sends every layer in the first one's
+{
+	// (two layers where the largest of three would wait on the estimate)
+	const CASES = [
+		['video/VP8', [null, null]],
+		['video/VP8', ['L1T3', null]],
+		['video/VP8', [null, 'L1T1']],
+		['video/VP9', [null, null, null]],
+		['video/VP9', ['L1T3', null]],
+		['video/AV1', [null, null, null]],
+		['video/H264', [null, null]],
+		['video/H264', ['L1T3', null]],
+		['video/H264', [null, 'L1T1']],
+	];
+	const layered = async (proxied) => {
+		const page = await open(proxied ? 'proxied' : 'natively', proxied);
+		const out = {};
+		try {
+			for (const [mime, modes] of CASES)
+				out[`${mime} ${JSON.stringify(modes)}`] = await end(page).call(
+					'simulcastLayers',
+					mime,
+					modes,
+				);
+		} catch (error) {
+			out.failure = error.message;
+		} finally {
+			await page.page.close().catch(() => {});
+		}
+		return out;
+	};
+	const want = await layered(false);
+	const got = await layered(true);
+	ok(
+		'natively: simulcast VP8 without modes sends three temporal layers, and VP9 its first encoding alone',
+		!want.failure &&
+			want['video/VP8 [null,null]']?.streams?.join() === '1280:T3,640:T3' &&
+			want['video/VP9 [null,null,null]']?.streams?.join() === '320:T3',
+		JSON.stringify(want),
+	);
+	// each layer the page sends is in Chrome's temporal layers, and the
+	// smallest is sent; the largest comes as the estimate reaches it, which
+	// over the relay can take longer than the 9 s looked at
+	const off = [];
+	for (const [key, read] of Object.entries(want)) {
+		const sent = got[key]?.streams ?? [];
+		const smallest = [...(read.streams ?? [])].sort(
+			(a, b) => parseInt(a) - parseInt(b),
+		)[0];
+		if (
+			JSON.stringify(got[key]?.params) !== JSON.stringify(read.params) ||
+			!sent.includes(smallest) ||
+			sent.some((stream) => !read.streams?.includes(stream))
+		)
+			off.push(
+				`${key}: ${JSON.stringify(got[key])} (natively ${JSON.stringify(read)})`,
+			);
+	}
+	ok(
+		"proxied: a simulcast sender's layers are sent in the temporal layers Chrome sends them in, and its modes read back as Chrome's",
+		!want.failure && !got.failure && !off.length,
+		got.failure ?? off.join('; '),
+	);
+}
+
+/**
+ * A video call whose page sends with scalabilityMode `mode` and whose far
+ * end is set to `farMode` before it answers: what both ends' transforms
+ * saw, and the size the page plays the far end's pictures at
+ */
+async function svcCall(proxied, codec, mode, farMode, size = {}) {
+	const near = await open(proxied ? 'proxied' : 'natively', proxied);
+	const far = await open('far end', false);
+	const own = end(near);
+	const other = end(far);
+	try {
+		await own.call('open', {});
+		await other.call('open', {});
+		await own.call('media', 'video', { codec, mode, ...size });
+		await other.call('media', 'video', { codec, ...size });
+		await other.call('remote', 'offer', await own.call('local', 'offer'));
+		if (farMode) await other.call('mode', farMode);
+		await own.call('remote', 'answer', await other.call('local', 'answer'));
+		await own.call('connected');
+		await other.call('connected');
+		const mine = await own.call('seen', 40);
+		const theirs = await other.call('seen', 40);
+		await sleep(1000);
+		return { mine, theirs, played: await own.call('played') };
+	} catch (error) {
+		return { failure: error.message };
+	} finally {
+		await own.call('close').catch(() => {});
+		await other.call('close').catch(() => {});
+		await near.page.close().catch(() => {});
+		await far.page.close().catch(() => {});
+	}
+}
+/**
+ * A sender's pictures as WebRTC's L1T3 structure has them from each
+ * keyframe: temporal layers 0, 2, 1, 2 over, each id one more than the
+ * last, a base picture depending on the base's last, one above on the
+ * last of the layers below
+ */
+const l1t3 = (list) => {
+	if (!list?.length) return 'no frames';
+	const off = [];
+	let at = 0;
+	const last = [];
+	for (const [i, f] of list.entries()) {
+		if (f.type === 'key') {
+			at = 0;
+			last.length = 0;
+		}
+		const temporal = [0, 2, 1, 2][at++ % 4];
+		const below = last.slice(0, Math.max(1, temporal)).filter((id) => id);
+		const deps = f.type === 'key' ? [] : [Math.max(...below)];
+		if (
+			(i && f.id !== list[i - 1].id + 1) ||
+			f.temporal !== temporal ||
+			f.spatial !== 0 ||
+			JSON.stringify(f.deps) !== JSON.stringify(deps)
+		)
+			off.push(`frame ${i} ${f.type} id ${f.id} T${f.temporal} deps ${f.deps}`);
+		last[temporal] = f.id;
+		last.length = temporal + 1;
+		if (off.length > 3) break;
+	}
+	return off.join('; ');
+};
+/**
+ * What a receiver's transform read of the sender's pictures over the
+ * dependency descriptor: each one's id, dependencies and layers as the
+ * sender's transform had them, its size as sent (Chrome reads none of an
+ * H.264 picture's but a keyframe's)
+ */
+const relayed = (sent, received, h264) => {
+	if (!received?.length) return 'nothing received';
+	const off = [];
+	const byId = new Map((sent ?? []).map((f) => [f.id, f]));
+	let matched = 0;
+	for (const [i, f] of received.entries()) {
+		if (f.id === null) {
+			off.push(`frame ${i} has no id`);
+			continue;
+		}
+		const was = byId.get(f.id);
+		if (!was) continue;
+		matched++;
+		const size = h264 && f.type !== 'key' ? [0, 0] : [was.width, was.height];
+		const same =
+			JSON.stringify([f.deps, f.spatial, f.temporal, f.width, f.height]) ===
+			JSON.stringify([was.deps, was.spatial, was.temporal, ...size]);
+		if (!same)
+			off.push(
+				`frame ${i} id ${f.id}: ${JSON.stringify([f.deps, f.spatial, f.temporal, f.width, f.height])} sent ${JSON.stringify([was.deps, was.spatial, was.temporal, was.width, was.height])}`,
+			);
+		if (off.length > 3) break;
+	}
+	if (matched < 10) off.push(`${matched} of the sent pictures received`);
+	return off.join('; ');
+};
+for (const codec of ['video/VP8', 'video/VP9', 'video/AV1', 'video/H264']) {
+	const name = codec.slice(6);
+	const h264 = name === 'H264';
+	const want = await svcCall(false, codec, 'L1T3', 'L1T3');
+	const got = await svcCall(true, codec, 'L1T3', 'L1T3');
+	ok(
+		`natively, ${name} L1T3: each receiver's transform reads the far sender's pictures as its transform had them`,
+		!want.failure &&
+			!relayed(want.mine?.['send video'], want.theirs?.['recv video'], h264) &&
+			!relayed(want.theirs?.['send video'], want.mine?.['recv video'], h264) &&
+			// (Chrome's VP8 has temporal layers of its own pattern)
+			(name === 'VP8' || !l1t3(want.mine?.['send video'])),
+		want.failure ??
+			`${relayed(want.mine?.['send video'], want.theirs?.['recv video'], h264)} / ${relayed(want.theirs?.['send video'], want.mine?.['recv video'], h264)} / ${l1t3(want.mine?.['send video'])}`,
+	);
+	if (want.failure) continue;
+	const sent = got.mine?.['send video'];
+	ok(
+		`proxied, ${name} L1T3: the page's sender transform reads its pictures' temporal layers, ids and dependencies as WebRTC's L1T3 has them`,
+		!got.failure &&
+			!l1t3(sent) &&
+			sent[0].keys === want.mine['send video'][0].keys,
+		got.failure ?? `${l1t3(sent)} ${JSON.stringify(sent?.slice(0, 6))}`,
+	);
+	ok(
+		`proxied, ${name} L1T3: the far end's receiver transform reads the page's pictures as the page's transform had them (the dependency descriptor sent)`,
+		!got.failure && !relayed(sent, got.theirs?.['recv video'], h264),
+		got.failure ?? relayed(sent, got.theirs?.['recv video'], h264),
+	);
+	const received = got.mine?.['recv video'];
+	ok(
+		`proxied, ${name} L1T3: the page's receiver transform reads the far end's pictures as its transform had them (the dependency descriptor read), with Chrome's keys`,
+		!got.failure &&
+			!relayed(got.theirs?.['send video'], received, h264) &&
+			received[0].keys === want.mine['recv video'][0].keys,
+		got.failure ??
+			`${relayed(got.theirs?.['send video'], received, h264)} ${received?.[0]?.keys} (natively ${want.mine['recv video'][0].keys})`,
+	);
+}
+for (const codec of ['video/VP9', 'video/AV1']) {
+	// the far end's two spatial layers: a frame for each layer to the
+	// receiver's transform, each with its own size, the picture played at
+	// the upper's
+	const name = codec.slice(6);
+	const size = { width: 640, height: 360 };
+	const want = await svcCall(false, codec, 'L1T2', 'L2T2', size);
+	const got = await svcCall(true, codec, 'L1T2', 'L2T2', size);
+	const spatial = (seen) =>
+		seen?.['recv video']?.some((f) => f.spatial === 1) ?? false;
+	ok(
+		`natively, ${name} L2T2: the receiver's transform reads both of the far end's spatial layers`,
+		!want.failure &&
+			spatial(want.mine) &&
+			!relayed(want.theirs?.['send video'], want.mine?.['recv video'], false),
+		want.failure ??
+			relayed(want.theirs?.['send video'], want.mine?.['recv video'], false),
+	);
+	ok(
+		`proxied, ${name} L2T2: the page's receiver transform reads each of the far end's spatial layers as a frame of its own as natively, and the page plays the pictures at the size the browser does`,
+		!got.failure &&
+			spatial(got.mine) &&
+			!relayed(got.theirs?.['send video'], got.mine?.['recv video'], false) &&
+			JSON.stringify(got.played) === JSON.stringify(want.played),
+		got.failure ??
+			`${relayed(got.theirs?.['send video'], got.mine?.['recv video'], false)} played ${JSON.stringify(got.played)} (natively ${JSON.stringify(want.played)})`,
+	);
+}
+
 gate.close();
 await done(browser);
