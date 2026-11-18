@@ -2,36 +2,45 @@
 // and orders them (headerOrder.ts): a leaf module, so the field order needs
 // none of the worker's state.
 
-/** every hint Chrome knows, by header name, with the feature that gates it */
-export const HINT_FEATURES: Record<string, string> = {
-	'device-memory': 'ch-device-memory',
-	'sec-ch-device-memory': 'ch-device-memory',
-	dpr: 'ch-dpr',
-	'sec-ch-dpr': 'ch-dpr',
-	'viewport-width': 'ch-viewport-width',
-	'sec-ch-viewport-width': 'ch-viewport-width',
-	'sec-ch-viewport-height': 'ch-viewport-height',
-	width: 'ch-width',
-	'sec-ch-width': 'ch-width',
-	rtt: 'ch-rtt',
-	downlink: 'ch-downlink',
-	ect: 'ch-ect',
-	'sec-ch-ua': 'ch-ua',
-	'sec-ch-ua-arch': 'ch-ua-arch',
-	'sec-ch-ua-platform': 'ch-ua-platform',
-	'sec-ch-ua-model': 'ch-ua-model',
-	'sec-ch-ua-mobile': 'ch-ua-mobile',
-	'sec-ch-ua-full-version': 'ch-ua-full-version',
-	'sec-ch-ua-platform-version': 'ch-ua-platform-version',
-	'sec-ch-ua-bitness': 'ch-ua-bitness',
-	'sec-ch-ua-full-version-list': 'ch-ua-full-version-list',
-	'sec-ch-ua-wow64': 'ch-ua-wow64',
-	'sec-ch-ua-form-factors': 'ch-ua-form-factors',
-	'sec-ch-prefers-color-scheme': 'ch-prefers-color-scheme',
-	'sec-ch-prefers-reduced-motion': 'ch-prefers-reduced-motion',
-	'sec-ch-prefers-reduced-transparency': 'ch-prefers-reduced-transparency',
-	'save-data': 'ch-save-data',
-};
+/** every hint Chrome knows, by header name */
+const HINT_NAMES = [
+	'device-memory',
+	'sec-ch-device-memory',
+	'dpr',
+	'sec-ch-dpr',
+	'viewport-width',
+	'sec-ch-viewport-width',
+	'sec-ch-viewport-height',
+	'width',
+	'sec-ch-width',
+	'rtt',
+	'downlink',
+	'ect',
+	'sec-ch-ua',
+	'sec-ch-ua-arch',
+	'sec-ch-ua-platform',
+	'sec-ch-ua-model',
+	'sec-ch-ua-mobile',
+	'sec-ch-ua-full-version',
+	'sec-ch-ua-platform-version',
+	'sec-ch-ua-bitness',
+	'sec-ch-ua-full-version-list',
+	'sec-ch-ua-wow64',
+	'sec-ch-ua-form-factors',
+	'sec-ch-prefers-color-scheme',
+	'sec-ch-prefers-reduced-motion',
+	'sec-ch-prefers-reduced-transparency',
+	'save-data',
+];
+
+/**
+ * every hint Chrome knows, by header name, with the feature that gates it:
+ * `ch-` and the name without its `sec-ch-` (every document bundle carries
+ * this table, for a meta's Accept-CH)
+ */
+export const HINT_FEATURES: Record<string, string> = Object.fromEntries(
+	HINT_NAMES.map((name) => [name, `ch-${name.replace(/^sec-ch-/, '')}`]),
+);
 
 /** the hints every request carries unless a policy forbids them */
 export const SENT_BY_DEFAULT = new Set([
