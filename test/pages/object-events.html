@@ -61,17 +61,21 @@
 			report[`${name}.sync`] = read(object);
 			return object;
 		};
-		// one Chrome shows as an image (its type says so): it has no
-		// context while the image loads. Its type set after its data, as a
+		// one Chrome shows as an image: its type says so, or with none its
+		// URL's extension. It has no context while the image loads, and
+		// none after, at the image's size. Its type set after its URL, as a
 		// page sets them one by one, before it is put in the document and
-		// after
-		const image = (name, late) => {
-			const object = document.createElement('object');
+		// after; an <embed> too
+		const image = (name, type, tag = 'object') => {
+			const object = document.createElement(tag);
 			watch(name, object);
-			object.setAttribute('data', `object-events.png?${name}`);
-			if (!late) object.setAttribute('type', 'image/png');
+			object.setAttribute(
+				tag === 'object' ? 'data' : 'src',
+				`object-events.png?${name}`,
+			);
+			if (type === 'before') object.setAttribute('type', 'image/png');
 			document.body.append(object);
-			if (late) object.setAttribute('type', 'image/png');
+			if (type === 'after') object.setAttribute('type', 'image/png');
 			report[`${name}.sync`] = read(object);
 			return object;
 		};
@@ -79,8 +83,11 @@
 			parsed,
 			typed: made('typed', true),
 			untyped: made('untyped', false),
-			image: image('image', false),
-			imageLate: image('imageLate', true),
+			image: image('image', 'before'),
+			imageLate: image('imageLate', 'after'),
+			imageUntyped: image('imageUntyped', null),
+			embedImage: image('embedImage', 'before', 'embed'),
+			embedImageUntyped: image('embedImageUntyped', null, 'embed'),
 		};
 		setTimeout(() => {
 			for (const [name, object] of Object.entries(objects)) {

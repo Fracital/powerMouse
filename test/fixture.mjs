@@ -34,6 +34,7 @@ const TYPES = {
 	js: 'text/javascript; charset=utf-8',
 	css: 'text/css; charset=utf-8',
 	json: 'application/json',
+	png: 'image/png',
 };
 
 // a hostile page that records every tell of being framed (isolation suite)

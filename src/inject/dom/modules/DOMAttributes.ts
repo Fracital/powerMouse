@@ -2271,15 +2271,36 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		const IMAGE_TYPE = /^image\/(?!svg\+xml\s*(;|$))/i;
 		const IMAGE_PATH =
 			/\.(png|jpe?g|jfif|pjp(eg)?|gif|webp|avif|apng|bmp|ico|cur)$/i;
-		const hold = (element: CustomElement, attribute: string) => {
+		/** whether Chrome shows the element as an image: by its type, by its URL ('untyped'), or not (false) */
+		const imageShown = (element: CustomElement): boolean | 'untyped' => {
 			const type = element.getAttribute('type')?.trim();
-			const held = (
-				type
-					? IMAGE_TYPE.test(type)
-					: IMAGE_PATH.test(new URL(loads.get(element)!.written).pathname)
-			)
-				? null
-				: HELD;
+			return type
+				? IMAGE_TYPE.test(type)
+				: IMAGE_PATH.test(new URL(loads.get(element)!.written).pathname) &&
+						'untyped';
+		};
+		const toBase64 = realm.btoa.bind(realm);
+		// Chrome lays an object out as an image or as an embedded document
+		// when it is attached, by its type or its URL then: one attached
+		// while its copy was on its way (no URL) keeps the document's box,
+		// 300x150, for the image it is given (Chrome 157, natively the image's
+		// size). Hidden for a layout, no observer hearing of it, it is laid
+		// out again as the image
+		const offsetWidth = Reflect.getOwnPropertyDescriptor(
+			realm.HTMLElement.prototype,
+			'offsetWidth',
+		)!.get!;
+		const relayout = (element: Element) => {
+			if (Reflect.apply(nativeElement.hasAttribute, element, ['hidden']))
+				return;
+			hiddenMutation(() => {
+				Reflect.apply(nativeElement.setAttribute, element, ['hidden', '']);
+				Reflect.apply(offsetWidth, element, []);
+				Reflect.apply(nativeElement.removeAttribute, element, ['hidden']);
+			});
+		};
+		const hold = (element: CustomElement, attribute: string) => {
+			const held = imageShown(element) ? null : HELD;
 			if (element.getAttribute(attribute) === held) return;
 			if (held === null) element.removeAttribute(attribute);
 			else {
@@ -2463,10 +2484,42 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 									{ type: `${mime};charset=utf-8` },
 								)
 							: await response.blob();
+					// one Chrome shows as an image by its URL's extension: a blob:
+					// URL names none, and Chrome would show the image in a
+					// document, where a data: URL of an image type is an image
+					// (Chrome 157: no context, the image's size). Under a policy
+					// of the page's that refuses data: the blob: stays. One it
+					// shows as an image that is none fails as natively (an
+					// embed's error; an object shows the document)
+					const shown = usePrototype(
+						element,
+						CustomElement.prototype,
+						imageShown,
+					);
+					// (one of no type, which Chrome sniffs, is the image)
+					const imageMime = IMAGE_TYPE.test(mime) ? mime : !mime && 'image/png';
+					// (where the page's own policy allows a data: URL, which the
+					// browser's copy of it judges as written)
+					const dataAllowed =
+						shown &&
+						!moduleClient.pageRefusals('object-src', new URL('data:,')).length;
+					let url: string | undefined;
+					if (shown && !imageMime) {
+						if (attribute === 'src')
+							url = dataAllowed ? 'data:image/png,' : 'blob:null/failed';
+					} else if (shown === 'untyped' && dataAllowed) {
+						const bytes = new Uint8Array(await blob.arrayBuffer());
+						let binary = '';
+						for (let at = 0; at < bytes.length; at += 0x8000)
+							binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
+						url = `data:${imageMime};base64,${toBase64(binary)}`;
+					}
 					if (loads.get(element) !== state) return;
 					if (current?.url?.startsWith('blob:'))
 						realm.URL.revokeObjectURL(current.url);
-					settle(proxyBlobURL(realm.URL.createObjectURL(blob)));
+					settle(url ?? proxyBlobURL(realm.URL.createObjectURL(blob)));
+					if (shown === 'untyped' && url && attribute === 'data')
+						relayout(element);
 				})
 				.catch(() => settle(partless ? null : routed));
 		};
