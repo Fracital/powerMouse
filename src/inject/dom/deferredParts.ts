@@ -115,6 +115,7 @@ import { relayBeacon } from './beaconRelay';
 import { identityFlow, relyingPartyGuard } from './credentialFlows';
 import { ownStoreRefusal } from './credentialStore';
 import { saveDownload } from './downloadSave';
+import { fetchLater } from './fetchLater';
 import { instructionData, loadXML, modifyXML, xmlProlog } from './instructions';
 import { lazyFonts } from './lazyFonts';
 import { formEncoding, legacyFormQuery, legacyQuery } from './legacyEncoding';
@@ -198,6 +199,9 @@ export const parts = {
 	longTasks,
 	cookieStoreMethods,
 	relayBeacon,
+	// fetchLater's call, at a document's first (./fetchLater.ts;
+	// modules/Navigator.ts)
+	fetchLater,
 	ancestorOriginsList,
 	attributeViewMethods,
 	sourcePolicy,

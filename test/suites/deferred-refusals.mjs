@@ -12,10 +12,11 @@
 // rejects before the browser is asked (src/inject/storageUsage.ts); a
 // Worker's construction throws before the browser's
 // (src/inject/workerStart.ts), and so do a WebSocket's and a
-// WebSocketStream's (src/inject/bareClient.ts socketStandIns); an image
-// in a frame no service worker controls keeps its route and loads nothing
-// (its copy is a part, src/inject/dom/uncontrolledCopies.ts); an XML
-// document a frame loads lands none of its tree (its load is a part,
+// WebSocketStream's (src/inject/bareClient.ts socketStandIns) and a
+// fetchLater() call (src/inject/dom/fetchLater.ts); an image in a frame
+// no service worker controls keeps its route and loads nothing (its copy
+// is a part, src/inject/dom/uncontrolledCopies.ts); an XML document a
+// frame loads lands none of its tree (its load is a part,
 // src/inject/dom/instructions.ts); a protocol handler's registration throws
 // (its checks are a part, src/inject/dom/protocolHandlers.ts). A part is made
 // synchronously within the call that needs it, so no page code runs between
@@ -79,6 +80,7 @@ const REFUSING = [
 	'protocolHandler',
 	'webSocket',
 	'webSocketStream',
+	'fetchLater',
 ];
 /** the calls that answer with a promise, which rejects */
 const PROMISED = [
@@ -147,6 +149,8 @@ function countNatives() {
 			'WebSocketStream',
 			window.WebSocketStream,
 		);
+	if (window.fetchLater)
+		window.fetchLater = counted('fetchLater', window.fetchLater);
 	if (window.StorageManager) {
 		const prototype = StorageManager.prototype;
 		prototype.estimate = counted('estimate', prototype.estimate);
@@ -212,6 +216,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			'protocolHandler',
 			'webSocket',
 			'webSocketStream',
+			'fetchLater',
 		],
 	);
 	ok(
@@ -264,6 +269,14 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			stream: answer.out?.webSocketStream,
 			reached: answer.reached,
 		}),
+	);
+	// a URL fetchLater cannot defer (no http(s)): the browser's own refusal
+	ok(
+		"with the parts, fetchLater of a data: URL is the browser's own call",
+		typeof answer.out?.fetchLater?.threw === 'string' &&
+			answer.out.fetchLater.threw !== 'no parts' &&
+			answer.reached?.includes('fetchLater'),
+		JSON.stringify({ out: answer.out?.fetchLater, reached: answer.reached }),
 	);
 	ok(
 		'with the parts, an estimate answers, through the browser',
