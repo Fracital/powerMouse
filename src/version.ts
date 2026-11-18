@@ -1,8 +1,10 @@
 // The build this bundle came from, baked in by esbuild's define: STOMP_BUILD
-// (version plus git sha or timestamp, when build.js provides it) or the
-// package version. Every bundle carries it; the service worker, the
-// controller and the inject bundles compare theirs, because a deploy that
-// replaces one without the others fails in ways that look like anything else.
+// (the version plus a hash of what the bundles are built from, build.js
+// buildId) or the package version. Every bundle carries it; the service
+// worker, the controller and the inject bundles compare theirs, because a
+// deploy that replaces one without the others fails in ways that look like
+// anything else. A commit that changes none of the inputs (only the tests,
+// docs, demo or CI) keeps it, and with it every bundle's bytes.
 // esbuild replaces these at build time (build.js `define`); there is no
 // Node here, so the name is declared for the type checker only
 declare const process: { env: Record<string, string | undefined> };
@@ -18,7 +20,7 @@ export const BUILD: string =
  * light rewriter library), baked in by esbuild's define (build.js) under a
  * production build. It changes when the rewriter changes and stays the same
  * across a deploy that only touched something else (the demo, the infra),
- * unlike BUILD, which is the commit and changes every deploy. The rewrite
+ * unlike BUILD, which changes with any of the bundles' inputs. The rewrite
  * cache is made and kept under it (src/server/rewriteCache.ts): a revisit
  * after a rewriter-unchanged deploy comes back warm, and output from a build
  * whose rewriter differs is never served. Empty under a dev build, which has

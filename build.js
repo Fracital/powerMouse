@@ -1,4 +1,3 @@
-import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
 	existsSync,
@@ -16,7 +15,7 @@ import {
 	writeFile,
 } from 'node:fs/promises';
 import { dirname, relative, resolve, sep } from 'node:path';
-import { build, context, formatMessages } from 'esbuild';
+import { context, build as esbuildBuild, formatMessages } from 'esbuild';
 import { rimraf } from 'rimraf';
 import ts from 'typescript';
 import { ownIterationPlugin } from './scripts/ownIteration.mjs';
@@ -28,42 +27,86 @@ const dev = process.argv.includes('--dev');
 // to it so the page can reload what changed (demo/public/pm/dev.js)
 const devPort = parseInt(process.env.PORT || '') || 8080;
 
-function buildId() {
-	try {
-		const sha = execSync('git rev-parse --short HEAD', {
-			stdio: ['ignore', 'pipe', 'ignore'],
-		})
-			.toString()
-			.trim();
-		if (sha) return `${pkg.version}+${sha}`;
-	} catch {
-		// not a git checkout (an npm tarball, a stage dir without .git)
-	}
-	return `${pkg.version}+${inputsHash()}`;
-}
+/**
+ * What the bundles are built from, files and directories from the root: the
+ * build id is a hash of them (buildId), and every file a build reads is
+ * checked to be among them or the locked dependencies (checkInputs), so two
+ * trees with the same inputs build the same files under the same id and two
+ * whose bundles differ never share one. The tests, docs, demo, changelog,
+ * CI and deploy files are not among them: a commit of only those keeps
+ * every bundle's bytes and hash.
+ */
+const BUILD_INPUTS = [
+	'build.js',
+	'package.json',
+	'package-lock.json',
+	'tsconfig.json',
+	'src',
+	'assets',
+	'scripts/ownIteration.mjs',
+	'scripts/ownMethods.mjs',
+];
 
 /**
- * Without a commit to name: a hash of what the bundles are built from (the
- * sources, the assets, the build's scripts and the locked dependencies), so
- * the same tree builds the same files
+ * The build id (src/version.ts BUILD): the package version and a hash of
+ * the inputs (BUILD_INPUTS), each file by its path and bytes; package.json
+ * without its scripts, which no bundle reads. The service worker, the
+ * controller and the inject bundles compare it, and a new one changes the
+ * service worker's bytes, so the browser installs it
  */
-function inputsHash() {
+function buildId() {
 	const hash = createHash('sha256');
 	const add = (path) => {
 		if (statSync(path).isDirectory())
 			for (const name of readdirSync(path).sort()) add(`${path}/${name}`);
-		else hash.update(`${path}\0`).update(readFileSync(path)).update('\0');
+		else {
+			let bytes = readFileSync(path);
+			if (path === 'package.json') {
+				const manifest = JSON.parse(bytes.toString('utf8'));
+				delete manifest.scripts;
+				bytes = Buffer.from(JSON.stringify(manifest));
+			}
+			hash.update(`${path}\0`).update(bytes).update('\0');
+		}
 	};
-	for (const path of [
-		'build.js',
-		'package.json',
-		'package-lock.json',
-		'src',
-		'assets',
-		'scripts',
-	])
-		if (existsSync(path)) add(path);
-	return hash.digest('hex').slice(0, 7);
+	for (const path of BUILD_INPUTS) if (existsSync(path)) add(path);
+	return `${pkg.version}+${hash.digest('hex').slice(0, 12)}`;
+}
+
+/** every file the builds of this run read, as esbuild names it */
+const readInputs = new Set();
+/** esbuild's build, noting what it read (checkInputs) */
+async function build(options) {
+	const result = await esbuildBuild({ ...options, metafile: true });
+	for (const input of Object.keys(result.metafile.inputs))
+		readInputs.add(input);
+	return result;
+}
+
+/**
+ * Throw unless every file the builds read is an input (BUILD_INPUTS) or a
+ * locked dependency's (node_modules, package-lock.json): a bundle built from
+ * a file the build id does not cover could change while the id stays
+ */
+function checkInputs() {
+	const root = resolve('.');
+	const covered = BUILD_INPUTS.map((path) => resolve(path));
+	const outside = [];
+	for (const input of readInputs) {
+		// (a module of a plugin's own namespace, or a group entry's stdin, named
+		// by its sourcefile: text the build made from its inputs, no file)
+		if (/^[\w-]+:/.test(input) || !existsSync(resolve(input))) continue;
+		const file = realpathSync(resolve(input));
+		if (relative(root, file).split(sep)[0] === 'node_modules') continue;
+		if (
+			!covered.some((path) => file === path || file.startsWith(`${path}${sep}`))
+		)
+			outside.push(input);
+	}
+	if (outside.length)
+		throw new Error(
+			`build: ${outside.join(', ')} ${outside.length === 1 ? 'is' : 'are'} built from but not among the build id's inputs (build.js BUILD_INPUTS)`,
+		);
 }
 
 const snapshot = resolve('src/inject/snapshot.ts');
@@ -1423,10 +1466,7 @@ if (dev) {
 		.digest('hex')
 		.slice(0, 16);
 	const run = async (options) => {
-		const result = await build({
-			...options,
-			metafile: options.plugins.includes(deferredTable) || options.metafile,
-		});
+		const result = await build(options);
 		if (options.plugins.includes(deferredTable))
 			checkDeferred(result.metafile, Object.keys(options.entryPoints)[0]);
 	};
@@ -1450,4 +1490,5 @@ if (dev) {
 			.filter((options) => !isDocument(options))
 			.map(run),
 	);
+	checkInputs();
 }
