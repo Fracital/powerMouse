@@ -3254,7 +3254,11 @@ export default class DocumentClient extends Client {
 	prepareStyleText(text: string): string {
 		const prewritten = this.#table()?.style(text);
 		if (prewritten !== undefined) {
-			if (text.length >= STYLE_MEMO_MIN) this.#rememberStyle(text, prewritten);
+			// its output is known for what it is when it comes back; the text
+			// itself is not memoized, the table answers it while it is kept
+			// (CNN's 3.1M-character style was kept once more that way)
+			if (text.length >= STYLE_MEMO_MIN)
+				this.#rememberStyle(text, prewritten, false);
 			return prewritten;
 		}
 		// what this routed already, coming back (a style's stand-in writes the
@@ -3297,7 +3301,12 @@ export default class DocumentClient extends Client {
 		if (table.url === this.baseHref) return table;
 		return null;
 	}
-	/** the inline scripts and styles of the document loadHTML wrote, rewritten by the worker */
+	/**
+	 * the inline scripts and styles of the document loadHTML wrote, rewritten
+	 * by the worker, until its markup is parsed (DOMContentLoaded): what
+	 * asks it later is a copy the page makes of one, rewritten here as any
+	 * script or style the page inserts (CNN's table was 14 MB)
+	 */
 	#prewritten: PrewrittenTable | null = null;
 	/**
 	 * loadHTML was called and has not written the page yet: this document
@@ -3310,7 +3319,7 @@ export default class DocumentClient extends Client {
 	/** large style texts and their routed text, the oldest out first */
 	readonly #styleMemo = new LazyMap<string, string>();
 	#styleMemoChars = 0;
-	#rememberStyle(text: string, output: string) {
+	#rememberStyle(text: string, output: string, memo = true) {
 		if (output.length > STYLE_MEMO_CHARS / 4) return;
 		if (!this.#styleOutputs.has(output)) {
 			this.#styleOutputs.add(output);
@@ -3321,7 +3330,7 @@ export default class DocumentClient extends Client {
 				this.#styleOutputChars -= kept.length;
 			}
 		}
-		if (this.#styleMemo.has(text)) return;
+		if (!memo || this.#styleMemo.has(text)) return;
 		this.#styleMemo.set(text, output);
 		this.#styleMemoChars += text.length + output.length;
 		for (const [key, value] of this.#styleMemo.entries()) {
@@ -3469,9 +3478,25 @@ export default class DocumentClient extends Client {
 			this.writing = writing;
 		}
 
-		const newDocument =
-			(parsed.doctype ? `<!DOCTYPE ${parsed.doctype.name}>` : '') +
-			serializeScripted(node, this.innerHTML);
+		// what the write needs, each let go when it is done with: an Error a
+		// page script makes while the write runs keeps its stack unformatted,
+		// with every function of it, these closures among them, where
+		// natively such an Error holds only the page's own frames. So nothing
+		// the write reads is a variable they close over, and what the page
+		// keeps through one is a few empty fields (CNN kept 52 MB: its
+		// rewritten markup, pinned by one slice of it, and the map of its
+		// rewritten inline scripts, through a Svelte module's Error)
+		const job: {
+			text: string;
+			pieces: string[];
+			sources: Map<string, string> | null;
+		} = {
+			text:
+				(parsed.doctype ? `<!DOCTYPE ${parsed.doctype.name}>` : '') +
+				serializeScripted(node, this.innerHTML),
+			pieces: [],
+			sources,
+		};
 		// the copy was made to be serialized (see releaseMarkup)
 		releaseMarkup(node);
 
@@ -3493,20 +3518,30 @@ export default class DocumentClient extends Client {
 			// script. Nothing does between the scripts of one write, so each
 			// piece after the first is written from a microtask queued after
 			// those of the piece before
-			const pieces = newDocument.split(/(?=<\/script)/i);
+			// (a piece is a slice of the text, which keeps all of it while any
+			// piece is kept: each goes once written)
+			job.pieces = job.text.split(/(?=<\/script)/i);
+			job.text = '';
 			// a script the parser has not run yet reads back as the page wrote
-			// it (Readback), until the page's markup is parsed
-			this.pendingScripts = sources;
+			// it (Readback), until the page's markup is parsed: the client's
+			// field is the map's one holder, emptied at DOMContentLoaded
+			this.pendingScripts = job.sources;
+			job.sources = null;
 			const state: NonNullable<typeof this.pieces> = {
 				between: false,
 				stopped: false,
 			};
 			this.pieces = state;
 			const next = (index: number) => {
-				if (state.stopped) return;
+				if (state.stopped) {
+					job.pieces = [];
+					return;
+				}
 				state.between = false;
-				this.write.call(document, trustedHTML(pieces[index]));
-				if (++index < pieces.length) {
+				const piece = job.pieces[index]!;
+				job.pieces[index] = '';
+				this.write.call(document, trustedHTML(piece));
+				if (++index < job.pieces.length) {
 					state.between = true;
 					Reflect.apply(this.#queueMicrotask, this.global, [
 						this.ownCallback(() => next(index)),
@@ -3514,6 +3549,7 @@ export default class DocumentClient extends Client {
 					return;
 				}
 				this.pieces = null;
+				job.pieces = [];
 				// what the write parsed now; what comes after a script it waits
 				// for, once the parser is through (a copy is not made twice):
 				// every load in a document no worker controls, an object's and
@@ -3523,6 +3559,7 @@ export default class DocumentClient extends Client {
 					'DOMContentLoaded',
 					() => {
 						this.pendingScripts = null;
+						this.#prewritten = null;
 						this.writtenLoads?.(document);
 					},
 					{ once: true },
