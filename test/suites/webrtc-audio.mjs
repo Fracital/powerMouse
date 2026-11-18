@@ -114,6 +114,7 @@ const INBOUND = [
 	'packetsLost',
 	'jitter',
 	'jitterBufferDelay',
+	'jitterBufferTargetDelay',
 	'jitterBufferEmittedCount',
 	'totalSamplesReceived',
 	'concealedSamples',
@@ -349,6 +350,27 @@ for (const name of Object.keys(SCENARIOS)) {
 				`${page.label}, ${name}: the far end takes the silences the page leaves out for silence, as natively (it conceals no more of them)`,
 				typeof concealed === 'number' && concealed <= natively + 9600,
 				`concealed ${concealed} samples | natively ${natively}`,
+			);
+		}
+		if (name === 'plain') {
+			// the page's jitter buffer aims at the delay Chrome's NetEq aims
+			// at for the same arrivals: a packet for a steady stream (40 ms
+			// while it starts), a packet more where they vary (it aimed at 60
+			// ms for every Opus stream, 40 and 20 for FEC; a loaded machine
+			// makes the arrivals vary, natively too)
+			const aim = (stats) =>
+				stats?.jitterBufferEmittedCount
+					? Math.round(
+							(1000 * stats.jitterBufferTargetDelay) /
+								stats.jitterBufferEmittedCount,
+						)
+					: null;
+			const target = aim(got.receives.stats);
+			const natively = aim(want.receives.stats);
+			ok(
+				`${page.label}, plain: the page's jitter buffer aims at the delay Chrome's does (within a packet)`,
+				target !== null && natively !== null && target <= natively + 20,
+				`${target} ms | natively ${natively}`,
 			);
 		}
 		if (name === 'rates') {

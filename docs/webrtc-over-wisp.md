@@ -1211,15 +1211,65 @@ packet, in order, which is how a decoded frame gets its RTP time back: the
 decoder's own timestamps are a count from its first input), with two
 channels from the first packet whose first byte says stereo; G.711 by hand
 and drawn out to 48 kHz. Decoded frames wait in a playout buffer
-(`src/rtc/playout.ts`): it starts playing once two frames are held, plays
-one frame per 20 ms on the worker's clock (corrected for timers that fire
+(`src/rtc/playout.ts`): it starts playing once its first frame has waited
+as long as a packet waits in NetEq's buffer (below), plays one frame per
+20 ms on the worker's clock from then on (corrected for timers that fire
 late), makes up sound while the frame due is not there (below) and lets
 its time stand still, so the frame plays when it comes and the delay grows
 by what was made up (with the spread of the arrival times too), jumps over
 a hole longer than 200 ms (a sender that left a silence out), drops a
-frame that comes after one later than it has played, and, when it has stayed deeper than that spread asks for
-over a hundred frames, gives up the quietest of the next few frames
-without a gap. The track's time is a steady count of what was written.
+frame that comes after one later than it has played, and, when it has
+held a frame more than that wait asks for over a hundred frames, gives up
+the quietest of the next few frames without a gap. The track's time is a steady count of what was written.
+
+The target is NetEq's (its delay manager, as Chrome 157 runs it): a
+packet's delay is how much later it came than the packet of the last 2 s
+that came soonest for its media time; the longest delay of each 500 ms
+goes into a histogram of 20 ms buckets that forgets 1.7 % an entry
+(faster at first), and the target is the bucket 95 % of the delays fit
+in, and one more, a packet at least. Comfort noise and telephone events
+do not count, a packet that came out of order does not count toward it,
+and a lost packet rebuilt from the next one's FEC copy counts as a
+packet of its own time that came with that one, a packet late. Measured
+natively with the far end's Opus through a relay (`jb-probe` kit),
+Chrome's target is 20 ms for a steady stream and with a tenth of the
+packets lost and no copies, 40 with copies rebuilding them, 40 with each
+packet delayed by 0 to 20 ms, 60 by 0 to 40 ms; the worker's is now 20,
+20, 40, 20 to 40 and 40 to 60 (a bucket under Chrome's in some runs
+where the relay's delays end at a bucket's edge: how much the arrivals
+vary besides decides it), where it was 60 for a steady stream and 64 to
+100 for the others (a floor of 40, the arrivals' spread and a frame, and
+20 ms more for Opus whether or not its packets carried copies).
+
+How long a packet waits is not the target: NetEq lets its buffer be
+anywhere between three quarters of its target (85 ms less, for a long
+one) and the higher of the target and that and 20 ms (15 to 35 ms for a
+target of 20), and shortens or stretches it a pitch period at a time
+while it is outside, so a packet waits about the middle of that:
+natively 29 to 31 ms of `jitterBufferDelay` for a target of 20, which
+counts each 10 ms of a packet to when it is played, 5 ms more than to
+when it starts. The worker's first frame plays that middle after it came
+(25 ms for a target of 20, 40 for the 40 a stream starts at), not at the
+next 20 ms of its clock, and a frame is given up when the frames of the
+last 2 s all waited longer than NetEq's buffer may be and would still
+wait at least its lower limit without it. A frame lost on the way, where
+nothing was held when it was due, is the one frame of sound made up
+then, as NetEq goes on from the packet after it, not two (the made-up
+frame libopus gives for it comes with that packet and is dropped). With
+the target alone a steady call's sound came 12 to 15 ms sooner than
+natively (16 to 25 ms of `jitterBufferDelay`, a loaded machine then
+making it conceal some 1,000 to 2,000 samples a call, natively none);
+holding whole frames instead, 8 ms later; now 24 to 29 ms against 29
+to 31. Measured with the relay (Chrome 157, `jb-probe` kit),
+`jitterBufferDelay` proxied and natively: a steady stream 24 and 29 to
+31; a tenth of the packets lost with FEC copies 27 to 41 and 30 to 37;
+delayed by 0 to 20 ms 33 to 34 and 31 to 36; by 0 to 40 ms 22 to 38 and
+45, with 3,000 to 6,000 samples concealed every 4 s (natively none:
+NetEq stretches its buffer before a packet is late, which the worker
+does not). The worker gives up at most a frame every 2 s where NetEq
+shortens its buffer within a second, so a delay that a held-up burst or
+a run of losses lengthened comes down slower: a tenth of the packets
+lost and no copies, 9 to 71 ms against natively 13 to 19.
 
 A frame that has not come when it is due (a delay longer than the buffer
 covers: the wisp server or the worker held up on a loaded machine) is made
@@ -1242,7 +1292,7 @@ and each loss is one concealment event; and the track's samples go on at
 the rate they would have (`totalSamplesReceived` grows by 2.5 s worth in
 2.5 s either way). Chrome made up 9 to 97 ms of sound for a 150 ms
 hold-up, depending on how deep its buffer was then, and 141 to 164 ms for
-a 300 ms one; the worker, whose buffer holds 60 ms of Opus where the
+a 300 ms one; the worker, whose buffer held 60 ms of Opus where the
 arrivals are steady, 120 to 140 ms and 160 ms. Chrome's NetEq also
 stretches and squeezes sound to move its delay (`insertedSamplesForDeceleration`,
 `removedSamplesForAcceleration`), where the worker gives
@@ -1405,9 +1455,10 @@ packet after a lost one read as contiguous a third of the time).
   libopus as one. Measured against libopus's own concealment, the output
   is the same.
 
-The copy comes a packet after the packet it rebuilds, so an Opus stream
-is held 20 ms longer in the playout buffer (its delay is 60 ms where the
-arrivals are steady) and the rebuilt packet is there before its time.
+The copy comes a packet after the packet it rebuilds, which NetEq counts
+as a packet of the lost one's time that came a packet late: where losses
+are rebuilt the target is a packet longer (40 ms against 20, natively and
+here), so the next rebuilt packet is there before its time.
 The stack hands a packet after a lost one on at once (str0m would hold
 the packets after a loss until 15 had come, 300 ms of Opus, waiting for
 the lost one: `set_reordering_size_audio(1)`), and drops one that comes

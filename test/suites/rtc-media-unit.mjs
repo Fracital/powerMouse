@@ -54,7 +54,10 @@ const { records } = m;
 // --- the playout buffer ---
 
 /** a buffer of 20 ms frames at 48 kHz, driven by `arrivals` (ms a frame comes at; null for lost) */
-function play(arrivals, { until, energy = () => 1, options = {} } = {}) {
+function play(
+	arrivals,
+	{ until, energy = () => 1, options = {}, madeUp = () => false } = {},
+) {
 	const discarded = [];
 	// the frames given up when the buffer plays (to shorten it), apart
 	// from the ones that came too late
@@ -78,7 +81,16 @@ function play(arrivals, { until, energy = () => 1, options = {} } = {}) {
 	for (let now = 0; now <= end; now += 20) {
 		while (next < events.length && events[next].at <= now) {
 			const { index, at } = events[next++];
-			playout.push(index * 960, 960, index, at, energy(index));
+			playout.push(
+				index * 960,
+				960,
+				index,
+				at,
+				energy(index),
+				// (made-up sound is no packet's arrival)
+				madeUp(index),
+				madeUp(index),
+			);
 		}
 		pulling = true;
 		out.push(playout.pull(now));
@@ -98,17 +110,38 @@ const holes = (out) => {
 {
 	const { out, playout } = play(Array.from({ length: 200 }, (_, i) => i * 20));
 	ok(
-		'a steady stream plays every frame in order, once two of them are held',
-		played(out).length === 200 &&
+		'a steady stream plays every frame in order, once the frames that cover where NetEq keeps its buffer are held (three while its target is 40 ms)',
+		played(out).length >= 199 &&
 			inOrder(played(out)) &&
 			holes(out) === 0 &&
-			out.indexOf(0) === 1,
+			out.indexOf(0) === 2,
 		`${played(out).length} played, ${holes(out)} holes, first at pull ${out.indexOf(0)}`,
 	);
 	ok(
-		'and its delay stays at the floor',
-		playout.stats.targetMs === 40 && playout.stats.dropped === 0,
-		JSON.stringify(playout.stats),
+		"and its target comes down to a packet, NetEq's for a steady stream, and it holds the two frames that cover where NetEq keeps its buffer for that target (just under 35 ms)",
+		playout.stats.targetMs === 20 &&
+			playout.stats.dropped === 1 &&
+			out.indexOf(199) === 200,
+		`frame 199, which came at pull 199, played at pull ${out.indexOf(199)}; ${JSON.stringify(playout.stats)}`,
+	);
+}
+{
+	// NetEq lets its buffer be between three quarters of its target and
+	// that and 20 ms, and a packet waits about the middle of that
+	const playout = new m.Playout({ rate: 48 });
+	const idle = playout.startsAt;
+	playout.push(0, 960, 'a', 3);
+	const first = playout.startsAt;
+	const early = playout.pull(42);
+	const played = playout.pull(43);
+	ok(
+		'a buffer that fills plays its first frame as long after it came as NetEq would (40 ms for its first target of 40), not at the next 20 ms',
+		idle === null &&
+			first === 43 &&
+			early === null &&
+			played === 'a' &&
+			playout.startsAt === null,
+		JSON.stringify({ idle, first, early, played }),
 	);
 }
 {
@@ -131,6 +164,40 @@ const holes = (out) => {
 	);
 }
 {
+	// frames lost for good from a buffer that holds no more than the frame
+	// due (each waits 18 ms, within NetEq's 15 to 35 for a target of 20)
+	const arrivals = Array.from({ length: 1000 }, (_, i) =>
+		i >= 300 && i % 10 === 5 ? null : i * 20 + 2,
+	);
+	const { out } = play(arrivals, { options: { initialMs: 20 } });
+	const lost = arrivals.filter((at) => at === null).length;
+	const after = (index) => out.indexOf(index) * 20 - arrivals[index];
+	ok(
+		'a frame lost for good is the one frame of sound made up for it, though nothing was held when it was due, as NetEq goes on from the packet after it: the delay does not grow by a frame for each',
+		holes(out.slice(out.indexOf(299))) === lost && after(999) === after(299),
+		`${holes(out.slice(out.indexOf(299)))} holes for ${lost} lost; frame 299 played ${after(299)} ms after it came, frame 999 ${after(999)}`,
+	);
+}
+{
+	// the same, with the sound made up for each lost frame coming with the
+	// frame after it (libopus's, from the one byte a lost packet is)
+	const lost = (i) => i >= 300 && i % 10 === 5;
+	const arrivals = Array.from(
+		{ length: 1000 },
+		(_, i) => (lost(i) ? i + 1 : i) * 20 + 2,
+	);
+	const { out } = play(arrivals, {
+		options: { initialMs: 20 },
+		madeUp: lost,
+	});
+	const after = (index) => out.indexOf(index) * 20 - arrivals[index];
+	ok(
+		'and so is sound made up for it that comes with the frame after it',
+		after(999) === after(299) && !out.slice(300).some((v) => lost(v)),
+		`frame 299 played ${after(299)} ms after it came, frame 999 ${after(999)}; made up played: ${out.filter((v) => v !== null && lost(v)).length}`,
+	);
+}
+{
 	const arrivals = Array.from({ length: 100 }, (_, i) => i * 20);
 	// 60 comes after 61, within what a buffer that starts deeper holds
 	arrivals[60] = 61 * 20 + 5;
@@ -142,20 +209,24 @@ const holes = (out) => {
 	);
 }
 {
-	// a frame lost on the way is rebuilt from the next one, which comes a
-	// frame later and a little more
-	const arrivals = Array.from({ length: 100 }, (_, i) => i * 20);
-	arrivals[50] = 51 * 20 + 5;
-	const plain = play(arrivals);
-	const held = play(arrivals, { options: { holdMs: 20 } });
+	// a tenth of the frames lost on the way and rebuilt from the next
+	// one's copy, which comes a frame later (and is decoded before it); or
+	// lost for good
+	const rebuilt = Array.from({ length: 400 }, (_, i) => i * 20);
+	const lost = [...rebuilt];
+	for (let at = 15; at < 400; at += 10) {
+		rebuilt[at] = (at + 1) * 20;
+		lost[at] = null;
+	}
+	const fec = play(rebuilt);
+	const plain = play(lost);
 	ok(
-		'a buffer that holds one frame more plays a frame rebuilt from the next one; one that does not has a gap there',
-		holes(plain.out) === 1 &&
-			plain.playout.stats.late === 1 &&
-			played(held.out).length === 100 &&
-			holes(held.out) === 0 &&
-			held.playout.stats.targetMs === plain.playout.stats.targetMs + 20,
-		`${holes(plain.out)} ${JSON.stringify(plain.playout.stats)} ${holes(held.out)} ${JSON.stringify(held.playout.stats)}`,
+		"a frame rebuilt from the next one's copy counts as one that came a packet late, as NetEq counts it: the buffer comes to hold a packet more and the rebuilt frames play; frames lost for good do not lengthen it",
+		holes(fec.out.slice(100)) === 0 &&
+			fec.playout.stats.targetMs === 40 &&
+			holes(plain.out) === 39 &&
+			plain.playout.stats.targetMs === 20,
+		`${holes(fec.out)} ${JSON.stringify(fec.playout.stats)} ${holes(plain.out)} ${JSON.stringify(plain.playout.stats)}`,
 	);
 }
 {
@@ -177,12 +248,16 @@ const holes = (out) => {
 	let seed = 7;
 	const random = () =>
 		(seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+	// (NetEq's histogram forgets slowly: the target comes down some 20 s
+	// after the arrivals settle)
 	const arrivals = Array.from(
-		{ length: 900 },
+		{ length: 1800 },
 		(_, i) => i * 20 + (i < 300 ? Math.floor(random() * 60) : 0),
 	);
-	const loud = (index) => (index % 7 === 3 ? 0.001 : 1);
-	const { out, playout, given } = play(arrivals, { energy: loud });
+	const loud = (index) => (index % 2 ? 0.001 : 1);
+	const { out, playout, given } = play(arrivals, {
+		energy: loud,
+	});
 	const late = out.slice(0, 300 / 1).filter((v) => v === null).length;
 	ok(
 		'arrivals that vary are held longer: the delay follows their spread',
@@ -198,11 +273,11 @@ const holes = (out) => {
 	);
 	ok(
 		'a buffer deeper than the arrivals ask for gives up frames, the quiet ones first',
-		playout.stats.targetMs === 40 &&
+		playout.stats.targetMs === 20 &&
 			given.length >= 2 &&
-			// one frame in seven is quiet, and at least half of those given
-			// up are: the quietest of the next few is chosen
-			given.filter((index) => loud(index) < 1).length * 2 >= given.length,
+			// every other frame is quiet, and the quieter of the next few
+			// is chosen (with a buffer of two frames, of the next two)
+			given.every((index) => loud(index) < 1),
 		`target ${playout.stats.targetMs}, gave up ${given}`,
 	);
 	const tail = out.slice(320);
@@ -269,7 +344,7 @@ const holes = (out) => {
 	const playout = new m.Playout({ rate: 48 });
 	playout.push(0, 960, 'a', 0);
 	playout.push(960, 960, 'b', 20);
-	const first = [playout.pull(20), playout.pull(40)];
+	const first = [playout.pull(20), playout.pull(40), playout.pull(60)];
 	// the same frame again (a retransmission that was not needed)
 	const discarded = [];
 	const again = new m.Playout({ rate: 48, discard: (v) => discarded.push(v) });

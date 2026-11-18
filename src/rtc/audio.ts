@@ -1137,6 +1137,8 @@ export class AudioReceiver {
 				{ samples: new Float32Array(0), frames, channels: 1, noise },
 				now,
 				0,
+				// (NetEq's delay manager leaves comfort noise and events out)
+				true,
 			);
 		} else if (frame.codec === 'telephone-event') this.#event(frame, time, now);
 		else return;
@@ -1151,10 +1153,6 @@ export class AudioReceiver {
 	#speak(codec: 'opus' | 'G711' | 'G722') {
 		if (this.#speech === codec) return;
 		this.#speech = codec;
-		// An Opus packet that is lost is rebuilt from the next one's copy of
-		// it, which comes a packet later: the receiver holds that much more
-		// sound, so the rebuilt one is there before its time
-		this.#playout.holdMs = codec === 'opus' ? FRAME_US / 1000 : 0;
 		this.#noise = new ComfortNoise(NOISE_RATES[codec]);
 	}
 
@@ -1194,6 +1192,7 @@ export class AudioReceiver {
 				{ samples, frames, channels: 1, tone: true },
 				now,
 				power(samples) / frames,
+				true,
 			);
 			tone.made += frames;
 		}
@@ -1266,8 +1265,14 @@ export class AudioReceiver {
 				// a packet rebuilt from its FEC copy is decoded, not
 				// concealed, in Chrome's counts
 				this.#waiting.push({ time: at, arrived: now, lost: !rebuilt });
-				if (rebuilt) this.#fec.used++;
-				else this.#concealed++;
+				// NetEq counts the copy as a packet of the lost one's time
+				// that came now, a packet late: where losses are rebuilt the
+				// target is a packet longer (measured: 40 ms against 20 with
+				// the same loss and no copies), so the next is there in time
+				if (rebuilt) {
+					this.#playout.arrived(at, now);
+					this.#fec.used++;
+				} else this.#concealed++;
 				try {
 					decoder.decode(
 						new EncodedAudioChunk({
@@ -1282,6 +1287,7 @@ export class AudioReceiver {
 				}
 			}
 		this.#waiting.push({ time, arrived: now });
+		this.#playout.arrived(time, now);
 		try {
 			decoder.decode(
 				new EncodedAudioChunk({
@@ -1305,6 +1311,7 @@ export class AudioReceiver {
 				channels,
 				waiting.arrived,
 				waiting.lost,
+				true,
 			);
 		}
 		data.close();
@@ -1329,6 +1336,7 @@ export class AudioReceiver {
 		channels: number,
 		arrived: number,
 		lost = false,
+		counted = false,
 	) {
 		const frames = samples.length / channels;
 		if (!frames) return;
@@ -1341,6 +1349,8 @@ export class AudioReceiver {
 			{ samples, frames, channels, arrived, lost },
 			arrived,
 			power(samples) / samples.length,
+			counted,
+			lost,
 		);
 	}
 
@@ -1353,6 +1363,14 @@ export class AudioReceiver {
 		while (this.#due <= now) {
 			const sound = this.#playout.pull(now);
 			let ms = sound ? sound.frames / 48 : this.#playout.frameMs;
+			// a buffer that fills plays its first frame when NetEq's would,
+			// which is seldom on the 20 ms of what played before: what is
+			// made up meanwhile ends then
+			const starts = sound ? null : this.#playout.startsAt;
+			if (starts !== null && starts > this.#due && starts < this.#due + ms)
+				// (in eighths of a millisecond: whole samples at each rate
+				// comfort noise is made at)
+				ms = Math.max(1, Math.round((starts - this.#due) * 8)) / 8;
 			if (sound?.noise) this.#noise.update(sound.noise);
 			else if (sound) this.#noise.stop();
 			const channels = this.#stereo ? 2 : 1;
