@@ -26,6 +26,8 @@
 //     to=<url>             a 302 to the URL
 //     hint=1               a 103 Early Hints first
 //     size=<n>             the body padded to n bytes (js, css, json, text)
+//     fill=<text>          what pads it (a text: whole repeats of it, so
+//                          multi-byte characters fall on every boundary)
 //     chunked=1            no Content-Length (the body goes out chunked)
 //     body=<text>          more body (js, css, html), as it is
 //     k=<preset>           a body of CSS_PRESETS, whose URLs carry the run
@@ -74,9 +76,11 @@ const CSS_PRESETS = {
 	late: (r) => `.late { background-image: url("${r('t=img&n=latebg')}"); }\n`,
 };
 
-const pad = (text, size, open, close) => {
+const pad = (text, size, open, close, fill = 'x') => {
 	const room = size - Buffer.byteLength(text) - open.length - close.length;
-	return room > 0 ? `${text}${open}${'x'.repeat(room)}${close}` : text;
+	return room > 0
+		? `${text}${open}${fill.repeat(Math.floor(room / Buffer.byteLength(fill)))}${close}`
+		: text;
 };
 
 function bodyOf(query) {
@@ -114,7 +118,7 @@ function bodyOf(query) {
 		case 'html':
 			return `<!doctype html><meta charset="utf-8"><title>${name}</title><body>${extra}`;
 		default:
-			return pad(`text ${name}`, size, ' ', '');
+			return pad(`text ${name}`, size, ' ', '', query.get('fill') || 'x');
 	}
 }
 

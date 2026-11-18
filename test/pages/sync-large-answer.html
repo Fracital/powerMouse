@@ -1,0 +1,55 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>sync large answer</title>
+<body>
+	<script>
+		// An ad frame's pattern (an ad quality script of 735 KB on
+		// washingtonpost.com): a script far larger than any synchronous answer
+		// can carry, written into a new frame's initial about:blank document,
+		// then a script after it. How long the write holds the page's thread,
+		// and whether both scripts run.
+		const run = new URLSearchParams(location.search).get('run') || 'x';
+		const frame = document.createElement('iframe');
+		document.body.append(frame);
+		const doc = frame.contentDocument;
+		const big = `/perf/r?t=js&n=big&size=900000&cc=max-age%3D600&run=${run}`;
+		const started = performance.now();
+		doc.open();
+		doc.write(
+			`<script src="${big}"><\/script>` +
+				`<script>(globalThis.__perfRan ??= []).push('after')<\/script>`,
+		);
+		doc.close();
+		const writeMs = Math.round(performance.now() - started);
+		// the page's own synchronous requests for bodies that large: a text
+		// whose surrogate pairs and two-byte characters fall on every boundary,
+		// and the bytes of an image read as x-user-defined text
+		const digest = (text, mask) => {
+			let hash = 0;
+			for (let i = 0; i < text.length; i++)
+				hash = (Math.imul(hash, 31) + (text.charCodeAt(i) & mask)) | 0;
+			return `${text.length}:${hash}`;
+		};
+		const syncRead = (url, binary) => {
+			try {
+				const request = new XMLHttpRequest();
+				request.open('GET', url, false);
+				if (binary)
+					request.overrideMimeType('text/plain; charset=x-user-defined');
+				request.send();
+				return `${request.status} ${digest(request.responseText, binary ? 0xff : 0xffff)}`;
+			} catch (error) {
+				return `threw ${error.name}`;
+			}
+		};
+		const text = syncRead(
+			`/perf/r?t=text&n=big&size=900000&fill=${encodeURIComponent('\u{1f600}\u00e9a')}&run=${run}`,
+			false,
+		);
+		const image = syncRead(`/perf/png?w=400&h=400&n=${run}`, true);
+		frame.addEventListener('load', () => {
+			const ran = frame.contentWindow.__perfRan || [];
+			window.__large = { done: true, writeMs, ran: [...ran], text, image };
+		});
+	</script>
+</body>

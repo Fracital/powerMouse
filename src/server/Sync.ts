@@ -1,5 +1,5 @@
 import { decodeBase64, encodeBase64 } from '../base64';
-import { encodeCookie, splitAnswer } from '../encodeCookie';
+import { encodeCookie, splitAnswer, SYNC_CHUNK } from '../encodeCookie';
 import { ProcessData, ProcessResult, SyncBody } from '../sync';
 import { RouteContext } from '../transport/messages';
 import Router from './Router';
@@ -17,6 +17,26 @@ function encodeBody(bytes: Uint8Array): SyncBody {
 		return { base64: encodeBase64(bytes) };
 	}
 }
+
+/**
+ * The most cookies one answer is set in. Chrome keeps at most 180 cookies of
+ * a site and drops the least recently used past that, so an answer in more
+ * never arrived whole: the page spun to its limit for it while the cookies
+ * set for it pushed every other answer, and the proxy origin's own cookies,
+ * out of the jar (an ad quality script of 735 KB written into ad frames on
+ * washingtonpost.com, 5 s a frame, and the script never ran). A body that
+ * would take more is kept here and read in parts (`syncPart`), each well
+ * under the limit with room for other answers in flight.
+ */
+const ANSWER_COOKIES = 72;
+/** what one part may cost in its answer's cookies, its wrapping aside */
+const PART_COST = (ANSWER_COOKIES - 2) * SYNC_CHUNK;
+/** how long a body waits for the page to read its parts */
+const KEEP_MS = 30e3;
+const kept = new Map<string, string>();
+
+/** what `text` costs as an answer's body, in its cookies */
+const answerCost = (text: string) => encodeCookie(JSON.stringify(text)).length;
 
 const maxRedirects = 20;
 const statusRedirect = [301, 302, 303, 307, 308];
@@ -83,6 +103,25 @@ async function process(
 }
 
 export function registerXhr(router: Router) {
+	// a part of a body kept for a page (see ANSWER_COOKIES), from `at`: as
+	// much as one answer carries, never a surrogate pair split (a part
+	// travels as UTF-8)
+	router.routes.set(/^\/syncPart$/, async (request) => {
+		const [key, at] = (await request.json()) as [string, number];
+		const body = kept.get(key);
+		if (body === undefined || at >= body.length)
+			return new Response(null, { status: 404 });
+		let end = Math.min(body.length, at + PART_COST);
+		for (let cost; (cost = answerCost(body.slice(at, end))) > PART_COST;)
+			end =
+				at + Math.max(1, Math.floor(((end - at) * PART_COST) / cost / 1.02));
+		const last = body.charCodeAt(end - 1);
+		if (end < body.length && end - at > 1 && last >= 0xd800 && last <= 0xdbff)
+			end--;
+		if (end === body.length) kept.delete(key);
+		return new Response(body.slice(at, end));
+	});
+
 	router.routes.set(/\/gxhr/, async (request, _url, context) => {
 		return new Response(
 			JSON.stringify(await process(router, await request.json(), context)),
@@ -101,10 +140,23 @@ export function registerXhr(router: Router) {
 		// the answer is read with document.cookie from a proxied frame, which in
 		// origin-isolation mode is a cross-site embed: the CookieStore default
 		// (Strict) is invisible there and every bridge call would time out
-		for (const [name, value] of splitAnswer(
-			id,
-			encodeCookie(JSON.stringify(response)),
-		))
+		let answer = splitAnswer(id, encodeCookie(JSON.stringify(response)));
+		if (answer.length > ANSWER_COOKIES && 'init' in response) {
+			const { text, base64, ...head } = response;
+			const body = (text ?? base64)!;
+			kept.set(id, body);
+			setTimeout(() => kept.delete(id), KEEP_MS);
+			answer = splitAnswer(
+				id,
+				encodeCookie(
+					JSON.stringify({
+						...head,
+						more: { key: id, length: body.length, base64: text === undefined },
+					}),
+				),
+			);
+		}
+		for (const [name, value] of answer)
 			await cookieStore.set({
 				name,
 				value,

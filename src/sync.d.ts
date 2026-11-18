@@ -29,4 +29,9 @@ export type ProcessResult =
 	| (SyncBody & {
 			init: ResponseInit;
 			url: string;
+			/**
+			 * a body too large for one answer, which the worker keeps under
+			 * `key` for the page to read in parts (base64 or text)
+			 */
+			more?: { key: string; length: number; base64: boolean };
 	  });

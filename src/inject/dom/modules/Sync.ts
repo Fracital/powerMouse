@@ -20,7 +20,8 @@ const LOOPBACK_TIMEOUT = 10e3;
 /** how long a page's read of a timing entry waits for the worker's note of it */
 const KEPT_LOADS_LIMIT = 1e3;
 
-const decoder = new TextDecoder();
+// a byte order mark stays: a body read in parts may start one with it
+const decoder = new TextDecoder('utf-8', { ignoreBOM: true });
 const encoder = new TextEncoder();
 
 /** Chrome's beacon quota: bytes of beacons in flight, per document */
@@ -62,6 +63,7 @@ interface SyncResponseInit extends SyncBody {
 	error: { message: string };
 	init: ResponseInit;
 	url: string;
+	more?: { key: string; length: number; base64: boolean };
 }
 
 // taken when the bundle loads, before page code can replace them
@@ -416,7 +418,23 @@ export default class SyncModule extends Module<DocumentClient> {
 				);
 			}
 
-			return createResponse(JSON.parse(decodeCookie(answer.value)));
+			const init = JSON.parse(decodeCookie(answer.value)) as SyncResponseInit;
+			// a body too large for one answer, read in parts (server/Sync.ts)
+			const more = init.more;
+			if (more) {
+				let body = '';
+				while (body.length < more.length) {
+					const part = this.fetch(
+						`${client.directory}syncPart`,
+						apiInit([more.key, body.length]),
+						true,
+					);
+					if (!part.ok) throw new TypeError('A part of the answer was lost');
+					body += decoder.decode(part.rawArrayBuffer);
+				}
+				init[more.base64 ? 'base64' : 'text'] = body;
+			}
+			return createResponse(init);
 		}
 
 		throw new RangeError(
