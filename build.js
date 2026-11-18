@@ -187,6 +187,9 @@ const common = {
 		// what the rewriter's wasm core module is asked for by: the hash of
 		// assets/core.wasm (see `bundles` below)
 		'process.env.STOMP_CORE': '""',
+		// (src/version.ts DOCUMENT, DOCUMENT_FULL: see `bundles` below)
+		'process.env.STOMP_DOCUMENT': '""',
+		'process.env.STOMP_DOCUMENT_FULL': '""',
 		// the rewriter's generation (src/version.ts REWRITE_GENERATION): a
 		// digest of the bytes a rewrite's output depends on, known once the
 		// wasm artifacts are copied and the library is built (see `bundles`
@@ -1049,6 +1052,9 @@ const stubCrypto = {
 	'crypto-js/md5': cryptoStub,
 };
 
+/** the document bundles, built before the others (`bundles`) */
+const DOCUMENT_BUNDLES = ['injectDocument', 'injectDocumentFull'];
+
 const builds = [
 	{
 		entryPoints: { injectDocument: 'src/inject/dom/entry.ts' },
@@ -1147,7 +1153,7 @@ const builds = [
  * good. The watch build has no bytes to hash before it starts: its files
  * are asked for by the time it started, and the dev server caches nothing.
  */
-const bundles = (library, generation = '', core = library) =>
+const bundles = (library, generation = '', core = library, documents = {}) =>
 	builds.map((options) => ({
 		...common,
 		...options,
@@ -1155,6 +1161,12 @@ const bundles = (library, generation = '', core = library) =>
 			...common.define,
 			'process.env.STOMP_LIBRARY': JSON.stringify(library),
 			'process.env.STOMP_CORE': JSON.stringify(core),
+			'process.env.STOMP_DOCUMENT': JSON.stringify(
+				documents.injectDocument ?? '',
+			),
+			'process.env.STOMP_DOCUMENT_FULL': JSON.stringify(
+				documents.injectDocumentFull ?? '',
+			),
 			'process.env.STOMP_REWRITE_GENERATION': JSON.stringify(generation),
 			...(options.inject?.includes(snapshot) ? reflectDefines : {}),
 		},
@@ -1331,14 +1343,32 @@ if (dev) {
 		.update(await readFile('assets/core.wasm'))
 		.digest('hex')
 		.slice(0, 16);
+	const run = async (options) => {
+		const result = await build({
+			...options,
+			metafile: options.plugins.includes(deferredTable) || options.metafile,
+		});
+		if (options.plugins.includes(deferredTable))
+			checkDeferred(result.metafile, Object.keys(options.entryPoints)[0]);
+	};
+	// the document bundles first: the bundles that name them (the service
+	// worker's shells, the controller's warm fetch) ask for each by the hash
+	// of its bytes (src/version.ts DOCUMENT), and a document bundle names the
+	// file it was loaded from (src/routeURL.ts ownDocumentBundle)
+	const isDocument = (options) =>
+		DOCUMENT_BUNDLES.includes(Object.keys(options.entryPoints)[0]);
 	await Promise.all(
-		bundles(library, generation, core).map(async (options) => {
-			const result = await build({
-				...options,
-				metafile: options.plugins.includes(deferredTable) || options.metafile,
-			});
-			if (options.plugins.includes(deferredTable))
-				checkDeferred(result.metafile, Object.keys(options.entryPoints)[0]);
-		}),
+		bundles(library, generation, core).filter(isDocument).map(run),
+	);
+	const documents = {};
+	for (const name of DOCUMENT_BUNDLES)
+		documents[name] = createHash('sha256')
+			.update(await readFile(`dist/${name}.js`))
+			.digest('hex')
+			.slice(0, 16);
+	await Promise.all(
+		bundles(library, generation, core, documents)
+			.filter((options) => !isDocument(options))
+			.map(run),
 	);
 }

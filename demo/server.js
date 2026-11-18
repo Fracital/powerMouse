@@ -573,7 +573,7 @@ const cached = { maxAge: '1d', immutable: false };
 app.use(
 	express.static(fileURLToPath(new URL('./public/', import.meta.url)), fresh),
 );
-// Two STomp files are not revalidated. One is the rewriter library, which
+// Some STomp files are not revalidated. One is the rewriter library, which
 // no inject bundle carries. A proxied page whose rewrite needs it and has no
 // copy (a worker, a sandboxed frame, any page of `rewriter: 'wasm'` whose
 // module declined a script) loads it with a synchronous request, and a
@@ -583,11 +583,20 @@ app.use(
 // rewriter's wasm core module, asked for the same way
 // (`core.wasm?<hash of its bytes>`): a proxied top whose first task
 // rewrites before the controller's compiled module reaches it fetches the
-// module with a synchronous request too. Only when the hash is the file's:
+// module with a synchronous request too. The document bundles are asked
+// for so as well (`injectDocument.js?<hash of its bytes>`), a parser-blocking
+// script of every proxied document's shell; the service worker keeps them
+// itself, and this spares its fetch of one a revalidation. Only when the
+// hash is the file's:
 // a page of the build before a deploy asks by the old hash and must not be
 // told to keep the new file under it. The watch build has no hash (its
 // files change under one name): nothing is kept.
-const keptFiles = ['rewriterLib.js', 'core.wasm'];
+const keptFiles = [
+	'rewriterLib.js',
+	'core.wasm',
+	'injectDocument.js',
+	'injectDocumentFull.js',
+];
 const fileHashes = new Map();
 function hashOf(path) {
 	try {

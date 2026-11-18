@@ -1,7 +1,7 @@
 import type { SiteShields } from '../blocker/types';
 import { utf8Bytes } from '../byteString';
 import type GenericCodec from '../Codecs';
-import { Config, ConfigCodec } from '../config';
+import { assetName, Config, ConfigCodec, type Assets } from '../config';
 import { switchesGroup, type OpenerFacts } from '../coop';
 import type { HopPolicy } from '../csp';
 import { isolationResponseHeaders } from '../isolation';
@@ -68,7 +68,7 @@ import {
 } from '../transport/messages';
 import RemoteTransport from '../transport/RemoteTransport';
 import { RpcHelper } from '../transport/rpc';
-import { BUILD, REWRITE_GENERATION } from '../version';
+import { BUILD, DOCUMENT, DOCUMENT_FULL, REWRITE_GENERATION } from '../version';
 import {
 	isLinkRoute,
 	makesSelfLink,
@@ -2244,8 +2244,169 @@ async function onItsSlot(
 	return `${origin}${path}${url.hash}`;
 }
 
+// ---- the document bundles (src/version.ts DOCUMENT)
+
+/** the store of the document bundles this worker and the ones before it kept, by URL */
+const BUNDLES = 'stomp-document-bundles';
+/** the bundles' files, by the names this worker's build gave them */
+const OWN_BUNDLES: [keyof Assets, string][] = [
+	['injectDocument', DOCUMENT],
+	['injectDocumentFull', DOCUMENT_FULL],
+];
+
+/** the first 16 hex digits of the SHA-256 of `bytes`, as build.js names a file */
+async function fileHash(bytes: ArrayBuffer): Promise<string> {
+	const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+	let hex = '';
+	for (const byte of digest.subarray(0, 8))
+		hex += byte.toString(16).padStart(2, '0');
+	return hex;
+}
+
+/**
+ * The URLs the store holds, as this worker last read or wrote it: a
+ * request is answered from the store only when its file is known to be
+ * there, so one that is not goes to the browser's own fetch at once
+ */
+const keptBundles = new Set<string>();
+let keptBundlesRead: Promise<void> | undefined;
+function readKeptBundles() {
+	keptBundlesRead ??= (async () => {
+		for (const request of await (await caches.open(BUNDLES)).keys())
+			keptBundles.add(request.url);
+	})().catch(() => {
+		// no store: every request goes to the browser's fetch
+	});
+	return keptBundlesRead;
+}
+readKeptBundles();
+
+/** the keeps in flight, by URL */
+const keeping = new Map<string, Promise<void>>();
+
+/**
+ * Fetch this build's file at `url` and keep it when its bytes are the ones
+ * `hash` names (a host that serves another build's bytes under it, as a
+ * deploy in progress may, is not kept from)
+ */
+function keepBundle(url: string, hash: string): Promise<void> {
+	let keep = keeping.get(url);
+	if (!keep) {
+		keep = (async () => {
+			await readKeptBundles();
+			if (keptBundles.has(url)) return;
+			const response = await fetch(url);
+			if (!response.ok || response.type !== 'basic') return;
+			const copy = response.clone();
+			if ((await fileHash(await response.arrayBuffer())) !== hash) return;
+			// a Response the browser fetched, which has its URL: Chrome keeps
+			// a code cache only for such an entry
+			await (await caches.open(BUNDLES)).put(url, copy);
+			keptBundles.add(url);
+		})()
+			.catch(() => {
+				// not kept: the next document's load fetches it again
+			})
+			.finally(() => keeping.delete(url));
+		keeping.set(url, keep);
+	}
+	return keep;
+}
+
+/**
+ * A document bundle's request: a proxied document's shell asks for
+ * `injectDocument.js?<hash>`, one file of one build, which the host serves
+ * with no-cache or for good, and the document waited for its revalidation
+ * before its first script (a round trip to the host, 54 to 129 ms over a
+ * link of 40 ms). A file the store holds is answered from it: this
+ * worker's own build's, which it fetched once and checked against its
+ * hash, or another build's that the worker before it kept (a document of
+ * that worker, still open through an update, whose frames ask for it), so
+ * neither is ever answered with the other's. One the store does not hold
+ * goes to the browser's own fetch, as it did before (a worker's answer
+ * costs the worker's thread, busy with the document then), and this
+ * build's is kept for the next. The browser's memory cache answers the
+ * documents after the first of a page's process itself, the file being
+ * fresh under its hash. False for any other request.
+ */
+function documentBundle(
+	event: FetchEvent,
+	pathname: string,
+	search: string,
+): boolean {
+	const { request } = event;
+	if (request.method !== 'GET' || !search) return false;
+	const scopes = new Set([new URL(self.registration.scope).pathname]);
+	const names = new Map<string, string>();
+	for (const [key, hash] of OWN_BUNDLES)
+		names.set(assetName(undefined, key), hash);
+	for (const ref of controllers.values()) {
+		scopes.add(ref.config.scope);
+		for (const [key, hash] of OWN_BUNDLES)
+			names.set(assetName(ref.config.assets, key), hash);
+	}
+	let own: string | undefined;
+	let known = false;
+	for (const scope of scopes)
+		for (const [name, hash] of names)
+			if (pathname === `${scope}${name}`) {
+				known = true;
+				own = hash;
+			}
+	if (!known) return false;
+	if (keptBundles.has(request.url)) {
+		event.respondWith(
+			(async () => {
+				try {
+					const kept = await (await caches.open(BUNDLES)).match(request);
+					if (kept) return kept;
+				} catch (error) {
+					// the store went (storage cleared): the network's answer
+				}
+				keptBundles.delete(request.url);
+				return fetch(request);
+			})(),
+		);
+		return true;
+	}
+	if (own && search === `?${encodeURIComponent(own)}`)
+		event.waitUntil(keepBundle(request.url, own));
+	return true;
+}
+
+/**
+ * Keep this worker's bundles and the ones the worker before it kept (its
+ * documents may still be open, and frames they make ask for that build's
+ * file): every other build's goes
+ */
+async function sweepBundles() {
+	const store = await caches.open(BUNDLES);
+	const own = new Set(
+		OWN_BUNDLES.map(([, hash]) => (hash ? `?${encodeURIComponent(hash)}` : '')),
+	);
+	const others = new Map<string, { request: Request; at: number }[]>();
+	for (const request of await store.keys()) {
+		const { pathname, search } = new URL(request.url);
+		if (own.has(search)) continue;
+		const at = Date.parse(
+			(await store.match(request))?.headers.get('date') ?? '',
+		);
+		const list = others.get(pathname) ?? [];
+		list.push({ request, at: Number.isNaN(at) ? 0 : at });
+		others.set(pathname, list);
+	}
+	for (const list of others.values()) {
+		list.sort((a, b) => b.at - a.at);
+		for (const { request } of list.slice(1)) {
+			keptBundles.delete(request.url);
+			await store.delete(request);
+		}
+	}
+}
+
 self.addEventListener('fetch', (event: FetchEvent) => {
-	const { pathname } = new URL(event.request.url);
+	const { pathname, search } = new URL(event.request.url);
+	if (documentBundle(event, pathname, search)) return;
 	const unmarked = unmarkHomed(event.request);
 	if (unmarked) {
 		event.respondWith(unmarked);
@@ -2294,6 +2455,7 @@ self.addEventListener('activate', (event: ExtendableEvent) => {
 			REWRITE_GENERATION
 				? new RewriteCache().adopt(REWRITE_GENERATION)
 				: new RewriteCache().clear(),
+			sweepBundles().catch(() => {}),
 		]),
 	);
 });

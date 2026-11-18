@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>bundle frames</title>
+	</head>
+	<body>
+		<!-- the suite document-bundle-cache: a frame the service worker shells
+		     and one whose document the page's inject makes (srcdoc) -->
+		<iframe src="bundle-frames-child.html"></iframe>
+		<iframe
+			srcdoc="<p>srcdoc</p><script>parent.postMessage('srcdoc', '*')</script>"
+		></iframe>
+		<script>
+			window.__frames = {};
+			addEventListener('message', (event) => {
+				window.__frames[event.data] = true;
+			});
+		</script>
+	</body>
+</html>

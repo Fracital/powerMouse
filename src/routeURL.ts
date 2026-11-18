@@ -9,7 +9,7 @@ import {
 import { splitIntegrityMark } from './sri';
 import StompURL, { openFragment, sealedFragmentText } from './StompURL';
 import { withQuery } from './urlShape';
-import { BUILD, CORE, LIBRARY } from './version';
+import { BUILD, CORE, DOCUMENT, DOCUMENT_FULL, LIBRARY } from './version';
 import { decodeLinkRoute, LINK_SEGMENT } from './visited';
 
 export { openFragment, sealedFragmentText };
@@ -313,10 +313,43 @@ function cryptoInject(config?: Config): boolean {
 	return config?.codec === 'aes' || config?.codec === 'base64';
 }
 
-/** the document bundle's file for `config`, as a shell names it (injectDocumentJS) */
+/** the document bundle this realm was loaded from: its file's name and its query (ownDocumentBundle) */
+let ownBundle: { name: string; query: string } | null = null;
+
+/**
+ * Note the URL a document bundle was loaded from (src/inject/dom/entry.ts):
+ * a shell this realm makes (a srcdoc frame's, a document it writes) names
+ * the same file of the same build, as the service worker's shell named it,
+ * whichever service worker is now in charge
+ */
+export function ownDocumentBundle(src: string) {
+	try {
+		const { pathname, search } = new URL(src);
+		ownBundle = {
+			name: pathname.slice(pathname.lastIndexOf('/') + 1),
+			query: search,
+		};
+	} catch (error) {
+		// no URL: the build's own name, below
+	}
+}
+
+/**
+ * The document bundle's file for `config`, as a shell names it
+ * (injectDocumentJS): its name and its hash (version.ts DOCUMENT), which a
+ * host may let browsers keep for good and the service worker keeps
+ * (serviceWorker.ts documentBundle), so no document waits for a
+ * revalidation of it before its first script
+ */
 export function injectDocumentFile(config?: Config) {
-	const key = cryptoInject(config) ? 'injectDocumentFull' : 'injectDocument';
-	return assetName(config?.assets, key);
+	const full = cryptoInject(config);
+	const name = assetName(
+		config?.assets,
+		full ? 'injectDocumentFull' : 'injectDocument',
+	);
+	if (ownBundle?.name === name) return `${name}${ownBundle.query}`;
+	const hash = full ? DOCUMENT_FULL : DOCUMENT;
+	return hash ? `${name}?${encodeURIComponent(hash)}` : name;
 }
 
 export function injectDocumentJS(url: StompURL, config?: Config) {

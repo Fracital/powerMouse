@@ -49,6 +49,23 @@ export const CORE: string =
 	(process.env.STOMP_CORE as string | undefined) || BUILD;
 
 /**
+ * What the document bundles are asked for by, after a `?`: the hash of each
+ * file as built (build.js builds them first, then the bundles that name
+ * them: the service worker's shells, the controller's warm fetch), so a
+ * proxied document's shell names one file of one build and the service
+ * worker keeps it (serviceWorker.ts documentBundle), with no revalidation
+ * before the document's first script. Empty in the document bundles
+ * themselves, which name the file they were loaded from (routeURL.ts
+ * ownDocumentBundle), and in a dev build, whose files change under one
+ * name.
+ */
+export const DOCUMENT: string =
+	(process.env.STOMP_DOCUMENT as string | undefined) || '';
+/** as DOCUMENT, for injectDocumentFull (the aes and base64 codecs') */
+export const DOCUMENT_FULL: string =
+	(process.env.STOMP_DOCUMENT_FULL as string | undefined) || '';
+
+/**
  * The name the light rewriter library asset assigns its factory to (build.js
  * writes the file as
  * `__stompRewriterLight=function(__stompRealm,__stompLibApi){...};`).
