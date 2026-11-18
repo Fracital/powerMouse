@@ -22,39 +22,32 @@ import type { DeviceConstraints, PermissionRequests } from './permissionCalls';
 // taken when the bundle loads: a device's getters are checked by their source
 const nativeToString = Function.prototype.toString;
 
-/** the permissions each site keeps (src/server/permissions.ts); push is notifications' */
-const SIMULATED = new Set([
+// the permissions each site keeps that are policy-controlled features too
+// (default allowlist `self`, by their own names)
+const KEPT_FEATURES = [
 	'geolocation',
 	'camera',
 	'microphone',
-	'notifications',
 	'clipboard-read',
 	'midi',
-	'persistent-storage',
 	'local-fonts',
 	'idle-detection',
 	'window-management',
 	'display-capture',
 	'captured-surface-control',
 	'local-network-access',
-]);
-/** a permission's policy-controlled feature (default allowlist `self`), by its name */
-const FEATURE: Record<string, string> = {
-	geolocation: 'geolocation',
-	camera: 'camera',
-	microphone: 'microphone',
-	'clipboard-read': 'clipboard-read',
-	'clipboard-write': 'clipboard-write',
-	midi: 'midi',
-	'local-fonts': 'local-fonts',
-	'idle-detection': 'idle-detection',
-	'window-management': 'window-management',
-	'display-capture': 'display-capture',
-	'captured-surface-control': 'captured-surface-control',
-	'local-network-access': 'local-network-access',
-	'screen-wake-lock': 'screen-wake-lock',
-	'speaker-selection': 'speaker-selection',
-};
+];
+// (lists asked with includes, the method the bundle took as it loaded: a
+// Set's has is the page's to replace)
+/** the permissions each site keeps (src/server/permissions.ts); push is notifications' */
+const SIMULATED = [...KEPT_FEATURES, 'notifications', 'persistent-storage'];
+/** the permissions that are a policy-controlled feature of their name */
+const FEATURE = [
+	...KEPT_FEATURES,
+	'clipboard-write',
+	'screen-wake-lock',
+	'speaker-selection',
+];
 
 /**
  * What the browser converts as an object where it expects a dictionary: a
@@ -239,10 +232,9 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			// frame of its own origin
 			if (name === 'notifications' || name === 'push')
 				return client.url.url.origin === site;
-			const feature = FEATURE[name];
-			if (!feature) return true;
-			if (!browserAllows(feature)) return false;
-			if (features && feature in features) return features[feature];
+			if (!FEATURE.includes(name)) return true;
+			if (!browserAllows(name)) return false;
+			if (features && name in features) return features[name];
 			return sameOriginAsParent();
 		};
 		this.documentPolicy = (feature) =>
@@ -301,7 +293,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 						Reflect.apply(nativeState, status, []) === 'prompt'
 					)
 						track(status, asked, 'granted');
-					else if (SIMULATED.has(simulatedName(asked))) {
+					else if (SIMULATED.includes(simulatedName(asked))) {
 						await states;
 						track(status, asked, siteState(asked));
 					}
@@ -346,6 +338,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		const request = async (names: string[]): Promise<Decision> =>
 			requests().request(names);
 		const direct = async (names: string[]) => requests().direct(names);
+		const browserRefuses = (name: string) => !browserAllows(name);
 		const mayRead = (name: string) =>
 			allowed(name) && siteState(name) === 'granted';
 		// whether the document may choose an AudioContext's output. Chrome
@@ -427,7 +420,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		this.userMedia(
 			request,
 			allowed,
-			(name) => !browserAllows(FEATURE[name]),
+			browserRefuses,
 			direct,
 			(constraints) => ask<MediaVerdict>({ op: 'media', constraints }),
 			this.devices(
@@ -452,7 +445,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 				wrap: (fn, wrap, construct) =>
 					proxyModule.wrapFunction(fn, wrap, construct),
 				allowed,
-				browserRefuses: (name) => !browserAllows(FEATURE[name] ?? name),
+				browserRefuses,
 				siteState,
 				request,
 				direct,
