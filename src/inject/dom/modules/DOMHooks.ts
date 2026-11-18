@@ -46,6 +46,7 @@ import type { MarkupContext, ScriptNotes } from '../markupMembers';
 import type { SinkContext } from '../markupSinks';
 import { responseURLOf } from '../responseDocuments';
 import type WriteStream from '../WriteStream';
+import { isStomp } from './Context';
 import {
 	attributeName,
 	hookWrite,
@@ -576,6 +577,18 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 	}
 	/** apply's wrapping of a hooked property, for a hook added later */
 	#wrapProperty?: (ctor: ElementCtor, property: string) => void;
+	/**
+	 * The member `name` (its setter with `setter`) of the realm of the node
+	 * `that` when that node's document is another client's (this realm's
+	 * member called on a frame's node: `Element.prototype.setHTMLUnsafe
+	 * .call(frameElement, markup)`), else null. The browser parses into the
+	 * node's document and makes its nodes in that document's realm; its
+	 * client's hooks rewrite the markup as that document's (a frame no
+	 * worker controls copies its loads, where a route means nothing), so a
+	 * markup member hands such a call to that realm's own
+	 */
+	ownMember: (that: unknown, name: string, setter?: boolean) => Fn | null =
+		() => null;
 	/** the attribute hooks by element name and attribute (attributeHooks) */
 	#hooksByName = new LazyMap<string, Map<string, readonly HookEntry[]>>();
 	/** every attribute name an attribute hook watches, on any element */
@@ -753,6 +766,47 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 		const proxyModule = moduleClient.getModule(ProxyModule)!;
 		const { requireElement } = this;
+
+		const ownerOf = Reflect.getOwnPropertyDescriptor(
+			realm.Node.prototype,
+			'ownerDocument',
+		)!.get!;
+		const viewOf = Reflect.getOwnPropertyDescriptor(
+			realm.Document.prototype,
+			'defaultView',
+		)!.get!;
+		const ownObject = realm.Object.prototype;
+		this.ownMember = (that, name, setter) => {
+			try {
+				const document = Reflect.apply(ownerOf, that, []);
+				if (!document || document === realm.document) return null;
+				const view = Reflect.apply(viewOf, document, []);
+				if (
+					!view ||
+					view === realm ||
+					!isStomp(view, moduleClient.names.client)
+				)
+					return null;
+				// (a node of this realm's adopted there keeps this realm's
+				// members, which are these)
+				let member: unknown;
+				for (
+					let proto = Reflect.getPrototypeOf(that as object);
+					proto;
+					proto = Reflect.getPrototypeOf(proto)
+				) {
+					if (proto === ownObject) return null;
+					const descriptor =
+						member === undefined &&
+						Reflect.getOwnPropertyDescriptor(proto, name);
+					if (descriptor)
+						member = (setter ? descriptor.set : descriptor.value) ?? null;
+				}
+				return typeof member === 'function' ? (member as Fn) : null;
+			} catch (error) {
+				return null;
+			}
+		};
 
 		/**
 		 * Etc hooks are here
@@ -1309,6 +1363,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			set: proxyModule.wrapFunction(
 				innerHTMLDescriptor.set!,
 				(target, that: Element, args) => {
+					const own = this.ownMember(that, 'innerHTML', true);
+					if (own) return Reflect.apply(own, that, args);
 					// null is the empty string ([LegacyNullToEmptyString]), after the
 					// page's Trusted Types judged it
 					const markup = moduleClient.trustedValue(
@@ -1408,6 +1464,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			set: proxyModule.wrapFunction(
 				outerHTMLDescriptor.set!,
 				(target, that: Element, args) => {
+					const own = this.ownMember(that, 'outerHTML', true);
+					if (own) return Reflect.apply(own, that, args);
 					// (the page's Trusted Types judge the markup first; a style's
 					// stand-in writes the inject's own, known by its element, or, once
 					// the written page is parsed again and the running script is a
@@ -1617,8 +1675,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// one call for every wrapper: the native it wraps says which member it
 		// is (its name), and its place in `natives` whose interface (`ends`:
 		// where each prototype's natives end)
-		const markupCall = (target: Fn, that: unknown, args: unknown[]) =>
-			markupParts().member(target, that as Node, args);
+		const markupCall = (target: Fn, that: unknown, args: unknown[]) => {
+			const own = this.ownMember(that, target.name);
+			return own
+				? Reflect.apply(own, that, args)
+				: markupParts().member(target, that as Node, args);
+		};
 		for (const proto of insertionPrototypes) {
 			if (proto)
 				for (const name of Reflect.ownKeys(proto)) {
@@ -1634,8 +1696,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		}
 		// setHTMLUnsafe: the markup rewritten (its scripts too, with
 		// runScripts), then the browser's parser (../markupSinks.ts)
-		const setHTMLUnsafeCall = (target: Fn, that: unknown, args: unknown[]) =>
-			sinks().setHTMLUnsafe(target, that, args);
+		const setHTMLUnsafeCall = (target: Fn, that: unknown, args: unknown[]) => {
+			const own = this.ownMember(that, 'setHTMLUnsafe');
+			return own
+				? Reflect.apply(own, that, args)
+				: sinks().setHTMLUnsafe(target, that, args);
+		};
 		for (const proto of [realm.Element.prototype, shadowRootPrototype]) {
 			const native = (proto as { setHTMLUnsafe?: unknown } | undefined)
 				?.setHTMLUnsafe;
@@ -1695,6 +1761,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				set: proxyModule.wrapFunction(
 					shadowInnerHTML.set,
 					(target, that: ShadowRoot, args) => {
+						const own = this.ownMember(that, 'innerHTML', true);
+						if (own) return Reflect.apply(own, that, args);
 						const markup = moduleClient.trustedValue(
 							args[0],
 							'TrustedHTML',

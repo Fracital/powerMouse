@@ -619,6 +619,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		const nativeGetAttributeNames = nativeElement.getAttributeNames;
 		const shadowRootGet = nativeGetter(nativeElement, 'shadowRoot');
 		const ownerDocumentGet = nativeGetter(nativeNode, 'ownerDocument');
+		const viewOf = nativeGetter(Document.prototype, 'defaultView');
 		const contentGet = Reflect.getOwnPropertyDescriptor(
 			HTMLTemplateElement.prototype,
 			'content',
@@ -650,6 +651,16 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// shadow roots (a declarative one, Document.parseHTMLUnsafe) and
 		// templates' content come along with it
 		const routeUnseen = (root: Node, type: 1 | 11, deep: boolean) => {
+			// a tree from another window's document (a creator's nodes put in
+			// its frame): what that document's hooks routed names routes,
+			// which mean nothing in a document no service worker controls, so
+			// each watched attribute is routed again as this document's (every
+			// hook starts from the page's original), as the browser loads an
+			// adopted node's resources for its new document
+			const again =
+				deep &&
+				domAttributesModule.uncontrolled() &&
+				!!Reflect.apply(viewOf, documentOf(root), []);
 			const pending: [Node, 1 | 11][] = [[root, type]];
 			for (let next = pending.pop(); next; next = pending.pop()) {
 				const elements = queryIn(next[0], next[1], '*');
@@ -694,6 +705,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 								!name.startsWith(markerPrefix()) &&
 								domHooksModule.hooksAttribute(name) &&
 								(working ||
+									again ||
 									(!names.includes(`${markerPrefix()}${name}`) &&
 										(name !== 'style' ||
 											MAY_ROUTE.test(
@@ -707,7 +719,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 							for (const name of element.getAttributeNames())
 								if (
 									!name.startsWith(markerPrefix()) &&
-									!element.hasAttributeOG(name)
+									(again || !element.hasAttributeOG(name))
 								)
 									domHooksModule.updateAttributeHooks(element, name);
 						});
@@ -1254,6 +1266,8 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		realm.Element.prototype.insertAdjacentHTML = proxyModule.wrapFunction(
 			realm.Element.prototype.insertAdjacentHTML,
 			(target, that: Element, args) => {
+				const own = domHooksModule.ownMember(that, 'insertAdjacentHTML');
+				if (own) return Reflect.apply(own, that, args);
 				// the browser's own refusals first: of the receiver, then of
 				// the count
 				if (args.length < 2) return Reflect.apply(target, that, args);

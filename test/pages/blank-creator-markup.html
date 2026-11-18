@@ -12,7 +12,8 @@
 	// page reads it (its markup, the URLs, the realm of every node it made
 	// and of a template's content, whether a script ran, whether an image
 	// loaded) and what getHTML returns; and the same calls made across
-	// realms (the creator's own member on the frame's element).
+	// realms (the creator's own member on the frame's element), whose loads
+	// are the frame's document's as natively.
 	const report = {};
 	window.__blankMarkup = report;
 	const ran = [];
@@ -55,7 +56,7 @@
 				`${error && error.name}: ${error && error.message}`;
 		}
 	};
-	async function readBack(label, frame, element, loads = true) {
+	async function readBack(label, frame, element) {
 		const realm = realmOf(frame);
 		report[`${label}.html`] = element.innerHTML;
 		report[`${label}.realms`] = [...element.childNodes]
@@ -73,12 +74,10 @@
 		report[`${label}.shadow`] = host?.shadowRoot
 			? `${realm(host.shadowRoot)} ${host.shadowRoot.innerHTML}`
 			: 'none';
-		if (loads) {
-			report[`${label}.image`] = await settle(element.querySelector('img'));
-			report[`${label}.shadowImage`] = await settle(
-				host?.shadowRoot?.querySelector('img'),
-			);
-		}
+		report[`${label}.image`] = await settle(element.querySelector('img'));
+		report[`${label}.shadowImage`] = await settle(
+			host?.shadowRoot?.querySelector('img'),
+		);
 		report[`${label}.ran`] = ran.splice(0).join(',');
 	}
 	async function inFrame(kind, frame) {
@@ -203,9 +202,40 @@
 		step(`${kind}.acrossSetHTMLUnsafe`, () =>
 			Element.prototype.setHTMLUnsafe.call(acrossUnsafe, MARKUP),
 		);
-		// (what the creator's member loads in the frame is left out: the
-		// creator's hooks route it for the creator's own document)
-		await readBack(`${kind}.acrossSetHTMLUnsafe`, frame, acrossUnsafe, false);
+		await readBack(`${kind}.acrossSetHTMLUnsafe`, frame, acrossUnsafe);
+		const acrossAppend = fresh(`${kind}-across-append`);
+		step(`${kind}.acrossAppendHTMLUnsafe`, () =>
+			Element.prototype.appendHTMLUnsafe.call(acrossAppend, MARKUP),
+		);
+		await readBack(`${kind}.acrossAppendHTMLUnsafe`, frame, acrossAppend);
+		const acrossInner = fresh(`${kind}-across-inner`);
+		step(`${kind}.acrossInnerHTML`, () =>
+			Reflect.getOwnPropertyDescriptor(Element.prototype, 'innerHTML').set.call(
+				acrossInner,
+				MARKUP,
+			),
+		);
+		await readBack(`${kind}.acrossInnerHTML`, frame, acrossInner);
+		const acrossAdjacent = fresh(`${kind}-across-adjacent`);
+		step(`${kind}.acrossInsertAdjacentHTML`, () =>
+			Element.prototype.insertAdjacentHTML.call(
+				acrossAdjacent,
+				'beforeend',
+				MARKUP,
+			),
+		);
+		await readBack(`${kind}.acrossInsertAdjacentHTML`, frame, acrossAdjacent);
+		// nodes across realms: an image of the creator's put in the frame by
+		// the frame's member, and one of the frame's by the creator's
+		const adopted = document.createElement('img');
+		adopted.src = 'blank-sprite.svg?adopted';
+		fresh(`${kind}-adopted`).append(adopted);
+		report[`${kind}.adoptedImage`] =
+			`${realm(adopted)} ${realm(adopted.ownerDocument)} ${await settle(adopted)}`;
+		const appended = doc.createElement('img');
+		appended.src = 'blank-sprite.svg?appended';
+		Node.prototype.appendChild.call(fresh(`${kind}-appended`), appended);
+		report[`${kind}.acrossAppendChild`] = await settle(appended);
 		report[`${kind}.acrossGetHTML`] = step(`${kind}.acrossGetHTML`, () =>
 			Element.prototype.getHTML.call(read, { serializableShadowRoots: true }),
 		);
