@@ -153,22 +153,37 @@ function findTop(
 	from: typeof globalThis = global,
 ): Context {
 	if (sites) return siteWindows().siteTop(global, sites.hub, from);
+	let parent: Context;
+	try {
+		parent = ((global as Record<string, any>)[client] as DocumentClient).parent;
+	} catch (error) {
+		return global;
+	}
+	// A window's way up changes only with its parent: a frame above it that
+	// navigates or leaves its document takes this window's browsing context
+	// with it, whose parent is then null. So the top found last time stands
+	// while the parent is the one it was found from (every read of `top`
+	// walked up, a frame six deep climbed six windows each time)
+	const kept = tops.get(global);
+	if (kept !== undefined && kept.parent === parent) return kept.top;
+	const first = parent;
 	let context: Context = global;
-
 	// walk up while the parent is still a STomp context; the controller page
 	// (or anything cross-origin) ends the proxied world
-	while (true) {
-		try {
-			const parent = (
-				(context as Record<string, any>)[client] as DocumentClient
-			).parent;
-			if (parent === context || !(client in parent)) return context;
+	try {
+		while (parent !== context && client in parent) {
 			context = parent;
-		} catch (error) {
-			return context;
+			parent = ((context as Record<string, any>)[client] as DocumentClient)
+				.parent;
 		}
+	} catch (error) {
+		// a window of another origin, or one with no STomp in it
 	}
+	tops.set(global, { parent: first, top: context });
+	return context;
 }
+/** the top `findTop` found for a window, and the parent it found it from */
+const tops = new OwnWeakMap<object, { parent: Context; top: Context }>();
 
 type PostMessageArgs = [
 	message: any,
@@ -287,8 +302,13 @@ export default class ContextModule extends Module<DocumentClient> {
 	 * answered by the stand-in's read alone, so it is no property of it.
 	 */
 	#brand(): symbol {
-		return Symbol.for(`${this.client.names.client}$standIn`);
+		// (made once: a registry lookup of a new string on every read of
+		// another window was the largest part of one)
+		return (this.#brandSymbol ??= Symbol.for(
+			`${this.client.names.client}$standIn`,
+		));
 	}
+	#brandSymbol?: symbol;
 	/**
 	 * Windows of another real origin, which refused the brand's read: no
 	 * stand-in is one, and a window keeps its identity. Kept so that a read

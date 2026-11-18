@@ -221,6 +221,9 @@ export function forgetDestination(client: DocumentClient, element: Element) {
  * held one before the frame got a fresh context, latest first
  */
 export function heldBefore(client: DocumentClient, context: object): object[] {
+	// (asked of every stand-in handed out: a group that never gave a frame a
+	// fresh context while a window of it was held has no record to find)
+	if (!registry(client).held) return [];
 	let element: Element | null = null;
 	try {
 		element = frameElementOf(context);
