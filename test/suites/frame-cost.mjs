@@ -135,6 +135,17 @@
 // 157), so the two ceilings above came down by as much, to 1,134 KB and
 // 1,136 KB, keeping their margins: the SVG element interfaces (+33 KB) go
 // past both.
+//
+// On 2026-11-18 a frame's heap came down by about 28 KB in every case:
+// the native prototype copies leave out the event handlers (about 20 KB)
+// and the bundle's own navigator has only the members it reads (about 8).
+// 20 frames on Chrome 157, two runs each, at eed90e1d and with both:
+// 1,121.0 to 1,121.1 KB and 1,092.1 to 1,092.8 same site, 1,119.1 to
+// 1,121.2 and 1,093.6 to 1,094.9 another site, 1,125.3 to 1,126.6 and
+// 1,097.7 to 1,098.9 reading the parent, 1,132.5 to 1,133.5 and 1,104.4
+// to 1,105.3 after a click, 1,122.5 to 1,123.3 and 1,092.7 to 1,094.9
+// with a first XMLHttpRequest. Every ceiling came down by as much (the
+// parent-reading frames' with the pool too), keeping its margin.
 import { statSync } from 'node:fs';
 import { measureFrames } from '../frame-memory.mjs';
 import { done, FIXTURE, ok, SLOT_PORTS } from '../lib.mjs';
@@ -142,10 +153,10 @@ import { done, FIXTURE, ok, SLOT_PORTS } from '../lib.mjs';
 const BUNDLE = new URL('../../dist/injectDocument.js', import.meta.url);
 const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 465;
 const FRAMES = Number(process.env.FRAMES) || 20;
-const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1134;
-const OTHER_LIMIT_KB = Number(process.env.FRAME_HEAP_OTHER_LIMIT_KB) || 1136;
-const CLICK_LIMIT_KB = Number(process.env.FRAME_HEAP_CLICK_LIMIT_KB) || 1149;
-const PART_LIMIT_KB = Number(process.env.FRAME_HEAP_PART_LIMIT_KB) || 1130;
+const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1106;
+const OTHER_LIMIT_KB = Number(process.env.FRAME_HEAP_OTHER_LIMIT_KB) || 1108;
+const CLICK_LIMIT_KB = Number(process.env.FRAME_HEAP_CLICK_LIMIT_KB) || 1121;
+const PART_LIMIT_KB = Number(process.env.FRAME_HEAP_PART_LIMIT_KB) || 1102;
 // With the site pool on (STOMP_SITE_POOL) a frame of another site is a
 // slot's: its first one takes the pool's spare and the hub starts the next,
 // about 3.4 MB once, which 20 frames would read as 170 KB each, so the
@@ -156,7 +167,7 @@ const PART_LIMIT_KB = Number(process.env.FRAME_HEAP_PART_LIMIT_KB) || 1130;
 // stand-in every document of the frame's origin shares for it.
 const POOL = SLOT_PORTS.length > 0;
 const PARENT_LIMIT_KB =
-	Number(process.env.FRAME_HEAP_PARENT_LIMIT_KB) || (POOL ? 1150 : 1136);
+	Number(process.env.FRAME_HEAP_PARENT_LIMIT_KB) || (POOL ? 1122 : 1108);
 
 const bundleKB = statSync(BUNDLE).size / 1024;
 ok(
