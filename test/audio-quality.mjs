@@ -535,6 +535,11 @@ export function compare(sentRecording, gotRecording) {
 		delaySpreadMs: ms.length
 			? +(Math.max(...ms) - Math.min(...ms)).toFixed(1)
 			: null,
+		// the delay over the whole recording (its blocks' median), where
+		// latencyMs is its first 2 s's
+		latencyMedianMs: ms.length
+			? Math.round(result.latencyMs - median(ms))
+			: result.latencyMs,
 		segSnrDb: snrs.length ? +median(snrs).toFixed(1) : null,
 		segSnrLowDb: snrs.length
 			? +[...snrs]

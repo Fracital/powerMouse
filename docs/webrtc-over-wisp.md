@@ -1146,7 +1146,8 @@ unless the peer's `stereo=1` asks for two at 64, `maxaveragebitrate`,
 hand (`src/rtc/g711.ts`: the track averaged down to 8 kHz, 160 bytes a
 packet). Three things about Chrome's encoder shape the code, each measured:
 it refuses input that is not exactly what it was configured for (so it is
-made for the track's own rate, and channels are mixed here); its
+made for the track's own rate, or 48 kHz as below, and channels are mixed
+here); its
 timestamps are its first input's plus what it has made, whatever the later
 inputs say (so a jump in the track's timestamps starts a new encoder, and
 the RTP time jumps with it); and with `usedtx` it makes nothing during a
@@ -1177,6 +1178,28 @@ only after ten without a voice), so an encoder late with a frame of
 speech on a loaded machine is not taken for one that left it out. After
 it the far end conceals 500 to 900 samples a call (the byte comes about
 20 ms after Chrome's would).
+
+A track at a rate Opus does not have (44.1 kHz, the fake capture
+device's and many microphones' and sound cards', or 22.05, 32 or 96 kHz)
+is made 48 kHz in the worker before the encoder (`src/rtc/resample.ts`:
+Chrome's SincResampler's filter, 32 taps, 16 input samples late, so each
+10 ms block's sound is there with the block). Given such a rate itself,
+the encoder converts it and holds each frame 10 to 40 ms past its last
+sample, unevenly (measured on 157, fed in real time 10 ms at a time: 13
+ms at 44.1 kHz, 21 at 22.05 and 32, 10 at 96, from 0.3 at Opus's own
+rates). Through the proxy that was 30.4 ms from a frame's first sample
+to its leaving the worker in place of 20.2, and the far end's jitter
+buffer grew with the unevenness (its jitter 6 ms against 1 natively):
+what the page sent came 74 to 89 ms after it was captured (median of
+four runs each way, same-origin and isolated) where natively it came
+after 43 to 54; now 51 to 55 ms, its jitter 1 ms. On the wire from the
+worker to the far end a packet takes under a millisecond. The
+webrtc-audio suite's `rates` call sends one capture twice, through
+AudioContexts at 48 and 44.1 kHz: the far end heard the second 21 to 34
+ms after the first (its blocks' median delay), natively -11 to -2 (once
+-40, lined up badly), now -13 to -1. What the page receives comes 5 to 8
+ms later than natively: the playout buffer holds 60 ms of Opus where the
+arrivals are steady (below), Chrome's 38 ms.
 
 Receiving (`AudioReceiver`): Opus through an `AudioDecoder` (one output a
 packet, in order, which is how a decoded frame gets its RTP time back: the

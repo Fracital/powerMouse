@@ -209,11 +209,14 @@
 			{ constraints = true, context = null, scramble = false } = {},
 		) {
 			const entry = peer(name);
-			const stream = await navigator.mediaDevices.getUserMedia({
-				audio: constraints,
-			});
+			// (a second track is of the same capture: another would start
+			// the fake device's file anew, at another moment)
+			const stream = (entry.stream ??=
+				await navigator.mediaDevices.getUserMedia({
+					audio: constraints,
+				}));
 			let [track] = stream.getAudioTracks();
-			entry.sources.push(track);
+			if (!entry.sources.includes(track)) entry.sources.push(track);
 			const settings = track.getSettings();
 			let rate = null;
 			if (context !== null) {
@@ -230,7 +233,8 @@
 				[track] = to.stream.getAudioTracks();
 				entry.sources.push(track);
 			}
-			entry.sent = track;
+			// (a second track sent beside it is not what is recorded)
+			entry.sent ??= track;
 			const sender = entry.pc.addTrack(track, new MediaStream([track]));
 			if (scramble) {
 				// both given with the transceiver, as Discord gives them:
@@ -286,14 +290,14 @@
 		},
 		/**
 		 * `ms` of the sound: what the connection sends (`sent`), or what it
-		 * receives, read off the track (`track`) or where a page plays it:
-		 * through an AudioContext (`context`, of `rate` or its own) into a
-		 * MediaStreamDestination
+		 * receives (the `index`th track it got), read off the track
+		 * (`track`) or where a page plays it: through an AudioContext
+		 * (`context`, of `rate` or its own) into a MediaStreamDestination
 		 */
-		async record(name, what, ms, rate = 0) {
+		async record(name, what, ms, rate = 0, index = 0) {
 			const entry = peer(name);
 			if (what === 'sent') return record(entry.sent, ms);
-			const [track] = entry.tracks;
+			const track = entry.tracks[index];
 			if (!track) throw new Error('no track received');
 			if (what === 'track') return record(track, ms);
 			const audio = new AudioContext(rate ? { sampleRate: rate } : undefined);

@@ -504,6 +504,7 @@ class FakeEncoder {
 				'Input audio buffer is incompatible with codec parameters',
 			);
 		if (this.first === null) this.first = data.timestamp;
+		(this.inputs ??= []).push(data.data.slice());
 		this.pending += data.duration;
 		if (data.data.some((value) => value !== 0)) this.loud = true;
 		while (this.pending >= 20000 - 1) {
@@ -615,6 +616,65 @@ const talkspurts = (frames) =>
 	);
 }
 {
+	// WebCodecs' encoder holds each frame of a rate other than Opus's own
+	// 10 to 40 ms (its own conversion, measured on 157): the sender gives
+	// it 48 kHz instead, each block's sound with the block, 16 samples late.
+	// (`behind`: how many samples short of the block's end the encoder was
+	// after it, rounding aside)
+	const results = {};
+	for (const rate of [44100, 32000, 96000, 16000]) {
+		const inputs = Array.from({ length: 100 }, (_, i) =>
+			sound(i, { rate, at: 5000 + i * 10000 }),
+		);
+		const frames = await send(inputs, opus());
+		const encoder = FakeEncoder.made.at(-1);
+		const fed = encoder.inputs.map((input) => input.length);
+		// against the tone at 48 kHz, as late as the filter is
+		const all = new Float32Array(fed.reduce((a, b) => a + b, 0));
+		let at = 0;
+		for (const input of encoder.inputs)
+			all.set(input, (at += input.length) - input.length);
+		const late = rate === 16000 ? 0 : 16 / rate;
+		let signal = 0;
+		let noise = 0;
+		const out = encoder.config.sampleRate;
+		for (let i = 1000; i < all.length; i++) {
+			const ideal = 0.5 * Math.sin(2 * Math.PI * 440 * (i / out - late));
+			signal += ideal * ideal;
+			noise += (all[i] - ideal) ** 2;
+		}
+		results[rate] = {
+			out,
+			frames: frames.length,
+			steps: [...new Set(steps(frames))],
+			// what the encoder had after each block, against what the block brought it to
+			behind: Math.max(
+				...fed.map(
+					(_, n) =>
+						Math.round(((n + 1) * (rate / 100) * out) / rate) -
+						fed.slice(0, n + 1).reduce((a, b) => a + b, 0),
+				),
+			),
+			snr: +(10 * Math.log10(signal / noise)).toFixed(1),
+		};
+	}
+	ok(
+		"a track at a rate other than Opus's own is encoded at 48 kHz, each block's sound with the block, as the tone it was",
+		[44100, 32000, 96000].every(
+			(rate) =>
+				results[rate].out === 48000 &&
+				results[rate].frames === 50 &&
+				results[rate].steps.join() === '960' &&
+				results[rate].behind <= 1 &&
+				results[rate].snr > 60,
+		) &&
+			results[16000].out === 16000 &&
+			results[16000].frames === 50 &&
+			results[16000].behind === 0,
+		JSON.stringify(results),
+	);
+}
+{
 	// the track stops for 0.3 s after half a second, and so do its times
 	const inputs = Array.from({ length: 100 }, (_, i) =>
 		sound(i, { at: 7777 + i * 10000 + (i >= 50 ? 300000 : 0) }),
@@ -677,13 +737,13 @@ const talkspurts = (frames) =>
 		`${mixed.length} frames`,
 	);
 	const other = await send(
-		Array.from({ length: 20 }, (_, i) => sound(i, { rate: 44100 })),
+		Array.from({ length: 20 }, (_, i) => sound(i, { rate: 24000 })),
 		opus(),
 	);
 	ok(
-		"the encoder is made for the track's own rate",
+		"the encoder is made for the track's own rate, one Opus takes as it is",
 		other.length === 10 &&
-			FakeEncoder.made.at(-1).config.sampleRate === 44100 &&
+			FakeEncoder.made.at(-1).config.sampleRate === 24000 &&
 			steps(other).every((step) => step === 960),
 		`${other.length} frames at ${FakeEncoder.made.at(-1).config.sampleRate}`,
 	);

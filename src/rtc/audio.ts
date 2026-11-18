@@ -28,6 +28,7 @@ import {
 	FLAG_VOICE,
 	type Frame,
 } from './records';
+import { Resampler } from './resample';
 
 /** hands an encoded frame to the stack; `age` is how long ago it was captured, in ms */
 export type FrameWriter = (frame: Frame, age: number) => void;
@@ -43,6 +44,12 @@ const OPUS_STEP = 120;
 /** the Opus frame this side sends: 20 ms */
 const FRAME_US = 20000;
 const OPUS_FRAME = 960;
+/**
+ * The rates WebCodecs' Opus encoder takes as they are; any other is made
+ * 48 kHz here first (src/rtc/resample.ts: the encoder's own conversion
+ * held each frame 10 to 40 ms)
+ */
+const OPUS_RATES = [8000, 12000, 16000, 24000, 48000];
 /** frames an encoder that leaves silence out must have skipped before its time is moved on */
 const DTX_RESUME = 5;
 /**
@@ -149,6 +156,9 @@ export class AudioSender {
 	/** the input the encoder was made for */
 	#rate = 0;
 	#channels = 0;
+	/** that input at 48 kHz, when the encoder does not take its rate, and the time of what it has made */
+	#resampler: Resampler | null = null;
+	#resampled = 0;
 	/** the encoder leaves silence out (the peer's `usedtx=1`) */
 	#dtx = false;
 	/**
@@ -359,6 +369,8 @@ export class AudioSender {
 		this.#last = null;
 		this.#placed = false;
 		this.#down = null;
+		this.#resampler = null;
+		this.#resampled = 0;
 		this.#g722 = null;
 		this.#framer = null;
 		this.#fill = 0;
@@ -415,25 +427,40 @@ export class AudioSender {
 		const samples = planes(data, channels);
 		this.#squares += power(samples);
 		this.#count += samples.length;
-		// the encoder takes only what it was configured for
-		const input =
-			data.numberOfChannels === channels
-				? data
-				: new AudioData({
+		// the encoder takes only what it was configured for: these
+		// channels, at its rate (each output sample of the resampler is
+		// at the time of the input it stands for)
+		const resampler = this.#resampler;
+		let input: AudioData | null = data;
+		if (resampler) {
+			const made = resampler.push(samples, data.numberOfFrames);
+			input = made.frames
+				? new AudioData({
 						format: 'f32-planar',
-						sampleRate: data.sampleRate,
-						numberOfFrames: data.numberOfFrames,
+						sampleRate: 48000,
+						numberOfFrames: made.frames,
 						numberOfChannels: channels,
-						timestamp: data.timestamp,
-						data: samples,
-					});
+						timestamp: this.#epoch + (this.#resampled / 48000) * 1e6,
+						data: made.samples,
+					})
+				: null;
+			this.#resampled += made.frames;
+		} else if (data.numberOfChannels !== channels)
+			input = new AudioData({
+				format: 'f32-planar',
+				sampleRate: data.sampleRate,
+				numberOfFrames: data.numberOfFrames,
+				numberOfChannels: channels,
+				timestamp: data.timestamp,
+				data: samples,
+			});
 		try {
-			encoder.encode(input);
+			if (input) encoder.encode(input);
 		} catch (error) {
 			this.#restart();
 			return;
 		} finally {
-			if (input !== data) input.close();
+			if (input && input !== data) input.close();
 		}
 		this.#fedUs += duration;
 		this.#fedAt = performance.now();
@@ -514,9 +541,10 @@ export class AudioSender {
 					if (this.#encoder === encoder) this.#restart();
 				},
 			});
+			const resample = !OPUS_RATES.includes(rate);
 			encoder.configure({
 				codec: 'opus',
-				sampleRate: rate,
+				sampleRate: resample ? 48000 : rate,
 				numberOfChannels: channels,
 				// the browser's own rates for a voice and for stereo
 				bitrate:
@@ -535,6 +563,8 @@ export class AudioSender {
 				} as OpusEncoderConfig,
 			});
 			this.#encoder = encoder;
+			this.#resampler = resample ? new Resampler(rate, 48000, channels) : null;
+			this.#resampled = 0;
 			this.#dtx = parameters.usedtx === '1';
 			this.#rate = rate;
 			this.#channels = channels;

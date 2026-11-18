@@ -128,18 +128,28 @@ const INBOUND = [
  * A call: `own` offers, the far end answers, each sends its fake
  * microphone (`own` as `mic` says), and both record. `munge` rewrites
  * the answer before `own` takes it (what a page does to the far end's
- * description). Resolves with each direction compared.
+ * description). With `also`, `own` sends a second track (`mic` as
+ * `also` says) and the far end's two are compared with each other.
+ * Resolves with each direction compared.
  */
 async function call(
 	own,
 	far,
-	{ mic = {}, munge = null, play = 'track', scramble = false } = {},
+	{
+		mic = {},
+		also = null,
+		munge = null,
+		play = 'track',
+		scramble = false,
+	} = {},
 ) {
 	const record = { failure: null };
 	try {
 		await own.call('open');
 		await far.call('open');
 		record.ownMic = await own.call('mic', { constraints: PLAIN, ...mic });
+		if (also)
+			record.alsoMic = await own.call('mic', { constraints: PLAIN, ...also });
 		record.farMic = await far.call('mic', { constraints: PLAIN, scramble });
 		const offer = await own.call('local', 'offer');
 		await far.call('remote', 'offer', offer);
@@ -153,12 +163,16 @@ async function call(
 		await far.call('unmuted');
 		// the call settles
 		await sleep(1500);
-		const [sentByOwn, heardByFar, sentByFar, heardByOwn] = await Promise.all([
-			own.call('record', 'sent', 11000),
-			sleep(1000).then(() => far.call('record', 'track', 9000)),
-			far.call('record', 'sent', 11000),
-			sleep(1000).then(() => own.call('record', play, 9000)),
-		]);
+		const [sentByOwn, heardByFar, sentByFar, heardByOwn, alsoByFar] =
+			await Promise.all([
+				own.call('record', 'sent', 11000),
+				sleep(1000).then(() => far.call('record', 'track', 9000)),
+				far.call('record', 'sent', 11000),
+				sleep(1000).then(() => own.call('record', play, 9000)),
+				also && sleep(1000).then(() => far.call('record', 'track', 9000, 0, 1)),
+			]);
+		// how much later the second track's sound comes than the first's
+		if (also) record.apart = compare(heardByFar, alsoByFar);
 		// (AUDIO_KEEP=1: the recordings themselves, in the run's file in test/out)
 		if (process.env.AUDIO_KEEP === '1')
 			record.raw = { sentByOwn, heardByFar, sentByFar, heardByOwn };
@@ -191,6 +205,7 @@ const brief = (side) =>
 	side &&
 	JSON.stringify({
 		latency: side.latencyMs,
+		latencyMedian: side.latencyMedianMs,
 		match: side.match,
 		snr: side.segSnrDb,
 		snrLow: side.segSnrLowDb,
@@ -231,6 +246,10 @@ const SCENARIOS = {
 	discord: { mic: { scramble: true }, scramble: true, munge: discordFmtp },
 	// silence left out without a transform
 	dtx: { munge: discordFmtp },
+	// the microphone sent twice, through an AudioContext at 48 kHz (Opus's
+	// own rate) and through one at 44.1 kHz: the far end hears the second
+	// as soon after the first as natively
+	rates: { mic: { context: 48000 }, also: { context: 44100 } },
 };
 const only = process.env.AUDIO_SCENARIOS?.split(',');
 
@@ -253,7 +272,7 @@ const run = async (page, name) => {
 	]);
 	(results[name] ??= {})[page.label] = got;
 	console.log(
-		`  ${page.label} ${name}: ${got.failure ?? ''}\n    fmtp ${JSON.stringify(got.fmtp)} mic ${JSON.stringify(got.ownMic)}\n    sends    ${brief(got.sends)}\n    receives ${brief(got.receives)}${got.seen ? `\n    seen ${JSON.stringify(got.seen, (key, value) => (key === 'times' ? undefined : value))}` : ''}`,
+		`  ${page.label} ${name}: ${got.failure ?? ''}\n    fmtp ${JSON.stringify(got.fmtp)} mic ${JSON.stringify(got.ownMic)}\n    sends    ${brief(got.sends)}\n    receives ${brief(got.receives)}${got.apart ? `\n    apart    ${brief(got.apart)}` : ''}${got.seen ? `\n    seen ${JSON.stringify(got.seen, (key, value) => (key === 'times' ? undefined : value))}` : ''}`,
 	);
 	if (VERBOSE) console.log(JSON.stringify(got));
 	return got;
@@ -330,6 +349,23 @@ for (const name of Object.keys(SCENARIOS)) {
 				`${page.label}, ${name}: the far end takes the silences the page leaves out for silence, as natively (it conceals no more of them)`,
 				typeof concealed === 'number' && concealed <= natively + 9600,
 				`concealed ${concealed} samples | natively ${natively}`,
+			);
+		}
+		if (name === 'rates') {
+			// (WebCodecs' Opus encoder held each frame of a 44.1 kHz track
+			// 10 to 30 ms, which the far end's jitter buffer then added to)
+			// (over the whole recording: the far end's jitter buffer moves
+			// each stream's delay on its own, natively by up to 10 ms either
+			// way, and further when the two line up badly; the tracks are
+			// of one capture, so natively apart is no reason to be)
+			const apart = got.apart?.latencyMedianMs;
+			const natively = want.apart?.latencyMedianMs;
+			ok(
+				`${page.label}, rates: the sound of a 44.1 kHz track comes as soon after a 48 kHz one's as natively`,
+				Number.isFinite(apart) &&
+					Number.isFinite(natively) &&
+					apart <= Math.max(natively, 0) + 15,
+				`${apart} ms after | natively ${natively}; ${brief(got.apart)}`,
 			);
 		}
 		if (name !== 'discord') continue;
