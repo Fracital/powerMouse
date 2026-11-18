@@ -293,6 +293,32 @@
 			return t;
 		},
 	);
+	kernel(
+		'keyed move styled',
+		() => {
+			// a list a framework keeps, each row's style set through the CSSOM
+			// (in the document itself: other kernels empty the box)
+			const list = document.createElement('div');
+			list.hidden = true;
+			document.body.append(list);
+			const rows = [];
+			for (let i = 0; i < 200; i++) {
+				const row = document.createElement('div');
+				row.style.width = `${i}px`;
+				list.append(row);
+				rows.push(row);
+			}
+			return { list, rows };
+		},
+		({ list, rows }) => {
+			for (let r = 0; r < 5; r++)
+				for (const row of rows) {
+					row.style.height = `${r}px`;
+					list.insertBefore(row, list.firstChild);
+				}
+			return list.firstChild.style.cssText.length + list.childElementCount;
+		},
+	);
 
 	// URL attributes and plain ones
 	kernel(

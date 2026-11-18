@@ -1,3 +1,4 @@
+import { MAY_ROUTE } from '../../../cssURL';
 import {
 	isSpeculationRules,
 	NO_SPECULATION,
@@ -681,14 +682,24 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					// and one whose watched attributes all have the original the
 					// hooks kept beside them has none to route (every move of an
 					// element the hooks saw walked it again with the swap: a
-					// framework's keyed moves)
+					// framework's keyed moves). A style a CSSOM write serialised
+					// has none (the write dropped it), and one that names nothing
+					// to route is its own original: React's and jQuery's style
+					// objects ran the style hook on every move
 					const working = pendingAttributes(element);
 					if (
 						names.some(
 							(name) =>
 								!name.startsWith('s_o:') &&
 								domHooksModule.hooksAttribute(name) &&
-								(working || !names.includes(`s_o:${name}`)),
+								(working ||
+									(!names.includes(`s_o:${name}`) &&
+										(name !== 'style' ||
+											MAY_ROUTE.test(
+												Reflect.apply(nativeGetAttribute, element, [
+													name,
+												]) as string,
+											)))),
 						)
 					)
 						usePrototype(element, CustomElement.prototype, (element) => {
