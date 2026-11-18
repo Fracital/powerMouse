@@ -207,6 +207,9 @@
 					outcome(() =>
 						document.createRange().createContextualFragment('<b>x</b>'),
 					),
+				// window.open(), routed by a deferred part
+				// (src/inject/dom/windowOpen.ts)
+				open: () => outcome(() => window.open('', '_blank')),
 				notFunction: () =>
 					outcome(() => {
 						const o = {};
