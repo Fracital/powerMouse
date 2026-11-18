@@ -256,15 +256,25 @@ if (window === window.parent || !origins.length) {
 											uv: init.passkeys.uv === true,
 											testing: init.passkeys.testing === true,
 										},
-										prompt: async (
+										// methods, not arrows: babel, which sorts the imports,
+										// refuses a typed async arrow in a conditional's branch
+										// (the file's imports went unchecked), and the return
+										// types break rpc's circular inference
+										async prompt(
 											request: PasskeyPrompt,
 											port: MessagePort,
-										): Promise<PasskeyAnswer | null> =>
-											(await rpc.call('passkeyPrompt', { request, port }, [
-												port,
-											])) as PasskeyAnswer | null,
-										focused: async (client: string): Promise<boolean> =>
-											(await rpc.call('passkeyFocused', client)) === true,
+										): Promise<PasskeyAnswer | null> {
+											return (await rpc.call(
+												'passkeyPrompt',
+												{ request, port },
+												[port],
+											)) as PasskeyAnswer | null;
+										},
+										async focused(client: string): Promise<boolean> {
+											return (
+												(await rpc.call('passkeyFocused', client)) === true
+											);
+										},
 									},
 								}
 							: {}),
