@@ -36,7 +36,11 @@ import DocumentClient, {
 	addDocumentOpenListener,
 	type StyleElement,
 } from '../Client';
-import { inertDocumentOf } from '../cloneNode';
+import {
+	inertDocumentOf,
+	nativeNodeType,
+	nativeQuerySelectorAll,
+} from '../cloneNode';
 import { ELEMENT_STYLE_INTERFACES } from '../cssRules';
 import { deferred } from '../deferred';
 import type { DeferredParts } from '../deferredParts';
@@ -2052,8 +2056,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// hooks run on the element itself, which makes its copy. Underneath the
 		// hooks, so the page's observers see nothing. A script is not one: it
 		// got its copy during the write, or (the transport in the page) does
-		// not run.
-		const nativeQueryAll = realm.Document.prototype.querySelectorAll;
+		// not run. Under a document, an element or a shadow root: the
+		// browser parses markup the inject rewrote into any of them
+		// (setHTMLUnsafe, a shadow root's innerHTML)
 		const LOADS = [
 			...['src', 'href', 'xlink:href', 'srcset', 'poster', 'data'],
 			'imagesrcset',
@@ -2072,14 +2077,16 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		const writtenObjects = OBJECT_LOADS.map(
 			([tag, name]) => `${tag}[${marker}${name}]:not([${name}])`,
 		).join(',');
-		moduleClient.writtenLoads = (document) => {
+		moduleClient.writtenLoads = (root) => {
 			const all = uncontrolled();
 			let elements: Element[];
 			try {
 				elements = [
-					...(Reflect.apply(nativeQueryAll, document, [
-						all ? written : writtenObjects,
-					]) as NodeListOf<Element>),
+					...(Reflect.apply(
+						nativeQuerySelectorAll[Reflect.apply(nativeNodeType, root, [])],
+						root,
+						[all ? written : writtenObjects],
+					) as NodeListOf<Element>),
 				];
 			} catch (error) {
 				return;

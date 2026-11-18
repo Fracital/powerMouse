@@ -119,7 +119,7 @@ const nativeTemplateContent = Reflect.getOwnPropertyDescriptor(
 	'content',
 )!.get!;
 const nativeAdoptNode = Document.prototype.adoptNode;
-const nativeNodeType = Reflect.getOwnPropertyDescriptor(
+export const nativeNodeType = Reflect.getOwnPropertyDescriptor(
 	Node.prototype,
 	'nodeType',
 )!.get!;
@@ -296,7 +296,11 @@ const nativeParentNode = Reflect.getOwnPropertyDescriptor(
 	'parentNode',
 )!.get!;
 const nativeRemoveChild = Node.prototype.removeChild;
-const nativeQuerySelectorAll: Record<number, (selectors: string) => unknown> = {
+/** the browser's querySelectorAll of a node of each type that has one */
+export const nativeQuerySelectorAll: Record<
+	number,
+	(selectors: string) => unknown
+> = {
 	1: Element.prototype.querySelectorAll,
 	9: Document.prototype.querySelectorAll,
 	11: DocumentFragment.prototype.querySelectorAll,

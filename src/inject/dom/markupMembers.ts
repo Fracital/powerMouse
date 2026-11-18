@@ -310,6 +310,24 @@ export function markupMembers(shared: MarkupContext) {
 	};
 	const document = () => client.global.document;
 	const sweep = () => client.sweepFrames?.();
+	// markup the inject rewrote that the browser's parser put in, in a
+	// document no worker controls: the nodes the parser made get their
+	// loads' copies now (DOMAttributes writtenLoads), a declarative shadow
+	// root's too (by the browser's getter: a closed one is out of reach)
+	const landedLoads = (root: Node, markup: string) => {
+		client.writtenLoads?.(root);
+		if (!/shadowrootmode/i.test(markup)) return;
+		const queue = childrenOf(root);
+		for (const node of queue) {
+			if (typeOf(node) !== 1) continue;
+			const shadow = call(shadowRootGet, node) as Node | null;
+			if (shadow) {
+				client.writtenLoads?.(shadow);
+				for (const child of childrenOf(shadow)) put(queue, child);
+			}
+			for (const child of childrenOf(node)) put(queue, child);
+		}
+	};
 	/** what the markup is where it lands: text (a <style>'s), markup the hooks put in (an SVG <style>'s or <script>'s), or markup for the browser's parser */
 	const contextKind = (context: Element): 'text' | 'nodes' | null => {
 		const name = call(localNameGet, context);
@@ -772,6 +790,7 @@ export function markupMembers(shared: MarkupContext) {
 			withMarkup(trustedHTML(shared.rewrite(markup, context, scripts))),
 		);
 		if (scripts && landing) record(landing, scripts);
+		if (landing) landedLoads(landing, markup);
 		sweep();
 		return result;
 	};

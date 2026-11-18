@@ -2617,8 +2617,8 @@ export default class DocumentClient extends Client {
 		formData?: FormData | null,
 		page?: string,
 	) => boolean;
-	/** @internal give the loads the parser made from markup the page wrote their copies (DOMAttributes; DOMHooks' write calls it) */
-	writtenLoads?: (document: Document) => void;
+	/** @internal give the loads the parser made from markup the page wrote their copies, under a document, an element or a shadow root (DOMAttributes; DOMHooks' write calls it) */
+	writtenLoads?: (root: Node) => void;
 	/**
 	 * @internal this client's synchronous bridge, for a client of another
 	 * bundle: a blob: document runs a bundle of its own, whose module classes

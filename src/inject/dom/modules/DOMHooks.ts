@@ -1706,6 +1706,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						Reflect.apply(target, that, [
 							trustedHTML(rewriteMarkup(markup, that.host ?? null)),
 						]);
+						// (in a document no worker controls, the loads' copies)
+						moduleClient.writtenLoads?.(that);
 						moduleClient.sweepFrames?.();
 					},
 				),

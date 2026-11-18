@@ -108,6 +108,23 @@ export function markupSinks(context: SinkContext) {
 		markup.nativeElement,
 		'shadowRoot',
 	)!.get!;
+	// Markup the inject rewrote that the browser's parser put in, in a
+	// document no worker controls: the rewrite left each load with only its
+	// marker (the copy it started was the inert element's), so the nodes the
+	// parser made get their copies now (DOMAttributes writtenLoads), a
+	// declarative shadow root's too (each nested one by the browser's
+	// getter: a closed one is out of reach)
+	const landedLoads = (root: Node, markup: string) => {
+		const roots = [root];
+		for (const root of roots) {
+			client.writtenLoads?.(root);
+			if (/shadowrootmode/i.test(markup))
+				for (const element of querySelectorAllOf(root)) {
+					const shadow = Reflect.apply(shadowRootOf, element, []) as Node;
+					if (shadow) roots.push(shadow);
+				}
+		}
+	};
 	// the element the selection starts in: the context the browser
 	// parses inserted markup in
 	const editingContext = (document: Document): Element | null => {
@@ -206,6 +223,7 @@ export function markupSinks(context: SinkContext) {
 				if (value === null) return false;
 				args[2] = trustedHTML(rewriteMarkup(value, editingContext(that)));
 				const result = Reflect.apply(target, that, args);
+				landedLoads(that, '');
 				client.sweepFrames?.();
 				return result;
 			}
@@ -236,6 +254,7 @@ export function markupSinks(context: SinkContext) {
 				}
 			} else return Reflect.apply(target, that, args);
 			const result = Reflect.apply(target, that, args);
+			if (command === 'insertimage') landedLoads(that, '');
 			if (made !== null)
 				for (const link of [
 					...(Reflect.apply(context.querySelectorAll, that, [
@@ -331,12 +350,14 @@ export function markupSinks(context: SinkContext) {
 				if (parsed.scripts)
 					scripts = members().notes(that as Node, parsed.options);
 			}
+			const written = args.length ? String(args[0]) : '';
 			if (args.length)
 				args[0] = trustedHTML(
-					rewriteMarkup(args[0] as string, markupContextOf(that), scripts),
+					rewriteMarkup(written, markupContextOf(that), scripts),
 				);
 			const result = Reflect.apply(target, that, args);
 			if (scripts) members().record(that as Node, scripts);
+			landedLoads(that as Node, written);
 			client.sweepFrames?.();
 			return result;
 		},
