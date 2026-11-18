@@ -134,8 +134,16 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 				});
 				return;
 			}
-			// the document's own, as natively (./activation.ts)
-			const activated = (activationState(moduleClient) & 1) !== 0;
+			// the document's own, as natively (./activation.ts), or for a
+			// navigation another document makes of this window in the call
+			// (navigateOther), that document's: the browser takes the
+			// initiator's, and this window's own is none (a popup opened
+			// without a URL has had no input)
+			const told = moduleClient.initiatorActivation;
+			const activated =
+				told?.url === url
+					? told.active
+					: (activationState(moduleClient) & 1) !== 0;
 			routed.postToWorker({
 				[NAVIGATION_HINT]: {
 					directory: routed.directory,

@@ -4,8 +4,11 @@
 // referrer), with and without user activation, such a popup sending itself
 // on by location.href under activation, a rel=noreferrer link; and the
 // Sec-Fetch-User of navigations a page starts in another browsing context
-// (an iframe's src, a form or a link into a named popup) under its
-// activation.
+// (an iframe's src, a form or a link into a named popup, a popup opened
+// without a URL that its opener sends on) under its activation, or with the
+// activation window.open() consumed (wpt-fetch-metadata's window-location
+// shape: an activation the runner's evaluation gave once reached such a
+// navigation through the proxy).
 // The worker took each for one the user started from the host (`none`,
 // `?1`); the document now tells it first (NAVIGATION_HINT). The host's own
 // navigation (frame.go) keeps `none` and `?1` and never waits for a hint.
@@ -56,6 +59,16 @@ const CASES = [
 		`${CROSS}/echo-headers`,
 		false,
 	],
+	...['location', 'href', 'assign', 'replace'].map((member) => [
+		`a popup opened without a URL and sent on by its opener's ${member === 'location' ? 'location' : `location.${member}`} in the same task, from a timer after a gesture (the open consumes the activation)`,
+		`openThen-${member}`,
+		`${FIXTURE}echo-headers`,
+	]),
+	[
+		"a popup opened in one gesture and sent on by its opener's location.assign from a timer of a later one",
+		'sendLater',
+		`${FIXTURE}echo-headers`,
+	],
 	[
 		'rel=noreferrer link into a frame, to another site, clicked by the user',
 		'noreferrer',
@@ -102,6 +115,20 @@ async function runCases(context, getFrame, tag) {
 			);
 			const popup = await popupEvent.catch(() => null);
 			if (!click && popup) await popup.click('#go').catch(() => {});
+			seen[name] = metadata(await recorded(key));
+			await popup?.close().catch(() => {});
+		} else if (kind.startsWith('openThen-') || kind === 'sendLater') {
+			const popupEvent = context.waitForEvent('page', { timeout: 10000 });
+			if (kind === 'sendLater') {
+				await getFrame().evaluate(() => window.__openNow());
+				await sleep(200);
+				await getFrame().evaluate((u) => window.__sendLater(u), url);
+			} else
+				await getFrame().evaluate(
+					([u, member]) => window.__openThen(u, member),
+					[url, kind.slice('openThen-'.length)],
+				);
+			const popup = await popupEvent.catch(() => null);
 			seen[name] = metadata(await recorded(key));
 			await popup?.close().catch(() => {});
 		} else if (kind === 'frameByScript') {

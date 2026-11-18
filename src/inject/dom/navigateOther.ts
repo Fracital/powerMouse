@@ -536,19 +536,33 @@ export function navigateOther(
 	// the navigation is made now and the worker needs no announcement. An
 	// opaque document's navigation (no Referer, Origin null) is the
 	// worker's to know only from one.
+	// (this document's activation as the call finds it: an open of the
+	// window in the same task consumed what it had, as natively)
+	let active = false;
+	try {
+		active = (activationState(client) & 1) !== 0;
+	} catch (error) {
+		// no user activation API
+	}
 	if (
 		initialBlank(target) &&
 		!client.sandboxedOpaque &&
 		!targetClient.sandboxedOpaque &&
 		Reflect.getPrototypeOf(targetClient.callIn) ===
 			Reflect.getPrototypeOf(client.ownCallback(() => {}))
-	)
-		return go();
-	let active = false;
-	try {
-		active = (activationState(client) & 1) !== 0;
-	} catch (error) {
-		// no user activation API
+	) {
+		// the window's location hooks tell the worker of the navigation
+		// (NavigationHint), and the browser takes this document's activation
+		// for its Sec-Fetch-User, not the window's: they hear it for the
+		// navigation they send on now. The window's document is of this
+		// document's origin (its creator's), so the site rule below holds
+		const owner = nav.clientOf(target) ?? targetClient;
+		owner.initiatorActivation = { url: destination.href, active };
+		try {
+			return go();
+		} finally {
+			owner.initiatorActivation = undefined;
+		}
 	}
 	let sameSite = false;
 	try {

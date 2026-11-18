@@ -2475,6 +2475,14 @@ export default class DocumentClient extends Client {
 	 * shows them, as natively, where it would show a navigation of its own
 	 */
 	navigatedBy?: (url: string, user: boolean, source: Element | null) => void;
+	/**
+	 * @internal set by navigateOther while another document of this realm
+	 * navigates this window to `url` in the call (a window still on its
+	 * initial about:blank): whether that document had transient activation
+	 * then, which the browser takes for the navigation's Sec-Fetch-User and
+	 * the hint this window's location hooks send carries (NavigationHint)
+	 */
+	initiatorActivation?: { url: string; active: boolean };
 	/** the frame element of this document named `name` (`target`, window.open), if any */
 	frameNamed(name: string): Element | null {
 		if (!name || name.startsWith('_')) return null;

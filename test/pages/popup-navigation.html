@@ -34,6 +34,29 @@
 		popup.document.body.append(button);
 		window.__opened = popup;
 	};
+	// a popup opened without a URL and sent on by this document, from a
+	// timer the test's evaluation (a gesture) set: `__openThen(url, member)`
+	// opens it and navigates it in one task, by `location`, `href`,
+	// `assign` or `replace` (window.open() consumes the activation, so
+	// natively no Sec-Fetch-User), as wpt's window-location pages do;
+	// `__openNow()` opens one and `__sendLater(url)` sends it on from a
+	// timer of a later gesture, which no open consumed
+	const navigateBy = (popup, url, member) => {
+		if (member === 'location') popup.location = url;
+		else if (member === 'href') popup.location.href = url;
+		else popup.location[member](url);
+	};
+	window.__openThen = (url, member) =>
+		setTimeout(() => {
+			const popup = window.open();
+			navigateBy(popup, url, member);
+			window.__opened = popup;
+		}, 50);
+	window.__openNow = () => {
+		window.__opened = window.open();
+	};
+	window.__sendLater = (url) =>
+		setTimeout(() => navigateBy(window.__opened, url, 'assign'), 50);
 	// navigations this document starts in another browsing context: an
 	// iframe whose src its button sets, a GET form and a link into a named
 	// popup. The test clicks the `#<kind>-go` element, or for a form
