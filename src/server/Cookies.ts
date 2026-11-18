@@ -876,6 +876,9 @@ export default class Cookies {
 		source: CookieSource = 'http',
 		partitionKey?: string,
 		crossSite = false,
+		// what each cookie did to the jar: its id and the cookie as stored,
+		// or null when it deleted one (none for a cookie the jar refused)
+		outcomes?: [string, JarCookie | null][],
 	): Promise<void> {
 		partitionKey = partitionKeyOf(partitionKey);
 		url = new URL(url);
@@ -915,11 +918,19 @@ export default class Cookies {
 					continue;
 			}
 
-			await this.#put(cookie, source, now);
+			const stored = await this.#put(cookie, source, now);
+			if (stored !== undefined) outcomes?.push([cookie.id, stored]);
 		}
 	}
-	/** store `cookie`, or delete it when it is expired */
-	async #put(cookie: JarCookie, source: CookieSource, now: number) {
+	/**
+	 * store `cookie`, or delete it when it is expired: the cookie as stored,
+	 * null for a deletion, undefined when nothing changed
+	 */
+	async #put(
+		cookie: JarCookie,
+		source: CookieSource,
+		now: number,
+	): Promise<JarCookie | null | undefined> {
 		const existing = (await this.db.get(STORE, cookie.id)) as
 			JarCookie | undefined;
 		// a script neither replaces nor deletes an HttpOnly cookie
@@ -928,7 +939,7 @@ export default class Cookies {
 			// Max-Age=0 or a past Expires: the site is deleting it
 			await this.db.delete(STORE, cookie.id);
 			this.onChange?.(cookie.domain);
-			return;
+			return null;
 		}
 		// Chrome keeps the old creation time only when the value is
 		// unchanged; a new value moves the cookie to the end of its path's
@@ -940,6 +951,7 @@ export default class Cookies {
 		}
 		await this.db.put(STORE, cookie);
 		this.onChange?.(cookie.domain);
+		return cookie;
 	}
 }
 
@@ -1179,12 +1191,29 @@ export function registerCookies(router: Router, cookies: Cookies): Cookies {
 	router.routes.set(
 		/^\/cookies\/set$/,
 		jsonAPI(
-			(
+			async (
 				value: string | string[],
 				url: string,
 				source?: CookieSource,
 				partitionKey?: string | null,
-			) => cookies.set(value, url, source, partitionKey ?? undefined),
+				// a document's own write: what it did to the jar, which the
+				// document applies to what it knows, so its next read of
+				// document.cookie needs no round trip of its own
+				outcomes?: boolean,
+			) => {
+				const done: [string, JarCookie | null][] | undefined = outcomes
+					? []
+					: undefined;
+				await cookies.set(
+					value,
+					url,
+					source,
+					partitionKey ?? undefined,
+					false,
+					done,
+				);
+				return done;
+			},
 		),
 	);
 	router.routes.set(/^\/cookies\/ordered$/, (request) =>

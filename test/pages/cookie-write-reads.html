@@ -1,0 +1,67 @@
+<!doctype html>
+<title>COOKIE WRITE READS</title>
+<body>
+	<iframe id="sibling" src="cookie-sibling.html?quiet"></iframe>
+	<script>
+		// Writes of document.cookie, each read back at once, as an ad library
+		// does (a probe, then its ids): what each read shows, in this
+		// document, in a new frame's about:blank document and in a sibling
+		// frame of the same origin. Through the proxy the suite also counts
+		// this document's round trips to the jar (window.__reads).
+		const p = `c${Date.now().toString(36)}_`;
+		const out = { steps: [] };
+		window.__cwr = out;
+		const mine = (cookies) =>
+			cookies
+				.split('; ')
+				.filter((cookie) => cookie.startsWith(p))
+				.map((cookie) => cookie.slice(p.length))
+				.join('; ');
+		(async () => {
+			const sibling = document.getElementById('sibling');
+			await new Promise((resolve) =>
+				sibling.contentDocument?.readyState === 'complete' &&
+				sibling.contentWindow.location.href !== 'about:blank'
+					? resolve()
+					: sibling.addEventListener('load', resolve, { once: true }),
+			);
+			while (typeof window.__reads !== 'function')
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			const reads = window.__reads;
+			const before = reads();
+			const blank = document.createElement('iframe');
+			document.body.append(blank);
+			const step = (name, write, where = document) => {
+				if (write) where.cookie = `${p}${write}`;
+				out.steps.push([
+					name,
+					// which of the three is the writer's own read
+					where === document ? 0 : where === blank.contentDocument ? 1 : 2,
+					mine(document.cookie),
+					mine(blank.contentDocument.cookie),
+					mine(sibling.contentDocument.cookie),
+				]);
+			};
+			step('a probe', 'probe=1; path=/');
+			step('the probe deleted', 'probe=; max-age=0; path=/');
+			step('an id', 'a=1; path=/');
+			step('another', 'b=2; path=/');
+			step('the first again, new value', 'a=3; path=/');
+			step('the first again, same value', 'a=3; path=/');
+			step('a longer path', 'c=4; path=/pages');
+			step('a path this page is not under', 'd=5; path=/elsewhere');
+			step(
+				'an expired date',
+				'b=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/',
+			);
+			step('from the about:blank frame', 'e=6; path=/', blank.contentDocument);
+			step('from the sibling frame', 'f=7; path=/', sibling.contentDocument);
+			step('read again, no write');
+			out.ownReads = reads() - before;
+			out.done = true;
+		})().catch((error) => {
+			out.error = String(error);
+			out.done = true;
+		});
+	</script>
+</body>

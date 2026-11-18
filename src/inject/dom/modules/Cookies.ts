@@ -364,7 +364,7 @@ export class CookiesModule extends Module<DocumentClient> {
 		const syncModule = client.getModule(SyncModule)!;
 
 		// a script-set cookie can neither create nor replace an HttpOnly one
-		if (
+		const answer =
 			!this.#inflight.size &&
 			syncModule.tryJsonAPI(
 				WRITE_BUDGET,
@@ -373,13 +373,34 @@ export class CookiesModule extends Module<DocumentClient> {
 				client.url.toString(),
 				'script',
 				this.#partitionKey,
-			)
-		) {
-			// kept for a read the bridge cannot make later
-			const now = Date.now();
-			const cookie = this.#known && this.#parse(value, now);
-			if (cookie) applyWrite(this.#known!, cookie, now);
-			this.#bump();
+				true,
+			);
+		if (answer) {
+			// the jar answers with what the write did (the cookie as stored, a
+			// deletion, nothing when refused), applied to what this document
+			// knows while that is current: an ad library reads document.cookie
+			// right after writing it, and every such read was a round trip of
+			// its own. Other documents of the site read the jar again (the new
+			// version)
+			const outcomes = answer.value as [string, JarCookie | null][] | null;
+			if (
+				Array.isArray(outcomes) &&
+				this.#known &&
+				this.#fresh &&
+				this.#version() === this.#cacheVersion
+			) {
+				for (const [id, stored] of outcomes) {
+					this.#known = this.#known.filter((cookie) => cookie.id !== id);
+					if (stored) this.#known.push(stored);
+				}
+				this.#restamp();
+			} else {
+				// kept for a read the bridge cannot make later
+				const now = Date.now();
+				const cookie = this.#known && this.#parse(value, now);
+				if (cookie) applyWrite(this.#known!, cookie, now);
+				this.#bump();
+			}
 			this.#changed();
 			return;
 		}
