@@ -313,9 +313,14 @@ function cryptoInject(config?: Config): boolean {
 	return config?.codec === 'aes' || config?.codec === 'base64';
 }
 
-export function injectDocumentJS(url: StompURL, config?: Config) {
+/** the document bundle's file for `config`, as a shell names it (injectDocumentJS) */
+export function injectDocumentFile(config?: Config) {
 	const key = cryptoInject(config) ? 'injectDocumentFull' : 'injectDocument';
-	return `${assetBase(url, config)}${assetName(config?.assets, key)}`;
+	return assetName(config?.assets, key);
+}
+
+export function injectDocumentJS(url: StompURL, config?: Config) {
+	return `${assetBase(url, config)}${injectDocumentFile(config)}`;
 }
 
 export function injectWorkerJS(url: StompURL, config?: Config) {

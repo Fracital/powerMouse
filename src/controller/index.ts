@@ -43,7 +43,7 @@ import type {
 	PasskeysConfig,
 	PasskeysInit as PasskeysInitOf,
 } from '../passkeys/types';
-import { libraryFile } from '../routeURL';
+import { injectDocumentFile, libraryFile } from '../routeURL';
 import { isUrlLike, urlLike } from '../StompURL';
 import { constructTransport, resolveHttp3 } from '../transport/construct';
 import { jarChanged, serveJar } from '../transport/jarServer';
@@ -1228,6 +1228,7 @@ export class StompController extends EventTarget {
 		// the service worker compiles the bytes it is handed, and a page's
 		// library compiles them synchronously if a rewrite beats the module)
 		const rewriterReady = this.#rewriterReady();
+		rewriterReady.then(() => this.#warmBundle()).catch(() => {});
 		this.#hostReady = Promise.all([
 			hooksReady,
 			transportReady,
@@ -1781,6 +1782,21 @@ export class StompController extends EventTarget {
 			);
 		}
 		await this.#fetchLibrary();
+	}
+	/**
+	 * Fetch the document bundle by the URL a proxied document's shell loads
+	 * it with, so that the HTTP cache has it when the first document asks:
+	 * that document downloaded all of it (510 KB), its parser waiting
+	 * between its first byte and its first script. A host that serves it
+	 * no-cache (the demo) still has each document ask whether it changed.
+	 * Nothing waits for this, and a failure leaves the document to fetch
+	 * the bundle itself, as before.
+	 */
+	#warmBundle() {
+		const url = new URL(injectDocumentFile(this.config), this.directory);
+		fetch(url)
+			.then((response) => response.arrayBuffer())
+			.catch(() => {});
 	}
 	/**
 	 * Fetch the light rewriter library asset (`init.assets.rewriterLib`) by the
