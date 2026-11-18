@@ -1,5 +1,3 @@
-import { digest } from './sha';
-
 // A proxied page's own Content-Security-Policy, as Chrome reads it and as
 // the proxy hands it to the browser (docs/csp.md).
 //
@@ -143,7 +141,7 @@ export const BROWSER_DIRECTIVES = [
  */
 export const WORKER_DIRECTIVES = [
 	...BROWSER_DIRECTIVES.filter((directive) => !directive.includes('frame-src')),
-	// where the page's list decides by URL alone (hostsApply)
+	// where the page's list decides by URL alone (./cspJudge.ts hostsApply)
 	'script-src-elem',
 	'style-src-elem',
 ];
@@ -325,16 +323,6 @@ export function trustedTypesRequired(
 	return found;
 }
 
-/** what the browser's script and style directives name of the proxy's own (codeSources) */
-export interface CodeOptions {
-	/** the nonce the document's shell and the inject's own scripts carry */
-	nonce: string;
-	/** the URLs a worker of the document imports the inject from (importScripts takes no nonce) */
-	assets: string[];
-	/** the name of the inject's own Trusted Types policy (ScriptFacts.tt) */
-	tt?: string;
-}
-
 /**
  * The directives the browser judges scripts and styles by, each written
  * out for itself; script-src stands for what only it decides of them
@@ -347,22 +335,6 @@ export const CODE_DIRECTIVES = [
 	'style-src-attr',
 	'script-src',
 ];
-
-const NONCE_OR_HASH = /^'(nonce-|sha(256|384|512)-)/i;
-const KEPT_KEYWORDS: Record<string, RegExp> = {
-	attr: /^'(unsafe-inline|unsafe-hashes|report-sample|sha(256|384|512)-[^']+)'$/i,
-	elem: /^'(unsafe-inline|strict-dynamic|report-sample|inline-speculation-rules|nonce-[^']+|sha(256|384|512)-[^']+)'$/i,
-};
-
-/** whether a script or style directive's `sources` lets the page's inline code run without a nonce or hash */
-export function inlineAllowed(sources: string[], directive: string): boolean {
-	const lower = sources.map((source) => source.toLowerCase());
-	return (
-		lower.includes("'unsafe-inline'") &&
-		!sources.some((source) => NONCE_OR_HASH.test(source)) &&
-		!(directive.startsWith('script') && lower.includes("'strict-dynamic'"))
-	);
-}
 
 /** whether `sources` names anything by its URL ('self', a host, a network scheme, `*`) */
 function namesURLs(sources: string[]): boolean {
@@ -377,137 +349,11 @@ function namesURLs(sources: string[]): boolean {
 	});
 }
 
-/**
- * Whether the hosts of a script or style directive's `sources` are the
- * worker's to apply to the document's requests: a list that lets a load
- * through by a nonce, a hash or 'strict-dynamic' judges it by its element,
- * which the worker never sees (the inject gives a load the page's policy
- * allows by its host the document's nonce, codeSources)
- */
-export function hostsApply(sources: string[]): boolean {
-	return (
-		!sources.some((source) => NONCE_OR_HASH.test(source)) &&
-		!sources.some((source) => source.toLowerCase() === "'strict-dynamic'")
-	);
-}
-
-/** what `codeAllows` is asked of a piece of the page's own code */
-export interface CodeItem {
-	/** the real URL of an external script or style, or null for inline code */
-	url?: URL | null;
-	/** the page's own text of an inline script, style, handler or eval (for a hash) */
-	text?: string | null;
-	/** a script or style element's nonce attribute, as the page set it */
-	nonce?: string | null;
-	/** an external script's integrity attribute */
-	integrity?: string | null;
-	/** what 'self' means (the real URL of the document whose policy it is) */
-	self?: URL;
-	/** code made from a string that WebAssembly compilation allows under 'wasm-unsafe-eval' */
-	wasm?: boolean;
-	/** the element is the parser's or a document.write's (not DOM-inserted): 'strict-dynamic' does not propagate to it */
-	parser?: boolean;
-}
-
-/**
- * Whether a script or style directive's `sources` let a specific piece of
- * the page's own code run, refuse or report, as Chrome judges it (measured,
- * Chrome 152 and 156). The browser never gets the page's script-src,
- * style-src or Trusted Types (browserPolicy); the inject enforces them
- * against the page's own code with this. `directive` is the effective
- * directive (CODE_DIRECTIVES); `script-src`/`style-src` stand for code made
- * from a string (eval, the Function constructor, a string timer, WebAssembly
- * compilation).
- */
-export function codeAllows(
-	sources: string[],
-	directive: string,
-	item: CodeItem = {},
-): boolean {
-	const lower = sources.map((source) => source.toLowerCase());
-	// code made from a string: only 'unsafe-eval' (and 'wasm-unsafe-eval' for
-	// WebAssembly compilation) lets it run
-	if (directive === 'script-src' || directive === 'style-src') {
-		if (lower.includes("'unsafe-eval'")) return true;
-		return !!item.wasm && lower.includes("'wasm-unsafe-eval'");
-	}
-	const attr = directive.endsWith('-attr');
-	const script = directive.startsWith('script');
-	const { url = null, text = null, nonce = null, self } = item;
-	// 'strict-dynamic' (script-src-elem only): a script the page inserts
-	// through the DOM is let through whether inline or external (trust
-	// propagates from the running script), host sources and 'unsafe-inline'
-	// are ignored, and the parser's and document.write's need a nonce or hash
-	if (script && !attr && lower.includes("'strict-dynamic'")) {
-		if (!item.parser) return true;
-		if (nonce && sources.includes(`'nonce-${nonce}'`)) return true;
-		if (url === null) return text !== null && hashMatches(sources, text);
-		return !!item.integrity && integrityMatches(sources, item.integrity);
-	}
-	if (url === null) {
-		// inline: a <script>/<style>'s text, or a handler/style attribute
-		if (!attr && nonce && sources.includes(`'nonce-${nonce}'`)) return true;
-		if (inlineAllowed(sources, directive)) return true;
-		if (text === null) return false;
-		// a handler or style attribute is let through by its hash only with
-		// 'unsafe-hashes'; a script or style element's by its hash alone
-		if (attr)
-			return lower.includes("'unsafe-hashes'") && hashMatches(sources, text);
-		return hashMatches(sources, text);
-	}
-	// an external script or style, named by its URL
-	if (nonce && sources.includes(`'nonce-${nonce}'`)) return true;
-	if (script && item.integrity && integrityMatches(sources, item.integrity))
-		return true;
-	return sourcesMatch(sources, url, self ?? url);
-}
-
 /** whether any of `policies` governs scripts or styles (the inject enforces those against the page's code) */
 export function enforcesCode(policies: Policy[]): boolean {
 	return policies.some((policy) =>
 		CODE_DIRECTIVES.some((directive) => governing(policy, directive) !== null),
 	);
-}
-
-/**
- * The sources the browser gets for a script or style directive whose page
- * sources are `sources`. The page's keywords, nonces, hashes and local
- * schemes are kept as written, so the browser judges the page's inline
- * code, its nonces, 'strict-dynamic' and eval itself. The proxy's own
- * scripts (the shell, the inject's) carry the document's nonce, given
- * wherever the page's inline code does not run without one (a nonce would
- * turn 'unsafe-inline' off). 'self' (every routed load) is given where the
- * page names URLs and nothing else decides by the element (the worker
- * applies the hosts), or where inline code runs (the inject bundle loads
- * by URL); elsewhere a load the page's policy allows by its host carries
- * the nonce (the inject gives it). A worker of the document imports the
- * inject by URL, which takes no nonce.
- */
-export function codeSources(
-	sources: string[],
-	directive: string,
-	{ nonce, assets }: CodeOptions,
-): string[] {
-	const kind = directive.endsWith('-attr') ? 'attr' : 'elem';
-	const kept: string[] = [];
-	for (const source of sources) {
-		const lower = source.toLowerCase();
-		if (KEPT_KEYWORDS[kind].test(source)) kept.push(source);
-		else if (
-			kind === 'elem' &&
-			SCHEME.test(lower) &&
-			!NETWORK.test(lower) &&
-			!kept.includes(lower)
-		)
-			kept.push(lower);
-	}
-	if (kind === 'attr') return kept;
-	const inline = inlineAllowed(sources, directive);
-	const byURL = inline || (namesURLs(sources) && hostsApply(sources));
-	if (!inline) kept.push(`'nonce-${nonce}'`);
-	if (byURL) kept.push("'self'");
-	else if (directive === 'script-src-elem') kept.push(...assets);
-	return kept;
 }
 
 const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
@@ -909,54 +755,7 @@ export function policyMark(): string {
 	return `p${[...bytes].map((byte) => byte.toString(36)).join('')}-`;
 }
 
-/** whether one of `sources` is a hash of `text` (its UTF-8 bytes; base64 or base64url) */
-export function hashMatches(sources: string[], text: string): boolean {
-	const hashes = sources.filter((source) =>
-		/^'sha(256|384|512)-/i.test(source),
-	);
-	if (!hashes.length) return false;
-	const made = new Map<string, string>();
-	return hashes.some((source) => {
-		const [, algorithm, value] = /^'(sha256|sha384|sha512)-([^']*)'$/i.exec(
-			source,
-		) ?? ['', '', ''];
-		if (!algorithm) return false;
-		const name = algorithm.toLowerCase() as 'sha256' | 'sha384' | 'sha512';
-		if (!made.has(name)) made.set(name, digest(name, text));
-		return made.get(name) === base64Standard(value);
-	});
-}
-
-/** whether one of `sources` is a hash an `integrity` attribute's metadata names */
-export function integrityMatches(
-	sources: string[],
-	integrity: string,
-): boolean {
-	const wanted = new Set(
-		sources
-			.map((source) => /^'(sha256|sha384|sha512)-([^']*)'$/i.exec(source))
-			.filter((match) => match !== null)
-			.map(
-				(match) => `${match![1].toLowerCase()}-${base64Standard(match![2])}`,
-			),
-	);
-	return integrity
-		.split(/\s+/)
-		.map((part) => /^(sha256|sha384|sha512)-([A-Za-z0-9+/_=-]+)/i.exec(part))
-		.some(
-			(match) =>
-				match !== null &&
-				wanted.has(`${match[1].toLowerCase()}-${base64Standard(match[2])}`),
-		);
-}
-
-/** a base64url value as base64, padded */
-function base64Standard(value: string): string {
-	const plain = value.replace(/-/g, '+').replace(/_/g, '/').replace(/=+$/, '');
-	return plain + '='.repeat((4 - (plain.length % 4)) % 4);
-}
-
-/** a nonce for the proxy's own scripts in one document (codeSources) */
+/** a nonce for the proxy's own scripts in one document (ScriptFacts.nonce) */
 export function policyNonce(): string {
 	const bytes = new Uint8Array(18);
 	crypto.getRandomValues(bytes);

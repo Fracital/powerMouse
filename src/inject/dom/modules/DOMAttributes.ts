@@ -25,7 +25,6 @@ import { parseSrcset, stringifySrcset } from '../../../srcset';
 import {
 	dataURLBytes,
 	INTEGRITY_MARK,
-	integrityHoldsSync,
 	markIntegrity,
 	NO_INTEGRITY,
 	REFUSED_FRAGMENT,
@@ -335,14 +334,24 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			// match go to the browser as they are, with the page's metadata on
 			// the element, and it refuses them itself as natively (its error,
 			// its message, a stylesheet with no sheet). Nothing of them runs, so
-			// nothing needs rewriting
+			// nothing needs rewriting. The digests are a deferred part
+			// (src/sriDigest.ts): without it the browser is given an empty
+			// data: URL to check instead, which runs nothing (and fails a
+			// digest), so the page's own never runs unrewritten
 			if (original?.protocol === 'data:' && metadata) {
 				const bytes = dataURLBytes(original.href);
-				if (bytes && !integrityHoldsSync(bytes, metadata)) {
+				let href = original.href;
+				let holds = false;
+				try {
+					holds = !!bytes && deferred('integrityHoldsSync')(bytes, metadata);
+				} catch (error) {
+					href = 'data:,';
+				}
+				if (bytes && !holds) {
 					givenIntegrity.add(element);
 					element.setAttribute('integrity', metadata);
 					element.removeAttributeOG('integrity');
-					return original.href;
+					return href;
 				}
 			}
 			return markIntegrity(routed, metadata, moduleClient.directory);

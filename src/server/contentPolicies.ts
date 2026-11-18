@@ -5,7 +5,6 @@ import {
 	governing,
 	governsWorkerRequests,
 	hopRefusals,
-	hostsApply,
 	namedRefusal,
 	parsePolicies,
 	REFUSED_URL,
@@ -13,6 +12,7 @@ import {
 	type Policy,
 	type WorkerPolicies,
 } from '../csp';
+import { hostsApply } from '../cspJudge';
 import { CSP_REPORT } from '../transport/messages';
 import type { NavigationChain } from './navigationHints';
 
@@ -276,7 +276,7 @@ export function refusingPolicies(
 		return (
 			governed !== null &&
 			// a script or style list that decides by the element too is the
-			// browser's and the inject's (src/csp.ts hostsApply)
+			// browser's and the inject's (src/cspJudge.ts hostsApply)
 			(!CODE_DIRECTIVES.includes(directive) || hostsApply(governed.sources)) &&
 			!sourcesMatch(governed.sources, url, document!.url, redirected)
 		);

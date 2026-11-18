@@ -79,7 +79,8 @@ The browser never gets the page's script-src or style-src, so STomp's own
 scripts and styles are never subject to it. The inject enforces them against
 the page's own code, from the page's policies the shell hands the client
 (`policyTexts`, and the metas the inject sees), as Chrome does (measured,
-Chrome 152 and 156; `src/csp.ts` `codeAllows`, `src/inject/dom/Client.ts`).
+Chrome 152 and 156; `src/cspJudge.ts` `codeAllows`,
+`src/inject/dom/policyChecks.ts`, a deferred part of the document bundle).
 A refusal is the inject's own securitypolicyviolation event, dispatched on
 the document, with Chrome's fields (the page's policy as its
 `originalPolicy`, the page's code as its `sample` under 'report-sample', the

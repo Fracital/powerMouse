@@ -111,10 +111,10 @@ import {
 	integrityMark,
 	markIntegrity,
 	NO_INTEGRITY,
-	refusalBytes,
 	REFUSED_FRAGMENT,
 	withIntegrityMark,
 } from '../sri';
+import { refusalBytes } from '../sriDigest';
 import StompURL from '../StompURL';
 import { getDomain, getPublicSuffix } from '../suffix';
 import type {

@@ -50,7 +50,78 @@
 					}
 					setTimeout(() => resolve({ events, pending: true }), 5000);
 				});
+			// a policy of the page's own, which allows the code the csp calls make
+			// and refuses their frame
+			// (the inject judges it: its checks are a deferred part,
+			// src/inject/dom/policyChecks.ts), in a meta the page inserts once
+			// the calls before it ran
+			const policed = () => {
+				if (document.querySelector('meta[http-equiv]')) return;
+				const meta = document.createElement('meta');
+				meta.httpEquiv = 'Content-Security-Policy';
+				meta.content =
+					"script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; frame-src 'none'";
+				document.head.append(meta);
+			};
+			const CSP_CALLS = {
+				// code made from a string: an EvalError's refusal, or 2
+				cspEval: () => outcome(() => eval('1 + 1')),
+				// an inline script the page inserts: whether it ran
+				cspScript: () => {
+					window.__cspRan = false;
+					const script = document.createElement('script');
+					script.textContent = 'window.__cspRan = true';
+					try {
+						document.body.append(script);
+					} catch (error) {
+						return { threw: String(error && error.message) };
+					}
+					return { ran: window.__cspRan };
+				},
+				// an inline style the page inserts: whether it applies
+				cspStyle: () => {
+					const box = document.createElement('div');
+					box.id = 'policed';
+					document.body.append(box);
+					const style = document.createElement('style');
+					style.textContent = '#policed { color: rgb(1, 2, 3); }';
+					try {
+						document.head.append(style);
+					} catch (error) {
+						return { threw: String(error && error.message) };
+					}
+					return { color: getComputedStyle(box).color };
+				},
+				// a frame its frame-src refuses (loadRefusal): whether its document
+				// is the one it was sent to
+				cspFrame: () =>
+					new Promise((resolve) => {
+						const frame = document.createElement('iframe');
+						frame.onload = () => {
+							let title;
+							try {
+								title = frame.contentDocument?.title ?? null;
+							} catch (error) {
+								title = null;
+							}
+							resolve({ title });
+						};
+						try {
+							frame.src = 'deferred-refusals-landed.html?frame';
+						} catch (error) {
+							resolve({ threw: String(error && error.message) });
+						}
+						document.body.append(frame);
+						setTimeout(() => resolve({ pending: true }), 5000);
+					}),
+			};
+			for (const [name, call] of Object.entries(CSP_CALLS))
+				CSP_CALLS[name] = () => {
+					policed();
+					return call();
+				};
 			const CALLS = {
+				...CSP_CALLS,
 				getUserMedia: () =>
 					outcome(() => navigator.mediaDevices.getUserMedia({ video: true })),
 				getCurrentPosition: () =>

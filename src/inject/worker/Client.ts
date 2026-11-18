@@ -2,12 +2,12 @@ import { ParsedConfig } from '../../config';
 import {
 	governing,
 	governsWorkerRequests,
-	hostsApply,
 	parsePolicies,
 	sourcesMatch,
 	type Policy,
 	type WorkerPolicies,
 } from '../../csp';
+import { hostsApply } from '../../cspJudge';
 import { workerKindPartition } from '../../partition';
 import type { EmulateInfo } from '../../serviceWorkerTypes';
 import { CSP_WORKER, WORKER_PARTITION } from '../../transport/messages';

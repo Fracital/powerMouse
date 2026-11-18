@@ -21,7 +21,11 @@
 // (its checks are a part, src/inject/dom/protocolHandlers.ts); execCommand's
 // insertHTML and Range's createContextualFragment throw before the browser
 // parses the markup (src/inject/dom/markupSinks.ts); window.open() throws
-// and opens nothing (src/inject/dom/windowOpen.ts). A part is made
+// and opens nothing (src/inject/dom/windowOpen.ts); under a policy of the
+// page's own that allows them, an eval throws, and an inline script and an
+// inline style the page inserts run and apply nothing, and a frame it
+// refuses still loads nothing (the policy's checks are a part,
+// src/inject/dom/policyChecks.ts). A part is made
 // synchronously within the call that needs it, so no page code runs between
 // the hook and the part (a download's copy is made after the click went
 // through the page, which the browser's own download had been cancelled
@@ -58,6 +62,14 @@ import {
 } from '../lib.mjs';
 
 const target = `${FIXTURE}pages/deferred-refusals.html`;
+/**
+ * The calls the page's own policy judges (a meta the child inserts first,
+ * which allows the code and refuses the frame: the checks are a deferred
+ * part, src/inject/dom/policyChecks.ts), made last: an eval, an inline
+ * script and style, a frame. (A synchronous request's and a WebSocket's checks are
+ * reached only past parts of their own, xhrChecks.ts and bareClient.ts)
+ */
+const POLICED = ['cspEval', 'cspScript', 'cspStyle', 'cspFrame'];
 const REFUSING = [
 	'getUserMedia',
 	'getCurrentPosition',
@@ -239,6 +251,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			'execCommand',
 			'contextualFragment',
 			'open',
+			...POLICED,
 		],
 	);
 	ok(
@@ -328,6 +341,14 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		answer.out?.notFunction?.threw === 'o[k] is not a function',
 		JSON.stringify(answer.out?.notFunction),
 	);
+	ok(
+		"with the parts, what the page's own policy allows runs and applies, and the frame it refuses loads nothing",
+		answer.out?.cspEval?.returned === 'number' &&
+			answer.out?.cspScript?.ran === true &&
+			answer.out?.cspStyle?.color === 'rgb(1, 2, 3)' &&
+			answer.out?.cspFrame?.title === null,
+		JSON.stringify(POLICED.map((call) => answer.out?.[call])),
+	);
 	const navigated = await top.evaluate(
 		(calls) => window.__child(calls),
 		['navigateOther'],
@@ -390,6 +411,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 				'notFunction',
 				'blankCopy',
 				'xmlLoad',
+				...POLICED,
 			],
 		},
 	);
@@ -463,6 +485,30 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			out.notFunction.threw !== 'no parts' &&
 			/not a function|was called on/.test(out.notFunction.threw),
 		JSON.stringify(out.notFunction),
+	);
+	// the page's own policy's checks: each refuses (an eval throws, an
+	// inline script and style run and apply nothing, and the refused frame
+	// still loads nothing), never lets the code through
+	ok(
+		"without the parts, an eval under the page's own policy throws",
+		out.cspEval?.threw === 'no parts',
+		JSON.stringify(out.cspEval),
+	);
+	ok(
+		"without the parts, an inline script under the page's own policy runs nothing",
+		out.cspScript?.ran === false,
+		JSON.stringify(out.cspScript),
+	);
+	ok(
+		"without the parts, an inline style under the page's own policy applies nothing",
+		typeof out.cspStyle?.color === 'string' &&
+			out.cspStyle.color !== 'rgb(1, 2, 3)',
+		JSON.stringify(out.cspStyle),
+	);
+	ok(
+		"without the parts, a frame the page's own policy refuses loads nothing",
+		out.cspFrame?.title === null,
+		JSON.stringify(out.cspFrame),
 	);
 	const saved = await downloadsSince(from);
 	ok(
