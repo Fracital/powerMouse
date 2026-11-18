@@ -36,6 +36,9 @@
 // (and the document.write stream, ./WriteStream.ts with its tokenizer, at a
 // document's first write)
 //
+// (and what performance.measureUserAgentSpecificMemory() answers, with the
+// page's own URLs, ./measuredMemory.ts, at a page's first call of it)
+//
 // (and the font faces of a sheet copied for a document no service worker
 // controls, ./lazyFonts.ts, at the first such face)
 //
@@ -112,6 +115,7 @@ import { instructionData, modifyXML, xmlProlog } from './instructions';
 import { lazyFonts } from './lazyFonts';
 import { formEncoding, legacyFormQuery, legacyQuery } from './legacyEncoding';
 import { markupMembers } from './markupMembers';
+import { measuredMemory } from './measuredMemory';
 import FingerprintModule from './modules/Fingerprint';
 import { longFrames } from './modules/LongFrames';
 import { longTasks } from './modules/LongTasks';
@@ -176,6 +180,9 @@ export const parts = {
 	workerStart,
 	compileFilter,
 	proceduralRunner,
+	// what measureUserAgentSpecificMemory() answers the page, at its first
+	// call (./measuredMemory.ts; ./modules/Isolation.ts)
+	measuredMemory,
 	longFrames,
 	longTasks,
 	cookieStoreMethods,
