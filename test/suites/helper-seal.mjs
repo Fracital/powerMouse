@@ -10,7 +10,12 @@
 // (helper-seal-child.html) framed by helper-seal.html hunts for its parent's
 // secret every one of those ways, in both demo modes, with and without the
 // parent reading the frame's contentWindow before the child arrives (which
-// puts the parent's client in the frame's initial about:blank).
+// puts the parent's client in the frame's initial about:blank). The secret
+// is fresh on every load and only the framing page holds it (the frame of
+// the child's own site it learns the name from holds none and frames
+// nothing), and each walk of the frame tree reports that it ran: a path
+// reads as sealed only when its code ran and found nothing, so a walk that
+// never ran cannot pass and a secret another page may read cannot fail it.
 import {
 	done,
 	FIXTURE,
@@ -22,6 +27,22 @@ import {
 	sleep,
 	submitLanding,
 } from '../lib.mjs';
+
+/** the framing page's secret, fresh on each load, from its own frame */
+async function secretOf(context) {
+	for (const page of context.pages())
+		for (const frame of page.frames()) {
+			const value = await frame
+				.evaluate(() =>
+					document.title === 'SEAL TOP' && !location.search.includes('sub')
+						? window.sealSecret
+						: null,
+				)
+				.catch(() => null);
+			if (value) return value;
+		}
+	return null;
+}
 
 /** the child's report, from any frame of the context */
 async function collect(context) {
@@ -55,6 +76,7 @@ const LEARNED = [
 const browser = await launch();
 const errors = [];
 const clientNames = [];
+const secrets = [];
 for (const [mode, base] of [
 	['same-origin', PROXY],
 	['isolated', HOST],
@@ -77,6 +99,21 @@ for (const [mode, base] of [
 		ok(`${label}: the child reports`, !!report, '');
 		const paths = report?.paths ?? {};
 		const detail = JSON.stringify(paths);
+		// only the framing page holds it, so a path that shows it reached
+		// that page
+		const secret = await secretOf(page.context());
+		secrets.push(secret);
+		const reached = (key) => !secret || String(paths[key]).includes(secret);
+		ok(
+			`${label}: the framing page holds a secret of this round`,
+			/^SEAL-SECRET-\w{8,}$/.test(String(secret)),
+			String(secret),
+		);
+		ok(
+			`${label}: no path shows the secret`,
+			!!secret && !Object.values(paths).some((v) => String(v).includes(secret)),
+			detail,
+		);
 		ok(
 			`${label}: the access API is found by its name, and a function's source no longer shows it`,
 			paths.accessNamed === 'true' && paths.sourceShowsAccess === 'false',
@@ -105,8 +142,9 @@ for (const [mode, base] of [
 		);
 		ok(
 			`${label}: the page's own eval and Function reach nothing`,
+			// the walk ran and found nothing
 			['eval', 'indirectEval', 'Function'].every(
-				(key) => !String(paths[key]).includes('SEAL-SECRET'),
+				(key) => paths[key] === 'ran nothing' && !reached(key),
 			),
 			detail,
 		);
@@ -124,9 +162,11 @@ for (const [mode, base] of [
 				paths[path] === 'nothing' || paths[path] === 'threw TypeError',
 				detail,
 			);
+		// the walk ran in the blank, and found nothing: a blank that ran no
+		// code, or threw, does not read as sealed
 		ok(
 			`${label}: a fresh about:blank frame reached by a literal name runs no code that reaches the parent`,
-			!String(paths.blankEval).includes('SEAL-SECRET'),
+			paths.blankEval === 'ran nothing' && !reached('blankEval'),
 			detail,
 		);
 		errors.push(...page.errors);
@@ -139,5 +179,10 @@ ok(
 		(name) => typeof name === 'string' && name !== '$P$s' && name.length >= 12,
 	) && new Set(clientNames).size === clientNames.length,
 	JSON.stringify(clientNames),
+);
+ok(
+	'each round the framing page held a secret of its own',
+	secrets.every(Boolean) && new Set(secrets).size === secrets.length,
+	JSON.stringify(secrets),
 );
 await done(browser, errors);

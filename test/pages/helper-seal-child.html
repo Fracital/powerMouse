@@ -20,8 +20,10 @@
 				paths[key] = `threw ${error.name}`;
 			}
 		};
-		// the code a raw evaluator would run: every window below the real top
-		const walk = `(function f(w) {
+		// the code a raw evaluator would run: every window below the real top,
+		// for a secret. It answers "ran" and what it found, so a path reads as
+		// safe only when the code ran and found nothing, not when it never ran
+		const walk = `'ran ' + ((function f(w) {
 			for (let i = 0; i < w.length; i++) {
 				try {
 					if (w[i].sealSecret) return w[i].sealSecret;
@@ -29,7 +31,7 @@
 					if (found) return found;
 				} catch (error) {}
 			}
-		})(top)`;
+		})(top) || 'nothing')`;
 		// what a client-like object leads to, by literal member reads (a
 		// computed read goes through the access API, which restricts a window)
 		const viaClient = (client) => {

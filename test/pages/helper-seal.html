@@ -5,21 +5,28 @@
 	<script>
 		// A page that frames another site and keeps a secret the child must not
 		// reach through anything the proxy puts on its own window (the client,
-		// the access API). With ?early the page reads the frame's contentWindow
-		// before the child's document arrives, which injects this page's client
-		// into the frame's initial about:blank (the child's document reuses it).
-		// ?access names the access API (the controller mints it): the child
-		// hunts with it as a page that learned it would
-		window.sealSecret = 'SEAL-SECRET';
+		// the access API). The secret is fresh on every load, and this page is
+		// the only one that holds it: the suite reads it here, so a path that
+		// reports it reached this page. With ?early the page reads the frame's
+		// contentWindow before the child's document arrives, which injects this
+		// page's client into the frame's initial about:blank (the child's
+		// document reuses it). ?access names the access API (the controller
+		// mints it): the child hunts with it as a page that learned it would.
+		// ?sub is the frame of the child's own site that the child reads the
+		// client's name from while it loads: it holds no secret and frames
+		// nothing, so whatever the child's walks find there is not this page's
 		const query = new URLSearchParams(location.search);
-		const childQuery = new URLSearchParams();
-		if (query.has('early')) childQuery.set('early', '');
-		if (query.has('access')) childQuery.set('access', query.get('access'));
-		const frame = document.createElement('iframe');
-		frame.src = refsCross(
-			`helper-seal-child.html${childQuery.size ? `?${childQuery}` : ''}`,
-		);
-		document.body.append(frame);
-		if (query.has('early')) window.__early = frame.contentWindow;
+		if (!query.has('sub')) {
+			window.sealSecret = `SEAL-SECRET-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+			const childQuery = new URLSearchParams();
+			if (query.has('early')) childQuery.set('early', '');
+			if (query.has('access')) childQuery.set('access', query.get('access'));
+			const frame = document.createElement('iframe');
+			frame.src = refsCross(
+				`helper-seal-child.html${childQuery.size ? `?${childQuery}` : ''}`,
+			);
+			document.body.append(frame);
+			if (query.has('early')) window.__early = frame.contentWindow;
+		}
 	</script>
 </body>
