@@ -2,6 +2,12 @@
 //! offers first. rustls has it only on aws-lc-rs, which does not build for
 //! wasm32-unknown-unknown; this one pairs ring's X25519 with the RustCrypto
 //! `ml-kem` crate (pure Rust). Shares and the secret put ML-KEM first.
+//!
+//! The plain X25519 share Chrome sends next to it has a key of its own:
+//! BoringSSL starts one key exchange per offered group, so the last 32 bytes
+//! of Chrome's X25519MLKEM768 share never equal its X25519 share. rustls
+//! offers the hybrid's own classical half as that share, which a server can
+//! tell from Chrome's by comparing the two.
 
 use rustls::{
 	crypto::{ring::kx_group::X25519, ActiveKeyExchange, SharedSecret, SupportedKxGroup},
@@ -21,12 +27,14 @@ pub static X25519_MLKEM768: &dyn SupportedKxGroup = &X25519MlKem768;
 impl SupportedKxGroup for X25519MlKem768 {
 	fn start(&self) -> Result<Box<dyn ActiveKeyExchange>, Error> {
 		let classical = X25519.start()?;
+		let standalone = X25519.start()?;
 		let (decapsulation_key, encapsulation_key) = MlKem768::generate(&mut rand_core::OsRng);
 		let mut combined_pub_key = encapsulation_key.as_bytes().to_vec();
 		debug_assert_eq!(combined_pub_key.len(), MLKEM768_ENCAPSULATION_KEY_LEN);
 		combined_pub_key.extend_from_slice(classical.pub_key());
 		Ok(Box::new(Active {
 			classical,
+			standalone,
 			decapsulation_key,
 			combined_pub_key,
 		}))
@@ -43,6 +51,8 @@ impl SupportedKxGroup for X25519MlKem768 {
 
 struct Active {
 	classical: Box<dyn ActiveKeyExchange>,
+	/// the separate X25519 share rustls offers beside this one
+	standalone: Box<dyn ActiveKeyExchange>,
 	decapsulation_key: <MlKem768 as KemCore>::DecapsulationKey,
 	combined_pub_key: Vec<u8>,
 }
@@ -70,16 +80,18 @@ impl ActiveKeyExchange for Active {
 		Ok(SharedSecret::from(secret))
 	}
 
-	/// Chrome also sends a plain X25519 share; rustls sends this one
+	/// Chrome also sends a plain X25519 share, with a key of its own;
+	/// rustls sends this one and completes it here when the server picks
+	/// X25519
 	fn hybrid_component(&self) -> Option<(NamedGroup, &[u8])> {
-		Some((self.classical.group(), self.classical.pub_key()))
+		Some((self.standalone.group(), self.standalone.pub_key()))
 	}
 
 	fn complete_hybrid_component(
 		self: Box<Self>,
 		peer_pub_key: &[u8],
 	) -> Result<SharedSecret, Error> {
-		self.classical.complete(peer_pub_key)
+		self.standalone.complete(peer_pub_key)
 	}
 
 	fn pub_key(&self) -> &[u8] {
