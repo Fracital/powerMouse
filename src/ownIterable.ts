@@ -81,6 +81,38 @@ class OwnIterator {
 }
 
 /**
+ * An array's steps, as its native iterator takes them (its length and the
+ * element read again at every step, done for good once past the end),
+ * without a call of the native one per element: the inject's loops are
+ * over arrays nearly all of them, and a step through the native cost
+ * several times one by index.
+ */
+class OwnArrayIterator {
+	declare a: any;
+	declare i: number;
+	declare e?: 1 | 2;
+	constructor(array: any, how?: 1 | 2) {
+		this.a = array;
+		this.i = 0;
+		this.e = how;
+	}
+	[iteratorKey]() {
+		return this;
+	}
+	next() {
+		const array = this.a;
+		const index = this.i;
+		if (array === undefined || index >= array.length) {
+			this.a = undefined;
+			return { value: undefined, done: true };
+		}
+		this.i = index + 1;
+		const value = array[index];
+		return { value: this.e! > 1 ? ownIterable(value) : value, done: false };
+	}
+}
+
+/**
  * `value` to iterate: as it is, or an iterator of its own. `how`: 1 for
  * `[...value]`, its values (an array); 2 for a loop whose variable is an
  * array pattern, each value as its own to iterate (`for ([k, v] of map)`).
@@ -89,7 +121,8 @@ class OwnIterator {
  */
 export function ownIterable(value: any, how?: 1 | 2): any {
 	let own = value;
-	if (value !== null && value !== undefined)
+	if (isArray(value)) own = new OwnArrayIterator(value, how);
+	else if (value !== null && value !== undefined)
 		for (let pass = 0; pass < 2 && own === value; pass++) {
 			const key = pass
 				? value[iteratorKey]
