@@ -2,7 +2,7 @@
 // measurement, and CI leaves measurements out). Each frame of a page
 // evaluates the document inject and runs its hooks in its own realm, and
 // ad-heavy pages keep hundreds of frames in one renderer, so a module that
-// adds a little to each frame adds it hundreds of times. Five checks:
+// adds a little to each frame adds it hundreds of times. Six checks:
 //
 // - the size of dist/injectDocument.js, against a budget: 418 KB as built,
 //   with the rewriter library a file of its own (dist/rewriterLib.js: the
@@ -84,6 +84,20 @@
 //   60 in measure-frame-memory about 1,102). The ceiling, 1,172 KB, keeps
 //   the same-site one's margin: one interface made in every such frame (the
 //   SVG element interfaces, +33 KB) goes past it, and so does that 26 KB.
+// - the same for FRAMES frames of another site that read their parent and
+//   top and post to their parent as they start, as an ad frame does
+//   (test/pages/frame-memory-parent.html). With the site pool those are a
+//   read of and a post to a window of another slot (siteWindows'
+//   restrictAcross and postAcross), which must need no deferred part: 1,124
+//   KB without the pool and 1,140 to 1,141 KB with it (STOMP_SITE_POOL=5)
+//   on Chrome 157 at the commit that put them back in the bundle, 1,142 to
+//   1,143 KB with them a part (40 frames, three runs each: 1,103.7 to
+//   1,104.9 KB against 1,106.9 to 1,107.6, the plain frames of another site
+//   1,094.0 to 1,095.9). The ceiling is 1,136 KB without the pool, 1,150 KB
+//   with it (about 9 KB over): the run-to-run noise at 20 frames is about
+//   that part's 3 KB, so site-pool-refusals holds that such a frame needs
+//   no part; the ceiling holds an interface or the whole parts statement
+//   made in every such frame.
 // - the same for FRAMES frames of another site that load their next
 //   document right after a real click in the top (test/frame-memory.mjs
 //   `click: 'refresh'`), as an ad frame loads its next ad: through the
@@ -136,8 +150,13 @@ const PART_LIMIT_KB = Number(process.env.FRAME_HEAP_PART_LIMIT_KB) || 1130;
 // slot's: its first one takes the pool's spare and the hub starts the next,
 // about 3.4 MB once, which 20 frames would read as 170 KB each, so the
 // frames of another site are measured after a first one settled (`warm`).
-// The ceilings are the same (docs/frame-memory.md, "With the site pool").
+// The ceilings are the same (docs/frame-memory.md, "With the site pool"),
+// but for the frames that read their parent and post to it: with the pool
+// those are reads of and posts to a window of another slot, which make the
+// stand-in every document of the frame's origin shares for it.
 const POOL = SLOT_PORTS.length > 0;
+const PARENT_LIMIT_KB =
+	Number(process.env.FRAME_HEAP_PARENT_LIMIT_KB) || (POOL ? 1150 : 1136);
 
 const bundleKB = statSync(BUNDLE).size / 1024;
 ok(
@@ -174,6 +193,24 @@ ok(
 	`a proxied frame of another site costs at most ${OTHER_LIMIT_KB} KB of heap`,
 	other.heapKB <= OTHER_LIMIT_KB,
 	`${other.heapKB.toFixed(0)} KB, ${other.rssKB.toFixed(0)} KB RSS, ${(other.scriptMs / FRAMES).toFixed(1)} ms of script (${FRAMES} frames)`,
+);
+
+const reading = await measureFrames({
+	proxied: true,
+	base: otherSite,
+	frames: FRAMES,
+	warm: POOL,
+	child: 'pages/frame-memory-parent.html',
+});
+ok(
+	`all ${FRAMES} proxied frames of another site that read their parent and post to it ran their script`,
+	reading.loaded === FRAMES,
+	`${reading.loaded} did`,
+);
+ok(
+	`a proxied frame of another site that reads its parent and top and posts to its parent costs at most ${PARENT_LIMIT_KB} KB of heap`,
+	reading.heapKB <= PARENT_LIMIT_KB,
+	`${reading.heapKB.toFixed(0)} KB, ${reading.rssKB.toFixed(0)} KB RSS (${FRAMES} frames)`,
 );
 
 const clicked = await measureFrames({

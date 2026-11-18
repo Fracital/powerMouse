@@ -1,7 +1,10 @@
 // The site pool's code that runs on an event is a deferred part of the
-// document bundle (src/inject/dom/siteAcross.ts, navigateOther.ts): a post
-// to and the stand-in of a window of another slot, a link and a form aimed
-// at one, a navigation of one. A document of a slot takes the parts from
+// document bundle (src/inject/dom/siteAcross.ts, navigateOther.ts): a link
+// and a form aimed at a window of another slot, a navigation of one. A post
+// to and the stand-in of such a window are not (siteWindows' postAcross and
+// restrictAcross): a frame of another slot reads its parent and posts to it
+// as it starts (an ad frame does), and a part there would be evaluated in
+// every such frame (frame-cost). A document of a slot takes the parts from
 // its top's text, a frame of another slot than its page's from its slot's
 // agent (src/controller/slotLibrary.ts), and a realm with neither from the
 // library's file: here a pool whose slots serve that file (through a front
@@ -20,11 +23,12 @@
 //   does the same with its own frame of the other site: navigates it;
 // - the frame's link and form aimed at the top are clicked, and the form's
 //   submit() is called.
-// With the parts each answers as natively. Without them the posts, the
-// reads and the navigations throw, nothing is posted (a listener every
-// document gets before any script of its own counts the browser's message
-// events) and nothing navigates; the clicks and the submit event navigate
-// nothing (their default is prevented), and submit() throws.
+// With the parts each answers as natively. Without them the posts and the
+// reads answer as natively all the same, each post delivered once (a
+// listener every document gets before any script of its own counts the
+// browser's message events); the navigations throw and navigate nothing,
+// the clicks and the submit event navigate nothing (their default is
+// prevented), and submit() throws.
 import { createServer, request } from 'node:http';
 import {
 	done,
@@ -394,40 +398,43 @@ for (const [name, slots] of [
 			where[0] !== where[1],
 		JSON.stringify(where),
 	);
+	// the reads of and the posts to a window of another slot need no part
+	// (siteWindows' restrictAcross and postAcross): an ad frame makes them
+	// as it starts, and a part would be evaluated in every such frame
+	ok(
+		`${label}: the page holds the frame's window while it is on about:blank, as natively`,
+		result.held === nativeRuns.held,
+		`${result.held} (natively ${nativeRuns.held})`,
+	);
+	for (const key of ['postHeld', 'postParent', 'readFrame', 'readParent'])
+		ok(
+			`${label}: ${key} answers as natively`,
+			result[key] === nativeRuns[key],
+			`${result[key]} (natively ${nativeRuns[key]})`,
+		);
+	ok(
+		`${label}: the page's post to the frame's window of another slot arrives from the page's origin, as natively`,
+		result.childMessages.length === 1 &&
+			result.childMessages[0].key === 'spr-held' &&
+			result.childMessages[0].origin === new URL(A).origin,
+		JSON.stringify(result.childMessages),
+	);
+	ok(
+		`${label}: the frame's post to its parent of another slot arrives from the frame's origin, as natively`,
+		result.topMessages.length === 1 &&
+			result.topMessages[0].key === 'spr-parent' &&
+			result.topMessages[0].origin === new URL(B).origin,
+		JSON.stringify(result.topMessages),
+	);
+	ok(
+		`${label}: the browser dispatches each post to its receiver, once`,
+		result.childRaw.length === 1 &&
+			result.childRaw[0].includes('spr-held') &&
+			result.topRaw.length === 1 &&
+			result.topRaw[0].includes('spr-parent'),
+		JSON.stringify([result.childRaw, result.topRaw]),
+	);
 	if (name === 'with') {
-		ok(
-			`${label}: the page holds the frame's window while it is on about:blank, as natively`,
-			result.held === nativeRuns.held,
-			`${result.held} (natively ${nativeRuns.held})`,
-		);
-		for (const key of ['postHeld', 'postParent', 'readFrame', 'readParent'])
-			ok(
-				`${label}: ${key} answers as natively`,
-				result[key] === nativeRuns[key],
-				`${result[key]} (natively ${nativeRuns[key]})`,
-			);
-		ok(
-			`${label}: the page's post to the frame's window of another slot arrives from the page's origin, as natively`,
-			result.childMessages.length === 1 &&
-				result.childMessages[0].key === 'spr-held' &&
-				result.childMessages[0].origin === new URL(A).origin,
-			JSON.stringify(result.childMessages),
-		);
-		ok(
-			`${label}: the frame's post to its parent of another slot arrives from the frame's origin, as natively`,
-			result.topMessages.length === 1 &&
-				result.topMessages[0].key === 'spr-parent' &&
-				result.topMessages[0].origin === new URL(B).origin,
-			JSON.stringify(result.topMessages),
-		);
-		ok(
-			`${label}: the browser dispatches each post to its receiver, once (the count without the parts is not vacuous)`,
-			result.childRaw.length === 1 &&
-				result.childRaw[0].includes('spr-held') &&
-				result.topRaw.length === 1 &&
-				result.topRaw[0].includes('spr-parent'),
-			JSON.stringify([result.childRaw, result.topRaw]),
-		);
 		ok(
 			`${label}: the page's navigation of the frame's window of another slot lands, as natively`,
 			result.navigateHeld === nativeRuns.navigateHeld && result.navigated,
@@ -453,30 +460,6 @@ for (const [name, slots] of [
 			"without the parts: every slot's library file had a parts statement, replaced",
 			fronted.length > 0 && fronted.every(Boolean),
 			JSON.stringify(fronted),
-		);
-		ok(
-			`${label}: the page holds the frame's window while it is on about:blank, as natively`,
-			result.held === nativeRuns.held,
-			`${result.held} (natively ${nativeRuns.held})`,
-		);
-		for (const key of ['postHeld', 'postParent', 'readFrame', 'readParent'])
-			ok(
-				`${label}: ${key} throws`,
-				typeof result[key] === 'string' && result[key].startsWith('threw '),
-				result[key],
-			);
-		ok(
-			`${label}: nothing is posted, the browser's own postMessage included`,
-			result.childMessages.length === 0 &&
-				result.topMessages.length === 0 &&
-				result.childRaw.length === 0 &&
-				result.topRaw.length === 0,
-			JSON.stringify([
-				result.childMessages,
-				result.topMessages,
-				result.childRaw,
-				result.topRaw,
-			]),
 		);
 		ok(
 			`${label}: the page's navigation of the frame's window of another slot throws and navigates nothing`,

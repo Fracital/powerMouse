@@ -830,7 +830,13 @@ the stand-ins for windows of another slot (ContextModule
 restrictAcross), postAcross, siteTop's answer for a window of another
 origin and the ancestors past a parent of another slot
 (DocumentClient.slotAncestorsPast). Deferred, every such frame would pay
-the part's cost (a crazygames page has some 200).
+the part's cost (a crazygames page has some 200): about 3 KB of heap a
+frame for the stand-in and the post, when they were a part of
+`siteAcross.ts` (frame-cost's frames that read their parent). The
+site-pool-refusals suite takes the parts from every slot of a pool (each
+serves the library's file with a parts statement that throws): such a
+frame's reads and posts answer as natively all the same, while a link, a
+form and a navigation aimed at a window of another slot refuse.
 
 A frame compiles what it runs: a function a document calls once costs
 that document its bytecode, however early it returns. So the pool's code

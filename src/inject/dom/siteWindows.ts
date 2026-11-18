@@ -12,6 +12,7 @@ import { parseNestedMark } from '../../partition';
 import { nestedMarkOf } from '../../rewriteHTML';
 import { slotLibraryName, type SlotShare } from '../../slotShare';
 import { BUILD } from '../../version';
+import { catchRequiredArguments } from '../modules/Proxy';
 import { OwnWeakMap } from '../ownCollections';
 import type DocumentClient from './Client';
 import { deferred } from './deferred';
@@ -21,7 +22,7 @@ import { markerPrefix } from './modules/MutationObserver';
 import { Pool } from './pool';
 import { pageSandbox, sandboxTokens } from './sandbox';
 
-export const NativeWeakRef = WeakRef;
+const NativeWeakRef = WeakRef;
 const nativeParent = Reflect.getOwnPropertyDescriptor(
 	globalThis,
 	'parent',
@@ -579,9 +580,11 @@ function makeSiteWindows() {
 
 	/**
 	 * Post to `target` if it is a window of another site's origin
-	 * (Context's postToRestricted), as `client`, by the deferred part
-	 * (./siteAcross.ts postAcross; without it the call throws); false for
-	 * any other target
+	 * (Context's postToRestricted), as `client`. The message goes
+	 * to any origin, in an envelope that names this page's origin, the
+	 * one it is for and the hub's token; the receiver's inject delivers it
+	 * as from that origin when it is for its own, and drops it otherwise,
+	 * as the browser does with the real origins
 	 */
 	function postAcross(
 		client: DocumentClient,
@@ -589,29 +592,117 @@ function makeSiteWindows() {
 		args: unknown[],
 		cloneCheck: (args: unknown[]) => void,
 	): boolean {
-		if (!client.sites || !isWindow(client, target)) return false;
+		const sites = client.sites;
+		if (!sites || !isWindow(client, target)) return false;
 		try {
 			if (client.names.client in (target as object)) return false;
 		} catch (error) {
 			// another origin: the `in` check throws
 		}
-		return deferred('postAcross')(client, target as object, args, cloneCheck);
+		catchRequiredArguments(args.length, 1, 'Window', 'postMessage');
+		cloneCheck(args);
+		const second = args[1];
+		const options =
+			typeof second === 'object' && second !== null
+				? (second as WindowPostMessageOptions)
+				: null;
+		const requested = options ? options.targetOrigin : second;
+		const transfer = options
+			? Array.isArray(options.transfer)
+				? options.transfer
+				: []
+			: Array.isArray(args[2])
+				? (args[2] as Transferable[])
+				: [];
+		let to = requested === undefined ? '/' : String(requested);
+		if (to === '/') to = client.origin;
+		else if (to !== '*')
+			try {
+				to = new URL(to).origin;
+			} catch (error) {
+				throw new client.global.DOMException(
+					"Failed to execute 'postMessage' on 'Window': Invalid target origin '" +
+						to +
+						"' in a call to 'postMessage'.",
+					'SyntaxError',
+				);
+			}
+		// the window's own (cross-origin) postMessage: this realm's would
+		// post to this window, whatever it is called on
+		Reflect.apply(
+			Reflect.get(target as object, 'postMessage') as Window['postMessage'],
+			target,
+			[
+				{
+					[client.names.globalName]: 'stompMessage',
+					data: args[0],
+					origin: client.origin,
+					to,
+					token: sites.token,
+				},
+				{ targetOrigin: '*', transfer },
+			],
+		);
+		return true;
 	}
 
 	/**
-	 * ContextModule's stand-in for a window of another slot's origin: the
-	 * one the module holds, else made by the deferred part
-	 * (./siteAcross.ts restrictAcross; without it the read throws)
+	 * ContextModule's stand-in for a window of another slot's origin, one
+	 * for every document of the module's origin in its frame tree, as
+	 * for a proxied window of another origin without a pool (`standIns`,
+	 * kept by the window itself, which this origin cannot reach here): a
+	 * frame hands its same-origin parent's windows to its own code as they
+	 * are, so `parent.parent` and `top` must be one object
 	 */
 	function restrictAcross(
 		client: DocumentClient,
 		module: ContextModule,
 		context: typeof globalThis,
 	): typeof globalThis {
-		return (
-			module.restricted.get(context) ??
-			deferred('restrictAcross')(client, module, context)
-		);
+		if (module.restricted.has(context)) return module.restricted.get(context)!;
+		const domain = client.documentDomain;
+		const key =
+			client.sandboxFlags === null
+				? domain !== null
+					? `${client.url.url.protocol}domain:${domain}`
+					: client.originKey
+				: null;
+		// the outermost document of this origin above this one
+		let keeper: DocumentClient = client;
+		for (let depth = 0; key !== null && depth < 64; depth++) {
+			try {
+				const parent = nativeParentOf(keeper.global) as typeof globalThis;
+				if (parent === keeper.global) break;
+				const above = (parent as Record<string, any>)[client.names.client] as
+					DocumentClient | undefined;
+				if (
+					!above ||
+					!('pool' in above) ||
+					above.sandboxFlags !== null ||
+					above.originKey !== client.originKey ||
+					above.documentDomain !== domain
+				)
+					break;
+				keeper = above;
+			} catch (error) {
+				// a parent of another origin
+				break;
+			}
+		}
+		const pool = keeper.pool;
+		let kept = key === null ? undefined : pool[Pool.AcrossStandIns]?.get(key);
+		if (key !== null && !kept) {
+			kept = new WeakMap();
+			(pool[Pool.AcrossStandIns] ??= new Map()).set(key, kept);
+		}
+		let restricted = kept?.get(context)?.deref();
+		if (!restricted) {
+			restricted = module.restrictContext(context);
+			kept?.set(context, new NativeWeakRef(restricted));
+		}
+		module.restricted.set(context, restricted);
+		module.restrictedContexts.set(restricted, context);
+		return restricted;
 	}
 
 	return {
