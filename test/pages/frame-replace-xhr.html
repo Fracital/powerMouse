@@ -53,4 +53,10 @@
 				view.location.replace(url);
 		}
 	}
+	// porte.js's page report: it looks for its own window among its parent's
+	// frames, which reads every frame's window while each is still on its
+	// initial about:blank (the new contexts of the location writes included)
+	const frames = window.parent.frames;
+	for (let index = 0; index < frames.length; index++)
+		if (frames[index] == window) break;
 </script>

@@ -4,11 +4,15 @@
 // (test/pages/frame-replace-xhr.html). On bankofamerica.com porte.js makes
 // the fraud-detection frame this way (src about:blank, appendChild, then
 // contentWindow.location.replace(iconnectmx.html on dull.bankofamerica.com)),
-// and the frame posts to its own origin with X-Embedding-Uri. Compared with
+// and the frame posts to its own origin with X-Embedding-Uri. Its page report
+// then reads every frame's window while each is still on its initial
+// about:blank, which through the proxy injected the new context's about:blank
+// and left the frame's document with no controller (Chrome 157). Compared with
 // native in both demo modes, for a frame given its src and the two location
-// writes.
+// writes, and the browser's own view of whether the worker controls each.
 import {
 	done,
+	evaluateIsolated,
 	FIXTURE,
 	HOST,
 	launch,
@@ -74,6 +78,25 @@ for (const [mode, base] of [
 			native[way] !== undefined && proxied[way] === native[way],
 			`native ${show(native[way])} -> proxied ${show(proxied[way])}`,
 		);
+	// what the browser itself says of each frame (a world the page's hooks
+	// do not reach): the service worker controls it, as it controls every
+	// proxied document
+	const frames = (top()?.childFrames() ?? []).filter((frame) =>
+		/html:nested:/.test(frame.url()),
+	);
+	const controlled = [];
+	for (const frame of frames)
+		controlled.push(
+			await evaluateIsolated(frame, () => !!navigator.serviceWorker.controller)
+				.then((yes) => (yes ? 'controlled' : 'not controlled'))
+				.catch((error) => `threw ${error.message}`),
+		);
+	ok(
+		`${mode}: every frame's document is controlled`,
+		controlled.length === ways.length &&
+			controlled.every((line) => line === 'controlled'),
+		show(controlled),
+	);
 	errors.push(...page.errors.map((error) => `${mode}: ${error}`));
 	await page.close();
 }
