@@ -73,6 +73,7 @@ import {
 	refererFor,
 	type ReferrerInfo,
 } from '../referrerPolicy';
+import { modifyRefresh } from '../refresh';
 import {
 	modifyCSS,
 	rewriteCSSValueURLs,
@@ -81,7 +82,6 @@ import {
 } from '../rewriteCSS';
 import {
 	isXMLDocumentMime,
-	modifyRefresh,
 	nestedMarkOf,
 	nestedMarkOfKind,
 	nestedTopOf,

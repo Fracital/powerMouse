@@ -6,13 +6,8 @@ import {
 import { handlerMark, keepSource, sourceKey } from '../../../functionSource';
 import type { modifyHTML } from '../../../htmlShell';
 import { JS_MIME_TYPES } from '../../../prewrite';
+import { isXMLDocumentMime, routeHTML } from '../../../rewriteHTML';
 import {
-	isXMLDocumentMime,
-	modifyRefresh,
-	routeHTML,
-} from '../../../rewriteHTML';
-import {
-	parseDataURI,
 	proxyBlobURL,
 	ROUTE_PROTOCOLS,
 	routeBinary,
@@ -30,7 +25,7 @@ import {
 	REFUSED_FRAGMENT,
 } from '../../../sri';
 import StompURL from '../../../StompURL';
-import { dataBody, unresolvable } from '../../../urlShape';
+import { unresolvable } from '../../../urlShape';
 import Module from '../../Module';
 import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule, { usePrototype } from '../../modules/Proxy';
@@ -44,6 +39,7 @@ import DocumentClient, {
 import { inertDocumentOf } from '../cloneNode';
 import { ELEMENT_STYLE_INTERFACES } from '../cssRules';
 import { deferred } from '../deferred';
+import type { DeferredParts } from '../deferredParts';
 import { forgetDestination, frameWindow } from '../freshContext';
 import { loadFetch } from '../loadGrants';
 import { responseURLOf } from '../responseDocuments';
@@ -499,50 +495,6 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				retried,
 				targets,
 			);
-		};
-		// A frame whose src is a data: document gets an opaque origin, which
-		// the inject cannot reach: its requests would have nowhere to go and
-		// its messages no route to the page. It loads instead from a blob: URL
-		// of the shell with the data: URL itself as the document's URL, so it
-		// runs injected and same-origin underneath, while every readback treats
-		// it as the opaque origin "null" it is: its location is the data: URL,
-		// its origin "null", and the page and the frame see each other through
-		// the restricted cross-origin stand-ins (contentDocument null), as for
-		// any frame of another real origin. Best effort, as every proxied
-		// cross-origin frame is in same-origin mode.
-		const opaqueDocument = (resource: StompURL): string | null => {
-			if (resource.url.protocol !== 'data:') return null;
-			const { mime, data } = parseDataURI(dataBody(resource.url));
-			if (
-				!/^\s*(text\/html|application\/xhtml\+xml)\s*$/i.test(
-					mime || 'text/plain',
-				)
-			)
-				return null;
-			// served by the worker as an inline document (controlled, its
-			// subresources reaching the worker); its requests refer as a data:
-			// document does, with nothing. Without a worker to register with,
-			// the shell is a blob as before (subresources then miss the worker)
-			const inline = moduleClient.inlineDocument(
-				data,
-				resource.url.href,
-				'data:,',
-			);
-			if (inline) return inline;
-			const blob = new NativeBlob(
-				[
-					deferred('modifyHTML')(
-						data,
-						resource,
-						moduleClient.config,
-						true,
-						undefined,
-						moduleClient.scriptNonce,
-					),
-				],
-				{ type: 'text/html' },
-			);
-			return proxyBlobURL(realm.URL.createObjectURL(blob));
 		};
 		const domHooksModule = moduleClient.getModule(DOMHooksModule)!;
 		// whether a document in this frame may run scripts: its own sandbox (as
@@ -1282,6 +1234,19 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.removeAttribute('src');
 						return;
 					}
+					// a data: document's frame is a deferred part (an opaque
+					// document, ../rareAttributes.ts), made first: without it the
+					// frame is not navigated, never to the page's markup
+					// unrewritten
+					let opaqueDocument: DeferredParts['opaqueDocument'] | undefined;
+					if (resource.url.protocol === 'data:')
+						try {
+							opaqueDocument = deferred('opaqueDocument');
+						} catch (error) {
+							moduleClient.opaqueFrames.delete(element);
+							element.removeAttribute('src');
+							return;
+						}
 					// the page's frame-src (src/csp.ts): a frame its policy
 					// refuses is sent where the browser's copy of the policy
 					// refuses it, and the browser refuses and reports it as natively
@@ -1295,16 +1260,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.setAttribute('src', refused);
 						return;
 					}
-					let opaque: string | null;
-					try {
-						opaque = opaqueDocument(resource);
-					} catch (error) {
-						// its shell is a deferred part: without it the frame is
-						// not navigated, never to the page's markup unrewritten
-						moduleClient.opaqueFrames.delete(element);
-						element.removeAttribute('src');
-						return;
-					}
+					const opaque =
+						opaqueDocument?.(moduleClient, resource, NativeBlob) ?? null;
 					if (opaque) moduleClient.opaqueFrames.add(element);
 					else moduleClient.opaqueFrames.delete(element);
 					// the frame navigates for this document, under its activation,
@@ -1446,21 +1403,19 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								moduleClient.reportAcceptCH(parseAcceptCH(content) ?? []);
 							break;
 						}
-						case 'refresh':
-							element.setAttributeOG(
-								'content',
-								element.getAttribute('content')!,
-							);
-							element.setAttribute(
-								'content',
-								modifyRefresh(
-									element.getAttribute('content')!,
-									moduleClient.baseURL,
-									moduleClient.config,
-									moduleClient.nestedRoute,
-								),
-							);
+						// a deferred part (../rareAttributes.ts), made first:
+						// without it the meta has no content for the browser
+						case 'refresh': {
+							let refresh: DeferredParts['metaRefresh'];
+							try {
+								refresh = deferred('metaRefresh');
+							} catch (error) {
+								element.removeAttribute('content');
+								break;
+							}
+							refresh(moduleClient, element);
 							break;
+						}
 					}
 			},
 			[
@@ -2666,34 +2621,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// base URL (which client.baseURL follows once a base is in place, and
 		// is the page's own base while loadHTML rewrites the markup)
 		const documentURL = () => moduleClient.url;
-		// A report-only base-uri's refusal is the inject's to report (the base
-		// applies): once, for the document's first base, a task later as
-		// natively, and for the markup's own once it is parsed (the hook ran
-		// on its copy, before the page's scripts could listen)
+		// the bases whose report-only refusal was reported (reportBase)
 		const reported = new LazyWeakSet<Element>();
-		const reportBase = (element: Element, url: URL) => {
-			const global = realm;
-			const owner = element.ownerDocument;
-			const first = owner.querySelector('base[href]');
-			if (reported.has(element) || (first !== element && first !== null))
-				return;
-			reported.add(element);
-			const report = () => moduleClient.reportRefusal('base-uri', url);
-			if (owner === global.document) {
-				Reflect.apply(setTimeout, global, [report, 0]);
-				return;
-			}
-			// (the markup is written after a document.open, which drops the
-			// document's listeners)
-			let pending = true;
-			addDocumentOpenListener(global, () => {
-				if (!pending) return;
-				pending = false;
-				global.document.addEventListener('DOMContentLoaded', report, {
-					once: true,
-				});
-			});
-		};
 		// the refusal URL each base was given, for the page's href: a hook
 		// that runs again (the base inserted) leaves it, as a write would be
 		// another check of the base, and another violation
@@ -2726,6 +2655,18 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					const refusals = /^https?:$/.test(url.protocol)
 						? moduleClient.pageRefusals('base-uri', url)
 						: [];
+					// a report-only refusal's report is a deferred part
+					// (../rareAttributes.ts), made first: without it the base
+					// applies to nothing (a refusal URL would be the browser's
+					// base, where its copy of the policy only reports it)
+					let reportBase: DeferredParts['reportBase'] | undefined;
+					if (refusals.length)
+						try {
+							reportBase = deferred('reportBase');
+						} catch (error) {
+							element.removeAttribute('href');
+							return;
+						}
 					if (
 						/^https?:$/.test(url.protocol) &&
 						moduleClient.baseRefused(url, element)
@@ -2742,7 +2683,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						element.setAttribute('href', refusal);
 						return;
 					}
-					if (refusals.length) reportBase(element, url);
+					reportBase?.(moduleClient, element, url, reported);
 					element.setAttribute(
 						'href',
 						routeHTML(

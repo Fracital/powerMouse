@@ -21,7 +21,8 @@ const entry = `${OUT}rewriter-unit-entry.mjs`;
 writeFileSync(
 	entry,
 	`export { cannotRewrite, modifyJS, postMessageMethod, routeJS } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
-export { routeHTML, modifyRefresh, parseRefresh } from ${JSON.stringify(`${root}src/rewriteHTML.ts`)};
+export { routeHTML } from ${JSON.stringify(`${root}src/rewriteHTML.ts`)};
+export { modifyRefresh, parseRefresh } from ${JSON.stringify(`${root}src/refresh.ts`)};
 export { modifyHTML } from ${JSON.stringify(`${root}src/htmlShell.ts`)};
 import { setDocumentShells } from ${JSON.stringify(`${root}src/rewriteHTML.ts`)};
 import { modifyHTML } from ${JSON.stringify(`${root}src/htmlShell.ts`)};
