@@ -1,7 +1,8 @@
 // A single-page app as Discord's is (spa-nav suite): links that the router
 // takes (pushState), React's default transition indicator (a replacing
 // Navigation API navigation to the current entry, intercepted until the
-// transition ends), Navigation API routing, traversals, lazy chunks (import(),
+// transition ends), a target=_blank link a root listener routes (Discord's
+// channel links), Navigation API routing, traversals, lazy chunks (import(),
 // a JSONP script chunk, a stylesheet chunk, and each of them failing), and
 // the page's unload listeners. Every step is told to the console as
 // `SPANAV <json>`; a document load the steps did not ask for shows as a
@@ -28,12 +29,29 @@
 	// the router: a link click becomes a pushState, a popstate re-renders
 	document.addEventListener('click', (event) => {
 		const link = event.target.closest('a');
-		if (!link) return;
+		if (!link || link.hasAttribute('data-external')) return;
 		event.preventDefault();
 		history.pushState({ at: link.id }, '', link.getAttribute('href'));
 		render();
 	});
 	addEventListener('popstate', render);
+	// a router's root listener, as React's is: Discord's channel links are
+	// target=_blank, and the listener cancels the click, routes it and stops
+	// its propagation (what it read of the click first is the step's result)
+	let rootSaw = null;
+	document.getElementById('root').addEventListener('click', (event) => {
+		const link = event.target.closest('a');
+		if (!link) return;
+		rootSaw = {
+			defaultPrevented: event.defaultPrevented,
+			returnValue: event.returnValue,
+		};
+		event.preventDefault();
+		event.stopPropagation();
+		rootSaw.cancelled = event.defaultPrevented;
+		history.pushState({ at: link.id }, '', link.getAttribute('href'));
+		render();
+	});
 
 	// React 19.2's onDefaultTransitionIndicator (react-dom): the browser's
 	// loading indicator for a transition, as a navigation to the current entry
@@ -121,6 +139,15 @@
 				await sleep(200);
 				document.getElementById('ch2').click();
 				await sleep(200);
+			},
+		],
+		[
+			'blank-click',
+			async () => {
+				// no new window or tab: the page cancelled the link
+				document.getElementById('ch4').click();
+				await sleep(500);
+				return rootSaw;
 			},
 		],
 		[

@@ -3,10 +3,15 @@
 // replacing Navigation API navigation to the current entry, intercepted
 // until the transition ends) alone and under a click, a Navigation API
 // navigation and a traversal the page intercepts, history.back() and
-// forward(), and lazy chunks (import(), a JSONP script, a stylesheet, each
-// also failing). The document stays the one that loaded through every step,
-// and each step leaves the page where it leaves it natively. Both modes,
-// against the page loaded natively at the top of a tab.
+// forward(), lazy chunks (import(), a JSONP script, a stylesheet, each also
+// failing), and a target=_blank link that a root listener cancels and routes
+// (Discord's channel links: proxied, the host opened it as a new tab, which
+// read as the whole page reloading). The document stays the one that loaded
+// through every step, and each step leaves the page where it leaves it
+// natively. Then the user's click on a target=_blank link the page leaves
+// alone opens it in a new window natively and in a new tab of the host
+// proxied, and nothing else opened. Both modes, against the page loaded
+// natively at the top of a tab.
 import {
 	done,
 	FIXTURE,
@@ -43,8 +48,26 @@ async function measure(page, start) {
 	return steps;
 }
 
+/** a click of the user's on the link the page leaves alone (`#out`) */
+const clickOut = (frame) => frame.click('#out');
+
 const nativePage = await browser.newPage();
+const nativePopups = [];
+nativePage.on('popup', (popup) => nativePopups.push(popup.url()));
 const native = await measure(nativePage, () => nativePage.goto(PAGE));
+ok(
+	'natively: the routed target=_blank link opened no window',
+	nativePopups.length === 0,
+	JSON.stringify(nativePopups),
+);
+await clickOut(nativePage.mainFrame());
+for (let i = 0; i < 40 && !nativePopups.length; i++) await sleep(100);
+ok(
+	"natively: the user's click on the link the page leaves alone opened it in a new window",
+	JSON.stringify(nativePopups) ===
+		JSON.stringify([`${FIXTURE}pages/walk-3.html`]),
+	JSON.stringify(nativePopups),
+);
 await nativePage.close();
 ok(
 	'natively: the steps ran to their end in one document',
@@ -59,7 +82,18 @@ for (const [mode, base] of [
 	['isolated', HOST],
 ]) {
 	const page = await openDemo(browser, base);
+	await page.evaluate(() => {
+		window.__opens = [];
+		window.controller.addEventListener('open', (event) =>
+			window.__opens.push(event.detail.url),
+		);
+	});
 	const proxied = await measure(page, () => submitLanding(page, PAGE));
+	ok(
+		`${mode}: the routed target=_blank link opened no tab`,
+		(await page.evaluate(() => window.__opens.length)) === 0,
+		JSON.stringify(await page.evaluate(() => window.__opens)),
+	);
 	const boots = proxied.filter(([step]) => step === 'boot');
 	ok(
 		`${mode}: no step loaded the document again`,
@@ -89,6 +123,20 @@ for (const [mode, base] of [
 		`${mode}: the page never unloaded`,
 		proxiedSteps.get('end')?.unload === null,
 		JSON.stringify(proxiedSteps.get('end')),
+	);
+	const frame = page
+		.frames()
+		.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
+	await clickOut(frame);
+	let opens = [];
+	for (let i = 0; i < 40 && !opens.length; i++) {
+		await sleep(100);
+		opens = await page.evaluate(() => window.__opens);
+	}
+	ok(
+		`${mode}: the user's click on the link the page leaves alone opened it in a new tab, as natively in a new window`,
+		JSON.stringify(opens) === JSON.stringify([`${FIXTURE}pages/walk-3.html`]),
+		JSON.stringify(opens),
 	);
 	await page.close();
 }

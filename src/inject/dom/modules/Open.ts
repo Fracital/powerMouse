@@ -1,5 +1,6 @@
 import Module from '../../Module';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import { heldClicks } from '../heldClicks';
 import { baseTarget, clickedLink } from '../links';
 
 const SAME_FRAME = ['', '_self', '_top', '_parent', '_unfencedtop'];
@@ -17,11 +18,17 @@ const SAME_FRAME = ['', '_self', '_top', '_parent', '_unfencedtop'];
  * allow-popups-to-escape-sandbox the popup is sandboxed like its opener, so
  * it is never a host tab: it opens as a window this document makes, which
  * the inject starts with the opener's flags (DocumentClient.sandboxFlags).
+ *
+ * Either is done once the click has gone through the page, unless a listener
+ * of the page cancelled it (../heldClicks.ts), as the browser decides a
+ * link's default action: an SPA's router (Discord's channel links are
+ * target=_blank) cancels the click and routes the link itself.
  */
 export default class OpenModule extends Module<DocumentClient> {
 	apply() {
 		const client = this.client;
 		const global = client.global;
+		const clicks = heldClicks(client);
 
 		const listener = (event: MouseEvent) => {
 			if (event.defaultPrevented) return;
@@ -62,7 +69,6 @@ export default class OpenModule extends Module<DocumentClient> {
 				// refused by the browser, as natively
 				if (!client.allows('allow-popups')) return;
 				if (!client.allows('allow-popups-to-escape-sandbox')) {
-					event.preventDefault();
 					// the link's popup has no opener (a _blank target implies
 					// noopener) unless it asks for one; a popup that runs no
 					// script keeps it, so a document of it the inject starts
@@ -78,18 +84,19 @@ export default class OpenModule extends Module<DocumentClient> {
 						rel.includes('noopener') ||
 						rel.includes('noreferrer') ||
 						(target === '_blank' && !rel.includes('opener'));
-					global.open(
-						url.href,
-						target || '_blank',
-						...(noopener && client.allows('allow-scripts')
+					const features =
+						noopener && client.allows('allow-scripts')
 							? [rel.includes('noreferrer') ? 'noreferrer' : 'noopener']
-							: []),
+							: [];
+					clicks.hold(event, () =>
+						global.open(url.href, target || '_blank', ...features),
 					);
 					return;
 				}
 				if (!client.config.openTab) return;
 			}
-			if (client.openInHost(url.toString())) event.preventDefault();
+			const href = url.toString();
+			clicks.hold(event, () => client.openInHost(href));
 		};
 		const install = () => {
 			global.addEventListener('click', listener, true);
