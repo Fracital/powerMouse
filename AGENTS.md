@@ -222,16 +222,7 @@ on every save (use a `git worktree`).
   controller's address: the directory the host gave plus `controller.id`
   (`/stomp/k7qx2m/`). Every routed URL starts with it and the service worker
   finds the controller by it (longest prefix), so two host tabs on one
-  directory are two controllers; the same id again replaces. A handshake
-  names the controller instance that made it (`token`): the same one again
-  (a rebind, a revive) is no replacement, and the worker lets the old
-  channel answer what is in flight on it before it closes it
-  (`drainController`, the controller's `#linger`). Never close a channel
-  with requests in flight on it: each one was a failed fetch, and a
-  navigation the host's error page (502, "Controller replaced"). When
-  another controller does replace one, a GET, HEAD or OPTIONS without a body
-  in flight on the old one is sent again through the new one
-  (`src/transport/HandoffTransport.ts`). `config.scope`
+  directory are two controllers; the same id again replaces. `config.scope`
   (`/stomp/`) is the service worker's scope and the only thing the asset URLs
   (inject bundles, the transport worker, the controller frame) are built
   from (`assetBase` in `src/routeURL.ts`). A controller is a tab, not a

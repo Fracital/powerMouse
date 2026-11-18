@@ -10,7 +10,7 @@ use oxc::span::SourceType;
 
 use crate::config::Config;
 use crate::early::{self, Mode, Verdict};
-use crate::source::{Utf16Offsets, holder_statement, source_key};
+use crate::source::{Utf16Offsets, holder_statement_into, source_key};
 use crate::walk::{Patterns, Walker};
 
 /// What one rewrite depends on besides the configuration: handed over per
@@ -472,7 +472,7 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 		}
 	}
 
-	let (mut edits, marks, key, declined) = walker.finish();
+	let (mut edits, marks, key, held, declined) = walker.finish();
 	if let Some(why) = declined {
 		return Err(why);
 	}
@@ -483,9 +483,15 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 	let mut pre = options.params.pre.clone();
 	let key = key.or_else(|| options.params.key.clone());
 	if options.holder && marks > 0 {
-		let key = key.clone().unwrap_or_else(|| source_key(source));
-		if let Some(holder) = holder_statement(&options.config.api, &key, source) {
-			pre.push_str(&holder);
+		// (as long as the script: the text ahead takes it as it is when it is
+		// empty, and is written onto otherwise, never made apart and copied)
+		match held {
+			Some(holder) if pre.is_empty() => pre = holder,
+			Some(holder) => pre.push_str(&holder),
+			None => {
+				let key = key.clone().unwrap_or_else(|| source_key(source));
+				holder_statement_into(&mut pre, &options.config.api, &key, source);
+			}
 		}
 	}
 	if !pre.is_empty() {

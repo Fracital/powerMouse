@@ -112,11 +112,4 @@ export class RpcHelper<
 		for (const { reject } of this.pending.values()) reject(new Error(reason));
 		this.pending.clear();
 	}
-	/**
-	 * Resolves once no call is outstanding, looked at every `ms`: a channel
-	 * being let go answers what it was asked before it closes
-	 */
-	async settled(ms = 50): Promise<void> {
-		while (this.pending.size) await new Promise((wake) => setTimeout(wake, ms));
-	}
 }

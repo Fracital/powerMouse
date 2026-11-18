@@ -12,36 +12,178 @@
 /// byte what the TypeScript gives, or a text the worker kept is never found
 /// by the function that reads it.
 pub fn source_key(text: &str) -> String {
-	let mut a: u32 = 0x811c_9dc5;
-	let mut b: u32 = 0x9747_b28c;
-	let mut step = |c: u32| {
-		a = (a ^ c).wrapping_mul(0x0100_0193);
-		b = (b ^ c).wrapping_mul(0x5bd1_e995);
-		b ^= b >> 13;
-	};
-	// an ASCII byte is its own code unit; only the rest is decoded
+	let (mut a, mut b) = KEY_SEEDS;
+	// an ASCII byte is its own code unit; only the rest is decoded. The two
+	// hashes are one chain of multiplications, a byte after another, which
+	// bounds the loop: eight ASCII bytes are read at once, so a byte costs
+	// its steps on the chain and no load and branch of its own
 	let bytes = text.as_bytes();
 	let mut at = 0;
-	while at < bytes.len() {
-		let byte = bytes[at];
+	loop {
+		while let Some(chunk) = bytes.get(at..at + 8) {
+			let word = u64::from_le_bytes(chunk.try_into().unwrap());
+			if word & HIGH != 0 {
+				break;
+			}
+			(a, b) = key_word(a, b, word);
+			at += 8;
+		}
+		let Some(&byte) = bytes.get(at) else {
+			break;
+		};
 		if byte < 0x80 {
-			step(u32::from(byte));
+			(a, b) = key_step(a, b, u32::from(byte));
 			at += 1;
 			continue;
 		}
 		let c = text[at..].chars().next().unwrap();
-		let mut units = [0u16; 2];
-		for unit in c.encode_utf16(&mut units) {
-			step(u32::from(*unit));
-		}
+		(a, b) = key_char(a, b, c);
 		at += c.len_utf8();
 	}
+	key_text(a, b)
+}
+
+/// The key of `text` ([`source_key`]) and its holder ([`holder_statement`]
+/// with `api` and that key), in one pass over the text. The key's chain of
+/// multiplications leaves the processor idle between one byte and the next,
+/// and the holder's copy of the text runs in that time: the holder of a
+/// script that has a function costs no pass of its own. None for the holder
+/// when the text holds one of the first stand-ins ([`holder_statement`] then
+/// looks for others).
+pub fn keyed_holder(api: &str, text: &str) -> (String, Option<String>) {
+	let first: [u8; 6] = STAND_INS[..CARRIED.len()].try_into().unwrap();
+	let (mut a, mut b) = KEY_SEEDS;
+	let bytes = text.as_bytes();
+	// the head names the key, which is known at the end: written with a key
+	// of the same length (nine digits, always) and the digits put in after
+	let mut head = String::new();
+	holder_head(&mut head, api, &"0".repeat(KEY_LENGTH), &FIRST);
+	// (`<api>?.src("<key>"`, holder_head)
+	let key_at = api.len() + "?.src(\"".len();
+	// (the copy is never longer than the text: a carried character is one
+	// byte or three, and its stand-in one)
+	let mut copy = Vec::with_capacity(head.len() + bytes.len() + HOLDER_TAIL.len());
+	copy.extend_from_slice(head.as_bytes());
+	copy.resize(head.len() + bytes.len(), 0);
+	let mut clean = true;
+	let mut at = 0;
+	let mut to = head.len();
+	loop {
+		// eight ASCII bytes at a time, as in source_key, copied as a word
+		// with the carried ones replaced where the word holds one
+		while let Some(chunk) = bytes.get(at..at + 8) {
+			let mut word_bytes: [u8; 8] = chunk.try_into().unwrap();
+			let word = u64::from_le_bytes(word_bytes);
+			if word & HIGH != 0 {
+				break;
+			}
+			(a, b) = key_word(a, b, word);
+			if holder_word(word) {
+				for byte in &mut word_bytes {
+					match HOLDER_BYTES[*byte as usize] {
+						0 => {}
+						6 => clean = false,
+						class => *byte = first[usize::from(class - 1)],
+					}
+				}
+			}
+			copy[to..to + 8].copy_from_slice(&word_bytes);
+			at += 8;
+			to += 8;
+		}
+		let Some(&byte) = bytes.get(at) else {
+			break;
+		};
+		if byte < 0x80 {
+			(a, b) = key_step(a, b, u32::from(byte));
+			copy[to] = match HOLDER_BYTES[byte as usize] {
+				0 => byte,
+				6 => {
+					clean = false;
+					byte
+				}
+				class => first[usize::from(class - 1)],
+			};
+			at += 1;
+			to += 1;
+			continue;
+		}
+		let c = text[at..].chars().next().unwrap();
+		(a, b) = key_char(a, b, c);
+		let width = c.len_utf8();
+		match c {
+			'\u{2028}' | '\u{2029}' => {
+				copy[to] = first[if c == '\u{2028}' { 4 } else { 5 }];
+				to += 1;
+			}
+			_ => {
+				copy[to..to + width].copy_from_slice(&bytes[at..at + width]);
+				to += width;
+			}
+		}
+		at += width;
+	}
+	let key = key_text(a, b);
+	copy.truncate(to);
+	copy.extend_from_slice(HOLDER_TAIL.as_bytes());
+	copy[key_at..key_at + KEY_LENGTH].copy_from_slice(key.as_bytes());
+	// (the text's characters, with ASCII bytes for some: UTF-8 still)
+	let holder = if clean { String::from_utf8(copy).ok() } else { None };
+	(key, holder)
+}
+
+/// how long a key is: seven base-36 digits of one hash and two of the other
+const KEY_LENGTH: usize = 9;
+
+const HIGH: u64 = 0x8080_8080_8080_8080;
+
+/// eight ASCII bytes, the first lowest, into the key's two hashes
+#[inline(always)]
+fn key_word(mut a: u32, mut b: u32, word: u64) -> (u32, u32) {
+	for i in 0..8 {
+		(a, b) = key_step(a, b, ((word >> (8 * i)) & 0xff) as u32);
+	}
+	(a, b)
+}
+
+const KEY_SEEDS: (u32, u32) = (0x811c_9dc5, 0x9747_b28c);
+
+/// the code units of the character `c`, which is not ASCII, into the key's
+/// two hashes
+fn key_char(mut a: u32, mut b: u32, c: char) -> (u32, u32) {
+	let mut units = [0u16; 2];
+	for unit in c.encode_utf16(&mut units) {
+		(a, b) = key_step(a, b, u32::from(*unit));
+	}
+	(a, b)
+}
+
+/// the key the two hashes make: 42 bits in nine base-36 digits
+fn key_text(a: u32, b: u32) -> String {
 	format!("{:0>7}{:0>2}", base36(a), base36(b % 1296))
+}
+
+/// one code unit `c` into the key's two hashes
+#[inline(always)]
+fn key_step(a: u32, b: u32, c: u32) -> (u32, u32) {
+	let a = (a ^ c).wrapping_mul(0x0100_0193);
+	let b = (b ^ c).wrapping_mul(0x5bd1_e995);
+	(a, b ^ (b >> 13))
 }
 
 /// `/*key.start.len*/`, the mark of a function at `start..end` (UTF-16 offsets)
 pub fn function_mark(key: &str, start: u32, end: u32) -> String {
-	format!("/*{key}.{}.{}*/", base36(start), base36(end - start))
+	// (one per function: written into its string, no formatting machinery
+	// and no string of its own for each number)
+	let mut mark = String::with_capacity(key.len() + 2 * BASE36_DIGITS + 6);
+	mark.push_str("/*");
+	mark.push_str(key);
+	mark.push('.');
+	push_base36(&mut mark, start);
+	mark.push('.');
+	push_base36(&mut mark, end - start);
+	mark.push_str("*/");
+	mark
 }
 
 /// the characters a kept text cannot carry in a block comment on one line
@@ -57,19 +199,39 @@ const STAND_INS: [u8; 29] = [
 /// area, from its start, one UTF-16 code unit each
 const PRIVATE_USE: std::ops::RangeInclusive<u32> = 0xe000..=0xf8ff;
 
+/// the first stand-ins, which nearly every script holds none of
+const FIRST: [char; 6] = {
+	let mut first = ['\0'; 6];
+	let mut i = 0;
+	while i < first.len() {
+		first[i] = STAND_INS[i] as char;
+		i += 1;
+	}
+	first
+};
+
 /// The statement that hands a script's text to the access API, `api` as
 /// the script reaches it (`holderStatement`): None when the text holds
 /// every stand-in character
 pub fn holder_statement(api: &str, key: &str, text: &str) -> Option<String> {
+	let mut out = String::new();
+	holder_statement_into(&mut out, api, key, text).then_some(out)
+}
+
+/// [`holder_statement`] written at the end of `out` (the text ahead of the
+/// script's code, which a copy of a script's length would otherwise be
+/// pushed onto): false, with `out` as it was, when the text holds every
+/// stand-in character
+pub fn holder_statement_into(out: &mut String, api: &str, key: &str, text: &str) -> bool {
 	// nearly every script holds none of the first stand-ins, which are then
 	// the ones taken: written so in one pass, which finds whether they were
 	// right, and written again after the general way's look at the text if
 	// not
-	let first: [char; 6] = STAND_INS[..CARRIED.len()].iter().map(|code| *code as char).collect::<Vec<_>>().try_into().unwrap();
-	let (out, clean) = holder_with(api, key, text, first);
-	if clean {
-		return Some(out);
+	let start = out.len();
+	if holder_with(out, api, key, text, FIRST) {
+		return true;
 	}
+	out.truncate(start);
 	let mut present = [false; 128];
 	for byte in text.bytes() {
 		if byte < 128 {
@@ -93,7 +255,11 @@ pub fn holder_statement(api: &str, key: &str, text: &str) -> Option<String> {
 				.filter_map(char::from_u32),
 		);
 	}
-	Some(holder_with(api, key, text, subs.try_into().ok()?).0)
+	let Ok(subs) = subs.try_into() else {
+		return false;
+	};
+	holder_with(out, api, key, text, subs);
+	true
 }
 
 /// what each byte is to the holder's copy of a text: 0 copied as it is,
@@ -115,10 +281,77 @@ const HOLDER_BYTES: [u8; 256] = {
 	table
 };
 
+/// whether any byte of `word` may be one [`HOLDER_BYTES`] does not copy as
+/// it is: below 0x0e (the first stand-ins, LF, CR, and the tab and the
+/// rest of the controls, which the byte loop then looks at and copies), `*`,
+/// `<`, or no ASCII. Exact for the word as a whole (a borrow can only run
+/// past a byte that is found anyway), so a word it passes is copied whole
+#[inline(always)]
+fn holder_word(word: u64) -> bool {
+	const ONES: u64 = 0x0101_0101_0101_0101;
+	let zero = |x: u64| x.wrapping_sub(ONES) & !x & HIGH;
+	let below = word.wrapping_sub(ONES * 0x0e) & !word & HIGH;
+	(word & HIGH) | below | zero(word ^ (ONES * u64::from(b'*'))) | zero(word ^ (ONES * u64::from(b'<'))) != 0
+}
+
 /// the holder of `text` with `subs` standing for the carried characters,
-/// and whether the text holds none of the first stand-ins
-fn holder_with(api: &str, key: &str, text: &str, subs: [char; 6]) -> (String, bool) {
-	let mut out = String::with_capacity(text.len() + 96);
+/// written at the end of `out`, and whether the text holds none of the first
+/// stand-ins
+fn holder_with(out: &mut String, api: &str, key: &str, text: &str, subs: [char; 6]) -> bool {
+	out.reserve(text.len() + 96);
+	holder_head(out, api, key, &subs);
+	// a byte at a time: every carried character but the two separators is
+	// one ASCII byte, and those two are the only characters whose UTF-8
+	// starts E2 80 A8 or E2 80 A9, so the runs between them are copied whole.
+	// Eight bytes at a time first where none of them is one to look at,
+	// which is most of a script
+	let bytes = text.as_bytes();
+	let mut clean = true;
+	let mut from = 0;
+	let mut at = 0;
+	while at < bytes.len() {
+		if let Some(chunk) = bytes.get(at..at + 8)
+			&& !holder_word(u64::from_le_bytes(chunk.try_into().unwrap()))
+		{
+			at += 8;
+			continue;
+		}
+		// the word that holds one, a byte at a time (a separator that starts
+		// in it may end past it)
+		let end = (at + 8).min(bytes.len());
+		while at < end {
+			let carried = match HOLDER_BYTES[bytes[at] as usize] {
+				0 => {
+					at += 1;
+					continue;
+				}
+				5 if bytes.get(at + 1) == Some(&0x80) && matches!(bytes.get(at + 2), Some(0xa8 | 0xa9)) => {
+					4 + usize::from(bytes[at + 2] == 0xa9)
+				}
+				5 => {
+					at += 1;
+					continue;
+				}
+				6 => {
+					clean = false;
+					at += 1;
+					continue;
+				}
+				class => usize::from(class - 1),
+			};
+			out.push_str(&text[from..at]);
+			out.push(subs[carried]);
+			at += if carried < 4 { 1 } else { 3 };
+			from = at;
+		}
+	}
+	out.push_str(&text[from..]);
+	out.push_str(HOLDER_TAIL);
+	clean
+}
+
+/// what the holder writes ahead of the text: the call that hands it over
+fn holder_head(out: &mut String, api: &str, key: &str, subs: &[char; 6]) {
 	// (an optional call of the API where it is, as the walk's own calls
 	// reach it: config.rs `api`; a realm without the inject has none)
 	out.push_str(api);
@@ -127,42 +360,10 @@ fn holder_with(api: &str, key: &str, text: &str, subs: [char; 6]) -> (String, bo
 	out.push(',');
 	out.push_str(&quote(&subs.iter().collect::<String>()));
 	out.push_str(",function(){/*");
-	// a byte at a time: every carried character but the two separators is
-	// one ASCII byte, and those two are the only characters whose UTF-8
-	// starts E2 80 A8 or E2 80 A9, so the runs between them are copied whole
-	let bytes = text.as_bytes();
-	let mut clean = true;
-	let mut from = 0;
-	let mut at = 0;
-	while at < bytes.len() {
-		let carried = match HOLDER_BYTES[bytes[at] as usize] {
-			0 => {
-				at += 1;
-				continue;
-			}
-			5 if bytes.get(at + 1) == Some(&0x80) && matches!(bytes.get(at + 2), Some(0xa8 | 0xa9)) => {
-				4 + usize::from(bytes[at + 2] == 0xa9)
-			}
-			5 => {
-				at += 1;
-				continue;
-			}
-			6 => {
-				clean = false;
-				at += 1;
-				continue;
-			}
-			class => usize::from(class - 1),
-		};
-		out.push_str(&text[from..at]);
-		out.push(subs[carried]);
-		at += if carried < 4 { 1 } else { 3 };
-		from = at;
-	}
-	out.push_str(&text[from..]);
-	out.push_str("*/});");
-	(out, clean)
 }
+
+/// what the holder writes behind the text
+const HOLDER_TAIL: &str = "*/});";
 
 /// `text` as a JavaScript string literal, spelled as JSON.stringify spells
 /// it (and the two line separators escaped, which a script's line cannot
@@ -211,18 +412,31 @@ pub fn quote(text: &str) -> String {
 	out
 }
 
-fn base36(mut n: u32) -> String {
-	if n == 0 {
-		return "0".to_owned();
-	}
-	let mut digits = Vec::new();
-	while n > 0 {
+fn base36(n: u32) -> String {
+	let mut out = String::new();
+	push_base36(&mut out, n);
+	out
+}
+
+/// the most digits a `u32` takes in base 36
+const BASE36_DIGITS: usize = 7;
+
+/// `n` in base 36 (lower case, no leading zeros) at the end of `out`
+fn push_base36(out: &mut String, mut n: u32) {
+	let mut digits = [0u8; BASE36_DIGITS];
+	let mut at = BASE36_DIGITS;
+	loop {
 		let d = (n % 36) as u8;
-		digits.push(if d < 10 { b'0' + d } else { b'a' + d - 10 });
+		at -= 1;
+		digits[at] = if d < 10 { b'0' + d } else { b'a' + d - 10 };
 		n /= 36;
+		if n == 0 {
+			break;
+		}
 	}
-	digits.reverse();
-	String::from_utf8(digits).unwrap()
+	for digit in &digits[at..] {
+		out.push(char::from(*digit));
+	}
 }
 
 /// the first byte at or past `at` that is no ASCII, or the end: eight
@@ -322,6 +536,7 @@ mod tests {
 		assert_eq!(source_key("const x = location.href;"), "1u8p5jibh");
 		assert_eq!(source_key("\u{fc}ber \u{1F600} \u{2028}"), "0plgj6ld2");
 		assert_eq!(source_key(&"x".repeat(1000)), "0263fxhmw");
+		assert_eq!(keyed_holder("0..$s$j", &"x".repeat(1000)).0, "0263fxhmw");
 	}
 
 	#[test]
@@ -329,6 +544,20 @@ mod tests {
 		assert_eq!(function_mark("0ztntfpdo", 5, 70), "/*0ztntfpdo.5.1t*/");
 		assert_eq!(function_mark("k", 0, 0), "/*k.0.0*/");
 		assert_eq!(function_mark("k", 36, 1296), "/*k.10.z0*/");
+		assert_eq!(function_mark("k", 0, u32::MAX), "/*k.0.1z141z3*/");
+		fn radix(mut n: u32) -> String {
+			let mut digits = Vec::new();
+			loop {
+				digits.push(char::from_digit(n % 36, 36).unwrap());
+				n /= 36;
+				if n == 0 {
+					break digits.iter().rev().collect();
+				}
+			}
+		}
+		for n in (0..5000).chain(u32::MAX - 5000..=u32::MAX).chain((0..32).map(|bit| 1 << bit)) {
+			assert_eq!(base36(n), radix(n), "{n}");
+		}
 	}
 
 	// what holderStatement gives (node, 2026-11-10)
@@ -441,6 +670,14 @@ mod tests {
 			}
 			assert_eq!(quote(&text), quote_chars(&text), "{text:?}");
 			assert_eq!(source_key(&text), key_units(&text), "{text:?}");
+			// the key and the holder in one pass give what each does on its
+			// own, and no holder only where a first stand-in is
+			let (key, holder) = keyed_holder("0..$s$j", &text);
+			assert_eq!(key, key_units(&text), "{text:?}");
+			assert_eq!(holder.is_none(), text.bytes().any(|byte| (1..=6).contains(&byte)), "{text:?}");
+			if holder.is_some() {
+				assert_eq!(holder, holder_statement("0..$s$j", &key, &text), "{text:?}");
+			}
 			if let Some(holder) = holder_statement("0..$s$j", "k", &text) {
 				let body = &holder[holder.find(",function(){/*").unwrap() + 14..holder.len() - 5];
 				let subs_text = &holder[holder.find("\",\"").unwrap() + 3..holder.find(",function").unwrap() - 1];
