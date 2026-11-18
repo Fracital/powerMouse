@@ -1169,13 +1169,15 @@ await mkdir('dist', { recursive: true });
 const FRAME_HTML = 'src/controller/controllerFrame.html';
 await copyFile(FRAME_HTML, 'dist/controllerFrame.html');
 // the wasm artifacts are built elsewhere (deploy/rust/build.sh, in a
-// container) and committed under assets/: the build copies them, so a
-// checkout with no Rust toolchain (CI, the deploy) ships the same bytes
+// container) and committed under assets/, as are the blocker's resources
+// (scripts/adblock-resources.mjs, from a uBlock Origin release): the build
+// copies them, so a checkout with no Rust toolchain (CI, the deploy) ships
+// the same bytes
 const ASSETS = 'assets';
 async function copyAssets() {
 	const copied = [];
 	for (const name of await readdir(ASSETS))
-		if (name.endsWith('.wasm') || name.endsWith('.js')) {
+		if (/\.(wasm|js|json)$/.test(name)) {
 			await copyFile(`${ASSETS}/${name}`, `dist/${name}`);
 			copied.push(`dist/${name}`);
 		}

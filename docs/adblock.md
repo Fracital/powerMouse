@@ -27,7 +27,7 @@ Origin. The plan and the reasons behind the design are in
 | Field       | Meaning                                                                                                                                                                            |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `lists`     | the filter lists: URLs, or `{ url, trusted, format }`. Default: EasyList, EasyPrivacy and uBlock Origin's filters, unbreak, badware, privacy, resource abuse and quick fixes lists |
-| `resources` | the URL of the redirect resources and scriptlets, in the format of Brave's `resources.json`. Default: Brave's published set, which is built from uBlock Origin's                   |
+| `resources` | the URL of the redirect resources and scriptlets, in the format of Brave's `resources.json`. Default: uBlock Origin's, `adblock-resources.json` in the directory (see below)       |
 | `engine`    | the URL of a serialized engine to load in place of fetching and compiling `lists` (see below)                                                                                      |
 | `refresh`   | hours between refreshes of the lists, default 24                                                                                                                                   |
 
@@ -36,15 +36,27 @@ a page's cookies, storage and responses. uBlock Origin's own lists are
 trusted by default, as in uBlock Origin; a list given as a plain URL is not.
 `format: 'hosts'` reads a hosts file.
 
-Nothing is bundled. The lists and the resources are fetched at runtime by
-the service worker through the controller's transport, like a page's own
-requests, so the list servers see the wisp server's address and never the
-user's. The compiled engine is kept in CacheStorage (`stomp-adblock`) with
-the resources, keyed by the list URLs and the engine's format, so a
-restarted worker loads it in milliseconds and the lists are fetched again
-only once the stored engine is older than `refresh`. A list that cannot be
-fetched is left out. With no list fetched at all, or no resources, the
-blocker stays off and pages load unfiltered; the stored engine, when there
+The lists are not bundled. They are fetched at runtime by the service
+worker through the controller's transport, like a page's own requests, so
+the list servers see the wisp server's address and never the user's. The
+default resources are a file of the package: uBlock Origin's scriptlets and
+redirect resources (`dist/adblock-resources.json`, GPL-3.0 like STomp, 473
+KB and 104 KB with gzip), which the worker reads from its own origin, the
+directory, like `blocker.wasm`. They are built from a uBlock Origin release
+(see "Building the resources"), because the lists name uBO's scriptlets and
+are written for the uBO release that ships them; Brave's published
+`resources.json` holds only Brave's own resources (25 of them, 2026-11-17)
+and none of uBO's, so with it no `+js()` rule of the default lists ran and a
+`$redirect` rule blocked instead. A host that names its own `resources` is
+fetched through the transport as before. The compiled engine is kept in
+CacheStorage (`stomp-adblock`) with the resources, keyed by the list URLs
+and the engine's format, so a restarted worker loads it in milliseconds and
+the lists are fetched again only once the stored engine is older than
+`refresh`. A list that cannot be
+fetched is left out. With no list fetched at all the blocker stays off and
+pages load unfiltered; without the resources it blocks and hides, with no
+scriptlet and no `$redirect` answer, says so once on the console and stores
+nothing, so the next worker tries them again. The stored engine, when there
 is one, keeps serving while a refresh fails.
 
 The module itself (`blocker.wasm`, named by `init.assets.blocker`, served
@@ -70,8 +82,8 @@ in the way of a host that did not ask for it:
 - A host that does not serve `blocker.wasm` gets one `console.info` line from
   the controller (`Stomp: the content blocker is off, its module did not
 load`); no list is asked for and the inject installs nothing for the
-  blocker. When the resources or every list cannot be fetched (a wisp server
-  that does not reach the list servers), the service worker says it once
+  blocker. When every list cannot be fetched (a wisp server that does not
+  reach the list servers), the service worker says it once
   (`Stomp: the content blocker is off: ...`) and pages load unfiltered; a
   single default list that fails is left out without a line. The next
   controller to shake hands tries again. With `true` or an object the module
@@ -81,7 +93,8 @@ load`); no list is asked for and the inject installs nothing for the
   data) documents load unfiltered until the engine is built.
 
 The first handshake waits for `blocker.wasm` either way (fetched beside the
-transport's module), so serve it with the cache headers of the other files.
+transport's module), so serve it with the cache headers of the other files,
+and serve `adblock-resources.json` beside it.
 
 ### A prebuilt engine
 
@@ -231,6 +244,24 @@ opened for the page's markup and before the page's first script, inside a
 function (its helpers never become globals), so what a scriptlet wraps is
 STomp's hook and what it sees is the page's own URL: a scriptlet that wraps
 `fetch` gets the URL the page passed, and `location.href` is the real page.
+The function declares `scriptletGlobals`, as uBlock Origin's scriptlet
+template and Brave do: uBO's `safeSelf()` reads it, and without it the first
+scriptlet of the script threw (the crate orders them by a hash, so a
+different rule was lost on each page).
+
+**YouTube.** YouTube's ads come in the same JSON as the video: the
+`adPlacements`, `playerAds` and `adSlots` of the page's
+`ytInitialPlayerResponse` and of what `/youtubei/v1/player` answers, so no
+network rule can tell them apart. The default lists remove them as uBlock
+Origin does, with nothing written for YouTube in STomp: `set-constant` on
+`ytInitialPlayerResponse.adPlacements` and its siblings, `json-prune` on
+`JSON.parse`, `json-prune-fetch-response`, `json-prune-xhr-response`,
+`trusted-replace-fetch-response` and `trusted-replace-xhr-response` on the
+player's requests, and cosmetic rules for the feed, companion and masthead
+slots; the network rules block the ad pings (`/pagead/`, `/api/stats/ads`,
+doubleclick) and redirect `ad_status.js` to uBO's stub. `adblock-youtube` checks the same rules on a
+fixture of the player JSON's shape against the page loaded natively with
+the engine's scriptlets run at document start.
 
 With `adblock: false` none of this exists: the config carries no `adblock`,
 the module is never fetched, the worker has no engine and the inject takes
@@ -336,6 +367,20 @@ an unlisted socket to a local server opens in 2.6 ms with the blocker on.
   it with a fresh one that loads the stored engine.
 - An instance that traps (a Rust panic aborts) is dropped and replaced the
   same way; requests pass unfiltered in between.
+
+## Building the resources
+
+`node scripts/adblock-resources.mjs <dir>`, with `<dir>` a checkout of
+uBlock Origin at a release tag (`git clone --depth 1 --branch <tag>
+https://github.com/gorhill/uBlock.git <dir>`), writes
+`assets/adblock-resources.json` and `assets/adblock-resources.UPSTREAM`
+(the tag and commit), as Brave builds the uBO part of the file it ships
+(brave-core-crx-packager): every scriptlet uBO registers, as the source of
+its function with the names of the functions it calls, and every redirect
+resource of uBO's `redirect-resources.js`, with a type from its extension.
+The same checkout gives the same bytes. The build copies the file to
+`dist/`. Raise the tag when the lists start naming scriptlets or arguments
+the file does not have (uBO's own lists follow its releases).
 
 ## Building the module
 

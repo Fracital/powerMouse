@@ -1,0 +1,6 @@
+source https://github.com/gorhill/uBlock (GPL-3.0)
+tag 1.76.4
+commit 3cca944b4a4c5f3473d6cb7153e6fb99b5f7d1db
+scriptlets 153
+redirects 47
+built by scripts/adblock-resources.mjs

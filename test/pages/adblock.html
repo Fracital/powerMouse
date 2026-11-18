@@ -77,9 +77,18 @@
 			trusted: window.__adblockTrusted ?? null,
 			untrusted: window.__adblockUntrusted ?? null,
 			flag: window.__adblockFlag ?? null,
-			leakedFunctions: ['spyFetch', 'setFlag', 'trustedMark'].filter(
-				(name) => name in window,
-			),
+			// uBlock Origin's own scriptlets (the default resources)
+			set: window.__adblockSet ?? null,
+			trustedSet: window.__adblockTrustedSet ?? null,
+			untrustedSet: window.__adblockUntrustedSet ?? null,
+			leakedFunctions: [
+				'spyFetch',
+				'setFlag',
+				'trustedMark',
+				'setConstant',
+				'safeSelf',
+				'scriptletGlobals',
+			].filter((name) => name in window),
 			gone: document.getElementById('gone') === null,
 			trackAttribute: document.getElementById('tracked').dataset.track ?? null,
 			classes: document.getElementById('classed').className,

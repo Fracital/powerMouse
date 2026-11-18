@@ -1,0 +1,116 @@
+<!doctype html>
+<title>adblock-yt</title>
+<!-- the shapes of a YouTube watch page that carry its ads (adblock-youtube suite) -->
+<ytd-rich-grid-renderer id="grid">
+	<ytd-rich-item-renderer id="feed-ad"
+		><div id="content">
+			<ytd-ad-slot-renderer>ad</ytd-ad-slot-renderer>
+		</div></ytd-rich-item-renderer
+	>
+	<ytd-rich-item-renderer id="feed-video"
+		><div id="content">video</div></ytd-rich-item-renderer
+	>
+</ytd-rich-grid-renderer>
+<div class="ytd-watch-flexy">
+	<div class="ytd-watch-next-secondary-results-renderer">
+		<ytd-ad-slot-renderer
+			id="companion"
+			class="ytd-watch-next-secondary-results-renderer"
+			>companion</ytd-ad-slot-renderer
+		>
+	</div>
+</div>
+<div class="ytd-two-column-browse-results-renderer">
+	<ytd-rich-grid-renderer
+		><div id="masthead-ad" class="ytd-rich-grid-renderer">
+			masthead
+		</div></ytd-rich-grid-renderer
+	>
+</div>
+<div class="video-ads" id="overlay">overlay</div>
+<yt-overlay-product-sticker id="sticker">sticker</yt-overlay-product-sticker>
+<div id="kept">kept</div>
+<script>
+	var ytInitialPlayerResponse = {
+		playabilityStatus: { status: 'OK' },
+		playerAds: [{ playerLegacyDesktopWatchAdsRenderer: {} }],
+		adPlacements: [
+			{
+				adPlacementRenderer: {
+					config: { adPlacementConfig: { kind: 'AD_PLACEMENT_KIND_START' } },
+				},
+			},
+		],
+		adSlots: [{ adSlotRenderer: {} }],
+		videoDetails: { videoId: 'stompFixture', title: 'A video' },
+	};
+	var meta = document.createElement('meta');
+</script>
+<script>
+	(function serverContract() {
+		window.__serverContract = true;
+	})();
+</script>
+<script>
+	// what the page itself sees, by its own (rewritten) code
+	const AD_KEYS = ['playerAds', 'adPlacements', 'adSlots'];
+	const keysOf = (object) =>
+		object && typeof object === 'object'
+			? Object.keys(object).filter((key) => object[key] !== undefined)
+			: object;
+	const PLAYER = '/pages/deep/youtubei/v1/player?prettyPrint=false';
+	const body = JSON.stringify({ context: { client: { clientName: 'WEB' } } });
+	const xhr = (responseType) =>
+		new Promise((resolve) => {
+			const request = new XMLHttpRequest();
+			request.open('POST', PLAYER);
+			request.responseType = responseType;
+			request.onloadend = () =>
+				resolve(
+					keysOf(
+						responseType === 'json'
+							? request.response
+							: JSON.parse(request.responseText),
+					),
+				);
+			request.send(body);
+		});
+	window.__adblockReport = async () => {
+		const shown = (id) => {
+			const element = document.getElementById(id);
+			return element ? getComputedStyle(element).display !== 'none' : null;
+		};
+		const response = await fetch(PLAYER, { method: 'POST', body });
+		const fetched = keysOf(await response.json());
+		const text = await (await fetch(PLAYER, { method: 'POST', body })).text();
+		return {
+			initial: keysOf(window.ytInitialPlayerResponse),
+			initialVideo: window.ytInitialPlayerResponse?.videoDetails?.videoId,
+			fetched,
+			fetchedUrl: response.url,
+			fetchedStatus: response.status,
+			text: keysOf(JSON.parse(text)),
+			xhr: await xhr(''),
+			xhrJson: await xhr('json'),
+			parsed: keysOf(
+				JSON.parse(
+					'{"playerResponse":{"adPlacements":[],"videoDetails":{}},"adSlots":[]}',
+				).playerResponse,
+			),
+			serverContract: window.__serverContract ?? null,
+			rpnt: [window.__rpnt ?? null, window.__rpntComma ?? null],
+			shown: Object.fromEntries(
+				[
+					'feed-ad',
+					'feed-video',
+					'companion',
+					'masthead-ad',
+					'overlay',
+					'sticker',
+					'kept',
+				].map((id) => [id, shown(id)]),
+			),
+			adKeys: AD_KEYS,
+		};
+	};
+</script>

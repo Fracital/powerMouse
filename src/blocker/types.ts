@@ -49,7 +49,8 @@ export interface AdblockOptions {
 	lists?: (string | AdblockList)[];
 	/**
 	 * the redirect resources and scriptlets, Brave's `resources.json`
-	 * format; default Brave's published set (uBlock Origin's scriptlets)
+	 * format; default uBlock Origin's, built into `adblock-resources.json` in
+	 * the directory (scripts/adblock-resources.mjs)
 	 */
 	resources?: string;
 	/**
@@ -300,8 +301,13 @@ export const DEFAULT_LISTS: AdblockList[] = [
 	},
 ];
 
-export const DEFAULT_RESOURCES =
-	'https://raw.githubusercontent.com/brave/adblock-resources/master/dist/resources.json';
+/**
+ * the file of the directory that holds uBlock Origin's scriptlets and
+ * redirect resources (assets/adblock-resources.json): the lists' `+js()` and
+ * `$redirect` rules name them, and the lists are written for the uBO release
+ * that shipped them, as the file is built from one
+ */
+export const DEFAULT_RESOURCES = 'adblock-resources.json';
 
 export const DEFAULT_REFRESH_HOURS = 24;
 
@@ -312,6 +318,8 @@ export const DEFAULT_REFRESH_HOURS = 24;
  */
 export function resolveAdblockOptions(
 	given: boolean | AdblockOptions | null | undefined,
+	/** where the default resources are served (the directory's copy) */
+	resources: string = DEFAULT_RESOURCES,
 ): AdblockInit | null {
 	if (given === false) return null;
 	const options = given === true || !given ? {} : given;
@@ -321,7 +329,7 @@ export function resolveAdblockOptions(
 	const hours = Number(options.refresh);
 	return {
 		lists,
-		resources: options.resources ?? DEFAULT_RESOURCES,
+		resources: options.resources ?? resources,
 		...(options.engine ? { engine: options.engine } : {}),
 		refreshMs:
 			(Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_REFRESH_HOURS) *

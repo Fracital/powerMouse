@@ -22,3 +22,4 @@ test/pages/vendor-*.js
 /bench/.contenders
 # lockfiles the bench adapters pin for the contenders they install
 bench/contenders/**/package-lock.json
+/assets/adblock-resources.json

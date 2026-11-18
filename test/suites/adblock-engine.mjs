@@ -379,6 +379,8 @@ ok(
 	cosmetic.script.startsWith('/*rewritten*/') &&
 		cosmetic.script.includes('function spyFetch') &&
 		cosmetic.script.includes('spyFetch("__adblockSpy")') &&
+		// uBlock Origin's scriptlets read it (safeSelf): the blocker declares it
+		cosmetic.script.includes('const scriptletGlobals = {};') &&
 		rewrites.length === 1 &&
 		blocker.cosmetic(page, rewrite).script === cosmetic.script &&
 		rewrites.length === 1,
@@ -452,11 +454,30 @@ const noResources = new Blocker(
 	fromPages,
 	async () => module,
 );
+// the lists still block and hide without the resources: only the
+// scriptlets are missing, said once, and nothing is stored
+const warned = [];
+const warn = console.warn;
+console.warn = (...args) => warned.push(args.join(' '));
+const noResourcesReady = await noResources.settled();
+console.warn = warn;
+const noResourcesPage = noResources.cosmetic(page, rewrite);
 ok(
-	'and with no resources',
-	(await noResources.settled()) === false &&
-		/resources/.test(noResources.lastError ?? ''),
-	String(noResources.lastError),
+	'with no resources the lists still block and hide, without scriptlets, and the blocker says so',
+	noResourcesReady === true &&
+		noResources.ready === true &&
+		noResources.decide({
+			url: `${SITE}/pages/adblock-blocked.js`,
+			source: page,
+			destination: 'script',
+			navigation: false,
+			topLevel: false,
+			method: 'GET',
+		}) !== null &&
+		noResourcesPage !== null &&
+		noResourcesPage.script === '' &&
+		warned.filter((line) => /runs without scriptlets/.test(line)).length === 1,
+	JSON.stringify([noResourcesReady, noResources.lastError, warned]),
 );
 const noModule = new Blocker(
 	init([{ url: `${SITE}/pages/adblock-list.txt` }]),
@@ -512,7 +533,8 @@ ok(
 	'`true` names the default lists, all https, and a day between refreshes',
 	defaults.lists.length > 3 &&
 		defaults.lists.every((list) => list.url.startsWith('https://')) &&
-		defaults.resources.startsWith('https://') &&
+		// the directory's copy of uBlock Origin's (scripts/adblock-resources.mjs)
+		defaults.resources === 'adblock-resources.json' &&
 		defaults.refreshMs === 24 * 3600_000 &&
 		!('byDefault' in defaults),
 );

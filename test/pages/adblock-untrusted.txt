@@ -1,3 +1,5 @@
 ! Title: a list the host did not mark trusted (adblock suites)
 127.0.0.1##+js(trusted-mark, __adblockUntrusted)
 127.0.0.1##+js(set-flag, __adblockFlag)
+127.0.0.1##+js(set, __adblockSet, true)
+127.0.0.1##+js(trusted-set, __adblockUntrustedSet, true)

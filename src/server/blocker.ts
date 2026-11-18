@@ -472,21 +472,34 @@ export class Blocker implements BlockerLike {
 		try {
 			resources = await resourcesPromise;
 		} catch (error) {
-			this.lastError = `the resources could not be fetched: ${String(error)}`;
-			return;
+			// the lists still block and hide without them; only the scriptlets
+			// and the `$redirect` answers are missing (a host that does not
+			// serve the directory's adblock-resources.json). Nothing is stored,
+			// so the next worker tries them again
+			resources = '';
+			(this.#init.byDefault ? console.info : console.warn)(
+				`Stomp: the content blocker runs without scriptlets: the resources could not be fetched: ${String(error)}`,
+			);
 		}
 		// the lists changed under this build (reconfigure): its engine is for
 		// the old lists, so drop it rather than serve or store it
 		if (generation !== this.#generation) return;
 		// the engine is loaded into an instance of its own (the builder holds
 		// the lists' text and the build's garbage), stored, and serves
-		if (this.#load(engine, resources)) {
+		if (this.#load(engine, resources || '[]')) {
 			this.#scripts.clear();
-			await this.#store(engine, resources);
+			if (resources) await this.#store(engine, resources);
 		}
 	}
 	async #fetchOk(url: string): Promise<Response> {
-		const response = await this.#fetch(url);
+		// a file of STomp's own origin (the default resources, which the
+		// directory serves beside blocker.wasm) is the worker's to read: the
+		// transport would ask the wisp server for this origin
+		const own = globalThis.location?.origin;
+		const response =
+			own && new URL(url, own).origin === own
+				? await fetch(url)
+				: await this.#fetch(url);
 		if (!response.ok) throw new Error(`status ${response.status} for ${url}`);
 		return response;
 	}
@@ -574,7 +587,13 @@ export class Blocker implements BlockerLike {
 			if (memo !== undefined) script = memo;
 			else {
 				try {
-					script = rewrite(resources.injected_script);
+					// uBlock Origin's scriptlets read `scriptletGlobals`, which the
+					// blocker that runs them declares around them (uBO's own
+					// scriptlet template, Brave's injection): without it the first
+					// scriptlet's first safeSelf() throws and that scriptlet is lost
+					script = rewrite(
+						`const scriptletGlobals = {};\n${resources.injected_script}`,
+					);
 				} catch (error) {
 					console.warn('Stomp: the scriptlets could not be rewritten', error);
 					script = '';

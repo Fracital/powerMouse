@@ -37,3 +37,5 @@ localhost#@#.adblock-generic
 ! Scriptlets
 127.0.0.1##+js(spy-fetch, __adblockSpy)
 127.0.0.1##+js(trusted-mark, __adblockTrusted)
+! uBlock Origin's scriptlets, which only the default resources have
+127.0.0.1##+js(trusted-set, __adblockTrustedSet, true)

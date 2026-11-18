@@ -93,8 +93,11 @@ const visit = (
 											await new Promise((resolve) =>
 												setTimeout(resolve, delay),
 											);
+										// a URL not mapped answers 404 (the fixture's
+										// pages/ answers any name with a page)
 										url = new URL(
-											mirror[url.href] ?? `${fixture}pages/adblock-missing.txt`,
+											mirror[url.href] ??
+												`${fixture}early-js?n=adblock-missing`,
 										);
 									}
 									return target.request(url, ...rest);
@@ -642,8 +645,9 @@ ok(
 // resolves no name but the loopback ones (lib.mjs launch), so the
 // controller's transport answers their URLs from the fixture and notes what
 // it was asked: a list that arrives came through the transport
-const RESOURCES =
-	'https://raw.githubusercontent.com/brave/adblock-resources/master/dist/resources.json';
+// the default resources are uBlock Origin's, the directory's own file
+// (scripts/adblock-resources.mjs), which the worker reads from its origin
+const RESOURCES = `${PROXY}stomp/adblock-resources.json`;
 const EASYLIST = 'https://easylist.to/easylist/easylist.txt';
 const UBLOCK = 'https://ublockorigin.github.io/uAssets/filters/';
 const LISTS = [
@@ -714,7 +718,8 @@ const listless = await visit(undefined, { page: site }, { mirror: {} });
 ok(
 	'default, no list to be had: asked of the transport, and the page loads unfiltered without a wait',
 	listless.config.adblock === true &&
-		listless.asked.includes(RESOURCES) &&
+		listless.asked.includes(EASYLIST) &&
+		!listless.asked.includes(RESOURCES) &&
 		everything(listless.reports.page) &&
 		listless.ms.page < 4000,
 	JSON.stringify([listless.asked, listless.ms, listless.reports]),
@@ -723,10 +728,11 @@ await sleep(300);
 const listlessAgain = await visit(undefined, { page: site }, { mirror: {} });
 ok(
 	'default, no list to be had: the next controller tries again, and the worker says once that the blocker is off',
-	listlessAgain.asked.includes(RESOURCES) &&
+	listlessAgain.asked.includes(EASYLIST) &&
 		workerLines.filter(
 			([kind, text]) =>
-				kind === 'info' && /content blocker is off: the resources/.test(text),
+				kind === 'info' &&
+				/content blocker is off: no filter list could be fetched/.test(text),
 		).length === 1 &&
 		!workerLines.some(([kind]) => kind === 'warning'),
 	JSON.stringify([listlessAgain.asked, workerLines]),
@@ -736,7 +742,6 @@ ok(
 // first navigation does not wait for them (one asked for waits five
 // seconds), and the engine serves from the moment it is built
 const mirror = {
-	[RESOURCES]: `${FIXTURE}pages/adblock-resources.json`,
 	[`${UBLOCK}filters.min.txt`]: `${FIXTURE}pages/adblock-list.txt`,
 	[EASYLIST]: `${FIXTURE}pages/adblock-untrusted.txt`,
 };
@@ -761,14 +766,18 @@ ok(
 );
 const afterDefault = await hits();
 ok(
-	'default: the default lists and the resources are asked of the transport, once each',
+	'default: the default lists are asked of the transport, once each, and the resources of the directory, by the worker',
 	JSON.stringify([...first.asked].sort()) ===
-		JSON.stringify([RESOURCES, ...LISTS].sort()) &&
+		JSON.stringify([...LISTS].sort()) &&
 		count(afterDefault, 'adblock-list.txt') ===
 			count(beforeDefault, 'adblock-list.txt') + 1 &&
 		count(afterDefault, 'adblock-resources.json') ===
-			count(beforeDefault, 'adblock-resources.json') + 1,
-	JSON.stringify(first.asked),
+			count(beforeDefault, 'adblock-resources.json') &&
+		contextRequested.includes(RESOURCES),
+	JSON.stringify([
+		first.asked,
+		contextRequested.filter((url) => url.includes('resources')),
+	]),
 );
 ok(
 	'default: the browser itself asks no list server',
@@ -776,15 +785,16 @@ ok(
 	JSON.stringify([...requested, ...contextRequested].filter(listServers)),
 );
 ok(
-	'default: once built the engine blocks, hides and runs the scriptlets, trusted for uBlock Origin lists only',
+	"default: once built the engine blocks, hides and runs uBlock Origin's scriptlets, trusted for uBlock Origin lists only",
 	JSON.stringify(built?.ran) ===
 		JSON.stringify(['allowed', 'third', 'domain']) &&
 		built.typedFetch === 'TypeError: Failed to fetch' &&
 		built.shown.generic === false &&
 		built.shown.procedural === false &&
-		built.spy?.href === site &&
-		built.trusted === true &&
-		built.untrusted === null,
+		built.set === true &&
+		built.trustedSet === true &&
+		built.untrustedSet === null &&
+		built.leakedFunctions.length === 0,
 	JSON.stringify(built),
 );
 ok(

@@ -1,0 +1,22 @@
+! Title: the YouTube-shaped rules of uBlock Origin's lists (adblock-youtube suite)
+! Each rule is the lists' own, as they were on 2026-11-17 (filters.min.txt,
+! quick-fixes.min.txt, easylist.txt), with www.youtube.com and its sibling
+! hosts replaced by the fixture's 127.0.0.1, the rpnt payload cut to its shape
+! (quotes, an arrow function, the $1 of the match) and the URL patterns kept
+! as they are: the fixture answers /pages/deep/youtubei/v1/player.
+127.0.0.1##+js(set, ytInitialPlayerResponse.playerAds, undefined)
+127.0.0.1##+js(set, ytInitialPlayerResponse.adPlacements, undefined)
+127.0.0.1##+js(set, ytInitialPlayerResponse.adSlots, undefined)
+127.0.0.1##+js(set, playerResponse.adPlacements, undefined)
+127.0.0.1##+js(json-prune, playerResponse.adPlacements playerResponse.playerAds playerResponse.adSlots adPlacements playerAds adSlots legacyImportant)
+127.0.0.1##+js(json-prune-fetch-response, adPlacements adSlots playerResponse.adPlacements playerResponse.adSlots [].playerResponse.adPlacements [].playerResponse.adSlots, , propsToMatch, /\/player(\?|$)/)
+127.0.0.1##+js(json-prune-xhr-response, adPlacements adSlots playerResponse.adPlacements playerResponse.adSlots [].playerResponse.adPlacements [].playerResponse.adSlots, , propsToMatch, /\/player(?:\?.+)?$/)
+127.0.0.1##+js(trusted-replace-xhr-response, /"adPlacements.*?("adSlots"|"adBreakHeartbeatParams")/gms, $1, /\/player(?:\?.+)?$/)
+127.0.0.1##+js(trusted-rpfr, '"adPlacements"', '"no_ads"', player?)
+127.0.0.1##+js(trusted-rpfr, '"adSlots"', '"no_ads"', player?)
+127.0.0.1##+js(rpnt, script, /(\(function serverContract\(\)|^if \(window\.ytcsi|^writeEmbed)/, (()=>{if("YOUTUBE_PREMIUM_LOGO"===window.__premium)return;window.__rpnt="ran"\,window.__rpntComma=[1\,2].length})();$1, sedCount, 1, excludes, MutationObserver, condition, /serverContract|js_ld|writeEmbed/)
+127.0.0.1##ytd-rich-item-renderer:has(> #content > ytd-ad-slot-renderer)
+127.0.0.1##.ytd-watch-flexy > .ytd-watch-next-secondary-results-renderer > ytd-ad-slot-renderer.ytd-watch-next-secondary-results-renderer
+127.0.0.1##.ytd-two-column-browse-results-renderer > ytd-rich-grid-renderer > #masthead-ad.ytd-rich-grid-renderer
+127.0.0.1##yt-overlay-product-sticker
+##.video-ads
