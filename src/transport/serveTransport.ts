@@ -4,6 +4,7 @@ import type {
 } from '@mercuryworkshop/proxy-transports';
 import { pastASCII, utf8Text } from '../byteString';
 import { sendBody } from './bodyPort';
+import { base64url, httpsQuery } from './http3/dnsHttps';
 import {
 	HANDSHAKE_REFUSED,
 	HostToTransport,
@@ -219,7 +220,6 @@ async function openStream(
  * kept: the next caller tries again.
  */
 const initializing = new WeakMap<ProxyTransport, Promise<void>>();
-
 function initOnce(transport: ProxyTransport): Promise<void> {
 	let pending = initializing.get(transport);
 	if (!pending) {
@@ -254,7 +254,11 @@ function wispClient(transport: ProxyTransport): WispClient | null {
  * is left to the first request, as before. A transport without epoxy's
  * client is only loaded.
  */
-export function warmTransport(transport: ProxyTransport): void {
+export function warmTransport(
+	transport: ProxyTransport,
+	/** epoxy's `ech_dns`, when it has one: its connection is opened too (warmResolver) */
+	resolver?: string,
+): void {
 	if (transport.ready || initializing.has(transport)) return;
 	const pending = Promise.resolve(transport.init())
 		.then(() => wispClient(transport)?.replace_stream_provider?.())
@@ -268,6 +272,40 @@ export function warmTransport(transport: ProxyTransport): void {
 		.finally(() => initializing.delete(transport));
 	pending.catch(() => {});
 	initializing.set(transport, pending);
+	if (resolver)
+		pending.then(() => warmResolver(transport, resolver)).catch(() => {});
+}
+
+/** the transport under the wrappers (Http3Transport, RevivingTransport): epoxy's own */
+function innermost(transport: ProxyTransport): ProxyTransport {
+	const base = (transport as { base?: ProxyTransport }).base;
+	return base && typeof base.request === 'function'
+		? innermost(base)
+		: transport;
+}
+
+/**
+ * Open the connection to the DNS-over-HTTPS server epoxy asks for a host's
+ * ECH config (`ech_dns`, docs/fingerprint.md) with one query of its own
+ * name, which epoxy never asks. Epoxy asks before the TLS handshake of
+ * each new host, and the first navigation's site waited for a TCP and TLS
+ * handshake with the resolver before its own (60 to 100 ms of its first
+ * byte); after this its query is one round trip on a connection already
+ * open. Sent on epoxy's own client, whose pool the lookups use, not
+ * through HTTP/3; nothing waits for it.
+ */
+async function warmResolver(transport: ProxyTransport, resolver: string) {
+	const url = new URL(resolver);
+	url.searchParams.set('dns', base64url(httpsQuery(url.hostname)));
+	const response = await innermost(transport).request(
+		url,
+		'GET',
+		null,
+		[['accept', 'application/dns-message']],
+		undefined,
+	);
+	// read to its end, so the stream is done with
+	await new Response(response.body as BodyInit).arrayBuffer();
 }
 
 /**

@@ -38,16 +38,22 @@ function construct(descriptor: TransportModule): Promise<ProxyTransport> {
 	);
 }
 
+/** epoxy's DNS-over-HTTPS endpoint for ECH configs (`ech_dns`), when the descriptor names one */
+function resolverOf(descriptor: TransportModule): string | undefined {
+	const options = descriptor.options?.[0] as { ech_dns?: unknown } | undefined;
+	return typeof options?.ech_dns === 'string' ? options.ech_dns : undefined;
+}
+
 const rpc = new RpcHelper<WorkerBound, WorkerToController>(
 	{
 		init: async (descriptor) => {
 			transport = await construct(descriptor);
-			warmTransport(transport);
+			warmTransport(transport, resolverOf(descriptor));
 			first();
 		},
 		setTransport: async (descriptor) => {
 			transport = await construct(descriptor);
-			warmTransport(transport);
+			warmTransport(transport, resolverOf(descriptor));
 		},
 		serve: async (port) => {
 			await ready;

@@ -6,7 +6,9 @@
 // two ports, requests fired in one tick. A failed init is retried.
 // warmTransport (src/transport/worker.ts calls it once a transport is made)
 // loads it and opens epoxy's wisp connection before any request, once, and a
-// request that comes meanwhile waits for both.
+// request that comes meanwhile waits for both. Given epoxy's ECH resolver,
+// it then opens that connection too, with one query of the resolver's own
+// name on epoxy's own transport, under the wrappers.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { done, ok, OUT } from '../lib.mjs';
@@ -206,5 +208,41 @@ const fire = (clients) =>
 		JSON.stringify({ warmed, inits: transport.inits, statuses }),
 	);
 	ports.forEach((p) => p.close());
+}
+{
+	const epoxy = fake();
+	const asked = [];
+	epoxy.request = async (url, method, body, headers) => {
+		asked.push({ url: String(url), method, headers });
+		return { body: null, headers: [], status: 200, statusText: 'OK' };
+	};
+	const wrapper = {
+		base: epoxy,
+		get ready() {
+			return epoxy.ready;
+		},
+		init: () => epoxy.init(),
+		request: () => {
+			throw new Error('the wrapper was asked');
+		},
+		connect: () => [() => {}, () => {}],
+		meta: () => ({}),
+	};
+	const warmed = typeof warmTransport === 'function';
+	if (warmed) warmTransport(wrapper, 'https://resolver.example/dns-query');
+	await sleep(150);
+	const query = asked[0] && new URL(asked[0].url);
+	ok(
+		"a warm given epoxy's ECH resolver asks it once for its own name, on epoxy's own transport, as a DNS message",
+		warmed &&
+			asked.length === 1 &&
+			asked[0].method === 'GET' &&
+			query.origin === 'https://resolver.example' &&
+			query.pathname === '/dns-query' &&
+			/^[A-Za-z0-9_-]+$/.test(query.searchParams.get('dns') ?? '') &&
+			JSON.stringify(asked[0].headers) ===
+				JSON.stringify([['accept', 'application/dns-message']]),
+		JSON.stringify({ warmed, asked }),
+	);
 }
 await done();
