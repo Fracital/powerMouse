@@ -1,0 +1,118 @@
+From e07c43d1ff221b86aac153388bde1c2866cbe0ae Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 17 Nov 2026 17:49:52 -0500
+Subject: [PATCH 53/54] client: send a Cookie field as its crumbs, as Chrome
+ does
+
+Chrome's HPACK encoder (quiche's HpackEncoder::CookieToCrumbs, RFC 9113
+8.2.3) sends a request's Cookie as one field per cookie: the value
+trimmed of spaces and tabs and split at each ";", one space after it
+dropped. h2 sent the joined value as one field, so the server saw one
+cookie field where Chrome sends several. Each crumb now goes out as a
+field of its own, in the Cookie field's place. HTTP/1 keeps one Cookie
+line, as Chrome's does.
+---
+ src/frame/headers.rs | 73 ++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 70 insertions(+), 3 deletions(-)
+
+diff --git a/src/frame/headers.rs b/src/frame/headers.rs
+index efb74a6..f7fc458 100644
+--- a/src/frame/headers.rs
++++ b/src/frame/headers.rs
+@@ -81,6 +81,51 @@ pub struct Iter {
+ 
+     /// Header fields
+     fields: header::IntoIter<HeaderValue>,
++
++    /// The name the last field had (a value without a name follows it)
++    last_name: Option<HeaderName>,
++
++    /// Crumbs of a Cookie field still to be yielded, in order
++    crumbs: std::collections::VecDeque<HeaderValue>,
++}
++
++/// A Cookie field's crumbs as Chrome's HPACK encoder makes them (quiche's
++/// `HpackEncoder::CookieToCrumbs`, RFC 9113 8.2.3): the value without
++/// leading and trailing spaces and tabs, split at each `;`, one space after
++/// the `;` dropped. Each crumb is a field of its own, so the server's table
++/// keeps the ones that do not change from request to request.
++fn cookie_crumbs(value: &HeaderValue) -> std::collections::VecDeque<HeaderValue> {
++    let bytes = value.as_bytes();
++    let start = bytes.iter().position(|b| *b != b' ' && *b != b'\t');
++    let mut out = std::collections::VecDeque::new();
++    let Some(start) = start else {
++        out.push_back(HeaderValue::from_static(""));
++        return out;
++    };
++    let end = bytes.iter().rposition(|b| *b != b' ' && *b != b'\t').unwrap() + 1;
++    let trimmed = Bytes::copy_from_slice(&bytes[start..end]);
++    let mut pos = 0;
++    loop {
++        match trimmed[pos..].iter().position(|b| *b == b';') {
++            None => {
++                out.push_back(crumb(trimmed.slice(pos..)));
++                break;
++            }
++            Some(at) => {
++                out.push_back(crumb(trimmed.slice(pos..pos + at)));
++                pos += at + 1;
++                if pos < trimmed.len() && trimmed[pos] == b' ' {
++                    pos += 1;
++                }
++            }
++        }
++    }
++    out
++}
++
++fn crumb(bytes: Bytes) -> HeaderValue {
++    // a slice of a valid value is valid (no CR, LF or NUL to cut through)
++    HeaderValue::from_maybe_shared(bytes).expect("a cookie crumb is a valid value")
+ }
+ 
+ #[derive(Debug, PartialEq, Eq)]
+@@ -742,9 +787,29 @@ impl Iterator for Iter {
+ 
+         self.pseudo = None;
+ 
+-        self.fields
+-            .next()
+-            .map(|(name, value)| Field { name, value })
++        // a Cookie field goes out as its crumbs, each with its name so each
++        // is indexed (Chrome's HPACK encoder)
++        if let Some(value) = self.crumbs.pop_front() {
++            return Some(Field {
++                name: Some(header::COOKIE),
++                value,
++            });
++        }
++
++        let (name, value) = self.fields.next()?;
++        if let Some(name) = &name {
++            self.last_name = Some(name.clone());
++        }
++        if self.last_name.as_ref() == Some(&header::COOKIE) && !value.is_sensitive() {
++            let mut crumbs = cookie_crumbs(&value);
++            let first = crumbs.pop_front().expect("at least one crumb");
++            self.crumbs = crumbs;
++            return Some(Field {
++                name: Some(header::COOKIE),
++                value: first,
++            });
++        }
++        Some(Field { name, value })
+     }
+ }
+ 
+@@ -962,6 +1027,8 @@ impl HeaderBlock {
+         let headers = Iter {
+             pseudo: Some(self.pseudo),
+             fields: self.fields.into_iter(),
++            last_name: None,
++            crumbs: Default::default(),
+         };
+ 
+         encoder.encode(headers, &mut hpack);
+-- 
+2.54.0
+
