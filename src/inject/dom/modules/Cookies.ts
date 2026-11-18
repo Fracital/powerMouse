@@ -445,7 +445,13 @@ export class CookiesModule extends Module<DocumentClient> {
 				hostname === change.domain ||
 				hostname.endsWith(`.${change.domain}`)
 			) {
-				this.#bump();
+				// this document reads the jar again; the stamp stays: every
+				// other document the change is for hears the worker too, and
+				// a stamp written by each one that heard it was a write of
+				// the proxy origin's storage, an event in every document of
+				// the origin (apnews.com: 4,800 writes in 36 s, 170,000
+				// events)
+				this.#view.fresh = false;
 				this.#changed();
 			}
 		});
