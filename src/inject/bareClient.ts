@@ -44,6 +44,20 @@ export interface SocketState {
 	closed: boolean;
 	binaryType: BinaryType;
 	url: string;
+	/**
+	 * bufferedAmount: the bytes the page sent that have not gone out yet,
+	 * and every byte it sent once its close had started, which never goes
+	 */
+	buffered: number;
+}
+
+/** the bytes send() puts on the wire for `data` (a string goes as UTF-8) */
+function sentBytes(data: unknown): number {
+	if (typeof data === 'string') return new TextEncoder().encode(data).length;
+	if (ArrayBuffer.isView(data)) return data.byteLength;
+	if (data instanceof Blob) return data.size;
+	if (data instanceof ArrayBuffer) return data.byteLength;
+	return new TextEncoder().encode(String(data)).length;
 }
 
 /**
@@ -128,6 +142,7 @@ function open(
 		closed: false,
 		binaryType: 'blob',
 		url: parsed.toString(),
+		buffered: 0,
 	} as SocketState;
 
 	// no Cookie here: the controller adds the jar's (HttpOnly included)
@@ -180,6 +195,9 @@ function open(
 	});
 
 	socket.addEventListener('message', async (event) => {
+		// natively a message that arrives once the page's close has started
+		// (the closing handshake under way) or the socket closed is dropped
+		if (state.closeRequest || state.closed) return;
 		let data = (event as MessageEvent).data;
 
 		// transports deliver binary frames as ArrayBuffer or Blob;
@@ -192,6 +210,7 @@ function open(
 			}
 		}
 
+		if (state.closeRequest || state.closed) return;
 		// the origin of the socket's URL, as natively (not the URL)
 		target.dispatchEvent(
 			new MessageEvent('message', {
@@ -255,12 +274,37 @@ function send(
 		);
 	}
 
+	// what the page sends counts in bufferedAmount until the transport has
+	// taken it, which is never while the page's script runs (a promise's
+	// reaction). Once the page's close has started, or the socket closed,
+	// nothing more goes out, natively: the bytes stay counted and that is
+	// all (through the proxy they went out ahead of the close frame, which
+	// the transport is given a microtask later, and a server's answer to
+	// them reached the page)
+	const size = sentBytes(data);
+	state.buffered += size;
+	if (state.closeRequest || state.closed) return;
+
+	// the transport takes a buffer over to its worker, which detaches it:
+	// the page's own stays as it was, natively, so the transport is given a
+	// copy (of a view, of its bytes only)
+	const sent =
+		data instanceof ArrayBuffer
+			? data.slice(0)
+			: ArrayBuffer.isView(data)
+				? new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice()
+						.buffer
+				: data;
+
 	// resolved by then; the transport may still reject, which the
 	// native API would surface as a close/error event
-	state.socket.send(data as string | ArrayBuffer | Blob).catch((error) => {
-		console.error(error);
-		target.dispatchEvent(new Event('error'));
-	});
+	state.socket.send(sent as string | ArrayBuffer | Blob).then(
+		() => (state.buffered -= size),
+		(error) => {
+			console.error(error);
+			target.dispatchEvent(new Event('error'));
+		},
+	);
 }
 
 /** the stand-in's close() */

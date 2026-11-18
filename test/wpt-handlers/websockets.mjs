@@ -55,6 +55,8 @@ export default () => {
 			server.once('headers', addProtocol);
 			server.handleUpgrade(req, socket, head, async (ws) => {
 				ws.on('error', () => {});
+				// from the first frame: a handler's receive() reads them in order
+				inboxOf(ws);
 				try {
 					await run?.(ws, req, url, socket);
 				} catch (error) {
@@ -66,20 +68,38 @@ export default () => {
 		};
 	};
 
-	/** the next message, null once the socket closes */
-	const receive = (ws) =>
-		new Promise((resolve) => {
-			const onMessage = (data, binary) => {
-				ws.off('close', onClose);
-				resolve({ data, binary });
-			};
-			const onClose = () => {
-				ws.off('message', onMessage);
-				resolve(null);
-			};
-			ws.once('message', onMessage);
-			ws.once('close', onClose);
+	/**
+	 * The socket's messages in the order they came, read one at a time as
+	 * pywebsocket's receive_message() reads them: `ws` emits every frame of
+	 * one TCP read at once, so a listener added again after an await missed
+	 * all but the first of a burst (a client that offers no
+	 * permessage-deflate, whose inflating spaces them out, sends one)
+	 */
+	const inboxes = new WeakMap();
+	const inboxOf = (ws) => {
+		let inbox = inboxes.get(ws);
+		if (inbox) return inbox;
+		inbox = { messages: [], waiting: [], closed: false };
+		inboxes.set(ws, inbox);
+		ws.on('message', (data, binary) => {
+			const waiter = inbox.waiting.shift();
+			if (waiter) waiter({ data, binary });
+			else inbox.messages.push({ data, binary });
 		});
+		ws.once('close', () => {
+			inbox.closed = true;
+			for (const waiter of inbox.waiting.splice(0)) waiter(null);
+		});
+		return inbox;
+	};
+	/** the next message, null once the socket closes */
+	const receive = (ws) => {
+		const inbox = inboxOf(ws);
+		if (inbox.messages.length) return Promise.resolve(inbox.messages.shift());
+		if (inbox.closed || ws.readyState === ws.CLOSED)
+			return Promise.resolve(null);
+		return new Promise((resolve) => inbox.waiting.push(resolve));
+	};
 	/** until the client closes or the handler's loop ends */
 	const closed = (ws) =>
 		new Promise((resolve) => {

@@ -12,6 +12,14 @@
 // A page that replaced EventTarget before its first WebSocket sees the
 // socket's events go through none of its class, as natively (the client
 // the inject opens sockets with is evaluated at that first socket).
+// A page that sends, closes and sends again, against a server that echoes,
+// gets no message once its close has started and its later send goes
+// nowhere, with bufferedAmount counting it, as natively (both messages
+// came back, the later send went out, and bufferedAmount read 0); a buffer
+// it sends stays its own (the transport detached an ArrayBuffer, which then
+// read 0 bytes). A burst of messages of mixed sizes and kinds goes out
+// and comes back in the order the page sent it, with bufferedAmount above
+// 0 while the page's script runs (it read 0).
 // Compared with the page loaded natively, in both modes, against a server
 // of the suite's own.
 import { createServer } from 'node:net';
@@ -42,6 +50,19 @@ sockets.on('connection', (ws, req) => {
 	else if (path === '/long') later(() => ws.close(4002, 'r'.repeat(123)));
 	// the connection ends with no close frame
 	else if (path === '/drop') later(() => ws.terminate());
+	// /echo: every message back at once, open until the page closes it
+	else if (path === '/echo') ws.on('message', (data) => ws.send(String(data)));
+	// /order: each message back at once, as text, and once it has 24, the
+	// order it read them in (by the number each starts with)
+	else if (path === '/order') {
+		const read = [];
+		ws.on('message', (data) => {
+			const text = String(data);
+			ws.send(text);
+			read.push(text.split(' ')[0]);
+			if (read.length === 24) ws.send('read ' + read.join(' '));
+		});
+	}
 	// /hold: open until the page closes it (ws echoes the page's close)
 });
 // a port nothing listens on: taken, then let go
@@ -100,6 +121,9 @@ for (const [mode, base] of [
 		'serverDrop',
 		'pageNoCode',
 		'pageCode',
+		'sendAfterClose',
+		'sendBuffer',
+		'sendOrder',
 	])
 		ok(
 			`${mode}: ${name} ends as natively`,

@@ -65,35 +65,11 @@
 	"/websockets/Create-protocols-repeated.any.worker.html?default": {
 		"Create WebSocket - Pass a valid URL and an array of protocol strings with repeated values - SYNTAX_ERR is thrown": "FAIL: assert_throws_dom: function \"function() { wsocket = CreateWebSocketWithRepeatedProtocols() }\" did not throw"
 	},
-	"/websockets/Send-65K-data.any.html?default": {
-		"Send 65K data on a WebSocket - Connection should be closed": "FAIL: assert_equals: expected 0 but got 65000"
-	},
-	"/websockets/Send-65K-data.any.worker.html?default": {
-		"Send 65K data on a WebSocket - Connection should be closed": "FAIL: assert_equals: expected 0 but got 65000"
-	},
 	"/websockets/Send-before-open.any.html?default": {
 		"Send data on a WebSocket before connection is opened - INVALID_STATE_ERR is returned": "FAIL: assert_throws_dom: function \"function() { wsocket.send(\"Message to send\") }\" threw object \"Error: Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.\" that is not a DOMException INVALI"
 	},
 	"/websockets/Send-before-open.any.worker.html?default": {
 		"Send data on a WebSocket before connection is opened - INVALID_STATE_ERR is returned": "FAIL: assert_throws_dom: function \"function() { wsocket.send(\"Message to send\") }\" threw object \"Error: Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.\" that is not a DOMException INVALI"
-	},
-	"/websockets/Send-binary-65K-arraybuffer.any.html?default": {
-		"Send 65K binary data on a WebSocket - ArrayBuffer - Connection should be closed": "FAIL: assert_equals: expected 0 but got 65000"
-	},
-	"/websockets/Send-binary-65K-arraybuffer.any.worker.html?default": {
-		"Send 65K binary data on a WebSocket - ArrayBuffer - Connection should be closed": "FAIL: assert_equals: expected 0 but got 65000"
-	},
-	"/websockets/Send-binary-arraybuffer.any.html?default": {
-		"Send binary data on a WebSocket - ArrayBuffer - Connection should be closed": "FAIL: assert_equals: expected 0 but got 15"
-	},
-	"/websockets/Send-binary-arraybuffer.any.worker.html?default": {
-		"Send binary data on a WebSocket - ArrayBuffer - Connection should be closed": "FAIL: assert_equals: expected 0 but got 15"
-	},
-	"/websockets/Send-data.any.html?default": {
-		"Send data on a WebSocket - Connection should be closed": "FAIL: assert_equals: expected 0 but got 15"
-	},
-	"/websockets/Send-data.any.worker.html?default": {
-		"Send data on a WebSocket - Connection should be closed": "FAIL: assert_equals: expected 0 but got 15"
 	},
 	"/websockets/Send-null.any.html?default": {
 		"(harness)": "TIMEOUT: ",
@@ -102,24 +78,6 @@
 	"/websockets/Send-null.any.worker.html?default": {
 		"(harness)": "TIMEOUT: ",
 		"Send null data on a WebSocket - Connection should be closed": "TIMEOUT: Test timed out"
-	},
-	"/websockets/Send-paired-surrogates.any.html?default": {
-		"Send paired surrogates data on a WebSocket - Connection should be closed": "FAIL: assert_equals: expected 0 but got 4"
-	},
-	"/websockets/Send-paired-surrogates.any.worker.html?default": {
-		"Send paired surrogates data on a WebSocket - Connection should be closed": "FAIL: assert_equals: expected 0 but got 4"
-	},
-	"/websockets/Send-unicode-data.any.html?default": {
-		"Send unicode data on a WebSocket - Connection should be closed": "FAIL: assert_equals: expected 0 but got 12"
-	},
-	"/websockets/Send-unicode-data.any.worker.html?default": {
-		"Send unicode data on a WebSocket - Connection should be closed": "FAIL: assert_equals: expected 0 but got 12"
-	},
-	"/websockets/bufferedAmount-unchanged-by-sync-xhr.any.html?default": {
-		"bufferedAmount should not be updated during a sync XHR": "FAIL: assert_equals: expected 5 but got 0"
-	},
-	"/websockets/bufferedAmount-unchanged-by-sync-xhr.any.worker.html?default": {
-		"bufferedAmount should not be updated during a sync XHR": "FAIL: assert_equals: expected 5 but got 0"
 	},
 	"/websockets/close-invalid.any.html?default": {
 		"0 on a websocket": "FAIL: assert_throws_dom: function \"function() { ws.close(t[0]); }\" threw object \"Error: Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 4999. 0 is neither.\" that ",
@@ -322,15 +280,6 @@
 		"Event handler for close should have [TreatNonCallableAsNull]": "FAIL: assert_equals: expected (object) null but got (function) function \"function() {}\"",
 		"Event handler for message should have [TreatNonCallableAsNull]": "FAIL: assert_equals: expected (object) null but got (function) function \"function() {}\""
 	},
-	"/websockets/interfaces/WebSocket/bufferedAmount/bufferedAmount-getting.html?default": {
-		"WebSockets: bufferedAmount after send()ing": "FAIL: assert_equals: bufferedAmount after sent \"x\" expected 1 but got 0"
-	},
-	"/websockets/interfaces/WebSocket/bufferedAmount/bufferedAmount-large.html?default": {
-		"WebSockets: bufferedAmount for 65K data": "FAIL: assert_equals: expected 0 but got 65000"
-	},
-	"/websockets/interfaces/WebSocket/bufferedAmount/bufferedAmount-unicode.html?default": {
-		"WebSockets: bufferedAmount for unicode data": "FAIL: assert_equals: expected 0 but got 12"
-	},
 	"/websockets/interfaces/WebSocket/close/close-basic.html?default": {
 		"WebSockets: close()": "FAIL: assert_equals: expected 2 but got 0"
 	},
@@ -377,9 +326,6 @@
 		"lone low surrogate": "FAIL: assert_throws_dom: function \"function(){ws.send('a\\uDC00x')}\" threw object \"Error: Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.\" that is not a DOMException INVALID_STATE_ERR: pr",
 		"lone high surrogate": "FAIL: assert_throws_dom: function \"function(){ws.send('a\\uD800x')}\" threw object \"Error: Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.\" that is not a DOMException INVALID_STATE_ERR: pr",
 		"surrogates in wrong order": "FAIL: assert_throws_dom: function \"function(){ws.send('a\\uDC00\\uD800x')}\" threw object \"Error: Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.\" that is not a DOMException INVALID_STATE_E"
-	},
-	"/websockets/interfaces/WebSocket/send/007.html?default": {
-		"WebSockets: close() followed by send()": "FAIL: assert_unreached: Reached unreachable code"
 	},
 	"/websockets/interfaces/WebSocket/send/010.html?default": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",

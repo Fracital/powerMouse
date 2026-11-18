@@ -55,7 +55,7 @@ export default class WebSocketModule extends Module<Client> {
 				return state.socket.readyState;
 			}
 			get bufferedAmount() {
-				return 0;
+				return this.#s.buffered;
 			}
 			get binaryType() {
 				return this.#s.binaryType;

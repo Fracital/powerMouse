@@ -13,7 +13,14 @@
 			// one) and without a close frame at all, and the page closing with
 			// no code and with one. First, a page that replaced EventTarget
 			// before its first WebSocket (?port /code): natively the socket's
-			// events go through none of the page's class.
+			// events go through none of the page's class. Last, a page that
+			// sends, closes and sends again, against a server that echoes
+			// (/echo): natively nothing more goes out once close() is called,
+			// bufferedAmount counts what was not sent, and no message is
+			// dispatched while the socket is closing. And a buffer the page
+			// sends stays the page's (natively it is not detached), counted
+			// in bufferedAmount. And a burst of messages arrives, and comes
+			// back, in the order it was sent (/order).
 			const params = new URLSearchParams(location.search);
 			const base = 'ws://127.0.0.1:' + params.get('port');
 			const run = (url, onopen) =>
@@ -25,6 +32,8 @@
 						onopen?.(ws);
 					};
 					ws.onerror = () => events.push('error ' + ws.readyState);
+					ws.onmessage = (e) =>
+						events.push('message ' + e.data + ' ' + ws.readyState);
 					ws.onclose = (e) => {
 						events.push(
 							['close', e.code, e.reason, e.wasClean, ws.readyState].join(' '),
@@ -68,6 +77,50 @@
 				results.pageCode = await run(base + '/hold', (ws) =>
 					ws.close(3001, 'bye'),
 				);
+				const sent = [];
+				results.sendAfterClose =
+					(await run(base + '/echo', (ws) => {
+						ws.send('before');
+						ws.close();
+						sent.push(ws.send('after'), ws.readyState, ws.bufferedAmount);
+					})) +
+					'; send: ' +
+					sent.join(' ');
+				const buffer = [];
+				results.sendBuffer =
+					(await run(base + '/echo', (ws) => {
+						const data = new ArrayBuffer(10);
+						const view = new Uint8Array(new ArrayBuffer(8), 2, 4);
+						ws.send(data);
+						ws.send(view);
+						buffer.push(data.byteLength, view.byteLength, ws.bufferedAmount);
+						ws.close();
+					})) +
+					'; ' +
+					buffer.join(' ');
+				// 24 messages of mixed sizes and kinds in one task: the server
+				// (/order) reports the order it read them in once it has all,
+				// and the page reads the order its echoes came back in
+				const order = [];
+				results.sendOrder =
+					(await run(base + '/order', (ws) => {
+						for (let i = 0; i < 24; i++) {
+							const text =
+								i + ' ' + ['x', '\u00e5', '\u5336', '\ud801\udc7e'][i % 4];
+							if (i % 3 === 2) ws.send(new TextEncoder().encode(text));
+							else ws.send(i % 5 === 4 ? text.repeat(5000) : text);
+						}
+						order.push(ws.bufferedAmount > 0);
+						ws.onmessage = (e) => {
+							const data = String(e.data);
+							if (data.startsWith('read ')) {
+								order.push(data);
+								ws.close();
+							} else order.push(data.split(' ')[0]);
+						};
+					})) +
+					'; ' +
+					order.join(' ');
 				window.__wsClose = results;
 			})();
 		</script>
