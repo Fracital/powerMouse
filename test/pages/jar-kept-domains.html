@@ -1,0 +1,61 @@
+<!doctype html>
+<title>jar kept by domain</title>
+<script>
+	// a popup of another host (localhost for 127.0.0.1, as the fixture serves
+	// both): a top-level document, whose cookies are first-party (a frame's
+	// would be third-party, which Chrome refuses)
+	const other = new URL('jar-kept-domains-popup.html', location.href);
+	other.hostname =
+		location.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+	let popup = null;
+	window.__jk = { ready: true };
+	const mine = (cookies) =>
+		(cookies ?? '')
+			.split('; ')
+			.filter((cookie) => cookie.startsWith('jk'))
+			.join('; ');
+	// the popup writes a cookie of its own host and answers what it reads
+	const heard = (i) =>
+		new Promise((resolve) => {
+			const hear = (event) => {
+				if (event.data?.jk !== i) return;
+				removeEventListener('message', hear);
+				resolve(event.data.cookies);
+			};
+			addEventListener('message', hear);
+		});
+	const ask = (i) => {
+		const answer = heard(i);
+		popup.postMessage({ jk: i }, '*');
+		return answer;
+	};
+	// each turn: a write of the other host's cookies, then a request of this
+	// host's, which carries this host's cookies; the last turn writes one of
+	// this host's first
+	window.__open = () => {
+		const ready = heard(-1);
+		popup = window.open(other.href);
+		return ready;
+	};
+	window.__run = async (turns) => {
+		document.cookie = 'jkown=0; path=/';
+		const carried = [];
+		let framed = '';
+		for (let i = 0; i < turns; i++) {
+			framed = await ask(i);
+			if (i === turns - 1) document.cookie = `jkown=${i}; path=/`;
+			const headers = await (
+				await fetch(`/echo-headers?jk=${i}`, { cache: 'no-store' })
+			).json();
+			carried.push(mine(headers.cookie));
+		}
+		return {
+			first: carried[0],
+			beforeLast: carried[turns - 2],
+			last: carried[turns - 1],
+			framed,
+			page: mine(document.cookie),
+		};
+	};
+	window.__close = () => popup?.close();
+</script>

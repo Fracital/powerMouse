@@ -1,0 +1,16 @@
+<!doctype html>
+<title>jar kept by domain: popup</title>
+<script>
+	const mine = () =>
+		document.cookie
+			.split('; ')
+			.filter((cookie) => cookie.startsWith('jk'))
+			.join('; ');
+	addEventListener('message', (event) => {
+		const i = event.data?.jk;
+		if (typeof i !== 'number') return;
+		document.cookie = `jkf${i % 4}=${i}; path=/`;
+		event.source.postMessage({ jk: i, cookies: mine() }, '*');
+	});
+	opener.postMessage({ jk: -1, cookies: mine() }, '*');
+</script>

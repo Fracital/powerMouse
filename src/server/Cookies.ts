@@ -1056,41 +1056,68 @@ const KEPT_DOMAINS = 4096;
  * host's candidate domains (four for img.cdn.example.com), each a round
  * trip to the browser's IndexedDB backend: about a millisecond before the
  * request could leave, and tens of milliseconds behind each other while a
- * page loads hundreds of resources. A read that a write overlapped is not
- * kept, so what is kept is never older than the last write this jar did
- * or heard of. Writers it does not do itself post on JAR_WRITES once they
- * are done (another scope's worker, a worker of the version before this
- * one, the site pool's jar server); with the site pool on nothing is kept
+ * page loads hundreds of resources. A write of a cookie forgets what was
+ * kept of the cookie's domain (the key of the index the reads go by), and
+ * a read that a write of its domain overlapped is not kept, so what is kept
+ * of a domain is never older than the last write of it this jar did or
+ * heard of. It forgot every domain at every write: an ad-heavy page sets
+ * the ad networks' cookies all the time (apnews.com: 2,900 writes in 40 s),
+ * so 6,750 of 8,580 reads went to IndexedDB, 3,100 of them overlapped by a
+ * write of some other domain. A write of the whole jar (clear) forgets
+ * everything. Writers it does not do itself post on JAR_WRITES once they
+ * are done, with the domain when they name it (another scope's worker, a
+ * worker of the version before this one, which names none, the site
+ * pool's jar server); with the site pool on nothing is kept
  * (jarWrittenElsewhere), since a slot's write must be read by the next
  * request whichever worker answers it.
  */
 class KeptJar implements JarDB {
 	#db: JarDB;
 	#kept = new Map<string, unknown[]>();
-	/** moves on at the start and the end of every write */
+	/** moves on at the start and the end of every write of the whole jar */
 	#generation = 0;
+	/** the same for each domain a write of one cookie was of */
+	#written = new Map<string, number>();
 	#channel: BroadcastChannel | null = null;
 	constructor(db: JarDB) {
 		this.#db = db;
 		try {
 			this.#channel = new BroadcastChannel(JAR_WRITES);
-			this.#channel.onmessage = () => this.#forget();
+			// a writer that names the domain (a KeptJar) or one that does not
+			this.#channel.onmessage = ({ data }) =>
+				this.#forget(
+					data !== null &&
+						typeof data === 'object' &&
+						typeof data.domain === 'string'
+						? data.domain
+						: undefined,
+				);
 		} catch (error) {
 			// no BroadcastChannel: nothing that writes elsewhere can be heard
 			keepsJar = false;
 		}
 	}
-	#forget() {
-		this.#kept.clear();
-		this.#generation++;
+	/** what is kept of `domain`, or of every domain */
+	#forget(domain?: string) {
+		if (domain === undefined || this.#written.size >= KEPT_DOMAINS) {
+			this.#kept.clear();
+			this.#written.clear();
+			this.#generation++;
+			return;
+		}
+		this.#kept.delete(domain);
+		this.#written.set(domain, (this.#written.get(domain) ?? 0) + 1);
 	}
-	async #write<T>(write: () => Promise<T>): Promise<T> {
-		this.#forget();
+	async #write<T>(
+		domain: string | undefined,
+		write: () => Promise<T>,
+	): Promise<T> {
+		this.#forget(domain);
 		try {
 			return await write();
 		} finally {
-			this.#forget();
-			this.#channel?.postMessage(null);
+			this.#forget(domain);
+			this.#channel?.postMessage(domain === undefined ? null : { domain });
 		}
 	}
 	async getAllFromIndex(
@@ -1103,8 +1130,13 @@ class KeptJar implements JarDB {
 		const kept = this.#kept.get(key);
 		if (kept) return kept;
 		const generation = this.#generation;
+		const written = this.#written.get(key);
 		const found = await this.#db.getAllFromIndex(store, index, key);
-		if (generation === this.#generation && keepsJar) {
+		if (
+			generation === this.#generation &&
+			written === this.#written.get(key) &&
+			keepsJar
+		) {
 			if (this.#kept.size >= KEPT_DOMAINS) this.#kept.clear();
 			this.#kept.set(key, found);
 		}
@@ -1120,13 +1152,31 @@ class KeptJar implements JarDB {
 		return this.#db.get(store, key);
 	}
 	put(store: string, value: unknown, key?: string) {
-		return this.#write(() => this.#db.put(store, value, key));
+		// a cookie (the store's key path is its id)
+		return this.#write(
+			store === STORE && key === undefined
+				? (value as JarCookie).domain
+				: undefined,
+			() => this.#db.put(store, value, key),
+		);
 	}
 	delete(store: string, key: string) {
-		return this.#write(() => this.#db.delete(store, key));
+		return this.#write(store === STORE ? domainOfID(key) : undefined, () =>
+			this.#db.delete(store, key),
+		);
 	}
 	clear(store: string) {
-		return this.#write(() => this.#db.clear(store));
+		return this.#write(undefined, () => this.#db.clear(store));
+	}
+}
+
+/** the domain a cookie's id names (cookieID), or undefined */
+function domainOfID(id: string): string | undefined {
+	try {
+		const domain: unknown = JSON.parse(id.slice(0, id.indexOf('@@')));
+		return typeof domain === 'string' ? domain : undefined;
+	} catch (error) {
+		return undefined;
 	}
 }
 
