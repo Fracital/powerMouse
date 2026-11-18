@@ -2,6 +2,7 @@ import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
 	existsSync,
+	readdirSync,
 	readFileSync,
 	realpathSync,
 	statSync,
@@ -38,7 +39,31 @@ function buildId() {
 	} catch {
 		// not a git checkout (an npm tarball, a stage dir without .git)
 	}
-	return `${pkg.version}+${Date.now().toString(36)}`;
+	return `${pkg.version}+${inputsHash()}`;
+}
+
+/**
+ * Without a commit to name: a hash of what the bundles are built from (the
+ * sources, the assets, the build's scripts and the locked dependencies), so
+ * the same tree builds the same files
+ */
+function inputsHash() {
+	const hash = createHash('sha256');
+	const add = (path) => {
+		if (statSync(path).isDirectory())
+			for (const name of readdirSync(path).sort()) add(`${path}/${name}`);
+		else hash.update(`${path}\0`).update(readFileSync(path)).update('\0');
+	};
+	for (const path of [
+		'build.js',
+		'package.json',
+		'package-lock.json',
+		'src',
+		'assets',
+		'scripts',
+	])
+		if (existsSync(path)) add(path);
+	return hash.digest('hex').slice(0, 7);
 }
 
 const snapshot = resolve('src/inject/snapshot.ts');
@@ -252,7 +277,8 @@ const libraryEntry = (file) => ({
 			namespace: 'library-entry',
 		}));
 		pluginBuild.onLoad({ filter: /.*/, namespace: 'library-entry' }, () => ({
-			contents: `"use strict";\nimport { api } from ${JSON.stringify(resolve(file))};\n__stompLibApi = api;\n`,
+			// (by the file from the root, so no map names the checkout's path)
+			contents: `"use strict";\nimport { api } from ${JSON.stringify(`./${fileId(resolve(file))}`)};\n__stompLibApi = api;\n`,
 			loader: 'js',
 			resolveDir: resolve('.'),
 		}));
@@ -499,6 +525,45 @@ const DEFERRED_FILES = new Set(
 const DEFERRED_ENTRY = 'src/inject/dom/deferredParts.ts';
 /** what the parts read of the bundle: by file (from the root), the names */
 const deferredShared = new Map();
+/**
+ * A shared module's number, `__stompShared(<number>)`: its place among the
+ * modules by file name, from SHARED_FIRST. The parts are built in parallel,
+ * so the order in which they first ask for each module varies from build to
+ * build; while they build, a module has its place in that order
+ * (deferredSharing), and once all are built writeLibrary renumbers it by
+ * name (sharedNumbers), as the table is (deferredTable). Both numbers have
+ * two digits, so the renumbering moves no column of the parts' maps.
+ */
+const SHARED_FIRST = 10;
+const SHARED_LAST = 99;
+/** `map` with the shared modules' texts in it renumbered (sharedNumbers) */
+function sharedSources(map) {
+	if (!map.sourcesContent) return map;
+	return {
+		...map,
+		sourcesContent: map.sourcesContent.map((content, index) =>
+			map.sources[index]?.startsWith(`${SHARED}:`) && content !== null
+				? sharedNumbers(content)
+				: content,
+		),
+	};
+}
+/** the shared modules' files, in the order of their numbers */
+const sharedOrder = () => [...deferredShared.keys()].sort();
+/**
+ * `text` with every module's number while building replaced by its number by
+ * name (deferredShared complete: all the parts built)
+ */
+function sharedNumbers(text) {
+	const order = sharedOrder();
+	const building = [...deferredShared.keys()];
+	return text.replace(/__stompShared\((\d+)\)/g, (call, number) => {
+		const id = building[Number(number) - SHARED_FIRST];
+		if (id === undefined)
+			throw new Error(`build: ${call} names no shared module`);
+		return `__stompShared(${SHARED_FIRST + order.indexOf(id)})`;
+	});
+}
 const fileId = (file) => relative(resolve('.'), file).split(sep).join('/');
 
 const parsedSources = new Map();
@@ -641,8 +706,9 @@ const deferredSharing = {
 			const known = deferredShared.get(id) ?? new Set();
 			for (const name of names) known.add(name);
 			deferredShared.set(id, known);
+			// (by the file from the root, so no map names the checkout's path)
 			return {
-				path: `${found.path}?${names.join(',')}`,
+				path: `${id}?${names.join(',')}`,
 				namespace: SHARED,
 				pluginData: { id, names },
 			};
@@ -656,8 +722,12 @@ const deferredSharing = {
 				(name, index) =>
 					`v${index} = /* @__PURE__ */ (() => m[${JSON.stringify(name)}])()`,
 			);
-			// the module's number: its place in the table (deferredTable)
-			const number = [...deferredShared.keys()].indexOf(id);
+			// the module's number while building (SHARED_FIRST)
+			const number = SHARED_FIRST + [...deferredShared.keys()].indexOf(id);
+			if (number > SHARED_LAST)
+				throw new Error(
+					`build: more than ${SHARED_LAST - SHARED_FIRST + 1} modules shared with the deferred parts (build.js SHARED_LAST)`,
+				);
 			return {
 				contents: `const m = /* @__PURE__ */ __stompShared(${number});\n${
 					values.length ? `const ${values.join(', ')};\n` : ''
@@ -730,7 +800,9 @@ function partFiles() {
 				names: [],
 			};
 			entry.imports.push(
-				`import ${clause.getText(source)} from ${JSON.stringify(imported)};`,
+				// (as deferredParts.ts names it, from its directory: the group's
+				// resolveDir, so no map names the checkout's path)
+				`import ${clause.getText(source)} from ${JSON.stringify(node.moduleSpecifier.text)};`,
 			);
 			entry.names.push(...names);
 			files.set(imported, entry);
@@ -928,10 +1000,13 @@ const deferredTable = {
 		pluginBuild.onLoad({ filter: /.*/, namespace: 'deferred-table' }, () => {
 			let imports = '';
 			const entries = [];
-			[...deferredShared].forEach(([id, names], index) => {
-				const list = [...names];
+			// (by name, as sharedNumbers numbers the parts' reads)
+			sharedOrder().forEach((id, at) => {
+				const names = deferredShared.get(id);
+				const index = SHARED_FIRST + at;
+				const list = [...names].sort();
 				if (!list.length) return;
-				imports += `import { ${list.map((name, at) => `${name} as s${index}_${at}`).join(', ')} } from ${JSON.stringify(resolve(id))};\n`;
+				imports += `import { ${list.map((name, at) => `${name} as s${index}_${at}`).join(', ')} } from ${JSON.stringify(`./${id}`)};\n`;
 				entries.push(
 					`case ${index}: return { ${list.map((name, at) => `${JSON.stringify(name)}: s${index}_${at}`).join(', ')} };`,
 				);
@@ -1009,14 +1084,17 @@ async function writeLibrary(light, parts, passkeys, activation) {
 	for (const statement of [light, parts, passkeys, activation]) {
 		const line = text.split('\n').length - 1;
 		if (statement.map)
-			sections.push({ offset: { line, column: 0 }, map: statement.map });
+			sections.push({
+				offset: { line, column: 0 },
+				map: sharedSources(statement.map),
+			});
 		// (the parts' statement: a map for each group, by its line)
 		for (const section of statement.sections ?? [])
 			sections.push({
 				offset: { line: line + section.line, column: 0 },
-				map: section.map,
+				map: sharedSources(section.map),
 			});
-		text += ended(statement.text);
+		text += ended(sharedNumbers(statement.text));
 	}
 	await writeFile(
 		'dist/rewriterLib.js',

@@ -90,6 +90,13 @@ jobs:
         if: steps.head.outputs.superseded != 'true'
         run: node build.js && test -f dist/serviceWorker.js && test -f dist/controller.mjs
 
+      # the same tree builds byte-identical files, none naming the checkout's
+      # path, so a hashed file (the document bundle, the rewriter library)
+      # keeps its hash until what it is built from changes
+      - name: Reproducible build
+        if: steps.head.outputs.superseded != 'true'
+        run: node scripts/check-reproducible.mjs
+
       # the rewriter on the minified shapes real sites broke it with
       # (test/corpus/sample; the rewrite-corpus suite runs the same check)
       - name: Rewrite corpus sample
