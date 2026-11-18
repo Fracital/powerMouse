@@ -40,6 +40,7 @@ import DOMHooksModule, {
 	nativeGetter,
 	nativeHTMLElement,
 	nativeNode,
+	pendingAttributes,
 } from './DOMHooks';
 import { hiddenMove, hiddenMutation } from './MutationObserver';
 
@@ -677,11 +678,24 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						)
 					)
 						continue;
-					usePrototype(element, CustomElement.prototype, (element) => {
-						for (const name of element.getAttributeNames())
-							if (!name.startsWith('s_o:') && !element.hasAttributeOG(name))
-								domHooksModule.updateAttributeHooks(element, name);
-					});
+					// and one whose watched attributes all have the original the
+					// hooks kept beside them has none to route (every move of an
+					// element the hooks saw walked it again with the swap: a
+					// framework's keyed moves)
+					const working = pendingAttributes(element);
+					if (
+						names.some(
+							(name) =>
+								!name.startsWith('s_o:') &&
+								domHooksModule.hooksAttribute(name) &&
+								(working || !names.includes(`s_o:${name}`)),
+						)
+					)
+						usePrototype(element, CustomElement.prototype, (element) => {
+							for (const name of element.getAttributeNames())
+								if (!name.startsWith('s_o:') && !element.hasAttributeOG(name))
+									domHooksModule.updateAttributeHooks(element, name);
+						});
 					// a style the hooks saw elsewhere (a clone, an element of
 					// another document) names routes: in a document no service
 					// worker controls its loads are copied here
@@ -1033,8 +1047,13 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				? fillScript(script, args, count, strings)
 				: undefined;
 			// a node of any realm: the page's own document made it, or the
-			// bundle did for a document its creator reaches into
-			const nodes = args.filter((arg): arg is Node => nodeTypeOf(arg) !== null);
+			// bundle did for a document its creator reaches into. Only what
+			// lands: insertBefore's reference child and replaceChild's old one
+			// are arguments too, and each was walked again, subtree and all,
+			// on every keyed move a framework makes
+			const nodes: Node[] = [];
+			for (let i = 0; i < count; i++)
+				if (nodeTypeOf(args[i]) !== null) nodes.push(args[i] as Node);
 			// an xml-stylesheet processing instruction loads as a document's child
 			if (nodeTypeOf(parent) === 9) {
 				for (const node of nodes) landStylesheetPIs(client, node);
