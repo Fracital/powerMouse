@@ -14,6 +14,9 @@ window.__deferredAnswers = async function () {
 			return failure(error);
 		}
 	};
+	// code made from a string, which a document rewrites with its light
+	// library (a sandboxed child with a copy of its own, made from its top's)
+	out.evaluated = read(() => eval('6 * 7'));
 	out.container = read(() => String(navigator.serviceWorker));
 	out.controller = read(() => String(navigator.serviceWorker.controller));
 	try {

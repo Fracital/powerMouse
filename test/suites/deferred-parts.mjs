@@ -4,9 +4,12 @@
 // statement of the rewriter library's file, which a proxied top's shell
 // loads before the bundle; a document under that top evaluates the text its
 // top holds the first time it needs a part, in its own realm, with no
-// request; a document with no top to take it from (sandboxed without
-// allow-same-origin, under a top of another build) reads the file with the
-// light library's one request.
+// request. So does a child sandboxed without allow-same-origin: its real
+// frame keeps allow-same-origin (the inject emulates the opaque origin), so
+// it reaches its top and takes from it both the parts' text and the light
+// library's, for the copy of its own it rewrites with. Only a document with
+// no top to take them from (under a top of another build) reads the file,
+// with the light library's one request.
 //
 // Checked against native Chrome on one fixture, in the top and in a child of
 // every kind (from a URL, srcdoc, a written about:blank, a blob document,
@@ -142,18 +145,19 @@ for (const [mode, base] of [
 			`${JSON.stringify(answer)}, natively ${JSON.stringify(native.children[kind])}`,
 		);
 	}
-	if (watch)
-		ok(
-			`${mode}: the top and the children under it make no request for the file`,
-			watch.asked.length === 0,
-			JSON.stringify(watch.asked),
-		);
 	const sandboxed = await top.evaluate(() => window.__child('sandboxed'));
 	ok(
 		`${mode}: a child sandboxed without allow-same-origin answers as natively`,
 		compared('sandboxed', sandboxed, native.children.sandboxed),
 		`${JSON.stringify(sandboxed)}, natively ${JSON.stringify(native.children.sandboxed)}`,
 	);
+	// (the sandboxed child too: it takes its top's parts and light library)
+	if (watch)
+		ok(
+			`${mode}: the top and the children under it, the sandboxed one too, make no request for the file`,
+			watch.asked.length === 0,
+			JSON.stringify(watch.asked),
+		);
 	await watch?.stop();
 	await page.close();
 }
