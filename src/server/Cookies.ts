@@ -20,6 +20,7 @@ import {
 } from '../transport/messages';
 import { JAR_DATABASE, JAR_STORE, type JarDB, type RemoteJar } from './jarDB';
 import Router, { json, jsonAPI } from './Router';
+import { windowURL } from './windowURLs';
 
 export type SameSite = 'lax' | 'strict' | 'none';
 
@@ -964,9 +965,12 @@ export function onJarChange(listener: (domain: string) => void) {
 }
 
 /**
- * Tell every window the jar changed for `domain`, so the documents it
+ * Tell the windows the jar changed for `domain`, so the documents it
  * covers drop their document.cookie cache. Sent before the response that
  * carried the Set-Cookie is answered, so the page's next read is fresh.
+ * A window whose document is of a host the cookies of `domain` are not for
+ * is not told (the page's Cookies module would drop the message): see
+ * windowURL.
  */
 async function broadcastChange(domain: string) {
 	if (typeof clients === 'undefined') return;
@@ -975,8 +979,11 @@ async function broadcastChange(domain: string) {
 		includeUncontrolled: true,
 	});
 	const change: CookiesChange = { domain };
-	for (const client of windows)
+	for (const client of windows) {
+		const host = domain === '' ? null : windowURL(client.url)?.hostname;
+		if (host && host !== domain && !host.endsWith(`.${domain}`)) continue;
 		client.postMessage({ [COOKIES_CHANGED]: change });
+	}
 }
 
 /**

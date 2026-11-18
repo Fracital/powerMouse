@@ -1,0 +1,25 @@
+<!doctype html>
+<title>change notes</title>
+<iframe id="same" name="same" src="change-notes-frame.html"></iframe>
+<iframe id="other" name="other"></iframe>
+<script>
+	// a frame of another host (localhost for 127.0.0.1, as the fixture serves both)
+	const other = new URL('change-notes-frame.html', location.href);
+	other.hostname =
+		location.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+	document.getElementById('other').src = other.href;
+	let loaded = 0;
+	for (const frame of document.querySelectorAll('iframe'))
+		frame.addEventListener('load', () => {
+			if (++loaded === 2) window.__cn = { ready: true };
+		});
+	// responses that set a cookie of this host, one after another
+	window.__run = async (count) => {
+		for (let i = 0; i < count; i++)
+			await (
+				await fetch(`/http-cache?k=cn${Date.now()}&n=n${i}&sc=seen&cc=no-store`)
+			).text();
+		await new Promise((resolve) => setTimeout(resolve, 1500));
+		return document.getElementById('same').contentWindow.__cookies();
+	};
+</script>

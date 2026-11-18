@@ -3,17 +3,27 @@ import type GenericCodec from '../Codecs';
 import { encodeCookie } from '../encodeCookie';
 import { STORAGE_EVENT, StorageChange } from '../transport/messages';
 import Router, { json, jsonAPI } from './Router';
+import { windowURL } from './windowURLs';
 
 declare const clients: Clients | undefined;
 
-/** tell every window about a change; each document decides if it cares */
+/**
+ * tell the windows about a change; each document decides if it cares. A
+ * window whose document is of another origin than the store's key names is
+ * not told (windowURL)
+ */
 async function broadcast(change: StorageChange) {
 	if (typeof clients === 'undefined') return;
 	const windows = await clients.matchAll({
 		type: 'window',
 		includeUncontrolled: true,
 	});
-	for (const client of windows) client.postMessage({ [STORAGE_EVENT]: change });
+	for (const client of windows) {
+		const origin = windowURL(client.url)?.origin;
+		if (origin && origin !== 'null' && !change.origin.startsWith(origin))
+			continue;
+		client.postMessage({ [STORAGE_EVENT]: change });
+	}
 }
 
 interface ItemEntry {

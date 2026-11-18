@@ -15,7 +15,7 @@ import {
 	validConfigCodecKey,
 } from '../config';
 import { workerKindPartition } from '../partition';
-import { parseRoutedURL, proxyOrigins } from '../routeURL';
+import { isDocumentKind, parseRoutedURL, proxyOrigins } from '../routeURL';
 import StompURL from '../StompURL';
 import { getPublicSuffix } from '../suffix';
 import type {
@@ -61,6 +61,7 @@ import {
 	StorageHosts,
 } from './Storage';
 import { registerXhr } from './Sync';
+import { addWindowRoutes } from './windowURLs';
 
 export interface StompServer {
 	router: Router;
@@ -440,6 +441,25 @@ export default async function createServer(
 			return routed;
 		}
 	};
+	// the real URLs of this controller's documents, for the change notes of
+	// the jar and the stores (windowURLs.ts)
+	addWindowRoutes(init.directory, (url) => {
+		if (!url.startsWith(scopePrefix)) return undefined;
+		// a link's route stands for its document's URL (src/visited.ts)
+		const link = linkOf(url);
+		if (link) return link.url.href;
+		const prefix = `${location.origin}${init.directory}`;
+		if (!url.startsWith(prefix)) return undefined;
+		try {
+			const { resource, url: real } = parseRoutedURL(url, init.codec, prefix);
+			// a document's route names the URL its client is of; any other
+			// (a document the page made, served from its shell) is read as
+			// no route
+			return isDocumentKind(resource) ? real.url.href : null;
+		} catch (error) {
+			return null;
+		}
+	});
 	// a routing error on a document: the host's page when it has one
 	router.errorPage = (request, status, message) =>
 		hostErrorPage(init, {

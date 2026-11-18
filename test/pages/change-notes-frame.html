@@ -1,0 +1,9 @@
+<!doctype html>
+<title>change notes frame</title>
+<script>
+	window.__cookies = () =>
+		document.cookie
+			.split('; ')
+			.filter((pair) => pair.startsWith('hcseen='))
+			.join('; ');
+</script>
