@@ -96,6 +96,12 @@ export function markupSinks(context: SinkContext) {
 			return null;
 		}
 	};
+	// a host's shadow root by the browser's own getter: the copy's host is
+	// read on the browser's Node prototype (usePrototype), which has none
+	const shadowRootOf = Reflect.getOwnPropertyDescriptor(
+		markup.nativeElement,
+		'shadowRoot',
+	)!.get!;
 	// the element the selection starts in: the context the browser
 	// parses inserted markup in
 	const editingContext = (document: Document): Element | null => {
@@ -142,7 +148,7 @@ export function markupSinks(context: SinkContext) {
 			originals.forEach((original, index) => {
 				const host = original as Element;
 				const root =
-					host.shadowRoot ??
+					(Reflect.apply(shadowRootOf, host, []) as ShadowRoot | null) ??
 					options.shadowRoots?.find((root) => root.host === host) ??
 					null;
 				if (
@@ -379,6 +385,20 @@ export function markupSinks(context: SinkContext) {
 		},
 		/** Element's and ShadowRoot's getHTML */
 		getHTML(target: Fn, that: unknown, args: unknown[]): unknown {
+			// Element's on an element of any realm (a frame's, which the
+			// creator's member serializes natively too), ShadowRoot's on a
+			// shadow root; on anything else the browser's own error
+			const ofShadow = target !== context.elementGetHTML;
+			let kind: 'element' | 'shadow' | null = null;
+			try {
+				if (!ofShadow && Reflect.apply(nodeTypeOf, that, []) === 1)
+					kind = 'element';
+				else if (ofShadow && Reflect.apply(markup.shadowHost!, that, []))
+					kind = 'shadow';
+			} catch (error) {
+				// not a node, or no shadow root
+			}
+			if (kind === null) return Reflect.apply(target, that, args);
 			const options = (args[0] ?? {}) as ShadowOptions;
 			// the page's options, with the copies of the roots it listed
 			const listed: ShadowRoot[] = [];
@@ -390,8 +410,8 @@ export function markupSinks(context: SinkContext) {
 			];
 			// every copy made, the shadow roots' too, for releaseMarkup
 			const made: Node[] = [];
-			if (that instanceof realm.Element) {
-				const copy = copyWithShadows(that, options, listed, made);
+			if (kind === 'element') {
+				const copy = copyWithShadows(that as Element, options, listed, made);
 				const html = Reflect.apply(target, copy, call()) as string;
 				for (const node of made) releaseMarkup(node);
 				return hooks.foldMarkup(html);
