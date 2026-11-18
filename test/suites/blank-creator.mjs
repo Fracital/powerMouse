@@ -10,8 +10,19 @@
 // load its script uses (the site serves the script once, as natively), the
 // creator's link keeps its route, and the frame's stylesheet applies
 // without reaching the site past the proxy.
+//
+// And the markup members in such frames (test/pages/blank-creator-markup.html):
+// setHTML, setHTMLUnsafe and getHTML called on an element of a frame on its
+// initial about:blank and of one its parent wrote into, which is of another
+// realm than the creator's whose bundle hooks it, and the creator's own
+// members called on the frame's elements. What the page reads (the markup,
+// its URLs, the realm of every node made and of a template's content, the
+// scripts that ran, whether an image loaded, what getHTML returns) is as
+// natively, no route reaches the page, and what the browser has in the
+// frames' elements is routed, never the URL the page wrote.
 import {
 	done,
+	evaluateIsolated,
 	FIXTURE,
 	HOST,
 	launch,
@@ -113,6 +124,115 @@ for (const [mode, base] of [
 		`${mode}: nothing either document loads reaches the site past the proxy`,
 		raw.length === 0,
 		JSON.stringify(raw.map((entry) => [entry.url, entry.type])),
+	);
+	await page.close();
+}
+const markupTarget = `${FIXTURE}pages/blank-creator-markup.html`;
+/** the markup page's report, once it is done */
+async function markupReport(page) {
+	let last = null;
+	for (let i = 0; i < 360; i++) {
+		await sleep(250);
+		for (const frame of page.frames()) {
+			const value = await frame
+				?.evaluate(() => window.__blankMarkup)
+				.catch(() => null);
+			if (value?.done) return { frame, value };
+			if (value) last = value;
+		}
+	}
+	return { frame: null, value: last };
+}
+/** every URL attribute under the frames' elements, as the browser has them */
+const rawURLs = (frame) =>
+	evaluateIsolated(frame, () => {
+		const out = [];
+		const walk = (root, where) => {
+			for (const element of root.querySelectorAll('*')) {
+				for (const name of ['href', 'src'])
+					if (element.hasAttribute(name))
+						out.push(
+							`${where}${element.closest('[id]')?.id ?? ''} ${name}=${element.getAttribute(name)}`,
+						);
+				const of = `${where}${element.closest('[id]')?.id ?? ''}>`;
+				if (element.shadowRoot) walk(element.shadowRoot, `${of}shadow:`);
+				if (element.localName === 'template')
+					walk(element.content, `${of}content:`);
+			}
+		};
+		walk(document, '');
+		return out;
+	});
+
+const markupNative = await browser.newPage();
+await markupNative.goto(markupTarget);
+const { value: nativeMarkup } = await markupReport(markupNative);
+await markupNative.close();
+const markupKeys = Object.keys(nativeMarkup ?? {}).filter(
+	(key) => key !== 'done',
+);
+ok(
+	'natively, the markup members ran in both frames',
+	nativeMarkup?.done === true &&
+		!nativeMarkup.error &&
+		markupKeys.some((key) => key.startsWith('blank.')) &&
+		markupKeys.some((key) => key.startsWith('written.')) &&
+		nativeMarkup['blank.setHTMLKept.image'] === 'load' &&
+		nativeMarkup['written.setHTMLUnsafe.shadowImage'] === 'load',
+	JSON.stringify(nativeMarkup),
+);
+for (const [mode, base] of [
+	['same-origin', PROXY],
+	['isolated', HOST],
+]) {
+	const page = await openDemo(browser, base);
+	const recorder = await recordRequests(page.context());
+	await submitLanding(page, markupTarget);
+	const { frame, value: proxied } = await markupReport(page);
+	const keys = [...new Set([...markupKeys, ...Object.keys(proxied ?? {})])];
+	const differ = keys.filter(
+		(key) => key !== 'done' && proxied?.[key] !== nativeMarkup?.[key],
+	);
+	for (const key of differ)
+		ok(
+			`${mode}: markup in a blank creator's frame, ${key} as natively`,
+			false,
+			`native ${JSON.stringify(nativeMarkup?.[key])} proxied ${JSON.stringify(proxied?.[key])}`,
+		);
+	ok(
+		`${mode}: markup in a blank creator's frame, all ${markupKeys.length} readings as natively`,
+		proxied?.done === true && markupKeys.length > 0 && differ.length === 0,
+		`${differ.length} differ`,
+	);
+	const leaked = Object.entries(proxied ?? {}).filter(
+		([, value]) => typeof value === 'string' && value.includes('/stomp/'),
+	);
+	ok(
+		`${mode}: no route reaches the page from a blank creator's frame's markup`,
+		leaked.length === 0,
+		JSON.stringify(leaked),
+	);
+	// what the browser has: each URL the members put in is routed (or an
+	// image's copy), never the page's as it wrote it
+	const raw = [];
+	for (const child of frame?.childFrames() ?? [])
+		raw.push(...((await rawURLs(child).catch(() => null)) ?? []));
+	const unrouted = raw.filter(
+		(entry) => !/=(\/stomp\/|blob:|https?:\/\/[^/]+\/stomp\/)/.test(entry),
+	);
+	ok(
+		`${mode}: what the members put in a blank creator's frames is routed`,
+		raw.length > 0 && unrouted.length === 0,
+		JSON.stringify({ unrouted, count: raw.length }),
+	);
+	const fixtureHost = new URL(FIXTURE).host;
+	const past = recorder
+		.raw()
+		.filter((entry) => new URL(entry.url).host === fixtureHost);
+	ok(
+		`${mode}: nothing the frames' markup loads reaches the site past the proxy`,
+		past.length === 0,
+		JSON.stringify(past.map((entry) => [entry.url, entry.type])),
 	);
 	await page.close();
 }

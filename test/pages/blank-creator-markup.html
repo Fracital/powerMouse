@@ -1,0 +1,237 @@
+<!doctype html>
+<title>BLANK CREATOR MARKUP</title>
+<script>
+	// The sanitizing and parsing markup members (setHTML, setHTMLUnsafe,
+	// getHTML, and the markup a shadow root's innerHTML, appendHTMLUnsafe
+	// and execCommand's insertHTML parse) called in frames whose document an
+	// about:blank creator made: a frame on its initial about:blank, reached
+	// into as it is appended, and one its parent writes into with
+	// document.open(). The element is the frame's, of another realm than
+	// the creator's, whose bundle hooks the frame's realm, and no worker
+	// controls the frame. Reports, per frame, what each call leaves as the
+	// page reads it (its markup, the URLs, the realm of every node it made
+	// and of a template's content, whether a script ran, whether an image
+	// loaded) and what getHTML returns; and the same calls made across
+	// realms (the creator's own member on the frame's element).
+	const report = {};
+	window.__blankMarkup = report;
+	const ran = [];
+	window.__markupRan = (name) => ran.push(name);
+	// whether an image shows within a few seconds (proxied, a frame no
+	// worker controls gets a copy, which takes a moment)
+	const settle = (image) =>
+		new Promise((resolve) => {
+			if (!image) return resolve('none');
+			const until = Date.now() + 3000;
+			const check = () => {
+				if (image.complete && image.naturalWidth > 0) resolve('load');
+				else if (Date.now() > until) resolve('error');
+				else setTimeout(check, 50);
+			};
+			check();
+		});
+	const realmOf = (frame) => (node) =>
+		node === null || node === undefined
+			? String(node)
+			: node instanceof frame.contentWindow.Node
+				? 'frame'
+				: node instanceof Node
+					? 'creator'
+					: 'other';
+	const MARKUP =
+		'<a id="a" href="link.html?x=1">a</a>' +
+		'<img id="i" src="blank-sprite.svg">' +
+		'<b onclick="parent.__markupRan(\'onclick\')">b</b>' +
+		'<script>parent.__markupRan("script")<\/script>' +
+		'<template id="t"><i>in template</i></template>' +
+		'<div id="h"><template shadowrootmode="open" shadowrootserializable>' +
+		'<a href="shadow.html">s</a><img src="blank-sprite.svg?shadow">' +
+		'</template></div>';
+	const step = (label, run) => {
+		try {
+			return run();
+		} catch (error) {
+			report[`${label}.threw`] =
+				`${error && error.name}: ${error && error.message}`;
+		}
+	};
+	async function readBack(label, frame, element, loads = true) {
+		const realm = realmOf(frame);
+		report[`${label}.html`] = element.innerHTML;
+		report[`${label}.realms`] = [...element.childNodes]
+			.map((node) => `${node.nodeName}:${realm(node)}`)
+			.join(',');
+		const a = element.querySelector('a');
+		report[`${label}.href`] = a
+			? `${a.getAttribute('href')} ${a.href}`
+			: 'none';
+		const template = element.querySelector('template');
+		report[`${label}.template`] = template
+			? `${realm(template.content)} ${template.innerHTML}`
+			: 'none';
+		const host = element.querySelector('#h');
+		report[`${label}.shadow`] = host?.shadowRoot
+			? `${realm(host.shadowRoot)} ${host.shadowRoot.innerHTML}`
+			: 'none';
+		if (loads) {
+			report[`${label}.image`] = await settle(element.querySelector('img'));
+			report[`${label}.shadowImage`] = await settle(
+				host?.shadowRoot?.querySelector('img'),
+			);
+		}
+		report[`${label}.ran`] = ran.splice(0).join(',');
+	}
+	async function inFrame(kind, frame) {
+		const doc = frame.contentDocument;
+		const realm = realmOf(frame);
+		const fresh = (id) => {
+			const div = doc.createElement('div');
+			div.id = id;
+			doc.body.append(div);
+			return div;
+		};
+		// setHTML: the browser's sanitizer, its default
+		const safe = fresh(`${kind}-safe`);
+		step(`${kind}.setHTML`, () => safe.setHTML(MARKUP));
+		await readBack(`${kind}.setHTML`, frame, safe);
+		// with a sanitizer that keeps every element (what is unsafe still goes)
+		const kept = fresh(`${kind}-kept`);
+		step(`${kind}.setHTMLKept`, () => kept.setHTML(MARKUP, { sanitizer: {} }));
+		await readBack(`${kind}.setHTMLKept`, frame, kept);
+		// setHTML on a template whose content the page never read: the
+		// markup is its content's, and a copy of it put in the document
+		const template = doc.createElement('template');
+		doc.body.append(template);
+		step(`${kind}.templateSetHTML`, () =>
+			template.setHTML('<a href="link.html?t">t</a>'),
+		);
+		report[`${kind}.templateSetHTML`] =
+			`${realm(template.content)} ${realm(template.content.firstChild)} ${template.innerHTML}`;
+		const copied = fresh(`${kind}-copied`);
+		copied.append(template.content.cloneNode(true));
+		report[`${kind}.templateSetHTML.copy`] =
+			`${realm(copied.firstChild)} ${copied.innerHTML} ${copied.querySelector('a')?.href}`;
+		// setHTML on a shadow root of the frame's
+		const shadowHost = fresh(`${kind}-shadow-host`);
+		const root = shadowHost.attachShadow({ mode: 'open' });
+		step(`${kind}.shadowSetHTML`, () =>
+			root.setHTML('<a href="link.html?r">r</a><img src="blank-sprite.svg">'),
+		);
+		report[`${kind}.shadowSetHTML`] =
+			`${[...root.childNodes].map(realm).join(',')} ${root.innerHTML}`;
+		report[`${kind}.shadowSetHTML.image`] = await settle(
+			root.querySelector('img'),
+		);
+		// setHTMLUnsafe: the parser as it is (its scripts do not run, a
+		// declarative shadow root is made)
+		const unsafe = fresh(`${kind}-unsafe`);
+		step(`${kind}.setHTMLUnsafe`, () => unsafe.setHTMLUnsafe(MARKUP));
+		await readBack(`${kind}.setHTMLUnsafe`, frame, unsafe);
+		const templateUnsafe = doc.createElement('template');
+		doc.body.append(templateUnsafe);
+		step(`${kind}.templateSetHTMLUnsafe`, () =>
+			templateUnsafe.setHTMLUnsafe('<a href="link.html?u">u</a>'),
+		);
+		report[`${kind}.templateSetHTMLUnsafe`] =
+			`${realm(templateUnsafe.content)} ${realm(templateUnsafe.content.firstChild)} ${templateUnsafe.innerHTML}`;
+		// the markup members' Unsafe ones parse as setHTMLUnsafe does
+		if (typeof doc.body.appendHTMLUnsafe === 'function') {
+			const appended = fresh(`${kind}-appended`);
+			step(`${kind}.appendHTMLUnsafe`, () => appended.appendHTMLUnsafe(MARKUP));
+			await readBack(`${kind}.appendHTMLUnsafe`, frame, appended);
+		}
+		// execCommand's insertHTML, at the selection in an editable element
+		const editable = fresh(`${kind}-editable`);
+		editable.contentEditable = 'true';
+		const range = doc.createRange();
+		range.selectNodeContents(editable);
+		const selection = frame.contentWindow.getSelection();
+		selection.removeAllRanges();
+		selection.addRange(range);
+		report[`${kind}.insertHTML`] = step(`${kind}.insertHTML`, () =>
+			doc.execCommand(
+				'insertHTML',
+				false,
+				'<img src="blank-sprite.svg?inserted"><a href="link.html?e">e</a>',
+			),
+		);
+		report[`${kind}.insertHTML.html`] = editable.innerHTML;
+		report[`${kind}.insertHTML.image`] = await settle(
+			editable.querySelector('img'),
+		);
+		// getHTML of what the page wrote by innerHTML, with its shadow root
+		const read = fresh(`${kind}-read`);
+		read.innerHTML = MARKUP;
+		read
+			.querySelector('#h')
+			.attachShadow({ mode: 'open', serializable: true }).innerHTML =
+			'<a href="shadow.html">s</a><img src="blank-sprite.svg">';
+		report[`${kind}.shadowInnerHTML.image`] = await settle(
+			read.querySelector('#h').shadowRoot.querySelector('img'),
+		);
+		report[`${kind}.getHTML`] = step(`${kind}.getHTML`, () => read.getHTML());
+		report[`${kind}.getHTML.shadows`] = step(`${kind}.getHTML.shadows`, () =>
+			read.getHTML({ serializableShadowRoots: true }),
+		);
+		report[`${kind}.shadowGetHTML`] = step(`${kind}.shadowGetHTML`, () =>
+			read.querySelector('#h').shadowRoot.getHTML(),
+		);
+		// a host's own shadow root, and a shadow root whose child is a host
+		report[`${kind}.hostGetHTML`] = step(`${kind}.hostGetHTML`, () =>
+			read.querySelector('#h').getHTML({ serializableShadowRoots: true }),
+		);
+		const outer = fresh(`${kind}-outer`).attachShadow({
+			mode: 'open',
+			serializable: true,
+		});
+		outer.innerHTML = '<p id="inner">p</p>';
+		outer
+			.querySelector('#inner')
+			.attachShadow({ mode: 'open', serializable: true }).innerHTML =
+			'<a href="inner.html">i</a>';
+		report[`${kind}.outerGetHTML`] = step(`${kind}.outerGetHTML`, () =>
+			outer.getHTML({ serializableShadowRoots: true }),
+		);
+		ran.splice(0);
+		// across realms: the creator's own members on the frame's element
+		const across = fresh(`${kind}-across`);
+		step(`${kind}.acrossSetHTML`, () =>
+			Element.prototype.setHTML.call(across, MARKUP),
+		);
+		await readBack(`${kind}.acrossSetHTML`, frame, across);
+		const acrossUnsafe = fresh(`${kind}-across-unsafe`);
+		step(`${kind}.acrossSetHTMLUnsafe`, () =>
+			Element.prototype.setHTMLUnsafe.call(acrossUnsafe, MARKUP),
+		);
+		// (what the creator's member loads in the frame is left out: the
+		// creator's hooks route it for the creator's own document)
+		await readBack(`${kind}.acrossSetHTMLUnsafe`, frame, acrossUnsafe, false);
+		report[`${kind}.acrossGetHTML`] = step(`${kind}.acrossGetHTML`, () =>
+			Element.prototype.getHTML.call(read, { serializableShadowRoots: true }),
+		);
+	}
+	addEventListener('load', async () => {
+		// on its initial about:blank, reached into as it is appended
+		const blank = document.createElement('iframe');
+		blank.id = 'blank';
+		document.body.append(blank);
+		blank.contentDocument;
+		// written into by its parent
+		const written = document.createElement('iframe');
+		written.id = 'written';
+		written.src = 'about:blank';
+		document.body.append(written);
+		const child = written.contentDocument;
+		child.open();
+		child.write('<!doctype html><title>child</title><body>child</body>');
+		child.close();
+		try {
+			await inFrame('blank', blank);
+			await inFrame('written', written);
+		} catch (error) {
+			report.error = String(error && error.stack);
+		}
+		report.done = true;
+	});
+</script>
+<body></body>
