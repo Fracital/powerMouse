@@ -9,7 +9,10 @@
 // The fields a page sets itself sit in Blink's header map, in its hash order:
 // an Accept, an Accept-Language, a Cache-Control or a Pragma the page wrote
 // went where the browser's own defaults of those names go (walmart's and
-// bestbuy's graphql calls write all of them).
+// bestbuy's graphql calls write all of them). A CORS preflight is the
+// network stack's own: Accept and the Access-Control-Request fields first,
+// Sec-Fetch-Mode before Sec-Fetch-Site, no client hints and no Pragma or
+// Cache-Control (the worker sent the fields of a no-store load).
 import { createServer } from 'node:http';
 import {
 	done,
@@ -27,9 +30,9 @@ const recorded = new Map();
 const recorder = createServer((req, res) => {
 	const url = new URL(req.url, 'http://x/');
 	const key = url.searchParams.get('k');
-	if (key && req.method !== 'OPTIONS')
+	if (key)
 		recorded.set(
-			key,
+			req.method === 'OPTIONS' ? `${key}-preflight` : key,
 			req.rawHeaders
 				.filter((_, i) => i % 2 === 0)
 				.map((name) => name.toLowerCase())
@@ -70,6 +73,8 @@ const KINDS = [
 	'page-cache',
 	'page-many',
 	'page-xhr',
+	// the CORS preflight before page-cache (Cache-Control is not safelisted)
+	'page-cache-preflight',
 ];
 const page = (run) => `${FIXTURE}pages/field-order.html?r=${R}&run=${run}`;
 

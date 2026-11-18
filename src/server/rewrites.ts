@@ -2796,7 +2796,7 @@ function genericForward(
 					destination,
 					mode: 'cors',
 					method: 'OPTIONS',
-					cache: 'no-store',
+					preflight: true,
 				};
 				let allowed = false;
 				try {

@@ -42,6 +42,8 @@ export interface RequestShape {
 	 * network stack would otherwise add the user's
 	 */
 	pageLanguage?: boolean;
+	/** a CORS preflight the worker sends for the page's request */
+	preflight?: boolean;
 }
 
 // fields that lead, before either group
@@ -67,6 +69,24 @@ const NETWORK = [
 	'accept-encoding',
 	'accept-language',
 	'cookie',
+	'priority',
+];
+
+// a CORS preflight, which the network stack builds whole (measured, Chrome
+// 152 to 157): no client hints, no cache fields, Sec-Fetch-Mode before
+// Sec-Fetch-Site
+const PREFLIGHT = [
+	'accept',
+	'access-control-request-method',
+	'access-control-request-headers',
+	'origin',
+	'user-agent',
+	'sec-fetch-mode',
+	'sec-fetch-site',
+	'sec-fetch-dest',
+	'referer',
+	'accept-encoding',
+	'accept-language',
 	'priority',
 ];
 
@@ -170,7 +190,7 @@ export function chromeOrderedHeaders(
 	// a revalidating load (fetch's no-cache, a reload, a form's POST
 	// navigation) asks for max-age=0; one that bypasses the cache (a hard
 	// reload, no-store) for no-cache, with the HTTP/1.0 Pragma
-	if (!fields.has('cache-control')) {
+	if (!fields.has('cache-control') && !shape.preflight) {
 		if (shape.cache === 'reload' || shape.cache === 'no-store') {
 			fields.set('cache-control', 'no-cache');
 			if (!fields.has('pragma')) fields.set('pragma', 'no-cache');
@@ -191,6 +211,11 @@ export function chromeOrderedHeaders(
 		out.push([chromeCase(name), value]);
 		fields.delete(name);
 	};
+	if (shape.preflight) {
+		PREFLIGHT.forEach(take);
+		for (const name of [...fields.keys()]) take(name);
+		return out;
+	}
 	const network = new Set(NETWORK);
 	for (const name of LEAD) if (!own.has(name)) take(name);
 	if (shape.navigation) {
