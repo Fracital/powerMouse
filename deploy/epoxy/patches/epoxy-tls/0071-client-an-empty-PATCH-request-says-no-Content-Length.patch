@@ -1,0 +1,32 @@
+From 823e150c83b4df918244bb6a069f2c53e1fc6b74 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 17 Nov 2026 17:47:00 -0500
+Subject: [PATCH 71/71] client: an empty PATCH request says no Content-Length
+
+Chrome's HttpNetworkTransaction adds Content-Length: 0 to a request
+without a body only when its method is POST or PUT. The client also
+said 0 for an empty PATCH, over HTTP/1 and HTTP/2.
+---
+ client/src/lib.rs | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/client/src/lib.rs b/client/src/lib.rs
+index a83920c..dcf5892 100644
+--- a/client/src/lib.rs
++++ b/client/src/lib.rs
+@@ -786,8 +786,10 @@ impl EpoxyClient {
+ 
+ 		match body_size {
+ 			// a body of known size names it, as Chrome's does, right after
+-			// Connection; an empty POST, PUT or PATCH says 0
+-			Some(0) if !matches!(request_method, Method::POST | Method::PUT | Method::PATCH) => {}
++			// Connection; an empty POST or PUT says 0, any other empty
++			// request (PATCH, DELETE, OPTIONS) says nothing, as Chrome's
++			// HttpNetworkTransaction does
++			Some(0) if !matches!(request_method, Method::POST | Method::PUT) => {}
+ 			Some(size) => {
+ 				headers_map.insert(CONTENT_LENGTH, size.into());
+ 			}
+-- 
+2.54.0
+

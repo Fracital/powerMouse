@@ -1,0 +1,63 @@
+From 9b5579d123503b8ff1574b6b533ee0039bd98272 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 17 Nov 2026 17:47:00 -0500
+Subject: [PATCH] client: an empty HTTP/2 request body adds no Content-Length
+
+The HTTP/2 client added Content-Length: 0 to every request with an empty
+body whose method has defined payload semantics, OPTIONS and PATCH among
+them, so a CORS preflight went out with one. Chrome sends Content-Length:
+0 only for an empty POST or PUT and never on a preflight. A body of known
+non-zero length still names it; an empty one is left to the caller.
+---
+ src/headers.rs         | 10 ----------
+ src/proto/h2/client.rs |  5 ++++-
+ 2 files changed, 4 insertions(+), 11 deletions(-)
+
+diff --git a/src/headers.rs b/src/headers.rs
+index 8bebdb9b..d33f67b1 100644
+--- a/src/headers.rs
++++ b/src/headers.rs
+@@ -1,8 +1,6 @@
+ #[cfg(all(feature = "client", feature = "http1"))]
+ use bytes::BytesMut;
+ use http::header::HeaderValue;
+-#[cfg(all(feature = "http2", feature = "client"))]
+-use http::Method;
+ #[cfg(any(feature = "client", all(feature = "server", feature = "http2")))]
+ use http::{
+     header::{ValueIter, CONTENT_LENGTH},
+@@ -96,14 +94,6 @@ fn from_digits(bytes: &[u8]) -> Option<u64> {
+     Some(result)
+ }
+ 
+-#[cfg(all(feature = "http2", feature = "client"))]
+-pub(super) fn method_has_defined_payload_semantics(method: &Method) -> bool {
+-    !matches!(
+-        *method,
+-        Method::GET | Method::HEAD | Method::DELETE | Method::CONNECT
+-    )
+-}
+-
+ #[cfg(feature = "http2")]
+ pub(super) fn set_content_length_if_missing(headers: &mut HeaderMap, len: u64) {
+     headers
+diff --git a/src/proto/h2/client.rs b/src/proto/h2/client.rs
+index 5e9641e4..bc53de6f 100644
+--- a/src/proto/h2/client.rs
++++ b/src/proto/h2/client.rs
+@@ -660,8 +660,11 @@ where
+                     let (head, body) = req.into_parts();
+                     let mut req = ::http::Request::from_parts(head, ());
+                     super::strip_connection_headers(req.headers_mut(), true);
++                    // An empty body adds no Content-Length: the caller sends 0
++                    // where Chrome does (an empty POST or PUT), and Chrome's
++                    // CORS preflight, an empty OPTIONS, carries none
+                     if let Some(len) = body.size_hint().exact() {
+-                        if len != 0 || headers::method_has_defined_payload_semantics(req.method()) {
++                        if len != 0 {
+                             headers::set_content_length_if_missing(req.headers_mut(), len);
+                         }
+                     }
+-- 
+2.54.0
+
