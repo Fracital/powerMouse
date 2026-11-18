@@ -49,7 +49,9 @@ import type WriteStream from '../WriteStream';
 import { isStomp } from './Context';
 import {
 	attributeName,
+	hiddenSuffix,
 	hookWrite,
+	isHiddenValue,
 	markerPrefix,
 	pageWrite as observedPageWrite,
 	propertyAttribute,
@@ -77,6 +79,19 @@ function pageWrite<T>(element: Element, name: string, callback: () => T): T {
 		appliedTab.get(element)?.delete(attributeName(element, name));
 	return observedPageWrite(element, name, callback);
 }
+
+/**
+ * Whether `name` of `element` is an attribute the page does not have: a
+ * type the hooks hid (an object's while its copy loads, DOMAttributes hold)
+ * that no marker of the page's stands for
+ */
+const isHidden = (element: unknown, name: unknown): boolean =>
+	name === 'type' &&
+	isHiddenValue(Reflect.apply(nativeElement.getAttribute, element, [name])) &&
+	!Reflect.apply(nativeElement.hasAttribute, element, [markerPrefix() + name]);
+/** isHidden of the name a call with `name` acts on */
+const isHiddenOn = (element: unknown, name: unknown): boolean =>
+	typeof name === 'string' && isHidden(element, attributeName(element, name));
 
 // the namespace ('' for none) of each prefixed attribute a hook removed
 // (xlink:href, while a load's copy is on its way): set again, it is the same
@@ -1795,7 +1810,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// value when a hook rewrote it or dropped it
 					const value = Reflect.apply(target, that, args) as string | null;
 					const local = String(args[1]);
-					if (isMarker(local)) return null;
+					if (isMarker(local) || isHidden(that, local)) return null;
 					// a marker is named as the hooks name the attribute
 					// (lowercased on an HTML element), and a name taken by an
 					// attribute of a namespace is not one a hook dropped
@@ -1846,7 +1861,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				Reflect.apply(target, that, args);
 
 				const attribute = attributeName(that, String(args[0]));
-				if (isMarker(attribute)) return null;
+				if (isMarker(attribute) || isHidden(that, attribute)) return null;
 
 				// no hook is working on the element: the DOM is the hooks'
 				// view, read natively without a prototype swap
@@ -1891,7 +1906,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			realm.Element.prototype.hasAttribute,
 			(target, that, args) => {
 				const native = Reflect.apply(target, that, args);
-				if (isMarkerOn(that, args[0])) return false;
+				if (isMarkerOn(that, args[0]) || isHiddenOn(that, args[0]))
+					return false;
 				// an attribute a hook dropped (iframe sandbox, an object's data)
 				// is still there for the page
 				if (native) return native;
@@ -1910,9 +1926,32 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			realm.Element.prototype.getAttributeNode,
 			(target, that, args) => {
 				const node = Reflect.apply(target, that, args);
-				return isMarkerOn(that, args[0]) ? null : node;
+				return isMarkerOn(that, args[0]) || isHiddenOn(that, args[0])
+					? null
+					: node;
 			},
 		);
+		// by no namespace and a local name: a marker, or an attribute the page
+		// does not have, is none, and stays
+		for (const method of [
+			'getAttributeNodeNS',
+			'hasAttributeNS',
+			'removeAttributeNS',
+		] as const)
+			(realm.Element.prototype as any)[method] = proxyModule.wrapFunction(
+				realm.Element.prototype[method],
+				(target, that, args) =>
+					(args[0] === null || args[0] === '') &&
+					args.length > 1 &&
+					that instanceof realm.Element &&
+					(isMarker(args[1]) || isHidden(that, args[1]))
+						? method === 'getAttributeNodeNS'
+							? null
+							: method === 'hasAttributeNS'
+								? false
+								: undefined
+						: Reflect.apply(target, that, args),
+			);
 
 		/**
 		 * The attribute names in the order the page sees them: a marker stands
@@ -1940,7 +1979,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		realm.Element.prototype.getAttributeNames = proxyModule.wrapFunction(
 			realm.Element.prototype.getAttributeNames,
 			(target, that, args) =>
-				visibleNames(Reflect.apply(target, that, args) as string[]),
+				visibleNames(Reflect.apply(target, that, args) as string[]).filter(
+					(name) => !isHidden(that, name),
+				),
 		);
 
 		// Attr.value: the page's value when the element keeps one for it, and
@@ -2014,7 +2055,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							const result: Attr[] = [];
 							for (const attr of all) {
 								if (!isMarker(attr.name)) {
-									result.push(attr);
+									if (!isHidden(owner, attr.name)) result.push(attr);
 									continue;
 								}
 								const base = attr.name.slice(markerPrefix().length);
@@ -2035,12 +2076,16 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						};
 						const named = (name: string) =>
 							visible().find((attr) => attr.name === name);
+						// a name the page has no attribute by
+						const unseen = (key: string | symbol) =>
+							typeof key === 'string' &&
+							(isMarker(key) || isHidden(owner, key));
 						const view = new Proxy(map, {
 							get: (map, key) => {
 								if (key === 'length') return visible().length;
 								if (typeof key === 'string' && /^\d+$/.test(key))
 									return visible()[Number(key)];
-								if (typeof key === 'string' && isMarker(key)) return undefined;
+								if (unseen(key)) return undefined;
 								// the methods are the prototype's own (map.item is
 								// NamedNodeMap.prototype.item), which act on the view
 								// when it is their receiver (viewMethods below), and
@@ -2053,18 +2098,25 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 							has: (map, key) =>
 								typeof key === 'string' && /^\d+$/.test(key)
 									? Number(key) < visible().length
-									: typeof key === 'string' && isMarker(key)
+									: unseen(key)
 										? false
 										: Reflect.has(map, key) ||
 											(typeof key === 'string' && !!named(key)),
-							ownKeys: (map) => [
-								...visible().map((_, i) => String(i)),
-								...Reflect.ownKeys(map).filter(
-									(key) =>
-										typeof key !== 'string' ||
-										(!/^\d+$/.test(key) && !isMarker(key)),
-								),
-							],
+							// the names as the page's attributes have them: a
+							// marker's for an attribute a hook dropped
+							ownKeys: (map) => {
+								const keys = Reflect.ownKeys(map);
+								return [
+									...visible().map((_, i) => String(i)),
+									...keys.flatMap((key): (string | symbol)[] => {
+										if (typeof key !== 'string') return [key];
+										if (/^\d+$/.test(key) || isHidden(owner, key)) return [];
+										if (!isMarker(key)) return [key];
+										const base = key.slice(markerPrefix().length);
+										return keys.includes(base) ? [] : [base];
+									}),
+								];
+							},
 						});
 						views.set(view, { map, owner, visible, named });
 						attributeMaps.set(map, view);
@@ -2080,6 +2132,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		const VIEW_METHODS = [
 			'item',
 			'getNamedItem',
+			'getNamedItemNS',
+			'removeNamedItem',
+			'removeNamedItemNS',
 			'setNamedItem',
 			'setNamedItemNS',
 		];
@@ -2100,6 +2155,13 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			return VIEW_METHODS.includes(key)
 				? (viewMethods ??= deferred('attributeViewMethods')({
 						isMarkerOn,
+						isHiddenOn,
+						empty: () =>
+							Reflect.apply(
+								attributesDescriptor.get!,
+								createElementIn(inertDocumentOf(realm.document), 'div'),
+								[],
+							) as NamedNodeMap,
 						attributeName,
 						Attr: realm.Attr,
 						nativeNamedNodeMap,
@@ -2169,6 +2231,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 								node.setAttribute(base, node.getAttribute(name)!);
 								node.removeAttribute(name);
 							}
+						// a type the page has none of (isHidden)
+						if (isHiddenValue(node.getAttribute('type')))
+							node.removeAttribute('type');
 						// an attribute a hook dropped was set again at the end: every
 						// attribute goes back to the order the page wrote them in
 						if (dropped)
@@ -2289,7 +2354,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				SELECTOR_ATTRIBUTE,
 				(match, name, op = '', value = '', flag = '') => {
 					const rest = op ? `${op}${value}${flag ? ` ${flag}` : ''}` : '';
-					return `:is([${marker}${name}${rest}],[${name}${rest}]:not([${marker}${name}]))`;
+					// (and not a type the page has none of, isHidden)
+					const hidden = /^type$/i.test(name)
+						? `:not([${name}$="${hiddenSuffix()}"])`
+						: '';
+					return `:is([${marker}${name}${rest}],[${name}${rest}]:not([${marker}${name}])${hidden})`;
 				},
 			);
 		const selectorCall = (target: Function, that: unknown, args: unknown[]) => {
@@ -2305,6 +2374,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				'querySelector',
 				'querySelectorAll',
 				'matches',
+				'webkitMatchesSelector',
 				'closest',
 			] as const) {
 				const native = (proto as any)[method];
@@ -2374,8 +2444,20 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		);
 		realm.Element.prototype.toggleAttribute = proxyModule.wrapFunction(
 			realm.Element.prototype.toggleAttribute,
-			(target, that: Element, args) =>
-				pageWrite(that, String(args[0]), () => {
+			(target, that: Element, args) => {
+				// one the page has none of is added empty, or with force false
+				// stays none
+				if (isHiddenOn(that, args[0])) {
+					if (args.length > 1 && !args[1]) return false;
+					pageWrite(that, 'type', () =>
+						usePrototype(that, CustomElement.prototype, (element) => {
+							element.setAttribute('type', '');
+							this.updateAttributeHooks(element, 'type');
+						}),
+					);
+					return true;
+				}
+				return pageWrite(that, String(args[0]), () => {
 					const result = Reflect.apply(target, that, args);
 					usePrototype(that, CustomElement.prototype, (element) =>
 						this.updateAttributeHooks(
@@ -2384,7 +2466,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						),
 					);
 					return result;
-				}),
+				});
+			},
 		);
 		// setAttributeNode and setAttributeNodeNS are one algorithm, and an
 		// attribute map's setNamedItem and setNamedItemNS are the same one
@@ -2395,6 +2478,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					realm.Element.prototype[method],
 					(target, that: Element, args) => {
 						const name = (args[0] as Attr)?.name;
+						// (it replaces no attribute of the page's)
+						const hidden = isHiddenOn(that, name);
 						const write = () => {
 							const result = Reflect.apply(target, that, args);
 							if (name)
@@ -2403,7 +2488,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 								);
 							return result;
 						};
-						return name ? pageWrite(that, name, write) : write();
+						const result = name ? pageWrite(that, name, write) : write();
+						return hidden ? null : result;
 					},
 				);
 
@@ -2512,6 +2598,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 				const attribute =
 					typeof args[0] === 'string' ? attributeName(that, args[0]) : args[0];
+				// one the page has none of: nothing to remove
+				if (isHidden(that, attribute)) return;
 
 				pageWrite(that, attribute, () => {
 					if (

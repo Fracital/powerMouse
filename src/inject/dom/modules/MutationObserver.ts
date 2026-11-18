@@ -44,6 +44,14 @@ export function useMarker(access: string) {
 
 const isMarker = (name: string | null): name is string =>
 	name !== null && name.startsWith(markerPrefix());
+/**
+ * The end of an <object>'s type the hooks wrote that the page has none of
+ * (DOMAttributes hold): Chrome goes by the MIME type before it (it drops a
+ * type's parameters), the page reads no type (DOMHooks isHidden)
+ */
+export const hiddenSuffix = () => `;${marker}hidden`;
+export const isHiddenValue = (value: string | null): boolean =>
+	!!value?.endsWith(hiddenSuffix());
 
 // native accessors, taken when the bundle is evaluated, before any hook:
 // interface checks are not realm checks, so they serve every realm the
@@ -156,7 +164,7 @@ interface Write {
 	name: string | null;
 	/** the names whose marker stands for `name` */
 	markers: Set<string>;
-	/** the attributes the hooks wrote, when the page wrote none */
+	/** the attributes the hooks wrote that the page did not (unseenWrite; every one when it wrote none) */
 	written: Set<string> | null;
 	records: Map<MutationObserver, MutationRecord[]>;
 }
@@ -230,7 +238,7 @@ function pageOldValue(
 	if (markerValue === undefined) markerValue = attributeOf(target, marker);
 	if (markerValue !== null) return markerValue;
 	const old = recordOldValue(record);
-	return old === null ? null : state.readback(name, old);
+	return old === null || isHiddenValue(old) ? null : state.readback(name, old);
 }
 
 /** records the page did not shape itself: markers out, old values its own */
@@ -297,7 +305,9 @@ function shapeWrite(
 		const native = firstOwn
 			? recordOldValue(firstOwn)
 			: attributeOf(target, name!);
-		return native === null ? null : state.readback(name!, native);
+		return native === null || isHiddenValue(native)
+			? null
+			: state.readback(name!, native);
 	};
 
 	const out: MutationRecord[] = [];
@@ -536,6 +546,16 @@ export function pageWrite<T>(
 		},
 		callback,
 	);
+}
+
+/**
+ * An attribute the hooks write on `element` while the page's write of
+ * another runs (an object's held data and type, DOMAttributes hold): the
+ * page wrote none of it, so its observers see none.
+ */
+export function unseenWrite(element: Element, name: string) {
+	const write = writes[writes.length - 1];
+	if (write?.target === element) (write.written ??= new Set()).add(name);
 }
 
 /**
