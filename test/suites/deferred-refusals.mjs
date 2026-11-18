@@ -33,7 +33,9 @@
 // src/inject/dom/policyChecks.ts); a document the page makes in a frame
 // whose shell is a part (src/htmlShell.ts: an srcdoc, a javascript: URL's
 // markup; a data: frame, src/inject/dom/rareAttributes.ts) is never given
-// to the frame, unrewritten or at all, and a refresh meta has no content
+// to the frame, unrewritten or at all, an <object>'s HTML document (its
+// copy's shell is that part too) fails as a failed fetch does natively, an
+// error and no document, and a refresh meta has no content
 // for the browser; a base a report-only base-uri refuses is refused, its
 // report being a part. A part is made synchronously within the call that
 // needs it, so no page code runs between the hook and the part (a
@@ -119,6 +121,11 @@ const REFUSING = [
  * on their own (each waits a while for what does not come)
  */
 const DOCUMENTS = ['srcdoc', 'javascriptDocument', 'dataFrame', 'refresh'];
+/**
+ * an <object>'s HTML document, in a child of its own (it waits a while for
+ * the object)
+ */
+const OBJECT = ['objectDocument'];
 /**
  * the refusing calls that navigate the child itself unless refused, each
  * made in a child of its own: one let through would answer for the others
@@ -302,6 +309,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		(calls) => window.__child(calls),
 		DOCUMENTS,
 	);
+	const object = await top.evaluate((calls) => window.__child(calls), OBJECT);
 	ok(
 		'with the parts, the counting stand-ins see the calls that reach the browser',
 		answer.out?.getSettings?.returned === 'object' &&
@@ -411,6 +419,16 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			answer.out.blankSetHTML.getHTML?.returned === 'string' &&
 			answer.out.blankSetHTML.parsed === 2,
 		JSON.stringify(answer.out?.blankSetHTML),
+	);
+	// as natively: its script runs, one load, the document shown
+	ok(
+		"with the parts, an <object>'s HTML document loads in its shell, as natively",
+		object.out?.objectDocument?.landed === '?object' &&
+			object.out.objectDocument.events?.join() === 'load' &&
+			object.out.objectDocument.shown === 'deferred refusals landed' &&
+			Array.isArray(object.reached) &&
+			object.reached.length === 0,
+		JSON.stringify(object),
 	);
 	ok(
 		'with the parts, window.open() reaches the browser',
@@ -542,7 +560,8 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		...POLICED,
 	]);
 	const documents = await without(DOCUMENTS);
-	const out = { ...answer.out, ...documents.out };
+	const object = await without(OBJECT);
+	const out = { ...answer.out, ...documents.out, ...object.out };
 	// (a child that was navigated answers with the page it landed on)
 	for (const call of AIMED) {
 		const aimed = await without([call]);
@@ -610,6 +629,16 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		'without the parts, a data: frame is refused: it is not navigated',
 		out.dataFrame?.ran === false,
 		JSON.stringify(out.dataFrame),
+	);
+	// as a failed fetch natively: an error, no document, nothing of the
+	// page's markup run (never the markup as written, never one without
+	// its shell)
+	ok(
+		"without the parts, an <object>'s HTML document is refused: an error and no document, as a failed fetch",
+		out.objectDocument?.landed === null &&
+			out.objectDocument.events?.join() === 'error' &&
+			out.objectDocument.shown === null,
+		JSON.stringify(out.objectDocument),
 	);
 	ok(
 		'without the parts, setHTML, setHTMLUnsafe and getHTML on an element of a frame on its initial about:blank throw, and nothing is parsed',
@@ -728,8 +757,10 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		Array.isArray(answer.reached) &&
 			answer.reached.length === 0 &&
 			Array.isArray(documents.reached) &&
-			documents.reached.length === 0,
-		JSON.stringify([answer.reached, documents.reached]),
+			documents.reached.length === 0 &&
+			Array.isArray(object.reached) &&
+			object.reached.length === 0,
+		JSON.stringify([answer.reached, documents.reached, object.reached]),
 	);
 }
 
