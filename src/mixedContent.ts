@@ -89,8 +89,17 @@ export interface MixedContentNotice {
 		| 'should-also'
 		| 'form'
 		| 'websocket';
-	/** the type Chrome names (`script`, `frame`, `resource`, ...) */
+	/**
+	 * the type Chrome names (`script`, `frame`, `resource`, ...), where the
+	 * request said it
+	 */
 	type?: string;
+	/**
+	 * what the request loads, which names the type where `type` is not
+	 * given (./mixedContentNotices.ts typeName: only a notice's text reads
+	 * it)
+	 */
+	destination?: string;
 	/** the URL as the page asked for it */
 	url: string;
 }
@@ -103,49 +112,6 @@ export function noticeNamesTop(notice: MixedContentNotice): boolean {
 		notice.kind === 'form' ||
 		notice.kind === 'should-also'
 	);
-}
-
-/** Chrome's name for what a request of `destination` loads */
-export function typeName(destination: string): string {
-	switch (destination) {
-		case 'script':
-		case 'paintworklet':
-		case 'audioworklet':
-			return 'script';
-		case 'style':
-			return 'stylesheet';
-		case 'image':
-			return 'image';
-		case 'font':
-			return 'font';
-		case 'iframe':
-		case 'frame':
-		case 'document':
-			return 'frame';
-		case 'object':
-		case 'embed':
-			return 'plugin resource';
-		case 'track':
-			return 'Text Track';
-		case 'worker':
-			return 'Worker';
-		case 'sharedworker':
-			return 'Shared Worker script';
-		case 'serviceworker':
-			return 'Service Worker script';
-		case 'manifest':
-			return 'manifest';
-		case 'audio':
-			return 'audio file';
-		case 'video':
-			return 'video';
-		case 'xslt':
-			return 'XSLT';
-		case 'report':
-			return 'Content Security Policy reporting endpoint';
-		default:
-			return 'resource';
-	}
 }
 
 export interface MixedContentRequest {
@@ -221,7 +187,7 @@ export function mixedContentVerdict(
 		if (insecure(url))
 			notices.push({
 				kind: 'should-also',
-				type: typeName(request.destination),
+				destination: request.destination,
 				url: pageURL,
 			});
 		return { action: 'allow', notices };
@@ -232,7 +198,9 @@ export function mixedContentVerdict(
 		notices: [
 			{
 				kind: 'blocked',
-				type: request.type ?? typeName(request.destination),
+				...(request.type === undefined
+					? { destination: request.destination }
+					: { type: request.type }),
 				url: pageURL,
 			},
 		],

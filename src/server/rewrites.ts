@@ -544,7 +544,7 @@ function loadOf(
 
 /**
  * Chrome's name for a request whose destination does not say what it is
- * (src/mixedContent.ts typeName): an XMLHttpRequest (the inject marks its
+ * (src/mixedContentNotices.ts typeName): an XMLHttpRequest (the inject marks its
  * abort id), an EventSource (its Accept), a prefetch (its Sec-Purpose)
  */
 function requestTypeOf(request: Request): string | undefined {

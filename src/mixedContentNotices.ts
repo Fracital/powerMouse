@@ -5,6 +5,49 @@
 // Its top level reads no global.
 import type { MixedContentNotice } from './mixedContent';
 
+/** Chrome's name for what a request of `destination` loads */
+export function typeName(destination: string | undefined): string {
+	switch (destination) {
+		case 'script':
+		case 'paintworklet':
+		case 'audioworklet':
+			return 'script';
+		case 'style':
+			return 'stylesheet';
+		case 'image':
+			return 'image';
+		case 'font':
+			return 'font';
+		case 'iframe':
+		case 'frame':
+		case 'document':
+			return 'frame';
+		case 'object':
+		case 'embed':
+			return 'plugin resource';
+		case 'track':
+			return 'Text Track';
+		case 'worker':
+			return 'Worker';
+		case 'sharedworker':
+			return 'Shared Worker script';
+		case 'serviceworker':
+			return 'Service Worker script';
+		case 'manifest':
+			return 'manifest';
+		case 'audio':
+			return 'audio file';
+		case 'video':
+			return 'video';
+		case 'xslt':
+			return 'XSLT';
+		case 'report':
+			return 'Content Security Policy reporting endpoint';
+		default:
+			return 'resource';
+	}
+}
+
 /** a notice's console level and its sentence, for the page at `page` */
 export function noticeText(
 	notice: MixedContentNotice,
@@ -15,7 +58,7 @@ export function noticeText(
 		case 'blocked':
 			return {
 				level: 'error',
-				text: `${start} requested an insecure ${notice.type} '${notice.url}'. This request has been blocked; the content must be served over HTTPS.`,
+				text: `${start} requested an insecure ${notice.type ?? typeName(notice.destination)} '${notice.url}'. This request has been blocked; the content must be served over HTTPS.`,
 			};
 		case 'upgraded':
 			return {
@@ -35,7 +78,7 @@ export function noticeText(
 		case 'should-also':
 			return {
 				level: 'warn',
-				text: `${start} requested an insecure ${notice.type} '${notice.url}'. This content should also be served over HTTPS.`,
+				text: `${start} requested an insecure ${notice.type ?? typeName(notice.destination)} '${notice.url}'. This content should also be served over HTTPS.`,
 			};
 		case 'form':
 			return {
