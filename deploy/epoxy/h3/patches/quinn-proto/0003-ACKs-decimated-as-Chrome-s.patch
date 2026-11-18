@@ -1,0 +1,129 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Wed, 18 Nov 2026 15:30:00 -0500
+Subject: [PATCH] ACKs decimated as Chrome's
+
+quinn acknowledged every second ack-eliciting packet for the whole
+connection, with max_ack_delay as the delay. A download is a QUIC
+packet per 1.2 KB, so a 3.5 MB response sent about 1500 ACKs, each one
+a packet to encrypt and a datagram over wisp.
+
+Chrome (quiche's QuicReceivedPacketManager) acknowledges every second
+ack-eliciting packet for the first 100 packets past the first one it
+received, then decimates: an ACK after every tenth ack-eliciting packet,
+or after a quarter of the minimum RTT (at most max_ack_delay), whichever
+comes first. Out-of-order packets and the other immediate-ACK triggers
+still send an ACK at once, and a peer's ACK_FREQUENCY frame still sets
+the threshold.
+---
+ src/connection/mod.rs    | 12 ++++++++++--
+ src/connection/spaces.rs | 44 ++++++++++++++++++++++++++++++++++++++++++--
+ 2 files changed, 52 insertions(+), 4 deletions(-)
+
+--- a/src/connection/mod.rs
++++ b/src/connection/mod.rs
+@@ -3022,8 +3022,16 @@
+             .pending_acks
+             .packet_received(now, number, ack_eliciting, &space.dedup)
+         {
+-            self.timers
+-                .set(Timer::MaxAckDelay, now + self.ack_frequency.max_ack_delay);
++            // decimated as Chrome's: a quarter of the minimum RTT, at most
++            // max_ack_delay (quiche's ack_decimation_delay)
++            let delay = if space.pending_acks.decimating() {
++                self.ack_frequency
++                    .max_ack_delay
++                    .min(self.path.rtt.min() / 4)
++            } else {
++                self.ack_frequency.max_ack_delay
++            };
++            self.timers.set(Timer::MaxAckDelay, now + delay);
+             self.next_bundled_ack_time = Some(now);
+         }
+ 
+--- a/src/connection/spaces.rs
++++ b/src/connection/spaces.rs
+@@ -640,8 +640,22 @@
+     largest_ack_eliciting_packet: Option<u64>,
+     /// The largest acknowledged packet number sent in an ACK frame
+     largest_acked: Option<u64>,
++    /// The first packet number received in this space
++    first_packet: Option<u64>,
++    /// Whether the peer chose the threshold with an ACK_FREQUENCY frame
++    frequency_from_peer: bool,
+ }
+ 
++/// Chrome's QUIC (quiche's QuicReceivedPacketManager) acknowledges every
++/// second ack-eliciting packet until it has received this many past the
++/// first, then decimates: an ACK after every tenth ack-eliciting packet, or
++/// after a quarter of the minimum RTT (at most max_ack_delay), whichever
++/// comes first.
++const ACK_DECIMATION_AFTER: u64 = 100;
++/// The ack-eliciting packets quiche lets go unacknowledged while
++/// decimating, less one (an ACK is due once the count exceeds it)
++const DECIMATED_ACK_ELICITING_THRESHOLD: u64 = 9;
++
+ impl PendingAcks {
+     fn new() -> Self {
+         Self {
+@@ -655,12 +669,33 @@
+             largest_packet: None,
+             largest_ack_eliciting_packet: None,
+             largest_acked: None,
++            first_packet: None,
++            frequency_from_peer: false,
+         }
+     }
+ 
++    /// Whether ACKs are decimated as Chrome's are, at `packet_number`: past
++    /// the first ACK_DECIMATION_AFTER packets, unless the peer set the
++    /// frequency itself
++    fn decimating_at(&self, packet_number: u64) -> bool {
++        !self.frequency_from_peer
++            && self
++                .first_packet
++                .is_some_and(|first| packet_number >= first + ACK_DECIMATION_AFTER)
++    }
++
++    /// Whether the newest packet is past the point ACKs are decimated from:
++    /// the ACK delay is then a quarter of the minimum RTT (at most
++    /// max_ack_delay), as quiche's ack_decimation_delay
++    pub(super) fn decimating(&self) -> bool {
++        self.largest_packet
++            .is_some_and(|(packet_number, _)| self.decimating_at(packet_number))
++    }
++
+     pub(super) fn set_ack_frequency_params(&mut self, frame: &frame::AckFrequency) {
+         self.ack_eliciting_threshold = frame.ack_eliciting_threshold.into_inner();
+         self.reordering_threshold = frame.reordering_threshold.into_inner();
++        self.frequency_from_peer = true;
+     }
+ 
+     pub(super) fn set_immediate_ack_required(&mut self) {
+@@ -702,6 +737,7 @@
+         ack_eliciting: bool,
+         dedup: &Dedup,
+     ) -> bool {
++        self.first_packet.get_or_insert(packet_number);
+         if !ack_eliciting {
+             self.non_ack_eliciting_since_last_ack_sent += 1;
+             return false;
+@@ -716,9 +752,13 @@
+             .or(Some(packet_number));
+ 
+         // Handle ack_eliciting_threshold
++        let threshold = if self.decimating_at(packet_number) {
++            DECIMATED_ACK_ELICITING_THRESHOLD
++        } else {
++            self.ack_eliciting_threshold
++        };
+         self.ack_eliciting_since_last_ack_sent += 1;
+-        self.immediate_ack_required |=
+-            self.ack_eliciting_since_last_ack_sent > self.ack_eliciting_threshold;
++        self.immediate_ack_required |= self.ack_eliciting_since_last_ack_sent > threshold;
+ 
+         // Handle out-of-order packets
+         self.immediate_ack_required |=
+-- 
+2.47.0
+

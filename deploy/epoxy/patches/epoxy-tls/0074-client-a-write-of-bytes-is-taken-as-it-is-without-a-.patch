@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Wed, 18 Nov 2026 15:30:00 -0500
+Subject: [PATCH] client: a write of bytes is taken as it is, without a Request
+
+convert_body read every chunk written to a socket's WritableStream, every
+datagram sent on a UDP stream and every chunk of a streamed request body
+through `new Request("", { body }).arrayBuffer()`: a Request, a promise
+and a task's wait for each write. An HTTP/3 connection (stomp-h3 over a
+wisp UDP stream) waited that long before each ACK it sent.
+
+A Uint8Array or an ArrayBuffer is now taken as it is (an ArrayBuffer as a
+view of all of it); anything else (a Blob, a string, a view of a
+SharedArrayBuffer, which a Request refuses) still goes through the
+Request. Every caller copies the bytes before it yields, as the Request
+copied them, so a buffer the page changes after the write does not
+change what was sent.
+---
+ client/src/utils/js.rs | 15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)
+
+--- a/client/src/utils/js.rs
++++ b/client/src/utils/js.rs
+@@ -6,7 +6,7 @@
+ use bytes::Bytes;
+ use futures_util::{AsyncRead, Stream, StreamExt, TryStreamExt};
+ use http_body_util::{Either, Full, StreamBody};
+-use js_sys::{Array, JsString, Object, Uint8Array};
++use js_sys::{Array, ArrayBuffer, JsString, Object, Uint8Array};
+ use send_wrapper::SendWrapper;
+ use wasm_bindgen::{prelude::*, JsCast, JsValue};
+ use wasm_streams::ReadableStream;
+@@ -90,7 +90,20 @@
+ 	pub fn from_entries(iterable: &JsValue) -> Result<Object, JsValue>;
+ }
+ 
++/// The bytes of a body: what `new Request("", { body }).arrayBuffer()` reads,
++/// and its Content-Type. A Uint8Array or ArrayBuffer (of a socket's write, a
++/// datagram, a request body's chunk) is taken as it is, without the Request
++/// and the promise each write cost, which put a task's wait before every
++/// datagram an HTTP/3 connection sends. The caller copies the bytes before
++/// it yields, as the Request copied them.
+ pub async fn convert_body(val: JsValue) -> Result<(Uint8Array, Option<String>), JsValue> {
++	if let Some(bytes) = val.dyn_ref::<Uint8Array>() {
++		if bytes.buffer().is_instance_of::<ArrayBuffer>() {
++			return Ok((bytes.clone(), None));
++		}
++	} else if val.is_instance_of::<ArrayBuffer>() {
++		return Ok((Uint8Array::new(&val), None));
++	}
+ 	let req: Array = convert_body_inner(val).await?.unchecked_into();
+ 	let content_type: Option<JsString> = object_truthy(req.at(1)).map(wasm_bindgen::JsCast::unchecked_into);
+ 	Ok((req.at(0).unchecked_into(), content_type.map(Into::into)))
+-- 
+2.47.0
+

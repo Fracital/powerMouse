@@ -53,9 +53,21 @@ h3 = { path = "vendor/h3" }
 rustls = { path = "vendor/rustls" }
 # quinn-proto with patches/quinn-proto (Chrome's client transport parameters)
 quinn-proto = { path = "vendor/quinn-proto" }
+# ring with patches/ring (AES in 64-bit words on wasm32)
+ring = { path = "vendor/ring" }
 
 [profile.release]
 opt-level = "z"
 lto = true
 codegen-units = 1
 panic = "abort"
+
+# A response over HTTP/3 is decrypted and decoded a 1.2 KB packet at a
+# time, so AES-GCM (ring) and the decoders are most of the time stomp-h3
+# takes to read one: they are built for speed, the rest for size
+[profile.release.package.brotli-decompressor]
+opt-level = 3
+[profile.release.package.compression-codecs]
+opt-level = 3
+[profile.release.package.ring]
+opt-level = 3

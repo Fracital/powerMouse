@@ -6,6 +6,7 @@
 use std::{
 	cell::RefCell,
 	sync::{atomic::Ordering, Arc},
+	task::Poll,
 	time::Duration,
 };
 
@@ -48,6 +49,16 @@ const MAX_FIELD_SECTION_SIZE: u64 = 256 * 1024;
 const QPACK_MAX_TABLE_CAPACITY: u64 = 64 * 1024;
 const QPACK_BLOCKED_STREAMS: u64 = 100;
 const CHUNK: usize = 64 * 1024;
+/// the most of a response body taken from the connection in one piece
+const GATHER: usize = 64 * 1024;
+
+/// A response body's receiving half as the gathering stream reads it: an
+/// error or the end met while gathering is reported after the data before it
+struct Gather {
+	rx: h3::client::RequestStream<h3_quinn::RecvStream, Bytes>,
+	failed: Option<std::io::Error>,
+	ended: bool,
+}
 
 fn js_error(message: impl std::fmt::Display) -> JsValue {
 	js_sys::Error::new(&message.to_string()).into()
@@ -391,7 +402,11 @@ impl H3Connection {
 		set("datagramsReceived", self.stats.received.load(Ordering::Relaxed) as f64);
 		set("bytesSent", self.stats.sent_bytes.load(Ordering::Relaxed) as f64);
 		set("bytesReceived", self.stats.received_bytes.load(Ordering::Relaxed) as f64);
-		set("mtu", self.quic.stats().path.current_mtu as f64);
+		let path = self.quic.stats().path;
+		set("mtu", path.current_mtu as f64);
+		set("lostPackets", path.lost_packets as f64);
+		set("congestionEvents", path.congestion_events as f64);
+		set("cwnd", path.cwnd as f64);
 		o.into()
 	}
 
@@ -539,15 +554,47 @@ impl H3Connection {
 		let body: JsValue = if null_body {
 			JsValue::NULL
 		} else {
-			let raw = stream::unfold(rx, |mut rx| async move {
-				match rx.recv_data().await {
-					Ok(Some(mut buf)) => {
-						let bytes = buf.copy_to_bytes(buf.remaining());
-						Some((Ok::<_, std::io::Error>(bytes), rx))
-					}
-					Ok(None) => None,
-					Err(e) => Some((Err(std::io::Error::other(e.to_string())), rx)),
+			// Each DATA chunk h3 hands out is one QUIC packet's STREAM
+			// frame (about 1.2 KB): what has arrived is taken in one piece
+			// (up to GATHER), so the decoder and the reader see a few large
+			// chunks, not a thousand small ones, when the connection is
+			// ahead of this thread
+			let raw = stream::unfold(Gather { rx, failed: None, ended: false }, |mut g| async move {
+				if let Some(error) = g.failed.take() {
+					return Some((Err(error), g));
 				}
+				if g.ended {
+					return None;
+				}
+				let first = match g.rx.recv_data().await {
+					Ok(Some(mut buf)) => buf.copy_to_bytes(buf.remaining()),
+					Ok(None) => return None,
+					Err(e) => return Some((Err(std::io::Error::other(e.to_string())), g)),
+				};
+				// copied together only when more than one chunk is waiting
+				let mut more: Option<Vec<u8>> = None;
+				while more.as_ref().map_or(first.len(), Vec::len) < GATHER {
+					match std::future::poll_fn(|cx| Poll::Ready(g.rx.poll_recv_data(cx))).await {
+						Poll::Ready(Ok(Some(mut buf))) => more
+							.get_or_insert_with(|| {
+								let mut out = Vec::with_capacity(GATHER + first.len());
+								out.extend_from_slice(&first);
+								out
+							})
+							.extend_from_slice(&buf.copy_to_bytes(buf.remaining())),
+						Poll::Ready(Ok(None)) => {
+							g.ended = true;
+							break;
+						}
+						Poll::Ready(Err(e)) => {
+							g.failed = Some(std::io::Error::other(e.to_string()));
+							break;
+						}
+						Poll::Pending => break,
+					}
+				}
+				let out = more.map_or(first, Bytes::from);
+				Some((Ok::<_, std::io::Error>(out), g))
 			})
 			.boxed_local();
 			let reader = raw.into_async_read();
@@ -558,15 +605,13 @@ impl H3Connection {
 				Some(Coding::Zstd) => Box::pin(ZstdDecoder::new(reader)),
 				None => Box::pin(reader),
 			};
-			let chunks = stream::unfold(decoded, |mut r| async move {
-				let mut buf = vec![0u8; CHUNK];
+			// one buffer for the whole body: each read is copied out into
+			// a chunk of its own size
+			let chunks = stream::unfold((decoded, vec![0u8; CHUNK]), |(mut r, mut buf)| async move {
 				match r.read(&mut buf).await {
 					Ok(0) => None,
-					Ok(n) => {
-						buf.truncate(n);
-						Some((Ok(Uint8Array::from(&buf[..]).into()), r))
-					}
-					Err(e) => Some((Err(js_error(e)), r)),
+					Ok(n) => Some((Ok(Uint8Array::from(&buf[..n]).into()), (r, buf))),
+					Err(e) => Some((Err(js_error(e)), (r, buf))),
 				}
 			});
 			wasm_streams::ReadableStream::from_stream(chunks).into_raw().into()

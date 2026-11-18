@@ -21,6 +21,7 @@ import { NETWORK_PARTITION } from '../networkPartition';
 import { wispGone } from '../RevivingTransport';
 import { AltSvcCache, type AltService } from './altSvc';
 import { base64url, httpsQuery, parseHttpsAnswer } from './dnsHttps';
+import { remoteH3Module } from './h3Thread';
 
 /** a datagram channel bound to one remote: one Uint8Array per datagram each way */
 export interface DatagramChannel {
@@ -56,12 +57,12 @@ export interface Http3Options {
 	udp?: UdpOpener;
 }
 
-interface H3Response {
+export interface H3Response {
 	status: number;
 	headers: RawHeaders;
 	body: ReadableStream<Uint8Array> | null;
 }
-interface H3Connection {
+export interface H3Connection {
 	readonly alive: boolean;
 	readonly handshake_ms: number;
 	stats(): Record<string, number>;
@@ -73,7 +74,7 @@ interface H3Connection {
 		body: Uint8Array | ReadableStream<Uint8Array> | null,
 	): Promise<H3Response>;
 }
-interface H3Module {
+export interface H3Module {
 	default(): Promise<unknown>;
 	connect(
 		host: string,
@@ -276,6 +277,7 @@ export default class Http3Transport implements ProxyTransport {
 	readonly base: ProxyTransport;
 	#options: Http3Options;
 	#moduleUrl: string | null;
+	#workerUrl: string | null;
 	#module: Promise<H3Module> | null = null;
 	#moduleError: string | null = null;
 	#cache = new AltSvcCache();
@@ -294,16 +296,21 @@ export default class Http3Transport implements ProxyTransport {
 
 	/**
 	 * `moduleUrl` is where stomp_h3.js lives (resolved by the host);
-	 * `options.module` wins when given.
+	 * `options.module` wins when given. `workerUrl` is a script that serves
+	 * stomp-h3 when started as a worker named H3_WORKER_NAME (the transport
+	 * worker's): stomp-h3 then runs on that thread (h3Thread.ts), or in this
+	 * realm when that worker cannot start or load it.
 	 */
 	constructor(
 		base: ProxyTransport,
 		options: Http3Options = {},
 		moduleUrl?: string,
+		workerUrl?: string,
 	) {
 		this.base = base;
 		this.#options = options;
 		this.#moduleUrl = options.module ?? moduleUrl ?? null;
+		this.#workerUrl = workerUrl ?? null;
 		for (const entry of options.force || []) {
 			const origin = forcedOrigin(entry);
 			if (!origin) continue;
@@ -606,6 +613,15 @@ export default class Http3Transport implements ProxyTransport {
 		this.#module ??= (async () => {
 			if (!this.#moduleUrl)
 				throw new Error('no stomp-h3 module URL (http3.module)');
+			if (this.#workerUrl && typeof Worker === 'function')
+				try {
+					return await remoteH3Module(this.#moduleUrl, this.#workerUrl);
+				} catch (error) {
+					console.warn(
+						'Stomp: stomp-h3 runs in the transport worker, its own worker did not start:',
+						error,
+					);
+				}
 			const module = (await import(
 				/* @vite-ignore */ this.#moduleUrl
 			)) as H3Module;
@@ -712,17 +728,41 @@ export default class Http3Transport implements ProxyTransport {
 			if (!released) cut = true;
 			end();
 		};
-		const watch = new TransformStream<Uint8Array, Uint8Array>({
-			transform: (chunk, controller) => {
-				if (!received) {
-					received = true;
-					this.#carried(relay);
-				}
-				controller.enqueue(chunk);
-			},
-			flush: readEnded,
-		});
-		channel.read.pipeTo(watch.writable).catch(readEnded);
+		// Every datagram stomp-h3 reads is pulled from the channel here, one
+		// read each, where a TransformStream piped to cost each datagram a
+		// read, a write, a transform and their promises: a QUIC response is
+		// about 800 datagrams a MB
+		const source = channel.read.getReader();
+		const watch = {
+			readable: new ReadableStream<Uint8Array>(
+				{
+					pull: async (controller) => {
+						let next: ReadableStreamReadResult<Uint8Array>;
+						try {
+							next = await source.read();
+						} catch (error) {
+							readEnded();
+							controller.error(error);
+							return;
+						}
+						if (next.done) {
+							readEnded();
+							controller.close();
+							return;
+						}
+						if (!received) {
+							received = true;
+							this.#carried(relay);
+						}
+						controller.enqueue(next.value);
+					},
+					cancel: (reason) => source.cancel(reason),
+				},
+				// one datagram read ahead, as the pipe read: the channel's end
+				// and its first datagram are seen while stomp-h3 is not reading
+				{ highWaterMark: 1 },
+			),
+		};
 		// A datagram that cannot go out means the same. stomp-h3 closes its
 		// writer when the connection goes without waiting on it, and closing
 		// an errored stream rejects with no one to catch it, so a failed write

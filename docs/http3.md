@@ -27,13 +27,14 @@ refusing UDP to one name leaves HTTP/3 on for the rest of the session.
 
 ## Pieces
 
-| Piece                                                    | Where                                                                      | What it does                                                                                                                                                                                                                                                                                                                                            |
-| -------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| stomp-h3                                                 | `deploy/epoxy/h3/` (Rust, wasm32), shipped in epoxy-transport's `dist/h3/` | QUIC (quinn 0.11) and HTTP/3 (h3 0.0.8) over a datagram channel handed in from JS: a quinn `AsyncUdpSocket` over a `ReadableStream`/`WritableStream` pair, a quinn `Runtime` on `spawn_local` and `setTimeout`. Exposes `connect(host, readable, writable, options)` and `H3Connection.request(method, url, headers, body)`.                            |
-| the datagram channel                                     | epoxy's `client.connect_udp('udp://host:port')`                            | A wisp UDP stream: one wisp DATA packet per datagram each way, so datagram boundaries survive. It shares the transport's one wisp connection; no new socket to the server.                                                                                                                                                                              |
-| `Http3Transport`                                         | `src/transport/http3/`                                                     | Wraps the base transport (a `ProxyTransport`). Learns h3 origins, keeps one QUIC connection per origin, decides per request whether h3 is used, falls back. Exported from `dist/controller.mjs` for hosts that construct transports themselves (`new Http3Transport(base, options, moduleUrl)`; `options.udp` can supply another channel opener there). |
-| `TransportDescriptor.http3`                              | `src/transport/construct.ts`                                               | The transport worker, the page host and the controller frame wrap the constructed transport when the descriptor asks for it. The module defaults to `h3/stomp_h3.js` next to the transport module (`/epoxy/h3/stomp_h3.js`).                                                                                                                            |
-| `stomp_h3.js` + `stomp_h3_bg.wasm` (2.1 MB, 540 KB gzip) | fetched by the transport worker the first time an origin offers h3         | Nothing loads while no origin has offered h3.                                                                                                                                                                                                                                                                                                           |
+| Piece                                                      | Where                                                                      | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| stomp-h3                                                   | `deploy/epoxy/h3/` (Rust, wasm32), shipped in epoxy-transport's `dist/h3/` | QUIC (quinn 0.11) and HTTP/3 (h3 0.0.8) over a datagram channel handed in from JS: a quinn `AsyncUdpSocket` over a `ReadableStream`/`WritableStream` pair, a quinn `Runtime` on `spawn_local` and `setTimeout`. Exposes `connect(host, readable, writable, options)` and `H3Connection.request(method, url, headers, body)`.                                                                                                                                                                                                                                                                                                                                                          |
+| the datagram channel                                       | epoxy's `client.connect_udp('udp://host:port')`                            | A wisp UDP stream: one wisp DATA packet per datagram each way, so datagram boundaries survive. It shares the transport's one wisp connection; no new socket to the server.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| the HTTP/3 worker                                          | `src/transport/http3/h3Thread.ts`                                          | Where stomp-h3 runs inside the transport worker: a worker of its own, the transport worker's script started again under the name `stomp-h3`. The transport worker keeps the wisp UDP streams and hands each datagram across as it arrives (its buffer moved, not copied); a response body comes back on a port of its own (`bodyPort.ts`). Decrypting, quinn and decoding a response a 1.2 KB packet at a time then cost a thread that runs nothing else, where they queued behind every other request of the page. Where that worker cannot start or load stomp-h3, stomp-h3 runs in the transport worker; a host that constructs `Http3Transport` itself loads it in its own realm. |
+| `Http3Transport`                                           | `src/transport/http3/`                                                     | Wraps the base transport (a `ProxyTransport`). Learns h3 origins, keeps one QUIC connection per origin, decides per request whether h3 is used, falls back. Exported from `dist/controller.mjs` for hosts that construct transports themselves (`new Http3Transport(base, options, moduleUrl)`; `options.udp` can supply another channel opener there).                                                                                                                                                                                                                                                                                                                               |
+| `TransportDescriptor.http3`                                | `src/transport/construct.ts`                                               | The transport worker, the page host and the controller frame wrap the constructed transport when the descriptor asks for it. The module defaults to `h3/stomp_h3.js` next to the transport module (`/epoxy/h3/stomp_h3.js`).                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `stomp_h3.js` + `stomp_h3_bg.wasm` (2.4 MB, 844 KB brotli) | fetched by the HTTP/3 worker the first time an origin offers h3            | Nothing loads while no origin has offered h3.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 ## How a request goes
 
@@ -91,8 +92,9 @@ refusing UDP to one name leaves HTTP/3 on for the rest of the session.
    request's. Request bodies are buffered (or a stream teed) for that retry.
 
 `info()` on an `Http3Transport` lists the alt-svc entries (with which are
-broken, and which of those by a refusal), the connections with their RTT and
-datagram counts, how the last 64 requests went, and what is known of the
+broken, and which of those by a refusal), the connections with their RTT,
+datagram counts, packets of ours lost, congestion events and congestion
+window (from the HTTP/3 worker every 250 ms), how the last 64 requests went, and what is known of the
 relay: `udpBlockedUntil`, `udpCarried` and the hosts in `udpRefused`.
 
 ## What matches Chrome
@@ -123,7 +125,10 @@ relay: `udpBlockedUntil`, `udpCarried` and the hosts in `udpRefused`.
   parameter of 0 to 15 random bytes. No greased fixed bit, an 8-byte first
   destination connection ID, every Initial datagram 1250 bytes and no path
   MTU probes (Chrome sends none; the packets stay at 1250), initial RTT
-  100 ms, Cubic. Measured against Chrome 152 (docs/fingerprint.md).
+  100 ms, Cubic. ACKs as quiche's QuicReceivedPacketManager sends them:
+  every second ack-eliciting packet for the first 100 packets, then every
+  tenth, or a quarter of the minimum RTT (at most max_ack_delay) after the
+  first unacknowledged one. Measured against Chrome 152 (docs/fingerprint.md).
 - TLS inside QUIC: TLS 1.3 only, ALPN `h3`, Chrome's cipher order
   (AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305), session resumption (one
   rustls config per worker), webpki roots.
@@ -168,11 +173,16 @@ relay: `udpBlockedUntil`, `udpCarried` and the hosts in `udpRefused`.
 - Chrome's packets to an IPv6 address are 20 bytes shorter (1230); the wisp
   server picks the address family, so stomp-h3 always sends 1250.
 - No connection migration or port changes: the wisp stream is the path.
-- Bulk downloads are slower over h3 than over h2 through wisp: every 1.4 KB
-  datagram is its own wisp frame and crosses into JS and back twice, where
-  h2 moves 16 KB records. Measured 20 MB from dl.google.com: 5 to 8 MB/s over
-  h3 against 7 to 18 MB/s over h2 on the same wisp. Small requests cost the
-  same either way (warm medians within a few ms).
+- A bulk download costs more CPU over h3 than over h2 through wisp: every
+  1.2 KB datagram is its own wisp frame, decrypted and decoded on its own
+  and handed between threads, where h2 moves 16 KB records. On the HTTP/3
+  worker's thread it reads about as fast: a 3 MB brotli script (12.8 MB
+  decoded) from a local server in 186 ms over h3 and 147 ms over h2
+  through the transport worker (Chrome 63 ms); Discord's web.js in 263 ms
+  (Chrome 247 ms). While a page loads, what is left is the relay's delay
+  (an RTT of 27 to 55 ms where Chrome's was about 20), not either
+  thread's CPU. Small requests cost the same either way (warm medians
+  within a few ms).
 - The alt-svc cache lives as long as the transport (the transport worker of
   one controller); Chrome keeps it on disk. A new tab learns it again from
   the first response. It is kept per network partition (the field the
