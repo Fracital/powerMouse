@@ -20,7 +20,8 @@
 // src/inject/dom/instructions.ts); a protocol handler's registration throws
 // (its checks are a part, src/inject/dom/protocolHandlers.ts); execCommand's
 // insertHTML and Range's createContextualFragment throw before the browser
-// parses the markup (src/inject/dom/markupSinks.ts). A part is made
+// parses the markup (src/inject/dom/markupSinks.ts); window.open() throws
+// and opens nothing (src/inject/dom/windowOpen.ts). A part is made
 // synchronously within the call that needs it, so no page code runs between
 // the hook and the part (a download's copy is made after the click went
 // through the page, which the browser's own download had been cancelled
@@ -85,6 +86,7 @@ const REFUSING = [
 	'fetchLater',
 	'execCommand',
 	'contextualFragment',
+	'open',
 ];
 /** the calls that answer with a promise, which rejects */
 const PROMISED = [
@@ -163,6 +165,11 @@ function countNatives() {
 		'createContextualFragment',
 		Range.prototype.createContextualFragment,
 	);
+	// (opens nothing: the page gets null, as from a popup blocker)
+	window.open = function () {
+		reached.push('open');
+		return null;
+	};
 	if (window.StorageManager) {
 		const prototype = StorageManager.prototype;
 		prototype.estimate = counted('estimate', prototype.estimate);
@@ -231,6 +238,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			'fetchLater',
 			'execCommand',
 			'contextualFragment',
+			'open',
 		],
 	);
 	ok(
@@ -303,6 +311,11 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			contextualFragment: answer.out?.contextualFragment,
 			reached: answer.reached,
 		}),
+	);
+	ok(
+		'with the parts, window.open() reaches the browser',
+		answer.out?.open?.returned === 'object' && answer.reached?.includes('open'),
+		JSON.stringify({ out: answer.out?.open, reached: answer.reached }),
 	);
 	ok(
 		'with the parts, an estimate answers, through the browser',

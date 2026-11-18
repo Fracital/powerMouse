@@ -1,6 +1,4 @@
-import { routeHTML } from '../../../rewriteHTML';
 import { openFragment } from '../../../routeURL';
-import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule, {
 	applyDescriptors,
@@ -44,13 +42,10 @@ import cloneRawNode, {
 } from '../cloneNode';
 import { deferred } from '../deferred';
 import type { DeferredParts } from '../deferredParts';
-import { frameWindow } from '../freshContext';
 import type { MarkupContext, ScriptNotes } from '../markupMembers';
 import type { SinkContext } from '../markupSinks';
 import { responseURLOf } from '../responseDocuments';
-import { siteWindows } from '../siteWindows';
 import type WriteStream from '../WriteStream';
-import ContextModule from './Context';
 import {
 	attributeName,
 	hookWrite,
@@ -802,176 +797,18 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		);
 		const openHook = realm.Document.prototype.open;
 
-		// a window this document opened, for a link, form or open() of the
-		// tab that names it later (DocumentClient namedWindow, tabPopups
-		// of the proxied top's client; the last 64)
-		const rememberOpened = (opened: unknown) => {
-			if (typeof opened !== 'object' || opened === null) return;
-			try {
-				const top = (moduleClient.proxiedTop as Record<string, any>)[
-					moduleClient.names.client
-				] as DocumentClient | undefined;
-				if (!top) return;
-				const list = (top.tabPopups ??= []);
-				if (list.length >= 64) list.shift();
-				list.push(new NativeWeakRef(opened as typeof globalThis));
-			} catch (error) {
-				// the proxied top went away
-			}
-		};
-		realm.open = proxyModule.wrapFunction(realm.open, (target, that, args) => {
-			const name = args[1] === undefined ? '_blank' : String(args[1]);
-			// about:blank (or no URL) is a document the page writes itself:
-			// opened as is, injected by the IFrame module's hook
-			let destination: URL | null = null;
-			if (args[0] !== undefined && String(args[0]) !== '')
-				destination = moduleClient.encodingParse(
-					String(args[0]),
-					moduleClient.baseHref,
-				);
-			const routable =
-				destination !== null && /^https?:$/.test(destination.protocol);
-			// the proxied parent or top, named from a frame under the top:
-			// the URL is routed as that window's document
-			let aimed = moduleClient.targetWindow(name);
-			// from a sandboxed document, the one it may navigate (else the
-			// browser opens nothing and the page gets null)
-			const keyword = name.toLowerCase();
-			if (
-				moduleClient.sandboxFlags !== null &&
-				['_top', '_parent', '_unfencedtop'].includes(keyword)
-			) {
-				const window =
-					keyword === '_parent' ? moduleClient.parent : moduleClient.proxiedTop;
-				if (window !== realm) {
-					if (!moduleClient.mayNavigate(window)) return null;
-					const client = (window as Record<string, any>)[
-						moduleClient.names.client
-					] as DocumentClient | undefined;
-					if (client) aimed = { window, client };
-				}
-			}
-			// the site pool: a window of another slot, asked to go there
-			// itself; a javascript: URL runs in no window of another origin.
-			// The caller gets that window's stand-in
-			const across =
-				aimed || !moduleClient.sites
-					? null
-					: siteWindows().targetAcross(moduleClient, name);
-			if (across) {
-				if (routable)
-					deferred('navigateAcross')(moduleClient, across, {
-						kind: 'link',
-						url: destination!.href,
-					});
-				return siteWindows().restrictAcross(
-					moduleClient,
-					moduleClient.getModule(ContextModule)!,
-					across,
-				);
-			}
-			// a frame of the tab by that name, which the browser would not
-			// navigate for this frame (DocumentClient namedWindow): this
-			// document's navigation of it, and the caller gets it
-			if (!aimed && routable) {
-				const named = moduleClient.namedWindow?.(name);
-				if (
-					named &&
-					moduleClient.navigateWindow?.(named, destination!.href, 'href')
-				)
-					return named;
-			}
-			// a javascript: URL runs in the opened window: rewritten, like a
-			// javascript: link (routeHTML rewrites its body)
-			if (destination !== null && destination.protocol === 'javascript:')
-				args[0] = routeHTML(
-					new StompURL(destination, moduleClient.url),
-					moduleClient.url,
-					moduleClient.config,
-					false,
-					aimed ? aimed.client.nestedRoute : moduleClient.nestedRoute,
-				);
-			// a new tab: the host's to open, when it said so (then the page
-			// sees null, as with a popup blocker). Not for a sandboxed
-			// document's popup that keeps its sandbox: the browser refuses it
-			// without allow-popups, and opens it sandboxed like the page
-			// (the IFrame module starts it with the opener's flags)
-			const escapes =
-				moduleClient.sandboxFlags === null ||
-				(moduleClient.allows('allow-popups') &&
-					moduleClient.allows('allow-popups-to-escape-sandbox'));
-			if (
-				routable &&
-				escapes &&
-				!['_self', '_top', '_parent', '_unfencedtop'].includes(
-					name.toLowerCase(),
-				) &&
-				// a frame of this page by that name: the browser navigates it,
-				// and a popup the tab opened (DocumentClient namedWindow)
-				!moduleClient.hasFrameNamed(name) &&
-				!moduleClient.namedWindow?.(name, true) &&
-				moduleClient.openInHost(destination!.toString())
-			)
-				return null;
-
-			if (routable)
-				args[0] =
-					// this window itself: a navigation like location.assign's; the
-					// proxied parent or top: one of that window's own
-					name.toLowerCase() === '_self'
-						? moduleClient.navigationRoute(destination!)
-						: aimed
-							? aimed.client.navigationRoute(destination!)
-							: routeHTML(
-									new StompURL(destination!, moduleClient.url),
-									moduleClient.url,
-									moduleClient.config,
-									false,
-									moduleClient.nestedRoute,
-								);
-
-			// the proxied parent or top navigates from its own realm (see
-			// DocumentClient targetWindow), and a javascript: URL's code runs
-			// there; the caller gets that window
-			if (aimed)
-				return aimed.client.callIn(target, aimed.window, [
-					args[0],
-					'_self',
-					...args.slice(2),
-				]);
-
-			// a frame of this document by that name still on its initial
-			// about:blank fires no navigate event: one sent to another
-			// origin gets a fresh context first, which the browser then
-			// navigates by its name
-			if (routable && destination) {
-				const element = moduleClient.frameNamed(name);
-				const view = element && frameWindow(element);
-				let client: DocumentClient | undefined;
-				try {
-					client = view
-						? ((view as unknown as Record<string, unknown>)[
-								moduleClient.names.client
-							] as DocumentClient | undefined)
-						: undefined;
-				} catch (error) {
-					// another real origin's
-				}
-				client?.freshTo?.(destination, null, true);
-			}
-
-			// a top-level page is its own top and parent: navigate the frame
-			// (a sandboxed frame's too)
-			if (
-				args[1] !== undefined &&
-				['_top', '_parent', '_unfencedtop'].includes(name.toLowerCase())
-			)
-				args[1] = '_self';
-
-			const opened = Reflect.apply(target, that, args);
-			rememberOpened(opened);
-			return opened;
-		});
+		// window.open(): where the URL is routed and the window it opened
+		// remembered for the tab are a deferred part (../windowOpen.ts),
+		// made in the call before anything of the browser's is (so the call
+		// stays inside the user's activation): without it the call throws
+		let opener: ReturnType<DeferredParts['windowOpen']> | null = null;
+		realm.open = proxyModule.wrapFunction(realm.open, (target, that, args) =>
+			(opener ??= deferred('windowOpen')(moduleClient, NativeWeakRef))(
+				target,
+				that,
+				args,
+			),
+		);
 
 		// the written markup is tokenized across calls (WriteStream): a tag,
 		// comment or script a call leaves unfinished waits for the call that

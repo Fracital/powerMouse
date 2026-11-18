@@ -542,6 +542,7 @@ const DEFERRED_FILES = new Set(
 		'src/inject/dom/protocolHandlers.ts',
 		'src/inject/dom/sourcePolicy.ts',
 		'src/inject/dom/WriteStream.ts',
+		'src/inject/dom/windowOpen.ts',
 		'src/inject/dom/writeTokenizer.ts',
 		'src/inject/dom/storageAccess.ts',
 		'src/inject/dom/violations.ts',

@@ -70,6 +70,8 @@
 // (and the WebTransport stand-in, ../webTransportStandIn.ts, with what
 // carries its sessions, ../webTransport.ts, once a realm makes its first
 // session)
+// (and window.open(), ./windowOpen.ts, at a document's first call)
+//
 // (and the watch of which images a document lays out in its viewport,
 // ./seenImages.ts, once the worker says one of them waits for a connection)
 //
@@ -173,6 +175,7 @@ import {
 	violationShows,
 	violationURL,
 } from './violations';
+import { windowOpen } from './windowOpen';
 import { writeStream } from './WriteStream';
 import { xhrMessage } from './xhrMessages';
 import { responseParser } from './xhrParse';
@@ -304,6 +307,9 @@ export const parts = {
 	onOwnSlot,
 	slotContainerPolicy,
 	seenImages,
+	// window.open(), at a document's first call (./windowOpen.ts;
+	// modules/DOMHooks.ts)
+	windowOpen,
 };
 
 export type DeferredParts = typeof parts;
