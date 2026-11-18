@@ -3,6 +3,7 @@ import ProxyModule from '../../modules/Proxy';
 import { LazyWeakSet } from '../../ownCollections';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { deferred } from '../deferred';
+import { clickedLink } from '../links';
 
 /**
  * A link with a `download` attribute. Chrome hands no download to a service
@@ -74,15 +75,7 @@ export default class DownloadModule extends Module<DocumentClient> {
 
 		const listener = (event: MouseEvent) => {
 			if (event.defaultPrevented || event.button !== 0) return;
-			const link = event
-				.composedPath()
-				.find(
-					(node): node is HTMLAnchorElement | HTMLAreaElement =>
-						node instanceof global.Element &&
-						(node.nodeName === 'A' || node.nodeName === 'AREA') &&
-						node.hasAttribute('href') &&
-						node.hasAttribute('download'),
-				);
+			const link = clickedLink(global, event, 'download');
 			if (!link) return;
 			let url: URL;
 			try {

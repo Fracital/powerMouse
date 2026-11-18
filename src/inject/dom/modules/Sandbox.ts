@@ -6,6 +6,7 @@ import { OwnWeakMap } from '../../ownCollections';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { deferred } from '../deferred';
 import type { DeferredParts } from '../deferredParts';
+import { baseTarget, clickedLink } from '../links';
 import { Pool } from '../pool';
 
 const LACKS_SAME_ORIGIN =
@@ -352,19 +353,9 @@ export default class SandboxModule extends Module<DocumentClient> {
 				event.shiftKey
 			)
 				return;
-			const link = event
-				.composedPath()
-				.find(
-					(node): node is HTMLAnchorElement | HTMLAreaElement =>
-						node instanceof global.Element &&
-						(node.nodeName === 'A' || node.nodeName === 'AREA') &&
-						node.hasAttribute('href'),
-				);
+			const link = clickedLink(global, event);
 			if (!link) return;
-			const aim =
-				link.getAttribute('target') ||
-				global.document.querySelector('base[target]')?.getAttribute('target') ||
-				'';
+			const aim = link.getAttribute('target') || baseTarget(global.document);
 			if (!aimsAway(aim)) return;
 			let linkAimed: DeferredParts['linkAimed'];
 			try {
@@ -387,8 +378,7 @@ export default class SandboxModule extends Module<DocumentClient> {
 			const keyword =
 				submitter?.getAttribute('formtarget') ||
 				form.getAttribute('target') ||
-				global.document.querySelector('base[target]')?.getAttribute('target') ||
-				'';
+				baseTarget(global.document);
 			return (
 				aimsAway(keyword) &&
 				deferred('submitAimed')(
