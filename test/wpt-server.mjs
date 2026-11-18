@@ -24,6 +24,9 @@
 //   (see `tools` for what such a module is handed).
 // - The report script (test/wpt/resources/testharnessreport.js) posts each
 //   page's results to /_wpt/report; a suite reads them from /_wpt/results.
+// - Each fixture keeps its own reports and stash, and its own copy of the
+//   handlers (fixtureOf): test/run.mjs starts one fixture per suite in one
+//   process, and a suite's /_wpt/reset empties its own alone.
 //
 // test/fixture.mjs calls `wpt(req, res, port)` first and serves the rest,
 // and hands a WebSocket upgrade to `wptUpgrade` first.
@@ -79,11 +82,6 @@ const TYPES = {
 export const SAME_ORIGIN_HOST = 'localhost';
 export const SAME_SITE_HOST = 'www.localhost';
 export const CROSS_SITE_HOST = '127.0.0.1';
-
-/** the testharness reports, latest per test path; /_wpt/results reads them */
-const reports = new Map();
-/** wptserve's stash: a value put once and taken once */
-const stash = new Map();
 
 const md5 = (text) => createHash('md5').update(text).digest('hex');
 
@@ -401,7 +399,7 @@ function readBodyBytes(req) {
  * common/security-features/subresource/subresource.py: redirections, the
  * stash actions, then a payload carrying the request headers as JSON.
  */
-async function subresource(req, res, url, { type, payload }) {
+async function subresource(req, res, url, { type, payload }, stash) {
 	const query = url.searchParams;
 	const redirection = query.get('redirection');
 	if (redirection && redirection !== 'no-redirect') {
@@ -468,7 +466,7 @@ async function subresource(req, res, url, { type, payload }) {
 		['content-type', type],
 		['cache-control', 'no-cache; must-revalidate'],
 	]);
-	res.end(payload(serverData, url, req));
+	res.end(payload(serverData, url, req, stash));
 }
 
 /**
@@ -554,7 +552,7 @@ const SUBRESOURCE = {
 	},
 	'image.py': {
 		type: 'image/bmp',
-		payload: ({ headers }, url) => {
+		payload: ({ headers }, url, req, stash) => {
 			const data = `{"headers": ${headers}}`;
 			const id = url.searchParams.get('id');
 			if (id) stash.set(`image|${id}`, data);
@@ -644,7 +642,13 @@ const HANDLERS = {
 	},
 	// fetch/metadata/resources/record-headers.py: the first request with a
 	// key stores its headers, `retrieve` takes them (204 while none)
-	'/fetch/metadata/resources/record-headers.py': async (req, res, url) => {
+	'/fetch/metadata/resources/record-headers.py': async (
+		req,
+		res,
+		url,
+		port,
+	) => {
+		const { stash } = fixtureOf(port);
 		const q = url.searchParams;
 		if (q.has('requireOPTIONS') && req.method !== 'OPTIONS') {
 			res.statusCode = 200;
@@ -749,18 +753,21 @@ for (const [name, spec] of Object.entries(SUBRESOURCE))
 		req,
 		res,
 		url,
+		port,
 	) =>
 		url.searchParams.has('report-headers') && name === 'image.py'
 			? json(
 					res,
 					200,
 					[['Access-Control-Allow-Origin', '*']],
-					stash.get(`image|${url.searchParams.get('id')}`) ?? '',
+					fixtureOf(port).stash.get(`image|${url.searchParams.get('id')}`) ??
+						'',
 				)
-			: subresource(req, res, url, spec);
+			: subresource(req, res, url, spec, fixtureOf(port).stash);
 
 // What a module of test/wpt-handlers/ is handed: its default export is a
-// function of these that returns `{ handlers, patterns, upgrades, patches }`.
+// function of these that returns `{ handlers, patterns, upgrades, patches }`,
+// called once for each fixture with that fixture's `stash` (fixtureOf).
 // `handlers` are keyed by the .py path like HANDLERS and called with (req,
 // res, url, port); `patterns` are [RegExp, handler] pairs for the paths no
 // exact key names; `upgrades` are WebSocket endpoints by path, called with
@@ -770,7 +777,6 @@ for (const [name, spec] of Object.entries(SUBRESOURCE))
 // (an https origin, a second port).
 const tools = {
 	root,
-	stash,
 	md5,
 	cors,
 	json,
@@ -782,8 +788,6 @@ const tools = {
 	cookiePairs,
 	hosts: { SAME_ORIGIN_HOST, SAME_SITE_HOST, CROSS_SITE_HOST },
 };
-const PATTERNS = [];
-const UPGRADES = {};
 const PATCHES = {
 	// common.sub.js builds the https origins from these constants; the
 	// fixture only speaks http
@@ -793,21 +797,54 @@ const PATCHES = {
 	],
 };
 const handlerDir = new URL('./wpt-handlers/', import.meta.url);
+/** the default exports of test/wpt-handlers/, in name order */
+const AREAS = [];
 if (existsSync(handlerDir))
-	for (const name of readdirSync(handlerDir).sort()) {
-		if (!name.endsWith('.mjs')) continue;
-		const area = (await import(new URL(name, handlerDir))).default(tools);
-		Object.assign(HANDLERS, area.handlers);
-		PATTERNS.push(...(area.patterns ?? []));
-		Object.assign(UPGRADES, area.upgrades);
+	for (const name of readdirSync(handlerDir).sort())
+		if (name.endsWith('.mjs'))
+			AREAS.push((await import(new URL(name, handlerDir))).default);
+
+/**
+ * What the fixture on `port` keeps, its own as each wptserve's is: the
+ * testharness reports, latest per test path (/_wpt/results reads them),
+ * wptserve's stash (a value put once and taken once), and the handlers of
+ * test/wpt-handlers/ made with that stash, whose own state (counters, open
+ * connections) is the fixture's too. test/run.mjs starts one fixture per
+ * suite in one process: with one stash for all of them, the /_wpt/reset a
+ * suite sends between its native and its proxied run emptied every suite's,
+ * and a page of another suite running beside it lost what its requests had
+ * stashed (wpt-fetch-objects' request-cache pages, beside
+ * wpt-fetch-metadata, read 0 or 1 of their 2 requests).
+ */
+const fixtures = new Map();
+function fixtureOf(port) {
+	let fixture = fixtures.get(port);
+	if (fixture) return fixture;
+	const stash = new Map();
+	fixture = {
+		reports: new Map(),
+		stash,
+		handlers: { ...HANDLERS },
+		patterns: [],
+		upgrades: {},
+		patches: { ...PATCHES },
+	};
+	for (const make of AREAS) {
+		const area = make({ ...tools, stash });
+		Object.assign(fixture.handlers, area.handlers);
+		fixture.patterns.push(...(area.patterns ?? []));
+		Object.assign(fixture.upgrades, area.upgrades);
 		for (const [path, list] of Object.entries(area.patches ?? {}))
-			PATCHES[path] = [...(PATCHES[path] ?? []), ...list];
+			fixture.patches[path] = [...(fixture.patches[path] ?? []), ...list];
 	}
+	fixtures.set(port, fixture);
+	return fixture;
+}
 
 /** a WebSocket upgrade for one of the WPT endpoints; false when it is none */
 export function wptUpgrade(req, socket, head, port) {
 	const url = new URL(req.url, `http://${req.headers.host || 'x'}`);
-	const upgrade = UPGRADES[url.pathname];
+	const upgrade = fixtureOf(port).upgrades[url.pathname];
 	if (!upgrade) return false;
 	upgrade(req, socket, head, url, port);
 	return true;
@@ -823,6 +860,7 @@ const reportKey = (path, search) => path + (search || '');
 export async function wpt(req, res, port) {
 	const url = new URL(req.url, `http://${req.headers.host || 'x'}`);
 	const path = url.pathname;
+	const { reports, stash, handlers, patterns, patches } = fixtureOf(port);
 	if (path === '/_wpt/report' && req.method === 'POST') {
 		try {
 			const body = JSON.parse(await readBody(req));
@@ -858,7 +896,7 @@ export async function wpt(req, res, port) {
 		return true;
 	}
 	const handler =
-		HANDLERS[path] ?? PATTERNS.find(([pattern]) => pattern.test(path))?.[1];
+		handlers[path] ?? patterns.find(([pattern]) => pattern.test(path))?.[1];
 	if (handler) {
 		try {
 			await handler(req, res, url, port);
@@ -922,10 +960,10 @@ export async function wpt(req, res, port) {
 			...sidecarHeaders(file, req, port),
 		];
 		response.body = readFileSync(file);
-		if (path.includes('.sub.') || PATCHES[path]) {
+		if (path.includes('.sub.') || patches[path]) {
 			let text = response.body.toString('utf8');
 			if (path.includes('.sub.')) text = substitute(text, req, port);
-			for (const [from, to] of PATCHES[path] ?? [])
+			for (const [from, to] of patches[path] ?? [])
 				text = text.replaceAll(from, to);
 			response.body = text;
 		}

@@ -77,7 +77,11 @@ echo-as-json}.py`, `fetch/api/resources/redirect.py`,
 empty,static-import}.py` with the redirection and stash actions,
 `referrer-policy/generic/resources/{referrer,refresh-policy}.py`). Every later
 area ports the handlers its tests call in `test/wpt-handlers/<area>.mjs`; its
-section below names them.
+section below names them. Each fixture keeps its own reports, stash and
+handler state, as each wptserve does: `test/run.mjs` runs every suite's
+fixture in one process, and the `/_wpt/reset` a suite sends between its
+native and proxied runs empties its own fixture's alone (the wpt-fixture
+suite checks it).
 
 Ours, not upstream:
 
