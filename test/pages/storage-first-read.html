@@ -1,0 +1,63 @@
+<!doctype html>
+<title>STORAGE FIRST READ</title>
+<body>
+	<script>
+		// An ad library's first look at localStorage: dozens of keys read in
+		// a new document, most of them missing, some small, one large, then
+		// the store's length and keys; and two frames that read each other's
+		// writes and removals at once. What every read shows, compared with
+		// native Chrome by the suite; through the proxy the suite also counts
+		// the synchronous round trips the reads took.
+		const out = { steps: [] };
+		window.__sfr = out;
+		if (location.search.includes('child')) {
+			// a document of the page's origin with nothing read yet
+		} else
+			(async () => {
+				localStorage.clear();
+				for (let i = 0; i < 30; i++) localStorage.setItem(`id${i}`, `v${i}`);
+				localStorage.setItem('big', 'b'.repeat(5000) + '\u{1f600}');
+				localStorage.setItem('empty', '');
+				const frame = () =>
+					new Promise((resolve) => {
+						const element = document.createElement('iframe');
+						element.src = 'storage-first-read.html?child';
+						element.onload = () => resolve(element.contentWindow);
+						document.body.append(element);
+					});
+				const a = await frame();
+				const b = await frame();
+				const record = (name, value) => out.steps.push([name, value]);
+				console.log('STEP reads');
+				const store = a.localStorage;
+				const seen = [];
+				for (let i = 0; i < 40; i++) seen.push(store.getItem(`id${i}`));
+				for (let i = 0; i < 20; i++) seen.push(store.getItem(`missing${i}`));
+				record('present and missing keys', seen);
+				record('a large value', store.getItem('big')?.length);
+				record('an empty value', store.getItem('empty'));
+				record('a key named like a method', store.getItem('getItem'));
+				record('the length', store.length);
+				record('the keys', Object.keys(store).sort());
+				record('a property read', [store.id3, store.missing1]);
+				console.log('STEP writes');
+				b.localStorage.setItem('id3', 'changed');
+				record("a frame reads the other frame's write", store.getItem('id3'));
+				b.localStorage.removeItem('id4');
+				record('and its removal', store.getItem('id4'));
+				b.localStorage.setItem('new', 'n');
+				record('and a new key', [store.getItem('new'), store.length]);
+				store.setItem('id5', 'mine');
+				record(
+					"the other frame reads this one's write",
+					b.localStorage.getItem('id5'),
+				);
+				localStorage.clear();
+				record("and the page's clear", [store.getItem('id1'), store.length]);
+				out.done = true;
+			})().catch((error) => {
+				out.error = String(error);
+				out.done = true;
+			});
+	</script>
+</body>

@@ -91,6 +91,11 @@ export default class StorageModule extends Module<DocumentClient> {
 			 * no question to the worker
 			 */
 			usage: number | null;
+			/**
+			 * `keys` is every key and `values` has every small one (getSmall):
+			 * a key that is in neither is missing
+			 */
+			whole?: boolean;
 		}
 		const caches = new Map<string, ReadCache>();
 		let stamps: Storage | null = null;
@@ -123,6 +128,7 @@ export default class StorageModule extends Module<DocumentClient> {
 				cache.values.clear();
 				cache.keys = null;
 				cache.usage = null;
+				cache.whole = false;
 				cache.version = version;
 			}
 			return cache;
@@ -149,6 +155,7 @@ export default class StorageModule extends Module<DocumentClient> {
 			if (version === null) {
 				cache.values.clear();
 				cache.keys = null;
+				cache.whole = false;
 				return;
 			}
 			cache.version = version;
@@ -172,6 +179,7 @@ export default class StorageModule extends Module<DocumentClient> {
 			if (!cache) return;
 			cache.values.clear();
 			cache.keys = null;
+			cache.whole = false;
 			if (!own) {
 				cache.usage = null;
 				return;
@@ -244,6 +252,10 @@ export default class StorageModule extends Module<DocumentClient> {
 			value: string | null,
 		) => {
 			const shadow = pendingOf(directory);
+			// the copy has it now, and every other document reads the store
+			// again, from the worker, which waits for this write: a copy of the
+			// whole store would say a key it sets is missing until it lands
+			wrote(directory, key, value);
 			const seq = shadow.seq++;
 			shadow.inflight.add(seq);
 			// every operation before the oldest in flight has landed, so a
@@ -257,13 +269,21 @@ export default class StorageModule extends Module<DocumentClient> {
 					entry.seq = seq;
 				}
 			} else shadow.values.set(key, { value, seq });
-			// landed (or lost): from now on every document reads the worker's
-			const settle = () => {
+			// landed (or lost): from now on every other document reads the
+			// worker's, and this one keeps the copy it applied the write to
+			// unless the write was lost
+			const settle = (landed: boolean) => {
 				shadow.inflight.delete(seq);
 				if (shadow.cleared === seq) shadow.cleared = null;
 				for (const [item, entry] of shadow.values)
 					if (entry.seq === seq) shadow.values.delete(item);
-				changed(directory, true);
+				if (!landed) changed(directory, true);
+				else {
+					const cache = current(directory);
+					const version = cache && stamp(cache);
+					if (cache && version !== null) cache.version = version;
+					else changed(directory, true);
+				}
 			};
 			// the origin and the key as the codec writes a URL: the request is
 			// the proxy's own, but its address names them no more than a route
@@ -275,10 +295,13 @@ export default class StorageModule extends Module<DocumentClient> {
 				origin: client.codec.encode(keyOf(directory)),
 			};
 			if (key !== null) operation.key = client.codec.encode(key);
-			post(directory, operation, args).then(settle, (error) => {
-				console.error(`Stomp: a storage write could not be stored: ${error}`);
-				settle();
-			});
+			post(directory, operation, args).then(
+				() => settle(true),
+				(error) => {
+					console.error(`Stomp: a storage write could not be stored: ${error}`);
+					settle(false);
+				},
+			);
 		};
 
 		/** `value` of `key` as this document sees it; undefined: ask the worker */
@@ -460,7 +483,19 @@ export default class StorageModule extends Module<DocumentClient> {
 				if (shadow !== undefined) return shadow;
 
 				const cache = current(this.#directory);
+				if (cache && !cache.whole && !cache.values.size) {
+					// the first read of the store takes every key and small value
+					const [keys, small]: [string[], [string, string][]] =
+						syncModule.jsonAPI(
+							`${dirOf(this.#directory)}getSmall`,
+							keyOf(this.#directory),
+						);
+					cache.keys = keys;
+					for (const [item, value] of small) cache.values.set(item, value);
+					cache.whole = true;
+				}
 				if (cache?.values.has(key)) return cache.values.get(key)!;
+				if (cache?.whole && !cache.keys!.includes(key)) return null;
 
 				const result = readItem(this.#directory, key);
 				cache?.values.set(key, result);

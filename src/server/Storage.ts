@@ -35,6 +35,10 @@ const sizeOf = (item: string, value: string) => item.length + value.length;
  * one is read in parts.
  */
 const PART_BYTES = 256 * 1024;
+/** the largest value a store's first read takes with the rest (getSmall) */
+const SMALL_VALUE = 2048;
+/** and the most of them, in characters, about 20 of the bridge's cookies */
+const SMALL_TOTAL = 48 * 1024;
 
 /** what `part` costs in the bridge's cookies: JSON twice, then escaped */
 const answerCost = (part: string) =>
@@ -414,6 +418,29 @@ export default class Storage {
 				url,
 			});
 	}
+	/**
+	 * Every key of `origin`'s store, in getKeys' order, and the small values
+	 * with their keys: a document's first read takes them all at once (an
+	 * ad library reads dozens of keys, most of them missing, and each read
+	 * was a synchronous round trip). Values over SMALL_VALUE, or past
+	 * SMALL_TOTAL, are read on their own.
+	 */
+	async getSmall(origin: string): Promise<[string[], [string, string][]]> {
+		const entries: ItemEntry[] = await this.db.getAllFromIndex(
+			this.store,
+			'origin',
+			IDBKeyRange.only(origin),
+		);
+		let room = SMALL_TOTAL;
+		const small: [string, string][] = [];
+		for (const { item, value } of entries)
+			if (
+				value.length <= SMALL_VALUE &&
+				(room -= item.length + value.length) > 0
+			)
+				small.push([item, value]);
+		return [entries.map(({ item }) => item), small];
+	}
 	async getKeys(origin: string): Promise<string[]> {
 		return (
 			await this.db.getAllFromIndex(
@@ -612,6 +639,7 @@ export function registerStorage(
 			'setItem',
 			'removeItem',
 			'getKeys',
+			'getSmall',
 			'clear',
 			'ordered',
 		]) {
