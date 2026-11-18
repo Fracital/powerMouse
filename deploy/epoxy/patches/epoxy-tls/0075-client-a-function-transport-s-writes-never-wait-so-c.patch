@@ -1,0 +1,180 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Wed, 18 Nov 2026 18:30:00 -0500
+Subject: [PATCH] client: a function transport's writes never wait, so concurrent requests over it no longer hang the wisp connection
+
+A function transport's write side was wasm-streams' IntoSink, whose
+poll_ready and poll_flush wait on the WritableStream's `ready` and `write`
+promises, which settle a microtask later at the soonest. The sink is shared
+by every stream of the wisp connection behind wisp-mux's lock, and a writer
+that met Pending while holding it kept it. rustls polls poll_flush once
+during a handshake; when that is Pending it goes on to read and does not
+flush again before the server answers. The multiplexor's actor then waited
+for the lock to send the next stream's CONNECT and read nothing meanwhile,
+so the answer never came: two requests started together, one of them over
+TLS, hung every request on the connection. epoxy's WebSocket sink is ready
+at once and never met it.
+
+Measured in Chrome 157 with a WebSocket behind a function transport (a
+write that sends synchronously, and one that also waits a macrotask):
+https://easylist.to/ with two plain HTTP requests beside it hung all three
+(only the TLS stream's CONNECT and ClientHello went out); the same requests
+in sequence, or plain HTTP only, loaded. Over a WebTransport session every
+page load that fetched more than one origin at once hung.
+
+The sink now hands each packet to the stream's writer at once, as the
+WebSocket's `send` does, and never waits: poll_ready and poll_flush are
+ready unless a write was rejected, which fails every later poll. The
+stream queues what it has not written yet, in order.
+---
+--- a/client/src/lib.rs
++++ b/client/src/lib.rs
+@@ -387,11 +387,9 @@
+ 			)) as ProviderWispTransportRead;
+ 
+ 			let write: WritableStream = object_get(&transport, "write").into();
+-			let write = Box::pin(WispTransportWrite(
+-				wasm_streams::WritableStream::from_raw(write)
+-					.try_into_sink()
+-					.map_err(|x| EpoxyError::wisp_transport(x.0.into()))?,
+-			)) as ProviderWispTransportWrite;
++			let write = Box::pin(
++				WispTransportWrite::new(&write).map_err(EpoxyError::wisp_transport)?,
++			) as ProviderWispTransportWrite;
+ 
+ 			Ok((read, write))
+ 		}))
+--- a/client/src/utils/mod.rs
++++ b/client/src/utils/mod.rs
+@@ -8,16 +8,18 @@
+ pub use js::*;
+ use js_sys::Uint8Array;
+ pub use rustls::*;
+-use wasm_streams::writable::IntoSink;
++use wasm_streams::writable::sys::{WritableStream, WritableStreamDefaultWriter};
+ use wisp_mux::{ws::Payload, WispError};
+ 
+ use std::{
++	cell::RefCell,
+ 	pin::Pin,
++	rc::Rc,
+ 	task::{Context, Poll},
+ };
+ 
+ use bytes::{buf::UninitSlice, BufMut, Bytes, BytesMut};
+-use futures_util::{ready, AsyncRead, Future, Sink, SinkExt, Stream};
++use futures_util::{ready, AsyncRead, Future, Sink, Stream};
+ use http::{HeaderValue, Uri};
+ use hyper::rt::Executor;
+ use pin_project_lite::pin_project;
+@@ -173,32 +175,86 @@
+ 	}
+ }
+ 
+-pub struct WispTransportWrite(pub IntoSink<'static>);
++/// The write side of a function transport: each packet goes to the page's
++/// WritableStream at once, and the sink never waits, as epoxy's own
++/// WebSocket's `send` does not.
++///
++/// The sink is shared by every stream of the wisp connection behind a lock,
++/// and a writer that met Pending while holding it kept it: rustls polls
++/// `poll_flush` once during a handshake, and when that is Pending it goes
++/// on to read and does not flush again before the server answers. The
++/// multiplexor's actor then waited for the lock to send the next stream's
++/// CONNECT, and read nothing meanwhile, so the answer never came: two
++/// requests started together, one of them over TLS, hung the whole wisp
++/// connection. A WebSocket's sink is ready at once and never met this; a
++/// WritableStream's `ready` and `write` promises settle a microtask later
++/// at the soonest, so every function transport did.
++///
++/// The stream queues what it has not written yet, in order, and the first
++/// write it rejects fails every later poll.
++pub struct WispTransportWrite {
++	writer: WritableStreamDefaultWriter,
++	failed: Rc<RefCell<Option<JsValue>>>,
++	closed: bool,
++}
+ unsafe impl Send for WispTransportWrite {}
+ 
++impl WispTransportWrite {
++	pub fn new(stream: &WritableStream) -> Result<Self, JsValue> {
++		Ok(Self {
++			writer: stream.get_writer()?,
++			failed: Rc::new(RefCell::new(None)),
++			closed: false,
++		})
++	}
++
++	fn failed(&self) -> Result<(), WispError> {
++		match &*self.failed.borrow() {
++			Some(err) => Err(WispError::WsImplError(Box::new(
++				EpoxyError::wisp_transport(err.clone()),
++			))),
++			None => Ok(()),
++		}
++	}
++
++	fn watch(&self, promise: js_sys::Promise) {
++		let failed = self.failed.clone();
++		wasm_bindgen_futures::spawn_local(async move {
++			if let Err(err) = wasm_bindgen_futures::JsFuture::from(promise).await {
++				failed.borrow_mut().get_or_insert(err);
++			}
++		});
++	}
++}
++
+ impl Sink<Payload> for WispTransportWrite {
+ 	type Error = WispError;
+ 
+-	fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+-		self.0
+-			.poll_ready_unpin(cx)
+-			.map_err(|x| WispError::WsImplError(Box::new(EpoxyError::wisp_transport(x))))
+-	}
+-
+-	fn start_send(mut self: Pin<&mut Self>, item: Payload) -> Result<(), Self::Error> {
+-		self.0
+-			.start_send_unpin(Uint8Array::from(item.as_ref()).into())
+-			.map_err(|x| WispError::WsImplError(Box::new(EpoxyError::wisp_transport(x))))
+-	}
+-
+-	fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+-		self.0
+-			.poll_flush_unpin(cx)
+-			.map_err(|x| WispError::WsImplError(Box::new(EpoxyError::wisp_transport(x))))
+-	}
+-	fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+-		self.0
+-			.poll_close_unpin(cx)
+-			.map_err(|x| WispError::WsImplError(Box::new(EpoxyError::wisp_transport(x))))
++	fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
++		Poll::Ready(self.failed())
++	}
++
++	fn start_send(self: Pin<&mut Self>, item: Payload) -> Result<(), Self::Error> {
++		self.failed()?;
++		if self.closed {
++			return Err(WispError::WsImplSocketClosed);
++		}
++		self.watch(
++			self.writer
++				.write_with_chunk(&Uint8Array::from(item.as_ref()).into()),
++		);
++		Ok(())
++	}
++
++	fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
++		Poll::Ready(self.failed())
++	}
++
++	fn poll_close(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
++		if !self.closed {
++			self.closed = true;
++			self.watch(self.writer.close());
++		}
++		Poll::Ready(Ok(()))
+ 	}
+ }
+-- 
+2.47.0
