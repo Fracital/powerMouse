@@ -32,11 +32,15 @@ export function resolveHttp3<T extends ConstructibleTransport>(
 	};
 }
 
-export async function constructTransport({
-	module,
-	options,
-	http3,
-}: ConstructibleTransport): Promise<ProxyTransport> {
+/**
+ * `h3Worker`: the transport worker's script, which stomp-h3 runs in a
+ * worker of its own from (http3/h3Thread.ts); without it stomp-h3 runs in
+ * this realm.
+ */
+export async function constructTransport(
+	{ module, options, http3 }: ConstructibleTransport,
+	h3Worker?: string,
+): Promise<ProxyTransport> {
 	const { default: Transport } = (await import(/* @vite-ignore */ module)) as {
 		default: new (...args: unknown[]) => ProxyTransport;
 	};
@@ -59,5 +63,6 @@ export async function constructTransport({
 		transport,
 		h3,
 		new URL('h3/stomp_h3.js', module).href,
+		h3Worker,
 	);
 }

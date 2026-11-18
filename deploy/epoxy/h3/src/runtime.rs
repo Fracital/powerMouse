@@ -22,6 +22,7 @@ impl Runtime for BrowserRuntime {
 		Box::pin(Timer {
 			deadline,
 			sleep: None,
+			armed: deadline,
 		})
 	}
 
@@ -33,6 +34,8 @@ impl Runtime for BrowserRuntime {
 struct Timer {
 	deadline: Instant,
 	sleep: Option<SendWrapper<TimeoutFuture>>,
+	/// when the running setTimeout fires (meaningful while `sleep` is set)
+	armed: Instant,
 }
 
 impl fmt::Debug for Timer {
@@ -42,9 +45,16 @@ impl fmt::Debug for Timer {
 }
 
 impl AsyncTimer for Timer {
+	// quinn resets its connection timer on every poll, mostly to a later
+	// deadline (a packet arrived, the idle or loss timer moved on): a
+	// setTimeout already running that fires no later is kept, and the poll
+	// re-arms for what is left when it fires early, instead of a
+	// clearTimeout and a new setTimeout per packet
 	fn reset(mut self: Pin<&mut Self>, deadline: Instant) {
 		self.deadline = deadline;
-		self.sleep = None;
+		if self.sleep.is_some() && self.armed > deadline {
+			self.sleep = None;
+		}
 	}
 
 	fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<()> {
@@ -56,6 +66,7 @@ impl AsyncTimer for Timer {
 			}
 			if self.sleep.is_none() {
 				let ms = (self.deadline - now).as_micros().div_ceil(1000);
+				self.armed = self.deadline;
 				self.sleep = Some(SendWrapper::new(TimeoutFuture::new(ms.min(u32::MAX as u128) as u32)));
 			}
 			let sleep = self.sleep.as_mut().unwrap();

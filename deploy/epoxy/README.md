@@ -102,6 +102,7 @@ fails the build at `git apply --check`.
 | hyperium/hyper                                                 | `0052` | `Error::is_empty_response()`: the request's connection ended before any byte of its response (HTTP/1: none read since its head was written; HTTP/2: GOAWAY or a closed connection before its head), and `Error::is_refused_stream()`: an HTTP/2 `REFUSED_STREAM` reset. A kept connection the server closed as a request reached it read as any other IncompleteMessage.          |
 | r58Playz/hyper-util-wasm                                       | `0052` | `Error::is_reused_connection()`: a request that went out and then lost its connection says whether the pool had kept that connection (it came back as `SendRequest` with no record of it), and a response over a kept connection carries a `ReusedConnection` extension.                                                                                                          |
 | MercuryWorkshop/epoxy-tls                                      | `0073` | A request goes again when Chrome sends it again (`ShouldResendRequest`): a kept connection that ended before any byte of a response, whatever the method; a 408 on a kept HTTP/1 connection; a refused HTTP/2 stream, twice at most. Not a fresh connection's, one whose response had begun, or a streaming body (`idle-close-retry` suite).                                      |
+| MercuryWorkshop/epoxy-tls                                      | `0074` | A write of a Uint8Array or ArrayBuffer (a socket's chunk, a UDP datagram, a streamed request body's chunk) is taken as it is; each went through `new Request("", { body }).arrayBuffer()`, a Request, a promise and a task's wait, before every ACK an HTTP/3 connection sent. Anything else still goes through the Request.                                                      |
 
 ## stomp-h3 (`h3/`)
 
@@ -137,7 +138,14 @@ on and an origin offers h3 (docs/http3.md).
   parameters: no min_ack_delay, a 65536 max_datagram_frame_size,
   version_information and google_connection_options) and `0002` (those
   two each in a random place, a random reserved version in random order
-  next to version 1). `src/lib.rs` adds
+  next to version 1), and `0003` (ACKs decimated as Chrome's: every
+  second ack-eliciting packet for the first 100, then every tenth or after
+  a quarter of the minimum RTT, at most max_ack_delay, as quiche's
+  QuicReceivedPacketManager). It vendors ring 0.17.14 with
+  `h3/patches/ring/0001` (its bitsliced AES in 64-bit words on wasm32,
+  four blocks a batch, as on a 64-bit target), and builds ring and the
+  brotli and compression decoders at `opt-level = 3`, the rest for size.
+  `src/lib.rs` adds
   X25519MLKEM768 (`src/mlkem.rs`, as in epoxy), brotli certificates, empty
   source connection ids, an 8-byte first destination id, no greased
   fixed bit, every Initial padded to 1250 bytes and no path MTU probes, as

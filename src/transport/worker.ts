@@ -8,6 +8,7 @@
 // the worker asks for them over its control channel.
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import { constructTransport, resolveHttp3 } from './construct';
+import { H3_WORKER_NAME, serveH3 } from './http3/h3Thread';
 import { jarChanged, serveJar } from './jarServer';
 import {
 	KEEPALIVE_MS,
@@ -21,11 +22,6 @@ import serveTransport, { warmTransport } from './serveTransport';
 
 declare const self: DedicatedWorkerGlobalScope;
 
-let transport: ProxyTransport | undefined;
-/** settles once the first transport exists; serve() waits for it */
-let first!: () => void;
-const ready = new Promise<void>((resolve) => (first = resolve));
-
 function construct(descriptor: TransportModule): Promise<ProxyTransport> {
 	return constructTransport(
 		resolveHttp3(
@@ -35,6 +31,8 @@ function construct(descriptor: TransportModule): Promise<ProxyTransport> {
 			},
 			location.href,
 		),
+		// stomp-h3 runs in a worker of its own, started from this script
+		location.href,
 	);
 }
 
@@ -44,59 +42,70 @@ function resolverOf(descriptor: TransportModule): string | undefined {
 	return typeof options?.ech_dns === 'string' ? options.ech_dns : undefined;
 }
 
-const rpc = new RpcHelper<WorkerBound, WorkerToController>(
-	{
-		init: async (descriptor) => {
-			transport = await construct(descriptor);
-			warmTransport(transport, resolverOf(descriptor));
-			first();
-		},
-		setTransport: async (descriptor) => {
-			transport = await construct(descriptor);
-			warmTransport(transport, resolverOf(descriptor));
-		},
-		serve: async (port) => {
-			await ready;
-			serveTransport(
-				port,
-				() => transport!,
-				async (url, headers) =>
-					rpc.call('decorate', { url: url.href, headers }),
-				async (url, origin) => rpc.call('admit', { url: url.href, origin }),
-			);
-		},
-		serveDecorated: async ({ port, decorate }) => {
-			await ready;
-			// the handshake headers are asked of whoever sent the port (a
-			// slot's controller)
-			const asked = new RpcHelper<Record<never, never>, WorkerToController>(
-				{},
-				TRANSPORT_WORKER_RPC,
-				(data, transfer) => decorate.postMessage(data, transfer),
-			);
-			decorate.addEventListener('message', (event) =>
-				asked.receive(event.data),
-			);
-			decorate.start();
-			serveTransport(
-				port,
-				() => transport!,
-				async (url, headers) =>
-					asked.call('decorate', { url: url.href, headers }),
-				async (url, origin) => asked.call('admit', { url: url.href, origin }),
-			);
-		},
-		serveJar: async (port) => serveJar(port),
-		jarChanged: async (domain) => jarChanged(domain),
-	},
-	TRANSPORT_WORKER_RPC,
-	(data, transfer) => self.postMessage(data, transfer),
-);
+// the transport worker starts itself again for stomp-h3 (http3/h3Thread.ts)
+if (self.name === H3_WORKER_NAME) serveH3(self);
+else transportWorker();
 
-self.addEventListener('message', (event) => rpc.receive(event.data));
+function transportWorker() {
+	let transport: ProxyTransport | undefined;
+	/** settles once the first transport exists; serve() waits for it */
+	let first!: () => void;
+	const ready = new Promise<void>((resolve) => (first = resolve));
 
-// the controller's clock for keeping the service worker running: a timer
-// here is not held back when the tab is hidden, the page's own is
-setInterval(() => {
-	rpc.call('tick', undefined).catch(() => {});
-}, KEEPALIVE_MS);
+	const rpc = new RpcHelper<WorkerBound, WorkerToController>(
+		{
+			init: async (descriptor) => {
+				transport = await construct(descriptor);
+				warmTransport(transport, resolverOf(descriptor));
+				first();
+			},
+			setTransport: async (descriptor) => {
+				transport = await construct(descriptor);
+				warmTransport(transport, resolverOf(descriptor));
+			},
+			serve: async (port) => {
+				await ready;
+				serveTransport(
+					port,
+					() => transport!,
+					async (url, headers) =>
+						rpc.call('decorate', { url: url.href, headers }),
+					async (url, origin) => rpc.call('admit', { url: url.href, origin }),
+				);
+			},
+			serveDecorated: async ({ port, decorate }) => {
+				await ready;
+				// the handshake headers are asked of whoever sent the port (a
+				// slot's controller)
+				const asked = new RpcHelper<Record<never, never>, WorkerToController>(
+					{},
+					TRANSPORT_WORKER_RPC,
+					(data, transfer) => decorate.postMessage(data, transfer),
+				);
+				decorate.addEventListener('message', (event) =>
+					asked.receive(event.data),
+				);
+				decorate.start();
+				serveTransport(
+					port,
+					() => transport!,
+					async (url, headers) =>
+						asked.call('decorate', { url: url.href, headers }),
+					async (url, origin) => asked.call('admit', { url: url.href, origin }),
+				);
+			},
+			serveJar: async (port) => serveJar(port),
+			jarChanged: async (domain) => jarChanged(domain),
+		},
+		TRANSPORT_WORKER_RPC,
+		(data, transfer) => self.postMessage(data, transfer),
+	);
+
+	self.addEventListener('message', (event) => rpc.receive(event.data));
+
+	// the controller's clock for keeping the service worker running: a timer
+	// here is not held back when the tab is hidden, the page's own is
+	setInterval(() => {
+		rpc.call('tick', undefined).catch(() => {});
+	}, KEEPALIVE_MS);
+}

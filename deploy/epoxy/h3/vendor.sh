@@ -29,3 +29,4 @@ fetch h3 0.0.8 10872b55cfb02a821b69dc7cf8dc6a71d6af25eb9a79662bec4a9d016056b3be
 # the release epoxy-tls pins, so the one patch applies to both
 fetch rustls 0.23.29 2491382039b29b9b11ff08b76ff6c97cf287671dbb74f0be44bda389fffe9bd1
 fetch quinn-proto 0.11.19 0e750cca55fe4f0439a15d0bb529da9651e79993e8e72c61a899a36d462befbe
+fetch ring 0.17.14 a4689e6c2294d81e88dc6261c768b63bc4fcdb852be6d1352498b114f61383b7

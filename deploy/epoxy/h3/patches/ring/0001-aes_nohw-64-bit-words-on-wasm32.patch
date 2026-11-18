@@ -1,0 +1,140 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Wed, 18 Nov 2026 15:30:00 -0500
+Subject: [PATCH] aes_nohw: 64-bit words on wasm32
+
+ring has no AES instructions on wasm32 and takes its constant-time
+bitsliced AES (aes_nohw.c), in 32-bit words, two blocks a batch, as on
+any target without OPENSSL_64_BIT. wasm32 has 64-bit integer operations
+of its own, so it now takes the 64-bit words, four blocks a batch, as a
+64-bit target does: the same algorithm and the same constant-time code,
+about a fifth less time in AES-GCM for an HTTP/3 download.
+---
+ crypto/fipsmodule/aes/aes_nohw.c | 32 +++++++++++++++++++-------------
+ 1 file changed, 19 insertions(+), 13 deletions(-)
+
+--- a/crypto/fipsmodule/aes/aes_nohw.c
++++ b/crypto/fipsmodule/aes/aes_nohw.c
+@@ -51,7 +51,13 @@
+ // uses row-major order. Matching the AES order was easier to reason about, and
+ // we do not have PSHUFB available to arbitrarily permute bytes.
+ 
+-#if defined(OPENSSL_64_BIT)
++// wasm32 has 64-bit integer operations of its own: it takes the 64-bit
++// words (four blocks a batch) too, as a 64-bit target does
++#if defined(OPENSSL_64_BIT) || defined(__wasm__)
++#define AES_NOHW_64
++#endif
++
++#if defined(AES_NOHW_64)
+ typedef uint64_t aes_word_t;
+ #define AES_NOHW_WORD_SIZE 8
+ #define AES_NOHW_BATCH_SIZE 4
+@@ -59,7 +65,7 @@
+ #define AES_NOHW_ROW1_MASK UINT64_C(0x00f000f000f000f0)
+ #define AES_NOHW_ROW2_MASK UINT64_C(0x0f000f000f000f00)
+ #define AES_NOHW_ROW3_MASK UINT64_C(0xf000f000f000f000)
+-#else  // !OPENSSL_64_BIT
++#else  // !AES_NOHW_64
+ typedef uint32_t aes_word_t;
+ #define AES_NOHW_WORD_SIZE 4
+ #define AES_NOHW_BATCH_SIZE 2
+@@ -67,7 +73,7 @@
+ #define AES_NOHW_ROW1_MASK 0x0c0c0c0c
+ #define AES_NOHW_ROW2_MASK 0x30303030
+ #define AES_NOHW_ROW3_MASK 0xc0c0c0c0
+-#endif  // OPENSSL_64_BIT
++#endif  // AES_NOHW_64
+ 
+ static inline aes_word_t aes_nohw_and(aes_word_t a, aes_word_t b) {
+   return a & b;
+@@ -176,7 +182,7 @@
+   // along diagonals of |AES_NOHW_BATCH_SIZE| by |AES_NOHW_BATCH_SIZE| squares
+   // will be correctly placed.)
+   dev_assert_secret(i < AES_NOHW_BATCH_SIZE);
+-#if defined(OPENSSL_64_BIT)
++#if defined(AES_NOHW_64)
+   batch->w[i] = in[0];
+   batch->w[i + 4] = in[1];
+ #else
+@@ -193,7 +199,7 @@
+                                       aes_word_t out[AES_NOHW_BLOCK_WORDS],
+                                       size_t i) {
+   dev_assert_secret(i < AES_NOHW_BATCH_SIZE);
+-#if defined(OPENSSL_64_BIT)
++#if defined(AES_NOHW_64)
+   out[0] = batch->w[i];
+   out[1] = batch->w[i + 4];
+ #else
+@@ -221,7 +227,7 @@
+ //
+ // These transformations are generalizations of the output of
+ // http://programming.sirrida.de/calcperm.php on smaller inputs.
+-#if defined(OPENSSL_64_BIT)
++#if defined(AES_NOHW_64)
+ static inline uint64_t aes_nohw_compact_word(uint64_t a) {
+ #if defined(RING_BIG_ENDIAN)
+   a = CRYPTO_bswap8(a);
+@@ -252,7 +258,7 @@
+ #endif
+   return a;
+ }
+-#else   // !OPENSSL_64_BIT
++#else   // !AES_NOHW_64
+ static inline uint32_t aes_nohw_compact_word(uint32_t a) {
+ #if defined(RING_BIG_ENDIAN)
+   a = CRYPTO_bswap4(a);
+@@ -291,12 +297,12 @@
+   return (uint8_t)a;
+ }
+ 
+-#endif  // OPENSSL_64_BIT
++#endif  // AES_NOHW_64
+ 
+ static inline void aes_nohw_compact_block(aes_word_t out[AES_NOHW_BLOCK_WORDS],
+                                           const uint8_t in[16]) {
+   OPENSSL_memcpy(out, in, 16);
+-#if defined(OPENSSL_64_BIT)
++#if defined(AES_NOHW_64)
+   uint64_t a0 = aes_nohw_compact_word(out[0]);
+   uint64_t a1 = aes_nohw_compact_word(out[1]);
+   out[0] = (a0 & UINT64_C(0x00000000ffffffff)) | (a1 << 32);
+@@ -320,7 +326,7 @@
+ 
+ static inline void aes_nohw_uncompact_block(
+     uint8_t out[16], const aes_word_t in[AES_NOHW_BLOCK_WORDS]) {
+-#if defined(OPENSSL_64_BIT)
++#if defined(AES_NOHW_64)
+   uint64_t a0 = in[0];
+   uint64_t a1 = in[1];
+   uint64_t b0 =
+@@ -362,7 +368,7 @@
+ // is repeated to the full width of |aes_word_t|.
+ static inline void aes_nohw_swap_bits(aes_word_t *a, aes_word_t *b,
+                                       uint32_t mask, aes_word_t shift) {
+-#if defined(OPENSSL_64_BIT)
++#if defined(AES_NOHW_64)
+   aes_word_t mask_w = (((uint64_t)mask) << 32) | mask;
+ #else
+   aes_word_t mask_w = mask;
+@@ -606,7 +612,7 @@
+ // aes_nohw_rotate_rows_down returns |v| with the rows in each column rotated
+ // down by one.
+ static inline aes_word_t aes_nohw_rotate_rows_down(aes_word_t v) {
+-#if defined(OPENSSL_64_BIT)
++#if defined(AES_NOHW_64)
+   return ((v >> 4) & UINT64_C(0x0fff0fff0fff0fff)) |
+          ((v << 12) & UINT64_C(0xf000f000f000f000));
+ #else
+@@ -617,7 +623,7 @@
+ // aes_nohw_rotate_rows_twice returns |v| with the rows in each column rotated
+ // by two.
+ static inline aes_word_t aes_nohw_rotate_rows_twice(aes_word_t v) {
+-#if defined(OPENSSL_64_BIT)
++#if defined(AES_NOHW_64)
+   return ((v >> 8) & UINT64_C(0x00ff00ff00ff00ff)) |
+          ((v << 8) & UINT64_C(0xff00ff00ff00ff00));
+ #else
+-- 
+2.47.0
+
