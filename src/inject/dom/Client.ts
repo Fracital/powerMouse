@@ -41,7 +41,6 @@ import {
 } from '../../prewrite';
 import { refererFor, type ReferrerInfo } from '../../referrerPolicy';
 import {
-	modifyHTML,
 	nestedMarkOf,
 	provideShellFacts,
 	provideShellSyncXHR,
@@ -2603,8 +2602,10 @@ export default class DocumentClient extends Client {
 			url,
 			documentURL === 'about:blank' ? 'about:blank' : url,
 		);
+		// (the shell is a deferred part: without it the URL throws, and its
+		// frame keeps the document it had)
 		if (!route)
-			return modifyHTML(
+			return deferred('modifyHTML')(
 				markup,
 				this.url,
 				this.config,

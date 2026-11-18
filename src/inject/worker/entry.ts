@@ -1,5 +1,7 @@
 import { helperNames } from '../../helperNames';
+import { modifyHTML } from '../../htmlShell';
 import { noticeText } from '../../mixedContentNotices';
+import { setDocumentShells } from '../../rewriteHTML';
 import {
 	SW_PORT,
 	TRANSPORT_INIT,
@@ -54,6 +56,9 @@ reportParts.seen = () => reportsSeen;
 workerStartParts.start = () => workerStart;
 // and what a WebSocket stand-in does (../socketParts.ts)
 socketParts.standIns = () => socketStandIns;
+// and the HTML shell of a data: document it routes (a worker routes no XML
+// one: it goes as it is)
+setDocumentShells((name) => (name === 'modifyHTML' ? modifyHTML : undefined));
 /** set once the bootstrap came without a transport (a worker of a worker): nothing carries its sessions */
 let transportless = false;
 webTransportParts.carry = () =>

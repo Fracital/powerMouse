@@ -120,8 +120,58 @@
 					policed();
 					return call();
 				};
+			// A document the page makes in a new frame of its own (`setup`
+			// gives it), whose shell is a part: its script posts the origin
+			// it reads, the page's own where the shell ran first, the
+			// proxy's where its markup ran unrewritten; nothing where the
+			// frame was given no document of it
+			const MADE = (origin) =>
+				`<script>parent.postMessage({ made: ${origin} }, '*')<\/script>`;
+			const made = (setup) =>
+				new Promise((resolve) => {
+					const frame = document.createElement('iframe');
+					addEventListener('message', (event) => {
+						if (
+							event.source === frame.contentWindow &&
+							typeof event.data?.made === 'string'
+						)
+							resolve({
+								ran:
+									event.data.made === location.origin
+										? 'injected'
+										: event.data.made,
+							});
+					});
+					document.body.append(frame);
+					try {
+						setup(frame);
+					} catch (error) {
+						resolve({ threw: String(error && error.message) });
+						return;
+					}
+					setTimeout(
+						() =>
+							resolve({
+								ran: false,
+								srcdoc: frame.hasAttribute('srcdoc'),
+								src: frame.getAttribute('src'),
+							}),
+						3000,
+					);
+				});
 			const CALLS = {
 				...CSP_CALLS,
+				srcdoc: () =>
+					made((frame) => {
+						frame.srcdoc = MADE('self.origin');
+					}),
+				// a javascript: URL's markup too large for the worker to serve
+				// (src/inject/Client.ts INLINE_DOCUMENT_MAX): the shell is the
+				// page's (dom/Client.ts javascriptDocument)
+				javascriptDocument: () =>
+					made((frame) => {
+						frame.src = `javascript:${JSON.stringify(MADE('self.origin'))}+' '.repeat(4200000)`;
+					}),
 				getUserMedia: () =>
 					outcome(() => navigator.mediaDevices.getUserMedia({ video: true })),
 				getCurrentPosition: () =>
@@ -192,10 +242,8 @@
 							if (event.source === frame.contentWindow)
 								resolve({ inFrame: event.data.out.formAimed.landed });
 						});
-						frame.srcdoc =
-							'<form target="_parent" action="deferred-refusals-landed.html">' +
-							'<input name="x" value="1"></form>' +
-							'<script>document.forms[0].requestSubmit()<\/script>';
+						// (a fetched document: an srcdoc's shell is a part too)
+						frame.src = 'deferred-refusals-aimed.html';
 						document.body.append(frame);
 						setTimeout(() => resolve({ stayed: true }), 2000);
 					}),

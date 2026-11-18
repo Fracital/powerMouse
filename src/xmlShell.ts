@@ -1,22 +1,24 @@
 // The XML shell (modifyXML), apart from src/rewriteHTML.ts: the worker
 // serves it for every XML document, and in a page it is a deferred part
 // (src/inject/dom/deferredParts.ts), since a document bundle meets an XML
-// document of its own making (a data: URL, an object's copy) so rarely.
+// document of its own making (a data: URL, an object's copy) so rarely. It
+// writes the HTML shell's statements (src/htmlShell.ts), and is evaluated
+// with it.
 import type { Config } from './config';
 import type { PolicyText, ScriptFacts } from './csp';
 import { helperNames } from './helperNames';
-import type { ReferrerInfo } from './referrerPolicy';
 import {
 	keptFacts,
 	libraryScripts,
 	marked,
 	policyTexts,
-	providedShell,
 	referred,
 	scriptFacts,
 	sited,
 	syncXHR,
-} from './rewriteHTML';
+} from './htmlShell';
+import type { ReferrerInfo } from './referrerPolicy';
+import { providedShell } from './rewriteHTML';
 import { injectDocumentJS } from './routeURL';
 import type { SiteFacts } from './siteFacts';
 import type StompURL from './StompURL';

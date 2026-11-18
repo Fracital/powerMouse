@@ -25,7 +25,9 @@
 // page's own that allows them, an eval throws, and an inline script and an
 // inline style the page inserts run and apply nothing, and a frame it
 // refuses still loads nothing (the policy's checks are a part,
-// src/inject/dom/policyChecks.ts). A part is made
+// src/inject/dom/policyChecks.ts); a document the page makes in a frame
+// whose shell is a part (src/htmlShell.ts: an srcdoc, a javascript: URL's
+// markup) is never given to the frame, unrewritten or at all. A part is made
 // synchronously within the call that needs it, so no page code runs between
 // the hook and the part (a download's copy is made after the click went
 // through the page, which the browser's own download had been cancelled
@@ -99,6 +101,8 @@ const REFUSING = [
 	'execCommand',
 	'contextualFragment',
 	'open',
+	'srcdoc',
+	'javascriptDocument',
 ];
 /** the calls that answer with a promise, which rejects */
 const PROMISED = [
@@ -203,6 +207,23 @@ function countNatives() {
 	}
 	if (window.IdentityCredential)
 		IdentityCredential.disconnect = refuse('disconnect');
+	// a document's markup the page made that reaches the browser as it is:
+	// an srcdoc, or a frame's data: URL, with no shell (`createClient` is in
+	// every shell's script)
+	const raw = (name, value) =>
+		(/^srcdoc$/i.test(name) ||
+			(/^src$/i.test(name) && /^\s*data:text\/html/i.test(value))) &&
+		!value.includes('createClient');
+	const setAttribute = Element.prototype.setAttribute;
+	Element.prototype.setAttribute = function (name, value) {
+		if (raw(String(name), String(value))) reached.push('rawDocument');
+		return Reflect.apply(setAttribute, this, [name, value]);
+	};
+	const setAttributeNS = Element.prototype.setAttributeNS;
+	Element.prototype.setAttributeNS = function (namespace, name, value) {
+		if (raw(String(name), String(value))) reached.push('rawDocument');
+		return Reflect.apply(setAttributeNS, this, [namespace, name, value]);
+	};
 	// the realm's own request the inject makes a response document with
 	const open = XMLHttpRequest.prototype.open;
 	XMLHttpRequest.prototype.open = function (...args) {
@@ -251,6 +272,8 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			'execCommand',
 			'contextualFragment',
 			'open',
+			'srcdoc',
+			'javascriptDocument',
 			...POLICED,
 		],
 	);
@@ -267,6 +290,13 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		answer.out?.blankCopy?.loaded === true,
 		JSON.stringify(answer.out?.blankCopy),
 	);
+	for (const call of ['srcdoc', 'javascriptDocument'])
+		ok(
+			`with the parts, a document the page makes (${call}) runs in its shell`,
+			answer.out?.[call]?.ran === 'injected' &&
+				!answer.reached?.includes('rawDocument'),
+			JSON.stringify({ out: answer.out?.[call], reached: answer.reached }),
+		);
 	ok(
 		'with the parts, an XML document a frame loads lands its tree',
 		answer.out?.xmlLoad?.root === 'svg' && answer.out.xmlLoad.landed === true,
@@ -430,7 +460,14 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		out[call]?.threw === 'no parts' || refusedPromise(call);
 	for (const call of REFUSING.filter(
 		(call) =>
-			!['xmlDocument', 'download', 'formAimed', 'navigateOther'].includes(call),
+			![
+				'xmlDocument',
+				'download',
+				'formAimed',
+				'navigateOther',
+				'srcdoc',
+				'javascriptDocument',
+			].includes(call),
 	))
 		ok(
 			`without the parts, ${call} refuses${
@@ -454,6 +491,18 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			out.foreignStats?.promise ?? '',
 		) || /Illegal invocation/.test(out.foreignStats?.threw ?? ''),
 		JSON.stringify(out.foreignStats),
+	);
+	// the frame gets no document of the markup: an srcdoc is not set, a
+	// javascript: URL throws in the frame (its document stays)
+	ok(
+		'without the parts, an srcdoc is refused: the frame gets no srcdoc',
+		out.srcdoc?.ran === false && out.srcdoc.srcdoc === false,
+		JSON.stringify(out.srcdoc),
+	);
+	ok(
+		"without the parts, a javascript: URL's markup is refused: the frame keeps its document",
+		out.javascriptDocument?.ran === false,
+		JSON.stringify(out.javascriptDocument),
 	);
 	ok(
 		'without the parts, a form a frame aims at its parent navigates nothing, neither the copy nor the browser',

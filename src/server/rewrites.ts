@@ -28,6 +28,7 @@ import {
 import { freshFrameDocument } from '../freshFrame';
 import { rewriteLinkHeader } from '../headers';
 import { helperNames } from '../helperNames';
+import { modifyHTML, modifyHTMLStreamed } from '../htmlShell';
 import {
 	delegatedTo,
 	documentIsolates,
@@ -80,14 +81,12 @@ import {
 } from '../rewriteCSS';
 import {
 	isXMLDocumentMime,
-	modifyHTML,
-	modifyHTMLStreamed,
 	modifyRefresh,
 	nestedMarkOf,
 	nestedMarkOfKind,
 	nestedTopOf,
 	routeHTML,
-	setXMLShell,
+	setDocumentShells,
 } from '../rewriteHTML';
 import { modifyJS, RewrittenBy, routeJS, ScriptType } from '../rewriteJS';
 import {
@@ -332,8 +331,8 @@ import { rememberVisitedHop, takeVisitedHop } from './visitedHops';
 // is a new key, so its output never matches the last one's. Kept the same for
 // the inline and the loaded-script paths.
 
-// a data: XML document a route names gets the XML shell
-setXMLShell(modifyXML);
+// a data: document a route names gets its shell
+setDocumentShells((name) => (name === 'modifyHTML' ? modifyHTML : modifyXML));
 const CACHE_GENERATION = REWRITE_GENERATION || BUILD;
 
 export const statusEmpty = [101, 204, 205, 304];

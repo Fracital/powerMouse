@@ -83,6 +83,11 @@
 // (and what routes xml-stylesheet processing instructions and an XML
 // document's prolog, ./instructions.ts, at the first one a document meets)
 //
+// (and the shells of a document the page makes itself that no worker
+// serves, ../../htmlShell.ts and ../../xmlShell.ts, at a document's first
+// srcdoc, object or embed document, javascript: URL markup or data: URL
+// document)
+//
 // (STomp's passkey provider's WebAuthn client is a deferred statement of
 // its own, ./passkeysPart.ts: few documents call WebAuthn, and a top that
 // needs a part here has the statement of all of them; and so are
@@ -98,8 +103,10 @@
 // it): constants and functions only, as the bundle's code reads what it
 // needs when it is called.
 import { compileFilter, proceduralRunner } from '../../blocker/procedural';
+import { modifyHTML } from '../../htmlShell';
 import { noticeText } from '../../mixedContentNotices';
 import { integrityHoldsSync } from '../../sriDigest';
+import { modifyXML } from '../../xmlShell';
 import { accessFailures } from '../accessFailures';
 import { bareClient, socketStandIns } from '../bareClient';
 import { cookieChanges, cookieStoreMethods } from '../cookieStoreMethods';
@@ -129,7 +136,7 @@ import { identityFlow, relyingPartyGuard } from './credentialFlows';
 import { ownStoreRefusal } from './credentialStore';
 import { saveDownload } from './downloadSave';
 import { fetchLater } from './fetchLater';
-import { instructionData, loadXML, modifyXML, xmlProlog } from './instructions';
+import { instructionData, loadXML, xmlProlog } from './instructions';
 import { lazyFonts } from './lazyFonts';
 import { formEncoding, legacyFormQuery, legacyQuery } from './legacyEncoding';
 import { markupMembers } from './markupMembers';
@@ -306,6 +313,10 @@ export const parts = {
 	// the loading of an XML document, at the XML shell's call
 	// (./instructions.ts; Client.loadXML)
 	loadXML,
+	// the shells of a document the page makes that no worker serves, at a
+	// document's first (../../htmlShell.ts, ../../xmlShell.ts; an srcdoc, an
+	// object's copy, a javascript: URL's markup, a data: URL)
+	modifyHTML,
 	modifyXML,
 	ownStoreRefusal,
 	targetAcross,

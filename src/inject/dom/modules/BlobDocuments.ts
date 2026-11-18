@@ -1,7 +1,5 @@
-import { setXMLShell } from '../../../rewriteHTML';
 import Module from '../../Module';
 import DocumentClient from '../Client';
-import { deferred } from '../deferred';
 
 /**
  * A document, a script or a stylesheet the page builds itself in a Blob
@@ -10,7 +8,7 @@ import { deferred } from '../deferred';
  * stays as the page made it (its size and its bytes read back as natively);
  * a load of its blob: URL is routed where it runs (src/inject/modules/
  * ObjectURL.ts): the worker reads the Blob and rewrites it like a fetched
- * one. A data: XML document gets the XML shell here.
+ * one.
  */
 export default class BlobDocumentsModule extends Module<DocumentClient> {
 	/**
@@ -20,9 +18,5 @@ export default class BlobDocumentsModule extends Module<DocumentClient> {
 	nativeBlob!: typeof Blob;
 	apply() {
 		this.nativeBlob = this.client.global.Blob;
-		// a data: XML document gets the XML shell, a deferred part
-		setXMLShell((data, url, config, mime) =>
-			deferred('modifyXML')(data, url, config, mime),
-		);
 	}
 }
