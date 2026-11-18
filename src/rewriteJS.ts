@@ -154,10 +154,13 @@ export const UNREWRITTEN_MODULE_END =
 /**
  * What a script this rewriter cannot rewrite (its parser refuses it, or
  * the rewrite failed) is answered with. One the browser refuses goes as it
- * came, and the page reads the browser's own SyntaxError. One it would run
- * must not run unrewritten, where its code would reach the real globals:
- * it goes with an end no browser compiles (UNREWRITTEN_END, or
- * UNREWRITTEN_MODULE_END for a module).
+ * came, and the page reads the browser's own SyntaxError, with no warning:
+ * nothing of it runs either way, and pages probe their engine with such
+ * code (YouTube's BotGuard evaluates `x='` on every watch and home page).
+ * One it would run must not run unrewritten, where its code would reach
+ * the real globals: it goes with an end no browser compiles
+ * (UNREWRITTEN_END, or UNREWRITTEN_MODULE_END for a module), and the
+ * console says so.
  */
 export function cannotRewrite(
 	script: string,
@@ -166,8 +169,10 @@ export function cannotRewrite(
 	type: ScriptType,
 	why: string,
 ): string {
+	const refused = refusedHere(script, type);
+	if (refused && config.allowInvalidJs !== false) return script;
 	const output = unrewritten(script, url, config, why);
-	if (output !== script || refusedHere(script, type)) return output;
+	if (output !== script || refused) return output;
 	return (
 		script + (isModuleType(type) ? UNREWRITTEN_MODULE_END : UNREWRITTEN_END)
 	);

@@ -923,6 +923,26 @@ console.log(JSON.stringify(answers));`,
 		cannotRewrite('var 1 = 2;', url, config, 'generic', 'a test') ===
 			'var 1 = 2;',
 	);
+	// and without a warning: nothing of it runs, natively or proxied, and
+	// pages probe their engine so (YouTube's BotGuard evaluates `x='` on
+	// every page), where one the browser would run is said once
+	const warned = [];
+	console.warn = (...args) => warned.push(args.join(' '));
+	const probe = cannotRewrite("x='", url, config, 'generic', 'a test');
+	const probed = warned.length;
+	cannotRewrite(taken, url, config, 'generic', 'a test');
+	console.warn = () => {};
+	ok(
+		'one the browser refuses comes back without a warning, one it would run with one',
+		probe === "x='" &&
+			!parses(probe) &&
+			probed === 0 &&
+			warned.length === 1 &&
+			/^Stomp could not rewrite https:\/\/example\.com\/a\.js: a test$/.test(
+				warned[0],
+			),
+		JSON.stringify(warned),
+	);
 	// the wasm rewriter's parser (oxc) takes shapes meriyah once refused and
 	// V8 runs: each of these is rewritten, not refused
 	for (const [what, source, type = 'generic'] of [
