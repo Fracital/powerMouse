@@ -93,8 +93,28 @@ function isInterfacePrototype(object: object): boolean {
 	);
 }
 
-export function applyDescriptors(target: any, from: any): any {
-	Object.defineProperties(target, Object.getOwnPropertyDescriptors(from));
+/** an event handler attribute's name (`onclick`, `onpagereveal`) */
+const HANDLER_NAME = /^on[a-z]+$/;
+
+/**
+ * Copy `from`'s own members onto `target`: a copy of a native prototype,
+ * made as the bundle loads, that the hooks read the browser's members from
+ * (usePrototype, nativeGetter) whatever the page does to the real one. The
+ * event handler attributes are left out: no hook reads a handler through a
+ * copy, and reading their descriptors made the getter and setter of every
+ * handler of Element, HTMLElement and SVGElement (some 300) in every frame,
+ * which no native frame makes until its page reads one (about 19 KB a
+ * frame, frame-cost)
+ */
+export function applyDescriptors(target: object, from: object): void {
+	for (const key of Reflect.ownKeys(from)) {
+		if (typeof key === 'string' && HANDLER_NAME.test(key)) continue;
+		Reflect.defineProperty(
+			target,
+			key,
+			Reflect.getOwnPropertyDescriptor(from, key)!,
+		);
+	}
 }
 
 export function invokeGlobal(that: any, check: any) {
