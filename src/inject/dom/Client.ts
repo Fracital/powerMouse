@@ -1516,6 +1516,12 @@ export default class DocumentClient extends Client {
 	 * (ContentSecurity sets it; gone once it ran)
 	 */
 	namesViolationTargets?: () => void;
+	/**
+	 * Bases about to connect (the inserted node, or those in it): where the
+	 * page's code inserted one a violation may name (./violations.ts
+	 * noteBaseSite sets it, at the first base the page's policy refuses)
+	 */
+	notesBases?: (bases: Element[]) => void;
 	/** whether any policy of this document governs scripts or styles (the inject enforces them against the page's code) */
 	get codeEnforced(): boolean {
 		return this.scriptFacts.code === true || enforcesCode(this.#ownPolicies());
@@ -3417,11 +3423,14 @@ export default class DocumentClient extends Client {
 		if (baseHref !== null && baseHref !== undefined)
 			try {
 				const base = new URL(baseHref, this.url.toString());
-				if (
-					ROUTE_PROTOCOLS.includes(base.protocol) &&
-					!this.baseRefused(base, baseElement!)
-				)
-					this.#parseBase = new StompURL(base, this.url);
+				if (ROUTE_PROTOCOLS.includes(base.protocol)) {
+					const refused = this.baseRefused(base, baseElement!);
+					if (!refused) this.#parseBase = new StompURL(base, this.url);
+					// where in the markup its violation names (a deferred part,
+					// ./violations.ts), for a base the page's policy refuses
+					if (refused || this.pageRefusals('base-uri', base).length)
+						deferred('markupBaseSite')(this, markup, baseElement!);
+				}
 			} catch (error) {
 				// not a URL: the document's own stands
 			}

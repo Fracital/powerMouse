@@ -1000,6 +1000,15 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 
 			// we're about to render
 			const name = htmlName(insert);
+			// (where the page inserts a base a violation may name)
+			if (willConnect)
+				client.notesBases?.(
+					name === 'BASE'
+						? [insert as Element]
+						: queryable !== null
+							? queryIn(insert, queryable, 'base')
+							: [],
+				);
 			// an HTML or an SVG <style>, inserted itself
 			const insertedStyle = client.styleElement(insert);
 			// a script itself, an HTML or an SVG one (whose name is lowercase)

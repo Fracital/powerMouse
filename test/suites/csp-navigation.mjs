@@ -10,7 +10,7 @@
 // judge. navigate-to does nothing, as in Chrome. The violation is the
 // browser's own wherever native Chrome fires one, and names the page's
 // URLs and policy. Compared with the pages loaded natively, in both modes.
-import { caseURL, compareCases, OTHER, report } from '../csp-lib.mjs';
+import { caseURL, compareCases, FIELDS, OTHER, report } from '../csp-lib.mjs';
 import { done, launch } from '../lib.mjs';
 
 const other = OTHER.replace(/\/$/, '');
@@ -201,6 +201,37 @@ const EXPECTED = {
 	},
 };
 
+// Where a form's violation says the code that submitted it was: the page's
+// call of submit() or requestSubmit() for a form into a frame, none for a
+// new window's (natively its navigation is judged later). The browser's
+// names the inject's hook and the inject's names nothing, but for the place
+// the hook noted (src/inject/dom/violations.ts noteFormSite)
+const FORMS = [
+	'form-blank-other',
+	'form-frame-other',
+	'form-frame-redirect-other',
+];
+const PLACED = {
+	'a report-only form-action, where the forms were submitted': {
+		s: 'nav',
+		ro: "form-action 'self'",
+		source: true,
+		probes: FORMS,
+	},
+	"a report-only form-action 'none', where the forms were submitted": {
+		s: 'nav',
+		ro: "form-action 'none'",
+		source: true,
+		probes: [...FORMS, 'form-blank-self'],
+	},
+	'an enforced form-action, where the forms were submitted': {
+		s: 'nav',
+		p: "form-action 'self'",
+		source: true,
+		probes: FORMS,
+	},
+};
+
 const browser = await launch();
 if (process.env.CSP_NATIVE_DUMP) {
 	// the native reports only, for measuring
@@ -210,5 +241,19 @@ if (process.env.CSP_NATIVE_DUMP) {
 		console.log(JSON.stringify({ name, report: await report(page, name) }));
 		await page.close();
 	}
-} else await compareCases(browser, CASES, { expected: EXPECTED });
+} else {
+	await compareCases(browser, CASES, { expected: EXPECTED });
+	await compareCases(browser, PLACED, {
+		fields: [
+			...FIELDS,
+			'sourceFile',
+			'lineNumber',
+			'columnNumber',
+			'isTrusted',
+			'windowEvent',
+			'methods',
+			'alike',
+		],
+	});
+}
 await done(browser);

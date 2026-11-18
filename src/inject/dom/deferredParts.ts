@@ -190,6 +190,9 @@ import { uncontrolledCopies } from './uncontrolledCopies';
 import {
 	dispatchViolation,
 	evalError,
+	markupBaseSite,
+	noteBaseSite,
+	noteFormSite,
 	refusedTrustedPolicy,
 	trustedTypeError,
 	violationPageCode,
@@ -286,6 +289,13 @@ export const parts = {
 	violationShows,
 	violationURL,
 	violationPageCode,
+	// and where a base or a form a violation may name was set or
+	// submitted, at a document's first its policy refuses (./violations.ts;
+	// modules/DOMAttributes.ts, modules/NavigationHint.ts, Client.ts
+	// loadHTML)
+	noteBaseSite,
+	noteFormSite,
+	markupBaseSite,
 	// the page's own policy's checks of its code and of the loads no worker
 	// sees, at the first a document with a policy needs (./policyChecks.ts;
 	// Client.ts), and a data: URL's integrity, which shares their digests

@@ -2780,7 +2780,17 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// the refusal URL each base was given, for the page's href: a hook
 		// that runs again (the base inserted) leaves it, as a write would be
 		// another check of the base, and another violation
-		const refusedBases = new LazyWeakMap<Element, [string, string]>();
+		const refusedBases = new LazyWeakMap<Element, [string, string, string]>();
+		// where the page's code (or the markup) set or inserted a base the
+		// browser may report as refused (../violations.ts noteBaseSite: the
+		// browser's names the hook, the inject's nothing)
+		const noteBase = (element: Element, url: string) => {
+			try {
+				deferred('noteBaseSite')(moduleClient, element, url);
+			} catch (error) {
+				// the part cannot be had: the violation names no place
+			}
+		};
 		domHooksModule.useAttributes(
 			(element) => {
 				const refused = refusedBases.get(element);
@@ -2788,8 +2798,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					refused &&
 					element.getAttribute('href') === refused[1] &&
 					element.getAttributeOG('href') === refused[0]
-				)
+				) {
+					// (inserted: the browser judges it there)
+					noteBase(element, refused[2]);
 					return;
+				}
 				element.restoreAttributesOG('href');
 
 				if (
@@ -2833,10 +2846,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						refusedBases.set(element, [
 							element.getAttributeOG('href')!,
 							refusal,
+							url.href,
 						]);
+						noteBase(element, url.href);
 						element.setAttribute('href', refusal);
 						return;
 					}
+					if (refusals.length) noteBase(element, url.href);
 					reportBase?.(moduleClient, element, url, reported);
 					element.setAttribute(
 						'href',

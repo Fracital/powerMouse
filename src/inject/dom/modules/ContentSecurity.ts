@@ -63,6 +63,7 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 			policy: nativePolicy!,
 			blocked: nativeBlocked!,
 			directive: nativeDirective!,
+			source: native('sourceFile')!,
 			localName: nativeLocalName,
 			attributeNames: nativeAttributeNames,
 			getAttribute: nativeGetAttribute,

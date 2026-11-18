@@ -290,7 +290,19 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 						).toString()}`,
 					);
 				if (!/^https?:$/.test(url.protocol)) return null;
+				const target = own('formtarget')
+					? submitter!.getAttribute('formtarget')
+					: form.getAttribute('target');
 				const policies = moduleClient.hopPolicies('form-action');
+				// where the page's code submitted it, which a violation of it
+				// names, a redirect's too (a new window's navigation names
+				// none, as natively)
+				if (policies)
+					try {
+						deferred('noteFormSite')(moduleClient, url.href, target);
+					} catch (error) {
+						// the part cannot be had: the violation names no place
+					}
 				if (
 					policies &&
 					moduleClient
@@ -333,9 +345,7 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 						0,
 					]);
 				send(url.href, undefined, policies ? { policies } : undefined, [
-					own('formtarget')
-						? submitter!.getAttribute('formtarget')
-						: form.getAttribute('target'),
+					target,
 					false,
 				]);
 			} catch (error) {

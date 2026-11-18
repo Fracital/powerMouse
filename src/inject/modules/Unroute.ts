@@ -631,6 +631,10 @@ export default class UnrouteModule extends Module<Client> {
 		this.#synchronousSite = this.#callerLocation?.() ?? NO_LOCATION;
 		return true;
 	}
+	/** the page's call site, from inside a hook (none: no script of the page's called it) */
+	callerSite(): ErrorLocation {
+		return this.#callerLocation?.() ?? NO_LOCATION;
+	}
 	/** note the page's call site, from inside a hook (#reportSites) */
 	noteReportSite() {
 		if (this.#reportSites.length >= 16) return;

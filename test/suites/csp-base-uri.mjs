@@ -22,8 +22,9 @@
 // A base each kind of base-uri refuses (report-only and enforced, by header
 // and by meta, where a report-only meta is ignored natively) is compared
 // with every field of its violations Chrome sets, where it says the code
-// that inserted the base is and whether the event is its own among them,
-// and how many the page sees.
+// that set or inserted the base is (the page's script and position, or the
+// markup's) and whether the event is its own and the one object every
+// listener is handed among them, and how many the page sees.
 import { report } from '../csp-lib.mjs';
 import {
 	done,
@@ -107,6 +108,16 @@ const CASES = {
 		probes: ['base-parsed', 'base-other'],
 		source: true,
 	},
+	'a report-only base-uri self by header, bases a script inserts': {
+		ro: "base-uri 'self'",
+		probes: ['base-self', 'base-other', 'base-change'],
+		source: true,
+	},
+	'an enforced base-uri self by header, bases a script inserts': {
+		p: "base-uri 'self'",
+		probes: ['base-other', 'base-change'],
+		source: true,
+	},
 	"a report-only base-uri 'none' by meta, ignored": {
 		mro: "base-uri 'none'",
 		b: `${FIXTURE}x/`,
@@ -143,30 +154,12 @@ function trackBaseConsole(page) {
 	return seen;
 }
 
-/** a case's probe outcomes and the violations the page saw, native or proxied */
-/**
- * Where Chrome says the code that made a violation was: through the proxy
- * the browser's names the inject's hook, or the shell's markup, and the
- * inject's names nothing (docs/csp.md, Not yet as natively)
- */
-const POSITION = ['sourceFile', 'lineNumber', 'columnNumber'];
-/**
- * A case's violations as compared: with `source`, every field the probes
- * recorded but `left` (`positions`: only where the code was)
- */
-const events = (value, source, positions = false) =>
+/** a case's violations as compared: with `source`, every field the probes recorded */
+const events = (value, source) =>
 	(value?.events ?? [])
 		.map((event) =>
 			source
-				? JSON.stringify(
-						Object.fromEntries(
-							Object.entries(event).filter(([field]) =>
-								positions
-									? POSITION.includes(field)
-									: !POSITION.includes(field),
-							),
-						),
-					)
+				? JSON.stringify(event)
 				: [event.effectiveDirective, event.blockedURI, event.disposition].join(
 						' ',
 					),
@@ -223,16 +216,6 @@ for (const [mode, base] of [
 				wanted.every((event, index) => event === got[index]),
 			JSON.stringify({ native: wanted, proxied: got }),
 		);
-		// (a known difference: the suite fails once it is as natively, and
-		// the line in docs/csp.md goes)
-		const placed = events(want, spec.source, true);
-		if (spec.source && placed.length)
-			ok(
-				`${mode}: ${name}: where the code was is still the known difference`,
-				JSON.stringify(placed) !==
-					JSON.stringify(events(value, spec.source, true)),
-				JSON.stringify(placed),
-			);
 		// where the page's base-uri accepts its own base, the proxy must not
 		// make the browser log a base-uri violation the native page never sees
 		if (spec.baseConsole)

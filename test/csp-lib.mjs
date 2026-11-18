@@ -21,7 +21,20 @@ export const OTHER = FIXTURE.includes('127.0.0.1')
 /** the page of a case named `name` */
 export function caseURL(
 	name,
-	{ p = [], ro = [], m = [], pp = [], b = [], h, s, js, fs, id, probes },
+	{
+		p = [],
+		ro = [],
+		m = [],
+		pp = [],
+		b = [],
+		h,
+		s,
+		js,
+		fs,
+		id,
+		source,
+		probes,
+	},
 ) {
 	const query = new URLSearchParams();
 	for (const policy of [].concat(p)) query.append('p', policy);
@@ -45,6 +58,10 @@ export function caseURL(
 	// `id`: the probes record whether a listener is handed the object
 	// window.event is and every other listener is (test/pages/csp-probes.js)
 	if (id) query.set('identity', '1');
+	// `source`: the navigation probes record where the browser says the code
+	// that made a violation was, and what a listener is handed
+	// (test/pages/csp-navigation-probes.js)
+	if (source) query.set('source', '1');
 	query.set('probes', probes.join(','));
 	query.set('case', name);
 	return `${FIXTURE}csp/doc?${query}`;

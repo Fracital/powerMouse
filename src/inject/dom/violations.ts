@@ -12,10 +12,179 @@
 // the first one that reaches the page.
 import { governing, sourcesMatch, type Policy } from '../../csp';
 import ProxyModule from '../modules/Proxy';
-import { unrouteURL } from '../modules/Unroute';
+import UnrouteModule, {
+	unrouteURL,
+	type ErrorLocation,
+} from '../modules/Unroute';
+import { LazyMap, LazyWeakMap, LazyWeakSet } from '../ownCollections';
 import { dispatchAsTrusted } from '../violationDispatch';
 import type DocumentClient from './Client';
+import { parsedBases } from './cloneNode';
 import { deferred } from './deferred';
+
+/** where the code that made a violation was, as the page reads it: its sourceFile, lineNumber and columnNumber */
+type Site = [string, number, number];
+
+/**
+ * The place each violation names where the browser's named the inject's
+ * hook or the shell's markup, and where the inject's own named none
+ * (placeViolation)
+ */
+const violationSites = new LazyWeakMap<object, Site>();
+/** the realms whose violations read their place from violationSites */
+const placing = new LazyWeakSet<object>();
+/**
+ * Each client's bases and forms the hooks judged: by the directive and the
+ * page's URL (no fragment), where the page's code set, inserted or
+ * submitted it, and whether that was the markup (noteBaseSite,
+ * noteFormSite)
+ */
+const notedSites = new LazyWeakMap<object, LazyMap<string, [Site, boolean]>>();
+
+/** `client`'s noted place of `directive`'s judgement of `url` */
+const noted = (client: DocumentClient, directive: string, url: string) =>
+	notedSites.get(client)?.get(`${directive} ${url.replace(/#.*$/s, '')}`);
+
+/** note a place (notedSites) */
+function note(
+	client: DocumentClient,
+	directive: string,
+	url: string,
+	place: [Site, boolean],
+) {
+	let sites = notedSites.get(client);
+	if (!sites) notedSites.set(client, (sites = new LazyMap()));
+	sites.set(`${directive} ${url.replace(/#.*$/s, '')}`, place);
+}
+
+/** a location of Unroute's as a violation names it */
+const siteOf = (site: ErrorLocation): Site => [
+	sourceName(site.filename),
+	site.lineno,
+	site.colno,
+];
+/** the page's URL of each base noted (noteBaseSite), for its insertion */
+const notedBases = new LazyWeakMap<Element, string>();
+/** where the markup's first base ends, by the parsed base the client read (markupBaseSite) */
+const markupSites = new LazyWeakMap<Element, Site>();
+
+/** a script's or a document's URL as a violation names it: no query, no fragment (measured) */
+const sourceName = (url: string) => url.replace(/[?#].*$/s, '');
+
+/**
+ * The hooks judge a base of the page's URL `url` that the browser may report
+ * as refused (a refusal URL, or a route under a base-uri that allows
+ * nothing) or the inject reports: natively the violation names the page's
+ * code that set its href or inserted it, or, for the markup's, where its
+ * start tag ends. The browser's names the hook (or the shell's markup), the
+ * inject's nothing, so where it was is noted here for violationShows and
+ * dispatchViolation.
+ */
+export function noteBaseSite(
+	client: DocumentClient,
+	element: Element,
+	url: string,
+) {
+	const parsed = parsedBases.get(element);
+	const markup = parsed && markupSites.get(parsed);
+	notedBases.set(element, url);
+	// its insertion is where it is judged next (modules/DOMContentHooks.ts)
+	client.notesBases ??= (bases) => {
+		for (const base of bases) {
+			const url = notedBases.get(base);
+			if (url !== undefined) noteBaseSite(client, base, url);
+		}
+	};
+	note(
+		client,
+		'base-uri',
+		url,
+		markup
+			? [markup, true]
+			: [siteOf(client.getModule(UnrouteModule)!.callerSite()), false],
+	);
+}
+
+/**
+ * The page submits a form to its URL `url` under a form-action (into the
+ * window `target` names, NavigationHint): natively a violation of it, at a
+ * redirect's hop too, names the page's code that submitted it (none for a
+ * new window, whose navigation is judged later, or for no code), where the
+ * browser's names the hook and the inject's nothing
+ */
+export function noteFormSite(
+	client: DocumentClient,
+	url: string,
+	target: string | null,
+) {
+	note(client, 'form-action', url, [
+		/^_blank$/i.test(target ?? '')
+			? ['', 0, 0]
+			: siteOf(client.getModule(UnrouteModule)!.callerSite()),
+		false,
+	]);
+}
+
+/**
+ * The markup's comments, its raw text elements' contents (where a `<base`
+ * is text) and its <base> start tags, in order
+ */
+const MARKUP_BASES =
+	/<!--[\s\S]*?(?:-->|$)|<(script|style|textarea|title|xmp|iframe|noembed|noframes|noscript|plaintext)(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*>[\s\S]*?(?:<\/\1(?=[\s/>])[^>]*>|$)|<base(?=[\s/>])((?:[^>"']|"[^"]*"|'[^']*')*)>/gi;
+
+/**
+ * Where the page's markup's first <base href> ends (the parsed `base` the
+ * client read of `markup`): the place Chrome names for its violation, the
+ * document's URL and the line and column after its start tag (measured),
+ * kept for noteBaseSite
+ */
+export function markupBaseSite(
+	client: DocumentClient,
+	markup: string,
+	base: Element,
+) {
+	for (const match of markup.matchAll(MARKUP_BASES)) {
+		if (
+			match[2] === undefined ||
+			!/(?:^|[\s/"'])href(?![^\s/=>])/i.test(match[2])
+		)
+			continue;
+		const lines = markup
+			.slice(0, match.index + match[0].length)
+			.split(/\r\n?|\n/);
+		markupSites.set(base, [
+			sourceName(client.url.url.href),
+			lines.length,
+			lines[lines.length - 1].length + 1,
+		]);
+		return;
+	}
+}
+
+/**
+ * `event` names `site` as where its code was: its sourceFile, lineNumber
+ * and columnNumber read it (their getters hooked in place at a realm's
+ * first, as the target's is, ./modules/ContentSecurity.ts)
+ */
+function placeViolation(client: DocumentClient, event: Event, site: Site) {
+	violationSites.set(event, site);
+	const global = client.global as typeof globalThis;
+	if (placing.has(global)) return;
+	placing.add(global);
+	const prototype = global.SecurityPolicyViolationEvent.prototype;
+	const proxyModule = client.getModule(ProxyModule)!;
+	['sourceFile', 'lineNumber', 'columnNumber'].forEach((key, index) => {
+		const descriptor = Reflect.getOwnPropertyDescriptor(prototype, key);
+		if (descriptor?.get)
+			Reflect.defineProperty(prototype, key, {
+				...descriptor,
+				get: proxyModule.wrapFunction(descriptor.get, (target, that, args) => {
+					const site = violationSites.get(that as object);
+					return site ? site[index] : Reflect.apply(target, that, args);
+				}),
+			});
+	});
+}
 
 /**
  * Fire a violation of `policy` on `document` as the browser would. Without
@@ -58,6 +227,9 @@ export function dispatchViolation(
 		client.namesViolationTargets?.();
 		client.codeViolationTarget.set(event, node);
 	}
+	// (where the page's code set the base or submitted the form)
+	const place = noted(client, directive, blockedURI);
+	if (place) placeViolation(client, event, place[0]);
 	// it reads trusted (../violationDispatch.ts): each listener of the
 	// document and its window is handed one view of it, as window.event is
 	const global = client.global as typeof globalThis;
@@ -182,6 +354,7 @@ export interface ViolationNatives {
 	policy: Function;
 	blocked: Function;
 	directive: Function;
+	source: Function;
 	localName: Function;
 	attributeNames: Function;
 	getAttribute: Function;
@@ -198,6 +371,47 @@ const SAMPLE_LENGTH = 40;
  * of the page's that allows the page's URL natively reports nothing.
  */
 export function violationShows(
+	client: DocumentClient,
+	natives: ViolationNatives,
+	event: Event,
+): boolean {
+	const shown = shows(client, natives, event);
+	if (shown)
+		try {
+			placeNoted(client, natives, event);
+		} catch (error) {
+			// as the browser names it
+		}
+	return shown;
+}
+
+/**
+ * A base-uri or form-action violation of the browser's that names the
+ * inject's hook (no script of the page's) or the shell's markup (the
+ * document's own route) names where the page's code or markup set the base
+ * or submitted the form (noteBaseSite, noteFormSite), as natively; one the
+ * page's own code made (an unhooked call) names it as the browser does
+ */
+function placeNoted(
+	client: DocumentClient,
+	natives: ViolationNatives,
+	event: Event,
+) {
+	const directive = Reflect.apply(natives.directive, event, []) as string;
+	if (directive !== 'base-uri' && directive !== 'form-action') return;
+	const source = Reflect.apply(natives.source, event, []) as string;
+	const page = source.includes(':') ? unrouteURL(client, source) : null;
+	const shell =
+		page !== null && sourceName(page) === sourceName(client.url.url.href);
+	if (page !== null && !shell) return;
+	const blocked = Reflect.apply(natives.blocked, event, []) as string;
+	const url = client.refusedURI(blocked)?.url ?? unrouteURL(client, blocked);
+	const place = url && noted(client, directive, url);
+	if (place && (!shell || place[1])) placeViolation(client, event, place[0]);
+}
+
+/** whether one of the browser's violations reaches the page (violationShows) */
+function shows(
 	client: DocumentClient,
 	natives: ViolationNatives,
 	event: Event,

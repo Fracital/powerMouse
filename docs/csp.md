@@ -327,7 +327,15 @@ host, and the browser refuses it as natively (even under `form-action *`).
 `SecurityPolicyViolationEvent`'s getters (`src/inject/dom/modules/ContentSecurity.ts`)
 name the page's URLs (documentURI, blockedURI without its fragment,
 referrer, sourceFile; the inject's own bundle as no URL) and the page's
-policy as it wrote it (originalPolicy); a report body
+policy as it wrote it (originalPolicy). A base-uri or form-action
+violation, the browser's (which names the inject's hook, or the shell's
+markup) or the inject's (which names nothing), names where Chrome does: the
+page's script that set or inserted the base or submitted the form, without
+its query, and the position of the call, the markup's base by the
+document's URL and the line and column after its start tag, and nothing
+for a form into a new window; the place is noted where the hook runs and
+read back by the violation (`src/inject/dom/violations.ts`, a deferred
+part). A report body
 (`ReportingObserver`) the same (`Unroute`). A fetch or XMLHttpRequest
 reads a response's policy headers as natively (the browser applies none
 of them to such a response).
@@ -399,10 +407,22 @@ refuses fires a violation, natively either.
   where it goes to a URL its copy of the policy refuses), which is no form
   submission: its `formData` is null, natively the form's (csp-navigation
   lists it as an expected difference).
-- A report-only base-uri or form-action refusal, and one of a frame's own
-  navigation, is the inject's event (no source position; a base-uri that
-  allows nothing is the browser's own, which names the inject's hook); a
-  same-frame one may go with the document, as natively it may.
+- A report-only refusal of a frame's own navigation is the inject's event,
+  with no source position; a same-frame one may go with the document, as
+  natively it may.
+- Where a violation says its code was (sourceFile, lineNumber,
+  columnNumber) is as natively for base-uri and form-action only, and for
+  those not where a page's inline script made it (its position is that of
+  the document the inject writes), for a form whose action is
+  javascript: or mailto:, for a form whose target names a window that does
+  not exist yet or that a `<base target>` sends to a new one (named as a
+  form into its own window), or for a base set and inserted again within
+  one task with the same URL (the last place is named). Every other
+  directive's violation is not placed as natively: the inject's own (the
+  page's code it refuses under script-src, style-src or Trusted Types, a
+  report-only refusal of a load) names no place, and the browser's names
+  the line and column of the inject's hook, with no sourceFile, where a
+  hook made the load (a frame, an image, a worker, a connection).
 - A navigation's hop refused by one of two policies is reported by both
   (the browser refuses `REFUSED_URL` under every policy it has).
 - A history traversal of a frame is not judged by its parent's frame-src;
