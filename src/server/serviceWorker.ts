@@ -96,6 +96,7 @@ import { forScript, jarWrittenElsewhere, onJarChange } from './Cookies';
 import createServer, {
 	addressCodec,
 	addressHub,
+	openDatabasesEarly,
 	publicSuffix,
 	slotHome,
 	StompServer,
@@ -2300,6 +2301,7 @@ function readKeptBundles() {
 	return keptBundlesRead;
 }
 readKeptBundles();
+openDatabasesEarly();
 
 /** the keeps in flight, by URL */
 const keeping = new Map<string, Promise<void>>();

@@ -42,7 +42,7 @@ import {
 	useCacheSecret,
 } from './cacheMarks';
 import { warmClientHints } from './clientHints';
-import Cookies, { openCookies, registerCookies } from './Cookies';
+import Cookies, { openCookies, openJarDB, registerCookies } from './Cookies';
 import { hostErrorPage } from './errorPage';
 import { registerIntegrityLoads } from './integrityLoads';
 import { RemoteJar, type JarPort } from './jarDB';
@@ -58,6 +58,7 @@ import { ShieldsStore } from './shields';
 import {
 	forgetSiteStorage,
 	openStorage,
+	openStorageDB,
 	registerStorage,
 	StorageHosts,
 } from './Storage';
@@ -231,13 +232,47 @@ function sharedStores(scope: string, jar?: JarPort): Promise<SharedStores> {
 	return stores;
 }
 
-/** the worker's own settings: the codec keys, the codec of every address it served, the cache marks' secret */
+let configDB: Promise<IDBPDatabase> | undefined;
+
+/**
+ * The worker's own settings: the codec keys, the codec of every address it
+ * served, the cache marks' secret. One connection serves every caller; it is
+ * closed for whoever upgrades the database, and the next caller opens another.
+ */
 export function openConfigDB(): Promise<IDBPDatabase> {
-	return openDB('stompConfig', 1, {
+	if (configDB) return configDB;
+	const opened = openDB('stompConfig', 1, {
 		upgrade: (db) => {
 			db.createObjectStore('consts');
 		},
+		blocking: () => {
+			if (configDB !== opened) return;
+			configDB = undefined;
+			opened.then((db) => db.close());
+		},
+		terminated: () => {
+			if (configDB === opened) configDB = undefined;
+		},
 	});
+	configDB = opened;
+	opened.catch(() => {
+		if (configDB === opened) configDB = undefined;
+	});
+	return opened;
+}
+
+/**
+ * Open the databases every handshake's server reads, from the worker's
+ * start: the browser starts the worker (and runs this) while it fetches the
+ * page that registers a controller, and the first handshake comes 20 to 60
+ * ms later. A slot of the site pool asks the host's jar, so the jar is
+ * opened by the handshake instead (createServer).
+ */
+export function openDatabasesEarly() {
+	openConfigDB().catch(() => {
+		// the handshake opens it again and reports why
+	});
+	openStorageDB().catch(() => {});
 }
 
 // a secret of the cache marks drawn again is kept with the others
@@ -339,6 +374,8 @@ export default async function createServer(
 	/** a slot of the site pool: the hub's worker's blocker, instead of an engine of this worker's */
 	remoteBlocker?: BlockerLike,
 ): Promise<StompServer> {
+	// the jar opens beside the codec's transaction (sharedStores takes it)
+	if (!jar) openJarDB().catch(() => {});
 	const db = await openConfigDB();
 
 	const tx = db.transaction('consts', 'readwrite');

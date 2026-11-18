@@ -539,13 +539,11 @@ export interface StorageHosts {
 	sessionStorage: Storage;
 }
 
-/**
- * The storage partitions, opened once per scope (createServer shares them
- * between the controllers of a scope). sessionStorage is wiped on open: the
- * worker's lifetime stands in for the session.
- */
-export async function openStorage(): Promise<StorageHosts> {
-	const db = await openDB('stompStorage', 1, {
+let storageDB: Promise<IDBPDatabase> | undefined;
+
+/** the storage partitions' database, opened once for every scope (and from the worker's start: openDatabasesEarly) */
+export function openStorageDB(): Promise<IDBPDatabase> {
+	storageDB ??= openDB('stompStorage', 1, {
 		upgrade: (db: IDBPDatabase) => {
 			for (const name of ['localStorage', 'sessionStorage']) {
 				const storage = db.createObjectStore(name, {
@@ -557,6 +555,17 @@ export async function openStorage(): Promise<StorageHosts> {
 			}
 		},
 	});
+	storageDB.catch(() => (storageDB = undefined));
+	return storageDB;
+}
+
+/**
+ * The storage partitions, opened once per scope (createServer shares them
+ * between the controllers of a scope). sessionStorage is wiped on open: the
+ * worker's lifetime stands in for the session.
+ */
+export async function openStorage(): Promise<StorageHosts> {
+	const db = await openStorageDB();
 
 	db.clear('sessionStorage');
 

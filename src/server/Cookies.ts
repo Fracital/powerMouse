@@ -9,7 +9,7 @@
 // then earlier creations (a re-set with a new value is a new creation, as
 // in Chrome). The matching functions are exported on their own so they can
 // be checked in node (cookie-rules suite).
-import { openDB } from 'idb';
+import { openDB, type IDBPDatabase } from 'idb';
 import { pastASCII, utf8Bytes, utf8Text } from '../byteString';
 import { JAR_TURN_COOKIE } from '../encodeCookie';
 import { ephemeralKey, registrableDomain } from '../partition';
@@ -1193,6 +1193,41 @@ export function jarWrittenElsewhere() {
 	keepsJar = false;
 }
 
+let jarDB: Promise<IDBPDatabase<unknown>> | undefined;
+
+/**
+ * This origin's jar database, opened once for every scope's jar (and from
+ * the handshake's start, while the codec's transaction runs: createServer)
+ */
+export function openJarDB(): Promise<IDBPDatabase<unknown>> {
+	jarDB ??= openDB(JAR_DATABASE, 2, {
+		upgrade: async (db, oldVersion, _newVersion, tx) => {
+			// nothing but the stores' own requests may be awaited in here (an
+			// IndexedDB transaction commits during any foreign await)
+			const legacy: JarCookie[] = [];
+			const now = Date.now();
+			if (oldVersion === 1) {
+				for (const [name, session] of [
+					['cookies', false],
+					['sessionCookies', true],
+				] as const)
+					for (const record of await tx.objectStore(name).getAll())
+						legacy.push(migrateLegacy(record, session, now));
+				db.deleteObjectStore('cookies');
+				db.deleteObjectStore('sessionCookies');
+			}
+			const store = db.createObjectStore(STORE, { keyPath: 'id' });
+			// requests read the candidate domains of their host; an insecure
+			// Set-Cookie looks up the Secure cookies of its name
+			store.createIndex('domain', 'domain');
+			store.createIndex('name', 'name');
+			for (const cookie of legacy) await store.put(cookie);
+		},
+	});
+	jarDB.catch(() => (jarDB = undefined));
+	return jarDB;
+}
+
 /**
  * The jar, opened once per scope (createServer shares it between the
  * controllers of a scope: a controller is a tab, and tabs share cookies).
@@ -1220,30 +1255,7 @@ export async function openCookies(
 		remote.onChanged = heard;
 		return cookies;
 	}
-	const db = await openDB(JAR_DATABASE, 2, {
-		upgrade: async (db, oldVersion, _newVersion, tx) => {
-			// nothing but the stores' own requests may be awaited in here (an
-			// IndexedDB transaction commits during any foreign await)
-			const legacy: JarCookie[] = [];
-			const now = Date.now();
-			if (oldVersion === 1) {
-				for (const [name, session] of [
-					['cookies', false],
-					['sessionCookies', true],
-				] as const)
-					for (const record of await tx.objectStore(name).getAll())
-						legacy.push(migrateLegacy(record, session, now));
-				db.deleteObjectStore('cookies');
-				db.deleteObjectStore('sessionCookies');
-			}
-			const store = db.createObjectStore(STORE, { keyPath: 'id' });
-			// requests read the candidate domains of their host; an insecure
-			// Set-Cookie looks up the Secure cookies of its name
-			store.createIndex('domain', 'domain');
-			store.createIndex('name', 'name');
-			for (const cookie of legacy) await store.put(cookie);
-		},
-	});
+	const db = await openJarDB();
 
 	// session cookies (no expiry) stay until clear(): the service worker is
 	// restarted whenever the browser idles it, which is not the end of the
