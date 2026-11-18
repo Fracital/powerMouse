@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>frame-kept-window child</title>
+<script>
+	// fetches its own origin (fetch and XMLHttpRequest) and tells its parent
+	// how that went
+	const xhr = () =>
+		new Promise((resolve) => {
+			const request = new XMLHttpRequest();
+			request.open('GET', location.href);
+			request.onload = () => resolve(`${request.status}`);
+			request.onerror = () => resolve('error');
+			request.send();
+		});
+	addEventListener('load', async () => {
+		let fetched;
+		try {
+			fetched = `${(await fetch(location.href)).status}`;
+		} catch (error) {
+			fetched = `threw ${error.name}`;
+		}
+		const result = `fetch ${fetched}, xhr ${await xhr()}`;
+		parent.postMessage({ way: window.name, result }, '*');
+	});
+</script>

@@ -71,6 +71,33 @@ import {
 // the browser's clock, taken when the bundle runs (routedFetch)
 const nativeNow =
 	typeof Performance === 'function' ? Performance.prototype.now : undefined;
+// the browser's microtask queue, taken when the bundle runs (Client: a
+// frame's initial about:blank reads its service worker container after)
+const nativeQueueMicrotask =
+	typeof queueMicrotask === 'function' ? queueMicrotask : undefined;
+
+/**
+ * Whether the frame of `global`, an initial about:blank, has a document to
+ * navigate to (a src or srcdoc): Chrome keeps the window for that document
+ * (the same origin), and once the about:blank's
+ * navigator.serviceWorker was read, the new document's container never has
+ * a controller, though the worker answers all its requests (measured,
+ * Chrome 157). Its inject would take it for a document no worker controls
+ * and send its requests through its parent's realm, judged by the parent's
+ * policies and named as the parent's.
+ */
+function navigationPending(global: typeof globalThis): boolean {
+	try {
+		const frame = Reflect.get(global, 'frameElement') as Element | null;
+		return (
+			!!frame &&
+			(frame.hasAttribute('srcdoc') ||
+				!/^\s*(about:blank)?\s*$/.test(frame.getAttribute('src') ?? ''))
+		);
+	} catch (error) {
+		return false;
+	}
+}
 
 export interface ModuleCtor {
 	new (client: any): Module<any>;
@@ -381,6 +408,23 @@ export default class Client {
 	// pristine copies taken before modules hook them: the Navigator module
 	// removes navigator.serviceWorker from proxied pages
 	#serviceWorkerContainer?: ServiceWorkerContainer;
+	/**
+	 * In another realm's frame on its initial about:blank: that document, and
+	 * the window's own fetch and container getters, taken before anything
+	 * hooked them. A first navigation within one origin keeps the window
+	 * (every proxied document is of the proxy's), and with it the hooks this
+	 * client put on it: the next document's requests reach this client
+	 * (#ownFetch). `waiting`: what is to listen on its container until it is
+	 * read, at the end of the turn that injected it, and never when the
+	 * frame then has a document to navigate to (navigationPending).
+	 */
+	#blank?: {
+		document: Document;
+		fetch: typeof fetch;
+		container: () => ServiceWorkerContainer | undefined;
+		controller: (this: ServiceWorkerContainer) => ServiceWorker | null;
+		waiting?: ((container: ServiceWorkerContainer) => void)[];
+	};
 	#portPostMessage?: PostMessage;
 	#serviceWorkerPostMessage?: PostMessage;
 	#workerPostMessage?: PostMessage;
@@ -751,11 +795,58 @@ export default class Client {
 			);
 		this.isDOM = false;
 		this.isWorker = false;
-		this.#serviceWorkerContainer = (
-			global.navigator as Navigator & {
-				serviceWorker?: ServiceWorkerContainer;
-			}
-		)?.serviceWorker;
+		const navigator = global.navigator as
+			(Navigator & { serviceWorker?: ServiceWorkerContainer }) | undefined;
+		// a frame's initial about:blank (no worker controls one): its getters
+		// are taken now, before the Navigator module may remove them
+		const container = global.Navigator
+			? Reflect.getOwnPropertyDescriptor(
+					global.Navigator.prototype,
+					'serviceWorker',
+				)?.get
+			: undefined;
+		const controller = global.ServiceWorkerContainer
+			? Reflect.getOwnPropertyDescriptor(
+					global.ServiceWorkerContainer.prototype,
+					'controller',
+				)?.get
+			: undefined;
+		if (
+			global !== globalThis &&
+			navigator &&
+			container &&
+			controller &&
+			nativeQueueMicrotask &&
+			typeof global.fetch === 'function' &&
+			global.location?.href === 'about:blank'
+		) {
+			const blank = (this.#blank = {
+				document: global.document,
+				fetch: global.fetch,
+				container: container as () => ServiceWorkerContainer | undefined,
+				controller: controller as () => ServiceWorker | null,
+				waiting: [] as
+					((container: ServiceWorkerContainer) => void)[] | undefined,
+			});
+			Reflect.apply(nativeQueueMicrotask, undefined, [
+				() => {
+					if (navigationPending(global)) return;
+					const waiting = blank.waiting!;
+					blank.waiting = undefined;
+					try {
+						this.#serviceWorkerContainer = Reflect.apply(
+							container,
+							navigator,
+							[],
+						);
+					} catch (error) {
+						// an opaque origin's: none
+					}
+					const read = this.#serviceWorkerContainer;
+					if (read) for (const listen of waiting) listen(read);
+				},
+			]);
+		} else this.#serviceWorkerContainer = navigator?.serviceWorker;
 		this.#serviceWorkerPostMessage = (
 			global.ServiceWorker as typeof ServiceWorker | undefined
 		)?.prototype.postMessage as PostMessage | undefined;
@@ -914,6 +1005,8 @@ export default class Client {
 	 * reach the proxy origin's server.
 	 */
 	routedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+		const own = this.#ownFetch();
+		if (own) return Reflect.apply(own, this.global, [input, init]);
 		const client = this.controlledClient();
 		if (!client || client === this) return fetch(input, init);
 		// through the ancestor's realm the request's client is the ancestor,
@@ -957,6 +1050,31 @@ export default class Client {
 			// no URL to know the entry by: it stays the ancestor's
 		}
 		return answer;
+	}
+	/**
+	 * The window's own fetch, when this client was made for a frame's
+	 * initial about:blank and the window now shows the document the frame
+	 * navigated to, which a worker controls: the page's requests reach this
+	 * client's hooks, and are that document's (its client, its policies, its
+	 * referrer), not this client's ancestor's. Null otherwise.
+	 */
+	#ownFetch(): typeof fetch | null {
+		const blank = this.#blank;
+		if (!blank) return null;
+		try {
+			if (Reflect.get(this.global, 'document') === blank.document) return null;
+			const container = Reflect.apply(
+				blank.container,
+				Reflect.get(this.global, 'navigator'),
+				[],
+			);
+			return container && Reflect.apply(blank.controller, container, [])
+				? blank.fetch
+				: null;
+		} catch (error) {
+			// a window being torn down: as before
+			return null;
+		}
 	}
 	/**
 	 * The loads this context made for documents below it that no worker
@@ -1286,20 +1404,26 @@ export default class Client {
 	}
 	/** the same, with the whole event (its ports): the emulated service workers' messages */
 	onServiceWorkerEvent(listener: (event: MessageEvent) => void) {
-		const container = this.#serviceWorkerContainer;
-		if (!container) return;
-		container.addEventListener('message', (event) =>
-			listener(event as MessageEvent),
-		);
-		container.startMessages?.();
+		this.#onContainer((container) => {
+			container.addEventListener('message', (event) =>
+				listener(event as MessageEvent),
+			);
+			container.startMessages?.();
+		});
 	}
 	onServiceWorkerMessage(listener: (data: unknown) => void) {
-		const container = this.#serviceWorkerContainer;
-		if (!container) return;
-		container.addEventListener('message', (event) =>
-			listener((event as MessageEvent).data),
-		);
-		container.startMessages?.();
+		this.#onContainer((container) => {
+			container.addEventListener('message', (event) =>
+				listener((event as MessageEvent).data),
+			);
+			container.startMessages?.();
+		});
+	}
+	/** `listen` on this context's container, now or once it is read (#blank) */
+	#onContainer(listen: (container: ServiceWorkerContainer) => void) {
+		const waiting = this.#blank?.waiting;
+		if (waiting) waiting.push(listen);
+		else if (this.#serviceWorkerContainer) listen(this.#serviceWorkerContainer);
 	}
 	/**
 	 * Hand a freshly constructed dedicated worker its own transport port.

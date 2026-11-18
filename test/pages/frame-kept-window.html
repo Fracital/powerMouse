@@ -1,0 +1,54 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>frame-kept-window</title>
+<script>
+	// A page whose connect-src allows its own origin only frames another
+	// origin's page, which fetches its own origin: the frame's requests are
+	// the frame's, never refused by its parent's policy. Each frame's
+	// initial about:blank is read before its navigation commits (the way
+	// Vimeo's player.js reaches the player it embeds): through the proxy the
+	// frame's document is of the same origin as that about:blank, and Chrome
+	// keeps the window for it.
+	window.__record = { done: false };
+	const record = {};
+	const ways = ['untouched', 'markupRead', 'markupPost', 'madeRead'];
+	const finish = () => {
+		if (ways.every((way) => way in record) && 'parent' in record)
+			window.__record = { ...record, done: true };
+	};
+	window.childURL = (way) =>
+		`${location.protocol}//localhost:${location.port}/pages/frame-kept-window-child.html?${way}`;
+	addEventListener('message', (event) => {
+		if (!event.data || !event.data.way) return;
+		record[event.data.way] = event.data.result;
+		finish();
+	});
+	// the parent's own request to the other origin is refused by its policy
+	fetch(childURL('parent')).then(
+		(response) => {
+			record.parent = `${response.status}`;
+			finish();
+		},
+		(error) => {
+			record.parent = `threw ${error.name}`;
+			finish();
+		},
+	);
+</script>
+<body>
+	<script>
+		for (const way of ['untouched', 'markupRead', 'markupPost'])
+			document.write(`<iframe name="${way}" src="${childURL(way)}"></iframe>`);
+	</script>
+	<script>
+		void document.getElementsByName('markupRead')[0].contentWindow;
+		document
+			.getElementsByName('markupPost')[0]
+			.contentWindow.postMessage('ping', '*');
+		const made = document.createElement('iframe');
+		made.name = 'madeRead';
+		made.src = childURL('madeRead');
+		document.body.append(made);
+		void made.contentWindow.document;
+	</script>
+</body>
