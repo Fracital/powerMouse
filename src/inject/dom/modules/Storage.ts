@@ -46,6 +46,9 @@ interface Pending {
 	inflight: Set<number>;
 }
 
+/** the read caches of this bundle's documents, by store (storageFactory) */
+const readCaches = new LazyMap<string, unknown>();
+
 export default class StorageModule extends Module<DocumentClient> {
 	apply() {
 		const client = this.client;
@@ -613,14 +616,25 @@ export default class StorageModule extends Module<DocumentClient> {
 		}
 
 		const storageFactory = (directory: string, store: string, key?: string) => {
-			caches.set(directory, {
-				store,
-				key,
-				version: '',
-				values: new Map(),
-				keys: null,
-				usage: null,
-			});
+			// one copy for every document of this bundle that reads the same
+			// store (a page and the about:blank frames it writes ads into):
+			// each frame's first reads, and its reads after a change, were
+			// round trips of its own
+			const id = `${directory}\n${keyOf(directory)}`;
+			let cache = readCaches.get(id) as ReadCache | undefined;
+			if (!cache)
+				readCaches.set(
+					id,
+					(cache = {
+						store,
+						key,
+						version: '',
+						values: new Map(),
+						keys: null,
+						usage: null,
+					}),
+				);
+			caches.set(directory, cache);
 			const storage = new StorageProxy(directory);
 			const proxy = new Proxy(storage, {
 				get: (target, prop, receiver) => {

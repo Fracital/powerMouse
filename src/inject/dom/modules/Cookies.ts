@@ -41,6 +41,22 @@ function applyWrite(list: JarCookie[], cookie: JarCookie, now: number) {
 	});
 }
 
+/**
+ * The jar's cookies for a document as last read, with its writes since
+ * applied; `fresh` while nothing else may have changed them (the version
+ * tells of other documents' writes). Kept for every document of this bundle
+ * that reads the same cookies (its URL and partition): a page and the
+ * about:blank frames it writes ads into, which read one jar. An ad frame's
+ * first read, and every frame's read after a change, was a synchronous round
+ * trip of its own.
+ */
+interface View {
+	known: JarCookie[] | null;
+	fresh: boolean;
+	version: string;
+}
+const views = new LazyMap<string, View>();
+
 /** a script write sent asynchronously that may not be in the jar yet */
 interface Unsettled {
 	cookie: JarCookie;
@@ -60,14 +76,14 @@ interface Unsettled {
 export class CookiesModule extends Module<DocumentClient> {
 	private cookieDescriptor: PropertyDescriptor;
 	#defaultView?: () => Window | null;
-	/**
-	 * The jar's cookies for this document as last read, with this document's
-	 * writes since applied; `#fresh` while nothing else may have changed
-	 * them (the version below tells of other documents' writes)
-	 */
-	#known: JarCookie[] | null = null;
-	#fresh = false;
-	#cacheVersion = '';
+	/** what this document knows of the jar, shared with its kind (`views`) */
+	get #view(): View {
+		const key = `${this.client.url}\n${this.#partitionKey}`;
+		let view = views.get(key);
+		if (!view)
+			views.set(key, (view = { known: null, fresh: false, version: '' }));
+		return view;
+	}
 	// The writes the synchronous bridge could not carry: its beacon was
 	// refused, because the page's own beacons (weather.com's analytics) hold
 	// the quota they share, and natively a cookie write never throws. They
@@ -155,7 +171,7 @@ export class CookiesModule extends Module<DocumentClient> {
 	}
 	/** the jar changed for this site: every document of it reads fresh */
 	#bump() {
-		this.#fresh = false;
+		this.#view.fresh = false;
 		this.#stamp();
 	}
 	/** a new version for this site; null when there is no storage for one */
@@ -175,10 +191,11 @@ export class CookiesModule extends Module<DocumentClient> {
 	 * that was current (it has this document's own write applied)
 	 */
 	#restamp() {
-		const current = this.#fresh && this.#version() === this.#cacheVersion;
+		const view = this.#view;
+		const current = view.fresh && this.#version() === view.version;
 		const version = this.#stamp();
-		if (current && version !== null) this.#cacheVersion = version;
-		else this.#fresh = false;
+		if (current && version !== null) view.version = version;
+		else view.fresh = false;
 	}
 	/**
 	 * What document.cookie reads for `list` (which has this document's
@@ -205,7 +222,8 @@ export class CookiesModule extends Module<DocumentClient> {
 		for (const other of this.#inflight.values()) base = Math.min(base, other);
 		if (cookie) {
 			this.#unsettled.set(cookie.id, { cookie, seq });
-			if (this.#known) applyWrite(this.#known, cookie, now);
+			const { known } = this.#view;
+			if (known) applyWrite(known, cookie, now);
 		}
 		// every other document of the site reads the jar, which waits for it
 		this.#restamp();
@@ -311,13 +329,14 @@ export class CookiesModule extends Module<DocumentClient> {
 	}
 	/** this document's next read goes to the jar */
 	invalidate() {
-		this.#fresh = false;
+		this.#view.fresh = false;
 	}
 	get pageCookies() {
 		const client = this.client;
 		const version = this.#version();
-		if (this.#known && this.#fresh && version === this.#cacheVersion)
-			return this.#show(this.#known);
+		const view = this.#view;
+		if (view.known && view.fresh && version === view.version)
+			return this.#show(view.known);
 
 		const syncModule = client.getModule(SyncModule)!;
 		client.cookieReads++;
@@ -329,18 +348,18 @@ export class CookiesModule extends Module<DocumentClient> {
 			this.#context,
 		);
 		if (answer) {
-			this.#known = this.#withUnsettled(
+			view.known = this.#withUnsettled(
 				(answer.value as FloatingCookie[]).filter((cookie) => !cookie.httpOnly),
 			);
-			this.#fresh = true;
-			this.#cacheVersion = version;
-			return this.#show(this.#known);
+			view.fresh = true;
+			view.version = version;
+			return this.#show(view.known);
 		}
 		// The bridge cannot ask now (the page's own beacons hold the quota),
 		// and a read never throws natively: what this document knew, with its
 		// own writes since, which is all the jar has unless another document
 		// or a response changed it in the meantime
-		return this.#show(this.#known ?? this.#withUnsettled([]));
+		return this.#show(view.known ?? this.#withUnsettled([]));
 	}
 	/** `list` with the writes the jar may not have yet, in the order made */
 	#withUnsettled(list: JarCookie[]): JarCookie[] {
@@ -383,22 +402,23 @@ export class CookiesModule extends Module<DocumentClient> {
 			// its own. Other documents of the site read the jar again (the new
 			// version)
 			const outcomes = answer.value as [string, JarCookie | null][] | null;
+			const view = this.#view;
 			if (
 				Array.isArray(outcomes) &&
-				this.#known &&
-				this.#fresh &&
-				this.#version() === this.#cacheVersion
+				view.known &&
+				view.fresh &&
+				this.#version() === view.version
 			) {
 				for (const [id, stored] of outcomes) {
-					this.#known = this.#known.filter((cookie) => cookie.id !== id);
-					if (stored) this.#known.push(stored);
+					view.known = view.known.filter((cookie) => cookie.id !== id);
+					if (stored) view.known.push(stored);
 				}
 				this.#restamp();
 			} else {
 				// kept for a read the bridge cannot make later
 				const now = Date.now();
-				const cookie = this.#known && this.#parse(value, now);
-				if (cookie) applyWrite(this.#known!, cookie, now);
+				const cookie = view.known && this.#parse(value, now);
+				if (cookie) applyWrite(view.known!, cookie, now);
 				this.#bump();
 			}
 			this.#changed();

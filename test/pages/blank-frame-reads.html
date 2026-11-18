@@ -1,0 +1,76 @@
+<!doctype html>
+<title>BLANK FRAME READS</title>
+<body>
+	<script>
+		// An ad page's slots: frames with no src whose about:blank documents
+		// read the page's cookies and localStorage, then one slot writes and
+		// the others and the page read again. What every read shows, compared
+		// with native Chrome by the suite; through the proxy the suite also
+		// counts the synchronous round trips each step took. A step of many
+		// documents names the one that wrote the cookie: natively another
+		// document may read it a moment later (the browser's cookie cache),
+		// so the suite holds every document to what the writer read.
+		const p = `b${Date.now().toString(36)}_`;
+		const out = { steps: [] };
+		window.__bfr = out;
+		const mine = (cookies) =>
+			cookies
+				.split('; ')
+				.filter((cookie) => cookie.startsWith(p))
+				.join('; ')
+				.replaceAll(p, '');
+		const record = (name, value, writer) =>
+			out.steps.push([name, value, writer]);
+		try {
+			document.cookie = `${p}page=1; path=/`;
+			localStorage.setItem(`${p}k`, 'v');
+			record('the page', [
+				mine(document.cookie),
+				localStorage.getItem(`${p}k`),
+				localStorage.getItem(`${p}missing`),
+			]);
+			const slots = [];
+			for (let i = 0; i < 8; i++) {
+				const frame = document.createElement('iframe');
+				document.body.append(frame);
+				slots.push(frame.contentWindow);
+			}
+			console.log('STEP slots read');
+			record(
+				'every slot reads what the page wrote',
+				slots.map((w) => [
+					mine(w.document.cookie),
+					w.localStorage.getItem(`${p}k`),
+					w.localStorage.getItem(`${p}missing`),
+				]),
+			);
+			console.log('STEP slot writes');
+			slots[3].document.cookie = `${p}slot=3; path=/`;
+			slots[3].localStorage.setItem(`${p}k`, 'slot');
+			slots[3].localStorage.setItem(`${p}new`, 'n');
+			record(
+				"the page and every slot read one slot's writes",
+				[window, ...slots].map((w) => [
+					mine(w.document.cookie),
+					w.localStorage.getItem(`${p}k`),
+					w.localStorage.getItem(`${p}new`),
+				]),
+				4,
+			);
+			slots[5].localStorage.removeItem(`${p}new`);
+			document.cookie = `${p}page=; max-age=0; path=/`;
+			record(
+				'and a removal and a deletion',
+				[window, ...slots].map((w) => [
+					mine(w.document.cookie),
+					w.localStorage.getItem(`${p}new`),
+				]),
+				0,
+			);
+		} catch (error) {
+			out.error = String(error);
+		}
+		console.log('STEP end');
+		out.done = true;
+	</script>
+</body>
