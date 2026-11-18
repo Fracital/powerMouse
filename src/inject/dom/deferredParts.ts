@@ -39,6 +39,11 @@
 // (and the blocker's procedural cosmetic filters, ../../blocker/procedural.ts,
 // at a document whose lists have one for its site)
 //
+// (and the page's own Content-Security-Policy checks, ./policyChecks.ts
+// with ../../cspJudge.ts and the digests of ../../sha.ts, at the first
+// check a document with a policy of the page's makes, with a data: URL's
+// integrity, ../../sriDigest.ts, which shares the digests)
+//
 // (and the document.write stream, ./WriteStream.ts with its tokenizer, at a
 // document's first write)
 //
@@ -94,6 +99,7 @@
 // needs when it is called.
 import { compileFilter, proceduralRunner } from '../../blocker/procedural';
 import { noticeText } from '../../mixedContentNotices';
+import { integrityHoldsSync } from '../../sriDigest';
 import { accessFailures } from '../accessFailures';
 import { bareClient, socketStandIns } from '../bareClient';
 import { cookieChanges, cookieStoreMethods } from '../cookieStoreMethods';
@@ -144,6 +150,7 @@ import { navigateOther } from './navigateOther';
 import { navigationRefusal, precommitRedirect } from './navigationRefusal';
 import { openerFacts, opensWithoutOpener } from './openerFacts';
 import { pictureWindows } from './pictureWindows';
+import { policyChecks } from './policyChecks';
 import { presentationIds } from './presentations';
 import { protocolHandler } from './protocolHandlers';
 import { rtcInstall } from './rtcInstall';
@@ -260,6 +267,12 @@ export const parts = {
 	violationShows,
 	violationURL,
 	violationPageCode,
+	// the page's own policy's checks of its code and of the loads no worker
+	// sees, at the first a document with a policy needs (./policyChecks.ts;
+	// Client.ts), and a data: URL's integrity, which shares their digests
+	// (../../sriDigest.ts; modules/DOMAttributes.ts)
+	policyChecks,
+	integrityHoldsSync,
 	navigationRefusal,
 	precommitRedirect,
 	webTransportStandIn,

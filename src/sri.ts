@@ -6,7 +6,6 @@
 // checks the origin's bytes against it, as the browser checks them natively:
 // a mismatch, or a response the page could not read (another origin's
 // without CORS), is a network error (src/server/integrity.ts).
-import { digestBytes } from './sha';
 
 /** what follows a route's kind when the load carries integrity metadata */
 export const INTEGRITY_MARK = ';sri=';
@@ -19,7 +18,7 @@ export const NO_INTEGRITY = 'none';
 /**
  * The fragment of a refused stylesheet's route asked for again with the
  * page's metadata on the element: the worker answers a stylesheet request
- * that carries integrity with bytes that match none of it (refusalBytes),
+ * that carries integrity with bytes that match none of it (./sriDigest.ts refusalBytes),
  * and the browser refuses them itself (no sheet, Chrome's own message;
  * DOMAttributes). Nothing of the origin's response is in them, so a page
  * that asks for such a URL itself learns nothing.
@@ -143,35 +142,6 @@ export function strongestItems(metadata: string): IntegrityItem[] {
 		['sha256', 'sha384', 'sha512'].indexOf(algorithm);
 	const best = Math.max(-1, ...items.map(({ algorithm }) => rank(algorithm)));
 	return items.filter(({ algorithm }) => rank(algorithm) === best);
-}
-
-/** whether `bytes` match `metadata` as the browser checks them (metadata naming nothing valid matches anything) */
-export function integrityHoldsSync(
-	bytes: Uint8Array,
-	metadata: string,
-): boolean {
-	const items = strongestItems(metadata);
-	if (!items.length) return true;
-	const digests = new Map<Algorithm, string>();
-	return items.some(({ algorithm, digest }) => {
-		if (!digests.has(algorithm))
-			digests.set(algorithm, digestBytes(algorithm, bytes));
-		return digests.get(algorithm) === digest;
-	});
-}
-
-/**
- * Bytes that match none of `metadata`'s digests under the SRI rules
- * (integrityHoldsSync), for the browser to refuse; null when the metadata
- * names nothing valid, which anything matches
- */
-export function refusalBytes(metadata: string): Uint8Array | null {
-	if (!strongestItems(metadata).length) return null;
-	const encoder = new TextEncoder();
-	for (let n = 0; ; n++) {
-		const bytes = encoder.encode(n ? `/*${n}*/` : '');
-		if (!integrityHoldsSync(bytes, metadata)) return bytes;
-	}
 }
 
 /**
