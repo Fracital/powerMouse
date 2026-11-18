@@ -127,6 +127,7 @@ import { longTasks } from './modules/LongTasks';
 import {
 	deviceConstraints,
 	notificationCall,
+	permissionRequests,
 	positionCall,
 	userMediaCall,
 } from './modules/permissionCalls';
@@ -219,6 +220,9 @@ export const parts = {
 	deviceConstraints,
 	positionCall,
 	notificationCall,
+	// the Permissions module's requests, at a page's first
+	// (./modules/permissionCalls.ts; ./modules/Permissions.ts)
+	permissionRequests,
 	rtcInstall,
 	responseParser,
 	xhrMessage,
