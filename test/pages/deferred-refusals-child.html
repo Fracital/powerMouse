@@ -165,6 +165,34 @@
 					made((frame) => {
 						frame.srcdoc = MADE('self.origin');
 					}),
+				// a data: document's frame (src/inject/dom/rareAttributes.ts)
+				dataFrame: () =>
+					made((frame) => {
+						frame.src = `data:text/html,${encodeURIComponent(MADE('"data"'))}`;
+					}),
+				// a refresh meta a script puts in a frame's document
+				// (rareAttributes.ts): where the frame goes
+				refresh: () =>
+					new Promise((resolve) => {
+						const frame = document.createElement('iframe');
+						addEventListener('message', (event) => {
+							if (event.source !== frame.contentWindow) return;
+							const landed = event.data?.out?.formAimed?.landed;
+							if (landed === '?refreshed') resolve({ refreshed: true });
+							if (landed !== '?first') return;
+							const meta = frame.contentDocument.createElement('meta');
+							meta.httpEquiv = 'refresh';
+							try {
+								meta.content = '0;url=deferred-refusals-landed.html?refreshed';
+								frame.contentDocument.head.append(meta);
+							} catch (error) {
+								resolve({ threw: String(error && error.message) });
+							}
+							setTimeout(() => resolve({ stayed: true }), 3000);
+						});
+						frame.src = 'deferred-refusals-landed.html?first';
+						document.body.append(frame);
+					}),
 				// a javascript: URL's markup too large for the worker to serve
 				// (src/inject/Client.ts INLINE_DOCUMENT_MAX): the shell is the
 				// page's (dom/Client.ts javascriptDocument)

@@ -27,12 +27,14 @@
 // refuses still loads nothing (the policy's checks are a part,
 // src/inject/dom/policyChecks.ts); a document the page makes in a frame
 // whose shell is a part (src/htmlShell.ts: an srcdoc, a javascript: URL's
-// markup) is never given to the frame, unrewritten or at all. A part is made
-// synchronously within the call that needs it, so no page code runs between
-// the hook and the part (a download's copy is made after the click went
-// through the page, which the browser's own download had been cancelled
-// for as it started); what is left to check is the part that throws
-// instead.
+// markup; a data: frame, src/inject/dom/rareAttributes.ts) is never given
+// to the frame, unrewritten or at all, and a refresh meta has no content
+// for the browser; a base a report-only base-uri refuses is refused, its
+// report being a part. A part is made synchronously within the call that
+// needs it, so no page code runs between the hook and the part (a
+// download's copy is made after the click went through the page, which the
+// browser's own download had been cancelled for as it started); what is
+// left to check is the part that throws instead.
 //
 // The tab's documents get, before any script of theirs (and so before the
 // inject takes the browser's functions), counting stand-ins for the
@@ -101,9 +103,12 @@ const REFUSING = [
 	'execCommand',
 	'contextualFragment',
 	'open',
-	'srcdoc',
-	'javascriptDocument',
 ];
+/**
+ * the documents a frame of the child is given whose code is a part, asked
+ * on their own (each waits a while for what does not come)
+ */
+const DOCUMENTS = ['srcdoc', 'javascriptDocument', 'dataFrame', 'refresh'];
 /** the calls that answer with a promise, which rejects */
 const PROMISED = [
 	'getUserMedia',
@@ -211,9 +216,11 @@ function countNatives() {
 	// an srcdoc, or a frame's data: URL, with no shell (`createClient` is in
 	// every shell's script)
 	const raw = (name, value) =>
-		(/^srcdoc$/i.test(name) ||
+		((/^srcdoc$/i.test(name) ||
 			(/^src$/i.test(name) && /^\s*data:text\/html/i.test(value))) &&
-		!value.includes('createClient');
+			!value.includes('createClient')) ||
+		// (and a refresh meta's content, unrouted)
+		(/^content$/i.test(name) && /url=deferred-refusals-landed/.test(value));
 	const setAttribute = Element.prototype.setAttribute;
 	Element.prototype.setAttribute = function (name, value) {
 		if (raw(String(name), String(value))) reached.push('rawDocument');
@@ -272,10 +279,12 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			'execCommand',
 			'contextualFragment',
 			'open',
-			'srcdoc',
-			'javascriptDocument',
 			...POLICED,
 		],
+	);
+	const documents = await top.evaluate(
+		(calls) => window.__child(calls),
+		DOCUMENTS,
 	);
 	ok(
 		'with the parts, the counting stand-ins see the calls that reach the browser',
@@ -293,9 +302,13 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 	for (const call of ['srcdoc', 'javascriptDocument'])
 		ok(
 			`with the parts, a document the page makes (${call}) runs in its shell`,
-			answer.out?.[call]?.ran === 'injected' &&
-				!answer.reached?.includes('rawDocument'),
-			JSON.stringify({ out: answer.out?.[call], reached: answer.reached }),
+			documents.out?.[call]?.ran === 'injected' &&
+				Array.isArray(documents.reached) &&
+				documents.reached.length === 0,
+			JSON.stringify({
+				out: documents.out?.[call],
+				reached: documents.reached,
+			}),
 		);
 	ok(
 		'with the parts, an XML document a frame loads lands its tree',
@@ -310,6 +323,23 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			out: answer.out?.protocolHandler,
 			reached: answer.reached,
 		}),
+	);
+	ok(
+		'with the parts, a data: frame shows its document',
+		documents.out?.dataFrame?.ran === 'data',
+		JSON.stringify(documents.out?.dataFrame),
+	);
+	ok(
+		'with the parts, a refresh meta a script inserts refreshes its frame',
+		documents.out?.refresh?.refreshed === true,
+		JSON.stringify(documents.out?.refresh),
+	);
+	const based = await top.evaluate(() => window.__baseIn());
+	ok(
+		'with the parts, a base a report-only base-uri refuses applies and is reported',
+		based.baseURI === 'https://base.example/based/' &&
+			based.events?.includes('base-uri https://base.example/based/ report'),
+		JSON.stringify(based),
 	);
 	ok(
 		'with the parts, a worker starts, through the browser',
@@ -420,32 +450,49 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 // without them: every call refuses, and nothing reaches the browser
 {
 	const from = downloads.length;
-	const answer = await top.evaluate(
-		async ({ name, calls }) => {
-			const client = window[name];
-			Reflect.defineProperty(client, 'deferredPartsText', {
-				configurable: true,
-				value: () => '__stompDeferred=function(){throw new Error("no parts")};',
-			});
-			try {
-				return await window.__child(calls);
-			} finally {
-				Reflect.deleteProperty(client, 'deferredPartsText');
-			}
-		},
-		{
-			name,
-			calls: [
-				...REFUSING,
-				'foreignStats',
-				'notFunction',
-				'blankCopy',
-				'xmlLoad',
-				...POLICED,
-			],
-		},
+	const without = (calls) =>
+		top.evaluate(
+			async ({ name, calls }) => {
+				const client = window[name];
+				Reflect.defineProperty(client, 'deferredPartsText', {
+					configurable: true,
+					value: () =>
+						'__stompDeferred=function(){throw new Error("no parts")};',
+				});
+				try {
+					return await window.__child(calls);
+				} finally {
+					Reflect.deleteProperty(client, 'deferredPartsText');
+				}
+			},
+			{ name, calls },
+		);
+	// (the frame loads with the parts, its base is given without them)
+	const based = await top.evaluate(
+		(name) =>
+			window
+				.__baseIn(() =>
+					Reflect.defineProperty(window[name], 'deferredPartsText', {
+						configurable: true,
+						value: () =>
+							'__stompDeferred=function(){throw new Error("no parts")};',
+					}),
+				)
+				.finally(() =>
+					Reflect.deleteProperty(window[name], 'deferredPartsText'),
+				),
+		name,
 	);
-	const out = answer.out ?? {};
+	const answer = await without([
+		...REFUSING,
+		'foreignStats',
+		'notFunction',
+		'blankCopy',
+		'xmlLoad',
+		...POLICED,
+	]);
+	const documents = await without(DOCUMENTS);
+	const out = { ...answer.out, ...documents.out };
 	// the parts' own error; an identity get with STomp's passkey provider
 	// in place goes to it, whose part is missing too: it ends as one the
 	// user declined (Credentials DECLINED), never at the browser's get
@@ -460,14 +507,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		out[call]?.threw === 'no parts' || refusedPromise(call);
 	for (const call of REFUSING.filter(
 		(call) =>
-			![
-				'xmlDocument',
-				'download',
-				'formAimed',
-				'navigateOther',
-				'srcdoc',
-				'javascriptDocument',
-			].includes(call),
+			!['xmlDocument', 'download', 'formAimed', 'navigateOther'].includes(call),
 	))
 		ok(
 			`without the parts, ${call} refuses${
@@ -503,6 +543,26 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		"without the parts, a javascript: URL's markup is refused: the frame keeps its document",
 		out.javascriptDocument?.ran === false,
 		JSON.stringify(out.javascriptDocument),
+	);
+	ok(
+		'without the parts, a data: frame is refused: it is not navigated',
+		out.dataFrame?.ran === false,
+		JSON.stringify(out.dataFrame),
+	);
+	ok(
+		'without the parts, a refresh meta is refused: its frame stays',
+		out.refresh?.stayed === true,
+		JSON.stringify(out.refresh),
+	);
+	// as an enforced base-uri refuses it: the browser refuses its refusal
+	// URL, and nothing reports the page's own base
+	// it applies to nothing: the document's base URL is its own
+	ok(
+		'without the parts, a base a report-only base-uri refuses is refused and not reported',
+		Array.isArray(based.events) &&
+			!based.events.some((event) => event.includes('base.example')) &&
+			based.baseURI === based.documentURL,
+		JSON.stringify(based),
 	);
 	ok(
 		'without the parts, a form a frame aims at its parent navigates nothing, neither the copy nor the browser',
@@ -567,8 +627,11 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 	);
 	ok(
 		'without the parts, no call reaches the browser',
-		Array.isArray(answer.reached) && answer.reached.length === 0,
-		JSON.stringify(answer.reached),
+		Array.isArray(answer.reached) &&
+			answer.reached.length === 0 &&
+			Array.isArray(documents.reached) &&
+			documents.reached.length === 0,
+		JSON.stringify([answer.reached, documents.reached]),
 	);
 }
 

@@ -21,6 +21,51 @@
 				document.body.append(frame);
 				return answer;
 			};
+			// A frame under a report-only base-uri 'none', and a base its
+			// document is given once it has loaded, with `before` run first
+			// (the suite takes the parts away there: the frame's own load is
+			// not what is checked): the violation events its document sees,
+			// and its base URL
+			let based = 0;
+			window.__baseIn = (before = () => {}) =>
+				new Promise((resolve) => {
+					const frame = document.createElement('iframe');
+					addEventListener('message', function framed(event) {
+						if (event.source !== frame.contentWindow || event.data !== 'framed')
+							return;
+						removeEventListener('message', framed);
+						const inner = frame.contentDocument;
+						const events = [];
+						inner.addEventListener('securitypolicyviolation', (violation) =>
+							events.push(
+								`${violation.violatedDirective} ${violation.blockedURI} ${violation.disposition}`,
+							),
+						);
+						before();
+						try {
+							const base = inner.createElement('base');
+							base.href = 'https://base.example/based/';
+							inner.head.append(base);
+						} catch (error) {
+							resolve({ threw: String(error && error.message) });
+						}
+						setTimeout(() => {
+							try {
+								resolve({
+									events,
+									baseURI: inner.baseURI,
+									documentURL: inner.URL,
+								});
+							} catch (error) {
+								resolve({ events, baseThrew: String(error && error.message) });
+							}
+						}, 1500);
+					});
+					setTimeout(() => resolve({ framed: false }), 15000);
+					// (a URL of its own each time)
+					frame.src = `/csp/framed?ro=${encodeURIComponent("base-uri 'none'")}&n=${++based}`;
+					document.body.append(frame);
+				});
 		</script>
 	</body>
 </html>

@@ -86,7 +86,9 @@
 // (and the shells of a document the page makes itself that no worker
 // serves, ../../htmlShell.ts and ../../xmlShell.ts, at a document's first
 // srcdoc, object or embed document, javascript: URL markup or data: URL
-// document)
+// document; with them the rare branches of DOMAttributes' hooks,
+// ./rareAttributes.ts with ../../refresh.ts, at a document's first data:
+// frame, refresh meta or report-only refusal of a base)
 //
 // (STomp's passkey provider's WebAuthn client is a deferred statement of
 // its own, ./passkeysPart.ts: few documents call WebAuthn, and a top that
@@ -160,6 +162,7 @@ import { pictureWindows } from './pictureWindows';
 import { policyChecks } from './policyChecks';
 import { presentationIds } from './presentations';
 import { protocolHandler } from './protocolHandlers';
+import { metaRefresh, opaqueDocument, reportBase } from './rareAttributes';
 import { rtcInstall } from './rtcInstall';
 import { seenImages } from './seenImages';
 import {
@@ -318,6 +321,12 @@ export const parts = {
 	// object's copy, a javascript: URL's markup, a data: URL)
 	modifyHTML,
 	modifyXML,
+	// and the rare branches of DOMAttributes' hooks, with the HTML shell's
+	// group: a data: frame's document, a refresh meta, a report-only
+	// base-uri's report (./rareAttributes.ts; modules/DOMAttributes.ts)
+	opaqueDocument,
+	metaRefresh,
+	reportBase,
 	ownStoreRefusal,
 	targetAcross,
 	navigateAcross,
