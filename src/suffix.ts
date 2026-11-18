@@ -2,7 +2,10 @@
 // of the suffix module when this thread holds it (`rewriter: 'wasm'`,
 // src/wasm/suffix.ts) and of tldts otherwise. The two give the same answer
 // for every input (rust/host/suffix.mjs compares them), so which one
-// answered never shows. This is the one place a bundle takes tldts in from:
+// answered never shows (the service worker's tldts is evaluated at its
+// first question and reads its trie from a part of the worker's script:
+// src/server/tldtsPart.ts). This is the one place a bundle takes tldts in
+// from:
 // when the module serves every thread, what is left to remove is here
 // (docs/rust-plan.md, phase 2).
 import {

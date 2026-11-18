@@ -270,6 +270,21 @@ on every save (use a `git worktree`).
   holds the Response (until it is collected or the worker stops): a probe
   that restarts Chrome right after a load must stop the worker first
   (`ServiceWorker.stopAllWorkers`) or it measures nothing consumed.
+- **Chrome compiles all of the service worker's script when it installs
+  it.** Every function, eagerly, and all of it goes into the script's code
+  cache before the install event (Chrome 157): bytes of
+  `dist/serviceWorker.js` cost a first visit even if they never run, and
+  a literal is built again at every start. Data a worker may never read can
+  be one of its parts (build.js `SW_PARTS`, `src/server/swParts.ts`): its
+  text is in a comment of the script, which neither the compiler nor the
+  cache reads, and the worker's own code parses it the first time it is
+  asked for (tldts's trie is one, `src/server/tldtsTrie.ts`, with tldts's
+  modules evaluated at its first call, `src/server/tldtsPart.ts`). Never
+  make a part code the worker evaluates: nothing the worker needs is a
+  compiled string (rewriteJS.ts asks `new Function` only a question it
+  can do without), so a host whose policy forbids that (and the wasm
+  modules with it) runs on tldts. A script the worker imports at install is compiled as eagerly,
+  and a module service worker has no code cache at all.
 - **The HTTP cache keeps and asks as Chrome's does, by measurement.**
   docs/http-cache.md is the table (what each shape of caching headers and
   each request cache mode makes of the next fetch) and the http-cache

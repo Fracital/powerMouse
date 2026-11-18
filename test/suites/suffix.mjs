@@ -7,6 +7,9 @@
 //   it names, what a lookup costs the instance;
 // - the glue every thread calls it through (src/wasm/suffix.ts): no answer
 //   without the module, tldts's answer with it, the same answer again;
+// - the service worker's tldts, whose trie is a part in a comment of its
+//   script (src/server/swParts.ts): the trie nowhere else in the script,
+//   the part's trie tldts's, and the lookup's answers tldts's;
 // - parity with tldts (rust/host/suffix.mjs, with a smaller fuzz than a
 //   run by hand): every rule of the pinned list, the hosts in the test
 //   data, IDN and IP and malformed forms, generated inputs, and the pinned
@@ -14,8 +17,8 @@
 //   that knows a rule the list does not fails here until the pin in
 //   rust/suffix/src/pins.env is raised.
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { done, ok, OUT } from '../lib.mjs';
 
 let esbuild;
@@ -195,6 +198,127 @@ ok(
 	suffix.suffixListPin()?.commit === pinned('PSL_COMMIT') &&
 		suffix.suffixListPin()?.date === pinned('PSL_DATE'),
 	JSON.stringify(suffix.suffixListPin()),
+);
+
+// the service worker's tldts reads its trie from a part (src/server/swParts.ts,
+// src/server/tldtsTrie.ts): the trie's text is a comment of the worker's
+// script, which Chrome neither compiles nor caches when it installs the
+// worker. Its lookup, built as the worker's build takes it (build.js
+// swTldts) and handed the holder of the worker's script as built, answers
+// as tldts, and its trie is tldts's, export for export.
+const worker = readFileSync(`${root}dist/serviceWorker.js`, 'utf8');
+const holderAt = worker.lastIndexOf('function __stompSwParts(){/*');
+const holder =
+	holderAt < 0
+		? ''
+		: worker.slice(holderAt, worker.indexOf('*/}', holderAt) + 3);
+ok(
+	"the service worker's script has tldts's trie only in its parts' comment",
+	holder.includes('kommunalforbund') &&
+		!worker.slice(0, holderAt).includes('kommunalforbund'),
+	`holder ${holder.length} of ${worker.length}`,
+);
+let workerTldts = null;
+if (holder) {
+	const trie = realpathSync(
+		`${root}node_modules/tldts/dist/es6/src/data/trie.js`,
+	);
+	const part = `${root}src/server/tldtsPart.ts`;
+	const out = `${OUT}suffix-worker.mjs`;
+	await esbuild.build({
+		stdin: {
+			contents:
+				`export { getDomain, getPublicSuffix } from ${JSON.stringify(part)};\n` +
+				`export * as trie from ${JSON.stringify(`${root}src/server/tldtsTrie.ts`)};\n`,
+			resolveDir: root,
+			loader: 'js',
+		},
+		bundle: true,
+		format: 'esm',
+		platform: 'neutral',
+		mainFields: ['module', 'main'],
+		target: 'es2022',
+		outfile: out,
+		logLevel: 'silent',
+		banner: { js: holder },
+		plugins: [
+			{
+				name: 'sw-tldts',
+				setup(build) {
+					build.onResolve({ filter: /^tldts$/ }, (args) =>
+						args.importer === part && args.pluginData !== 'sw-tldts'
+							? build.resolve(args.path, {
+									kind: 'import-statement',
+									importer: args.importer,
+									resolveDir: args.resolveDir,
+									pluginData: 'sw-tldts',
+								})
+							: undefined,
+					);
+					build.onResolve({ filter: /\/data\/trie$/ }, async (args) => {
+						if (args.pluginData === 'sw-tldts') return undefined;
+						const found = await build.resolve(args.path, {
+							kind: args.kind,
+							importer: args.importer,
+							resolveDir: args.resolveDir,
+							pluginData: 'sw-tldts',
+						});
+						return realpathSync(found.path) === trie
+							? { path: `${root}src/server/tldtsTrie.ts` }
+							: undefined;
+					});
+				},
+			},
+		],
+	});
+	const built = readFileSync(out, 'utf8');
+	workerTldts = await import(`${out}?${Date.now()}`);
+	const original = await import(pathToFileURL(trie).href);
+	const differ = Object.keys(original).filter(
+		(name) =>
+			JSON.stringify(
+				ArrayBuffer.isView(original[name])
+					? [original[name].constructor.name, ...original[name]]
+					: original[name],
+			) !==
+			JSON.stringify(
+				ArrayBuffer.isView(workerTldts.trie[name])
+					? [workerTldts.trie[name].constructor.name, ...workerTldts.trie[name]]
+					: workerTldts.trie[name],
+			),
+	);
+	ok(
+		"the service worker's tldts carries no trie of its own, and the part's is tldts's, export for export",
+		!built.slice(holder.length).includes('kommunalforbund') &&
+			Object.keys(workerTldts.trie).sort().join() ===
+				Object.keys(original).sort().join() &&
+			differ.length === 0,
+		JSON.stringify(differ),
+	);
+}
+const workerApart = workerTldts
+	? samples
+			.concat([
+				'a.b.github.io',
+				'x.co.uk',
+				'192.168.0.1',
+				'a.b.blogspot.com',
+				'www.ck',
+			])
+			.filter(
+				(input) =>
+					workerTldts.getDomain(input) !== tldts.getDomain(input) ||
+					workerTldts.getDomain(input, { allowPrivateDomains: true }) !==
+						tldts.getDomain(input, { allowPrivateDomains: true }) ||
+					workerTldts.getPublicSuffix(input) !== tldts.getPublicSuffix(input) ||
+					workerTldts.getPublicSuffix(input, { allowPrivateDomains: true }) !==
+						tldts.getPublicSuffix(input, { allowPrivateDomains: true }),
+			)
+	: null;
+ok(
+	"the service worker's tldts, its trie read from the part, answers as tldts",
+	workerApart?.length === 0,
+	JSON.stringify(workerApart),
 );
 
 // parity with tldts, the harness's own run

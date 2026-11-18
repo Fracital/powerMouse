@@ -15,6 +15,7 @@ import {
 	writeFile,
 } from 'node:fs/promises';
 import { dirname, relative, resolve, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { context, build as esbuildBuild, formatMessages } from 'esbuild';
 import { rimraf } from 'rimraf';
 import ts from 'typescript';
@@ -1207,6 +1208,156 @@ const stubCrypto = {
 	'crypto-js/md5': cryptoStub,
 };
 
+/**
+ * The service worker's parts (src/server/swParts.ts): data a worker may
+ * never read, which its script carries as text in a comment and parses the
+ * first time it is asked for. Chrome compiles all of a service worker's
+ * script when it installs it and serializes all of it into the code cache
+ * before the install event, its literals among it; a comment is in neither.
+ * The worker evaluates no string: a part is data its own code reads. Each
+ * is its name and what makes its text.
+ */
+const SW_PARTS = [{ name: 'tldts-trie', text: tldtsTrieText }];
+/** the marks of the holder's comment (src/server/swParts.ts) */
+const SW_PART_NAME = '\u0002';
+const SW_PART_TEXT = '\u0003';
+const SW_PART_CLOSE = '*\u0001/';
+
+/** tldts's public suffix trie, the module tldts's lookup imports */
+const TLDTS_TRIE = 'node_modules/tldts/dist/es6/src/data/trie.js';
+/** what src/server/tldtsTrie.ts makes of each of the trie's exports */
+const TLDTS_TRIE_EXPORTS = {
+	nodeFlags: 'Uint8Array',
+	edgeStart: 'Uint16Array',
+	edgeLength: 'Uint8Array',
+	edgeChild: 'Uint16Array',
+	labelText: 'string',
+	rulesRoot: 'number',
+	exceptionsRoot: 'number',
+};
+/**
+ * The trie's values as JSON (src/server/tldtsTrie.ts), in ASCII so the
+ * worker's script stays a one-byte string. A tldts whose trie has other
+ * exports or kinds fails the build here: tldtsTrie.ts follows it first.
+ */
+async function tldtsTrieText() {
+	const trie = await import(pathToFileURL(realpathSync(TLDTS_TRIE)).href);
+	const names = Object.keys(trie).sort();
+	const expected = Object.keys(TLDTS_TRIE_EXPORTS).sort();
+	if (names.join() !== expected.join())
+		throw new Error(
+			`build: ${TLDTS_TRIE} exports ${names.join(', ')}, and src/server/tldtsTrie.ts makes ${expected.join(', ')}`,
+		);
+	const values = {};
+	for (const name of expected) {
+		const value = trie[name];
+		const kind = ArrayBuffer.isView(value)
+			? value.constructor.name
+			: typeof value;
+		if (kind !== TLDTS_TRIE_EXPORTS[name])
+			throw new Error(
+				`build: ${TLDTS_TRIE}'s ${name} is a ${kind}, and src/server/tldtsTrie.ts makes a ${TLDTS_TRIE_EXPORTS[name]}`,
+			);
+		values[name] = ArrayBuffer.isView(value) ? Array.from(value) : value;
+	}
+	return JSON.stringify(values).replace(
+		/[\u007f-￿]/g,
+		(char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`,
+	);
+}
+
+/** each part's text as the holder's comment has it */
+async function swPartTexts() {
+	return Promise.all(
+		SW_PARTS.map(async ({ name, text: make }) => {
+			const text = await make();
+			for (const mark of [SW_PART_NAME, SW_PART_TEXT, '\u0001'])
+				if (text.includes(mark))
+					throw new Error(
+						`build: the service worker's part '${name}' has a U+000${mark.charCodeAt(0)} of its own`,
+					);
+			return `${SW_PART_NAME}${name}${SW_PART_TEXT}${text.replaceAll('*/', SW_PART_CLOSE)}`;
+		}),
+	);
+}
+
+/**
+ * tldts in the service worker: src/suffix.ts's import of it is
+ * src/server/tldtsPart.ts, which requires tldts at its first call (so
+ * esbuild evaluates tldts's modules then), and the trie tldts's lookup
+ * imports is src/server/tldtsTrie.ts, which parses its part
+ *
+ * @type {import('esbuild').Plugin}
+ */
+const swTldts = {
+	name: 'sw-tldts',
+	setup(pluginBuild) {
+		const suffix = resolve('src/suffix.ts');
+		const trie = realpathSync(resolve(TLDTS_TRIE));
+		const part = resolve('src/server/tldtsPart.ts');
+		pluginBuild.onResolve({ filter: /^tldts$/ }, (args) => {
+			if (args.importer === suffix) return { path: part };
+			// (the part's require is of the ES module tldts's import is, not
+			// of its CommonJS build, which carries a trie of its own)
+			if (args.importer === part && args.pluginData !== 'sw-tldts')
+				return pluginBuild.resolve(args.path, {
+					kind: 'import-statement',
+					importer: args.importer,
+					resolveDir: args.resolveDir,
+					pluginData: 'sw-tldts',
+				});
+			return undefined;
+		});
+		pluginBuild.onResolve({ filter: /\/data\/trie$/ }, async (args) => {
+			if (args.pluginData === 'sw-tldts') return undefined;
+			const found = await pluginBuild.resolve(args.path, {
+				kind: args.kind,
+				importer: args.importer,
+				resolveDir: args.resolveDir,
+				pluginData: 'sw-tldts',
+			});
+			return !found.errors.length && realpathSync(found.path) === trie
+				? { path: resolve('src/server/tldtsTrie.ts') }
+				: undefined;
+		});
+	},
+};
+
+/**
+ * The service worker's build writes its files itself: the script with the
+ * parts' holder, `function __stompSwParts(){/*...*\/}`, as the last statement
+ * of its IIFE (in the bundle's scope, no global of the worker's). The map
+ * stays the build's: nothing it maps moves.
+ *
+ * @type {import('esbuild').Plugin}
+ */
+const swPartsHolder = {
+	name: 'sw-parts-holder',
+	setup(pluginBuild) {
+		pluginBuild.onEnd(async (result) => {
+			if (result.errors.length || !result.outputFiles) return;
+			const holder = `function __stompSwParts(){/*${(await swPartTexts()).join('')}*/}`;
+			for (const file of result.outputFiles) {
+				let contents = file.contents;
+				if (file.path.endsWith('.js')) {
+					const text = file.text;
+					const end = text.lastIndexOf('})();');
+					if (
+						end < 0 ||
+						!/^\n(\/\/# sourceMappingURL=[^\n]*\n)?$/.test(text.slice(end + 5))
+					)
+						throw new Error(
+							`build: ${relative(resolve('.'), file.path)} does not end with its IIFE`,
+						);
+					contents = `${text.slice(0, end)}${holder}${text.slice(end)}`;
+				}
+				await mkdir(dirname(file.path), { recursive: true });
+				await writeFile(file.path, contents);
+			}
+		});
+	},
+};
+
 /** the document bundles, built before the others (`bundles`) */
 const DOCUMENT_BUNDLES = ['injectDocument', 'injectDocumentFull'];
 
@@ -1245,6 +1396,9 @@ const builds = [
 	{
 		entryPoints: { serviceWorker: 'src/server/serviceWorker.ts' },
 		format: 'iife',
+		// (its parts: SW_PARTS)
+		write: false,
+		plugins: [swTldts, swPartsHolder],
 	},
 	{
 		entryPoints: { Controller: 'src/controller/entry.ts' },
