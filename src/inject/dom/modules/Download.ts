@@ -87,7 +87,7 @@ export default class DownloadModule extends Module<DocumentClient> {
 			let url: URL;
 			try {
 				// the hooked getter answers with what the page wrote
-				url = new URL(link.getAttribute('href')!, client.baseURL.toString());
+				url = new URL(link.getAttribute('href')!, client.baseHref);
 			} catch (error) {
 				return;
 			}

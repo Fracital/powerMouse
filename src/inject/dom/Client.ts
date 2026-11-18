@@ -2971,7 +2971,7 @@ export default class DocumentClient extends Client {
 			if (typeof value !== 'string') continue;
 			try {
 				entries.push([
-					new URL(key, this.baseURL.toString()).href.replace(/#.*$/s, ''),
+					new URL(key, this.baseHref).href.replace(/#.*$/s, ''),
 					value,
 				]);
 			} catch (error) {
@@ -3192,6 +3192,19 @@ export default class DocumentClient extends Client {
 	 */
 	get baseURL(): StompURL {
 		if (this.#parseBase) return this.#parseBase;
+		const memo = this.#readBase();
+		return new StompURL(memo.href, this.codec, memo.directory);
+	}
+	/**
+	 * `baseURL.toString()` without a copy: nearly every hook resolves the
+	 * page's URLs against it, and a copy made only to be printed was a URL
+	 * parse on every attribute a hook routed
+	 */
+	override get baseHref(): string {
+		if (this.#parseBase) return this.#parseBase.toString();
+		return this.#readBase().href;
+	}
+	#readBase(): { href: string; directory: string } {
 		// Nearly every hook asks, and decoding the route each time was a
 		// tenth of the hooks' time on a Google keystroke: the answer is a
 		// function of the base URL and the shell's name for the page, so it
@@ -3202,8 +3215,7 @@ export default class DocumentClient extends Client {
 			this.global.document,
 		) as string;
 		const memo = this.#urlMemo;
-		if (memo && memo.base === base && memo.named === named)
-			return new StompURL(memo.href, this.codec, memo.directory);
+		if (memo && memo.base === base && memo.named === named) return memo;
 		const url = this.#readURL(named);
 		this.#urlMemo = {
 			base,
@@ -3211,7 +3223,7 @@ export default class DocumentClient extends Client {
 			href: url.url.href,
 			directory: url.directory,
 		};
-		return url;
+		return this.#urlMemo;
 	}
 	#readURL(named: unknown): StompURL {
 		// a document the page made (a blob, a data: frame, an inline document
@@ -3645,7 +3657,7 @@ export default class DocumentClient extends Client {
 	#table(): PrewrittenTable | null {
 		const table = this.#prewritten;
 		if (!table) return null;
-		if (table.url === this.baseURL.toString()) return table;
+		if (table.url === this.baseHref) return table;
 		return null;
 	}
 	/** the inline scripts and styles of the document loadHTML wrote, rewritten by the worker */

@@ -44,7 +44,7 @@ export function precommitRedirect(
 	const text = `${args[0]}`;
 	let url: URL;
 	try {
-		url = new URL(text, client.baseURL.toString());
+		url = new URL(text, client.baseHref);
 	} catch (error) {
 		return Reflect.apply(target, that, [text, ...rest]);
 	}

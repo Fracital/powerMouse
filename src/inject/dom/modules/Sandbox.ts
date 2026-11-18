@@ -98,8 +98,7 @@ export default class SandboxModule extends Module<DocumentClient> {
 			'caches',
 			"Failed to read the 'caches' property from 'Window': Cache storage is disabled because the context is sandboxed and lacks the 'allow-same-origin' flag.",
 		);
-		const resolve = (value: unknown) =>
-			new URL(String(value), client.baseURL.toString());
+		const resolve = (value: unknown) => new URL(String(value), client.baseHref);
 		const LOCATION_PARTS = [
 			'href',
 			'protocol',

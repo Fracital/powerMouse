@@ -40,7 +40,7 @@ export default class WorkerModule extends Module<Client> {
 		 * SecurityError naming the script and the page's origin.
 		 */
 		const checkOrigin = (name: string, source: string) => {
-			const url = new URL(source, moduleClient.baseURL.toString());
+			const url = new URL(source, moduleClient.baseHref);
 			const { origin } = moduleClient.url.url;
 			if (['http:', 'https:'].includes(url.protocol) && url.origin !== origin)
 				throw withStack(
@@ -125,7 +125,7 @@ export default class WorkerModule extends Module<Client> {
 					// browser fails it (requestVerdict reports it)
 					const resolved = moduleClient.encodingParse(
 						source,
-						moduleClient.baseURL.toString(),
+						moduleClient.baseHref,
 					);
 					if (requestRefused(moduleClient, 'worker-src', resolved)) {
 						args[0] = trustedScriptURL(
@@ -147,8 +147,7 @@ export default class WorkerModule extends Module<Client> {
 						start,
 						worker,
 						own,
-						moduleClient.encodingParse(source, moduleClient.baseURL.toString())
-							.href,
+						moduleClient.encodingParse(source, moduleClient.baseHref).href,
 					);
 					moduleClient.provisionWorkerTransport(worker, blobScript(url));
 					if (own) parts.releaseOnLoad(start, worker, own);
@@ -216,7 +215,7 @@ export default class WorkerModule extends Module<Client> {
 					if (args.length)
 						args[0] = routeJS(
 							new StompURL(
-								new URL(String(args[0]), moduleClient.baseURL.toString()),
+								new URL(String(args[0]), moduleClient.baseHref),
 								moduleClient.url,
 							),
 							moduleClient.url,

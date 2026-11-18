@@ -722,15 +722,12 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 					!this.#async &&
 					(!syncAllowed() ||
 						that.client.connectRefusal(
-							that.client.encodingParse(
-								this.#url,
-								that.client.baseURL.toString(),
-							),
+							that.client.encodingParse(this.#url, that.client.baseHref),
 						))
 				) {
 					const failed = that.client.encodingParse(
 						this.#url,
-						that.client.baseURL.toString(),
+						that.client.baseHref,
 					);
 					failed.hash = '';
 					failed.username = '';
@@ -778,7 +775,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				// one); the route is of the URL without them
 				const target = that.client.encodingParse(
 					this.#url,
-					that.client.baseURL.toString(),
+					that.client.baseHref,
 				);
 				if (this.#username !== null) target.username = this.#username;
 				if (this.#password !== null) target.password = this.#password;

@@ -105,7 +105,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 			// the popup's first navigation is decided by this document's
 			// opener policy facts (src/coop.ts), told before it starts
 			try {
-				const url = new URL(String(page), moduleClient.baseURL.toString());
+				const url = new URL(String(page), moduleClient.baseHref);
 				if (page !== undefined && /^https?:$/.test(url.protocol))
 					moduleClient
 						.getModule(NavigationHintModule)
@@ -481,7 +481,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 				try {
 					url = moduleClient.encodingParse(
 						link.getAttribute('href')!,
-						moduleClient.baseURL.toString(),
+						moduleClient.baseHref,
 					);
 				} catch (error) {
 					// no URL: the click navigates nothing, here or in the browser

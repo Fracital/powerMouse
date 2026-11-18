@@ -166,10 +166,7 @@ export default class LocationModule extends Module<DocumentClient> {
 				const url = String(args[0]);
 				if (failsToParse(moduleClient, url))
 					return Reflect.apply(target, real, [url]);
-				args[0] = moduleClient.encodingParse(
-					url,
-					moduleClient.baseURL.toString(),
-				);
+				args[0] = moduleClient.encodingParse(url, moduleClient.baseHref);
 			}
 
 			// Location's own: a value that is no scheme throws, where
@@ -306,7 +303,7 @@ export default class LocationModule extends Module<DocumentClient> {
 				return Reflect.apply(real[method], real, args.length ? [url] : []);
 			const destination = moduleClient.encodingParse(
 				url,
-				moduleClient.baseURL.toString(),
+				moduleClient.baseHref,
 			);
 			moduleClient.getModule(NavigationHintModule)?.hint(destination.href);
 			return go(destination, method);

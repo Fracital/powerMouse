@@ -911,10 +911,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		if (this.#holds().has(context)) return context;
 		let target: URL | undefined;
 		try {
-			target = this.client.encodingParse(
-				String(url),
-				this.client.baseURL.toString(),
-			);
+			target = this.client.encodingParse(String(url), this.client.baseHref);
 		} catch (error) {
 			// no URL: the window's own document decides
 		}

@@ -449,6 +449,10 @@ export default class Client {
 	get baseURL(): StompURL {
 		return this.url;
 	}
+	/** `baseURL.toString()` without a copy */
+	get baseHref(): string {
+		return this.baseURL.toString();
+	}
 	/**
 	 * `input` against `base` as the browser parses the URL of an element, an
 	 * XMLHttpRequest, a beacon, an EventSource, a worker or a navigation: a

@@ -363,7 +363,7 @@ export default class FetchModule extends Module<Client> {
 						[text, ...args.slice(1)],
 						newTarget || target,
 					);
-				const url = client.encodingParse(text, client.baseURL.toString());
+				const url = client.encodingParse(text, client.baseHref);
 
 				// one a worker's policy refuses fails as the browser fails it
 				// (requestVerdict, which reports it with no sourceFile, as
@@ -468,7 +468,7 @@ export default class FetchModule extends Module<Client> {
 				if (!args.length) return Reflect.apply(target, that, args);
 				let location: string;
 				try {
-					location = new URL(String(args[0]), client.baseURL.toString()).href;
+					location = new URL(String(args[0]), client.baseHref).href;
 				} catch (error) {
 					throw new realm.TypeError(
 						"Failed to execute 'redirect' on 'Response': Invalid URL",
@@ -500,7 +500,7 @@ export default class FetchModule extends Module<Client> {
 			if (referrer === '' || referrer === 'about:client') return init;
 			let requested: URL;
 			try {
-				requested = new URL(referrer, client.baseURL.toString());
+				requested = new URL(referrer, client.baseHref);
 			} catch (error) {
 				throw new realm.TypeError(
 					`${failed}: Referrer '${referrer}' is not a valid URL.`,
@@ -538,7 +538,7 @@ export default class FetchModule extends Module<Client> {
 				else {
 					const text = String(args[0]);
 					try {
-						input = new URL(text, client.baseURL.toString());
+						input = new URL(text, client.baseHref);
 					} catch (error) {
 						// a URL that does not parse against the page's (a relative
 						// one in a data: worker, whose origin is opaque) throws
@@ -635,7 +635,7 @@ export default class FetchModule extends Module<Client> {
 					const text = String(args[0]);
 					if (args.length && failsToParse(client, text))
 						return await Reflect.apply(target, that, [text, ...args.slice(1)]);
-					url = new URL(text, client.baseURL.toString());
+					url = new URL(text, client.baseHref);
 					// a URL with credentials is no request: the browser's own
 					// TypeError, which the route (it has none) would not get
 					if (url.username !== '' || url.password !== '')
@@ -796,7 +796,7 @@ export default class FetchModule extends Module<Client> {
 					try {
 						url = request
 							? new URL(Reflect.apply(nativeRequestURL, request, []) as string)
-							: new URL(String(args[0]), client.baseURL.toString());
+							: new URL(String(args[0]), client.baseHref);
 					} catch (error) {
 						// the browser's own TypeError for a URL that does not parse
 						return Reflect.apply(target, that, args);

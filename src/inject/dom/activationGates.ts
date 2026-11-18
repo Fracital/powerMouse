@@ -249,8 +249,7 @@ function rules(client: DocumentClient, gate: Gate) {
 					args[0] !== undefined &&
 					String(args[0]) !== '' &&
 					/^https?:$/.test(
-						client.encodingParse(String(args[0]), client.baseURL.toString())
-							.protocol,
+						client.encodingParse(String(args[0]), client.baseHref).protocol,
 					);
 			} catch (error) {
 				// no URL: the browser's

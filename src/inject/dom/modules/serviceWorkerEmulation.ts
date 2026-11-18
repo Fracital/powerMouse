@@ -325,7 +325,7 @@ export function emulateServiceWorker(
 			throw new global.TypeError(
 				"Failed to execute 'register' on 'ServiceWorkerContainer': 1 argument required, but only 0 present.",
 			);
-		const base = client.baseURL.toString();
+		const base = client.baseHref;
 		const text = String(args[0]);
 		let script: URL;
 		try {
@@ -421,7 +421,7 @@ export function emulateServiceWorker(
 		return objects.registration(snapshot);
 	});
 	hook(objects, proto, 'getRegistration', isContainer, 0, async (args) => {
-		const base = client.baseURL.toString();
+		const base = client.baseHref;
 		let url: URL;
 		try {
 			url = new URL(

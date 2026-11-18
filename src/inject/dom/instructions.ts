@@ -54,7 +54,7 @@ export function instructionData(
 		mapStylesheetHref(page, (href) => {
 			try {
 				const resource = new StompURL(
-					new URL(href, client.baseURL.toString()),
+					new URL(href, client.baseHref),
 					client.baseURL,
 				);
 				return stylesheetKind(page) === 'xsl'

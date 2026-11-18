@@ -305,10 +305,7 @@ export default class AccessModule extends Module<Client> {
 			if (isBareSpecifier(specifier)) return specifier;
 			let resource: URL;
 			try {
-				resource = new URL(
-					specifier,
-					baseURL || moduleClient.baseURL.toString(),
-				);
+				resource = new URL(specifier, baseURL || moduleClient.baseHref);
 			} catch (error) {
 				// no URL: the browser's import fails on it as it does natively
 				return specifier;
@@ -1075,10 +1072,7 @@ export default class AccessModule extends Module<Client> {
 						set(value);
 						return result;
 					}
-					const destination = new URL(
-						<urlLike>value,
-						moduleClient.baseURL.toString(),
-					);
+					const destination = new URL(<urlLike>value, moduleClient.baseHref);
 					set(
 						// this document's own location: a navigation the browser's
 						// history records (another window's is that window's)

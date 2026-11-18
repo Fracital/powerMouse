@@ -65,7 +65,7 @@ export default class WebSocketModule extends Module<Client> {
 				// constructor, which throws before it connects anywhere
 				let parsed: URL | null = null;
 				if (args.length && !failsToParse(client, String(url)))
-					parsed = new URL(String(url), client.baseURL.toString());
+					parsed = new URL(String(url), client.baseHref);
 				if (
 					!parsed ||
 					![...wsProtocols, 'http:', 'https:'].includes(parsed.protocol) ||

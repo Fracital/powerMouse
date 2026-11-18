@@ -104,7 +104,7 @@ export default class HistoryModule extends Module<DocumentClient> {
 					const text = `${args[2]}`;
 					let url: URL | null;
 					try {
-						url = new URL(text, this.client.baseURL.toString());
+						url = new URL(text, this.client.baseHref);
 					} catch (error) {
 						url = null;
 					}

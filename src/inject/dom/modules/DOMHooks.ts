@@ -659,7 +659,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			element.getAttributeOG(attribute) ?? element.getAttribute(attribute);
 		if (value === null) return null;
 		try {
-			new URL(value, this.client.baseURL.toString());
+			new URL(value, this.client.baseHref);
 			return null;
 		} catch (error) {
 			return value;
@@ -792,7 +792,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			if (args[0] !== undefined && String(args[0]) !== '')
 				destination = moduleClient.encodingParse(
 					String(args[0]),
-					moduleClient.baseURL.toString(),
+					moduleClient.baseHref,
 				);
 			const routable =
 				destination !== null && /^https?:$/.test(destination.protocol);
@@ -1049,7 +1049,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// opened on a javascript: URL, a document the page made with
 					// createHTMLDocument) has none for the page either
 					if (base === 'about:blank') return base;
-					return responseURLOf(that) ?? moduleClient.baseURL.toString();
+					return responseURLOf(that) ?? moduleClient.baseHref;
 				},
 			),
 		});
@@ -1090,7 +1090,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					try {
 						return moduleClient.encodingParse(
 							written,
-							moduleClient.baseURL.toString(),
+							moduleClient.baseHref,
 							that,
 						).href;
 					} catch (error) {
@@ -1715,10 +1715,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						try {
 							made = routeHTML(
 								new StompURL(
-									moduleClient.encodingParse(
-										value,
-										moduleClient.baseURL.toString(),
-									),
+									moduleClient.encodingParse(value, moduleClient.baseHref),
 									moduleClient.baseURL,
 								),
 								moduleClient.baseURL,

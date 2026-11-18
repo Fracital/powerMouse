@@ -317,7 +317,7 @@ export default class NavigateModule extends Module<DocumentClient> {
 				try {
 					resolved = moduleClient.encodingParse(
 						href,
-						moduleClient.baseURL.toString(),
+						moduleClient.baseHref,
 					).href;
 				} catch (error) {
 					continue;

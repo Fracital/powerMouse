@@ -202,14 +202,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				.encodingParse(
 					(element.getAttributeOG(attribute) ??
 						element.getAttribute(attribute))!,
-					moduleClient.baseURL.toString(),
+					moduleClient.baseHref,
 					element,
 				)
 				.toString();
 		/** what the page's URL `value` names, against the document's base */
 		const pageURL = (value: string) =>
 			new StompURL(
-				moduleClient.encodingParse(value, moduleClient.baseURL.toString()),
+				moduleClient.encodingParse(value, moduleClient.baseHref),
 				moduleClient.baseURL,
 			);
 		/** route one URL attribute, keeping the page's value as the original */
@@ -239,7 +239,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			moduleClient
 				.encodingParse(
 					(element.getAttributeOG('href') ?? element.getAttribute('href'))!,
-					responseURLOf(element) ?? moduleClient.baseURL.toString(),
+					responseURLOf(element) ?? moduleClient.baseHref,
 					element,
 				)
 				.toString();
@@ -1011,7 +1011,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					routed,
 					page: moduleClient.encodingParse(
 						element.getAttributeOG(attribute) ?? routed,
-						moduleClient.baseURL.toString(),
+						moduleClient.baseHref,
 					).href,
 				},
 			];
@@ -1667,7 +1667,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.setAttributeOG('src', element.getAttribute('src')!);
 					const url = moduleClient.encodingParse(
 						element.getAttribute('src')!,
-						moduleClient.baseURL.toString(),
+						moduleClient.baseHref,
 					);
 					// the page's own script-src refuses this external script: it
 					// does not load, the browser fires 'error', and the inject
@@ -1780,7 +1780,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							element,
 							moduleClient.encodingParse(
 								element.getAttribute('href')!,
-								moduleClient.baseURL.toString(),
+								moduleClient.baseHref,
 							),
 						)
 					) {
@@ -2140,10 +2140,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// browser keeps it in the list and fails it if it picks it
 					const pages = parsed.map((src) => {
 						try {
-							return moduleClient.encodingParse(
-								src.url,
-								moduleClient.baseURL.toString(),
-							);
+							return moduleClient.encodingParse(src.url, moduleClient.baseHref);
 						} catch (error) {
 							return null;
 						}
@@ -2897,7 +2894,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			if (
 				unresolvable(
 					(element.getAttributeOG('action') ?? element.getAttribute('action'))!,
-					this.client.baseURL.toString(),
+					this.client.baseHref,
 				)
 			) {
 				element.setAttribute('action', element.getAttributeOG('action')!);
@@ -2913,7 +2910,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					.encodingParse(
 						(element.getAttributeOG('action') ??
 							element.getAttribute('action'))!,
-						moduleClient.baseURL.toString(),
+						moduleClient.baseHref,
 					)
 					.toString();
 			} catch (error) {
@@ -3143,7 +3140,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			const written = element.getAttributeOG(attribute);
 			return written !== null && written !== ''
 				? moduleClient
-						.encodingParse(written, moduleClient.baseURL.toString(), element)
+						.encodingParse(written, moduleClient.baseHref, element)
 						.toString()
 				: false;
 		};

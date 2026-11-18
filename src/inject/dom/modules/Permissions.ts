@@ -526,7 +526,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 				direct,
 				error: (message, name) =>
 					withStack(new global.DOMException(message, name)),
-				base: () => client.baseURL.toString(),
+				base: () => client.baseHref,
 				route: (url) => routeBinary(new StompURL(url, client.url)),
 				site,
 				onOpen: (callback) => addDocumentOpenListener(global, callback),

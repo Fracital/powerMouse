@@ -57,6 +57,9 @@ Reflect.defineProperty(globalThis, '__differential', {
 			config: host.config,
 			url,
 			baseURL: url,
+			// (its text, which the access API's location writes and
+			// src/inject/nativeErrors.ts resolve against: src/inject/Client.ts)
+			baseHref: url.toString(),
 			// a document's: a URL the page writes is resolved against the
 			// document's base, as src/inject/nativeErrors.ts failsToParse asks
 			isDOM: true,

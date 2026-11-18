@@ -138,7 +138,7 @@ export default class NavigatorModule extends Module<DocumentClient> {
 					if (args.length < 1) return Reflect.apply(target, that, args);
 					let url: URL;
 					try {
-						url = client.encodingParse(args[0], client.baseURL.toString());
+						url = client.encodingParse(args[0], client.baseHref);
 					} catch (error) {
 						// the browser's own TypeError for a URL that does not parse
 						return Reflect.apply(target, that, args);
