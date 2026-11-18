@@ -17,6 +17,11 @@
 // (and Chrome 157's markup insertion members, ./markupMembers.ts, at a
 // page's first call of one)
 //
+// (and the rare markup sinks, execCommand's markup and links,
+// createContextualFragment, setHTMLUnsafe, setHTML, getHTML,
+// serializeToString, with the document.domain setter, ./markupSinks.ts, at
+// a page's first call of one; a group apart from the insertion members)
+//
 // (and the SecurityError of a navigation a page may not intercept, with a
 // precommit handler's redirect, ./navigationRefusal.ts, when one is refused
 // or redirected)
@@ -120,6 +125,7 @@ import { instructionData, loadXML, modifyXML, xmlProlog } from './instructions';
 import { lazyFonts } from './lazyFonts';
 import { formEncoding, legacyFormQuery, legacyQuery } from './legacyEncoding';
 import { markupMembers } from './markupMembers';
+import { markupSinks } from './markupSinks';
 import { measuredMemory } from './measuredMemory';
 import FingerprintModule from './modules/Fingerprint';
 import { longFrames } from './modules/LongFrames';
@@ -231,6 +237,9 @@ export const parts = {
 	xhrMessage,
 	emulateServiceWorker,
 	markupMembers,
+	// the rare markup sinks' work and the document.domain setter's, at a
+	// page's first call of one (./markupSinks.ts; modules/DOMHooks.ts)
+	markupSinks,
 	// a document's navigation of another window, refused as Chrome refuses
 	// it, at its first (./navigateOther.ts; modules/Context.ts)
 	navigateOther,

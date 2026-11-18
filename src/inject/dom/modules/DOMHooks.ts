@@ -15,7 +15,6 @@ import {
 } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
 import { LazyMap, LazyWeakMap } from '../../ownCollections';
-import { getPublicSuffix } from '../../rewriter';
 import {
 	isOwnInjector,
 	isParsed,
@@ -47,9 +46,9 @@ import { deferred } from '../deferred';
 import type { DeferredParts } from '../deferredParts';
 import { frameWindow } from '../freshContext';
 import type { MarkupContext, ScriptNotes } from '../markupMembers';
+import type { SinkContext } from '../markupSinks';
 import { responseURLOf } from '../responseDocuments';
 import { siteWindows } from '../siteWindows';
-import { stylesheetPIs } from '../stylesheetPIs';
 import type WriteStream from '../WriteStream';
 import ContextModule from './Context';
 import {
@@ -1170,8 +1169,15 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			realm.Document.prototype,
 			'domain',
 		)!;
-		const isIP = (host: string) =>
-			host.startsWith('[') || /^\d+\.\d+\.\d+\.\d+$/.test(host);
+		// The setter's work, and that of the rare markup sinks below
+		// (execCommand's markup and links, createContextualFragment,
+		// setHTMLUnsafe, setHTML, getHTML, serializeToString), is a deferred
+		// part (../markupSinks.ts), made at a page's first call of one, before
+		// the hook calls anything of the browser's: without it the call
+		// throws. What it needs is taken now (sinkContext, by the getHTML
+		// hooks).
+		let sinkParts: ReturnType<DeferredParts['markupSinks']> | null = null;
+		const sinks = () => (sinkParts ??= deferred('markupSinks')(sinkContext));
 		Reflect.defineProperty(realm.Document.prototype, 'domain', {
 			enumerable: true,
 			configurable: true,
@@ -1189,47 +1195,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			),
 			set: proxyModule.wrapFunction(
 				domainDescriptor.set!,
-				(target, that: Document, args) => {
-					// (the getter refuses a receiver that is no document, as the
-					// setter would)
-					Reflect.apply(domainDescriptor.get!, that, []);
-					const value = String(args[0]);
-					// the effective domain: the host, or what an earlier write set
-					const host =
-						moduleClient.documentDomain ?? moduleClient.url.url.hostname;
-					const refuse = (reason: string) =>
-						withStack(
-							new realm.DOMException(
-								`Failed to set the 'domain' property on 'Document': ${reason}`,
-								'SecurityError',
-							),
-						);
-					// a sandboxed document never sets it, allow-same-origin or not
-					if (moduleClient.sandboxFlags !== null)
-						throw refuse('Assignment is forbidden for sandboxed iframes.');
-					if (value === '') throw refuse("'' is an empty domain.");
-					let parsed: string | null = null;
-					try {
-						parsed = new URL(`http://${value}/`).hostname;
-					} catch (error) {
-						// not a host
-					}
-					const shown = parsed ?? encodeURI(value);
-					if (parsed !== host) {
-						if (
-							parsed === null ||
-							isIP(host) ||
-							isIP(parsed) ||
-							!host.endsWith(`.${parsed}`)
-						)
-							throw refuse(`'${shown}' is not a suffix of '${host}'.`);
-						// with the list's private section, as Chrome refuses it:
-						// 'github.io' is a top-level domain to a page of its customer
-						if (getPublicSuffix(parsed) === parsed)
-							throw refuse(`'${shown}' is a top-level domain.`);
-					}
-					if (moduleClient.siteKeyed) moduleClient.setDocumentDomain(parsed!);
-				},
+				(target, that: Document, args) => sinks().setDomain(that, args),
 			),
 		});
 
@@ -1699,101 +1665,28 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// command makes; a link's URL is routed, and the links the command
 		// made are then given the URL through the hook, which keeps what the
 		// page wrote for it to read back.
+		// That work is a deferred part (../markupSinks.ts); a call with no
+		// value, or of another command, needs none: the hook coerces the value,
+		// as it always did, and calls the browser's.
 		const nativeExecCommand = realm.Document.prototype.execCommand;
-		if (typeof nativeExecCommand === 'function') {
-			const nativeGetSelection = realm.Document.prototype.getSelection;
-			const nativeQuerySelectorAll = realm.Document.prototype.querySelectorAll;
-			// the element the selection starts in: the context the browser
-			// parses inserted markup in
-			const editingContext = (document: Document): Element | null => {
-				try {
-					const selection = Reflect.apply(
-						nativeGetSelection,
-						document,
-						[],
-					) as Selection | null;
-					if (!selection || selection.rangeCount === 0) return null;
-					const start = selection.getRangeAt(0).startContainer;
-					return usePrototype(start, nativeNode, (node) =>
-						node.nodeType === 1 ? (node as Element) : node.parentElement,
-					);
-				} catch (error) {
-					return null;
-				}
-			};
-			const escapeAttribute = (value: string) =>
-				value.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+		if (typeof nativeExecCommand === 'function')
 			realm.Document.prototype.execCommand = proxyModule.wrapFunction(
 				nativeExecCommand,
 				(target, that, args) => {
 					const command = String(args[0]).toLowerCase();
 					if (args.length < 3 || args[2] === undefined || args[2] === null)
 						return Reflect.apply(target, that, args);
-					let made: string | null = null;
-					if (command === 'inserthtml') {
-						// (the page's Trusted Types judge the markup first)
-						const value = moduleClient.trustedValue(
-							args[2],
-							'TrustedHTML',
-							'Document execCommand',
-							() => Reflect.apply(target, that, args),
-						);
-						if (value === null) return false;
-						args[2] = trustedHTML(rewriteMarkup(value, editingContext(that)));
-						const result = Reflect.apply(target, that, args);
-						moduleClient.sweepFrames?.();
-						return result;
-					}
-					const value = String(args[2]);
-					if (command === 'insertimage' && value !== '') {
-						args[0] = 'insertHTML';
-						args[2] = trustedHTML(
-							rewriteMarkup(
-								`<img src="${escapeAttribute(value)}">`,
-								editingContext(that),
-							),
-						);
-					} else if (command === 'createlink' && value !== '') {
-						try {
-							made = routeHTML(
-								new StompURL(
-									moduleClient.encodingParse(value, moduleClient.baseHref),
-									moduleClient.baseURL,
-								),
-								moduleClient.baseURL,
-								moduleClient.config,
-								false,
-								moduleClient.nestedRoute,
-							);
-							args[2] = made;
-						} catch (error) {
-							// no URL: the link is made of it as it is
-						}
-					} else return Reflect.apply(target, that, args);
-					const result = Reflect.apply(target, that, args);
-					if (made !== null)
-						for (const link of [
-							...(Reflect.apply(nativeQuerySelectorAll, that, [
-								'a[href]',
-							]) as NodeListOf<Element>),
-						])
-							// the ones the command made: the routed URL, and no record
-							// of what the page wrote
-							if (
-								usePrototype(
-									link,
-									CustomElement.prototype,
-									(element) =>
-										element.getAttribute('href') === made &&
-										!element.hasAttributeOG('href'),
-								)
-							)
-								link.setAttribute('href', value);
-					moduleClient.sweepFrames?.();
-					return result;
+					if (
+						command === 'inserthtml' ||
+						command === 'insertimage' ||
+						command === 'createlink'
+					)
+						return sinks().execCommand(target, that, args, command);
+					// (coerced before the browser coerces it again, as the part does)
+					String(args[2]);
+					return Reflect.apply(target, that, args);
 				},
 			);
-		}
 		// Range.createContextualFragment parses in the page's document, so an
 		// element in the fragment starts its load as it is parsed, inserted or
 		// not: the page's raw URLs went straight to the site, or unrouted to
@@ -1806,44 +1699,8 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		if (typeof RangeProto?.createContextualFragment === 'function')
 			RangeProto.createContextualFragment = proxyModule.wrapFunction(
 				RangeProto.createContextualFragment,
-				(target, that: Range, args) => {
-					if (!args.length) return Reflect.apply(target, that, args);
-					// (the page's Trusted Types judge the markup first)
-					const markup = moduleClient.trustedValue(
-						args[0],
-						'TrustedHTML',
-						'Range createContextualFragment',
-						() => Reflect.apply(target, that, args),
-					);
-					if (markup === null) return;
-					const start = that.startContainer;
-					const owner = (
-						start.nodeType === 9 ? start : start.ownerDocument
-					) as Document;
-					const inert = inertDocumentOf(owner);
-					// the context element, as the spec picks it: the start node
-					// if it is an element, else its parent element; none for a
-					// document or fragment
-					const element =
-						start.nodeType === 1
-							? (start as Element)
-							: start.parentNode?.nodeType === 1
-								? (start.parentNode as Element)
-								: null;
-					const holder = element
-						? inert.createElementNS(element.namespaceURI, element.localName)
-						: inert.createElement('body');
-					const range = inert.createRange();
-					range.selectNodeContents(holder);
-					const parsed = Reflect.apply(target, range, [
-						trustedHTML(markup),
-					]) as DocumentFragment;
-					const fragment = owner.createDocumentFragment();
-					fragment.append(cloneRawNode([...parsed.childNodes], owner));
-					// its scripts are the parser's, which run as they are
-					moduleClient.parsedScripts(fragment);
-					return fragment;
-				},
+				(target, that: Range, args) =>
+					sinks().contextualFragment(target, that, args),
 			);
 		const hookedInnerHTMLSet = Reflect.getOwnPropertyDescriptor(
 			realm.Element.prototype,
@@ -1894,20 +1751,6 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// any page script ran, in as little code as can take it (a frame
 		// compiles what runs here: each kilobyte of it was a kilobyte of every
 		// frame's heap).
-		// the element markup is parsed in for a setHTMLUnsafe: the element,
-		// a shadow root's host (by the browser's own getters)
-		const nodeTypeOf = nativeGetter(nativeNode, 'nodeType');
-		const markupContextOf = (that: unknown): Element | null => {
-			try {
-				if (Reflect.apply(nodeTypeOf, that, []) === 1) return that as Element;
-				return markupContext.shadowHost
-					? (Reflect.apply(markupContext.shadowHost, that, []) as Element)
-					: null;
-			} catch (error) {
-				// not a node: the browser's error, after
-				return null;
-			}
-		};
 		const markupContext: MarkupContext = {
 			client: moduleClient,
 			rewrite: rewriteMarkup,
@@ -1952,57 +1795,16 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				}
 			markupContext.ends.push(markupContext.natives.length);
 		}
+		// setHTMLUnsafe: the markup rewritten (its scripts too, with
+		// runScripts), then the browser's parser (../markupSinks.ts)
+		const setHTMLUnsafeCall = (target: Fn, that: unknown, args: unknown[]) =>
+			sinks().setHTMLUnsafe(target, that, args);
 		for (const proto of [realm.Element.prototype, shadowRootPrototype]) {
 			const native = (proto as { setHTMLUnsafe?: unknown } | undefined)
 				?.setHTMLUnsafe;
 			if (typeof native !== 'function') continue;
 			(proto as { setHTMLUnsafe: unknown }).setHTMLUnsafe =
-				proxyModule.wrapFunction(
-					native as (html: string) => void,
-					(target, that, args) => {
-						if (args.length) {
-							// (the page's Trusted Types judge the markup first; what goes
-							// on is the inject's, trusted)
-							const markup = moduleClient.trustedValue(
-								args[0],
-								'TrustedHTML',
-								`${(that as Node).nodeType === 1 ? 'Element' : 'ShadowRoot'} setHTMLUnsafe`,
-								() => Reflect.apply(target, that, args),
-							);
-							if (markup === null) return;
-							args[0] = trustedHTML(markup);
-						}
-						const kind = args.length ? moduleClient.styleKind(that) : null;
-						if (kind === 'html')
-							return setStyleText(that as Element, String(args[0]));
-						// an SVG <style>'s markup is markup, its text routed as it
-						// goes in, which the native call would not (no declarative
-						// shadow root is made in a style)
-						if (kind === 'svg')
-							return Reflect.apply(hookedInnerHTMLSet, that, [args[0]]);
-						// and a script's markup is its text, which a connected
-						// script runs: rewritten as it goes in, by the same setter
-						if (args.length && isScriptElement(that))
-							return Reflect.apply(hookedInnerHTMLSet, that, [args[0]]);
-						// (runScripts: the scripts are rewritten, ../markupMembers.ts
-						// parserOptions; the context, by the browser's own getters)
-						let scripts: ScriptNotes | undefined;
-						if (args.length > 1) {
-							const parsed = markupParts().parserOptions(args[1]);
-							args[1] = parsed.options;
-							if (parsed.scripts)
-								scripts = markupParts().notes(that as Node, parsed.options);
-						}
-						if (args.length)
-							args[0] = trustedHTML(
-								rewriteMarkup(args[0], markupContextOf(that), scripts),
-							);
-						const result = Reflect.apply(target, that, args);
-						if (scripts) markupParts().record(that as Node, scripts);
-						moduleClient.sweepFrames?.();
-						return result;
-					},
-				);
+				proxyModule.wrapFunction(native as Fn, setHTMLUnsafeCall);
 		}
 		// setHTML is the setter that sanitizes: the browser parses the markup
 		// in the element's context and keeps what its sanitizer allows. On the
@@ -2011,17 +1813,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// and rewriting the markup first would hand the sanitizer attributes
 		// it drops. So the browser sanitizes into a copy of the element in the
 		// inert document, where nothing loads, and what it leaves goes in
-		// through the insertion hook, like the nodes of any other parser.
+		// through the insertion hook, like the nodes of any other parser
+		// (../markupSinks.ts; a wrapper of Element's setHTML is Element's,
+		// any other ShadowRoot's).
 		const elementSetHTML = (realm.Element.prototype as { setHTML?: unknown })
-			.setHTML;
-		const shadowHost =
-			shadowRootPrototype &&
-			Reflect.getOwnPropertyDescriptor(shadowRootPrototype, 'host')?.get;
-		const contentOf = Reflect.getOwnPropertyDescriptor(
-			realm.HTMLTemplateElement.prototype,
-			'content',
-		)!.get!;
-		const importNode = realm.Document.prototype.importNode;
+			.setHTML as Fn | undefined;
 		const hookedReplaceChildren = {
 			element: realm.Element.prototype.replaceChildren,
 			fragment: realm.DocumentFragment.prototype.replaceChildren,
@@ -2030,63 +1826,14 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			realm.Node.prototype,
 			'textContent',
 		)!;
+		const setHTMLCall = (target: Fn, that: unknown, args: unknown[]) =>
+			sinks().setHTML(target, that, args);
 		for (const proto of [realm.Element.prototype, shadowRootPrototype]) {
 			const native = (proto as { setHTML?: unknown } | undefined)?.setHTML;
 			if (typeof native !== 'function' || typeof elementSetHTML !== 'function')
 				continue;
-			const ofShadow = proto === shadowRootPrototype;
 			(proto as unknown as { setHTML: unknown }).setHTML =
-				proxyModule.wrapFunction(
-					native as (html: string, options?: unknown) => void,
-					(target, that, args) => {
-						// the element whose context the markup is parsed in: a shadow
-						// root's host, or the element itself
-						let context: Element | null = null;
-						try {
-							if (ofShadow)
-								context = Reflect.apply(shadowHost!, that, []) as Element;
-							else if (isScriptElement(that))
-								// the browser leaves a script as it is
-								context = null;
-							else if ((that as Node).nodeType === 1) context = that as Element;
-						} catch (error) {
-							// no shadow root: the native call throws what the browser does
-						}
-						if (!context || !args.length)
-							return Reflect.apply(target, that, args);
-						const shell = Reflect.apply(
-							importNode,
-							inertDocumentOf(realm.document),
-							[context, false],
-						) as Element;
-						// (a sanitizer the browser refuses throws here, as natively)
-						Reflect.apply(elementSetHTML, shell, args);
-						const kind = ofShadow ? null : moduleClient.styleKind(that);
-						if (kind) {
-							// a style's markup is its text, which is routed as it goes in
-							const text = String(
-								Reflect.apply(hookedTextContent.get!, shell, []) ?? '',
-							);
-							if (kind === 'html') setStyleText(that as Element, text);
-							else Reflect.apply(hookedTextContent.set!, that, [text]);
-							return;
-						}
-						// a template's markup is its content's
-						const template = !ofShadow && isHTMLTemplate(that);
-						const left = template
-							? (Reflect.apply(contentOf, shell, []) as DocumentFragment)
-							: shell;
-						Reflect.apply(
-							ofShadow || template
-								? hookedReplaceChildren.fragment
-								: hookedReplaceChildren.element,
-							template ? Reflect.apply(contentOf, that, []) : that,
-							[...left.childNodes],
-						);
-						// a frame the sanitizer was told to keep is injected as it connects
-						moduleClient.sweepFrames?.();
-					},
-				);
+				proxyModule.wrapFunction(native as Fn, setHTMLCall);
 		}
 		const shadowInnerHTML =
 			shadowRootPrototype &&
@@ -2581,71 +2328,31 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 		// getHTML: the browser's own serializer on a folded copy in the inert
 		// document (see inertCopy), with a copy of each shadow root it could
-		// serialize (open and serializable, or one the page lists) attached to
-		// the copy of its host as the root is, its markers folded too; the
-		// native call gets the page's options with the copies of the roots it
-		// listed, so it decides what to include as it would on the page's own
-		type ShadowOptions = {
-			serializableShadowRoots?: boolean;
-			shadowRoots?: ShadowRoot[];
-		};
-		const copyWithShadows = <T extends Element | DocumentFragment>(
-			node: T,
-			options: ShadowOptions,
-			// the copies of the roots the page listed, for the native call
-			listed: ShadowRoot[],
-			// every copy and shadow root made, to let go of after (releaseMarkup)
-			made: Node[],
-		): T =>
-			usePrototype(node, nativeNode, (native) => {
-				const copy = inertCopy(native) as T;
-				made.push(copy);
-				const originals: Node[] = [
-					...(native.nodeType === 1 ? [native] : []),
-					...querySelectorAllOf(native),
-				];
-				const copies: Node[] = [
-					...(copy.nodeType === 1 ? [copy] : []),
-					...querySelectorAllOf(copy),
-				];
-				originals.forEach((original, index) => {
-					const host = original as Element;
-					const root =
-						host.shadowRoot ??
-						options.shadowRoots?.find((root) => root.host === host) ??
-						null;
-					if (
-						!root ||
-						!(
-							(options.serializableShadowRoots && root.serializable) ||
-							options.shadowRoots?.includes(root)
-						)
-					)
-						return;
-					// the root as it is: the browser decides from these, as it would
-					// from the page's own
-					const shadow = (copies[index] as Element).attachShadow({
-						mode: root.mode,
-						serializable: root.serializable,
-						clonable: root.clonable,
-						delegatesFocus: root.delegatesFocus,
-					});
-					if (options.shadowRoots?.includes(root)) listed.push(shadow);
-					made.push(shadow);
-					for (const child of root.childNodes)
-						shadow.append(
-							child.nodeType === 1
-								? copyWithShadows(child as Element, options, listed, made)
-								: inertCopy(child),
-						);
-					foldMarkers(shadow);
-				});
-				foldMarkers(copy);
-				return copy;
-			});
+		// serialize attached to the copy of its host; and XMLSerializer: the
+		// same folded copy, serialised as XML (../markupSinks.ts). What the
+		// part reads back is finished by foldMarkup, as the readback modules
+		// rewrap it (CSS), read at the call
 		this.foldMarkup = (html: string): string => html;
 		const elementGetHTML = (realm.Element.prototype as { getHTML?: unknown })
-			.getHTML as ((options?: ShadowOptions) => string) | undefined;
+			.getHTML as Fn | undefined;
+		const sinkContext: SinkContext = {
+			hooks: this,
+			markup: markupContext,
+			members: markupParts,
+			setStyleText,
+			innerHTMLSet: hookedInnerHTMLSet,
+			replaceChildren: hookedReplaceChildren,
+			textContent: hookedTextContent,
+			elementSetHTML,
+			elementGetHTML,
+			domainGet: domainDescriptor.get!,
+			getSelection: realm.Document.prototype.getSelection,
+			querySelectorAll: nativeQueryAll.document,
+			foldMarkers,
+			querySelectorAllOf,
+		};
+		const getHTMLCall = (target: Fn, that: unknown, args: unknown[]) =>
+			sinks().getHTML(target, that, args);
 		for (const proto of [
 			realm.Element.prototype,
 			(realm as { ShadowRoot?: typeof ShadowRoot }).ShadowRoot?.prototype,
@@ -2653,71 +2360,14 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			const getHTML = (proto as { getHTML?: unknown } | undefined)?.getHTML;
 			if (typeof getHTML !== 'function') continue;
 			(proto as { getHTML: unknown }).getHTML = proxyModule.wrapFunction(
-				getHTML as (options?: ShadowOptions) => string,
-				(target, that, args) => {
-					const options = (args[0] ?? {}) as ShadowOptions;
-					// the page's options, with the copies of the roots it listed
-					const listed: ShadowRoot[] = [];
-					const call = () => [
-						{
-							serializableShadowRoots: !!options.serializableShadowRoots,
-							shadowRoots: listed,
-						},
-					];
-					// every copy made, the shadow roots' too, for releaseMarkup
-					const made: Node[] = [];
-					if (that instanceof realm.Element) {
-						const copy = copyWithShadows(that, options, listed, made);
-						const html = Reflect.apply(target, copy, call()) as string;
-						for (const node of made) releaseMarkup(node);
-						return this.foldMarkup(html);
-					}
-					// a shadow root cannot be copied: its children are, under a
-					// holder in the inert document, serialized as the root's
-					const holder = inertCopy(realm.document.createElement('div'));
-					for (const child of (that as ShadowRoot).childNodes)
-						holder.append(
-							child.nodeType === 1
-								? copyWithShadows(child as Element, options, listed, made)
-								: inertCopy(child),
-						);
-					foldMarkers(holder);
-					const html = Reflect.apply(elementGetHTML!, holder, call()) as string;
-					releaseMarkup(holder);
-					for (const node of made) releaseMarkup(node);
-					return this.foldMarkup(html);
-				},
+				getHTML as Fn,
+				getHTMLCall,
 			);
 		}
 
-		// XMLSerializer: the same folded copy, serialised as XML
-		const serializeToString = realm.XMLSerializer.prototype.serializeToString;
 		realm.XMLSerializer.prototype.serializeToString = proxyModule.wrapFunction(
-			serializeToString,
-			(target, that, args) => {
-				const node = args[0];
-				if (!(node instanceof realm.Node))
-					return Reflect.apply(target, that, args);
-				const one = (node: Node) => {
-					const clone = inertCopy(node);
-					foldMarkers(clone);
-					const xml = Reflect.apply(target, that, [clone]) as string;
-					releaseMarkup(clone);
-					return xml;
-				};
-				// a document cannot be copied: its children are, one by one,
-				// which is how the serializer writes a document; its
-				// xml-stylesheet PIs as the page wrote them
-				const xml = unrouteCSS(
-					moduleClient,
-					node.nodeType === 9
-						? Array.from(node.childNodes, one).join('')
-						: one(node as Node),
-				);
-				return xml.includes('<?xml-stylesheet')
-					? stylesheetPIs(moduleClient).fold(xml)
-					: xml;
-			},
+			realm.XMLSerializer.prototype.serializeToString,
+			(target, that, args) => sinks().serializeToString(target, that, args),
 		);
 
 		// attribute selectors match the page's values: `[href="/x"]` is
