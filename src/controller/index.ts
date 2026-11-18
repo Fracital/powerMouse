@@ -2068,7 +2068,10 @@ export class StompController extends EventTarget {
 							: null,
 					[],
 				],
-				siteHomed: async (site) => [this.#sites?.homed(site) ?? false, []],
+				siteHomed: async (site) => [
+					(await this.#sites?.homed(site)) ?? false,
+					[],
+				],
 				blockerPort: async () => {
 					const blocker = this.#init.agent?.blocker?.() ?? null;
 					return [blocker, blocker ? [blocker] : []];

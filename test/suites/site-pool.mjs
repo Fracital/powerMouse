@@ -571,9 +571,9 @@ ok(
 	crossSet.includes('sp_set=1'),
 	crossSet,
 );
-// the same pool in another order is another assignment: B is shown from
-// another slot there, with the same cookies, and without what its pages
-// stored in the first one, which is why a site keeps its slot
+// the same pool in another order keeps every site's slot: B is shown from
+// its slot there, with what its pages stored, as natively a site keeps
+// its storage
 await b.frame.evaluate(() => localStorage.setItem('sp-b', 'b'));
 await page.evaluate(async (POOL) => {
 	window.rotated = window.make({
@@ -583,22 +583,11 @@ await page.evaluate(async (POOL) => {
 }, POOL);
 await show('rotated', `${A}${PAGE}?ra`, inPool(POOL));
 const rb = await show('rotated', `${B}${PAGE}?rb`, inPool(POOL));
-const moved = await asPage(
-	rb.frame,
-	"return [document.cookie, localStorage.getItem('sp-b')]",
-);
 ok(
-	'a site shown from another slot has its cookies',
-	slotOf(rb.frame.url()) !== slotB &&
-		moved[0].includes('sp_none=1') &&
-		moved[0].includes('sp_lax=1') &&
-		moved[0].includes('sp_set=1'),
-	`${rb.frame.url()} ${JSON.stringify(moved)}`,
-);
-ok(
-	"and not what its pages stored in the first slot (a site's storage is its slot's)",
-	moved[1] === null,
-	JSON.stringify(moved),
+	'the same pool in another order shows a site from its slot, with what its pages stored',
+	slotOf(rb.frame.url()) === slotB &&
+		(await asPage(rb.frame, "return localStorage.getItem('sp-b')")) === 'b',
+	rb.frame.url(),
 );
 // a later controller with the same pool finds every site where it was
 await page.evaluate(async (POOL) => {
@@ -613,6 +602,33 @@ ok(
 		slotOf(la.frame.url()) === slotA &&
 		(await asPage(lb.frame, "return localStorage.getItem('sp-b')")) === 'b',
 	`${lb.frame.url()} ${la.frame.url()}`,
+);
+// a list without B's slot moves B to another: with the same cookies, and
+// without what its pages stored in the first one, which is why a site
+// keeps its slot
+const WITHOUT = POOL.filter((slot) => slot !== slotB);
+await page.evaluate(async (WITHOUT) => {
+	window.without = window.make({ sitePool: { origins: WITHOUT } });
+	await window.without.wait();
+}, WITHOUT);
+await show('without', `${A}${PAGE}?wa`, inPool(WITHOUT));
+const wb = await show('without', `${B}${PAGE}?wb`, inPool(WITHOUT));
+const moved = await asPage(
+	wb.frame,
+	"return [document.cookie, localStorage.getItem('sp-b')]",
+);
+ok(
+	'a site whose slot left the list is shown from another, with its cookies',
+	slotOf(wb.frame.url()) !== slotB &&
+		moved[0].includes('sp_none=1') &&
+		moved[0].includes('sp_lax=1') &&
+		moved[0].includes('sp_set=1'),
+	`${wb.frame.url()} ${JSON.stringify(moved)}`,
+);
+ok(
+	"and not what its pages stored in the first slot (a site's storage is its slot's)",
+	moved[1] === null,
+	JSON.stringify(moved),
 );
 
 // a link from A to B

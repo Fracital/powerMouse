@@ -504,7 +504,7 @@ export class SiteHub {
 	async originOf(site: string, from?: string): Promise<string | null> {
 		let origin: string;
 		try {
-			origin = this.#slots.originOf(site, from, this.#dead);
+			origin = await this.#slots.originOf(site, from, this.#dead);
 		} catch (error) {
 			// no slot answers from here
 			return null;
@@ -543,16 +543,20 @@ export class SiteHub {
 			globalThis.requestIdleCallback ??
 			((callback: () => void) => setTimeout(callback, 50));
 		idle(
-			() => {
-				this.#warming = false;
+			async () => {
 				const slots = this.#slots;
 				const wanted: (string | null)[] = [];
-				if (!slots.origins.some((origin) => slots.usedHere(origin)))
-					wanted.push(slots.next(this.#dead), slots.last(this.#dead));
-				else if ([...this.#agents.keys()].every((o) => slots.usedHere(o)))
-					wanted.push(slots.next(this.#dead));
+				try {
+					if (!slots.origins.some((origin) => slots.usedHere(origin)))
+						wanted.push(await slots.next(this.#dead), slots.last(this.#dead));
+					else if ([...this.#agents.keys()].every((o) => slots.usedHere(o)))
+						wanted.push(await slots.next(this.#dead));
+				} finally {
+					this.#warming = false;
+				}
 				for (const origin of wanted)
-					if (origin && !this.#agents.has(origin)) this.#agent(origin);
+					if (origin && !this.#agents.has(origin) && !this.#dead.has(origin))
+						this.#agent(origin);
 			},
 			{ timeout: WARM_WAIT_MS },
 		);
@@ -566,8 +570,8 @@ export class SiteHub {
 		return this.#cross(site, arrival, location.origin);
 	}
 	/** the slot of `site` sent a navigation back here (its agent is gone): it is left out */
-	homed(site: string): boolean {
-		const origin = this.#slots.known(site);
+	async homed(site: string): Promise<boolean> {
+		const origin = await this.#slots.known(site);
 		if (!origin || origin === location.origin) return false;
 		this.#kill(origin, new Error(`the agent of ${origin} is gone`));
 		return true;

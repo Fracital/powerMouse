@@ -373,6 +373,22 @@ for (const [label, name, origins] of FALLBACKS) {
 		wrongType.origin,
 		stranger.origin,
 	];
+	// each case is the sites' first visit to such a pool: a site keeps a
+	// slot of any earlier list it is in, and the cases before gave them
+	// theirs (a site kept on a dead slot is the case further down)
+	await page.evaluate(async () => {
+		const asked = (request) =>
+			new Promise((resolve, reject) => {
+				request.onsuccess = () => resolve(request.result);
+				request.onerror = () => reject(request.error);
+			});
+		const db = await asked(indexedDB.open('kept-site-slots'));
+		const tx = db.transaction('sites', 'readwrite');
+		tx.objectStore('sites').delete('http://127.0.0.1');
+		tx.objectStore('sites').delete('http://localhost');
+		await new Promise((resolve) => (tx.oncomplete = resolve));
+		db.close();
+	});
 	const started = Date.now();
 	await page.evaluate(
 		({ name, list }) => window.make(name, { sitePool: { origins: list } }),
@@ -516,15 +532,26 @@ ok(
 	errors.length === errorsBefore,
 	JSON.stringify(errors.slice(errorsBefore)),
 );
-const kept = await page.evaluate((list) => {
-	const pools = JSON.parse(localStorage.getItem('kept-site-slots') ?? '[]');
-	return pools.find(
-		(pool) => JSON.stringify(pool.origins) === JSON.stringify(list),
-	)?.sites;
+// each site's slots, newest first: the first of the pool's is its own
+const kept = await page.evaluate(async (list) => {
+	const asked = (request) =>
+		new Promise((resolve, reject) => {
+			request.onsuccess = () => resolve(request.result);
+			request.onerror = () => reject(request.error);
+		});
+	const db = await asked(indexedDB.open('kept-site-slots'));
+	const sites = db.transaction('sites').objectStore('sites');
+	const [a, b] = await Promise.all([
+		asked(sites.get('http://127.0.0.1')),
+		asked(sites.get('http://localhost')),
+	]);
+	db.close();
+	const own = (slots) => slots?.find((slot) => list.includes(slot));
+	return { a: own(a), b: own(b), kept: { a, b } };
 }, DYING);
 ok(
 	'the site keeps its slot (its data is there when the slot answers again)',
-	kept?.['http://127.0.0.1'] === 0 && kept?.['http://localhost'] === 1,
+	kept.a === DYING[0] && kept.b === DYING[1],
 	JSON.stringify(kept),
 );
 // a later controller of the same pool: the slot's site is kept for it,

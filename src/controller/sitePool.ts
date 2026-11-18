@@ -7,35 +7,41 @@
 // origin private file system) is the slot origin's, so a site that moved
 // would leave its data behind.
 
+import { openDB, type IDBPDatabase } from 'idb';
+
 /** what a host gives for the site pool */
 export interface SitePoolInit {
 	/**
 	 * The slots: origins that serve `directory` as the host page's origin
 	 * does, none of them the host page's own, all of its site (another port
 	 * of its host: nothing is partitioned between them and the cookies the
-	 * server sees are shared). Their order and number are part of where
-	 * every site's data is kept: a changed list is another pool.
+	 * server sees are shared). A site keeps the slot it was given while
+	 * that origin is in the list, in any order and whatever else the list
+	 * gains or loses; a site whose slot is taken out is given another, and
+	 * what it stored stays in the one taken out.
 	 */
 	origins: string[];
 }
 
 /**
- * Where the host origin keeps which site has which slot (localStorage): a
- * fixed text that names neither the project nor a proxy, as the kept ids'
- * key (src/controller/id.ts).
+ * Where the host origin keeps which site has which slot: an IndexedDB
+ * database of its own, under a fixed text that names neither the project
+ * nor a proxy, as the kept ids' key (src/controller/id.ts). `sites` holds,
+ * by site, the slot origins it was given, newest first (one, unless the
+ * list changed under it); `slots`, by slot origin, how many sites were
+ * given that slot.
  */
-const KEY = 'kept-site-slots';
+const DATABASE = 'kept-site-slots';
+const SITES = 'sites';
+const COUNTS = 'slots';
+/**
+ * where an earlier build kept the assignments (the host origin's
+ * localStorage: per pool, at most four, site to index), read into the
+ * database once and removed
+ */
+const LEGACY_KEY = 'kept-site-slots';
 /** where the host origin keeps the slot that took a navigation last, in any tab (SiteSlots.last) */
 const LAST_KEY = 'last-site-slot';
-/** at most this many pools are remembered (a host has one; a changed list is another) */
-const KEPT_POOLS = 4;
-
-interface Kept {
-	/** the pool the assignments are for */
-	origins: string[];
-	/** site -> index into `origins`, oldest assignment first */
-	sites: Record<string, number>;
-}
 
 /** the pool's origins, checked: http(s) origins, each once, none the page's own */
 export function poolOrigins(init: SitePoolInit, own: string): string[] {
@@ -57,109 +63,154 @@ export function poolOrigins(init: SitePoolInit, own: string): string[] {
 	return origins;
 }
 
+/** a kept record's slot origins (`sites`) */
+const slotList = (value: unknown): string[] =>
+	Array.isArray(value)
+		? value.filter((origin): origin is string => typeof origin === 'string')
+		: [];
+/** a kept count (`slots`) */
+const counted = (value: unknown): number =>
+	Number.isInteger(value) && (value as number) > 0 ? (value as number) : 0;
+
 /**
- * Which slot shows which site. An assignment is kept for good (in the host
- * origin's localStorage, so every tab of the host agrees and a later visit
- * finds the site's data where it left it). A site seen for the first time
- * gets a slot no site has yet; when there is none, the slot that was used
- * longest ago in this page, never the one the navigation comes from when
- * there is another: a frame of another site is then in another process
- * than the document that embeds it, and with more sites than slots the
- * ones that share a process are the ones farthest apart in time.
+ * Which slot shows which site. An assignment is kept for good, in the host
+ * origin's IndexedDB, so every tab of the host agrees and a later visit
+ * finds the site's data where it left it: by slot origin, never dropped,
+ * so a changed list keeps every site whose slot it still has, and a site
+ * is one record, read by its key, however many there are. A site seen
+ * for the first time gets a slot no site has yet; when there is none, the
+ * slot that was used longest ago in this page, never the one the
+ * navigation comes from when there is another: a frame of another site is
+ * then in another process than the document that embeds it, and with more
+ * sites than slots the ones that share a process are the ones farthest
+ * apart in time. What this page read or gave stays its answer while it
+ * lives (an assignment moves only when a list has lost its slot).
  */
 export class SiteSlots {
 	readonly origins: string[];
 	#storage: Storage | null;
+	/** the kept assignments, null where the page has no IndexedDB */
+	#db: Promise<IDBPDatabase | null>;
 	/** when each slot last took a navigation in this page */
 	#used: number[];
-	/** this page's own view, for a browser without storage */
+	/** what this page read or gave, by site (all there is without a database) */
 	#sites = new Map<string, number>();
+	/** the sites being read or given now: a page and its frame ask once */
+	#asked = new Map<string, Promise<number>>();
 	#clock = 0;
-	/** what was read of the kept assignments last, and what it said */
-	#raw: string | null = null;
-	#parsed: unknown = null;
-	constructor(origins: string[], storage: Storage | null = keptStorage()) {
+	constructor(
+		origins: string[],
+		storage: Storage | null = keptStorage(),
+		db: Promise<IDBPDatabase | null> = keptDatabase(storage),
+	) {
 		this.origins = origins;
 		this.#storage = storage;
+		this.#db = db;
 		this.#used = origins.map(() => 0);
 	}
-	/** every pool's assignments as kept, this pool's last */
-	#kept(): Kept[] {
-		let kept: unknown = null;
-		try {
-			// parsed again only when another tab or page wrote it: every
-			// assignment is kept, and the text grows with the sites seen
-			const raw = this.#storage?.getItem(KEY) ?? null;
-			if (raw !== this.#raw) {
-				this.#raw = null;
-				this.#parsed = JSON.parse(raw ?? 'null');
-				this.#raw = raw;
+	/** the first of a site's kept slots that is one of this pool's, -1 when none is */
+	#own(kept: string[]): number {
+		for (const origin of kept) {
+			const index = this.origins.indexOf(origin);
+			if (index !== -1) return index;
+		}
+		return -1;
+	}
+	/** how many sites each slot has, as far as this page knows (without a database) */
+	#counts(): number[] {
+		const count = this.origins.map(() => 0);
+		for (const taken of this.#sites.values()) count[taken]++;
+		return count;
+	}
+	/**
+	 * The kept slot of `site`, or one given it now and kept, in one
+	 * transaction (two tabs that see a new site at once give it one slot);
+	 * -1 when it has none and every slot is dead
+	 */
+	async #keep(
+		db: IDBPDatabase,
+		site: string,
+		from?: string,
+		dead?: Set<string>,
+	): Promise<number> {
+		const tx = db.transaction([SITES, COUNTS], 'readwrite');
+		tx.done.catch(() => {});
+		const sites = tx.objectStore(SITES);
+		const counts = tx.objectStore(COUNTS);
+		const kept = slotList(await sites.get(site));
+		let index = this.#own(kept);
+		if (index === -1) {
+			const count = await Promise.all(
+				this.origins.map(async (origin) => counted(await counts.get(origin))),
+			);
+			index = this.#pick(count, from, dead);
+			if (index !== -1) {
+				const origin = this.origins[index];
+				// the slots it had stay listed after it: the list of another
+				// tab, or of a later visit, may still have one
+				sites.put([origin, ...kept.filter((other) => other !== origin)], site);
+				counts.put(count[index] + 1, origin);
 			}
-			kept = this.#parsed;
-		} catch (error) {
-			// not ours, or cut short: start over
 		}
-		const pools = (Array.isArray(kept) ? kept : []).filter(
-			(pool: Kept | null) =>
-				typeof pool === 'object' &&
-				pool !== null &&
-				Array.isArray(pool.origins) &&
-				typeof pool.sites === 'object' &&
-				pool.sites !== null,
-		) as Kept[];
-		const own = (pool: Kept) =>
-			pool.origins.length === this.origins.length &&
-			pool.origins.every((origin, i) => origin === this.origins[i]);
-		return [
-			...pools.filter((pool) => !own(pool)),
-			pools.find(own) ?? { origins: this.origins, sites: {} },
-		];
+		await tx.done;
+		return index;
 	}
-	#read(): Map<string, number> {
-		if (!this.#storage) return this.#sites;
-		const sites = new Map<string, number>();
-		for (const [site, index] of Object.entries(this.#kept().at(-1)!.sites))
-			if (Number.isInteger(index) && index >= 0 && index < this.origins.length)
-				sites.set(site, index);
-		return sites;
-	}
-	#write(sites: Map<string, number>) {
-		this.#sites = sites;
-		if (!this.#storage) return;
-		const pools = this.#kept();
-		pools[pools.length - 1] = {
-			origins: this.origins,
-			// every one: a site that lost its slot would find its data in
-			// another (its storage, the HTTP cache, its service workers)
-			sites: Object.fromEntries(sites),
-		};
-		try {
-			this.#storage.setItem(KEY, JSON.stringify(pools.slice(-KEPT_POOLS)));
-		} catch (error) {
-			// no room: this page's own view stands
-			this.#storage = null;
-		}
+	/** the slot `site` gets (originOf), kept where the page can */
+	async #give(
+		site: string,
+		from?: string,
+		dead?: Set<string>,
+	): Promise<number> {
+		let index: number | undefined;
+		const db = await this.#db;
+		if (db)
+			try {
+				index = await this.#keep(db, site, from, dead);
+			} catch (error) {
+				// the database refused (no room, or closed for a newer
+				// version): this page's own view stands
+			}
+		index ??= this.#pick(this.#counts(), from, dead);
+		if (index === -1) throw new Error('no slot of the site pool answers');
+		this.#sites.set(site, index);
+		return index;
 	}
 	/** the slot of `site` when it has one */
-	known(site: string): string | null {
-		const index = this.#read().get(site);
-		return index === undefined ? null : this.origins[index];
+	async known(site: string): Promise<string | null> {
+		let index = this.#sites.get(site);
+		if (index === undefined) {
+			const db = await this.#db;
+			try {
+				index = db ? this.#own(slotList(await db.get(SITES, site))) : -1;
+			} catch (error) {
+				index = -1;
+			}
+			if (index === -1) return null;
+			this.#sites.set(site, index);
+		}
+		return this.origins[index];
 	}
 	/**
 	 * The slot `site` is shown from, given one now when it has none. `from`
 	 * is the slot of the document the navigation comes from, when it comes
 	 * from one; a slot in `dead` (one that did not answer from this network)
-	 * is given to no new site. Throws when every slot is dead.
+	 * is given to no new site. Rejects when every slot is dead.
 	 */
-	originOf(site: string, from?: string, dead?: Set<string>): string {
-		// read again each time: another tab of the host may have assigned it
-		const sites = this.#read();
-		let index = sites.get(site);
+	async originOf(
+		site: string,
+		from?: string,
+		dead?: Set<string>,
+	): Promise<string> {
+		let index = this.#sites.get(site);
 		if (index === undefined) {
-			index = this.#pick(sites, from, dead);
-			if (index === -1) throw new Error('no slot of the site pool answers');
-			sites.set(site, index);
-			this.#write(sites);
+			let asked = this.#asked.get(site);
+			if (!asked) {
+				asked = this.#give(site, from, dead).finally(() =>
+					this.#asked.delete(site),
+				);
+				this.#asked.set(site, asked);
+			}
+			index = await asked;
 		}
 		this.#used[index] = ++this.#clock;
 		const origin = this.origins[index];
@@ -198,17 +249,26 @@ export class SiteSlots {
 	 * the page shown last), or from none before any was used. Null when
 	 * every slot is dead.
 	 */
-	next(dead?: Set<string>): string | null {
+	async next(dead?: Set<string>): Promise<string | null> {
 		const last = this.#clock
 			? this.origins[this.#used.indexOf(this.#clock)]
 			: undefined;
-		const index = this.#pick(this.#read(), last, dead);
+		let count: number[] | null = null;
+		const db = await this.#db;
+		if (db)
+			try {
+				const counts = db.transaction(COUNTS).objectStore(COUNTS);
+				count = await Promise.all(
+					this.origins.map(async (origin) => counted(await counts.get(origin))),
+				);
+			} catch (error) {
+				// the database refused: this page's own view
+			}
+		const index = this.#pick(count ?? this.#counts(), last, dead);
 		return index === -1 ? null : this.origins[index];
 	}
-	/** the slot a new site gets (see originOf), -1 when every slot is dead */
-	#pick(sites: Map<string, number>, from?: string, dead?: Set<string>): number {
-		const count = this.origins.map(() => 0);
-		for (const taken of sites.values()) count[taken]++;
+	/** the slot a new site gets (see originOf) given each slot's sites, -1 when every slot is dead */
+	#pick(count: number[], from?: string, dead?: Set<string>): number {
 		const avoid = this.origins.length > 1 ? this.origins.indexOf(from!) : -1;
 		let best = -1;
 		const alive = this.origins.filter((origin) => !dead?.has(origin));
@@ -238,6 +298,106 @@ function keptStorage(): Storage | null {
 	} catch (error) {
 		// storage is blocked for this page
 		return null;
+	}
+}
+
+/**
+ * The host origin's kept assignments, with what an earlier build kept in
+ * its localStorage read in; null where the page has no IndexedDB (every
+ * assignment is then this page's own)
+ */
+export async function keptDatabase(
+	storage: Storage | null,
+): Promise<IDBPDatabase | null> {
+	let db: IDBPDatabase;
+	try {
+		db = await openDB(DATABASE, 1, {
+			upgrade(db) {
+				db.createObjectStore(SITES);
+				db.createObjectStore(COUNTS);
+			},
+			// a later build's version: this page lets go, and keeps its own
+			// view from then on
+			blocking() {
+				db.close();
+			},
+		});
+	} catch (error) {
+		// storage is blocked for this page
+		return null;
+	}
+	await keepLegacy(db, storage);
+	return db;
+}
+
+/**
+ * The assignments an earlier build kept in the host origin's localStorage
+ * (`kept-site-slots`: the last four pools, oldest first, each site to an
+ * index into its origins), read into the database: a site keeps every
+ * slot it had in any of them, newest first, after those the database has
+ * for it (which are newer). Then the text is removed; a page of an earlier
+ * build that writes it again is read in by the next page.
+ */
+async function keepLegacy(db: IDBPDatabase, storage: Storage | null) {
+	let raw: string | null = null;
+	try {
+		raw = storage?.getItem(LEGACY_KEY) ?? null;
+	} catch (error) {
+		// storage is blocked for this page
+	}
+	if (raw === null) return;
+	const given = new Map<string, string[]>();
+	try {
+		const pools: unknown = JSON.parse(raw);
+		for (const pool of Array.isArray(pools) ? pools : []) {
+			if (
+				typeof pool !== 'object' ||
+				pool === null ||
+				!Array.isArray(pool.origins) ||
+				typeof pool.sites !== 'object' ||
+				pool.sites === null
+			)
+				continue;
+			for (const [site, index] of Object.entries(pool.sites)) {
+				const origin = Number.isInteger(index)
+					? pool.origins[index as number]
+					: undefined;
+				if (typeof origin !== 'string') continue;
+				const had = given.get(site) ?? [];
+				given.set(site, [origin, ...had.filter((other) => other !== origin)]);
+			}
+		}
+	} catch (error) {
+		// not ours, or cut short: nothing to read in
+	}
+	try {
+		const tx = db.transaction([SITES, COUNTS], 'readwrite');
+		tx.done.catch(() => {});
+		const sites = tx.objectStore(SITES);
+		const counts = tx.objectStore(COUNTS);
+		const added = new Map<string, number>();
+		// the first page of this build has nothing to merge with (a put
+		// without a get: 100,000 sites read in in about half the time)
+		const empty = (await sites.count()) === 0;
+		await Promise.all(
+			[...given].map(async ([site, origins]) => {
+				const had = empty ? [] : slotList(await sites.get(site));
+				const more = origins.filter((origin) => !had.includes(origin));
+				if (!more.length) return;
+				sites.put([...had, ...more], site);
+				for (const origin of more)
+					added.set(origin, (added.get(origin) ?? 0) + 1);
+			}),
+		);
+		await Promise.all(
+			[...added].map(async ([origin, more]) =>
+				counts.put(counted(await counts.get(origin)) + more, origin),
+			),
+		);
+		await tx.done;
+		storage?.removeItem(LEGACY_KEY);
+	} catch (error) {
+		// the database refused: the text stays for the next page
 	}
 }
 

@@ -68,23 +68,57 @@ page stores in the browser's own stores (IndexedDB, Cache Storage, the
 origin private file system) and what the worker keeps for it (localStorage,
 the HTTP and rewrite caches, emulated service worker registrations) is the
 slot origin's: a site shown from another slot tomorrow would find nothing
-of it (the suite shows it: the same pool in another order has a site's
-cookies and not its localStorage). So the first assignment is kept for
-good, in the host origin's localStorage (`kept-site-slots`: per pool, site
-to index), and every tab of the host reads the same one. Every assignment
-is kept, however many sites come after (about 25 characters each, and
-Chrome 157 gives the host origin's localStorage about 5.2 million: some
-200,000 sites; the text is parsed again only when another page wrote
-it); a bound that dropped the oldest would leave
-a site's data in a slot it no longer has (site-pool-kept-sites: a site
-seen before 4100 others keeps its slot, its passkey and what it stored). A site seen for
-the first time gets an empty slot, else the slot used longest ago in this
-page, and never the slot of the document the navigation comes from when
-there is another: a frame of a new site is always in another process than
-its embedder, and the sites that share a process are the ones farthest
-apart in time. A site has the same slot as a page, as a frame and in every
-tab: same-site documents of one browsing context group reach each other
-synchronously, so they must be one origin.
+of it (the site-pool suite shows it: a list without a site's slot shows it
+with its cookies and not its localStorage). So the first assignment is
+kept for good, in the host origin's IndexedDB (database
+`kept-site-slots`: `sites`, each site's slot origins, newest first, one
+record per site; `slots`, how many sites each slot was given), and every
+tab of the host reads the same one. It is kept by slot origin, not by the
+list: a changed list (another order, slots added or taken out) keeps every
+site whose slot it still has, and a site whose slot it lost is given
+another, its earlier slots kept after it for a list that has one again
+(site-pool-kept-sites: four changed lists, each in a new tab, and the
+first again after a new site; at 37a22599 every one of them moved the
+site, the last because only four lists' assignments were kept, and it
+read none of what it stored). Nothing is ever dropped, and a full
+localStorage (the host's own data, or the 200,000 sites the earlier kept
+text had room for) is not where they are (the suite fills it: at
+37a22599 the site's next visit, after a new site, was shown from
+another slot). A site seen before 4100 others keeps its slot, its passkey
+and what it stored, too. Two tabs that see a new site at once give it one
+slot (one transaction reads and writes it). A page reads a site's record
+the first time it shows the site, by its key, and keeps the answer while
+it lives. A site seen for the first time gets an empty slot, else the slot
+used longest ago in this page, and never the slot of the document the
+navigation comes from when there is another: a frame of a new site is
+always in another process than its embedder, and the sites that share a
+process are the ones farthest apart in time. A site has the same slot as a
+page, as a frame and in every tab: same-site documents of one browsing
+context group reach each other synchronously, so they must be one origin.
+(The fewest sites: every site a slot was ever given.)
+
+What a navigation's read of the assignments costs, in headless Chrome 157,
+ms, the medians of 15 in each of three runs (a page that drives
+`SiteSlots` over one pool of five with that many sites kept; its clock
+counts in 0.1 ms, as a page's that is not cross-origin isolated); each
+cell is before (37a22599) / now:
+
+| sites   | a page's first read     | a site read again | a site not read yet     | after another tab wrote | a new site               |
+| ------- | ----------------------- | ----------------- | ----------------------- | ----------------------- | ------------------------ |
+| 1,000   | 0.3 to 0.4 / 0.3 to 0.5 | 0.1 / 0           | 0.1 to 0.2 / 0.3 to 0.4 | 0.3 to 0.4 / 0.2 to 0.3 | 0.5 to 0.6 / 0.4 to 0.7  |
+| 10,000  | 4.3 to 4.4 / 0.3 to 0.5 | 2.0 to 2.2 / 0    | 1.7 to 2.3 / 0.2 to 0.4 | 4.6 to 5.4 / 0.3 to 0.4 | 7.6 to 10.6 / 0.5 to 0.8 |
+| 100,000 | 64 to 71 / 0.4 to 1.1   | 34 to 37 / 0      | 33 to 38 / 0.2 to 0.5   | 73 to 92 / 0.2 to 0.4   | 97 to 131 / 0.4 to 0.7   |
+
+Before, every navigation copied the whole text out of localStorage,
+compared it with the one read last and made a map of every site from
+it, and a new site wrote the whole text back. The first page of this
+build reads the text an earlier build kept (every pool's, each site's
+slots newest first) into the database once, and removes it: 48 to 66 ms
+for 1,000 sites, 0.2 to 0.4 s for 10,000, 1.7 to 2.7 s for 100,000, which
+that page's first navigation waits for. A page of an earlier build that
+writes the text again is read in by the next page. The slot that took a
+navigation last (`last-site-slot`, Spares) stays in localStorage: a hint,
+not where data is.
 
 **Hub and agents** (src/controller/sites.ts, site.ts). The host's controller
 is the hub and keeps its own worker, transport and API. For each slot in
@@ -848,7 +882,7 @@ Where a slot cannot show sites, the hub shows them from its own page's
 origin, as the single-origin controller does: per page, silently (a
 console warning, nothing a proxied page can see), and only for the sites
 of that slot. A slot left out stays out while the page lives, and the
-sites it was given keep it (`kept-site-slots` is not rewritten): their
+sites it was given keep it (their records are not rewritten): their
 data is there, and the next page asks the slot again. The hub's worker
 routes as a slot's does: a navigation to a document on the hub's own
 origin (a page that holds a proxy URL, a link of the hub's origin, a
@@ -1303,6 +1337,12 @@ suite named passes with it off (`STOMP_SITE_POOL=0`).
 - **Sites that share a slot** are as coupled as without a pool, for good:
   a site cannot move without its data. Six ports are five slots, and an ad
   page has more sites than that.
+- **A slot taken out of the list** keeps what its sites stored: they are
+  given another slot and find none of it there, where natively nothing
+  takes a site's storage away (the site-pool suite's list without a site's
+  slot). They stay on the new slot when the old one is listed again: what
+  they stored since is there. Every other change of the list (another
+  order, a slot added) keeps every site where it was.
 - **The initiator of a navigation a frame aims at another slot's window**:
   the frame's inject asks that window's to navigate itself (an envelope
   with the hub's token, taken only from a frame under the receiver), so
