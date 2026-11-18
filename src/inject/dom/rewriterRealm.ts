@@ -11,6 +11,7 @@ const REALM_FACTORY = '$stomp$realm';
 const createElement = Document.prototype.createElement;
 const appendChild = Node.prototype.appendChild;
 const removeChild = Node.prototype.removeChild;
+const attachShadow = Element.prototype.attachShadow;
 const documentElementGet = Reflect.getOwnPropertyDescriptor(
 	Document.prototype,
 	'documentElement',
@@ -41,8 +42,9 @@ const scriptTextSet = Reflect.getOwnPropertyDescriptor(
  * without allow-scripts, sandbox.ts).
  *
  * The realm is an about:blank frame's, made in `document` and removed again
- * in the same task, before any page code of the document runs: no page can
- * reach it, so no page can change what its code reads (a page that replaces
+ * before this returns, with the browser's methods taken when the bundle
+ * loaded, so no page code runs meanwhile: no page can reach it, so no page
+ * can change what its code reads (a page that replaces
  * `String.prototype.slice` in its own realm changes nothing here), and no
  * frame of one site can reach the realm of another's through it. The
  * library is evaluated there while the frame is in the document: a removed
@@ -61,17 +63,40 @@ export function createRewriterRealm(
 	 * text runs there as a script that carries it
 	 */
 	nonce: string | null = null,
+	/**
+	 * The page's code may have run in `document` (a top makes its library
+	 * the first time a rewrite needs it: DocumentClient #topLibrary): the
+	 * frame goes in the closed shadow root of an element of its own, where
+	 * the page has no way to it. Its load event, which inserting it fires
+	 * before the call returns, is not composed and ends at the shadow root
+	 * (a listener of the document's would hear it and could read the
+	 * frame's window before the library is in it), the window's `frames`
+	 * and `length` leave it out, and an observer of the document sees only
+	 * that element, which the caller keeps from the page's observers
+	 */
+	hidden = false,
 ): RewriterLib | null {
 	let root: Element | null = null;
-	let frame: HTMLIFrameElement | null = null;
+	// what goes in the document: the frame, or the element whose shadow root holds it
+	let placed: Element | null = null;
 	try {
 		const factory = given();
 		root = Reflect.apply(documentElementGet, document, []) as Element | null;
 		if (!root) return null;
-		frame = Reflect.apply(createElement, document, [
+		const frame = Reflect.apply(createElement, document, [
 			'iframe',
 		]) as HTMLIFrameElement;
-		Reflect.apply(appendChild, root, [frame]);
+		if (hidden) {
+			const host = Reflect.apply(createElement, document, ['div']) as Element;
+			// (with no prototype: the init's other members are read from it,
+			// and a getter of the page's on Object.prototype would run)
+			const init = { __proto__: null, mode: 'closed' } as ShadowRootInit;
+			Reflect.apply(appendChild, Reflect.apply(attachShadow, host, [init]), [
+				frame,
+			]);
+			placed = host;
+		} else placed = frame;
+		Reflect.apply(appendChild, root, [placed]);
 		const realm = Reflect.apply(contentWindowGet, frame, []) as
 			(typeof globalThis & { eval: (code: string) => unknown }) | null;
 		if (!realm) return null;
@@ -93,9 +118,9 @@ export function createRewriterRealm(
 	} catch (error) {
 		return null;
 	} finally {
-		if (root && frame)
+		if (root && placed)
 			try {
-				Reflect.apply(removeChild, root, [frame]);
+				Reflect.apply(removeChild, root, [placed]);
 			} catch (error) {
 				// not in the document after all
 			}

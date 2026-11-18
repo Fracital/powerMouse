@@ -90,7 +90,11 @@ import DOMAttributesModule, {
 	scriptKind,
 	shouldRewriteScript,
 } from './modules/DOMAttributes';
-import { markerPrefix, useMarker } from './modules/MutationObserver';
+import {
+	hiddenMutation,
+	markerPrefix,
+	useMarker,
+} from './modules/MutationObserver';
 import SyncModule from './modules/Sync';
 import { HTML_NAMESPACE, SVG_NAMESPACE } from './namespaces';
 import type { PolicyChecks } from './policyChecks';
@@ -552,7 +556,7 @@ export default class DocumentClient extends Client {
 		this.guardScripts();
 		// The rewriter library this bundle's rewrites use (rewriter.ts). The
 		// bundle's first client is its realm's document; a top makes the realm
-		// it shares now, before any of our hooks or of the page's code exists
+		// it shares the first time a rewrite needs it (#topLibrary)
 		if (
 			shareRewriter(() => this.#rewriterLibrary(), {
 				lightText: () => {
@@ -586,40 +590,71 @@ export default class DocumentClient extends Client {
 			}) &&
 			!this.sandboxedOpaque &&
 			this.#topClient() === this
-		)
-			// the top makes the light library in a realm no page code runs in,
-			// from the file its shell loaded (a document whose policy refuses
-			// code made from a string makes it with a script carrying the
-			// document's nonce instead). A frame of another slot than its
-			// page's, which has no top in reach, takes the one its slot's agent
-			// made for every such frame of the slot (siteWindows slotShared)
-			this.#rewriter =
-				(this.sites ? siteWindows().slotShared(this) : null)?.rewriter ??
+		) {
+			// the library a top shares rewrites in the wasm module the
+			// controller compiled, once it has arrived: the realm only
+			// instantiates it, and until then a rewrite compiles the bytes
+			// synchronously (rewriter.ts provideModule). One instance per top;
+			// a frame under it holds none, and the agent's library is given the
+			// module once, by the first frame that has it. A module that
+			// arrives before the top made its library waits for it
+			this.#rewriter = null;
+			this.#rewriterModules = [];
+			this.requestModules((name, module) => {
+				const library = this.#rewriter;
+				if (!library) {
+					this.#rewriterModules?.push([name, module]);
+					return;
+				}
+				this.#adoptModule(library, name, module);
+			});
+		}
+	}
+	/**
+	 * The top's library, made the first time a rewrite of this document or
+	 * of a frame under it needs one: most revisits of a page rewrite nothing
+	 * in the document (the worker wrote its scripts), and the realm (a
+	 * browsing context made and removed) was a fifth of the shell's script.
+	 * The light library is made in a realm no page code runs in, from the
+	 * file its shell loaded (a document whose policy refuses code made from
+	 * a string makes it with a script carrying the document's nonce
+	 * instead), with the browser's own methods taken when the bundle loaded,
+	 * in a frame no page code reaches (rewriterRealm.ts `hidden`), whose
+	 * element no observer of the page's hears of. A frame of
+	 * another slot than its page's, which has no top in reach, takes the one
+	 * its slot's agent made for every such frame of the slot (siteWindows
+	 * slotShared). Null when one cannot be had.
+	 */
+	#topLibrary(): RewriterLib | null {
+		if (this.#rewriter || !this.#rewriterModules) return this.#rewriter ?? null;
+		const modules = this.#rewriterModules;
+		this.#rewriterModules = null;
+		const agent =
+			(this.sites ? siteWindows().slotShared(this) : null)?.rewriter ?? null;
+		const library =
+			agent ??
+			hiddenMutation(() =>
 				createRewriterRealm(
 					this.global.document,
 					lightFactory,
 					this.scriptFacts.evaluates ? null : this.scriptNonce,
-				);
-		// the library a top shares rewrites in the wasm module the controller
-		// compiled, once it has arrived: the realm only instantiates it, and
-		// until then a rewrite compiles the bytes synchronously (rewriter.ts
-		// provideModule). One instance per top; a frame under it holds none,
-		// and the agent's library is given the module once, by the first
-		// frame that has it
-		const library = this.#rewriter;
-		// (a frame under a top holds none, and asks no agent)
-		const agents =
-			!!library &&
-			library ===
-				(this.sites ? siteWindows().slotShared(this) : null)?.rewriter;
+					true,
+				),
+			);
+		this.#rewriter = library;
+		this.#rewriterAgent = !!agent;
 		if (library)
-			this.requestModules((name, module) => {
-				try {
-					if (!agents || !library.holds(name)) library.adopt(name, module);
-				} catch (error) {
-					// the library is gone with its document
-				}
-			});
+			for (const [name, module] of modules)
+				this.#adoptModule(library, name, module);
+		return library;
+	}
+	#adoptModule(library: RewriterLib, name: string, module: WebAssembly.Module) {
+		try {
+			if (!this.#rewriterAgent || !library.holds(name))
+				library.adopt(name, module);
+		} catch (error) {
+			// the library is gone with its document
+		}
 	}
 	/**
 	 * The rewriter library a top shares with the frames under it, in a realm
@@ -627,7 +662,7 @@ export default class DocumentClient extends Client {
 	 * top or could not make one. @internal
 	 */
 	get sharedRewriter(): RewriterLib | null {
-		return this.#rewriter ?? null;
+		return this.#topLibrary();
 	}
 	/**
 	 * The light library's statement (src/inject/rewriter.ts lightFactory)
@@ -659,8 +694,12 @@ export default class DocumentClient extends Client {
 	deferredPartsText(build: string, name?: string): string | null {
 		return build === BUILD ? deferredText(name) : null;
 	}
-	/** a top's library (null: it could not make one), undefined for a frame under a top */
+	/** a top's library (null: not made yet, or it could not make one), undefined for a frame under a top */
 	#rewriter: RewriterLib | null | undefined;
+	/** the modules that arrived for a top's library before it was made; null once it was (#topLibrary) */
+	#rewriterModules: [name: string, module: WebAssembly.Module][] | null = null;
+	/** whether the top's library is its slot's agent's, which holds the modules the first frame gave it */
+	#rewriterAgent = false;
 	/** the library of this document's top, once looked up (null: none to share) */
 	#topRewriter: RewriterLib | null | undefined;
 	/**
@@ -671,7 +710,7 @@ export default class DocumentClient extends Client {
 	 */
 	#rewriterLibrary(): RewriterLib | null {
 		if (this.sandboxedOpaque) return null;
-		if (this.#rewriter !== undefined) return this.#rewriter;
+		if (this.#rewriter !== undefined) return this.#topLibrary();
 		if (this.#topRewriter === undefined) {
 			this.#topRewriter = null;
 			const top = this.#topClient();

@@ -1,0 +1,101 @@
+<!doctype html>
+<title>REALM UNSEEN</title>
+<body>
+	<script>
+		// Listens and observes everything a frame put in the document would
+		// show (its load event, as the document and the root element hear it in
+		// the capture phase, a mutation record, the window's frames), replaces
+		// the methods and the getters a frame's insertion could call, and then
+		// evaluates code made from a string, the page's first: through STomp
+		// that is the document's first rewrite. `?case=child` has a frame of the
+		// page's own origin make it instead. Natively nothing is inserted, and
+		// none of it hears of anything but the page's own frame.
+		const which = new URLSearchParams(location.search).get('case') || 'top';
+		const heard = [];
+		document.addEventListener(
+			'load',
+			(event) => heard.push(`document:${event.target.nodeName}`),
+			true,
+		);
+		document.documentElement.addEventListener(
+			'load',
+			(event) => heard.push(`root:${event.target.nodeName}`),
+			true,
+		);
+		const records = [];
+		const observer = new MutationObserver((list) => {
+			for (const record of list)
+				records.push(
+					`${record.type}:${[...record.addedNodes, ...record.removedNodes]
+						.map((node) => node.nodeName)
+						.join(',')}`,
+				);
+		});
+		observer.observe(document, {
+			childList: true,
+			subtree: true,
+			attributes: true,
+		});
+		const calls = [];
+		const count = (owner, name) => {
+			const native = owner[name];
+			owner[name] = function (...args) {
+				calls.push(name);
+				return Reflect.apply(native, this, args);
+			};
+		};
+		count(Document.prototype, 'createElement');
+		count(Node.prototype, 'appendChild');
+		count(Node.prototype, 'removeChild');
+		count(Element.prototype, 'attachShadow');
+		for (const name of [
+			'delegatesFocus',
+			'slotAssignment',
+			'serializable',
+			'clonable',
+			'mode',
+		])
+			Object.defineProperty(Object.prototype, name, {
+				configurable: true,
+				get() {
+					calls.push(`get ${name}`);
+					return undefined;
+				},
+			});
+		const report = (results, framesThen) => {
+			observer.disconnect();
+			window.__unseen = JSON.stringify({
+				case: which,
+				results,
+				framesThen,
+				frames: window.length,
+				heard,
+				records,
+				calls,
+			});
+			document.title = 'REALM UNSEEN DONE';
+		};
+		const evaluate = (realm) => {
+			calls.length = 0;
+			const results = [
+				realm.eval('1 + 1'),
+				new realm.Function('return location.pathname.length > 0')(),
+			];
+			return [results, calls.splice(0)];
+		};
+		if (which === 'child') {
+			const frame = document.createElement('iframe');
+			frame.srcdoc = '<p>child</p>';
+			frame.addEventListener('load', () => {
+				const [results, during] = evaluate(frame.contentWindow);
+				const framesThen = window.length;
+				setTimeout(() => report([...results, ...during], framesThen), 50);
+			});
+			document.body.append(frame);
+		} else {
+			const [results, during] = evaluate(window);
+			const framesThen = window.length;
+			setTimeout(() => report([...results, ...during], framesThen), 50);
+		}
+	</script>
+</body>
