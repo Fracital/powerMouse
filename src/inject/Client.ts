@@ -316,6 +316,20 @@ export default class Client {
 		value: unknown,
 		member: 'href' | 'assign' | 'replace',
 	) => boolean;
+	/**
+	 * @internal set by the WebRTC library once this document makes encoded
+	 * frames (src/inject/encodedFrames.ts `window`): a window message's
+	 * data as it is posted, when it carries some
+	 */
+	encodedFrames?: {
+		window(
+			data: unknown,
+			transfer: unknown[],
+			same: boolean,
+		): { data: unknown; transfer: unknown[] } | 'error' | null;
+	};
+	/** @internal set by the WebRTC module: this document's encoded frames, made now (a message that carries some is coming) */
+	loadEncodedFrames?: () => void;
 	/** @internal this context's native window.postMessage, taken before the Context module wraps it: another context posting here calls it from its own realm */
 	nativePostMessage?: PostMessage;
 	/** @internal the Context module's wrapper over window.postMessage: a page that replaced it is called as written */

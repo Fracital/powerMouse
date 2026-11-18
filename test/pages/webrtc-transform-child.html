@@ -1,0 +1,47 @@
+<!doctype html>
+<title>WEBRTC TRANSFORM CHILD</title>
+<script>
+	// A document the webrtc-transform page posts encoded frames to: what
+	// each message, messageerror and BroadcastChannel message it has reads
+	// as, told to its parent or opener
+	const heard = [];
+	const tell = () => {
+		const to = parent !== window ? parent : opener;
+		to?.postMessage({ heard }, '*');
+	};
+	const frame = (data) => {
+		const f = data?.frame;
+		return f
+			? [
+					Object.prototype.toString.call(f),
+					f.data.byteLength > 0,
+					data.list?.[0] === f,
+				].join('|')
+			: JSON.stringify(data);
+	};
+	const from = (event) =>
+		[event.origin, event.source === (parent !== window ? parent : opener)].join(
+			'|',
+		);
+	addEventListener('message', (event) => {
+		heard.push(`message ${frame(event.data)} ${from(event)}`);
+		tell();
+	});
+	addEventListener('messageerror', (event) => {
+		heard.push(
+			`messageerror ${JSON.stringify(event.data)} ${from(event)} ${event.ports.length}`,
+		);
+		tell();
+	});
+	const channel = new BroadcastChannel('webrtc-transform');
+	channel.onmessage = (event) => {
+		heard.push(`broadcast ${frame(event.data)} ${event.origin}`);
+		tell();
+	};
+	channel.onmessageerror = () => {
+		heard.push('broadcast messageerror');
+		tell();
+	};
+	// ready: the parent posts once each child says so
+	tell();
+</script>

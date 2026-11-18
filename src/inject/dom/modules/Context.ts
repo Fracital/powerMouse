@@ -211,6 +211,8 @@ applyDescriptors(nativeMessageEvent, MessageEvent.prototype);
 interface MessageData {
 	data: any;
 	origin: string;
+	/** encoded frames: `message` carries some, `error` is a messageerror (Context.postMessage) */
+	frames?: 'message' | 'error';
 	[marker: string]: unknown;
 }
 
@@ -528,15 +530,34 @@ export default class ContextModule extends Module<DocumentClient> {
 					targetOrigin: args[1] ? String(args[1]) : '*',
 				};
 
+		// encoded frames (the WebRTC library's, once this document has
+		// some): to a receiver of another origin a messageerror, as their
+		// agent cluster is the sender's (Chrome 157)
+		let { data, transfer } = message;
+		let frames: MessageData['frames'];
+		const carried = this.client.encodedFrames?.window(
+			data,
+			transfer,
+			this.#sameOrigin(receiver),
+		);
+		if (carried === 'error') {
+			data = null;
+			frames = 'error';
+		} else if (carried) {
+			data = carried.data;
+			transfer = carried.transfer as Transferable[];
+			frames = 'message';
+		}
 		return <PostMessageArgs2>[
 			<MessageData>{
 				[this.client.names.globalName]: 'stompMessage',
-				data: message.data,
+				data,
 				origin: this.client.origin,
+				frames,
 			},
 			{
 				targetOrigin: this.deliveryOrigin(receiver),
-				transfer: message.transfer,
+				transfer,
 			},
 		];
 	}
@@ -603,6 +624,13 @@ export default class ContextModule extends Module<DocumentClient> {
 			// a window of another real origin
 			return undefined;
 		}
+	}
+	/** whether `context`'s document is of this one's origin (an agent cluster, as Chrome keys it) */
+	#sameOrigin(context: unknown): boolean {
+		const other = this.#clientOf(context);
+		if (!other) return false;
+		const own = this.client.origin;
+		return other === this.client || (own !== 'null' && other.origin === own);
 	}
 	/** whether this document reaches `context`'s (same origin-domain, neither opaque) */
 	#reaches(context: unknown): boolean {
@@ -1471,6 +1499,8 @@ export default class ContextModule extends Module<DocumentClient> {
 		// native MessageEvent members alone while its data is read
 		const stopImmediate =
 			this.client.global.Event.prototype.stopImmediatePropagation;
+		const dispatch = realm.EventTarget.prototype.dispatchEvent;
+		const NativeMessageEvent = realm.MessageEvent;
 		const tagMessages = () => {
 			realm.addEventListener('message', (event) => {
 				/*console.error(
@@ -1539,6 +1569,27 @@ export default class ContextModule extends Module<DocumentClient> {
 						}
 					}
 
+					// encoded frames: a receiver of another origin than the
+					// sender's has a messageerror (data null) instead, and one
+					// of its origin turns them back with its own frames
+					const { frames } = data as MessageData;
+					if (frames === 'error') {
+						Reflect.apply(stopImmediate, event, []);
+						Reflect.apply(dispatch, realm, [
+							new NativeMessageEvent('messageerror', {
+								data: null,
+								origin: (data as MessageData).origin,
+								source: event.source,
+							}),
+						]);
+						return;
+					}
+					if (frames === 'message' && !moduleClient.encodedFrames)
+						try {
+							moduleClient.loadEncodedFrames?.();
+						} catch (error) {
+							// (the frames arrive as the browser clones the inject's)
+						}
 					messageData.set(event, data);
 
 					/* else {

@@ -98,6 +98,8 @@ export interface Installed {
 		args: unknown[],
 		newTarget: Function,
 	) => object;
+	/** the document's encoded frames, made now (src/inject/encodedFrames.ts) */
+	frames: () => void;
 }
 
 /** the library's text, evaluated: one per bundle */

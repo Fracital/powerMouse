@@ -1220,6 +1220,7 @@ export default class WebRTCStack {
 				natives[name] = global[name];
 			for (const name of [
 				'ArrayBuffer',
+				'BroadcastChannel',
 				'MessageChannel',
 				'MessagePort',
 				'Performance',
@@ -1240,6 +1241,9 @@ export default class WebRTCStack {
 			} catch (error) {
 				frames = null;
 			}
+			// a window message of this document's that carries frames
+			// (the Context module)
+			if (frames) client.encodedFrames = frames;
 			return frames;
 		};
 		/** the slot is new to the page until the next task */
@@ -4608,6 +4612,7 @@ export default class WebRTCStack {
 			RTCPeerConnection: MockPeerConnection as unknown as Function,
 			RTCDataChannelEvent: MockDataChannelEvent as unknown as Function,
 			RTCRtpScriptTransform,
+			frames: () => void framesOf(),
 		};
 	}
 }

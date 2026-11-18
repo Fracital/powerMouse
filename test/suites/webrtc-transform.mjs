@@ -504,5 +504,112 @@ for (const flag of [false, true]) {
 	);
 }
 
+// ---- frames posted to windows and on a BroadcastChannel ------------------------------
+{
+	const child = `${FIXTURE}pages/webrtc-transform-child.html`;
+	// another site: the fixture by another name
+	const across = child.replace('//127.0.0.1:', '//localhost:');
+	const postsCall = async (proxied) => {
+		const near = await open(proxied ? 'proxied' : 'natively', proxied);
+		const far = await open('far end', false);
+		const own = end(near);
+		const other = end(far);
+		try {
+			await own.call('open', {});
+			await other.call('open', {});
+			await own.call('posts', [child, across]);
+			await other.call('media', 'audio', {});
+			await other.call('remote', 'offer', await own.call('local', 'offer'));
+			await own.call('remote', 'answer', await other.call('local', 'answer'));
+			await own.call('connected');
+			return await own.call('posted');
+		} catch (error) {
+			return { failure: error.message };
+		} finally {
+			await own.call('close').catch(() => {});
+			await other.call('close').catch(() => {});
+			await near.page.close().catch(() => {});
+			await far.page.close().catch(() => {});
+		}
+	};
+	const want = await postsCall(false);
+	const got = await postsCall(true);
+	ok(
+		'natively: a frame posted to the page itself and to a frame of its origin arrives, to one of another site is a messageerror, on a BroadcastChannel is null',
+		!want.failure &&
+			want.self?.startsWith('[object RTCEncodedAudioFrame]') &&
+			want.children?.[0]?.some((heard) =>
+				heard.startsWith('message [object'),
+			) &&
+			want.children?.[1]?.some((heard) => heard.startsWith('messageerror')),
+		want.failure ?? JSON.stringify(want),
+	);
+	const off = unlike(got, want);
+	ok(
+		"proxied: a frame posted with a window's postMessage (the page itself, a frame of its origin, one of another site) and on a BroadcastChannel arrives, fails and refuses as natively",
+		!got.failure && !off.length,
+		got.failure ?? off.join('; '),
+	);
+}
+
+// ---- the empty frames of padding packets ------------------------------------------
+/** an audio call of `seconds`: the empty frames each end's receiver transform was given */
+async function paddingCall(proxied, seconds) {
+	const near = await open(proxied ? 'proxied' : 'natively', proxied);
+	const far = await open('far end', false);
+	const own = end(near);
+	const other = end(far);
+	try {
+		await own.call('open', {});
+		await other.call('open', {});
+		await own.call('media', 'audio', {});
+		await other.call('media', 'audio', {});
+		await other.call('remote', 'offer', await own.call('local', 'offer'));
+		await own.call('remote', 'answer', await other.call('local', 'answer'));
+		await own.call('connected');
+		await other.call('connected');
+		return {
+			mine: (await own.call('empty', seconds * 1000))?.['recv audio'] ?? [],
+			theirs: (await other.call('empty', 0))?.['recv audio'] ?? [],
+		};
+	} catch (error) {
+		return { failure: error.message };
+	} finally {
+		await own.call('close').catch(() => {});
+		await other.call('close').catch(() => {});
+		await near.page.close().catch(() => {});
+		await far.page.close().catch(() => {});
+	}
+}
+{
+	// Chrome's sender probes its bandwidth every 5 s or so with padding on the
+	// sound's stream: each packet a frame of no bytes for the receiver's
+	// transform, its sequence number its own, its RTP time the packet's
+	// before, without an audio level
+	const padded = (list) =>
+		list.length > 0 &&
+		list.every(
+			(f) =>
+				f.prevSeq !== null &&
+				f.seq === ((f.prevSeq + 1) & 0xffff) &&
+				f.rtp === f.prevRtp,
+		);
+	const want = await paddingCall(false, 12);
+	const got = await paddingCall(true, 12);
+	ok(
+		"natively: a receiver's transform is given Chrome's padding as empty frames",
+		!want.failure && padded(want.mine),
+		want.failure ?? JSON.stringify(want.mine),
+	);
+	ok(
+		"proxied: the page's receiver transform is given the far end's padding as empty frames, as natively",
+		!got.failure &&
+			padded(got.mine) &&
+			got.mine[0].keys === want.mine?.[0]?.keys,
+		got.failure ??
+			`${JSON.stringify(got.mine)} (natively ${JSON.stringify(want.mine?.[0])})`,
+	);
+}
+
 gate.close();
 await done(browser);

@@ -23,11 +23,26 @@
 	const WORKER = `
 		// per operation and kind: each of the first frames
 		const seen = {};
+		// and the empty ones (a padding packet's), with the frame before
+		const empty = {};
 		onrtctransform = (event) => {
 			const { readable, writable, options } = event.transformer;
-			const list = (seen[options.operation + ' ' + options.kind] = []);
+			const op = options.operation + ' ' + options.kind;
+			const list = (seen[op] = []);
+			const blank = (empty[op] = []);
+			let prev = null;
 			readable.pipeThrough(new TransformStream({
 				transform(frame, controller) {
+					const now = frame.getMetadata();
+					if (!frame.data.byteLength && blank.length < 20)
+						blank.push({
+							seq: now.sequenceNumber ?? null,
+							rtp: now.rtpTimestamp,
+							keys: Object.keys(now).join(),
+							prevSeq: prev?.sequenceNumber ?? null,
+							prevRtp: prev?.rtpTimestamp ?? null,
+						});
+					prev = now;
 					if (list.length < 120) {
 						const meta = frame.getMetadata();
 						list.push({
@@ -47,7 +62,7 @@
 				},
 			})).pipeTo(writable);
 		};
-		setInterval(() => postMessage(seen), 250);`;
+		setInterval(() => postMessage({ seen, empty }), 250);`;
 
 	function open(name, config) {
 		const pc = new RTCPeerConnection(config);
@@ -55,7 +70,10 @@
 		entry.worker = new Worker(
 			URL.createObjectURL(new Blob([WORKER], { type: 'text/javascript' })),
 		);
-		entry.worker.onmessage = (event) => (entry.seen = event.data);
+		entry.worker.onmessage = (event) => {
+			entry.seen = event.data.seen;
+			entry.empty = event.data.empty;
+		};
 		peers.set(name, entry);
 		pc.addEventListener('track', (event) => {
 			entry.tracks.push(event.track);
@@ -174,6 +192,11 @@
 			).catch(() => {});
 			return entry.seen ?? null;
 		},
+		/** the empty frames the transforms were given, `ms` from now */
+		async empty(name, ms) {
+			await wait(ms);
+			return peer(name).empty ?? null;
+		},
 		close(name) {
 			const entry = peers.get(name);
 			if (!entry) return;
@@ -202,7 +225,9 @@
 			const t = event.transformer; const op = t.options.operation + ' ' + t.options.kind;
 			let n = 0;
 			t.readable.pipeThrough(new TransformStream({ transform(frame, c) {
-				if (++n !== 6) { c.enqueue(frame); return; }
+				// the seventh, written as it came: emptied (its metadata kept)
+				if (++n === 7 && out[op]) setTimeout(() => (out[op].writtenOriginal = [frame.data.byteLength, Object.keys(frame.getMetadata()).join()].join('|')), 300);
+				if (n !== 6) { c.enqueue(frame); return; }
 				const C = frame.constructor; const o = (out[op] = {});
 				const base = frame.getMetadata();
 				const bytes = frame.data.byteLength;
@@ -224,6 +249,8 @@
 				if (other) other.postMessage({ op, frame });
 				o.afterPost = frame.data.byteLength === bytes;
 				c.enqueue(copy);
+				// a copy written keeps its bytes
+				setTimeout(() => (o.written = [copy.data.byteLength > 0, Object.keys(copy.getMetadata()).join()].join('|')), 300);
 			}})).pipeTo(t.writable);
 		};
 		setInterval(() => postMessage({ out }), 250);`;
@@ -311,6 +338,9 @@
 			() =>
 				entry.copies.worker &&
 				Object.keys(entry.copies.worker).length >= 2 &&
+				Object.values(entry.copies.worker).every(
+					(o) => 'written' in o && 'writtenOriginal' in o,
+				) &&
 				Object.keys(entry.copies.page).length >= 2 &&
 				entry.copies.other &&
 				Object.keys(entry.copies.other).length >= 2,
@@ -491,6 +521,114 @@
 		const entry = peer(name);
 		const track = source(entry, kind, 320, 180);
 		entry.pc.addTrack(track, new MediaStream([track]));
+	};
+	// ---- frames posted to windows and on a BroadcastChannel ----
+
+	/**
+	 * A send transform's worker that posts its sixth frame to the page and
+	 * sends a copy of it: a frame written to the writable is emptied, and so
+	 * natively is what another context makes of it later
+	 */
+	const POSTER = `
+		onrtctransform = (event) => {
+			const t = event.transformer;
+			let n = 0;
+			t.readable.pipeThrough(new TransformStream({ transform(frame, c) {
+				if (++n !== 6) return c.enqueue(frame);
+				postMessage({ frame });
+				c.enqueue(new frame.constructor(frame));
+			}})).pipeTo(t.writable);
+		};`;
+	/**
+	 * The page's sound sent through POSTER's transform; at its frame, the
+	 * page posts it to itself (and with it in the transfer list), to a frame
+	 * of its origin and one of another site (`others`), and on a
+	 * BroadcastChannel: what each made of it (entry.posts)
+	 */
+	window.__transform.posts = async (name, others) => {
+		const entry = peer(name);
+		const worker = new Worker(
+			URL.createObjectURL(new Blob([POSTER], { type: 'text/javascript' })),
+		);
+		entry.stops.push(() => worker.terminate());
+		const result = (entry.posts = { children: {} });
+		// the children, each told what it heard
+		const children = others.map((url) => {
+			const child = document.createElement('iframe');
+			child.src = url;
+			document.body.append(child);
+			entry.stops.push(() => child.remove());
+			return child;
+		});
+		addEventListener('message', (event) => {
+			if (!event.data?.heard) return;
+			const at = children.findIndex(
+				(child) => child.contentWindow === event.source,
+			);
+			if (at >= 0) result.children[at] = event.data.heard;
+		});
+		const mine = new BroadcastChannel('webrtc-transform');
+		entry.stops.push(() => mine.close());
+		mine.onmessage = (event) =>
+			(result.broadcastHere = JSON.stringify(event.data));
+		const err = (f) => {
+			try {
+				f();
+				return 'ok';
+			} catch (error) {
+				return `${error.name}: ${error.message}`;
+			}
+		};
+		worker.onmessage = async ({ data }) => {
+			const { frame } = data;
+			if (!frame || result.self) return;
+			result.got = Object.prototype.toString.call(frame);
+			const self = new Promise((resolve) => {
+				const heard = (event) => {
+					if (!event.data?.self) return;
+					removeEventListener('message', heard);
+					resolve(
+						[
+							Object.prototype.toString.call(event.data.frame),
+							event.data.frame === frame,
+							event.data.list[0] === event.data.frame,
+							event.data.frame.data.byteLength === frame.data.byteLength,
+						].join('|'),
+					);
+				};
+				addEventListener('message', heard);
+			});
+			result.selfPost = err(() =>
+				postMessage({ self: 1, frame, list: [frame] }, '*'),
+			);
+			result.self = await Promise.race([self, wait(2000).then(() => 'none')]);
+			result.selfTransfer = err(() => postMessage({ frame }, '*', [frame]));
+			for (const [i, child] of children.entries())
+				result[`child ${i}`] = err(() =>
+					child.contentWindow.postMessage({ frame, list: [frame] }, '*'),
+				);
+			const channel = new BroadcastChannel('webrtc-transform');
+			result.broadcast = err(() =>
+				channel.postMessage({ frame, list: [frame], from: 'page' }),
+			);
+			channel.close();
+		};
+		const track = source(entry, 'audio');
+		const sender = entry.pc.addTrack(track, new MediaStream([track]));
+		sender.transform = new RTCRtpScriptTransform(worker, {});
+	};
+	window.__transform.posted = async (name, ms = 20000) => {
+		const entry = peer(name);
+		await until(
+			() =>
+				entry.posts?.broadcast &&
+				Object.keys(entry.posts.children).length >= 2 &&
+				Object.values(entry.posts.children).every((heard) => heard.length > 0),
+			ms,
+			'posts',
+		).catch(() => {});
+		await wait(1500);
+		return entry.posts;
 	};
 	window.__transformReady = true;
 })();

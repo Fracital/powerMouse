@@ -406,6 +406,8 @@ export default class WebRTCModule extends Module<DocumentClient> {
 		const installNow = () => {
 			if (!gone()) void install();
 		};
+		// a window message that carries encoded frames: this document's own
+		client.loadEncodedFrames = () => install().frames();
 		// the entries of documents that are gone go first, then this one's,
 		// made by the tables' own realm: one made by this document's WeakRef
 		// would keep this document alive with the tables

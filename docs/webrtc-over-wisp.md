@@ -2053,14 +2053,34 @@ DataCloneError; a received picture's copies and clones lose their
 Chrome does to its own frames, natively, and calls a page whose sound
 goes through both ends' streams, the receiver's transferred to a worker.
 
-Limits: a frame posted with a window's `postMessage` (to a frame or
-another window) or on a `BroadcastChannel` is not carried (the browser
-clones the inject's object as an empty one), and a document of the page that
-made neither a transform nor the streams takes posted frames as such
-markers; `sendKeyFrameRequest()` is the browser's (an unattached
-transformer's refusal); a sent picture's
-`spatialIndex` and `temporalIndex` are 0 and simulcast layers share one
-count of ids; the empty frames Chrome gives a receiver's transform for
-padding packets are not given; and a receiver's transform is given every
-frame from the first, where Chrome gives none to one set as late as the
-track event.
+A window's `postMessage` carries frames too (the document's Context
+module asks the document's frames, `encodedFrames.window`): to the
+window itself and to a document of its origin as markers in the
+message's envelope, which the receiving document turns back with frames
+of its own (made then, the WebRTC library loaded if it had none); to a
+document of another origin, which Chrome keeps out of the frame's agent
+cluster, as a messageerror with no data (the envelope says so, and the
+receiver's tagger fires it in the message's place). A frame on a
+`BroadcastChannel` makes the message's data null, as Chrome's
+receivers have it. A frame a readable gave is emptied once it is
+written (its metadata kept), as Chrome's is, and a copy or a clone keeps
+its bytes. A receiver's transform is given the far end's padding as
+empty frames (their own sequence numbers, the RTP time of the packet
+before, no `audioLevel`), as Chrome's is: Chrome's sender probes its
+bandwidth with padding on the sound's stream every 5 s or so, and the
+stack passes such a packet on as a frame of no bytes.
+
+Limits: a messageerror the tagger fires is the page's own event to the
+browser (`isTrusted` false); what another context makes of a frame
+posted to it is its bytes as posted, where in Chrome it shares the
+frame's content and finds it emptied if the transform writes the frame
+before the message is read; the stack's sender sends no padding of its
+own, so a far end's transform has no empty frames from the page;
+`sendKeyFrameRequest()` is the browser's (an unattached transformer's
+refusal); a sent picture's `spatialIndex` and `temporalIndex` are 0,
+the encodings' `scalabilityMode` is not taken (Chrome's temporal and
+spatial layers, with the dependency descriptor that carries a frame's
+id, dependencies and layer, are not made or read), and simulcast layers
+share one count of ids; and a receiver's transform is given every frame
+from the first, where Chrome gives none to one set as late as the track
+event.

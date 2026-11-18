@@ -38,6 +38,8 @@ interface FrameState {
 	meta: Record<string, unknown>;
 	type?: 'key' | 'delta';
 	back: unknown;
+	/** a readable gave it (not a copy or a clone): written, it is emptied */
+	original?: boolean;
 }
 
 export interface FrameRealm {
@@ -49,6 +51,19 @@ export interface FrameRealm {
 		readable: ReadableStream;
 		writable: WritableStream;
 	};
+	/**
+	 * A window's message (the document's Context module posts it): null
+	 * when it carries no frame of these (or one in `transfer`, which is
+	 * the browser's DataCloneError), `error` for a receiver of another
+	 * origin than the sender's, which has a messageerror (Chrome 157: a
+	 * frame stays in its agent cluster), else the data and transfer to
+	 * post, which the receiving document's frames turn back
+	 */
+	window(
+		data: unknown,
+		transfer: unknown[],
+		same: boolean,
+	): { data: unknown; transfer: unknown[] } | 'error' | null;
 }
 
 // getMetadata()'s members in Chrome 157's order
@@ -97,6 +112,7 @@ export function frameRealm(
 	const NativeChannel = natives.MessageChannel as typeof MessageChannel;
 	const NativePort = natives.MessagePort as typeof MessagePort;
 	const RealmObject = natives.Object as ObjectConstructor;
+	const RealmBuffer = natives.ArrayBuffer as ArrayBufferConstructor;
 	const RealmArray = natives.Array as ArrayConstructor;
 	const RealmMap = natives.Map as MapConstructor;
 	const RealmSet = natives.Set as SetConstructor;
@@ -204,7 +220,10 @@ export function frameRealm(
 		return made;
 	};
 	/** a frame of the port's (or of another context's) */
-	const frameOf = (message: TransformFrame & { side?: string }) => {
+	const frameOf = (
+		message: TransformFrame & { side?: string },
+		original = false,
+	) => {
 		if (
 			!message ||
 			(message.kind === 'video' ? !VideoFrame : message.kind !== 'audio') ||
@@ -223,6 +242,7 @@ export function frameRealm(
 			meta: message.meta,
 			type: message.type,
 			back: message.back,
+			original,
 		});
 	};
 	/**
@@ -233,7 +253,7 @@ export function frameRealm(
 		const meta = { ...state.meta };
 		if (state.kind === 'video' && state.side === 'receive')
 			delete meta.receiveTime;
-		return { ...state, data: copyBuffer(state.data), meta };
+		return { ...state, data: copyBuffer(state.data), meta, original: false };
 	};
 
 	// --- the streams ---
@@ -266,11 +286,14 @@ export function frameRealm(
 				};
 				if (own.type) message.type = own.type;
 				post(port, message, [data]);
+				// (one the readable gave is emptied, its metadata kept, and a
+				// copy or a clone keeps its bytes: Chrome 157)
+				if (own.original) own.data = new RealmBuffer(0);
 			},
 			close: () => apply(portClose, port, []),
 		});
 		onMessage(port, (message: TransformFrame) => {
-			const made = frameOf(message);
+			const made = frameOf(message, true);
 			if (made && controller)
 				try {
 					apply(enqueue, controller, [made]);
@@ -353,7 +376,7 @@ export function frameRealm(
 					if (message?.[FRAME_MARK] === 'done')
 						apply(closeController, controller, []);
 					else {
-						const frame = frameOf(message);
+						const frame = frameOf(message, true);
 						if (frame) apply(enqueue, controller, [frame]);
 					}
 				} catch (error) {
@@ -370,6 +393,7 @@ export function frameRealm(
 					if (!own) return;
 					const sent = copyOf(own);
 					post(port, { [FRAME_MARK]: 'frame', ...sent }, [sent.data]);
+					if (own.original) own.data = new RealmBuffer(0);
 				},
 				close: () => post(port, { [FRAME_MARK]: 'done' }, []),
 			});
@@ -596,6 +620,35 @@ export function frameRealm(
 		);
 		Reflect.defineProperty(prototype, 'postMessage', descriptor);
 	}
+	// a BroadcastChannel's receivers have a message whose data is null for
+	// one that carries a frame (Chrome 157)
+	const broadcasts = (natives.BroadcastChannel as Function | undefined)
+		?.prototype as object | undefined;
+	const broadcast = broadcasts && describe(broadcasts, 'postMessage');
+	if (broadcasts && typeof broadcast?.value === 'function') {
+		broadcast.value = wrapFunction(
+			broadcast.value as Function,
+			(target, that, args) => {
+				if (live && args.length && carries(args[0], [])) {
+					const out = apply(arraySlice, args, []) as unknown[];
+					out[0] = null;
+					return apply(target, that, out);
+				}
+				return apply(target, that, args);
+			},
+		);
+		Reflect.defineProperty(broadcasts, 'postMessage', broadcast);
+	}
+	const forWindow: FrameRealm['window'] = (data, transfer, same) => {
+		if (!live || !carries(data, transfer)) return null;
+		for (let i = 0; i < transfer.length; i++)
+			if (typeof transfer[i] === 'object' && frames.has(transfer[i] as object))
+				return null;
+		if (!same) return 'error';
+		const out = apply(arraySlice, transfer, []) as unknown[];
+		return { data: wrap(data, out), transfer: out };
+	};
+
 	// structuredClone where the global has it (its own, or a prototype's in
 	// a worker), over what is there (the document's other hooks)
 	let cloneOwner: object | null = global;
@@ -915,5 +968,5 @@ export function frameRealm(
 		if (global[name] === Class) global[name] = constructor;
 	}
 
-	return { streams };
+	return { streams, window: forWindow };
 }
