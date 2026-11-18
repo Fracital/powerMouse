@@ -314,8 +314,9 @@ export default class IFrameModule extends Module<DocumentClient> {
 		].filter((ctor) => typeof ctor === 'function');
 
 		// A frame's load event for the shell its document still is: the
-		// shell writes the page from a timer (DocumentClient.loadHTML), and
-		// when Chrome runs the shell's load task first the element fires
+		// shell writes the page at the end tag of its last element, or from
+		// a timer where no network parser reads it (DocumentClient.loadHTML),
+		// and when Chrome runs the shell's load task first the element fires
 		// `load` twice, for the shell and for the page, where natively it
 		// fires once, for the page. The first is kept from the page, before
 		// any listener of its own: a capture listener of the document's (a

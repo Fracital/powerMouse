@@ -20,6 +20,7 @@ import type { SiteFacts } from './siteFacts';
 import StompURL from './StompURL';
 import {
 	CSP_FACTS,
+	SHELL_END,
 	SHELL_MARKUP,
 	SW_CONTROL,
 	WORKER_BASE,
@@ -376,8 +377,12 @@ ${blocked}
 		: '';
 	return {
 		head: `<!DOCTYPE HTML><html><head><meta charset="utf-8" /></head><body>${gap}${baseScript}${library}<script${loading} src="${injectDocumentJS(url, config)}"></script>${kept}`,
+		// the empty script after the one that loads the page: the client
+		// writes the page at its end tag (DocumentClient.loadHTML), before the
+		// shell's parse could end; a type no script runs as, so no policy
+		// judges it
 		tail: (prewritten) =>
-			`<script${attribute}>${inject(prewritten)}</script></body></html>`,
+			`<script${attribute}>${inject(prewritten)}</script><script type="${SHELL_END}"></script></body></html>`,
 	};
 }
 

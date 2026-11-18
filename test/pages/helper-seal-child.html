@@ -114,28 +114,53 @@
 		t('Function', () => Function(`return ${walk}`)());
 
 		// the client's real name, read off the shell of a frame of this site
-		// while it loads (the frame reuses the window this page can read)
+		// while it loads (the frame reuses the window this page can read): by
+		// an observer of the frame's document, which sees each script of the
+		// shell as the parser inserts it, before it runs (the shell's page is
+		// written over it before the frame's next task), and by a look at the
+		// document every task
 		const learnName = () =>
 			new Promise((resolve) => {
 				const frame = document.createElement('iframe');
 				frame.src = 'helper-seal.html?sub';
 				const channel = new MessageChannel();
 				const deadline = Date.now() + 8000;
+				let observed = null;
+				let learned = false;
+				const scan = (doc) => {
+					for (const script of doc ? doc.getElementsByTagName('script') : []) {
+						const match = (script.textContent || '').match(
+							/"(\$\w{12,})" in globalThis/,
+						);
+						if (match) return match[1];
+					}
+					return null;
+				};
+				const learn = (name) => {
+					if (learned || !name) return;
+					learned = true;
+					observer.disconnect();
+					resolve(name);
+				};
+				const observer = new MutationObserver(() => learn(scan(observed)));
 				channel.port1.onmessage = () => {
+					if (learned) return;
 					try {
 						const doc = frame.contentDocument;
-						for (const script of doc
-							? doc.getElementsByTagName('script')
-							: []) {
-							const match = (script.textContent || '').match(
-								/"(\$\w{12,})" in globalThis/,
-							);
-							if (match) return resolve(match[1]);
+						if (doc && doc !== observed) {
+							observed = doc;
+							observer.observe(doc, { childList: true, subtree: true });
 						}
+						learn(scan(doc));
 					} catch (error) {
 						// not readable yet
 					}
-					if (Date.now() > deadline) return resolve(null);
+					if (learned) return;
+					if (Date.now() > deadline) {
+						learned = true;
+						observer.disconnect();
+						return resolve(null);
+					}
 					channel.port2.postMessage(0);
 				};
 				document.body.append(frame);

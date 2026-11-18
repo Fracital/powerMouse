@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>frame-onload parent</title>
+<!-- the frame-onload suite: what this page's onload finds in its frame, and
+how many load events the frame element fired (encoding/legacy-mb-tchinese's
+big5-decode-errors.html reads its frame's spans at its body's onload) -->
+<body onload="record()">
+	<iframe id="child" src="frame-onload-child.html"></iframe>
+	<script>
+		let loads = 0;
+		document.getElementById('child').addEventListener('load', () => loads++);
+		function record() {
+			const frame = document.getElementById('child');
+			const doc = frame.contentWindow.document;
+			const atLoad = {
+				spans: doc.querySelectorAll('span').length,
+				readyState: doc.readyState,
+				title: doc.title,
+			};
+			// the element's load events, once a second one would have come
+			setTimeout(() => {
+				window.__onload = { ...atLoad, loads };
+			}, 1000);
+		}
+	</script>
+</body>

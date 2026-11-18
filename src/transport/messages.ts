@@ -608,6 +608,13 @@ export const WORKER_PARTITION = '$stomp$workerPartition';
  */
 export const SHELL_MARKUP = '$stomp$shellMarkup';
 /**
+ * the type of the empty script element that ends an HTML shell, after the
+ * script that loads the page (DocumentClient.loadHTML): no script runs from
+ * it, but the parser performs a microtask checkpoint at its end tag, where
+ * the client writes the page before the shell can finish loading
+ */
+export const SHELL_END = 'text/x-stomp-shell-end';
+/**
  * dedicated worker -> its Worker object: where an uncaught error the browser
  * located inside the inject really comes from (the page's call site), sent
  * before the browser's report of it, which follows on the same queue

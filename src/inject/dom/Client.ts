@@ -56,7 +56,7 @@ import {
 } from '../../scriptRoutes';
 import { IMPORT_MAP_ROUTE } from '../../sri';
 import StompURL from '../../StompURL';
-import { HOOK_ERROR, OPEN_TAB } from '../../transport/messages';
+import { HOOK_ERROR, OPEN_TAB, SHELL_END } from '../../transport/messages';
 import { queryOf } from '../../urlShape';
 import { BUILD } from '../../version';
 import { contextText, linkRoute, opaqueContext } from '../../visited';
@@ -137,6 +137,9 @@ export function nonceOf(element: Element): string {
 	return '';
 }
 const nativeQuerySelectorAll = Element.prototype.querySelectorAll;
+const nativeDocumentQuerySelector = Document.prototype.querySelector;
+const nativeObserve = MutationObserver.prototype.observe;
+const nativeDisconnect = MutationObserver.prototype.disconnect;
 const nativeGetAttribute = Element.prototype.getAttribute;
 const nativeParent = Reflect.getOwnPropertyDescriptor(
 	Node.prototype,
@@ -391,6 +394,8 @@ export default class DocumentClient extends Client {
 	readonly #setTimeout: typeof setTimeout;
 	/** the window's queueMicrotask, before page code can replace it (loadHTML) */
 	readonly #queueMicrotask: typeof queueMicrotask;
+	/** the window's MutationObserver, before page code can replace it (loadHTML) */
+	readonly #MutationObserver: typeof MutationObserver;
 	/** the window's native `origin` getter (Readback hooks the property) */
 	readonly #originGet: (() => string) | undefined;
 	/**
@@ -486,6 +491,7 @@ export default class DocumentClient extends Client {
 		}
 		this.#setTimeout = this.global.setTimeout;
 		this.#queueMicrotask = this.global.queueMicrotask;
+		this.#MutationObserver = this.global.MutationObserver;
 		this.write = this.global.document.write;
 		this.open = this.global.document.open;
 		const innerHTMLGet = Reflect.getOwnPropertyDescriptor(
@@ -3523,7 +3529,55 @@ export default class DocumentClient extends Client {
 		// page the parent's URL (reCAPTCHA's anchor took its page for its
 		// parent and never answered it). So the callback is this window's own,
 		// through a wrapper and a setTimeout taken before any page script ran.
+		//
+		// The timer alone left a race: on a loaded machine the shell's parse
+		// could end before it ran, and the shell's load event then marked the
+		// frame complete, so the parent's load fired while the frame still
+		// held the empty shell (a page's onload found nothing in its frame).
+		// The shell ends with an empty script element of a type no script runs
+		// as (SHELL_END, after the script that calls this), and a parser fed
+		// by the network performs a microtask checkpoint at its end tag, with
+		// no script running, where document.open() is allowed: an observer
+		// that sees that element writes the page there, before the shell's
+		// parse can end, so the frame keeps loading until the page has
+		// loaded, as natively. The timer stays for a shell no such parser
+		// reads; whichever comes first writes.
 		this.shellPending = true;
-		Reflect.apply(this.#setTimeout, this.global, [this.ownCallback(load)]);
+		const shell = this.global.document;
+		let observer: MutationObserver | null = null;
+		let started = false;
+		const start = () => {
+			if (started) return;
+			started = true;
+			if (observer) Reflect.apply(nativeDisconnect, observer, []);
+			load();
+		};
+		try {
+			// (the page is written from a microtask the callback queues, in
+			// the same checkpoint: the browser runs a microtask's callback in
+			// its own realm, this window's, where the observer's callback may be
+			// another realm's. A STomp the page runs in wraps the window's
+			// observer in its own bundle's function, which may be the parent's,
+			// and document.open() then gave the page the parent's URL)
+			observer = new this.#MutationObserver(() => {
+				if (
+					!started &&
+					Reflect.apply(nativeDocumentQuerySelector, shell, [
+						`script[type="${SHELL_END}"]`,
+					])
+				)
+					Reflect.apply(this.#queueMicrotask, this.global, [
+						this.ownCallback(start),
+					]);
+			});
+			Reflect.apply(nativeObserve, observer, [
+				shell,
+				{ childList: true, subtree: true },
+			]);
+		} catch (error) {
+			// no observer: the timer writes the page
+			observer = null;
+		}
+		Reflect.apply(this.#setTimeout, this.global, [this.ownCallback(start)]);
 	}
 }
