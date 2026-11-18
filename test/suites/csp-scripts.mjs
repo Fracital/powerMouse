@@ -10,7 +10,7 @@
 // report otherwise. Compared with the page loaded natively, in both modes.
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { compareCases, OTHER } from '../csp-lib.mjs';
+import { compareCases, FIELDS, OTHER } from '../csp-lib.mjs';
 import { done, launch } from '../lib.mjs';
 
 const other = OTHER.replace(/\/$/, '');
@@ -258,6 +258,27 @@ const EXPECTED = {
 	},
 };
 
+// A violation the inject fires itself (the browser never gets script-src,
+// and judges no other origin's load through the proxy) reads trusted, as the
+// browser's own: each listener of the dispatch, a function's, an object's
+// handleEvent, the document's and the window's on- handler, is handed the
+// one object window.event is, whose members are the prototype's
+const IDENTITY = {
+	'an enforced script-src and img-src, what a listener is handed': {
+		p: "script-src 'self'; img-src 'self'",
+		id: true,
+		probes: ['script-inline', 'eval', 'handler-attribute', 'img-other'],
+	},
+	'a report-only script-src and img-src, what a listener is handed': {
+		ro: "script-src 'self'; img-src 'self'",
+		id: true,
+		probes: ['script-inline', 'eval', 'img-other', 'img-self'],
+	},
+};
+
 const browser = await launch();
 await compareCases(browser, CASES, { expected: EXPECTED });
+await compareCases(browser, IDENTITY, {
+	fields: [...FIELDS, 'isTrusted', 'windowEvent', 'methods', 'alike'],
+});
 await done(browser);

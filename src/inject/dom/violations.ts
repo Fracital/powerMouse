@@ -11,7 +11,9 @@
 // violations back as the page sees them (./modules/ContentSecurity.ts), from
 // the first one that reaches the page.
 import { governing, sourcesMatch, type Policy } from '../../csp';
+import ProxyModule from '../modules/Proxy';
 import { unrouteURL } from '../modules/Unroute';
+import { dispatchAsTrusted } from '../violationDispatch';
 import type DocumentClient from './Client';
 import { deferred } from './deferred';
 
@@ -56,14 +58,17 @@ export function dispatchViolation(
 		client.namesViolationTargets?.();
 		client.codeViolationTarget.set(event, node);
 	}
-	// isTrusted is an own, non-configurable accessor Chrome puts on every
-	// event, so it cannot be set here; ContentSecurity hands the page's
-	// listeners a view that reads it true for a tagged event
-	client.trustedViolations.add(event);
-	Reflect.apply(
-		(client.global as typeof globalThis).EventTarget.prototype.dispatchEvent,
+	// it reads trusted (../violationDispatch.ts): each listener of the
+	// document and its window is handed one view of it, as window.event is
+	const global = client.global as typeof globalThis;
+	dispatchAsTrusted(
+		global,
+		client.getModule(ProxyModule)!,
+		client.violationViews,
+		global.EventTarget.prototype.dispatchEvent,
 		document,
-		[event],
+		[document, global],
+		event,
 	);
 }
 

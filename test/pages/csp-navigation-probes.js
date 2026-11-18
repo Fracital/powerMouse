@@ -32,9 +32,24 @@
 			: []),
 	];
 	const events = [];
+	// (`source` also: the object a listener is handed is the one
+	// window.event is, with the prototype's own members, and every other
+	// listener of the dispatch, an object's handleEvent and the on- handlers
+	// of the document and the window, is handed it too)
+	const identity = query.has('source');
+	const seen = [];
+	const others = [[], [], [], []];
 	document.addEventListener('securitypolicyviolation', (event) => {
 		const shaped = {};
 		for (const field of FIELDS) shaped[field] = event[field];
+		if (identity) {
+			seen.push(event);
+			shaped.windowEvent = window.event === event;
+			shaped.methods =
+				event.constructor === SecurityPolicyViolationEvent &&
+				event.stopPropagation === Event.prototype.stopPropagation &&
+				Array.isArray(event.composedPath());
+		}
 		shaped.target =
 			event.target === document
 				? 'document'
@@ -43,6 +58,26 @@
 					: String(event.target);
 		events.push(shaped);
 	});
+	if (identity) {
+		const note = (list) => (event) =>
+			list.push([event, event.isTrusted, window.event === event]);
+		document.addEventListener('securitypolicyviolation', {
+			handleEvent: note(others[0]),
+		});
+		document.onsecuritypolicyviolation = note(others[1]);
+		window.addEventListener('securitypolicyviolation', note(others[2]));
+		window.onsecuritypolicyviolation = note(others[3]);
+	}
+	/** whether every other listener was handed what the first one was */
+	const alike = () =>
+		events.forEach((shaped, index) => {
+			shaped.alike = others.every(
+				(list) =>
+					list[index]?.[0] === seen[index] &&
+					list[index][1] === shaped.isTrusted &&
+					list[index][2],
+			);
+		});
 	const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 	const error = (e) => `${e?.name}: ${e?.message}`;
 	const policyQuery = () => {
@@ -505,6 +540,7 @@
 		}
 		// the violation events of the last probes are queued as tasks
 		await wait(500);
+		if (identity) alike();
 		window.__csp = { done: true, case: query.get('case'), results, events };
 		if (query.has('post'))
 			parent.postMessage(

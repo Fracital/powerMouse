@@ -145,10 +145,13 @@ and the inject reports it; its listeners read the violation as trusted.
 
 An enforced Trusted Types violation is the browser's own to the page, which
 compares `isTrusted`: the browser never gets the directive, so the inject
-synthesises the event and tags it (`trustedViolations`). `isTrusted` is an
-own, non-configurable accessor Chrome puts on every event, so it cannot be
-set on the event; the ContentSecurity module hands the page's
-securitypolicyviolation listeners a view that reads it true for a tagged one.
+synthesises the event, as it does every violation it fires. `isTrusted` is
+an own, non-configurable accessor Chrome puts on every event, so it cannot
+be set on the event: each listener of the dispatch (a function, an object's
+`handleEvent`, the document's and the window's `on` handler) is handed one
+view of it that reads it true, which `window.event` reads too, and whose
+other members are the event's and the prototype's own
+(`src/inject/violationDispatch.ts`).
 A violation in a document the browser made of its creator's (about:blank,
 srcdoc) names, as Chrome's report strips it, the bare scheme (`about`) with
 status 0, not the page's URL. STomp's own DOM writes, parses and worker loads

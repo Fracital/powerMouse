@@ -188,10 +188,11 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 					}
 				}),
 			});
-		// An enforced Trusted Types violation reads back trusted, as the
-		// browser's would (the enforced csp-trusted-types cases compare
-		// isTrusted; the browser never gets require-trusted-types-for)
-		trustTaggedViolations(global, proxyModule, client.trustedViolations);
+		// A violation the inject fires reads back trusted, as the browser's
+		// would (the csp-trusted-types, csp-scripts and csp-base-uri cases
+		// compare isTrusted, and that every listener is handed one object,
+		// window.event)
+		trustTaggedViolations(global, proxyModule, client.violationViews);
 		// A synthesised script-src/style-src violation of the page's own code
 		// (dom/Client.ts: the browser never gets those directives) is dispatched
 		// on the document so the page's listener always hears it, but names the

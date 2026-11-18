@@ -15,6 +15,8 @@ import { replayOf } from '../../transport/ports';
 import { bareClient } from '../bareClient';
 import Client, { type HandedModules } from '../Client';
 import ProxyModule from '../modules/Proxy';
+import { LazyWeakMap } from '../ownCollections';
+import { dispatchAsTrusted } from '../violationDispatch';
 import { trustTaggedViolations } from '../violationViews';
 import ServiceWorkerGlobalModule from './modules/ServiceWorkerGlobal';
 
@@ -155,8 +157,8 @@ export default class WorkerClient extends Client {
 	} | null = null;
 	/** a blob: worker's: the page's script its bootstrap imports (WorkerPolicies.script) */
 	#bootstrapped: string | null = null;
-	/** the violations judgeConnections dispatched, which the worker's listeners read as trusted (violationViews) */
-	readonly #violations = new WeakSet<object>();
+	/** the views of the violations judgeConnections dispatched, which the worker's listeners read as trusted (violationDispatch) */
+	readonly #violations = new LazyWeakMap<object, object>();
 	#viewsOn = false;
 	/**
 	 * Hands the worker the policies its requests are judged by: its
@@ -339,8 +341,15 @@ export default class WorkerClient extends Client {
 							columnNumber: 0,
 							sample: '',
 						});
-						this.#violations.add(event);
-						Reflect.apply(nativeDispatchEvent, globalThis, [event]);
+						dispatchAsTrusted(
+							this.global,
+							this.getModule(ProxyModule)!,
+							this.#violations,
+							nativeDispatchEvent,
+							globalThis,
+							[globalThis],
+							event,
+						);
 					},
 				]);
 		return refused;

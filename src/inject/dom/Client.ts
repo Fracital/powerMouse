@@ -1444,11 +1444,12 @@ export default class DocumentClient extends Client {
 	/**
 	 * Synthesised Trusted Types violations the browser cannot fire (it gets no
 	 * `require-trusted-types-for`/`trusted-types`, src/csp.ts): the inject
-	 * judges the page's value and reports its refusal itself. Each is tagged
-	 * so it reads back trusted, as the browser's is (ContentSecurity), and so
-	 * is every other violation the inject fires (./violations.ts).
+	 * judges the page's value and reports its refusal itself. Each reads
+	 * back trusted, as the browser's does, and so does every other violation
+	 * the inject fires (./violations.ts): the view of it every listener is
+	 * handed, by the event (../violationDispatch.ts).
 	 */
-	readonly trustedViolations = new LazyWeakSet<object>();
+	readonly violationViews = new LazyWeakMap<object, object>();
 	/** a sink's refusal only report-only policies make: the inject's event (the browser judges its own value) */
 	override reportTrustedTypes(sink: string, value: string) {
 		this.#checks()?.reportTrustedTypes(this, sink, value);
