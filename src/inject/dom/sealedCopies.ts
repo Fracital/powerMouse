@@ -17,7 +17,12 @@
  * One worker serves every copy that is on its way at the same time (2 ms
  * for fifty images, measured). A second URL the worker made, for nothing,
  * tells when its URLs are gone: the worker's end is not synchronous, and a
- * fetch that fails drops the cache entry of the URL it names.
+ * fetch that fails drops the cache entry of the URL it names. That fetch
+ * is asked of another worker of the bundle's (the prober, ended once it
+ * has been idle a while): Chrome reports a document's failed fetch in its
+ * console ("Failed to load resource: net::ERR_FILE_NOT_FOUND", one for
+ * every batch, which the page never caused natively), a worker's not
+ * (measured, plain Chrome 157).
  *
  * A document whose policy refuses a worker from a blob: URL (a list's
  * `$csp=worker-src 'none'`, or a script-src without blob:, through the
@@ -42,6 +47,8 @@ let held: SealerNatives = null;
 const BATCH_MS = 100;
 /** how long a URL is waited for (a worker that never starts) */
 const MINT_MS = 3_000;
+/** how long the prober is kept with nothing to ask */
+const PROBER_IDLE_MS = 5_000;
 
 interface Batch {
 	worker: Worker;
@@ -89,11 +96,11 @@ function mint(from: Batch, blob: Blob): Promise<string | null> {
 	});
 }
 
-function open(route: string | null): Batch | null {
+function open(route: string | null, fromRoute = false): Batch | null {
 	const taken = held;
 	if (!taken) return null;
 	try {
-		const routed = blobRefused && route !== null;
+		const routed = (fromRoute || blobRefused) && route !== null;
 		if (!routed)
 			source ??= Reflect.apply(taken.createObjectURL, taken.URL, [
 				new taken.Blob([SEALER_SOURCE], { type: 'text/javascript' }),
@@ -141,18 +148,55 @@ function open(route: string | null): Batch | null {
 	}
 }
 
-/** the route's worker that asks whether a URL is alive, for a document whose policy refuses a blob: fetch */
+/**
+ * The worker that asks whether a URL is alive: a blob: one, or the
+ * route's where the document's policy refuses a blob: fetch (which a
+ * blob: worker inherits) or a blob: worker
+ */
 let prober: Batch | null = null;
+/** the prober's last use, for its idle end */
+let probed = 0;
 
-/** whether a fetch of `url` succeeds, asked of the route's worker (null when it cannot say) */
-async function probe(url: string, route: string): Promise<boolean | null> {
-	if (!prober || prober.closed) {
-		const routed = blobRefused;
-		blobRefused = true;
-		prober = open(route);
-		blobRefused = routed;
+function endProber(ended: Batch) {
+	ended.closed = true;
+	if (prober === ended) prober = null;
+	try {
+		Reflect.apply(held!.terminate, ended.worker, []);
+	} catch (error) {
+		// gone already
 	}
-	const asked = prober;
+	fail(ended);
+}
+
+/** the prober to ask, started if there is none (when a batch opens too, so it is up when the batch ends) */
+function proberFor(route: string | null, fromRoute: boolean): Batch | null {
+	const routed = (fromRoute || blobRefused) && route !== null;
+	if (prober && (prober.closed || prober.refused || prober.routed !== routed))
+		endProber(prober);
+	if (!prober) {
+		prober = open(route, fromRoute);
+		const opened = prober;
+		if (opened) {
+			const idle = () => {
+				if (prober !== opened) return;
+				const left = probed + PROBER_IDLE_MS - held!.now();
+				if (left > 0) held!.setTimeout(idle, left);
+				else endProber(opened);
+			};
+			held!.setTimeout(idle, PROBER_IDLE_MS);
+		}
+	}
+	probed = held!.now();
+	return prober;
+}
+
+/** whether a fetch of `url` succeeds, asked of the prober (null when it cannot say) */
+async function probe(
+	url: string,
+	route: string | null,
+	fromRoute: boolean,
+): Promise<boolean | null> {
+	const asked = proberFor(route, fromRoute);
 	if (!asked) return null;
 	const answer = await new Promise<string | null>((resolve) => {
 		const id = asked.next++;
@@ -171,11 +215,15 @@ async function probe(url: string, route: string): Promise<boolean | null> {
 }
 
 /**
- * End a worker, and wait until what it made is gone. `route`: the route's
- * worker asks, for a document whose policy refuses a blob: fetch (the
- * page would see the violation)
+ * End a worker, and wait until what it made is gone, as the prober finds
+ * it. `fetchRefused`: the route's worker asks, for a document whose policy
+ * refuses a blob: fetch (the page would see the violation)
  */
-async function close(ended: Batch, route: string | null) {
+async function close(
+	ended: Batch,
+	route: string | null,
+	fetchRefused: boolean,
+) {
 	ended.closed = true;
 	if (batch === ended) batch = null;
 	const sentinel = await ended.sentinel;
@@ -187,14 +235,15 @@ async function close(ended: Batch, route: string | null) {
 	fail(ended);
 	if (sentinel !== null)
 		for (let tries = 0; tries < 400; tries++) {
-			if (route !== null) {
-				if ((await probe(sentinel, route)) !== true) break;
-			} else
-				try {
-					await fetch(sentinel);
-				} catch (error) {
-					break;
-				}
+			let alive = await probe(sentinel, route, fetchRefused);
+			// no worker to ask: this realm's own fetch, which the console
+			// reports when it fails (one the policy refuses is not made)
+			if (alive === null && !fetchRefused)
+				alive = await fetch(sentinel).then(
+					() => true,
+					() => false,
+				);
+			if (alive !== true) break;
 			await new Promise((resolve) => held!.setTimeout(resolve, 1));
 		}
 	ended.die();
@@ -229,8 +278,10 @@ export async function sealedURL(
 			!batch ||
 			batch.closed ||
 			(held !== null && held.now() - batch.opened > BATCH_MS)
-		)
+		) {
 			batch = open(route);
+			proberFor(route, refuses.fetch);
+		}
 		const mine = batch;
 		if (!mine) return null;
 		mine.pending++;
@@ -242,7 +293,7 @@ export async function sealedURL(
 			})
 			.catch(() => null);
 		if (--mine.pending === 0 && !mine.closed)
-			close(mine, refuses.fetch ? route : null).catch(() => mine.die());
+			close(mine, route, refuses.fetch).catch(() => mine.die());
 		await mine.dead;
 		// refused: once more, from the route (a routed worker is not refused again)
 		if (made !== null || !mine.refused || route === null) return url;

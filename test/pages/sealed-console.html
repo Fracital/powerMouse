@@ -1,0 +1,52 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>sealed copies, console</title>
+<body>
+	<script>
+		// Images of another site in an about:blank frame the page wrote (a
+		// document no service worker controls, whose loads the proxy copies),
+		// in three bursts, as an ad or a fraud script adds its pixels: each
+		// loads, and nothing is said in the console about it. The suite reads
+		// the console; this page reports what each element did.
+		const other = new URLSearchParams(location.search).get('b');
+		const out = (window.__sealed = { done: false });
+		const frame = document.createElement('iframe');
+		document.body.append(frame);
+		const written = frame.contentDocument;
+		written.open();
+		written.write('<body>');
+		written.close();
+		const settled = (element) =>
+			new Promise((resolve) => {
+				element.addEventListener('load', () => resolve('load'));
+				element.addEventListener('error', () => resolve('error'));
+				setTimeout(() => resolve('timeout'), 10000);
+			});
+		const image = (n) => {
+			const element = written.createElement('img');
+			const loaded = settled(element);
+			element.src = `${other}/pages/object-events.png?n=${n}`;
+			written.body.append(element);
+			return loaded.then((event) => `${event} ${element.naturalWidth}`);
+		};
+		(async () => {
+			const results = [];
+			out.ms = [];
+			for (let burst = 0; burst < 3; burst++) {
+				const started = performance.now();
+				results.push(
+					...(await Promise.all([0, 1, 2].map((i) => image(`${burst}-${i}`)))),
+				);
+				out.ms.push(Math.round(performance.now() - started));
+				await new Promise((resolve) => setTimeout(resolve, 400));
+			}
+			// a style's image is copied too
+			const styled = written.createElement('div');
+			styled.style.cssText = `width:1px;height:1px;background-image:url("${other}/pages/object-events.png?n=style")`;
+			written.body.append(styled);
+			await new Promise((resolve) => setTimeout(resolve, 1500));
+			out.images = results;
+			out.done = true;
+		})();
+	</script>
+</body>
