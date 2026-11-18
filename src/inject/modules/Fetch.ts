@@ -56,6 +56,39 @@ const nativeRequestReferrer = Reflect.getOwnPropertyDescriptor(
 	Request.prototype,
 	'referrer',
 )!.get!;
+const nativeRequestBody = Reflect.getOwnPropertyDescriptor(
+	Request.prototype,
+	'body',
+)!.get!;
+const nativeRequestKeepalive = Reflect.getOwnPropertyDescriptor(
+	Request.prototype,
+	'keepalive',
+)!.get!;
+const nativeRequestArrayBuffer = Request.prototype.arrayBuffer;
+/** what of a Request an init carries, but its body (bytesInit) */
+const INIT_MEMBERS = [
+	'method',
+	'headers',
+	'referrer',
+	'referrerPolicy',
+	'mode',
+	'credentials',
+	'cache',
+	'redirect',
+	'integrity',
+	'keepalive',
+	'signal',
+];
+
+/** `request` (pageRequest's copy) as an init whose body is its bytes */
+async function bytesInit(request: Request): Promise<RequestInit> {
+	const init: Record<string, unknown> = {
+		body: await Reflect.apply(nativeRequestArrayBuffer, request, []),
+	};
+	for (const key of INIT_MEMBERS)
+		init[key] = (request as unknown as Record<string, unknown>)[key];
+	return init;
+}
 /**
  * Whether `value` is a Request of any realm, as the browser tells: its own
  * getters check the object's brand, which a Request another window made
@@ -712,6 +745,17 @@ export default class FetchModule extends Module<Client> {
 								add,
 							),
 						};
+				// A Request handed on as the init gives the browser its body as
+				// a stream, which a no-cors or keepalive request may not have
+				// (natively its body keeps its bytes, and goes): such a body goes
+				// as its bytes (npr.org's GeoEdge reports, a no-cors POST Request)
+				if (
+					isRequest(init) &&
+					(mode === 'no-cors' ||
+						Reflect.apply(nativeRequestKeepalive, init, [])) &&
+					Reflect.apply(nativeRequestBody, init, []) !== null
+				)
+					init = await bytesInit(init);
 				if (signal && aborted !== null) {
 					const id = aborted;
 					if (signal.aborted) client.abortRequest(id);

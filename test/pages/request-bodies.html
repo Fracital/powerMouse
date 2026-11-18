@@ -1,0 +1,81 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>request bodies</title>
+<body>
+	<script>
+		// POSTs made as Request objects handed to fetch, whose bodies have bytes
+		// (a string, an ArrayBuffer, a Blob): no-cors ones (npr.org's GeoEdge
+		// reports), keepalive ones, and a cors one, to <to>/echo-post, which
+		// records what arrived under (k, shape). `window.__done` holds what
+		// each fetch answered.
+		const q = new URL(location.href).searchParams;
+		const to = q.get('to');
+		const k = q.get('k');
+		const url = (shape) =>
+			new URL(`/echo-post?k=${encodeURIComponent(k)}&shape=${shape}`, to).href;
+		const form = { 'content-type': 'application/x-www-form-urlencoded' };
+		const bytes = () => new Uint8Array([0x61, 0x3d, 0x31, 0x80, 0xff]).buffer;
+
+		const shapes = {
+			'no-cors text': () =>
+				new Request(url('no-cors text'), {
+					method: 'POST',
+					mode: 'no-cors',
+					headers: form,
+					body: 'a=1&b=2',
+				}),
+			'no-cors buffer': () =>
+				new Request(url('no-cors buffer'), {
+					method: 'POST',
+					mode: 'no-cors',
+					headers: form,
+					body: bytes(),
+				}),
+			'no-cors keepalive buffer': () =>
+				new Request(url('no-cors keepalive buffer'), {
+					method: 'POST',
+					mode: 'no-cors',
+					headers: form,
+					body: bytes(),
+					keepalive: true,
+				}),
+			'cors keepalive blob': () =>
+				new Request(url('cors keepalive blob'), {
+					method: 'POST',
+					headers: form,
+					body: new Blob(['x=y']),
+					keepalive: true,
+				}),
+			'cors text': () =>
+				new Request(url('cors text'), {
+					method: 'POST',
+					headers: form,
+					body: 'c=3',
+				}),
+			'no-cors text and an init': () => [
+				new Request(url('no-cors text and an init'), {
+					method: 'POST',
+					mode: 'no-cors',
+					body: 'd=4',
+				}),
+				{ headers: form },
+			],
+		};
+
+		(async () => {
+			const done = {};
+			for (const [name, make] of Object.entries(shapes)) {
+				try {
+					const made = make();
+					const response = await (Array.isArray(made)
+						? fetch(...made)
+						: fetch(made));
+					done[name] = `${response.status} ${response.type}`;
+				} catch (error) {
+					done[name] = `threw ${error.name}: ${error.message}`;
+				}
+			}
+			window.__done = done;
+		})();
+	</script>
+</body>
