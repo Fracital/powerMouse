@@ -118,6 +118,32 @@ export class CookiesModule extends Module<DocumentClient> {
 	 * module reads the jar again and reports what changed
 	 */
 	readonly changeListeners = new Set<() => void>();
+	/**
+	 * This document's document.cookie writes in the order made, each
+	 * cookie's id with the cookie as written or null for a deletion, kept
+	 * once the Cookie Store module asks (recordWrites) for its change events:
+	 * natively each write is an event of its own, in the order written (two
+	 * deletes in one task were reported in the jar's order, from one diff)
+	 */
+	#writes: [string, JarCookie | null][] | null = null;
+	recordWrites() {
+		this.#writes ??= [];
+	}
+	/** the writes recorded since the last take */
+	takeWrites(): [string, JarCookie | null][] {
+		const writes = this.#writes ?? [];
+		if (this.#writes) this.#writes = [];
+		return writes;
+	}
+	/** a write this document's view of the jar shows (`cookie` is as stored) */
+	#wrote(id: string, cookie: JarCookie | null, now: number) {
+		const writes = this.#writes;
+		if (!writes || writes.length >= 512) return;
+		if (cookie && expired(cookie, now)) cookie = null;
+		if (cookie && !cookieMatches(cookie, this.client.url.url, this.#context))
+			return;
+		writes.push([id, cookie]);
+	}
 	#changed() {
 		for (const listener of this.changeListeners) listener();
 	}
@@ -273,6 +299,7 @@ export class CookiesModule extends Module<DocumentClient> {
 			this.#unsettled.set(cookie.id, { cookie, seq });
 			const { known } = this.#view;
 			if (known) applyWrite(known, cookie, now);
+			this.#wrote(cookie.id, cookie, now);
 		}
 		// every other document of the site reads the jar, which waits for it
 		this.#restamp();
@@ -464,6 +491,15 @@ export class CookiesModule extends Module<DocumentClient> {
 			// version)
 			const outcomes = answer.value as [string, JarCookie | null][] | null;
 			const view = this.#view;
+			if (this.#writes) {
+				const now = Date.now();
+				if (Array.isArray(outcomes))
+					for (const [id, stored] of outcomes) this.#wrote(id, stored, now);
+				else {
+					const cookie = this.#parse(value, now);
+					if (cookie) this.#wrote(cookie.id, cookie, now);
+				}
+			}
 			if (
 				Array.isArray(outcomes) &&
 				view.known &&

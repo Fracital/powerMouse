@@ -1,0 +1,46 @@
+<!doctype html>
+<title>COOKIE STORE ORDER</title>
+<body>
+	<script>
+		// document.cookie writes made together in one task, and what a
+		// cookieStore change listener hears of them: natively each write is
+		// an event of its own, in the order written (two deletes, a set and a
+		// delete, a set and its delete, two overwrites), and a write that
+		// changes nothing is none. The suite compares the list with native
+		// Chrome.
+		const p = `cso${Date.now().toString(36)}_`;
+		const out = { seen: [] };
+		window.__cso = out;
+		const set = (cookie) => (document.cookie = `${p}${cookie}; path=/`);
+		const gone = (name) => set(`${name}=; max-age=0`);
+		for (const name of ['seed', 'a', 'c', 'd']) set(`${name}=1`);
+		cookieStore.addEventListener('change', (event) =>
+			out.seen.push(
+				[
+					...event.changed.map((c) => `+${c.name.replace(p, '')}=${c.value}`),
+					...event.deleted.map((c) => `-${c.name.replace(p, '')}`),
+				].join(' '),
+			),
+		);
+		const steps = [
+			// the later-made cookie deleted first
+			() => (gone('a'), gone('seed')),
+			() => (set('b=1'), gone('c')),
+			// the same value again: no change
+			() => set('d=1'),
+			() => (set('e=1'), gone('e')),
+			() => (set('d=2'), set('d=3')),
+		];
+		let step = 0;
+		const next = () => {
+			if (step === steps.length) {
+				setTimeout(() => (out.done = true), 800);
+				return;
+			}
+			out.seen.push(`|${step + 1}`);
+			steps[step++]();
+			setTimeout(next, 600);
+		};
+		setTimeout(next, 600);
+	</script>
+</body>
