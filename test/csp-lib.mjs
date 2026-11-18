@@ -21,7 +21,7 @@ export const OTHER = FIXTURE.includes('127.0.0.1')
 /** the page of a case named `name` */
 export function caseURL(
 	name,
-	{ p = [], ro = [], m = [], pp = [], b = [], h, s, js, probes },
+	{ p = [], ro = [], m = [], pp = [], b = [], h, s, js, fs, probes },
 ) {
 	const query = new URLSearchParams();
 	for (const policy of [].concat(p)) query.append('p', policy);
@@ -40,6 +40,8 @@ export function caseURL(
 	for (const href of [].concat(b)) query.append('b', href);
 	if (h) query.set('h', h);
 	if (js) query.set('js', js);
+	// `fs`: the case in a frame with this sandbox attribute
+	if (fs !== undefined) query.set('fs', fs);
 	query.set('probes', probes.join(','));
 	query.set('case', name);
 	return `${FIXTURE}csp/doc?${query}`;

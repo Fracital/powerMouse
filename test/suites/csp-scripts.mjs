@@ -4,7 +4,8 @@
 // and by the hash of the page's own text (the proxy rewrites it), scripts
 // by URL, 'strict-dynamic', eval, Function, string timers and WebAssembly
 // compilation by 'unsafe-eval' and 'wasm-unsafe-eval', event handler
-// attributes, inline and linked styles. The proxy's own scripts carry a
+// attributes, inline and linked styles, and the inline code and eval of a
+// frame sandboxed to an opaque origin. The proxy's own scripts carry a
 // nonce of the document's and run under every policy: the probes would not
 // report otherwise. Compared with the page loaded natively, in both modes.
 import { createHash } from 'node:crypto';
@@ -75,6 +76,22 @@ const COPIED = [
 	'script-path-template-none',
 	'script-path-cloneNode-late',
 	'script-path-cloneNode-none',
+];
+
+// what a frame sandboxed to an opaque origin runs under a policy of its own
+// that governs code: it judges its code with the page policy's checks, a
+// deferred part it makes from its top's text at its first script
+// (src/inject/dom/policyChecks.ts; deferred-refusals takes them away)
+const OPAQUE = [
+	'self-origin',
+	'script-inline',
+	'script-inline-nonce',
+	'eval',
+	'function',
+	'timeout-string',
+	'handler-attribute',
+	'style-inline',
+	'style-attribute',
 ];
 
 const CASES = {
@@ -191,6 +208,23 @@ const CASES = {
 		p: "require-trusted-types-for 'script'",
 		s: true,
 		probes: ['markup-styles', 'style-inline'],
+	},
+	'opaque frame, nonce': {
+		p: "script-src 'nonce-probes'; style-src 'self'",
+		h: 'nonce',
+		fs: 'allow-scripts',
+		probes: OPAQUE,
+	},
+	'opaque frame, unsafe-inline and unsafe-eval': {
+		p: "default-src 'self' 'unsafe-inline' 'unsafe-eval'",
+		fs: 'allow-scripts',
+		probes: OPAQUE,
+	},
+	'opaque frame, meta': {
+		m: "script-src 'nonce-probes' 'unsafe-eval'; style-src 'unsafe-inline'",
+		h: 'nonce',
+		fs: 'allow-scripts allow-forms',
+		probes: OPAQUE,
 	},
 	'unsafe-inline styles': {
 		p: "style-src 'self' 'unsafe-inline'",

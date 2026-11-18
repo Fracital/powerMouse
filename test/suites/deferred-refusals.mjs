@@ -30,9 +30,13 @@
 // page's own that allows them, an eval throws, and an inline script and an
 // inline style the page inserts run and apply nothing, and a frame it
 // refuses still loads nothing (the policy's checks are a part,
-// src/inject/dom/policyChecks.ts); a document the page makes in a frame
-// whose shell is a part (src/htmlShell.ts: an srcdoc, a javascript: URL's
-// markup; a data: frame, src/inject/dom/rareAttributes.ts) is never given
+// src/inject/dom/policyChecks.ts), in a frame sandboxed to an opaque origin
+// too, which makes the checks itself from its top's text, and runs none of
+// its markup's code under a header policy that governs code, nor applies
+// its styles (and so where its top has no text to give, the case of a top
+// of another build, and the file it reads instead cannot be had); a
+// document the page makes in a frame whose shell is a part
+// (src/htmlShell.ts: an srcdoc, a javascript: URL's markup; a data: frame, src/inject/dom/rareAttributes.ts) is never given
 // to the frame, unrewritten or at all, an <object>'s HTML document (its
 // copy's shell is that part too) fails as a failed fetch does natively, an
 // error and no document, and a refresh meta has no content
@@ -84,6 +88,57 @@ const target = `${FIXTURE}pages/deferred-refusals.html`;
  * reached only past parts of their own, xhrChecks.ts and bareClient.ts)
  */
 const POLICED = ['cspEval', 'cspScript', 'cspStyle', 'cspFrame'];
+/**
+ * What a frame sandboxed to an opaque origin under a header policy that
+ * governs code ran (test/pages/deferred-refusals-opaque.html): what it
+ * posted, and read in the frame (`name`), whether its markup's scripts ran
+ * and its styles apply
+ */
+async function opaqueOutcome(page, answer) {
+	const { name, posted } = answer ?? {};
+	const frame = page
+		.frames()
+		.reverse()
+		.find((frame) => frame.name() === name);
+	const read = await frame
+		?.evaluate(() => ({
+			allowedRan: window.__allowedRan === true,
+			refusedRan: window.__refusedRan === true,
+			allowed: getComputedStyle(document.getElementById('allowed')).color,
+			refused: getComputedStyle(document.getElementById('refused')).color,
+		}))
+		.catch((error) => ({ error: String(error) }));
+	return { posted, read: read ?? null };
+}
+/** an opaque frame's outcome (opaqueOutcome) as its policy has it */
+const opaqueAsAllowed = ({ posted, read }) =>
+	posted?.refusedRan === false &&
+	posted.eval === 2 &&
+	posted.allowed === 'rgb(1, 2, 3)' &&
+	posted.refused !== 'rgb(4, 5, 6)' &&
+	read?.allowedRan === true &&
+	read.refusedRan === false;
+/** an opaque frame's outcome where its checks refuse: no script ran, no style applies */
+const opaqueRefused = ({ posted, read }) =>
+	posted === null &&
+	read?.allowedRan === false &&
+	read.refusedRan === false &&
+	typeof read.allowed === 'string' &&
+	read.allowed !== 'rgb(1, 2, 3)' &&
+	read.refused !== 'rgb(4, 5, 6)';
+/** the policed calls' outcome as the child's policy has it (`out` their answers) */
+const policedAsAllowed = (out) =>
+	out?.cspEval?.returned === 'number' &&
+	out.cspScript?.ran === true &&
+	out.cspStyle?.color === 'rgb(1, 2, 3)' &&
+	out.cspFrame?.title === null;
+/** the policed calls' outcome where their checks refuse (`error` the eval's) */
+const policedRefused = (out, error) =>
+	out?.cspEval?.threw === error &&
+	out.cspScript?.ran === false &&
+	typeof out.cspStyle?.color === 'string' &&
+	out.cspStyle.color !== 'rgb(1, 2, 3)' &&
+	out.cspFrame?.title === null;
 const REFUSING = [
 	'getUserMedia',
 	'getCurrentPosition',
@@ -302,8 +357,15 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			'contextualFragment',
 			'blankSetHTML',
 			'open',
+			// (before the policed calls: their policy refuses frames)
+			'cspOpaque',
 			...POLICED,
 		],
+	);
+	const opaque = await opaqueOutcome(page, answer.out?.cspOpaque);
+	const opaqueChild = await top.evaluate(
+		(calls) => window.__child(calls, 'allow-scripts'),
+		POLICED,
 	);
 	const documents = await top.evaluate(
 		(calls) => window.__child(calls),
@@ -452,11 +514,18 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 	);
 	ok(
 		"with the parts, what the page's own policy allows runs and applies, and the frame it refuses loads nothing",
-		answer.out?.cspEval?.returned === 'number' &&
-			answer.out?.cspScript?.ran === true &&
-			answer.out?.cspStyle?.color === 'rgb(1, 2, 3)' &&
-			answer.out?.cspFrame?.title === null,
+		policedAsAllowed(answer.out),
 		JSON.stringify(POLICED.map((call) => answer.out?.[call])),
+	);
+	ok(
+		'with the parts, a frame sandboxed to an opaque origin runs and applies what its own header policy allows, and nothing else',
+		opaqueAsAllowed(opaque),
+		JSON.stringify(opaque),
+	);
+	ok(
+		"with the parts, in a frame sandboxed to an opaque origin, what the page's own policy allows runs and applies",
+		policedAsAllowed(opaqueChild.out),
+		JSON.stringify(opaqueChild),
 	);
 	const navigated = await top.evaluate(
 		(calls) => window.__child(calls),
@@ -521,9 +590,9 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 // without them: every call refuses, and nothing reaches the browser
 {
 	const from = downloads.length;
-	const without = (calls) =>
+	const without = (calls, sandbox) =>
 		top.evaluate(
-			async ({ name, calls }) => {
+			async ({ name, calls, sandbox }) => {
 				const client = window[name];
 				Reflect.defineProperty(client, 'deferredPartsText', {
 					configurable: true,
@@ -531,12 +600,12 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 						'__stompDeferred=function(){throw new Error("no parts")};',
 				});
 				try {
-					return await window.__child(calls);
+					return await window.__child(calls, sandbox);
 				} finally {
 					Reflect.deleteProperty(client, 'deferredPartsText');
 				}
 			},
-			{ name, calls },
+			{ name, calls, sandbox },
 		);
 	// (the frame loads with the parts, its base is given without them)
 	const based = await top.evaluate(
@@ -561,8 +630,11 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		'blankCopy',
 		'xmlLoad',
 		'blankSetHTML',
+		'cspOpaque',
 		...POLICED,
 	]);
+	const opaque = await opaqueOutcome(page, answer.out?.cspOpaque);
+	const opaqueChild = await without(POLICED, 'allow-scripts');
 	const documents = await without(DOCUMENTS);
 	// an object's own load is a navigation of its context, which no
 	// service worker sees: one to an http(s) URL reached a server (the
@@ -779,6 +851,18 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		out.cspFrame?.title === null,
 		JSON.stringify(out.cspFrame),
 	);
+	// a frame sandboxed to an opaque origin takes its parts from its top as
+	// text too, and refuses alike
+	ok(
+		'without the parts, a frame sandboxed to an opaque origin under a header policy that governs code runs none of its scripts and applies none of its styles',
+		opaqueRefused(opaque),
+		JSON.stringify(opaque),
+	);
+	ok(
+		"without the parts, in a frame sandboxed to an opaque origin, an eval under the page's own policy throws, and an inline script and style run and apply nothing",
+		policedRefused(opaqueChild.out, 'no parts'),
+		JSON.stringify(opaqueChild),
+	);
 	const saved = await downloadsSince(from);
 	ok(
 		'without the parts, a download link saves nothing, neither the copy nor the route',
@@ -794,6 +878,68 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			Array.isArray(object.reached) &&
 			object.reached.length === 0,
 		JSON.stringify([answer.reached, documents.reached, object.reached]),
+	);
+}
+
+// a frame whose top has no text to give (one of another build, as
+// deferred-parts has it) reads the rewriter library's file itself: an
+// opaque frame under a code policy reads it at its first script, and with
+// the file answered as gone (the test's own route, no page reaches it) its
+// checks refuse as without the parts
+{
+	const LIBRARY = /\/rewriterLib\.js(\?|$)/;
+	const cdp = await page.context().newCDPSession(page);
+	await cdp.send('Network.enable');
+	const asked = [];
+	cdp.on('Network.requestWillBeSent', ({ request }) => {
+		if (LIBRARY.test(request.url)) asked.push(request.url);
+	});
+	const unshared = (calls, sandbox) =>
+		top.evaluate(
+			async ({ name, calls, sandbox }) => {
+				const client = window[name];
+				Reflect.defineProperty(client, 'deferredPartsText', {
+					configurable: true,
+					value: () => null,
+				});
+				try {
+					return await window.__child(calls, sandbox);
+				} finally {
+					Reflect.deleteProperty(client, 'deferredPartsText');
+				}
+			},
+			{ name, calls, sandbox },
+		);
+	const read = await unshared(['cspOpaque']);
+	const opaque = await opaqueOutcome(page, read.out?.cspOpaque);
+	const opaqueChild = await unshared(POLICED, 'allow-scripts');
+	ok(
+		'under a top with no parts to give, the frames read the file, and one sandboxed to an opaque origin runs what its policy allows',
+		asked.length > 0 &&
+			opaqueAsAllowed(opaque) &&
+			policedAsAllowed(opaqueChild.out),
+		JSON.stringify({ asked: asked.length, opaque, opaqueChild }),
+	);
+	await page
+		.context()
+		.route(LIBRARY, (route) => route.fulfill({ status: 404, body: '' }));
+	const gone = await unshared(['cspOpaque']);
+	const goneOpaque = await opaqueOutcome(page, gone.out?.cspOpaque);
+	const goneChild = await unshared(POLICED, 'allow-scripts');
+	await page.context().unroute(LIBRARY);
+	await cdp.detach().catch(() => {});
+	ok(
+		'under a top with no parts to give, where the file cannot be had, a frame sandboxed to an opaque origin under a header policy that governs code runs none of its scripts and applies none of its styles',
+		opaqueRefused(goneOpaque),
+		JSON.stringify(goneOpaque),
+	);
+	ok(
+		"under a top with no parts to give, where the file cannot be had, in a frame sandboxed to an opaque origin, an eval under the page's own policy throws, and an inline script and style run and apply nothing",
+		policedRefused(
+			goneChild.out,
+			'Stomp: the rewriter library did not load (HTTP 404)',
+		),
+		JSON.stringify(goneChild),
 	);
 }
 

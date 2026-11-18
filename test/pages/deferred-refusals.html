@@ -9,8 +9,11 @@
 			// The child the suite deferred-refusals asks: it makes, in a realm
 			// of its own, the calls whose code is a deferred part of the
 			// document bundle, and posts what each did. `calls` names them.
-			window.__child = (calls) => {
+			// `sandbox`: the frame's sandbox attribute (allow-scripts: an opaque
+			// origin, which judges its code with the checks it makes itself)
+			window.__child = (calls, sandbox) => {
 				const frame = document.createElement('iframe');
+				if (sandbox !== undefined) frame.sandbox = sandbox;
 				const answer = new Promise((resolve) => {
 					addEventListener('message', (event) => {
 						if (event.source === frame.contentWindow) resolve(event.data);

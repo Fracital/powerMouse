@@ -18,6 +18,8 @@
 //         default), `nonce` (that element with nonce="probes"), `inline`
 //         (its text inline), `inline-nonce`, `inline-hash` (inline, and the
 //         sha256 of its text is in the X-Probe-Hash header)
+//     fs: the case in a frame with this sandbox attribute instead (a page
+//         under no policy whose iframe is this URL without `fs`)
 //   /csp/probes.js       the probes (test/pages/csp-probes.js; `?js=tt` the
 //                        csp-tt-probes.js ones)
 //   /csp/ok              text "ok", for any origin (CORS *)
@@ -111,6 +113,15 @@ export function csp(req, res) {
 	};
 	switch (url.pathname) {
 		case '/csp/doc': {
+			if (query.has('fs')) {
+				const inner = new URLSearchParams(query);
+				inner.delete('fs');
+				send(
+					'text/html; charset=utf-8',
+					`<!doctype html><html><head><title>CSP FRAME</title></head><body><iframe sandbox="${attribute(query.get('fs'))}" src="${attribute(`/csp/doc?${inner}`)}"></iframe></body></html>`,
+				);
+				return true;
+			}
 			const js = query.get('js');
 			const probes = readFileSync(`${pages}${probeFile(js)}`, 'utf8');
 			const src =

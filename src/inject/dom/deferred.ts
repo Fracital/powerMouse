@@ -5,14 +5,15 @@
 // deferredFactory). A document under that top evaluates the function's text
 // in its own realm (the bundle's), taken from the top, with no request (a
 // frame of another slot than its page's, from its slot's agent:
-// src/controller/slotLibrary.ts). Only a realm with neither (a frame
-// sandboxed to an opaque origin, a frame under a top of another build, a top
-// the page made) asks for the file
-// itself, with the one synchronous request its own copy of the light library
-// makes too (the file is read once for both). The function is handed this
-// bundle's own modules (stomp:deferred-shared), so the parts share the
-// snapshots taken before any page script ran, the client and every hook's
-// helpers with the bundle.
+// src/controller/slotLibrary.ts), a frame sandboxed to an opaque origin too
+// (its real frame keeps allow-same-origin: it reaches its top). Only a realm
+// with neither (a frame under a top of another build, a top the page made)
+// asks for the file itself, with the one synchronous request its own copy
+// of the light library makes too (the file is read once for both); where
+// it cannot be had, each part's hook refuses (deferred-refusals). The
+// function is handed this bundle's own modules (stomp:deferred-shared), so
+// the parts share the snapshots taken before any page script ran, the
+// client and every hook's helpers with the bundle.
 import shared from 'stomp:deferred-shared';
 import { ACTIVATION_FACTORY, PASSKEYS_FACTORY } from '../../version';
 import { deferredFactory } from '../rewriter';

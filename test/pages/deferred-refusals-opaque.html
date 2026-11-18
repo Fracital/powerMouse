@@ -1,0 +1,49 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>deferred refusals opaque</title>
+		<style nonce="a">
+			#allowed {
+				color: rgb(1, 2, 3);
+			}
+		</style>
+		<style>
+			#refused {
+				color: rgb(4, 5, 6);
+			}
+		</style>
+	</head>
+	<body>
+		<p id="allowed">allowed</p>
+		<p id="refused">refused</p>
+		<script>
+			window.__refusedRan = true;
+		</script>
+		<script nonce="a">
+			// A frame the suite deferred-refusals sandboxes to an opaque origin,
+			// under a policy of its own header that governs code: its markup's
+			// script and style with the nonce run and apply, the others do not,
+			// and an eval is allowed. What it ran is posted to its parent.
+			window.__allowedRan = true;
+			let evaluated;
+			try {
+				evaluated = eval('1 + 1');
+			} catch (error) {
+				evaluated = `threw ${error && error.message}`;
+			}
+			const color = (id) => getComputedStyle(document.getElementById(id)).color;
+			parent.postMessage(
+				{
+					opaque: {
+						refusedRan: window.__refusedRan === true,
+						eval: evaluated,
+						allowed: color('allowed'),
+						refused: color('refused'),
+					},
+				},
+				'*',
+			);
+		</script>
+	</body>
+</html>

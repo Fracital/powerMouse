@@ -236,6 +236,24 @@
 				});
 			const CALLS = {
 				...CSP_CALLS,
+				// a frame sandboxed to an opaque origin under a header policy of
+				// its own that governs code (deferred-refusals-opaque.html), whose
+				// checks are made at its first script: what it posted, null when
+				// none of its code ran (the suite reads the rest in the frame,
+				// by its name)
+				cspOpaque: () =>
+					new Promise((resolve) => {
+						const frame = document.createElement('iframe');
+						frame.name = `cspOpaque-${Math.random().toString(36).slice(2)}`;
+						frame.sandbox = 'allow-scripts';
+						addEventListener('message', (event) => {
+							if (event.source === frame.contentWindow && event.data?.opaque)
+								resolve({ name: frame.name, posted: event.data.opaque });
+						});
+						frame.src = 'deferred-refusals-opaque.html';
+						document.body.append(frame);
+						setTimeout(() => resolve({ name: frame.name, posted: null }), 4000);
+					}),
 				srcdoc: () =>
 					made((frame) => {
 						frame.srcdoc = MADE('self.origin');

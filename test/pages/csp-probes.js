@@ -541,6 +541,9 @@
 				[`script-path-${path}-none`, () => scriptBy(path, false)],
 			]),
 		),
+		// the document's origin: "null" in a frame sandboxed without
+		// allow-same-origin
+		'self-origin': () => self.origin,
 		eval: () => evaluated(() => eval('1 + 1')),
 		function: () => evaluated(() => new Function('return 2')()),
 		'timeout-string': () =>
