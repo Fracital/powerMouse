@@ -448,6 +448,13 @@ export const FRAME_MOVED = '$stomp$frameMoved';
 export const FRAME_ENTRY = '$stomp$frameEntry';
 /** SW -> every window: the cookie jar changed for `domain` (every host when empty); pages drop their document.cookie cache */
 export const COOKIES_CHANGED = '$stomp$cookiesChanged';
+/**
+ * The BroadcastChannel of the host origin's cookie jar database: whoever
+ * writes it (a scope's service worker, the site pool's jar server) posts
+ * there once the write is done, and a service worker that keeps what it
+ * read of the jar (KeptJar, src/server/Cookies.ts) forgets it
+ */
+export const JAR_WRITES = '$stomp$jarWrites';
 export interface CookiesChange {
 	domain: string;
 }

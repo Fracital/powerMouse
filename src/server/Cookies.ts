@@ -16,6 +16,7 @@ import {
 	CookieRecord,
 	COOKIES_CHANGED,
 	CookiesChange,
+	JAR_WRITES,
 } from '../transport/messages';
 import { JAR_DATABASE, JAR_STORE, type JarDB, type RemoteJar } from './jarDB';
 import Router, { json, jsonAPI } from './Router';
@@ -1001,6 +1002,102 @@ function migrateLegacy(
 	};
 }
 
+/** the most domains a KeptJar keeps the cookies of */
+const KEPT_DOMAINS = 4096;
+
+/**
+ * The scope's jar database, with each domain's cookies kept as it last
+ * answered them until a write. Every request with credentials reads its
+ * host's candidate domains (four for img.cdn.example.com), each a round
+ * trip to the browser's IndexedDB backend: about a millisecond before the
+ * request could leave, and tens of milliseconds behind each other while a
+ * page loads hundreds of resources. A read that a write overlapped is not
+ * kept, so what is kept is never older than the last write this jar did
+ * or heard of. Writers it does not do itself post on JAR_WRITES once they
+ * are done (another scope's worker, a worker of the version before this
+ * one, the site pool's jar server); with the site pool on nothing is kept
+ * (jarWrittenElsewhere), since a slot's write must be read by the next
+ * request whichever worker answers it.
+ */
+class KeptJar implements JarDB {
+	#db: JarDB;
+	#kept = new Map<string, unknown[]>();
+	/** moves on at the start and the end of every write */
+	#generation = 0;
+	#channel: BroadcastChannel | null = null;
+	constructor(db: JarDB) {
+		this.#db = db;
+		try {
+			this.#channel = new BroadcastChannel(JAR_WRITES);
+			this.#channel.onmessage = () => this.#forget();
+		} catch (error) {
+			// no BroadcastChannel: nothing that writes elsewhere can be heard
+			keepsJar = false;
+		}
+	}
+	#forget() {
+		this.#kept.clear();
+		this.#generation++;
+	}
+	async #write<T>(write: () => Promise<T>): Promise<T> {
+		this.#forget();
+		try {
+			return await write();
+		} finally {
+			this.#forget();
+			this.#channel?.postMessage(null);
+		}
+	}
+	async getAllFromIndex(
+		store: string,
+		index: string,
+		key: string,
+	): Promise<unknown[]> {
+		if (!keepsJar || store !== STORE || index !== 'domain')
+			return this.#db.getAllFromIndex(store, index, key);
+		const kept = this.#kept.get(key);
+		if (kept) return kept;
+		const generation = this.#generation;
+		const found = await this.#db.getAllFromIndex(store, index, key);
+		if (generation === this.#generation && keepsJar) {
+			if (this.#kept.size >= KEPT_DOMAINS) this.#kept.clear();
+			this.#kept.set(key, found);
+		}
+		return found;
+	}
+	getAll(store: string) {
+		return this.#db.getAll(store);
+	}
+	getAllKeys(store: string) {
+		return this.#db.getAllKeys(store);
+	}
+	get(store: string, key: string) {
+		return this.#db.get(store, key);
+	}
+	put(store: string, value: unknown, key?: string) {
+		return this.#write(() => this.#db.put(store, value, key));
+	}
+	delete(store: string, key: string) {
+		return this.#write(() => this.#db.delete(store, key));
+	}
+	clear(store: string) {
+		return this.#write(() => this.#db.clear(store));
+	}
+}
+
+/** whether a service worker's jar keeps what it read (KeptJar) */
+let keepsJar = true;
+
+/**
+ * The site pool is on for this worker (it is the hub's, or a slot's): the
+ * jar is written by other origins' workers through the jar server, and a
+ * write of theirs must be seen by the very next request, so nothing read
+ * is kept from now on
+ */
+export function jarWrittenElsewhere() {
+	keepsJar = false;
+}
+
 /**
  * The jar, opened once per scope (createServer shares it between the
  * controllers of a scope: a controller is a tab, and tabs share cookies).
@@ -1057,7 +1154,10 @@ export async function openCookies(
 	// restarted whenever the browser idles it, which is not the end of the
 	// user's session
 
-	const cookies = new Cookies(db as unknown as JarDB, publicSuffix);
+	const cookies = new Cookies(
+		new KeptJar(db as unknown as JarDB),
+		publicSuffix,
+	);
 	cookies.onChange = (domain) => {
 		broadcastChange(domain);
 		for (const listener of jarListeners) listener(domain);

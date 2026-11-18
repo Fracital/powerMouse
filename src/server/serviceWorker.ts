@@ -91,7 +91,7 @@ import {
 	hintsDocument,
 	recordReport as recordClientHintsReport,
 } from './clientHints';
-import { forScript, onJarChange } from './Cookies';
+import { forScript, jarWrittenElsewhere, onJarChange } from './Cookies';
 import createServer, {
 	addressCodec,
 	addressHub,
@@ -266,6 +266,8 @@ function registerController(
 	// (a slot of the site pool: then the host's cookie jar's and the hub's
 	// blocker's)
 	const [port, transportPort, jarPort, blockerPort] = ports;
+	// the slots' workers write the hub's jar through its jar server
+	if (slot || pooled) jarWrittenElsewhere();
 	// the pool's workers share one process: each slot keeps its share of
 	// the memory cache's budget, and of the memory its rewriter's instance
 	// keeps between documents (at least SLOT_MEMORY_LIMIT)

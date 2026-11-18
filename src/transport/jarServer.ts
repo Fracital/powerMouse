@@ -14,6 +14,7 @@ import {
 	type JarChanged,
 	type JarReply,
 } from '../server/jarDB';
+import { JAR_WRITES } from './messages';
 
 let opened: Promise<IDBDatabase> | undefined;
 
@@ -123,6 +124,23 @@ async function answer({ op, args }: JarCall): Promise<unknown> {
 	}
 }
 
+let writes: BroadcastChannel | null | undefined;
+/**
+ * a slot's write of the jar is done: a service worker of the host's origin
+ * that keeps what it read of the jar forgets it (KeptJar,
+ * src/server/Cookies.ts)
+ */
+function wrote({ op, args }: JarCall) {
+	if (op !== 'put' && op !== 'delete' && op !== 'clear') return;
+	if (Object.hasOwn(KEPT, String(args[0]))) return;
+	try {
+		writes ??= new BroadcastChannel(JAR_WRITES);
+		writes.postMessage(null);
+	} catch (error) {
+		writes = null;
+	}
+}
+
 /** the ports of the slots' workers, newest last (a stopped worker's port is never heard of again) */
 const ports: MessagePort[] = [];
 const MAX_PORTS = 64;
@@ -149,8 +167,14 @@ export function serveJar(port: MessagePort) {
 		const reply = (rest: Omit<JarReply, 'jar'>) =>
 			port.postMessage({ jar: data.jar, ...rest } satisfies JarReply);
 		answer(data).then(
-			(result) => reply({ result }),
-			(error) => reply({ error: String(error) }),
+			(result) => {
+				wrote(data);
+				reply({ result });
+			},
+			(error) => {
+				wrote(data);
+				reply({ error: String(error) });
+			},
 		);
 	});
 	port.start();

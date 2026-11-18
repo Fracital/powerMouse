@@ -1,0 +1,4 @@
+{
+	"set-cookie": ["jk=1; Path=/"],
+	"cache-control": "no-store"
+}
