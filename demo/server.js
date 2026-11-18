@@ -40,6 +40,21 @@
 //                       site publishes a config, as Chrome does (default
 //                       https://cloudflare-dns.com/dns-query; `off` sends only
 //                       GREASE ECH; `?noech` on the page does that for a visit)
+//   STOMP_WISP_WEBTRANSPORT whether epoxy carries Wisp over the relay's
+//                       WebTransport session (the descriptor's
+//                       `webTransport`, docs/webtransport.md "Wisp over
+//                       WebTransport"). On unless `0`: the transport looks
+//                       for /webtransport.json on the wisp URL's origin
+//                       (this server forwards the built-in holyWisp's, which
+//                       is started with `webTransport` when the `holywisp`
+//                       package knows it), else dials a wss: wisp URL as
+//                       https:, and uses the WebSocket whenever there is no
+//                       session, never waiting for one it has not had
+//                       before. A URL names the session instead (a relay
+//                       with a public name and certificate:
+//                       https://holywisp.fracit.al/...), or, ending in
+//                       .json, its discovery document. `?wt=0` or `?wt` on
+//                       the page decides for one visit
 //   STOMP_SITE_POOL     the site pool's slots (docs/site-pool.md): more
 //                       ports to answer on, a list (`8082,8083`) or a number
 //                       of free ports to take (`5`; default `0` or `off`:
@@ -110,6 +125,8 @@ try {
 }
 
 const externalWisp = process.env.STOMP_WISP_URL || '';
+const wispWebTransport = process.env.STOMP_WISP_WEBTRANSPORT || '1';
+const webTransportOn = wispWebTransport !== '0';
 const proxyOrigin = process.env.STOMP_PROXY_ORIGIN || '';
 const dev = !!process.env.STOMP_DEV;
 
@@ -149,6 +166,10 @@ if (!externalWisp) {
 		dnsResultOrder: 'ipv4first',
 		tcpNoDelay: true,
 		logLevel: process.env.HOLYWISP_LOG_LEVEL || 'error',
+		// its UDP listener on the same port number, on 127.0.0.1; a wrapper
+		// that does not know the option starts no listener, and the page
+		// stays on the WebSocket
+		...(webTransportOn && { webTransport: true }),
 	});
 	// The child does not outlive this process: `holywisp` stops it on exit and
 	// on SIGINT/SIGTERM/SIGHUP, and it stops itself when its stdin pipe from
@@ -161,6 +182,16 @@ Set STOMP_WISP_URL to use an external wisp server instead.`);
 		process.exit(1);
 	}
 }
+// the built-in holyWisp has a WebTransport listener only when the `holywisp`
+// package and its binary know the option; without one the page is not told
+// to look for it (an external relay is always looked at)
+const webTransport =
+	webTransportOn &&
+	(!wisp ||
+		(await fetch(`http://127.0.0.1:${wisp.port}/webtransport.json`).then(
+			(answer) => answer.ok,
+			() => false,
+		)));
 
 const started = Date.now();
 
@@ -374,7 +405,33 @@ const pageConfig = {
 	// startedAt lets the dev client tell a restarted server from a dropped
 	// connection: a different value on reconnect means new server code
 	...(dev && { dev: true, startedAt: started }),
+	...(webTransport && {
+		webTransport:
+			wispWebTransport === '1'
+				? true
+				: /\.json(?:$|[?#])/.test(wispWebTransport)
+					? { discovery: wispWebTransport }
+					: { url: wispWebTransport },
+	}),
 };
+// the built-in holyWisp's discovery document, on the wisp URL's origin where
+// the transport looks for it; a document that names no `url` would send the
+// session to this server's port, so it names holyWisp's own
+if (wisp && webTransport)
+	app.get('/webtransport.json', async (req, res) => {
+		res.set('Cache-Control', 'no-store');
+		res.set('Access-Control-Allow-Origin', '*');
+		try {
+			const answer = await fetch(
+				`http://127.0.0.1:${wisp.port}/webtransport.json`,
+			);
+			if (!answer.ok) return res.sendStatus(answer.status);
+			const body = await answer.json();
+			res.json({ ...body, url: body.url || `https://127.0.0.1:${wisp.port}/` });
+		} catch {
+			res.sendStatus(502);
+		}
+	});
 app.get('/config.js', (req, res) => {
 	const sitePool = slotPorts(req);
 	res.set('Cache-Control', 'no-store');

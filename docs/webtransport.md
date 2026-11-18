@@ -431,3 +431,150 @@ a worker, and one the content blocker's list refuses, which the server
 never hears of through the proxy. Natively Chrome takes the server's
 certificate with a pinned hash, or with `--ignore-certificate-errors-spki-list`
 and `--origin-to-force-quic-on`.
+
+## Wisp over WebTransport
+
+Everything above is about the page's own sessions. The transport can also
+use a WebTransport session itself, as the carrier of its wisp connection
+in place of the WebSocket (`TransportDescriptor.webTransport`, off unless
+set in the library, on in the demo, `src/transport/wispWebTransport.ts`),
+the way holyWisp's WebTransport listener serves it (holyWisp's
+docs/webtransport.md, "Wisp on the session" and "Certificates"):
+
+- **Where the session is.** `url` names it, its certificate checked as any
+  site's (a relay with a public name and a Web PKI certificate). Otherwise
+  a discovery document, `discovery` or `GET /webtransport.json` on the wisp
+  URL's origin (`ws:` read as `http:`, `wss:` as `https:`), answers
+  `{ url, hashes: [{ algorithm: 'sha-256', value }] }`, the value in
+  base64: the current certificate and the previous one, for a relay with
+  no public name that makes its own. The session is the document's `url`,
+  or the document's own origin over `https:` when it lists none, never the
+  page's or the wisp URL's: a relay behind Cloudflare (whose UDP 443 never
+  reaches the edge) names a host of its own there, as the edges'
+  `https://holywisp.fracit.al/webtransport.json` names
+  `https://holywisp.fracit.al/`. With neither option and no document, a
+  `wss:` wisp URL is dialed as `https:`, its path kept.
+- **Certificates.** Every `sha-256` hash listed goes in one handshake's
+  `serverCertificateHashes`: Chrome takes a certificate whose hash is any
+  of them, so the current one and the previous one are both tried at once,
+  and a failed handshake costs a round trip and stays in Chrome's throttle
+  for five minutes. When the handshake fails, the document is fetched
+  again (it may have rotated between the two), and a document that changed
+  gets one more handshake. A document with no hashes leaves the
+  certificate to the Web PKI.
+- **The Wisp stream.** One bidirectional stream carries the Wisp packets,
+  each after its length as a u32 LE (epoxy-server's LengthDelimitedLe),
+  read as they arrive whatever QUIC cut them into. epoxy takes the session
+  as its function transport (`EpoxyClient`'s `wisp` may be a function
+  returning `{ read, write }`, one packet per chunk), so the Wisp in it is
+  epoxy's own, v1 and v2.
+- **Datagrams.** The transport watches the CONNECTs and CLOSEs it sends and
+  hears: a DATA packet of a UDP stream that fits `maxDatagramSize` goes as
+  one datagram, whole, with no prefix, and one that does not on the
+  stream; a datagram that arrives is one packet. Nothing else ever goes as
+  a datagram. Chrome reads about 1215 for a session on loopback, five of
+  which the Wisp header takes: stomp-h3's QUIC packets after the handshake
+  (1200 bytes, no path MTU probes) and most WebRTC packets fit, and
+  stomp-h3's Initials (padded to 1250, as Chrome's) go on the stream.
+- **Wisp v2** (`wisp_v2` in epoxy's options) is offered as the protocol
+  `wisp-v2`; holyWisp answers it with `wt-protocol` and opens v2 with INFO,
+  as it does for a WebSocket with a subprotocol.
+- **Choosing, without waiting on UDP.** UDP is often blocked, and a
+  network that drops it looks like a handshake that never ends (Chrome
+  gives up after 4 s), so nothing waits for a session the relay has not
+  given before. What each relay did is remembered by its plan (`url`, the
+  document's URL, or the wisp URL) in this realm and in IndexedDB
+  (`stomp-wisp-carrier`) for the origin's next page and worker:
+  - nothing known: the transport rides the WebSocket at once (epoxy's own
+    with its `wisp` URL, exactly as without the option) and tries a session
+    beside it, closed once it is up, whose outcome is remembered;
+  - it worked (for 7 days): the session, within `timeoutMs` (2 s by
+    default), else the WebSocket;
+  - it failed (no document, a document that names no https URL, a
+    handshake that fails or times out, a stream that cannot be opened):
+    the WebSocket, without trying, for five minutes, or until the network
+    changes (`online`, a `navigator.connection` change).
+
+  The first start that ever meets a relay is on the WebSocket, and the
+  next transport (a revive, a reload) on the session. Measured on loopback
+  in Chrome 157, the first request answers as soon as with the carrier off
+  when the session fails (`webtransport-wisp`); a window that waited for
+  the session would have cost every page behind blocked UDP that window.
+  Each choice is logged on the console (`Stomp: wisp over WebTransport to
+...` or `Stomp: wisp over its WebSocket (why)`), and the transport's
+  `carrier` says it.
+
+- **Revival.** A transport keeps its carrier: when the session ends, the
+  packets' readable ends as a closed WebSocket's does, the next wisp
+  connection epoxy asks for fails with `WebTransportCarrierLost`
+  (RevivingTransport's DEAD), and RevivingTransport makes a new transport,
+  which chooses again: the requests it sends again are those it sends
+  again after a lost WebSocket. A session the relay closed (a restart that
+  closes its sessions first) keeps the relay remembered as working; one
+  that ended without a close (UDP lost under it, a relay that went away)
+  leaves nothing known, so the new transport rides the WebSocket at once
+  and the session tried beside it tells the two apart.
+
+It rests on epoxy-tls's `deploy/epoxy` patch 0075 (in the pinned build),
+which makes a function transport's writes never wait, as the WebSocket's
+`send` does not. Every
+stream of a wisp connection writes through one sink behind wisp-mux's
+lock, and epoxy's function-transport sink (wasm-streams' IntoSink) is
+Pending until the WritableStream's `ready` and `write` promises settle, a
+microtask later at the soonest. A writer that met Pending kept the lock.
+rustls polls `poll_flush` once in a handshake, and on Pending goes on to
+read without flushing again; the multiplexor's actor then waited for the
+lock to send the next stream's CONNECT and read nothing meanwhile, so the
+server's answer never arrived. Measured in Chrome 157 with a WebSocket
+behind a function transport: one https request with two plain http ones
+beside it hung all three (only its CONNECT and ClientHello went out), and
+in sequence they loaded (`epoxy-function-transport`). Without the patch
+every page load over the session that opened more than one origin at once
+hung. No STomp path handed epoxy a function transport before the carrier.
+
+### What a browser client cannot do of holyWisp's design
+
+- `serverCertificateHashes` takes only a certificate of at most 14 days of
+  validity that holds now, an X.509 v3 one with an ECDSA key in Chrome's
+  WebTransport (holyWisp makes P-256, valid from an hour ago for 13 days,
+  which fits; a `webtransport-cert` chain goes through the Web PKI with no
+  hashes). A clock more than an hour behind the server's refuses a fresh
+  certificate.
+- The hashes apply to that one session to that URL only: no pooling, no
+  other origin, and the page cannot reuse them for a `fetch` of the same
+  host. The document itself has to come over HTTPS from a certificate the
+  browser trusts (or plain HTTP on loopback), on TCP.
+- The WebTransport URL has to reach the UDP listener directly. A wisp
+  host behind a proxy that carries only TCP (Cloudflare's, or OpenResty in
+  front of terp) needs `webtransport-url` naming an address that is not
+  proxied, and the client has nothing to derive it from otherwise: the
+  descriptor's `discovery` or `url` has to name that host. A relay that is
+  keyed by its path (the edges' keyed relay) loses the key when the
+  document lists no `url`: the document's `url` has to carry it.
+- A failed or timed-out handshake stays in Chrome's throttle for five
+  minutes, and every one pending doubles the next one's wait, so a client
+  cannot probe a relay over and over: one try per transport start while
+  nothing is known, none for five minutes after a failure.
+- A page that has never met a relay cannot know whether UDP reaches it
+  without waiting for a handshake, so its first transport is on the
+  WebSocket; the session is had from the next one.
+- `WebTransport` exists only in secure contexts: a host page on plain
+  `http:` (not localhost) has none, and gets the WebSocket.
+- Chrome drops a datagram larger than the connection takes without a word,
+  and a datagram arriving faster than it is read past
+  `incomingHighWaterMark`; the client reads them at once, and keeps a UDP
+  packet larger than `maxDatagramSize` to the stream.
+- After the server closes a session Chrome answers with a FIN on the
+  CONNECT stream and never with CONNECTION_CLOSE (the measurements above):
+  the server reaps the connection.
+
+`webtransport-wisp` covers it, with the transport in its worker and in the
+page: test/wisp-wt.mjs is a relay of holyWisp's design in front of the
+demo's holyWisp (the document on its TCP port; on its UDP one
+test/wtserver.mjs's `/bridge` route, whose streams and datagrams the relay
+serves), and when holyWisp's own build with the listener is on the machine
+(`HOLYWISP_WT`, or `~/src/holyWisp/build/release/holywisp`) the suite runs a
+page, a socket and UDP through it too, skipped otherwise. The demo turns
+the carrier on (`STOMP_WISP_WEBTRANSPORT`, demo/README.md): through
+`wss://holywisp.fracit.al/` on 2026-11-18 its second start rode the edge's
+session, pages loaded and a page's WebSocket echoed.

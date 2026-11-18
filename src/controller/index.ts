@@ -178,6 +178,7 @@ export type {
 	UdpOpener,
 } from '../transport/http3/Http3Transport';
 export type { Http3DescriptorOptions } from '../transport/construct';
+export type { WispWebTransportOptions } from '../transport/wispWebTransport';
 export type {
 	NavigateInfo,
 	CookieRecord,

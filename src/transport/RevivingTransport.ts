@@ -35,9 +35,9 @@ import type {
 	TransferrableResponse,
 } from '@mercuryworkshop/proxy-transports';
 
-/** the wisp connection under the request is gone */
+/** the wisp connection under the request is gone (WebTransportCarrierLost: wispWebTransport.ts CARRIER_LOST) */
 const DEAD =
-	/MuxTaskEnded|Multiplexor task ended|WsImplSocketClosed|MuxMessageFailedTo(?:Send|Recv)/;
+	/MuxTaskEnded|Multiplexor task ended|WsImplSocketClosed|MuxMessageFailedTo(?:Send|Recv)|WebTransportCarrierLost/;
 /** hyper failed before the request went out (opening its connection) */
 const UNSENT = /Error\(Connect,/;
 /** the connection closed under a request before its response head */

@@ -13,6 +13,7 @@ import type {
 } from '../passkeys/types';
 import type { PortBody } from './bodyPort';
 import type { Http3DescriptorOptions } from './construct';
+import type { WispWebTransportOptions } from './wispWebTransport';
 
 // postMessage keys (controller <-> service worker <-> proxied contexts)
 
@@ -1548,6 +1549,8 @@ export interface TransportModule {
 	options?: unknown[];
 	/** TransportDescriptor.http3 */
 	http3?: boolean | Http3DescriptorOptions;
+	/** TransportDescriptor.webTransport */
+	webTransport?: boolean | WispWebTransportOptions;
 }
 
 /** implemented by the transport worker (src/transport/worker.ts), called by the controller */

@@ -22,6 +22,7 @@ import type {
 	RequestInfo,
 	RequestRule,
 } from '../transport/messages';
+import type { WispWebTransportOptions } from '../transport/wispWebTransport';
 import type { SiteHistoryAnswer, SiteHistoryOp } from './history';
 import type { SitePoolInit } from './sitePool';
 
@@ -51,6 +52,15 @@ export interface TransportDescriptor {
 	 * either, every request goes over the transport as before. docs/http3.md.
 	 */
 	http3?: boolean | Http3DescriptorOptions;
+	/**
+	 * Wisp over the relay's WebTransport session (holyWisp's WebTransport
+	 * listener) instead of its WebSocket, when the relay offers one
+	 * (`/webtransport.json` on the wisp URL's origin) and it can be had in
+	 * `timeoutMs`; the WebSocket otherwise (UDP blocked, no listener, a
+	 * certificate that does not match). Off unless set; epoxy only (it
+	 * takes the session as its wisp transport). docs/webtransport.md.
+	 */
+	webTransport?: boolean | WispWebTransportOptions;
 }
 
 export interface ControllerFrameInit {

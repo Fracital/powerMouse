@@ -8,6 +8,10 @@ import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import Http3Transport, { type Http3Options } from './http3/Http3Transport';
 import RevivingTransport from './RevivingTransport';
 import { useWebTransportModule } from './webTransportHost';
+import {
+	CarrierTransport,
+	type WispWebTransportOptions,
+} from './wispWebTransport';
 
 /** `http3` in a descriptor: a function (`udp`) cannot be cloned into a worker */
 export type Http3DescriptorOptions = Omit<Http3Options, 'udp'>;
@@ -17,6 +21,7 @@ export interface ConstructibleTransport {
 	module: string;
 	options?: unknown[];
 	http3?: boolean | Http3DescriptorOptions;
+	webTransport?: boolean | WispWebTransportOptions;
 }
 
 /** the descriptor with `http3.module` resolved against `base` too */
@@ -38,7 +43,7 @@ export function resolveHttp3<T extends ConstructibleTransport>(
  * this realm.
  */
 export async function constructTransport(
-	{ module, options, http3 }: ConstructibleTransport,
+	{ module, options, http3, webTransport }: ConstructibleTransport,
 	h3Worker?: string,
 ): Promise<ProxyTransport> {
 	const { default: Transport } = (await import(/* @vite-ignore */ module)) as {
@@ -46,8 +51,21 @@ export async function constructTransport(
 	};
 	if (typeof Transport !== 'function')
 		throw new TypeError(`${module} has no default export to construct`);
-	const transport = new RevivingTransport(
-		() => new Transport(...(options || [])),
+	const args = options || [];
+	// Wisp over the relay's WebTransport session when it has one (epoxy's
+	// function transport: a `wisp` URL to start from), its WebSocket
+	// otherwise (src/transport/wispWebTransport.ts)
+	const carried =
+		webTransport &&
+		typeof (args[0] as { wisp?: unknown } | undefined)?.wisp === 'string';
+	const transport = new RevivingTransport(() =>
+		carried
+			? new CarrierTransport(
+					Transport,
+					args,
+					webTransport === true ? {} : webTransport,
+				)
+			: new Transport(...args),
 	);
 	// stomp-h3 ships in epoxy-transport's dist/h3/ (deploy/epoxy/h3); a
 	// page's WebTransport sessions use it whether or not HTTP/3 is on

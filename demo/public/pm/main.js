@@ -163,6 +163,14 @@ const blockedCounts = new Map();
 const ECH_DNS = new URLSearchParams(location.search).has('noech')
 	? null
 	: CFG.echDns;
+// Wisp over the relay's WebTransport session (STOMP_WISP_WEBTRANSPORT on the
+// server, docs/webtransport.md "Wisp over WebTransport"), its WebSocket when
+// the relay has none; ?wt=0 (off) or ?wt (on) on this page decides for one
+// visit
+const WEB_TRANSPORT = new URLSearchParams(location.search).has('wt')
+	? new URLSearchParams(location.search).get('wt') !== '0' &&
+		(CFG.webTransport || true)
+	: CFG.webTransport;
 // the transports and the built-in wisp live on the proxy origin
 const proxyBase = () => (ISOLATED ? PROXY_ORIGIN : '');
 // STOMP_WISP_URL points the transports at an external wisp server (in
@@ -190,6 +198,7 @@ const transports = {
 				? { module: `${proxyBase()}/epoxy/h3/stomp_h3.js` }
 				: true,
 		}),
+		...(WEB_TRANSPORT && { webTransport: WEB_TRANSPORT }),
 	}),
 	libcurl: () => ({
 		module: `${proxyBase()}/libcurl/index.mjs`,

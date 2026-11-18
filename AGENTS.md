@@ -364,6 +364,16 @@ on every save (use a `git worktree`).
   patch). The wisp server must relay UDP; the holyWisp edges do since
   abulxt 853761c7 (`holywisp_allow_udp`, `proxy-udp = direct`).
   docs/http3.md.
+- Wisp over the relay's WebTransport session (a descriptor's
+  `webTransport`, off unless set in the library, on in the demo,
+  `src/transport/wispWebTransport.ts`) hands epoxy a function transport.
+  Nothing waits on UDP: a relay never met rides the WebSocket and tries a
+  session beside it, remembered per relay in IndexedDB
+  (`stomp-wisp-carrier`), so suites see the session from the second start
+  only (webtransport-wisp's `learn`). It rests on epoxy-tls 0075: a
+  function transport's sink that waited held wisp-mux's lock across a TLS
+  handshake's flush and hung the whole connection.
+  docs/webtransport.md, "Wisp over WebTransport".
 
 When a site hangs or a socket goes quiet, suspect the transport before the
 rewriter: reproduce with a raw `controller.transport.request()` /
