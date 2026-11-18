@@ -162,7 +162,16 @@ export function governing(
 ): { name: string; sources: string[] } | null {
 	for (const name of FALLBACK[effective] ?? [effective]) {
 		const sources = policy.directives.get(name);
-		if (sources) return { name, sources };
+		if (!sources) continue;
+		// a worker is no parser's script: a list with 'strict-dynamic' lets
+		// every one through, whichever directive it is (measured, Chrome 157:
+		// Bing Maps' blob: tile workers under its script-src)
+		if (
+			effective === 'worker-src' &&
+			sources.some((source) => source.toLowerCase() === "'strict-dynamic'")
+		)
+			return null;
+		return { name, sources };
 	}
 	return null;
 }

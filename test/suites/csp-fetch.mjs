@@ -159,6 +159,31 @@ const CASES = {
 		p: "script-src 'self' 'unsafe-inline'",
 		probes: ['worker-self', 'worker-blob', 'worker-data'],
 	},
+	// Bing Maps' policy: a worker is no parser's script, so a script-src
+	// with 'strict-dynamic' lets every one through, a blob: worker included
+	'worker-src from script-src with strict-dynamic': {
+		p: "script-src https: 'strict-dynamic' 'nonce-probes'",
+		h: 'nonce',
+		probes: ['worker-self', 'worker-blob', 'worker-data'],
+	},
+	'worker-src from default-src with strict-dynamic': {
+		p: "default-src 'strict-dynamic' 'nonce-probes'",
+		h: 'nonce',
+		probes: ['worker-self', 'worker-blob', 'worker-data'],
+	},
+	'worker-src from child-src with strict-dynamic': {
+		p: "child-src 'strict-dynamic'",
+		probes: ['worker-self', 'worker-blob', 'worker-data'],
+	},
+	'worker-src with strict-dynamic': {
+		p: "worker-src 'strict-dynamic'",
+		probes: ['worker-self', 'worker-blob', 'worker-data'],
+	},
+	'worker-src over a script-src with strict-dynamic': {
+		p: "worker-src 'self'; script-src 'strict-dynamic' 'nonce-probes'",
+		h: 'nonce',
+		probes: ['worker-self', 'worker-blob', 'worker-data'],
+	},
 };
 
 const browser = await launch();
