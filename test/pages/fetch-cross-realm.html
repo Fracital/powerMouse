@@ -1,0 +1,58 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>fetch-cross-realm</title>
+<script>
+	// A Request made in one window and handed to another window's fetch or
+	// Request: libraries take a clean fetch from an iframe
+	// (iframe.contentWindow.fetch) and call it with their own Requests, and
+	// a frame may call its parent's. The browser takes any window's Request
+	// as the request it is.
+	window.__record = { done: false };
+	addEventListener('load', async () => {
+		const record = {};
+		const frame = document.createElement('iframe');
+		document.body.append(frame);
+		const other = frame.contentWindow;
+		const text = async (response) =>
+			`${response.status} ${new URL(response.url).pathname} ${(await response.text()).trim()}`;
+		const step = async (name, run) => {
+			try {
+				record[name] = await run();
+			} catch (error) {
+				record[name] = `threw ${error.name}`;
+			}
+		};
+		// the frame's Request into this window's fetch
+		await step('frameRequestTopFetch', async () =>
+			text(await fetch(new other.Request('fetch-cross-realm.txt'))),
+		);
+		// this window's Request into the frame's fetch
+		await step('topRequestFrameFetch', async () =>
+			text(await other.fetch(new Request('fetch-cross-realm.txt'))),
+		);
+		// a copy made by this window's Request constructor
+		await step(
+			'frameRequestTopConstructor',
+			async () =>
+				new URL(new Request(new other.Request('fetch-cross-realm.txt?c')).url)
+					.search,
+		);
+		// a POST keeps its method and body
+		await step('framePostTopFetch', async () => {
+			const response = await fetch(
+				new other.Request('/echo-body', { method: 'POST', body: 'hello' }),
+			);
+			return `${response.status} ${(await response.json()).bytes}`;
+		});
+		// fetch(request, init) with a frame's request
+		await step('frameRequestWithInit', async () => {
+			const response = await fetch(new other.Request('/echo-body'), {
+				method: 'POST',
+				body: 'hello world',
+			});
+			return `${response.status} ${(await response.json()).bytes}`;
+		});
+		window.__record = { ...record, done: true };
+	});
+</script>
+<body></body>

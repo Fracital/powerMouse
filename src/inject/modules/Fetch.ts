@@ -55,6 +55,22 @@ const nativeRequestReferrer = Reflect.getOwnPropertyDescriptor(
 	Request.prototype,
 	'referrer',
 )!.get!;
+/**
+ * Whether `value` is a Request of any realm, as the browser tells: its own
+ * getters check the object's brand, which a Request another window made
+ * (an iframe's, the parent's) passes where `instanceof` sees another realm's
+ * prototype. fetch and Request take such a request as the request it is,
+ * never as the string "[object Request]"
+ */
+function isRequest(value: unknown): value is Request {
+	if (typeof value !== 'object' || value === null) return false;
+	try {
+		Reflect.apply(nativeRequestReferrer, value, []);
+		return true;
+	} catch (error) {
+		return false;
+	}
+}
 
 const nativeHeadersGet = Headers.prototype.get;
 const nativeResponseHeaders = Reflect.getOwnPropertyDescriptor(
@@ -518,7 +534,7 @@ export default class FetchModule extends Module<Client> {
 				// resolved when it was made); anything else is a URL string to
 				// resolve against the page's real URL, which String(Request) is not
 				let input: Request | URL;
-				if (args[0] instanceof target) input = args[0];
+				if (isRequest(args[0])) input = args[0];
 				else {
 					const text = String(args[0]);
 					try {
@@ -604,7 +620,7 @@ export default class FetchModule extends Module<Client> {
 				let init: RequestInit;
 				let url: urlLike;
 
-				let request = args[0] instanceof Request ? args[0] : null;
+				let request = isRequest(args[0]) ? args[0] : null;
 				// fetch(request, init) is a fetch of `new Request(request, init)`:
 				// what the init names replaces the request's (its method, body,
 				// headers, signal), which reading the request alone would drop
@@ -665,16 +681,15 @@ export default class FetchModule extends Module<Client> {
 				if (client.opaqueRequests) add[OPAQUE_HEADER] = '1';
 				// what goes out: the page's headers without the proxy's markers
 				// (the worker trusts those), the proxy's own added
-				init =
-					init instanceof Request
-						? pageRequest(init, add)
-						: {
-								...init,
-								headers: pageHeaderRecord(
-									new Headers(init?.headers ?? undefined),
-									add,
-								),
-							};
+				init = isRequest(init)
+					? pageRequest(init, add)
+					: {
+							...init,
+							headers: pageHeaderRecord(
+								new Headers(init?.headers ?? undefined),
+								add,
+							),
+						};
 				if (signal && aborted !== null) {
 					const id = aborted;
 					if (signal.aborted) client.abortRequest(id);
@@ -776,7 +791,7 @@ export default class FetchModule extends Module<Client> {
 						'fetchLater',
 						global,
 					);
-					const request = args[0] instanceof Request ? args[0] : null;
+					const request = isRequest(args[0]) ? args[0] : null;
 					let url: URL;
 					try {
 						url = request
