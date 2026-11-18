@@ -1,0 +1,11 @@
+<!doctype html>
+<title>script-checkpoint-close</title>
+<!-- a page's close() while its markup is parsed ends nothing (script-checkpoint suite) -->
+<script>
+	document.write('<p id="written">written</p>');
+	document.close();
+</script>
+<p id="after">after the close</p>
+<script>
+	window.__closed = [...document.querySelectorAll('p')].map((p) => p.id);
+</script>

@@ -247,7 +247,10 @@ STomp's hook and what it sees is the page's own URL: a scriptlet that wraps
 The function declares `scriptletGlobals`, as uBlock Origin's scriptlet
 template and Brave do: uBO's `safeSelf()` reads it, and without it the first
 scriptlet of the script threw (the crate orders them by a hash, so a
-different rule was lost on each page).
+different rule was lost on each page). A scriptlet that watches the page's
+nodes (`replace-node-text`, `remove-node-text`) sees each inline script of
+the markup before it runs and as the page wrote it, as it does natively (see
+"YouTube").
 
 **YouTube.** YouTube's ads come in the same JSON as the video: the
 `adPlacements`, `playerAds` and `adSlots` of the page's
@@ -257,9 +260,10 @@ Origin does, with nothing written for YouTube in STomp: `set-constant` on
 `ytInitialPlayerResponse.adPlacements` and its siblings, `json-prune` on
 `JSON.parse`, `json-prune-fetch-response`, `json-prune-xhr-response`,
 `trusted-replace-fetch-response` and `trusted-replace-xhr-response` on the
-player's requests, and cosmetic rules for the feed, companion and masthead
-slots; the network rules block the ad pings (`/pagead/`, `/api/stats/ads`,
-doubleclick) and redirect `ad_status.js` to uBO's stub. `adblock-youtube` checks the same rules on a
+player's requests, `replace-node-text` on an inline script, and cosmetic
+rules for the feed, companion and masthead slots; the network rules block
+the ad pings (`/pagead/`, `/api/stats/ads`, doubleclick) and redirect
+`ad_status.js` to uBO's stub. `adblock-youtube` checks the same rules on a
 fixture of the player JSON's shape against the page loaded natively with
 the engine's scriptlets run at document start.
 

@@ -348,11 +348,25 @@ export default class ReadbackModule extends Module<DocumentClient> {
 					[],
 				) as HTMLScriptElement | null;
 				if (parent && sources.has(parent)) return parent;
+				const found =
+					client.pendingScripts &&
+					(pendingScript(that) ?? pendingScript(parent));
+				if (found) return found;
 				if (client.speculationMarked)
 					return markedRules(that) ?? markedRules(parent);
 			} catch (error) {
 				// not a node
 			}
+		};
+		// a script of the page's markup the parser has not run yet (loadHTML):
+		// it holds the rewrite, and reads back as the page wrote it
+		const pendingScript = (node: unknown): HTMLScriptElement | undefined => {
+			if (!isScriptNode(node)) return;
+			const text = nativeText(node);
+			const written = client.pendingScripts!.get(text);
+			if (written === undefined) return;
+			sources.set(node, { written, rewritten: text });
+			return node;
 		};
 		// speculation rules of the page's markup, which the parser made with
 		// the page's text marked (scriptRoutes.ts markedSpeculationRules)

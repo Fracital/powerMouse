@@ -757,6 +757,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// register again. With three arguments it is window.open, which the
 		// hook below handles.
 		const documentOpen = realm.Document.prototype.open;
+		const stopPieces = (that: unknown) => {
+			if (that !== realm.document || !moduleClient.pieces?.between) return;
+			moduleClient.pieces.stopped = true;
+			moduleClient.pieces = null;
+			moduleClient.pendingScripts = null;
+		};
 		realm.Document.prototype.open = proxyModule.wrapFunction(
 			documentOpen,
 			(target, that, args) => {
@@ -764,6 +770,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				// a fresh parser with an empty input stream: whatever an earlier
 				// write left unfinished went with the old one
 				if (typeof that === 'object' && that !== null) stream?.reset(that);
+				// between two pieces of the page's markup (loadHTML) no script of
+				// the parser runs, so open() aborts the page's parser, as
+				// natively: the rest of the markup is never written
+				stopPieces(that);
 				const result = Reflect.apply(target, that, args);
 				if (that === realm.document) {
 					moduleClient.opened = true;
@@ -772,6 +782,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				return result;
 			},
 		);
+		const openHook = realm.Document.prototype.open;
 
 		realm.open = proxyModule.wrapFunction(realm.open, (target, that, args) => {
 			const name = args[1] === undefined ? '_blank' : String(args[1]);
@@ -937,6 +948,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				if (newline) text += '\n';
 				const document =
 					typeof that === 'object' && that !== null ? that : realm.document;
+				// between two pieces of the page's markup (loadHTML), where the
+				// network's parser has no insertion point (a MutationObserver's
+				// callback before a script), the write opens the document first
+				if (document === realm.document && moduleClient.pieces?.between)
+					Reflect.apply(openHook, document, []);
 				// a write once the document has loaded opens it again (the page
 				// never called open()): known before the markup is rewritten, the
 				// listeners after, once the browser has dropped the window's own
@@ -996,6 +1012,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		realm.Document.prototype.close = proxyModule.wrapFunction(
 			realm.Document.prototype.close,
 			(target, that, args) => {
+				// the page's markup is still being written in pieces (loadHTML):
+				// the network's parser is no script-created parser, so close()
+				// ends nothing
+				if (that === realm.document && moduleClient.pieces) return;
 				const tail = stream?.take(that);
 				if (tail) Reflect.apply(nativeWrite, that, [trustedHTML(tail)]);
 				const result = Reflect.apply(target, that, args);

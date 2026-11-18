@@ -1,0 +1,37 @@
+<!doctype html>
+<title>script-checkpoint</title>
+<script>
+	// a parser fed by the network performs a microtask checkpoint before it
+	// runs each script it inserted: an observer sees the script, as the page
+	// wrote it, and may change it before it runs (script-checkpoint suite)
+	window.__checkpoint = [];
+	const log = (entry) => window.__checkpoint.push(entry);
+	new MutationObserver((records) => {
+		for (const record of records)
+			for (const node of record.addedNodes) {
+				if (node.nodeName !== 'SCRIPT') continue;
+				const text = node.textContent.trim();
+				log(`saw ${text}`);
+				if (text.includes('EDIT_ME')) node.textContent = 'log("edited")';
+			}
+	}).observe(document, { childList: true, subtree: true });
+	Promise.resolve().then(() => log('microtask of the first'));
+</script>
+<script>
+	log('second');
+	Promise.resolve().then(() => log('microtask of the second'));
+</script>
+<script>
+	log('EDIT_ME as written');
+</script>
+<script src="/pages/script-checkpoint.js"></script>
+<script>
+	log('after the external');
+</script>
+<script>
+	log('EDIT_ME after the external');
+</script>
+<p>after the scripts</p>
+<script>
+	log('last');
+</script>

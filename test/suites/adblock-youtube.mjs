@@ -212,6 +212,12 @@ ok(
 	JSON.stringify(on.parsed),
 );
 ok(
+	'on: replace-node-text edits an inline script before it runs, as natively, and the script still runs',
+	JSON.stringify(on.rpnt) === JSON.stringify(blocked.rpnt) &&
+		on.serverContract === true,
+	JSON.stringify([on.rpnt, on.serverContract, on.threw]),
+);
+ok(
 	'on: the companion, feed, masthead, overlay and sticker slots are hidden, nothing else',
 	ADS.every((id) => on.shown?.[id] === false) &&
 		KEPT.every((id) => on.shown?.[id] === true),

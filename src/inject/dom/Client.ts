@@ -378,6 +378,19 @@ export default class DocumentClient extends Client {
 	// native script text setter: the hooked one rewrites what it is given, and
 	// markup the client rewrites itself must not go through it twice
 	private scriptText: (script: HTMLScriptElement, text: string) => void;
+	/**
+	 * @internal the inline scripts of the page's markup, rewritten, to the
+	 * source the page wrote, while the parser has not run them all (loadHTML,
+	 * Readback)
+	 */
+	pendingScripts: Map<string, string> | null = null;
+	/**
+	 * @internal while loadHTML writes the page's markup in pieces: `between`
+	 * in the microtask checkpoint between two, where no script of the parser
+	 * runs (the document's write, open() and close() hooks act as on the
+	 * network's parser there), `stopped` once the page opened the document
+	 */
+	pieces: { between: boolean; stopped: boolean } | null = null;
 	private isConnected: (node: Node) => boolean;
 	private baseURIDescriptor: PropertyDescriptor;
 	private parentDescriptor: PropertyDescriptor;
@@ -394,6 +407,8 @@ export default class DocumentClient extends Client {
 	#parseBase: StompURL | null = null;
 	/** the window's setTimeout, before page code can replace it (loadHTML) */
 	readonly #setTimeout: typeof setTimeout;
+	/** the window's queueMicrotask, before page code can replace it (loadHTML) */
+	readonly #queueMicrotask: typeof queueMicrotask;
 	/** the window's native `origin` getter (Readback hooks the property) */
 	readonly #originGet: (() => string) | undefined;
 	/**
@@ -486,6 +501,7 @@ export default class DocumentClient extends Client {
 			setCacheMarkSource(() => this.cacheMark);
 		}
 		this.#setTimeout = this.global.setTimeout;
+		this.#queueMicrotask = this.global.queueMicrotask;
 		this.write = this.global.document.write;
 		this.open = this.global.document.open;
 		const innerHTMLGet = Reflect.getOwnPropertyDescriptor(
@@ -3273,7 +3289,12 @@ export default class DocumentClient extends Client {
 	 * import map its routed targets): the written page (loadHTML) and
 	 * document.write markup go through here before the browser parses them.
 	 */
-	rewriteInlineScripts(root: ParentNode, parsed = false) {
+	rewriteInlineScripts(
+		root: ParentNode,
+		parsed = false,
+		/** each rewritten classic script's text, to the source the page wrote */
+		sources?: Map<string, string>,
+	) {
 		// The page's markup (`parsed`) reaches the browser through
 		// document.write, and a script that runs inside a write has no URL:
 		// its stack frames and errors read `<anonymous>`, where the network's
@@ -3340,7 +3361,9 @@ export default class DocumentClient extends Client {
 			const named = /^\/\/[#@]\s*sourceURL=/m.test(rewritten)
 				? rewritten
 				: rewritten + sourceURL;
-			write(named.replace(/<\/script/gi, '<\\/script'));
+			const text = named.replace(/<\/script/gi, '<\\/script');
+			write(text);
+			sources?.set(text, source);
 		}
 	}
 	/**
@@ -3773,6 +3796,7 @@ export default class DocumentClient extends Client {
 		// blob: copy) gets its loads as copies, and its own markup is written
 		// as markup the page writes is (WriteStream): a script copied at once,
 		// or it would never run, the rest after the write (writtenLoads)
+		const sources = new Map<string, string>();
 		const uncontrolled =
 			!!this.getModule(DOMAttributesModule)?.uncontrolled?.();
 		const writing = this.writing;
@@ -3789,7 +3813,7 @@ export default class DocumentClient extends Client {
 			// preamble that restores the source the page wrote for
 			// `document.currentScript.textContent`; a module has no currentScript.
 			// Nothing may produce `</script` in the markup.
-			this.rewriteInlineScripts(node, true);
+			this.rewriteInlineScripts(node, true, sources);
 		} finally {
 			this.#parseBase = null;
 			this.writing = writing;
@@ -3810,21 +3834,52 @@ export default class DocumentClient extends Client {
 			// (the shell asked apply() to leave it to us), before the first
 			// script of the page
 			this.runHook('post');
-			this.write.call(this.global.document, trustedHTML(newDocument));
-			{
+			const document = this.global.document;
+			// the markup is written in pieces that end before each `</script`:
+			// a parser fed by the network performs a microtask checkpoint
+			// before it runs a script it inserted (the "text" insertion mode),
+			// so a MutationObserver sees the script, and may change it, before
+			// it runs, and a script's promise reactions run before the next
+			// script. Nothing does between the scripts of one write, so each
+			// piece after the first is written from a microtask queued after
+			// those of the piece before
+			const pieces = newDocument.split(/(?=<\/script)/i);
+			// a script the parser has not run yet reads back as the page wrote
+			// it (Readback), until the page's markup is parsed
+			this.pendingScripts = sources;
+			const state: NonNullable<typeof this.pieces> = {
+				between: false,
+				stopped: false,
+			};
+			this.pieces = state;
+			const next = (index: number) => {
+				if (state.stopped) return;
+				state.between = false;
+				this.write.call(document, trustedHTML(pieces[index]));
+				if (++index < pieces.length) {
+					state.between = true;
+					Reflect.apply(this.#queueMicrotask, this.global, [
+						this.ownCallback(() => next(index)),
+					]);
+					return;
+				}
+				this.pieces = null;
 				// what the write parsed now; what comes after a script it waits
 				// for, once the parser is through (a copy is not made twice):
 				// every load in a document no worker controls, an object's and
 				// an embed's in any (DOMAttributes writtenLoads)
-				const document = this.global.document;
 				this.writtenLoads?.(document);
 				document.addEventListener(
 					'DOMContentLoaded',
-					() => this.writtenLoads?.(document),
+					() => {
+						this.pendingScripts = null;
+						this.writtenLoads?.(document);
+					},
 					{ once: true },
 				);
-			}
-			this.global.document.close();
+				document.close();
+			};
+			next(0);
 		};
 		// The browser runs a timer's callback in the realm that made it, and
 		// document.open() gives the document the URL of that realm's document.
