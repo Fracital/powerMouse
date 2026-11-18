@@ -233,7 +233,8 @@ async function h3Body(body: BodyInit | null): Promise<{
  * does not, so without this a server that needs a length refuses the request
  * (IIS answers 411 Length Required, as every Bing API POST did). A body of
  * unknown length (a page's own ReadableStream) goes out without one, as
- * natively, and a bodyless POST/PUT/PATCH says zero.
+ * natively, and a bodyless POST or PUT says zero, as Chrome's network stack
+ * says it for those two methods only (a bodyless PATCH carries none).
  */
 export function h3RequestHeaders(
 	method: string,
@@ -264,7 +265,7 @@ export function h3RequestHeaders(
 	if (!agent) out.push(['user-agent', navigator.userAgent]);
 	if (!type && contentType) out.push(['content-type', contentType]);
 	const upper = method.toUpperCase();
-	const bodyMethod = upper === 'POST' || upper === 'PUT' || upper === 'PATCH';
+	const bodyMethod = upper === 'POST' || upper === 'PUT';
 	if (!length) {
 		if (h3 instanceof Uint8Array)
 			out.push(['content-length', String(h3.byteLength)]);

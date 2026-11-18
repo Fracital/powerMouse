@@ -110,6 +110,20 @@ ok(
 	clOf(h3RequestHeaders('POST', [], null, null)) === '0',
 	JSON.stringify(h3RequestHeaders('POST', [], null, null)),
 );
+// Chrome's HttpNetworkTransaction says Content-Length: 0 for a bodyless
+// request only when it is a POST or a PUT: a capture of Chrome 157's empty
+// PATCH, DELETE and OPTIONS carries none (request-diff, 2026-11-17).
+ok(
+	'a bodyless PUT over h3 says Content-Length 0, as Chrome does',
+	clOf(h3RequestHeaders('PUT', [], null, null)) === '0',
+	JSON.stringify(h3RequestHeaders('PUT', [], null, null)),
+);
+for (const method of ['PATCH', 'DELETE', 'OPTIONS'])
+	ok(
+		`a bodyless ${method} over h3 carries no Content-Length, as Chrome's`,
+		clOf(h3RequestHeaders(method, [], null, null)) === null,
+		JSON.stringify(h3RequestHeaders(method, [], null, null)),
+	);
 ok(
 	'a GET over h3 carries no Content-Length',
 	clOf(h3RequestHeaders('GET', [], null, null)) === null,
