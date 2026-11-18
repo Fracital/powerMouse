@@ -3,10 +3,12 @@
 Every piece of stomp written in Rust and run as wasm (the JS rewriter, the
 CSS rewriter and markup scanner, the blocker, WebRTC over wisp; docs/rust-plan.md) is a crate under `rust/` and
 is built here, in one pinned container, into a committed artifact under
-`assets/` that `build.js` copies into `dist/`. There is no Rust toolchain on
-CI, on the deploy or on terp, and `dist/` is wiped on every build, so the
+`assets/` that `build.js` copies into `dist/`. Nothing is built from Rust
+on CI, on the deploy or on terp, and `dist/` is wiped on every build, so the
 artifact must be committed: a change to a crate is a change to its artifact
-in the same commit.
+in the same commit. CI runs one crate's tests, the WebRTC stack's
+(`cargo test -p rtc`, its `rust` job), in the image `pins.env` pins, as
+`test.sh -p rtc` runs them here.
 
 ```sh
 deploy/rust/build.sh <crate> <name>    # e.g. build.sh rwjs rewriter

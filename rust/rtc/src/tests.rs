@@ -483,7 +483,11 @@ fn audio_both_ways() {
 	assert_eq!(a.frames[3].level, media::ABSENT);
 
 	// a lost packet holds nothing back: the next comes at once, marked as
-	// following a loss, and the lost one coming late is not handed on
+	// following a loss; the lost one coming late is handed on too (NetEq
+	// plays a packet that swapped places on the way, and the host puts it
+	// back in its place); one that comes twice is not (str0m drops a
+	// sequence number it has had: the host's own drop of a packet no newer
+	// than what it decoded is for one that comes after its time)
 	let before = b.frames.len();
 	let packet = |n: u8| [0xfc, 0x33, n];
 	a.write(0, 111, 0, media::ABSENT, media::ABSENT, 960 * 25, "", &packet(0));
@@ -494,14 +498,20 @@ fn audio_both_ways() {
 	assert!(started.elapsed() < Duration::from_millis(500), "held back {:?}", started.elapsed());
 	assert_eq!(b.frames[before].data, packet(1));
 	assert!(b.frames[before].flags & media::FLAG_CONTIGUOUS == 0);
-	for datagram in lost {
-		b.receive(&datagram);
+	for datagram in &lost {
+		b.receive(datagram);
+	}
+	pump(&mut a, &mut b, "the late packet", |_, b| b.frames.len() > before + 1);
+	assert_eq!(b.frames[before + 1].data, packet(0));
+	assert_eq!(b.frames[before + 1].time, b.frames[before].time - 960);
+	for datagram in &lost {
+		b.receive(datagram);
 	}
 	a.write(0, 111, 0, media::ABSENT, media::ABSENT, 960 * 27, "", &packet(2));
-	pump(&mut a, &mut b, "the packet after that", |_, b| b.frames.len() > before + 1);
-	assert_eq!(b.frames.len(), before + 2, "the late packet was handed on");
-	assert_eq!(b.frames[before + 1].data, packet(2));
-	assert!(b.frames[before + 1].flags & media::FLAG_CONTIGUOUS != 0);
+	pump(&mut a, &mut b, "the packet after that", |_, b| b.frames.len() > before + 2);
+	assert_eq!(b.frames.len(), before + 3, "the late packet was handed on twice");
+	assert_eq!(b.frames[before + 2].data, packet(2));
+	assert_eq!(b.frames[before + 2].time, b.frames[before].time + 960);
 
 	// redundant audio is the peer's to read too
 	a.control(&[("op", "red"), ("index", "0"), ("on", "1")]);

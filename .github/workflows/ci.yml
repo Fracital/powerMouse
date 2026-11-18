@@ -103,6 +103,50 @@ jobs:
         if: steps.head.outputs.superseded != 'true'
         run: node test/corpus/check.mjs --minify test/corpus/sample
 
+  # The WebRTC stack's own tests (rust/rtc: str0m as patched, two peers
+  # over a fake network), which the wasm build does not run: cargo test in
+  # the Rust image deploy/rust/pins.env pins by digest, with the patched
+  # crates made as deploy/rust/patches.sh makes them. About 3 minutes from
+  # cold (image, crates, debug build, the tests themselves 27 s), beside
+  # the browser suites.
+  rust:
+    name: rust tests (rtc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Still master's head?
+        id: head
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          head=$(gh api "repos/$REPO/commits/master" --jq .sha 2>/dev/null) || head=$GITHUB_SHA
+          if [[ $head != "$GITHUB_SHA" ]]; then
+            echo "::notice::superseded by $head, skipped"
+            echo superseded=true >>"$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.head.outputs.superseded != 'true'
+        with:
+          persist-credentials: false
+
+      # (the checkout is read-only in the container: the crates are patched
+      # and built in a copy of it)
+      - name: cargo test -p rtc
+        if: steps.head.outputs.superseded != 'true'
+        run: |
+          source deploy/rust/pins.env
+          docker run --rm -v "$PWD:/src:ro" "$RUST_IMAGE" bash -c '
+            set -euo pipefail
+            mkdir -p /work
+            cp -r /src/rust /work/rust
+            rm -rf /work/rust/target /work/rust/patched
+            bash /src/deploy/rust/patches.sh
+            cd /work/rust
+            cargo test --locked -p rtc'
+
   # test262 natively and rewritten (test/test262/run.mjs), gated by
   # test/test262/known.txt, which names the test262 commit it was recorded
   # at: that commit is the one fetched (test/ and harness/ only, cached by
