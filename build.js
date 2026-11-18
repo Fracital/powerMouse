@@ -519,6 +519,7 @@ const DEFERRED_FILES = new Set(
 		'src/inject/dom/lazyFonts.ts',
 		'src/inject/dom/instructions.ts',
 		'src/inject/dom/markupMembers.ts',
+		'src/inject/dom/measuredMemory.ts',
 		'src/inject/dom/openerFacts.ts',
 		'src/inject/dom/pictureWindows.ts',
 		'src/inject/dom/modules/Fingerprint.ts',
