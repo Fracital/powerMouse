@@ -29,14 +29,3 @@
   window instead, a link and `open()` a host tab). A link and
   `window.open(url, name)` aimed by name at a popup the tab opened navigate
   that popup, where they went to the host as a new tab, with no referrer.
-
-### Known limitations
-
-- A document whose bundle has not run yet answers its own URL getters
-  (`document.URL` and its kin) with the proxy's route.
-- A POST form aimed by name at a sibling frame opens a new window, as
-  before: the copy of it the frame would submit is disconnected before it
-  submits.
-- A user's click on a link, or submission of a GET form, aimed by name at
-  a sibling frame sends no Sec-Fetch-User: the navigation is made by
-  script.

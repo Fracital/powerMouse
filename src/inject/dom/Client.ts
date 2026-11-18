@@ -2881,6 +2881,14 @@ export default class DocumentClient extends Client {
 	 * it is asked
 	 */
 	tabPopups?: WeakRef<typeof globalThis>[];
+	/**
+	 * @internal set by the History module: another document's link or form
+	 * (`source`, null when that document is of another origin) navigates
+	 * this window to `url` from its realm (navigateOther), by the user's
+	 * click or submission when `user`: this window's navigate event for it
+	 * shows them, as natively, where it would show a navigation of its own
+	 */
+	navigatedBy?: (url: string, user: boolean, source: Element | null) => void;
 	/** the frame element of this document named `name` (`target`, window.open), if any */
 	frameNamed(name: string): Element | null {
 		if (!name || name.startsWith('_')) return null;

@@ -6177,6 +6177,7 @@ export function registerRewrites(
 						policies.texts,
 						facts,
 						syncBlocked,
+						true,
 					);
 					return encoding === 'utf-8' ? shell : encodeShell(shell, encoding);
 				}

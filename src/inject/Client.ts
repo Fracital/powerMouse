@@ -58,6 +58,7 @@ import { fragmentOf } from '../urlShape';
 import { BUILD } from '../version';
 import { LINK_SEGMENT } from '../visited';
 import { forbidCodecModule } from '../wasm/codec';
+import type { OtherCause } from './dom/navigateOther';
 import Module from './Module';
 import { LazyMap } from './ownCollections';
 import { coreModuleAt, rewriteCounts, rewriterLibraryAt } from './rewriter';
@@ -307,23 +308,26 @@ export default class Client {
 		container?: unknown,
 	) => unknown;
 	/**
-	 * @internal set by the Context module: this document navigates another
-	 * proxied window `target` to `value` (its location set, or `member`
-	 * called), as Chrome would let it or refuse it, from that window's realm
-	 * with this document as the navigation's initiator. False when `target`
-	 * is no window of the proxied world (the caller does what it did)
-	 */
-	/**
 	 * @internal set by the Context module: whether `target` is a window of
 	 * this real origin that runs nothing of ours yet (its document has
 	 * committed and its shell's bundle has not run, or nothing injected its
 	 * about:blank), and is not this document's
 	 */
 	unclaimedWindow?: (target: unknown) => boolean;
+	/**
+	 * @internal set by the Context module: this document navigates another
+	 * proxied window `target` to `value` (its location set, or `member`
+	 * called), as Chrome would let it or refuse it, from that window's realm
+	 * with this document as the navigation's initiator. False when `target`
+	 * is no window of the proxied world (the caller does what it did).
+	 * `cause`: the page's link or form that started it (OtherCause), a
+	 * form's submitted by that window in place of the location's
+	 */
 	navigateWindow?: (
 		target: unknown,
 		value: unknown,
 		member: 'href' | 'assign' | 'replace',
+		cause?: OtherCause,
 	) => boolean;
 	/**
 	 * @internal set by the WebRTC library once this document makes encoded

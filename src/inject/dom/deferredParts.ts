@@ -132,6 +132,7 @@ import { seenImages } from './seenImages';
 import {
 	acceptAcross,
 	ancestorAcross,
+	formSubmission,
 	locationAcross,
 	navigateAcross,
 	submitAimed,
@@ -255,6 +256,7 @@ export const parts = {
 	ancestorAcross,
 	locationAcross,
 	submitAimed,
+	formSubmission,
 	judgeAcross,
 	receiveAcross,
 	onOwnSlot,

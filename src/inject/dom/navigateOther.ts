@@ -38,6 +38,35 @@ export interface OtherNavigation {
 	voucher: () => DocumentClient | null;
 }
 
+/**
+ * A form's submission another window makes as this document's navigation
+ * of it (the Sandbox module's, for a form aimed by name at a frame the
+ * browser would not navigate for this one): the copy of the form, its entry
+ * list built in the page's call, that `window` submits from its document
+ * once it is written in. `owner`, the window's client, routes the copy's
+ * `action` by its hooks; with none (a frame on its initial about:blank
+ * that nothing injected) `action` is routed already.
+ */
+export type OtherSubmission = (
+	window: Context,
+	owner: DocumentClient | null,
+	action: string,
+) => void;
+
+/**
+ * What started a navigation of another window, where the page's link or
+ * form did (the Sandbox module's): what that window's navigate event reads
+ * of it (History navigatedBy), and a form's submission.
+ */
+export interface OtherCause {
+	/** the form's: the window submits it in place of its Location's */
+	submission?: OtherSubmission;
+	/** the link, or the form's submitter or the form */
+	source: Element;
+	/** whether the user's click or submission started it (a trusted event) */
+	user: boolean;
+}
+
 /** how long a navigation of another window waits for the worker to hear of its initiator */
 const INITIATOR_WAIT_MS = 1000;
 
@@ -267,17 +296,23 @@ function refuse(
  * a moment later (natively it starts in the call, cancelling one under
  * way, and commits later), but for a window on its initial about:blank
  * whose client is of this document's realm, which starts in the call and
- * needs no announcement.
+ * needs no announcement. `cause`: a link or a form of this document's
+ * started it, which the window's navigate event shows as natively (its
+ * sourceElement and userInitiated); a form's submission the window
+ * submits in place of its Location's (a POST keeps its method and body,
+ * and this document is its initiator all the same).
  */
 export function navigateOther(
 	nav: OtherNavigation,
 	target: Context,
 	value: urlLike,
 	member: 'href' | 'assign' | 'replace',
+	cause: OtherCause | null = null,
 	/** (once it has waited for the target's document: afterShell) */
 	waited = false,
 ) {
 	const client = nav.client;
+	const submission = cause?.submission;
 	const destination = client.encodingParse(
 		String(value),
 		client.baseURL.toString(),
@@ -287,8 +322,10 @@ export function navigateOther(
 		// the site pool: an ancestor of another slot, out of reach: refused
 		// here as Chrome refuses it, else asked to navigate itself to an
 		// http(s) URL (siteAcross.ts)
+		// (a form's is never one: the Context module hands over no window
+		// of another slot for it)
 		const across =
-			client.sites && foreignWindow(target)
+			!submission && client.sites && foreignWindow(target)
 				? deferred('ancestorAcross')(client, target)
 				: null;
 		const reason = across && refusal(nav, target, destination, across);
@@ -317,7 +354,7 @@ export function navigateOther(
 		if (waits) {
 			afterShell(client, target, () => {
 				try {
-					navigateOther(nav, target, value, member, true);
+					navigateOther(nav, target, value, member, cause, true);
 				} catch (error) {
 					// refused, or the window went away
 				}
@@ -329,28 +366,54 @@ export function navigateOther(
 		// this document navigate it
 		if (!client.mayNavigate(target))
 			throw client.navigationRefused(member, member !== 'href', destination);
-		target.location.replace(
-			routeHTML(
-				new StompURL(destination, client.url),
-				client.url,
-				client.config,
-				false,
-				false,
-			),
+		const routed = routeHTML(
+			new StompURL(destination, client.url),
+			client.url,
+			client.config,
+			false,
+			false,
 		);
+		if (submission) submission(target, null, routed);
+		else target.location.replace(routed);
 		return;
 	}
 	const reason = refusal(nav, target, destination);
 	if (reason !== null) throw refuse(nav, target, reason, member, destination);
 	const replace = member === 'replace';
 	// (made once the target's document is written in: started while it is
-	// still the shell, the navigation is aborted when it is, as above)
+	// still the shell, the navigation is aborted when it is, as above; a
+	// form's copy is taken out of the document with it)
 	const go = (late = waited) => {
 		try {
 			if (!late && unwritten(client, target))
 				return afterShell(client, target, () => go(true));
 		} catch (error) {
 			// the window went away, or is of another real origin now
+		}
+		const owner = nav.clientOf(target) ?? targetClient;
+		// (the element only when its document is of the window's origin:
+		// natively the event shows no other origin's)
+		if (cause)
+			try {
+				owner.navigatedBy?.(
+					destination.href,
+					cause.user,
+					!client.sandboxedOpaque &&
+						!owner.sandboxedOpaque &&
+						client.url.url.origin === owner.url.url.origin
+						? cause.source
+						: null,
+				);
+			} catch (error) {
+				// no URL to compare
+			}
+		if (submission) {
+			try {
+				submission(target, owner, destination.href);
+			} catch (error) {
+				// the window went away
+			}
+			return;
 		}
 		try {
 			const standIn = (target.location as Record<string, any>)[
@@ -364,9 +427,7 @@ export function navigateOther(
 			// (the window's client now: the target's document may have been
 			// replaced since the call)
 			if (typeof method === 'function')
-				(nav.clientOf(target) ?? targetClient).callIn(method, standIn, [
-					destination.href,
-				]);
+				owner.callIn(method, standIn, [destination.href]);
 		} catch (error) {
 			// the window went away
 		}
@@ -375,8 +436,9 @@ export function navigateOther(
 	// a navigation to a fragment of the target's document is synchronous
 	// and sends no request, as natively (a navigation the page makes
 	// after it, or a javascript: URL's document, sees the fragment)
-	// (a URL that ends in `#` has an empty one)
-	if (destination.href.includes('#')) {
+	// (a URL that ends in `#` has an empty one; a POST form's submission
+	// always loads its action)
+	if (!submission && destination.href.includes('#')) {
 		try {
 			const at = new URL(targetClient.location.toString());
 			at.hash = '';

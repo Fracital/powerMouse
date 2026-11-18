@@ -1,0 +1,20 @@
+<!doctype html>
+<title>sibling click</title>
+<body>
+	<script>
+		// A click in a frame that sends its sibling on (nested-frames suite):
+		// sibling-click-frame.html, by `c`, and the sibling
+		// sibling-click-target.html, named `click-target`, which reports its
+		// navigate event (an /echo-post beacon of shape `navigate`, keyed by
+		// `k`)
+		const query = new URLSearchParams(location.search);
+		const frame = document.createElement('iframe');
+		frame.src = `sibling-click-frame.html?${query}`;
+		frame.style.cssText = 'width:320px;height:240px';
+		document.body.append(frame);
+		const target = document.createElement('iframe');
+		target.name = 'click-target';
+		target.src = `sibling-click-target.html?${new URLSearchParams({ k: query.get('k') })}`;
+		document.body.append(target);
+	</script>
+</body>

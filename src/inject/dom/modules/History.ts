@@ -4,7 +4,7 @@ import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
-import { LazyWeakMap } from '../../ownCollections';
+import { LazyWeakMap, OwnWeakMap } from '../../ownCollections';
 import DocumentClient from '../Client';
 import { destinationURL } from '../freshContext';
 import { Pool } from '../pool';
@@ -37,6 +37,9 @@ const elided = (value: string) =>
 	value.length <= 1024
 		? value
 		: `${value.slice(0, 511)}...${value.slice(-510)}`;
+
+/** how long a navigation another document told of (navigatedBy) waits for its navigate event */
+const TOLD_MS = 2000;
 
 /**
  * The page sees a history that is its own, as a top-level page would:
@@ -497,9 +500,75 @@ export default class HistoryModule extends Module<DocumentClient> {
 					Reflect.apply(destinationOf, event, []),
 					[],
 				) as string;
+			// A navigation another document's link or form makes of this
+			// window from its realm (DocumentClient navigatedBy): its navigate
+			// event shows that element and whether the user's click or
+			// submission started it, where it would show none and false (the
+			// window navigating itself by script) or a form's copy in this
+			// document. Told just before the navigation starts, and taken by
+			// the event that goes to its URL (a form's fires a task later)
+			let told: {
+				url: string;
+				at: number;
+				cause: { user: boolean; source: Element | null };
+			} | null = null;
+			const causes = new OwnWeakMap<
+				object,
+				{ user: boolean; source: Element | null }
+			>();
+			moduleClient.navigatedBy = (url, user, source) => {
+				told = {
+					url: url.split('#')[0],
+					at: Date.now(),
+					cause: { user, source },
+				};
+			};
+			for (const [name, read] of [
+				['userInitiated', (cause) => cause.user],
+				['sourceElement', (cause) => cause.source],
+			] as const satisfies readonly [
+				string,
+				(cause: { user: boolean; source: Element | null }) => unknown,
+			][]) {
+				const descriptor = Reflect.getOwnPropertyDescriptor(eventProto, name);
+				if (!descriptor?.get) continue;
+				Reflect.defineProperty(eventProto, name, {
+					...descriptor,
+					get: proxyModule.wrapFunction(
+						descriptor.get,
+						(target, that, args) => {
+							const cause = causes.get(that as object);
+							return cause ? read(cause) : Reflect.apply(target, that, args);
+						},
+					),
+				});
+			}
 			Reflect.apply(nativeEventTarget.addEventListener, navigation, [
 				'navigate',
 				(event: Event) => {
+					const pending = told;
+					if (pending)
+						try {
+							if (Date.now() - pending.at > TOLD_MS) told = null;
+							else {
+								const raw = String(
+									Reflect.apply(
+										destinationHref,
+										Reflect.apply(destinationOf, event, []),
+										[],
+									),
+								);
+								if (
+									(unrouteURL(moduleClient, raw) ?? raw).split('#')[0] ===
+									pending.url
+								) {
+									causes.set(event, pending.cause);
+									told = null;
+								}
+							}
+						} catch (error) {
+							// no destination to compare
+						}
 					try {
 						const to = Reflect.apply(destinationOf, event, []);
 						if (!Reflect.apply(destinationSame, to, [])) {

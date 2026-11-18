@@ -6,13 +6,15 @@
 		// just committed (nested-frames suite), by `c`: `sibling`, a frame of
 		// this page sends this page's fresh frame on as its src commits
 		// (`sibling-src` by a write of the frame element's src,
-		// `sibling-link`, `sibling-form` and `sibling-open` by a link, a
-		// form and an open() aiming at the frame's name);
+		// `sibling-link`, `sibling-form`, `sibling-post` and `sibling-open`
+		// by a link, a GET and a POST form and an open() aiming at the
+		// frame's name);
 		// `popup`, it sends on a popup this page opened without a URL and then
 		// sent to a document (finding it by its name) as that document commits
 		// (`popup-document` by its document's location, `popup-assign` by a
 		// write of its location, `popup-read` once it has told what the
-		// popup's location reads, `popup-link`, `popup-form`, `popup-post`
+		// popup's location reads, `popup-doc` once it has told what its
+		// document reads, `popup-link`, `popup-form`, `popup-post`
 		// and `popup-open` by a link, a GET and a POST form and an open()
 		// aiming at its name); `loaded`, this page sends on a frame whose
 		// first document had loaded as the src it was given next commits. The

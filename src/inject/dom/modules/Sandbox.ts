@@ -8,6 +8,7 @@ import { OwnWeakMap } from '../../ownCollections';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { deferred } from '../deferred';
 import type { DeferredParts } from '../deferredParts';
+import type { OtherSubmission } from '../navigateOther';
 import { Pool } from '../pool';
 import { siteWindows } from '../siteWindows';
 
@@ -386,7 +387,14 @@ export default class SandboxModule extends Module<DocumentClient> {
 					if (!named) return;
 					const destination = resolve(link.getAttribute('href'));
 					if (!['http:', 'https:'].includes(destination.protocol)) return;
-					if (client.navigateWindow?.(named, destination.href, 'href'))
+					// (its navigate event shows the link, and the user's click
+					// as the user's)
+					if (
+						client.navigateWindow?.(named, destination.href, 'href', {
+							source: link,
+							user: event.isTrusted,
+						})
+					)
 						event.preventDefault();
 					return;
 				}
@@ -451,6 +459,8 @@ export default class SandboxModule extends Module<DocumentClient> {
 		const submitAimed = (
 			form: HTMLFormElement,
 			submitter: HTMLElement | null,
+			/** the user's own submission (onSubmit) */
+			user = false,
 		): boolean => {
 			if (client.sandboxFlags !== null) return false;
 			const keyword =
@@ -464,10 +474,12 @@ export default class SandboxModule extends Module<DocumentClient> {
 					? null
 					: siteWindows().targetAcross(client, keyword);
 			// a window by that name the browser would not navigate for this
-			// frame (DocumentClient namedWindow): a GET is this document's
-			// navigation of it. Any other is the browser's, as before (a
-			// sibling frame's copy of the form, as for the proxied parent,
-			// is disconnected before it submits: measured)
+			// frame (DocumentClient namedWindow): the submission is this
+			// document's navigation of it, a GET by its URL, a POST by a copy
+			// of the form the window submits (Context navigateWindow, which
+			// waits for the window's document to be written in: a copy
+			// submitted in its shell was taken out of the document, and its
+			// navigation aborted, by the document.open() that writes it)
 			const named = aimed || across ? null : client.namedWindow?.(keyword);
 			if (!aimed && !across && !named) return false;
 			const method = (
@@ -491,14 +503,8 @@ export default class SandboxModule extends Module<DocumentClient> {
 					.some(({ policy }) => policy.disposition === 'enforce')
 			)
 				return false;
-			// (a named window's javascript: action or non-GET form: the
-			// browser's, as before)
-			if (
-				named &&
-				(destination.protocol === 'javascript:' ||
-					!(method === '' || method === 'get'))
-			)
-				return false;
+			// (a named window's javascript: action: the browser's, as before)
+			if (named && destination.protocol === 'javascript:') return false;
 			if (destination.protocol === 'javascript:') {
 				if (aimed)
 					aimed.client.callIn(nativeAssign, aimed.window.location, [
@@ -513,6 +519,27 @@ export default class SandboxModule extends Module<DocumentClient> {
 				return true;
 			}
 			if (!['http:', 'https:'].includes(destination.protocol)) return false;
+			// (what the window's navigate event shows of it: the submitter,
+			// else the form)
+			const source = submitter ?? form;
+			if (named && method === 'post') {
+				let submission: OtherSubmission;
+				try {
+					submission = deferred('formSubmission')(
+						client,
+						form,
+						submitter,
+						nativeSubmit,
+					);
+				} catch (error) {
+					return true;
+				}
+				return !!client.navigateWindow?.(named, destination.href, 'href', {
+					submission,
+					source,
+					user,
+				});
+			}
 			if (named) {
 				// (the entry list the browser builds, as the URL's query)
 				let query: URLSearchParams;
@@ -524,7 +551,10 @@ export default class SandboxModule extends Module<DocumentClient> {
 					return false;
 				}
 				destination.search = query.toString();
-				return !!client.navigateWindow?.(named, destination.href, 'href');
+				return !!client.navigateWindow?.(named, destination.href, 'href', {
+					source,
+					user,
+				});
 			}
 			if (!aimed && !across) return false;
 			// the copy of the form that window submits, or the ask of a window
@@ -558,11 +588,48 @@ export default class SandboxModule extends Module<DocumentClient> {
 				assign: nativeAssign,
 				submit: nativeSubmit,
 			});
+		// Whether a submit event is of the user's own submission (natively
+		// its navigation's userInitiated): the browser fires a trusted one
+		// for requestSubmit() and for a script's click() of a submit button
+		// too, whose navigations are not the user's. A click is kept from
+		// its capture until a microtask after it: one a script dispatched
+		// (click()) is still kept when the button submits, synchronously,
+		// and the user's is not (the browser runs microtasks after each of
+		// its listeners)
+		let requesting = false;
+		let clicking: Event | null = null;
+		const nativeQueueMicrotask = global.queueMicrotask;
+		const onClickCapture = (event: Event) => {
+			clicking = event;
+			Reflect.apply(nativeQueueMicrotask, global, [
+				() => {
+					if (clicking === event) clicking = null;
+				},
+			]);
+		};
+		const nativeRequestSubmit = global.HTMLFormElement.prototype.requestSubmit;
+		if (nativeRequestSubmit)
+			global.HTMLFormElement.prototype.requestSubmit = proxyModule.wrapFunction(
+				nativeRequestSubmit,
+				(target, that, args) => {
+					const was = requesting;
+					requesting = true;
+					try {
+						return Reflect.apply(target, that, args);
+					} finally {
+						requesting = was;
+					}
+				},
+			);
 		const onSubmit = (event: SubmitEvent) => {
 			if (event.defaultPrevented) return;
 			const form = event.target;
 			if (!(form instanceof global.HTMLFormElement)) return;
-			if (submitAimed(form, event.submitter)) event.preventDefault();
+			const user =
+				event.isTrusted &&
+				!requesting &&
+				!(clicking !== null && !(clicking as Event).isTrusted);
+			if (submitAimed(form, event.submitter, user)) event.preventDefault();
 		};
 		// submit() fires no event
 		global.HTMLFormElement.prototype.submit = proxyModule.wrapFunction(
@@ -579,6 +646,7 @@ export default class SandboxModule extends Module<DocumentClient> {
 			},
 		);
 		const install = () => {
+			global.addEventListener('click', onClickCapture, true);
 			global.addEventListener('click', onClick);
 			global.addEventListener('submit', onSubmit);
 		};

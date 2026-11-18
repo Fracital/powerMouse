@@ -1,3 +1,5 @@
+// (first: see ./closeGap.ts)
+import './closeGap';
 import { ownDocumentBundle } from '../../routeURL';
 import createDOMClient from './document';
 

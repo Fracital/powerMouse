@@ -318,7 +318,13 @@ Filled in commit by commit; see the CHANGELOG for each.
   frame had activation and is of the target document's site (measured:
   Chrome sends none for a click in a frame of another site). The same goes
   for a same-origin frame's navigation of its top, whose Referer was the
-  top's own URL. Left: Chrome consumes the frame's activation when a frame
+  top's own URL, and for a link or a form a frame aims by name at a sibling
+  frame (the host frames the proxied top sandboxed, so the browser
+  navigates no sibling for a frame): a POST form is a copy of it the
+  sibling submits once its document is written in, with the entry list
+  the frame built, and the sibling's navigate event shows the link or the
+  submitter as its `sourceElement` and a user's click as `userInitiated`
+  (Sandbox, History `navigatedBy`). Left: Chrome consumes the frame's activation when a frame
   of the top's site navigates the top, and when
   `allow-top-navigation-by-user-activation` lets it, which the inject
   cannot do (`navigator.userActivation.isActive` reads true after); a frame

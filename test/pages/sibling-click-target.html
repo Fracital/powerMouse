@@ -1,0 +1,24 @@
+<!doctype html>
+<title>sibling click target</title>
+<body>
+	<script>
+		// the frame sibling-click.html's other frame sends on: what its
+		// navigate event shows, as an /echo-post beacon of shape `navigate`
+		const k = new URLSearchParams(location.search).get('k');
+		navigation.addEventListener('navigate', (event) => {
+			const source = event.sourceElement;
+			navigator.sendBeacon(
+				`/echo-post?k=${encodeURIComponent(k)}&shape=navigate`,
+				JSON.stringify({
+					type: event.navigationType,
+					user: event.userInitiated,
+					formData: !!event.formData,
+					source: source ? source.localName : null,
+					// (the element is of the frame that clicked, not this document)
+					own: source ? source.ownerDocument === document : null,
+					canIntercept: event.canIntercept,
+				}),
+			);
+		});
+	</script>
+</body>

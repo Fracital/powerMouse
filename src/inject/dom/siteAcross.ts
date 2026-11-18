@@ -9,6 +9,7 @@
 import { INITIATOR_ROUTE } from '../../transport/messages';
 import type DocumentClient from './Client';
 import type { AcrossInitiator, AcrossNavigation } from './Client';
+import type { OtherSubmission } from './navigateOther';
 import { siteWindows } from './siteWindows';
 
 /** how long a navigation across slots waits for a worker to answer of its initiator, each way */
@@ -50,6 +51,51 @@ function copyOf(
 	return copy;
 }
 
+/** the attributes and the entry list of `form`'s submission by `submitter`, as the browser builds them in the call */
+function formParts(
+	client: DocumentClient,
+	form: HTMLFormElement,
+	submitter: HTMLElement | null,
+) {
+	const attributes: [string, string][] = [];
+	for (const [name, override] of FORM_OVERRIDES) {
+		const value =
+			(override && submitter?.getAttribute(override)) ??
+			form.getAttribute(name);
+		if (value !== null && value !== undefined) attributes.push([name, value]);
+	}
+	const entries = [
+		...new client.global.FormData(form, submitter ?? undefined),
+	] as [string, string | File][];
+	return { attributes, entries };
+}
+
+/**
+ * `form`'s submission by `submitter` as another window makes it
+ * (OtherSubmission): the copy of the form, with the entry list built now,
+ * that the window submits from its document when it is called. `submit`:
+ * HTMLFormElement's own submit.
+ */
+export function formSubmission(
+	client: DocumentClient,
+	form: HTMLFormElement,
+	submitter: HTMLElement | null,
+	submit: () => void,
+): OtherSubmission {
+	const { attributes, entries } = formParts(client, form, submitter);
+	return (window, owner, action) => {
+		const document = window.document;
+		const copy = copyOf(document, client.global, attributes, action, entries);
+		document.documentElement.append(copy);
+		try {
+			if (owner) owner.callIn(submit, copy, []);
+			else Reflect.apply(submit, copy, []);
+		} finally {
+			copy.remove();
+		}
+	};
+}
+
 /**
  * A form's submission to `destination`, an http(s) URL, aimed at the
  * proxied parent or top (the Sandbox module's submitAimed, which judged it):
@@ -66,39 +112,22 @@ export function submitAimed(
 	across: typeof globalThis | null,
 	submit: () => void,
 ) {
-	const attributes: [string, string][] = [];
-	for (const [name, override] of FORM_OVERRIDES) {
-		const value =
-			(override && submitter?.getAttribute(override)) ??
-			form.getAttribute(name);
-		if (value !== null && value !== undefined) attributes.push([name, value]);
-	}
-	const entries = [
-		...new client.global.FormData(form, submitter ?? undefined),
-	] as [string, string | File][];
-	if (!aimed) {
-		navigateAcross(client, across!, {
-			kind: 'form',
-			action: destination.href,
-			attributes,
-			entries,
-		});
+	if (aimed) {
+		formSubmission(
+			client,
+			form,
+			submitter,
+			submit,
+		)(aimed.window, aimed.client, destination.href);
 		return;
 	}
-	const document = aimed.window.document;
-	const copy = copyOf(
-		document,
-		client.global,
+	const { attributes, entries } = formParts(client, form, submitter);
+	navigateAcross(client, across!, {
+		kind: 'form',
+		action: destination.href,
 		attributes,
-		destination.href,
 		entries,
-	);
-	document.documentElement.append(copy);
-	try {
-		aimed.client.callIn(submit, copy, []);
-	} finally {
-		copy.remove();
-	}
+	});
 }
 
 /**

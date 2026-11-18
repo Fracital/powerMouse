@@ -22,7 +22,7 @@ import DocumentClient, {
 } from '../Client';
 import { deferred } from '../deferred';
 import { frameDestination, frameOfHeld, heldBefore } from '../freshContext';
-import type { OtherNavigation } from '../navigateOther';
+import type { OtherCause, OtherNavigation } from '../navigateOther';
 import { foreignWindow, nativeOrigin, siteWindows } from '../siteWindows';
 
 function removeBlob(protocol: string): string {
@@ -658,8 +658,9 @@ export default class ContextModule extends Module<DocumentClient> {
 		target: Context,
 		value: urlLike,
 		member: 'href' | 'assign' | 'replace',
+		cause: OtherCause | null = null,
 	) {
-		deferred('navigateOther')(this.#navigation, target, value, member);
+		deferred('navigateOther')(this.#navigation, target, value, member, cause);
 	}
 	/** what the navigation part reads of this module */
 	#navigation: OtherNavigation = {
@@ -1310,7 +1311,7 @@ export default class ContextModule extends Module<DocumentClient> {
 				return false;
 			}
 		};
-		moduleClient.navigateWindow = (target, value, member) => {
+		moduleClient.navigateWindow = (target, value, member, cause) => {
 			if (
 				!isWindow(moduleClient, target) ||
 				(!this.#clientOf(target) && !moduleClient.unclaimedWindow!(target))
@@ -1318,7 +1319,7 @@ export default class ContextModule extends Module<DocumentClient> {
 				return false;
 			const url = String(value);
 			if (failsToParse(moduleClient, url)) return false;
-			this.#navigateOther(target, url, member);
+			this.#navigateOther(target, url, member, cause);
 			return true;
 		};
 

@@ -1,0 +1,58 @@
+<!doctype html>
+<title>sibling click frame</title>
+<body style="margin: 0">
+	<a
+		id="link"
+		target="click-target"
+		style="display: block; width: 300px; height: 100px"
+		>link</a
+	>
+	<form id="form" target="click-target">
+		<input name="x" value="y" />
+		<button id="submit" style="width: 300px; height: 60px">submit</button>
+	</form>
+	<script>
+		// a frame of sibling-click.html: the suite clicks #link or #submit,
+		// and by `c` that sends the frame named click-target to echo-headers:
+		// `link`, the link; `post` and `get`, the form by its button;
+		// `request`, the form's requestSubmit() from the click;
+		// `link-script` and `submit-script`, a script's click() of a link or
+		// the button from the click; `open`, window.open() from the click
+		const query = new URLSearchParams(location.search);
+		const c = query.get('c');
+		const k = query.get('k');
+		const link = document.getElementById('link');
+		const form = document.getElementById('form');
+		link.href = `/echo-headers?k=${k}&html`;
+		form.method = c === 'get' ? 'get' : 'post';
+		form.action = c === 'get' ? '/echo-headers' : `/echo-headers?k=${k}&html`;
+		if (c === 'get')
+			for (const [name, value] of [
+				['k', k],
+				['html', ''],
+			]) {
+				const input = document.createElement('input');
+				input.type = 'hidden';
+				input.name = name;
+				input.value = value;
+				form.append(input);
+			}
+		const instead = (then) =>
+			link.addEventListener('click', (event) => {
+				event.preventDefault();
+				then();
+			});
+		if (c === 'request') instead(() => form.requestSubmit());
+		else if (c === 'submit-script')
+			instead(() => document.getElementById('submit').click());
+		else if (c === 'link-script')
+			instead(() => {
+				const other = document.createElement('a');
+				other.href = link.href;
+				other.target = 'click-target';
+				document.body.append(other);
+				other.click();
+			});
+		else if (c === 'open') instead(() => open(link.href, 'click-target'));
+	</script>
+</body>

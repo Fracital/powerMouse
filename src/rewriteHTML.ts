@@ -3,6 +3,7 @@ import type { AdblockPage } from './blocker/types';
 import type GenericCodec from './Codecs';
 import { Config } from './config';
 import type { PolicyText, ScriptFacts } from './csp';
+import { gapView } from './gapView';
 import { helperNames } from './helperNames';
 import { CACHE_MARK_SHAPE, realmCacheMark } from './memoryMark';
 import type { Prewritten } from './prewrite';
@@ -359,6 +360,8 @@ export function modifyHTML(
 	facts?: ScriptFacts,
 	/** its real permissions policy blocks a synchronous XHR (src/server/clientHints.ts syncXHRBlocked) */
 	syncXHRBlocked?: boolean,
+	/** the service worker serves the document: its shell answers for it in the gap (src/gapView.ts) */
+	served = false,
 ): string {
 	const { head, tail } = shell(
 		script,
@@ -378,6 +381,7 @@ export function modifyHTML(
 		policies,
 		facts,
 		syncXHRBlocked,
+		served,
 	);
 	return head + tail(prewritten);
 }
@@ -429,6 +433,7 @@ export function modifyHTMLStreamed(
 		policies,
 		facts,
 		syncXHRBlocked,
+		true,
 	);
 }
 
@@ -452,6 +457,7 @@ function shell(
 	policies?: PolicyText[],
 	facts?: ScriptFacts,
 	syncXHRBlocked?: boolean,
+	served = false,
 ): { head: string; tail: (prewritten?: Prewritten | null) => string } {
 	// if(fragment) return '<script>document.currentScript.replaceWith(globalstomp.cloneIntoNewNode())
 	// a shell the page realm builds is of a document that inherits the
@@ -542,8 +548,14 @@ ${blocked}
 		? `<script${attribute}>globalThis[${markupKey}] = ${markup()};</script>`
 		: '';
 	const library = top ? libraryScripts(url, config, attribute, loading) : '';
+	// what another document reads of this one until its bundle runs: first,
+	// as the parser may wait on the library's script (its file only assigns
+	// functions, read once the bundle runs)
+	const gap = served
+		? `<script${attribute}>${gapView(url.url, referrer && 'referrer' in referrer ? referrer.referrer : '')}</script>`
+		: '';
 	return {
-		head: `<!DOCTYPE HTML><html><head><meta charset="utf-8" /></head><body>${baseScript}${library}<script${loading} src="${injectDocumentJS(url, config)}"></script>${kept}`,
+		head: `<!DOCTYPE HTML><html><head><meta charset="utf-8" /></head><body>${gap}${baseScript}${library}<script${loading} src="${injectDocumentJS(url, config)}"></script>${kept}`,
 		tail: (prewritten) =>
 			`<script${attribute}>${inject(prewritten)}</script></body></html>`,
 	};

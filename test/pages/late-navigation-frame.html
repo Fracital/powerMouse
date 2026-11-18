@@ -7,8 +7,9 @@
 		// window's next document has committed, by `how`: a replace() of the
 		// window's location (the default), of its document's (`document`), a
 		// write of the window's location (`assign`), a replace() once what
-		// the window's location reads is told (`read`), a write of its frame
-		// element's src (`src`), or a link (`link`), a form (`form`, a POST
+		// the window's location reads is told (`read`) or what its document
+		// reads once it has a body (`doc`), a write of its frame element's
+		// src (`src`), or a link (`link`), a form (`form`, a POST
 		// one `post`) or an open() (`open`) of this document aiming at the
 		// window by its `name`
 		window.watch = (target, dest, how, name) => {
@@ -23,9 +24,32 @@
 				} catch (error) {
 					// between documents
 				}
-				if (!now || now === first || (settled && now.readyState !== 'complete'))
+				if (
+					!now ||
+					now === first ||
+					(settled && now.readyState !== 'complete') ||
+					(how === 'doc' && !now.body)
+				)
 					setTimeout(poll, 0);
-				else if (how === 'read') {
+				else if (how === 'doc') {
+					// what the window's document reads as its markup comes in (its
+					// bundle may not have run yet), as a beacon of shape `read`
+					const read = {};
+					for (const key of [
+						'URL',
+						'documentURI',
+						'baseURI',
+						'referrer',
+						'domain',
+					])
+						read[key] = now[key];
+					const k = new URL(dest).searchParams.get('k');
+					navigator.sendBeacon(
+						`/echo-post?k=${encodeURIComponent(k)}&shape=read`,
+						JSON.stringify(read),
+					);
+					target.location.replace(dest);
+				} else if (how === 'read') {
 					// what the window's location reads as its document commits,
 					// as a beacon of shape `read`, then the navigation
 					const read = {};
@@ -43,8 +67,7 @@
 						read[key] = target.location[key];
 					read.string = String(target.location);
 					read.ancestors = [...target.location.ancestorOrigins];
-					// (not the document's own URL: until its bundle runs, its
-					// getters are the browser's, which read the route)
+					// (the document's own URL: `doc`)
 					const k = new URL(dest).searchParams.get('k');
 					navigator.sendBeacon(
 						`/echo-post?k=${encodeURIComponent(k)}&shape=read`,
