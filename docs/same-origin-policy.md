@@ -953,7 +953,11 @@ Filled in commit by commit; see the CHANGELOG for each.
   activation an input event elsewhere gave: one a document starts with
   keeps the browser's decision (its popup blocker cannot be asked without
   an activation, and with the blocker off, as Playwright runs Chrome,
-  every popup opens natively). Left: a consumed
+  every popup opens natively). A tab the host opens for a popup
+  (`onOpen`) is opened as the blocker would open the popup: only with the
+  document's own transient activation, and one for each, the activation
+  then consumed for the tab's documents until the next input event
+  (`mayOpenPopup`, popup-activation). Left: a consumed
   activation given back through the proxy within five seconds of one of
   the document's own; an evaluation's activation (no input event) is the
   browser's; the autoplay attribute, a file input's `click()`,

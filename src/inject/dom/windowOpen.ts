@@ -10,6 +10,7 @@
 // only).
 import { routeHTML } from '../../rewriteHTML';
 import StompURL from '../../StompURL';
+import { mayOpenPopup, popupOpened } from './activation';
 import type DocumentClient from './Client';
 import { deferred } from './deferred';
 import { frameWindow } from './freshContext';
@@ -117,6 +118,7 @@ export function windowOpen(
 			(client.allows('allow-popups') &&
 				client.allows('allow-popups-to-escape-sandbox'));
 		if (
+			client.config.openTab &&
 			routable &&
 			escapes &&
 			!['_self', '_top', '_parent', '_unfencedtop'].includes(
@@ -125,10 +127,16 @@ export function windowOpen(
 			// a frame of this page by that name: the browser navigates it,
 			// and a popup the tab opened (DocumentClient namedWindow)
 			!client.hasFrameNamed(name) &&
-			!client.namedWindow?.(name, true) &&
-			client.openInHost(destination!.toString())
-		)
-			return null;
+			!client.namedWindow?.(name, true)
+		) {
+			// Chrome's popup blocker: none without a transient activation,
+			// one for each (../activation.ts)
+			if (!mayOpenPopup(client)) return null;
+			if (client.openInHost(destination!.toString())) {
+				popupOpened(client);
+				return null;
+			}
+		}
 
 		if (routable)
 			args[0] =

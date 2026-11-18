@@ -432,6 +432,12 @@ export default class DocumentClient extends Client {
 	 * that the browser gave it only through the proxy (./activation.ts)
 	 */
 	activation: ActivationNote | null = null;
+	/**
+	 * @internal when a tab the host opened for a document of this tab last
+	 * consumed its activation (the proxied top's client keeps it,
+	 * ./activation.ts mayOpenPopup)
+	 */
+	popupConsumed?: number;
 	/** @internal ./activation.ts markActivation, of this document's realm */
 	markActivation: typeof markActivation | null = null;
 	/** @internal the Permissions module's gate hooks: `done` lists the navigator members a page was handed */

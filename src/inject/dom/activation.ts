@@ -106,10 +106,63 @@ export function activationState(client: DocumentClient): number {
 		const now = Date.now();
 		if (active && now - note.foreign < LIFESPAN && now - note.own >= LIFESPAN)
 			active = false;
+		if (active && popupConsumed(client, note, now)) active = false;
 		if (sticky && note.foreignSticky && !note.ownSticky) sticky = false;
 		sticky ||= active;
 	}
 	return browser | (active ? 1 : 0) | (sticky ? 2 : 0);
+}
+
+/** the client that keeps what consumed `client`'s tab's activation: its proxied top's, else its own */
+function tabClient(client: DocumentClient): DocumentClient {
+	try {
+		const top = (client.proxiedTop as Record<string, any>)[client.names.client];
+		if (top && top.global === client.proxiedTop) return top as DocumentClient;
+	} catch (error) {
+		// the proxied top went away
+	}
+	return client;
+}
+
+/**
+ * Whether `client`'s document may have a popup the browser does not open
+ * itself (a tab the host opens for it), as Chrome's popup blocker decides:
+ * only with a transient activation, and one popup for each (opening one
+ * consumes it, in every document of the tab; measured in Chrome 157: a
+ * second window.open() in the same click answers null, and so does one
+ * after a target=_blank link's click). The host's tab leaves the browser's
+ * activation as it was, so the consumption is kept here, by the tab's
+ * proxied top: an activation an input event gave is consumed until the
+ * next input event. One automation gives with no input event is told from
+ * the next by nothing, and is not consumed.
+ */
+export function mayOpenPopup(client: DocumentClient): boolean {
+	return (activationState(client) & 1) !== 0;
+}
+
+/**
+ * Whether a tab the host opened consumed the activation an input event
+ * gave `client`'s document (mayOpenPopup)
+ */
+function popupConsumed(
+	client: DocumentClient,
+	note: ActivationNote,
+	now: number,
+): boolean {
+	const input = Math.max(note.own, note.input);
+	if (now - input >= LIFESPAN) return false;
+	return (tabClient(client).popupConsumed ?? -Infinity) >= input;
+}
+
+/**
+ * A tab the host opened for `client`'s document consumed the tab's
+ * activation (mayOpenPopup): from then on the document answers as without
+ * one (navigator.userActivation.isActive false, as natively), its gated
+ * calls hooked as for an activation it got through the proxy
+ */
+export function popupOpened(client: DocumentClient) {
+	tabClient(client).popupConsumed = Date.now();
+	if (client.activation) hookGates(client, client.activation);
 }
 
 /**
@@ -158,6 +211,11 @@ export function markActivation(
 	if (!start) note.foreign = at;
 	if (input) note.input = at;
 	if (!note.ownSticky) note.foreignSticky = true;
+	hookGates(client, note);
+}
+
+/** the gated calls' hooks in `client`'s realm, made once */
+function hookGates(client: DocumentClient, note: ActivationNote) {
 	if (note.hooked) return;
 	note.hooked = true;
 	// the hooks' rules are a deferred statement (./activationPart.ts), the
