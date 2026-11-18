@@ -455,5 +455,16 @@ export default class WebRTCModule extends Module<DocumentClient> {
 		page.RTCDataChannel = standIns.RTCDataChannel;
 		page.RTCDataChannelEvent = standIns.RTCDataChannelEvent;
 		page.RTCStatsReport = standIns.RTCStatsReport;
+		// the browser's, made by the library: a port of its own goes to the
+		// transform's worker, for the frames of the sender or receiver the
+		// page gives it to (rtcStack.ts)
+		const NativeScriptTransform = global.RTCRtpScriptTransform;
+		if (typeof NativeScriptTransform === 'function')
+			page.RTCRtpScriptTransform = proxyModule.wrapFunction(
+				NativeScriptTransform,
+				(target, that, args, newTarget) =>
+					install().RTCRtpScriptTransform(target, args, newTarget),
+				true,
+			);
 	}
 }

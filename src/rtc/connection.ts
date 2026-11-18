@@ -22,10 +22,12 @@ import type {
 	Negotiated,
 	Request,
 	StatsReply,
+	TransformFrame,
 	WorkerEvent,
 	WorkerMessage,
 } from './protocol';
 import {
+	ABSENT,
 	decodeChannelData,
 	decodeMediaData,
 	decodeText,
@@ -34,6 +36,7 @@ import {
 	encodeDatagram,
 	encodeFrame,
 	encodeText,
+	FLAG_KEYFRAME,
 	IN_CHANNEL_SEND,
 	IN_CONTROL,
 	IN_DATAGRAM,
@@ -285,6 +288,14 @@ interface MediaState {
 	ridsDeclined: Set<string>;
 	sender: AudioSender | VideoSender | null;
 	receiver: AudioReceiver | VideoReceiver | null;
+	/** the page's encoded transforms (RTCRtpScriptTransform): the ports to their workers */
+	sendTransform: MessagePort | null;
+	receiveTransform: MessagePort | null;
+	/** the section's streams as its transforms' frames name them, and when they were asked */
+	ssrcs: { tx?: number; rx?: number; at: number } | null;
+	/** the received frames' sequence numbers, and the sent video frames' ids */
+	sequence: number;
+	frameId: number;
 }
 
 const sends = (direction: Direction) =>
@@ -656,7 +667,15 @@ export class Connection {
 				);
 			} else if (tag === OUT_MEDIA_DATA) {
 				const frame = decodeMediaData(payload);
-				this.#medias.get(frame.media)?.receiver?.frame(frame);
+				const state = this.#medias.get(frame.media);
+				const port = state?.receiveTransform;
+				if (state && port) {
+					// (the payload is a view of the record)
+					frame.payload = frame.payload.slice();
+					queueMicrotask(() =>
+						this.#transform(state, 'receive', port, frame, 0),
+					);
+				} else state?.receiver?.frame(frame);
 			} else if (tag === OUT_RESULT && wantResult) result = decodeText(payload);
 		}
 		// what a section negotiated is asked of the stack once its records
@@ -704,6 +723,11 @@ export class Connection {
 			ridsDeclined: new Set(),
 			sender: null,
 			receiver: null,
+			sendTransform: null,
+			receiveTransform: null,
+			ssrcs: null,
+			sequence: crypto.getRandomValues(new Uint16Array(1))[0],
+			frameId: 0,
 		};
 		if (kind === 'audio') {
 			state.sender = new AudioSender(index, this.#writeFrame);
@@ -729,12 +753,140 @@ export class Connection {
 		this.#control({ op: 'keyframe', index: state.index, rid: '', kind: 'pli' });
 	}
 
-	/** an encoded frame for the stack to packetize and send */
+	/** an encoded frame for the stack to packetize and send, through the page's transform if it has one */
 	#writeFrame = (frame: Frame, age: number) => {
+		if (this.#closed) return;
+		const state = this.#medias.get(frame.media);
+		const port = state?.sendTransform;
+		if (state && port)
+			queueMicrotask(() => this.#transform(state, 'send', port, frame, age));
+		else this.#packetize(frame, age);
+	};
+	#packetize(frame: Frame, age: number) {
 		if (this.#closed) return;
 		this.#stack.input(this.#id, IN_MEDIA_WRITE, encodeFrame(frame, age));
 		this.#drain();
-	};
+	}
+
+	// --- encoded transforms ---
+
+	/**
+	 * The stream ids a section's frames carry: asked of the stack outside
+	 * its records (a control call among them would take a result another
+	 * waits for), and again at most twice a second while one is unknown
+	 */
+	#ssrcsOf(state: MediaState): { tx?: number; rx?: number } {
+		const known = state.ssrcs;
+		const now = performance.now();
+		if (
+			known &&
+			((known.tx !== undefined && known.rx !== undefined) ||
+				now - known.at < 500)
+		)
+			return known;
+		const reports = this.#control({ op: 'rtcp', index: state.index });
+		const id = (key: string) =>
+			reports.error || !reports[key] ? undefined : Number(reports[key]);
+		state.ssrcs = { tx: id('tx'), rx: id('rx'), at: now };
+		return state.ssrcs;
+	}
+
+	/**
+	 * A frame to the page's transform: what getMetadata() reads of it in
+	 * the transform's worker, in Chrome's order (Chrome 157), and what it
+	 * is to the stack again when it comes back
+	 */
+	#transform(
+		state: MediaState,
+		side: 'send' | 'receive',
+		port: MessagePort,
+		frame: Frame & { codec?: string },
+		age: number,
+	) {
+		if (
+			this.#closed ||
+			port !== (side === 'send' ? state.sendTransform : state.receiveTransform)
+		)
+			return;
+		const ids = this.#ssrcsOf(state);
+		const ssrc = side === 'send' ? ids.tx : ids.rx;
+		const now = performance.timeOrigin + performance.now();
+		const meta: Record<string, unknown> = {};
+		const audio = state.kind === 'audio';
+		if (audio && side === 'send') meta.captureTime = now - age;
+		meta.contributingSources = [];
+		meta.mimeType =
+			this.#codecOf(state.kind, frame.pt)?.mimeType ??
+			`${state.kind}/${frame.codec ?? ''}`;
+		meta.payloadType = frame.pt;
+		if (side === 'receive') meta.receiveTime = now;
+		meta.rtpTimestamp = Number(frame.time & 0xffffffffn);
+		if (ssrc !== undefined) meta.synchronizationSource = ssrc;
+		const key = (frame.flags & FLAG_KEYFRAME) !== 0;
+		if (audio) {
+			if (frame.level !== ABSENT) meta.audioLevel = 10 ** (-frame.level / 20);
+			if (side === 'receive')
+				meta.sequenceNumber = state.sequence = (state.sequence + 1) & 0xffff;
+		} else {
+			if (side === 'send') {
+				const id = ++state.frameId;
+				meta.dependencies = key ? [] : [id - 1];
+				meta.frameId = id;
+			}
+			meta.height = 0;
+			meta.spatialIndex = 0;
+			meta.temporalIndex = 0;
+			meta.width = 0;
+		}
+		const data = frame.payload.slice().buffer;
+		// the frame as it was, but its bytes
+		const rest: Partial<Frame> = { ...frame };
+		delete rest.payload;
+		const message: TransformFrame = {
+			kind: state.kind,
+			data,
+			meta,
+			back: { frame: rest, age, at: performance.now() },
+		};
+		if (!audio) message.type = key ? 'key' : 'delta';
+		port.postMessage(message, [data]);
+	}
+
+	/** a frame back from the page's transform: sent, or decoded */
+	#transformed(
+		state: MediaState,
+		side: 'send' | 'receive',
+		port: MessagePort,
+		message: TransformFrame,
+	) {
+		if (
+			this.#closed ||
+			port !== (side === 'send' ? state.sendTransform : state.receiveTransform)
+		)
+			return;
+		const back = message?.back as
+			{ frame: Omit<Frame, 'payload'>; age: number; at: number } | undefined;
+		if (!back?.frame || !(message.data instanceof ArrayBuffer)) return;
+		const frame = { ...back.frame, payload: new Uint8Array(message.data) };
+		if (side === 'send')
+			this.#packetize(frame, back.age + performance.now() - back.at);
+		else state.receiver?.frame(frame as Frame & { codec: string });
+	}
+
+	/** the page gave a sender or a receiver of the section a transform, or took it away */
+	#setTransform(
+		state: MediaState,
+		side: 'send' | 'receive',
+		port: MessagePort | null,
+	) {
+		const old = side === 'send' ? state.sendTransform : state.receiveTransform;
+		old?.close();
+		if (side === 'send') state.sendTransform = port;
+		else state.receiveTransform = port;
+		if (!port) return;
+		port.onmessage = (event) =>
+			this.#transformed(state, side, port, event.data as TransformFrame);
+	}
 
 	/** what a section negotiated, as the stack has it now: its direction, and the payload to send */
 	#negotiated(index: number) {
@@ -744,6 +896,7 @@ export class Connection {
 		// a section no description has settled yet
 		if (result.error) return;
 		state.direction = (result.dir as Direction) ?? null;
+		state.ssrcs = null;
 		const payloads = parsePayloads(result.codecs ?? '');
 		// the stack keeps its own parameters for a payload; what the peer
 		// asked for (stereo, a bitrate, silence left out) is in its
@@ -989,6 +1142,8 @@ export class Connection {
 		state.stopped = true;
 		state.sender?.close();
 		state.receiver?.close();
+		this.#setTransform(state, 'send', null);
+		this.#setTransform(state, 'receive', null);
 	}
 
 	/**
@@ -2299,6 +2454,16 @@ export class Connection {
 					reply(null);
 					break;
 				}
+				case 'transform': {
+					const state = this.#handles.get(request.handle);
+					if (!state) {
+						request.port?.close();
+						throw 'no such media section';
+					}
+					this.#setTransform(state, request.side, request.port);
+					reply(null);
+					break;
+				}
 				case 'dtmf': {
 					const state = this.#handles.get(request.handle);
 					if (!state) throw 'no such media section';
@@ -2444,6 +2609,8 @@ export class Connection {
 		for (const state of this.#medias.values()) {
 			state.sender?.close();
 			state.receiver?.close();
+			this.#setTransform(state, 'send', null);
+			this.#setTransform(state, 'receive', null);
 		}
 		this.#control({ op: 'close' });
 		setTimeout(() => this.#end(), CLOSE_LINGER_MS);

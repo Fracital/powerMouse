@@ -92,6 +92,12 @@ export interface RtcContext {
 export interface Installed {
 	RTCPeerConnection: Function;
 	RTCDataChannelEvent: Function;
+	/** a page's `new RTCRtpScriptTransform(...)`, by the browser's constructor */
+	RTCRtpScriptTransform: (
+		target: Function,
+		args: unknown[],
+		newTarget: Function,
+	) => object;
 }
 
 /** the library's text, evaluated: one per bundle */

@@ -356,7 +356,7 @@ native prototypes, as the Location stand-in's does).
 | `RTCDTMFSender`                                              | `insertDTMF`, `toneBuffer`, `canInsertDTMF`, `tonechange`: RFC 4733 telephone-event packets as Chrome's sender writes them (section 16)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | events                                                       | `RTCPeerConnectionIceEvent`, `RTCPeerConnectionIceErrorEvent`, `RTCTrackEvent`, `RTCDataChannelEvent`, `RTCDTMFToneChangeEvent`, `RTCErrorEvent` with `RTCError` (`errorDetail`, `sdpLineNumber`, `sctpCauseCode`, `receivedAlert`, `sentAlert`, `httpRequestStatusCode`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `getStats`                                                   | an `RTCStatsReport` (a real `Map` subclass with the native prototype shape) of Chrome's report types with Chrome's fields and ids: `peer-connection`, `transport`, `candidate-pair`, `local-candidate`, `remote-candidate`, `certificate`, `codec`, `inbound-rtp`, `outbound-rtp`, `remote-inbound-rtp`, `remote-outbound-rtp`, `media-source`, `media-playout`, `data-channel`; the numbers from str0m's `PeerStats`, `MediaIngressStats` and `MediaEgressStats` and the worker's encoder and decoder counters. Candidate addresses in the report are the edge's or empty, as in 5.1                                                                                                                                                                                                                                                     |
-| out of scope, left as the browser leaves them in a worker    | `RTCRtpScriptTransform` and encoded insertable streams (the frames are in the worker already; a page's transform runs there in a later phase), `RTCIceTransport.getStats`, `RTCIdentityAssertion`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| out of scope, left as the browser leaves them in a worker    | encoded insertable streams (`createEncodedStreams`; `RTCRtpScriptTransform` is carried, section 16), `RTCIceTransport.getStats`, `RTCIdentityAssertion`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 Errors and their texts are copied from Chrome 152 and 156 as the suite
 records them, the way `src/inject/errorMessages.ts` and the
@@ -1525,7 +1525,7 @@ the speech after them is marked; the speech encoder is neither fed nor reset
 in between (G.722's state carries across the silence). White noise above
 about -65 dBFS is speech to the detector, below -70 it is comfort noise.
 With Opus Chrome never sends comfort noise (`usedtx` leaves the silence
-out instead). Measured on 152 and 156 with a werift peer logging every
+out instead, but for a 1 byte packet at times: see Encoded transforms). Measured on 152 and 156 with a werift peer logging every
 packet, from tones, silences and noises a page wrote sample for sample at
 the codec's rate (every speech packet byte for byte what its samples
 encode to).
@@ -1803,3 +1803,73 @@ Chrome offers it in a `recvonly` section; and a section an answer rejects
 lists the preferred payloads in its `m=` line only, as Chrome's
 `createAnswer()` writes it (its `localDescription` names them in
 `a=rtpmap` lines as well).
+
+### Encoded transforms
+
+A page that encrypts its call end to end does it in an encoded transform:
+`sender.transform = new RTCRtpScriptTransform(worker, options)` and the
+same on each receiver, then, in that worker, an `rtctransform` event
+whose `transformer` has the frames on a `readable` and takes them back on
+a `writable`. Discord's voice does this for every call (DAVE: its check is
+`"transform" in RTCRtpSender.prototype`, and a client without transforms
+refuses calls). The stand-ins took `transform` and did nothing with it,
+so through the proxy the page's sound went out as its encoder made it and
+what came in was decoded as it came: in a Discord call the far ends drop
+every frame of the page (it is not encrypted), and the page decodes their
+encrypted frames as Opus, which is noise ("calls sound completely
+unintelligible, but rtc does connect").
+
+The transform is now carried. The inject's `RTCRtpScriptTransform` is
+the browser's constructor, called with a port of the inject's among the
+options (`TRANSFORM_KEY`, protocol.ts), so the browser still fires its
+own `rtctransform` event in the page's worker. Given to a stand-in's
+sender or receiver (rtcStack.ts `setTransform`: Chrome's TypeError for
+another object, its InvalidStateError for a transform used before), the
+port goes to the rtc worker, which sends each encoded frame of that
+section through it (connection.ts `#transform`) and packetizes or decodes
+what comes back (`#transformed`): a frame the page's transform drops is
+not sent, or not heard. In the page's worker the worker inject
+(src/inject/worker/modules/EncodedTransform.ts) answers the
+transformer's `options` (the page's own), `readable` and `writable`, and
+makes each frame an object on the browser's `RTCEncodedAudioFrame` or
+`RTCEncodedVideoFrame` prototype, whose `data`, `timestamp`, `type`,
+`getMetadata()` and `toString()` read as Chrome's (Chrome 157's keys in
+its order: `captureTime` of a sent sound, `receiveTime` and
+`sequenceNumber` of a received one, the section's stream id as
+`synchronizationSource`, the wire's payload type and `mimeType`,
+`audioLevel` from the frame's level).
+
+Measured with webrtc-audio (two browsers playing the same file on their
+fake microphones, the far end Chrome's own stack, both ends scrambling
+every frame in a transform's worker and dropping a frame without their
+mark, as DAVE does, with Discord's Opus parameters), Chrome 157:
+natively the sound both ways is as without the transform (segmental SNR
+10.5 dB sent, 11.4 dB received, nothing missing). Through the proxy
+before: the page's transforms were given no frame, the far end dropped
+all 611 frames of the page and heard nothing, and what the page received
+was noise (segmental SNR at the measure's floor of -10 dB, spectral
+distance 28 dB against natively 2, 6.2 s of the 8.5 s compared missing).
+After, in the same-origin and isolated modes: segmental SNR 11.1 and
+11.4 dB sent, 11.5 and 11.6 dB received, spectral distance 2 dB, nothing
+missing, the page's transforms given every frame with the stream ids the
+far end's transform sees, and the far end dropping none.
+
+With Discord's `usedtx=1` one difference is left: where the sound goes
+silent Chrome's encoder still sends a 1 byte Opus packet now and then
+(its transform is handed the silence as empty frames), and the worker's
+WebCodecs encoder sends nothing. The far end's jitter buffer then counts
+the silence as concealed (about 55,000 samples, over a second of a 14 s
+call, natively none) and adjusts its delay more often; the speech is as
+clear as natively.
+
+Limits: `createEncodedStreams()` (the older encoded insertable streams)
+still fails with NotSupportedError; a frame is the browser's class but
+not the browser's object, so `new RTCEncodedAudioFrame(frame)` and
+posting a frame to another context fail; `sendKeyFrameRequest()` is the
+browser's (an unattached transformer's refusal); a video frame's
+metadata says width and height 0 and numbers sent frames itself (each
+depends on the one before, a keyframe on none); a received sound's
+`sequenceNumber` counts its frames from a random start rather than
+reading the packet's; and a receiver's transform is given every frame
+from the first, where Chrome gives none to one set as late as the track
+event.

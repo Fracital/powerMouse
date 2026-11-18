@@ -1,6 +1,7 @@
 import { createClientFactory } from '../Client';
 import baseModules from '../modules';
 import WorkerClient from './Client';
+import EncodedTransformModule from './modules/EncodedTransform';
 import ImportScriptsModule from './modules/ImportScripts';
 import WorkerLocationModule from './modules/Location';
 import WorkerPermissionsModule from './modules/Permissions';
@@ -13,6 +14,7 @@ const createWorkerClient = createClientFactory(WorkerClient, (client) => {
 	client.addModule(WorkerLocationModule);
 	client.addModule(XMLHttpRequestModule);
 	client.addModule(WorkerPermissionsModule);
+	client.addModule(EncodedTransformModule);
 	// does nothing until the `sw:` route's preamble calls it
 	client.addModule(ServiceWorkerGlobalModule);
 });

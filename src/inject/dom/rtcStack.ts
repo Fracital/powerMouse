@@ -17,7 +17,7 @@ import type {
 	WorkerEvent,
 	WorkerMessage,
 } from '../../rtc/protocol';
-import { isReply } from '../../rtc/protocol';
+import { isReply, TRANSFORM_KEY } from '../../rtc/protocol';
 import {
 	candidateLine,
 	channelChecked,
@@ -33,6 +33,7 @@ import {
 	type Description as Parsed,
 } from '../rtcValidation';
 import type { RtcContext } from './rtcLazy';
+import { isArray } from './rtcStackGlobals';
 
 /*
  * WebRTC over wisp (docs/webrtc-over-wisp.md). The browser's own
@@ -96,6 +97,10 @@ interface Shared {
 	tracks: WeakMap<object, { id?: string; label: string; muted: boolean }>;
 	/** the id of a stream a peer named */
 	streams: WeakMap<object, string>;
+	/** an RTCRtpScriptTransform the page made: the port to its worker, until a sender or receiver takes it */
+	transformPorts: WeakMap<object, MessagePort>;
+	/** the transforms a sender or a receiver has had: none is given to another */
+	transformsUsed: WeakSet<object>;
 }
 // an about:blank child (a frame, a popup) runs its creator's bundle: its
 // worker when the child has no controller
@@ -234,6 +239,8 @@ export default class WebRTCStack {
 		shared.dtmf ??= new WeakMap();
 		shared.tracks ??= new WeakMap();
 		shared.streams ??= new WeakMap();
+		shared.transformPorts ??= new WeakMap();
+		shared.transformsUsed ??= new WeakSet();
 
 		// --- the document's worker, started on the first connection ---
 
@@ -949,6 +956,9 @@ export default class WebRTCStack {
 			events: boolean;
 			/** the sender's RTCDTMFSender, once it is read */
 			dtmf: object | null;
+			/** the sender's and the receiver's encoded transforms */
+			sendTransform: object | null;
+			receiveTransform: object | null;
 			/** its track's media-source number in the stats (SA<n>), 0 for none */
 			source: number;
 		}
@@ -1099,7 +1109,67 @@ export default class WebRTCStack {
 					.catch(() => {});
 			}
 		}
+		/**
+		 * A sender's or a receiver's `transform` set: an RTCRtpScriptTransform
+		 * (or null), as the browser takes one (Chrome 157: another object is
+		 * a TypeError, one a sender or receiver had is an InvalidStateError).
+		 * Its port goes to the worker, which sends each frame through the
+		 * transform's worker (src/rtc/connection.ts).
+		 */
+		const NativeScriptTransform = live.RTCRtpScriptTransform as
+			Function | undefined;
+		const setTransform = (
+			slot: MediaSlot,
+			side: 'send' | 'receive',
+			value: unknown,
+		) => {
+			const on = side === 'send' ? 'RTCRtpSender' : 'RTCRtpReceiver';
+			const key = side === 'send' ? 'sendTransform' : 'receiveTransform';
+			const transform = value ?? null;
+			if (transform === slot[key]) return;
+			if (
+				transform !== null &&
+				!shared.transformPorts.has(transform as object) &&
+				!(
+					NativeScriptTransform &&
+					typeof transform === 'object' &&
+					Reflect.getPrototypeOf(transform) === NativeScriptTransform.prototype
+				)
+			)
+				throw new RealmTypeError(
+					`Failed to set the 'transform' property on '${on}': Failed to convert value to 'RTCRtpScriptTransform'.`,
+				);
+			if (transform !== null) {
+				if (shared.transformsUsed.has(transform as object))
+					throw domException(
+						`Failed to set the 'transform' property on '${on}': Transform cannot be reused`,
+						'InvalidStateError',
+					);
+				shared.transformsUsed.add(transform as object);
+			}
+			slot[key] = transform as object | null;
+			const port =
+				transform === null
+					? null
+					: (shared.transformPorts.get(transform as object) ?? null);
+			if (port) shared.transformPorts.delete(transform as object);
+			// a transform made where the inject took no port carries nothing
+			if (transform !== null && !port) return;
+			slot.pc
+				.call(
+					{ op: 'transform', handle: slot.handle, side, port },
+					port ? [port] : [],
+				)
+				.catch(() => {});
+		};
+
 		class SenderMembers {
+			get transform() {
+				return slotOf(this).sendTransform;
+			}
+			set transform(value: unknown) {
+				setTransform(slotOf(this), 'send', value);
+			}
 			get track() {
 				return slotOf(this).track;
 			}
@@ -1272,6 +1342,12 @@ export default class WebRTCStack {
 			}
 		}
 		class ReceiverMembers {
+			get transform() {
+				return slotOf(this).receiveTransform;
+			}
+			set transform(value: unknown) {
+				setTransform(slotOf(this), 'receive', value);
+			}
 			get track() {
 				return slotOf(this).remote;
 			}
@@ -1867,6 +1943,8 @@ export default class WebRTCStack {
 				jitter: null,
 				events: false,
 				dtmf: null,
+				sendTransform: null,
+				receiveTransform: null,
 				source: track ? ++sourceSerial : 0,
 			};
 			mediaSlots.set(slot.transceiver, slot);
@@ -4327,9 +4405,50 @@ export default class WebRTCStack {
 			MockStatsReport,
 		])
 			ours.add(made);
+		/**
+		 * `new RTCRtpScriptTransform(worker, options, transfer)`: the
+		 * browser's, whose worker gets its rtctransform event, with a port
+		 * of ours among the options for the worker's inject to find
+		 * (src/inject/worker/modules/EncodedTransform.ts), which carries the
+		 * frames of the sender or receiver it is given to. A transfer list
+		 * that is not an array goes to the browser as it is, for its error.
+		 */
+		const RTCRtpScriptTransform = (
+			target: Function,
+			args: unknown[],
+			newTarget: Function,
+		): object => {
+			const transfer = args[2];
+			if (transfer !== undefined && !isArray(transfer))
+				return Reflect.construct(target, args, newTarget) as object;
+			const [kept, handed] = privateChannel();
+			const list: unknown[] = [];
+			if (transfer)
+				for (let i = 0; i < (transfer as unknown[]).length; i++)
+					list[list.length] = (transfer as unknown[])[i];
+			list[list.length] = handed;
+			const options = objectCreate(null) as Record<string, unknown>;
+			options[TRANSFORM_KEY] = handed;
+			options.options = args[1];
+			let made: object;
+			try {
+				made = Reflect.construct(
+					target,
+					[args[0], options, list],
+					newTarget,
+				) as object;
+			} catch (error) {
+				closePort(kept);
+				throw error;
+			}
+			shared.transformPorts.set(made, kept);
+			return made;
+		};
+
 		return {
 			RTCPeerConnection: MockPeerConnection as unknown as Function,
 			RTCDataChannelEvent: MockDataChannelEvent as unknown as Function,
+			RTCRtpScriptTransform,
 		};
 	}
 }

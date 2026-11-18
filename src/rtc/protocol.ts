@@ -10,6 +10,30 @@ import type { PlayedStats, SourceStats } from './level';
 import type { RtpCount, TransportReport } from './stats';
 import type { EncodingLimits, VideoReceiverStats } from './video';
 
+/**
+ * The key of an RTCRtpScriptTransform's options the inject adds, under
+ * which the transform's worker finds the port its frames come on (the
+ * page's own options are under `options`): read and removed by the
+ * worker's inject (src/inject/worker/modules/EncodedTransform.ts), never
+ * seen by the page
+ */
+export const TRANSFORM_KEY = '$stomp$transform';
+
+/**
+ * An encoded frame on its way through a page's transform: to the
+ * transform's worker and back, which may change `data` (or drop it)
+ */
+export interface TransformFrame {
+	kind: 'audio' | 'video';
+	data: ArrayBuffer;
+	/** getMetadata()'s answer, its captureTime and receiveTime in ms since 1970 */
+	meta: Record<string, unknown>;
+	/** a video frame's type */
+	type?: 'key' | 'delta';
+	/** what the rtc worker needs of it again, which the page never sees */
+	back: unknown;
+}
+
 /** the worker's first message: where everything comes from */
 export interface RtcWorkerInit {
 	kind: 'init';
@@ -192,6 +216,20 @@ export type Request =
 			op: 'receiveTrack';
 			handle: number;
 			writable: WritableStream<AudioData | VideoFrame> | null;
+	  }
+	/**
+	 * The page's encoded transform of the section's sender (`send`) or
+	 * receiver: the port of its RTCRtpScriptTransform (transferred), which
+	 * reaches the transform's worker, or null for none. Each encoded frame
+	 * goes to it as a TransformFrame and is packetized or decoded as it
+	 * comes back.
+	 */
+	| {
+			seq: number;
+			op: 'transform';
+			handle: number;
+			side: 'send' | 'receive';
+			port: MessagePort | null;
 	  }
 	/** a tone of the sender's RTCDTMFSender, one of 0-9, A-D, * and #, for `duration` ms */
 	| {
