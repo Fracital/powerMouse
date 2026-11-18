@@ -1484,18 +1484,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		/**
 		 * inner and outer HTML need to have their getters hooked
 		 * this will reveal hooked attributes etc
-		 *
-		 * Element.prototype.getInnerHTML
+		 * (a getInnerHTML, which Chrome no longer has, is taken off the
+		 * prototype with every other unhooked markup member below)
 		 */
-
-		if ('getInnerHTML' in realm.Element.prototype) {
-			(realm.Element.prototype as any).getInnerHTML = proxyModule.wrapFunction(
-				(realm.Element.prototype as any).getInnerHTML as () => string,
-				(target, that) => {
-					return that.innerHTML;
-				},
-			);
-		}
 
 		const innerHTMLDescriptor = Reflect.getOwnPropertyDescriptor(
 			realm.Element.prototype,
