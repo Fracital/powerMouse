@@ -144,5 +144,68 @@ export default class NavigatorModule extends Module<DocumentClient> {
 					return Reflect.apply(target, that, args);
 				},
 			);
+
+		// fetchLater (a deferred fetch, sent when the document goes or once
+		// `activateAfter` has passed): its request went to the address the page
+		// named, past the proxy, to the real site, and Chrome hands no
+		// deferred request to a service worker, so a routed one would reach
+		// nothing. It is made here: the page's own fetch (keepalive, routed
+		// like any) once the time has passed or as the document goes (pagehide,
+		// as it is unloaded or put in the back/forward cache), unless its
+		// signal aborted first. The page gets a FetchLaterResult whose
+		// `activated` says whether it was sent. The call is a deferred part
+		// (../fetchLater.ts), made before the browser's is called: without it
+		// the call throws
+		const later = global as typeof globalThis & {
+			fetchLater?: (...args: unknown[]) => unknown;
+			FetchLaterResult?: { prototype: object };
+		};
+		const resultPrototype = later.FetchLaterResult?.prototype;
+		const activatedGetter =
+			resultPrototype &&
+			Reflect.getOwnPropertyDescriptor(resultPrototype, 'activated')?.get;
+		if (
+			typeof later.fetchLater === 'function' &&
+			resultPrototype &&
+			activatedGetter
+		) {
+			const fetch = global.fetch;
+			// the browser's own, as the page may replace the window's later
+			const setTimeout = global.setTimeout;
+			const add = global.EventTarget.prototype.addEventListener;
+			const remove = global.EventTarget.prototype.removeEventListener;
+			const requestURL = Reflect.getOwnPropertyDescriptor(
+				global.Request.prototype,
+				'url',
+			)!.get!;
+			const states = new LazyWeakMap<object, { activated: boolean }>();
+			Reflect.defineProperty(resultPrototype, 'activated', {
+				...Reflect.getOwnPropertyDescriptor(resultPrototype, 'activated'),
+				get: proxyModule.wrapFunction(activatedGetter, (target, that, args) => {
+					const state = states.get(that as object);
+					return state ? state.activated : Reflect.apply(target, that, args);
+				}),
+			});
+			later.fetchLater = proxyModule.wrapFunction(
+				later.fetchLater,
+				(target, that, args) =>
+					deferred('fetchLater')(
+						{
+							client,
+							global,
+							states,
+							resultPrototype,
+							fetch,
+							setTimeout,
+							add,
+							remove,
+							requestURL,
+						},
+						target,
+						that,
+						args,
+					),
+			);
+		}
 	}
 }
