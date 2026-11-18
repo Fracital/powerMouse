@@ -135,9 +135,12 @@ holyWisp runs once per run with its stock settings plus: flood protection off (i
 101st stream a second to one origin, which a page bursting to its own host reaches; the production edges run with it
 off too), loopback, private and literal-IP destinations allowed (the fixture servers), IPv4 first, `TCP_NODELAY`, and a
 `dns-server` pointing at the harness DNS (`lib/dns.mjs`). That DNS answers names under `.bench.test` with 127.0.0.1 and
-forwards every other question to the system resolver, so the fixture servers have real origins
-(`http://a.bench.test:<port>`, `b.`, `c.`) while real sites resolve as usual. The two contenders that fetch from Node
-run with `lib/node-dns-shim.cjs` preloaded, which maps the same names.
+forwards every other question to the system resolver and to 1.1.1.1 at once (and again after 0.4, 1 and 2 s while
+neither answers), relaying the first answer, so the fixture servers have real origins (`http://a.bench.test:<port>`,
+`b.`, `c.`) while real sites resolve as usual. A local stub resolver that sits on a question past holyWisp's 3 s timeout
+holds one of holyWisp's four resolver threads for 3 s per question (A, then AAAA): the content blocker's list downloads
+at a STomp start then held all four, and the first page's own lookup, answered at once here, waited its turn for 3 to 12
+s. The two contenders that fetch from Node run with `lib/node-dns-shim.cjs` preloaded, which maps the same names.
 
 Chrome for the proxied rows runs with
 `--host-resolver-rules=MAP *.bench.test 127.0.0.1:<leak catcher>, MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1`:
