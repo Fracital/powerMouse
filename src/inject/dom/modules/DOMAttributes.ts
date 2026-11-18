@@ -209,9 +209,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				.toString();
 		/** what the page's URL `value` names, against the document's base */
 		const pageURL = (value: string) =>
-			new StompURL(
+			moduleClient.atBase(
 				moduleClient.encodingParse(value, moduleClient.baseHref),
-				moduleClient.baseURL,
 			);
 		/** route one URL attribute, keeping the page's value as the original */
 		const routeAttribute =
@@ -2150,9 +2149,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						const page = pages[index];
 						updated.push({
 							...src,
-							url: page
-								? routeImageSet(new StompURL(page, moduleClient.baseURL))
-								: src.url,
+							url: page ? routeImageSet(moduleClient.atBase(page)) : src.url,
 						});
 					});
 

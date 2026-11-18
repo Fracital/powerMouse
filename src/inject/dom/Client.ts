@@ -2718,16 +2718,26 @@ export default class DocumentClient extends Client {
 	 * route (src/visited.ts), which the browser shows visited exactly when
 	 * its history has it under this document's own partition.
 	 */
-	linkRoute(resource: StompURL, base: StompURL = this.url): string {
+	linkRoute(resource: StompURL, base?: StompURL): string {
 		const context = this.visitedContext;
 		const plain = () =>
-			routeHTML(resource, base, this.config, false, this.nestedRoute);
+			routeHTML(
+				resource,
+				base ?? this.url,
+				this.config,
+				false,
+				this.nestedRoute,
+			);
 		if (context === null || !ROUTE_PROTOCOLS.includes(resource.url.protocol))
 			return plain();
 		// a URL that is a route already is the real URL it stands for
 		const target = unwrapRoute(resource.url, resource.codec) ?? resource.url;
 		if (!this.followsOwnLinks) {
-			const own = this.location.url;
+			// (parsed once per address: only read here)
+			const href = this.locationHref;
+			if (this.#ownLocation?.href !== href)
+				this.#ownLocation = { href, url: new URL(href) };
+			const own = this.#ownLocation.url;
 			if (
 				target.origin === own.origin &&
 				target.pathname === own.pathname &&
@@ -2735,7 +2745,34 @@ export default class DocumentClient extends Client {
 			)
 				return plain();
 		}
-		return linkRoute(this.scope, this.codec, context, target);
+		// the same link again (a list rendered once more) is the same route:
+		// sealing it was most of a link's write
+		const key = `${context} ${target.href}`;
+		let route = this.#linkRoutes.get(key);
+		if (route === undefined) {
+			if (this.#linkRoutes.size >= 1024) this.#linkRoutes.clear();
+			route = linkRoute(this.scope, this.codec, context, target);
+			this.#linkRoutes.set(key, route);
+		}
+		return route;
+	}
+	#ownLocation?: { href: string; url: URL };
+	#linkRoutes = new LazyMap<string, string>();
+	/**
+	 * `url`, just resolved against the base URL and held by nothing else, as
+	 * a StompURL of the base's routes (`new StompURL(url, baseURL)` without
+	 * the two copies: the hooks route every URL a page writes this way)
+	 */
+	atBase(url: URL): StompURL {
+		const parsing = this.#parseBase;
+		const made = StompURL.of(
+			url,
+			this.codec,
+			parsing ? parsing.directory : this.#readBase().directory,
+		);
+		// (a cache mark goes with the base, as the constructor takes it on)
+		if (parsing && parsing.mark !== undefined) made.mark = parsing.mark;
+		return made;
 	}
 	/**
 	 * The proxied window `_parent`, `_top` or `_unfencedtop` names from a

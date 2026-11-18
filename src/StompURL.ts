@@ -90,6 +90,19 @@ export default class StompURL {
 		this.directory = directory;
 	}
 	/**
+	 * A StompURL of `url` itself, not of a copy: for a URL just parsed that
+	 * nothing else holds (the hooks route every link a page writes, and the
+	 * copy was one more parse of each)
+	 */
+	static of(url: URL, codec: GenericCodec, directory: string): StompURL {
+		const made = Object.create(StompURL.prototype) as StompURL;
+		made.codec = codec;
+		made.directory = directory;
+		made.url = url;
+		made.mark = undefined;
+		return made;
+	}
+	/**
 	 * The route's last segment: the URL without its fragment, sealed, and
 	 * the fragment after it, an empty query or fragment kept
 	 * (src/urlShape.ts). A document's fragment is sealed too
