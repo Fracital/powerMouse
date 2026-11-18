@@ -2263,7 +2263,7 @@ export default class DocumentClient extends Client {
 		return Reflect.apply(this.#originGet, this.global, []);
 	}
 	get parent(): typeof globalThis {
-		return this.parentDescriptor.get!.call(this.global);
+		return Reflect.apply(this.parentDescriptor.get!, this.global, []);
 	}
 	/** @internal what this client's bundle fetches its copies through (loadGrants.ts) */
 	loadSource(): LoadSource | null {
@@ -2802,7 +2802,7 @@ export default class DocumentClient extends Client {
 		return this.#referrers.get(document);
 	}
 	get top(): typeof globalThis {
-		return this.topDescriptor.get!.call(this.global);
+		return Reflect.apply(this.topDescriptor.get!, this.global, []);
 	}
 	/**
 	 * Whether a `target` names a browsing context this page already has (an
@@ -3211,8 +3211,10 @@ export default class DocumentClient extends Client {
 		// is made again only when either changed (a new copy each time, as a
 		// caller may change what it is given)
 		const named = this.namedBase;
-		const base = this.baseURIDescriptor.get!.call(
+		const base = Reflect.apply(
+			this.baseURIDescriptor.get!,
 			this.global.document,
+			[],
 		) as string;
 		const memo = this.#urlMemo;
 		if (memo && memo.base === base && memo.named === named) return memo;
@@ -3277,7 +3279,9 @@ export default class DocumentClient extends Client {
 		}
 	}
 	get baseURI(): URL {
-		return new URL(this.baseURIDescriptor.get!.call(this.global.document));
+		return new URL(
+			Reflect.apply(this.baseURIDescriptor.get!, this.global.document, []),
+		);
 	}
 	/**
 	 * An inline script's rewrite with `preamble` in front, as the client

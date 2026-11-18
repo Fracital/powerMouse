@@ -71,7 +71,7 @@ export function usePrototype<Prototype extends object, CallbackResult>(
 			Reflect.defineProperty(target, key, descriptor);
 
 	if (cleanup) {
-		cleanup.call(target);
+		Reflect.apply(cleanup, target, []);
 	}
 
 	if (result.length === 2) {

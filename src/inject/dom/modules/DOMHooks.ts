@@ -173,19 +173,22 @@ function applyAttribute(
 ) {
 	try {
 		if (value === null) {
-			const node = nativeElement.getAttributeNode.call(element, attribute);
+			const node = Reflect.apply(nativeElement.getAttributeNode, element, [
+				attribute,
+			]);
 			if (node && attribute.includes(':')) {
 				if (!removedNamespaces.has(element))
 					removedNamespaces.set(element, new Map());
 				removedNamespaces.get(element)!.set(attribute, node.namespaceURI ?? '');
 			}
-			nativeElement.removeAttribute.call(element, attribute);
-		} else if (nativeElement.hasAttribute.call(element, attribute)) {
-			nativeElement.setAttribute.call(
-				element,
+			Reflect.apply(nativeElement.removeAttribute, element, [attribute]);
+		} else if (
+			Reflect.apply(nativeElement.hasAttribute, element, [attribute])
+		) {
+			Reflect.apply(nativeElement.setAttribute, element, [
 				attribute,
 				trustedAttribute(element, attribute, value),
-			);
+			]);
 		} else {
 			// an SVG element's xlink: attribute the hooks set first (one
 			// the parser made from written markup that a hook held back)
@@ -204,8 +207,13 @@ function applyAttribute(
 				namespace || null,
 			);
 			if (namespace)
-				nativeElement.setAttributeNS.call(element, namespace, attribute, given);
-			else nativeElement.setAttribute.call(element, attribute, given);
+				Reflect.apply(nativeElement.setAttributeNS, element, [
+					namespace,
+					attribute,
+					given,
+				]);
+			else
+				Reflect.apply(nativeElement.setAttribute, element, [attribute, given]);
 		}
 		if (!appliedTab.has(element)) appliedTab.set(element, new Map());
 		appliedTab.get(element)!.set(attribute, value);
@@ -228,7 +236,7 @@ export class CustomElement extends Element {
 		if (this.attributeTab.has(attribute)) {
 			return this.attributeTab.get(attribute)!;
 		} else {
-			return nativeElement.getAttribute.call(this, attribute);
+			return Reflect.apply(nativeElement.getAttribute, this, [attribute]);
 		}
 	}
 	setAttribute(attribute: string, value: string) {
@@ -242,7 +250,7 @@ export class CustomElement extends Element {
 			return this.attributeTab.get(attribute) !== null;
 		}
 
-		return nativeElement.hasAttribute.call(this, attribute);
+		return Reflect.apply(nativeElement.hasAttribute, this, [attribute]);
 	}
 	applyAttributes() {
 		// called after the prototype is restored, so don't rely on `this.attributeTab`
@@ -289,7 +297,7 @@ export class CustomElement extends Element {
 	}
 	[cleanupPrototype]() {
 		// invoked after the real prototype is restored (see usePrototype)
-		CustomElement.prototype.applyAttributes.call(this);
+		Reflect.apply(CustomElement.prototype.applyAttributes, this, []);
 	}
 	getAttributeOG(attribute: string): string | null {
 		const og = `${ORIGINAL_ATTRIBUTE}${attribute}`;
@@ -603,14 +611,15 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// prefix (x:href, an XML document's own): its hooks are xlink:href's,
 		// called with the name it has. A q:href of no namespace is no link
 		if (otherXlinkPrefix(attribute)) {
-			const node = nativeElement.getAttributeNode.call(element, attribute);
+			const node = Reflect.apply(nativeElement.getAttributeNode, element, [
+				attribute,
+			]);
 			if (
 				node
 					? node.namespaceURI !== XLINK_NAMESPACE
-					: !nativeElement.hasAttribute.call(
-							element,
+					: !Reflect.apply(nativeElement.hasAttribute, element, [
 							ORIGINAL_ATTRIBUTE + attribute,
-						)
+						])
 			)
 				return NO_HOOKS;
 			attribute = 'xlink:href';
@@ -2105,14 +2114,17 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					// attribute of a namespace is not one a hook dropped
 					if (
 						attributeName(that, local) !== local ||
-						(value === null && nativeElement.hasAttribute.call(that, local))
+						(value === null &&
+							Reflect.apply(nativeElement.hasAttribute, that, [local]))
 					)
 						return value;
 					const original = pendingAttributes(that)
 						? usePrototype(that, CustomElement.prototype, (element) =>
 								element.getAttributeOG(local),
 							)
-						: nativeElement.getAttribute.call(that, ORIGINAL_ATTRIBUTE + local);
+						: Reflect.apply(nativeElement.getAttribute, that, [
+								ORIGINAL_ATTRIBUTE + local,
+							]);
 					if (original !== null) return original;
 					// a style the browser serialised from a CSSOM write, as
 					// getAttribute reads it
@@ -2153,9 +2165,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				// view, read natively without a prototype swap
 				if (!pendingAttributes(that)) {
 					const marker = ORIGINAL_ATTRIBUTE + attribute;
-					if (nativeElement.hasAttribute.call(that, marker))
-						return nativeElement.getAttribute.call(that, marker);
-					const value = nativeElement.getAttribute.call(that, attribute);
+					if (Reflect.apply(nativeElement.hasAttribute, that, [marker]))
+						return Reflect.apply(nativeElement.getAttribute, that, [marker]);
+					const value = Reflect.apply(nativeElement.getAttribute, that, [
+						attribute,
+					]);
 					return attribute === 'style' && typeof value === 'string'
 						? unrouteCSS(moduleClient, value, true)
 						: value;
@@ -2196,10 +2210,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				if (native) return native;
 				const attribute = attributeName(that, String(args[0]));
 				if (!pendingAttributes(that))
-					return nativeElement.hasAttribute.call(
-						that,
+					return Reflect.apply(nativeElement.hasAttribute, that, [
 						ORIGINAL_ATTRIBUTE + attribute,
-					);
+					]);
 				return usePrototype(that, CustomElement.prototype, (element) =>
 					element.hasAttributeOG(attribute),
 				);

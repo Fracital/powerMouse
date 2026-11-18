@@ -82,7 +82,8 @@ export function asciiText(bytes: Uint8Array): string {
 	let text = '';
 	// (an argument list has a limit; a URL is rarely past the first piece)
 	for (let at = 0; at < bytes.length; at += 8192)
-		text += String.fromCharCode.apply(
+		text += Reflect.apply(
+			String.fromCharCode,
 			null,
 			bytes.subarray(at, at + 8192) as unknown as number[],
 		);
