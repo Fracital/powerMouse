@@ -41,6 +41,21 @@ export const BEACON_QUOTA = 64 * 1024;
 const URL_REQUEST = 1024 * 1024;
 
 /**
+ * Send a beacon of this bundle's document with no body to `url` (the whole
+ * request in it), which takes none of the beacon quota and which Chrome
+ * sends even when the document unloads in the task that sent it: false when
+ * the URL is too long for one or the browser refused it
+ */
+export function beaconInURL(url: string): boolean {
+	if (url.length > URL_REQUEST) return false;
+	try {
+		return navigator.sendBeacon(url);
+	} catch (error) {
+		return false;
+	}
+}
+
+/**
  * The beacons in flight a write may bring the document to (the bridge counts
  * the body of every beacon it sent, reads included; a request in the URL has
  * none); the rest of the quota is kept for reads, which cannot go another

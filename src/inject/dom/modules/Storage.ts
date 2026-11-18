@@ -2,8 +2,10 @@ import {
 	LEGACY_FS_CLEAR,
 	LEGACY_FS_CLEARED,
 	STORAGE_EVENT,
+	STORAGE_LANDED,
 	StorageChange,
 	type LegacyFileSystemClear,
+	type StorageLanded,
 } from '../../../transport/messages';
 import Module from '../../Module';
 import LegacyFileSystemModule from '../../modules/LegacyFileSystem';
@@ -19,7 +21,7 @@ import { deferred } from '../deferred';
 import type { PresentationIds } from '../presentations';
 import { hold, onLeave, othersHold, StampStore } from '../stampHolders';
 import type { StorageAccessTaken } from '../storageAccess';
-import SyncModule, { WRITE_BUDGET } from './Sync';
+import SyncModule, { beaconInURL, WRITE_BUDGET } from './Sync';
 
 /**
  * Chrome's quota for a store: 5 MiB of key and value lengths, in UTF-16 code
@@ -36,8 +38,12 @@ interface Shadowed {
 	seq: number;
 }
 
-/** a store's operations in flight from this document */
+/** a store's operations in flight from this bundle's documents */
 interface Pending {
+	/** the sequence's name to the worker, which applies it in order */
+	sender: string;
+	/** what settles each operation sent as a beacon, by its number */
+	beacons: Map<number, (landed: boolean) => void>;
 	values: Map<string, Shadowed>;
 	/** the newest clear in flight, before which every other key is gone */
 	cleared: number | null;
@@ -49,6 +55,25 @@ interface Pending {
 
 /** the read caches of this bundle's documents, by store (storageFactory) */
 const readCaches = new LazyMap<string, unknown>();
+/**
+ * The operations in flight of this bundle's documents, by store (as
+ * readCaches): one sequence for every document of the bundle that writes
+ * the store (a page and its about:blank frames), whose order the worker
+ * keeps, as one realm's writes are in the order made natively
+ */
+const pendingStores = new LazyMap<string, Pending>();
+/** each sequence by its sender, for the worker's note that one landed */
+const sequences = new LazyMap<string, Pending>();
+const REALM = Math.random().toString(36).slice(2, 10);
+let sequenceCount = 0;
+/**
+ * How long an operation sent as a beacon waits for the worker's note that it
+ * landed before this document counts it as landed: the worker applies one
+ * or empties its key (a lost one) well before
+ */
+const LANDED_WAIT_MS = 15e3;
+const nativeSetTimeout = globalThis.setTimeout;
+const nativeClearTimeout = globalThis.clearTimeout;
 /** a version no stamp has: the copy is read again */
 const LEFT = '\0';
 /** this realm leaves the stamps' lists (stampHolders): its copies read again */
@@ -237,22 +262,61 @@ export default class StorageModule extends Module<DocumentClient> {
 		// since one waiting for the answer to the one before was lost when the
 		// page unloaded first. Reads of such a key answer from here until the
 		// write landed, which is what the page expects of its own writes;
-		// other documents see the value once it is stored.
-		const pending = new LazyMap<string, Pending>();
+		// other documents see the value once it is stored. A write while no
+		// other realm holds a copy of the store goes this way too (unheld):
+		// apnews.com made 550 writes in 40 s, each a synchronous round trip
+		// of 1.5 to 2.5 ms on the page's thread. The
+		// operations of every document of this bundle are one sequence.
+		const storeOf = (directory: string) => `${directory}\n${keyOf(directory)}`;
+		const pending = {
+			get: (directory: string) => pendingStores.get(storeOf(directory)),
+		};
 		const pendingOf = (directory: string) => {
 			let shadow = pending.get(directory);
 			if (!shadow) {
 				shadow = {
+					sender: `${REALM}.${sequenceCount++}`,
+					beacons: new Map(),
 					values: new Map(),
 					cleared: null,
 					seq: 0,
 					inflight: new Set(),
 				};
-				pending.set(directory, shadow);
+				pendingStores.set(storeOf(directory), shadow);
+				sequences.set(shadow.sender, shadow);
 			}
 			return shadow;
 		};
 		const busy = (directory: string) => !!pending.get(directory)?.inflight.size;
+		/**
+		 * No other realm holds a copy of the store (stampHolders): a write
+		 * need not wait for the worker, which applies this realm's writes in
+		 * the order made, and whose readers wait for every one it has heard
+		 * of. A realm that reads the store from now on is on the list before
+		 * it reads, and the next write waits again.
+		 */
+		const unheld = (directory: string) => {
+			const cache = current(directory);
+			if (!cache || !stampStore || !orderedURL(directory)) return false;
+			try {
+				return !othersHold(stampStore, stampOf(cache));
+			} catch (error) {
+				return false;
+			}
+		};
+		// against the bundle's own document, which a worker controls (an
+		// about:blank client's location is about:blank, which resolves
+		// nothing); null where that does not resolve it: an <object>'s
+		// document runs the bundle at a blob: URL, and the worker never
+		// applied a write such a document sent without waiting, so its writes
+		// wait for the worker as before
+		const orderedURL = (directory: string): URL | null => {
+			try {
+				return new URL(`${dirOf(directory)}ordered`, location.href);
+			} catch (error) {
+				return null;
+			}
+		};
 		// Which operation it is goes in the URL, its arguments in the body:
 		// the worker hears of the write when the request arrives, so the next
 		// document's reads wait for it however long a large body takes to be
@@ -262,10 +326,10 @@ export default class StorageModule extends Module<DocumentClient> {
 			operation: Record<string, string>,
 			args: unknown[],
 		) => {
-			const url = new URL(
-				`${dirOf(directory)}ordered`,
-				pageGlobal.location.href,
-			);
+			// (where neither resolves, as before: against the page's)
+			const url =
+				orderedURL(directory) ??
+				new URL(`${dirOf(directory)}ordered`, pageGlobal.location.href);
 			for (const [name, value] of Object.entries(operation))
 				url.searchParams.set(name, value);
 			return fetch(url, {
@@ -323,13 +387,38 @@ export default class StorageModule extends Module<DocumentClient> {
 			// the origin and the key as the codec writes a URL: the request is
 			// the proxy's own, but its address names them no more than a route
 			const operation: Record<string, string> = {
-				sender,
+				sender: shadow.sender,
 				seq: String(seq),
 				base: String(base),
 				name,
 				origin: client.codec.encode(keyOf(directory)),
 			};
 			if (key !== null) operation.key = client.codec.encode(key);
+			// A beacon with its arguments in its URL, which Chrome sends even
+			// when the page unloads in the same task (a fetch is cancelled with
+			// its document) and which takes none of the page's beacon quota.
+			// It has no answer the page reads: the worker tells the bundle's
+			// document when it landed (STORAGE_LANDED). One too long for a URL,
+			// or one the browser refuses, is a fetch with a body, as before.
+			// (where neither resolves, as before: against the page's)
+			const url =
+				orderedURL(directory) ??
+				new URL(`${dirOf(directory)}ordered`, pageGlobal.location.href);
+			for (const [name, value] of Object.entries(operation))
+				url.searchParams.set(name, value);
+			url.searchParams.set('args', client.codec.encode(JSON.stringify(args)));
+			if (beaconInURL(url.href)) {
+				const timer = nativeSetTimeout(
+					() => shadow.beacons.get(seq)?.(true),
+					LANDED_WAIT_MS,
+				);
+				shadow.beacons.set(seq, (landed) => {
+					if (!shadow.beacons.delete(seq)) return;
+					nativeClearTimeout(timer);
+					settle(landed);
+				});
+				return;
+			}
 			post(directory, operation, args).then(
 				() => settle(true),
 				(error) => {
@@ -562,6 +651,7 @@ export default class StorageModule extends Module<DocumentClient> {
 
 				if (
 					busy(directory) ||
+					unheld(directory) ||
 					!syncModule.tryJsonAPI(
 						WRITE_BUDGET,
 						`${dirOf(directory)}removeItem`,
@@ -593,6 +683,7 @@ export default class StorageModule extends Module<DocumentClient> {
 				const call = [keyOf(directory), item, value, sender, here()];
 				if (
 					busy(directory) ||
+					unheld(directory) ||
 					// far over what the budget lets through, so not even encoded
 					value.length > WRITE_BUDGET ||
 					!syncModule.tryJsonAPI(
@@ -894,6 +985,14 @@ export default class StorageModule extends Module<DocumentClient> {
 					?.drop(drop.key, () =>
 						client.postToWorker({ [LEGACY_FS_CLEARED]: drop.id }),
 					);
+			// one of this bundle's beacons of an ordered operation landed
+			const landed = (data as Record<string, StorageLanded> | null)?.[
+				STORAGE_LANDED
+			];
+			if (landed)
+				return sequences.get(String(landed.sender))?.beacons.get(landed.seq)?.(
+					!landed.lost,
+				);
 			const change = (data as Record<string, StorageChange> | null)?.[
 				STORAGE_EVENT
 			];

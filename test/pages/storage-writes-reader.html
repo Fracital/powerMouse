@@ -1,0 +1,16 @@
+<!doctype html>
+<title>storage writes: reader</title>
+<script>
+	const params = new URLSearchParams(location.search);
+	const prefix = params.get('p') ?? 'sw';
+	const seen = {};
+	for (let i = 0; i < localStorage.length; i++) {
+		const key = localStorage.key(i);
+		if (!key.startsWith(prefix)) continue;
+		const value = localStorage.getItem(key);
+		seen[key] = value.length > 64 ? `${value.length} chars` : value;
+	}
+	const sorted = Object.fromEntries(Object.entries(seen).sort());
+	if (params.has('top')) window.__report = sorted;
+	else parent.postMessage({ reader: prefix, seen: sorted }, '*');
+</script>

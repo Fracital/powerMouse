@@ -1,0 +1,8 @@
+<!doctype html>
+<title>storage writes: closer</title>
+<script>
+	const prefix = new URLSearchParams(location.search).get('p') ?? 'sw';
+	localStorage.setItem(`${prefix}closed`, 'before closing');
+	localStorage.setItem(`${prefix}closedLarge`, 'y'.repeat(48 * 1024));
+	window.close();
+</script>

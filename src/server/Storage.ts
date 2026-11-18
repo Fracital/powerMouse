@@ -1,7 +1,13 @@
 import { IDBPDatabase, openDB } from 'idb';
 import type GenericCodec from '../Codecs';
 import { encodeCookie } from '../encodeCookie';
-import { STORAGE_EVENT, StorageChange } from '../transport/messages';
+import {
+	RouteContext,
+	STORAGE_EVENT,
+	STORAGE_LANDED,
+	StorageChange,
+	StorageLanded,
+} from '../transport/messages';
 import Router, { json, jsonAPI } from './Router';
 import { windowURL } from './windowURLs';
 
@@ -23,6 +29,20 @@ async function broadcast(change: StorageChange) {
 		if (origin && origin !== 'null' && !change.origin.startsWith(origin))
 			continue;
 		client.postMessage({ [STORAGE_EVENT]: change });
+	}
+}
+
+/**
+ * tell the document that sent an ordered operation it is done (applied, or
+ * lost, which a reader sees as the key gone): a document in the
+ * back/forward cache is not among the clients, and is not woken
+ */
+async function landed(clientId: string | undefined, note: StorageLanded) {
+	if (typeof clients === 'undefined' || !clientId) return;
+	try {
+		(await clients.get(clientId))?.postMessage({ [STORAGE_LANDED]: note });
+	} catch (error) {
+		// the document is gone
 	}
 }
 
@@ -218,9 +238,16 @@ export default class Storage {
 	 * when its body has been read, and one whose body never comes is known by
 	 * its key. `base` is the oldest the document has in flight: every one
 	 * before it landed, so a worker that started since waits for none of
-	 * those.
+	 * those. A beacon (which survives the page's unload, and whose URL takes
+	 * none of the page's beacon quota) has its arguments in its URL too
+	 * (`args`, as `codec` writes them), and no answer the page reads: the
+	 * document that sent it is told when it is applied (STORAGE_LANDED).
 	 */
-	async ordered(request: Request, codec: GenericCodec): Promise<Response> {
+	async ordered(
+		request: Request,
+		codec: GenericCodec,
+		context?: RouteContext,
+	): Promise<Response> {
 		const params = new URL(request.url).searchParams;
 		const sender = params.get('sender');
 		const seq = Number(params.get('seq'));
@@ -242,7 +269,12 @@ export default class Storage {
 		)
 			return json(400, 'not an ordered storage operation');
 		// read from now on, while the operation waits for its turn
-		const body = request.json() as Promise<unknown[]>;
+		const inURL = sealed('args');
+		const body = (
+			inURL === null
+				? request.json()
+				: Promise.resolve().then(() => JSON.parse(inURL))
+		) as Promise<unknown[]>;
 		body.catch(() => {});
 		const op = {
 			origin,
@@ -255,10 +287,13 @@ export default class Storage {
 		this.heard.add(op);
 		const forget = () => this.heard.delete(op);
 		op.finished.then(forget, forget);
+		const to = context?.requestClientId || context?.clientId;
 		try {
 			await op.finished;
+			landed(to, { sender, seq, lost: op.lost });
 			return json(200, null);
 		} catch (error) {
+			landed(to, { sender, seq, lost: true });
 			return json(500, String(error));
 		}
 	}
@@ -659,7 +694,7 @@ export function registerStorage(
 			router.routes.set(
 				new RegExp(`^\\/${name}\\/${api}$`),
 				api === 'ordered'
-					? (request) => host.ordered(request, codec)
+					? (request, _url, context) => host.ordered(request, codec, context)
 					: jsonAPI(async (origin: string, ...args: unknown[]) => {
 							await host.settled(origin);
 							return call.call(host, origin, ...args);

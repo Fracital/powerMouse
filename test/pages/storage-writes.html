@@ -1,0 +1,85 @@
+<!doctype html>
+<title>storage writes</title>
+<script>
+	// what localStorage holds under `prefix`, a long value by its length
+	const snapshot = (storage, prefix) => {
+		const seen = {};
+		for (let i = 0; i < storage.length; i++) {
+			const key = storage.key(i);
+			if (!key.startsWith(prefix)) continue;
+			const value = storage.getItem(key);
+			seen[key] = value.length > 64 ? `${value.length} chars` : value;
+		}
+		return Object.fromEntries(Object.entries(seen).sort());
+	};
+	const prefix = new URLSearchParams(location.search).get('p') ?? 'sw';
+	// in one task, the page and an about:blank frame it made (one realm)
+	// write the same keys in turn, and read them back
+	window.__order = () => {
+		const blank = document.createElement('iframe');
+		document.body.append(blank);
+		const theirs = blank.contentWindow.localStorage;
+		for (let i = 0; i < 30; i++) {
+			const storage = i % 3 === 0 ? theirs : localStorage;
+			const key = `${prefix}k${i % 5}`;
+			if (i % 4 === 3) storage.removeItem(key);
+			else storage.setItem(key, String(i));
+		}
+		return {
+			mine: snapshot(localStorage, prefix),
+			theirs: snapshot(theirs, prefix),
+		};
+	};
+	// a frame of this page's origin added after the writes, which reads them
+	// as its first script runs
+	window.__frame = () =>
+		new Promise((resolve) => {
+			const frame = document.createElement('iframe');
+			addEventListener('message', function heard(event) {
+				if (event.data?.reader !== prefix) return;
+				removeEventListener('message', heard);
+				// gone again, so no other realm holds the store for what follows
+				frame.remove();
+				resolve(event.data.seen);
+			});
+			frame.src = `storage-writes-reader.html?p=${prefix}`;
+			document.body.append(frame);
+		});
+	// an <object>'s document writes, and this page reads that once it is gone
+	window.__object = () =>
+		new Promise((resolve) => {
+			const object = document.createElement('object');
+			addEventListener('message', function heard(event) {
+				if (event.data?.object !== prefix) return;
+				removeEventListener('message', heard);
+				object.remove();
+				resolve({
+					read: event.data.read,
+					after: snapshot(localStorage, prefix),
+				});
+			});
+			object.type = 'text/html';
+			object.data = `storage-writes-object.html?p=${prefix}`;
+			document.body.append(object);
+		});
+	// writes in the task that navigates away: the next page reads them
+	window.__leave = () => {
+		localStorage.setItem(`${prefix}small`, 'before navigating');
+		localStorage.setItem(`${prefix}large`, 'x'.repeat(48 * 1024));
+		localStorage.removeItem(`${prefix}k1`);
+		localStorage.setItem(`${prefix}k2`, 'back');
+		location.href = `storage-writes-reader.html?p=${prefix}&top`;
+	};
+	// a popup that writes in the task that closes it
+	window.__close = () =>
+		new Promise((resolve) => {
+			const popup = window.open(`storage-writes-closer.html?p=${prefix}`);
+			const check = setInterval(() => {
+				if (!popup.closed) return;
+				clearInterval(check);
+				resolve();
+			}, 50);
+		});
+	window.__snapshot = () => snapshot(localStorage, prefix);
+	window.__sw = { ready: true };
+</script>

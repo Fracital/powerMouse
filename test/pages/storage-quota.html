@@ -62,8 +62,9 @@
 			set('orderLate', make('late-first', 20 * KiB)),
 			set('orderLate', make('late-second', 20 * KiB)),
 			// over what the bridge takes at once (WRITE_BUDGET), so always sent
-			// asynchronously: the suite's lost write
-			set('orderMixed', make('mixed-second', 48 * KiB)),
+			// asynchronously, and longer than a beacon's URL takes, so with a
+			// body: the suite's lost write
+			set('orderMixed', make('mixed-second', 1100 * KiB)),
 			set('orderGone', make('gone', 20 * KiB)),
 		];
 		localStorage.removeItem('orderGone');
@@ -90,7 +91,7 @@
 			setTimeout(finish);
 		};
 		const finish = () => {
-			// about 1.7 Mi code units are stored: 4 MiB more is over the quota,
+			// about 2.7 Mi code units are stored: 4 MiB more is over the quota,
 			// and so is one value of 6 MiB on its own; 2 MiB still fits
 			results.over = set('over', make('over', 4 * MiB, 'x'));
 			results.alone = set('alone', make('alone', 6 * MiB, 'x'));

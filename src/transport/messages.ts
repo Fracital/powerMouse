@@ -500,6 +500,19 @@ export const OPEN_TAB = '$stomp$open';
  */
 export const STORAGE_EVENT = '$stomp$storageEvent';
 /**
+ * the service worker telling the document that sent one of its ordered
+ * storage operations (a beacon, which has no answer the page reads) that it
+ * is done: its `sender` (the realm's sequence of operations on a store),
+ * its `seq`, and whether it was lost
+ */
+export const STORAGE_LANDED = '$stomp$storageLanded';
+export interface StorageLanded {
+	sender: string;
+	seq: number;
+	/** not applied: the worker emptied its key */
+	lost?: boolean;
+}
+/**
  * Clear-Site-Data "storage": the service worker asking every window to drop
  * a storage key's directory of the legacy file system (its `key`), which it
  * cannot reach itself, and waiting for the first to say it is gone (its
