@@ -272,11 +272,22 @@ export function browserPolicy(
 		if (!sources) continue;
 		// (one that allows nothing is the browser's as written: it refuses
 		// the proxy's own URLs too, and its <base> or form with them)
-		if (sources.every((source) => source.toLowerCase() === "'none'")) {
+		const none = sources.every((source) => source.toLowerCase() === "'none'");
+		// but for a report-only form-action, whose refusal the inject reports
+		// once, as natively (src/inject/dom/modules/NavigationHint.ts): the
+		// browser's copy refused the form's route three times over, and
+		// reported each, so the browser gets the route's 'self' and the
+		// pool's slots (an action of javascript: or mailto:, which names no
+		// host, it still refuses and reports itself)
+		const reportedForm =
+			name === 'form-action' && policy.disposition === 'report';
+		if (none && !reportedForm) {
 			directives.push(`${name} 'none'`);
 			continue;
 		}
 		const browser = withSlots(name, sources, browserSources(sources));
+		if (none)
+			for (const slot of slots) if (!browser.includes(slot)) browser.push(slot);
 		// A page's own <base href> keeps its real URL for a moment while the
 		// inject routes it to the proxy origin (src/inject/dom/modules/DOMAttributes.ts),
 		// and the browser judges that transient write against base-uri. Its

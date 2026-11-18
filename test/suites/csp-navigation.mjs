@@ -110,6 +110,19 @@ const CASES = {
 		ro: "form-action 'self'",
 		probes: ['form-blank-other', 'form-frame-other'],
 	},
+	// (one form, one violation: the browser's copy of one that allows
+	// nothing refused the form's route three times over, so it gets the
+	// route's 'self', src/csp.ts browserPolicy, and the inject reports it)
+	"a report-only form-action 'none'": {
+		s: 'nav',
+		ro: "form-action 'none'",
+		probes: [
+			'form-blank-other',
+			'form-frame-other',
+			'form-blank-self',
+			'form-frame-redirect-other',
+		],
+	},
 	'default-src does not govern forms': {
 		s: 'nav',
 		p: "default-src 'self'; script-src 'self' 'unsafe-inline'",
