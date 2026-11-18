@@ -714,6 +714,13 @@ const STANDBY_STALE_MS = 10000;
  */
 const DECLINED_HOLD_MS = KEEPALIVE_MS;
 /**
+ * How long a channel this controller let go of (it shook hands again)
+ * stays open at most, answering what is in flight on it: past the worker's
+ * own bound for that (DRAIN_MS and RETIRE_GRACE_MS in
+ * src/server/serviceWorker.ts), so the worker is what closes it
+ */
+const LINGER_MS = 70000;
+/**
  * how long a service worker of another build gets to update and activate
  * before wait() resolves on the one we have (the new one is adopted when it
  * activates)
@@ -949,6 +956,14 @@ export class StompController extends EventTarget {
 	/** the run of the worker that took our handshake (ReviveMessage.instance) */
 	#instance: string | undefined;
 	#takenWaiters = new Set<() => void>();
+	/**
+	 * this instance's name in each of its handshakes
+	 * (ControllerInitMessage.token): the worker tells it shaking hands again
+	 * from another controller taking its address
+	 */
+	#token = Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte) =>
+		byte.toString(16).padStart(2, '0'),
+	).join('');
 	/** a handshake offered to a worker that may have stopped (see #standIn) */
 	#standby?: { port: MessagePort; at: number; stopServing?: () => void };
 	/** the run of the worker that last declined an offer, and when */
@@ -1939,9 +1954,12 @@ export class StompController extends EventTarget {
 	/** the channel in use goes: what waits for the worker waits for the next handshake's answer */
 	#retire() {
 		if (this.#port) {
+			// the worker hears it first: it lets the channel go once what is
+			// in flight on it is answered. Calls of ours on it are made again
+			// on the next channel (#call)
+			this.#rpc?.call('retire', undefined).catch(() => {});
 			this.#rpc?.abort('Service worker replaced');
-			this.#stopServing?.();
-			this.#port.close();
+			this.#linger(this.#port, this.#stopServing);
 		}
 
 		this.#expectHandshake();
@@ -1954,13 +1972,42 @@ export class StompController extends EventTarget {
 		for (const worker of this.#serviceWorkers.values()) worker.terminate();
 		this.#serviceWorkers.clear();
 	}
-	/** a handshake offered for a stopped worker only (see #handshakeNow) is withdrawn */
-	#dropStandby() {
+	/**
+	 * A channel this controller let go of: it goes on answering the worker
+	 * (its transport, when it is served on this port, and its calls) until
+	 * the worker closes it, once nothing is in flight there, or LINGER_MS.
+	 * Closed at once, it failed every request in flight on it: a page's
+	 * fetches, and a navigation as the host's error page (502)
+	 */
+	#linger(port: MessagePort, stopServing?: () => void) {
+		const timer = setTimeout(() => {
+			stopServing?.();
+			port.close();
+		}, LINGER_MS);
+		port.addEventListener(
+			'close',
+			() => {
+				clearTimeout(timer);
+				stopServing?.();
+			},
+			{ once: true },
+		);
+	}
+	/**
+	 * a handshake offered for a stopped worker only (see #handshakeNow) is
+	 * withdrawn. `linger`: for a handshake made in its place, while the worker
+	 * may have taken the offer already (it says so a moment later): what it
+	 * sent on the offer's channel is answered there (#linger)
+	 */
+	#dropStandby(linger = false) {
 		const standby = this.#standby;
 		if (!standby) return;
 		this.#standby = undefined;
-		standby.stopServing?.();
-		standby.port.close();
+		if (linger) this.#linger(standby.port, standby.stopServing);
+		else {
+			standby.stopServing?.();
+			standby.port.close();
+		}
 		for (const done of [...this.#takenWaiters]) done();
 	}
 	/**
@@ -2006,7 +2053,7 @@ export class StompController extends EventTarget {
 	 * takes it says so (hello), and the channel is this one from then on.
 	 */
 	#handshakeNow(standby = false) {
-		this.#dropStandby();
+		this.#dropStandby(!standby);
 		if (!standby) this.#retire();
 
 		const channel = new MessageChannel();
@@ -2252,6 +2299,7 @@ export class StompController extends EventTarget {
 			directory: this.config.directory,
 			config: this.config,
 			build: BUILD,
+			token: this.#token,
 			...(standby ? { standby: true } : {}),
 			...(rewritePorts.length
 				? {

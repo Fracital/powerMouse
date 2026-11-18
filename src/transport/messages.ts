@@ -990,6 +990,14 @@ export interface ControllerInitMessage {
 	 * for that slot, as from a slot's worker
 	 */
 	pooled?: boolean;
+	/**
+	 * the StompController instance's own random name, the same in each of
+	 * its handshakes: a worker that has a registration at the address with
+	 * this name (from the same client) is hearing that controller again over
+	 * a new channel, and lets the old one finish what is in flight on it
+	 * rather than replace it
+	 */
+	token?: string;
 }
 
 /**
@@ -1154,6 +1162,11 @@ export type SWbound = {
 	rules: [RequestRule[]];
 	/** the host page was reloaded: the pages it restores are (HostReload) */
 	hostReload: [HostReload];
+	/**
+	 * the controller shook hands again over another channel: this one
+	 * answers what is in flight on it, then the worker closes it
+	 */
+	retire: [];
 	/** resolve a URL against the controller's config into a routed (proxied) URL */
 	route: [string, string];
 	/** the real URL a routed one stands for (the controller's codec); null for anything that is not a route */

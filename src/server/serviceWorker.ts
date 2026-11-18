@@ -19,6 +19,10 @@ import { nestedMarkOfKind, nestedTopOf } from '../rewriteHTML';
 import { addRouteScope, proxyOrigins, unwrapRoute } from '../routeURL';
 import { SW_ROUTE, type ApiReply } from '../serviceWorkerTypes';
 import { getPublicSuffix } from '../suffix';
+import HandoffTransport, {
+	CONTROLLER_REPLACED,
+	CONTROLLER_RETIRED,
+} from '../transport/HandoffTransport';
 import {
 	ABORT_REQUEST,
 	BLOB_MINTED,
@@ -155,7 +159,15 @@ interface ControllerRef {
 	port: MessagePort;
 	rpc: RpcHelper<SWbound, Controllerbound>;
 	/** the controller's transport, over the second port or the rpc port */
-	transport: RemoteTransport;
+	transport: HandoffTransport;
+	/**
+	 * the StompController instance that registered it (its handshakes all
+	 * name it): a handshake that names it again is that controller over a
+	 * new channel, never another controller taking the address
+	 */
+	token?: string;
+	/** let go of: what was in flight on it is answered, then it closes (drainController) */
+	draining?: boolean;
 	/** the controller's rewrite workers, when it started any */
 	pool?: RewritePool;
 	server: Promise<StompServer>;
@@ -244,6 +256,7 @@ function registerController(
 		slot,
 		slots,
 		pooled,
+		token,
 	}: ControllerInitMessage,
 	ports: MessagePort[],
 	client?: string,
@@ -295,10 +308,24 @@ function registerController(
 		: undefined;
 	const existing = controllers.get(directory);
 
-	if (existing) {
-		// the controller hears why its calls fail before the port goes
+	if (
+		existing &&
+		token !== undefined &&
+		existing.token === token &&
+		existing.owner === client
+	) {
+		// the same controller shaking hands again (a rebind, a revive it could
+		// not place, a standby offer taken while its handshake was on the
+		// way): what is in flight on the channel it had is answered there.
+		// Its emulated service workers are started again (it stopped them)
+		serviceWorkers.dropHost(directory);
+		drainController(existing);
+	} else if (existing) {
+		// another controller takes the address. It hears why its calls fail
+		// before the port goes; what was in flight on its transport is sent
+		// again through this one where that is safe (HandoffTransport)
 		existing.rpc.call('replaced', undefined).catch(() => {});
-		forget(existing, 'Controller replaced');
+		forget(existing, CONTROLLER_REPLACED);
 	}
 
 	// a controller bundle from before addresses sends no scope: its directory
@@ -312,7 +339,19 @@ function registerController(
 
 	// a controller whose transport lives in its worker sends a second port,
 	// served from there; otherwise the transport shares the rpc port
-	const transport = new RemoteTransport(transportPort ?? port);
+	const transport = new HandoffTransport(
+		new RemoteTransport(transportPort ?? port),
+		async () => {
+			// the registration at the address now, when it is another one
+			// (another controller, or this one over a new channel) that reads
+			// its routes as this one did
+			const now = controllers.get(directory);
+			if (!now || now === ref || now.config.codec !== config.codec)
+				return undefined;
+			await now.server;
+			return now.transport;
+		},
+	);
 	// the host's request log, only when it asked: one RPC per request. The
 	// rpc is created below; requests only arrive once it exists
 	function report(info: RequestInfo) {
@@ -430,6 +469,11 @@ function registerController(
 			hostReload: async (mode) => {
 				(await server).hostReloaded(mode);
 			},
+			// the controller shook hands again (with this worker or another):
+			// this channel answers what is in flight on it, then closes
+			retire: async () => {
+				drainController(ref);
+			},
 			goneClients: async (asked) => [
 				Array.isArray(asked) ? await goneClients(asked) : [],
 				[],
@@ -505,6 +549,7 @@ function registerController(
 		pool,
 		client,
 		owner: client,
+		...(token !== undefined ? { token } : {}),
 		serial: ++serials,
 		// a slot's worker, or the hub's (whose documents of a site with a
 		// slot leave for it too)
@@ -647,13 +692,49 @@ async function newestAlive(
  * address is free (unless a later registration already took it over).
  */
 function forget(ref: ControllerRef, reason: string) {
-	serviceWorkers.dropHost(ref.directory);
+	// a registration a later one took over has no say in the address's
+	// emulated service workers any more
+	if (controllers.get(ref.directory) === ref) {
+		serviceWorkers.dropHost(ref.directory);
+		controllers.delete(ref.directory);
+	}
 	ref.rpc.abort(reason);
 	ref.transport.close(reason);
 	ref.pool?.close();
 	ref.port.close();
-	if (controllers.get(ref.directory) === ref) controllers.delete(ref.directory);
 }
+
+/** the longest a registration being let go keeps a request in flight waiting before it closes */
+const DRAIN_MS = 60000;
+
+/**
+ * Let go of a registration its own controller replaced with a new channel:
+ * the requests and calls in flight on it get their answers there (a
+ * navigation, a long poll, a permission prompt), and once nothing waits on
+ * it, or after DRAIN_MS, it is forgotten. It used to be forgotten at once,
+ * which failed all of them: the page's fetches, and a navigation as the
+ * host's error page (502, "Controller replaced").
+ */
+function drainController(ref: ControllerRef) {
+	if (ref.draining) return;
+	ref.draining = true;
+	const sleep = (ms: number) =>
+		new Promise<void>((wake) => setTimeout(wake, ms));
+	void (async () => {
+		await Promise.race([
+			Promise.all([ref.transport.settled(), ref.rpc.settled()]),
+			sleep(DRAIN_MS),
+		]);
+		// told by the controller over the old channel (`retire`) before its
+		// new handshake reached this worker, or with no new handshake here
+		// at all (it went to the worker that replaced this one): the address
+		// stays served a moment longer, never an orphan in between
+		if (controllers.get(ref.directory) === ref) await sleep(RETIRE_GRACE_MS);
+		forget(ref, CONTROLLER_RETIRED);
+	})();
+}
+/** how long a registration that is let go keeps its address when no new handshake took it */
+const RETIRE_GRACE_MS = 5000;
 
 /** a page API call's sender: a document routed under `ref`'s address, by its real URL */
 function serviceWorkerSender(
