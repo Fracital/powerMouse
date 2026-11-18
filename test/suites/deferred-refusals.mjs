@@ -7,7 +7,8 @@
 // disconnect (FedCM), a same-origin download link's click, a form a
 // frame submits to its proxied parent (its submit event, or submit()) and
 // a link it clicks aimed there, a link and a form's submit() aimed by name
-// at a frame on its initial about:blank, a frame's navigation of another
+// at a frame on its initial about:blank, a sandboxed frame's write of a
+// part of its parent's location, a frame's navigation of another
 // window (`w.location = url`); and a call of no function through the
 // access API throws the TypeError the call threw (only its wording is a
 // part, src/inject/accessFailures.ts); navigator.storage.estimate()
@@ -96,6 +97,7 @@ const REFUSING = [
 	'download',
 	'blankLink',
 	'blankSubmit',
+	'sandboxedHash',
 	'navigateOther',
 	'estimate',
 	'worker',
@@ -441,7 +443,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 	}
 	const blank = await top.evaluate(
 		(calls) => window.__child(calls),
-		['blankLink', 'blankSubmit'],
+		['blankLink', 'blankSubmit', 'sandboxedHash'],
 	);
 	ok(
 		'with the parts, a link and a form aimed by name at a frame on its initial about:blank land there',
@@ -449,6 +451,13 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			blank.out?.blankSubmit?.inFrame === '?z=3' &&
 			blank.out.blankSubmit.threw === null,
 		JSON.stringify(blank.out),
+	);
+	ok(
+		"with the parts, a sandboxed frame's write of its parent's location hash throws the SecurityError and navigates nothing",
+		/^SecurityError: Failed to set a named property 'hash' on 'Location': The current window does not have permission to navigate the target frame/.test(
+			blank.out?.sandboxedHash?.threw ?? '',
+		) && blank.out.sandboxedHash.moved === false,
+		JSON.stringify(blank.out?.sandboxedHash),
 	);
 	// FedCM's protocol answers (the browser's get is never asked for an
 	// identity, with the parts or without)
@@ -540,6 +549,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 				'download',
 				'blankLink',
 				'blankSubmit',
+				'sandboxedHash',
 				'navigateOther',
 			].includes(call),
 	))
@@ -624,6 +634,12 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			out.blankSubmit.threw === 'no parts' &&
 			out.blankSubmit.at === 'about:blank',
 		JSON.stringify(out.blankSubmit),
+	);
+	ok(
+		"without the parts, a sandboxed frame's write of its parent's location hash throws and navigates nothing",
+		out.sandboxedHash?.threw === 'Error: no parts' &&
+			out.sandboxedHash.moved === false,
+		JSON.stringify(out.sandboxedHash),
 	);
 	ok(
 		'without the parts, a navigation of another window throws and navigates nothing',

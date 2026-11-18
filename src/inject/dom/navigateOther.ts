@@ -3,16 +3,20 @@
 // refused as Chrome refuses it, with its console message and SecurityError,
 // else made from that window's own realm once the service worker heard of
 // its initiator (at once for a window on its initial about:blank whose
-// client is of this document's realm). A deferred part of the document
-// bundle (./deferredParts.ts), made by the Context module's hook before it
-// calls anything of the browser's: without it the navigation throws and
-// nothing navigates. Its top level reads no global (constants and functions
-// only).
+// client is of this document's realm); and whether a sandboxed document
+// may navigate another window at all (DocumentClient.mayNavigate), with the
+// SecurityError it gets when it may not. A deferred part of the document
+// bundle (./deferredParts.ts), made by the Context module's hook (and by
+// mayNavigate's callers, Sandbox's gated Location, its link to the top and
+// window.open()) before it calls anything of the browser's: without it the
+// navigation throws (a link's is prevented) and nothing navigates. Its top
+// level reads no global (constants and functions only).
 import { siteOf } from '../../partition';
 import { routeHTML } from '../../rewriteHTML';
 import { injectDocumentJS } from '../../routeURL';
 import StompURL, { type urlLike } from '../../StompURL';
 import { INITIATOR_ROUTE } from '../../transport/messages';
+import { withStack } from '../nativeErrors';
 import { getPublicSuffix } from '../rewriter';
 import { activationState } from './activation';
 import type DocumentClient from './Client';
@@ -162,6 +166,76 @@ function reachesAncestor(nav: OtherNavigation, context: unknown): boolean {
 	return false;
 }
 /**
+ * DocumentClient.mayNavigate for a sandboxed document, `client`, and a
+ * `target` other than its own window: its descendants, the windows it
+ * opened, and the proxied top under allow-top-navigation (with user
+ * activation under allow-top-navigation-by-user-activation).
+ * `frameTopNavigation`: whether its frame's sandbox attribute grants
+ * allow-top-navigation.
+ */
+export function mayNavigate(
+	client: DocumentClient,
+	target: unknown,
+	frameTopNavigation: boolean,
+): boolean {
+	if (typeof target !== 'object' || target === null) return true;
+	if (client.openedWindows.has(target)) return true;
+	// a descendant: its chain of parents reaches this window
+	const parentOf = client['parentDescriptor'].get!;
+	let context = target as Context;
+	for (let depth = 0; depth < 64; depth++) {
+		let parent: Context;
+		try {
+			parent = Reflect.apply(parentOf, context, []);
+		} catch (error) {
+			break;
+		}
+		if (parent === client.global) return true;
+		if (parent === context) break;
+		context = parent;
+	}
+	// (the site pool: the top of the proxied world may be another slot's,
+	// out of reach)
+	if (
+		target !== client.proxiedTop &&
+		!(
+			client.sites &&
+			target === siteWindows().siteTop(client.global, client.sites.hub)
+		)
+	)
+		return false;
+	const activated = (activationState(client) & 1) !== 0;
+	// a document of another origin than its top's (an opaque one) needs a
+	// user activation all the same, unless its frame's attribute grants the
+	// flag: a policy's sandbox does not lift Chrome's framebusting
+	// intervention (csp-sandbox suite, measured)
+	if (client.allows('allow-top-navigation'))
+		return (
+			activated ||
+			frameTopNavigation ||
+			(!client.sandboxedOpaque && client.origin === client.topOrigin)
+		);
+	return client.allows('allow-top-navigation-by-user-activation') && activated;
+}
+/**
+ * The SecurityError a sandboxed document gets for navigating a window it
+ * may not (`member` of Location, set or called), naming the URL as the page
+ * wrote it
+ */
+export function navigationRefused(
+	client: DocumentClient,
+	member: string,
+	call: boolean,
+	url: URL | string,
+): DOMException {
+	return withStack(
+		new client.global.DOMException(
+			`${call ? `Failed to execute '${member}' on` : `Failed to set a named property '${member}' on`} 'Location': The current window does not have permission to navigate the target frame to '${String(url)}'.`,
+			'SecurityError',
+		),
+	);
+}
+/**
  * Why Chrome refuses this document's navigation of `target` to
  * `destination` (the reason its console message gives), or null when it
  * allows it: LocalFrame::CanNavigate, measured in Chrome 152, 156 and 157
@@ -280,7 +354,7 @@ function refuse(
 	} catch (error) {
 		// no console
 	}
-	return client.navigationRefused(member, member !== 'href', destination);
+	return navigationRefused(client, member, member !== 'href', destination);
 }
 /**
  * Navigate `target`, another window of the proxied world, to
@@ -365,7 +439,7 @@ export function navigateOther(
 		// initial about:blank): only a sandbox decides, and the browser lets
 		// this document navigate it
 		if (!client.mayNavigate(target))
-			throw client.navigationRefused(member, member !== 'href', destination);
+			throw navigationRefused(client, member, member !== 'href', destination);
 		const routed = routeHTML(
 			new StompURL(destination, client.url),
 			client.url,

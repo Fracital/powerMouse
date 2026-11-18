@@ -310,6 +310,31 @@
 				formAimed: () => aimedFrom('form'),
 				// the same, by submit(), which throws without the part
 				submitAimed: () => aimedFrom('submit'),
+				// a sandboxed frame of this one sets a part of this window's
+				// location, which a sandboxed document may not navigate (whether
+				// it may is a part, src/inject/dom/navigateOther.ts mayNavigate):
+				// what it threw, and whether this window's hash moved
+				sandboxedHash: () =>
+					new Promise((resolve) => {
+						const hash = location.hash;
+						const frame = document.createElement('iframe');
+						frame.sandbox = 'allow-scripts allow-same-origin';
+						addEventListener('message', (event) => {
+							if (event.source === frame.contentWindow)
+								setTimeout(
+									() =>
+										resolve({
+											threw: event.data.threw,
+											moved: location.hash !== hash,
+										}),
+									500,
+								);
+						});
+						// (a fetched document: an srcdoc's shell is a part too)
+						frame.src = 'deferred-refusals-aimed.html?hash';
+						document.body.append(frame);
+						setTimeout(() => resolve({ pending: true }), 5000);
+					}),
 				// and a link a frame of this one clicks, aimed at its parent
 				linkAimed: () => aimedFrom('link'),
 				// a link of this document aimed by name at a frame of it still on
