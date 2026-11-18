@@ -26,35 +26,17 @@
  * (src/blocker/csp.ts): the first worker's error before it answered says
  * so, and the copies it was to make are made again by the other.
  *
- * Everything is taken when the bundle loads, before the page runs.
+ * Everything is taken when the bundle loads, before the page runs
+ * (./sealerNatives.ts): this file is a deferred part of the document bundle
+ * (./deferredParts.ts), evaluated with the copies of a document no service
+ * worker controls (./uncontrolledCopies.ts), the one file that calls it.
  */
 import { SEALER_SOURCE } from '../../transport/messages';
 import { trustedScriptURL } from '../trusted';
+import type { SealerNatives } from './sealerNatives';
 
-type Post = (message: unknown) => void;
-
-const taken = (() => {
-	try {
-		const Worker = globalThis.Worker;
-		return {
-			Worker,
-			createObjectURL: globalThis.URL.createObjectURL,
-			URL: globalThis.URL,
-			Blob: globalThis.Blob,
-			post: Worker.prototype.postMessage as Post,
-			terminate: Worker.prototype.terminate,
-			listen: globalThis.EventTarget.prototype.addEventListener,
-			dataOf: Reflect.getOwnPropertyDescriptor(
-				globalThis.MessageEvent.prototype,
-				'data',
-			)!.get!,
-			setTimeout: globalThis.setTimeout.bind(globalThis),
-			now: Date.now,
-		};
-	} catch (error) {
-		return null;
-	}
-})();
+/** the natives, taken by the bundle at load (./sealerNatives.ts) */
+let held: SealerNatives = null;
 
 /** how long a worker takes new copies: a slow one never holds later ones up */
 const BATCH_MS = 100;
@@ -95,11 +77,11 @@ function mint(from: Batch, blob: Blob): Promise<string | null> {
 	return new Promise((resolve) => {
 		const id = from.next++;
 		from.waiting.set(id, resolve);
-		taken!.setTimeout(() => {
+		held!.setTimeout(() => {
 			if (from.waiting.delete(id)) resolve(null);
 		}, MINT_MS);
 		try {
-			Reflect.apply(taken!.post, from.worker, [[id, blob]]);
+			Reflect.apply(held!.post, from.worker, [[id, blob]]);
 		} catch (error) {
 			from.waiting.delete(id);
 			resolve(null);
@@ -108,6 +90,7 @@ function mint(from: Batch, blob: Blob): Promise<string | null> {
 }
 
 function open(route: string | null): Batch | null {
+	const taken = held;
 	if (!taken) return null;
 	try {
 		const routed = blobRefused && route !== null;
@@ -174,11 +157,11 @@ async function probe(url: string, route: string): Promise<boolean | null> {
 	const answer = await new Promise<string | null>((resolve) => {
 		const id = asked.next++;
 		asked.waiting.set(id, resolve);
-		taken!.setTimeout(() => {
+		held!.setTimeout(() => {
 			if (asked.waiting.delete(id)) resolve(null);
 		}, MINT_MS);
 		try {
-			Reflect.apply(taken!.post, asked.worker, [[id, url]]);
+			Reflect.apply(held!.post, asked.worker, [[id, url]]);
 		} catch (error) {
 			asked.waiting.delete(id);
 			resolve(null);
@@ -197,7 +180,7 @@ async function close(ended: Batch, route: string | null) {
 	if (batch === ended) batch = null;
 	const sentinel = await ended.sentinel;
 	try {
-		Reflect.apply(taken!.terminate, ended.worker, []);
+		Reflect.apply(held!.terminate, ended.worker, []);
 	} catch (error) {
 		// gone already
 	}
@@ -212,7 +195,7 @@ async function close(ended: Batch, route: string | null) {
 				} catch (error) {
 					break;
 				}
-			await new Promise((resolve) => taken!.setTimeout(resolve, 1));
+			await new Promise((resolve) => held!.setTimeout(resolve, 1));
 		}
 	ended.die();
 }
@@ -226,6 +209,8 @@ async function close(ended: Batch, route: string | null) {
  * policy refuses a blob: one.
  */
 export async function sealedURL(
+	/** the natives the bundle took at load (./sealerNatives.ts) */
+	natives: SealerNatives,
 	blob: Blob,
 	prime: (url: string) => Promise<boolean>,
 	route: string | null = null,
@@ -235,6 +220,7 @@ export async function sealedURL(
 		fetch: false,
 	},
 ): Promise<string | null> {
+	held = natives;
 	// a refusal the page's policy makes would show the page a violation:
 	// the route's worker, from the start
 	if (refuses.worker && route !== null) blobRefused = true;
@@ -242,7 +228,7 @@ export async function sealedURL(
 		if (
 			!batch ||
 			batch.closed ||
-			(taken !== null && taken.now() - batch.opened > BATCH_MS)
+			(held !== null && held.now() - batch.opened > BATCH_MS)
 		)
 			batch = open(route);
 		const mine = batch;
