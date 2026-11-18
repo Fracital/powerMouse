@@ -17,6 +17,9 @@
 //   (through that popup's own globals) and from every `event.source` it
 //   heard, the page knowing the share's name, and no key of its own window
 //   names the client or the share;
+// - the page and both frames seal a URL to the same text, whether in a
+//   codec module's instance (the page's, and a frame of its slot in it) or
+//   in JavaScript (a frame of another slot, src/wasm/codec.ts);
 // - a page that replaces methods of its own realm's Array, Object, String,
 //   RegExp and JSON, and then has its rewrites made, changes nothing of how
 //   another site's frame in the same slot is rewritten: that frame's eval,
@@ -373,6 +376,44 @@ for (const [mode, pool, frameSlots] of [
 			sharing?.length >= 2 && sharing.every((kind) => kind === 'top'),
 			JSON.stringify(sharing ?? 'no agent'),
 		);
+
+	// where each document seals (src/wasm/codec.ts codecRuns): a frame of
+	// another slot holds no parts of its own top's shell, so it seals in
+	// JavaScript, with no request, and must write what its top's module
+	// writes; one of its top's slot seals in its top's instance
+	const SEALED = `https://example.com/${'path/'.repeat(40)}?q=${'\u00e9\u4e2d'.repeat(30)}#x`;
+	const seals = await Promise.all(
+		[top, b, c].map((frame) =>
+			frame
+				.evaluate(
+					({ name, text }) => {
+						const client = window[name];
+						const sealed = client.codec.encode(text);
+						return {
+							runs: client.codecRuns,
+							sealed,
+							opened: client.codec.decode(sealed) === text,
+						};
+					},
+					{ name: clientName, text: SEALED },
+				)
+				.catch((error) => ({ error: error.message })),
+		),
+	);
+	ok(
+		`${mode}: the page and both frames seal a URL to the same text and open it again`,
+		seals.every(
+			(seal) => seal.opened === true && seal.sealed === seals[0].sealed,
+		),
+		JSON.stringify(
+			seals.map(({ runs, opened, error, sealed }) => ({
+				runs,
+				opened,
+				error,
+				same: sealed === seals[0].sealed,
+			})),
+		),
+	);
 
 	// the walk finds the agent where the hub's page is in reach: from the
 	// browser's own top of a window of the slot's origin no hook holds back

@@ -72,10 +72,11 @@ const childOf = (top, frameName, name = null) =>
 		async ([frameName, name]) => {
 			const client = name === null ? null : window[name];
 			if (client)
-				Reflect.defineProperty(client, 'sharedRewriter', {
-					configurable: true,
-					get: () => ({ build: 'another build' }),
-				});
+				for (const key of ['sharedRewriter', 'sharedCodec'])
+					Reflect.defineProperty(client, key, {
+						configurable: true,
+						get: () => ({ build: 'another build' }),
+					});
 			try {
 				const frame = document.createElement('iframe');
 				frame.name = frameName;
@@ -90,12 +91,25 @@ const childOf = (top, frameName, name = null) =>
 				document.body.append(frame);
 				const answered = await answer;
 				await new Promise((resolve) => setTimeout(resolve, 300));
+				const own = client ? frame.contentWindow[name] : null;
+				// (what its codec writes, against its top's: a URL that takes
+				// the codec's pieces, sealed in each)
+				const text = `https://example.com/${'x/'.repeat(9000)}?q=\u00e9`;
 				return {
 					answered,
-					counts: client ? frame.contentWindow[name].rewriteCounts : null,
+					counts: own ? own.rewriteCounts : null,
+					codec: own
+						? {
+								runs: own.codecRuns,
+								same: own.codec.encode(text) === client.codec.encode(text),
+								opened: own.codec.decode(client.codec.encode(text)) === text,
+							}
+						: null,
 				};
 			} finally {
-				if (client) Reflect.deleteProperty(client, 'sharedRewriter');
+				if (client)
+					for (const key of ['sharedRewriter', 'sharedCodec'])
+						Reflect.deleteProperty(client, key);
 			}
 		},
 		[frameName, name],
@@ -306,13 +320,22 @@ for (const [mode, base] of [
 		// a frame under a top of another build does not share the top's library
 		// instance; it takes the light library's text from its top and makes a
 		// copy of its own, then rewrites all the same (its module compiled from
-		// bytes it fetched, not watched here)
+		// bytes it fetched, not watched here). Nor its codec instance: it holds
+		// no parts of a shell of its own, so it seals in JavaScript
+		// (src/wasm/codec.ts), the same text as its top's module
 		const other = await childOf(top, 'other-build', name);
 		ok(
 			`${mode}: a frame under a top of another build rewrites with a copy of its own`,
 			other.answered.href === nativeChild.answered.href &&
 				other.counts.answered >= 1,
 			`${JSON.stringify(other.answered)} ${JSON.stringify(other.counts)}`,
+		);
+		ok(
+			`${mode}: a frame under a top of another build seals and opens as its top does, in a codec of its own`,
+			other.codec?.runs !== 'top' &&
+				other.codec?.same === true &&
+				other.codec.opened === true,
+			JSON.stringify(other.codec),
 		);
 		await watch.stop();
 	}
