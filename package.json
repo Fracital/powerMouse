@@ -81,7 +81,7 @@
 		"eslint-config-prettier": "^10.1.0",
 		"express": "^5.1.0",
 		"globals": "^17.14.0",
-		"holywisp": "0.5.2",
+		"holywisp": "0.5.3",
 		"playwright-core": "1.65.0",
 		"prettier": "^3.6.0",
 		"rimraf": "^6.0.1",
