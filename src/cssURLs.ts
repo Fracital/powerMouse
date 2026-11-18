@@ -73,7 +73,18 @@ const letter = (char: string, hex: string) => {
 };
 /** a `url(` however it is spelled (`URL(`, `u\72l(`, `\55RL(`) */
 export const URL_NAME = `${letter('u', '[57]5')}${letter('r', '[57]2')}${letter('l', '[46][cC]')}\\(`;
-const RAW_URL = new RegExp(`${URL_NAME}\\s*(['"]?)(.*?)\\1\\s*\\)`, 'g');
+// A quoted target runs to the first same quote a `)` follows, a backslash
+// escaping the character after it (the routed value's kept token is a
+// JSON string, `#url(\"a.png\")`, so text routed already is found whole);
+// failing that, the target runs unquoted to the first `)`.
+const LINE = String.raw`\n\r\u2028\u2029`;
+const RAW_URL = new RegExp(
+	`${URL_NAME}\\s*(?:(['"])((?:\\\\[^${LINE}]|[^\\\\${LINE}])*?)\\1|(.*?))\\s*\\)`,
+	'g',
+);
+/** a quoted target's escapes resolved, as the routed check reads it */
+const unescapeTarget = (target: string) =>
+	target.replace(/\\([^\n\r\u2028\u2029])/g, '$1');
 
 /** the page's url() token as it is kept after `#`: its name written `url` */
 const keptToken = (token: string) =>
@@ -105,22 +116,28 @@ export function originalOf(
  * property, or anything css-tree can't parse) through the binary route.
  */
 export function rewriteCSSValueURLs(value: string, url: StompURL): string {
-	return value.replace(RAW_URL, (match, quote, target) => {
-		try {
-			const routed = originalOf(target);
-			const original = routed?.url ?? target;
-			const resolved = new StompURL(new URL(original, url.toString()), url);
-			// routed already: the page's token as it was kept, so text routed
-			// twice still reads back as the page wrote it
-			match = routed ? routed.token : keptToken(match);
-			// keep the page's own token after '#', so reads can give it back
-			return `url(${JSON.stringify(
-				preserveValue(routeBinary(resolved), match),
-			)})`;
-		} catch (error) {
-			return match;
-		}
-	});
+	return value.replace(
+		RAW_URL,
+		(match, quote?: string, quoted?: string, bare?: string) => {
+			try {
+				const target = quoted ?? bare!;
+				const routed = originalOf(
+					quote && target.includes('\\') ? unescapeTarget(target) : target,
+				);
+				const original = routed?.url ?? target;
+				const resolved = new StompURL(new URL(original, url.toString()), url);
+				// routed already: the page's token as it was kept, so text routed
+				// twice still reads back as the page wrote it
+				match = routed ? routed.token : keptToken(match);
+				// keep the page's own token after '#', so reads can give it back
+				return `url(${JSON.stringify(
+					preserveValue(routeBinary(resolved), match),
+				)})`;
+			} catch (error) {
+				return match;
+			}
+		},
+	);
 }
 
 // a url() token whose target may hold escapes: a Typed OM value serialises

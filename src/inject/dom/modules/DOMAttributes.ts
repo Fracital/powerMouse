@@ -1708,6 +1708,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					: value;
 			};
 
+			const cssTextSet = this.#nativeCssText.set!;
 			const rewriteCssText = (value: unknown) => {
 				try {
 					return modifyCSS(
@@ -1769,11 +1770,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								: value;
 						},
 						set: (target, key, value) => {
-							if (typeof key === 'string')
-								value =
-									key === 'cssText'
-										? rewriteCssText(value)
-										: rewriteValue(value);
+							if (key === 'cssText') {
+								// past the prototype's setter, which routes the text too:
+								// routed once
+								Reflect.apply(cssTextSet, target, [rewriteCssText(value)]);
+								afterWrite(target);
+								return true;
+							}
+							if (typeof key === 'string') value = rewriteValue(value);
 							const done = Reflect.set(target, key, value);
 							afterWrite(target);
 							return done;
@@ -1820,7 +1824,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 										if (!declaration || typeof declaration !== 'object')
 											return Reflect.apply(target, that, args);
 										owners.set(declaration, that as Element);
-										Reflect.apply(target, that, [rewriteCssText(args[0])]);
+										// the browser forwards the write to cssText's setter,
+										// which routes it too: written past it, routed once
+										Reflect.apply(cssTextSet, declaration, [
+											rewriteCssText(args[0]),
+										]);
 										afterWrite(declaration);
 									},
 								),

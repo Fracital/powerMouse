@@ -1,0 +1,54 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>custom-property-csstext</title>
+<script>
+	// A style's text written by script, with a quoted url() in a custom
+	// property and a declaration after it: through cssText, through
+	// `el.style = text` and through the attribute, in this document and in
+	// an about:blank frame (which no service worker controls). Each reads
+	// back as natively: the custom property as written, the declaration after
+	// it kept, and a property that takes the custom property by var() loads
+	// the image it names.
+	window.__record = { done: false };
+	const image = '/pages/blank-cors-image.svg';
+	const texts = {
+		double: `--a: url("${image}"); color: red`,
+		single: `--a: url('${image}'); color: red`,
+		bare: `--a: url(${image}); color: red`,
+		two: `--a: url("${image}"); --b: url("${image}?b"); color: red`,
+		used: `--a: url("${image}"); background-image: var(--a); width: 3px; height: 3px`,
+	};
+	const ways = {
+		cssText: (element, text) => (element.style.cssText = text),
+		assign: (element, text) => (element.style = text),
+		attribute: (element, text) => element.setAttribute('style', text),
+	};
+	function read(doc, record, prefix) {
+		for (const [name, text] of Object.entries(texts))
+			for (const [way, write] of Object.entries(ways)) {
+				const element = doc.createElement('div');
+				doc.body.append(element);
+				write(element, text);
+				const key = `${prefix} ${name} ${way}`;
+				record[`${key} --a`] = element.style.getPropertyValue('--a');
+				record[`${key} --b`] = element.style.getPropertyValue('--b');
+				record[`${key} color`] = element.style.color;
+				record[`${key} background`] =
+					doc.defaultView.getComputedStyle(element).backgroundImage;
+				// the double-quoted token serialises as written
+				if (name === 'double' || name === 'two')
+					record[`${key} cssText`] = element.style.cssText;
+			}
+	}
+	addEventListener('load', async () => {
+		const record = {};
+		read(document, record, 'page');
+		const frame = document.createElement('iframe');
+		document.body.append(frame);
+		read(frame.contentDocument, record, 'blank');
+		// the about:blank frame's copy of the image by var()
+		await new Promise((resolve) => setTimeout(resolve, 1500));
+		window.__record = { ...record, done: true };
+	});
+</script>
+<body></body>

@@ -362,6 +362,22 @@ fn original_of(target: &[u8]) -> Option<(Vec<u8>, (usize, usize))> {
 	Some((token, url))
 }
 
+/// `unescapeTarget`: a quoted target's escapes resolved (a backslash and
+/// the character after it, one that ends no line, read as that character),
+/// as the routed check reads it
+fn unescape_target(target: &[u8]) -> Vec<u8> {
+	let mut output = Vec::with_capacity(target.len());
+	let mut at = 0;
+	while at < target.len() {
+		if target[at] == b'\\' && at + 1 < target.len() && !line_terminator(target, at + 1) {
+			at += 1;
+		}
+		output.push(target[at]);
+		at += 1;
+	}
+	output
+}
+
 /// `preserveValue`: `url` to its `#`, then `#` and the page's token
 fn preserve_value(url: &[u8], value: &[u8], output: &mut Vec<u8>) {
 	let end = url
@@ -385,11 +401,12 @@ fn line_terminator(text: &[u8], at: usize) -> bool {
 }
 
 /// `RAW_URL` (src/cssURLs.ts) tried at the `url(` whose `(` is at `paren`:
-/// where group 2 stands and where the match ends. The expression backtracks in a
-/// fixed order: all the white space, then a quote when one is there (group
-/// 2 as short as it can be, the same quote after it), then no quote; fewer
-/// white space cannot match where those did not.
-fn url_at(text: &[u8], paren: usize) -> Option<(usize, usize, usize)> {
+/// where the target stands, where the match ends and whether the target was
+/// quoted. The expression backtracks in a fixed order: all the white space,
+/// then a quote when one is there (the target as short as it can be, a
+/// backslash escaping the character after it, the same quote after it),
+/// then no quote; fewer white space cannot match where those did not.
+fn url_at(text: &[u8], paren: usize) -> Option<(usize, usize, usize, bool)> {
 	let start = skip_spaces(text, paren + 1);
 	if let Some(&quote) = text.get(start)
 		&& (quote == b'"' || quote == b'\'')
@@ -399,8 +416,15 @@ fn url_at(text: &[u8], paren: usize) -> Option<(usize, usize, usize)> {
 			if text[end] == quote {
 				let close = skip_spaces(text, end + 1);
 				if text.get(close) == Some(&b')') {
-					return Some((start + 1, end, close + 1));
+					return Some((start + 1, end, close + 1, true));
 				}
+			} else if text[end] == b'\\' {
+				// an escape: the character after it is the string's, unless
+				// it ends a line or the text
+				if end + 1 >= text.len() || line_terminator(text, end + 1) {
+					break;
+				}
+				end += 1;
 			} else if line_terminator(text, end) {
 				break;
 			}
@@ -411,7 +435,7 @@ fn url_at(text: &[u8], paren: usize) -> Option<(usize, usize, usize)> {
 	loop {
 		let close = skip_spaces(text, end);
 		if text.get(close) == Some(&b')') {
-			return Some((start, end, close + 1));
+			return Some((start, end, close + 1, false));
 		}
 		if close > end {
 			// white space that no parenthesis follows: group 2 runs over it,
@@ -461,12 +485,16 @@ pub fn rewrite_urls(value: &[u8], route: &mut Route, output: &mut Vec<u8>) -> Pa
 	let mut answer = Vec::new();
 	let mut preserved = Vec::new();
 	while let Some((found, paren)) = find_url(value, at) {
-		let Some((target_start, target_end, end)) = url_at(value, paren) else {
+		let Some((target_start, target_end, end, quoted)) = url_at(value, paren) else {
 			at = found + 1;
 			continue;
 		};
 		let target = &value[target_start..target_end];
-		let routed = original_of(target);
+		let routed = if quoted && target.contains(&b'\\') {
+			original_of(&unescape_target(target))
+		} else {
+			original_of(target)
+		};
 		let original = match &routed {
 			Some((token, url)) => &token[url.0..url.1],
 			None => target,
@@ -803,6 +831,16 @@ mod tests {
 		let once = value("URL(a)");
 		assert_eq!(value(&once), once);
 		let once = sheet("a{b:U\\52L(c)}");
+		assert_eq!(sheet(&once), once);
+		// a double-quoted token is kept with its quotes escaped: routed again,
+		// the escaped quote ends no string
+		let once = value("url(\"a.png\") url(\"b.png\") c");
+		assert_eq!(
+			once,
+			"url(\"/1/a.png#url(\\\"a.png\\\")\") url(\"/1/b.png#url(\\\"b.png\\\")\") c"
+		);
+		assert_eq!(value(&once), once);
+		let once = sheet("a{--b:url(\"c\");--d:url('e');f:g}");
 		assert_eq!(sheet(&once), once);
 	}
 
