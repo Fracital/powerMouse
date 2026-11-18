@@ -46,7 +46,7 @@ function blockedOf(url: URL): string {
  * browser would fire it, in a timer, so it does not re-enter the page
  * mid-mutation, its part made there (./violations.ts): the browser never
  * gets the page's script-src/style-src (src/csp.ts browserPolicy), so the
- * inject reports the page's own code itself; untrusted (csp-scripts
+ * inject reports the page's own code itself, read as trusted (csp-scripts
  * compares no isTrusted; the fields it compares are the browser's). A code
  * one without `documentURI`, a Trusted Types one with it.
  */
@@ -297,7 +297,7 @@ export const policyChecks = {
 			// the part cannot be had: the load went out all the same
 		}
 	},
-	/** a sink's refusal only report-only policies make: the inject's event, untrusted (the browser judges its own value) */
+	/** a sink's refusal only report-only policies make: the inject's event (the browser judges its own value) */
 	reportTrustedTypes(client: DocumentClient, sink: string, value: string) {
 		const sample = sinkSample(sink, value);
 		for (const { policy } of client.pagePolicies())

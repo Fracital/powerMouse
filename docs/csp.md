@@ -84,8 +84,9 @@ Chrome 152 and 156; `src/cspJudge.ts` `codeAllows`,
 A refusal is the inject's own securitypolicyviolation event, dispatched on
 the document, with Chrome's fields (the page's policy as its
 `originalPolicy`, the page's code as its `sample` under 'report-sample', the
-element Chrome names as its `target`); it is not trusted, which the suite
-does not compare for scripts and styles.
+element Chrome names as its `target`); its listeners read it as trusted,
+as the browser's is (`trustTaggedViolations`), which the suite does not
+compare for scripts and styles.
 
 An inline script (its text) or an inline style runs only where an enforced
 policy allows it by 'unsafe-inline', by a nonce the element carries, or by
@@ -140,7 +141,7 @@ tail when a default policy exists but returned null or does not cover the
 type. A `createPolicy` the `trusted-types` directive refuses (a disallowed or
 duplicate name) throws Chrome's TypeError and reports a trusted-types-policy
 violation. Under a report-only policy the sink goes on with the page's value
-and the inject reports it; the violation is not trusted.
+and the inject reports it; its listeners read the violation as trusted.
 
 An enforced Trusted Types violation is the browser's own to the page, which
 compares `isTrusted`: the browser never gets the directive, so the inject
@@ -235,7 +236,8 @@ inject stops those at the worker's global, before the page's listeners
 A report-only policy's refusal of a load that goes out cannot be made the
 browser's without refusing the load: the inject dispatches the violation
 itself, with Chrome's fields, as many times as Chrome fires it (a fetch, a
-beacon and a frame twice, measured), but not trusted. The worker tells the
+beacon and a frame twice, measured), which its listeners read as trusted,
+as the browser's (csp-base-uri compares it). The worker tells the
 document of the ones only it sees (`CSP_REPORT`); the fetch,
 XMLHttpRequest, EventSource, beacon and WebSocket hooks report their own.
 
@@ -352,7 +354,7 @@ refuses fires a violation, natively either.
 ## Not yet as natively
 
 - Trusted Types: a report-only policy's violation of a sink the inject
-  writes is not trusted and reaches no `ReportingObserver`, and the
+  writes reaches no `ReportingObserver`, and the
   browser reports a report-only refusal of a script whose text landed as
   a Text node, or of a javascript: URL, with the rewrite as the sample.
   A javascript: URL of a link (its href is rewritten when it is set) is
@@ -395,7 +397,8 @@ refuses fires a violation, natively either.
   submission: its `formData` is null, natively the form's (csp-navigation
   lists it as an expected difference).
 - A report-only base-uri or form-action refusal, and one of a frame's own
-  navigation, is the inject's event (untrusted, no source position); a
+  navigation, is the inject's event (no source position; a base-uri that
+  allows nothing is the browser's own, which names the inject's hook); a
   same-frame one may go with the document, as natively it may.
 - A navigation's hop refused by one of two policies is reported by both
   (the browser refuses `REFUSED_URL` under every policy it has).

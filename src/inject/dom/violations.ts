@@ -20,7 +20,8 @@ import { deferred } from './deferred';
  * `documentURI` it is one the page's code or a load makes (named by the
  * page's URL, with its referrer and status 200, its target `node`); with it,
  * a Trusted Types one, named as the client measured it when it was refused.
- * An enforced one reads back trusted (ContentSecurity).
+ * It reads back trusted, an enforced or a report-only one, as the browser's
+ * does (ContentSecurity).
  */
 export function dispatchViolation(
 	client: DocumentClient,
@@ -58,7 +59,7 @@ export function dispatchViolation(
 	// isTrusted is an own, non-configurable accessor Chrome puts on every
 	// event, so it cannot be set here; ContentSecurity hands the page's
 	// listeners a view that reads it true for a tagged event
-	if (policy.disposition === 'enforce') client.trustedViolations.add(event);
+	client.trustedViolations.add(event);
 	Reflect.apply(
 		(client.global as typeof globalThis).EventTarget.prototype.dispatchEvent,
 		document,

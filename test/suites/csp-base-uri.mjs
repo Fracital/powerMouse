@@ -150,8 +150,6 @@ function trackBaseConsole(page) {
  * inject's names nothing (docs/csp.md, Not yet as natively)
  */
 const POSITION = ['sourceFile', 'lineNumber', 'columnNumber'];
-/** whether the inject's own violation reads as trusted (the next change) */
-const UNCOMPARED = ['isTrusted'];
 /**
  * A case's violations as compared: with `source`, every field the probes
  * recorded but `left` (`positions`: only where the code was)
@@ -165,7 +163,7 @@ const events = (value, source, positions = false) =>
 							Object.entries(event).filter(([field]) =>
 								positions
 									? POSITION.includes(field)
-									: !POSITION.includes(field) && !UNCOMPARED.includes(field),
+									: !POSITION.includes(field),
 							),
 						),
 					)

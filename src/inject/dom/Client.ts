@@ -1416,7 +1416,7 @@ export default class DocumentClient extends Client {
 	 * event for each such policy, as the browser fires it, named as Chrome
 	 * names the load (a navigation of another origin by its origin). The
 	 * browser cannot be made to report it itself without refusing the load,
-	 * so the event is the inject's: the same fields, but not trusted.
+	 * so the event is the inject's: the same fields, read as trusted.
 	 */
 	reportRefusal(
 		directive: string,
@@ -1444,13 +1444,12 @@ export default class DocumentClient extends Client {
 	/**
 	 * Synthesised Trusted Types violations the browser cannot fire (it gets no
 	 * `require-trusted-types-for`/`trusted-types`, src/csp.ts): the inject
-	 * judges the page's value and reports its refusal itself. An enforced one
-	 * is tagged so it reads back trusted, as the browser's is
-	 * (ContentSecurity); a report-only one is left untrusted (the suite does
-	 * not compare isTrusted for the report-only cases).
+	 * judges the page's value and reports its refusal itself. Each is tagged
+	 * so it reads back trusted, as the browser's is (ContentSecurity), and so
+	 * is every other violation the inject fires (./violations.ts).
 	 */
 	readonly trustedViolations = new LazyWeakSet<object>();
-	/** a sink's refusal only report-only policies make: the inject's event, untrusted (the browser judges its own value) */
+	/** a sink's refusal only report-only policies make: the inject's event (the browser judges its own value) */
 	override reportTrustedTypes(sink: string, value: string) {
 		this.#checks()?.reportTrustedTypes(this, sink, value);
 	}
