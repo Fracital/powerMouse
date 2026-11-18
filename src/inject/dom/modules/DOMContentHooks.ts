@@ -464,9 +464,15 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			// a script of the document's own markup the page inserts again (it
 			// read the text back and made a script of it): the worker's rewrite
 			const type = scriptType(script);
+			// a script with no text (one that loads by `src`, most of a page's)
+			// runs none of it: nothing to rewrite. Asked of the library, it made
+			// a top's first task fetch and compile the wasm module synchronously
+			// when nothing else of that task needed it (15 to 30 ms)
 			const rewritten =
-				client.prewrittenScript(type === 'genericModule', passed, true) ??
-				modifyJS(passed, client.baseURL, client.config, type);
+				passed === ''
+					? ''
+					: (client.prewrittenScript(type === 'genericModule', passed, true) ??
+						modifyJS(passed, client.baseURL, client.config, type));
 			// a rewrite that changed nothing leaves no mark. The mark is the
 			// rewritten text, and a script of the document's markup whose text
 			// is its own rewrite (nothing in it to rewrite, and written as the

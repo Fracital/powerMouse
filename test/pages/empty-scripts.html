@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>empty scripts</title>
+		<script>
+			// The suite empty-script-rewrite: every script here but this one has
+			// no text (external, a module, an empty element, one added empty), so
+			// there is nothing of theirs to rewrite, and the proxied page asks its
+			// rewriter for nothing before the controller's module arrives.
+			window.__empty = { ran: [] };
+			const added = document.createElement('script');
+			document.head.appendChild(added);
+			window.__empty.addedText = added.text;
+		</script>
+		<script src="empty-scripts.js"></script>
+		<script type="module" src="empty-scripts-module.js"></script>
+		<script></script>
+	</head>
+	<body>
+		<p>empty scripts</p>
+		<script>
+			addEventListener('load', () => {
+				const scripts = [...document.scripts];
+				window.__empty.texts = scripts.map((script) => script.text);
+				window.__empty.ready = true;
+			});
+		</script>
+	</body>
+</html>

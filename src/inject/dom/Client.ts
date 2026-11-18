@@ -3557,14 +3557,17 @@ export default class DocumentClient extends Client {
 			this.giveCodeNonce(script, null, passed, false);
 		}
 		const module = scriptKind(script) === 'module';
+		// no text runs nothing: nothing to rewrite (DOMContentHooks)
 		const rewritten =
-			this.prewrittenScript(module, passed, true) ??
-			modifyJS(
-				passed,
-				this.baseURL,
-				this.config,
-				module ? 'genericModule' : 'generic',
-			);
+			passed === ''
+				? ''
+				: (this.prewrittenScript(module, passed, true) ??
+					modifyJS(
+						passed,
+						this.baseURL,
+						this.config,
+						module ? 'genericModule' : 'generic',
+					));
 		this.rewrittenScripts.set(script, rewritten);
 		// (what runs is the inject's, which the page's default policy is not
 		// asked of again where it lands as a Text node: TrustedTypes.ts)
