@@ -59,7 +59,7 @@ const { records } = m;
  * loop plays it: every 10 ms, 10 ms from a sync buffer of `future`
  * samples, and a decision when that holds less than 10 ms past its
  * overlap of 30 (a frame taken, made `stretchMs` shorter or longer where
- * the decision says, twice that shorter for its fast accelerate; or
+ * the decision says, its fast accelerate too, as Chrome runs it; or
  * `lag` samples at a time made up for one that is not there; a frame
  * after made-up sound merged in at `best` samples of it, by default
  * where the made-up sound not played yet ends; a stream starts with the
@@ -106,7 +106,7 @@ function play(
 				let frames = 960;
 				const by = {
 					accelerate: -stretchMs,
-					fast: -2 * stretchMs,
+					fast: -stretchMs,
 					preemptive: stretchMs,
 				}[op];
 				if (by) {
@@ -1236,6 +1236,123 @@ function tonePackets(ms, rate, step, { frames = 40, start = 1000 } = {}) {
 			shorter?.change === -145 &&
 			lags.every((lag) => lag === 291),
 		JSON.stringify({ longer: longer?.change, shorter: shorter?.change, lags }),
+	);
+}
+
+// --- a hold-up, on a clock of the test's own ---
+{
+	// A 660 Hz tone in 20 ms packets, held up 300 ms 3 s in. Natively
+	// (Chrome 157, the jb-probe kit's counts every 5 ms, with an output
+	// that asks every 10 ms) the target stays at about 300 ms for 4.5 s,
+	// then falls to 20, and the delay comes down from 300 to 145 ms over
+	// 500 ms, 581 to 871 samples each 50 ms: one pitch period a 10 ms tick
+	// where it holds 20 ms to stretch, as NetEq's fast accelerate (four
+	// times past the upper limit) runs in Chrome, where WebRTC's
+	// enable_fast_accelerate is off. The worker took out four periods at
+	// once, 2,324 to 2,904 samples each 50 ms, over 150 ms.
+	let clock = 0;
+	let ids = 0;
+	const timers = new Map();
+	const saved = {
+		setTimeout: globalThis.setTimeout,
+		clearTimeout: globalThis.clearTimeout,
+		performance: Object.getOwnPropertyDescriptor(globalThis, 'performance'),
+	};
+	Object.defineProperty(globalThis, 'performance', {
+		value: { now: () => clock },
+		configurable: true,
+		writable: true,
+	});
+	globalThis.setTimeout = (run, ms = 0) => {
+		timers.set(++ids, { at: clock + Math.max(0, ms), run });
+		return ids;
+	};
+	globalThis.clearTimeout = (id) => timers.delete(id);
+	const until = (time) => {
+		for (;;) {
+			let next = null;
+			for (const entry of timers)
+				if (entry[1].at <= time && (!next || entry[1].at < next[1].at))
+					next = entry;
+			if (!next) break;
+			timers.delete(next[0]);
+			clock = Math.max(clock, next[1].at);
+			next[1].run();
+		}
+		clock = time;
+	};
+	globalThis.AudioDecoder = class {
+		constructor({ output }) {
+			this.output = output;
+			this.state = 'configured';
+			this.decodeQueueSize = 0;
+		}
+		configure() {}
+		decode(chunk) {
+			const from = Math.round(chunk.timestamp * 0.048);
+			this.output(
+				new FakeAudioData({
+					format: 'f32-planar',
+					sampleRate: 48000,
+					numberOfFrames: 960,
+					numberOfChannels: 1,
+					timestamp: chunk.timestamp,
+					data: Float32Array.from(
+						{ length: 960 },
+						(_, i) => 0.5 * Math.sin((2 * Math.PI * 660 * (from + i)) / 48000),
+					),
+				}),
+			);
+		}
+		close() {}
+	};
+	globalThis.EncodedAudioChunk = class {
+		constructor({ timestamp, data }) {
+			this.timestamp = timestamp;
+			this.data = new Uint8Array(data);
+		}
+	};
+	const receiver = new m.AudioReceiver();
+	receiver.setTrack(new WritableStream({ write() {} }));
+	const steps = [];
+	let last = 0;
+	for (let packet = 0; packet < 500; packet++) {
+		const sent = packet * 20;
+		// (held from 3,000 to 3,300 ms, then sent at once)
+		const at = sent >= 3000 && sent < 3300 ? 3300 : sent;
+		while (last + 50 <= at) {
+			last += 50;
+			until(last);
+			steps.push(receiver.played.removedSamplesForAcceleration);
+		}
+		until(at);
+		receiver.frame({
+			codec: 'opus',
+			time: BigInt(packet * 960),
+			payload: Uint8Array.of(0x4b, 1, 2, 3),
+			flags: records.FLAG_CONTIGUOUS,
+		});
+	}
+	receiver.close();
+	globalThis.setTimeout = saved.setTimeout;
+	globalThis.clearTimeout = saved.clearTimeout;
+	Object.defineProperty(globalThis, 'performance', saved.performance);
+	delete globalThis.AudioDecoder;
+	delete globalThis.EncodedAudioChunk;
+	const each = steps.map((removed, at) => removed - (steps[at - 1] ?? 0));
+	const most = Math.max(...each);
+	const first = each.findIndex((removed) => removed > 0);
+	const busy = each.filter((removed) => removed > 0).length;
+	ok(
+		'after a 300 ms hold-up the delay comes down as in Chrome, a pitch period of the tone each 10 ms at most (Chrome: 581 to 871 samples each 50 ms over 500 ms), not four at once',
+		most <= 900 && most >= 435 && busy >= 8 && steps.at(-1) >= 5000,
+		JSON.stringify({
+			most,
+			first: first * 50,
+			busy,
+			removed: steps.at(-1),
+			each: each.slice(first, first + 14),
+		}),
 	);
 }
 

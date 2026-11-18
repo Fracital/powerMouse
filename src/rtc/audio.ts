@@ -1616,11 +1616,38 @@ export class AudioReceiver {
 		// is (decoded all the same) and a later decision shortens the next
 		// one ("build up decoded data"), so it shortens a frame at most
 		// every other frame
+		const left = this.#futureFrames - OVERLAP;
+		const long = this.#playout.frameMs >= 30;
 		const building =
-			(op === 'accelerate' || op === 'fast') &&
-			this.#futureFrames - OVERLAP < 2 * OUT &&
-			this.#playout.frameMs < 30;
+			(op === 'accelerate' || op === 'fast') && left < 2 * OUT && !long;
 		if (building) op = 'normal';
+		// With 30 ms in the sync buffer past its overlap (10 ms, of frames
+		// of 30 ms or more) NetEq stretches what that holds and decodes
+		// nothing; of those longer frames it shortens nothing under 30 ms
+		// (nor a telephone event's tones)
+		if (op !== 'normal' && op !== 'merge' && op !== 'expand') {
+			if (left >= 3 * OUT || (left >= OUT && long)) {
+				if (!this.#toned && (op === 'preemptive' || left >= 3 * OUT)) {
+					const channels = this.#future.length;
+					const done = this.#stretch(new Float32Array(0), 0, channels, op);
+					if (done) {
+						// (what a preemptive expand puts in plays after it)
+						this.#append(
+							Array.from({ length: channels }, (_, channel) =>
+								done.samples.subarray(
+									channel * done.frames,
+									(channel + 1) * done.frames,
+								),
+							),
+							done.frames,
+						);
+						this.#mode = op;
+						this.#playout.stretched(done.change / 48, now);
+					}
+				}
+				op = 'normal';
+			}
+		}
 		if (!ample || op !== 'normal' || building) {
 			const sound = op === 'expand' ? null : this.#playout.take();
 			if (sound) this.#play(sound, op, now);
@@ -1676,7 +1703,7 @@ export class AudioReceiver {
 		) {
 			const changed = this.#stretch(samples, frames, channels, op);
 			if (changed) {
-				this.#playout.stretched((changed.frames - frames) / 48, now);
+				this.#playout.stretched(changed.change / 48, now);
 				({ samples, frames } = changed);
 			}
 		}
@@ -1713,14 +1740,21 @@ export class AudioReceiver {
 	 * NetEq's accelerate and preemptive expand of a frame: it and what it
 	 * borrows from the end of the sync buffer (played or not) to make 30 ms
 	 * are stretched at their 15 ms point, and what was borrowed and not
-	 * played goes back (an accelerate may fade into it)
+	 * played goes back, shorter where the cut fell in it (an accelerate of
+	 * the sync buffer alone, `frames` 0); Chrome's NetEq has fast
+	 * accelerate off (WebRTC's `enable_fast_accelerate`), so `fast` takes
+	 * out a period as `accelerate` does
 	 */
 	#stretch(
 		samples: Float32Array,
 		frames: number,
 		channels: number,
 		op: 'accelerate' | 'fast' | 'preemptive',
-	): { samples: Float32Array<ArrayBuffer>; frames: number } | null {
+	): {
+		samples: Float32Array<ArrayBuffer>;
+		frames: number;
+		change: number;
+	} | null {
 		const borrowed = Math.max(0, STRETCH_INPUT - frames);
 		if (borrowed > HISTORY) return null;
 		const planes = Array.from({ length: channels }, (_, channel) => {
@@ -1735,25 +1769,35 @@ export class AudioReceiver {
 			return plane;
 		});
 		const old = Math.max(0, borrowed - this.#futureFrames);
-		const done = stretch(planes, borrowed + frames, op, old, OVERLAP);
+		const done = stretch(
+			planes,
+			borrowed + frames,
+			op === 'preemptive' ? op : 'accelerate',
+			old,
+			OVERLAP,
+		);
 		if (!done) return null;
 		const plane = (channel: number) =>
 			done.planes[Math.min(channel, channels - 1)];
-		for (let channel = 0; channel < this.#future.length; channel++)
-			this.#future[channel].set(
-				plane(channel).subarray(old, borrowed),
-				this.#futureFrames - (borrowed - old),
-			);
-		for (let channel = 0; channel < 2; channel++)
-			this.#history[channel].set(
-				plane(channel).subarray(0, borrowed),
-				HISTORY - borrowed,
-			);
-		const length = done.length - borrowed;
+		const kept = Math.min(borrowed, done.length);
+		const from = this.#futureFrames - (borrowed - old);
+		for (let channel = 0; channel < this.#future.length; channel++) {
+			const future = new Float32Array(from + kept - old);
+			future.set(this.#future[channel].subarray(0, from));
+			future.set(plane(channel).subarray(old, kept), from);
+			this.#future[channel] = future;
+		}
+		this.#futureFrames = from + kept - old;
+		for (let channel = 0; channel < 2; channel++) {
+			const history = this.#history[channel];
+			history.copyWithin(borrowed - kept, 0, HISTORY - borrowed);
+			history.set(plane(channel).subarray(0, kept), HISTORY - kept);
+		}
+		const length = done.length - kept;
 		const out = new Float32Array(length * channels);
 		for (let channel = 0; channel < channels; channel++)
-			out.set(plane(channel).subarray(borrowed, done.length), channel * length);
-		return { samples: out, frames: length };
+			out.set(plane(channel).subarray(kept, done.length), channel * length);
+		return { samples: out, frames: length, change: done.change };
 	}
 
 	/** how loud made-up sound still is (NetEq's mute factor) */
@@ -1957,11 +2001,11 @@ export class AudioReceiver {
 		);
 	}
 
-	/** sound into the sync buffer (NetEq counts it as it is made) */
+	/** sound into the sync buffer (NetEq counts it as it is made; not what a stretch put in) */
 	#append(
 		planes: Float32Array[],
 		frames: number,
-		made: { concealed: boolean; waited: number; silent?: boolean },
+		made?: { concealed: boolean; waited: number; silent?: boolean },
 	) {
 		const channels = planes.length;
 		const old = this.#future;
@@ -1974,14 +2018,15 @@ export class AudioReceiver {
 		});
 		this.#futureFrames += frames;
 		this.#remember(planes, frames);
-		this.#played.made(
-			frames,
-			made.concealed,
-			!!made.silent,
-			NOISE_RATES[this.#speech],
-			made.waited,
-			this.#playout.stats.targetMs,
-		);
+		if (made)
+			this.#played.made(
+				frames,
+				made.concealed,
+				!!made.silent,
+				NOISE_RATES[this.#speech],
+				made.waited,
+				this.#playout.stats.targetMs,
+			);
 	}
 
 	/** the sound played, kept for a frame to be made up */

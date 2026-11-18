@@ -26,9 +26,8 @@ const EXPAND_WINDOW = 60;
 const EXPAND_LAGS = 54;
 const EXPAND_PEAKS_IN = 51;
 const DISTORTION = 120;
-/** how alike a period and the next must be (0.9; 0.5 when fast) */
+/** how alike a period and the next must be */
 const ALIKE = 0.9;
-const FAST_ALIKE = 0.5;
 /**
  * Sound quieter than this (mean square, full scale 1) is not speech, and
  * is cut anywhere (NetEq's fixed threshold before it has estimated the
@@ -185,15 +184,15 @@ export function expandLagOf(history: Float32Array): {
 
 /**
  * `planes` (`length` samples each, at least `STRETCH_INPUT`) made a pitch
- * period shorter (`accelerate`; as many periods as fit in 15 ms, `fast`)
- * or longer (`preemptive`, the first `old` samples of it played already),
+ * period shorter (`accelerate`; NetEq's fast mode, as many periods as fit
+ * in 15 ms, is off in Chrome: WebRTC's `enable_fast_accelerate`) or longer (`preemptive`, the first `old` samples of it played already),
  * the stretch at the cut faded across as NetEq fades it; null where its
  * sound does not repeat well enough
  */
 export function stretch(
 	planes: Float32Array[],
 	length: number,
-	op: 'accelerate' | 'fast' | 'preemptive',
+	op: 'accelerate' | 'preemptive',
 	old: number,
 	overlap: number,
 ): { planes: Float32Array[]; length: number; change: number } | null {
@@ -230,8 +229,7 @@ export function stretch(
 		});
 		return { planes: out, length: length + peak, change: peak };
 	}
-	if (!(alike > (op === 'fast' ? FAST_ALIKE : ALIKE) || !active)) return null;
-	if (op === 'fast') peak = Math.floor(AT / peak) * peak;
+	if (!(alike > ALIKE || !active)) return null;
 	// the first 15 ms, its last period fading into the period after it,
 	// then the rest after that period
 	const out = planes.map((plane) => {

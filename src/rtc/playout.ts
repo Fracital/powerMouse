@@ -94,8 +94,9 @@ class Forgetting {
  * default): the sound playing is kept between the target and the target
  * and the longest delay of the last 2 s and `LIMIT_MS` behind the packet
  * of those 2 s that came soonest for its time, a pitch period at a time,
- * at most once each `TIMESCALE_MS`, and as fast as a frame allows past
- * `FAST` times the upper limit
+ * at most once each `TIMESCALE_MS`, and without waiting past `FAST` times
+ * the upper limit (NetEq's fast accelerate, which in Chrome takes out a
+ * period as its accelerate does)
  */
 const LIMIT_MS = 20;
 /** how long after a frame was made shorter or longer the next may be (NetEq's six 10 ms ticks) */

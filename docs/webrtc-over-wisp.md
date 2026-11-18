@@ -1276,14 +1276,17 @@ and 20 ms, measured as how far behind the packet of those 2 s that came
 soonest for its time the sound playing is (`GetPlayoutDelayMs`; a
 packet that came out of order is kept in that history but does not set
 how late the others are, as in NetEq's). At or above the upper limit a
-frame is made a pitch period shorter (accelerate), at four times it as
-many periods as fit in half the frame (fast accelerate, which does not
-wait), and under the target a period longer (preemptive expand), at
-most once each 60 ms and not in a stream's first 60 ms (NetEq's soft
-reset on its first packet starts the countdown each stretch starts),
-a frame made shorter only with 20 ms already in the sync buffer past
-its overlap (with less it plays as it is and the next is shortened, as
-NetEq builds up decoded sound first), where the frame's sound repeats well enough (periods 2.5 to 15 ms that
+frame is made a pitch period shorter (accelerate), at four times it
+the same without waiting (NetEq's fast accelerate, which would take out
+as many periods as fit in half the frame, but Chrome leaves WebRTC's
+`enable_fast_accelerate` off), and under the target a period longer
+(preemptive expand), at most once each 60 ms and not in a stream's
+first 60 ms (NetEq's soft reset on its first packet starts the
+countdown each stretch starts), a frame made shorter only with 20 ms
+already in the sync buffer past its overlap (with less it plays as it
+is and the next is shortened, as NetEq builds up decoded sound first),
+and with 30 ms there the sync buffer's own last 30 ms stretched and no
+frame taken, as NetEq does, where the frame's sound repeats well enough (periods 2.5 to 15 ms that
 correlate at 0.9, or quiet), the two periods at the cut faded into each
 other (`src/rtc/stretch.ts`, a port of NetEq's time stretching: 30 ms,
 the frame and what it borrows from the end of the sync buffer, its
@@ -1301,6 +1304,29 @@ the hold-up's packet leaves it, and then comes down (natively 300 ms
 of delay over the window of a 300 ms hold-up and 214 over the next 4
 s). The worker used to decide on NetEq's older filtered buffer level,
 which shortened a hold-up within a second, sooner than Chrome 157 does.
+Once the target falls (4.5 s after a 300 ms hold-up) Chrome brings the
+delay from 300 to 145 to 185 ms over 350 to 500 ms, 581 to 872 samples
+of a 660 Hz tone each 50 ms, a period each 10 ms; the worker took out
+four periods at a time, 2,324 to 2,904 each 50 ms over 150 ms, and now
+takes out 580 to 872 over 400 ms.
+
+NetEq's ticks are its `GetAudio` calls, so its clock is the sound
+card's. Chrome asks for 10 ms at a time; without a sound server its
+output asks every 10 ms (measured on 157: 296 of 300 asks 10 ms
+apart), and Chrome's counts are the worker's (over the 4 s after a
+300 ms hold-up 8,900 to 11,300 samples taken out and 193 to 211 ms of
+`jitterBufferDelay`, against 8,900 to 10,500 and 195 to 210; 30.0 ms
+for a clean stream either way).
+PipeWire plays 512 frames at a time and asks every 10.7 ms, twice at
+once every 160 ms (266 and 18 of 300 asks), which puts up to 10 ms more
+on each arrival's tick: Chrome's target for a steady stream is then 40
+in some runs, its upper limit wider, and a hold-up comes down more
+slowly (about 5,500 samples over that window). What a sound server asks
+for depends on the machine and on what else plays through it, and a
+page cannot read it (an AudioContext's `baseLatency` says 512 frames
+with PipeWire and 2,048 without a server, where WebRTC is asked every
+10 ms), so the worker keeps the 10 ms clock; the `jb-probe` kit is run
+without a sound server to compare.
 The track's `removedSamplesForAcceleration` and
 `insertedSamplesForDeceleration` count what was taken out and put in.
 
