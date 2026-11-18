@@ -398,6 +398,34 @@
 			return div.classList.length;
 		},
 	);
+	kernel(
+		'style.setProperty',
+		() => {
+			const div = document.createElement('div');
+			box.append(div);
+			return div;
+		},
+		(div) => {
+			for (let r = 0; r < 20000; r++)
+				div.style.setProperty('width', `${r & 255}px`);
+			return div.style.getPropertyValue('width').length;
+		},
+	);
+	kernel(
+		'style.getPropertyValue',
+		() => {
+			const div = document.createElement('div');
+			div.style.width = '3px';
+			box.append(div);
+			return div;
+		},
+		(div) => {
+			let t = 0;
+			for (let r = 0; r < 20000; r++)
+				t += div.style.getPropertyValue('width').length;
+			return t;
+		},
+	);
 
 	// network setup and messages
 	kernel(

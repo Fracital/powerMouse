@@ -2397,6 +2397,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				CSSStyleDeclaration,
 				CSSStyleDeclaration
 			>();
+			// each page-facing declaration's own, which the prototype's methods
+			// and setters are called with when the page calls them on the Proxy
+			const declarationTargets = new LazyWeakMap<object, CSSStyleDeclaration>();
+			// (a primitive is no key: WeakMap's get answers undefined)
+			const real = (that: unknown) =>
+				declarationTargets.get(that as object) || that;
 			// a computed style's url() is absolute, natively: the real URL its
 			// route stands for
 			const computedDeclarations = new LazyWeakSet<CSSStyleDeclaration>();
@@ -2422,18 +2428,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 
 				if (!proxy) {
 					proxy = new Proxy(declaration, {
+						// a method is the prototype's own, as natively: the
+						// prototype's methods take the Proxy for its declaration
+						// (`real`), and getPropertyValue reads back the page's URL
+						// there like the named properties do here
 						get: (target, key) => {
 							const value = Reflect.get(target, key);
-							// getPropertyValue reads back the page's URL like the named
-							// properties do
-							if (key === 'getPropertyValue' && typeof value === 'function')
-								return (...args: unknown[]) => {
-									const result = Reflect.apply(value, target, args);
-									return typeof result === 'string' && result.includes('url(')
-										? restore(target, result, String(args[0]).startsWith('--'))
-										: result;
-								};
-							if (typeof value === 'function') return value.bind(target);
 							return typeof value === 'string' && value.includes('url(')
 								? restore(target, value)
 								: value;
@@ -2451,6 +2451,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					});
 
 					declarationProxies.set(declaration, proxy);
+					declarationTargets.set(proxy, declaration);
 				}
 
 				return proxy;
@@ -2594,23 +2595,34 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							},
 						);
 
-			styleProto.setProperty = proxyModule.wrapFunction(
-				styleProto.setProperty,
-				(target, that, args) => {
-					if (args.length > 1) args[1] = rewriteValue(args[1]);
-					const result = Reflect.apply(target, that, args);
-					afterWrite(that);
-					return result;
-				},
-			);
-			styleProto.removeProperty = proxyModule.wrapFunction(
-				styleProto.removeProperty,
-				(target, that, args) => {
-					const result = Reflect.apply(target, that, args);
-					afterWrite(that);
-					return restoreCSSValueURLs(result);
-				},
-			);
+			// the methods take the Proxy for its declaration (`real`): a write
+			// routes, and a read of a page-facing declaration reads back the
+			// page's URLs
+			for (const name of [
+				'setProperty',
+				'removeProperty',
+				'getPropertyValue',
+				'getPropertyPriority',
+				'item',
+			] as const)
+				styleProto[name] = proxyModule.wrapFunction(
+					styleProto[name],
+					(target, that, args) => {
+						const declaration = real(that) as CSSStyleDeclaration;
+						const write = name === 'setProperty' || name === 'removeProperty';
+						if (name === 'setProperty' && args.length > 1)
+							args[1] = rewriteValue(args[1]);
+						const result = Reflect.apply(target, declaration, args);
+						if (write) afterWrite(declaration);
+						if (name === 'removeProperty') return restoreCSSValueURLs(result);
+						return name === 'getPropertyValue' &&
+							declaration !== that &&
+							typeof result === 'string' &&
+							result.includes('url(')
+							? restore(declaration, result, String(args[0]).startsWith('--'))
+							: result;
+					},
+				) as never;
 
 			// newer Chromium moves the named properties (backgroundImage, ...)
 			// onto CSSStyleProperties; wrap setters on both prototypes
@@ -2648,8 +2660,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						set: proxyModule.wrapFunction(
 							descriptor.set,
 							(target, that, args) => {
-								const result = Reflect.apply(target, that, [rewrite(args[0])]);
-								afterWrite(that);
+								const declaration = real(that);
+								const result = Reflect.apply(target, declaration, [
+									rewrite(args[0]),
+								]);
+								afterWrite(declaration);
 								return result;
 							},
 						),

@@ -1,0 +1,81 @@
+<!doctype html>
+<title>DECLARATION METHODS</title>
+<body>
+	<script>
+		// An element's style declaration's methods, as a page reaches them:
+		// read twice, compared with the prototype's, called on another
+		// element's declaration, called through the prototype. Natively each
+		// is the prototype's own function, and its receiver is whatever it is
+		// called on.
+		const a = document.createElement('div');
+		const b = document.createElement('div');
+		document.body.append(a, b);
+		const facts = {};
+		const tryIt = (name, run) => {
+			try {
+				facts[name] = run();
+			} catch (error) {
+				facts[name] = `threw ${error.name}`;
+			}
+		};
+		const proto = CSSStyleDeclaration.prototype;
+		tryIt('same read', () => a.style.setProperty === a.style.setProperty);
+		tryIt(
+			'same on two elements',
+			() => a.style.getPropertyValue === b.style.getPropertyValue,
+		);
+		for (const name of [
+			'setProperty',
+			'getPropertyValue',
+			'getPropertyPriority',
+			'removeProperty',
+			'item',
+		])
+			tryIt(`${name} is the prototype's`, () => a.style[name] === proto[name]);
+		tryIt('constructor', () => a.style.constructor === CSSStyleDeclaration);
+		tryIt('constructor name', () => a.style.constructor.name);
+		tryIt('method name', () => a.style.setProperty.name);
+		tryIt(
+			'computed style method',
+			() => getComputedStyle(a).getPropertyValue === a.style.getPropertyValue,
+		);
+		tryIt('set through another declaration', () => {
+			const set = a.style.setProperty;
+			set.call(b.style, 'color', 'blue');
+			return [a.style.color, b.style.color];
+		});
+		tryIt('read through the prototype', () => {
+			a.style.setProperty('background-image', 'url("/pages/paint.png")');
+			return [
+				proto.getPropertyValue.call(a.style, 'background-image'),
+				a.style.getPropertyValue('background-image'),
+				a.style.backgroundImage,
+			];
+		});
+		tryIt('a custom property through the prototype', () => {
+			a.style.setProperty('--icon', 'url(/pages/paint.png)');
+			return [
+				a.style.getPropertyValue('--icon'),
+				proto.getPropertyValue.call(a.style, '--icon'),
+				a.style.removeProperty('--icon'),
+			];
+		});
+		tryIt('priority and item', () => {
+			a.style.setProperty('width', '3px', 'important');
+			return [
+				a.style.getPropertyPriority('width'),
+				proto.getPropertyPriority.call(a.style, 'width'),
+				a.style.item(0),
+				proto.item.call(a.style, 1),
+				[...a.style],
+				a.style.length,
+			];
+		});
+		tryIt('remove', () => [
+			a.style.removeProperty('background-image'),
+			proto.removeProperty.call(a.style, 'width'),
+			a.style.cssText,
+		]);
+		window.__dm = facts;
+	</script>
+</body>
