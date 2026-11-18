@@ -2244,6 +2244,24 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				// another context already
 			}
 		});
+		// a load that fails as a failed fetch does, with no request: an
+		// object fires error and shows no document (a revoked blob: of this
+		// origin, which a context the element already has fails on too,
+		// where it stays on its document for one of no origin), an embed
+		// nothing (a blob: URL of no origin, never minted: a revoked one of
+		// this origin would fire an embed's load)
+		let revoked: string | undefined;
+		const fail = (element: CustomElement, attribute: string) => {
+			if (attribute === 'data' && !revoked) {
+				const minted = realm.URL.createObjectURL(new NativeBlob([]));
+				realm.URL.revokeObjectURL(minted);
+				revoked = proxyBlobURL(minted);
+			}
+			element.setAttribute(
+				attribute,
+				attribute === 'data' ? revoked! : 'blob:null/failed',
+			);
+		};
 		const hold = (element: CustomElement, attribute: string) => {
 			element.setAttribute(attribute, HELD);
 			queueMicrotask(() => heldBlank(element));
@@ -2321,10 +2339,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					});
 					moduleClient.getModule(MixedContentModule)!.report(mixed.notices);
 				}
-				// a load that fails as the blocked one does: an object fires
-				// error, an embed nothing (a blob: URL of no origin, never minted;
-				// a revoked one of this origin would fire an embed's load)
-				element.setAttribute(attribute, 'blob:null/mixed-content-blocked');
+				// a load that fails as the blocked one does
+				fail(element, attribute);
 				return;
 			}
 			const current = loads.get(element);
@@ -2342,13 +2358,19 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			// nothing to load until the proxied copy is in (an empty URL makes
 			// an object show its fallback and not load again)
 			hold(element, attribute);
-			const settle = (value: string) => {
+			const settle = (value: string | null) => {
 				if (loads.get(element) !== state) return;
-				state.url = value;
-				usePrototype(element, CustomElement.prototype, (element) =>
-					element.setAttribute(attribute, value),
-				);
+				usePrototype(element, CustomElement.prototype, (element) => {
+					if (value === null) fail(element, attribute);
+					else element.setAttribute(attribute, value);
+					// (the hooks' view: the URL the element was given)
+					state.url = element.getAttribute(attribute)!;
+				});
 			};
+			// without the shell's part (deferred.ts) the element loads nothing:
+			// a failed fetch's error and no request (the route would go to
+			// the proxy origin's server, never through a worker)
+			let partless = false;
 			// the copy goes out as the load it stands for (loadGrants.ts); a
 			// blob: is read at once, as the browser resolves it at the load
 			(fromBlob
@@ -2366,49 +2388,54 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						throw new Error(String(response.status));
 					const type = response.headers.get('content-type') ?? '';
 					const mime = type.split(';')[0].trim().toLowerCase();
+					const html = mime === 'text/html' || mime === 'application/xhtml+xml';
+					const xml = !html && isXMLDocumentMime(mime);
+					partless = true;
+					const writeHTML = html ? deferred('modifyHTML') : null;
+					const writeXML = xml ? deferred('modifyXML') : null;
+					partless = false;
 					// an XML document (an SVG, a feed) runs its XHTML scripts too:
 					// it gets the XML shell, under its own mime
-					const blob =
-						mime === 'text/html' || mime === 'application/xhtml+xml'
+					const blob = html
+						? new NativeBlob(
+								[
+									writeHTML!(
+										await response.text(),
+										resource,
+										moduleClient.config,
+										true,
+										undefined,
+										moduleClient.scriptNonce,
+									),
+								],
+								{ type: 'text/html' },
+							)
+						: xml
 							? new NativeBlob(
 									[
-										deferred('modifyHTML')(
+										writeXML!(
 											await response.text(),
 											resource,
 											moduleClient.config,
-											true,
+											mime,
 											undefined,
-											moduleClient.scriptNonce,
+											undefined,
+											false,
+											undefined,
+											undefined,
+											undefined,
+											true,
 										),
 									],
-									{ type: 'text/html' },
+									{ type: `${mime};charset=utf-8` },
 								)
-							: isXMLDocumentMime(mime)
-								? new NativeBlob(
-										[
-											deferred('modifyXML')(
-												await response.text(),
-												resource,
-												moduleClient.config,
-												mime,
-												undefined,
-												undefined,
-												false,
-												undefined,
-												undefined,
-												undefined,
-												true,
-											),
-										],
-										{ type: `${mime};charset=utf-8` },
-									)
-								: await response.blob();
+							: await response.blob();
 					if (loads.get(element) !== state) return;
 					if (current?.url?.startsWith('blob:'))
 						realm.URL.revokeObjectURL(current.url);
 					settle(proxyBlobURL(realm.URL.createObjectURL(blob)));
 				})
-				.catch(() => settle(routed));
+				.catch(() => settle(partless ? null : routed));
 		};
 		// the property reads the page's URL from the original alone: the real
 		// attribute is absent while the proxied copy loads, then a blob: URL

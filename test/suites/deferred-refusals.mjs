@@ -564,7 +564,30 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		...POLICED,
 	]);
 	const documents = await without(DOCUMENTS);
+	// an object's own load is a navigation of its context, which no
+	// service worker sees: one to an http(s) URL reached a server (the
+	// copy's fetch, the page's load of the resource, goes as the page's).
+	// The object's context is the child's frame: the demo's, the proxied
+	// top's, the child's, then its own
+	const objectNavigations = [];
+	const objectNavigation = (request) => {
+		try {
+			let depth = 0;
+			for (let frame = request.frame(); frame.parentFrame(); depth++)
+				frame = frame.parentFrame();
+			if (
+				depth === 3 &&
+				request.isNavigationRequest() &&
+				/^https?:/.test(request.url())
+			)
+				objectNavigations.push(request.url());
+		} catch (error) {
+			// a frame already gone
+		}
+	};
+	page.on('request', objectNavigation);
 	const object = await without(OBJECT);
+	page.off('request', objectNavigation);
 	const out = { ...answer.out, ...documents.out, ...object.out };
 	// (a child that was navigated answers with the page it landed on)
 	for (const call of AIMED) {
@@ -636,7 +659,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 	);
 	// as a failed fetch natively: an error, no document, nothing of the
 	// page's markup run (never the markup as written, never one without
-	// its shell)
+	// its shell), and nothing more asked of any server
 	for (const call of ['objectDocument', 'typedObjectDocument'])
 		ok(
 			`without the parts, an <object>'s HTML document is refused: an error and no document, as a failed fetch (${call})`,
@@ -645,6 +668,11 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 				out[call].shown === null,
 			JSON.stringify(out[call]),
 		);
+	ok(
+		"without the parts, an <object>'s context loads nothing of a server's",
+		objectNavigations.length === 0,
+		JSON.stringify(objectNavigations),
+	);
 	ok(
 		'without the parts, setHTML, setHTMLUnsafe and getHTML on an element of a frame on its initial about:blank throw, and nothing is parsed',
 		out.blankSetHTML?.setHTML?.threw === 'no parts' &&
