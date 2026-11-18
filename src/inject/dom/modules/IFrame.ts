@@ -9,6 +9,7 @@ import ProxyModule from '../../modules/Proxy';
 import { scopePrefix, unrouteURL } from '../../modules/Unroute';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { deferred } from '../deferred';
+import type { DeferredParts } from '../deferredParts';
 import { addClientModules } from '../document';
 import {
 	containerOf,
@@ -434,34 +435,16 @@ export default class IFrameModule extends Module<DocumentClient> {
 
 		// a link or form of this document aimed by name at a frame of it still
 		// on its initial about:blank: decided once the page's own listeners
-		// had the event (one may cancel it), as the browser does
-		const blankTarget = (name: string | null) => {
-			if (!name || name.startsWith('_')) return null;
-			const element = moduleClient.frameNamed(name);
-			const view = element && frameWindow(element);
-			if (!view) return null;
-			try {
-				const client = (view as unknown as Record<string, unknown>)[
-					moduleClient.names.client
-				] as DocumentClient | undefined;
-				return client?.freshTo ? client : null;
-			} catch (error) {
-				return null;
-			}
-		};
+		// had the event (one may cancel it), as the browser does, by a
+		// deferred part (../siteAcross.ts blankLink and blankSubmission),
+		// which a link or form aimed by name at a frame of this document
+		// needs. Without it the link or the submit event navigates nothing
+		// and submit() throws
+		const blankElement = (name: string | null) =>
+			!name || name.startsWith('_') ? null : moduleClient.frameNamed(name);
 		const baseTarget = () =>
 			global.document.querySelector('base[target]')?.getAttribute('target') ??
 			null;
-		// the frame gets its fresh context, still empty, and the browser goes
-		// on with the link or form as natively (its ping, its request)
-		const afterPage = (event: Event, then: () => unknown) =>
-			global.addEventListener(
-				event.type,
-				(late) => {
-					if (late === event && !event.defaultPrevented) then();
-				},
-				{ once: true },
-			);
 		const onClick = (event: MouseEvent) => {
 			if (event.button !== 0 || event.ctrlKey || event.metaKey) return;
 			if (event.shiftKey || event.altKey) return;
@@ -474,72 +457,51 @@ export default class IFrameModule extends Module<DocumentClient> {
 						node.hasAttribute('href'),
 				);
 			if (!link || link.hasAttribute('download')) return;
-			const target = blankTarget(link.getAttribute('target') || baseTarget());
-			if (!target) return;
-			afterPage(event, () => {
-				let url: URL;
-				try {
-					url = moduleClient.encodingParse(
-						link.getAttribute('href')!,
-						moduleClient.baseHref,
-					);
-				} catch (error) {
-					// no URL: the click navigates nothing, here or in the browser
-					return;
-				}
-				target.freshTo!(url, null, true);
-			});
+			const element = blankElement(link.getAttribute('target') || baseTarget());
+			if (!element) return;
+			let blankLink: DeferredParts['blankLink'];
+			try {
+				blankLink = deferred('blankLink');
+			} catch (error) {
+				event.preventDefault();
+				return;
+			}
+			blankLink(moduleClient, event, link, element);
 		};
 		// a form's submission (its submit event, or submit(), which fires none)
 		const submission = (
 			form: HTMLFormElement,
 			submitter: HTMLButtonElement | HTMLInputElement | null,
+			event: Event | null,
 		) => {
-			const own = (name: string) => !!submitter?.hasAttribute(name);
-			const target = blankTarget(
-				(own('formtarget')
-					? submitter!.getAttribute('formtarget')
+			const element = blankElement(
+				(submitter?.hasAttribute('formtarget')
+					? submitter.getAttribute('formtarget')
 					: form.getAttribute('target')) || baseTarget(),
 			);
-			if (!target) return null;
-			const method = (
-				(own('formmethod') ? submitter!.formMethod : form.method) || 'get'
-			).toLowerCase();
-			if (method !== 'get' && method !== 'post') return null;
-			return () => {
-				try {
-					const url = new URL(
-						own('formaction') ? submitter!.formAction : form.action,
-					);
-					const data = new global.FormData(form, submitter ?? undefined);
-					if (method === 'get')
-						url.search = new URLSearchParams(
-							data as unknown as Record<string, string>,
-						).toString();
-					// a submission the page's form-action refuses goes nowhere
-					// (NavigationHint sends it to a refusal URL, which the
-					// browser refuses): the frame keeps its context, as natively
-					if (
-						moduleClient
-							.pageRefusals('form-action', url)
-							.some(({ policy }) => policy.disposition === 'enforce')
-					)
-						return false;
-					return target.freshTo!(url, null, true);
-				} catch (error) {
-					return false;
-				}
-			};
+			if (element)
+				deferred('blankSubmission')(
+					moduleClient,
+					form,
+					submitter,
+					element,
+					event,
+				);
 		};
 		const onSubmit = (event: Event) => {
 			const form = event.target;
 			if (!(form instanceof global.HTMLFormElement)) return;
-			const go = submission(
-				form,
-				(event as SubmitEvent).submitter as
-					HTMLButtonElement | HTMLInputElement | null,
-			);
-			if (go) afterPage(event, go);
+			try {
+				submission(
+					form,
+					(event as SubmitEvent).submitter as
+						HTMLButtonElement | HTMLInputElement | null,
+					event,
+				);
+			} catch (error) {
+				// no part: the submission goes nowhere
+				event.preventDefault();
+			}
 		};
 		const listenTargets = () => {
 			global.addEventListener('click', onClick, true);
@@ -550,7 +512,8 @@ export default class IFrameModule extends Module<DocumentClient> {
 		global.HTMLFormElement.prototype.submit = proxyModule.wrapFunction(
 			global.HTMLFormElement.prototype.submit,
 			(target, that, args) => {
-				if (that instanceof global.HTMLFormElement) submission(that, null)?.();
+				if (that instanceof global.HTMLFormElement)
+					submission(that, null, null);
 				return Reflect.apply(target, that, args);
 			},
 		);

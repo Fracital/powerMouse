@@ -168,7 +168,9 @@ import { seenImages } from './seenImages';
 import {
 	acceptAcross,
 	ancestorAcross,
-	formSubmission,
+	blankLink,
+	blankSubmission,
+	linkAimed,
 	locationAcross,
 	navigateAcross,
 	submitAimed,
@@ -333,8 +335,14 @@ export const parts = {
 	acceptAcross,
 	ancestorAcross,
 	locationAcross,
+	// a link or a form aimed at another window (its target `_top`,
+	// `_parent`, `_unfencedtop` or a name), at a document's first
+	// (modules/Sandbox.ts; modules/IFrame.ts, a frame still on its initial
+	// about:blank)
+	linkAimed,
 	submitAimed,
-	formSubmission,
+	blankLink,
+	blankSubmission,
 	judgeAcross,
 	receiveAcross,
 	onOwnSlot,

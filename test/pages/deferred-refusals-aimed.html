@@ -5,13 +5,31 @@
 		<title>deferred refusals aimed</title>
 	</head>
 	<body>
-		<!-- a frame of the suite deferred-refusals' child: its form, aimed at
-		the child, is submitted as the frame loads -->
+		<!-- a frame of the suite deferred-refusals' child: as it loads, its
+		form or link, aimed at the child, is submitted or clicked (`?form`: the
+		form's submit event; `?submit`: its submit(), answering with what that
+		threw; `?link`: a link's click) -->
 		<form target="_parent" action="deferred-refusals-landed.html">
-			<input name="x" value="1" />
+			<input />
 		</form>
+		<a target="_parent" href="deferred-refusals-landed.html?link">x</a>
 		<script>
-			document.forms[0].requestSubmit();
+			const form = document.forms[0];
+			const input = form.elements[0];
+			if (location.search === '?form') {
+				input.name = 'x';
+				input.value = '1';
+				form.requestSubmit();
+			} else if (location.search === '?submit') {
+				input.name = 'y';
+				input.value = '2';
+				try {
+					form.submit();
+					parent.postMessage({ threw: null }, '*');
+				} catch (error) {
+					parent.postMessage({ threw: String(error && error.message) }, '*');
+				}
+			} else if (location.search === '?link') document.links[0].click();
 		</script>
 	</body>
 </html>
