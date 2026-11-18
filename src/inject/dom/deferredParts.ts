@@ -36,6 +36,9 @@
 // (and the document.write stream, ./WriteStream.ts with its tokenizer, at a
 // document's first write)
 //
+// (and the checks of navigator.registerProtocolHandler() and
+// unregisterProtocolHandler(), ./protocolHandlers.ts, at a page's first call)
+//
 // (and what performance.measureUserAgentSpecificMemory() answers, with the
 // page's own URLs, ./measuredMemory.ts, at a page's first call of it)
 //
@@ -131,6 +134,7 @@ import { navigationRefusal, precommitRedirect } from './navigationRefusal';
 import { openerFacts, opensWithoutOpener } from './openerFacts';
 import { pictureWindows } from './pictureWindows';
 import { presentationIds } from './presentations';
+import { protocolHandler } from './protocolHandlers';
 import { rtcInstall } from './rtcInstall';
 import { seenImages } from './seenImages';
 import {
@@ -183,6 +187,9 @@ export const parts = {
 	// what measureUserAgentSpecificMemory() answers the page, at its first
 	// call (./measuredMemory.ts; ./modules/Isolation.ts)
 	measuredMemory,
+	// navigator.(un)registerProtocolHandler()'s checks, at a page's first
+	// call (./protocolHandlers.ts; ./modules/Navigator.ts)
+	protocolHandler,
 	longFrames,
 	longTasks,
 	cookieStoreMethods,

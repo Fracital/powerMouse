@@ -15,7 +15,8 @@
 // controls keeps its route and loads nothing (its copy is a part,
 // src/inject/dom/uncontrolledCopies.ts); an XML document a frame loads
 // lands none of its tree (its load is a part,
-// src/inject/dom/instructions.ts). A part is made
+// src/inject/dom/instructions.ts); a protocol handler's registration throws
+// (its checks are a part, src/inject/dom/protocolHandlers.ts). A part is made
 // synchronously within the call that needs it, so no page code runs between
 // the hook and the part (a download's copy is made after the click went
 // through the page, which the browser's own download had been cancelled
@@ -74,6 +75,7 @@ const REFUSING = [
 	'navigateOther',
 	'estimate',
 	'worker',
+	'protocolHandler',
 ];
 /** the calls that answer with a promise, which rejects */
 const PROMISED = [
@@ -131,6 +133,10 @@ function countNatives() {
 			prototype[name] = counted(name, prototype[name]);
 	}
 	if (window.Worker) window.Worker = constructs('Worker', Worker);
+	if (Navigator.prototype.registerProtocolHandler)
+		Navigator.prototype.registerProtocolHandler = function () {
+			reached.push('registerProtocolHandler');
+		};
 	if (window.StorageManager) {
 		const prototype = StorageManager.prototype;
 		prototype.estimate = counted('estimate', prototype.estimate);
@@ -193,6 +199,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			'worker',
 			'blankCopy',
 			'xmlLoad',
+			'protocolHandler',
 		],
 	);
 	ok(
@@ -212,6 +219,15 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		'with the parts, an XML document a frame loads lands its tree',
 		answer.out?.xmlLoad?.root === 'svg' && answer.out.xmlLoad.landed === true,
 		JSON.stringify(answer.out?.xmlLoad),
+	);
+	ok(
+		'with the parts, a protocol handler is accepted, without the browser',
+		answer.out?.protocolHandler?.returned === 'undefined' &&
+			!answer.reached?.includes('registerProtocolHandler'),
+		JSON.stringify({
+			out: answer.out?.protocolHandler,
+			reached: answer.reached,
+		}),
 	);
 	ok(
 		'with the parts, a worker starts, through the browser',
