@@ -144,10 +144,13 @@ const shared = new Map<string, Promise<SharedStores>>();
  * of the scope that asks for the same lists, fetching through the transport
  * of whichever controller registered last (the earlier one's tab may be gone)
  */
-const blockers = new Map<
-	string,
-	{ blocker: Blocker; bare: BareCompatibleClient }
->();
+interface BlockerEntry {
+	blocker: Blocker;
+	bare: BareCompatibleClient;
+	/** the newest controller's rewrite workers (Blocker's engine builds) */
+	pool?: RewritePool;
+}
+const blockers = new Map<string, BlockerEntry>();
 
 /** a blocker of the `blockers` map is keyed by its scope and everything that
  * shapes its engine, so controllers of one scope asking for the same lists
@@ -166,23 +169,29 @@ function sharedBlocker(
 	scope: string,
 	init: AdblockInit,
 	bare: BareCompatibleClient,
+	pool: RewritePool | undefined,
 ): Blocker {
 	const key = blockerKey(scope, init);
 	let entry = blockers.get(key);
 	// one that never got an engine (no module, no list fetched) is tried
 	// again by the next controller to shake hands
 	if (!entry || entry.blocker.failed) {
-		const holder = { bare } as { blocker: Blocker; bare: BareCompatibleClient };
+		const holder = { bare, pool } as BlockerEntry;
 		// the module is this thread's, handed over with the handshake and
 		// compiling behind it (src/wasm/thread.ts)
 		holder.blocker = new Blocker(
 			init,
 			(url) => holder.bare.fetch(url, { redirect: 'follow' }),
 			() => heldModules().then(() => moduleOf('blocker')),
+			// the newest controller's rewrite workers, while they serve
+			() => (holder.pool?.live ? holder.pool : undefined),
 		);
 		entry = holder;
 		blockers.set(key, entry);
-	} else entry.bare = bare;
+	} else {
+		entry.bare = bare;
+		entry.pool = pool ?? entry.pool;
+	}
 	return entry.blocker;
 }
 
@@ -559,7 +568,12 @@ export default async function createServer(
 	const blocker: BlockerLike | undefined = !adblock
 		? undefined
 		: (remoteBlocker ??
-			sharedBlocker(init.scope, adblock, new BareCompatibleClient(transport)));
+			sharedBlocker(
+				init.scope,
+				adblock,
+				new BareCompatibleClient(transport),
+				pool,
+			));
 	const shields = new ShieldsStore();
 	const { route, setRules, hostReloaded } = registerRewrites(
 		router,

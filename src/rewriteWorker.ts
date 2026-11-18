@@ -5,7 +5,9 @@
 // with a pool, they are rewritten side by side. Each port the controller
 // hands over is a channel to the service worker, which sends a script with
 // everything its output depends on and gets back what modifyJS makes of it,
-// the same as it would have made itself.
+// the same as it would have made itself. It also compiles the content
+// blocker's engine from its lists when the service worker asks.
+import { buildEngine } from './blocker/build';
 import { parseConfig } from './config';
 import { modifyJS, type RewrittenBy } from './rewriteJS';
 import {
@@ -50,6 +52,13 @@ function serve(port: MessagePort) {
 	const rpc = new RpcHelper<RewriteBound, Record<string, never>>(
 		{
 			rewrite: async (request) => [rewrite(request), []],
+			// the blocker's engine, compiled here for the service worker
+			// (src/blocker/build.ts); the module and the build's memory go
+			// with the call
+			buildEngine: async ({ module, lists }) => {
+				const engine = buildEngine(await WebAssembly.compile(module), lists);
+				return engine ? [engine.buffer, [engine.buffer]] : [null, []];
+			},
 		},
 		REWRITE_RPC,
 		(data, transfer) => port.postMessage(data, transfer),

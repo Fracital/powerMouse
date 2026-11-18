@@ -14,6 +14,7 @@
 // The crate never discards a compiled regex on wasm (it has no clock), so a
 // long-lived worker's instance only grows: past a ceiling it is replaced by
 // a fresh one loading the same serialized engine.
+import type { EngineList } from '../blocker/build';
 import { carriedCsp, withWorkerSource } from '../blocker/csp';
 import {
 	BlockerInstance,
@@ -27,6 +28,7 @@ import {
 	type AdblockList,
 	type AdblockPage,
 } from '../blocker/types';
+import type { RewritePool } from './rewritePool';
 import type Router from './Router';
 
 /** the CacheStorage store the serialized engines and the resources live in */
@@ -53,6 +55,20 @@ const SCRIPT_MEMO = 64;
 const LIST_AFTER_MS = 250;
 /** how long a start's list downloads wait for a first navigation at the most */
 const LIST_WAIT_MS = 2_000;
+
+/**
+ * The blocker module's bytes, as the newest handshake handed them
+ * (heardBlockerBytes): a rewrite worker that compiles an engine
+ * compiles the module from them, as a compiled module cannot be posted from
+ * a service worker
+ */
+let moduleBytes: ArrayBuffer | undefined;
+
+/** the modules a handshake (or a later message of its controller) handed this thread */
+export function heardBlockerBytes(modules?: Record<string, unknown>) {
+	const bytes = modules?.blocker;
+	if (bytes instanceof ArrayBuffer) moduleBytes = bytes;
+}
 
 let navigationAnswered: () => void;
 const firstNavigation = new Promise<void>((resolve) => {
@@ -224,6 +240,7 @@ export class Blocker implements BlockerLike {
 	#init: AdblockInit;
 	readonly #fetch: FetchResource;
 	readonly #given: () => Promise<WebAssembly.Module | null>;
+	readonly #pool: () => RewritePool | undefined;
 	#module: WebAssembly.Module | null = null;
 	#instance: BlockerInstance | null = null;
 	/** the engine is loaded and answers */
@@ -253,10 +270,13 @@ export class Blocker implements BlockerLike {
 		init: AdblockInit,
 		fetch: FetchResource,
 		module: () => Promise<WebAssembly.Module | null>,
+		/** the rewrite workers of the newest controller, which compile an engine off this thread */
+		pool: () => RewritePool | undefined = () => undefined,
 	) {
 		this.#init = init;
 		this.#fetch = fetch;
 		this.#given = module;
+		this.#pool = pool;
 		this.#restored = new Promise((resolve) => {
 			this.#tried = resolve;
 		});
@@ -503,6 +523,8 @@ export class Blocker implements BlockerLike {
 		})();
 		resourcesPromise.catch(() => {});
 		let engine: Uint8Array<ArrayBuffer>;
+		/** the lists compiled into `engine`, when it was not prebuilt */
+		let entries: EngineList[] | undefined;
 		if (this.#init.engine) {
 			try {
 				engine = new Uint8Array(
@@ -555,25 +577,18 @@ export class Blocker implements BlockerLike {
 				this.lastError = `no filter list could be fetched (${missed})`;
 				return;
 			}
-			let builder: BlockerInstance;
-			try {
-				builder = new BlockerInstance(this.#module!);
-				for (const { list, text } of fetched)
-					builder.call(
-						text,
-						OP.addList |
-							(list.trusted ? FLAG_TRUSTED : 0) |
-							(list.format === 'hosts' ? FLAG_HOSTS : 0),
-					);
-				if (builder.call('', OP.build) !== 0) {
-					this.lastError = 'the lists could not be compiled';
-					return;
-				}
-				engine = builder.bytes();
-			} catch (error) {
-				this.lastError = `the lists could not be compiled: ${String(error)}`;
-				return;
-			}
+			entries = fetched.map(({ list, text }) => ({
+				text,
+				flags:
+					(list.trusted ? FLAG_TRUSTED : 0) |
+					(list.format === 'hosts' ? FLAG_HOSTS : 0),
+			}));
+			// a rewrite worker's thread compiles it when the controller has
+			// one (src/blocker/build.ts), this thread otherwise
+			const built =
+				(await this.#buildElsewhere(entries)) ?? this.#buildHere(entries);
+			if (!built) return;
+			engine = built;
 		}
 		let resources: string;
 		try {
@@ -592,10 +607,50 @@ export class Blocker implements BlockerLike {
 		// the old lists, so drop it rather than serve or store it
 		if (generation !== this.#generation) return;
 		// the engine is loaded into an instance of its own (the builder holds
-		// the lists' text and the build's garbage), stored, and serves
-		if (this.#load(engine, resources || '[]')) {
+		// the lists' text and the build's garbage), stored, and serves. One a
+		// worker compiled that this thread's module cannot load (a module of
+		// another handshake's build) is compiled here instead
+		let loaded = this.#load(engine, resources || '[]');
+		if (!loaded && entries && this.#builtElsewhere === engine) {
+			const built = this.#buildHere(entries);
+			if (built) loaded = this.#load((engine = built), resources || '[]');
+		}
+		if (loaded) {
 			this.#scripts.clear();
 			if (resources) await this.#store(engine, resources);
+		}
+	}
+	/** the engine a rewrite worker compiled from `lists`, null when none could */
+	#builtElsewhere: Uint8Array<ArrayBuffer> | null = null;
+	async #buildElsewhere(
+		lists: EngineList[],
+	): Promise<Uint8Array<ArrayBuffer> | null> {
+		const pool = this.#pool();
+		if (!pool?.live || !moduleBytes) return null;
+		try {
+			this.#builtElsewhere = await pool.buildEngine({
+				module: moduleBytes,
+				lists,
+			});
+		} catch (error) {
+			this.#builtElsewhere = null;
+		}
+		return this.#builtElsewhere;
+	}
+	/** the engine of `lists` compiled on this thread (one call of 220 to 280 ms for the default lists) */
+	#buildHere(lists: EngineList[]): Uint8Array<ArrayBuffer> | null {
+		try {
+			const builder = new BlockerInstance(this.#module!);
+			for (const { text, flags } of lists)
+				builder.call(text, OP.addList | flags);
+			if (builder.call('', OP.build) !== 0) {
+				this.lastError = 'the lists could not be compiled';
+				return null;
+			}
+			return builder.bytes();
+		} catch (error) {
+			this.lastError = `the lists could not be compiled: ${String(error)}`;
+			return null;
 		}
 	}
 	async #fetchOk(url: string): Promise<Response> {

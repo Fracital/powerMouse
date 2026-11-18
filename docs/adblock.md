@@ -65,9 +65,16 @@ wasm modules (`src/wasm/thread.ts`): the controller fetches it once and
 hands its bytes to the service worker with the handshake
 (`ControllerInitMessage.modules.blocker`), which compiles them on its own
 thread. A compiled `WebAssembly.Module` cannot be posted to a service
-worker, and nothing else runs the blocker, so the controller never compiles
-it and the rewrite workers never get it. When the module cannot be fetched
-the controller says so on the console and runs without the blocker.
+worker, so the controller never compiles it. Compiling the lists into an
+engine is one call into the module (220 to 280 ms for the default lists),
+which on the service worker's thread held every request of the pages it
+served meanwhile: when the controller runs rewrite workers, the service
+worker sends one of them the module's bytes and the lists' text, and it
+compiles the engine and sends its bytes back (`src/blocker/build.ts`); the
+service worker loads it as it loads a stored one. With no rewrite worker,
+or none that answers, the service worker compiles it itself, as before.
+When the module cannot be fetched the controller says so on the console and
+runs without the blocker.
 
 With `true` or an object, the first navigation waits for the engine, for
 five seconds at the most; past that the document loads unfiltered and the

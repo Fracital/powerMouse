@@ -89,7 +89,7 @@ import {
 	setMemoryLimit,
 } from '../wasm/thread';
 import { knownOriginOf, knownTopSiteOf, recordBlobOrigin } from './blobOrigins';
-import { Blocker } from './blocker';
+import { Blocker, heardBlockerBytes } from './blocker';
 import { memoryCache } from './cache';
 import { legacyFileSystemCleared } from './clearSiteData';
 import {
@@ -273,6 +273,7 @@ function registerController(
 	}
 	// the controller's wasm modules, for this thread (src/wasm/thread.ts):
 	// compiled behind the handshake, the JavaScript rewriters answer until then
+	heardBlockerBytes(modules);
 	void adoptModules(modules);
 	// the handshake's ports: the rpc's, the transport's when it lives in the
 	// controller's worker, then one per rewrite worker
@@ -1473,7 +1474,10 @@ function handleMessage(event: ExtendableMessageEvent) {
 			CONTROLLER_MODULES
 		] as ControllerModulesMessage;
 		const ref = controllers.get(directory);
-		if (ref && ref.owner === sender) void adoptModules(modules);
+		if (ref && ref.owner === sender) {
+			heardBlockerBytes(modules);
+			void adoptModules(modules);
+		}
 	} else if (CONTROLLER_CLIENT in data) {
 		const { directory, client } = data[
 			CONTROLLER_CLIENT

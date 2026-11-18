@@ -1,6 +1,7 @@
 // The service worker's calls to a rewrite worker (src/rewriteWorker.ts,
 // src/server/rewritePool.ts). Apart from transport/messages.ts, which the
 // controller and its declarations import, because this names the rewriter.
+import type { EngineList } from './blocker/build';
 import type { Config } from './config';
 import type { RewrittenBy, ScriptSource, ScriptType } from './rewriteJS';
 
@@ -38,7 +39,15 @@ export interface RewriteAnswer extends Required<RewrittenBy> {
 	output: string;
 }
 
+/** a content blocker engine to compile (src/blocker/build.ts): the blocker module's bytes and the lists */
+export interface EngineBuild {
+	module: ArrayBuffer;
+	lists: EngineList[];
+}
+
 /** implemented by a rewrite worker (src/rewriteWorker.ts), called by the service worker */
 export type RewriteBound = {
 	rewrite: [RewriteRequest, string | RewriteAnswer];
+	/** the serialized engine, null when the module refused the lists */
+	buildEngine: [EngineBuild, ArrayBuffer | null];
 };

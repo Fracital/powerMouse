@@ -7,7 +7,12 @@
 // port that closed or timed out is not used again.
 import type { Config } from '../config';
 import { RewrittenBy, ScriptSource, ScriptType } from '../rewriteJS';
-import { REWRITE_READY, REWRITE_RPC, RewriteBound } from '../rewriteMessages';
+import {
+	REWRITE_READY,
+	REWRITE_RPC,
+	RewriteBound,
+	type EngineBuild,
+} from '../rewriteMessages';
 import { routeScopeList } from '../routeURL';
 import type StompURL from '../StompURL';
 import { RpcHelper } from '../transport/rpc';
@@ -23,6 +28,9 @@ interface Member {
 	/** the worker said it serves this port (REWRITE_READY): until then nothing is sent */
 	ready: boolean;
 }
+
+/** how long the blocker's engine may take in a worker before the service worker compiles it itself */
+const ENGINE_BUILD_WAIT_MS = 60_000;
 
 export class RewritePool {
 	#members: Member[];
@@ -85,11 +93,16 @@ export class RewritePool {
 				member = candidate;
 		return member;
 	}
-	/** a call to the worker with the least in hand (`size` characters more), null when none answered in time */
+	/**
+	 * a call to the worker with the least in hand (`size` characters more),
+	 * null when none answered in time; a worker that took longer than the
+	 * rewrite timeout is let go, unless `wait` gives the call its own
+	 */
 	async #call<K extends keyof RewriteBound>(
 		method: K,
 		request: RewriteBound[K][0],
 		size: number,
+		wait?: number,
 	): Promise<RewriteBound[K][1] | null> {
 		const member = this.#pick();
 		if (!member) return null;
@@ -101,9 +114,10 @@ export class RewritePool {
 				member.rpc.call(method, request),
 				new Promise<never>((_, reject) => {
 					timer = setTimeout(() => {
-						this.#drop(member, `took over ${this.#timeout} ms`);
+						if (wait === undefined)
+							this.#drop(member, `took over ${this.#timeout} ms`);
 						reject(new Error('rewrite worker timed out'));
-					}, this.#timeout);
+					}, wait ?? this.#timeout);
 				}),
 			]);
 		} catch (error) {
@@ -143,6 +157,25 @@ export class RewritePool {
 		if (answer === null || typeof answer === 'string') return answer;
 		if (told) told.by = answer.by;
 		return answer.output;
+	}
+	/**
+	 * The content blocker's engine compiled by the worker with the least in
+	 * hand (src/blocker/build.ts), which counts the lists' text as its load
+	 * so scripts go to the others meanwhile. Null when none is ready, the
+	 * module refused the lists or no answer came in ENGINE_BUILD_WAIT_MS:
+	 * the caller compiles it itself. The worker is kept either way.
+	 */
+	async buildEngine(
+		build: EngineBuild,
+	): Promise<Uint8Array<ArrayBuffer> | null> {
+		const size = build.lists.reduce((sum, list) => sum + list.text.length, 0);
+		const engine = await this.#call(
+			'buildEngine',
+			build,
+			size,
+			ENGINE_BUILD_WAIT_MS,
+		);
+		return engine ? new Uint8Array(engine) : null;
 	}
 	/**
 	 * A document's inline script, rewritten by the worker with the least in
