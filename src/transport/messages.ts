@@ -97,6 +97,22 @@ export interface ControllerClientMessage {
 }
 /** a page tells the worker it aborted a request (the id it sent in ABORT_HEADER) */
 export const ABORT_REQUEST = '$stomp$abort';
+/**
+ * A page tells the worker which of its images still loading it laid out in
+ * its viewport (their URLs, as the page asked for them): Chrome raises such
+ * an image's request to a fetch's urgency, so one still waiting for a
+ * connection goes before the scripts and images out of sight
+ * (src/transport/socketPool.ts raise)
+ */
+export const IMAGES_SEEN = '$stomp$seen';
+/**
+ * The worker tells a document, on the channel the document opened for its
+ * load grants (src/inject/dom/loadGrants.ts), that a request for one of its
+ * images waits for a connection: only then does the document watch which
+ * of its images it lays out in its viewport (IMAGES_SEEN), as only then
+ * does the order of its requests depend on it
+ */
+export const IMAGES_WAITING = '$stomp$imagesWaiting';
 /** the request header a page adds so the worker can match an abort to the request; never forwarded */
 export const ABORT_HEADER = 'x-stomp-abort';
 /**
@@ -1429,6 +1445,12 @@ export type TransportToHost = {
 			| { result: 'failure'; error: string }
 		),
 	];
+	/**
+	 * a request waiting for a connection (named in its REQUEST_QUEUE field):
+	 * cancelled (the page gave it up) or raised (an image the page laid out
+	 * in its viewport)
+	 */
+	requeue: [{ id: string; op: 'cancel' | 'raise' }, void];
 	request: [
 		{
 			remote: string;
@@ -1455,6 +1477,8 @@ export type TransportToHost = {
 /** implemented by RemoteTransport, called by the host */
 export type HostToTransport = {
 	ready: [];
+	/** the request the worker named `id` (an image's) waits for a connection (socketPool.ts) */
+	waiting: [string];
 };
 
 /** rpc id on the controller <-> transport worker channel (the Worker's own) */

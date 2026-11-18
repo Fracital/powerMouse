@@ -133,6 +133,7 @@ import {
 	ENCODING_MARKER,
 	FRESH_RETURN_ROUTE,
 	HOPS_MARKER,
+	IMAGES_WAITING,
 	INITIATOR_ROUTE,
 	KEPT_MARKER,
 	LOAD_HEADER,
@@ -154,7 +155,13 @@ import {
 	XHR_MARKER,
 } from '../transport/messages';
 import { NETWORK_PARTITION } from '../transport/networkPartition';
-import { queueValue, REQUEST_QUEUE } from '../transport/requestQueue';
+import RemoteTransport from '../transport/RemoteTransport';
+import {
+	FIRST_IMAGES_URGENCY,
+	queueValue,
+	REQUEST_QUEUE,
+	SEEN_URGENCY,
+} from '../transport/requestQueue';
 import { fragmentOf, queryOf, withQuery } from '../urlShape';
 import { BUILD, REWRITE_GENERATION } from '../version';
 import { contextText, isLinkRoute, LINK_SEGMENT, linkRoute } from '../visited';
@@ -276,7 +283,7 @@ import {
 import { integrityHolds } from './integrity';
 import { importMapIntegrity } from './integrityLoads';
 import { noteKeptLoad } from './keptLoads';
-import { takeLoadGrant } from './loadGrants';
+import { takeLoadGrant, tellLoadClient } from './loadGrants';
 import { recordCrossedMedia } from './mediaLoads';
 import {
 	awaitNavigationHint,
@@ -1178,6 +1185,107 @@ export function abortRequest(id: unknown) {
 	if (typeof id === 'string') pendingAborts.get(id)?.();
 }
 
+/** this worker's names for its requests in the transport's queue (REQUEST_QUEUE) */
+const QUEUE_PREFIX = Math.random().toString(36).slice(2, 10);
+let queueCount = 0;
+/** by its URL (the routed one the browser asked the worker for), how to raise each image request not yet answered */
+const unansweredImages = new Map<string, Set<() => void>>();
+/**
+ * the images pages laid out in their viewports lately, by URL, and when:
+ * the page tells as soon as it has laid them out, which can be before
+ * their requests reach this worker, and those go out raised
+ */
+const seenImages = new Map<string, number>();
+const SEEN_KEPT = 1024;
+const SEEN_MS = 30_000;
+const seenLately = (url: string) =>
+	(seenImages.get(url) ?? -Infinity) > performance.now() - SEEN_MS;
+
+/**
+ * Chrome gives a document's first five images a script's urgency until it
+ * has laid them out (measured in Chrome 157: Priority u=2, i over HTTP/2,
+ * and their place in the line for a connection to an HTTP/1 server): the
+ * image requests each client has made, by client, the oldest dropped first
+ */
+const imagesMade = new Map<string, number>();
+const FIRST_IMAGES = 5;
+const CLIENTS_KEPT = 1024;
+/** whether the image request this client makes now is one of its first five */
+function firstImage(client: string | undefined): boolean {
+	if (!client) return false;
+	const made = imagesMade.get(client) ?? 0;
+	if (made >= FIRST_IMAGES) return false;
+	imagesMade.delete(client);
+	if (imagesMade.size >= CLIENTS_KEPT)
+		imagesMade.delete(imagesMade.keys().next().value!);
+	imagesMade.set(client, made + 1);
+	return true;
+}
+
+/** what the worker noted of a request as its fetch event came (noteRequest) */
+interface RequestNote {
+	/** when (ms since the epoch) */
+	askedAt: number;
+	/** an image request among its client's first five */
+	first: boolean;
+}
+const requestNotes = new WeakMap<Request, RequestNote>();
+
+/**
+ * Note `request` as its fetch event comes, before any of the worker's work
+ * on it: the order the browser asked in is the order requests of one
+ * urgency leave in (REQUEST_QUEUE), and a document's first five images are
+ * the first five it asked for, whatever order the work on each finishes in
+ */
+export function noteRequest(request: Request, client: string) {
+	requestNotes.set(request, {
+		askedAt: performance.timeOrigin + performance.now(),
+		first:
+			request.destination === 'image' &&
+			request.mode !== 'navigate' &&
+			firstImage(client),
+	});
+}
+
+/**
+ * The client of each image request not answered yet, by its name in the
+ * transport's queue, and the clients told one of theirs waits
+ * (IMAGES_WAITING): a document watches its images only once told, so a
+ * frame whose images never wait (an ad's pixel, every image of an HTTP/2
+ * site) pays nothing for it
+ */
+const imageClients = new Map<string, string>();
+const toldClients = new Set<string>();
+RemoteTransport.waiting = (id) => {
+	const client = imageClients.get(id);
+	if (client === undefined || toldClients.has(client)) return;
+	if (!tellLoadClient(client, IMAGES_WAITING)) return;
+	if (toldClients.size >= CLIENTS_KEPT) toldClients.clear();
+	toldClients.add(client);
+};
+
+/**
+ * A page laid these images (their URLs as the browser's own src getter
+ * reads them: the routed ones, the requests' own) out in its
+ * viewport while they loaded (IMAGES_SEEN): each request for one still
+ * waiting for a connection waits at a fetch's urgency from now on, as
+ * Chrome raises it, and so does one that has not reached the worker yet
+ */
+export function imagesSeen(urls: unknown) {
+	if (!Array.isArray(urls)) return;
+	const now = performance.now();
+	for (let url of urls) {
+		if (typeof url !== 'string') continue;
+		const hash = url.indexOf('#');
+		if (hash !== -1) url = url.slice(0, hash);
+		seenImages.delete(url);
+		if (seenImages.size >= SEEN_KEPT)
+			seenImages.delete(seenImages.keys().next().value!);
+		seenImages.set(url, now);
+		for (const raise of unansweredImages.get(url) ?? []) raise();
+	}
+}
+
 function genericForward(
 	rewriter: Rewriter,
 	transformBody: BodyTransform | void,
@@ -1191,6 +1299,10 @@ function genericForward(
 		context?: RouteContext,
 	): Promise<Response> {
 		const started = Date.now();
+		// when the browser asked: the transport's queue keeps that order
+		const noted = requestNotes.get(serverRequest);
+		const askedAt =
+			noted?.askedAt ?? performance.timeOrigin + performance.now();
 		// the page's abort reaches the worker as a message under the id the
 		// page put in the request (Chrome does not fire the request's own
 		// signal in a fetch event); the signal is honoured too where it fires
@@ -2644,12 +2756,28 @@ function genericForward(
 		// urgent first. The transport takes the field off
 		const queued = (
 			headers: RawHeaders,
-			shape: RequestShape,
+			urgency: number,
 			credentialed: boolean,
+			id: string,
+			image = false,
 		): RawHeaders => [
 			...headers.filter(([name]) => name.toLowerCase() !== REQUEST_QUEUE),
-			[REQUEST_QUEUE, queueValue(queueUrgency(shape), credentialed)],
+			[REQUEST_QUEUE, queueValue(urgency, credentialed, id, askedAt, image)],
 		];
+		// under its name there, a request the page gives up on leaves the
+		// line (Chrome drops it from its socket pool's queue) and an image
+		// the page lays out in its viewport is raised (imagesSeen)
+		const requeue = (id: string, op: 'cancel' | 'raise') =>
+			(
+				rewriter.bare.transport as {
+					requeue?: (id: string, op: 'cancel' | 'raise') => void;
+				}
+			).requeue?.(id, op);
+		const queueName = () => {
+			const id = `${QUEUE_PREFIX}${++queueCount}`;
+			abortedSoon.catch(() => requeue(id, 'cancel'));
+			return id;
+		};
 		// the fields go out in the order Chrome sends them (headerOrder.ts)
 		const shape: RequestShape = {
 			navigation: navigation && DOCUMENT_DESTINATIONS.has(destination),
@@ -2662,6 +2790,25 @@ function genericForward(
 			pageLanguage,
 		};
 		const fetchUpstream = (headers: Headers) => {
+			const id = queueName();
+			const image = !shape.navigation && shape.destination === 'image';
+			const raise = () => requeue(id, 'raise');
+			// what the image's src reads to the browser's own getter: the
+			// request's URL, the fragment aside
+			const page = serverRequest.url;
+			const client = context?.clientId;
+			const first = image && (noted ? noted.first : firstImage(client));
+			if (image) {
+				let raises = unansweredImages.get(page);
+				if (!raises) unansweredImages.set(page, (raises = new Set()));
+				raises.add(raise);
+				if (client) imageClients.set(id, client);
+			}
+			if (first && !headers.has('priority'))
+				headers.set('priority', `u=${FIRST_IMAGES_URGENCY}, i`);
+			let urgency = queueUrgency(shape);
+			if (first) urgency = Math.min(urgency, FIRST_IMAGES_URGENCY);
+			if (image && seenLately(page)) urgency = Math.min(urgency, SEEN_URGENCY);
 			const upstream = upload.then((body) =>
 				rewriter.bare.fetch(url.toString(), {
 					method: serverRequest.method,
@@ -2670,11 +2817,22 @@ function genericForward(
 					body,
 					headers: queued(
 						partitioned(chromeOrderedHeaders(headers, shape)),
-						shape,
+						urgency,
 						credentials,
+						id,
+						image,
 					),
 				}),
 			);
+			if (image) {
+				const answered = () => {
+					imageClients.delete(id);
+					const raises = unansweredImages.get(page);
+					raises?.delete(raise);
+					if (raises?.size === 0) unansweredImages.delete(page);
+				};
+				upstream.then(answered, answered);
+			}
 			// an answer that arrives after the page gave up is dropped unread, so
 			// the transport stops reading it
 			upstream.then(
@@ -2808,9 +2966,10 @@ function genericForward(
 								partitioned(
 									chromeOrderedHeaders(preflightHeaders, preflightShape),
 								),
-								preflightShape,
+								queueUrgency(preflightShape),
 								// a preflight never carries credentials
 								false,
+								queueName(),
 							),
 						}),
 						abortedSoon,

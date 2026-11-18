@@ -37,6 +37,7 @@ import {
 	ControllerCloseMessage,
 	ControllerInitMessage,
 	ControllerModulesMessage,
+	IMAGES_SEEN,
 	INIT_PAGE_MODULES,
 	INIT_REMOTE_TRANSPORT,
 	InitPageModulesMessage,
@@ -130,6 +131,8 @@ import { RewritePool } from './rewritePool';
 import {
 	abortRequest,
 	departingMixedContent,
+	imagesSeen,
+	noteRequest,
 	siteArrived,
 	siteBetween,
 	siteDeparture,
@@ -1348,6 +1351,8 @@ function handleMessage(event: ExtendableMessageEvent) {
 		legacyFileSystemCleared(data[LEGACY_FS_CLEARED]);
 	} else if (ABORT_REQUEST in data) {
 		abortRequest((data as Record<string, unknown>)[ABORT_REQUEST]);
+	} else if (IMAGES_SEEN in data) {
+		imagesSeen((data as Record<string, unknown>)[IMAGES_SEEN]);
 	} else if (CONTROLLER_CLOSE in data) {
 		// only the tab that registered the controller may close it (a proxied
 		// page is a client too, and must not be able to kill its host's)
@@ -2407,6 +2412,7 @@ async function sweepBundles() {
 self.addEventListener('fetch', (event: FetchEvent) => {
 	const { pathname, search } = new URL(event.request.url);
 	if (documentBundle(event, pathname, search)) return;
+	noteRequest(event.request, event.clientId);
 	const unmarked = unmarkHomed(event.request);
 	if (unmarked) {
 		event.respondWith(unmarked);

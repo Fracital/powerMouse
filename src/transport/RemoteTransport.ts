@@ -21,6 +21,11 @@ import { RpcHelper } from './rpc';
  * The other end is served by `serveTransport()`.
  */
 export default class RemoteTransport implements ProxyTransport {
+	/**
+	 * hears the worker's name for an image's request that waits for a
+	 * connection (REQUEST_QUEUE): the service worker tells its document
+	 */
+	static waiting: ((id: string) => void) | null = null;
 	ready = false;
 	private readyPromise: Promise<void>;
 	private readyResolve!: () => void;
@@ -33,6 +38,9 @@ export default class RemoteTransport implements ProxyTransport {
 			{
 				ready: async () => {
 					this.readyResolve();
+				},
+				waiting: async (id) => {
+					RemoteTransport.waiting?.(id);
 				},
 			},
 			TRANSPORT_RPC,
@@ -66,6 +74,10 @@ export default class RemoteTransport implements ProxyTransport {
 	async init() {
 		await this.readyPromise;
 		this.ready = true;
+	}
+	/** cancel or raise the request named `id` while it waits for a connection (socketPool.ts) */
+	requeue(id: string, op: 'cancel' | 'raise') {
+		this.rpc.call('requeue', { id, op }).catch(() => {});
 	}
 	async request(
 		remote: URL,

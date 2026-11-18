@@ -187,6 +187,14 @@ export function openLoadChannel(
 	return true;
 }
 
+/** post `message` to the document `client` on its channel; whether it has one */
+export function tellLoadClient(client: string, message: unknown): boolean {
+	const port = channels.get(client);
+	if (!port) return false;
+	port.postMessage(message);
+	return true;
+}
+
 /** close the channels of clients that are gone */
 async function sweepChannels() {
 	const alive = new Set(

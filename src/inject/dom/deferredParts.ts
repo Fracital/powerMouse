@@ -55,6 +55,9 @@
 // (and the WebTransport stand-in, ../webTransportStandIn.ts, with what
 // carries its sessions, ../webTransport.ts, once a realm makes its first
 // session)
+// (and the watch of which images a document lays out in its viewport,
+// ./seenImages.ts, once the worker says one of them waits for a connection)
+//
 // (and what routes xml-stylesheet processing instructions and an XML
 // document's prolog, ./instructions.ts, at the first one a document meets)
 //
@@ -121,6 +124,7 @@ import { openerFacts, opensWithoutOpener } from './openerFacts';
 import { pictureWindows } from './pictureWindows';
 import { presentationIds } from './presentations';
 import { rtcInstall } from './rtcInstall';
+import { seenImages } from './seenImages';
 import {
 	acceptAcross,
 	ancestorAcross,
@@ -248,6 +252,7 @@ export const parts = {
 	receiveAcross,
 	onOwnSlot,
 	slotContainerPolicy,
+	seenImages,
 };
 
 export type DeferredParts = typeof parts;

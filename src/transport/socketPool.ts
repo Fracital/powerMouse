@@ -37,12 +37,35 @@ interface Group {
 	active: number;
 }
 
+/** ms since the epoch, comparable across the worker's realm and this one */
+const now = () => performance.timeOrigin + performance.now();
+
 interface Waiting {
 	group: Group;
 	urgency: number;
+	/** the worker's name for it (REQUEST_QUEUE), for a raise or a cancel */
+	id: string;
+	/**
+	 * when the browser asked for it (ms since the epoch): of the same
+	 * urgency, the first asked goes first, as Chrome's queue does, whatever
+	 * order the worker's work on each brought them here in
+	 */
+	asked: number;
 	/** true: counted against the limits */
 	start: (counted: boolean) => void;
+	/** given up while it waited */
+	cancel: () => void;
 }
+
+/** a request the page gave up on while it waited for a connection: it never goes out */
+export class QueuedCancel extends Error {
+	constructor() {
+		super('Stomp: request cancelled while it waited for a connection');
+	}
+}
+
+/** cancels and raises that came before their request, kept for it (they cross apart) */
+const EARLY_KEPT = 256;
 
 /** what a request holds while it is in flight */
 export interface Ticket {
@@ -101,26 +124,45 @@ export class SocketPool {
 	/** by urgency, then the order they came in */
 	#waiting: Waiting[] = [];
 	#active = 0;
+	#early = new Set<string>();
+	#raised = new Map<string, number>();
 
 	/**
 	 * Wait for a connection for a request to `url` with `headers` (the
 	 * worker's REQUEST_QUEUE and NETWORK_PARTITION fields name its urgency,
 	 * credentials and partition; a request without them is a credentialed
-	 * one of urgency 1, a fetch's).
+	 * one of urgency 1, a fetch's). `waits` hears the worker's name for an
+	 * image's request that has to wait.
 	 */
-	async take(url: URL, headers: RawHeaders): Promise<Ticket> {
+	async take(
+		url: URL,
+		headers: RawHeaders,
+		waits?: (id: string) => void,
+	): Promise<Ticket> {
 		let urgency = 1;
 		let credentials = 'credentialed';
 		let partition = '';
+		let id = '';
+		let asked = now();
+		let image = false;
 		if (Array.isArray(headers))
 			for (const [name, value] of headers) {
 				const lower = name.toLowerCase();
 				if (lower === REQUEST_QUEUE) {
-					const [u, c] = value.split(' ');
+					const [u, c, named, at, kind] = value.split(' ');
 					urgency = Number(u) || 0;
 					credentials = c ?? credentials;
+					id = named ?? '';
+					asked = Number(at) || asked;
+					image = kind === 'image';
 				} else if (lower === NETWORK_PARTITION) partition = value;
 			}
+		if (id && this.#early.delete(id)) throw new QueuedCancel();
+		const raised = id ? this.#raised.get(id) : undefined;
+		if (raised !== undefined) {
+			this.#raised.delete(id);
+			urgency = Math.min(urgency, raised);
+		}
 		const key = `${partition}\n${url.protocol}//${url.host}\n${credentials}`;
 		let group = this.#groups.get(key);
 		if (!group) {
@@ -138,12 +180,66 @@ export class SocketPool {
 		}
 		// it waits its turn; whoever starts it counts it (or not, when its
 		// group turned out to multiplex while it waited)
-		const counted = await new Promise<boolean>((start) => {
-			let at = this.#waiting.length;
-			while (at > 0 && this.#waiting[at - 1].urgency > urgency) at--;
-			this.#waiting.splice(at, 0, { group: group!, urgency, start });
-		});
+		if (image && id) waits?.(id);
+		const counted = await new Promise<boolean>((start, reject) =>
+			this.#wait({
+				group: group!,
+				urgency,
+				id,
+				asked,
+				start,
+				cancel: () => reject(new QueuedCancel()),
+			}),
+		);
 		return this.#ticket(group, counted);
+	}
+
+	/** in line behind every request as urgent or more */
+	#wait(waiting: Waiting) {
+		let at = this.#waiting.length;
+		const behind = (other: Waiting) =>
+			other.urgency > waiting.urgency ||
+			(other.urgency === waiting.urgency && other.asked > waiting.asked);
+		while (at > 0 && behind(this.#waiting[at - 1])) at--;
+		this.#waiting.splice(at, 0, waiting);
+	}
+
+	/**
+	 * The page gave the request `id` up: if it still waits, it leaves the
+	 * line and never goes out, as Chrome drops a cancelled request from its
+	 * socket pool's queue. One that already went is left to finish (the
+	 * worker drops its answer).
+	 */
+	cancel(id: string) {
+		const at = this.#waiting.findIndex((waiting) => waiting.id === id);
+		if (at < 0) {
+			// it may not have reached the line yet
+			if (this.#early.size >= EARLY_KEPT) this.#early.clear();
+			this.#early.add(id);
+			return;
+		}
+		const [waiting] = this.#waiting.splice(at, 1);
+		waiting.cancel();
+	}
+
+	/**
+	 * The page laid the image `id` out in its viewport: if it still waits, it
+	 * waits at `urgency` from now on (behind those already there), as Chrome
+	 * raises an image in the viewport to a fetch's urgency once laid out.
+	 */
+	raise(id: string, urgency: number) {
+		const at = this.#waiting.findIndex((waiting) => waiting.id === id);
+		if (at < 0) {
+			// it may not have reached the line yet
+			if (this.#raised.size >= EARLY_KEPT) this.#raised.clear();
+			this.#raised.set(id, urgency);
+			return;
+		}
+		if (this.#waiting[at].urgency <= urgency) return;
+		const [waiting] = this.#waiting.splice(at, 1);
+		waiting.urgency = urgency;
+		waiting.asked = now();
+		this.#wait(waiting);
 	}
 
 	#startable(group: Group) {

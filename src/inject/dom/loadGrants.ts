@@ -1,10 +1,15 @@
 import {
+	IMAGES_WAITING,
 	LOAD_CHANNEL,
 	LOAD_HEADER,
 	SW_REVIVE,
 	type LoadGrantMessage,
 } from '../../transport/messages';
 import type Client from '../Client';
+import type DocumentClient from './Client';
+import { addDocumentOpenListener } from './Client';
+import { deferred } from './deferred';
+import { seenImageNatives } from './seenImageNatives';
 
 /**
  * This bundle's load grants (src/server/loadGrants.ts). A load the inject
@@ -85,6 +90,8 @@ let recent: (LoadGrantMessage & { at: number })[] = [];
 /** this bundle's own, or the one it goes through; undefined until asked */
 let source: LoadSource | null | undefined;
 let first: Client | null = null;
+/** whether this realm watches its images (IMAGES_WAITING) */
+let watching = false;
 
 const ALPHABET =
 	'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
@@ -120,8 +127,29 @@ function open(directory: string, answer?: string): boolean {
 		if (port === null) port = mine;
 		Reflect.apply(taken.listen, mine, [
 			'message',
-			() => {
-				if (port === mine) return;
+			(event: MessageEvent) => {
+				if (port === mine) {
+					// the worker's word that an image of this document waits for
+					// a connection: the document watches its images from now on
+					if (
+						!watching &&
+						first &&
+						Reflect.apply(taken.dataOf, event, []) === IMAGES_WAITING
+					) {
+						watching = true;
+						try {
+							const client = first as DocumentClient;
+							watching = deferred('seenImages')(
+								client,
+								seenImageNatives,
+								addDocumentOpenListener,
+							);
+						} catch (error) {
+							// no parts to be had: its requests wait as they are
+						}
+					}
+					return;
+				}
 				port = mine;
 				const since = taken.now() - RETOLD_MS;
 				recent = recent.filter((grant) => grant.at >= since);

@@ -326,6 +326,35 @@ does for a server it knows nothing of. A request holds its place until
 its body has been read. WebSocket handshakes wait their turn per host
 and port, and the 256th socket fails.
 
+Chrome raises an image to a fetch's urgency once it is laid out in the
+viewport: with 18 images in view waiting, a fetch, an XHR or a script
+the page asks for then goes after them, and with the images below the
+fold before them. The transport cannot see layout, so the page tells it
+(`src/inject/dom/seenImages.ts`), once it has a reason to: when one of a
+document's image requests has to wait for a connection, the transport
+tells the service worker, and the worker tells the document on the
+channel it opened for its load grants. Only then does the document
+run the watch, a deferred part (a frame evaluates only its group):
+while it parses or has an image still loading, one
+IntersectionObserver, fed the images still loading as the parser adds
+them at each rendered frame, names each image it
+finds in the viewport to the worker once (`$stomp$seen`), which raises
+its request in the transport's queue (an image named before its request
+reached the worker goes out raised); once they have loaded, the
+observer goes. A frame whose images never wait (an ad's pixel, every
+image of an HTTP/2 or HTTP/3 server), or whose images have loaded by the
+time it hears, runs none of it. Before layout, Chrome gives a
+document's first five images a script's urgency (Priority `u=2, i` over
+HTTP/2, `i` for the rest), which the worker does by itself: it counts
+each document's image requests as their fetch events come. Of one
+urgency, the request the browser asked the worker for first goes first,
+whatever order the worker's work on each brings them to the transport
+in. And Chrome drops a request the page aborts while it waits for a
+socket: it never reaches the server. The worker names each
+request in the queue, and a page's abort cancels it there (six fetches
+aborted while images wait: none reached the server, as natively; all
+six did before).
+
 The cost is the point: an HTTP/1 site loads as slowly as in Chrome. A
 page of a stylesheet, two scripts in its head, 30 images and 8 scripts
 (each answered after 100 ms) loaded in 1104 ms proxied (454 ms before,
@@ -338,9 +367,25 @@ What is left:
 
 - A script a page inserts waits at urgency 2, as one of its markup
   (Chrome: 3), and a beacon at a fetch's 1 (Chrome: 4); the worker sees
-  neither difference. An image in the viewport is not raised once laid
-  out, so a page of visible images and scripts sends its scripts before
-  its images, where Chrome sends the images first.
+  neither difference.
+- Chrome raises an image in the viewport at the layout itself, where
+  the page's word reaches the transport a little after (and the page
+  starts watching only once one of its images waited): on a page whose head holds its first
+  render (a stylesheet and a script) the scripts of its body can take the
+  connections that free up then. Chrome neither boosts nor counts among
+  the first five an image its width and height attributes make small
+  (under 10,000 pixels: measured in Chrome 157, 99x100 is small and
+  101x100 is not), which the worker cannot see, so a 1x1 pixel among a
+  document's first images goes at a script's urgency and takes the
+  place of a later one. The worker counts a document's images as its
+  requests reach it, a CSS background's among them. A fetch, which the
+  worker has less to do for, takes a free connection before an image
+  the browser asked for at the same time. A document that has loaded is no longer
+  watched, so an image a page inserts or scrolls into view after its
+  load is not raised. An image of srcset or of a picture element is
+  named by its src, which is not what it asked for.
+- A request the page abandons once it went out still runs to its end
+  (Chrome closes the connection); the worker drops the answer.
 - The limits are each transport's (a controller's), where Chrome's are
   the profile's, and the WebSocket handshake lock is per host and port,
   not per IP (the wisp server resolves names). Idle connections do not

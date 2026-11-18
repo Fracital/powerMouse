@@ -8,7 +8,15 @@
 // connections to an HTTP/1 server, Chrome 6) and every WebSocket handshake
 // at once (measured 2026-11-17; fixed by src/transport/socketPool.ts, with
 // epoxy saying which HTTP version each response came over, deploy/epoxy
-// patches epoxy-tls 0063 and epoxy-transport 0055).
+// patches epoxy-tls 0063 and epoxy-transport 0055). Chrome also raises an
+// image laid out in the viewport to a fetch's urgency, so a fetch, an XHR
+// or a script that comes while visible images wait goes after them (the
+// page tells the transport which, once told one of its images waits:
+// src/inject/dom/seenImages.ts), gives a document's first five images a
+// script's urgency before it lays any out (the worker does: Priority u=2, i
+// over HTTP/2, and their place in the line), and drops a request the page
+// aborts while it waits (it never reaches the server; the worker cancels it
+// in the transport's queue).
 //
 // The suite's servers on 127.0.0.1 count what reaches them: an HTTP/1
 // server (also reached as localhost, another host to Chrome), and an HTTP/2
@@ -87,13 +95,14 @@ Promise.all(Array.from({ length: ${n} }, (_, i) =>
 )).then(() => fetch('/report?run=' + tag, { cache: 'no-store' }));
 </script>`;
 /**
- * A page whose images below the fold wait for connections (each answered
- * after a wave of 300 ms), then, while they wait, loads of other kinds:
- * the wave each reaches the server in says where it waited
+ * A page whose images wait for connections (each answered after a wave of
+ * 300 ms), below the fold or, with `shown`, in the viewport, then, while
+ * they wait, loads of other kinds: the wave each reaches the server in says
+ * where it waited
  */
 const WAVE_MS = 300;
-const latePage = (tag, n) => `<!doctype html><title>LATE</title>
-<div style="height:3000px"></div>
+const latePage = (tag, n, shown) => `<!doctype html><title>LATE</title>
+${shown ? '' : '<div style="height:3000px"></div>'}
 ${Array.from({ length: n }, (_, i) => `<img src="/load?run=${tag}&i=${i}&d=${WAVE_MS}">`).join('')}
 <script>
 setTimeout(() => {
@@ -114,7 +123,45 @@ setTimeout(() => {
 	document.body.append(script);
 	new Image().src = u('/load', 'image');
 	navigator.sendBeacon(u('/load', 'beacon'));
+}, ${shown ? 150 : 50});
+addEventListener('load', () => fetch('/report?run=${tag}', { cache: 'no-store' }));
+</script>`;
+/**
+ * A page whose images below the fold wait for connections, and six fetches
+ * it aborts while they wait, then one it keeps: natively the aborted ones
+ * leave the queue and never reach the server
+ */
+const abortsPage = (tag) => `<!doctype html><title>ABORTS</title>
+<div style="height:3000px"></div>
+${Array.from({ length: 18 }, (_, i) => `<img src="/load?run=${tag}&i=${i}&d=${WAVE_MS}">`).join('')}
+<script>
+setTimeout(() => {
+	const u = (i) => '/load?run=${tag}&d=${WAVE_MS}&i=' + i;
+	const controller = new AbortController();
+	for (let i = 0; i < 6; i++)
+		fetch(u('aborted-' + i), { cache: 'no-store', signal: controller.signal }).catch(() => {});
+	setTimeout(() => {
+		controller.abort();
+		fetch(u('kept'), { cache: 'no-store' });
+	}, 100);
 }, 50);
+addEventListener('load', () => setTimeout(() => fetch('/report?run=${tag}', { cache: 'no-store' }), ${WAVE_MS * 2}));
+</script>`;
+/**
+ * A page whose fetches hold every connection to the server while its
+ * markup's twelve images (below the fold) and six scripts after them wait:
+ * Chrome gives a document's first five images a script's urgency, so they
+ * go with the first script, the rest after the scripts
+ */
+const firstPage = (tag) => `<!doctype html><title>FIRST</title>
+<script>
+for (let i = 0; i < 6; i++)
+	fetch('/load?run=${tag}&d=${WAVE_MS}&i=busy-' + i, { cache: 'no-store' });
+</script>
+<div style="height:3000px"></div>
+${Array.from({ length: 12 }, (_, i) => `<img src="/load?run=${tag}&i=${i}&d=${WAVE_MS}">`).join('')}
+${Array.from({ length: 6 }, (_, i) => `<script src="/load?run=${tag}&i=script-${i}&d=${WAVE_MS}"></script>`).join('')}
+<script>
 addEventListener('load', () => fetch('/report?run=${tag}', { cache: 'no-store' }));
 </script>`;
 /** a page of `k` WebSockets at once, each handshake answered after `d` ms */
@@ -154,7 +201,10 @@ function handler(req, res) {
 	};
 	if (url.pathname === '/burst.html')
 		return html(burstPage(tag, +q.get('n'), q.get('other') ?? ''));
-	if (url.pathname === '/late.html') return html(latePage(tag, +q.get('n')));
+	if (url.pathname === '/late.html')
+		return html(latePage(tag, +q.get('n'), q.has('shown')));
+	if (url.pathname === '/aborts.html') return html(abortsPage(tag));
+	if (url.pathname === '/first.html') return html(firstPage(tag));
 	if (url.pathname === '/sockets.html')
 		return html(socketsPage(tag, +q.get('k'), +q.get('d')));
 	if (url.pathname === '/report') {
@@ -170,6 +220,7 @@ function handler(req, res) {
 		i: q.get('i'),
 		host: req.headers.host ?? req.headers[':authority'],
 		connection: socket.$id,
+		priority: req.headers.priority ?? null,
 		at: now(),
 	};
 	run.loads.push(load);
@@ -218,6 +269,43 @@ const H1 = `http://127.0.0.1:${await listen(h1)}`;
 const H1_OTHER = H1.replace('127.0.0.1', 'localhost');
 const H2 = `https://127.0.0.1:${await listen(h2)}`;
 
+/** the wave each late load of a late page reached the server in */
+function lateWaves(run) {
+	const first = Math.min(...run.loads.map((load) => load.at));
+	const out = {};
+	const markup = run.loads.filter((load) => /^\d+$/.test(load.i));
+	for (const load of run.loads)
+		if (load.i !== 'image' && !markup.includes(load))
+			out[`${load.i}'s wave`] = Math.floor((load.at - first) / WAVE_MS);
+	// a late image waits behind those of the markup (one urgency: in
+	// the order they came)
+	const image = run.loads.find((load) => load.i === 'image');
+	out['the late image after every image of the markup'] =
+		!!image && markup.every((load) => load.at <= image.at);
+	out['last image wave'] = Math.max(
+		...markup.map((load) => Math.floor((load.at - first) / WAVE_MS)),
+	);
+	return out;
+}
+
+/** which loads of a first page reached the server in the wave after its fetches */
+function firstWaves(run) {
+	const first = Math.min(...run.loads.map((load) => load.at));
+	const second = run.loads.filter(
+		(load) => Math.floor((load.at - first) / WAVE_MS) === 1,
+	);
+	return {
+		'images in the second wave': second
+			.filter((load) => /^\d+$/.test(load.i))
+			.map((load) => +load.i)
+			.sort((a, b) => a - b)
+			.join(' '),
+		'scripts in the second wave': second.filter((load) =>
+			load.i.startsWith('script-'),
+		).length,
+	};
+}
+
 /** each step: its page, and what of the run is compared */
 const connectionsOf = (loads) =>
 	new Set(loads.map((load) => load.connection)).size;
@@ -255,23 +343,40 @@ const STEPS = [
 	[
 		'loads that come while 18 images wait for an HTTP/1 server',
 		(tag) => `${H1}/late.html?run=${tag}&n=18`,
-		(run) => {
-			const first = Math.min(...run.loads.map((load) => load.at));
-			const out = {};
-			const markup = run.loads.filter((load) => /^\d+$/.test(load.i));
-			for (const load of run.loads)
-				if (load.i !== 'image' && !markup.includes(load))
-					out[`${load.i}'s wave`] = Math.floor((load.at - first) / WAVE_MS);
-			// a late image waits behind those of the markup (one urgency: in
-			// the order they came)
-			const image = run.loads.find((load) => load.i === 'image');
-			out['the late image after every image of the markup'] =
-				!!image && markup.every((load) => load.at <= image.at);
-			out['last image wave'] = Math.max(
-				...markup.map((load) => Math.floor((load.at - first) / WAVE_MS)),
-			);
-			return out;
-		},
+		lateWaves,
+	],
+	[
+		'loads that come while 18 images in the viewport wait for an HTTP/1 server',
+		(tag) => `${H1}/late.html?run=${tag}&n=18&shown`,
+		lateWaves,
+	],
+	[
+		"a page's first images and scripts while its fetches hold every connection to an HTTP/1 server",
+		(tag) => `${H1}/first.html?run=${tag}`,
+		firstWaves,
+	],
+	[
+		"the Priority of a page's images to an HTTP/2 server",
+		(tag) => `${H2}/first.html?run=${tag}`,
+		(run) => ({
+			'Priority of each image of the markup, in order': run.loads
+				.filter((load) => /^\d+$/.test(load.i))
+				.sort((a, b) => a.i - b.i)
+				.map((load) => load.priority)
+				.join(' | '),
+		}),
+	],
+	[
+		'6 fetches the page aborts while 18 images wait for an HTTP/1 server',
+		(tag) => `${H1}/aborts.html?run=${tag}`,
+		(run) => ({
+			'aborted fetches that reached the server': run.loads.filter((load) =>
+				load.i.startsWith('aborted-'),
+			).length,
+			'the fetch it kept reached the server': run.loads.some(
+				(load) => load.i === 'kept',
+			),
+		}),
 	],
 	[
 		'8 WebSockets at once to one host',
@@ -300,10 +405,18 @@ const KNOWN_BY_REASON = {
 	'a script the page inserts waits as one of its markup': [
 		"loads that come while 18 images wait for an HTTP/1 server: script's wave",
 	],
+	// natively the page's first two images reach the server with its
+	// fetches, before four of them; through the proxy the fetches, which the
+	// worker has less to do for, take every connection first, and the first
+	// five images go in the wave after
+	'the worker passes a fetch on sooner than an image': [
+		"a page's first images and scripts while its fetches hold every connection to an HTTP/1 server: images in the second wave",
+	],
 	// a beacon is urgency 4 in Chrome, the last to go; the worker sees a
 	// keepalive fetch, urgency 1
 	'a beacon waits as a fetch': [
 		"loads that come while 18 images wait for an HTTP/1 server: beacon's wave",
+		"loads that come while 18 images in the viewport wait for an HTTP/1 server: beacon's wave",
 	],
 };
 const KNOWN = new Map(

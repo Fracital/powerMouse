@@ -17,7 +17,7 @@ import {
 	WebSocketMessage,
 } from './messages';
 import { NETWORK_PARTITION } from './networkPartition';
-import { REQUEST_QUEUE } from './requestQueue';
+import { REQUEST_QUEUE, SEEN_URGENCY } from './requestQueue';
 import { resumableBody } from './resumableBody';
 import { RpcHelper } from './rpc';
 import { poolOf, reportsVersion, type SocketPass } from './socketPool';
@@ -339,6 +339,12 @@ export default function serveTransport(
 
 	const rpc = new RpcHelper<TransportToHost, HostToTransport>(
 		{
+			requeue: async ({ id, op }) => {
+				const pool = poolOf(getTransport()).http;
+				if (op === 'cancel') pool.cancel(id);
+				else pool.raise(id, SEEN_URGENCY);
+				return [undefined, []];
+			},
 			request: async ({ remote, method, body, headers }) => {
 				const transport = await readyTransport();
 				const url = new URL(remote);
@@ -346,7 +352,9 @@ export default function serveTransport(
 				// it waits for a connection as Chrome's requests wait for a
 				// socket (socketPool.ts), and holds it until its body ends
 				const ticket = reportsVersion(transport)
-					? await poolOf(transport).http.take(url, headers)
+					? await poolOf(transport).http.take(url, headers, (id) =>
+							rpc.call('waiting', id).catch(() => {}),
+						)
 					: null;
 				let response;
 				try {
