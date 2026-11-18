@@ -88,6 +88,7 @@ import {
 	notificationParts,
 	permissionElements,
 } from '../permissionGates';
+import { reportsSeen } from '../reportsSeen';
 import { bucketMethods } from '../storageBucketMethods';
 import { carry as carryWebTransport } from '../webTransport';
 import { standIn as webTransportStandIn } from '../webTransportStandIn';
@@ -154,6 +155,9 @@ export const parts = {
 	// the wording of the access API's errors, at a document's first
 	// (../accessFailures.ts; ../errorMessages.ts)
 	accessFailures,
+	// the un-routing of ReportingObserver's reports, at the first
+	// (../reportsSeen.ts; ../modules/Unroute.ts)
+	reportsSeen,
 	compileFilter,
 	longFrames,
 	longTasks,

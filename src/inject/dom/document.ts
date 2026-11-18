@@ -6,6 +6,7 @@ import { legacyFileSystemParts } from '../legacyFileSystemParts';
 import { mixedContentParts } from '../mixedContentParts';
 import Module from '../Module';
 import baseModules from '../modules';
+import { reportParts } from '../reportParts';
 import { storageBucketParts } from '../storageBucketParts';
 import { webTransportParts } from '../webTransportParts';
 import DocumentClient from './Client';
@@ -81,6 +82,8 @@ legacyFileSystemParts.drop = () => deferred('dropLegacyFileSystem');
 mixedContentParts.noticeText = () => deferred('noticeText');
 // and the wording of the access API's errors, with a document's first
 accessFailureParts.failures = () => deferred('accessFailures');
+// and the un-routing of ReportingObserver's reports, with the first
+reportParts.seen = () => deferred('reportsSeen');
 
 class FingerprintStandIn extends Module<DocumentClient> {
 	apply() {

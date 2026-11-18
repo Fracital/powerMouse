@@ -14,6 +14,8 @@ import { idbSizeParts } from '../idbSizeParts';
 import { partitionLegacyFileSystem } from '../legacyFileSystem';
 import { legacyFileSystemParts } from '../legacyFileSystemParts';
 import { mixedContentParts } from '../mixedContentParts';
+import { reportParts } from '../reportParts';
+import { reportsSeen } from '../reportsSeen';
 import { handModules } from '../rewriter';
 import { bucketMethods } from '../storageBucketMethods';
 import { storageBucketParts } from '../storageBucketParts';
@@ -40,6 +42,8 @@ legacyFileSystemParts.partition = () => partitionLegacyFileSystem;
 mixedContentParts.noticeText = () => noticeText;
 // and the wording of the access API's errors (../accessFailureParts.ts)
 accessFailureParts.failures = () => accessFailures;
+// and the un-routing of ReportingObserver's reports (../reportParts.ts)
+reportParts.seen = () => reportsSeen;
 /** set once the bootstrap came without a transport (a worker of a worker): nothing carries its sessions */
 let transportless = false;
 webTransportParts.carry = () =>

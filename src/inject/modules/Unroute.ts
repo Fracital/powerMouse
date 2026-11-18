@@ -16,6 +16,8 @@ import type DocumentClient from '../dom/Client';
 import Module from '../Module';
 import { skippedFrames } from '../nativeErrors';
 import { LazyWeakMap, LazyWeakSet } from '../ownCollections';
+import { reportParts } from '../reportParts';
+import type { ReportView } from '../reportsSeen';
 import ProxyModule from './Proxy';
 import ResourceBufferModule from './ResourceBuffer';
 
@@ -324,17 +326,6 @@ const MUTED: ErrorReport = {
 };
 /** a DataCloneError's message: what it was thrown for, the value as text, the verdict */
 const UNCLONEABLE = /^([^:]*: )([\s\S]+)( could not be cloned\.)$/;
-/** the deprecation report's id for a synchronous request on a document's main thread */
-const SYNCHRONOUS_REQUEST_REPORT =
-	'XMLHttpRequestSynchronousInNonWorkerOutsideBeforeUnload';
-// the members of a report and its body that hold a URL
-const REPORT_URL_KEYS = [
-	'url',
-	'sourceFile',
-	'documentURL',
-	'blockedURL',
-	'referrer',
-];
 
 /**
  * Strings the browser builds from request URLs come back as the page's URLs:
@@ -993,122 +984,6 @@ export default class UnrouteModule extends Module<Client> {
 		const client = this.client;
 		const proxyModule = client.getModule(ProxyModule)!;
 		const global = client.global as typeof globalThis & Record<string, any>;
-		const unroute = (value: unknown) =>
-			typeof value === 'string' ? (unrouteURL(client, value) ?? value) : value;
-		const unrouteJSON = (json: Record<string, unknown>) => {
-			const site = Object.hasOwn(json, 'sourceFile')
-				? siteFor(json.sourceFile, json.id)
-				: undefined;
-			if (site) {
-				json.sourceFile = site.filename;
-				if (Object.hasOwn(json, 'lineNumber')) json.lineNumber = site.lineno;
-				if (Object.hasOwn(json, 'columnNumber')) json.columnNumber = site.colno;
-			}
-			for (const key of REPORT_URL_KEYS)
-				if (Object.hasOwn(json, key) && typeof json[key] === 'string')
-					json[key] = unroute(json[key]);
-			if (typeof json.originalPolicy === 'string')
-				json.originalPolicy = pagePolicy(json.originalPolicy);
-		};
-		// a policy violation names the page's policy as the page wrote it, not
-		// the one the browser was given for it (src/csp.ts)
-		const pagePolicy = (value: unknown) =>
-			typeof value === 'string'
-				? ((
-						client as { pagePolicyText?: (text: string) => string | null }
-					).pagePolicyText?.(value) ?? value)
-				: value;
-		// A report that names one of the inject's bundles as its source was
-		// made inside a hook the page called (a deprecated `unload` listener
-		// added through the hooked addEventListener): the browser takes the
-		// hook for the caller. It shows the page's call site, which the hook
-		// noted (noteReportSite; a deprecation is reported once a document,
-		// so the first one noted is the one reported).
-		// (a synchronous request's has a place of its own: `id` is the
-		// report's)
-		const siteFor = (sourceFile: unknown, id?: unknown) =>
-			typeof sourceFile === 'string' && unrouteURL(client, sourceFile) === null
-				? (id === SYNCHRONOUS_REQUEST_REPORT && this.#synchronousSite) ||
-					this.#reportSites[0]
-				: undefined;
-		const idOf = (body: unknown) => {
-			try {
-				return (body as { id?: unknown }).id;
-			} catch (error) {
-				return undefined;
-			}
-		};
-		const hooked = new LazyWeakSet<object>();
-		const hook = (prototype: any) => {
-			if (!prototype || hooked.has(prototype)) return;
-			hooked.add(prototype);
-			const nativeSource = Reflect.getOwnPropertyDescriptor(
-				prototype,
-				'sourceFile',
-			)?.get;
-			for (const key of REPORT_URL_KEYS) {
-				const descriptor = Reflect.getOwnPropertyDescriptor(prototype, key);
-				if (!descriptor?.get) continue;
-				Reflect.defineProperty(prototype, key, {
-					...descriptor,
-					get: proxyModule.wrapFunction(
-						descriptor.get,
-						(target, that, args) => {
-							const value = Reflect.apply(target, that, args);
-							return key === 'sourceFile'
-								? (siteFor(value, idOf(that))?.filename ?? unroute(value))
-								: unroute(value);
-						},
-					),
-				});
-			}
-			const policy = Reflect.getOwnPropertyDescriptor(
-				prototype,
-				'originalPolicy',
-			);
-			if (policy?.get)
-				Reflect.defineProperty(prototype, 'originalPolicy', {
-					...policy,
-					get: proxyModule.wrapFunction(policy.get, (target, that, args) =>
-						pagePolicy(Reflect.apply(target, that, args)),
-					),
-				});
-			if (nativeSource)
-				for (const [key, part] of [
-					['lineNumber', 'lineno'],
-					['columnNumber', 'colno'],
-				] as const) {
-					const descriptor = Reflect.getOwnPropertyDescriptor(prototype, key);
-					if (!descriptor?.get) continue;
-					Reflect.defineProperty(prototype, key, {
-						...descriptor,
-						get: proxyModule.wrapFunction(
-							descriptor.get,
-							(target, that, args) => {
-								const value = Reflect.apply(target, that, args);
-								const site = siteFor(
-									Reflect.apply(nativeSource, that, []),
-									idOf(that),
-								);
-								return site ? site[part] : value;
-							},
-						),
-					});
-				}
-			if (Object.hasOwn(prototype, 'toJSON'))
-				prototype.toJSON = proxyModule.wrapFunction(
-					prototype.toJSON,
-					(target, that, args) => {
-						const json: Record<string, any> = Reflect.apply(target, that, args);
-						if (json && typeof json === 'object') {
-							unrouteJSON(json);
-							if (json.body && typeof json.body === 'object')
-								unrouteJSON(json.body);
-						}
-						return json;
-					},
-				);
-		};
 		// The bodies the page sees are hooked from the first reports of their
 		// kind (`seen`, below), before the page's callback or takeRecords has
 		// them, not by walking the globals here: reading `global[name]` for
@@ -1122,53 +997,22 @@ export default class UnrouteModule extends Module<Client> {
 
 		// Report and most bodies are not exposed: their prototypes are taken
 		// from the first reports, before the page's callback has them
+		const view: ReportView = {
+			client,
+			proxyModule,
+			hooked: new LazyWeakSet<object>(),
+			synchronousSite: () => this.#synchronousSite,
+			firstSite: () => this.#reportSites[0],
+		};
+		// (a deferred part, ../reportsSeen.ts: without it, no report reaches
+		// the page)
+		const seen = (reports: unknown) => reportParts.seen!()(view, reports);
 		const Observer = global.ReportingObserver;
 		if (typeof Observer !== 'function') return;
 		const nativeTakeRecords = Reflect.getOwnPropertyDescriptor(
 			Observer.prototype,
 			'takeRecords',
 		)?.value;
-		// A report about the inject's own code is not the page's. There is
-		// one: a document with no top to take the rewriter library from (a
-		// frame under a top of another build) fetches it with a synchronous
-		// request (src/inject/rewriter.ts), which the browser reports as
-		// deprecated, naming the inject bundle. No request of the page's
-		// raises that report here: its synchronous requests go through the
-		// bridge (dom/modules/Sync.ts).
-		const own = (report: unknown) => {
-			try {
-				const { type, body } = report as {
-					type?: unknown;
-					body?: { id?: unknown; sourceFile?: unknown } | null;
-				};
-				return (
-					type === 'deprecation' &&
-					body?.id === SYNCHRONOUS_REQUEST_REPORT &&
-					// (one the page opened is the page's: noteSynchronousRequest)
-					!this.#synchronousSite &&
-					typeof body.sourceFile === 'string' &&
-					unrouteURL(client, body.sourceFile) === null
-				);
-			} catch (error) {
-				return false;
-			}
-		};
-		const seen = (reports: unknown) => {
-			if (Array.isArray(reports) && reports.some(own))
-				reports = reports.filter((report) => !own(report));
-			if (Array.isArray(reports))
-				for (const report of reports) {
-					if (typeof report !== 'object' || report === null) continue;
-					hook(Reflect.getPrototypeOf(report));
-					try {
-						const body = (report as Report).body;
-						if (body) hook(Reflect.getPrototypeOf(body));
-					} catch (error) {
-						// a report without a body
-					}
-				}
-			return reports;
-		};
 		if (typeof nativeTakeRecords === 'function')
 			Observer.prototype.takeRecords = proxyModule.wrapFunction(
 				nativeTakeRecords,
@@ -1183,7 +1027,11 @@ export default class UnrouteModule extends Module<Client> {
 					const callback = args[0];
 					args[0] = function (this: unknown, ...called: unknown[]) {
 						const came = Array.isArray(called[0]) ? called[0].length : 0;
-						called[0] = seen(called[0]);
+						try {
+							called[0] = seen(called[0]);
+						} catch (error) {
+							return;
+						}
 						// (nothing left: there was no report of the page's. A list
 						// that came empty is the browser's own call, after the page
 						// took its records)
