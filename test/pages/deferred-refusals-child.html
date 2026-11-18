@@ -178,6 +178,15 @@
 						worker.terminate();
 						return worker;
 					}),
+				// a protocol handler's registration, accepted silently after the
+				// browser's checks (src/inject/dom/protocolHandlers.ts)
+				protocolHandler: () =>
+					outcome(() =>
+						navigator.registerProtocolHandler(
+							'web+refusals',
+							`${location.origin}/?%s`,
+						),
+					),
 				// the usage walk behind navigator.storage.estimate()
 				// (src/inject/storageUsage.ts)
 				estimate: () => outcome(() => navigator.storage.estimate()),

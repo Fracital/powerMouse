@@ -4,7 +4,6 @@ import Module from '../../Module';
 import { reportOnly } from '../../modules/Fetch';
 import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule from '../../modules/Proxy';
-import { withStack } from '../../nativeErrors';
 import { LazyWeakMap } from '../../ownCollections';
 import DocumentClient from '../Client';
 import { deferred } from '../deferred';
@@ -44,34 +43,8 @@ export default class NavigatorModule extends Module<DocumentClient> {
 
 		// a protocol handler would be registered for the proxy origin, with the
 		// browser's prompt naming it: accepted silently, like a denied prompt,
-		// after the checks the browser makes first (the safelisted schemes and
-		// `web+` names, a URL with `%s`)
-		const SAFE_SCHEMES = new Set([
-			'bitcoin',
-			'ftp',
-			'ftps',
-			'geo',
-			'im',
-			'irc',
-			'ircs',
-			'magnet',
-			'mailto',
-			'matrix',
-			'mms',
-			'news',
-			'nntp',
-			'openpgp4fpr',
-			'sftp',
-			'sip',
-			'sms',
-			'smsto',
-			'ssh',
-			'tel',
-			'urn',
-			'webcal',
-			'wtai',
-			'xmpp',
-		]);
+		// after the checks the browser makes first (a deferred part,
+		// ../protocolHandlers.ts)
 		const navigator = global.Navigator.prototype as Record<string, any>;
 		for (const name of ['registerProtocolHandler', 'unregisterProtocolHandler'])
 			if (typeof navigator[name] === 'function')
@@ -82,22 +55,7 @@ export default class NavigatorModule extends Module<DocumentClient> {
 						// a receiver that is not this window's navigator
 						if (args.length < 2 || that !== global.navigator)
 							return Reflect.apply(target, that, args);
-						const scheme = String(args[0]);
-						if (!SAFE_SCHEMES.has(scheme) && !/^web\+[a-z]+$/.test(scheme))
-							throw withStack(
-								new global.DOMException(
-									`Failed to execute '${name}' on 'Navigator': The scheme '${scheme}' doesn't belong to the scheme allowlist. Please prefix non-allowlisted schemes with the string 'web+'.`,
-									'SecurityError',
-								),
-							);
-						if (!String(args[1]).includes('%s'))
-							throw withStack(
-								new global.DOMException(
-									`Failed to execute '${name}' on 'Navigator': The url provided ('${String(args[1])}') does not contain '%s'.`,
-									'SyntaxError',
-								),
-							);
-						return undefined;
+						return deferred('protocolHandler')(global, name, args);
 					},
 				);
 
