@@ -3,8 +3,14 @@
 // scope (`/stomp/<id>/`), sees only its own requests, and the one that
 // registered first keeps navigating after the second arrived. The same id
 // passed twice still replaces (a reload that kept its id): the replaced
-// controller's calls reject with "Controller replaced" and a request in
-// flight on its transport fails at once. The cookie jar is per scope, so a
+// controller's calls reject with "Controller replaced", and a request in
+// flight on its transport is sent again through the controller that took
+// the address (a GET, HEAD or OPTIONS without a body, as Chrome sends one
+// again over a connection that closed under it), so the page sees it
+// complete rather than fail. A controller that shakes hands again with the
+// worker that has it (rebind, a revive it cannot place) is no other
+// controller: what is in flight on its old channel completes there, a
+// navigation included. The cookie jar is per scope, so a
 // cookie one controller's frame set travels on the other's requests. A
 // routed URL whose controller is gone (a closed tab) is answered by the
 // newest live controller of the scope with the same codec; when none has
@@ -270,7 +276,10 @@ const twin = await page.evaluate(
 	const started = Date.now();
 	const slow = fa.element.contentWindow
 		.fetch('/slow')
-		.then((response) => ({ status: response.status }), (error) => ({ error: String(error) }))
+		.then(
+			async (response) => ({ status: response.status, text: await response.text() }),
+			(error) => ({ error: String(error) }),
+		)
 		.then((result) => ({ ...result, ms: Date.now() - started }));
 	// b only once the fixture has the request: made sooner, b's init can
 	// reach the worker before the frame's fetch does, which then routes to b
@@ -321,13 +330,134 @@ ok(
 	JSON.stringify(twin),
 );
 ok(
-	"a request in flight on the replaced controller's transport fails at once",
+	"a request in flight on the replaced controller's transport is sent again through the controller that took the address, and completes",
 	twin.a === 'went' &&
-		twin.slow &&
-		twin.slow.status !== 200 &&
-		twin.slow.ms < 4000,
+		twin.slow?.status === 200 &&
+		twin.slow.text === 'slow' &&
+		twin.slow.ms < 15000,
 	JSON.stringify(twin.slow),
 );
+
+// ---- a controller that shakes hands again keeps what is in flight ----------
+
+// A live controller shakes hands again with the worker that already has it:
+// a rebind (the host adopting an update, the controllerchange handler, a
+// build mismatch healed), or a revive it cannot tell is from the run it
+// shook hands with (a worker too busy right after a restart to say hello
+// within REVIVE_PING_MS). The worker took the new handshake for another
+// controller at the address and replaced the one it had: every request in
+// flight on the old channel failed, a navigation as the host's error page
+// (502, "Controller replaced"). A tab of its own, since the revive is heard
+// by every controller of the page.
+const rehandshake = await context.newPage();
+rehandshake.on('pageerror', (error) => errors.push(error.message));
+await rehandshake.goto(PROXY);
+await rehandshake.waitForFunction(
+	() => window.controller && window.controller.isReady,
+	null,
+	{ timeout: 45000 },
+);
+const again = await rehandshake.evaluate(
+	`(async (fixture) => {
+	${GO}
+	// each trigger with a fetch (/slow: five seconds) and a navigation
+	// (/slow-page: three) in flight on the channel the controller has
+	const rehandshakes = async (c) => {
+		const out = {};
+		await c.wait();
+		const fc = show(c);
+		out.first = await go(fc, fixture + 'pages/hist-1.html');
+		const served = () =>
+			fc.element.contentWindow
+				.fetch('/requests')
+				.then((response) => response.json(), () => []);
+		let hops = 0;
+		const inFlight = async (trigger) => {
+			const before = (await served()).length;
+			const started = Date.now();
+			const slow = fc.element.contentWindow
+				.fetch('/slow')
+				.then(
+					async (response) => ({ status: response.status, text: await response.text() }),
+					(error) => ({ error: String(error) }),
+				)
+				.then((result) => ({ ...result, ms: Date.now() - started }));
+			const fn = show(c);
+			const nav = go(fn, fixture + 'slow-page?ms=3000');
+			for (let i = 0; i < 150; i++) {
+				const log = (await served()).slice(before);
+				if (log.includes('/slow') && log.includes('/slow-page')) break;
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			}
+			await trigger();
+			const result = { slow: await slow, nav: await nav };
+			const read = await peek(fn.element, 'read');
+			result.title = read?.title ?? null;
+			result.error = read?.error ?? null;
+			result.route = await Promise.race([
+				c.route(fixture + 'pages/hist-2.html').then(() => 'answered', (e) => String(e)),
+				new Promise((resolve) => setTimeout(() => resolve('unanswered'), 5000)),
+			]);
+			result.after = await go(fc, fixture + 'pages/hist-' + (++hops % 2 + 1) + '.html');
+			result.afterTitle = await title(fc);
+			return result;
+		};
+		out.rebind = await inFlight(() => c.rebind());
+		out.revive = await inFlight(async () => {
+			navigator.serviceWorker.dispatchEvent(
+				new MessageEvent('message', {
+					data: { $stomp$swRevive: { instance: 'another-run' } },
+					source: c.serviceworker,
+				}),
+			);
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		});
+		return out;
+	};
+	const wisp = location.origin.replace(/^http/, 'ws') + '/wisp/';
+	return {
+		// the transport served from this page, on the handshake's own port
+		page: await rehandshakes(make({ id: 'again' })),
+		// the transport in the controller's worker, on a port of its own
+		worker: await rehandshakes(
+			make({
+				id: 'again-worker',
+				transport: { module: '/epoxy/index.mjs', options: [{ wisp }] },
+			}),
+		),
+	};
+})(${JSON.stringify(FIXTURE)})`,
+);
+for (const [host, where] of [
+	['page', 'its transport in the page'],
+	['worker', 'its transport in its worker'],
+])
+	for (const [trigger, what] of [
+		['rebind', 'rebind() to the worker it has'],
+		['revive', 'a revive it cannot place'],
+	]) {
+		const run = again[host]?.[trigger];
+		ok(
+			`a controller that shakes hands again (${what}, ${where}) completes the fetch in flight`,
+			again[host]?.first === 'went' &&
+				run?.slow?.status === 200 &&
+				run.slow.text === 'slow',
+			JSON.stringify(run?.slow),
+		);
+		ok(
+			`and the navigation in flight, with no error page (${trigger}, ${host})`,
+			run?.nav === 'went' && run.title === 'SLOW' && run.error === null,
+			JSON.stringify([run?.nav, run?.title, run?.error]),
+		);
+		ok(
+			`and serves on after it (${trigger}, ${host})`,
+			run?.route === 'answered' &&
+				run.after === 'went' &&
+				/^HIST [12]$/.test(run.afterTitle ?? ''),
+			JSON.stringify([run?.route, run?.after, run?.afterTitle]),
+		);
+	}
+await rehandshake.close();
 
 // ---- the cookie jar is shared by the scope ----------------------------------
 
