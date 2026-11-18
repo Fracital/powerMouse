@@ -2326,12 +2326,15 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			unseenWrite(element, 'type');
 			element.setAttribute('type', heldType());
 		};
-		// (a type the page wrote once Chrome had gone by the held one stays
-		// in its marker: the held one stands, as natively the type Chrome went
-		// by does)
+		// The page's type in place of the held one, once Chrome went by the
+		// URL (Chrome 157: an image stays one, whatever the type then): one
+		// it wrote once Chrome had gone by the held one stays in its marker
+		// until then. (One Chrome went by that the page wrote is not held,
+		// and changed with the URL it would count: a type the page wrote
+		// after it stays in its marker.)
 		const release = (element: CustomElement) => {
 			const page = element.getAttributeOG('type');
-			if (element.getAttribute('type') !== heldType() || page) return;
+			if (!isHiddenValue(element.getAttribute('type'))) return;
 			unseenWrite(element, 'type');
 			element.removeAttributeOG('type');
 			if (page === null) element.removeAttribute('type');
@@ -2377,8 +2380,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// once the object was put in the document with its URL changes
 		// nothing (Chrome went by the one it had then): the page's goes in
 		// the marker, the one Chrome went by stays (hidden when the page
-		// removed it). Before, it decides, and the element is held again by
-		// it. After the copy is in, the page's stands.
+		// removed it) until the copy is in (release). Before, it decides, and
+		// the element is held again by it. After the copy is in, the page's
+		// stands.
 		domHooksModule.useAttributes(
 			(element) => {
 				// (a page's write; an insertion's pass writes none)
@@ -2522,17 +2526,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			// nothing to load until the proxied copy is in (an empty URL makes
 			// an object show its fallback and not load again)
 			hold(element, attribute);
-			let blobImage = false;
 			const settle = (value: string | null) => {
 				if (loads.get(element) !== state) return;
 				usePrototype(element, CustomElement.prototype, (element) => {
 					if (value === null) fail(element, attribute);
 					else {
 						element.setAttribute(attribute, value);
-						// (after the URL, which Chrome goes by then: an image's
-						// blob: copy, under a policy that refuses its data: URL,
-						// keeps the type)
-						if (!blobImage) release(element);
+						// (after the URL, which Chrome goes by then)
+						release(element);
 					}
 					// (the hooks' view: the URL the element was given)
 					state.url = element.getAttribute(attribute)!;
@@ -2634,7 +2635,6 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					if (loads.get(element) !== state) return;
 					if (current?.url?.startsWith('blob:'))
 						realm.URL.revokeObjectURL(current.url);
-					blobImage = shown === 'untyped' && !url && !!imageMime;
 					settle(url ?? proxyBlobURL(realm.URL.createObjectURL(blob)));
 				})
 				.catch(() => settle(partless ? null : routed));

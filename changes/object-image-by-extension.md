@@ -13,7 +13,9 @@
   `attributes`, the `type` property, its markup, a copy of it, selectors
   or its observers' records. A `type` the page writes once the object is
   in the document with its URL changes nothing, as natively; one written
-  before decides, as natively (object-documents).
+  before decides, as natively. Once its copy is in, the page's style
+  sheets see the `type` the page wrote, as natively, under a policy that
+  refuses data: too (object-documents, csp-fetch).
 - An `<object>` of a `type` Chrome knows none of (whitespace alone or
   around an image's, such as `" "` or `" image/png"`, or an unknown one
   such as `application/x-foo`) fires error once and loads nothing, at a
@@ -22,7 +24,23 @@
 
 ### Known limitations
 
-- The page's own style sheets see the held `type` of such an `<object>`
-  while its copy is on its way (a `[type]` rule, `getComputedStyle`), and
-  after it where the page wrote a `type` once the object was in the
-  document, or its policy refuses data: for object-src.
+- The page's own style sheets (a `[type]` rule, `getComputedStyle`) and
+  XPath (`document.evaluate` of `@type`) see the held `type` of such an
+  `<object>` while its copy is on its way; once it is in, the page's
+  `type` is the real one, a `type` it wrote meanwhile included. Rewriting
+  the page's selectors and their readback, or its XPath expressions, would
+  cost kilobytes for a window of milliseconds; XPath sees the markers of
+  every hooked attribute the same way.
+- A `type` the page writes once an `<object>` of a `type` of its own is
+  in the document with its URL stays in its marker: Chrome went by the
+  real one, and changing it with the copy's URL would count (a `" "`
+  written over with `image/png` showed nothing, natively error). The
+  page's style sheets and XPath see the earlier one (object-documents
+  measures it).
+- An `<object>` moved (removed and put back) while its copy is on its way
+  keeps its hold: natively Chrome decides again by its `type` then, and a
+  `type` written meanwhile makes it a document that loads twice.
+- A `type` written after a layout on an `<object>` given its URL in the
+  document: natively it keeps the box of a document with no document in
+  it (the image's `type` written over with `text/html`); a hold has no
+  such state, and the proxy goes by the new `type`.
