@@ -140,6 +140,8 @@ const QUOTED_URL =
 export function restoreCSSValueURLs(
 	value: string,
 	resolve?: (routed: string) => string | null,
+	/** every url() as the page wrote it (a custom property's value) */
+	asWritten = false,
 ): string {
 	return value.replace(
 		QUOTED_URL,
@@ -150,7 +152,7 @@ export function restoreCSSValueURLs(
 				if (real) return cssURLValue(real);
 				// the browser serialises a property's url() quoted; one left
 				// bare is in a value it keeps as written
-				return restoreValue(text, bare !== undefined);
+				return restoreValue(text, asWritten || bare !== undefined);
 			} catch (error) {
 				return match;
 			}

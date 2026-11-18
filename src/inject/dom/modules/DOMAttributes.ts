@@ -2405,12 +2405,20 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			// a computed style's url() is absolute, natively: the real URL its
 			// route stands for
 			const computedDeclarations = new LazyWeakSet<CSSStyleDeclaration>();
-			const restore = (target: CSSStyleDeclaration, value: string) =>
-				computedDeclarations.has(target)
-					? restoreCSSValueURLs(value, (routed) =>
-							computedURL(moduleClient, routed),
-						)
-					: restoreCSSValueURLs(value);
+			// a custom property's value is the page's tokens as written, computed
+			// or not: its url() is neither resolved nor quoted
+			const restore = (
+				target: CSSStyleDeclaration,
+				value: string,
+				custom = false,
+			) =>
+				custom
+					? restoreCSSValueURLs(value, undefined, true)
+					: computedDeclarations.has(target)
+						? restoreCSSValueURLs(value, (routed) =>
+								computedURL(moduleClient, routed),
+							)
+						: restoreCSSValueURLs(value);
 
 			const wrapDeclaration = (declaration: CSSStyleDeclaration) => {
 				if (!declaration || typeof declaration !== 'object') return declaration;
@@ -2427,7 +2435,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								return (...args: unknown[]) => {
 									const result = Reflect.apply(value, target, args);
 									return typeof result === 'string' && result.includes('url(')
-										? restore(target, result)
+										? restore(target, result, String(args[0]).startsWith('--'))
 										: result;
 								};
 							if (typeof value === 'function') return value.bind(target);

@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>custom-property-urls</title>
+<style>
+	:root {
+		--piece: url(/pages/blank-cors-image.svg);
+		--quoted: url('/pages/blank-cors-image.svg');
+		--relative: url(blank-cors-image.svg);
+	}
+</style>
+<link rel="stylesheet" href="custom-property-urls.css" />
+<script>
+	// A custom property's value is the page's tokens as written: a url() in
+	// one reads back neither resolved nor quoted, computed or not (lichess
+	// keeps its chess pieces in `---white-king: url(/assets/...)` and loads
+	// each from the value with `url(` and `)` cut off).
+	window.__record = { done: false };
+	addEventListener('load', async () => {
+		const record = {};
+		const computed = getComputedStyle(document.documentElement);
+		for (const name of ['--piece', '--quoted', '--relative', '--sheet-piece'])
+			record[`computed ${name}`] = computed.getPropertyValue(name);
+		record['rule --piece'] =
+			document.styleSheets[0].cssRules[0].style.getPropertyValue('--piece');
+		document.documentElement.style.setProperty(
+			'--inline',
+			'url(/pages/blank-cors-image.svg)',
+		);
+		record['inline --inline'] =
+			document.documentElement.style.getPropertyValue('--inline');
+		record['computed --inline'] = getComputedStyle(
+			document.documentElement,
+		).getPropertyValue('--inline');
+		// lichess's use: the URL is the value without `url(` and `)`
+		const image = new Image();
+		image.src = computed.getPropertyValue('--piece').trim().slice(4, -1);
+		record.image = await new Promise((resolve) => {
+			image.onload = () => resolve(`load ${image.naturalWidth}`);
+			image.onerror = () => resolve('error');
+			setTimeout(() => resolve('timeout'), 15000);
+		});
+		window.__record = { ...record, done: true };
+	});
+</script>
+<body></body>
