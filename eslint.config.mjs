@@ -1,8 +1,49 @@
+import { readFileSync } from 'node:fs';
 import js from '@eslint/js';
 import prettier from 'eslint-config-prettier';
 import { defineConfig } from 'eslint/config';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
+
+// The members of the inject's `navigator` (src/inject/dom/snapshot.ts): the
+// document bundles' files that name the global are given that object, which
+// has only the members listed there
+const snapshotNavigator = JSON.parse(
+	readFileSync(new URL('src/inject/dom/snapshot.ts', import.meta.url), 'utf8')
+		.match(/const NAVIGATOR_MEMBERS = (\[[^\]]*\])/)[1]
+		.replaceAll("'", '"'),
+);
+/** a read of the global `navigator` in the inject of a member it lacks */
+const snapshotNavigatorRule = {
+	meta: { type: 'problem', schema: [] },
+	create(context) {
+		return {
+			'Program:exit'(program) {
+				const scope = context.sourceCode.getScope(program);
+				const references = [
+					...(scope.set.get('navigator')?.references ?? []),
+					...scope.through.filter(
+						(reference) => reference.identifier.name === 'navigator',
+					),
+				];
+				for (const { identifier } of references) {
+					const parent = identifier.parent;
+					const member =
+						parent.type === 'MemberExpression' &&
+						parent.object === identifier &&
+						!parent.computed
+							? parent.property.name
+							: null;
+					if (member === null || !snapshotNavigator.includes(member))
+						context.report({
+							node: identifier,
+							message: `the inject's navigator has only ${snapshotNavigator.join(', ')} (src/inject/dom/snapshot.ts NAVIGATOR_MEMBERS)`,
+						});
+				}
+			},
+		};
+	},
+};
 
 export default defineConfig([
 	{
@@ -68,5 +109,13 @@ export default defineConfig([
 			'@typescript-eslint/no-explicit-any': 'off',
 			'no-constant-condition': ['error', { checkLoops: false }],
 		},
+	},
+	{
+		files: ['src/inject/**/*.ts', 'src/*.ts'],
+		ignores: ['src/inject/worker/**', 'src/inject/dom/rtcStack*.ts'],
+		plugins: {
+			stomp: { rules: { 'snapshot-navigator': snapshotNavigatorRule } },
+		},
+		rules: { 'stomp/snapshot-navigator': 'error' },
 	},
 ]);
