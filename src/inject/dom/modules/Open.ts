@@ -1,5 +1,6 @@
 import Module from '../../Module';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import { baseTarget, clickedLink } from '../links';
 
 const SAME_FRAME = ['', '_self', '_top', '_parent', '_unfencedtop'];
 
@@ -28,20 +29,11 @@ export default class OpenModule extends Module<DocumentClient> {
 			if (event.type === 'click' && event.button !== 0) return;
 			const sandboxed = client.sandboxFlags !== null;
 			if (!client.config.openTab && !sandboxed) return;
-			const link = event
-				.composedPath()
-				.find(
-					(node): node is HTMLAnchorElement | HTMLAreaElement =>
-						node instanceof global.Element &&
-						(node.nodeName === 'A' || node.nodeName === 'AREA') &&
-						node.hasAttribute('href'),
-				);
+			const link = clickedLink(global, event);
 			if (!link) return;
 			// the hooked getters answer with what the page wrote
 			const target = (
-				link.getAttribute('target') ||
-				global.document.querySelector('base[target]')?.getAttribute('target') ||
-				''
+				link.getAttribute('target') || baseTarget(global.document)
 			).toLowerCase();
 			const modifier =
 				event.type === 'auxclick' ||

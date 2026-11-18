@@ -10,6 +10,7 @@ import { activationState } from '../activation';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { deferred } from '../deferred';
 import { destinationURL } from '../freshContext';
+import { clickedLink } from '../links';
 import { nativeElement } from './DOMHooks';
 import { hookWrite } from './MutationObserver';
 
@@ -218,14 +219,7 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 		// document (a popup opened without a URL, a new frame) fires no
 		// navigate events at all
 		const onClick = (event: Event) => {
-			const link = event
-				.composedPath()
-				.find(
-					(node): node is HTMLAnchorElement | HTMLAreaElement =>
-						node instanceof global.Element &&
-						(node.nodeName === 'A' || node.nodeName === 'AREA') &&
-						node.hasAttribute('href'),
-				);
+			const link = clickedLink(global, event);
 			if (!link) return;
 			// the page's view: the real URL
 			const url = link.href;

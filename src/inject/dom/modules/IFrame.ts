@@ -20,6 +20,7 @@ import {
 	recordFresh,
 	swappingFrames,
 } from '../freshContext';
+import { baseTarget, clickedLink } from '../links';
 import { pageSandbox, sandboxTokens } from '../sandbox';
 import ContextModule, { initialBlank, isStomp } from './Context';
 import { nativeElement } from './DOMHooks';
@@ -442,22 +443,14 @@ export default class IFrameModule extends Module<DocumentClient> {
 		// and submit() throws
 		const blankElement = (name: string | null) =>
 			!name || name.startsWith('_') ? null : moduleClient.frameNamed(name);
-		const baseTarget = () =>
-			global.document.querySelector('base[target]')?.getAttribute('target') ??
-			null;
 		const onClick = (event: MouseEvent) => {
 			if (event.button !== 0 || event.ctrlKey || event.metaKey) return;
 			if (event.shiftKey || event.altKey) return;
-			const link = event
-				.composedPath()
-				.find(
-					(node): node is HTMLAnchorElement | HTMLAreaElement =>
-						node instanceof global.Element &&
-						(node.nodeName === 'A' || node.nodeName === 'AREA') &&
-						node.hasAttribute('href'),
-				);
+			const link = clickedLink(global, event);
 			if (!link || link.hasAttribute('download')) return;
-			const element = blankElement(link.getAttribute('target') || baseTarget());
+			const element = blankElement(
+				link.getAttribute('target') || baseTarget(global.document),
+			);
 			if (!element) return;
 			let blankLink: DeferredParts['blankLink'];
 			try {
@@ -477,7 +470,7 @@ export default class IFrameModule extends Module<DocumentClient> {
 			const element = blankElement(
 				(submitter?.hasAttribute('formtarget')
 					? submitter.getAttribute('formtarget')
-					: form.getAttribute('target')) || baseTarget(),
+					: form.getAttribute('target')) || baseTarget(global.document),
 			);
 			if (element)
 				deferred('blankSubmission')(

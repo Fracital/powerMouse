@@ -5,6 +5,7 @@ import { beforeFragment } from '../../../urlShape';
 import Module from '../../Module';
 import { unrouteURL } from '../../modules/Unroute';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import { baseTarget, clickedLink } from '../links';
 import HistoryModule from './History';
 import { hookWrite } from './MutationObserver';
 
@@ -322,19 +323,10 @@ export default class FragmentModule extends Module<DocumentClient> {
 				event.shiftKey
 			)
 				return;
-			const link = event
-				.composedPath()
-				.find(
-					(node): node is HTMLAnchorElement | HTMLAreaElement =>
-						node instanceof global.Element &&
-						(node.nodeName === 'A' || node.nodeName === 'AREA') &&
-						node.hasAttribute('href'),
-				);
+			const link = clickedLink(global, event);
 			if (!link || link.hasAttribute('download')) return;
 			const target = (
-				link.getAttribute('target') ||
-				global.document.querySelector('base[target]')?.getAttribute('target') ||
-				''
+				link.getAttribute('target') || baseTarget(global.document)
 			).toLowerCase();
 			if (!SAME_FRAME.includes(target) && !client.hasFrameNamed(target)) return;
 			const routed = Reflect.apply(getAttribute, link, ['href']) as
