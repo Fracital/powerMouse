@@ -8,13 +8,14 @@ import { blobLoads, opaqueCopies } from '../blobLoads';
 import type DocumentClient from '../Client';
 import type { CanvasTaints } from '../Client';
 import { createHTMLElement } from '../cloneNode';
+import { deferred } from '../deferred';
 import { lazyInterface } from '../lazyInterface';
 import SyncModule from './Sync';
 
 // taken when the bundle loads, before page code can replace it
 const nativeListen = EventTarget.prototype.addEventListener;
 
-type Kind = 'image' | 'svgImage' | 'video' | 'canvas' | 'other';
+export type Kind = 'image' | 'svgImage' | 'video' | 'canvas' | 'other';
 
 const toStringTag = Symbol.toStringTag;
 
@@ -442,14 +443,8 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 				`Failed to execute '${method}' on 'HTMLCanvasElement': Tainted canvases may not be exported.`,
 			);
 
-		// WebGL refuses a tainting source as a texture
-		const sourceName: Record<Kind, string> = {
-			image: 'The image element',
-			svgImage: 'The image element',
-			video: 'The video element',
-			canvas: 'The canvas element',
-			other: 'The source image',
-		};
+		// WebGL refuses a tainting source as a texture (its words, and the
+		// other refusals' below, are a deferred part: ../taintRefusals.ts)
 		/** a WebGL context's prototype, by its interface's name */
 		const hookTextures = (proto: object, name: string) => {
 			const methods =
@@ -468,9 +463,11 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 						const source = args[args.length - 1];
 						if (taints(source))
 							throw securityError(
-								`Failed to execute '${method}' on '${name}': ${
-									sourceName[kindOf(source as object)]
-								} contains cross-origin data, and may not be loaded.`,
+								deferred('textureRefusal')(
+									method,
+									name,
+									kindOf(source as object),
+								),
 							);
 						return Reflect.apply(target, that, args);
 					},
@@ -574,32 +571,19 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 		) {
 			lazyContext('OffscreenCanvasRenderingContext2D', '2d', true);
 			hookGetContext(global.OffscreenCanvas.prototype);
-			// Chrome 153 reworded its OffscreenCanvas errors: 'Tainted
-			// "OffscreenCanvas" may not be exported.' became 'A tainted
-			// OffscreenCanvas may not be exported.'. No canvas is tainted natively
-			// in proxy space, so the wording is told by a sibling message of the
-			// same change: the no-context rejection quotes "OffscreenCanvas" only
-			// in the old one. Asked once, on the first tainted export.
+			// (Chrome's words for a tainted export, which changed in 153: asked
+			// once, on the first tainted export, ../taintRefusals.ts)
 			const convertToBlob = global.OffscreenCanvas.prototype.convertToBlob;
 			let taintedWording: Promise<string> | undefined;
-			const convertTainted = () =>
-				(taintedWording ??= (
-					Reflect.apply(
-						convertToBlob,
-						new global.OffscreenCanvas(1, 1),
-						[],
-					).then(
-						() => '',
-						(error: unknown) => String((error as Error)?.message),
-					) as Promise<string>
-				).then(
-					(probe) =>
-						`Failed to execute 'convertToBlob' on 'OffscreenCanvas': ${
-							probe.includes('"OffscreenCanvas"')
-								? 'Tainted "OffscreenCanvas" may not be exported.'
-								: 'A tainted OffscreenCanvas may not be exported.'
-						}`,
-				));
+			const convertTainted = () => {
+				if (!taintedWording)
+					try {
+						taintedWording = deferred('exportRefusal')(global, convertToBlob);
+					} catch (error) {
+						return global.Promise.reject(error) as Promise<string>;
+					}
+				return taintedWording;
+			};
 			hookRead(
 				global.OffscreenCanvas.prototype,
 				'convertToBlob',
@@ -638,9 +622,7 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 					NativeVideoFrame,
 					(target, that, args, newTarget) => {
 						if (newTarget && args.length && taints(args[0]))
-							throw securityError(
-								"Failed to construct 'VideoFrame': VideoFrames can't be created from tainted sources.",
-							);
+							throw securityError(deferred('videoFrameRefusal')());
 						return newTarget
 							? Reflect.construct(target, args, newTarget)
 							: Reflect.apply(target, that, args);

@@ -20,7 +20,10 @@
 // called with a window as its receiver (src/inject/windowArrays.ts) and
 // Origin.from() (src/inject/originFrom.ts), and caches.match() and a
 // cache's add() reject before the browser's caches are asked
-// (src/inject/cacheCalls.ts); an
+// (src/inject/cacheCalls.ts), and a tainted source as a VideoFrame, a WebGL
+// texture or an OffscreenCanvas's export, or a tainted ImageBitmap cloned,
+// refuses with the parts' own error instead of Chrome's
+// (src/inject/dom/taintRefusals.ts); an
 // image in a frame
 // no service worker controls keeps its route and loads nothing (its copy
 // is a part, src/inject/dom/uncontrolledCopies.ts); an XML document a
@@ -176,6 +179,9 @@ const REFUSING = [
 	'originFrom',
 	'cacheMatch',
 	'cacheAdd',
+	'taintVideoFrame',
+	'taintTexture',
+	'taintExport',
 	'execCommand',
 	'contextualFragment',
 	'open',
@@ -206,6 +212,9 @@ const PROMISED = [
 	'estimate',
 	'cacheMatch',
 	'cacheAdd',
+	'taintVideoFrame',
+	'taintTexture',
+	'taintExport',
 ];
 
 /** counting stand-ins for the browser's functions, in every document */
@@ -268,6 +277,14 @@ function countNatives() {
 		window.fetchLater = counted('fetchLater', window.fetchLater);
 	Array.prototype.at = counted('arrayAt', Array.prototype.at);
 	if (window.Origin?.from) Origin.from = counted('originFrom', Origin.from);
+	// (each refuses a tainting source with the parts too: neither is
+	// counted either way)
+	if (window.VideoFrame)
+		window.VideoFrame = constructs('VideoFrame', window.VideoFrame);
+	if (window.WebGLRenderingContext) {
+		const prototype = WebGLRenderingContext.prototype;
+		prototype.texImage2D = counted('texImage2D', prototype.texImage2D);
+	}
 	if (window.CacheStorage) {
 		CacheStorage.prototype.keys = counted(
 			'cacheKeys',
@@ -377,6 +394,10 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			'originFrom',
 			'cacheMatch',
 			'cacheAdd',
+			'taintVideoFrame',
+			'taintTexture',
+			'taintExport',
+			'taintClone',
 			'execCommand',
 			'contextualFragment',
 			'blankSetHTML',
@@ -507,6 +528,28 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			add: answer.out?.cacheAdd,
 			reached: answer.reached,
 		}),
+	);
+	// (as natively: Chrome's own words, and no call reaches the browser's
+	// constructor or texture)
+	for (const [call, words] of [
+		['taintVideoFrame', "VideoFrames can't be created from tainted sources"],
+		['taintTexture', 'contains cross-origin data, and may not be loaded'],
+		['taintExport', 'OffscreenCanvas may not be exported'],
+		['taintClone', 'Non-origin-clean ImageBitmap cannot be cloned'],
+	])
+		ok(
+			`with the parts, a tainted source is refused as natively (${call})`,
+			(answer.out?.[call]?.promise ?? '').includes(words) ||
+				(call === 'taintTexture' &&
+					answer.out?.[call]?.promise === 'rejected: no webgl'),
+			JSON.stringify(answer.out?.[call]),
+		);
+	ok(
+		"with the parts, a tainted source reaches no VideoFrame or texture of the browser's",
+		!answer.reached?.some((name) =>
+			['VideoFrame', 'texImage2D'].includes(name),
+		),
+		JSON.stringify(answer.reached),
 	);
 	ok(
 		"with the parts, execCommand's insertHTML and createContextualFragment reach the browser",
@@ -720,6 +763,8 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 	// user declined (Credentials DECLINED), never at the browser's get
 	const refusedPromise = (call) =>
 		/^rejected: no parts/.test(out[call]?.promise ?? '') ||
+		// (a browser without WebGL has no texture to refuse)
+		(call === 'taintTexture' && out[call]?.promise === 'rejected: no webgl') ||
 		(call === 'identity' &&
 			/^rejected: The operation either timed out or was not allowed/.test(
 				out[call]?.promise ?? '',

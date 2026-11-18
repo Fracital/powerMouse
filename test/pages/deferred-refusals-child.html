@@ -9,6 +9,17 @@
 			// Each call (the names in the hash) as a page makes it: whether it
 			// threw, or returned a promise and how that settled; an XHR's
 			// document and the events it got. Posted to the parent.
+			// an image of the fixture's other host: another origin's
+			const crossImage = () =>
+				new Promise((resolve, reject) => {
+					const url = new URL('object-events.png', location.href);
+					url.hostname =
+						url.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+					const element = new Image();
+					element.onload = () => resolve(element);
+					element.onerror = () => reject(new Error('no image'));
+					element.src = url.href;
+				});
 			const outcome = async (run) => {
 				try {
 					const value = run();
@@ -497,6 +508,43 @@
 							.open('deferred-refusals')
 							.then((cache) => cache.add('deferred-refusals-landed.html')),
 					),
+				// what a tainted source is refused with, and the walk of a message
+				// for a tainted ImageBitmap (src/inject/dom/taintRefusals.ts): an
+				// image of another origin (the fixture's other host) as a
+				// VideoFrame, a WebGL texture, in an OffscreenCanvas exported, and
+				// as an ImageBitmap cloned
+				taintVideoFrame: () =>
+					outcome(async () => {
+						const element = await crossImage();
+						new VideoFrame(element, { timestamp: 0 }).close();
+					}),
+				taintTexture: () =>
+					outcome(async () => {
+						const element = await crossImage();
+						const gl = document.createElement('canvas').getContext('webgl');
+						if (!gl) throw new Error('no webgl');
+						gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+						gl.texImage2D(
+							gl.TEXTURE_2D,
+							0,
+							gl.RGBA,
+							gl.RGBA,
+							gl.UNSIGNED_BYTE,
+							element,
+						);
+					}),
+				taintExport: () =>
+					outcome(async () => {
+						const element = await crossImage();
+						const canvas = new OffscreenCanvas(4, 4);
+						canvas.getContext('2d').drawImage(element, 0, 0);
+						await canvas.convertToBlob();
+					}),
+				taintClone: () =>
+					outcome(async () => {
+						const bitmap = await createImageBitmap(await crossImage());
+						structuredClone({ bitmap });
+					}),
 				// Origin.from() of this window (src/inject/originFrom.ts)
 				originFrom: () => outcome(() => Origin.from(window)),
 				// an array method called with a window as its receiver

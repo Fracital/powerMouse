@@ -14,6 +14,9 @@
 // own. This file is not built itself: build.js reads its imports, and
 // `parts` names each of them once.
 //
+// (and what a tainted source's refusals say, ./taintRefusals.ts, at a
+// document's first such refusal)
+//
 // (and what a page's Cache API add(), addAll() and caches.match() do past
 // their hooks' checks, ../cacheCalls.ts, at a realm's first; a worker's
 // bundle has it itself)
@@ -203,6 +206,11 @@ import {
 } from './siteEvents';
 import { sourcePolicy } from './sourcePolicy';
 import { storageAccessHandle } from './storageAccess';
+import {
+	exportRefusal,
+	textureRefusal,
+	videoFrameRefusal,
+} from './taintRefusals';
 import { uncontrolledCopies } from './uncontrolledCopies';
 import {
 	dispatchViolation,
@@ -238,6 +246,12 @@ export const parts = {
 	// what a page's add(), addAll() and caches.match() do past their hooks'
 	// checks, at a realm's first (../cacheCalls.ts; ../modules/Partition.ts)
 	cacheCalls,
+	// what a tainted source's refusals say (a WebGL texture, a VideoFrame, an
+	// OffscreenCanvas's export), at a document's first (./taintRefusals.ts;
+	// modules/CanvasTaint.ts)
+	textureRefusal,
+	videoFrameRefusal,
+	exportRefusal,
 	// what Origin.from() answers a page, at a realm's first call
 	// (../originFrom.ts; ../modules/OriginFrom.ts)
 	originFrom,
