@@ -16,7 +16,7 @@ import ProxyModule, { invokeGlobal } from '../../modules/Proxy';
 import { routedPrefix } from '../../modules/Unroute';
 import { LazyMap, LazySet } from '../../ownCollections';
 import { getDomain, getPublicSuffix } from '../../rewriter';
-import DocumentClient from '../Client';
+import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { hold, onLeave, othersHold, StampStore } from '../stampHolders';
 import SyncModule, { BEACON_QUOTA, WRITE_BUDGET } from './Sync';
 
@@ -64,6 +64,10 @@ const views = new LazyMap<string, View>();
 const dropViews = () => {
 	for (const view of views.values()) view.fresh = false;
 };
+const nativeAddListener = EventTarget.prototype.addEventListener;
+// a window's parent as the browser has it (a window's own accessor answers
+// for any window)
+const nativeParent = Reflect.getOwnPropertyDescriptor(window, 'parent')!.get!;
 
 /** a script write sent asynchronously that may not be in the jar yet */
 interface Unsettled {
@@ -530,6 +534,31 @@ export class CookiesModule extends Module<DocumentClient> {
 		const proxyModule = client.getModule(ProxyModule)!;
 
 		client.responseListeners.add(() => this.invalidate());
+		// A popup the browser opened for a page of this bundle's runs the
+		// bundle too, and its view outlives its window: a document that hears
+		// of a change drops only its own view, so the next popup of its URL
+		// read this one's copy of the jar (WPT's window-open.https.html). The
+		// view reads again when the window goes. (The bundle's own window
+		// drops every view when it goes, stampHolders; an about:blank frame
+		// shares its view with the document that made it, which hears.)
+		if (
+			(global as unknown) !== globalThis &&
+			(Reflect.apply(nativeParent, global, []) as unknown) === global
+		) {
+			const gone = () => {
+				this.#view.fresh = false;
+			};
+			// document.open() drops every listener on the window
+			const listen = () => {
+				try {
+					Reflect.apply(nativeAddListener, global, ['pagehide', gone, true]);
+				} catch (error) {
+					// the window is gone already
+				}
+			};
+			listen();
+			addDocumentOpenListener(global, listen);
+		}
 		// Set-Cookie the worker applied for a document of this site
 		client.onServiceWorkerMessage((data) => {
 			const change = (data as Record<string, CookiesChange> | null)?.[

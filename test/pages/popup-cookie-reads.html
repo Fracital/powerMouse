@@ -1,0 +1,30 @@
+<!doctype html>
+<title>popup cookie reads</title>
+<script>
+	// a popup of this host reads document.cookie and posts it here; between
+	// two popups of one URL a response sets the cookie again
+	const read = () =>
+		new Promise((resolve) => {
+			const popup = window.open('popup-cookie-reads-popup.html');
+			const timer = setTimeout(() => resolve('no answer'), 10000);
+			const heard = (event) => {
+				if (typeof event.data !== 'string') return;
+				removeEventListener('message', heard);
+				clearTimeout(timer);
+				popup.close();
+				setTimeout(() => resolve(event.data), 300);
+			};
+			addEventListener('message', heard);
+		});
+	const set = async (run) =>
+		(await fetch(`/http-cache?k=${run}&n=popup&sc=seen&cc=no-store`)).text();
+	window.__run = async () => {
+		const run = `pcr${Date.now()}`;
+		await set(run);
+		const first = await read();
+		await set(run);
+		const second = await read();
+		return { first, second };
+	};
+	window.__pcr = { ready: true };
+</script>
