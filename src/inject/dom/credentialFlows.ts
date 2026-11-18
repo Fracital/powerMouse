@@ -1,11 +1,12 @@
 // The Credentials module's flows (modules/Credentials.ts) that only a call
-// runs: FedCM's protocol with its account chooser, and the guard of the
-// browser's own WebAuthn calls. Deferred parts (./deferredParts.ts), made at
+// runs: FedCM's protocol with its account chooser, navigator.login's
+// setStatus(), and the guard of the browser's own WebAuthn calls. Deferred parts (./deferredParts.ts), made at
 // a document's first identity request, disconnect or WebAuthn call: most
 // documents make none. The module hands them what it took when it applied,
 // before any page script ran, and their own top level reads no global.
 import { routeXHR } from '../../routeURL';
 import StompURL from '../../StompURL';
+import { requiredArgumentsMessage } from '../modules/Proxy';
 import { scopePrefix } from '../modules/Unroute';
 import { withStack } from '../nativeErrors';
 import type DocumentClient from './Client';
@@ -26,6 +27,31 @@ interface IdpAccount {
 	given_name?: string;
 	picture?: string;
 	approved_clients?: string[];
+}
+
+/**
+ * navigator.login.setStatus() of a document's NavigatorLogin (`args` the
+ * page's): a promise of the page's, rejected with Chrome's TypeError for no
+ * status or one that is no LoginStatus. The status declares nothing STomp
+ * reads.
+ */
+export function loginStatus(
+	args: unknown[],
+	PagePromise: PromiseConstructor,
+	typeError: (message: string) => TypeError,
+): Promise<unknown> {
+	const reject = (message: string) =>
+		Reflect.apply(PagePromise.reject, PagePromise, [typeError(message)]);
+	if (!args.length)
+		return reject(
+			requiredArgumentsMessage(0, 1, 'NavigatorLogin', 'setStatus'),
+		);
+	const status = String(args[0]);
+	if (status !== 'logged-in' && status !== 'logged-out')
+		return reject(
+			`Failed to execute 'setStatus' on 'NavigatorLogin': The provided value '${status}' is not a valid enum value of type LoginStatus.`,
+		);
+	return Reflect.apply(PagePromise.resolve, PagePromise, [undefined]);
 }
 
 /** what the Credentials module hands the FedCM flow */

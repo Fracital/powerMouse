@@ -156,7 +156,11 @@ import { checkedHeader, checkedMethod, notOpened } from '../xhrChecks';
 import { ancestorOriginsList } from './ancestorOriginsList';
 import { attributeViewMethods } from './attributeViewMethods';
 import { relayBeacon } from './beaconRelay';
-import { identityFlow, relyingPartyGuard } from './credentialFlows';
+import {
+	identityFlow,
+	loginStatus,
+	relyingPartyGuard,
+} from './credentialFlows';
 import { ownStoreRefusal } from './credentialStore';
 import { saveDownload } from './downloadSave';
 import { fetchLater } from './fetchLater';
@@ -362,6 +366,8 @@ export const parts = {
 	// document's first such call (modules/Credentials.ts)
 	identityFlow,
 	relyingPartyGuard,
+	// and navigator.login.setStatus(), at a document's first call
+	loginStatus,
 	storageAccessHandle,
 	presentationIds,
 	// a same-origin download's copy, at a document's first (modules/Download.ts)

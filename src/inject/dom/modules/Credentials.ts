@@ -1,8 +1,5 @@
 import Module from '../../Module';
-import ProxyModule, {
-	memberName,
-	requiredArgumentsMessage,
-} from '../../modules/Proxy';
+import ProxyModule, { memberName } from '../../modules/Proxy';
 import { withStack } from '../../nativeErrors';
 import type DocumentClient from '../Client';
 import { deferred, passkeysPart } from '../deferred';
@@ -317,22 +314,13 @@ export default class CredentialsModule extends Module<DocumentClient> {
 						// NavigatorLogin)
 						if (!loginData.has(that)) return Reflect.apply(target, that, args);
 						// the method answers with a promise, so what it refuses
-						// is a rejection, never a throw
-						if (!args.length)
-							return reject(
-								typeError(
-									requiredArgumentsMessage(0, 1, 'NavigatorLogin', 'setStatus'),
-								),
-							);
-						const status = String(args[0]);
-						if (status !== 'logged-in' && status !== 'logged-out')
-							return reject(
-								typeError(
-									`Failed to execute 'setStatus' on 'NavigatorLogin': The provided value '${status}' is not a valid enum value of type LoginStatus.`,
-								),
-							);
-						loginStatus = status;
-						return Reflect.apply(PagePromise.resolve, PagePromise, [undefined]);
+						// is a rejection, never a throw (../credentialFlows.ts,
+						// made at a document's first call)
+						try {
+							return deferred('loginStatus')(args, PagePromise, typeError);
+						} catch (error) {
+							return reject(error);
+						}
 					},
 				),
 			});
@@ -348,9 +336,6 @@ export default class CredentialsModule extends Module<DocumentClient> {
 
 		const login = PageObject.create(nlPrototype);
 		loginData.add(login);
-		/** this origin's declared login status (navigator.login.setStatus) */
-		let loginStatus: 'logged-in' | 'logged-out' | null = null;
-		void loginStatus;
 		const navigatorPrototype = global.Navigator?.prototype;
 		if (navigatorPrototype) {
 			const descriptor = Reflect.getOwnPropertyDescriptor(

@@ -23,7 +23,8 @@
 // (src/inject/cacheCalls.ts), and a tainted source as a VideoFrame, a WebGL
 // texture or an OffscreenCanvas's export, or a tainted ImageBitmap cloned,
 // refuses with the parts' own error instead of Chrome's
-// (src/inject/dom/taintRefusals.ts); an
+// (src/inject/dom/taintRefusals.ts), and navigator.login.setStatus()
+// rejects (src/inject/dom/credentialFlows.ts); an
 // image in a frame
 // no service worker controls keeps its route and loads nothing (its copy
 // is a part, src/inject/dom/uncontrolledCopies.ts); an XML document a
@@ -182,6 +183,7 @@ const REFUSING = [
 	'taintVideoFrame',
 	'taintTexture',
 	'taintExport',
+	'loginStatus',
 	'execCommand',
 	'contextualFragment',
 	'open',
@@ -215,6 +217,7 @@ const PROMISED = [
 	'taintVideoFrame',
 	'taintTexture',
 	'taintExport',
+	'loginStatus',
 ];
 
 /** counting stand-ins for the browser's functions, in every document */
@@ -285,6 +288,8 @@ function countNatives() {
 		const prototype = WebGLRenderingContext.prototype;
 		prototype.texImage2D = counted('texImage2D', prototype.texImage2D);
 	}
+	if (window.NavigatorLogin)
+		NavigatorLogin.prototype.setStatus = refuse('setStatus');
 	if (window.CacheStorage) {
 		CacheStorage.prototype.keys = counted(
 			'cacheKeys',
@@ -398,6 +403,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			'taintTexture',
 			'taintExport',
 			'taintClone',
+			'loginStatus',
 			'execCommand',
 			'contextualFragment',
 			'blankSetHTML',
@@ -550,6 +556,12 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			['VideoFrame', 'texImage2D'].includes(name),
 		),
 		JSON.stringify(answer.reached),
+	);
+	ok(
+		'with the parts, navigator.login.setStatus() answers, without the browser',
+		answer.out?.loginStatus?.promise === 'resolved' &&
+			!answer.reached?.includes('setStatus'),
+		JSON.stringify({ out: answer.out?.loginStatus, reached: answer.reached }),
 	);
 	ok(
 		"with the parts, execCommand's insertHTML and createContextualFragment reach the browser",

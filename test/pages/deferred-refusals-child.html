@@ -545,6 +545,9 @@
 						const bitmap = await createImageBitmap(await crossImage());
 						structuredClone({ bitmap });
 					}),
+				// navigator.login.setStatus() (src/inject/dom/credentialFlows.ts)
+				loginStatus: () =>
+					outcome(() => navigator.login.setStatus('logged-in')),
 				// Origin.from() of this window (src/inject/originFrom.ts)
 				originFrom: () => outcome(() => Origin.from(window)),
 				// an array method called with a window as its receiver
