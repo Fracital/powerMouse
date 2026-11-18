@@ -351,15 +351,21 @@ request: `npm ci --ignore-scripts`, `npm run check`, `npm run lint`,
 `npx prettier --check .`, `npm run check:prose` (no em dashes, no AI
 attribution, well-formed `changes/` fragments; the same script checks a
 PR's commit messages) and the esbuild
-build. All of it must pass locally before you push. Five `browser suites`
+build. All of it must pass locally before you push. Seven `browser suites`
 jobs (`SUITES=adversarial-` for the adversarial corpus, `SUITES=!adversarial-`
-with `SHARD=1/4` to `4/4` for the rest, side by side so none nears the time
+with `SHARD=1/6` to `6/6` for the rest, side by side so none nears the time
 limit) run `npm test` on the runner's Chrome with `SKIP_NETWORK=1` (the suites
-that drive Wikipedia stay out), `SKIP_TIMING=1` (the flick-velocity suite)
-and `SKIP_MEASUREMENT=1` (the vendored web-platform-tests, which report
-every expected failure on purpose, but those `GATED_WPT` in test/run.mjs
-names, and the `measure-*` timings) and
-`PARALLEL=2`, after printing the runner's Chrome version. The adversarial
+that drive Wikipedia and the public HTTP/3 servers stay out), `SKIP_TIMING=1`
+(the suites' checks that read pointer timing or a speed ratio, which each
+suite skips itself and keeps the rest) and `SKIP_MEASUREMENT=1` (the
+`measure-*` timings, but those `GATED` in test/run.mjs names, whose checks
+hold on any machine) and `PARALLEL=2`, after printing the runner's Chrome
+version. The vendored web-platform-tests (`wpt-*`) run there as gates: each
+compares the proxied verdicts with the native ones and its expected-failure
+list, and leaves out by name, with the reason, a page whose verdict flips.
+A suite goes in one of those buckets only when it cannot be deterministic on
+the runner; a correctness check never does (until 2026-11-18 every `wpt-*`
+suite did, and a regression of `wpt-cookies-more` landed unseen). The adversarial
 corpus (`adversarial-*`) runs there as a gate: each suite lists its open cases
 (`knownOpen` in its file, with the reason and, where a case differs between
 Chrome versions, the majors it holds for); a listed check that still fails

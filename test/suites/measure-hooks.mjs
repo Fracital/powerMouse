@@ -19,7 +19,8 @@
 //   PROFILE  a path: the proxied run's CPU profile is written there
 //   REPORT   a path: every run's timings are written there as JSON
 //
-// SKIP_MEASUREMENT=1 leaves the suite out.
+// The checks hold on any machine, so a gate run (SKIP_MEASUREMENT=1, as CI
+// runs) keeps the suite (test/run.mjs GATED); the table is noise there.
 import { writeFileSync } from 'node:fs';
 import { loadavg } from 'node:os';
 import {

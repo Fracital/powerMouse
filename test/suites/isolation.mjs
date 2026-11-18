@@ -257,20 +257,13 @@ ok(
 	page.url(),
 );
 
-// navigation controls still work across the origin boundary
-await submitLanding(page, 'https://en.wikipedia.org/wiki/Web_proxy');
-await waitFrame(() => !!document.querySelector('#firstHeading'));
+// navigation controls still work across the origin boundary (over the
+// fixture's walk pages: no network)
+await submitLanding(page, `${FIXTURE}pages/walk-1.html`);
+await waitFrame(() => document.title === 'WALK 1');
 await sleep(1500);
 const beforeClick = await omni(page);
-await proxied().evaluate((b) => {
-	const a = [...document.links].find(
-		(x) =>
-			/^https:\/\/en\.wikipedia\.org\/wiki\/[^:#?]+$/.test(x.href) &&
-			x.href !== b.split('#')[0] &&
-			!/Main_Page/.test(x.href),
-	);
-	a.click();
-}, beforeClick);
+await proxied().evaluate(() => document.getElementById('next').click());
 await page.waitForFunction(
 	(b) => document.querySelector('#omni input').value !== b,
 	beforeClick,
@@ -279,7 +272,7 @@ await page.waitForFunction(
 const afterClick = await omni(page);
 ok(
 	'in-frame link updates the address bar',
-	afterClick.startsWith('https://en.wikipedia.org/wiki/'),
+	afterClick === `${FIXTURE}pages/walk-2.html`,
 	afterClick,
 );
 await page.click('#back');
@@ -301,7 +294,7 @@ const urls = await page.evaluate(() =>
 );
 ok(
 	'tab switcher shows URLs from the controller frame',
-	urls.some((t) => /wikipedia/i.test(t)),
+	urls.some((t) => t.includes('/pages/walk-')),
 	urls.join(' | '),
 );
 

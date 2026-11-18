@@ -113,8 +113,14 @@
 			setTimeout(() => x.abort(), 100);
 			setTimeout(() => resolve({ ...out, hung: true }), 3000);
 		});
+		// another site of the fixture (localhost for 127.0.0.1), whose answer
+		// any origin may read: a site out there that sends no CORS answer
+		// fails natively too (example.com stopped sending one)
 		__xhr.site = await req((x, out) => {
-			x.open('GET', 'https://example.com/');
+			x.open(
+				'GET',
+				`${location.origin.replace('127.0.0.1', 'localhost')}/echo-headers`,
+			);
 			out.site = true;
 		});
 		__xhr.misc = await req((x, out) => {

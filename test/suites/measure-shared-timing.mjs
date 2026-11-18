@@ -12,7 +12,8 @@
 //  3. cross-frame timing: performance.now resolution/offset and same-origin
 //     postMessage latency, recorded for the record.
 //
-// SKIP_MEASUREMENT=1 leaves the suite out.
+// It asserts nothing that depends on the machine, so a gate run
+// (SKIP_MEASUREMENT=1, as CI runs) keeps it (test/run.mjs GATED).
 import {
 	done,
 	FIXTURE,

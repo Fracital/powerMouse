@@ -4,7 +4,8 @@
 // other types), the event sequence is loadstart, progress, load, loadend, a
 // timeout fires timeout and loadend with status 0, abort() fires abort and
 // loadend, the upload target reports the body, withCredentials and timeout
-// read back their defaults, and an async request to a real site completes.
+// read back their defaults, and an async request to another site (the
+// fixture's other host name, which answers any origin) completes.
 import {
 	done,
 	FIXTURE,
@@ -89,9 +90,10 @@ ok(
 	JSON.stringify(xhr.misc),
 );
 ok(
-	'an async request to a real site completes through the proxy',
+	'an async request to another site completes through the proxy',
 	xhr.site?.status === 200 &&
-		xhr.site?.responseURL === 'https://example.com/' &&
+		xhr.site?.responseURL ===
+			`${new URL(FIXTURE).origin.replace('127.0.0.1', 'localhost')}/echo-headers` &&
 		xhr.site?.responseKind === 'string',
 	JSON.stringify(xhr.site),
 );

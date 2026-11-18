@@ -19,7 +19,10 @@
 //           rounds before them (default 2)
 //   ONLY    kernels to run, by name, comma separated
 //
-// SKIP_MEASUREMENT=1 leaves the suite out.
+// The checks hold on any machine, so a gate run (SKIP_MEASUREMENT=1, as CI
+// runs) keeps the suite (test/run.mjs GATED) and times one round of each
+// kernel with no warm-up unless ROUNDS or WARM say otherwise: the table is
+// noise there, the checksums are what is checked.
 import { loadavg } from 'node:os';
 import {
 	done,
@@ -40,6 +43,10 @@ for (const [name, key] of [
 	['ONLY', 'only'],
 ])
 	if (process.env[name]) query.set(key, process.env[name]);
+if (process.env.SKIP_MEASUREMENT === '1') {
+	if (!process.env.ROUNDS) query.set('rounds', '1');
+	if (!process.env.WARM) query.set('warm', '0');
+}
 const url = `${FIXTURE}pages/measure-compute.html?${query}`;
 // a proxied kernel can take a hundred times its native time
 const TIMEOUT = 8 * 60 * 1000;

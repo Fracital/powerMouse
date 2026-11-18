@@ -1,8 +1,10 @@
 // The Back button walks the tab's own history, never the host page, and
 // Alt+Right goes forward again after re-entering the tab from the switcher.
+// The pages are the fixture's walk pages (in-frame links, no network); the
+// same walk over Wikipedia's redirects is backwalk-single's.
 import {
-	clickWikipediaLink,
 	done,
+	FIXTURE,
 	launch,
 	ok,
 	omni,
@@ -10,6 +12,7 @@ import {
 	openDemo,
 	sleep,
 	submitLanding,
+	waitActive,
 } from '../lib.mjs';
 
 const browser = await launch();
@@ -22,30 +25,28 @@ const omniIs = (value) =>
 		value,
 		{ timeout: 30000 },
 	);
-
-await submitLanding(page, 'https://en.wikipedia.org/wiki/Main_Page');
-await page.waitForFunction(
-	() =>
-		document
-			.querySelector('#omni input')
-			.value.startsWith('https://en.wikipedia.org/wiki/'),
-	null,
-	{ timeout: 40000 },
-);
-await sleep(1500);
-const first = await omni(page);
-
-const visited = [];
-const clickLink = async () => {
-	const before = await omni(page);
-	visited.push(before.split('#')[0]);
-	await clickWikipediaLink(page, visited);
-	await page.waitForFunction(
-		(b) => document.querySelector('#omni input').value !== b,
-		before,
+const omniEnds = (tail) =>
+	page.waitForFunction(
+		(t) => document.querySelector('#omni input').value.endsWith(t),
+		tail,
 		{ timeout: 30000 },
 	);
-	await sleep(1200);
+
+await submitLanding(page, `${FIXTURE}pages/walk-1.html`);
+await omniEnds('/pages/walk-1.html');
+await sleep(800);
+const first = await omni(page);
+
+const clickLink = async () => {
+	const before = await omni(page);
+	const n = Number(/walk-(\d)\.html$/.exec(before)[1]);
+	const frame = await waitActive(
+		page,
+		`document.title === 'WALK ${n}' && !!document.getElementById('next')`,
+	);
+	await frame.evaluate(() => document.getElementById('next').click());
+	await omniEnds(`/pages/walk-${n + 1}.html`);
+	await sleep(800);
 	return omni(page);
 };
 const second = await clickLink();

@@ -1,6 +1,10 @@
-// Swiping through the switcher: a fast flick carries several cards with a
-// settle time that scales with the distance, a slow drag moves exactly one,
-// and nothing in the switcher is text-selectable.
+// Swiping through the switcher: a slow drag of one card's pitch moves exactly
+// one card either way, a fast flick carries several with a settle time that
+// scales with the distance, and nothing in the switcher is text-selectable.
+// The flick's checks depend on the velocity measured from the pointer's
+// timing, which a two-core runner misreads: SKIP_TIMING=1 leaves them out
+// and keeps the rest. A slow drag reads no velocity (the pointer rests
+// before it lifts, so the last 80 ms hold one sample).
 import {
 	done,
 	launch,
@@ -10,6 +14,8 @@ import {
 	submitLanding,
 	waitActive,
 } from '../lib.mjs';
+
+const SKIP_TIMING = process.env.SKIP_TIMING === '1';
 
 const browser = await launch();
 const page = await openDemo(browser);
@@ -38,45 +44,61 @@ const settleVar = () =>
 
 ok('six tabs, last centred', (await index()) === 5, String(await index()));
 
-// a fast flick: short travel, high velocity, carries several cards
-await page.mouse.move(640, 300);
-await page.mouse.down();
-for (let x = 640; x <= 900; x += 65) {
-	await page.mouse.move(x, 300);
-	await sleep(8);
-}
-await page.mouse.up();
-const settle = await settleVar();
-await sleep(800);
-const afterFlick = await index();
-ok(
-	'fast flick travels more than one card',
-	afterFlick <= 3,
-	`index ${afterFlick}, settle ${settle}`,
-);
-ok(
-	'settle duration scales with distance',
-	/^\d+ms$/.test(settle) && parseInt(settle) > 250,
-	settle,
-);
-ok('settle variable cleared afterwards', (await settleVar()) === '');
+/** a slow drag of one pitch, the pointer resting before it lifts */
+const slowDrag = async (direction) => {
+	await page.mouse.move(640, 300);
+	await page.mouse.down();
+	for (let d = 0; d <= 740; d += 20) {
+		await page.mouse.move(640 + direction * d, 300);
+		await sleep(40);
+	}
+	await sleep(120);
+	await page.mouse.up();
+	await sleep(700);
+};
 
-// a slow drag of one card width moves exactly one
-const before = await index();
-await page.mouse.move(640, 300);
-await page.mouse.down();
-for (let x = 640; x >= 640 - 740; x -= 20) {
-	await page.mouse.move(x, 300);
-	await sleep(40);
-}
-await sleep(120);
-await page.mouse.up();
-await sleep(700);
+// rightwards from the last card goes back one, leftwards forward again
+let before = await index();
+await slowDrag(1);
+ok(
+	'slow drag of one pitch to the right moves back one card',
+	(await index()) === before - 1,
+	`${before} -> ${await index()}`,
+);
+before = await index();
+await slowDrag(-1);
 ok(
 	'slow drag of one pitch moves one card',
 	(await index()) === before + 1,
 	`${before} -> ${await index()}`,
 );
+
+// a fast flick: short travel, high velocity, carries several cards
+if (SKIP_TIMING)
+	console.log('SKIP the fast flick (pointer timing; SKIP_TIMING=1)');
+else {
+	await page.mouse.move(640, 300);
+	await page.mouse.down();
+	for (let x = 640; x <= 900; x += 65) {
+		await page.mouse.move(x, 300);
+		await sleep(8);
+	}
+	await page.mouse.up();
+	const settle = await settleVar();
+	await sleep(800);
+	const afterFlick = await index();
+	ok(
+		'fast flick travels more than one card',
+		afterFlick <= 3,
+		`index ${afterFlick}, settle ${settle}`,
+	);
+	ok(
+		'settle duration scales with distance',
+		/^\d+ms$/.test(settle) && parseInt(settle) > 250,
+		settle,
+	);
+	ok('settle variable cleared afterwards', (await settleVar()) === '');
+}
 
 const selectable = await page.evaluate(() =>
 	[

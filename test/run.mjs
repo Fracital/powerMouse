@@ -60,6 +60,8 @@ const SUITE_TIMEOUT_MINUTES = {
 	// 78 cases loaded natively and in both modes, each until its landing
 	// and its reports: about eight minutes alone
 	'top-navigation': 15,
+	// about six minutes alone here, one page at a time
+	'wpt-indexeddb': 20,
 };
 // what a suite's demo server needs beyond the defaults
 const SUITE_ENV = {
@@ -156,42 +158,56 @@ if (!existsSync(`${root}dist/serviceWorker.js`)) {
 	process.exit(2);
 }
 
-// suites that drive real sites (Wikipedia) and cannot run on a runner
-// without a dependable internet path; SKIP_NETWORK=1 leaves them out
+// suites that drive real sites (Wikipedia, the public HTTP/3 servers) and
+// cannot run on a runner without a dependable internet path; SKIP_NETWORK=1
+// leaves them out. A suite whose only site out there is example.com
+// (transport-worker, isolation) is no network suite: the gate's switcher
+// suites load it as well. back, isolation and xhr walk the fixture's pages
+// where they walked Wikipedia (backwalk-single keeps that walk)
 const NETWORK_SUITES = new Set([
-	'back',
 	'demo',
-	'isolation',
 	'backwalk-single',
 	'backwalk-tabs',
 	'backwalk-browser',
 	'host-api',
-	'xhr',
-	'transport-worker',
 	'http3',
 ]);
 const SKIP_NETWORK = process.env.SKIP_NETWORK === '1';
-// suites whose checks depend on pointer timing (a flick's measured velocity)
-// and misfire on a two-core runner; SKIP_TIMING=1 leaves them out
-const TIMING_SUITES = new Set(['switcher-momentum']);
+// suites whose every check depends on pointer timing and misfires on a
+// two-core runner; SKIP_TIMING=1 leaves them out. A suite with a timing
+// check among others reads SKIP_TIMING itself and keeps the rest
+// (switcher-momentum's flick, switcher-slide's fade)
+const TIMING_SUITES = new Set([]);
 const SKIP_TIMING = process.env.SKIP_TIMING === '1';
-// measurement suites (the vendored web-platform-tests, the timings named
-// measure-*) report every expected WPT failure and numbers that depend on the
-// machine on purpose; SKIP_MEASUREMENT=1 leaves them out of a gate run. The
-// adversarial corpus is a gate: each adversarial-* suite lists its open
-// cases, which pass as known open (test/adversarial.mjs). A wpt- suite whose
-// verdicts hold from run to run and that is quick is a gate too: GATED_WPT
-// (wpt-encoding-legacy: every verdict the same in each run measured, one to
-// two minutes)
-const GATED_WPT = new Set(['wpt-encoding-legacy']);
+// measurement suites: the timings named measure-*, whose numbers depend on
+// the machine; SKIP_MEASUREMENT=1 leaves them out of a gate run. A measure-
+// suite whose checks hold on any machine is a gate (GATED): measure-compute
+// and measure-hooks check that every kernel computes the same checksum
+// natively and proxied (their tables are only printed), measure-shared-timing
+// that no entry of the inject's shows in the page's resource timing. The
+// vendored web-platform-tests (wpt-*) are gates too: each compares the
+// proxied verdicts with the native ones and with its expected-failure list
+// (test/wpt.mjs), and a page whose verdict flips from run to run is left out
+// by its suite, with the reason (test/wpt/BACKLOG.md). They were all
+// measurements until 2026-11-18, and a regression of wpt-cookies-more landed
+// unseen; a wpt- suite that is not deterministic yet goes in WPT_MEASUREMENT,
+// with its reason. The adversarial corpus is a gate as well: each
+// adversarial-* suite lists its open cases, which pass as known open
+// (test/adversarial.mjs)
+const GATED = new Set([
+	'measure-compute',
+	'measure-hooks',
+	'measure-shared-timing',
+]);
+const WPT_MEASUREMENT = new Map([]);
 const isMeasurement = (name) =>
-	(name.startsWith('wpt-') && !GATED_WPT.has(name)) ||
-	name.startsWith('measure-');
+	(name.startsWith('wpt-') && WPT_MEASUREMENT.has(name)) ||
+	(name.startsWith('measure-') && !GATED.has(name));
 const SKIP_MEASUREMENT = process.env.SKIP_MEASUREMENT === '1';
 // SUITES=<prefix> runs only the suites named with it, SUITES=!<prefix> all
 // but those; SHARD=<k>/<n> then keeps the k-th (1-based) of n shards of what
 // is left. GitHub CI runs the adversarial corpus as a job of its own and the
-// rest as four shards beside it: the rest alone took 64 to 69 of the job's 70
+// rest as six shards beside it: the rest alone took 64 to 69 of the job's 70
 // minutes. The shards are cut by how long each suite took on CI
 // (test/suite-seconds.json, the seconds column of a green run's summary
 // tables; a suite it does not name counts as its median), longest first, each

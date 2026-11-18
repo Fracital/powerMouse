@@ -823,8 +823,10 @@ npm test -- wpt-xhr-request wpt-url-elements
 UPDATE_EXPECTED=1 npm test -- wpt-cookies   # rewrite expected/wpt-cookies.json
 ```
 
-The suites are measurements (`SKIP_MEASUREMENT=1` leaves them out, as CI
-does). A proxied failure not on the list fails the suite; so does a listed
+The suites are gates, run by CI like any other (test/run.mjs; until
+2026-11-18 they were measurements that `SKIP_MEASUREMENT=1` left out). A page
+whose verdict flips from run to run is left out by its suite's `skip`, with
+the reason in `BACKLOG.md`. A proxied failure not on the list fails the suite; so does a listed
 failure that now passes, so a fix comes with its expected list trimmed.
 Every page starts with an empty cookie jar in both modes and has 30 s to
 report; a page that does not is a failure with the cause `timeout`. The

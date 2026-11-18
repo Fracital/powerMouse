@@ -183,22 +183,27 @@ jobs:
         run: npm run test262:report
 
   # Browser suites on the runner's Chrome. Fixture-based suites only
-  # (SKIP_NETWORK leaves out the ones that drive Wikipedia); no secrets, read
-  # only, not required by branch protection until it has proven stable.
+  # (SKIP_NETWORK leaves out the ones that drive Wikipedia and the public
+  # HTTP/3 servers, SKIP_MEASUREMENT the measure-* timings, SKIP_TIMING the
+  # checks that read pointer timing); no secrets, read only.
   browser:
     name: browser suites (${{ matrix.group.name }})
     runs-on: ubuntu-latest
     # the adversarial corpus (about 5 minutes here) runs as a job of its own,
-    # and the rest as four shards beside it (alone they took 64 to 69 of the
-    # 70 minutes; a shard takes about 20)
+    # and the rest as six shards beside it (alone they took 64 to 69 of the
+    # 70 minutes; four shards took about 20 each, and the web-platform-tests
+    # suites, gates since 2026-11-18, add about 80 minutes of suite time, so
+    # four would take about 30)
     strategy:
       fail-fast: false
       matrix:
         group:
-          - { name: main 1, suites: '!adversarial-', shard: 1/4 }
-          - { name: main 2, suites: '!adversarial-', shard: 2/4 }
-          - { name: main 3, suites: '!adversarial-', shard: 3/4 }
-          - { name: main 4, suites: '!adversarial-', shard: 4/4 }
+          - { name: main 1, suites: '!adversarial-', shard: 1/6 }
+          - { name: main 2, suites: '!adversarial-', shard: 2/6 }
+          - { name: main 3, suites: '!adversarial-', shard: 3/6 }
+          - { name: main 4, suites: '!adversarial-', shard: 4/6 }
+          - { name: main 5, suites: '!adversarial-', shard: 5/6 }
+          - { name: main 6, suites: '!adversarial-', shard: 6/6 }
           - { name: adversarial, suites: 'adversarial-', shard: '' }
     # a clean run takes about 40 minutes (cross-origin-isolation alone takes
     # about 15, visited about 3); a suite that failed runs once more alone
