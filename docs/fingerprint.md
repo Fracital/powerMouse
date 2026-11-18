@@ -293,6 +293,61 @@ release, chosen when a connection opens, and data on each release; it is
 not done. Firefox and Safari users get Chrome's fingerprint and field order
 next to their own UA.
 
+## Connections toward a server
+
+What a server sees of how many connections a browser opens to it, and in
+what order its requests arrive, measured against Chrome 157 on local
+servers (connection-limits suite): Chrome keeps at most six requests in
+flight to an HTTP/1 server, per group (the scheme, host and port, in a
+network partition, with credentials or without; 127.0.0.1 and localhost
+of one server are two groups, twelve in flight), 256 over every group,
+and the rest wait for a connection, the most urgent first and in the
+order they came within an urgency: a stylesheet or an iframe a page adds
+while 18 images wait goes on the next free connection, a fetch or XHR
+too when the images are below the fold (Chrome raises an image in the
+viewport once it is laid out, to a fetch's urgency). An HTTP/2 server
+gets every request at once on one connection, as many as its
+SETTINGS_MAX_CONCURRENT_STREAMS. WebSockets go one handshake at a time
+to an IP and port (RFC 6455 4.1), and past 255 open or opening a new one
+fails.
+
+Through the proxy before, epoxy opened a connection per request in
+flight: 100 fetches at once opened 100 connections to an HTTP/1 server
+(Chrome 6), a page of 41 loads 40 (Chrome 6), a page of 111 loads 110,
+and 12 WebSockets shook hands at once. HTTP/2 was already as Chrome's
+(one connection, the server's stream limit). Now the transport worker
+keeps Chrome's pool (`src/transport/socketPool.ts`): the service worker
+names each request's urgency and credentials in a field
+(`src/transport/requestQueue.ts`, beside the network partition's), the
+transport groups and queues requests as above, and a group stays at six
+until a response says it came over HTTP/2 or HTTP/3 (epoxy says which:
+deploy/epoxy patches epoxy-tls 0063, epoxy-transport 0055), as Chrome
+does for a server it knows nothing of. A request holds its place until
+its body has been read. WebSocket handshakes wait their turn per host
+and port, and the 256th socket fails.
+
+The cost is the point: an HTTP/1 site loads as slowly as in Chrome. A
+page of a stylesheet, two scripts in its head, 30 images and 8 scripts
+(each answered after 100 ms) loaded in 1104 ms proxied (454 ms before,
+Chrome 828 ms); with 100 images and 10 scripts at 20 ms, 605 ms (354
+before, Chrome 451). The rest over Chrome is the proxy's own time to
+first request, which 40 connections hid. HTTP/2 pages and bodies are
+unchanged (5 alternated rounds each, load 26 to 37).
+
+What is left:
+
+- A script a page inserts waits at urgency 2, as one of its markup
+  (Chrome: 3), and a beacon at a fetch's 1 (Chrome: 4); the worker sees
+  neither difference. An image in the viewport is not raised once laid
+  out, so a page of visible images and scripts sends its scripts before
+  its images, where Chrome sends the images first.
+- The limits are each transport's (a controller's), where Chrome's are
+  the profile's, and the WebSocket handshake lock is per host and port,
+  not per IP (the wisp server resolves names). Idle connections do not
+  count against the 256 (Chrome closes idle ones to make room).
+- A transport other than our epoxy build (libcurl) says nothing of HTTP
+  versions, so its requests are not queued, and its WebSockets are.
+
 ## What is left
 
 1. libcurl's TLS and HTTP/2 (the big one). libcurl.js ships a prebuilt

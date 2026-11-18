@@ -29,6 +29,8 @@ And every WebSocket frame it writes is flushed: the page's message, its
 close and the answers to the server's ping and close waited in the wisp
 stream for the next write, so a server answering the page looked silent
 (see the `websocket-frames` suite).
+And each response says which HTTP version it came over, so STomp keeps
+Chrome's six connections to an HTTP/1 server (`connection-limits` suite).
 The build also carries stomp-h3, HTTP/3 over wisp
 UDP for STomp's `http3` option (`h3/`, below), whose QUIC ClientHello and
 transport parameters are Chrome's too.
@@ -81,6 +83,8 @@ fails the build at `git apply --check`.
 | MercuryWorkshop/epoxy-tls                                      | `0061` | A WebSocket frame is flushed once written (`send`, `close`, the read loop's pong and close answers). fastwebsockets does not flush and the wisp stream only queued the packet for the sink's next poll, so the page's message left with its next frame or another stream's write.                                                                                                 |
 | MercuryWorkshop/epoxy-tls                                      | `0062` | `EpoxyClient.partition()`: a client of its own HTTP pool and TLS session caches over the same wisp connection (the multiplexor and the one that replaces it are shared), for a network partition.                                                                                                                                                                                 |
 | MercuryWorkshop/EpoxyTransport                                 | `0054` | `request` reads a request's network partition from the `$stomp$network` field (`fieldSupport.partition` names it), takes it off and sends the request on that partition's `partition()` client, as Chrome keys its socket pool by top-level site (STomp's `net-partitions` suite); idle 5 minutes, 64 kept.                                                                       |
+| MercuryWorkshop/epoxy-tls                                      | `0063` | A response says which HTTP version it came over (`httpVersion`: `1.1`, `2`, ...). STomp's transport worker keeps six requests in flight to an HTTP/1 server and lets HTTP/2 ones go, as Chrome does (`connection-limits` suite).                                                                                                                                                  |
+| MercuryWorkshop/EpoxyTransport                                 | `0055` | `request` passes that `httpVersion` on, and `fieldSupport.httpVersion` says it does.                                                                                                                                                                                                                                                                                              |
 
 ## stomp-h3 (`h3/`)
 

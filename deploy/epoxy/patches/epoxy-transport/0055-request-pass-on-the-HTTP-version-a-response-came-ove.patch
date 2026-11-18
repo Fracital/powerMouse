@@ -1,0 +1,40 @@
+From 7d9328dda1e55b2e2983f41f0657d3077c50e3eb Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 17 Nov 2026 13:00:00 -0500
+Subject: [PATCH] request: pass on the HTTP version a response came over
+
+fieldSupport.httpVersion says so, and each response carries epoxy-tls's
+httpVersion (1.1, 2, ...): STomp's transport host sends six requests at a
+time to an HTTP/1 server, as Chrome does, and lets HTTP/2 ones go.
+---
+ src/main.ts | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/src/main.ts b/src/main.ts
+index 6d45722..d9817cb 100644
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -100,6 +100,8 @@ export default class EpoxyTransport implements ProxyTransport {
+ 		acceptEncoding: "gzip, deflate, br, zstd",
+ 		priority: true,
+ 		partition: PARTITION_FIELD,
++		// each response says which HTTP version it came over (httpVersion)
++		httpVersion: true,
+ 	};
+ 	/** by name, the one used longest ago first */
+ 	private partitions = new Map<string, Partition>();
+@@ -205,7 +207,10 @@ export default class EpoxyTransport implements ProxyTransport {
+ 				headers: headersEntries,
+ 				status: res.status,
+ 				statusText: res.statusText,
+-			};
++				// "1.1", "2" and so on: a host queues HTTP/1 requests six to a
++				// server as a browser does, and lets HTTP/2 ones go
++				httpVersion: (res as any).httpVersion,
++			} as TransferrableResponse;
+ 		} catch (err) {
+ 			console.error(err);
+ 			throw err;
+-- 
+2.54.0
+

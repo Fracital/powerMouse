@@ -318,15 +318,25 @@ export default class Http3Transport implements ProxyTransport {
 	 * that turned HTTP/3 on); no Accept-Encoding, since stomp-h3 decodes gzip
 	 * and br only and names them itself
 	 */
-	get fieldSupport(): { priority?: boolean; partition?: string } {
+	get fieldSupport(): {
+		priority?: boolean;
+		partition?: string;
+		httpVersion?: boolean;
+	} {
 		const base = (
 			this.base as {
-				fieldSupport?: { priority?: boolean; partition?: string };
+				fieldSupport?: {
+					priority?: boolean;
+					partition?: string;
+					httpVersion?: boolean;
+				};
 			}
 		).fieldSupport;
 		return {
 			priority: !!base?.priority,
 			...(base?.partition && { partition: base.partition }),
+			// an HTTP/3 response says so itself (#viaH3)
+			...(base?.httpVersion && { httpVersion: true }),
 		};
 	}
 
@@ -785,7 +795,9 @@ export default class Http3Transport implements ProxyTransport {
 			headers: response.headers,
 			status: response.status,
 			statusText: STATUS_TEXT[response.status] ?? '',
-		};
+			// one QUIC connection takes every request (socketPool.ts)
+			httpVersion: '3',
+		} as TransferrableResponse;
 	}
 
 	/** ask the DoH server for `remote`'s HTTPS record, once per name per answer's TTL */

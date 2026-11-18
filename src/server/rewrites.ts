@@ -154,6 +154,7 @@ import {
 	XHR_MARKER,
 } from '../transport/messages';
 import { NETWORK_PARTITION } from '../transport/networkPartition';
+import { queueValue, REQUEST_QUEUE } from '../transport/requestQueue';
 import { fragmentOf, queryOf, withQuery } from '../urlShape';
 import { BUILD, REWRITE_GENERATION } from '../version';
 import { contextText, isLinkRoute, LINK_SEGMENT, linkRoute } from '../visited';
@@ -252,7 +253,11 @@ import {
 	REDIRECT_STATUSES,
 	RouteTransform,
 } from './filterHeaders';
-import { chromeOrderedHeaders, type RequestShape } from './headerOrder';
+import {
+	chromeOrderedHeaders,
+	queueUrgency,
+	type RequestShape,
+} from './headerOrder';
 import {
 	authorizationAhead,
 	authorizationForRealm,
@@ -2630,6 +2635,18 @@ function genericForward(
 			...headers.filter(([name]) => name.toLowerCase() !== NETWORK_PARTITION),
 			[NETWORK_PARTITION, networkPartition],
 		];
+		// and it waits for one as Chrome's requests wait for a socket
+		// (src/transport/socketPool.ts): six at a time to an HTTP/1 server
+		// for those with credentials and six for those without, the most
+		// urgent first. The transport takes the field off
+		const queued = (
+			headers: RawHeaders,
+			shape: RequestShape,
+			credentialed: boolean,
+		): RawHeaders => [
+			...headers.filter(([name]) => name.toLowerCase() !== REQUEST_QUEUE),
+			[REQUEST_QUEUE, queueValue(queueUrgency(shape), credentialed)],
+		];
 		// the fields go out in the order Chrome sends them (headerOrder.ts)
 		const shape: RequestShape = {
 			navigation: navigation && DOCUMENT_DESTINATIONS.has(destination),
@@ -2647,7 +2664,11 @@ function genericForward(
 					redirect: 'manual',
 					// redirect: serverRequest.redirect,
 					body,
-					headers: partitioned(chromeOrderedHeaders(headers, shape)),
+					headers: queued(
+						partitioned(chromeOrderedHeaders(headers, shape)),
+						shape,
+						credentials,
+					),
 				}),
 			);
 			// an answer that arrives after the page gave up is dropped unread, so
@@ -2766,20 +2787,26 @@ function genericForward(
 					preflightHeaders.set('sec-fetch-site', site);
 					preflightHeaders.set('sec-fetch-dest', destination);
 				}
+				const preflightShape: RequestShape = {
+					navigation: false,
+					destination,
+					mode: 'cors',
+					method: 'OPTIONS',
+					cache: 'no-store',
+				};
 				let allowed = false;
 				try {
 					const answer = await Promise.race([
 						rewriter.bare.fetch(url.toString(), {
 							method: 'OPTIONS',
 							redirect: 'manual',
-							headers: partitioned(
-								chromeOrderedHeaders(preflightHeaders, {
-									navigation: false,
-									destination,
-									mode: 'cors',
-									method: 'OPTIONS',
-									cache: 'no-store',
-								}),
+							headers: queued(
+								partitioned(
+									chromeOrderedHeaders(preflightHeaders, preflightShape),
+								),
+								preflightShape,
+								// a preflight never carries credentials
+								false,
 							),
 						}),
 						abortedSoon,

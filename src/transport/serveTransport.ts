@@ -15,8 +15,10 @@ import {
 	WebSocketMessage,
 } from './messages';
 import { NETWORK_PARTITION } from './networkPartition';
+import { REQUEST_QUEUE } from './requestQueue';
 import { resumableBody } from './resumableBody';
 import { RpcHelper } from './rpc';
+import { poolOf, reportsVersion, type SocketPass } from './socketPool';
 import { serveWebTransport, type AdmitSession } from './webTransportHost';
 
 /**
@@ -43,6 +45,8 @@ interface FieldSupport {
 	priority?: boolean;
 	/** the field it reads a request's network partition from (NETWORK_PARTITION) */
 	partition?: string;
+	/** each response says which HTTP version it came over (socketPool.ts) */
+	httpVersion?: boolean;
 }
 
 /** `headers` as `transport` can send them */
@@ -62,6 +66,8 @@ export function fitHeaders(
 		const lower = name.toLowerCase();
 		if (lower === NETWORK_PARTITION) {
 			if (partitioned) out.push([name, value]);
+		} else if (lower === REQUEST_QUEUE) {
+			// the worker's word for the socket pool here, never the server's
 		} else if (lower === 'accept-encoding') {
 			if (support?.acceptEncoding) out.push([name, support.acceptEncoding]);
 		} else if (lower === 'priority') {
@@ -242,13 +248,25 @@ export default function serveTransport(
 				const transport = await readyTransport();
 				const url = new URL(remote);
 				const sent = fitHeaders(transport, headers);
-				const response = await transport.request(
-					url,
-					method,
-					body,
-					sent,
-					undefined,
-				);
+				// it waits for a connection as Chrome's requests wait for a
+				// socket (socketPool.ts), and holds it until its body ends
+				const ticket = reportsVersion(transport)
+					? await poolOf(transport).http.take(url, headers)
+					: null;
+				let response;
+				try {
+					response = await transport.request(
+						url,
+						method,
+						body,
+						sent,
+						undefined,
+					);
+				} catch (error) {
+					ticket?.failed();
+					throw error;
+				}
+				if (ticket) response = ticket.answered(response);
 				// a streamed body goes on a port of its own (bodyPort.ts), and
 				// a large one the reader falls behind on is let go and resumed
 				// by range (resumableBody.ts)
@@ -290,6 +308,16 @@ export default function serveTransport(
 						// anything else: the handshake goes out without the extra headers
 					}
 
+				// Chrome's limits (socketPool.ts): one handshake at a time to a
+				// host and port, and past 255 sockets a new one fails
+				const pass: SocketPass | null = await poolOf(transport).ws.admit(
+					new URL(url),
+				);
+				if (!pass) {
+					socket.close();
+					return [{ result: 'failure', error: 'too many WebSockets' }, []];
+				}
+
 				let resolve!: (result: TransportToHost['connect'][1]) => void;
 				const result = new Promise<TransportToHost['connect'][1]>(
 					(res) => (resolve = res),
@@ -299,26 +327,38 @@ export default function serveTransport(
 					new URL(url),
 					protocols,
 					requestHeaders,
-					(protocol, extensions) =>
-						resolve({ result: 'success', protocol, extensions }),
+					(protocol, extensions) => {
+						pass.connected();
+						resolve({ result: 'success', protocol, extensions });
+					},
 					(data) =>
 						postToPort(
 							socket,
 							{ type: 'data', data } satisfies WebSocketMessage,
 							transferablesOf(data),
 						),
-					(code, reason) =>
+					(code, reason) => {
+						pass.connected();
+						pass.closed();
 						postToPort(socket, {
 							type: 'close',
 							code,
 							reason,
-						} satisfies WebSocketMessage),
-					(error) => resolve({ result: 'failure', error }),
+						} satisfies WebSocketMessage);
+					},
+					(error) => {
+						pass.connected();
+						pass.closed();
+						resolve({ result: 'failure', error });
+					},
 				);
 
 				socket.onmessage = ({ data }: MessageEvent<WebSocketMessage>) => {
 					if (data.type === 'data') send(data.data);
-					else if (data.type === 'close') close(data.code, data.reason);
+					else if (data.type === 'close') {
+						pass.closed();
+						close(data.code, data.reason);
+					}
 				};
 				socket.onmessageerror = (event) =>
 					console.error('Transport socket port messageerror', event);

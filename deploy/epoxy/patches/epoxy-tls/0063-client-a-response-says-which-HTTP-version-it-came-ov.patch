@@ -1,0 +1,46 @@
+From c682ebecf39533d9662c44805368530627173d82 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Tue, 17 Nov 2026 13:00:00 -0500
+Subject: [PATCH] client: a response says which HTTP version it came over
+
+A host that schedules requests as a browser does needs it: Chrome sends
+six at a time to an HTTP/1 server and queues the rest, where one HTTP/2
+connection takes them all. The JS Response gets httpVersion (0.9, 1.0,
+1.1, 2 or 3) beside url, redirected and rawHeaders.
+---
+ client/src/lib.rs | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/client/src/lib.rs b/client/src/lib.rs
+index 54a59d1..a83920c 100644
+--- a/client/src/lib.rs
++++ b/client/src/lib.rs
+@@ -820,6 +820,17 @@ impl EpoxyClient {
+ 			.map_err(|_| EpoxyError::ResponseHeadersFromEntriesFailed)?;
+ 
+ 		let response_headers_raw = response.headers().clone();
++		// the protocol the response came over, for a host that schedules its
++		// requests as a browser does (six at a time to an HTTP/1 server, the
++		// rest queued; any number on one HTTP/2 connection)
++		let http_version = match response.version() {
++			http::Version::HTTP_09 => "0.9",
++			http::Version::HTTP_10 => "1.0",
++			http::Version::HTTP_11 => "1.1",
++			http::Version::HTTP_2 => "2",
++			http::Version::HTTP_3 => "3",
++			_ => "",
++		};
+ 
+ 		let response_builder = ResponseInit::new();
+ 		response_builder.set_headers(&response_headers);
+@@ -903,6 +914,7 @@ impl EpoxyClient {
+ 
+ 		utils::define_property(&resp, "url", response_uri.to_string().into());
+ 		utils::define_property(&resp, "redirected", redirected.into());
++		utils::define_property(&resp, "httpVersion", http_version.into());
+ 
+ 		let raw_headers = Object::new();
+ 		for (k, v) in &response_headers_raw {
+-- 
+2.54.0
+

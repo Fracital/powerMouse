@@ -100,6 +100,22 @@ export function chromePriority(shape: RequestShape): string | null {
 	}
 }
 
+/**
+ * Where a request of this shape waits for a connection to an HTTP/1 server
+ * (src/transport/socketPool.ts): Chrome's urgency for it, as above, except a
+ * script, which waits at 2. Chrome gives a script of the markup 1 or 2
+ * (parser-blocking, or after an image of the body) and a script a page
+ * inserts 3; the worker cannot tell them apart, and the markup's are most
+ * of what waits behind images. Chrome raises an image in the viewport once
+ * it is laid out, which the worker does not see either.
+ */
+export function queueUrgency(shape: RequestShape): number {
+	if (!shape.navigation && shape.destination === 'script') return 2;
+	const priority = chromePriority(shape);
+	const urgency = priority && /\bu=(\d)/.exec(priority);
+	return urgency ? Number(urgency[1]) : 3;
+}
+
 /** Chrome's spelling: client hints and Priority lowercase, the rest title case */
 function chromeCase(name: string): string {
 	if (isHintName(name) || name.startsWith('sec-ch-') || name === 'priority')
