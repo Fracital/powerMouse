@@ -448,6 +448,13 @@
 				'Node',
 			]);
 			for (const name of Object.getOwnPropertyNames(window)) {
+				// the budget ends this loop too, not only its hammers: each
+				// interface gets a frame of its own below before any hammer
+				// runs (a proxied frame costs what its inject makes, ~25 ms,
+				// a native one next to nothing), so the ~770 left when the
+				// budget ran out in this group went on past it in one task,
+				// with no hammer to yield
+				if (Date.now() > DEADLINE) break;
 				const d = Object.getOwnPropertyDescriptor(window, name);
 				const ctor = d && d.value;
 				if (
@@ -554,6 +561,8 @@
 				)
 					continue;
 				if (SKIP_INTERFACES.test(name)) continue;
+				// (the budget ends it as it ends the instances group)
+				if (Date.now() > DEADLINE) break;
 				for (const which of KINDS) {
 					const w = alive(frame?.contentWindow) ? frame.contentWindow : fresh();
 					const p = payloads(`new ${name}`)[which];
