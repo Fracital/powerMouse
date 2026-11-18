@@ -1,0 +1,5 @@
+/* test/pages/css-local-urls.html: a fragment-only url() in a stylesheet of
+its own names an element of the document that uses the sheet */
+.sheet {
+	fill: url(#green) red;
+}

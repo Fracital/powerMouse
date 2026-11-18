@@ -1,0 +1,103 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<meta
+			http-equiv="Content-Security-Policy"
+			content="img-src https://img.invalid"
+		/>
+		<title>css local urls</title>
+		<script>
+			window.__violations = [];
+			document.addEventListener('securitypolicyviolation', (event) =>
+				window.__violations.push(
+					`${event.effectiveDirective} ${event.blockedURI}`,
+				),
+			);
+		</script>
+		<!-- Reddit's js_challenge page paints its logo like this: a class
+		rule whose fill is a gradient of the same document, by fragment -->
+		<style>
+			.rule {
+				fill: url(#green) red;
+			}
+			.quoted {
+				fill: url('#green');
+			}
+			.clipped {
+				fill: #00f;
+				clip-path: url(#left-half);
+			}
+			.filtered {
+				fill: red;
+				filter: url(#to-green);
+			}
+		</style>
+		<link rel="stylesheet" href="css-local-urls.css" />
+	</head>
+	<body>
+		<svg id="shapes" width="320" height="40">
+			<defs>
+				<linearGradient id="green">
+					<stop offset="0" stop-color="#0f0" />
+					<stop offset="1" stop-color="#0f0" />
+				</linearGradient>
+				<clipPath id="left-half">
+					<rect x="160" y="0" width="20" height="40" />
+				</clipPath>
+				<filter id="to-green">
+					<feFlood flood-color="#0f0" />
+				</filter>
+			</defs>
+			<rect id="rule" class="rule" x="0" width="40" height="40" />
+			<rect id="quoted" class="quoted" x="40" width="40" height="40" />
+			<rect
+				id="attribute"
+				x="80"
+				width="40"
+				height="40"
+				fill="url(#green) red"
+			/>
+			<rect
+				id="inline"
+				x="120"
+				width="40"
+				height="40"
+				style="fill: url(#green) red"
+			/>
+			<rect id="clipped" class="clipped" x="160" width="40" height="40" />
+			<rect id="filtered" class="filtered" x="200" width="40" height="40" />
+			<rect id="sheet" class="sheet" x="240" width="40" height="40" />
+			<rect id="cssom" x="280" width="40" height="40" />
+		</svg>
+		<script>
+			document
+				.getElementById('cssom')
+				.style.setProperty('fill', 'url(#green) red');
+			addEventListener('load', () =>
+				setTimeout(() => {
+					const ids = [
+						'rule',
+						'quoted',
+						'attribute',
+						'inline',
+						'clipped',
+						'filtered',
+						'sheet',
+						'cssom',
+					];
+					window.__localURLs = {
+						computed: ids.map((id) => {
+							const style = getComputedStyle(document.getElementById(id));
+							return `${id}: ${style.fill} | ${style.clipPath} | ${style.filter}`;
+						}),
+						inline: document.getElementById('inline').getAttribute('style'),
+						cssom: document.getElementById('cssom').style.fill,
+						rule: document.styleSheets[0].cssRules[0].style.fill,
+						violations: window.__violations,
+					};
+				}, 500),
+			);
+		</script>
+	</body>
+</html>

@@ -2,7 +2,7 @@
 // stylesheet and the url() routing a regex can do. The inject's core uses
 // these on every style it touches; modifyCSS (rewriteCSS.ts, with css-tree)
 // is reached through src/rewriters.ts.
-import { cssURLValue, serializeCSSURL } from './cssURL';
+import { cssURLValue, isLocalURL, serializeCSSURL } from './cssURL';
 import { rewriter } from './rewriters';
 import { createDataURI, parseDataURI, routeBinary, routeURL } from './routeURL';
 import StompURL from './StompURL';
@@ -42,7 +42,9 @@ export function preserveValue(url: string, value: string) {
  * wrote it) as the page wrote it
  */
 function restoreValue(url: string, asWritten = false) {
-	const hashi = url.indexOf('#');
+	// (the kept token always starts `url(`: a url() the rewriter left, such
+	// as a local `url(#gradient)` (isLocalURL), has a `#` of its own)
+	const hashi = url.indexOf('#url(');
 
 	if (hashi === -1) {
 		throw new Error('Invalid value URL');
@@ -125,6 +127,7 @@ export function rewriteCSSValueURLs(value: string, url: StompURL): string {
 					quote && target.includes('\\') ? unescapeTarget(target) : target,
 				);
 				const original = routed?.url ?? target;
+				if (isLocalURL(original)) return match;
 				const resolved = new StompURL(new URL(original, url.toString()), url);
 				// routed already: the page's token as it was kept, so text routed
 				// twice still reads back as the page wrote it

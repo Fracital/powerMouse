@@ -10,6 +10,19 @@
  */
 export const MAY_ROUTE = /url\(|image-set|src\(|import|\\/i;
 
+/**
+ * Whether a url()'s target is a fragment alone (`url(#gradient)`), a local
+ * URL (CSS Values 4): it names an element of the document itself (an SVG
+ * paint server, clip path, mask, filter or marker), which the browser uses
+ * without loading anything and reads back as written. Routed, it named
+ * another document: nothing painted, the page was fetched again as an
+ * image (Reddit's challenge page, under an img-src that refuses its own
+ * origin, saw a violation natively absent). So it is left as written, and
+ * where a property does load it (a background-image), the browser resolves
+ * it against the proxied document's route, as natively against its URL.
+ */
+export const isLocalURL = (target: string): boolean => target.startsWith('#');
+
 /** the contexts parsed lazily: values, preludes and selectors stay raw text */
 export const LAZY_CONTEXTS = ['stylesheet', 'declarationList'];
 

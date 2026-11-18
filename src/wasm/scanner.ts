@@ -12,6 +12,7 @@
 // work in JavaScript as it always did. A rewrite made during a rewrite (a
 // data: stylesheet a stylesheet imports) runs in an instance of its own
 // (src/wasm/thread.ts).
+import { isLocalURL } from '../cssURL';
 import { routeCSS } from '../cssURLs';
 import { routeBinary } from '../routeURL';
 import StompURL from '../StompURL';
@@ -53,6 +54,9 @@ function styleRoute(url: StompURL): RouteImport {
 	return (kind, text) => {
 		try {
 			if (kind === ROUTE_IMPORT && text.startsWith(`${url.directory}css/`))
+				return null;
+			// a value's url(#id) names an element of the document (isLocalURL)
+			if (kind !== ROUTE_STYLE && kind !== ROUTE_IMPORT && isLocalURL(text))
 				return null;
 			base ??= url.toString();
 			const resolved = new StompURL(new URL(text, base), url);
