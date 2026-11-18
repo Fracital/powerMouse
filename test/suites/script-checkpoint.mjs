@@ -10,8 +10,11 @@
 // (test/pages/script-checkpoint.html) logs what an observer sees of each
 // script, edits two before they run (one after a parser-blocking external
 // script) and logs its promise reactions; through the proxy the log is the
-// native one but for where the reactions stand against the observer's
-// callback (below). Between two pieces the page's write and open() open the
+// native one. A classic script's first statement puts the source back in its
+// element, which queued the observers' microtask ahead of the script's own
+// reactions and was heard by them; it is put back unheard, from a microtask
+// (Readback), and the observer runs after the reactions, as natively
+// (test/pages/script-records.html). Between two pieces the page's write and open() open the
 // document, as where the network's parser has no insertion point (WPT's
 // document-write/mutation-observer.html), and while the pieces are written a
 // script's close() ends nothing, as with the network's parser
@@ -84,28 +87,36 @@ ok(
 		JSON.stringify(proxiedClosed) === JSON.stringify(nativeClosed),
 	JSON.stringify([proxiedClosed, nativeClosed]),
 );
-// what an observer sees and edits, and what runs, in order
-const seen = (log) => log.filter((entry) => !entry.startsWith('microtask'));
 ok(
-	'through the proxy an observer sees each script as the page wrote it, before it runs, and its edits run in its place',
-	JSON.stringify(seen(proxied)) === JSON.stringify(seen(native)),
+	"through the proxy an observer sees each script as the page wrote it, before it runs, its edits run in its place, and a script's promise reactions run before the observer hears of the next script, as natively",
+	JSON.stringify(proxied) === JSON.stringify(native),
 	JSON.stringify([proxied, native]),
 );
-// a script's promise reactions run before the next script does. (Natively
-// they also run before the observer hears of the next script; through the
-// proxy the observer hears first: a classic script's first statement puts
-// the page's text back for document.currentScript, a mutation whose
-// observers' microtask is queued before the script's own reactions)
-const before = (log, entry, next) =>
-	log.indexOf(entry) !== -1 && log.indexOf(entry) < log.indexOf(next);
+
+// what an observer of the scripts' children hears: the parser's insertion of
+// each one's text, and nothing of the source a script's first statement puts
+// back in it (prewrite.ts scriptPreamble), which no native script does
+const records = `${FIXTURE}pages/script-records.html`;
+const recordsOf = (frame) =>
+	frame
+		.waitForFunction(() => window.__done, null, { timeout: 20000 })
+		.then(() => frame.evaluate(() => [...window.__records]));
+const recordsPage = await browser.newPage();
+await recordsPage.goto(records);
+const nativeRecords = await recordsOf(recordsPage.mainFrame());
+await recordsPage.close();
+await page.evaluate(async (records) => {
+	const element = document.createElement('iframe');
+	element.name = 'records';
+	document.body.append(element);
+	await window.controller.createFrame(element).go(records);
+}, records);
+const proxiedRecords = await recordsOf(page.frame({ name: 'records' }));
 ok(
-	"through the proxy a script's promise reactions run before the next script, as natively",
-	[native, proxied].every(
-		(log) =>
-			before(log, 'microtask of the first', 'second') &&
-			before(log, 'microtask of the second', 'edited'),
-	),
-	JSON.stringify([proxied, native]),
+	"an observer hears of no script's text but the parser's, as natively",
+	nativeRecords.length === 2 &&
+		JSON.stringify(proxiedRecords) === JSON.stringify(nativeRecords),
+	JSON.stringify([proxiedRecords, nativeRecords]),
 );
 
 await browser.close();

@@ -1,3 +1,4 @@
+import { scriptPreamble } from '../../../prewrite';
 import { parsedSpeculationRules } from '../../../scriptRoutes';
 import Module from '../../Module';
 import MixedContentModule from '../../modules/MixedContent';
@@ -12,6 +13,7 @@ import {
 	nativeHTMLScriptElement,
 } from './DOMContentHooks';
 import { nativeElement, nativeGetter, nativeNode } from './DOMHooks';
+import { hiddenMutation } from './MutationObserver';
 
 /** what the page wrote into a script, and what the rewriter made of it */
 interface ScriptSource {
@@ -426,12 +428,68 @@ export default class ReadbackModule extends Module<DocumentClient> {
 				return false;
 			}
 		};
+		// A classic script's first statement puts the source the page wrote back
+		// in its element (prewrite.ts scriptPreamble), a mutation of the page's
+		// tree no native script makes: an observer heard of it, and its
+		// microtask was queued before the script's own promise reactions, so
+		// the observer ran first. The text is put back from a microtask queued
+		// as the script starts, with no observer hearing of it (until then the
+		// script reads back as written from its record), and the observers'
+		// microtask is queued by what the parser inserts after the script, as
+		// natively.
+		const currentScriptGet = nativeGetter(
+			global.Document.prototype,
+			'currentScript',
+		);
+		const queueMicrotask = global.queueMicrotask;
+		let restores: [HTMLScriptElement, string, string][] | null = null;
+		const restore = () => {
+			const list = restores!;
+			restores = null;
+			hiddenMutation(() => {
+				for (const [script, source, rewritten] of list)
+					if (nativeText(script) === rewritten) {
+						client.scriptText(script, source);
+						sources.set(script, { written: source, rewritten: source });
+					}
+			});
+		};
+		const isPreamble = (that: unknown, value: unknown): boolean => {
+			// (an SVG script's source goes back as before: the text setter put
+			// back is an HTML script's)
+			if (
+				typeof value !== 'string' ||
+				!isScriptNode(that) ||
+				Reflect.apply(nativeNamespace, that, []) !== HTML ||
+				that !== Reflect.apply(currentScriptGet, global.document, [])
+			)
+				return false;
+			const text = nativeText(that);
+			const at = text.indexOf('document.currentScript.textContent = ');
+			return (
+				at !== -1 &&
+				at < 512 &&
+				text.length > value.length &&
+				text.startsWith(scriptPreamble(value), at)
+			);
+		};
 		const wrapTextSetter = (prototype: object, key: string) => {
 			const descriptor = Reflect.getOwnPropertyDescriptor(prototype, key);
 			if (!descriptor?.set) return;
 			Reflect.defineProperty(prototype, key, {
 				...descriptor,
 				set: proxyModule.wrapFunction(descriptor.set, (target, that, args) => {
+					if (key === 'textContent' && isPreamble(that, args[0])) {
+						const script = that as HTMLScriptElement;
+						const rewritten = nativeText(script);
+						sources.set(script, { written: args[0], rewritten });
+						if (!restores) {
+							restores = [];
+							Reflect.apply(queueMicrotask, global, [restore]);
+						}
+						restores.push([script, args[0], rewritten]);
+						return;
+					}
 					const result = Reflect.apply(target, that, args);
 					if (isScriptNode(that)) {
 						// unchanged (detached, or the running script restoring its

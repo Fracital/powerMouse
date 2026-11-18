@@ -1,0 +1,24 @@
+<!doctype html>
+<title>script-records</title>
+<!-- what an observer hears of the scripts of the markup (script-checkpoint suite) -->
+<script>
+	window.__records = [];
+	new MutationObserver((records) => {
+		for (const record of records) {
+			const script =
+				record.target.nodeName === 'SCRIPT' ||
+				record.target.parentNode?.nodeName === 'SCRIPT';
+			if (script)
+				window.__records.push(
+					`${record.type} ${record.target.nodeName} +${record.addedNodes.length} -${record.removedNodes.length}`,
+				);
+		}
+	}).observe(document, { childList: true, subtree: true, characterData: true });
+</script>
+<script>
+	window.__ran = 1;
+</script>
+<script>
+	window.__ran++;
+	setTimeout(() => (window.__done = true), 100);
+</script>

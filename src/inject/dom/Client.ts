@@ -375,9 +375,12 @@ export default class DocumentClient extends Client {
 	// native innerHTML, taken before the hooks: the page-facing getter folds
 	// the markers back, which is the opposite of what the written page needs
 	private innerHTML: (element: Element) => string;
-	// native script text setter: the hooked one rewrites what it is given, and
-	// markup the client rewrites itself must not go through it twice
-	private scriptText: (script: HTMLScriptElement, text: string) => void;
+	/**
+	 * @internal native script text setter: the hooked one rewrites what it is
+	 * given, and markup the client rewrites itself (and a script's source put
+	 * back, Readback) must not go through it twice
+	 */
+	scriptText: (script: HTMLScriptElement, text: string) => void;
 	/**
 	 * @internal the inline scripts of the page's markup, rewritten, to the
 	 * source the page wrote, while the parser has not run them all (loadHTML,
