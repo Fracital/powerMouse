@@ -4,7 +4,6 @@ import type {
 } from '@mercuryworkshop/proxy-transports';
 import { acceptLanguage } from '../acceptLanguage';
 import {
-	DEFAULT_RESOURCES,
 	resolveAdblockOptions,
 	withAdblockLists,
 	type AdblockApplied,
@@ -1190,11 +1189,12 @@ export class StompController extends EventTarget {
 		// them, and the first handshake waits for it: the service worker
 		// builds the engine once it holds the module. A module that cannot be
 		// had leaves the blocker off (and the config says so to every document)
-		// the default resources are the directory's own file, which the service
-		// worker reads from this origin rather than through the transport
+		// the default resources are the directory's own file
+		// (init.assets.adblockResources), which the service worker reads from
+		// this origin rather than through the transport
 		this.#adblock = resolveAdblockOptions(
 			init.adblock,
-			new URL(DEFAULT_RESOURCES, this.directory).href,
+			new URL(assetName(init.assets, 'adblockResources'), this.directory).href,
 		);
 		// the default lists are kept for adblockDefaults(); the lists in force
 		// start as the host's seed (the demo's kept editor state) or the defaults

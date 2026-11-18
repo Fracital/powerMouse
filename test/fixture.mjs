@@ -165,6 +165,7 @@ const NEUTRAL = {
 	'tw.js': 'transportWorker.js',
 	'rw.js': 'rewriteWorker.js',
 	'lib.js': 'rewriterLib.js',
+	'blk.json': 'adblock-resources.json',
 	// the rewriter is the wasm core module, always required now; the content
 	// blocker's module too. neutral-host.html does not rename them, so they
 	// keep their default names under /neutral/
@@ -268,7 +269,9 @@ export function startFixture(port = 8084) {
 					? 'text/html; charset=utf-8'
 					: neutral.endsWith('.wasm')
 						? 'application/wasm'
-						: 'text/javascript; charset=utf-8',
+						: neutral.endsWith('.json')
+							? 'application/json'
+							: 'text/javascript; charset=utf-8',
 			);
 			res.setHeader('cache-control', 'no-cache');
 			return res.end(readFileSync(file));

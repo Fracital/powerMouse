@@ -341,6 +341,12 @@ export interface Assets {
 	/** the built-in blocker's wasm module (docs/adblock.md) */
 	blocker?: string;
 	/**
+	 * the built-in blocker's default scriptlets and redirect resources,
+	 * uBlock Origin's (docs/adblock.md), which the service worker reads when
+	 * `init.adblock` names no `resources`
+	 */
+	adblockResources?: string;
+	/**
 	 * The light rewriter library (the wasm glue, src/rewriterLightDocument.ts):
 	 * no document bundle carries it. A proxied top's shell loads this file,
 	 * and a sandboxed frame fetches it the first time it rewrites. It is asked
@@ -366,6 +372,7 @@ export const DEFAULT_ASSETS: Required<Assets> = {
 	rewriteWorker: 'rewriteWorker.js',
 	core: 'core.wasm',
 	blocker: 'blocker.wasm',
+	adblockResources: 'adblock-resources.json',
 	rewriterLib: 'rewriterLib.js',
 };
 

@@ -94,7 +94,8 @@ load`); no list is asked for and the inject installs nothing for the
 
 The first handshake waits for `blocker.wasm` either way (fetched beside the
 transport's module), so serve it with the cache headers of the other files,
-and serve `adblock-resources.json` beside it.
+and serve `adblock-resources.json` beside it. A host that renames the files
+names them in `init.assets.blocker` and `init.assets.adblockResources`.
 
 ### A prebuilt engine
 
