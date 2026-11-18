@@ -760,7 +760,8 @@ export class Connection {
 		const port = state?.sendTransform;
 		if (state && port)
 			queueMicrotask(() => this.#transform(state, 'send', port, frame, age));
-		else this.#packetize(frame, age);
+		// (an empty frame is for a transform: silence the encoder left out)
+		else if (frame.payload.length) this.#packetize(frame, age);
 	};
 	#packetize(frame: Frame, age: number) {
 		if (this.#closed) return;
@@ -824,7 +825,9 @@ export class Connection {
 		if (ssrc !== undefined) meta.synchronizationSource = ssrc;
 		const key = (frame.flags & FLAG_KEYFRAME) !== 0;
 		if (audio) {
-			if (frame.level !== ABSENT) meta.audioLevel = 10 ** (-frame.level / 20);
+			// (a silent frame's level is 0, as Chrome gives it)
+			if (frame.level !== ABSENT)
+				meta.audioLevel = frame.level >= 127 ? 0 : 10 ** (-frame.level / 20);
 			if (side === 'receive')
 				meta.sequenceNumber = state.sequence = (state.sequence + 1) & 0xffff;
 		} else {
@@ -868,9 +871,11 @@ export class Connection {
 			{ frame: Omit<Frame, 'payload'>; age: number; at: number } | undefined;
 		if (!back?.frame || !(message.data instanceof ArrayBuffer)) return;
 		const frame = { ...back.frame, payload: new Uint8Array(message.data) };
-		if (side === 'send')
-			this.#packetize(frame, back.age + performance.now() - back.at);
-		else state.receiver?.frame(frame as Frame & { codec: string });
+		if (side === 'send') {
+			// an empty frame is not sent, as Chrome sends none
+			if (frame.payload.length)
+				this.#packetize(frame, back.age + performance.now() - back.at);
+		} else state.receiver?.frame(frame as Frame & { codec: string });
 	}
 
 	/** the page gave a sender or a receiver of the section a transform, or took it away */

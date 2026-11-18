@@ -1156,6 +1156,28 @@ Every frame carries its level (RFC 6464, from the power of what went into
 it), the first after a break is marked as a talkspurt, and `age` is
 counted from when the frame's first sample was read.
 
+What `usedtx` leaves out is not quite nothing. libopus makes a frame of
+silence a packet of one byte, its table of contents alone, and Chrome's
+`AudioEncoder` gives no output for it, where Chrome's own sender sends the
+first one of a silence (the last frame's configuration, one frame) and
+hands each of them to a sender's transform as an empty frame, which is
+not sent. In a silence libopus still makes every 21st frame (comfort
+noise), so on the wire a silence is a frame, the byte 20 ms later, nothing
+for 380 ms, a frame, the byte, and so on (measured on 157, from digital
+silence and noise at -60 and -75 dBFS; noise at -45 is sent whole). The
+far end's jitter buffer takes the byte for the start of a silence; without
+it, it conceals the whole silence (webrtc-audio, Discord's parameters:
+about 56,000 concealed samples a call, natively none). `AudioSender`
+does the same (`#leftOut`): once a frame's sound and one more block of the
+track (at least 10 ms later on the clock, and as much again as the
+encoder has needed to give a frame it made) are in the encoder with no
+output for it, the frame is one it left out. That is guessed only after
+eight quiet frames in a row (-40 dBov or below: libopus leaves out frames
+only after ten without a voice), so an encoder late with a frame of
+speech on a loaded machine is not taken for one that left it out. After
+it the far end conceals 500 to 900 samples a call (the byte comes about
+20 ms after Chrome's would).
+
 Receiving (`AudioReceiver`): Opus through an `AudioDecoder` (one output a
 packet, in order, which is how a decoded frame gets its RTP time back: the
 decoder's own timestamps are a count from its first input), with two
@@ -1528,7 +1550,8 @@ the speech after them is marked; the speech encoder is neither fed nor reset
 in between (G.722's state carries across the silence). White noise above
 about -65 dBFS is speech to the detector, below -70 it is comfort noise.
 With Opus Chrome never sends comfort noise (`usedtx` leaves the silence
-out instead, but for a 1 byte packet at times: see Encoded transforms). Measured on 152 and 156 with a werift peer logging every
+out instead, but for a one byte packet at its start: see the sender
+above). Measured on 152 and 156 with a werift peer logging every
 packet, from tones, silences and noises a page wrote sample for sample at
 the codec's rate (every speech packet byte for byte what its samples
 encode to).
@@ -1857,13 +1880,9 @@ After, in the same-origin and isolated modes: segmental SNR 11.1 and
 missing, the page's transforms given every frame with the stream ids the
 far end's transform sees, and the far end dropping none.
 
-With Discord's `usedtx=1` one difference is left: where the sound goes
-silent Chrome's encoder still sends a 1 byte Opus packet now and then
-(its transform is handed the silence as empty frames), and the worker's
-WebCodecs encoder sends nothing. The far end's jitter buffer then counts
-the silence as concealed (about 55,000 samples, over a second of a 14 s
-call, natively none) and adjusts its delay more often; the speech is as
-clear as natively.
+With Discord's `usedtx=1` the silences the page leaves out are sent as
+Chrome sends them (Audio in the worker, `#leftOut`), and its send
+transform is handed them as empty frames, as Chrome's is.
 
 Limits: `createEncodedStreams()` (the older encoded insertable streams)
 still fails with NotSupportedError; a frame is the browser's class but

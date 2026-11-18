@@ -46,6 +46,25 @@ const OPUS_FRAME = 960;
 /** frames an encoder that leaves silence out must have skipped before its time is moved on */
 const DTX_RESUME = 5;
 /**
+ * How much more of the track than a frame's own sound is fed before the
+ * frame is taken to be one the encoder left out: the most the encoder has
+ * needed before giving a frame it made (a resampling encoder needs more
+ * than the frame), and one more block of the track, at least
+ * `DTX_SETTLE_MS` later on the clock (a track read in a burst leaves the
+ * encoder no time between blocks)
+ */
+const DTX_WAIT_US = 20000;
+const DTX_LEAD_MAX_US = 40000;
+const DTX_SETTLE_MS = 10;
+/**
+ * libopus leaves frames out only after ten frames without a voice: a
+ * frame is taken to be left out only after `DTX_QUIET_FRAMES` frames this
+ * quiet (a level, -dBov), so an encoder late with a frame of speech (a
+ * loaded machine) is not taken for one that left it out
+ */
+const DTX_QUIET_LEVEL = 40;
+const DTX_QUIET_FRAMES = 8;
+/**
  * The longest run of lost Opus packets the decoder conceals: past it the
  * gap is a pause (a sender that left silence out), not a loss
  */
@@ -132,6 +151,21 @@ export class AudioSender {
 	#channels = 0;
 	/** the encoder leaves silence out (the peer's `usedtx=1`) */
 	#dtx = false;
+	/**
+	 * With `usedtx`, the time (on the encoder's count) of the frame after
+	 * the last one the encoder made, which it may leave out; whether it
+	 * is the first left out since (sent as a packet of the last frame's
+	 * table of contents byte alone, as Chrome sends it); and when its
+	 * sound was all in the encoder
+	 */
+	#gap: number | null = null;
+	#gapToc = 0;
+	#gapFirst = false;
+	#gapDue = 0;
+	/** how far past a frame's sound the track had been fed when the encoder gave it, in microseconds */
+	#lead = 0;
+	/** frames the encoder made in a row that were quiet */
+	#quiet = 0;
 	/** an input no encoder could be made for, not to be tried on every frame */
 	#refused = '';
 	/** RTP times start at a number of the sender's own */
@@ -331,6 +365,9 @@ export class AudioSender {
 		this.#made = 0;
 		this.#squares = 0;
 		this.#count = 0;
+		this.#gap = null;
+		this.#lead = 0;
+		this.#quiet = 0;
 	}
 
 	#input(data: AudioData) {
@@ -400,6 +437,69 @@ export class AudioSender {
 		}
 		this.#fedUs += duration;
 		this.#fedAt = performance.now();
+		if (this.#dtx) this.#leftOut(payload);
+	}
+
+	/**
+	 * The frames an encoder told `usedtx` left out (WebCodecs' Opus encoder
+	 * gives no output for a frame of silence libopus makes a one byte
+	 * packet of). Chrome's own sender sends the first of them, that byte
+	 * alone, so the far end's jitter buffer knows the silence for what it
+	 * is (without it, it conceals all of it), and hands each of them to a
+	 * transform of the sender as an empty frame, which is not sent; every
+	 * 21st frame of a silence the encoder makes, as Chrome's does
+	 * (measured on 157). A frame is taken to be left out once its sound
+	 * and more (`DTX_WAIT_US`) are in the encoder with no output for it,
+	 * after `DTX_QUIET_FRAMES` quiet ones.
+	 */
+	#leftOut(payload: Payload) {
+		const epoch = this.#epoch;
+		if (this.#gap === null || epoch === null || this.#quiet < DTX_QUIET_FRAMES)
+			return;
+		const base = Math.round(epoch * OPUS_UNITS);
+		const now = performance.now();
+		// (a frame a block at most: a block is half a frame, so a backlog is
+		// soon made up)
+		const index = (this.#gap - base) / OPUS_FRAME;
+		const end = epoch + (index + 1) * FRAME_US + this.#lead;
+		if (this.#fedUs < end) return;
+		if (!this.#gapDue) this.#gapDue = now;
+		if (this.#fedUs < end + DTX_WAIT_US || now - this.#gapDue < DTX_SETTLE_MS)
+			return;
+		const time = this.#gap;
+		const age =
+			now - this.#fedAt + (this.#fedUs - epoch - index * FRAME_US) / 1000;
+		this.#gap += OPUS_FRAME;
+		this.#gapDue = 0;
+		if (this.#gapFirst) {
+			this.#gapFirst = false;
+			this.#send(
+				payload.pt,
+				48000,
+				time,
+				OPUS_FRAME,
+				Uint8Array.of(this.#gapToc),
+				age,
+			);
+		} else {
+			// (with the level of its sound, as Chrome's)
+			const level = levelOf(this.#squares, this.#count);
+			this.#squares = 0;
+			this.#count = 0;
+			this.#write(
+				{
+					media: this.media,
+					pt: payload.pt,
+					flags: 0,
+					level,
+					orientation: ABSENT,
+					time: BigInt(time + this.#shift + this.#offset),
+					rid: '',
+					payload: new Uint8Array(0),
+				},
+				Math.max(0, age),
+			);
+		}
 	}
 
 	#start(payload: Payload, rate: number, channels: number) {
@@ -456,6 +556,8 @@ export class AudioSender {
 		let counted =
 			Math.round(((chunk.timestamp - this.#epoch) * OPUS_UNITS) / OPUS_STEP) *
 			OPUS_STEP;
+		// (a frame placed where the run was fed to, after frames left out)
+		let resumed = false;
 		if (this.#dtx) {
 			const fed =
 				(Math.floor((this.#fedUs - this.#epoch) / FRAME_US) - 1) * OPUS_FRAME;
@@ -464,6 +566,11 @@ export class AudioSender {
 					? 0
 					: this.#last - Math.round(this.#epoch * OPUS_UNITS);
 			counted = fed - follows >= DTX_RESUME * OPUS_FRAME ? fed : follows;
+			resumed = counted !== follows;
+			this.#quiet =
+				levelOf(this.#squares, this.#count) >= DTX_QUIET_LEVEL
+					? this.#quiet + 1
+					: 0;
 		}
 		this.#send(
 			payload.pt,
@@ -475,6 +582,20 @@ export class AudioSender {
 				this.#fedAt +
 				(this.#fedUs - this.#epoch - counted / OPUS_UNITS) / 1000,
 		);
+		if (this.#dtx && bytes.length) {
+			// (a frame that follows the last: its place on the track is known)
+			if (!resumed) {
+				const lead =
+					this.#fedUs - this.#epoch - (counted / OPUS_FRAME + 1) * FRAME_US;
+				if (lead >= this.#lead) this.#lead = Math.min(DTX_LEAD_MAX_US, lead);
+				else this.#lead = Math.max(0, this.#lead - 100);
+			}
+			this.#gap = this.#last;
+			// the same configuration and channels, one frame (code 0)
+			this.#gapToc = bytes[0] & 0xfc;
+			this.#gapFirst = true;
+			this.#gapDue = 0;
+		}
 	}
 
 	/** G.711 at 8 kHz or G.722 at 16 kHz, both encoded here: WebCodecs has neither encoder */

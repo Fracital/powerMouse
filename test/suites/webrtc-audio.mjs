@@ -229,6 +229,8 @@ const SCENARIOS = {
 	// transform (DAVE), and the answer asks for Discord's Opus parameters
 	// (silence left out)
 	discord: { mic: { scramble: true }, scramble: true, munge: discordFmtp },
+	// silence left out without a transform
+	dtx: { munge: discordFmtp },
 };
 const only = process.env.AUDIO_SCENARIOS?.split(',');
 
@@ -315,7 +317,22 @@ for (const name of Object.keys(SCENARIOS)) {
 				off.join('; '),
 			);
 		}
-		if (name !== 'discord' || got.failure) continue;
+		if (got.failure) continue;
+		if (name === 'discord' || name === 'dtx') {
+			// Chrome's sender sends the first frame of a silence it leaves
+			// out as a byte, so the far end knows it is silence: it conceals
+			// none of it. (Without the byte, about 56,000 samples a call; a
+			// loaded machine makes the page's sound late now and then, a few
+			// thousand, as without usedtx)
+			const concealed = got.sends.stats?.concealedSamples;
+			const natively = want.sends.stats?.concealedSamples;
+			ok(
+				`${page.label}, ${name}: the far end takes the silences the page leaves out for silence, as natively (it conceals no more of them)`,
+				typeof concealed === 'number' && concealed <= natively + 9600,
+				`concealed ${concealed} samples | natively ${natively}`,
+			);
+		}
+		if (name !== 'discord') continue;
 		// the transforms' workers: every frame, with its stream and the
 		// metadata Chrome gives it, and the far end's stream ids on ours
 		const mine = got.seen?.own ?? {};
@@ -339,6 +356,21 @@ for (const name of Object.keys(SCENARIOS)) {
 			mine.send?.ssrcs[0] === theirs.recv?.ssrcs[0] &&
 				mine.recv?.ssrcs[0] === theirs.send?.ssrcs[0],
 			JSON.stringify({ mine, theirs }),
+		);
+		// (natively about 19 of every 21 frames of a silence)
+		ok(
+			`${page.label}, discord: the page's send transform is handed the silence it leaves out as empty frames, and the far end's gets the byte that says so, as natively`,
+			mine.send?.empty >= natives.send?.empty / 2 &&
+				mine.send.empty <= natives.send.empty * 2 &&
+				theirs.recv?.tiny >= want.seen?.far?.recv?.tiny / 2 &&
+				theirs.recv.tiny <= want.seen.far.recv.tiny * 2 + 2,
+			JSON.stringify({
+				proxied: { empty: mine.send?.empty, tiny: theirs.recv?.tiny },
+				natively: {
+					empty: natives.send?.empty,
+					tiny: want.seen?.far?.recv?.tiny,
+				},
+			}),
 		);
 		ok(
 			`${page.label}, discord: the far end drops none of the page's frames (they are encrypted)`,

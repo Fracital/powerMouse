@@ -540,6 +540,7 @@ async function send(
 	payloads,
 	pause = { before: Infinity, ms: 0 },
 	wait = 50,
+	pace = 0,
 ) {
 	const frames = [];
 	const sender = new m.AudioSender(3, (frame, age) =>
@@ -552,13 +553,17 @@ async function send(
 			async start(controller) {
 				for (const [at, input] of inputs.entries()) {
 					if (at === pause.before) await sleep(pause.ms);
+					// (`pace` ms between inputs, as a track gives them)
+					if (pace) await sleep(pace);
 					controller.enqueue(input);
 				}
 				controller.close();
 			},
 		}),
 	);
-	await sleep(wait + (pause.before < inputs.length ? pause.ms : 0));
+	await sleep(
+		wait + (pause.before < inputs.length ? pause.ms : 0) + pace * inputs.length,
+	);
 	sender.close();
 	return frames;
 }
@@ -708,6 +713,42 @@ const talkspurts = (frames) =>
 		'and the silence it does send says so',
 		frames[40].level === 127 && !(frames[40].flags & records.FLAG_VOICE),
 		`level ${frames[40].level}`,
+	);
+}
+{
+	// the same, read as a track gives it (a block each 10 ms): the first
+	// frame left out goes out as its table of contents byte alone, and the
+	// rest are empty frames, for a transform (not sent), as Chrome's sender
+	// does it; the frames it makes keep their times
+	const inputs = Array.from({ length: 140 }, (_, i) =>
+		sound(i, { amplitude: i < 40 || i >= 120 ? 0.5 : 0 }),
+	);
+	const frames = await send(
+		inputs,
+		opus('minptime=10;useinbandfec=1;usedtx=1'),
+		undefined,
+		600,
+		10,
+	);
+	const sent = frames.filter((frame) => frame.payload.length);
+	const byte = frames.findIndex((frame) => frame.payload.length === 1);
+	const empty = frames.filter((frame) => !frame.payload.length);
+	const after =
+		frames.slice(byte + 1).findIndex((f) => f.payload.length) + byte + 1;
+	ok(
+		'a silence an encoder leaves out goes out as a byte, then empty frames, as Chrome sends it',
+		byte === 40 &&
+			frames[byte].payload[0] === 0x78 &&
+			Number(frames[byte].time - frames[byte - 1].time) === 960 &&
+			frames.filter((frame) => frame.payload.length === 1).length === 1 &&
+			empty.length >= 15 &&
+			empty.every(
+				(frame, i) => i === 0 || Number(frame.time - empty[i - 1].time) === 960,
+			) &&
+			Number(empty[0].time - frames[byte].time) === 960 &&
+			frames[after].flags & records.FLAG_TALKSPURT &&
+			sent.length === 51,
+		`byte at ${byte}, ${empty.length} empty, ${sent.length} sent, next at ${after}`,
 	);
 }
 {

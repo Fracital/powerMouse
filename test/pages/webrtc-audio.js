@@ -103,7 +103,8 @@
 	 */
 	const SCRAMBLE = `
 		// per operation: frames, the ones with a stream id and of the
-		// audio class, their stream ids, payload types and metadata keys
+		// audio class, their stream ids, payload types and metadata keys,
+		// the empty ones and the ones of a byte or so
 		const seen = {};
 		const MARK = [0xfa, 0xfa];
 		const flip = (bytes, from, to) => {
@@ -114,7 +115,7 @@
 			const send = options.operation === 'send';
 			const mine = (seen[options.operation] = {
 				frames: 0, dropped: 0, audio: 0, ssrcs: [], types: [], keys: [],
-				times: [],
+				times: [], empty: 0, tiny: 0,
 			});
 			readable.pipeThrough(new TransformStream({
 				transform(frame, controller) {
@@ -131,6 +132,9 @@
 					if (!send && self.keepTimes && mine.times.length < 1000)
 						mine.times.push([meta.rtpTimestamp, Math.round(meta.receiveTime * 10) / 10, frame.data.byteLength]);
 					const bytes = new Uint8Array(frame.data);
+					// silence left out, and the packets that say so (a byte, and the mark)
+					if (!bytes.length) mine.empty++;
+					else if (bytes.length <= 3) mine.tiny++;
 					// an empty frame (silence left out) passes as it is, as DAVE's
 					// does: Chrome sends nothing for it
 					if (!bytes.length) {
