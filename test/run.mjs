@@ -94,6 +94,9 @@ const SUITE_ENV = {
 	'cross-origin-isolation': { STOMP_ISOLATION: 'on' },
 	// a page that isolates itself is isolated only in an isolated host
 	'performance-clocks': { STOMP_ISOLATION: 'on' },
+	// performance.measureUserAgentSpecificMemory() is a cross-origin
+	// isolated page's only
+	'measured-memory': { STOMP_ISOLATION: 'on' },
 	// for its page that sends COOP and COEP
 	'sop-escapes': { STOMP_ISOLATION: 'on' },
 	// production's host page (its second server runs one without)

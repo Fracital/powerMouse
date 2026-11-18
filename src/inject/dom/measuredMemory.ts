@@ -7,6 +7,7 @@
 // whose parts leave the breakdown and their bytes the total.
 import { scopePrefix, unrouteURL } from '../modules/Unroute';
 import type DocumentClient from './Client';
+import { nativeQuery } from './longEntryNatives';
 import { nativeElement } from './modules/DOMHooks';
 import { markerPrefix } from './modules/MutationObserver';
 
@@ -14,22 +15,50 @@ import { markerPrefix } from './modules/MutationObserver';
 export function measuredMemory(
 	client: DocumentClient,
 ): (measured: unknown) => unknown {
-	const global = client.global as typeof globalThis & Record<string, any>;
 	const origin = new URL(scopePrefix(client)).origin;
+	/**
+	 * The documents a frame element the browser names can be in: this
+	 * document's (its frames' elements) and its parents' up to the proxied
+	 * top, since a frame's own window is named by its element, which is in
+	 * its parent's document. The host's page ends it.
+	 */
+	const documents = (): Document[] => {
+		const found: Document[] = [];
+		let current: DocumentClient | null = client;
+		for (let depth = 0; current && depth < 64; depth++) {
+			found.push(current.global.document);
+			try {
+				const parent: unknown = current.parent;
+				if (parent === current.global) break;
+				const next: unknown = (parent as Record<string, unknown>)[
+					client.names.client
+				];
+				current =
+					typeof next === 'object' && next !== null
+						? (next as DocumentClient)
+						: null;
+			} catch (error) {
+				// a parent of another origin (the host's page in isolation mode)
+				break;
+			}
+		}
+		return found;
+	};
 	/** the `src` the page gave the frame whose element has `routed` */
 	const written = (id: unknown, routed: string): string => {
 		try {
-			for (const element of global.document.querySelectorAll(
-				'iframe,frame,object,embed',
-			) as Iterable<Element>) {
-				const get = (name: string) =>
-					Reflect.apply(nativeElement.getAttribute, element, [name]) as
-						string | null;
-				const name = element.localName === 'object' ? 'data' : 'src';
-				if (get(name) !== routed || (get('id') ?? '') !== id) continue;
-				const marked = get(`${markerPrefix()}${name}`);
-				if (marked !== null) return marked;
-			}
+			for (const document of documents())
+				for (const element of Reflect.apply(nativeQuery!, document, [
+					'iframe,frame,object,embed',
+				]) as Iterable<Element>) {
+					const get = (name: string) =>
+						Reflect.apply(nativeElement.getAttribute, element, [name]) as
+							string | null;
+					const name = element.localName === 'object' ? 'data' : 'src';
+					if (get(name) !== routed || (get('id') ?? '') !== id) continue;
+					const marked = get(`${markerPrefix()}${name}`);
+					if (marked !== null) return marked;
+				}
 		} catch (error) {
 			// no document to look in: the route's URL
 		}
