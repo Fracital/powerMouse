@@ -1,12 +1,15 @@
 // When a received audio frame is played (docs/webrtc-over-wisp.md,
-// section 16). Frames arrive when the network and the wisp stream deliver
-// them, in bursts and late; a track plays them end to end. The buffer here
-// holds enough of them to ride out what the arrivals vary by and no more:
-// its depth is where Chrome's NetEq keeps its own for the same arrivals
-// (its delay manager and its buffer's limits, below), a frame that has not come when it is due is a
-// gap (the caller plays silence), an underrun waits for the buffer to fill
-// again, and a buffer that stays deeper than it needs gives up its
-// quietest frame.
+// section 16), as Chrome's NetEq decides it. Frames arrive when the
+// network and the wisp stream deliver them, in bursts and late; the
+// caller plays them through a sync buffer, 10 ms at a time, and asks here
+// what to do each time that buffer runs short: play the next frame
+// (`normal`), make up sound for one that is not there (`expand`), go on
+// from made-up sound to the frame after a hole (`merge`), or play the
+// next frame a pitch period shorter or longer to move the delay
+// (`accelerate`, `fast`, `preemptive`). The delay aimed at is NetEq's
+// (its delay manager, below), and the buffer is kept at it as NetEq's
+// decision logic keeps it, on the delay of the sound playing behind the
+// packet of the last 2 s that came soonest.
 //
 // Nothing here knows about audio or clocks: a frame has a time and a
 // length in the caller's units (RTP timestamps), `now` is the caller's
@@ -16,8 +19,6 @@ interface Held<T> {
 	time: number;
 	length: number;
 	value: T;
-	/** how loud the frame is, for the choice of one to drop (lower is quieter) */
-	energy: number;
 	/** when it came, in the caller's milliseconds */
 	came: number;
 }
@@ -25,13 +26,17 @@ interface Held<T> {
 export interface PlayoutOptions<T> {
 	/** units of time in a millisecond (48 at 48 kHz) */
 	rate: number;
-	/** the delay in milliseconds a new stream starts at */
+	/** the delay in milliseconds a new stream aims at */
 	initialMs?: number;
 	/** the longest delay in milliseconds */
 	maxMs?: number;
-	/** a frame the buffer gives up (late, too many, dropped to shorten the delay) */
+	/** a frame the buffer gives up (late, or too many) */
 	discard?: (value: T) => void;
 }
+
+/** what the caller does when its sync buffer runs short (NetEq's operations) */
+export type Operation =
+	'normal' | 'merge' | 'expand' | 'accelerate' | 'fast' | 'preemptive';
 
 /**
  * NetEq's delay manager (WebRTC's modules/audio_coding/neteq, as Chrome
@@ -84,31 +89,35 @@ class Forgetting {
 		);
 	}
 }
-/** how far below a long target NetEq's buffer may be before it is stretched */
-const LOW_OFFSET_MS = 85;
-/** how far above its lower limit NetEq's buffer may be before it is shortened */
+/**
+ * NetEq's decision logic (Chrome 157's, whose stable delay mode is its
+ * default): the sound playing is kept between the target and the target
+ * and the longest delay of the last 2 s and `LIMIT_MS` behind the packet
+ * of those 2 s that came soonest for its time, a pitch period at a time,
+ * at most once each `TIMESCALE_MS`, and as fast as a frame allows past
+ * `FAST` times the upper limit
+ */
 const LIMIT_MS = 20;
-/** how much sooner than its time a first frame may play (a timer that fires a little early) */
-const EARLY_MS = 0.5;
 /** how long after a frame was made shorter or longer the next may be (NetEq's six 10 ms ticks) */
 const TIMESCALE_MS = 60;
-/** how many times its upper limit the buffer may be before it is shortened every frame, by as much as a frame allows (NetEq's fast accelerate) */
 const FAST = 4;
+/** a frame after a hole is played early where what is held waits this much longer than the target (half of NetEq's target window) */
+const ABOVE_MS = 50;
+/** made-up sound that has faded goes on until what is held waits this share of the target (NetEq's postponed decoding) */
+const POSTPONE = 0.5;
 /** a hole longer than this many milliseconds is a pause in the stream, not a loss */
 const PAUSE_MS = 200;
-/** empty pulls in a row before the stream is taken to have paused */
-const EMPTY_PULLS = 3;
 /** a frame this far from what is held belongs to another clock */
 const JUMP_MS = 10000;
 
 export interface PlayoutStats {
 	/** frames handed out */
 	played: number;
-	/** pulls that had no frame: silence */
+	/** decisions that had no frame to play: sound made up */
 	gaps: number;
 	/** frames that came after their time */
 	late: number;
-	/** frames given up to shorten the delay, or because too many were held */
+	/** frames given up because too many were held */
 	dropped: number;
 	/** milliseconds of sound taken out of frames, and put into them, to move the delay */
 	removedMs: number;
@@ -125,11 +134,13 @@ export class Playout<T> {
 	#maxMs: number;
 	#discard: (value: T) => void;
 	#held: Held<T>[] = [];
-	/** the time of the next frame to play; null while the buffer fills */
+	/** the time after the last frame taken (NetEq's sync buffer end); null before a stream's first */
 	#next: number | null = null;
 	#targetMs: number;
 	/** the arrivals of the last `HISTORY_MS`: when, and that less the media time, in ms */
 	#arrivals: { time: number; late: number }[] = [];
+	/** every packet of the last `HISTORY_MS` of media time, and the tick it came in (NetEq's packet arrival history) */
+	#history: { time: number; at: number; reordered: boolean }[] = [];
 	/** the media time of the latest arrival: one before it came out of order */
 	#latest: number | null = null;
 	#latestTick = 0;
@@ -141,29 +152,9 @@ export class Playout<T> {
 	#reordered = new Forgetting(REORDER_FORGET);
 	/** the delay of the latest arrival */
 	#delay = 0;
-	#empty = 0;
-	/** sound made up while nothing was held (units), which a hole that turns up then was */
-	#owed = 0;
-	/** how long frames wait, filtered as NetEq filters its buffer's level (ms; null before the first) */
-	#level: number | null = null;
-	/** the caller plays comfort noise */
-	#quiet = false;
-	/** the last pull was a gap (NetEq does not stretch right after an expand) */
-	#gap = false;
 	/** when a frame was last made shorter or longer */
 	#scaled = -Infinity;
-	/**
-	 * What the caller does to the frame the last pull gave, as NetEq's
-	 * decision logic decides it: take a pitch period out (`accelerate`),
-	 * as many as fit in 10 ms (`fast`), or put one in (`expand`), and
-	 * tell `stretched` how much it did.
-	 */
-	decision: 'fast' | 'accelerate' | 'expand' | null = null;
-	/** when the buffer started to fill, for a stream that sends too little to fill it */
-	#filling: number | null = null;
-	/** times of frames given up, which are not gaps when their turn comes */
-	#skipped = new Map<number, number>();
-	/** the length of the last frame played, which a gap is taken to have */
+	/** the length of the last frame taken, the shortest target */
 	frameMs = 20;
 	stats: PlayoutStats;
 
@@ -185,9 +176,9 @@ export class Playout<T> {
 		};
 	}
 
-	/** playing: frames and their gaps are due (not while the buffer fills, or the stream is silent) */
-	get running(): boolean {
-		return this.#next !== null;
+	/** frames held */
+	get held(): number {
+		return this.#held.length;
 	}
 
 	#heldMs(): number {
@@ -200,14 +191,7 @@ export class Playout<T> {
 	 * A frame arrived. Its arrival counts toward the delay unless the
 	 * caller told it with `arrived` (`counted`).
 	 */
-	push(
-		time: number,
-		length: number,
-		value: T,
-		now: number,
-		energy = 0,
-		counted = false,
-	) {
+	push(time: number, length: number, value: T, now: number, counted = false) {
 		// a frame far from what is held is another stream's clock: start over
 		const reference = this.#next ?? this.#held.at(-1)?.time;
 		if (
@@ -217,10 +201,8 @@ export class Playout<T> {
 			for (const held of this.#held.splice(0)) this.#discard(held.value);
 			this.#next = null;
 			this.#arrivals = [];
+			this.#history = [];
 			this.#latest = null;
-			this.#level = null;
-			this.#filling = null;
-			this.#skipped.clear();
 		}
 		if (!counted) this.arrived(time, now);
 		if (this.#next !== null && time < this.#next) {
@@ -235,13 +217,7 @@ export class Playout<T> {
 			this.#discard(value);
 			return;
 		}
-		this.#held.splice(at, 0, {
-			time,
-			length,
-			value,
-			energy,
-			came: now,
-		});
+		this.#held.splice(at, 0, { time, length, value, came: now });
 		if (this.#heldMs() > this.#maxMs) {
 			// more than the buffer may hold: the oldest goes
 			const [oldest] = this.#held.splice(0, 1);
@@ -250,7 +226,6 @@ export class Playout<T> {
 				this.#next = Math.max(this.#next, oldest.time + oldest.length);
 			this.#discard(oldest.value);
 		}
-		if (this.#next === null && this.#filling === null) this.#filling = now;
 	}
 
 	/** a packet arrived for media `time`: its delay, as NetEq counts it */
@@ -258,6 +233,26 @@ export class Playout<T> {
 		// (NetEq's clock is its 10 ms ticks: how long after the last a
 		// packet came is a count of them)
 		const tick = Math.floor(now / TICK_MS) * TICK_MS;
+		// (NetEq's packet arrival history: one older than it keeps, or one
+		// it has, is not counted at all; one older than its newest is kept
+		// but does not set how late the others are)
+		const history = this.#history;
+		const newest = history.at(-1)?.time ?? -Infinity;
+		if (
+			time < newest - HISTORY_MS * this.#rate ||
+			history.some((arrival) => arrival.time === time)
+		)
+			return;
+		const reordered = time < newest;
+		history.splice(
+			reordered
+				? history.findIndex((arrival) => arrival.time > time)
+				: history.length,
+			0,
+			{ time, at: tick, reordered },
+		);
+		while (history[0].time < history.at(-1)!.time - HISTORY_MS * this.#rate)
+			history.shift();
 		if (this.#latest !== null && time < this.#latest) {
 			// one that came out of order: as late as it came after the latest
 			this.#reordered.add(
@@ -334,89 +329,88 @@ export class Playout<T> {
 		this.stats.targetMs = this.#targetMs;
 	}
 
+	/** how far behind the packet of the history that came soonest for its time the sound of `time` is at `now` (NetEq's GetDelayMs), and the most a packet of it came behind that one */
+	#behind(time: number, now: number): { delay: number; most: number } {
+		let soonest = Infinity;
+		let latest = -Infinity;
+		for (const arrival of this.#history) {
+			if (arrival.reordered) continue;
+			const late = arrival.at - arrival.time / this.#rate;
+			soonest = Math.min(soonest, late);
+			latest = Math.max(latest, late);
+		}
+		if (soonest === Infinity) return { delay: 0, most: 0 };
+		return {
+			delay: Math.max(
+				0,
+				Math.floor(now / TICK_MS) * TICK_MS - time / this.#rate - soonest,
+			),
+			most: latest - soonest,
+		};
+	}
+
 	/**
-	 * The frame to play now: a frame, or null for silence of `frameMs`
-	 * (nothing has come, the buffer is filling, or the frame due was
-	 * lost). The caller asks again when what it got has played; `quiet`
-	 * says it plays comfort noise meanwhile, which NetEq keeps out of its
-	 * buffer's level.
+	 * What to do now that the caller's sync buffer holds less than it
+	 * plays next, `future` units of sound not played yet, the last
+	 * operation `last` (`noise` for comfort noise), `generated` units made
+	 * up since that began, `muted` when what it made up has faded to under
+	 * half: NetEq's decision.
 	 */
-	pull(now: number, quiet = false): T | null {
-		this.#quiet = quiet;
-		this.decision = null;
-		const heldMs = this.#heldMs();
-		this.stats.heldMs = heldMs;
-		if (this.#next === null) {
-			// filling: until the delay is there, or for as long as it would
-			// take to come if the sender sent steadily
-			const waited = this.#filling === null ? 0 : now - this.#filling;
-			if (
-				!this.#held.length ||
-				(heldMs <= this.#depthMs() && waited < this.#waitMs() - EARLY_MS)
-			) {
-				this.stats.gaps++;
-				return null;
-			}
-			this.#next = this.#held[0].time;
-			this.#filling = null;
-			// (the level goes on: NetEq's filter is not reset when its
-			// buffer runs dry and fills again)
-			this.#gap = false;
-			this.#empty = 0;
-			this.#owed = 0;
-		}
-		for (;;) {
-			const length = this.#skipped.get(this.#next);
-			if (length === undefined) break;
-			this.#skipped.delete(this.#next);
-			this.#next += length;
-		}
+	decide(
+		now: number,
+		future: number,
+		last: Operation | 'noise' | null,
+		generated: number,
+		muted = false,
+	): Operation {
 		const head = this.#held[0];
-		if (!head) {
-			// Nothing held: the frame due has not come. The time stands
-			// still (the caller makes up sound meanwhile) and the frame plays
-			// when it comes, later than it would have, as NetEq plays a
-			// packet that comes after its time rather than drop it
-			// (measured: Chrome's packetsDiscarded stays 0 with packets
-			// held up for 60 to 300 ms); a stream that stays silent fills
-			// the buffer again before it plays.
-			// (if the frame due was lost, the sound made up meanwhile was its
-			// time: NetEq goes on from the packet after it)
-			this.stats.gaps++;
-			this.#gap = true;
-			this.#measure(0);
-			this.#owed += Math.round(this.frameMs * this.#rate);
-			if (++this.#empty >= EMPTY_PULLS) this.#next = null;
-			return null;
-		}
-		this.#empty = 0;
-		const owed = this.#owed;
-		this.#owed = 0;
-		if (head.time > this.#next) {
-			if (head.time - this.#next > PAUSE_MS * this.#rate) {
+		this.stats.heldMs = this.#heldMs();
+		const next = this.#next;
+		// a stream's first frame plays at once, as NetEq plays its first
+		// packet at its next 10 ms
+		if (head && next === null) return 'normal';
+		const expanding = last === 'expand' || last === 'noise';
+		const target = this.#targetMs;
+		if (head && next !== null) {
+			if (head.time - next > PAUSE_MS * this.#rate) {
 				// the sender paused (silence suppression): go on from here
 				this.#next = head.time;
-				this.#skipped.clear();
-			} else {
-				// lost: what was made up while nothing was held stood for it
-				this.#next += Math.min(head.time - this.#next, owed);
+				return last === 'expand' ? 'merge' : 'normal';
+			}
+			const tail = this.#held.at(-1)!;
+			const waiting = (tail.time - head.time) / this.#rate + now - tail.came;
+			if (
+				!(expanding && (last === 'noise' || muted)) ||
+				waiting >= target * POSTPONE
+			) {
+				if (head.time <= next) {
+					// the frame due is here
+					if (last === 'expand') return 'normal';
+					const { delay, most } = this.#behind(next - future, now);
+					const high = target + most + LIMIT_MS;
+					if (delay >= FAST * high) return 'fast';
+					if (now - this.#scaled >= TIMESCALE_MS) {
+						if (delay >= high) return 'accelerate';
+						if (delay < target) return 'preemptive';
+					}
+					return 'normal';
+				}
+				// a frame after a hole: once as much sound as the hole was
+				// made up, or what is held waits far longer than the target
+				if (head.time - next <= generated || waiting > target + ABOVE_MS) {
+					if (last === 'expand') return 'merge';
+					if (last === 'noise') return 'normal';
+				}
 			}
 		}
-		if (head.time > this.#next) {
-			// lost, or not here yet: its time passes
-			this.#next += Math.min(
-				head.time - this.#next,
-				Math.round(this.frameMs * this.#rate),
-			);
-			this.stats.gaps++;
-			this.#gap = true;
-			this.#measure(this.#levelOf(now));
-			return null;
-		}
-		this.#measure(this.#levelOf(now));
-		if (!this.#gap) this.decision = this.#decide(now);
-		this.#gap = false;
+		this.stats.gaps++;
+		return 'expand';
+	}
+
+	/** the frame the last decision plays: the next held */
+	take(): T | null {
 		const [playing] = this.#held.splice(0, 1);
+		if (!playing) return null;
 		this.#next = playing.time + playing.length;
 		this.frameMs = playing.length / this.#rate;
 		this.stats.played++;
@@ -424,128 +418,31 @@ export class Playout<T> {
 	}
 
 	/**
-	 * NetEq lets its buffer be anywhere between three quarters of its
-	 * target (85 ms less, for a long one) and the higher of the target and
-	 * that and 20 ms, 15 to 35 ms for a target of 20, and shortens or
-	 * stretches it a pitch period at a time while it is outside.
+	 * How long until the frame of `time` is taken, in ms, where the next
+	 * decision is at `pulling`: the sound due before it after that
 	 */
-	#band() {
-		const target = this.#targetMs;
-		const low = Math.max((target * 3) / 4, target - LOW_OFFSET_MS);
-		return { low, high: Math.max(target, low + LIMIT_MS) };
+	dueIn(time: number, now: number, pulling: number, first = time): number {
+		// (before the stream's first frame plays: after the first held, or
+		// the caller's `first`)
+		const from = this.#next ?? this.#held[0]?.time ?? first;
+		return pulling - now + (time - from) / this.#rate;
 	}
 
-	/**
-	 * How long a frame waits where NetEq's would: about the middle of that
-	 * (natively 29 to 31 ms of delay for a target of 20, counted to when
-	 * each 10 ms of it is played, 5 ms more than to when it starts)
-	 */
-	#waitMs() {
-		const { low, high } = this.#band();
-		return Math.min(this.#maxMs - this.frameMs, (low + high) / 2);
-	}
-
-	/** what is held where frames wait that long: the frame due, and the ones that came meanwhile */
-	#depthMs() {
-		return Math.min(
-			this.#maxMs - this.frameMs,
-			(Math.floor(this.#waitMs() / this.frameMs) + 1) * this.frameMs,
-		);
-	}
-
-	/**
-	 * How long until the frame of `time` is pulled, in ms, where the next
-	 * pull is at `pulling`: the sound due before it after that (while the
-	 * buffer fills, until it plays)
-	 */
-	dueIn(time: number, now: number, pulling: number): number {
-		if (this.#next === null)
-			return this.#filling === null
-				? this.#waitMs()
-				: this.#filling + this.#waitMs() - now;
-		return pulling - now + (time - this.#next) / this.#rate;
-	}
-
-	/**
-	 * When the buffer that is filling plays its first frame (null when it
-	 * is not filling, or holds nothing): as long after that frame came as
-	 * NetEq's would wait. The caller plays it then, not at its next 20 ms.
-	 */
-	get startsAt(): number | null {
-		if (this.#next !== null || !this.#held.length || this.#filling === null)
-			return null;
-		return this.#filling + this.#waitMs();
-	}
-
-	/**
-	 * What NetEq's level is for this buffer: how long the frame due has
-	 * waited since it came (natively, with no frame made shorter or
-	 * longer, its packets wait 29 to 38 ms for a target of 20, inside its
-	 * 15 to 35 ms, and 44 for a target of 60, inside 45 to 65), or, after
-	 * a burst, the sound held behind it
-	 */
-	#levelOf(now: number): number {
-		const head = this.#held[0];
-		if (!head) return 0;
-		return Math.max(now - head.came, this.#heldMs() - head.length / this.#rate);
-	}
-
-	/**
-	 * NetEq's buffer level filter: each 10 ms the level is a weighted
-	 * mean of what it was and what the buffer holds now, weighted more
-	 * to what it was the longer the target (251 to 254 of 256); here once
-	 * a pull
-	 */
-	#measure(waited: number) {
-		if (this.#quiet) return;
-		if (this.#level === null) {
-			this.#level = waited;
-			return;
-		}
-		const target = this.#targetMs;
-		const kept =
-			(target <= 20 ? 251 : target <= 60 ? 252 : target <= 140 ? 253 : 254) /
-			256;
-		const factor = kept ** (this.frameMs / 10);
-		this.#level = this.#level * factor + waited * (1 - factor);
-	}
-
-	/**
-	 * NetEq's decision for a frame that came in time: shorter where the
-	 * level is above the buffer's upper limit, longer where it is below
-	 * its lower, no sooner than `TIMESCALE_MS` after the last; as short as
-	 * it can be made where the level is `FAST` times the upper limit, at
-	 * every frame.
-	 */
-	#decide(now: number): 'fast' | 'accelerate' | 'expand' | null {
-		const level = this.#level ?? 0;
-		const { low, high } = this.#band();
-		if (level >= FAST * high) return 'fast';
-		if (now - this.#scaled < TIMESCALE_MS) return null;
-		if (level >= high) return 'accelerate';
-		if (level < low) return 'expand';
-		return null;
-	}
-
-	/**
-	 * The caller made the frame the last pull gave `ms` longer (shorter
-	 * where negative): the frames after it wait that much longer, which
-	 * the level takes in at once, as NetEq's filter takes in what it
-	 * stretched
-	 */
+	/** the caller made the frame taken `ms` longer (shorter where negative) */
 	stretched(ms: number, now: number) {
-		if (this.#level !== null) this.#level += ms;
 		if (ms < 0) this.stats.removedMs -= ms;
 		else this.stats.insertedMs += ms;
 		this.#scaled = now;
 	}
 
+	/** the stream stopped: its next frame starts it again, at once */
+	reset() {
+		this.#next = null;
+	}
+
 	/** give up everything held, for a stream that ends */
 	clear() {
 		this.#next = null;
-		this.#filling = null;
-		this.#level = null;
-		this.#skipped.clear();
 		for (const held of this.#held.splice(0)) this.#discard(held.value);
 	}
 }

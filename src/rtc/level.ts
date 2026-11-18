@@ -50,11 +50,6 @@ export class AudioLevel {
 			this.#block(planes, at, end, (end - at) / rate);
 		}
 	}
-
-	/** silence of `frames` at `rate` */
-	quiet(frames: number, rate: number) {
-		this.add([new Float32Array(frames)], frames, rate);
-	}
 }
 
 /** an AudioData's channels, each as its own samples */
@@ -125,28 +120,24 @@ export class PlayedCount {
 	#concealing = false;
 
 	/**
-	 * `frames` at 48 kHz were written: sound from packets that came
-	 * `waitedMs` before (`samples` its channels), or concealment (silence
-	 * when `samples` is null), the decoder running at `rate`, the buffer
-	 * aiming at `targetMs`
+	 * `frames` at 48 kHz went into the sync buffer: sound from packets
+	 * that came `waitedMs` before, or concealment (`silent` once it has
+	 * faded), the decoder running at `rate`, the buffer aiming at
+	 * `targetMs` (NetEq counts its sound as it makes it)
 	 */
-	wrote(
+	made(
 		frames: number,
-		samples: Float32Array[] | null,
 		concealed: boolean,
+		silent: boolean,
 		rate: number,
 		waitedMs: number,
 		targetMs: number,
 	) {
 		const counts = this.#counts;
 		const decoded = Math.round((frames * rate) / 48000);
-		counts.samples += decoded;
-		counts.playoutSamples += frames;
-		if (samples) this.#level.add(samples, frames, 48000);
-		else this.#level.quiet(frames, 48000);
 		if (concealed) {
 			counts.concealed += decoded;
-			if (!samples) counts.silent += decoded;
+			if (silent) counts.silent += decoded;
 			if (!this.#concealing) counts.events++;
 			this.#concealing = true;
 			counts.playoutDelay += (frames * targetMs) / 1000;
@@ -157,6 +148,18 @@ export class PlayedCount {
 		counts.delay += (decoded * waitedMs) / 1000;
 		counts.target += (decoded * targetMs) / 1000;
 		counts.playoutDelay += (frames * waitedMs) / 1000;
+	}
+
+	/** made-up sound a merge played more (or, where negative, less) of than was made */
+	correct(frames: number, rate: number) {
+		this.#counts.concealed += Math.round((frames * rate) / 48000);
+	}
+
+	/** `frames` at 48 kHz were played (`samples` its channels) */
+	played(samples: Float32Array[], frames: number, rate: number) {
+		this.#counts.samples += Math.round((frames * rate) / 48000);
+		this.#counts.playoutSamples += frames;
+		this.#level.add(samples, frames, 48000);
 	}
 
 	get stats(): PlayedStats {
