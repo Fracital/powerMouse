@@ -202,15 +202,16 @@ ok(
 	JSON.stringify(r.referrer),
 );
 ok('window.name is empty', r.name === '', JSON.stringify(r.name));
-// the browser's window, as in any frame natively (not the frame's inner
-// size at 0,0, a window with no toolbar)
-const hostOuter = await page.evaluate(() =>
-	[outerWidth, outerHeight, screenX, screenY].join(' '),
+// the viewport and the browser's UI around the host's (not the frame's
+// inner size at 0,0, nor the browser window's, which counts the host's bars
+// as browser UI; window-geometry has the rest)
+const hostChrome = await page.evaluate(() =>
+	[outerWidth - innerWidth, outerHeight - innerHeight].join(' '),
 );
 ok(
-	"outer size and position are the browser window's",
-	r.outerSize === hostOuter,
-	JSON.stringify([r.outerSize, hostOuter]),
+	"outer size is the viewport and the browser's UI around the host's",
+	r.outerSize === hostChrome,
+	JSON.stringify([r.outerSize, hostChrome]),
 );
 ok(
 	'parent.document / top.document resolve to the page itself',

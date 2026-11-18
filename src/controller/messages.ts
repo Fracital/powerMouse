@@ -4,7 +4,7 @@ import type {
 	AdblockOptions,
 	SiteShields,
 } from '../blocker/types';
-import type { Assets, Config, ConfigCodec } from '../config';
+import type { Assets, Config, ConfigCodec, HostGeometry } from '../config';
 import type { HelperNames } from '../helperNames';
 import type { HookErrorInfo, InitHooks } from '../hooks';
 import type {
@@ -160,6 +160,8 @@ export type FrameBound = {
 	setTransport: [TransportDescriptor];
 	/** frames are addressed by their index in the host window's `frames` list */
 	frameInfo: [FrameAddress, FrameInfo];
+	/** the host's browser window as its frames' documents see it (HOST_GEOMETRY, ./geometry.ts) */
+	geometry: [HostGeometry, null];
 	frameActivated: [
 		{ index: number; token: string; nested: boolean; origin?: string },
 		null,

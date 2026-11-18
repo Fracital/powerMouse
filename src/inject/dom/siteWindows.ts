@@ -23,12 +23,15 @@ import { Pool } from './pool';
 import { pageSandbox, sandboxTokens } from './sandbox';
 
 const NativeWeakRef = WeakRef;
-const nativeParent = Reflect.getOwnPropertyDescriptor(
+export const nativeParent = Reflect.getOwnPropertyDescriptor(
 	globalThis,
 	'parent',
 )?.get;
-const nativeTopOf = Reflect.getOwnPropertyDescriptor(globalThis, 'top')?.get;
-const nativeLength = Reflect.getOwnPropertyDescriptor(
+export const nativeTopOf = Reflect.getOwnPropertyDescriptor(
+	globalThis,
+	'top',
+)?.get;
+export const nativeLength = Reflect.getOwnPropertyDescriptor(
 	globalThis,
 	'length',
 )?.get;

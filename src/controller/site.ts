@@ -6,6 +6,7 @@
 import { SITE_FOCUS } from '../config';
 import { helperNames } from '../helperNames';
 import { RpcHelper } from '../transport/rpc';
+import { shareGeometry } from './geometry';
 import {
 	answerRun,
 	bindHistory,
@@ -153,6 +154,9 @@ function start(init: SiteAgentInit, port: MessagePort, host: string) {
 					value: focused,
 					configurable: true,
 				});
+			},
+			geometry: async (geometry) => {
+				shareGeometry(window, geometry);
 			},
 			goneClients: async (clients) => {
 				await ready;

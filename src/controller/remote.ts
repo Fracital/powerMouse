@@ -13,7 +13,7 @@ import { assetName } from '../config';
 // this class embeds that frame and mirrors the StompController / Frame API
 // over postMessage. Proxied content is shown in sandboxed, cross-origin
 // frames the host page can neither read nor be read by.
-import type { Assets, Config, ConfigCodec } from '../config';
+import type { Assets, Config, ConfigCodec, HostGeometry } from '../config';
 import { validateNames, type HelperNames } from '../helperNames';
 import { validateHooks, type HookErrorInfo, type InitHooks } from '../hooks';
 import { askHost } from '../passkeys/host';
@@ -30,6 +30,7 @@ import type {
 import { RpcHelper } from '../transport/rpc';
 import { BUILD } from '../version';
 import { ClientFrames } from './clientFrames';
+import { GeometryWatch } from './geometry';
 import {
 	framePath,
 	type ReportedEntry,
@@ -223,6 +224,15 @@ export class RemoteController extends EventTarget {
 	/** the inner controller's `stale` (see StompController); null while the builds agree */
 	stale: StaleInfo | null = null;
 	frames: RemoteFrame[] = [];
+	/**
+	 * The host's browser window as its frames' documents see it
+	 * (./geometry.ts), kept by the controller frame (and its slots' agents)
+	 */
+	#geometry = new GeometryWatch(
+		() => this.frames.map((frame) => frame.element),
+		(geometry: HostGeometry) =>
+			this.#ready.then(() => this.#rpc.call('geometry', geometry)),
+	);
 	isReady = false;
 	/** the site pool's slots the controller frame shows sites from (none without one) */
 	#slots: string[] = [];
@@ -690,7 +700,12 @@ export class RemoteController extends EventTarget {
 	createFrame(element: HTMLIFrameElement = document.createElement('iframe')) {
 		const frame = new RemoteFrame(this, element, this.#sandbox);
 		this.frames.push(frame);
+		this.#geometry.observe(element);
 		return frame;
+	}
+	/** @internal measure the frames' geometry now (a frame about to navigate); settles once the controller frame kept it */
+	measureGeometry(): Promise<void> {
+		return this.#geometry.update();
 	}
 	/**
 	 * index of a frame in this window's `frames` list. That list is in frame
@@ -918,6 +933,8 @@ export class RemoteFrame extends EventTarget {
 			await this.#runs.typed(origin ?? this.controller.proxyOrigin);
 		else
 			await this.controller.frameCommand(this.element, 'typed').catch(() => {});
+		// where the frame is, for its first document's first script
+		await this.controller.measureGeometry();
 		this.element.src = routed;
 		this.#keepFocusAcrossCommit();
 		this.url = url;
