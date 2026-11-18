@@ -14,6 +14,10 @@
 // own. This file is not built itself: build.js reads its imports, and
 // `parts` names each of them once.
 //
+// (and what reads a window as an array method or as a list of arguments
+// does, ../windowArrays.ts, at a document's first such call: a worker's
+// scope has none)
+//
 // (and the codec module's bytes, ../../wasm/codecBytes.ts, which a
 // proxied top compiles at its first seal from the parts its shell loaded:
 // the frames under it seal in its instance)
@@ -134,6 +138,7 @@ import { bucketMethods } from '../storageBucketMethods';
 import { storageUsage } from '../storageUsage';
 import { carry as carryWebTransport } from '../webTransport';
 import { standIn as webTransportStandIn } from '../webTransportStandIn';
+import { windowArrays } from '../windowArrays';
 import { workerStart } from '../workerStart';
 import { checkedHeader, checkedMethod, notOpened } from '../xhrChecks';
 import { ancestorOriginsList } from './ancestorOriginsList';
@@ -221,6 +226,10 @@ export const parts = {
 	// the wording of the access API's errors, at a document's first
 	// (../accessFailures.ts; ../errorMessages.ts)
 	accessFailures,
+	// what reads a window as an array method or a list of arguments does,
+	// at a document's first such call (../windowArrays.ts;
+	// ../modules/Reflection.ts)
+	windowArrays,
 	// the un-routing of ReportingObserver's reports, at the first
 	// (../reportsSeen.ts; ../modules/Unroute.ts)
 	reportsSeen,

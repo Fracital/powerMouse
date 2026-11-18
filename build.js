@@ -561,6 +561,7 @@ const DEFERRED_FILES = new Set(
 		'src/wasm/codecBytes.ts',
 		'src/inject/serviceWorkerObjects.ts',
 		'src/inject/storageBucketMethods.ts',
+		'src/inject/windowArrays.ts',
 		'src/inject/webTransport.ts',
 		'src/inject/webTransportStandIn.ts',
 		'src/inject/xhrChecks.ts',

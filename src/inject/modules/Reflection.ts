@@ -1,6 +1,7 @@
 import Client from '../Client';
 import Module from '../Module';
-import { LazyWeakMap } from '../ownCollections';
+import { windowArrayParts } from '../windowArrayParts';
+import type { WindowArrays } from '../windowArrays';
 import { accessHolders } from './Access';
 import ProxyModule from './Proxy';
 
@@ -490,39 +491,17 @@ export default class ReflectionModule extends Module<Client> {
 			(client.isWindowObject
 				? client.isWindowObject(value)
 				: windowLike(value));
-		const isIndex = (key: unknown): key is string => {
-			if (typeof key !== 'string') return false;
-			const index = +key;
-			return index >= 0 && index % 1 === 0 && `${index}` === key;
-		};
-		// a window as the page may read it: a child as `window[i]` hands it
-		// out, any other key the window's own (`length` included). It is
-		// handed to concat only once the window was found spreadable.
-		const views = new LazyWeakMap<object, object>();
-		const viewOf = (window: any): object => {
-			let view = views.get(window);
-			if (!view) {
-				view = new Proxy(Object.create(null) as object, {
-					get: (_, key) =>
-						isIndex(key)
-							? api().get(window[key], +key, window)
-							: key === SPREADABLE || Reflect.get(window, key),
-					has: (_, key) => Reflect.has(window, key),
-				});
-				views.set(window, view);
-			}
-			return view;
-		};
-		// a window given as a list of arguments: read at once, as natively
-		const childrenOf = (window: any): unknown[] => {
-			const length = window.length;
-			const children: unknown[] = [];
-			for (let index = 0; index < length; index++)
-				children[index] = api().get(window[index], index, window);
-			return children;
-		};
+		// what reads the window as the page may (../windowArrays.ts), made at
+		// a document's first such call
+		let arrays: WindowArrays | undefined;
+		const windowArrays = () =>
+			(arrays ??= windowArrayParts.make!()({
+				get: (object, key, container) => api().get(object, key, container),
+				isWindow,
+				proxyModule,
+			}));
 		const listOf = (list: unknown) =>
-			isWindow(list) ? childrenOf(list) : list;
+			isWindow(list) ? windowArrays().childrenOf(list) : list;
 
 		const arrayPrototype = global.Array.prototype as any;
 		for (const name in READERS) {
@@ -538,47 +517,7 @@ export default class ReflectionModule extends Module<Client> {
 			name: string,
 			window: object,
 			args: unknown[],
-		): unknown => {
-			const callback = args[0];
-			if (name === 'sort') {
-				// sort writes the window, which the browser refuses after the
-				// comparisons: those see what the page may of each child
-				const shown = (value: unknown) => api().get(value, 0, window);
-				const compare =
-					callback === undefined
-						? (a: unknown, b: unknown) => {
-								const x = `${shown(a)}`;
-								const y = `${shown(b)}`;
-								return x < y ? -1 : y < x ? 1 : 0;
-							}
-						: typeof callback === 'function'
-							? (a: unknown, b: unknown) =>
-									Reflect.apply(callback, undefined, [shown(a), shown(b)])
-							: callback;
-				return Reflect.apply(native, window, [compare]);
-			}
-			const at = READERS[name];
-			if (at > 0 && typeof callback === 'function')
-				args[0] = function (this: unknown, ...values: unknown[]) {
-					if (values.length > at) values[at] = window;
-					return Reflect.apply(callback, this, values);
-				};
-			return Reflect.apply(native, viewOf(window), args);
-		};
-		// a method bound to a window
-		const routers = new LazyWeakMap<Function, Function>();
-		const routerOf = (native: Function) => {
-			let router = routers.get(native);
-			if (!router) {
-				router = proxyModule.wrapFunction(native, (target, that, args) =>
-					isWindow(that)
-						? route(target, readerOf(target)!, that, args)
-						: Reflect.apply(target, that, args),
-				);
-				routers.set(native, router);
-			}
-			return router;
-		};
+		): unknown => windowArrays().route(native, name, window, args);
 
 		// (`length`: a hook with a rest parameter where the native counts one)
 		const install = (holder: any, hook: Function, length = false) => {
@@ -633,7 +572,7 @@ export default class ReflectionModule extends Module<Client> {
 				return Reflect.apply(
 					bind,
 					name !== undefined && isWindow(thisArg)
-						? routerOf(this as Function)
+						? windowArrays().routerOf(this as Function)
 						: this,
 					before(thisArg, args),
 				);
@@ -719,7 +658,10 @@ export default class ReflectionModule extends Module<Client> {
 						return Reflect.apply(
 							native,
 							this,
-							before(isWindow(items) ? viewOf(items) : items, rest),
+							before(
+								isWindow(items) ? windowArrays().viewOf(items) : items,
+								rest,
+							),
 						);
 					},
 				}[name],
@@ -739,11 +681,14 @@ export default class ReflectionModule extends Module<Client> {
 				concat(this: unknown, ...items: unknown[]) {
 					for (let index = 0; index < items.length; index++) {
 						const item = items[index];
-						if (!isArray(item) && spreadable(item)) items[index] = viewOf(item);
+						if (!isArray(item) && spreadable(item))
+							items[index] = windowArrays().viewOf(item);
 					}
 					return Reflect.apply(
 						concat,
-						!isArray(this) && spreadable(this) ? viewOf(this) : this,
+						!isArray(this) && spreadable(this)
+							? windowArrays().viewOf(this)
+							: this,
 						items,
 					);
 				},
@@ -753,7 +698,7 @@ export default class ReflectionModule extends Module<Client> {
 	}
 }
 
-const SPREADABLE = Symbol.isConcatSpreadable;
+export const SPREADABLE = Symbol.isConcatSpreadable;
 const EMPTY: unknown[] = [];
 /** `first`, then `rest`: a list made with no iterator a page could replace */
 const before = (first: unknown, rest: unknown[]): unknown[] => {
@@ -770,7 +715,7 @@ const gather = (...items: unknown[]) => items;
  * its last argument) or -1. The ones that only write (`push`, `fill`) the
  * browser refuses on a window, and `keys` reads only its length.
  */
-const READERS: Record<string, number> = {
+export const READERS: Record<string, number> = {
 	at: -1,
 	entries: -1,
 	every: 2,
@@ -810,6 +755,6 @@ const weakMapSet = WeakMap.prototype.set;
  * the name of one of those, asked of anything a page calls `call` on (the
  * map's own `get` bound to it: no list made per call)
  */
-const readerOf = Reflect.apply(Function.prototype.bind, weakMapGet, [
+export const readerOf = Reflect.apply(Function.prototype.bind, weakMapGet, [
 	arrayReaders,
 ]) as (fn: unknown) => string | undefined;

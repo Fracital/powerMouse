@@ -486,6 +486,9 @@
 					outcome(() => new WebSocketStream('wss://socket.invalid/#x')),
 				// fetchLater (src/inject/dom/fetchLater.ts): a URL it cannot defer
 				fetchLater: () => outcome(() => fetchLater('data:,x')),
+				// an array method called with a window as its receiver
+				// (src/inject/windowArrays.ts): its first child, or none
+				windowArray: () => outcome(() => Array.prototype.at.call(window, 0)),
 				// the usage walk behind navigator.storage.estimate()
 				// (src/inject/storageUsage.ts)
 				estimate: () => outcome(() => navigator.storage.estimate()),

@@ -16,7 +16,9 @@
 // Worker's construction throws before the browser's
 // (src/inject/workerStart.ts), and so do a WebSocket's and a
 // WebSocketStream's (src/inject/bareClient.ts socketStandIns) and a
-// fetchLater() call (src/inject/dom/fetchLater.ts); an image in a frame
+// fetchLater() call (src/inject/dom/fetchLater.ts), and an array method
+// called with a window as its receiver (src/inject/windowArrays.ts); an
+// image in a frame
 // no service worker controls keeps its route and loads nothing (its copy
 // is a part, src/inject/dom/uncontrolledCopies.ts); an XML document a
 // frame loads lands none of its tree (its load is a part,
@@ -167,6 +169,7 @@ const REFUSING = [
 	'webSocket',
 	'webSocketStream',
 	'fetchLater',
+	'windowArray',
 	'execCommand',
 	'contextualFragment',
 	'open',
@@ -255,6 +258,7 @@ function countNatives() {
 		);
 	if (window.fetchLater)
 		window.fetchLater = counted('fetchLater', window.fetchLater);
+	Array.prototype.at = counted('arrayAt', Array.prototype.at);
 	Document.prototype.execCommand = counted(
 		'execCommand',
 		Document.prototype.execCommand,
@@ -353,6 +357,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			'webSocket',
 			'webSocketStream',
 			'fetchLater',
+			'windowArray',
 			'execCommand',
 			'contextualFragment',
 			'blankSetHTML',
@@ -459,6 +464,12 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			answer.out.fetchLater.threw !== 'no parts' &&
 			answer.reached?.includes('fetchLater'),
 		JSON.stringify({ out: answer.out?.fetchLater, reached: answer.reached }),
+	);
+	ok(
+		"with the parts, an array method called with a window as its receiver is the browser's, reading the window's children",
+		typeof answer.out?.windowArray?.returned === 'string' &&
+			answer.reached?.includes('arrayAt'),
+		JSON.stringify({ out: answer.out?.windowArray, reached: answer.reached }),
 	);
 	ok(
 		"with the parts, execCommand's insertHTML and createContextualFragment reach the browser",
