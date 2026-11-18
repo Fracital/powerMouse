@@ -68,6 +68,7 @@ import DOMHooksModule, {
 	appliedAttribute,
 	CustomElement,
 	nativeElement,
+	nativeRead,
 	pendingAttributes,
 } from './DOMHooks';
 import { hiddenMutation, hookWrite, MARKER } from './MutationObserver';
@@ -1719,7 +1720,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['SCRIPT', 'type'],
 				// and carries the integrity (src/sri.ts), which may come after src
 				['SCRIPT', 'integrity'],
-				[realm.HTMLScriptElement, 'integrity', () => false],
+				[realm.HTMLScriptElement, 'integrity', nativeRead],
 				[realm.HTMLScriptElement, 'src', originalURL('src')],
 			],
 		);
@@ -1838,10 +1839,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				// the route carries the integrity (src/sri.ts), which markup and
 				// pages may give after href
 				['LINK', 'integrity'],
-				[realm.HTMLLinkElement, 'integrity', () => false],
-				[realm.HTMLLinkElement, 'as', () => false],
+				[realm.HTMLLinkElement, 'integrity', nativeRead],
+				[realm.HTMLLinkElement, 'as', nativeRead],
 				[realm.HTMLLinkElement, 'href', linkURL],
-				[realm.HTMLLinkElement, 'rel', () => false],
+				[realm.HTMLLinkElement, 'rel', nativeRead],
 			],
 		);
 
@@ -2111,7 +2112,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// natively
 					ogOrFalse('content'),
 				],
-				[realm.HTMLMetaElement, 'httpEquiv', () => false],
+				[realm.HTMLMetaElement, 'httpEquiv', nativeRead],
 			],
 		);
 
@@ -2268,7 +2269,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			},
 			[
 				['*', 'style'],
-				[realm.HTMLElement, 'style', () => false],
+				[realm.HTMLElement, 'style', nativeRead],
 			],
 		);
 
@@ -3365,10 +3366,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				['IFRAME', 'sandbox'],
 				...(Reflect.getOwnPropertyDescriptor(iframePrototype, 'sandbox')?.set
 					? [
-							[realm.HTMLIFrameElement, 'sandbox', () => false] as [
+							[realm.HTMLIFrameElement, 'sandbox', nativeRead] as [
 								typeof HTMLIFrameElement,
 								string,
-								() => false,
+								typeof nativeRead,
 							],
 						]
 					: []),
@@ -3379,7 +3380,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			['FORM', 'action'],
 			['FORM', 'method'],
 			[realm.HTMLFormElement, 'action', originalURL('action')],
-			[realm.HTMLFormElement, 'method', () => false],
+			[realm.HTMLFormElement, 'method', nativeRead],
 		]);
 
 		// a base's href resolves against the document's URL, not against the

@@ -138,6 +138,14 @@ const otherXlinkPrefix = (name: string) =>
 	name.indexOf(':') === name.length - 5;
 
 /**
+ * A property hook that reads nothing itself (`[ctor, 'style', nativeRead]`):
+ * it is there for the property's setter, and its getter answers natively.
+ * A getter whose hooks are all this one works on no element, so it needs
+ * no prototype swap (a page's every `el.style` read made one).
+ */
+export const nativeRead = (): false => false;
+
+/**
  * Whether the hooks are working on `element` (inside usePrototype with the
  * CustomElement prototype), where their view of its attributes holds writes
  * the DOM has not had yet. Anywhere else the DOM is that view, and a read of
@@ -2968,8 +2976,16 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			// (the prototype itself, as a script that tests for hooks
 			// calls it): the browser refuses it before any hook runs
 			if (!inherits(that, ctor)) Reflect.apply(target, that, args);
+			const entries = this.#propertyHooks(property);
+			if (
+				!pendingAttributes(that) &&
+				entries.every((entry) => entry.hook[2] === nativeRead)
+			) {
+				const value = Reflect.apply(target, that, args);
+				return typeof value === 'string' ? this.readbackURL(value) : value;
+			}
 			return usePrototype(that, CustomElement.prototype, (element) => {
-				for (const entry of this.#propertyHooks(property)) {
+				for (const entry of entries) {
 					let result: string | boolean;
 					try {
 						result = (entry.hook as PropertyHook)[2](element);
