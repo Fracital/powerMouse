@@ -1037,8 +1037,15 @@ export class AudioReceiver {
 	 * NetEq hands the sound card a frame every 10 ms
 	 */
 	#playing = false;
-	/** the first frame arrived: the track has sound now */
+	/**
+	 * The track has sound now: called when the first sound after a frame
+	 * arrived is written to the track (Chrome's remote track unmutes when
+	 * its first audio plays, not when its first packet comes), or at once
+	 * where there is no track to write to
+	 */
 	onStart: (() => void) | null = null;
+	/** a frame arrived and `onStart` waits for its sound to be written */
+	#starting = false;
 	/** the next frame heard is a start again (the section had stopped receiving) */
 	rearm() {
 		this.#started = false;
@@ -1089,6 +1096,11 @@ export class AudioReceiver {
 
 	/** the track's sink (a MediaStreamTrackGenerator's writable), or null */
 	setTrack(writable: WritableStream<AudioData> | null) {
+		// (a start nothing will be written for now is told at once)
+		if (!writable && this.#starting) {
+			this.#starting = false;
+			this.onStart?.();
+		}
 		const old = this.#writer;
 		this.#writer = null;
 		old?.close().catch(() => {});
@@ -1123,7 +1135,8 @@ export class AudioReceiver {
 		this.#counts.bytes += frame.payload.length;
 		if (!this.#started) {
 			this.#started = true;
-			this.onStart?.();
+			if (this.#writer) this.#starting = true;
+			else this.onStart?.();
 		}
 		if (!this.#writer) return;
 		// the stack's count runs below zero when a sender's times jump back
@@ -1819,6 +1832,10 @@ export class AudioReceiver {
 		});
 		this.#clock += (frames / 48000) * 1e6;
 		this.#counts.written++;
+		if (this.#starting) {
+			this.#starting = false;
+			this.onStart?.();
+		}
 		writer.write(audio).catch(() => {
 			// the track ended
 			if (this.#writer === writer) this.#writer = null;

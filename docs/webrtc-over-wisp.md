@@ -1132,7 +1132,8 @@ track its `a=msid` names), `mediaDirection`, `stopMedia`, `sendTrack` and
 `setRemote` (the media sections as they are now: handle, mid, the
 direction negotiated, and for `setRemote` what the peer's description says
 of each: its direction and the streams and track of its `a=msid`), and by
-the event `unmute` (a section's first frame arrived). A section the peer
+the event `unmute` (a section's first frame arrived; for audio, when the
+sound that frame starts is first written to the track, below). A section the peer
 offers first gets a negative handle from the worker. The stack tells of
 such a section only when its media flows, so the worker names a direction
 for every section of an offer it hands the stack (`dir<n>`, all of what is
@@ -1213,7 +1214,15 @@ Receiving (`AudioReceiver`): Opus through an `AudioDecoder` (one output a
 packet, in order, which is how a decoded frame gets its RTP time back: the
 decoder's own timestamps are a count from its first input), with two
 channels from the first packet whose first byte says stereo; G.711 by hand
-and drawn out to 48 kHz. Decoded frames wait in a playout buffer
+and drawn out to 48 kHz. The track unmutes when the first sound after
+the first packet is written to it, not when the packet comes: natively
+(Chrome 157, a page's receiver read from when it is made) the track's
+frames are silent until its `unmute`, and its first sound follows 3 to
+10 ms later; here the sound came 42 to 45 ms
+after `unmute`, so a page that listened from `unmute` heard the decoder's
+first 2 to 6 ms of near-silence and its edge (one to three breaks of phase
+in `webrtc-media`'s 5 ms windows, natively none); now it follows within
+a millisecond. Decoded frames wait in a playout buffer
 (`src/rtc/playout.ts`): it starts playing once its first frame has waited
 as long as a packet waits in NetEq's buffer (below), plays one frame per
 20 ms on the worker's clock from then on (corrected for timers that fire

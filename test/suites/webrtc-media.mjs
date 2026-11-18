@@ -1030,11 +1030,17 @@ for (const proxied of pages) {
 			answers.join(' /// ') ||
 				`${plain(got.farView ?? null)} | natively ${plain(want.farView ?? null)}`,
 		);
+		// (heard from when the track unmutes: natively its sound is there
+		// by then, so it starts with no silence; the page's track unmuted
+		// with the first packet, before its first sound, and the sound began
+		// with 2 to 6 ms of the decoder's start and its edge, which read as
+		// one or two breaks of phase, three on a loaded machine)
 		ok(
 			`${label}, ${name}: the page hears the far end's tone and the far end the page's, unbroken`,
 			!!got.heard.own &&
 				!!got.heard.far &&
 				sounds(got.heard.own, want.heard.own) &&
+				got.heard.own.silentMs <= want.heard.own.silentMs + 1 &&
 				sounds(got.heard.far, want.heard.far),
 			JSON.stringify([
 				got.heard.own,
