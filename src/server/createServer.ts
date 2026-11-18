@@ -15,6 +15,7 @@ import {
 	validConfigCodecKey,
 } from '../config';
 import { workerKindPartition } from '../partition';
+import { usePasskeysRemote } from '../passkeys/authenticator';
 import { isDocumentKind, parseRoutedURL, proxyOrigins } from '../routeURL';
 import StompURL from '../StompURL';
 import { getPublicSuffix } from '../suffix';
@@ -213,6 +214,7 @@ function sharedStores(scope: string, jar?: JarPort): Promise<SharedStores> {
 	if (jar) {
 		(remoteJar ??= new RemoteJar()).bind(jar);
 		usePermissionsRemote(remoteJar);
+		usePasskeysRemote(remoteJar);
 	}
 	let stores = shared.get(scope);
 	if (!stores) {

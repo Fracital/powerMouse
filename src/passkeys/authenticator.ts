@@ -7,9 +7,10 @@
 // key that cannot be exported, kept in the worker's own IndexedDB database
 // (stompPasskeys, a name no proxied page's IndexedDB reaches: the inject
 // suffixes every name a page opens with its storage key, as it does for
-// the cookie jar's), bound to the site's real relying party id, and used
-// only after the host application asked the user
-// (PasskeysInit.onRequest). The worker decides who asks (the sender's own
+// the cookie jar's; with the site pool, the host origin's one, which every
+// slot's worker asks over the jar's port), bound to the site's real
+// relying party id, and used only after the host application asked the
+// user (PasskeysInit.onRequest). The worker decides who asks (the sender's own
 // routed URL, src/server/passkeys.ts) and signs; the host only confirms, and
 // never holds a key.
 //
@@ -20,6 +21,7 @@
 // as a software provider without a registered model has them; the
 // credentials are neither backup eligible nor backed up (BE and BS are 0),
 // which is true: they live in this browser's storage and nowhere else.
+import { PASSKEYS_DATABASE, PASSKEYS_STORE, type JarDB } from '../server/jarDB';
 import { concat, encodeCBOR, type CBORValue } from './cbor';
 import {
 	PASSKEY_CANCEL,
@@ -118,8 +120,20 @@ const sha256 = async (value: Uint8Array | string): Promise<Uint8Array> =>
 
 // --- the store: one database of the worker's origin ---
 
-const DATABASE = 'stompPasskeys';
-const STORE = 'credentials';
+const DATABASE = PASSKEYS_DATABASE;
+const STORE = PASSKEYS_STORE;
+
+/**
+ * the site pool: a slot's worker keeps the credentials in the host origin's
+ * one database (src/server/jarDB.ts), which every slot's worker asks, so a
+ * site's passkeys are where they were whichever slot shows it
+ */
+let remote: JarDB | null = null;
+
+/** the site pool: ask the host's passkey database, over the jar's port */
+export function usePasskeysRemote(db: JarDB) {
+	remote = db;
+}
 
 let database: Promise<IDBDatabase> | null = null;
 function open(): Promise<IDBDatabase> {
@@ -154,9 +168,24 @@ async function store<T>(
 }
 
 const heldFor = async (rpId: string): Promise<Held[]> =>
-	((await store('readonly', (credentials) =>
-		credentials.index('rpId').getAll(rpId),
-	)) as Held[] | undefined) ?? [];
+	((remote
+		? await remote.getAllFromIndex(STORE, 'rpId', rpId)
+		: await store('readonly', (credentials) =>
+				credentials.index('rpId').getAll(rpId),
+			)) as Held[] | undefined) ?? [];
+const allHeld = async (): Promise<Held[]> =>
+	((remote
+		? await remote.getAll(STORE)
+		: await store('readonly', (credentials) => credentials.getAll())) as
+		Held[] | undefined) ?? [];
+const keep = async (held: Held): Promise<void> => {
+	if (remote) await remote.put(STORE, held);
+	else await store('readwrite', (credentials) => credentials.put(held));
+};
+const drop = async (id: string): Promise<void> => {
+	if (remote) await remote.delete(STORE, id);
+	else await store('readwrite', (credentials) => credentials.delete(id));
+};
 
 const describe = (held: Held): PasskeyInfo => ({
 	id: held.id,
@@ -177,25 +206,24 @@ export async function passkeyCommand(
 		const all =
 			typeof command.rpId === 'string'
 				? await heldFor(command.rpId)
-				: (((await store('readonly', (credentials) => credentials.getAll())) as
-						Held[] | undefined) ?? []);
+				: await allHeld();
 		return all.map(describe);
 	}
 	if (command.op === 'delete') {
 		const id = String(command.id);
-		const found = await store('readonly', (credentials) =>
-			credentials.getKey(id),
-		);
+		const found = remote
+			? await remote.get(STORE, id)
+			: await store('readonly', (credentials) => credentials.getKey(id));
 		if (found === undefined) return false;
-		await store('readwrite', (credentials) => credentials.delete(id));
+		await drop(id);
 		return true;
 	}
 	if (typeof command.rpId !== 'string') {
-		await store('readwrite', (credentials) => credentials.clear());
+		if (remote) await remote.clear(STORE);
+		else await store('readwrite', (credentials) => credentials.clear());
 		return null;
 	}
-	for (const held of await heldFor(command.rpId))
-		await store('readwrite', (credentials) => credentials.delete(held.id));
+	for (const held of await heldFor(command.rpId)) await drop(held.id);
 	return null;
 }
 
@@ -205,12 +233,9 @@ export async function passkeyCommand(
  * suffix of it)
  */
 export async function forgetPasskeysOf(host: string): Promise<void> {
-	const all =
-		((await store('readonly', (credentials) => credentials.getAll())) as
-			Held[] | undefined) ?? [];
-	for (const held of all)
+	for (const held of await allHeld())
 		if (held.rpId === host || host.endsWith(`.${held.rpId}`))
-			await store('readwrite', (credentials) => credentials.delete(held.id));
+			await drop(held.id);
 }
 
 // --- what an authenticator writes ---
@@ -513,8 +538,8 @@ export function runCeremony(
 				discoverable &&
 				toBase64URL(old.userHandle) === toBase64URL(options.user.id)
 			)
-				await store('readwrite', (credentials) => credentials.delete(old.id));
-		await store('readwrite', (credentials) => credentials.put(credential));
+				await drop(old.id);
+		await keep(credential);
 
 		const cose = encodeCBOR(await coseKey(pair.publicKey, algorithm));
 		const authData = await authenticatorData(
@@ -613,7 +638,7 @@ export function runCeremony(
 						),
 					);
 		chosen.lastUsed = Date.now();
-		await store('readwrite', (credentials) => credentials.put(chosen));
+		await keep(chosen);
 		const results = await prfResults(
 			chosen,
 			verified,
@@ -637,22 +662,17 @@ export function runCeremony(
 		const held = await heldFor(ceremony.rpId);
 		if (told.kind === 'unknown') {
 			if (held.some((credential) => credential.id === told.credentialId))
-				await store('readwrite', (credentials) =>
-					credentials.delete(told.credentialId),
-				);
+				await drop(told.credentialId);
 			return { done: true };
 		}
 		for (const credential of held) {
 			if (toBase64URL(credential.userHandle) !== told.userId) continue;
 			if (told.kind === 'accepted') {
-				if (!told.ids.includes(credential.id))
-					await store('readwrite', (credentials) =>
-						credentials.delete(credential.id),
-					);
+				if (!told.ids.includes(credential.id)) await drop(credential.id);
 			} else {
 				credential.userName = told.name;
 				credential.userDisplayName = told.displayName;
-				await store('readwrite', (credentials) => credentials.put(credential));
+				await keep(credential);
 			}
 		}
 		return { done: true };

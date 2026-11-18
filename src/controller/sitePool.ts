@@ -27,8 +27,6 @@ export interface SitePoolInit {
 const KEY = 'kept-site-slots';
 /** where the host origin keeps the slot that took a navigation last, in any tab (SiteSlots.last) */
 const LAST_KEY = 'last-site-slot';
-/** at most this many sites are remembered for a pool; the oldest assignments go first */
-const KEPT_SITES = 4096;
 /** at most this many pools are remembered (a host has one; a changed list is another) */
 const KEPT_POOLS = 4;
 
@@ -77,6 +75,9 @@ export class SiteSlots {
 	/** this page's own view, for a browser without storage */
 	#sites = new Map<string, number>();
 	#clock = 0;
+	/** what was read of the kept assignments last, and what it said */
+	#raw: string | null = null;
+	#parsed: unknown = null;
 	constructor(origins: string[], storage: Storage | null = keptStorage()) {
 		this.origins = origins;
 		this.#storage = storage;
@@ -86,7 +87,15 @@ export class SiteSlots {
 	#kept(): Kept[] {
 		let kept: unknown = null;
 		try {
-			kept = JSON.parse(this.#storage?.getItem(KEY) ?? 'null');
+			// parsed again only when another tab or page wrote it: every
+			// assignment is kept, and the text grows with the sites seen
+			const raw = this.#storage?.getItem(KEY) ?? null;
+			if (raw !== this.#raw) {
+				this.#raw = null;
+				this.#parsed = JSON.parse(raw ?? 'null');
+				this.#raw = raw;
+			}
+			kept = this.#parsed;
 		} catch (error) {
 			// not ours, or cut short: start over
 		}
@@ -120,7 +129,9 @@ export class SiteSlots {
 		const pools = this.#kept();
 		pools[pools.length - 1] = {
 			origins: this.origins,
-			sites: Object.fromEntries([...sites].slice(-KEPT_SITES)),
+			// every one: a site that lost its slot would find its data in
+			// another (its storage, the HTTP cache, its service workers)
+			sites: Object.fromEntries(sites),
 		};
 		try {
 			this.#storage.setItem(KEY, JSON.stringify(pools.slice(-KEPT_POOLS)));

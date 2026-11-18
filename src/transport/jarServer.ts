@@ -8,6 +8,8 @@ import {
 	DEVICE_GRANTS_STORE,
 	JAR_DATABASE,
 	JAR_STORE,
+	PASSKEYS_DATABASE,
+	PASSKEYS_STORE,
 	PERMISSIONS_DATABASE,
 	PERMISSIONS_STORE,
 	type JarCall,
@@ -49,10 +51,11 @@ function database(): Promise<IDBDatabase> {
 const keptOpen = new Map<string, Promise<IDBDatabase>>();
 
 /**
- * A store the host's service worker keeps out of line, by its database:
- * the sites' permission states and the devices they chose
- * (src/server/permissions.ts, whose version and store this makes when the
- * host's worker has not yet)
+ * A store the host's service worker keeps, by its database: the sites'
+ * permission states and the devices they chose, out of line
+ * (src/server/permissions.ts), and the passkeys, in line
+ * (src/passkeys/authenticator.ts), whose version and store this makes when
+ * the host's worker has not yet
  */
 function keptDatabase(name: string, storeName: string): Promise<IDBDatabase> {
 	let opened = keptOpen.get(name);
@@ -60,8 +63,12 @@ function keptDatabase(name: string, storeName: string): Promise<IDBDatabase> {
 	opened = new Promise<IDBDatabase>((resolve, reject) => {
 		const request = indexedDB.open(name, 1);
 		request.onupgradeneeded = () => {
-			if (!request.result.objectStoreNames.contains(storeName))
-				request.result.createObjectStore(storeName);
+			if (request.result.objectStoreNames.contains(storeName)) return;
+			if (storeName === PASSKEYS_STORE)
+				request.result
+					.createObjectStore(storeName, { keyPath: 'id' })
+					.createIndex('rpId', 'rpId');
+			else request.result.createObjectStore(storeName);
 		};
 		request.onerror = () => reject(request.error);
 		request.onsuccess = () => {
@@ -79,10 +86,11 @@ function keptDatabase(name: string, storeName: string): Promise<IDBDatabase> {
 	return opened;
 }
 
-/** the stores kept out of line, by store, and their databases */
+/** the stores kept besides the jar, by store, and their databases */
 const KEPT: Record<string, string> = {
 	[PERMISSIONS_STORE]: PERMISSIONS_DATABASE,
 	[DEVICE_GRANTS_STORE]: DEVICE_GRANTS_DATABASE,
+	[PASSKEYS_STORE]: PASSKEYS_DATABASE,
 };
 
 function settled<T>(request: IDBRequest<T>): Promise<T> {
@@ -113,7 +121,9 @@ async function answer({ op, args }: JarCall): Promise<unknown> {
 			return settled(store.get(args[1] as IDBValidKey));
 		case 'put':
 			return settled(
-				kept ? store.put(args[1], String(args[2])) : store.put(args[1]),
+				kept && name !== PASSKEYS_STORE
+					? store.put(args[1], String(args[2]))
+					: store.put(args[1]),
 			);
 		case 'delete':
 			return settled(store.delete(args[1] as IDBValidKey));

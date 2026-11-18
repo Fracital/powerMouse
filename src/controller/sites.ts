@@ -11,8 +11,6 @@
 import type { SitesConfig } from '../config';
 import type {
 	PasskeyAnswer,
-	PasskeyCommand,
-	PasskeyInfo,
 	PasskeyPrompt,
 	PasskeysConfig,
 } from '../passkeys/types';
@@ -74,7 +72,8 @@ export interface SiteAgentInit {
 	controller: Partial<ControllerInit>;
 	/**
 	 * the hub's passkeys (Config.passkeys): the slot's worker is the
-	 * authenticator of the sites it shows, and the hub's host asks the user
+	 * authenticator of the sites it shows, with the credentials in the hub
+	 * origin's store (src/server/jarDB.ts), and the hub's host asks the user
 	 * (HubBound.passkeyPrompt)
 	 */
 	passkeys?: PasskeysConfig;
@@ -134,8 +133,6 @@ export type AgentBound = {
 	focus: [number];
 	/** which of these service worker clients the slot's worker does not know (the hub's ClientFrames) */
 	goneClients: [string[], string[]];
-	/** the host's command to the passkeys the slot's worker holds (StompController.passkeys) */
-	passkeys: [PasskeyCommand, PasskeyInfo[] | boolean | null];
 	history: [
 		{ index: number; run: number; op: SiteHistoryOp },
 		SiteHistoryAnswer | null,
@@ -795,28 +792,6 @@ export class SiteHub {
 		} catch (error) {
 			// the agent is gone: its slot shows nothing now
 		}
-	}
-	/**
-	 * The host's passkey command (StompController.passkeys) for every slot's
-	 * worker, each the authenticator of the sites it shows and their store:
-	 * their answers, null for a slot that could not answer. Every slot's,
-	 * started for it: a slot no site of this page uses holds what sites it
-	 * showed before
-	 */
-	passkeys(
-		command: PasskeyCommand,
-	): Promise<(PasskeyInfo[] | boolean | null)[]> {
-		return Promise.all(
-			this.#slots.origins.map(async (origin) => {
-				const agent = this.#agent(origin);
-				try {
-					await agent.ready;
-					return await agent.rpc.call('passkeys', command);
-				} catch (error) {
-					return null;
-				}
-			}),
-		);
 	}
 	/**
 	 * which of `clients` no slot's worker knows either: a document shown

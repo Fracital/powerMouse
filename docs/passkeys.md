@@ -124,9 +124,11 @@ response. What the worker writes:
   zeros, as Chrome gives for providers that do not attest.
 
 **With the site pool** (docs/site-pool.md, Passkeys), each slot's worker
-is the authenticator of the sites that slot shows, with its own
-`stompPasskeys` on the slot's origin, and the hub's host asks the user for
-every slot. `controller.passkeys` and `forgetStorage` reach every slot's.
+is the authenticator of the sites that slot shows, with the keys in the
+hub origin's one `stompPasskeys`, asked over the jar's port, and the hub's
+host asks the user for every slot. A site's passkeys are the same
+whichever slot shows it, and `controller.passkeys` and `forgetStorage`
+reach them all through the hub's worker.
 
 ## User verification: real or none
 

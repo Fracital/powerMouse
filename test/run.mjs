@@ -86,6 +86,8 @@ const SUITE_ENV = {
 	'adversarial-passkeys': { STOMP_TEST_TRANSPORT: '1' },
 	// the same with the pool on: a slot's worker holds its site's keys
 	'site-pool-passkeys': { STOMP_TEST_TRANSPORT: '1', STOMP_SITE_POOL: '5' },
+	// and a site that more than 4096 others came after, then another slot
+	'site-pool-kept-sites': { STOMP_TEST_TRANSPORT: '1', STOMP_SITE_POOL: '5' },
 	// the host's pages cross-origin isolated (the demo server's default)
 	'cross-origin-isolation': { STOMP_ISOLATION: 'on' },
 	// a page that isolates itself is isolated only in an isolated host

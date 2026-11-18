@@ -44,6 +44,16 @@ export const PERMISSIONS_STORE = 'states';
  */
 export const DEVICE_GRANTS_DATABASE = 'stompDeviceGrants';
 export const DEVICE_GRANTS_STORE = 'grants';
+/**
+ * The passkeys STomp holds for proxied sites (src/passkeys/authenticator.ts),
+ * asked the same way: a credential is the user's, not the slot's, and
+ * natively outlives anything short of the user deleting it, so every slot's
+ * worker keeps them in the host origin's one database, where the host's
+ * worker and its `passkeys` API find every one (keyed in line by `id`, with
+ * an index on `rpId`)
+ */
+export const PASSKEYS_DATABASE = 'stompPasskeys';
+export const PASSKEYS_STORE = 'credentials';
 
 export type JarOp = keyof JarDB;
 /** slot worker -> host: one request of the jar */

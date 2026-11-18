@@ -2652,13 +2652,8 @@ export class StompController extends EventTarget {
 		command: PasskeyCommand,
 	): Promise<PasskeyInfo[] | boolean | null> {
 		await this.#ready;
-		const own = this.#call('passkeys', command);
-		if (!this.#sites) return own;
-		// the site pool: each slot's worker holds the passkeys of its sites
-		const all = [await own, ...(await this.#sites.passkeys(command))];
-		if (command.op === 'list')
-			return all.flatMap((answer) => (Array.isArray(answer) ? answer : []));
-		return command.op === 'delete' ? all.includes(true) : null;
+		// (the site pool: every slot's worker keeps them in this one's store)
+		return this.#call('passkeys', command);
 	}
 	/**
 	 * @internal A command to the jar, from `cookies` or from the controller

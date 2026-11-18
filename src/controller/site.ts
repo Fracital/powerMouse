@@ -179,10 +179,6 @@ function start(init: SiteAgentInit, port: MessagePort, host: string) {
 						return [await traverse(win, command), []];
 				}
 			},
-			passkeys: async (command) => {
-				await ready;
-				return [await controller!.passkeyCommand(command), []];
-			},
 			history: async ({ index, run, op }) => {
 				const win = frameWindow(index, framesUp);
 				if (!win) return [null, []];

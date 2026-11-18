@@ -71,7 +71,13 @@ slot origin's: a site shown from another slot tomorrow would find nothing
 of it (the suite shows it: the same pool in another order has a site's
 cookies and not its localStorage). So the first assignment is kept for
 good, in the host origin's localStorage (`kept-site-slots`: per pool, site
-to index), and every tab of the host reads the same one. A site seen for
+to index), and every tab of the host reads the same one. Every assignment
+is kept, however many sites come after (about 25 characters each, and
+Chrome 157 gives the host origin's localStorage about 5.2 million: some
+200,000 sites; the text is parsed again only when another page wrote
+it); a bound that dropped the oldest would leave
+a site's data in a slot it no longer has (site-pool-kept-sites: a site
+seen before 4100 others keeps its slot, its passkey and what it stored). A site seen for
 the first time gets an empty slot, else the slot used longest ago in this
 page, and never the slot of the document the navigation comes from when
 there is another: a frame of a new site is always in another process than
@@ -401,10 +407,13 @@ log late or with no frame.
 
 **Passkeys** (docs/passkeys.md). A slot's worker is the passkey
 authenticator of the sites it shows, as the hub's is of its own: it checks
-who asks from the sender's route, makes and signs, and keeps the keys in
-`stompPasskeys` on the slot's origin. A site keeps its slot, so its
-passkeys stay with the rest of its data there, each site's under its
-relying party ids as on one origin. The hub hands each agent its passkeys
+who asks from the sender's route, makes and signs. It keeps the keys where
+the hub's worker does, in `stompPasskeys` on the hub's origin, asked over
+the jar's port as the permission states are (src/server/jarDB.ts,
+src/transport/jarServer.ts; a non-extractable `CryptoKey` crosses a
+`MessagePort` as itself): a credential is the user's, and natively
+outlives anything short of the user deleting it, so it must not depend on
+which slot shows its site. The hub hands each agent its passkeys
 option (`SiteAgentInit.passkeys`), and the agent's controller gives every
 prompt to the hub (`passkeyRelay`, `HubBound.passkeyPrompt`), whose host
 asks the user with the frame the document is in, as for its own sites.
@@ -413,13 +422,10 @@ a slot's worker has no client of a top shown from another slot: when none
 of its own clients has the focus it asks the hub
 (`passkeyFocused`), which answers whether the focus is in the frame of the
 host's page that shows the document (through its host in isolation mode).
-`controller.passkeys` lists, deletes and clears across the hub's worker
-and every slot's (an agent is started for a slot that has none yet: it
-may hold the passkeys of sites it showed before), and `forgetStorage`
-forgets a site's passkeys in every slot with its storage. The passkeys
-suite passes with the pool on, in both modes (site-pool-passkeys runs it
-so). A site that loses its slot (the pool's kept assignments are bounded,
-`KEPT_SITES`) loses its passkeys with its storage.
+`controller.passkeys` and `forgetStorage` reach the one store through the
+hub's worker. The passkeys suite passes with the pool on, in both modes
+(site-pool-passkeys runs it so), and site-pool-kept-sites shows a site
+shown from another slot than the one it registered from still signing in.
 
 ## Popups under the isolated host
 
