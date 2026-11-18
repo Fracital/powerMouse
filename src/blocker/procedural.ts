@@ -6,6 +6,8 @@
 // that touches the DOM goes through the natives the inject took before it
 // hooked anything (`Dom`), so the page's replacements are never called and
 // the proxy's own hooks never run for the blocker's reads.
+import type { Natives } from '../inject/dom/modules/Adblock';
+import { LazyWeakSet } from '../inject/ownCollections';
 import type { ProceduralFilter } from './types';
 
 /** the DOM as the blocker reads and edits it: natives of the page's realm */
@@ -246,5 +248,117 @@ export function compileFilter(json: string): CompiledFilter | null {
 					break;
 			}
 		},
+	};
+}
+
+/** XPathResult.ORDERED_NODE_SNAPSHOT_TYPE */
+const SNAPSHOT = 7;
+
+/**
+ * What runs a document's procedural filters (the inject's Adblock module,
+ * made with them, a deferred part as `compileFilter` is): every match is
+ * hidden (inline, the only way to name one element) or given the filter's
+ * action, once. The DOM is read with the natives the module took at load.
+ */
+export function proceduralRunner(
+	natives: Natives,
+	global: typeof globalThis,
+	document: Document,
+	path: string,
+	filters: CompiledFilter[],
+	queryAll: Dom['queryAll'],
+): () => void {
+	const attribute = (element: Element, name: string): string | null =>
+		Reflect.apply(natives.getAttribute, element, [name]) as string | null;
+	const declare = (element: Element, declarations: string) => {
+		const style = natives.styleOf(element);
+		if (!style) return;
+		for (const part of declarations.split(';')) {
+			const colon = part.indexOf(':');
+			if (colon === -1) continue;
+			const important = /!\s*important\s*$/i.test(part);
+			Reflect.apply(natives.setProperty, style, [
+				part.slice(0, colon).trim(),
+				part
+					.slice(colon + 1)
+					.replace(/!\s*important\s*$/i, '')
+					.trim(),
+				important ? 'important' : '',
+			]);
+		}
+	};
+	const dom: Dom = {
+		document,
+		path,
+		queryAll,
+		parent: (element) =>
+			Reflect.apply(natives.parentElement, element, []) as Element | null,
+		closest: (element, selector) =>
+			Reflect.apply(natives.closest, element, [selector]) as Element | null,
+		text: (element) =>
+			(Reflect.apply(natives.textContent, element, []) as string | null) ?? '',
+		attributes: (element) =>
+			(Reflect.apply(natives.getAttributeNames, element, []) as string[]).map(
+				(name) => [name, attribute(element, name) ?? ''],
+			),
+		computed: (element, pseudo, property) =>
+			Reflect.apply(
+				natives.getPropertyValue,
+				Reflect.apply(natives.getComputedStyle, global, [element, pseudo]),
+				[property],
+			) as string,
+		xpath: (expression, context) => {
+			const result = Reflect.apply(natives.evaluate, document, [
+				expression,
+				context,
+				null,
+				SNAPSHOT,
+				null,
+			]);
+			const out: Element[] = [];
+			const length = Reflect.apply(
+				natives.snapshotLength,
+				result,
+				[],
+			) as number;
+			for (let i = 0; i < length; i++) {
+				const found = Reflect.apply(natives.snapshotItem, result, [i]) as Node;
+				if (Reflect.apply(natives.nodeType, found, []) === 1)
+					out.push(found as Element);
+			}
+			return out;
+		},
+		remove: (element) => Reflect.apply(natives.remove, element, []),
+		removeAttribute: (element, name) =>
+			Reflect.apply(natives.removeAttribute, element, [name]),
+		removeClass: (element, name) => {
+			const classes = attribute(element, 'class');
+			if (classes === null) return;
+			const kept = classes.split(/\s+/).filter((token) => token !== name);
+			if (kept.length !== classes.split(/\s+/).length)
+				Reflect.apply(natives.setAttribute, element, ['class', kept.join(' ')]);
+		},
+		style: declare,
+	};
+	const handled = new LazyWeakSet<Element>();
+	return () => {
+		for (const filter of filters) {
+			let matched: Element[];
+			try {
+				matched = filter.matches(dom);
+			} catch (error) {
+				continue;
+			}
+			for (const element of matched) {
+				if (handled.has(element)) continue;
+				handled.add(element);
+				try {
+					if (filter.hides) declare(element, 'display: none !important');
+					else filter.act(element, dom);
+				} catch (error) {
+					// an element the page took away meanwhile
+				}
+			}
+		}
 	};
 }

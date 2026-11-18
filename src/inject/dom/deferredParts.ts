@@ -78,7 +78,7 @@
 // have run, so their top level reads no global (a page may have replaced
 // it): constants and functions only, as the bundle's code reads what it
 // needs when it is called.
-import { compileFilter } from '../../blocker/procedural';
+import { compileFilter, proceduralRunner } from '../../blocker/procedural';
 import { noticeText } from '../../mixedContentNotices';
 import { accessFailures } from '../accessFailures';
 import { bareClient } from '../bareClient';
@@ -175,6 +175,7 @@ export const parts = {
 	// first (../workerStart.ts; ../modules/Worker.ts)
 	workerStart,
 	compileFilter,
+	proceduralRunner,
 	longFrames,
 	longTasks,
 	cookieStoreMethods,

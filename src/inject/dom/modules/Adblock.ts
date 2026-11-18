@@ -1,8 +1,8 @@
-import type { CompiledFilter, Dom } from '../../../blocker/procedural';
+import type { CompiledFilter } from '../../../blocker/procedural';
 import type { AdblockPage } from '../../../blocker/types';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
-import { LazyWeakMap, LazyWeakSet } from '../../ownCollections';
+import { LazyWeakMap } from '../../ownCollections';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { deferred } from '../deferred';
 
@@ -112,7 +112,7 @@ interface Adopted {
 
 type Getter = () => unknown;
 
-interface Natives {
+export interface Natives {
 	Function: FunctionConstructor;
 	Array: ArrayConstructor;
 	Sheet: typeof CSSStyleSheet;
@@ -231,8 +231,6 @@ const FIRST_BATCH_MS = 0;
 const BATCH_MS = 60;
 /** ms between two runs of the procedural filters */
 const PROCEDURAL_MS = 250;
-/** XPathResult.ORDERED_NODE_SNAPSHOT_TYPE */
-const SNAPSHOT = 7;
 
 function start(
 	client: DocumentClient,
@@ -260,83 +258,14 @@ function start(
 	};
 	const attribute = (element: Element, name: string): string | null =>
 		Reflect.apply(natives.getAttribute, element, [name]) as string | null;
-	const declare = (element: Element, declarations: string) => {
-		const style = natives.styleOf(element);
-		if (!style) return;
-		for (const part of declarations.split(';')) {
-			const colon = part.indexOf(':');
-			if (colon === -1) continue;
-			const important = /!\s*important\s*$/i.test(part);
-			Reflect.apply(natives.setProperty, style, [
-				part.slice(0, colon).trim(),
-				part
-					.slice(colon + 1)
-					.replace(/!\s*important\s*$/i, '')
-					.trim(),
-				important ? 'important' : '',
-			]);
-		}
-	};
-	const dom: Dom = {
-		document,
-		path: `${client.url.url.pathname}${client.url.url.search}`,
-		queryAll: (root, selector) =>
-			elements(
-				Reflect.apply(
-					root === document ? natives.documentQuery : natives.elementQuery,
-					root,
-					[selector],
-				),
-			),
-		parent: (element) =>
-			Reflect.apply(natives.parentElement, element, []) as Element | null,
-		closest: (element, selector) =>
-			Reflect.apply(natives.closest, element, [selector]) as Element | null,
-		text: (element) =>
-			(Reflect.apply(natives.textContent, element, []) as string | null) ?? '',
-		attributes: (element) =>
-			(Reflect.apply(natives.getAttributeNames, element, []) as string[]).map(
-				(name) => [name, attribute(element, name) ?? ''],
-			),
-		computed: (element, pseudo, property) =>
+	const queryAll = (root: Document | Element, selector: string) =>
+		elements(
 			Reflect.apply(
-				natives.getPropertyValue,
-				Reflect.apply(natives.getComputedStyle, global, [element, pseudo]),
-				[property],
-			) as string,
-		xpath: (expression, context) => {
-			const result = Reflect.apply(natives.evaluate, document, [
-				expression,
-				context,
-				null,
-				SNAPSHOT,
-				null,
-			]);
-			const out: Element[] = [];
-			const length = Reflect.apply(
-				natives.snapshotLength,
-				result,
-				[],
-			) as number;
-			for (let i = 0; i < length; i++) {
-				const found = Reflect.apply(natives.snapshotItem, result, [i]) as Node;
-				if (Reflect.apply(natives.nodeType, found, []) === 1)
-					out.push(found as Element);
-			}
-			return out;
-		},
-		remove: (element) => Reflect.apply(natives.remove, element, []),
-		removeAttribute: (element, name) =>
-			Reflect.apply(natives.removeAttribute, element, [name]),
-		removeClass: (element, name) => {
-			const classes = attribute(element, 'class');
-			if (classes === null) return;
-			const kept = classes.split(/\s+/).filter((token) => token !== name);
-			if (kept.length !== classes.split(/\s+/).length)
-				Reflect.apply(natives.setAttribute, element, ['class', kept.join(' ')]);
-		},
-		style: declare,
-	};
+				root === document ? natives.documentQuery : natives.elementQuery,
+				root,
+				[selector],
+			),
+		);
 
 	// the sheet: the lists' selectors, one rule each (a selector this browser
 	// does not take drops its own rule only), and the filters that are a
@@ -352,6 +281,17 @@ function start(
 		if (filter.css) rules.push(filter.css);
 		else if (!foreign) filters.push(filter);
 	}
+	// what runs them, of the same part (most sites have none)
+	const runFilters = filters.length
+		? deferred('proceduralRunner')(
+				natives,
+				global,
+				document,
+				`${client.url.url.pathname}${client.url.url.search}`,
+				filters,
+				queryAll,
+			)
+		: null;
 	const sheet = new natives.Sheet();
 	Reflect.apply(natives.replaceSync, sheet, [rules.join('\n')]);
 	const addRule = (rule: string) => {
@@ -453,32 +393,13 @@ function start(
 			.catch(() => {});
 	};
 
-	// the procedural filters: every match is hidden (inline, the only way to
-	// name one element) or given the filter's action, once
-	const handled = new LazyWeakSet<Element>();
+	// the procedural filters (./procedural.ts proceduralRunner)
 	let proceduralAt = 0;
 	let proceduralArmed = false;
 	const procedural = () => {
 		proceduralArmed = false;
 		proceduralAt = Date.now();
-		for (const filter of filters) {
-			let matched: Element[];
-			try {
-				matched = filter.matches(dom);
-			} catch (error) {
-				continue;
-			}
-			for (const element of matched) {
-				if (handled.has(element)) continue;
-				handled.add(element);
-				try {
-					if (filter.hides) declare(element, 'display: none !important');
-					else filter.act(element, dom);
-				} catch (error) {
-					// an element the page took away meanwhile
-				}
-			}
-		}
+		runFilters!();
 	};
 	const later = (callback: () => void, ms: number) =>
 		Reflect.apply(natives.setTimeout, global, [
@@ -522,7 +443,7 @@ function start(
 			note(target);
 			budget--;
 			if (!deep) continue;
-			const inside = dom.queryAll(target, '[class],[id]');
+			const inside = queryAll(target, '[class],[id]');
 			for (const element of inside) note(element);
 			budget -= inside.length;
 		}
