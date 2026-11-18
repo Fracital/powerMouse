@@ -1,0 +1,30 @@
+<!doctype html>
+<title>FRAME TEMPLATE XHR</title>
+<body></body>
+<script>
+	// foxnews.com's template frame: the page inserts a hidden frame of
+	// another origin as markup (jQuery's append) and a script on the page
+	// reads the new frame's contentWindow at once (an ad-safety script that
+	// watches every frame, Confiant on foxnews). The frame asks for a
+	// template of its own origin as jQuery's $.ajax does, with
+	// X-Requested-With, which is no simple header: the request is the
+	// frame's own, so natively it is same-origin and asks nothing first. The
+	// result of each frame is kept by name in window.__record.
+	const child = '/pages/frame-template-xhr-child.html';
+	const other = location.origin.replace('127.0.0.1', 'localhost');
+	window.__record = {};
+	const ways = ['untouched', 'read'];
+	addEventListener('message', (event) => {
+		if (!event.data || !event.data.templateFrame) return;
+		__record[event.data.templateFrame] = event.data.result;
+		if (ways.every((way) => way in __record)) __record.done = true;
+	});
+	for (const way of ways) {
+		document.body.insertAdjacentHTML(
+			'beforeend',
+			`<iframe id="frame-${way}" src="${other}${child}?${way}" style="display: none"></iframe>`,
+		);
+		const frame = document.getElementById(`frame-${way}`);
+		if (way === 'read') void frame.contentWindow.navigator.userAgent;
+	}
+</script>

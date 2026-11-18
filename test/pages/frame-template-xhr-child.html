@@ -1,0 +1,17 @@
+<!doctype html>
+<title>template frame</title>
+<script>
+	// $.ajax({ url, dataType: 'text' }) for a URL of this document's origin
+	const xhr = new XMLHttpRequest();
+	xhr.open('GET', '/pages/frame-template-xhr.txt?cb=1');
+	xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+	xhr.setRequestHeader('Accept', 'text/plain, */*; q=0.01');
+	const report = (result) =>
+		parent.postMessage(
+			{ templateFrame: location.search.slice(1), result },
+			'*',
+		);
+	xhr.onload = () => report(`${xhr.status} ${xhr.responseText.trim()}`);
+	xhr.onerror = () => report('error');
+	xhr.send();
+</script>
