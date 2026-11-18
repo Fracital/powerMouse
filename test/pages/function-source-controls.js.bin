@@ -1,0 +1,18 @@
+// A script whose text holds every control character but tab and the line
+// breaks, and DEL, in strings and a comment, as obfuscated sensors' string
+// tables do: its functions read back as written all the same
+// (test/suites/function-source.mjs). Served byte for byte (a .bin).
+(function   controls ( ) {
+	var table = ''
+	/*  */
+	function   decode ( i ) { return table.charCodeAt ( i ) /* a * and a < */ }
+	var arrow = ( a , b ) =>  a < b ? ' ' : " "
+	var own = function  own ( ) { return '' + location.href }
+	class   Keyed { method ( ) { return top } }
+	window.__put('controls:', {
+		controls, decode, arrow, own, Keyed, method: Keyed.prototype.method,
+		size: function size ( ) { return ('' + controls).length },
+	})
+	window.__fnsrc['controls:selfLength'] = String(('' + controls).length)
+	window.__pending.done('controls')
+})()

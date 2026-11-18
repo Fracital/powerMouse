@@ -1,0 +1,9 @@
+// A module script whose text holds every control character but tab and the line
+// breaks, and DEL, in strings and a comment, as obfuscated sensors' string
+// tables do: its functions read back as written all the same
+// (test/suites/function-source.mjs). Served byte for byte (a .bin).
+const table = ''
+function   moduleDecode ( i ) { return table.charCodeAt ( i ) /* * < */ }
+const moduleArrow = ( ) =>  '' + top
+window.__put('controlsmodule:', { moduleDecode, moduleArrow })
+window.__pending.done('controlsmodule')

@@ -52,6 +52,11 @@ const STAND_INS: [u8; 29] = [
 	29, 30, 31, 127,
 ];
 
+/// where the stand-ins go on when a text holds nearly every control
+/// character (an obfuscated sensor's string tables do): the private use
+/// area, from its start, one UTF-16 code unit each
+const PRIVATE_USE: std::ops::RangeInclusive<u32> = 0xe000..=0xf8ff;
+
 /// The statement that hands a script's text to the access API, `api` as
 /// the script reaches it (`holderStatement`): None when the text holds
 /// every stand-in character
@@ -60,7 +65,7 @@ pub fn holder_statement(api: &str, key: &str, text: &str) -> Option<String> {
 	// the ones taken: written so in one pass, which finds whether they were
 	// right, and written again after the general way's look at the text if
 	// not
-	let first: [u8; 6] = STAND_INS[..CARRIED.len()].try_into().unwrap();
+	let first: [char; 6] = STAND_INS[..CARRIED.len()].iter().map(|code| *code as char).collect::<Vec<_>>().try_into().unwrap();
 	let (out, clean) = holder_with(api, key, text, first);
 	if clean {
 		return Some(out);
@@ -71,7 +76,23 @@ pub fn holder_statement(api: &str, key: &str, text: &str) -> Option<String> {
 			present[byte as usize] = true;
 		}
 	}
-	let subs: Vec<u8> = STAND_INS.iter().copied().filter(|code| !present[*code as usize]).take(CARRIED.len()).collect();
+	let mut subs: Vec<char> =
+		STAND_INS.iter().filter(|code| !present[**code as usize]).take(CARRIED.len()).map(|code| *code as char).collect();
+	if subs.len() < CARRIED.len() {
+		// (the private use characters the text holds are looked for only here)
+		let mut held = vec![false; (PRIVATE_USE.end() - PRIVATE_USE.start() + 1) as usize];
+		for c in text.chars() {
+			if PRIVATE_USE.contains(&u32::from(c)) {
+				held[(u32::from(c) - PRIVATE_USE.start()) as usize] = true;
+			}
+		}
+		subs.extend(
+			PRIVATE_USE
+				.filter(|code| !held[(code - PRIVATE_USE.start()) as usize])
+				.take(CARRIED.len() - subs.len())
+				.filter_map(char::from_u32),
+		);
+	}
 	Some(holder_with(api, key, text, subs.try_into().ok()?).0)
 }
 
@@ -96,7 +117,7 @@ const HOLDER_BYTES: [u8; 256] = {
 
 /// the holder of `text` with `subs` standing for the carried characters,
 /// and whether the text holds none of the first stand-ins
-fn holder_with(api: &str, key: &str, text: &str, subs: [u8; 6]) -> (String, bool) {
+fn holder_with(api: &str, key: &str, text: &str, subs: [char; 6]) -> (String, bool) {
 	let mut out = String::with_capacity(text.len() + 96);
 	// (an optional call of the API where it is, as the walk's own calls
 	// reach it: config.rs `api`; a realm without the inject has none)
@@ -104,7 +125,7 @@ fn holder_with(api: &str, key: &str, text: &str, subs: [u8; 6]) -> (String, bool
 	out.push_str("?.src(");
 	out.push_str(&quote(key));
 	out.push(',');
-	out.push_str(&quote(&subs.iter().map(|code| *code as char).collect::<String>()));
+	out.push_str(&quote(&subs.iter().collect::<String>()));
 	out.push_str(",function(){/*");
 	// a byte at a time: every carried character but the two separators is
 	// one ASCII byte, and those two are the only characters whose UTF-8
@@ -134,7 +155,7 @@ fn holder_with(api: &str, key: &str, text: &str, subs: [u8; 6]) -> (String, bool
 			class => usize::from(class - 1),
 		};
 		out.push_str(&text[from..at]);
-		out.push(subs[carried] as char);
+		out.push(subs[carried]);
 		at += if carried < 4 { 1 } else { 3 };
 		from = at;
 	}
@@ -317,8 +338,25 @@ mod tests {
 			holder_statement("0..$s$j", "k", "a*b<c\nd").unwrap(),
 			"0..$s$j?.src(\"k\",\"\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\",function(){/*a\u{1}b\u{2}c\u{3}d*/});"
 		);
+		// a text that holds every ASCII stand-in (an obfuscated sensor's
+		// string tables) takes them from the private use area, skipping
+		// those it holds
 		let all: String = STAND_INS.iter().map(|code| *code as char).collect();
-		assert!(holder_statement("0..$s$j", "k", &all).is_none());
+		assert_eq!(
+			holder_statement("0..$s$j", "k", &format!("{all}*<\n")).unwrap(),
+			format!(
+				"0..$s$j?.src(\"k\",\"\u{e000}\u{e001}\u{e002}\u{e003}\u{e004}\u{e005}\",function(){{/*{all}\u{e000}\u{e001}\u{e002}*/}});"
+			)
+		);
+		let most: String = all.chars().filter(|c| *c != '\u{7}' && *c != '\u{8}').collect();
+		assert_eq!(
+			holder_statement("0..$s$j", "k", &format!("{most}\u{e000}\r\u{2029}")).unwrap(),
+			format!(
+				"0..$s$j?.src(\"k\",\"\\u0007\\b\u{e001}\u{e002}\u{e003}\u{e004}\",function(){{/*{most}\u{e000}\u{e002}\u{e004}*/}});"
+			)
+		);
+		let every: String = all.chars().chain((0xe000..=0xf8ff).filter_map(char::from_u32)).collect();
+		assert!(holder_statement("0..$s$j", "k", &every).is_none());
 	}
 
 	#[test]

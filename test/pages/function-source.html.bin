@@ -14,7 +14,7 @@
 		}
 	};
 	window.__pending = {
-		left: ['inline', 'handler', 'timer', 'module', 'inlinemodule', 'worker', 'gsi', 'surrogate'],
+		left: ['inline', 'handler', 'timer', 'module', 'inlinemodule', 'worker', 'gsi', 'surrogate', 'controls', 'controlsmodule'],
 		done: function (name) {
 			this.left = this.left.filter(function (n) { return n !== name });
 			if (!this.left.length) window.__fnsrcDone = true;
@@ -23,6 +23,8 @@
 </script>
 <script src="function-source.js.bin"></script>
 <script type="module" src="function-source-mod.js.bin"></script>
+<script src="function-source-controls.js.bin"></script>
+<script type="module" src="function-source-controls-mod.js.bin"></script>
 <button id="clicker" onclick="  return  location.href  /* kept */ ">x</button>
 <div id="hover" onmouseover="window.__hoverFn = function  fromHandler ( e ) { return top }">y</div>
 <script>

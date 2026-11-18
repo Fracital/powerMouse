@@ -26,6 +26,13 @@ const STAND_INS = [
 	1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
 	25, 26, 27, 28, 29, 30, 31, 127,
 ].map((code) => String.fromCharCode(code));
+/**
+ * where the stand-ins go on when a text holds nearly every control
+ * character (an obfuscated sensor's string tables do): the private use
+ * area, from its start, one UTF-16 code unit each
+ */
+const PRIVATE_USE_START = 0xe000;
+const PRIVATE_USE_END = 0xf8ff;
 const HOLDER_HEAD = 'function(){/*';
 const HOLDER_TAIL = '*/}';
 
@@ -75,6 +82,14 @@ export function holderStatement(
 	const subs: string[] = [];
 	for (const candidate of STAND_INS) {
 		if (subs.length === CARRIED.length) break;
+		if (!text.includes(candidate)) subs.push(candidate);
+	}
+	for (
+		let code = PRIVATE_USE_START;
+		subs.length < CARRIED.length && code <= PRIVATE_USE_END;
+		code++
+	) {
+		const candidate = String.fromCharCode(code);
 		if (!text.includes(candidate)) subs.push(candidate);
 	}
 	if (subs.length < CARRIED.length) return null;
@@ -175,6 +190,9 @@ export function keepEmbedded(
 
 /** the key of a holder's text, its stand-ins read as what they stand for */
 function encodedKey(encoded: string, subs: string): string {
+	// (stand-ins past ASCII, which the key's map does not reach)
+	for (let i = 0; i < CARRIED.length; i++)
+		if (subs.charCodeAt(i) >= 128) return sourceKey(decode(encoded, subs));
 	const map: number[] = [];
 	for (let i = 0; i < 128; i++) map.push(i);
 	for (let i = 0; i < CARRIED.length; i++)

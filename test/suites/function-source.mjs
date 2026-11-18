@@ -11,7 +11,11 @@
 // functions keep their native strings. Text that holds a surrogate with no
 // other half (in a string, a template, a pattern and comments) is evaluated
 // every one of those ways too, and what it computes and how its function
-// reads back are compared by their UTF-16 units. And Google's GSI case: a
+// reads back are compared by their UTF-16 units. A script and a module
+// whose text holds every control character but tab and the line breaks, and
+// DEL (as the string tables of the obfuscated anti-fraud sensors on NPR and
+// Bank of America do, which take their decoding keys from their own
+// functions' sources), read back as written too. And Google's GSI case: a
 // page puts a listener's source in its button frame's URL, and the frame
 // answers 400 unless it is the source the page wrote.
 // test/pages/function-source.html.bin collects every string; the suite
@@ -42,6 +46,8 @@ const GROUPS = [
 	['worker', 'a dedicated worker'],
 	['native', 'bound, native and Proxy functions'],
 	['surrogate', 'evaluated text that holds a lone surrogate'],
+	['controls', 'a script that holds every control character'],
+	['controlsmodule', 'a module that holds every control character'],
 ];
 
 const browser = await launch();
