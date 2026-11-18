@@ -329,8 +329,18 @@ export default class AccessModule extends Module<Client> {
 		// the errors a helper throws in the page's place, with the message V8
 		// gives the page's expression (`partial`, its source)
 		const errors = new ErrorMessages(moduleClient);
-		const nullish = (value: unknown): value is null | undefined =>
-			value === null || value === undefined;
+		// strictly null or undefined: document.all, which == null, is an
+		// object to a member read (`document.all[0]`), and a switch is what
+		// the minifier leaves strict (it makes `v === null || v ===
+		// undefined` into `v == null`)
+		const nullish = (value: unknown): value is null | undefined => {
+			switch (value) {
+				case null:
+				case undefined:
+					return true;
+			}
+			return false;
+		};
 		/**
 		 * The property key a computed member's key is (`o[k]`): an object
 		 * there is converted, once, as the member read would. The helpers
@@ -1472,9 +1482,7 @@ export default class AccessModule extends Module<Client> {
 			// renders `t?.messages[s.current % t.messages.length]` with `t`
 			// undefined, which threw reading `t.messages` as a get2 argument.
 			lazy: (target: any): ((key: any) => unknown) | undefined =>
-				target === null || target === undefined
-					? undefined
-					: (key: any) => api.get2(target, key),
+				nullish(target) ? undefined : (key: any) => api.get2(target, key),
 			method: (
 				target: any,
 				chained: boolean,

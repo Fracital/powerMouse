@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>document.all</title>
+	</head>
+	<body>
+		<p id="first">document.all through computed members</p>
+		<script>
+			// document.all is loosely equal to null and typeof 'undefined', yet
+			// an object to a member read, a call and an optional chain:
+			// ThreatMetrix (chase.com) walks `document.all[i]`, which threw an
+			// empty TypeError through the proxy
+			const results = {};
+			const run = (name, body) => {
+				try {
+					const value = body();
+					results[name] = {
+						value:
+							value && typeof value === 'object'
+								? (value.nodeName ?? String(value))
+								: String(value),
+					};
+				} catch (error) {
+					results[name] = {
+						threw: error.constructor.name + ': ' + error.message,
+					};
+				}
+			};
+			const all = document.all;
+			const i = 0;
+			const name = 'first';
+			const length = 'length';
+			const item = 'item';
+			run('index', () => document.all[i]);
+			run('index of a held one', () => all[i + 1]);
+			run('by id', () => all[name]);
+			run('length', () => all[length]);
+			run('a method', () => all[item](0));
+			run('a method by name, called', () => all[item].call(all, 1));
+			run('an optional index', () => all?.[i]);
+			run('an optional method', () => all?.[item]?.(0));
+			run('a read past an index', () => all[i].nodeName);
+			run('a write', () => {
+				all[name + 'x'] = 1;
+				return all[name + 'x'];
+			});
+			run('in', () => length in all);
+			run('a loop', () => {
+				let n = 0;
+				for (let k = 0; k < all[length]; k++) if (all[k].nodeType === 1) n++;
+				return n === all.length;
+			});
+			run('loosely null', () => all == null);
+			run('typeof', () => typeof all);
+			window.__all = { done: true, results };
+		</script>
+	</body>
+</html>
