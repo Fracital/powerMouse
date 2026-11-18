@@ -78,6 +78,7 @@ struct Received {
 	level: u8,
 	orientation: u8,
 	time: u64,
+	seq: u16,
 	rid: String,
 	data: Vec<u8>,
 	colour: [u8; 4],
@@ -150,7 +151,7 @@ impl Peer {
 				OUT_EVENT => self.events.push(owned(&bytes[1..])),
 				OUT_RESULT => result = Some(owned(&bytes[1..])),
 				OUT_MEDIA_DATA => {
-					let rid_len = bytes[19] as usize;
+					let rid_len = bytes[21] as usize;
 					self.frames.push(Received {
 						media: bytes[1],
 						pt: bytes[2],
@@ -160,8 +161,9 @@ impl Peer {
 						orientation: bytes[6],
 						colour: bytes[7..11].try_into().unwrap(),
 						time: u64::from_be_bytes(bytes[11..19].try_into().unwrap()),
-						rid: String::from_utf8(bytes[20..20 + rid_len].to_vec()).unwrap(),
-						data: bytes[20 + rid_len..].to_vec(),
+						seq: u16::from_be_bytes([bytes[19], bytes[20]]),
+						rid: String::from_utf8(bytes[22..22 + rid_len].to_vec()).unwrap(),
+						data: bytes[22 + rid_len..].to_vec(),
 					});
 				}
 				_ => {}
@@ -434,6 +436,8 @@ fn audio_both_ways() {
 		if n > 0 {
 			assert_eq!(frame.time - b.frames[n - 1].time, 960, "frame {n}");
 			assert!(frame.flags & media::FLAG_CONTIGUOUS != 0, "frame {n}");
+			// one packet a frame: the packets' own numbers
+			assert_eq!(frame.seq, b.frames[n - 1].seq.wrapping_add(1), "frame {n}");
 		}
 	}
 	assert_eq!(a.frames.len(), sent.len());

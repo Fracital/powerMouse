@@ -1073,8 +1073,11 @@ Frames are binary. A frame to send is input kind 4:
 and a received frame is output tag 6:
 
 ```
-[media u8][pt u8][codec u8][flags u8][level u8][orientation u8][colour u32][time u64][rid len u8][rid][bytes]
+[media u8][pt u8][codec u8][flags u8][level u8][orientation u8][colour u32][time u64][seq u16][rid len u8][rid][bytes]
 ```
+
+(`seq` the RTP sequence number of the frame's first packet, which a
+receiver's encoded transform reads as `sequenceNumber`.)
 
 `time` is in units of the payload's clock (48000 for Opus, 90000 for
 video); `age` is how long ago the frame was captured, which makes the
@@ -1963,14 +1966,26 @@ With Discord's `usedtx=1` the silences the page leaves out are sent as
 Chrome sends them (Audio in the worker, `#leftOut`), and its send
 transform is handed them as empty frames, as Chrome's is.
 
+A frame's metadata is Chrome's (Chrome 157, measured per codec with
+webrtc-transform against Chrome's own on both ends): a received sound's
+`sequenceNumber` is its packet's (the stack's record carries it); a sent
+picture is numbered from 1 (`frameId`), a keyframe depending on none and
+any other frame on the one before, and has the size it was encoded at;
+a received keyframe has the size its bytes state (VP8's keyframe header,
+VP9's uncompressed header, H.264's sequence parameter set, cropped, in
+`src/rtc/pictureSize.ts`), AV1's none, as Chrome's depacketizers read
+them, and the frames between it have 0 by 0. The stack's VP9 packetizer
+(str0m, patched) states a keyframe's size in its scalability structure,
+as libwebrtc's does: a browser receiving the page's VP9 reads its
+keyframes' size from there, and read 0 by 0 before.
+
 Limits: `createEncodedStreams()` (the older encoded insertable streams)
 still fails with NotSupportedError; a frame is the browser's class but
 not the browser's object, so `new RTCEncodedAudioFrame(frame)` and
 posting a frame to another context fail; `sendKeyFrameRequest()` is the
-browser's (an unattached transformer's refusal); a video frame's
-metadata says width and height 0 and numbers sent frames itself (each
-depends on the one before, a keyframe on none); a received sound's
-`sequenceNumber` counts its frames from a random start rather than
-reading the packet's; and a receiver's transform is given every frame
-from the first, where Chrome gives none to one set as late as the track
-event.
+browser's (an unattached transformer's refusal); a sent picture's
+`spatialIndex` and `temporalIndex` are 0 and simulcast layers share one
+count of ids; the empty frames Chrome gives a receiver's transform for
+padding packets are not given; and a receiver's transform is given every
+frame from the first, where Chrome gives none to one set as late as the
+track event.

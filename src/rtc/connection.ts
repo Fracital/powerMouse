@@ -10,6 +10,7 @@ import { peerAbort } from './abort';
 import { AudioReceiver, AudioSender } from './audio';
 import { hex, type Certificate } from './certificate';
 import { parseParameters, parsePayloads, type Formats } from './formats';
+import { pictureSize } from './pictureSize';
 import type {
 	CandidateInit,
 	ChannelOptions,
@@ -293,8 +294,7 @@ interface MediaState {
 	receiveTransform: MessagePort | null;
 	/** the section's streams as its transforms' frames name them, and when they were asked */
 	ssrcs: { tx?: number; rx?: number; at: number } | null;
-	/** the received frames' sequence numbers, and the sent video frames' ids */
-	sequence: number;
+	/** the sent video frames' ids */
 	frameId: number;
 }
 
@@ -726,7 +726,6 @@ export class Connection {
 			sendTransform: null,
 			receiveTransform: null,
 			ssrcs: null,
-			sequence: crypto.getRandomValues(new Uint16Array(1))[0],
 			frameId: 0,
 		};
 		if (kind === 'audio') {
@@ -828,18 +827,22 @@ export class Connection {
 			// (a silent frame's level is 0, as Chrome gives it)
 			if (frame.level !== ABSENT)
 				meta.audioLevel = frame.level >= 127 ? 0 : 10 ** (-frame.level / 20);
-			if (side === 'receive')
-				meta.sequenceNumber = state.sequence = (state.sequence + 1) & 0xffff;
+			if (side === 'receive' && frame.seq !== undefined)
+				meta.sequenceNumber = frame.seq;
 		} else {
+			// a sent picture's size as encoded; a received one's as its
+			// keyframe states it, 0 on the frames between
+			let size: [number, number] | null = null;
 			if (side === 'send') {
 				const id = ++state.frameId;
 				meta.dependencies = key ? [] : [id - 1];
 				meta.frameId = id;
-			}
-			meta.height = 0;
+				if (frame.width && frame.height) size = [frame.width, frame.height];
+			} else if (key) size = pictureSize(frame.codec ?? '', frame.payload);
+			meta.height = size ? size[1] : 0;
 			meta.spatialIndex = 0;
 			meta.temporalIndex = 0;
-			meta.width = 0;
+			meta.width = size ? size[0] : 0;
 		}
 		const data = frame.payload.slice().buffer;
 		// the frame as it was, but its bytes

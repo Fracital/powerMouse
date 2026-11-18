@@ -20,7 +20,8 @@
 //
 // TCP streams and everything else pass through untouched. `seen` lists the
 // UDP CONNECTs in order with the reason each was refused with (null for a
-// stream that was relayed).
+// stream that was relayed). `tap`, when set, is called with the bytes of
+// each DATA packet the server sends the client (what a stream received).
 import { createServer } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 
@@ -37,6 +38,7 @@ export async function startWispGate(upstream) {
 		gated: new Set(),
 		resolve: new Map(),
 		seen: [],
+		tap: null,
 		connections: 0,
 		cut() {
 			for (const pair of pairs) for (const socket of pair) socket.terminate();
@@ -110,6 +112,7 @@ export async function startWispGate(upstream) {
 			forward(packet);
 		});
 		behind.on('message', (data) => {
+			if (gate.tap && data[0] === DATA) gate.tap(Buffer.from(data).subarray(5));
 			if (client.readyState === WebSocket.OPEN) client.send(data);
 		});
 		const end = () => {

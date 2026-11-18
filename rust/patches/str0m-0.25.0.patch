@@ -353,6 +353,118 @@
      /// Set absolute capture time for this frame.
      pub fn abs_capture_time(mut self, capture_time: AbsCaptureTime) -> Self {
          self.ext_vals.abs_capture_time = Some(capture_time);
+--- a/src/packet/vp9.rs
++++ b/src/packet/vp9.rs
+@@ -4,8 +4,8 @@
+ use std::fmt;
+ 
+ /// Max non-flexible VP9 descriptor size reserved for MTU headroom:
+-/// flags(1) + PID(2) + L(1) + tl0picidx(1) + ≤1 SS byte on keyframe first-packets; 8 is a safe bound.
+-const VP9_NON_FLEXIBLE_HEADER_SIZE: usize = 8;
++/// flags(1) + PID(2) + L(1) + tl0picidx(1) + ≤5 SS bytes on keyframe first-packets; 12 is a safe bound.
++const VP9_NON_FLEXIBLE_HEADER_SIZE: usize = 12;
+ /// VP9 RTP payload descriptor size for flexible mode:
+ /// flags(1) + 15-bit PID(2) = 3
+ const VP9_FLEXIBLE_HEADER_SIZE: usize = 3;
+@@ -155,6 +155,55 @@
+     frame_type == 0
+ }
+ 
++/// The frame size a VP9 keyframe's uncompressed header states (VP9 spec 6.2:
++/// frame_marker, profile, show_existing_frame, frame_type, show_frame,
++/// error_resilient_mode, frame_sync_code, color_config, frame_size).
++pub fn vp9_keyframe_size(payload: &[u8]) -> Option<(u16, u16)> {
++    let mut at = 0usize;
++    let mut bits = |n: usize| -> Option<u32> {
++        let mut value = 0u32;
++        for _ in 0..n {
++            let byte = *payload.get(at >> 3)?;
++            value = (value << 1) | ((byte >> (7 - (at & 7))) & 1) as u32;
++            at += 1;
++        }
++        Some(value)
++    };
++    if bits(2)? != 2 {
++        return None;
++    }
++    let low = bits(1)?;
++    let high = bits(1)?;
++    let profile = (high << 1) | low;
++    if profile == 3 {
++        bits(1)?;
++    }
++    // show_existing_frame, then frame_type (0: a keyframe)
++    if bits(1)? != 0 || bits(1)? != 0 {
++        return None;
++    }
++    bits(2)?;
++    if bits(24)? != 0x49_83_42 {
++        return None;
++    }
++    if profile >= 2 {
++        bits(1)?;
++    }
++    // color_space: not CS_RGB has color_range (and, in profiles 1 and 3,
++    // subsampling and a reserved bit); CS_RGB has a reserved bit in those
++    if bits(3)? != 7 {
++        bits(1)?;
++        if profile == 1 || profile == 3 {
++            bits(3)?;
++        }
++    } else if profile == 1 || profile == 3 {
++        bits(1)?;
++    }
++    let width = bits(16)? + 1;
++    let height = bits(16)? + 1;
++    Some((width as u16, height as u16))
++}
++
+ /// Detect whether a VP9 RTP payload contains a keyframe by inspecting the P bit.
+ ///
+ /// VP9 RTP descriptor byte 0: `I|P|L|F|B|E|V|Z`
+@@ -269,6 +318,9 @@
+     ) -> Result<Vec<Vec<u8>>, PacketError> {
+         // Detect keyframe from VP9 bitstream to set P flag correctly.
+         let is_keyframe = detect_vp9_keyframe_bitstream(payload);
++        // a keyframe's size, which libwebrtc states in its SS (Y=1): what a
++        // receiver's depacketizer reads as the picture's width and height
++        let size = if is_keyframe { vp9_keyframe_size(payload) } else { None };
+ 
+         // tl0picidx increments on every TID=0 frame. Since we always emit TID=0,
+         // this increments on every frame per draft-ietf-payload-vp9, Section 6.3.
+@@ -292,8 +344,13 @@
+             let is_last = payload_data_remaining == current_fragment_size;
+ 
+             // Non-keyframe: 5 bytes (flags + 15-bit PID + L + tl0picidx)
+-            // Keyframe first packet: 6 bytes (+ 1 byte SS data, G=0)
+-            let ss_size = if is_keyframe && is_first { 1 } else { 0 };
++            // Keyframe first packet: 6 bytes (+ 1 byte SS data, G=0), and the
++            // picture's size (+ 4 bytes, Y=1) where its header states one
++            let ss_size = if is_keyframe && is_first {
++                if size.is_some() { 5 } else { 1 }
++            } else {
++                0
++            };
+             let header_size = 5 + ss_size;
+             let mut out = Vec::with_capacity(header_size + current_fragment_size);
+ 
+@@ -327,7 +384,15 @@
+             // GOF to advertise; a G=1/R=0 GOF mis-signals references (see commit msg). This matches what
+             // libwebrtc emits for non-scalable VP9 (g_bit = num_frames_in_gof > 0). RFC 9628 §4.2.
+             if is_keyframe && is_first {
+-                out.push(0x00);
++                match size {
++                    // N_S=0, Y=1, G=0: one layer, of this size
++                    Some((width, height)) => {
++                        out.push(0x10);
++                        out.extend_from_slice(&width.to_be_bytes());
++                        out.extend_from_slice(&height.to_be_bytes());
++                    }
++                    None => out.push(0x00),
++                }
+             }
+ 
+             out.extend_from_slice(
 --- a/src/rtp/ext.rs
 +++ b/src/rtp/ext.rs
 @@ -737,8 +737,9 @@

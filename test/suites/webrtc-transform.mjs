@@ -1,0 +1,277 @@
+// What a proxied page's encoded transforms (RTCRtpScriptTransform) are
+// given, next to the browser's own: test/pages/webrtc-transform.html sends
+// a tone and a canvas both ways, each sender and receiver through a
+// transform whose worker writes down the first frames, to the same page
+// loaded natively in a second context. The page is loaded natively (the
+// control) and through the proxy, whose WebRTC goes over a wisp relay in
+// front of the suite's (test/wisp-gate.mjs) that reads the RTP headers of
+// what comes in, so a received frame's sequence number can be checked
+// against the packet's.
+import { spawn } from 'node:child_process';
+import { createServer as createNet } from 'node:net';
+import { fileURLToPath } from 'node:url';
+import {
+	done,
+	FIXTURE,
+	launch,
+	NO_AUDIO,
+	ok,
+	openDemo,
+	PORT,
+	sleep,
+	submitLanding,
+	waitForServer,
+} from '../lib.mjs';
+import { startWispGate } from '../wisp-gate.mjs';
+
+const root = fileURLToPath(new URL('../../', import.meta.url));
+const target = `${FIXTURE}pages/webrtc-transform.html`;
+
+// the packets the relay saw come in: "ssrc rtp seq"
+const wire = new Set();
+const gate = await startWispGate(`ws://127.0.0.1:${PORT}/wisp/`);
+gate.tap = (bytes) => {
+	// RTP (version 2, not RTCP's payload types), as SRTP leaves its header
+	if (bytes.length < 12 || (bytes[0] & 0xc0) !== 0x80) return;
+	const pt = bytes[1] & 0x7f;
+	if (pt >= 64 && pt <= 95) return;
+	wire.add(
+		`${bytes.readUInt32BE(8)} ${bytes.readUInt32BE(4)} ${bytes.readUInt16BE(2)}`,
+	);
+};
+const freePort = () =>
+	new Promise((resolve, reject) => {
+		const probe = createNet();
+		probe.on('error', reject);
+		probe.listen(0, '127.0.0.1', () => {
+			const { port } = probe.address();
+			probe.close(() => resolve(port));
+		});
+	});
+const port = await freePort();
+const server = spawn(process.execPath, [`${root}demo/server.js`], {
+	env: { ...process.env, PORT: String(port), STOMP_WISP_URL: gate.url },
+	stdio: ['ignore', 'ignore', 'inherit'],
+});
+process.on('exit', () => server.kill());
+const BASE = `http://localhost:${port}/`;
+await waitForServer(`${BASE}api/status`);
+
+// the fake capture device (no real one is opened): a page allowed it gets
+// the browser's host candidates
+const FAKE = [
+	'--use-fake-device-for-media-stream',
+	'--use-fake-ui-for-media-stream',
+	'--autoplay-policy=no-user-gesture-required',
+];
+const browser = await launch(FAKE, { env: NO_AUDIO });
+
+let names = 0;
+function end(page) {
+	const name = `t${names++}`;
+	return {
+		label: page.label,
+		call: (step, ...args) =>
+			page
+				.frame()
+				.evaluate(
+					([step, name, args]) => window.__transform[step](name, ...args),
+					[step, name, args],
+				)
+				.catch((error) => {
+					throw new Error(
+						`${page.label}, ${step}: ${String(error.message).split('\n')[0]}`,
+					);
+				}),
+	};
+}
+async function open(label, proxied) {
+	let opened;
+	let frame;
+	if (proxied) {
+		opened = await openDemo(browser, BASE);
+		await submitLanding(opened, target);
+		frame = () =>
+			opened.frames().findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
+		// the page's microphone is asked of the user through the host (the
+		// demo's prompt): allowed, as a user does
+		void (async () => {
+			while (!opened.isClosed()) {
+				const button = await opened
+					.waitForSelector('#permissionPrompt .allow', { timeout: 0 })
+					.catch(() => null);
+				await button?.click().catch(() => {});
+				await sleep(200);
+			}
+		})();
+	} else {
+		opened = await (await browser.newContext()).newPage();
+		await opened.goto(target);
+		frame = () => opened.mainFrame();
+	}
+	for (let i = 0; i < 160; i++) {
+		if (
+			await frame()
+				?.evaluate(() => window.__transformReady)
+				.catch(() => false)
+		)
+			break;
+		await sleep(250);
+	}
+	return { label, page: opened, frame };
+}
+
+/** a call of the page (`proxied` or natively) with the native far end: what both ends' transforms saw */
+async function call(proxied, kind, codec) {
+	const near = await open(proxied ? 'proxied' : 'natively', proxied);
+	const far = await open('far end', false);
+	const own = end(near);
+	const other = end(far);
+	try {
+		await own.call('open', {});
+		await other.call('open', {});
+		await own.call('media', kind, { codec });
+		await other.call('media', kind, { codec });
+		await other.call('remote', 'offer', await own.call('local', 'offer'));
+		await own.call('remote', 'answer', await other.call('local', 'answer'));
+		await own.call('connected');
+		await other.call('connected');
+		const mine = await own.call('seen', 60);
+		const theirs = await other.call('seen', 60);
+		return { mine, theirs };
+	} catch (error) {
+		return { failure: error.message };
+	} finally {
+		await own.call('close').catch(() => {});
+		await other.call('close').catch(() => {});
+		await near.page.close().catch(() => {});
+		await far.page.close().catch(() => {});
+	}
+}
+
+const brief = (list) =>
+	JSON.stringify(
+		(list ?? [])
+			.slice(0, 4)
+			.map((f) => [f.type, f.id, f.deps, f.width, f.height, f.seq, f.keys]),
+	);
+
+/**
+ * What a sender's frames read as in Chrome: the first a keyframe with id 1
+ * depending on none, each id one more than the last, a delta frame
+ * depending on the frame before (a later keyframe on none, or on the frame
+ * before where the encoder makes it as part of the sequence: Chrome's
+ * H.264 every so often), every frame of the size encoded
+ */
+const sentShape = (list, width, height) => {
+	if (!list?.length) return 'no frames';
+	const off = [];
+	if (list[0].type !== 'key' || list[0].id !== 1 || list[0].deps?.length !== 0)
+		off.push(`first ${JSON.stringify(list[0])}`);
+	for (let i = 1; i < list.length; i++) {
+		const f = list[i];
+		const deps = JSON.stringify(f.deps);
+		if (
+			f.id !== list[i - 1].id + 1 ||
+			(deps !== JSON.stringify([f.id - 1]) &&
+				(f.type !== 'key' || deps !== '[]'))
+		)
+			off.push(`frame ${i} ${f.type} id ${f.id} deps ${f.deps}`);
+		if (f.width !== width || f.height !== height)
+			off.push(`frame ${i} ${f.width}x${f.height}`);
+		if (off.length > 3) break;
+	}
+	return off.join('; ');
+};
+/** a receiver's: each keyframe of the size `key` (Chrome's for the codec), the rest 0 by 0 */
+const receivedShape = (list, key) => {
+	if (!list?.length) return 'no frames';
+	if (!list.some((f) => f.type === 'key')) return 'no keyframe';
+	const off = [];
+	for (const [i, f] of list.entries()) {
+		const want = f.type === 'key' ? key : [0, 0];
+		if (f.width !== want[0] || f.height !== want[1])
+			off.push(`frame ${i} ${f.type} ${f.width}x${f.height}`);
+		if (off.length > 3) break;
+	}
+	return off.join('; ');
+};
+
+// ---- audio: a received frame's sequence number is its packet's ----------
+{
+	const want = await call(false, 'audio');
+	const got = await call(true, 'audio');
+	const consecutive = (list) =>
+		list?.length > 1 &&
+		list.every((f, i) => !i || f.seq === ((list[i - 1].seq + 1) & 0xffff));
+	ok(
+		'natively, audio: the receiver transform gets consecutive sequence numbers',
+		!want.failure && consecutive(want.mine?.['recv audio']),
+		want.failure ?? brief(want.mine?.['recv audio']),
+	);
+	const mine = got.mine?.['recv audio'];
+	const missing = (mine ?? []).filter(
+		(f) => !wire.has(`${f.ssrc} ${f.rtp} ${f.seq}`),
+	);
+	ok(
+		'proxied, audio: a received frame has the sequence number of the packet it came in',
+		!got.failure && mine?.length > 1 && missing.length === 0,
+		got.failure ??
+			`${missing.length} of ${mine?.length} not on the wire: ${brief(missing)} (${wire.size} packets seen)`,
+	);
+	ok(
+		'proxied, audio: the received metadata has the keys Chrome gives',
+		mine?.[0]?.keys === want.mine?.['recv audio']?.[0]?.keys,
+		`${mine?.[0]?.keys} | natively ${want.mine?.['recv audio']?.[0]?.keys}`,
+	);
+}
+
+// ---- video: sizes, ids and dependencies, per codec ---------------------------
+for (const codec of ['video/VP8', 'video/VP9', 'video/H264', 'video/AV1']) {
+	const want = await call(false, 'video', codec);
+	const got = await call(true, 'video', codec);
+	const name = codec.slice(6);
+	// Chrome's for the codec, natively: a received keyframe's size
+	const key = want.mine?.['recv video']?.find((f) => f.type === 'key');
+	ok(
+		`natively, ${name}: the transforms read as Chrome's always do`,
+		!want.failure &&
+			!sentShape(want.mine?.['send video'], 320, 180) &&
+			key &&
+			!receivedShape(want.mine?.['recv video'], [key.width, key.height]),
+		want.failure ??
+			`${sentShape(want.mine?.['send video'], 320, 180)} / ${brief(want.mine?.['recv video'])}`,
+	);
+	if (want.failure || !key) continue;
+	const sent = got.mine?.['send video'];
+	ok(
+		`proxied, ${name}: a sent frame's type, id, dependencies and size read as natively`,
+		!got.failure &&
+			!sentShape(sent, 320, 180) &&
+			sent[0].keys === want.mine['send video'][0].keys,
+		got.failure ?? `${sentShape(sent, 320, 180)} ${brief(sent)}`,
+	);
+	const received = got.mine?.['recv video'];
+	ok(
+		`proxied, ${name}: a received keyframe has the size Chrome reads (${key.width}x${key.height}), the frames between none`,
+		!got.failure &&
+			!receivedShape(received, [key.width, key.height]) &&
+			received[0].keys === want.mine['recv video'][0].keys,
+		got.failure ??
+			`${receivedShape(received, [key.width, key.height])} ${brief(received)}`,
+	);
+	// what the far end reads of the proxied page's keyframes, as of the
+	// native page's (what the packets say of their size)
+	const farKey = got.theirs?.['recv video']?.find((f) => f.type === 'key');
+	const farWant = want.theirs?.['recv video']?.find((f) => f.type === 'key');
+	ok(
+		`proxied, ${name}: the far end reads the page's keyframes at the size it reads the browser's (${farWant?.width}x${farWant?.height})`,
+		farKey &&
+			farKey.width === farWant?.width &&
+			farKey.height === farWant?.height,
+		JSON.stringify(farKey ?? null),
+	);
+}
+
+gate.close();
+await done(browser);

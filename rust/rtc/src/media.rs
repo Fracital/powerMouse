@@ -409,7 +409,8 @@ pub fn parse_frame(bytes: &[u8]) -> Option<Frame<'_>> {
 }
 
 /// A frame the stack received, after the tag:
-/// `[media u8][pt u8][codec u8][flags u8][level u8][orientation u8][colour 4][time u64][rid len u8][rid][bytes]`.
+/// `[media u8][pt u8][codec u8][flags u8][level u8][orientation u8][colour 4][time u64][seq u16][rid len u8][rid][bytes]`,
+/// `seq` the RTP sequence number of its first packet.
 /// None for a payload of no codec the host knows.
 pub fn data_record(tag: u8, media: u8, data: &MediaData) -> Option<Vec<u8>> {
 	let codec = codec_id(data.params.spec().codec);
@@ -438,7 +439,7 @@ pub fn data_record(tag: u8, media: u8, data: &MediaData) -> Option<Vec<u8>> {
 		None => ABSENT,
 	};
 	let rid = data.rid.as_ref().map(|rid| rid.as_bytes()).unwrap_or(&[]);
-	let mut out = Vec::with_capacity(21 + rid.len() + data.data.len());
+	let mut out = Vec::with_capacity(23 + rid.len() + data.data.len());
 	out.push(tag);
 	out.push(media);
 	out.push(*data.pt);
@@ -448,6 +449,7 @@ pub fn data_record(tag: u8, media: u8, data: &MediaData) -> Option<Vec<u8>> {
 	out.push(orientation);
 	out.extend_from_slice(&data.ext_vals.color_space.unwrap_or([0; 4]));
 	out.extend_from_slice(&data.time.numer().to_be_bytes());
+	out.extend_from_slice(&(**data.seq_range.start() as u16).to_be_bytes());
 	out.push(rid.len() as u8);
 	out.extend_from_slice(rid);
 	out.extend_from_slice(&data.data);

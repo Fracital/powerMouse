@@ -42,6 +42,9 @@
 # The ICE agent can be read (DirectApi::ice_agent), for which remote
 # candidates still have a pair: the agent prunes a pair it gave up on
 # without an event, and the host closes the stream to that remote.
+# A VP9 keyframe's first packet states the picture's size in its
+# scalability structure (Y=1), as libwebrtc's does: as published it states
+# none, and a browser's receiver reads the keyframe's width and height as 0.
 str0m 0.25.0 357c7e453c033c8bb59e912312f9f9ff07c2a9ce7268bcb94f0c828a5b47e58f
 # sctp-proto: Association::abort, an ABORT with a User-Initiated Abort cause
 # and the reason given (as published only a graceful shutdown is offered).

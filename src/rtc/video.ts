@@ -717,13 +717,15 @@ export class VideoSender {
 			{
 				media: this.media,
 				pt: payload.pt,
-				flags: 0,
+				flags: chunk.type === 'key' ? FLAG_KEYFRAME : 0,
 				level: ABSENT,
 				orientation: ABSENT,
 				colour: chunk.type === 'key' ? layer.colour : 0,
 				time: BigInt(Math.round(us * VIDEO_UNITS) + this.#offset),
 				rid: this.#plain(layer) ? '' : layer.limits.rid,
 				payload: bytes,
+				width: layer.config?.width,
+				height: layer.config?.height,
 			},
 			readAt === undefined ? 0 : Math.max(0, now - readAt),
 		);

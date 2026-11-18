@@ -168,6 +168,11 @@ export interface Frame {
 	/** the simulcast layer, '' for none */
 	rid: string;
 	payload: Uint8Array;
+	/** a received frame's RTP sequence number (its first packet's) */
+	seq?: number;
+	/** a sent picture's size, as the encoder was given it (for the page's encoded transform) */
+	width?: number;
+	height?: number;
 }
 
 /**
@@ -194,11 +199,11 @@ export function encodeFrame(frame: Frame, age: number): Uint8Array {
 
 /**
  * the payload of an OUT_MEDIA_DATA record (after its tag):
- * `[media u8][pt u8][codec u8][flags u8][level u8][orientation u8][colour u32][time u64][rid len u8][rid][bytes]`
+ * `[media u8][pt u8][codec u8][flags u8][level u8][orientation u8][colour u32][time u64][seq u16][rid len u8][rid][bytes]`
  */
 export function decodeMediaData(bytes: Uint8Array): Frame & { codec: string } {
 	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-	const ridLen = bytes[18];
+	const ridLen = bytes[20];
 	return {
 		media: bytes[0],
 		pt: bytes[1],
@@ -208,8 +213,9 @@ export function decodeMediaData(bytes: Uint8Array): Frame & { codec: string } {
 		orientation: bytes[5],
 		colour: view.getUint32(6),
 		time: view.getBigUint64(10),
-		rid: decoder.decode(bytes.subarray(19, 19 + ridLen)),
-		payload: bytes.subarray(19 + ridLen),
+		seq: view.getUint16(18),
+		rid: decoder.decode(bytes.subarray(21, 21 + ridLen)),
+		payload: bytes.subarray(21 + ridLen),
 	};
 }
 
