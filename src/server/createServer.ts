@@ -40,6 +40,7 @@ import {
 	renewCacheSecret,
 	useCacheSecret,
 } from './cacheMarks';
+import { warmClientHints } from './clientHints';
 import Cookies, { openCookies, registerCookies } from './Cookies';
 import { hostErrorPage } from './errorPage';
 import { registerIntegrityLoads } from './integrityLoads';
@@ -51,6 +52,7 @@ import { RewriteCache } from './rewriteCache';
 import type { RewritePool } from './rewritePool';
 import { registerRewrites } from './rewrites';
 import Router, { json } from './Router';
+import { serviceWorkers } from './serviceWorkers';
 import { ShieldsStore } from './shields';
 import {
 	forgetSiteStorage,
@@ -449,6 +451,7 @@ export default async function createServer(
 
 	const cookies = registerCookies(router, stores.cookies);
 	const cache = config.cache === false ? undefined : stores.cache;
+	warmStores(cache, config.serviceWorkers !== false);
 	const rewrites = config.cache === false ? undefined : stores.rewrites;
 	// a page asks who it is (its service worker client id) and reports it to
 	// the host, so the host can attribute requests to frames
@@ -569,4 +572,19 @@ export default async function createServer(
 				url,
 			),
 	};
+}
+
+/**
+ * Start the reads a request makes once per worker start, so that they run
+ * side by side now rather than one after another in the first navigation's
+ * way to the network: the emulated service workers' registrations (does
+ * one control the page), the client hints' stores and the HTTP cache's.
+ * Each is the same promise the request then waits on; a failure is left
+ * to it.
+ */
+function warmStores(cache: HttpCache | undefined, workers: boolean) {
+	const reads: Promise<unknown>[] = [warmClientHints()];
+	if (workers) reads.push(serviceWorkers.any());
+	if (cache) reads.push(cache.warm());
+	for (const read of reads) read.catch(() => {});
 }

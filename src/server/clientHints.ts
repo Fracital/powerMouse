@@ -692,6 +692,16 @@ function loadAccepted(): Promise<void> {
 	return loaded;
 }
 
+/**
+ * Load what a request's hints are read from before one asks: the origins'
+ * accepted hints (an IndexedDB read) and the browser's high-entropy user
+ * agent values (an asynchronous answer). Both are read once per worker
+ * start, and the first navigation after it waited for each in turn.
+ */
+export function warmClientHints(): Promise<unknown> {
+	return Promise.all([loadAccepted(), userAgentValues()]);
+}
+
 /** the hints `origin` accepted, as the browser keeps them */
 export async function acceptedHints(origin: string): Promise<Set<string>> {
 	await loadAccepted();

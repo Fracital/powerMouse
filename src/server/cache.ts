@@ -426,6 +426,10 @@ export class HttpCache {
 	private open(): Promise<Cache> {
 		return (this.cache ??= caches.open(STORE));
 	}
+	/** open the store before a request asks it (createServer warmStores) */
+	warm(): Promise<unknown> {
+		return this.open();
+	}
 	/** the request headers an entry was stored for, the ones its Vary names (`*`: what no request has) */
 	static varyKey(vary: string | null, headers: Headers): string {
 		const names = (vary || '')
