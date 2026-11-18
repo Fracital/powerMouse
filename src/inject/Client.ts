@@ -1476,18 +1476,49 @@ export default class Client {
 	}
 	/** the same, with the whole event (its ports): the emulated service workers' messages */
 	onServiceWorkerEvent(listener: (event: MessageEvent) => void) {
-		this.#onContainer((container) => {
-			container.addEventListener('message', (event) =>
-				listener(event as MessageEvent),
-			);
-			container.startMessages?.();
-		});
+		this.#onContainerMessage(listener, false);
 	}
 	onServiceWorkerMessage(listener: (data: unknown) => void) {
+		this.#onContainerMessage(listener, true);
+	}
+	/**
+	 * This client's listeners of its container's messages, which one
+	 * listener of the container's calls in turn. The worker tells every
+	 * window of each change of the jar and of storage, and a page with a
+	 * few hundred ad frames got tens of thousands of these a minute: each
+	 * module's listener of its own was a call into the page's realm per
+	 * message (apnews.com's top document made 457,000 of them in 40 s).
+	 */
+	#containerListeners?: [(value: never) => void, boolean][];
+	#onContainerMessage(listener: (value: never) => void, data: boolean) {
+		if (this.#containerListeners) {
+			this.#containerListeners.push([listener, data]);
+			return;
+		}
+		const listeners: [(value: never) => void, boolean][] = [[listener, data]];
+		this.#containerListeners = listeners;
 		this.#onContainer((container) => {
-			container.addEventListener('message', (event) =>
-				listener((event as MessageEvent).data),
-			);
+			container.addEventListener('message', (event) => {
+				// (as natively: one added now hears the next message, and one
+				// that throws keeps none of the others from hearing this one)
+				const count = listeners.length;
+				let read = false;
+				let value: unknown;
+				let thrown: { error: unknown } | null = null;
+				for (let index = 0; index < count; index++) {
+					const [each, wantsData] = listeners[index];
+					if (wantsData && !read) {
+						value = (event as MessageEvent).data;
+						read = true;
+					}
+					try {
+						each((wantsData ? value : event) as never);
+					} catch (error) {
+						thrown ??= { error };
+					}
+				}
+				if (thrown) throw thrown.error;
+			});
 			container.startMessages?.();
 		});
 	}

@@ -1,0 +1,38 @@
+<!doctype html>
+<title>inject listeners</title>
+<p>
+	The page reads document.cookie and localStorage but not cookieStore until the
+	suite asks.
+</p>
+<script>
+	// what an ad library does: read and write cookies and storage, no cookieStore
+	document.cookie = 'il_seed=1; path=/';
+	document.cookie;
+	localStorage.setItem('il_seed', '1');
+	window.__il = { ready: true };
+	// the suite's second step: the page's first look at cookieStore, a
+	// listener of its own, then a cookie written, read a few times (each a
+	// round trip of the proxy's synchronous bridge) and deleted
+	window.__listen = async () => {
+		const seen = [];
+		cookieStore.addEventListener('change', (event) => {
+			for (const cookie of event.changed) seen.push(`+${cookie.name}`);
+			for (const cookie of event.deleted) seen.push(`-${cookie.name}`);
+		});
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		document.cookie = 'il_a=1; path=/';
+		for (let i = 0; i < 3; i++) {
+			void document.cookie;
+			localStorage.getItem(`il_missing${i}`);
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+		await new Promise((resolve) => setTimeout(resolve, 500));
+		document.cookie = 'il_a=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+		// apart, so each delete is an event of its own (two in one turn are
+		// reported in the jar's order, not the writes': not this suite's matter)
+		await new Promise((resolve) => setTimeout(resolve, 500));
+		document.cookie = 'il_seed=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+		await new Promise((resolve) => setTimeout(resolve, 1500));
+		return seen;
+	};
+</script>

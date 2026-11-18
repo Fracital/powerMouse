@@ -57,14 +57,26 @@ export default class CookieStoreModule extends Module<DocumentClient> {
 		const nativeDispatch = global.EventTarget.prototype.dispatchEvent;
 		const stopImmediate = global.Event.prototype.stopImmediatePropagation;
 
-		// the browser's events are about the proxy origin's cookies (the sync
-		// bridge's answers ride in them): dropped before any page listener
-		Reflect.apply(nativeAdd, store, [
-			'change',
-			(event: Event) => {
-				if (event.isTrusted) Reflect.apply(stopImmediate, event, []);
-			},
-		]);
+		// The browser's events are about the proxy origin's cookies (the sync
+		// bridge's answers ride in them): dropped before any page listener.
+		// The page reaches the store only through the getter below, so the
+		// listener is added at its first read: the browser tells a document
+		// of cookie changes only while its store has a listener, and every
+		// proxied document listening made each answer of the bridge an event
+		// in each of them (apnews.com's top document had 99,000 in 40 s).
+		// A capture listener, as one at the target runs before the page's of
+		// either phase
+		let dropping = false;
+		const dropBrowserEvents = () => {
+			dropping = true;
+			Reflect.apply(nativeAdd, store, [
+				'change',
+				(event: Event) => {
+					if (event.isTrusted) Reflect.apply(stopImmediate, event, []);
+				},
+				true,
+			]);
+		};
 
 		const withoutHash = (url: URL) => url.href.replace(/#[^]*$/, '');
 
@@ -177,7 +189,10 @@ export default class CookieStoreModule extends Module<DocumentClient> {
 				// still the getter's once it is removed, where natively the
 				// window of a removed frame answers null)
 				if (result === store && global.closed) return null;
-				if (result === store) watch();
+				if (result === store) {
+					if (!dropping) dropBrowserEvents();
+					watch();
+				}
 				return result;
 			}),
 		});
