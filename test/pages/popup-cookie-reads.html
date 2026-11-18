@@ -26,5 +26,28 @@
 		const second = await read();
 		return { first, second };
 	};
+	// a popup of this host sets the cookie with a fetch and says so, and the
+	// page reads document.cookie on the message, a dozen times: the jar has a
+	// response's cookies before the page that fetched sees it (WPT's
+	// cookies/samesite/fetch.https.html, whose puppet popup does this)
+	window.__runFetch = async () => {
+		const run = `pcf${Date.now()}`;
+		const popup = window.open(`popup-cookie-reads-popup.html?fetch=${run}`);
+		const reads = [];
+		await new Promise((resolve) => {
+			const timer = setTimeout(resolve, 20000);
+			const heard = (event) => {
+				if (event.data !== 'ready' && event.data !== 'set') return;
+				if (event.data === 'set') reads.push(document.cookie);
+				if (reads.length < 12) return popup.postMessage('go', '*');
+				clearTimeout(timer);
+				removeEventListener('message', heard);
+				resolve();
+			};
+			addEventListener('message', heard);
+		});
+		popup.close();
+		return reads;
+	};
 	window.__pcr = { ready: true };
 </script>

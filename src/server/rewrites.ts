@@ -136,6 +136,7 @@ import {
 	HOPS_MARKER,
 	IMAGES_WAITING,
 	INITIATOR_ROUTE,
+	JAR_MARKER,
 	KEPT_MARKER,
 	LOAD_HEADER,
 	MEMORY_MARKER,
@@ -236,7 +237,7 @@ import {
 	responsePolicies,
 	workerPolicies,
 } from './contentPolicies';
-import Cookies from './Cookies';
+import Cookies, { type JarCookie } from './Cookies';
 import {
 	corpBlocks,
 	corsCheck,
@@ -489,6 +490,12 @@ interface RedirectHop {
 	 * in proxy URL space, where it never crosses, and sends it on every hop)
 	 */
 	unauthorized?: boolean;
+	/**
+	 * the hosts whose Set-Cookie on a hop so far changed the jar, which the
+	 * chain's answer names to the inject (JAR_MARKER); the hop's own list,
+	 * filled once its cookies are stored, before the browser asks for the next
+	 */
+	jar?: string[];
 }
 
 /** the destinations and modes a LOAD_HEADER may name: a page's subresource loads, never a navigation */
@@ -1924,6 +1931,8 @@ function genericForward(
 		// before it: the page's Authorization went no further than that
 		const unauthorized = !!previousHop?.unauthorized;
 		if (unauthorized) requestHeaders.delete('authorization');
+		// the hosts whose cookies the chain changed the jar with (JAR_MARKER)
+		const jarHosts = [...(previousHop?.jar ?? [])];
 		const carried = previousHop?.referer;
 		// (a document of an opaque origin, one the page sandboxed without
 		// allow-same-origin, is no referrer of anything)
@@ -4160,6 +4169,8 @@ function genericForward(
 						? { grant: { token: loadToken, load: granted } }
 						: {}),
 					first: previousHop?.first ?? serverRequest.url,
+					// (filled below, when this hop's cookies are stored)
+					jar: jarHosts,
 				},
 			);
 
@@ -4248,6 +4259,7 @@ function genericForward(
 				),
 			);
 
+		const outcomes: [string, JarCookie | null][] = [];
 		for (const [header, value] of response.rawHeaders ?? []) {
 			if (header.toLowerCase() === 'set-cookie') {
 				// a response to a request without credentials sets nothing
@@ -4258,9 +4270,19 @@ function genericForward(
 						'http',
 						partitionKey,
 						crossSiteSet,
+						outcomes,
 					);
 			}
 		}
+		// the page's inject tells the other documents of the site before the
+		// page sees the answer (JAR_MARKER)
+		if (outcomes.length && !jarHosts.includes(url.url.hostname))
+			jarHosts.push(url.url.hostname);
+		if (jarHosts.length && !redirect)
+			responseHeaders.append(
+				'server-timing',
+				`${JAR_MARKER};desc="${jarHosts.join(' ')}"`,
+			);
 
 		// A frame's navigation the site redirects to another origin: the frame
 		// gets a fresh browsing context for it (src/freshFrame.ts), which asks

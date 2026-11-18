@@ -11,6 +11,7 @@ import Module from '../../Module';
 import {
 	adoptTypeMark,
 	isStompHeader,
+	jarChanges,
 	pageHeaderRecord,
 	reportOnly,
 } from '../../modules/Fetch';
@@ -354,7 +355,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 					this.#upload.dispatchEvent(new ProgressEvent('loadend'));
 				}
 				this.#readyState = HEADERS_RECEIVED;
-				that.client.notifyResponse();
+				that.client.notifyResponse(jarChanges(response!));
 				this.#status = response!.status;
 				this.#statusText = response!.statusText;
 				// the fetch hook already reads a Response's URL as the page's; a

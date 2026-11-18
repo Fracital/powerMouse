@@ -236,8 +236,12 @@ export default class Client {
 	 */
 	fingerprintSeed: number;
 	applied: boolean;
-	/** @internal called after a response reached this context (fetch, XHR): caches that depend on the jar drop */
-	readonly responseListeners = new Set<() => void>();
+	/**
+	 * @internal called after a response reached this context (fetch, XHR),
+	 * with the hosts it changed the jar for: caches that depend on the jar
+	 * drop
+	 */
+	readonly responseListeners = new Set<(jarHosts: readonly string[]) => void>();
 	/**
 	 * @internal Globals of this realm that a module holds behind an accessor
 	 * until the page first reads them (CanvasTaint's WebGL interfaces): each
@@ -1497,9 +1501,12 @@ export default class Client {
 	get storageKey(): string {
 		return `${this.url.url.origin}${this.partition}`;
 	}
-	/** @internal a response reached this context */
-	notifyResponse() {
-		for (const listener of this.responseListeners) listener();
+	/**
+	 * @internal a response reached this context; `jarHosts` are the hosts
+	 * its Set-Cookie headers changed the jar for (JAR_MARKER)
+	 */
+	notifyResponse(jarHosts: readonly string[] = []) {
+		for (const listener of this.responseListeners) listener(jarHosts);
 	}
 	/** the same, with the whole event (its ports): the emulated service workers' messages */
 	onServiceWorkerEvent(listener: (event: MessageEvent) => void) {

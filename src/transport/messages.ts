@@ -341,6 +341,18 @@ export const siteMetrics = (value: string) =>
  * reading: filterHeaders.ts browserBytes)
  */
 export const BYTES_MARKER = 'stomp-bytes';
+/**
+ * A Server-Timing metric the worker adds to an answer whose Set-Cookie
+ * headers (its own, or a redirect's on the way) changed the jar: its
+ * description is the hosts they were set from, space-separated. Natively
+ * the jar has a response's cookies before the page sees the response, so a
+ * page that tells another window of it (a popup's fetch, then postMessage)
+ * has that window read them in document.cookie. The worker's broadcast of
+ * the change (COOKIES_CHANGED) is a message of its own, which the page's
+ * message could overtake: the inject that hands the page the response
+ * stamps the sites' cookie versions first (src/inject/dom/modules/Cookies.ts)
+ */
+export const JAR_MARKER = 'stomp-jar';
 /** every Server-Timing metric of the worker's own, which the page never sees */
 export const PROXY_METRICS: readonly string[] = [
 	TAO_MARKER,
@@ -360,6 +372,7 @@ export const PROXY_METRICS: readonly string[] = [
 	KEPT_MARKER,
 	HOPS_MARKER,
 	BYTES_MARKER,
+	JAR_MARKER,
 ];
 /**
  * On the answer of a page's emulated service worker: `<type> <url>`, the

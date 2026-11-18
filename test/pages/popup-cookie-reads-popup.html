@@ -1,5 +1,13 @@
 <!doctype html>
 <title>popup cookie reads: popup</title>
 <script>
-	opener.postMessage(document.cookie, '*');
+	const run = new URLSearchParams(location.search).get('fetch');
+	if (run) {
+		// each message: a response sets the cookie, then the opener is told
+		addEventListener('message', async () => {
+			await fetch(`/http-cache?k=${run}&n=popup&sc=seen&cc=no-store`);
+			opener.postMessage('set', '*');
+		});
+		opener.postMessage('ready', '*');
+	} else opener.postMessage(document.cookie, '*');
 </script>

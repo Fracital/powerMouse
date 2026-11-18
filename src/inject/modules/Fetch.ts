@@ -9,6 +9,7 @@ import {
 	ABORT_HEADER,
 	BYTES_MARKER,
 	CORS_MARKER,
+	JAR_MARKER,
 	OPAQUE_COPY_HEADER,
 	OPAQUE_HEADER,
 	OPAQUE_MARKER,
@@ -188,6 +189,27 @@ export function adoptTypeMark(response: Response): boolean {
 		url || undefined,
 	);
 	return true;
+}
+
+/**
+ * The hosts whose Set-Cookie headers changed the jar on the way to
+ * `response` (JAR_MARKER), none for any other response
+ */
+export function jarChanges(response: Response): string[] {
+	try {
+		const headers = Reflect.apply(nativeResponseHeaders, response, []);
+		const timing = Reflect.apply(nativeHeadersGet, headers, [
+			'server-timing',
+		]) as string | null;
+		const lead = `${JAR_MARKER};desc="`;
+		const at = timing === null ? -1 : timing.lastIndexOf(lead);
+		if (at === -1) return [];
+		const from = at + lead.length;
+		return timing!.slice(from, timing!.indexOf('"', from)).split(' ');
+	} catch (error) {
+		// not a Response (a worker's synchronous XMLHttpRequest makes its own)
+		return [];
+	}
 }
 
 /**
@@ -706,8 +728,9 @@ export default class FetchModule extends Module<Client> {
 					routeXHR(new StompURL(url, client.url)),
 					init,
 				);
-				// the response may have set cookies: document.cookie reads fresh
-				client.notifyResponse();
+				// the response may have set cookies: document.cookie reads fresh,
+				// here and, for the sites it set them for, in every document
+				client.notifyResponse(jarChanges(res));
 
 				// the page's URL for the routed one (unrouteURL reads the routed
 				// prefix off the client, not this bundle's free `location`)

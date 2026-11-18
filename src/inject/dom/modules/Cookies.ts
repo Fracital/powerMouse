@@ -22,6 +22,10 @@ import SyncModule, { BEACON_QUOTA, WRITE_BUDGET } from './Sync';
 
 const publicSuffix = (host: string) => getPublicSuffix(host);
 
+/** the key the documents of `host`'s site bump when they change its cookies */
+const versionKeyOf = (host: string) =>
+	`$stomp$cookies:${getDomain(host) ?? host}`;
+
 const expired = (cookie: JarCookie, now: number) =>
 	cookie.expires !== undefined && cookie.expires <= now;
 
@@ -209,8 +213,7 @@ export class CookiesModule extends Module<DocumentClient> {
 	}
 	/** the key other documents of this site bump when they write a cookie */
 	get #versionKey() {
-		const { hostname } = this.client.url.url;
-		return `$stomp$cookies:${getDomain(hostname) ?? hostname}`;
+		return versionKeyOf(this.client.url.url.hostname);
 	}
 	#version(): string {
 		try {
@@ -248,22 +251,33 @@ export class CookiesModule extends Module<DocumentClient> {
 	 * (stampHolders): this document's view has the change applied or is
 	 * dropped, and the realm's other views are dropped.
 	 */
-	#stamp(): string | null {
+	#stamp(key = this.#versionKey): string | null {
 		const version = `${Date.now()}:${Math.random()}`;
 		try {
 			if (!this.#setItem) return null;
-			if (this.#store && !othersHold(this.#store, this.#versionKey)) {
+			if (this.#store && !othersHold(this.#store, key)) {
 				// the realm's other views (documents of other URLs) read again
 				const own = this.#view;
 				for (const view of views.values()) if (view !== own) view.fresh = false;
 				return this.#version();
 			}
-			this.#setItem.call(this.#versions, this.#versionKey, version);
+			this.#setItem.call(this.#versions, key, version);
 			return version;
 		} catch (error) {
 			// no storage: this document's cache is dropped at least
 			return null;
 		}
+	}
+	/**
+	 * A response this document is handing the page changed the jar for
+	 * `host` (JAR_MARKER): every document of that site reads it again, as
+	 * after this document's own write. The worker tells them too, but by a
+	 * message of its own, which the page's could overtake: a popup's fetch
+	 * set cookies, it posted to its opener, and the opener's document.cookie
+	 * read without them (WPT cookies/samesite/fetch.https.html, under load)
+	 */
+	#jarChanged(host: string) {
+		this.#stamp(versionKeyOf(host));
 	}
 	/**
 	 * Other documents read the jar again; this one keeps what it knows when
@@ -533,7 +547,10 @@ export class CookiesModule extends Module<DocumentClient> {
 		const global = client.global;
 		const proxyModule = client.getModule(ProxyModule)!;
 
-		client.responseListeners.add(() => this.invalidate());
+		client.responseListeners.add((jarHosts) => {
+			this.invalidate();
+			for (const host of jarHosts) this.#jarChanged(host);
+		});
 		// A popup the browser opened for a page of this bundle's runs the
 		// bundle too, and its view outlives its window: a document that hears
 		// of a change drops only its own view, so the next popup of its URL
