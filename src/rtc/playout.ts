@@ -160,7 +160,7 @@ export class Playout<T> {
 
 	constructor(options: PlayoutOptions<T>) {
 		this.#rate = options.rate;
-		this.#floorMs = options.initialMs ?? 40;
+		this.#floorMs = options.initialMs ?? 80;
 		this.#maxMs = options.maxMs ?? 500;
 		this.#discard = options.discard ?? (() => {});
 		this.#targetMs = this.#floorMs;
@@ -354,7 +354,10 @@ export class Playout<T> {
 	 * plays next, `future` units of sound not played yet, the last
 	 * operation `last` (`noise` for comfort noise), `generated` units made
 	 * up since that began, `muted` when what it made up has faded to under
-	 * half: NetEq's decision.
+	 * half: NetEq's decision. With `ample` (the sync buffer holds what it
+	 * plays next) only a merge or a frame made shorter or longer is acted
+	 * on, as NetEq acts on them each 10 ms; anything else is `normal`
+	 * (nothing to do), and counts nothing.
 	 */
 	decide(
 		now: number,
@@ -362,17 +365,25 @@ export class Playout<T> {
 		last: Operation | 'noise' | null,
 		generated: number,
 		muted = false,
+		ample = false,
 	): Operation {
 		const head = this.#held[0];
 		this.stats.heldMs = this.#heldMs();
 		const next = this.#next;
 		// a stream's first frame plays at once, as NetEq plays its first
-		// packet at its next 10 ms
-		if (head && next === null) return 'normal';
+		// packet at its next 10 ms; and is not stretched for its first 60 ms,
+		// as NetEq's soft reset on its first packet starts the countdown it
+		// starts after each stretch (so a call whose second packet is late
+		// starts with it made up, not with a stretched first packet)
+		if (head && next === null) {
+			this.#scaled = now;
+			return 'normal';
+		}
 		const expanding = last === 'expand' || last === 'noise';
 		const target = this.#targetMs;
 		if (head && next !== null) {
 			if (head.time - next > PAUSE_MS * this.#rate) {
+				if (ample) return 'normal';
 				// the sender paused (silence suppression): go on from here
 				this.#next = head.time;
 				return last === 'expand' ? 'merge' : 'normal';
@@ -403,6 +414,7 @@ export class Playout<T> {
 				}
 			}
 		}
+		if (ample) return 'normal';
 		this.stats.gaps++;
 		return 'expand';
 	}

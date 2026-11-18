@@ -26,6 +26,7 @@ const from = (file) => JSON.stringify(`${root}src/rtc/${file}`);
 writeFileSync(
 	entry,
 	`export { Playout } from ${from('playout.ts')};
+export { expandLagOf, stretch } from ${from('stretch.ts')};
 export * from ${from('g711.ts')};
 export * from ${from('g722.ts')};
 export { AudioSender, AudioReceiver, levelOf } from ${from('audio.ts')};
@@ -221,6 +222,26 @@ const holes = (out) => {
 			soon.insertedMs > 0 &&
 			soon.removedMs === 0,
 		`${JSON.stringify(far)} ${JSON.stringify(soon)}`,
+	);
+}
+{
+	// Natively (Chrome 157, the jb-probe kit, its counts every 5 ms) a
+	// call's first 60 ms of sound are not stretched: a steady stream's
+	// first 145 samples are inserted after its third or fourth packet, and
+	// with 0 to 20 ms of jitter what is late is made up first (580 to 1164
+	// samples by the third packet). The worker inserted 145 at its first
+	// or second packet, and with jitter made up 580 at most.
+	const arrivals = Array.from({ length: 50 }, (_, i) => i * 20);
+	// (before NetEq's first update of its target, at 500 ms)
+	const { ops, times, playout } = play(arrivals, { until: 300 });
+	const early = ops.filter((op, at) => times[at] < 60);
+	ok(
+		"a stream's first 60 ms are not made longer or shorter, as NetEq's soft reset on its first packet holds its stretching back, and it starts at NetEq's start target of 80 ms",
+		early.length > 0 &&
+			early.every((op) => op === 'normal') &&
+			ops.includes('preemptive') &&
+			playout.stats.targetMs === 80,
+		`${ops.map((op, at) => `${times[at]}:${op}`).join(' ')} ${JSON.stringify(playout.stats)}`,
 	);
 }
 {
@@ -1193,6 +1214,31 @@ function tonePackets(ms, rate, step, { frames = 40, start = 1000 } = {}) {
 	);
 }
 
+// --- NetEq's time stretching and expand, on a tone ---
+{
+	// Natively (Chrome 157, the jb-probe kit's 660 Hz tone, its counts
+	// every 5 ms) insertedSamplesForDeceleration steps by 145, a pitch
+	// period that NetEq finds at 4 kHz, and concealedSamples by 291 (581,
+	// 872, 1164, 1455), the lag its expand settles on: four periods, the
+	// one of its three peaks the sound before it differs least from. The
+	// worker inserted 218 and made up 145 at a time.
+	const tone = (length) =>
+		Float32Array.from(
+			{ length },
+			(_, i) => 0.5 * Math.sin((2 * Math.PI * 660 * i) / 48000),
+		);
+	const longer = m.stretch([tone(1440)], 1440, 'preemptive', 0, 30);
+	const shorter = m.stretch([tone(1440)], 1440, 'accelerate', 0, 30);
+	const { lags } = m.expandLagOf(tone(1920));
+	ok(
+		"a 660 Hz tone is made longer or shorter by NetEq's pitch period of it (145 samples) and made up 291 samples at a time, as Chrome's NetEq does",
+		longer?.change === 145 &&
+			shorter?.change === -145 &&
+			lags.every((lag) => lag === 291),
+		JSON.stringify({ longer: longer?.change, shorter: shorter?.change, lags }),
+	);
+}
+
 // --- a lost Opus packet ---
 
 {
@@ -1676,9 +1722,10 @@ async function receiving({
 {
 	// Natively (Chrome 157, the far end's Opus through a relay, the
 	// jb-probe kit), jitterBufferDelay: a steady stream 30 to 33 ms, a
-	// tenth lost with no copies 14 to 20, with copies 33 to 38; the first
-	// sound 3 to 10 ms after the first packet. The worker's was 23, 20 to
-	// 28 and 41 to 43, the first sound 42 to 45 ms after.
+	// tenth lost with no copies 13 to 25 (at a target of 20, nothing
+	// inserted), with copies 33 to 38; the first sound 3 to 10 ms after the
+	// first packet. The worker's was 23, 20 to 28 and 41 to 43, the first
+	// sound 42 to 45 ms after.
 	const steady = await receiving({});
 	const lossy = await receiving({ lost: 0.1 });
 	const rebuilt = await receiving({ lost: 0.1, copies: true });
@@ -1701,7 +1748,8 @@ async function receiving({
 		"with a tenth of the packets lost and no copies, each loss made up and merged as NetEq's expand and merge do, packets wait as long as in Chrome's NetEq (the sound kept at the target, the made-up sound filling the sync buffer)",
 		Math.round(lossy.targetMs) === 20 &&
 			lossy.delayMs >= 13 &&
-			lossy.delayMs <= 19 &&
+			lossy.delayMs <= 21 &&
+			lossy.inserted === 0 &&
 			lossy.concealed > 0,
 		all,
 	);

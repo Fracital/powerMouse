@@ -28,7 +28,7 @@ import {
 	type Frame,
 } from './records';
 import { Resampler } from './resample';
-import { stretch } from './stretch';
+import { expandLagOf, stretch, STRETCH_INPUT } from './stretch';
 
 /** hands an encoded frame to the stack; `age` is how long ago it was captured, in ms */
 export type FrameWriter = (frame: Frame, age: number) => void;
@@ -836,9 +836,17 @@ export class AudioSender {
 // --- receiving ---
 
 /** decoded sound at 48 kHz: one plane after the other */
-/** sound being made up: the period repeated, where in it, how much of it, how alike its repeats */
+/**
+ * sound being made up: the end of the last sound played, the lags it
+ * repeats at in turn (NetEq's three, 0 1 2 1 0 ...), the lag now and
+ * where in it, how much of it, how alike its repeats
+ */
 interface Expansion {
 	period: Float32Array[];
+	lags: number[];
+	turn: number;
+	way: number;
+	lag: number;
 	at: number;
 	made: number;
 	alike: number;
@@ -894,13 +902,6 @@ function toneSamples(
 }
 /** sound kept of what was played, for a frame that has to be made up: 40 ms */
 const HISTORY = 1920;
-/**
- * The periods made-up sound repeats are looked for between 2.5 and 15 ms,
- * as NetEq's expand looks for them, over the last 10 ms
- */
-const LAG_LOW = 120;
-const LAG_HIGH = 720;
-const LAG_WINDOW = 480;
 /** NetEq's sync buffer: what it plays each time (10 ms), and the made-up sound it keeps past that */
 const OUT = 480;
 /** that in milliseconds: the sound card's 10 ms */
@@ -924,35 +925,6 @@ const NORMAL_FADE = 48;
  */
 function fadeOf(alike: number): number {
 	return alike > 0.7 ? 0.05 : 0.45;
-}
-
-/**
- * How long a period of the last sound played is (`LAG_LOW` to `LAG_HIGH`
- * samples: the shortest that repeats about as well as the best, so a
- * voice or a tone repeats its own period), and how alike its repeats are
- * (normalized correlation)
- */
-function periodOf(history: Float32Array): { lag: number; alike: number } {
-	const end = history.length;
-	const scores = new Float64Array(LAG_HIGH + 1);
-	let alike = 0;
-	for (let candidate = LAG_LOW; candidate <= LAG_HIGH; candidate++) {
-		let cross = 0;
-		let now = 0;
-		let then = 0;
-		for (let at = end - LAG_WINDOW; at < end; at++) {
-			cross += history[at] * history[at - candidate];
-			now += history[at] * history[at];
-			then += history[at - candidate] * history[at - candidate];
-		}
-		scores[candidate] = now && then ? cross / Math.sqrt(now * then) : 0;
-		alike = Math.max(alike, scores[candidate]);
-	}
-	let lag = LAG_LOW;
-	while (lag < LAG_HIGH && scores[lag] < alike * 0.98) lag++;
-	// (the top of that peak)
-	while (lag < LAG_HIGH && scores[lag + 1] > scores[lag]) lag++;
-	return { lag, alike };
 }
 
 /** how long after the last frame the receiver's clock stops */
@@ -1202,7 +1174,7 @@ export class AudioReceiver {
 		} else if (frame.codec === 'telephone-event') this.#event(frame, time, now);
 		else return;
 		this.#heard = now;
-		this.#wake();
+		this.#wake(now + TICK);
 	}
 
 	/** the speech codec now: comfort noise is made at its rate */
@@ -1529,7 +1501,7 @@ export class AudioReceiver {
 			arrived,
 			counted,
 		);
-		this.#wake();
+		this.#wake(arrived + TICK);
 	}
 
 	#tick = () => {
@@ -1545,6 +1517,13 @@ export class AudioReceiver {
 		// Before the stream's first frame nothing plays: the clock stops
 		// until it comes, and goes on at its next 10 ms.
 		while (this.#due <= now) {
+			// a packet that came before this 10 ms and is still being decoded
+			// is waited for, a little (NetEq has it in its buffer then)
+			const decoding = this.#waiting[0];
+			if (decoding && decoding.arrived < this.#due && now - this.#due < TICK) {
+				this.#timer = setTimeout(this.#tick, 1);
+				return;
+			}
 			const played = this.#getAudio(writer, this.#due);
 			this.#due += TICK;
 			if (!played) return;
@@ -1565,16 +1544,18 @@ export class AudioReceiver {
 	};
 
 	/**
-	 * The clock goes on at its next 10 ms: the sound card asks every 10 ms
-	 * whether or not anything plays, so a frame that comes to a stopped
-	 * clock plays at the next of those (as Chrome's first sound comes 0 to
-	 * 10 ms after its first packet)
+	 * The clock goes on at its next 10 ms from `from` (the 10 ms after a
+	 * packet came): the sound card asks every 10 ms whether or not anything
+	 * plays, so a frame that comes to a stopped clock plays at the next of
+	 * those after it came, late where its decoding took past that (as
+	 * Chrome's first sound comes 0 to 10 ms after its first packet, which
+	 * NetEq decodes when it plays it)
 	 */
-	#wake() {
+	#wake(from: number) {
 		if (this.#timer !== null || !this.#writer) return;
 		const now = performance.now();
-		if (this.#due < now)
-			this.#due += Math.ceil((now - this.#due) / TICK) * TICK;
+		if (this.#due < from)
+			this.#due += Math.ceil((from - this.#due) / TICK) * TICK;
 		this.#timer = setTimeout(this.#tick, Math.max(0, this.#due - now));
 	}
 
@@ -1615,15 +1596,32 @@ export class AudioReceiver {
 		writer: WritableStreamDefaultWriter<AudioData>,
 		now: number,
 	): boolean {
-		if (this.#futureFrames - OVERLAP < OUT) {
-			const expansion = this.#expansion;
-			const op = this.#playout.decide(
-				now,
-				this.#futureFrames,
-				this.#mode,
-				(this.#noiseTicks ?? 0) * OUT,
-				!!expansion && this.#gain(expansion) < 0.5,
-			);
+		// (NetEq decides each 10 ms: with enough in the sync buffer only a
+		// frame made shorter or longer, or a merge, is played then)
+		const ample = this.#futureFrames - OVERLAP >= OUT;
+		const expansion = this.#expansion;
+		let op =
+			!ample || this.#playout.held
+				? this.#playout.decide(
+						now,
+						this.#futureFrames,
+						this.#mode,
+						(this.#noiseTicks ?? 0) * OUT,
+						!!expansion && this.#gain(expansion) < 0.5,
+						ample,
+					)
+				: 'normal';
+		// NetEq shortens a frame of under 30 ms only with 20 ms already in
+		// the sync buffer past its overlap: with less, the frame plays as it
+		// is (decoded all the same) and a later decision shortens the next
+		// one ("build up decoded data"), so it shortens a frame at most
+		// every other frame
+		const building =
+			(op === 'accelerate' || op === 'fast') &&
+			this.#futureFrames - OVERLAP < 2 * OUT &&
+			this.#playout.frameMs < 30;
+		if (building) op = 'normal';
+		if (!ample || op !== 'normal' || building) {
 			const sound = op === 'expand' ? null : this.#playout.take();
 			if (sound) this.#play(sound, op, now);
 			else if (!this.#playing) return false;
@@ -1676,13 +1674,7 @@ export class AudioReceiver {
 			!sound.tone &&
 			(op === 'accelerate' || op === 'fast' || op === 'preemptive')
 		) {
-			const changed = stretch(
-				samples,
-				frames,
-				channels,
-				op === 'preemptive',
-				op === 'fast',
-			);
+			const changed = this.#stretch(samples, frames, channels, op);
 			if (changed) {
 				this.#playout.stretched((changed.frames - frames) / 48, now);
 				({ samples, frames } = changed);
@@ -1717,6 +1709,53 @@ export class AudioReceiver {
 		this.#append(planes, frames, { concealed: false, waited });
 	}
 
+	/**
+	 * NetEq's accelerate and preemptive expand of a frame: it and what it
+	 * borrows from the end of the sync buffer (played or not) to make 30 ms
+	 * are stretched at their 15 ms point, and what was borrowed and not
+	 * played goes back (an accelerate may fade into it)
+	 */
+	#stretch(
+		samples: Float32Array,
+		frames: number,
+		channels: number,
+		op: 'accelerate' | 'fast' | 'preemptive',
+	): { samples: Float32Array<ArrayBuffer>; frames: number } | null {
+		const borrowed = Math.max(0, STRETCH_INPUT - frames);
+		if (borrowed > HISTORY) return null;
+		const planes = Array.from({ length: channels }, (_, channel) => {
+			const plane = new Float32Array(borrowed + frames);
+			plane.set(
+				this.#history[Math.min(channel, 1)].subarray(HISTORY - borrowed),
+			);
+			plane.set(
+				samples.subarray(channel * frames, (channel + 1) * frames),
+				borrowed,
+			);
+			return plane;
+		});
+		const old = Math.max(0, borrowed - this.#futureFrames);
+		const done = stretch(planes, borrowed + frames, op, old, OVERLAP);
+		if (!done) return null;
+		const plane = (channel: number) =>
+			done.planes[Math.min(channel, channels - 1)];
+		for (let channel = 0; channel < this.#future.length; channel++)
+			this.#future[channel].set(
+				plane(channel).subarray(old, borrowed),
+				this.#futureFrames - (borrowed - old),
+			);
+		for (let channel = 0; channel < 2; channel++)
+			this.#history[channel].set(
+				plane(channel).subarray(0, borrowed),
+				HISTORY - borrowed,
+			);
+		const length = done.length - borrowed;
+		const out = new Float32Array(length * channels);
+		for (let channel = 0; channel < channels; channel++)
+			out.set(plane(channel).subarray(borrowed, done.length), channel * length);
+		return { samples: out, frames: length };
+	}
+
 	/** how loud made-up sound still is (NetEq's mute factor) */
 	#gain(expansion: Expansion): number {
 		return Math.max(0, 1 - (fadeOf(expansion.alike) * expansion.made) / 960);
@@ -1726,15 +1765,24 @@ export class AudioReceiver {
 	#expand() {
 		let expansion = this.#expansion;
 		if (!expansion) {
-			const { lag, alike } = periodOf(this.#history[0]);
+			const { lags, longest, alike } = expandLagOf(this.#history[0]);
 			expansion = this.#expansion = {
-				period: this.#history.map((history) => history.slice(-lag)),
+				period: this.#history.map((history) => history.slice(-longest)),
+				lags,
+				turn: -1,
+				way: 1,
+				lag: lags[0],
 				at: 0,
 				made: 0,
 				alike,
 			};
 		}
-		const lag = expansion.period[0].length;
+		// (each repeat the last lag of what was played, NetEq's Process)
+		expansion.turn += expansion.way;
+		if (expansion.turn <= 0) expansion.way = 1;
+		if (expansion.turn >= 2) expansion.way = -1;
+		const lag = (expansion.lag = expansion.lags[expansion.turn]);
+		expansion.at = 0;
 		const silent = this.#gain(expansion) <= 0;
 		const planes = this.#continue(expansion, lag, this.#stereo ? 2 : 1);
 		this.#append(planes, lag, { concealed: true, waited: 0, silent });
@@ -1746,7 +1794,8 @@ export class AudioReceiver {
 		frames: number,
 		channels: number,
 	): Float32Array[] {
-		const lag = expansion.period[0].length;
+		const { lag } = expansion;
+		const skip = expansion.period[0].length - lag;
 		// a twentieth each 20 ms for a sound that repeats, nearly half for
 		// one that does not
 		const step = fadeOf(expansion.alike) / 960;
@@ -1758,7 +1807,8 @@ export class AudioReceiver {
 			const gain = Math.max(0, 1 - step * (expansion.made + at));
 			const from = (expansion.at + at) % lag;
 			for (let channel = 0; channel < channels; channel++)
-				out[channel][at] = gain * expansion.period[Math.min(channel, 1)][from];
+				out[channel][at] =
+					gain * expansion.period[Math.min(channel, 1)][skip + from];
 		}
 		expansion.at = (expansion.at + frames) % lag;
 		expansion.made += frames;

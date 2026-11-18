@@ -1279,10 +1279,20 @@ how late the others are, as in NetEq's). At or above the upper limit a
 frame is made a pitch period shorter (accelerate), at four times it as
 many periods as fit in half the frame (fast accelerate, which does not
 wait), and under the target a period longer (preemptive expand), at
-most once each 60 ms, where the frame's sound repeats well enough
-(periods 2.5 to 10 ms that correlate at 0.9, or quiet), the two periods
-at the cut faded into each other (`src/rtc/stretch.ts`); a frame right
-after made-up sound plays as it is. Between the limits nothing moves,
+most once each 60 ms and not in a stream's first 60 ms (NetEq's soft
+reset on its first packet starts the countdown each stretch starts),
+a frame made shorter only with 20 ms already in the sync buffer past
+its overlap (with less it plays as it is and the next is shortened, as
+NetEq builds up decoded sound first), where the frame's sound repeats well enough (periods 2.5 to 15 ms that
+correlate at 0.9, or quiet), the two periods at the cut faded into each
+other (`src/rtc/stretch.ts`, a port of NetEq's time stretching: 30 ms,
+the frame and what it borrows from the end of the sync buffer, its
+period found at 4 kHz and cut at 15 ms); a frame right after made-up
+sound plays as it is. Natively a 660 Hz tone is stretched 145 samples
+at a time (two periods); the worker's stretch put in 218, and stretched
+a call's first packet where Chrome makes up what is late first. The
+target starts at 80 ms until NetEq's first 500 ms of delays are in, as
+NetEq's delay manager starts it. Between the limits nothing moves,
 so a steady stream's packets wait where its start put them: 30 to 33 ms
 of `jitterBufferDelay` natively for a target of 20, which counts each
 packet from the tick it came to the tick it is taken. A hold-up stays
@@ -1296,12 +1306,20 @@ The track's `removedSamplesForAcceleration` and
 
 A frame that has not come when it is due (lost, or later than the
 buffer covers) is made up as NetEq's expand makes it up, not left
-silent: the last period of what was played (the shortest lag between
-2.5 and 15 ms whose repeats correlate about as well as the best) is
-repeated, in phase, a period at a time until the sync buffer holds 10
+silent: the end of what was played is repeated, in phase, at NetEq's
+expand lag (`Expand::AnalyzeSignal`: of the three strongest correlations
+of its last 15 ms at 4 kHz, each moved to the lag within 0.5 ms that
+differs least from the sound that long before it over its last 2.5 ms,
+the one strongest for how much it differs; its repeats take turns at
+that lag and two between it and the correlation's), a lag at a time
+until the sync buffer holds 10
 ms past its overlap again, fading by a twentieth each 20 ms where it
 repeats well and by nearly half where it does not, to silence; its
-time stands still meanwhile. The frame after the hole is taken once
+time stands still meanwhile. For a 660 Hz tone that lag is 291 samples
+(four periods; natively `concealedSamples` steps 581, 872, 1164, 1455),
+where the worker repeated its shortest period, 145, and so made up less
+of a late packet's time at a call's start than Chrome, which left its
+delay 3 to 9 ms short with jittered packets. The frame after the hole is taken once
 as much sound as the hole was has been made up (NetEq counts the 10 ms
 since the expand began), or once what is held waits 50 ms longer than
 the target; after made-up sound that faded to under half, or comfort
@@ -1346,8 +1364,11 @@ a tenth of the packets lost with no copies 16 to 21 where the target
 was 20, and 12 to 20 natively (before, 20 to 28), 31 to 32 where both
 targets went to 40 (natively 26 to 31); with copies rebuilding them 36
 to 37 and 30 to 33 (before, 41 to 43 and 33 to 38); delayed by 0 to 20
-ms 31 to 32 and 35 to 39; by 0 to 40 ms 39 to 42 and 44 to 50, nothing
-concealed either way; lost and delayed by 0 to 20 ms 43 to 54 and 42 to
+ms 36 to 42 and 30 to 52, by 0 to 40 ms 41 to 53 and 38 to 53, nothing
+concealed either way once the call settled (four runs each where the
+relay delayed the packets alike for both; before NetEq's expand lag,
+time stretching and start, 31 to 32 against 35 to 39, and 39 to 42
+against 44 to 50); lost and delayed by 0 to 20 ms 43 to 54 and 42 to
 52; a 300 ms hold-up 278 to 284 and 278 to 281 over its window, then 176
 to 218 and 203 to 205 over the next (9,810 to 12,208 samples taken out,
 natively 9,002 to 9,004). The receiver's own check (`rtc-media-unit`, the
