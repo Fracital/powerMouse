@@ -79,6 +79,7 @@ import { isPortBody, receiveBody } from './bodyPort';
 import { transferablesOf } from './messages';
 import { NETWORK_PARTITION } from './networkPartition';
 import { promptSink } from './promptSink';
+import type { Ride } from './riderPace';
 import { RpcHelper } from './rpc';
 import {
 	errorText,
@@ -124,7 +125,7 @@ type Connection =
 	| {
 			split?: undefined;
 			first: WispPipe;
-			more: () => Promise<MessagePort | null>;
+			more: () => Promise<Ride | null>;
 			/** shard 0's epoxy took `first` */
 			taken: boolean;
 	  };
@@ -175,7 +176,7 @@ export function shardCount(asked: unknown): { max: number; start: number } {
 /** what a ShardedTransport is to the shards it starts */
 interface Owner {
 	/** a port that is one more lane of the wisp connection, for shard `index` */
-	lane(v2: boolean, index: number): Promise<MessagePort>;
+	lane(v2: boolean, index: number): Promise<Ride>;
 	/** shard `index` became saturated or not */
 	load(index: number, saturated: boolean): void;
 }
@@ -209,9 +210,9 @@ class Remote {
 		this.#rpc = new RpcHelper<ShardToHost, ShardBound>(
 			{
 				lane: async ({ v2 }) => {
-					const port = await owner.lane(v2, index);
-					this.lanes.push(port);
-					return [port, [port]];
+					const lane = await owner.lane(v2, index);
+					this.lanes.push(lane.port);
+					return [lane, [lane.port]];
 				},
 				load: async (saturated) => {
 					this.saturated = saturated;
@@ -501,17 +502,17 @@ class ShardedTransport implements ProxyTransport {
 			void warmResolver(this.#local, this.#resolver).catch(() => {});
 	}
 
-	/** a port that is one more lane of the wisp connection, for a shard's worker */
-	async lane(v2: boolean, index: number): Promise<MessagePort> {
+	/** a port that is one more lane of the wisp connection, for a shard's worker (a rider of the host's relay, paced when `credit`) */
+	async lane(v2: boolean, index: number): Promise<Ride> {
 		const connection = await this.#connect(v2);
 		if (!connection.split) {
-			const port = await connection.more();
-			if (!port) throw lost();
-			return port;
+			const ride = await connection.more();
+			if (!ride) throw lost();
+			return ride;
 		}
 		const channel = new MessageChannel();
 		connection.split.attach(channel.port1, this.#meters[index]);
-		return channel.port2;
+		return { port: channel.port2, credit: false };
 	}
 
 	/**

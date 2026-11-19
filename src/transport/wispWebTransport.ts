@@ -69,6 +69,7 @@ import type {
 } from '@mercuryworkshop/proxy-transports';
 import { askCarrierHost, type CarrierGiven } from './carrierClient';
 import { promptSink } from './promptSink';
+import type { Ride } from './riderPace';
 import { wispNote } from './transportLog';
 
 /** TransportDescriptor.webTransport */
@@ -490,9 +491,10 @@ export interface WispPipe {
 	/**
 	 * one more wisp connection over the same carrier, as a port another
 	 * realm speaks Wisp on (wispSplit.ts lanePipe); null once the carrier is
-	 * gone. A carrier host's rider has it (carrierClient.ts `ride`)
+	 * gone. A carrier host's rider has it (carrierClient.ts `ride`), paced
+	 * when `credit` (riderPace.ts)
 	 */
-	more?: () => Promise<MessagePort | null>;
+	more?: () => Promise<Ride | null>;
 }
 
 /** a carrier that is open, its first Wisp packet read (buffered for epoxy) */
@@ -511,7 +513,7 @@ export interface OpenCarrier {
 	/** a wisp connection of the carrier host's (carrierHost.ts), which tells how the carrier ends */
 	hosted?: boolean;
 	/** WispPipe.more: more riders of the carrier host's relay */
-	more?: () => Promise<MessagePort | null>;
+	more?: () => Promise<Ride | null>;
 }
 
 /**

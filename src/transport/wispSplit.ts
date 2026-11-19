@@ -35,13 +35,14 @@
 //   connection would.
 
 import { ownBuffer, PacketBatch } from './packetBatch';
+import { paceRider, type Ride } from './riderPace';
 
 /** what epoxy's function transport gives back (EpoxyWispTransportResult) */
 export interface WispPipe {
 	read: ReadableStream<ArrayBuffer>;
 	write: WritableStream<Uint8Array>;
 	/** wispWebTransport.ts WispPipe.more */
-	more?: () => Promise<MessagePort | null>;
+	more?: () => Promise<Ride | null>;
 }
 
 /** what crosses a lane's port, each way (a rider's: a packet alone too, and the host's `{ end }`) */
@@ -412,9 +413,14 @@ export class WispSplit {
 export function lanePipe(
 	port: MessagePort,
 	arrived?: () => void,
+	credit = false,
 ): WispPipe & { end(): void } {
 	let reading!: ReadableStreamDefaultController<ArrayBuffer>;
 	let done = false;
+	// a carrier host's rider (`ride`) at the pace of this realm's body readers
+	const pace = credit
+		? paceRider(port, (packet) => reading.enqueue(packet))
+		: null;
 	const batch = new PacketBatch((sent) => {
 		if (!done) port.postMessage(sent satisfies LaneMessage, sent);
 	});
@@ -422,6 +428,7 @@ export function lanePipe(
 		if (done) return;
 		batch.flush();
 		done = true;
+		pace?.end(false);
 		port.postMessage('end' satisfies LaneMessage);
 		port.close();
 		try {
@@ -440,11 +447,14 @@ export function lanePipe(
 		if (done) return;
 		if (data instanceof ArrayBuffer) {
 			arrived?.();
-			reading.enqueue(data);
+			if (pace) pace.take([data]);
+			else reading.enqueue(data);
 			return;
 		}
 		if (!Array.isArray(data)) {
-			// the lane's end, or the carrier host's (its relay's carrier ended)
+			// the lane's end, or the carrier host's (its relay's carrier
+			// ended): what waits here came before it
+			pace?.end(true);
 			done = true;
 			batch.clear();
 			port.close();
@@ -456,7 +466,8 @@ export function lanePipe(
 			return;
 		}
 		arrived?.();
-		for (const packet of data) reading.enqueue(packet);
+		if (pace) pace.take(data);
+		else for (const packet of data) reading.enqueue(packet);
 	};
 	port.start();
 	const write = new WritableStream<Uint8Array>({

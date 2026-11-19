@@ -813,7 +813,7 @@ export function serveCarriers(scope: SharedWorkerGlobalScope): void {
 					);
 					return [given, given.port ? [given.port] : []];
 				},
-				ride: async ({ relay: id, batches }) => {
+				ride: async ({ relay: id, batches, credit }) => {
 					const relay = byId.get(id);
 					if (!relay || relay.dead)
 						return [
@@ -826,7 +826,7 @@ export function serveCarriers(scope: SharedWorkerGlobalScope): void {
 							},
 							[],
 						];
-					const given = await relay.rider(client, batches);
+					const given = await relay.rider(client, batches, credit === true);
 					return [given, given.port ? [given.port] : []];
 				},
 				hold: async (fields) => {
