@@ -66,6 +66,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { createBrotliCompress } from 'node:zlib';
 
 const pages = fileURLToPath(new URL('./pages/', import.meta.url));
 const PNG = Buffer.from(
@@ -105,7 +106,14 @@ export function csp(req, res) {
 	const key = query.get('k');
 	if (key !== null && url.pathname !== '/csp/log') {
 		if (!logs.has(key)) logs.set(key, []);
-		logs.get(key).push(url.pathname);
+		// (a layout's script by its name)
+		logs
+			.get(key)
+			.push(
+				url.pathname === '/csp/ran.js'
+					? `${url.pathname}?n=${query.get('n')}`
+					: url.pathname,
+			);
 	}
 	res.setHeader('cache-control', 'no-store');
 	res.setHeader('access-control-allow-origin', '*');
@@ -122,6 +130,10 @@ export function csp(req, res) {
 					'text/html; charset=utf-8',
 					`<!doctype html><html><head><title>CSP FRAME</title></head><body><iframe sandbox="${attribute(query.get('fs'))}" src="${attribute(`/csp/doc?${inner}`)}"></iframe></body></html>`,
 				);
+				return true;
+			}
+			if (query.has('l')) {
+				layout(req, res, query);
 				return true;
 			}
 			const js = query.get('js');
@@ -221,6 +233,9 @@ export function csp(req, res) {
 			return true;
 		case '/csp/run.js':
 			send('text/javascript', 'window.__ran = 1;');
+			return true;
+		case '/csp/ran.js':
+			send('text/javascript', ranText(query.get('n') ?? ''));
 			return true;
 		case '/csp/wrun.js':
 			send('text/javascript', 'self.__ran = (self.__ran ?? 0) + 1;');
@@ -336,6 +351,144 @@ function policies(res, query) {
 		meta('m', 'Content-Security-Policy') +
 		meta('mro', 'Content-Security-Policy-Report-Only')
 	);
+}
+
+/** the text of a layout's script that says `name` ran (its hash is the one a policy names) */
+export const ranText = (name) =>
+	`__ran(${JSON.stringify(String(name).replace(/[^\w-]/g, ''))})`;
+
+/**
+ * A /csp/doc page laid out by its `l` query (csp-meta-scripts): the
+ * recorder first in the head (an inline script with nonce="probes", before
+ * any meta, so it runs under every meta), then each comma-separated token
+ * of `l` in order, then the body's end. The recorder counts each script that
+ * ran (`__ran(name)`), the load and error events of each script element
+ * (`data-n`), the document's violations and the csp-violation reports a
+ * ReportingObserver is handed, and puts them on `window.__csp` a moment
+ * after load, as the probes do (test/csp-lib.mjs compareCases). The probe
+ * `reports` answers the reports.
+ *
+ *   meta / meta:<i>  every `m` policy's meta here, or the i-th one's
+ *   mi:<i>           an inline script (nonce="probes") that appends the
+ *                    i-th `m` policy's meta to the head
+ *   gap              2 KB of comment, then the response pauses 400 ms (the
+ *                    head is read on in a later piece)
+ *   body             the head ends and the body starts here (else at the end)
+ *   i:<n>            an inline script `__ran("<n>")`, no nonce
+ *   in:<n> / ix:<n>  the same with nonce="probes" / nonce="wrong"
+ *   e:<n> / en:<n>   a script by /csp/ran.js?n=<n>, without / with the nonce
+ *   eo:<n>           the same of the other origin, without a nonce
+ *   di:<n> / de:<n>  an inline script (nonce="probes") that inserts an
+ *                    inline / external script of <n> after itself, no nonce
+ *   wi:<n> / we:<n>  the same by document.write
+ *   sty:<n>          an inline <style id="<n>"> that sets --<n> on the root
+ * With `br` the page goes brotli-compressed, each piece flushed.
+ */
+function layout(req, res, query) {
+	const host = req.headers.host ?? '';
+	const other = `http://${host.includes('127.0.0.1') ? host.replace('127.0.0.1', 'localhost') : host.replace('localhost', '127.0.0.1')}`;
+	const metas = query.getAll('m');
+	const meta = (policy) =>
+		`<meta http-equiv="Content-Security-Policy" content="${attribute(policy)}">`;
+	const helper = (code) => `<script nonce="probes">{ ${code} }</script>`;
+	// (under the page's `k`, the log has the scripts that reached the server)
+	const logKey = query.get('k');
+	const external = (name, origin = '') =>
+		`${origin}/csp/ran.js?n=${encodeURIComponent(name)}${logKey === null ? '' : `&k=${encodeURIComponent(logKey)}`}`;
+	const parts = [''];
+	let body = false;
+	for (const token of (query.get('l') ?? '').split(',').filter(Boolean)) {
+		const colon = token.indexOf(':');
+		const kind = colon === -1 ? token : token.slice(0, colon);
+		const arg = colon === -1 ? '' : token.slice(colon + 1);
+		const n = attribute(arg);
+		const add = (markup) => (parts[parts.length - 1] += markup);
+		switch (kind) {
+			case 'meta':
+				add(arg ? meta(metas[Number(arg)] ?? '') : metas.map(meta).join(''));
+				break;
+			case 'mi':
+				add(
+					helper(
+						`const m = document.createElement('meta'); m.httpEquiv = 'Content-Security-Policy'; m.content = ${JSON.stringify(metas[Number(arg)] ?? '').replace(/</g, '\\u003c')}; document.head.append(m);`,
+					),
+				);
+				break;
+			case 'sty':
+				add(`<style id="${n}">:root{--${n}:1}</style>`);
+				break;
+			case 'gap':
+				add(`<!--${'.'.repeat(2048)}-->`);
+				parts.push('');
+				break;
+			case 'body':
+				add('</head><body>');
+				body = true;
+				break;
+			case 'i':
+				add(`<script data-n="${n}">${ranText(arg)}</script>`);
+				break;
+			case 'in':
+				add(`<script data-n="${n}" nonce="probes">${ranText(arg)}</script>`);
+				break;
+			case 'ix':
+				add(`<script data-n="${n}" nonce="wrong">${ranText(arg)}</script>`);
+				break;
+			case 'e':
+				add(
+					`<script data-n="${n}" src="${attribute(external(arg))}"></script>`,
+				);
+				break;
+			case 'en':
+				add(
+					`<script data-n="${n}" nonce="probes" src="${attribute(external(arg))}"></script>`,
+				);
+				break;
+			case 'eo':
+				add(
+					`<script data-n="${n}" src="${attribute(external(arg, other))}"></script>`,
+				);
+				break;
+			case 'di':
+			case 'de':
+				add(
+					helper(
+						`const s = document.createElement('script'); s.dataset.n = ${JSON.stringify(arg)}; ${kind === 'di' ? `s.text = ${JSON.stringify(ranText(arg))}` : `s.src = ${JSON.stringify(external(arg))}`}; document.currentScript.after(s);`,
+					),
+				);
+				break;
+			case 'wi':
+			case 'we':
+				add(
+					helper(
+						`document.write(${JSON.stringify(kind === 'wi' ? `<script data-n="${n}">${ranText(arg)}</script>` : `<script data-n="${n}" src="${attribute(external(arg))}"></script>`).replace(/<\//g, '<\\/')});`,
+					),
+				);
+				break;
+		}
+	}
+	if (!body) parts[parts.length - 1] += '</head><body>';
+	parts[parts.length - 1] += '<p id="end">end</p></body></html>';
+	for (const policy of query.getAll('p'))
+		res.appendHeader('content-security-policy', policy);
+	for (const policy of query.getAll('ro'))
+		res.appendHeader('content-security-policy-report-only', policy);
+	res.setHeader('content-type', 'text/html; charset=utf-8');
+	const recorder = readFileSync(`${pages}csp-meta-recorder.js`, 'utf8');
+	parts[0] = `<!doctype html><html><head><script nonce="probes">${recorder}</script><title>CSP META</title>${parts[0]}`;
+	let out = res;
+	if (query.has('br')) {
+		res.setHeader('content-encoding', 'br');
+		out = createBrotliCompress();
+		out.pipe(res);
+	}
+	const send = (index) => {
+		if (index === parts.length - 1) return out.end(parts[index]);
+		out.write(parts[index]);
+		out.flush?.();
+		setTimeout(() => send(index + 1), 400);
+	};
+	send(0);
 }
 
 // The `sandbox` directive's pages (csp-sandbox suite):

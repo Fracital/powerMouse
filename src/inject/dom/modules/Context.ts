@@ -93,6 +93,8 @@ export const nativeOpener = Reflect.getOwnPropertyDescriptor(
 // Chrome's console message for a navigation it refuses is the browser's own:
 // printed with the console's native method, which no page hook sees
 export const nativeConsoleError = console.error;
+// (a report-only policy's is the console's info)
+export const nativeConsoleInfo = console.info;
 
 /** whether a frame's window is still on the initial about:blank its creation gave it */
 export function initialBlank(context: typeof globalThis): boolean {
