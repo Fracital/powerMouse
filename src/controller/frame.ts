@@ -181,7 +181,12 @@ if (window === window.parent || !origins.length) {
 							{ cause: error },
 						);
 					}
-					const serviceworker = await activated(registration);
+					// the controller waits for the worker to activate before its
+					// first handshake, and is made now: the transport (its worker,
+					// its module, the wisp carrier) starts while the service worker
+					// installs, which on a first visit took longer than all of it
+					const activating = activated(registration);
+					activating.catch(() => {});
 					// the site pool: the slots' origins, which frame one another's
 					// documents (a frame of another site in a page), as the proxy
 					// origin's and the host's do
@@ -197,7 +202,7 @@ if (window === window.parent || !origins.length) {
 					// the descriptor goes to the controller as it is: it hosts the
 					// transport in its worker (or in this frame, `host: 'page'`)
 					controller = new StompController({
-						serviceworker,
+						serviceworker: registration,
 						transport: onProxyOrigin(init.transport),
 						directory: init.directory,
 						id: init.id,
@@ -319,7 +324,8 @@ if (window === window.parent || !origins.length) {
 					controller.addEventListener('carrier', (event) => {
 						rpc.call('carrier', (event as CustomEvent<CarrierInfo>).detail);
 					});
-					await controller.wait();
+					// a worker that could not install is the host's error, as before
+					await Promise.all([activating, controller.wait()]);
 					return [
 						{
 							config: controller.config,

@@ -454,6 +454,33 @@ interface OpenCarrier {
 	stats?: PipeStats;
 }
 
+/**
+ * The notes of a carrier that ends, and a session lost without a close of
+ * the relay's remembered as lost: the next start rides the WebSocket at
+ * once and tries a session beside it, which tells the two apart
+ */
+function watchEnd(open: OpenCarrier, key: string) {
+	const up = performance.now();
+	const stats = open.stats;
+	const ended = (how: string) =>
+		`WebTransport session ended after ${Math.round((performance.now() - up) / 1000)} s (${how}${stats ? `; sent ${stats.datagramsSent} / received ${stats.datagramsReceived} datagrams, ${stats.sent - stats.datagramsSent} / ${stats.received - stats.datagramsReceived} packets on the stream` : ''})`;
+	if (open.carrier === 'webtransport')
+		open.ended.then(
+			() => wispNote('info', ended('closed')),
+			() => {
+				memory.lost(key);
+				wispNote('warn', ended('lost without a close'));
+			},
+		);
+	else
+		void open.closed?.then((code) =>
+			wispNote(
+				code === 1000 ? 'info' : 'warn',
+				`websocket closed (code ${code})`,
+			),
+		);
+}
+
 /** what a session carried, for the note when it ends */
 interface PipeStats {
 	sent: number;
@@ -975,201 +1002,60 @@ function socketCarrier(
 
 type TransportClass = new (...args: unknown[]) => ProxyTransport;
 
+/** a carrier chosen for a relay: null when neither could be opened */
+interface Choice {
+	plan: RelayPlan;
+	open: OpenCarrier | null;
+	why: string;
+	ms: number;
+}
+
 /**
- * Epoxy over the relay's WebTransport session or its WebSocket, whichever
- * init() chose (see the top of the file). Until init() chose, and when
- * neither could be opened, `base` is the transport as given.
+ * Whether a transport takes its wisp connection as a function transport
+ * (`wisp` a function): epoxy's builds do, and tell their version
+ * (`client_version`); a transport that does not say so (libcurl) keeps its
+ * wisp URL
  */
-export class CarrierTransport implements ProxyTransport {
-	#Transport: TransportClass;
-	#options: unknown[];
+const takesPipes = (transport: ProxyTransport) =>
+	typeof (transport as { client_version?: unknown }).client_version ===
+	'object';
+
+/**
+ * What chooses and opens a relay's carrier (see the top of the file): the
+ * transport's own (CarrierTransport), or the carrier host's that every
+ * transport of the origin shares (carrierHost.ts)
+ */
+class Chooser {
 	#wisp: string;
-	/** null: off, the transport as given on its own WebSocket */
+	#first: { wisp_v2?: boolean; wisp_ws_protocols?: string[] };
 	#webTransport: WispWebTransportOptions | null;
-	#label: CarrierLabel | null;
-	#base: ProxyTransport;
-	#starting: Promise<void> | null = null;
-	/** which carrier the wisp connection rides: null before init() chose */
-	carrier: Carrier | null = null;
-	/** the choice, as the console and the host have it */
-	info: CarrierInfo | null = null;
 	/** the session tried beside the WebSocket, settled (for tests and the demo) */
 	probed: Promise<boolean> = Promise.resolve(false);
 
 	constructor(
-		Transport: TransportClass,
-		options: unknown[],
+		wisp: string,
+		first: unknown,
 		webTransport: WispWebTransportOptions | null,
-		label: CarrierLabel | null = null,
 	) {
-		this.#Transport = Transport;
-		this.#options = options;
-		this.#wisp = (options[0] as { wisp: string }).wisp;
+		this.#wisp = wisp;
+		this.#first = (first ?? {}) as {
+			wisp_v2?: boolean;
+			wisp_ws_protocols?: string[];
+		};
 		this.#webTransport = webTransport;
-		this.#label = label;
-		this.#base = new Transport(...options);
-	}
-
-	/**
-	 * whether init() opens the wisp connection itself (no `webTransport`):
-	 * warmTransport must not open another
-	 */
-	get opensWisp(): boolean {
-		return !this.#webTransport;
-	}
-
-	/** the transport in use (serveTransport and webTransportHost look through it) */
-	get base(): ProxyTransport {
-		return this.#base;
-	}
-
-	get ready(): boolean {
-		return this.#base.ready;
-	}
-	set ready(value: boolean) {
-		this.#base.ready = value;
-	}
-
-	get client(): unknown {
-		return (this.#base as { client?: unknown }).client;
-	}
-
-	get fieldSupport(): unknown {
-		return (this.#base as { fieldSupport?: unknown }).fieldSupport;
-	}
-
-	init(): Promise<void> {
-		this.#starting ??= this.#start().catch((error) => {
-			this.#starting = null;
-			throw error;
-		});
-		return this.#starting;
 	}
 
 	get #v2(): boolean {
-		return Boolean((this.#options[0] as { wisp_v2?: boolean }).wisp_v2);
+		return Boolean(this.#first.wisp_v2);
 	}
 
 	get #timeoutMs(): number {
 		return this.#webTransport?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 	}
 
-	/** the choice, told: the host's `carrier` */
-	#announce(key: string, info: CarrierInfo) {
-		this.info = { ...info, ...this.#label };
-		announce(key, this.info);
-	}
-
-	/** what the notes say of the transport beside its carrier: `epoxy, HTTP/3 on` */
-	get #what(): string {
-		const label = this.#label;
-		return label
-			? `${label.transport}, HTTP/3 ${label.http3 ? 'on' : 'off'}`
-			: '';
-	}
-
-	/** the note of riding the WebSocket */
-	#connecting(off = false) {
-		const what = this.#what;
-		wispNote(
-			'info',
-			`connecting to ${this.#wisp} (wisp transport ${LABEL.websocket}${off ? ', WebTransport off' : ''}${what ? `; ${what}` : ''})`,
-		);
-	}
-
-	/**
-	 * No `webTransport`: the transport as given, on its own WebSocket. Its
-	 * wisp connection is opened now and the time to it told (epoxy's
-	 * replace_stream_provider settles once the relay answered; a request
-	 * meanwhile waits for that connection, as warmTransport had it); a
-	 * transport without that call is timed to the end of its init. A
-	 * connection that cannot be opened now is left to the first request,
-	 * as before, and the line says why.
-	 */
-	async #plain() {
-		const key = `wisp ${this.#wisp}`;
-		this.#connecting(true);
-		let started = performance.now();
-		await this.#base.init();
-		this.carrier = 'websocket';
-		const client = (
-			this.#base as {
-				client?: { replace_stream_provider?: () => Promise<unknown> };
-			}
-		).client;
-		if (typeof client?.replace_stream_provider !== 'function') {
-			const ms = Math.round(performance.now() - started);
-			this.#announce(key, {
-				carrier: 'websocket',
-				url: this.#wisp,
-				ms,
-				why: 'off',
-			});
-			return;
-		}
-		started = performance.now();
-		client.replace_stream_provider().then(
-			() => {
-				const ms = Math.round(performance.now() - started);
-				this.#announce(key, {
-					carrier: 'websocket',
-					url: this.#wisp,
-					ms,
-					why: 'off',
-				});
-			},
-			(error) => {
-				const ms = Math.round(performance.now() - started);
-				wispNote(
-					'warn',
-					`websocket did not open (${short(error)}); the first request tries again`,
-				);
-				this.#announce(key, {
-					carrier: 'websocket',
-					url: this.#wisp,
-					ms,
-					why: `off; the WebSocket did not open (${short(error)})`,
-				});
-			},
-		);
-	}
-
-	async #start() {
-		if (this.carrier === null) {
-			if (!this.#webTransport) return this.#plain();
-			const plan = relayPlan(this.#wisp, this.#webTransport);
-			const started = performance.now();
-			const { open, why } = await this.#choose(plan);
-			const ms = Math.round(performance.now() - started);
-			if (open) {
-				const [first, ...rest] = this.#options;
-				this.#base = new this.#Transport(
-					{ ...(first as object), wisp: this.#pipes(open, plan.key) },
-					...rest,
-				);
-			}
-			this.carrier = open?.carrier ?? 'websocket';
-			if (this.carrier === 'webtransport') {
-				const what = this.#what;
-				wispNote(
-					'info',
-					`WebTransport session established in ${ms} ms: wisp transport ${LABEL.webtransport} to ${open!.url}${what ? ` (${what})` : ''}`,
-				);
-			} else this.#connecting();
-			this.#announce(plan.key, {
-				carrier: this.carrier,
-				url: open?.url ?? this.#wisp,
-				ms,
-				...(this.carrier === 'websocket' && { why }),
-			});
-		}
-		await this.#base.init();
-	}
-
 	/** the WebSocket, opened as epoxy's own would be */
-	#socket(): Promise<OpenCarrier> {
-		const first = this.#options[0] as { wisp_ws_protocols?: string[] };
-		const protocols = [...(first.wisp_ws_protocols ?? [])];
+	socket(): Promise<OpenCarrier> {
+		const protocols = [...(this.#first.wisp_ws_protocols ?? [])];
 		// epoxy asks for v2 with a protocol of its own; holyWisp takes any
 		if (this.#v2) protocols.push(crypto.randomUUID());
 		return socketCarrier(
@@ -1197,11 +1083,11 @@ export class CarrierTransport implements ProxyTransport {
 	 * The carrier to ride (null: neither could be opened, the transport as
 	 * given), and why it is not the session when it is not
 	 */
-	async #choose(
+	async choose(
 		plan: RelayPlan,
 	): Promise<{ open: OpenCarrier | null; why: string }> {
 		const socket = () =>
-			this.#socket().catch((error) => {
+			this.socket().catch((error) => {
 				wispNote('warn', `websocket did not open (${short(error)})`);
 				return null;
 			});
@@ -1373,6 +1259,295 @@ export class CarrierTransport implements ProxyTransport {
 				: `not up within ${budget} ms (remembered for the next start)`,
 		};
 	}
+}
+
+/**
+ * Epoxy over the relay's WebTransport session or its WebSocket, whichever
+ * init() chose (see the top of the file). Until init() chose, and when
+ * neither could be opened, `base` is the transport as given.
+ */
+export class CarrierTransport implements ProxyTransport {
+	#Transport: TransportClass | null = null;
+	#options: unknown[];
+	#wisp: string;
+	/** null: off, the transport as given on its own WebSocket */
+	#webTransport: WispWebTransportOptions | null;
+	#label: CarrierLabel | null;
+	/** the transport as given, once its class is in; the chosen one after init() */
+	#base: ProxyTransport | null = null;
+	/** settles once the transport's class is in */
+	#loaded: Promise<void>;
+	/** the carrier being chosen before init() asked (while the module loads) */
+	#choice: Promise<Choice> | null = null;
+	#starting: Promise<void> | null = null;
+	/** without `webTransport`: epoxy was handed its WebSocket as its function transport */
+	#piped = false;
+	/** which carrier the wisp connection rides: null before init() chose */
+	carrier: Carrier | null = null;
+	/** the choice, as the console and the host have it */
+	info: CarrierInfo | null = null;
+	#chooser: Chooser;
+
+	/**
+	 * `Transport` may be the promise of the class (its module loading): the
+	 * carrier is then chosen at once, while the module loads, as nothing of
+	 * the choice needs the transport
+	 */
+	constructor(
+		Transport: TransportClass | Promise<TransportClass>,
+		options: unknown[],
+		webTransport: WispWebTransportOptions | null,
+		label: CarrierLabel | null = null,
+	) {
+		this.#options = options;
+		this.#wisp = (options[0] as { wisp: string }).wisp;
+		this.#webTransport = webTransport;
+		this.#label = label;
+		this.#chooser = new Chooser(this.#wisp, options[0], webTransport);
+		if (typeof Transport === 'function') {
+			this.#adopt(Transport);
+			this.#loaded = Promise.resolve();
+			return;
+		}
+		if (webTransport) this.#choice = this.#chooseTimed();
+		this.#loaded = Transport.then(
+			(Transport) => this.#adopt(Transport),
+			(error: unknown) => {
+				// no transport will ride what was opened
+				void this.#choice?.then(({ open }) => open?.close());
+				throw error;
+			},
+		);
+		this.#loaded.catch(() => {});
+	}
+
+	#adopt(Transport: TransportClass) {
+		this.#Transport = Transport;
+		this.#base = new Transport(...this.#options);
+	}
+
+	/** the session tried beside the WebSocket, settled (for tests and the demo) */
+	get probed(): Promise<boolean> {
+		return this.#chooser.probed;
+	}
+
+	/** settles once the transport's class is in (constructed with its promise) */
+	get loaded(): Promise<void> {
+		return this.#loaded;
+	}
+
+	/**
+	 * whether init() opens the wisp connection itself (no `webTransport`):
+	 * warmTransport must not open another
+	 */
+	get opensWisp(): boolean {
+		return !this.#webTransport && !this.#piped;
+	}
+
+	/** the transport in use (serveTransport and webTransportHost look through it) */
+	get base(): ProxyTransport {
+		return this.#base!;
+	}
+
+	get ready(): boolean {
+		return this.#base?.ready ?? false;
+	}
+	set ready(value: boolean) {
+		if (this.#base) this.#base.ready = value;
+	}
+
+	get client(): unknown {
+		return (this.#base as { client?: unknown } | null)?.client;
+	}
+
+	get fieldSupport(): unknown {
+		return (this.#base as { fieldSupport?: unknown } | null)?.fieldSupport;
+	}
+
+	init(): Promise<void> {
+		this.#starting ??= this.#start().catch((error) => {
+			this.#starting = null;
+			throw error;
+		});
+		return this.#starting;
+	}
+
+	/** the choice, told: the host's `carrier` */
+	#announce(key: string, info: CarrierInfo) {
+		this.info = { ...info, ...this.#label };
+		announce(key, this.info);
+	}
+
+	/** what the notes say of the transport beside its carrier: `epoxy, HTTP/3 on` */
+	get #what(): string {
+		const label = this.#label;
+		return label
+			? `${label.transport}, HTTP/3 ${label.http3 ? 'on' : 'off'}`
+			: '';
+	}
+
+	/** the note of riding the WebSocket */
+	#connecting(off = false) {
+		const what = this.#what;
+		wispNote(
+			'info',
+			`connecting to ${this.#wisp} (wisp transport ${LABEL.websocket}${off ? ', WebTransport off' : ''}${what ? `; ${what}` : ''})`,
+		);
+	}
+
+	/**
+	 * No `webTransport`: the transport as given, on its own WebSocket. Its
+	 * wisp connection is opened now and the time to it told (epoxy's
+	 * replace_stream_provider settles once the relay answered; a request
+	 * meanwhile waits for that connection, as warmTransport had it); a
+	 * transport without that call is timed to the end of its init. A
+	 * connection that cannot be opened now is left to the first request,
+	 * as before, and the line says why.
+	 */
+	async #plain() {
+		const key = `wisp ${this.#wisp}`;
+		this.#connecting(true);
+		let started = performance.now();
+		if (takesPipes(this.#base!)) {
+			const piped = this.#unchosen();
+			const opening = this.#chooser.socket().catch((error) => {
+				wispNote(
+					'warn',
+					`websocket did not open (${short(error)}); the first request tries again`,
+				);
+				return null;
+			});
+			const [open] = await Promise.all([
+				opening,
+				// epoxy's module loads while the WebSocket opens
+				piped.transport.init().catch(() => {}),
+			]);
+			if (open) {
+				const ms = Math.round(performance.now() - started);
+				piped.give(this.#pipes(open, key));
+				this.#base = piped.transport;
+				this.#piped = true;
+				this.carrier = 'websocket';
+				await this.#base.init();
+				this.#announce(key, {
+					carrier: 'websocket',
+					url: this.#wisp,
+					ms,
+					why: 'off',
+				});
+				return;
+			}
+		}
+		await this.#base!.init();
+		this.carrier = 'websocket';
+		const client = (
+			this.#base as {
+				client?: { replace_stream_provider?: () => Promise<unknown> };
+			}
+		).client;
+		if (typeof client?.replace_stream_provider !== 'function') {
+			const ms = Math.round(performance.now() - started);
+			this.#announce(key, {
+				carrier: 'websocket',
+				url: this.#wisp,
+				ms,
+				why: 'off',
+			});
+			return;
+		}
+		started = performance.now();
+		client.replace_stream_provider().then(
+			() => {
+				const ms = Math.round(performance.now() - started);
+				this.#announce(key, {
+					carrier: 'websocket',
+					url: this.#wisp,
+					ms,
+					why: 'off',
+				});
+			},
+			(error) => {
+				const ms = Math.round(performance.now() - started);
+				wispNote(
+					'warn',
+					`websocket did not open (${short(error)}); the first request tries again`,
+				);
+				this.#announce(key, {
+					carrier: 'websocket',
+					url: this.#wisp,
+					ms,
+					why: `off; the WebSocket did not open (${short(error)})`,
+				});
+			},
+		);
+	}
+
+	/** a choice of this transport's carrier, and how long it took */
+	async #chooseTimed(): Promise<Choice> {
+		const plan = relayPlan(this.#wisp, this.#webTransport!);
+		const started = performance.now();
+		const { open, why } = await this.#chooser.choose(plan);
+		return { plan, open, why, ms: Math.round(performance.now() - started) };
+	}
+
+	/**
+	 * The transport over a carrier not chosen yet: it is made, and its init()
+	 * (epoxy's wasm module) run, while the carrier is chosen; its wisp
+	 * connection, which nothing asks for before the choice, is the one
+	 * `give` hands it
+	 */
+	#unchosen(): {
+		transport: ProxyTransport;
+		give: (pipes: (v2: boolean) => Promise<WispPipe>) => void;
+	} {
+		let give!: (pipes: (v2: boolean) => Promise<WispPipe>) => void;
+		const pipes = new Promise<(v2: boolean) => Promise<WispPipe>>(
+			(resolve) => (give = resolve),
+		);
+		const [first, ...rest] = this.#options;
+		const transport = new this.#Transport!(
+			{
+				...(first as object),
+				wisp: async (v2: boolean) => (await pipes)(v2),
+			},
+			...rest,
+		);
+		return { transport, give };
+	}
+
+	async #start() {
+		await this.#loaded;
+		if (this.carrier === null) {
+			if (!this.#webTransport) return this.#plain();
+			const choosing = this.#choice ?? this.#chooseTimed();
+			this.#choice = null;
+			const piped = this.#unchosen();
+			// epoxy's module loads while the carrier is chosen
+			const [{ plan, open, why, ms }] = await Promise.all([
+				choosing,
+				piped.transport.init().catch(() => {}),
+			]);
+			if (open) {
+				piped.give(this.#pipes(open, plan.key));
+				this.#base = piped.transport;
+			}
+			this.carrier = open?.carrier ?? 'websocket';
+			if (this.carrier === 'webtransport') {
+				const what = this.#what;
+				wispNote(
+					'info',
+					`WebTransport session established in ${ms} ms: wisp transport ${LABEL.webtransport} to ${open!.url}${what ? ` (${what})` : ''}`,
+				);
+			} else this.#connecting();
+			this.#announce(plan.key, {
+				carrier: this.carrier,
+				url: open?.url ?? this.#wisp,
+				ms,
+				...(this.carrier === 'websocket' && { why }),
+			});
+		}
+		await this.#base!.init();
+	}
 
 	/**
 	 * Epoxy's function transport: the first wisp connection it asks for is
@@ -1385,25 +1560,7 @@ export class CarrierTransport implements ProxyTransport {
 	 */
 	#pipes(open: OpenCarrier, key: string): (v2: boolean) => Promise<WispPipe> {
 		let unused: OpenCarrier | null = open;
-		const up = performance.now();
-		const stats = open.stats;
-		const ended = (how: string) =>
-			`WebTransport session ended after ${Math.round((performance.now() - up) / 1000)} s (${how}${stats ? `; sent ${stats.datagramsSent} / received ${stats.datagramsReceived} datagrams, ${stats.sent - stats.datagramsSent} / ${stats.received - stats.datagramsReceived} packets on the stream` : ''})`;
-		if (open.carrier === 'webtransport')
-			open.ended.then(
-				() => wispNote('info', ended('closed')),
-				() => {
-					memory.lost(key);
-					wispNote('warn', ended('lost without a close'));
-				},
-			);
-		else
-			void open.closed?.then((code) =>
-				wispNote(
-					code === 1000 ? 'info' : 'warn',
-					`websocket closed (code ${code})`,
-				),
-			);
+		watchEnd(open, key);
 		return async () => {
 			const mine = unused;
 			unused = null;
@@ -1429,10 +1586,10 @@ export class CarrierTransport implements ProxyTransport {
 		headers: RawHeaders,
 		signal: AbortSignal | undefined,
 	): Promise<TransferrableResponse> {
-		return this.#base.request(remote, method, body, headers, signal);
+		return this.#base!.request(remote, method, body, headers, signal);
 	}
 
 	connect(...args: Parameters<ProxyTransport['connect']>) {
-		return this.#base.connect(...args);
+		return this.#base!.connect(...args);
 	}
 }

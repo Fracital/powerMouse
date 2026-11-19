@@ -615,6 +615,16 @@ transport WebSocket (TCP), WebTransport off; epoxy, HTTP/3 on)`, and the
   that ended without a close (UDP lost under it, a relay that went away)
   is remembered as lost, so the new transport rides the WebSocket at once
   and the session tried beside it tells the two apart.
+- **Without `webTransport`.** A transport given a wisp URL hands epoxy its
+  WebSocket as the function transport too (when epoxy's build takes one:
+  `client_version` is an object), opened as epoxy's own would be, so the
+  WebSocket's close ends epoxy's wisp connection and the next request
+  revives the transport like a lost session. Epoxy over its own WebSocket
+  by URL left a pooled connection's requests unanswered when the WebSocket
+  dropped while idle: a page shown again from the back/forward cache whose
+  `pageshow` did not reach the controller (Chrome closes the page's
+  WebSockets, its workers' with them), and a reset that came after an
+  earlier NAT-style drop had been recovered from (`wisp-idle-drop`).
 
 It rests on epoxy-tls's `deploy/epoxy` patch 0075 (in the pinned build),
 which makes a function transport's writes never wait, as the WebSocket's
