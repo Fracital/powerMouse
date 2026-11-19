@@ -145,14 +145,21 @@ on and an origin offers h3 (docs/http3.md).
   next to version 1), and `0003` (ACKs decimated as Chrome's: every
   second ack-eliciting packet for the first 100, then every tenth or after
   a quarter of the minimum RTT, at most max_ack_delay, as quiche's
-  QuicReceivedPacketManager). It vendors ring 0.17.14 with
+  QuicReceivedPacketManager), and `0004` (the keep-alive PINGs only while
+  a bidirectional stream is open, as quiche's QuicPingManager: an idle
+  connection sends nothing) and `0005` (a PING alone goes as Chrome's
+  29-byte packet: no ACK frame unless one is due, and a client's packets
+  padded only as far as header protection needs). It vendors
+  ring 0.17.14 with
   epoxy's own `patches/ring/0001` (its bitsliced AES in 64-bit words on wasm32,
   four blocks a batch, as on a 64-bit target), and builds ring and the
   brotli and compression decoders at `opt-level = 3`, the rest for size.
   `src/lib.rs` adds
   X25519MLKEM768 (`src/mlkem.rs`, as in epoxy), brotli certificates, empty
   source connection ids, an 8-byte first destination id, no greased
-  fixed bit, every Initial padded to 1250 bytes and no path MTU probes, as
+  fixed bit, every Initial padded to 1250 bytes and no path MTU probes,
+  a PING 15 s after the last packet heard while a request is open (counted
+  in the connection's `pings`, which STomp's blackhole watch times), as
   Chrome's client, and seeds fastrand (h3's GREASE source, a fixed seed on
   wasm32-unknown-unknown otherwise). A request's fields go out in the
   caller's order, Accept-Encoding saying Chrome's `gzip, deflate, br, zstd`

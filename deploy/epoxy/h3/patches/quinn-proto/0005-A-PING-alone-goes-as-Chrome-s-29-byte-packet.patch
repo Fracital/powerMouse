@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Thu, 19 Nov 2026 04:10:00 -0500
+Subject: [PATCH] A PING alone goes as Chrome's 29-byte packet
+
+Chrome's keep-alive and probe PINGs (headless Chrome 157, NetLog: a
+PING frame and nothing else) are 29 bytes on a connection with an 8-byte
+destination id: the PING and the padding header protection needs. quinn
+sent 35: it bundles its ACK ranges into any ack-eliciting packet once
+the bundling delay has passed, so the PING carried an ACK of packets
+that wanted none, and it pads every packet to the destination id plus
+22 bytes, so a stateless reset can pass for one (30 without the ACK).
+
+- A packet whose only frame is a PING goes without an ACK frame unless
+  an ack-eliciting packet has come since the last ACK (one that is due
+  still goes with it).
+- A client's packets are padded only as far as header protection needs.
+  The server's keep quinn's floor.
+
+quinn-proto's own `keep_alive` test (a connection with no stream open,
+pinged) fails with 0004 applied, as it should; the other 313 pass.
+---
+diff --git a/src/connection/mod.rs b/src/connection/mod.rs
+--- a/src/connection/mod.rs
++++ b/src/connection/mod.rs
+@@ -3190,8 +3190,10 @@
+         }
+ 
+         // PING
++        let mut ping_only = false;
+         if mem::replace(&mut space.ping_pending, false) {
+             trace!("PING");
++            ping_only = buf.len() == pre_payload_len;
+             buf.write(frame::FrameType::PING);
+             sent.non_retransmits = true;
+             self.stats.frame_tx.ping += 1;
+@@ -3431,7 +3433,12 @@
+         // but sending multiple ACKs for a single incoming packet is a waste of peer's resources,
+         // so we have next_bundled_ack_time to control when to send ACKs.
+         let any_frames_sent = buf.len() > pre_payload_len;
++        // A packet of a PING alone (the keep-alive's, a loss probe's) goes
++        // without an ACK frame unless an ACK is due, as Chrome's: quiche
++        // sends it as the PING and the padding header protection needs
++        let ping_alone = ping_only && buf.len() == pre_payload_len + 1;
+         if any_frames_sent
++            && !(ping_alone && !space.pending_acks.ack_due())
+             && sent.largest_acked.is_none()
+             && self.next_bundled_ack_time.is_some_and(|time| time <= now)
+             && space.pending_acks.can_send_with_other_frames()
+diff --git a/src/connection/packet_builder.rs b/src/connection/packet_builder.rs
+--- a/src/connection/packet_builder.rs
++++ b/src/connection/packet_builder.rs
+@@ -148,10 +148,17 @@
+ 
+         // pn_len + payload_len + tag_len >= sample_size + 4
+         // payload_len >= sample_size + 4 - pn_len - tag_len
+-        let min_size = Ord::max(
+-            buffer.len() + (sample_size + 4).saturating_sub(number.len() + tag_len),
+-            partial_encode.start + dst_cid.len() + 6,
+-        );
++        //
++        // A client's packets are only as large as header protection needs,
++        // as Chrome's: quiche pads a packet of a PING alone to the sample and
++        // no further (29 bytes with an 8-byte connection id, where the
++        // stateless reset floor made it 30)
++        let protected = buffer.len() + (sample_size + 4).saturating_sub(number.len() + tag_len);
++        let min_size = if conn.side().is_client() {
++            protected
++        } else {
++            Ord::max(protected, partial_encode.start + dst_cid.len() + 6)
++        };
+         let max_size = buffer_capacity.saturating_sub(tag_len);
+         // A peer-provided Initial token can consume the space needed after the header.
+         // Leave room for both a CONNECTION_CLOSE and a CRYPTO frame with data. The
+diff --git a/src/connection/spaces.rs b/src/connection/spaces.rs
+--- a/src/connection/spaces.rs
++++ b/src/connection/spaces.rs
+@@ -716,6 +716,11 @@
+         self.immediate_ack_required && !self.ranges.is_empty()
+     }
+ 
++    /// Whether an ack-eliciting packet has come since the last ACK frame went
++    pub(super) fn ack_due(&self) -> bool {
++        self.ack_eliciting_since_last_ack_sent > 0
++    }
++
+     /// Whether any ACK frames can be sent in data-initiated packets
+     pub(super) fn can_send_with_other_frames(&self) -> bool {
+         !self.ranges.is_empty()
+-- 
+2.47.0
+

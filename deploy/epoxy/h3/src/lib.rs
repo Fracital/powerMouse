@@ -74,6 +74,16 @@ fn transport_config() -> TransportConfig {
 	let mut t = TransportConfig::default();
 	// max_idle_timeout 30 s
 	t.max_idle_timeout(Some(VarInt::from_u32(30_000).into()));
+	// A PING 15 s after the last packet heard while a request is open, and
+	// none while the connection is idle (patches/quinn-proto/0004), as
+	// quiche's QuicPingManager (kPingTimeoutSecs). Measured in headless
+	// Chrome 157: a request held open is pinged 15 s after it went out and
+	// every 15 s after that; an idle connection sends nothing until its idle
+	// timeout. A request the server acknowledged and whose answer is lost
+	// is found by that PING: Chrome closed the connection as a blackhole
+	// 6.4 s after it, 21.4 s after the request (the host's watch does the
+	// same, Http3Transport in STomp, by `pings`).
+	t.keep_alive_interval(Some(Duration::from_secs(15)));
 	// initial_max_stream_data_{bidi_local,bidi_remote,uni} 6 MiB
 	t.stream_receive_window(VarInt::from_u32(6 * 1024 * 1024));
 	// initial_max_data 15 MiB
@@ -388,6 +398,15 @@ impl H3Connection {
 	#[wasm_bindgen(getter)]
 	pub fn handshake_ms(&self) -> f64 {
 		self.handshake_ms
+	}
+
+	/// The PING frames sent so far: the keep-alive's while a request is
+	/// open, and the probes of a loss timeout with nothing to send again.
+	/// Each one is acknowledged at once by a live peer, so the host times
+	/// one as it times a request (Http3Transport's blackhole watch).
+	#[wasm_bindgen(getter)]
+	pub fn pings(&self) -> f64 {
+		self.quic.stats().frame_tx.ping as f64
 	}
 
 	/// The connection's smoothed RTT and datagram counters.

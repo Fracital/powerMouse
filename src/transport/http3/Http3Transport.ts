@@ -22,7 +22,7 @@ import { wispGone } from '../RevivingTransport';
 import { logTransport, rideOf, transportLog } from '../transportLog';
 import { AltSvcCache, type AltService } from './altSvc';
 import { base64url, httpsQuery, parseHttpsAnswer } from './dnsHttps';
-import { remoteH3Module } from './h3Thread';
+import { PING_GAP_MS, remoteH3Module } from './h3Thread';
 
 /** a datagram channel bound to one remote: one Uint8Array per datagram each way */
 export interface DatagramChannel {
@@ -66,6 +66,8 @@ export interface H3Response {
 export interface H3Connection {
 	readonly alive: boolean;
 	readonly handshake_ms: number;
+	/** PING frames sent so far (stomp-h3 builds with the 15 s keep-alive; undefined before) */
+	readonly pings?: number;
 	stats(): Record<string, number>;
 	close(): void;
 	request(
@@ -820,6 +822,46 @@ export default class Http3Transport implements ProxyTransport {
 		const unheard = new Map<object, number>();
 		/** requests made and not yet sent */
 		const unsent = new Set<object>();
+		/** requests made and not yet answered */
+		const open = new Set<object>();
+		// A request the server acknowledged and whose answer is then lost is
+		// found by stomp-h3's keep-alive, as Chrome finds it: a PING 15 s
+		// after the last datagram heard while a request is open, which a
+		// live peer acknowledges at once, so it is timed as a request is.
+		// Chrome 157 closed such a connection as a blackhole 6.4 s after its
+		// PING, 21.4 s after the request (measured); quinn waited for its
+		// 30 s idle timeout. stomp-h3 counts the PINGs it sent (`pings`),
+		// read after a write only while a request the server acknowledged
+		// waits for its answer and only for a datagram that went out
+		// PING_GAP_MS or more after the last one heard (sooner, it is the
+		// ACK of what was heard, which wants no answer).
+		let lastHeard = performance.now();
+		let pings = 0;
+		let pingCheck = false;
+		const checkPing = (at: number) => {
+			pingCheck = false;
+			let count: number;
+			try {
+				count = Number(conn?.pings);
+			} catch {
+				return;
+			}
+			// NaN from a stomp-h3 without the keep-alive
+			if (!(count > pings)) return;
+			pings = count;
+			if (ended || !conn?.alive) return;
+			for (const request of open)
+				if (!unsent.has(request) && !unheard.has(request))
+					unheard.set(request, at);
+			if (silence === undefined) rearm();
+		};
+		const syncPings = () => {
+			try {
+				pings = Number(conn?.pings) || pings;
+			} catch {
+				// still inside the wasm
+			}
+		};
 		let silence: ReturnType<typeof setTimeout> | undefined;
 		const stopWatch = () => {
 			clearTimeout(silence);
@@ -847,7 +889,7 @@ export default class Http3Transport implements ProxyTransport {
 			if (waited < wait) return rearm();
 			const live = conn;
 			console.warn(
-				`Stomp: QUIC to ${origin} heard nothing back for ${Math.round(waited)} ms after a request (a blackhole, as Chrome closes one); its requests go over the base transport`,
+				`Stomp: QUIC to ${origin} heard nothing back for ${Math.round(waited)} ms after a request or a PING (a blackhole, as Chrome closes one); its requests go over the base transport`,
 			);
 			if (transportLog.on)
 				logTransport(
@@ -868,10 +910,14 @@ export default class Http3Transport implements ProxyTransport {
 		// anything heard: every request out is acknowledged by now or will
 		// be, and is no longer watched
 		const heard = () => {
+			lastHeard = performance.now();
 			if (!unheard.size) return;
 			unheard.clear();
 			stopWatch();
-			queueMicrotask(measure);
+			queueMicrotask(() => {
+				measure();
+				syncPings();
+			});
 		};
 		const sent = () => {
 			if (!unsent.size) return;
@@ -884,8 +930,11 @@ export default class Http3Transport implements ProxyTransport {
 		const watchRequest = () => {
 			const request = {};
 			unsent.add(request);
+			open.add(request);
+			syncPings();
 			return () => {
 				unsent.delete(request);
+				open.delete(request);
 				if (unheard.delete(request) && !unheard.size) stopWatch();
 			};
 		};
@@ -946,6 +995,15 @@ export default class Http3Transport implements ProxyTransport {
 				// the watch never stands in a datagram's way
 				try {
 					sent();
+					if (
+						!pingCheck &&
+						open.size > unheard.size &&
+						performance.now() - lastHeard >= PING_GAP_MS
+					) {
+						pingCheck = true;
+						const at = performance.now();
+						queueMicrotask(() => checkPing(at));
+					}
 				} catch {
 					// unwatched
 				}
@@ -974,6 +1032,7 @@ export default class Http3Transport implements ProxyTransport {
 			this.#connections.set(origin, conn);
 			this.#watches.set(conn, watchRequest);
 			measure();
+			syncPings();
 			this.#confirmed.add(origin);
 			this.#cache.confirm(origin);
 			if (transportLog.on)

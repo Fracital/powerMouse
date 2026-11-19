@@ -63,13 +63,20 @@ refusing UDP to one name leaves HTTP/3 on for the rest of the session.
    it was made and is done being timed once anything is heard: a server
    acknowledges a request within its max_ack_delay (25 ms) whether or not
    it answers yet, so one it holds (a long poll) never trips it. A request
-   the server acknowledged whose answer is then lost is not caught this
-   way (over a WebTransport carrier: the flow's small datagrams lost while
-   its large packets still cross on the stream, which is how the server's
-   acknowledgement arrived): Chrome finds that with the PING it sends every
-   15 s while a request is open and its blackhole delay after it, about
-   21 s; stomp-h3 sends no PING, so it waits for the 30 s idle timeout,
-   after which rule 6 marks the origin broken.
+   the server acknowledged whose answer is then lost (over a WebTransport
+   carrier: the flow's small datagrams lost while its large packets still
+   cross on the stream, which is how the server's acknowledgement arrived)
+   is found by the keep-alive, as Chrome finds it: stomp-h3 sends a PING
+   15 s after the last datagram heard while a request is open, and none
+   while the connection is idle (quiche's QuicPingManager; measured in
+   headless Chrome 157 against an HTTP/3 server: a request held open was
+   pinged at 15, 30 and 45 s, an idle connection sent nothing until its idle
+   timeout). A live peer acknowledges a PING at once, so it is timed as a
+   request is: Chrome closed the connection as a blackhole 6.4 s after the
+   PING went unanswered, 21.4 s after the request, and sent the request
+   again, and the wrapper does the same (stomp-h3 counts its PINGs, `pings`,
+   and the HTTP/3 worker tells the transport worker of each one ahead of
+   its datagram). Rule 6 then marks the origin broken.
 4. A handshake that fails (a TLS or QUIC error, the channel closed, nothing
    back within `timeout`, 10 s) marks the origin broken: 5 minutes, doubling
    on each consecutive failure up to 2 days, reset when QUIC works again.
@@ -153,7 +160,10 @@ relay: `udpBlockedUntil`, `udpCarried` and the hosts in `udpRefused`.
   parameter of 0 to 15 random bytes. No greased fixed bit, an 8-byte first
   destination connection ID, every Initial datagram 1250 bytes and no path
   MTU probes (Chrome sends none; the packets stay at 1250), initial RTT
-  100 ms, Cubic. ACKs as quiche's QuicReceivedPacketManager sends them:
+  100 ms, Cubic. A PING 15 s after the last packet heard while a request is
+  open, none while idle (rule 3), its packet the PING alone with no ACK
+  frame unless one is due (29 bytes with an 8-byte connection id, as
+  Chrome's). ACKs as quiche's QuicReceivedPacketManager sends them:
   every second ack-eliciting packet for the first 100 packets, then every
   tenth, or a quarter of the minimum RTT (at most max_ack_delay) after the
   first unacknowledged one. Measured against Chrome 152 (docs/fingerprint.md).

@@ -8,7 +8,4 @@
   retry without alt-svc. A QUIC path that carried the handshake and then
   nothing (a WebTransport carrier's UDP flow lost while the session lived)
   held every request to that origin for the idle timeout, each reconnecting
-  and waiting again. A request the server acknowledged whose answer is
-  then lost still waits for the idle timeout (Chrome's 15 s PING finds it
-  in about 21 s; stomp-h3 sends none), and then marks the origin broken.
-  (http3-fallback, webtransport-wisp suites.)
+  and waiting again. (http3-fallback, webtransport-wisp suites.)

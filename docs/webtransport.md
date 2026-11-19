@@ -505,8 +505,9 @@ docs/webtransport.md, "Wisp on the session" and "Certificates"):
   a download from it is HTTP/2 on the stream whatever the carrier. A path
   that took the handshake and then carried no datagrams held an h3 request
   for quinn's 30 s idle timeout, and the next one again; Chrome's blackhole
-  delay and its broken mark now end that (docs/http3.md, rules 3 and 6;
-  `webtransport-wisp`).
+  delay and its broken mark now end that, and stomp-h3's keep-alive PING
+  finds a request whose answer alone was lost at Chrome's 21.4 s
+  (docs/http3.md, rules 3 and 6; `webtransport-wisp`, `http3-fallback`).
 - **Wisp v2** (`wisp_v2` in epoxy's options) is offered as the protocol
   `wisp-v2`; holyWisp answers it with `wt-protocol` and opens v2 with INFO,
   as it does for a WebSocket with a subprotocol.

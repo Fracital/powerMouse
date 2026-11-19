@@ -98,8 +98,10 @@ const DATAGRAM_H3 = `data:text/javascript,${encodeURIComponent(`
 // the server acknowledges it (`ack <id>`, which this side acknowledges in
 // turn with one datagram that wants no answer, as a QUIC packet that is
 // only an ACK) or answers (`resp <id>`). Nothing heard for the handshake
-// timeout closes it as quinn's idle timeout does, in quinn's words. Its
-// RTT is 1 ms, as on loopback.
+// timeout closes it as quinn's idle timeout does, in quinn's words. While a
+// request is open it sends a PING (`ping`) 15 s after the last datagram
+// heard and counts it in `pings`, as stomp-h3's keep-alive. Its RTT is
+// 1 ms, as on loopback.
 const PROBING_H3 = `data:text/javascript,${encodeURIComponent(`
 	export default async function init() {}
 	export async function connect(host, readable, writable, options) {
@@ -123,10 +125,13 @@ const PROBING_H3 = `data:text/javascript,${encodeURIComponent(`
 		const pending = new Map();
 		let closed = false;
 		let idle;
+		let keepAlive;
+		let pings = 0;
 		const close = (why) => {
 			if (closed) return;
 			closed = true;
 			clearTimeout(idle);
+			clearTimeout(keepAlive);
 			writer.close().catch(() => {});
 			for (const entry of pending.values()) {
 				clearTimeout(entry.timer);
@@ -137,6 +142,12 @@ const PROBING_H3 = `data:text/javascript,${encodeURIComponent(`
 		const heard = () => {
 			clearTimeout(idle);
 			idle = setTimeout(() => close('Connection error: Timeout'), idleMs);
+			clearTimeout(keepAlive);
+			keepAlive = setTimeout(() => {
+				if (closed || !pending.size) return;
+				pings++;
+				send('ping');
+			}, 15000);
 		};
 		send('hello ' + host);
 		const first = await Promise.race([
@@ -177,6 +188,10 @@ const PROBING_H3 = `data:text/javascript,${encodeURIComponent(`
 				if (inside) throw new Error('recursive use of an object detected which would lead to unsafe aliasing in rust');
 				return { rttMs: 1 };
 			},
+			get pings() {
+				if (inside) throw new Error('recursive use of an object detected which would lead to unsafe aliasing in rust');
+				return pings;
+			},
 			close: () => close('Connection error: closed locally'),
 			request() {
 				if (closed) return Promise.reject(new Error('h3 send: closed'));
@@ -211,8 +226,12 @@ const PROBING_H3 = `data:text/javascript,${encodeURIComponent(`
  * edges' name gate does), `blackhole`, `endLater`, `echo` (what goes out
  * comes back), `echo:MS` (after that long), `dark:N` (the first N datagrams
  * echo, nothing after them crosses either way: a path that took the
- * handshake and then carried nothing) and `server:MS` (PROBING_H3's server:
- * a request is acknowledged at once and answered MS later). Each request reports how long it took and how it went;
+ * handshake and then carried nothing), `server:MS` (PROBING_H3's server:
+ * a request is acknowledged at once and answered MS later, a PING
+ * acknowledged at once) and `acked` (PROBING_H3's server acknowledges the
+ * first request at once, and nothing it sends after that arrives: the
+ * answer is lost, and so is everything after it). A request step's `cap`
+ * is how long it may take (15 s). Each request reports how long it took and how it went;
  * the end reports the wrapper's info() and how often the channel was opened,
  * in all and per host.
  */
@@ -265,6 +284,8 @@ const scenario = async ({ module, channel, options, steps }) => {
 		});
 		let shut = false;
 		let crossed = 0;
+		// `acked`: the acknowledgement went back, nothing will after it
+		let lostAfter = false;
 		const write = new WritableStream({
 			write(chunk) {
 				if (kind === 'shut' && !shut) {
@@ -272,10 +293,18 @@ const scenario = async ({ module, channel, options, steps }) => {
 					back.close();
 				}
 				if (kind === 'dark' && crossed++ < Number(arg)) back.enqueue(chunk);
-				if (kind === 'server') {
+				if (kind === 'server' || kind === 'acked') {
 					const [what, id] = new TextDecoder().decode(chunk).split(' ');
 					const say = (text) => back.enqueue(new TextEncoder().encode(text));
 					if (what === 'hello') say('hello');
+					if (kind === 'acked') {
+						if (what === 'req' && !lostAfter) {
+							lostAfter = true;
+							say(`ack ${id}`);
+						}
+						return;
+					}
+					if (what === 'ping') say('ack ping');
 					if (what !== 'req') return;
 					say(`ack ${id}`);
 					setTimeout(() => say(`resp ${id}`), Number(arg));
@@ -318,7 +347,7 @@ const scenario = async ({ module, channel, options, steps }) => {
 			const response = await Promise.race([
 				transport.request(url, 'GET', null, [], undefined),
 				new Promise((resolve, reject) =>
-					setTimeout(() => reject(new Error('HUNG')), 15000),
+					setTimeout(() => reject(new Error('HUNG')), step.cap ?? 15000),
 				),
 			]);
 			out.push({
@@ -681,6 +710,69 @@ if (!present) {
 			!entry(r, 'https://poll.test')?.brokenUntil &&
 			r.opened === 1,
 		JSON.stringify({ out: r.out, opened: r.opened, alt: r.info.altSvc }),
+	);
+}
+{
+	// A request the server acknowledges and whose answer is lost, with
+	// nothing after it arriving either: Chrome 157 sent its PING 15 s on,
+	// closed the connection as a blackhole 6.4 s after it (21.4 s after the
+	// request, measured) and sent the request again. stomp-h3 sent no PING
+	// and waited for its 30 s idle timeout. Beside it, a request the server
+	// acknowledges and answers 25 s later, which the same PING finds alive.
+	const [lost, held] = await Promise.all([
+		run({
+			module: PROBING_H3,
+			channel: 'acked',
+			options: { timeout: 30000 },
+			steps: [
+				{ url: 'https://lost.test/', alt: 'h3=":443"' },
+				{ sleep: 300 },
+				{ url: 'https://lost.test/', alt: 'h3=":443"', cap: 40000 },
+				{ url: 'https://lost.test/', alt: 'h3=":443"' },
+			],
+		}),
+		run({
+			module: PROBING_H3,
+			channel: 'server:25000',
+			options: { timeout: 30000 },
+			steps: [
+				{ url: 'https://held.test/', alt: 'h3=":443"' },
+				{ sleep: 300 },
+				{ url: 'https://held.test/', alt: 'h3=":443"', cap: 40000 },
+			],
+		}),
+	]);
+	ok(
+		"a request the server acknowledges and whose answer is lost goes over the base transport at Chrome's time: its PING 15 s on goes unanswered for the blackhole delay",
+		lost.out[1]?.status === 200 &&
+			lost.out[1].via === 'base-after-h3' &&
+			lost.out[1].ms > 20000 &&
+			lost.out[1].ms < 23500,
+		JSON.stringify(lost.out),
+	);
+	ok(
+		'and the origin is marked broken: the next request goes over the base transport at once, with no new connection',
+		entry(lost, 'https://lost.test')?.brokenUntil > lost.now &&
+			lost.out[2]?.via === 'base' &&
+			lost.out[2].ms < 250 &&
+			lost.opened === 1,
+		JSON.stringify({
+			out: lost.out,
+			opened: lost.opened,
+			alt: lost.info.altSvc,
+		}),
+	);
+	ok(
+		'a request the server holds for 25 s, acknowledging its PING, is answered over HTTP/3; the origin is not marked broken',
+		held.out[1]?.via === 'h3' &&
+			held.out[1].ms > 24900 &&
+			!entry(held, 'https://held.test')?.brokenUntil &&
+			held.opened === 1,
+		JSON.stringify({
+			out: held.out,
+			opened: held.opened,
+			alt: held.info.altSvc,
+		}),
 	);
 }
 

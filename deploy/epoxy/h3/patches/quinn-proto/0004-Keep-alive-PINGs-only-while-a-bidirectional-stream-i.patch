@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Thu, 19 Nov 2026 03:30:00 -0500
+Subject: [PATCH] Keep-alive PINGs only while a bidirectional stream is open
+
+quinn's keep_alive_interval pings whenever the timer runs out, whatever
+the connection carries, so a connection with nothing open would be kept
+up for good. Chrome (quiche's QuicPingManager) pings a client connection
+15 s after the last packet only while its session says to keep it alive
+(QuicSession::ShouldKeepConnectionAlive: an active stream), and an idle
+connection sends nothing until its idle timeout. Measured in headless
+Chrome 157 against an HTTP/3 server: a request held open was pinged at
+15, 30 and 45 s; with no request open there was no PING, and the
+connection closed at its idle timeout.
+
+The timer still runs out 15 s after the last packet received; the PING
+goes only while a bidirectional stream, this side's or one the peer has
+opened, is not yet over both ways (an HTTP/3 client's requests, a
+WebTransport session's CONNECT stream). Unidirectional streams (HTTP/3's
+control and QPACK streams, open for the connection's life) do not count.
+---
+diff --git a/src/connection/mod.rs b/src/connection/mod.rs
+--- a/src/connection/mod.rs
++++ b/src/connection/mod.rs
+@@ -1203,8 +1203,15 @@
+                     self.kill(ConnectionError::TimedOut);
+                 }
+                 Timer::KeepAlive => {
+-                    trace!("sending keep-alive");
+-                    self.ping();
++                    // Only while a stream is open, as quiche: a client
++                    // pings when its session says to keep the connection
++                    // alive (QuicSession::ShouldKeepConnectionAlive, an
++                    // active stream), so an idle connection sends nothing
++                    // and reaches its idle timeout
++                    if self.streams.bidi_open() {
++                        trace!("sending keep-alive");
++                        self.ping();
++                    }
+                 }
+                 Timer::LossDetection => {
+                     self.on_loss_detection_timeout(now);
+diff --git a/src/connection/streams/state.rs b/src/connection/streams/state.rs
+--- a/src/connection/streams/state.rs
++++ b/src/connection/streams/state.rs
+@@ -952,6 +952,19 @@
+         expanded
+     }
+ 
++    /// Whether a bidirectional stream is open and not yet over both ways:
++    /// one this side opened (an HTTP/3 client's requests, a WebTransport
++    /// session's CONNECT stream and its streams), or one the peer opened.
++    /// The peer's are kept here before it opens them; those are not counted.
++    pub(crate) fn bidi_open(&self) -> bool {
++        let open = |id: &StreamId| {
++            id.dir() == Dir::Bi
++                && (id.initiator() == self.side
++                    || id.index() < self.next_remote[Dir::Bi as usize])
++        };
++        self.send.keys().any(open) || self.recv.keys().any(open)
++    }
++
+     pub(super) fn insert(&mut self, remote: bool, id: StreamId) {
+         let bi = id.dir() == Dir::Bi;
+         // bidirectional OR (unidirectional AND NOT remote)
+-- 
+2.47.0
+

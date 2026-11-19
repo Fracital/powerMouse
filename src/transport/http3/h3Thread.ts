@@ -20,6 +20,15 @@ export const H3_WORKER_NAME = 'stomp-h3';
 const H3_RPC = '$stomp$h3';
 /** on a connection's datagram port: the read side ended (to the worker), the worker closed its write side (from it) */
 const END = 'end';
+/** on a connection's datagram port, from the worker: stomp-h3 sent a PING, in the datagram after this */
+const PING = 'ping';
+/**
+ * How long after the last datagram heard one that goes out is taken for a
+ * possible PING (stomp-h3's keep-alive goes 15 s after it) rather than the
+ * ACK of what was heard (within max_ack_delay, 25 ms): only then is
+ * stomp-h3's PING count read
+ */
+export const PING_GAP_MS = 1000;
 /** how often the worker looks for connections that ended on their own (idle timeout, a lost path) and sends their stats */
 const WATCH_MS = 250;
 
@@ -96,6 +105,7 @@ export function serveH3(scope: DedicatedWorkerGlobalScope): void {
 				// own loop, which reads as fast as they arrive
 				let push!: ReadableStreamDefaultController<Uint8Array>;
 				let ended = false;
+				let lastRead = performance.now();
 				const readable = new ReadableStream<Uint8Array>({
 					start: (controller) => {
 						push = controller;
@@ -103,25 +113,51 @@ export function serveH3(scope: DedicatedWorkerGlobalScope): void {
 				});
 				port.onmessage = ({ data }: MessageEvent<ArrayBuffer | string>) => {
 					if (ended) return;
-					if (data instanceof ArrayBuffer) push.enqueue(new Uint8Array(data));
-					else if (data === END) {
+					if (data instanceof ArrayBuffer) {
+						lastRead = performance.now();
+						push.enqueue(new Uint8Array(data));
+					} else if (data === END) {
 						ended = true;
 						push.close();
 					}
 				};
-				// datagrams out: one message each, the buffer moved
+				// datagrams out: one message each, the buffer moved. One that
+				// goes out a while after the last came in may carry a PING,
+				// which the transport worker times (Http3Transport's blackhole
+				// watch): stomp-h3's count is read once its write is over (the
+				// connection is in use inside it), and the PING marker goes
+				// ahead of the datagram. The end goes after what was held.
+				let conn: H3Connection | null = null;
+				let pings = 0;
+				const post = (buffer: ArrayBuffer) =>
+					port.postMessage(buffer, [buffer]);
 				const closeWrite = () => {
-					port.postMessage(END);
+					queueMicrotask(() => port.postMessage(END));
 				};
 				const writable = new WritableStream<Uint8Array>({
 					write: (chunk) => {
 						const buffer = ownBuffer(chunk);
-						port.postMessage(buffer, [buffer]);
+						if (!conn || performance.now() - lastRead < PING_GAP_MS)
+							return post(buffer);
+						const live = conn;
+						queueMicrotask(() => {
+							try {
+								const count = Number(live.pings);
+								if (count > pings) {
+									pings = count;
+									port.postMessage(PING);
+								}
+							} catch {
+								// no count
+							}
+							post(buffer);
+						});
 					},
 					close: closeWrite,
 					abort: closeWrite,
 				});
-				const conn = await module.connect(host, readable, writable, options);
+				conn = await module.connect(host, readable, writable, options);
+				pings = Number(conn.pings) || 0;
 				const id = next++;
 				connections.set(id, { conn, alive: true });
 				watching ??= setInterval(() => {
@@ -173,16 +209,23 @@ class RemoteConnection implements H3Connection {
 	#stats: Record<string, number> = {};
 	#id: number;
 	#rpc: RpcHelper<FromWorker, ToWorker>;
+	#pings: () => number;
 	constructor(
 		id: number,
 		handshake: number,
 		stats: Record<string, number>,
 		rpc: RpcHelper<FromWorker, ToWorker>,
+		pings: () => number,
 	) {
 		this.#id = id;
 		this.handshake_ms = handshake;
 		this.#stats = stats;
 		this.#rpc = rpc;
+		this.#pings = pings;
+	}
+	/** the PINGs the worker said went out (each one's marker precedes its datagram), counted from the handshake */
+	get pings(): number {
+		return this.#pings();
 	}
 	/** what the worker last said (every WATCH_MS) */
 	stats(): Record<string, number> {
@@ -286,9 +329,12 @@ async function startWorker(
 		connect: async (host, readable, writable, options) => {
 			const { port1, port2 } = new MessageChannel();
 			const writer = writable.getWriter();
+			// counted before the datagram that carries it is written
+			let pings = 0;
 			port1.onmessage = ({ data }: MessageEvent<ArrayBuffer | string>) => {
 				if (data instanceof ArrayBuffer)
 					writer.write(new Uint8Array(data)).catch(() => {});
+				else if (data === PING) pings++;
 				else if (data === END) writer.close().catch(() => {});
 			};
 			// each datagram goes on as it is read, its buffer moved
@@ -316,6 +362,7 @@ async function startWorker(
 				opened.handshake,
 				opened.stats,
 				rpc,
+				() => pings,
 			);
 			connections.set(opened.conn, conn);
 			return conn;

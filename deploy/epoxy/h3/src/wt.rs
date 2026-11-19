@@ -16,7 +16,6 @@ use std::{
 	rc::Rc,
 	sync::{Arc, Mutex},
 	task::{Context, Poll, Wake, Waker},
-	time::Duration,
 };
 
 use bytes::{Buf, Bytes, BytesMut};
@@ -1228,10 +1227,10 @@ pub async fn connect_webtransport(
 	let target = Target::parse(&url).map_err(|e| fail(&e))?;
 	let hashes = (!opts.hashes.is_empty()).then(|| opts.hashes.clone());
 	let tls = tls_config(&opts.pem, hashes)?;
-	let mut transport = transport_config();
 	// quiche pings a connection with an open request stream (the CONNECT
-	// stream) every 15 s, so an idle session stays up
-	transport.keep_alive_interval(Some(Duration::from_secs(15)));
+	// stream) every 15 s, so an idle session stays up (transport_config's
+	// keep-alive: the CONNECT stream is open while the session is)
+	let transport = transport_config();
 	// a fresh config: Chrome's WebTransport client has no TLS session cache
 	let config = quic_client_config(tls, transport)?;
 	let start = web_time::Instant::now();
