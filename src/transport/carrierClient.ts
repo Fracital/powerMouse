@@ -6,15 +6,21 @@
 // own. What it gets is a rider: the relay's wisp connection as this
 // transport alone sees it, its own stream ids, over a MessagePort.
 //
-// Every message on a rider's port is one Wisp packet (an ArrayBuffer,
-// transferred), the host's `{ end }` when the carrier ended under it
-// (`lost`: without a close of the relay's), or the client's `end` when its
-// epoxy let go. The control port carries the RPC and an `alive` each way
+// Every message on a rider's port is a Wisp packet (an ArrayBuffer,
+// transferred) or, between a client and a host that both say `batches`,
+// the packets of one task (an array of them: packetBatch.ts); the host's
+// `{ end }` when the carrier ended under it (`lost`: without a close of the
+// relay's), or the client's `end` when its epoxy let go. A host that says
+// `batches` also gives more riders of the relay a rider is on (`ride`): a
+// sharded transport's workers each ride the relay so, their packets going
+// to and from the host without the transport worker in between
+// (ShardedTransport.ts). The control port carries the RPC and an `alive` each way
 // every ALIVE_MS: a MessagePort says nothing when the realm at its other end
 // is gone (Chrome 157 fires no `close`), and a Web Lock, which would, keeps
 // the page out of the back/forward cache. A host not heard from is gone
 // (its riders end as lost, and the next start opens a carrier of its own);
 // a client not heard from has its riders let go.
+import { ownBuffer, PacketBatch } from './packetBatch';
 import { RpcHelper } from './rpc';
 import type { Held, PoolFields, PoolLine, SocketPass } from './socketPool';
 import { relayNote, type TransportNote } from './transportLog';
@@ -58,6 +64,8 @@ export interface CarrierAsk {
 	first: { wisp_v2?: boolean; wisp_ws_protocols?: string[] };
 	/** null: the WebSocket only (the descriptor has no `webTransport`) */
 	webTransport: WispWebTransportOptions | null;
+	/** the client takes and sends a task's packets in one message */
+	batches?: boolean;
 }
 
 /** what the host gives: a rider, or why there is none */
@@ -78,6 +86,10 @@ export interface CarrierGiven {
 	lanes?: number;
 	/** the relay opened the session's Wisp stream */
 	serverStream?: boolean;
+	/** the host's name for the relay, to ride it again (`ride`) */
+	relay?: number;
+	/** the host takes and sends a task's packets in one message, and gives more riders */
+	batches?: boolean;
 }
 
 /** a request the host's pool gave a connection: its name, and whether it counts */
@@ -98,6 +110,8 @@ export interface PoolLearn {
 
 export type HostBound = {
 	open: [CarrierAsk, CarrierGiven];
+	/** one more rider of the relay `relay` (its port null when it is gone) */
+	ride: [{ relay: number; batches: boolean }, CarrierGiven];
 	/** the host's pool (socketPool.ts SocketPool.hold) */
 	hold: [PoolFields, PoolTicket];
 	learn: [PoolLearn, PoolLine | null];
@@ -330,7 +344,7 @@ export async function askCarrierHost(
 	}
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
-		const asked = link.rpc.call('open', ask);
+		const asked = link.rpc.call('open', { ...ask, batches: true });
 		const given = await Promise.race([
 			asked,
 			new Promise<null>((resolve) => {
@@ -373,6 +387,10 @@ function riderCarrier(
 ): OpenCarrier {
 	let reading!: ReadableStreamDefaultController<ArrayBuffer>;
 	let ended = false;
+	const batches = given.batches === true;
+	const batch = new PacketBatch((packets) => {
+		if (!ended) port.postMessage(packets, packets);
+	});
 	let settle!: () => void;
 	let fail!: (error: Error) => void;
 	const done = new Promise<void>((resolve, reject) => {
@@ -396,6 +414,7 @@ function riderCarrier(
 	const close = () => {
 		if (ended) return;
 		try {
+			batch.flush();
 			port.postMessage(END);
 		} catch {
 			// gone already
@@ -419,6 +438,10 @@ function riderCarrier(
 			if (!ended) reading.enqueue(data);
 			return;
 		}
+		if (Array.isArray(data)) {
+			if (!ended) for (const packet of data) reading.enqueue(packet);
+			return;
+		}
 		if (typeof data === 'object' && data !== null && 'end' in data)
 			finish((data as { end: unknown }).end === 'lost');
 	});
@@ -426,12 +449,14 @@ function riderCarrier(
 	const write = new WritableStream<Uint8Array>({
 		write(packet) {
 			if (ended) return;
-			const own = packet.slice();
-			port.postMessage(own.buffer, [own.buffer]);
+			const own = ownBuffer(packet);
+			if (batches) batch.push(own);
+			else port.postMessage(own, [own]);
 		},
 		close,
 		abort: close,
 	});
+	const relay = given.relay;
 	return {
 		carrier: given.carrier ?? 'websocket',
 		url: given.url ?? '',
@@ -439,5 +464,15 @@ function riderCarrier(
 		close,
 		ended: done,
 		hosted: true,
+		...(batches &&
+			relay !== undefined && {
+				more: async () => {
+					if (ended) return null;
+					const more = await link.rpc
+						.call('ride', { relay, batches: true })
+						.catch(() => null);
+					return more?.port ?? null;
+				},
+			}),
 	};
 }

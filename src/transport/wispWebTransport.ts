@@ -487,6 +487,12 @@ interface Discovery {
 export interface WispPipe {
 	read: ReadableStream<ArrayBuffer>;
 	write: WritableStream<Uint8Array>;
+	/**
+	 * one more wisp connection over the same carrier, as a port another
+	 * realm speaks Wisp on (wispSplit.ts lanePipe); null once the carrier is
+	 * gone. A carrier host's rider has it (carrierClient.ts `ride`)
+	 */
+	more?: () => Promise<MessagePort | null>;
 }
 
 /** a carrier that is open, its first Wisp packet read (buffered for epoxy) */
@@ -504,6 +510,8 @@ export interface OpenCarrier {
 	stats?: PipeStats;
 	/** a wisp connection of the carrier host's (carrierHost.ts), which tells how the carrier ends */
 	hosted?: boolean;
+	/** WispPipe.more: more riders of the carrier host's relay */
+	more?: () => Promise<MessagePort | null>;
 }
 
 /**
@@ -2000,7 +2008,11 @@ export class CarrierTransport implements ProxyTransport {
 				throw new Error(
 					`${CARRIER_LOST}: the ${open.carrier === 'webtransport' ? 'WebTransport session' : 'WebSocket'} to the wisp relay ended`,
 				);
-			return { read: mine.pipe.read, write: promptSink(mine.pipe.write) };
+			return {
+				read: mine.pipe.read,
+				write: promptSink(mine.pipe.write),
+				...(mine.more && { more: mine.more }),
+			};
 		};
 	}
 
