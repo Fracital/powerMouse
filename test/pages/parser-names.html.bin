@@ -1,0 +1,78 @@
+<!doctype html>
+<title>PARSER NAMES</title>
+<!--
+  Attribute names only the HTML parser makes. An `=` where a name starts
+  begins the name (`=""data-av="19"` is the attribute `=""data-av` of value
+  19, the shape of an ad server's markup), and setAttribute refuses any name
+  with an `=` in it, so a copy of the element made by setting its attributes
+  one by one throws where the browser's own insertion never does. Every sink
+  that takes markup is used once; each records whether it threw, and the
+  elements it made stay in the document for the parity read.
+-->
+<div id="static" a="1" =""data-av="19" b"c="2" =y>static</div>
+<ol id="outcomes"></ol>
+<div id="sinks"></div>
+<script>
+	(() => {
+		const MARKUP = '<div class="av" a="1" =""data-av="19" b"c="2" =y>m</div>';
+		const outcomes = document.getElementById('outcomes');
+		const sinks = document.getElementById('sinks');
+		const slot = (name) => {
+			const div = document.createElement('div');
+			div.id = name;
+			sinks.append(div);
+			return div;
+		};
+		const run = (name, fn) => {
+			const li = document.createElement('li');
+			try {
+				fn(slot(name));
+				li.textContent = `${name}: ok`;
+			} catch (error) {
+				li.textContent = `${name}: ${error.name}`;
+			}
+			outcomes.append(li);
+		};
+		run('innerHTML', (el) => {
+			el.innerHTML = MARKUP;
+		});
+		run('insertAdjacentHTML', (el) => {
+			el.insertAdjacentHTML('beforeend', MARKUP);
+		});
+		run('outerHTML', (el) => {
+			const inner = document.createElement('span');
+			el.append(inner);
+			inner.outerHTML = MARKUP;
+		});
+		run('createContextualFragment', (el) => {
+			const range = document.createRange();
+			range.selectNodeContents(el);
+			el.append(range.createContextualFragment(MARKUP));
+		});
+		run('setHTMLUnsafe', (el) => {
+			if (el.setHTMLUnsafe) el.setHTMLUnsafe(MARKUP);
+			else el.innerHTML = MARKUP;
+		});
+		run('template', (el) => {
+			const template = document.createElement('template');
+			template.innerHTML = MARKUP;
+			el.append(document.importNode(template.content, true));
+		});
+		run('DOMParser', (el) => {
+			const parsed = new DOMParser().parseFromString(MARKUP, 'text/html');
+			el.append(document.adoptNode(parsed.body.firstChild));
+		});
+		run('cloneNode', (el) => {
+			el.append(document.getElementById('static').cloneNode(true));
+		});
+		run('script', (el) => {
+			el.innerHTML = '<script =""data-av="19" type="text/plain">1<\/script>';
+		});
+	})();
+</script>
+<div id="written"></div>
+<script>
+	document.write(
+		'<div class="written" a="1" =""data-av="19" b"c="2" =y>w</div>',
+	);
+</script>
