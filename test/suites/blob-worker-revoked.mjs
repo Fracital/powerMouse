@@ -7,6 +7,11 @@
 // native and immediate, and the page's own fetch of the revoked URL fails
 // as natively. A blob: URL the worker imports itself after the page revoked
 // it fails as natively. Both modes, against the page loaded natively.
+// And the first load of a Blob a fresh service worker serves, a worker's
+// import() of a blob: URL it revoked, fails at once as natively: the
+// worker learns whether it reads blob: URLs itself before it asks a realm
+// for the bytes (src/server/rewrites.ts learnBlobsReadable), and a Chrome
+// worker never hears an ask, which left the import waiting 3 s.
 import {
 	done,
 	FIXTURE,
@@ -21,6 +26,9 @@ import {
 
 const browser = await launch();
 const PAGE = `${FIXTURE}pages/blob-worker-revoked.html`;
+const WAIT_PAGE = `${FIXTURE}pages/blob-worker-import-wait.html`;
+/** how long the import may take: the ask it waited on was 3 s */
+const AT_ONCE_MS = 2000;
 const CASES = [
 	'classic',
 	'module',
@@ -31,10 +39,10 @@ const CASES = [
 	'moduleMessages',
 ];
 
-async function measure(getFrame) {
+async function measure(getFrame, name = '__revoked') {
 	for (let i = 0; i < 60; i++) {
 		const report = await getFrame()
-			?.evaluate(() => (window.__revoked?.done ? window.__revoked : null))
+			?.evaluate((key) => (window[key]?.done ? window[key] : null), name)
 			.catch(() => null);
 		if (report) return report;
 		await sleep(250);
@@ -46,6 +54,16 @@ const verdict = (value) =>
 	typeof value === 'string' && value.startsWith('error')
 		? 'error'
 		: JSON.stringify(value);
+
+const waitNative = await browser.newPage();
+await waitNative.goto(WAIT_PAGE);
+const nativeWait = await measure(() => waitNative.mainFrame(), '__importWait');
+await waitNative.close();
+ok(
+	"natively: a worker's import() of a blob: URL it revoked fails at once",
+	nativeWait.result === 'failed' && nativeWait.ms < AT_ONCE_MS,
+	JSON.stringify(nativeWait),
+);
 
 const nativePage = await browser.newPage();
 await nativePage.goto(PAGE);
@@ -64,6 +82,16 @@ for (const [mode, base] of [
 	['same-origin', PROXY],
 	['isolated', HOST],
 ]) {
+	// (first, in a service worker that has served no Blob yet)
+	const waitPage = await openDemo(browser, base);
+	await submitLanding(waitPage, WAIT_PAGE);
+	const wait = await measure(() => frameOf(waitPage), '__importWait');
+	ok(
+		`${mode}: the first Blob a service worker serves, a worker's import() of a blob: URL it revoked, fails at once as natively`,
+		wait.result === nativeWait.result && wait.ms < AT_ONCE_MS,
+		`native ${JSON.stringify(nativeWait)} proxied ${JSON.stringify(wait)}`,
+	);
+	await waitPage.close();
 	const page = await openDemo(browser, base);
 	await submitLanding(page, PAGE);
 	const proxied = await measure(() => frameOf(page));

@@ -2244,6 +2244,12 @@ export class StompController extends EventTarget {
 					rpc.abort('Controller replaced');
 				},
 				isolationEngine: async () => [await this.#isolationEngine(), []],
+				// (kept a while: the worker reads it at once)
+				blobProbe: async () => {
+					const url = URL.createObjectURL(new Blob([]));
+					setTimeout(() => URL.revokeObjectURL(url), 10000);
+					return [url, []];
+				},
 				mediaVerdict: async (constraints) => [
 					await mediaVerdict(constraints),
 					[],

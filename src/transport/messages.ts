@@ -1479,6 +1479,12 @@ export type Controllerbound = {
 	 */
 	isolationEngine: [undefined, IsolationEngine | null];
 	/**
+	 * a blob: URL the controller's document minted, which the worker reads
+	 * to learn whether it reads its clients' (src/server/rewrites.ts
+	 * learnBlobsReadable); revoked a while later
+	 */
+	blobProbe: [undefined, string | null];
+	/**
 	 * a proxied site's WebAuthn ceremony, checked by the worker, for the
 	 * host to ask the user about: its answer (PasskeyAnswer) or null. The
 	 * port hears PASSKEY_CANCEL when the page gives up

@@ -385,6 +385,8 @@ export default async function createServer(
 	remoteBlocker?: BlockerLike,
 	/** asks the controller's document what the browser makes of cross-origin isolation (src/isolation.ts IsolationEngine) */
 	askIsolationEngine?: () => Promise<IsolationEngine | null>,
+	/** asks the controller's document for a blob: URL it minted (src/server/rewrites.ts learnBlobsReadable) */
+	askBlobProbe?: () => Promise<string | null>,
 ): Promise<StompServer> {
 	// the jar opens beside the codec's transaction (sharedStores takes it)
 	if (!jar) openJarDB().catch(() => {});
@@ -592,6 +594,7 @@ export default async function createServer(
 		shields,
 		stores.storage,
 		askIsolationEngine,
+		askBlobProbe,
 	);
 	if (blocker) registerBlocker(router, blocker);
 	registerStorage(router, stores.storage, init.codec);

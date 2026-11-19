@@ -1562,10 +1562,12 @@ The frame's own request is read: the realm that routes a load to a private
 URL hands the Blob over as the body of a POST to `blob~bytes/<uuid>`
 (src/inject/modules/ObjectURL.ts), which the service worker keeps as that
 realm's real origin's (handedBlobs in src/server/rewrites.ts, 64 MiB, the
-oldest first) and reads when its own fetch() fails. Its first such request
-tells it whether it reads its clients' blob: URLs itself (Chrome, and a
-first-party page anywhere); then it answers 204 and the realm hands no
-more. A blob: document goes the same way: the Blob posted with its inline
+oldest first) and reads when its own fetch() fails. Whether it reads its
+clients' blob: URLs itself (Chrome, and a first-party page anywhere) it
+learns as the first load of a page's Blob comes, from a blob: URL the
+controller's document mints for it (`blobProbe`, learnBlobsReadable in
+src/server/rewrites.ts), else from the first bytes handed over; then it
+answers 204, the realm hands no more, and it asks for none. A blob: document goes the same way: the Blob posted with its inline
 document (src/server/inline.ts) is one WebKit's worker cannot read, so its
 bytes go with it, under the inline token. A load named by its blob: URL
 alone (a static import of a blob: module, which the worker routes as it
@@ -1575,7 +1577,10 @@ that loads it) for the bytes in a message (BLOB_ASK): it hands them over as
 above, or says it holds none (the page revoked the URL), and the load fails
 at once, as natively. A window and a dedicated worker both
 hear such a message in Firefox and WebKit (measured; a worker once it
-started its container's messages). Nothing is handed over until the
+started its container's messages). A Chrome worker hears none, and before
+the worker learned up front that it needs no bytes there, a worker's
+import() of a blob: URL it had revoked waited 3 s for an answer in a
+service worker that had served no Blob yet (blob-worker-revoked). Nothing is handed over until the
 worker could not read a URL, so Chrome pays only a listener. The
 coi-engines suite starts a classic and a module blob: worker, runs a blob:
 script, a blob: module's static import of another blob: module and a frame

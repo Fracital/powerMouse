@@ -386,6 +386,7 @@ function registerController(
 		remoteBlocker,
 		// (the rpc is made below; nothing asks before a request arrives)
 		() => rpc.call('isolationEngine', undefined),
+		() => rpc.call('blobProbe', undefined),
 	);
 
 	const rpc = new RpcHelper<SWbound, Controllerbound>(

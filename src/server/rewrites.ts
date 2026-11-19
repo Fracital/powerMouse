@@ -5665,11 +5665,55 @@ const BLOB_ANSWER_HEADER = 'stomp-blob-answer';
 /** how long a load whose blob: URL this worker cannot read waits for them */
 const HANDED_WAIT_MS = 3000;
 /**
- * whether this worker reads its clients' blob: URLs itself, as it learns at
- * the first bytes handed over: then it needs none (the realm that offers
- * them is told so, and offers no more)
+ * whether this worker reads its clients' blob: URLs itself, as it learns
+ * from a blob: URL a controller's document mints for it (learnBlobsReadable),
+ * else at the first bytes handed over: then it needs none (the realm that
+ * offers them is told so, and offers no more), and asks for none
  */
 let blobsReadable: boolean | undefined;
+/** asks a controller's document for a blob: URL it minted (registerRewrites) */
+let askBlobURL: (() => Promise<string | null>) | undefined;
+let learningBlobs: Promise<void> | undefined;
+/** how long learnBlobsReadable waits for the controller's document */
+const BLOB_LEARN_MS = 1000;
+/**
+ * Learn blobsReadable from a blob: URL a controller's document minted for
+ * this worker, once, as the first load of a page's Blob comes, before it
+ * asks a realm for any bytes: a load then never waits on an ask where this
+ * worker reads blob: URLs itself (Chrome, whose dedicated workers hear no
+ * ask and left an import of a revoked blob: URL waiting HANDED_WAIT_MS; a
+ * first-party page anywhere). The worker cannot mint one itself (no
+ * URL.createObjectURL in a service worker). A controller that does not
+ * answer in time is not asked again (the next one that connects is), so a
+ * load waits for it at most once
+ */
+function learnBlobsReadable(): Promise<void> {
+	if (blobsReadable !== undefined || !askBlobURL) return Promise.resolve();
+	const ask = askBlobURL;
+	learningBlobs ??= Promise.race([
+		Promise.resolve().then(ask),
+		new Promise<null>((resolve) =>
+			setTimeout(() => resolve(null), BLOB_LEARN_MS),
+		),
+	])
+		.catch(() => null)
+		.then(async (url) => {
+			if (
+				blobsReadable === undefined &&
+				typeof url === 'string' &&
+				url.startsWith(`blob:${location.origin}/`)
+			)
+				try {
+					await (await fetch(url)).body?.cancel();
+					blobsReadable = true;
+				} catch (error) {
+					blobsReadable = false;
+				}
+			else if (askBlobURL === ask) askBlobURL = undefined;
+			learningBlobs = undefined;
+		});
+	return learningBlobs;
+}
 
 function handBlob(
 	uuid: string,
@@ -5700,6 +5744,7 @@ function handBlob(
  */
 async function askedBlob(url: string, ...asked: (string | null | undefined)[]) {
 	const uuid = url.slice(url.lastIndexOf('/') + 1);
+	await learnBlobsReadable();
 	if (blobsReadable) return undefined;
 	if (handedBlobs.has(uuid) || typeof clients === 'undefined')
 		return handedBlobs.get(uuid);
@@ -5741,7 +5786,11 @@ export function registerRewrites(
 	storage?: StorageHosts,
 	/** asks the controller's document what the browser makes of cross-origin isolation (null: it cannot say) */
 	askIsolationEngine?: () => Promise<IsolationEngine | null>,
+	/** asks the controller's document for a blob: URL it minted (learnBlobsReadable) */
+	askBlobProbe?: () => Promise<string | null>,
 ) {
+	// (the newest controller's: an older one may be gone)
+	if (askBlobProbe) askBlobURL = askBlobProbe;
 	let isolationEngine: Promise<IsolationEngine> | undefined;
 	const rewriter: Rewriter = {
 		get config() {
@@ -6419,7 +6468,8 @@ export function registerRewrites(
 			handedWaits.delete(uuid);
 			return new Response(null, { status: 202 });
 		}
-		// (learned of a blob: URL's bytes a realm offers; an inline
+		await learnBlobsReadable();
+		// (else learned of a blob: URL's bytes a realm offers; an inline
 		// document's are kept until it is served, which reads them or the Blob)
 		if (blobsReadable === undefined && !answer && uuid.length === 36)
 			try {

@@ -1,0 +1,13 @@
+<!doctype html>
+<title>BLOB WORKER IMPORT WAIT</title>
+<script>
+	// The first load of a Blob in a fresh service worker (blob-worker-revoked
+	// suite): a worker of a script the page did not mint imports a blob: URL
+	// it minted and revoked, which fails at once natively. It reports what
+	// the import did and how long it took into window.__importWait.
+	const report = (window.__importWait = {});
+	const worker = new Worker('blob-worker-import-wait.js');
+	worker.onmessage = (event) =>
+		Object.assign(report, event.data, { done: true });
+	worker.onerror = () => Object.assign(report, { result: 'error', done: true });
+</script>
