@@ -769,6 +769,35 @@ app.use('/stomp/', (req, res, next) => {
 	}
 	next();
 });
+// A proxied page at the top of a tab of its own (a popup, a link opened in a
+// new tab) that the user reloads with Ctrl+Shift+R: Chrome sends a forced
+// reload past the service worker, so the page's address reaches this host,
+// which has no file there ("Cannot GET"), where natively the page comes
+// back. The answer is a page that reloads once more, plainly, which the
+// worker answers when it is active. Only a forced reload's request (no-cache)
+// gets it: the plain reload sends max-age=0, so a worker that does not answer
+// it ends at the error page rather than in a loop.
+const RELOAD_THROUGH_WORKER = `<!doctype html><meta charset="utf-8"><title></title><script>
+navigator.serviceWorker?.getRegistration(location.href).then((registration) => {
+	if (registration?.active) location.reload();
+});
+</script>`;
+app.use('/stomp/', (req, res, next) => {
+	if (
+		req.method === 'GET' &&
+		req.headers['sec-fetch-mode'] === 'navigate' &&
+		req.headers['sec-fetch-dest'] === 'document' &&
+		/(^|,)\s*no-cache\s*(,|$)/.test(req.headers['cache-control'] ?? '') &&
+		/^\/[^/]+\/html[^/]*\//.test(req.path)
+	) {
+		res.status(404);
+		res.set('Content-Type', 'text/html; charset=utf-8');
+		res.set('Cache-Control', 'no-store');
+		res.end(RELOAD_THROUGH_WORKER);
+		return;
+	}
+	next();
+});
 app.use(
 	'/examples/',
 	express.static(
