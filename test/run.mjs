@@ -111,6 +111,8 @@ const SUITE_ENV = {
 	'sop-escapes': { STOMP_ISOLATION: 'on' },
 	// production's host page (its second server runs one without)
 	'popup-openers': { STOMP_ISOLATION: 'on' },
+	// production's host page: its proxied frames share its renderer
+	'hard-reload': { STOMP_ISOLATION: 'on' },
 	// the pool's slots (a sixth for the spare check), also in a run that
 	// turns the pool off for the rest
 	'site-pool': { STOMP_SITE_POOL: '6' },

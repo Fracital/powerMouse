@@ -2175,6 +2175,102 @@
 				document.body.append(frame);
 			}),
 	);
+	// An about:blank this page navigates the child of another site's frame
+	// to (test/pages/sop-blank-b.html): natively this page's in Chrome, which
+	// reaches it as its own, and which the other site's frame (its parent)
+	// reaches no more than any document of this site, nor it that frame
+	const blankOfB = () =>
+		new Promise((resolve) => {
+			const frame = document.createElement('iframe');
+			const listen = async (event) => {
+				if (event.source !== frame.contentWindow) return;
+				const loads = event.data?.sopBlankLoads;
+				if (loads === 1)
+					frame.contentWindow.frames[0].location.href = 'about:blank';
+				if (loads !== 2) return;
+				window.removeEventListener('message', listen);
+				// (the state it settles in: Firefox replaces the first document)
+				await sleep(400);
+				resolve(frame);
+			};
+			window.addEventListener('message', listen);
+			frame.src = `${B}/pages/sop-blank-b.html`;
+			document.body.append(frame);
+		});
+	const readOf = (get) => {
+		try {
+			const value = get();
+			return value === undefined || value === null ? String(value) : value;
+		} catch (error) {
+			return error.name;
+		}
+	};
+	let blankFrame = null;
+	add(
+		'frame/an about:blank this page navigates a frame of another site to',
+		async () => {
+			blankFrame = await Promise.race([
+				blankOfB(),
+				sleep(8000).then(() => null),
+			]);
+			if (!blankFrame) return 'no frame';
+			const blank = blankFrame.contentWindow.frames[0];
+			return {
+				document: readOf(() => blank.document.URL),
+				origin: readOf(() => blank.origin),
+				domain: readOf(() => blank.document.domain),
+				title: readOf(() => blank.document.title),
+				// what its relative URLs resolve against
+				baseURI: readOf(() => blank.document.baseURI.split('?')[0]),
+				resolved: readOf(() => {
+					const link = blank.document.createElement('a');
+					link.href = 'x.html';
+					return link.href.split('?')[0];
+				}),
+			};
+		},
+	);
+	add(
+		'frame/the other site reads nothing of an about:blank this page navigated',
+		async () => {
+			if (!blankFrame) return 'no frame';
+			const blank = blankFrame.contentWindow.frames[0];
+			try {
+				blank.secretOfA = 'A';
+				blank.document.body.textContent = 'secret of A';
+			} catch (error) {
+				// not this page's
+			}
+			return new Promise((resolve) => {
+				const listen = (event) => {
+					if (!event.data?.sopBlankRead) return;
+					window.removeEventListener('message', listen);
+					resolve(event.data.sopBlankRead);
+				};
+				window.addEventListener('message', listen);
+				blankFrame.contentWindow.postMessage('sopBlankRead', '*');
+				setTimeout(() => resolve('no answer'), 4000);
+			});
+		},
+	);
+	add(
+		'frame/an about:blank this page navigated reads nothing of the other site',
+		() => {
+			if (!blankFrame) return 'no frame';
+			const blank = blankFrame.contentWindow.frames[0];
+			try {
+				const script = blank.document.createElement('script');
+				script.textContent = `self.sopBlankReads = (() => {
+					const read = (get) => { try { const value = get(); return value === undefined || value === null ? String(value) : String(value).split('?')[0]; } catch (error) { return error.name; } };
+					return { parentDocument: read(() => parent.document.URL), parentSecret: read(() => parent.secretOfB), parentLocation: read(() => parent.location.href), top: read(() => top.document.URL), origin: read(() => self.origin) };
+				})();`;
+				blank.document.body.append(script);
+				return blank.sopBlankReads ?? 'no run';
+			} catch (error) {
+				return failed(error);
+			}
+		},
+	);
 	add('frame/another site reports in', async () => {
 		other = await frameOfB();
 		return {

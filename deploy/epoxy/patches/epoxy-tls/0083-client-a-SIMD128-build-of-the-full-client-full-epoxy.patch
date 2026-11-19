@@ -1,0 +1,203 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Thu, 19 Nov 2026 13:00:00 -0500
+Subject: [PATCH] client: a SIMD128 build of the full client, full/epoxy-simd.wasm
+
+publish.sh builds the full client a second time with SIMD=1 (rustc
++simd128,+bulk-memory, clang -msimd128 -mbulk-memory, so ring's AES takes
+eight blocks a batch) and writes it as full/epoxy-simd.wasm beside
+epoxy.wasm. The two builds' wasm-bindgen glue differs only in the numbers
+of its closure-wrapper imports; simd-wasm.mjs checks that the glues differ
+in nothing else, renames the SIMD module's imports to the base glue's and
+checks every import it asks for is one full/epoxy.js provides, so that one
+glue serves either module. Anything else fails the build. The Rust is the
+same, so the TLS ClientHello and everything on the wire are too.
+---
+ client/build.sh      |   9 ++++++++-
+ client/publish.sh    |   6 ++++++
+ client/simd-wasm.mjs | 141 ++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 155 insertions(+), 1 deletion(-)
+
+diff --git a/client/build.sh b/client/build.sh
+--- a/client/build.sh
++++ b/client/build.sh
+@@ -18,7 +18,14 @@
+ 	exit 1
+ fi
+ 
+-export CFLAGS='-O3' RUSTFLAGS='-Zlocation-detail=none -C target-cpu=mvp --cfg getrandom_backend="wasm_js"'
++# SIMD=1: the same client for an engine with wasm SIMD128 and bulk memory
++# (publish.sh's epoxy-simd.wasm), ring's AES taking eight blocks a batch
++if [ "${SIMD:-0}" = "1" ]; then
++	FEATURES='-C target-feature=+simd128,+bulk-memory' CFEATURES=' -msimd128 -mbulk-memory'
++else
++	FEATURES='' CFEATURES=''
++fi
++export CFLAGS="-O3$CFEATURES" RUSTFLAGS="-Zlocation-detail=none -C target-cpu=mvp $FEATURES --cfg getrandom_backend=\"wasm_js\""
+ cargo build --target wasm32-unknown-unknown -Z build-std=panic_abort,std -Z build-std-features=optimize_for_size --release $CARGOFLAGS "$@"
+ echo "[epx] cargo finished"
+ wasm-bindgen --target web --out-dir out/ ../target/wasm32-unknown-unknown/release/epoxy_client.wasm
+diff --git a/client/publish.sh b/client/publish.sh
+--- a/client/publish.sh
++++ b/client/publish.sh
+@@ -8,5 +8,11 @@
+ 
+ bash build.sh
+ mv pkg full
++# full/epoxy-simd.wasm: the full client built for wasm SIMD128, which a loader
++# takes where the engine validates it. Its imports are renamed to the base
++# glue's (simd-wasm.mjs), so full/epoxy.js serves either module.
++SIMD=1 bash build.sh
++node simd-wasm.mjs full/epoxy.js pkg/epoxy.js pkg/epoxy.wasm full/epoxy-simd.wasm
++rm -r pkg
+ MINIMAL=1 bash build.sh
+ mv pkg minimal
+diff --git a/client/simd-wasm.mjs b/client/simd-wasm.mjs
+new file mode 100644
+--- /dev/null
++++ b/client/simd-wasm.mjs
+@@ -0,0 +1,141 @@
++// simd-wasm.mjs <base glue> <simd glue> <simd wasm> <out wasm>
++//
++// The SIMD128 build of epoxy-client is the same Rust compiled with other
++// target features, so wasm-bindgen writes the same glue for it but for the
++// numbers in the names of its closure-wrapper imports
++// (__wbindgen_closure_wrapper<N>, N a function index that moves with code
++// size). One glue serves both modules once those imports carry the base
++// build's names: this checks that the two glues differ in nothing else, line
++// for line, renames the SIMD module's imports to match, and checks that every
++// import the module then asks for is one the base glue provides. Anything else
++// fails the build.
++import { readFileSync, writeFileSync } from 'node:fs';
++
++const [baseGlue, simdGlue, simdWasm, out] = process.argv.slice(2);
++const fail = (why) => {
++	console.error(`simd-wasm: ${why}`);
++	process.exit(1);
++};
++
++// each closure wrapper's definition, by name; the glue without them must be
++// the same text. A wrapper of the SIMD build takes the name of a base wrapper
++// with the same body (two with the same body are the same function).
++const WRAPPER = /^[ \t]*imports\.wbg\.(__wbindgen_closure_wrapper\d+) = (function\([^)]*\) \{\n[\s\S]*?\n[ \t]*\};)\n/gm;
++const split = (path) => {
++	const text = readFileSync(path, 'utf8');
++	const wrappers = [...text.matchAll(WRAPPER)].map((m) => ({ name: m[1], body: m[2] }));
++	return { rest: text.replace(WRAPPER, ''), wrappers };
++};
++const base = split(baseGlue);
++const simd = split(simdGlue);
++if (base.rest !== simd.rest) {
++	const x = base.rest.split('\n');
++	const y = simd.rest.split('\n');
++	const i = x.findIndex((line, n) => line !== y[n]);
++	fail(`the glues differ beyond closure-wrapper names:\n  ${x[i]}\n  ${y[i]}`);
++}
++if (base.wrappers.length !== simd.wrappers.length) fail('the glues have different numbers of closure wrappers');
++const rename = new Map();
++for (const { name, body } of simd.wrappers) {
++	const match =
++		base.wrappers.find((w) => w.name === name && w.body === body) ??
++		base.wrappers.find((w) => w.body === body);
++	if (!match) fail(`no closure wrapper of the base glue does what ${name} does`);
++	if (name !== match.name) rename.set(name, match.name);
++}
++const provided = new Set(
++	readFileSync(baseGlue, 'utf8')
++		.split('\n')
++		.map((line) => /^\s*imports\.wbg\.([\w$]+) = /.exec(line)?.[1])
++		.filter(Boolean),
++);
++
++const wasm = readFileSync(simdWasm);
++let at = 8;
++const leb = () => {
++	let result = 0;
++	let shift = 0;
++	for (;;) {
++		const byte = wasm[at++];
++		result += (byte & 0x7f) * 2 ** shift;
++		shift += 7;
++		if (!(byte & 0x80)) return result;
++	}
++};
++const encodeLeb = (n) => {
++	const bytes = [];
++	do {
++		let byte = n & 0x7f;
++		n = Math.floor(n / 128);
++		if (n) byte |= 0x80;
++		bytes.push(byte);
++	} while (n);
++	return Buffer.from(bytes);
++};
++const name = () => {
++	const length = leb();
++	const s = wasm.subarray(at, at + length).toString('utf8');
++	at += length;
++	return s;
++};
++const limits = () => {
++	const flags = wasm[at++];
++	leb();
++	if (flags & 1) leb();
++};
++
++if (wasm.readUInt32LE(0) !== 0x6d736100) fail('not a wasm module');
++const parts = [wasm.subarray(0, 8)];
++let renamed = 0;
++const asked = [];
++while (at < wasm.length) {
++	const start = at;
++	const id = wasm[at++];
++	const size = leb();
++	const body = at;
++	const end = body + size;
++	if (id !== 2) {
++		parts.push(wasm.subarray(start, end));
++		at = end;
++		continue;
++	}
++	const count = leb();
++	const entries = [encodeLeb(count)];
++	for (let i = 0; i < count; i++) {
++		const module = name();
++		let field = name();
++		const descStart = at;
++		const kind = wasm[at++];
++		if (kind === 0) leb();
++		else if (kind === 1) {
++			at++;
++			limits();
++		} else if (kind === 2) limits();
++		else if (kind === 3) at += 2;
++		else if (kind === 4) {
++			at++;
++			leb();
++		} else fail(`import kind ${kind} unknown`);
++		const desc = wasm.subarray(descStart, at);
++		if (module === 'wbg' && rename.has(field)) {
++			field = rename.get(field);
++			renamed++;
++		}
++		if (module === 'wbg') asked.push(field);
++		for (const s of [module, field]) {
++			const bytes = Buffer.from(s, 'utf8');
++			entries.push(encodeLeb(bytes.length), bytes);
++		}
++		entries.push(desc);
++	}
++	if (at !== end) fail('import section not read to its end');
++	const payload = Buffer.concat(entries);
++	parts.push(Buffer.from([2]), encodeLeb(payload.length), payload);
++}
++if (renamed !== rename.size) fail(`${rename.size} imports to rename, ${renamed} found`);
++const missing = asked.filter((field) => !provided.has(field));
++if (missing.length) fail(`the base glue provides no ${missing.join(', ')}`);
++const result = Buffer.concat(parts);
++if (!WebAssembly.validate(result)) fail('the renamed module does not validate');
++writeFileSync(out, result);
++console.log(`simd-wasm: ${rename.size} closure-wrapper import(s) renamed, ${asked.length} imports all in the base glue`);
+-- 
+2.47.0
+

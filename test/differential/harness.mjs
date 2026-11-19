@@ -51,7 +51,7 @@ export async function createHarness({ core } = {}) {
 	const entry = `${OUT}${tag}-entry.mjs`;
 	writeFileSync(
 		entry,
-		`export { modifyJS } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
+		`export { modifyJS, SCRIPT_FILE } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
 export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
 export { parseConfig } from ${JSON.stringify(`${root}src/config.ts`)};
 export { reportKeptSources } from ${JSON.stringify(`${root}src/functionSource.ts`)};
@@ -157,8 +157,9 @@ export { printInWasm } from ${JSON.stringify(`${root}src/wasm/rewriter.ts`)};
 		}
 	};
 	/**
-	 * `source` as the service worker rewrites a script of the page's (`at`:
-	 * the script's own URL, when it is not the page's)
+	 * `source` as the service worker rewrites a script file of the page's
+	 * (with its position map; `at`: the script's own URL, when it is not the
+	 * page's)
 	 */
 	const rewrite = (source, type = 'generic', at = undefined) =>
 		quietly(() =>
@@ -167,6 +168,8 @@ export { printInWasm } from ${JSON.stringify(`${root}src/wasm/rewriter.ts`)};
 				at === undefined ? worker.url : new worker.lib.StompURL(at, worker.url),
 				CONFIG,
 				type,
+				'',
+				worker.lib.SCRIPT_FILE,
 			),
 		);
 	/** the URL a route of a module or a file stands for, or null for anything else */

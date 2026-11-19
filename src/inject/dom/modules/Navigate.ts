@@ -41,10 +41,19 @@ export default class NavigateModule extends Module<DocumentClient> {
 			client = id;
 			tell();
 		};
-		// about: and blob: documents have no proxy-origin URL to ask
+		// about: and blob: documents have no proxy-origin URL to ask. The
+		// worker that served the document's navigation knows it already and
+		// its shell said so (DocumentClient.servedClient), heard after apply
+		// as an answer is; one of an earlier worker's is asked, a request
+		// and a pass of the worker's router for every document
+		const served = moduleClient.servedClient;
 		if (/^https?:$/.test(global.location.protocol))
-			fetch(`${global.location.origin}${moduleClient.directory}whoami`)
-				.then((response) => response.json())
+			(served
+				? Promise.resolve(served)
+				: fetch(
+						`${global.location.origin}${moduleClient.directory}whoami`,
+					).then((response) => response.json())
+			)
 				.then(learned)
 				.catch(() => {});
 		// a document on about:srcdoc is a client of its own with no such URL:

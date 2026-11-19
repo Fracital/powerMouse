@@ -297,7 +297,12 @@ export function loadFetch(
 	init: RequestInit = {},
 ): Promise<Response> {
 	const from = loadSource();
-	const token = from ? from.announce(url, load) : null;
+	const token = from
+		? from.announce(
+				url,
+				(client as Partial<DocumentClient>).crossCarried ? `^${load}` : load,
+			)
+		: null;
 	if (!from || token === null) return client.routedFetch(url, init);
 	// the grant's token rides alongside the caller's headers (a request that
 	// names a load still sends its own Accept, Content-Type and the rest); every

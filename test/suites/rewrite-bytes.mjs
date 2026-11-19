@@ -1,7 +1,8 @@
 // A script that comes as UTF-8 is rewritten from its bytes to the bytes of
 // its output (src/wasm/rewriteBytes.ts), in a rewrite worker or the service
 // worker, in node: the output must be modifyJS's of the text the bytes
-// decode to, encoded, byte for byte, and where the module does not answer
+// decode to as a script file (SCRIPT_FILE: with its position map), encoded,
+// byte for byte, and where the module does not answer
 // for the bytes (no UTF-8, a script it declines, a thread with no module)
 // it answers null, for the caller to rewrite the decoded text instead. The
 // scripts: the suites' pages' and fixtures' scripts, and the shapes of
@@ -25,7 +26,7 @@ mkdirSync(OUT, { recursive: true });
 const entry = `${OUT}rewrite-bytes-entry.mjs`;
 writeFileSync(
 	entry,
-	`export { modifyJS } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
+	`export { modifyJS, SCRIPT_FILE } from ${JSON.stringify(`${root}src/rewriteJS.ts`)};
 export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
 export { parseConfig } from ${JSON.stringify(`${root}src/config.ts`)};
 export { adoptModule } from ${JSON.stringify(`${root}src/wasm/thread.ts`)};
@@ -72,7 +73,14 @@ console.warn = () => {};
 const types = ['generic', 'genericModule', 'worker', 'workerModule'];
 const fallback = (bytes, type, preamble) =>
 	encoder.encode(
-		thread.modifyJS(decoder.decode(bytes), url, config, type, preamble),
+		thread.modifyJS(
+			decoder.decode(bytes),
+			url,
+			config,
+			type,
+			preamble,
+			thread.SCRIPT_FILE,
+		),
 	);
 
 ok(

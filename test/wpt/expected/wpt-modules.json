@@ -25,9 +25,6 @@
 		"eval should successfully import": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/the-script-element/module/dynamic-import/",
 		"the Function constructor should successfully import": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/the-script-element/module/dynamic-import/"
 	},
-	"/html/semantics/scripting-1/the-script-element/module/evaluation-error-5.html": {
-		"Test for the inline module script error that reports wrong line\n": "FAIL: assert_equals: expected 16 but got 1"
-	},
 	"/html/semantics/scripting-1/the-script-element/module/import-meta/import-meta-resolve-importmap.html": {
 		"import(import.meta.resolve(x)) can be different from import(x)": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch dynamically imported module: http://localhost:PORT/html/semantics/scripting-1/the-script-element/module/import-meta/sta"
 	},

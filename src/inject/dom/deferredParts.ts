@@ -21,6 +21,11 @@
 // their hooks' checks, ../cacheCalls.ts, at a realm's first; a worker's
 // bundle has it itself)
 //
+// (and the reader of the position map a script file's rewrite carries,
+// ../positionMaps.ts, at a document's first position asked of such a file:
+// a stack's place, a long animation frame's script; a worker's bundle has
+// it itself)
+//
 // (and what Origin.from() answers a page, ../originFrom.ts, at a realm's
 // first call; a worker's bundle has it itself)
 //
@@ -145,7 +150,8 @@ import {
 	notificationParts,
 	permissionElements,
 } from '../permissionGates';
-import { reportsSeen } from '../reportsSeen';
+import { readers as positionReaders } from '../positionMaps';
+import { madeReport, reportsSeen } from '../reportsSeen';
 import { bucketMethods } from '../storageBucketMethods';
 import { storageUsage } from '../storageUsage';
 import { carry as carryWebTransport } from '../webTransport';
@@ -164,12 +170,15 @@ import {
 import { ownStoreRefusal } from './credentialStore';
 import { saveDownload } from './downloadSave';
 import { fetchLater } from './fetchLater';
+import { hookHandlerName } from './handlerGetters';
 import { instructionData, loadXML, xmlProlog } from './instructions';
 import { lazyFonts } from './lazyFonts';
 import { formEncoding, legacyFormQuery, legacyQuery } from './legacyEncoding';
 import { markupMembers } from './markupMembers';
+import { codePlace, handlerPlace, markupScriptSite } from './markupPlaces';
 import { markupSinks } from './markupSinks';
 import { measuredMemory } from './measuredMemory';
+import { moduleGraph } from './moduleGraph';
 import FingerprintModule from './modules/Fingerprint';
 import { longFrames } from './modules/LongFrames';
 import { longTasks } from './modules/LongTasks';
@@ -250,6 +259,15 @@ export const parts = {
 	// what a page's add(), addAll() and caches.match() do past their hooks'
 	// checks, at a realm's first (../cacheCalls.ts; ../modules/Partition.ts)
 	cacheCalls,
+	// the reader of the maps of rewrites, at a realm's first position of
+	// one: a script file's, and code's the inject rewrote, which it finds by
+	// the script V8 ran (../positionMaps.ts; ../positionParts.ts)
+	positionReaders,
+	// where the markup has a script or a handler V8 counts a frame's line
+	// and column from (./markupPlaces.ts; Client.ts rewriteInlineScripts,
+	// modules/DOMAttributes.ts)
+	codePlace,
+	handlerPlace,
 	// what a tainted source's refusals say (a WebGL texture, a VideoFrame, an
 	// OffscreenCanvas's export), at a document's first (./taintRefusals.ts;
 	// modules/CanvasTaint.ts)
@@ -266,6 +284,9 @@ export const parts = {
 	// the un-routing of ReportingObserver's reports, at the first
 	// (../reportsSeen.ts; ../modules/Unroute.ts)
 	reportsSeen,
+	// the reports of the violations the inject makes itself, at the first
+	// (../reportsSeen.ts; ./policyChecks.ts)
+	madeReport,
 	// what a worker's construction does past its checks, at a document's
 	// first (../workerStart.ts; ../modules/Worker.ts)
 	workerStart,
@@ -326,6 +347,9 @@ export const parts = {
 	// the copies a document no service worker controls makes of its loads,
 	// at its first (./uncontrolledCopies.ts; ./modules/DOMAttributes.ts)
 	uncontrolledCopies,
+	// and the module graphs of such a document, at its first module
+	// (./moduleGraph.ts; Client.ts importIn, moduleText)
+	moduleGraph,
 	// the violations and errors of the page's own policy the inject makes
 	// itself, the first time it refuses something (./violations.ts; Client.ts)
 	dispatchViolation,
@@ -344,11 +368,18 @@ export const parts = {
 	noteBaseSite,
 	noteFormSite,
 	markupBaseSite,
+	// where a script of the markup a violation names is (./markupPlaces.ts;
+	// ./policyChecks.ts)
+	markupScriptSite,
 	// the page's own policy's checks of its code and of the loads no worker
 	// sees, at the first a document with a policy needs (./policyChecks.ts;
 	// Client.ts), and a data: URL's integrity, which shares their digests
 	// (../../sriDigest.ts; modules/DOMAttributes.ts)
 	policyChecks,
+	// the getters of a handler property the page's attributes use, at the
+	// first attribute of its name (./handlerGetters.ts;
+	// modules/DOMAttributes.ts)
+	hookHandlerName,
 	integrityHoldsSync,
 	navigationRefusal,
 	precommitRedirect,

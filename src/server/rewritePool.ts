@@ -6,7 +6,12 @@
 // with the page or a crash) or the worker took longer than the timeout. A
 // port that closed or timed out is not used again.
 import type { Config } from '../config';
-import { RewrittenBy, ScriptSource, ScriptType } from '../rewriteJS';
+import {
+	RewrittenBy,
+	SCRIPT_FILE,
+	ScriptSource,
+	ScriptType,
+} from '../rewriteJS';
 import {
 	REWRITE_READY,
 	REWRITE_RPC,
@@ -157,7 +162,10 @@ export class RewritePool {
 		);
 		// the worker says the wasm module rewrote it (the only backend)
 		if (answer === null || typeof answer === 'string') return answer;
-		if (told) told.by = answer.by;
+		if (told) {
+			told.by = answer.by;
+			if (answer.map) told.map = answer.map;
+		}
 		return answer.output;
 	}
 	/**
@@ -217,6 +225,8 @@ export class RewritePool {
 	/**
 	 * A document's inline script, rewritten by the worker with the least in
 	 * hand (with its preamble). Null when none is ready or answered in time.
+	 * `told` has the map of the output the rewrite handed over apart
+	 * (src/prewrite.ts).
 	 */
 	async rewriteInline(
 		script: string,
@@ -224,8 +234,41 @@ export class RewritePool {
 		config: Config,
 		type: ScriptType,
 		preamble: string,
+		told?: RewrittenBy,
 	): Promise<string | null> {
-		return this.#rewriteOne(script, url, config, type, undefined, preamble);
+		return this.#rewriteOne(
+			script,
+			url,
+			config,
+			type,
+			{ apart: true },
+			preamble,
+			told,
+		);
+	}
+	/**
+	 * A handler of a document's markup (an onclick's text), rewritten by the
+	 * worker with the least in hand as the client rewrites it (`preamble`,
+	 * src/prewrite.ts handlerPreamble): the text is kept by the client, so
+	 * the output holds no holder statement. Null when none is ready or
+	 * answered in time; `told` has the map handed over apart.
+	 */
+	async rewriteHandler(
+		script: string,
+		url: StompURL,
+		config: Config,
+		preamble: string,
+		told?: RewrittenBy,
+	): Promise<string | null> {
+		return this.#rewriteOne(
+			script,
+			url,
+			config,
+			'generic',
+			{ apart: true, text: null },
+			preamble,
+			told,
+		);
 	}
 	/**
 	 * The script rewritten by a worker, or null when the caller must rewrite
@@ -247,7 +290,7 @@ export class RewritePool {
 			url,
 			config,
 			type,
-			undefined,
+			SCRIPT_FILE,
 			preamble,
 			told,
 		);

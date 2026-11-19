@@ -67,7 +67,7 @@ export const nativeAttributes = Reflect.getOwnPropertyDescriptor(
 	'attributes',
 )!.get!;
 
-const nativeGetAttributeNames = Element.prototype.getAttributeNames;
+export const nativeGetAttributeNames = Element.prototype.getAttributeNames;
 const nativeGetAttributeNS = Element.prototype.getAttributeNS;
 const nativeHasAttributeNS = Element.prototype.hasAttributeNS;
 

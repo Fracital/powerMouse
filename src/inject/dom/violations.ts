@@ -23,7 +23,7 @@ import { parsedBases } from './cloneNode';
 import { deferred } from './deferred';
 
 /** where the code that made a violation was, as the page reads it: its sourceFile, lineNumber and columnNumber */
-type Site = [string, number, number];
+export type Site = [string, number, number];
 
 /**
  * The place each violation names where the browser's named the inject's
@@ -205,6 +205,7 @@ export function dispatchViolation(
 	node: Node | null,
 	documentURI?: string,
 	statusCode = 200,
+	site?: Site,
 ) {
 	const event = new Event('securitypolicyviolation', {
 		bubbles: true,
@@ -228,8 +229,8 @@ export function dispatchViolation(
 		client.codeViolationTarget.set(event, node);
 	}
 	// (where the page's code set the base or submitted the form)
-	const place = noted(client, directive, blockedURI);
-	if (place) placeViolation(client, event, place[0]);
+	const place = site ?? noted(client, directive, blockedURI)?.[0];
+	if (place) placeViolation(client, event, place);
 	// it reads trusted (../violationDispatch.ts): each listener of the
 	// document and its window is handed one view of it, as window.event is
 	const global = client.global as typeof globalThis;

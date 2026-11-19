@@ -1,5 +1,7 @@
 import { scopePrefix } from '../../modules/Unroute';
-import type DocumentClient from '../Client';
+import { codes, placeKept } from '../../positionMaps';
+import { heldCodes, placeOf, type Place } from '../../positionParts';
+import { nativeScriptText, type default as DocumentClient } from '../Client';
 import { nativeGetAttribute, nativeQuery } from '../longEntryNatives';
 import type EntryTimingModule from './EntryTiming';
 import type { Admit } from './EntryTiming';
@@ -36,8 +38,11 @@ const BY_SOURCE = /^([^[\]]*\[src=")(.*)("\]\.[^[\]."]*)$/s;
  * page (the host's, another tab's), is left out, as the browser leaves
  * another origin's out.
  *
- * Not mapped: `sourceCharPosition` is the function's place in the script
- * as the rewriter printed it, as the columns of an error's stack are.
+ * A script's `sourceCharPosition` is its function's place in the page's
+ * text where the script is a file the service worker rewrote (the map its
+ * rewrite carries), as the columns of an error's stack are, and in a script
+ * of the page's markup, which the inject rewrote, where the map its rewrite
+ * handed over puts it (kept by the hash of the text the browser ran).
  *
  * Made when a document's first long animation frame reaches its page
  * (EntryTiming): the handler of every such entry from then on.
@@ -136,8 +141,73 @@ export function longFrames(
 		views.set(script, known);
 		return known;
 	};
+	/**
+	 * a script's sourceCharPosition, `position` the browser's: none for one
+	 * the page does not hear the source of, and in a script file the
+	 * service worker rewrote, where the map its rewrite carries puts it in
+	 * the page's text (../../positionParts.ts)
+	 */
+	const charPosition = (script: object, position: unknown): unknown => {
+		const shown = view(script);
+		if (shown.anonymous) return -1;
+		return typeof position === 'number' && position >= 0
+			? ((placeOf(shown.sourceURL, position) ??
+					markupPlace(shown.sourceURL, position, script))?.[0] ?? position)
+			: position;
+	};
+	/**
+	 * where position `at` of a script of the document's markup stands in
+	 * its text (the browser names one by the document, Client.ts
+	 * rewriteInlineScripts), where the inject kept the map of its rewrite
+	 * (../../positionParts.ts keepCode). Its entry has no hash to find it
+	 * by, as a frame has: it is the one whose output is long enough, and
+	 * whose map puts `at` where an inline script's text has the function's
+	 * name just before, else the only one long enough
+	 */
+	const markupPlace = (
+		url: string,
+		at: number,
+		script: object,
+	): Place | null => {
+		const page = `${global.location.href}`.replace(/#.*$/s, '');
+		if ((!codes.size && !heldCodes.size) || url !== timing.pageURL(page))
+			return null;
+		const name = `${read(script, 'sourceFunctionName')}`;
+		const texts: string[] = [];
+		if (name)
+			for (const element of Reflect.apply(nativeQuery!, global.document, [
+				'script:not([src])',
+			]) as Iterable<Element>)
+				try {
+					texts.push(Reflect.apply(nativeScriptText.get!, element, []));
+				} catch (error) {
+					// not an HTML script
+				}
+		const tail = `\n//# sourceURL=${page}`;
+		const long: Place[] = [];
+		const named: Place[] = [];
+		for (const code of [...codes.values(), ...heldCodes.values()]) {
+			const place = code[1].tail === tail && placeKept(code, at);
+			if (!place) continue;
+			long.push(place);
+			if (
+				name &&
+				texts.some(
+					(text) => text.slice(place[0] - name.length, place[0]) === name,
+				)
+			)
+				named.push(place);
+		}
+		return named.length === 1 ? named[0]! : long.length === 1 ? long[0]! : null;
+	};
 	const installScript = (prototype: object) => {
-		for (const name of ['invokerType', 'sourceURL', 'invoker', 'window'])
+		for (const name of [
+			'invokerType',
+			'sourceURL',
+			'invoker',
+			'window',
+			'sourceFunctionName',
+		])
 			natives[name] = Reflect.getOwnPropertyDescriptor(prototype, name)?.get;
 		timing.hookGetter(prototype, 'sourceURL', (that, native) => {
 			native();
@@ -151,18 +221,17 @@ export function longFrames(
 			const name = native();
 			return view(that).anonymous ? '' : name;
 		});
-		timing.hookGetter(prototype, 'sourceCharPosition', (that, native) => {
-			const position = native();
-			return view(that).anonymous ? -1 : position;
-		});
+		timing.hookGetter(prototype, 'sourceCharPosition', (that, native) =>
+			charPosition(that, native()),
+		);
 		scriptJSON = timing.hookJSON(prototype, (json, that) => {
 			const shown = view(that);
 			if ('sourceURL' in json) json.sourceURL = shown.sourceURL;
 			if ('invoker' in json) json.invoker = shown.invoker;
-			if (shown.anonymous) {
-				if ('sourceFunctionName' in json) json.sourceFunctionName = '';
-				if ('sourceCharPosition' in json) json.sourceCharPosition = -1;
-			}
+			if (shown.anonymous && 'sourceFunctionName' in json)
+				json.sourceFunctionName = '';
+			if ('sourceCharPosition' in json)
+				json.sourceCharPosition = charPosition(that, json.sourceCharPosition);
 		});
 	};
 	let installed = false;

@@ -93,6 +93,8 @@ export const nativeOpener = Reflect.getOwnPropertyDescriptor(
 // Chrome's console message for a navigation it refuses is the browser's own:
 // printed with the console's native method, which no page hook sees
 export const nativeConsoleError = console.error;
+// (a report-only policy's is the console's info)
+export const nativeConsoleInfo = console.info;
 
 /** whether a frame's window is still on the initial about:blank its creation gave it */
 export function initialBlank(context: typeof globalThis): boolean {
@@ -229,6 +231,16 @@ interface ParsedPostMessageArgs {
 	transfer: Transferable[];
 	targetOrigin: string;
 }
+
+/** the error of `global`'s postMessage for a target origin that is no URL */
+export const invalidTargetOrigin = (
+	global: typeof globalThis,
+	target: string,
+): DOMException =>
+	new global.DOMException(
+		`Failed to execute 'postMessage' on 'Window': Invalid target origin '${target}' in a call to 'postMessage'.`,
+		'SyntaxError',
+	);
 
 /** whether `value` is a window, of any origin, as `client`'s realm reads it */
 export function isWindow(
@@ -601,14 +613,7 @@ export default class ContextModule extends Module<DocumentClient> {
 						try {
 							return new URL(target).origin;
 						} catch (error) {
-							throw withStack(
-								new moduleClient.global.DOMException(
-									"Failed to execute 'postMessage' on 'Window': Invalid target origin '" +
-										target +
-										"' in a call to 'postMessage'.",
-									'SyntaxError',
-								),
-							);
+							throw withStack(invalidTargetOrigin(moduleClient.global, target));
 						}
 					})();
 		return wanted !== 'null' && wanted === receiverOrigin;
@@ -741,10 +746,16 @@ export default class ContextModule extends Module<DocumentClient> {
 		// a child that runs no STomp yet (an iframe still on its initial
 		// about:blank) is still that child, of the frame's origin: never the
 		// top, which a walk down the tree would visit again forever
-		const restrictChild = (child: Context) =>
-			isStomp(child, moduleClient.names.client)
+		// (a window that runs nothing yet on an about:blank this page or
+		// another of its origin navigated it to is that page's: injected
+		// first, as reading a child's contentWindow injects it)
+		const restrictChild = (child: Context) => {
+			if (!isStomp(child, moduleClient.names.client))
+				moduleClient.navigatorOf(child)?.injectNavigated?.(child);
+			return isStomp(child, moduleClient.names.client)
 				? this.newRestricted(child)
 				: this.restrictOpaque(child);
+		};
 
 		const restrictedLocation = this.restrictObject('Location', {
 			replace: {

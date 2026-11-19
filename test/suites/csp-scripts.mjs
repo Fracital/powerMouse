@@ -276,8 +276,30 @@ const IDENTITY = {
 	},
 };
 
+// Where each refusal of code made from a string and of a handler says the
+// code was (sourceFile, lineNumber, columnNumber): the call of eval,
+// Function or the timer, in the probes' script file or, inlined, in the
+// page's markup, and the handler's place in the markup it was written in,
+// each read through the map of the rewrite of the code that made the call
+// (docs/rust-plan.md, position maps)
+const PLACED = {
+	'where code from a string is refused, in a script file': {
+		p: "script-src 'nonce-probes'",
+		h: 'nonce',
+		probes: ['eval', 'function', 'timeout-string', 'handler-attribute'],
+	},
+	'where code from a string is refused, in the markup': {
+		p: `script-src ${probesHash} ${insertedHash}`,
+		h: 'inline-hash',
+		probes: ['eval', 'function', 'timeout-string'],
+	},
+};
+
 const browser = await launch();
 await compareCases(browser, CASES, { expected: EXPECTED });
+await compareCases(browser, PLACED, {
+	fields: [...FIELDS, 'sourceFile', 'lineNumber', 'columnNumber'],
+});
 await compareCases(browser, IDENTITY, {
 	fields: [...FIELDS, 'isTrusted', 'windowEvent', 'methods', 'alike'],
 });

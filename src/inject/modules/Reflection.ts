@@ -1,5 +1,6 @@
 import Client from '../Client';
 import Module from '../Module';
+import { OwnWeakSet } from '../ownCollections';
 import { windowArrayParts } from '../windowArrayParts';
 import type { WindowArrays } from '../windowArrays';
 import { accessHolders } from './Access';
@@ -73,6 +74,12 @@ export default class ReflectionModule extends Module<Client> {
 					'defaultView',
 				)?.get
 			: undefined;
+		const nativeNodeType = (global as { Node?: { prototype: object } }).Node
+			? Reflect.getOwnPropertyDescriptor(
+					(global as unknown as { Node: { prototype: object } }).Node.prototype,
+					'nodeType',
+				)?.get
+			: undefined;
 		const scopePrototypes = new Set<object>();
 		for (
 			let prototype = Object.getPrototypeOf(global);
@@ -80,6 +87,13 @@ export default class ReflectionModule extends Module<Client> {
 			prototype = Object.getPrototypeOf(prototype)
 		)
 			scopePrototypes.add(prototype);
+		// what the browser's nodeType getter refused (an interface's
+		// prototype, HTMLElement.prototype, is no node): that never changes.
+		// The page's own read of `nodeType` threw for each of them, so every
+		// descriptor asked of such a prototype made an exception, about 2 us
+		// against 0.05 natively, and a frame its parent had injected spent
+		// some 4.5 ms of its bundle's evaluation on them (Chrome 157)
+		const notNodes = new OwnWeakSet<object>();
 		const windowLike = (target: unknown): boolean => {
 			if (typeof target !== 'object' || target === null) return false;
 			if (target === global || target === document) return true;
@@ -88,17 +102,26 @@ export default class ReflectionModule extends Module<Client> {
 				const scope = target as {
 					window?: unknown;
 					self?: unknown;
-					nodeType?: unknown;
 				};
 				if (scope.window === target || scope.self === target) return true;
 				// the document of another window (a frame's contentDocument):
 				// its `location` is that window's, and its descriptor's getter
 				// handed out the frame's real Location, the proxy's URL and a
-				// way to navigate the frame past the rewriter
+				// way to navigate the frame past the rewriter. Told by the
+				// browser's getters, which run no code of the page's; most of
+				// what reflection is asked about has no nodeType at all
+				if (!nativeNodeType || !nativeDefaultView || !('nodeType' in target))
+					return false;
+				if (notNodes.has(target)) return false;
+				let type: unknown;
+				try {
+					type = Reflect.apply(nativeNodeType, target, []);
+				} catch (error) {
+					notNodes.add(target);
+					return false;
+				}
 				return (
-					scope.nodeType === 9 &&
-					!!nativeDefaultView &&
-					Reflect.apply(nativeDefaultView, target, []) !== null
+					type === 9 && Reflect.apply(nativeDefaultView, target, []) !== null
 				);
 			} catch (error) {
 				return false;

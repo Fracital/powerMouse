@@ -196,6 +196,8 @@ const transportFile = (name) =>
 // blank-loads, sw-restart suites)
 const TRANSPORT_SIBLINGS = {
 	'epoxy.wasm': 'epoxy-transport',
+	// the SIMD128 build, which the transport loads where Chrome has SIMD
+	'epoxy-simd.wasm': 'epoxy-transport',
 };
 const transportSibling = (name, pkg) =>
 	fileURLToPath(

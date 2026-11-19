@@ -184,6 +184,8 @@ export function cannotRewrite(
  */
 export interface RewrittenBy {
 	by?: 'wasm';
+	/** the map a rewrite asked for apart handed over (ScriptSource.apart) */
+	map?: string;
 }
 
 export interface ScriptSource {
@@ -199,7 +201,28 @@ export interface ScriptSource {
 	shifts?: number[];
 	/** false: never written into the output (a javascript: URL's body) */
 	embed?: boolean;
+	/** true: a script file the service worker serves, whose output carries the map of itself to its text (rust/rwjs/src/positions.rs) */
+	positions?: boolean;
+	/**
+	 * true: code the inject rewrites (an inline script, a handler, eval, a
+	 * string timer), whose rewrite hands the map of itself over apart
+	 * (src/wasm/rewriter.ts takeApart), which the inject keeps by the script
+	 * V8 runs (src/inject/positionParts.ts keepCode)
+	 */
+	apart?: boolean;
+	/** what precedes the output in the script V8 runs (a handler's mark, a javascript: URL's call) */
+	head?: string;
+	/** what follows the output in the script V8 runs (an inline script's sourceURL) */
+	tail?: string;
+	/**
+	 * where the code stands in the document: the lines before its first and
+	 * the column its first line starts at
+	 */
+	place?: [number, number];
 }
+
+/** a script file the service worker serves: its own text kept, and its output mapped to it */
+export const SCRIPT_FILE: ScriptSource = { positions: true };
 
 /** whether `code` parses as a script of one expression statement (a javascript: URL's body) */
 export function singleExpression(code: string): boolean {

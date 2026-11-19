@@ -2,9 +2,7 @@ import Module from '../../Module';
 import { mayOpenPopup, popupOpened } from '../activation';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { heldClicks } from '../heldClicks';
-import { baseTarget, clickedLink } from '../links';
-
-const SAME_FRAME = ['', '_self', '_top', '_parent', '_unfencedtop'];
+import { baseTarget, clickedLink, SAME_FRAME } from '../links';
 
 /**
  * Links that would open a new browsing context (`target="_blank"`, a name
@@ -34,6 +32,15 @@ export default class OpenModule extends Module<DocumentClient> {
 		const clicks = heldClicks(client);
 
 		const listener = (event: MouseEvent) => {
+			// a javascript: link's code, judged as its navigation starts
+			const clicked = event.type === 'click' && clickedLink(global, event);
+			if (clicked)
+				client.jsStarts(
+					clicked.getAttribute('target') || baseTarget(global.document),
+					clicked.getAttribute('href') ?? '',
+					event,
+					clicked,
+				);
 			if (event.defaultPrevented) return;
 			if (event.type === 'auxclick' && event.button !== 1) return;
 			if (event.type === 'click' && event.button !== 0) return;
@@ -107,9 +114,17 @@ export default class OpenModule extends Module<DocumentClient> {
 					popupOpened(client);
 			});
 		};
+		// a refused javascript: URL of statements throws: nothing ran natively,
+		// so no listener of the page's hears of it (DocumentClient codeRuns)
+		const refusal = (event: ErrorEvent) => {
+			if (event.error !== client.codeRefusal) return;
+			event.stopImmediatePropagation();
+			event.preventDefault();
+		};
 		const install = () => {
 			global.addEventListener('click', listener, true);
 			global.addEventListener('auxclick', listener, true);
+			global.addEventListener('error', refusal, true);
 		};
 		install();
 		addDocumentOpenListener(global, install);

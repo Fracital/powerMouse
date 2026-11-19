@@ -18,22 +18,5 @@
 		"Executing the javascript URL should violate the parent's CSP for\n          area[target=iframeWithScriptScrcNone].href": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Executing the javascript URL should violate the parent's CSP for\n          area[target=otherTabWithScriptSrcNone].href": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Executing the javascript URL should violate the parent's CSP for\n          otherTabWithScriptSrcNone.location.href": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
-	"/content-security-policy/navigation/to-javascript-parent-initiated-parent-csp.html": {
-		"(harness)": "TIMEOUT: ",
-		"Should not have executed the javascript url for\n      iframe.contentWindow.location.href": "FAIL: assert_true: Javascript url executed expected true got false",
-		"Should not have executed the javascript url for\n      iframe.src": "TIMEOUT: Test timed out",
-		"Should not have executed the javascript url for\n      otherTab.location.href": "NOTRUN: ",
-		"Should not have executed the javascript url for\n      area[target=iframe].href": "NOTRUN: ",
-		"Should not have executed the javascript url for\n      area[target=otherTab].href": "NOTRUN: ",
-		"Should not have executed the javascript url for\n      a[target=otherTab].href": "NOTRUN: ",
-		"Should not have executed the javascript url for\n      a[target=iframe].href": "NOTRUN: "
-	},
-	"/content-security-policy/navigation/to-javascript-url-script-src.html": {
-		"(harness)": "TIMEOUT: ",
-		"<iframe src='javascript:'> blocked without 'unsafe-inline'.": "TIMEOUT: Test timed out",
-		"<iframe> navigated to 'javascript:' blocked without 'unsafe-inline'.": "NOTRUN: ",
-		"<iframe src='...'> with 'unsafe-inline' navigated to 'javascript:' blocked in this document": "NOTRUN: ",
-		"<iframe src='...'> without 'unsafe-inline' navigated to 'javascript:' blocked in this document.": "NOTRUN: "
 	}
 }
