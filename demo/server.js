@@ -1,7 +1,7 @@
 // Minimal host for the STomp demo:
 //   /            demo page (demo/public)
 //   /suggestions TLD autocomplete for the address bar
-//   /api/status  uptime + version for the landing page
+//   /api/status  uptime, version and build (dist/build.json) for the page
 //   /stomp/      STomp dist (service worker, inject bundles, controller)
 //   /examples/   embedding examples (examples/minimal-host.html)
 //   /epoxy/      epoxy transport module
@@ -441,11 +441,22 @@ app.get('/config.js', (req, res) => {
 	);
 });
 
+// the build being served (build.js writes dist/build.json: the version, the
+// build id, the commit it was built from and that commit's date), read on
+// each request, as a rebuild replaces it under a running server
+function servedBuild() {
+	try {
+		return JSON.parse(readFileSync(join(stompPath, 'build.json'), 'utf8'));
+	} catch {
+		return null;
+	}
+}
 app.get('/api/status', (req, res) => {
 	res.json({
 		uptime: (Date.now() - started) / 1000,
 		version: pkg.version,
 		node: process.version,
+		build: servedBuild(),
 	});
 });
 // the repository's latest commits, for the home page. This checkout's own

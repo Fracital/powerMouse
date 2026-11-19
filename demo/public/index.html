@@ -228,6 +228,26 @@
 						></button>
 					</div>
 				</form>
+				<!-- the menu (Fullscreen, About): beside the address box, not in
+				     it; the tab manager has its own button for the same menu -->
+				<button
+					id="toolMenu"
+					class="toolbtn menubtn"
+					type="button"
+					title="Menu"
+					aria-label="Menu"
+					aria-haspopup="menu"
+					aria-expanded="false"
+					aria-controls="pmMenu"
+				>
+					<img
+						src="/pm/icons/menu.svg"
+						width="24"
+						height="24"
+						alt=""
+						draggable="false"
+					/>
+				</button>
 			</div>
 			<div id="frames" class="frames"></div>
 		</div>
@@ -235,14 +255,37 @@
 		<div id="recentsPanel" class="recents hidden">
 			<div class="recentsTop">
 				<span class="recentsCount" id="recentsCount">0 active tabs</span>
-				<button
-					class="recentsMore"
-					id="newTab"
-					title="New tab"
-					aria-label="New tab"
-				>
-					+
-				</button>
+				<div class="recentsActions">
+					<button
+						class="recentsMore"
+						id="newTab"
+						title="New tab"
+						aria-label="New tab"
+					>
+						+
+					</button>
+					<!-- the bar's menu, which the tab manager hides with the bar -->
+					<button
+						class="recentsMore"
+						id="recentsMenu"
+						type="button"
+						title="Menu"
+						aria-label="Menu"
+						aria-haspopup="menu"
+						aria-expanded="false"
+						aria-controls="pmMenu"
+					>
+						<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+							<path
+								d="M4 6.5h16M4 12h16M4 17.5h16"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+							/>
+						</svg>
+					</button>
+				</div>
 			</div>
 			<div class="recentsLabels" id="recentsLabels"></div>
 			<button class="closeAll" id="closeAll">Close all</button>
@@ -271,18 +314,46 @@
 
 		<!-- Shields: the content blocker's per-site panel, a popover under the
 		     omnibar button (built and filled by pm/main.js on open) -->
-		<div id="shieldsScrim" class="shieldsScrim hidden"></div>
+		<div id="shieldsScrim" class="popoverScrim hidden"></div>
 		<div
 			id="shieldsPanel"
-			class="shields hidden"
+			class="popover shields hidden"
 			role="dialog"
 			aria-label="Shields for this site"
 			aria-hidden="true"
 		></div>
 
+		<!-- the menu: the Shields panel's popover with Fullscreen (hidden where
+		     the page cannot be made fullscreen) and About, which opens the
+		     build information in the settings-page dialog below -->
+		<div id="menuScrim" class="popoverScrim hidden"></div>
+		<div
+			id="pmMenu"
+			class="popover pmMenu hidden"
+			role="menu"
+			aria-label="Menu"
+			aria-hidden="true"
+		>
+			<button
+				id="menuFullscreen"
+				class="pmMenuItem"
+				type="button"
+				role="menuitem"
+				tabindex="-1"
+			></button>
+			<button
+				id="menuAbout"
+				class="pmMenuItem"
+				type="button"
+				role="menuitem"
+				tabindex="-1"
+			></button>
+		</div>
+
 		<!-- Shields settings pages (Filter Lists and Global Settings): full
 		     overlay views the Shields panel's footer opens, after Brave's
-		     brave://settings/shields pages. Built and filled by pm/main.js. -->
+		     brave://settings/shields pages, and the menu's About in the same
+		     dialog. Built and filled by pm/main.js. -->
 		<div id="shieldsPageScrim" class="shieldsPageScrim hidden"></div>
 		<div
 			id="shieldsPage"

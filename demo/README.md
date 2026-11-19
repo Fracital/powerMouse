@@ -87,7 +87,7 @@ server on the same port:
 | `/epoxy/`      | `@mercuryworkshop/epoxy-transport`'s `dist/`                                                      |
 | `/libcurl/`    | `@mercuryworkshop/libcurl-transport`'s `dist/`                                                    |
 | `/wisp/`       | WebSocket upgrade handed to holyWisp (the `holywisp` package), see below                          |
-| `/api/status`  | `{ uptime, version, node }` for the landing page footer                                           |
+| `/api/status`  | `{ uptime, version, node, build }` for the landing page footer and the menu's About               |
 | `/api/commits` | `{ repo, url, commits }` for the landing page's latest commits: GitHub's answer, kept ten minutes |
 
 Nothing else is proxied by the server. All page traffic goes through the
@@ -275,6 +275,26 @@ holyWisp is started.
     writes the store the proxied page itself reads, and it runs before
     Discord's own scripts delete `window.localStorage`.
 
+14. **Menu.** A button beside the address box, outside it (`#toolMenu`),
+    and its twin beside New tab in the tab manager, which hides the bar
+    (`#recentsMenu`), open one menu (`#pmMenu`), a popover built on the
+    Shields panel's (`popover()` in main.js, `.popover` in main.css): it
+    fades in, and closes at once by every way (its button, a click outside,
+    Escape, an item chosen). **Fullscreen** calls `requestFullscreen()` on
+    this page's root, not on a proxied frame, and `exitFullscreen()`; its
+    label and icon follow `fullscreenchange`, so Escape or the browser
+    leaving fullscreen shows too. Where the page cannot be made fullscreen
+    (`document.fullscreenEnabled` false, as on an iPhone's Safari) the item
+    is not offered. **About** opens the Shields settings pages' dialog
+    (`#shieldsPage`, view `about`): the version, build id, commit and build
+    date from `/api/status` (`build`, the server's copy of
+    `dist/build.json`, which `build.js` writes: the date is the commit's,
+    never the build's time, so the build stays reproducible), then what the
+    console badges said (mode, transport, controller) and the server's Node
+    and uptime. While the dialog is open everything else in the page is
+    inert and Tab goes round its controls; Escape, its Close button and its
+    backdrop close it and the focus goes back to the menu button.
+
 Errors from any step land in the status line (`Error: ...`) rather than the
 console only.
 
@@ -333,6 +353,7 @@ demo/
 │       ├── main.js     controller wiring and UI behaviour
 │       ├── dev.js      live reload client, npm run dev only
 │       ├── noise.png, header-background.png, logo.png
+│       └── icons/      the bar's, the menu's and the bookmarks' icons
 └── README.md
 ```
 

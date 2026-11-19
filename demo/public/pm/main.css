@@ -1001,6 +1001,25 @@ body.recents .frames .frame.gone,
 	background: rgba(255, 255, 255, 0.12);
 }
 
+/* New tab, then the bar's menu, which the tab manager hides with the bar */
+.recentsActions {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+#recentsMenu {
+	display: grid;
+	place-items: center;
+	padding: 0;
+}
+#recentsMenu svg {
+	display: block;
+}
+#recentsMenu[aria-expanded='true'],
+#recentsMenu:focus-visible {
+	background: rgba(255, 255, 255, 0.12);
+}
+
 /* one label per card. It is the whole browser view's size (chrome bar plus
    frame) and carries the card's transform (set from JS): its top --ch pixels
    are a copy of the chrome bar, scaled with the page like a real preview,
@@ -1043,6 +1062,45 @@ body.recents .frames .frame.gone,
 .cardChrome .toolbtn {
 	box-sizing: border-box;
 	cursor: inherit;
+}
+
+/* the menu button's picture, after the address box: the live button's box
+   (a .toolbtn, which the copy is not: Back, Forward, Reload and Saved pages
+   are the card's tools) */
+.cardChrome .menubtn {
+	flex: 0 0 auto;
+	display: grid;
+	place-items: center;
+	box-sizing: border-box;
+	width: 36px;
+	height: 36px;
+	border: 1px solid transparent;
+}
+.cardChrome .menubtn img {
+	display: block;
+}
+
+/* the live menu button shows while its menu is open, and when the keyboard
+   is on it (a quiet fill, as the demo has no focus rings) */
+.toolbtn.menubtn[aria-expanded='true'],
+.toolbtn.menubtn:focus-visible {
+	background: rgba(255, 255, 255, 0.12);
+	border-color: rgba(255, 255, 255, 0.18);
+}
+
+/* a phone's bar holds the menu button too: narrower buttons and gaps, so
+   the address box keeps its 120px at 320px wide (the cards' copies alike) */
+@media only screen and (max-width: 400px) {
+	.chrome,
+	.cardChrome {
+		gap: 4px;
+		padding-left: 6px;
+		padding-right: 6px;
+	}
+	.toolbtn,
+	.cardChrome .menubtn {
+		width: 30px;
+	}
 }
 
 /* the box of the live bar's form: it grows into the room the buttons
@@ -2386,17 +2444,22 @@ input:focus-visible {
 	display: none;
 }
 
-.shieldsScrim {
+/* ---- popovers: the Shields panel and the menu -------------------------- */
+/* A panel under a button of the bar, over a transparent scrim that takes the
+   click outside it. It fades in when it opens and is gone at once when it
+   closes (the global .hidden, display: none): nothing of it lingers to be
+   seen or clicked. */
+.popoverScrim {
 	position: fixed;
 	inset: 0;
 	z-index: 60;
 	background: transparent;
 }
-.shieldsScrim.hidden {
+.popoverScrim.hidden {
 	display: none;
 }
 
-.shields {
+.popover {
 	/* Brave Shields, 1:1 with the panel_new Leo panel. Colours are the resolved
 	   Nala dark tokens (from @brave/leo universal.tokens.json, cross-checked by
 	   sampling Brave's rendered panel): page.background #141415, container
@@ -2419,7 +2482,6 @@ input:focus-visible {
 	--sh-border-interactive: #303a68;
 	position: fixed;
 	z-index: 61;
-	width: 360px;
 	max-width: calc(100vw - 16px);
 	max-height: calc(100vh - 76px);
 	overflow-y: auto;
@@ -2435,26 +2497,91 @@ input:focus-visible {
 	box-shadow:
 		0 12px 40px rgba(0, 0, 0, 0.55),
 		0 0 0 1px rgba(255, 255, 255, 0.06);
-	opacity: 1;
-	/* Brave's Shields popup is a native WebUI Views bubble (WebUIBubbleManager,
-	   no Brave animation override), and Chromium shows it with a plain opacity
-	   fade: no scale and no directional zoom from a corner. Match that, and
-	   dismiss the same way. This fades the panel both in and out. */
-	transition:
-		opacity 0.16s ease,
-		visibility 0.16s;
+	/* never the universal transition: a resize moves it at once */
+	transition: none;
+	/* its own scroller: the same thin scrollbar as the pages, so a short
+	   viewport does not put a chunky default bar over its rounded edge */
+	scrollbar-width: thin;
+	scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
 }
-.shields.hidden {
-	/* the global .hidden is display: none !important, and nothing transitions
-	   out of display: none, so the fade never ran; keep the panel laid out
-	   (it is position: fixed, so it takes no space) and hide it with opacity */
-	display: block !important;
-	opacity: 0;
-	visibility: hidden;
-	pointer-events: none;
+/* Brave's Shields popup is a native WebUI Views bubble (WebUIBubbleManager,
+   no Brave animation override), and Chromium shows it with a plain opacity
+   fade: no scale and no directional zoom from a corner. It runs each time the
+   panel leaves .hidden (display none to block restarts the animation). Closing
+   has no fade: the panel goes at once, its parts with it. */
+@keyframes popoverIn {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
 }
-.shields * {
+.popover:not(.hidden) {
+	animation: popoverIn 0.16s ease;
+}
+.popover * {
 	box-sizing: border-box;
+}
+.popover::-webkit-scrollbar {
+	width: 9px;
+	height: 9px;
+}
+.popover::-webkit-scrollbar-thumb {
+	background: rgba(255, 255, 255, 0.16);
+	border-radius: 999px;
+	border: 3px solid transparent;
+	background-clip: padding-box;
+}
+.popover::-webkit-scrollbar-thumb:hover {
+	background: rgba(255, 255, 255, 0.28);
+	background-clip: padding-box;
+}
+.popover::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.shields {
+	width: 360px;
+}
+
+/* the menu: the popover with a short list of items, each an icon and its
+   label, in the panel's row language */
+.pmMenu {
+	min-width: 200px;
+	padding: 6px;
+	border-radius: 12px;
+}
+.pmMenuItem {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	width: 100%;
+	padding: 9px 12px;
+	border: none;
+	border-radius: 8px;
+	background: none;
+	color: var(--sh-text);
+	font: inherit;
+	text-align: left;
+	white-space: nowrap;
+	cursor: pointer;
+	transition: background-color 0.1s cubic-bezier(0.42, 0, 0.58, 1);
+}
+.pmMenuItem[hidden] {
+	display: none;
+}
+.pmMenuItem:hover,
+.pmMenuItem:focus-visible {
+	background: rgba(255, 255, 255, 0.06);
+}
+.pmMenuItem:focus-visible {
+	outline: 2px solid var(--sh-interactive);
+	outline-offset: -2px;
+}
+.pmMenuItem .shieldsIcon {
+	width: 20px;
+	height: 20px;
 }
 
 /* main_card: the raised surface holding the site row and the count box */
@@ -3110,6 +3237,39 @@ input:focus-visible {
 	background: rgba(255, 255, 255, 0.1);
 	color: #fff;
 }
+
+/* About (the menu's): the proxy's build and the session's facts, a term
+   and its value per row */
+.aboutMark {
+	flex: none;
+	display: block;
+}
+.aboutFacts {
+	margin: 0;
+}
+.aboutRow {
+	display: flex;
+	gap: 16px;
+	padding: 8px 0;
+	border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.aboutRow:first-child {
+	border-top: none;
+}
+.aboutRow dt {
+	flex: 0 0 34%;
+	color: #909093;
+	font-size: 12.5px;
+}
+.aboutRow dd {
+	flex: 1 1 auto;
+	min-width: 0;
+	margin: 0;
+	color: #e4e4e5;
+	font-size: 13px;
+	overflow-wrap: anywhere;
+	user-select: text;
+}
 .spBack:focus-visible,
 .spClose:focus-visible,
 .spBtn:focus-visible,
@@ -3214,29 +3374,6 @@ input:focus-visible {
 .spEditor {
 	scrollbar-width: thin;
 	scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
-}
-/* the popup is its own scroller; give it the same thin scrollbar as the pages
-   so a short viewport does not put a chunky default bar over its rounded edge */
-.shields {
-	scrollbar-width: thin;
-	scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
-}
-.shields::-webkit-scrollbar {
-	width: 9px;
-	height: 9px;
-}
-.shields::-webkit-scrollbar-thumb {
-	background: rgba(255, 255, 255, 0.16);
-	border-radius: 999px;
-	border: 3px solid transparent;
-	background-clip: padding-box;
-}
-.shields::-webkit-scrollbar-thumb:hover {
-	background: rgba(255, 255, 255, 0.28);
-	background-clip: padding-box;
-}
-.shields::-webkit-scrollbar-track {
-	background: transparent;
 }
 .spListRow {
 	display: flex;
@@ -3597,11 +3734,7 @@ input:focus-visible {
 }
 
 /* ---- Shields motion (Brave-matched: short, ease-out, nothing bouncy) ------- */
-/* The panel popping in: a subtle fade with a slight rise + scale, like the Leo
-   panel settling in. Runs on open because .hidden toggles display, and a
-   display change restarts the animation. */
-/* The panel fades in and out through the opacity/visibility transition on
-   .shields, defined with .shields above. */
+/* The panel fades in (popoverIn, with .popover above) and goes at once. */
 
 /* Detail-view navigation (fingerprinting / trackers & ads > and Back). The
    panel renders by swapping innerHTML, so a two-pane slide would mean keeping
@@ -3664,15 +3797,12 @@ input:focus-visible {
 
 /* Reduced motion: keep the end states, drop the non-essential motion. */
 @media (prefers-reduced-motion: reduce) {
-	.shields:not(.hidden),
+	.popover:not(.hidden),
 	.shields.shAnimFwd > *,
 	.shields.shAnimBack > *,
 	.shieldsPage:not(.hidden),
 	.shieldsPageScrim:not(.hidden) {
 		animation: none;
-	}
-	.shields {
-		transition: none;
 	}
 	.shieldsToggle,
 	.shieldsToggle::after {

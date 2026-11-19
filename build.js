@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
 	existsSync,
@@ -72,6 +73,41 @@ function buildId() {
 	};
 	for (const path of BUILD_INPUTS) if (existsSync(path)) add(path);
 	return `${pkg.version}+${hash.digest('hex').slice(0, 12)}`;
+}
+const BUILD_ID = buildId();
+
+/**
+ * What the build is, for a host to show (dist/build.json, the demo's About):
+ * the version, the build id, the last commit that changed the build's inputs
+ * (BUILD_INPUTS) and that commit's date. Never the time of the build: the
+ * date is the commit's (SOURCE_DATE_EPOCH wins when it is set, as in any
+ * reproducible build), so building the same tree again writes the same
+ * file, and a commit of only the tests, docs, demo or CI keeps it as it is,
+ * with every other file of dist/. Outside a git checkout the commit is null,
+ * and so is the date unless SOURCE_DATE_EPOCH gives one.
+ */
+function buildInfo() {
+	let commit = null;
+	let date = null;
+	try {
+		const [sha, seconds] = execFileSync(
+			'git',
+			['log', '-1', '--format=%H %ct', '--', ...BUILD_INPUTS],
+			{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+		)
+			.trim()
+			.split(' ');
+		if (sha && seconds) {
+			commit = sha;
+			date = new Date(Number(seconds) * 1000).toISOString();
+		}
+	} catch {
+		// no git, or not a checkout
+	}
+	const epoch = Number(process.env.SOURCE_DATE_EPOCH);
+	if (process.env.SOURCE_DATE_EPOCH && Number.isFinite(epoch))
+		date = new Date(epoch * 1000).toISOString();
+	return { version: pkg.version, build: BUILD_ID, commit, date };
 }
 
 /** every file the builds of this run read, as esbuild names it */
@@ -246,9 +282,8 @@ const common = {
 	define: {
 		'process.env.STOMP_VERSION': JSON.stringify(pkg.version),
 		// build id for the version pin between the service worker, the inject
-		// bundles and the controller: the version plus the commit, or the time
-		// when this is not a git checkout
-		'process.env.STOMP_BUILD': JSON.stringify(buildId()),
+		// bundles and the controller: the version plus a hash of the inputs
+		'process.env.STOMP_BUILD': JSON.stringify(BUILD_ID),
 		'process.env.NODE_ENV': JSON.stringify(dev ? 'development' : 'production'),
 		// what the rewriter library asset is asked for by: known once that
 		// file is built (see `bundles` below)
@@ -1516,6 +1551,10 @@ async function copyAssets() {
 	return copied;
 }
 await copyAssets();
+await writeFile(
+	'dist/build.json',
+	`${JSON.stringify(buildInfo(), null, '\t')}\n`,
+);
 
 /**
  * Tell the dev server what a build produced. The server may be down or

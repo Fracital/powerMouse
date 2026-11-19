@@ -28,7 +28,10 @@ const BADGE = {
 	red: '#c0392b',
 	grey: '#606060',
 };
+// The menu's About shows what each label said last.
+const badgeFacts = new Map();
 function badge(label, value, color = 'blue') {
+	badgeFacts.set(label, value);
 	console.info(
 		`%c ${label} %c ${value} `,
 		BADGE_LEFT,
@@ -1480,7 +1483,12 @@ function createLabel(tab) {
 	shields.append(shieldsImg, shieldsBadgeCopy);
 	end.append(status, shields, star);
 	box.append(url, end);
-	chrome.append(box);
+	// the menu button after the address box, a picture as Back is
+	const menu = document.createElement('span');
+	menu.className = 'menubtn';
+	menu.setAttribute('aria-hidden', 'true');
+	menu.append($('toolMenu').querySelector('img').cloneNode());
+	chrome.append(box, menu);
 
 	const close = document.createElement('button');
 	close.className = 'close';
@@ -2280,6 +2288,9 @@ function slideFrom(elements, fromRects) {
 
 // keyboard: Alt+Left / Alt+Right like a desktop browser, Escape closes recents
 addEventListener('keydown', (event) => {
+	// an open dialog's keys are its own (About opened from the tab manager:
+	// Enter on its Close button is no press on the centred card)
+	if (shieldsPageOpen()) return;
 	if (event.key === 'Escape') leaveRecents();
 	if (document.body.classList.contains('recents') && !event.altKey) {
 		if (event.key === 'ArrowLeft' && recentsIndex > 0) {
@@ -2332,18 +2343,23 @@ for (const [label, url, color] of QUICK_LINKS) {
 // between answers the counter keeps ticking from the last one, so it moves
 // every second like a clock instead of jumping on each poll.
 let loggedVersion = false;
+let serverStatus = null; // the last answer, for the menu's About
 let uptimeAt = null; // [server uptime in s, Date.now() when it was fetched]
-function renderUptime() {
-	if (!uptimeAt) return;
+function uptimeText() {
+	if (!uptimeAt) return null;
 	const uptime = uptimeAt[0] + (Date.now() - uptimeAt[1]) / 1000;
 	const h = Math.floor(uptime / 3600);
 	const m = Math.floor((uptime % 3600) / 60);
 	const s = Math.floor(uptime % 60);
-	$('uptime').textContent = `${h} hours, ${m} minutes, ${s} seconds`;
+	return `${h} hours, ${m} minutes, ${s} seconds`;
+}
+function renderUptime() {
+	if (uptimeAt) $('uptime').textContent = uptimeText();
 }
 async function pollStatus() {
 	try {
-		const { uptime, version } = await (await fetch('/api/status')).json();
+		serverStatus = await (await fetch('/api/status')).json();
+		const { uptime, version } = serverStatus;
 		uptimeAt = [uptime, Date.now()];
 		renderUptime();
 		$('version').textContent = `STomp ${version}`;
@@ -3603,6 +3619,12 @@ const SHIELD_ICONS = {
 	forget:
 		'<path fill="currentColor" fill-rule="evenodd" d="M21.366 2.122a.792.792 0 1 0-1.316-.881l-4.33 6.463-1.101-.738a.79.79 0 0 0-1.099.217v.002l-.007.009-.028.04-.12.167a16.7 16.7 0 0 1-2.253 2.471c-1.528 1.363-3.539 2.591-5.73 2.522a.792.792 0 0 0-.802.945l.777-.153-.777.154v.003l.002.005.002.012a3 3 0 0 0 .04.162q.04.155.131.422c.124.351.325.836.644 1.397.638 1.123 1.744 2.543 3.617 3.797s3.607 1.736 4.89 1.9c.639.08 1.164.082 1.536.062a6 6 0 0 0 .605-.064l.012-.002.005-.001h.002c.001 0 .002 0-.152-.778l.154.777a.792.792 0 0 0 .568-1.101c-.898-2-.528-4.327.15-6.259a16.7 16.7 0 0 1 1.427-3.024q.071-.116.109-.174l.027-.042.006-.01a.79.79 0 0 0-.217-1.099l-1.101-.738zm-7.25 6.895q.138-.168.25-.313l1.132.757 1.131.757a18 18 0 0 0-.73 1.428l-2.574-1.724c.308-.33.573-.639.79-.905m-1.947 2.037 3.123 2.092v.002c-.627 1.784-1.101 4.124-.48 6.375a8 8 0 0 1-.706-.057 9 9 0 0 1-.865-.157c-.308-1.044-.303-2.133-.104-3.202a.792.792 0 1 0-1.557-.29c-.172.925-.228 1.906-.086 2.895a11 11 0 0 1-1.595-.89c-1.646-1.102-2.59-2.33-3.122-3.264a8 8 0 0 1-.322-.632c2.318-.282 4.3-1.612 5.713-2.87zM1.345 16.203a.792.792 0 0 0 0 1.584h2.112a.792.792 0 1 0 0-1.584zm-.792 3.96c0-.437.354-.792.792-.792h4.224a.792.792 0 0 1 0 1.584H1.345a.79.79 0 0 1-.792-.792m.74-5.597a.792.792 0 1 0 0-1.584.792.792 0 0 0 0 1.584" clip-rule="evenodd"/>',
 	back: '<path fill="currentColor" fill-rule="evenodd" d="M6.701 11.167h11.466a.833.833 0 0 1 0 1.666H6.7l5.656 5.221a.833.833 0 0 1-1.13 1.225l-6.78-6.258a1.39 1.39 0 0 1 0-2.042l6.78-6.258a.833.833 0 1 1 1.13 1.225z" clip-rule="evenodd"/>',
+	// the menu's: four corners going out, coming in, and an i in a ring
+	fullscreen:
+		'<path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M4 9V5.5A1.5 1.5 0 0 1 5.5 4H9m6 0h3.5A1.5 1.5 0 0 1 20 5.5V9m0 6v3.5a1.5 1.5 0 0 1-1.5 1.5H15m-6 0H5.5A1.5 1.5 0 0 1 4 18.5V15"/>',
+	fullscreenExit:
+		'<path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M9 4v3.5A1.5 1.5 0 0 1 7.5 9H4m16 0h-3.5A1.5 1.5 0 0 1 15 7.5V4m0 16v-3.5a1.5 1.5 0 0 1 1.5-1.5H20M4 15h3.5A1.5 1.5 0 0 1 9 16.5V20"/>',
+	info: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.7"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M12 11v5.5"/><circle cx="12" cy="7.75" r="1.15" fill="currentColor"/>',
 };
 function shieldIcon(name, cls = 'shieldsIcon') {
 	return `<svg class="${cls}" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${SHIELD_ICONS[name] || ''}</svg>`;
@@ -4944,17 +4966,30 @@ async function renderPasskeys(focus = null) {
 let shieldsPageFrom = null;
 let shieldsPageOpener = null;
 
+// what the open page made inert: everything else in the body (the tab
+// manager and the navigation bar too, not only the page under it), so the
+// focus stays in the dialog
+let shieldsPageInert = [];
+
 function openShieldsPage(view, from = null) {
 	shieldsPageFrom = from;
 	if (!shieldsPageOpener) shieldsPageOpener = document.activeElement;
 	if (view === 'global') buildGlobalPage();
 	else if (view === 'passkeys') buildPasskeysPage();
+	else if (view === 'about') buildAboutPage();
 	else buildFilterListsPage();
+	if (!shieldsPageOpen()) {
+		shieldsPageInert = [...document.body.children].filter(
+			(element) =>
+				element !== shieldsPage &&
+				element !== shieldsPageScrim &&
+				!element.inert,
+		);
+		for (const element of shieldsPageInert) element.inert = true;
+	}
 	shieldsPage.classList.remove('hidden');
 	shieldsPage.setAttribute('aria-hidden', 'false');
 	shieldsPageScrim.classList.remove('hidden');
-	landing.inert = true;
-	browser.inert = true;
 	shieldsPage.scrollTop = 0;
 	(shieldsPage.querySelector('.spClose') || shieldsPage).focus();
 }
@@ -4971,8 +5006,8 @@ function closeShieldsPage() {
 	shieldsPage.classList.add('hidden');
 	shieldsPage.setAttribute('aria-hidden', 'true');
 	shieldsPageScrim.classList.add('hidden');
-	landing.inert = false;
-	browser.inert = false;
+	for (const element of shieldsPageInert) element.inert = false;
+	shieldsPageInert = [];
 	shieldsPageFrom = null;
 	const opener = shieldsPageOpener;
 	shieldsPageOpener = null;
@@ -4985,7 +5020,25 @@ shieldsPageScrim.addEventListener('click', closeShieldsPage);
 addEventListener(
 	'keydown',
 	(event) => {
-		if (event.key !== 'Escape' || !shieldsPageOpen()) return;
+		if (!shieldsPageOpen()) return;
+		// Tab goes round the dialog's controls, never out of it to the
+		// browser's own (everything else in the page is inert)
+		if (event.key === 'Tab') {
+			const controls = [
+				...shieldsPage.querySelectorAll(
+					'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+				),
+			].filter(
+				(control) => !control.disabled && control.getClientRects().length,
+			);
+			// (from outside it, a sheet over it, the browser's order is right)
+			const end = event.shiftKey ? controls[0] : controls.at(-1);
+			if (!end || document.activeElement !== end) return;
+			event.preventDefault();
+			(event.shiftKey ? controls.at(-1) : controls[0]).focus();
+			return;
+		}
+		if (event.key !== 'Escape') return;
 		if (
 			['filters', 'passkeys'].includes(shieldsPage.dataset.view) &&
 			shieldsPageFrom === 'global'
@@ -5013,12 +5066,61 @@ function shieldsComingSoon(title) {
 	});
 }
 
-function positionShields() {
-	const rect = shieldsButton.getBoundingClientRect();
-	shieldsPanel.style.top = `${Math.round(rect.bottom + 4)}px`;
-	shieldsPanel.style.left = 'auto';
-	shieldsPanel.style.right = `${Math.max(8, Math.round(window.innerWidth - rect.right))}px`;
+/**
+ * A popover under a button (the Shields panel, the menu): `panel` (a
+ * .popover) over `scrim` (a .popoverScrim), which takes the click outside
+ * it. It fades in when it opens and is gone at once when it closes, however
+ * it closes (its button again, a click outside, Escape, an item chosen): the
+ * global .hidden, so nothing of it is left to see, click or focus. Escape
+ * closes it before anything else sees the key, and the focus goes back to
+ * its button when it was in the popover.
+ */
+function popover(panel, scrim) {
+	let anchor = null;
+	const isOpen = () => !panel.classList.contains('hidden');
+	const position = () => {
+		const rect = anchor.getBoundingClientRect();
+		panel.style.top = `${Math.round(rect.bottom + 4)}px`;
+		panel.style.left = 'auto';
+		panel.style.right = `${Math.max(8, Math.round(innerWidth - rect.right))}px`;
+	};
+	const open = (button) => {
+		anchor?.setAttribute('aria-expanded', 'false');
+		anchor = button;
+		position();
+		panel.classList.remove('hidden');
+		panel.setAttribute('aria-hidden', 'false');
+		scrim.classList.remove('hidden');
+		button.setAttribute('aria-expanded', 'true');
+	};
+	const close = () => {
+		if (!isOpen()) return;
+		const inside = panel.contains(document.activeElement);
+		panel.classList.add('hidden');
+		panel.setAttribute('aria-hidden', 'true');
+		scrim.classList.add('hidden');
+		anchor.setAttribute('aria-expanded', 'false');
+		if (inside && anchor.isConnected) anchor.focus();
+	};
+	scrim.addEventListener('click', close);
+	addEventListener('resize', () => {
+		if (isOpen()) position();
+	});
+	addEventListener(
+		'keydown',
+		(event) => {
+			if (event.key !== 'Escape' || !isOpen()) return;
+			close();
+			event.stopImmediatePropagation();
+		},
+		true,
+	);
+	return { open, close, isOpen };
 }
+
+const shieldsPopover = popover(shieldsPanel, shieldsScrim);
+const closeShields = shieldsPopover.close;
+const shieldsOpen = shieldsPopover.isOpen;
 
 function openShields() {
 	const host = activeHost();
@@ -5029,39 +5131,216 @@ function openShields() {
 	// animation, not a stale per-child one
 	shieldsPanel.classList.remove('shAnimFwd', 'shAnimBack');
 	buildShieldsPanel(host);
-	positionShields();
-	shieldsPanel.classList.remove('hidden');
-	shieldsPanel.setAttribute('aria-hidden', 'false');
-	shieldsScrim.classList.remove('hidden');
-	shieldsButton.setAttribute('aria-expanded', 'true');
+	shieldsPopover.open(shieldsButton);
 }
-
-function closeShields() {
-	shieldsPanel.classList.add('hidden');
-	shieldsPanel.setAttribute('aria-hidden', 'true');
-	shieldsScrim.classList.add('hidden');
-	shieldsButton.setAttribute('aria-expanded', 'false');
-}
-
-const shieldsOpen = () => !shieldsPanel.classList.contains('hidden');
 
 shieldsButton.addEventListener('click', () => {
 	if (shieldsOpen()) closeShields();
 	else openShields();
 });
-shieldsScrim.addEventListener('click', closeShields);
-window.addEventListener('resize', () => {
-	if (shieldsOpen()) positionShields();
-});
+
+// ---- the menu: Fullscreen and About -----------------------------------------
+// The button beside the address box (and its twin in the tab manager, which
+// hides the bar) opens the Shields panel's popover as a menu: Fullscreen puts
+// this page, STomp's window, in fullscreen and takes it out again, and About
+// shows the proxy's build.
+const menuPanel = $('pmMenu');
+const menuPopover = popover(menuPanel, $('menuScrim'));
+const menuFullscreen = $('menuFullscreen');
+const menuAbout = $('menuAbout');
+
+// The Fullscreen API on this page's root, or null where the page cannot be
+// made fullscreen (an iPhone's Safari has it for videos only, a frame may
+// not be allowed it): the menu does not offer it then. Safari before 16.4
+// has it under its prefix only.
+const fullscreen = (() => {
+	const root = document.documentElement;
+	if (document.fullscreenEnabled && root.requestFullscreen)
+		return {
+			element: () => document.fullscreenElement,
+			enter: () => root.requestFullscreen(),
+			exit: () => document.exitFullscreen(),
+			change: 'fullscreenchange',
+		};
+	if (document.webkitFullscreenEnabled && root.webkitRequestFullscreen)
+		return {
+			element: () => document.webkitFullscreenElement,
+			enter: () => root.webkitRequestFullscreen(),
+			exit: () => document.webkitExitFullscreen(),
+			change: 'webkitfullscreenchange',
+		};
+	return null;
+})();
+
+/** the Fullscreen item says what choosing it does */
+function syncFullscreenItem() {
+	menuFullscreen.hidden = !fullscreen;
+	if (!fullscreen) return;
+	const on = !!fullscreen.element();
+	menuFullscreen.innerHTML = `${shieldIcon(on ? 'fullscreenExit' : 'fullscreen')}<span>${on ? 'Exit fullscreen' : 'Fullscreen'}</span>`;
+}
+menuAbout.innerHTML = `${shieldIcon('info')}<span>About</span>`;
+syncFullscreenItem();
+// Escape and the browser's own controls leave fullscreen without the menu
+if (fullscreen)
+	document.addEventListener(fullscreen.change, syncFullscreenItem);
+
+async function toggleFullscreen() {
+	try {
+		if (fullscreen.element()) await fullscreen.exit();
+		else await fullscreen.enter();
+	} catch (error) {
+		console.warn('Fullscreen:', error.message);
+	}
+}
+
+const menuItems = () =>
+	[...menuPanel.querySelectorAll('[role="menuitem"]')].filter(
+		(item) => !item.hidden,
+	);
+
+for (const button of [$('toolMenu'), $('recentsMenu')])
+	button.addEventListener('click', () => {
+		if (menuPopover.isOpen()) return menuPopover.close();
+		syncFullscreenItem();
+		menuPopover.open(button);
+		menuItems()[0]?.focus();
+	});
+
+// a menu's keys: the arrows, Home and End move between the items, Tab
+// leaves the menu, and while it is open no key reaches the tab manager
+// (Enter and Space still choose the focused item)
 addEventListener(
 	'keydown',
 	(event) => {
-		if (event.key !== 'Escape' || !shieldsOpen()) return;
-		closeShields();
+		if (!menuPopover.isOpen()) return;
+		const items = menuItems();
+		const at = items.indexOf(document.activeElement);
+		const next = {
+			ArrowDown: (at + 1) % items.length,
+			ArrowUp: (at <= 0 ? items.length : at) - 1,
+			Home: 0,
+			End: items.length - 1,
+		}[event.key];
+		if (event.key === 'Tab') return menuPopover.close();
 		event.stopImmediatePropagation();
+		if (next === undefined) return;
+		event.preventDefault();
+		items[next]?.focus();
 	},
 	true,
 );
+
+menuFullscreen.addEventListener('click', () => {
+	menuPopover.close();
+	toggleFullscreen();
+});
+menuAbout.addEventListener('click', () => {
+	menuPopover.close();
+	openShieldsPage('about');
+});
+
+/** About: the proxy's build and what the console badges said */
+function buildAboutPage() {
+	shieldsPage.dataset.view = 'about';
+	shieldsPage.innerHTML = `
+		<div class="spHead">
+			<img class="aboutMark" src="/pm/logo.png" width="28" height="28" alt="" draggable="false" />
+			<h2 class="spTitle" id="shieldsPageTitle">About STomp</h2>
+			<button class="spClose" id="spClose" type="button" aria-label="Close">×</button>
+		</div>
+		<div class="spBody">
+			<section class="spSection">
+				<h3 class="spSectionTitle">Build</h3>
+				<dl class="aboutFacts" id="aboutBuild"></dl>
+			</section>
+			<section class="spSection">
+				<h3 class="spSectionTitle">This session</h3>
+				<dl class="aboutFacts" id="aboutSession"></dl>
+			</section>
+		</div>`;
+	shieldsPage
+		.querySelector('#spClose')
+		.addEventListener('click', closeShieldsPage);
+	fillAbout();
+	refreshAbout();
+}
+
+/** the server's answer as it is now, not the last poll's */
+async function refreshAbout() {
+	try {
+		serverStatus = await (await fetch('/api/status')).json();
+	} catch {
+		if (!serverStatus) serverStatus = { unavailable: true };
+	}
+	if (shieldsPageOpen() && shieldsPage.dataset.view === 'about') fillAbout();
+}
+
+function fillAbout() {
+	const status = serverStatus;
+	const build = status?.build;
+	const list = (id, rows) => {
+		const facts = shieldsPage.querySelector(`#${id}`);
+		facts.replaceChildren();
+		for (const [fact, label, value, datetime, title] of rows) {
+			if (value === undefined || value === null || value === '') continue;
+			const row = document.createElement('div');
+			row.className = 'aboutRow';
+			row.dataset.fact = fact;
+			const term = document.createElement('dt');
+			term.textContent = label;
+			const detail = document.createElement('dd');
+			if (title) detail.title = title;
+			if (datetime) {
+				const time = document.createElement('time');
+				time.dateTime = datetime;
+				time.textContent = value;
+				detail.append(time);
+			} else detail.textContent = value;
+			row.append(term, detail);
+			facts.append(row);
+		}
+	};
+	const date = build?.date ? new Date(build.date) : null;
+	// a page or a service worker of another build than the server's (a deploy
+	// under way) says so; the same build is not repeated
+	const running = (value) =>
+		value && build?.build && value !== build.build ? value : null;
+	list(
+		'aboutBuild',
+		status && !status.unavailable
+			? [
+					['version', 'Version', build?.version ?? status.version],
+					['build', 'Build', build?.build],
+					['commit', 'Commit', build?.commit?.slice(0, 7), null, build?.commit],
+					[
+						'date',
+						'Build date',
+						date &&
+							new Intl.DateTimeFormat(undefined, {
+								dateStyle: 'long',
+								timeStyle: 'short',
+							}).format(date),
+						build?.date,
+					],
+					['page', 'This page', running(controller?.build)],
+					['worker', 'Service worker', running(controller?.config?.build)],
+				]
+			: [['status', 'Status', status?.unavailable ? 'Unavailable' : 'Loading']],
+	);
+	// the console badges' facts (mode, transport, controller), and the server
+	list('aboutSession', [
+		...[...badgeFacts]
+			.filter(([label]) => label !== 'STomp')
+			.map(([label, value]) => [label.toLowerCase(), label, value]),
+		[
+			'server',
+			'Server',
+			status?.node &&
+				`Node ${status.node}${uptimeText() ? `, up ${uptimeText()}` : ''}`,
+		],
+	]);
+}
 
 const booted = boot();
 booted

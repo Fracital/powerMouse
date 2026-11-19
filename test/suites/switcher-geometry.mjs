@@ -316,9 +316,9 @@ await sleep(600);
  * points over the opening card must never hit another card's label (its bar
  * copy, close button or body) or one of the switcher's controls, no other
  * tab's frame may still be visible within the card's box, and no control
- * (tab count, new tab, Close all, a dock button) that overlaps the box may
- * still show. Labels and controls are drawn over every frame, so anything
- * that merely faded out painted over the opening page for ~150 ms.
+ * (tab count, new tab, the menu, Close all, a dock button) that overlaps the
+ * box may still show. Labels and controls are drawn over every frame, so
+ * anything that merely faded out painted over the opening page for ~150 ms.
  */
 const sampleOpen = () =>
 	page.evaluate(
@@ -331,6 +331,7 @@ const sampleOpen = () =>
 				const controls = [
 					'#recentsCount',
 					'#newTab',
+					'#recentsMenu',
 					'#closeAll',
 					'.dockButton',
 				].flatMap((sel) => [...panel.querySelectorAll(sel)]);
