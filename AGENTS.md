@@ -563,7 +563,14 @@ suite, and they run against the real thing:
    a fixture site that exercises cookies, headers, redirects, XHR, history,
    storage, iframes, workers, EventSource, forms and inline styles; then real
    sites (Wikipedia, GitHub, MDN, Hacker News render; many others bot-block
-   headless browsers, which is not a STomp bug).
+   headless browsers, which is not a STomp bug). Chrome reads
+   `navigator.webdriver` as true whenever the DevTools protocol drives it
+   (Playwright, Puppeteer, `--remote-debugging-port`), and some sites refuse
+   that natively too: YouTube stops every such video at about 45 seconds.
+   Launch a real-site probe with
+   `--disable-blink-features=AutomationControlled`, as a user's Chrome
+   reads it, and load the site natively the same way before calling a
+   refusal the proxy's (docs/http3.md, "YouTube's attestation").
 4. For "did the proxy leak the origin", read attributes with the parent
    realm's `Element.prototype.getAttribute.call(el, name)`: the page's own
    `getAttribute` is hooked to return the original value.

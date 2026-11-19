@@ -343,13 +343,53 @@ returns, that fails the one call and the stream stays usable; a rejected
 
 ## YouTube's attestation
 
-YouTube decides whether a watch session's video keeps streaming (the SABR
-`STREAM_PROTECTION_STATUS`: 2 pending, 1 accepted, 3 attestation required,
-after which the video stops when its buffer runs out, at about 45 seconds)
-by the network path of the session's requests, and HTTP/3 is part of that
-path. Measured 2026-11-10, headful Chrome 152 on a private display, a fresh
-profile for every load, four public videos, arms alternated in one batch,
-refused loads of those with a verdict:
+YouTube decides whether a watch session's video keeps streaming: each SABR
+response of the video carries a `STREAM_PROTECTION_STATUS` (2 pending, 1
+accepted, 3 attestation required), and after a 3 the video stops when its
+buffer runs out, at about 45 seconds ("Something went wrong").
+
+Through the proxy a video plays on as it does natively. Measured
+2026-11-19 on master (Chrome 157 headless, a fresh profile for every load,
+two to three public videos, arms alternated, 100 to 110 seconds a load,
+refused loads; the proxied arms are a demo on the machine and
+stomp.fracit.al, both through the holyWisp edges):
+
+| Arm                                                                 | Refused |
+| ------------------------------------------------------------------- | ------- |
+| Chrome, no proxy                                                    | 0 of 18 |
+| Chrome, no proxy, `--disable-quic`                                  | 0 of 9  |
+| STomp, Wisp over WebTransport, `http3` (the demo's defaults)        | 0 of 28 |
+| STomp, Wisp over the WebSocket, `http3`                             | 0 of 4  |
+| STomp, Wisp over the WebSocket, HTTP/2 only                         | 0 of 8  |
+| the same arms, Chrome driven over the DevTools protocol as it comes | 8 of 8  |
+
+Twelve of those loads (two each of Chrome, the demo and stomp.fracit.al,
+twice) went on after 40 seconds: six opened a related video in the page
+(YouTube's own navigation) and six loaded the watch page again in the same
+profile, and every second video was accepted too.
+
+In the last row Chrome is refused natively and through the proxy alike:
+Chrome reads `navigator.webdriver` as true whenever the DevTools protocol
+drives it (Playwright, Puppeteer, `--remote-debugging-port`), headless or
+not, and YouTube refuses that session, so the video stops between 39 and
+45 seconds. A user's own Chrome reads false. A probe of this check
+therefore launches Chrome with
+`--disable-blink-features=AutomationControlled` and loads the video natively
+the same way beside the proxied arm; the 45 second stops seen in headless
+probes from 2026-11-17 on were this flag, not STomp.
+
+One difference remains on the wire and is left as it is: Chrome adds
+`X-Browser-Channel`, `X-Browser-Copyright`, `X-Browser-Validation` and
+`X-Browser-Year` to its requests to youtube.com and googlevideo.com, and a
+proxied request has none of them, since the browser adds them for Google's
+hosts only and the service worker never sees them. `X-Browser-Validation`
+is a keyed hash Chrome vouches for itself with, so STomp does not make one
+up, and the verdicts above are accepted without them.
+
+Measured 2026-11-10, headful Chrome 152 on a private display, from the same
+machine when it left through another tunnel, a fresh profile for every
+load, four public videos, arms alternated in one batch, refused loads of
+those with a verdict:
 
 | Arm (from a machine behind a WireGuard tunnel unless it says edges) | Refused  |
 | ------------------------------------------------------------------- | -------- |
@@ -365,7 +405,8 @@ refused loads of those with a verdict:
 | STomp, HTTP/2, the holyWisp edges                                   | 4 of 36  |
 | STomp, `http3`, the holyWisp edges                                  | 3 of 20  |
 
-What follows from it:
+What followed from it then (none of the TCP refusals came back on
+2026-11-19, natively or through the proxy):
 
 - The wisp server does not matter: wisp-js and holyWisp on the same machine
   are refused alike. Where its connections leave from does.
@@ -390,9 +431,10 @@ What follows from it:
 - Through the edges `http3` made no difference in 20 loads. There the
   session is split across two addresses (above).
 
-So a host whose users see YouTube stop turns `http3` on, and one that
-already has looks at where its wisp server's TCP and UDP streams leave
-from. The demo has had it on by default since.
+So a host whose users saw YouTube stop turned `http3` on, and one that
+already had looked at where its wisp server's TCP and UDP streams leave
+from. The demo has had it on by default since. The 2026-11-19 table is
+the one that holds now.
 
 ## Building and testing
 
