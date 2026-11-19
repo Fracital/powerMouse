@@ -5333,6 +5333,7 @@ function streamMarkup(
 	} | null,
 	meta: ((segment: string) => void) | null,
 	sizes: (read: number) => [number, number],
+	client: string | undefined,
 ): string {
 	const random = new Uint8Array(22);
 	crypto.getRandomValues(random);
@@ -5397,8 +5398,17 @@ function streamMarkup(
 				tryAt = 0;
 				last = Date.now();
 			};
-			cut();
-			void (async () => {
+			// after the shell is on its way, and after the page asked for its
+			// inject bundle (or BUNDLE_WAIT_MS): the first piece is the whole
+			// head, whose cut and prewrite (CNN's 3.7 MB) held the shell back,
+			// and the bundle's fetch event waited for this thread to be done
+			// with them (190 ms on CNN), where the page could load it while
+			// the head is rewritten
+			bundleAsked(client).then(() => {
+				cut();
+				void readRest();
+			});
+			const readRest = async () => {
 				try {
 					for (let next = read.next; ; next = null) {
 						const chunk = await (next ?? reader.read());
@@ -5424,7 +5434,7 @@ function streamMarkup(
 				}
 				if (timer !== null) clearTimeout(timer);
 				send(pending, true);
-			})();
+			};
 		},
 		cancel() {
 			reader.cancel().catch(() => {});
@@ -5439,6 +5449,26 @@ function streamMarkup(
 		}, MARKUP_WAIT_MS),
 	});
 	return token;
+}
+/** the documents whose bundle request is awaited (bundleAsked), by client id */
+const bundleWaits = new Map<string, () => void>();
+/** how long a document's head waits for its bundle request (one the memory cache answers comes to no worker) */
+const BUNDLE_WAIT_MS = 40;
+function bundleAsked(client: string | undefined): Promise<void> {
+	return new Promise((resolve) => {
+		const timer = setTimeout(done, client ? BUNDLE_WAIT_MS : 0);
+		function done() {
+			clearTimeout(timer);
+			if (client && bundleWaits.get(client) === done)
+				bundleWaits.delete(client);
+			resolve();
+		}
+		if (client) bundleWaits.set(client, done);
+	});
+}
+/** the document `client` asked for its inject bundle (src/server/serviceWorker.ts documentBundle) */
+export function bundleRequested(client: string) {
+	bundleWaits.get(client)?.();
 }
 /** a page's blob: script or stylesheet (src/inject/modules/ObjectURL.ts): its kind, and the private URL's uuid */
 const BLOB_ROUTE = /^\/blob~(js|wjs|module|css)(?:~([\da-f-]{36}))?\//;
@@ -6574,6 +6604,7 @@ export function registerRewrites(
 							? (segment) => applyMeta(hints, segment)
 							: null,
 						(read) => documentSizes(response.headers, read),
+						request.clientId,
 					);
 					const shell = modifyHTMLStreamed(
 						'',

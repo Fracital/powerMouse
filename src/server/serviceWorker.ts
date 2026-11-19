@@ -136,6 +136,7 @@ import { RewriteCache } from './rewriteCache';
 import { RewritePool } from './rewritePool';
 import {
 	abortRequest,
+	bundleRequested,
 	departingMixedContent,
 	imagesSeen,
 	noteRequest,
@@ -2515,6 +2516,8 @@ function documentBundle(
 				own = hash;
 			}
 	if (!known) return false;
+	// its document's head is rewritten once this is answered (streamMarkup)
+	if (event.clientId) bundleRequested(event.clientId);
 	if (keptBundles.has(request.url)) {
 		event.respondWith(
 			(async () => {
