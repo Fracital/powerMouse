@@ -162,6 +162,18 @@
 // to 1,102.8 and 1,075.7 to 1,078.6 with a first XMLHttpRequest. The
 // ceilings stay where they were: the XMLHttpRequest case had come to
 // within a KB of its own, and the margin is for the fixes that come next.
+// By 2026-11-19 master measured 1,102.3 to 1,104.0 KB with a first
+// XMLHttpRequest (the page written as its parse goes, 8b8f0030 and
+// 75d8eacf, about 3 KB of it). Since then open() with a method the browser
+// sends as written (a GET, a POST) needs no deferred part, so this case
+// is a frame's first request without one, and a wrapper's source is noted
+// without a call through the hooked toString: 1,097.5 to 1,100.1 KB (five
+// runs each, alternated, 20 frames, Chrome 157 at a85ca1a5), 1,097.7 to
+// 1,098.1 same site (1,100.0 to 1,101.5 before). Most of what is left is
+// not this frame's alone: about 1.4 MB of each 20 frames is code compiled
+// once for all of them (the gate's collectGarbage drops the compilation
+// cache, and their first frames compile the bundle and baseline code
+// again), and a measure over 40 frames reads about 35 KB less a frame.
 import { statSync } from 'node:fs';
 import { measureFrames } from '../frame-memory.mjs';
 import { done, FIXTURE, ok, SLOT_PORTS } from '../lib.mjs';
@@ -269,7 +281,7 @@ ok(
 	`${parted.loaded} did`,
 );
 ok(
-	`a proxied frame that opens an XMLHttpRequest (a deferred part's first need) costs at most ${PART_LIMIT_KB} KB of heap`,
+	`a proxied frame that opens an XMLHttpRequest (a GET, which needs no deferred part) costs at most ${PART_LIMIT_KB} KB of heap`,
 	parted.heapKB <= PART_LIMIT_KB,
 	`${parted.heapKB.toFixed(0)} KB, ${parted.rssKB.toFixed(0)} KB RSS (${FRAMES} frames)`,
 );

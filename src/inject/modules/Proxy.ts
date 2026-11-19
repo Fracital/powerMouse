@@ -650,6 +650,10 @@ export default class ProxyModule extends Module<Client> {
 	}
 	/** the constructors the page has in place of the realm's own, by the native */
 	#standIns = new Map<Function, Function>();
+	/** the realm's Function.prototype.toString, apply's hook */
+	#toString?: Function;
+	/** whether the hook answers `that` with the browser's toString (apply) */
+	#ownSource?: (that: Function) => boolean;
 	apply() {
 		const global = this.client.global;
 		// what this bundle rewrites keeps its text here, for the hook below
@@ -690,7 +694,10 @@ export default class ProxyModule extends Module<Client> {
 			}
 		};
 		let delegating = false;
-		global.Function.prototype.toString = this.wrapFunction(
+		// a function no other realm's toString is asked about: the hook
+		// answers with what the browser's says (mirrorSource reads it so)
+		this.#ownSource = (that) => delegating || !foreignToString(that);
+		global.Function.prototype.toString = this.#toString = this.wrapFunction(
 			global.Function.prototype.toString,
 			(target, that, args) => {
 				const known = this.functionStrings.get(that);
@@ -891,17 +898,36 @@ export default class ProxyModule extends Module<Client> {
 	/** `to`'s toString shows `from`'s source */
 	mirrorSource(from: Function, to: Function) {
 		const known = this.functionStrings.get(from);
-		if (known !== undefined) this.functionStrings.set(to, known);
-		else {
-			const source = from.toString();
-			// a native the page has not dressed up reads the same later
+		if (known !== undefined) {
+			this.functionStrings.set(to, known);
+			return;
+		}
+		// (the one read of it that `from.toString()` made)
+		const toString = from.toString;
+		if (
+			this.#ownSource &&
+			toString === this.#toString &&
+			this.#ownSource(from)
+		) {
+			// what apply's hook would answer, without the call: each wrapper's
+			// went through the hook, which read the browser's source, and the
+			// source again here, both checked (some 600 a frame, which made
+			// both hot enough to be compiled again in every frame)
+			const source = Reflect.apply(nativeToString, from, []) as string;
 			this.functionStrings.set(
 				to,
-				isNative(source) && source === Reflect.apply(nativeToString, from, [])
-					? from
-					: source,
+				isNative(source) ? from : (originalSource(source) ?? source),
 			);
+			return;
 		}
+		const source = Reflect.apply(toString, from, []) as string;
+		// a native the page has not dressed up reads the same later
+		this.functionStrings.set(
+			to,
+			isNative(source) && source === Reflect.apply(nativeToString, from, [])
+				? from
+				: source,
+		);
 	}
 	/**
 	 * `wrapper` stands in for the realm's constructor `native` (the page's

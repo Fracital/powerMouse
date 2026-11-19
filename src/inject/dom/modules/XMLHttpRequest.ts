@@ -623,8 +623,19 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				username: string | void,
 				password: string | void,
 			) {
-				// a method the browser refuses changes nothing of the request
-				const checked = deferred('checkedMethod')(that.client.global, method);
+				// a method the browser refuses changes nothing of the request. One
+				// it sends as written, upper case, is checkedMethod's own answer
+				// without the part: a frame's first GET or POST makes none
+				const checked =
+					method === 'GET' ||
+					method === 'POST' ||
+					method === 'HEAD' ||
+					method === 'PUT' ||
+					method === 'DELETE' ||
+					method === 'OPTIONS' ||
+					method === 'PATCH'
+						? method
+						: deferred('checkedMethod')(that.client.global, method);
 				// a document may not make a synchronous request with a response
 				// type or a timeout set beforehand
 				if (!async && (this.#timeout !== 0 || this.#responseType !== ''))

@@ -67,10 +67,11 @@
 // that throws (as one of another build, deferred-parts, would hand none),
 // and the frame makes the calls: each throws, or rejects where the call
 // answers with a promise; an XHR with a document response refuses (its
-// open() throws, since the method check is a part too, xhrChecks.ts; a
-// request past it fails as on a network error: its error event, no
-// document); a download link saves nothing (neither the copy nor the
-// browser's download of the route); a form aimed at the frame navigates
+// open() of a method that needs a check throws, since the check is a part
+// too, xhrChecks.ts; a GET needs none, and the request fails as on a
+// network error: its error event, no document); a download link saves
+// nothing (neither the copy nor the browser's download of the route); a
+// form aimed at the frame navigates
 // nothing (neither the copy nor the browser's own submission); and no
 // stand-in counted a call. The same frame with the parts counts the calls
 // that do reach the browser (a track's settings, the XHR document's
