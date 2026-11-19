@@ -77,6 +77,10 @@ impl Server {
 		transport
 			.stream_receive_window(VarInt::from_u32(64 * 1024))
 			.receive_window(VarInt::from_u32(1024 * 1024))
+			// what the server may have unacknowledged toward a client in all:
+			// quinn's 10 MB default would bind before Chrome's windows do on
+			// a long path (test/wisp-wt.mjs delayMs)
+			.send_window(64 * 1024 * 1024)
 			.max_concurrent_bidi_streams(VarInt::from_u32(100))
 			.max_concurrent_uni_streams(VarInt::from_u32(100))
 			.datagram_receive_buffer_size(Some(1024 * 1024));
@@ -145,6 +149,12 @@ impl Server {
 	/// what a datagram of a /bridge session can carry, -1 for none
 	pub fn bridge_max_datagram(&self, session: u32) -> i32 {
 		bridge::max_datagram(session)
+	}
+
+	/// opens a server bidirectional stream on a /bridge session: its
+	/// handle, -1 when the session is gone
+	pub fn bridge_open_bidi(&self, session: u32) -> f64 {
+		bridge::open_bidi(session) as f64
 	}
 
 	/// closes a /bridge session with its capsule and FIN

@@ -191,7 +191,7 @@ for (const [mode, base] of [
 			await noMenuCarrier(page),
 		);
 		const established = new RegExp(
-			`^\\[wisp\\] WebTransport session established in \\d+ ms: wisp transport WebTransport \\(UDP/QUIC\\) to ${literal(relay.url)} \\(\\w[\\w-]*, HTTP/3 on\\)$`,
+			`^\\[wisp\\] WebTransport session established in \\d+ ms: wisp transport WebTransport \\(UDP/QUIC\\) to ${literal(relay.url)} \\(\\w[\\w-]*, HTTP/3 on; 8 lanes, the relay opened the Wisp stream\\)$`,
 		);
 		ok(
 			`${mode}: the console says WebTransport was tried and the session established, how fast and to where, in plain [wisp] lines`,
