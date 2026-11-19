@@ -1,10 +1,13 @@
 # Publish master to npm as @sysce/stomp@nightly, once a night and on manual
 # dispatch. Only a commit whose CI passed is published, and only once.
 #
-# Same posture as ci.yml: pinned actions, no pull_request trigger, and no
-# secret. npm trusted publishing authenticates this workflow (OIDC,
-# `id-token: write`; the trust is set on npmjs.com for Fracital/powerMouse
-# and nightly.yml), and the package carries provenance.
+# Same posture as ci.yml: pinned actions and no pull_request trigger. npm
+# trusted publishing authenticates this workflow (OIDC, `id-token: write`; the
+# trust is set on npmjs.com for Fracital/powerMouse and nightly.yml), and the
+# package carries provenance. One secret, optional: STOMP_DISPATCH_TOKEN (a
+# token of Fracital's limited to Fracital/SystemYA and Fracital/Fracital,
+# Contents read and write) tells those repos of a new nightly right away;
+# without it they pick it up on their own schedule.
 
 name: Nightly
 
@@ -88,9 +91,30 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Publish
+        id: publish
         if: steps.fresh.outputs.publish == 'true'
         run: |
           version=$(node scripts/nightly-version.mjs)
           npm version "$version" --no-git-tag-version
           npm publish --tag nightly --provenance --access public
           echo "::notice::published @sysce/stomp@$version"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+      # tell the sites that vendor STomp, so they update now instead of on
+      # their schedule (their stomp-update.yml takes repository_dispatch
+      # stomp-nightly with client_payload.version)
+      - name: Tell SystemYA and Fracital
+        if: steps.fresh.outputs.publish == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.STOMP_DISPATCH_TOKEN }}
+          VERSION: ${{ steps.publish.outputs.version }}
+        run: |
+          if [[ -z $GH_TOKEN ]]; then
+            echo "::warning::STOMP_DISPATCH_TOKEN is not set; downstream repos pick the nightly up on their schedule"
+            exit 0
+          fi
+          for repo in Fracital/SystemYA Fracital/Fracital; do
+            gh api "repos/$repo/dispatches" -f event_type=stomp-nightly -f "client_payload[version]=$VERSION" \
+              || echo "::warning::could not dispatch to $repo"
+          done
