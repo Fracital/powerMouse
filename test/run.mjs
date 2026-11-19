@@ -21,7 +21,14 @@
 // real sites (Wikipedia, example.com) through the demo's own wisp, so the
 // machine needs network access.
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import {
+	appendFileSync,
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	writeFileSync,
+} from 'node:fs';
 import { createServer } from 'node:net';
 import { availableParallelism } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -65,8 +72,9 @@ const SUITE_TIMEOUT_MINUTES = {
 };
 // what a suite's demo server needs beyond the defaults
 const SUITE_ENV = {
-	// epoxy that takes the TURN fixture's certificate authority (TURN over TLS)
-	'webrtc-net': { STOMP_TEST_TRANSPORT: '1' },
+	// epoxy that takes the TURN fixture's certificate authority (TURN over
+	// TLS), and the wisp server's streams (WISP_LOG)
+	'webrtc-net': { STOMP_TEST_TRANSPORT: '1', WISP_LOG: '1' },
 	// epoxy plus the fixture hosts of test/mixed-servers.mjs
 	'mixed-content': { STOMP_TEST_TRANSPORT: '1' },
 	// and the default-port sites of the visited suite
@@ -399,10 +407,36 @@ async function startServersOnce(name) {
 	delete env.STOMP_WISP_URL;
 	// the demo's default (HTTP/3 on) unless the suite itself pins it
 	if (!SUITE_ENV[name]?.STOMP_HTTP3) delete env.STOMP_HTTP3;
+	// WISP_LOG: every stream the demo's holyWisp opens and closes, each line
+	// after the time it was told here (ms since the epoch), in a file the
+	// suite is told of: a stream can open and close between any two looks
+	// at the system's sockets
+	let wispLog = null;
+	if (env.WISP_LOG) {
+		delete env.WISP_LOG;
+		env.HOLYWISP_LOG_LEVEL = 'debug';
+		mkdirSync(`${root}test/out`, { recursive: true });
+		wispLog = `${root}test/out/wisp-${port}.log`;
+		writeFileSync(wispLog, '');
+	}
 	const server = spawn(process.execPath, [`${root}demo/server.js`], {
 		env,
 		stdio: ['ignore', 'pipe', 'inherit'],
 	});
+	if (wispLog) {
+		let partial = '';
+		server.stdout.on('data', (chunk) => {
+			const at = Date.now();
+			const lines = (partial + chunk).split('\n');
+			partial = lines.pop();
+			const streams = lines.filter((line) => line.includes(': stream '));
+			if (streams.length)
+				appendFileSync(
+					wispLog,
+					streams.map((line) => `${at} ${line}\n`).join(''),
+				);
+		});
+	}
 	// ready once this server says it listens: a port probed free can be taken
 	// by another run's server (a demo's slots serve the whole app) before
 	// this one binds it, and /api/status would then answer from that one
@@ -439,7 +473,7 @@ async function startServersOnce(name) {
 		stop();
 		throw error;
 	}
-	return { port, fixturePort, slotPorts, stop };
+	return { port, fixturePort, slotPorts, wispLog, stop };
 }
 
 /**
@@ -447,7 +481,7 @@ async function startServersOnce(name) {
  * suites run one at a time, and as one block when it finishes when they run
  * in parallel, so the log never interleaves two suites.
  */
-function runSuite(name, { port, fixturePort, slotPorts }) {
+function runSuite(name, { port, fixturePort, slotPorts, wispLog }) {
 	return new Promise((resolve) => {
 		const child = spawn(process.execPath, [`${suitesDir}${name}.mjs`], {
 			env: {
@@ -456,6 +490,7 @@ function runSuite(name, { port, fixturePort, slotPorts }) {
 				PORT: port,
 				FIXTURE: `http://127.0.0.1:${fixturePort}/`,
 				SITE_POOL_PORTS: slotPorts.join(','),
+				...(wispLog && { WISP_LOG: wispLog }),
 			},
 			stdio: ['ignore', 'pipe', 'inherit'],
 		});

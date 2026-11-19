@@ -418,6 +418,14 @@
 		watched(name) {
 			return peer(name).watched;
 		},
+		/** the checks the connection sent so far, by its pairs in getStats */
+		async checks(name) {
+			let sent = 0;
+			(await peer(name).pc.getStats()).forEach((entry) => {
+				if (entry.type === 'candidate-pair') sent += entry.requestsSent;
+			});
+			return sent;
+		},
 		bufferedAmount(name, label) {
 			return channelOf(name, label).channel.bufferedAmount;
 		},

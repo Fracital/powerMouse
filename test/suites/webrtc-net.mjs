@@ -1097,19 +1097,21 @@ async function relay() {
 	};
 }
 
-/** the sockets connected to 127.0.0.1:`port` until `stop()`, each by when it was first seen (ms after `start`) */
-async function streamsTo(port, start, stop) {
-	const remote = `0100007F:${port.toString(16).toUpperCase().padStart(4, '0')}`;
-	const seen = new Map();
-	while (!stop()) {
-		for (const line of readFileSync('/proc/net/udp', 'utf8').split('\n')) {
-			const fields = line.trim().split(/\s+/);
-			if (fields[2] === remote && !seen.has(fields[9]))
-				seen.set(fields[9], Date.now() - start);
-		}
-		await sleep(5);
-	}
-	return [...seen.values()];
+/**
+ * The streams the demo's wisp server opened to 127.0.0.1:`port`, each by
+ * when it said so (ms after `start`): every one, from its log (the runner's
+ * WISP_LOG), as a socket that opens and closes between two looks at the
+ * system's list is never seen there
+ */
+async function streamsTo(port, start) {
+	// what the server said last is on its way to the file
+	await sleep(500);
+	const opened = new RegExp(` stream \\d+ open to 127\\.0\\.0\\.1:${port}$`);
+	return readFileSync(process.env.WISP_LOG, 'utf8')
+		.split('\n')
+		.filter((line) => opened.test(line))
+		.map((line) => Number(line.slice(0, line.indexOf(' '))) - start)
+		.filter((at) => at >= 0);
 }
 
 /** the page's state transitions from `start` on, at their times after it */
@@ -1145,8 +1147,17 @@ async function farEndGone(opened, how) {
 		const start = Date.now();
 		if (how === 'refuse') path.refuse();
 		else path.state.pass = false;
-		const streams =
-			how === 'refuse' && streamsTo(path.port, start, () => !watching);
+		// the checks it sends, as its getStats counts them, until it failed
+		// (a pair it gave up leaves the report)
+		const counted = [];
+		const counting =
+			how === 'refuse' &&
+			(async () => {
+				while (watching) {
+					counted.push(await own.call('checks'));
+					await sleep(100);
+				}
+			})();
 		if (how === 'revive') {
 			await sleep(20000);
 			path.state.pass = true;
@@ -1206,7 +1217,11 @@ async function farEndGone(opened, how) {
 		// stack's went at its next wake for the bandwidth estimate, 50 and
 		// 75 ms apart
 		result.fastOff = fast.filter((gap) => gap < 55 || gap > 70).length;
-		if (streams) result.streams = await streams;
+		if (counting) {
+			await counting;
+			result.checks = Math.max(...counted) - counted[0];
+			result.streams = await streamsTo(path.port, start);
+		}
 		let since = start + (result.resumed ?? 0);
 		if (how === 'vanish') {
 			since = Date.now();
@@ -1412,7 +1427,7 @@ for (const result of gone) {
 				story,
 			);
 		console.log(
-			`note: natively, the far end ${far} (${how}): checked ${result.steady?.join(', ')} ms apart, from ${result.firstUnanswered} ms unanswered and every 62.5 ms from ${result.fastFrom} ms (${result.fastChecks} checks, the last ${result.lastCheck} ms); disconnected ${disconnected} ms and failed ${failed} ms after, the last traffic sent ${result.lastTraffic} ms and the last packet ${result.lastAny} ms after${result.heardAfter === undefined ? '' : `; a message sent once it was back arrived in ${result.heardAfter} ms (${result.after})`}`,
+			`note: natively, the far end ${far} (${how}): checked ${result.steady?.join(', ')} ms apart, from ${result.firstUnanswered} ms unanswered and every 62.5 ms from ${result.fastFrom} ms (${result.fastChecks} checks, the last ${result.lastCheck} ms); disconnected ${disconnected} ms and failed ${failed} ms after, the last traffic sent ${result.lastTraffic} ms and the last packet ${result.lastAny} ms after${result.checks === undefined ? '' : `, ${result.checks} checks sent to the closed port`}${result.heardAfter === undefined ? '' : `; a message sent once it was back arrived in ${result.heardAfter} ms (${result.after})`}`,
 		);
 		continue;
 	}
@@ -1434,11 +1449,14 @@ for (const result of gone) {
 		);
 	if (how === 'refuse')
 		ok(
-			`${label}: a remote the wisp server refused is asked again by the next check, as Chrome checks a port that refused the last, and gets no stream once the connection failed`,
+			`${label}: a remote the wisp server refused is asked again by each check, as Chrome sends each check to a port that refused the last: a stream for each (as many checks as natively), none once the connection failed`,
 			!result.failure &&
-				// sockets come and go between two looks at the list, so not
-				// every one is seen: some while it checks every 62.5 ms
-				result.streams.filter((at) => at > 2000 && at < failed).length >= 2 &&
+				native &&
+				// the first went on the stream the server then refused
+				result.streams.length >= result.checks - 2 &&
+				result.streams.length <= result.checks &&
+				result.streams.length >= 150 &&
+				Math.abs(result.checks - native.checks) <= native.checks / 10 &&
 				result.streams.every((at) => at < failed + 300),
 			story,
 		);
@@ -1452,7 +1470,7 @@ for (const result of gone) {
 			story,
 		);
 	console.log(
-		`note: ${label}, the far end ${far} (${how}): checked ${result.steady?.join(', ')} ms apart, from ${result.firstUnanswered} ms unanswered and every 62.5 ms from ${result.fastFrom} ms (${result.fastChecks} checks, the last ${result.lastCheck} ms); disconnected ${disconnected} ms and failed ${failed} ms after, the last traffic sent ${result.lastTraffic} ms and the last packet ${result.lastAny} ms after${result.streams ? `, streams seen at ${result.streams.join(', ')} ms` : ''}${result.heardAfter === undefined ? '' : `; a message sent once it was back arrived in ${result.heardAfter} ms (${result.after})`}`,
+		`note: ${label}, the far end ${far} (${how}): checked ${result.steady?.join(', ')} ms apart, from ${result.firstUnanswered} ms unanswered and every 62.5 ms from ${result.fastFrom} ms (${result.fastChecks} checks, the last ${result.lastCheck} ms); disconnected ${disconnected} ms and failed ${failed} ms after, the last traffic sent ${result.lastTraffic} ms and the last packet ${result.lastAny} ms after${result.streams ? `, ${result.checks} checks and ${result.streams.length} streams opened, the last ${result.streams.at(-1)} ms after` : ''}${result.heardAfter === undefined ? '' : `; a message sent once it was back arrived in ${result.heardAfter} ms (${result.after})`}`,
 	);
 }
 
