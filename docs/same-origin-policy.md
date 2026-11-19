@@ -114,14 +114,15 @@ would not give it).
 
 ### 4. Document-level policy
 
-| Behaviour                                                            | Chrome                                                                                         | Before                                                             | Fix                                       |
-| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------- |
-| `window.origin`, `self.origin`, `location.origin`, `isSecureContext` | the page's                                                                                     | as natively                                                        |                                           |
-| `document.domain` setter                                             | host-parsed value (`0.0.1` is `0.0.0.1`, an IP host only to itself, `''` "is an empty domain") | accepted `0.0.1`; other messages                                   | setter parses the value as a host         |
-| `postMessage` targetOrigin, `event.origin`                           | per origin                                                                                     | as natively                                                        |                                           |
-| `document.referrer`, Referrer-Policy                                 | per policy                                                                                     | as natively (referrer and wpt-referrer-policy suites)              |                                           |
-| `navigation.entries()` across origins                                | only the contiguous same-origin entries                                                        | **leak**: B sees A's entry, its full URL included, and `canGoBack` | entries filtered to the document's origin |
-| `:visited`                                                           | partitioned by top-level site and frame origin; never readable by script                       | every proxied link is a proxy URL in one partition                 | link routes (Visited links)               |
+| Behaviour                                                            | Chrome                                                                                               | Before                                                                       | Fix                                                                         |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `window.origin`, `self.origin`, `location.origin`, `isSecureContext` | the page's                                                                                           | as natively                                                                  |                                                                             |
+| `document.domain` setter                                             | host-parsed value (`0.0.1` is `0.0.0.1`, an IP host only to itself, `''` "is an empty domain")       | accepted `0.0.1`; other messages                                             | setter parses the value as a host                                           |
+| `postMessage` targetOrigin, `event.origin`                           | per origin                                                                                           | as natively                                                                  |                                                                             |
+| `document.referrer`, Referrer-Policy                                 | per policy                                                                                           | as natively (referrer and wpt-referrer-policy suites)                        |                                                                             |
+| `navigation.entries()` across origins                                | only the contiguous same-origin entries                                                              | **leak**: B sees A's entry, its full URL included, and `canGoBack`           | entries filtered to the document's origin                                   |
+| `:visited`                                                           | partitioned by top-level site and frame origin; never readable by script                             | every proxied link is a proxy URL in one partition                           | link routes (Visited links)                                                 |
+| An about:blank a page navigates another origin's frame's child to    | the page's origin (Firefox too; WebKit keeps the parent's): the page reaches it, the parent does not | **leak**: the parent's; the parent reached it and the page got SecurityError | the page's bundle, as its creator, where the browser's `blank` rule says so |
 
 ### 5. Workers
 
@@ -286,6 +287,40 @@ Filled in commit by commit; see the CHANGELOG for each.
   page's own `history.back()` does not. A popup held the same way
   stays open: a fresh context for it would cut its opener
   (docs/scramjet-parity.md section 2c).
+- **An about:blank a page navigates is of the origin the browser gives
+  it** (coi-engines, sop-escapes and sop-partitions suites). When a page P
+  navigates the child of a frame X of another origin to about:blank,
+  Chrome and Firefox make the new document P's: P reaches it, X reads
+  `contentDocument` null and SecurityError for its document, and the
+  document's `parent` is closed to it, its base URL P's. WebKit keeps the
+  parent's origin: X reaches it, P does not (measured in Chrome 157,
+  Firefox 160 and WebKitGTK 2.52.4). Through the proxy the frame's parent
+  X injected it as its own: X reached a document of P's origin, P got
+  SecurityError, and the document reached X. Now the inject navigates the
+  window with P's own Location (P's base URL, P's referrer), and X records
+  P as the window's navigator until the window shows another document
+  (DocumentClient navigatedBlank, blankCreator). The document then gets
+  P's bundle with P as its creator (IFrame injectNavigated), and X's realm
+  reads it as one of another origin (Context restrictChild). Which engine
+  does which is the service worker's `blank` rule (src/isolation.ts),
+  which the controller asks the browser, never its name. Firefox replaces
+  the first about:blank document about 200 ms later; that race is
+  Firefox's own and is not played out, the state after it is. Under a
+  frame of another site the document is in the partition its site has
+  with a cross-site ancestor, as Chrome keys it: its `document.cookie`
+  reads "" and drops writes, service worker `register` and
+  `getRegistrations` reject with InvalidStateError, and its requests, its
+  blob: workers' and its blob: documents' carry that partition's
+  Partitioned cookies, not P's. P's realm makes those requests (the
+  document has no service worker), so they say so: a load grant of `^`
+  (src/server/loadGrants.ts), and `cross` on its BLOB_MINTED and inline
+  document messages. The worker moves only a first-party client's
+  request, and only into its own site's partition under itself, which
+  any page reaches natively by navigating a cross-site frame's child. One
+  difference stays: the proxy's HTTP cache confirms an entry made for a
+  request with other cookies (docs/http-cache.md), so that document's
+  fetch of a resource P's top-level page cached reaches the site once
+  more.
 - **A frame navigates its top and its parent as natively** (top-navigation
   suite: 66 cases, Chrome 152, 156 and 157 alike natively, against both
   modes). A frame's `top.location = url`, `top.location.href = url`,
@@ -1505,6 +1540,7 @@ frames and workers):
 | A frame with a Document-Isolation-Policy                           | apart        | as any frame | as any frame |
 | A `credentialless` frame without an embedder policy                | loads        | no load      | no load      |
 | A dedicated worker (or a blob: one) of a page that is not isolated | not isolated | not isolated | not isolated |
+| An about:blank a page navigates another origin's frame's child to  | the page's   | the page's   | the parent's |
 
 Firefox and WebKit have no `cross-origin-isolated` permission: every frame
 and worker of an isolated page is isolated. WebKit has no `credentialless`,
@@ -1528,7 +1564,10 @@ Chrome's (`byEngine`, which tries every combination), it asks the
 controller's page once, and that page asks the browser
 (src/controller/isolationProbe.ts). A dedicated worker and two hidden
 frames of its own load what the service worker answers itself
-(`coi~probe/c`, `p`, `d`). The worker's script sends COEP
+(`coi~probe/c`, `p`, `d`), and a third tells whose an about:blank is
+(`blank`): a data: frame whose child its parent navigates to about:blank
+(the controller's document reaches it in Chrome and Firefox, not in
+WebKit; the service worker reads the answer at `coi~probe/b`). The worker's script sends COEP
 `credentialless`, and the worker is isolated only where the browser has
 that policy. A frame cannot ask that: WebKit checks no embedder policy of
 a frame's document that a service worker answered (measured, WebKitGTK

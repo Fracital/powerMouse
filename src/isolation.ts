@@ -35,6 +35,14 @@
  *   Permissions-Policy say and whatever its origin.
  * - `dip`: a Document-Isolation-Policy isolates the document that sends it
  *   (Chrome).
+ * - `blank`: an about:blank document a page navigates a frame to is of that
+ *   page's origin, which reaches it, as the frame's parent does not when it
+ *   is another origin's (Chrome, Firefox); WebKit makes it the parent's
+ *   (measured natively in Chrome 157, Firefox 160 and WebKitGTK 2.52.4).
+ *   Not an isolation rule, but asked of the browser the same way: the inject
+ *   asks the service worker for it when a page navigates such a frame
+ *   (src/inject/dom/navigateOther.ts), and the service worker asks the
+ *   controller's document.
  * The service worker asks the controller's document, which asks the browser
  * (src/controller/isolationProbe.ts), only when the answer would change what
  * it decides (byEngine).
@@ -43,6 +51,7 @@ export interface IsolationEngine {
 	credentialless: boolean;
 	permission: boolean;
 	dip: boolean;
+	blank: boolean;
 }
 
 /** Chrome's rules, by which the service worker decides when the browser could not be asked */
@@ -50,13 +59,15 @@ export const CHROMIUM: IsolationEngine = {
 	credentialless: true,
 	permission: true,
 	dip: true,
+	blank: true,
 };
 
 /** every engine IsolationEngine can describe */
-const ENGINES: IsolationEngine[] = [0, 1, 2, 3, 4, 5, 6, 7].map((bits) => ({
+const ENGINES: IsolationEngine[] = Array.from({ length: 16 }, (_, bits) => ({
 	credentialless: !!(bits & 1),
 	permission: !!(bits & 2),
 	dip: !!(bits & 4),
+	blank: !!(bits & 8),
 }));
 
 /**
@@ -82,7 +93,8 @@ export async function byEngine<T>(
  * `crossOriginIsolated`; `p` and `d` a document with require-corp (and for
  * `d` a Document-Isolation-Policy) whose title is this name and whose
  * script posts the name and its `crossOriginIsolated` to its parent
- * (`coi~probetrue`)
+ * (`coi~probetrue`); `b` the browser's `blank` rule, as JSON, for the
+ * inject (fetched, not navigated to)
  */
 export const ISOLATION_PROBE = 'coi~probe';
 

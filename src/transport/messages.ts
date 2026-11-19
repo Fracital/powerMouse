@@ -145,7 +145,13 @@ export interface LoadChannelMessage {
  * `<destination> <mode>`, the Sec-Fetch-Dest and Sec-Fetch-Mode of the load
  * the request stands for (subresource values only, never a navigation's
  * but an object's or embed's), or `copy` (a load the worker takes no
- * metadata from) or `download`
+ * metadata from) or `download`. Led by `^` (or `^` alone, for a request
+ * that is otherwise the page's own): the request is a document's the
+ * client's realm makes it for, of the client's origin, whose partition is
+ * the one the client's site has under its own top-level site with a frame
+ * of another site above it (an about:blank the client navigated a frame of
+ * another site's to, src/isolation.ts `blank`); taken only from a client
+ * in no partition
  */
 export interface LoadGrantMessage {
 	/** 22 random characters of base64url: the LOAD_HEADER of the request */
@@ -695,6 +701,8 @@ export const BLOB_ASK = '$stomp$blobAsk';
 export interface BlobMintedMessage {
 	directory: string;
 	url: string;
+	/** minted by a document whose partition is as a load grant's `^` names */
+	cross?: boolean;
 }
 
 /**
@@ -1001,6 +1009,8 @@ export interface InlineDocumentMessage {
 	blob?: Blob | string;
 	/** that Blob's document is cross-origin isolated, as its creator is (it inherits the creator's embedder policy) */
 	isolated?: boolean;
+	/** its creator's partition is as a load grant's `^` names (LoadGrantMessage) */
+	cross?: boolean;
 }
 
 /**

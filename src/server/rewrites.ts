@@ -1543,7 +1543,7 @@ function genericForward(
 						serverRequest.referrer,
 						serverRequest.url,
 					)?.grant;
-		const granted =
+		const grant =
 			serverRequest.mode === 'navigate'
 				? null
 				: earlierGrant
@@ -1555,6 +1555,11 @@ function genericForward(
 							context?.clientId,
 							serverRequest.url,
 						);
+		// (`^`: a document's its client makes it for, in the partition its
+		// site has with another site above it, LoadGrantMessage; the load
+		// after it, if any, is what the grant names)
+		const crossGranted = grant?.[0] === '^';
+		const granted = crossGranted ? grant!.slice(1) || null : grant;
 		let internal = granted !== null || (!!context?.internal && !context.cors);
 		const load = loadOf(granted);
 		// a navigation of a window that another document started, which the
@@ -2122,7 +2127,7 @@ function genericForward(
 		// site, as Chrome's cookie partition key has the ancestor chain bit
 		// (measured: B framed by A reads what B set for A's own request, and B
 		// framed by A framed by B none of B's top-level page's)
-		const contextPartition = navigation
+		const clientPartition = navigation
 			? topLevel
 				? ''
 				: kindPartition(resource, url.url.origin, publicSuffix, rewriter.codec)
@@ -2136,6 +2141,16 @@ function genericForward(
 							rewriter.codec,
 						)
 					: '';
+		// a grant's `^` moves a first-party client's request into the
+		// partition its site has under itself with another site between
+		// (Chrome's ancestor chain bit), and no other
+		const contextPartition =
+			crossGranted &&
+			clientPartition === '' &&
+			client &&
+			client.origin !== 'null'
+				? `^${siteOf(client, publicSuffix)}`
+				: clientPartition;
 		const partitionKey =
 			partitionSite(contextPartition) ??
 			(topSite !== null && topSite !== siteOf(url.url, publicSuffix)
@@ -4283,8 +4298,8 @@ function genericForward(
 						? { unauthorized: true }
 						: {}),
 					...(timingDenied ? { timingDenied: true } : {}),
-					...(granted !== null && loadToken !== null
-						? { grant: { token: loadToken, load: granted } }
+					...(grant !== null && loadToken !== null
+						? { grant: { token: loadToken, load: grant } }
 						: {}),
 					first: previousHop?.first ?? serverRequest.url,
 					// (filled below, when this hop's cookies are stored)
@@ -6301,9 +6316,22 @@ export function registerRewrites(
 	// Document-Isolation-Policy) its kind names. Only to a worker or a
 	// navigation: no page learns of the browser's answer by loading it
 	router.routes.set(
-		new RegExp(`^/${ISOLATION_PROBE}/[cpd]$`),
-		(request, path) => {
+		new RegExp(`^/${ISOLATION_PROBE}/[cpdb]$`),
+		async (request, path) => {
 			const kind = path.slice(-1);
+			// the browser's about:blank rule (src/isolation.ts IsolationEngine
+			// `blank`), which the inject asks for: no more than the browser
+			// tells any page of itself
+			if (kind === 'b')
+				return new Response(
+					JSON.stringify((await rewriter.isolationEngine()).blank),
+					{
+						headers: {
+							'content-type': 'application/json',
+							'cache-control': 'no-store',
+						},
+					},
+				);
 			if (kind === 'c')
 				return request.destination === 'worker'
 					? new Response('postMessage(crossOriginIsolated)', {

@@ -741,10 +741,16 @@ export default class ContextModule extends Module<DocumentClient> {
 		// a child that runs no STomp yet (an iframe still on its initial
 		// about:blank) is still that child, of the frame's origin: never the
 		// top, which a walk down the tree would visit again forever
-		const restrictChild = (child: Context) =>
-			isStomp(child, moduleClient.names.client)
+		// (a window that runs nothing yet on an about:blank this page or
+		// another of its origin navigated it to is that page's: injected
+		// first, as reading a child's contentWindow injects it)
+		const restrictChild = (child: Context) => {
+			if (!isStomp(child, moduleClient.names.client))
+				moduleClient.navigatorOf(child)?.injectNavigated?.(child);
+			return isStomp(child, moduleClient.names.client)
 				? this.newRestricted(child)
 				: this.restrictOpaque(child);
+		};
 
 		const restrictedLocation = this.restrictObject('Location', {
 			replace: {
