@@ -990,15 +990,44 @@ export function onJarChange(listener: (domain: string) => void) {
 	jarListeners.add(listener);
 }
 
+/** the broadcasts of changes not yet posted to every window (changesTold) */
+const telling = new Set<Promise<void>>();
+
 /**
  * Tell the windows the jar changed for `domain`, so the documents it
- * covers drop their document.cookie cache. Sent before the response that
- * carried the Set-Cookie is answered, so the page's next read is fresh.
+ * covers drop their document.cookie cache. Started before the response
+ * that carried the Set-Cookie is answered, and a navigation's answer waits
+ * until it is posted (changesTold), so the page's next read is fresh.
  * A window whose document is of a host the cookies of `domain` are not for
  * is not told (the page's Cookies module would drop the message): see
  * windowURL.
  */
-async function broadcastChange(domain: string) {
+function broadcastChange(domain: string) {
+	if (typeof clients === 'undefined') return;
+	const told = postChange(domain).catch(() => {});
+	telling.add(told);
+	void told.finally(() => telling.delete(told));
+}
+
+/**
+ * Settles once every change of the jar so far is posted to the windows, or
+ * after `ms`. A navigation whose response changed the jar is answered then:
+ * natively the jar has the cookies before the document is seen, and a
+ * sibling frame that reads document.cookie at the frame's load must read
+ * them (cookie-cache). The new document tells no other of the change (a
+ * fetch's inject does, JAR_MARKER), so the message is their only word of
+ * it, and it reached them after the frame had loaded when the answer went
+ * out first.
+ */
+export function changesTold(ms: number): Promise<void> {
+	if (!telling.size) return Promise.resolve();
+	return Promise.race([
+		Promise.all(telling).then(() => {}),
+		new Promise<void>((resolve) => setTimeout(resolve, ms)),
+	]);
+}
+
+async function postChange(domain: string) {
 	if (typeof clients === 'undefined') return;
 	const windows = await clients.matchAll({
 		type: 'window',

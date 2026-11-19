@@ -234,6 +234,11 @@ export function modifyHTMLStreamed(
 	facts?: ScriptFacts,
 	/** as modifyHTML's */
 	syncXHRBlocked?: boolean,
+	/**
+	 * where the client reads the markup from, as it comes (the worker's
+	 * MARKUP_ROUTE): the shell holds none of it, and `script` is not read
+	 */
+	stream?: string,
 ): { head: string; tail: (prewritten: Prewritten | null) => string } {
 	return shell(
 		script,
@@ -254,6 +259,7 @@ export function modifyHTMLStreamed(
 		facts,
 		syncXHRBlocked,
 		true,
+		stream,
 	);
 }
 
@@ -278,6 +284,7 @@ function shell(
 	facts?: ScriptFacts,
 	syncXHRBlocked?: boolean,
 	served = false,
+	stream?: string,
 ): { head: string; tail: (prewritten?: Prewritten | null) => string } {
 	// if(fragment) return '<script>document.currentScript.replaceWith(globalstomp.cloneIntoNewNode())
 	// a shell the page realm builds is of a document that inherits the
@@ -341,10 +348,14 @@ ${sited(names.client, sites)}${referred(names.client, referrer)}${policyTexts(na
 
 ${blocked}
 	try {
-		${names.client}.loadHTML(${
-			streamed
-				? `(() => { const markup = globalThis[${markupKey}]; delete globalThis[${markupKey}]; return markup; })()`
-				: markup()
+		${
+			stream !== undefined
+				? `${names.client}.loadHTMLStream(${JSON.stringify(stream).replace(/</g, '\\u003c')}`
+				: `${names.client}.loadHTML(${
+						streamed
+							? `(() => { const markup = globalThis[${markupKey}]; delete globalThis[${markupKey}]; return markup; })()`
+							: markup()
+					}`
 		}${
 			prewritten && (prewritten.scripts.length || prewritten.styles.length)
 				? `, ${escapeText(JSON.stringify(JSON.stringify(prewritten)))}`
@@ -365,9 +376,10 @@ ${blocked}
 	const baseScript = base
 		? `<script${attribute}>globalThis[${JSON.stringify(WORKER_BASE)}] = ${JSON.stringify(url.toString()).replace(/</g, '\\u003c')};</script>`
 		: '';
-	const kept = streamed
-		? `<script${attribute}>globalThis[${markupKey}] = ${markup()};</script>`
-		: '';
+	const kept =
+		streamed && stream === undefined
+			? `<script${attribute}>globalThis[${markupKey}] = ${markup()};</script>`
+			: '';
 	const library = top ? libraryScripts(url, config, attribute, loading) : '';
 	// what another document reads of this one until its bundle runs: first,
 	// as the parser may wait on the library's script (its file only assigns

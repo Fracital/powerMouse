@@ -1081,6 +1081,12 @@ export default class Client {
 		}
 	}
 	/**
+	 * @internal the sizes the document's body had, [encoded, decoded], when
+	 * the shell is not what the browser counted it by (its markup came after
+	 * the shell, DocumentClient loadHTMLStream); for its navigation timing
+	 */
+	documentSizes: [number, number] | null = null;
+	/**
 	 * @internal a native fetch that runs in this client's realm: this
 	 * bundle's, or the window's own when another realm's bundle made this
 	 * client (#ownFetch)

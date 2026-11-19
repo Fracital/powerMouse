@@ -625,6 +625,14 @@ export const WORKER_PARTITION = '$stomp$workerPartition';
  */
 export const SHELL_MARKUP = '$stomp$shellMarkup';
 /**
+ * the route under a controller's address a document's shell reads the rest
+ * of its markup from as it arrives (`markup-<token>`, DocumentClient
+ * loadHTMLStream): each piece is `<length>\n<JSON [markup, prewritten
+ * table or null, the document's byte count with the last piece, else -1]>`.
+ * No page URL corresponds to it
+ */
+export const MARKUP_ROUTE = 'markup';
+/**
  * the type of the empty script element that ends an HTML shell, after the
  * script that loads the page (DocumentClient.loadHTML): no script runs from
  * it, but the parser performs a microtask checkpoint at its end tag, where
