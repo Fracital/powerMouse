@@ -656,9 +656,14 @@ async function openSession(
 	}
 }
 
+/** the u32 LE at `at` */
+const u32 = (bytes: Uint8Array, at: number) =>
+	bytes[at] |
+	(bytes[at + 1] << 8) |
+	(bytes[at + 2] << 16) |
+	(bytes[at + 3] * 2 ** 24);
 /** a packet's stream id (u32 LE after its type) */
-const streamOf = (packet: Uint8Array) =>
-	packet[1] | (packet[2] << 8) | (packet[3] << 16) | (packet[4] * 2 ** 24);
+const streamOf = (packet: Uint8Array) => u32(packet, 1);
 
 /** a promise that settles when its `settle` is called, and when the first packet was read */
 function firstPacket() {
@@ -709,16 +714,12 @@ function pipeOf(
 			// closed already
 		}
 	};
-	const take = (packet: Uint8Array) => {
+	/** a packet, in a buffer of its own (handed to epoxy as it is) */
+	const take = (packet: Uint8Array<ArrayBuffer>) => {
 		if (ended) return;
 		if (packet[0] === CLOSE && packet.length >= 5) udp.delete(streamOf(packet));
 		stats.received++;
-		reading.enqueue(
-			packet.buffer.slice(
-				packet.byteOffset,
-				packet.byteOffset + packet.byteLength,
-			) as ArrayBuffer,
-		);
+		reading.enqueue(packet.buffer);
 		got();
 	};
 	const read = new ReadableStream<ArrayBuffer>({
@@ -731,32 +732,57 @@ function pipeOf(
 	});
 	session.closed.then(end, end);
 
-	// the stream: packets after their u32 LE lengths, cut wherever QUIC cut
+	// the stream: packets after their u32 LE lengths, cut wherever QUIC cut.
+	// Each byte is copied once, into its packet's own buffer, however many
+	// chunks the packet spans: a relay's DATA packet is up to 128 KiB and a
+	// reader that keeps up gets a chunk of a few QUIC packets, so gathering
+	// the chunks into one buffer that grew with each copied the packet over
+	// again for every chunk of it.
 	void (async () => {
 		const reader = stream.readable.getReader();
-		let held = new Uint8Array(0);
+		/** a prefix cut between chunks */
+		const prefix = new Uint8Array(4);
+		let prefixed = 0;
+		/** the packet being filled, when it spans chunks */
+		let packet: Uint8Array<ArrayBuffer> | null = null;
+		let filled = 0;
 		try {
 			for (;;) {
 				const { value, done } = await reader.read();
 				if (done) break;
-				let buffer: Uint8Array = value;
-				if (held.length) {
-					buffer = new Uint8Array(held.length + value.length);
-					buffer.set(held);
-					buffer.set(value, held.length);
-				}
 				let at = 0;
-				while (buffer.length - at >= 4) {
-					const length =
-						buffer[at] |
-						(buffer[at + 1] << 8) |
-						(buffer[at + 2] << 16) |
-						(buffer[at + 3] * 2 ** 24);
-					if (buffer.length - at - 4 < length) break;
-					take(buffer.subarray(at + 4, at + 4 + length));
-					at += 4 + length;
+				while (at < value.length) {
+					if (!packet) {
+						let length: number;
+						if (!prefixed && value.length - at >= 4) {
+							length = u32(value, at);
+							at += 4;
+						} else {
+							const n = Math.min(4 - prefixed, value.length - at);
+							prefix.set(value.subarray(at, at + n), prefixed);
+							prefixed += n;
+							at += n;
+							if (prefixed < 4) break;
+							prefixed = 0;
+							length = u32(prefix, 0);
+						}
+						if (value.length - at >= length) {
+							take(value.slice(at, at + length));
+							at += length;
+							continue;
+						}
+						packet = new Uint8Array(length);
+						filled = 0;
+					}
+					const n = Math.min(packet.length - filled, value.length - at);
+					packet.set(value.subarray(at, at + n), filled);
+					filled += n;
+					at += n;
+					if (filled === packet.length) {
+						take(packet);
+						packet = null;
+					}
 				}
-				held = buffer.slice(at);
 			}
 		} catch {
 			// the session or the stream failed
@@ -764,7 +790,7 @@ function pipeOf(
 		end();
 	})();
 
-	// datagrams: one whole packet each (UDP DATA)
+	// datagrams: one whole packet each (UDP DATA), each a chunk of its own
 	void (async () => {
 		const reader = session.datagrams.readable.getReader();
 		try {
@@ -773,7 +799,11 @@ function pipeOf(
 				if (done) break;
 				if (value.length < 5) continue;
 				stats.datagramsReceived++;
-				take(value);
+				take(
+					value.byteOffset === 0 && value.byteLength === value.buffer.byteLength
+						? (value as Uint8Array<ArrayBuffer>)
+						: value.slice(),
+				);
 			}
 		} catch {
 			// the session ended

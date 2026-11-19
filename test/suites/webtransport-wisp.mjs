@@ -39,8 +39,9 @@
 // machine (HOLYWISP_WT, or ~/src/holyWisp/build/release/holywisp), a page
 // and a UDP echo go through it too; skipped otherwise (CI).
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createSocket } from 'node:dgram';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createServer as createHttps } from 'node:https';
 import { createServer } from 'node:net';
 import { homedir } from 'node:os';
@@ -512,6 +513,42 @@ for (const host of ['worker', 'page']) {
 			refused.slice(0, 4).every((r) => r === 'failed') &&
 				refused.slice(4).every((r) => r === 'status 200'),
 			JSON.stringify(refused),
+		);
+		// the relay cuts the Wisp stream into chunks of a few bytes and of
+		// more than a packet, so length prefixes and packets span chunks:
+		// two bodies of a megabyte read back byte for byte
+		relay.pieces = [1, 3, 2, 4, 7, 1500, 5, 70000, 16384];
+		const cut = await page.evaluate(
+			async ({ url, timeoutMs }) => {
+				const hung = new Promise((resolve) =>
+					setTimeout(() => resolve('HUNG'), timeoutMs * 3),
+				);
+				const digest = (i) =>
+					window.controller.transport
+						.request(new URL(`${url}?cut${i}`), 'GET', null, [], undefined)
+						.then(async (r) => {
+							const body = await new Response(r.body).arrayBuffer();
+							const hash = await crypto.subtle.digest('SHA-256', body);
+							return `${r.status} ${body.byteLength} ${[...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
+						});
+				return Promise.race([Promise.all([digest(1), digest(2)]), hung]).catch(
+					(error) => String(error).slice(0, 200),
+				);
+			},
+			{
+				url: `${FIXTURE}pages/prewrite-big.html.bin`,
+				timeoutMs: TIMEOUT_MS,
+			},
+		);
+		relay.pieces = [];
+		const big = readFileSync(
+			new URL('../pages/prewrite-big.html.bin', import.meta.url),
+		);
+		const want = `200 ${big.length} ${createHash('sha256').update(big).digest('hex')}`;
+		ok(
+			`${host}: bodies whose packets and length prefixes the relay cut across chunks read back byte for byte`,
+			Array.isArray(cut) && cut.every((r) => r === want),
+			JSON.stringify({ cut, want }),
 		);
 		if (host === 'page') {
 			const udp = delta(before);

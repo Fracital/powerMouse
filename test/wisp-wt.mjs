@@ -33,7 +33,10 @@
 // way, evenly (at 0.1 every tenth; `datagramsLost` counts them), the stream
 // untouched; `udpLost`
 // loses every UDP DATA, by datagram or on the stream, either way (a path
-// that stops carrying one UDP flow while the session lives).
+// that stops carrying one UDP flow while the session lives). `pieces` (byte
+// counts, used in turn) cuts what goes to a client on the Wisp stream into
+// writes of those sizes, each on a later turn, so a packet and its length
+// prefix reach the client across chunks of their own.
 import { createSocket } from 'node:dgram';
 import { createServer } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -94,6 +97,7 @@ export async function startWispWebTransport(upstream) {
 		datagramMax: 0,
 		datagramLoss: 0,
 		udpLost: false,
+		pieces: [],
 		/** the leaf's SPKI hash, for --ignore-certificate-errors-spki-list (a dial without hashes) */
 		get spki() {
 			return server.spki;
@@ -226,8 +230,27 @@ export async function startWispWebTransport(upstream) {
 		const framed = Buffer.alloc(4 + packet.length);
 		framed.writeUInt32LE(packet.length, 0);
 		packet.copy(framed, 4);
-		if (session.stream) api.write(session.stream, framed);
+		if (session.stream) write(session, framed);
 		else session.out.push(framed);
+	}
+
+	/** bytes on the session's Wisp stream, whole or in `pieces` */
+	function write(session, framed) {
+		if (!relay.pieces.length && !session.cut.length)
+			return api.write(session.stream, framed);
+		session.cut.push(framed);
+		if (session.cut.length > 1) return;
+		const next = () => {
+			const head = session.cut[0];
+			if (!head || !sessions.has(session.id)) return;
+			const sizes = relay.pieces.length ? relay.pieces : [head.length];
+			const n = sizes[session.piece++ % sizes.length];
+			api.write(session.stream, head.subarray(0, n));
+			if (n >= head.length) session.cut.shift();
+			else session.cut[0] = head.subarray(n);
+			if (session.cut.length) setImmediate(next);
+		};
+		setImmediate(next);
 	}
 
 	/** a packet from the client to the wisp server */
@@ -266,6 +289,8 @@ export async function startWispWebTransport(upstream) {
 				udp: new Set(),
 				queued: [],
 				out: [],
+				cut: [],
+				piece: 0,
 			};
 			sessions.set(id, session);
 			ws.binaryType = 'nodebuffer';
@@ -285,7 +310,7 @@ export async function startWispWebTransport(upstream) {
 			// the first stream is the Wisp stream; holyWisp takes no other
 			if (!session || session.stream) return api.reset(id, 0);
 			session.stream = id;
-			for (const framed of session.out.splice(0)) api.write(id, framed);
+			for (const framed of session.out.splice(0)) write(session, framed);
 		} else if (kind === 'data') {
 			const session = [...sessions.values()].find((s) => s.stream === id);
 			if (!session) return;
