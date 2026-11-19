@@ -774,6 +774,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		for (const entry of entries)
 			this.#runHook(entry, element, propertyAttribute(property));
 	}
+	// (The long loops of this apply run in closures of their own. apply is
+	// one call of some 12 KB of bytecode, and a loop in it that ran long
+	// enough had V8 compile all of it to baseline code, some 70 KB in each
+	// compile of the bundle; with DOMAttributes.apply's, the same, a frame of
+	// the frame-cost suite paid about 23 KB for it. A loop in a closure has
+	// the closure alone compiled.)
 	apply() {
 		const moduleClient = this.client;
 		const realm = moduleClient.global;
@@ -1648,23 +1654,26 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 			shadowRootPrototype,
 			characterDataPrototype,
 		];
-		for (const proto of [
+		const dropMembers = (protos: (object | undefined)[]) => {
+			for (const proto of protos) {
+				if (!proto) continue;
+				const insertions = insertionPrototypes.includes(proto);
+				for (const name of Reflect.ownKeys(proto))
+					if (
+						typeof name === 'string' &&
+						name.includes('HTML') &&
+						!HOOKED_MARKUP_MEMBERS.has(name) &&
+						!(insertions && MARKUP_INSERTION.test(name))
+					)
+						Reflect.deleteProperty(proto, name);
+			}
+		};
+		dropMembers([
 			...insertionPrototypes,
 			global.DocumentFragment.prototype,
 			global.Document.prototype,
 			global.Node.prototype,
-		]) {
-			if (!proto) continue;
-			const insertions = insertionPrototypes.includes(proto);
-			for (const name of Reflect.ownKeys(proto))
-				if (
-					typeof name === 'string' &&
-					name.includes('HTML') &&
-					!HOOKED_MARKUP_MEMBERS.has(name) &&
-					!(insertions && MARKUP_INSERTION.test(name))
-				)
-					Reflect.deleteProperty(proto, name);
-		}
+		]);
 		// appendHTML(Unsafe), prependHTML, beforeHTML, afterHTML,
 		// replaceWithHTML and their stream* forms: the Unsafe ones as
 		// setHTMLUnsafe (the markup rewritten, then the browser's parser), the
@@ -1710,19 +1719,22 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				? Reflect.apply(own, that, args)
 				: markupParts().member(target, that as Node, args);
 		};
-		for (const proto of insertionPrototypes) {
-			if (proto)
-				for (const name of Reflect.ownKeys(proto)) {
-					if (typeof name !== 'string' || !MARKUP_INSERTION.test(name))
-						continue;
-					const native = (proto as unknown as Record<string, unknown>)[name];
-					if (typeof native !== 'function') continue;
-					markupContext.natives.push(native as Fn);
-					(proto as unknown as Record<string, unknown>)[name] =
-						proxyModule.wrapFunction(native as Fn, markupCall);
-				}
-			markupContext.ends.push(markupContext.natives.length);
-		}
+		const wrapInsertions = () => {
+			for (const proto of insertionPrototypes) {
+				if (proto)
+					for (const name of Reflect.ownKeys(proto)) {
+						if (typeof name !== 'string' || !MARKUP_INSERTION.test(name))
+							continue;
+						const native = (proto as unknown as Record<string, unknown>)[name];
+						if (typeof native !== 'function') continue;
+						markupContext.natives.push(native as Fn);
+						(proto as unknown as Record<string, unknown>)[name] =
+							proxyModule.wrapFunction(native as Fn, markupCall);
+					}
+				markupContext.ends.push(markupContext.natives.length);
+			}
+		};
+		wrapInsertions();
 		// setHTMLUnsafe: the markup rewritten (its scripts too, with
 		// runScripts), then the browser's parser (../markupSinks.ts)
 		const setHTMLUnsafeCall = (target: Fn, that: unknown, args: unknown[]) => {
@@ -2637,15 +2649,18 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 		const trackProperties = new Map<ElementCtor, Set<string>>();
 
-		for (const entry of this.hooks) {
-			if (isAttributeHook(entry.hook)) continue;
+		const track = (hooks: typeof this.hooks) => {
+			for (const entry of hooks) {
+				if (isAttributeHook(entry.hook)) continue;
 
-			if (!trackProperties.has(entry.hook[0])) {
-				trackProperties.set(entry.hook[0], new Set());
+				if (!trackProperties.has(entry.hook[0])) {
+					trackProperties.set(entry.hook[0], new Set());
+				}
+
+				trackProperties.get(entry.hook[0])!.add(entry.hook[1]);
 			}
-
-			trackProperties.get(entry.hook[0])!.add(entry.hook[1]);
-		}
+		};
+		track(this.hooks);
 
 		// each hooked property's interface, name and native getter, by its native
 		// getter and setter, for the one getter and one setter call every
@@ -2792,8 +2807,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				set: proxyModule.wrapFunction(descriptor.set!, propertySet),
 			});
 		};
-		for (const [ctor, properties] of trackProperties)
-			for (const property of properties) wrapProperty(ctor, property);
+		const wrapProperties = () => {
+			for (const [ctor, properties] of trackProperties)
+				for (const property of properties) wrapProperty(ctor, property);
+		};
+		wrapProperties();
 		this.#wrapProperty = wrapProperty;
 	}
 }
