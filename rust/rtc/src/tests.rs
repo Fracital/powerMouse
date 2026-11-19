@@ -2,10 +2,49 @@
 //! back to back, every record through the exports. Run by
 //! `deploy/rust/test.sh -p rtc` (natively, in the toolchain container).
 
-use std::sync::Mutex;
+use std::cell::Cell;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use super::*;
+
+thread_local! {
+	/// the time the stack reads while a test holds a `Clock`
+	static CLOCK: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+/// The time the stack reads (lib.rs, `now`): the `Clock`'s while a test
+/// holds one, else the machine's. In whole microseconds either way, as the
+/// worker's clock reads (src/rtc/wasi.ts): on a clock in nanoseconds the
+/// timeout, rounded up from whole microseconds, can wake the connection
+/// up to 1 us before what it was for.
+pub(super) fn now() -> Instant {
+	static ORIGIN: LazyLock<Instant> = LazyLock::new(Instant::now);
+	CLOCK.get().unwrap_or_else(|| *ORIGIN + Duration::from_micros(ORIGIN.elapsed().as_micros() as u64))
+}
+
+/// A clock of the test's own for the stack, from the time it is made until
+/// it is dropped: it moves only when it is set, so how late a loaded
+/// machine runs the test moves nothing. Connections it drove are not
+/// driven after it (their time would go back).
+struct Clock;
+
+impl Clock {
+	fn hold() -> Clock {
+		CLOCK.set(Some(now()));
+		Clock
+	}
+
+	fn set(&self, at: Instant) {
+		CLOCK.set(Some(at));
+	}
+}
+
+impl Drop for Clock {
+	fn drop(&mut self) {
+		CLOCK.set(None);
+	}
+}
 
 /// a self-signed ECDSA P-256 certificate (DER) and its PKCS#8 key, made for
 /// these tests alone: the host makes its own with WebCrypto
@@ -162,7 +201,7 @@ impl Peer {
 				OUT_EVENT => self.events.push(owned(&bytes[1..])),
 				OUT_TIMEOUT => {
 					let ms = u32::from_be_bytes(bytes[1..5].try_into().unwrap());
-					self.wake = Some(Instant::now() + Duration::from_millis(ms as u64));
+					self.wake = Some(now() + Duration::from_millis(ms as u64));
 				}
 				OUT_RESULT => result = Some(owned(&bytes[1..])),
 				OUT_CHANNEL_DATA => self.messages.push(bytes[4..].to_vec()),
@@ -1377,38 +1416,50 @@ fn a_remote_nothing_answers_at_is_checked_as_chromes_is() {
 	assert!(last <= 15000, "the last check {last} ms after the first");
 }
 
+/// what a browser holds a timer for 0 ms that a timer's callback sets
+/// (HTML's timer nesting clamp)
+const NESTED_ZERO_TIMER: Duration = Duration::from_millis(4);
+
 /// Carry datagrams between the two for `ms` (none when `lost`), calling
-/// each only when its timeout says, as the worker does; the checks `a`
-/// sent to `b`, at their times, and how often `a`, called when it asked,
-/// had nothing due yet and asked to be called again at once. What one
-/// sends while it takes in the other's crosses at once, as the worker
-/// sends it: a datagram runs a turn that is due when it comes (the
-/// stack's receive is a timeout too), so a check the peer's check came
-/// just ahead of goes out then, not at the next wake.
+/// each only when its timeout says, as the worker does, on a `Clock` that
+/// goes from one wake to the next; the checks `a` sent to `b`, at their
+/// times, and how often `a`, called when it asked, had nothing due yet
+/// and asked to be called again at once (which the worker's timer then
+/// holds 4 ms). What one sends while it takes in the other's crosses at
+/// once, as the worker sends it: a datagram runs a turn that is due when
+/// it comes (the stack's receive is a timeout too), so a check the peer's
+/// check came just ahead of goes out then, not at the next wake.
 fn run_on_timeouts(a: &mut Peer, b: &mut Peer, ms: u64, lost: bool) -> (Vec<Instant>, usize) {
-	let end = Instant::now() + Duration::from_millis(ms);
+	let clock = Clock::hold();
+	let end = now() + Duration::from_millis(ms);
 	let mut checks = Vec::new();
 	let mut early = 0;
-	while Instant::now() < end {
-		let due = [a.wake, b.wake].into_iter().flatten().min().unwrap_or(end).min(end);
-		if let Some(wait) = due.checked_duration_since(Instant::now()) {
-			std::thread::sleep(wait);
+	loop {
+		let due = [a.wake, b.wake].into_iter().flatten().min().unwrap_or(end).max(now());
+		if due >= end {
+			break;
 		}
-		let now = Instant::now();
-		if a.wake.is_some_and(|at| at <= now) {
+		clock.set(due);
+		if a.wake.is_some_and(|at| at <= due) {
 			let outbox = a.outbox.len();
 			a.tick();
-			if a.outbox.len() == outbox && a.wake.is_some_and(|at| at <= Instant::now()) {
-				early += 1;
+			if a.wake.is_some_and(|at| at <= due) {
+				if a.outbox.len() == outbox {
+					early += 1;
+				}
+				a.wake = Some(due + NESTED_ZERO_TIMER);
 			}
 		}
-		if b.wake.is_some_and(|at| at <= now) {
+		if b.wake.is_some_and(|at| at <= due) {
 			b.tick();
+			if b.wake.is_some_and(|at| at <= due) {
+				b.wake = Some(due + NESTED_ZERO_TIMER);
+			}
 		}
 		while !a.outbox.is_empty() || !b.outbox.is_empty() {
 			for datagram in std::mem::take(&mut a.outbox) {
 				if is_check(&datagram) && destination(&datagram) == b.address {
-					checks.push(Instant::now());
+					checks.push(due);
 				}
 				if !lost {
 					b.receive(&datagram);

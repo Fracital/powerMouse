@@ -57,8 +57,20 @@ mod media;
 mod size;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+use tests::now;
 
 use media::MediaSlot;
+
+/// The time. The tests can run a connection on a clock of their own
+/// (tests.rs, `Clock`), so that a test of when things go out reads the
+/// times the connection asked to be called at, not when a loaded machine
+/// got round to calling it.
+#[cfg(not(test))]
+#[inline(always)]
+fn now() -> Instant {
+	Instant::now()
+}
 
 /// bytes from a hex string
 fn unhex(text: &str) -> Option<Vec<u8>> {
@@ -687,7 +699,7 @@ impl Conn {
 					// rounded up: a timer that wakes before `at` finds nothing
 					// due and is set again for 0 ms, which a browser holds for
 					// 4 ms once timers nest (HTML's timer nesting clamp)
-					let ms = at.saturating_duration_since(Instant::now()).as_micros().div_ceil(1000);
+					let ms = at.saturating_duration_since(now()).as_micros().div_ceil(1000);
 					let mut record = vec![OUT_TIMEOUT];
 					record.extend_from_slice(&(ms.min(u32::MAX as u128) as u32).to_be_bytes());
 					self.push(record);
@@ -1004,7 +1016,7 @@ impl Conn {
 			// since 1970.
 			"rtcp" => {
 				let mid = self.media_mid(fields)?;
-				let now = Instant::now();
+				let now = now();
 				let micros = |time: Duration| (time.as_micros() as u64).to_string();
 				let age = |at: Instant| micros(now.saturating_duration_since(at));
 				let rtt = |rtt: Option<Duration>| rtt.map(micros).unwrap_or_default();
@@ -1418,7 +1430,7 @@ pub unsafe extern "C" fn c(ptr: *mut u8, len: usize) -> i32 {
 		}
 		_ => return -1,
 	}
-	let mut rtc = builder.build(Instant::now());
+	let mut rtc = builder.build(now());
 	// the host's own address for its sockets: every stream is one pair of
 	// this and a remote (docs/webrtc-over-wisp.md, section 5)
 	let mut hosts = Vec::new();
@@ -1484,7 +1496,7 @@ pub unsafe extern "C" fn i(id: i32, kind: u32, ptr: *mut u8, len: usize) -> i32 
 	let Some(conn) = conn(id) else {
 		return STATUS_NO_CONNECTION;
 	};
-	let now = Instant::now();
+	let now = now();
 	let mut status = match kind {
 		IN_DATAGRAM => match parse_datagram(&bytes) {
 			Some((proto, source, destination, payload)) => {
@@ -1573,7 +1585,7 @@ pub unsafe extern "C" fn t(id: i32) -> i32 {
 	let Some(conn) = conn(id) else {
 		return STATUS_NO_CONNECTION;
 	};
-	if let Err(error) = conn.rtc.handle_input(Input::Timeout(Instant::now())) {
+	if let Err(error) = conn.rtc.handle_input(Input::Timeout(now())) {
 		let message = error.to_string();
 		conn.event(&[("ev", "error"), ("message", &message)]);
 	}
