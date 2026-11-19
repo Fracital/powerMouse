@@ -708,8 +708,15 @@ that is up already (<n> s, <n> transports on it)` (with its lanes and
   opens a carrier of its own), and a carrier no rider rides is closed
   after 30 s. Only the carrier is shared: epoxy, its connection pool, its
   TLS and stomp-h3's thread stay in each page's transport worker, since a
-  SharedWorkerGlobalScope has no `Worker` for stomp-h3's thread (and the
-  parallel TLS workers to come). What rides the carrier is limited there
+  SharedWorkerGlobalScope has no `Worker` for stomp-h3's thread or the
+  transport's shards (`src/transport/ShardedTransport.ts`). A sharded
+  transport's workers ride the relay too, each a rider of its own that the
+  host gives the transport worker for it (`ride`, the host renumbering its
+  streams as any rider's): their packets go between the host and each
+  worker without the transport worker in between, and the relay still sees
+  one connection. A rider and a client that both say `batches` send the
+  packets of a task in one message (one message from the host's process
+  costs it about 0.1 ms whatever it carries). What rides the carrier is limited there
   as Chrome limits a profile: every realm asks the host's socket pool (six
   requests at a time to an HTTP/1 group, 256 in all) and its WebSocket
   endpoint lock, so nine tabs cannot put more on the one wisp connection

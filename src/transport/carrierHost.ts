@@ -26,12 +26,16 @@
 //
 // Only the carrier is shared, and the limits on what rides it: epoxy, its
 // connections and its TLS stay in each page's transport worker, which can
-// start workers of its own (stomp-h3's thread; a SharedWorkerGlobalScope
-// has no Worker), and each asks the host's socket pool and WebSocket gate
-// (socketPool.ts), as Chrome's tabs ask their profile's one pool. The relay
-// limits a connection's streams (holyWisp: 2048, fewer while it throttles,
-// past which a CONNECT is closed with 0x49); a refused CONNECT is held here
-// and sent again as streams close, its rider told nothing.
+// start workers of its own (stomp-h3's thread, its transport's shards; a
+// SharedWorkerGlobalScope has no Worker), and each asks the host's socket
+// pool and WebSocket gate (socketPool.ts), as Chrome's tabs ask their
+// profile's one pool. The relay limits a connection's streams (holyWisp:
+// 2048, fewer while it throttles, past which a CONNECT is closed with
+// 0x49); a refused CONNECT is held here and sent again as streams close,
+// its rider told nothing. A rider can be given more of the same relay
+// (`ride`), one for each shard of a transport, whose worker then speaks to
+// the host directly; a rider and its client that both say `batches` send
+// the packets of one task in one message (packetBatch.ts).
 import {
 	ALIVE,
 	ALIVE_MS,
@@ -47,6 +51,7 @@ import {
 	type ClientBound,
 	type HostBound,
 } from './carrierClient';
+import { PacketBatch } from './packetBatch';
 import { RpcHelper } from './rpc';
 import {
 	SocketPool,
@@ -124,6 +129,14 @@ const own = (bytes: Uint8Array): ArrayBuffer => bytes.slice().buffer;
 const short = (error: unknown) =>
 	String((error as Error)?.message ?? error).slice(0, 160);
 
+/**
+ * the most a rider's message carries: the relay's packets each come in a
+ * task of their own, and gather only while the host is busy
+ * (PacketBatch's `idle`); a message posted to another process costs about
+ * as much whatever it carries
+ */
+const RIDER_MESSAGE_MAX = 256 * 1024;
+
 /** a page's control port */
 interface Client {
 	port: MessagePort;
@@ -181,16 +194,35 @@ class Rider {
 	#held: ArrayBuffer[] = [];
 	#heldBytes = 0;
 	#drained: (() => void) | null = null;
+	/** its client takes a task's packets in one message */
+	#batch: PacketBatch | null;
 	constructor(
 		readonly relay: Relay,
 		readonly port: MessagePort,
 		readonly client: Client,
+		batches: boolean,
 		credit = false,
 	) {
 		this.#credit = credit;
+		this.#batch = batches
+			? new PacketBatch(
+					(packets) => {
+						if (this.ended) return;
+						try {
+							this.port.postMessage(packets, packets);
+						} catch {
+							// its realm is gone
+						}
+					},
+					{ idle: true, max: RIDER_MESSAGE_MAX },
+				)
+			: null;
 		port.addEventListener('message', (event) => {
 			const data = event.data as unknown;
 			if (data instanceof ArrayBuffer) relay.fromRider(this, data);
+			else if (Array.isArray(data))
+				for (const packet of data as ArrayBuffer[])
+					relay.fromRider(this, packet);
 			else if (data === END) relay.drop(this);
 			else if (typeof (data as { took?: unknown } | null)?.took === 'number')
 				this.#took((data as { took: number }).took);
@@ -223,6 +255,10 @@ class Rider {
 		this.#drained = null;
 		resolve?.();
 	}
+	/** what was gathered for it, posted now */
+	flush() {
+		if (!this.ended) this.#batch?.flush();
+	}
 	send(buffer: ArrayBuffer) {
 		if (this.ended) return;
 		if (
@@ -237,6 +273,10 @@ class Rider {
 	}
 	#post(buffer: ArrayBuffer) {
 		this.#out += buffer.byteLength;
+		if (this.#batch) {
+			this.#batch.push(buffer);
+			return;
+		}
 		try {
 			this.port.postMessage(buffer, [buffer]);
 		} catch {
@@ -249,6 +289,7 @@ class Rider {
 		// what waits for it goes first: the end comes after its packets
 		for (const buffer of this.#held.splice(0)) this.#post(buffer);
 		this.#heldBytes = 0;
+		this.#batch?.flush();
 		this.ended = true;
 		this.#wake();
 		try {
@@ -260,9 +301,13 @@ class Rider {
 	}
 }
 
+let relays = 0;
+
 /** a relay's carrier and the riders on it */
 class Relay {
 	dead = false;
+	/** its name to its clients (CarrierGiven.relay) */
+	readonly id = ++relays;
 	#chooser: Chooser;
 	#ready: Promise<OpenCarrier | null>;
 	#open: OpenCarrier | null = null;
@@ -353,8 +398,12 @@ class Relay {
 		return known === 'quiet' && !this.dead;
 	}
 
-	/** a rider for `client`, or why there is none */
-	async rider(client: Client, credit = false): Promise<CarrierGiven> {
+	/** a rider for `client` (`batches`: it takes a task's packets at once; `credit`: it says what it took), or why there is none */
+	async rider(
+		client: Client,
+		batches: boolean,
+		credit = false,
+	): Promise<CarrierGiven> {
 		const opened = this.#open === null;
 		const open = await this.#ready;
 		if (!open || this.dead)
@@ -366,7 +415,7 @@ class Relay {
 				riders: 0,
 			};
 		const channel = new MessageChannel();
-		const rider = new Rider(this, channel.port1, client, credit);
+		const rider = new Rider(this, channel.port1, client, batches, credit);
 		this.#riders.add(rider);
 		client.riders.add(rider);
 		clearTimeout(this.#idle);
@@ -380,6 +429,8 @@ class Relay {
 			upMs: opened ? 0 : Math.round(performance.now() - this.#upAt),
 			riders: this.#riders.size,
 			credit,
+			relay: this.id,
+			batches: true,
 			...(open.stats && {
 				lanes: open.stats.lanes,
 				serverStream: open.stats.server,
@@ -687,6 +738,7 @@ function alive(port: MessagePort) {
 /** In the SharedWorker: serve carriers to every page of the origin that connects */
 export function serveCarriers(scope: SharedWorkerGlobalScope): void {
 	const relays = new Map<string, Relay>();
+	const byId = new Map<number, Relay>();
 	const clients = new Map<RpcHelper<HostBound, ClientBound>, Client>();
 	// Chrome's limits, for every realm of the origin as for a profile
 	// (socketPool.ts): one pool, and one WebSocket endpoint lock (the 255
@@ -747,12 +799,34 @@ export function serveCarriers(scope: SharedWorkerGlobalScope): void {
 						else {
 							const made: Relay = new Relay(ask, () => {
 								if (relays.get(key) === made) relays.delete(key);
+								byId.delete(made.id);
 							});
 							relay = made;
 							relays.set(key, made);
+							byId.set(made.id, made);
 						}
 					}
-					const given = await relay.rider(client, ask.credit === true);
+					const given = await relay.rider(
+						client,
+						ask.batches === true,
+						ask.credit === true,
+					);
+					return [given, given.port ? [given.port] : []];
+				},
+				ride: async ({ relay: id, batches }) => {
+					const relay = byId.get(id);
+					if (!relay || relay.dead)
+						return [
+							{
+								port: null,
+								why: 'the relay is gone',
+								ms: 0,
+								upMs: 0,
+								riders: 0,
+							},
+							[],
+						];
+					const given = await relay.rider(client, batches);
 					return [given, given.port ? [given.port] : []];
 				},
 				hold: async (fields) => {

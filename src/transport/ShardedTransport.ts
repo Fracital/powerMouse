@@ -8,21 +8,28 @@
 // Here the transport worker runs its transport as shards. Shard 0 is an
 // instance of the module in the transport worker itself, as a transport
 // that runs alone; the others are instances in workers the transport worker
-// starts from its own script (shardWorker.ts), started only when shard 0
-// and every other one running cannot keep up, and closed again when they
-// have carried nothing for IDLE_MS. A start, and browsing that one thread
-// keeps up with, pays for no worker.
+// starts from its own script (shardWorker.ts), started only when a thread
+// cannot keep up with more downloads than there are shards to take them,
+// and closed again when they have carried nothing for IDLE_MS. A start,
+// and browsing that one thread keeps up with, pays for no worker.
 //
 // - A shard is saturated when its thread runs a task posted now later than
 //   a few milliseconds on average while Wisp packets come to it
 //   (shards.ts Saturation): the packets wait behind one another.
 // - A group is busy while it has a response body in flight that has been
 //   read for BUSY_MS or more: a download, not a page's images.
-// - The next shard starts when there are more busy groups than shards
-//   running and no shard running could take one: each is saturated (shard
-//   0 counts as such while it relays the others' packets). Up to the
-//   descriptor's `shards`, as many at once as there are busy groups beyond
-//   one a shard.
+// - While a thread cannot keep up and there are more busy groups than
+//   shards to take them, one each (shard 0 takes none while a worker runs,
+//   below), as many workers start at once as there are busy groups beyond
+//   that, up to the descriptor's `shards`: a worker just started takes one,
+//   and waiting for each to be saturated in turn took a round of moves for
+//   each.
+// - Shard 0 is the last place for a group while a worker runs: every
+//   worker's response bodies go through this thread to the service worker,
+//   and over a split connection (below) every packet of theirs too. A
+//   download on it ran slowest of four (the thread 0.85 of a core where
+//   each worker's was 0.5), and the four took 1.1 to 1.25 Gbit/s where four
+//   workers beside it took 1.5 to 1.6.
 //
 // Each request, WebSocket and raw stream goes to one shard by its group
 // (its network partition and its origin, or the stream's host and port).
@@ -35,20 +42,33 @@
 // open; a group moves only when it has nothing in flight and its shard is
 // saturated while another is not, and its next request goes to the other
 // one (a new connection there, its TLS handshaken again; the old shard's
-// idle connections close on their own). What decides how many connections
-// a group has and when a request may go (socketPool.ts), the fields sent
-// (fitHeaders), a body resumed by range (resumableBody.ts) and the order
-// requests go in stay with serveTransport in the transport worker, before
-// any request reaches a shard, as for a transport that runs alone.
+// idle connections close on their own). An HTTP/1 group whose download
+// holds a connection on a saturated shard moves too: its next request
+// opens a connection of its own anyway (socketPool.ts), and opens it where
+// a thread keeps up, while the download goes on where it began. An HTTP/2
+// group's next request is a stream of the connection it has, and stays: a
+// second connection beside it is not one Chrome opens. A response under
+// way cannot change threads, so downloads that each run as one response,
+// started together, stay where they began (`start` spreads them from the
+// first request). What decides how many connections a group has and when
+// a request may go (socketPool.ts), the fields sent (fitHeaders), a body
+// resumed by range (resumableBody.ts) and the order requests go in stay
+// with serveTransport in the transport worker, before any request reaches
+// a shard, as for a transport that runs alone.
 //
-// The Wisp connection stays one, the transport's: what CarrierTransport
-// hands its transport (the carrier, or the carrier host's rider), or a
-// WebSocket opened here as epoxy would open its own, is split into a lane
+// The Wisp connection stays one, the transport's. When CarrierTransport
+// hands its transport a rider of the carrier host's (carrierHost.ts), shard
+// 0's epoxy rides it, and each worker is given a rider of the same relay
+// of its own (`ride`), whose port it speaks Wisp on: the host renumbers
+// every rider's streams into the relay connection's, and a worker's
+// packets go to and from the host without this thread in between.
+// Otherwise (the carrier is the transport's own, or a WebSocket opened here
+// as epoxy would open its own) the connection is split here into a lane
 // per shard (wispSplit.ts), each lane's epoxy shaking hands with the
-// relay's one greeting and its streams renumbered into the connection's.
-// The relay sees one session, one handshake and one stream id space.
-// Shard 0's packets are handed over in this realm; a worker's cross as
-// transferred buffers, those of one task in one message.
+// relay's one greeting and its streams renumbered into the connection's,
+// and this thread relays the workers' packets. Either way the relay sees one session, one handshake and one
+// stream id space; packets that cross to a worker go as transferred
+// buffers, those of one task in one message.
 import type {
 	ProxyTransport,
 	RawHeaders,
@@ -90,10 +110,29 @@ interface Placed {
 	since: number;
 	/** when it last moved to another shard */
 	moved: number;
+	/** HTTP/2 or HTTP/3, as its last response said (null: none said yet) */
+	multiplexed: boolean | null;
 }
 
-/** the most shards a transport is given when its descriptor names no number */
-const AUTO_MAX = 4;
+const MULTIPLEXED = new Set(['2', '3']);
+
+/** the wisp connection the shards ride */
+type Connection =
+	/** split here into a lane each */
+	| { split: WispSplit }
+	/** a carrier host's rider, shard 0's, and more of its relay for the workers */
+	| {
+			split?: undefined;
+			first: WispPipe;
+			more: () => Promise<MessagePort | null>;
+			/** shard 0's epoxy took `first` */
+			taken: boolean;
+	  };
+
+const lost = () => new Error(`${CARRIER_LOST}: the wisp connection ended`);
+
+/** the most workers a transport starts when its descriptor names no number (half the cores, at most this) */
+const AUTO_WORKERS = 4;
 /** groups kept on their shard; past it the one used longest ago is forgotten */
 const GROUPS_KEPT = 4096;
 /** a group used within this long counts against its shard when a new one is placed (ms) */
@@ -125,7 +164,7 @@ export function shardCount(asked: unknown): { max: number; start: number } {
 	const max =
 		given(asked) ??
 		given((asked as { max?: unknown } | null)?.max) ??
-		Math.max(1, Math.min(AUTO_MAX, Math.floor(cores / 2)));
+		1 + Math.min(AUTO_WORKERS, Math.floor(cores / 2));
 	const start = Math.min(
 		max,
 		given((asked as { start?: unknown } | null)?.start) ?? 1,
@@ -237,10 +276,22 @@ class Remote {
 		}, IDLE_MS);
 	}
 
-	close() {
+	/** closed (`instance`: whose riders it lets go of first, so the carrier host closes their streams) */
+	close(instance?: number) {
 		clearTimeout(this.#idle);
-		this.#rpc.abort('the transport shard closed');
-		this.#worker.terminate();
+		const end = () => {
+			this.#rpc.abort('the transport shard closed');
+			this.#worker.terminate();
+		};
+		if (instance === undefined) return end();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		void Promise.race([
+			this.call('cut', instance).catch(() => {}),
+			new Promise<void>((resolve) => (timer = setTimeout(resolve, 1000))),
+		]).then(() => {
+			clearTimeout(timer);
+			end();
+		});
 	}
 }
 
@@ -361,8 +412,10 @@ class ShardedTransport implements ProxyTransport {
 	/** by shard: what the relay sent its lanes lately */
 	#meters: Meter[];
 	#starting: Promise<void> | null = null;
-	#split: WispSplit | null = null;
-	#opening: Promise<WispSplit> | null = null;
+	#connection: Connection | null = null;
+	#opening: Promise<Connection> | null = null;
+	/** the wisp connection ended (a rider's, told here; a split's says so itself) */
+	#ended = false;
 	/** by group: where it runs, the one used longest ago first */
 	#groups = new Map<string, Placed>();
 	/** a shard's worker failed to start: no more are started */
@@ -385,11 +438,17 @@ class ShardedTransport implements ProxyTransport {
 				...given,
 				...(ech_cache !== undefined && { ech_cache }),
 				wisp: async (v2: boolean) => {
-					const split = await this.#splitter(v2);
-					const pipe = split.attachLocal(this.#meters[0], () =>
-						this.#localLoad.busy(),
-					);
-					return { read: pipe.read, write: promptSink(pipe.write) };
+					const connection = await this.#connect(v2);
+					if (connection.split) {
+						const pipe = connection.split.attachLocal(this.#meters[0], () =>
+							this.#localLoad.busy(),
+						);
+						return { read: pipe.read, write: promptSink(pipe.write) };
+					}
+					// asked again: its rider ended, and with it the transport
+					if (connection.taken) throw lost();
+					connection.taken = true;
+					return { read: connection.first.read, write: connection.first.write };
 				},
 			},
 			...rest,
@@ -444,9 +503,14 @@ class ShardedTransport implements ProxyTransport {
 
 	/** a port that is one more lane of the wisp connection, for a shard's worker */
 	async lane(v2: boolean, index: number): Promise<MessagePort> {
-		const split = await this.#splitter(v2);
+		const connection = await this.#connect(v2);
+		if (!connection.split) {
+			const port = await connection.more();
+			if (!port) throw lost();
+			return port;
+		}
 		const channel = new MessageChannel();
-		split.attach(channel.port1, this.#meters[index]);
+		connection.split.attach(channel.port1, this.#meters[index]);
 		return channel.port2;
 	}
 
@@ -460,13 +524,11 @@ class ShardedTransport implements ProxyTransport {
 	 * WebSocket under it would answer and those GETs would fail
 	 * (wisp-reconnect suite).
 	 */
-	#splitter(v2: boolean): Promise<WispSplit> {
-		if (this.#split?.ended)
-			return Promise.reject(
-				new Error(`${CARRIER_LOST}: the wisp connection ended`),
-			);
-		if (this.#split) return Promise.resolve(this.#split);
-		this.#opening ??= (async () => {
+	#connect(v2: boolean): Promise<Connection> {
+		if (this.#ended || this.#connection?.split?.ended)
+			return Promise.reject(lost());
+		if (this.#connection) return Promise.resolve(this.#connection);
+		this.#opening ??= (async (): Promise<Connection> => {
 			let pipe: WispPipe;
 			if (typeof this.#wisp === 'function')
 				pipe = await (this.#wisp as (v2: boolean) => Promise<WispPipe>)(v2);
@@ -477,12 +539,70 @@ class ShardedTransport implements ProxyTransport {
 				if (v2) protocols.push(crypto.randomUUID());
 				pipe = await wispSocketPipe(String(this.#wisp), protocols);
 			}
-			this.#split = new WispSplit(pipe);
-			return this.#split;
+			this.#connection = pipe.more
+				? { first: this.#watched(pipe), more: pipe.more, taken: false }
+				: { split: new WispSplit(pipe) };
+			if (transportLog.on)
+				logTransport(
+					pipe.more
+						? "transport shards ride the carrier host's relay, a rider each"
+						: 'transport shards split the wisp connection here, a lane each',
+				);
+			return this.#connection;
 		})().finally(() => {
 			this.#opening = null;
 		});
 		return this.#opening;
+	}
+
+	/**
+	 * Shard 0's rider, read through: its packets are counted (its meter, and
+	 * its Saturation), and its end is the wisp connection's, which every
+	 * worker's rider is let go with (the host may be gone, and not tell them)
+	 */
+	#watched(pipe: WispPipe): WispPipe {
+		const reader = pipe.read.getReader();
+		const read = new ReadableStream<ArrayBuffer>(
+			{
+				pull: async (controller) => {
+					let got: ReadableStreamReadResult<ArrayBuffer>;
+					try {
+						got = await reader.read();
+					} catch (error) {
+						this.#lost();
+						controller.error(error);
+						return;
+					}
+					if (got.done) {
+						this.#lost();
+						controller.close();
+						return;
+					}
+					this.#localLoad.busy();
+					this.#meters[0].add(got.value.byteLength);
+					controller.enqueue(got.value);
+				},
+				cancel: (reason) => {
+					this.#lost();
+					return reader.cancel(reason);
+				},
+			},
+			{ highWaterMark: 0 },
+		);
+		return { read, write: pipe.write };
+	}
+
+	/** the wisp connection ended: every worker's rider of it ends too */
+	#lost() {
+		if (this.#ended) return;
+		this.#ended = true;
+		for (const remote of this.#remotes)
+			remote?.call('cut', this.#instance).catch(() => {});
+	}
+
+	/** whether shard 0 relays for the workers (their bodies, and over a split connection their packets): while `running` shards run, workers among them */
+	#relaying(running: number): boolean {
+		return running > 1;
 	}
 
 	/** whether shard `index` is running (shard 0 always is) */
@@ -520,18 +640,17 @@ class ShardedTransport implements ProxyTransport {
 			.map((_, index) => index)
 			.filter((index) => this.#running(index));
 		if (running.length >= this.#plan.count) return;
-		// one that keeps up can take a group (shard 0 not, while it relays)
-		const relaying = running.length > 1;
-		if (
-			running.some(
-				(index) => !(index === 0 && relaying) && !this.#saturated(index),
-			)
-		)
-			return;
+		// a thread that cannot keep up, with more busy groups than shards to
+		// take them, one each (shard 0 takes none once it relays): as many
+		// more as there are busy groups beyond that, at once. A shard just
+		// started takes one; waiting for each to be saturated in turn would
+		// take a round of moves for each
+		if (!running.some((index) => this.#saturated(index))) return;
 		const busy = this.#busy(Date.now()).reduce((sum, n) => sum + n, 0);
-		// as many as there are busy groups beyond one a shard, at once: each
-		// waiting for the next to be saturated would take a round of moves
-		for (let more = busy - running.length; more > 0; more--) {
+		const takers = this.#relaying(running.length + 1)
+			? running.length - 1
+			: running.length;
+		for (let more = busy - takers; more > 0; more--) {
 			const index = this.#remotes.findIndex(
 				(remote, index) => index > 0 && remote === null,
 			);
@@ -569,8 +688,11 @@ class ShardedTransport implements ProxyTransport {
 		this.#remotes[index] = null;
 		for (const [group, placed] of this.#groups)
 			if (placed.shard === index) this.#groups.delete(group);
-		for (const port of remote.lanes) this.#split?.detach(port);
-		remote.close();
+		const split = this.#connection?.split;
+		if (split) {
+			for (const port of remote.lanes) split.detach(port);
+			remote.close();
+		} else remote.close(this.#instance);
 		if (transportLog.on)
 			logTransport(`transport shard ${index + 1} closes (idle)`);
 	}
@@ -594,16 +716,39 @@ class ShardedTransport implements ProxyTransport {
 			) {
 				const to = this.#best(now, held.shard);
 				const busy = this.#busy(now);
+				const relays =
+					held.shard === 0 &&
+					this.#relaying(this.#remotes.filter(Boolean).length + 1);
 				if (
 					to !== held.shard &&
 					!this.#saturated(to) &&
-					// shard 0 is also the thread that relays every other shard's packets:
-					// a group alone there goes too
-					busy[to] < busy[held.shard] + (held.shard === 0 ? 1 : 0)
+					// shard 0 relaying for every other shard: a group
+					// alone there goes too
+					busy[to] < busy[held.shard] + (relays ? 1 : 0)
 				) {
 					if (transportLog.on)
 						logTransport(
 							`${this.#named(group)} moves from transport shard ${held.shard + 1} to ${to + 1}`,
+						);
+					held.shard = to;
+					held.moved = now;
+				}
+			} else if (
+				// HTTP/1, a download holding a connection on a shard that cannot
+				// keep up: this request opens a connection of its own, on a
+				// shard that keeps up (the download stays where it is)
+				held.flying > 0 &&
+				held.multiplexed === false &&
+				held.bodies > 0 &&
+				now - held.since >= BUSY_MS &&
+				now - held.moved > MOVE_MS &&
+				this.#saturated(held.shard)
+			) {
+				const to = this.#best(now, held.shard);
+				if (to !== held.shard && !this.#saturated(to)) {
+					if (transportLog.on)
+						logTransport(
+							`${this.#named(group)} opens its next connection on transport shard ${to + 1} (shard ${held.shard + 1} cannot keep up)`,
 						);
 					held.shard = to;
 					held.moved = now;
@@ -619,6 +764,7 @@ class ShardedTransport implements ProxyTransport {
 			bodies: 0,
 			since: 0,
 			moved: 0,
+			multiplexed: null,
 		};
 		this.#groups.set(group, placed);
 		if (this.#groups.size > GROUPS_KEPT)
@@ -656,9 +802,10 @@ class ShardedTransport implements ProxyTransport {
 			if (now - used < LATELY_MS) lately[shard]++;
 		}
 		// the first of these that differs decides
-		// shard 0's thread relays the other shards' packets: while they run,
-		// it is the last place for a group
-		const relays = running.map((index) => (index === 0 ? 1 : 0));
+		// shard 0's thread relays for the other shards (their bodies, and
+		// over a split connection their packets): while they run, it is the last place for a group
+		const relaying = this.#relaying(running.length);
+		const relays = running.map((index) => (index === 0 && relaying ? 1 : 0));
 		const order = (a: number, b: number) =>
 			relays[a] - relays[b] ||
 			saturated[a] - saturated[b] ||
@@ -731,51 +878,74 @@ class ShardedTransport implements ProxyTransport {
 			groupOf(remote.protocol, remote.host, headers),
 		);
 		try {
-			if (!ticket.remote) {
-				const response = await this.#local.request(
-					remote,
-					method,
-					body,
-					headers,
-					signal,
-				);
-				if (!(response.body instanceof ReadableStream)) {
-					ticket.done();
-					return response;
-				}
-				return {
-					...response,
-					body: watched(
-						response.body as ReadableStream<Uint8Array>,
-						this.#reading(ticket),
-					),
-				};
-			}
-			const sent = crossable(body);
-			const response = await ticket.remote.call(
-				'request',
-				{
-					instance: this.#instance,
-					remote: remote.href,
-					method,
-					body: sent,
-					headers,
-				},
-				transferablesOf(sent),
+			const response = await this.#request(
+				ticket,
+				remote,
+				method,
+				body,
+				headers,
+				signal,
 			);
-			const { body: got, ...rest } = response;
-			if (!isPortBody(got)) {
-				ticket.done();
-				return response as TransferrableResponse;
-			}
-			return {
-				...rest,
-				body: receiveBody(got, this.#reading(ticket)),
-			} as TransferrableResponse;
+			const version = (response as { httpVersion?: unknown }).httpVersion;
+			if (typeof version === 'string' && version)
+				ticket.placed.multiplexed = MULTIPLEXED.has(version);
+			return response;
 		} catch (error) {
 			ticket.done();
 			throw error;
 		}
+	}
+
+	/** the request on `ticket`'s shard, its body watched */
+	async #request(
+		ticket: Ticket,
+		remote: URL,
+		method: string,
+		body: BodyInit | null,
+		headers: RawHeaders,
+		signal: AbortSignal | undefined,
+	): Promise<TransferrableResponse> {
+		if (!ticket.remote) {
+			const response = await this.#local.request(
+				remote,
+				method,
+				body,
+				headers,
+				signal,
+			);
+			if (!(response.body instanceof ReadableStream)) {
+				ticket.done();
+				return response;
+			}
+			return {
+				...response,
+				body: watched(
+					response.body as ReadableStream<Uint8Array>,
+					this.#reading(ticket),
+				),
+			};
+		}
+		const sent = crossable(body);
+		const response = await ticket.remote.call(
+			'request',
+			{
+				instance: this.#instance,
+				remote: remote.href,
+				method,
+				body: sent,
+				headers,
+			},
+			transferablesOf(sent),
+		);
+		const { body: got, ...rest } = response;
+		if (!isPortBody(got)) {
+			ticket.done();
+			return response as TransferrableResponse;
+		}
+		return {
+			...rest,
+			body: receiveBody(got, this.#reading(ticket)),
+		} as TransferrableResponse;
 	}
 
 	connect(

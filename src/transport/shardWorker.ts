@@ -3,7 +3,9 @@
 // runs an instance of it for each transport the transport worker makes. Its
 // TLS, HTTP and Wisp work for the origins given to it runs on this thread;
 // its Wisp connection is a lane of the transport worker's one
-// (wispSplit.ts). Nothing here queues, decorates or rewrites a request: the
+// (wispSplit.ts), or a rider of the carrier host's relay that the transport
+// worker asked the host for (carrierHost.ts), its packets to and from the
+// host directly. Nothing here queues, decorates or rewrites a request: the
 // transport worker did that before the request came (serveTransport.ts),
 // as for its own transport.
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
@@ -34,6 +36,8 @@ interface Made {
 	transport: ProxyTransport;
 	/** whether its epoxy has asked for its wisp connection */
 	opened: boolean;
+	/** its wisp connections not ended, to end them (ShardBound.cut) */
+	lanes: Set<() => void>;
 	/** epoxy's DNS-over-HTTPS endpoint for ECH, warmed with the connection */
 	resolver?: string;
 }
@@ -65,14 +69,17 @@ export function serveShard(scope: DedicatedWorkerGlobalScope) {
 					/* @vite-ignore */ module
 				)) as { default: new (...args: unknown[]) => ProxyTransport };
 				const [first, ...rest] = options as [Record<string, unknown>];
-				const entry = { opened: false } as Made;
+				const entry = { opened: false, lanes: new Set() } as Made;
 				// epoxy's function transport: a lane of the transport worker's
-				// wisp connection each time it asks for one
+				// wisp connection each time it asks for one (or a rider of the
+				// carrier host's, the transport worker's relay)
 				const wisp = async (v2: boolean) => {
 					entry.opened = true;
 					const pipe = lanePipe(await rpc.call('lane', { instance, v2 }), () =>
 						saturation.busy(),
 					);
+					// one a carrier: the set holds the few a transport's life has
+					entry.lanes.add(pipe.end);
 					return { read: pipe.read, write: promptSink(pipe.write) };
 				};
 				// epoxy's ECH answers kept as the transport worker's are (echCache.ts)
@@ -96,6 +103,12 @@ export function serveShard(scope: DedicatedWorkerGlobalScope) {
 			},
 			drop: async (instance) => {
 				made.delete(instance);
+			},
+			cut: async (instance) => {
+				const entry = made.get(instance);
+				if (!entry) return;
+				for (const end of [...entry.lanes]) end();
+				entry.lanes.clear();
 			},
 			warm: async (instance) => {
 				const entry = get(instance);

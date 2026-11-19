@@ -5,9 +5,11 @@
 //
 // Each epoxy's connection is a lane: a MessagePort to the shard's worker
 // that carries the packets each way (each its own ArrayBuffer, transferred,
-// those of one task in one message), and 'end' when either side is done;
-// or, for the epoxy of this realm (the transport worker's own shard), a pipe
-// whose packets are handed over as they come.
+// those of one task in one message: packetBatch.ts), and 'end' when either
+// side is done; or, for the epoxy of this realm (the transport worker's own
+// shard), a pipe whose packets are handed over as they come. A shard's end
+// of a lane (lanePipe) speaks to a carrier host's rider as well
+// (carrierHost.ts), which ends with `{ end }` and may send a packet alone.
 //
 // - The handshake is the first lane's: the relay's packets up to and with
 //   stream 0's CONTINUE (Wisp v2's INFO, any extension's packets, then the
@@ -32,14 +34,19 @@
 // - When the relay's connection ends, every lane ends, as each epoxy's own
 //   connection would.
 
+import { ownBuffer, PacketBatch } from './packetBatch';
+
 /** what epoxy's function transport gives back (EpoxyWispTransportResult) */
 export interface WispPipe {
 	read: ReadableStream<ArrayBuffer>;
 	write: WritableStream<Uint8Array>;
+	/** wispWebTransport.ts WispPipe.more */
+	more?: () => Promise<MessagePort | null>;
 }
 
-/** what crosses a lane's port, each way */
-export type LaneMessage = ArrayBuffer[] | 'end';
+/** what crosses a lane's port, each way (a rider's: a packet alone too, and the host's `{ end }`) */
+export type LaneMessage =
+	ArrayBuffer[] | ArrayBuffer | 'end' | { end: 'lost' | 'closed' };
 
 const CONNECT = 0x01;
 const CONTINUE = 0x03;
@@ -47,8 +54,6 @@ const CLOSE = 0x04;
 const INFO = 0x05;
 /** a CLOSE's reason: the client closed the stream (Wisp's 0x02, voluntary) */
 const VOLUNTARY = 0x02;
-/** what one message to a lane carries at most before it goes */
-const MESSAGE_MAX = 1024 * 1024;
 
 const streamOf = (packet: Uint8Array) =>
 	packet[1] | (packet[2] << 8) | (packet[3] << 16) | (packet[4] * 2 ** 24);
@@ -94,38 +99,23 @@ interface Outlet {
 /** a lane over a port to a shard's worker: the packets of one task in one message */
 class PortOutlet implements Outlet {
 	readonly port: MessagePort;
-	#batch: ArrayBuffer[] = [];
-	#bytes = 0;
-	#scheduled = false;
+	#batch: PacketBatch;
 	#done = false;
 
 	constructor(port: MessagePort) {
 		this.port = port;
+		this.#batch = new PacketBatch((batch) => {
+			if (!this.#done) port.postMessage(batch satisfies LaneMessage, batch);
+		});
 	}
 
 	send(packet: ArrayBuffer) {
-		if (this.#done) return;
-		this.#batch.push(packet);
-		this.#bytes += packet.byteLength;
-		if (this.#bytes >= MESSAGE_MAX) this.flush();
-		else if (!this.#scheduled) {
-			this.#scheduled = true;
-			setTimeout(() => this.flush(), 0);
-		}
-	}
-
-	flush() {
-		this.#scheduled = false;
-		if (this.#done || !this.#batch.length) return;
-		const batch = this.#batch;
-		this.#batch = [];
-		this.#bytes = 0;
-		this.port.postMessage(batch satisfies LaneMessage, batch);
+		if (!this.#done) this.#batch.push(packet);
 	}
 
 	end() {
 		if (this.#done) return;
-		this.flush();
+		this.#batch.flush();
 		this.#done = true;
 		this.port.postMessage('end' satisfies LaneMessage);
 		this.port.close();
@@ -417,25 +407,20 @@ export class WispSplit {
 /**
  * The shard's end of a lane, as epoxy's function transport takes it: each
  * read one packet, each write one packet. The writes of one task go in one
- * message.
+ * message. `end` lets it go from this side.
  */
-export function lanePipe(port: MessagePort, arrived?: () => void): WispPipe {
+export function lanePipe(
+	port: MessagePort,
+	arrived?: () => void,
+): WispPipe & { end(): void } {
 	let reading!: ReadableStreamDefaultController<ArrayBuffer>;
 	let done = false;
-	let batch: ArrayBuffer[] = [];
-	let bytes = 0;
-	let scheduled = false;
-	const flush = () => {
-		scheduled = false;
-		if (done || !batch.length) return;
-		const sent = batch;
-		batch = [];
-		bytes = 0;
-		port.postMessage(sent satisfies LaneMessage, sent);
-	};
+	const batch = new PacketBatch((sent) => {
+		if (!done) port.postMessage(sent satisfies LaneMessage, sent);
+	});
 	const finish = () => {
 		if (done) return;
-		flush();
+		batch.flush();
 		done = true;
 		port.postMessage('end' satisfies LaneMessage);
 		port.close();
@@ -453,8 +438,15 @@ export function lanePipe(port: MessagePort, arrived?: () => void): WispPipe {
 	});
 	port.onmessage = ({ data }: MessageEvent<LaneMessage>) => {
 		if (done) return;
-		if (data === 'end') {
+		if (data instanceof ArrayBuffer) {
+			arrived?.();
+			reading.enqueue(data);
+			return;
+		}
+		if (!Array.isArray(data)) {
+			// the lane's end, or the carrier host's (its relay's carrier ended)
 			done = true;
+			batch.clear();
 			port.close();
 			try {
 				reading.close();
@@ -472,22 +464,10 @@ export function lanePipe(port: MessagePort, arrived?: () => void): WispPipe {
 			if (done) throw new Error('the Wisp connection ended');
 			// a view of a larger buffer (epoxy's memory) is copied; a packet
 			// that owns its buffer is transferred
-			const own =
-				packet.byteOffset === 0 &&
-				packet.byteLength === packet.buffer.byteLength &&
-				packet.buffer instanceof ArrayBuffer
-					? packet
-					: packet.slice();
-			batch.push(own.buffer as ArrayBuffer);
-			bytes += own.byteLength;
-			if (bytes >= MESSAGE_MAX) flush();
-			else if (!scheduled) {
-				scheduled = true;
-				setTimeout(flush, 0);
-			}
+			batch.push(ownBuffer(packet));
 		},
 		close: finish,
 		abort: finish,
 	});
-	return { read, write };
+	return { read, write, end: finish };
 }
