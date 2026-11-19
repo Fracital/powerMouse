@@ -229,8 +229,18 @@ With the epoxy option `ech_dns` (a DNS-over-HTTPS endpoint; the demo sets
 EpoxyTransport asks it for each name's HTTPS record through epoxy itself
 while the wisp stream to the name opens, and epoxy-tls offers real ECH with
 the config (rustls's ECH client, HPKE on ring, the X25519 suites
-BoringSSL's client offers). Answers are kept for the record's TTL; a
-connection waits at most 1.5 s for one and otherwise sends GREASE.
+BoringSSL's client offers). A connection waits at most 1.5 s for the answer
+and otherwise sends GREASE. Answers are kept as Chrome's host cache keeps
+them: by network partition (Chrome 157 asks a name again for each
+top-level site, and again for a frame cross-site to its top, measured
+against a DNS server that counted its queries in a network namespace), for
+the answer's TTL and never longer (the smallest TTL of the records taken; a
+name with no record for its SOA's negative TTL, RFC 2308; not at all
+without an SOA; a day at most). STomp keeps them in IndexedDB too
+(`stomp-ech`, `src/transport/echCache.ts`, epoxy's `ech_cache`), so a
+reload and a new tab do not ask the DoH server again for a name they were
+told of, and empties that store when the network changes, as Chrome
+empties its host cache (`ech-cache` suite).
 
 Sites that report it, natively and through the demo (`ech.mjs`):
 
