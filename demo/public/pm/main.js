@@ -185,6 +185,18 @@ const transportDebugOn = () => {
 		return false;
 	}
 };
+// how many threads the transport's TLS runs on (TransportDescriptor.shards):
+// ?shards=1 runs it in the transport worker alone, for one visit;
+// ?shardstart=N starts N of them at once
+const SHARD_START = new URLSearchParams(location.search).get('shardstart');
+const SHARDS = new URLSearchParams(location.search).has('shards')
+	? SHARD_START
+		? {
+				max: Number(new URLSearchParams(location.search).get('shards')),
+				start: Number(SHARD_START),
+			}
+		: Number(new URLSearchParams(location.search).get('shards'))
+	: null;
 const WEB_TRANSPORT = new URLSearchParams(location.search).has('wt')
 	? new URLSearchParams(location.search).get('wt') !== '0' &&
 		(CFG.webTransport || true)
@@ -221,6 +233,7 @@ const transports = {
 				: true,
 		}),
 		...(WEB_TRANSPORT && { webTransport: WEB_TRANSPORT }),
+		...(SHARDS !== null && { shards: SHARDS }),
 	}),
 	libcurl: () => ({
 		module: `${proxyBase()}${transportPath('libcurl')}index.mjs`,
@@ -1019,6 +1032,10 @@ async function startController(name) {
 			transport: transports[name](),
 			directory: DIRECTORY,
 			codec: 'xor',
+			// ?carrierhost=0: this visit's transport opens its own carrier
+			...(new URLSearchParams(location.search).get('carrierhost') === '0' && {
+				carrierHost: false,
+			}),
 			...(SITE_POOL && { sitePool: { origins: SITE_POOL } }),
 			cache: CACHE,
 			serviceWorkers: SERVICE_WORKERS,

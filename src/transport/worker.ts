@@ -22,6 +22,8 @@ import {
 import { connectionLost } from './RevivingTransport';
 import { RpcHelper } from './rpc';
 import serveTransport, { warmTransport } from './serveTransport';
+import { SHARD_WORKER_NAME } from './shards';
+import { serveShard } from './shardWorker';
 import { transportLog, watchTransportNotes } from './transportLog';
 import { watchCarrier } from './wispWebTransport';
 
@@ -47,10 +49,11 @@ function resolverOf(descriptor: TransportModule): string | undefined {
 	return typeof options?.ech_dns === 'string' ? options.ech_dns : undefined;
 }
 
-// the transport worker starts itself again for stomp-h3 (http3/h3Thread.ts),
-// and the host page starts it as the carrier host (carrierHost.ts), a
-// SharedWorker
+// the transport worker starts itself again for stomp-h3 (http3/h3Thread.ts)
+// and for each shard of its transport (ShardedTransport.ts), and the host
+// page starts it as the carrier host (carrierHost.ts), a SharedWorker
 if (self.name === H3_WORKER_NAME) serveH3(self);
+else if (self.name.startsWith(`${SHARD_WORKER_NAME} `)) serveShard(self);
 else if (self.name === CARRIER_HOST_NAME)
 	serveCarriers(self as unknown as SharedWorkerGlobalScope);
 else transportWorker();

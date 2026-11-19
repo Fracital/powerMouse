@@ -23,6 +23,7 @@ import type {
 	RequestInfo,
 	RequestRule,
 } from '../transport/messages';
+import type { ShardsOption } from '../transport/ShardedTransport';
 import type { TransportNote } from '../transport/transportLog';
 import type {
 	CarrierInfo,
@@ -68,6 +69,18 @@ export interface TransportDescriptor {
 	 * says which. docs/webtransport.md.
 	 */
 	webTransport?: boolean | WispWebTransportOptions;
+	/**
+	 * How many threads the transport's TLS may run on (`host: 'worker'`,
+	 * epoxy with a `wisp` URL). The transport worker runs the module itself,
+	 * and starts more instances in workers of its own only when it cannot
+	 * keep up with downloads from more servers than it has threads, each
+	 * origin's connections on one of them, over the one wisp connection;
+	 * a worker that carried nothing for 30 s closes. A number is the most
+	 * threads (1: the transport worker alone, as before); `{ max, start }`
+	 * says how many run from the start too. Default: half the cores the
+	 * browser reports, at most 4, one from the start.
+	 */
+	shards?: ShardsOption;
 }
 
 export interface ControllerFrameInit {

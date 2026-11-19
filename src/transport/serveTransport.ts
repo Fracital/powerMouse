@@ -307,8 +307,20 @@ export function warmTransport(
 		.finally(() => initializing.delete(transport));
 	pending.catch(() => {});
 	initializing.set(transport, pending);
-	if (resolver)
+	// a sharded transport's shards warm it each with its own wisp connection
+	if (resolver && !warmsResolver(transport))
 		pending.then(() => warmResolver(transport, resolver)).catch(() => {});
+}
+
+/** whether a layer under the wrappers warms epoxy's resolver itself (ShardedTransport) */
+function warmsResolver(transport: ProxyTransport): boolean {
+	let current: unknown = transport;
+	for (let depth = 0; depth < 6 && current; depth++) {
+		if ((current as { warmsResolver?: unknown }).warmsResolver === true)
+			return true;
+		current = (current as { base?: unknown }).base;
+	}
+	return false;
 }
 
 /** the transport under the wrappers (Http3Transport, RevivingTransport): epoxy's own */
