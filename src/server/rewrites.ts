@@ -1531,9 +1531,9 @@ function genericForward(
 		// a page's own request from an opaque origin (a document the page
 		// sandboxed without allow-same-origin), or a navigation such a
 		// document started
+		const opaqueAsked = serverRequest.headers.get(OPAQUE_HEADER);
 		const opaque =
-			(serverRequest.mode !== 'navigate' &&
-				serverRequest.headers.has(OPAQUE_HEADER)) ||
+			(serverRequest.mode !== 'navigate' && opaqueAsked !== null) ||
 			initiated?.origin === 'null';
 		requestHeaders.delete(OPAQUE_HEADER);
 		// an XMLHttpRequest with upload listeners (the CORS-preflight flag)
@@ -2317,6 +2317,17 @@ function genericForward(
 		const credentialsIncluded = serverRequest.credentials === 'include';
 		if (previousHop?.tainted && requestHeaders.has('origin'))
 			requestHeaders.set('origin', 'null');
+		// FedCM's client metadata, which Chrome sends as from an opaque origin
+		// (Sec-Fetch-Site: cross-site) yet with the relying party's Origin
+		// (measured in Chrome 157, the fedcm suite); only the inject's own
+		// grant names a webidentity load
+		if (
+			load?.destination === 'webidentity' &&
+			opaqueAsked === 'rp' &&
+			initiator &&
+			!previousHop
+		)
+			requestHeaders.set('origin', initiator.origin);
 		/** a request the browser would refuse: a network error to the page */
 		const refuse = (error: string, method = serverRequest.method) => {
 			rewriter.log?.({

@@ -265,6 +265,9 @@ function start(init: SiteAgentInit, port: MessagePort, host: string) {
 			// unused: the agent's transport is the hub's
 			transport: { module: 'about:blank' },
 			agent,
+			// the hub's page draws a FedCM account chooser over the frame
+			identityRelay: (request, port) =>
+				hub.call('identityChooser', { request, port }, [port]),
 			// the hub's host asks the user about a ceremony of a site this
 			// slot shows; the slot's worker makes and signs (docs/passkeys.md)
 			...(init.passkeys

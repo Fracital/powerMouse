@@ -78,6 +78,13 @@ export interface Config {
 	 */
 	passkeys?: PasskeysConfig;
 	/**
+	 * @internal For tests (StompController's `fedcmTesting`): a proxied
+	 * page's FedCM request ends at once, without the random delay Chrome
+	 * gives a failure before its UI and the three seconds it holds a token,
+	 * as Chrome does under DevTools' FedCm.enable({ disableRejectionDelay })
+	 */
+	fedcmTesting?: boolean;
+	/**
 	 * The rewriter is the Rust wasm core module in `assets/`
 	 * (docs/rust-plan.md): the service worker, the rewrite workers and the
 	 * inject all rewrite in it. Always `'wasm'`; a thread that holds no module

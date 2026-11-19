@@ -9,7 +9,10 @@ import { helperNames } from '../helperNames';
 import type { HookErrorInfo } from '../hooks';
 import type { PasskeyAnswer, PasskeyPrompt } from '../passkeys/types';
 import { constructTransport, resolveHttp3 } from '../transport/construct';
-import type { RequestInfo } from '../transport/messages';
+import type {
+	IdentityChooserRequest,
+	RequestInfo,
+} from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
 import { shareGeometry } from './geometry';
 import {
@@ -235,6 +238,15 @@ if (window === window.parent || !origins.length) {
 							rpc.call('hookError', info);
 						},
 						...(init.errorPage ? { errorPage: init.errorPage } : {}),
+						...(init.fedcmTesting ? { fedcmTesting: true } : {}),
+						// the host's page draws a site's FedCM account chooser
+						identityRelay: async (
+							request: IdentityChooserRequest,
+							port: MessagePort,
+						): Promise<number> =>
+							(await rpc.call('identityChooser', { request, port }, [
+								port,
+							])) as number,
 						// a site's permission request the host asks the user about
 						...(init.permissionPrompt
 							? {

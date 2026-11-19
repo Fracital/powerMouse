@@ -233,6 +233,8 @@ export function startFixture(port = 8084) {
 	const fedcmWellKnown = [];
 	// the well-known file a host answers with, set by /pages/fedcm-wellknown
 	const fedcmWellKnownSet = new Map();
+	// every FedCM endpoint request, in order (/pages/fedcm-log?all)
+	const fedcmAll = [];
 	const server = createServer(async (req, res) => {
 		const path = new URL(req.url, 'http://x').pathname;
 		if (sop(req, res)) return;
@@ -528,6 +530,18 @@ export function startFixture(port = 8084) {
 		// the IdP session cookie.
 		if (path.startsWith('/pages/fedcm-')) {
 			const query = new URL(req.url, 'http://x').searchParams;
+			if (path !== '/pages/fedcm-log')
+				fedcmAll.push({
+					at: Date.now(),
+					url: req.url,
+					dest: req.headers['sec-fetch-dest'] ?? null,
+					mode: req.headers['sec-fetch-mode'] ?? null,
+					site: req.headers['sec-fetch-site'] ?? null,
+					origin: req.headers.origin ?? null,
+					referer: req.headers.referer ?? null,
+					cookie: req.headers.cookie ?? null,
+					accept: req.headers.accept ?? null,
+				});
 			const run = query.get('k') ?? '';
 			const origin = req.headers.origin;
 			const step = path.replace('/pages/fedcm-', '').replace('.json', '');
@@ -578,7 +592,11 @@ export function startFixture(port = 8084) {
 			// /pages/fedcm-log?k=<run>: what each step saw
 			if (path === '/pages/fedcm-log')
 				return sendJSON(
-					query.has('wk') ? fedcmWellKnown : (fedcmLog.get(run) ?? {}),
+					query.has('wk')
+						? fedcmWellKnown
+						: query.has('all')
+							? fedcmAll
+							: (fedcmLog.get(run) ?? {}),
 				);
 			// /pages/fedcm-wellknown?host=<host>&body=<json>|status=<n>: what
 			// that host's well-known file answers from now on (neither: the
@@ -613,7 +631,7 @@ export function startFixture(port = 8084) {
 			if (path === '/pages/fedcm-config.json') {
 				record('config');
 				const passed = new URLSearchParams();
-				for (const name of ['k', 'nocors', 'multi', 'status', 'error'])
+				for (const name of ['k', 'nocors', 'multi', 'fresh', 'status', 'error'])
 					if (query.has(name)) passed.set(name, query.get(name));
 				const q = passed.size ? `?${passed}` : '';
 				// `xo=<origin>`: the endpoints `xstep` names (comma-separated,
@@ -634,13 +652,14 @@ export function startFixture(port = 8084) {
 				// one returning account (approved_clients holds the RP), so a flow
 				// that allows it auto-selects without a chooser; `?multi` adds a
 				// second, unapproved account to force the chooser
+				// (`?fresh`: the account is not one of the RP's, a new user)
 				const accounts = [
 					{
 						id: 'acct-1',
 						name: 'Ada Proxy',
 						email: 'ada@idp.test',
 						given_name: 'Ada',
-						approved_clients: ['stomp-rp'],
+						...(query.has('fresh') ? {} : { approved_clients: ['stomp-rp'] }),
 					},
 				];
 				if (query.has('multi'))

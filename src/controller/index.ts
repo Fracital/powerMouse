@@ -50,6 +50,7 @@ import { constructTransport, resolveHttp3 } from '../transport/construct';
 import { jarChanged, serveJar } from '../transport/jarServer';
 import type {
 	HostReload,
+	IdentityChooserRequest,
 	PermissionRequestInfo,
 	RequestRule,
 	SiteArrival,
@@ -101,6 +102,7 @@ import serveTransport from '../transport/serveTransport';
 import TransportWorker from '../transport/TransportWorker';
 import { BUILD, coreModuleKey } from '../version';
 import { compileModule } from '../wasm/module';
+import { drawAccountChooser } from './accountChooser';
 import { ClientFrames } from './clientFrames';
 import { GeometryWatch, shareGeometry } from './geometry';
 import {
@@ -281,6 +283,18 @@ export interface ControllerInit {
 	 * browser that holds no passkey for the site.
 	 */
 	passkeys?: PasskeysInit;
+	/**
+	 * @internal For tests: a proxied page's FedCM request ends without the
+	 * random delay Chrome gives a failure before its UI and without the
+	 * three seconds it holds a token, as Chrome does under DevTools'
+	 * FedCm.enable({ disableRejectionDelay: true })
+	 */
+	fedcmTesting?: boolean;
+	/** @internal the controller frame (a slot's agent) hands a FedCM account chooser to its host's page, which draws it */
+	identityRelay?: (
+		request: IdentityChooserRequest,
+		port: MessagePort,
+	) => Promise<number>;
 	/** @internal the controller frame hands every prompt to its host, which asks the user */
 	passkeyRelay?: {
 		config: PasskeysConfig;
@@ -1166,6 +1180,7 @@ export class StompController extends EventTarget {
 			...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 			...(init.membrane === false ? { membrane: false } : {}),
 			...(passkeys ? { passkeys } : {}),
+			...(init.fedcmTesting === true ? { fedcmTesting: true } : {}),
 			...(init.serviceWorkers === false ? { serviceWorkers: false } : {}),
 			// the rewriter is wasm-only (the core module); every thread uses it
 			rewriter: 'wasm',
@@ -1376,6 +1391,8 @@ export class StompController extends EventTarget {
 					passkeys: () => this.config.passkeys,
 					passkeyPrompt: (request, port) => this.#passkeyPrompt(request, port),
 					passkeyFocused: (client) => this.#passkeyFocused(client),
+					identityChooser: (request, port) =>
+						this.#identityChooser(request, port),
 					setTransport: (descriptor) =>
 						this.setTransport(descriptor as TransportDescriptor),
 				},
@@ -2175,6 +2192,10 @@ export class StompController extends EventTarget {
 					await this.#passkeyFocused(client),
 					[],
 				],
+				identityChooser: async ({ request, port }) => [
+					await this.#identityChooser(request, port),
+					[],
+				],
 				crossSite: async (args) => [
 					this.#init.agent
 						? await this.#init.agent.crossSite(args)
@@ -2440,6 +2461,24 @@ export class StompController extends EventTarget {
 		const frame = this.#clients.frame(client);
 		return (
 			!!frame && document.hasFocus() && document.activeElement === frame.element
+		);
+	}
+	/**
+	 * a site's FedCM account chooser (its worker's, or a slot's worker's
+	 * through its agent), drawn in this page over the document's frame, or
+	 * by the host's page of the controller frame (src/controller/
+	 * accountChooser.ts)
+	 */
+	#identityChooser(
+		request: IdentityChooserRequest,
+		port: MessagePort,
+	): Promise<number> {
+		const relay = this.#init.identityRelay;
+		if (relay) return relay(request, port);
+		return drawAccountChooser(
+			this.#clients.frame(request.client)?.element ?? null,
+			request,
+			port,
 		);
 	}
 	/** a site asks for a permission: the host's onPermissionRequest answers */

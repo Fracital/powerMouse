@@ -29,6 +29,7 @@ import type {
 } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
 import { BUILD } from '../version';
+import { drawAccountChooser } from './accountChooser';
 import { ClientFrames } from './clientFrames';
 import { GeometryWatch } from './geometry';
 import {
@@ -174,6 +175,8 @@ export interface RemoteControllerInit {
 	 * user about every passkey made and every sign-in.
 	 */
 	passkeys?: RemotePasskeysInit;
+	/** @internal For tests (see StompController's fedcmTesting) */
+	fedcmTesting?: boolean;
 }
 
 /** a proxied site's passkey ceremony the host is asked about (RemoteControllerInit.passkeys) */
@@ -372,6 +375,15 @@ export class RemoteController extends EventTarget {
 						[],
 					];
 				},
+				// a site's FedCM account chooser, drawn here over its frame
+				identityChooser: async ({ request, port }) => [
+					await drawAccountChooser(
+						this.#clients.frame(request.client)?.element ?? null,
+						request,
+						port,
+					),
+					[],
+				],
 				passkeyFocused: async (client) => {
 					const frame = this.#clients.frame(client);
 					return [
@@ -510,6 +522,7 @@ export class RemoteController extends EventTarget {
 					...(init.cache === false ? { cache: false } : {}),
 					requestLog: !!init.onRequest,
 					...(init.onPermissionRequest ? { permissionPrompt: true } : {}),
+					...(init.fedcmTesting ? { fedcmTesting: true } : {}),
 					...(init.passkeys
 						? {
 								passkeys: {

@@ -18,6 +18,7 @@ import type {
 	CookieCommand,
 	CookieResult,
 	HostReload,
+	IdentityChooserRequest,
 	PermissionRequestInfo,
 	RequestInfo,
 	RequestRule,
@@ -82,6 +83,8 @@ export interface ControllerFrameInit {
 	permissionPrompt?: boolean;
 	/** the host asks the user about passkeys for proxied sites (RemoteControllerInit.passkeys): what pages are told of them */
 	passkeys?: PasskeysConfig;
+	/** FedCM requests end without Chrome's delays (RemoteControllerInit.fedcmTesting) */
+	fedcmTesting?: boolean;
 	/** unparseable scripts fail instead of running raw (RemoteControllerInit.allowInvalidJs) */
 	allowInvalidJs?: boolean;
 	/** the window membrane off when false (RemoteControllerInit.membrane) */
@@ -233,4 +236,13 @@ export type HostBound = {
 	passkeyPrompt: [{ request: PasskeyPrompt; port: MessagePort }, unknown];
 	/** the site pool: whether the focus is in the frame that shows the document `client` (a ceremony's focus check) */
 	passkeyFocused: [string, boolean];
+	/**
+	 * a proxied site's FedCM account chooser, drawn by the host's page over
+	 * the document's frame: the index picked, IDENTITY_CLOSED or
+	 * IDENTITY_GONE; the port closes when the document goes away
+	 */
+	identityChooser: [
+		{ request: IdentityChooserRequest; port: MessagePort },
+		number,
+	];
 };

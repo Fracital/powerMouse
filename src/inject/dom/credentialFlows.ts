@@ -7,20 +7,23 @@
 import { registrableDomain, siteOf } from '../../partition';
 import { routeXHR } from '../../routeURL';
 import StompURL from '../../StompURL';
-import { LOAD_HEADER, OPAQUE_HEADER } from '../../transport/messages';
+import {
+	IDENTITY_CLOSED,
+	IDENTITY_GONE,
+	LOAD_HEADER,
+	OPAQUE_HEADER,
+	PERMISSION,
+	type IdentityChooserAccount,
+	type PermissionOp,
+} from '../../transport/messages';
+import { closePort, onPort, privateChannel } from '../../transport/ports';
 import { requiredArgumentsMessage } from '../modules/Proxy';
 import { scopePrefix } from '../modules/Unroute';
 import { withStack } from '../nativeErrors';
 import { getPublicSuffix } from '../rewriter';
 import type DocumentClient from './Client';
-import { createElementIn } from './cloneNode';
 import { loadFetch, loadSource } from './loadGrants';
 import { DECLINED } from './modules/Credentials';
-import {
-	nativeElement,
-	nativeEventTarget,
-	nativeNode,
-} from './modules/DOMHooks';
 
 const GET_PREFIX = "Failed to execute 'get' on 'CredentialsContainer': ";
 const IDENTITY_READ_PREFIX = `${GET_PREFIX}Failed to read the 'identity' property from 'CredentialRequestOptions': `;
@@ -34,8 +37,18 @@ interface Account {
 	id: string;
 	name: string | undefined;
 	email: string | undefined;
-	/** its approved_clients name the relying party */
-	approved: boolean;
+	/** its approved_clients name the relying party, or the browser signed in with it before */
+	returning: boolean;
+	/** where Chrome lists it: by its latest sign-in, then as the provider listed it */
+	rank: number;
+}
+
+/** what the browser keeps of the site's sign-ins with a provider (IdentityState, no prototype) */
+interface State {
+	accounts: string[];
+	quiet: boolean;
+	cooldown: boolean;
+	testing: boolean;
 }
 
 /**
@@ -89,6 +102,36 @@ export interface IdentityContext {
 /** how long a read waits for its body once its request was answered */
 const READ_GRACE_MS = 2_000;
 
+/** how long Chrome holds a token after its request went out (measured: 3 s) */
+const TOKEN_HOLD_MS = 3_000;
+/** a rank after every account signed in with before (Account.rank) */
+const UNRANKED = 1 << 20;
+
+/**
+ * How long Chrome holds a failure that came before its UI (a silent
+ * request with no account to sign in, a config refused, a site in its
+ * cooldown): random, measured over 73 failures in Chrome 157 as log-normal
+ * in seconds (mu 1.72, sigma 1.28, so a median of 5.6 s) and never past
+ * 60 s
+ */
+const rejectionDelay = (): number => {
+	// Box-Muller (1 - random: never the log of 0)
+	const normal =
+		Math.sqrt(-2 * Math.log(1 - Math.random())) *
+		Math.cos(2 * Math.PI * Math.random());
+	return Math.min(60_000, Math.round(1000 * Math.exp(1.72 + 1.28 * normal)));
+};
+
+/** `value` at `index` of `list`, defined: a setter of an index the page put on Array.prototype is never handed it */
+const put = (list: unknown[], index: number, value: unknown) =>
+	Reflect.defineProperty(list, index, {
+		__proto__: null,
+		value,
+		writable: true,
+		enumerable: true,
+		configurable: true,
+	} as PropertyDescriptor);
+
 /**
  * An own data property of a parsed JSON value. Its prototypes are the
  * page's: a getter the page put there would be handed the object (an
@@ -121,13 +164,18 @@ const originOf = (url: string): string => new URL(url).origin;
  * promise of the page's.
  *
  * The steps go as Chrome 157's own requests do (measured, the fedcm suite):
- * the well-known file, the config, the accounts list and the client
- * metadata no-cors, with no Origin, no Referer and no CORS check (the
- * browser reads them in its own process: an identity provider sends no
- * Access-Control-Allow-Origin for them, Google's does not), the well-known
- * file and config also without credentials and as from an opaque origin
- * (Sec-Fetch-Site: cross-site); the token and disconnect POSTs as CORS
- * requests of the relying party's origin, which the provider must allow.
+ * the well-known file, the config and the accounts list no-cors, with no
+ * Origin, no Referer and no CORS check (the browser reads them in its own
+ * process: an identity provider sends no Access-Control-Allow-Origin for
+ * them, Google's does not), the well-known file and config also without
+ * credentials and as from an opaque origin (Sec-Fetch-Site: cross-site);
+ * the client metadata only when the list has a new account, the same way
+ * but with the relying party's Origin; the token and disconnect POSTs as
+ * CORS requests of the relying party's origin, which the provider must
+ * allow. Whether the user is asked at all goes by the mediation and what
+ * the browser keeps of the site's sign-ins (src/server/identityStates.ts),
+ * and the chooser is the host's page's, never the document's
+ * (src/controller/accountChooser.ts).
  * The worker reads the no-cors steps' bodies and posts them on this
  * document's load channel (IDENTITY_READ): what a provider tells the
  * browser alone (the user's accounts) is never in a Response, a promise or
@@ -161,14 +209,16 @@ export function identityFlow({
 	 * getter of its prototype's `constructor`, learns nothing).
 	 * `credentials` is the step's (the accounts list includes the
 	 * provider's cookies, the rest omit them); `opaque` sends it as from an
-	 * opaque origin, as the browser sends the well-known file and config.
+	 * opaque origin, as the browser sends the well-known file and config
+	 * (`rp`: with the relying party's Origin all the same, as the client
+	 * metadata).
 	 * The load's `webidentity` destination makes the worker send
 	 * Sec-Fetch-Dest: webidentity (src/server/rewrites.ts).
 	 */
 	const idpRead = (
 		absolute: string,
 		credentials: RequestCredentials,
-		opaque: boolean,
+		opaque: boolean | 'rp',
 		heard: (status: number, body: string | null) => void,
 	): Promise<void> =>
 		new PagePromise<void>((done) => {
@@ -194,7 +244,7 @@ export function identityFlow({
 				__proto__: null,
 				accept: 'application/json',
 				[LOAD_HEADER]: token,
-				...(opaque ? { [OPAQUE_HEADER]: '1' } : {}),
+				...(opaque ? { [OPAQUE_HEADER]: opaque === 'rp' ? 'rp' : '1' } : {}),
 			} as unknown as Record<string, string>;
 			try {
 				// (its answer has no body: the body comes on the channel, which
@@ -218,7 +268,7 @@ export function identityFlow({
 	const idpJSON = (
 		absolute: string,
 		credentials: RequestCredentials,
-		opaque: boolean,
+		opaque: boolean | 'rp',
 		use: (json: unknown) => void,
 	): Promise<void> =>
 		idpRead(absolute, credentials, opaque, (status, body) => {
@@ -328,6 +378,71 @@ export function identityFlow({
 		if (config !== undefined) use(config);
 	};
 
+	// --- what the browser keeps of the site's sign-ins (src/server/identityStates.ts) ---
+
+	const routed = client.routedClient();
+	/**
+	 * Ask the service worker `message`, the answer handed to `heard` (the
+	 * promise resolves with nothing: what the browser keeps of the user's
+	 * sign-ins is never a value of a promise the page could be handed)
+	 */
+	const ask = (
+		message: PermissionOp,
+		heard: (answer: unknown) => void = () => {},
+	): Promise<void> =>
+		new PagePromise<void>((done) => {
+			if (!routed) return done(undefined);
+			const [port, theirs] = privateChannel();
+			onPort(port, 'message', (data) => {
+				closePort(port);
+				heard(data);
+				done(undefined);
+			});
+			if (
+				!routed.postToWorker(
+					{ [PERMISSION]: { directory: routed.directory, ...message } },
+					[theirs],
+				)
+			)
+				done(undefined);
+		});
+	/** the state of the provider of `configAbsolute`, as the worker keeps it */
+	const stateOf = async (configAbsolute: string): Promise<State> => {
+		const state: State = {
+			__proto__: null,
+			accounts: [],
+			quiet: false,
+			cooldown: false,
+			testing: false,
+		} as State;
+		await ask({ op: 'identity', idp: originOf(configAbsolute) }, (answer) => {
+			const accounts = own(answer, 'accounts');
+			if (isArray(accounts)) {
+				const length = own(accounts, 'length') as number;
+				for (let i = 0; i < length; i++) {
+					const id = own(accounts, i);
+					if (typeof id === 'string')
+						put(state.accounts, state.accounts.length, id);
+				}
+			}
+			state.quiet = own(answer, 'quiet') === true;
+			state.cooldown = own(answer, 'cooldown') === true;
+			state.testing = own(answer, 'testing') === true;
+		});
+		return state;
+	};
+	const done = (
+		configAbsolute: string,
+		how: 'chosen' | 'auto' | 'closed' | 'prevent' | 'disconnected',
+		account?: string,
+	) =>
+		ask({
+			op: 'identityDone',
+			idp: originOf(configAbsolute),
+			how,
+			...(account === undefined ? {} : { account }),
+		});
+
 	// --- IdentityCredential.disconnect: config, then the disconnect POST ---
 
 	const disconnect = (options: unknown): Promise<undefined> => {
@@ -370,122 +485,20 @@ export function identityFlow({
 				});
 				if (answer === null || answer.status < 200 || answer.status > 299)
 					throw fail();
+				// the account the provider disconnected is no returning one of
+				// the browser's any more
+				const account = ownString(answer.json, 'account_id');
+				if (account !== undefined)
+					await done(configAbsolute, 'disconnected', account);
 				return undefined;
 			})().then(resolvePage, rejectPage);
 		});
 	};
 
-	// --- the account chooser: an in-page overlay the page cannot read ---
-
-	/**
-	 * The index of the account the user picks, or -1 for a dismiss. Natively
-	 * the chooser is the browser's own, and the relying party never learns
-	 * the accounts in it; this one is drawn in the page, so it is made so
-	 * that no page code reaches what it shows: a closed shadow root made by
-	 * the browser's own functions (taken before any of the page's script
-	 * ran), with every name and address in an attribute shown as generated
-	 * content (which window.find() and a selection do not see) and no event
-	 * of it ever read.
-	 */
-	const chooseAccount = (accounts: Account[]): Promise<number> =>
-		new PagePromise<number>((resolveChoice) => {
-			const doc = global.document as Document;
-			const call = (fn: unknown, that: unknown, args: unknown[]): any =>
-				Reflect.apply(fn as Function, that, args);
-			const make = (name: string, attributes: string[]): Element => {
-				const element = createElementIn(doc, name);
-				for (let i = 0; i + 1 < attributes.length; i += 2)
-					call(nativeElement.setAttribute, element, [
-						attributes[i],
-						attributes[i + 1],
-					]);
-				return element;
-			};
-			const append = (parent: Node, child: Node) =>
-				call(nativeNode.appendChild, parent, [child]);
-			const listen = (target: Element, listener: () => void) =>
-				call(nativeEventTarget.addEventListener, target, ['click', listener]);
-			const host = make('div', [
-				'style',
-				'all:initial!important;display:block!important;position:fixed!important;inset:0!important;z-index:2147483647!important',
-			]);
-			// (an init without a prototype: no getter of the page's says what
-			// else the root is, serializable or clonable)
-			const root = call(nativeElement.attachShadow, host, [
-				{ __proto__: null, mode: 'closed' },
-			]) as ShadowRoot;
-			const settle = (index: number) => {
-				try {
-					call(nativeElement.remove, host, []);
-				} catch (error) {
-					// already gone
-				}
-				resolveChoice(index);
-			};
-			const style = make('style', []);
-			call(
-				Reflect.getOwnPropertyDescriptor(nativeNode, 'textContent')!.set,
-				style,
-				[
-					'.s{position:fixed;inset:0;background:rgba(0,0,0,.3)}' +
-						'.c{position:fixed;top:16px;left:50%;transform:translateX(-50%);min-width:340px;max-width:90vw;background:#fff;color:#202124;border-radius:12px;box-shadow:0 2px 16px rgba(0,0,0,.3);font:14px system-ui,sans-serif;overflow:hidden}' +
-						'.h{padding:14px 20px;border-bottom:1px solid #e0e0e0;font-weight:500}' +
-						'.a{display:flex;flex-direction:column;align-items:flex-start;padding:12px 20px;width:100%;border:0;background:none;text-align:left;cursor:pointer;font:inherit;color:inherit}' +
-						'.a:hover{background:#f1f3f4}' +
-						'.a::before{content:attr(data-n);font-weight:500}' +
-						'.a::after{content:attr(data-e);color:#5f6368;font-size:13px}' +
-						'.f{padding:12px 20px;border-top:1px solid #e0e0e0;text-align:right}' +
-						'.x{border:0;background:none;color:#1a73e8;cursor:pointer;font:inherit;padding:8px}' +
-						'[data-t]::before{content:attr(data-t)}',
-				],
-			);
-			append(root, style);
-			// a click outside the card dismisses (the scrim is under the card,
-			// not around it: no event needs reading to tell the two apart)
-			const scrim = make('div', ['class', 's']);
-			listen(scrim, () => settle(-1));
-			append(root, scrim);
-			const card = make('div', ['class', 'c']);
-			append(card, make('div', ['class', 'h', 'data-t', 'Sign in']));
-			for (let i = 0; i < accounts.length; i++) {
-				const { name, email } = accounts[i];
-				const shown = name ?? email ?? accounts[i].id;
-				const button = make('button', [
-					'class',
-					'a',
-					'type',
-					'button',
-					'aria-label',
-					email && email !== shown ? `${shown}, ${email}` : shown,
-					'data-n',
-					shown,
-					'data-e',
-					email ?? '',
-				]);
-				listen(button, () => settle(i));
-				append(card, button);
-			}
-			const footer = make('div', ['class', 'f']);
-			const cancel = make('button', [
-				'class',
-				'x',
-				'type',
-				'button',
-				'aria-label',
-				'Close',
-				'data-t',
-				'Cancel',
-			]);
-			listen(cancel, () => settle(-1));
-			append(footer, cancel);
-			append(card, footer);
-			append(root, card);
-			append((doc.body ?? doc.documentElement) as Node, host);
-		});
-
 	// --- the FedCM protocol for one provider ---
 
-	// (an object of the bundle's: no global the page could have replaced)
+	// (objects of the bundle's: no global the page could have replaced)
+	/** the user closed the chooser, or the document went away while it showed */
 	const DISMISSED = {};
 
 	/** a token request's failure, as Chrome rejects it (measured) */
@@ -499,13 +512,21 @@ export function identityFlow({
 				)
 			: domException(GENERIC_TOKEN_ERROR, 'NetworkError');
 
+	/** Config.fedcmTesting, as the worker said: no delays */
+	let testing = false;
+
 	// one provider through the protocol; the resolved credential, null for a
-	// fault to try the next provider on, or DISMISSED for a user dismiss
+	// fault to try the next provider on, DISMISSED for a user's dismiss
 	const attempt = async (
 		provider: any,
 		mediation: unknown,
 	): Promise<object | null | typeof DISMISSED> => {
 		const configAbsolute = new URL(provider.configURL).href;
+		const state = await stateOf(configAbsolute);
+		if (state.testing) testing = true;
+		// (measured: a site in its cooldown, and a silent request while the
+		// site may not sign in automatically, fail before any request)
+		if (state.cooldown || (mediation === 'silent' && state.quiet)) return null;
 		let config: unknown;
 		await readConfig(configAbsolute, (json) => (config = json));
 		const configOrigin = originOf(configAbsolute);
@@ -546,60 +567,103 @@ export function identityFlow({
 					for (let j = 0; j < count && !approved; j++)
 						approved = own(approvedList, j) === clientId;
 				}
+				// the latest sign-in first, as Chrome lists them
+				let rank = -1;
+				for (let j = 0; j < state.accounts.length && rank === -1; j++)
+					if (state.accounts[j] === id) rank = j;
 				// (defined, not set: a setter of an index the page put on
 				// Array.prototype would be handed the account)
-				Reflect.defineProperty(accounts, accounts.length, {
+				put(accounts, accounts.length, {
 					__proto__: null,
-					value: {
-						__proto__: null,
-						id,
-						name: ownString(entry, 'name'),
-						email: ownString(entry, 'email'),
-						approved,
-					},
-					writable: true,
-					enumerable: true,
-					configurable: true,
-				} as PropertyDescriptor);
+					id,
+					name: ownString(entry, 'name'),
+					email: ownString(entry, 'email'),
+					returning: approved || rank !== -1,
+					rank: rank === -1 ? UNRANKED + i : rank,
+				} as Account);
 			}
 		});
 		if (accounts.length === 0) return null;
 
-		// auto re-authentication: one returning account, not forced to choose
-		const autoEligible =
-			mediation !== 'required' && accounts.length === 1 && accounts[0].approved;
-
-		let chosen: Account;
-		let isAutoSelected: boolean;
-		if (autoEligible) {
-			chosen = accounts[0];
-			isAutoSelected = true;
-		} else if (mediation === 'silent') {
-			// silent mediation may not draw a chooser
-			return null;
-		} else {
-			// fetched for the UI's privacy-policy / terms links; its result is
-			// not needed to mint a token (another origin's is not asked)
+		// a new account (not returning) is signed up, with the site's privacy
+		// policy and terms: only then is the client metadata asked for, with
+		// its query replaced by the client id, as from an opaque origin but
+		// with the relying party's Origin (measured)
+		let privacyPolicy: string | undefined;
+		let termsOfService: string | undefined;
+		let returning = 0;
+		for (let i = 0; i < accounts.length; i++)
+			if (accounts[i].returning) returning++;
+		if (returning < accounts.length) {
 			const metadata = endpointOf(
 				own(config, 'client_metadata_endpoint'),
 				configAbsolute,
 			);
 			if (sameOrigin(metadata)) {
 				const url = new URL(metadata);
+				url.search = '';
 				url.searchParams.set('client_id', clientId);
-				await idpRead(url.href, 'omit', false, () => {});
+				await idpJSON(url.href, 'omit', 'rp', (json) => {
+					privacyPolicy = ownString(json, 'privacy_policy_url');
+					termsOfService = ownString(json, 'terms_of_service_url');
+				});
 			}
-			const picked = await chooseAccount(accounts);
-			if (picked === -1) return DISMISSED;
-			chosen = accounts[picked];
-			isAutoSelected = false;
 		}
 
+		// automatic re-authentication: exactly one returning account, the
+		// user not asked to choose, and none made lately
+		let chosen: Account | undefined;
+		if (mediation !== 'required' && returning === 1 && !state.quiet)
+			for (let i = 0; i < accounts.length && !chosen; i++)
+				if (accounts[i].returning) chosen = accounts[i];
+		const isAutoSelected = chosen !== undefined;
+		if (!chosen) {
+			// silent mediation may not show the chooser
+			if (mediation === 'silent') return null;
+			// the browser's chooser, which the host's page draws
+			// (src/controller/accountChooser.ts): the accounts it signed in
+			// with first, the latest first, then the others as listed
+			const shown: Account[] = [];
+			for (let i = 0; i < accounts.length; i++) {
+				let at = shown.length;
+				while (at > 0 && shown[at - 1].rank > accounts[i].rank) at--;
+				for (let j = shown.length; j > at; j--) put(shown, j, shown[j - 1]);
+				put(shown, at, accounts[i]);
+			}
+			const listed: IdentityChooserAccount[] = [];
+			for (let i = 0; i < shown.length; i++) {
+				const { id, name, email } = shown[i];
+				put(listed, i, {
+					name: name ?? email ?? id,
+					email: email ?? '',
+					signUp: !shown[i].returning,
+					...(privacyPolicy === undefined ? {} : { privacyPolicy }),
+					...(termsOfService === undefined ? {} : { termsOfService }),
+				});
+			}
+			let picked: unknown = IDENTITY_GONE;
+			await ask(
+				{
+					op: 'identityChooser',
+					idp: configOrigin,
+					accounts: listed,
+				},
+				(answer) => (picked = answer),
+			);
+			if (typeof picked !== 'number' || !shown[picked]) {
+				// the close button starts the site's cooldown, as Chrome's does
+				if (picked === IDENTITY_CLOSED) await done(configAbsolute, 'closed');
+				return DISMISSED;
+			}
+			chosen = shown[picked];
+		}
+
+		const asked = Date.now();
 		const answer = await idpPost(tokenURL, {
 			client_id: clientId,
 			nonce: typeof provider.nonce === 'string' ? provider.nonce : '',
 			account_id: chosen.id,
-			disclosure_text_shown: String(!chosen.approved),
+			disclosure_text_shown: String(!chosen.returning),
 			is_auto_selected: String(isAutoSelected),
 		});
 		// a network error (a provider that does not allow the relying party's
@@ -616,8 +680,19 @@ export function identityFlow({
 				'',
 			);
 		const token = ownString(answer.json, 'token');
-		if (token !== undefined)
+		if (token !== undefined) {
+			// the account is a returning one from now on; an automatic sign-in
+			// keeps the site from another for a while, a pick lets it again
+			await done(configAbsolute, isAutoSelected ? 'auto' : 'chosen', chosen.id);
+			// Chrome holds the token three seconds after its request (measured:
+			// a pick, or an automatic sign-in, resolves three seconds later)
+			const left = testing ? 0 : asked + TOKEN_HOLD_MS - Date.now();
+			if (left > 0)
+				await new PagePromise<void>((wake) =>
+					global.setTimeout(() => wake(undefined), left),
+				);
 			return makeCredential(token, isAutoSelected, configAbsolute);
+		}
 		const error = own(answer.json, 'error');
 		const code = ownString(error, 'code');
 		// an error URL is the config's site's, or none
@@ -695,6 +770,14 @@ export function identityFlow({
 			if (invalid) return rejectPage(invalid);
 			const abort = abortReason(signal);
 			if (abort !== undefined) return rejectPage(abort);
+			// (measured: at once, before any request)
+			if (mediation === 'conditional')
+				return rejectPage(
+					domException(
+						'Conditional mediation is not supported for this credential type',
+						'NotSupportedError',
+					),
+				);
 			const providers = (identity as { providers: any[] }).providers;
 			void (async () => {
 				for (const provider of providers) {
@@ -705,11 +788,23 @@ export function identityFlow({
 						);
 					if (credential) return resolvePage(credential);
 				}
-				return rejectPage(domException(GENERIC_TOKEN_ERROR, 'NetworkError'));
+				// a failure before the chooser showed is held a while, so the
+				// page cannot tell one with no account from one the user turned
+				// down (measured, below)
+				const delay = testing ? 0 : rejectionDelay();
+				global.setTimeout(
+					() => rejectPage(domException(GENERIC_TOKEN_ERROR, 'NetworkError')),
+					delay,
+				);
 			})().catch((error) => rejectPage(error));
 		});
 
-	return { runIdentity, disconnect };
+	// preventSilentAccess(): the site's next request asks the user, until a
+	// pick in the chooser (src/server/identityStates.ts)
+	const preventSilent = () =>
+		void ask({ op: 'identityDone', idp: '', how: 'prevent' });
+
+	return { runIdentity, disconnect, preventSilent };
 }
 
 /** what the Credentials module hands the guard of the browser's WebAuthn calls */

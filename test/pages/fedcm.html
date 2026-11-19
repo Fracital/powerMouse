@@ -115,6 +115,64 @@
 		return seen;
 	};
 
+	// what page code can tell of a chooser being shown without reading it:
+	// every change to its document, its element count, what is hit at a
+	// grid of points, focus and blur, resizes and the active element, from
+	// watchPage() on (pageSeen() reports)
+	window.watchPage = () => {
+		const points = [];
+		for (const x of [0.1, 0.5, 0.9])
+			for (const y of [0.05, 0.3, 0.6, 0.9])
+				points.push([innerWidth * x, innerHeight * y]);
+		const hits = () =>
+			points
+				.map(([x, y]) => {
+					const hit = document.elementFromPoint(x, y);
+					return hit ? hit.tagName : '-';
+				})
+				.join(',');
+		const seen = {
+			mutations: 0,
+			focus: 0,
+			resized: 0,
+			count: document.getElementsByTagName('*').length,
+			hits: hits(),
+			active: document.activeElement,
+			focused: document.hasFocus(),
+		};
+		const observer = new MutationObserver((records) => {
+			seen.mutations += records.length;
+		});
+		observer.observe(document, {
+			childList: true,
+			subtree: true,
+			attributes: true,
+			characterData: true,
+		});
+		let first = 2;
+		const resize = new ResizeObserver(() => {
+			if (first > 0) first--;
+			else seen.resized++;
+		});
+		resize.observe(document.documentElement);
+		resize.observe(document.body);
+		const count = () => seen.focus++;
+		for (const type of ['focus', 'blur']) addEventListener(type, count, true);
+		for (const type of ['focusin', 'focusout'])
+			document.addEventListener(type, count, true);
+		addEventListener('resize', () => seen.resized++);
+		window.pageSeen = () => ({
+			mutations: seen.mutations,
+			focus: seen.focus,
+			resized: seen.resized,
+			count: document.getElementsByTagName('*').length - seen.count,
+			hits: hits() === seen.hits,
+			active: document.activeElement === seen.active,
+			focused: document.hasFocus() === seen.focused,
+		});
+		return true;
+	};
+
 	// a scenario run while the page watches everything a script of its own
 	// can be handed: a getter of Object.prototype's `then` (every promise
 	// resolution with an object asks it) and of Promise.prototype's
@@ -322,9 +380,13 @@
 	// start a scenario without awaiting, so the suite can act on the chooser,
 	// then read window.__pending for the settled result
 	window.startScenario = (name, params = {}) => {
+		window.__done = null;
 		window.__pending = settleGet(optionsFor(name, params));
+		window.__pending.then((result) => (window.__done = result));
 		return true;
 	};
+	// the settled result of the scenario startScenario started, or null
+	window.readDone = () => window.__done;
 	window.readPending = () => window.__pending;
 	// a scenario run as a page's first identity request made after it put a
 	// Symbol of its own in place (restored once the request settles)
@@ -356,6 +418,8 @@
 			if (name === 'resolve') return IdentityProvider.resolve('tok');
 			if (name === 'disconnect') return IdentityCredential.disconnect(arg);
 			if (name === 'setStatus') return navigator.login.setStatus(arg);
+			if (name === 'preventSilentAccess')
+				return navigator.credentials.preventSilentAccess();
 			throw new Error('unknown');
 		});
 

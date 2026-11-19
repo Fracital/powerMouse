@@ -951,6 +951,10 @@ async function startController(name) {
 	// visit, so the browser keeps the compiled code of the scripts proxied
 	// pages load (it does so only for the same URL, and routed URLs start
 	// with the id)
+	// `?fedcm=test` is for the suites: a proxied page's FedCM requests end
+	// without the delays Chrome gives them, as under DevTools' FedCm.enable
+	if (new URLSearchParams(location.search).get('fedcm') === 'test')
+		controllerCallbacks.fedcmTesting = true;
 	// passkeys for proxied sites, asked about here (docs/passkeys.md), with
 	// a real user verification when this page can make one
 	if (!PASSKEY_FLAGS.includes('off')) {

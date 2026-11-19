@@ -15,6 +15,7 @@ import type {
 	PasskeysConfig,
 } from '../passkeys/types';
 import type {
+	IdentityChooserRequest,
 	PermissionRequestInfo,
 	RequestInfo,
 	SiteArrival,
@@ -105,6 +106,11 @@ export type HubBound = {
 	];
 	/** whether the focus is in the page of the frame that shows the document `client` (a ceremony's focus check) */
 	passkeyFocused: [string, boolean];
+	/** a site's FedCM account chooser, which the host's page draws, with the port that closes when the document goes away */
+	identityChooser: [
+		{ request: IdentityChooserRequest; port: MessagePort },
+		number,
+	];
 	/** replace the transport (the agent's setTransport) */
 	setTransport: [TransportModule];
 };
@@ -350,6 +356,11 @@ export interface HubHost {
 	): Promise<PasskeyAnswer | null>;
 	/** HubBound.passkeyFocused */
 	passkeyFocused(client: string): Promise<boolean>;
+	/** HubBound.identityChooser */
+	identityChooser(
+		request: IdentityChooserRequest,
+		port: MessagePort,
+	): Promise<number>;
 	setTransport(descriptor: TransportModule): Promise<void>;
 }
 
@@ -882,6 +893,10 @@ export class SiteHub {
 				],
 				passkeyFocused: async (client) => [
 					await host.passkeyFocused(client),
+					[],
+				],
+				identityChooser: async ({ request, port }) => [
+					await host.identityChooser(request, port),
 					[],
 				],
 				setTransport: async (descriptor) => host.setTransport(descriptor),

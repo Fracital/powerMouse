@@ -48,10 +48,9 @@ interface CredentialData {
  * process with no CORS check (the well-known file, config, accounts) are read
  * by the service worker, which posts their bodies on the document's load
  * channel (../credentialFlows.ts idpRead). The account chooser the browser
- * draws as trusted chrome is, here, an in-page DOM overlay: a closed shadow
- * root made with the browser's own functions, its names and addresses shown
- * as generated content, so no page code reads the account list from it. The
- * page can still tell that an overlay was added.
+ * draws as trusted chrome is drawn by the host's page over the document's
+ * frame (src/controller/accountChooser.ts): nothing of it is in the page's
+ * document.
  *
  * IdentityCredentialError is left as the browser's own: it is constructible,
  * reads no network and so cannot leak, and reads natively already.
@@ -278,6 +277,33 @@ export default class CredentialsModule extends Module<DocumentClient> {
 			}
 			return flow.runIdentity(identity, signal, mediation);
 		};
+
+		// preventSilentAccess(): Chrome answers a top-level document only
+		// (a frame's is refused, measured), and every proxied document is a
+		// frame to it; at a proxied top it resolves, and FedCM's next request
+		// of the site asks the user (what the browser keeps of a site's
+		// sign-ins is the worker's: src/server/identityStates.ts)
+		if (typeof container.preventSilentAccess === 'function')
+			container.preventSilentAccess = proxyModule.wrapFunction(
+				container.preventSilentAccess,
+				(target, that, args) => {
+					if (that !== global.navigator.credentials)
+						return Reflect.apply(target, that, args);
+					if (client.ancestorOrigins().length)
+						return reject(
+							domException(
+								'Error connecting to Credential Management service.',
+								'NotSupportedError',
+							),
+						);
+					try {
+						identityFlow().preventSilent();
+					} catch (error) {
+						return reject(error);
+					}
+					return Reflect.apply(PagePromise.resolve, PagePromise, [undefined]);
+				},
+			);
 
 		// --- the statics, each reading as the browser's and routing/emulating ---
 

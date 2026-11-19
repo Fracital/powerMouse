@@ -831,7 +831,69 @@ export type PermissionOp =
 			op: 'forget';
 			kind: DeviceKind;
 			key: string;
+	  }
+	| {
+			/**
+			 * what the browser keeps of FedCM sign-ins for the document and
+			 * the provider of `idp` (an origin): an IdentityState
+			 */
+			op: 'identity';
+			idp: string;
+	  }
+	| {
+			/**
+			 * a FedCM sign-in ended (src/server/identityStates.ts): `signedIn`
+			 * with `account` (chosen in the chooser, or `auto`); `closed`: the
+			 * user closed the chooser; `prevent`: preventSilentAccess();
+			 * `disconnected`: `account` was disconnected
+			 */
+			op: 'identityDone';
+			idp: string;
+			how: 'chosen' | 'auto' | 'closed' | 'prevent' | 'disconnected';
+			account?: string;
+	  }
+	| {
+			/**
+			 * the account chooser, which the host's page draws: the index
+			 * picked, IDENTITY_CLOSED or IDENTITY_GONE
+			 */
+			op: 'identityChooser';
+			idp: string;
+			accounts: IdentityChooserAccount[];
 	  };
+/** what the browser keeps of a site's FedCM sign-ins with one provider (PermissionOp `identity`) */
+export interface IdentityState {
+	/** the accounts signed in with before, the latest first */
+	accounts: string[];
+	/** no auto re-authentication now: one was made lately, or preventSilentAccess() */
+	quiet: boolean;
+	/** the user closed a chooser of this site lately: every request fails */
+	cooldown: boolean;
+	/** Config.fedcmTesting: no delays */
+	testing: boolean;
+}
+/** an account the chooser shows (IdentityChooserRequest) */
+export interface IdentityChooserAccount {
+	name: string;
+	email: string;
+	/** a new account: the chooser says what is shared, and the links */
+	signUp: boolean;
+	privacyPolicy?: string;
+	termsOfService?: string;
+}
+/** the account chooser of a document's FedCM request, for the host's page to draw */
+export interface IdentityChooserRequest {
+	/** the document that asks (the frame the chooser is drawn over) */
+	client: string;
+	/** the relying party's top-level host and the provider's, as Chrome's title names them */
+	site: string;
+	idp: string;
+	accounts: IdentityChooserAccount[];
+}
+/** the chooser's answer when the user closed it */
+export const IDENTITY_CLOSED = -1;
+/** the chooser's answer when the document went away first */
+export const IDENTITY_GONE = -2;
 /** the device APIs whose grants each site keeps */
 export type DeviceKind = 'usb' | 'hid' | 'serial' | 'bluetooth';
 /** a device a site was granted: the key the inject made of it, and a Bluetooth device's services */
@@ -1404,6 +1466,16 @@ export type Controllerbound = {
 	 * document of another slot)
 	 */
 	passkeyFocused: [string, boolean];
+	/**
+	 * a proxied site's FedCM account chooser, which the host's page draws
+	 * over the document's frame: the index of the account picked,
+	 * IDENTITY_CLOSED or IDENTITY_GONE. The port closes when the document
+	 * goes away
+	 */
+	identityChooser: [
+		{ request: IdentityChooserRequest; port: MessagePort },
+		number,
+	];
 	/**
 	 * the site pool: the slot `site` is shown from (its origin), given one
 	 * now when it has none; null without a pool

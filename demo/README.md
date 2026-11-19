@@ -325,6 +325,9 @@ used until the user says so in this page, which no proxied page can click:
 For the suites, `?passkeys=off` leaves the option out and `?passkeys=test`
 takes a page's timeout as given, as Chrome takes it with a virtual
 authenticator.
+`?fedcm=test` ends a proxied page's FedCM requests without the delays
+Chrome gives a token and a refusal, as Chrome does under DevTools'
+`FedCm.enable`.
 
 ## Transports
 

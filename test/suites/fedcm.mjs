@@ -17,7 +17,12 @@
 // against endpoints that send no CORS header, and compare the two: what
 // succeeds, what fails and how, what each request carried, and that page
 // code sees nothing of the accounts the provider listed.
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { chromium } from 'playwright-core';
 import {
+	CHROME,
 	done,
 	FIXTURE,
 	frameTarget,
@@ -62,6 +67,7 @@ const STATICS = [
 	'resolve',
 	'setStatus',
 	'setStatusBad',
+	'preventSilentAccess',
 ];
 
 const logOf = (run) =>
@@ -151,6 +157,171 @@ const prepare = async (scenario, configURL) =>
 			: scenario.wellKnown,
 	);
 
+/**
+ * Whether the user is asked at all, in order: natively in a regular
+ * profile's first visit (Chrome 157 measured: an incognito profile never
+ * signs in automatically, and nothing tells STomp which it is), proxied
+ * after the steps above, which leave the site free to sign in
+ * automatically (their last sign-in was a pick). Each step against the
+ * cross-site provider with no CORS: its mediation, `extra` for its config
+ * (`multi`: a second, new account), `act` in the chooser if one shows
+ * (`pick` the `index`th account, `close` it), `prevent`: the page calls
+ * preventSilentAccess() first
+ */
+const MEDIATION = [
+	{
+		name: 'a silent request signs the one returning account in automatically',
+		mediation: 'silent',
+	},
+	{
+		name: 'right after an automatic sign-in an optional request shows the chooser',
+		mediation: 'optional',
+		act: 'pick',
+	},
+	{
+		name: 'after a pick a silent request signs in automatically again',
+		mediation: 'silent',
+	},
+	{
+		name: 'right after an automatic sign-in a silent request fails before any request',
+		mediation: 'silent',
+	},
+	{ name: 'conditional mediation is not supported', mediation: 'conditional' },
+	{
+		name: 'a required request always shows the chooser',
+		mediation: 'required',
+		act: 'pick',
+	},
+	{
+		name: 'after preventSilentAccess() a silent request fails before any request',
+		mediation: 'silent',
+		prevent: true,
+	},
+	{
+		name: 'after preventSilentAccess() an optional request shows the chooser',
+		mediation: 'optional',
+		act: 'pick',
+	},
+	{
+		name: 'a pick ends preventSilentAccess(): an optional request signs in automatically',
+		mediation: 'optional',
+	},
+	{
+		name: 'a new account beside a returning one: the client metadata is asked for, and a pick of it shows the disclosure',
+		mediation: 'required',
+		extra: '&multi',
+		act: 'pick',
+		index: 1,
+	},
+	{
+		name: 'two returning accounts: the chooser, the latest signed in with first',
+		mediation: 'optional',
+		extra: '&multi',
+		act: 'pick',
+	},
+	{
+		name: 'two returning accounts: a silent request fails after the accounts',
+		mediation: 'silent',
+		extra: '&multi',
+	},
+	{
+		name: 'the user closes the chooser: the request fails at once',
+		mediation: 'required',
+		act: 'close',
+	},
+	{
+		name: 'after the user closed the chooser every request of the site fails before any request',
+		mediation: 'required',
+		act: 'pick',
+	},
+];
+const fedcmAll = () =>
+	fetch(`${FIXTURE}pages/fedcm-log?all`)
+		.then((r) => r.json())
+		.catch(() => []);
+
+/**
+ * One MEDIATION step in `frame` (`host`: the host's page, whose chooser is
+ * pressed; null natively, where `native` is the reference's CDP state):
+ * how it ended, the chooser shown (each account's name and whether it is
+ * new), the endpoints the provider saw, the client metadata requests
+ */
+async function mediationStep(frame, step, host, native = null) {
+	const run = `med-${host ? 'proxied' : 'native'}-${Math.random().toString(36).slice(2)}`;
+	const configURL = configOf(
+		crossOrigin,
+		run,
+		`&nocors=config,accounts,client${step.extra ?? ''}`,
+	);
+	await setWellKnown({ provider_urls: [configURL] });
+	const prevented = step.prevent
+		? await callStatic(frame, 'preventSilentAccess')
+		: null;
+	const before = (await fedcmAll()).length;
+	let chooser = null;
+	let result;
+	if (native) {
+		native.step = step;
+		native.dialogs = [];
+		result = await runScenario(frame, 'flow', {
+			configURL,
+			mediation: step.mediation,
+		});
+		chooser = native.dialogs[0] ?? null;
+	} else {
+		await frame.evaluate((a) => window.startScenario('flow', a), {
+			configURL,
+			mediation: step.mediation,
+		});
+		for (const end = Date.now() + 15000; Date.now() < end; await sleep(150)) {
+			result = await frame.evaluate(() => window.readDone()).catch(() => null);
+			if (result) break;
+			const shown = await hostChooser(host);
+			if (!shown) continue;
+			chooser = shown.accounts.map(
+				(account) =>
+					`${account.label.split(',')[0]}${account.state === 'sign-up' ? ' (new)' : ''}`,
+			);
+			await press({
+				session: shown.session,
+				frameId: shown.frameId,
+				backendNodeId:
+					step.act === 'pick'
+						? shown.accounts[step.index ?? 0].backendNodeId
+						: shown.close,
+			});
+			result = await frame.evaluate(() => window.readPending());
+			break;
+		}
+		result ??= { kind: 'error', error: 'no answer' };
+	}
+	await setWellKnown(null);
+	const log = await logOf(run);
+	const client = (await fedcmAll())
+		.slice(before)
+		.filter((entry) => entry.url.includes('fedcm-client'))
+		.map((entry) => ({
+			query: new URL(entry.url, 'http://x').search,
+			dest: entry.dest,
+			mode: entry.mode,
+			site: entry.site,
+			origin: entry.origin,
+			referer: entry.referer,
+			cookie: /fedcm_sid/.test(entry.cookie ?? ''),
+		}));
+	return {
+		result:
+			result.kind === 'token'
+				? `token ${result.token} auto=${result.isAutoSelected}`
+				: result.error,
+		chooser,
+		steps: Object.keys(log),
+		disclosure: log.token?.disclosureTextShown ?? null,
+		client,
+		prevented,
+	};
+}
+
 /** what of a step's request is compared natively and through the proxy */
 const shapeOf = (step) =>
 	step && {
@@ -177,44 +348,92 @@ async function proxiedFrame(page) {
 	return null;
 }
 
+const attribute = (node, name) => {
+	const list = node.attributes ?? [];
+	for (let i = 0; i + 1 < list.length; i += 2)
+		if (list[i] === name) return list[i + 1];
+	return null;
+};
+/** the buttons under `node` (shadow roots included), in order */
+const buttonsOf = (node, out = []) => {
+	if (node.nodeName === 'BUTTON') out.push(node);
+	for (const child of [...(node.children ?? []), ...(node.shadowRoots ?? [])])
+		buttonsOf(child, out);
+	return out;
+};
+/** the buttons of the shadow root under `node` that has a Close button (the chooser's) */
+const chooserButtonsOf = (node) => {
+	if (node.nodeName === '#document-fragment') {
+		const buttons = buttonsOf(node);
+		if (buttons.some((button) => attribute(button, 'aria-label') === 'Close'))
+			return buttons;
+	}
+	for (const child of [
+		...(node.children ?? []),
+		...(node.shadowRoots ?? []),
+		// (a frame of the page's process too: wherever the chooser is drawn)
+		...(node.contentDocument ? [node.contentDocument] : []),
+	]) {
+		const found = chooserButtonsOf(child);
+		if (found) return found;
+	}
+	return null;
+};
 /**
- * A button of the proxied chooser whose accessible name matches `label`,
- * found over CDP (its shadow root is closed: no page code, and so no
- * Playwright locator, reaches it), or null when none shows in time
+ * The proxied chooser, which the host's page draws (src/controller/
+ * accountChooser.ts), read over CDP wherever it is (its shadow root is
+ * closed: no Playwright locator reaches it): its account buttons
+ * (accessible name, `sign-in` or `sign-up`) and its close button, or null
+ * when it is not shown
  */
-async function chooserButton(frame, label, timeout = 10000) {
-	const { session, frameId } = await frameTarget(frame);
-	const attribute = (node, name) => {
-		const list = node.attributes ?? [];
-		for (let i = 0; i + 1 < list.length; i += 2)
-			if (list[i] === name) return list[i + 1];
-		return null;
-	};
-	const find = (node) => {
-		if (
-			node.nodeName === 'BUTTON' &&
-			label.test(attribute(node, 'aria-label') ?? '')
-		)
-			return node;
-		for (const child of [
-			...(node.children ?? []),
-			...(node.shadowRoots ?? []),
-			...(node.contentDocument ? [node.contentDocument] : []),
-		]) {
-			const found = find(child);
-			if (found) return found;
-		}
-		return null;
-	};
-	for (const end = Date.now() + timeout; Date.now() < end; await sleep(200)) {
+async function hostChooser(page) {
+	const { session, frameId } = await frameTarget(page.mainFrame());
+	try {
 		const { root } = await session.send('DOM.getDocument', {
 			depth: -1,
 			pierce: true,
 		});
-		const node = find(root);
-		if (node) return { session, frameId, backendNodeId: node.backendNodeId };
+		const buttons = chooserButtonsOf(root) ?? [];
+		const accounts = buttons
+			.filter((node) => attribute(node, 'aria-label') !== 'Close')
+			.map((node) => ({
+				label: attribute(node, 'aria-label'),
+				state: attribute(node, 'data-state') ?? 'sign-in',
+				backendNodeId: node.backendNodeId,
+			}));
+		const close = buttons.find(
+			(node) => attribute(node, 'aria-label') === 'Close',
+		);
+		if (!accounts.length || !close) {
+			await session.detach().catch(() => {});
+			return null;
+		}
+		return { session, frameId, accounts, close: close.backendNodeId };
+	} catch (error) {
+		await session.detach().catch(() => {});
+		return null;
 	}
-	await session.detach().catch(() => {});
+}
+/**
+ * A button of the proxied chooser whose accessible name matches `label`
+ * (hostChooser), or null when none shows in time
+ */
+async function chooserButton(page, label, timeout = 10000) {
+	for (const end = Date.now() + timeout; Date.now() < end; await sleep(200)) {
+		const chooser = await hostChooser(page);
+		if (!chooser) continue;
+		const node = label.test('Close')
+			? chooser.close
+			: chooser.accounts.find((account) => label.test(account.label))
+					?.backendNodeId;
+		if (node)
+			return {
+				session: chooser.session,
+				frameId: chooser.frameId,
+				backendNodeId: node,
+			};
+		await chooser.session.detach().catch(() => {});
+	}
 	return null;
 }
 /** click a chooser button chooserButton found, from a world of its own */
@@ -240,8 +459,8 @@ async function press(button) {
 		await session.detach().catch(() => {});
 	}
 }
-async function pressChooser(frame, label) {
-	const button = await chooserButton(frame, label);
+async function pressChooser(page, label) {
+	const button = await chooserButton(page, label);
 	return button ? press(button) : false;
 }
 
@@ -256,7 +475,7 @@ const callStatic = (frame, name, arg) =>
  * proxy (`chooser`: the overlay is pressed): its result, and what each step
  * of it carried
  */
-async function corsScenario(frame, scenario, native) {
+async function corsScenario(frame, scenario, native, host = null) {
 	const run = `cors-${native ? 'native' : 'proxied'}-${Math.random().toString(36).slice(2)}`;
 	const configURL = scenarioConfig(scenario, run);
 	await prepare(scenario, configURL);
@@ -275,7 +494,7 @@ async function corsScenario(frame, scenario, native) {
 			mediation: 'required',
 		});
 		if (scenario.pick) {
-			const pressed = await pressChooser(frame, /Ada Proxy/);
+			const pressed = await pressChooser(host, /Ada Proxy/);
 			result = pressed
 				? await frame.evaluate(() => window.readPending())
 				: { kind: 'error', error: 'no chooser' };
@@ -293,7 +512,7 @@ async function corsScenario(frame, scenario, native) {
 				]),
 			);
 			if (result.error === 'a chooser was shown')
-				await pressChooser(frame, /^Close$/);
+				await pressChooser(host, /^Close$/);
 		}
 	} else
 		result = await runScenario(frame, 'flow', {
@@ -357,12 +576,15 @@ async function reference() {
 	// dialog is closed
 	const cdp = await page.context().newCDPSession(page);
 	await cdp.send('FedCm.enable', { disableRejectionDelay: true });
-	cdp.on('FedCm.dialogShown', ({ dialogId, dialogType }) =>
+	// (`held`: the next chooser stays open until the suite picks)
+	let held = null;
+	cdp.on('FedCm.dialogShown', ({ dialogId, dialogType }) => {
+		if (held && dialogType === 'AccountChooser') return held(dialogId);
 		(dialogType === 'AccountChooser'
 			? cdp.send('FedCm.selectAccount', { dialogId, accountIndex: 0 })
 			: cdp.send('FedCm.dismissDialog', { dialogId })
-		).catch(() => {}),
-	);
+		).catch(() => {});
+	});
 	const cors = [];
 	for (const scenario of CORS_SCENARIOS)
 		cors.push(await corsScenario(page.mainFrame(), scenario, true));
@@ -379,8 +601,81 @@ async function reference() {
 		},
 	);
 	await setWellKnown(null);
+	// what page code can tell while the browser's chooser shows
+	const seenRun = `seen-native-${Date.now()}`;
+	const seenConfig = scenarioConfig(CORS_SCENARIOS[0], seenRun);
+	await prepare(CORS_SCENARIOS[0], seenConfig);
+	await page.evaluate(() => window.watchPage());
+	const shown = new Promise((resolve) => (held = resolve));
+	await page.evaluate((a) => window.startScenario('flow', a), {
+		configURL: seenConfig,
+		mediation: 'required',
+	});
+	const dialogId = await Promise.race([shown, sleep(15000)]);
+	held = null;
+	const seen = dialogId
+		? await page.evaluate(() => window.pageSeen())
+		: 'no chooser';
+	if (dialogId)
+		await cdp.send('FedCm.selectAccount', { dialogId, accountIndex: 0 });
+	await page.evaluate(() => window.readPending());
+	await setWellKnown(null);
 	await browser.close();
-	return { detect, validation, statics, cors, spied, errors };
+	const mediation = await mediationReference();
+	return { detect, validation, statics, cors, spied, seen, mediation, errors };
+}
+
+/**
+ * MEDIATION natively, in a regular profile of its own (an incognito one,
+ * every context Playwright makes but a persistent one, never signs in
+ * automatically); a chooser is picked from or closed (Chrome's close
+ * button, which starts the site's cooldown) as each step says
+ */
+async function mediationReference() {
+	const profile = mkdtempSync(join(tmpdir(), 'stomp-fedcm-'));
+	const context = await chromium.launchPersistentContext(profile, {
+		executablePath: CHROME,
+		headless: true,
+		args: [
+			'--no-sandbox',
+			'--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE *.localhost, EXCLUDE 127.0.0.1',
+		],
+	});
+	try {
+		const page = await context.newPage();
+		await page.goto(target);
+		await page.waitForFunction(() => window.__fedcm?.ready === true, null, {
+			timeout: 20000,
+		});
+		const cdp = await context.newCDPSession(page);
+		await cdp.send('FedCm.enable', { disableRejectionDelay: true });
+		const native = { step: null, dialogs: [] };
+		cdp.on('FedCm.dialogShown', ({ dialogId, dialogType, accounts }) => {
+			if (dialogType !== 'AccountChooser')
+				return cdp.send('FedCm.dismissDialog', { dialogId }).catch(() => {});
+			native.dialogs.push(
+				accounts.map(
+					(account) =>
+						`${account.name}${account.loginState === 'SignUp' ? ' (new)' : ''}`,
+				),
+			);
+			(native.step?.act === 'pick'
+				? cdp.send('FedCm.selectAccount', {
+						dialogId,
+						accountIndex: native.step.index ?? 0,
+					})
+				: cdp.send('FedCm.dismissDialog', { dialogId, triggerCooldown: true })
+			).catch(() => {});
+		});
+		await page.evaluate((o) => window.signIn(o), crossOrigin);
+		const steps = [];
+		for (const step of MEDIATION)
+			steps.push(await mediationStep(page.mainFrame(), step, null, native));
+		return steps;
+	} finally {
+		await context.close();
+		rmSync(profile, { recursive: true, force: true });
+	}
 }
 
 const ref = await reference();
@@ -421,13 +716,63 @@ ok(
 	ref.spied.result?.kind === 'token' && ref.spied.leaked === false,
 	JSON.stringify(ref.spied),
 );
+ok(
+	'natively page code cannot tell the chooser is shown',
+	JSON.stringify(ref.seen) ===
+		JSON.stringify({
+			mutations: 0,
+			focus: 0,
+			resized: 0,
+			count: 0,
+			hits: true,
+			active: true,
+			focused: true,
+		}),
+	JSON.stringify(ref.seen),
+);
+// what Chrome 157 did when this was written (a regular profile)
+{
+	const m = ref.mediation;
+	ok(
+		'natively a returning account signs in automatically, then not again until a pick; preventSilentAccess() the same; conditional is refused; a closed chooser cools the site down',
+		m[0].result === 'token idtok.acct-1.true.n0 auto=true' &&
+			m[0].chooser === null &&
+			m[1].result === 'token idtok.acct-1.false.n0 auto=false' &&
+			m[1].chooser !== null &&
+			m[2].result === 'token idtok.acct-1.true.n0 auto=true' &&
+			m[3].steps.length === 0 &&
+			/^NotSupportedError/.test(m[4].result) &&
+			m[6].steps.length === 0 &&
+			m[7].chooser !== null &&
+			m[8].result === 'token idtok.acct-1.true.n0 auto=true' &&
+			m[12].result === 'NetworkError: Error retrieving a token.' &&
+			m[13].steps.length === 0 &&
+			m[13].chooser === null,
+		JSON.stringify(m.map((step) => [step.result, step.chooser, step.steps])),
+	);
+	ok(
+		'natively the client metadata is asked for only with a new account, by the client id alone, with the relying party Origin',
+		m.every((step, i) =>
+			i === 9 ? step.client.length === 1 : !step.client.length,
+		) &&
+			m[9].client[0]?.query === '?client_id=stomp-rp' &&
+			m[9].client[0]?.origin === sameOrigin &&
+			m[9].disclosure === 'true' &&
+			JSON.stringify(m[10].chooser) ===
+				JSON.stringify(['Bo Guest', 'Ada Proxy']),
+		JSON.stringify(
+			m.map((step) => [step.client, step.disclosure, step.chooser]),
+		),
+	);
+}
 
 const browser = await launch();
 for (const [mode, base] of [
 	['same-origin', PROXY],
 	['isolated', HOST],
 ]) {
-	const page = await openDemo(browser, base);
+	// (`?fedcm=test`: no delays, as the reference has none)
+	const page = await openDemo(browser, `${base}?fedcm=test`);
 	const recorder = await recordRequests(page.context());
 	await submitLanding(page, target);
 	const frame = await proxiedFrame(page);
@@ -499,8 +844,9 @@ for (const [mode, base] of [
 		JSON.stringify({ proxied: statics, native: ref.statics }),
 	);
 
-	// 4. a whole flow completes and resolves a token through the proxy, auto-
-	//    selecting the one returning account; every step went to the IdP
+	// 4. a whole flow completes and resolves a token through the proxy, the
+	//    account picked in the chooser (1b signed in automatically: the
+	//    site may not again for a while, see 9); every step went to the IdP
 	//    labelled webidentity, config without the IdP cookie, accounts with it
 	//    (a provider of another site lists the config in its well-known file)
 	for (const [label, origin] of [
@@ -511,17 +857,20 @@ for (const [mode, base] of [
 		await frame.evaluate((o) => window.signIn(o), origin);
 		if (origin === crossOrigin)
 			await setWellKnown({ provider_urls: [configOf(origin, run)] });
-		const got = await runScenario(frame, 'flow', {
+		await frame.evaluate((a) => window.startScenario('flow', a), {
 			configURL: configOf(origin, run),
-			mediation: 'optional',
+			mediation: 'required',
 		});
+		const got = (await pressChooser(page, /Ada Proxy/))
+			? await frame.evaluate(() => window.readPending())
+			: { kind: 'no chooser' };
 		await setWellKnown(null);
 		const log = await logOf(run);
 		ok(
 			`${mode}: ${label}: get({identity}) resolves an IdentityCredential token through the proxy`,
 			got.kind === 'token' &&
-				got.token === 'idtok.acct-1.true.n0' &&
-				got.isAutoSelected === true &&
+				got.token === 'idtok.acct-1.false.n0' &&
+				got.isAutoSelected === false &&
 				got.type === 'identity' &&
 				got.id === '' &&
 				got.ctor === 'IdentityCredential' &&
@@ -535,7 +884,7 @@ for (const [mode, base] of [
 				log.accounts?.dest === 'webidentity' &&
 				log.token?.dest === 'webidentity' &&
 				log.token?.accountId === 'acct-1' &&
-				log.token?.isAutoSelected === 'true' &&
+				log.token?.isAutoSelected === 'false' &&
 				log.token?.nonce === 'n0',
 			JSON.stringify(log),
 		);
@@ -567,7 +916,7 @@ for (const [mode, base] of [
 	{
 		const cors = [];
 		for (const scenario of CORS_SCENARIOS)
-			cors.push(await corsScenario(frame, scenario, false));
+			cors.push(await corsScenario(frame, scenario, false, page));
 		CORS_SCENARIOS.forEach((scenario, i) =>
 			ok(
 				`${mode}: ${scenario.name}, as natively`,
@@ -590,14 +939,16 @@ for (const [mode, base] of [
 		const configURL = scenarioConfig(CORS_SCENARIOS[0], run);
 		await prepare(CORS_SCENARIOS[0], configURL);
 		await frame.evaluate((o) => window.signIn(o), crossOrigin);
+		await frame.evaluate(() => window.watchPage());
 		await frame.evaluate((a) => window.startSpied('flow', a.params, a.needle), {
 			params: { configURL, mediation: 'required' },
 			needle: NEEDLE,
 		});
-		const button = await chooserButton(frame, /Ada Proxy/);
+		const button = await chooserButton(page, /Ada Proxy/);
 		const peeked = button
 			? await frame.evaluate(() => window.peekChooser())
 			: null;
+		const seen = button ? await frame.evaluate(() => window.pageSeen()) : null;
 		const pressed = button ? await press(button) : false;
 		const spied = pressed
 			? await frame.evaluate(() => window.readPending())
@@ -617,6 +968,14 @@ for (const [mode, base] of [
 				!peeked.html,
 			JSON.stringify(peeked),
 		);
+		// natively the chooser is the browser's: the page's document, its
+		// layout, what is hit where and the focus change in no way while it
+		// shows (the host's page draws it here, over the frame)
+		ok(
+			`${mode}: page code cannot tell the chooser is shown (no change to its document, layout, hit testing or focus), as natively`,
+			seen !== null && JSON.stringify(seen) === JSON.stringify(ref.seen),
+			JSON.stringify({ proxied: seen, native: ref.seen }),
+		);
 	}
 
 	// 5. the chooser: a forced prompt selects an account and mints a token
@@ -626,34 +985,15 @@ for (const [mode, base] of [
 			configURL: configOf(sameOrigin, run),
 			mediation: 'required',
 		});
-		const pressed = await pressChooser(frame, /Ada Proxy/);
+		const pressed = await pressChooser(page, /Ada Proxy/);
 		const got = pressed
 			? await frame.evaluate(() => window.readPending())
 			: { kind: 'no chooser' };
 		ok(
-			`${mode}: choosing an account in the overlay mints a token (not auto-selected)`,
+			`${mode}: choosing an account in the chooser mints a token (not auto-selected)`,
 			got.kind === 'token' &&
 				got.token === 'idtok.acct-1.false.n0' &&
 				got.isAutoSelected === false,
-			JSON.stringify(got),
-		);
-	}
-
-	// 6. the chooser dismissed: Chrome's generic network error
-	{
-		const run = `dismiss-${mode}-${Date.now()}`;
-		await frame.evaluate((a) => window.startScenario('flow', a), {
-			configURL: configOf(sameOrigin, run),
-			mediation: 'required',
-		});
-		const pressed = await pressChooser(frame, /^Close$/);
-		const got = pressed
-			? await frame.evaluate(() => window.readPending())
-			: { kind: 'no chooser' };
-		ok(
-			`${mode}: dismissing the chooser rejects with Chrome's generic error`,
-			got.kind === 'error' &&
-				got.error === 'NetworkError: Error retrieving a token.',
 			JSON.stringify(got),
 		);
 	}
@@ -671,6 +1011,47 @@ for (const [mode, base] of [
 			`${mode}: IdentityCredential.disconnect routes through the proxy and resolves`,
 			disc === 'undefined' && log.disconnect?.dest === 'webidentity',
 			JSON.stringify({ disc, log: log.disconnect }),
+		);
+	}
+
+	// 8b. without the suites' flag, a token is held three seconds after its
+	//     request, as Chrome holds it (another tab of the demo: another
+	//     controller, the same worker and sign-ins)
+	if (mode === 'same-origin') {
+		const plain = await openDemo(browser, base);
+		await submitLanding(plain, target);
+		const plainFrame = await proxiedFrame(plain);
+		const run = `hold-${Date.now()}`;
+		await plainFrame?.evaluate((a) => window.startScenario('flow', a), {
+			configURL: configOf(sameOrigin, run),
+			mediation: 'required',
+		});
+		const pressed = plainFrame ? await pressChooser(plain, /Ada Proxy/) : false;
+		const at = Date.now();
+		const got = pressed
+			? await plainFrame.evaluate(() => window.readPending())
+			: { kind: 'no chooser' };
+		const held = Date.now() - at;
+		ok(
+			`${mode}: a token resolves three seconds after its request, as Chrome holds it`,
+			got.kind === 'token' && held >= 2700 && held < 6000,
+			JSON.stringify({ got: got.kind, held }),
+		);
+		await plain.close();
+	}
+
+	// 9. when the user is asked at all, by mediation and by what the browser
+	//    keeps of the site's sign-ins, step by step as natively (MEDIATION)
+	{
+		const steps = [];
+		for (const step of MEDIATION)
+			steps.push(await mediationStep(frame, step, page));
+		MEDIATION.forEach((step, i) =>
+			ok(
+				`${mode}: ${step.name}, as natively`,
+				JSON.stringify(steps[i]) === JSON.stringify(ref.mediation[i]),
+				JSON.stringify({ proxied: steps[i], native: ref.mediation[i] }),
+			),
 		);
 	}
 

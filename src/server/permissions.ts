@@ -93,8 +93,10 @@ function load(): Promise<void> {
 			const keys = (await tx.store.getAllKeys()) as string[];
 			const values = (await tx.store.getAll()) as PermissionState[];
 			await tx.done;
+			// (a value that is no state is FedCM's: keptValue)
 			keys.forEach((key, i) => {
-				if (!states.has(key)) states.set(key, values[i]);
+				if (!states.has(key) && typeof values[i] === 'string')
+					states.set(key, values[i]);
 			});
 		} catch (error) {
 			// no store: this worker's answers only
@@ -140,6 +142,38 @@ async function setState(site: string, name: string, state: PermissionState) {
 		else await db?.put('states', state, key);
 	} catch (error) {
 		// kept for this worker's life only
+	}
+}
+
+/**
+ * A value the store keeps under `key` beside the states: what the browser
+ * keeps of a site's FedCM sign-ins (src/server/identityStates.ts), which
+ * Chrome keeps as permissions too. Read anew each time: another slot's
+ * worker, or another of this worker's documents, may have changed it
+ */
+export async function keptValue(key: string): Promise<unknown> {
+	try {
+		if (remote) return await remote.get(PERMISSIONS_STORE, key);
+		return await (await openStore())?.get(PERMISSIONS_STORE, key);
+	} catch (error) {
+		return undefined;
+	}
+}
+/** keep `value` under `key` (keptValue); undefined forgets it */
+export async function keepValue(key: string, value: unknown): Promise<void> {
+	try {
+		if (remote)
+			await (value === undefined
+				? remote.delete(PERMISSIONS_STORE, key)
+				: remote.put(PERMISSIONS_STORE, value, key));
+		else {
+			const db = await openStore();
+			await (value === undefined
+				? db?.delete(PERMISSIONS_STORE, key)
+				: db?.put(PERMISSIONS_STORE, value, key));
+		}
+	} catch (error) {
+		// not kept: the sign-in is remembered by nothing
 	}
 }
 

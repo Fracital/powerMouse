@@ -106,6 +106,7 @@ import createServer, {
 	StompServer,
 } from './createServer';
 import { hostErrorPage } from './errorPage';
+import { identityDone, identityState } from './identityStates';
 import { INLINE_MAX, INLINE_TOKEN, putInline } from './inline';
 import { openLoadChannel, servedLoadClient } from './loadGrants';
 import {
@@ -1249,6 +1250,68 @@ function handleMessage(event: ExtendableMessageEvent) {
 					ref.rpc.call('mediaVerdict', message.constraints),
 					new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
 				]);
+			// FedCM (src/server/identityStates.ts): the document's own origin
+			// is the relying party, under its top
+			if (
+				message.op === 'identity' ||
+				message.op === 'identityDone' ||
+				message.op === 'identityChooser'
+			) {
+				const rp = new URL(real).origin;
+				const idp = String(message.idp);
+				if (message.op === 'identity')
+					return identityState(site, rp, idp, ref.config.fedcmTesting === true);
+				if (message.op === 'identityDone')
+					return identityDone(site, rp, message);
+				// the host's page draws the chooser over the document's frame;
+				// the port tells it the document went away
+				const gone = new MessageChannel();
+				reply.addEventListener('close', () => gone.port1.close());
+				reply.start();
+				const name = (origin: string) => {
+					try {
+						return new URL(origin).host;
+					} catch (error) {
+						return origin;
+					}
+				};
+				return ref.rpc.call(
+					'identityChooser',
+					{
+						request: {
+							client: source.id,
+							site: name(site),
+							idp: name(idp),
+							accounts: (Array.isArray(message.accounts)
+								? message.accounts.slice(0, 64)
+								: []
+							).map((account) => {
+								const text = (value: unknown) =>
+									typeof value === 'string' ? value.slice(0, 1024) : '';
+								const link = (value: unknown) => {
+									try {
+										const url = new URL(text(value));
+										return /^https?:$/.test(url.protocol)
+											? url.href
+											: undefined;
+									} catch (error) {
+										return undefined;
+									}
+								};
+								return {
+									name: text(account?.name),
+									email: text(account?.email),
+									signUp: account?.signUp === true,
+									privacyPolicy: link(account?.privacyPolicy),
+									termsOfService: link(account?.termsOfService),
+								};
+							}),
+						},
+						port: gone.port2,
+					},
+					[gone.port2],
+				);
+			}
 			const devices = deviceOp(site, message);
 			if (devices) return devices;
 			if (!SIMULATED_PERMISSIONS.includes(name)) return null;
