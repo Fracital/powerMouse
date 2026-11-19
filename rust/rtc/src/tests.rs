@@ -1380,7 +1380,11 @@ fn a_remote_nothing_answers_at_is_checked_as_chromes_is() {
 /// Carry datagrams between the two for `ms` (none when `lost`), calling
 /// each only when its timeout says, as the worker does; the checks `a`
 /// sent to `b`, at their times, and how often `a`, called when it asked,
-/// had nothing due yet and asked to be called again at once
+/// had nothing due yet and asked to be called again at once. What one
+/// sends while it takes in the other's crosses at once, as the worker
+/// sends it: a datagram runs a turn that is due when it comes (the
+/// stack's receive is a timeout too), so a check the peer's check came
+/// just ahead of goes out then, not at the next wake.
 fn run_on_timeouts(a: &mut Peer, b: &mut Peer, ms: u64, lost: bool) -> (Vec<Instant>, usize) {
 	let end = Instant::now() + Duration::from_millis(ms);
 	let mut checks = Vec::new();
@@ -1401,17 +1405,19 @@ fn run_on_timeouts(a: &mut Peer, b: &mut Peer, ms: u64, lost: bool) -> (Vec<Inst
 		if b.wake.is_some_and(|at| at <= now) {
 			b.tick();
 		}
-		for datagram in std::mem::take(&mut a.outbox) {
-			if is_check(&datagram) && destination(&datagram) == b.address {
-				checks.push(Instant::now());
+		while !a.outbox.is_empty() || !b.outbox.is_empty() {
+			for datagram in std::mem::take(&mut a.outbox) {
+				if is_check(&datagram) && destination(&datagram) == b.address {
+					checks.push(Instant::now());
+				}
+				if !lost {
+					b.receive(&datagram);
+				}
 			}
-			if !lost {
-				b.receive(&datagram);
-			}
-		}
-		for datagram in std::mem::take(&mut b.outbox) {
-			if !lost {
-				a.receive(&datagram);
+			for datagram in std::mem::take(&mut b.outbox) {
+				if !lost {
+					a.receive(&datagram);
+				}
 			}
 		}
 	}
