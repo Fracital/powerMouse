@@ -199,9 +199,25 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// styles whose text was rewritten before the browser parsed it; the
 		// CSSOM pass would only redo the same work (modifyCSS is idempotent)
 		const prewritten = new WeakSet<StyleElement>();
+		// a piece of a style's text that leaves a url() open for a later
+		// piece to close: Google's app launcher writes `url('`, the address
+		// and `')` as three Text nodes. Routed on its own the piece was closed
+		// where it ends, the address landed outside the url() and the rule
+		// was dropped (the launcher's icons went blank). Such a piece lands as
+		// the page wrote it, and its style's rules are routed by the CSSOM
+		// pass (rewriteStyle) before anything paints, not its text. Not an
+		// @import's: the browser fetches that as it parses, before the pass.
+		const opensURL = (text: string) =>
+			/(?<!@import\s*)url\([^)]*$/i.test(text.slice(-4096));
+		const routePiece = (text: string) =>
+			opensURL(text) ? text : client.prepareStyleText(text);
+		const splitsURL = (style: StyleElement) =>
+			[...style.childNodes].some(
+				(node) => node.nodeType === 3 && opensURL((node as Text).data),
+			);
 		const rewriteStyleText = (style: StyleElement) => {
 			const text = style.textContent;
-			if (!text) return;
+			if (!text || splitsURL(style)) return;
 			// the page's own style-src refuses this inline style of the markup:
 			// it applies nothing (no text) and the inject reports it (src/csp.ts)
 			if (client.refuseInlineStyle(style, text, true)) {
@@ -219,12 +235,12 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// Text that becomes part of a <style>'s text, however it gets there,
 		// is routed before it lands (see prepareStyleText): chess.com filled
 		// its board's style with innerHTML and every piece loaded straight
-		// from the site. Each piece of text is routed on its own, which holds
-		// as long as no url() is split across two text nodes.
+		// from the site. Each piece of text is routed on its own, unless it
+		// leaves a url() open (routePiece).
 		const routeTextNode = (node: Node) =>
 			usePrototype(node, nativeCharacterData, (text) => {
 				const data = text.data;
-				const routed = client.prepareStyleText(data);
+				const routed = routePiece(data);
 				if (routed !== data) text.data = routed;
 			});
 		// a node argument about to go into a style: a Text, or a fragment's
@@ -262,7 +278,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				(text) => text.data,
 			);
 			usePrototype(node, nativeCharacterData, (text) => {
-				text.data = client.prepareStyleText(edited);
+				text.data = routePiece(edited);
 			});
 			return result;
 		};
@@ -346,10 +362,12 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 
 			if (prewritten.has(style)) {
 				prewritten.delete(style);
-				for (const rule of style.sheet.cssRules)
-					(rule as any)[rewrittenRule] = true;
-				copied();
-				return;
+				if (!splitsURL(style)) {
+					for (const rule of style.sheet.cssRules)
+						(rule as any)[rewrittenRule] = true;
+					copied();
+					return;
+				}
 			}
 
 			const rules = [...style.sheet!.cssRules].filter(
@@ -591,7 +609,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					if (!style) return Reflect.apply(target, that, args);
 					// null sets the empty string, as natively
 					const text = args[0] === null ? '' : String(args[0]);
-					Reflect.apply(target, that, [client.prepareStyleText(text)]);
+					Reflect.apply(target, that, [routePiece(text)]);
 					prewrote(style);
 				}),
 			});
@@ -1072,7 +1090,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					if (nodeTypeOf(args[i]) !== null) routeInsertedText(args[i] as Node);
 					else if (strings)
 						args[i] = Reflect.apply(nativeCreateTextNode, realm.document, [
-							client.prepareStyleText(String(args[i])),
+							routePiece(String(args[i])),
 						]);
 				}
 				prewritten.add(style);

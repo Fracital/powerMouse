@@ -14,11 +14,12 @@
 		const errors = {};
 		const read = {};
 		const ways = {};
-		// a connected <style> for `name`, and an element its rule paints
-		const sheet = (name) => {
+		// a <style> for `name` (connected unless `detached`), and an element
+		// its rule paints
+		const sheet = (name, detached = false) => {
 			const style = document.createElement('style');
 			style.id = `s-${name}`;
-			document.head.appendChild(style);
+			if (!detached) document.head.appendChild(style);
 			const box = document.createElement('div');
 			box.className = `w-${name}`;
 			box.style.cssText = 'width: 4px; height: 4px';
@@ -94,6 +95,41 @@
 			if (typeof style.setHTMLUnsafe !== 'function') throw new Error('absent');
 			style.setHTMLUnsafe(rule('set-html-unsafe'));
 		};
+		// Google's app launcher (incremental DOM, from its templates) writes a
+		// rule as a Text node per piece, its url() split across three:
+		// `url('`, the address, `')`. The icons painted for a second, until
+		// the launcher wrote its style again that way.
+		const pieces = (name) => {
+			const text = rule(name);
+			const start = text.indexOf("url('") + 5;
+			const end = text.indexOf("')");
+			return [text.slice(0, start), text.slice(start, end), text.slice(end)];
+		};
+		ways['split-append-child'] = () => {
+			const style = sheet('split-append-child');
+			for (const piece of pieces('split-append-child'))
+				style.appendChild(document.createTextNode(piece));
+		};
+		ways['split-append'] = () => {
+			sheet('split-append').append(...pieces('split-append'));
+		};
+		ways['split-detached'] = () => {
+			const style = sheet('split-detached', true);
+			for (const piece of pieces('split-detached'))
+				style.appendChild(document.createTextNode(piece));
+			document.head.appendChild(style);
+		};
+		// the same pieces written again into the Text nodes, as a template's
+		// update does
+		ways['split-data'] = () => {
+			const style = sheet('split-data');
+			const texts = pieces('split-data').map((piece) =>
+				style.appendChild(document.createTextNode(piece)),
+			);
+			const again = pieces('split-data');
+			again[1] += '?again';
+			texts.forEach((text, i) => (text.data = again[i]));
+		};
 		for (const [name, run] of Object.entries(ways)) {
 			try {
 				run();
@@ -108,6 +144,7 @@
 					innerHTML: style.innerHTML,
 					textContent: style.textContent,
 					rule: style.sheet?.cssRules[0]?.cssText ?? null,
+					texts: [...style.childNodes].map((node) => node.data),
 				};
 			}
 			window.__styleText = { done: true, errors, read };

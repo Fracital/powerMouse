@@ -6,8 +6,12 @@
 // (style-text.html) writes one rule per way, each with a background marked
 // `?style=<way>`; natively every way loads its image, and through the proxy
 // none may be a raw request and every one must reach the worker. What each
-// element's innerHTML, textContent and first rule read back is compared with
-// the native load. Both demo modes.
+// element's innerHTML, textContent, first rule and Text nodes read back is
+// compared with the native load. The split-* ways write a rule's url() as
+// Google's app launcher does, in three Text nodes (`url('`, the address,
+// `')`): each piece was routed on its own, the first closed where it ended,
+// and the rule lost its background (the launcher's icons went blank a
+// second after the tray opened). Both demo modes.
 import {
 	done,
 	FIXTURE,
