@@ -48,6 +48,13 @@ function tell(note: TransportNote) {
 export const wispNote = (level: TransportNote['level'], text: string) =>
 	tell({ level, text: `[wisp] ${text}` });
 
+/** a note made in another realm (the carrier host's), told here as it was made */
+export const relayNote = (note: TransportNote) =>
+	tell({
+		level: note.level === 'warn' ? 'warn' : 'info',
+		text: String(note.text),
+	});
+
 /** a `[net]` line of the verbose mode (call it only when `transportLog.on`) */
 export const logTransport = (text: string) =>
 	tell({ level: 'info', text: `[net] ${text}` });

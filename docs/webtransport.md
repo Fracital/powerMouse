@@ -625,6 +625,57 @@ transport WebSocket (TCP), WebTransport off; epoxy, HTTP/3 on)`, and the
   `pageshow` did not reach the controller (Chrome closes the page's
   WebSockets, its workers' with them), and a reset that came after an
   earlier NAT-style drop had been recovered from (`wisp-idle-drop`).
+- **The carrier host.** The carrier is not the page's: it lives in a
+  SharedWorker of the transport worker's script (`name: 'stomp-carrier'`,
+  `extendedLifetime: true`, `src/transport/carrierHost.ts`), which the
+  controller starts for a descriptor with a wisp URL and hands to where
+  the transport runs (`carrierClient.ts`). Chrome 157 keeps such a worker
+  for 300 s after its last page, the same instance across reloads,
+  navigations and a tab closed and opened again, and its WebTransport
+  sessions and WebSockets with it (also while a page is in the
+  back/forward cache, which a SharedWorker does not keep a page out of).
+  A transport asks the host for a wisp connection before it would choose
+  a carrier; the host chooses as a transport would (the same code, the
+  same IndexedDB memory) and gives each transport a rider: a wisp
+  connection of its own over a MessagePort, its stream ids from 1, played
+  the relay's INFO and its CONTINUE for stream 0 as the relay sent them,
+  each stream given an id of the relay's connection on the way out and its
+  own back on the way in (holyWisp takes one Wisp stream per session and
+  allows 2048 streams in it). A rider whose v2 INFO differs from the first
+  one's (the one the relay heard) is let go, and its transport opens a
+  carrier of its own. A start rides the host's carrier when it would have
+  ended on it anyway: a session; the WebSocket with WebTransport off; the
+  WebSocket a failed session left, while the 30 s quiet lasts. Past the
+  quiet, or once a session is remembered as working, the start chooses
+  again, and the riders on the old carrier stay until they let go. The
+  controller's `carrier` then has `shared`, how long the carrier had been
+  up (ms), and the console says `riding the WebTransport session to <url>
+that is up already (<n> s, <n> transports on it)`; the host's own lines
+  (`trying ...`, `WebTransport session established ...`) are printed by
+  every page's controller. Each side tells the other it is alive every 2
+  s (a MessagePort fires no `close` when the realm at its other end is
+  gone, and a Web Lock, which would tell, keeps a page out of the
+  back/forward cache): a client silent for 8 s (150 s for a transport in
+  the page, whose timers Chrome holds for a minute in a tab hidden for
+  five; a page that unloads lets go at once) has its streams closed on the
+  relay, a host silent for 8 s is gone (its riders end, and the next start
+  opens a carrier of its own), and a carrier no rider rides is closed
+  after 30 s. Only the carrier is shared: epoxy, its connection pool, its
+  TLS and stomp-h3's thread stay in each page's transport worker, since a
+  SharedWorkerGlobalScope has no `Worker` for stomp-h3's thread (and the
+  parallel TLS workers to come). A failed handshake now counts in the
+  host's throttle, which outlives a reload, where it counted in that
+  page's. `ControllerInit.carrierHost: false` has each transport open its
+  own carrier. Through a local demo at the prod relay
+  (`wss://stomp.fracit.al/pipe/<key>/`, about 34 ms away; headless Chrome
+  157, 2026-11-19, four rounds alternating with the tree before it, each a
+  fresh profile), the first proxied byte (a raw request to
+  `https://example.com/`, from the page's start) came at 270 ms (median)
+  on a reload against 360 before, and at 247 ms in a second tab against
+  335: the carrier was the transport's in 0 to 1 ms where opening the
+  session took 65 to 87. A cold start is unchanged (685 and 695 ms against
+  691 and 734 in the two quiet rounds): it opens the host's session as it
+  opened its own.
 
 It rests on epoxy-tls's `deploy/epoxy` patch 0075 (in the pinned build),
 which makes a function transport's writes never wait, as the WebSocket's

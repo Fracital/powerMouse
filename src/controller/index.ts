@@ -47,6 +47,7 @@ import type {
 } from '../passkeys/types';
 import { coreFile, injectDocumentFile, libraryFile } from '../routeURL';
 import { isUrlLike, urlLike } from '../StompURL';
+import { startCarrierHost, useCarrierHost } from '../transport/carrierClient';
 import { constructTransport, resolveHttp3 } from '../transport/construct';
 import { jarChanged, serveJar } from '../transport/jarServer';
 import type {
@@ -278,6 +279,15 @@ export interface ControllerInit {
 	 * (what the wisp connection rides) are on the console either way.
 	 */
 	debugTransport?: boolean;
+	/**
+	 * Whether a transport given a wisp URL rides the carrier host's wisp
+	 * connection (src/transport/carrierHost.ts): a SharedWorker of the
+	 * transport worker's script that keeps the origin's WebTransport session
+	 * (or WebSocket) to the relay up across reloads and tabs, so that a
+	 * reload and a second tab do not open one again. On by default; false
+	 * has each transport open its own, as every start did before.
+	 */
+	carrierHost?: boolean;
 	/** @internal the controller frame hands the transport's notes to its host, which prints them */
 	onTransportNote?: (note: TransportNote) => void;
 	/**
@@ -1001,6 +1011,8 @@ export class StompController extends EventTarget {
 	#note: (note: TransportNote) => void;
 	/** the verbose mode (ControllerInit.debugTransport) */
 	#debugTransport: boolean;
+	/** ControllerInit.carrierHost */
+	#sharesCarrier: boolean;
 	#rewriteWorkers?: RewriteWorkers | BrokeredPool;
 	/** the site pool's hub (ControllerInit.sitePool) */
 	#sites?: SiteHub;
@@ -1161,6 +1173,7 @@ export class StompController extends EventTarget {
 		});
 		this.#note = init.onTransportNote ?? printNote;
 		this.#debugTransport = init.debugTransport ?? debugTransportStored();
+		this.#sharesCarrier = init.carrierHost !== false;
 		if (this.#debugTransport) transportLog.on = true;
 		watchTransportNotes((note) => {
 			if (this.transportHost === 'page') this.#note(note);
@@ -1800,6 +1813,8 @@ export class StompController extends EventTarget {
 				(note) => this.#note(note),
 			);
 			if (this.#debugTransport) worker.debugTransport(true);
+			const host = this.#carrierHost(descriptor);
+			if (host) worker.carrierHost(host);
 			await worker.init(resolvedModule(descriptor));
 			this.#worker = worker;
 			// the host's own view of the transport, served by the worker like
@@ -1845,8 +1860,23 @@ export class StompController extends EventTarget {
 			own();
 		}
 	}
+	/**
+	 * The carrier host's port, for a descriptor whose transport rides a wisp
+	 * carrier (a `wisp` URL): the SharedWorker that keeps the origin's wisp
+	 * connections up across reloads and tabs (carrierHost.ts). Null without
+	 * one; the transport opens its own carrier then.
+	 */
+	#carrierHost(descriptor: TransportDescriptor): MessagePort | null {
+		const first = descriptor.options?.[0] as { wisp?: unknown } | undefined;
+		if (!this.#sharesCarrier || typeof first?.wisp !== 'string') return null;
+		return startCarrierHost(
+			new URL(assetName(this.config.assets, 'transportWorker'), this.directory),
+		);
+	}
 	/** import a descriptor's module in this page (`host: 'page'`, or the worker fallback) */
 	async #importInPage(descriptor: TransportDescriptor): Promise<void> {
+		const host = this.#carrierHost(descriptor);
+		if (host) useCarrierHost(host);
 		try {
 			this.transport = await importTransport(descriptor);
 		} catch (error) {

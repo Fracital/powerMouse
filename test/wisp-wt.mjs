@@ -20,7 +20,12 @@
 // (ms) each Wisp stream's first packets (a session that comes late, each
 // step within the client's time). `stats` counts the documents fetched,
 // sessions (and those the client closed), WebSockets (and those that
-// ended), and the UDP DATA packets each way by how they went. `document`
+// ended), and the UDP DATA packets each way by how they went. A session
+// counts once the client opens its Wisp stream: Chrome 157 goes on with
+// the handshake of a session the page closed while it was connecting (one
+// past the client's timeout, with UDP dropped), and when UDP comes back it
+// sends the session's CONNECT, seconds later, and closes it at once; such
+// a stray, which no client rode, counts in `stray`. `document`
 // (a function of the fetch's count, returning the JSON body or null for a 404) replaces the
 // answer; `rotate()` restarts the WebTransport listener with a new
 // certificate on the same port, the old hash listed as the previous;
@@ -67,6 +72,7 @@ export async function startWispWebTransport(upstream) {
 		udpOnStreamIn: 0,
 		udpOnStreamOut: 0,
 		datagramsLost: 0,
+		stray: 0,
 		protocols: [],
 	};
 	const sockets = new Set();
@@ -277,7 +283,6 @@ export async function startWispWebTransport(upstream) {
 
 	function handler(kind, id, value) {
 		if (kind === 'session') {
-			stats.sessions++;
 			stats.protocols.push(value.protocol);
 			const ws = new WebSocket(
 				upstream,
@@ -312,6 +317,7 @@ export async function startWispWebTransport(upstream) {
 			// the first stream is the Wisp stream; holyWisp takes no other
 			if (!session || session.stream) return api.reset(id, 0);
 			session.stream = id;
+			stats.sessions++;
 			const flush = () => {
 				session.holding = false;
 				for (const framed of session.out.splice(0)) write(session, framed);
@@ -336,7 +342,8 @@ export async function startWispWebTransport(upstream) {
 				toServer(session, Buffer.from(value), true);
 		} else if (kind === 'closed') {
 			const session = sessions.get(id);
-			if (session) stats.sessionsClosed++;
+			if (session?.stream) stats.sessionsClosed++;
+			else if (session) stats.stray++;
 			sessions.delete(id);
 			session?.ws.close();
 		}

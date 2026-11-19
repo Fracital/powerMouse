@@ -7,6 +7,8 @@
 // has to answer it. The WebSocket handshake cookies stay the controller's:
 // the worker asks for them over its control channel.
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
+import { CARRIER_HOST_NAME, useCarrierHost } from './carrierClient';
+import { serveCarriers } from './carrierHost';
 import { constructTransport, resolveHttp3 } from './construct';
 import { H3_WORKER_NAME, serveH3 } from './http3/h3Thread';
 import { jarChanged, serveJar } from './jarServer';
@@ -45,8 +47,12 @@ function resolverOf(descriptor: TransportModule): string | undefined {
 	return typeof options?.ech_dns === 'string' ? options.ech_dns : undefined;
 }
 
-// the transport worker starts itself again for stomp-h3 (http3/h3Thread.ts)
+// the transport worker starts itself again for stomp-h3 (http3/h3Thread.ts),
+// and the host page starts it as the carrier host (carrierHost.ts), a
+// SharedWorker
 if (self.name === H3_WORKER_NAME) serveH3(self);
+else if (self.name === CARRIER_HOST_NAME)
+	serveCarriers(self as unknown as SharedWorkerGlobalScope);
 else transportWorker();
 
 function transportWorker() {
@@ -103,6 +109,7 @@ function transportWorker() {
 			serveJar: async (port) => serveJar(port),
 			jarChanged: async (domain) => jarChanged(domain),
 			connectionLost: async () => connectionLost(transport),
+			carrierHost: async (port) => useCarrierHost(port),
 		},
 		TRANSPORT_WORKER_RPC,
 		(data, transfer) => self.postMessage(data, transfer),
