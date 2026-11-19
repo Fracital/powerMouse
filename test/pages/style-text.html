@@ -130,6 +130,18 @@
 			again[1] += '?again';
 			texts.forEach((text, i) => (text.data = again[i]));
 		};
+		// an @import whose string is routed: its text and its rule read back
+		// as the page wrote them
+		const imp = (name) => new URL(`imp.css?style=${name}`, location.href).href;
+		ways['import-string'] = () => {
+			sheet('import-string').textContent =
+				`@import "${imp('import-string')}" supports(display: grid);`;
+		};
+		ways['import-string-single'] = () => {
+			sheet('import-string-single').append(
+				`@import '${imp('import-string-single')}' screen;`,
+			);
+		};
 		for (const [name, run] of Object.entries(ways)) {
 			try {
 				run();
@@ -137,6 +149,13 @@
 				errors[name] = String(error).slice(0, 80);
 			}
 		}
+		const imported = (style) => {
+			try {
+				return style.sheet?.cssRules[0]?.styleSheet?.cssRules.length;
+			} catch (error) {
+				return error.name;
+			}
+		};
 		setTimeout(() => {
 			for (const name of Object.keys(ways)) {
 				const style = document.getElementById(`s-${name}`);
@@ -145,6 +164,8 @@
 					textContent: style.textContent,
 					rule: style.sheet?.cssRules[0]?.cssText ?? null,
 					texts: [...style.childNodes].map((node) => node.data),
+					// an import's sheet, loaded (one of another origin throws)
+					imported: imported(style),
 				};
 			}
 			window.__styleText = { done: true, errors, read };

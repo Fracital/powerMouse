@@ -53,7 +53,11 @@ function styleRoute(url: StompURL): RouteImport {
 	let base: string | undefined;
 	return (kind, text) => {
 		try {
-			if (kind === ROUTE_IMPORT && text.startsWith(`${url.directory}css/`))
+			// (an empty one loads nothing natively)
+			if (
+				kind === ROUTE_IMPORT &&
+				(!text || text.startsWith(`${url.directory}css/`))
+			)
 				return null;
 			// a value's url(#id) names an element of the document (isLocalURL)
 			if (kind !== ROUTE_STYLE && kind !== ROUTE_IMPORT && isLocalURL(text))

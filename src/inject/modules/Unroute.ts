@@ -197,6 +197,9 @@ export function unrouteText(
 // parentheses (the rewriter's own text)
 const ROUTED_CSS_URL =
 	/url\((&quot;|["']|)([^"')\s]*?)#url(\\?)\(((?:\\.|&quot;|[^\\)])*?)\3\)\1\)/g;
+// an @import's string whose target is routed, the page's string kept after
+// `#url(` (the rewriter's own text; a rule's cssText has a url() instead)
+const ROUTED_CSS_STRING = /(?<!\()"([^"\s]*?)#url\(((?:\\.|[^\\)])*?)\)"/g;
 
 // what the markup serializer escapes in an attribute value, and back
 const ATTRIBUTE_ESCAPES: Record<string, string> = {
@@ -228,6 +231,11 @@ export function unrouteCSS(
 ): string {
 	if (!text.includes('#url')) return text;
 	const prefix = routedPrefix(client);
+	text = text.replace(
+		ROUTED_CSS_STRING,
+		(match, target: string, token: string) =>
+			target.startsWith(prefix) ? token.replace(/\\(.)/g, '$1') : match,
+	);
 	return text.replace(
 		ROUTED_CSS_URL,
 		(match, quote: string, target: string, escape: string, inner: string) => {

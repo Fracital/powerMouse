@@ -11,7 +11,9 @@
 // Google's app launcher does, in three Text nodes (`url('`, the address,
 // `')`): each piece was routed on its own, the first closed where it ended,
 // and the rule lost its background (the launcher's icons went blank a
-// second after the tray opened). Both demo modes.
+// second after the tray opened). The import-string ways write an @import
+// with a string, whose route the text and the rule showed, and every
+// import's sheet must load. Both demo modes.
 import {
 	done,
 	FIXTURE,

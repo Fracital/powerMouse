@@ -637,8 +637,22 @@ impl Walk<'_, '_, '_> {
 				} else if import {
 					let value = string_decode(token);
 					if (self.route)(IMPORT, &value, &mut self.answer)? {
+						// the page's string kept after `#url(` as a url()'s
+						// token is, so the text reads back as the page wrote
+						// it and a rule as Chrome serialises it (unrouteCSS),
+						// closed where the page left it open at the end of
+						// the text, as Chrome closes it (kept_token)
+						let mut kept = Vec::with_capacity(token.len() + 6);
+						kept.extend_from_slice(b"url(");
+						kept.extend_from_slice(token);
+						if token.len() == 1 || token.last() != token.first() {
+							kept.extend_from_slice(&token[..1]);
+						}
+						kept.push(b')');
+						self.preserved.clear();
+						preserve_value(&self.answer, &kept, &mut self.preserved);
 						self.generated.clear();
-						json_string(&self.answer, &mut self.generated);
+						json_string(&self.preserved, &mut self.generated);
 						self.edits.replace(from, to, &self.generated);
 					}
 				}
@@ -756,14 +770,24 @@ mod tests {
 	fn imports_strings_and_image_sets() {
 		assert_eq!(
 			sheet("@import 'a.css';@import url(b.css) screen;"),
-			"@import \"/4/a.css\";@import url(/3/b.css#url\\(b.css\\)) screen;"
+			"@import \"/4/a.css#url('a.css')\";@import url(/3/b.css#url\\(b.css\\)) screen;"
 		);
 		assert_eq!(
 			sheet("a{b:image-set(\"c\" 1x)}"),
 			"a{b:image-set(url(/1/c#url\\(\\\"c\\\"\\)) 1x)}"
 		);
 		// the name is read as Chrome reads it: any case, escapes resolved
-		assert_eq!(sheet("@IMPORT 'a.css';"), "@IMPORT \"/4/a.css\";");
+		assert_eq!(
+			sheet("@IMPORT 'a.css';"),
+			"@IMPORT \"/4/a.css#url('a.css')\";"
+		);
+		// a double-quoted string is kept escaped in the routed one
+		assert_eq!(
+			sheet("@import \"a.css\" layer;"),
+			"@import \"/4/a.css#url(\\\"a.css\\\")\" layer;"
+		);
+		// and one the text ends in is kept closed, as Chrome closes it
+		assert_eq!(sheet("@import 'a.css"), "@import \"/4/a.css#url('a.css')\"");
 		assert_eq!(
 			sheet("@\\69mport url(b.css);"),
 			"@\\69mport url(/3/b.css#url\\(b.css\\));"
