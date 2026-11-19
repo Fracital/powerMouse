@@ -20,7 +20,7 @@
 // the page out of the back/forward cache. A host not heard from is gone
 // (its riders end as lost, and the next start opens a carrier of its own);
 // a client not heard from has its riders let go.
-import { ownBuffer, PacketBatch } from './packetBatch';
+import { ownBuffer, PacketBatch, wispFeed } from './packetBatch';
 import { paceRider, type Ride } from './riderPace';
 import { RpcHelper } from './rpc';
 import type { Held, PoolFields, PoolLine, SocketPass } from './socketPool';
@@ -413,6 +413,7 @@ function riderCarrier(
 		if (ended) return;
 		ended = true;
 		pace?.end(false);
+		feed.flush();
 		link.riders.delete(end);
 		try {
 			reading.close();
@@ -444,18 +445,22 @@ function riderCarrier(
 			close();
 		},
 	});
+	const feed = wispFeed((packet) => {
+		try {
+			reading.enqueue(packet);
+		} catch {
+			// cancelled already
+		}
+	});
 	// paced to the readers of this realm's bodies (riderPace.ts)
-	const pace =
-		given.credit === true
-			? paceRider(port, (packet) => reading.enqueue(packet))
-			: null;
+	const pace = given.credit === true ? paceRider(port, feed.push) : null;
 	port.addEventListener('message', (event) => {
 		const data = event.data as unknown;
 		if (data instanceof ArrayBuffer || Array.isArray(data)) {
 			if (ended) return;
 			const packets = Array.isArray(data) ? (data as ArrayBuffer[]) : [data];
 			if (pace) pace.take(packets);
-			else for (const packet of packets) reading.enqueue(packet);
+			else for (const packet of packets) feed.push(packet);
 			return;
 		}
 		if (typeof data === 'object' && data !== null && 'end' in data) {

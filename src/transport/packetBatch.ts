@@ -90,3 +90,66 @@ export function ownBuffer(packet: Uint8Array): ArrayBuffer {
 		? packet.buffer
 		: (packet.slice().buffer as ArrayBuffer);
 }
+
+const DATA = 0x02;
+const CLOSE = 0x04;
+
+/**
+ * Packets handed to an epoxy's Wisp reader, a stream's CLOSE never in the
+ * task its DATA came in. Epoxy's multiplexor drops what a stream holds
+ * unread once its CLOSE is in (wisp-mux's read ends at the close), so the
+ * end of a response a server sent just before it closed, or a body hyper
+ * had not asked for yet, was lost: a batch (a lane's message, a carrier
+ * host's) handed a download's last DATA and its CLOSE over at once, and an
+ * HTTP/1 response with `Connection: close` ended short (IncompleteBody).
+ * Such a CLOSE, and whatever came after it, waits a task, as a packet of
+ * its own message did; `flush` hands over what waits (the connection ends).
+ */
+export function wispFeed(enqueue: (packet: ArrayBuffer) => void): {
+	push(packet: ArrayBuffer): void;
+	flush(): void;
+} {
+	/** the streams given DATA in this task */
+	const fed = new Set<number>();
+	let waiting: ArrayBuffer[] = [];
+	let scheduled = false;
+	const later = () => {
+		if (scheduled) return;
+		scheduled = true;
+		setTimeout(() => {
+			scheduled = false;
+			fed.clear();
+			const held = waiting;
+			waiting = [];
+			for (const packet of held) push(packet);
+		}, 0);
+	};
+	const push = (packet: ArrayBuffer) => {
+		if (waiting.length) {
+			waiting.push(packet);
+			return;
+		}
+		if (packet.byteLength >= 5) {
+			const bytes = new Uint8Array(packet, 0, 5);
+			const id =
+				(bytes[1] | (bytes[2] << 8) | (bytes[3] << 16) | (bytes[4] << 24)) >>>
+				0;
+			if (id !== 0 && bytes[0] === CLOSE && fed.has(id)) {
+				waiting.push(packet);
+				later();
+				return;
+			}
+			if (id !== 0 && bytes[0] === DATA) {
+				fed.add(id);
+				later();
+			}
+		}
+		enqueue(packet);
+	};
+	const flush = () => {
+		const held = waiting;
+		waiting = [];
+		for (const packet of held) enqueue(packet);
+	};
+	return { push, flush };
+}

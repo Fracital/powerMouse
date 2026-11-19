@@ -34,7 +34,7 @@
 // - When the relay's connection ends, every lane ends, as each epoxy's own
 //   connection would.
 
-import { ownBuffer, PacketBatch } from './packetBatch';
+import { ownBuffer, PacketBatch, wispFeed } from './packetBatch';
 import { paceRider, type Ride } from './riderPace';
 
 /** what epoxy's function transport gives back (EpoxyWispTransportResult) */
@@ -211,9 +211,17 @@ export class WispSplit {
 	attachLocal(meter: Meter | null = null, arrived?: () => void): WispPipe {
 		let reading!: ReadableStreamDefaultController<ArrayBuffer>;
 		let closed = false;
+		const feed = wispFeed((packet) => {
+			try {
+				reading.enqueue(packet);
+			} catch {
+				// cancelled already
+			}
+		});
 		const close = () => {
 			if (closed) return;
 			closed = true;
+			feed.flush();
 			try {
 				reading.close();
 			} catch {
@@ -225,7 +233,7 @@ export class WispSplit {
 				send: (packet) => {
 					if (closed) return;
 					arrived?.();
-					reading.enqueue(packet);
+					feed.push(packet);
 				},
 				end: close,
 			},
@@ -417,10 +425,15 @@ export function lanePipe(
 ): WispPipe & { end(): void } {
 	let reading!: ReadableStreamDefaultController<ArrayBuffer>;
 	let done = false;
+	const feed = wispFeed((packet) => {
+		try {
+			reading.enqueue(packet);
+		} catch {
+			// cancelled already
+		}
+	});
 	// a carrier host's rider (`ride`) at the pace of this realm's body readers
-	const pace = credit
-		? paceRider(port, (packet) => reading.enqueue(packet))
-		: null;
+	const pace = credit ? paceRider(port, feed.push) : null;
 	const batch = new PacketBatch((sent) => {
 		if (!done) port.postMessage(sent satisfies LaneMessage, sent);
 	});
@@ -429,6 +442,7 @@ export function lanePipe(
 		batch.flush();
 		done = true;
 		pace?.end(false);
+		feed.flush();
 		port.postMessage('end' satisfies LaneMessage);
 		port.close();
 		try {
@@ -448,13 +462,14 @@ export function lanePipe(
 		if (data instanceof ArrayBuffer) {
 			arrived?.();
 			if (pace) pace.take([data]);
-			else reading.enqueue(data);
+			else feed.push(data);
 			return;
 		}
 		if (!Array.isArray(data)) {
 			// the lane's end, or the carrier host's (its relay's carrier
 			// ended): what waits here came before it
 			pace?.end(true);
+			feed.flush();
 			done = true;
 			batch.clear();
 			port.close();
@@ -467,7 +482,7 @@ export function lanePipe(
 		}
 		arrived?.();
 		if (pace) pace.take(data);
-		else for (const packet of data) reading.enqueue(packet);
+		else for (const packet of data) feed.push(packet);
 	};
 	port.start();
 	const write = new WritableStream<Uint8Array>({
