@@ -797,7 +797,7 @@ that Chrome 157 run:
 | `wpt-eventsource-format`         | 52        | 6            | 6              |
 | `wpt-beacon`                     | 15        | 0            | 0              |
 | `wpt-websockets`                 | 246       | 70           | 273            |
-| `wpt-workers-basics`             | 79        | 8            | 15             |
+| `wpt-workers-basics`             | 79        | 7            | 13             |
 | `wpt-workers-constructors`       | 43        | 0            | 0              |
 | `wpt-workers-scope`              | 78        | 0            | 0              |
 | `wpt-workers-semantics`          | 68        | 16           | 28             |

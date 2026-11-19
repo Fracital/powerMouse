@@ -2340,6 +2340,7 @@ export default class DocumentClient extends Client {
 				? allowDelegates(allow, src)
 				: { delegates: 'none' as const }),
 			credentialless,
+			apart: facts.includes('d'),
 		};
 	}
 	/**

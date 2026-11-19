@@ -935,10 +935,6 @@ fix).
   worker that
   starts another one has to rewrite its source and has no rewriter library
   and no base to fetch it against.
-- `workers/Worker-postMessage-happens-in-parallel.https.html` (2: the harness
-  ERROR `SharedArrayBuffer is not defined` and a TIMEOUT): the page asks for
-  cross-origin isolation, and a proxied frame is isolated only when the host
-  page is; the runner's host is not. A known limit.
 
 Cleared on the combined tree: `SharedWorker-detach-frame-in-error-event.html`
 (a frame's `document` read as cross-origin; the lead's about:blank origin
