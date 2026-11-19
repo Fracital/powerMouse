@@ -277,6 +277,8 @@ export async function startWebTransportServer({
 		certHash: leaf.certHash,
 		spki: leaf.spki,
 		certPem: `-----BEGIN CERTIFICATE-----\n${leaf.cert.toString('base64').replace(/.{64}/g, '$&\n')}\n-----END CERTIFICATE-----\n`,
+		/** the leaf's key, for a TCP server of the same name beside it (an h3 origin's) */
+		keyPem: `-----BEGIN PRIVATE KEY-----\n${leaf.key.toString('base64').replace(/.{64}/g, '$&\n')}\n-----END PRIVATE KEY-----\n`,
 		caPem,
 		events,
 		/**

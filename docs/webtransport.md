@@ -483,6 +483,30 @@ docs/webtransport.md, "Wisp on the session" and "Certificates"):
   which the Wisp header takes: stomp-h3's QUIC packets after the handshake
   (1200 bytes, no path MTU probes) and most WebRTC packets fit, and
   stomp-h3's Initials (padded to 1250, as Chrome's) go on the stream.
+- **HTTP/3 inside.** stomp-h3's QUIC rides a UDP stream like any other, so a
+  connection's packets take both ways: its 1250-byte ones (Initials, full
+  packets of a request body) on the stream, the rest (requests,
+  acknowledgements) as datagrams, and the server's the same by holyWisp's
+  datagram size. QUIC takes the two as one path that reorders and loses
+  some, as it takes UDP. Over `wss://holywisp.fracit.al/` on 2026-11-19
+  (headless Chrome 157, this machine behind a WireGuard tunnel of MTU 1360)
+  the server's packets came as datagrams of up to 1285 bytes and ones of
+  1477 on the stream (quic.nginx.org's), and the inner connection lost none
+  of its packets. After holyWisp's BBR and backpressure fixes that day, a 20
+  MB range of dl.google.com read from the transport itself, twice per
+  carrier and version (Mbit/s, cold then warm): HTTP/2 over the session (the
+  stream alone) 43 and 49, HTTP/3 (mostly datagrams) 51 and 86; over the
+  WebSocket HTTP/2 51 and 101, HTTP/3 15 and 33. HTTP/3 is fastest through
+  the session (where over the WebSocket each inner packet waits behind
+  TCP's), and HTTP/2 through it matches the WebSocket cold and runs about
+  half of it warm. Before those fixes the session ran either at 15 to 32:
+  the slow part was the relay's QUIC sending, not the datagrams.
+  speed.cloudflare.com offers no h3 (no Alt-Svc, no HTTPS record asked), so
+  a download from it is HTTP/2 on the stream whatever the carrier. A path
+  that took the handshake and then carried no datagrams held an h3 request
+  for quinn's 30 s idle timeout, and the next one again; Chrome's blackhole
+  delay and its broken mark now end that (docs/http3.md, rules 3 and 6;
+  `webtransport-wisp`).
 - **Wisp v2** (`wisp_v2` in epoxy's options) is offered as the protocol
   `wisp-v2`; holyWisp answers it with `wt-protocol` and opens v2 with INFO,
   as it does for a WebSocket with a subprotocol.

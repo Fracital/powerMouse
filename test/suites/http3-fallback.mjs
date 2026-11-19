@@ -93,6 +93,111 @@ const DATAGRAM_H3 = `data:text/javascript,${encodeURIComponent(`
 	}
 `)}`;
 
+// A stand-in for stomp-h3 that sends again what is not acknowledged, as
+// QUIC does: a request goes out, and again after 200, 400, 800 ms... until
+// the server acknowledges it (`ack <id>`, which this side acknowledges in
+// turn with one datagram that wants no answer, as a QUIC packet that is
+// only an ACK) or answers (`resp <id>`). Nothing heard for the handshake
+// timeout closes it as quinn's idle timeout does, in quinn's words. Its
+// RTT is 1 ms, as on loopback.
+const PROBING_H3 = `data:text/javascript,${encodeURIComponent(`
+	export default async function init() {}
+	export async function connect(host, readable, writable, options) {
+		const reader = readable.getReader();
+		const writer = writable.getWriter();
+		const encoder = new TextEncoder();
+		const decoder = new TextDecoder();
+		const read = () => reader.read().catch(() => ({ done: true }));
+		// stomp-h3's writes run inside its wasm, where a call back into the
+		// connection (its stats) throws as wasm-bindgen does
+		let inside = false;
+		const send = (text) => {
+			inside = true;
+			try {
+				return writer.write(encoder.encode(text)).catch(() => {});
+			} finally {
+				inside = false;
+			}
+		};
+		const idleMs = options.timeoutMs ?? 10000;
+		const pending = new Map();
+		let closed = false;
+		let idle;
+		const close = (why) => {
+			if (closed) return;
+			closed = true;
+			clearTimeout(idle);
+			writer.close().catch(() => {});
+			for (const entry of pending.values()) {
+				clearTimeout(entry.timer);
+				entry.reject(new Error('h3 response: ' + why));
+			}
+			pending.clear();
+		};
+		const heard = () => {
+			clearTimeout(idle);
+			idle = setTimeout(() => close('Connection error: Timeout'), idleMs);
+		};
+		send('hello ' + host);
+		const first = await Promise.race([
+			read(),
+			new Promise((resolve) => setTimeout(() => resolve('timeout'), idleMs)),
+		]);
+		if (first === 'timeout') {
+			close('timeout');
+			throw new Error('quic handshake: timed out');
+		}
+		if (first.done) throw new Error('quic handshake: datagram channel closed');
+		heard();
+		(async () => {
+			for (;;) {
+				const next = await read();
+				if (next.done) return close('Connection error: closed');
+				heard();
+				const [what, id] = decoder.decode(next.value).split(' ');
+				const entry = pending.get(id);
+				if (what === 'ack') {
+					if (entry) {
+						entry.acked = true;
+						clearTimeout(entry.timer);
+					}
+					send('a ' + id);
+				} else if (what === 'resp' && entry) {
+					clearTimeout(entry.timer);
+					pending.delete(id);
+					entry.resolve({ status: 200, headers: [], body: null });
+				}
+			}
+		})();
+		let ids = 0;
+		return {
+			get alive() { return !closed; },
+			handshake_ms: 1,
+			stats() {
+				if (inside) throw new Error('recursive use of an object detected which would lead to unsafe aliasing in rust');
+				return { rttMs: 1 };
+			},
+			close: () => close('Connection error: closed locally'),
+			request() {
+				if (closed) return Promise.reject(new Error('h3 send: closed'));
+				const id = String(ids++);
+				return new Promise((resolve, reject) => {
+					const entry = { resolve, reject, acked: false, timer: 0 };
+					pending.set(id, entry);
+					let wait = 200;
+					const out = () => {
+						if (closed || entry.acked || !pending.has(id)) return;
+						send('req ' + id);
+						entry.timer = setTimeout(out, wait);
+						wait *= 2;
+					};
+					out();
+				});
+			},
+		};
+	}
+`)}`;
+
 /**
  * Runs `steps` against a fresh Http3Transport. A step is a request
  * (`{ url, alt }`: the stand-in answers with `Alt-Svc: alt`), `{ sleep }`,
@@ -104,7 +209,10 @@ const DATAGRAM_H3 = `data:text/javascript,${encodeURIComponent(`
  * once, no reason reported), `close:N` (closed at once, close reason N),
  * `shut:N` (closed with reason N when the first datagram is sent, as the
  * edges' name gate does), `blackhole`, `endLater`, `echo` (what goes out
- * comes back) and `echo:MS` (after that long). Each request reports how long it took and how it went;
+ * comes back), `echo:MS` (after that long), `dark:N` (the first N datagrams
+ * echo, nothing after them crosses either way: a path that took the
+ * handshake and then carried nothing) and `server:MS` (PROBING_H3's server:
+ * a request is acknowledged at once and answered MS later). Each request reports how long it took and how it went;
  * the end reports the wrapper's info() and how often the channel was opened,
  * in all and per host.
  */
@@ -156,11 +264,21 @@ const scenario = async ({ module, channel, options, steps }) => {
 			},
 		});
 		let shut = false;
+		let crossed = 0;
 		const write = new WritableStream({
 			write(chunk) {
 				if (kind === 'shut' && !shut) {
 					shut = true;
 					back.close();
+				}
+				if (kind === 'dark' && crossed++ < Number(arg)) back.enqueue(chunk);
+				if (kind === 'server') {
+					const [what, id] = new TextDecoder().decode(chunk).split(' ');
+					const say = (text) => back.enqueue(new TextEncoder().encode(text));
+					if (what === 'hello') say('hello');
+					if (what !== 'req') return;
+					say(`ack ${id}`);
+					setTimeout(() => say(`resp ${id}`), Number(arg));
 				}
 				if (kind !== 'echo') return;
 				if (arg) setTimeout(() => back.enqueue(chunk), Number(arg));
@@ -469,6 +587,100 @@ if (!present) {
 			r.out[0].via === 'base-after-h3' &&
 			r.out[0].ms < 2000,
 		JSON.stringify(r.out ?? r),
+	);
+	ok(
+		'and the origin is not marked broken for it: the wisp stream ended, not its QUIC',
+		!entry(r, 'https://ends.test')?.brokenUntil,
+		JSON.stringify(r.info.altSvc),
+	);
+}
+
+// ---- a QUIC path that carries the handshake and then nothing -----------------
+// With PROBING_H3, which sends a request again until it is acknowledged.
+// Chrome closes a connection that has sent and heard nothing back for its
+// blackhole delay (6.4 s on loopback, measured: QUIC_TOO_MANY_RTOS), sends
+// the request again without the alternative and marks it broken when that
+// answers. stomp-h3 (quinn) waited for its idle timeout (30 s), and the
+// next request reconnected and waited again.
+{
+	const r = await run({
+		module: PROBING_H3,
+		channel: 'dark:1',
+		// the idle timeout far past the check's 15 s
+		options: { timeout: 30000 },
+		steps: [
+			{ url: 'https://dark.test/', alt: 'h3=":443"' },
+			{ sleep: 300 },
+			{ url: 'https://dark.test/', alt: 'h3=":443"' },
+			{ url: 'https://dark.test/', alt: 'h3=":443"' },
+		],
+	});
+	const dark = entry(r, 'https://dark.test');
+	ok(
+		"a QUIC connection that hears nothing back is closed at Chrome's blackhole delay: its GET goes over the base transport",
+		r.out[1]?.status === 200 &&
+			r.out[1].via === 'base-after-h3' &&
+			r.out[1].ms > 5500 &&
+			r.out[1].ms < 8500,
+		JSON.stringify(r.out),
+	);
+	ok(
+		'and the origin is marked broken: the next request goes over the base transport at once, with no new connection',
+		dark?.brokenUntil > r.now &&
+			r.out[2]?.status === 200 &&
+			r.out[2].via === 'base' &&
+			r.out[2].ms < 250 &&
+			r.opened === 1,
+		JSON.stringify({ out: r.out, dark, opened: r.opened }),
+	);
+}
+{
+	// the connection dies under the request with its channel open (quinn's
+	// idle timeout, here 1.5 s): Chrome's retry without the alternative
+	const r = await run({
+		module: PROBING_H3,
+		channel: 'dark:1',
+		options: { timeout: 1500 },
+		steps: [
+			{ url: 'https://idle.test/', alt: 'h3=":443"' },
+			{ sleep: 300 },
+			{ url: 'https://idle.test/', alt: 'h3=":443"' },
+			{ url: 'https://idle.test/', alt: 'h3=":443"' },
+		],
+	});
+	ok(
+		'a QUIC connection that fails under a request marks the origin broken once the base transport answered it; the next request does not reconnect',
+		r.out[1]?.via === 'base-after-h3' &&
+			entry(r, 'https://idle.test')?.brokenUntil > r.now &&
+			r.out[2]?.via === 'base' &&
+			r.out[2].ms < 250 &&
+			r.opened === 1,
+		JSON.stringify({ out: r.out, opened: r.opened, alt: r.info.altSvc }),
+	);
+}
+{
+	// a request the server acknowledges and answers 7 s later (a long
+	// poll): the only datagram unanswered is the acknowledgement of the
+	// server's, which wants no answer, and the connection stays
+	const r = await run({
+		module: PROBING_H3,
+		channel: 'server:7000',
+		options: { timeout: 30000 },
+		steps: [
+			{ url: 'https://poll.test/', alt: 'h3=":443"' },
+			{ sleep: 300 },
+			{ url: 'https://poll.test/', alt: 'h3=":443"' },
+			{ url: 'https://poll.test/', alt: 'h3=":443"' },
+		],
+	});
+	ok(
+		'a request the server acknowledges and holds past the blackhole delay is answered over HTTP/3; the origin is not marked broken',
+		r.out[1]?.via === 'h3' &&
+			r.out[1].ms > 6900 &&
+			r.out[2]?.via === 'h3' &&
+			!entry(r, 'https://poll.test')?.brokenUntil &&
+			r.opened === 1,
+		JSON.stringify({ out: r.out, opened: r.opened, alt: r.info.altSvc }),
 	);
 }
 

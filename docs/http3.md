@@ -52,6 +52,24 @@ refusing UDP to one name leaves HTTP/3 on for the rest of the session.
    A connection whose wisp UDP stream ends (the stream closed, or the
    whole wisp connection was lost) is closed at once, so the requests on
    it fail over to the base transport now rather than at the idle timeout.
+   A connection that hears nothing back after a request went out is
+   closed as Chrome closes a blackhole (QUIC_TOO_MANY_RTOS): quiche's delay
+   for two tail loss probes and five retransmission timeouts, 6.4 s at a
+   1 ms RTT (measured in headless Chrome 157 with every datagram dropped
+   after a first request: Chrome closed the connection 6.4 s after the
+   second went out and sent it again). quinn has no such detection: with
+   its small datagrams lost it sent a few probes and then waited for its
+   30 s idle timeout. A request is timed from the first datagram out after
+   it was made and is done being timed once anything is heard: a server
+   acknowledges a request within its max_ack_delay (25 ms) whether or not
+   it answers yet, so one it holds (a long poll) never trips it. A request
+   the server acknowledged whose answer is then lost is not caught this
+   way (over a WebTransport carrier: the flow's small datagrams lost while
+   its large packets still cross on the stream, which is how the server's
+   acknowledgement arrived): Chrome finds that with the PING it sends every
+   15 s while a request is open and its blackhole delay after it, about
+   21 s; stomp-h3 sends no PING, so it waits for the 30 s idle timeout,
+   after which rule 6 marks the origin broken.
 4. A handshake that fails (a TLS or QUIC error, the channel closed, nothing
    back within `timeout`, 10 s) marks the origin broken: 5 minutes, doubling
    on each consecutive failure up to 2 days, reset when QUIC works again.
@@ -90,6 +108,16 @@ refusing UDP to one name leaves HTTP/3 on for the rest of the session.
    base transport when it is GET, HEAD or OPTIONS, or when its stream never
    opened (so it never reached the server); otherwise the error is the
    request's. Request bodies are buffered (or a stream teed) for that retry.
+   When the connection itself failed under the request (a blackhole, the
+   idle timeout, an error of the connection's; not its wisp stream ending)
+   and the base transport answers the retry, the origin is marked broken
+   as in 4, as Chrome marks an alternative broken once its retry without
+   alt-svc after ERR_QUIC_PROTOCOL_ERROR succeeds. Without it a QUIC path
+   that carried the handshake and then nothing (datagrams lost while a
+   WebTransport carrier's stream carried the large packets, measured with
+   test/wisp-wt.mjs's relay) held every request to the origin for the
+   idle timeout: each reconnected, its handshake worked again, and it
+   waited again.
 
 `info()` on an `Http3Transport` lists the alt-svc entries (with which are
 broken, and which of those by a refusal), the connections with their RTT,

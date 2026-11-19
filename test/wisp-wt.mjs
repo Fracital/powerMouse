@@ -26,7 +26,14 @@
 // `cut()` closes every session and WebSocket, as a restarted relay does;
 // `udpBlocked = true` drops every datagram that reaches the listener (a
 // network that lets no UDP through); `drop()` ends every session the way a
-// network that stops passing UDP does (no session close).
+// network that stops passing UDP does (no session close). `datagramMax`
+// (bytes, 0 for the session's own) is the largest UDP DATA the relay sends
+// as a datagram, a larger one going on the stream as holyWisp sends it;
+// `datagramLoss` (0 to 1) is the share of the UDP DATA datagrams lost each
+// way, evenly (at 0.1 every tenth; `datagramsLost` counts them), the stream
+// untouched; `udpLost`
+// loses every UDP DATA, by datagram or on the stream, either way (a path
+// that stops carrying one UDP flow while the session lives).
 import { createSocket } from 'node:dgram';
 import { createServer } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -55,10 +62,21 @@ export async function startWispWebTransport(upstream) {
 		datagramsOut: 0,
 		udpOnStreamIn: 0,
 		udpOnStreamOut: 0,
+		datagramsLost: 0,
 		protocols: [],
 	};
 	const sockets = new Set();
 	const sessions = new Map();
+	// datagramLoss's share, added up per datagram: one is lost each time it
+	// reaches a whole one, so a run loses its share and no test leans on chance
+	let lossOwed = 0;
+	const lose = () => {
+		lossOwed += relay.datagramLoss;
+		if (lossOwed < 1) return false;
+		lossOwed -= 1;
+		stats.datagramsLost++;
+		return true;
+	};
 	let server;
 	let previous = null;
 	let api;
@@ -73,6 +91,9 @@ export async function startWispWebTransport(upstream) {
 		document: null,
 		documentDelay: 0,
 		udpBlocked: false,
+		datagramMax: 0,
+		datagramLoss: 0,
+		udpLost: false,
 		/** the leaf's SPKI hash, for --ignore-certificate-errors-spki-list (a dial without hashes) */
 		get spki() {
 			return server.spki;
@@ -188,7 +209,14 @@ export async function startWispWebTransport(upstream) {
 		const id = packet.length >= 5 ? idOf(packet) : -1;
 		if (type === CLOSE) session.udp.delete(id);
 		if (type === DATA && session.udp.has(id)) {
-			const max = api.maxDatagram(session.id);
+			if (relay.udpLost) {
+				stats.datagramsLost++;
+				return;
+			}
+			const max = relay.datagramMax
+				? Math.min(relay.datagramMax, api.maxDatagram(session.id))
+				: api.maxDatagram(session.id);
+			if (max >= packet.length && lose()) return;
 			if (max >= packet.length && api.datagram(session.id, packet)) {
 				stats.datagramsOut++;
 				return;
@@ -208,9 +236,14 @@ export async function startWispWebTransport(upstream) {
 		const id = packet.length >= 5 ? idOf(packet) : -1;
 		if (type === CONNECT && packet[5] === UDP) session.udp.add(id);
 		if (type === CLOSE) session.udp.delete(id);
+		if (relay.udpLost && type === DATA && session.udp.has(id)) {
+			stats.datagramsLost++;
+			return;
+		}
 		if (datagram) {
 			// holyWisp acts only on UDP DATA in a datagram
 			if (type !== DATA || !session.udp.has(id)) return;
+			if (lose()) return;
 			stats.datagramsIn++;
 		} else if (type === DATA && session.udp.has(id)) stats.udpOnStreamIn++;
 		if (session.ws.readyState === WebSocket.OPEN) session.ws.send(packet);

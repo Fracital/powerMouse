@@ -28,7 +28,12 @@
 //   requests answer over the WebSocket, the switch is on the console, and
 //   the relay is remembered as failing;
 // - a session named by its URL alone (no document), its certificate taken
-//   as the Web PKI's.
+//   as the Web PKI's;
+// - HTTP/3 to an origin through the session (QUIC in the relay's QUIC),
+//   with datagrams smaller than QUIC's packets and some of them lost, and
+//   then with the flow's UDP lost after the handshake: Chrome's blackhole
+//   delay, not QUIC's idle timeout, before the request goes over TCP and
+//   the origin is marked broken.
 //
 // When holyWisp's own build with its WebTransport listener is on the
 // machine (HOLYWISP_WT, or ~/src/holyWisp/build/release/holywisp), a page
@@ -36,11 +41,13 @@
 import { spawn } from 'node:child_process';
 import { createSocket } from 'node:dgram';
 import { existsSync } from 'node:fs';
+import { createServer as createHttps } from 'node:https';
 import { createServer } from 'node:net';
 import { homedir } from 'node:os';
 import { WebSocketServer } from 'ws';
 import { done, FIXTURE, launch, ok, PORT, PROXY, sleep } from '../lib.mjs';
 import { startWispWebTransport } from '../wisp-wt.mjs';
+import { startWebTransportServer } from '../wtserver.mjs';
 
 const TIMEOUT_MS = 10000;
 /** the carrier's timeout here, short so the fallback cases are quick */
@@ -83,6 +90,7 @@ function startController(page, host, wisp, extra = {}) {
 					module: '/epoxy/index.mjs',
 					options: [{ wisp, ...(extra.options ?? {}) }],
 					host,
+					...(extra.http3 && { http3: extra.http3 }),
 					...(extra.webTransport !== false && {
 						webTransport: {
 							timeoutMs: carrierMs,
@@ -895,6 +903,126 @@ for (const host of ['worker', 'page']) {
 		);
 		await context.close();
 	}
+}
+
+// HTTP/3 through the session: QUIC inside the relay's QUIC. An h3 origin
+// (test/wtserver.mjs, whose answer to a GET is a 404 over HTTP/3) with an
+// HTTPS server on the same TCP port that offers it (Alt-Svc) and answers
+// 200, the way a site's TCP and UDP sides sit, both trusted through the
+// test CA. stomp-h3's packets (1250 bytes) and the server's handshake
+// (1200) are larger than this relay's datagrams (1000), so they go on the
+// Wisp stream both ways while the small ones go as datagrams, and a tenth
+// of those are lost: every request still answers over HTTP/3. Then the
+// session stops carrying the flow's UDP either way (the session lives):
+// a request on the connection must not wait for stomp-h3's 30 s idle
+// timeout. As Chrome does with a blackhole (6.4 s on loopback, measured),
+// the connection is closed, the request goes over TCP, and the origin is
+// marked broken, so the next request goes over TCP at once.
+{
+	const h3 = await startWebTransportServer({ port: 0 });
+	const tcpSeen = [];
+	const site = createHttps({ cert: h3.certPem, key: h3.keyPem }, (req, res) => {
+		tcpSeen.push(req.url);
+		res.setHeader('alt-svc', `h3=":${h3.port}"; ma=3600`);
+		res.setHeader('content-type', 'text/plain');
+		res.end('tcp');
+	});
+	await new Promise((resolve) => site.listen(h3.port, '127.0.0.1', resolve));
+	const origin = `https://127.0.0.1:${h3.port}`;
+	const { context, page } = await controllerPage(
+		'page',
+		relay.wisp,
+		{
+			options: { pem_files: [h3.caPem] },
+			http3: { pem: h3.caPem, timeout: 5000 },
+		},
+		{ learn: true },
+	);
+	const get = (path) =>
+		page.evaluate(async (url) => {
+			const t = window.controller.transport;
+			const t0 = performance.now();
+			try {
+				const response = await Promise.race([
+					t.request(new URL(url), 'GET', null, [], undefined),
+					new Promise((resolve, reject) =>
+						setTimeout(() => reject(new Error('HUNG')), 20000),
+					),
+				]);
+				await new Response(response.body).arrayBuffer();
+				return {
+					status: response.status,
+					via: t.info().recent.at(-1)?.via,
+					ms: Math.round(performance.now() - t0),
+				};
+			} catch (error) {
+				return {
+					error: String(error).slice(0, 160),
+					ms: Math.round(performance.now() - t0),
+				};
+			}
+		}, `${origin}${path}`);
+	const info = () => page.evaluate(() => window.controller.transport.info());
+	ok(
+		'h3 through the session: the transport rides the session',
+		(await carrierOf(page)) === 'webtransport',
+	);
+	relay.datagramMax = 1000;
+	relay.datagramLoss = 0.1;
+	const before = snapshot();
+	const learned = await get('/learn');
+	let up = false;
+	for (let i = 0; i < 80 && !up; i++) {
+		up = (await info()).connections.some((c) => c.alive);
+		if (!up) await sleep(100);
+	}
+	const lossy = [];
+	for (let i = 0; i < 6; i++) lossy.push(await get(`/lossy?${i}`));
+	const d = delta(before);
+	ok(
+		'h3 through the session, datagrams of 1000 bytes and a tenth of them lost: every request answers over HTTP/3',
+		learned.status === 200 &&
+			up &&
+			lossy.every((r) => r.status === 404 && r.via === 'h3'),
+		JSON.stringify({ learned, up, lossy }),
+	);
+	ok(
+		"h3 through the session: QUIC's packets too large for a datagram went on the Wisp stream both ways, the rest as datagrams",
+		d.udpOnStreamIn > 0 &&
+			d.udpOnStreamOut > 0 &&
+			d.datagramsIn > 0 &&
+			d.datagramsOut > 0 &&
+			d.datagramsLost > 0,
+		JSON.stringify(d),
+	);
+	relay.udpLost = true;
+	const dark = await get('/dark');
+	const next = await get('/next');
+	const after = await info();
+	const entry = after.altSvc.find((e) => e.origin === origin);
+	ok(
+		"h3 through the session, its UDP lost after the handshake: the request goes over TCP at Chrome's blackhole delay, not QUIC's idle timeout",
+		dark.status === 200 &&
+			dark.via === 'base-after-h3' &&
+			dark.ms > 5000 &&
+			dark.ms < 10000,
+		JSON.stringify(dark),
+	);
+	ok(
+		'h3 through the session: and the origin is marked broken, the next request over TCP at once',
+		entry?.brokenUntil > Date.now() &&
+			next.status === 200 &&
+			next.via === 'base' &&
+			next.ms < 1500 &&
+			!after.connections.some((c) => c.alive),
+		JSON.stringify({ next, entry, connections: after.connections }),
+	);
+	relay.datagramMax = 0;
+	relay.datagramLoss = 0;
+	relay.udpLost = false;
+	await context.close();
+	site.close();
+	await h3.close();
 }
 
 // holyWisp's own listener, when its build is on the machine

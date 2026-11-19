@@ -114,6 +114,10 @@ export interface Http3Info {
 
 const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_WAIT_MS = 300;
+/** quiche's floor for a retransmission timeout (kMinRetransmissionTimeMs) */
+const MIN_RTO_MS = 200;
+/** the RTT a connection is taken to have before it measured one (stomp-h3's initial_rtt) */
+const INITIAL_RTT_MS = 100;
 /** how long HTTP/3 stays off for every origin once the relay is taken to have no UDP */
 const UDP_BLOCKED_MS = 5 * 60 * 1000;
 /**
@@ -189,6 +193,27 @@ const hex = (reason: number) => `0x${reason.toString(16).padStart(2, '0')}`;
 
 const sleep = (ms: number) =>
 	new Promise<null>((resolve) => setTimeout(() => resolve(null), ms));
+
+/**
+ * How long Chrome lets a QUIC connection go without hearing from its peer
+ * while it has packets out before it closes it as a blackhole
+ * (QUIC_TOO_MANY_RTOS, "Network blackhole detected"): quiche's
+ * GetNetworkBlackholeDelay for its default of two tail loss probes and
+ * five retransmission timeouts, each twice the last. Measured in headless
+ * Chrome 157 against test/wtserver.mjs with every datagram dropped after
+ * the first request: the second request's connection was closed so 6.4 s
+ * after it went out (an RTT of about 1 ms: 2 x 101.5 + 31 x 200 ms), and
+ * Chrome sent the request again on a new connection. The mean deviation
+ * quiche adds four times is taken as a quarter of the RTT (stomp-h3 reports
+ * the smoothed RTT alone), which is what it settles near on a steady path;
+ * under 200 ms of RTT the floor decides either way.
+ */
+export function blackholeDelay(rttMs: number): number {
+	const srtt = rttMs > 0 ? rttMs : INITIAL_RTT_MS;
+	const tlp = Math.max(2 * srtt, 1.5 * srtt + MIN_RTO_MS / 2);
+	const rto = Math.max(srtt + 4 * (srtt / 4), MIN_RTO_MS);
+	return Math.round(2 * tlp + 31 * rto);
+}
 
 /** `https://host[:port]` for a `force` entry given either way */
 function forcedOrigin(entry: string): string | null {
@@ -293,6 +318,14 @@ export default class Http3Transport implements ProxyTransport {
 	};
 	#dnsAsked = new Map<string, number>();
 	#recent: Http3Info['recent'] = [];
+	/**
+	 * Connections that ended because their wisp UDP stream did (the stream
+	 * closed, or the wisp connection was lost): that says nothing about the
+	 * origin's QUIC, so a request retried after one does not mark it broken
+	 */
+	#channelEnded = new WeakSet<H3Connection>();
+	/** each connection's blackhole watch: a request to watch, and the call that ends its watch */
+	#watches = new WeakMap<H3Connection, () => () => void>();
 
 	/**
 	 * `moduleUrl` is where stomp_h3.js lives (resolved by the host);
@@ -435,12 +468,16 @@ export default class Http3Transport implements ProxyTransport {
 		const alt = usable ? this.#lookup(key, origin) : null;
 		let retryBody = body;
 		let via: Http3Info['recent'][number]['via'] = 'base';
+		/** the QUIC connection that failed under this request, when it did */
+		let failed: H3Connection | null = null;
 
 		if (alt) {
 			const conn = await this.#connectionFor(key, alt);
 			if (conn) {
 				const prepared = await h3Body(body);
 				retryBody = prepared.retry;
+				// watched until it is heard from (blackholeDelay)
+				const unwatch = this.#watches.get(conn)?.();
 				try {
 					const response = await this.#viaH3(
 						conn,
@@ -448,7 +485,7 @@ export default class Http3Transport implements ProxyTransport {
 						method,
 						prepared,
 						headers,
-					);
+					).finally(() => unwatch?.());
 					this.#note(remote, 'h3');
 					this.#learn(key, remote, response.headers);
 					// the copy kept for a retry is not needed
@@ -456,7 +493,10 @@ export default class Http3Transport implements ProxyTransport {
 						void prepared.retry.cancel().catch(() => {});
 					return response;
 				} catch (error) {
-					if (!conn.alive) this.#lost(key, conn);
+					if (!conn.alive) {
+						this.#lost(key, conn);
+						failed = conn;
+					}
 					// a request whose stream never opened never reached the
 					// server, whatever its method
 					const unsent = /^h3 send:/.test(String((error as Error)?.message));
@@ -480,6 +520,21 @@ export default class Http3Transport implements ProxyTransport {
 			signal,
 		);
 		this.#note(remote, via);
+		// As Chrome: a request whose QUIC connection failed under it (a
+		// blackhole, the idle timeout, an error of the connection's) is sent
+		// again without the alternative, and when that answers, the
+		// alternative is marked broken (HttpNetworkTransaction's retry
+		// without alt-svc on ERR_QUIC_PROTOCOL_ERROR). Without it every
+		// request after one reconnected, waited out the same failure, and
+		// was sent again: a QUIC path that carried the handshake and not the
+		// requests held each of a page's requests to that origin until its
+		// connection's idle timeout, for good.
+		if (failed && !this.#channelEnded.has(failed) && this.#cache.lookup(key)) {
+			const delay = this.#cache.markBroken(key);
+			console.warn(
+				`Stomp: HTTP/3 to ${origin} failed under a request that the base transport answered; HTTP/3 off for it for ${Math.round(delay / 1000)} s`,
+			);
+		}
 		if (usable) {
 			// the base transport may have answered over a new wisp connection
 			this.#currentRelay();
@@ -713,9 +768,92 @@ export default class Http3Transport implements ProxyTransport {
 		const end = () => {
 			if (ended) return;
 			ended = true;
+			stopWatch();
 			if (!conn) return;
+			this.#channelEnded.add(conn);
 			conn.close();
 			this.#lost(origin, conn);
+		};
+		// Chrome's blackhole detection (blackholeDelay): a request sent and
+		// nothing heard back since. stomp-h3 (quinn) has none: with every
+		// small datagram lost it sent a handful of probes and then waited
+		// for the 30 s idle timeout, so a QUIC path that took the handshake
+		// and then carried nothing (a wisp relay's datagrams lost while its
+		// stream carries, as over a WebTransport session whose datagrams do
+		// not get through) held every request that long. A server
+		// acknowledges a request within its max_ack_delay (25 ms) whether or
+		// not it answers it yet, so a request it holds (a long poll) is
+		// heard from. A request is timed from the first datagram that went
+		// out after it was made: one waiting for a stream sends nothing.
+		// Requests whose first datagram went out and nothing was heard
+		// since, by when that was
+		const unheard = new Map<object, number>();
+		/** requests made and not yet sent */
+		const unsent = new Set<object>();
+		let silence: ReturnType<typeof setTimeout> | undefined;
+		const stopWatch = () => {
+			clearTimeout(silence);
+			silence = undefined;
+		};
+		// The delay by the RTT, read only from a timer or a microtask: the
+		// writes and reads below are called from inside stomp-h3's wasm, and
+		// a call back into the connection there (its stats) throws (a
+		// recursive use of the Rust object), which errored the writer and
+		// left every request on the connection unsent.
+		let wait = blackholeDelay(0);
+		const measure = () => {
+			try {
+				if (conn?.alive) wait = blackholeDelay(Number(conn.stats().rttMs));
+			} catch {
+				// still inside the wasm: the last measure stands
+			}
+		};
+		const blackhole = () => {
+			silence = undefined;
+			if (ended || !conn?.alive || !unheard.size) return;
+			const since = Math.min(...unheard.values());
+			const waited = performance.now() - since;
+			measure();
+			if (waited < wait) return rearm();
+			const live = conn;
+			console.warn(
+				`Stomp: QUIC to ${origin} heard nothing back for ${Math.round(waited)} ms after a request (a blackhole, as Chrome closes one); its requests go over the base transport`,
+			);
+			live.close();
+			this.#lost(origin, live);
+		};
+		const rearm = () => {
+			stopWatch();
+			if (ended || !unheard.size) return;
+			const since = Math.min(...unheard.values());
+			silence = setTimeout(
+				blackhole,
+				Math.max(0, since + wait - performance.now()),
+			);
+		};
+		// anything heard: every request out is acknowledged by now or will
+		// be, and is no longer watched
+		const heard = () => {
+			if (!unheard.size) return;
+			unheard.clear();
+			stopWatch();
+			queueMicrotask(measure);
+		};
+		const sent = () => {
+			if (!unsent.size) return;
+			const now = performance.now();
+			for (const request of unsent) unheard.set(request, now);
+			unsent.clear();
+			if (silence === undefined) rearm();
+		};
+		/** a request on the connection, watched until it is heard from or the returned call */
+		const watchRequest = () => {
+			const request = {};
+			unsent.add(request);
+			return () => {
+				unsent.delete(request);
+				if (unheard.delete(request) && !unheard.size) stopWatch();
+			};
 		};
 		// the first datagram back shows the relay carries UDP
 		let received = false;
@@ -754,6 +892,7 @@ export default class Http3Transport implements ProxyTransport {
 							received = true;
 							this.#carried(relay);
 						}
+						heard();
 						controller.enqueue(next.value);
 					},
 					cancel: (reason) => source.cancel(reason),
@@ -769,13 +908,23 @@ export default class Http3Transport implements ProxyTransport {
 		// ends the connection here and leaves this stream open.
 		const out = channel.write.getWriter();
 		const write = new WritableStream<Uint8Array>({
-			write: (chunk) => out.write(chunk).catch(end),
+			write: (chunk) => {
+				// the watch never stands in a datagram's way
+				try {
+					sent();
+				} catch {
+					// unwatched
+				}
+				return out.write(chunk).catch(end);
+			},
 			close: () => {
 				released = true;
+				stopWatch();
 				return out.close().catch(() => {});
 			},
 			abort: (reason) => {
 				released = true;
+				stopWatch();
 				return out.abort(reason).catch(() => {});
 			},
 		});
@@ -789,6 +938,8 @@ export default class Http3Transport implements ProxyTransport {
 				return null;
 			}
 			this.#connections.set(origin, conn);
+			this.#watches.set(conn, watchRequest);
+			measure();
 			this.#confirmed.add(origin);
 			this.#cache.confirm(origin);
 			return conn;
