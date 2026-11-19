@@ -29,7 +29,7 @@ use crate::shape::{
 	is_literal, iterates, post_message, pure, pure_arguments, refers_to, spreads_plain,
 	spec_text, unparen,
 };
-use crate::source::{Utf16Offsets, function_mark, keyed_holder, quote, source_key};
+use crate::source::{Utf16Offsets, function_mark, quote, source_key};
 
 /// What a node's place says about it, handed from the parent to the next
 /// expression visited
@@ -111,9 +111,6 @@ pub struct Walker<'a, 'c, 'h> {
 	discarded: Option<Span>,
 	marks: u32,
 	key: Option<String>,
-	/// the holder of the script's text, made with the key when the holder is
-	/// written (src/source.rs keyed_holder)
-	held: Option<String>,
 	declined: Option<Decline>,
 	/// the early-error check, which this walk drives (src/early.rs): one
 	/// walk for the rewrite and the check
@@ -190,7 +187,6 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			discarded: None,
 			marks: 0,
 			key: options.params.key.clone(),
-			held: None,
 			declined: None,
 			early: Checker::new(parsed, mode),
 			pending_method: None,
@@ -210,8 +206,8 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 	/// the edits, how many functions are marked, the key the marks name, the
 	/// holder of the script's text (when the walk made it) and why the walk
 	/// declined the script
-	pub fn finish(self) -> (Vec<Edit>, u32, Option<String>, Option<String>, Option<Decline>) {
-		(self.edits, self.marks, self.key, self.held, self.declined)
+	pub fn finish(self) -> (Vec<Edit>, u32, Option<String>, Option<Decline>) {
+		(self.edits, self.marks, self.key, self.declined)
 	}
 
 	/// why the walk declined the script, if it did (it may have left a
@@ -524,17 +520,10 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 
 	fn key(&mut self) -> &str {
 		if self.key.is_none() {
-			// a script with a marked function is written with its holder when
-			// the rewriter runs where no page does: made in the key's pass over
-			// the text
-			let key = if self.options.holder {
-				let (key, held) = keyed_holder(self.api(), self.src);
-				self.held = held;
-				key
-			} else {
-				source_key(self.src)
-			};
-			self.key = Some(key);
+			// (the holder a script with a marked function is written with,
+			// where the rewriter runs where no page does, is written into the
+			// output once the syntax tree has gone: src/rewrite.rs)
+			self.key = Some(source_key(self.src));
 		}
 		self.key.as_deref().unwrap_or_default()
 	}

@@ -1735,6 +1735,32 @@ Measured the same day and not taken: `+simd128` (no snip, both builds) is
 their scripts, gains nothing measurable (section 6's table prices it at 4
 to 12% for one site's load at a time).
 
+What a cold rewrite holds (2026-11-19). A script that grows an instance
+past `SERVING_MEMORY_LIMIT` is rewritten on a fresh one every time, so
+for the large scripts the peak and the cold time are what serving pays:
+the twelve largest (2.9 to 12.7 MB, 75.9 MB in all), each on a new
+instance, alternated, median of 7, the linear memory each ends with. The
+tree and its arena were alive until the output had been made, and the
+holder's copy of the text was made apart during the walk and copied into
+the output: 1,280 MiB for the twelve, 16.9 times their length (Discord's
+bundle 200 MiB). The tree and the arena now go before the output is made,
+which takes their room, and the holder is written into the output where
+it stands (`Piece::Fill`, `rust/edits`): 1,050 MiB, 13.8 times (Discord
+161, Slack 189 to 151, YouTube 178 to 149), and the twelve take 1,986 ms
+cold rather than 2,126 (7% less). Warm, on an instance already grown, 3%
+less too; through the worker's glue over the corpus the same within
+noise. What is left is the arena: oxc's used bytes are 10.2 times a
+script's length at the median (13.5 at p90, 18.3 at most, scripts of
+100 KB and more), and its chunks double, which puts its capacity at 14
+times at the median. Two ways with it measured and not taken: sizing the
+arena to the script, since a first chunk sized for most scripts is
+followed by one twice as large for the rest (24 to 40 times for a script
+past the guess) and pages past the used part are never touched anyway;
+and keeping one arena reset between rewrites, as scramjet does: 4.5%
+faster on a kept instance, but the arena keeps its largest chunk, which
+the output then cannot take (15.9 times cold), so more instances pass the
+limit and through the worker's glue the corpus takes 4.1% longer.
+
 ## 12. Risks
 
 | Risk                                                                                             | Handling                                                                                            |

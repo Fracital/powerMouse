@@ -46,6 +46,10 @@ pub enum Piece {
 	/// the source between two offsets, as it is (a helper's argument that
 	/// names the page's expression)
 	Source(Span),
+	/// text the caller writes into the output where it stands
+	/// ([`apply_filling`]): a text as long as the source, made from it,
+	/// that would otherwise be made apart and then copied in
+	Fill,
 }
 
 impl From<&str> for Piece {
@@ -165,10 +169,32 @@ pub fn apply(source: &str, edits: Vec<Edit>) -> Result<String, EditError> {
 	apply_range(source, Span::new(0, source.len() as u32), edits)
 }
 
+/// [`apply`], with `fill` writing each [`Piece::Fill`] at the end of the
+/// output where the piece stands, the output given room for `fill_len`
+/// bytes more for each (it grows if `fill` writes more)
+pub fn apply_filling(
+	source: &str,
+	edits: Vec<Edit>,
+	fill_len: usize,
+	fill: &mut dyn FnMut(&mut String),
+) -> Result<String, EditError> {
+	apply_with(source, Span::new(0, source.len() as u32), edits, fill_len, fill)
+}
+
 /// The output of the part `range` of `source` alone, with `edits` (all of
 /// them inside it) spliced in: a part the rewriter writes somewhere else, or
 /// twice, is rendered on its own and becomes the text of an edit
-pub fn apply_range(source: &str, range: Span, mut edits: Vec<Edit>) -> Result<String, EditError> {
+pub fn apply_range(source: &str, range: Span, edits: Vec<Edit>) -> Result<String, EditError> {
+	apply_with(source, range, edits, 0, &mut |_| {})
+}
+
+fn apply_with(
+	source: &str,
+	range: Span,
+	mut edits: Vec<Edit>,
+	fill_len: usize,
+	fill: &mut dyn FnMut(&mut String),
+) -> Result<String, EditError> {
 	let len = range.end;
 	if range.end < range.start || range.end as usize > source.len() {
 		return Err(EditError::OutOfBounds(range));
@@ -196,6 +222,7 @@ pub fn apply_range(source: &str, range: Span, mut edits: Vec<Edit>) -> Result<St
 			.map(|piece| match piece {
 				Piece::Text(text) => text.len(),
 				Piece::Source(span) => span.len() as usize,
+				Piece::Fill => fill_len,
 			})
 			.sum()
 	};
@@ -221,27 +248,27 @@ pub fn apply_range(source: &str, range: Span, mut edits: Vec<Edit>) -> Result<St
 		// wraps that end where this edit starts are closed first, unless it
 		// is an insertion there, which belongs inside them
 		let insert = matches!(edit.kind, Kind::Insert { .. });
-		close_through(source, &mut out, &mut cursor, &mut open, start, !insert);
+		close_through(source, &mut out, &mut cursor, &mut open, start, !insert, fill);
 		if start > cursor {
 			out.push_str(&source[cursor as usize..start as usize]);
 			cursor = start;
 		}
 		match &edit.kind {
 			Kind::Wrap { before, after } => {
-				write(source, &mut out, before);
+				write(source, &mut out, before, fill);
 				open.push((edit.span.end, after));
 			}
 			Kind::Replace { text } => {
-				write(source, &mut out, text);
+				write(source, &mut out, text, fill);
 				cursor = edit.span.end;
 			}
 			Kind::Insert { text, .. } => {
-				write(source, &mut out, text);
+				write(source, &mut out, text, fill);
 			}
 		}
 		i += 1;
 	}
-	close_through(source, &mut out, &mut cursor, &mut open, len, true);
+	close_through(source, &mut out, &mut cursor, &mut open, len, true, fill);
 	if len > cursor {
 		out.push_str(&source[cursor as usize..len as usize]);
 	}
@@ -258,6 +285,7 @@ fn close_through(
 	open: &mut Vec<(u32, &[Piece])>,
 	at: u32,
 	inclusive: bool,
+	fill: &mut dyn FnMut(&mut String),
 ) {
 	while let Some(&(end, after)) = open.last() {
 		if end > at || (end == at && !inclusive) {
@@ -267,18 +295,19 @@ fn close_through(
 			out.push_str(&source[*cursor as usize..end as usize]);
 			*cursor = end;
 		}
-		write(source, out, after);
+		write(source, out, after, fill);
 		open.pop();
 	}
 }
 
-fn write(source: &str, out: &mut String, pieces: &[Piece]) {
+fn write(source: &str, out: &mut String, pieces: &[Piece], fill: &mut dyn FnMut(&mut String)) {
 	for piece in pieces {
 		match piece {
 			Piece::Text(text) => out.push_str(text),
 			Piece::Source(span) => {
 				out.push_str(&source[span.start as usize..span.end as usize]);
 			}
+			Piece::Fill => fill(out),
 		}
 	}
 }
@@ -472,5 +501,21 @@ mod tests {
 			Edit::wrap(Span::new(1, 2), t("["), t("]")),
 		];
 		assert_eq!(apply(src, edits).unwrap(), "(a)[b]");
+	}
+
+	#[test]
+	fn fills_are_written_where_they_stand() {
+		let src = "'use strict'; a.b";
+		let fill = |out: &mut String| out.push_str("<held>");
+		let edits = vec![
+			Edit::wrap(Span::new(0, 12), Vec::new(), vec![Piece::from(";"), Piece::Fill]),
+			Edit::wrap(Span::new(14, 17), t("W("), t(")")),
+		];
+		let out = apply_filling(src, edits, 6, &mut { fill }).unwrap();
+		assert_eq!(out, "'use strict';<held>; W(a.b)");
+		assert_eq!(out.capacity(), out.len());
+		let edits = vec![Edit::insert(0, vec![Piece::Fill, Piece::from("\n")], -1)];
+		let mut longer = |out: &mut String| out.push_str(&"x".repeat(100));
+		assert_eq!(apply_filling("a", edits, 4, &mut longer).unwrap(), format!("{}\na", "x".repeat(100)));
 	}
 }

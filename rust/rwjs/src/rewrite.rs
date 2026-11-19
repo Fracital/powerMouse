@@ -1,7 +1,7 @@
 //! The parse and the driver: what a rewrite is given, what it answers, and
 //! what goes around the walk (the text ahead of the script's own code, the
 //! holder of its text, the routed source map). The walk itself is `walk`.
-use edits::{Edit, Piece, Span as EditSpan, apply};
+use edits::{Edit, Piece, Span as EditSpan, apply, apply_filling};
 use oxc::allocator::Allocator;
 use oxc::ast_visit::Visit;
 use oxc::ast::ast::{Expression, Statement};
@@ -10,7 +10,7 @@ use oxc::span::SourceType;
 
 use crate::config::Config;
 use crate::early::{self, Mode, Verdict};
-use crate::source::{Utf16Offsets, holder_statement_into, source_key};
+use crate::source::{Utf16Offsets, holder_room, holder_statement_into, source_key};
 use crate::walk::{Patterns, Walker};
 
 /// What one rewrite depends on besides the configuration: handed over per
@@ -482,60 +482,77 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 		}
 	}
 
-	let (mut edits, marks, key, held, declined) = walker.finish();
+	let (mut edits, marks, key, declined) = walker.finish();
 	if let Some(why) = declined {
 		return Err(why);
 	}
 
 	// the text ahead of the script's own code stays behind the directive
 	// prologue (anything before it would make `'use strict'` a plain
-	// expression) and behind a hashbang
-	let mut pre = options.params.pre.clone();
+	// expression) and behind a hashbang. The holder of the script's text
+	// goes last in it, written into the output where it stands
+	// (`Piece::Fill`), after the syntax tree has gone: a copy of the text as
+	// long as it, made apart during the walk and copied in, was alive with
+	// the tree (12.7 MB of the 200 a fresh instance ended Discord's bundle
+	// with) and then with the output
+	let mut lead = String::new();
+	let pre = &options.params.pre;
 	let key = key.or_else(|| options.params.key.clone());
-	if options.holder && marks > 0 {
-		// (as long as the script: the text ahead takes it as it is when it is
-		// empty, and is written onto otherwise, never made apart and copied)
-		match held {
-			Some(holder) if pre.is_empty() => pre = holder,
-			Some(holder) => pre.push_str(&holder),
-			None => {
-				let key = key.clone().unwrap_or_else(|| source_key(source));
-				holder_statement_into(&mut pre, &options.config.api, &key, source);
-			}
-		}
-	}
-	if !pre.is_empty() {
+	let held = options.holder && marks > 0;
+	if !pre.is_empty() || held {
 		let directive = if options.module { None } else { program.directives.last() };
-		match directive {
+		let at = match directive {
 			Some(directive) => {
 				let span = directive.span;
 				if !source[..span.end as usize].ends_with(';') {
-					pre.insert(0, ';');
+					lead.push(';');
 				}
-				edits.push(Edit::wrap(
-					EditSpan::new(span.start, span.end),
-					Vec::new(),
-					vec![Piece::Text(pre)],
-				));
+				None
 			}
 			None => {
 				let mut at = program.hashbang.as_ref().map_or(0, |hashbang| hashbang.span.end);
 				if at > 0 {
-					pre.insert(0, '\n');
+					lead.push('\n');
 				} else if !options.module {
 					// `--> text` is a comment only where its line starts: the
 					// text goes behind such lines, not ahead of the first
 					at = after_close_comments(source) as u32;
 					if at > 0 && !source[..at as usize].ends_with(LINE_ENDS) {
-						pre.insert(0, '\n');
+						lead.push('\n');
 					}
 				}
-				edits.push(Edit::insert(at, vec![Piece::Text(pre)], -1));
+				Some(at)
 			}
-		}
+		};
+		lead.push_str(pre);
+		// (the lead goes with the holder: a text the holder cannot carry,
+		// which holds every stand-in, has neither when there is no preamble)
+		let pieces = vec![if held { Piece::Fill } else { Piece::Text(std::mem::take(&mut lead)) }];
+		edits.push(match directive {
+			Some(directive) => Edit::wrap(EditSpan::new(directive.span.start, directive.span.end), Vec::new(), pieces),
+			None => Edit::insert(at.unwrap_or(0), pieces, -1),
+		});
 	}
 
-	let text = apply(source, edits).map_err(|_| Decline::Edits)?;
+	// (the tree and the arena it is in go before the output is made, which
+	// takes their room)
+	drop(program);
+	drop(allocator);
+	let key = if held { Some(key.unwrap_or_else(|| source_key(source))) } else { key };
+	let text = match &key {
+		Some(key) if held => {
+			let api = &options.config.api;
+			apply_filling(source, edits, lead.len() + holder_room(api, key, source), &mut |out| {
+				let start = out.len();
+				out.push_str(&lead);
+				if !holder_statement_into(out, api, key, source) && pre.is_empty() {
+					out.truncate(start);
+				}
+			})
+		}
+		_ => apply(source, edits),
+	}
+	.map_err(|_| Decline::Edits)?;
 	// a call kept as a target must still be a call the browser takes as
 	// one (the walk may have made a direct eval of it a conditional)
 	if freed {
