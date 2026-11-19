@@ -9,14 +9,22 @@ import {
 } from '../../csp';
 import { hostsApply } from '../../cspJudge';
 import { workerKindPartition, workerKindUnisolated } from '../../partition';
+import { routeXHR } from '../../routeURL';
 import type { EmulateInfo } from '../../serviceWorkerTypes';
-import { CSP_WORKER, WORKER_PARTITION } from '../../transport/messages';
+import StompURL from '../../StompURL';
+import {
+	CSP_WORKER,
+	LOAD_HEADER,
+	WORKER_PARTITION,
+	WORKER_REPORT_LOAD,
+} from '../../transport/messages';
 import { privateChannel, replayOf } from '../../transport/ports';
 import RemoteTransport from '../../transport/RemoteTransport';
 import { bareClient } from '../bareClient';
 import Client, { type HandedModules } from '../Client';
 import ProxyModule from '../modules/Proxy';
-import { LazyWeakMap } from '../ownCollections';
+import UnrouteModule from '../modules/Unroute';
+import { LazySet, LazyWeakMap } from '../ownCollections';
 import { dispatchAsTrusted } from '../violationDispatch';
 import { trustTaggedViolations } from '../violationViews';
 import ServiceWorkerGlobalModule from './modules/ServiceWorkerGlobal';
@@ -61,6 +69,21 @@ const nativeDispatchEvent = EventTarget.prototype.dispatchEvent;
 const nativeSetTimeout = globalThis.setTimeout;
 const NativeMessageEvent = globalThis.MessageEvent;
 const NativeViolationEvent = globalThis.SecurityPolicyViolationEvent;
+const nativeStringify = JSON.stringify;
+/**
+ * The origin this bundle was loaded from, as the frame of its own first
+ * run names it (no page's script has run yet): a worker whose location is
+ * opaque (a data: worker's) has the proxy's origin nowhere else
+ */
+const loadedFrom = (() => {
+	try {
+		return /(https?:\/\/[^/\s()]+)\/\S*:\d+:\d+/.exec(
+			new Error().stack ?? '',
+		)?.[1];
+	} catch (error) {
+		return undefined;
+	}
+})();
 
 /** the events a held message or connect stands for */
 const HELD_TYPES = ['message', 'connect'];
@@ -96,6 +119,14 @@ function releasePreambleHeld() {
 export default class WorkerClient extends Client {
 	/** the version id when this worker is a page's emulated service worker (docs/service-workers.md) */
 	serviceWorkerVersion?: string;
+	/**
+	 * The origin of this worker's routes where its location is opaque (a
+	 * data: worker's): the one its bundle came from (Unroute proxyOrigin), so
+	 * its routes read back and its bundle's frames are the inject's
+	 */
+	get bundleOrigin(): string | undefined {
+		return this.global.location.origin === 'null' ? loadedFrom : undefined;
+	}
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
 		this.isWorker = true;
@@ -275,24 +306,22 @@ export default class WorkerClient extends Client {
 	#unisolated = false;
 	/**
 	 * The context that started this dedicated worker is not cross-origin
-	 * isolated natively, though the host's page is (its route says so, or
-	 * a blob: or data: worker's bootstrap calls this before the worker's own
-	 * script): natively it is not either. Chrome already makes it so (its
-	 * creator's served Permissions-Policy reaches it); WebKit and Firefox
-	 * isolate every worker of an isolated page, so here its
-	 * `crossOriginIsolated` reads false and its SharedArrayBuffer global is
-	 * gone, and a worker it starts is told the same (src/inject/workerStart.ts)
+	 * isolated natively, though the host's page is, or the proxy isolates
+	 * the context's cluster with a Document-Isolation-Policy (its route says
+	 * so, or a blob: or data: worker's bootstrap calls this before the
+	 * worker's own script): natively it is not either. Chrome already makes
+	 * it so under an isolated host (its creator's served Permissions-Policy
+	 * reaches it); WebKit and Firefox isolate every worker of an isolated
+	 * page, and a Document-Isolation-Policy every worker of its documents, so
+	 * here its `crossOriginIsolated` reads false and its SharedArrayBuffer
+	 * global is gone, and a worker it starts is told the same
+	 * (src/inject/workerStart.ts). Only a context the proxy isolates says it.
 	 */
 	notIsolated() {
 		this.isolation = 'n';
 	}
 	override hideSharedArrayBuffer() {
-		if (
-			!this.hostIsolated ||
-			!this.isolation?.includes('n') ||
-			this.#unisolated
-		)
-			return;
+		if (!this.isolation?.includes('n') || this.#unisolated) return;
 		this.#unisolated = true;
 		Reflect.deleteProperty(this.global, 'SharedArrayBuffer');
 		const proxyModule = this.getModule(ProxyModule)!;
@@ -345,12 +374,14 @@ export default class WorkerClient extends Client {
 	 * a socket, a session; script-src-elem: importScripts, import();
 	 * worker-src: a worker), as Chrome does (measured, Chrome 157): each
 	 * policy that refuses it reports it on the worker's global a task later
-	 * (trusted; the worker's URL as its documentURI, without its query as
-	 * its sourceFile, `blob` or `data` for those, none where `sourced` is
-	 * false (an EventSource's), status 0; a local scheme's URL as its
-	 * scheme). A refused request is never made, and the browser judges a
-	 * request it lets out once more: a report-only policy alone reports it
-	 * `reportTimes` times. True where an enforced one refuses it.
+	 * (trusted; the worker's URL as its documentURI, the page's code that
+	 * made it as its place, its script's URL without the query as its
+	 * sourceFile, `blob` or `data` for those, none where `sourced` is false
+	 * (an EventSource's), status 0; a local scheme's URL as its scheme), and
+	 * to the policy's report-uri (#deliverReport). A refused request is never
+	 * made, and the browser judges a request it lets out once more: a
+	 * report-only policy alone reports it `reportTimes` times. True where an
+	 * enforced one refuses it.
 	 */
 	requestVerdict(
 		directive: string,
@@ -380,13 +411,49 @@ export default class WorkerClient extends Client {
 		);
 		if (typeof NativeViolationEvent !== 'function') return refused;
 		const own = judged.named ?? this.url.url.href.replace(/#.*$/s, '');
+		// (the page's frame that made the request: the hook is under it)
+		const site = sourced
+			? this.getModule(UnrouteModule)?.callerSite()
+			: undefined;
 		const sourceFile = sourced
-			? (judged.named ?? own.replace(/\?.*$/s, ''))
+			? (judged.named ?? (site?.filename || own).replace(/[?#].*$/s, ''))
 			: '';
+		const lineNumber = site?.filename ? site.lineno : 0;
+		// (an import() is the one script-src-elem request reported once: the
+		// rewrite wraps the whole call, so in a script the service worker
+		// rewrote (a file, a blob:), whose map places the wrap at `import`,
+		// the frame is there, where natively the place is its specifier's,
+		// `import(` on)
+		const columnNumber = site?.filename
+			? site.colno +
+				(directive === 'script-src-elem' &&
+				reportTimes === 1 &&
+				judged.named !== 'data'
+					? 7
+					: 0)
+			: 0;
 		const blockedURI = /^(https?|wss?):$/.test(url.protocol)
 			? url.href.replace(/#.*$/s, '')
 			: url.protocol.slice(0, -1);
-		for (const { policy } of refusing)
+		for (const { policy, self } of refusing) {
+			this.#deliverReport(policy, self, {
+				'document-uri': own,
+				referrer: '',
+				'violated-directive': directive,
+				'effective-directive': directive,
+				'original-policy': policy.text,
+				disposition: policy.disposition,
+				'blocked-uri': blockedURI,
+				...(sourceFile
+					? {
+							'line-number': lineNumber,
+							'column-number': columnNumber,
+							'source-file': sourceFile,
+						}
+					: {}),
+				'status-code': 0,
+				'script-sample': '',
+			});
 			for (let i = refused ? 1 : reportTimes; i > 0; i--)
 				Reflect.apply(nativeSetTimeout, globalThis, [
 					() => {
@@ -402,8 +469,8 @@ export default class WorkerClient extends Client {
 							disposition: policy.disposition,
 							sourceFile,
 							statusCode: 0,
-							lineNumber: 0,
-							columnNumber: 0,
+							lineNumber,
+							columnNumber,
 							sample: '',
 						});
 						dispatchAsTrusted(
@@ -417,7 +484,51 @@ export default class WorkerClient extends Client {
 						);
 					},
 				]);
+		}
 		return refused;
+	}
+	/** the reports this worker sent, as their bodies read */
+	readonly #sentReports = new LazySet<string>();
+	/**
+	 * Send the report of a violation of `policy` (Chrome's members, in its
+	 * order) to the policy's report-uri endpoints (resolved against `self`,
+	 * the URL the policy's 'self' is), as Chrome does for a
+	 * worker (measured, Chrome 157): one POST of application/csp-report to
+	 * each as the violation is made, no-cors with Sec-Fetch-Dest: report, the
+	 * worker's URL as its Referer, none again for a report that reads as one
+	 * the worker sent. The browser never gets the worker's policy, so the
+	 * service worker sends it, for a request that names WORKER_REPORT_LOAD
+	 * and whose endpoint and body it finds in the worker's own policies
+	 */
+	#deliverReport(policy: Policy, self: URL, report: Record<string, unknown>) {
+		const endpoints = policy.directives.get('report-uri');
+		if (!endpoints?.length) return;
+		const text = nativeStringify({ 'csp-report': report });
+		if (this.#sentReports.has(text)) return;
+		this.#sentReports.add(text);
+		for (const endpoint of endpoints) {
+			let url: URL;
+			try {
+				url = new URL(endpoint, self);
+			} catch (error) {
+				continue;
+			}
+			if (!/^https?:$/.test(url.protocol)) continue;
+			try {
+				this.nativeFetch(routeXHR(new StompURL(url, this.url)), {
+					method: 'POST',
+					body: text,
+					credentials: 'same-origin',
+					keepalive: true,
+					headers: {
+						'content-type': 'application/csp-report',
+						[LOAD_HEADER]: WORKER_REPORT_LOAD,
+					},
+				}).catch(() => {});
+			} catch (error) {
+				// a worker being closed
+			}
+		}
 	}
 	/** the `sw:` route's preamble: this worker is a page's service worker */
 	emulateServiceWorker(info: EmulateInfo) {

@@ -7,7 +7,10 @@
 // origins, only for h3 and only for the origin's own host, `clear` forgets
 // it; a request never waits on a QUIC handshake that has not worked yet; a
 // failed handshake marks the origin broken and the base transport serves it
-// with no stall; a forced origin waits at most the handshake timeout. And
+// with no stall; a forced origin waits at most the handshake timeout; an
+// HTTPS record that names h3 (from a stand-in DoH server) puts a name's
+// first request on HTTP/3, and a slow record or handshake delays it by a
+// bounded head start at most. And
 // what a refused UDP stream means (docs/http3.md, rule 5): HTTP/3 goes off
 // for that origin alone, and for every origin only when the relay itself
 // is shown to have no UDP (a wisp v2 server without the UDP extension, or
@@ -41,7 +44,10 @@ const present = await page.evaluate(
 // first fails the handshake the way stomp-h3 words it. Over a channel that
 // echoes it is a connection that works; a datagram really has to come back.
 const DATAGRAM_H3 = `data:text/javascript,${encodeURIComponent(`
-	export default async function init() {}
+	// (how many transports loaded it: the scenario counts them)
+	export default async function init() {
+		globalThis.h3Inits = (globalThis.h3Inits ?? 0) + 1;
+	}
 	export async function connect(host, readable, writable, options) {
 		const reader = readable.getReader();
 		const writer = writable.getWriter();
@@ -215,7 +221,8 @@ const PROBING_H3 = `data:text/javascript,${encodeURIComponent(`
 
 /**
  * Runs `steps` against a fresh Http3Transport. A step is a request
- * (`{ url, alt }`: the stand-in answers with `Alt-Svc: alt`), `{ sleep }`,
+ * (`{ url, alt, partition }`: the stand-in answers with `Alt-Svc: alt`;
+ * `partition` is the network partition the service worker names), `{ sleep }`,
  * `{ info }` (a snapshot of info() under that name) or `{ relay }` (the base
  * transport is on a new wisp connection, whose channels are the ones given).
  * `channel` is one kind for every host or a map of host to kind (`*` for the
@@ -233,10 +240,60 @@ const PROBING_H3 = `data:text/javascript,${encodeURIComponent(`
  * answer is lost, and so is everything after it). A request step's `cap`
  * is how long it may take (15 s). Each request reports how long it took and how it went;
  * the end reports the wrapper's info() and how often the channel was opened,
- * in all and per host.
+ * in all and per host. The base transport is a DoH server too, at
+ * doh.test: `records` maps a name to the HTTPS record it answers for it
+ * (`{ alpn, port, delay }`, alpn h3 unless given, after `delay` ms), any
+ * other name has none; `asked` counts its questions per name.
  */
-const scenario = async ({ module, channel, options, steps }) => {
+const scenario = async ({
+	module,
+	channel,
+	options,
+	steps,
+	records = {},
+	shared = false,
+}) => {
 	const { Http3Transport } = await import('/stomp/controller.mjs');
+	const asked = {};
+	const answered = {};
+	const answeredWith = [];
+	// an RFC 8484 answer to the query in `dns`: the question, and one
+	// ServiceMode HTTPS record (priority 1, target ".", TTL 300) when there
+	// is one for the name
+	const doh = async (url) => {
+		const query = Uint8Array.from(
+			atob(url.searchParams.get('dns').replace(/-/g, '+').replace(/_/g, '/')),
+			(c) => c.charCodeAt(0),
+		);
+		const labels = [];
+		for (let at = 12; query[at]; at += query[at] + 1)
+			labels.push(
+				new TextDecoder().decode(query.subarray(at + 1, at + 1 + query[at])),
+			);
+		const name = labels.join('.');
+		asked[name] = (asked[name] ?? 0) + 1;
+		const record = records[name];
+		if (record?.delay)
+			await new Promise((resolve) => setTimeout(resolve, record.delay));
+		const answer = [...query];
+		answer[2] = 0x81;
+		answer[3] = 0x80;
+		if (record) {
+			answer[7] = 1;
+			const alpn = new TextEncoder().encode(record.alpn ?? 'h3');
+			const rdata = [0, 1, 0, 0, 1, 0, alpn.length + 1, alpn.length, ...alpn];
+			if (record.port)
+				rdata.push(0, 3, 0, 2, record.port >> 8, record.port & 255);
+			answer.push(0xc0, 12, 0, 65, 0, 1, 0, 0, 1, 44, 0, rdata.length);
+			answer.push(...rdata);
+		}
+		return {
+			status: 200,
+			statusText: 'OK',
+			headers: [['content-type', 'application/dns-message']],
+			body: new Uint8Array(answer),
+		};
+	};
 	const base = {
 		ready: false,
 		// what Http3Transport tells one wisp connection from the next by
@@ -245,6 +302,8 @@ const scenario = async ({ module, channel, options, steps }) => {
 			this.ready = true;
 		},
 		async request(url) {
+			if (url.hostname === 'doh.test' && url.searchParams.has('dns'))
+				return doh(url);
 			const alt = url.searchParams.get('alt');
 			return {
 				status: 200,
@@ -256,6 +315,32 @@ const scenario = async ({ module, channel, options, steps }) => {
 		connect() {
 			throw new Error('not here');
 		},
+		// `shared`: the base answers HTTPS records itself (the epoxy build's
+		// httpsAnswer), one question per name, counted in `answered`
+		...(shared && {
+			fieldSupport: { httpsAnswer: true },
+			async httpsAnswer(host, headers) {
+				answered[host] = (answered[host] ?? 0) + 1;
+				answeredWith.push(headers ?? null);
+				const query = [0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+				for (const label of host.split('.'))
+					query.push(label.length, ...new TextEncoder().encode(label));
+				query.push(0, 0, 65, 0, 1);
+				const url = new URL('https://doh.test/dns-query');
+				url.searchParams.set(
+					'dns',
+					btoa(String.fromCharCode(...query))
+						.replace(/\+/g, '-')
+						.replace(/\//g, '_')
+						.replace(/=+$/, ''),
+				);
+				const answer = await doh(url);
+				// (asked of the base itself, not over a DoH request)
+				asked[host]--;
+				if (!asked[host]) delete asked[host];
+				return answer.body.buffer;
+			},
+		}),
 	};
 	let opened = 0;
 	const openedBy = {};
@@ -322,8 +407,21 @@ const scenario = async ({ module, channel, options, steps }) => {
 				arg && { closeReason: () => Number(arg) }),
 		};
 	};
-	const transport = new Http3Transport(base, { ...options, udp }, module);
+	const transport = new Http3Transport(
+		base,
+		{ ...options, udp },
+		module,
+		undefined,
+		shared,
+	);
+	const inits0 = globalThis.h3Inits ?? 0;
 	await transport.init();
+	// what it did when it started, before any request
+	await new Promise((resolve) => setTimeout(resolve, 50));
+	const atStart = {
+		asked: Object.keys(asked).length,
+		inits: (globalThis.h3Inits ?? 0) - inits0,
+	};
 	const out = [];
 	const infos = {};
 	for (const step of steps) {
@@ -345,7 +443,13 @@ const scenario = async ({ module, channel, options, steps }) => {
 		const t0 = performance.now();
 		try {
 			const response = await Promise.race([
-				transport.request(url, 'GET', null, [], undefined),
+				transport.request(
+					url,
+					'GET',
+					null,
+					step.partition ? [['$stomp$network', step.partition]] : [],
+					undefined,
+				),
 				new Promise((resolve, reject) =>
 					setTimeout(() => reject(new Error('HUNG')), step.cap ?? 15000),
 				),
@@ -363,7 +467,20 @@ const scenario = async ({ module, channel, options, steps }) => {
 		}
 	}
 	const info = transport.info();
-	return { out, info, infos, opened, openedBy, now: Date.now() };
+	const inits = (globalThis.h3Inits ?? 0) - inits0;
+	return {
+		out,
+		info,
+		infos,
+		opened,
+		openedBy,
+		asked,
+		answered,
+		answeredWith,
+		atStart,
+		inits,
+		now: Date.now(),
+	};
 };
 const run = (args) =>
 	page
@@ -1033,6 +1150,242 @@ for (const [kind, what] of [
 			r.info.udpRefused.length === 0 &&
 			r.opened === 1,
 		JSON.stringify({ quiet, refused: r.info.udpRefused, opened: r.opened }),
+	);
+}
+
+// ---- HTTPS records: h3 on the first request ----------------------------------
+// As Chrome's resolver asks for a name's HTTPS record with its addresses and
+// connects with QUIC at once when its alpn names h3, racing TCP: the first
+// request to such a name waits for the record (up to 300 ms) and then for
+// the QUIC handshake (a head start of `wait`, 300 ms), and goes over the
+// base transport when either is late. Nothing of it happens when the
+// transport starts: until a record (or an Alt-Svc) has named h3 and
+// stomp-h3 has loaded, a first request does not wait for its record. These
+// need no stomp-h3 (the stand-in module above).
+const DOH = { dns: 'https://doh.test/dns-query' };
+// a first name whose record names h3: its request does not wait, and the
+// record loads stomp-h3 for the steps after it
+const WARM = [{ url: 'https://warm.test/' }, { sleep: 100 }];
+const warmed = (records) => ({ 'warm.test': {}, ...records });
+{
+	const r = await scoped({
+		channel: 'echo',
+		options: DOH,
+		records: warmed({ 'rec.test': {}, 'two.test': { alpn: 'h2' } }),
+		steps: [
+			...WARM,
+			{ url: 'https://rec.test/' },
+			{ url: 'https://rec.test/' },
+			{ url: 'https://none.test/' },
+			{ url: 'https://none.test/' },
+			{ url: 'https://two.test/' },
+			{ url: 'https://rec.test:8443/' },
+			{ url: 'https://127.0.0.9/' },
+			{ url: 'http://plain.test/' },
+		],
+	});
+	ok(
+		'nothing is asked and stomp-h3 is not loaded when the transport starts; a first request before it has loaded does not wait for its record, and the record that names h3 loads it',
+		r.atStart.asked === 0 &&
+			r.atStart.inits === 0 &&
+			r.out[0]?.via === 'base' &&
+			r.out[0].ms < 50 &&
+			r.asked['warm.test'] === 1 &&
+			r.inits === 1,
+		JSON.stringify({ atStart: r.atStart, inits: r.inits, out: r.out[0] }),
+	);
+	ok(
+		'a name whose HTTPS record names h3: its first request goes over HTTP/3, the record asked once',
+		r.out[1]?.via === 'h3' &&
+			r.out[2]?.via === 'h3' &&
+			r.asked['rec.test'] === 1 &&
+			entry(r, 'https://rec.test')?.source === 'dns' &&
+			fast(r.out.slice(1, 3), 150),
+		JSON.stringify({ out: r.out, asked: r.asked, alt: r.info.altSvc }),
+	);
+	ok(
+		'a name with no HTTPS record, or one without h3, is served by the base transport once its record says so, asked once',
+		[3, 4, 5].every((i) => r.out[i]?.via === 'base') &&
+			fast(r.out.slice(3, 6), 100) &&
+			r.asked['none.test'] === 1 &&
+			r.asked['two.test'] === 1 &&
+			!r.openedBy['none.test'] &&
+			!r.openedBy['two.test'],
+		JSON.stringify({ out: r.out, asked: r.asked, openedBy: r.openedBy }),
+	);
+	ok(
+		'no record is asked for another port, an IP address or plain http',
+		r.asked['rec.test'] === 1 &&
+			!r.asked['127.0.0.9'] &&
+			!r.asked['plain.test'] &&
+			Object.keys(r.asked).length === 4 &&
+			[6, 7, 8].every((i) => r.out[i]?.via === 'base'),
+		JSON.stringify({ out: r.out, asked: r.asked }),
+	);
+}
+{
+	const r = await scoped({
+		channel: 'echo',
+		options: DOH,
+		records: { 'two.test': { alpn: 'h2' }, 'doh.test': {} },
+		steps: [
+			{ url: 'https://none.test/' },
+			{ url: 'https://two.test/' },
+			{ url: 'https://doh.test/' },
+			{ sleep: 50 },
+		],
+	});
+	ok(
+		'records without h3 never load stomp-h3, and the DoH server is not asked for its own name',
+		r.inits === 0 &&
+			r.out.every((x) => x.via === 'base') &&
+			r.asked['none.test'] === 1 &&
+			r.asked['two.test'] === 1 &&
+			!r.asked['doh.test'],
+		JSON.stringify({ out: r.out, asked: r.asked, inits: r.inits }),
+	);
+}
+{
+	const r = await scoped({
+		channel: 'echo',
+		options: DOH,
+		records: warmed({ 'rec.test': {} }),
+		steps: [
+			...WARM,
+			{ url: 'https://rec.test/', partition: 'https://a.test' },
+			{ url: 'https://rec.test/', partition: 'https://a.test' },
+			{ url: 'https://rec.test/', partition: 'https://b.test' },
+		],
+	});
+	ok(
+		'an HTTPS record answer is kept per network partition: another site asks again, and each goes over HTTP/3',
+		r.asked['rec.test'] === 2 && r.out.slice(1).every((x) => x.via === 'h3'),
+		JSON.stringify({ out: r.out, asked: r.asked }),
+	);
+}
+{
+	const r = await scoped({
+		channel: 'echo',
+		options: DOH,
+		shared: true,
+		records: warmed({ 'rec.test': {} }),
+		steps: [
+			...WARM,
+			{ url: 'https://rec.test/', partition: 'https://a.test' },
+			{ url: 'https://rec.test/', partition: 'https://a.test' },
+			{ url: 'https://none.test/' },
+		],
+	});
+	ok(
+		'a base that answers HTTPS records itself is asked instead of the DoH server, with the partition, and its answer puts a first request on HTTP/3',
+		Object.keys(r.asked).length === 0 &&
+			r.answered['warm.test'] === 1 &&
+			r.answered['rec.test'] === 1 &&
+			r.answered['none.test'] === 1 &&
+			r.out[1]?.via === 'h3' &&
+			r.out[2]?.via === 'h3' &&
+			r.out[3]?.via === 'base' &&
+			r.answeredWith.some((headers) => headers?.[0]?.[1] === 'https://a.test'),
+		JSON.stringify({
+			out: r.out,
+			asked: r.asked,
+			answered: r.answered,
+			answeredWith: r.answeredWith,
+		}),
+	);
+}
+{
+	const r = await scoped({
+		channel: 'echo',
+		options: { dns: '' },
+		records: { 'rec.test': {} },
+		steps: [{ url: 'https://rec.test/' }],
+	});
+	ok(
+		'with `dns` empty no record is asked for',
+		r.out[0]?.via === 'base' && Object.keys(r.asked).length === 0,
+		JSON.stringify({ out: r.out, asked: r.asked }),
+	);
+}
+{
+	const r = await scoped({
+		channel: { 'dead.test': 'blackhole', 'up.test': 'echo', '*': 'echo' },
+		options: DOH,
+		records: warmed({ 'dead.test': {}, 'up.test': {} }),
+		steps: [
+			...WARM,
+			{ url: 'https://dead.test/' },
+			{ url: 'https://dead.test/' },
+			{ url: 'https://up.test/' },
+			{ sleep: 300 },
+			{ url: 'https://up.test/' },
+		],
+	});
+	ok(
+		'a first QUIC connection not up within its head start: the base transport serves the request after 300 ms, and the next at once',
+		r.out[1]?.via === 'base' &&
+			r.out[1].ms >= 250 &&
+			r.out[1].ms < 700 &&
+			r.out[2]?.via === 'base' &&
+			r.out[2].ms < 100 &&
+			r.openedBy['dead.test'] === 1,
+		JSON.stringify({ out: r.out, openedBy: r.openedBy }),
+	);
+	ok(
+		'a relay that carried a datagram back keeps giving head starts, and a QUIC connection is used once up',
+		r.out[3]?.via === 'h3' &&
+			r.out[4]?.via === 'h3' &&
+			r.asked['up.test'] === 1,
+		JSON.stringify({ out: r.out, asked: r.asked }),
+	);
+}
+{
+	const r = await scoped({
+		channel: {
+			'dead.test': 'blackhole',
+			'up.test': 'echo',
+			'warm.test': 'blackhole',
+		},
+		options: DOH,
+		records: warmed({ 'dead.test': {}, 'up.test': {} }),
+		steps: [
+			...WARM,
+			{ url: 'https://dead.test/' },
+			{ url: 'https://up.test/' },
+			{ sleep: 300 },
+			{ url: 'https://up.test/' },
+		],
+	});
+	ok(
+		'over a relay nothing has come back on since a head start ran out, a new name gets none, and its QUIC connection is used once up',
+		r.out[1]?.via === 'base' &&
+			r.out[2]?.via === 'base' &&
+			r.out[2].ms < 100 &&
+			r.out[3]?.via === 'h3' &&
+			r.asked['up.test'] === 1,
+		JSON.stringify({ out: r.out, asked: r.asked }),
+	);
+}
+{
+	const r = await scoped({
+		channel: 'echo',
+		options: DOH,
+		records: warmed({ 'slow.test': { delay: 1200 } }),
+		steps: [
+			...WARM,
+			{ url: 'https://slow.test/' },
+			{ sleep: 1500 },
+			{ url: 'https://slow.test/' },
+		],
+	});
+	ok(
+		'a DoH server slower than 300 ms: the first request goes over the base transport at 300 ms, and the answer serves the next over HTTP/3',
+		r.out[1]?.via === 'base' &&
+			r.out[1].ms >= 250 &&
+			r.out[1].ms < 600 &&
+			r.out[2]?.via === 'h3' &&
+			r.asked['slow.test'] === 1,
+		JSON.stringify({ out: r.out, asked: r.asked }),
 	);
 }
 

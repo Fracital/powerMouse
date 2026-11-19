@@ -31,7 +31,9 @@
 // - a head whose inline script trickles in (YouTube's 780 KB) is in, and
 //   the body's first heading after it, while the rest is on its way (the
 //   worker cut the markup only once twice as much had come as when it
-//   last found the script unfinished, which passed the document's end).
+//   last found the script unfinished, which passed the document's end),
+//   and so is one whose script's end tag comes in two pieces (the worker
+//   looks for it in what came last and the end of what came before).
 import {
 	done,
 	evaluateIsolated,
@@ -91,9 +93,11 @@ const midway = () =>
 				order: window.__order?.join() ?? null,
 			}
 		: null;
-// the page once it is whole: its elements' names, in the isolated world
+// the page once it is whole and loaded (its last script sets __done while
+// the parser is still on it, so readyState is read once it says complete: a
+// read at the poll's moment raced the load, either way round)
 const whole = () =>
-	window.__done
+	window.__done && document.readyState === 'complete'
 		? {
 				order: window.__order?.join() ?? null,
 				readyState: document.readyState,
@@ -199,13 +203,26 @@ async function slowheadCase(proxied) {
 	}
 }
 
-async function trickleCase(proxied) {
+// midway for the trickle page: its first heading and the script after it
+// come in one chunk, which a loaded parser may still split, so the read waits
+// for that script (`late` says whether it ran only once the rest came)
+const trickleMidway = () =>
+	document.getElementById('early') && window.__order?.includes('a')
+		? {
+				late: !!document.getElementById('late'),
+				w1: !!document.getElementById('w1'),
+				readyState: document.readyState,
+				order: window.__order?.join() ?? null,
+			}
+		: null;
+
+async function trickleCase(proxied, split = false) {
 	const { page, find } = await open(
-		`${FIXTURE}stream/trickle?wait=${WAIT}`,
+		`${FIXTURE}stream/trickle?wait=${WAIT}${split ? '&split' : ''}`,
 		proxied,
 	);
 	try {
-		const mid = await poll(find, midway, undefined, 400, 25);
+		const mid = await poll(find, trickleMidway, undefined, 400, 25);
 		const end = await poll(find, whole, undefined, 400, 50);
 		return { mid, end };
 	} finally {
@@ -335,6 +352,7 @@ const native = {
 	hidden: await hiddenCase(false),
 	slowhead: await slowheadCase(false),
 	trickle: await trickleCase(false),
+	split: await trickleCase(false, true),
 };
 ok(
 	'natively: the heading is in while the rest is on its way, and the page loads whole',
@@ -359,6 +377,7 @@ const proxied = {
 	hidden: await hiddenCase(true),
 	slowhead: await slowheadCase(true),
 	trickle: await trickleCase(true),
+	split: await trickleCase(true, true),
 };
 ok(
 	'proxied: while the rest is on its way, the page holds its first part (its heading, its write) and not the rest, and is loading',
@@ -449,6 +468,18 @@ ok(
 	!!native.trickle.end &&
 		JSON.stringify(proxied.trickle.end) === JSON.stringify(native.trickle.end),
 	`${JSON.stringify(proxied.trickle.end)} natively ${JSON.stringify(native.trickle.end)}`,
+);
+ok(
+	"proxied: while the rest of a page whose head script's end tag came in two pieces is on its way, the script ran and the first heading is in, as natively",
+	native.split.mid?.late === false &&
+		JSON.stringify(proxied.split.mid) === JSON.stringify(native.split.mid),
+	`${JSON.stringify(proxied.split.mid)} natively ${JSON.stringify(native.split.mid)}`,
+);
+ok(
+	"proxied: the page whose head script's end tag came in two pieces loads whole, as natively",
+	!!native.split.end &&
+		JSON.stringify(proxied.split.end) === JSON.stringify(native.split.end),
+	`${JSON.stringify(proxied.split.end)} natively ${JSON.stringify(native.split.end)}`,
 );
 
 await done(browser);

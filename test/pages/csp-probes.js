@@ -35,6 +35,8 @@
 			documentURI: event.documentURI,
 			referrer: event.referrer,
 			sourceFile: event.sourceFile,
+			lineNumber: event.lineNumber,
+			columnNumber: event.columnNumber,
 			statusCode: event.statusCode,
 			sample: event.sample,
 			target:
@@ -547,6 +549,21 @@
 		'script-blob': () =>
 			script({ src: blob('window.__ran=1', 'text/javascript') }),
 		'script-inline': () => script({}, 'window.__ran = 1'),
+		// a script given a src it is refused and never inserted: Chrome
+		// judges a script as it connects, and fires nothing for this one
+		'script-unconnected': () =>
+			settle(
+				new Promise((resolve) => {
+					const node = document.createElement('script');
+					node.onload = () => resolve('load');
+					node.onerror = () => resolve('error');
+					node.setAttribute('src', `${other}/csp/run.js`);
+					setTimeout(
+						() => resolve(`waited, src ${node.getAttribute('src')}`),
+						100,
+					);
+				}),
+			),
 		'script-inline-nonce': () =>
 			script({ nonce: 'probes' }, 'window.__ran = 1'),
 		// a script by URL the policy lets through only by its nonce, given as
@@ -607,6 +624,24 @@
 		// allow-same-origin
 		'self-origin': () => self.origin,
 		eval: () => evaluated(() => eval('1 + 1')),
+		// two violations of one place, whose reports read the same
+		'eval-twice': () =>
+			[0, 1].map(() => evaluated(() => eval('1 + 1'))).join(', '),
+		// a cookie of the document's origin, which a report to an endpoint
+		// of that origin carries
+		'report-cookie': () => {
+			document.cookie = 'csp-report=1; path=/';
+			return document.cookie.includes('csp-report=1') ? 'set' : 'not set';
+		},
+		// what reached the fixture's report endpoint (the case's policy's
+		// report-uri of /csp/report?k=reports, of this origin or the
+		// other) for the probes before it, a moment after
+		reports: () =>
+			wait(800).then(() =>
+				fetch('/csp/reports?k=reports&clear').then((response) =>
+					response.text(),
+				),
+			),
 		function: () => evaluated(() => new Function('return 2')()),
 		'timeout-string': () =>
 			settle(
@@ -657,6 +692,11 @@
 			const value = getComputedStyle(node).getPropertyValue('--csp-probe');
 			node.remove();
 			return value.trim() || 'none';
+		},
+		'markup-sheet': () => {
+			const link = document.getElementById('markup-sheet');
+			if (!link) return 'no link';
+			return link.sheet ? 'sheet' : 'no sheet';
 		},
 		'markup-styles': () => {
 			const root = getComputedStyle(document.documentElement);

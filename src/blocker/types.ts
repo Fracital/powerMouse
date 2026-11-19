@@ -74,10 +74,15 @@ export interface AdblockInit {
 	engine?: string;
 	refreshMs: number;
 	/**
+	 * the directory's engine snapshot of SNAPSHOT_LISTS, by its URL (with the
+	 * hash of its bytes): with the option left out, a worker that has no
+	 * engine stored serves it while the lists are fetched
+	 */
+	snapshot?: string;
+	/**
 	 * the host did not name the option, and the blocker is on because that
 	 * is the default: what it cannot have (its module, the lists) leaves it
-	 * off with one line on the console, and no navigation waits for the
-	 * lists to be fetched
+	 * off with one line on the console
 	 */
 	byDefault?: true;
 }
@@ -302,6 +307,18 @@ export const DEFAULT_LISTS: AdblockList[] = [
 ];
 
 /**
+ * the default lists compiled into the directory's engine snapshot
+ * (assets/adblock-snapshot.dat.gz, scripts/adblock-snapshot.mjs): uBlock
+ * Origin's own, which carry its YouTube rules. With no engine stored (a first
+ * visit) the worker serves the snapshot within milliseconds and the default
+ * lists, fetched in the background, replace it once built. EasyList and
+ * EasyPrivacy are left out of it for size: the eight lists were 3.6 MB
+ * gzipped (8.6 MB raw), these six 1.1 MB (2.5 MB raw)
+ */
+export const SNAPSHOT_LISTS: AdblockList[] =
+	/* @__PURE__ */ DEFAULT_LISTS.filter((list) => list.trusted);
+
+/**
  * the file of the directory that holds uBlock Origin's scriptlets and
  * redirect resources (assets/adblock-resources.json): the lists' `+js()` and
  * `$redirect` rules name them, and the lists are written for the uBO release
@@ -320,6 +337,8 @@ export function resolveAdblockOptions(
 	given: boolean | AdblockOptions | null | undefined,
 	/** where the default resources are served (the directory's copy) */
 	resources: string = DEFAULT_RESOURCES,
+	/** where the directory's engine snapshot is served, for the default */
+	snapshot?: string,
 ): AdblockInit | null {
 	if (given === false) return null;
 	const options = given === true || !given ? {} : given;
@@ -334,7 +353,9 @@ export function resolveAdblockOptions(
 		refreshMs:
 			(Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_REFRESH_HOURS) *
 			3600_000,
-		...(given === undefined || given === null ? { byDefault: true } : {}),
+		...(given === undefined || given === null
+			? { byDefault: true, ...(snapshot ? { snapshot } : {}) }
+			: {}),
 	};
 }
 

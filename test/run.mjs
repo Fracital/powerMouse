@@ -77,6 +77,9 @@ const SUITE_ENV = {
 	'webrtc-net': { STOMP_TEST_TRANSPORT: '1', WISP_LOG: '1' },
 	// epoxy plus the fixture hosts of test/mixed-servers.mjs
 	'mixed-content': { STOMP_TEST_TRANSPORT: '1' },
+	// an https page of the fixture's mixed.test, whose report-to the Reporting
+	// API sends only for an https document
+	'csp-reports': { STOMP_TEST_TRANSPORT: '1' },
 	// and the default-port sites of the visited suite
 	visited: { STOMP_TEST_TRANSPORT: '1' },
 	// the fixture's https origin through the test transport, and a wisp that
@@ -111,6 +114,8 @@ const SUITE_ENV = {
 	'sop-escapes': { STOMP_ISOLATION: 'on' },
 	// production's host page (its second server runs one without)
 	'popup-openers': { STOMP_ISOLATION: 'on' },
+	// production's host page: its proxied frames share its renderer
+	'hard-reload': { STOMP_ISOLATION: 'on' },
 	// the pool's slots (a sixth for the spare check), also in a run that
 	// turns the pool off for the rest
 	'site-pool': { STOMP_SITE_POOL: '6' },

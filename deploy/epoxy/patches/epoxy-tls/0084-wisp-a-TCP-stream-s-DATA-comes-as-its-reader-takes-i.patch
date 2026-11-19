@@ -1,0 +1,647 @@
+From 7ac91b97d7712dd8acf7d179e44cbf25d66886b3 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Thu, 19 Nov 2026 14:46:45 -0500
+Subject: [PATCH] wisp: a TCP stream's DATA comes as its reader takes it, by
+ stream credit (0xE2), when the server offers it
+
+Wisp's CONTINUE paces what the client sends and nothing paced what the
+server sends: a server read each remote as fast as its transport toward
+the client drained, whether or not the page read the body. A body read
+slowly piled up in epoxy (flume::unbounded per stream), and a remote
+done early closed its idle keep-alive while the client still held the
+rest. The only brake a server had was per connection or per lane, and it
+held back every stream behind one slow reader. Natively TCP's receive
+window holds back that one socket.
+
+Stream credit (holyWisp's `stream-credit`, ~/.claude/stomp-work/wisp-credit
+SPEC.md, draft 1) gives each TCP and Twisp stream a byte window the
+client grants as its reader consumes. The client names extension 0xE2 in
+its INFO, with its initial window (u32 LE, 256 KiB), only when the
+server's INFO named it; otherwise its INFO is as before (UDP only) and
+nothing below happens.
+
+With it on, each TCP stream's reader (what hyper or rustls above it took
+from MuxStreamRead) grants CREDIT(consumed + window) once it has consumed
+half the window since the last grant, a 13-byte packet (type 0xE2, the
+stream id, the absolute limit u64 LE) sent by the actor, only while the
+stream is open, on the stream's own lane (STomp routes by stream id). The
+window grows as TCP's receive autotuning does: when the reader finds
+nothing to read and the data stopped exactly at a limit it was given
+(the server had used all of it before the next grant came into effect),
+the window was what held the stream back, and it doubles, once per such
+stall, up to 16 MiB per stream and within 64 MiB of growth across the
+connection's streams, given back when a stream's reader goes. A reader
+that stalls is just not granted more, and the server stops reading that
+remote alone. UDP streams are never counted. DATA past the limit (a
+server's bug) is taken.
+---
+ client/src/stream_provider.rs |  16 ++--
+ wisp/src/extensions/credit.rs | 135 ++++++++++++++++++++++++++++++++++
+ wisp/src/extensions/mod.rs    |   1 +
+ wisp/src/mux/client.rs        |  13 +++-
+ wisp/src/mux/inner.rs         |  87 +++++++++++++++++++++-
+ wisp/src/stream/mod.rs        | 125 +++++++++++++++++++++++++++++--
+ 6 files changed, 361 insertions(+), 16 deletions(-)
+ create mode 100644 wisp/src/extensions/credit.rs
+
+diff --git a/client/src/stream_provider.rs b/client/src/stream_provider.rs
+index e6f890e..0249f5e 100644
+--- a/client/src/stream_provider.rs
++++ b/client/src/stream_provider.rs
+@@ -22,7 +22,10 @@ use send_wrapper::SendWrapper;
+ use wasm_bindgen_futures::spawn_local;
+ use webpki_roots::TLS_SERVER_ROOTS;
+ use wisp_mux::{
+-	extensions::{udp::UdpProtocolExtensionBuilder, AnyProtocolExtensionBuilder},
++	extensions::{
++		credit::StreamCreditProtocolExtensionBuilder, udp::UdpProtocolExtensionBuilder,
++		AnyProtocolExtensionBuilder,
++	},
+ 	packet::StreamType,
+ 	stream::{MuxStream, MuxStreamAsyncRW},
+ 	ws::{TransportRead, TransportWrite},
+@@ -321,10 +324,13 @@ impl StreamProvider {
+ 		&self,
+ 		mut locked: MutexGuard<'_, Option<ClientMux<ProviderWispTransportWrite>>>,
+ 	) -> Result<(), EpoxyError> {
+-		let extensions_vec: Vec<AnyProtocolExtensionBuilder> =
+-			vec![AnyProtocolExtensionBuilder::new(
+-				UdpProtocolExtensionBuilder,
+-			)];
++		// stream credit (0xE2) is named only when the server's INFO names it
++		// (wisp-mux's client handshake): each TCP stream's DATA then comes
++		// no faster than its reader takes it, as a native socket's does
++		let extensions_vec: Vec<AnyProtocolExtensionBuilder> = vec![
++			AnyProtocolExtensionBuilder::new(UdpProtocolExtensionBuilder),
++			AnyProtocolExtensionBuilder::new(StreamCreditProtocolExtensionBuilder::new()),
++		];
+ 		let extensions = if self.wisp_v2 {
+ 			Some(WispV2Handshake::new(extensions_vec))
+ 		} else {
+diff --git a/wisp/src/extensions/credit.rs b/wisp/src/extensions/credit.rs
+new file mode 100644
+index 0000000..17ba1ec
+--- /dev/null
++++ b/wisp/src/extensions/credit.rs
+@@ -0,0 +1,135 @@
++//! Stream credit (extension and packet 0xE2): per-stream flow control
++//! toward the client.
++//!
++//! Wisp's CONTINUE paces what the client sends; nothing paced what the
++//! server sends, so a server read a remote as fast as its transport drained
++//! whether or not the page read the body. With stream credit the server
++//! never sends a TCP stream's DATA past a limit the client grants as its
++//! reader consumes, as a native socket's receive window holds the remote
++//! back. Both INFOs must name it; the client names it only when the
++//! server's INFO did. A UDP stream is never counted.
++//!
++//! The client's INFO carries `initial_window` (u32 LE): the bytes of DATA
++//! the server may send on each stream before the first grant. A CREDIT
++//! packet (type 0xE2, the stream's id, then the new limit as u64 LE) is
++//! absolute: the total DATA payload the server may have sent on the stream
++//! from its start. The stream's reader grants (see `stream::MuxStreamRead`).
++use async_trait::async_trait;
++use bytes::{BufMut, Bytes, BytesMut};
++
++use crate::{Role, WispError};
++
++use super::{AnyProtocolExtension, ProtocolExtension, ProtocolExtensionBuilder};
++
++/// The window a stream starts with, before any grant (bytes).
++pub const INITIAL_WINDOW: u32 = 256 * 1024;
++/// The most one stream's window grows to (bytes): a gigabit at 138 ms.
++pub const MAX_WINDOW: u64 = 16 * 1024 * 1024;
++/// The most the windows of all the connection's streams may have grown past
++/// `INITIAL_WINDOW` together (bytes).
++pub const WINDOW_BUDGET: u64 = 64 * 1024 * 1024;
++/// The smallest initial window a server takes (smaller is taken as this).
++const MIN_WINDOW: u32 = 16 * 1024;
++
++#[derive(Debug, Clone, Copy)]
++/// Stream credit protocol extension.
++pub struct StreamCreditProtocolExtension {
++	/// The bytes of DATA each stream may receive before its first grant.
++	pub initial_window: u32,
++	role: Role,
++}
++
++impl StreamCreditProtocolExtension {
++	/// Stream credit protocol extension ID (and its packet's type).
++	pub const ID: u8 = 0xE2;
++}
++
++#[async_trait]
++impl ProtocolExtension for StreamCreditProtocolExtension {
++	fn get_id(&self) -> u8 {
++		Self::ID
++	}
++
++	fn encode(&self) -> Bytes {
++		match self.role {
++			// the server says nothing more (bytes after 0 are reserved)
++			Role::Server => Bytes::new(),
++			Role::Client => {
++				let mut bytes = BytesMut::with_capacity(4);
++				bytes.put_u32_le(self.initial_window);
++				bytes.freeze()
++			}
++		}
++	}
++
++	fn box_clone(&self) -> Box<dyn ProtocolExtension + Sync + Send> {
++		Box::new(*self)
++	}
++}
++
++/// Stream credit protocol extension builder.
++pub struct StreamCreditProtocolExtensionBuilder {
++	/// The initial window this side asks for (the client's).
++	pub initial_window: u32,
++}
++
++impl StreamCreditProtocolExtensionBuilder {
++	/// A builder that asks for `INITIAL_WINDOW`.
++	pub fn new() -> Self {
++		Self {
++			initial_window: INITIAL_WINDOW,
++		}
++	}
++}
++
++impl Default for StreamCreditProtocolExtensionBuilder {
++	fn default() -> Self {
++		Self::new()
++	}
++}
++
++impl ProtocolExtensionBuilder for StreamCreditProtocolExtensionBuilder {
++	fn get_id(&self) -> u8 {
++		StreamCreditProtocolExtension::ID
++	}
++
++	fn build_from_bytes(
++		&mut self,
++		bytes: Bytes,
++		role: Role,
++	) -> Result<AnyProtocolExtension, WispError> {
++		// the client reads the server's (empty) metadata and keeps its own
++		// window; a server reads the client's window
++		let initial_window = match role {
++			Role::Client => self.initial_window,
++			Role::Server => {
++				let Some(window) = bytes.get(..4) else {
++					return Err(WispError::PacketTooSmall);
++				};
++				u32::from_le_bytes([window[0], window[1], window[2], window[3]])
++			}
++		};
++		Ok(StreamCreditProtocolExtension {
++			initial_window: initial_window.max(MIN_WINDOW),
++			role,
++		}
++		.into())
++	}
++
++	fn build_to_extension(&mut self, role: Role) -> Result<AnyProtocolExtension, WispError> {
++		Ok(StreamCreditProtocolExtension {
++			initial_window: self.initial_window.max(MIN_WINDOW),
++			role,
++		}
++		.into())
++	}
++}
++
++/// A CREDIT packet: `stream_id` may have been sent `limit` bytes of DATA.
++pub(crate) fn credit_packet(stream_id: u32, limit: u64) -> Bytes {
++	let mut bytes = BytesMut::with_capacity(13);
++	bytes.put_u8(StreamCreditProtocolExtension::ID);
++	bytes.put_u32_le(stream_id);
++	bytes.put_u64_le(limit);
++	bytes.freeze()
++}
+diff --git a/wisp/src/extensions/mod.rs b/wisp/src/extensions/mod.rs
+index 4086b51..cedead9 100644
+--- a/wisp/src/extensions/mod.rs
++++ b/wisp/src/extensions/mod.rs
+@@ -1,6 +1,7 @@
+ //! Wisp protocol extensions.
+ #[cfg(feature = "certificate")]
+ pub mod cert;
++pub mod credit;
+ pub mod motd;
+ pub mod password;
+ pub mod udp;
+diff --git a/wisp/src/mux/client.rs b/wisp/src/mux/client.rs
+index 200a0f8..37c329a 100644
+--- a/wisp/src/mux/client.rs
++++ b/wisp/src/mux/client.rs
+@@ -1,7 +1,7 @@
+ use futures::channel::oneshot;
+ 
+ use crate::{
+-	extensions::udp::UdpProtocolExtension,
++	extensions::{credit::StreamCreditProtocolExtension, udp::UdpProtocolExtension},
+ 	mux::send_info_packet,
+ 	packet::{ConnectPacket, ContinuePacket, MaybeInfoPacket, Packet, StreamType},
+ 	stream::MuxStream,
+@@ -19,6 +19,8 @@ use super::{
+ pub(crate) struct ClientActor;
+ 
+ impl<W: TransportWrite> MultiplexorActor<W> for ClientActor {
++	const GRANTS_CREDIT: bool = true;
++
+ 	fn handle_connect_packet(
+ 		&mut self,
+ 		_: crate::stream::MuxStream<W>,
+@@ -76,6 +78,15 @@ impl<W: TransportWrite> MultiplexorImpl<W> for ClientImpl {
+ 				MaybeInfoPacket::Info(info) => {
+ 					// v2 server
+ 					(closure)(&mut builders).await?;
++					// stream credit is named only when the server's INFO named
++					// it: its packets mean nothing to a server that did not
++					if !info
++						.extensions
++						.iter()
++						.any(|x| x.get_id() == StreamCreditProtocolExtension::ID)
++					{
++						builders.retain(|x| x.get_id() != StreamCreditProtocolExtension::ID);
++					}
+ 					send_info_packet(tx, &mut builders, Role::Client).await?;
+ 
+ 					let mut supported_extensions =
+diff --git a/wisp/src/mux/inner.rs b/wisp/src/mux/inner.rs
+index e7ca312..06a552e 100644
+--- a/wisp/src/mux/inner.rs
++++ b/wisp/src/mux/inner.rs
+@@ -1,7 +1,7 @@
+ use std::{
+ 	pin::pin,
+ 	sync::{
+-		atomic::{AtomicU32, AtomicU8, Ordering},
++		atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering},
+ 		Arc, Mutex,
+ 	},
+ 	task::Context,
+@@ -11,7 +11,10 @@ use futures::{channel::oneshot, stream::unfold, SinkExt, StreamExt};
+ use rustc_hash::FxHashMap;
+ 
+ use crate::{
+-	extensions::AnyProtocolExtension,
++	extensions::{
++		credit::{credit_packet, StreamCreditProtocolExtension, WINDOW_BUDGET},
++		AnyProtocolExtension, ProtocolExtensionListExt,
++	},
+ 	locked_sink::Waiter,
+ 	packet::{
+ 		ClosePacket, CloseReason, ConnectPacket, ContinuePacket, MaybeExtensionPacket, Packet,
+@@ -31,6 +34,41 @@ pub(crate) enum WsEvent<W: TransportWrite> {
+ 	),
+ 	WispMessage(Packet<'static>),
+ 	EndFut(Option<CloseReason>),
++	/// a stream's reader grants the server credit up to this limit (bytes
++	/// of DATA from the stream's start); sent only while the stream is open
++	Credit(u32, u64),
++}
++
++/// The connection's stream credit (extension 0xE2), when both sides named
++/// it: each stream's initial window and what all the windows have grown
++/// past it together, which `WINDOW_BUDGET` bounds.
++pub(crate) struct CreditBudget {
++	pub initial: u64,
++	grown: AtomicU64,
++}
++
++impl CreditBudget {
++	fn new(initial: u32) -> Self {
++		Self {
++			initial: u64::from(initial),
++			grown: AtomicU64::new(0),
++		}
++	}
++
++	/// takes up to `want` bytes of growth from the budget, and says how much it took
++	pub fn take(&self, want: u64) -> u64 {
++		let grown = self.grown.load(Ordering::Relaxed);
++		let took = want.min(WINDOW_BUDGET.saturating_sub(grown));
++		self.grown.store(grown + took, Ordering::Relaxed);
++		took
++	}
++
++	/// gives back growth a stream had (its reader is gone)
++	pub fn give(&self, bytes: u64) {
++		let grown = self.grown.load(Ordering::Relaxed);
++		self.grown
++			.store(grown.saturating_sub(bytes), Ordering::Relaxed);
++	}
+ }
+ 
+ pub(crate) type StreamMap = FxHashMap<u32, StreamMapValue>;
+@@ -63,6 +101,11 @@ pub(crate) struct StreamInfo {
+ 	flow_control: AtomicU32,
+ 	close_reason: AtomicU8,
+ 	flow_waker: Mutex<Waiter>,
++
++	/// the connection's stream credit, for a stream it counts (not UDP)
++	pub credit: Option<Arc<CreditBudget>>,
++	/// the bytes of DATA payload received on it (counted with credit only)
++	pub received: AtomicU64,
+ }
+ 
+ impl StreamInfo {
+@@ -71,6 +114,7 @@ impl StreamInfo {
+ 		stream_type: StreamType,
+ 		flow_status: FlowControl,
+ 		buffer_size: u32,
++		credit: Option<Arc<CreditBudget>>,
+ 	) -> Self {
+ 		debug_assert_ne!(id, 0);
+ 
+@@ -87,6 +131,9 @@ impl StreamInfo {
+ 			flow_control: AtomicU32::new(buffer_size),
+ 			flow_waker: Mutex::new(Waiter::Woken),
+ 			close_reason: AtomicU8::new(CloseReason::Unknown.into()),
++
++			credit,
++			received: AtomicU64::new(0),
+ 		}
+ 	}
+ 
+@@ -140,6 +187,9 @@ impl StreamInfo {
+ }
+ 
+ pub(crate) trait MultiplexorActor<W: TransportWrite>: Send {
++	/// this side grants stream credit when both INFOs named it (the client)
++	const GRANTS_CREDIT: bool = false;
++
+ 	fn handle_connect_packet(
+ 		&mut self,
+ 		stream: MuxStream<W>,
+@@ -153,6 +203,13 @@ pub(crate) trait MultiplexorActor<W: TransportWrite>: Send {
+ 		streams: &mut StreamMap,
+ 	) -> Result<(), WispError> {
+ 		if let Some(stream) = streams.get(&id) {
++			if stream.info.credit.is_some() {
++				// DATA past the limit is a server's bug: it is taken all the same
++				stream
++					.info
++					.received
++					.fetch_add(pkt.len() as u64, Ordering::Relaxed);
++			}
+ 			let _ = stream.stream.try_send(pkt);
+ 		}
+ 		Ok(())
+@@ -185,6 +242,8 @@ pub(crate) struct MuxInner<R: TransportRead, W: TransportWrite, M: MultiplexorAc
+ 	streams: StreamMap,
+ 	current_id: u32,
+ 	buffer_size: u32,
++	/// stream credit, when both INFOs named it and this side grants it
++	credit: Option<Arc<CreditBudget>>,
+ 
+ 	actor_tx: flume::Sender<WsEvent<W>>,
+ }
+@@ -213,6 +272,14 @@ impl<R: TransportRead, W: TransportWrite, M: MultiplexorActor<W>> MuxInner<R, W,
+ 			.chain(std::iter::once(StreamType::Tcp.into()))
+ 			.collect();
+ 
++		let credit = if M::GRANTS_CREDIT {
++			extensions
++				.find_extension::<StreamCreditProtocolExtension>()
++				.map(|x| Arc::new(CreditBudget::new(x.initial_window)))
++		} else {
++			None
++		};
++
+ 		MuxInnerResult {
+ 			actor_tx: actor_tx.clone(),
+ 			mux: Self {
+@@ -230,6 +297,7 @@ impl<R: TransportRead, W: TransportWrite, M: MultiplexorActor<W>> MuxInner<R, W,
+ 				streams: StreamMap::default(),
+ 				current_id: 0,
+ 				buffer_size,
++				credit,
+ 
+ 				actor_tx,
+ 			},
+@@ -333,6 +401,16 @@ impl<R: TransportRead, W: TransportWrite, M: MultiplexorActor<W>> MuxInner<R, W,
+ 						let _ = channel.send(Err(WispError::InvalidStreamId(id)));
+ 					}
+ 				}
++				WsEvent::Credit(id, limit) => {
++					// a stream closed meanwhile has no credit to grant (its id
++					// may even be the server's to reuse)
++					if self.streams.contains_key(&id) {
++						self.tx.lock().await;
++						// a transport that failed ends the connection by its read
++						let _ = self.tx.get().send(credit_packet(id, limit)).await;
++						self.tx.unlock();
++					}
++				}
+ 				WsEvent::EndFut(x) => {
+ 					if let Some(reason) = x {
+ 						self.tx.lock().await;
+@@ -374,7 +452,10 @@ impl<R: TransportRead, W: TransportWrite, M: MultiplexorActor<W>> MuxInner<R, W,
+ 			flume::unbounded()
+ 		};
+ 
+-		let info = Arc::new(StreamInfo::new(id, ty, flow, self.buffer_size));
++		// a UDP stream is never counted (its DATA is lossy, a native UDP
++		// socket has no backpressure either); TCP and Twisp streams are
++		let credit = (ty != StreamType::Udp).then(|| self.credit.clone()).flatten();
++		let info = Arc::new(StreamInfo::new(id, ty, flow, self.buffer_size, credit));
+ 		let val = StreamMapValue {
+ 			info: info.clone(),
+ 			stream: data_tx,
+diff --git a/wisp/src/stream/mod.rs b/wisp/src/stream/mod.rs
+index dc39d69..abc18cf 100644
+--- a/wisp/src/stream/mod.rs
++++ b/wisp/src/stream/mod.rs
+@@ -1,13 +1,14 @@
+ use std::{
+ 	pin::Pin,
+-	sync::Arc,
++	sync::{atomic::Ordering, Arc},
+ 	task::{ready, Context, Poll},
+ };
+ 
+ use futures::{channel::oneshot, FutureExt, Sink, SinkExt, Stream, StreamExt};
+ 
+ use crate::{
+-	mux::inner::{FlowControl, StreamInfo, WsEvent},
++	extensions::credit::MAX_WINDOW,
++	mux::inner::{CreditBudget, FlowControl, StreamInfo, WsEvent},
+ 	packet::{ClosePacket, CloseReason, Packet, StreamType},
+ 	ws::{Payload, TransportWrite},
+ 	LockedWebSocketWrite, WispError,
+@@ -73,10 +74,95 @@ macro_rules! unlock {
+ 	};
+ }
+ 
++/// What a stream's reader has granted the server (stream credit, 0xE2).
++///
++/// A grant goes out once the reader has consumed half the window since the
++/// last one, for the bytes consumed plus the window: the server never has
++/// more than a window outstanding past what the reader took, as a native
++/// socket's receive window holds a remote back. The window grows as TCP's
++/// receive autotuning grows it: when the reader finds nothing to read and
++/// the server stopped exactly at a limit it was given (all it was allowed
++/// came, and the next grant had not come into effect yet), the window was
++/// what held the stream back, and it doubles, up to `MAX_WINDOW` and within
++/// what the connection's `WINDOW_BUDGET` has left. A reader that keeps up
++/// within a round trip grows it so each round trip; one that stalls is
++/// just not granted more.
++struct ReadCredit {
++	budget: Arc<CreditBudget>,
++	window: u64,
++	/// what the reader took (bytes of DATA payload)
++	consumed: u64,
++	/// the latest limit granted (the INFO's initial window before any)
++	granted: u64,
++	/// the limit before it: data that stops exactly here waited for `granted`
++	previous: u64,
++	/// what had been received when the window last grew: it grows once per stall
++	grown_at: u64,
++}
++
++impl ReadCredit {
++	fn new(budget: Arc<CreditBudget>) -> Self {
++		let initial = budget.initial;
++		Self {
++			budget,
++			window: initial,
++			consumed: 0,
++			granted: initial,
++			previous: initial,
++			grown_at: 0,
++		}
++	}
++
++	/// a new limit to grant, when the reader took `bytes` and half the window is used
++	fn took(&mut self, bytes: usize) -> Option<u64> {
++		self.consumed += bytes as u64;
++		if self.granted.saturating_sub(self.consumed) > self.window / 2 {
++			return None;
++		}
++		self.grant()
++	}
++
++	/// a new limit to grant, when the reader found nothing to read and the
++	/// server stopped at a limit (`received`: what came so far)
++	fn starved(&mut self, received: u64) -> Option<u64> {
++		if received <= self.grown_at || (received != self.previous && received != self.granted)
++		{
++			return None;
++		}
++		self.grown_at = received;
++		let want = self.window.min(MAX_WINDOW.saturating_sub(self.window));
++		let grew = self.budget.take(want);
++		if grew == 0 {
++			return None;
++		}
++		self.window += grew;
++		self.grant()
++	}
++
++	fn grant(&mut self) -> Option<u64> {
++		let limit = self.consumed + self.window;
++		if limit <= self.granted {
++			return None;
++		}
++		self.previous = self.granted;
++		self.granted = limit;
++		Some(limit)
++	}
++}
++
++impl Drop for ReadCredit {
++	fn drop(&mut self) {
++		self.budget.give(self.window - self.budget.initial);
++	}
++}
++
+ pub struct MuxStreamRead<W: TransportWrite> {
+ 	inner: flume::r#async::RecvStream<'static, Payload>,
+ 	write: LockedWebSocketWrite<W>,
+ 	info: Arc<StreamInfo>,
++	/// the actor, which sends this stream's grants
++	actor: flume::Sender<WsEvent<W>>,
++	credit: Option<ReadCredit>,
+ 
+ 	read_cnt: u32,
+ 	chunk: Option<Payload>,
+@@ -87,17 +173,30 @@ impl<W: TransportWrite> MuxStreamRead<W> {
+ 		inner: flume::Receiver<Payload>,
+ 		write: LockedWebSocketWrite<W>,
+ 		info: Arc<StreamInfo>,
++		actor: flume::Sender<WsEvent<W>>,
+ 	) -> Self {
+ 		Self {
+ 			inner: inner.into_stream(),
+ 			write,
++			credit: info.credit.clone().map(ReadCredit::new),
+ 			info,
++			actor,
+ 
+ 			chunk: None,
+ 			read_cnt: 0,
+ 		}
+ 	}
+ 
++	/// the server may send this stream up to `limit` bytes; nothing is
++	/// granted once the stream is closed
++	fn grant(&self, limit: Option<u64>) {
++		if let Some(limit) = limit {
++			if !self.inner.is_disconnected() {
++				let _ = self.actor.try_send(WsEvent::Credit(self.info.id, limit));
++			}
++		}
++	}
++
+ 	pub fn get_stream_id(&self) -> u32 {
+ 		self.info.id
+ 	}
+@@ -139,10 +238,17 @@ impl<W: TransportWrite> Stream for MuxStreamRead<W> {
+ 		let chunk = if let Some(chunk) = self.chunk.take() {
+ 			chunk
+ 		} else {
+-			let Some(chunk) = ready!(self.inner.poll_next_unpin(cx)) else {
+-				return Poll::Ready(None);
+-			};
+-			chunk
++			match self.inner.poll_next_unpin(cx) {
++				Poll::Ready(Some(chunk)) => chunk,
++				Poll::Ready(None) => return Poll::Ready(None),
++				Poll::Pending => {
++					// the reader took all that came: was it held back by its window?
++					let received = self.info.received.load(Ordering::Relaxed);
++					let limit = self.credit.as_mut().and_then(|x| x.starved(received));
++					self.grant(limit);
++					return Poll::Pending;
++				}
++			}
+ 		};
+ 
+ 		macro_rules! ready {
+@@ -178,6 +284,11 @@ impl<W: TransportWrite> Stream for MuxStreamRead<W> {
+ 			}
+ 		}
+ 
++		// what the reader takes is granted again (stream credit)
++		let len = chunk.len();
++		let limit = self.credit.as_mut().and_then(|x| x.took(len));
++		self.grant(limit);
++
+ 		Poll::Ready(Some(Ok(chunk)))
+ 	}
+ }
+@@ -374,7 +485,7 @@ impl<W: TransportWrite> MuxStream<W> {
+ 		info: Arc<StreamInfo>,
+ 	) -> Self {
+ 		Self {
+-			read: MuxStreamRead::new(rx, ws.clone(), info.clone()),
++			read: MuxStreamRead::new(rx, ws.clone(), info.clone(), tx.clone()),
+ 			write: MuxStreamWrite::new(tx, ws, info),
+ 		}
+ 	}
+-- 
+2.56.1
+

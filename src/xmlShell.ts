@@ -9,17 +9,19 @@ import type { PolicyText, ScriptFacts } from './csp';
 import { helperNames } from './helperNames';
 import {
 	keptFacts,
+	leftKept,
 	libraryScripts,
 	marked,
 	policyTexts,
 	referred,
+	reportEndpoints,
 	scriptFacts,
 	sited,
 	syncXHR,
 } from './htmlShell';
 import type { ReferrerInfo } from './referrerPolicy';
 import { providedShell } from './rewriteHTML';
-import { injectDocumentJS } from './routeURL';
+import { BUNDLE_CLIENT, injectDocumentJS } from './routeURL';
 import type { SiteFacts } from './siteFacts';
 import type StompURL from './StompURL';
 import { WORKER_BASE } from './transport/messages';
@@ -99,15 +101,15 @@ export function modifyXML(
 	const cdata = (text: string) =>
 		`<![CDATA[${text.split(']]>').join(']]]]><![CDATA[>')}]]>`;
 	const names = helperNames(config);
-	const inject = `if (typeof globalThis.createClient !== 'function') {
+	const inject = `if (!(${JSON.stringify(names.client)} in globalThis) && typeof globalThis.createClient !== 'function') {
 	document.documentElement.textContent = "Stomp bundle did not load. See devtools output for more information.";
-} else {
+${leftKept(names.client, url)}} else {
 	${scriptFacts(facts)}if (!(${JSON.stringify(names.client)} in globalThis))
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
 	else {
 		delete globalThis.createClient;
 		${names.client}.takeNamedBase();
-	}${keptFacts(names.client, facts)}${marked(names.client, url)}
+	}${keptFacts(names.client, facts)}${reportEndpoints(names.client, facts)}${marked(names.client, url)}
 ${sited(names.client, sites)}${referred(names.client, referrer)}${policyTexts(names.client, policies)}${syncXHR(names.client, syncXHRBlocked)}
 	if (!${names.client}.applied) ${names.client}.apply();
 	${names.client}.loadXML(${JSON.stringify(script)}, ${JSON.stringify(mime)});
@@ -118,5 +120,5 @@ ${sited(names.client, sites)}${referred(names.client, referrer)}${policyTexts(na
 	const named = base
 		? `<script${own}>${cdata(`globalThis[${JSON.stringify(WORKER_BASE)}] = ${JSON.stringify(url.toString())};`)}</script>`
 		: '';
-	return `<?xml version="1.0" encoding="${encoding}"?>${root}${named}${top ? libraryScripts(url, config, own, loading) : ''}<script${loading} src="${injectDocumentJS(url, config)}"></script><script${own}>${cdata(inject)}</script></${name}>`;
+	return `<?xml version="1.0" encoding="${encoding}"?>${root}${named}${top ? libraryScripts(url, config, own, loading) : ''}<script${loading} src="${injectDocumentJS(url, config)}" ${BUNDLE_CLIENT}="${names.client}"></script><script${own}>${cdata(inject)}</script></${name}>`;
 }

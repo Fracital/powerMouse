@@ -113,7 +113,9 @@ export function emulateServiceWorker(
 		transfer: Transferable[] = [],
 	): Promise<unknown> =>
 		new Promise((resolve, reject) => {
-			const routed = client.routedClient();
+			// (an about:blank another origin's page navigated a frame to has
+			// none: Chrome's InvalidStateError)
+			const routed = client.navigatorOf(global) ? null : client.routedClient();
 			// the browser's own channel, and only its delivered answer
 			// (src/transport/ports.ts)
 			const [port, theirs] = privateChannel();

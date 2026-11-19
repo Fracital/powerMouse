@@ -22,6 +22,12 @@
 		return location.pathname;
 	}
 	window.__pw.moduleSource = inModule.toString();
+	// the markup's handlers, each run once (their places read in __pw.at)
+	document.getElementById('handler-a').click();
+	for (const button of document.querySelectorAll('.handler')) {
+		button.dispatchEvent(new MouseEvent('mouseover'));
+		button.click();
+	}
 	window.__pw.done = true;
 </script>
 <script>
@@ -47,6 +53,45 @@
 	__pw.copyText = copy.text === document.scripts[0].text;
 	__pw.styleText = document.querySelector('style').textContent.trim();
 </script>
+<script>
+	// where a handler's frame is: its line and column, as V8 names them
+	function where(error) {
+		var frame = String(error.stack).split('\n')[1] || '';
+		var found = /:(\d+):(\d+)\)?$/.exec(frame);
+		return found ? found[1] + ':' + found[2] : frame;
+	}
+	__pw.at = [];
+</script>
+<!-- handlers of the markup: the worker's rewrites, each placed where its tag ends -->
+<button
+	id="handler-a"
+	onclick="
+		__pw.handlerPath = location.pathname;
+		function inHandler() {
+			return 'h';
+		}
+		__pw.handlerSource = inHandler.toString();
+	"
+>
+	a
+</button>
+<button class="handler" onclick="__pw.at.push(where(new Error()))">b</button>
+<button
+	class="handler"
+	onmouseover="__pw.at.push(where(new Error()))"
+	onclick="__pw.at.push(where(new Error()))"
+>
+	c
+</button>
+<button class="handler" onClick='__pw.at.push("single", where(new Error()))'>
+	d
+</button>
+<button
+	class="handler"
+	onclick="true &amp;&amp; __pw.at.push('reference', where(new Error()))"
+>
+	e
+</button>
 <table>
 	<tbody>
 		<tr>

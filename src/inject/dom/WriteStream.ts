@@ -239,8 +239,14 @@ export default class WriteStream {
 		// inert document, see inertDocumentOf)
 		const inert = inertDocumentOf(document);
 		const div = inert.createElement('div');
-		div.append(cloneRawNode(nodes, inert));
-		this.#client.rewriteInlineScripts(div);
+		const client = this.#client;
+		client.copyingMarkup = true;
+		try {
+			div.append(cloneRawNode(nodes, inert));
+		} finally {
+			client.copyingMarkup = false;
+		}
+		client.rewriteInlineScripts(div);
 		const html = this.#client.innerHTMLOf(div);
 		// a copy only to be serialized (see releaseMarkup)
 		releaseMarkup(div);

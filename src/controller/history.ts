@@ -40,6 +40,22 @@ const DROPPED_TIMEOUT = 3000;
 const ACTIVATION_GRACE = 400;
 /** how deep nested frames are followed */
 const MAX_DEPTH = 8;
+/** how long a step taken with location.replace waits for the worker to hear of it */
+const TELL_WAIT_MS = 250;
+
+/**
+ * Told the URL of a step about to be taken with location.replace, before it
+ * is: the controller of this realm tells its worker (StompController), so
+ * that the load takes the kept document as the browser's traversal's does
+ * (`historyStep`, src/server/rewrites.ts). Natively it is a history step,
+ * which Chrome asks of its HTTP cache however stale.
+ */
+let stepTeller: ((url: string) => Promise<unknown>) | null = null;
+
+/** set the realm's teller of replaced steps (one per realm: the newest controller's) */
+export function tellSteps(teller: (url: string) => Promise<unknown>) {
+	stepTeller = teller;
+}
 
 export type Direction = 'back' | 'forward';
 
@@ -668,10 +684,16 @@ class FrameHistory {
 		this.known.set(node.win, target);
 		// replacing the entry leaves the joint history as it is: the entry
 		// keeps its key and stands for the target from now on
+		// (a step all the same: the worker is told first, and waited for a
+		// moment at most)
 		const replace = () => {
 			if (node.key === target.key) this.alias.delete(node.key);
 			else this.alias.set(node.key, target.key);
-			node.win.location.replace(target.url);
+			const told = stepTeller?.(target.url).catch(() => {});
+			if (!told) return node.win.location.replace(target.url);
+			void Promise.race([told, sleep(TELL_WAIT_MS)]).then(() =>
+				node.win.location.replace(target.url),
+			);
 		};
 		// the browser's own traversal, to the native entry that shows the
 		// target, unless another frame moved the joint history since the step

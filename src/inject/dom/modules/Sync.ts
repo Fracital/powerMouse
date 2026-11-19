@@ -9,6 +9,7 @@ import Module from '../../Module';
 import ResourceTimingModule from '../../modules/ResourceTiming';
 import { withStack } from '../../nativeErrors';
 import DocumentClient from '../Client';
+import { heldPart } from '../deferred';
 
 const statusEmpty: number[] = [101, 204, 205, 304];
 
@@ -441,7 +442,11 @@ export default class SyncModule extends Module<DocumentClient> {
 
 			// a piece missing would leave a cut answer, whose last escape decodes
 			// to a control character: wait for the whole of it
-			const answer = joinAnswer(readCookies(), id);
+			// (or in the answer to an ask for them: syncAnswer.ts)
+			const answer = joinAnswer(
+				readCookies() + (heldPart('syncAnswer')?.(client, id, deadline) ?? ''),
+				id,
+			);
 			if (!answer) {
 				if (kickAt && Date.now() >= kickAt) {
 					kickAt = 0;

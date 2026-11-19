@@ -29,6 +29,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # the blocker's engine snapshot (assets/adblock-snapshot.dat.gz,
+  # docs/adblock.md "The snapshot") is made by hand from lists that change
+  # every day: this run fails, every night until it is made again, once its
+  # lists are more than 14 days old or it was made by another blocker.wasm
+  # (the build refuses that one too). It does not hold the publish: an old
+  # snapshot still serves, only until the worker's own build of the lists
+  snapshot:
+    name: adblock snapshot is fresh
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: master
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Snapshot fresh?
+        run: |
+          node scripts/adblock-snapshot.mjs --check 2>check.txt || {
+            echo "::error file=assets/adblock-snapshot.UPSTREAM::$(cat check.txt)"
+            exit 1
+          }
+
   publish:
     name: publish @sysce/stomp@nightly
     runs-on: ubuntu-latest

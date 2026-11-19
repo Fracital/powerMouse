@@ -32,11 +32,23 @@ export interface RewriteRequest {
 	source?: ScriptSource;
 	/** code to run first, after the directive prologue (an inline script's currentScript restore) */
 	preamble?: string;
+	/**
+	 * a document's inline script, for the table that goes with its markup
+	 * (src/prewrite.ts): the worker writes a classic one's preamble itself
+	 * and answers with the rewrite packed (packRewrite) for this access
+	 * helper, so the service worker holds no copy of the script's text in
+	 * the rewrite
+	 */
+	pack?: string;
 }
 
 /** a script's output with the backend that made it (always the wasm module); the output alone when nothing rewrote it */
-export interface RewriteAnswer extends Required<RewrittenBy> {
+export interface RewriteAnswer extends Required<Pick<RewrittenBy, 'by'>> {
 	output: string;
+	/** the map of an output asked for apart (src/wasm/rewriter.ts takeApart) */
+	map?: string;
+	/** asked for packed (RewriteRequest.pack): `output` is the PackedRewrite's rest, and this its other two */
+	packed?: [at: number, holder: 0 | string];
 }
 
 /** a script that came as UTF-8: its bytes, handed over, in place of its text (src/wasm/rewriteBytes.ts) */

@@ -5,11 +5,9 @@ import { beforeFragment } from '../../../urlShape';
 import Module from '../../Module';
 import { unrouteURL } from '../../modules/Unroute';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
-import { baseTarget, clickedLink } from '../links';
+import { baseTarget, clickedLink, SAME_FRAME } from '../links';
 import HistoryModule from './History';
 import { hookWrite } from './MutationObserver';
-
-const SAME_FRAME = ['', '_self', '_top', '_parent', '_unfencedtop'];
 
 type Entry = object;
 interface NavigationLike extends EventTarget {

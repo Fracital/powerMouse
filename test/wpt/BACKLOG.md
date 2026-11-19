@@ -115,16 +115,16 @@ another stream's while these were measured.
   served, `metaPolicies(markup)`), and in a data: document `'self'` is matched against the proxy's idea of its
   URL (`sourcesMatch` against `document.url` in `src/csp.ts`) instead of an
   opaque origin.
-- `content-security-policy/navigation/to-javascript-parent-initiated-parent-csp.html`
-  (8: the harness TIMEOUT, 1 FAIL "Javascript url executed", 1 TIMEOUT, 5
-  NOTRUN), `content-security-policy/navigation/to-javascript-url-script-src.html`
-  (5: the harness TIMEOUT and four subtests),
-  `content-security-policy/navigation/to-javascript-parent-initiated-check-csp-order.html`
-  (8: the harness TIMEOUT and 7 MISSING): a `javascript:` navigation of a
-  child frame or another window runs although the initiator's `script-src`
-  forbids it. The proxy runs a `javascript:` URL in the target and checks no
-  policy of the document that started it, where Chrome checks the
-  initiator's.
+- `content-security-policy/navigation/to-javascript-parent-initiated-check-csp-order.html`
+  (8: the harness TIMEOUT and 7 MISSING): the order of the initiator's and
+  the target's checks; the page times out through the proxy.
+
+Cleared by the javascript: URL starts of forms, frames and new windows
+(`DocumentClient.jsStarts`, a frame's `src` included, each target keeping
+its notes in order): `to-javascript-url-script-src.html` (all five) and
+`to-javascript-parent-initiated-parent-csp.html` (all eight; its
+"executed" failures were a second navigation of the same frame taking
+the first one's note).
 
 Cleared on the combined tree: `frame-src-same-document-meta.sub.html` (no
 fix names it).
@@ -562,11 +562,6 @@ makes a history entry there since 211f4cc3).
   cross-origin classic script (or importScripts) has a muted, sanitized base
   URL natively, and the rewriter is given the script's real URL for every
   classic script. Idea: the worker passes a base it knows is muted.
-- `html/semantics/scripting-1/the-script-element/module/evaluation-error-5.html`
-  (1: the inline module error's line, 1 for 16): markup scripts are written
-  as their own text, so an error's lineno is relative to the script, not to
-  the document; classic inline scripts too. Idea: pad each markup script to
-  its position in the original markup.
 - `html/semantics/scripting-1/the-script-element/module/module-in-xhtml.xhtml`
   (1: the harness TIMEOUT; its one subtest fails natively): XHTML scripts
   (README), `async_test is not defined`.

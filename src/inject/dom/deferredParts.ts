@@ -21,6 +21,11 @@
 // their hooks' checks, ../cacheCalls.ts, at a realm's first; a worker's
 // bundle has it itself)
 //
+// (and the reader of the position map a script file's rewrite carries,
+// ../positionMaps.ts, at a document's first position asked of such a file:
+// a stack's place, a long animation frame's script; a worker's bundle has
+// it itself)
+//
 // (and what Origin.from() answers a page, ../originFrom.ts, at a realm's
 // first call; a worker's bundle has it itself)
 //
@@ -71,8 +76,17 @@
 // (and what performance.measureUserAgentSpecificMemory() answers, with the
 // page's own URLs, ./measuredMemory.ts, at a page's first call of it)
 //
+// (and the loads of an <object>'s data and an <embed>'s src,
+// ./objectLoads.ts, at a document's first object or embed with a URL)
+//
+// (and a frame's fresh browsing context, ./freshSwap.ts, at the first
+// frame of a document that is to show another origin's document)
+//
 // (and the font faces of a sheet copied for a document no service worker
 // controls, ./lazyFonts.ts, at the first such face)
+//
+// (and the ask for a synchronous request's answer, ./syncAnswer.ts, at a
+// document's first wait on the bridge)
 //
 // (and the handlers of long tasks and long animation frames,
 // ./modules/LongTasks.ts and ./modules/LongFrames.ts, at a document's first
@@ -125,7 +139,7 @@
 import { compileFilter, proceduralRunner } from '../../blocker/procedural';
 import { modifyHTML } from '../../htmlShell';
 import { noticeText } from '../../mixedContentNotices';
-import { integrityHoldsSync } from '../../sriDigest';
+import { dataIntegrity } from '../../sriDigest';
 import { codecBytes } from '../../wasm/codecBytes';
 import { modifyXML } from '../../xmlShell';
 import { accessFailures } from '../accessFailures';
@@ -145,7 +159,8 @@ import {
 	notificationParts,
 	permissionElements,
 } from '../permissionGates';
-import { reportsSeen } from '../reportsSeen';
+import { readers as positionReaders } from '../positionMaps';
+import { madeReport, reportsSeen } from '../reportsSeen';
 import { bucketMethods } from '../storageBucketMethods';
 import { storageUsage } from '../storageUsage';
 import { carry as carryWebTransport } from '../webTransport';
@@ -154,6 +169,7 @@ import { windowArrays } from '../windowArrays';
 import { workerStart } from '../workerStart';
 import { checkedHeader, checkedMethod, notOpened } from '../xhrChecks';
 import { ancestorOriginsList } from './ancestorOriginsList';
+import { animatedHref } from './animatedHref';
 import { attributeViewMethods } from './attributeViewMethods';
 import { relayBeacon } from './beaconRelay';
 import {
@@ -164,12 +180,16 @@ import {
 import { ownStoreRefusal } from './credentialStore';
 import { saveDownload } from './downloadSave';
 import { fetchLater } from './fetchLater';
+import { freshSwap } from './freshSwap';
+import { hookHandlerName } from './handlerGetters';
 import { instructionData, loadXML, xmlProlog } from './instructions';
 import { lazyFonts } from './lazyFonts';
 import { formEncoding, legacyFormQuery, legacyQuery } from './legacyEncoding';
 import { markupMembers } from './markupMembers';
+import { codePlace, handlerPlace, markupScriptSite } from './markupPlaces';
 import { markupSinks } from './markupSinks';
 import { measuredMemory } from './measuredMemory';
+import { moduleGraph } from './moduleGraph';
 import FingerprintModule from './modules/Fingerprint';
 import { longFrames } from './modules/LongFrames';
 import { longTasks } from './modules/LongTasks';
@@ -183,6 +203,7 @@ import {
 import { emulateServiceWorker } from './modules/serviceWorkerEmulation';
 import { mayNavigate, navigateOther, navigationRefused } from './navigateOther';
 import { navigationRefusal, precommitRedirect } from './navigationRefusal';
+import { objectLoads } from './objectLoads';
 import { openerFacts, opensWithoutOpener } from './openerFacts';
 import { pictureWindows } from './pictureWindows';
 import { policyChecks } from './policyChecks';
@@ -210,12 +231,14 @@ import {
 } from './siteEvents';
 import { sourcePolicy } from './sourcePolicy';
 import { storageAccessHandle } from './storageAccess';
+import { syncAnswer } from './syncAnswer';
 import {
 	exportRefusal,
 	textureRefusal,
 	videoFrameRefusal,
 } from './taintRefusals';
 import { uncontrolledCopies } from './uncontrolledCopies';
+import { deliverReport } from './violationDelivery';
 import {
 	dispatchViolation,
 	evalError,
@@ -250,6 +273,15 @@ export const parts = {
 	// what a page's add(), addAll() and caches.match() do past their hooks'
 	// checks, at a realm's first (../cacheCalls.ts; ../modules/Partition.ts)
 	cacheCalls,
+	// the reader of the maps of rewrites, at a realm's first position of
+	// one: a script file's, and code's the inject rewrote, which it finds by
+	// the script V8 ran (../positionMaps.ts; ../positionParts.ts)
+	positionReaders,
+	// where the markup has a script or a handler V8 counts a frame's line
+	// and column from (./markupPlaces.ts; Client.ts rewriteInlineScripts,
+	// modules/DOMAttributes.ts)
+	codePlace,
+	handlerPlace,
 	// what a tainted source's refusals say (a WebGL texture, a VideoFrame, an
 	// OffscreenCanvas's export), at a document's first (./taintRefusals.ts;
 	// modules/CanvasTaint.ts)
@@ -266,6 +298,13 @@ export const parts = {
 	// the un-routing of ReportingObserver's reports, at the first
 	// (../reportsSeen.ts; ../modules/Unroute.ts)
 	reportsSeen,
+	// the reports of the violations the inject makes itself, at the first
+	// (../reportsSeen.ts; ./policyChecks.ts)
+	madeReport,
+	// and the delivery of a violation's report to the page's policy's
+	// report-uri, at a document's first (./violationDelivery.ts;
+	// ./policyChecks.ts, ./violations.ts)
+	deliverReport,
 	// what a worker's construction does past its checks, at a document's
 	// first (../workerStart.ts; ../modules/Worker.ts)
 	workerStart,
@@ -315,6 +354,13 @@ export const parts = {
 	// the rare markup sinks' work and the document.domain setter's, at a
 	// page's first call of one (./markupSinks.ts; modules/DOMHooks.ts)
 	markupSinks,
+	// an SVG animation of an href, its values routed, at a document's first
+	// (./animatedHref.ts; modules/DOMAttributes.ts)
+	animatedHref,
+	// a frame's fresh browsing context, at the first frame of a document
+	// that is to show another origin's document (./freshSwap.ts;
+	// ./freshContext.ts, modules/IFrame.ts)
+	freshSwap,
 	// a document's navigation of another window, refused as Chrome refuses
 	// it, at its first (./navigateOther.ts; modules/Context.ts)
 	navigateOther,
@@ -323,9 +369,20 @@ export const parts = {
 	// (DocumentClient.mayNavigate; modules/Sandbox.ts)
 	mayNavigate,
 	navigationRefused,
+	// an <object>'s data and an <embed>'s src, copied through the proxy, at
+	// a document's first object or embed with a URL (./objectLoads.ts;
+	// ./modules/DOMAttributes.ts)
+	objectLoads,
 	// the copies a document no service worker controls makes of its loads,
 	// at its first (./uncontrolledCopies.ts; ./modules/DOMAttributes.ts)
 	uncontrolledCopies,
+	// and the module graphs of such a document, at its first module
+	// (./moduleGraph.ts; Client.ts importIn, moduleText)
+	moduleGraph,
+	// a synchronous request's answer, asked for with one of the page's own
+	// where the browser lets the worker answer it, at a document's first wait
+	// on the bridge (./syncAnswer.ts; modules/Sync.ts)
+	syncAnswer,
 	// the violations and errors of the page's own policy the inject makes
 	// itself, the first time it refuses something (./violations.ts; Client.ts)
 	dispatchViolation,
@@ -344,12 +401,19 @@ export const parts = {
 	noteBaseSite,
 	noteFormSite,
 	markupBaseSite,
+	// where a script of the markup a violation names is (./markupPlaces.ts;
+	// ./policyChecks.ts)
+	markupScriptSite,
 	// the page's own policy's checks of its code and of the loads no worker
 	// sees, at the first a document with a policy needs (./policyChecks.ts;
 	// Client.ts), and a data: URL's integrity, which shares their digests
 	// (../../sriDigest.ts; modules/DOMAttributes.ts)
 	policyChecks,
-	integrityHoldsSync,
+	// the getters of a handler property the page's attributes use, at the
+	// first attribute of its name (./handlerGetters.ts;
+	// modules/DOMAttributes.ts)
+	hookHandlerName,
+	dataIntegrity,
 	navigationRefusal,
 	precommitRedirect,
 	webTransportStandIn,

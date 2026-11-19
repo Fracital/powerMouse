@@ -76,6 +76,13 @@ const nativeSetTimeout = globalThis.setTimeout;
 const nativeClearTimeout = globalThis.clearTimeout;
 /** a version no stamp has: the copy is read again */
 const LEFT = '\0';
+/** how long a streamed document's markup waits for its store's first read (primeStore) */
+const PRIME_WAIT_MS = 200;
+/**
+ * a count of what changed this bundle's copies (wrote, changed): a first
+ * read asked for before (primeStore) is not taken after one
+ */
+let storeChanges = 0;
 /** this realm leaves the stamps' lists (stampHolders): its copies read again */
 const dropCaches = () => {
 	for (const cache of readCaches.values())
@@ -166,8 +173,9 @@ export default class StorageModule extends Module<DocumentClient> {
 			let version: string;
 			try {
 				// on the stamp's list before the copy is filled: a write by
-				// another realm from now on stamps
-				if (stampStore) hold(stampStore, stampOf(cache));
+				// another realm from now on stamps (none while it is off the
+				// lists: no copy)
+				if (stampStore && !hold(stampStore, stampOf(cache))) return null;
 				version = Reflect.apply(nativeGetItem, stamps, [stampOf(cache)]) ?? '';
 			} catch (error) {
 				return null;
@@ -209,6 +217,7 @@ export default class StorageModule extends Module<DocumentClient> {
 			key: string | null,
 			value: string | null,
 		) => {
+			storeChanges++;
 			const cache = current(directory);
 			if (!cache) return;
 			const version = stamp(cache);
@@ -235,6 +244,7 @@ export default class StorageModule extends Module<DocumentClient> {
 		 * this document's writes landing, which its size was counted for.
 		 */
 		const changed = (directory: string, own: boolean) => {
+			storeChanges++;
 			const cache = caches.get(directory);
 			if (!cache) return;
 			cache.values.clear();
@@ -428,6 +438,27 @@ export default class StorageModule extends Module<DocumentClient> {
 			);
 		};
 
+		/**
+		 * The first read of a store (getSmall's answer) into its copy, with
+		 * what the copy has already (this document's writes, which are current
+		 * while the stamp is)
+		 */
+		const fill = (
+			cache: ReadCache,
+			[keys, small]: [string[], [string, string][]],
+		) => {
+			const known = cache.values;
+			for (const [item, value] of known) {
+				const index = keys.indexOf(item);
+				if (value === null && index !== -1) keys.splice(index, 1);
+				else if (value !== null && index === -1) keys.push(item);
+			}
+			for (const [item, value] of small)
+				if (!known.has(item)) known.set(item, value);
+			cache.keys = keys;
+			cache.whole = true;
+		};
+
 		/** `value` of `key` as this document sees it; undefined: ask the worker */
 		const shadowed = (directory: string, key: string) => {
 			const shadow = pending.get(directory);
@@ -607,16 +638,20 @@ export default class StorageModule extends Module<DocumentClient> {
 				if (shadow !== undefined) return shadow;
 
 				const cache = current(this.#directory);
-				if (cache && !cache.whole && !cache.values.size) {
-					// the first read of the store takes every key and small value
-					const [keys, small]: [string[], [string, string][]] =
+				if (cache && !cache.whole) {
+					// The first read of the store takes every key and small value,
+					// with what the copy has already (this document's writes, which
+					// are current while the stamp is): a store written before it
+					// was read (YouTube's availability check, a setItem and a
+					// removeItem of one key) was never whole, and every read of
+					// another key was a round trip of its own
+					fill(
+						cache,
 						syncModule.jsonAPI(
 							`${dirOf(this.#directory)}getSmall`,
 							keyOf(this.#directory),
-						);
-					cache.keys = keys;
-					for (const [item, value] of small) cache.values.set(item, value);
-					cache.whole = true;
+						),
+					);
 				}
 				if (cache?.values.has(key)) return cache.values.get(key)!;
 				if (cache?.whole && !cache.keys!.includes(key)) return null;
@@ -836,6 +871,43 @@ export default class StorageModule extends Module<DocumentClient> {
 			`${client.directory}localStorage/`,
 			'localStorage',
 		);
+		// A streamed document's first read of its localStorage, asked for
+		// as its markup is (Client.loadHTMLStream), not through the bridge:
+		// its head's scripts run while the worker is busy with the body, and
+		// a read spun until the worker was free (CNN's head, 100 ms of
+		// document.cookie reads). The copy is on the stamp's list and its
+		// version read before the worker reads the store, so a write the
+		// answer may lack changes the stamp, and the answer is not taken
+		// then, nor after any write or change this bundle saw meanwhile. The
+		// markup waits for it, PRIME_WAIT_MS at most.
+		client.primeStore = () => {
+			const directory = `${client.directory}localStorage/`;
+			const cache = current(directory);
+			if (!cache || cache.whole) return;
+			const { version } = cache;
+			const seen = storeChanges;
+			return new Promise<void>((resolve) => {
+				nativeSetTimeout(resolve, PRIME_WAIT_MS);
+				fetch(new URL(`${dirOf(directory)}getSmall`, location.href), {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify([keyOf(directory)]),
+				})
+					.then((response) => (response.ok ? response.json() : null))
+					.then((answer) => {
+						if (
+							answer &&
+							storeChanges === seen &&
+							current(directory) === cache &&
+							cache.version === version &&
+							!cache.whole
+						)
+							fill(cache, answer);
+					})
+					.catch(() => {})
+					.finally(resolve);
+			});
+		};
 		const sessionStorage = storageFactory(
 			`${client.directory}sessionStorage/`,
 			'sessionStorage',

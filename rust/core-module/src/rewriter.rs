@@ -10,9 +10,11 @@
 //!   rewrite depends on per script (its URL, the key and shifts of its
 //!   marks, the text ahead of its code) comes in a call of its own before
 //!   it (`FLAG_PARAMS`, the text of `rewrite::Params`) and holds for one
-//!   rewrite; what it found besides the text (`marks<TAB>key`) is asked for
-//!   after it (`FLAG_META`). `FLAG_REVISION` answers the revision of what
-//!   the module writes, for a cache of rewrites to key on.
+//!   rewrite; what it found besides the text (`marks<TAB>key`, and under
+//!   `FLAG_APART` `<TAB>map`) is asked for after it (`FLAG_META`).
+//!   `FLAG_REVISION` answers the revision of what
+//!   the module writes, for a cache of rewrites to key on. `FLAG_LINK`
+//!   merges the modules of an import cycle into one (`rwjs::link`).
 //! - `jp()` and `jn()` are the output's pointer and length.
 //! - `jb() -> ptr` is the scratch the host answers an `e.j` call in: routing
 //!   stays with the host (`route(kind, ptr, len) -> len`), which writes the
@@ -59,6 +61,18 @@ const FLAG_SINGLE: u32 = 128;
 /// the source does not parse or the part does not apply (a None told from an
 /// empty answer)
 const FLAG_PRINT: u32 = 256;
+/// the output carries the map of itself to the script's text, for the
+/// positions a page reads (`rwjs::positions`): a script file the service
+/// worker serves
+const FLAG_POSITIONS: u32 = 512;
+/// the map is made as for `FLAG_POSITIONS` but handed over beside the
+/// output (`FLAG_META`), which carries none: code the inject rewrites,
+/// which it finds the map of by the hash V8 names the script it ran by
+const FLAG_APART: u32 = 1024;
+/// merge the modules of an import cycle into one (`rwjs::link`): the input
+/// is the modules apart by NUL, the output the merged module and each one's
+/// facade, apart by NUL, status `STATUS_PARSE` when they do not link
+const FLAG_LINK: u32 = 2048;
 
 /// statuses besides 0: the configuration or the params did not parse
 const STATUS_CONFIG: i32 = 1;
@@ -89,6 +103,8 @@ struct State {
 	config: Config,
 	params: Params,
 	meta: String,
+	/// the map the last rewrite made apart (`FLAG_APART`)
+	apart: Option<String>,
 	output: Vec<u8>,
 	scratch: Vec<u8>,
 }
@@ -106,6 +122,7 @@ fn state() -> &'static mut State {
 		config: Config::default(),
 		params: Params::default(),
 		meta: String::new(),
+		apart: None,
 		output: Vec::new(),
 		scratch: vec![0; SCRATCH],
 	})
@@ -145,7 +162,11 @@ pub unsafe extern "C" fn call(ptr: *mut u8, len: usize, flags: u32) -> i32 {
 	state().output = Vec::new();
 	if flags & FLAG_META != 0 {
 		let st = state();
-		st.output = st.meta.clone().into_bytes();
+		st.output = match st.apart.take() {
+			Some(map) => format!("{}\t{map}", st.meta),
+			None => st.meta.clone(),
+		}
+		.into_bytes();
 		return 0;
 	}
 	if flags & FLAG_REVISION != 0 {
@@ -180,6 +201,15 @@ pub unsafe extern "C" fn call(ptr: *mut u8, len: usize, flags: u32) -> i32 {
 			None => STATUS_PARSE,
 		};
 	}
+	if flags & FLAG_LINK != 0 {
+		return match rwjs::link::link(source) {
+			Some(linked) => {
+				state().output = linked.into_bytes();
+				0
+			}
+			None => STATUS_PARSE,
+		};
+	}
 	if flags & FLAG_PARAMS != 0 {
 		return match Params::parse(source) {
 			Ok(params) => {
@@ -195,16 +225,22 @@ pub unsafe extern "C" fn call(ptr: *mut u8, len: usize, flags: u32) -> i32 {
 	let options = Options {
 		module: flags & FLAG_MODULE != 0,
 		holder: flags & FLAG_HOLDER != 0,
+		positions: flags & FLAG_POSITIONS != 0,
+		apart: flags & FLAG_APART != 0,
 		config: &config,
 		params: &params,
 	};
 	let st = state();
 	st.meta = String::new();
+	st.apart = None;
 	let mut route = |kind: u32, text: &str| route(kind, text);
 	match rewrite::rewrite(source, &options, &mut route) {
 		Ok(output) => {
 			let st = state();
 			st.meta = format!("{}\t{}", output.marks, output.key);
+			if flags & FLAG_APART != 0 {
+				st.apart = Some(output.map);
+			}
 			st.output = output.text.into_bytes();
 			0
 		}

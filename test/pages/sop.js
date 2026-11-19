@@ -2175,6 +2175,145 @@
 				document.body.append(frame);
 			}),
 	);
+	// An about:blank this page navigates the child of another site's frame
+	// to (test/pages/sop-blank-b.html): natively this page's in Chrome, which
+	// reaches it as its own, and which the other site's frame (its parent)
+	// reaches no more than any document of this site, nor it that frame
+	const blankOfB = () =>
+		new Promise((resolve) => {
+			const frame = document.createElement('iframe');
+			const listen = async (event) => {
+				if (event.source !== frame.contentWindow) return;
+				const loads = event.data?.sopBlankLoads;
+				if (loads === 1)
+					frame.contentWindow.frames[0].location.href = 'about:blank';
+				if (loads !== 2) return;
+				window.removeEventListener('message', listen);
+				// (the state it settles in: Firefox replaces the first document)
+				await sleep(400);
+				resolve(frame);
+			};
+			window.addEventListener('message', listen);
+			frame.src = `${B}/pages/sop-blank-b.html`;
+			document.body.append(frame);
+		});
+	const readOf = (get) => {
+		try {
+			const value = get();
+			return value === undefined || value === null ? String(value) : value;
+		} catch (error) {
+			return error.name;
+		}
+	};
+	let blankFrame = null;
+	add(
+		'frame/an about:blank this page navigates a frame of another site to',
+		async () => {
+			blankFrame = await Promise.race([
+				blankOfB(),
+				sleep(8000).then(() => null),
+			]);
+			if (!blankFrame) return 'no frame';
+			const blank = blankFrame.contentWindow.frames[0];
+			return {
+				document: readOf(() => blank.document.URL),
+				origin: readOf(() => blank.origin),
+				domain: readOf(() => blank.document.domain),
+				title: readOf(() => blank.document.title),
+				// what its relative URLs resolve against
+				baseURI: readOf(() => blank.document.baseURI.split('?')[0]),
+				resolved: readOf(() => {
+					const link = blank.document.createElement('a');
+					link.href = 'x.html';
+					return link.href.split('?')[0];
+				}),
+			};
+		},
+	);
+	add(
+		'frame/the other site reads nothing of an about:blank this page navigated',
+		async () => {
+			if (!blankFrame) return 'no frame';
+			const blank = blankFrame.contentWindow.frames[0];
+			try {
+				blank.secretOfA = 'A';
+				blank.document.body.textContent = 'secret of A';
+			} catch (error) {
+				// not this page's
+			}
+			return new Promise((resolve) => {
+				const listen = (event) => {
+					if (!event.data?.sopBlankRead) return;
+					window.removeEventListener('message', listen);
+					resolve(event.data.sopBlankRead);
+				};
+				window.addEventListener('message', listen);
+				blankFrame.contentWindow.postMessage('sopBlankRead', '*');
+				setTimeout(() => resolve('no answer'), 4000);
+			});
+		},
+	);
+	add(
+		'frame/an about:blank this page navigated reads nothing of the other site',
+		() => {
+			if (!blankFrame) return 'no frame';
+			const blank = blankFrame.contentWindow.frames[0];
+			try {
+				const script = blank.document.createElement('script');
+				script.textContent = `self.sopBlankReads = (() => {
+					const read = (get) => { try { const value = get(); return value === undefined || value === null ? String(value) : String(value).split('?')[0]; } catch (error) { return error.name; } };
+					return { parentDocument: read(() => parent.document.URL), parentSecret: read(() => parent.secretOfB), parentLocation: read(() => parent.location.href), top: read(() => top.document.URL), origin: read(() => self.origin) };
+				})();`;
+				blank.document.body.append(script);
+				return blank.sopBlankReads ?? 'no run';
+			} catch (error) {
+				return failed(error);
+			}
+		},
+	);
+	// A frame of the other site whose initial about:blank this page read
+	// and marked before the site's document loaded (the way an embed's
+	// script reaches the player it makes): natively that document gets a
+	// window of its own, where through the proxy the browser keeps the
+	// about:blank's (one real origin) and, with it, whatever this page and
+	// its client put there (test/pages/sop-kept-b.html)
+	add(
+		"frame/another site's document in a window this page read first",
+		() =>
+			new Promise((resolve) => {
+				const frame = document.createElement('iframe');
+				frame.src = `${B}/pages/sop-kept-b.html`;
+				let timer = 0;
+				const finish = (result) => {
+					clearTimeout(timer);
+					window.removeEventListener('message', listen);
+					delete Object.prototype.sopKeptParent;
+					frame.remove();
+					resolve(result);
+				};
+				const listen = (event) => {
+					if (event.data?.sopKept) finish(event.data.sopKept);
+				};
+				window.addEventListener('message', listen);
+				Object.defineProperty(Object.prototype, 'sopKeptParent', {
+					value: 'the parent realm',
+					configurable: true,
+				});
+				document.body.append(frame);
+				const held = frame.contentWindow;
+				for (const write of [
+					() => (held.sopKeptExpando = 'parent'),
+					() => (held.Array.prototype.sopKeptMark = 'parent'),
+					() => (held.sopKeptObject = {}),
+				])
+					try {
+						write();
+					} catch (error) {
+						// a window of another origin
+					}
+				timer = setTimeout(() => finish('no answer'), 8000);
+			}),
+	);
 	add('frame/another site reports in', async () => {
 		other = await frameOfB();
 		return {

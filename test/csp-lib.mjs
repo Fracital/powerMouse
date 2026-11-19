@@ -29,10 +29,13 @@ export function caseURL(
 		b = [],
 		h,
 		s,
+		sl,
 		js,
 		fs,
 		id,
 		source,
+		l,
+		br,
 		probes,
 	},
 ) {
@@ -50,6 +53,8 @@ export function caseURL(
 	// markup's <base> elements), true for the ordinary page with styles in
 	// its markup
 	if (s) query.set('s', s === true ? '1' : s);
+	// `sl`: a stylesheet <link> in the page's markup
+	if (sl) query.set('sl', '1');
 	for (const href of [].concat(b)) query.append('b', href);
 	if (h) query.set('h', h);
 	if (js) query.set('js', js);
@@ -62,6 +67,11 @@ export function caseURL(
 	// that made a violation was, and what a listener is handed
 	// (test/pages/csp-navigation-probes.js)
 	if (source) query.set('source', '1');
+	// `l`: a page of the layout's parser-inserted scripts and metas instead
+	// of the probes (test/csp-server.mjs layout, csp-meta-scripts)
+	if (l) query.set('l', [].concat(l).join(','));
+	// `br`: the layout's page brotli-compressed, each piece flushed
+	if (br) query.set('br', '1');
 	query.set('probes', probes.join(','));
 	query.set('case', name);
 	return `${FIXTURE}csp/doc?${query}`;
@@ -148,12 +158,27 @@ export const FIELDS = [
  * must differ from native in both modes: the suite fails when one matches
  * again (the entry and the doc's line then go), as it does for a
  * difference that is not listed.
+ *
+ * `consoleMessages`: the Content Security Policy messages of the console
+ * (the browser's natively, which the inject writes for what it refuses
+ * itself) are compared too.
  */
 export async function compareCases(
 	browser,
 	cases,
-	{ fields = FIELDS, expected = {} } = {},
+	{ fields = FIELDS, expected = {}, consoleMessages = false } = {},
 ) {
+	/** the CSP console messages of `page` from now on, and of its frames */
+	const watchConsole = (page) => {
+		const seen = [];
+		if (consoleMessages)
+			page.on('console', (message) => {
+				if (/Content Security Policy/.test(message.text()))
+					seen.push(`[${message.type()}] ${message.text()}`);
+			});
+		return seen;
+	};
+	const nativeConsole = {};
 	const strays = Object.entries(expected).flatMap(([name, probes]) =>
 		Object.keys(probes)
 			.filter(
@@ -171,6 +196,7 @@ export async function compareCases(
 	const native = {};
 	for (const [name, spec] of Object.entries(cases)) {
 		const page = await browser.newPage();
+		nativeConsole[name] = watchConsole(page);
 		await page.goto(caseURL(name, spec));
 		native[name] = await report(page, name);
 		await page.close();
@@ -207,9 +233,24 @@ export async function compareCases(
 		['isolated', HOST],
 	]) {
 		const page = await openDemo(browser, base);
+		const seen = watchConsole(page);
 		for (const [name, spec] of Object.entries(cases)) {
+			seen.length = 0;
 			await submitLanding(page, caseURL(name, spec));
 			const proxied = await report(page, name);
+			if (consoleMessages) {
+				const want = [...nativeConsole[name]].sort();
+				const got = [...seen].sort();
+				ok(
+					`${mode}: ${name}: the console says what it says natively`,
+					want.length === got.length &&
+						want.every((text, index) => text === got[index]),
+					JSON.stringify({
+						missing: without(want, got),
+						extra: without(got, want),
+					}).slice(0, 3000),
+				);
+			}
 			const want = native[name];
 			const { violations: knownViolations, ...known } = expected[name] ?? {};
 			const differs = Object.keys(want?.results ?? {}).filter(

@@ -68,6 +68,9 @@ const bodyOf = Reflect.getOwnPropertyDescriptor(
 	Document.prototype,
 	'body',
 )!.get!;
+/** whether `document` has a body (by the browser's own) */
+export const hasBody = (document: Document) =>
+	Reflect.apply(bodyOf, document, []) !== null;
 const doctypeOf = Reflect.getOwnPropertyDescriptor(
 	Document.prototype,
 	'doctype',
@@ -100,6 +103,8 @@ export const FIRST_PASS_MS = 4;
 export const PASS_MS = 20;
 /** how long the pass after the page's first write waits for the frame that draws it */
 export const FRAME_WAIT_MS = 50;
+/** how long the writes of one task may run before the next piece waits for a frame */
+export const YIELD_MS = 50;
 /**
  * what is copied is written once there is this much of it (a quarter of
  * what is written already, from WRITE_CHARS up to WRITE_MAX), or once the
@@ -323,14 +328,19 @@ export default class PageStream {
 	#copied(): string {
 		const holder = this.#holder;
 		const root = Reflect.apply(documentElement, this.#parse, []) as Element;
+		const open = this.#open;
+		this.copyingHead = isNamed(open[open.length - 1]!, 'head');
 		Reflect.apply(appendChild, root, [holder]);
 		try {
 			return this.#copy(holder, false);
 		} finally {
+			this.copyingHead = false;
 			Reflect.apply(removeChild, root, [holder]);
 			empty(holder);
 		}
 	}
+	/** the nodes being copied (the holder's) are the head's children */
+	copyingHead = false;
 	/**
 	 * The attributes a later <html> or <body> tag added to the root or the
 	 * body, as such a tag (the written document's parser adds them too)
@@ -378,8 +388,7 @@ export default class PageStream {
 				Reflect.apply(namespaceURI, child, []) === HTML &&
 				RAW_TEXT.includes(` ${Reflect.apply(localName, child, []) as string} `)
 			);
-		if (type === 1 && isNamed(child, 'head'))
-			return Reflect.apply(bodyOf, this.#parse, []) !== null;
+		if (type === 1 && isNamed(child, 'head')) return hasBody(this.#parse);
 		if (type === 1 && isNamed(child, 'body')) return false;
 		// foster parenting adds to a text right before an open table
 		if (
@@ -499,6 +508,8 @@ const slice = String.prototype.slice;
  */
 export async function readMarkup(
 	url: string,
+	/** what the first piece waits for (the store's first read, Client.primeStore) */
+	before: Promise<void> | undefined,
 	feed: (
 		markup: string,
 		table: unknown,
@@ -527,6 +538,7 @@ export async function readMarkup(
 			[],
 		) as ReadableStreamDefaultReader<Uint8Array>;
 		const decoder = new NativeTextDecoder();
+		await before;
 		let text = '';
 		// the record in hand's `<length>\n` once read: until the record is
 		// all there only the text's length is looked at (searching a text

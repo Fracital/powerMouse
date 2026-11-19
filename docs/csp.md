@@ -39,10 +39,12 @@ rewritten inline script by them too, and a nonce or hash on the real
 injected element does not hold on the live proxy origin. The inject enforces
 those against the page's own code instead (Scripts and styles, below).
 report-uri and report-to are left out (the browser would post the proxy's
-URLs). A report-only policy goes to the browser as one. A meta's content is
+URLs): the inject sends a document's reports to its report-uri itself,
+and hands those for its report-to to the service worker (Reports, below). A report-only policy goes to the browser as one. A meta's content is
 replaced by the browser policy for it (the inject's attribute hook; the page
 reads its own content back), and it applies when the meta is inserted, as
-natively.
+natively. A meta outside the head is ignored, as natively: the browser gets
+no content for it, and the console says so with the page's policy.
 
 A document of the site pool (docs/site-pool.md) is on a slot's origin, and a
 frame or a form of a site another slot shows reaches it by a 307 to that
@@ -99,12 +101,115 @@ where it sees the request (`hostsApply`, Hosts below); the inject refuses a
 `data:` or `blob:` one itself and fires the enforced violation the worker
 cannot. A script the page inserts through the DOM is judged as it connects,
 with the nonce it has then, as Chrome judges it as it prepares it: one whose
-src the page set before it connected, and that a nonce could still let
-through, is held refused (no src) and judged again by the insertion that
-connects it (`DocumentClient.holdScript`); any other way it reaches the
-document, it stays refused. A script-src-attr handler and a style-src-attr style attribute run
+src the page set before it connected, and that a policy refuses, is held
+(no src for the browser; the page reads its own) and judged by the
+insertion that connects it (`DocumentClient.holdScript`), whose call its
+violation names; one never inserted fires nothing. Any other way it
+reaches the document (inserted into another document), it stays held.
+
+A script of the page's markup (the response's, or one document.write
+writes) is judged as the parser prepares it, as Chrome judges it, by the
+policies the document has then: a meta in the head applies to the scripts
+after it, whether it came in the first chunk of the markup, a later one, or
+from a script that inserted it, and not to the scripts before it. The copy
+of the markup marks each script (`<prefix>parsed`), and a MutationObserver
+the inject keeps on the written document judges each marked script the
+parser inserts (the parser runs a microtask checkpoint before it runs a
+script it inserted, also where the markup waited behind a script that was
+loading; `DocumentClient` `#watchParsed`). A script the inject writes in
+the markup's place (the stand-in that writes each inline style,
+`DOMContentHooks` `rewriteStyle`, kept in `ownScripts`) is not marked: the
+browser never sees it, so the page's policy never judges it, and a style
+under a policy of nonces stays and applies with no violation. An external
+script the policies
+in force already refuse as it is copied gets no src there (more policies
+refuse no less), and is judged and reported with the others, in the order
+the parser prepares them; one after a meta of the head that is not in the
+page yet is written with no src for the browser until it is judged, so
+that the browser's preload scanner fetches nothing the page's policy
+refuses, as natively (`#holdParsed`). A refused inline script keeps no
+text; a refused external one keeps `src=""` for the browser, which fires
+its error event, as for the refused script natively, and the page reads
+its own src back. A violation of an inline script of the markup names
+where its text starts, as Chrome's does: the document's URL (no query, no
+fragment), the line (its line feeds counted; a carriage return alone ends
+none) and the column in UTF-16 units (`./markupPlaces.ts`
+`markupScriptSite`, read from the markup the inject received); an external
+one's names none, as natively. One the page's code inserts (through the
+DOM, by document.write) names the inserting call, as Chrome's does: in a
+script file, its place in the file's own text, from the map the service
+worker's rewrite of the file carries, and in code the inject rewrote (a
+script of the markup, eval, a handler) from the map its rewrite handed
+over (`docs/rust-plan.md`, position maps).
+The console says what Chrome's says of
+each refusal (the page's directive, its notes on 'unsafe-inline' and on
+the fallback directive), and
+the page's ReportingObservers are handed a csp-violation report of it as the
+browser hands its own: takeRecords has it at once, the callback in a task
+before the event, a buffered observer the reports before as it first
+observes, and the report and its body read as the browser's
+(`src/inject/reportsSeen.ts` `madeReport`; csp-meta-scripts compares them).
+A document reports a placed violation once, as Chrome does: the same code
+refused again at the same place (a script file run twice) fires its event
+and makes no second report.
+
+A script-src-attr handler and a style-src-attr style attribute run
 only by 'unsafe-inline' (or 'unsafe-hashes' with the value's hash); the
-inject clears the live attribute where they do not. A CSSOM write (an
+inject clears the live attribute where they do not. Chrome judges a
+handler as its attribute is set and again as it compiles it, at its first
+run or the first read of its property (`el.onclick`), by the policies in
+force each time (a report-only policy reports both), and so does the
+inject: one the page's code sets as it sets it, one of the page's markup
+as the parser inserts its element in the written page (the copy marks it,
+and `#watchParsed` judges it, also after the markup's last script, at
+DOMContentLoaded), one a document.write wrote at the write, once the
+parser inserted it (`writtenHandlers`), so a meta before it applies. One
+that runs before it was judged as parsed (an iframe's load as the parser
+inserts it) is judged as parsed first. The rewritten handler asks the
+access API's `csp` first (`DocumentClient.codeRuns`, `./policyChecks.ts`
+runRefused), which judges it once by the policies then and keeps that
+verdict, as the compiled handler is kept: a handler parsed before a meta a
+script inserts is refused as it runs. Its property's getter judges it the
+same way and reads null where it is refused, and one read before any
+policy governs code compiles it, so it runs whatever policy comes, as
+natively (`./handlerGetters.ts`: a property's getters, on the few
+prototypes that have them, are hooked the first time the inject meets an
+attribute of its name in that document, before the element is in it, with
+one getter body that finds the name in a table of the native getters;
+hooking every handler's in every frame cost some 19 KB a frame, these
+about 2 KB in a frame that has a handler attribute and nothing in one
+that has none). Its violation as it is compiled names the code that dispatched its
+event or read its property, else its place in the markup (where its start
+tag ends, where V8 counts the handler's own frame from: the service
+worker's, sent with its rewrite, src/prewrite.ts, else found in the page,
+`./markupPlaces.ts` handlerPlace; two handlers of one text are two
+scripts, each with its own place); as it is parsed,
+none, or the write. A javascript: URL is judged at script-src-elem as
+Chrome judges it: as its navigation starts, by the policies of the
+document whose code started it (a link's click, a location it set, a
+form it submitted, a frame's `src` it set, its open()), at that code
+(`DocumentClient.jsStarts`, which hands the check to the window it runs
+in, or, for a window with no document of the inject's yet, keeps it for
+that window to find; another frame's violation targets the frame's
+element; the markup's frame and a new window's URL are judged twice there,
+as natively), and again as it runs, by its window's, at the document's
+first line. The rewritten URL asks `csp` before its code
+(`src/rewriteHTML.ts`), and a refusal runs none of it; a report-only
+policy reports it twice. A URL the starting document's enforced policies
+refuse as it starts goes to a route that only judges it (`routeHTML`
+`judged`: a policy only grows, so every navigation the document starts to
+it is refused from now), so its code is never compiled and declares
+nothing. The violation events and reports of a check made as the
+navigation started are dispatched before the code runs, as natively, also
+where the code runs before that check's own task (a frame's, a form's). One of statements has the call after its
+directive prologue, and the rest stays the script's own (its `let` and
+`const` the window's, its value the URL's): a refusal throws what the
+inject's own error listener takes before any of the page's. Under
+`require-trusted-types-for 'script'` the code then goes to the page's
+default policy (`Location href`), and what it returns runs instead; with
+none, or null, the navigation is refused (report-only: reported) with
+Chrome's console message. Their console messages are Chrome's ("Executing
+inline event handler", "Running the JavaScript URL", with no hash). A CSSOM write (an
 element's `style` property, `setProperty`) is the browser's to allow, so the
 inject does not refuse it, only the `style` attribute the page sets as a
 string.
@@ -113,7 +218,12 @@ script-src (or default-src) decides eval, `Function`, a string timer and
 WebAssembly compilation: without 'unsafe-eval' (or 'wasm-unsafe-eval', which
 allows only WebAssembly) the inject throws Chrome's EvalError or CompileError
 naming the page's directive, runs nothing, and reports it; a string timer
-runs nothing and throws nothing. STomp's own code is never refused: it evals
+runs nothing and throws nothing. The violation names the page's call, as
+Chrome's does (sourceFile, lineNumber, columnNumber): in a script file, in
+a script of the markup (the document's lines, its first line's column
+from where its text starts) or in a handler (from where its start tag
+ends), read through the map of the rewrite of the code that made the call
+(`docs/rust-plan.md`, position maps). STomp's own code is never refused: it evals
 through the realm's own `eval` captured before the page's, and its wasm
 compiles with native `WebAssembly` methods captured before the inject's wrap
 (`src/wasm/module.ts`), so the page's policy never reaches it.
@@ -219,9 +329,11 @@ reconnect, as natively. A socket fires error and no close; a session's
 global gets one event for each policy that refuses it, report-only ones
 too, a task later (twice for a fetch or an importScripts only a
 report-only policy refuses, as Chrome): Chrome's fields (the worker's URL
-as its documentURI and, without its query, as its sourceFile, none for
-an EventSource, `blob` or `data` for those, a local scheme's URL as its
-scheme, status 0, no referrer). The event is the inject's; its listeners
+as its documentURI, the place of the page's code that made the request
+as its sourceFile (its script's URL without the query, `blob` or `data`
+for those), lineNumber and columnNumber, none for an EventSource, a local
+scheme's URL as its scheme, status 0, no referrer). The policy's
+report-uri gets its report (Reports). The event is the inject's; its listeners
 read it as trusted, as the browser's is (`trustTaggedViolations`, as for
 Trusted Types). The document hears nothing of it, natively either
 (csp-workers, csp-worker-requests).
@@ -326,7 +438,8 @@ host, and the browser refuses it as natively (even under `form-action *`).
 
 `SecurityPolicyViolationEvent`'s getters (`src/inject/dom/modules/ContentSecurity.ts`)
 name the page's URLs (documentURI, blockedURI without its fragment,
-referrer, sourceFile; the inject's own bundle as no URL) and the page's
+sourceFile; the inject's own bundle as no URL), the document's referrer
+as the page reads it and the page's
 policy as it wrote it (originalPolicy). A base-uri or form-action
 violation, the browser's (which names the inject's hook, or the shell's
 markup) or the inject's (which names nothing), names where Chrome does: the
@@ -339,6 +452,62 @@ part). A report body
 (`ReportingObserver`) the same (`Unroute`). A fetch or XMLHttpRequest
 reads a response's policy headers as natively (the browser applies none
 of them to such a response).
+
+## Reports
+
+A document's policy's report-uri gets what Chrome sends it (measured,
+Chrome 157), for the inject's violations as they are made
+(`policyChecks.ts` makeReport) and for the browser's as the page sees them
+(`violations.ts` violationShows): one POST of `application/csp-report`
+(`{"csp-report": {...}}`, Chrome's members in its order, the place only
+where there is one) to each endpoint, at once, none again for a report
+that reads as one the document sent, and none where the policy has
+report-to. It is a request of the document's
+(`src/inject/dom/violationDelivery.ts`, a deferred part) the service
+worker sends as a `report` load (Sec-Fetch-Dest: report, no-cors), with
+the cookies of an endpoint of the document's origin only and the Referer
+the document's policy gives it. csp-scripts compares what the fixture's
+endpoint receives, of its origin and of another.
+
+A worker's policy's report-uri gets what Chrome sends it too (measured,
+Chrome 157): the same POST of `application/csp-report` as the violation
+is made (Sec-Fetch-Dest: report, no-cors), the worker's URL as its
+Referer and its document-uri, the place of the page's code in the
+worker's script, once per report that reads the same (a fetch only a
+report-only policy refuses fires two events and sends one report). The
+worker's inject sends it (`WorkerClient.requestVerdict`), with no load
+channel to announce it on: it names `WORKER_REPORT_LOAD` in the load
+header, and the service worker sends it as a `report no-cors` load only
+where the requesting worker's own policy (a `blob:` worker's creator's)
+is the report's original-policy and names that endpoint in its
+report-uri, and the body is a `csp-report` of Chrome's members
+(`contentPolicies.ts` workerReportAllowed): a worker's script can make
+no request that way that a violation of its policy does not send
+natively. csp-worker-requests compares what the fixture's endpoint
+receives from a dedicated and a shared worker.
+
+A policy's report-to sends to the endpoint its first token names in the
+document's Reporting-Endpoints (an https document's only, an endpoint of
+a potentially trustworthy URL only; the legacy Report-To header's groups
+are none, as natively). The service worker reads the header with the
+document's response (`src/server/reportUploads.ts` reportingEndpoints,
+into its ScriptFacts) and the shell gives the client them as `reportTo`
+(`src/htmlShell.ts` reportEndpoints). The inject hands each report (once
+per document, the place only where there is one) to the service worker as
+a `reports` load, and the worker delivers it as Chrome's Reporting API
+does (measured, Chrome 157): the first report at once, the ones queued
+after it together about a minute after the last upload, or at once when
+their document is gone (the worker looks for the documents of waiting
+reports every second, `clients.get`); each document's reports for one
+endpoint in one POST of `application/reports+json` (a list of `{age,
+body, type, url, user_agent}`, every member in alphabetical order), with
+Origin, User-Agent and Accept-Language and no Referer or Sec-Fetch-
+headers; an endpoint of another origin asked first by a CORS preflight
+(each upload, no cache) and sent no cookies, one of the document's origin
+sent them. A report outlives its document (the fetch event that handed it
+over waits until it is delivered), and one that failed goes with the next
+upload, up to five times. csp-reports compares what the endpoints of an
+https fixture receive, natively and in both modes.
 
 ## Sandbox
 
@@ -364,38 +533,54 @@ refuses fires a violation, natively either.
 
 ## Not yet as natively
 
-- Trusted Types: a report-only policy's violation of a sink the inject
-  writes reaches no `ReportingObserver`, and the
-  browser reports a report-only refusal of a script whose text landed as
-  a Text node, or of a javascript: URL, with the rewrite as the sample.
-  A javascript: URL of a link (its href is rewritten when it is set) is
-  judged by the browser with the rewrite's code: the default policy is
-  handed it, and a refusal's sample is it. A worker judges no
+- Trusted Types: the browser reports a report-only refusal of a script
+  whose text landed as a Text node with the rewrite as the sample. A
+  worker judges no
   importScripts of the page's and reports no report-only refusal, and a
   module worker of a `blob:` URL does not start. An SVG script's
   rewritten text is let through only by a default policy, as the page's
   own would be. A violation's sourceFile is not the page's script.
+- An external script after a meta a script inserts is not fetched; Chrome's
+  preload scanner, which does not know the meta, fetches it (and does not
+  run it).
+- A report-only refusal of a load that went out (an image, a fetch: the
+  worker's word, after the load) is reported, event and report, with no
+  place, and without Chrome's console message; Chrome names where the
+  parser was or the calling code.
 - 'unsafe-hashes' with the hash of an event handler, a style attribute or a
   `javascript:` URL: the rewrite changes the text, and the browser refuses
   it.
-- A stylesheet `<link>` the page's policy allows by its host where the
-  list also takes nonces is refused.
+- A javascript: URL of statements refused only as it runs (another
+  window's location set to it, which the setting document does not
+  judge; a markup frame's src parsed before a meta) has compiled before
+  its check refuses it (the check is its first call): a `let`, `const` or
+  `class` it declares is the window's, never initialized (`typeof`
+  throws, a later declaration of the name is a SyntaxError); natively
+  there is none. A link or form whose URL went to the judging route keeps
+  it: moved to a document that allows the code, it still runs none.
+- A javascript: URL whose code a Trusted Types default policy changes runs
+  the changed code one task later than natively (it goes through a
+  navigation of its own).
+- A stylesheet `<link>` the page's policy refuses keeps no href, so its
+  `sheet` is null; natively it is an empty sheet (csp-scripts lists it as
+  an expected difference).
 - A module worker of a `blob:` URL under a policy that refuses `blob:`
   scripts does not start (its bootstrap imports the page's module).
 - A report-only policy does not report an inline script an enforced one
   allows by its hash.
-- A refused external script keeps no src: its markup read back (and
-  written, as by document.write), a copy of it (cloneNode, importNode, a
-  template's content), and the script itself once it connects load nothing
-  and fire no event, where natively each is judged again as it connects. A
-  script of another document is judged as its src is set there, so a nonce
-  it is given later does not count when it is adopted (csp-scripts lists
-  these as expected differences).
-- Under 'strict-dynamic' the inject bundle's script carries the document's
-  nonce (nothing else lets it through), and V8 keys a script's compiled
-  code by its nonce too: each such document compiles its own copy of the
-  bundle (about 770 KB of heap a frame, measured). Elsewhere the bundle
-  loads by its URL, which the browser's policy names.
+- A script the page's code gave a refused src before it connected (held,
+  above) has no src for the browser: a copy of it (cloneNode, importNode, a
+  template's content) loads nothing and fires no event, where natively each
+  is judged again as it connects. A script of another document is judged
+  as its src is set there (its violation names that call), so a nonce it
+  is given later does not count when it is adopted, and it loads nothing
+  (csp-scripts lists these as expected differences).
+- A frame under a script policy the inject enforces (nonces,
+  'strict-dynamic') costs about 15 KB of heap more than under none: its
+  checks' deferred part, evaluated in each such frame (frame-cost gates a
+  'strict-dynamic' frame). The bundle loads by its URL there as anywhere
+  (the browser gets no script policy of the page's), so its compiled code
+  is shared.
 - A sandbox's console messages name the proxy's URLs (a refused form's,
   a refused popup's), and a meta's or a report-only policy's `sandbox`
   is ignored without Chrome's console error for it. An external script of
@@ -418,9 +603,11 @@ refuses fires a violation, natively either.
   not exist yet or that a `<base target>` sends to a new one (named as a
   form into its own window), or for a base set and inserted again within
   one task with the same URL (the last place is named). Every other
-  directive's violation is not placed as natively: the inject's own (the
-  page's code it refuses under script-src, style-src or Trusted Types, a
-  report-only refusal of a load) names no place, and the browser's names
+  directive's violation is not placed as natively, but for an inline
+  script of the markup's or one a script file inserts: the inject's own
+  (the page's code it refuses under script-src-attr, style-src or Trusted
+  Types, a report-only refusal of a load) names no place, and the
+  browser's names
   the line and column of the inject's hook, with no sourceFile, where a
   hook made the load (a frame, an image, a worker, a connection).
 - A navigation's hop refused by one of two policies is reported by both
@@ -445,12 +632,6 @@ refuses fires a violation, natively either.
   worker's own policy reaches its inject once its script's body starts, so
   what a module it imports connects to at its top level is refused by the
   service worker without a violation. A worker's script list that takes
-  nonces, hashes or 'strict-dynamic' judges none of its imports. A
-  worker's violation's lineNumber and columnNumber are 0, and its
-  sourceFile is the worker's script even for a script it imported.
-- No report goes to a policy's report-uri or report-to endpoint, a
-  document's or a worker's (the site never sees one; the page sees every
-  violation, as natively; csp-worker-requests lists a worker's as an
-  expected difference).
+  nonces, hashes or 'strict-dynamic' judges none of its imports.
 - An `<object>` of a page-made `blob:` URL does not load through the proxy,
   with or without a policy.

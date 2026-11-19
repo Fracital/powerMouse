@@ -457,6 +457,11 @@ What is left:
    it needs the config handed in with the connection (the lookup is
    EpoxyTransport's) and the same retry; about half a day.
 9. One HTTPS record per name: Chrome reads one lookup for both h3 (`alpn`)
-   and ECH. With both `http3.dns` and `ech_dns` set, the name is asked
-   twice, by Http3Transport and by EpoxyTransport, each with its own cache.
+   and ECH. With HTTP/3 on and `ech_dns` set (`http3.dns` defaults to it),
+   Http3Transport reads EpoxyTransport's own lookup (the epoxy build's
+   `httpsAnswer`, through the shards, per network partition), so one
+   question serves both.
+   With an epoxy build without it, or `http3.dns` naming another server,
+   the name is asked twice, by Http3Transport and by EpoxyTransport, each
+   with its own cache.
 10. libcurl has no ECH (mbedTLS); it sends no ECH extension at all.

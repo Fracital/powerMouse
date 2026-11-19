@@ -74,6 +74,8 @@ export interface StompServer {
 	clearCache(): Promise<void>;
 	/** the host page was reloaded: what it restores takes that cache mode (rewrites.ts) */
 	hostReloaded(mode: HostReload): void;
+	/** the next navigation to this routed URL is a history step (rewrites.ts historySteps) */
+	historyStepped(url: string): void;
 	/** the cookie jar, for the host's cookies API */
 	cookies: Cookies;
 	/**
@@ -163,6 +165,7 @@ function blockerKey(scope: string, init: AdblockInit): string {
 		init.resources,
 		init.engine ?? '',
 		init.refreshMs,
+		init.snapshot ?? '',
 	]);
 }
 
@@ -387,6 +390,8 @@ export default async function createServer(
 	askIsolationEngine?: () => Promise<IsolationEngine | null>,
 	/** asks the controller's document for a blob: URL it minted (src/server/rewrites.ts learnBlobsReadable) */
 	askBlobProbe?: () => Promise<string | null>,
+	/** tells the controller a page that is isolated natively is shown without isolation (Rewriter.isolationWanted) */
+	tellIsolationWanted?: (client: string) => void,
 ): Promise<StompServer> {
 	// the jar opens beside the codec's transaction (sharedStores takes it)
 	if (!jar) openJarDB().catch(() => {});
@@ -580,7 +585,7 @@ export default async function createServer(
 				pool,
 			));
 	const shields = new ShieldsStore();
-	const { route, setRules, hostReloaded } = registerRewrites(
+	const { route, setRules, hostReloaded, historyStepped } = registerRewrites(
 		router,
 		init,
 		cookies,
@@ -595,13 +600,27 @@ export default async function createServer(
 		stores.storage,
 		askIsolationEngine,
 		askBlobProbe,
+		tellIsolationWanted,
 	);
 	if (blocker) registerBlocker(router, blocker);
 	registerStorage(router, stores.storage, init.codec);
 	registerMediaLoads(router);
 	registerKeptLoads(router);
 	registerIntegrityLoads(router);
-	registerXhr(router, init.codec);
+	// whether a page's synchronous request reaches the worker, as an earlier
+	// worker learned it (Sync.ts reached)
+	let syncKnown: boolean | undefined;
+	try {
+		const known: unknown = await db.get('consts', 'syncAnswers');
+		if (typeof known === 'boolean') syncKnown = known;
+	} catch (error) {
+		// not known yet
+	}
+	registerXhr(router, init.codec, syncKnown, (value) =>
+		openConfigDB()
+			.then((store) => store.put('consts', value, 'syncAnswers'))
+			.catch(() => {}),
+	);
 
 	return {
 		router,
@@ -624,6 +643,7 @@ export default async function createServer(
 		},
 		setRules,
 		hostReloaded,
+		historyStepped,
 		realURL,
 		codec: init.codec,
 		routeOf: (routed) => {

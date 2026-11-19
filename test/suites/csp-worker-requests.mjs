@@ -89,16 +89,9 @@ const CASES = {
 };
 
 // each listed in docs/csp.md
-const NO_REPORT =
-	'no report reaches the report-uri (the worker reports nothing to an endpoint, as a document does not)';
 const NO_HOP_VIOLATION =
 	"the hop the worker's policy refuses is refused (the service worker answers a network error, and the fetch rejects as natively) or let out, but its violation is not fired: the service worker cannot reach the worker's global";
 const EXPECTED = {
-	"the worker's own policy's report-uri": {
-		'r-dedicated-report': NO_REPORT,
-		'r-dedicated-report-ro': NO_REPORT,
-		'r-shared-report': NO_REPORT,
-	},
 	"a redirect the worker's own policy refuses": {
 		'h-dedicated-connect': NO_HOP_VIOLATION,
 		'h-dedicated-ro': NO_HOP_VIOLATION,

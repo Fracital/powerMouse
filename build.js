@@ -299,6 +299,35 @@ const libraryIteration = ownIterationPlugin(
 	true,
 );
 
+/**
+ * The built-in blocker's engine snapshot (scripts/adblock-snapshot.mjs,
+ * docs/adblock.md): what a worker with no engine stored serves on a first
+ * visit, gzipped. Its serialization is blocker.wasm's, so a snapshot made by
+ * another module, or a file its UPSTREAM does not describe, is refused here
+ * rather than failing to load in every browser. Its age is not a build's
+ * concern (an old checkout builds as it did); the nightly workflow checks
+ * it (`--check`). It is asked for by the hash of its bytes (src/version.ts
+ * ADBLOCK_SNAPSHOT), so a host may let browsers keep it for good.
+ */
+function adblockSnapshot() {
+	const upstream = readFileSync('assets/adblock-snapshot.UPSTREAM', 'utf8');
+	const digest = (path) =>
+		createHash('sha256').update(readFileSync(path)).digest('hex');
+	const file = digest('assets/adblock-snapshot.dat.gz');
+	if (
+		/^blocker\.wasm sha256 ([0-9a-f]{64})$/m.exec(upstream)?.[1] !==
+		digest('assets/blocker.wasm')
+	)
+		throw new Error(
+			'build: assets/adblock-snapshot.dat.gz was made by another blocker.wasm; run node scripts/adblock-snapshot.mjs',
+		);
+	if (/^sha256 ([0-9a-f]{64})$/m.exec(upstream)?.[1] !== file)
+		throw new Error(
+			'build: assets/adblock-snapshot.dat.gz is not the file assets/adblock-snapshot.UPSTREAM describes; run node scripts/adblock-snapshot.mjs',
+		);
+	return file.slice(0, 16);
+}
+
 /** @type {import('esbuild').BuildOptions} */
 const common = {
 	platform: 'browser',
@@ -324,6 +353,9 @@ const common = {
 		// what the rewriter's wasm core module is asked for by: the hash of
 		// assets/core.wasm (see `bundles` below)
 		'process.env.STOMP_CORE': '""',
+		// what the blocker's engine snapshot is asked for by (src/version.ts
+		// ADBLOCK_SNAPSHOT): the hash of its bytes
+		'process.env.STOMP_ADBLOCK_SNAPSHOT': JSON.stringify(adblockSnapshot()),
 		// (src/version.ts DOCUMENT, DOCUMENT_FULL: see `bundles` below)
 		'process.env.STOMP_DOCUMENT': '""',
 		'process.env.STOMP_DOCUMENT_FULL': '""',
@@ -596,11 +628,15 @@ const DEFERRED_FILES = new Set(
 		'src/inject/dom/deferredParts.ts',
 		'src/inject/dom/downloadSave.ts',
 		'src/inject/dom/fetchLater.ts',
+		'src/inject/dom/freshSwap.ts',
+		'src/inject/dom/animatedHref.ts',
+		'src/inject/dom/handlerGetters.ts',
 		'src/inject/dom/legacyEncoding.ts',
 		'src/inject/dom/lazyFonts.ts',
 		'src/inject/dom/instructions.ts',
 		'src/inject/dom/markupMembers.ts',
 		'src/inject/dom/measuredMemory.ts',
+		'src/inject/dom/objectLoads.ts',
 		'src/inject/dom/markupSinks.ts',
 		'src/inject/dom/openerFacts.ts',
 		'src/inject/dom/pictureWindows.ts',
@@ -628,9 +664,14 @@ const DEFERRED_FILES = new Set(
 		'src/inject/dom/writeTokenizer.ts',
 		'src/inject/dom/storageAccess.ts',
 		'src/inject/dom/taintRefusals.ts',
+		'src/inject/dom/violationDelivery.ts',
 		'src/inject/dom/violations.ts',
+		'src/inject/dom/markupPlaces.ts',
 		'src/inject/violationDispatch.ts',
 		'src/inject/dom/uncontrolledCopies.ts',
+		'src/inject/dom/moduleGraph.ts',
+		'src/inject/dom/syncAnswer.ts',
+		'src/syncAsk.ts',
 		'src/inject/idbSize.ts',
 		'src/inject/storageUsage.ts',
 		'src/inject/legacyFileSystem.ts',
@@ -640,6 +681,7 @@ const DEFERRED_FILES = new Set(
 		'src/refusalName.ts',
 		'src/wasm/codecBytes.ts',
 		'src/inject/serviceWorkerObjects.ts',
+		'src/inject/positionMaps.ts',
 		'src/inject/originFrom.ts',
 		'src/inject/storageBucketMethods.ts',
 		'src/inject/windowArrays.ts',
@@ -663,6 +705,19 @@ const DEFERRED_FILES = new Set(
 		// (as esbuild names a module: by its real path, a linked node_modules
 		// followed)
 	].map((file) => realpathSync(resolve(file))),
+);
+
+/**
+ * Deferred files whose state no two groups need to share (sha.ts: its
+ * tables, made on first use): a group that reaches one carries its own
+ * copy, and two groups that reach it are not one for it (partGroups). The
+ * hashes joined the page's policy checks, the integrity checks and the
+ * position maps with long animation frames into one group of 21 KB, which
+ * a frame under a script policy evaluated whole (about 2 to 3 KB of heap a
+ * frame more than its checks alone, measured, Chrome 157).
+ */
+const COPIED_FILES = new Set(
+	['src/sha.ts'].map((file) => realpathSync(resolve(file))),
 );
 const DEFERRED_ENTRY = 'src/inject/dom/deferredParts.ts';
 /** what the parts read of the bundle: by file (from the root), the names */
@@ -1014,7 +1069,7 @@ function reachedFiles(metafile) {
 		// is in a namespace of its own)
 		if (input.includes(':') || !existsSync(resolve(input))) continue;
 		const file = realpathSync(resolve(input));
-		if (DEFERRED_FILES.has(file)) reached.add(file);
+		if (DEFERRED_FILES.has(file) && !COPIED_FILES.has(file)) reached.add(file);
 	}
 	return reached;
 }
@@ -1452,10 +1507,29 @@ const NAMED_FRAMES = ['siteFrame', 'controllerFrame'];
 // (a document bundle's codec module is a deferred part, src/wasm/codecBytes.ts)
 const documentDefine = { 'process.env.STOMP_CODEC_WASM': 'undefined' };
 
+/**
+ * A document bundle's first statement: in a window that already holds the
+ * client its shell names (src/routeURL.ts BUNDLE_CLIENT, `data-c`: a frame
+ * its parent injected before it navigated), the bundle evaluates nothing,
+ * as the shell throws away what it would make (takeNamedBase). Evaluated
+ * in that realm through the parent's hooks, the bundle's script took a
+ * median 1.8 ms of such a frame's start, and 0.2 ms with this (Chrome 157).
+ * The test only ever skips: with no client of that name the shell's own
+ * check says the bundle did not load. Strict as the bundle is: the
+ * directive comes first.
+ */
+const DOCUMENT_GUARD = {
+	banner: {
+		js: '"use strict";if(!(()=>{try{return document.currentScript.getAttribute("data-c")in globalThis}catch{}})()){',
+	},
+	footer: { js: '}' },
+};
+
 const builds = [
 	{
 		entryPoints: { injectDocument: 'src/inject/dom/entry.ts' },
 		format: 'iife',
+		...DOCUMENT_GUARD,
 		alias: stubCrypto,
 		inject: [snapshot, domSnapshot],
 		plugins: [rewriterLib, deferredTable],
@@ -1464,6 +1538,7 @@ const builds = [
 	{
 		entryPoints: { injectDocumentFull: 'src/inject/dom/entry.ts' },
 		format: 'iife',
+		...DOCUMENT_GUARD,
 		inject: [snapshot, domSnapshot],
 		plugins: [rewriterLib, deferredTable],
 		define: documentDefine,
@@ -1615,14 +1690,15 @@ const FRAME_HTML = 'src/controller/controllerFrame.html';
 await copyFile(FRAME_HTML, 'dist/controllerFrame.html');
 // the wasm artifacts are built elsewhere (deploy/rust/build.sh, in a
 // container) and committed under assets/, as are the blocker's resources
-// (scripts/adblock-resources.mjs, from a uBlock Origin release): the build
+// (scripts/adblock-resources.mjs, from a uBlock Origin release) and its
+// engine snapshot (scripts/adblock-snapshot.mjs): the build
 // copies them, so a checkout with no Rust toolchain (CI, the deploy) ships
 // the same bytes
 const ASSETS = 'assets';
 async function copyAssets() {
 	const copied = [];
 	for (const name of await readdir(ASSETS))
-		if (/\.(wasm|js|json)$/.test(name)) {
+		if (/\.(wasm|js|json|gz)$/.test(name)) {
 			await copyFile(`${ASSETS}/${name}`, `dist/${name}`);
 			copied.push(`dist/${name}`);
 		}

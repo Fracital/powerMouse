@@ -16,21 +16,28 @@ import type DocumentClient from '../dom/Client';
 import Module from '../Module';
 import { skippedFrames } from '../nativeErrors';
 import { LazyWeakMap, LazyWeakSet } from '../ownCollections';
+import { placeOf, positionParts } from '../positionParts';
 import { reportParts } from '../reportParts';
 import type { ReportView } from '../reportsSeen';
 import ProxyModule from './Proxy';
 import ResourceBufferModule from './ResourceBuffer';
 
 /**
- * The proxy-origin prefix every route of this context starts with. A
- * document's origin comes from its base URL: an about:srcdoc frame reads its
- * location origin as "null", while its base URL is the parent's routed one.
+ * The proxy origin this context's routes are under. A document's comes
+ * from its base URL: an about:srcdoc frame reads its location origin as
+ * "null", while its base URL is the parent's routed one. A worker's is its
+ * location's, but where that is opaque (a data: worker's), the origin its
+ * bundle came from (WorkerClient.bundleOrigin).
  */
+const proxyOrigin = (client: Client) =>
+	client.isDOM
+		? (client as DocumentClient).baseURI.origin
+		: ((client as { bundleOrigin?: string }).bundleOrigin ??
+			client.global.location.origin);
+
+/** the proxy-origin prefix every route of this context starts with */
 export function routedPrefix(client: Client): string {
-	const base = client.isDOM
-		? (client as DocumentClient).baseURI
-		: client.global.location;
-	return `${base.origin}${client.directory}`;
+	return `${proxyOrigin(client)}${client.directory}`;
 }
 
 /**
@@ -38,10 +45,7 @@ export function routedPrefix(client: Client): string {
  * the proxy's own files (the inject bundles) are served from.
  */
 export function scopePrefix(client: Client): string {
-	const base = client.isDOM
-		? (client as DocumentClient).baseURI
-		: client.global.location;
-	return `${base.origin}${client.scope}`;
+	return `${proxyOrigin(client)}${client.scope}`;
 }
 
 /**
@@ -273,8 +277,16 @@ interface CallSite {
 	isEval(): boolean;
 	getLineNumber(): number | null | undefined;
 	getColumnNumber(): number | null | undefined;
+	getPosition?(): number;
 	toString(): string;
 }
+
+/** a frame's own `:line:column`, at the end of its text */
+const FRAME_PLACE = /:\d+:\d+(\)?)$/;
+/** a CallSite's getters of its place, in placeOf's order */
+const PLACES = ['getPosition', 'getLineNumber', 'getColumnNumber'];
+/** a URL's fragment */
+const HASH = /#.*$/s;
 
 type PrepareStackTrace = (error: unknown, sites: CallSite[]) => unknown;
 
@@ -334,6 +346,24 @@ const MUTED: ErrorReport = {
 };
 /** a DataCloneError's message: what it was thrown for, the value as text, the verdict */
 const UNCLONEABLE = /^([^:]*: )([\s\S]+)( could not be cloned\.)$/;
+
+/** a page's ReportingObserver, as the reports the inject makes reach it (../reportsSeen.ts madeReport) */
+export interface MadeObserver {
+	callback: Function;
+	/** the types it takes, or null for every type */
+	types: string[] | null;
+	/** it is to be handed the reports made before it first observes */
+	buffered: boolean;
+	/** the reports the inject made that it is still to be handed */
+	pending: unknown[];
+}
+/** the page's observers, and the reports the inject made (the newest 100) */
+export interface MadeReports {
+	observers: LazyWeakMap<object, MadeObserver>;
+	/** the observers that observe, in the order they started */
+	observing: object[];
+	buffer: { type: string; report: object }[];
+}
 
 /**
  * Strings the browser builds from request URLs come back as the page's URLs:
@@ -621,8 +651,8 @@ export default class UnrouteModule extends Module<Client> {
 	 * (applyReports), oldest first.
 	 */
 	#reportSites: ErrorLocation[] = [];
-	/** the first of the page's frames on the stack now (applyErrorStacks) */
-	#callerLocation?: () => ErrorLocation | undefined;
+	/** the first of the page's frames on the stack now, or the one `skip` frames of the page's under it where there is one (applyErrorStacks) */
+	#callerLocation?: (skip?: number) => ErrorLocation | undefined;
 	/** where the page first opened a synchronous request (noteSynchronousRequest) */
 	#synchronousSite?: ErrorLocation;
 	/**
@@ -639,9 +669,14 @@ export default class UnrouteModule extends Module<Client> {
 		this.#synchronousSite = this.#callerLocation?.() ?? NO_LOCATION;
 		return true;
 	}
-	/** the page's call site, from inside a hook (none: no script of the page's called it) */
-	callerSite(): ErrorLocation {
-		return this.#callerLocation?.() ?? NO_LOCATION;
+	/**
+	 * the page's call site, from inside a hook (none: no script of the
+	 * page's called it); with `skip`, the call `skip` frames of the page's
+	 * under it, where there is one (a handler's caller: the code that
+	 * dispatched its event)
+	 */
+	callerSite(skip?: number): ErrorLocation {
+		return this.#callerLocation?.(skip) ?? NO_LOCATION;
 	}
 	/** note the page's call site, from inside a hook (#reportSites) */
 	noteReportSite() {
@@ -745,10 +780,19 @@ export default class UnrouteModule extends Module<Client> {
 		if (!location && this.#isInternal(filename))
 			location = this.pageLocation(native.error) ?? NO_LOCATION;
 		// a script that has no file name for the browser and is the page's
-		// for its stack: one of the page's markup (see rewriteInlineScripts)
-		if (!location && filename === '') {
+		// for its stack: one of the page's markup (see rewriteInlineScripts);
+		// and code of the document the inject rewrote (a script of its
+		// markup, a handler), which the browser places in what it ran: where
+		// its stack's top frame is in the document, placed as its own
+		const own = (name: unknown) =>
+			!this.client.isWorker &&
+			typeof name === 'string' &&
+			name.replace(HASH, '') ===
+				`${this.client.global.location?.href}`.replace(HASH, '');
+		if (!location && (filename === '' || own(filename))) {
 			const site = this.pageLocation(native.error);
-			if (site?.routed) location = site;
+			if (site?.routed && (filename === '' || own(site.routed)))
+				location = site;
 		}
 		const routed = location
 			? location.routed
@@ -987,6 +1031,16 @@ export default class UnrouteModule extends Module<Client> {
 			});
 	}
 	/**
+	 * The page's ReportingObservers and the reports the inject made itself
+	 * (its own violations, ../reportsSeen.ts madeReport), which reach them
+	 * as the browser's own reach them
+	 */
+	readonly madeReports: MadeReports = {
+		observers: new LazyWeakMap(),
+		observing: [],
+		buffer: [],
+	};
+	/**
 	 * Reports a page reads through ReportingObserver (a deprecation, an
 	 * intervention, a policy violation) name the page's URLs: the report's
 	 * `url` (the document's), and the URLs in its body, in their getters and
@@ -1025,18 +1079,68 @@ export default class UnrouteModule extends Module<Client> {
 			Observer.prototype,
 			'takeRecords',
 		)?.value;
+		const { observers } = this.madeReports;
 		if (typeof nativeTakeRecords === 'function')
 			Observer.prototype.takeRecords = proxyModule.wrapFunction(
 				nativeTakeRecords,
-				(target, that, args) => seen(Reflect.apply(target, that, args)),
+				(target, that, args) => {
+					const records = seen(Reflect.apply(target, that, args));
+					// and the reports the inject made that it holds
+					const pending = observers.get(that)?.pending;
+					if (pending?.length && Array.isArray(records)) {
+						for (let i = 0; i < pending.length; i++)
+							records[records.length] = pending[i];
+						pending.length = 0;
+					}
+					return records;
+				},
 			);
+		// whether each observes, and the reports the inject made that a
+		// buffered one is handed as it starts
+		for (const name of ['observe', 'disconnect'] as const) {
+			const native = Reflect.getOwnPropertyDescriptor(
+				Observer.prototype,
+				name,
+			)?.value;
+			if (typeof native === 'function')
+				Observer.prototype[name] = proxyModule.wrapFunction(
+					native,
+					(target, that, args) => {
+						const result = Reflect.apply(target, that, args);
+						const observer = observers.get(that);
+						if (!observer) return result;
+						const { observing } = this.madeReports;
+						let at = -1;
+						for (let i = 0; i < observing.length; i++)
+							if (observing[i] === that) at = i;
+						if (name === 'disconnect') {
+							if (at >= 0) {
+								for (let i = at + 1; i < observing.length; i++)
+									observing[i - 1] = observing[i];
+								observing.length--;
+							}
+							return result;
+						}
+						if (at >= 0) return result;
+						observing[observing.length] = that as object;
+						// handed the reports before once, as it first observes
+						// (as the browser's registers it)
+						if (observer.buffered) {
+							observer.buffered = false;
+							if (this.madeReports.buffer.length)
+								reportParts.made?.().buffered(this.madeReports, that, observer);
+						}
+						return result;
+					},
+				);
+		}
 		global.ReportingObserver = proxyModule.wrapFunction(
 			Observer,
 			(target, that, args, newTarget) => {
 				// called without new: the browser's TypeError
 				if (!newTarget) return Reflect.apply(target, that, args);
-				if (typeof args[0] === 'function') {
-					const callback = args[0];
+				const callback = args[0];
+				if (typeof callback === 'function') {
 					args[0] = function (this: unknown, ...called: unknown[]) {
 						const came = Array.isArray(called[0]) ? called[0].length : 0;
 						try {
@@ -1051,7 +1155,36 @@ export default class UnrouteModule extends Module<Client> {
 						return Reflect.apply(callback, this, called);
 					};
 				}
-				return Reflect.construct(target, args, newTarget);
+				const made = Reflect.construct(target, args, newTarget);
+				if (typeof callback === 'function') {
+					// the types it takes (strings of an array, as most pages
+					// give them; any other list takes the inject's reports too)
+					let types: string[] | null = null;
+					let buffered = false;
+					try {
+						const options = args[1] as
+							{ types?: unknown; buffered?: unknown } | null | undefined;
+						if (options && typeof options === 'object') {
+							buffered = !!options.buffered;
+							const given = options.types;
+							if (Array.isArray(given)) {
+								types = [];
+								for (let i = 0; i < given.length; i++)
+									if (typeof given[i] === 'string')
+										types[types.length] = given[i];
+							}
+						}
+					} catch (error) {
+						// options the browser read already
+					}
+					observers.set(made, {
+						callback,
+						types,
+						buffered,
+						pending: [],
+					});
+				}
+				return made;
 			},
 			true,
 		);
@@ -1091,13 +1224,48 @@ export default class UnrouteModule extends Module<Client> {
 		// which gives it no file name: it has the source URL the inject names
 		// it with (rewriteInlineScripts), the page's URL natively
 		const scriptName = (site: CallSite) =>
-			site.getFileName() ??
-			(site.isEval() ? undefined : site.getScriptNameOrSourceURL());
+			site.getFileName() ||
+			(site.isEval() ? site.getFileName() : site.getScriptNameOrSourceURL());
 		const fileName = (site: CallSite): string | null | undefined => {
 			const name = scriptName(site);
 			return typeof name === 'string'
 				? (unrouteURL(moduleClient, name) ?? name)
 				: name;
+		};
+		// where a frame stands in the page's text, where the map its script's
+		// rewrite carries says (../positionParts.ts): offset, line, column. A
+		// frame of no file kept may be in code the inject rewrote (an inline
+		// script, a handler, eval), whose map is found by its script. `at`:
+		// another position in the frame's script
+		const placed = (site: CallSite, at = site.getPosition?.()) =>
+			placeOf(fileName(site), at, site);
+		// a frame's text with its own line and column the page's; for code
+		// the page's eval runs, the eval's place too, where the frame below
+		// is the call (V8 names the call's place, which is the frame's)
+		const placedFrame = (
+			site: CallSite,
+			text: string,
+			index: number,
+			sites: CallSite[],
+		) => {
+			const place = placed(site);
+			if (place) text = text.replace(FRAME_PLACE, `:${place[1]}:${place[2]}$1`);
+			return placedOrigin(site, text, index, sites);
+		};
+		// an eval's origin in `text` placed, as the frame below's script has
+		// it (../positionMaps.ts placeOrigin)
+		const placedOrigin = (
+			site: CallSite,
+			text: string,
+			index: number,
+			sites: CallSite[],
+		) => {
+			const below = sites[index + 1];
+			return below && site.isEval()
+				? (positionParts
+						.maps?.()
+						.origin(text, below, fileName(below), placed) ?? text)
+				: text;
 		};
 		// a frame inside the inject bundle: no page URL corresponds to it
 		// (or a function the inject made with a realm's Function: its code has
@@ -1138,8 +1306,9 @@ export default class UnrouteModule extends Module<Client> {
 			for (let i = index + 1; i < sites.length; i++) {
 				const name = fileName(sites[i]);
 				if (typeof name !== 'string' || isInternal(sites[i])) continue;
-				const line = sites[i].getLineNumber();
-				const column = sites[i].getColumnNumber();
+				const place = placed(sites[i]);
+				const line = place ? place[1] : sites[i].getLineNumber();
+				const column = place ? place[2] : sites[i].getColumnNumber();
 				const caller = sites[i].getFunctionName();
 				return {
 					location:
@@ -1195,16 +1364,28 @@ export default class UnrouteModule extends Module<Client> {
 							const name = target.getFunctionName();
 							return helperName(name) ? null : name;
 						};
+					const which = PLACES.indexOf(key as string);
+					if (which >= 0) {
+						const place = placed(target);
+						if (place) return () => place[which];
+					}
 					if (key === 'getEvalOrigin' || key === 'toString')
 						return () => {
 							const value = Reflect.apply((target as any)[key], target, []);
-							return typeof value === 'string'
-								? cleanFrame(
-										key === 'toString' ? unnamed(value) : value,
+							if (typeof value !== 'string') return value;
+							return key === 'toString'
+								? placedFrame(
+										target,
+										cleanFrame(unnamed(value), index, sites),
 										index,
 										sites,
 									)
-								: value;
+								: placedOrigin(
+										target,
+										cleanFrame(value, index, sites),
+										index,
+										sites,
+									);
 						};
 					const value = Reflect.get(target, key, target);
 					return typeof value === 'function' ? value.bind(target) : value;
@@ -1319,16 +1500,17 @@ export default class UnrouteModule extends Module<Client> {
 		// The page's frame that called into the inject, for a hook that has to
 		// say where it was called from (noteReportSite): the stack of an error
 		// made here, formatted without the page's formatter.
-		let locating = false;
-		this.#callerLocation = () => {
+		// (while it does, the frames of the page's it skips, plus one)
+		let locating = 0;
+		this.#callerLocation = (skip = 0) => {
 			const error = new ErrorCtor();
-			locating = true;
+			locating = skip + 1;
 			try {
 				Reflect.get(error, 'stack');
 			} catch (failure) {
 				// no stack to read
 			} finally {
-				locating = false;
+				locating = 0;
 			}
 			return this.#pageSites.get(error);
 		};
@@ -1378,19 +1560,21 @@ export default class UnrouteModule extends Module<Client> {
 				shown = sites;
 			}
 			// where the page's code threw it, for the error's report
+			const first = shown[locating - 1] ?? shown[0];
 			if (
 				fromV8 &&
 				((typeof error === 'object' && error !== null) ||
 					typeof error === 'function') &&
-				shown.length
+				first
 			)
 				try {
-					const routed = scriptName(shown[0]);
+					const routed = scriptName(first);
+					const place = placed(first);
 					this.#pageSites.set(error, {
 						routed: typeof routed === 'string' ? routed : null,
-						filename: fileName(shown[0]) ?? '',
-						lineno: shown[0].getLineNumber() ?? 0,
-						colno: shown[0].getColumnNumber() ?? 0,
+						filename: fileName(first) ?? '',
+						lineno: place ? place[1] : (first.getLineNumber() ?? 0),
+						colno: place ? place[2] : (first.getColumnNumber() ?? 0),
 					});
 				} catch (failure) {
 					// a frame that cannot say
@@ -1427,7 +1611,7 @@ export default class UnrouteModule extends Module<Client> {
 				shown
 					.map(
 						(site, index) =>
-							`\n    at ${cleanFrame(unnamed(String(site)), index, shown)}`,
+							`\n    at ${placedFrame(site, cleanFrame(unnamed(String(site)), index, shown), index, shown)}`,
 					)
 					.join('')
 			);

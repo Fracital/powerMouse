@@ -56,10 +56,14 @@ const nativeRequestReferrer = Reflect.getOwnPropertyDescriptor(
 	Request.prototype,
 	'referrer',
 )!.get!;
+// (a realm of Firefox's has it or not: Firefox 160 makes a fresh profile's
+// first page natively, and often the first proxied document of a tab, with
+// a Request that has neither body nor duplex, so no request streams, and
+// the documents after it with both)
 const nativeRequestBody = Reflect.getOwnPropertyDescriptor(
 	Request.prototype,
 	'body',
-)!.get!;
+)?.get;
 const nativeRequestKeepalive = Reflect.getOwnPropertyDescriptor(
 	Request.prototype,
 	'keepalive',
@@ -748,8 +752,10 @@ export default class FetchModule extends Module<Client> {
 				// A Request handed on as the init gives the browser its body as
 				// a stream, which a no-cors or keepalive request may not have
 				// (natively its body keeps its bytes, and goes): such a body goes
-				// as its bytes (npr.org's GeoEdge reports, a no-cors POST Request)
+				// as its bytes (npr.org's GeoEdge reports, a no-cors POST Request);
+				// a realm with no request streams hands on no stream
 				if (
+					nativeRequestBody &&
 					isRequest(init) &&
 					(mode === 'no-cors' ||
 						Reflect.apply(nativeRequestKeepalive, init, [])) &&
@@ -823,6 +829,23 @@ export default class FetchModule extends Module<Client> {
 		const proto = global.Response.prototype;
 		const emptyHeaders = new LazyWeakMap<Response, Headers>();
 		const shownHeaders = new LazyWeakMap<Response, Headers>();
+		// the headers shown for an answer are immutable as its own are: a
+		// change throws once its arguments are good (they are checked on a
+		// throwaway, which throws as the browser does for bad ones)
+		const fixed = new LazyWeakSet<Headers>();
+		const headersProto = global.Headers.prototype;
+		for (const name of ['append', 'set', 'delete'] as const)
+			headersProto[name] = proxyModule.wrapFunction(
+				headersProto[name],
+				(target, that, args) => {
+					if (!fixed.has(that as Headers))
+						return Reflect.apply(target, that, args);
+					Reflect.apply(target, new global.Headers(), args);
+					throw new global.TypeError(
+						`Failed to execute '${name}' on 'Headers': Headers are immutable`,
+					);
+				},
+			) as never;
 		const opaque: Record<string, (that: Response) => unknown> = {
 			status: () => 0,
 			ok: () => false,
@@ -834,6 +857,7 @@ export default class FetchModule extends Module<Client> {
 				let headers = emptyHeaders.get(that);
 				if (!headers) {
 					headers = new global.Headers();
+					fixed.add(headers);
 					emptyHeaders.set(that, headers);
 				}
 				return headers;
@@ -873,6 +897,7 @@ export default class FetchModule extends Module<Client> {
 						while (i < bytes.length && bytes[i] !== key) i += 2;
 						shown.append(key, i < bytes.length ? bytes[i + 1] : value);
 					}
+					fixed.add(shown);
 					shownHeaders.set(that as Response, shown);
 				}
 				return shown;

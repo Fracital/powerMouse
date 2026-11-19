@@ -6,6 +6,7 @@ import type {
 import { poolHost } from './carrierClient';
 import { NETWORK_PARTITION } from './networkPartition';
 import { REQUEST_QUEUE } from './requestQueue';
+import { changedResponse } from './responseFacts';
 import { connectionLine, logTransport, transportLog } from './transportLog';
 
 // Chrome's connection limits toward a server, which the transport keeps as
@@ -505,13 +506,12 @@ function heldTicket(held: Held, line?: (line: PoolLine) => void): Ticket {
 				transportLog.on ? line : undefined,
 			);
 			if (holds && response.body instanceof ReadableStream)
-				return {
-					...response,
+				return changedResponse(response, {
 					body: untilDone(
 						response.body as ReadableStream<Uint8Array>,
 						held.release,
 					),
-				};
+				});
 			held.release();
 			return response;
 		},

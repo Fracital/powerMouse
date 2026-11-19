@@ -10,7 +10,7 @@ import { activationState } from '../activation';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { deferred } from '../deferred';
 import { destinationURL } from '../freshContext';
-import { clickedLink } from '../links';
+import { baseTarget, clickedLink } from '../links';
 import { nativeElement } from './DOMHooks';
 import { hookWrite } from './MutationObserver';
 
@@ -276,6 +276,16 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 				(own('formmethod') ? submitter!.formMethod : form.method) || 'get'
 			).toLowerCase();
 			if (method === 'dialog') return null;
+			// a javascript: action, judged as its submission starts
+			// (DocumentClient jsStarts)
+			moduleClient.jsStarts(
+				(own('formtarget')
+					? submitter!.getAttribute('formtarget')
+					: form.getAttribute('target')) || baseTarget(global.document),
+				action,
+				event,
+				own('formaction') ? submitter! : form,
+			);
 			try {
 				let url = new URL(action);
 				// a form without fields submits to `action?` (src/urlShape.ts)

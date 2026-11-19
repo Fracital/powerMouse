@@ -150,7 +150,7 @@ export const MEMBERS = [
 	'applyMeasuredMemory',
 	'connectInheritance',
 	'rewriterLightText',
-	'scriptAwaitsNonce',
+	'scriptAwaits',
 	'applyScriptSource',
 	'applyErrorReports',
 	'ownTransportPort',
@@ -191,6 +191,8 @@ export const MEMBERS = [
 	'connectVerdict',
 	'releaseHeld',
 	'emulate',
+	'pendingForeign',
+	'bundleOrigin',
 ];
 
 const CHARACTERS =

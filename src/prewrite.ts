@@ -22,8 +22,20 @@
 // the holder, which the client makes from the text, are cut out of the
 // rewrite; the worker sends a rewrite whole when putting them back would
 // not give it byte for byte.
+//
+// The markup's handler attributes (onclick) go the same way: the client
+// rewrote each as its element was copied, and placed it in the markup (where
+// its start tag ends, which V8 counts its positions from). That was most of
+// what a frame with one handler cost (some 7 KB of heap: the rewrite's calls
+// and the scan of the markup, measured, Chrome 157). The worker sends each
+// text's rewrite once and the place of every attribute of that name and
+// text, in the markup's order, and the client takes them in the order it
+// copies them. A handler the scan cannot read as the parser does (a
+// character reference in it, a carriage return) is rewritten and placed in
+// the page as before.
 
 import { holderStatement, sourceKey } from './functionSource';
+import { accessExpression } from './helperNames';
 import type { MarkupElement, MarkupScan } from './wasm/scanner';
 
 /** an inline classic script's first statement: `document.currentScript.textContent` reads back as the page wrote it */
@@ -32,10 +44,12 @@ export const scriptPreamble = (source: string) =>
 
 /**
  * A script's rewrite as the table carries it: `rest`, the rewrite with its
- * preamble (a classic script's) and its holder statement (if `holder`) cut
- * out at `at`; or the whole rewrite, when `at` is -1
+ * preamble (a classic script's) and its holder statement (if `holder`, the
+ * text's key, which the worker had: hashed in the page, YouTube's 780 KB
+ * inline script took some 5 ms) cut out at `at`; or the whole rewrite, when
+ * `at` is -1
  */
-export type PackedRewrite = [rest: string, at: number, holder: 0 | 1];
+export type PackedRewrite = [rest: string, at: number, holder: 0 | string];
 
 /** what the worker made of a document's inline scripts and styles */
 export interface Prewritten {
@@ -43,18 +57,49 @@ export interface Prewritten {
 	url: string;
 	/**
 	 * [kind (c: classic, m: module), where the script's text stands in the
-	 * markup (start, end), its rewrite (PackedRewrite)]
+	 * markup (start, end), its rewrite (PackedRewrite), the map the rewrite
+	 * handed over apart ('' for none: src/wasm/rewriter.ts takeApart), and
+	 * where its text starts in the document (the lines before, the column:
+	 * src/rewriteJS.ts ScriptSource.place)]
 	 */
-	scripts: [kind: 'c' | 'm', start: number, end: number, ...PackedRewrite][];
-	/** [where the style's text stands in the markup (start, end), its rewrite] */
-	styles: [start: number, end: number, output: string][];
+	scripts: [
+		kind: 'c' | 'm',
+		start: number,
+		end: number,
+		...PackedRewrite,
+		map: string,
+		place: [before: number, column: number],
+	][];
+	/** [where the style's text stands in the markup (start, end), its rewrite (PackedStyle)] */
+	styles: [start: number, end: number, output: PackedStyle][];
+	/**
+	 * [where a handler's text stands in the markup (start, end), its rewrite
+	 * as the client makes it (handlerPreamble's preamble, no holder: the
+	 * client keeps the text), the map the rewrite handed over apart, and each
+	 * attribute of that text: its name and where its start tag ends in the
+	 * document (the lines before, the column: ScriptSource.place)]
+	 */
+	handlers?: [
+		start: number,
+		end: number,
+		output: string,
+		map: string,
+		places: [name: string, before: number, column: number][],
+	][];
 }
+
+/**
+ * What a handler's rewrite runs first (src/inject/dom/modules/DOMAttributes.ts):
+ * the page's policy judges it as it runs (DocumentClient.codeRuns)
+ */
+export const handlerPreamble = (access: string, key: string) =>
+	`if(${accessExpression(access)}.csp(this,"${key}"))return;`;
 
 /** the rewrite `packed` stands for (the preamble only when `preamble`) */
 function unpack(
 	kind: 'c' | 'm',
 	source: string,
-	[rest, at, holder]: PackedRewrite,
+	[rest, at, holder]: readonly [...PackedRewrite, ...unknown[]],
 	access: string,
 	preamble = true,
 ): string {
@@ -62,7 +107,7 @@ function unpack(
 	return (
 		rest.slice(0, at) +
 		(kind === 'c' && preamble ? scriptPreamble(source) : '') +
-		(holder ? (holderStatement(access, sourceKey(source), source) ?? '') : '') +
+		(holder ? (holderStatement(access, holder, source) ?? '') : '') +
 		rest.slice(at)
 	);
 }
@@ -79,7 +124,8 @@ export function packRewrite(
 ): PackedRewrite {
 	const whole: PackedRewrite = [output, -1, 0];
 	const preamble = kind === 'c' ? scriptPreamble(source) : '';
-	const holder = holderStatement(access, sourceKey(source), source) ?? '';
+	const key = sourceKey(source);
+	const holder = holderStatement(access, key, source) ?? '';
 	const at = preamble
 		? output.indexOf(preamble)
 		: holder
@@ -91,9 +137,62 @@ export function packRewrite(
 		output.slice(0, at) +
 			output.slice(at + preamble.length + (held ? holder.length : 0)),
 		at,
-		held ? 1 : 0,
+		held ? key : 0,
 	];
 	return unpack(kind, source, packed, access) === output ? packed : whole;
+}
+
+/**
+ * A style's rewrite as the table carries it: whole, or as pieces, each the
+ * rewrite's own text or where the style's text it is stands ([start, end]).
+ * The rewrite of a large style is mostly the text as written (CNN's 2.78 MB
+ * style has 603 url()s in its 9019 rules), and the whole of it was 42% of
+ * the head's record: 2.8 MB more to stringify and encode in the worker,
+ * hand to the page and parse there
+ */
+export type PackedStyle = string | (string | [start: number, end: number])[];
+
+/** below this many characters a style's rewrite goes whole */
+const PACKED_STYLE = 16 * 1024;
+
+/** the rewrite `packed` stands for, of the style `source` */
+export function unpackStyle(source: string, packed: PackedStyle): string {
+	if (typeof packed === 'string') return packed;
+	let text = '';
+	for (const piece of packed)
+		text +=
+			typeof piece === 'string' ? piece : source.slice(piece[0], piece[1]);
+	return text;
+}
+
+/**
+ * `output`, the rewrite of the style `source`, as the table carries it: its
+ * rules (to each `}`) that are the source's as written are named by where
+ * they stand, when that is most of it and unpacks to `output` exactly
+ */
+export function packStyle(source: string, output: string): PackedStyle {
+	if (output.length < PACKED_STYLE) return output;
+	const pieces: (string | [number, number])[] = [];
+	let kept = 0;
+	let i = 0;
+	let j = 0;
+	while (i < source.length && j < output.length) {
+		const a = source.indexOf('}', i) + 1 || source.length;
+		const b = output.indexOf('}', j) + 1 || output.length;
+		const last = pieces[pieces.length - 1];
+		if (a - i === b - j && output.startsWith(source.slice(i, a), j)) {
+			kept += a - i;
+			if (typeof last === 'object' && last[1] === i) last[1] = a;
+			else pieces.push([i, a]);
+		} else if (typeof last === 'string')
+			pieces[pieces.length - 1] = last + output.slice(j, b);
+		else pieces.push(output.slice(j, b));
+		i = a;
+		j = b;
+	}
+	if (j < output.length) pieces.push(output.slice(j));
+	if (kept * 2 < output.length) return output;
+	return unpackStyle(source, pieces) === output ? pieces : output;
 }
 
 /** the MIME types a classic script may name, as Chrome takes them (DOMAttributes' scriptKind) */
@@ -222,6 +321,96 @@ export function inlineSources(
 	return { scripts: [...scripts.values()], styles: [...styles.values()] };
 }
 
+/** a start tag: its name and attributes (src/inject/dom/markupPlaces.ts TAGS) */
+const TAG = /<([a-zA-Z][^\s/>]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/y;
+/** what holds no tags: a comment, or a raw text element's start tag (its text follows) */
+const UNTAGGED =
+	/<!--[\s\S]*?(?:-->|$)|<(script|style|textarea|title|xmp|iframe|noembed|noframes|noscript|plaintext)(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*>/gi;
+/** what may start a handler attribute */
+const HANDLER_LIKE = /[\s/"']on[a-z]+\s*=/gi;
+/** an attribute and its value, quoted or not */
+const ATTRIBUTE = /[\s/]([^\s"'>/=]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g;
+/** past this many handler texts the rest are left to the page */
+const HANDLER_LIMIT = 1024;
+
+/**
+ * The handler attributes of `markup` (an `on` and letters, the first of its
+ * name in its tag), each text once with where it first stands, and every
+ * attribute of that text: its name and where its start tag ends. Read as
+ * the client's handlerPlace reads them (src/inject/dom/markupPlaces.ts):
+ * comments and the text of raw text elements hold none. Only the tags
+ * around what looks like one are read. A value with a character reference
+ * or a carriage return is not the text the parser gives the element: it is
+ * left out.
+ */
+export function handlerSources(
+	markup: string,
+): [source: string, start: number, end: number, places: [string, number][]][] {
+	const found = new Map<string, [string, number, number, [string, number][]]>();
+	let total = 0;
+	const untagged = new RegExp(UNTAGGED);
+	let next = untagged.exec(markup);
+	/** the comment or raw text read last (from, to), and where the last tag read ends */
+	let from = -1;
+	let to = -1;
+	let read = 0;
+	const candidates = new RegExp(HANDLER_LIKE);
+	for (let candidate; (candidate = candidates.exec(markup));) {
+		const at = candidate.index;
+		if (at < read) continue;
+		// the last comment or raw text that starts before it, which it may be
+		// in (a raw text element's start tag holds attributes)
+		while (at >= to && next && next.index < at) {
+			from = next.index;
+			to = from + next[0].length;
+			if (next[1]) {
+				from = to;
+				const close = new RegExp(`</${next[1]}(?=[\\s/>])`, 'gi');
+				close.lastIndex = to;
+				to = close.test(markup) ? close.lastIndex : markup.length;
+			}
+			untagged.lastIndex = Math.max(to, next.index + 1);
+			next = untagged.exec(markup);
+		}
+		if (at >= from && at < to) continue;
+		const open = markup.lastIndexOf('<', at);
+		if (open < read) continue;
+		TAG.lastIndex = open;
+		const tag = TAG.exec(markup);
+		if (!tag || TAG.lastIndex <= at) continue;
+		const end = (read = TAG.lastIndex);
+		const seen = new Set<string>();
+		const rest = open + 1 + tag[1]!.length;
+		for (const attribute of tag[2]!.matchAll(ATTRIBUTE)) {
+			const name = attribute[1]!.toLowerCase();
+			if (seen.has(name)) continue;
+			seen.add(name);
+			if (!/^on[a-z]+$/.test(name)) continue;
+			const value = attribute[2] ?? attribute[3] ?? attribute[4]!;
+			if (value.includes('&') || value.includes('\r')) continue;
+			const known = found.get(value);
+			if (known) {
+				known[3].push([name, end]);
+				continue;
+			}
+			if (found.size >= HANDLER_LIMIT) continue;
+			if ((total += value.length) > LIMIT) return [...found.values()];
+			const valueEnd =
+				rest +
+				attribute.index! +
+				attribute[0].length -
+				(attribute[4] === undefined ? 1 : 0);
+			found.set(value, [
+				value,
+				valueEnd - value.length,
+				valueEnd,
+				[[name, end]],
+			]);
+		}
+	}
+	return [...found.values()];
+}
+
 /**
  * A directive prologue as a rewriter writes it: the JavaScript one prints
  * the directives alone, the wasm one leaves the page's own text, with its
@@ -232,8 +421,25 @@ const PROLOGUE =
 
 /** the client's lookup of a Prewritten table */
 export class PrewrittenTable {
-	readonly #scripts = new Map<string, PackedRewrite>();
+	/** each script's rewrite, then its map and where it stands (PrewrittenTable's) */
+	readonly #scripts = new Map<
+		string,
+		[...PackedRewrite, map?: string, place?: [number, number]]
+	>();
 	readonly #styles = new Map<string, string>();
+	/**
+	 * each handler text's rewrite, its map and the places of the attributes
+	 * of each name, `next` the one to take (made with the first handler: a
+	 * frame's table seldom has any)
+	 */
+	#handlers?: Map<
+		string,
+		[
+			output: string,
+			map: string,
+			places: Record<string, { next: number; places: [number, number][] }>,
+		]
+	>;
 	readonly #access: string;
 	/** the URL the outputs were made for */
 	readonly url: string;
@@ -251,8 +457,50 @@ export class PrewrittenTable {
 		if (table.url !== this.url) return;
 		for (const [kind, start, end, ...packed] of table.scripts)
 			this.#scripts.set(`${kind}\u0000${markup.slice(start, end)}`, packed);
-		for (const [start, end, output] of table.styles)
-			this.#styles.set(markup.slice(start, end), output);
+		for (const [start, end, output] of table.styles) {
+			const source = markup.slice(start, end);
+			// (unpackStyle, written out: a function of its own is one more
+			// closure in every frame)
+			let text = typeof output === 'string' ? output : '';
+			if (typeof output !== 'string')
+				for (const piece of output)
+					text +=
+						typeof piece === 'string'
+							? piece
+							: source.slice(piece[0], piece[1]);
+			this.#styles.set(source, text);
+		}
+		for (const [start, end, output, map, places] of table.handlers ?? []) {
+			const source = markup.slice(start, end);
+			const handlers = (this.#handlers ??= new Map());
+			let known = handlers.get(source);
+			if (!known)
+				handlers.set(
+					source,
+					(known = [output, map, { __proto__: null } as never]),
+				);
+			for (const [name, before, column] of places) {
+				const kept = (known[2][name] ??= { next: 0, places: [] });
+				kept.places[kept.places.length] = [before, column];
+			}
+		}
+	}
+	/**
+	 * The rewrite of a handler of this text and its map, and when `placed` (an
+	 * attribute the parser gave an element of the markup) where it stands:
+	 * the next place of an attribute of its name and text
+	 */
+	handler(
+		name: string,
+		source: string,
+		placed: boolean,
+	): [output: string, map: string, place?: [number, number]] | undefined {
+		const found = this.#handlers?.get(source);
+		if (!found) return undefined;
+		if (!placed) return [found[0], found[1]];
+		const kept = found[2][name];
+		const place = kept ? kept.places[kept.next++] : undefined;
+		return [found[0], found[1], place];
 	}
 	/**
 	 * The rewrite of an inline script of this text: as the document's own
@@ -263,7 +511,7 @@ export class PrewrittenTable {
 	 */
 	script(module: boolean, source: string, bare = false): string | undefined {
 		const kind = module ? 'm' : 'c';
-		const packed = this.#scripts.get(`${kind}\u0000${source}`);
+		const packed = (this.found = this.#scripts.get(`${kind}\u0000${source}`));
 		if (packed === undefined) return undefined;
 		if (module || !bare) return unpack(kind, source, packed, this.#access);
 		if (packed[1] !== -1)
@@ -276,6 +524,8 @@ export class PrewrittenTable {
 		if (at === -1 || !PROLOGUE.test(output.slice(0, at))) return undefined;
 		return output.slice(0, at) + output.slice(at + preamble.length);
 	}
+	/** the entry script() last found: its map is at 3, where it stands in the document at 4 */
+	found?: [...PackedRewrite, map?: string, place?: [number, number]];
 	style(source: string): string | undefined {
 		return this.#styles.get(source);
 	}

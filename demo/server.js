@@ -702,6 +702,10 @@ app.use(
 // first; isolation mode's frame and the site pool's are asked for so too
 // (`controllerFrame.html?<hash>&script=controllerFrame.js%3F<hash>`). And
 // the page names its own scripts so (stampedPage above).
+// The blocker's engine snapshot (`adblock-snapshot.dat.gz?<hash of its
+// bytes>`), which a first visit's worker loads, is kept so too, and is
+// answered as the bytes it is (the worker decompresses it), never as a
+// gzip encoding.
 const keptFiles = [
 	'rewriterLib.js',
 	'core.wasm',
@@ -715,6 +719,7 @@ const keptFiles = [
 	'controllerFrame.html',
 	'controllerFrame.js',
 	'siteFrame.js',
+	'adblock-snapshot.dat.gz',
 ];
 const fileHashes = new Map();
 function hashOf(path) {
@@ -737,13 +742,16 @@ function hashOf(path) {
 	}
 }
 const stompFiles = {
-	setHeaders: (res, path) =>
+	setHeaders: (res, path) => {
+		if (path.endsWith('.dat.gz'))
+			res.set('Content-Type', 'application/octet-stream');
 		res.set(
 			'Cache-Control',
 			keptFiles.includes(basename(path)) && askedByHash(res, path)
 				? KEPT
 				: 'no-cache',
-		),
+		);
+	},
 };
 app.use('/stomp/', express.static(stompPath, stompFiles));
 // A routed script request that reaches this host instead of the service
@@ -765,6 +773,35 @@ app.use('/stomp/', (req, res, next) => {
 		res.set('Content-Type', 'text/javascript; charset=utf-8');
 		res.set('Cache-Control', 'no-store');
 		res.end();
+		return;
+	}
+	next();
+});
+// A proxied page at the top of a tab of its own (a popup, a link opened in a
+// new tab) that the user reloads with Ctrl+Shift+R: Chrome sends a forced
+// reload past the service worker, so the page's address reaches this host,
+// which has no file there ("Cannot GET"), where natively the page comes
+// back. The answer is a page that reloads once more, plainly, which the
+// worker answers when it is active. Only a forced reload's request (no-cache)
+// gets it: the plain reload sends max-age=0, so a worker that does not answer
+// it ends at the error page rather than in a loop.
+const RELOAD_THROUGH_WORKER = `<!doctype html><meta charset="utf-8"><title></title><script>
+navigator.serviceWorker?.getRegistration(location.href).then((registration) => {
+	if (registration?.active) location.reload();
+});
+</script>`;
+app.use('/stomp/', (req, res, next) => {
+	if (
+		req.method === 'GET' &&
+		req.headers['sec-fetch-mode'] === 'navigate' &&
+		req.headers['sec-fetch-dest'] === 'document' &&
+		/(^|,)\s*no-cache\s*(,|$)/.test(req.headers['cache-control'] ?? '') &&
+		/^\/[^/]+\/html[^/]*\//.test(req.path)
+	) {
+		res.status(404);
+		res.set('Content-Type', 'text/html; charset=utf-8');
+		res.set('Cache-Control', 'no-store');
+		res.end(RELOAD_THROUGH_WORKER);
 		return;
 	}
 	next();

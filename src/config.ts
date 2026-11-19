@@ -49,6 +49,14 @@ export interface Config {
 	 */
 	workerTransport?: boolean;
 	/**
+	 * Set by the service worker once it knows whether a page's synchronous
+	 * XMLHttpRequest reaches it (Firefox: true; Chrome and WebKit send it to
+	 * the network): where it does, a page that waits on the synchronous
+	 * bridge asks for its answer with one (src/server/Sync.ts answers).
+	 * Unset until a page has asked.
+	 */
+	syncAnswers?: boolean;
+	/**
 	 * HTTP cache in the service worker, on unless `false`: GET responses are
 	 * kept in a Cache API store and served or revalidated with ETag /
 	 * Last-Modified as Chrome's HTTP cache does (docs/http-cache.md).
@@ -376,6 +384,15 @@ export interface Assets {
 	 */
 	adblockResources?: string;
 	/**
+	 * the built-in blocker's engine snapshot of the default lists, gzipped
+	 * (docs/adblock.md, "The snapshot"), which a service worker with no
+	 * engine stored decompresses and serves while it fetches the lists.
+	 * Serve it as it is (`application/octet-stream`, no `Content-Encoding`).
+	 * It is asked for as `<name>?<hash of its bytes>`, so it can be cached
+	 * for good.
+	 */
+	adblockSnapshot?: string;
+	/**
 	 * The light rewriter library (the wasm glue, src/rewriterLightDocument.ts):
 	 * no document bundle carries it. A proxied top's shell loads this file,
 	 * and a sandboxed frame fetches it the first time it rewrites. It is asked
@@ -402,6 +419,7 @@ export const DEFAULT_ASSETS: Required<Assets> = {
 	core: 'core.wasm',
 	blocker: 'blocker.wasm',
 	adblockResources: 'adblock-resources.json',
+	adblockSnapshot: 'adblock-snapshot.dat.gz',
 	rewriterLib: 'rewriterLib.js',
 };
 

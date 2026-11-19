@@ -4,12 +4,12 @@ import {
 	routeCSS,
 } from '../../../cssURLs';
 import { handlerMark, keepSource, sourceKey } from '../../../functionSource';
+import { helperNames } from '../../../helperNames';
 import type { modifyHTML } from '../../../htmlShell';
-import { JS_MIME_TYPES } from '../../../prewrite';
-import { isXMLDocumentMime, routeHTML } from '../../../rewriteHTML';
+import { handlerPreamble, JS_MIME_TYPES } from '../../../prewrite';
+import { routeHTML } from '../../../rewriteHTML';
 import {
 	proxyBlobURL,
-	ROUTE_PROTOCOLS,
 	routeBinary,
 	routeImageSet,
 	routeXHR,
@@ -18,7 +18,6 @@ import { routeJS, ScriptType } from '../../../scriptRoutes';
 import { parseAcceptCH } from '../../../server/hintNames';
 import { parseSrcset, stringifySrcset } from '../../../srcset';
 import {
-	dataURLBytes,
 	INTEGRITY_MARK,
 	markIntegrity,
 	NO_INTEGRITY,
@@ -27,25 +26,28 @@ import {
 import StompURL from '../../../StompURL';
 import { unresolvable } from '../../../urlShape';
 import Module from '../../Module';
-import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule, { usePrototype } from '../../modules/Proxy';
 import { computedURL, scopePrefix, unrouteCSS } from '../../modules/Unroute';
 import { LazyMap, LazyWeakMap, LazyWeakSet } from '../../ownCollections';
+import { keepCode } from '../../positionParts';
 import { modifyCSS, modifyJS } from '../../rewriter';
+import { isParsed } from '../../trusted';
 import DocumentClient, {
 	addDocumentOpenListener,
+	getGlobalParsingState,
 	type StyleElement,
 } from '../Client';
 import {
 	inertDocumentOf,
 	nativeNodeType,
 	nativeQuerySelectorAll,
+	startedScripts,
 } from '../cloneNode';
 import { ELEMENT_STYLE_INTERFACES } from '../cssRules';
 import { deferred } from '../deferred';
 import type { DeferredParts } from '../deferredParts';
 import { forgetDestination, frameWindow } from '../freshContext';
-import { loadFetch } from '../loadGrants';
+import type { ObjectLoads } from '../objectLoads';
 import { responseURLOf } from '../responseDocuments';
 import { guardDocument, realSandbox, sandboxTokens } from '../sandbox';
 import { sealerNatives } from '../sealerNatives';
@@ -61,10 +63,8 @@ import DOMHooksModule, {
 } from './DOMHooks';
 import {
 	hiddenMutation,
-	hiddenSuffix,
 	isHiddenValue,
 	markerPrefix,
-	unseenWrite,
 } from './MutationObserver';
 import NavigationHintModule from './NavigationHint';
 import TokenListsModule from './TokenLists';
@@ -255,13 +255,19 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// the attribute, the property and the markup read back as the page
 		// wrote them, currentSrc as the URL the copy came from.
 		// (an about:srcdoc document has its parent's worker, so one under such
-		// a document has none either)
+		// a document has none either. WebKit hands an about:blank document,
+		// opened or not, its creator's worker, which serves none of its
+		// routes, as it served no document of it: one another realm's bundle
+		// made is judged as one with none, measured in the
+		// uncontrolled-modules suite)
+		const blank = () =>
+			moduleClient.opened || realm.location.href === 'about:blank';
 		const uncontrolled = () =>
-			!moduleClient.controlled &&
-			(moduleClient.opened ||
-				realm.location.href === 'about:blank' ||
-				realm.location.href === 'about:srcdoc' ||
-				realm.location.protocol === 'blob:');
+			(realm !== globalThis && blank()) ||
+			(!moduleClient.controlled &&
+				(blank() ||
+					realm.location.href === 'about:srcdoc' ||
+					realm.location.protocol === 'blob:'));
 		this.uncontrolled = uncontrolled;
 		// the proxy origin from the base URL: an about:blank document's own
 		// origin reads "null"
@@ -342,24 +348,24 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			const metadata = element.hasAttribute('integrity')
 				? element.getAttribute('integrity')
 				: element.getAttributeOG('integrity');
-			// a data: URL's bytes are here, and checked now: ones that do not
-			// match go to the browser as they are, with the page's metadata on
-			// the element, and it refuses them itself as natively (its error,
-			// its message, a stylesheet with no sheet). Nothing of them runs, so
-			// nothing needs rewriting. The digests are a deferred part
+			// a data: URL's bytes are checked now: ones that do not match go to
+			// the browser as they are, with the page's metadata on the element,
+			// and it refuses them itself as natively (its error, its message, a
+			// stylesheet with no sheet). Nothing of them runs, so nothing needs
+			// rewriting. The bytes and their digests are a deferred part
 			// (src/sriDigest.ts): without it the browser is given an empty
 			// data: URL to check instead, which runs nothing (and fails a
 			// digest), so the page's own never runs unrewritten
 			if (original?.protocol === 'data:' && metadata) {
-				const bytes = dataURLBytes(original.href);
 				let href = original.href;
-				let holds = false;
+				let holds: boolean | null;
 				try {
-					holds = !!bytes && deferred('integrityHoldsSync')(bytes, metadata);
+					holds = deferred('dataIntegrity')(original.href, metadata);
 				} catch (error) {
+					holds = false;
 					href = 'data:,';
 				}
-				if (bytes && !holds) {
+				if (holds === false) {
 					givenIntegrity.add(element);
 					element.setAttribute('integrity', metadata);
 					element.removeAttributeOG('integrity');
@@ -411,12 +417,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				let href: string | null;
 				try {
 					const name = Reflect.apply(localNameOf, target, []);
-					// an object held on about:blank# (see HELD) of a type Chrome
-					// knows none of: its copy fires the error, as natively once
+					// an object held on about:blank# (../objectLoads.ts HELD) of
+					// a type Chrome knows none of: its copy fires the error, as
+					// natively once
 					if (name === 'object') {
 						if (
-							loads.get(target!)?.url === undefined &&
-							Reflect.apply(read, target, ['data']) === HELD
+							(objects?.unsettled(target!) ?? true) &&
+							Reflect.apply(read, target, ['data']) === 'about:blank#'
 						)
 							Reflect.apply(stop, event, []);
 						return;
@@ -593,9 +600,20 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				return /^on[a-z]+$/.test(name);
 			}
 		}
+		// the getters of the handler properties the page's attributes use,
+		// each hooked as its first attribute comes (../handlerGetters.ts)
+		const hookedNames: Record<string, 1> = { __proto__: null } as never;
 		domHooksModule.useAttributes(
 			(element, name) => {
 				if (!isHandler(element, name)) return;
+				if (!hookedNames[name]) {
+					hookedNames[name] = 1;
+					try {
+						deferred('hookHandlerName')(moduleClient, name);
+					} catch (error) {
+						// the part cannot be had: the handler is judged as it runs
+					}
+				}
 				element.restoreAttributesOG(name);
 				if (element.hasAttribute(name)) {
 					const source = element.getAttribute(name)!;
@@ -612,16 +630,46 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					}
 					// the browser compiles the code as a function's body: marked,
 					// so the function reads back with the page's code in it
+					// (its positions read as its own, as natively: of its tag in the
+					// page's markup). The page's policy judges it again as it first
+					// runs, by the policies in force then (DocumentClient.codeRuns).
+					// What the worker made of it already, with where an attribute
+					// of the markup stands (../../../prewrite.ts), else made and
+					// placed here (../markupPlaces.ts handlerPlace). V8 knows a
+					// handler's script by its text, and two attributes of one text
+					// were one script whose frames all read the first one's place:
+					// a placed one's head ends with its place (the mark's readback
+					// drops all of the head, functionSource.ts originalSource)
 					const key = sourceKey(source);
 					keepSource(key, source);
+					const placed = moduleClient.markupCopy;
+					const prewritten = moduleClient.prewrittenHandler(
+						name,
+						source,
+						placed,
+					);
+					const place = prewritten
+						? prewritten[2]
+						: placed
+							? deferred('handlerPlace')(moduleClient, name, source)
+							: undefined;
+					const head =
+						handlerMark(key) + (place ? `/*${place[0]}.${place[1]}*/` : '');
+					if (prewritten) {
+						keepCode(prewritten[1], { head, place }, prewritten[0]);
+						element.setAttribute(name, head + prewritten[0]);
+						return;
+					}
 					element.setAttribute(
 						name,
-						handlerMark(key) +
+						head +
 							modifyJS(
 								source,
 								moduleClient.baseURL,
 								moduleClient.config,
 								'generic',
+								handlerPreamble(helperNames(moduleClient.config).access, key),
+								{ head, place },
 							),
 					);
 				}
@@ -905,58 +953,33 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// unrewritten). The attribute is href by any prefix: the browser
 		// looks the prefix up (q:href, with q bound to xlink), and a prefix
 		// it finds no namespace for animates nothing, whatever its values.
-		// A change of the animation's own href retargets it: routed again.
+		// A change of the animation's own href retargets it: routed again. The
+		// routing is a deferred part (../animatedHref.ts), made at a document's
+		// first animation of an href: without it the animation's values are
+		// emptied, and it animates the href to nothing.
 		const ANIMATED = ['to', 'from', 'by', 'values'];
-		const animatedTarget = (element: CustomElement): Element | null => {
-			const reference =
-				element.getAttribute('href') ??
-				element.getAttribute(xlinkName(element));
-			if (reference?.startsWith('#'))
-				return (
-					(element.getRootNode() as Document | ShadowRoot).getElementById?.(
-						reference.slice(1),
-					) ?? null
-				);
-			return element.parentElement;
-		};
 		const animatedHook = (element: CustomElement) => {
 			element.restoreAttributesOG(...ANIMATED);
 			const name = element.getAttribute('attributeName');
 			if (name === null || !/^(?:[^:]+:)?href$/.test(name)) return;
-			const target = animatedTarget(element);
-			const link = target ? target.localName === 'a' : null;
-			const route = (value: string): string => {
-				const trimmed = value.trim();
-				if (trimmed === '' || trimmed.startsWith('#')) return value;
-				try {
-					const url = pageURL(trimmed);
-					// (a link's route rewrites a javascript: URL's code)
-					if (link === true || url.url.protocol === 'javascript:')
-						return moduleClient.linkRoute(url);
-					return routeBinary(url);
-				} catch (error) {
-					// no URL: the browser makes nothing of it either
-					return value;
+			let animate: DeferredParts['animatedHref'];
+			try {
+				animate = deferred('animatedHref');
+			} catch (error) {
+				for (const attribute of ANIMATED) {
+					if (!element.hasAttribute(attribute)) continue;
+					element.setAttributeOG(attribute, element.getAttribute(attribute)!);
+					element.setAttribute(attribute, '');
 				}
-			};
-			for (const attribute of ANIMATED) {
-				if (!element.hasAttribute(attribute)) continue;
-				const value = element.getAttribute(attribute)!;
-				// `values` is a list, split at semicolons before any is a URL
-				const routed =
-					attribute === 'values'
-						? value.split(';').map(route).join(';')
-						: route(value);
-				if (routed === value) continue;
-				if (attribute === 'values') {
-					const written = value.split(';');
-					routed
-						.split(';')
-						.forEach((part, i) => animatedValues.set(part, written[i]));
-				} else animatedValues.set(routed, value);
-				element.setAttributeOG(attribute, value);
-				element.setAttribute(attribute, routed);
+				return;
 			}
+			animate(element, {
+				moduleClient,
+				pageURL,
+				animatedValues,
+				xlinkName,
+				ANIMATED,
+			});
 		};
 		domHooksModule.useAttributes(
 			animatedHook,
@@ -986,7 +1009,6 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				// at its insertion: a connected one keeps the load it has
 				if (attribute === 'integrity' && element.isConnected) return;
 				releaseIntegrity(element);
-				element.restoreAttributesOG('src');
 				// a held script (holdScript) keeps its page's src through a change
 				// of its type or integrity (its route, integrity and all, is made
 				// as it connects); a src set or removed again replaces it
@@ -994,6 +1016,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					if (attribute === 'type' || attribute === 'integrity') return;
 					moduleClient.releaseScript(element);
 				}
+				element.restoreAttributesOG('src');
 
 				if (
 					element.hasAttribute('src') &&
@@ -1009,20 +1032,52 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// does not load, the browser fires 'error', and the inject
 					// reports it (src/csp.ts). A script the page inserts through the
 					// DOM, not the parser (DOMAttributes runs for inserted elements).
-					// One not connected yet that a nonce could still let through is
-					// held refused, and judged again as it connects, as Chrome
-					// judges it (with the nonce it has then: DOMContentHooks)
+					// One not connected yet that a policy refuses is held, and judged
+					// as it connects, as Chrome judges it (with the nonce it has
+					// then, naming the inserting call: DOMContentHooks). One of
+					// markup the parser runs (a copy made of it) is the parser's:
+					// a document.write's is judged now; the page's markup gets no
+					// src here where the policies in force refuse it (more
+					// policies refuse no less), and is judged and reported as the
+					// parser prepares it, by the policies in force then
+					// (judgeParsed), in its order
+					const parser =
+						isParsed(element) &&
+						getGlobalParsingState(realm) === 'parsingBeforeWrite';
+					// (one a markup string made that is inserted as it is never
+					// runs: Chrome never prepares it, so never judges it,
+					// cloneNode startedScripts; a document.write's copy is the
+					// parser's, written again)
+					const started = !parser && startedScripts.has(element);
 					if (
+						!started &&
+						!parser &&
 						!element.isConnected &&
-						moduleClient.scriptAwaitsNonce(element, url)
+						moduleClient.scriptAwaits(element, url)
 					) {
+						// (the page reads its own src back meanwhile)
 						const src = element.getAttribute('src')!;
 						element.removeAttribute('src');
-						element.removeAttributeOG('src');
 						moduleClient.holdScript(element, url, src);
 						return;
 					}
-					if (moduleClient.refuseExternalScript(element, url, false)) {
+					if (parser && moduleClient.markupCopy)
+						moduleClient.quietRefusal = true;
+					let refused: boolean;
+					try {
+						refused =
+							!started &&
+							moduleClient.refuseExternalScript(element, url, parser);
+					} finally {
+						moduleClient.quietRefusal = false;
+					}
+					if (refused) {
+						// the parser's keeps the page's src and gets an empty one,
+						// for which the browser fires its error as it prepares it
+						if (parser) {
+							element.setAttribute('src', '');
+							return;
+						}
 						// clear the live src (the page's own, which the browser would
 						// otherwise load) so nothing loads; the browser fires 'error'
 						element.removeAttribute('src');
@@ -1032,7 +1087,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					}
 					// let through by its host or its integrity where the page's
 					// policy says so and the browser's copy would not (src/csp.ts)
-					moduleClient.giveCodeNonce(element, url, null, false);
+					moduleClient.giveCodeNonce(element, url, null, parser);
 					placeLoad(
 						element,
 						'src',
@@ -1257,12 +1312,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// a javascript: URL runs in the frame, which a sandbox without
 					// allow-scripts forbids: natively nothing happens, so the frame
 					// is not navigated at all
-					if (
-						resource.url.protocol === 'javascript:' &&
-						!frameRunsScripts(element)
-					) {
-						element.removeAttribute('src');
-						return;
+					let judged: string | undefined;
+					if (resource.url.protocol === 'javascript:') {
+						if (!frameRunsScripts(element)) {
+							element.removeAttribute('src');
+							return;
+						}
+						// judged as its navigation starts (DocumentClient jsStarts)
+						judged = moduleClient.jsStarts(element, resource.url.href);
 					}
 					// a data: document's frame is a deferred part (an opaque
 					// document, ../rareAttributes.ts), made first: without it the
@@ -1320,6 +1377,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								},
 							);
 					const routed =
+						judged ??
 						opaque ??
 						routeHTML(
 							resource,
@@ -1364,7 +1422,16 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						resource.url.href !== 'about:blank' &&
 						moduleClient.freshFrame
 					) {
-						if (moduleClient.freshFrame(element, routed)) return;
+						let fresh: boolean;
+						try {
+							fresh = moduleClient.freshFrame(element, routed);
+						} catch (error) {
+							// the fresh context is a deferred part (../freshSwap.ts):
+							// without it the frame is not navigated
+							element.removeAttribute('src');
+							return;
+						}
+						if (fresh) return;
 					}
 					// the document the frame shows now sees the navigation (its
 					// navigate event): this one judged it
@@ -2083,9 +2150,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// document no service worker controls: each load the rewrite left with
 		// only its marker (see placeLoad) gets the page's value back and its
 		// hooks run on the element itself, which makes its copy. Underneath the
-		// hooks, so the page's observers see nothing. A script is not one: it
-		// got its copy during the write, or (the transport in the page) does
-		// not run. Under a document, an element or a shadow root: the
+		// hooks, so the page's observers see nothing. A classic script is not
+		// one: it got its copy during the write, or (the transport in the
+		// page) does not run. Under a document, an element or a shadow root: the
 		// browser parses markup the inject rewrote into any of them
 		// (setHTMLUnsafe, a shadow root's innerHTML)
 		const LOADS = [
@@ -2094,7 +2161,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		];
 		const marker = markerPrefix().replace(':', '\\:');
 		const written = LOADS.map((name) => name.replace(':', '\\:'))
-			.map((name) => `[${marker}${name}]:not([${name}]):not(script)`)
+			.map(
+				(name) =>
+					`[${marker}${name}]:not([${name}]):not(script:not([type=module]))`,
+			)
 			.join(',');
 		// a document a worker controls loads its elements itself, but for an
 		// <object>'s data and an <embed>'s src: Chrome sends no such load
@@ -2233,190 +2303,35 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// element loads nothing until then; a later value wins over a load
 		// still in flight, and a failed fetch falls back to the routed URL.
 		// The attribute and the property read back as the page wrote them.
-		// per element: the URL the page wrote, the load for it, and the blob:
-		// URL once it is in. A hook that runs again for the same value (the
-		// insertion hooks re-run every attribute hook) keeps the load and its
-		// blob instead of starting over, which would reset a document the
-		// element is already showing
-		const loads = new LazyWeakMap<
-			Element,
-			{ written: string; generation: number; url?: string; attached?: boolean }
-		>();
-		let generations = 0;
-		// The element stands on about:blank# while its copy is on its way: a
-		// fragment of its context's initial about:blank, which Chrome goes to
-		// at once and fires no load for, as natively while the document loads
-		// (no URL with a type shows an empty document of that type and fires
-		// load, and so does about:blank: Chrome 157 fired load twice, natively
-		// once). Before the page reads the context, its URL is put back to
-		// the about:blank it is natively
-		const HELD = 'about:blank#';
+		// The loads are a deferred part (../objectLoads.ts), made at the
+		// first object or embed a document gives a URL: most never do
 		const objectWindow = Reflect.getOwnPropertyDescriptor(
 			realm.HTMLObjectElement.prototype,
 			'contentWindow',
 		)!.get!;
-		const heldBlank = (moduleClient.heldBlank = (
-			element,
-			context = element instanceof realm.HTMLObjectElement
-				? (Reflect.apply(objectWindow, element, []) as typeof globalThis | null)
-				: null,
-		) => {
-			const state = loads.get(element);
-			try {
-				if (state && !state.url && context?.location.href === HELD)
-					Reflect.apply(
-						context.History.prototype.replaceState,
-						context.history,
-						[null, '', 'about:blank'],
-					);
-			} catch (error) {
-				// another context already
-			}
-		});
-		// a load that fails as a failed fetch does, with no request: an
-		// object fires error and shows no document (a revoked blob: of this
-		// origin, which a context the element already has fails on too,
-		// where it stays on its document for one of no origin), an embed
-		// nothing (a blob: URL of no origin, never minted: a revoked one of
-		// this origin would fire an embed's load)
-		let revoked: string | undefined;
-		const fail = (element: CustomElement, attribute: string) => {
-			if (attribute === 'data' && !revoked) {
-				const minted = realm.URL.createObjectURL(new NativeBlob([]));
-				realm.URL.revokeObjectURL(minted);
-				revoked = proxyBlobURL(minted);
-			}
-			// (as the document of no type it is natively, before the URL)
-			release(element);
-			element.setAttribute(
-				attribute,
-				attribute === 'data' ? revoked! : 'blob:null/failed',
-			);
-		};
-		// One Chrome shows as an image has no context while its image loads,
-		// and fails on about:blank# (Chrome 157: error, where natively it
-		// loads): a type of an image (an SVG is a document), or without a
-		// type a URL whose extension names one. Chrome reads the type as
-		// written: one with whitespace around it names none it knows. It is held with no URL,
-		// which it loads nothing for, again when its type changes while the
-		// copy is on its way (a type set after the data)
-		const IMAGE_TYPE = /^image\/(?!svg\+xml\s*(;|$))/i;
-		const IMAGE_PATH =
-			/\.(png|jpe?g|jfif|pjp(eg)?|gif|webp|avif|apng|bmp|ico|cur)$/i;
-		/** whether Chrome shows the element as an image: by its type, by its URL ('untyped'), or not (false) */
-		const imageShown = (
-			element: CustomElement,
-			real = false,
-		): boolean | 'untyped' => {
-			// the page's type (the one it wrote, none for one it has none of),
-			// or with `real` the one Chrome goes by
-			const written = real
-				? (Reflect.apply(nativeElement.getAttribute, element, ['type']) as
-						string | null)
-				: (element.getAttributeOG('type') ?? element.getAttribute('type'));
-			const type = !real && isHiddenValue(written) ? null : written;
-			return type
-				? IMAGE_TYPE.test(type)
-				: IMAGE_PATH.test(new URL(loads.get(element)!.written).pathname) &&
-						'untyped';
-		};
 		const toBase64 = realm.btoa.bind(realm);
-		// Chrome lays an object out as an image or as an embedded document
-		// when it is attached, by its type or its URL then: one held with no
-		// URL is a document (300x150) for the image it is given. One shown as
-		// an image by its URL is held with a type of an image the page does
-		// not see (hiddenSuffix, DOMHooks isHidden), a blank one of the page's
-		// in its marker, which is taken off once its copy is in (Chrome 157:
-		// no context and no event while held, the image's size and one load
-		// after, as natively). Its URL comes first: with no type and no URL
-		// Chrome lays it out as a document again
-		const heldType = () => `image/png${hiddenSuffix()}`;
-		const hide = (element: CustomElement) => {
-			const type = element.getAttribute('type');
-			if (isHiddenValue(type)) return;
-			if (type !== null) element.setAttributeOG('type', type);
-			unseenWrite(element, 'type');
-			element.setAttribute('type', heldType());
-		};
-		// The page's type in place of the held one, once Chrome went by the
-		// URL (Chrome 157: an image stays one, whatever the type then): one
-		// it wrote once Chrome had gone by the held one stays in its marker
-		// until then. (One Chrome went by that the page wrote is not held,
-		// and changed with the URL it would count: a type the page wrote
-		// after it stays in its marker.)
-		const release = (element: CustomElement) => {
-			const page = element.getAttributeOG('type');
-			if (!isHiddenValue(element.getAttribute('type'))) return;
-			unseenWrite(element, 'type');
-			element.removeAttributeOG('type');
-			if (page === null) element.removeAttribute('type');
-			else element.setAttribute('type', page);
-		};
-		const connected = Reflect.getOwnPropertyDescriptor(
-			realm.Node.prototype,
-			'isConnected',
-		)!.get!;
-		/**
-		 * Whether Chrome went by the element's type and URL already: natively
-		 * it does when the element is put in the document with its URL (one
-		 * given its URL there decides later)
-		 */
-		const decided = (element: Element) => {
-			const state = loads.get(element);
-			return (
-				!!state &&
-				!state.url &&
-				!state.attached &&
-				element.localName === 'object' &&
-				(Reflect.apply(connected, element, []) as boolean)
-			);
-		};
-		/** with `kept`, by the type Chrome went by (decided), which stays */
-		const hold = (element: CustomElement, attribute: string, kept = false) => {
-			const shown = imageShown(element, kept);
-			if (!kept)
-				if (shown === 'untyped' && attribute === 'data') hide(element);
-				else release(element);
-			const held = shown ? null : HELD;
-			if (element.getAttribute(attribute) === held) return;
-			unseenWrite(element, attribute);
-			// (after the type: one of an image fails on about:blank#)
-			element.attributeTab.delete(attribute);
-			if (held === null) element.removeAttribute(attribute);
-			else {
-				element.setAttribute(attribute, held);
-				queueMicrotask(() => heldBlank(element));
-			}
-		};
-		// The page's type, while the copy is on its way. Natively one written
-		// once the object was put in the document with its URL changes
-		// nothing (Chrome went by the one it had then): the page's goes in
-		// the marker, the one Chrome went by stays (hidden when the page
-		// removed it) until the copy is in (release). Before, it decides, and
-		// the element is held again by it. After the copy is in, the page's
-		// stands.
+		let objects: ObjectLoads | undefined;
+		const objectLoads = () =>
+			(objects ??= deferred('objectLoads')({
+				moduleClient,
+				realm,
+				NativeBlob,
+				pageURL,
+				objectWindow,
+				connected: isConnected,
+				toBase64,
+			}));
+		// (no load made: no context is held)
+		moduleClient.heldBlank = (element, context) =>
+			objects?.heldBlank(element, context);
+		// The page's type, while the copy is on its way (../objectLoads.ts
+		// typeHook); with no load made it stands, only its marker goes
 		domHooksModule.useAttributes(
 			(element) => {
 				// (a page's write; an insertion's pass writes none)
 				if (!element.attributeTab.has('type')) return;
-				const state = loads.get(element);
-				const type = Reflect.apply(nativeElement.getAttribute, element, [
-					'type',
-				]) as string | null;
-				if (decided(element)) {
-					const page = element.getAttribute('type');
-					if (page !== null) element.setAttributeOG('type', page);
-					const kept =
-						page !== null || type === null || isHiddenValue(type)
-							? type
-							: type + hiddenSuffix();
-					if (kept === null) element.removeAttribute('type');
-					else element.setAttribute('type', kept);
-					return;
-				}
-				element.removeAttributeOG('type');
-				if (state && !state.url)
-					hold(element, element.localName === 'object' ? 'data' : 'src');
+				if (objects) objects.typeHook(element);
+				else element.removeAttributeOG('type');
 			},
 			[
 				['OBJECT', 'type'],
@@ -2431,6 +2346,21 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				],
 			],
 		);
+		// without the part the element loads nothing: an object fires error
+		// and shows no document, as for a failed fetch (a revoked blob: of
+		// this origin), an embed loads nothing (a blob: URL of no origin)
+		let revoked: string | undefined;
+		const refusedLoad = (attribute: string) => {
+			if (attribute !== 'data') return 'blob:null/failed';
+			if (!revoked) {
+				const minted = Reflect.apply(createObjectURL, realm.URL, [
+					new NativeBlob([]),
+				]) as string;
+				Reflect.apply(revokeObjectURL, realm.URL, [minted]);
+				revoked = proxyBlobURL(minted);
+			}
+			return revoked;
+		};
 		const proxiedLoad = (attribute: string) => (element: CustomElement) => {
 			element.restoreAttributesOG(attribute);
 			if (
@@ -2438,218 +2368,15 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				element.getAttribute(attribute) === ''
 			)
 				return;
-			const written = element.getAttribute(attribute)!;
-			element.setAttributeOG(attribute, written);
-			// the clone a document's markup is rewritten on (an inert
-			// document's, see Client.load and WriteStream): the parser makes the
-			// real element from the markup serialized from it, which gets its
-			// copy after the write (writtenLoads). A copy settled here would
-			// land on the clone, and the real one would load nothing. One
-			// shown as an image by its URL is written held as one (hide), so
-			// the parser lays the real one out as the image
-			if (element.ownerDocument !== realm.document) {
-				loads.set(element, {
-					written: pageURL(written).url.href,
-					generation: 0,
-				});
-				if (attribute === 'data' && imageShown(element) === 'untyped')
-					hide(element);
-				loads.delete(element);
-				element.removeAttribute(attribute);
+			element.setAttributeOG(attribute, element.getAttribute(attribute)!);
+			let made: ObjectLoads;
+			try {
+				made = objectLoads();
+			} catch (error) {
+				element.setAttribute(attribute, refusedLoad(attribute));
 				return;
 			}
-			const resource = pageURL(written);
-			const routedOf = () =>
-				routeHTML(
-					resource,
-					moduleClient.baseURL,
-					moduleClient.config,
-					false,
-					moduleClient.childRoute,
-				);
-			// the page's object-src (src/csp.ts): the browser refuses and
-			// reports what it refuses, where the browser's copy of the policy
-			// refuses it too (the copy itself is a blob: URL, which the copy
-			// allows wherever the page allows any load)
-			const refused = moduleClient.loadRefusal(
-				'object-src',
-				resource.url,
-				true,
-			);
-			if (refused !== null) {
-				loads.delete(element);
-				element.setAttribute(attribute, refused);
-				return;
-			}
-			let routed = routedOf();
-			// a blob: of the page's is copied like a fetched resource: as it is
-			// it would show a document of the proxy's origin, unrewritten
-			const fromBlob = resource.url.protocol === 'blob:';
-			if (!fromBlob && !ROUTE_PROTOCOLS.includes(resource.url.protocol)) {
-				// data: and the like: as routeHTML leaves them
-				element.setAttribute(attribute, routed);
-				return;
-			}
-			// mixed content (src/mixedContent.ts): the resource is copied here,
-			// never reaching the worker as the element's, so the page's URL
-			// decides here. A blocked one fails to load, as natively (an object
-			// fires error); an upgraded one loads over https
-			const mixed = fromBlob
-				? undefined
-				: moduleClient
-						.getModule(MixedContentModule)
-						?.verdict(resource.url, attribute === 'data' ? 'object' : 'embed');
-			if (mixed?.action === 'upgrade') {
-				resource.url = mixed.url;
-				routed = routedOf();
-			}
-			if (mixed?.action === 'block') {
-				// told once: the insertion hooks run this again for the same value
-				if (loads.get(element)?.written !== resource.url.href) {
-					loads.set(element, {
-						written: resource.url.href,
-						generation: ++generations,
-					});
-					moduleClient.getModule(MixedContentModule)!.report(mixed.notices);
-				}
-				// a load that fails as the blocked one does (no copy on its way)
-				fail(element, attribute);
-				loads.get(element)!.url = element.getAttribute(attribute)!;
-				return;
-			}
-			const current = loads.get(element);
-			if (current?.written === resource.url.href) {
-				if (current.url) element.setAttribute(attribute, current.url);
-				else hold(element, attribute, decided(element));
-				return;
-			}
-			const generation = ++generations;
-			const state: {
-				written: string;
-				generation: number;
-				url?: string;
-				attached?: boolean;
-			} = {
-				written: resource.url.href,
-				generation,
-				attached: Reflect.apply(connected, element, []),
-			};
-			loads.set(element, state);
-			// nothing to load until the proxied copy is in (an empty URL makes
-			// an object show its fallback and not load again)
-			hold(element, attribute);
-			const settle = (value: string | null) => {
-				if (loads.get(element) !== state) return;
-				usePrototype(element, CustomElement.prototype, (element) => {
-					if (value === null) fail(element, attribute);
-					else {
-						element.setAttribute(attribute, value);
-						// (after the URL, which Chrome goes by then)
-						release(element);
-					}
-					// (the hooks' view: the URL the element was given)
-					state.url = element.getAttribute(attribute)!;
-				});
-			};
-			// without the shell's part (deferred.ts) the element loads nothing:
-			// a failed fetch's error and no request (the route would go to
-			// the proxy origin's server, never through a worker)
-			let partless = false;
-			// the copy goes out as the load it stands for (loadGrants.ts); a
-			// blob: is read at once, as the browser resolves it at the load
-			(fromBlob
-				? moduleClient.nativeFetch(routeXHR(resource))
-				: loadFetch(
-						moduleClient,
-						new URL(routeXHR(resource), scopePrefix(moduleClient)).href,
-						// Chrome loads an object's or embed's resource as a nested
-						// context: mode navigate, destination its element
-						attribute === 'data' ? 'object navigate' : 'embed navigate',
-					)
-			)
-				.then(async (response) => {
-					if (!response.ok && response.status !== 0)
-						throw new Error(String(response.status));
-					const type = response.headers.get('content-type') ?? '';
-					const mime = type.split(';')[0].trim().toLowerCase();
-					const html = mime === 'text/html' || mime === 'application/xhtml+xml';
-					const xml = !html && isXMLDocumentMime(mime);
-					partless = true;
-					const writeHTML = html ? deferred('modifyHTML') : null;
-					const writeXML = xml ? deferred('modifyXML') : null;
-					partless = false;
-					// an XML document (an SVG, a feed) runs its XHTML scripts too:
-					// it gets the XML shell, under its own mime
-					const blob = html
-						? new NativeBlob(
-								[
-									writeHTML!(
-										await response.text(),
-										resource,
-										moduleClient.config,
-										true,
-										undefined,
-										moduleClient.scriptNonce,
-									),
-								],
-								{ type: 'text/html' },
-							)
-						: xml
-							? new NativeBlob(
-									[
-										writeXML!(
-											await response.text(),
-											resource,
-											moduleClient.config,
-											mime,
-											undefined,
-											undefined,
-											false,
-											undefined,
-											undefined,
-											undefined,
-											true,
-										),
-									],
-									{ type: `${mime};charset=utf-8` },
-								)
-							: await response.blob();
-					// one Chrome shows as an image by its URL's extension: a blob:
-					// URL names none, and Chrome would show the image in a
-					// document, where a data: URL of an image type is an image
-					// (Chrome 157: no context, the image's size). Under a policy
-					// of the page's that refuses data: the blob: stays. One it
-					// shows as an image that is none fails as natively (an
-					// embed's error; an object shows the document)
-					const shown = usePrototype(
-						element,
-						CustomElement.prototype,
-						imageShown,
-					);
-					// (one of no type, which Chrome sniffs, is the image)
-					const imageMime = IMAGE_TYPE.test(mime) ? mime : !mime && 'image/png';
-					// (where the page's own policy allows a data: URL, which the
-					// browser's copy of it judges as written)
-					const dataAllowed =
-						shown &&
-						!moduleClient.pageRefusals('object-src', new URL('data:,')).length;
-					let url: string | undefined;
-					if (shown && !imageMime) {
-						if (attribute === 'src')
-							url = dataAllowed ? 'data:image/png,' : 'blob:null/failed';
-					} else if (shown === 'untyped' && dataAllowed) {
-						const bytes = new Uint8Array(await blob.arrayBuffer());
-						let binary = '';
-						for (let at = 0; at < bytes.length; at += 0x8000)
-							binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
-						url = `data:${imageMime};base64,${toBase64(binary)}`;
-					}
-					if (loads.get(element) !== state) return;
-					if (current?.url?.startsWith('blob:'))
-						realm.URL.revokeObjectURL(current.url);
-					settle(url ?? proxyBlobURL(realm.URL.createObjectURL(blob)));
-				})
-				.catch(() => settle(partless ? null : routed));
+			made.load(element, attribute);
 		};
 		// the property reads the page's URL from the original alone: the real
 		// attribute is absent while the proxied copy loads, then a blob: URL

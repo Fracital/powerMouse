@@ -224,6 +224,21 @@ function textOf(key: string, entry: Kept): string | null {
 	return entry.text ?? null;
 }
 
+/**
+ * The text kept by `key`, and what its stand-ins stand for when a holder
+ * carried it (the line ends among them: `subs[2]` to `subs[5]` are LF, CR,
+ * LS and PS), or null (./inject/positionMaps.ts)
+ */
+export function keptText(key: string): [string, string | undefined] | null {
+	const entry = kept.get(key);
+	const text = entry ? textOf(key, entry) : null;
+	return text === null ? null : [text, entry!.subs];
+}
+
+/** a function's own source, as the browser reads it (no page's hook) */
+export const nativeSource = (fn: Function): string =>
+	Reflect.apply(nativeToString, fn, []);
+
 function decode(text: string, subs: string | undefined): string {
 	if (subs === undefined) return text;
 	for (let i = 0; i < CARRIED.length; i++)
