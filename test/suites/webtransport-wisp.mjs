@@ -1120,6 +1120,89 @@ for (const host of ['worker', 'page']) {
 		await context.close();
 	}
 
+	// a relay that offers 8 lanes and refuses those from 4 on (LANE_REFUSED):
+	// what the client sent on a refused lane goes again on the others, the
+	// session goes on, and the next session to the relay opens only the 4
+	// lanes it took
+	{
+		reset();
+		relay.serverStream = true;
+		relay.lanes = 8;
+		relay.refuseLanesFrom = 4;
+		// the refusals come late: the client has sent CONNECTs on those lanes
+		relay.refuseDelay = 150;
+		const before = snapshot();
+		const { context, page } = await controllerPage('worker', relay.wisp);
+		// eight requests at once, a connection each (HTTP/1.1): every lane
+		// gets a CONNECT before the refusals come
+		const burst = await page.evaluate(
+			async ({ url, timeoutMs }) => {
+				const one = (i) =>
+					Promise.race([
+						window.controller.transport
+							.request(new URL(`${url}?burst${i}`), 'GET', null, [], undefined)
+							.then(async (r) => {
+								await new Response(r.body).arrayBuffer();
+								return r.status === 200 ? 'ok' : `status ${r.status}`;
+							}),
+						new Promise((resolve) =>
+							setTimeout(() => resolve('HUNG'), timeoutMs),
+						),
+					]).catch((error) => String(error).slice(0, 200));
+				return Promise.all([...Array(8).keys()].map(one));
+			},
+			{ url: `${FIXTURE}pages/echo.json`, timeoutMs: TIMEOUT_MS },
+		);
+		const first = await load(page, `${FIXTURE}pages/walk-1.html`, 'WALK 1');
+		for (
+			let i = 0;
+			i < 40 && relay.stats.laneRefused - before.laneRefused < 4;
+			i++
+		)
+			await sleep(50);
+		const d = delta(before);
+		const from = relay.stats.connects.length;
+		relay.cut();
+		const second = await load(page, `${FIXTURE}pages/walk-2.html`, 'WALK 2');
+		const info = await carrierInfo(page);
+		const after = delta(before);
+		const lanesAfter = relay.stats.connects.slice(from).map((c) => c.lane);
+		relay.refuseLanesFrom = 0;
+		relay.refuseDelay = 0;
+		ok(
+			'a refused lane: everything answers, before and after the relay restarts',
+			burst.every((r) => r === 'ok') && allOk(first) && allOk(second),
+			JSON.stringify({ burst, first, second }),
+		);
+		ok(
+			'a refused lane: the 4 lanes past what the relay takes are refused once, what the client sent on them goes again on the others, and the session goes on',
+			d.laneRefused === 4 &&
+				d.refusedPackets > 0 &&
+				d.sessions === 1 &&
+				d.lanes === 3,
+			JSON.stringify(d),
+		);
+		ok(
+			'a refused lane: the next session opens only the 4 lanes the relay takes, and the relay refuses none',
+			after.sessions === 2 &&
+				after.laneRefused === 4 &&
+				info?.lanes === 4 &&
+				lanesAfter.length > 0 &&
+				lanesAfter.every((lane) => lane < 4),
+			JSON.stringify({ info, after, lanesAfter }),
+		);
+		ok(
+			'a refused lane: the console says so',
+			page.logs.some((line) =>
+				/^\[wisp\] the relay refused lane \d+ .*open 4 lanes from now on$/.test(
+					line,
+				),
+			),
+			JSON.stringify(page.logs.filter((l) => l.startsWith('[wisp]'))),
+		);
+		await context.close();
+	}
+
 	// a held lane holds up only its own streams; on one lane, everything
 	for (const lanes of [8, 0]) {
 		reset();
