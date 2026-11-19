@@ -93,4 +93,62 @@ for (const [mode, base] of [
 	await tab.context().close();
 }
 
+// A page's autofocus element has the focus as the page appears, so the keys
+// typed next go into it (Bing's search box). In isolation mode the proxied
+// frame is of another origin than the host's page, where Chrome refuses
+// autofocus ("Blocked autofocusing ... in a cross-origin subframe"): the
+// first candidate that takes the focus, past one that cannot, and one the
+// page inserts after load, against the page loaded natively.
+const autofocused = async (frame) => {
+	for (let i = 0; i < 80; i++) {
+		const loaded = await frame()
+			?.evaluate(() => window.__autofocus?.loaded)
+			.catch(() => false);
+		if (loaded) break;
+		await sleep(250);
+	}
+	return frame()
+		?.evaluate(() => document.activeElement?.id ?? null)
+		.catch((error) => String(error));
+};
+const typed = (frame) =>
+	frame()
+		?.evaluate(() => document.getElementById('q')?.value ?? null)
+		.catch((error) => String(error));
+
+for (const name of ['autofocus.html', 'autofocus-inserted.html']) {
+	const url = `${FIXTURE}pages/${name}`;
+	const tab = await browser.newPage();
+	await tab.goto(url);
+	const nativeActive = await autofocused(() => tab.mainFrame());
+	await tab.keyboard.type('ok');
+	await sleep(300);
+	const nativeTyped = await typed(() => tab.mainFrame());
+	await tab.context().close();
+	ok(
+		`natively: ${name}'s autofocus element has the focus and the keys typed next`,
+		nativeActive === 'q' && nativeTyped === 'ok',
+		JSON.stringify({ nativeActive, nativeTyped }),
+	);
+	for (const [mode, base] of [
+		['same-origin', PROXY],
+		['isolated', HOST],
+	]) {
+		const demo = await openDemo(browser, base);
+		await demo.click('#mainForm input[name=url]');
+		await demo.keyboard.type(url);
+		await demo.keyboard.press('Enter');
+		const active = await autofocused(newest(demo));
+		await demo.keyboard.type('ok');
+		await sleep(300);
+		const value = await typed(newest(demo));
+		ok(
+			`${mode}: ${name}'s autofocus element has the focus and the keys typed next, as natively`,
+			active === nativeActive && value === nativeTyped,
+			JSON.stringify({ active, value }),
+		);
+		await demo.context().close();
+	}
+}
+
 await done(browser);

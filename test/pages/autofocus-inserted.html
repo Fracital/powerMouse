@@ -1,0 +1,16 @@
+<!doctype html>
+<title>autofocus inserted</title>
+<p>Autofocus probe (focus suite): a candidate the page inserts later.</p>
+<input id="before" />
+<script>
+	window.__autofocus = { loaded: false };
+	addEventListener('load', () =>
+		setTimeout(() => {
+			const input = document.createElement('input');
+			input.id = 'q';
+			input.autofocus = true;
+			document.body.append(input);
+			setTimeout(() => (window.__autofocus.loaded = true), 500);
+		}, 300),
+	);
+</script>

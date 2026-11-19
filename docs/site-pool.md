@@ -329,6 +329,18 @@ body, no focus or blur event, the keys reach the page (before: false);
 a frame of another site in the page takes and gives back focus as
 natively (the top's `hasFocus()` stays true while its frame has it).
 
+**Autofocus.** Chrome runs autofocus for a tab's top document only, the
+host's: a candidate in the proxied top is dropped because the host's
+address bar has the focus, and in isolation mode refused outright as a
+cross-origin subframe's. The proxied top flushes its own candidates
+instead (src/inject/dom/autofocus.ts, on the Navigate module's
+observer), as HTML's flush autofocus candidates does for a top: at a
+rendering update, once per document, nothing when something has the
+focus or the document is at a fragment's target, after its style
+sheets, the first candidate that takes the focus (focus suite, a parsed
+and an inserted candidate, both modes). A frame of the page has no such
+flush (natively one of the top's origin has its candidates flushed).
+
 **Cross-origin isolation.** In a cross-origin isolated host page the
 `cross-origin-isolated` permission reaches a frame of another origin only
 when the frame's `allow` names it. The hub's `Frame` adds
