@@ -188,6 +188,7 @@ import {
 	recordInlineOrigin,
 } from './blobOrigins';
 import { navigationUpstream, type BlockerLike } from './blocker';
+import { BodyBytes } from './bodyBytes';
 import {
 	askedRange,
 	byteRange,
@@ -5788,12 +5789,14 @@ export function registerRewrites(
 		return output;
 	};
 	// a script that came as UTF-8 goes to the rewriter as its bytes, and its
-	// output comes back as bytes (src/wasm/rewriteBytes.ts), from a rewrite
-	// worker or this thread: the same output rewriteScript makes of the text
-	// they decode to, never decoded or encoded here. Its text where it was
-	// made of the decoded text (a script the module does not answer for)
+	// output comes back as a Blob of its bytes (src/wasm/rewriteBytes.ts),
+	// from a rewrite worker or this thread: the same output rewriteScript
+	// makes of the text they decode to, never decoded or encoded here. Its
+	// text where it was made of the decoded text (a script the module does
+	// not answer for). The bytes are handed to the worker, and had again
+	// of `body` when it does not answer
 	const rewriteScriptBytes = async (
-		bytes: Uint8Array,
+		body: BodyBytes,
 		url: StompURL,
 		type: ScriptType,
 		note: Note,
@@ -5801,7 +5804,7 @@ export function registerRewrites(
 	): Promise<Blob | string> => {
 		const pooled = rewriter.pool?.live
 			? await rewriter.pool.rewriteBytes(
-					bytes,
+					body,
 					url,
 					rewriter.config,
 					type,
@@ -5810,22 +5813,17 @@ export function registerRewrites(
 			: null;
 		note.rewriteIn = pooled === null ? 'service-worker' : 'pool';
 		note.rewriteBy = 'wasm';
-		if (pooled !== null)
-			return typeof pooled === 'string' ? pooled : new Blob([pooled]);
-		const output = rewriteBytesInWasm(
-			bytes,
-			url,
-			rewriter.config,
-			type,
-			preamble,
-		);
-		if (output !== null) return new Blob([output]);
-		return modifyJS(
-			new TextDecoder().decode(bytes),
-			url,
-			rewriter.config,
-			type,
-			preamble,
+		if (pooled !== null) return pooled;
+		const bytes = body.bytes;
+		return (
+			rewriteBytesInWasm(bytes, url, rewriter.config, type, preamble) ??
+			modifyJS(
+				new TextDecoder().decode(bytes),
+				url,
+				rewriter.config,
+				type,
+				preamble,
+			)
 		);
 	};
 	// the config a script's rewrite depends on, for its cache key: all of it
@@ -6019,13 +6017,14 @@ export function registerRewrites(
 					})
 				) {
 					note.rewriteCache = 'skip';
-					const read = new Uint8Array(await response.arrayBuffer());
-					note.bytes = read.byteLength;
+					const body = await BodyBytes.read(response);
+					const read = body.bytes;
+					note.bytes = body.size;
 					if (
 						scriptEncoding(read, contentType, isModuleType, environment) ===
 						'utf-8'
 					)
-						return rewriteScriptBytes(read, url, type, note, preamble);
+						return rewriteScriptBytes(body, url, type, note, preamble);
 					return rewriteScript(
 						decodeScript(read, contentType, isModuleType, environment),
 						url,
@@ -6039,8 +6038,9 @@ export function registerRewrites(
 				// nothing and makes no string of the output (YouTube's bundle is
 				// 10 MB in and 20 MB out, read, decoded and encoded again on
 				// every load).
-				const bytes = new Uint8Array(await response.arrayBuffer());
-				note.bytes = bytes.byteLength;
+				const body = await BodyBytes.read(response);
+				const bytes = body.bytes;
+				note.bytes = body.size;
 				const encoding = scriptEncoding(
 					bytes,
 					contentType,
@@ -6096,7 +6096,7 @@ export function registerRewrites(
 				// UTF-8 by the rewriter itself
 				const output =
 					encoding === 'utf-8'
-						? await rewriteScriptBytes(bytes, url, type, note, preamble)
+						? await rewriteScriptBytes(body, url, type, note, preamble)
 						: await rewriteScript(
 								new TextDecoder(encoding).decode(bytes),
 								url,

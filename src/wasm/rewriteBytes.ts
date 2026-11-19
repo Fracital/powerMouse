@@ -8,8 +8,13 @@
 // bundle, whose output is 28 MB, some 60 ms of one thread or another,
 // about a tenth of the rewrite, a third of it on the service worker's one
 // thread. Here the bytes go in as they came and the output comes out as
-// bytes, for the response to take as they are: the same bytes the
-// string's rewrite gives, encoded.
+// a Blob of its bytes, for the response to take as it is: the same bytes
+// the string's rewrite gives, encoded. The Blob is made from the module's
+// memory where the output stands, the one copy of it the rewrite makes:
+// a rewrite worker posts it to the service worker as a handle, where a
+// buffer of the bytes was copied out of the module and then again into
+// the Blob the service worker made of it (10 ms of its thread for
+// Discord's 28 MB).
 import type { Config } from '../config';
 import { keepsSourcesHere } from '../functionSource';
 import { scriptLead } from '../scriptLead';
@@ -30,11 +35,11 @@ import { hasModule, withInstance } from './thread';
 /**
  * The output of the script whose UTF-8 bytes are `bytes`, as modifyJS
  * (src/rewriteJS.ts) makes it of the text `new TextDecoder().decode(bytes)`,
- * encoded; or null for the caller to make it of that text: the thread
- * holds no module or another revision's, the bytes are no UTF-8 (the
- * decoder puts U+FFFD in for what is not), the module declined the script
- * (it is handed back, with what the string's rewrite says of it), or this
- * realm keeps the scripts' texts itself.
+ * as a Blob of its UTF-8 bytes; or null for the caller to make it of that
+ * text: the thread holds no module or another revision's, the bytes are no
+ * UTF-8 (the decoder puts U+FFFD in for what is not), the module declined
+ * the script (it is handed back, with what the string's rewrite says of
+ * it), or this realm keeps the scripts' texts itself.
  */
 export function rewriteBytesInWasm(
 	bytes: Uint8Array,
@@ -42,7 +47,7 @@ export function rewriteBytesInWasm(
 	config: Config,
 	type: ScriptType,
 	preamble = '',
-): Uint8Array<ArrayBuffer> | null {
+): Blob | null {
 	if (!hasModule(REWRITER) || keepsSourcesHere()) return null;
 	// (the decoder drops one byte order mark)
 	const text =
@@ -68,9 +73,11 @@ export function rewriteBytesInWasm(
 			// is decoded without it where the text's rewrite reads it back
 			// (BufferInstance.call), as a browser decodes the body it is served
 			const out = result.bytes;
-			return out[0] === 0xef && out[1] === 0xbb && out[2] === 0xbf
-				? out.slice(3)
-				: out;
+			return new Blob([
+				out[0] === 0xef && out[1] === 0xbb && out[2] === 0xbf
+					? out.subarray(3)
+					: out,
+			]);
 		},
 		rewriterRoute(url, config, type),
 	);

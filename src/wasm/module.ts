@@ -360,9 +360,11 @@ export class BufferInstance {
 	}
 	/**
 	 * `call` for a text that is UTF-8 bytes already (a script as the network
-	 * sent it): copied in as they are, and the answer copied out as bytes,
-	 * so neither is decoded or encoded here. The module answers status 3 for
-	 * bytes that are no UTF-8.
+	 * sent it): copied in as they are, and the answer's bytes given where
+	 * they stand in the module's memory, neither decoded nor encoded. The
+	 * view holds until the instance is called again or grows: the caller
+	 * copies them out (into a Blob, say) before that. The module answers
+	 * status 3 for bytes that are no UTF-8.
 	 */
 	callBytes(
 		input: Uint8Array,
@@ -370,7 +372,8 @@ export class BufferInstance {
 	): { bytes: Uint8Array<ArrayBuffer> } | { status: number } {
 		const status = this.#exports.r(...this.#give(input), flags);
 		if (status !== 0) return { status };
-		return { bytes: this.#view(this.#exports.p(), this.#exports.n()).slice() };
+		const { memory, p, n } = this.#exports;
+		return { bytes: new Uint8Array(memory.buffer as ArrayBuffer, p(), n()) };
 	}
 	/**
 	 * `call` for a module with a kept input buffer (`i`, `x`): the text is

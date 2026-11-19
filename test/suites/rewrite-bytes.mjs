@@ -5,7 +5,9 @@
 // for the bytes (no UTF-8, a script it declines, a thread with no module)
 // it answers null, for the caller to rewrite the decoded text instead. The
 // scripts: the suites' pages' and fixtures' scripts, and the shapes of
-// each fallback.
+// each fallback. And the service worker's read of a script's body
+// (src/server/bodyBytes.ts): its bytes handed to a worker are had again
+// when the worker does not answer.
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { done, ok, OUT } from '../lib.mjs';
@@ -28,6 +30,7 @@ export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
 export { parseConfig } from ${JSON.stringify(`${root}src/config.ts`)};
 export { adoptModule } from ${JSON.stringify(`${root}src/wasm/thread.ts`)};
 export { rewriteBytesInWasm } from ${JSON.stringify(`${root}src/wasm/rewriteBytes.ts`)};
+export { BodyBytes } from ${JSON.stringify(`${root}src/server/bodyBytes.ts`)};
 `,
 );
 const bundle = `${OUT}rewrite-bytes.mjs`;
@@ -57,6 +60,11 @@ const decoder = new TextDecoder();
 const show = (value) => JSON.stringify(value).slice(0, 300);
 const same = (a, b) =>
 	a.length === b.length && a.every((byte, at) => byte === b[at]);
+/** the bytes path's Blob as its bytes (null as it is) */
+const bytesPath = async (...args) => {
+	const blob = thread.rewriteBytesInWasm(...args);
+	return blob && new Uint8Array(await blob.arrayBuffer());
+};
 // (the console's warnings of the scripts handed back)
 const warn = console.warn;
 console.warn = () => {};
@@ -92,7 +100,7 @@ const differ = [];
 for (const file of files) {
 	const bytes = readFileSync(`${root}${file}`);
 	for (const type of types) {
-		const output = thread.rewriteBytesInWasm(bytes, url, config, type);
+		const output = await bytesPath(bytes, url, config, type);
 		compared++;
 		if (output === null) continue;
 		answered++;
@@ -154,7 +162,7 @@ const CASES = {
 };
 for (const [name, { bytes, answers }] of Object.entries(CASES)) {
 	const given = new Uint8Array(bytes);
-	const output = thread.rewriteBytesInWasm(given, url, config, 'generic');
+	const output = await bytesPath(given, url, config, 'generic');
 	const expected = fallback(given, 'generic', '');
 	ok(
 		name,
@@ -170,20 +178,77 @@ for (const [name, { bytes, answers }] of Object.entries(CASES)) {
 {
 	const bytes = encoder.encode('"use strict"; self.onmessage = () => top;');
 	const preamble = 'document.currentScript;';
-	const results = types.map((type) => {
-		const output = thread.rewriteBytesInWasm(
-			bytes,
-			url,
-			config,
-			type,
-			preamble,
+	const results = [];
+	for (const type of types) {
+		const output = await bytesPath(bytes, url, config, type, preamble);
+		results.push(
+			output !== null && same(output, fallback(bytes, type, preamble)),
 		);
-		return output !== null && same(output, fallback(bytes, type, preamble));
-	});
+	}
 	ok(
 		"a preamble and the lead of each type, as the text's rewrite writes them",
 		results.every(Boolean),
 		show(results),
+	);
+}
+
+// a body read for a worker: its bytes, the same after they were handed over
+{
+	const text = encoder.encode('top.x = "\u00e9t\u00e9";\n'.repeat(300));
+	const streamOf = (chunks) =>
+		new Response(
+			new ReadableStream({
+				start(controller) {
+					for (const chunk of chunks) controller.enqueue(chunk);
+					controller.close();
+				},
+			}),
+		);
+	const pieces = [];
+	for (let at = 0; at < text.length; at += 1000)
+		pieces.push(text.slice(at, at + 1000));
+	const many = await thread.BodyBytes.read(streamOf(pieces));
+	const given = many.handOver();
+	const own = given === many.bytes.buffer;
+	structuredClone(given, { transfer: [given] });
+	ok(
+		"a body of many chunks hands over its bytes' own buffer and has them again",
+		own &&
+			many.size === text.length &&
+			given.byteLength === 0 &&
+			same(many.bytes, text),
+		show({ own, size: many.size, again: many.bytes.length }),
+	);
+	// one chunk that is part of a larger buffer: a copy of it goes
+	const wide = new Uint8Array(text.length + 20);
+	wide.set(text, 10);
+	const one = await thread.BodyBytes.read(
+		streamOf([wide.subarray(10, 10 + text.length)]),
+	);
+	const copy = one.handOver();
+	const copied =
+		copy.byteLength === text.length && same(new Uint8Array(copy), text);
+	structuredClone(copy, { transfer: [copy] });
+	ok(
+		'a body of one chunk hands over a copy of just its bytes',
+		copied && same(one.bytes, text) && wide.byteLength === text.length + 20,
+	);
+	const fetched = await thread.BodyBytes.read(new Response(text));
+	const none = await thread.BodyBytes.read(new Response(null));
+	ok(
+		'a body read as arrayBuffer() reads it: the bytes, none for no body',
+		same(fetched.bytes, text) && none.size === 0 && none.bytes.length === 0,
+	);
+	let refused = null;
+	try {
+		await thread.BodyBytes.read(streamOf(['top.x = 1;']));
+	} catch (error) {
+		refused = error;
+	}
+	ok(
+		'a chunk that is no bytes is a TypeError, as arrayBuffer() says',
+		refused instanceof TypeError,
+		String(refused),
 	);
 }
 

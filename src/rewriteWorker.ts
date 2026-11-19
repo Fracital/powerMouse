@@ -57,13 +57,13 @@ function rewrite(request: RewriteRequest): string | RewriteAnswer {
 }
 
 /**
- * A script from its UTF-8 bytes: the output's bytes, handed over (the
- * buffer is this call's), or what modifyJS makes of the text they decode
- * to where the module did not answer for them
+ * A script from its UTF-8 bytes: a Blob of the output's bytes (it goes to
+ * the service worker as a handle), or what modifyJS makes of the text they
+ * decode to where the module did not answer for them
  */
 function rewriteBytes(
 	request: RewriteBytesRequest,
-): [ArrayBuffer | string, Transferable[]] {
+): [Blob | string, Transferable[]] {
 	const url = scriptURL(request);
 	const bytes = new Uint8Array(request.bytes);
 	const output = rewriteBytesInWasm(
@@ -73,7 +73,7 @@ function rewriteBytes(
 		request.type,
 		request.preamble,
 	);
-	if (output) return [output.buffer, [output.buffer]];
+	if (output) return [output, []];
 	return [
 		modifyJS(
 			new TextDecoder().decode(bytes),
