@@ -75,8 +75,11 @@ export function serveShard(scope: DedicatedWorkerGlobalScope) {
 				// carrier host's, the transport worker's relay)
 				const wisp = async (v2: boolean) => {
 					entry.opened = true;
-					const pipe = lanePipe(await rpc.call('lane', { instance, v2 }), () =>
-						saturation.busy(),
+					const lane = await rpc.call('lane', { instance, v2 });
+					const pipe = lanePipe(
+						lane.port,
+						() => saturation.busy(),
+						lane.credit,
 					);
 					// one a carrier: the set holds the few a transport's life has
 					entry.lanes.add(pipe.end);

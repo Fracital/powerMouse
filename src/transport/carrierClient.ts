@@ -20,8 +20,8 @@
 // the page out of the back/forward cache. A host not heard from is gone
 // (its riders end as lost, and the next start opens a carrier of its own);
 // a client not heard from has its riders let go.
-import { bodiesTaken } from './bodyPort';
 import { ownBuffer, PacketBatch } from './packetBatch';
+import { paceRider, type Ride } from './riderPace';
 import { RpcHelper } from './rpc';
 import type { Held, PoolFields, PoolLine, SocketPass } from './socketPool';
 import { relayNote, type TransportNote } from './transportLog';
@@ -57,13 +57,6 @@ export const PAGE_ALIVE = 'alive page';
 export const END = 'end';
 /** what a host posts a rider that takes credit past what it said it took, at most (bytes) */
 export const RIDER_WINDOW = 4 * 1024 * 1024;
-/** what a rider tells the host it took, at least, each time (bytes) */
-const TOOK_STEP = 1024 * 1024;
-/** DATA a rider hands epoxy ahead of what this realm's body readers took, at most, while they read */
-const PACED_AHEAD = 16 * 1024 * 1024;
-/** readers that took nothing for this long are not reading: nothing waits for them */
-const PACED_QUIET_MS = 250;
-const DATA = 0x02;
 /** a page's message on the control port as it unloads: what it held of the host's pool goes */
 export const LEFT = 'left';
 
@@ -125,7 +118,7 @@ export interface PoolLearn {
 export type HostBound = {
 	open: [CarrierAsk, CarrierGiven];
 	/** one more rider of the relay `relay` (its port null when it is gone) */
-	ride: [{ relay: number; batches: boolean }, CarrierGiven];
+	ride: [{ relay: number; batches: boolean; credit?: boolean }, CarrierGiven];
 	/** the host's pool (socketPool.ts SocketPool.hold) */
 	hold: [PoolFields, PoolTicket];
 	learn: [PoolLearn, PoolLine | null];
@@ -419,6 +412,7 @@ function riderCarrier(
 	const finish = (lost: boolean) => {
 		if (ended) return;
 		ended = true;
+		pace?.end(false);
 		link.riders.delete(end);
 		try {
 			reading.close();
@@ -450,65 +444,25 @@ function riderCarrier(
 			close();
 		},
 	});
-	// Paced to the readers of this realm's bodies: epoxy keeps whatever a
-	// stream receives until its body is read (wisp has no flow control
-	// toward the client), and the host, a thread of its own, can read the
-	// relay faster than they take it, where a carrier of this realm's own
-	// was read no faster than this thread runs. A packet past PACED_AHEAD
-	// bytes ahead of them waits here, the host sends RIDER_WINDOW past what
-	// was let through, and stops reading the relay past that: the session
-	// holds the server back, as a reader holds a socket's back natively.
-	// Readers that stop (a paused one) hold nothing back.
-	const paced = given.credit === true;
-	const held: ArrayBuffer[] = [];
-	let delivered = 0;
-	let start = 0;
-	let untold = 0;
-	let quiet: ReturnType<typeof setTimeout> | undefined;
-	const flowing = () => {
-		if (performance.now() - bodiesTaken.at > PACED_QUIET_MS) {
-			start = delivered - bodiesTaken.bytes;
-			return true;
-		}
-		return delivered - bodiesTaken.bytes - start < PACED_AHEAD;
-	};
-	const pass = () => {
-		clearTimeout(quiet);
-		while (!ended && held.length && flowing()) {
-			const packet = held.shift()!;
-			const bytes = new Uint8Array(packet);
-			if (bytes[0] === DATA && bytes.length > 5) delivered += bytes.length - 5;
-			untold += packet.byteLength;
-			reading.enqueue(packet);
-		}
-		if (!ended && (untold >= TOOK_STEP || (!held.length && untold))) {
-			try {
-				port.postMessage({ took: untold });
-			} catch {
-				// gone already
-			}
-			untold = 0;
-		}
-		if (ended || !held.length) bodiesTaken.waiters.delete(pass);
-		else {
-			bodiesTaken.waiters.add(pass);
-			quiet = setTimeout(pass, PACED_QUIET_MS);
-		}
-	};
+	// paced to the readers of this realm's bodies (riderPace.ts)
+	const pace =
+		given.credit === true
+			? paceRider(port, (packet) => reading.enqueue(packet))
+			: null;
 	port.addEventListener('message', (event) => {
 		const data = event.data as unknown;
 		if (data instanceof ArrayBuffer || Array.isArray(data)) {
 			if (ended) return;
 			const packets = Array.isArray(data) ? (data as ArrayBuffer[]) : [data];
-			if (!paced) for (const packet of packets) reading.enqueue(packet);
-			else {
-				held.push(...packets);
-				pass();
-			}
+			if (pace) pace.take(packets);
+			else for (const packet of packets) reading.enqueue(packet);
 			return;
 		}
-		if (typeof data === 'object' && data !== null && 'end' in data)
+		if (typeof data === 'object' && data !== null && 'end' in data) {
+			// what waits here came before the end
+			pace?.end(true);
 			finish((data as { end: unknown }).end === 'lost');
+		}
 	});
 	port.start();
 	const write = new WritableStream<Uint8Array>({
@@ -531,12 +485,14 @@ function riderCarrier(
 		hosted: true,
 		...(batches &&
 			relay !== undefined && {
-				more: async () => {
+				more: async (): Promise<Ride | null> => {
 					if (ended) return null;
 					const more = await link.rpc
-						.call('ride', { relay, batches: true })
+						.call('ride', { relay, batches: true, credit: true })
 						.catch(() => null);
-					return more?.port ?? null;
+					return more?.port
+						? { port: more.port, credit: more.credit === true }
+						: null;
 				},
 			}),
 	};

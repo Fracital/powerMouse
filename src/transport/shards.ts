@@ -9,6 +9,7 @@ import type {
 } from '@mercuryworkshop/proxy-transports';
 import type { PortBody } from './bodyPort';
 import type { TransportToHost } from './messages';
+import type { Ride } from './riderPace';
 
 /** the name a shard's worker is started with, then its number */
 export const SHARD_WORKER_NAME = 'stomp-shard';
@@ -69,8 +70,8 @@ export type ShardBound = {
 
 /** implemented by the transport worker, called by a shard */
 export type ShardToHost = {
-	/** a port that is one more Wisp connection of the transport `instance` (wispSplit.ts lanePipe) */
-	lane: [{ instance: number; v2: boolean }, MessagePort];
+	/** a port that is one more Wisp connection of the transport `instance` (wispSplit.ts lanePipe), paced when `credit` (riderPace.ts) */
+	lane: [{ instance: number; v2: boolean }, Ride];
 	/** whether the shard's thread is saturated now (Saturation) */
 	load: [boolean];
 };

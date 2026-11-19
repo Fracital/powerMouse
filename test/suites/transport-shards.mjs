@@ -20,7 +20,10 @@
 //   takes the first lane's INFO first (nothing incompatible);
 //   a proxied page loads from one of them and fetches from the others; a
 //   WebSocket through a shard echoes text and binary and closes with the
-//   server's code;
+//   server's code; 256 MB from four HTTP/1.1 origins read slowly through
+//   the workers' riders leaves no more of it in the transport's threads
+//   than the pace lets ahead (each worker's epoxy is handed the relay's
+//   packets at the pace its bodies are read: src/transport/riderPace.ts);
 // - with `shards: 4` (the default's shape): the same downloads of a few
 //   hundred KB start no worker, every origin on shard 1; downloads that
 //   shard 1 cannot keep up with start workers, and the downloads moved to
@@ -39,6 +42,7 @@ import { createServer as createHttpsServer } from 'node:https';
 import { WebSocketServer } from 'ws';
 import { done, launch, ok, PORT, PROXY } from '../lib.mjs';
 import { startWispWebTransport } from '../wisp-wt.mjs';
+import { grewBy, workerMemory } from '../worker-memory.mjs';
 import { startWebTransportServer } from '../wtserver.mjs';
 
 const ORIGINS = 4;
@@ -112,6 +116,41 @@ const http1 = createHttpsServer(
 await new Promise((resolve) => http1.listen(0, '127.0.0.1', resolve));
 const http1Origin = `https://127.0.0.1:${http1.address().port}`;
 
+// four more HTTP/1.1 origins, whose bodies nothing holds back but the
+// client's reading (h2's flow control would): `/flow?n=` streams `n` bytes
+// of one random MiB as fast as the client takes them
+const flowChunk = randomBytes(1024 * 1024);
+const flowServers = [];
+for (let i = 0; i < ORIGINS; i++) {
+	const server = createHttpsServer(
+		{ cert: certPem, key: keyPem },
+		(req, res) => {
+			const n = Number(new URL(req.url, 'https://x').searchParams.get('n'));
+			res.writeHead(200, {
+				'content-type': 'application/octet-stream',
+				'content-length': String(n),
+				'cache-control': 'no-store',
+			});
+			let left = n;
+			const more = () => {
+				while (left > 0) {
+					const part = flowChunk.subarray(0, Math.min(left, flowChunk.length));
+					left -= part.length;
+					if (!res.write(part)) return void res.once('drain', more);
+				}
+				res.end();
+			};
+			more();
+		},
+	);
+	// (a keep-alive that outlasts the reads: epoxy drops what a stream
+	// still holds unread when the stream's CLOSE comes, and node closes an
+	// idle connection after 5 s, which it is once it wrote the body)
+	server.keepAliveTimeout = 60 * 1000;
+	await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+	flowServers.push(`https://127.0.0.1:${server.address().port}`);
+}
+
 const echo = new WebSocketServer({ port: 0, host: '127.0.0.1' });
 echo.on('connection', (ws) =>
 	ws.on('message', (m, binary) => {
@@ -125,6 +164,9 @@ const wsEcho = `ws://127.0.0.1:${echo.address().port}/`;
 const relay = await startWispWebTransport(`ws://127.0.0.1:${PORT}/wisp/`);
 const browser = await launch();
 const errors = [];
+/** the transport worker's memory and its shards', summed (worker-memory.mjs) */
+const workers = await workerMemory(browser);
+const MB = 1024 * 1024;
 
 /** a controller page whose worker transport has `shards` and webTransport on or off (epoxy in Wisp v2 with `v2`) */
 async function controllerPage(
@@ -365,6 +407,56 @@ const EAGER = { max: 4, start: 4 };
 			socket.code === 4001 &&
 			socket.reason === 'bye',
 		JSON.stringify(socket),
+	);
+
+	// 64 MB from each of four HTTP/1.1 origins at once, each read 128 KiB
+	// every 40 ms (3.2 MB/s, well under what the relay gives): unpaced, a
+	// worker's epoxy kept what the host read of the relay ahead of its
+	// readers (wisp has no flow control toward the client), most of each
+	// body (126 to 129 MB more of the four threads' memory; paced, 9)
+	const flowBefore = await workers.memory();
+	const flowed = await page.evaluate(
+		async ({ servers, bytes }) => {
+			const one = async (origin) => {
+				const response = await window.controller.transport.request(
+					new URL(`${origin}/flow?n=${bytes}`),
+					'GET',
+					null,
+					[],
+					undefined,
+				);
+				const reader = response.body.getReader();
+				let read = 0;
+				let paused = 0;
+				for (;;) {
+					const { done, value } = await reader.read();
+					if (done) return read;
+					read += value.byteLength;
+					if (read - paused >= 128 * 1024) {
+						paused = read;
+						await new Promise((resolve) => setTimeout(resolve, 40));
+					}
+				}
+			};
+			return Promise.all(servers.map((origin) => one(origin))).then(
+				(all) => all.reduce((sum, n) => sum + n, 0),
+				(error) => String(error),
+			);
+		},
+		{ servers: flowServers, bytes: 64 * MB },
+	);
+	const flowAfter = await workers.memory();
+	const grew = grewBy(flowBefore, flowAfter, 'transport');
+	ok(
+		"four shards: 256 MB read slowly through the workers' riders: the transport's threads hold no more of it than the pace lets ahead",
+		flowed === ORIGINS * 64 * MB && grew !== null && grew < 64 * MB,
+		JSON.stringify({
+			flowed,
+			grewMB: grew === null ? null : Math.round(grew / MB),
+			placed: flowServers.map((origin) => placements(page).get(origin)),
+			before: flowBefore.transport,
+			after: flowAfter.transport,
+		}),
 	);
 	await context.close();
 }
@@ -682,4 +774,5 @@ const EAGER = { max: 4, start: 4 };
 http1.close();
 relay.close?.();
 await wt.close?.();
+await workers.detach();
 await done(browser, errors);
