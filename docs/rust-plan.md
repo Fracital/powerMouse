@@ -1697,6 +1697,14 @@ calling thread. Rewritten from the bytes to the bytes of the output
 `kevlar_base` 378 to 242). In node, with the worker's code in the same
 thread (no copy between threads), the transcodes are 5 to 10% of a
 rewrite: most of the difference is the strings' copies between threads.
+What was left on the calling thread was copies: the bytes copied to post
+them (4 ms for Discord's bundle) and the output's bytes copied into a Blob
+(10 ms for its 28 MB), after the worker had copied them out of the module.
+The bytes are now transferred (`src/server/bodyBytes.ts` keeps the chunks
+the body came in, to have them again for a worker that never answers) and
+the worker makes the Blob of the module's memory and posts it as a
+handle: the calling thread's 108 ms for the twelve scripts is 1.2 ms, and
+end to end they take 5% less.
 
 Measured the same day and not taken: `+simd128` (no snip, both builds) is
 9.5% slower over the whole corpus; and keeping an instance that grew past

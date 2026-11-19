@@ -16,6 +16,7 @@ import {
 import { routeScopeList } from '../routeURL';
 import type StompURL from '../StompURL';
 import { RpcHelper } from '../transport/rpc';
+import type { BodyBytes } from './bodyBytes';
 
 interface Member {
 	rpc: RpcHelper<Record<string, never>, RewriteBound>;
@@ -160,25 +161,26 @@ export class RewritePool {
 		return answer.output;
 	}
 	/**
-	 * The script whose UTF-8 bytes are `bytes`, rewritten by a worker from
-	 * its bytes (src/wasm/rewriteBytes.ts): its output's bytes, or the
-	 * output as text where the worker made it of the decoded text; null
-	 * when the caller must rewrite it itself. A copy of the bytes is handed
-	 * over: the caller rewrites them when no worker answers.
+	 * The script whose UTF-8 bytes `body` holds, rewritten by a worker from
+	 * its bytes (src/wasm/rewriteBytes.ts): a Blob of its output's bytes,
+	 * or the output as text where the worker made it of the decoded text;
+	 * null when the caller must rewrite it itself. The bytes are handed
+	 * over (BodyBytes.handOver): the caller has them again of `body` when
+	 * no worker answers.
 	 */
 	rewriteBytes(
-		bytes: Uint8Array,
+		body: BodyBytes,
 		url: StompURL,
 		config: Config,
 		type: ScriptType,
 		/** code to run first, after the worker's bootstrap (modifyJS's) */
 		preamble?: string,
-	): Promise<ArrayBuffer | string | null> {
-		const copy = bytes.slice().buffer;
+	): Promise<Blob | string | null> {
+		const bytes = body.handOver();
 		return this.#call(
 			'rewriteBytes',
 			{
-				bytes: copy,
+				bytes,
 				url: url.toString(),
 				directory: url.directory,
 				codecKey: url.codec.key,
@@ -188,9 +190,9 @@ export class RewritePool {
 				...(url.mark === undefined ? {} : { mark: url.mark }),
 				...(preamble ? { preamble } : {}),
 			},
-			bytes.length,
+			body.size,
 			undefined,
-			[copy],
+			[bytes],
 		);
 	}
 	/**
