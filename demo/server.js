@@ -99,7 +99,7 @@
 //                       demo/public/pm/dev.js
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync, statSync, watch } from 'node:fs';
+import { readdirSync, readFileSync, statSync, watch } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
@@ -443,7 +443,7 @@ app.get('/config.js', (req, res) => {
 	res.set('Cache-Control', 'no-store');
 	res.type('application/javascript');
 	res.send(
-		`window.STOMP_CONFIG = ${JSON.stringify({ ...pageConfig, ...(sitePool.length && { sitePool }) })};\n`,
+		`window.STOMP_CONFIG = ${JSON.stringify({ ...pageConfig, transports: transportPaths(), ...(sitePool.length && { sitePool }) })};\n`,
 	);
 });
 
@@ -635,15 +635,55 @@ app.get('/api/commits', async (req, res) => {
 // never change, so a day of max-age kept the previous epoxy (TLS, HTTP/2,
 // HTTP/3) in browsers and Cloudflare for a day after a pin bump. Fonts never
 // change and may be cached.
+// A file asked for by the hash of its bytes is the exception: that URL
+// names one file, and is kept for good (KEPT) when the hash is the file's
+// own. A page of the build before a deploy asks by the old hash and must
+// not be told to keep the new file under it: it gets the file no-cache, as
+// it would by its plain name. The watch build has no hash (its files change
+// under one name): nothing is kept.
 const fresh = {
 	setHeaders: (res) => res.set('Cache-Control', 'no-cache'),
 };
 const cached = { maxAge: '1d', immutable: false };
+const KEPT = 'public, max-age=31536000, immutable';
+const publicDir = fileURLToPath(new URL('./public/', import.meta.url));
+// (`?<hash>`, or a first parameter of its own: `controllerFrame.html?<hash>&script=`)
+const askedByHash = (res, path) => {
+	const asked = /\?([0-9a-f]{16})(?:&|$)/.exec(res.req.originalUrl);
+	return !dev && !!asked && asked[1] === hashOf(path);
+};
+// The page names the scripts, the stylesheet and the images it loads from
+// /stomp/ and /pm/ by the hash of each file (`/stomp/Controller.js?<hash>`),
+// so a reload revalidates the page and none of them. The page itself stays
+// no-cache: it is what says which hashes are current, and a kept copy would
+// go on naming the last build's files after a deploy. (/config.js is
+// no-store: it is made for each request.)
+function stampedPage() {
+	return readFileSync(join(publicDir, 'index.html'), 'utf8').replace(
+		/\b(src|href)="\/(stomp|pm)\/([\w./-]+)"/g,
+		(whole, attribute, root, file) => {
+			const hash = hashOf(
+				root === 'stomp' ? join(stompPath, file) : join(publicDir, 'pm', file),
+			);
+			return hash ? `${attribute}="/${root}/${file}?${hash}"` : whole;
+		},
+	);
+}
+if (!dev)
+	app.get(['/', '/index.html'], (req, res) => {
+		res.set('Cache-Control', 'no-cache');
+		res.type('html');
+		// (an ETag of the stamped text: an unchanged page is a 304)
+		res.send(stampedPage());
+	});
 app.use(
-	express.static(fileURLToPath(new URL('./public/', import.meta.url)), fresh),
+	express.static(publicDir, {
+		setHeaders: (res, path) =>
+			res.set('Cache-Control', askedByHash(res, path) ? KEPT : 'no-cache'),
+	}),
 );
-// Some STomp files are not revalidated. One is the rewriter library, which
-// no inject bundle carries. A proxied page whose rewrite needs it and has no
+// Some STomp files are asked for by their hash. One is the rewriter
+// library, which no inject bundle carries. A proxied page whose rewrite needs it and has no
 // copy (a worker, a sandboxed frame, any page of `rewriter: 'wasm'` whose
 // module declined a script) loads it with a synchronous request, and a
 // revalidation there is a round trip the page's script waits for. STomp
@@ -655,16 +695,26 @@ app.use(
 // module with a synchronous request too. The document bundles are asked
 // for so as well (`injectDocument.js?<hash of its bytes>`), a parser-blocking
 // script of every proxied document's shell; the service worker keeps them
-// itself, and this spares its fetch of one a revalidation. Only when the
-// hash is the file's:
-// a page of the build before a deploy asks by the old hash and must not be
-// told to keep the new file under it. The watch build has no hash (its
-// files change under one name): nothing is kept.
+// itself, and this spares its fetch of one a revalidation. The controller
+// asks for the workers it starts and the blocker's module so
+// (`transportWorker.js?<hash>`, src/version.ts TRANSPORT_WORKER): a reload
+// of the page starts its transport without a revalidation of the worker
+// first; isolation mode's frame and the site pool's are asked for so too
+// (`controllerFrame.html?<hash>&script=controllerFrame.js%3F<hash>`). And
+// the page names its own scripts so (stampedPage above).
 const keptFiles = [
 	'rewriterLib.js',
 	'core.wasm',
 	'injectDocument.js',
 	'injectDocumentFull.js',
+	'transportWorker.js',
+	'rewriteWorker.js',
+	'blocker.wasm',
+	'Controller.js',
+	'SearchBuilder.js',
+	'controllerFrame.html',
+	'controllerFrame.js',
+	'siteFrame.js',
 ];
 const fileHashes = new Map();
 function hashOf(path) {
@@ -690,10 +740,8 @@ const stompFiles = {
 	setHeaders: (res, path) =>
 		res.set(
 			'Cache-Control',
-			!dev &&
-				keptFiles.includes(basename(path)) &&
-				res.req.originalUrl.endsWith(`?${hashOf(path)}`)
-				? 'public, max-age=31536000, immutable'
+			keptFiles.includes(basename(path)) && askedByHash(res, path)
+				? KEPT
 				: 'no-cache',
 		),
 };
@@ -728,8 +776,59 @@ app.use(
 		fresh,
 	),
 );
-app.use('/epoxy/', express.static(transportDir('epoxy-transport'), fresh));
-app.use('/libcurl/', express.static(transportDir('libcurl-transport'), fresh));
+// The transports are asked for under the hash of their package's files
+// (`/epoxy/<hash>/index.mjs`, config.js `transports`), kept for good when it
+// is the hash of the files there now. A path segment, not a query: a
+// module's own URLs are relative to it (epoxy's epoxy.wasm, h3/stomp_h3.js
+// and stomp-h3's wasm) and keep its directory but not its query, and the one
+// hash names all of them, so a module never meets another build's wasm.
+// Under another hash (a page of the build before a deploy) the files are
+// served no-cache, as under the plain names, which keep working.
+function filesHash(dir) {
+	const hash = createHash('sha256');
+	const add = (path) => {
+		for (const name of readdirSync(join(dir, path)).sort()) {
+			const file = path ? `${path}/${name}` : name;
+			if (statSync(join(dir, file)).isDirectory()) add(file);
+			else hash.update(`${file}\0${hashOf(join(dir, file))}\0`);
+		}
+	};
+	try {
+		add('');
+		return hash.digest('hex').slice(0, 16);
+	} catch {
+		return '';
+	}
+}
+function transportFiles(name) {
+	const dir = transportDir(name);
+	const plain = express.static(dir, fresh);
+	const versioned = express.static(dir, {
+		setHeaders: (res) =>
+			res.set('Cache-Control', res.locals.keptTransport ? KEPT : 'no-cache'),
+	});
+	return (req, res, next) => {
+		const asked = /^\/([0-9a-f]{16})(\/.*)$/.exec(req.url);
+		if (!asked) return plain(req, res, next);
+		const url = req.url;
+		res.locals.keptTransport = !dev && asked[1] === filesHash(dir);
+		req.url = asked[2];
+		versioned(req, res, (error) => {
+			req.url = url;
+			next(error);
+		});
+	};
+}
+/** where the page loads each transport from (config.js `transports`) */
+const transportPaths = () =>
+	dev
+		? {}
+		: {
+				epoxy: `/epoxy/${filesHash(transportDir('epoxy-transport'))}/`,
+				libcurl: `/libcurl/${filesHash(transportDir('libcurl-transport'))}/`,
+			};
+app.use('/epoxy/', transportFiles('epoxy-transport'));
+app.use('/libcurl/', transportFiles('libcurl-transport'));
 // self-hosted font for the page (no Google Fonts round-trip)
 app.use(
 	'/fonts/montserrat/',

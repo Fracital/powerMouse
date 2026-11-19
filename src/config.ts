@@ -3,6 +3,14 @@ import GenericCodec, { AESCodec, Base64Codec, XORCodec } from './Codecs';
 import type { HelperNames } from './helperNames';
 import type { ResolvedHooks } from './hooks';
 import type { PasskeysConfig } from './passkeys/types';
+import {
+	BLOCKER,
+	CONTROLLER_FRAME,
+	CONTROLLER_FRAME_SCRIPT,
+	REWRITE_WORKER,
+	SITE_FRAME_SCRIPT,
+	TRANSPORT_WORKER,
+} from './version';
 
 export declare type ConfigCodec = 'generic' | 'xor' | 'aes' | 'base64';
 
@@ -410,4 +418,32 @@ export function assetName(
 	key: keyof Assets,
 ): string {
 	return assets?.[key] || DEFAULT_ASSETS[key];
+}
+
+/**
+ * A file the controller starts, as it asks for it: its name and the hash of
+ * this build's bytes (src/version.ts TRANSPORT_WORKER), so that one URL is
+ * one file and a host may answer it `immutable`. The name alone in a
+ * build with no hashes (the watch build).
+ */
+export function assetFile(
+	assets: Assets | undefined,
+	key:
+		| 'transportWorker'
+		| 'rewriteWorker'
+		| 'blocker'
+		| 'controllerFrame'
+		| 'controllerFrameScript'
+		| 'siteFrameScript',
+): string {
+	const hash = {
+		transportWorker: TRANSPORT_WORKER,
+		rewriteWorker: REWRITE_WORKER,
+		blocker: BLOCKER,
+		controllerFrame: CONTROLLER_FRAME,
+		controllerFrameScript: CONTROLLER_FRAME_SCRIPT,
+		siteFrameScript: SITE_FRAME_SCRIPT,
+	}[key];
+	const name = assetName(assets, key);
+	return hash ? `${name}?${encodeURIComponent(hash)}` : name;
 }

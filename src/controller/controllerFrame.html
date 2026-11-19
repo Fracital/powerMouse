@@ -15,13 +15,14 @@
 		<script>
 			// The host may serve this frame's script under another name and says
 			// so with ?script=<name> (RemoteControllerInit.assets). A name is a
-			// bare file name only: nothing else is accepted, and without one the
-			// default applies.
+			// bare file name only, with the hash of its bytes after a `?` (the
+			// controller asks for it so, src/config.ts assetFile): nothing else
+			// is accepted, and without one the default applies.
 			(function () {
 				var name = new URLSearchParams(location.search).get('script');
 				var safe =
 					name !== null &&
-					/^[\w.-]+$/.test(name) &&
+					/^[\w.-]+(\?[0-9a-f]{16})?$/.test(name) &&
 					name.indexOf('/') === -1 &&
 					name.indexOf('..') === -1
 						? name

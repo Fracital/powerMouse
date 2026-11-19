@@ -340,7 +340,9 @@ console.log('INFO on:', JSON.stringify(report));
 ok('on: the config carries the option', on.config.adblock === true);
 ok(
 	'on: the module is fetched once, from the directory',
-	requested.filter((url) => url.endsWith('/stomp/blocker.wasm')).length === 1,
+	// (asked for by its hash, src/version.ts BLOCKER)
+	requested.filter((url) => /\/stomp\/blocker\.wasm(\?|$)/.test(url)).length ===
+		1,
 	requested.filter((url) => url.includes('blocker')).join(' '),
 );
 ok(

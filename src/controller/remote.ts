@@ -7,7 +7,7 @@ import {
 	type AdblockOptions,
 	type SiteShields,
 } from '../blocker/types';
-import { assetName } from '../config';
+import { assetFile } from '../config';
 // Host-side controller for origin isolation. The real StompController runs in
 // a hidden controller frame on the proxy origin (dist/controllerFrame.html);
 // this class embeds that frame and mirrors the StompController / Frame API
@@ -29,7 +29,7 @@ import type {
 } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
 import type { CarrierInfo } from '../transport/wispWebTransport';
-import { BUILD } from '../version';
+import { BUILD, CONTROLLER_FRAME_SCRIPT } from '../version';
 import { drawAccountChooser } from './accountChooser';
 import { ClientFrames } from './clientFrames';
 import { GeometryWatch } from './geometry';
@@ -298,12 +298,20 @@ export class RemoteController extends EventTarget {
 			);
 
 		this.element = document.createElement('iframe');
-		// the frame learns its own script's name from the query (sanitised there)
-		const script = init.assets?.controllerFrameScript;
-		this.element.src = `${this.proxyOrigin}${this.directory}${assetName(
-			init.assets,
-			'controllerFrame',
-		)}${script ? `?script=${encodeURIComponent(script)}` : ''}`;
+		// the frame learns its own script's name from the query (sanitised
+		// there); both are asked for by the hash of their bytes
+		// (`controllerFrame.html?<hash>&script=controllerFrame.js%3F<hash>`),
+		// so a host may answer them `immutable`
+		const frame = assetFile(init.assets, 'controllerFrame');
+		const script =
+			init.assets?.controllerFrameScript || CONTROLLER_FRAME_SCRIPT
+				? assetFile(init.assets, 'controllerFrameScript')
+				: '';
+		this.element.src = `${this.proxyOrigin}${this.directory}${frame}${
+			script
+				? `${frame.includes('?') ? '&' : '?'}script=${encodeURIComponent(script)}`
+				: ''
+		}`;
 		// a host page that is cross-origin isolated lets the proxy's frames be
 		// (the permission does not reach another origin's frame by itself):
 		// the controller's frame reads there that the host is, and tells the
