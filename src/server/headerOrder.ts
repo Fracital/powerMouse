@@ -97,10 +97,11 @@ export const CHROME_ACCEPT_ENCODING = 'gzip, deflate, br, zstd';
  * The Priority field Chrome sends over HTTP/2 and HTTP/3 (RFC 9218), by
  * destination, as it sends it for a load with the default priority: a
  * document and its frames u=0, i; a stylesheet and a font u=0; fetch and
- * XHR u=1, i; an image i (urgency 3); a beacon or report u=4, i. A script
- * sends none (urgency 3, not incremental, the default): Chrome raises
- * parser-blocking scripts to u=1, which the worker cannot tell from the
- * async and module scripts most pages load.
+ * XHR u=1, i; an image i (urgency 3); a beacon or report, and a dedicated
+ * or shared worker's script (classic or module, measured Chrome 157), u=4,
+ * i. A script sends none (urgency 3, not incremental, the default): Chrome
+ * raises parser-blocking scripts to u=1, which the worker cannot tell from
+ * the async and module scripts most pages load.
  */
 export function chromePriority(shape: RequestShape): string | null {
 	if (shape.navigation) return 'u=0, i';
@@ -109,8 +110,6 @@ export function chromePriority(shape: RequestShape): string | null {
 		case 'font':
 			return 'u=0';
 		case 'script':
-		case 'sharedworker':
-		case 'worker':
 		case 'serviceworker':
 			return null;
 		case 'image':
@@ -119,6 +118,8 @@ export function chromePriority(shape: RequestShape): string | null {
 		case 'track':
 			return 'i';
 		case 'report':
+		case 'sharedworker':
+		case 'worker':
 			return 'u=4, i';
 		default:
 			return 'u=1, i';
