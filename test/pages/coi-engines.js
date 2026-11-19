@@ -1,12 +1,13 @@
 // What a page, its workers and its frames read of cross-origin isolation
 // (coi-engines suite). The fixture serves this script in a document whose
 // headers the URL names (test/coi-server.mjs, /coi/doc?script=/pages/coi-engines.js);
-// a worker's script is answered with the same headers, a blob: worker is
-// made of the same source. With `frames=<origin>` the page also makes the
+// a worker's script is answered with the same headers, a blob: worker (a
+// classic one and a module) is made of the same source, and a blob: script
+// says whether it ran. With `frames=<origin>` the page also makes the
 // frames FRAMES names (each a document of this script with `frame=<name>`,
 // which posts its report to its parent; another origin's is of `<origin>`).
 // The report is left in `window.__coiEngine`: { page, worker, blobWorker,
-// frames: { name: report | 'no report' } }.
+// blobModuleWorker, blobScript, frames: { name: report | 'no report' } }.
 (() => {
 	const query = new URLSearchParams(location.search);
 	const own = query.getAll('h');
@@ -40,6 +41,22 @@
 					URL.createObjectURL(new Blob([source], { type: 'text/javascript' })),
 				),
 		),
+		started(
+			() =>
+				new Worker(
+					URL.createObjectURL(new Blob([source], { type: 'text/javascript' })),
+					{ type: 'module' },
+				),
+		),
+		new Promise((resolve) => {
+			const script = document.createElement('script');
+			script.src = URL.createObjectURL(
+				new Blob(['self.coiBlobScript = "ran"'], { type: 'text/javascript' }),
+			);
+			script.onload = () => resolve(self.coiBlobScript ?? 'no run');
+			script.onerror = () => resolve('error');
+			document.documentElement.append(script);
+		}),
 	];
 	const RC = 'cross-origin-embedder-policy:require-corp';
 	const CORP = 'cross-origin-resource-policy:cross-origin';
@@ -79,11 +96,19 @@
 					frames[name] = report;
 				}),
 			);
-	Promise.all(reports).then(([worker, blobWorker]) => {
-		const report = { page: read(), worker, blobWorker };
-		if (other) report.frames = frames;
-		const frame = query.get('frame');
-		if (frame) parent.postMessage({ coiFrame: frame, report }, '*');
-		else window.__coiEngine = report;
-	});
+	Promise.all(reports).then(
+		([worker, blobWorker, blobModuleWorker, blobScript]) => {
+			const report = {
+				page: read(),
+				worker,
+				blobWorker,
+				blobModuleWorker,
+				blobScript,
+			};
+			if (other) report.frames = frames;
+			const frame = query.get('frame');
+			if (frame) parent.postMessage({ coiFrame: frame, report }, '*');
+			else window.__coiEngine = report;
+		},
+	);
 })();

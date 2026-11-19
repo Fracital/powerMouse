@@ -1551,11 +1551,22 @@ or for a blob: or data: worker what its bootstrap runs first
 to its own workers. A `credentialless` attribute makes a credentialless
 frame only where the browser's frames have that property (Chrome).
 
-One difference is left, on the suite's known list, and it is not about
-isolation: in the isolated mode (frames of another site's page) a blob:
-worker fails to start in Firefox and WebKit, because its bootstrap imports
-the page's Blob through the service worker, whose fetch() of that blob:
-URL Firefox refuses there (NetworkError, measured).
+A blob: worker's bootstrap imports the page's script through the service
+worker, which reads the page's Blob at a private blob: URL of it, as it
+reads a blob: script or stylesheet. In a frame of another site's page (the
+isolated mode) Firefox and WebKit refuse the worker's fetch() of a blob:
+URL the frame minted (Firefox NetworkError, WebKit "Load failed"), and
+WebKit's worker cannot read a Blob posted to it there either
+(NotFoundError), so the worker failed to start and the script did not run.
+The frame's own request is read: the realm that routes a load to a private
+URL hands the Blob over as the body of a POST to `blob~bytes/<uuid>`
+(src/inject/modules/ObjectURL.ts), which the service worker keeps as that
+realm's real origin's (handedBlobs in src/server/rewrites.ts, 64 MiB, the
+oldest first) and reads when its own fetch() fails. Its first such request
+tells it whether it reads its clients' blob: URLs itself (Chrome, and a
+first-party page anywhere); then it answers 204 and the realm hands no
+more. The coi-engines suite starts a classic and a module blob: worker and
+runs a blob: script in every engine and mode.
 
 ## Left
 

@@ -5524,6 +5524,65 @@ export function bundleRequested(client: string) {
 }
 /** a page's blob: script or stylesheet (src/inject/modules/ObjectURL.ts): its kind, and the private URL's uuid */
 const BLOB_ROUTE = /^\/blob~(js|wjs|module|css)(?:~([\da-f-]{36}))?\//;
+/** the bytes of the Blob behind a private URL, which its realm hands over (src/inject/modules/ObjectURL.ts) */
+const BLOB_BYTES_ROUTE = /^\/blob~bytes\/([\da-f-]{36})$/;
+
+/**
+ * The bytes of the Blobs behind private URLs (BLOB_ROUTE), as the realms
+ * that hold them handed them over, by the URL's uuid, with the real origin
+ * of the realm that did. In a frame of another site's page Firefox and
+ * WebKit refuse this worker's fetch() of a blob: URL the frame minted, and
+ * WebKit's worker cannot read a Blob posted to it there either (NotFoundError);
+ * the body of the frame's own request is read (measured, Firefox 157 and
+ * WebKitGTK 2.52.4). Kept while there is room (HANDED_BYTES, the oldest go
+ * first), as the private URL is: every load of it reads them.
+ */
+const handedBlobs = new Map<
+	string,
+	{ origin: string; type: string; bytes: ArrayBuffer }
+>();
+const HANDED_BYTES = 64 * 1024 * 1024;
+let handedSize = 0;
+/** the loads waiting for bytes not handed over yet */
+const handedWaits = new Map<string, (() => void)[]>();
+/** how long a load whose blob: URL this worker cannot read waits for them */
+const HANDED_WAIT_MS = 3000;
+/**
+ * whether this worker reads its clients' blob: URLs itself, as it learns at
+ * the first bytes handed over: then it needs none (the realm that offers
+ * them is told so, and offers no more)
+ */
+let blobsReadable: boolean | undefined;
+
+function handBlob(
+	uuid: string,
+	handed: { origin: string; type: string; bytes: ArrayBuffer },
+) {
+	const before = handedBlobs.get(uuid);
+	if (before) handedSize -= before.bytes.byteLength;
+	handedBlobs.delete(uuid);
+	handedBlobs.set(uuid, handed);
+	handedSize += handed.bytes.byteLength;
+	for (const [old, { bytes }] of handedBlobs) {
+		if (handedSize <= HANDED_BYTES || old === uuid) break;
+		handedBlobs.delete(old);
+		handedSize -= bytes.byteLength;
+	}
+	for (const wake of handedWaits.get(uuid) ?? []) wake();
+	handedWaits.delete(uuid);
+}
+
+/** the bytes handed over for `uuid`, waited for a while when they have not come yet */
+async function handedBlob(uuid: string) {
+	if (!handedBlobs.has(uuid))
+		await new Promise<void>((resolve) => {
+			const waits = handedWaits.get(uuid) ?? [];
+			waits.push(resolve);
+			handedWaits.set(uuid, waits);
+			setTimeout(resolve, HANDED_WAIT_MS);
+		});
+	return handedBlobs.get(uuid);
+}
 
 export function registerRewrites(
 	router: Router,
@@ -6150,6 +6209,45 @@ export function registerRewrites(
 		return `${rewriter.directory}blob~${script === 'generic' ? 'js' : script ? 'module' : 'css'}/${rewriter.codec.encode(given)}`;
 	}, true);
 
+	// a realm's bytes of a Blob behind a private URL (handedBlobs): kept as
+	// its own real origin's, from its client's URL, as BLOB_MINTED records a
+	// minted URL's. 204 tells it this worker reads its blob: URLs itself
+	router.routes.set(BLOB_BYTES_ROUTE, async (request, path, context) => {
+		if (request.method !== 'POST') return Response.error();
+		const uuid = BLOB_BYTES_ROUTE.exec(path)![1];
+		if (blobsReadable === undefined)
+			try {
+				await (await fetch(`blob:${location.origin}/${uuid}`)).body?.cancel();
+				blobsReadable = true;
+			} catch (error) {
+				blobsReadable = false;
+			}
+		if (blobsReadable) return new Response(null, { status: 204 });
+		const found =
+			context?.clientId && typeof clients !== 'undefined'
+				? await clients.get(context.clientId).catch(() => undefined)
+				: undefined;
+		let origin: string | undefined;
+		try {
+			origin = found?.url.startsWith('blob:')
+				? (await knownOriginOf(found.url))?.origin
+				: parseRoutedURL(
+						found?.url ?? '',
+						rewriter.codec,
+						`${location.origin}${rewriter.directory}`,
+					).url.url.origin;
+		} catch (error) {
+			// not a routed document's nor a known blob: worker's
+		}
+		if (!origin) return Response.error();
+		handBlob(uuid, {
+			origin,
+			type: request.headers.get('content-type') ?? '',
+			bytes: await request.arrayBuffer(),
+		});
+		return new Response(null, { status: 202 });
+	});
+
 	router.routes.set(BLOB_ROUTE, async (request, path) => {
 		const [, kind, at] = BLOB_ROUTE.exec(path)!;
 		let page: StompURL;
@@ -6174,14 +6272,26 @@ export function registerRewrites(
 		}`;
 		const minter = await knownOriginOf(blobURL);
 		if (minter && minter.origin !== page.url.origin) return Response.error();
-		let response: Response;
-		try {
-			response = await fetch(blobURL);
-		} catch (error) {
-			return Response.error();
-		}
-		const type = response.headers.get('content-type');
-		const bytes = new Uint8Array(await response.arrayBuffer());
+		// a private URL's bytes its realm handed over, when this worker
+		// cannot read it (handedBlobs): only that realm's origin's
+		let type: string | null;
+		let bytes: Uint8Array;
+		const ready = at ? handedBlobs.get(at) : undefined;
+		if (ready && ready.origin === page.url.origin) {
+			type = ready.type;
+			bytes = new Uint8Array(ready.bytes);
+		} else
+			try {
+				const response = await fetch(blobURL);
+				type = response.headers.get('content-type');
+				bytes = new Uint8Array(await response.arrayBuffer());
+				blobsReadable = true;
+			} catch (error) {
+				const kept = at ? await handedBlob(at) : undefined;
+				if (kept?.origin !== page.url.origin) return Response.error();
+				type = kept.type;
+				bytes = new Uint8Array(kept.bytes);
+			}
 		const headers: Record<string, string> = { 'cache-control': 'no-store' };
 		if (kind === 'css') {
 			if (type) headers['content-type'] = type;

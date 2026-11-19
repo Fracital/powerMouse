@@ -14,9 +14,10 @@
 // (src/controller/isolationProbe.ts).
 //
 // Each kind of page (test/pages/coi-engines.js) reports what it, its
-// worker, a blob: worker of it and (one kind) its frames read of
-// `crossOriginIsolated` and SharedArrayBuffer, natively and through the demo
-// in both modes, and every part must read as natively:
+// worker, a blob: worker of it (classic and module) and (one kind) its
+// frames read of `crossOriginIsolated` and SharedArrayBuffer, and whether a
+// blob: script of it ran, natively and through the demo in both modes, and
+// every part must read as natively:
 // - in Chrome, always, with the embedder policy the host's page and a
 //   proxied document were served with;
 // - in WebKit (WebKitGTK's MiniBrowser driven by WebKitWebDriver, in a
@@ -73,7 +74,13 @@ const pageURL = ({ headers, frames }) =>
 const parts = (report) => {
 	const named = new Map();
 	const add = (prefix, of) => {
-		for (const part of ['page', 'worker', 'blobWorker'])
+		for (const part of [
+			'page',
+			'worker',
+			'blobWorker',
+			'blobModuleWorker',
+			'blobScript',
+		])
 			named.set(`${prefix}${part}`, of?.[part]);
 	};
 	add('', report);
@@ -85,16 +92,10 @@ const parts = (report) => {
 
 // Differences known and left, by engine, mode and part (a part's name ends
 // with it), with why. One that now reads as natively fails too: take it off.
-const KNOWN = {
-	Firefox: {
-		'isolated: blobWorker':
-			"a blob: worker's bootstrap imports the page's Blob through the service worker, which reads it with fetch(): in a frame of another site's page (the isolated mode) Firefox refuses that fetch (NetworkError, measured) and the worker fails to start",
-	},
-	WebKit: {
-		'isolated: blobWorker':
-			"a blob: worker's bootstrap imports the page's Blob through the service worker, which reads it with fetch(): in a frame of another site's page (the isolated mode) the worker fails to start in WebKit too",
-	},
-};
+// (none left: a blob: worker of a frame of another site's page started in
+// Firefox and WebKit once the page hands its Blob's bytes to the service
+// worker, which cannot read that blob: URL there)
+const KNOWN = {};
 
 /** every part of what a page read through the proxy reads as it did natively */
 function compare(engine, mode, kind, want, got) {

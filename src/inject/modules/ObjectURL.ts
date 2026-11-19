@@ -22,6 +22,12 @@ import ProxyModule from './Proxy';
 import { realmOrigin } from './Unroute';
 
 /**
+ * whether this realm hands the service worker the bytes of the Blobs its
+ * loads are routed to (#handBytes): until the worker says it reads them itself
+ */
+let handsBytes = true;
+
+/**
  * `URL.createObjectURL` mints a blob: URL under the origin of the realm that
  * called it, which is the proxy's: the page gets it under its real origin
  * instead (`blob:<real origin>/<uuid>`), so `new URL(u).origin`, what it
@@ -33,6 +39,29 @@ import { realmOrigin } from './Unroute';
 export default class ObjectURLModule extends Module<Client> {
 	/** the Blobs behind the URLs this realm minted (workerBlobs) */
 	#blobs = blobTable();
+	/**
+	 * Hand the service worker the bytes of the Blob behind a private URL a
+	 * load is routed to (src/server/rewrites.ts, handedBlobs): in a frame of
+	 * another site's page Firefox and WebKit refuse the worker's own read of
+	 * it, and read the body of this realm's request. Sent once per private
+	 * URL, and no more once the worker says it reads them itself (204)
+	 */
+	#handBytes(proxy: string, uuid: string, blob: Blob) {
+		const client = this.client;
+		if (!handsBytes || (client.isDOM && !client.controlled)) return;
+		client
+			.nativeFetch(
+				// (the directory is absolute: a blob: worker's base resolves no path)
+				new URL(`${client.url.directory}blob~bytes/${uuid}`, `${proxy}/`).href,
+				{ method: 'POST', body: blob },
+			)
+			.then(
+				(response) => {
+					if (response.status === 204) handsBytes = false;
+				},
+				() => {},
+			);
+	}
 	/**
 	 * Tell the service worker about a blob: URL this realm minted, so a
 	 * worker started from it is judged as this page (BLOB_MINTED). Sent by
@@ -125,6 +154,7 @@ export default class ObjectURLModule extends Module<Client> {
 				if (!copy) {
 					copy = proxyBlobURL(String(Reflect.apply(create, URLCtor, [blob])));
 					privates.set(href, copy);
+					this.#handBytes(proxy, copy.slice(own.length), blob);
 				}
 				at = `~${copy.slice(own.length)}`;
 			}
