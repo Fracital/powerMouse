@@ -43,95 +43,6 @@ pub fn source_key(text: &str) -> String {
 	key_text(a, b)
 }
 
-/// The key of `text` ([`source_key`]) and its holder ([`holder_statement`]
-/// with `api` and that key), in one pass over the text. The key's chain of
-/// multiplications leaves the processor idle between one byte and the next,
-/// and the holder's copy of the text runs in that time: the holder of a
-/// script that has a function costs no pass of its own. None for the holder
-/// when the text holds one of the first stand-ins ([`holder_statement`] then
-/// looks for others).
-pub fn keyed_holder(api: &str, text: &str) -> (String, Option<String>) {
-	let first: [u8; 6] = STAND_INS[..CARRIED.len()].try_into().unwrap();
-	let (mut a, mut b) = KEY_SEEDS;
-	let bytes = text.as_bytes();
-	// the head names the key, which is known at the end: written with a key
-	// of the same length (nine digits, always) and the digits put in after
-	let mut head = String::new();
-	holder_head(&mut head, api, &"0".repeat(KEY_LENGTH), &FIRST);
-	// (`<api>?.src("<key>"`, holder_head)
-	let key_at = api.len() + "?.src(\"".len();
-	// (the copy is never longer than the text: a carried character is one
-	// byte or three, and its stand-in one)
-	let mut copy = Vec::with_capacity(head.len() + bytes.len() + HOLDER_TAIL.len());
-	copy.extend_from_slice(head.as_bytes());
-	copy.resize(head.len() + bytes.len(), 0);
-	let mut clean = true;
-	let mut at = 0;
-	let mut to = head.len();
-	loop {
-		// eight ASCII bytes at a time, as in source_key, copied as a word
-		// with the carried ones replaced where the word holds one
-		while let Some(chunk) = bytes.get(at..at + 8) {
-			let mut word_bytes: [u8; 8] = chunk.try_into().unwrap();
-			let word = u64::from_le_bytes(word_bytes);
-			if word & HIGH != 0 {
-				break;
-			}
-			(a, b) = key_word(a, b, word);
-			if holder_word(word) {
-				for byte in &mut word_bytes {
-					match HOLDER_BYTES[*byte as usize] {
-						0 => {}
-						6 => clean = false,
-						class => *byte = first[usize::from(class - 1)],
-					}
-				}
-			}
-			copy[to..to + 8].copy_from_slice(&word_bytes);
-			at += 8;
-			to += 8;
-		}
-		let Some(&byte) = bytes.get(at) else {
-			break;
-		};
-		if byte < 0x80 {
-			(a, b) = key_step(a, b, u32::from(byte));
-			copy[to] = match HOLDER_BYTES[byte as usize] {
-				0 => byte,
-				6 => {
-					clean = false;
-					byte
-				}
-				class => first[usize::from(class - 1)],
-			};
-			at += 1;
-			to += 1;
-			continue;
-		}
-		let c = text[at..].chars().next().unwrap();
-		(a, b) = key_char(a, b, c);
-		let width = c.len_utf8();
-		match c {
-			'\u{2028}' | '\u{2029}' => {
-				copy[to] = first[if c == '\u{2028}' { 4 } else { 5 }];
-				to += 1;
-			}
-			_ => {
-				copy[to..to + width].copy_from_slice(&bytes[at..at + width]);
-				to += width;
-			}
-		}
-		at += width;
-	}
-	let key = key_text(a, b);
-	copy.truncate(to);
-	copy.extend_from_slice(HOLDER_TAIL.as_bytes());
-	copy[key_at..key_at + KEY_LENGTH].copy_from_slice(key.as_bytes());
-	// (the text's characters, with ASCII bytes for some: UTF-8 still)
-	let holder = if clean { String::from_utf8(copy).ok() } else { None };
-	(key, holder)
-}
-
 /// how long a key is: seven base-36 digits of one hash and two of the other
 const KEY_LENGTH: usize = 9;
 
@@ -365,6 +276,16 @@ fn holder_head(out: &mut String, api: &str, key: &str, subs: &[char; 6]) {
 /// what the holder writes behind the text
 const HOLDER_TAIL: &str = "*/});";
 
+/// the room the holder of `text` takes where it has the first stand-ins,
+/// which nearly every one has: what it writes ahead, the text's length (a
+/// carried character's stand-in is one byte, a separator's of three) and
+/// what it writes behind
+pub fn holder_room(api: &str, key: &str, text: &str) -> usize {
+	let mut head = String::new();
+	holder_head(&mut head, api, key, &FIRST);
+	head.len() + text.len() + HOLDER_TAIL.len()
+}
+
 /// `text` as a JavaScript string literal, spelled as JSON.stringify spells
 /// it (and the two line separators escaped, which a script's line cannot
 /// hold before ES2019)
@@ -536,7 +457,6 @@ mod tests {
 		assert_eq!(source_key("const x = location.href;"), "1u8p5jibh");
 		assert_eq!(source_key("\u{fc}ber \u{1F600} \u{2028}"), "0plgj6ld2");
 		assert_eq!(source_key(&"x".repeat(1000)), "0263fxhmw");
-		assert_eq!(keyed_holder("0..$s$j", &"x".repeat(1000)).0, "0263fxhmw");
 	}
 
 	#[test]
@@ -670,13 +590,11 @@ mod tests {
 			}
 			assert_eq!(quote(&text), quote_chars(&text), "{text:?}");
 			assert_eq!(source_key(&text), key_units(&text), "{text:?}");
-			// the key and the holder in one pass give what each does on its
-			// own, and no holder only where a first stand-in is
-			let (key, holder) = keyed_holder("0..$s$j", &text);
-			assert_eq!(key, key_units(&text), "{text:?}");
-			assert_eq!(holder.is_none(), text.bytes().any(|byte| (1..=6).contains(&byte)), "{text:?}");
-			if holder.is_some() {
-				assert_eq!(holder, holder_statement("0..$s$j", &key, &text), "{text:?}");
+			// the room the output gives the holder is what it takes, or more
+			// (a separator's stand-in is shorter), where the first stand-ins do
+			if !text.bytes().any(|byte| (1..=6).contains(&byte)) {
+				let holder = holder_statement("0..$s$j", "k", &text).unwrap();
+				assert!(holder.len() <= holder_room("0..$s$j", "k", &text), "{text:?}");
 			}
 			if let Some(holder) = holder_statement("0..$s$j", "k", &text) {
 				let body = &holder[holder.find(",function(){/*").unwrap() + 14..holder.len() - 5];
