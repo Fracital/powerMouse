@@ -139,6 +139,7 @@ import {
 	AWAY_MARKER,
 	BLOB_ASK,
 	CACHED_MARKER,
+	CONNECTION_MARKER,
 	CORS_MARKER,
 	CREDENTIALS_HEADER,
 	ENCODING_MARKER,
@@ -178,8 +179,10 @@ import {
 	SEEN_URGENCY,
 } from '../transport/requestQueue';
 import {
+	connectionMark,
 	factsOf,
 	notingFacts,
+	type EncodedBytes,
 	type ResponseFacts,
 } from '../transport/responseFacts';
 import { fragmentOf, queryOf, withQuery } from '../urlShape';
@@ -1090,6 +1093,11 @@ interface Note {
 	rewriteBy?: 'wasm' | 'js';
 	/** how many bytes the origin's body was, when the transform read it (SIZE_MARKER) */
 	bytes?: number;
+	/**
+	 * how many bytes the origin's body came as before the transport decoded
+	 * its Content-Encoding, once the body has ended (responseFacts.ts)
+	 */
+	encodedBytes?: EncodedBytes;
 }
 
 interface Rewriter {
@@ -3932,6 +3940,15 @@ function genericForward(
 		// the registration that controls the document this navigation makes:
 		// its shell says so before the page's first script
 		const note: Note = control ? { serviceWorker: control } : {};
+		// what the transport said of the origin's answer, when the network
+		// gave it (responseFacts.ts; the cast: the compiler does not follow
+		// fetchUpstream's assignment)
+		const answerFacts =
+			cached || revalidated || fromWorker
+				? null
+				: (upstreamFacts as ResponseFacts | null);
+		// the bytes its body came as, which its end says (SIZE_MARKER)
+		if (answerFacts?.encodedBytes) note.encodedBytes = answerFacts.encodedBytes;
 		// what the document's shell tells its client of its isolation, and
 		// its own embedder policy for the loads it makes
 		if (isolation) {
@@ -4262,13 +4279,17 @@ function genericForward(
 		if (memory && !redirect)
 			responseHeaders.append('server-timing', MEMORY_MARKER);
 		// the protocol the origin's answer came over, which the browser has
-		// as none for the worker's answer (PROTOCOL_MARKER; the cast: the
-		// compiler does not follow fetchUpstream's assignment)
-		const answerFacts = upstreamFacts as ResponseFacts | null;
-		if (!cached && !revalidated && !redirect && answerFacts?.protocol)
+		// as none for the worker's answer (PROTOCOL_MARKER), and when the
+		// steps of its connection happened (CONNECTION_MARKER)
+		if (!redirect && answerFacts?.protocol)
 			responseHeaders.append(
 				'server-timing',
 				`${PROTOCOL_MARKER};desc="${answerFacts.protocol}"`,
+			);
+		if (!redirect && answerFacts?.connection)
+			responseHeaders.append(
+				'server-timing',
+				`${CONNECTION_MARKER};desc=${connectionMark(answerFacts.connection)}`,
 			);
 		// an XMLHttpRequest's entry names its initiator (XHR_MARKER)
 		if (requestTypeOf(serverRequest) === 'XMLHttpRequest endpoint' && !redirect)
@@ -4698,6 +4719,7 @@ function genericForward(
 					: sizeMark(
 							response.headers,
 							transformed !== false ? (note.bytes ?? null) : null,
+							note.encodedBytes,
 						);
 			if (sizes !== null) responseHeaders.append('server-timing', sizes);
 			const kept = encoded ?? (output instanceof Blob ? output : null);
@@ -5179,23 +5201,34 @@ const hasMark = (value: string | null, mark: string) =>
  * body had (SIZE_MARKER), or null when the browser's own count of the
  * answer is the origin's already. `headers` are the origin's and `read` the
  * bytes of the body a transform read (null for a body passed through).
- * A body that came encoded is as long as its Content-Length says; without
- * one (a chunked answer) nothing says how long it was before the transport
- * decoded it, and it counts as its decoded bytes.
+ * A body that came encoded was as long as the transport counted before it
+ * decoded it (`counted`, read once the body has ended: responseFacts.ts),
+ * else as its Content-Length says; with neither (a chunked answer through
+ * a transport that does not count) it counts as its decoded bytes. A body
+ * passed through goes before its end, and only its Content-Length says.
  */
-function sizeMark(headers: Headers, read: number | null): string | null {
+function sizeMark(
+	headers: Headers,
+	read: number | null,
+	counted?: EncodedBytes,
+): string | null {
 	if (read === null) {
 		const told = encodedLength(headers);
 		return told !== null ? `${SIZE_MARKER};dur=${told}` : null;
 	}
-	const [encoded, decoded] = documentSizes(headers, read);
+	const [encoded, decoded] = documentSizes(headers, read, counted);
 	return `${SIZE_MARKER};dur=${encoded};desc=${decoded}`;
+}
+
+/** whether a body came with a Content-Encoding */
+function isEncoded(headers: Headers): boolean {
+	const encoding = (headers.get('content-encoding') ?? '').trim().toLowerCase();
+	return encoding !== '' && encoding !== 'identity';
 }
 
 /** how long an encoded body was by its Content-Length, or null when it came as it is or nothing says */
 function encodedLength(headers: Headers): number | null {
-	const encoding = (headers.get('content-encoding') ?? '').trim().toLowerCase();
-	const encoded = encoding !== '' && encoding !== 'identity';
+	const encoded = isEncoded(headers);
 	const told = headers.get('content-length');
 	const length =
 		told !== null && /^\d+$/.test(told.trim()) ? Number(told.trim()) : null;
@@ -5203,8 +5236,13 @@ function encodedLength(headers: Headers): number | null {
 }
 
 /** the sizes a body of `read` decoded bytes had: [encoded, decoded] (sizeMark) */
-function documentSizes(headers: Headers, read: number): [number, number] {
-	return [encodedLength(headers) ?? read, read];
+function documentSizes(
+	headers: Headers,
+	read: number,
+	counted?: EncodedBytes,
+): [number, number] {
+	const before = isEncoded(headers) ? counted?.() : undefined;
+	return [before ?? encodedLength(headers) ?? read, read];
 }
 
 /** what the forward sets itself on a rewritten body, whatever the origin said */
@@ -7187,7 +7225,7 @@ export function registerRewrites(
 						request.navigation && hints
 							? (segment) => applyMeta(hints, segment)
 							: null,
-						(read) => documentSizes(response.headers, read),
+						(read) => documentSizes(response.headers, read, note.encodedBytes),
 						request.clientId,
 						told,
 					);

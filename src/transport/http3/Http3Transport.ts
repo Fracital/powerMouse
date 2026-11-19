@@ -18,6 +18,11 @@ import type {
 } from '@mercuryworkshop/proxy-transports';
 import { pastASCII, utf8Bytes } from '../../byteString';
 import { NETWORK_PARTITION } from '../networkPartition';
+import {
+	connectionTimes,
+	laterConnection,
+	type ConnectionTimes,
+} from '../responseFacts';
 import { wispGone } from '../RevivingTransport';
 import { logTransport, rideOf, transportLog } from '../transportLog';
 import { AltSvcCache, type AltService } from './altSvc';
@@ -66,6 +71,10 @@ export interface H3Response {
 	status: number;
 	headers: RawHeaders;
 	body: ReadableStream<Uint8Array> | null;
+	/** the body's bytes before stomp-h3 decoded its Content-Encoding, final once it has ended */
+	encoded?: { bytes: number };
+	/** the same, read across the HTTP/3 worker (h3Thread.ts) */
+	encodedBytes?: () => number | undefined;
 }
 export interface H3Connection {
 	readonly alive: boolean;
@@ -123,6 +132,29 @@ const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_WAIT_MS = 300;
 /** quiche's floor for a retransmission timeout (kMinRetransmissionTimeMs) */
 const MIN_RTO_MS = 200;
+/** a lookup a request waited for, in ms from its call */
+interface Lookup {
+	start: number;
+	end: number;
+}
+
+/**
+ * `times` of a new connection with `looked`, the HTTPS record's lookup the
+ * request waited for, as its lookup (spanning the transport's own, when it
+ * said one): Chrome's resolver asks for the record with the addresses
+ */
+function withLookup(
+	times: ConnectionTimes,
+	looked: Lookup | undefined,
+): ConnectionTimes {
+	if (times.reused || !looked) return times;
+	return {
+		...times,
+		dnsStart: Math.min(looked.start, times.dnsStart ?? looked.start),
+		dnsEnd: Math.max(looked.end, times.dnsEnd ?? looked.end),
+	};
+}
+
 /** the RTT a connection is taken to have before it measured one (stomp-h3's initial_rtt) */
 const INITIAL_RTT_MS = 100;
 /** how long HTTP/3 stays off for every origin once the relay is taken to have no UDP */
@@ -371,6 +403,16 @@ export default class Http3Transport implements ProxyTransport {
 	#channelEnded = new WeakSet<H3Connection>();
 	/** each connection's blackhole watch: a request to watch, and the call that ends its watch */
 	#watches = new WeakMap<H3Connection, () => () => void>();
+	/** when each connection's steps happened, and whether a request has reported them (#connectionTimes) */
+	#opened = new WeakMap<
+		H3Connection,
+		{
+			connectStart: number;
+			secureStart: number;
+			connectEnd: number;
+			reported: boolean;
+		}
+	>();
 
 	/**
 	 * `moduleUrl` is where stomp_h3.js lives (resolved by the host);
@@ -507,6 +549,7 @@ export default class Http3Transport implements ProxyTransport {
 		headers: RawHeaders,
 		signal: AbortSignal | undefined,
 	): Promise<TransferrableResponse> {
+		const asked = performance.now();
 		const origin = remote.origin;
 		// what it knows of an origin and the QUIC connections it keeps are
 		// the request's network partition's (the field the service worker
@@ -523,8 +566,13 @@ export default class Http3Transport implements ProxyTransport {
 		let alt = usable ? this.#lookup(key, origin) : null;
 		// a name not met before: its HTTPS record, as Chrome's resolver asks
 		// for it with the addresses, may name h3 for this first request
-		if (!alt && usable && this.#options.dns && this.#asksDns(key, remote))
+		/** when the request waited for that record, from its call: the lookup Chrome reports */
+		let looked: Lookup | undefined;
+		if (!alt && usable && this.#options.dns && this.#asksDns(key, remote)) {
+			const lookupStart = performance.now() - asked;
 			alt = await this.#fromDns(key, remote, headers, this.#headStart(key));
+			looked = { start: lookupStart, end: performance.now() - asked };
+		}
 		let retryBody = body;
 		let via: Http3Info['recent'][number]['via'] = 'base';
 		/** the QUIC connection that failed under this request, when it did */
@@ -538,6 +586,7 @@ export default class Http3Transport implements ProxyTransport {
 				// watched until it is heard from (blackholeDelay)
 				const unwatch = this.#watches.get(conn)?.();
 				try {
+					const sentAt = performance.now();
 					const response = await this.#viaH3(
 						conn,
 						remote,
@@ -545,6 +594,8 @@ export default class Http3Transport implements ProxyTransport {
 						prepared,
 						headers,
 					).finally(() => unwatch?.());
+					(response as { connection?: ConnectionTimes }).connection =
+						this.#connectionTimes(conn, asked, sentAt, looked);
 					this.#note(remote, 'h3');
 					this.#learn(key, remote, response.headers);
 					// the copy kept for a retry is not needed
@@ -573,6 +624,7 @@ export default class Http3Transport implements ProxyTransport {
 			}
 		}
 
+		const baseCalled = performance.now();
 		const response = await this.base.request(
 			remote,
 			method,
@@ -580,6 +632,17 @@ export default class Http3Transport implements ProxyTransport {
 			headers,
 			signal,
 		);
+		// the base transport's times are from its own call, after the
+		// record's wait (and a QUIC try): from this request's call, with
+		// that wait as its lookup
+		const told = connectionTimes(
+			(response as { connection?: unknown }).connection,
+		);
+		if (told)
+			(response as { connection?: ConnectionTimes }).connection = withLookup(
+				laterConnection(told, baseCalled - asked),
+				looked,
+			);
 		this.#note(remote, via);
 		// As Chrome: a request whose QUIC connection failed under it (a
 		// blackhole, the idle timeout, an error of the connection's) is sent
@@ -858,6 +921,7 @@ export default class Http3Transport implements ProxyTransport {
 		// connection's relay is not this stream's to give
 		const relay = this.#currentRelay();
 		let channel: DatagramChannel;
+		const connectStart = performance.now();
 		try {
 			channel = await udp(alt.host, alt.port);
 		} catch (error) {
@@ -1106,6 +1170,7 @@ export default class Http3Transport implements ProxyTransport {
 				return out.abort(reason).catch(() => {});
 			},
 		});
+		const secureStart = performance.now();
 		try {
 			conn = await module.connect(alt.host, watch.readable, write, {
 				...(this.#options.pem ? { pem: this.#options.pem } : {}),
@@ -1116,6 +1181,12 @@ export default class Http3Transport implements ProxyTransport {
 				return null;
 			}
 			this.#connections.set(origin, conn);
+			this.#opened.set(conn, {
+				connectStart,
+				secureStart,
+				connectEnd: performance.now(),
+				reported: false,
+			});
 			this.#watches.set(conn, watchRequest);
 			measure();
 			syncPings();
@@ -1170,6 +1241,38 @@ export default class Http3Transport implements ProxyTransport {
 			);
 	}
 
+	/**
+	 * The times of `conn` for a request asked for at `asked` and sent at
+	 * `sent` (responseFacts.ts): the steps of a connection this request
+	 * opened, which only the first request on it reports; a connection that
+	 * was there when the request was asked for, or that another request
+	 * reported, is reused
+	 */
+	#connectionTimes(
+		conn: H3Connection,
+		asked: number,
+		sent: number,
+		looked: Lookup | undefined,
+	): ConnectionTimes {
+		const opened = this.#opened.get(conn);
+		const requestStart = Math.max(0, sent - asked);
+		if (!opened || opened.reported || opened.connectStart < asked)
+			return { reused: true, requestStart };
+		opened.reported = true;
+		// (QUIC's handshake is its connection: secure from its start, as
+		// Chrome reports it)
+		return withLookup(
+			{
+				reused: false,
+				connectStart: opened.connectStart - asked,
+				secureStart: opened.secureStart - asked,
+				connectEnd: opened.connectEnd - asked,
+				requestStart,
+			},
+			looked,
+		);
+	}
+
 	async #viaH3(
 		conn: H3Connection,
 		remote: URL,
@@ -1184,6 +1287,7 @@ export default class Http3Transport implements ProxyTransport {
 			out,
 			body.h3,
 		);
+		const encoded = response.encoded;
 		return {
 			body: response.body as unknown as TransferrableResponse['body'],
 			headers: response.headers,
@@ -1191,6 +1295,9 @@ export default class Http3Transport implements ProxyTransport {
 			statusText: STATUS_TEXT[response.status] ?? '',
 			// one QUIC connection takes every request (socketPool.ts)
 			httpVersion: '3',
+			// what the body came as before decoding (responseFacts.ts)
+			encodedBytes:
+				response.encodedBytes ?? (encoded ? () => encoded.bytes : undefined),
 		} as TransferrableResponse;
 	}
 

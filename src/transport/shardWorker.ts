@@ -17,6 +17,7 @@ import { withEchCache } from './echCache';
 import { base64url, httpsQuery } from './http3/dnsHttps';
 import { postToPort, transferablesOf } from './messages';
 import { promptSink } from './promptSink';
+import { withoutEncodedBytes } from './responseFacts';
 import { RpcHelper } from './rpc';
 import {
 	errorText,
@@ -157,14 +158,17 @@ export function serveShard(scope: DedicatedWorkerGlobalScope) {
 					// the text is what RevivingTransport reads
 					throw new Error(errorText(error), { cause: error });
 				}
-				if (response.body instanceof ReadableStream) {
+				// (a function, which crosses with the body's end: responseFacts.ts)
+				const [plain, encodedBytes] = withoutEncodedBytes(response);
+				if (plain.body instanceof ReadableStream) {
 					const pushed = sendBody(
-						response.body as ReadableStream<Uint8Array>,
+						plain.body as ReadableStream<Uint8Array>,
 						true,
+						encodedBytes,
 					);
-					return [{ ...response, body: pushed }, [pushed.$stompBodyPort]];
+					return [{ ...plain, body: pushed }, [pushed.$stompBodyPort]];
 				}
-				return [response, transferablesOf(response.body)];
+				return [plain, transferablesOf(plain.body)];
 			},
 			connect: async ({ instance, url, protocols, requestHeaders, port }) => {
 				const { transport } = get(instance);

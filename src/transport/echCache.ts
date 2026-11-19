@@ -19,6 +19,8 @@ export interface EchCacheEntry {
 	key: string;
 	ech: Uint8Array | null;
 	until: number;
+	/** the HTTPS record's answer as it came (httpsAnswer: Http3Transport's h3 from the record), when epoxy kept it */
+	answer?: ArrayBuffer | null;
 }
 
 /** what epoxy-transport's `ech_cache` option takes */
@@ -68,7 +70,11 @@ async function load(): Promise<EchCacheEntry[]> {
 		const now = Date.now();
 		const fresh: EchCacheEntry[] = [];
 		keys.forEach((key, at) => {
-			const value = values[at] as { ech?: unknown; until?: unknown };
+			const value = values[at] as {
+				ech?: unknown;
+				until?: unknown;
+				answer?: unknown;
+			};
 			const ech = value?.ech;
 			if (
 				typeof key !== 'string' ||
@@ -79,7 +85,12 @@ async function load(): Promise<EchCacheEntry[]> {
 				store.delete(key);
 				return;
 			}
-			fresh.push({ key, ech, until: value.until });
+			const answer = value.answer;
+			fresh.push(
+				answer === null || answer instanceof ArrayBuffer
+					? { key, ech, until: value.until, answer }
+					: { key, ech, until: value.until },
+			);
 		});
 		if (fresh.length > ECH_KEPT) {
 			fresh.sort((a, b) => b.until - a.until);
@@ -91,14 +102,24 @@ async function load(): Promise<EchCacheEntry[]> {
 	}
 }
 
-function put({ key, ech, until }: EchCacheEntry) {
+function put({ key, ech, until, answer }: EchCacheEntry) {
 	if (!(until > Date.now())) return;
 	void db().then((database) => {
 		try {
 			database
 				?.transaction(STORE, 'readwrite')
 				.objectStore(STORE)
-				.put({ ech: ech ? new Uint8Array(ech) : null, until }, key);
+				.put(
+					{
+						ech: ech ? new Uint8Array(ech) : null,
+						until,
+						// (a copy: epoxy keeps its own)
+						...(answer === undefined
+							? {}
+							: { answer: answer ? answer.slice(0) : null }),
+					},
+					key,
+				);
 		} catch {
 			// not kept: the next realm asks again
 		}
