@@ -504,6 +504,12 @@ export async function readMarkup(
 		) as ReadableStreamDefaultReader<Uint8Array>;
 		const decoder = new NativeTextDecoder();
 		let text = '';
+		// the record in hand's `<length>\n` once read: until the record is
+		// all there only the text's length is looked at (searching a text
+		// that grows by a chunk at a time flattens it each time, quadratic
+		// over a record of megabytes: 0.6 s for CNN's head)
+		let line = -1;
+		let length = 0;
 		for (;;) {
 			const chunk = (await Reflect.apply(
 				readChunk,
@@ -517,9 +523,11 @@ export async function readMarkup(
 			]) as string;
 			// each record is `<length>\n<JSON>`
 			for (;;) {
-				const line = Reflect.apply(indexOf, text, ['\n']) as number;
-				if (line < 0) break;
-				const length = +(Reflect.apply(slice, text, [0, line]) as string);
+				if (line < 0) {
+					line = Reflect.apply(indexOf, text, ['\n']) as number;
+					if (line < 0) break;
+					length = +(Reflect.apply(slice, text, [0, line]) as string);
+				}
 				if (text.length < line + 1 + length) break;
 				// (by index: a page's Array.prototype iterator is not asked)
 				const record = parseJSON(
@@ -529,6 +537,7 @@ export async function readMarkup(
 				const table = record[1];
 				const sizes = record[2];
 				text = Reflect.apply(slice, text, [line + 1 + length]) as string;
+				line = -1;
 				ended = sizes !== null;
 				feed(markup, table, sizes, ended);
 				if (ended) return;

@@ -15,9 +15,23 @@
 //     sizes    a body of a known length, no Content-Length
 //     frame    two sandboxed frames of the paint case: allow-scripts, and
 //              nothing allowed
+//     bighead  a head of 1.5 MB, most of it one <style> with url()s (CNN's
+//              is 3.7 MB, a 3.1 MB style), and scripts that read it
 
 /** the head's padding: the worker reads the encoding from the first 1024 bytes */
 const PAD = `<!-- ${'pad '.repeat(300)} -->`;
+
+/** CSS of about `size` characters, a url() in every eighth rule */
+function rules(size) {
+	let css = '';
+	for (let i = 0; css.length < size; i++)
+		css +=
+			i % 8
+				? `.r${i} .x${i % 97}>p{margin:${i % 13}px;border-top:1px solid #${(i % 4096).toString(16).padStart(3, '0')};flex:none}\n`
+				: `.r${i}{background:url(img/${i}.png) no-repeat}\n`;
+	return css;
+}
+const BIG = rules(1536 * 1024);
 
 const CASES = {
 	paint: [
@@ -31,6 +45,10 @@ const CASES = {
 	sizes: [
 		`<!doctype html><html><head><meta charset="utf-8"><title>stream sizes</title>${PAD}</head><body><h1 id="early">early</h1>`,
 		`<p>${'size '.repeat(4000)}</p><script>window.__done = true;</script></body></html>`,
+	],
+	bighead: [
+		`<!doctype html><html><head><meta charset="utf-8"><title>stream bighead</title>${PAD}<script>window.__order = ['head'];</script><style id="big">#early{color:rgb(1, 2, 3)}\n${BIG}</style><script>__order.push('after style', String(document.getElementById('big').textContent.length));</script></head><body><h1 id="early">early</h1><script>__order.push('a');</script>`,
+		`<p id="late">late</p><script>__order.push('end'); window.__done = true;</script></body></html>`,
 	],
 	frame: [
 		`<!doctype html><html><head><meta charset="utf-8"><title>stream frame</title>${PAD}</head><body><iframe id="inner" sandbox="allow-scripts" src="/stream/paint?wait=__WAIT__"></iframe><iframe id="bare" sandbox="" src="/stream/paint?wait=__WAIT__"></iframe>`,
