@@ -12,6 +12,7 @@ import { headersFixture } from './headers-server.mjs';
 import { perf } from './perf-server.mjs';
 import { shapes } from './shapes-server.mjs';
 import { sop } from './sop-server.mjs';
+import { stream } from './stream-server.mjs';
 import { visited } from './visited-server.mjs';
 import { wpt, wptUpgrade } from './wpt-server.mjs';
 
@@ -24,8 +25,9 @@ import { wpt, wptUpgrade } from './wpt-server.mjs';
 // /sop/ (the same-origin policy suites) by test/sop-server.mjs, /visited/
 // (the visited suite) by test/visited-server.mjs, /coi/ (the
 // cross-origin isolation suite) by test/coi-server.mjs and /shape/ (the
-// url-shapes suite) by test/shapes-server.mjs and /perf/ (the performance
-// suites) by test/perf-server.mjs.
+// url-shapes suite) by test/shapes-server.mjs, /perf/ (the performance
+// suites) by test/perf-server.mjs and /stream/ (documents that arrive in
+// parts, the html-stream suite) by test/stream-server.mjs.
 const pagesDir = fileURLToPath(new URL('./pages/', import.meta.url));
 /** the early-error cases' texts by their line, read at the first request */
 let earlyCases;
@@ -237,6 +239,7 @@ export function startFixture(port = 8084) {
 		if (headersFixture(req, res)) return;
 		if (shapes(req, res)) return;
 		if (perf(req, res)) return;
+		if (stream(req, res)) return;
 		if (await wpt(req, res, port)) return;
 		served.push(path);
 		if (path === '/requests') {

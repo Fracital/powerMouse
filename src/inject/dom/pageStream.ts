@@ -428,3 +428,85 @@ const startTag = (markup: string, name: string) =>
 const isNamed = (node: Node, name: string) =>
 	Reflect.apply(namespaceURI, node, []) === HTML &&
 	Reflect.apply(localName, node, []) === name;
+
+// the browser's own, taken when the bundle runs: the page's scripts run
+// while the markup is still read
+const nativeFetch = globalThis.fetch;
+const responseOk = Reflect.getOwnPropertyDescriptor(
+	Response.prototype,
+	'ok',
+)!.get!;
+const responseBody = Reflect.getOwnPropertyDescriptor(
+	Response.prototype,
+	'body',
+)!.get!;
+const getReader = ReadableStream.prototype.getReader;
+const readChunk = ReadableStreamDefaultReader.prototype.read;
+const NativeTextDecoder = TextDecoder;
+const decode = TextDecoder.prototype.decode;
+const parseJSON = JSON.parse;
+const indexOf = String.prototype.indexOf;
+const slice = String.prototype.slice;
+
+/**
+ * Read the rest of a document's markup from the worker (its MARKUP_ROUTE,
+ * at `url`), handing each piece to `feed` as it comes: its markup, its
+ * table of prewritten scripts and styles (or null), and with the last one
+ * the sizes the document's body had ([encoded, decoded]). A read that
+ * fails ends the markup where it got to, as a body the network cut short.
+ */
+export async function readMarkup(
+	url: string,
+	feed: (
+		markup: string,
+		table: unknown,
+		sizes: [number, number] | null,
+		end: boolean,
+	) => void,
+): Promise<void> {
+	let ended = false;
+	try {
+		const response = (await Reflect.apply(nativeFetch, globalThis, [
+			url,
+			{ cache: 'no-store', credentials: 'omit' },
+		])) as Response;
+		if (!Reflect.apply(responseOk, response, []))
+			throw new Error(`no markup stream (${url})`);
+		const reader = Reflect.apply(
+			getReader,
+			Reflect.apply(responseBody, response, []),
+			[],
+		) as ReadableStreamDefaultReader<Uint8Array>;
+		const decoder = new NativeTextDecoder();
+		let text = '';
+		for (;;) {
+			const chunk = (await Reflect.apply(
+				readChunk,
+				reader,
+				[],
+			)) as ReadableStreamReadResult<Uint8Array>;
+			if (chunk.done) break;
+			text += Reflect.apply(decode, decoder, [
+				chunk.value,
+				{ stream: true },
+			]) as string;
+			// each record is `<length>\n<JSON>`
+			for (;;) {
+				const line = Reflect.apply(indexOf, text, ['\n']) as number;
+				if (line < 0) break;
+				const length = +(Reflect.apply(slice, text, [0, line]) as string);
+				if (text.length < line + 1 + length) break;
+				const [markup, table, sizes] = parseJSON(
+					Reflect.apply(slice, text, [line + 1, line + 1 + length]) as string,
+				) as [string, unknown, [number, number] | null];
+				text = Reflect.apply(slice, text, [line + 1 + length]) as string;
+				ended = sizes !== null;
+				feed(markup, table, sizes, ended);
+				if (ended) return;
+			}
+		}
+	} catch (error) {
+		console.warn('Stomp: the markup stream failed:', error);
+	}
+	if (!ended) feed('', null, null, true);
+}

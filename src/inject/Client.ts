@@ -1066,6 +1066,12 @@ export default class Client {
 			return false;
 		}
 	}
+	/**
+	 * @internal the sizes the document's body had, [encoded, decoded], when
+	 * the shell is not what the browser counted it by (its markup came after
+	 * the shell, DocumentClient loadHTMLStream); for its navigation timing
+	 */
+	documentSizes: [number, number] | null = null;
 	/** @internal this bundle's native fetch, which runs in this client's realm */
 	nativeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
 		return fetch(input, init);

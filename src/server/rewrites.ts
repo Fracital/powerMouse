@@ -29,6 +29,7 @@ import { freshFrameDocument } from '../freshFrame';
 import { rewriteLinkHeader } from '../headers';
 import { helperNames } from '../helperNames';
 import { modifyHTML, modifyHTMLStreamed } from '../htmlShell';
+import { completeLength } from '../inject/dom/writeTokenizer';
 import {
 	delegatedTo,
 	documentIsolates,
@@ -138,6 +139,7 @@ import {
 	JAR_MARKER,
 	KEPT_MARKER,
 	LOAD_HEADER,
+	MARKUP_ROUTE,
 	MEMORY_MARKER,
 	OPAQUE_COPY_HEADER,
 	OPAQUE_HEADER,
@@ -5017,14 +5019,27 @@ const hasMark = (value: string | null, mark: string) =>
  * decoded it, and it counts as its decoded bytes.
  */
 function sizeMark(headers: Headers, read: number | null): string | null {
+	if (read === null) {
+		const told = encodedLength(headers);
+		return told !== null ? `${SIZE_MARKER};dur=${told}` : null;
+	}
+	const [encoded, decoded] = documentSizes(headers, read);
+	return `${SIZE_MARKER};dur=${encoded};desc=${decoded}`;
+}
+
+/** how long an encoded body was by its Content-Length, or null when it came as it is or nothing says */
+function encodedLength(headers: Headers): number | null {
 	const encoding = (headers.get('content-encoding') ?? '').trim().toLowerCase();
 	const encoded = encoding !== '' && encoding !== 'identity';
 	const told = headers.get('content-length');
 	const length =
 		told !== null && /^\d+$/.test(told.trim()) ? Number(told.trim()) : null;
-	if (read === null)
-		return encoded && length !== null ? `${SIZE_MARKER};dur=${length}` : null;
-	return `${SIZE_MARKER};dur=${encoded && length !== null ? length : read};desc=${read}`;
+	return encoded ? length : null;
+}
+
+/** the sizes a body of `read` decoded bytes had: [encoded, decoded] (sizeMark) */
+function documentSizes(headers: Headers, read: number): [number, number] {
+	return [encodedLength(headers) ?? read, read];
 }
 
 /** what the forward sets itself on a rewritten body, whatever the origin said */
@@ -5103,6 +5118,237 @@ export function withRefreshMeta(markup: string, value: string): string {
 
 /** the route of a document (src/rewriteHTML.ts routeHTML) */
 const DOCUMENT_ROUTE = /^\/html(:nested:[^/]*)?\//;
+
+/** an HTML document's first part, read until its encoding and its head are known (readHead) */
+interface HeadRead {
+	encoding: string;
+	/** the markup so far */
+	text: string;
+	/** how many bytes of the body that was */
+	bytes: number;
+	/** the body's reader, with more to come; null when that was all */
+	rest: ReadableStreamDefaultReader<Uint8Array> | null;
+	/** the rest's first read, made already */
+	next: Promise<ReadableStreamReadResult<Uint8Array>> | null;
+	decoder: TextDecoder;
+}
+
+/** the bytes the encoding is decided by: a byte order mark and the prescan's (src/server/charset.ts) */
+const PRESCAN_BYTES = 1024;
+/** where the body starts: what the head's metas are read up to (metaPolicies) */
+const BODY_START = /<body[\s>]/i;
+
+/**
+ * Read an HTML document's body until its encoding is decided (its first
+ * 1024 bytes) and its head has ended (`<body`, which the meta readers stop
+ * at), or to its end. The decode is the whole body's (a decoder fed as the
+ * bytes come gives the same text).
+ */
+async function readHead(
+	response: Response,
+	contentType: string | null,
+): Promise<HeadRead | null> {
+	if (!response.body) return null;
+	const reader = response.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let bytes = 0;
+	let done = false;
+	while (bytes < PRESCAN_BYTES) {
+		const chunk = await reader.read();
+		if (chunk.done) {
+			done = true;
+			break;
+		}
+		chunks.push(chunk.value);
+		bytes += chunk.value.byteLength;
+	}
+	const first = new Uint8Array(bytes);
+	let at = 0;
+	for (const chunk of chunks) {
+		first.set(chunk, at);
+		at += chunk.byteLength;
+	}
+	const encoding = documentEncoding(first, contentType);
+	const decoder = new TextDecoder(encoding);
+	let text = decoder.decode(first, { stream: !done });
+	let searched = 0;
+	while (!done && !BODY_START.test(text.slice(Math.max(0, searched - 5)))) {
+		searched = text.length;
+		const chunk = await reader.read();
+		if (chunk.done) {
+			done = true;
+			text += decoder.decode();
+			break;
+		}
+		bytes += chunk.value.byteLength;
+		text += decoder.decode(chunk.value, { stream: true });
+	}
+	// what comes at once is read too: a document that is all there (most
+	// are) goes in its shell, as it always did, and is not worth a second
+	// request; one that keeps coming, or pauses, streams
+	let next: Promise<ReadableStreamReadResult<Uint8Array>> | null = null;
+	while (!done && bytes < WHOLE_BYTES) {
+		next = reader.read();
+		const chunk = await Promise.race([
+			next,
+			new Promise<null>((resolve) => setTimeout(() => resolve(null), QUICK_MS)),
+		]);
+		if (chunk === null) break;
+		next = null;
+		if (chunk.done) {
+			done = true;
+			text += decoder.decode();
+			break;
+		}
+		bytes += chunk.value.byteLength;
+		text += decoder.decode(chunk.value, { stream: true });
+	}
+	return { encoding, text, bytes, rest: done ? null : reader, next, decoder };
+}
+/** a document of at most this much that arrives at once is not streamed (readHead) */
+const WHOLE_BYTES = 256 * 1024;
+/** what "at once" is: the next chunk within this */
+const QUICK_MS = 20;
+
+/** a document's markup streams the worker holds for their clients, by token (MARKUP_ROUTE) */
+const markupStreams = new Map<
+	string,
+	{ stream: ReadableStream<Uint8Array>; timer: ReturnType<typeof setTimeout> }
+>();
+/** how long a markup stream waits for its client before it goes */
+const MARKUP_WAIT_MS = 60_000;
+/** a piece of markup is cut once this much is in hand, or after SEGMENT_MS */
+const SEGMENT_CHARS = 32 * 1024;
+const SEGMENT_MS = 30;
+
+const TOKEN_ALPHABET =
+	'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+/**
+ * The rest of a document's markup, for its client as it arrives
+ * (MARKUP_ROUTE): `first`, the markup read so far (with what the worker
+ * added to it), then the body as `read`'s reader gives it, in pieces cut
+ * between whole tokens (never inside a script's or a style's text), each
+ * with the prewritten table of its inline scripts and styles (`prewrite`)
+ * and `meta` shown each later piece; the last piece carries the sizes the
+ * body had (`sizes`, of its decoded byte count: [encoded, decoded]). Answers
+ * the token the client asks with.
+ */
+function streamMarkup(
+	read: HeadRead,
+	first: string,
+	prewrite: (segment: string) => {
+		finish: () => Promise<Prewritten>;
+	} | null,
+	meta: ((segment: string) => void) | null,
+	sizes: (read: number) => [number, number],
+): string {
+	const random = new Uint8Array(22);
+	crypto.getRandomValues(random);
+	let token = '';
+	for (const byte of random) token += TOKEN_ALPHABET[byte & 63];
+	const reader = read.rest!;
+	const decoder = read.decoder;
+	const encoder = new TextEncoder();
+	let total = read.bytes;
+	const stream = new ReadableStream<Uint8Array>({
+		start(controller) {
+			let order = Promise.resolve();
+			// a <base>: the worker's outputs would be for another URL
+			let based = false;
+			let later = false;
+			const send = (segment: string, end: boolean) => {
+				if (later) meta?.(segment);
+				later = true;
+				if (!based && hasBase(segment)) based = true;
+				const job = based ? null : prewrite(segment);
+				order = order.then(async () => {
+					let table: Prewritten | null = null;
+					if (job)
+						try {
+							table = await job.finish();
+						} catch (error) {
+							console.warn('Stomp: no prewritten table:', error);
+						}
+					const record = JSON.stringify([
+						segment,
+						table,
+						end ? sizes(total) : null,
+					]);
+					try {
+						controller.enqueue(encoder.encode(`${record.length}\n${record}`));
+						if (end) controller.close();
+					} catch (error) {
+						// the page went away
+					}
+				});
+			};
+			let pending = first;
+			// a cut is tried once this much is in hand (twice what a cut that
+			// found no whole token had: a script's text may be megabytes)
+			let tryAt = 0;
+			let last = Date.now();
+			// what came since the last cut, when the origin pauses: cut then
+			let timer: ReturnType<typeof setTimeout> | null = null;
+			const cut = () => {
+				if (timer !== null) clearTimeout(timer);
+				timer = null;
+				let end = completeLength(pending);
+				// (never between the halves of a surrogate pair)
+				const unit = pending.charCodeAt(end - 1);
+				if (unit >= 0xd800 && unit < 0xdc00) end--;
+				if (end === 0) {
+					tryAt = pending.length * 2;
+					return;
+				}
+				send(pending.slice(0, end), false);
+				pending = pending.slice(end);
+				tryAt = 0;
+				last = Date.now();
+			};
+			cut();
+			void (async () => {
+				try {
+					for (let next = read.next; ; next = null) {
+						const chunk = await (next ?? reader.read());
+						if (chunk.done) break;
+						total += chunk.value.byteLength;
+						pending += decoder.decode(chunk.value, { stream: true });
+						if (pending.length < tryAt) continue;
+						if (
+							pending.length >= SEGMENT_CHARS ||
+							Date.now() - last >= SEGMENT_MS
+						)
+							cut();
+						else
+							timer ??= setTimeout(() => {
+								timer = null;
+								if (pending.length >= tryAt) cut();
+							}, SEGMENT_MS);
+					}
+					pending += decoder.decode();
+				} catch (error) {
+					// the body failed: what came is the page, as the browser's
+					// parser would have it
+				}
+				if (timer !== null) clearTimeout(timer);
+				send(pending, true);
+			})();
+		},
+		cancel() {
+			reader.cancel().catch(() => {});
+		},
+	});
+	markupStreams.set(token, {
+		stream,
+		timer: setTimeout(() => {
+			if (markupStreams.get(token)?.stream !== stream) return;
+			markupStreams.delete(token);
+			stream.cancel().catch(() => {});
+		}, MARKUP_WAIT_MS),
+	});
+	return token;
+}
 /** a page's blob: script or stylesheet (src/inject/modules/ObjectURL.ts): its kind, and the private URL's uuid */
 const BLOB_ROUTE = /^\/blob~(js|wjs|module|css)(?:~([\da-f-]{36}))?\//;
 
@@ -5871,6 +6117,27 @@ export function registerRewrites(
 		},
 	);
 
+	// the rest of a document's markup, for the client its shell made
+	router.routes.set(
+		new RegExp(`^/${MARKUP_ROUTE}-([A-Za-z0-9_-]{22})$`),
+		(_request, path) => {
+			const token = path.slice(MARKUP_ROUTE.length + 2);
+			const kept = markupStreams.get(token);
+			if (!kept) return new Response(null, { status: 404 });
+			markupStreams.delete(token);
+			clearTimeout(kept.timer);
+			return new Response(kept.stream, {
+				headers: {
+					'content-type': 'text/plain; charset=utf-8',
+					'cache-control': 'no-store',
+					// (a document of an opaque origin reads it too: one the page
+					// sandboxed without allow-same-origin)
+					'access-control-allow-origin': '*',
+				},
+			});
+		},
+	);
+
 	router.routes.set(
 		DOCUMENT_ROUTE,
 		genericForward(
@@ -5939,13 +6206,27 @@ export function registerRewrites(
 				// for document.characterSet. An XML document is decoded by the
 				// XML rules (no meta, the declaration's encoding) and its shell
 				// served in what they name, as an HTML one is.
-				const bytes = new Uint8Array(await response.arrayBuffer());
-				note.bytes = bytes.byteLength;
+				//
+				// An HTML document is read as it comes: its encoding is known from
+				// its first 1024 bytes, and what its head's metas say (its
+				// policies, its client hints) once the body starts. The shell goes
+				// out then, and the rest of the markup follows it as it arrives
+				// (streamMarkup), where the page waited for the last byte.
 				const xml = isXMLDocumentMime(mime);
-				let encoding = xml
-					? xmlEncoding(bytes, contentType)
-					: documentEncoding(bytes, contentType);
-				const decoded = decodeDocument(bytes, contentType, encoding);
+				const read = xml ? null : await readHead(response, contentType);
+				let bytes: Uint8Array | null = null;
+				if (!read) {
+					bytes = new Uint8Array(await response.arrayBuffer());
+					note.bytes = bytes.byteLength;
+				} else if (!read.rest) note.bytes = read.bytes;
+				let encoding = read
+					? read.encoding
+					: xml
+						? xmlEncoding(bytes!, contentType)
+						: documentEncoding(bytes!, contentType);
+				const decoded = read
+					? read.text
+					: decodeDocument(bytes!, contentType, encoding);
 				// (a root whose name the shell cannot write in a legacy
 				// encoding: the shell is UTF-8, xmlShell.ts)
 				if (xml) encoding = xmlShellEncoding(decoded, encoding);
@@ -6180,20 +6461,53 @@ export function registerRewrites(
 								...(fingerprintSeed !== undefined ? { fingerprintSeed } : {}),
 							}
 						: rewriter.config;
-				const job = prewrite(
-					markup,
-					url,
+				const partition =
 					mayKeep({
 						method: request.method,
 						requestHeaders: request.headers,
 						status: response.status,
 						responseHeaders: response.headers,
 					}) &&
-						// (a policy its frame set on it is not the document's)
-						embedded !== 'apply'
+					// (a policy its frame set on it is not the document's)
+					embedded !== 'apply'
 						? request.partition
-						: null,
-				);
+						: null;
+				// the rest of the markup is still to come: the shell goes out now,
+				// and the markup to the client as it comes (streamMarkup)
+				if (read?.rest) {
+					const token = streamMarkup(
+						read,
+						markup,
+						(segment) => prewrite(segment, url, partition),
+						request.navigation && hints
+							? (segment) => applyMeta(hints, segment)
+							: null,
+						(read) => documentSizes(response.headers, read),
+					);
+					const shell = modifyHTMLStreamed(
+						'',
+						url,
+						shellConfig,
+						referrer,
+						note.serviceWorker,
+						upgradeInsecure,
+						adblock,
+						shellSites(url, request.routed, rewriter.directory),
+						top,
+						note.isolation,
+						note.agentCluster,
+						policies.texts,
+						facts,
+						syncBlocked,
+						// (absolute: a document of an opaque origin reads it too)
+						new URL(
+							`${rewriter.directory}${MARKUP_ROUTE}-${token}`,
+							request.routed,
+						).href,
+					);
+					return encodeShell(shell.head + shell.tail(null), encoding);
+				}
+				const job = prewrite(markup, url, partition);
 				if (!job) {
 					const shell = modifyHTML(
 						markup,

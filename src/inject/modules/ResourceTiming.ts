@@ -702,6 +702,14 @@ export default class ResourceTimingModule extends Module<Client> {
 			'description',
 		)?.get;
 		const toldSizes = (entry: object): [number, number | null] | null => {
+			// (a document whose markup came after its shell: what the worker
+			// read of its body, which the shell's metric could not say yet)
+			if (
+				client.documentSizes &&
+				entryType &&
+				Reflect.apply(entryType, entry, []) === 'navigation'
+			)
+				return client.documentSizes;
 			if (!nativeServerTiming || !metricName || !metricDuration) return null;
 			for (const metric of Reflect.apply(
 				nativeServerTiming,
@@ -831,6 +839,19 @@ export default class ResourceTimingModule extends Module<Client> {
 			const sizes = name.endsWith('BodySize') ? toldSizes(entry) : null;
 			if (name === 'encodedBodySize') return sizes ? sizes[0] : result;
 			if (name === 'decodedBodySize') return sizes?.[1] ?? result;
+			// (the shell's bytes, which the browser counted, stand for the body's)
+			if (
+				name === 'transferSize' &&
+				result !== 0 &&
+				bodySize &&
+				client.documentSizes &&
+				Reflect.apply(entryType!, entry, []) === 'navigation'
+			)
+				return (
+					result -
+					(Reflect.apply(bodySize, entry, []) as number) +
+					client.documentSizes[0]
+				);
 			if (name !== 'transferSize' || result !== 0 || !bodySize) return result;
 			// (nothing came of a load that was aborted or refused)
 			if (!answered(entry)) return 0;

@@ -102,6 +102,7 @@ import PageStream, {
 	FIRST_PASS_MS,
 	now,
 	PASS_MS,
+	readMarkup,
 	rootOf,
 	WRITE_CHARS,
 	WRITE_MAX,
@@ -3457,6 +3458,20 @@ export default class DocumentClient extends Client {
 		);
 	}
 	/**
+	 * Write the page as its markup comes: the worker served the shell once
+	 * the head was in, and hands the rest to `url` (its MARKUP_ROUTE) as the
+	 * origin sends it, each piece with its prewritten table
+	 */
+	loadHTMLStream(url: string) {
+		const feed = this.#startPage();
+		void readMarkup(url, (markup, table, sizes, end) => {
+			// the sizes the body had, for the document's navigation timing
+			// (ResourceTiming): the shell's are the browser's count
+			if (sizes) this.documentSizes = sizes;
+			feed(markup, (table ?? undefined) as Prewritten | undefined, end);
+		});
+	}
+	/**
 	 * Begin writing the page (../pageStream.ts): its markup is handed to the
 	 * returned function in pieces, in order, each with the worker's table of
 	 * its inline scripts and styles (its texts named by where they stand in
@@ -3467,7 +3482,7 @@ export default class DocumentClient extends Client {
 	 */
 	#startPage(): (
 		markup: string,
-		prewritten: string | undefined,
+		prewritten: string | Prewritten | undefined,
 		end: boolean,
 	) => void {
 		// the document is new: its sandbox is decided now, and a document
@@ -3791,7 +3806,10 @@ export default class DocumentClient extends Client {
 			// them, named by where their texts stand in this piece
 			if (prewritten !== undefined)
 				try {
-					const table = JSON.parse(prewritten) as Prewritten;
+					const table =
+						typeof prewritten === 'string'
+							? (JSON.parse(prewritten) as Prewritten)
+							: prewritten;
 					if (this.#prewritten) this.#prewritten.add(table, markup);
 					else
 						this.#prewritten = new PrewrittenTable(
