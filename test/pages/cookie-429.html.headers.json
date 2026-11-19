@@ -1,0 +1,5 @@
+{
+	":status": 429,
+	"retry-after": "1000",
+	"set-cookie": ["rl=1; Path=/", "rlh=1; Path=/; HttpOnly"]
+}
