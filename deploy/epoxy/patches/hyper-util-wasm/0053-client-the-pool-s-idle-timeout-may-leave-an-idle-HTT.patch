@@ -1,0 +1,150 @@
+From 7a2308d21154f1abb053c1a11346d08f7ad0f28f Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Thu, 19 Nov 2026 05:29:25 -0500
+Subject: [PATCH] client: the pool's idle timeout may leave an idle HTTP/2
+ connection open
+
+Builder::pool_idle_timeout_http2(false) has pool_idle_timeout close an idle
+HTTP/1 connection only: an HTTP/2 one (a connection that can be shared)
+stays until its server closes it or the client is dropped, at the interval
+and at a checkout alike. Chrome 157 closes a used HTTP/1 socket idle 300 s
+and keeps an idle HTTP/2 session with no timer of its own. The default
+(true) is as before.
+---
+ src/client/legacy/client.rs | 11 +++++++++++
+ src/client/legacy/pool.rs   | 20 ++++++++++++++++++--
+ 2 files changed, 29 insertions(+), 2 deletions(-)
+
+diff --git a/src/client/legacy/client.rs b/src/client/legacy/client.rs
+index d8dbc76..09339c3 100644
+--- a/src/client/legacy/client.rs
++++ b/src/client/legacy/client.rs
+@@ -990,6 +990,7 @@ impl Builder {
+             pool_config: pool::Config {
+                 idle_timeout: Some(Duration::from_secs(90)),
+                 max_idle_per_host: usize::MAX,
++                idle_timeout_http2: true,
+             },
+             pool_timer: None,
+         }
+@@ -1027,6 +1028,16 @@ impl Builder {
+         self
+     }
+ 
++    /// Set whether `pool_idle_timeout` closes an idle HTTP/2 connection
++    /// too, or only an HTTP/1 one (an HTTP/2 connection then stays until
++    /// its server closes it or the client is dropped).
++    ///
++    /// Default is true.
++    pub fn pool_idle_timeout_http2(&mut self, val: bool) -> &mut Self {
++        self.pool_config.idle_timeout_http2 = val;
++        self
++    }
++
+     #[doc(hidden)]
+     #[deprecated(note = "renamed to `pool_max_idle_per_host`")]
+     pub fn max_idle_per_host(&mut self, max_idle: usize) -> &mut Self {
+diff --git a/src/client/legacy/pool.rs b/src/client/legacy/pool.rs
+index dbe8b16..a38e1c1 100644
+--- a/src/client/legacy/pool.rs
++++ b/src/client/legacy/pool.rs
+@@ -99,6 +99,9 @@ struct PoolInner<T, K: Eq + Hash> {
+     exec: Exec,
+     timer: Option<Timer>,
+     timeout: Option<Duration>,
++    // whether `timeout` closes an idle HTTP/2 connection (one that can be
++    // shared) too, or only an HTTP/1 one
++    timeout_shared: bool,
+ }
+ 
+ // This is because `Weak::new()` *allocates* space for `T`, even if it
+@@ -109,6 +112,8 @@ struct WeakOpt<T>(Option<Weak<T>>);
+ pub struct Config {
+     pub idle_timeout: Option<Duration>,
+     pub max_idle_per_host: usize,
++    /// `idle_timeout` closes an idle HTTP/2 connection too (the default)
++    pub idle_timeout_http2: bool,
+ }
+ 
+ impl Config {
+@@ -135,6 +140,7 @@ impl<T, K: Key> Pool<T, K> {
+                 exec,
+                 timer,
+                 timeout: config.idle_timeout,
++                timeout_shared: config.idle_timeout_http2,
+             })))
+         } else {
+             None
+@@ -294,6 +300,7 @@ impl<T: Poolable, K: Key> Pool<T, K> {
+ struct IdlePopper<'a, T, K> {
+     key: &'a K,
+     list: &'a mut Vec<Idle<T>>,
++    timeout_shared: bool,
+ }
+ 
+ impl<'a, T: Poolable + 'a, K: Debug> IdlePopper<'a, T, K> {
+@@ -311,7 +318,9 @@ impl<'a, T: Poolable + 'a, K: Debug> IdlePopper<'a, T, K> {
+             //
+             // In that case, we could just break out of the loop and drop the
+             // whole list...
+-            if expiration.expires(entry.idle_at) {
++            if (self.timeout_shared || !entry.value.can_share())
++                && expiration.expires(entry.idle_at)
++            {
+                 trace!("removing expired connection for {:?}", self.key);
+                 continue;
+             }
+@@ -466,6 +475,7 @@ impl<T: Poolable, K: Key> PoolInner<T, K> {
+     /// This should *only* be called by the IdleTask
+     fn clear_expired(&mut self) {
+         let dur = self.timeout.expect("interval assumes timeout");
++        let timeout_shared = self.timeout_shared;
+ 
+         let now = Instant::now();
+         //self.last_idle_check_at = now;
+@@ -477,7 +487,9 @@ impl<T: Poolable, K: Key> PoolInner<T, K> {
+                     return false;
+                 }
+ 
+-                if now.duration_since(entry.idle_at) > dur {
++                if (timeout_shared || !entry.value.can_share())
++                    && now.duration_since(entry.idle_at) > dur
++                {
+                     trace!("idle interval evicting expired for {:?}", key);
+                     return false;
+                 }
+@@ -638,6 +650,7 @@ impl<T: Poolable, K: Key> Checkout<T, K> {
+         let entry = {
+             let mut inner = self.pool.inner.as_ref()?.lock().unwrap();
+             let expiration = Expiration::new(inner.timeout);
++            let timeout_shared = inner.timeout_shared;
+             let maybe_entry = inner.idle.get_mut(&self.key).and_then(|list| {
+                 trace!("take? {:?}: expiration = {:?}", self.key, expiration.0);
+                 // A block to end the mutable borrow on list,
+@@ -646,6 +659,7 @@ impl<T: Poolable, K: Key> Checkout<T, K> {
+                     let popper = IdlePopper {
+                         key: &self.key,
+                         list,
++                        timeout_shared,
+                     };
+                     popper.pop(&expiration)
+                 }
+@@ -882,6 +896,7 @@ mod tests {
+             super::Config {
+                 idle_timeout: Some(Duration::from_millis(100)),
+                 max_idle_per_host: max_idle,
++                idle_timeout_http2: true,
+             },
+             TokioExecutor::new(),
+             Option::<timer::Timer>::None,
+@@ -980,6 +995,7 @@ mod tests {
+             super::Config {
+                 idle_timeout: Some(Duration::from_millis(10)),
+                 max_idle_per_host: std::usize::MAX,
++                idle_timeout_http2: true,
+             },
+             TokioExecutor::new(),
+             Some(TokioTimer::new()),
+-- 
+2.56.1
+

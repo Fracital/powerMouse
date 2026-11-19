@@ -663,7 +663,18 @@ that is up already (<n> s, <n> transports on it)`; the host's own lines
   after 30 s. Only the carrier is shared: epoxy, its connection pool, its
   TLS and stomp-h3's thread stay in each page's transport worker, since a
   SharedWorkerGlobalScope has no `Worker` for stomp-h3's thread (and the
-  parallel TLS workers to come). A failed handshake now counts in the
+  parallel TLS workers to come). What rides the carrier is limited there
+  as Chrome limits a profile: every realm asks the host's socket pool (six
+  requests at a time to an HTTP/1 group, 256 in all) and its WebSocket
+  endpoint lock, so nine tabs cannot put more on the one wisp connection
+  than one profile of Chrome would; the 255 WebSockets stay each realm's,
+  as Chrome counts a renderer process's. holyWisp refuses a session's
+  streams past `max-streams-per-conn` (2048, fewer under its reputation's
+  THROTTLE) with a CLOSE of 0x49: the host holds such a CONNECT, with what
+  its rider sent on it, and sends it again when a stream closes or the
+  relay takes the one before it (and with backoff from 250 ms to 8 s), on
+  the same session and with nothing said to the rider; a stream held 30 s
+  while none closed hears the refusal. A failed handshake now counts in the
   host's throttle, which outlives a reload, where it counted in that
   page's. `ControllerInit.carrierHost: false` has each transport open its
   own carrier. Through a local demo at the prod relay
