@@ -449,6 +449,39 @@
 		};
 	};
 
+	// a flow started with a signal of an AbortController the page then
+	// aborts (abortOpen, with `reason` if one is given): how it ended, and
+	// whether it rejected with the signal's reason itself
+	window.startAbortable = (params = {}) => {
+		const controller = new AbortController();
+		window.__abort = controller;
+		window.__done = null;
+		window.__pending = (async () => {
+			try {
+				const credential = await navigator.credentials.get({
+					...optionsFor('flow', params),
+					signal: controller.signal,
+				});
+				return { result: `token ${credential?.token}` };
+			} catch (error) {
+				return {
+					result:
+						typeof error === 'string'
+							? `the string ${error}`
+							: `${error.name}: ${error.message}`,
+					isReason: error === controller.signal.reason,
+				};
+			}
+		})();
+		window.__pending.then((result) => (window.__done = result));
+		return true;
+	};
+	window.abortOpen = (reason) => {
+		if (reason === undefined) window.__abort.abort();
+		else window.__abort.abort(reason);
+		return true;
+	};
+
 	// the settled result of what was started, or `still open` after `ms`
 	// (with the page's setTimeout as the page loaded: startWatched counts
 	// the calls of the one it put in its place)

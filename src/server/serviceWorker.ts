@@ -1273,9 +1273,12 @@ function handleMessage(event: ExtendableMessageEvent) {
 				if (message.op === 'identityDone')
 					return identityDone(site, rp, message);
 				// the host's page draws the chooser over the document's frame;
-				// the port tells it the document went away
+				// the port tells it the document went away, or a message on
+				// it that the request ended (its signal aborted: Chrome fires
+				// no close event for a port closed)
 				const gone = new MessageChannel();
 				reply.addEventListener('close', () => gone.port1.close());
+				reply.addEventListener('message', () => gone.port1.postMessage(null));
 				reply.start();
 				const name = (origin: string) => {
 					try {

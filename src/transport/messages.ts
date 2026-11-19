@@ -1495,7 +1495,8 @@ export type Controllerbound = {
 	 * a proxied site's FedCM account chooser, which the host's page draws
 	 * over the document's frame: the index of the account picked,
 	 * IDENTITY_CLOSED or IDENTITY_GONE. The port closes when the document
-	 * goes away
+	 * goes away, and a message on it says the request ended (its signal
+	 * aborted)
 	 */
 	identityChooser: [
 		{ request: IdentityChooserRequest; port: MessagePort },

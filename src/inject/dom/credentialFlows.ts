@@ -13,6 +13,7 @@ import {
 	LOAD_HEADER,
 	OPAQUE_HEADER,
 	PERMISSION,
+	postToPort,
 	type IdentityChooserAccount,
 	type PermissionOp,
 } from '../../transport/messages';
@@ -58,6 +59,20 @@ interface Account {
  * other code names it)
  */
 const OPEN = 'identityOpen';
+/** what OPEN holds (no prototype) */
+interface Open {
+	signal: unknown;
+	/** its end by an abort of its signal, whose listener had not run yet */
+	end: (reason: unknown) => void;
+}
+
+/** one request of this document's, as the flow goes (no prototype) */
+interface Asked {
+	/** it settled, or its signal was aborted: the flow asks nothing more */
+	ended: boolean;
+	/** the chooser it shows, closed */
+	close: (() => void) | null;
+}
 
 /** what the browser keeps of the site's sign-ins with a provider (IdentityState, no prototype) */
 interface State {
@@ -403,11 +418,15 @@ export function identityFlow({
 	/**
 	 * Ask the service worker `message`, the answer handed to `heard` (the
 	 * promise resolves with nothing: what the browser keeps of the user's
-	 * sign-ins is never a value of a promise the page could be handed)
+	 * sign-ins is never a value of a promise the page could be handed).
+	 * `asked`'s `close` then stops waiting, and tells the worker so (a
+	 * message on the port: Chrome fires no close event on the other end of
+	 * a port closed), which closes the chooser it showed
 	 */
 	const ask = (
 		message: PermissionOp,
 		heard: (answer: unknown) => void = () => {},
+		asked?: Asked,
 	): Promise<void> =>
 		new PagePromise<void>((done) => {
 			if (!routed) return done(undefined);
@@ -417,6 +436,12 @@ export function identityFlow({
 				heard(data);
 				done(undefined);
 			});
+			if (asked)
+				asked.close = () => {
+					postToPort(port, null);
+					closePort(port);
+					done(undefined);
+				};
 			if (
 				!routed.postToWorker(
 					{ [PERMISSION]: { directory: routed.directory, ...message } },
@@ -536,16 +561,24 @@ export function identityFlow({
 
 	// one provider through the protocol; the resolved credential, null for a
 	// fault to try the next provider on, DISMISSED for a user's dismiss
+	// (`asked` ended: its signal was aborted, and the flow asks nothing
+	// more, as Chrome's stops at an abort)
 	const attempt = async (
 		provider: any,
 		mediation: unknown,
+		asked: Asked,
 	): Promise<object | null | typeof DISMISSED> => {
 		const configAbsolute = new URL(provider.configURL).href;
 		const state = await stateOf(configAbsolute);
 		if (state.testing) testing = true;
 		// (measured: a site in its cooldown, and a silent request while the
 		// site may not sign in automatically, fail before any request)
-		if (state.cooldown || (mediation === 'silent' && state.quiet)) return null;
+		if (
+			asked.ended ||
+			state.cooldown ||
+			(mediation === 'silent' && state.quiet)
+		)
+			return null;
 		let config: unknown;
 		await readConfig(configAbsolute, (json) => (config = json));
 		const configOrigin = originOf(configAbsolute);
@@ -562,6 +595,7 @@ export function identityFlow({
 		// the accounts and token endpoints are the config's origin's, and a
 		// login URL is named (Chrome refuses the config otherwise)
 		if (
+			asked.ended ||
 			!sameOrigin(accountsURL) ||
 			!sameOrigin(tokenURL) ||
 			endpointOf(own(config, 'login_url'), configAbsolute) === null
@@ -602,7 +636,7 @@ export function identityFlow({
 				} as Account);
 			}
 		});
-		if (accounts.length === 0) return null;
+		if (asked.ended || accounts.length === 0) return null;
 
 		// a new account (not returning) is signed up, with the site's privacy
 		// policy and terms: only then is the client metadata asked for, with
@@ -613,7 +647,7 @@ export function identityFlow({
 		let returning = 0;
 		for (let i = 0; i < accounts.length; i++)
 			if (accounts[i].returning) returning++;
-		if (returning < accounts.length) {
+		if (returning < accounts.length && !asked.ended) {
 			const metadata = endpointOf(
 				own(config, 'client_metadata_endpoint'),
 				configAbsolute,
@@ -661,14 +695,16 @@ export function identityFlow({
 				});
 			}
 			let picked: unknown = IDENTITY_GONE;
-			await ask(
-				{
-					op: 'identityChooser',
-					idp: configOrigin,
-					accounts: listed,
-				},
-				(answer) => (picked = answer),
-			);
+			if (!asked.ended)
+				await ask(
+					{
+						op: 'identityChooser',
+						idp: configOrigin,
+						accounts: listed,
+					},
+					(answer) => (picked = answer),
+					asked,
+				);
 			if (typeof picked !== 'number' || !shown[picked]) {
 				// the close button starts the site's cooldown, as Chrome's does
 				if (picked === IDENTITY_CLOSED) await done(configAbsolute, 'closed');
@@ -676,6 +712,7 @@ export function identityFlow({
 			}
 			chosen = shown[picked];
 		}
+		if (asked.ended) return null;
 
 		const posted = now();
 		const answer = await idpPost(tokenURL, {
@@ -805,7 +842,10 @@ export function identityFlow({
 	// Measured in Chrome 157: while a request of the tab is open (in flight,
 	// its chooser shown, its failure or token held) another, of the document
 	// or of a frame, is refused with NotAllowedError in a task of its own,
-	// and the first goes on.
+	// and the first goes on. An abort of the signal ends the request at
+	// once: the tab may ask again in the same task, the chooser closes, no
+	// request is made after it, and the promise rejects with the signal's
+	// reason in a task of its own.
 	const runIdentity = (
 		identity: unknown,
 		signal: unknown,
@@ -824,6 +864,13 @@ export function identityFlow({
 						'NotSupportedError',
 					),
 				);
+			// (an open request whose signal was aborted ended then, as the
+			// browser's abort steps run before any listener of the page's)
+			const open = top[OPEN] as Open | undefined;
+			if (open) {
+				const reason = abortReason(open.signal);
+				if (reason !== undefined) open.end(reason);
+			}
 			if (top[OPEN]) {
 				later(
 					() => rejectPage(domException(ONE_AT_A_TIME, 'NotAllowedError')),
@@ -831,15 +878,34 @@ export function identityFlow({
 				);
 				return;
 			}
-			const ours = { __proto__: null };
-			top[OPEN] = ours;
-			let ended = false;
+			const asked = { __proto__: null, ended: false, close: null } as Asked;
 			const settle = (how: (value: any) => void, value: unknown) => {
-				if (ended) return;
-				ended = true;
+				if (asked.ended) return;
+				asked.ended = true;
 				if (top[OPEN] === ours) top[OPEN] = undefined;
 				how(value);
 			};
+			const ours = {
+				__proto__: null,
+				signal,
+				end: (reason) =>
+					settle(() => {
+						asked.close?.();
+						later(() => rejectPage(reason), 0);
+					}, undefined),
+			} as Open;
+			top[OPEN] = ours;
+			try {
+				// (an event the browser fired: a page's own dispatch of one
+				// leaves the signal unaborted)
+				if (signal !== null && signal !== undefined)
+					listenOn(signal as EventTarget, 'abort', () => {
+						const reason = abortReason(signal);
+						if (reason !== undefined) ours.end(reason);
+					});
+			} catch (error) {
+				// no AbortSignal: nothing ends it
+			}
 			// a frame that goes away (removed, navigated) takes its request
 			// with it
 			if (top !== (client as unknown))
@@ -853,7 +919,8 @@ export function identityFlow({
 			const providers = (identity as { providers: any[] }).providers;
 			void (async () => {
 				for (const provider of providers) {
-					const credential = await attempt(provider, mediation);
+					if (asked.ended) return;
+					const credential = await attempt(provider, mediation, asked);
 					if (credential === DISMISSED)
 						return settle(
 							rejectPage,
@@ -864,6 +931,7 @@ export function identityFlow({
 				// a failure before the chooser showed is held a while, so the
 				// page cannot tell one with no account from one the user turned
 				// down (measured, below)
+				if (asked.ended) return;
 				later(
 					() =>
 						settle(

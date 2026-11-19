@@ -622,7 +622,9 @@ async function reference() {
 	await setWellKnown(null);
 	// a page that replaced Math and the timers sees none of them called
 	const watched = await watchedRuns(page.mainFrame(), null);
-	// a second request while the chooser shows
+	// a second request while the chooser shows, and an abort of its signal
+	const closed = [];
+	cdp.on('FedCm.dialogClosed', () => closed.push(Date.now()));
 	await page.evaluate(() => window.addChild());
 	const open = {};
 	{
@@ -638,6 +640,30 @@ async function reference() {
 			await cdp.send('FedCm.selectAccount', { dialogId: id, accountIndex: 0 });
 		open.first = await settled(page.mainFrame());
 	}
+	open.aborts = [];
+	for (const reason of [undefined, 'why']) {
+		const shown = new Promise((resolve) => (held = resolve));
+		await page.evaluate((a) => window.startAbortable(a), {
+			configURL: configOf(sameOrigin, `abort-native-${Date.now()}`),
+			mediation: 'required',
+		});
+		const id = await Promise.race([shown, sleep(15000)]);
+		held = null;
+		const before = closed.length;
+		await page.evaluate((r) => window.abortOpen(r), reason);
+		const ended = await settled(page.mainFrame());
+		await sleep(500);
+		open.aborts.push({
+			...ended,
+			shown: !!id,
+			closed: closed.length > before,
+		});
+	}
+	// (the next request shows the chooser: an abort starts no cooldown)
+	open.after = await runScenario(page.mainFrame(), 'flow', {
+		configURL: configOf(sameOrigin, `after-abort-native-${Date.now()}`),
+		mediation: 'required',
+	}).then(brief);
 	await browser.close();
 	const mediation = await mediationReference();
 	return {
@@ -660,7 +686,7 @@ const brief = (result) =>
 		? `token ${result.token}`
 		: (result?.error ?? result?.result ?? 'none');
 
-/** the settled result of what `frame` started (startWatched, startScenario), or a timeout */
+/** the settled result of what `frame` started (startWatched, startAbortable, startScenario), or a timeout */
 const settled = (frame, ms = 15000) =>
 	frame.evaluate((ms) => window.readPendingWithin(ms), ms);
 
@@ -868,6 +894,21 @@ ok(
 		JSON.stringify(ref.open),
 	);
 }
+ok(
+	"natively an abort while the chooser shows rejects with the signal's reason and closes the chooser, and the next request shows it again",
+	JSON.stringify(ref.open.aborts) ===
+		JSON.stringify([
+			{
+				result: 'AbortError: signal is aborted without reason',
+				isReason: true,
+				shown: true,
+				closed: true,
+			},
+			{ result: 'the string why', isReason: true, shown: true, closed: true },
+		]) && ref.open.after === 'token idtok.acct-1.false.n0',
+	JSON.stringify(ref.open),
+);
+
 const browser = await launch();
 for (const [mode, base] of [
 	['same-origin', PROXY],
@@ -1139,6 +1180,49 @@ for (const [mode, base] of [
 			JSON.stringify({
 				proxied: { second, first },
 				native: { second: ref.open.second, first: brief(ref.open.first) },
+			}),
+		);
+	}
+
+	// 5d. an abort of the request's signal while the chooser shows: it
+	//     rejects with the signal's reason, the host's chooser closes, and
+	//     the next request shows it again (no cooldown), as natively
+	{
+		const aborts = [];
+		for (const reason of [undefined, 'why']) {
+			await frame.evaluate((a) => window.startAbortable(a), {
+				configURL: configOf(sameOrigin, `abort-${mode}-${Date.now()}`),
+				mediation: 'required',
+			});
+			const shown = await chooserButton(page, /Ada Proxy/);
+			await shown?.session.detach().catch(() => {});
+			await frame.evaluate((r) => window.abortOpen(r), reason);
+			const ended = await settled(frame);
+			let closed = false;
+			for (const end = Date.now() + 3000; Date.now() < end; await sleep(150)) {
+				const chooser = await hostChooser(page);
+				if (!chooser) {
+					closed = true;
+					break;
+				}
+				await chooser.session.detach().catch(() => {});
+			}
+			aborts.push({ ...ended, shown: !!shown, closed });
+		}
+		await frame.evaluate((a) => window.startScenario('flow', a), {
+			configURL: configOf(sameOrigin, `after-abort-${mode}-${Date.now()}`),
+			mediation: 'required',
+		});
+		const after = (await pressChooser(page, /Ada Proxy/))
+			? brief(await settled(frame))
+			: 'no chooser';
+		ok(
+			`${mode}: an abort while the chooser shows rejects with the signal's reason and closes the chooser, and the next request shows it again, as natively`,
+			JSON.stringify({ aborts, after }) ===
+				JSON.stringify({ aborts: ref.open.aborts, after: ref.open.after }),
+			JSON.stringify({
+				proxied: { aborts, after },
+				native: { aborts: ref.open.aborts, after: ref.open.after },
 			}),
 		);
 	}

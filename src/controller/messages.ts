@@ -259,7 +259,8 @@ export type HostBound = {
 	/**
 	 * a proxied site's FedCM account chooser, drawn by the host's page over
 	 * the document's frame: the index picked, IDENTITY_CLOSED or
-	 * IDENTITY_GONE; the port closes when the document goes away
+	 * IDENTITY_GONE; the port closes when the document goes away, and a
+	 * message on it says the request ended (its signal aborted)
 	 */
 	identityChooser: [
 		{ request: IdentityChooserRequest; port: MessagePort },

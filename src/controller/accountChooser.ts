@@ -20,7 +20,8 @@ import {
  *
  * Resolves with the index of the account picked, IDENTITY_CLOSED when the
  * user closed it (Chrome's close button, which starts the site's cooldown)
- * or IDENTITY_GONE when `port` closed first (the document went away).
+ * or IDENTITY_GONE when `port` closed first (the document went away) or
+ * said the request ended (an abort of its signal).
  */
 export function drawAccountChooser(
 	frame: HTMLIFrameElement | null,
@@ -44,6 +45,9 @@ export function drawAccountChooser(
 			resolve(answer);
 		};
 		port.addEventListener('close', () => settle(IDENTITY_GONE));
+		// (a message: the request ended, its signal aborted, and the chooser
+		// closes as Chrome's does)
+		port.addEventListener('message', () => settle(IDENTITY_GONE));
 		port.start();
 
 		const make = <K extends keyof HTMLElementTagNameMap>(
