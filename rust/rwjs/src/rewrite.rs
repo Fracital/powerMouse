@@ -120,24 +120,29 @@ pub const ROUTE_SOURCE_MAP: u32 = 2;
 const LINE_ENDS: [char; 4] = ['\n', '\r', '\u{2028}', '\u{2029}'];
 
 /// where the first line that is no HTML close comment (`--> text`, behind
-/// white space and comments that end on the line) starts
+/// white space and comments that end on the line) starts. A line's end is
+/// looked for only behind such a comment: a bundle's first line is often
+/// all of it, megabytes the search for its end read a character at a time
+/// (33 ms of a 6 MB script's rewrite)
 fn after_close_comments(source: &str) -> usize {
 	let mut at = 0;
 	loop {
 		let rest = &source[at..];
-		let end = rest.find(LINE_ENDS);
-		let mut line = &rest[..end.unwrap_or(rest.len())];
+		let mut line = rest;
 		loop {
-			line = line.trim_start();
-			match line.strip_prefix("/*").and_then(|comment| comment.split_once("*/")) {
-				Some((_, behind)) => line = behind,
-				None => break,
+			line = line.trim_start_matches(|c: char| c.is_whitespace() && !LINE_ENDS.contains(&c));
+			let Some(comment) = line.strip_prefix("/*") else {
+				break;
+			};
+			match comment.find("*/") {
+				Some(end) if !comment[..end].contains(LINE_ENDS) => line = &comment[end + 2..],
+				_ => break,
 			}
 		}
 		if !line.starts_with("-->") {
 			return at;
 		}
-		match end {
+		match rest.find(LINE_ENDS) {
 			Some(end) => at += end + rest[end..].chars().next().map_or(1, char::len_utf8),
 			None => return source.len(),
 		}
@@ -315,6 +320,7 @@ pub fn parses(source: &str, single: bool) -> bool {
 	let parse_options = ParseOptions {
 		allow_return_outside_function: !single,
 		parse_regular_expression: true,
+		enable_ident_hashes: false,
 		..ParseOptions::default()
 	};
 	let (text, parsed, _) = parse_targets(&allocator, source, source_type, &parse_options);
@@ -365,6 +371,10 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 		allow_return_outside_function: true,
 		allow_v8_intrinsics: true,
 		preserve_parens: true,
+		// no hash of each name the parser reads (3% of the parse): nothing
+		// here keeps names in a map of oxc's, the early check its own
+		// (src/early.rs), and a name is compared as its text
+		enable_ident_hashes: false,
 		// (a pattern is asked of the regular expression parser by the
 		// walk, src/pattern.rs: one V8 refuses is a parse error here, the
 		// JavaScript rewriter decides, and the literal reaches V8 as
@@ -1128,6 +1138,48 @@ pub(crate) mod tests {
 		);
 		assert_eq!(out("--> a", &mut route), "--> a\nPRE;");
 		assert_eq!(out("a-->b", &mut route), "PRE;a-->b");
+	}
+
+	/// the close comments' end found as it was when each line was cut at
+	/// its end first
+	fn after_close_comments_by_lines(source: &str) -> usize {
+		let mut at = 0;
+		loop {
+			let rest = &source[at..];
+			let end = rest.find(LINE_ENDS);
+			let mut line = &rest[..end.unwrap_or(rest.len())];
+			loop {
+				line = line.trim_start();
+				match line.strip_prefix("/*").and_then(|comment| comment.split_once("*/")) {
+					Some((_, behind)) => line = behind,
+					None => break,
+				}
+			}
+			if !line.starts_with("-->") {
+				return at;
+			}
+			match end {
+				Some(end) => at += end + rest[end..].chars().next().map_or(1, char::len_utf8),
+				None => return source.len(),
+			}
+		}
+	}
+
+	#[test]
+	fn close_comments_end_where_their_lines_do() {
+		let pieces = [
+			"--> a", "-->", "/* a */", "/* a\nb */", "/*", "*/", " ", "\u{a0}", "\u{85}", "\u{feff}", "\n", "\r\n", "\u{2028}",
+			"\u{2029}", "x",
+		];
+		let mut texts = vec![String::new()];
+		for _ in 0..4 {
+			let longer: Vec<String> =
+				texts.iter().flat_map(|text| pieces.iter().map(move |piece| format!("{text}{piece}"))).collect();
+			texts.extend(longer);
+		}
+		for text in &texts {
+			assert_eq!(after_close_comments(text), after_close_comments_by_lines(text), "{text:?}");
+		}
 	}
 
 	#[test]

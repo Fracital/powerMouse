@@ -1706,6 +1706,29 @@ the worker makes the Blob of the module's memory and posts it as a
 handle: the calling thread's 108 ms for the twelve scripts is 1.2 ms, and
 end to end they take 5% less.
 
+Where a warm rewrite's time goes (2026-11-19, the twelve scripts, a build
+that stops after each stage, least of 7): oxc's parse 41%, the walk 51%,
+the rest (the comments DevTools reads, the preamble's place, applying the
+edits) 8%. Of the walk, the source key's pass with the holder's copy
+riding in it is a fifth (151 ms of 759; the key alone 101), and the early
+check it drives 5.5% of the whole. Two parse options cost nothing worth
+changing: `preserve_parens` (591 ms with it, 592 without; the walk reads
+the parentheses), and the regular expressions, which the parser does not
+parse (`rust/rwjs/src/pattern.rs` asks it only for a pattern its scan
+does not know: 0.1%). One cost was waste: the parser hashes every name
+it reads for oxc's semantic maps, which nothing here uses, and
+`enable_ident_hashes: false` takes 3% off the parse. And placing the
+preamble read the whole first line to find its end, a character at a
+time, which in a bundle is often the whole file (33 ms of a 6 MB chunk
+of discord.com's home page); the line's end is now looked for only
+behind an HTML close comment. Over the corpus,
+through the worker's glue, alternated: 4.3% less time, the outputs the
+same. The key's pass is the largest piece left that is ours, and it is a
+chain of multiplications a byte after another that the key's definition
+(`src/functionSource.ts` `sourceKey`, which pages' kept texts are found
+by) fixes: it goes faster only with a key of more lanes, a new
+generation of keys.
+
 Measured the same day and not taken: `+simd128` (no snip, both builds) is
 9.5% slower over the whole corpus; and keeping an instance that grew past
 `SERVING_MEMORY_LIMIT`, over the whole corpus in the order the sites serve
