@@ -34,5 +34,9 @@
   `?wt` decides for one visit. Each choice is one line on the console
   (`STomp transport  Wisp over WebTransport (UDP/QUIC) to <url>, <ms> ms`,
   or the WebSocket's with why not WebTransport, and a line when a revived
-  transport switches), and the controller's `carrier` and its `carrier`
-  event say it (also on `StompRemoteController`).
+  transport switches), the controller's `carrier` and its `carrier` event
+  say it (also on `StompRemoteController`), and the demo shows it: a UDP or
+  TCP tag on the menu button, the carrier, its time, the relay and why not
+  UDP atop the menu and in About's Transport row. The demo turns the
+  carrier on for its built-in holyWisp only when that serves its discovery
+  document.

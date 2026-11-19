@@ -229,7 +229,10 @@
 					</div>
 				</form>
 				<!-- the menu (Fullscreen, About): beside the address box, not in
-				     it; the tab manager has its own button for the same menu -->
+				     it; the tab manager has its own button for the same menu.
+				     Its tag says what the wisp connection rides (UDP for
+				     WebTransport, TCP for the WebSocket), hidden until a
+				     transport with `webTransport` chose -->
 				<button
 					id="toolMenu"
 					class="toolbtn menubtn"
@@ -247,6 +250,7 @@
 						alt=""
 						draggable="false"
 					/>
+					<span class="carrierTag" id="carrierTag" hidden></span>
 				</button>
 			</div>
 			<div id="frames" class="frames"></div>
@@ -325,7 +329,8 @@
 
 		<!-- the menu: the Shields panel's popover with Fullscreen (hidden where
 		     the page cannot be made fullscreen) and About, which opens the
-		     build information in the settings-page dialog below -->
+		     build information in the settings-page dialog below; atop it,
+		     what the wisp connection rides (not an item) -->
 		<div id="menuScrim" class="popoverScrim hidden"></div>
 		<div
 			id="pmMenu"
@@ -334,6 +339,7 @@
 			aria-label="Menu"
 			aria-hidden="true"
 		>
+			<div id="menuCarrier" class="pmMenuCarrier" role="none" hidden></div>
 			<button
 				id="menuFullscreen"
 				class="pmMenuItem"

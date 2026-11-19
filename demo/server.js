@@ -43,14 +43,14 @@
 //   STOMP_WISP_WEBTRANSPORT whether epoxy carries Wisp over the relay's
 //                       WebTransport session (the descriptor's
 //                       `webTransport`, docs/webtransport.md "Wisp over
-//                       WebTransport"). On unless `0`: the transport looks
-//                       for /webtransport.json on the wisp URL's origin
-//                       (this server forwards the built-in holyWisp's, which
-//                       is started with `webTransport` when the `holywisp`
-//                       package knows it), else dials a wss: wisp URL as
-//                       https:, and uses the WebSocket whenever there is no
-//                       session, never waiting for one it has not had
-//                       before. A URL names the session instead (a relay
+//                       WebTransport"). On unless `0`: the transport dials
+//                       a wss: wisp URL as https: on its own host and path,
+//                       else looks for /webtransport.json on the wisp URL's
+//                       origin (this server forwards the built-in holyWisp's
+//                       when it serves one), opens the session and the
+//                       WebSocket together and rides the session when it is
+//                       up about as soon, the WebSocket otherwise (UDP
+//                       blocked, no session). A URL names the session instead (a relay
 //                       with a public name and certificate:
 //                       https://holywisp.fracit.al/...), or, ending in
 //                       .json, its discovery document. `?wt=0` or `?wt` on
@@ -182,16 +182,20 @@ Set STOMP_WISP_URL to use an external wisp server instead.`);
 		process.exit(1);
 	}
 }
-// the built-in holyWisp has a WebTransport listener only when the `holywisp`
-// package and its binary know the option; without one the page is not told
-// to look for it (an external relay is always looked at)
+// the built-in holyWisp has a WebTransport listener the page can reach only
+// when the `holywisp` package and its binary know the option and it serves
+// its discovery document (its self-made certificate's hashes): a binary
+// that answers every path with its banner is no document; without one the
+// page is not told to look for it (an external relay is always looked at)
 const webTransport =
 	webTransportOn &&
 	(!wisp ||
-		(await fetch(`http://127.0.0.1:${wisp.port}/webtransport.json`).then(
-			(answer) => answer.ok,
-			() => false,
-		)));
+		(await fetch(`http://127.0.0.1:${wisp.port}/webtransport.json`)
+			.then((answer) => (answer.ok ? answer.json() : null))
+			.then(
+				(document) => Array.isArray(document?.hashes),
+				() => false,
+			)));
 
 const started = Date.now();
 

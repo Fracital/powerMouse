@@ -942,10 +942,8 @@ async function startController(name) {
 				: `same origin (${location.origin})`,
 		'green',
 	);
-	badge(
-		'Transport',
-		`${name} over ${wispURL()}${HTTP3 && name === 'epoxy' ? ', HTTP/3 on' : ''}`,
-	);
+	transportName = name;
+	badge('Transport', transportFact(name));
 
 	// no id is given: the controller keeps one per open tab from visit to
 	// visit, so the browser keeps the compiled code of the scripts proxied
@@ -1003,6 +1001,7 @@ async function startController(name) {
 		});
 	}
 	window.controller = controller; // handy from devtools
+	watchCarrier(controller);
 
 	setStatus('Waiting for the service worker…');
 	await controller.wait();
@@ -1049,9 +1048,12 @@ async function switchTransport(name) {
 	rememberTransport(name);
 	setStatus(`Switching to ${name}…`);
 	try {
+		// a transport without `webTransport` (libcurl) chooses no carrier
+		showCarrier(null);
+		transportName = name;
 		await controller.setTransport(transports[name]());
 		setStatus('Ready');
-		badge('Transport', `${name} over ${wispURL()}`);
+		badge('Transport', transportFact(name));
 	} catch (error) {
 		setStatus(`Transport failed: ${error.message}`, true);
 	}
@@ -5202,6 +5204,62 @@ function syncFullscreenItem() {
 	menuFullscreen.innerHTML = `${shieldIcon(on ? 'fullscreenExit' : 'fullscreen')}<span>${on ? 'Exit fullscreen' : 'Fullscreen'}</span>`;
 }
 menuAbout.innerHTML = `${shieldIcon('info')}<span>About</span>`;
+
+// ---- what the wisp connection rides ------------------------------------------
+// The controller's `carrier` (a transport with `webTransport`, the demo's
+// default, docs/webtransport.md "Wisp over WebTransport"): WebTransport, on
+// UDP, or the WebSocket, on TCP. The menu button's tag says which at a
+// glance, the menu's first line and About's Transport row say where, how
+// fast and, on TCP, why not UDP; each follows the `carrier` event, so a
+// revived transport that chose the other shows at once.
+const carrierTag = $('carrierTag');
+const menuCarrier = $('menuCarrier');
+const toolMenu = $('toolMenu');
+/** the transport the bar's select chose, for the Transport fact */
+let transportName = '';
+const transportFact = (name) =>
+	`${name} over ${wispURL()}${HTTP3 && name === 'epoxy' ? ', HTTP/3 on' : ''}`;
+
+function showCarrier(info) {
+	if (!info) {
+		carrierTag.hidden = true;
+		menuCarrier.hidden = true;
+		toolMenu.title = 'Menu';
+		return;
+	}
+	const udp = info.carrier === 'webtransport';
+	const what = udp ? 'WebTransport (UDP)' : 'WebSocket (TCP)';
+	carrierTag.hidden = false;
+	carrierTag.dataset.carrier = info.carrier;
+	carrierTag.textContent = udp ? 'UDP' : 'TCP';
+	toolMenu.title = `Menu (wisp over ${what})`;
+	menuCarrier.hidden = false;
+	menuCarrier.dataset.carrier = info.carrier;
+	const line = document.createElement('div');
+	const name = document.createElement('strong');
+	name.textContent = what;
+	line.append('Wisp over ', name, `, ${info.ms} ms`);
+	const where = document.createElement('small');
+	where.textContent = info.url;
+	menuCarrier.replaceChildren(line, where);
+	if (info.why) {
+		const why = document.createElement('small');
+		why.textContent = `Not UDP: ${info.why}`;
+		menuCarrier.append(why);
+	}
+	badge(
+		'Transport',
+		`${transportFact(transportName)}; Wisp over ${what} to ${info.url}, ${info.ms} ms${info.why ? `; not UDP: ${info.why}` : ''}`,
+		udp ? 'green' : 'blue',
+	);
+	if (shieldsPageOpen() && shieldsPage.dataset.view === 'about') fillAbout();
+}
+
+/** follow a controller's carrier (StompController or the remote one) */
+function watchCarrier(target) {
+	target.addEventListener('carrier', (event) => showCarrier(event.detail));
+	if (target.carrier) showCarrier(target.carrier);
+}
 syncFullscreenItem();
 // Escape and the browser's own controls leave fullscreen without the menu
 if (fullscreen)
