@@ -486,6 +486,13 @@
 		firstInput: performance.getEntriesByType('first-input').length,
 	};
 	const inputs = {};
+	// the first input is the click's pointerdown: held busy as the click is, so
+	// its entry is long however the press and the release fall into frames
+	document
+		.getElementById('button')
+		.addEventListener('pointerdown', function perfPointerdown() {
+			busy(80);
+		});
 	document.getElementById('button').onclick = function perfClick() {
 		busy(80);
 		inputs.click = true;
