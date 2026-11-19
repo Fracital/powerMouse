@@ -88,6 +88,17 @@ const requestText = Reflect.getOwnPropertyDescriptor(
 	XMLHttpRequest.prototype,
 	'responseText',
 )!.get!;
+const requestTypeSet = Reflect.getOwnPropertyDescriptor(
+	XMLHttpRequest.prototype,
+	'responseType',
+)?.set;
+const requestResponse = Reflect.getOwnPropertyDescriptor(
+	XMLHttpRequest.prototype,
+	'response',
+)?.get;
+const Bytes = Uint8Array;
+/** whether this realm is a worker's, whose synchronous request may answer an ArrayBuffer (a window's may not) */
+const inWorker = typeof globalThis.document === 'undefined';
 const clock = globalThis.performance;
 const clockNow = clock?.now;
 const now = (): number =>
@@ -437,27 +448,34 @@ export function controllerModule(): WebAssembly.Module | null {
 }
 
 /**
- * The core module's bytes, with one synchronous request. A window's
- * synchronous XHR cannot ask for an ArrayBuffer, so the bytes are read as a
- * `x-user-defined` string and unpacked a byte at a time. Throws when the
- * asset cannot be had.
+ * The core module's bytes, with one synchronous request. A worker's answers
+ * an ArrayBuffer; a window's synchronous XHR cannot ask for one, so there
+ * the bytes are read as a `x-user-defined` string and unpacked a byte at a
+ * time. Throws when the asset cannot be had.
  */
 function fetchCoreBytes(): Uint8Array {
 	const url = coreURL?.();
 	if (!url) throw new Error('Stomp: no rewriter module to load');
 	const request = new XMLHttpRequest();
 	Reflect.apply(requestOpen, request, ['GET', url, false]);
-	Reflect.apply(requestOverrideMime, request, [
-		'text/plain; charset=x-user-defined',
-	]);
+	const buffered = inWorker && !!requestTypeSet && !!requestResponse;
+	if (buffered) Reflect.apply(requestTypeSet, request, ['arraybuffer']);
+	else
+		Reflect.apply(requestOverrideMime, request, [
+			'text/plain; charset=x-user-defined',
+		]);
 	Reflect.apply(requestSend, request, []);
 	const status: unknown = Reflect.apply(requestStatus, request, []);
 	if (status !== 200)
 		throw new Error(
 			`Stomp: the rewriter module did not load (HTTP ${String(status)})`,
 		);
+	if (buffered)
+		return new Bytes(
+			Reflect.apply(requestResponse, request, []) as ArrayBuffer,
+		);
 	const binary = text(Reflect.apply(requestText, request, []));
-	const bytes = new Uint8Array(binary.length);
+	const bytes = new Bytes(binary.length);
 	for (let i = 0; i < binary.length; i++)
 		bytes[i] = binary.charCodeAt(i) & 0xff;
 	return bytes;
