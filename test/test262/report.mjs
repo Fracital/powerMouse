@@ -298,6 +298,12 @@ if (knownFile) {
 		);
 	if (threw.length) bad.push(`${threw.length} rewrites threw`);
 	if (totals.hung) bad.push(`${totals.hung} files hung`);
+	// a runner that cannot start (a bundle that throws at load) crashes every
+	// file: no run differs, so nothing above notices
+	const ran = totals.files - totals.skipped;
+	if (ran && !totals.runs) bad.push(`no file ran: all ${ran} crashed`);
+	else if (totals.crashed > Math.max(10, ran / 100))
+		bad.push(`${totals.crashed} of ${ran} files crashed`);
 	if (bad.length) {
 		console.log(`\nFAIL test262 gate\n${bad.join('\n')}`);
 		process.exit(1);
