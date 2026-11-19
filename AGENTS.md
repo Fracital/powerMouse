@@ -377,8 +377,9 @@ on every save (use a `git worktree`).
   `webTransport`, off unless set in the library, on in the demo,
   `src/transport/wispWebTransport.ts`) hands epoxy a function transport.
   UDP first: a relay never met opens the session and the WebSocket
-  together and takes the session when it is up within a grace of the
-  WebSocket (on loopback, always), closing the other; what happened is
+  together and rides the session when it is up within 3 s (one and a
+  half `timeoutMs`) of the start, the WebSocket only when the session failed or is not up
+  by then, closing the other; what happened is
   remembered per relay in IndexedDB (`stomp-wisp-carrier`), a failure
   leaving the WebSocket alone for 30 s and then a session tried beside it.
   The controller's `carrier` (and its event) says which, for a transport

@@ -510,19 +510,30 @@ docs/webtransport.md, "Wisp on the session" and "Certificates"):
 - **Wisp v2** (`wisp_v2` in epoxy's options) is offered as the protocol
   `wisp-v2`; holyWisp answers it with `wt-protocol` and opens v2 with INFO,
   as it does for a WebSocket with a subprotocol.
-- **Choosing: UDP first, never waiting on it long.** UDP is often
+- **Choosing: UDP first, the WebSocket the fallback.** UDP is often
   blocked, and a network that drops it looks like a handshake that never
   ends (Chrome gives up after 4 s). What each relay did is remembered by
   its plan (`url`, the document's URL, or the wisp URL) in this realm and
   in IndexedDB for the origin's next page and worker:
-  - nothing known: the session and the WebSocket are opened together. The
-    session is taken when its Wisp stream's first packet comes within half
-    the WebSocket's own time after the WebSocket's (150 to 400 ms) and its
-    handshake was done within a tenth of it (50 to 100 ms); else the
-    WebSocket. The one not taken is closed as soon as it is open (the
-    WebSocket with 1000, the session with a close), so the relay holds
-    nothing for it, and the outcome is remembered: a session that came up
-    too late for this start is had by the next.
+  - nothing known: the session and the WebSocket are opened together, the
+    WebSocket as a standby. The session is the carrier when its Wisp
+    stream's first packet comes within one and a half `timeoutMs` (3 s by
+    default; each step, the document, the handshake and the stream, has
+    `timeoutMs`) of the start, however long after the WebSocket's that is. The WebSocket is
+    ridden only when the session fails (at once: a refused port, a
+    certificate that does not match, no document, a closed session) or is
+    not up by then; past that time, whichever is up first. The one not
+    taken is closed as soon as it is open (the WebSocket with 1000, the
+    session with a close), so the relay holds nothing for it, and the
+    session's outcome is remembered: a session that came up too late for
+    this start is had by the next. A network that drops UDP pays its
+    handshake's `timeoutMs` once per relay. 3 s is twice the slowest of 12
+    cold starts to `https://stomp.fracit.al/` (holyWisp's QUIC listener on
+    the page's own host, 136 ms away; headless Chrome 157, 2026-11-19):
+    the Wisp stream's first packet came at 1182 ms (p50), 1454 (p90) and
+    1511 at most, the WebSocket's at 520 (p50). Until then the first start
+    rode the WebSocket every time (it took the session only within 50 to
+    100 ms of the WebSocket) and only the second rode UDP.
   - it worked (for 7 days): the session, within `timeoutMs` (2 s by
     default), else the WebSocket;
   - it failed (no session at the derived URL nor a document, a document
@@ -559,13 +570,15 @@ docs/webtransport.md, "Wisp on the session" and "Certificates"):
   up) the choice was the WebSocket at 507 and 504 ms (p50, worker and
   page), and at an address that drops it (no answer: Chrome's 4 s) at 576
   and 577 ms: the tenth of the WebSocket's time given to the handshake, 50
-  ms here, is what a network that drops UDP pays, once per origin. The
+  ms here, was then what a network that drops UDP paid, once per origin
+  (now `timeoutMs`). The
   first answer through the relay varied more between runs than between
   settings (with the carrier off 747 to 6172 ms in the worker; p50 1223
   off, 973 refused, 1051 dropped; in the page 960, 1006, 1107). On loopback
-  (`webtransport-wisp`) the first start rides the session, and with UDP
-  blocked the first request answers within the suite's 400 ms of the
-  carrier off.
+  (`webtransport-wisp`) the first start rides the session, also one up 600
+  ms after the WebSocket, and a session that fails falls back with the
+  first request within the suite's 400 ms of the carrier off; with UDP
+  blocked, within that and the suite's `timeoutMs` (its handshake's).
 
   The host's console has one plain `[wisp]` line for each event, in
   KrunkNative's words (src/transport/transportLog.ts): `trying the
@@ -644,10 +657,10 @@ hung. No STomp path handed epoxy a function transport before the carrier.
   over: one try per transport start, none for 30 s after a failure.
 - A page that has never met a relay cannot know whether UDP reaches it
   without waiting for a handshake, and a session's Wisp stream answers a
-  round trip after the WebSocket's (Chrome opens a stream only on a
+  round trip after the session is up (Chrome opens a stream only on a
   session that is up, and the relay speaks first on it): the first start
-  waits that long for it after the WebSocket, and for a network that
-  drops UDP a tenth of the WebSocket's time, once per origin.
+  waits for the session, and a network that drops UDP waits out the
+  handshake's `timeoutMs`, once per relay.
 - `WebTransport` exists only in secure contexts: a host page on plain
   `http:` (not localhost) has none, and gets the WebSocket.
 - Chrome drops a datagram larger than the connection takes without a word,

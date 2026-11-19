@@ -7,10 +7,11 @@
 // - a start that knows nothing of the relay opens the session and the
 //   WebSocket together and rides the session, which is up in time, the
 //   WebSocket closed; remembered (IndexedDB) as working, it says so on the
-//   console and in the controller's `carrier`. A session that is up too late
-//   leaves that start on the WebSocket and is closed, and the next start
-//   rides it. The next start rides the session, no WebSocket opened and the
-//   document not fetched again: a navigation, a page's
+//   console and in the controller's `carrier`. A session up well after the
+//   WebSocket, within the carrier's time, is still the carrier; one that is
+//   up after that time leaves that start on the WebSocket and is closed,
+//   and the next start rides it. The next start rides the session, no
+//   WebSocket opened and the document not fetched again: a navigation, a page's
 //   fetch, the host's own request and a page's WebSocket, a UDP stream's
 //   DATA as datagrams (one too large for a datagram on the Wisp stream),
 //   Wisp v2 offered as a protocol; requests in flight when the relay cut the
@@ -20,7 +21,8 @@
 //   fetched again and the session is had;
 // - no document, blocked UDP, no matching hash, no listener: everything
 //   answers over the WebSocket with the first request within noise of the
-//   carrier off, the relay is remembered as failing, and the next start
+//   carrier off (blocked UDP: within noise of that and the carrier's
+//   time, which it waits out), the relay is remembered as failing, and the next start
 //   tries nothing; once that quiet is over (FAILED_QUIET_MS), a start rides
 //   the WebSocket at once and tries a session beside it, and when UDP came
 //   back the start after it rides the session;
@@ -53,6 +55,8 @@ import { startWebTransportServer } from '../wtserver.mjs';
 const TIMEOUT_MS = 10000;
 /** the carrier's timeout here, short so the fallback cases are quick */
 const CARRIER_MS = 1500;
+/** what a first start waits for the session in all (wispWebTransport.ts firstStartMs) */
+const FIRST_START_MS = CARRIER_MS * 1.5;
 
 const relay = await startWispWebTransport(`ws://127.0.0.1:${PORT}/wisp/`);
 let lossy = await startWispWebTransport(`ws://127.0.0.1:${PORT}/wisp/`);
@@ -399,11 +403,42 @@ for (const host of ['worker', 'page']) {
 		await fresh.context.close();
 	}
 
+	// a session up well after the WebSocket, within the carrier's time:
+	// still the carrier, the WebSocket closed
+	{
+		reset();
+		relay.documentDelay = 600;
+		// the last context's session close reaches the relay first
+		await sleep(300);
+		const before = snapshot();
+		const { context, page } = await controllerPage(host, relay.wisp);
+		const result = await load(page, `${FIXTURE}pages/walk-2.html`, 'WALK 2');
+		const info = await carrierInfo(page);
+		await sleep(300);
+		const d = delta(before);
+		relay.documentDelay = 0;
+		ok(
+			`${host} slow session: the first start rides it, not the WebSocket that was up first`,
+			allOk(result) &&
+				info?.carrier === 'webtransport' &&
+				info.ms >= 600 &&
+				d.sessions === 1 &&
+				d.sessionsClosed === 0 &&
+				d.ws === 1 &&
+				d.wsClosed === 1,
+			JSON.stringify({ result, info, d }),
+		);
+		await context.close();
+	}
+
 	// a session that is up too late for the first start: the WebSocket, the
 	// session closed once it is up and remembered, the next start on it
 	{
 		reset();
-		relay.documentDelay = 600;
+		// the document and the Wisp stream each within the carrier's time,
+		// the session after it
+		relay.documentDelay = CARRIER_MS - 300;
+		relay.streamDelay = CARRIER_MS - 300;
 		// the last context's session close reaches the relay first
 		await sleep(300);
 		const before = snapshot();
@@ -414,11 +449,13 @@ for (const host of ['worker', 'page']) {
 		await sleep(300);
 		const d = delta(before);
 		relay.documentDelay = 0;
+		relay.streamDelay = 0;
 		ok(
 			`${host} late session: the first start rides the WebSocket, saying why`,
 			allOk(result) &&
 				info?.carrier === 'websocket' &&
-				/within \d+ ms of the WebSocket/.test(info.why) &&
+				info.ms >= FIRST_START_MS &&
+				new RegExp(`not up within ${FIRST_START_MS} ms`).test(info.why) &&
 				d.ws === 1 &&
 				d.wsClosed === 0,
 			JSON.stringify({ result, info, d }),
@@ -770,10 +807,13 @@ for (const host of ['worker', 'page']) {
 			d.ws >= 1 && d.sessions === 0,
 			JSON.stringify(d),
 		);
-		// no wait for the session: within noise of the carrier off
+		// a session that fails is not waited for: within noise of the
+		// carrier off; one whose UDP is dropped is waited for the carrier's
+		// time (its handshake's), once
+		const waits = name === 'UDP blocked' ? CARRIER_MS : 0;
 		ok(
-			`${host} ${name}: the first request answered ${ms} ms after the start, ${baseline} ms with the carrier off`,
-			ms < baseline + 400,
+			`${host} ${name}: the first request answered ${ms} ms after the start, ${baseline} ms with the carrier off${waits ? `, plus the carrier's ${waits} ms` : ''}`,
+			ms < baseline + waits + 400,
 		);
 		ok(
 			`${host} ${name}: remembered as failing`,

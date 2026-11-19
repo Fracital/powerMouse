@@ -2,7 +2,9 @@
 // `carrier`, src/transport/wispWebTransport.ts), with a relay of holyWisp's
 // design (test/wisp-wt.mjs) in front of the demo's holyWisp named as the
 // session's discovery document, in the isolated and the same-origin mode:
-//  - UDP up: once a page is open, the controller's `carrier` is
+//  - UDP up, the session's document answering 600 ms late (a session up
+//    well after the WebSocket, as on stomp.fracit.al): the first start
+//    rides it, and once a page is open, the controller's `carrier` is
 //    WebTransport to the session's URL and About's Transport row says
 //    WebTransport (UDP) with it;
 //  - the session lost and UDP gone with it: the next page rides the
@@ -162,29 +164,16 @@ for (const [mode, base] of [
 	// UDP up: WebTransport
 	{
 		relay.udpBlocked = false;
+		relay.documentDelay = 600;
 		const page = await demo(base);
 		page.on('pageerror', (error) => errors.push(error.message));
 		await followCarrier(page);
 		// the bar, with its menu button, shows once a page is open
 		await submitLanding(page, `${FIXTURE}pages/walk-1.html`);
-		let carrier = await carrierIs(page, 'webtransport');
-		// a session up too late for the first start (a loaded machine) is
-		// the next start's: what is tested here is what the demo shows
-		if (carrier?.carrier !== 'webtransport') {
-			console.log(
-				`${mode}: the first start rode ${carrier?.carrier}, starting again`,
-			);
-			page.notes.length = 0;
-			await page.reload();
-			await page.waitForFunction(
-				() => document.getElementById('logMsg').textContent === 'Ready',
-			);
-			await followCarrier(page);
-			await submitLanding(page, `${FIXTURE}pages/walk-1.html`);
-			carrier = await carrierIs(page, 'webtransport');
-		}
+		const carrier = await carrierIs(page, 'webtransport');
+		relay.documentDelay = 0;
 		ok(
-			`${mode}: the controller's carrier is WebTransport to the session, timed`,
+			`${mode}: the first start rides the session that came after the WebSocket, as the controller's carrier says, timed`,
 			carrier?.carrier === 'webtransport' &&
 				carrier.url.includes(relay.url) &&
 				Number.isFinite(carrier.ms),

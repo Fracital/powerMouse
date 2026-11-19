@@ -61,9 +61,9 @@ export interface TransportDescriptor {
 	 * Wisp over the relay's WebTransport session (holyWisp's WebTransport
 	 * listener) instead of its WebSocket, when the relay offers one (a wss:
 	 * wisp URL dialed as https:, or what `/webtransport.json` on its origin
-	 * names) and it is up about as soon as the WebSocket (a relay met before:
-	 * within `timeoutMs`); the WebSocket otherwise (UDP blocked, no listener,
-	 * a certificate that does not match). Off unless set; epoxy only (it
+	 * names) and it is up in time (`timeoutMs`); the WebSocket otherwise (UDP
+	 * blocked, no listener, a certificate that does not match), which a
+	 * relay not met before has opened beside the session. Off unless set; epoxy only (it
 	 * takes the session as its wisp transport). The controller's `carrier`
 	 * says which. docs/webtransport.md.
 	 */

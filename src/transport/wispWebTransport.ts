@@ -26,15 +26,15 @@
 // The carrier is chosen when the transport starts (CarrierTransport.init),
 // from what this relay did before (`memory`, kept in IndexedDB across
 // reloads):
-// - nothing known: the session and the WebSocket are opened together, and
-//   the session is taken when its Wisp stream is up within graceFor() of
-//   the WebSocket's (half the WebSocket's own time, between GRACE_MIN_MS and
-//   GRACE_MAX_MS: a session's Wisp stream is about one round trip behind a
-//   WebSocket, which takes three) and its handshake was done within
-//   readyGraceFor() of it (a tenth, 50 to 100 ms: the handshake is done as
-//   the WebSocket is, and a network that drops UDP costs only this), else
-//   the WebSocket; the one not taken is closed, and the outcome is
-//   remembered;
+// - nothing known: UDP first. The session is the carrier when its Wisp
+//   stream is up within firstStartMs() of the start (each of its steps
+//   within `timeoutMs`), however long after the WebSocket that is; the
+//   WebSocket, opened beside it as a standby, is ridden only when the
+//   session failed (at once, without waiting out the time) or is not up by
+//   then. Past that time, whichever is up first; the one not taken is
+//   closed, and the session's outcome is remembered (a session up too late
+//   for this start is the next start's). A network that drops UDP pays its
+//   handshake's `timeoutMs` once per relay;
 // - the session worked: the session, within `timeoutMs`, else the WebSocket;
 // - it failed: the WebSocket alone for FAILED_QUIET_MS, then the WebSocket at
 //   once with a session tried beside it whose outcome is remembered, so a
@@ -78,7 +78,11 @@ export interface WispWebTransportOptions {
 	 * origin is asked only when that fails
 	 */
 	discovery?: string;
-	/** how long the document and then the session's handshake may take (ms) */
+	/**
+	 * how long the document, the session's handshake and its Wisp stream may
+	 * each take (ms); on a start that knows nothing of the relay, the session
+	 * may take half as long again in all before the WebSocket is ridden
+	 */
 	timeoutMs?: number;
 }
 
@@ -115,7 +119,24 @@ export interface CarrierLabel {
 /** the text RevivingTransport takes for a wisp connection that is gone (its DEAD) */
 export const CARRIER_LOST = 'WebTransportCarrierLost';
 
+/**
+ * Each step of a session (the document, the handshake, the Wisp stream);
+ * a network that drops UDP pays the handshake's once per relay. On a first
+ * start the whole session has FIRST_START_PART of it from the start. The
+ * session on https://stomp.fracit.al/ (holyWisp's QUIC listener on the
+ * page's own host, 136 ms away through a WireGuard hop that cost each
+ * session one server PTO; headless Chrome 157, 12 cold starts, 2026-11-19)
+ * had its handshake done in 1029 ms (p50) and 1388 at most, and
+ * its Wisp stream's first packet came at 1182 (p50), 1454 (p90) and 1511
+ * ms at most, about nine round trips, where the WebSocket's came at 520:
+ * 3 s is twice the slowest, so a relay of that shape is had on the first
+ * start up to about 300 ms away.
+ */
 const DEFAULT_TIMEOUT_MS = 2000;
+const FIRST_START_PART = 1.5;
+/** how long a start that knows nothing of the relay waits for the session */
+export const firstStartMs = (timeoutMs: number) =>
+	Math.round(timeoutMs * FIRST_START_PART);
 /**
  * How long a relay whose session could not be had is left to the WebSocket
  * alone; after it each start tries a session beside the WebSocket
@@ -127,27 +148,6 @@ const FAILED_FOR_MS = 7 * 24 * 60 * 60 * 1000;
 const WORKED_FOR_MS = 7 * 24 * 60 * 60 * 1000;
 /** how long a discovery document, or a URL that has none, is kept */
 const DOCUMENT_FOR_MS = 60 * 60 * 1000;
-/**
- * How long after the WebSocket's first packet a session's may come and be
- * taken, as a part of the WebSocket's time, and its bounds (ms): GRACE_*
- * when the session's handshake is done by then (its Wisp stream's first
- * packet is a round trip after it), READY_* for the handshake to be done
- * when it is not, which is all a network that drops UDP costs. Measured to
- * wss://holywisp.fracit.al/ from headless Chrome 157 (45 cold starts,
- * docs/webtransport.md): the handshake was done within 10 ms of the
- * WebSocket's first packet in 44 (one 311 ms after), and the Wisp stream's
- * first packet came 29 % (p50), 42 % (p90), 45 % (max) of the WebSocket's
- * time after the WebSocket's. GRACE_MIN_MS is for a relay a few ms away,
- * where scheduling is the round trip: on a loaded machine's loopback a
- * session whose handshake was done came more than 50 ms after the
- * WebSocket (demo-carrier). It costs a network that drops UDP nothing.
- */
-const GRACE_PART = 0.5;
-const GRACE_MIN_MS = 150;
-const GRACE_MAX_MS = 400;
-const READY_PART = 0.1;
-const READY_MIN_MS = 50;
-const READY_MAX_MS = 100;
 /** the protocol offered for Wisp v2 (holyWisp takes any; its own client offers this) */
 const V2_PROTOCOL = 'wisp-v2';
 
@@ -155,15 +155,6 @@ const DATA = 0x02;
 const CONNECT = 0x01;
 const CLOSE = 0x04;
 const UDP = 0x02;
-
-const part = (ms: number, of: number, min: number, max: number) =>
-	Math.round(Math.min(max, Math.max(min, ms * of)));
-/** the wait for a session after the WebSocket was up `wsMs` after the start */
-export const graceFor = (wsMs: number) =>
-	part(wsMs, GRACE_PART, GRACE_MIN_MS, GRACE_MAX_MS);
-/** the wait for its handshake, of that, when it was not done yet */
-export const readyGraceFor = (wsMs: number) =>
-	part(wsMs, READY_PART, READY_MIN_MS, READY_MAX_MS);
 
 /** where a relay's session is looked for, and what it is remembered by */
 export interface RelayPlan {
@@ -860,8 +851,6 @@ async function sessionCarrier(
 	plan: RelayPlan,
 	v2: boolean,
 	ms: number,
-	/** called when the handshake is done, before the Wisp stream is up */
-	handshaken?: () => void,
 ): Promise<OpenCarrier & { via: Via }> {
 	const { session, url, via } = await openSession(
 		plan,
@@ -869,7 +858,6 @@ async function sessionCarrier(
 		ms,
 		memory.via(plan.key),
 	);
-	handshaken?.();
 	const close = () => {
 		try {
 			session.close();
@@ -1192,8 +1180,8 @@ export class CarrierTransport implements ProxyTransport {
 	}
 
 	/** a session, remembered as working or failing */
-	#session(plan: RelayPlan, handshaken?: () => void): Promise<OpenCarrier> {
-		return sessionCarrier(plan, this.#v2, this.#timeoutMs, handshaken).then(
+	#session(plan: RelayPlan): Promise<OpenCarrier> {
+		return sessionCarrier(plan, this.#v2, this.#timeoutMs).then(
 			(open) => {
 				memory.worked(plan.key, open.via);
 				return open;
@@ -1259,7 +1247,7 @@ export class CarrierTransport implements ProxyTransport {
 			const reason = memory.reason(plan.key) ?? 'no session';
 			wispNote(
 				'info',
-				`trying the WebTransport transport to ${target} beside the WebSocket, for the next start`,
+				`trying the WebTransport transport to ${target} in the background, for the next start`,
 			);
 			const started = performance.now();
 			this.probed = this.#session(plan).then(
@@ -1267,7 +1255,7 @@ export class CarrierTransport implements ProxyTransport {
 					open.close();
 					wispNote(
 						'info',
-						`WebTransport session established in ${Math.round(performance.now() - started)} ms beside the WebSocket: the next start takes it`,
+						`WebTransport session established in ${Math.round(performance.now() - started)} ms in the background: the next start takes it`,
 					);
 					return true;
 				},
@@ -1283,109 +1271,106 @@ export class CarrierTransport implements ProxyTransport {
 		}
 		wispNote(
 			'info',
-			`trying the WebTransport transport to ${target}, the WebSocket beside it`,
+			`trying the WebTransport transport to ${target}, the WebSocket on standby`,
 		);
 		return this.#race(plan, socket);
 	}
 
 	/**
-	 * Nothing known: the session and the WebSocket together, the session
-	 * taken when its Wisp stream is up within graceFor() of the
-	 * WebSocket's, and its handshake done within readyGraceFor(); the other
-	 * is closed
+	 * Nothing known: the session is the carrier when it is up within
+	 * firstStartMs() of the start; the WebSocket, opened beside it, only when
+	 * the session failed or is not up by then, and past that, whichever is up
+	 * first. The other is closed when it opens.
 	 */
 	async #race(
 		plan: RelayPlan,
 		openSocket: () => Promise<OpenCarrier | null>,
 	): Promise<{ open: OpenCarrier | null; why: string }> {
-		const started = performance.now();
-		let handshaken!: () => void;
-		const handshake = new Promise<'handshaken'>(
-			(resolve) => (handshaken = () => resolve('handshaken')),
-		);
-		let isHandshaken = false;
-		void handshake.then(() => (isHandshaken = true));
-		const session = this.#session(plan, handshaken);
-		session.catch(() => {});
+		const budget = firstStartMs(this.#timeoutMs);
+		const session = this.#session(plan);
 		const socket = openSocket();
-		let sessionError: unknown = null;
-		type Won = { open: OpenCarrier | null; from: 'session' | 'socket' };
-		const bySession: Promise<Won | null> = session.then(
-			(open) => ({ open, from: 'session' }),
-			(error) => {
-				sessionError = error;
-				return null;
-			},
+		this.probed = session.then(
+			() => true,
+			() => false,
 		);
-		const bySocket: Promise<Won> = socket.then((open) => ({
-			open,
-			from: 'socket',
-		}));
-		const first = await Promise.race([
-			bySession.then((won) => won ?? bySocket),
-			bySocket,
-		]);
+		let sessionError: unknown = null;
+		const bySession = session.catch((error: unknown) => {
+			sessionError = error;
+			return null;
+		});
 		// the one not taken is closed when it opens
 		const loser = (other: Promise<OpenCarrier | null>) =>
 			void other.then(
 				(open) => open?.close(),
 				() => {},
 			);
-		this.probed = session.then(
-			() => true,
-			() => false,
-		);
-		if (first.from === 'session') {
-			loser(socket);
-			return { open: first.open, why: '' };
-		}
-		if (!first.open) {
-			// no WebSocket: the session when it comes
-			const open = await session.catch(() => null);
-			if (!open)
-				unavailable(plan.key, sessionError, ', and the WebSocket neither');
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const late = new Promise<'late'>((resolve) => {
+			timer = setTimeout(() => resolve('late'), budget);
+		});
+		const first = await Promise.race([bySession, late]);
+		clearTimeout(timer);
+		if (first !== 'late') {
+			if (first) {
+				loser(socket);
+				return { open: first, why: '' };
+			}
+			// it failed: the WebSocket, as soon as it is up
+			const open = await socket;
+			unavailable(
+				plan.key,
+				sessionError,
+				open ? ', trying the next transport' : ', and the WebSocket neither',
+			);
 			return {
 				open,
-				why: `no session either: ${short(sessionError)}`,
+				why: open
+					? short(sessionError)
+					: `no session either: ${short(sessionError)}`,
 			};
 		}
-		const wsMs = performance.now() - started;
-		const grace = graceFor(wsMs);
-		const readyGrace = readyGraceFor(wsMs);
-		const after = (ms: number) =>
-			new Promise<'late'>((resolve) => setTimeout(() => resolve('late'), ms));
-		const deadline = performance.now() + grace;
-		// its handshake first, when it is not done: a network that drops UDP
-		// costs this much
-		const handshakeLate =
-			!isHandshaken &&
-			(await Promise.race([handshake, bySession, after(readyGrace)])) ===
-				'late';
-		const late = handshakeLate
-			? 'late'
-			: await Promise.race([
-					bySession,
-					after(Math.max(0, deadline - performance.now())),
-				]);
-		if (late && late !== 'late') {
+		// not up in time: the WebSocket when it is up, unless the session is
+		// up first; the session goes on, and its outcome is remembered
+		type Won = { open: OpenCarrier | null; from: 'session' | 'socket' };
+		const won = await Promise.race<Won>([
+			bySession.then((open) =>
+				open
+					? { open, from: 'session' }
+					: socket.then((open) => ({ open, from: 'socket' })),
+			),
+			socket.then((open): Promise<Won> | Won =>
+				open
+					? { open, from: 'socket' }
+					: bySession.then((open) => ({ open, from: 'session' })),
+			),
+		]);
+		if (won.from === 'session') {
 			loser(socket);
-			return { open: late.open, why: '' };
+			if (!won.open)
+				unavailable(plan.key, sessionError, ', and the WebSocket neither');
+			return {
+				open: won.open,
+				why: won.open ? '' : `no session either: ${short(sessionError)}`,
+			};
 		}
 		loser(session);
-		if (late === 'late')
+		if (sessionError)
+			unavailable(plan.key, sessionError, ', trying the next transport');
+		else {
 			wispNote(
 				'info',
-				`WebTransport unavailable (${handshakeLate ? `no handshake within ${readyGrace} ms` : `not up within ${grace} ms`} of the WebSocket), trying the next transport; WebTransport again on the next start if it comes up`,
+				`WebTransport unavailable (not up within ${budget} ms), trying the next transport; WebTransport on the next start if it comes up`,
 			);
-		else unavailable(plan.key, sessionError, ', trying the next transport');
+			// one that never comes up is told as any failure is
+			void bySession.then((open) => {
+				if (!open) unavailable(plan.key, sessionError, '');
+			});
+		}
 		return {
-			open: first.open,
-			why:
-				late === 'late'
-					? handshakeLate
-						? `no handshake within ${readyGrace} ms of the WebSocket (remembered for the next start)`
-						: `not up within ${grace} ms of the WebSocket (remembered for the next start)`
-					: short(sessionError),
+			open: won.open,
+			why: sessionError
+				? short(sessionError)
+				: `not up within ${budget} ms (remembered for the next start)`,
 		};
 	}
 

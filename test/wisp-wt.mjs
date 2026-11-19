@@ -16,11 +16,12 @@
 //   fits, on the stream otherwise; a datagram from the client is one whole
 //   packet.
 //
-// `documentDelay` (ms) holds each document's answer back (a session that
-// comes late). `stats` counts the documents fetched, sessions (and those the client
-// closed), WebSockets (and those that ended), and the UDP DATA packets each
-// way by how they went. `document` (a function of the
-// fetch's count, returning the JSON body or null for a 404) replaces the
+// `documentDelay` (ms) holds each document's answer back and `streamDelay`
+// (ms) each Wisp stream's first packets (a session that comes late, each
+// step within the client's time). `stats` counts the documents fetched,
+// sessions (and those the client closed), WebSockets (and those that
+// ended), and the UDP DATA packets each way by how they went. `document`
+// (a function of the fetch's count, returning the JSON body or null for a 404) replaces the
 // answer; `rotate()` restarts the WebTransport listener with a new
 // certificate on the same port, the old hash listed as the previous;
 // `cut()` closes every session and WebSocket, as a restarted relay does;
@@ -93,6 +94,7 @@ export async function startWispWebTransport(upstream) {
 		stats,
 		document: null,
 		documentDelay: 0,
+		streamDelay: 0,
 		udpBlocked: false,
 		datagramMax: 0,
 		datagramLoss: 0,
@@ -230,7 +232,7 @@ export async function startWispWebTransport(upstream) {
 		const framed = Buffer.alloc(4 + packet.length);
 		framed.writeUInt32LE(packet.length, 0);
 		packet.copy(framed, 4);
-		if (session.stream) write(session, framed);
+		if (session.stream && !session.holding) write(session, framed);
 		else session.out.push(framed);
 	}
 
@@ -310,7 +312,13 @@ export async function startWispWebTransport(upstream) {
 			// the first stream is the Wisp stream; holyWisp takes no other
 			if (!session || session.stream) return api.reset(id, 0);
 			session.stream = id;
-			for (const framed of session.out.splice(0)) write(session, framed);
+			const flush = () => {
+				session.holding = false;
+				for (const framed of session.out.splice(0)) write(session, framed);
+			};
+			session.holding = relay.streamDelay > 0;
+			if (session.holding) setTimeout(flush, relay.streamDelay);
+			else flush();
 		} else if (kind === 'data') {
 			const session = [...sessions.values()].find((s) => s.stream === id);
 			if (!session) return;
