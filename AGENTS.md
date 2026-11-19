@@ -404,7 +404,11 @@ on every save (use a `git worktree`).
   origin rides, its Wisp stream ids remapped, so a reload and a second tab
   open no session of their own. Only the carrier is shared: epoxy, its pool,
   its TLS and stomp-h3's thread stay in each page's transport worker (a
-  SharedWorkerGlobalScope has no `Worker`). Without `webTransport` epoxy
+  SharedWorkerGlobalScope has no `Worker`). The limits are the host's too:
+  every realm asks its socket pool and WebSocket endpoint lock
+  (`socketPool.ts` HostedPool, one per profile as in Chrome; the 255
+  WebSockets stay a realm's), and a CONNECT the relay refuses past its
+  stream limit (0x49) waits there for a stream to close. Without `webTransport` epoxy
   still gets the WebSocket as a function transport, so an idle drop ends its
   wisp connection (`wisp-idle-drop`).
   docs/webtransport.md, "Wisp over WebTransport".

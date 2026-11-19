@@ -42,7 +42,11 @@
 // that stops carrying one UDP flow while the session lives). `pieces` (byte
 // counts, used in turn) cuts what goes to a client on the Wisp stream into
 // writes of those sizes, each on a later turn, so a packet and its length
-// prefix reach the client across chunks of their own.
+// prefix reach the client across chunks of their own. `maxStreams` (0 for
+// none) is the most streams a session has open, as holyWisp's
+// `max-streams-per-conn`: a CONNECT past it is closed with 0x49 and never
+// reaches the wisp server (`stats.refused` counts them, `stats.mostOpen`
+// the most a session had open).
 import { createSocket } from 'node:dgram';
 import { createServer } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -52,6 +56,8 @@ const CONNECT = 0x01;
 const DATA = 0x02;
 const CLOSE = 0x04;
 const UDP = 0x02;
+/** holyWisp's CLOSE reason for a CONNECT past the session's stream limit */
+const THROTTLED = 0x49;
 
 const b64 = (hex) => Buffer.from(hex, 'hex').toString('base64');
 const idOf = (packet) => packet.readUInt32LE(1);
@@ -72,6 +78,8 @@ export async function startWispWebTransport(upstream) {
 		udpOnStreamIn: 0,
 		udpOnStreamOut: 0,
 		datagramsLost: 0,
+		refused: 0,
+		mostOpen: 0,
 		stray: 0,
 		protocols: [],
 	};
@@ -106,6 +114,7 @@ export async function startWispWebTransport(upstream) {
 		datagramLoss: 0,
 		udpLost: false,
 		pieces: [],
+		maxStreams: 0,
 		/** the leaf's SPKI hash, for --ignore-certificate-errors-spki-list (a dial without hashes) */
 		get spki() {
 			return server.spki;
@@ -219,7 +228,10 @@ export async function startWispWebTransport(upstream) {
 	function toClient(session, packet) {
 		const type = packet[0];
 		const id = packet.length >= 5 ? idOf(packet) : -1;
-		if (type === CLOSE) session.udp.delete(id);
+		if (type === CLOSE) {
+			session.udp.delete(id);
+			session.open.delete(id);
+		}
 		if (type === DATA && session.udp.has(id)) {
 			if (relay.udpLost) {
 				stats.datagramsLost++;
@@ -265,8 +277,31 @@ export async function startWispWebTransport(upstream) {
 	function toServer(session, packet, datagram) {
 		const type = packet[0];
 		const id = packet.length >= 5 ? idOf(packet) : -1;
+		if (type === CONNECT) {
+			session.refused.delete(id);
+			if (relay.maxStreams && session.open.size >= relay.maxStreams) {
+				// refused: the client hears a CLOSE, the server nothing
+				stats.refused++;
+				session.refused.add(id);
+				const close = Buffer.alloc(6);
+				close[0] = CLOSE;
+				close.writeUInt32LE(id, 1);
+				close[5] = THROTTLED;
+				toClient(session, close);
+				return;
+			}
+			session.open.add(id);
+			stats.mostOpen = Math.max(stats.mostOpen, session.open.size);
+		}
+		if (session.refused.has(id)) {
+			if (type === CLOSE) session.refused.delete(id);
+			return;
+		}
 		if (type === CONNECT && packet[5] === UDP) session.udp.add(id);
-		if (type === CLOSE) session.udp.delete(id);
+		if (type === CLOSE) {
+			session.udp.delete(id);
+			session.open.delete(id);
+		}
 		if (relay.udpLost && type === DATA && session.udp.has(id)) {
 			stats.datagramsLost++;
 			return;
@@ -294,6 +329,8 @@ export async function startWispWebTransport(upstream) {
 				stream: 0,
 				held: Buffer.alloc(0),
 				udp: new Set(),
+				open: new Set(),
+				refused: new Set(),
 				queued: [],
 				out: [],
 				cut: [],
