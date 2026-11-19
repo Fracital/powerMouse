@@ -5,6 +5,7 @@
 // controller frame all construct descriptors through here, so the options
 // mean the same wherever the transport runs.
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
+import { withEchCache } from './echCache';
 import Http3Transport, { type Http3Options } from './http3/Http3Transport';
 import RevivingTransport from './RevivingTransport';
 import { useWebTransportModule } from './webTransportHost';
@@ -84,7 +85,8 @@ export async function constructTransport(
 			throw new TypeError(`${module} has no default export to construct`);
 		return Transport;
 	});
-	const args = options || [];
+	// epoxy's `ech_dns` answers are kept across reloads (echCache.ts)
+	const args = withEchCache(options || []);
 	// Wisp over the relay's WebTransport session when it has one (epoxy's
 	// function transport: a `wisp` URL to start from), its WebSocket
 	// otherwise (src/transport/wispWebTransport.ts). Without `webTransport`

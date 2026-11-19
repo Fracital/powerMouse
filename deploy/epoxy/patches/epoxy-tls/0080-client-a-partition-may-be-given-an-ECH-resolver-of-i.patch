@@ -1,0 +1,66 @@
+From 7dcbea7040226937a62af44d02f93f6f1ae3b1ad Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Thu, 19 Nov 2026 04:36:00 -0500
+Subject: [PATCH] client: a partition may be given an ECH resolver of its own
+
+EpoxyClient.partition(ech_resolver) makes the partition's stream provider
+ask that function for a host's ECH config list instead of the client's.
+Chrome keys its host cache, HTTPS records included, by the network
+partition: a name is asked again for each top-level site, and again for a
+frame cross-site to its top (measured in Chrome 157 against a DNS server
+that counted the queries). Without the argument the partition asks the
+client's resolver, as before.
+---
+ client/src/lib.rs             | 8 +++++---
+ client/src/stream_provider.rs | 9 ++++++---
+ 2 files changed, 11 insertions(+), 6 deletions(-)
+
+diff --git a/client/src/lib.rs b/client/src/lib.rs
+index 6f16973..85e9779 100644
+--- a/client/src/lib.rs
++++ b/client/src/lib.rs
+@@ -582,9 +582,11 @@ impl EpoxyClient {
+ 	/// client's wisp connection: a network partition's (a browser keeps
+ 	/// apart what pages of different top-level sites connect to, and every
+ 	/// connection is a wisp stream, so the partition opens no new wisp
+-	/// connection)
+-	pub fn partition(&self) -> EpoxyClient {
+-		let stream_provider = Arc::new(self.stream_provider.partition());
++	/// connection). `ech_resolver`, when given, is the partition's own
++	/// (a browser keys its host cache, HTTPS records included, by the
++	/// partition too); without it the partition asks this client's.
++	pub fn partition(&self, ech_resolver: Option<Function>) -> EpoxyClient {
++		let stream_provider = Arc::new(self.stream_provider.partition(ech_resolver));
+ 		let client = http_client(
+ 			&stream_provider,
+ 			self.title_case_headers,
+diff --git a/client/src/stream_provider.rs b/client/src/stream_provider.rs
+index 054973d..b0715e4 100644
+--- a/client/src/stream_provider.rs
++++ b/client/src/stream_provider.rs
+@@ -266,8 +266,9 @@ impl StreamProvider {
+ 	/// browser keys its connections, and the TLS sessions it resumes, by the
+ 	/// top-level site; each connection is a wisp stream already, so a
+ 	/// partition needs no wisp connection of its own, only its own pool
+-	/// (EpoxyClient::partition) and these caches.
+-	pub fn partition(&self) -> Self {
++	/// (EpoxyClient::partition) and these caches, and the ECH resolver it
++	/// is given (the provider's own when none is).
++	pub fn partition(&self, ech_resolver: Option<Function>) -> Self {
+ 		let fresh = |config: &Arc<ClientConfig>| {
+ 			let mut config = ClientConfig::clone(config);
+ 			config.resumption = Resumption::default();
+@@ -281,7 +282,9 @@ impl StreamProvider {
+ 			h2_config: fresh(&self.h2_config),
+ 			ws_config: fresh(&self.ws_config),
+ 			client_config: fresh(&self.client_config),
+-			ech_resolver: self.ech_resolver.clone(),
++			ech_resolver: ech_resolver
++				.map(SendWrapper::new)
++				.or_else(|| self.ech_resolver.clone()),
+ 			sessions: Arc::new(SessionCache::default()),
+ 		}
+ 	}
+-- 
+2.56.1
+
