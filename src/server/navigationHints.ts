@@ -62,6 +62,33 @@ export async function awaitNavigationHintPeek(
 	return peekNavigationHint(url);
 }
 
+/**
+ * The navigations a host started itself (a typed address, RemoteFrame.go),
+ * by URL, when it told the worker: no document's hint is coming for them,
+ * and the navigation waits for none (the isolated host's frame sends no
+ * referrer, and each one it navigated waited the whole wait: 100 ms of
+ * every address typed). Taken by the navigation that names it.
+ */
+const hostStarted = new Map<string, number>();
+
+/** the host is about to navigate a frame of its own to `url` */
+export function noteHostNavigation(url: string) {
+	const key = keyOf(url);
+	hostStarted.delete(key);
+	hostStarted.set(key, Date.now());
+	if (hostStarted.size > KEPT)
+		hostStarted.delete(hostStarted.keys().next().value!);
+	for (const wake of waiters.get(key) ?? []) wake();
+}
+
+/** whether the host told of a navigation to `key` (taken) */
+function hostTook(key: string): boolean {
+	const at = hostStarted.get(key);
+	if (at === undefined) return false;
+	hostStarted.delete(key);
+	return Date.now() - at <= TTL_MS;
+}
+
 /** the hint for a navigation to `url`, taken (it serves one navigation), when one arrived */
 export function takeNavigationHint(url: string): NavigationHint | null {
 	const key = keyOf(url);
@@ -79,6 +106,7 @@ export async function awaitNavigationHint(
 	const hint = takeNavigationHint(url);
 	if (hint) return hint;
 	const key = keyOf(url);
+	if (hostTook(key)) return null;
 	await new Promise<void>((resolve) => {
 		const wake = () => {
 			clearTimeout(timer);
@@ -90,7 +118,9 @@ export async function awaitNavigationHint(
 		if (!waiters.has(key)) waiters.set(key, new Set());
 		waiters.get(key)!.add(wake);
 	});
-	return takeNavigationHint(url);
+	const told = takeNavigationHint(url);
+	hostTook(key);
+	return told;
 }
 
 /**

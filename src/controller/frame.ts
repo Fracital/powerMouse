@@ -477,7 +477,7 @@ if (window === window.parent || !origins.length) {
 						[],
 					];
 				},
-				frameCommand: async ({ index, command, origin }) => {
+				frameCommand: async ({ index, command, origin, routed }) => {
 					const win = historyWindow(index);
 					if (!win) {
 						// the site pool: a document of a slot, stepped by its agent
@@ -490,6 +490,7 @@ if (window === window.parent || !origins.length) {
 					}
 					if (command === 'typed') {
 						noteBrowserNavigation(win);
+						if (routed) await controller?.typed(routed).catch(() => {});
 						return [true, []];
 					}
 					if (command === 'reload') {

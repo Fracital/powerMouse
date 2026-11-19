@@ -111,6 +111,7 @@ import { INLINE_MAX, INLINE_TOKEN, putInline } from './inline';
 import { openLoadChannel, servedLoadClient } from './loadGrants';
 import {
 	awaitNavigationHintPeek,
+	noteHostNavigation,
 	peekNavigationHint,
 	recordNavigationChain,
 	recordNavigationHint,
@@ -392,6 +393,9 @@ function registerController(
 				expectArrival(arrival);
 			},
 			route: async (url) => [(await server).route(url), []],
+			typed: async (routed) => {
+				noteHostNavigation((await server).realURL(routed));
+			},
 			unroute: async (url) => {
 				const ready = await server;
 				const real = ready.realURL(url);

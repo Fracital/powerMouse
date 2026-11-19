@@ -200,7 +200,13 @@ export type FrameBound = {
 	];
 	/** resolves to whether the command was carried out (false: nothing to go back/forward to) */
 	frameCommand: [
-		{ index: number; command: FrameCommand; origin?: string },
+		{
+			index: number;
+			command: FrameCommand;
+			origin?: string;
+			/** `typed`: the route the host navigates the frame to next */
+			routed?: string;
+		},
 		boolean,
 	];
 	clearCache: [];

@@ -781,6 +781,7 @@ export class RemoteController extends EventTarget {
 	async frameCommand(
 		element: HTMLIFrameElement,
 		command: FrameCommand,
+		routed?: string,
 	): Promise<boolean> {
 		await this.#ready;
 		const index = this.#frameIndex(element);
@@ -790,6 +791,7 @@ export class RemoteController extends EventTarget {
 			index,
 			command,
 			...(origin ? { origin } : {}),
+			...(routed ? { routed } : {}),
 		});
 	}
 	/** @internal the site pool: an op on run `run` of `element`'s frame's history, for the agent of `origin` (FrameBound.frameHistory) */
@@ -961,11 +963,14 @@ export class RemoteFrame extends EventTarget {
 				)
 				.catch(() => {});
 		}
-		// the next document is the host's, not the page's (history intervention)
+		// the next document is the host's, not the page's (history intervention),
+		// and the worker waits for no document's word of who started it
 		if (this.controller.siteMode)
 			await this.#runs.typed(origin ?? this.controller.proxyOrigin);
 		else
-			await this.controller.frameCommand(this.element, 'typed').catch(() => {});
+			await this.controller
+				.frameCommand(this.element, 'typed', routed)
+				.catch(() => {});
 		// where the frame is, for its first document's first script
 		await this.controller.measureGeometry();
 		this.element.src = routed;

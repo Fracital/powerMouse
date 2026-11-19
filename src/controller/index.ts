@@ -2912,6 +2912,15 @@ export class StompController extends EventTarget {
 		return new URL(await this.#call('route', url), this.directory).href;
 	}
 	/**
+	 * @internal the isolated host navigates a frame to the route `routed`
+	 * itself (frame.ts frameCommand `typed`): its navigation waits for no
+	 * document's hint. (A worker of a build that has no such call refuses.)
+	 */
+	async typed(routed: string): Promise<void> {
+		await this.#ready;
+		await this.#call('typed', routed);
+	}
+	/**
 	 * The real URL a routed one stands for (the inverse of `route()`, with
 	 * this controller's codec), or null for anything that is not a route: a
 	 * host reading a routed URL off a frame or a report never has to parse

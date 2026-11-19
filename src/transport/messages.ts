@@ -1257,6 +1257,8 @@ export type SWbound = {
 	retire: [];
 	/** resolve a URL against the controller's config into a routed (proxied) URL */
 	route: [string, string];
+	/** the host navigates a frame of its own to this routed URL now (a typed address): no document's hint is coming */
+	typed: [string];
 	/** the real URL a routed one stands for (the controller's codec); null for anything that is not a route */
 	unroute: [string, string | null];
 	/** drop every entry of the HTTP cache */
