@@ -142,6 +142,10 @@ export default class TransportWorker {
 	connectionLost() {
 		this.#rpc.call('connectionLost', undefined).catch(() => {});
 	}
+	/** the carrier host's port (carrierClient.ts); before init() for the first transport to ride it */
+	carrierHost(port: MessagePort) {
+		this.#rpc.call('carrierHost', port, [port]).catch(() => {});
+	}
 	/** a new port the worker serves, for a RemoteTransport on this side */
 	serve(): MessagePort {
 		const channel = new MessageChannel();

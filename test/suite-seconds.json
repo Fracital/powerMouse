@@ -36,6 +36,7 @@
 	"bypass-relative": 72,
 	"cache": 7,
 	"cache-stale": 5,
+	"carrier-host": 57,
 	"client-hints": 50,
 	"client-hints-unit": 1,
 	"codec": 3,

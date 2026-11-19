@@ -1701,6 +1701,8 @@ export type WorkerBound = {
 	jarChanged: [string];
 	/** the controller's page is back from the back/forward cache: Chrome closed the wisp WebSocket (RevivingTransport) */
 	connectionLost: [];
+	/** the carrier host's port (carrierClient.ts), sent before `init`: the transport's wisp connections ride its carriers */
+	carrierHost: [MessagePort];
 };
 
 /**

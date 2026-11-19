@@ -24,6 +24,17 @@ import { closePort, onPort, privateChannel } from './ports';
 
 /** bytes sent that the receiving reader has not taken yet, at most */
 export const BODY_WINDOW = 4 * 1024 * 1024;
+
+/**
+ * What the readers of the bodies this realm sent took, and when they last
+ * took any (their credit): a carrier host's rider hands epoxy the wire's
+ * packets at their pace (carrierClient.ts), and `waiters` hear each take
+ */
+export const bodiesTaken = {
+	bytes: 0,
+	at: -Infinity,
+	waiters: new Set<() => void>(),
+};
 /** the most one message carries */
 const MESSAGE_MAX = 1024 * 1024;
 
@@ -88,8 +99,12 @@ export function sendBody(
 
 	onPort(port, 'message', (message) => {
 		const data = message as BodyControl;
-		if (data.type === 'credit') credit += data.bytes;
-		else if (data.type === 'cancel') {
+		if (data.type === 'credit') {
+			credit += data.bytes;
+			bodiesTaken.bytes += data.bytes;
+			bodiesTaken.at = performance.now();
+			for (const waiter of [...bodiesTaken.waiters]) waiter();
+		} else if (data.type === 'cancel') {
 			stopped = true;
 			reader.cancel(data.reason).catch(() => {});
 			closePort(port);

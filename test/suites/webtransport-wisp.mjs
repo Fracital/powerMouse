@@ -23,7 +23,8 @@
 //   answers over the WebSocket with the first request within noise of the
 //   carrier off (blocked UDP: within noise of that and the carrier's
 //   time, which it waits out), the relay is remembered as failing, and the next start
-//   tries nothing; once that quiet is over (FAILED_QUIET_MS), a start rides
+//   tries nothing (it rides the WebSocket the carrier host holds); once
+//   that quiet is over (FAILED_QUIET_MS), a start rides
 //   the WebSocket at once and tries a session beside it, and when UDP came
 //   back the start after it rides the session;
 // - a session whose UDP the network drops (no session close): the next
@@ -36,6 +37,10 @@
 //   then with the flow's UDP lost after the handshake: Chrome's blackhole
 //   delay, not QUIC's idle timeout, before the request goes over TCP and
 //   the origin is marked broken, each said by a verbose `[net]` line.
+//
+// The starts that learn a relay first (controllerPage's `learn`) open
+// carriers of their own (`carrierHost: false`); carrier-host covers riding
+// the host's.
 //
 // When holyWisp's own build with its WebTransport listener is on the
 // machine (HOLYWISP_WT, or ~/src/holyWisp/build/release/holywisp), a page
@@ -91,6 +96,7 @@ function startController(page, host, wisp, extra = {}) {
 			const registration = await StompController.register('/stomp/');
 			const controller = new StompController({
 				serviceworker: registration,
+				...(extra.carrierHost === false && { carrierHost: false }),
 				transport: {
 					module: '/epoxy/index.mjs',
 					options: [{ wisp, ...(extra.options ?? {}) }],
@@ -163,7 +169,9 @@ const autoKey = (wisp) => `wisp ${wisp}`;
  * A controller page in a context of its own. `learn`: one start first (the
  * WebSocket, a session tried beside it), and once the origin remembers the
  * session worked, the page loaded again and started again, so that it
- * rides the session.
+ * rides the session. Those starts open their own carriers (no carrier
+ * host, whose session the second would ride): what is checked is how a
+ * start that remembers the session has it.
  */
 async function controllerPage(
 	host,
@@ -171,6 +179,7 @@ async function controllerPage(
 	extra = {},
 	{ learn = false, at = relay } = {},
 ) {
+	if (learn) extra = { carrierHost: false, ...extra };
 	const context = await browser.newContext();
 	const page = await context.newPage();
 	page.on('pageerror', (error) => errors.push(error.message));
@@ -833,16 +842,23 @@ for (const host of ['worker', 'page']) {
 			echoed === 'one,two,three',
 			echoed,
 		);
-		// the next start of the origin tries nothing
+		// the next start of the origin tries nothing: it rides the WebSocket
+		// the carrier host holds, as the quiet has it
 		const again = snapshot();
 		await page.goto(`${PROXY}stomp/controllerFrame.html`);
 		await startController(page, host, relay.wisp);
 		const next = await load(page, `${FIXTURE}pages/walk-4.html`, 'WALK 4');
 		const d2 = delta(again);
+		const shared = await carrierInfo(page);
 		ok(
-			`${host} ${name}: the next start goes to the WebSocket without a document or a handshake`,
-			allOk(next) && d2.documents === 0 && d2.sessions === 0 && d2.ws >= 1,
-			JSON.stringify({ next, d2 }),
+			`${host} ${name}: the next start rides the WebSocket the carrier host holds, without a document or a handshake`,
+			allOk(next) &&
+				d2.documents === 0 &&
+				d2.sessions === 0 &&
+				d2.ws === 0 &&
+				shared?.carrier === 'websocket' &&
+				shared.shared > 0,
+			JSON.stringify({ next, d2, shared }),
 		);
 		await context.close();
 	}
