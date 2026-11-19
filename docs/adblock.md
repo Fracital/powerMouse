@@ -319,7 +319,13 @@ handshake, as the request rules do. A `SiteShields` entry
 blockScripts, blockFingerprinting, cookies, forget }`.
 
 `enabled` is the master toggle: down, every layer below is off for the host
-without touching STomp's rewriting. What the worker enforces today:
+without touching STomp's rewriting. In the demo, the Block ads switch beside
+the transport select takes the shields down on every site while it is off:
+each entry, and a `*` entry for the hosts with none, goes to the controller
+with `enabled: false`, the button and panel read down, and the panel's
+master switch is disabled. What each site has stored is persisted as it
+was, so the sites come back as they were left when Block ads is on again.
+What the worker enforces today:
 
 - `mode` (`aggressive` | `standard` | `allow`): the ad/tracker blocker.
   `allow` turns it off for the host; `aggressive` and `standard` both block

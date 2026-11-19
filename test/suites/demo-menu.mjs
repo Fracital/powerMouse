@@ -9,6 +9,8 @@
 //    label and icon saying what choosing it does, also after the page left
 //    fullscreen another way; where the page cannot be made fullscreen the
 //    menu leaves it out;
+//  - with the Block ads switch off the shields read down on every site,
+//    and what each site has stored is kept for when it is on again;
 //  - About opens a modal dialog with the version, build id, commit and build
 //    date the server serves (dist/build.json through /api/status), and the
 //    console badges' facts; Escape, its Close button and the backdrop close
@@ -688,6 +690,64 @@ for (const [width, height] of [
 	errors.push(...phone.errors);
 	await phone.close();
 }
+
+// ---- Block ads off: shields down everywhere --------------------------------------
+// the demo's Block ads switch off takes the shields down on every site: the
+// button reads down, the panel says why and its master switch is off and
+// disabled, and what was stored for a site is kept as it was (on again, the
+// sites come back as they were left)
+const unblocked = await browsing({}, (page) =>
+	page.addInitScript(() => {
+		if (window !== top || sessionStorage.getItem('seeded')) return;
+		sessionStorage.setItem('seeded', '1');
+		localStorage.setItem('stomp-demo:adblock', '0');
+		localStorage.setItem(
+			'stomp-demo:shields',
+			JSON.stringify([{ host: 'kept.example', enabled: true }]),
+		);
+	}),
+);
+const upWhileOff = await unblocked.evaluate(() =>
+	document.getElementById('toolShields').classList.contains('up'),
+);
+await unblocked.click('#toolShields');
+await painted(unblocked);
+const offPanel = await unblocked.evaluate(() => {
+	const master = document.getElementById('shMaster');
+	return {
+		state: document.querySelector('#shieldsPanel .shieldsState')?.textContent,
+		checked: master?.checked,
+		disabled: master?.disabled,
+		stored: JSON.parse(localStorage.getItem('stomp-demo:shields') || '[]'),
+	};
+});
+ok(
+	'with Block ads off the shields read down on every site, the master switch off and disabled',
+	upWhileOff === false &&
+		/Shields down while Block ads is off/.test(offPanel.state ?? '') &&
+		offPanel.checked === false &&
+		offPanel.disabled === true,
+	JSON.stringify({ upWhileOff, ...offPanel }),
+);
+ok(
+	'and what each site has stored is kept as it was, none written down',
+	offPanel.stored.length > 0 &&
+		offPanel.stored.every((entry) => entry.enabled !== false) &&
+		offPanel.stored.find((entry) => entry.host === 'kept.example')?.enabled ===
+			true,
+	JSON.stringify(offPanel.stored),
+);
+errors.push(...unblocked.errors);
+await unblocked.close();
+const blocking = await browsing();
+ok(
+	'with Block ads on the shields are up',
+	await blocking.evaluate(() =>
+		document.getElementById('toolShields').classList.contains('up'),
+	),
+);
+errors.push(...blocking.errors);
+await blocking.close();
 
 // ---- no Fullscreen API ----------------------------------------------------------
 // an iPhone's Safari has no element fullscreen, under either name (Chrome

@@ -142,8 +142,44 @@ function loadShields() {
 }
 function persistShields() {
 	try {
-		localStorage.setItem(SHIELDS_KEY, JSON.stringify(controller.shields.all()));
+		localStorage.setItem(
+			SHIELDS_KEY,
+			JSON.stringify(controller.shields.all().map(keptShields)),
+		);
 	} catch {}
+}
+// With Block ads off the shields are down on every site: each entry goes to
+// the controller with `enabled: false` (and a '*' entry covers the hosts with
+// none), so the worker applies none of their layers, and the button and panel
+// read down. What a site was set to is kept as it was, so turning Block ads
+// on again brings every site's shields back as the user left them.
+const SHIELDS_FORCED_DOWN = ADBLOCK.adblock === false;
+// each host's own `enabled` as stored, while Block ads is off
+const storedEnabled = new Map();
+function keptShields(entry) {
+	if (!SHIELDS_FORCED_DOWN) return entry;
+	const kept = { ...entry };
+	const stored = storedEnabled.get(entry.host);
+	if (stored === undefined) delete kept.enabled;
+	else kept.enabled = stored;
+	return kept;
+}
+function forcedDown(list) {
+	if (!SHIELDS_FORCED_DOWN) return list;
+	if (CFG.shieldsDefaults !== false && !list.some((e) => e && e.host === '*'))
+		list.push({ host: '*' });
+	return list
+		.filter((entry) => entry && entry.host)
+		.map((entry) => {
+			const host = String(entry.host).toLowerCase();
+			storedEnabled.set(host, entry.enabled);
+			return { ...entry, host, enabled: false };
+		});
+}
+// a host's shields as the button and panel show them
+function shownShields(host) {
+	const state = controller.shields.get(host);
+	return SHIELDS_FORCED_DOWN ? { ...state, enabled: false } : state;
 }
 // the shields the controller starts with: what this page kept, plus a '*'
 // default entry so every host with no entry of its own gets the "goodies on"
@@ -155,7 +191,7 @@ function initialShields() {
 	const list = loadShields();
 	if (CFG.shieldsDefaults !== false && !list.some((e) => e && e.host === '*'))
 		list.push({ host: '*' });
-	return list;
+	return forcedDown(list);
 }
 // how many requests the blocker stopped or redirected for each tab's frame,
 // for the omnibar badge and the panel's count; reset when a tab navigates
@@ -3650,7 +3686,7 @@ function syncShields() {
 	// turns on the per-site layers (HTTPS upgrade, cookie policy) that would
 	// change requests out from under a page. The entry, with its "goodies on"
 	// defaults, is written when the user opens Shields for the site (openShields)
-	const state = controller.shields.get(host);
+	const state = shownShields(host);
 	shieldsButton.classList.toggle('up', !!state.enabled);
 	const count = shieldsCountNow();
 	// the global "Show the number of blocked items on the shields icon" setting
@@ -3870,7 +3906,7 @@ function playShieldsNav(dir) {
 }
 
 function buildShieldsPanel(host) {
-	const state = controller.shields.get(host);
+	const state = shownShields(host);
 	const count = shieldsCountNow();
 	const favicon = (activeTab && activeTab.icon) || '/pm/icons/globe.png';
 	shieldsPanel.classList.toggle('down', !state.enabled);
@@ -3879,8 +3915,8 @@ function buildShieldsPanel(host) {
 		<div class="shieldsHead">
 			<span class="shieldsFavicon" style="background-image:url('${escapeHtml(favicon)}')"></span>
 			<span class="shieldsDomain" dir="ltr" title="${escapeHtml(host)}">${escapeHtml(host)}</span>
-			<span class="shieldsState">Shields <b>${state.enabled ? 'up' : 'down'}</b> for this site</span>
-			<input type="checkbox" class="shieldsToggle" id="shMaster" ${state.enabled ? 'checked' : ''} aria-label="Shields up for this site" />
+			<span class="shieldsState">Shields <b>${state.enabled ? 'up' : 'down'}</b> ${SHIELDS_FORCED_DOWN ? 'while Block ads is off' : 'for this site'}</span>
+			<input type="checkbox" class="shieldsToggle" id="shMaster" ${state.enabled ? 'checked' : ''} ${SHIELDS_FORCED_DOWN ? 'disabled title="Turn on Block ads to raise shields"' : ''} aria-label="Shields up for this site" />
 		</div>`;
 
 	const footer = `
@@ -5206,7 +5242,8 @@ const shieldsOpen = shieldsPopover.isOpen;
 function openShields() {
 	const host = activeHost();
 	if (!host) return;
-	if (!controller.shields.has(host)) controller.shields.set(host, {});
+	if (!controller.shields.has(host))
+		controller.shields.set(host, SHIELDS_FORCED_DOWN ? { enabled: false } : {});
 	shieldsPanel.dataset.host = host;
 	// clear any leftover view-swap class so reopening plays only the panel-in
 	// animation, not a stale per-child one
