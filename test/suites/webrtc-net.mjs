@@ -1394,8 +1394,10 @@ for (const result of gone) {
 	// the relay sees the checks of the pair sent on unless its port closed.
 	// Chrome checks it 2656.25 ms apart (2500 ms or more on its 265.625 ms
 	// turns), but a loaded host holds a check: on CI's runner one came 98
-	// ms late, 2573 and 2641 ms from the next ones. Natively a check may be
-	// held 200 ms; through the proxy the gaps are Chrome's unloaded ones
+	// ms late, 2573 and 2641 ms from the next ones; on another the
+	// connection read disconnected 4898 ms after the first unanswered check
+	// the relay saw. Natively a check may be held 200 ms;
+	// through the proxy the gaps and windows are Chrome's unloaded ones
 	const slack = base ? 0 : 200;
 	const cadence =
 		how === 'refuse' ||
@@ -1408,10 +1410,10 @@ for (const result of gone) {
 			result.fastFrom <= 3000 &&
 			result.fastChecks >= 150 &&
 			result.fastOff * 10 <= result.fastChecks &&
-			disconnected - result.firstUnanswered >= 4950 &&
-			disconnected - result.firstUnanswered <= 5350 &&
-			failed - result.firstUnanswered >= 14950 &&
-			failed - result.firstUnanswered <= 15350 &&
+			disconnected - result.firstUnanswered >= 4950 - slack &&
+			disconnected - result.firstUnanswered <= 5350 + slack &&
+			failed - result.firstUnanswered >= 14950 - slack &&
+			failed - result.firstUnanswered <= 15350 + slack &&
 			result.lastCheck >= failed - 400 &&
 			result.lastCheck <= failed + 300);
 	if (!base) {

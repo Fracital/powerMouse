@@ -66,8 +66,11 @@ export function owners(serverPid, suitePid) {
 	};
 }
 
-/** local port -> the inodes (`socket:[n]`) of the sockets bound to it now */
-export function table(protocol) {
+/**
+ * local port -> the inodes (`socket:[n]`) of the sockets bound to it now
+ * (with `to`, only those connected to that port)
+ */
+export function table(protocol, to = null) {
 	const ports = new Map();
 	for (const name of [protocol, `${protocol}6`]) {
 		let text;
@@ -81,6 +84,9 @@ export function table(protocol) {
 			if (fields.length < 10) continue;
 			const local = fields[1];
 			const port = parseInt(local.slice(local.lastIndexOf(':') + 1), 16);
+			const remote = fields[2];
+			if (to && parseInt(remote.slice(remote.lastIndexOf(':') + 1), 16) !== to)
+				continue;
 			if (!ports.has(port)) ports.set(port, new Set());
 			ports.get(port).add(`socket:[${fields[9]}]`);
 		}

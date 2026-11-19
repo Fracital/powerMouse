@@ -153,8 +153,9 @@ function frames(buffered, each) {
  * answer back, so that the socket that asked lives long enough for a suite
  * to sample it. `port` 0 takes a free one. `onMessage(message, from)` sees
  * every message as it arrives, to log what a browser sends. With
- * `arrival(port, protocol)` (test/sockets.mjs) each packet and connection
- * keeps what it says of the socket it came from as it arrived.
+ * `arrival(port, protocol, to)` (test/sockets.mjs) each packet and
+ * connection keeps what it says of the socket it came from as it arrived
+ * (a connection's with the port it came to).
  */
 export function startTurn({
 	transport = 'udp',
@@ -449,7 +450,7 @@ export function startTurn({
 			from: `${raw.remoteAddress}:${raw.remotePort}`,
 			port: raw.remotePort,
 			at: Date.now(),
-			...arrival?.(raw.remotePort, 'tcp'),
+			...arrival?.(raw.remotePort, 'tcp', raw.localPort),
 		};
 		entries.set(entry.from, entry);
 		server.connections.push(entry);

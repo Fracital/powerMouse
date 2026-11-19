@@ -15,7 +15,11 @@
 //   server's stream for a STUN request can live a few hundred
 //   milliseconds, and the suite's thread stalls for as long under load);
 //   TCP connections to the fixtures, which outlive any gap, are sampled
-//   with `ss`.
+//   with `ss`, with the port each is connected to: Linux picks a
+//   connection's local port by a hash of where it goes, so another
+//   process's connection elsewhere often has the same local port, and a
+//   fixture that says its own port (`arrival`'s `to`) counts only those
+//   connected to it.
 //
 // A packet is the holder's of its port at the time it can have been sent:
 // from when the fixture's thread last ran before it (it arrived no
@@ -39,9 +43,9 @@ const SLACK = 2 * PERIOD + TICK;
 const ORDER = ['browser', 'server', 'other', 'suite'];
 
 /**
- * Starts sampling. `arrival(port, protocol)` is called by a fixture as a
- * packet or a connection from `port` arrives, and answers what to keep of
- * it: `{ port, at, since, who }`. `senders(packets, protocol)` tells who
+ * Starts sampling. `arrival(port, protocol, to)` is called by a fixture as a
+ * packet or a connection from `port` arrives (a TCP one at the fixture's
+ * port `to`), and answers what to keep of it: `{ port, at, since, who, to }`. `senders(packets, protocol)` tells who
  * sent each of `packets` (such arrivals, or `{ port, at }`): 'browser',
  * 'server' (the demo's wisp server), 'suite' (this process), 'other',
  * 'unseen' or 'ambiguous'; `owner(port, protocol)` tells who holds a port
@@ -83,7 +87,7 @@ export async function watchSockets(proxy = PROXY) {
 	});
 	sampler.unref();
 
-	/** TCP: `port` -> [{ owner, first, last }] (indexes in `taken`), from `ss` */
+	/** TCP: `port` -> [{ owner, to, first, last }] (indexes in `taken`; `to` the port it is connected to), from `ss` */
 	const tcp = new Map();
 	const taken = [];
 	let sampling = true;
@@ -96,16 +100,19 @@ export async function watchSockets(proxy = PROXY) {
 			if (stdout !== null) {
 				const index = taken.push({ start, end: Date.now() }) - 1;
 				for (const line of stdout.split('\n')) {
-					const local = line.trim().split(/\s+/)[3];
+					const [, , , local, peer = ''] = line.trim().split(/\s+/);
 					if (!local) continue;
 					const port = Number(local.slice(local.lastIndexOf(':') + 1));
+					const to = Number(peer.slice(peer.lastIndexOf(':') + 1)) || null;
 					for (const [, pid] of line.matchAll(/pid=(\d+)/g)) {
 						const owner = ownerOf(Number(pid));
 						let spans = tcp.get(port);
 						if (!spans) tcp.set(port, (spans = []));
-						const last = spans.findLast((span) => span.owner === owner);
+						const last = spans.findLast(
+							(span) => span.owner === owner && span.to === to,
+						);
 						if (last && last.last >= index - 1) last.last = index;
-						else spans.push({ owner, first: index, last: index });
+						else spans.push({ owner, to, first: index, last: index });
 					}
 				}
 			}
@@ -114,17 +121,18 @@ export async function watchSockets(proxy = PROXY) {
 	})();
 
 	/** who holds the socket at local `port` this moment */
-	const holder = (port, protocol) => {
-		const inodes = table(protocol).get(port) ?? new Set();
+	const holder = (port, protocol, to) => {
+		const inodes = table(protocol, to).get(port) ?? new Set();
 		resolve(inodes, true);
 		const who = [...inodes].map((inode) => found.get(inode));
 		return ORDER.find((owner) => who.includes(owner)) ?? 'gone';
 	};
-	const arrival = (port, protocol = 'udp') => ({
+	const arrival = (port, protocol = 'udp', to = null) => ({
 		port,
 		at: Date.now(),
 		since: ran,
-		who: holder(port, protocol),
+		who: holder(port, protocol, to),
+		to,
 	});
 
 	/** each packet attributed so far, by verdict, once */
@@ -139,7 +147,7 @@ export async function watchSockets(proxy = PROXY) {
 			}
 			return verdict;
 		});
-	const sender = ({ port, at, since = at, who: told }, protocol) => {
+	const sender = ({ port, at, since = at, who: told, to }, protocol) => {
 		const who = new Set(told && told !== 'gone' ? [told] : []);
 		if (protocol === 'udp') {
 			for (const span of udp.values())
@@ -154,7 +162,12 @@ export async function watchSockets(proxy = PROXY) {
 			let after = taken.findIndex((sample) => sample.start >= at);
 			if (after === -1) after = taken.length - 1;
 			for (const span of tcp.get(port) ?? [])
-				if (span.first <= after && span.last >= before) who.add(span.owner);
+				if (
+					span.first <= after &&
+					span.last >= before &&
+					(!to || span.to === to)
+				)
+					who.add(span.owner);
 		}
 		if (who.size > 1) return 'ambiguous';
 		return [...who][0] ?? 'unseen';
