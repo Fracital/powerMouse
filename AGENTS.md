@@ -397,9 +397,16 @@ on every save (use a `git worktree`).
   connection (src/transport/transportLog.ts): made where the transport
   runs, printed by the host's controller only. It rests on epoxy-tls 0075: a
   function transport's sink that waited held wisp-mux's lock across a TLS
-  handshake's flush and hung the whole connection. Without `webTransport`
-  epoxy still gets the WebSocket as a function transport, so an idle drop
-  ends its wisp connection (`wisp-idle-drop`).
+  handshake's flush and hung the whole connection.
+  The carrier itself lives in the carrier host (`src/transport/carrierHost.ts`,
+  `carrierClient.ts`): a SharedWorker of the transport worker's script
+  (`name: 'stomp-carrier'`, `extendedLifetime`) that every transport of the
+  origin rides, its Wisp stream ids remapped, so a reload and a second tab
+  open no session of their own. Only the carrier is shared: epoxy, its pool,
+  its TLS and stomp-h3's thread stay in each page's transport worker (a
+  SharedWorkerGlobalScope has no `Worker`). Without `webTransport` epoxy
+  still gets the WebSocket as a function transport, so an idle drop ends its
+  wisp connection (`wisp-idle-drop`).
   docs/webtransport.md, "Wisp over WebTransport".
 
 When a site hangs or a socket goes quiet, suspect the transport before the

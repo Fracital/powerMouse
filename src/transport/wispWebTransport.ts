@@ -61,6 +61,7 @@ import type {
 	RawHeaders,
 	TransferrableResponse,
 } from '@mercuryworkshop/proxy-transports';
+import { askCarrierHost, type CarrierGiven } from './carrierClient';
 import { promptSink } from './promptSink';
 import { wispNote } from './transportLog';
 
@@ -108,6 +109,12 @@ export interface CarrierInfo {
 	transport?: string;
 	/** whether the descriptor turned HTTP/3 on */
 	http3?: boolean;
+	/**
+	 * the carrier is the carrier host's, which this origin's transports
+	 * share (carrierHost.ts): how long it had been up when this transport
+	 * took it, in ms (0: it was opened for this one)
+	 */
+	shared?: number;
 }
 
 /** what CarrierTransport tells of the transport it carries, beside the carrier */
@@ -265,10 +272,11 @@ export const memory = (() => {
 	};
 	const api = {
 		async get(key: string): Promise<Known | undefined> {
-			if (known.has(key)) return live(known.get(key));
+			// what is stored, every time: the carrier host's realm outlives
+			// pages that wrote here too (a transport that chose on its own)
 			const stored = (await run('readonly', (store) => store.get(key))) as
 				Remembered | undefined;
-			if (stored && !known.has(key)) known.set(key, stored);
+			if (stored) known.set(key, stored);
 			return live(known.get(key));
 		},
 		/** a failure's quiet: when it failed and until when nothing is tried beside the WebSocket */
@@ -434,13 +442,13 @@ interface Discovery {
 }
 
 /** what epoxy's function transport gives back (EpoxyWispTransportResult) */
-interface WispPipe {
+export interface WispPipe {
 	read: ReadableStream<ArrayBuffer>;
 	write: WritableStream<Uint8Array>;
 }
 
 /** a carrier that is open, its first Wisp packet read (buffered for epoxy) */
-interface OpenCarrier {
+export interface OpenCarrier {
 	carrier: Carrier;
 	url: string;
 	pipe: WispPipe;
@@ -452,6 +460,8 @@ interface OpenCarrier {
 	closed?: Promise<number>;
 	/** the Wisp packets it carried each way, and of them as datagrams (the session's) */
 	stats?: PipeStats;
+	/** a wisp connection of the carrier host's (carrierHost.ts), which tells how the carrier ends */
+	hosted?: boolean;
 }
 
 /**
@@ -459,7 +469,7 @@ interface OpenCarrier {
  * the relay's remembered as lost: the next start rides the WebSocket at
  * once and tries a session beside it, which tells the two apart
  */
-function watchEnd(open: OpenCarrier, key: string) {
+export function watchEnd(open: OpenCarrier, key: string) {
 	const up = performance.now();
 	const stats = open.stats;
 	const ended = (how: string) =>
@@ -1008,6 +1018,8 @@ interface Choice {
 	open: OpenCarrier | null;
 	why: string;
 	ms: number;
+	/** what the carrier host said, when the carrier is its */
+	shared?: CarrierGiven;
 }
 
 /**
@@ -1025,7 +1037,7 @@ const takesPipes = (transport: ProxyTransport) =>
  * transport's own (CarrierTransport), or the carrier host's that every
  * transport of the origin shares (carrierHost.ts)
  */
-class Chooser {
+export class Chooser {
 	#wisp: string;
 	#first: { wisp_v2?: boolean; wisp_ws_protocols?: string[] };
 	#webTransport: WispWebTransportOptions | null;
@@ -1406,18 +1418,33 @@ export class CarrierTransport implements ProxyTransport {
 	 */
 	async #plain() {
 		const key = `wisp ${this.#wisp}`;
-		this.#connecting(true);
 		let started = performance.now();
+		// said once, unless the WebSocket is the carrier host's, up already
+		let told = false;
+		const connecting = () => {
+			if (!told) this.#connecting(true);
+			told = true;
+		};
 		if (takesPipes(this.#base!)) {
 			const piped = this.#unchosen();
-			const opening = this.#chooser.socket().catch((error) => {
-				wispNote(
-					'warn',
-					`websocket did not open (${short(error)}); the first request tries again`,
-				);
-				return null;
-			});
-			const [open] = await Promise.all([
+			const opening = (async (): Promise<{
+				open: OpenCarrier | null;
+				given: CarrierGiven | null;
+			}> => {
+				const hosted = await this.#hosted(null);
+				if (!hosted?.open || !hosted.given.upMs) connecting();
+				if (hosted) return hosted;
+				try {
+					return { open: await this.#chooser.socket(), given: null };
+				} catch (error) {
+					wispNote(
+						'warn',
+						`websocket did not open (${short(error)}); the first request tries again`,
+					);
+					return { open: null, given: null };
+				}
+			})();
+			const [{ open, given }] = await Promise.all([
 				opening,
 				// epoxy's module loads while the WebSocket opens
 				piped.transport.init().catch(() => {}),
@@ -1428,16 +1455,19 @@ export class CarrierTransport implements ProxyTransport {
 				this.#base = piped.transport;
 				this.#piped = true;
 				this.carrier = 'websocket';
+				if (given?.upMs) this.#riding(given);
 				await this.#base.init();
 				this.#announce(key, {
 					carrier: 'websocket',
 					url: this.#wisp,
 					ms,
 					why: 'off',
+					...(given && { shared: given.upMs }),
 				});
 				return;
 			}
 		}
+		connecting();
 		await this.#base!.init();
 		this.carrier = 'websocket';
 		const client = (
@@ -1486,8 +1516,52 @@ export class CarrierTransport implements ProxyTransport {
 	async #chooseTimed(): Promise<Choice> {
 		const plan = relayPlan(this.#wisp, this.#webTransport!);
 		const started = performance.now();
+		const hosted = await this.#hosted(this.#webTransport);
+		if (hosted)
+			return {
+				plan,
+				open: hosted.open,
+				why: hosted.given.why,
+				ms: Math.round(performance.now() - started),
+				shared: hosted.given,
+			};
 		const { open, why } = await this.#chooser.choose(plan);
 		return { plan, open, why, ms: Math.round(performance.now() - started) };
+	}
+
+	/** a rider of the carrier host's (carrierHost.ts), or null to open a carrier here */
+	#hosted(webTransport: WispWebTransportOptions | null) {
+		const first = this.#options[0] as {
+			wisp_v2?: boolean;
+			wisp_ws_protocols?: string[];
+		};
+		const ms = webTransport?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+		return askCarrierHost(
+			{
+				wisp: this.#wisp,
+				first: {
+					wisp_v2: Boolean(first.wisp_v2),
+					...(first.wisp_ws_protocols && {
+						wisp_ws_protocols: [...first.wisp_ws_protocols],
+					}),
+				},
+				webTransport,
+			},
+			// the host may choose as long as a transport would, the WebSocket's
+			// wait included
+			firstStartMs(ms) + Math.max(10000, ms),
+		);
+	}
+
+	/** the note of a carrier the host shares: what it rides, and since when */
+	#riding(given: CarrierGiven) {
+		const what = this.#what;
+		const name =
+			given.carrier === 'webtransport' ? 'WebTransport session' : 'WebSocket';
+		wispNote(
+			'info',
+			`riding the ${name} to ${given.url} that is up already (${Math.round(given.upMs / 1000)} s, ${given.riders} transport${given.riders === 1 ? '' : 's'} on it): wisp transport ${LABEL[given.carrier ?? 'websocket']}${what ? ` (${what})` : ''}`,
+		);
 	}
 
 	/**
@@ -1523,7 +1597,7 @@ export class CarrierTransport implements ProxyTransport {
 			this.#choice = null;
 			const piped = this.#unchosen();
 			// epoxy's module loads while the carrier is chosen
-			const [{ plan, open, why, ms }] = await Promise.all([
+			const [{ plan, open, why, ms, shared }] = await Promise.all([
 				choosing,
 				piped.transport.init().catch(() => {}),
 			]);
@@ -1532,7 +1606,8 @@ export class CarrierTransport implements ProxyTransport {
 				this.#base = piped.transport;
 			}
 			this.carrier = open?.carrier ?? 'websocket';
-			if (this.carrier === 'webtransport') {
+			if (open && shared?.upMs) this.#riding(shared);
+			else if (this.carrier === 'webtransport') {
 				const what = this.#what;
 				wispNote(
 					'info',
@@ -1544,6 +1619,7 @@ export class CarrierTransport implements ProxyTransport {
 				url: open?.url ?? this.#wisp,
 				ms,
 				...(this.carrier === 'websocket' && { why }),
+				...(open && shared && { shared: shared.upMs }),
 			});
 		}
 		await this.#base!.init();
@@ -1560,7 +1636,8 @@ export class CarrierTransport implements ProxyTransport {
 	 */
 	#pipes(open: OpenCarrier, key: string): (v2: boolean) => Promise<WispPipe> {
 		let unused: OpenCarrier | null = open;
-		watchEnd(open, key);
+		// the carrier host tells the end of the carrier it shares
+		if (!open.hosted) watchEnd(open, key);
 		return async () => {
 			const mine = unused;
 			unused = null;
