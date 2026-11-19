@@ -148,6 +148,8 @@ export class SocketPool {
 	#active = 0;
 	#early = new Set<string>();
 	#raised = new Map<string, number>();
+	/** by the worker's name, how each request in flight lets its connection go */
+	#flying = new Map<string, () => void>();
 
 	constructor(transport: ProxyTransport | null = null) {
 		this.#transport = transport;
@@ -209,7 +211,7 @@ export class SocketPool {
 		}
 		if (group.multiplexed) return this.#ticket(group, false, 0);
 		if (this.#startable(group))
-			return this.#ticket(group, true, this.#count(group));
+			return this.#ticket(group, true, this.#count(group), id);
 		// it waits its turn; whoever starts it counts it (or not, when its
 		// group turned out to multiplex while it waited)
 		if (image && id) waits?.(id);
@@ -224,7 +226,13 @@ export class SocketPool {
 					cancel: () => reject(new QueuedCancel()),
 				}),
 		);
-		return this.#ticket(group, counted, nth);
+		const ticket = this.#ticket(group, counted, nth, id);
+		// given up between its start and here
+		if (id && this.#early.delete(id)) {
+			this.#flying.get(id)?.();
+			throw new QueuedCancel();
+		}
+		return ticket;
 	}
 
 	/** in line behind every request as urgent or more */
@@ -238,12 +246,17 @@ export class SocketPool {
 	}
 
 	/**
-	 * The page gave the request `id` up: if it still waits, it leaves the
-	 * line and never goes out, as Chrome drops a cancelled request from its
-	 * socket pool's queue. One that already went is left to finish (the
-	 * worker drops its answer).
+	 * The page gave the request `id` up (or its document went): if it still
+	 * waits, it leaves the line and never goes out, as Chrome drops a
+	 * cancelled request from its socket pool's queue. One that already went
+	 * lets its connection go to the next in line now, as Chrome closes the
+	 * socket of a request it cancels: a request whose server never answers
+	 * held one of its six until the server did. (The transport cannot stop
+	 * it; the worker drops its answer.)
 	 */
 	cancel(id: string) {
+		const flying = this.#flying.get(id);
+		if (flying) return flying();
 		const at = this.#waiting.findIndex((waiting) => waiting.id === id);
 		if (at < 0) {
 			// it may not have reached the line yet
@@ -319,16 +332,18 @@ export class SocketPool {
 		);
 	}
 
-	#ticket(group: Group, counted: boolean, nth: number): Ticket {
+	#ticket(group: Group, counted: boolean, nth: number, id = ''): Ticket {
 		let held = counted;
 		const release = () => {
 			if (!held) return;
 			held = false;
+			if (id) this.#flying.delete(id);
 			group.active--;
 			this.#active--;
 			if (!group.active) group.idleSince = now();
 			this.#pump();
 		};
+		if (held && id) this.#flying.set(id, release);
 		return {
 			answered: (response) => {
 				const version = (response as { httpVersion?: unknown }).httpVersion;

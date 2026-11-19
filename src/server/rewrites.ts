@@ -224,6 +224,7 @@ import {
 	topDocument,
 	type HintsContext,
 } from './clientHints';
+import { holdRequest } from './clientRequests';
 import {
 	directiveOf,
 	embeddingVerdict,
@@ -1201,6 +1202,8 @@ function routePartition(
 
 /** requests in flight the page may still abort, by the id it sent (ABORT_HEADER) */
 const pendingAborts = new Map<string, () => void>();
+/** how to give up each request in flight, for one whose client goes (clientRequests.ts) */
+const requestAborts = new WeakMap<Request, () => void>();
 /** the page posted that it aborted the request with this id */
 export function abortRequest(id: unknown) {
 	if (typeof id === 'string') pendingAborts.get(id)?.();
@@ -1339,6 +1342,7 @@ function genericForward(
 				reject(ABORTED);
 			};
 			if (abortId) pendingAborts.set(abortId, abort);
+			requestAborts.set(serverRequest, abort);
 			if (!signal) return;
 			if (signal.aborted) abort();
 			else signal.addEventListener('abort', abort, { once: true });
@@ -4734,6 +4738,16 @@ function genericForward(
 				: undefined;
 		const timedOutAnswer = () =>
 			new Response(null, { headers: { [TIMEOUT_HEADER]: abortId! } });
+		// given up when the client that made it goes, as the browser cancels a
+		// document's requests (a navigation has no client yet, a keepalive
+		// request outlives its document)
+		const client =
+			context?.internal || serverRequest.keepalive
+				? ''
+				: (context?.requestClientId ?? '');
+		const release = client
+			? holdRequest(client, () => requestAborts.get(serverRequest)?.())
+			: undefined;
 		try {
 			const answer = await forward(serverRequest, resolved, context);
 			if (!timedOut) return answer;
@@ -4789,6 +4803,7 @@ function genericForward(
 			throw error;
 		} finally {
 			clearTimeout(timer);
+			release?.();
 			if (abortId) pendingAborts.delete(abortId);
 		}
 	};
