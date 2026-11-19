@@ -141,12 +141,12 @@ for (const [mode, base] of [
 	const realFrame = () =>
 		mode === 'same-origin'
 			? page.mainFrame()
-			: page
-					.frames()
-					.find(
-						(f) =>
-							depth(f) === 1 && f.url().endsWith('/stomp/controllerFrame.html'),
-					);
+			: page.frames().find(
+					(f) =>
+						depth(f) === 1 &&
+						// asked for by its hash (`controllerFrame.html?<hash>&script=...`)
+						new URL(f.url()).pathname.endsWith('/stomp/controllerFrame.html'),
+				);
 	const before = await realFrame().evaluate(realState);
 	const unroute = (url) =>
 		page.evaluate((u) => window.controller.unroute(u), url).catch(() => null);
@@ -193,7 +193,9 @@ for (const [mode, base] of [
 		for (const f of page.frames())
 			if (
 				within(f, innerDemo) &&
-				(await unroute(f.url())) === `${proxyOrigin}/stomp/controllerFrame.html`
+				// asked for by its hash (`controllerFrame.html?<hash>&script=...`)
+				(await unroute(f.url()))?.split('?')[0] ===
+					`${proxyOrigin}/stomp/controllerFrame.html`
 			)
 				return f;
 		return null;
