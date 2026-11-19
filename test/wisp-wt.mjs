@@ -29,7 +29,9 @@
 // - lanes: `lanes` (holyWisp's webtransport-lanes, 8 by default, 0 or 1 for
 //   none) is added to the wisp server's INFO as extension 0xE1. A client
 //   stream that starts with a LANE packet (type 0xE1, index u8) is that
-//   lane; a bad or repeated index is reset with LANE_REFUSED (1), any other
+//   lane; a bad or repeated index (or one from `refuseLanesFrom` on, a
+//   relay that offers more than it takes; `refuseDelay` ms later, what it
+//   carried meanwhile dropped) is reset with LANE_REFUSED (1), any other
 //   client stream once lane 0 is taken with STREAM_UNWANTED (2). A Wisp
 //   stream's packets go back on the lane its CONNECT came on. What a lane
 //   sends before the client's INFO is held until it came. A lane that ends
@@ -161,6 +163,8 @@ export async function startWispWebTransport(upstream) {
 		serverStreams: 0,
 		lanes: 0,
 		laneRefused: 0,
+		/** packets a lane refused late (`refuseDelay`) carried after its LANE, dropped */
+		refusedPackets: 0,
 		unwanted: 0,
 		incompatible: 0,
 		connectsByLane: [],
@@ -209,6 +213,10 @@ export async function startWispWebTransport(upstream) {
 		pieces: [],
 		serverStream: true,
 		lanes: 8,
+		/** lanes from this index on are refused (LANE_REFUSED) though offered: 0 for none */
+		refuseLanesFrom: 0,
+		/** how long such a refusal waits (ms), what the lane carries meanwhile dropped */
+		refuseDelay: 0,
 		highWater: 4 * 1024 * 1024,
 		delayMs: 0,
 		lossRate: 0,
@@ -582,16 +590,25 @@ export async function startWispWebTransport(upstream) {
 			streams.delete(stream);
 			return null;
 		}
+		const past = relay.refuseLanesFrom > 0 && index >= relay.refuseLanesFrom;
 		if (
 			!session.advertised ||
 			index < 1 ||
 			index >= session.advertised ||
+			past ||
 			session.lanes[index]
 		) {
-			stats.laneRefused++;
-			api.reset(stream, LANE_REFUSED);
-			streams.delete(stream);
-			return null;
+			const refuse = () => {
+				stats.laneRefused++;
+				api.reset(stream, LANE_REFUSED);
+				streams.delete(stream);
+			};
+			if (!past || !relay.refuseDelay) {
+				refuse();
+				return null;
+			}
+			setTimeout(refuse, relay.refuseDelay);
+			return { ...entry, pending: false, refusing: true };
 		}
 		return addLane(session, stream, index);
 	}
@@ -674,6 +691,11 @@ export async function startWispWebTransport(upstream) {
 				if (entry.pending) {
 					entry = claim(entry, packet);
 					if (!entry) return;
+					if (entry.refusing) streams.set(id, entry);
+					continue;
+				}
+				if (entry.refusing) {
+					stats.refusedPackets++;
 					continue;
 				}
 				toServer(entry.session, Buffer.from(packet), entry);

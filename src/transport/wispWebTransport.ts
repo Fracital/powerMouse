@@ -196,6 +196,16 @@ const LANES_EXTENSION = 0xe1;
 const LANE = 0xe1;
 /** the reset of a stream the client did not ask for */
 const STREAM_UNWANTED = 2;
+/** the relay's reset of a lane it does not take (an index past what it takes) */
+const LANE_REFUSED = 1;
+/**
+ * what a lane keeps of what it sent until the relay first answers on it,
+ * to send again on another lane if the relay refuses it (bytes); past
+ * this a refusal ends the session
+ */
+const LANE_REPLAY_MAX = 4 * 1024 * 1024;
+/** by RelayPlan.key, the lanes a relay took when it refused the next (lane 0 counted): later sessions open no more */
+const laneCaps = new Map<string, number>();
 /**
  * The lanes a session has at most, lane 0 counted: what the relay offers
  * (holyWisp's webtransport-lanes, 8 by default), within the descriptor's
@@ -829,7 +839,7 @@ function firstPacket() {
 async function readPackets(
 	readable: ReadableStream<Uint8Array>,
 	take: (packet: Uint8Array<ArrayBuffer>) => void,
-) {
+): Promise<unknown> {
 	const reader = readable.getReader();
 	/** a prefix cut between chunks */
 	const prefix = new Uint8Array(4);
@@ -875,8 +885,9 @@ async function readPackets(
 				}
 			}
 		}
-	} catch {
-		// the session or the stream failed
+	} catch (error) {
+		// the session or the stream failed: why
+		return error;
 	}
 }
 
@@ -947,6 +958,15 @@ interface Lane {
 	/** the bytes it carried, both ways, decayed by LANE_HALF_LIFE_MS */
 	recent: number;
 	at: number;
+	/**
+	 * what it sent (copies) until the relay first answers on it, to send
+	 * again elsewhere if the relay refuses it; null once it answered (or
+	 * past LANE_REPLAY_MAX)
+	 */
+	sent: Uint8Array[] | null;
+	sentBytes: number;
+	/** the relay answered on it: it is the relay's */
+	heard: boolean;
 }
 
 /** how the carrier opens the Wisp connection on lane 0 */
@@ -957,6 +977,8 @@ interface Opening {
 	server: boolean;
 	/** the most lanes to open, lane 0 counted */
 	lanes: number;
+	/** the relay refused lane `index` (LANE_REFUSED): it took the lanes below it */
+	refused?: (index: number) => void;
 }
 
 /**
@@ -1049,23 +1071,76 @@ function pipeOf(
 	};
 	const send = (lane: Lane, packet: Uint8Array) => {
 		account(lane, packet.length);
+		if (lane.sent) {
+			lane.sent.push(packet.slice());
+			lane.sentBytes += packet.length;
+			if (lane.sentBytes > LANE_REPLAY_MAX) lane.sent = null;
+		}
 		// not awaited: a lane that waits for the relay's credit holds up
 		// only its own writes (Wisp's CONTINUE bounds what each stream has
-		// outstanding)
+		// outstanding). A lane the relay has not answered on yet may be
+		// refused: its reader tells (laneEnded)
 		const written = lane.writer.write(framed(packet));
-		written.catch(end);
+		written.catch(() => lane.heard && end());
 		return written;
+	};
+	/**
+	 * A lane the relay refused (LANE_REFUSED, before it answered on it): the
+	 * relay acted on nothing it carried, so its Wisp streams go on the other
+	 * lanes, what it sent sent again there in order, and the session goes
+	 * on. Any other end of a lane ends the Wisp connection (SPEC.md 3.5).
+	 */
+	const laneEnded = (lane: Lane, error: unknown) => {
+		const code = (error as { streamErrorCode?: unknown } | undefined)
+			?.streamErrorCode;
+		const sent = lane.sent;
+		if (
+			ended ||
+			lane.index === 0 ||
+			lane.heard ||
+			code !== LANE_REFUSED ||
+			!sent
+		)
+			return end();
+		lanes.splice(lanes.indexOf(lane), 1);
+		lane.sent = null;
+		stats.lanes = Math.min(stats.lanes, lane.index);
+		opening.refused?.(lane.index);
+		for (const [id, on] of laneOf)
+			if (on === lane) {
+				const to = pick();
+				laneOf.set(id, to);
+				if (open.has(id)) to.open++;
+			}
+		for (const packet of sent)
+			void send(
+				packet.length >= 5
+					? (laneOf.get(streamOf(packet)) ?? lanes[0])
+					: lanes[0],
+				packet,
+			);
 	};
 	const addLane = (
 		index: number,
 		readable: ReadableStream<Uint8Array>,
 		writer: WritableStreamDefaultWriter<Uint8Array>,
 	) => {
-		const lane: Lane = { index, writer, open: 0, recent: 0, at: 0 };
+		const lane: Lane = {
+			index,
+			writer,
+			open: 0,
+			recent: 0,
+			at: 0,
+			// lane 0 is the session's own; another is the relay's once it answers on it
+			sent: index === 0 ? null : [],
+			sentBytes: 0,
+			heard: index === 0,
+		};
 		lanes.push(lane);
 		lanes.sort((a, b) => a.index - b.index);
-		// a lane that ends ends the Wisp connection (SPEC.md 3.5)
-		void readPackets(readable, (packet) => take(packet, lane)).then(end);
+		void readPackets(readable, (packet) => take(packet, lane)).then((error) =>
+			laneEnded(lane, error),
+		);
 		return lane;
 	};
 
@@ -1090,9 +1165,10 @@ function pipeOf(
 					if (ended) return;
 					const writer = stream.writable.getWriter();
 					// the LANE packet first: type, stream 0, the lane's index
+					// (a refusal is told by its reader: laneEnded)
 					writer
 						.write(framed(new Uint8Array([LANE, 0, 0, 0, 0, index])))
-						.catch(end);
+						.catch(() => {});
 					addLane(index, stream.readable, writer);
 				},
 				() => {
@@ -1119,7 +1195,13 @@ function pipeOf(
 	/** a packet from the relay, in a buffer of its own (handed to epoxy as it is) */
 	const take = (packet: Uint8Array<ArrayBuffer>, lane: Lane | null) => {
 		if (ended) return;
-		if (lane) account(lane, packet.length);
+		if (lane) {
+			account(lane, packet.length);
+			if (!lane.heard) {
+				lane.heard = true;
+				lane.sent = null;
+			}
+		}
 		if (state !== 'open' && lane?.index === 0) {
 			const passed = opened(packet);
 			if (!passed) return;
@@ -1245,7 +1327,16 @@ async function sessionCarrier(
 		const { pipe, first, stats } = pipeOf(session, zero.stream, {
 			v2,
 			server: zero.server,
-			lanes,
+			lanes: Math.min(lanes, laneCaps.get(plan.key) ?? lanes),
+			refused: (index) => {
+				const took = Math.min(index, laneCaps.get(plan.key) ?? index);
+				if (laneCaps.get(plan.key) === took) return;
+				laneCaps.set(plan.key, took);
+				wispNote(
+					'warn',
+					`the relay refused lane ${index} (LANE_REFUSED): its Wisp streams went on the other lanes, and sessions to it open ${took} lanes from now on`,
+				);
+			},
 		});
 		await timeout(first, ms, 'the Wisp stream');
 		const ended = session.closed.then(() => {});
