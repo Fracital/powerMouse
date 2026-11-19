@@ -839,9 +839,21 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 		// register again. With three arguments it is window.open, which the
 		// hook below handles.
 		const documentOpen = realm.Document.prototype.open;
+		const currentScriptOf = nativeGetter(
+			realm.Document.prototype,
+			'currentScript',
+		);
+		// while the page's markup is written as it comes (loadHTML), whether
+		// the network's parser would have no insertion point now: outside the
+		// writes of its pieces, with no script of the parser running (a
+		// timer's callback, an event's listener, a MutationObserver's)
+		const noInsertionPoint = (that: unknown) =>
+			that === realm.document &&
+			!!moduleClient.pieces?.between &&
+			Reflect.apply(currentScriptOf, that, []) === null;
 		const stopPieces = (that: unknown) => {
-			if (that !== realm.document || !moduleClient.pieces?.between) return;
-			moduleClient.pieces.stopped = true;
+			if (!noInsertionPoint(that)) return;
+			moduleClient.pieces!.stopped = true;
 			moduleClient.pieces = null;
 			moduleClient.pendingScripts = null;
 		};
@@ -906,9 +918,9 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					typeof that === 'object' && that !== null ? that : realm.document;
 				// between two pieces of the page's markup (loadHTML), where the
 				// network's parser has no insertion point (a MutationObserver's
-				// callback before a script), the write opens the document first
-				if (document === realm.document && moduleClient.pieces?.between)
-					Reflect.apply(openHook, document, []);
+				// callback before a script, a timer's while the rest of the
+				// markup is on its way), the write opens the document first
+				if (noInsertionPoint(document)) Reflect.apply(openHook, document, []);
 				// a write once the document has loaded opens it again (the page
 				// never called open()): known before the markup is rewritten, the
 				// listeners after, once the browser has dropped the window's own

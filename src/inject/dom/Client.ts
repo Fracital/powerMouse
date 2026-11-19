@@ -97,6 +97,16 @@ import {
 } from './modules/MutationObserver';
 import SyncModule from './modules/Sync';
 import { HTML_NAMESPACE, SVG_NAMESPACE } from './namespaces';
+import PageStream, {
+	empty,
+	FIRST_PASS_MS,
+	now,
+	PASS_MS,
+	rootOf,
+	WRITE_CHARS,
+	WRITE_MAX,
+	WRITE_MS,
+} from './pageStream';
 import type { PolicyChecks } from './policyChecks';
 import { Pool, type PoolState } from './pool';
 import { createRewriterRealm, libraryFactoryFromScript } from './rewriterRealm';
@@ -376,9 +386,10 @@ export default class DocumentClient extends Client {
 	pendingScripts: Map<string, string> | null = null;
 	/**
 	 * @internal while loadHTML writes the page's markup in pieces: `between`
-	 * in the microtask checkpoint between two, where no script of the parser
-	 * runs (the document's write, open() and close() hooks act as on the
-	 * network's parser there), `stopped` once the page opened the document
+	 * outside the writes of the pieces, where no script of the parser runs
+	 * but one the written markup holds (the document's write, open() and
+	 * close() hooks act as on the network's parser there, DOMHooks), `stopped`
+	 * once the page opened the document
 	 */
 	pieces: { between: boolean; stopped: boolean } | null = null;
 	private isConnected: (node: Node) => boolean;
@@ -3439,106 +3450,266 @@ export default class DocumentClient extends Client {
 		// writes a no-break space as &nbsp;: an XML-level decode leaves that
 		// as text, and every U+00A0 in a script, a style or a JSON payload
 		// read "&nbsp;" (BBC's __NEXT_DATA__, so React's hydration failed)
-		const markup = unescapeText(script);
-		// the document's inline scripts and styles as the worker rewrote them,
-		// named by where their texts stand in the markup
-		if (prewritten !== undefined)
-			try {
-				this.#prewritten = new PrewrittenTable(
-					JSON.parse(unescapeText(prewritten)) as Prewritten,
-					markup,
-					this.names.access,
-				);
-			} catch (error) {
-				// not a table: everything is rewritten here
-			}
+		this.#startPage()(
+			unescapeText(script),
+			prewritten === undefined ? undefined : unescapeText(prewritten),
+			true,
+		);
+	}
+	/**
+	 * Begin writing the page (../pageStream.ts): its markup is handed to the
+	 * returned function in pieces, in order, each with the worker's table of
+	 * its inline scripts and styles (its texts named by where they stand in
+	 * that piece), the last with `end`. The shell's document is opened for
+	 * the page at the shell's end, and what of the markup is parsed is
+	 * written from there, a task at a time, so the page paints and loads as
+	 * its markup comes.
+	 */
+	#startPage(): (
+		markup: string,
+		prewritten: string | undefined,
+		end: boolean,
+	) => void {
 		// the document is new: its sandbox is decided now, and a document
 		// without allow-scripts is guarded before any of its markup is touched
 		this.refreshSandbox();
-		setGlobalParsingState(this.global, 'parsingBeforeWrite');
-
-		const parsed = parseHTML(markup, this.global.document);
-		if (parsed.documentElement) {
-			if (this.allows('allow-scripts'))
-				textifyNoscript(parsed.documentElement, this.innerHTML);
-			else unwrapNoscript(parsed.documentElement);
-		}
-
-		// the first <base href> is the base URL of everything in the page; its
-		// own href resolves against the document's URL, and one that does not
-		// parse or names no web URL leaves the document's URL in place
-		const baseElement = parsed.querySelector('base[href]');
-		const baseHref = baseElement?.getAttribute('href');
-		if (baseHref !== null && baseHref !== undefined)
-			try {
-				const base = new URL(baseHref, this.url.toString());
-				if (ROUTE_PROTOCOLS.includes(base.protocol)) {
-					const refused = this.baseRefused(base, baseElement!);
-					if (!refused) this.#parseBase = new StompURL(base, this.url);
-					// where in the markup its violation names (a deferred part,
-					// ./violations.ts), for a base the page's policy refuses
-					if (refused || this.pageRefusals('base-uri', base).length)
-						deferred('markupBaseSite')(this, markup, baseElement!);
-				}
-			} catch (error) {
-				// not a URL: the document's own stands
-			}
-
+		const scripts = this.allows('allow-scripts');
+		const shell = this.global.document;
 		// the copy is made in an inert document (see inertDocumentOf), as a
 		// write's is: made in this one, every image, video and audio in it
 		// loaded a second time (each <video> of a page was downloaded twice),
 		// an autoplaying one could play, detached, and an image that listens
 		// to the viewport kept the whole copy alive
-		const inert = inertDocumentOf(this.global.document);
-		const node = inert.createElement('div');
+		const inert = inertDocumentOf(shell);
 		// a document no worker controls (an <object>'s HTML document is a
 		// blob: copy) gets its loads as copies, and its own markup is written
 		// as markup the page writes is (WriteStream): a script copied at once,
 		// or it would never run, the rest after the write (writtenLoads)
-		const sources = new Map<string, string>();
 		const uncontrolled =
 			!!this.getModule(DOMAttributesModule)?.uncontrolled?.();
-		const writing = this.writing;
-		if (uncontrolled) this.writing = true;
-		try {
-			// workaround:
-			// we cannot append any descendants of parsed into any element (whether it is attached or detached) because it will pre-fetch the images in parsed
-			// pass the entirety of parsed into cloneRawNode
-			node.append(cloneRawNode([parsed.documentElement], inert));
-
-			setGlobalParsingState(this.global);
-
-			// inline scripts are rewritten here, once. A classic script gets a
-			// preamble that restores the source the page wrote for
-			// `document.currentScript.textContent`; a module has no currentScript.
-			// Nothing may produce `</script` in the markup.
-			this.rewriteInlineScripts(node, true, sources);
-		} finally {
-			this.#parseBase = null;
-			this.writing = writing;
-		}
-
-		// what the write needs, each let go when it is done with: an Error a
-		// page script makes while the write runs keeps its stack unformatted,
-		// with every function of it, these closures among them, where
-		// natively such an Error holds only the page's own frames. So nothing
-		// the write reads is a variable they close over, and what the page
-		// keeps through one is a few empty fields (CNN kept 52 MB: its
-		// rewritten markup, pinned by one slice of it, and the map of its
-		// rewritten inline scripts, through a Svelte module's Error)
+		// what the write needs, each let go when the page is written: an Error
+		// a page script makes while a piece is written keeps the functions of
+		// its stack unformatted, these closures among them, so nothing large
+		// is a variable they close over (see loadHTML's write before: CNN kept
+		// 52 MB through a Svelte module's Error)
 		const job: {
-			text: string;
-			pieces: string[];
+			// the parse
+			stream: PageStream | null;
+			// the markup so far, which a refused base's violation names its place in
+			received: string;
+			// what is copied and not yet written
+			copied: string;
+			// each rewritten classic script's text, to the source the page
+			// wrote (the client's pendingScripts holds it once the page is
+			// written, emptied at DOMContentLoaded)
 			sources: Map<string, string> | null;
-		} = {
-			text:
-				(parsed.doctype ? `<!DOCTYPE ${parsed.doctype.name}>` : '') +
-				serializeScripted(node, this.innerHTML),
-			pieces: [],
-			sources,
+		} = { stream: null, received: '', copied: '', sources: new Map() };
+		// the page's first <base href>: the base URL of everything in the page
+		let base: StompURL | null = null;
+		// what each copy is made in, to be serialized
+		const node = inert.createElement('div');
+		const copy = (from: Element, shallow: boolean) => {
+			if (!shallow) {
+				if (scripts) textifyNoscript(from, this.innerHTML);
+				else unwrapNoscript(from);
+			}
+			const writing = this.writing;
+			if (uncontrolled) this.writing = true;
+			this.#parseBase = base;
+			setGlobalParsingState(this.global, 'parsingBeforeWrite');
+			try {
+				// workaround: no descendant of the parse may go into any element
+				// (attached or not), which would fetch its images; the copy is
+				// made of its nodes (in the parse's own tree, where a base's
+				// hook finds the policies before it)
+				node.append(
+					cloneRawNode(
+						shallow ? [from] : [...from.childNodes],
+						inert,
+						false,
+						shallow,
+					),
+				);
+				setGlobalParsingState(this.global);
+				// inline scripts are rewritten here, once. A classic script gets a
+				// preamble that restores the source the page wrote for
+				// `document.currentScript.textContent`; a module has no currentScript.
+				// Nothing may produce `</script` in the markup.
+				this.rewriteInlineScripts(node, true, job.sources ?? undefined);
+			} finally {
+				setGlobalParsingState(this.global);
+				this.#parseBase = null;
+				this.writing = writing;
+			}
+			const markup = serializeScripted(node, this.innerHTML);
+			// the copy was made to be serialized (see releaseMarkup)
+			releaseMarkup(node);
+			empty(node);
+			return markup;
 		};
-		// the copy was made to be serialized (see releaseMarkup)
-		releaseMarkup(node);
+		// the first <base href> is the base URL of everything in the page
+		// after it; its own href resolves against the document's URL, and
+		// one that does not parse or names no web URL leaves the document's
+		// URL in place
+		const watch = (node: Element) => {
+			const found = scripts ? 'base[href]:not(noscript base)' : 'base[href]';
+			const element = node.matches(found) ? node : node.querySelector(found);
+			if (!element) return false;
+			const href = element.getAttribute('href');
+			if (href !== null)
+				try {
+					const url = new URL(href, this.url.toString());
+					if (ROUTE_PROTOCOLS.includes(url.protocol)) {
+						const refused = this.baseRefused(url, element);
+						if (!refused) base = new StompURL(url, this.url);
+						// where in the markup its violation names (a deferred part,
+						// ./violations.ts), for a base the page's policy refuses
+						if (refused || this.pageRefusals('base-uri', url).length)
+							deferred('markupBaseSite')(this, job.received, element);
+					}
+				} catch (error) {
+					// not a URL: the document's own stands
+				}
+			return true;
+		};
+		// the parse (made with the first piece: all of the markup at once is
+		// parsed whole, as it always was)
+		let written = false;
+		// a pass is due (a task the timer runs, or the open's own)
+		let due = false;
+		const state: NonNullable<typeof this.pieces> = {
+			between: false,
+			stopped: false,
+		};
+		// the root the page's markup made, gone when the page opened the
+		// document again
+		let root: Element | null = null;
+		// when the page was last written
+		let lastWrite = 0;
+		// how much is written so far
+		let total = 0;
+		// a copy threw: the page is what was copied before it
+		let failed = false;
+		const finish = (document: Document) => {
+			if (this.pieces !== state) return;
+			this.pieces = null;
+			job.stream = null;
+			job.received = '';
+			job.copied = '';
+			job.sources = null;
+			// what the write parsed now; what comes after a script it waits
+			// for, once the parser is through (a copy is not made twice):
+			// every load in a document no worker controls, an object's and
+			// an embed's in any (DOMAttributes writtenLoads)
+			this.writtenLoads?.(document);
+			document.addEventListener(
+				'DOMContentLoaded',
+				() => {
+					this.pendingScripts = null;
+					// what asks the worker's table after the parse is a copy the
+					// page makes, rewritten here as any it inserts
+					this.#prewritten = null;
+					this.writtenLoads?.(document);
+				},
+				{ once: true },
+			);
+			document.close();
+		};
+		// one pass: what the parse has done, written. The markup is written
+		// in pieces that end before each `</script`: a parser fed by the
+		// network performs a microtask checkpoint before it runs a script it
+		// inserted (the "text" insertion mode), so a MutationObserver sees
+		// the script, and may change it, before it runs, and a script's
+		// promise reactions run before the next script. Nothing does between
+		// the scripts of one write, so each piece after the first is written
+		// from a microtask queued after those of the piece before. The next
+		// pass is a task of its own, after which the page may paint.
+		const pass = () => {
+			due = false;
+			const document = this.global.document;
+			const page = job.stream;
+			if (
+				!page ||
+				failed ||
+				state.stopped ||
+				(root !== null && rootOf(document) !== root)
+			)
+				return;
+			let markup = '';
+			// a copy that throws (a data: document cannot load the rewriter
+			// library) ends the page where it is, and the document is closed
+			// as natively, else it and every document above it never loaded
+			let thrown: { error: unknown } | null = null;
+			try {
+				markup = page.take(now() + (root === null ? FIRST_PASS_MS : PASS_MS));
+			} catch (error) {
+				failed = true;
+				thrown = { error };
+			}
+			job.copied += markup;
+			const ended = failed || page.done;
+			// written now: the first of the page, its end, what the parse had
+			// once it has nothing more (the rest is on its way), or what was
+			// copied once it is enough (WRITE_CHARS, more as the page grows);
+			// else the next pass copies more first
+			const time = now();
+			if (
+				root !== null &&
+				markup &&
+				!ended &&
+				job.copied.length <
+					Math.min(WRITE_MAX, Math.max(WRITE_CHARS, total / 4)) &&
+				time - lastWrite < WRITE_MS
+			) {
+				schedule();
+				return;
+			}
+			lastWrite = time;
+			const batch = job.copied;
+			total += batch.length;
+			job.copied = '';
+			// (what the next piece's write reads is no variable of this pass:
+			// a piece is a slice of the batch, which keeps all of it while any
+			// piece is kept, so each goes once written)
+			const pieces = batch.split(/(?=<\/script)/i);
+			const loads = uncontrolled || /<(?:object|embed)\b/i.test(batch);
+			const more = markup !== '';
+			const next = (index: number) => {
+				if (state.stopped) {
+					pieces.length = 0;
+					return;
+				}
+				state.between = false;
+				const piece = pieces[index]!;
+				pieces[index] = '';
+				this.write.call(document, trustedHTML(piece));
+				state.between = true;
+				root ??= rootOf(document);
+				if (index + 1 < pieces.length) {
+					Reflect.apply(this.#queueMicrotask, this.global, [
+						this.ownCallback(() => next(index + 1)),
+					]);
+					return;
+				}
+				if (ended) {
+					finish(document);
+					return;
+				}
+				// an object's or an embed's load is not the worker's
+				// (writtenLoads); the rest of the page waits for its markup
+				if (loads) this.writtenLoads?.(document);
+				if (more) schedule();
+			};
+			if (pieces[0]) next(0);
+			else if (ended) finish(document);
+			// reported as it was before the page was written as it is parsed
+			if (thrown) throw thrown.error;
+		};
+		const schedule = () => {
+			if (due || !written) return;
+			due = true;
+			Reflect.apply(this.#setTimeout, this.global, [this.ownCallback(pass)]);
+		};
 
 		// jump out of the DOM "write stream" so we can start loading our own HTML
 		const load = () => {
@@ -3549,64 +3720,12 @@ export default class DocumentClient extends Client {
 			// (the shell asked apply() to leave it to us), before the first
 			// script of the page
 			this.runHook('post');
-			const document = this.global.document;
-			// the markup is written in pieces that end before each `</script`:
-			// a parser fed by the network performs a microtask checkpoint
-			// before it runs a script it inserted (the "text" insertion mode),
-			// so a MutationObserver sees the script, and may change it, before
-			// it runs, and a script's promise reactions run before the next
-			// script. Nothing does between the scripts of one write, so each
-			// piece after the first is written from a microtask queued after
-			// those of the piece before
-			// (a piece is a slice of the text, which keeps all of it while any
-			// piece is kept: each goes once written)
-			job.pieces = job.text.split(/(?=<\/script)/i);
-			job.text = '';
 			// a script the parser has not run yet reads back as the page wrote
-			// it (Readback), until the page's markup is parsed: the client's
-			// field is the map's one holder, emptied at DOMContentLoaded
+			// it (Readback), until the page's markup is parsed
 			this.pendingScripts = job.sources;
-			job.sources = null;
-			const state: NonNullable<typeof this.pieces> = {
-				between: false,
-				stopped: false,
-			};
 			this.pieces = state;
-			const next = (index: number) => {
-				if (state.stopped) {
-					job.pieces = [];
-					return;
-				}
-				state.between = false;
-				const piece = job.pieces[index]!;
-				job.pieces[index] = '';
-				this.write.call(document, trustedHTML(piece));
-				if (++index < job.pieces.length) {
-					state.between = true;
-					Reflect.apply(this.#queueMicrotask, this.global, [
-						this.ownCallback(() => next(index)),
-					]);
-					return;
-				}
-				this.pieces = null;
-				job.pieces = [];
-				// what the write parsed now; what comes after a script it waits
-				// for, once the parser is through (a copy is not made twice):
-				// every load in a document no worker controls, an object's and
-				// an embed's in any (DOMAttributes writtenLoads)
-				this.writtenLoads?.(document);
-				document.addEventListener(
-					'DOMContentLoaded',
-					() => {
-						this.pendingScripts = null;
-						this.#prewritten = null;
-						this.writtenLoads?.(document);
-					},
-					{ once: true },
-				);
-				document.close();
-			};
-			next(0);
+			written = true;
+			pass();
 		};
 		// The browser runs a timer's callback in the realm that made it, and
 		// document.open() gives the document the URL of that realm's document.
@@ -3631,7 +3750,6 @@ export default class DocumentClient extends Client {
 		// loaded, as natively. The timer stays for a shell no such parser
 		// reads; whichever comes first writes.
 		this.shellPending = true;
-		const shell = this.global.document;
 		let observer: MutationObserver | null = null;
 		let started = false;
 		const start = () => {
@@ -3667,5 +3785,38 @@ export default class DocumentClient extends Client {
 			observer = null;
 		}
 		Reflect.apply(this.#setTimeout, this.global, [this.ownCallback(start)]);
+
+		return (markup, prewritten, end) => {
+			// the document's inline scripts and styles as the worker rewrote
+			// them, named by where their texts stand in this piece
+			if (prewritten !== undefined)
+				try {
+					const table = JSON.parse(prewritten) as Prewritten;
+					if (this.#prewritten) this.#prewritten.add(table, markup);
+					else
+						this.#prewritten = new PrewrittenTable(
+							table,
+							markup,
+							this.names.access,
+						);
+				} catch (error) {
+					// not a table: everything is rewritten here
+				}
+			job.received += markup;
+			const stream = job.stream;
+			if (stream) stream.add(markup, end);
+			else if (end)
+				job.stream = new PageStream(
+					parseHTML(markup, shell),
+					copy,
+					watch,
+					true,
+				);
+			else {
+				job.stream = new PageStream(parseHTML('', shell), copy, watch);
+				job.stream.add(markup, false);
+			}
+			schedule();
+		};
 	}
 }

@@ -148,11 +148,14 @@ export function libraryFactoryFromScript(
 	/** the realm `document` is of, where the name is made (this one's by default) */
 	global: typeof globalThis = globalThis,
 ): Function | null {
-	let root: Element | null = null;
+	let root: Node | null = null;
 	let script: Element | null = null;
 	try {
-		root = Reflect.apply(documentElementGet, document, []) as Element | null;
-		if (!root) return null;
+		// (a document just opened has no root yet, while the page is written
+		// as its markup comes: the script is its root for as long as it runs)
+		root =
+			(Reflect.apply(documentElementGet, document, []) as Element | null) ??
+			document;
 		script = Reflect.apply(createElement, document, ['script']) as Element;
 		Reflect.apply(setAttribute, script, ['nonce', nonce]);
 		try {

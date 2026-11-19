@@ -244,6 +244,11 @@ export class PrewrittenTable {
 	constructor(table: Prewritten, markup: string, access: string) {
 		this.url = table.url;
 		this.#access = access;
+		this.add(table, markup);
+	}
+	/** the table of another piece of the document's markup (`markup`, which it names its texts in) */
+	add(table: Prewritten, markup: string) {
+		if (table.url !== this.url) return;
 		for (const [kind, start, end, ...packed] of table.scripts)
 			this.#scripts.set(`${kind}\u0000${markup.slice(start, end)}`, packed);
 		for (const [start, end, output] of table.styles)
