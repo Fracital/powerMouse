@@ -305,15 +305,32 @@ function serveSession(session: WtSession, port: MessagePort) {
 			},
 			() => {},
 		);
+	/** a task later: what the session's streams heard in the same turn reaches the page first */
+	const after = () => new Promise((resolve) => setTimeout(resolve, 0));
+	/** receive sides' errors posted a task late, which the session's end waits for */
+	const late = new Set<Promise<void>>();
 	const fail = (id: number, write: boolean, error: unknown) => {
-		if (over || !done(id, write)) return;
+		if (over) return;
+		// A reset that comes with the peer's STOP_SENDING (a server closing
+		// as webtransport-go does) reaches the page after it, as natively:
+		// Chrome errors the writable first. stomp-h3 hears the stop a hop
+		// later than a read hears the reset, in the same turn.
+		const stopMayCome =
+			!write && session.stopped !== undefined && !!sides.get(id)?.has('w');
+		if (!done(id, write)) return;
 		const code = codeOf(error);
-		post({
+		const message: WebTransportMessage = {
 			t: 'e',
 			id,
 			...(write ? { w: true } : {}),
 			...(code === undefined ? {} : { code }),
+		};
+		if (!stopMayCome) return void post(message);
+		const posted = after().then(() => {
+			late.delete(posted);
+			if (!over) post(message);
 		});
+		late.add(posted);
 	};
 	/** each receive side's credit: the page's reader took all it was sent */
 	const credits = new Map<number, () => void>();
@@ -457,17 +474,20 @@ function serveSession(session: WtSession, port: MessagePort) {
 			post({ t: 'D', b: buffer }, buffer);
 		}
 	})().catch(() => {});
-	// (a task later: what the session's streams heard before it ended,
-	// woken in the same turn, reaches the page first)
-	const after = () => new Promise((resolve) => setTimeout(resolve, 0));
+	// (a task later, and after the streams' late errors: what the
+	// session's streams heard before it ended reaches the page first)
+	const settled = async () => {
+		await after();
+		await Promise.all(late);
+	};
 	session.closed().then(
 		async ({ closeCode, reason }) => {
-			await after();
+			await settled();
 			if (!over) post({ t: 'Z', code: closeCode, reason });
 			finish();
 		},
 		async () => {
-			await after();
+			await settled();
 			if (!over) post({ t: 'L' });
 			finish();
 		},
