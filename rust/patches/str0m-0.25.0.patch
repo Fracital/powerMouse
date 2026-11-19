@@ -205,7 +205,21 @@
  
 --- a/src/channel.rs
 +++ b/src/channel.rs
-@@ -216,27 +216,23 @@
+@@ -87,6 +87,13 @@
+         self.rtc.sctp.buffered_amount(self.sctp_stream_id)
+     }
+ 
++    /// What was written and not handed to the network yet, as a browser's
++    /// bufferedAmount reads: unlike [`Channel::buffered_amount`] it leaves
++    /// out what is sent and not acknowledged (STomp)
++    pub fn unsent_amount(&mut self) -> usize {
++        self.rtc.sctp.unsent_amount(self.sctp_stream_id)
++    }
++
+     /// Set the threshold to emit an
+     /// [`Event::ChannelBufferedAmountLow`][crate::Event::ChannelBufferedAmountLow]
+     ///
+@@ -216,27 +223,23 @@
              );
          }
  
@@ -760,7 +774,23 @@
          Ok(stream.write_with_ppi(buf, ppi)?)
      }
  
-@@ -675,6 +739,11 @@
+@@ -664,6 +728,15 @@
+         stream.buffered_amount().unwrap_or(0)
+     }
+ 
++    /// The bytes of a stream not handed to the network yet (STomp: what a
++    /// browser's bufferedAmount reads)
++    pub fn unsent_amount(&mut self, id: u16) -> usize {
++        let Some(assoc) = self.assoc.as_mut() else {
++            return 0;
++        };
++        assoc.stream(id).map(|s| s.unsent_amount()).unwrap_or(0)
++    }
++
+     pub fn set_buffered_amount_low_threshold(&mut self, id: u16, threshold: usize) {
+         let entry =
+             entry_by_id_mut(&mut self.entries, id).expect("stream entry for valid channel id");
+@@ -675,6 +748,11 @@
      pub fn handle_input(&mut self, now: Instant, data: &[u8]) {
          trace!("Handle input: {}", data.len());
  

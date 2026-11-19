@@ -1,6 +1,15 @@
 --- a/src/association/mod.rs
 +++ b/src/association/mod.rs
-@@ -965,6 +965,26 @@
+@@ -19,6 +19,8 @@
+ use crate::chunk::chunk_shutdown_ack::ChunkShutdownAck;
+ use crate::chunk::chunk_shutdown_complete::ChunkShutdownComplete;
+ use crate::chunk::chunk_type::CT_FORWARD_TSN;
++use crate::config::CHROME_MTU;
++use crate::queue::payload_queue::wire_size;
+ use crate::config::COMMON_HEADER_SIZE;
+ use crate::config::DATA_CHUNK_HEADER_SIZE;
+ use crate::config::{ServerConfig, TransportConfig};
+@@ -965,6 +967,26 @@
          Ok(())
      }
  
@@ -27,3 +36,236 @@
      /// Close ends the SCTP Association and cleans up any state
      pub fn close(&mut self) -> Result<()> {
          self.close_with_reason(AssociationError::AssociationClosed)
+@@ -3964,7 +3986,7 @@
+ 
+                 if self.abandon_if_needed(tsn, now) {
+                     chunks.retain(|c| !self.outbound_queue.is_abandoned(c.tsn));
+-                    bytes_to_send = chunks.iter().map(|c| c.user_data.len()).sum();
++                    bytes_to_send = chunks.iter().map(|c| wire_size(c.user_data.len())).sum();
+                     i += 1;
+                     continue;
+                 }
+@@ -3973,11 +3995,14 @@
+                 if i == 0 && self.rwnd < c.user_data.len() as u32 {
+                     // Send it as a zero window probe
+                     done = true;
+-                } else if bytes_to_send + c.user_data.len() > awnd as usize {
++                } else if bytes_to_send > 0
++                    && bytes_to_send + wire_size(c.user_data.len()) > awnd as usize
++                {
+                     break;
+                 }
+ 
+-                bytes_to_send += c.user_data.len();
++                // as the window counts them (pop_pending_data_chunks_to_send)
++                bytes_to_send += wire_size(c.user_data.len());
+             } else {
+                 break; // end of pending data
+             }
+@@ -4039,8 +4064,13 @@
+                 };
+                 let data_len = c.user_data.len();
+ 
+-                if self.outbound_queue.inflight_bytes() + data_len > self.cwnd as usize {
+-                    break; // would exceeds cwnd
++                // Chrome's dcSCTP sends a new chunk when it fits in the window
++                // with what is outstanding, each at its size on the wire
++                // (157, measured: 59 of 4 bytes after a timeout, 10 of 100;
++                // 4 of 1000 before one); one goes when nothing is outstanding
++                let outstanding = self.outbound_queue.inflight_wire_bytes();
++                if outstanding > 0 && outstanding + wire_size(data_len) > self.cwnd as usize {
++                    break; // the window is full
+                 }
+ 
+                 if data_len > self.rwnd as usize {
+@@ -4353,7 +4383,9 @@
+                 //      cwnd = 1*MTU
+ 
+                 self.ssthresh = core::cmp::max(self.cwnd / 2, 4 * self.mtu);
+-                self.cwnd = self.mtu;
++                // Chrome's MTU, 1191 bytes, whatever the packets' size here:
++                // it is what limits a stalled channel's outstanding data
++                self.cwnd = CHROME_MTU;
+                 trace!(
+                     "[{}] updated cwnd={} ssthresh={} inflight={} (RTO)",
+                     self.side,
+--- a/src/association/stream.rs
++++ b/src/association/stream.rs
+@@ -538,6 +538,12 @@
+         }
+     }
+ 
++    /// The bytes written to this stream not handed to the network yet, as
++    /// a browser's bufferedAmount reads (an outstanding chunk is not in it)
++    pub fn unsent_amount(&self) -> usize {
++        self.association.outbound_queue.unsent(self.stream_identifier)
++    }
++
+     /// buffered_amount_low_threshold returns the number of bytes of buffered outgoing data that is
+     /// considered "low." Defaults to 0.
+     pub fn buffered_amount_low_threshold(&self) -> Result<usize> {
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -9,6 +9,8 @@
+ pub(crate) const RECEIVE_MTU: usize = 8192;
+ /// initial MTU for outgoing packets (to DTLS)
+ pub(crate) const INITIAL_MTU: u32 = 1228;
++/// Chrome's dcSCTP MTU, its window after a retransmission timeout
++pub(crate) const CHROME_MTU: u32 = 1191;
+ pub(crate) const INITIAL_RECV_BUF_SIZE: u32 = 1024 * 1024;
+ pub(crate) const COMMON_HEADER_SIZE: u32 = 12;
+ pub(crate) const DATA_CHUNK_HEADER_SIZE: u32 = 16;
+--- a/src/queue/outbound_queue.rs
++++ b/src/queue/outbound_queue.rs
+@@ -1,4 +1,5 @@
+ use alloc::vec::Vec;
++use std::collections::HashMap;
+ use std::time::Instant;
+ 
+ use super::payload_queue::PayloadQueue;
+@@ -18,6 +19,10 @@
+     inflight: PayloadQueue,
+     next_message_id: u64,
+     next_unstarted_message_id: u64,
++    /// the bytes of each stream not handed to the network yet: a
++    /// browser's bufferedAmount (Chrome's counts what dcSCTP has not put
++    /// in a packet; an outstanding chunk is not in it)
++    unsent: HashMap<u16, usize>,
+ }
+ 
+ impl OutboundQueue {
+@@ -33,6 +38,7 @@
+         // Never alias a still-queued message, even on counter exhaustion.
+         self.next_message_id = message_id.checked_add(1).expect("message ID exhausted");
+         for mut chunk in chunks {
++            *self.unsent.entry(chunk.stream_identifier).or_default() += chunk.user_data.len();
+             chunk.message_id = message_id;
+             self.pending.push(chunk);
+         }
+@@ -64,6 +70,7 @@
+         let unordered = chunk.unordered;
+         let message_id = chunk.message_id;
+         let bytes = self.pending.remove_message(message_id, |_| {});
++        self.release_unsent(stream, bytes);
+         if !unordered {
+             self.pending.compact_ordered_ssns(stream);
+         }
+@@ -79,6 +86,7 @@
+         self.start_timed_messages(now);
+         let c = self.pending.peek()?;
+         let mut chunk = self.pending.pop(c.beginning_fragment, c.unordered)?;
++        self.release_unsent(chunk.stream_identifier, chunk.user_data.len());
+         chunk.tsn = *next_tsn;
+         *next_tsn = next_tsn.wrapping_add(1);
+         chunk.since = Some(now);
+@@ -151,6 +159,7 @@
+             chunk.user_data.clear();
+             terminal = Some(chunk);
+         });
++        self.release_unsent(stream, bytes);
+         if let Some(mut chunk) = terminal {
+             // These bytes have never been assigned TSNs or transmitted. One
+             // empty terminal marker suffices to skip the whole tail, avoiding
+@@ -219,4 +228,19 @@
+     pub(crate) fn inflight_bytes(&self) -> usize {
+         self.inflight.get_num_bytes()
+     }
++
++    /// What is outstanding takes on the wire, as dcSCTP counts it
++    pub(crate) fn inflight_wire_bytes(&self) -> usize {
++        self.inflight.get_num_wire_bytes()
++    }
++
++    pub(crate) fn unsent(&self, stream: u16) -> usize {
++        self.unsent.get(&stream).copied().unwrap_or(0)
++    }
++
++    fn release_unsent(&mut self, stream: u16, bytes: usize) {
++        if let Some(unsent) = self.unsent.get_mut(&stream) {
++            *unsent = unsent.saturating_sub(bytes);
++        }
++    }
+ }
+--- a/src/queue/payload_queue.rs
++++ b/src/queue/payload_queue.rs
+@@ -14,6 +14,15 @@
+     pub(crate) sorted: VecDeque<u32>,
+     dup_tsn: Vec<u32>,
+     n_bytes: usize,
++    /// what the chunks of n_bytes take on the wire (wire_size())
++    n_wire: usize,
++}
++
++/// A DATA chunk's size on the wire, its header and padding with it, as
++/// Chrome's dcSCTP counts what is outstanding; a chunk with no data left
++/// (acked, abandoned) counts nothing
++pub(crate) fn wire_size(len: usize) -> usize {
++    if len == 0 { 0 } else { 16 + ((len + 3) & !3) }
+ }
+ 
+ impl PayloadQueue {
+@@ -37,6 +46,7 @@
+ 
+     pub(crate) fn push_no_check(&mut self, p: ChunkPayloadData) {
+         self.n_bytes += p.user_data.len();
++        self.n_wire += wire_size(p.user_data.len());
+         self.sorted.push_back(p.tsn);
+         self.chunk_map.insert(p.tsn, p);
+         //self.length += 1;
+@@ -55,6 +65,7 @@
+         }
+ 
+         self.n_bytes += p.user_data.len();
++        self.n_wire += wire_size(p.user_data.len());
+         self.sorted.push_back(p.tsn);
+         self.chunk_map.insert(p.tsn, p);
+         //self.length += 1;
+@@ -70,6 +81,7 @@
+             if let Some(c) = self.chunk_map.remove(&tsn) {
+                 //self.length -= 1;
+                 self.n_bytes = self.n_bytes.saturating_sub(c.user_data.len());
++                self.n_wire = self.n_wire.saturating_sub(wire_size(c.user_data.len()));
+                 return Some(c);
+             }
+         }
+@@ -86,10 +98,12 @@
+     pub(crate) fn pop_up_to(&mut self, cumulative_tsn: u32) {
+         let chunk_map = &mut self.chunk_map;
+         let n_bytes = &mut self.n_bytes;
++        let n_wire = &mut self.n_wire;
+         self.sorted.retain(|tsn| {
+             if sna32lte(*tsn, cumulative_tsn) {
+                 if let Some(c) = chunk_map.remove(tsn) {
+                     *n_bytes = n_bytes.saturating_sub(c.user_data.len());
++                    *n_wire = n_wire.saturating_sub(wire_size(c.user_data.len()));
+                 }
+                 false
+             } else {
+@@ -113,6 +127,7 @@
+         for chunk in self.chunk_map.values_mut() {
+             if chunk.message_id == message_id {
+                 released += chunk.user_data.len();
++                self.n_wire = self.n_wire.saturating_sub(wire_size(chunk.user_data.len()));
+                 chunk.user_data.clear();
+                 chunk.abandoned = true;
+                 chunk.retransmit = false;
+@@ -173,6 +188,7 @@
+             c.retransmit = false;
+             let n = c.user_data.len();
+             self.n_bytes -= n;
++            self.n_wire = self.n_wire.saturating_sub(wire_size(n));
+             c.user_data.clear();
+             n
+         } else {
+@@ -188,6 +204,11 @@
+         self.n_bytes
+     }
+ 
++    /// What the chunks queued take on the wire (wire_size())
++    pub(crate) fn get_num_wire_bytes(&self) -> usize {
++        self.n_wire
++    }
++
+     pub(crate) fn len(&self) -> usize {
+         //assert_eq!(self.chunk_map.len(), self.length);
+         self.chunk_map.len()

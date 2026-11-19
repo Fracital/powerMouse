@@ -962,6 +962,18 @@ TURN server.
   sctp-proto's 60 s (a line of the str0m patch): what a page sent during an
   outage is sent again within 3 s of the path coming back, after an ICE
   restart too, where it took up to a minute.
+- **SCTP's window** is dcSCTP's (the sctp-proto patch): a new chunk goes
+  out when it fits in the window with what is outstanding, each chunk at
+  its size on the wire (16 bytes of header, the data padded to 4), and
+  after a retransmission timeout the window is 1191 bytes, Chrome's MTU. So
+  a channel written to through an outage hands on as many messages as
+  Chrome's (157, measured: 59 of 4 bytes, 10 of 100, 4 of 1000 before the
+  first timeout) and keeps the rest; send() says nothing, and every message
+  arrives, in order, once the path is back. `bufferedAmount` reads what is
+  not handed on (`Channel::unsent_amount`), as Chrome's does: it read what
+  was not acknowledged, so it grew from the first message of an outage,
+  and sctp-proto handed on every message, its window counting only their
+  bytes.
 - **The peers in the suite** are signalled by the suite itself (it holds
   both ends), not by a WebSocket relay in the fixture. werift cannot resolve
   a `.local` name, so the suite takes those candidates out of what it hands

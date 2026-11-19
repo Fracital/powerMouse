@@ -551,8 +551,9 @@ impl Conn {
 		}
 	}
 
-	/// what each channel has queued, reported when it changed: the page's
-	/// `bufferedAmount` follows these
+	/// what each channel has not handed to the network yet, reported when
+	/// it changed: the page's `bufferedAmount` follows these (Chrome's
+	/// leaves out what is sent and not acknowledged)
 	fn report_buffered(&mut self) {
 		self.buffered.resize(self.channels.len(), 0);
 		for index in 0..self.channels.len() {
@@ -562,7 +563,7 @@ impl Conn {
 			let amount = self
 				.rtc
 				.channel(id)
-				.map(|mut c| c.buffered_amount())
+				.map(|mut c| c.unsent_amount())
 				.unwrap_or(0);
 			// less the stand-in bytes still in it: the stream releases its
 			// bytes in the order they were written

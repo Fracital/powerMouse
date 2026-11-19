@@ -45,6 +45,10 @@
 # A VP9 keyframe's first packet states the picture's size in its
 # scalability structure (Y=1), as libwebrtc's does: as published it states
 # none, and a browser's receiver reads the keyframe's width and height as 0.
+# A channel says what it has not handed to the network yet
+# (Channel::unsent_amount, sctp-proto's below), what a browser's
+# bufferedAmount reads: buffered_amount counts what is sent and not
+# acknowledged too.
 str0m 0.25.0 357c7e453c033c8bb59e912312f9f9ff07c2a9ce7268bcb94f0c828a5b47e58f
 # is (str0m's ICE agent): the agent checks its pairs as Chrome does, on a
 # loop of Chrome's (src/pacing.rs): which pair a turn checks, how often,
@@ -58,4 +62,12 @@ str0m 0.25.0 357c7e453c033c8bb59e912312f9f9ff07c2a9ce7268bcb94f0c828a5b47e58f
 is 0.12.0 72dd0494853a6c3769c87adc610e8b228fd8c65c41cc4d2717ff6151ee2d6c73
 # sctp-proto: Association::abort, an ABORT with a User-Initiated Abort cause
 # and the reason given (as published only a graceful shutdown is offered).
+# New data is sent as Chrome's dcSCTP sends it: a chunk goes when it fits in
+# the window with what is outstanding, each chunk counted at its size on the
+# wire (its header and padding), and the window after a retransmission
+# timeout is Chrome's MTU of 1191 bytes. As published the window counted the
+# messages' bytes alone and fell to sctp-proto's MTU, so a channel stalled
+# by an outage sent every small message it was given (Chrome: 59 of 4
+# bytes). Each stream counts what it has not handed on
+# (Stream::unsent_amount).
 sctp-proto 0.10.8 28aca56f649fa088cbdda778a5121f2227995ed057e77de462112b2e5890d591

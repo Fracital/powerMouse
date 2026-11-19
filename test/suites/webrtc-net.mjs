@@ -876,7 +876,13 @@ for (const [label, base] of probes) {
 // while it is answered, and from the turn after 2.5 s without a word from
 // the peer every 62.5 ms, until it fails; disconnected 5 s after the first
 // that went unanswered and failed 15 s after it, each on a turn of its
-// 265.6 ms loop. The agent checked every 3 s.
+// 265.6 ms loop. The agent checked every 3 s. A path that passes nothing
+// but checks (`stall`) leaves the connection connected; its data channel
+// hands what the page sends to the network while it fits in 1191 bytes
+// with what is outstanding, each message counting its chunk (20 bytes for
+// these: 59 of them), and keeps the rest: send() says nothing, bufferedAmount reads only what it
+// kept, and every message arrives, in order, once the path is back.
+// sctp-proto handed on every one and read all it had not had acknowledged.
 
 const kindOf = (bytes) =>
 	bytes[0] < 4 ? (bytes[0] === 1 ? 'answer' : 'check') : 'traffic';
@@ -888,13 +894,16 @@ async function relay() {
 	await new Promise((resolve) => a.bind(0, '127.0.0.1', resolve));
 	await new Promise((resolve) => b.bind(0, '127.0.0.1', resolve));
 	const state = { pass: true, peer: 0, page: null, sent: [], open: true };
+	// `pass`: true, false, or 'stun' for checks and their answers only
+	const passes = (message) =>
+		state.pass === true || (state.pass === 'stun' && message[0] < 4);
 	a.on('message', (message, from) => {
 		state.sent.push({ at: Date.now(), kind: kindOf(message) });
 		state.page = from;
-		if (state.pass && state.peer) b.send(message, state.peer, '127.0.0.1');
+		if (passes(message) && state.peer) b.send(message, state.peer, '127.0.0.1');
 	});
 	b.on('message', (message) => {
-		if (state.pass && state.page && state.open)
+		if (passes(message) && state.page && state.open)
 			a.send(message, state.page.port, state.page.address);
 	});
 	const { port } = a.address();
@@ -1075,12 +1084,77 @@ async function farEndGone(opened, how) {
 	return result;
 }
 
+/**
+ * A connection through a relay to the peer that passes nothing but checks
+ * and their answers for 14 s while the page sends a message every 200 ms:
+ * what send() said, the bufferedAmount after each and what the peer heard
+ */
+async function stalled(opened) {
+	const own = pageEnd(opened.frame);
+	const peer = nodeEnd();
+	const path = await relay();
+	const result = { how: 'stall' };
+	try {
+		await own.call('open', { iceServers: [] });
+		await own.call('channels', [['chat', {}]]);
+		await peer.call('open');
+		const offer = await own.call('offer');
+		await own.call('accept', path.through(await peer.call('answer', offer)));
+		await own.call('opened', 'chat');
+		await peer.call('opened', 'chat');
+		await own.call('pulse', 'chat', 200);
+		await sleep(5000);
+		const start = Date.now();
+		path.state.pass = 'stun';
+		await sleep(14000);
+		path.state.pass = true;
+		const back = Date.now();
+		const pulses = await own.call('pulses', 'chat');
+		const into = pulses.filter(([at]) => at >= start && at < back);
+		// handed on: bufferedAmount reads the message just sent, not yet
+		// taken, and nothing before it; so does it for the first kept, and
+		// the one after it reads more
+		result.handedOn =
+			into.findIndex(([, n, amount]) => amount !== `p${n}`.length) - 1;
+		result.held = into.at(-1)?.[2];
+		// what it kept: every message from the first it did not hand on
+		result.kept = into
+			.slice(result.handedOn)
+			.reduce((sum, [, n]) => sum + `p${n}`.length, 0);
+		result.errors = pulses.filter(([, , , said]) => said).length;
+		const last = into.at(-1)?.[1] ?? 0;
+		const sent = Array.from({ length: last + 1 }, (_, n) => `p${n}`);
+		const pulsed = () =>
+			peer
+				.call('heard', 'chat')
+				.then((heard) => heard.filter((m) => /^p\d+$/.test(m)));
+		await until(
+			async () => (await pulsed()).length > last,
+			15000,
+			'the messages held',
+		).catch(() => {});
+		result.deliveredAfter = Date.now() - back;
+		const heard = await pulsed();
+		result.inOrder = sent.every((text, n) => heard[n] === text);
+		result.heard = heard.length;
+		result.ice = (await own.call('read')).ice;
+		result.states = named(transitionsSince(await own.call('timeline'), start));
+	} catch (error) {
+		result.failure = String(error).slice(0, 300);
+	}
+	await own.call('close').catch(() => {});
+	await peer.call('close').catch(() => {});
+	path.close();
+	return result;
+}
+
 const gone = await Promise.all(
 	probes.flatMap(([label, base]) =>
-		['vanish', 'revive', 'refuse'].map(async (how) => {
+		['vanish', 'revive', 'refuse', 'stall'].map(async (how) => {
 			const opened = await page(browser, base);
 			pages.push(opened);
-			const result = await farEndGone(opened, how);
+			const result =
+				how === 'stall' ? await stalled(opened) : await farEndGone(opened, how);
 			await opened.page.close();
 			return { label, base, ...result };
 		}),
@@ -1090,6 +1164,36 @@ for (const result of gone) {
 	const { label, base, how } = result;
 	const native = gone.find((one) => one.base === null && one.how === how);
 	const story = `${JSON.stringify(result)}${base ? ` natively ${JSON.stringify(native)}` : ''}`;
+	if (how === 'stall') {
+		// natively 59 (1191 bytes at 20 a message), and the rest kept
+		const held =
+			!result.failure &&
+			result.errors === 0 &&
+			result.handedOn >= 55 &&
+			result.handedOn <= 65 &&
+			result.held === result.kept &&
+			result.inOrder &&
+			result.states === '';
+		if (!base)
+			ok(
+				'natively, a path that passes only checks: the channel hands on 59 messages or so and keeps the rest, bufferedAmount reading what it keeps, send() says nothing, and all arrive in order once the path is back',
+				held,
+				story,
+			);
+		else
+			ok(
+				`${label}, a path that passes only checks: the channel hands on as many messages as natively and keeps the rest, bufferedAmount reading what it keeps, send() says nothing, and all arrive in order once the path is back`,
+				held &&
+					native &&
+					Math.abs(result.handedOn - native.handedOn) <= 1 &&
+					result.deliveredAfter < 4000,
+				story,
+			);
+		console.log(
+			`note: ${label}, a path that passes only checks: ${result.handedOn} messages handed on, bufferedAmount ${result.held} at the last, ${result.heard} heard ${result.deliveredAfter} ms after it was back (${result.states || 'connected throughout'})`,
+		);
+		continue;
+	}
 	const disconnected = when(result.gone ?? [], 'connection:disconnected');
 	const failed = when(result.gone ?? [], 'connection:failed');
 	const far = how === 'refuse' ? 'refused' : 'gone';

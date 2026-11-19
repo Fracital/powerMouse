@@ -1152,6 +1152,76 @@ fn a_message_sent_into_an_outage_arrives_soon_after_it() {
 	assert!(took < Duration::from_millis(3500), "arrived {took:?} after the path came back");
 }
 
+/// A channel written to while nothing but checks crosses hands on what
+/// Chrome's would (157, measured: 4-byte messages every 200 ms, 59 of
+/// them, the window after a retransmission timeout being 1191 bytes and
+/// each chunk counting 20) and keeps the rest; its bufferedAmount reads
+/// only what it keeps, and all of them arrive, in order, once the path is
+/// back. sctp-proto sent every one, its window counting the bytes of the
+/// messages only, and counted what was sent and not acknowledged as
+/// buffered.
+#[test]
+fn a_channel_written_to_in_an_outage_holds_what_chromes_holds() {
+	let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let mut a = Peer::new("10.0.0.1:5000", &[]);
+	let mut b = Peer::new("10.0.0.2:5000", &[]);
+	let index: u16 = get(&a.control(&[("op", "channel"), ("label", "data")]), "index").parse().unwrap();
+	negotiate_udp(&mut a, &mut b);
+	pump(&mut a, &mut b, "the channel", |a, b| a.event("channel_open").is_some() && b.event("channel_open").is_some());
+	let stun = |datagram: &[u8]| parse_datagram(datagram).is_some_and(|(_, _, _, payload)| payload.first().is_some_and(|b| *b < 4));
+	// the channel's own open message acknowledged, as in a call that has
+	// gone on a while
+	run(&mut a, &mut b, 1000, false, &mut Vec::new(), None);
+	let name = index.to_string();
+	let buffered = |a: &Peer| {
+		a.events_named("buffered")
+			.iter()
+			.rev()
+			.find(|e| get(e, "index") == name)
+			.map(|e| get(e, "amount").parse::<usize>().unwrap())
+			.unwrap_or(0)
+	};
+	let mut amounts = Vec::new();
+	let mut sent = Vec::new();
+	let mut next = Instant::now();
+	let end = Instant::now() + Duration::from_millis(14000);
+	while Instant::now() < end {
+		if Instant::now() >= next {
+			let body = format!("m{:03}", sent.len());
+			let mut message = index.to_be_bytes().to_vec();
+			message.push(0);
+			message.extend_from_slice(body.as_bytes());
+			let (ptr, len) = give(&message);
+			assert_eq!(unsafe { i(a.id, IN_CHANNEL_SEND, ptr, len) }, STATUS_OK);
+			a.drain();
+			sent.push(body.into_bytes());
+			amounts.push(buffered(&a));
+			next += Duration::from_millis(200);
+		}
+		for datagram in std::mem::take(&mut a.outbox) {
+			if stun(&datagram) {
+				b.receive(&datagram);
+			}
+		}
+		for datagram in std::mem::take(&mut b.outbox) {
+			if stun(&datagram) {
+				a.receive(&datagram);
+			}
+		}
+		a.tick();
+		b.tick();
+		std::thread::sleep(Duration::from_millis(1));
+	}
+	assert!(b.messages.is_empty());
+	let out = amounts.iter().take_while(|amount| **amount == 0).count();
+	assert!(out == 59, "{out} of {} messages handed on in the outage, bufferedAmount {amounts:?}", sent.len());
+	let held: Vec<usize> = (1..=sent.len() - out).map(|n| n * 4).collect();
+	assert_eq!(amounts[out..], held[..], "bufferedAmount once the window was full");
+	pump(&mut a, &mut b, "the messages", |_, b| b.messages.len() >= sent.len());
+	assert_eq!(b.messages, sent);
+	pump(&mut a, &mut b, "nothing buffered", |a, _| buffered(a) == 0);
+}
+
 /// whether a datagram is a STUN binding request (a check)
 fn is_check(datagram: &[u8]) -> bool {
 	parse_datagram(datagram).is_some_and(|(_, _, _, payload)| payload.starts_with(&[0, 1]))

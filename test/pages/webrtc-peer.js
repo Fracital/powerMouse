@@ -337,13 +337,34 @@
 			const [track] = out.stream.getAudioTracks();
 			peer(name).pc.addTrack(track, out.stream);
 		},
-		/** a message on `label` every `ms` while it is open, to keep data flowing */
-		pulse(name, label, ms) {
-			const { channel } = channelOf(name, label);
+		/**
+		 * A message on `label` every `ms` while it is open, to keep data
+		 * flowing: `p<n>`, padded with dots to `size` characters, each
+		 * written down with when it was sent, what send() said and the
+		 * bufferedAmount after it (`pulses`)
+		 */
+		pulse(name, label, ms, size = 0) {
+			const state = channelOf(name, label);
+			const { channel } = state;
+			state.pulses = [];
 			const timer = setInterval(() => {
-				if (channel.readyState === 'open') channel.send('pulse');
-				else clearInterval(timer);
+				if (channel.readyState !== 'open') return clearInterval(timer);
+				const n = state.pulses.length;
+				let said = null;
+				try {
+					channel.send(`p${n}`.padEnd(size, '.'));
+				} catch (error) {
+					said = error.name;
+				}
+				state.pulses.push([Date.now(), n, channel.bufferedAmount, said]);
 			}, ms);
+		},
+		/** what pulse wrote down so far: [sent at, n, bufferedAmount after, error] */
+		pulses(name, label) {
+			return channelOf(name, label).pulses ?? [];
+		},
+		bufferedAmount(name, label) {
+			return channelOf(name, label).channel.bufferedAmount;
 		},
 		async read(name) {
 			const { pc, log, channels } = peer(name);
