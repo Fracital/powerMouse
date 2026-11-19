@@ -75,10 +75,13 @@ export interface TransportDescriptor {
 	 * and starts more instances in workers of its own only when it cannot
 	 * keep up with downloads from more servers than it has threads, each
 	 * origin's connections on one of them, over the one wisp connection;
-	 * a worker that carried nothing for 30 s closes. A number is the most
-	 * threads (1: the transport worker alone, as before); `{ max, start }`
-	 * says how many run from the start too. Default: half the cores the
-	 * browser reports, at most 4, one from the start.
+	 * while a worker runs, the transport worker takes no new origin (every
+	 * worker's bodies go through it), and a worker that carried nothing for
+	 * 30 s closes. A number is the most threads, the transport worker's
+	 * counted (1: the transport worker alone, as before); `{ max, start }`
+	 * says how many run from the start too. Default: workers for half the
+	 * cores the browser reports, at most 4, beside the transport worker's
+	 * own thread; none from the start.
 	 */
 	shards?: ShardsOption;
 }

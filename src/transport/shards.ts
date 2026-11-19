@@ -35,6 +35,12 @@ export type ShardBound = {
 	drop: [number];
 	/** open its wisp connection now (epoxy's replace_stream_provider), unless it has one */
 	warm: [number];
+	/**
+	 * end the wisp connections of the transport `instance` here: its carrier
+	 * ended where the shard cannot hear it (the carrier host's realm went
+	 * away), or the shard closes, and a carrier host's rider is let go
+	 */
+	cut: [number];
 	request: [
 		{
 			instance: number;

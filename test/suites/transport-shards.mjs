@@ -5,16 +5,19 @@
 // (src/transport/wispSplit.ts). Through test/wisp-wt.mjs in front of the
 // demo's holyWisp:
 //
-// - with `shards: { max: 4, start: 4 }` (three workers from the start):
+// - with `shards: { max: 4, start: 4 }` (three workers from the start),
+//   their wisp connections riders of the carrier host's relay of their own
+//   (the verbose log says so), and with the host off, lanes of the
+//   transport worker's split connection:
 //   downloads from four HTTPS origins at once, two from each, arrive byte
 //   for byte (SHA-256 against what each server sent), each origin placed
 //   on one shard, the four on the three workers (shard 1 relays their
 //   packets and takes none while they run), and the relay sees one session
 //   for all of them over its WebTransport listener and, with webTransport
 //   off, one WebSocket (wisp-split has the handshake and the stream ids);
-//   with epoxy in Wisp v2 and the carrier host off, the relay's lane 0 its
-//   own (INFO and CONTINUE at once), the same downloads arrive and the
-//   relay takes the first lane's INFO first (nothing incompatible);
+//   with epoxy in Wisp v2 and the host off, the relay's lane 0 its own
+//   (INFO and CONTINUE at once), the same downloads arrive and the relay
+//   takes the first lane's INFO first (nothing incompatible);
 //   a proxied page loads from one of them and fetches from the others; a
 //   WebSocket through a shard echoes text and binary and closes with the
 //   server's code;
@@ -23,10 +26,16 @@
 //   shard 1 cannot keep up with start workers, and the downloads moved to
 //   them arrive byte for byte; the workers close once they carried nothing
 //   for 30 s;
+//   then a small download arrives as before, on shard 1;
+// - an HTTP/1.1 origin whose download holds a connection on a shard that
+//   cannot keep up opens its next connection on another shard, and both
+//   bodies arrive byte for byte (when the shard was saturated: the check
+//   says whether it was);
 // - `shards: 1` runs the transport alone: no shard is named, the bodies are
 //   the same.
 import { createHash, randomBytes } from 'node:crypto';
 import { createSecureServer } from 'node:http2';
+import { createServer as createHttpsServer } from 'node:https';
 import { WebSocketServer } from 'ws';
 import { done, launch, ok, PORT, PROXY } from '../lib.mjs';
 import { startWispWebTransport } from '../wisp-wt.mjs';
@@ -71,6 +80,37 @@ for (let i = 0; i < ORIGINS; i++) {
 	await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 	servers.push(`https://127.0.0.1:${server.address().port}`);
 }
+
+// an HTTP/1.1 origin (no h2 in its ALPN): each request in flight holds a
+// connection. `?long` streams `n` bytes, a random MiB over and over, as
+// fast as the client takes them
+const http1 = createHttpsServer(
+	{ cert: certPem, key: keyPem },
+	async (req, res) => {
+		const url = new URL(req.url, 'https://x');
+		const n = Number(url.searchParams.get('n'));
+		res.writeHead(200, {
+			'content-type': 'application/octet-stream',
+			'content-length': String(n),
+			'cache-control': 'no-store',
+		});
+		if (!url.searchParams.has('long')) {
+			const body = randomBytes(n);
+			sent.set(
+				url.searchParams.get('id'),
+				createHash('sha256').update(body).digest('hex'),
+			);
+			return void res.end(body);
+		}
+		const block = randomBytes(1024 * 1024);
+		for (let left = n; left > 0; left -= block.length)
+			if (!res.write(left >= block.length ? block : block.subarray(0, left)))
+				await new Promise((resolve) => res.once('drain', resolve));
+		res.end();
+	},
+);
+await new Promise((resolve) => http1.listen(0, '127.0.0.1', resolve));
+const http1Origin = `https://127.0.0.1:${http1.address().port}`;
 
 const echo = new WebSocketServer({ port: 0, host: '127.0.0.1' });
 echo.on('connection', (ws) =>
@@ -132,6 +172,10 @@ async function controllerPage(
 	);
 	return { context, page };
 }
+
+/** the verbose log's line of how the shards ride the wisp connection */
+const ridden = (page) =>
+	page.logs.find((line) => /transport shards (ride|split)/.test(line)) ?? '';
 
 /**
  * two downloads from each origin at once through the host's transport
@@ -247,6 +291,11 @@ const EAGER = { max: 4, start: 4 };
 		JSON.stringify(shards),
 	);
 	ok(
+		"four shards: each worker rides the carrier host's relay, a rider of its own",
+		/ride the carrier host's relay/.test(ridden(page)),
+		ridden(page),
+	);
+	ok(
 		'four shards: the relay sees one session for every shard',
 		// (and the WebSocket a first start opens on standby, closed)
 		relay.stats.sessions - before.sessions === 1 &&
@@ -320,6 +369,40 @@ const EAGER = { max: 4, start: 4 };
 	await context.close();
 }
 
+// ---- four shards, the carrier host off: the connection split here ----------
+
+{
+	const before = { ...relay.stats };
+	const { context, page } = await controllerPage(
+		EAGER,
+		true,
+		relay.wisp,
+		false,
+	);
+	const [whole, bad] = intact(await downloads(page, 'split'));
+	ok(
+		'carrier host off: eight downloads from four origins arrive byte for byte',
+		whole,
+		bad,
+	);
+	ok(
+		"carrier host off: the shards are lanes of the transport worker's connection",
+		/split the wisp connection here/.test(ridden(page)),
+		ridden(page),
+	);
+	ok(
+		'carrier host off: the relay sees one session for every shard',
+		relay.stats.sessions - before.sessions === 1,
+		`sessions ${before.sessions} -> ${relay.stats.sessions}`,
+	);
+	ok(
+		'carrier host off: the origins run on the three workers',
+		new Set([...placements(page).values()].flat()).size === 3,
+		JSON.stringify([...placements(page)]),
+	);
+	await context.close();
+}
+
 // ---- four shards, Wisp v2, the carrier host off ----------------------------
 
 {
@@ -341,11 +424,13 @@ const EAGER = { max: 4, start: 4 };
 		"Wisp v2, carrier host off: the relay opened lane 0, one session, and took the first lane's INFO first",
 		relay.stats.sessions - before.sessions === 1 &&
 			relay.stats.serverStreams - before.serverStreams === 1 &&
-			relay.stats.incompatible === before.incompatible,
+			relay.stats.incompatible === before.incompatible &&
+			/split the wisp connection here/.test(ridden(page)),
 		JSON.stringify({
 			sessions: relay.stats.sessions - before.sessions,
 			serverStreams: relay.stats.serverStreams - before.serverStreams,
 			incompatible: relay.stats.incompatible - before.incompatible,
+			ridden: ridden(page),
 		}),
 	);
 	ok(
@@ -439,7 +524,144 @@ const EAGER = { max: 4, start: 4 };
 			closed === started,
 			JSON.stringify({ started, closed }),
 		);
+		const [after, afterBad] = intact(
+			await downloads(page, 'after', small),
+			small,
+		);
+		ok(
+			'lazy: once they closed, small downloads arrive as before',
+			after,
+			afterBad,
+		);
 	}
+	await context.close();
+}
+
+// ---- HTTP/1.1: a download's next connection, on a shard that keeps up ------
+
+{
+	// straight to the demo's holyWisp, as fast as a shard decrypts
+	const { context, page } = await controllerPage(
+		{ max: 3, start: 3 },
+		false,
+		`ws://127.0.0.1:${PORT}/wisp/`,
+	);
+	const long = 384 * 1024 * 1024;
+	const next = 4 * 1024 * 1024;
+	const fetchOne = (origin, bytes, id) =>
+		page.evaluate(
+			async ({ origin, bytes, id }) => {
+				const streamed = id === 'h1-long';
+				const response = await window.controller.transport.request(
+					new URL(
+						`${origin}/bytes?n=${bytes}&id=${id}${streamed ? '&long' : ''}`,
+					),
+					'GET',
+					null,
+					[],
+					undefined,
+				);
+				if (streamed) {
+					// counted as it comes, not kept
+					const reader = response.body.getReader();
+					let length = 0;
+					for (;;) {
+						const { done, value } = await reader.read();
+						if (done) break;
+						length += value.byteLength;
+					}
+					return [id, '', length, response.httpVersion];
+				}
+				const body = await new Response(response.body).arrayBuffer();
+				const digest = await crypto.subtle.digest('SHA-256', body);
+				return [
+					id,
+					[...new Uint8Array(digest)]
+						.map((b) => b.toString(16).padStart(2, '0'))
+						.join(''),
+					body.byteLength,
+					response.httpVersion,
+				];
+			},
+			{ origin, bytes, id },
+		);
+	// the origin placed, and its protocol learned, with a small request first
+	const first = await fetchOne(http1Origin, 1024, 'h1-first');
+	const shardOf = () =>
+		placements(page).get(http1Origin)?.[0] ??
+		page.logs
+			.map((line) => /\[net\] (\S+) runs on transport shard (\d+)/.exec(line))
+			.find((match) => match?.[1] === http1Origin)?.[2];
+	const where = Number(shardOf());
+	const began = Date.now();
+	const downloading = fetchOne(http1Origin, long, 'h1-long');
+	// the next request goes once the download's shard cannot keep up and the
+	// download is busy (read for ShardedTransport.ts BUSY_MS, 300), or it ends
+	const state = new RegExp(
+		`transport shard ${where} (cannot keep up|keeps up again)`,
+	);
+	const states = (from = 0) =>
+		page.logs
+			.slice(from)
+			.map((line) => state.exec(line)?.[1])
+			.filter(Boolean);
+	let saturated = false;
+	let ended = false;
+	downloading.then(
+		() => (ended = true),
+		() => (ended = true),
+	);
+	while (!ended && !(saturated && Date.now() - began >= 500)) {
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		saturated = states().at(-1) === 'cannot keep up';
+	}
+	// read now: the download may well have ended by the time the next request has
+	const running = saturated && !ended;
+	const mark = page.logs.length;
+	const second = await fetchOne(http1Origin, next, 'h1-next');
+	// a shard that kept up again while the request went may have taken it
+	const eased = states(mark).includes('keeps up again');
+	const busy = running && !eased;
+	const got = [await downloading, second];
+	const whole =
+		got[0][2] === long &&
+		got[1][2] === next &&
+		sent.get(got[1][0]) === got[1][1];
+	const opened = page.logs.find((line) =>
+		/opens its next connection on transport shard/.test(line),
+	);
+	ok(
+		'HTTP/1.1: the origin speaks HTTP/1.1 to the transport',
+		first[3] === '1.1',
+		JSON.stringify(first),
+	);
+	ok(
+		'HTTP/1.1: a download arrives whole, and the next request from its origin byte for byte',
+		whole,
+		JSON.stringify(got.map(([id, , length]) => [id, length])),
+	);
+	const elsewhere =
+		Boolean(opened) && !new RegExp(`on transport shard ${where} `).test(opened);
+	ok(
+		busy
+			? "HTTP/1.1: the next request opens its connection on another shard while the download's cannot keep up"
+			: running
+				? 'HTTP/1.1: (its shard kept up again meanwhile) a next connection, if any, is on another shard'
+				: "HTTP/1.1: (its shard kept up) the next request stays on the download's shard",
+		busy ? elsewhere : running ? !opened || elsewhere : !opened,
+		JSON.stringify({
+			where,
+			saturated,
+			running,
+			eased,
+			opened,
+			// what the transport said of its shards meanwhile
+			said:
+				busy && !elsewhere
+					? page.logs.slice(mark - 5).filter((line) => /shard/.test(line))
+					: undefined,
+		}),
+	);
 	await context.close();
 }
 
@@ -457,6 +679,7 @@ const EAGER = { max: 4, start: 4 };
 	await context.close();
 }
 
+http1.close();
 relay.close?.();
 await wt.close?.();
 await done(browser, errors);
