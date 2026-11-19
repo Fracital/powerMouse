@@ -1823,6 +1823,21 @@ export class CarrierTransport implements ProxyTransport {
 		return (this.#base as { fieldSupport?: unknown } | null)?.fieldSupport;
 	}
 
+	/** the transport's answer for `host`'s HTTPS record (RevivingTransport's httpsAnswer) */
+	async httpsAnswer(
+		host: string,
+		headers?: RawHeaders,
+	): Promise<ArrayBuffer | null> {
+		await this.init();
+		const base = this.#base as {
+			httpsAnswer?: (
+				host: string,
+				headers?: RawHeaders,
+			) => Promise<ArrayBuffer | null>;
+		} | null;
+		return (await base?.httpsAnswer?.(host, headers)) ?? null;
+	}
+
 	init(): Promise<void> {
 		this.#starting ??= this.#start().catch((error) => {
 			this.#starting = null;

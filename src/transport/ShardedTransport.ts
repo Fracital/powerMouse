@@ -949,6 +949,40 @@ class ShardedTransport implements ProxyTransport {
 		} as TransferrableResponse;
 	}
 
+	/**
+	 * The answer for `host`'s HTTPS record from the epoxy of the shard its
+	 * https requests in this partition (`headers`, which epoxy reads the
+	 * partition from as its request() does) go to, whose ECH lookup before a
+	 * connection's TLS asks the same question (EpoxyTransport's
+	 * httpsAnswer), or null
+	 */
+	async httpsAnswer(
+		host: string,
+		headers?: RawHeaders,
+	): Promise<ArrayBuffer | null> {
+		const ticket = await this.#take(groupOf('https:', host, headers));
+		try {
+			if (!ticket.remote)
+				return (
+					(await (
+						this.#local as {
+							httpsAnswer?: (
+								host: string,
+								headers?: RawHeaders,
+							) => Promise<ArrayBuffer | null>;
+						}
+					).httpsAnswer?.(host, headers)) ?? null
+				);
+			return await ticket.remote.call('httpsAnswer', {
+				instance: this.#instance,
+				host,
+				headers: headers ?? [],
+			});
+		} finally {
+			ticket.done();
+		}
+	}
+
 	connect(
 		url: URL,
 		protocols: string[],
