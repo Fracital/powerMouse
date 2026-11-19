@@ -50,6 +50,7 @@ import {
 	frameOfSource,
 	historyRunReport,
 	hookErrorReport,
+	keepClient,
 	navigateReport,
 	NAVIGATION_WAIT_MS,
 	navigationTypeReport,
@@ -265,6 +266,8 @@ export class RemoteController extends EventTarget {
 	}
 	readonly element: HTMLIFrameElement;
 	#rpc: RpcHelper<HostBound, FrameBound>;
+	/** the documents the controller frame said want isolation they lack (NavigateInfo.isolation) */
+	#isolationWanted = new Set<string>();
 	#ready: Promise<void>;
 	#init: RemoteControllerInit;
 	#sandbox: string;
@@ -331,6 +334,10 @@ export class RemoteController extends EventTarget {
 			{
 				ready: async () => {
 					frameReady();
+				},
+				isolationWanted: async (client) => {
+					if (typeof client === 'string')
+						keepClient(this.#isolationWanted, client);
 				},
 				hookError: async (info) => {
 					init.onHookError?.(info);
@@ -492,6 +499,8 @@ export class RemoteController extends EventTarget {
 			const navigate = navigateReport(event.data);
 			if (navigate) {
 				if (navigate.client) this.#clients.attribute(navigate.client, frame);
+				if (navigate.client && this.#isolationWanted.has(navigate.client))
+					navigate.isolation = 'wanted';
 				// where the frame's history can go is the controller frame's to
 				// say (nested frames included), not the page's own navigable;
 				// the site pool: once the agent of the document's slot took it
@@ -1025,16 +1034,20 @@ export class RemoteFrame extends EventTarget {
 	}
 	/** the last report, with the frame's history state */
 	#last: NavigateInfo | null = null;
+	/** the history state the controller frame last said (#syncHistory) */
+	#synced: [boolean | null, boolean | null] = [null, null];
 	/** history state requests, answered in order */
 	#history: Promise<void> = Promise.resolve();
-	/** the frame's history state from the controller frame */
+	/**
+	 * the frame's history state from the controller frame (null when it could
+	 * not say: a report then keeps its own, not the previous document's)
+	 */
 	#syncHistory(): Promise<void> {
 		const run = () =>
 			this.controller
 				.frameInfo(this.element)
 				.then((info) => {
-					if (info.canGoBack !== null) this.canGoBack = info.canGoBack;
-					if (info.canGoForward !== null) this.canGoForward = info.canGoForward;
+					this.#synced = [info.canGoBack, info.canGoForward];
 				})
 				.catch(() => {});
 		this.#history = this.#history.then(run, run);
@@ -1069,8 +1082,9 @@ export class RemoteFrame extends EventTarget {
 			info.canGoForward = this.#runs.can('forward');
 		} else {
 			await this.#syncHistory();
-			if (this.canGoBack !== null) info.canGoBack = this.canGoBack;
-			if (this.canGoForward !== null) info.canGoForward = this.canGoForward;
+			const [back, forward] = this.#synced;
+			if (back !== null) info.canGoBack = back;
+			if (forward !== null) info.canGoForward = forward;
 		}
 		this.canGoBack = info.canGoBack;
 		this.canGoForward = info.canGoForward;
@@ -1101,10 +1115,11 @@ export class RemoteFrame extends EventTarget {
 		}
 		await this.#syncHistory();
 		const last = this.#last;
+		const [back, forward] = this.#synced;
 		if (
 			!last ||
-			(this.canGoBack === last.canGoBack &&
-				this.canGoForward === last.canGoForward)
+			((back ?? last.canGoBack) === last.canGoBack &&
+				(forward ?? last.canGoForward) === last.canGoForward)
 		)
 			return;
 		await this.reported({ ...last }, announce);

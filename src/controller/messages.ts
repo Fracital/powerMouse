@@ -262,6 +262,8 @@ export type HostBound = {
 	transportNote: [TransportNote];
 	/** a host hook threw in a proxied realm, or a hook URL could not be fetched */
 	hookError: [HookErrorInfo];
+	/** the document `client` is a page isolated natively shown without isolation (NavigateInfo.isolation) */
+	isolationWanted: [string];
 	/** a site asks for a permission the proxy origin holds for another (see StompController.onPermissionRequest) */
 	permission: [PermissionRequestInfo, boolean | null];
 	/**

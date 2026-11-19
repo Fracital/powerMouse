@@ -70,10 +70,11 @@ export function workerURL(
 	// of a context that is not (its shell said `n`, or it is such a worker)
 	// says so in its route, or in what its bootstrap runs first, and its
 	// client answers as a worker that is not isolated (WebKit and Firefox
-	// isolate every worker of an isolated page: src/isolation.ts)
+	// isolate every worker of an isolated page, as a Document-Isolation-Policy
+	// every worker of its document: src/isolation.ts). A shell says `n` only
+	// to a document the proxy isolates
 	const unisolated =
 		!shared &&
-		moduleClient.hostIsolated &&
 		(
 			(moduleClient as { isolationFacts?: string }).isolationFacts ??
 			moduleClient.isolation ??
