@@ -209,10 +209,27 @@ export const ownScripts = new WeakSet<object>();
  */
 const ownInjectorMarkup = new Set<number>();
 
+// the browser's own encoder, taken before any page script ran (markupHash;
+// made at first use: a realm with none loads this module too)
+const NativeEncoder = globalThis.TextEncoder;
+const encodeInto = NativeEncoder?.prototype.encodeInto;
+let hashEncoder: TextEncoder | undefined;
+
+/**
+ * FNV-1a of the text's UTF-8, which the browser's encoder makes: a loop of
+ * charCodeAt calls (each through the bundle's own method helper) took 25 ms
+ * over CNN's 3 MB style, and the hash is taken twice for each
+ */
 function markupHash(text: string): number {
+	const bytes = new Uint8Array(text.length * 3);
+	hashEncoder ??= new NativeEncoder();
+	const { written } = Reflect.apply(encodeInto!, hashEncoder, [
+		text,
+		bytes,
+	]) as TextEncoderEncodeIntoResult;
 	let hash = 0x811c9dc5;
-	for (let i = 0; i < text.length; i++)
-		hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193);
+	for (let i = 0; i < written; i++)
+		hash = Math.imul(hash ^ bytes[i]!, 0x01000193);
 	return hash >>> 0;
 }
 

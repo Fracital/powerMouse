@@ -3440,6 +3440,10 @@ export default class DocumentClient extends Client {
 	/** large routed style texts this client made, the oldest out first */
 	readonly #styleOutputs = new LazySet<string>();
 	#styleOutputChars = 0;
+	/** @internal the page's text of a style of its markup whose rewrite is `routed` (PrewrittenTable.styleSource) */
+	prewrittenStyleSource(routed: string): string | undefined {
+		return this.#table()?.styleSource(routed);
+	}
 	/** @internal the worker's rewrite of an inline script of this document's markup (PrewrittenTable.script) */
 	prewrittenScript(
 		module: boolean,
