@@ -20,7 +20,9 @@
 //   whole page and ran none of it;
 // - a head of 1.5 MB, most of it one style (CNN's is 3.7 MB), is in while
 //   the rest is on its way, its scripts read the style's text as natively,
-//   and the style applies.
+//   and the style applies;
+// - a frame of the first case that is not displayed (it draws no frames:
+//   the page's first writes wait for one, or for a timer) loads whole.
 import {
 	done,
 	evaluateIsolated,
@@ -137,6 +139,25 @@ async function bigheadCase(proxied) {
 			50,
 		);
 		return { mid, end };
+	} finally {
+		await page.close();
+	}
+}
+
+async function hiddenCase(proxied) {
+	const { page, find } = await open(
+		`${FIXTURE}stream/hidden?wait=1500`,
+		proxied,
+	);
+	try {
+		const inner = () =>
+			page.frames().filter((f) => f.parentFrame() === find())[0];
+		const end = await poll(inner, whole, undefined, 400, 50);
+		const frame = inner();
+		const elements = frame
+			? await evaluateIsolated(frame, shape).catch(() => null)
+			: null;
+		return { end, elements };
 	} finally {
 		await page.close();
 	}
@@ -261,6 +282,7 @@ const native = {
 	sizes: await sizesCase(false),
 	frame: await frameCase(false),
 	bighead: await bigheadCase(false),
+	hidden: await hiddenCase(false),
 };
 ok(
 	'natively: the heading is in while the rest is on its way, and the page loads whole',
@@ -282,6 +304,7 @@ const proxied = {
 	sizes: await sizesCase(true),
 	frame: await frameCase(true),
 	bighead: await bigheadCase(true),
+	hidden: await hiddenCase(true),
 };
 ok(
 	'proxied: while the rest is on its way, the page holds its first part (its heading, its write) and not the rest, and is loading',
@@ -338,6 +361,13 @@ ok(
 	!!native.bighead.end &&
 		JSON.stringify(proxied.bighead.end) === JSON.stringify(native.bighead.end),
 	`${JSON.stringify(proxied.bighead.end)?.slice(0, 400)} natively ${JSON.stringify(native.bighead.end)?.slice(0, 400)}`,
+);
+ok(
+	'proxied: a frame that is not displayed loads whole, as natively',
+	!!native.hidden.end &&
+		JSON.stringify(proxied.hidden.end) === JSON.stringify(native.hidden.end) &&
+		proxied.hidden.elements === native.hidden.elements,
+	`${JSON.stringify(proxied.hidden.end)} natively ${JSON.stringify(native.hidden.end)}`,
 );
 
 await done(browser);

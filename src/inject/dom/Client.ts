@@ -101,6 +101,7 @@ import { HTML_NAMESPACE, SVG_NAMESPACE } from './namespaces';
 import PageStream, {
 	empty,
 	FIRST_PASS_MS,
+	FRAME_WAIT_MS,
 	now,
 	PASS_MS,
 	readMarkup,
@@ -410,6 +411,8 @@ export default class DocumentClient extends Client {
 	#parseBase: StompURL | null = null;
 	/** the window's setTimeout, before page code can replace it (loadHTML) */
 	readonly #setTimeout: typeof setTimeout;
+	/** the window's requestAnimationFrame, before page code can replace it (loadHTML) */
+	readonly #requestFrame: typeof requestAnimationFrame;
 	/** the window's queueMicrotask, before page code can replace it (loadHTML) */
 	readonly #queueMicrotask: typeof queueMicrotask;
 	/** the window's MutationObserver, before page code can replace it (loadHTML) */
@@ -514,6 +517,7 @@ export default class DocumentClient extends Client {
 			setCacheMarkSource(() => this.cacheMark);
 		}
 		this.#setTimeout = this.global.setTimeout;
+		this.#requestFrame = this.global.requestAnimationFrame;
 		this.#queueMicrotask = this.global.queueMicrotask;
 		this.#MutationObserver = this.global.MutationObserver;
 		this.write = this.global.document.write;
@@ -3703,6 +3707,8 @@ export default class DocumentClient extends Client {
 		let root: Element | null = null;
 		// when the page was last written
 		let lastWrite = 0;
+		// how many times the page was written
+		let writes = 0;
 		// how much is written so far
 		let total = 0;
 		// a copy threw: the page is what was copied before it
@@ -3765,13 +3771,15 @@ export default class DocumentClient extends Client {
 			}
 			job.copied += markup;
 			const ended = failed || page.done;
-			// written now: the first of the page, its end, what the parse had
-			// once it has nothing more (the rest is on its way), or what was
-			// copied once it is enough (WRITE_CHARS, more as the page grows);
-			// else the next pass copies more first
+			// written now: the first of the page and what the pass after it
+			// copied (the first of its body, where the head was all of the
+			// first: CNN's body waited WRITE_MS behind its 3.7 MB head), its
+			// end, what the parse had once it has nothing more (the rest is on
+			// its way), or what was copied once it is enough (WRITE_CHARS, more
+			// as the page grows); else the next pass copies more first
 			const time = now();
 			if (
-				root !== null &&
+				writes > 1 &&
 				markup &&
 				!ended &&
 				job.copied.length <
@@ -3782,6 +3790,7 @@ export default class DocumentClient extends Client {
 				return;
 			}
 			lastWrite = time;
+			if (job.copied) writes++;
 			const batch = job.copied;
 			total += batch.length;
 			job.copied = '';
@@ -3822,10 +3831,37 @@ export default class DocumentClient extends Client {
 			// reported as it was before the page was written as it is parsed
 			if (thrown) throw thrown.error;
 		};
+		// the page's first two writes are drawn before the next pass: passes
+		// queued back to back held the first paint off until the scheduler
+		// drew anyway (about 100 ms), where a parser the network feeds yields
+		// to rendering. A frame that never comes (a hidden document) is
+		// waited for FRAME_WAIT_MS
+		let drawn = 0;
 		const schedule = () => {
 			if (due || !written) return;
 			due = true;
-			Reflect.apply(this.#setTimeout, this.global, [this.ownCallback(pass)]);
+			const run = this.ownCallback(pass);
+			if (writes > 2 || drawn === writes) {
+				Reflect.apply(this.#setTimeout, this.global, [run]);
+				return;
+			}
+			drawn = writes;
+			let ran = false;
+			const once = () => {
+				if (ran) return;
+				ran = true;
+				run();
+			};
+			try {
+				Reflect.apply(this.#requestFrame, this.global, [
+					this.ownCallback(() =>
+						Reflect.apply(this.#setTimeout, this.global, [once]),
+					),
+				]);
+			} catch (error) {
+				// no frames here: the timer runs it
+			}
+			Reflect.apply(this.#setTimeout, this.global, [once, FRAME_WAIT_MS]);
 		};
 
 		// jump out of the DOM "write stream" so we can start loading our own HTML
