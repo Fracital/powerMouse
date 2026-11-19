@@ -104,6 +104,7 @@ fails the build at `git apply --check`.
 | MercuryWorkshop/epoxy-tls                                      | `0073` | A request goes again when Chrome sends it again (`ShouldResendRequest`): a kept connection that ended before any byte of a response, whatever the method; a 408 on a kept HTTP/1 connection; a refused HTTP/2 stream, twice at most. Not a fresh connection's, one whose response had begun, or a streaming body (`idle-close-retry` suite).                                      |
 | MercuryWorkshop/epoxy-tls                                      | `0074` | A write of a Uint8Array or ArrayBuffer (a socket's chunk, a UDP datagram, a streamed request body's chunk) is taken as it is; each went through `new Request("", { body }).arrayBuffer()`, a Request, a promise and a task's wait, before every ACK an HTTP/3 connection sent. Anything else still goes through the Request.                                                      |
 | MercuryWorkshop/epoxy-tls                                      | `0075` | client: a function transport's writes never wait, as the WebSocket's `send` does not. One that waited held wisp-mux's sink lock across a TLS handshake's lone flush, the actor stopped reading while it waited to send the next CONNECT, and every request on the connection hung (STomp's WebTransport carrier).                                                                 |
+| MercuryWorkshop/epoxy-tls                                      | `0076` | A zstd body is decoded frame after frame to its end, as Chrome's `ZstdSourceStream` reads it (a skippable frame passed over); the decoder stopped at the end of the first frame and the rest was dropped, so Spotify's search answer, in 64 KiB frames, reached the page cut at 64 KiB (`zstd-frames` suite). Gzip still reads one member, as Chrome does.                        |
 
 ## stomp-h3 (`h3/`)
 
@@ -156,7 +157,7 @@ on and an origin offers h3 (docs/http3.md).
   (in the caller's place, or before Accept-Language, Cookie and Priority
   when the caller has none) and a Cookie as its crumbs, one field per
   cookie, as Chrome's QPACK encoder sends it; a response body is decoded
-  from gzip, deflate, br or zstd.
+  from gzip, deflate, br or zstd (every frame of a zstd body, as Chrome).
 - `connect_webtransport` (`src/wt.rs`) opens a WebTransport (draft 02)
   session as Chrome does, on a QUIC connection of its own with the same
   transport parameters and ClientHello as `connect` but no TLS session

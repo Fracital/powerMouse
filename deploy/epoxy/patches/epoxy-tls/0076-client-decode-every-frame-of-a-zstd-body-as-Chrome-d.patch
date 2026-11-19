@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Wed, 18 Nov 2026 19:30:00 -0500
+Subject: [PATCH 76/76] client: decode every frame of a zstd body, as Chrome does
+
+Chrome's ZstdSourceStream reads a frame after the one before it ends
+(and passes over a skippable frame). async-compression's ZstdDecoder
+stops at the end of the first frame unless multiple_members is on, and
+the rest of the body was dropped as if the response had ended there. A
+server that compresses a response in parts writes a frame per part:
+Spotify's search answer is 185 KB of JSON in 64 KiB frames, and the
+page got the first 64 KiB. Gzip keeps reading one member, as Chrome's
+GzipSourceStream does.
+---
+ client/src/lib.rs | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/client/src/lib.rs b/client/src/lib.rs
+--- a/client/src/lib.rs
++++ b/client/src/lib.rs
+@@ -945,8 +945,14 @@
+ 							EpoxyCompression::Deflate => {
+ 								Either::Right(Either::Left(async_comp::ZlibDecoder::new(response_body)))
+ 							}
++							// every frame, as Chrome's ZstdSourceStream reads
++							// them: a body a server compressed in parts is
++							// a frame per part, and the decoder stopped at
++							// the end of the first
+ 							EpoxyCompression::Zstd => {
+-								Either::Right(Either::Right(async_comp::ZstdDecoder::new(response_body)))
++								let mut decoder = async_comp::ZstdDecoder::new(response_body);
++								decoder.multiple_members(true);
++								Either::Right(Either::Right(decoder))
+ 							}
+ 						}),
+ 						None => Either::Right(response_body),
+-- 
+2.54.0
+

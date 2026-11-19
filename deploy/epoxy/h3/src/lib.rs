@@ -602,7 +602,13 @@ impl H3Connection {
 				Some(Coding::Gzip) => Box::pin(GzipDecoder::new(reader)),
 				Some(Coding::Brotli) => Box::pin(BrotliDecoder::new(reader)),
 				Some(Coding::Deflate) => Box::pin(ZlibDecoder::new(reader)),
-				Some(Coding::Zstd) => Box::pin(ZstdDecoder::new(reader)),
+				// every frame, as Chrome's ZstdSourceStream reads them: a
+				// body a server compressed in parts is a frame per part
+				Some(Coding::Zstd) => {
+					let mut decoder = ZstdDecoder::new(reader);
+					decoder.multiple_members(true);
+					Box::pin(decoder)
+				}
 				None => Box::pin(reader),
 			};
 			// one buffer for the whole body: each read is copied out into
