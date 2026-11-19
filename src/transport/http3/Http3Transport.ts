@@ -548,6 +548,10 @@ export default class Http3Transport implements ProxyTransport {
 			console.warn(
 				`Stomp: HTTP/3 to ${origin} failed under a request that the base transport answered; HTTP/3 off for it for ${Math.round(delay / 1000)} s`,
 			);
+			if (transportLog.on)
+				logTransport(
+					`HTTP/3 to ${keyed(key)} falls back: its QUIC connection failed under a request that the base transport answered; ${OVER_TCP} for ${Math.round(delay / 1000)} s`,
+				);
 		}
 		if (usable) {
 			// the base transport may have answered over a new wisp connection
@@ -845,6 +849,10 @@ export default class Http3Transport implements ProxyTransport {
 			console.warn(
 				`Stomp: QUIC to ${origin} heard nothing back for ${Math.round(waited)} ms after a request (a blackhole, as Chrome closes one); its requests go over the base transport`,
 			);
+			if (transportLog.on)
+				logTransport(
+					`HTTP/3 to ${keyed(origin)} falls back: QUIC heard nothing back for ${Math.round(waited)} ms after a request (a blackhole, as Chrome closes one); the connection is closed and its requests go ${OVER_TCP}`,
+				);
 			live.close();
 			this.#lost(origin, live);
 		};

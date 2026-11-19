@@ -35,7 +35,7 @@
 //   with datagrams smaller than QUIC's packets and some of them lost, and
 //   then with the flow's UDP lost after the handshake: Chrome's blackhole
 //   delay, not QUIC's idle timeout, before the request goes over TCP and
-//   the origin is marked broken.
+//   the origin is marked broken, each said by a verbose `[net]` line.
 //
 // When holyWisp's own build with its WebTransport listener is on the
 // machine (HOLYWISP_WT, or ~/src/holyWisp/build/release/holywisp), a page
@@ -105,6 +105,7 @@ function startController(page, host, wisp, extra = {}) {
 				},
 				directory: '/stomp/',
 				codec: 'xor',
+				...(extra.debugTransport && { debugTransport: true }),
 			});
 			await controller.wait();
 			if (!controller.transport.ready) await controller.transport.init();
@@ -1006,6 +1007,8 @@ for (const host of ['worker', 'page']) {
 		{
 			options: { pem_files: [h3.caPem] },
 			http3: { pem: h3.caPem, timeout: 5000 },
+			// the verbose log's fallback lines, checked below
+			debugTransport: true,
 		},
 		{ learn: true },
 	);
@@ -1087,6 +1090,23 @@ for (const host of ['worker', 'page']) {
 			next.ms < 1500 &&
 			!after.connections.some((c) => c.alive),
 		JSON.stringify({ next, entry, connections: after.connections }),
+	);
+	const fallbacks = page.logs.filter((text) =>
+		text.startsWith(`[net] HTTP/3 to ${origin}`),
+	);
+	ok(
+		'h3 through the session: the verbose log says each fallback and why, the blackhole and the origin marked broken',
+		fallbacks.some((text) =>
+			/ falls back: QUIC heard nothing back for \d+ ms after a request \(a blackhole, as Chrome closes one\); the connection is closed and its requests go HTTP\/2 or HTTP\/1\.1 over TLS over a Wisp TCP stream$/.test(
+				text,
+			),
+		) &&
+			fallbacks.some((text) =>
+				/ falls back: its QUIC connection failed under a request that the base transport answered; HTTP\/2 or HTTP\/1\.1 over TLS over a Wisp TCP stream for \d+ s$/.test(
+					text,
+				),
+			),
+		JSON.stringify(fallbacks),
 	);
 	relay.datagramMax = 0;
 	relay.datagramLoss = 0;
