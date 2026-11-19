@@ -5271,9 +5271,14 @@ async function readHead(
 	const encoding = documentEncoding(first, contentType);
 	const decoder = new TextDecoder(encoding);
 	let text = decoder.decode(first, { stream: !done });
-	let searched = 0;
-	while (!done && !BODY_START.test(text.slice(Math.max(0, searched - 5)))) {
-		searched = text.length;
+	// each new piece is searched with the end of the text before it (`<body`
+	// may be split between pieces), never the whole text: a slice of a text
+	// that grows a piece at a time flattens it each time, quadratic over a
+	// head of megabytes (0.4 s for CNN's 3.5 MB head)
+	let piece = text;
+	let carry = '';
+	while (!done && !BODY_START.test(carry + piece)) {
+		carry = (carry + piece).slice(-5);
 		const chunk = await reader.read();
 		if (chunk.done) {
 			done = true;
@@ -5281,7 +5286,8 @@ async function readHead(
 			break;
 		}
 		bytes += chunk.value.byteLength;
-		text += decoder.decode(chunk.value, { stream: true });
+		piece = decoder.decode(chunk.value, { stream: true });
+		text += piece;
 	}
 	// what comes at once is read too: a document that is all there (most
 	// are) goes in its shell, as it always did, and is not worth a second

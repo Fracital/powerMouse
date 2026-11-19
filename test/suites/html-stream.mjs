@@ -17,7 +17,10 @@
 // - the navigation's body sizes are the document's, not the shell's;
 // - a sandboxed frame (allow-scripts, an opaque origin) of the first case
 //   loads as natively, and one sandboxed with nothing allowed holds the
-//   whole page and ran none of it.
+//   whole page and ran none of it;
+// - a head of 1.5 MB, most of it one style (CNN's is 3.7 MB), is in while
+//   the rest is on its way, its scripts read the style's text as natively,
+//   and the style applies.
 import {
 	done,
 	evaluateIsolated,
@@ -103,6 +106,37 @@ async function paintCase(proxied) {
 			? await evaluateIsolated(frame, shape).catch(() => null)
 			: null;
 		return { mid, end, elements };
+	} finally {
+		await page.close();
+	}
+}
+
+async function bigheadCase(proxied) {
+	const { page, find } = await open(
+		`${FIXTURE}stream/bighead?wait=${WAIT}`,
+		proxied,
+	);
+	try {
+		const mid = await poll(find, midway, undefined, 400, 25);
+		const end = await poll(
+			find,
+			() =>
+				window.__done
+					? {
+							order: window.__order.join(),
+							color: getComputedStyle(document.getElementById('early')).color,
+							text: [
+								document.getElementById('big').textContent.slice(0, 160),
+								document.getElementById('big').textContent.slice(-80),
+							],
+							rules: document.styleSheets[0].cssRules.length,
+						}
+					: null,
+			undefined,
+			400,
+			50,
+		);
+		return { mid, end };
 	} finally {
 		await page.close();
 	}
@@ -226,6 +260,7 @@ const native = {
 	sjis: await sjisCase(false),
 	sizes: await sizesCase(false),
 	frame: await frameCase(false),
+	bighead: await bigheadCase(false),
 };
 ok(
 	'natively: the heading is in while the rest is on its way, and the page loads whole',
@@ -246,6 +281,7 @@ const proxied = {
 	sjis: await sjisCase(true),
 	sizes: await sizesCase(true),
 	frame: await frameCase(true),
+	bighead: await bigheadCase(true),
 };
 ok(
 	'proxied: while the rest is on its way, the page holds its first part (its heading, its write) and not the rest, and is loading',
@@ -290,6 +326,18 @@ ok(
 	'proxied: a frame sandboxed with nothing allowed holds its whole markup and ran none of its scripts, as natively',
 	native.frame.bare !== null && proxied.frame.bare === native.frame.bare,
 	`${proxied.frame.bare?.slice(0, 120)} natively ${native.frame.bare?.slice(0, 120)}`,
+);
+ok(
+	'proxied: while the rest of a page with a 1.5 MB head is on its way, its head and first heading are in, as natively',
+	!!native.bighead.mid &&
+		JSON.stringify(proxied.bighead.mid) === JSON.stringify(native.bighead.mid),
+	`${JSON.stringify(proxied.bighead.mid)} natively ${JSON.stringify(native.bighead.mid)}`,
+);
+ok(
+	"proxied: the big head's scripts read its style's text, and the style applies, as natively",
+	!!native.bighead.end &&
+		JSON.stringify(proxied.bighead.end) === JSON.stringify(native.bighead.end),
+	`${JSON.stringify(proxied.bighead.end)?.slice(0, 400)} natively ${JSON.stringify(native.bighead.end)?.slice(0, 400)}`,
 );
 
 await done(browser);
