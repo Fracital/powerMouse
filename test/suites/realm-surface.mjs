@@ -59,6 +59,16 @@ const EXCLUDED = [
 	],
 	[
 		/./,
+		/^G\.(outer(Width|Height)|screen(X|Y|Left|Top))$/,
+		"a frame's window size and position are its top's, which leaves out the host's frame around the page (each read as its top reads it)",
+		null,
+		(native, proxied, top) =>
+			top.native !== undefined &&
+			native === top.native &&
+			proxied === top.proxied,
+	],
+	[
+		/./,
 		/^G\.history~length$/,
 		"the length of the tab's joint history: the native page is its tab's second entry, the proxied one shares the host tab's",
 	],
@@ -376,13 +386,21 @@ function compare(realm, first, second, proxied, mode) {
 	};
 	if (!a || !p) return result;
 	result.facts = Object.keys(a).length;
+	// the same fact of the top realm of each load, for a rule that holds a
+	// frame's to its top's
+	const topNative = realm === 'top' ? null : facts(first, 'top');
+	const topProxied = realm === 'top' ? null : facts(proxied, 'top');
 	const excluded = (key, native, through) =>
 		EXCLUDED.find(
 			([realms, pattern, , only, when]) =>
 				realms.test(realm) &&
 				pattern.test(key) &&
 				(!only || only === mode) &&
-				(!when || when(native, through)),
+				(!when ||
+					when(native, through, {
+						native: topNative?.[key],
+						proxied: topProxied?.[key],
+					})),
 		);
 	const differ = (key, native, through) => {
 		const rule = excluded(key, native, through);

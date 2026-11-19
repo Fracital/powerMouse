@@ -6,6 +6,7 @@
 import { SITE_FOCUS } from '../config';
 import { helperNames } from '../helperNames';
 import { RpcHelper } from '../transport/rpc';
+import { shareGeometry } from './geometry';
 import {
 	answerRun,
 	bindHistory,
@@ -99,6 +100,9 @@ function start(init: SiteAgentInit, port: MessagePort, host: string) {
 		configurable: true,
 	});
 	const ready = new Promise<void>((resolve) => (settle = resolve));
+	// a start that failed is the hub's to hear (its `ready`), which may ask
+	// only after the browser looked for a handler: never an error of the page's
+	ready.catch(() => {});
 	const hub = new RpcHelper<AgentBound, HubBound>(
 		{
 			ready: async () => {
@@ -154,6 +158,9 @@ function start(init: SiteAgentInit, port: MessagePort, host: string) {
 					configurable: true,
 				});
 			},
+			geometry: async (geometry) => {
+				shareGeometry(window, geometry);
+			},
 			goneClients: async (clients) => {
 				await ready;
 				return [await controller!.goneClients(clients), []];
@@ -193,6 +200,9 @@ function start(init: SiteAgentInit, port: MessagePort, host: string) {
 	port.start();
 	const started = (async () => {
 		const directory = new URL('./', location.href);
+		// a slot that is not a secure context has no service worker
+		if (!navigator.serviceWorker)
+			throw new Error(`${location.origin} is not a secure context`);
 		const known = await navigator.serviceWorker
 			.getRegistration(directory.href)
 			.catch(() => undefined);

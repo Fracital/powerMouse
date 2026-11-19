@@ -19,6 +19,7 @@ import {
 	ConfigCodec,
 	DEFAULT_ASSETS,
 	WASM_ASSETS,
+	type HostGeometry,
 } from '../config';
 import {
 	helperNames,
@@ -101,6 +102,7 @@ import TransportWorker from '../transport/TransportWorker';
 import { BUILD } from '../version';
 import { compileModule } from '../wasm/module';
 import { ClientFrames } from './clientFrames';
+import { GeometryWatch, shareGeometry } from './geometry';
 import {
 	answerRun,
 	bindHistory,
@@ -904,6 +906,14 @@ export class StompController extends EventTarget {
 	 */
 	transportHost: 'worker' | 'page';
 	frames: Frame[] = [];
+	/**
+	 * The host's browser window as its frames' documents see it
+	 * (./geometry.ts), kept on this window and every slot's agent's
+	 */
+	#geometry = new GeometryWatch(
+		() => this.frames.map((frame) => frame.element),
+		(geometry) => this.shareGeometry(geometry),
+	);
 	isReady = false;
 	#worker?: TransportWorker | BrokeredTransport;
 	#rewriteWorkers?: RewriteWorkers | BrokeredPool;
@@ -3003,7 +3013,21 @@ export class StompController extends EventTarget {
 	createFrame(element: HTMLIFrameElement = document.createElement('iframe')) {
 		const frame = new Frame(this, element, this.#sandbox);
 		this.frames.push(frame);
+		this.#geometry.observe(element);
 		return frame;
+	}
+	/** @internal measure the frames' geometry now (a frame about to navigate); settles once it was kept */
+	measureGeometry(): Promise<void> {
+		return this.#geometry.update();
+	}
+	/**
+	 * @internal keep the host's geometry (./geometry.ts) on this window and
+	 * tell every slot's agent: this page's own frames', or (an isolated
+	 * RemoteController's controller frame) the host's page's
+	 */
+	shareGeometry(geometry: HostGeometry): Promise<void> {
+		shareGeometry(window, geometry);
+		return this.#sites?.geometry() ?? Promise.resolve();
 	}
 }
 
@@ -3691,6 +3715,8 @@ export class Frame extends EventTarget {
 		// frame is navigated once it is in the document (or, one that is not
 		// put there within CONNECTED_LIMIT_MS, as it was asked to be)
 		if (globalThis.crossOriginIsolated === true) await connected(this.element);
+		// where the frame is, for its first document's first script
+		await this.controller.measureGeometry();
 		// waited for from here: until the frame is navigated nothing of the
 		// wait holds it, and the load of the about:blank its insertion made
 		// is not taken for the new document's

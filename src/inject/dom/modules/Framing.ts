@@ -3,7 +3,8 @@ import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { routedPrefix } from '../../modules/Unroute';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
-import { siteWindows } from '../siteWindows';
+import { hostGeometry } from '../hostGeometry';
+import { nativeTopOf, siteWindows } from '../siteWindows';
 import ContextModule, { reachableClients } from './Context';
 
 /**
@@ -16,8 +17,8 @@ import ContextModule, { reachableClients } from './Context';
  *   controller can find it; a page must never see that, but it may still use
  *   the name slot as storage, so writes go to a shadow value); a frame or
  *   popup the page made keeps the name it gave it
- * - outer size / screen position match the inner size, like a maximised
- *   window
+ * - outer size and screen position are a window's whose viewport is the
+ *   frame's: the browser's window less the host's UI around the frame
  * - `document.referrer` never reveals the host; a document the service
  *   worker served shows the referrer it computed under the referring
  *   document's policy for the real origins, and anything else (srcdoc,
@@ -177,11 +178,15 @@ export default class FramingModule extends Module<DocumentClient> {
 			});
 		}
 
-		// outerWidth, outerHeight, screenX/Y and screenLeft/Top stay the
-		// browser's: in any frame they are the top-level window's, which is
-		// what a top-level page reads natively. They were the frame's inner
-		// size at 0,0, a window with no toolbar at all (outerHeight equal to
-		// innerHeight), which a real one never is outside fullscreen.
+		// outerWidth, outerHeight, screenX/Y and screenLeft/Top: the
+		// browser's window less the host's UI around the host's frame, in
+		// every document below the real top (../hostGeometry.ts). Not the
+		// frame's inner size at 0,0, a window with no toolbar at all
+		// (outerHeight equal to innerHeight), which a real one never is
+		// outside fullscreen, nor the browser window's own, which counts the
+		// host's bars as browser UI
+		if ((Reflect.apply(nativeTopOf!, global, []) as unknown) !== global)
+			hostGeometry(moduleClient, proxyModule);
 
 		// document.referrer: the host page is never the referrer
 		const referrerDescriptor = Reflect.getOwnPropertyDescriptor(

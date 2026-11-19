@@ -5,25 +5,54 @@
 		<title>WINDOW GEOMETRY</title>
 	</head>
 	<body>
+		<iframe id="child" srcdoc="<p>child</p>"></iframe>
 		<script>
 			// The window's outer size and screen position, and how they relate
 			// to the viewport: what a fingerprinting script reads to tell a real
 			// window (a toolbar above the viewport) from a headless or
-			// fullscreen one.
+			// fullscreen one, and what Discord reads to tell its devtools are
+			// docked (outerWidth - innerWidth or outerHeight - innerHeight over
+			// 160), and the same read in a frame of the page, which natively
+			// is the top's window
 			// (a function too, so the suite can read a native window again)
+			const read = (win) => [
+				win.outerWidth,
+				win.outerHeight,
+				win.screenX,
+				win.screenY,
+				win.screenLeft,
+				win.screenTop,
+			];
 			window.__measureGeometry = () => ({
-				outer: [
-					outerWidth,
-					outerHeight,
-					screenX,
-					screenY,
-					screenLeft,
-					screenTop,
-				].join(' '),
+				outer: read(window).join(' '),
+				inner: [innerWidth, innerHeight].join(' '),
+				chrome: [outerWidth - innerWidth, outerHeight - innerHeight].join(' '),
 				toolbar: outerHeight > innerHeight,
 				wider: outerWidth >= innerWidth,
+				devtools:
+					outerWidth - innerWidth > 160 || outerHeight - innerHeight > 160,
+				child: (() => {
+					try {
+						return read(document.getElementById('child').contentWindow).join(
+							' ',
+						);
+					} catch (error) {
+						return String(error);
+					}
+				})(),
 			});
-			window.__geometry = window.__measureGeometry();
+			// as the page's first script runs
+			window.__early = window.__measureGeometry();
+			// what a resize listener reads, as the event fires
+			window.__resizes = [];
+			addEventListener('resize', () =>
+				window.__resizes.push(window.__measureGeometry()),
+			);
+			const start = () => {
+				window.__geometry = window.__measureGeometry();
+			};
+			if (document.readyState === 'complete') start();
+			else addEventListener('load', start);
 		</script>
 	</body>
 </html>

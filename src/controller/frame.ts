@@ -11,6 +11,7 @@ import type { PasskeyAnswer, PasskeyPrompt } from '../passkeys/types';
 import { constructTransport, resolveHttp3 } from '../transport/construct';
 import type { RequestInfo } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
+import { shareGeometry } from './geometry';
 import {
 	answerRun,
 	bindHistory,
@@ -315,6 +316,13 @@ if (window === window.parent || !origins.length) {
 				unroute: async (url) => {
 					if (!controller) throw new Error('Controller is not initialised');
 					return [await controller.unroute(url), []];
+				},
+				// kept here, and by every slot's agent, for the documents of
+				// their origins (./geometry.ts)
+				geometry: async (geometry) => {
+					if (controller) await controller.shareGeometry(geometry);
+					else shareGeometry(window, geometry);
+					return [null, []];
 				},
 				viewport: async ([width, height, origin]) => {
 					if (typeof origin === 'string' && controller?.siteOriginKnown(origin))

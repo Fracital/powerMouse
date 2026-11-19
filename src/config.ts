@@ -223,6 +223,31 @@ export const SITE_FOCUS = '$stomp$siteFocus';
  */
 export const SITE_RUNS = '$stomp$siteRuns';
 
+/**
+ * The property of the hub's window (the host's page, or an isolated
+ * RemoteController's controller frame) and of each slot's agent window that
+ * holds the host's browser window as its frames' documents see it
+ * (src/controller/geometry.ts): a proxied document reads its outer size and
+ * screen position from it (src/inject/dom/hostGeometry.ts)
+ */
+export const HOST_GEOMETRY = '$stomp$hostGeometry';
+
+/** what HOST_GEOMETRY holds, measured in the host's page (its real top) */
+export interface HostGeometry {
+	/**
+	 * the browser's own UI around the host's viewport: outerWidth minus
+	 * innerWidth, outerHeight minus innerHeight
+	 */
+	chrome: readonly [number, number];
+	/**
+	 * each frame of the host's page by its index in the page's `frames`:
+	 * where its viewport is in the host's (left, top) and how much of the
+	 * host's viewport is not the frame's (width, height); null for a frame
+	 * that shows no proxied page
+	 */
+	frames: readonly (readonly [number, number, number, number] | null)[];
+}
+
 export interface ParsedConfig extends Omit<Config, 'codec'> {
 	codec: GenericCodec;
 }

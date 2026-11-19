@@ -8,7 +8,7 @@
 // frames, no transport and no cookie jar of its own: every port it would
 // serve the transport on is served by the hub's, and its worker's jar is
 // the hub's origin's (src/server/jarDB.ts).
-import type { SitesConfig } from '../config';
+import type { HostGeometry, SitesConfig } from '../config';
 import type {
 	PasskeyAnswer,
 	PasskeyPrompt,
@@ -24,6 +24,7 @@ import type {
 import { RpcHelper } from '../transport/rpc';
 import type { DecorateHandshake } from '../transport/serveTransport';
 import type { AdmitSession } from '../transport/webTransportHost';
+import { sharedGeometry } from './geometry';
 import type { SiteHistoryAnswer, SiteHistoryOp } from './history';
 import type { ControllerInit } from './index';
 import { SiteSlots } from './sitePool';
@@ -131,6 +132,8 @@ export type AgentBound = {
 	activated: [{ index: number; token: string; nested: boolean }, boolean];
 	/** the frame at `index` of the hub's page has focus there (-1: none does) */
 	focus: [number];
+	/** the host's browser window as its frames' documents see it (HOST_GEOMETRY, ./geometry.ts) */
+	geometry: [HostGeometry];
 	/** which of these service worker clients the slot's worker does not know (the hub's ClientFrames) */
 	goneClients: [string[], string[]];
 	history: [
@@ -417,6 +420,8 @@ export class SiteHub {
 	#slots: SiteSlots;
 	/** agents by origin */
 	#agents = new Map<string, Agent>();
+	/** the agents whose `ready` settled well */
+	#running = new WeakSet<Agent>();
 	/** the slots that did not answer from here: no site is shown from one while this page lives */
 	#dead = new Set<string>();
 	/** a spare agent is to be started (warm) */
@@ -776,6 +781,22 @@ export class SiteHub {
 			return false;
 		}
 	}
+	/**
+	 * tell every agent the host's geometry this window keeps (HOST_GEOMETRY);
+	 * settles once each running agent heard. One still starting has it on its
+	 * port before any document of its slot loads (the hub's first call is its
+	 * `ready`), and one that never starts (a dead slot) holds nothing up.
+	 */
+	async geometry(): Promise<void> {
+		const geometry = sharedGeometry(window);
+		if (!geometry) return;
+		const heard: Promise<unknown>[] = [];
+		for (const agent of this.#agents.values()) {
+			const call = agent.rpc.call('geometry', geometry).catch(() => {});
+			if (this.#running.has(agent)) heard.push(call);
+		}
+		await Promise.all(heard);
+	}
 	/** tell every slot's worker what the hub's own was told (FannedMethod); settles once each heard */
 	async apply(method: FannedMethod, args: unknown): Promise<void> {
 		await Promise.all(
@@ -874,6 +895,8 @@ export class SiteHub {
 		channel.port1.start();
 		// (heard once the agent has its port)
 		if (this.#focused !== -1) rpc.call('focus', this.#focused).catch(() => {});
+		const geometry = sharedGeometry(window);
+		if (geometry) rpc.call('geometry', geometry).catch(() => {});
 		let started!: () => void;
 		const helloed = new Promise<void>((resolve) => (started = resolve));
 		let unreachable!: (error: Error) => void;
@@ -896,6 +919,10 @@ export class SiteHub {
 				),
 			]),
 		};
+		agent.ready.then(
+			() => this.#running.add(agent),
+			() => {},
+		);
 		this.#tellAll(agent);
 		// the agent's frame said hello (its document runs)
 		let greeted = false;
