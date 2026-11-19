@@ -921,8 +921,8 @@ TURN server.
   when it changes (`ev=remotes`); the worker closes the streams to the
   others. The stream DTLS travels on stays until DTLS moves, also when its
   pair is gone (an ICE restart drops them all). A remote that never
-  answers is given up about 16 s after its first check (Chrome: 15 s,
-  measured with the same three silent candidates), and the wisp server's
+  answers is given up 15 s after its first check, as in Chrome (measured
+  with the same three silent candidates), and the wisp server's
   socket for it closes then rather than with the connection. One the wisp
   server refuses or closes is not asked for again for 10 s, and once the
   connection failed (below) nothing is sent to it, so no stream is opened
@@ -944,10 +944,19 @@ TURN server.
   The worker counts the checks and answers of the selected pair
   (`TransportStats.unanswered`), withholds what is not STUN without
   consent, and when the peer closes its end runs the same clock from then.
-  Chrome checks the selected pair every 2.7 s once it is stable and every
-  60 ms or so once nothing has come for 2.5 s; the agent checks every 3 s,
-  so the first unanswered check and with it both steps fall up to a few
-  seconds earlier or later than Chrome's.
+- **Checks** go on Chrome's schedule (the is patch, `src/pacing.rs`, 157
+  measured): one loop turns every 265.6 ms, or every 62.5 ms while the pair
+  sent on is weak, and checks one pair a turn. A connected pair is checked
+  43, 109, 1230, 2293 and 4949 ms after it connected and then every
+  2.656 s; once nothing has come from the peer for 2.5 s it is checked
+  every 62.5 ms, so the first unanswered check, and with it disconnected
+  (5 s on) and failed (15 s on), falls where Chrome's does; 15 s after
+  that check the pair is checked once more and then not until the peer
+  checks it. A remote nothing answers at beside a working pair is checked
+  25 times in 15 s (531 ms apart) and then given up; on a connection with
+  no other pair, every 62.5 ms. str0m's agent gave each pair a timer that
+  backed off from 250 ms to 3 s. What is not STUN that comes in counts as
+  hearing from the remote (`IceAgent::note_received`).
 - **SCTP timers** back off to 3 s at most, as Chrome's dcSCTP (157,
   measured: its retransmissions 3.0 s apart through an outage), not
   sctp-proto's 60 s (a line of the str0m patch): what a page sent during an

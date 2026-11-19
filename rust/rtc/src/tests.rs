@@ -1152,6 +1152,154 @@ fn a_message_sent_into_an_outage_arrives_soon_after_it() {
 	assert!(took < Duration::from_millis(3500), "arrived {took:?} after the path came back");
 }
 
+/// whether a datagram is a STUN binding request (a check)
+fn is_check(datagram: &[u8]) -> bool {
+	parse_datagram(datagram).is_some_and(|(_, _, _, payload)| payload.starts_with(&[0, 1]))
+}
+
+/// `negotiate` without the TCP candidates the descriptions carry (which
+/// the worker never hands on): a UDP pair, as in a call through the proxy
+fn negotiate_udp(a: &mut Peer, b: &mut Peer) {
+	let udp = |sdp: &str| {
+		sdp.split("\r\n").filter(|line| !(line.starts_with("a=candidate:") && line.contains(" tcp "))).collect::<Vec<_>>().join("\r\n")
+	};
+	let offer = udp(get(&a.control(&[("op", "offer")]), "sdp"));
+	let answer = udp(get(&b.control(&[("op", "remote_offer"), ("sdp", &offer)]), "sdp"));
+	a.control(&[("op", "answer"), ("sdp", &answer)]);
+	let (ca, cb) = (a.candidate(), b.candidate());
+	a.control(&[("op", "remote_candidate"), ("candidate", &cb)]);
+	b.control(&[("op", "remote_candidate"), ("candidate", &ca)]);
+}
+
+/// Carry datagrams between the two for `ms`, or drop every one when
+/// `lost`; the checks `a` sent, by destination, at their times. When `a`
+/// last heard from `b`. With a channel `pulse`, `a` sends a message on it
+/// every 200 ms, as a call's data flows.
+fn run(a: &mut Peer, b: &mut Peer, ms: u64, lost: bool, checks: &mut Vec<(String, Instant)>, pulse: Option<u16>) -> Option<Instant> {
+	let end = Instant::now() + Duration::from_millis(ms);
+	let mut heard = None;
+	let mut next = Instant::now();
+	while Instant::now() < end {
+		if let Some(index) = pulse.filter(|_| Instant::now() >= next) {
+			let mut message = index.to_be_bytes().to_vec();
+			message.push(0);
+			message.extend_from_slice(b"pulse");
+			let (ptr, len) = give(&message);
+			assert_eq!(unsafe { i(a.id, IN_CHANNEL_SEND, ptr, len) }, STATUS_OK);
+			a.drain();
+			next += Duration::from_millis(200);
+		}
+		for datagram in std::mem::take(&mut a.outbox) {
+			let to = destination(&datagram);
+			if is_check(&datagram) {
+				checks.push((to.clone(), Instant::now()));
+			}
+			if !lost && to == b.address {
+				b.receive(&datagram);
+			}
+		}
+		for datagram in std::mem::take(&mut b.outbox) {
+			if !lost {
+				a.receive(&datagram);
+				heard = Some(Instant::now());
+			}
+		}
+		a.tick();
+		b.tick();
+		std::thread::sleep(Duration::from_millis(1));
+	}
+	heard
+}
+
+fn gaps(times: &[Instant]) -> Vec<u128> {
+	times.windows(2).map(|w| (w[1] - w[0]).as_millis()).collect()
+}
+
+/// Chrome checks the pair it sends on as libwebrtc's loop does (157,
+/// measured): every 2.656 s once connected a while; every 62.5 ms once
+/// nothing came from the peer for 2.5 s; once more 15 s after the first
+/// check that went unanswered, and then no more. str0m's agent checked it
+/// every 3 s and, once its answers stopped, 0.25 to 3 s apart until it
+/// gave up 22 s on.
+#[test]
+fn the_pair_sent_on_is_checked_as_chromes_is() {
+	let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let mut a = Peer::new("10.0.0.1:5000", &[]);
+	let mut b = Peer::new("10.0.0.2:5000", &[]);
+	let index: u16 = get(&a.control(&[("op", "channel"), ("label", "data")]), "index").parse().unwrap();
+	negotiate_udp(&mut a, &mut b);
+	pump(&mut a, &mut b, "the channel", |a, b| a.event("channel_open").is_some() && b.event("channel_open").is_some());
+	let mut checks = Vec::new();
+	let heard = run(&mut a, &mut b, 9000, false, &mut checks, Some(index)).unwrap();
+	let connected: Vec<Instant> = checks.iter().filter(|(to, _)| *to == b.address).map(|(_, at)| *at).collect();
+	let steady = gaps(&connected);
+	assert!(
+		steady.len() >= 3 && steady[steady.len() - 2..].iter().all(|gap| (2640..=2680).contains(gap)),
+		"checks while connected {steady:?} ms apart"
+	);
+	let lost = Instant::now();
+	let mut checks = Vec::new();
+	run(&mut a, &mut b, 17500, true, &mut checks, Some(index));
+	let gone: Vec<Instant> = checks.iter().filter(|(to, _)| *to == b.address).map(|(_, at)| *at).collect();
+	let since = |at: &Instant| (*at - lost).as_millis();
+	let apart = gaps(&gone);
+	// the regular check (at most 2.7 s on) and then the fast ones, from
+	// 2.5 s after the peer was last heard
+	let fast = apart.iter().filter(|gap| (55..=75).contains(*gap)).count();
+	assert!(
+		gone.len() > 150 && fast * 10 >= apart.len() * 9,
+		"{} checks after the peer went, {apart:?} ms apart",
+		gone.len()
+	);
+	let first = since(&gone[0]);
+	let last = since(gone.last().unwrap());
+	assert!(first <= 2800, "the first check after the peer went at {first} ms");
+	// from the turn after 2.5 s without a word from the peer, or after the
+	// first check that went unanswered if that was later (a pair whose last
+	// check was answered is receiving): natively 2.7 to 2.92 s
+	let fast_from = (gone[apart.iter().position(|gap| *gap < 100).unwrap()] - heard).as_millis();
+	assert!((2500..=2950).contains(&fast_from), "checked every 62.5 ms from {fast_from} ms after the peer was last heard");
+	assert!(
+		last >= first + 15000 && last <= first + 15130,
+		"the last check {last} ms after the peer went, the first unanswered at {first} ms"
+	);
+}
+
+/// A remote nothing answers at, beside the pair sent on, is checked as
+/// Chrome checks it (157, measured: 192, 254 and 317 ms after it was
+/// added, then 531 ms apart, 1062 ms where the pair sent on took its
+/// turn, the last 14.72 s on: 25 checks) and given up 15 s after its first
+/// check. str0m's agent checked it 9 times in 16 s, backing off to 3 s.
+#[test]
+fn a_remote_nothing_answers_at_is_checked_as_chromes_is() {
+	let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let mut a = Peer::new("10.0.0.1:5000", &[]);
+	let mut b = Peer::new("10.0.0.2:5000", &[]);
+	a.control(&[("op", "channel"), ("label", "data")]);
+	negotiate_udp(&mut a, &mut b);
+	pump(&mut a, &mut b, "the channel", |a, b| a.event("channel_open").is_some() && b.event("channel_open").is_some());
+	let mut checks = Vec::new();
+	run(&mut a, &mut b, 3000, false, &mut checks, None);
+	a.control(&[("op", "remote_candidate"), ("candidate", "candidate:2 1 udp 2130706430 10.0.0.9 5000 typ host")]);
+	let added = Instant::now();
+	let mut checks = Vec::new();
+	run(&mut a, &mut b, 17000, false, &mut checks, None);
+	let dead: Vec<Instant> = checks.iter().filter(|(to, _)| to == "10.0.0.9:5000").map(|(_, at)| *at).collect();
+	let apart = gaps(&dead);
+	assert!((22..=28).contains(&dead.len()), "{} checks, {apart:?} ms apart", dead.len());
+	// three at the weak interval, a turn and two strong ones to the next
+	assert!(apart[..2].iter().all(|gap| (55..=75).contains(gap)), "the first checks {apart:?} ms apart");
+	assert!((580..=610).contains(&apart[2]), "the fourth {apart:?} ms apart");
+	assert!(
+		apart[3..].iter().all(|gap| (520..=545).contains(gap) || (1050..=1075).contains(gap)),
+		"then {apart:?} ms apart"
+	);
+	let first = (dead[0] - added).as_millis();
+	let last = (*dead.last().unwrap() - dead[0]).as_millis();
+	assert!(first <= 300, "first checked {first} ms after it was added");
+	assert!(last <= 15000, "the last check {last} ms after the first");
+}
+
 #[test]
 fn a_passive_tcp_candidate_is_checked_over_tcp_from_port_9() {
 	let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());

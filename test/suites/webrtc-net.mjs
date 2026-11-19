@@ -871,6 +871,12 @@ for (const [label, base] of probes) {
 // stack's agent used to decide for itself, 22 s on, never failed, and went
 // on sending media and retransmissions, opening a stream again now and
 // then (10 s apart at the soonest) to a remote the wisp server refused.
+//
+// Chrome's checks of the pair it sends on, 157, measured: 2.656 s apart
+// while it is answered, and from the turn after 2.5 s without a word from
+// the peer every 62.5 ms, until it fails; disconnected 5 s after the first
+// that went unanswered and failed 15 s after it, each on a turn of its
+// 265.6 ms loop. The agent checked every 3 s.
 
 const kindOf = (bytes) =>
 	bytes[0] < 4 ? (bytes[0] === 1 ? 'answer' : 'check') : 'traffic';
@@ -966,7 +972,9 @@ async function farEndGone(opened, how) {
 		await own.call('opened', 'chat');
 		await peer.call('opened', 'chat');
 		await own.call('pulse', 'chat', 200);
-		await sleep(3000);
+		// long enough for the checks to settle (natively 2.656 s apart from
+		// 4.9 s after it connected)
+		await sleep(9000);
 		const start = Date.now();
 		if (how === 'refuse') path.refuse();
 		else path.state.pass = false;
@@ -1011,6 +1019,23 @@ async function farEndGone(opened, how) {
 		result.anyAfterFailed = sent.filter(
 			(p) => p.at > failed + 300 && p.at < (result.resumed ?? Infinity),
 		).length;
+		// the checks: the last two gaps before it went, and after
+		const checks = path.state.sent
+			.filter((packet) => packet.kind === 'check')
+			.map((packet) => packet.at - start);
+		const before = checks.filter((at) => at < 0).slice(-3);
+		result.steady = before.slice(1).map((at, n) => at - before[n]);
+		const after = checks.filter(
+			(at) => at >= 0 && at < (result.resumed ?? Infinity),
+		);
+		result.firstUnanswered = after[0];
+		result.lastCheck = after.at(-1);
+		const gaps = after.slice(1).map((at, n) => at - after[n]);
+		const fastFrom = gaps.findIndex((gap) => gap < 100);
+		result.fastFrom = fastFrom < 0 ? null : after[fastFrom];
+		const fast = fastFrom < 0 ? [] : gaps.slice(fastFrom);
+		result.fastChecks = fast.length;
+		result.fastOff = fast.filter((gap) => gap < 40 || gap > 100).length;
 		if (streams) result.streams = await streams;
 		let since = start + (result.resumed ?? 0);
 		if (how === 'vanish') {
@@ -1080,14 +1105,36 @@ for (const result of gone) {
 		failed - disconnected <= 11000;
 	const quiet =
 		result.trafficAfterDisconnected === 0 && result.anyAfterFailed === 0;
+	// the relay sees the checks of the pair sent on unless its port closed
+	const cadence =
+		how === 'refuse' ||
+		(!result.failure &&
+			result.steady.length === 2 &&
+			result.steady.every((gap) => gap >= 2600 && gap <= 2720) &&
+			result.fastFrom >= 2100 &&
+			result.fastFrom <= 3000 &&
+			result.fastChecks >= 150 &&
+			result.fastOff * 10 <= result.fastChecks &&
+			disconnected - result.firstUnanswered >= 4950 &&
+			disconnected - result.firstUnanswered <= 5350 &&
+			failed - result.firstUnanswered >= 14950 &&
+			failed - result.firstUnanswered <= 15350 &&
+			result.lastCheck >= failed - 400 &&
+			result.lastCheck <= failed + 300);
 	if (!base) {
 		ok(
 			`natively, the far end ${far}: disconnected about 5 s after the first unanswered check and failed 10 s later, nothing but checks sent between and nothing after`,
 			states && quiet,
 			story,
 		);
+		if (how !== 'refuse')
+			ok(
+				`natively, the far end ${far}: the pair sent on checked 2.66 s apart, then every 62.5 ms from about 2.5 s on until it failed; disconnected 5 s and failed 15 s after the first unanswered check`,
+				cadence,
+				story,
+			);
 		console.log(
-			`note: natively, the far end ${far} (${how}): disconnected ${disconnected} ms and failed ${failed} ms after, the last traffic sent ${result.lastTraffic} ms and the last packet ${result.lastAny} ms after${result.heardAfter === undefined ? '' : `; a message sent once it was back arrived in ${result.heardAfter} ms (${result.after})`}`,
+			`note: natively, the far end ${far} (${how}): checked ${result.steady?.join(', ')} ms apart, from ${result.firstUnanswered} ms unanswered and every 62.5 ms from ${result.fastFrom} ms (${result.fastChecks} checks, the last ${result.lastCheck} ms); disconnected ${disconnected} ms and failed ${failed} ms after, the last traffic sent ${result.lastTraffic} ms and the last packet ${result.lastAny} ms after${result.heardAfter === undefined ? '' : `; a message sent once it was back arrived in ${result.heardAfter} ms (${result.after})`}`,
 		);
 		continue;
 	}
@@ -1101,6 +1148,12 @@ for (const result of gone) {
 		!result.failure && quiet,
 		story,
 	);
+	if (how !== 'refuse')
+		ok(
+			`${label}, the far end ${far}: the pair sent on is checked as natively, 2.66 s apart and then every 62.5 ms from about 2.5 s on until it failed, so that it reads disconnected 5 s and failed 15 s after the first unanswered check`,
+			cadence,
+			story,
+		);
 	if (how === 'refuse')
 		ok(
 			`${label}: a remote the wisp server refused gets no stream again once the connection failed`,
@@ -1119,7 +1172,7 @@ for (const result of gone) {
 			story,
 		);
 	console.log(
-		`note: ${label}, the far end ${far} (${how}): disconnected ${disconnected} ms and failed ${failed} ms after, the last traffic sent ${result.lastTraffic} ms and the last packet ${result.lastAny} ms after${result.streams ? `, streams seen at ${result.streams.join(', ')} ms` : ''}${result.heardAfter === undefined ? '' : `; a message sent once it was back arrived in ${result.heardAfter} ms (${result.after})`}`,
+		`note: ${label}, the far end ${far} (${how}): checked ${result.steady?.join(', ')} ms apart, from ${result.firstUnanswered} ms unanswered and every 62.5 ms from ${result.fastFrom} ms (${result.fastChecks} checks, the last ${result.lastCheck} ms); disconnected ${disconnected} ms and failed ${failed} ms after, the last traffic sent ${result.lastTraffic} ms and the last packet ${result.lastAny} ms after${result.streams ? `, streams seen at ${result.streams.join(', ')} ms` : ''}${result.heardAfter === undefined ? '' : `; a message sent once it was back arrived in ${result.heardAfter} ms (${result.after})`}`,
 	);
 }
 

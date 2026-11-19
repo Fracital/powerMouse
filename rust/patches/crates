@@ -46,6 +46,16 @@
 # scalability structure (Y=1), as libwebrtc's does: as published it states
 # none, and a browser's receiver reads the keyframe's width and height as 0.
 str0m 0.25.0 357c7e453c033c8bb59e912312f9f9ff07c2a9ce7268bcb94f0c828a5b47e58f
+# is (str0m's ICE agent): the agent checks its pairs as Chrome does, on a
+# loop of Chrome's (src/pacing.rs): which pair a turn checks, how often,
+# when one is weak and checked every 62.5 ms, and when one is given up
+# (15 s after its first unanswered check). As published each pair has a
+# timer of its own that backs off from 250 ms to 3 s, so a connected pair
+# was checked every 3 s, one whose answers stopped 0.25 to 3 s apart, and
+# a remote that never answers 9 times in 16 s (Chrome: 25 beside a working
+# pair, 241 alone). The agent is told what that is not STUN came from
+# each remote (IceAgent::note_received, the str0m patch's caller).
+is 0.12.0 72dd0494853a6c3769c87adc610e8b228fd8c65c41cc4d2717ff6151ee2d6c73
 # sctp-proto: Association::abort, an ABORT with a User-Initiated Abort cause
 # and the reason given (as published only a graceful shutdown is offered).
 sctp-proto 0.10.8 28aca56f649fa088cbdda778a5121f2227995ed057e77de462112b2e5890d591

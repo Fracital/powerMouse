@@ -1,0 +1,479 @@
+--- a/src/agent.rs
++++ b/src/agent.rs
+@@ -16,6 +16,7 @@
+ use str0m_proto::{NonCryptographicRng, Pii, Protocol};
+ 
+ use crate::candidate::{Candidate, CandidateKind};
++use crate::pacing::{on_metronome, PINGS_AT_WEAK_INTERVAL, STRONG_INTERVAL, TURN_DELAY, WEAK_INTERVAL, WEAK_TURN_DELAY};
+ use crate::pair::{CandidatePair, CheckState, PairId};
+ 
+ /// Handles the ICE protocol for a given peer.
+@@ -111,6 +112,13 @@
+     /// Target MTU (start) and warn threshold (end). Buffer sizing uses the
+     /// target; oversized outgoing datagrams above the warn threshold log a warning.
+     mtu: RangeInclusive<usize>,
++
++    /// The next turn of the loop that checks pairs as Chrome's does
++    /// (pacing.rs), and when it last checked any.
++    next_turn: Option<Instant>,
++    last_check: Option<Instant>,
++    /// when the metronome the turns wake on started (the first turn)
++    metronome: Option<Instant>,
+ }
+ 
+ /// IceAgent contains only static references to thread-safe traits,
+@@ -347,6 +355,9 @@
+             local_preference: LocalPreferenceHolder(Arc::new(default_local_preference)),
+             sha1_hmac_provider,
+             mtu: DATAGRAM_MTU_TARGET..=DATAGRAM_MTU_WARN,
++            next_turn: None,
++            last_check: None,
++            metronome: None,
+         }
+     }
+ 
+@@ -1226,13 +1237,13 @@
+ 
+         self.evaluate_nomination();
+ 
+-        // prune failed candidates.
++        // prune failed candidates (checked ones at the turns of the loop)
+         let mut any_pruned = false;
+         self.candidate_pairs.retain(|p| {
+             let keep = if self.ice_lite {
+                 p.is_ice_lite_alive(now)
+             } else {
+-                p.is_still_possible(now, &self.timing_config)
++                true
+             };
+             if !keep {
+                 debug!("Remove failed pair: {:?}", Pii(&p));
+@@ -1265,21 +1276,104 @@
+             return;
+         }
+ 
+-        // when do we need to handle the next candidate pair?
+-        let next = self
++        if self.next_turn.is_none_or(|at| now >= at) && !self.candidate_pairs.is_empty() {
++            self.turn(now);
++        }
++    }
++
++    /// A turn of Chrome's loop (pacing.rs): the pairs' states, those given
++    /// up pruned, and a check of the one due first, if any is.
++    fn turn(&mut self, real_now: Instant) {
++        // the turn as of when it was due: Chrome's runs on its tick, and a
++        // timer here that wakes a few ms late should neither put the next
++        // turn later nor find a pair not due yet that Chrome's would
++        let now = self
++            .next_turn
++            .filter(|due| real_now.saturating_duration_since(*due) < WEAK_TURN_DELAY)
++            .unwrap_or(real_now);
++        let sent_on = self.nominated_send;
++        for p in &mut self.candidate_pairs {
++            p.pace.update(now, Some(p.id()) == sent_on);
++        }
++        let before = self.candidate_pairs.len();
++        // the pair sent on stays, unchecked, until the peer checks it again
++        self.candidate_pairs
++            .retain(|p| p.pace.active() || Some(p.id()) == sent_on);
++        if self.candidate_pairs.len() != before {
++            self.evaluate_nomination();
++            self.evaluate_state(real_now);
++        }
++        // nothing to check: the loop stops until a pair can be checked again
++        if !self.candidate_pairs.iter().any(|p| p.pace.pingable(now, true)) {
++            self.next_turn = None;
++            return;
++        }
++        let selected = sent_on.and_then(|id| self.candidate_pairs.iter().position(|p| p.id() == id));
++        let weak = selected.is_none_or(|i| self.candidate_pairs[i].pace.weak(now));
++        let more = self
+             .candidate_pairs
+-            .iter_mut()
+-            .enumerate()
+-            .map(|(i, c)| (i, c.next_binding_attempt(now, &self.timing_config)))
+-            .min_by_key(|(_, t)| *t);
++            .iter()
++            .any(|p| p.pace.active() && p.pace.pings() < PINGS_AT_WEAK_INTERVAL);
++        let fast = weak || more;
++        let start = *self.metronome.get_or_insert(now);
++        let delay = if fast { WEAK_TURN_DELAY } else { TURN_DELAY };
++        self.next_turn = Some(on_metronome(start, now + delay));
++        let interval = if fast { WEAK_INTERVAL } else { STRONG_INTERVAL };
++        if self.last_check.is_some_and(|at| now < at + interval) {
++            return;
++        }
++        if let Some(idx) = self.next_to_check(now, selected, weak) {
++            self.stun_client_binding_request(real_now, idx);
++            self.candidate_pairs[idx].pace.pinged(now);
++            self.last_check = Some(now);
++        }
++    }
+ 
+-        if let Some((idx, deadline)) = next {
+-            if now >= deadline {
+-                let pair = &self.candidate_pairs[idx];
+-                trace!("Handle next triggered pair: {:?}", pair);
+-                self.stun_client_binding_request(now, idx);
+-            } else {
+-                // trace!("Next triggered pair is in the future: {:?}", deadline - now);
++    /// The pair Chrome checks at a turn (BasicIceController::FindNextPingableConnection)
++    fn next_to_check(&self, now: Instant, selected: Option<usize>, weak: bool) -> Option<usize> {
++        let pairs = &self.candidate_pairs;
++        // a nomination goes with the next check
++        if let Some(i) = pairs.iter().position(|p| p.nomination_pending() && p.pace.active()) {
++            return Some(i);
++        }
++        if let Some(i) = selected {
++            if pairs[i].pace.writable() && pairs[i].pace.due(now) {
++                return Some(i);
++            }
++        }
++        // the one checked longest ago (never first), the higher first of equals
++        let oldest = |filter: &dyn Fn(&CandidatePair) -> bool| {
++            pairs
++                .iter()
++                .enumerate()
++                .filter(|(_, p)| filter(p))
++                .min_by_key(|(_, p)| p.pace.last_ping())
++                .map(|(i, _)| i)
++        };
++        if weak {
++            if let Some(i) = oldest(&|p| p.pace.writable() && p.pace.due(now)) {
++                return Some(i);
++            }
++        }
++        let triggered = pairs
++            .iter()
++            .enumerate()
++            .filter(|(_, p)| p.pace.pingable(now, weak) && p.pace.needs_triggered_check())
++            .min_by_key(|(_, p)| p.pace.last_check_received())
++            .map(|(i, _)| i);
++        triggered.or_else(|| oldest(&|p| p.pace.pingable(now, weak)))
++    }
++
++    /// Something that is not STUN came in: Chrome's pair with that remote
++    /// is receiving (pacing.rs)
++    pub fn note_received(&mut self, now: Instant, source: SocketAddr, destination: SocketAddr) {
++        let local = &self.local_candidates;
++        let remote = &self.remote_candidates;
++        for p in &mut self.candidate_pairs {
++            if p.remote_candidate(remote).addr() == source
++                && p.local_candidate(local).base() == destination
++            {
++                p.pace.received(now, false);
+             }
+         }
+     }
+@@ -1319,10 +1413,14 @@
+             // ice-lite doesn't do checks.
+             None
+         } else {
+-            self.candidate_pairs
+-                .iter_mut()
+-                .map(|c| c.next_binding_attempt(last_now, &self.timing_config))
+-                .min()
++            // the next turn of Chrome's loop (pacing.rs); when it is not
++            // turning, now if a pair can be checked
++            self.next_turn.or_else(|| {
++                self.candidate_pairs
++                    .iter()
++                    .any(|p| p.pace.pingable(last_now, true))
++                    .then_some(last_now)
++            })
+         };
+ 
+         // Time must advance with at least Ta.
+@@ -1601,6 +1699,7 @@
+         let remote_addr = remote.addr();
+ 
+         pair.increase_remote_binding_requests(req.now);
++        pair.pace.received(req.now, true);
+ 
+         if self.ice_lite && !self.controlling {
+             // ice-lite sends no checks of its own, so this pair can never be
+@@ -1911,6 +2010,8 @@
+         };
+ 
+         pair.record_binding_response(now, trans_id, valid_idx);
++        let rtt = pair.last_successful_rtt().unwrap_or_default();
++        pair.pace.answered(now, rtt);
+ 
+         // For a controlled agent, a successful check can make a nominated pair valid.
+         self.evaluate_nomination();
+@@ -2045,7 +2146,11 @@
+             // it is just another pair being checked.
+             if p.is_nominated() && p.state() == CheckState::Succeeded {
+                 any_nomination = true;
+-            } else if p.is_still_possible(now, &self.timing_config) {
++            } else if if self.ice_lite {
++                p.is_still_possible(now, &self.timing_config)
++            } else {
++                p.pace.active()
++            } {
+                 any_still_possible = true;
+             }
+         }
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -107,6 +107,8 @@
+ 
+ mod pair;
+ 
++mod pacing;
++
+ mod preference;
+ pub use preference::default_local_preference;
+ 
+--- a/src/pacing.rs
++++ b/src/pacing.rs
+@@ -0,0 +1,207 @@
++//! When the agent checks which pair: Chrome's way (STomp).
++//!
++//! libwebrtc's P2PTransportChannel, BasicIceController and Connection as
++//! Chrome 157 runs them, measured with a relay between Chrome and a peer
++//! (and remotes nothing answers at). A loop turns every 265.625 ms, or
++//! every 62.5 ms while the pair it sends on is weak (or there is none) or
++//! a pair has had fewer than 3 checks: its delays of 250 and 48 ms, on the
++//! 64 Hz metronome Chrome's WebRTC tasks wake on (so a turn a few ms late
++//! does not put the next one later). A turn checks one pair at
++//! most, and none when the last check of any went out less than 48 ms (480
++//! ms while not weak) before: the pair sent on when its interval passed,
++//! then one answered on its own checks whose interval passed while the
++//! pair sent on is weak, then one the peer checked and that has not been
++//! answered yet, then any other in the order of their last check (never
++//! checked first). A pair's interval is 48 ms for its first 3 checks, 900
++//! ms until it has 5 round trip times or while an answer is missing, and
++//! 2.5 s after that. So a connected pair is checked twice 1.06 s apart and
++//! then every 2.656 s, and a remote that never answers every 531 ms beside
++//! it (62.5 ms on a connection with no other pair). A pair is weak once
++//! nothing came from its remote for 2.5 s (unless its last check was
++//! answered) or once 5 checks went unanswered over 5 s. 15 s after the
++//! first check that went unanswered a pair is given up (the pair sent on is
++//! checked once more then); the pair sent on stays, unchecked, until the
++//! peer checks it again. What the connection reads (disconnected at 5 s,
++//! failed at 15 s) is the host's.
++
++use std::time::{Duration, Instant};
++
++pub(crate) const TURN_DELAY: Duration = Duration::from_millis(250);
++pub(crate) const WEAK_TURN_DELAY: Duration = Duration::from_millis(48);
++const METRONOME_TICK: Duration = Duration::from_micros(15_625);
++pub(crate) const WEAK_INTERVAL: Duration = Duration::from_millis(48);
++pub(crate) const STRONG_INTERVAL: Duration = Duration::from_millis(480);
++const STABILIZING_INTERVAL: Duration = Duration::from_millis(900);
++const STABLE_INTERVAL: Duration = Duration::from_millis(2500);
++const RECEIVING_TIMEOUT: Duration = Duration::from_millis(2500);
++const UNWRITABLE_TIMEOUT: Duration = Duration::from_millis(5000);
++const UNWRITABLE_CHECKS: usize = 5;
++const INACTIVE_TIMEOUT: Duration = Duration::from_millis(15000);
++pub(crate) const PINGS_AT_WEAK_INTERVAL: usize = 3;
++/// round trip times before Chrome calls them converged (RTT_RATIO + 2)
++const CONVERGED_SAMPLES: u64 = 5;
++/// what Chrome takes a pair's round trip time to be before it has one
++const DEFAULT_RTT: Duration = Duration::from_millis(3000);
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
++pub(crate) enum Write {
++    /// never answered
++    #[default]
++    Init,
++    Writable,
++    /// checks unanswered for 5 s
++    Unreliable,
++    /// given up
++    Timeout,
++}
++
++/// The first tick of the metronome started at `start` after `at`: when a
++/// task Chrome posts for `at` runs. Its tasks run just after a tick, so a
++/// delay of 250 ms from one (16 ticks) runs at the 17th, 265.625 ms on.
++pub(crate) fn on_metronome(start: Instant, at: Instant) -> Instant {
++    let tick = METRONOME_TICK.as_nanos();
++    let ticks = at.saturating_duration_since(start).as_nanos() / tick + 1;
++    start + Duration::from_nanos((ticks * tick) as u64)
++}
++
++/// What Chrome keeps of a pair to pace its checks.
++#[derive(Debug, Clone, Default)]
++pub(crate) struct Pace {
++    pings: usize,
++    last_ping: Option<Instant>,
++    last_answer: Option<Instant>,
++    last_received: Option<Instant>,
++    last_check_received: Option<Instant>,
++    samples: u64,
++    rtt: Option<Duration>,
++    /// when the checks since the last answer went
++    unanswered: Vec<Instant>,
++    write: Write,
++    /// the pair sent on was given up at this turn: it is checked once more
++    last_call: bool,
++}
++
++impl Pace {
++    pub(crate) fn pings(&self) -> usize {
++        self.pings
++    }
++
++    pub(crate) fn last_ping(&self) -> Option<Instant> {
++        self.last_ping
++    }
++
++    pub(crate) fn writable(&self) -> bool {
++        self.write == Write::Writable
++    }
++
++    pub(crate) fn active(&self) -> bool {
++        self.write != Write::Timeout
++    }
++
++    pub(crate) fn pinged(&mut self, now: Instant) {
++        self.pings += 1;
++        self.last_ping = Some(now);
++        self.last_call = false;
++        self.unanswered.push(now);
++    }
++
++    pub(crate) fn answered(&mut self, now: Instant, rtt: Duration) {
++        self.samples += 1;
++        let before = self.rtt.unwrap_or(DEFAULT_RTT);
++        self.rtt = Some((before * 3 + rtt) / 4);
++        self.last_answer = Some(now);
++        self.last_received = Some(now);
++        self.unanswered.clear();
++        self.write = Write::Writable;
++    }
++
++    /// Something came from the pair's remote, a check of the peer's when
++    /// `check`: a pair that was given up is checked again.
++    pub(crate) fn received(&mut self, now: Instant, check: bool) {
++        self.last_received = Some(now);
++        if check {
++            self.last_check_received = Some(now);
++            if self.write == Write::Timeout {
++                self.write = Write::Init;
++                self.unanswered.clear();
++            }
++        }
++    }
++
++    fn rtt(&self) -> Duration {
++        self.rtt.unwrap_or(DEFAULT_RTT)
++    }
++
++    /// The pair's state at a turn: `sent_on` for the pair the agent sends on.
++    pub(crate) fn update(&mut self, now: Instant, sent_on: bool) {
++        let first = self.unanswered.first().copied();
++        let estimate = (self.rtt() * 2).clamp(Duration::from_millis(100), Duration::from_secs(60));
++        let failures = self
++            .unanswered
++            .get(UNWRITABLE_CHECKS - 1)
++            .is_some_and(|at| *at + estimate < now);
++        let waited = |limit: Duration| first.is_some_and(|at| now > at + limit);
++        if self.write == Write::Writable && failures && waited(UNWRITABLE_TIMEOUT) {
++            self.write = Write::Unreliable;
++        }
++        if matches!(self.write, Write::Init | Write::Unreliable) && waited(INACTIVE_TIMEOUT) {
++            self.write = Write::Timeout;
++            self.last_call = sent_on;
++        }
++    }
++
++    fn receiving(&self, now: Instant) -> bool {
++        match (self.last_ping, self.last_answer) {
++            (Some(ping), Some(answer)) if ping < answer => true,
++            _ => self
++                .last_received
++                .is_some_and(|at| now <= at + RECEIVING_TIMEOUT),
++        }
++    }
++
++    pub(crate) fn weak(&self, now: Instant) -> bool {
++        !(self.writable() && self.receiving(now))
++    }
++
++    /// The pair's own interval has passed since its last check.
++    pub(crate) fn due(&self, now: Instant) -> bool {
++        let missing = self
++            .unanswered
++            .first()
++            .is_some_and(|at| now.saturating_duration_since(*at) > self.rtt() * 2);
++        let interval = if self.pings < PINGS_AT_WEAK_INTERVAL {
++            WEAK_INTERVAL
++        } else if self.samples >= CONVERGED_SAMPLES && !missing {
++            STABLE_INTERVAL
++        } else {
++            STABILIZING_INTERVAL
++        };
++        self.last_ping.is_none_or(|at| at + interval <= now)
++    }
++
++    /// The pair may be checked at this turn, the pair sent on being `weak`.
++    pub(crate) fn pingable(&self, now: Instant, weak: bool) -> bool {
++        if self.last_call {
++            return true;
++        }
++        if !self.active() {
++            return false;
++        }
++        if weak || !self.writable() {
++            return true;
++        }
++        self.due(now)
++    }
++
++    /// The peer checked it since this side last did, and it is not answered yet.
++    pub(crate) fn needs_triggered_check(&self) -> bool {
++        !self.writable()
++            && self
++                .last_check_received
++                .is_some_and(|at| self.last_ping.is_none_or(|ping| at > ping))
++    }
++
++    pub(crate) fn last_check_received(&self) -> Option<Instant> {
++        self.last_check_received
++    }
++}
+--- a/src/pair.rs
++++ b/src/pair.rs
+@@ -3,6 +3,7 @@
+ use std::time::{Duration, Instant};
+ 
+ use crate::Candidate;
++use crate::pacing::Pace;
+ use crate::CandidateKind;
+ use crate::stun::{DEFAULT_MAX_RETRANSMITS, StunTiming, TransId};
+ use str0m_proto::Id;
+@@ -60,6 +61,9 @@
+     /// Sum of all RTTs measured from successful STUN binding transactions
+     /// on this pair, across the whole pair lifetime.
+     total_round_trip_time: Duration,
++
++    /// What paces its checks as Chrome's are (pacing.rs)
++    pub(crate) pace: Pace,
+ }
+ 
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+@@ -163,6 +167,7 @@
+             nomination_state: Default::default(),
+             responses_received: 0,
+             total_round_trip_time: Duration::ZERO,
++            pace: Pace::default(),
+         }
+     }
+ 
+@@ -269,6 +274,12 @@
+         if other.state == CheckState::Succeeded {
+             self.state = CheckState::Succeeded;
+         }
++        self.pace = other.pace.clone();
++    }
++
++    /// Nominated, and the check that says so not sent yet.
++    pub(crate) fn nomination_pending(&self) -> bool {
++        matches!(self.nomination_state, NominationState::Nominated)
+     }
+ 
+     /// Records a new binding request attempt.

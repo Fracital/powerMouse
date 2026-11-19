@@ -325,6 +325,19 @@
              self.state = RtcState::Closing;
          }
  
+@@ -2183,6 +2208,12 @@
+             ..
+         } = self;
+ 
++        // what is not STUN tells the agent the pair is receiving, which
++        // paces its checks as Chrome's are (the is patch's pacing.rs)
++        if !matches!(r.contents.inner, Stun(_)) {
++            ice.note_received(recv_time, r.source, r.destination);
++        }
++
+         match r.contents.inner {
+             Stun(stun) => {
+                 let packet = is::stun::StunPacket {
 --- a/src/media/mod.rs
 +++ b/src/media/mod.rs
 @@ -649,13 +649,9 @@
