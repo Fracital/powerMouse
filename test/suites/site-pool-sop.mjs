@@ -87,6 +87,9 @@ async function collect(context, global, roles) {
 					.evaluate((global) => window[global], global)
 					.catch(() => null);
 				if (value?.role && value.done) reports[value.role] = value;
+				// site-pool-sop.html's top opens its popup on a user's click
+				else if (global === '__sop' && value?.role === 'top' && !value.clicked)
+					await frame.click('#open', { timeout: 1000 }).catch(() => null);
 			}
 		if (roles.every((role) => reports[role])) break;
 	}

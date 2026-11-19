@@ -1,4 +1,5 @@
 import Module from '../../Module';
+import { mayOpenPopup, popupOpened } from '../activation';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { heldClicks } from '../heldClicks';
 import { baseTarget, clickedLink } from '../links';
@@ -22,7 +23,9 @@ const SAME_FRAME = ['', '_self', '_top', '_parent', '_unfencedtop'];
  * Either is done once the click has gone through the page, unless a listener
  * of the page cancelled it (../heldClicks.ts), as the browser decides a
  * link's default action: an SPA's router (Discord's channel links are
- * target=_blank) cancels the click and routes the link itself.
+ * target=_blank) cancels the click and routes the link itself. The host's
+ * tab opens as the browser's popup would: only with a transient activation
+ * (a script's click with none opens nothing), one for each.
  */
 export default class OpenModule extends Module<DocumentClient> {
 	apply() {
@@ -96,7 +99,13 @@ export default class OpenModule extends Module<DocumentClient> {
 				if (!client.config.openTab) return;
 			}
 			const href = url.toString();
-			clicks.hold(event, () => client.openInHost(href));
+			// as the browser's popup blocker decides once the click went
+			// through the page: none without a transient activation (a
+			// script's click at load opens nothing), one for each
+			clicks.hold(event, () => {
+				if (mayOpenPopup(client) && client.openInHost(href))
+					popupOpened(client);
+			});
 		};
 		const install = () => {
 			global.addEventListener('click', listener, true);

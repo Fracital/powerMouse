@@ -1,0 +1,79 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>popup activation</title>
+	</head>
+	<body>
+		<!-- Popups and Chrome's popup blocker (popup-activation suite): what
+		opens with no transient activation, and how many open for one -->
+		<a id="load" target="_blank" href="/pages/walk-3.html?load-click">load</a>
+		<a id="timer" target="_blank" href="/pages/walk-3.html?timer-click"
+			>timer</a
+		>
+		<a id="user" target="_blank" href="/pages/walk-3.html?user-click">user</a>
+		<a id="first" target="_blank" href="/pages/walk-3.html?first-click"
+			>first</a
+		>
+		<a id="second" target="_blank" href="/pages/walk-3.html?second-click"
+			>second</a
+		>
+		<a id="after" target="_blank" href="/pages/walk-3.html?after-open">after</a>
+		<a
+			id="inline"
+			target="_blank"
+			href="/pages/walk-3.html?inline-link"
+			onclick="
+				window.__log.push([
+					'inline',
+					window.open('/pages/walk-3.html?inline-open') === null,
+				]);
+				return false;
+			"
+			>inline</a
+		>
+		<button id="twice">twice</button>
+		<button id="click">click</button>
+		<button id="clicks">clicks</button>
+		<button id="openThenClick">open then click</button>
+		<script>
+			window.__log = [];
+			const log = (...entry) => window.__log.push(entry);
+			const byId = (id) => document.getElementById(id);
+			// as the page loads: no activation
+			log(
+				'load-open',
+				window.open('/pages/walk-3.html?load-open', '_blank') === null,
+				navigator.userActivation.isActive,
+			);
+			byId('load').click();
+			setTimeout(() => {
+				log(
+					'timer-open',
+					window.open('/pages/walk-3.html?timer-open') === null,
+					navigator.userActivation.isActive,
+				);
+				byId('timer').click();
+				console.log('POPUP ACTIVATION LOADED');
+			}, 50);
+			// the user's clicks: one popup each
+			byId('twice').onclick = () => {
+				window.open('/pages/walk-3.html?twice-1');
+				log(
+					'twice',
+					navigator.userActivation.isActive,
+					window.open('/pages/walk-3.html?twice-2') === null,
+				);
+			};
+			byId('click').onclick = () => byId('user').click();
+			byId('clicks').onclick = () => {
+				byId('first').click();
+				byId('second').click();
+			};
+			byId('openThenClick').onclick = () => {
+				window.open('/pages/walk-3.html?open-first');
+				byId('after').click();
+			};
+		</script>
+	</body>
+</html>

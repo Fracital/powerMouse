@@ -126,7 +126,23 @@
 				seen();
 				// the frame's window, held while it shows the other site
 				const held = frames[0];
-				popup = window.open(refsCross('site-pool-sop.html?role=popup'));
+				// Chrome opens a popup only in a transient activation (its popup
+				// blocker, which the proxy keeps): the suite clicks the button
+				const button = document.createElement('button');
+				button.id = 'open';
+				button.textContent = 'open';
+				document.body.append(button);
+				await new Promise((resolve) =>
+					button.addEventListener(
+						'click',
+						() => {
+							popup = window.open(refsCross('site-pool-sop.html?role=popup'));
+							report.clicked = true;
+							resolve();
+						},
+						{ once: true },
+					),
+				);
 				for (let i = 0; i < 60 && report.messages.length < 4; i++)
 					await sleep(100);
 				// the popup's document has arrived by now

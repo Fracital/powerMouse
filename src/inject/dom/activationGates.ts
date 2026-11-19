@@ -223,7 +223,7 @@ function rules(client: DocumentClient, gate: Gate) {
 		);
 	// a popup the browser opens: its blocker refuses one with no
 	// activation. Not a URL the host opens as a tab (DOMHooks' open):
-	// that is the host's to decide
+	// ./windowOpen.ts decides that one as the blocker would
 	gate(
 		'',
 		'open',

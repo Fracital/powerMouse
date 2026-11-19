@@ -122,11 +122,17 @@ export const NO_AUDIO = {
  * in headless mode (`--hide-scrollbars`), and a bug that needs one never shows.
  * `env`: environment variables for Chrome on top of this process's (see
  * NO_AUDIO).
+ * `popupBlocker`: block popups as a user's Chrome does; Playwright turns the
+ * blocker off (`--disable-popup-blocking`), and every popup opens there.
  */
 export async function launch(
 	args = [],
-	{ scrollbars = false, env = null } = {},
+	{ scrollbars = false, env = null, popupBlocker = false } = {},
 ) {
+	const ignored = [
+		...(scrollbars ? ['--hide-scrollbars'] : []),
+		...(popupBlocker ? ['--disable-popup-blocking'] : []),
+	];
 	return chromium.launch({
 		executablePath: CHROME,
 		headless: true,
@@ -136,7 +142,7 @@ export async function launch(
 			'--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE *.localhost, EXCLUDE 127.0.0.1',
 			...args,
 		],
-		...(scrollbars ? { ignoreDefaultArgs: ['--hide-scrollbars'] } : {}),
+		...(ignored.length ? { ignoreDefaultArgs: ignored } : {}),
 	});
 }
 
