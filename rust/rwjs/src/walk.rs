@@ -128,17 +128,15 @@ pub struct Walker<'a, 'c, 'h> {
 	allocator: &'c Allocator,
 	/// a regular expression's pattern does not compile: the parser's error
 	bad_pattern: bool,
-	/// the tree walked, for the question src/args.rs answers
-	program: &'c Program<'a>,
 	/// whether something may rebind a function's `arguments` (src/args.rs),
 	/// by the function's start: asked of the function's part of the tree the
 	/// first time a read of `arguments` by a computed key in it needs it
 	/// (most scripts have none, and most functions)
 	rebound: std::collections::HashMap<u32, bool>,
 	/// for each function, field initializer and static block around (not
-	/// arrows), innermost last: the function's start, None where
-	/// `arguments` is no arguments object of its own
-	own_arguments: Vec<Option<u32>>,
+	/// arrows), innermost last: the function, None where `arguments` is no
+	/// arguments object of its own
+	own_arguments: Vec<Option<&'a Function<'a>>>,
 }
 
 fn espan(span: Span) -> EditSpan {
@@ -166,7 +164,6 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 	pub fn new(
 		src: &'a str,
 		parsed: &'a str,
-		program: &'c Program<'a>,
 		options: &'c Options<'c>,
 		offsets: &'c Utf16Offsets,
 		route: &'c mut Route<'h>,
@@ -200,7 +197,6 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 			setter_value: None,
 			allocator,
 			bad_pattern: false,
-			program,
 			rebound: std::collections::HashMap::new(),
 			own_arguments: Vec::new(),
 		}
@@ -518,10 +514,10 @@ impl<'a, 'c, 'h> Walker<'a, 'c, 'h> {
 	/// whether `arguments` where the walk stands is the innermost
 	/// function's own arguments object for certain
 	fn own_arguments(&mut self) -> bool {
-		let Some(&Some(start)) = self.own_arguments.last() else {
+		let Some(&Some(function)) = self.own_arguments.last() else {
 			return false;
 		};
-		!crate::args::rebound_at(self.program, start, &mut self.rebound)
+		!crate::args::rebound_in(function, &mut self.rebound)
 	}
 
 	// ---- marks ----
@@ -2371,7 +2367,7 @@ impl<'a> Visit<'a> for Walker<'a, '_, '_> {
 			.map(|(_, calls_super)| calls_super);
 		let setter = self.setter_value.take() == Some(it.span);
 		self.functions += 1;
-		self.own_arguments.push(Some(it.span.start));
+		self.own_arguments.push(Some(self.alloc(it)));
 		let saved = self.early.function_enter(it, method);
 		let directives = it.body.as_ref().map_or(&[][..], |body| &body.directives[..]);
 		match (&it.body, self.rewriting) {
