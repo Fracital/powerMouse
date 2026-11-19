@@ -166,7 +166,20 @@
              }
          }
      }
-@@ -1319,10 +1413,14 @@
+@@ -1314,15 +1408,27 @@
+             return Some(last_now + self.timing_advance);
+         }
+ 
++        // the next turn of Chrome's loop, when it is due: the loop spaces
++        // its own turns (pacing.rs), and Ta from the last wake (anything
++        // else that woke the agent, the bandwidth estimate every 25 ms)
++        // put every turn on the next wake after it
++        if let Some(turn) = self.next_turn.filter(|_| !self.ice_lite) {
++            return Some(turn);
++        }
++
+         // when do we need to handle the next candidate pair?
+         let maybe_next = if self.ice_lite {
              // ice-lite doesn't do checks.
              None
          } else {
@@ -185,7 +198,7 @@
          };
  
          // Time must advance with at least Ta.
-@@ -1601,6 +1699,7 @@
+@@ -1601,6 +1707,7 @@
          let remote_addr = remote.addr();
  
          pair.increase_remote_binding_requests(req.now);
@@ -193,7 +206,7 @@
  
          if self.ice_lite && !self.controlling {
              // ice-lite sends no checks of its own, so this pair can never be
-@@ -1911,6 +2010,8 @@
+@@ -1911,6 +2018,8 @@
          };
  
          pair.record_binding_response(now, trans_id, valid_idx);
@@ -202,7 +215,7 @@
  
          // For a controlled agent, a successful check can make a nominated pair valid.
          self.evaluate_nomination();
-@@ -2045,7 +2146,11 @@
+@@ -2045,7 +2154,11 @@
              // it is just another pair being checked.
              if p.is_nominated() && p.state() == CheckState::Succeeded {
                  any_nomination = true;

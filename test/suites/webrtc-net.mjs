@@ -1044,7 +1044,10 @@ async function farEndGone(opened, how) {
 		result.fastFrom = fastFrom < 0 ? null : after[fastFrom];
 		const fast = fastFrom < 0 ? [] : gaps.slice(fastFrom);
 		result.fastChecks = fast.length;
-		result.fastOff = fast.filter((gap) => gap < 40 || gap > 100).length;
+		// natively 62 or 63 ms, as the relay's clock reads them; the
+		// stack's went at its next wake for the bandwidth estimate, 50 and
+		// 75 ms apart
+		result.fastOff = fast.filter((gap) => gap < 55 || gap > 70).length;
 		if (streams) result.streams = await streams;
 		let since = start + (result.resumed ?? 0);
 		if (how === 'vanish') {

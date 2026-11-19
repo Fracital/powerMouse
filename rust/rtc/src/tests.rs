@@ -98,6 +98,8 @@ struct Peer {
 	messages: Vec<Vec<u8>>,
 	/// datagrams waiting to cross to the other peer
 	outbox: Vec<Vec<u8>>,
+	/// when the connection last asked to be called again (its timeout)
+	wake: Option<Instant>,
 }
 
 impl Drop for Peer {
@@ -133,6 +135,7 @@ impl Peer {
 			frames: Vec::new(),
 			messages: Vec::new(),
 			outbox: Vec::new(),
+			wake: None,
 		}
 	}
 
@@ -157,6 +160,10 @@ impl Peer {
 					self.outbox.push(bytes[1..].to_vec());
 				}
 				OUT_EVENT => self.events.push(owned(&bytes[1..])),
+				OUT_TIMEOUT => {
+					let ms = u32::from_be_bytes(bytes[1..5].try_into().unwrap());
+					self.wake = Some(Instant::now() + Duration::from_millis(ms as u64));
+				}
 				OUT_RESULT => result = Some(owned(&bytes[1..])),
 				OUT_CHANNEL_DATA => self.messages.push(bytes[4..].to_vec()),
 				OUT_MEDIA_DATA => {
@@ -1368,6 +1375,87 @@ fn a_remote_nothing_answers_at_is_checked_as_chromes_is() {
 	let last = (*dead.last().unwrap() - dead[0]).as_millis();
 	assert!(first <= 300, "first checked {first} ms after it was added");
 	assert!(last <= 15000, "the last check {last} ms after the first");
+}
+
+/// Carry datagrams between the two for `ms` (none when `lost`), calling
+/// each only when its timeout says, as the worker does; the checks `a`
+/// sent to `b`, at their times, and how often `a`, called when it asked,
+/// had nothing due yet and asked to be called again at once
+fn run_on_timeouts(a: &mut Peer, b: &mut Peer, ms: u64, lost: bool) -> (Vec<Instant>, usize) {
+	let end = Instant::now() + Duration::from_millis(ms);
+	let mut checks = Vec::new();
+	let mut early = 0;
+	while Instant::now() < end {
+		let due = [a.wake, b.wake].into_iter().flatten().min().unwrap_or(end).min(end);
+		if let Some(wait) = due.checked_duration_since(Instant::now()) {
+			std::thread::sleep(wait);
+		}
+		let now = Instant::now();
+		if a.wake.is_some_and(|at| at <= now) {
+			let outbox = a.outbox.len();
+			a.tick();
+			if a.outbox.len() == outbox && a.wake.is_some_and(|at| at <= Instant::now()) {
+				early += 1;
+			}
+		}
+		if b.wake.is_some_and(|at| at <= now) {
+			b.tick();
+		}
+		for datagram in std::mem::take(&mut a.outbox) {
+			if is_check(&datagram) && destination(&datagram) == b.address {
+				checks.push(Instant::now());
+			}
+			if !lost {
+				b.receive(&datagram);
+			}
+		}
+		for datagram in std::mem::take(&mut b.outbox) {
+			if !lost {
+				a.receive(&datagram);
+			}
+		}
+	}
+	(checks, early)
+}
+
+/// A check goes out when the turn of Chrome's loop that sends it is due,
+/// called at the time the connection asks, as the worker calls it: on a
+/// pair nothing answers every 62.5 ms, and once connected 2656.25 ms
+/// apart (Chrome 157, measured: no jitter). The agent put every wake at
+/// least 50 ms (its Ta) after the last, and the bandwidth estimate wakes
+/// the connection every 25 ms, so each turn went at the next of those
+/// wakes: checks 50 and 75 ms apart, and 2650 and 2675 ms. And a
+/// timeout in whole milliseconds rounded down woke the connection before
+/// anything was due, so the worker set its timer again for 0 ms, which
+/// Chrome holds for 4 ms: checks 59 and 66 ms apart.
+#[test]
+fn a_check_goes_out_when_its_turn_is_due() {
+	let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	// the bandwidth estimate on, as the worker configures every connection
+	let mut a = Peer::new("10.0.0.1:5000", &[("bwe", "300000")]);
+	let mut b = Peer::new("10.0.0.2:5000", &[("bwe", "300000")]);
+	a.control(&[("op", "channel"), ("label", "data")]);
+	negotiate_udp(&mut a, &mut b);
+	// (the first turn is the metronome's first tick, whenever that is)
+	let (checks, early) = run_on_timeouts(&mut a, &mut b, 2000, true);
+	let lone = gaps(&checks);
+	assert!(
+		lone.len() >= 25 && lone[1..].iter().all(|gap| (61..=64).contains(gap)),
+		"checks nothing answers {lone:?} ms apart"
+	);
+	// a timeout that came before what it was for: a browser holds the
+	// timer the worker sets again for 0 ms 4 ms once timers nest
+	assert_eq!(early, 0, "woken before anything was due");
+	let mut a = Peer::new("10.0.0.1:5000", &[("bwe", "300000")]);
+	let mut b = Peer::new("10.0.0.2:5000", &[("bwe", "300000")]);
+	a.control(&[("op", "channel"), ("label", "data")]);
+	negotiate_udp(&mut a, &mut b);
+	pump(&mut a, &mut b, "the channel", |a, b| a.event("channel_open").is_some() && b.event("channel_open").is_some());
+	let steady = gaps(&run_on_timeouts(&mut a, &mut b, 11000, false).0);
+	assert!(
+		steady.len() >= 4 && steady[steady.len() - 2..].iter().all(|gap| (2654..=2659).contains(gap)),
+		"checks while connected {steady:?} ms apart"
+	);
 }
 
 #[test]

@@ -81,7 +81,8 @@ const OUT_TRANSMIT: u8 = 1;
 const OUT_EVENT: u8 = 2;
 /// `[channel u16][binary u8][bytes]`: a message received on a channel
 const OUT_CHANNEL_DATA: u8 = 3;
-/// `[ms u32]`: call `t` again in this many milliseconds at the latest
+/// `[ms u32]`: call `t` again in this many milliseconds (when the next
+/// thing is due, rounded up to a whole one)
 const OUT_TIMEOUT: u8 = 4;
 /// text: the result of the last control call
 const OUT_RESULT: u8 = 5;
@@ -660,7 +661,10 @@ impl Conn {
 			};
 			match output {
 				Output::Timeout(at) => {
-					let ms = at.saturating_duration_since(Instant::now()).as_millis();
+					// rounded up: a timer that wakes before `at` finds nothing
+					// due and is set again for 0 ms, which a browser holds for
+					// 4 ms once timers nest (HTML's timer nesting clamp)
+					let ms = at.saturating_duration_since(Instant::now()).as_micros().div_ceil(1000);
 					let mut record = vec![OUT_TIMEOUT];
 					record.extend_from_slice(&(ms.min(u32::MAX as u128) as u32).to_be_bytes());
 					self.push(record);
