@@ -19,6 +19,7 @@ import {
 import { closePort, onPort, privateChannel } from '../../transport/ports';
 import { requiredArgumentsMessage } from '../modules/Proxy';
 import { scopePrefix } from '../modules/Unroute';
+import { later, now, random } from '../modules/WebTransport';
 import { withStack } from '../nativeErrors';
 import { getPublicSuffix } from '../rewriter';
 import type DocumentClient from './Client';
@@ -112,14 +113,18 @@ const UNRANKED = 1 << 20;
  * request with no account to sign in, a config refused, a site in its
  * cooldown): random, measured over 73 failures in Chrome 157 as log-normal
  * in seconds (mu 1.72, sigma 1.28, so a median of 5.6 s) and never past
- * 60 s
+ * 60 s.
+ * Chrome's own UI calls nothing of the page's, and a page that replaced
+ * Math's members would see each call (and choose the delay: a NaN is none
+ * at all), so nothing of the realm's Math is read: `random` is the
+ * browser's, taken before any page script ran, the normal is the sum of
+ * twelve uniforms less six, and e is a literal raised by `**`.
  */
 const rejectionDelay = (): number => {
-	// Box-Muller (1 - random: never the log of 0)
-	const normal =
-		Math.sqrt(-2 * Math.log(1 - Math.random())) *
-		Math.cos(2 * Math.PI * Math.random());
-	return Math.min(60_000, Math.round(1000 * Math.exp(1.72 + 1.28 * normal)));
+	let normal = -6;
+	for (let i = 0; i < 12; i++) normal += random();
+	const delay = 1000 * 2.718281828459045 ** (1.72 + 1.28 * normal);
+	return delay < 60_000 ? delay : 60_000;
 };
 
 /** `value` at `index` of `list`, defined: a setter of an index the page put on Array.prototype is never handed it */
@@ -192,8 +197,6 @@ export function identityFlow({
 	parse,
 	isArray,
 }: IdentityContext) {
-	const global = client.global as unknown as typeof globalThis &
-		Record<string, any>;
 	const rpSite = siteOf(client.url.url, getPublicSuffix);
 	const siteOfURL = (url: string) => siteOf(new URL(url), getPublicSuffix);
 
@@ -256,8 +259,9 @@ export function identityFlow({
 					headers,
 					referrer: '',
 				} as RequestInit);
+				// (the browser's setTimeout: a page's own would see the call)
 				Reflect.apply(PagePromise.prototype.then, answered, [
-					() => global.setTimeout(finish, READ_GRACE_MS),
+					() => later(finish, READ_GRACE_MS),
 					finish,
 				]);
 			} catch (error) {
@@ -658,7 +662,7 @@ export function identityFlow({
 			chosen = shown[picked];
 		}
 
-		const asked = Date.now();
+		const posted = now();
 		const answer = await idpPost(tokenURL, {
 			client_id: clientId,
 			nonce: typeof provider.nonce === 'string' ? provider.nonce : '',
@@ -686,11 +690,8 @@ export function identityFlow({
 			await done(configAbsolute, isAutoSelected ? 'auto' : 'chosen', chosen.id);
 			// Chrome holds the token three seconds after its request (measured:
 			// a pick, or an automatic sign-in, resolves three seconds later)
-			const left = testing ? 0 : asked + TOKEN_HOLD_MS - Date.now();
-			if (left > 0)
-				await new PagePromise<void>((wake) =>
-					global.setTimeout(() => wake(undefined), left),
-				);
+			const left = testing ? 0 : posted + TOKEN_HOLD_MS - now();
+			if (left > 0) await new PagePromise<void>((wake) => later(wake, left));
 			return makeCredential(token, isAutoSelected, configAbsolute);
 		}
 		const error = own(answer.json, 'error');
@@ -791,10 +792,9 @@ export function identityFlow({
 				// a failure before the chooser showed is held a while, so the
 				// page cannot tell one with no account from one the user turned
 				// down (measured, below)
-				const delay = testing ? 0 : rejectionDelay();
-				global.setTimeout(
+				later(
 					() => rejectPage(domException(GENERIC_TOKEN_ERROR, 'NetworkError')),
-					delay,
+					testing ? 0 : rejectionDelay(),
 				);
 			})().catch((error) => rejectPage(error));
 		});

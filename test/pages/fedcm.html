@@ -385,6 +385,51 @@
 		window.__pending.then((result) => (window.__done = result));
 		return true;
 	};
+	// a scenario started as a page that replaced Math's members (Math.random
+	// answering NaN), setTimeout, setInterval and Date.now with recorders
+	// before it asked: how it ended, and which of them were called while it
+	// was open (natively none: the browser runs FedCM in its own process).
+	// Read with readDone()/readPending()
+	window.startWatched = (name, params = {}) => {
+		const calls = {};
+		const restore = [];
+		const wrap = (owner, key, label, answer) => {
+			const real = owner[key];
+			owner[key] = function (...args) {
+				calls[label] = (calls[label] ?? 0) + 1;
+				return answer ? answer() : Reflect.apply(real, this, args);
+			};
+			restore.push(() => (owner[key] = real));
+		};
+		wrap(Math, 'random', 'Math.random', () => NaN);
+		for (const key of ['sqrt', 'log', 'cos', 'exp', 'min', 'round', 'pow'])
+			wrap(Math, key, `Math.${key}`);
+		wrap(window, 'setTimeout', 'setTimeout');
+		wrap(window, 'setInterval', 'setInterval');
+		wrap(Date, 'now', 'Date.now');
+		window.__done = null;
+		window.__pending = settleGet(optionsFor(name, params)).then((result) => {
+			for (const undo of restore.reverse()) undo();
+			return (window.__done = {
+				result:
+					result.kind === 'token' ? `token ${result.token}` : result.error,
+				calls,
+			});
+		});
+		return true;
+	};
+
+	// the settled result of what was started, or `still open` after `ms`
+	// (with the page's setTimeout as the page loaded: startWatched counts
+	// the calls of the one it put in its place)
+	const loadedTimeout = setTimeout;
+	window.readPendingWithin = (ms) =>
+		Promise.race([
+			window.__pending,
+			new Promise((resolve) =>
+				loadedTimeout(() => resolve({ result: 'still open' }), ms),
+			),
+		]);
 	// the settled result of the scenario startScenario started, or null
 	window.readDone = () => window.__done;
 	window.readPending = () => window.__pending;

@@ -620,9 +620,47 @@ async function reference() {
 		await cdp.send('FedCm.selectAccount', { dialogId, accountIndex: 0 });
 	await page.evaluate(() => window.readPending());
 	await setWellKnown(null);
+	// a page that replaced Math and the timers sees none of them called
+	const watched = await watchedRuns(page.mainFrame(), null);
 	await browser.close();
 	const mediation = await mediationReference();
-	return { detect, validation, statics, cors, spied, seen, mediation, errors };
+	return {
+		detect,
+		validation,
+		statics,
+		cors,
+		spied,
+		seen,
+		watched,
+		mediation,
+		errors,
+	};
+}
+
+/** the settled result of what `frame` started (startWatched), or a timeout */
+const settled = (frame, ms = 15000) =>
+	frame.evaluate((ms) => window.readPendingWithin(ms), ms);
+
+/**
+ * Requests made by a page that replaced Math's members and its timers
+ * (startWatched): one whose chooser is picked from (natively the
+ * reference's CDP session picks; through the proxy `host`'s chooser is
+ * pressed), and one whose config is missing (a failure before the
+ * chooser, held for Chrome's delay unless `?fedcm=test` or CDP drops it)
+ */
+async function watchedRuns(frame, host, ms = 15000) {
+	await frame.evaluate((a) => window.startWatched('flow', a), {
+		configURL: configOf(sameOrigin, `watched-${Date.now()}`),
+		mediation: 'required',
+	});
+	if (host) await pressChooser(host, /Ada Proxy/);
+	const picked = await settled(frame);
+	await frame.evaluate((a) => window.startWatched('flow', a), {
+		configURL: `${sameOrigin}/pages/fedcm-missing.json`,
+		mediation: 'required',
+	});
+	const failed = await settled(frame, ms);
+	return { picked, failed };
 }
 
 /**
@@ -765,7 +803,14 @@ ok(
 		),
 	);
 }
-
+ok(
+	'natively a page that replaced Math and its timers sees none of them called by a FedCM request',
+	ref.watched.picked.result === 'token idtok.acct-1.false.n0' &&
+		JSON.stringify(ref.watched.picked.calls) === '{}' &&
+		ref.watched.failed.result === 'NetworkError: Error retrieving a token.' &&
+		JSON.stringify(ref.watched.failed.calls) === '{}',
+	JSON.stringify(ref.watched),
+);
 const browser = await launch();
 for (const [mode, base] of [
 	['same-origin', PROXY],
@@ -998,6 +1043,19 @@ for (const [mode, base] of [
 		);
 	}
 
+	// 5b. a page that replaced Math's members and its timers before asking
+	//     sees none of them called, as natively (the browser's own UI runs
+	//     nothing of the page's); `?fedcm=test` drops the delays here, so
+	//     8b runs the held failure in a tab without it
+	{
+		const watched = await watchedRuns(frame, page);
+		ok(
+			`${mode}: a FedCM request calls none of the page's Math members, setTimeout, setInterval or Date.now, as natively`,
+			JSON.stringify(watched) === JSON.stringify(ref.watched),
+			JSON.stringify({ proxied: watched, native: ref.watched }),
+		);
+	}
+
 	// 7. IdentityCredential.disconnect routes and resolves through the proxy
 	{
 		const run = `disc-${mode}-${Date.now()}`;
@@ -1036,6 +1094,17 @@ for (const [mode, base] of [
 			`${mode}: a token resolves three seconds after its request, as Chrome holds it`,
 			got.kind === 'token' && held >= 2700 && held < 6000,
 			JSON.stringify({ got: got.kind, held }),
+		);
+		// (5b with Chrome's delays: the token held, a failure before the
+		// chooser held at random, never past 60 s, and the page's Math.random
+		// answering NaN chooses nothing)
+		const watched = plainFrame
+			? await watchedRuns(plainFrame, plain, 70000)
+			: null;
+		ok(
+			`${mode}: with Chrome's delays a FedCM request calls none of the page's Math members or timers, as natively`,
+			JSON.stringify(watched) === JSON.stringify(ref.watched),
+			JSON.stringify({ proxied: watched, native: ref.watched }),
 		);
 		await plain.close();
 	}
