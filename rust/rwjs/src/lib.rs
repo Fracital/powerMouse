@@ -5,11 +5,15 @@
 //! spans, `shape` the questions they ask of a node, `early` the early errors
 //! a browser refuses a script for, `config` what a host hands over, `source`
 //! the function marks and keys of src/functionSource.ts, `printer` the port of
-//! src/callPrinter.ts (how V8 names an expression in an error's message).
+//! src/callPrinter.ts (how V8 names an expression in an error's message),
+//! `link` the merge of an import cycle's modules into one (a document no
+//! service worker controls copies its module graph to blob: URLs).
 pub mod args;
 pub mod config;
 pub mod early;
+pub mod link;
 pub mod pattern;
+pub mod positions;
 pub mod printer;
 pub mod rewrite;
 pub mod shape;

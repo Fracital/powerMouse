@@ -66,6 +66,11 @@ export type ShardBound = {
 		{ instance: number; kind: RawKind; url: string; port: MessagePort },
 		{ send: boolean; closeReason: boolean },
 	];
+	/** the transport's answer for `host`'s HTTPS record (EpoxyTransport's httpsAnswer), or null */
+	httpsAnswer: [
+		{ instance: number; host: string; headers: RawHeaders },
+		ArrayBuffer | null,
+	];
 };
 
 /** implemented by the transport worker, called by a shard */

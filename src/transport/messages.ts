@@ -146,7 +146,13 @@ export interface LoadChannelMessage {
  * `<destination> <mode>`, the Sec-Fetch-Dest and Sec-Fetch-Mode of the load
  * the request stands for (subresource values only, never a navigation's
  * but an object's or embed's), or `copy` (a load the worker takes no
- * metadata from) or `download`
+ * metadata from) or `download`. Led by `^` (or `^` alone, for a request
+ * that is otherwise the page's own): the request is a document's the
+ * client's realm makes it for, of the client's origin, whose partition is
+ * the one the client's site has under its own top-level site with a frame
+ * of another site above it (an about:blank the client navigated a frame of
+ * another site's to, src/isolation.ts `blank`); taken only from a client
+ * in no partition
  */
 export interface LoadGrantMessage {
 	/** 22 random characters of base64url: the LOAD_HEADER of the request */
@@ -317,6 +323,25 @@ export const CORS_MARKER = 'stomp-cors';
  */
 export const SIZE_MARKER = 'stomp-size';
 /**
+ * A Server-Timing metric whose description is the protocol the origin's
+ * answer came over, as Chrome names it (`h3`, `h2`, `http/1.1`): the
+ * browser has a service worker's answer as of no protocol, and the inject
+ * shows the page this one as the entry's `nextHopProtocol`
+ */
+export const PROTOCOL_MARKER = 'stomp-protocol';
+/**
+ * A Server-Timing metric whose description is when the steps of the
+ * connection the origin's answer came on happened, in ms after the request
+ * reached the transport (its own times, responseFacts.ts): `r_REQUEST` for
+ * a connection that had carried a request before, else the lookup's start
+ * and end, the connection's start, its TLS start, its end and the request's
+ * start, joined by `_`, a step the transport did not see as `x`. The
+ * browser has a service worker's answer as made on no connection, and the
+ * inject shows the page these as the entry's connection times, from where
+ * the page's fetch started
+ */
+export const CONNECTION_MARKER = 'stomp-connection';
+/**
  * A Server-Timing metric the worker adds to a load a style sheet of
  * another origin made, when the page loaded that sheet without cors: the
  * browser reports no resource timing entry for it (the sheet's content is
@@ -379,6 +404,8 @@ export const PROXY_METRICS: readonly string[] = [
 	TIMING_DENIED_MARKER,
 	CORS_MARKER,
 	SIZE_MARKER,
+	PROTOCOL_MARKER,
+	CONNECTION_MARKER,
 	UNREPORTED_MARKER,
 	ENCODING_MARKER,
 	WORKER_SCRIPT_MARKER,
@@ -609,6 +636,16 @@ export interface NavigateInfo {
 	icon: string | null;
 	/** the page's service worker client id, once it learned it (`whoami`) */
 	client?: string;
+	/**
+	 * `wanted`: the page is cross-origin isolated natively (it sent COOP
+	 * `same-origin` and an embedder policy, or a Document-Isolation-Policy)
+	 * and is not here: the host's page is not isolated and the browser
+	 * cannot isolate a frame of it by itself (it has no
+	 * Document-Isolation-Policy). A host may offer the page a window of its
+	 * own whose page is isolated (README, Cross-origin isolation). Set by the
+	 * controller, absent otherwise
+	 */
+	isolation?: 'wanted';
 }
 /**
  * global set by the bootstrap of a worker started from a blob: URL: the
@@ -696,6 +733,8 @@ export const BLOB_ASK = '$stomp$blobAsk';
 export interface BlobMintedMessage {
 	directory: string;
 	url: string;
+	/** minted by a document whose partition is as a load grant's `^` names */
+	cross?: boolean;
 }
 
 /**
@@ -979,8 +1018,11 @@ export type PasskeyMessage = { directory: string } & PasskeyOp;
  */
 export const SRCDOC_VOUCH = '$stomp$srcdocVouch';
 /**
- * an about:srcdoc client presents the token its ancestor vouched for; an
- * empty token says none vouches for it (an opaque document)
+ * an about:srcdoc client presents the token its ancestor vouched for, with
+ * a request for `<directory>$stomp$srcdocClaim/<token>` (a message would
+ * not do: WebKit reports a srcdoc document's message to its controller as
+ * its parent's client's); an empty token says none vouches for it (an
+ * opaque document)
  */
 export const SRCDOC_CLAIM = '$stomp$srcdocClaim';
 
@@ -1002,6 +1044,8 @@ export interface InlineDocumentMessage {
 	blob?: Blob | string;
 	/** that Blob's document is cross-origin isolated, as its creator is (it inherits the creator's embedder policy) */
 	isolated?: boolean;
+	/** its creator's partition is as a load grant's `^` names (LoadGrantMessage) */
+	cross?: boolean;
 }
 
 /**
@@ -1058,6 +1102,15 @@ export interface ControllerInitMessage {
 	 * load that finishes after the handshake sends CONTROLLER_MODULES.
 	 */
 	modules?: Record<string, ArrayBuffer>;
+	/**
+	 * The modules come as the first message on the handshake's port (a
+	 * CONTROLLER_MODULES), not in `modules`: a message through
+	 * ServiceWorker.postMessage goes by way of the browser's process, 5.6 ms
+	 * for their 2 MB on Chrome 157, one on a port 1.8. The worker says it
+	 * took them (`hello`'s portModules); a worker of an earlier build does
+	 * not, and is sent a CONTROLLER_MODULES
+	 */
+	modulesOnPort?: boolean;
 	/** the built-in blocker: its lists (its module is `modules.blocker`) (docs/adblock.md) */
 	adblock?: AdblockInit;
 	/**
@@ -1256,8 +1309,20 @@ export type HostReload = 'no-cache' | 'reload';
 export type SWbound = {
 	/** replace the request rules */
 	rules: [RequestRule[]];
+	/**
+	 * the controller starts the agent of the documents a
+	 * Document-Isolation-Policy isolates (src/controller/apart.ts): its route
+	 * answers this token once, with a document that runs `script`
+	 */
+	apartAgent: [{ token: string; script: string }];
 	/** the host page was reloaded: the pages it restores are (HostReload) */
 	hostReload: [HostReload];
+	/**
+	 * the next navigation to this routed URL is a step of a frame's history
+	 * the controller takes with location.replace (src/controller/history.ts):
+	 * it takes the kept document, as a traversal does
+	 */
+	historyStep: [string];
 	/**
 	 * the controller shook hands again over another channel: this one
 	 * answers what is in flight on it, then the worker closes it
@@ -1442,7 +1507,7 @@ export type Controllerbound = {
 	 * creates for the controller is up (`ready`), with the worker's name for
 	 * this run of it (ReviveMessage.instance)
 	 */
-	hello: [{ instance: string }];
+	hello: [{ instance: string; portModules?: boolean }];
 	ready: [{ build: string }];
 	/** another controller registered with this one's id; the worker closes the port right after */
 	replaced: [];
@@ -1479,6 +1544,11 @@ export type Controllerbound = {
 	 * could not tell
 	 */
 	isolationEngine: [undefined, IsolationEngine | null];
+	/**
+	 * a top-level page that is cross-origin isolated natively is shown to
+	 * this client without isolation (NavigateInfo.isolation)
+	 */
+	isolationWanted: [string];
 	/**
 	 * a blob: URL the controller's document minted, which the worker reads
 	 * to learn whether it reads its clients' (src/server/rewrites.ts

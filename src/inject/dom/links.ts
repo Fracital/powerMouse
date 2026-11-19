@@ -24,3 +24,6 @@ export const clickedLink = (
 /** the target `document`'s base element gives its links and forms, '' for none */
 export const baseTarget = (document: Document): string =>
 	document.querySelector('base[target]')?.getAttribute('target') ?? '';
+
+/** targets that navigate a document's own frame or an ancestor of it */
+export const SAME_FRAME = ['', '_self', '_top', '_parent', '_unfencedtop'];

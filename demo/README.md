@@ -37,7 +37,7 @@ Environment variables:
 | `STOMP_WISP_WEBTRANSPORT` | on             | Set to `0` to keep Wisp on the WebSocket; else epoxy tries the relay's WebTransport session first (docs/webtransport.md, "Wisp over WebTransport"): a URL names it (a public certificate) or, ending in `.json`, its document; the built-in holyWisp's is asked when it serves one (`?wt=0` / `?wt` decides for a visit); About's Transport row says which Wisp rides now |
 | `STOMP_REWRITER`          | unset          | `wasm` runs the Rust rewriters where a thread holds them (the controller's `rewriter` option; `?wasm` does one visit, `?js` the JavaScript ones)                                                                                                                                                                                                                          |
 | `STOMP_ADBLOCK`           | on             | Set to `0` to turn off the content blocker (docs/adblock.md), a JSON object is its `adblock` option; `?noadblock` and `?adblock` do one visit, the toggle is kept                                                                                                                                                                                                         |
-| `STOMP_ECH_DNS`           | Cloudflare DoH | DNS-over-HTTPS endpoint epoxy asks for HTTPS records to offer real Encrypted Client Hello (docs/fingerprint.md); `off` sends GREASE ECH only (`?noech` does one visit)                                                                                                                                                                                                    |
+| `STOMP_ECH_DNS`           | Cloudflare DoH | DNS-over-HTTPS endpoint epoxy asks for HTTPS records to offer real Encrypted Client Hello (docs/fingerprint.md), and HTTP/3 asks for a name's first request (docs/http3.md); `off` sends GREASE ECH only (`?noech` does one visit)                                                                                                                                        |
 | `STOMP_SITE_POOL`         | unset          | More ports to answer on, a list or a number of free ones to take: the slots of the site pool (see Site pool; `?nopool` on the page leaves it out for a visit)                                                                                                                                                                                                             |
 | `STOMP_TEST_TRANSPORT`    | unset          | Set to `1` to use `/test/mixed-transport.mjs` (epoxy that reaches the suites' fixture hosts: mixed-content's, and the names under a private suffix); test runs only                                                                                                                                                                                                       |
 
@@ -282,8 +282,9 @@ holyWisp is started.
     Discord's own scripts delete `window.localStorage`.
 
 14. **Menu.** A button beside the address box, outside it (`#toolMenu`),
-    and its twin beside New tab in the tab manager, which hides the bar
-    (`#recentsMenu`), open one menu (`#pmMenu`), a popover built on the
+    opens the menu (`#pmMenu`). The menu is the tab's: the tab manager,
+    which hides the bar, has only its New tab button. The menu is a popover
+    built on the
     Shields panel's (`popover()` in main.js, `.popover` in main.css): it
     fades in, and closes at once by every way (its button, a click outside,
     Escape, an item chosen). **Fullscreen** calls `requestFullscreen()` on

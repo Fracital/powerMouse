@@ -308,7 +308,8 @@ on every save (use a `git worktree`).
   `src/server/cache.ts` changes with a row there, not from the RFC. One
   difference is kept on purpose and listed in both: an entry made with
   credentials is confirmed before a request with other credentials gets it
-  (do not drop this: one store serves every cookie jar). A 206 is kept as
+  (do not drop this: one store serves every cookie jar), but a document's
+  Back or Forward takes the entry as natively. A 206 is kept as
   a part and completed by range as Chrome completes its sparse entries,
   quirks included (`completePart` in `src/server/rewrites.ts`). The
   rewrite cache's `mayKeep` is a rule of its own and stays stricter. The

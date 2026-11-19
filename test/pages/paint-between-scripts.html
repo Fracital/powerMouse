@@ -1,0 +1,32 @@
+<!doctype html>
+<title>PAINT BETWEEN SCRIPTS</title>
+<body>
+	<h1>The page paints before its last long script runs</h1>
+	<script>
+		// Three scripts of 150 ms each follow the page's first content. Native
+		// Chrome's parser yields to rendering after a while of them and the
+		// page paints before the last one runs; the suite compares the order
+		// of the first contentful paint and the scripts' ends.
+		window.__pbs = { ends: [] };
+		new PerformanceObserver((list) => {
+			for (const entry of list.getEntries())
+				if (entry.name === 'first-contentful-paint')
+					window.__pbs.fcp = entry.startTime;
+		}).observe({ type: 'paint', buffered: true });
+		const busy = () => {
+			const start = performance.now();
+			while (performance.now() - start < 150);
+			window.__pbs.ends.push(performance.now());
+		};
+	</script>
+	<script>
+		busy();
+	</script>
+	<script>
+		busy();
+	</script>
+	<script>
+		busy();
+	</script>
+	<p>end</p>
+</body>

@@ -19,6 +19,10 @@ export type Kind = 'image' | 'svgImage' | 'video' | 'canvas' | 'other';
 
 const toStringTag = Symbol.toStringTag;
 
+// (context interface names the module names more than once)
+const OFFSCREEN_2D = 'OffscreenCanvasRenderingContext2D';
+const BITMAP_RENDERER = 'ImageBitmapRenderingContext';
+
 /**
  * Canvas tainting. Every route is same-origin to the browser, so an image of
  * another site drawn into a canvas never taints it and the page reads its
@@ -476,13 +480,9 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 		};
 		/** a context's prototype, by its interface's name */
 		const hookContext = (proto: object, name: string) => {
-			if (
-				name === 'CanvasRenderingContext2D' ||
-				name === 'OffscreenCanvasRenderingContext2D'
-			)
+			if (name === 'CanvasRenderingContext2D' || name === OFFSCREEN_2D)
 				hook2D(proto, name);
-			else if (name === 'ImageBitmapRenderingContext')
-				hookBitmapRenderer(proto);
+			else if (name === BITMAP_RENDERER) hookBitmapRenderer(proto);
 			else hookTextures(proto, name);
 		};
 		// the context prototypes looked at already: each is hooked (or not) on
@@ -563,13 +563,13 @@ export default class CanvasTaintModule extends Module<DocumentClient> {
 		lazyContext('WebGLRenderingContext', 'webgl', true);
 		lazyContext('WebGL2RenderingContext', 'webgl2', true);
 		lazyContext('CanvasRenderingContext2D', '2d', false);
-		lazyContext('ImageBitmapRenderingContext', 'bitmaprenderer', false);
+		lazyContext(BITMAP_RENDERER, 'bitmaprenderer', false);
 
 		if (
 			typeof global.OffscreenCanvas === 'function' &&
-			Reflect.has(global, 'OffscreenCanvasRenderingContext2D')
+			Reflect.has(global, OFFSCREEN_2D)
 		) {
-			lazyContext('OffscreenCanvasRenderingContext2D', '2d', true);
+			lazyContext(OFFSCREEN_2D, '2d', true);
 			hookGetContext(global.OffscreenCanvas.prototype);
 			// (Chrome's words for a tainted export, which changed in 153: asked
 			// once, on the first tainted export, ../taintRefusals.ts)

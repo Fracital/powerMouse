@@ -103,6 +103,12 @@ const readSmall = () => {
 		texts: [...query.call(document, 'script, style')].map((node) =>
 			text.call(node),
 		),
+		// the handlers as the browser holds them (the rewrites)
+		handlers: [...query.call(document, 'button')].map((node) =>
+			['onclick', 'onmouseover'].map((name) =>
+				top.Element.prototype.getAttribute.call(node, name),
+			),
+		),
 		// the streamed shell's copy of the markup (modifyHTMLStreamed)
 		shellMarkup: Reflect.getOwnPropertyDescriptor(window, '$stomp$shellMarkup')
 			? 'present'
@@ -128,6 +134,31 @@ ok(
 	withWorkers?.shellMarkup === 'gone' && inPage?.shellMarkup === 'gone',
 	JSON.stringify([withWorkers?.shellMarkup, inPage?.shellMarkup]),
 );
+// the markup's handlers: the worker's rewrite of each (prewrite.ts
+// handlerSources) is the page's own byte for byte, and each frame reads
+// where its tag ends, as natively (`__pw.at`, in the runs above); one
+// with a character reference is rewritten in the page either way. (Each
+// controller names its helpers anew: the names are left out.)
+const unnamed = (result) =>
+	JSON.stringify(result?.handlers).replace(/\$[\w$]{4}(?![\w$])/g, '$');
+ok(
+	"prewritten, the markup's handlers are the rewrites the page makes, and run and read their places as natively",
+	!!withWorkers?.handlers?.length &&
+		unnamed(withWorkers) === unnamed(inPage) &&
+		withWorkers.handlers.every(([click]) => click?.includes('.csp(this,"')) &&
+		native?.at?.length === 7 &&
+		native?.handlerSource?.startsWith('function inHandler'),
+	JSON.stringify({
+		native: native?.at,
+		handlers: withWorkers?.handlers?.map((pair) =>
+			pair.map((text) => text?.slice(0, 80)),
+		),
+		inPage: inPage?.handlers?.map((pair) =>
+			pair.map((text) => text?.slice(0, 80)),
+		),
+	}),
+);
+
 // The worker's rewrite carries the script's text for its functions (a
 // holder statement), where the page's keeps it in memory: in the page the
 // module and the copied script show it only when the worker made them

@@ -7,7 +7,7 @@
 // src/wasm/rewriter.ts REVISION, which the suite holds it to), and every
 // script handed back as it came. A worker that took it would evaluate its
 // text unrewritten and read the proxy's location for its own.
-const REVISION = '18';
+const REVISION = '20';
 const template = Uint8Array.from(
 	atob(
 		'AGFzbQEAAAABHAVgAX8Bf2ACf38AYAJ/fwF/YAN/f38Bf2AAAX8CBwEBZQFyAAMDCAcAAQIDBAQEBQMBAAQGCwJ/AUEAC38BQQALByYIBm1lbW9yeQIAAWEAAQFmAAIBYwADAXIABAFwAAUBbgAGAWIABwpABwYAQYCABAsCAAsEAEEACx4AIAJBIHEEQEGACCQAQQEkAQUgACQAIAEkAQtBAAsEACMACwQAIwELBgBBgIAICwsIAQBBgAgLATE=',

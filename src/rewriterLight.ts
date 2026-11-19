@@ -27,6 +27,7 @@ import {
 	parsesInWasm,
 	printInWasm,
 	rewriteInWasm,
+	takeApart,
 } from './wasm/rewriter';
 import { adoptModule, hasModule } from './wasm/thread';
 
@@ -56,11 +57,20 @@ let served = 0;
 let loads = 0;
 
 let error = '';
+/** the map the last call handed over apart (src/wasm/rewriter.ts takeApart) */
+let lastApart = '';
 const kept: [key: string, text: string][] = [];
 reportKeptSources((key, text) => kept.push([key, text]));
 
-function run<T>(work: () => T, failed: T): T {
+/** the call stops for a module when this copy holds none (`needs`) */
+export function stopped(): void {
+	if (!hasRewriter()) needed = true;
+}
+
+/** `work` as a call of this copy's: what it logged, threw and stopped for is the call's */
+export function run<T>(work: () => T, failed: T): T {
 	error = '';
+	lastApart = '';
 	needed = false;
 	kept.length = 0;
 	messages.length = 0;
@@ -126,10 +136,13 @@ export function library(parts: LightParts) {
 		): string | null {
 			return run(() => {
 				const { url, config } = enter(contextJSON);
-				const source =
-					sourceJSON === ''
-						? undefined
-						: (JSON.parse(sourceJSON) as ScriptSource);
+				// (code the inject rewrites, whose map comes apart: ScriptSource.apart)
+				const source: ScriptSource = {
+					apart: true,
+					...(sourceJSON === ''
+						? {}
+						: (JSON.parse(sourceJSON) as ScriptSource)),
+				};
 				const output = rewriteInWasm(
 					script,
 					url,
@@ -140,6 +153,7 @@ export function library(parts: LightParts) {
 				);
 				if (output !== null) {
 					served++;
+					lastApart = takeApart();
 					return output;
 				}
 				// no module in this realm yet: the caller gives us one and asks
@@ -245,6 +259,10 @@ export function library(parts: LightParts) {
 		},
 		error(): string {
 			return error;
+		},
+		/** the map of the last rewrite of `js` asked for apart (src/wasm/rewriter.ts takeApart) */
+		positions(): string {
+			return lastApart;
 		},
 		keptCount(): number {
 			return kept.length;

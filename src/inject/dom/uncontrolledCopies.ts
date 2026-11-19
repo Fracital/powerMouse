@@ -726,10 +726,18 @@ export function uncontrolledCopies(ctx: CopyContext) {
 		const state: Copy = { routed, made: [] };
 		if (retried) state.retried = true;
 		states.set(attribute, state);
+		// a module script's copy is its graph's (./moduleGraph.ts): one that
+		// does not load gets a URL that fails, as its load does natively
+		const module =
+			element.localName === 'script' &&
+			loadKind(element, attribute) === 'script cors';
 		// markup the page writes: the element here is the clone the markup
 		// is rewritten on; the parser makes the real one, which gets its copy
-		// after the write (writtenLoads). A script is copied at once below.
-		if (moduleClient.writing && element.localName !== 'script') {
+		// after the write (writtenLoads). A classic script is copied at once
+		// below. (A module script does not hold up the parser, and one the
+		// parser made with no src and no text has not started: it runs once
+		// it gets its copy)
+		if (moduleClient.writing && (element.localName !== 'script' || module)) {
 			states.delete(attribute);
 			element.removeAttribute(attribute);
 			return;
@@ -820,15 +828,19 @@ export function uncontrolledCopies(ctx: CopyContext) {
 		Promise.allSettled(
 			targets.map(({ routed, page }) =>
 				isRoute(routed)
-					? copyOf(
-							routed,
-							page,
-							state,
-							4,
-							loadKind(element, attribute),
-							null,
-							loadCredentials(loadKind(element, attribute), element),
-						)
+					? module
+						? deferred('moduleGraph')(moduleClient).load(
+								new URL(routed, scopePrefix(moduleClient)).href,
+							)
+						: copyOf(
+								routed,
+								page,
+								state,
+								4,
+								loadKind(element, attribute),
+								null,
+								loadCredentials(loadKind(element, attribute), element),
+							)
 					: routed,
 			),
 		).then((results) => {
@@ -841,7 +853,11 @@ export function uncontrolledCopies(ctx: CopyContext) {
 					),
 				);
 			else {
-				settle(routed);
+				settle(
+					module
+						? `blob:${new URL(scopePrefix(moduleClient)).origin}/0`
+						: routed,
+				);
 				release(state);
 			}
 		});

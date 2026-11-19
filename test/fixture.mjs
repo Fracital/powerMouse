@@ -14,7 +14,7 @@ import { shapes } from './shapes-server.mjs';
 import { sop } from './sop-server.mjs';
 import { stream } from './stream-server.mjs';
 import { visited } from './visited-server.mjs';
-import { wpt, wptUpgrade } from './wpt-server.mjs';
+import { wpt, wptForget, wptUpgrade } from './wpt-server.mjs';
 
 // /pages/<file> serves test/pages/<file> as is; a `<file>.headers.json`
 // next to it adds response headers (Set-Cookie, a Content-Type charset), and
@@ -170,6 +170,7 @@ const NEUTRAL = {
 	'rw.js': 'rewriteWorker.js',
 	'lib.js': 'rewriterLib.js',
 	'blk.json': 'adblock-resources.json',
+	'blk.dat': 'adblock-snapshot.dat.gz',
 	// the rewriter is the wasm core module, always required now; the content
 	// blocker's module too. neutral-host.html does not rename them, so they
 	// keep their default names under /neutral/
@@ -196,6 +197,8 @@ const transportFile = (name) =>
 // blank-loads, sw-restart suites)
 const TRANSPORT_SIBLINGS = {
 	'epoxy.wasm': 'epoxy-transport',
+	// the SIMD128 build, which the transport loads where Chrome has SIMD
+	'epoxy-simd.wasm': 'epoxy-transport',
 };
 const transportSibling = (name, pkg) =>
 	fileURLToPath(
@@ -263,6 +266,20 @@ export function startFixture(port = 8084) {
 			);
 			return res.end();
 		}
+		// /out/<name>: a file a suite made under test/out (adblock: an engine
+		// snapshot of fixture lists, which the worker reads through the
+		// transport)
+		const made = /^\/out\/([\w-]+\.dat)$/.exec(path)?.[1];
+		if (made) {
+			const file = fileURLToPath(new URL(`./out/${made}`, import.meta.url));
+			if (!existsSync(file)) {
+				res.statusCode = 404;
+				return res.end('no such file');
+			}
+			res.setHeader('content-type', 'application/octet-stream');
+			res.setHeader('cache-control', 'no-cache');
+			return res.end(readFileSync(file));
+		}
 		const neutral = /^\/neutral\/([\w.-]+)$/.exec(path)?.[1];
 		if (neutral) {
 			const file = TRANSPORTS[neutral]
@@ -282,7 +299,9 @@ export function startFixture(port = 8084) {
 						? 'application/wasm'
 						: neutral.endsWith('.json')
 							? 'application/json'
-							: 'text/javascript; charset=utf-8',
+							: neutral.endsWith('.dat')
+								? 'application/octet-stream'
+								: 'text/javascript; charset=utf-8',
 			);
 			res.setHeader('cache-control', 'no-cache');
 			return res.end(readFileSync(file));
@@ -1035,6 +1054,7 @@ export function startFixture(port = 8084) {
 		// every interface, so http://localhost:PORT/ (a second proxied origin
 		// for the suites) answers over ::1 as well as 127.0.0.1
 		server.once('error', reject);
+		server.once('close', () => wptForget(port));
 		server.listen(port, () => resolve(server));
 	});
 }

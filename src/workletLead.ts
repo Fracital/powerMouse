@@ -22,7 +22,10 @@
 /**
  * The statement a worklet module's rewrite starts with: the function of the
  * module's scope `access` names, which answers the access API, one that does
- * what the page's code does with no hooks, made on the first call.
+ * what the page's code does with no hooks, made on the first call. Its pos
+ * takes the map statement a script file's rewrite starts with
+ * (rust/rwjs/src/positions.rs) and keeps nothing: a worklet keeps no
+ * positions.
  */
 export function workletAccess(access: string): string {
 	return `function ${access}() {
@@ -226,6 +229,7 @@ export function workletAccess(access: string): string {
 		pattern: (object) => object,
 		source: (value) => value,
 		src: () => {},
+		pos: () => {},
 	};
 	return Object.freeze(api);
 })());

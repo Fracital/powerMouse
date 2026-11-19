@@ -13,6 +13,7 @@ import ErrorMessages from '../errorMessages';
 import Module from '../Module';
 import { failsToParse } from '../nativeErrors';
 import { LazyWeakMap, OwnWeakSet } from '../ownCollections';
+import { keepPositions } from '../positionParts';
 import { requestRefused } from '../requestVerdict';
 import { modifyJS } from '../rewriter';
 import { trustedScript } from '../trusted';
@@ -1555,6 +1556,10 @@ export default class AccessModule extends Module<Client> {
 						? Reflect.apply(method, holder, args)
 						: errors.call(method, holder, args, partial);
 			},
+			// a handler (`that` its this) or a javascript: URL (`that` 0) the
+			// page's policy refuses as it runs: the rewrite returns at once
+			csp: (that: unknown, code: string, statements?: 1): boolean =>
+				moduleClient.codeRuns(that, code, statements),
 			// `with (o) body` whose body says `postMessage` is printed
 			// `with (scope(o)) with (scoped()) body`: the head as written, and
 			// inside it a scope that answers that one name when the head is a
@@ -1740,6 +1745,12 @@ export default class AccessModule extends Module<Client> {
 			src: (key: unknown, subs: unknown, holder: unknown): void => {
 				if (keepEmbedded(key, subs, holder))
 					holders[holders.length] = holder as Function;
+			},
+			// the map of a script file's rewrite to the page's text, for the
+			// positions the page reads (../positionParts.ts), held as a holder is
+			pos: (url: unknown, key: unknown, map: unknown): void => {
+				if (keepPositions(url, key, map))
+					holders[holders.length] = map as Function;
 			},
 		};
 

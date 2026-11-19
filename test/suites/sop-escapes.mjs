@@ -19,6 +19,7 @@ import {
 	ok,
 	openDemo,
 	PROXY,
+	RUN,
 	sleep,
 	SLOT_PORTS,
 } from '../lib.mjs';
@@ -53,7 +54,7 @@ const KNOWN = new Map(
 const other = new URL(FIXTURE.replace('127.0.0.1', 'localhost')).origin;
 const only = process.env.SOP_ONLY ?? '';
 const pageURL = (k) =>
-	`${FIXTURE}pages/sop.html?b=${encodeURIComponent(other)}&k=${k}${
+	`${FIXTURE}pages/sop.html?b=${encodeURIComponent(other)}&k=${k}${RUN}${
 		only ? `&only=${encodeURIComponent(only)}` : ''
 	}`;
 
@@ -154,7 +155,7 @@ for (const [mode, base] of [
 // reads are judged as the worker's origin's, preflighted once
 if (!only || only.startsWith('sw/')) {
 	const swURL = (k) =>
-		`${FIXTURE}pages/deep/sopsw/sop-sw.html?b=${encodeURIComponent(other)}&k=${k}`;
+		`${FIXTURE}pages/deep/sopsw/sop-sw.html?b=${encodeURIComponent(other)}&k=${k}${RUN}`;
 	const swReport = async (page) => {
 		for (let i = 0; i < 400; i++) {
 			await sleep(250);

@@ -11,6 +11,7 @@
 // window.open()) before it calls anything of the browser's: without it the
 // navigation throws (a link's is prevented) and nothing navigates. Its top
 // level reads no global (constants and functions only).
+import { ISOLATION_PROBE } from '../../isolation';
 import { siteOf } from '../../partition';
 import { routeHTML } from '../../rewriteHTML';
 import { injectDocumentJS } from '../../routeURL';
@@ -30,6 +31,84 @@ import {
 import { foreignWindow, siteWindows } from './siteWindows';
 
 type Context = typeof globalThis;
+
+/**
+ * The browser's rule for an about:blank a page navigates a frame to
+ * (src/isolation.ts IsolationEngine `blank`: true, the page's origin), as
+ * the service worker said, asked once per bundle when a page first does
+ */
+let blankRule: boolean | Promise<boolean> | undefined;
+
+/**
+ * Make `then`, a navigation of `target` to `destination`, once its next
+ * document's origin is decided: for about:blank in a frame whose parent is
+ * of another origin than this document, this document's where the browser
+ * makes it so (its parent records it, DocumentClient navigatedBlank: the
+ * bundle that injects it takes it for its creator, and the parent's realm
+ * reaches it no more than natively), else the parent's. Asked of the
+ * service worker the first time, which delays this navigation by its
+ * answer (natively it commits a moment later anyway)
+ */
+function blankDecided(
+	nav: OtherNavigation,
+	target: Context,
+	destination: URL,
+	replace: boolean,
+	cause: OtherCause | null,
+	then: () => void,
+) {
+	const client = nav.client;
+	if (destination.protocol !== 'about:' || destination.pathname !== 'blank')
+		return then();
+	const parent = client.parentClientOf(target);
+	if (!parent) return then();
+	const mark = (rule: boolean) => {
+		const mine =
+			rule &&
+			parent !== client &&
+			!client.sandboxedOpaque &&
+			(parent.sandboxedOpaque || parent.origin !== client.origin);
+		parent.navigatedBlank(target, mine ? client : null);
+		if (mine && !cause?.submission)
+			try {
+				// made from this document's realm, with its own Location's
+				// member: the browser takes this document for the initiator,
+				// whose base URL the about:blank takes on, as natively (made from
+				// the window's realm, it took its parent's)
+				if (cause)
+					nav
+						.clientOf(target)
+						?.navigatedBy?.(destination.href, cause.user, null);
+				const own = client.global.location;
+				const member = (
+					replace
+						? Reflect.getOwnPropertyDescriptor(own, 'replace')?.value
+						: Reflect.getOwnPropertyDescriptor(own, 'href')?.set
+				) as (url: string) => void;
+				Reflect.apply(member, Reflect.get(target, 'location'), [
+					destination.href,
+				]);
+				return;
+			} catch (error) {
+				// the window went away
+			}
+		then();
+	};
+	if (typeof blankRule === 'boolean') return mark(blankRule);
+	const asker = nav.voucher() ?? client;
+	blankRule ??= asker
+		.nativeFetch(
+			`${asker.global.location.origin}${asker.directory}${ISOLATION_PROBE}/b`,
+			{ cache: 'no-store' },
+		)
+		.then((response) => response.json())
+		.then(
+			(rule) => (blankRule = rule !== false),
+			// (Chrome's, as the worker decides when it cannot ask)
+			() => (blankRule = true),
+		);
+	void blankRule.then(mark);
+}
 
 /** what the Context module hands over: its client and its view of the windows */
 export interface OtherNavigation {
@@ -448,7 +527,10 @@ export function navigateOther(
 			false,
 		);
 		if (submission) submission(target, null, routed);
-		else target.location.replace(routed);
+		else
+			blankDecided(nav, target, destination, member === 'replace', cause, () =>
+				target.location.replace(routed),
+			);
 		return;
 	}
 	const reason = refusal(nav, target, destination);
@@ -506,7 +588,8 @@ export function navigateOther(
 			// the window went away
 		}
 	};
-	if (!/^https?:$/.test(destination.protocol)) return go();
+	if (!/^https?:$/.test(destination.protocol))
+		return blankDecided(nav, target, destination, replace, cause, () => go());
 	// a navigation to a fragment of the target's document is synchronous
 	// and sends no request, as natively (a navigation the page makes
 	// after it, or a javascript: URL's document, sees the fragment)

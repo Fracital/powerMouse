@@ -17,14 +17,25 @@ debug = false
 strip = true
 
 # oxc's parser (with its lexer, a third of a script's rewrite at opt-level
-# z) is built for speed, everything else for size: on the bench corpus a
-# rewrite takes about 11% less time for 123 KB more of core.wasm (25 KB
-# more brotli). Building the rewriter's walk (rwjs) at "s" as well is
-# about 7% less time again for 82 KB more (15 KB brotli), but V8 compiles
-# a module's functions on their first call, and its larger functions add
-# 3 to 8 ms to each thread's first rewrite after a compile (a top
-# document's, the service worker's) against about 1 ms for the parser's.
+# z) is built for speed: on the bench corpus a rewrite takes about 11% less
+# time for 123 KB more of core.wasm (25 KB more brotli). So are the
+# rewriter's walk (rwjs, all but its linker and its printer, which run
+# rarely and are built for size by `#[optimize(size)]`) and the edits it
+# makes (edits): over the site corpus (4,018 scripts, 323 MB) through the
+# rewrite worker's glue a rewrite takes 8.3% less time, the twelve largest
+# scripts 9.9% less, for 171,665 bytes more (27,413 brotli). V8 compiles a
+# module's function on its first call: the first rewrite after a compile
+# takes about 1 ms longer with the larger functions (a 5 KB script, 6.6 ms
+# against 7.8; a 204 KB one 13.9 against 14.3 more than its second). At
+# "s" the walk saves 7% for 105 KB; everything else, the CSS scanner and
+# the suffix lookup among it, stays at z.
 [profile.release.package.oxc_parser]
+opt-level = 3
+
+[profile.release.package.rwjs]
+opt-level = 3
+
+[profile.release.package.edits]
 opt-level = 3
 
 # str0m-rust-crypto 0.7.0 as published, minus dimpl's `rcgen` feature: it

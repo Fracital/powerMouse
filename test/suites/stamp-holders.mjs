@@ -11,7 +11,15 @@
 // writer reads it natively, since another document's read may lag
 // natively); the stamps are counted in the same-origin mode, where the
 // demo's own page is a document of the proxy origin and hears them.
+//
+// Then a page whose pagehide listener reads the store and its cookies after
+// STomp's realm left the lists (YouTube's does) is reloaded: the realm it
+// leaves stays off them, so the reloaded page is the one realm on each list
+// and its writes take no synchronous round trip. Every reload of YouTube
+// put one more realm on the lists for good, and the next document's every
+// write was a round trip.
 import {
+	bridgeRequests,
 	done,
 	FIXTURE,
 	HOST,
@@ -113,6 +121,79 @@ for (const [mode, base] of [
 			`${mode}: writes while the frame holds copies stamp`,
 			between('frame', 'gone') > 0,
 			`${between('frame', 'gone')} stamps`,
+		);
+	}
+	await page.close();
+}
+
+const reloadTarget = `${FIXTURE}pages/stamp-holders-reload.html`;
+const WRITES = ['setItem', 'removeItem', 'clear'];
+async function reloadReport(page, loads) {
+	for (let i = 0; i < 80; i++) {
+		await sleep(250);
+		for (const frame of page.frames()) {
+			const value = await frame.evaluate(() => window.__shr).catch(() => null);
+			if (value?.done && value.loads === loads) return value;
+		}
+	}
+	return null;
+}
+for (const [mode, base] of [
+	['same-origin', PROXY],
+	['isolated', HOST],
+]) {
+	const page = await openDemo(browser, base);
+	let step = '';
+	page.on('console', (message) => {
+		if (message.text().startsWith('STEP ')) step = message.text().slice(5);
+	});
+	const sent = [];
+	page.context().on('request', (request) => {
+		if (step === 'load2' && /\/xhr$/.test(new URL(request.url()).pathname))
+			sent.push(request);
+	});
+	await submitLanding(page, reloadTarget);
+	const first = await reloadReport(page, 1);
+	await sleep(500);
+	await page.click('#toolReload');
+	const second = await reloadReport(page, 2);
+	ok(
+		`${mode}: the page loaded and reloaded`,
+		first && second,
+		JSON.stringify({ first, second }),
+	);
+	ok(
+		`${mode}: the reloaded page reads its own writes`,
+		JSON.stringify(second?.steps) ===
+			JSON.stringify([['the page reads its own writes', [null, '9', '2']]]),
+		JSON.stringify(second?.steps),
+	);
+	const writes = [];
+	for (const request of await bridgeRequests(page, sent)) {
+		const url = request?.data?.url;
+		const route = url && new URL(url).pathname.split('/').at(-1);
+		if (WRITES.includes(route)) writes.push(route);
+	}
+	ok(
+		`${mode}: the reloaded page's thirty writes take no synchronous round trip`,
+		writes.length === 0,
+		JSON.stringify(writes),
+	);
+	if (mode === 'same-origin') {
+		// the demo's page is a document of the proxy origin: the lists are
+		// in its localStorage
+		const lists = await page.evaluate(() =>
+			Object.keys(localStorage)
+				.filter((key) => key.startsWith('$stomp$held:'))
+				.map((key) => [key, localStorage.getItem(key)]),
+		);
+		const fixture = new URL(FIXTURE).hostname;
+		const ours = lists.filter(([key]) => key.includes(fixture));
+		ok(
+			`${mode}: after the reload, one realm is on each list`,
+			ours.length >= 2 &&
+				ours.every(([, value]) => value && value.split(' ').length === 1),
+			JSON.stringify(ours),
 		);
 	}
 	await page.close();

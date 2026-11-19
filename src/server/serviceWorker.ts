@@ -85,9 +85,11 @@ import { suffixListPin } from '../wasm/suffix';
 import {
 	adoptModules,
 	heldModules,
+	modulesComing,
 	SERVING_MEMORY_LIMIT,
 	setMemoryLimit,
 } from '../wasm/thread';
+import { allowApartAgent, apartClient } from './apartAgent';
 import { knownOriginOf, knownTopSiteOf, recordBlobOrigin } from './blobOrigins';
 import { Blocker, heardBlockerBytes } from './blocker';
 import { memoryCache } from './cache';
@@ -196,6 +198,8 @@ interface ControllerRef {
 	slots?: Map<string, string>;
 	/** this origin is a slot of the site pool (its documents ask for an agent cluster of their own) */
 	slot?: boolean;
+	/** lets go of the wait for the modules its handshake's port brings (portModules) */
+	dropModules?: () => void;
 }
 
 /**
@@ -247,12 +251,54 @@ const SLOT_MEMORY_LIMIT = 16 * 1024 * 1024;
  */
 const remoteBlockers = new Map<string, RemoteBlocker>();
 
+/** the time a handshake's modules get to follow on its port (ControllerInitMessage.modulesOnPort) */
+const PORT_MODULES_MS = 10000;
+/**
+ * The modules a handshake's port brings first (a CONTROLLER_MODULES),
+ * adopted as the handshake's own are (heldModules waits for them);
+ * nothing when the port closes or brings none in PORT_MODULES_MS. The
+ * function returned lets the wait go when this worker closes the port
+ * itself (forget): a port closed at this end hears no close, and a
+ * registration replaced at once kept the blocker's first build waiting
+ */
+function portModules(port: MessagePort): () => void {
+	let drop = () => {};
+	const adopted = new Promise<void>((resolve) => {
+		const stop = () => {
+			port.removeEventListener('message', take);
+			port.removeEventListener('close', none);
+			clearTimeout(timer);
+		};
+		const none = () => {
+			stop();
+			resolve();
+		};
+		const take = (event: MessageEvent) => {
+			const message = (event.data as Record<string, unknown> | null)?.[
+				CONTROLLER_MODULES
+			] as ControllerModulesMessage | undefined;
+			if (typeof message?.modules !== 'object' || message.modules === null)
+				return;
+			stop();
+			heardBlockerBytes(message.modules);
+			resolve(adoptModules(message.modules));
+		};
+		const timer = setTimeout(none, PORT_MODULES_MS);
+		port.addEventListener('message', take);
+		port.addEventListener('close', none);
+		drop = none;
+	});
+	modulesComing(adopted);
+	return drop;
+}
+
 function registerController(
 	{
 		directory,
 		config: given,
 		rewritePool,
 		modules,
+		modulesOnPort,
 		adblock,
 		standby,
 		codecKey,
@@ -278,6 +324,8 @@ function registerController(
 	// compiled behind the handshake, the JavaScript rewriters answer until then
 	heardBlockerBytes(modules);
 	void adoptModules(modules);
+	const dropModules =
+		modulesOnPort && ports[0] ? portModules(ports[0]) : undefined;
 	// the handshake's ports: the rpc's, the transport's when it lives in the
 	// controller's worker, then one per rewrite worker
 	const poolPorts =
@@ -387,6 +435,7 @@ function registerController(
 		// (the rpc is made below; nothing asks before a request arrives)
 		() => rpc.call('isolationEngine', undefined),
 		() => rpc.call('blobProbe', undefined),
+		(client) => void rpc.call('isolationWanted', client).catch(() => {}),
 	);
 
 	const rpc = new RpcHelper<SWbound, Controllerbound>(
@@ -407,6 +456,9 @@ function registerController(
 			},
 			rules: async (rules) => {
 				(await server).setRules(rules);
+			},
+			apartAgent: async ({ token, script }) => {
+				allowApartAgent(token, script);
 			},
 			clearCache: async () => {
 				await (await server).clearCache();
@@ -479,6 +531,9 @@ function registerController(
 			hostReload: async (mode) => {
 				(await server).hostReloaded(mode);
 			},
+			historyStep: async (url) => {
+				if (typeof url === 'string') (await server).historyStepped(url);
+			},
 			// the controller shook hands again (with this worker or another):
 			// this channel answers what is in flight on it, then closes
 			retire: async () => {
@@ -547,7 +602,12 @@ function registerController(
 	// which run of the worker has this controller: its revive, on its way or
 	// still to come, is not for it (a controller of an earlier build has no
 	// such method and checks over the port instead)
-	rpc.call('hello', { instance: INSTANCE }).catch(() => {});
+	rpc
+		.call('hello', {
+			instance: INSTANCE,
+			...(modulesOnPort ? { portModules: true } : {}),
+		})
+		.catch(() => {});
 
 	const ref: ControllerRef = {
 		directory,
@@ -561,6 +621,7 @@ function registerController(
 		owner: client,
 		...(token !== undefined ? { token } : {}),
 		serial: ++serials,
+		...(dropModules ? { dropModules } : {}),
 		// a slot's worker, or the hub's (whose documents of a site with a
 		// slot leave for it too)
 		...(slot || pooled ? { slots: new Map<string, string>() } : {}),
@@ -573,6 +634,7 @@ function registerController(
 			serviceWorkers.setEventDelay(config.serviceWorkerEventDelay);
 	});
 	controllers.set(directory, ref);
+	closed.delete(directory);
 	for (const wake of [...registrationWaiters]) wake();
 	// the controller's side of the port went away (it shook hands again over
 	// a new channel; Chrome does not fire this when the tab itself goes, the
@@ -711,7 +773,42 @@ function forget(ref: ControllerRef, reason: string) {
 	ref.rpc.abort(reason);
 	ref.transport.close(reason);
 	ref.pool?.close();
+	ref.dropModules?.();
 	ref.port.close();
+}
+
+/**
+ * The controllers whose tab said it is going (CONTROLLER_CLOSE), by
+ * address, for CLOSED_MS. Chrome runs the host page's pagehide before its
+ * frames', so what a proxied document asks as it unloads comes after the
+ * close: a page's storage read in its pagehide (Twitch's) found no
+ * controller, went to the host's server and spun to the bridge's 10 s limit,
+ * on the renderer the reloaded host page needed to commit (a reload, a hard
+ * one most often, waited 10 s with nothing on screen), and its writes there
+ * were lost. A document's request at such an address is still answered by
+ * its controller's server, whose transport is closed: what needs the
+ * network fails at once. A navigation to it is an orphan's, as before.
+ */
+const closed = new Map<string, ControllerRef>();
+const CLOSED_MS = 15000;
+
+function closeController(ref: ControllerRef) {
+	forget(ref, 'Controller closed');
+	closed.set(ref.directory, ref);
+	setTimeout(() => {
+		if (closed.get(ref.directory) === ref) closed.delete(ref.directory);
+	}, CLOSED_MS);
+}
+
+/** the closed controller that still answers a document's `request` at `pathname` (closed) */
+function closedFor(
+	request: Request,
+	pathname: string,
+): ControllerRef | undefined {
+	if (request.mode === 'navigate') return undefined;
+	for (const ref of closed.values())
+		if (pathname.startsWith(ref.directory)) return ref;
+	return undefined;
 }
 
 /** the longest a registration being let go keeps a request in flight waiting before it closes */
@@ -948,7 +1045,7 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 	if (
 		address !== null &&
 		!controllers.has(address) &&
-		Date.now() - STARTED_AT < REVIVE_HOLD_MS
+		Date.now() - reviveFrom < REVIVE_HOLD_MS
 	) {
 		event.waitUntil(
 			registered(() => controllers.has(address)).then(() =>
@@ -995,16 +1092,17 @@ function handleMessage(event: ExtendableMessageEvent) {
 		)
 			return;
 		// its partition is its creator's, read from the creator's route
-		// (never from the message)
+		// (never from the message, but for a first-party creator's `^`,
+		// LoadGrantMessage)
 		const route = controllers.get(message.directory)?.ready?.routeOf(source);
 		let partition = '';
 		try {
-			if (route)
-				partition = routePartition(
-					route.resource,
-					new URL(route.url).origin,
-					route.codec,
-				);
+			if (route) {
+				const origin = new URL(route.url).origin;
+				partition = routePartition(route.resource, origin, route.codec);
+				if (message.cross === true && partition === '')
+					partition = `^${schemefulSite(origin, publicSuffix)}`;
+			}
 		} catch (error) {
 			// not a URL: first-party
 		}
@@ -1016,6 +1114,9 @@ function handleMessage(event: ExtendableMessageEvent) {
 				? { blob: message.blob, client: (event.source as Client).id }
 				: {}),
 			...(message.blob && message.isolated === true ? { isolated: true } : {}),
+			// (its creator is in the cluster the proxy's Document-Isolation-Policy
+			// isolates: so is it)
+			...(apartClient((event.source as Client).id) ? { apart: true } : {}),
 			...(partition ? { partition } : {}),
 		});
 	} else if (LOAD_CHANNEL in data) {
@@ -1082,22 +1183,6 @@ function handleMessage(event: ExtendableMessageEvent) {
 				}
 			})(),
 		);
-	} else if (SRCDOC_CLAIM in data) {
-		// from the about:srcdoc client itself (Chrome reports its URL as
-		// empty until the document is parsed)
-		const message = data[SRCDOC_CLAIM] as SrcdocMessage;
-		const source = event.source instanceof Client ? event.source : null;
-		if (
-			!message ||
-			typeof message.token !== 'string' ||
-			(message.token !== '' && !INLINE_TOKEN.test(message.token)) ||
-			!source ||
-			source.type !== 'window' ||
-			source.frameType !== 'nested' ||
-			(source.url !== '' && !source.url.startsWith('about:srcdoc'))
-		)
-			return;
-		claim(message.token, source.id);
 	} else if (BLOB_MINTED in data) {
 		// from a routed document of that controller, for a blob: URL of this
 		// origin; the origin recorded is the document's own real one, never
@@ -1123,13 +1208,20 @@ function handleMessage(event: ExtendableMessageEvent) {
 			// and its partition, from its route: the worker started from it
 			// is in it too
 			const route = ready.routeOf(source);
+			const partition = route
+				? routePartition(route.resource, origin, route.codec)
+				: null;
 			recordBlobOrigin(
 				message.url,
 				origin,
 				(event.source as Client).id,
-				route
-					? partitionSite(routePartition(route.resource, origin, route.codec))
-					: null,
+				// (one a document the client's realm made minted, in the
+				// partition a load grant's `^` names: only from a first-party one)
+				message.cross === true && partition === ''
+					? schemefulSite(origin, publicSuffix)
+					: partition === null
+						? null
+						: partitionSite(partition),
 			);
 		} catch (error) {
 			// not a URL: nothing to record
@@ -1527,7 +1619,7 @@ function handleMessage(event: ExtendableMessageEvent) {
 		// page is a client too, and must not be able to kill its host's)
 		const { directory } = data[CONTROLLER_CLOSE] as ControllerCloseMessage;
 		const ref = controllers.get(directory);
-		if (ref && ref.owner === sender) forget(ref, 'Controller closed');
+		if (ref && ref.owner === sender) closeController(ref);
 	} else if (BLOCKER_SERVE in data) {
 		// the hub of a site pool: from the registering tab
 		// only, a port on which a slot's worker asks this worker's engine
@@ -2099,6 +2191,16 @@ function originKeyed(response: Response): Response {
 
 /** when this worker (re)started: its first moments are the revive window */
 const STARTED_AT = Date.now();
+/**
+ * When the revive window began: the start, and again the activation. A new
+ * build's worker starts when it installs and may wait long before it
+ * activates (Chrome activates it once the old one has no event in
+ * progress); from then on every controller's address is its, and none has
+ * shaken hands with it yet. The window from its start was long over, and
+ * what the pages asked before their controller's handshake reached it went
+ * to the host's server (a frame's whoami, its scripts, its storage calls).
+ */
+let reviveFrom = STARTED_AT;
 /** this run of the worker, to its controllers (ReviveMessage) */
 const INSTANCE = `${STARTED_AT.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 /**
@@ -2125,7 +2227,7 @@ function answerFor(
 	event: FetchEvent,
 	pathname: string,
 ): Promise<Response> | null {
-	const ref = controllerFor(pathname);
+	const ref = controllerFor(pathname) ?? closedFor(event.request, pathname);
 	if (ref) {
 		// the server is still opening its databases: decide once it's up
 		if (ref.ready && !ref.ready.router.willRoute(event.request.url))
@@ -2160,7 +2262,7 @@ async function heldForRevive(
 
 /** resolves once `there()` holds (looked at with every registration), or when the revive window ends */
 async function registered(there: () => boolean): Promise<void> {
-	const deadline = STARTED_AT + REVIVE_HOLD_MS;
+	const deadline = reviveFrom + REVIVE_HOLD_MS;
 	while (!there() && Date.now() < deadline)
 		await new Promise<void>((resolve) => {
 			const wake = () => {
@@ -2210,7 +2312,7 @@ async function answerLink(event: FetchEvent, scope: string): Promise<Response> {
 			status: 307,
 			headers: { location: back, 'cache-control': 'no-store' },
 		});
-	const deadline = STARTED_AT + REVIVE_HOLD_MS;
+	const deadline = reviveFrom + REVIVE_HOLD_MS;
 	while (!scopeControllers(scope).length && Date.now() < deadline)
 		await new Promise<void>((resolve) => {
 			const wake = () => {
@@ -2580,9 +2682,40 @@ async function sweepBundles() {
 	}
 }
 
+/**
+ * An about:srcdoc client's claim (SRCDOC_CLAIM): a request of its own, so
+ * its client is the document's (Chrome reports its URL as empty until the
+ * document is parsed)
+ */
+function srcdocClaim(event: FetchEvent, pathname: string): boolean {
+	const ref = controllerFor(pathname);
+	const prefix = `${ref?.directory}${SRCDOC_CLAIM}/`;
+	const token = pathname.slice(prefix.length);
+	if (
+		!ref ||
+		!pathname.startsWith(prefix) ||
+		(token !== '' && !INLINE_TOKEN.test(token))
+	)
+		return false;
+	event.respondWith(
+		(async () => {
+			const source = await clients.get(event.clientId);
+			if (
+				source?.type === 'window' &&
+				(source as WindowClient).frameType === 'nested' &&
+				(source.url === '' || source.url.startsWith('about:srcdoc'))
+			)
+				claim(token, source.id);
+			return new Response(null, { status: 204 });
+		})(),
+	);
+	return true;
+}
+
 self.addEventListener('fetch', (event: FetchEvent) => {
 	const { pathname, search } = new URL(event.request.url);
 	if (documentBundle(event, pathname, search)) return;
+	if (srcdocClaim(event, pathname)) return;
 	noteRequest(event.request, event.clientId);
 	const unmarked = unmarkHomed(event.request);
 	if (unmarked) {
@@ -2600,18 +2733,46 @@ self.addEventListener('fetch', (event: FetchEvent) => {
 	// waits for it, before another controller could take it over as an orphan
 	if (
 		!controllerFor(pathname) &&
-		Date.now() - STARTED_AT < REVIVE_HOLD_MS &&
+		!closedFor(event.request, pathname) &&
+		Date.now() - reviveFrom < REVIVE_HOLD_MS &&
 		addressShaped(pathname)
 	) {
 		event.respondWith(heldForRevive(event, pathname));
 		return;
 	}
 	const answer = answerFor(event, pathname);
-	if (answer) event.respondWith(answer);
+	if (answer)
+		event.respondWith(
+			event.request.mode === 'navigate' ? lasting(event, answer) : answer,
+		);
 	// the site pool: a slot's navigation whose agent is gone
 	else if (event.request.mode === 'navigate' && addressShaped(pathname))
 		event.respondWith(unclaimed(event.request, pathname));
 });
+
+/**
+ * A navigation's answer, whose body this worker goes on writing once it is
+ * handed over (the rewriter streams the document): the event lasts until
+ * the body is written. Chrome activates a waiting worker the moment the
+ * active one has no event in progress, and stops the old one there and
+ * then: a document it was still writing never ended, and its frame showed
+ * nothing for good.
+ */
+function lasting(
+	event: FetchEvent,
+	answer: Promise<Response>,
+): Promise<Response> {
+	return answer.then((response) => {
+		if (!response.body || response.type !== 'default') return response;
+		const { readable, writable } = new TransformStream<Uint8Array>();
+		event.waitUntil(response.body.pipeTo(writable).catch(() => {}));
+		return new Response(readable, {
+			status: response.status,
+			statusText: response.statusText,
+			headers: response.headers,
+		});
+	});
+}
 
 self.addEventListener('install', () => {
 	self.skipWaiting();
@@ -2626,6 +2787,7 @@ self.addEventListener('install', () => {
 // not be trusted): the cache falls back to the build in its key and is
 // dropped on every activation, as it was before.
 self.addEventListener('activate', (event: ExtendableEvent) => {
+	reviveFrom = Date.now();
 	event.waitUntil(
 		Promise.all([
 			self.clients.claim(),
@@ -2638,7 +2800,13 @@ self.addEventListener('activate', (event: ExtendableEvent) => {
 });
 
 // This script only runs again when the worker was terminated and restarted.
-// Nothing in `controllers` survived, so ask every client to re-register.
+// Nothing in `controllers` survived, so ask every client to re-register, as
+// soon as the script has run: whatever woke the worker (a navigation, a
+// host's call) waits for that handshake. A controller whose own handshake
+// woke the worker takes the revive while it waits for that handshake's
+// hello and finds it is the same run (src/controller/index.ts), so an early
+// revive asks nothing twice. (It went out 100 ms later, and every load
+// after Chrome stopped an idle worker waited for it.)
 setTimeout(async () => {
 	for (const client of await self.clients.matchAll({
 		includeUncontrolled: true,
@@ -2646,4 +2814,4 @@ setTimeout(async () => {
 		client.postMessage({
 			[SW_REVIVE]: { instance: INSTANCE } satisfies ReviveMessage,
 		});
-}, 100);
+}, 0);

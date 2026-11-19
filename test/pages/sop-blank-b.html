@@ -1,0 +1,41 @@
+<!doctype html>
+<title>SOP BLANK B</title>
+<body>
+	<script>
+		// Another site's document with a child frame (sop-escapes and
+		// sop-partitions suites), which its parent navigates to about:blank:
+		// it tells its parent of each load of the child, passes on what a
+		// document in the child posts it, and says on request what it reads of
+		// the child (natively, nothing in Chrome and Firefox, whose
+		// about:blank is the navigating page's).
+		window.secretOfB = 'B';
+		const child = document.createElement('iframe');
+		let loads = 0;
+		child.onload = () => parent.postMessage({ sopBlankLoads: ++loads }, '*');
+		const read = (get) => {
+			try {
+				const value = get();
+				return value === undefined || value === null ? String(value) : value;
+			} catch (error) {
+				return error.name;
+			}
+		};
+		addEventListener('message', (event) => {
+			if (event.data?.sopPart) parent.postMessage(event.data, '*');
+			if (event.data !== 'sopBlankRead') return;
+			parent.postMessage(
+				{
+					sopBlankRead: {
+						contentDocument: read(() => child.contentDocument?.URL),
+						document: read(() => child.contentWindow.document.URL),
+						secret: read(() => child.contentWindow.secretOfA),
+						body: read(() => child.contentWindow.document.body.textContent),
+						origin: read(() => child.contentWindow.origin),
+					},
+				},
+				'*',
+			);
+		});
+		document.body.append(child);
+	</script>
+</body>

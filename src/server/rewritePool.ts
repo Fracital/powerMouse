@@ -6,7 +6,13 @@
 // with the page or a crash) or the worker took longer than the timeout. A
 // port that closed or timed out is not used again.
 import type { Config } from '../config';
-import { RewrittenBy, ScriptSource, ScriptType } from '../rewriteJS';
+import type { PackedRewrite } from '../prewrite';
+import {
+	RewrittenBy,
+	SCRIPT_FILE,
+	ScriptSource,
+	ScriptType,
+} from '../rewriteJS';
 import {
 	REWRITE_READY,
 	REWRITE_RPC,
@@ -157,7 +163,10 @@ export class RewritePool {
 		);
 		// the worker says the wasm module rewrote it (the only backend)
 		if (answer === null || typeof answer === 'string') return answer;
-		if (told) told.by = answer.by;
+		if (told) {
+			told.by = answer.by;
+			if (answer.map) told.map = answer.map;
+		}
 		return answer.output;
 	}
 	/**
@@ -217,6 +226,8 @@ export class RewritePool {
 	/**
 	 * A document's inline script, rewritten by the worker with the least in
 	 * hand (with its preamble). Null when none is ready or answered in time.
+	 * `told` has the map of the output the rewrite handed over apart
+	 * (src/prewrite.ts).
 	 */
 	async rewriteInline(
 		script: string,
@@ -224,8 +235,85 @@ export class RewritePool {
 		config: Config,
 		type: ScriptType,
 		preamble: string,
+		told?: RewrittenBy,
 	): Promise<string | null> {
-		return this.#rewriteOne(script, url, config, type, undefined, preamble);
+		return this.#rewriteOne(
+			script,
+			url,
+			config,
+			type,
+			{ apart: true },
+			preamble,
+			told,
+		);
+	}
+	/**
+	 * A document's inline script, rewritten with its preamble (a classic
+	 * one's) and packed for the table (packRewrite under the access helper
+	 * `access`) by the worker with the least in hand: the worker makes the
+	 * preamble and cuts it and the holder out, so this thread never copies,
+	 * hashes or compares the script's text and its rewrite (CNN's 2.46 MB
+	 * inline script and its 7.9 MB rewrite held it 60 ms). Null when none is
+	 * ready or answered in time, or the rewrite is the script as written.
+	 */
+	async packInline(
+		script: string,
+		url: StompURL,
+		config: Config,
+		type: ScriptType,
+		access: string,
+		told?: RewrittenBy,
+	): Promise<PackedRewrite | null> {
+		const answer = await this.#call(
+			'rewrite',
+			{
+				script,
+				url: url.toString(),
+				directory: url.directory,
+				codecKey: url.codec.key,
+				config,
+				type,
+				scopes: routeScopeList(),
+				...(url.mark === undefined ? {} : { mark: url.mark }),
+				source: { apart: true },
+				pack: access,
+			},
+			script.length,
+		);
+		// (unpacked: the rewrite is the script as written, or a worker of an
+		// older bundle made it without the preamble it was not sent; the page
+		// rewrites it then)
+		if (answer === null || typeof answer === 'string' || !answer.packed)
+			return null;
+		if (told) {
+			told.by = answer.by;
+			if (answer.map) told.map = answer.map;
+		}
+		return [answer.output, ...answer.packed];
+	}
+	/**
+	 * A handler of a document's markup (an onclick's text), rewritten by the
+	 * worker with the least in hand as the client rewrites it (`preamble`,
+	 * src/prewrite.ts handlerPreamble): the text is kept by the client, so
+	 * the output holds no holder statement. Null when none is ready or
+	 * answered in time; `told` has the map handed over apart.
+	 */
+	async rewriteHandler(
+		script: string,
+		url: StompURL,
+		config: Config,
+		preamble: string,
+		told?: RewrittenBy,
+	): Promise<string | null> {
+		return this.#rewriteOne(
+			script,
+			url,
+			config,
+			'generic',
+			{ apart: true, text: null },
+			preamble,
+			told,
+		);
 	}
 	/**
 	 * The script rewritten by a worker, or null when the caller must rewrite
@@ -247,7 +335,7 @@ export class RewritePool {
 			url,
 			config,
 			type,
-			undefined,
+			SCRIPT_FILE,
 			preamble,
 			told,
 		);

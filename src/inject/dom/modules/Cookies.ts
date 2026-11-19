@@ -443,8 +443,8 @@ export class CookiesModule extends Module<DocumentClient> {
 		const syncModule = client.getModule(SyncModule)!;
 		client.cookieReads++;
 		// on the stamp's list before the copy is taken: a write by another
-		// realm from now on stamps
-		if (this.#store) hold(this.#store, this.#versionKey);
+		// realm from now on stamps (none while it is off the lists: no copy)
+		const keep = !this.#store || hold(this.#store, this.#versionKey);
 		// the jar answers without its HttpOnly cookies (the route filters)
 		const answer = syncModule.tryJsonAPI(
 			BEACON_QUOTA,
@@ -456,7 +456,7 @@ export class CookiesModule extends Module<DocumentClient> {
 			view.known = this.#withUnsettled(
 				(answer.value as FloatingCookie[]).filter((cookie) => !cookie.httpOnly),
 			);
-			view.fresh = true;
+			view.fresh = keep;
 			view.version = version;
 			view.turn = turn;
 			return this.#show(view.known);

@@ -93,6 +93,8 @@ export const nativeOpener = Reflect.getOwnPropertyDescriptor(
 // Chrome's console message for a navigation it refuses is the browser's own:
 // printed with the console's native method, which no page hook sees
 export const nativeConsoleError = console.error;
+// (a report-only policy's is the console's info)
+export const nativeConsoleInfo = console.info;
 
 /** whether a frame's window is still on the initial about:blank its creation gave it */
 export function initialBlank(context: typeof globalThis): boolean {
@@ -229,6 +231,16 @@ interface ParsedPostMessageArgs {
 	transfer: Transferable[];
 	targetOrigin: string;
 }
+
+/** the error of `global`'s postMessage for a target origin that is no URL */
+export const invalidTargetOrigin = (
+	global: typeof globalThis,
+	target: string,
+): DOMException =>
+	new global.DOMException(
+		`Failed to execute 'postMessage' on 'Window': Invalid target origin '${target}' in a call to 'postMessage'.`,
+		'SyntaxError',
+	);
 
 /** whether `value` is a window, of any origin, as `client`'s realm reads it */
 export function isWindow(
@@ -601,14 +613,7 @@ export default class ContextModule extends Module<DocumentClient> {
 						try {
 							return new URL(target).origin;
 						} catch (error) {
-							throw withStack(
-								new moduleClient.global.DOMException(
-									"Failed to execute 'postMessage' on 'Window': Invalid target origin '" +
-										target +
-										"' in a call to 'postMessage'.",
-									'SyntaxError',
-								),
-							);
+							throw withStack(invalidTargetOrigin(moduleClient.global, target));
 						}
 					})();
 		return wanted !== 'null' && wanted === receiverOrigin;
@@ -741,10 +746,16 @@ export default class ContextModule extends Module<DocumentClient> {
 		// a child that runs no STomp yet (an iframe still on its initial
 		// about:blank) is still that child, of the frame's origin: never the
 		// top, which a walk down the tree would visit again forever
-		const restrictChild = (child: Context) =>
-			isStomp(child, moduleClient.names.client)
+		// (a window that runs nothing yet on an about:blank this page or
+		// another of its origin navigated it to is that page's: injected
+		// first, as reading a child's contentWindow injects it)
+		const restrictChild = (child: Context) => {
+			if (!isStomp(child, moduleClient.names.client))
+				moduleClient.navigatorOf(child)?.injectNavigated?.(child);
+			return isStomp(child, moduleClient.names.client)
 				? this.newRestricted(child)
 				: this.restrictOpaque(child);
+		};
 
 		const restrictedLocation = this.restrictObject('Location', {
 			replace: {
@@ -956,20 +967,47 @@ export default class ContextModule extends Module<DocumentClient> {
 				return old as Context;
 		return null;
 	}
-	#pending(context: Context, url: unknown): RestrictedContext {
-		if (this.#holds().has(context)) return context;
+	/**
+	 * Whether `url`, the document a window waits for, is an http(s) one of
+	 * another origin than this document; `opaque`: of any origin when this
+	 * document's is opaque, which no document's is the same as
+	 */
+	#foreignNext(url: unknown, opaque = false): boolean {
 		let target: URL | undefined;
 		try {
 			target = this.client.encodingParse(String(url), this.client.baseHref);
 		} catch (error) {
 			// no URL: the window's own document decides
 		}
-		if (
-			target === undefined ||
-			!/^https?:$/.test(target.protocol) ||
-			sameOrigin(this.client.url.toString(), target.href)
-		)
-			return this.newRestricted(context);
+		return (
+			target !== undefined &&
+			/^https?:$/.test(target.protocol) &&
+			((opaque && this.client.originKey === null) ||
+				!sameOrigin(this.client.url.toString(), target.href))
+		);
+	}
+	/**
+	 * Whether `context`, a window on its initial about:blank this realm does
+	 * not hold as itself, waits for a document of another origin (`url`):
+	 * then nothing of this client goes into it. The browser keeps that
+	 * window for the document (every proxied site is the proxy's origin),
+	 * where natively the document gets a window of its own, so it must be
+	 * as fresh as the browser made it, and the document's own shell injects
+	 * it. Under an opaque origin (a sandbox without allow-same-origin) every
+	 * document is of another, and natively none is kept. The stand-in of
+	 * another origin's window the page gets for it then (as pending gives,
+	 * which an uninjected window would not get from newRestricted), else
+	 * null.
+	 */
+	pendingForeign(context: Context, url: unknown): RestrictedContext | null {
+		if (this.#holds().has(context) || !this.#foreignNext(url, true))
+			return null;
+		const restricted = this.restrictOpaque(context);
+		return this.#handle(context) ?? restricted;
+	}
+	#pending(context: Context, url: unknown): RestrictedContext {
+		if (this.#holds().has(context)) return context;
+		if (!this.#foreignNext(url)) return this.newRestricted(context);
 		// (the site pool too: the other site may share this document's slot,
 		// a pool of one slot or more sites than slots, and then the browser
 		// never restricts the window)
@@ -1403,6 +1441,19 @@ export default class ContextModule extends Module<DocumentClient> {
 						Reflect.get(value, 'parent') !== container
 					)
 						return value;
+					// (one whose src names another origin: left as the browser
+					// made it, the page gets its stand-in, pendingForeign. Its
+					// parent is this realm or a window of its origin it holds)
+					const element = initialBlank(value as Context)
+						? (Reflect.get(value, 'frameElement') as object | null)
+						: null;
+					const away =
+						element &&
+						this.pendingForeign(
+							value as Context,
+							frameDestination(moduleClient, element),
+						);
+					if (away) return away;
 					owner.injectChild?.(value as Context);
 					if (!(moduleClient.names.client in value)) return value;
 				} else if ((value as { window?: unknown }).window !== value)

@@ -12,9 +12,10 @@
 	// registrations it has. A blob: and a `javascript:` document it makes say
 	// which cookies their requests carry, and an image of site A (`?c=`) that
 	// may be cached says whether the HTTP cache had it already.
-	// `?role=nested` is B framed by A framed by B.
+	// `?role=nested` is B framed by A framed by B. In an about:blank document
+	// (sop-part-blank.html) the query is `window.__partQuery`.
 	(async () => {
-		const query = new URLSearchParams(location.search);
+		const query = new URLSearchParams(window.__partQuery ?? location.search);
 		const role = query.get('role');
 		const phase = query.get('phase') ?? 'before';
 		// every name starts with the run's tag (`?t=`, read back as `p`), so
@@ -50,7 +51,7 @@
 			const cross = query.get('x');
 			if (cross)
 				await fetch(
-					`${cross}/sop/r?k=part&acao=${encodeURIComponent(location.origin)}&acac=1&cookie=${encodeURIComponent(
+					`${cross}/sop/r?k=part&acao=${encodeURIComponent(self.origin)}&acac=1&cookie=${encodeURIComponent(
 						`${tag}_${role}_cross_chips=1; Path=/; SameSite=None; Secure; Partitioned`,
 					)}`,
 					{ credentials: 'include' },
@@ -71,11 +72,15 @@
 			const writable = await file.createWritable();
 			await writable.write(new Uint8Array(UNIT));
 			await writable.close();
-			// a service worker registration (scoped to a path no page here is at)
-			await settle(
-				navigator.serviceWorker.register('sop-part-sw.js', {
-					scope: `${tag}-sw-${role}`,
-				}),
+			// a service worker registration (scoped to a path no page here is
+			// at), or why there is none (an about:blank document has none)
+			out.register = await settle(
+				navigator.serviceWorker
+					.register('sop-part-sw.js', { scope: `${tag}-sw-${role}` })
+					.then(
+						() => 'registered',
+						(error) => error.name,
+					),
 				4000,
 			);
 		};
@@ -108,7 +113,7 @@
 					};
 					addEventListener('message', report);
 					const script = `fetch(${JSON.stringify(
-						`${location.origin}/sop/cookies`,
+						`${self.origin}/sop/cookies`,
 					)}).then((response) => response.json()).then((sent) => parent.postMessage({ inlineSent: ${JSON.stringify(
 						kind,
 					)}, sent, cookies: document.cookie.split('; ').map((pair) => pair.split('=')[0]) }, '*'));`;
@@ -181,11 +186,15 @@
 				locks: shown(
 					(await navigator.locks.query()).held.map((lock) => lock.name),
 				),
-				registrations: shown(
-					(await navigator.serviceWorker.getRegistrations()).map(
-						(registration) =>
-							new URL(registration.scope).pathname.split('/').pop(),
-					),
+				// (an about:blank document has none to ask for)
+				registrations: await navigator.serviceWorker.getRegistrations().then(
+					(registrations) =>
+						shown(
+							registrations.map((registration) =>
+								new URL(registration.scope).pathname.split('/').pop(),
+							),
+						),
+					(error) => error.name,
 				),
 				// the partition's own: a unit per role that wrote to it
 				estimate: {
@@ -218,7 +227,7 @@
 			// what each kind of worker sees of the stores: the document's
 			// partition, which it takes on before its own script runs
 			const blobSource = `importScripts(${JSON.stringify(
-				new URL('sop-part-list.js', location.href).href,
+				new URL('sop-part-list.js', document.baseURI).href,
 			)}); self.listStores().then(postMessage, (error) => postMessage({ error: String(error) }));`;
 			out.workers = {
 				dedicated: await fromWorker(new Worker('sop-part-dedicated.js')),

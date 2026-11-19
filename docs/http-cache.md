@@ -104,11 +104,17 @@ page.
 | a `Range` first, the 206 with no validator                                                                    | the 206 is not kept: the next GET is fetched                                                         |
 | a document, loaded again in another frame                                                                     | as a fetch                                                                                           |
 | a document, reloaded                                                                                          | as `no-cache`: `Cache-Control: max-age=0`, a 304 when it has a validator                             |
+| a document, by Back or Forward, after the page set another cookie                                             | as `force-cache`: not asked, whatever cookies were set since                                         |
 
 Chrome hands the worker a request with a conditional header of the page's
 as `cache: 'no-cache'`, and a reloaded document's too; the forward
 (`genericForward` in `src/server/rewrites.ts`) reads the mode from both.
-The conditional headers Chrome adds for what its memory cache holds (a
+A document's Back or Forward comes as `cache: 'force-cache'` (in a frame,
+which the back/forward cache never answers for, and in a tab it does not
+keep). A step the controller takes with `location.replace` (another
+frame's entries came after the frame's, `src/controller/history.ts`) is
+told to the worker before it is taken (`historyStep`), and the load
+takes the mode a traversal's has. The conditional headers Chrome adds for what its memory cache holds (a
 script, an image) are dropped before: those loads are the worker's
 MemoryCache's.
 
@@ -194,9 +200,13 @@ The http-cache suite lists it with what the proxy does (`KNOWN_BY_REASON`).
    credentials (a Cookie or an Authorization header) is given to a request
    with other credentials only once the origin has confirmed it (a 304 to
    its validator), and is fetched again when it has no validator, unless
-   the response said `public`. The entry keeps a digest of the credentials,
-   not the credentials. The digest is of the header the worker sends, which
-   it builds from the jar for each request, so it follows the jar whoever
+   the response said `public`, or the request is a document's by Back or
+   Forward (a navigation that takes a stale entry): that step shows again
+   the page its history entry showed, as natively, whatever cookies the
+   page set since (the suite's history rows). The entry keeps a digest of
+   the credentials, not the credentials. The digest is of the header the
+   worker sends, which it builds from the jar for each request, so it
+   follows the jar whoever
    wrote it: the page's script, a response, the host (`cookies.set`,
    `cookies.clear`), a page in another tab (the suite's credentials rows).
    The proxy's cache outlives what a site takes for a session, and the
@@ -220,5 +230,6 @@ Content-Encoding is of the decoded bytes.
 | what a request is given  | `HttpCache.match` (`CacheHit`)                                       |
 | the request's cache mode | `genericForward`, at the HTTP cache                                  |
 | a reload of the host     | `src/controller/hostReload.ts`                                       |
+| a step taken by replace  | `tellSteps` in `src/controller/history.ts`, `historySteps`           |
 | Clear-Site-Data          | `clearsCache`, `clearOrigin`                                         |
 | the rewrite cache's rule | `mayKeep` (not this table: its own)                                  |

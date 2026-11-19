@@ -15,6 +15,7 @@ import {
 	ok,
 	PROXY,
 	recordRequests,
+	RUN,
 	sleep,
 } from '../lib.mjs';
 
@@ -73,14 +74,19 @@ const logs = async (key) =>
 		),
 	);
 
+// the documents' keys, this run's own (lib.mjs RUN)
+const [NATIVE, FRAMED, POPUP] = ['native', 'framed', 'popup'].map(
+	(key) => `${key}${RUN}`,
+);
+
 const browser = await launch();
 const nativePage = await browser.newPage();
-await nativePage.goto(page('native'));
+await nativePage.goto(page(NATIVE));
 await sleep(4000);
 const normal = (texts) =>
-	JSON.stringify(texts).replace(/(native|framed|popup)-/g, 'K-');
+	JSON.stringify(texts).replace(/(native|framed|popup)\w*-/g, 'K-');
 const nativeTexts = normal(await nativePage.evaluate(() => window.__texts));
-const native = await logs('native');
+const native = await logs(NATIVE);
 await nativePage.close();
 console.log('native', JSON.stringify(native));
 ok(
@@ -112,12 +118,12 @@ await host.evaluate(async (url) => {
 	});
 	await controller.wait();
 	await controller.createFrame(element).go(url);
-}, page('framed'));
+}, page(FRAMED));
 await sleep(4000);
 const popup = host.context().waitForEvent('page');
 for (const frame of host.frames())
 	await frame
-		.evaluate((url) => window.__ready && window.open(url), page('popup'))
+		.evaluate((url) => window.__ready && window.open(url), page(POPUP))
 		.catch(() => null);
 const opened = await popup;
 await opened.waitForLoadState().catch(() => null);
@@ -135,8 +141,8 @@ ok(
 		proxiedTexts.every((text) => text === nativeTexts),
 	JSON.stringify({ nativeTexts, proxiedTexts }),
 );
-const framed = await logs('framed');
-const popped = await logs('popup');
+const framed = await logs(FRAMED);
+const popped = await logs(POPUP);
 console.log('framed', JSON.stringify(framed));
 console.log('popup', JSON.stringify(popped));
 const raw = recorder

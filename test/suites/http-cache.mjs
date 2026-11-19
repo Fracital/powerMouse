@@ -67,7 +67,7 @@ async function report(page) {
 
 const browser = await launch();
 
-if (only !== 'reloads' && only !== 'credentials') {
+if (!['reloads', 'credentials', 'history'].includes(only)) {
 	const nativePage = await browser.newPage();
 	await nativePage.goto(pageURL('native'));
 	const native = await report(nativePage);
@@ -247,6 +247,160 @@ if (!only || only === 'reloads') {
 			`\n      native  ${native}\n      proxied ${proxied}`,
 		);
 		await page.context().close();
+	}
+}
+
+// Back to a document made for a request with a cookie, after the page
+// set another: Chrome's Back asks its HTTP cache to take whatever entry it
+// has, however stale and whatever cookies the request carries now, so the
+// origin is not asked (the suite's browser has no back/forward cache, as
+// for a frame, whose history steps never use it). The proxy's rule for
+// other credentials (above, and the credentials rows below) is for every
+// other request: the step shows again the page its history entry showed.
+// Again after another tab added entries: the demo's Back then takes the
+// step with location.replace (src/controller/history.ts), and the
+// controller tells the worker it is a history step all the same.
+if (!only || only === 'history') {
+	const idle = (n) =>
+		`${FIXTURE}pages/http-cache.html?k=idle-${run}&only=none&n=${n}`;
+	const path = '/http-cache/history';
+	const doc = (mode) =>
+		`${FIXTURE}${path.slice(1)}?k=history-${run}&n=${mode}&cc=${encodeURIComponent('max-age=3600')}&html=1`;
+	const link = (url) => {
+		const a = document.createElement('a');
+		a.href = url;
+		document.body.append(a);
+		a.click();
+	};
+	// (each showing of a page is a new document: the last one's mark is gone)
+	const isIdle = () => {
+		if (!window.__hc?.done || window.__seen) return false;
+		return (window.__seen = true);
+	};
+	const isDoc = () => {
+		if (!/^#\d+$/.test(document.body?.textContent ?? '')) return false;
+		if (window.__seen) return false;
+		return (window.__seen = true);
+	};
+	/** the frame (of `frames()`) where `pred` holds */
+	const showing = async (frames, pred, arg) => {
+		for (let i = 0; i < 160; i++) {
+			for (const frame of frames())
+				if (await frame.evaluate(pred, arg).catch(() => false)) return frame;
+			await sleep(250);
+		}
+		throw new Error('not shown');
+	};
+	const walk = async (mode, frames, back, between) => {
+		let frame = await showing(frames, isIdle);
+		await frame.evaluate((line) => {
+			document.cookie = line;
+		}, `hch=1; path=${path}`);
+		frame.evaluate(link, doc(mode)).catch(() => {});
+		frame = await showing(frames, isDoc);
+		await frame.evaluate((line) => {
+			document.cookie = line;
+		}, `hch=2; path=${path}`);
+		frame.evaluate(link, idle('2')).catch(() => {});
+		await showing(frames, isIdle);
+		if (between) await between(link);
+		await back();
+		await showing(frames, isDoc);
+		await sleep(500);
+		const log = await (
+			await fetch(`${FIXTURE}http-cache/log?k=history-${run}`)
+		).json();
+		const asked = log[mode]?.asked ?? [];
+		return JSON.stringify([
+			asked[0] ?? 'not asked',
+			asked.slice(1).join(' / ') || 'not asked',
+		]);
+	};
+	// (the other tab: a page, then a link from it)
+	const otherTab = async (frames, open, link) => {
+		await open();
+		const frame = await showing(frames, isIdle);
+		frame.evaluate(link, idle('4')).catch(() => {});
+		await showing(frames, isIdle);
+	};
+	const variants = [
+		['', false],
+		[', after another tab added entries', true],
+	];
+	for (const [said, tabs] of variants) {
+		const name = (mode) => (tabs ? `${mode}-tabs` : mode);
+		const context = await browser.newContext();
+		const nativeTab = await context.newPage();
+		await nativeTab.goto(idle('1'));
+		let other = null;
+		const native = await walk(
+			name('native'),
+			() => [nativeTab.mainFrame(), ...(other ? [other.mainFrame()] : [])],
+			async () => {
+				await nativeTab.bringToFront();
+				await nativeTab.goBack();
+			},
+			tabs
+				? (link) =>
+						otherTab(
+							() => [other.mainFrame()],
+							async () => {
+								other = await context.newPage();
+								await other.goto(idle('3'));
+							},
+							link,
+						)
+				: null,
+		);
+		await context.close();
+		ok(
+			`natively, Back to a document made with another cookie is not asked for${said}`,
+			native === JSON.stringify(['200', 'not asked']),
+			native,
+		);
+		for (const [mode, base] of [
+			['same-origin', PROXY],
+			['isolated', HOST],
+		]) {
+			const page = await openDemo(browser, base);
+			await submitLanding(page, idle('1'));
+			const frames = () =>
+				page
+					.frames()
+					.filter((frame) => /\/stomp\/[\w-]+\/html\//.test(frame.url()));
+			const proxied = await walk(
+				name(mode),
+				frames,
+				() => page.click('#toolBack'),
+				tabs
+					? async (link) => {
+							await otherTab(
+								frames,
+								async () => {
+									await page.click('#home');
+									await sleep(500);
+									await submitLanding(page, idle('3'));
+								},
+								link,
+							);
+							// the first tab again: the tab manager, then the tab with the keyboard
+							await page.click('#recents');
+							await sleep(900);
+							for (let i = 0; i < 6; i++)
+								await page.keyboard.press('ArrowLeft');
+							await sleep(300);
+							await page.keyboard.press('Enter');
+							await sleep(900);
+						}
+					: null,
+			);
+			ok(
+				`${mode}: Back to a document made with another cookie asks the origin as natively${said}`,
+				proxied === native,
+				`\n      native  ${native}\n      proxied ${proxied}`,
+			);
+			await page.context().close();
+		}
 	}
 }
 

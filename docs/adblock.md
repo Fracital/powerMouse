@@ -78,7 +78,14 @@ runs without the blocker.
 
 With `true` or an object, the first navigation waits for the engine, for
 five seconds at the most; past that the document loads unfiltered and the
-engine serves from the moment it is built.
+engine serves from the moment it is built. With the option left out it
+waits for the engine snapshot instead (below), a second at the most. A
+document that loaded unfiltered stays so for as long as it is open, because
+a scriptlet runs before the page's first script or never: on a YouTube
+watch page every related video the user clicks is the same document, whose
+player fetches the next video's data with a `fetch` it took from a frame of
+its own while the page loaded, so a first visit that did not wait played
+the pre-roll ads of every video after the first one.
 
 ### By default
 
@@ -95,9 +102,11 @@ load`); no list is asked for and the inject installs nothing for the
   single default list that fails is left out without a line. The next
   controller to shake hands tries again. With `true` or an object the module
   and each list that fails are a `console.warn`, as before.
-- No navigation waits for the list servers, only for the engine the browser
-  stored (milliseconds). With none stored yet (a first visit, or cleared site
-  data) documents load unfiltered until the engine is built.
+- No navigation waits for the list servers. With an engine stored it serves
+  (milliseconds to load); with none (a first visit, or cleared site data)
+  the engine snapshot does (below), and a navigation waits for it a second
+  at the most. A directory that does not serve the snapshot, or one that
+  takes longer, leaves the documents before the lists' engine unfiltered.
 - The lists are downloaded after the worker's first navigation has been
   answered (and 250 ms more, for the page's first subresources), or 2 s
   after the start when no page is asked for; a refresh of a stored engine
@@ -112,8 +121,66 @@ load`); no list is asked for and the inject installs nothing for the
 
 The first handshake waits for `blocker.wasm` either way (fetched beside the
 transport's module), so serve it with the cache headers of the other files,
-and serve `adblock-resources.json` beside it. A host that renames the files
-names them in `init.assets.blocker` and `init.assets.adblockResources`.
+and serve `adblock-resources.json` and `adblock-snapshot.dat.gz` beside it.
+A host that renames the files names them in `init.assets.blocker`,
+`init.assets.adblockResources` and `init.assets.adblockSnapshot`.
+
+### The snapshot
+
+`adblock-snapshot.dat.gz` is an engine of uBlock Origin's six lists
+(`SNAPSHOT_LISTS`, `src/blocker/types.ts`), compiled and serialized by
+`blocker.wasm` as the service worker stores its own, and gzipped. A worker
+on by default with no engine stored fetches it from its own origin (never
+through the transport) with the resources, decompresses it
+(`DecompressionStream('gzip')`, in Chrome, Firefox and Safari alike), loads
+it, and serves it while it fetches the eight default lists; their engine
+replaces it once built, and is the one stored. The snapshot itself is never
+stored: a worker that starts again before the lists' engine was built loads
+it again, from the browser's HTTP cache.
+
+It is stored compressed so that it is 1.1 MB on the wire (2.5 MB
+decompressed) however the host serves `dist/`: serve it as the file it is,
+`application/octet-stream` with no `Content-Encoding` (the demo server
+does). A host that answers it with `Content-Encoding: gzip` anyway still
+works, since the browser then hands the worker the decompressed bytes and
+the worker takes bytes without gzip's magic number as they are. The
+controller asks for it as `adblock-snapshot.dat.gz?<hash of its bytes>`, so
+a host may answer that URL `Cache-Control: public, max-age=31536000,
+immutable` (the demo server does).
+
+In headless Chrome 157's service worker (2026-11-19) the decompression
+takes 9.3 to 13.9 ms and the load 4.7 to 9.2 ms (an outlier of 12.9 ms),
+against about 240 ms to compile the lists. A first visit to example.org
+through the local demo, a fresh profile each, two runs of ten of each
+alternated on a loaded machine: 333 to 752 ms (median 465) with the blocker
+and 297 to 492 ms (median 402) without it, then 261 to 493 ms (median 301)
+and 214 to 518 ms (median 276). Waiting for the lists' first build instead
+had taken 881 to 1092 ms.
+
+EasyList and EasyPrivacy are left out of it for size. uBlock Origin's lists
+carry its YouTube rules (`trusted-prevent-dom-bypass` and
+`trusted-replace-fetch-response` on `get_watch`, the `player` and `next`
+pruning) and the same 32 scriptlets for a watch page as the eight lists'
+engine; what the snapshot does not block until the lists' engine serves is
+the network rules of the two EasyLists (YouTube's `/pagead/` and
+`/api/stats/ads` beacons among them). Gzipped, the eight lists' engine was
+3.6 MB (8.6 MB raw); with brotli it was 2.84 MB, six uBlock Origin lists
+and EasyPrivacy 1.70 MB, six and EasyList 2.00 MB, uBlock Origin's filters
+and quick fixes alone 0.67 MB.
+
+`node scripts/adblock-snapshot.mjs` fetches the lists as they are now and
+writes `assets/adblock-snapshot.dat.gz` and `assets/adblock-snapshot.UPSTREAM`
+(each list's digest, the module's, the file's and the date). The snapshot
+only bridges the seconds until the worker's own build, so it is made again
+now and then, not on every build. It must be made again when
+`blocker.wasm` changes, since its serialization is the crate's: the build
+refuses a snapshot whose `UPSTREAM` names another module or another file.
+`node scripts/adblock-snapshot.mjs --check` fails once the lists are more
+than 14 days old, and the nightly workflow runs it: its `snapshot` job is
+red every night until the snapshot is made again and committed (the
+publish goes ahead, since an old snapshot still serves until the lists'
+engine does). The age is not checked by the build, so an old checkout
+builds as it did.
 
 ### A prebuilt engine
 
