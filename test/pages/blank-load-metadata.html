@@ -21,7 +21,45 @@
 		link.rel = 'stylesheet';
 		link.href = at('blank-load-metadata.css');
 		doc.head.append(link);
-		for (const name of ['blm-bg', 'blm-font']) {
+		// the same loads of another origin (localhost is another origin and
+		// site than 127.0.0.1): an image, a classic script, a stylesheet of
+		// that origin whose @import, background and font are its own; and
+		// CORS loads, a crossorigin image and module scripts (of this origin
+		// too: Chrome sends Origin for a module script's request)
+		const cross = (path) =>
+			new URL(path, `http://localhost:${location.port}/pages/`).href;
+		const ximg = doc.createElement('img');
+		ximg.src = cross('/echo-headers?k=blm-ximg');
+		doc.body.append(ximg);
+		const corsimg = doc.createElement('img');
+		corsimg.crossOrigin = 'anonymous';
+		corsimg.src = cross('/echo-headers?k=blm-corsimg');
+		doc.body.append(corsimg);
+		const socorsimg = doc.createElement('img');
+		socorsimg.crossOrigin = 'anonymous';
+		socorsimg.src = at('/echo-headers?k=blm-socorsimg');
+		doc.body.append(socorsimg);
+		const socorsscript = doc.createElement('script');
+		socorsscript.crossOrigin = 'anonymous';
+		socorsscript.src = at('/echo-headers?k=blm-socorsscript&js');
+		doc.head.append(socorsscript);
+		const xscript = doc.createElement('script');
+		xscript.src = cross('/echo-headers?k=blm-xscript&js');
+		doc.head.append(xscript);
+		for (const [key, url] of [
+			['blm-module', at],
+			['blm-xmodule', cross],
+		]) {
+			const module = doc.createElement('script');
+			module.type = 'module';
+			module.src = url(`/echo-headers?k=${key}&js`);
+			doc.head.append(module);
+		}
+		const xlink = doc.createElement('link');
+		xlink.rel = 'stylesheet';
+		xlink.href = cross('blank-load-metadata-cross.css');
+		doc.head.append(xlink);
+		for (const name of ['blm-bg', 'blm-font', 'blm-xbg', 'blm-xfont']) {
 			const div = doc.createElement('div');
 			div.className = name;
 			div.textContent = 'x';
@@ -48,6 +86,45 @@
 		const object = document.createElement('object');
 		object.data = at('/echo-headers?k=blm-object');
 		document.body.append(object);
+		// this document's own CORS loads of its own origin: a crossorigin
+		// image and a font
+		const ccorsimg = document.createElement('img');
+		ccorsimg.crossOrigin = 'anonymous';
+		ccorsimg.src = at('/echo-headers?k=blm-ccorsimg');
+		document.body.append(ccorsimg);
+		const ccorsstyle = document.createElement('link');
+		ccorsstyle.rel = 'stylesheet';
+		ccorsstyle.crossOrigin = 'anonymous';
+		ccorsstyle.href = at('/echo-headers?k=blm-ccorsstyle');
+		document.head.append(ccorsstyle);
+		const ccorsvideo = document.createElement('video');
+		ccorsvideo.crossOrigin = 'anonymous';
+		ccorsvideo.preload = 'auto';
+		ccorsvideo.src = at('/echo-headers?k=blm-ccorsvideo');
+		document.body.append(ccorsvideo);
+		const cstyle = document.createElement('style');
+		cstyle.textContent = `@font-face { font-family: blm-cfont; src: url(${JSON.stringify(at('/echo-headers?k=blm-cfont'))}); } .blm-cfont { font-family: blm-cfont; }`;
+		document.head.append(cstyle);
+		const cfont = document.createElement('div');
+		cfont.className = 'blm-cfont';
+		cfont.textContent = 'x';
+		document.body.append(cfont);
+		const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+		const use = doc.createElementNS('http://www.w3.org/2000/svg', 'use');
+		use.setAttribute('href', at('/echo-headers?k=blm-use#x'));
+		svg.append(use);
+		doc.body.append(svg);
+		const download = document.createElement('a');
+		download.download = 'blm.json';
+		download.href = at('/echo-headers?k=blm-download');
+		document.body.append(download);
+		download.click();
+		const xembed = document.createElement('embed');
+		xembed.src = cross('/echo-headers?k=blm-xembed');
+		document.body.append(xembed);
+		const xobject = document.createElement('object');
+		xobject.data = cross('/echo-headers?k=blm-xobject');
+		document.body.append(xobject);
 		// the page's own fetch claiming an embed's navigation: what it got back
 		// (the JSON the site sent, or a document the proxy made of it) and how
 		// long it took (a navigation waits for a hint)

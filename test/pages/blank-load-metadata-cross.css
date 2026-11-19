@@ -1,0 +1,12 @@
+/* blank-load-metadata.html: a stylesheet of another origin, whose loads are its own origin's */
+@import url('/echo-headers?k=blm-ximport');
+.blm-xbg {
+	background-image: url('/echo-headers?k=blm-xbg');
+}
+@font-face {
+	font-family: blm-xfont;
+	src: url('/echo-headers?k=blm-xfont');
+}
+.blm-xfont {
+	font-family: blm-xfont;
+}

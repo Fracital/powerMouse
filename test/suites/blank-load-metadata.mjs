@@ -4,7 +4,15 @@
 // copies it (`empty`, `cors`): an image, a script, a stylesheet's @import,
 // background and font; and an <embed>'s and an <object>'s resource, which
 // the proxy copies in every document. Both modes, each request compared with the page
-// loaded natively (Sec-Fetch-Site too). The header that says so is the
+// loaded natively (Sec-Fetch-Site too). Each of them of another origin as
+// well, and the Origin of all: Chrome sends none for a no-cors load or an
+// embed's or object's navigation, one for a CORS load of another origin
+// (a crossorigin image, a font) and for a module script of any origin,
+// where the fetch that copies it is always a CORS one; and for an element's
+// CORS load of its own origin (a crossorigin image or stylesheet, a font,
+// in the controlled document too), never a crossorigin video's. An SVG
+// <use>'s external document is an image of the same origin only, and a
+// download the proxy saves the navigation it is natively. The header that says so is the
 // proxy's: a page's fetch that sends it with a navigation's values goes out
 // as the fetch it is, without it, and the host's request rules match it as
 // that fetch: a rule that edits headers sees the real destination only, a
@@ -31,6 +39,24 @@ const KINDS = [
 	'font',
 	'embed',
 	'object',
+	'module',
+	'ximg',
+	'corsimg',
+	'socorsimg',
+	'socorsscript',
+	'ccorsimg',
+	'ccorsstyle',
+	'ccorsvideo',
+	'cfont',
+	'use',
+	'download',
+	'xscript',
+	'xmodule',
+	'ximport',
+	'xbg',
+	'xfont',
+	'xembed',
+	'xobject',
 	'spoof',
 ];
 
@@ -54,6 +80,7 @@ async function measure(getFrame) {
 			dest: headers['sec-fetch-dest'] ?? null,
 			mode: headers['sec-fetch-mode'] ?? null,
 			site: headers['sec-fetch-site'] ?? null,
+			origin: headers.origin ?? null,
 		};
 		if (seen[kind]) seen[kind].tag = headers['x-stomp-load'] ?? null;
 	}
@@ -144,10 +171,15 @@ for (const [mode, base] of [
 		}),
 	);
 	await page.evaluate(() => window.controller.setRules([]));
-	const metadata = ({ dest, mode, site } = {}) => ({ dest, mode, site });
+	const metadata = ({ dest, mode, site, origin } = {}) => ({
+		dest,
+		mode,
+		site,
+		origin,
+	});
 	for (const kind of KINDS.filter((kind) => kind !== 'spoof'))
 		ok(
-			`${mode}: a copied ${kind} load: Sec-Fetch-Dest, -Mode and -Site as natively`,
+			`${mode}: the ${kind} load: Origin, Sec-Fetch-Dest, -Mode and -Site as natively`,
 			JSON.stringify(metadata(proxied[kind])) ===
 				JSON.stringify(metadata(native[kind])),
 			`native ${JSON.stringify(native[kind])} proxied ${JSON.stringify(proxied[kind])}`,

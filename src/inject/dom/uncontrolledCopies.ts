@@ -453,7 +453,12 @@ export function uncontrolledCopies(ctx: CopyContext) {
 				? 'image no-cors'
 				: name === 'script'
 					? 'script no-cors'
-					: null;
+					: // an external <use> document: Chrome's request is an
+						// image's of the document's origin only (Chrome 157,
+						// blank-load-metadata)
+						name === 'use'
+						? 'image same-origin'
+						: null;
 		switch (name) {
 			case 'img':
 				return `image ${mode(element)}`;

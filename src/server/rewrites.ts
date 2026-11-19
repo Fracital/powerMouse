@@ -517,7 +517,16 @@ const LOAD_DESTINATIONS = [
 	// (src/inject/dom/modules/Credentials.ts)
 	'webidentity',
 ];
-const LOAD_MODES = ['no-cors', 'cors'];
+// (`same-origin`: an SVG <use>'s external document, which Chrome loads as
+// an image of the document's own origin only)
+const LOAD_MODES = ['no-cors', 'cors', 'same-origin'];
+/**
+ * A CORS load of these that an element or a stylesheet starts carries
+ * Origin to its own origin too, where a fetch's does not: a crossorigin
+ * image, script and stylesheet, a module script, a font (and a crossorigin
+ * video does not; measured in Chrome 157, blank-load-metadata)
+ */
+const ORIGIN_ALWAYS = ['image', 'script', 'style', 'font'];
 /** the longest FedCM endpoint body the worker reads for the inject (identityRead) */
 const IDENTITY_READ_MAX = 1 << 20;
 /**
@@ -2006,20 +2015,25 @@ function genericForward(
 		if (granted === 'download' && !previousHop && !sameOrigin)
 			internal = !!context?.internal && !context.cors;
 
+		// The request's mode as the browser makes it: the inject fetches every
+		// copy of a page's load in `cors`, and the copy is that load (its
+		// grant names it: a FedCM endpoint the inject reads in the browser's
+		// place, an image, a classic script, an embed's navigation), any
+		// other copy (a download, a load whose kind the worker takes no
+		// metadata from) the browser's own no-cors load of it
+		const loadMode = load?.mode ?? (internal ? 'no-cors' : serverRequest.mode);
 		// the browser sends Origin on cross-origin CORS requests and on every
-		// request with a body; Chrome also on a module script's, same-origin
-		// or not
+		// request with a body; Chrome also on an element's CORS load to its
+		// own origin (ORIGIN_ALWAYS), and never on a no-cors load or a GET
+		// navigation, an embed's and an object's included (measured in
+		// Chrome 157, blank-load-metadata; fedcm for the well-known file,
+		// config and accounts, no-cors)
 		// (a chain that went from another origin to a third is no origin's any
-		// more, its own included: "null", below). A FedCM endpoint the inject
-		// reads in the browser's place goes in the mode the browser's own
-		// request has: the well-known file, config and accounts no-cors, with
-		// no Origin (measured in Chrome 157, the fedcm suite)
-		const originMode =
-			load?.destination === 'webidentity' ? load.mode : serverRequest.mode;
+		// more, its own included: "null", below)
 		if (
 			(initiator || opaque) &&
-			(((!sameOrigin || previousHop?.tainted) && originMode === 'cors') ||
-				(serverRequest.mode === 'cors' && destination === 'script') ||
+			(((!sameOrigin || previousHop?.tainted) && loadMode === 'cors') ||
+				(loadMode === 'cors' && ORIGIN_ALWAYS.includes(destination)) ||
 				!BODY_ILLEGAL.includes(serverRequest.method))
 		)
 			requestHeaders.set('origin', opaque ? 'null' : initiator!.origin);
@@ -2132,11 +2146,15 @@ function genericForward(
 
 		if (potentiallyTrustworthy(url.url)) {
 			requestHeaders.set('sec-fetch-site', site);
+			// (a download the inject saves for a page is the navigation it is
+			// natively: Chrome 157, blank-load-metadata)
 			requestHeaders.set(
 				'sec-fetch-mode',
 				load?.mode ??
-					(serverRequest.mode ||
-						(destination === 'empty' ? 'cors' : 'no-cors')),
+					(granted === 'download' && internal
+						? 'navigate'
+						: serverRequest.mode ||
+							(destination === 'empty' ? 'cors' : 'no-cors')),
 			);
 			requestHeaders.set(
 				'sec-fetch-dest',
@@ -2268,9 +2286,7 @@ function genericForward(
 		// The origin compared is the initiator's: "null" for an opaque one, a
 		// blob: worker or client this worker cannot place, and after a
 		// redirect from another origin to a third
-		const policyMode = navigation
-			? 'navigate'
-			: (load?.mode ?? (internal ? 'no-cors' : serverRequest.mode));
+		const policyMode = navigation ? 'navigate' : loadMode;
 		const policyOrigin =
 			opaque || unknownBlob || previousHop?.tainted
 				? 'null'
