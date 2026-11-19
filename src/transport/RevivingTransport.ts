@@ -101,9 +101,22 @@ const SUPERSEDED = Symbol('superseded');
 /** how long the wisp connection has to open a stream before it counts as lost */
 const PROBE_MS = 2000;
 
+/**
+ * The wisp close reasons that say the destination cannot be reached at
+ * all, whoever asks and however often: 0x42 (holyWisp: a name that does
+ * not resolve, an address with no route) and 0x03 (wisp-js's answer to a
+ * name that does not resolve). docs/http3.md has the table.
+ */
+const UNREACHABLE = new Set([0x42, 0x03]);
+
+/** how long the server's answer about a destination is waited for: past every backoff it helps no request */
+const ASK_MS = BACKOFF_MS.reduce((sum, ms) => sum + ms);
+
 interface UdpStream {
 	read: ReadableStream<unknown>;
 	write: WritableStream<unknown>;
+	/** the wisp close reason, once `read` has ended (deploy/epoxy patch 0058) */
+	closeReason?: () => number | undefined;
 }
 
 export default class RevivingTransport implements ProxyTransport {
@@ -117,6 +130,8 @@ export default class RevivingTransport implements ProxyTransport {
 	#lost = -1;
 	/** whether the current generation carried a request or a socket */
 	#served = false;
+	/** by host and port, the #unreachable question still open: one for a burst */
+	#asking = new Map<string, Promise<boolean>>();
 
 	/** `make` builds the transport, and builds it again when its connection is lost */
 	constructor(make: () => ProxyTransport) {
@@ -220,6 +235,8 @@ export default class RevivingTransport implements ProxyTransport {
 		const replayable =
 			REPLAYABLE.has(method.toUpperCase()) &&
 			(body === null || body === undefined);
+		/** asked once, at the first refused stream: the destination is unreachable */
+		let unreachable: Promise<boolean> | null = null;
 		for (let attempt = 1; ; attempt++) {
 			const generation = await this.#live();
 			const pending = this.base.request(remote, method, body, headers, signal);
@@ -265,7 +282,24 @@ export default class RevivingTransport implements ProxyTransport {
 				// at once only meets the same full window, so back off a little first and
 				// let the streams ahead of it finish. A revived request already waited
 				// for the new transport's init, so it is not held up again here.
-				if (!gone) await backoff(attempt, signal);
+				// A stream refused because its destination cannot be reached (a
+				// name that does not resolve) ends the same way, and Chrome fails
+				// that request at once, so the wisp server is asked about the
+				// destination beside the first wait, and its answer ends the
+				// request where it says unreachable.
+				if (!gone) {
+					unreachable ??= this.#ask(remote);
+					const refused = unreachable.then((yes) =>
+						yes ? true : new Promise<never>(() => {}),
+					);
+					if (
+						await Promise.race([
+							refused,
+							backoff(attempt, signal).then(() => false),
+						])
+					)
+						throw error;
+				}
 			} finally {
 				if (waiting) this.#waiting.delete(waiting);
 			}
@@ -304,6 +338,60 @@ export default class RevivingTransport implements ProxyTransport {
 			return true;
 		} finally {
 			clearTimeout(timer);
+		}
+	}
+
+	/** #unreachable, shared by the requests to one host and port while it is open */
+	#ask(remote: URL): Promise<boolean> {
+		const key = `${remote.hostname}:${remote.port || remote.protocol}`;
+		let asking = this.#asking.get(key);
+		if (!asking) {
+			asking = this.#unreachable(remote).finally(() =>
+				this.#asking.delete(key),
+			);
+			this.#asking.set(key, asking);
+		}
+		return asking;
+	}
+
+	/**
+	 * Whether the wisp server says `remote`'s host cannot be reached at
+	 * all. Wisp has no answer to CONNECT but a CLOSE, and epoxy ends a TCP
+	 * stream the server refused without its reason, which only a UDP stream
+	 * reports: the server closes one to such a host as it would the TCP
+	 * stream, one wisp round trip after the CONNECT, and leaves one to a
+	 * host it can reach open. A refusal for the client's rate (0x49) or a
+	 * relay without UDP (0x48) says nothing about the host.
+	 */
+	async #unreachable(remote: URL): Promise<boolean> {
+		const client = this.client as
+			{ connect_udp?: (url: string) => Promise<UdpStream> } | undefined;
+		if (typeof client?.connect_udp !== 'function') return false;
+		const port = remote.port || (remote.protocol === 'https:' ? '443' : '80');
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let stream: UdpStream | undefined;
+		let reader: ReadableStreamDefaultReader<unknown> | undefined;
+		try {
+			stream = await client.connect_udp(`udp://${remote.hostname}:${port}`);
+			if (typeof stream.closeReason !== 'function') return false;
+			reader = stream.read.getReader();
+			const read = reader;
+			const ended = (async () => {
+				while (!(await read.read()).done);
+				return true;
+			})().catch(() => false);
+			const late = new Promise<false>((resolve) => {
+				timer = setTimeout(() => resolve(false), ASK_MS);
+			});
+			if (!(await Promise.race([ended, late]))) return false;
+			return UNREACHABLE.has(stream.closeReason() ?? 0);
+		} catch {
+			return false;
+		} finally {
+			clearTimeout(timer);
+			reader?.cancel().catch(() => {});
+			stream?.write.abort().catch(() => {});
+			if (stream && !reader) close(stream);
 		}
 	}
 

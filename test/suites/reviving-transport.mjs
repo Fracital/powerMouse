@@ -328,4 +328,133 @@ function makeFactory(plan, udp) {
 	);
 }
 
+// 9 to 11) a stream refused at connect because its destination cannot be
+// reached ends as a throttled one does; the wisp server says which on a UDP
+// stream to the same host and port, whose close reason epoxy reports. A
+// UDP stream the server closes with `reason` at once, or (reason null) one
+// it leaves open; each stream it opens, and whether it was closed after
+const udpAnswer = (reason, streams) => () => async (url) => {
+	let ended = null;
+	const stream = {
+		url,
+		closed: false,
+		read: new ReadableStream({
+			start(controller) {
+				if (reason !== null) {
+					ended = reason;
+					controller.close();
+				}
+			},
+			cancel: () => void (stream.closed = true),
+		}),
+		write: new WritableStream({ abort: () => void (stream.closed = true) }),
+		closeReason: () => ended ?? undefined,
+	};
+	streams.push(stream);
+	return stream;
+};
+for (const [name, reason, answers] of [
+	// 0x42: a name that does not resolve, an address with no route
+	['unreachable (0x42)', 0x42, false],
+	// 0x49: the server's limits, the backoff's case
+	['throttled (0x49)', 0x49, true],
+	// a host the server reaches: no CLOSE
+	['reachable (open)', null, true],
+]) {
+	let calls = 0;
+	const streams = [];
+	const { factory } = makeFactory(
+		(call) => {
+			calls++;
+			return call <= 2 ? new Error(CONNECT_REFUSED) : null;
+		},
+		udpAnswer(reason, streams),
+	);
+	const transport = new RevivingTransport(factory);
+	const t0 = Date.now();
+	const r = await transport
+		.request(new URL('https://example.com/'), 'GET', null, [], undefined)
+		.then(
+			(res) => res.status,
+			(error) => `rejected ${error.message}`,
+		);
+	const elapsed = Date.now() - t0;
+	// an open stream is closed once the backoffs are over (920 ms)
+	await new Promise((resolve) =>
+		setTimeout(resolve, reason === null ? 1000 : 0),
+	);
+	const detail = JSON.stringify({
+		result: r,
+		calls,
+		elapsed,
+		streams: streams.map((s) => [s.url, s.closed]),
+	});
+	if (answers)
+		ok(
+			`a stream refused at connect whose destination the server calls ${name} is retried and answers`,
+			r === 200 && calls === 3 && elapsed >= 50,
+			detail,
+		);
+	else
+		ok(
+			`a stream refused at connect whose destination the server calls ${name} fails at once, as Chrome's lookup does`,
+			/rejected .*tls handshake eof/.test(String(r)) &&
+				calls === 1 &&
+				elapsed < 50,
+			detail,
+		);
+	ok(
+		`${name}: the server was asked once, on a UDP stream to the host and port, closed after`,
+		streams.length === 1 &&
+			streams[0].url === 'udp://example.com:443' &&
+			(reason !== null || streams[0].closed),
+		detail,
+	);
+}
+
+// 12) a burst refused at connect asks the server about the destination once
+{
+	const streams = [];
+	const attempts = new Map();
+	const factory = () => ({
+		ready: true,
+		client: { connect_udp: udpAnswer(0x49, streams)() },
+		async init() {},
+		async request(remote) {
+			const n = (attempts.get(remote.href) ?? 0) + 1;
+			attempts.set(remote.href, n);
+			if (n <= 2) throw new Error(CONNECT_REFUSED);
+			return response();
+		},
+		connect() {
+			return [() => {}, () => {}];
+		},
+	});
+	const transport = new RevivingTransport(factory);
+	const results = await Promise.all(
+		Array.from({ length: 20 }, (_, i) =>
+			transport
+				.request(
+					new URL(`https://example.com/y${i}`),
+					'GET',
+					null,
+					[],
+					undefined,
+				)
+				.then(
+					(res) => res.status,
+					(error) => `rejected ${error.message}`,
+				),
+		),
+	);
+	ok(
+		'a throttled burst to one host all answers and asks the server about the host once',
+		results.every((r) => r === 200) && streams.length === 1,
+		JSON.stringify({
+			ok: results.filter((r) => r === 200).length,
+			streams: streams.length,
+		}),
+	);
+}
+
 await done();
