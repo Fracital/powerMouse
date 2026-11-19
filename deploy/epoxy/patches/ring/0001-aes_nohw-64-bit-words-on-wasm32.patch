@@ -8,7 +8,9 @@ bitsliced AES (aes_nohw.c), in 32-bit words, two blocks a batch, as on
 any target without OPENSSL_64_BIT. wasm32 has 64-bit integer operations
 of its own, so it now takes the 64-bit words, four blocks a batch, as a
 64-bit target does: the same algorithm and the same constant-time code,
-about a fifth less time in AES-GCM for an HTTP/3 download.
+about a fifth less time in AES-GCM for an HTTP/3 download, and an HTTP/2
+download over TLS about 40 % faster in epoxy, whose AES-GCM was more than
+half of the transport worker's time.
 ---
  crypto/fipsmodule/aes/aes_nohw.c | 32 +++++++++++++++++++-------------
  1 file changed, 19 insertions(+), 13 deletions(-)

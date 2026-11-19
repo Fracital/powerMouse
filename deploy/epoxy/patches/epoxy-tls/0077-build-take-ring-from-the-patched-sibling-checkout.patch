@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Thu, 19 Nov 2026 02:30:00 -0500
+Subject: [PATCH] build: take ring from the patched sibling checkout
+
+ring comes from the sibling checkout of the release Cargo.lock pins,
+carrying deploy/epoxy/patches/ring (its bitsliced AES in 64-bit words on
+wasm32), as stomp-h3 has it.
+---
+ Cargo.toml | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -21,6 +21,9 @@ rustls = { path = "../rustls" }
+ # The sibling checkout carries deploy/epoxy/patches/hyper (reads a lone CR
+ # in an HTTP/1 response head as Chrome does instead of refusing the response).
+ hyper = { path = "../hyper" }
++# The sibling checkout is the ring release Cargo.lock pinned, carrying
++# deploy/epoxy/patches/ring (AES in 64-bit words on wasm32).
++ring = { path = "../ring" }
+
+ # The sibling checkout carries deploy/epoxy/patches/hyper-util-wasm (exposes
+ # http2_max_header_list_size on the legacy client builder).

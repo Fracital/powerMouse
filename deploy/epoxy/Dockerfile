@@ -29,6 +29,8 @@ ARG HYPER_REV
 ARG H2_WASM_REV
 ARG RUSTLS_VERSION
 ARG RUSTLS_SHA256
+ARG RING_VERSION
+ARG RING_SHA256
 WORKDIR /src
 RUN git clone -q https://github.com/r58Playz/hyper-util-wasm.git hyper-util-wasm \
  && git -C hyper-util-wasm checkout -q "$HYPER_UTIL_WASM_REV"
@@ -44,10 +46,13 @@ RUN git init -q h2-wasm \
 RUN curl -fsSL "https://static.crates.io/crates/rustls/rustls-${RUSTLS_VERSION}.crate" -o /tmp/rustls.crate \
  && echo "$RUSTLS_SHA256  /tmp/rustls.crate" | sha256sum -c - \
  && mkdir rustls && tar xzf /tmp/rustls.crate -C rustls --strip-components=1
+RUN curl -fsSL "https://static.crates.io/crates/ring/ring-${RING_VERSION}.crate" -o /tmp/ring.crate \
+ && echo "$RING_SHA256  /tmp/ring.crate" | sha256sum -c - \
+ && mkdir ring && tar xzf /tmp/ring.crate -C ring --strip-components=1
 
 # --- patches, in numeric order, each checked before it is applied ------------
 COPY patches /patches
-RUN for repo in hyper hyper-util-wasm h2-wasm rustls epoxy-tls epoxy-transport; do \
+RUN for repo in hyper hyper-util-wasm h2-wasm rustls ring epoxy-tls epoxy-transport; do \
       for p in /patches/$repo/*.patch; do \
         [ -e "$p" ] || continue; \
         echo "[patch] $repo <- $(basename "$p")"; \
@@ -80,6 +85,6 @@ RUN mkdir -p /out/epoxy-tls /out/epoxy-transport \
  && cd /src/epoxy-tls/client && cp -r full minimal package.json README.md LICENSE /out/epoxy-tls/ \
  && cd /src/epoxy-transport && cp -r dist lib package.json package-lock.json README.md .gitignore /out/epoxy-transport/ \
  && cp LICENSE /out/epoxy-transport/ 2>/dev/null || true \
- && printf 'hyper-util-wasm %s\nepoxy-tls %s\nepoxy-transport %s\nhyper %s\nh2-wasm %s\nrustls %s\n' "$HYPER_UTIL_WASM_REV" "$EPOXY_TLS_REV" "$EPOXY_TRANSPORT_REV" "$HYPER_REV" "$H2_WASM_REV" "$RUSTLS_VERSION" > /out/UPSTREAM \
+ && printf 'hyper-util-wasm %s\nepoxy-tls %s\nepoxy-transport %s\nhyper %s\nh2-wasm %s\nrustls %s\nring %s\n' "$HYPER_UTIL_WASM_REV" "$EPOXY_TLS_REV" "$EPOXY_TRANSPORT_REV" "$HYPER_REV" "$H2_WASM_REV" "$RUSTLS_VERSION" "$RING_VERSION" > /out/UPSTREAM \
  && (cd /patches && find . -name '*.patch' | sort) >> /out/UPSTREAM \
  && (cd /src/stomp-h3 && printf 'stomp-h3 %s\n' "$(cat Cargo.toml Cargo.lock src/*.rs patches/*/*.patch | sha256sum | cut -c1-12)") >> /out/UPSTREAM

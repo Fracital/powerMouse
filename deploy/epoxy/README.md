@@ -39,7 +39,7 @@ UDP for STomp's `http3` option (`h3/`, below), whose QUIC ClientHello and
 transport parameters are Chrome's too.
 
 Nothing is forked in the sense of a diverging tree. `upstream.env` pins the
-six upstream revisions, `patches/` holds `git format-patch` output applied
+seven upstream revisions, `patches/` holds `git format-patch` output applied
 on top of them, and `build.sh` does the rest in a container. Bumping upstream
 means changing a revision and rebuilding; a patch that no longer applies
 fails the build at `git apply --check`.
@@ -105,6 +105,8 @@ fails the build at `git apply --check`.
 | MercuryWorkshop/epoxy-tls                                      | `0074` | A write of a Uint8Array or ArrayBuffer (a socket's chunk, a UDP datagram, a streamed request body's chunk) is taken as it is; each went through `new Request("", { body }).arrayBuffer()`, a Request, a promise and a task's wait, before every ACK an HTTP/3 connection sent. Anything else still goes through the Request.                                                      |
 | MercuryWorkshop/epoxy-tls                                      | `0075` | client: a function transport's writes never wait, as the WebSocket's `send` does not. One that waited held wisp-mux's sink lock across a TLS handshake's lone flush, the actor stopped reading while it waited to send the next CONNECT, and every request on the connection hung (STomp's WebTransport carrier).                                                                 |
 | MercuryWorkshop/epoxy-tls                                      | `0076` | A zstd body is decoded frame after frame to its end, as Chrome's `ZstdSourceStream` reads it (a skippable frame passed over); the decoder stopped at the end of the first frame and the rest was dropped, so Spotify's search answer, in 64 KiB frames, reached the page cut at 64 KiB (`zstd-frames` suite). Gzip still reads one member, as Chrome does.                        |
+| ring 0.17.14 (the crates.io release Cargo.lock pins)           | `0001` | Its bitsliced AES (`aes_nohw.c`) takes 64-bit words, four blocks a batch, on wasm32 as on a 64-bit target, where it took 32-bit words, two blocks a batch: the same constant-time code, an HTTP/2 download over TLS about 40 % faster (AES-128-GCM was more than half of the transport worker's time). stomp-h3 vendors the same patch.                                           |
+| MercuryWorkshop/epoxy-tls                                      | `0077` | `[patch.crates-io]` so ring comes from the sibling checkout.                                                                                                                                                                                                                                                                                                                      |
 
 ## stomp-h3 (`h3/`)
 
@@ -144,7 +146,7 @@ on and an origin offers h3 (docs/http3.md).
   second ack-eliciting packet for the first 100, then every tenth or after
   a quarter of the minimum RTT, at most max_ack_delay, as quiche's
   QuicReceivedPacketManager). It vendors ring 0.17.14 with
-  `h3/patches/ring/0001` (its bitsliced AES in 64-bit words on wasm32,
+  epoxy's own `patches/ring/0001` (its bitsliced AES in 64-bit words on wasm32,
   four blocks a batch, as on a 64-bit target), and builds ring and the
   brotli and compression decoders at `opt-level = 3`, the rest for size.
   `src/lib.rs` adds
