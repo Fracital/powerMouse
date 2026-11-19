@@ -502,15 +502,24 @@ For your own deployment:
 - Keep `dist/`, the transports and the page on the same origin. The service
   worker scope and `directory` must match the path `dist/` is mounted at.
 - Run wisp with its default filters (the loopback opt-in is for local QA).
-- The page, its scripts and `/stomp/` are served with `Cache-Control:
-no-cache` so browsers revalidate and CDNs do not pin a stale service worker
-  or shell to a new build; the transports and fonts may be cached for a day.
-  One file under `/stomp/` is kept for good: the rewriter library, which
-  STomp asks for as `rewriterLib.js?<hash of its bytes>` and a worker loads
-  with a synchronous request, where a revalidation is a round trip a script
-  waits for. `demo/server.js` answers that URL with `immutable` only when
-  the hash is the file's own (a page of the build before a deploy asks by
-  the old hash, and gets `no-cache`).
+- The page, its scripts, `/stomp/` and the transports are served with
+  `Cache-Control: no-cache` so browsers revalidate and CDNs do not pin a
+  stale service worker or shell to a new build; fonts may be cached for a
+  day. What is asked for by the hash of its bytes is kept for good instead:
+  STomp asks for the rewriter library, the core module, the document
+  bundles, the transport and rewrite workers, the blocker's module,
+  isolation mode's controller frame and its script, and the site pool's
+  frame script as `<name>?<hash of its bytes>`, the page names its scripts, its stylesheet
+  and its images so (`demo/server.js` writes the hashes into `index.html` as
+  it serves it), and it loads each transport from under the hash of its
+  package's files (`/epoxy/<hash>/index.mjs`, from config.js `transports`:
+  a path segment, because epoxy.wasm and stomp-h3 are fetched relative to
+  the module and would lose a query). `demo/server.js` answers such a URL
+  with `immutable` only when the hash is the file's own (a page of the
+  build before a deploy asks by the old hash, and gets `no-cache`), so a
+  reload revalidates only the page, the service worker's script and the
+  images the stylesheet names. The page itself stays `no-cache`: it is what
+  names the current hashes. The plain names keep working, `no-cache`.
   The demo also registers with `updateViaCache: 'none'`. Behind Cloudflare,
   check the zone's Browser Cache TTL: it overrides origin headers unless a
   cache rule for the host says "respect origin" (stomp.fracit.al and

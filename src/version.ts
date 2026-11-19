@@ -116,3 +116,35 @@ export const PASSKEYS_FACTORY = '__stompPasskeys';
  * LIGHT_FACTORY is (src/inject/rewriter.ts).
  */
 export const ACTIVATION_FACTORY = '__stompActivation';
+
+/**
+ * What the controller asks for the files it starts by, after a `?`: the
+ * hash of each as built (build.js NAMED_WORKERS, and the blocker's module
+ * as copied), so a host may let browsers keep them for good and a reload
+ * of the host's page starts its transport worker, its rewrite workers and
+ * the blocker without a revalidation of each (the transport worker's was
+ * one round trip before the transport module's, itself one before its
+ * wasm's). Empty in a dev build, whose files change under one name, and in
+ * the bundles built before these files (the document bundles, the workers
+ * themselves).
+ */
+export const TRANSPORT_WORKER: string =
+	(process.env.STOMP_TRANSPORT_WORKER as string | undefined) || '';
+/** as TRANSPORT_WORKER, for rewriteWorker.js */
+export const REWRITE_WORKER: string =
+	(process.env.STOMP_REWRITE_WORKER as string | undefined) || '';
+/** as TRANSPORT_WORKER, for blocker.wasm */
+export const BLOCKER: string =
+	(process.env.STOMP_BLOCKER as string | undefined) || '';
+/**
+ * As TRANSPORT_WORKER, for isolation mode's frame and the site pool's
+ * (controllerFrame.html as copied, and the scripts it loads, built after
+ * the workers: build.js NAMED_FRAMES). Empty in the frame scripts
+ * themselves.
+ */
+export const CONTROLLER_FRAME: string =
+	(process.env.STOMP_CONTROLLER_FRAME as string | undefined) || '';
+export const CONTROLLER_FRAME_SCRIPT: string =
+	(process.env.STOMP_CONTROLLER_FRAME_SCRIPT as string | undefined) || '';
+export const SITE_FRAME_SCRIPT: string =
+	(process.env.STOMP_SITE_FRAME_SCRIPT as string | undefined) || '';

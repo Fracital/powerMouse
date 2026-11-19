@@ -190,6 +190,7 @@
 	"referrer": 10,
 	"refresh": 2,
 	"register": 3,
+	"reload-revalidations": 8,
 	"removed-frame": 5,
 	"request-clients": 126,
 	"request-frames": 8,

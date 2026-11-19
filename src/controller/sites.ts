@@ -704,7 +704,9 @@ export class SiteHub {
 			`${this.#host.directory.pathname}${this.#host.frameFile}`,
 			origin,
 		);
-		src.searchParams.set('script', this.#host.scriptFile);
+		// (the frame's hash a bare key: `?<hash>&script=`, which searchParams
+		// would write as `<hash>=`)
+		src.search = `${src.search ? `${src.search}&` : '?'}script=${encodeURIComponent(this.#host.scriptFile)}`;
 		return src;
 	}
 	/** a command of the isolated RemoteController for the frame at `index` of the host's page, to the agent of `origin` (AgentBound.command) */

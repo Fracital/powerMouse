@@ -69,7 +69,7 @@ ok(
 );
 
 // isolated mode: the demo host asks for the frame by its (here unchanged)
-// name and tells it its script
+// name and tells it its script, both by the hash of their bytes
 const isolated = await browser.newPage();
 await isolated.goto(HOST);
 await isolated.waitForFunction(
@@ -103,8 +103,8 @@ const remote = await isolated.evaluate(
 );
 ok(
 	'a RemoteController asks for the frame by its asset name and names its script',
-	remote.src.endsWith(
-		'/stomp/controllerFrame.html?script=controllerFrame.js',
+	/\/stomp\/controllerFrame\.html\?[0-9a-f]{16}&script=controllerFrame\.js%3F[0-9a-f]{16}$/.test(
+		remote.src,
 	) && remote.ready === true,
 	JSON.stringify(remote),
 );
