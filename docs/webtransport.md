@@ -567,16 +567,29 @@ docs/webtransport.md, "Wisp on the session" and "Certificates"):
   blocked the first request answers within the suite's 400 ms of the
   carrier off.
 
-  Each choice is one line on the console, `STomp transport` then `Wisp
-over WebTransport (UDP/QUIC) to <url>, <ms> ms` or `Wisp over WebSocket
-(TCP) to <url>, <ms> ms; WebTransport: <why>`, and another when a
-  revived transport rides the other carrier (`switched from WebTransport
-to WebSocket`). The transport's `carrier` and `info` say it, and the
+  The host's console has one plain `[wisp]` line for each event, in
+  KrunkNative's words (src/transport/transportLog.ts): `trying the
+WebTransport transport to <url>`, then `WebTransport session established
+in <ms> ms: wisp transport WebTransport (UDP/QUIC) to <url> (epoxy,
+HTTP/3 on)`, or `WebTransport unavailable (<why>), trying the next
+transport; WebTransport again in 30 s` (a warning; a relay that names no
+  session is an info line) and `connecting to <wss url> (wisp transport
+WebSocket (TCP); ...)`; `WebTransport skipped: it failed <n> s ago
+(<why>); next try in <n> s` once per quiet; `WebTransport session ended
+after <n> s (...)` with the datagrams and stream packets it carried,
+  `websocket closed (code <n>)`, `reconnecting now (the wisp connection was
+lost)` and `switched from WebTransport to WebSocket`. Without
+  `webTransport` the WebSocket is one line, `connecting to <wss url> (wisp
+transport WebSocket (TCP), WebTransport off; epoxy, HTTP/3 on)`, and the
+  controller's `carrier` is set for it too (`why: 'off'`). The lines are
+  made where the transport runs and printed by the host's controller (the
+  transport worker and the controller frame hand them on). The transport's
+  `carrier` and `info` say it, and the
   controller's `carrier` (a `carrier` event each time, from the transport
   worker or the page, through the controller frame to a
-  `StompRemoteController`) gives the host what the demo shows: a UDP or
-  TCP tag on its menu button, the carrier, time, relay and why not UDP
-  atop the menu and in About's Transport row. No proxied page is told.
+  `StompRemoteController`) gives the host what the demo shows in About's
+  Transport row: the carrier, time, relay and why not UDP. No proxied page
+  is told.
 
 - **Revival.** A transport keeps its carrier: when the session ends, the
   packets' readable ends as a closed WebSocket's does, the next wisp

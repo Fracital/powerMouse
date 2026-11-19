@@ -21,6 +21,12 @@ import { REQUEST_QUEUE, SEEN_URGENCY } from './requestQueue';
 import { resumableBody } from './resumableBody';
 import { RpcHelper } from './rpc';
 import { poolOf, reportsVersion, type SocketPass } from './socketPool';
+import {
+	connectionLine,
+	logTransport,
+	rideOf,
+	transportLog,
+} from './transportLog';
 import { serveWebTransport, type AdmitSession } from './webTransportHost';
 
 /**
@@ -93,6 +99,16 @@ export function fitHeaders(
 	return out;
 }
 
+/** the origins each transport that names no HTTP version answered for, told once each (the verbose log) */
+const unversionedSeen = new WeakMap<ProxyTransport, Set<string>>();
+function unversioned(transport: ProxyTransport, url: URL) {
+	let seen = unversionedSeen.get(transport);
+	if (!seen) unversionedSeen.set(transport, (seen = new Set()));
+	if (seen.has(url.origin)) return;
+	seen.add(url.origin);
+	logTransport(connectionLine(transport, undefined, url.origin, '', ''));
+}
+
 /** how long a decorate hook may take before the handshake goes out without it */
 const DECORATE_TIMEOUT_MS = 2000;
 
@@ -134,10 +150,13 @@ const CLOSE_FLUSH_MS = 2000;
 async function openStream(
 	port: MessagePort,
 	opening: Promise<RawStream>,
+	/** the verbose log's line once it is open (transportLog.ts), '' when off */
+	line: string,
 ): Promise<[TransportToHost['udp'][1], Transferable[]]> {
 	let raw: RawStream;
 	try {
 		raw = await opening;
+		if (line) logTransport(line);
 	} catch (error) {
 		port.close();
 		return [
@@ -243,6 +262,16 @@ function wispClient(transport: ProxyTransport): WispClient | null {
 	return held.base ? wispClient(held.base) : null;
 }
 
+/** whether a transport under the wrappers opens its wisp connection in init() itself (CarrierTransport.opensWisp) */
+function opensWisp(transport: ProxyTransport): boolean {
+	let current: unknown = transport;
+	for (let depth = 0; depth < 6 && current; depth++) {
+		if ((current as { opensWisp?: unknown }).opensWisp === true) return true;
+		current = (current as { base?: unknown }).base;
+	}
+	return false;
+}
+
 /**
  * Load the transport and open its wisp connection now, before anything asks
  * for them. A transport did both on its first request: the first navigation
@@ -261,7 +290,13 @@ export function warmTransport(
 ): void {
 	if (transport.ready || initializing.has(transport)) return;
 	const pending = Promise.resolve(transport.init())
-		.then(() => wispClient(transport)?.replace_stream_provider?.())
+		// a transport that opened its wisp connection in init() (a carrier
+		// on its own WebSocket) is not given another
+		.then(() =>
+			opensWisp(transport)
+				? undefined
+				: wispClient(transport)?.replace_stream_provider?.(),
+		)
 		.then(
 			() => {},
 			(error) => {
@@ -374,6 +409,7 @@ export default function serveTransport(
 					throw error;
 				}
 				if (ticket) response = ticket.answered(response);
+				else if (transportLog.on) unversioned(transport, url);
 				// a streamed body goes on a port of its own (bodyPort.ts), and
 				// a large one the reader falls behind on is let go and resumed
 				// by range (resumableBody.ts)
@@ -440,6 +476,10 @@ export default function serveTransport(
 					requestHeaders,
 					(protocol, extensions) => {
 						pass.connected();
+						if (transportLog.on)
+							logTransport(
+								`WebSocket to ${url}: HTTP/1.1 Upgrade over ${url.startsWith('wss:') ? 'TLS over ' : ''}a Wisp TCP stream, ${rideOf(transport, false)}`,
+							);
 						resolve({ result: 'success', protocol, extensions });
 					},
 					(data) =>
@@ -487,6 +527,9 @@ export default function serveTransport(
 				return openStream(
 					stream,
 					client.connect_udp(`udp://${bracket(host)}:${remotePort}`),
+					transportLog.on
+						? `UDP to ${bracket(host)}:${remotePort} (WebRTC): a Wisp UDP stream, ${rideOf(transport, true)}`
+						: '',
 				);
 			},
 			tcp: async ({ host, port: remotePort, tls, stream }) => {
@@ -500,6 +543,9 @@ export default function serveTransport(
 					Reflect.apply(connect, client, [
 						`${tls ? 'tls' : 'tcp'}://${bracket(host)}:${remotePort}`,
 					]),
+					transportLog.on
+						? `${tls ? 'TLS' : 'TCP'} to ${bracket(host)}:${remotePort} (WebRTC): ${tls ? 'TLS over ' : ''}a Wisp TCP stream, ${rideOf(transport, false)}`
+						: '',
 				);
 			},
 		},

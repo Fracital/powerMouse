@@ -5,6 +5,7 @@ import type {
 } from '@mercuryworkshop/proxy-transports';
 import { NETWORK_PARTITION } from './networkPartition';
 import { REQUEST_QUEUE } from './requestQueue';
+import { connectionLine, logTransport, transportLog } from './transportLog';
 
 // Chrome's connection limits toward a server, which the transport keeps as
 // Chrome's socket pool does (measured in Chrome 157, connection-limits
@@ -35,7 +36,26 @@ interface Group {
 	multiplexed: boolean;
 	/** requests in flight that count against its limit */
 	active: number;
+	/**
+	 * The verbose log (transportLog.ts): the group's origin, partition and
+	 * credentials, the version its connection was logged with, the HTTP/1
+	 * connections it has open as the pool counts them (the most requests it
+	 * had in flight since it was last idle long), and since when nothing is
+	 * in flight
+	 */
+	origin: string;
+	partition: string;
+	credentials: string;
+	logged?: string;
+	opened: number;
+	idleSince: number;
 }
+
+/**
+ * How long epoxy's pool keeps an idle connection (hyper-util's default):
+ * a group idle that long opens a new one, which the verbose log tells
+ */
+const IDLE_MS = 90 * 1000;
 
 /** ms since the epoch, comparable across the worker's realm and this one */
 const now = () => performance.timeOrigin + performance.now();
@@ -51,8 +71,8 @@ interface Waiting {
 	 * order the worker's work on each brought them here in
 	 */
 	asked: number;
-	/** true: counted against the limits */
-	start: (counted: boolean) => void;
+	/** true: counted against the limits; `nth`, the connection more it takes (#count's) */
+	start: (started: [counted: boolean, nth: number]) => void;
 	/** given up while it waited */
 	cancel: () => void;
 }
@@ -120,12 +140,18 @@ function untilDone(
 
 /** the HTTP connections of one transport, as Chrome's socket pool keeps them */
 export class SocketPool {
+	/** the transport whose pool it is, for the verbose log's lines */
+	#transport: ProxyTransport | null;
 	#groups = new Map<string, Group>();
 	/** by urgency, then the order they came in */
 	#waiting: Waiting[] = [];
 	#active = 0;
 	#early = new Set<string>();
 	#raised = new Map<string, number>();
+
+	constructor(transport: ProxyTransport | null = null) {
+		this.#transport = transport;
+	}
 
 	/**
 	 * Wait for a connection for a request to `url` with `headers` (the
@@ -170,28 +196,35 @@ export class SocketPool {
 				for (const [other, kept] of this.#groups)
 					if (!kept.active && !this.#waiting.some((w) => w.group === kept))
 						this.#groups.delete(other);
-			group = { multiplexed: false, active: 0 };
+			group = {
+				multiplexed: false,
+				active: 0,
+				origin: `${url.protocol}//${url.host}`,
+				partition,
+				credentials,
+				opened: 0,
+				idleSince: now(),
+			};
 			this.#groups.set(key, group);
 		}
-		if (group.multiplexed) return this.#ticket(group, false);
-		if (this.#startable(group)) {
-			this.#count(group);
-			return this.#ticket(group, true);
-		}
+		if (group.multiplexed) return this.#ticket(group, false, 0);
+		if (this.#startable(group))
+			return this.#ticket(group, true, this.#count(group));
 		// it waits its turn; whoever starts it counts it (or not, when its
 		// group turned out to multiplex while it waited)
 		if (image && id) waits?.(id);
-		const counted = await new Promise<boolean>((start, reject) =>
-			this.#wait({
-				group: group!,
-				urgency,
-				id,
-				asked,
-				start,
-				cancel: () => reject(new QueuedCancel()),
-			}),
+		const [counted, nth] = await new Promise<[boolean, number]>(
+			(start, reject) =>
+				this.#wait({
+					group: group!,
+					urgency,
+					id,
+					asked,
+					start,
+					cancel: () => reject(new QueuedCancel()),
+				}),
 		);
-		return this.#ticket(group, counted);
+		return this.#ticket(group, counted, nth);
 	}
 
 	/** in line behind every request as urgent or more */
@@ -246,23 +279,65 @@ export class SocketPool {
 		return group.active < PER_GROUP && this.#active < TOTAL;
 	}
 
-	#count(group: Group) {
+	/**
+	 * Counts a request in; when it takes a connection more than the group
+	 * had open, that connection's number (the verbose log's), else 0
+	 */
+	#count(group: Group): number {
+		if (!group.active && now() - group.idleSince >= IDLE_MS) {
+			group.opened = 0;
+			group.logged = undefined;
+		}
 		group.active++;
 		this.#active++;
+		if (group.active <= group.opened) return 0;
+		group.opened = group.active;
+		return group.opened;
 	}
 
-	#ticket(group: Group, counted: boolean): Ticket {
+	/** the verbose log's line for a connection of `group` that `version` answered on */
+	#log(group: Group, version: string | undefined, nth: number) {
+		// an HTTP/3 connection is Http3Transport's to tell, at its handshake
+		if (!this.#transport || version === '3') return;
+		const multiplexed = !!version && MULTIPLEXED.has(version);
+		if (multiplexed) {
+			// its requests are not counted: idle is since its last answer
+			if (now() - group.idleSince >= IDLE_MS) group.logged = undefined;
+			group.idleSince = now();
+		}
+		if (multiplexed ? group.logged === version : !nth) return;
+		group.logged = version;
+		logTransport(
+			connectionLine(
+				this.#transport,
+				version,
+				group.origin,
+				group.partition,
+				group.credentials,
+				multiplexed ? 1 : nth,
+			),
+		);
+	}
+
+	#ticket(group: Group, counted: boolean, nth: number): Ticket {
 		let held = counted;
 		const release = () => {
 			if (!held) return;
 			held = false;
 			group.active--;
 			this.#active--;
+			if (!group.active) group.idleSince = now();
 			this.#pump();
 		};
 		return {
 			answered: (response) => {
 				const version = (response as { httpVersion?: unknown }).httpVersion;
+				if (transportLog.on)
+					this.#log(
+						group,
+						typeof version === 'string' && version ? version : undefined,
+						nth,
+					);
 				if (typeof version === 'string' && version) {
 					const multiplexed = MULTIPLEXED.has(version);
 					if (multiplexed !== group.multiplexed) {
@@ -297,11 +372,10 @@ export class SocketPool {
 			const waiting = this.#waiting[i];
 			if (waiting.group.multiplexed) {
 				this.#waiting.splice(i, 1);
-				waiting.start(false);
+				waiting.start([false, 0]);
 			} else if (this.#startable(waiting.group)) {
 				this.#waiting.splice(i, 1);
-				this.#count(waiting.group);
-				waiting.start(true);
+				waiting.start([true, this.#count(waiting.group)]);
 			} else i++;
 		}
 	}
@@ -355,7 +429,7 @@ const pools = new WeakMap<object, { http: SocketPool; ws: WebSocketGate }>();
 export function poolOf(transport: ProxyTransport) {
 	let pool = pools.get(transport);
 	if (!pool) {
-		pool = { http: new SocketPool(), ws: new WebSocketGate() };
+		pool = { http: new SocketPool(transport), ws: new WebSocketGate() };
 		pools.set(transport, pool);
 	}
 	return pool;

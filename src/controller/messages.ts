@@ -23,6 +23,7 @@ import type {
 	RequestInfo,
 	RequestRule,
 } from '../transport/messages';
+import type { TransportNote } from '../transport/transportLog';
 import type {
 	CarrierInfo,
 	WispWebTransportOptions,
@@ -84,6 +85,8 @@ export interface ControllerFrameInit {
 	hostReload?: HostReload;
 	/** the host wants a RequestInfo per request (RemoteControllerInit.onRequest) */
 	requestLog?: boolean;
+	/** the transport's verbose mode, as the host's origin asked for it (RemoteControllerInit.debugTransport) */
+	debugTransport?: boolean;
 	/** the host asks the user about a site's permission (RemoteControllerInit.onPermissionRequest) */
 	permissionPrompt?: boolean;
 	/** the host asks the user about passkeys for proxied sites (RemoteControllerInit.passkeys): what pages are told of them */
@@ -233,6 +236,8 @@ export type HostBound = {
 	stale: [StaleInfo | null];
 	/** the inner controller's transport chose its carrier (StompController.carrier) */
 	carrier: [CarrierInfo];
+	/** a note of the inner controller's transport, for the host's console (transportLog.ts) */
+	transportNote: [TransportNote];
 	/** a host hook threw in a proxied realm, or a hook URL could not be fetched */
 	hookError: [HookErrorInfo];
 	/** a site asks for a permission the proxy origin holds for another (see StompController.onPermissionRequest) */

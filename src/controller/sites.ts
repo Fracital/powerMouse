@@ -224,8 +224,9 @@ export function answerDecorate(
 			],
 			admit: async ({ url, origin }) => [await admit(new URL(url), origin), []],
 			tick: async () => {},
-			// the hub's controller hears its worker's carrier itself
+			// the hub's controller hears its worker's carrier and notes itself
 			carrier: async () => {},
+			transportNote: async () => {},
 		},
 		DECORATE_RPC,
 		(data, transfer) => port.postMessage(data, transfer),

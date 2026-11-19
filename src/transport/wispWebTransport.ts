@@ -50,11 +50,18 @@
 // the WebSocket as well, so that the one not taken can be closed and every
 // choice timed; the transport as given (epoxy's own WebSocket, by URL) is
 // what is left when neither could be opened.
+//
+// Without `webTransport` there is nothing to choose: CarrierTransport keeps
+// the transport as given, on its own WebSocket, opens its wisp connection
+// when it starts (epoxy's replace_stream_provider, as warmTransport did) and
+// reports it as it reports a choice, so the host always hears what the
+// wisp connection rides.
 import type {
 	ProxyTransport,
 	RawHeaders,
 	TransferrableResponse,
 } from '@mercuryworkshop/proxy-transports';
+import { wispNote } from './transportLog';
 
 /** TransportDescriptor.webTransport */
 export interface WispWebTransportOptions {
@@ -86,10 +93,22 @@ export interface CarrierInfo {
 	url: string;
 	/** from the transport's start to its wisp connection's first packet (ms) */
 	ms: number;
-	/** on the WebSocket: why not WebTransport */
+	/** on the WebSocket: why not WebTransport (`off`: the descriptor has no `webTransport`) */
 	why?: string;
 	/** what the last transport to this relay in this realm rode, when it was the other carrier */
 	previous?: Carrier;
+	/** a transport to this relay rode the same carrier before in this realm: this one is a reconnect (a revival) */
+	reconnected?: boolean;
+	/** the transport module, as named by its URL (`epoxy`, `libcurl`) */
+	transport?: string;
+	/** whether the descriptor turned HTTP/3 on */
+	http3?: boolean;
+}
+
+/** what CarrierTransport tells of the transport it carries, beside the carrier */
+export interface CarrierLabel {
+	transport: string;
+	http3: boolean;
 }
 
 /** the text RevivingTransport takes for a wisp connection that is gone (its DEAD) */
@@ -260,6 +279,12 @@ export const memory = (() => {
 			if (stored && !known.has(key)) known.set(key, stored);
 			return live(known.get(key));
 		},
+		/** a failure's quiet: when it failed and until when nothing is tried beside the WebSocket */
+		quiet(key: string): { failed: number; until: number } | undefined {
+			const entry = known.get(key);
+			if (entry?.verdict !== 'failed' || entry.quiet === undefined) return;
+			return { failed: entry.quiet - FAILED_QUIET_MS, until: entry.quiet };
+		},
 		/** why the relay's session failed last, when it did */
 		reason(key: string): string | undefined {
 			const entry = known.get(key);
@@ -359,35 +384,48 @@ export function watchCarrier(listener: (info: CarrierInfo) => void) {
 /** what the last transport to each relay rode in this realm, by RelayPlan.key */
 const lastCarrier = new Map<string, Carrier>();
 
-const LOG_LABEL =
-	'padding: 1px 4px; border-radius: 3px 0 0 3px; color: #fff; background: #606060;';
-const LOG_VALUE = (carrier: Carrier) =>
-	`padding: 1px 4px; border-radius: 0 3px 3px 0; color: #fff; background: ${carrier === 'webtransport' ? '#2e9e4f' : '#1475b2'};`;
+/** a carrier as the notes name it, and what it rides */
+const NAME: Record<Carrier, string> = {
+	webtransport: 'WebTransport',
+	websocket: 'WebSocket',
+};
+const LABEL: Record<Carrier, string> = {
+	webtransport: 'WebTransport (UDP/QUIC)',
+	websocket: 'WebSocket (TCP)',
+};
+/** the error of a relay that names no session at all: an info note, as no relay is no failure */
+const NO_SESSION = 'the relay names no WebTransport session';
 
-/** the console line of a choice: at a glance, which carrier, where and how fast */
-export function describeCarrier(info: CarrierInfo): string {
-	const what =
-		info.carrier === 'webtransport'
-			? 'Wisp over WebTransport (UDP/QUIC)'
-			: 'Wisp over WebSocket (TCP)';
-	return `${what} to ${info.url}, ${info.ms} ms${info.why ? `; WebTransport: ${info.why}` : ''}`;
+/** by RelayPlan.key, the quiet a note told already (KrunkNative's skip_noted): one note per backoff */
+const quietNoted = new Map<string, number>();
+
+/** the note of a session that could not be had, as KrunkNative words a transport that failed */
+function unavailable(key: string, error: unknown, next: string) {
+	const why = short(error);
+	quietNoted.set(key, memory.quiet(key)?.until ?? 0);
+	if (why === NO_SESSION) wispNote('info', `${why}: wisp uses the WebSocket`);
+	else
+		wispNote(
+			'warn',
+			`WebTransport unavailable (${why})${next}; WebTransport again in ${FAILED_QUIET_MS / 1000} s`,
+		);
 }
 
+/**
+ * A choice, to the watchers: the host's controller prints it
+ * (src/controller/transportConsole.ts), so it is on the host's console
+ * whether the transport runs in the worker or in a page
+ */
 function announce(key: string, info: CarrierInfo) {
 	const previous = lastCarrier.get(key);
 	lastCarrier.set(key, info.carrier);
-	if (previous && previous !== info.carrier) info.previous = previous;
-	console.info(
-		`%c STomp transport %c ${describeCarrier(info)} `,
-		LOG_LABEL,
-		LOG_VALUE(info.carrier),
-	);
-	if (info.previous)
-		console.info(
-			`%c STomp transport %c switched from ${info.previous === 'webtransport' ? 'WebTransport' : 'WebSocket'} to ${info.carrier === 'webtransport' ? 'WebTransport' : 'WebSocket'} `,
-			LOG_LABEL,
-			LOG_VALUE(info.carrier),
+	if (previous && previous !== info.carrier) {
+		info.previous = previous;
+		wispNote(
+			'info',
+			`switched from ${NAME[previous]} to ${NAME[info.carrier]}`,
 		);
+	} else if (previous) info.reconnected = true;
 	for (const watcher of watchers)
 		try {
 			watcher(info);
@@ -418,6 +456,18 @@ interface OpenCarrier {
 	close(): void;
 	/** settles when it ends; rejects when it ended without a close of the relay's */
 	ended: Promise<void>;
+	/** the WebSocket's: settles with its close code once it closed */
+	closed?: Promise<number>;
+	/** the Wisp packets it carried each way, and of them as datagrams (the session's) */
+	stats?: PipeStats;
+}
+
+/** what a session carried, for the note when it ends */
+interface PipeStats {
+	sent: number;
+	received: number;
+	datagramsSent: number;
+	datagramsReceived: number;
 }
 
 /** the discovery document's URL for a wisp URL (relayPlan's, when it has one) */
@@ -587,8 +637,7 @@ async function openSession(
 			}
 	}
 	const { found } = await discover(plan.discovery!, ms);
-	if (!found)
-		throw first ?? new Error('the relay names no WebTransport session');
+	if (!found) throw first ?? new Error(NO_SESSION);
 	// the document names the session that failed already
 	if (first && found.url === plan.direct && !found.hashes.length) throw first;
 	const by = async (found: Discovery): Promise<Opened> => ({
@@ -637,6 +686,12 @@ function pipeOf(
 	let reading: ReadableStreamDefaultController<ArrayBuffer>;
 	let ended = false;
 	const { first, got, failed } = firstPacket();
+	const stats: PipeStats = {
+		sent: 0,
+		received: 0,
+		datagramsSent: 0,
+		datagramsReceived: 0,
+	};
 	const end = () => {
 		if (ended) return;
 		ended = true;
@@ -657,6 +712,7 @@ function pipeOf(
 	const take = (packet: Uint8Array) => {
 		if (ended) return;
 		if (packet[0] === CLOSE && packet.length >= 5) udp.delete(streamOf(packet));
+		stats.received++;
 		reading.enqueue(
 			packet.buffer.slice(
 				packet.byteOffset,
@@ -715,7 +771,9 @@ function pipeOf(
 			for (;;) {
 				const { value, done } = await reader.read();
 				if (done) break;
-				if (value.length >= 5) take(value);
+				if (value.length < 5) continue;
+				stats.datagramsReceived++;
+				take(value);
 			}
 		} catch {
 			// the session ended
@@ -726,6 +784,7 @@ function pipeOf(
 	const datagramWriter = session.datagrams.writable.getWriter();
 	const write = new WritableStream<Uint8Array>({
 		async write(packet) {
+			stats.sent++;
 			const type = packet[0];
 			if (packet.length >= 5) {
 				const id = streamOf(packet);
@@ -738,6 +797,7 @@ function pipeOf(
 				) {
 					// a datagram the connection drops is lost, as UDP's is
 					await datagramWriter.ready;
+					stats.datagramsSent++;
 					datagramWriter.write(packet).catch(() => {});
 					return;
 				}
@@ -758,7 +818,7 @@ function pipeOf(
 			end();
 		},
 	});
-	return { pipe: { read, write }, first };
+	return { pipe: { read, write }, first, stats };
 }
 
 /**
@@ -787,14 +847,14 @@ async function sessionCarrier(
 		}
 	};
 	try {
-		const { pipe, first } = pipeOf(
+		const { pipe, first, stats } = pipeOf(
 			session,
 			await session.createBidirectionalStream(),
 		);
 		await timeout(first, ms, 'the Wisp stream');
 		const ended = session.closed.then(() => {});
 		ended.catch(() => {});
-		return { carrier: 'webtransport', url, via, pipe, close, ended };
+		return { carrier: 'webtransport', url, via, pipe, close, ended, stats };
 	} catch (error) {
 		close();
 		throw error;
@@ -828,6 +888,8 @@ function socketCarrier(
 		let ended = false;
 		let endedBy: () => void;
 		const done = new Promise<void>((resolve) => (endedBy = resolve));
+		let closedWith!: (code: number) => void;
+		const closed = new Promise<number>((resolve) => (closedWith = resolve));
 		const close = () => {
 			try {
 				socket.close(1000);
@@ -881,9 +943,13 @@ function socketCarrier(
 				},
 				close,
 				ended: done,
+				closed,
 			});
 		};
-		socket.onclose = end;
+		socket.onclose = (event) => {
+			closedWith(event.code);
+			end();
+		};
 		socket.onerror = end;
 	});
 }
@@ -899,7 +965,9 @@ export class CarrierTransport implements ProxyTransport {
 	#Transport: TransportClass;
 	#options: unknown[];
 	#wisp: string;
-	#webTransport: WispWebTransportOptions;
+	/** null: off, the transport as given on its own WebSocket */
+	#webTransport: WispWebTransportOptions | null;
+	#label: CarrierLabel | null;
 	#base: ProxyTransport;
 	#starting: Promise<void> | null = null;
 	/** which carrier the wisp connection rides: null before init() chose */
@@ -912,13 +980,23 @@ export class CarrierTransport implements ProxyTransport {
 	constructor(
 		Transport: TransportClass,
 		options: unknown[],
-		webTransport: WispWebTransportOptions,
+		webTransport: WispWebTransportOptions | null,
+		label: CarrierLabel | null = null,
 	) {
 		this.#Transport = Transport;
 		this.#options = options;
 		this.#wisp = (options[0] as { wisp: string }).wisp;
 		this.#webTransport = webTransport;
+		this.#label = label;
 		this.#base = new Transport(...options);
+	}
+
+	/**
+	 * whether init() opens the wisp connection itself (no `webTransport`):
+	 * warmTransport must not open another
+	 */
+	get opensWisp(): boolean {
+		return !this.#webTransport;
 	}
 
 	/** the transport in use (serveTransport and webTransportHost look through it) */
@@ -954,11 +1032,92 @@ export class CarrierTransport implements ProxyTransport {
 	}
 
 	get #timeoutMs(): number {
-		return this.#webTransport.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+		return this.#webTransport?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+	}
+
+	/** the choice, told: the host's `carrier` */
+	#announce(key: string, info: CarrierInfo) {
+		this.info = { ...info, ...this.#label };
+		announce(key, this.info);
+	}
+
+	/** what the notes say of the transport beside its carrier: `epoxy, HTTP/3 on` */
+	get #what(): string {
+		const label = this.#label;
+		return label
+			? `${label.transport}, HTTP/3 ${label.http3 ? 'on' : 'off'}`
+			: '';
+	}
+
+	/** the note of riding the WebSocket */
+	#connecting(off = false) {
+		const what = this.#what;
+		wispNote(
+			'info',
+			`connecting to ${this.#wisp} (wisp transport ${LABEL.websocket}${off ? ', WebTransport off' : ''}${what ? `; ${what}` : ''})`,
+		);
+	}
+
+	/**
+	 * No `webTransport`: the transport as given, on its own WebSocket. Its
+	 * wisp connection is opened now and the time to it told (epoxy's
+	 * replace_stream_provider settles once the relay answered; a request
+	 * meanwhile waits for that connection, as warmTransport had it); a
+	 * transport without that call is timed to the end of its init. A
+	 * connection that cannot be opened now is left to the first request,
+	 * as before, and the line says why.
+	 */
+	async #plain() {
+		const key = `wisp ${this.#wisp}`;
+		this.#connecting(true);
+		let started = performance.now();
+		await this.#base.init();
+		this.carrier = 'websocket';
+		const client = (
+			this.#base as {
+				client?: { replace_stream_provider?: () => Promise<unknown> };
+			}
+		).client;
+		if (typeof client?.replace_stream_provider !== 'function') {
+			const ms = Math.round(performance.now() - started);
+			this.#announce(key, {
+				carrier: 'websocket',
+				url: this.#wisp,
+				ms,
+				why: 'off',
+			});
+			return;
+		}
+		started = performance.now();
+		client.replace_stream_provider().then(
+			() => {
+				const ms = Math.round(performance.now() - started);
+				this.#announce(key, {
+					carrier: 'websocket',
+					url: this.#wisp,
+					ms,
+					why: 'off',
+				});
+			},
+			(error) => {
+				const ms = Math.round(performance.now() - started);
+				wispNote(
+					'warn',
+					`websocket did not open (${short(error)}); the first request tries again`,
+				);
+				this.#announce(key, {
+					carrier: 'websocket',
+					url: this.#wisp,
+					ms,
+					why: `off; the WebSocket did not open (${short(error)})`,
+				});
+			},
+		);
 	}
 
 	async #start() {
 		if (this.carrier === null) {
+			if (!this.#webTransport) return this.#plain();
 			const plan = relayPlan(this.#wisp, this.#webTransport);
 			const started = performance.now();
 			const { open, why } = await this.#choose(plan);
@@ -971,13 +1130,19 @@ export class CarrierTransport implements ProxyTransport {
 				);
 			}
 			this.carrier = open?.carrier ?? 'websocket';
-			this.info = {
+			if (this.carrier === 'webtransport') {
+				const what = this.#what;
+				wispNote(
+					'info',
+					`WebTransport session established in ${ms} ms: wisp transport ${LABEL.webtransport} to ${open!.url}${what ? ` (${what})` : ''}`,
+				);
+			} else this.#connecting();
+			this.#announce(plan.key, {
 				carrier: this.carrier,
 				url: open?.url ?? this.#wisp,
 				ms,
 				...(this.carrier === 'websocket' && { why }),
-			};
-			announce(plan.key, this.info);
+			});
 		}
 		await this.#base.init();
 	}
@@ -1004,10 +1169,6 @@ export class CarrierTransport implements ProxyTransport {
 			},
 			(error) => {
 				memory.failed(plan.key, short(error));
-				console.warn(
-					`Stomp: no WebTransport session to the wisp relay (${plan.key}); its WebSocket for ${FAILED_QUIET_MS / 1000} s, then a session tried beside it:`,
-					error,
-				);
 				throw error;
 			},
 		);
@@ -1022,21 +1183,40 @@ export class CarrierTransport implements ProxyTransport {
 	): Promise<{ open: OpenCarrier | null; why: string }> {
 		const socket = () =>
 			this.#socket().catch((error) => {
-				console.warn('Stomp: the wisp WebSocket could not be opened:', error);
+				wispNote('warn', `websocket did not open (${short(error)})`);
 				return null;
 			});
-		if (typeof WebTransport !== 'function')
+		const target = plan.direct ?? plan.discovery;
+		if (typeof WebTransport !== 'function') {
+			wispNote(
+				'info',
+				'WebTransport unavailable (none in this realm): wisp uses the WebSocket',
+			);
 			return { open: await socket(), why: 'none in this realm' };
+		}
 		const before = await memory.get(plan.key);
-		if (before === 'quiet')
+		if (before === 'quiet') {
+			const reason = memory.reason(plan.key) ?? 'no session';
+			const quiet = memory.quiet(plan.key);
+			if (quiet && quietNoted.get(plan.key) !== quiet.until) {
+				quietNoted.set(plan.key, quiet.until);
+				const now = Date.now();
+				wispNote(
+					'info',
+					`WebTransport skipped: it failed ${Math.round((now - quiet.failed) / 1000)} s ago (${reason}); next try in ${Math.max(0, Math.round((quiet.until - now) / 1000))} s`,
+				);
+			}
 			return {
 				open: await socket(),
-				why: `it failed lately (${memory.reason(plan.key) ?? 'no session'}); tried again within ${FAILED_QUIET_MS / 1000} s`,
+				why: `it failed lately (${reason}); tried again within ${FAILED_QUIET_MS / 1000} s`,
 			};
+		}
 		if (before === 'worked') {
+			wispNote('info', `trying the WebTransport transport to ${target}`);
 			try {
 				return { open: await this.#session(plan), why: '' };
 			} catch (error) {
+				unavailable(plan.key, error, ', trying the next transport');
 				return {
 					open: await socket(),
 					why: `the session that worked before failed: ${short(error)}`,
@@ -1046,15 +1226,34 @@ export class CarrierTransport implements ProxyTransport {
 		if (before === 'retry') {
 			// the WebSocket now; the session's outcome for the next transport
 			const reason = memory.reason(plan.key) ?? 'no session';
+			wispNote(
+				'info',
+				`trying the WebTransport transport to ${target} beside the WebSocket, for the next start`,
+			);
+			const started = performance.now();
 			this.probed = this.#session(plan).then(
-				(open) => (open.close(), true),
-				() => false,
+				(open) => {
+					open.close();
+					wispNote(
+						'info',
+						`WebTransport session established in ${Math.round(performance.now() - started)} ms beside the WebSocket: the next start takes it`,
+					);
+					return true;
+				},
+				(error) => {
+					unavailable(plan.key, error, '');
+					return false;
+				},
 			);
 			return {
 				open: await socket(),
 				why: `it failed before (${reason}); a session is tried beside the WebSocket`,
 			};
 		}
+		wispNote(
+			'info',
+			`trying the WebTransport transport to ${target}, the WebSocket beside it`,
+		);
 		return this.#race(plan, socket);
 	}
 
@@ -1112,6 +1311,8 @@ export class CarrierTransport implements ProxyTransport {
 		if (!first.open) {
 			// no WebSocket: the session when it comes
 			const open = await session.catch(() => null);
+			if (!open)
+				unavailable(plan.key, sessionError, ', and the WebSocket neither');
 			return {
 				open,
 				why: `no session either: ${short(sessionError)}`,
@@ -1140,6 +1341,12 @@ export class CarrierTransport implements ProxyTransport {
 			return { open: late.open, why: '' };
 		}
 		loser(session);
+		if (late === 'late')
+			wispNote(
+				'info',
+				`WebTransport unavailable (${handshakeLate ? `no handshake within ${readyGrace} ms` : `not up within ${grace} ms`} of the WebSocket), trying the next transport; WebTransport again on the next start if it comes up`,
+			);
+		else unavailable(plan.key, sessionError, ', trying the next transport');
 		return {
 			open: first.open,
 			why:
@@ -1162,8 +1369,25 @@ export class CarrierTransport implements ProxyTransport {
 	 */
 	#pipes(open: OpenCarrier, key: string): (v2: boolean) => Promise<WispPipe> {
 		let unused: OpenCarrier | null = open;
+		const up = performance.now();
+		const stats = open.stats;
+		const ended = (how: string) =>
+			`WebTransport session ended after ${Math.round((performance.now() - up) / 1000)} s (${how}${stats ? `; sent ${stats.datagramsSent} / received ${stats.datagramsReceived} datagrams, ${stats.sent - stats.datagramsSent} / ${stats.received - stats.datagramsReceived} packets on the stream` : ''})`;
 		if (open.carrier === 'webtransport')
-			open.ended.catch(() => memory.lost(key));
+			open.ended.then(
+				() => wispNote('info', ended('closed')),
+				() => {
+					memory.lost(key);
+					wispNote('warn', ended('lost without a close'));
+				},
+			);
+		else
+			void open.closed?.then((code) =>
+				wispNote(
+					code === 1000 ? 'info' : 'warn',
+					`websocket closed (code ${code})`,
+				),
+			);
 		return async () => {
 			const mine = unused;
 			unused = null;

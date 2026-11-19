@@ -37,6 +37,35 @@ export function resolveHttp3<T extends ConstructibleTransport>(
 	};
 }
 
+/** directories a package keeps its build in, which name no transport */
+const BUILD_DIRECTORIES = new Set([
+	'dist',
+	'lib',
+	'build',
+	'esm',
+	'cjs',
+	'out',
+]);
+
+/**
+ * A transport module as the host's console names it: its file, or for an
+ * index its package's directory, without `-transport`
+ * (`/epoxy/index.mjs` and `@mercuryworkshop/epoxy-transport/dist/index.mjs`
+ * are `epoxy`)
+ */
+export function transportName(module: string): string {
+	let parts: string[];
+	try {
+		parts = new URL(module).pathname.split('/').filter(Boolean);
+	} catch {
+		parts = module.split('/').filter(Boolean);
+	}
+	let name = (parts.pop() ?? '').replace(/\.[cm]?js$/, '');
+	while ((name === 'index' || BUILD_DIRECTORIES.has(name)) && parts.length)
+		name = parts.pop()!;
+	return name.replace(/-transport$/, '') || 'transport';
+}
+
 /**
  * `h3Worker`: the transport worker's script, which stomp-h3 runs in a
  * worker of its own from (http3/h3Thread.ts); without it stomp-h3 runs in
@@ -54,16 +83,19 @@ export async function constructTransport(
 	const args = options || [];
 	// Wisp over the relay's WebTransport session when it has one (epoxy's
 	// function transport: a `wisp` URL to start from), its WebSocket
-	// otherwise (src/transport/wispWebTransport.ts)
+	// otherwise (src/transport/wispWebTransport.ts). Without `webTransport`
+	// a transport given a wisp URL rides its own WebSocket, and says so
+	// as the carrier, as the host's console and `carrier` tell it
 	const carried =
-		webTransport &&
 		typeof (args[0] as { wisp?: unknown } | undefined)?.wisp === 'string';
+	const label = { transport: transportName(module), http3: !!http3 };
 	const transport = new RevivingTransport(() =>
 		carried
 			? new CarrierTransport(
 					Transport,
 					args,
-					webTransport === true ? {} : webTransport,
+					!webTransport ? null : webTransport === true ? {} : webTransport,
+					label,
 				)
 			: new Transport(...args),
 	);

@@ -99,6 +99,11 @@ import {
 import RemoteTransport from '../transport/RemoteTransport';
 import { RpcHelper } from '../transport/rpc';
 import serveTransport from '../transport/serveTransport';
+import {
+	transportLog,
+	watchTransportNotes,
+	type TransportNote,
+} from '../transport/transportLog';
 import TransportWorker from '../transport/TransportWorker';
 import { watchCarrier, type CarrierInfo } from '../transport/wispWebTransport';
 import { BUILD, coreModuleKey } from '../version';
@@ -151,6 +156,7 @@ import {
 	type SiteFrameInfo,
 	type SiteHistoryCommand,
 } from './sites';
+import { debugTransportStored, printNote } from './transportConsole';
 
 export { default as SearchBuilder } from '../bootstrapper/SearchBuilder';
 export type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
@@ -257,6 +263,20 @@ export interface ControllerInit {
 	onRequest?: (info: RequestEvent) => void;
 	/** @internal the service worker sends request reports; set by the controller frame */
 	requestLog?: boolean;
+	/**
+	 * The transport's verbose log on the console (src/transport/transportLog.ts):
+	 * a `[net]` line for each connection the transport opens to a site, what
+	 * it rides there (HTTP/1.1, HTTP/2 over TLS over a Wisp TCP stream,
+	 * HTTP/3 over a Wisp UDP stream) and what that Wisp stream rides to the
+	 * relay (WebTransport's QUIC stream or datagrams, or the WebSocket), and
+	 * each HTTP/3 fallback with its reason. Off by default, when nothing is
+	 * built for it; `localStorage['stomp:debug-transport'] = '1'` on the
+	 * host's origin turns it on when this is not given. The `[wisp]` notes
+	 * (what the wisp connection rides) are on the console either way.
+	 */
+	debugTransport?: boolean;
+	/** @internal the controller frame hands the transport's notes to its host, which prints them */
+	onTransportNote?: (note: TransportNote) => void;
 	/**
 	 * @internal how the host page was loaded (hostReload.ts), found out by
 	 * the host side of a controller frame; null: it was not reloaded
@@ -917,8 +937,8 @@ function failingTransport(error: unknown): ProxyTransport {
  * `{ build }`) when a later handshake agrees again, `transporthost`
  * (detail: `{ host: 'page', error }`) when the transport worker could not
  * host a descriptor and the page took over, and `carrier` (detail:
- * CarrierInfo, also `carrier`) each time a transport with `webTransport`
- * chooses what its wisp connection rides.
+ * CarrierInfo, also `carrier`) each time a descriptor's transport given a
+ * wisp URL is up on what its wisp connection rides.
  */
 export class StompController extends EventTarget {
 	config: Config;
@@ -956,10 +976,11 @@ export class StompController extends EventTarget {
 	transportHost: 'worker' | 'page';
 	/**
 	 * What the transport's wisp connection rides, WebTransport or its
-	 * WebSocket, once a transport with `webTransport` chose (a `carrier`
-	 * event each time it does, a revived transport too); null before, and
-	 * for a transport without the option. The host's alone: no proxied page
-	 * is told.
+	 * WebSocket, once a descriptor's transport given a wisp URL chose (with
+	 * `webTransport`) or opened its WebSocket (without: `why` is `off`); a
+	 * `carrier` event each time, a revived transport too. Null before, and
+	 * for an instance or a transport given no wisp URL. The host's alone: no
+	 * proxied page is told.
 	 */
 	carrier: CarrierInfo | null = null;
 	frames: Frame[] = [];
@@ -973,6 +994,10 @@ export class StompController extends EventTarget {
 	);
 	isReady = false;
 	#worker?: TransportWorker | BrokeredTransport;
+	/** prints a note of the transport's (the host's console), or hands it to the host that does */
+	#note: (note: TransportNote) => void;
+	/** the verbose mode (ControllerInit.debugTransport) */
+	#debugTransport: boolean;
 	#rewriteWorkers?: RewriteWorkers | BrokeredPool;
 	/** the site pool's hub (ControllerInit.sitePool) */
 	#sites?: SiteHub;
@@ -1126,9 +1151,16 @@ export class StompController extends EventTarget {
 			this.transportHost = 'page';
 			this.transport = given;
 		}
-		// a transport in this page announces its carrier here
+		// a transport in this page announces its carrier here, and tells
+		// its notes (the worker's come over its channel)
 		watchCarrier((info) => {
 			if (this.transportHost === 'page') this.#carrierChosen(info);
+		});
+		this.#note = init.onTransportNote ?? printNote;
+		this.#debugTransport = init.debugTransport ?? debugTransportStored();
+		if (this.#debugTransport) transportLog.on = true;
+		watchTransportNotes((note) => {
+			if (this.transportHost === 'page') this.#note(note);
 		});
 		this.#sandbox = init.sandbox === undefined ? DEFAULT_SANDBOX : init.sandbox;
 		const rewriteWorkers = Math.min(
@@ -1752,7 +1784,9 @@ export class StompController extends EventTarget {
 				this.#keepAlive,
 				this.#admitSession,
 				this.#carrierChosen,
+				(note) => this.#note(note),
 			);
+			if (this.#debugTransport) worker.debugTransport(true);
 			await worker.init(resolvedModule(descriptor));
 			this.#worker = worker;
 			// the host's own view of the transport, served by the worker like

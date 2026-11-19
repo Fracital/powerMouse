@@ -14,6 +14,7 @@ import type {
 	RequestInfo,
 } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
+import type { TransportNote } from '../transport/transportLog';
 import type { CarrierInfo } from '../transport/wispWebTransport';
 import { shareGeometry } from './geometry';
 import {
@@ -292,6 +293,12 @@ if (window === window.parent || !origins.length) {
 									},
 								}
 							: {}),
+						// the transport's notes go on the host's console, never this
+						// frame's (the proxy origin's)
+						debugTransport: init.debugTransport === true,
+						onTransportNote: (note: TransportNote) => {
+							rpc.call('transportNote', note);
+						},
 						// the host's request log travels SW -> here -> host
 						...(init.requestLog
 							? {

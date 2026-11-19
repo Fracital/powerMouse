@@ -13,6 +13,7 @@ import type {
 } from '../passkeys/types';
 import type { PortBody } from './bodyPort';
 import type { Http3DescriptorOptions } from './construct';
+import type { TransportNote } from './transportLog';
 import type { CarrierInfo, WispWebTransportOptions } from './wispWebTransport';
 
 // postMessage keys (controller <-> service worker <-> proxied contexts)
@@ -1657,6 +1658,8 @@ export interface TransportModule {
 
 /** implemented by the transport worker (src/transport/worker.ts), called by the controller */
 export type WorkerBound = {
+	/** the verbose mode (transportLog.ts) on or off, sent before `init` */
+	debugTransport: [boolean];
 	/** import the module and construct the transport; rejects with the import or constructor error */
 	init: [TransportModule];
 	/** replace the transport; in-flight requests finish on the old one */
@@ -1703,6 +1706,8 @@ export type WorkerToController = {
 	tick: [];
 	/** the transport chose what its wisp connection rides (wispWebTransport.ts watchCarrier) */
 	carrier: [CarrierInfo];
+	/** a line for the host's console (transportLog.ts) */
+	transportNote: [TransportNote];
 };
 
 export type WebSocketMessage =

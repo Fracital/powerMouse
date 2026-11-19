@@ -8,6 +8,7 @@
 // the page's streams have the backpressure QUIC's flow control gives them.
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import { postToPort, TransportToHost, WebTransportMessage } from './messages';
+import { logTransport, rideOf, transportLog } from './transportLog';
 
 /** stomp-h3's session (deploy/epoxy/h3/src/webtransport.rs) */
 interface WtSession {
@@ -239,6 +240,10 @@ export async function serveWebTransport(
 		channel?.write.abort().catch(() => {});
 		return failure(String((error as Error)?.message ?? error));
 	}
+	if (transportLog.on)
+		logTransport(
+			`WebTransport session to ${target.origin}: HTTP/3 over QUIC over a Wisp UDP stream, ${rideOf(transport, true)}`,
+		);
 	serveSession(session, port);
 	return [
 		{

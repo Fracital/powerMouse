@@ -2584,64 +2584,6 @@ input:focus-visible {
 	height: 20px;
 }
 
-/* What the wisp connection rides (the controller's `carrier`): a small tag
-   on the menu button's corner, in the Shields badge's place and type, quiet
-   grey for TCP and the panel's green for UDP; and a line atop the menu with
-   the carrier, its time, the relay and, on TCP, why not UDP. */
-.toolbtn.menubtn {
-	position: relative;
-}
-.carrierTag {
-	position: absolute;
-	right: -3px;
-	bottom: -2px;
-	height: 12px;
-	padding: 0 3px;
-	border-radius: 999px;
-	background: #303032;
-	box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
-	color: #c9c9ca;
-	font-family: 'Montserrat', sans-serif;
-	font-size: 7px;
-	font-weight: 600;
-	letter-spacing: 0.04em;
-	line-height: 12px;
-	pointer-events: none;
-}
-.carrierTag[data-carrier='webtransport'] {
-	background: #1d3526;
-	color: #8fd6a6;
-}
-.carrierTag[hidden] {
-	display: none;
-}
-.pmMenuCarrier {
-	max-width: 280px;
-	margin: 0 0 4px;
-	padding: 6px 12px 9px;
-	border-bottom: 1px solid var(--sh-divider);
-	color: var(--sh-text-2);
-	font-size: 12.5px;
-	line-height: 1.45;
-}
-.pmMenuCarrier[hidden] {
-	display: none;
-}
-.pmMenuCarrier strong {
-	color: var(--sh-text);
-	font-weight: 600;
-}
-.pmMenuCarrier[data-carrier='webtransport'] strong {
-	color: #8fd6a6;
-}
-.pmMenuCarrier small {
-	display: block;
-	color: var(--sh-text-3);
-	font-size: 11.5px;
-	overflow-wrap: anywhere;
-	user-select: text;
-}
-
 /* main_card: the raised surface holding the site row and the count box */
 .shieldsCard {
 	background: var(--sh-card);

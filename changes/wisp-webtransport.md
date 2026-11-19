@@ -31,12 +31,33 @@
   keeps the WebSocket; a URL names the session, or with `.json` its
   discovery document), with the built-in holyWisp's document forwarded at
   `/webtransport.json` when its package starts the listener; `?wt=0` or
-  `?wt` decides for one visit. Each choice is one line on the console
-  (`STomp transport  Wisp over WebTransport (UDP/QUIC) to <url>, <ms> ms`,
-  or the WebSocket's with why not WebTransport, and a line when a revived
-  transport switches), the controller's `carrier` and its `carrier` event
-  say it (also on `StompRemoteController`), and the demo shows it: a UDP or
-  TCP tag on the menu button, the carrier, its time, the relay and why not
-  UDP atop the menu and in About's Transport row. The demo turns the
-  carrier on for its built-in holyWisp only when that serves its discovery
-  document.
+  `?wt` decides for one visit. The host's console has a plain `[wisp]`
+  line for each event of the carrier, as KrunkNative's console words them
+  (`trying the WebTransport transport to <url>`, `WebTransport session
+established in <ms> ms: wisp transport WebTransport (UDP/QUIC) to <url>
+(epoxy, HTTP/3 on)`, `WebTransport unavailable (<why>), trying the next
+transport; WebTransport again in 30 s`, `WebTransport skipped: it failed
+<n> s ago (<why>); next try in <n> s`, `connecting to <wss url> (wisp
+transport WebSocket (TCP); epoxy, HTTP/3 on)`, a session or WebSocket
+  that ended, `reconnecting now`, `switched from WebTransport to
+WebSocket`), `console.info` or `console.warn` for a failure, printed by
+  the host's controller whether the transport runs in its worker, its page
+  or the controller frame. A transport without `webTransport` reports its
+  WebSocket the same way (one line, `..., WebTransport off; ...`), so the
+  controller's `carrier` and its `carrier` event (also on
+  `StompRemoteController`) are set for every transport given a wisp URL,
+  and the demo shows it in About's Transport row alone (the carrier, its
+  time, the relay and why not UDP), which takes the place of the demo's
+  own Transport console line; the menu button's UDP or TCP tag and the
+  carrier line atop the menu are gone. The demo turns the carrier on for its built-in holyWisp only when
+  that serves its discovery document.
+- The transport's verbose log (`ControllerInit.debugTransport`, off by
+  default; `localStorage['stomp:debug-transport'] = '1'` on the host's
+  origin, or the demo's `?transportdebug`): a `[net]` line on the host's
+  console for each connection the transport opens to a site (HTTP/1.1 or
+  HTTP/2 over TLS over a Wisp TCP stream, HTTP/3 over QUIC over a Wisp UDP
+  stream, a WebSocket, a page's WebTransport session, WebRTC's streams),
+  what its Wisp stream rides to the relay (WebTransport's QUIC stream or
+  its datagrams, or the WebSocket), and each HTTP/3 fallback to TCP with
+  its reason. Nothing is built for it while it is off. The demo's About has
+  a Transport log row saying how to turn it on.

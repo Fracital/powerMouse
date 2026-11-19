@@ -170,6 +170,21 @@ const ECH_DNS = new URLSearchParams(location.search).has('noech')
 // server, docs/webtransport.md "Wisp over WebTransport"), its WebSocket when
 // the relay has none; ?wt=0 (off) or ?wt (on) on this page decides for one
 // visit
+// the transport's verbose log on this page's console (a `[net]` line per
+// connection, ControllerInit.debugTransport): ?transportdebug for a visit, or
+// localStorage['stomp:debug-transport'] = '1' on this origin, which the
+// controller reads itself
+const TRANSPORT_DEBUG_QUERY = new URLSearchParams(location.search).has(
+	'transportdebug',
+);
+const transportDebugOn = () => {
+	if (TRANSPORT_DEBUG_QUERY) return true;
+	try {
+		return localStorage.getItem('stomp:debug-transport') === '1';
+	} catch {
+		return false;
+	}
+};
 const WEB_TRANSPORT = new URLSearchParams(location.search).has('wt')
 	? new URLSearchParams(location.search).get('wt') !== '0' &&
 		(CFG.webTransport || true)
@@ -910,6 +925,7 @@ const controllerCallbacks = {
 	errorPage: '/error.html',
 	// every proxied request, for the request viewer
 	onRequest: recordRequest,
+	...(TRANSPORT_DEBUG_QUERY && { debugTransport: true }),
 	// a page's window.open / target=_blank becomes a tab here, never a
 	// bare proxied popup (the page sees null, like a popup blocker)
 	onOpen: (url) => navigate(url, { newTab: true }),
@@ -943,7 +959,9 @@ async function startController(name) {
 		'green',
 	);
 	transportName = name;
-	badge('Transport', transportFact(name));
+	// the console's line is the transport's own ([wisp], when it connects);
+	// About shows the fact
+	badgeFacts.set('Transport', transportFact(name));
 
 	// no id is given: the controller keeps one per open tab from visit to
 	// visit, so the browser keeps the compiled code of the scripts proxied
@@ -1048,12 +1066,11 @@ async function switchTransport(name) {
 	rememberTransport(name);
 	setStatus(`Switching to ${name}…`);
 	try {
-		// a transport without `webTransport` (libcurl) chooses no carrier
-		showCarrier(null);
+		// until the new transport's carrier event says what it rides
 		transportName = name;
+		badgeFacts.set('Transport', transportFact(name));
 		await controller.setTransport(transports[name]());
 		setStatus('Ready');
-		badge('Transport', transportFact(name));
 	} catch (error) {
 		setStatus(`Transport failed: ${error.message}`, true);
 	}
@@ -5206,51 +5223,25 @@ function syncFullscreenItem() {
 menuAbout.innerHTML = `${shieldIcon('info')}<span>About</span>`;
 
 // ---- what the wisp connection rides ------------------------------------------
-// The controller's `carrier` (a transport with `webTransport`, the demo's
-// default, docs/webtransport.md "Wisp over WebTransport"): WebTransport, on
-// UDP, or the WebSocket, on TCP. The menu button's tag says which at a
-// glance, the menu's first line and About's Transport row say where, how
-// fast and, on TCP, why not UDP; each follows the `carrier` event, so a
-// revived transport that chose the other shows at once.
-const carrierTag = $('carrierTag');
-const menuCarrier = $('menuCarrier');
-const toolMenu = $('toolMenu');
+// The controller's `carrier` (every transport given a wisp URL: with
+// `webTransport`, docs/webtransport.md "Wisp over WebTransport", or without,
+// on its WebSocket): WebTransport, on UDP, or the WebSocket, on TCP. About's
+// Transport row says which, where, how fast and, on TCP, why not UDP; it
+// follows the `carrier` event, so a revived transport that chose the other
+// shows at once. The console has the transport's own line ([wisp]).
 /** the transport the bar's select chose, for the Transport fact */
 let transportName = '';
 const transportFact = (name) =>
 	`${name} over ${wispURL()}${HTTP3 && name === 'epoxy' ? ', HTTP/3 on' : ''}`;
 
 function showCarrier(info) {
-	if (!info) {
-		carrierTag.hidden = true;
-		menuCarrier.hidden = true;
-		toolMenu.title = 'Menu';
-		return;
-	}
 	const udp = info.carrier === 'webtransport';
 	const what = udp ? 'WebTransport (UDP)' : 'WebSocket (TCP)';
-	carrierTag.hidden = false;
-	carrierTag.dataset.carrier = info.carrier;
-	carrierTag.textContent = udp ? 'UDP' : 'TCP';
-	toolMenu.title = `Menu (wisp over ${what})`;
-	menuCarrier.hidden = false;
-	menuCarrier.dataset.carrier = info.carrier;
-	const line = document.createElement('div');
-	const name = document.createElement('strong');
-	name.textContent = what;
-	line.append('Wisp over ', name, `, ${info.ms} ms`);
-	const where = document.createElement('small');
-	where.textContent = info.url;
-	menuCarrier.replaceChildren(line, where);
-	if (info.why) {
-		const why = document.createElement('small');
-		why.textContent = `Not UDP: ${info.why}`;
-		menuCarrier.append(why);
-	}
-	badge(
+	// `off`: the transport has no `webTransport` (STOMP_WISP_WEBTRANSPORT=0)
+	const notUdp = info.why === 'off' ? 'WebTransport off' : info.why;
+	badgeFacts.set(
 		'Transport',
-		`${transportFact(transportName)}; Wisp over ${what} to ${info.url}, ${info.ms} ms${info.why ? `; not UDP: ${info.why}` : ''}`,
-		udp ? 'green' : 'blue',
+		`${transportFact(transportName)}; Wisp over ${what} to ${info.url}, ${info.ms} ms${notUdp ? `; not UDP: ${notUdp}` : ''}`,
 	);
 	if (shieldsPageOpen() && shieldsPage.dataset.view === 'about') fillAbout();
 }
@@ -5413,6 +5404,13 @@ function fillAbout() {
 		...[...badgeFacts]
 			.filter(([label]) => label !== 'STomp')
 			.map(([label, value]) => [label.toLowerCase(), label, value]),
+		[
+			'transportlog',
+			'Transport log',
+			transportDebugOn()
+				? 'On: a [net] line on the console for each connection'
+				: "Off; ?transportdebug, or localStorage['stomp:debug-transport'] = '1' and a reload, puts a [net] line for each connection on the console",
+		],
 		[
 			'server',
 			'Server',

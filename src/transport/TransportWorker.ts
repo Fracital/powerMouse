@@ -6,6 +6,7 @@ import {
 } from './messages';
 import { RpcHelper } from './rpc';
 import type { DecorateHandshake } from './serveTransport';
+import type { TransportNote } from './transportLog';
 import type { AdmitSession } from './webTransportHost';
 import type { CarrierInfo } from './wispWebTransport';
 
@@ -32,6 +33,7 @@ export default class TransportWorker {
 		tick: () => void,
 		admit?: AdmitSession,
 		carrier?: (info: CarrierInfo) => void,
+		note?: (note: TransportNote) => void,
 	) {
 		// a classic worker (see build.js: emscripten's environment detection)
 		this.#worker = new Worker(url);
@@ -47,6 +49,7 @@ export default class TransportWorker {
 					[],
 				],
 				carrier: async (info) => carrier?.(info),
+				transportNote: async (line) => note?.(line),
 			},
 			TRANSPORT_WORKER_RPC,
 			(data, transfer) => this.#worker.postMessage(data, transfer),
@@ -70,6 +73,10 @@ export default class TransportWorker {
 	/** `failed()` once, when the worker script could not start */
 	onFailure(failed: () => void) {
 		this.#failed.catch(failed);
+	}
+	/** the verbose mode (transportLog.ts) on or off in the worker; before init() to have it from the start */
+	debugTransport(on: boolean) {
+		this.#rpc.call('debugTransport', on).catch(() => {});
 	}
 	/**
 	 * Import the module and construct the transport in the worker. Rejects

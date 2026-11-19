@@ -34,6 +34,7 @@ import type {
 	RawHeaders,
 	TransferrableResponse,
 } from '@mercuryworkshop/proxy-transports';
+import { wispNote } from './transportLog';
 
 /** the wisp connection under the request is gone (WebTransportCarrierLost: wispWebTransport.ts CARRIER_LOST) */
 const DEAD =
@@ -264,21 +265,21 @@ export default class RevivingTransport implements ProxyTransport {
 	revive(generation: number): Promise<boolean> {
 		if (generation !== this.#generation) return Promise.resolve(true);
 		this.#reviving ??= (async () => {
+			// the host's console (transportLog.ts); the new transport's own
+			// notes say what it rides
+			wispNote('info', 'reconnecting now (the wisp connection was lost)');
 			try {
 				const next = this.#make();
 				await next.init();
 				this.#base = next;
 			} catch (error) {
-				console.warn(
-					'Stomp: the wisp connection was lost and a new transport could not start:',
-					error,
+				wispNote(
+					'warn',
+					`reconnecting failed (${String((error as Error)?.message ?? error).slice(0, 160)}); the next request tries again`,
 				);
 				return false;
 			}
 			this.#generation++;
-			console.warn(
-				'Stomp: the wisp connection was lost; a new transport takes over',
-			);
 			for (const waiting of this.#waiting)
 				if (waiting.generation < this.#generation) waiting.supersede();
 			return true;

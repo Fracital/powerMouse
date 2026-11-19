@@ -70,6 +70,7 @@ import {
 import { createShields, type Shields } from './shields';
 import type { SitePoolInit } from './sitePool';
 import { SiteRuns } from './siteRuns';
+import { debugTransportStored, printNote } from './transportConsole';
 
 export interface RemoteControllerInit {
 	/** origin that serves dist/ and the proxied content, e.g. https://proxy.example.com */
@@ -152,6 +153,12 @@ export interface RemoteControllerInit {
 	errorPage?: string;
 	/** one report per proxied request, with the RemoteFrame when known (see StompController.onRequest) */
 	onRequest?: (info: RemoteRequestEvent) => void;
+	/**
+	 * the transport's verbose log on this page's console (see
+	 * StompController.debugTransport); without it, this origin's
+	 * `localStorage['stomp:debug-transport'] = '1'` turns it on
+	 */
+	debugTransport?: boolean;
 	/**
 	 * a proxied site asks for a permission the proxy origin holds for another
 	 * site (see StompController.onPermissionRequest); the frames that should
@@ -400,6 +407,8 @@ export class RemoteController extends EventTarget {
 					this.carrier = info;
 					this.dispatchEvent(new CustomEvent('carrier', { detail: info }));
 				},
+				// the transport's notes are this page's console's
+				transportNote: async (note) => printNote(note),
 				stale: async (info) => {
 					const was = this.stale;
 					this.stale = info;
@@ -528,6 +537,9 @@ export class RemoteController extends EventTarget {
 					openTab: !!init.onOpen,
 					...(init.cache === false ? { cache: false } : {}),
 					requestLog: !!init.onRequest,
+					...((init.debugTransport ?? debugTransportStored())
+						? { debugTransport: true }
+						: {}),
 					...(init.onPermissionRequest ? { permissionPrompt: true } : {}),
 					...(init.fedcmTesting ? { fedcmTesting: true } : {}),
 					...(init.passkeys

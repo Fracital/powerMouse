@@ -386,18 +386,15 @@ for (const host of ['worker', 'page']) {
 			d.documents === 1 && verdict === 'worked',
 			JSON.stringify({ verdict, d }),
 		);
-		if (host === 'page')
-			ok(
-				`${host} first start: the console says it at a glance`,
-				fresh.page.logs.some(
-					(line) =>
-						line.includes('STomp transport') &&
-						line.includes(
-							`Wisp over WebTransport (UDP/QUIC) to ${relay.url}, ${info?.ms} ms`,
-						),
-				),
-				JSON.stringify(fresh.page.logs.filter((l) => l.includes('STomp'))),
-			);
+		// on the controller's page wherever the transport runs (the worker
+		// hands its notes over)
+		ok(
+			`${host} first start: the console says it at a glance`,
+			fresh.page.logs.includes(
+				`[wisp] WebTransport session established in ${info?.ms} ms: wisp transport WebTransport (UDP/QUIC) to ${relay.url} (epoxy, HTTP/3 off)`,
+			),
+			JSON.stringify(fresh.page.logs.filter((l) => l.startsWith('[wisp]'))),
+		);
 		await fresh.context.close();
 	}
 
@@ -864,14 +861,11 @@ for (const host of ['worker', 'page']) {
 			`${host} UDP lost under the session: the controller's carrier says the WebSocket`,
 			(await carrierInfo(page))?.carrier === 'websocket',
 		);
-		if (host === 'page')
-			ok(
-				`${host} UDP lost under the session: the console says it switched`,
-				page.logs.some((line) =>
-					line.includes('switched from WebTransport to WebSocket'),
-				),
-				JSON.stringify(page.logs.filter((l) => l.includes('STomp'))),
-			);
+		ok(
+			`${host} UDP lost under the session: the console says it switched`,
+			page.logs.includes('[wisp] switched from WebTransport to WebSocket'),
+			JSON.stringify(page.logs.filter((l) => l.startsWith('[wisp]'))),
+		);
 		await context.close();
 		await lossy.close();
 		lossy = await startWispWebTransport(`ws://127.0.0.1:${PORT}/wisp/`);

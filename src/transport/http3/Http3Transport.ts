@@ -19,6 +19,7 @@ import type {
 import { pastASCII, utf8Bytes } from '../../byteString';
 import { NETWORK_PARTITION } from '../networkPartition';
 import { wispGone } from '../RevivingTransport';
+import { logTransport, rideOf, transportLog } from '../transportLog';
 import { AltSvcCache, type AltService } from './altSvc';
 import { base64url, httpsQuery, parseHttpsAnswer } from './dnsHttps';
 import { remoteH3Module } from './h3Thread';
@@ -190,6 +191,15 @@ interface Relay {
 }
 
 const hex = (reason: number) => `0x${reason.toString(16).padStart(2, '0')}`;
+
+/** where an origin's requests go when HTTP/3 does not take them (the verbose log) */
+const OVER_TCP = 'HTTP/2 or HTTP/1.1 over TLS over a Wisp TCP stream';
+
+/** a key of the connections and the alt-svc cache, as the verbose log names it: the origin, and its partition */
+function keyed(key: string): string {
+	const at = key.lastIndexOf(' ');
+	return at < 0 ? key : `${key.slice(at + 1)} (partition ${key.slice(0, at)})`;
+}
 
 const sleep = (ms: number) =>
 	new Promise<null>((resolve) => setTimeout(() => resolve(null), ms));
@@ -505,6 +515,10 @@ export default class Http3Transport implements ProxyTransport {
 						`Stomp: HTTP/3 request to ${origin} failed, retrying over the base transport:`,
 						error,
 					);
+					if (transportLog.on)
+						logTransport(
+							`HTTP/3 to ${keyed(key)}: a ${method.toUpperCase()} failed (${String((error as Error)?.message ?? error).slice(0, 160)}), sent again with ${OVER_TCP}`,
+						);
 					via = 'base-after-h3';
 				}
 			}
@@ -645,6 +659,10 @@ export default class Http3Transport implements ProxyTransport {
 		console.warn(
 			`Stomp: the wisp server refused UDP to ${alt.host}:${alt.port} (${detail}); HTTP/3 off for ${origin} for ${Math.round(delay / 1000)} s`,
 		);
+		if (transportLog.on)
+			logTransport(
+				`HTTP/3 to ${keyed(origin)} falls back: the wisp server refused the Wisp UDP stream to ${alt.host}:${alt.port} (${detail}); ${OVER_TCP} for ${Math.round(delay / 1000)} s`,
+			);
 		if (relay !== this.#relay || relay.carried) return;
 		if (reason !== undefined && !RELAY_REASONS.has(reason)) return;
 		relay.refused.add(alt.host.toLowerCase());
@@ -662,6 +680,10 @@ export default class Http3Transport implements ProxyTransport {
 		console.warn(
 			`Stomp: HTTP/3 is off for ${UDP_BLOCKED_MS / 1000} s, the wisp server relays no UDP (${why})`,
 		);
+		if (transportLog.on)
+			logTransport(
+				`HTTP/3 falls back for every origin: the wisp server relays no UDP (${why}); ${OVER_TCP} for ${UDP_BLOCKED_MS / 1000} s`,
+			);
 	}
 
 	#loadModule(): Promise<H3Module> {
@@ -685,6 +707,10 @@ export default class Http3Transport implements ProxyTransport {
 		})().catch((error) => {
 			this.#moduleError = String(error?.message || error);
 			console.warn('Stomp: HTTP/3 is off, stomp-h3 did not load:', error);
+			if (transportLog.on)
+				logTransport(
+					`HTTP/3 falls back for every origin: stomp-h3 did not load (${this.#moduleError}); ${OVER_TCP}`,
+				);
 			throw error;
 		});
 		return this.#module;
@@ -942,6 +968,10 @@ export default class Http3Transport implements ProxyTransport {
 			measure();
 			this.#confirmed.add(origin);
 			this.#cache.confirm(origin);
+			if (transportLog.on)
+				logTransport(
+					`HTTP/3 to ${keyed(origin)}: QUIC over a Wisp UDP stream to ${alt.host}:${alt.port}, ${rideOf(this, true)}; handshake ${Math.round(conn.handshake_ms)} ms, from ${alt.source === 'alt-svc' ? 'Alt-Svc' : alt.source === 'dns' ? 'an HTTPS DNS record' : 'force'}`,
+				);
 			return conn;
 		} catch (error) {
 			const message = String((error as Error)?.message || error);
@@ -969,14 +999,22 @@ export default class Http3Transport implements ProxyTransport {
 			console.warn(
 				`Stomp: QUIC to ${origin} failed (${message}); HTTP/3 off for it for ${Math.round(delay / 1000)} s`,
 			);
+			if (transportLog.on)
+				logTransport(
+					`HTTP/3 to ${keyed(origin)} falls back: QUIC failed (${message}); ${OVER_TCP} for ${Math.round(delay / 1000)} s`,
+				);
 			return null;
 		}
 	}
 
 	/** a connection that died under a request: drop it; the next request reconnects */
 	#lost(origin: string, conn: H3Connection) {
-		if (this.#connections.get(origin) === conn)
-			this.#connections.delete(origin);
+		if (this.#connections.get(origin) !== conn) return;
+		this.#connections.delete(origin);
+		if (transportLog.on)
+			logTransport(
+				`HTTP/3 to ${keyed(origin)}: the QUIC connection ended; ${OVER_TCP} until a new one is up`,
+			);
 	}
 
 	async #viaH3(
