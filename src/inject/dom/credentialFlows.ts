@@ -4,14 +4,23 @@
 // a document's first identity request, disconnect or WebAuthn call: most
 // documents make none. The module hands them what it took when it applied,
 // before any page script ran, and their own top level reads no global.
+import { registrableDomain, siteOf } from '../../partition';
 import { routeXHR } from '../../routeURL';
 import StompURL from '../../StompURL';
+import { LOAD_HEADER, OPAQUE_HEADER } from '../../transport/messages';
 import { requiredArgumentsMessage } from '../modules/Proxy';
 import { scopePrefix } from '../modules/Unroute';
 import { withStack } from '../nativeErrors';
+import { getPublicSuffix } from '../rewriter';
 import type DocumentClient from './Client';
-import { loadFetch } from './loadGrants';
+import { createElementIn } from './cloneNode';
+import { loadFetch, loadSource } from './loadGrants';
 import { DECLINED } from './modules/Credentials';
+import {
+	nativeElement,
+	nativeEventTarget,
+	nativeNode,
+} from './modules/DOMHooks';
 
 const GET_PREFIX = "Failed to execute 'get' on 'CredentialsContainer': ";
 const IDENTITY_READ_PREFIX = `${GET_PREFIX}Failed to read the 'identity' property from 'CredentialRequestOptions': `;
@@ -20,13 +29,13 @@ const PROVIDERS_READ_PREFIX = `${IDENTITY_READ_PREFIX}Failed to read the 'provid
 /** Chrome's generic FedCM failure, given for a dismissed chooser and most faults */
 const GENERIC_TOKEN_ERROR = 'Error retrieving a token.';
 
-interface IdpAccount {
+/** an account of a provider's list, as the flow keeps it (no prototype) */
+interface Account {
 	id: string;
-	name?: string;
-	email?: string;
-	given_name?: string;
-	picture?: string;
-	approved_clients?: string[];
+	name: string | undefined;
+	email: string | undefined;
+	/** its approved_clients name the relying party */
+	approved: boolean;
 }
 
 /**
@@ -72,12 +81,57 @@ export interface IdentityContext {
 	/** the browser's own IdentityCredentialError, where it has one */
 	IdentityCredentialError:
 		(new (message?: string, options?: object) => object) | undefined;
+	/** JSON.parse and Array.isArray, taken before any of the page's script ran */
+	parse: (text: string) => unknown;
+	isArray: (value: unknown) => boolean;
 }
+
+/** how long a read waits for its body once its request was answered */
+const READ_GRACE_MS = 2_000;
+
+/**
+ * An own data property of a parsed JSON value. Its prototypes are the
+ * page's: a getter the page put there would be handed the object (an
+ * account list, for one), so nothing else of it is ever read
+ */
+const own = (value: unknown, key: PropertyKey): unknown => {
+	if (value === null || typeof value !== 'object') return undefined;
+	const descriptor = Reflect.getOwnPropertyDescriptor(value, key);
+	return descriptor ? descriptor.value : undefined;
+};
+const ownString = (value: unknown, key: string): string | undefined => {
+	const member = own(value, key);
+	return typeof member === 'string' ? member : undefined;
+};
+
+/** an endpoint of a FedCM config, absolute, or null when it is none */
+const endpointOf = (value: unknown, base: string): string | null => {
+	if (typeof value !== 'string') return null;
+	try {
+		return new URL(value, base).href;
+	} catch (error) {
+		return null;
+	}
+};
+const originOf = (url: string): string => new URL(url).origin;
 
 /**
  * FedCM for one document (see modules/Credentials.ts): the get() of an
  * identity request and IdentityCredential.disconnect, each answering with a
- * promise of the page's
+ * promise of the page's.
+ *
+ * The steps go as Chrome 157's own requests do (measured, the fedcm suite):
+ * the well-known file, the config, the accounts list and the client
+ * metadata no-cors, with no Origin, no Referer and no CORS check (the
+ * browser reads them in its own process: an identity provider sends no
+ * Access-Control-Allow-Origin for them, Google's does not), the well-known
+ * file and config also without credentials and as from an opaque origin
+ * (Sec-Fetch-Site: cross-site); the token and disconnect POSTs as CORS
+ * requests of the relying party's origin, which the provider must allow.
+ * The worker reads the no-cors steps' bodies and posts them on this
+ * document's load channel (IDENTITY_READ): what a provider tells the
+ * browser alone (the user's accounts) is never in a Response, a promise or
+ * a function of the page's, and the page sees only what Chrome shows it.
  */
 export function identityFlow({
 	client,
@@ -87,47 +141,107 @@ export function identityFlow({
 	abortReason,
 	makeCredential,
 	IdentityCredentialError: NativeIdentityCredentialError,
+	parse,
+	isArray,
 }: IdentityContext) {
 	const global = client.global as unknown as typeof globalThis &
 		Record<string, any>;
+	const rpSite = siteOf(client.url.url, getPublicSuffix);
+	const siteOfURL = (url: string) => siteOf(new URL(url), getPublicSuffix);
 
-	// --- the routed fetch every FedCM step goes through ---
+	// --- the routed requests every FedCM step goes through ---
 
 	const routeOf = (absolute: string): string =>
 		new URL(routeXHR(new StompURL(absolute, client.url)), scopePrefix(client))
 			.href;
-	// a GET of an IdP endpoint, its JSON or null for any fault; `credentials`
-	// is the step's (config and client metadata omit the IdP's cookies,
-	// accounts include them). The load's `webidentity` destination makes the
-	// server send Sec-Fetch-Dest: webidentity (src/server/rewrites.ts).
-	const idpGet = async (
+
+	/**
+	 * A no-cors step's body, as the worker read it, handed to `heard` (the
+	 * promise resolves with nothing: page code that reaches it, through a
+	 * getter of its prototype's `constructor`, learns nothing).
+	 * `credentials` is the step's (the accounts list includes the
+	 * provider's cookies, the rest omit them); `opaque` sends it as from an
+	 * opaque origin, as the browser sends the well-known file and config.
+	 * The load's `webidentity` destination makes the worker send
+	 * Sec-Fetch-Dest: webidentity (src/server/rewrites.ts).
+	 */
+	const idpRead = (
 		absolute: string,
 		credentials: RequestCredentials,
-	): Promise<any | null> => {
-		try {
-			const response = await loadFetch(
-				client,
-				routeOf(absolute),
-				'webidentity cors',
-				{
+		opaque: boolean,
+		heard: (status: number, body: string | null) => void,
+	): Promise<void> =>
+		new PagePromise<void>((done) => {
+			const from = loadSource();
+			const routed = routeOf(absolute);
+			const token = from ? from.announce(routed, 'webidentity no-cors') : null;
+			if (!from || token === null) return done(undefined);
+			let settled = false;
+			const finish = () => {
+				if (settled) return;
+				settled = true;
+				from.expect(token, null);
+				done(undefined);
+			};
+			from.expect(token, (status, body) => {
+				if (settled) return;
+				heard(status, body);
+				finish();
+			});
+			// (records of no prototype: the browser reads every member of an
+			// init, and a getter of the page's would be handed this one)
+			const headers = {
+				__proto__: null,
+				accept: 'application/json',
+				[LOAD_HEADER]: token,
+				...(opaque ? { [OPAQUE_HEADER]: '1' } : {}),
+			} as unknown as Record<string, string>;
+			try {
+				// (its answer has no body: the body comes on the channel, which
+				// may trail it a little)
+				const answered = from.client.nativeFetch(routed, {
+					__proto__: null,
 					method: 'GET',
 					credentials,
-					headers: { accept: 'application/json' },
-				},
-			);
-			if (!response.ok) return null;
-			return JSON.parse(await response.text());
-		} catch (error) {
-			return null;
-		}
-	};
-	// the credentialed POST of the id assertion (token) or disconnect endpoint
+					headers,
+					referrer: '',
+				} as RequestInit);
+				Reflect.apply(PagePromise.prototype.then, answered, [
+					() => global.setTimeout(finish, READ_GRACE_MS),
+					finish,
+				]);
+			} catch (error) {
+				finish();
+			}
+		});
+	/** a no-cors step's JSON, handed to `use` unless it is a fault (a 2xx only) */
+	const idpJSON = (
+		absolute: string,
+		credentials: RequestCredentials,
+		opaque: boolean,
+		use: (json: unknown) => void,
+	): Promise<void> =>
+		idpRead(absolute, credentials, opaque, (status, body) => {
+			if (status < 200 || status > 299 || body === null) return;
+			try {
+				use(parse(body));
+			} catch (error) {
+				// not JSON: a fault
+			}
+		});
+
+	// the credentialed CORS POST of the id assertion (token) or disconnect
+	// endpoint: its status and JSON (null when it is none), or null for a
+	// network error (a provider that does not allow the relying party)
 	const idpPost = async (
 		absolute: string,
 		body: Record<string, string>,
-	): Promise<any | null> => {
+	): Promise<{ status: number; json: unknown } | null> => {
+		// (what it sends and answers is the relying party's to know: the
+		// provider allows it the answer, and the token is the page's)
+		let response: Response;
 		try {
-			const response = await loadFetch(
+			response = await loadFetch(
 				client,
 				routeOf(absolute),
 				'webidentity cors',
@@ -139,13 +253,79 @@ export function identityFlow({
 						'content-type': 'application/x-www-form-urlencoded',
 					},
 					body: new URLSearchParams(body).toString(),
+					referrer: '',
 				},
 			);
-			if (!response.ok) return null;
-			return JSON.parse(await response.text());
 		} catch (error) {
 			return null;
 		}
+		let json: unknown = null;
+		try {
+			json = parse(await response.text());
+		} catch (error) {
+			// no JSON
+		}
+		return { __proto__: null, status: response.status, json } as {
+			status: number;
+			json: unknown;
+		};
+	};
+
+	/**
+	 * Whether the well-known file `file` of the provider of `configAbsolute`
+	 * lists it, as Chrome requires of a provider of another site than the
+	 * relying party's (one of the same site needs none, measured): the file
+	 * at the root of its registrable domain names it as its one provider
+	 * URL, or names the config's own accounts endpoint and login URL
+	 */
+	const listed = (
+		configAbsolute: string,
+		file: unknown,
+		config: unknown,
+	): boolean => {
+		if (file === undefined) return false;
+		const accounts = ownString(file, 'accounts_endpoint');
+		const login = ownString(file, 'login_url');
+		if (accounts !== undefined && login !== undefined)
+			return (
+				endpointOf(accounts, configAbsolute) ===
+					endpointOf(own(config, 'accounts_endpoint'), configAbsolute) &&
+				endpointOf(login, configAbsolute) ===
+					endpointOf(own(config, 'login_url'), configAbsolute)
+			);
+		const providers = own(file, 'provider_urls');
+		if (!isArray(providers) || own(providers, 'length') !== 1) return false;
+		return endpointOf(own(providers, 0), configAbsolute) === configAbsolute;
+	};
+	/**
+	 * The config of `configAbsolute` (its parsed JSON), handed to `use`
+	 * unless it is not readable, or is of another site than the relying
+	 * party's and not listed in its provider's well-known file (Chrome asks
+	 * for the two at once)
+	 */
+	const readConfig = async (
+		configAbsolute: string,
+		use: (config: unknown) => void,
+	): Promise<void> => {
+		let config: unknown;
+		let file: unknown;
+		let wellKnown: Promise<void> | null = null;
+		if (siteOfURL(configAbsolute) !== rpSite) {
+			const at = new URL(configAbsolute);
+			const root = `${at.protocol}//${registrableDomain(at.hostname, getPublicSuffix)}${at.port ? `:${at.port}` : ''}`;
+			wellKnown = idpJSON(
+				`${root}/.well-known/web-identity`,
+				'omit',
+				true,
+				(json) => (file = json),
+			);
+		}
+		await idpJSON(configAbsolute, 'omit', true, (json) => (config = json));
+		if (wellKnown) {
+			await wellKnown;
+			if (!listed(configAbsolute, file, config)) return;
+		}
+		if (config !== undefined) use(config);
 	};
 
 	// --- IdentityCredential.disconnect: config, then the disconnect POST ---
@@ -172,86 +352,135 @@ export function identityFlow({
 				} catch (error) {
 					throw fail();
 				}
-				const config = await idpGet(configAbsolute, 'omit');
-				if (typeof config?.disconnect_endpoint !== 'string') throw fail();
-				const answer = await idpPost(
-					new URL(config.disconnect_endpoint, configAbsolute).href,
-					{ client_id: clientId, account_hint: accountHint },
+				let config: unknown;
+				await readConfig(configAbsolute, (json) => (config = json));
+				const endpoint = endpointOf(
+					own(config, 'disconnect_endpoint'),
+					configAbsolute,
 				);
-				if (answer === null) throw fail();
+				// (another origin's is refused, as natively)
+				if (
+					endpoint === null ||
+					originOf(endpoint) !== originOf(configAbsolute)
+				)
+					throw fail();
+				const answer = await idpPost(endpoint, {
+					client_id: clientId,
+					account_hint: accountHint,
+				});
+				if (answer === null || answer.status < 200 || answer.status > 299)
+					throw fail();
 				return undefined;
 			})().then(resolvePage, rejectPage);
 		});
 	};
 
-	// --- the account chooser: an in-page overlay (the documented compromise) ---
+	// --- the account chooser: an in-page overlay the page cannot read ---
 
-	// resolves the chosen account, or null for a dismiss. Drawn in a shadow
-	// root so the page's CSS and markup reach it as little as possible; open,
-	// so the suites can drive it, which a page could use to read it too.
-	const chooseAccount = (accounts: IdpAccount[]): Promise<IdpAccount | null> =>
-		new Promise((resolveChoice) => {
-			const doc = global.document;
-			const host = doc.createElement('div');
-			host.style.cssText =
-				'position:fixed;inset:0;z-index:2147483647;pointer-events:auto';
-			const root = host.attachShadow({ mode: 'open' });
-			const settle = (account: IdpAccount | null) => {
+	/**
+	 * The index of the account the user picks, or -1 for a dismiss. Natively
+	 * the chooser is the browser's own, and the relying party never learns
+	 * the accounts in it; this one is drawn in the page, so it is made so
+	 * that no page code reaches what it shows: a closed shadow root made by
+	 * the browser's own functions (taken before any of the page's script
+	 * ran), with every name and address in an attribute shown as generated
+	 * content (which window.find() and a selection do not see) and no event
+	 * of it ever read.
+	 */
+	const chooseAccount = (accounts: Account[]): Promise<number> =>
+		new PagePromise<number>((resolveChoice) => {
+			const doc = global.document as Document;
+			const call = (fn: unknown, that: unknown, args: unknown[]): any =>
+				Reflect.apply(fn as Function, that, args);
+			const make = (name: string, attributes: string[]): Element => {
+				const element = createElementIn(doc, name);
+				for (let i = 0; i + 1 < attributes.length; i += 2)
+					call(nativeElement.setAttribute, element, [
+						attributes[i],
+						attributes[i + 1],
+					]);
+				return element;
+			};
+			const append = (parent: Node, child: Node) =>
+				call(nativeNode.appendChild, parent, [child]);
+			const listen = (target: Element, listener: () => void) =>
+				call(nativeEventTarget.addEventListener, target, ['click', listener]);
+			const host = make('div', [
+				'style',
+				'all:initial!important;display:block!important;position:fixed!important;inset:0!important;z-index:2147483647!important',
+			]);
+			// (an init without a prototype: no getter of the page's says what
+			// else the root is, serializable or clonable)
+			const root = call(nativeElement.attachShadow, host, [
+				{ __proto__: null, mode: 'closed' },
+			]) as ShadowRoot;
+			const settle = (index: number) => {
 				try {
-					host.remove();
+					call(nativeElement.remove, host, []);
 				} catch (error) {
 					// already gone
 				}
-				resolveChoice(account);
+				resolveChoice(index);
 			};
-			const style = doc.createElement('style');
-			style.textContent =
-				'.b{position:fixed;inset:0;background:rgba(0,0,0,.3);display:flex;align-items:flex-start;justify-content:center}' +
-				'.c{margin-top:16px;min-width:340px;max-width:90vw;background:#fff;color:#202124;border-radius:12px;box-shadow:0 2px 16px rgba(0,0,0,.3);font:14px system-ui,sans-serif;overflow:hidden}' +
-				'.h{padding:14px 20px;border-bottom:1px solid #e0e0e0;font-weight:500}' +
-				'.a{display:flex;flex-direction:column;align-items:flex-start;padding:12px 20px;width:100%;border:0;background:none;text-align:left;cursor:pointer;font:inherit}' +
-				'.a:hover{background:#f1f3f4}.n{font-weight:500}.e{color:#5f6368;font-size:13px}' +
-				'.f{padding:12px 20px;border-top:1px solid #e0e0e0;text-align:right}' +
-				'.x{border:0;background:none;color:#1a73e8;cursor:pointer;font:inherit;padding:8px}';
-			root.append(style);
-			const backdrop = doc.createElement('div');
-			backdrop.className = 'b';
-			const card = doc.createElement('div');
-			card.className = 'c';
-			const header = doc.createElement('div');
-			header.className = 'h';
-			header.textContent = 'Sign in';
-			card.append(header);
-			for (const account of accounts) {
-				const button = doc.createElement('button');
-				button.className = 'a';
-				button.type = 'button';
-				const name = doc.createElement('div');
-				name.className = 'n';
-				name.textContent = account.name ?? account.email ?? account.id;
-				const email = doc.createElement('div');
-				email.className = 'e';
-				email.textContent = account.email ?? '';
-				button.append(name, email);
-				button.addEventListener('click', () => settle(account));
-				card.append(button);
+			const style = make('style', []);
+			call(
+				Reflect.getOwnPropertyDescriptor(nativeNode, 'textContent')!.set,
+				style,
+				[
+					'.s{position:fixed;inset:0;background:rgba(0,0,0,.3)}' +
+						'.c{position:fixed;top:16px;left:50%;transform:translateX(-50%);min-width:340px;max-width:90vw;background:#fff;color:#202124;border-radius:12px;box-shadow:0 2px 16px rgba(0,0,0,.3);font:14px system-ui,sans-serif;overflow:hidden}' +
+						'.h{padding:14px 20px;border-bottom:1px solid #e0e0e0;font-weight:500}' +
+						'.a{display:flex;flex-direction:column;align-items:flex-start;padding:12px 20px;width:100%;border:0;background:none;text-align:left;cursor:pointer;font:inherit;color:inherit}' +
+						'.a:hover{background:#f1f3f4}' +
+						'.a::before{content:attr(data-n);font-weight:500}' +
+						'.a::after{content:attr(data-e);color:#5f6368;font-size:13px}' +
+						'.f{padding:12px 20px;border-top:1px solid #e0e0e0;text-align:right}' +
+						'.x{border:0;background:none;color:#1a73e8;cursor:pointer;font:inherit;padding:8px}' +
+						'[data-t]::before{content:attr(data-t)}',
+				],
+			);
+			append(root, style);
+			// a click outside the card dismisses (the scrim is under the card,
+			// not around it: no event needs reading to tell the two apart)
+			const scrim = make('div', ['class', 's']);
+			listen(scrim, () => settle(-1));
+			append(root, scrim);
+			const card = make('div', ['class', 'c']);
+			append(card, make('div', ['class', 'h', 'data-t', 'Sign in']));
+			for (let i = 0; i < accounts.length; i++) {
+				const { name, email } = accounts[i];
+				const shown = name ?? email ?? accounts[i].id;
+				const button = make('button', [
+					'class',
+					'a',
+					'type',
+					'button',
+					'aria-label',
+					email && email !== shown ? `${shown}, ${email}` : shown,
+					'data-n',
+					shown,
+					'data-e',
+					email ?? '',
+				]);
+				listen(button, () => settle(i));
+				append(card, button);
 			}
-			const footer = doc.createElement('div');
-			footer.className = 'f';
-			const cancel = doc.createElement('button');
-			cancel.className = 'x';
-			cancel.type = 'button';
-			cancel.textContent = 'Cancel';
-			cancel.setAttribute('aria-label', 'Close');
-			cancel.addEventListener('click', () => settle(null));
-			footer.append(cancel);
-			card.append(footer);
-			backdrop.addEventListener('click', (event) => {
-				if (event.target === backdrop) settle(null);
-			});
-			backdrop.append(card);
-			root.append(backdrop);
-			(doc.body ?? doc.documentElement).append(host);
+			const footer = make('div', ['class', 'f']);
+			const cancel = make('button', [
+				'class',
+				'x',
+				'type',
+				'button',
+				'aria-label',
+				'Close',
+				'data-t',
+				'Cancel',
+			]);
+			listen(cancel, () => settle(-1));
+			append(footer, cancel);
+			append(card, footer);
+			append(root, card);
+			append((doc.body ?? doc.documentElement) as Node, host);
 		});
 
 	// --- the FedCM protocol for one provider ---
@@ -259,18 +488,16 @@ export function identityFlow({
 	// (an object of the bundle's: no global the page could have replaced)
 	const DISMISSED = {};
 
-	const metadataRoute = async (
-		config: any,
-		configAbsolute: string,
-		clientId: string,
-	): Promise<void> => {
-		// fetched for the UI's privacy-policy / terms links; its result is not
-		// needed to mint a token, but the step is part of the flow and routes
-		if (typeof config.client_metadata_endpoint !== 'string') return;
-		const url = new URL(config.client_metadata_endpoint, configAbsolute);
-		url.searchParams.set('client_id', clientId);
-		await idpGet(url.href, 'omit');
-	};
+	/** a token request's failure, as Chrome rejects it (measured) */
+	const tokenError = (code: string, url: string): object =>
+		NativeIdentityCredentialError
+			? withStack(
+					new NativeIdentityCredentialError(GENERIC_TOKEN_ERROR, {
+						error: code,
+						url,
+					}),
+				)
+			: domException(GENERIC_TOKEN_ERROR, 'NetworkError');
 
 	// one provider through the protocol; the resolved credential, null for a
 	// fault to try the next provider on, or DISMISSED for a user dismiss
@@ -279,33 +506,70 @@ export function identityFlow({
 		mediation: unknown,
 	): Promise<object | null | typeof DISMISSED> => {
 		const configAbsolute = new URL(provider.configURL).href;
-		const config = await idpGet(configAbsolute, 'omit');
+		let config: unknown;
+		await readConfig(configAbsolute, (json) => (config = json));
+		const configOrigin = originOf(configAbsolute);
+		const sameOrigin = (url: string | null): url is string =>
+			url !== null && originOf(url) === configOrigin;
+		const accountsURL = endpointOf(
+			own(config, 'accounts_endpoint'),
+			configAbsolute,
+		);
+		const tokenURL = endpointOf(
+			own(config, 'id_assertion_endpoint'),
+			configAbsolute,
+		);
+		// the accounts and token endpoints are the config's origin's, and a
+		// login URL is named (Chrome refuses the config otherwise)
 		if (
-			!config ||
-			typeof config.accounts_endpoint !== 'string' ||
-			typeof config.id_assertion_endpoint !== 'string'
+			!sameOrigin(accountsURL) ||
+			!sameOrigin(tokenURL) ||
+			endpointOf(own(config, 'login_url'), configAbsolute) === null
 		)
 			return null;
-		const list = await idpGet(
-			new URL(config.accounts_endpoint, configAbsolute).href,
-			'include',
-		);
-		const accounts: IdpAccount[] = Array.isArray(list?.accounts)
-			? list.accounts
-			: [];
+		// the list, copied as it is read into objects of no prototype (none of
+		// it is ever handed to anything of the page's)
+		const accounts: Account[] = [];
+		const clientId: string = provider.clientId;
+		await idpJSON(accountsURL, 'include', false, (json) => {
+			const list = own(json, 'accounts');
+			if (!isArray(list)) return;
+			const length = own(list, 'length') as number;
+			for (let i = 0; i < length; i++) {
+				const entry = own(list, i);
+				const id = ownString(entry, 'id');
+				if (id === undefined) continue;
+				const approvedList = own(entry, 'approved_clients');
+				let approved = false;
+				if (isArray(approvedList)) {
+					const count = own(approvedList, 'length') as number;
+					for (let j = 0; j < count && !approved; j++)
+						approved = own(approvedList, j) === clientId;
+				}
+				// (defined, not set: a setter of an index the page put on
+				// Array.prototype would be handed the account)
+				Reflect.defineProperty(accounts, accounts.length, {
+					__proto__: null,
+					value: {
+						__proto__: null,
+						id,
+						name: ownString(entry, 'name'),
+						email: ownString(entry, 'email'),
+						approved,
+					},
+					writable: true,
+					enumerable: true,
+					configurable: true,
+				} as PropertyDescriptor);
+			}
+		});
 		if (accounts.length === 0) return null;
 
-		const clientId: string = provider.clientId;
-		const approved = (account: IdpAccount) =>
-			Array.isArray(account.approved_clients) &&
-			account.approved_clients.includes(clientId);
 		// auto re-authentication: one returning account, not forced to choose
 		const autoEligible =
-			mediation !== 'required' &&
-			accounts.length === 1 &&
-			approved(accounts[0]);
+			mediation !== 'required' && accounts.length === 1 && accounts[0].approved;
 
-		let chosen: IdpAccount;
+		let chosen: Account;
 		let isAutoSelected: boolean;
 		if (autoEligible) {
 			chosen = accounts[0];
@@ -314,35 +578,56 @@ export function identityFlow({
 			// silent mediation may not draw a chooser
 			return null;
 		} else {
-			await metadataRoute(config, configAbsolute, clientId);
+			// fetched for the UI's privacy-policy / terms links; its result is
+			// not needed to mint a token (another origin's is not asked)
+			const metadata = endpointOf(
+				own(config, 'client_metadata_endpoint'),
+				configAbsolute,
+			);
+			if (sameOrigin(metadata)) {
+				const url = new URL(metadata);
+				url.searchParams.set('client_id', clientId);
+				await idpRead(url.href, 'omit', false, () => {});
+			}
 			const picked = await chooseAccount(accounts);
-			if (picked === null) return DISMISSED;
-			chosen = picked;
+			if (picked === -1) return DISMISSED;
+			chosen = accounts[picked];
 			isAutoSelected = false;
 		}
 
-		const answer = await idpPost(
-			new URL(config.id_assertion_endpoint, configAbsolute).href,
-			{
-				client_id: clientId,
-				nonce: typeof provider.nonce === 'string' ? provider.nonce : '',
-				account_id: chosen.id,
-				disclosure_text_shown: String(!approved(chosen)),
-				is_auto_selected: String(isAutoSelected),
-			},
-		);
-		if (answer && typeof answer.token === 'string')
-			return makeCredential(answer.token, isAutoSelected, configAbsolute);
-		if (answer && answer.error && NativeIdentityCredentialError) {
-			const { code, url } = answer.error;
-			throw withStack(
-				new NativeIdentityCredentialError(GENERIC_TOKEN_ERROR, {
-					error: typeof code === 'string' ? code : '',
-					url: typeof url === 'string' ? url : '',
-				}),
+		const answer = await idpPost(tokenURL, {
+			client_id: clientId,
+			nonce: typeof provider.nonce === 'string' ? provider.nonce : '',
+			account_id: chosen.id,
+			disclosure_text_shown: String(!chosen.approved),
+			is_auto_selected: String(isAutoSelected),
+		});
+		// a network error (a provider that does not allow the relying party's
+		// origin) or an HTTP error rejects at once, as natively: 500 and 503
+		// say what they are, anything else nothing
+		if (answer === null) throw tokenError('', '');
+		if (answer.status < 200 || answer.status > 299)
+			throw tokenError(
+				answer.status === 500
+					? 'server_error'
+					: answer.status === 503
+						? 'temporarily_unavailable'
+						: '',
+				'',
 			);
-		}
-		return null;
+		const token = ownString(answer.json, 'token');
+		if (token !== undefined)
+			return makeCredential(token, isAutoSelected, configAbsolute);
+		const error = own(answer.json, 'error');
+		const code = ownString(error, 'code');
+		// an error URL is the config's site's, or none
+		const errorURL = endpointOf(own(error, 'url'), configAbsolute);
+		throw tokenError(
+			code ?? '',
+			errorURL !== null && siteOfURL(errorURL) === siteOfURL(configAbsolute)
+				? errorURL
+				: '',
+		);
 	};
 
 	/** the error Chrome rejects with for a malformed identity request, or null */

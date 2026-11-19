@@ -118,6 +118,7 @@ import StompURL from '../StompURL';
 import { getDomain, getPublicSuffix } from '../suffix';
 import type {
 	HostReload,
+	IdentityReadMessage,
 	RequestErrorKind,
 	RequestInfo,
 	RequestRule,
@@ -133,6 +134,7 @@ import {
 	ENCODING_MARKER,
 	FRESH_RETURN_ROUTE,
 	HOPS_MARKER,
+	IDENTITY_READ,
 	IMAGES_WAITING,
 	INITIATOR_ROUTE,
 	JAR_MARKER,
@@ -516,6 +518,8 @@ const LOAD_DESTINATIONS = [
 	'webidentity',
 ];
 const LOAD_MODES = ['no-cors', 'cors'];
+/** the longest FedCM endpoint body the worker reads for the inject (identityRead) */
+const IDENTITY_READ_MAX = 1 << 20;
 /**
  * An object's or embed's resource, which Chrome loads as a nested context,
  * goes as `navigate` too. Taken for those two destinations only: the worker
@@ -2006,11 +2010,15 @@ function genericForward(
 		// request with a body; Chrome also on a module script's, same-origin
 		// or not
 		// (a chain that went from another origin to a third is no origin's any
-		// more, its own included: "null", below)
+		// more, its own included: "null", below). A FedCM endpoint the inject
+		// reads in the browser's place goes in the mode the browser's own
+		// request has: the well-known file, config and accounts no-cors, with
+		// no Origin (measured in Chrome 157, the fedcm suite)
+		const originMode =
+			load?.destination === 'webidentity' ? load.mode : serverRequest.mode;
 		if (
 			(initiator || opaque) &&
-			(((!sameOrigin || previousHop?.tainted) &&
-				serverRequest.mode === 'cors') ||
+			(((!sameOrigin || previousHop?.tainted) && originMode === 'cors') ||
 				(serverRequest.mode === 'cors' && destination === 'script') ||
 				!BODY_ILLEGAL.includes(serverRequest.method))
 		)
@@ -2281,6 +2289,19 @@ function genericForward(
 			internal &&
 			granted !== 'download' &&
 			load?.mode !== 'navigate';
+		// a FedCM endpoint the browser reads from its own process, no-cors (the
+		// well-known file, config, accounts, client metadata): the inject runs
+		// the flow, but its body is never in a Response or promise of the
+		// page's realm, where page code could take it (a getter of
+		// Object.prototype's `then` is handed every Response a fetch resolves
+		// with). This worker reads it and posts it on the client's load
+		// channel (IDENTITY_READ), and the request is answered empty. Only a
+		// grant names this load: the inject's own request, never the page's
+		const identityRead =
+			load?.destination === 'webidentity' &&
+			load.mode === 'no-cors' &&
+			loadToken !== null &&
+			!!context?.clientId;
 		// the site of the frame or worker that makes the request (a
 		// navigation's is its destination's), null for an opaque or unknown
 		// one: with the top-level site, the network partition (the HTTP and
@@ -3711,11 +3732,14 @@ function genericForward(
 		// element fires `error`, as natively. And so for every load the
 		// inject copies for a page, whatever it is for: natively such a
 		// response never enters the page's process, and a copy's bytes do
+		// (but for a FedCM endpoint's, which the browser reads in its own
+		// process and this worker reads in its place: identityRead)
 		if (
 			fromNetwork &&
 			chainCrossed &&
 			policyMode === 'no-cors' &&
 			(serverRequest.destination === 'script' || copiedLoad) &&
+			!identityRead &&
 			!REDIRECT_STATUSES.includes(response.status)
 		) {
 			let verdict = orbByHeaders(response.headers, response.status);
@@ -4357,7 +4381,28 @@ function genericForward(
 		/** the transform's output when it is text: a rewrite made just now */
 		let rewritten: string | null = null;
 
-		if (statusEmpty.includes(+response.status)) {
+		if (identityRead && !redirect) {
+			// (a hop that redirects is followed by the browser, with the token)
+			let text: string | null = null;
+			try {
+				const bytes = statusEmpty.includes(+response.status)
+					? new ArrayBuffer(0)
+					: await response.arrayBuffer();
+				if (bytes.byteLength <= IDENTITY_READ_MAX)
+					text = new TextDecoder().decode(bytes);
+			} catch (error) {
+				// a body that broke off: none
+			}
+			tellLoadClient(context!.clientId!, {
+				[IDENTITY_READ]: {
+					token: loadToken!,
+					status: response.status,
+					body: text,
+				} satisfies IdentityReadMessage,
+			});
+			body = undefined;
+			responseHeaders.delete('content-length');
+		} else if (statusEmpty.includes(+response.status)) {
 			body = undefined;
 		} else if (opaqueFetch && !keepOpaqueBody) {
 			await response.body?.cancel().catch(() => {});

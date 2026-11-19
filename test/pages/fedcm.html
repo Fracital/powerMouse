@@ -86,8 +86,183 @@
 				};
 			return { kind: 'value', value: String(cred) };
 		} catch (error) {
-			return { kind: 'error', error: `${error.name}: ${error.message}` };
+			return {
+				kind: 'error',
+				error: `${error.name}: ${error.message}`,
+				// an IdentityCredentialError's own code and URL
+				...(error instanceof IdentityCredentialError
+					? { code: error.error, url: error.url }
+					: {}),
+			};
 		}
+	};
+
+	// what page code can see of an open account chooser: the overlay's
+	// shadow root, its text through window.find(), the body's text and its
+	// serialization with every shadow root that allows it
+	window.peekChooser = (needle = window.__needle) => {
+		const seen = {
+			shadowRoots: [...document.querySelectorAll('*')].filter(
+				(element) => element.shadowRoot,
+			).length,
+			find: window.find(needle),
+			text: document.body.innerText.includes(needle),
+			html: document.body
+				.getHTML({ serializableShadowRoots: true })
+				.includes(needle),
+		};
+		getSelection().removeAllRanges();
+		return seen;
+	};
+
+	// a scenario run while the page watches everything a script of its own
+	// can be handed: a getter of Object.prototype's `then` (every promise
+	// resolution with an object asks it) and of Promise.prototype's
+	// `constructor` (every await and then() asks it), Response's body
+	// readers, JSON.parse, Array.isArray, URLSearchParams and an index
+	// setter of Array.prototype. Whether any of what it saw holds `needle`
+	window.runSpied = async (name, params, needle) => {
+		const seen = [];
+		const holds = (value) => {
+			try {
+				if (typeof value === 'string') return value.includes(needle);
+				if (value && typeof value === 'object')
+					return JSON.stringify(value)?.includes(needle) ?? false;
+			} catch (error) {
+				// a cycle
+			}
+			return false;
+		};
+		// where the first value that held it was handed over
+		let leakStack = null;
+		const note = (value) => {
+			seen.push(value);
+			if (leakStack === null && holds(value))
+				leakStack = new Error().stack.slice(0, 1500);
+		};
+		const restore = [];
+		let inside = false;
+		const realThen = Promise.prototype.then;
+		const spy = (object, key, descriptor) => {
+			const before = Object.getOwnPropertyDescriptor(object, key);
+			Object.defineProperty(object, key, { configurable: true, ...descriptor });
+			restore.push(() =>
+				before
+					? Object.defineProperty(object, key, before)
+					: delete object[key],
+			);
+		};
+		const watch = (value) => {
+			note(value);
+			// a promise or a Response handed over: what it holds, too
+			if (inside) return;
+			inside = true;
+			try {
+				if (value instanceof Promise)
+					Reflect.apply(realThen, value, [(v) => watch(v), () => {}]);
+				else if (value instanceof Response && !value.bodyUsed)
+					Reflect.apply(realThen, value.clone().text(), [
+						(v) => note(v),
+						() => {},
+					]);
+			} catch (error) {
+				// a body already taken
+			} finally {
+				inside = false;
+			}
+		};
+		spy(Object.prototype, 'then', {
+			get() {
+				watch(this);
+				return undefined;
+			},
+		});
+		spy(Promise.prototype, 'constructor', {
+			get() {
+				watch(this);
+				return Promise;
+			},
+		});
+		for (const key of ['text', 'json', 'arrayBuffer', 'blob', 'clone']) {
+			const real = Response.prototype[key];
+			spy(Response.prototype, key, {
+				writable: true,
+				value: function (...args) {
+					watch(this);
+					const result = Reflect.apply(real, this, args);
+					watch(result);
+					return result;
+				},
+			});
+		}
+		const realParse = JSON.parse;
+		spy(JSON, 'parse', {
+			writable: true,
+			value: (...args) => {
+				note(args[0]);
+				return Reflect.apply(realParse, JSON, args);
+			},
+		});
+		const realIsArray = Array.isArray;
+		spy(Array, 'isArray', {
+			writable: true,
+			value: (value) => {
+				note(value);
+				return realIsArray(value);
+			},
+		});
+		const RealSearch = URLSearchParams;
+		spy(window, 'URLSearchParams', {
+			writable: true,
+			value: function URLSearchParams(init) {
+				note(init);
+				return new RealSearch(init);
+			},
+		});
+		spy(Array.prototype, '0', {
+			get() {
+				return undefined;
+			},
+			set(value) {
+				if (this !== seen) note(value);
+				Object.defineProperty(this, '0', {
+					value,
+					writable: true,
+					enumerable: true,
+					configurable: true,
+				});
+			},
+		});
+		let result;
+		try {
+			result = await settleGet(optionsFor(name, params));
+		} finally {
+			for (const undo of restore.reverse()) undo();
+		}
+		// (a body read a little later)
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		const leaks = seen.filter(holds);
+		return {
+			result,
+			leaked: leaks.length > 0,
+			seen: seen.length,
+			// what held it, for the report
+			leaks: leaks
+				.slice(0, 3)
+				.map((value) =>
+					typeof value === 'string'
+						? value.slice(0, 300)
+						: `${Object.prototype.toString.call(value)} ${JSON.stringify(value).slice(0, 300)}`,
+				),
+			stack: leakStack,
+		};
+	};
+	window.startSpied = (name, params, needle) => {
+		// (kept for peekChooser, which is then called with nothing: an
+		// argument the suite passed would be among what the page sees)
+		window.__needle = needle;
+		window.__pending = runSpied(name, params, needle);
+		return true;
 	};
 
 	// a named scenario's options, built in the page (a signal cannot cross

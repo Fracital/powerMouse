@@ -153,6 +153,22 @@ export interface LoadGrantMessage {
 	load: string;
 }
 /**
+ * SW -> proxied page, on that channel: the answer to a granted
+ * `webidentity no-cors` load (a FedCM endpoint the browser reads from its
+ * own process, with no CORS check: the well-known file, the config, the
+ * accounts list, the client metadata). The worker reads its body and posts
+ * it here, keyed by the request's token, and the request itself is
+ * answered with no body: the inject reads it from its own channel, where
+ * no promise or Response of the page's realm ever holds it
+ */
+export const IDENTITY_READ = '$stomp$identityRead';
+export interface IdentityReadMessage {
+	token: string;
+	status: number;
+	/** the body's text, or null when it was too long to read */
+	body: string | null;
+}
+/**
  * On the answer to a granted load whose response the page may not read (a
  * no-cors load of another origin, or one that came through another origin):
  * the inject keeps its copy where no realm of the page can fetch it. Only

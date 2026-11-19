@@ -229,6 +229,10 @@ export function startFixture(port = 8084) {
 	// endpoint and the token POST's body, so a suite can prove every step went
 	// through the proxy with the right destination and credentials
 	const fedcmLog = new Map();
+	// every request for the well-known file, in order (/pages/fedcm-log?wk)
+	const fedcmWellKnown = [];
+	// the well-known file a host answers with, set by /pages/fedcm-wellknown
+	const fedcmWellKnownSet = new Map();
 	const server = createServer(async (req, res) => {
 		const path = new URL(req.url, 'http://x').pathname;
 		if (sop(req, res)) return;
@@ -490,25 +494,52 @@ export function startFixture(port = 8084) {
 		// FedCM's well-known file (fedcm suite): fetched from the identity
 		// provider's site before the config the page names
 		if (path === '/.well-known/web-identity') {
+			fedcmWellKnown.push({
+				host: req.headers.host,
+				dest: req.headers['sec-fetch-dest'] ?? null,
+				mode: req.headers['sec-fetch-mode'] ?? null,
+				site: req.headers['sec-fetch-site'] ?? null,
+				origin: req.headers.origin ?? null,
+				referer: req.headers.referer ?? null,
+				cookie: req.headers.cookie ?? null,
+			});
+			const set = fedcmWellKnownSet.get(req.headers.host);
+			if (set?.status) {
+				res.statusCode = set.status;
+				return res.end();
+			}
 			res.setHeader('content-type', 'application/json');
 			return res.end(
-				JSON.stringify({
-					provider_urls: [`http://${req.headers.host}/pages/fedcm-config.json`],
-				}),
+				set?.body ??
+					JSON.stringify({
+						provider_urls: [
+							`http://${req.headers.host}/pages/fedcm-config.json`,
+						],
+					}),
 			);
 		}
 		// The mock identity provider the fedcm suite flows through. Every FedCM
 		// endpoint requires Sec-Fetch-Dest: webidentity (so the suite proves the
-		// proxy sends it) and reflects the Origin with credentials allowed (the
-		// proxied, page-level emulation reads these cross-origin bodies with CORS,
-		// where a real browser reads them no-cors from its own process). `k=<run>`
-		// ties a flow's steps together; the config bakes it into the sibling
-		// endpoint URLs it returns. `?signin` seeds the IdP session cookie.
+		// proxy sends it) and reflects the Origin with credentials allowed,
+		// unless `nocors` names it (below: a real provider allows CORS on its
+		// token and disconnect endpoints only). `k=<run>` ties a flow's steps
+		// together; the config bakes it (and `nocors`, `multi`, `status`,
+		// `error`) into the sibling endpoint URLs it returns. `?signin` seeds
+		// the IdP session cookie.
 		if (path.startsWith('/pages/fedcm-')) {
 			const query = new URL(req.url, 'http://x').searchParams;
 			const run = query.get('k') ?? '';
 			const origin = req.headers.origin;
-			if (origin) {
+			const step = path.replace('/pages/fedcm-', '').replace('.json', '');
+			// `nocors=<steps>` (comma-separated: config, accounts, client, token,
+			// disconnect), which the config bakes into its endpoints: those steps
+			// answer with no CORS header at all, as a real IdP's config, accounts
+			// and client metadata do (Google's): Chrome reads them from its own
+			// process, with no CORS check, and only the token and disconnect
+			// POSTs are CORS requests of the relying party's origin
+			const bare = (query.get('nocors') ?? '').split(',').includes(step);
+			if (bare);
+			else if (origin) {
 				res.setHeader('access-control-allow-origin', origin);
 				res.setHeader('access-control-allow-credentials', 'true');
 				res.setHeader('vary', 'origin');
@@ -522,6 +553,9 @@ export function startFixture(port = 8084) {
 					dest: dest ?? null,
 					cookie: req.headers.cookie ?? null,
 					mode: req.headers['sec-fetch-mode'] ?? null,
+					site: req.headers['sec-fetch-site'] ?? null,
+					origin: origin ?? null,
+					referer: req.headers.referer ?? null,
 					accept: req.headers.accept ?? null,
 				};
 				return log;
@@ -542,25 +576,57 @@ export function startFixture(port = 8084) {
 				res.end(JSON.stringify(body));
 			};
 			// /pages/fedcm-log?k=<run>: what each step saw
-			if (path === '/pages/fedcm-log') return sendJSON(fedcmLog.get(run) ?? {});
+			if (path === '/pages/fedcm-log')
+				return sendJSON(
+					query.has('wk') ? fedcmWellKnown : (fedcmLog.get(run) ?? {}),
+				);
+			// /pages/fedcm-wellknown?host=<host>&body=<json>|status=<n>: what
+			// that host's well-known file answers from now on (neither: the
+			// default again)
+			if (path === '/pages/fedcm-wellknown') {
+				const host = query.get('host');
+				if (query.has('body') || query.has('status'))
+					fedcmWellKnownSet.set(host, {
+						body: query.get('body'),
+						status: Number(query.get('status')) || 0,
+					});
+				else fedcmWellKnownSet.delete(host);
+				return sendJSON({ set: true });
+			}
 			// seed the IdP's session cookie (credentialed), so the accounts step
 			// carries it and the config/metadata steps (uncredentialed) do not
 			if (path === '/pages/fedcm-signin') {
-				res.setHeader(
-					'set-cookie',
+				// (`?lax`, opened as a page: Lax, Strict and default cookies too,
+				// which a real IdP's session keeps)
+				res.setHeader('set-cookie', [
 					'fedcm_sid=yes; Path=/; SameSite=None; Secure',
-				);
+					...(query.has('lax')
+						? [
+								'fedcm_lax=yes; Path=/; SameSite=Lax',
+								'fedcm_strict=yes; Path=/; SameSite=Strict',
+								'fedcm_default=yes; Path=/',
+							]
+						: []),
+				]);
 				return sendJSON({ signedIn: true });
 			}
 			if (path === '/pages/fedcm-config.json') {
 				record('config');
-				const q = run ? `?k=${encodeURIComponent(run)}` : '';
+				const passed = new URLSearchParams();
+				for (const name of ['k', 'nocors', 'multi', 'status', 'error'])
+					if (query.has(name)) passed.set(name, query.get(name));
+				const q = passed.size ? `?${passed}` : '';
+				// `xo=<origin>`: the endpoints `xstep` names (comma-separated,
+				// default accounts) are that origin's
+				const xo = query.get('xo');
+				const moved = (query.get('xstep') ?? 'accounts').split(',');
+				const at = (step) => (xo && moved.includes(step) ? `${xo}/pages/` : '');
 				return sendJSON({
-					accounts_endpoint: `fedcm-accounts.json${q}`,
-					client_metadata_endpoint: `fedcm-client.json${q}`,
-					id_assertion_endpoint: `fedcm-token.json${q}`,
-					disconnect_endpoint: `fedcm-disconnect.json${q}`,
-					login_url: 'fedcm.html',
+					accounts_endpoint: `${at('accounts')}fedcm-accounts.json${q}`,
+					client_metadata_endpoint: `${at('client')}fedcm-client.json${q}`,
+					id_assertion_endpoint: `${at('token')}fedcm-token.json${q}`,
+					disconnect_endpoint: `${at('disconnect')}fedcm-disconnect.json${q}`,
+					...(query.has('nologin') ? {} : { login_url: 'fedcm.html' }),
 				});
 			}
 			if (path === '/pages/fedcm-accounts.json') {
@@ -611,6 +677,10 @@ export function startFixture(port = 8084) {
 					};
 					// a token the suite can read back to prove the POST's body round-
 					// tripped through the proxy with the chosen account and flags
+					if (query.has('status')) {
+						res.statusCode = Number(query.get('status'));
+						return sendJSON({ token: 'not-ok' });
+					}
 					if (query.has('error'))
 						return sendJSON({
 							error: { code: 'invalid_request', url: 'https://idp.test/e' },
