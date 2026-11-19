@@ -140,6 +140,8 @@ struct Conn {
 	/// the remotes the agent has a pair from a host candidate with, as
 	/// last said (`ev=remotes`)
 	remotes: Vec<(Protocol, SocketAddr)>,
+	/// the agent's pairs as getStats lists them, as last said (`ev=pairs`)
+	pairs: Vec<(SocketAddr, SocketAddr, bool)>,
 	queue: VecDeque<Vec<u8>>,
 }
 
@@ -604,6 +606,27 @@ impl Conn {
 		self.drive_stack();
 		self.report_buffered();
 		self.report_remotes();
+		self.report_pairs();
+	}
+
+	/// The agent's pairs, said whenever they change: the base each sends
+	/// from, its remote, and whether it is writable (`base|remote|1`).
+	/// getStats lists these: a pair from when the agent forms it until it
+	/// gives up on it, as Chrome's does (pacing.rs).
+	fn report_pairs(&mut self) {
+		let mut pairs: Vec<_> = self.rtc.direct_api().ice_agent().pairs().collect();
+		pairs.sort();
+		pairs.dedup();
+		if pairs == self.pairs {
+			return;
+		}
+		let list = pairs
+			.iter()
+			.map(|(base, remote, writable)| format!("{base}|{remote}|{}", u8::from(*writable)))
+			.collect::<Vec<_>>()
+			.join(",");
+		self.pairs = pairs;
+		self.event(&[("ev", "pairs"), ("list", &list)]);
 	}
 
 	/// The remotes the agent still has a candidate pair from the host
@@ -1439,6 +1462,7 @@ pub unsafe extern "C" fn c(ptr: *mut u8, len: usize) -> i32 {
 		low: Vec::new(),
 		hosts,
 		remotes: Vec::new(),
+		pairs: Vec::new(),
 		queue: VecDeque::new(),
 	};
 	if let Some(index) = state.conns.iter().position(|c| c.is_none()) {

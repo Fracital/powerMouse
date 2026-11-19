@@ -155,6 +155,10 @@ function nodeEnd(options = {}) {
 	return { call: async (step, ...args) => steps[step](...args) };
 }
 
+/** a list of state transitions ({ at, what }) as text, and when one came */
+const named = (list) => list.map((entry) => entry.what).join();
+const when = (list, what) => list.find((entry) => entry.what === what)?.at;
+
 /** the address of the first host candidate in a description */
 const hostIn = (sdp) => {
 	const found = / udp \d+ ([\d.]+) (\d+) typ host/.exec(sdp);
@@ -229,6 +233,7 @@ for (const [label, base] of [
 	let opening = null;
 	let after = null;
 	let closed = null;
+	let watched = null;
 	try {
 		await own.call('open', { iceServers: [] });
 		await own.call('channels', [['chat', {}]]);
@@ -240,6 +245,7 @@ for (const [label, base] of [
 		await own.call('opened', 'chat');
 		await peer.call('opened', 'chat');
 		const mid = /^a=mid:(.*)$/m.exec(offer.replace(/\r/g, ''))?.[1] ?? '0';
+		await own.call('watch');
 		for (const one of sinks) await own.call('add', one.candidate(mid));
 		const start = Date.now();
 		const count = async () => {
@@ -295,6 +301,7 @@ for (const [label, base] of [
 				) / 10,
 			quietFor: Math.round((Date.now() - quiet) / 100) / 10,
 		};
+		watched = await own.call('watched');
 		await own.call('close');
 		await until(
 			async () => !proxied || (await count()).peer === 0,
@@ -308,6 +315,33 @@ for (const [label, base] of [
 	await peer.call('close').catch(() => {});
 	for (const one of sinks) one.close();
 	const story = JSON.stringify({ opening, after, closed, life });
+	// getStats lists a sink's pair, waiting and then in progress, until the
+	// turn that gives it up, its remote candidate with it (Chrome 157: 15.07
+	// s after its first check); the worker used to list it for ever
+	const listing = sinks.map((one) => {
+		const pair = watched?.pairs[one.address];
+		const first = one.packets[0]?.at;
+		return {
+			states: pair?.states.map(([, state]) => state).join(),
+			gone: pair?.gone && first && pair.gone - first,
+			remoteGone: pair?.gone && watched.remotes[one.address]?.gone - pair.gone,
+		};
+	});
+	ok(
+		`${label}: getStats lists the pair of each sink, waiting then in progress, until about 15 s after its first check, and its remote candidate with it`,
+		!failure &&
+			listing.every(
+				({ states, gone, remoteGone }) =>
+					/^(waiting,)?in-progress$/.test(states) &&
+					gone >= 14900 &&
+					gone <= 15500 &&
+					Math.abs(remoteGone) <= 60,
+			),
+		failure ?? JSON.stringify(listing),
+	);
+	console.log(
+		`note: ${label}: the sinks' pairs left getStats ${listing.map(({ gone }) => gone).join(', ')} ms after their first checks`,
+	);
 	if (!proxied) {
 		// the browser's sockets are not connected to a remote, and what
 		// it does with a candidate that never answers is its own business:
@@ -353,6 +387,132 @@ for (const [label, base] of [
 			.join(
 				', ',
 			)}; the sinks' last check ${after?.lastCheck ?? '?'} s after they were added`,
+	);
+}
+
+// --- a connection that never connects (section 5.3) ---
+//
+// The page's only remote is a sink. Chrome 157, measured: checking (the
+// ICE transport too) as the candidate is added, and at the turn that
+// gives up the pair, 15.05 s after its first check, iceConnectionState and
+// the ICE transport read disconnected and the connection failed, told in
+// that order in one task; the pair and its remote candidate leave getStats
+// then, and the transport's iceState there reads failed. The stack's
+// connection read failed for both, and its pair stayed in getStats.
+
+const withoutCandidates = (sdp) =>
+	sdp
+		.split('\r\n')
+		.filter((line) => !line.startsWith('a=candidate:'))
+		.join('\r\n');
+
+const never = await Promise.all(
+	[
+		['natively', null],
+		['same-origin', PROXY],
+		['isolated', HOST],
+	].map(async ([label, base]) => {
+		const opened = await page(browser, base);
+		pages.push(opened);
+		const own = pageEnd(opened.frame);
+		const peer = nodeEnd();
+		const one = await sink();
+		const result = { label };
+		try {
+			await own.call('open', { iceServers: [] });
+			await own.call('channels', [['chat', {}]]);
+			await peer.call('open');
+			const offer = await own.call('offer');
+			const answer = await peer.call('answer', withoutCandidates(offer));
+			await own.call('accept', withoutCandidates(answer));
+			await own.call('watch');
+			const mid = /^a=mid:(.*)$/m.exec(offer.replace(/\r/g, ''))?.[1] ?? '0';
+			const start = Date.now();
+			await own.call('add', one.candidate(mid));
+			await until(
+				async () =>
+					(await own.call('timeline')).some(
+						([at, what]) => at >= start && what === 'connection:failed',
+					),
+				25000,
+				'failed',
+			).catch(() => {});
+			await sleep(300);
+			const first = one.packets[0]?.at;
+			result.told = (await own.call('timeline'))
+				.filter(([at]) => at >= start)
+				.map(([at, what]) => ({ at: at - first, what }));
+			const watched = await own.call('watched');
+			const pair = watched.pairs[one.address];
+			result.reads = watched.reads.join();
+			result.pair = pair?.states.map(([, state]) => state).join();
+			result.pairGone = pair?.gone && pair.gone - first;
+			result.remoteGone =
+				watched.remotes[one.address]?.gone &&
+				watched.remotes[one.address].gone - first;
+			result.iceState = watched.iceState;
+			result.read = await own.call('read');
+		} catch (error) {
+			result.failure = String(error).slice(0, 300);
+		}
+		await own.call('close').catch(() => {});
+		await peer.call('close').catch(() => {});
+		one.close();
+		await opened.page.close();
+		return result;
+	}),
+);
+for (const result of never) {
+	const native = never[0];
+	const failed = when(result.told ?? [], 'connection:failed');
+	const story = JSON.stringify({ ...result, read: undefined });
+	// Chrome tells the three at the turn that gives up its pair in this
+	// order, the ICE transport already disconnected at the first; natively
+	// a loaded host may reorder them (as the far end gone below), so there
+	// any order within the 5 ms
+	const last = (result.told ?? []).slice(3).map(({ what }) => what);
+	const states =
+		!result.failure &&
+		(named(result.told) ===
+			'ice:checking,iceTransport:checking,connection:connecting,ice:disconnected,iceTransport:disconnected,connection:failed' ||
+			(result === native &&
+				named(result.told.slice(0, 3)) ===
+					'ice:checking,iceTransport:checking,connection:connecting' &&
+				last.length === 3 &&
+				[
+					'ice:disconnected',
+					'iceTransport:disconnected',
+					'connection:failed',
+				].every((what) => last.includes(what)))) &&
+		(result.reads === 'checking:checking,disconnected:disconnected' ||
+			(result === native &&
+				result.reads?.startsWith('checking:checking,disconnected:'))) &&
+		result.told.at(-1).at - result.told.at(-3).at <= 5 &&
+		failed >= 15000 &&
+		failed <= 15150 &&
+		result.read.ice === 'disconnected' &&
+		result.read.connection === 'failed';
+	const stats =
+		!result.failure &&
+		result.pair === 'in-progress' &&
+		Math.abs(result.pairGone - failed) <= 60 &&
+		Math.abs(result.remoteGone - failed) <= 60 &&
+		result.iceState === 'failed';
+	ok(
+		`${result.label}, a connection that never connects: checking, then 15.05 s after its first check iceConnectionState and its ICE transport disconnected and the connection failed, in that order and at once${result === native ? '' : ', as natively'}`,
+		states &&
+			(result === native ||
+				(native.told &&
+					Math.abs(failed - when(native.told, 'connection:failed')) <= 100)),
+		story,
+	);
+	ok(
+		`${result.label}, a connection that never connects: getStats lists its pair in progress until then, its remote candidate with it, and then the transport's iceState failed`,
+		stats,
+		story,
+	);
+	console.log(
+		`note: ${result.label}, a connection that never connects: ${named(result.told ?? [])} (${(result.told ?? []).map(({ at }) => at).join(', ')} ms after the first check), its pair gone ${result.pairGone} ms, getStats iceState ${result.iceState}`,
 	);
 }
 
@@ -957,8 +1117,6 @@ const transitionsSince = (timeline, start) =>
 	timeline
 		.filter(([at]) => at >= start)
 		.map(([at, what]) => ({ at: at - start, what }));
-const named = (list) => list.map((entry) => entry.what).join();
-const when = (list, what) => list.find((entry) => entry.what === what)?.at;
 
 /**
  * A connection through a relay to the peer, whose far end goes: `vanish`

@@ -1682,6 +1682,9 @@ export class Connection {
 			case 'remotes':
 				this.#remotes(fields.list ?? '');
 				break;
+			case 'pairs':
+				this.#stats.pairs(fields.list ?? '');
+				break;
 			case 'buffered':
 				if (this.#channels.get(Number(fields.index))?.sent)
 					this.#event({
@@ -1726,10 +1729,12 @@ export class Connection {
 
 	/** the agent's state as the page's two state machines show it */
 	#stackIce(state: RTCIceConnectionState) {
-		// the agent has no "failed": it is disconnected without ever
-		// having connected
+		// the agent gave up on every pair without ever having connected:
+		// Chrome's connection reads failed, its iceConnectionState (and its
+		// ICE transport) disconnected (157, measured: both 15.05 s after
+		// the first check, at the turn that gives up the last pair)
 		if (state === 'disconnected' && !this.#connected) {
-			this.#setIce('failed');
+			this.#setIce('disconnected');
 			this.#setConnection('failed');
 			return;
 		}
@@ -2619,8 +2624,13 @@ export class Connection {
 					break;
 				case 'stats': {
 					const rtp = this.#stats.rtp();
+					const transport = this.#stats.report();
 					reply({
-						ice: this.#iceState,
+						// the transport's: failed once it has no pair left
+						ice:
+							transport.pairs.length || !this.#stats.paired
+								? this.#iceState
+								: 'failed',
 						connection: this.#connectionState,
 						local: this.#shown,
 						media: [...this.#medias.values()].map((state) => ({
@@ -2631,7 +2641,7 @@ export class Connection {
 							received: state.receiver?.stats ?? null,
 							...this.#mediaStats(state, rtp),
 						})),
-						transport: this.#stats.report(),
+						transport,
 						ufrag: this.#ufrag,
 						certificate: base64(this.#certificate.certificate),
 						fingerprint: this.#fingerprint,
@@ -2666,6 +2676,12 @@ export class Connection {
 			(fields.rest.includes('tcptype') &&
 				(tcptype === 'passive' || tcptype === 'so'));
 		const line = candidateLine(fields);
+		// known before the stack checks it: its first check goes at once
+		this.#stats.remote(
+			candidate,
+			joinAddress(fields.address, Number(fields.port)),
+			this.#remoteUfrag,
+		);
 		const result = reachable
 			? this.#control({ op: 'remote_candidate', candidate: line })
 			: {};
@@ -2675,11 +2691,6 @@ export class Connection {
 				line,
 			);
 		if (result.error) throw result.error;
-		this.#stats.remote(
-			candidate,
-			joinAddress(fields.address, Number(fields.port)),
-			this.#remoteUfrag,
-		);
 	}
 
 	/**

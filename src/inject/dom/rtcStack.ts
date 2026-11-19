@@ -4438,13 +4438,14 @@ export default class WebRTCStack {
 				case 'ice':
 					if (state.iceConnectionState !== event.state) {
 						state.iceConnectionState = event.state;
-						target.dispatchEvent(new RealmEvent('iceconnectionstatechange'));
+						// the ICE transport reads its state as the connection
+						// tells it, and tells it after
 						const iceState =
 							event.state === 'completed' ? 'connected' : event.state;
-						if (state.net.iceState !== iceState) {
-							state.net.iceState = iceState;
-							changed(state.net.ice);
-						}
+						const moved = state.net.iceState !== iceState;
+						state.net.iceState = iceState;
+						target.dispatchEvent(new RealmEvent('iceconnectionstatechange'));
+						if (moved) changed(state.net.ice);
 					}
 					break;
 				case 'pair': {

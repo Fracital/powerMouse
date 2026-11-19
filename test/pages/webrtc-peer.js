@@ -363,6 +363,61 @@
 		pulses(name, label) {
 			return channelOf(name, label).pulses ?? [];
 		},
+		/**
+		 * From now on: the ICE transport's state changes in the timeline
+		 * (`iceTransport:<state>`), what it reads as each
+		 * iceconnectionstatechange is told, and every 20 ms getStats'
+		 * candidate pairs and remote candidates, by remote address: a
+		 * pair's states with when each was first read, and when it and the
+		 * remote left the report (`watched`)
+		 */
+		watch(name) {
+			const entry = peer(name);
+			const { pc, timeline } = entry;
+			const seen = { reads: [], pairs: {}, remotes: {}, iceState: null };
+			entry.watched = seen;
+			const transport = pc.sctp?.transport.iceTransport;
+			transport?.addEventListener('statechange', () =>
+				timeline.push([Date.now(), `iceTransport:${transport.state}`]),
+			);
+			pc.addEventListener('iceconnectionstatechange', () =>
+				seen.reads.push(`${pc.iceConnectionState}:${transport?.state}`),
+			);
+			const note = (table, key, now, state) => {
+				const found = (table[key] ??= { states: [], gone: null });
+				if (state && found.states.at(-1)?.[1] !== state)
+					found.states.push([now, state]);
+				found.gone = null;
+			};
+			const timer = setInterval(async () => {
+				if (pc.signalingState === 'closed') return clearInterval(timer);
+				const report = await pc.getStats();
+				const now = Date.now();
+				const listed = new Set();
+				report.forEach((stat) => {
+					if (stat.type === 'transport') seen.iceState = stat.iceState;
+					const remote =
+						stat.type === 'candidate-pair'
+							? report.get(stat.remoteCandidateId)
+							: stat.type === 'remote-candidate' && stat;
+					if (!remote) return;
+					const key = `${remote.address}:${remote.port}`;
+					listed.add(`${stat.type}/${key}`);
+					if (stat.type === 'candidate-pair')
+						note(seen.pairs, key, now, stat.state);
+					else note(seen.remotes, key, now);
+				});
+				for (const [type, table] of [
+					['candidate-pair', seen.pairs],
+					['remote-candidate', seen.remotes],
+				])
+					for (const key in table)
+						if (!listed.has(`${type}/${key}`)) table[key].gone ??= now;
+			}, 20);
+		},
+		watched(name) {
+			return peer(name).watched;
+		},
 		bufferedAmount(name, label) {
 			return channelOf(name, label).channel.bufferedAmount;
 		},

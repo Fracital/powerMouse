@@ -742,7 +742,13 @@ TURN server.
   peer reflexive one until the page adds the peer's own, which then takes
   its place) and `candidate-pair` with the checks, the round trip time and
   the bytes, all counted by the worker, which carries every datagram
-  (`src/rtc/stats.ts`). The selected pair is the one ICE nominated. Host
+  (`src/rtc/stats.ts`). The pairs are the agent's (`ev=pairs`, its base,
+  remote and writability, said when they change): one is listed from
+  when the agent forms it, `waiting`, `in-progress` while a check of its
+  own is out and `succeeded` once one is answered, until the turn that
+  gives it up (the pair sent on, the turn after), and a remote candidate
+  only with a pair, as in Chrome 157; the transport's `iceState` reads
+  `failed` once no pair is left. The selected pair is the one ICE nominated. Host
   candidates read `address: ''` and `networkType: 'unknown'`, as Chrome's
   do behind mDNS names; a reflexive or relayed one is at the wisp server's
   address as the server saw it, with the server's `url`.
@@ -927,8 +933,13 @@ TURN server.
   server refuses or closes is asked for again by the next check (below),
   and once the connection failed nothing is sent to it, so no stream is
   opened to it again.
-- **States.** The agent has no "failed": a connection that is disconnected
-  before it ever connected reads `failed`.
+- **States.** The agent has no "failed": a connection whose agent gives
+  up every pair before it ever connected reads as Chrome 157's does (a
+  page whose only remote never answers, measured): `connectionState`
+  `failed`, and `iceConnectionState` and the ICE transport
+  `disconnected`, at the turn that gives up the last pair, 15.05 s after
+  its first check. The ICE transport reads each state before
+  `iceconnectionstatechange` tells it, and tells its own after.
 - **Consent freshness** (RFC 7675) is the worker's, as Chrome keeps it, not
   the agent's (which said `disconnected` some 22 s after the far end went,
   never failed, and sent media and SCTP retransmissions over the dead path

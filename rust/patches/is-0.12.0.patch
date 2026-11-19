@@ -48,7 +48,7 @@
              };
              if !keep {
                  debug!("Remove failed pair: {:?}", Pii(&p));
-@@ -1265,21 +1276,104 @@
+@@ -1265,21 +1276,116 @@
              return;
          }
  
@@ -91,9 +91,6 @@
 +        let more = self
              .candidate_pairs
 -            .iter_mut()
--            .enumerate()
--            .map(|(i, c)| (i, c.next_binding_attempt(now, &self.timing_config)))
--            .min_by_key(|(_, t)| *t);
 +            .iter()
 +            .any(|p| p.pace.active() && p.pace.pings() < PINGS_AT_WEAK_INTERVAL);
 +        let fast = weak || more;
@@ -110,14 +107,7 @@
 +            self.last_check = Some(now);
 +        }
 +    }
- 
--        if let Some((idx, deadline)) = next {
--            if now >= deadline {
--                let pair = &self.candidate_pairs[idx];
--                trace!("Handle next triggered pair: {:?}", pair);
--                self.stun_client_binding_request(now, idx);
--            } else {
--                // trace!("Next triggered pair is in the future: {:?}", deadline - now);
++
 +    /// The pair Chrome checks at a turn (BasicIceController::FindNextPingableConnection)
 +    fn next_to_check(&self, now: Instant, selected: Option<usize>, weak: bool) -> Option<usize> {
 +        let pairs = &self.candidate_pairs;
@@ -146,11 +136,32 @@
 +        }
 +        let triggered = pairs
 +            .iter()
-+            .enumerate()
+             .enumerate()
+-            .map(|(i, c)| (i, c.next_binding_attempt(now, &self.timing_config)))
+-            .min_by_key(|(_, t)| *t);
 +            .filter(|(_, p)| p.pace.pingable(now, weak) && p.pace.needs_triggered_check())
 +            .min_by_key(|(_, p)| p.pace.last_check_received())
 +            .map(|(i, _)| i);
 +        triggered.or_else(|| oldest(&|p| p.pace.pingable(now, weak)))
++    }
+ 
+-        if let Some((idx, deadline)) = next {
+-            if now >= deadline {
+-                let pair = &self.candidate_pairs[idx];
+-                trace!("Handle next triggered pair: {:?}", pair);
+-                self.stun_client_binding_request(now, idx);
+-            } else {
+-                // trace!("Next triggered pair is in the future: {:?}", deadline - now);
++    /// The pairs as Chrome's getStats lists them (STomp, pacing.rs): the
++    /// base each sends from, its remote, and whether it is writable.
++    pub fn pairs(&self) -> impl Iterator<Item = (SocketAddr, SocketAddr, bool)> + '_ {
++        self.candidate_pairs.iter().filter(|p| p.pace.listed()).map(|p| {
++            (
++                p.local_candidate(&self.local_candidates).base(),
++                p.remote_candidate(&self.remote_candidates).addr(),
++                p.pace.writable(),
++            )
++        })
 +    }
 +
 +    /// Something that is not STUN came in: Chrome's pair with that remote
@@ -166,7 +177,7 @@
              }
          }
      }
-@@ -1314,15 +1408,27 @@
+@@ -1314,15 +1420,27 @@
              return Some(last_now + self.timing_advance);
          }
  
@@ -198,7 +209,7 @@
          };
  
          // Time must advance with at least Ta.
-@@ -1601,6 +1707,7 @@
+@@ -1601,6 +1719,7 @@
          let remote_addr = remote.addr();
  
          pair.increase_remote_binding_requests(req.now);
@@ -206,7 +217,7 @@
  
          if self.ice_lite && !self.controlling {
              // ice-lite sends no checks of its own, so this pair can never be
-@@ -1911,6 +2018,8 @@
+@@ -1911,6 +2030,8 @@
          };
  
          pair.record_binding_response(now, trans_id, valid_idx);
@@ -215,7 +226,7 @@
  
          // For a controlled agent, a successful check can make a nominated pair valid.
          self.evaluate_nomination();
-@@ -2045,7 +2154,11 @@
+@@ -2045,7 +2166,11 @@
              // it is just another pair being checked.
              if p.is_nominated() && p.state() == CheckState::Succeeded {
                  any_nomination = true;
@@ -241,7 +252,7 @@
  
 --- a/src/pacing.rs
 +++ b/src/pacing.rs
-@@ -0,0 +1,207 @@
+@@ -0,0 +1,218 @@
 +//! When the agent checks which pair: Chrome's way (STomp).
 +//!
 +//! libwebrtc's P2PTransportChannel, BasicIceController and Connection as
@@ -264,8 +275,8 @@
 +//! nothing came from its remote for 2.5 s (unless its last check was
 +//! answered) or once 5 checks went unanswered over 5 s. 15 s after the
 +//! first check that went unanswered a pair is given up (the pair sent on is
-+//! checked once more then); the pair sent on stays, unchecked, until the
-+//! peer checks it again. What the connection reads (disconnected at 5 s,
++//! checked once more then, and leaves getStats at the next turn); the
++//! pair sent on stays, unchecked, until the peer checks it again. What the connection reads (disconnected at 5 s,
 +//! failed at 15 s) is the host's.
 +
 +use std::time::{Duration, Instant};
@@ -323,6 +334,9 @@
 +    write: Write,
 +    /// the pair sent on was given up at this turn: it is checked once more
 +    last_call: bool,
++    /// given up at an earlier turn: Chrome destroyed its connection, and
++    /// getStats no longer lists it
++    dead: bool,
 +}
 +
 +impl Pace {
@@ -340,6 +354,12 @@
 +
 +    pub(crate) fn active(&self) -> bool {
 +        self.write != Write::Timeout
++    }
++
++    /// getStats lists it: until the turn after it was given up (the turn
++    /// that gives up any other also prunes it)
++    pub(crate) fn listed(&self) -> bool {
++        !self.dead
 +    }
 +
 +    pub(crate) fn pinged(&mut self, now: Instant) {
@@ -368,6 +388,7 @@
 +            if self.write == Write::Timeout {
 +                self.write = Write::Init;
 +                self.unanswered.clear();
++                self.dead = false;
 +            }
 +        }
 +    }
@@ -378,6 +399,7 @@
 +
 +    /// The pair's state at a turn: `sent_on` for the pair the agent sends on.
 +    pub(crate) fn update(&mut self, now: Instant, sent_on: bool) {
++        self.dead = self.write == Write::Timeout;
 +        let first = self.unanswered.first().copied();
 +        let estimate = (self.rtt() * 2).clamp(Duration::from_millis(100), Duration::from_secs(60));
 +        let failures = self

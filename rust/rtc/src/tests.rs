@@ -1458,6 +1458,102 @@ fn a_check_goes_out_when_its_turn_is_due() {
 	);
 }
 
+/// What getStats lists, Chrome 157 measured: a pair from when it forms
+/// (waiting, before its first check) until the turn that gives it up, 15
+/// s after its first check. On a connection with no other pair that is the
+/// turn that reads disconnected (and failed), 15.05 s on; the pair sent
+/// on is checked once more there and leaves the list at the next turn.
+/// The stack said nothing of its pairs: the worker listed every pair it
+/// had seen a packet of, for ever, in progress.
+#[test]
+fn the_pairs_are_listed_as_chromes_are() {
+	let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let lists = |peer: &Peer| -> Vec<(usize, String)> {
+		peer.events
+			.iter()
+			.enumerate()
+			.filter(|(_, e)| get(e, "ev") == "pairs")
+			.map(|(n, e)| (n, get(e, "list").to_string()))
+			.collect()
+	};
+	// a connection whose only remote nothing answers at
+	let mut a = Peer::new("10.0.0.1:5000", &[]);
+	let mut b = Peer::new("10.0.0.2:5000", &[]);
+	a.control(&[("op", "channel"), ("label", "data")]);
+	let bare = |sdp: &str| sdp.split("\r\n").filter(|line| !line.starts_with("a=candidate:")).collect::<Vec<_>>().join("\r\n");
+	let offer = bare(get(&a.control(&[("op", "offer")]), "sdp"));
+	let answer = bare(get(&b.control(&[("op", "remote_offer"), ("sdp", &offer)]), "sdp"));
+	a.control(&[("op", "answer"), ("sdp", &answer)]);
+	a.tick();
+	a.control(&[("op", "remote_candidate"), ("candidate", "candidate:2 1 udp 2130706430 10.0.0.9 5000 typ host")]);
+	let added = Instant::now();
+	let formed = lists(&a);
+	assert_eq!(formed.last().map(|(_, l)| l.as_str()), Some("10.0.0.1:5000|10.0.0.9:5000|0"), "as it was added: {formed:?}");
+	let mut first = None;
+	let mut emptied = None;
+	let mut given_up = None;
+	while Instant::now() < added + Duration::from_millis(16500) {
+		for datagram in std::mem::take(&mut a.outbox) {
+			if is_check(&datagram) && first.is_none() {
+				first = Some(Instant::now());
+			}
+		}
+		let before = a.events.len();
+		a.tick();
+		for (n, e) in a.events.iter().enumerate().skip(before) {
+			if get(e, "ev") == "pairs" && get(e, "list").is_empty() {
+				emptied.get_or_insert((n, Instant::now()));
+			}
+			if get(e, "ev") == "ice" && get(e, "state") == "disconnected" {
+				given_up.get_or_insert((n, Instant::now()));
+			}
+		}
+		std::thread::sleep(Duration::from_millis(1));
+	}
+	let first = first.expect("no check");
+	let (n, at) = emptied.unwrap_or_else(|| panic!("the pair stayed: {:?}", lists(&a)));
+	let (m, then) = given_up.expect("never disconnected");
+	let after = (at - first).as_millis();
+	assert!((15000..=15130).contains(&after), "the pair left the list {after} ms after its first check");
+	// in the same turn as the state
+	assert!(n.abs_diff(m) <= 2 && (then - at).as_millis() <= 2, "listed until {after} ms, disconnected {} ms", (then - first).as_millis());
+
+	// the pair sent on, once the peer is gone
+	let mut a = Peer::new("10.0.0.1:5000", &[]);
+	let mut b = Peer::new("10.0.0.2:5000", &[]);
+	let index: u16 = get(&a.control(&[("op", "channel"), ("label", "data")]), "index").parse().unwrap();
+	negotiate_udp(&mut a, &mut b);
+	pump(&mut a, &mut b, "the channel", |a, b| a.event("channel_open").is_some() && b.event("channel_open").is_some());
+	let mut checks = Vec::new();
+	run(&mut a, &mut b, 6000, false, &mut checks, Some(index));
+	assert_eq!(lists(&a).last().map(|(_, l)| l.as_str()), Some("10.0.0.1:5000|10.0.0.2:5000|1"), "{:?}", lists(&a));
+	let seen = a.events.len();
+	let lost = Instant::now();
+	let mut last_check = lost;
+	let mut gone = None;
+	while Instant::now() < lost + Duration::from_millis(17500) {
+		for datagram in std::mem::take(&mut a.outbox) {
+			if is_check(&datagram) {
+				last_check = Instant::now();
+			}
+		}
+		std::mem::take(&mut b.outbox);
+		let before = a.events.len();
+		a.tick();
+		b.tick();
+		if gone.is_none() && a.events[before..].iter().any(|e| get(e, "ev") == "pairs" && get(e, "list").is_empty()) {
+			gone = Some(Instant::now());
+		}
+		std::thread::sleep(Duration::from_millis(1));
+	}
+	let later: Vec<String> = lists(&a).into_iter().filter(|(n, _)| *n >= seen).map(|(_, l)| l).collect();
+	// unwritable once 5 checks went unanswered over 5 s, then gone
+	assert_eq!(later, ["10.0.0.1:5000|10.0.0.2:5000|0", ""], "the lists once the peer went");
+	// at the turn after its last check
+	let after = (gone.unwrap() - last_check).as_millis();
+	assert!((40..=80).contains(&after), "the pair sent on left the list {after} ms after its last check");
+}
+
 #[test]
 fn a_passive_tcp_candidate_is_checked_over_tcp_from_port_9() {
 	let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());

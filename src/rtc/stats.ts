@@ -117,6 +117,8 @@ export interface SelectedPair {
 interface Pair extends Omit<PairReport, 'local' | 'remote' | 'priority'> {
 	local: Candidate;
 	remote: Candidate;
+	/** the agent has it (`pairs`): getStats lists it */
+	listed: boolean;
 }
 
 const ID_CHARS =
@@ -417,10 +419,28 @@ export class TransportStats {
 			responsesReceived: 0,
 			consentRequestsSent: 0,
 			totalRoundTripTime: 0,
+			listed: true,
 		};
 		this.#pairs.set(key, pair);
 		if (this.#pairs.size === 1) this.#onPair();
 		return pair;
+	}
+
+	/**
+	 * The agent's pairs (`base|remote|writable`, comma separated): getStats
+	 * lists these, from when the agent forms one (waiting, before its first
+	 * check) until it gives up on it, and with them their remotes, as
+	 * Chrome's does
+	 */
+	pairs(list: string) {
+		for (const pair of this.#pairs.values()) pair.listed = false;
+		for (const entry of list ? list.split(',') : []) {
+			const [base, remote, writable] = entry.split('|');
+			const pair = this.#pair(base, remote, null);
+			if (!pair) continue;
+			pair.listed = true;
+			pair.writable = writable === '1';
+		}
 	}
 
 	/** a datagram the stack sent from `local` to `remote` */
@@ -432,8 +452,10 @@ export class TransportStats {
 			if (stun.type === BINDING_REQUEST) {
 				pair.requestsSent++;
 				if (pair === this.#selected) this.unanswered ??= performance.now();
-				if (pair.writable) pair.consentRequestsSent++;
-				else pair.state = 'in-progress';
+				// Chrome's pair is in progress while a check is out, and
+				// counts those after the first answer as consent's
+				if (pair.responsesReceived) pair.consentRequestsSent++;
+				pair.state = 'in-progress';
 				if (stun.role) this.#iceRole = stun.role;
 				this.#asked.set(stun.transaction, {
 					pair,
@@ -482,7 +504,7 @@ export class TransportStats {
 	}
 
 	/** RFC 8445 6.1.2.3, with G the controlling side's priority */
-	#priority({ local, remote }: Pair): bigint {
+	#priority({ local, remote }: Pick<Pair, 'local' | 'remote'>): bigint {
 		const controlling = this.#iceRole !== 'controlled';
 		const g = BigInt(controlling ? local.priority : remote.priority);
 		const d = BigInt(controlling ? remote.priority : local.priority);
@@ -635,12 +657,16 @@ export class TransportStats {
 	}
 
 	report(): TransportReport {
-		const pairs = [...this.#pairs.values()];
+		const pairs = [...this.#pairs.values()].filter((pair) => pair.listed);
 		const hello = this.#hello;
+		const selected = this.#selected ? pairs.indexOf(this.#selected) : -1;
 		return {
 			locals: this.#locals.map(({ remote: _, ...candidate }) => candidate),
-			remotes: this.#remotes.map(({ remote: _, ...candidate }) => candidate),
-			pairs: pairs.map((pair) => {
+			// a remote candidate is told with its pairs
+			remotes: this.#remotes
+				.filter((candidate) => pairs.some((pair) => pair.remote === candidate))
+				.map(({ remote: _, ...candidate }) => candidate),
+			pairs: pairs.map(({ listed: _, ...pair }) => {
 				const { local, remote, ...counters } = pair;
 				return {
 					...counters,
@@ -649,7 +675,7 @@ export class TransportStats {
 					priority: Number(this.#priority(pair)),
 				};
 			}),
-			selected: this.#selected ? pairs.indexOf(this.#selected) : null,
+			selected: selected < 0 ? null : selected,
 			selectedChanges: this.#selectedChanges,
 			iceRole: this.#iceRole,
 			dtlsRole: this.#dtlsRole,
