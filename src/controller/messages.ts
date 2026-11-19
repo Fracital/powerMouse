@@ -23,7 +23,10 @@ import type {
 	RequestInfo,
 	RequestRule,
 } from '../transport/messages';
-import type { WispWebTransportOptions } from '../transport/wispWebTransport';
+import type {
+	CarrierInfo,
+	WispWebTransportOptions,
+} from '../transport/wispWebTransport';
 import type { SiteHistoryAnswer, SiteHistoryOp } from './history';
 import type { SitePoolInit } from './sitePool';
 
@@ -55,11 +58,13 @@ export interface TransportDescriptor {
 	http3?: boolean | Http3DescriptorOptions;
 	/**
 	 * Wisp over the relay's WebTransport session (holyWisp's WebTransport
-	 * listener) instead of its WebSocket, when the relay offers one
-	 * (`/webtransport.json` on the wisp URL's origin) and it can be had in
-	 * `timeoutMs`; the WebSocket otherwise (UDP blocked, no listener, a
-	 * certificate that does not match). Off unless set; epoxy only (it
-	 * takes the session as its wisp transport). docs/webtransport.md.
+	 * listener) instead of its WebSocket, when the relay offers one (a wss:
+	 * wisp URL dialed as https:, or what `/webtransport.json` on its origin
+	 * names) and it is up about as soon as the WebSocket (a relay met before:
+	 * within `timeoutMs`); the WebSocket otherwise (UDP blocked, no listener,
+	 * a certificate that does not match). Off unless set; epoxy only (it
+	 * takes the session as its wisp transport). The controller's `carrier`
+	 * says which. docs/webtransport.md.
 	 */
 	webTransport?: boolean | WispWebTransportOptions;
 }
@@ -155,6 +160,8 @@ export type FrameBound = {
 		{
 			config: Config;
 			stale: StaleInfo | null;
+			/** the inner controller's `carrier`, as it is when it is ready */
+			carrier?: CarrierInfo | null;
 			/** the site pool's slots, whose documents report too (none without a pool) */
 			sites?: string[];
 		},
@@ -224,6 +231,8 @@ export type HostBound = {
 	request: [RequestInfo];
 	/** the inner controller's `stale` changed: the builds, or null once they agree again */
 	stale: [StaleInfo | null];
+	/** the inner controller's transport chose its carrier (StompController.carrier) */
+	carrier: [CarrierInfo];
 	/** a host hook threw in a proxied realm, or a hook URL could not be fetched */
 	hookError: [HookErrorInfo];
 	/** a site asks for a permission the proxy origin holds for another (see StompController.onPermissionRequest) */

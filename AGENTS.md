@@ -376,10 +376,13 @@ on every save (use a `git worktree`).
 - Wisp over the relay's WebTransport session (a descriptor's
   `webTransport`, off unless set in the library, on in the demo,
   `src/transport/wispWebTransport.ts`) hands epoxy a function transport.
-  Nothing waits on UDP: a relay never met rides the WebSocket and tries a
-  session beside it, remembered per relay in IndexedDB
-  (`stomp-wisp-carrier`), so suites see the session from the second start
-  only (webtransport-wisp's `learn`). It rests on epoxy-tls 0075: a
+  UDP first: a relay never met opens the session and the WebSocket
+  together and takes the session when it is up within a grace of the
+  WebSocket (on loopback, always), closing the other; what happened is
+  remembered per relay in IndexedDB (`stomp-wisp-carrier`), a failure
+  leaving the WebSocket alone for 30 s and then a session tried beside it.
+  The controller's `carrier` (and its event) says which; the demo shows it
+  on its menu button. It rests on epoxy-tls 0075: a
   function transport's sink that waited held wisp-mux's lock across a TLS
   handshake's flush and hung the whole connection.
   docs/webtransport.md, "Wisp over WebTransport".

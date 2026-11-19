@@ -4,9 +4,13 @@
 // port, the Wisp stream and the datagrams on its UDP one) in front of the
 // demo's holyWisp, with the transport in its worker and in the page:
 //
-// - a start that knows nothing of the relay rides the WebSocket at once and
-//   tries a session beside it, remembered (IndexedDB) as working; the next
-//   start rides the session, no WebSocket opened: a navigation, a page's
+// - a start that knows nothing of the relay opens the session and the
+//   WebSocket together and rides the session, which is up in time, the
+//   WebSocket closed; remembered (IndexedDB) as working, it says so on the
+//   console and in the controller's `carrier`. A session that is up too late
+//   leaves that start on the WebSocket and is closed, and the next start
+//   rides it. The next start rides the session, no WebSocket opened and the
+//   document not fetched again: a navigation, a page's
 //   fetch, the host's own request and a page's WebSocket, a UDP stream's
 //   DATA as datagrams (one too large for a datagram on the Wisp stream),
 //   Wisp v2 offered as a protocol; requests in flight when the relay cut the
@@ -15,12 +19,14 @@
 // - a stale document (a rotation between the fetch and the handshake) is
 //   fetched again and the session is had;
 // - no document, blocked UDP, no matching hash, no listener: everything
-//   answers over the WebSocket with the first request as soon as with the
+//   answers over the WebSocket with the first request within noise of the
 //   carrier off, the relay is remembered as failing, and the next start
-//   tries nothing;
+//   tries nothing; once that quiet is over (FAILED_QUIET_MS), a start rides
+//   the WebSocket at once and tries a session beside it, and when UDP came
+//   back the start after it rides the session;
 // - a session whose UDP the network drops (no session close): the next
-//   requests answer over the WebSocket, and the relay is remembered as
-//   failing;
+//   requests answer over the WebSocket, the switch is on the console, and
+//   the relay is remembered as failing;
 // - a session named by its URL alone (no document), its certificate taken
 //   as the Web PKI's.
 //
@@ -154,6 +160,8 @@ async function controllerPage(
 	const context = await browser.newContext();
 	const page = await context.newPage();
 	page.on('pageerror', (error) => errors.push(error.message));
+	page.logs = [];
+	page.on('console', (message) => page.logs.push(message.text()));
 	await page.goto(`${PROXY}stomp/controllerFrame.html`);
 	let started = await startController(page, host, wisp, extra);
 	if (learn) {
@@ -166,13 +174,49 @@ async function controllerPage(
 	return { context, page, started };
 }
 
-/** which carrier a page-hosted transport chose (null in the worker: not reachable) */
-const carrierOf = (page) =>
-	page.evaluate(() => {
-		for (let t = window.controller.transport; t; t = t.base)
-			if ('carrier' in t) return t.carrier;
-		return null;
+/** the controller's `carrier` once the transport chose (worker or page), null if it never does */
+const carrierInfo = (page) =>
+	page.evaluate(async () => {
+		for (let i = 0; i < 60 && !window.controller.carrier; i++)
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		return window.controller.carrier;
 	});
+/** which carrier the transport chose */
+const carrierOf = async (page) => (await carrierInfo(page))?.carrier ?? null;
+
+/** waits until the origin remembers `key` as `want` */
+async function settledTo(page, key, want) {
+	for (let i = 0; i < 40; i++) {
+		const verdict = await verdictOf(page, key);
+		if (verdict === want) return verdict;
+		await sleep(150);
+	}
+	return verdictOf(page, key);
+}
+
+/** FAILED_QUIET_MS went by for `key`: what failed is tried beside the WebSocket again */
+const endQuiet = (page, key) =>
+	page.evaluate(
+		(key) =>
+			new Promise((resolve) => {
+				const request = indexedDB.open('stomp-wisp-carrier', 1);
+				request.onerror = () => resolve(false);
+				request.onsuccess = () => {
+					const store = request.result
+						.transaction('relays', 'readwrite')
+						.objectStore('relays');
+					const get = store.get(key);
+					get.onsuccess = () => {
+						if (!get.result) return resolve(false);
+						store.put({ ...get.result, quiet: 0 }, key).onsuccess = () => {
+							request.result.close();
+							resolve(true);
+						};
+					};
+				};
+			}),
+		key,
+	);
 
 /** a navigation, a page's fetch and the host's own request, each "ok@ms" or why not */
 function load(page, url, title) {
@@ -295,7 +339,8 @@ const reset = () => {
 
 for (const host of ['worker', 'page']) {
 	// over the session
-	// nothing known of the relay: the WebSocket at once, a session beside it
+	// nothing known of the relay: the session and the WebSocket together,
+	// the session taken as it is up in time, the WebSocket closed
 	{
 		reset();
 		const before = snapshot();
@@ -306,23 +351,91 @@ for (const host of ['worker', 'page']) {
 			'WALK 1',
 		);
 		const verdict = await settled(fresh.page, autoKey(relay.wisp));
+		const info = await carrierInfo(fresh.page);
+		await sleep(300);
 		const d = delta(before);
 		ok(
-			`${host} first start: everything answers over the WebSocket`,
-			allOk(result) && d.ws >= 1,
-			JSON.stringify({ result, d }),
+			`${host} first start: everything answers`,
+			allOk(result),
+			JSON.stringify(result),
 		);
 		ok(
-			`${host} first start: a session was tried beside it and is remembered as working`,
-			d.documents === 1 && d.sessions === 1 && verdict === 'worked',
+			`${host} first start: it rides the WebTransport session, as the controller's carrier says`,
+			info?.carrier === 'webtransport' &&
+				info.url === relay.url &&
+				Number.isFinite(info.ms) &&
+				d.sessions === 1 &&
+				d.sessionsClosed === 0,
+			JSON.stringify({ info, d }),
+		);
+		ok(
+			`${host} first start: the WebSocket opened beside it was closed`,
+			d.ws === 1 && d.wsClosed === 1,
+			JSON.stringify(d),
+		);
+		ok(
+			`${host} first start: remembered as working, the document fetched once`,
+			d.documents === 1 && verdict === 'worked',
 			JSON.stringify({ verdict, d }),
 		);
 		if (host === 'page')
 			ok(
-				`${host} first start: the transport says it rides the WebSocket`,
-				(await carrierOf(fresh.page)) === 'websocket',
+				`${host} first start: the console says it at a glance`,
+				fresh.page.logs.some(
+					(line) =>
+						line.includes('STomp transport') &&
+						line.includes(
+							`Wisp over WebTransport (UDP/QUIC) to ${relay.url}, ${info?.ms} ms`,
+						),
+				),
+				JSON.stringify(fresh.page.logs.filter((l) => l.includes('STomp'))),
 			);
 		await fresh.context.close();
+	}
+
+	// a session that is up too late for the first start: the WebSocket, the
+	// session closed once it is up and remembered, the next start on it
+	{
+		reset();
+		relay.documentDelay = 600;
+		// the last context's session close reaches the relay first
+		await sleep(300);
+		const before = snapshot();
+		const { context, page } = await controllerPage(host, relay.wisp);
+		const result = await load(page, `${FIXTURE}pages/walk-2.html`, 'WALK 2');
+		const info = await carrierInfo(page);
+		const verdict = await settled(page, autoKey(relay.wisp));
+		await sleep(300);
+		const d = delta(before);
+		relay.documentDelay = 0;
+		ok(
+			`${host} late session: the first start rides the WebSocket, saying why`,
+			allOk(result) &&
+				info?.carrier === 'websocket' &&
+				/within \d+ ms of the WebSocket/.test(info.why) &&
+				d.ws === 1 &&
+				d.wsClosed === 0,
+			JSON.stringify({ result, info, d }),
+		);
+		ok(
+			`${host} late session: the session was closed once it was up, remembered as working`,
+			d.sessions === 1 && d.sessionsClosed === 1 && verdict === 'worked',
+			JSON.stringify({ verdict, d }),
+		);
+		const again = snapshot();
+		await page.goto(`${PROXY}stomp/controllerFrame.html`);
+		await startController(page, host, relay.wisp);
+		const next = await load(page, `${FIXTURE}pages/walk-3.html`, 'WALK 3');
+		const d2 = delta(again);
+		ok(
+			`${host} late session: the next start rides it, no WebSocket`,
+			allOk(next) &&
+				(await carrierOf(page)) === 'webtransport' &&
+				d2.ws === 0 &&
+				d2.sessions === 1,
+			JSON.stringify({ next, d2 }),
+		);
+		await context.close();
 	}
 
 	// remembered as working: over the session
@@ -343,18 +456,17 @@ for (const host of ['worker', 'page']) {
 		);
 		const d = delta(before);
 		ok(
-			`${host}: the next start rides a WebTransport session, no WebSocket opened`,
+			`${host}: the next start rides a WebTransport session, no WebSocket opened, the document kept`,
 			page.learned === 'worked' &&
 				d.sessions === 1 &&
 				d.ws === 0 &&
-				d.documents === 1,
+				d.documents === 0,
 			JSON.stringify({ learned: page.learned, d }),
 		);
-		if (host === 'page')
-			ok(
-				`${host}: the transport says it rides WebTransport`,
-				(await carrierOf(page)) === 'webtransport',
-			);
+		ok(
+			`${host}: the transport says it rides WebTransport`,
+			(await carrierOf(page)) === 'webtransport',
+		);
 		const echoed = await socketEcho(page, wsEcho);
 		ok(
 			`${host}: a page's WebSocket echoes over the session`,
@@ -626,11 +738,12 @@ for (const host of ['worker', 'page']) {
 			verdict === 'failed',
 			String(verdict),
 		);
-		if (host === 'page')
-			ok(
-				`${host} ${name}: the transport says it rides the WebSocket`,
-				(await carrierOf(page)) === 'websocket',
-			);
+		const info = await carrierInfo(page);
+		ok(
+			`${host} ${name}: the transport says it rides the WebSocket, and why`,
+			info?.carrier === 'websocket' && !!info.why,
+			JSON.stringify(info),
+		);
 		const echoed = await socketEcho(page, wsEcho);
 		ok(
 			`${host} ${name}: a page's WebSocket echoes`,
@@ -646,6 +759,56 @@ for (const host of ['worker', 'page']) {
 		ok(
 			`${host} ${name}: the next start goes to the WebSocket without a document or a handshake`,
 			allOk(next) && d2.documents === 0 && d2.sessions === 0 && d2.ws >= 1,
+			JSON.stringify({ next, d2 }),
+		);
+		await context.close();
+	}
+
+	// UDP comes back after a failure: once the quiet is over, the WebSocket
+	// at once with a session beside it, then the session
+	{
+		reset();
+		relay.udpBlocked = true;
+		const key = autoKey(relay.wisp);
+		const { context, page } = await controllerPage(host, relay.wisp);
+		await load(page, `${FIXTURE}pages/walk-5.html`, 'WALK 5');
+		const failed = await settled(page, key);
+		relay.udpBlocked = false;
+		const quietOver = await endQuiet(page, key);
+		const before = snapshot();
+		await page.goto(`${PROXY}stomp/controllerFrame.html`);
+		await startController(page, host, relay.wisp);
+		const result = await load(page, `${FIXTURE}pages/walk-4.html`, 'WALK 4');
+		const info = await carrierInfo(page);
+		const verdict = await settledTo(page, key, 'worked');
+		const d = delta(before);
+		ok(
+			`${host} recovery: after the quiet, the WebSocket at once with a session tried beside it`,
+			failed === 'failed' &&
+				quietOver &&
+				allOk(result) &&
+				info?.carrier === 'websocket' &&
+				/tried beside the WebSocket/.test(info.why) &&
+				d.ws >= 1 &&
+				d.sessions === 1,
+			JSON.stringify({ failed, quietOver, result, info, d }),
+		);
+		ok(
+			`${host} recovery: the session is remembered as working again`,
+			verdict === 'worked',
+			String(verdict),
+		);
+		const again = snapshot();
+		await page.goto(`${PROXY}stomp/controllerFrame.html`);
+		await startController(page, host, relay.wisp);
+		const next = await load(page, `${FIXTURE}pages/walk-3.html`, 'WALK 3');
+		const d2 = delta(again);
+		ok(
+			`${host} recovery: the next start rides the session`,
+			allOk(next) &&
+				(await carrierOf(page)) === 'webtransport' &&
+				d2.ws === 0 &&
+				d2.sessions === 1,
 			JSON.stringify({ next, d2 }),
 		);
 		await context.close();
@@ -689,6 +852,18 @@ for (const host of ['worker', 'page']) {
 			verdict === 'failed',
 			String(verdict),
 		);
+		ok(
+			`${host} UDP lost under the session: the controller's carrier says the WebSocket`,
+			(await carrierInfo(page))?.carrier === 'websocket',
+		);
+		if (host === 'page')
+			ok(
+				`${host} UDP lost under the session: the console says it switched`,
+				page.logs.some((line) =>
+					line.includes('switched from WebTransport to WebSocket'),
+				),
+				JSON.stringify(page.logs.filter((l) => l.includes('STomp'))),
+			);
 		await context.close();
 		await lossy.close();
 		lossy = await startWispWebTransport(`ws://127.0.0.1:${PORT}/wisp/`);

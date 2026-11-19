@@ -7,6 +7,7 @@ import {
 import { RpcHelper } from './rpc';
 import type { DecorateHandshake } from './serveTransport';
 import type { AdmitSession } from './webTransportHost';
+import type { CarrierInfo } from './wispWebTransport';
 
 /** how long the worker gets to start and import the transport module before the controller gives up on it */
 const BOOT_TIMEOUT_MS = 30000;
@@ -30,6 +31,7 @@ export default class TransportWorker {
 		decorate: DecorateHandshake,
 		tick: () => void,
 		admit?: AdmitSession,
+		carrier?: (info: CarrierInfo) => void,
 	) {
 		// a classic worker (see build.js: emscripten's environment detection)
 		this.#worker = new Worker(url);
@@ -44,6 +46,7 @@ export default class TransportWorker {
 					admit ? await admit(new URL(url), origin) : true,
 					[],
 				],
+				carrier: async (info) => carrier?.(info),
 			},
 			TRANSPORT_WORKER_RPC,
 			(data, transfer) => this.#worker.postMessage(data, transfer),

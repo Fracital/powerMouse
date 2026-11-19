@@ -28,6 +28,7 @@ import type {
 	RequestRule,
 } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
+import type { CarrierInfo } from '../transport/wispWebTransport';
 import { BUILD } from '../version';
 import { drawAccountChooser } from './accountChooser';
 import { ClientFrames } from './clientFrames';
@@ -207,7 +208,7 @@ export const DEFAULT_SANDBOX =
 
 /**
  * Events, as on StompController: `navigate`, `open`, `request` alongside the
- * callbacks; `stale` (detail: StaleInfo) when the
+ * callbacks; `carrier` (detail: CarrierInfo) as on StompController; `stale` (detail: StaleInfo) when the
  * controller frame's service worker is another build than its controller
  * and could not be replaced in time, `rebind` once the builds agree again.
  */
@@ -226,6 +227,8 @@ export class RemoteController extends EventTarget {
 	config?: Config;
 	/** the inner controller's `stale` (see StompController); null while the builds agree */
 	stale: StaleInfo | null = null;
+	/** the inner controller's `carrier` (see StompController), with its `carrier` event */
+	carrier: CarrierInfo | null = null;
 	frames: RemoteFrame[] = [];
 	/**
 	 * The host's browser window as its frames' documents see it
@@ -393,6 +396,10 @@ export class RemoteController extends EventTarget {
 						[],
 					];
 				},
+				carrier: async (info) => {
+					this.carrier = info;
+					this.dispatchEvent(new CustomEvent('carrier', { detail: info }));
+				},
 				stale: async (info) => {
 					const was = this.stale;
 					this.stale = info;
@@ -557,10 +564,11 @@ export class RemoteController extends EventTarget {
 				}),
 			)
 			.then(
-				({ config, stale, sites }) => {
+				({ config, stale, carrier, sites }) => {
 					this.#slots = Array.isArray(sites) ? sites : [];
 					this.config = config;
 					this.stale = stale ?? null;
+					if (carrier && !this.carrier) this.carrier = carrier;
 					this.isReady = true;
 				},
 				(error: Error) => {

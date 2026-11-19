@@ -13,7 +13,7 @@ import type {
 } from '../passkeys/types';
 import type { PortBody } from './bodyPort';
 import type { Http3DescriptorOptions } from './construct';
-import type { WispWebTransportOptions } from './wispWebTransport';
+import type { CarrierInfo, WispWebTransportOptions } from './wispWebTransport';
 
 // postMessage keys (controller <-> service worker <-> proxied contexts)
 
@@ -1693,6 +1693,8 @@ export type WorkerToController = {
 	admit: [{ url: string; origin: string }, boolean];
 	/** KEEPALIVE_MS went by: the controller keeps the service worker running */
 	tick: [];
+	/** the transport chose what its wisp connection rides (wispWebTransport.ts watchCarrier) */
+	carrier: [CarrierInfo];
 };
 
 export type WebSocketMessage =

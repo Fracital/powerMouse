@@ -100,6 +100,7 @@ import RemoteTransport from '../transport/RemoteTransport';
 import { RpcHelper } from '../transport/rpc';
 import serveTransport from '../transport/serveTransport';
 import TransportWorker from '../transport/TransportWorker';
+import { watchCarrier, type CarrierInfo } from '../transport/wispWebTransport';
 import { BUILD, coreModuleKey } from '../version';
 import { compileModule } from '../wasm/module';
 import { drawAccountChooser } from './accountChooser';
@@ -180,7 +181,10 @@ export type {
 	UdpOpener,
 } from '../transport/http3/Http3Transport';
 export type { Http3DescriptorOptions } from '../transport/construct';
-export type { WispWebTransportOptions } from '../transport/wispWebTransport';
+export type {
+	CarrierInfo,
+	WispWebTransportOptions,
+} from '../transport/wispWebTransport';
 export type {
 	NavigateInfo,
 	CookieRecord,
@@ -910,9 +914,11 @@ function failingTransport(error: unknown): ProxyTransport {
 /**
  * Events: `stale` (detail: StaleInfo) when the handshake met a service worker
  * of another build that could not be replaced in time, `rebind` (detail:
- * `{ build }`) when a later handshake agrees again, and `transporthost`
+ * `{ build }`) when a later handshake agrees again, `transporthost`
  * (detail: `{ host: 'page', error }`) when the transport worker could not
- * host a descriptor and the page took over.
+ * host a descriptor and the page took over, and `carrier` (detail:
+ * CarrierInfo, also `carrier`) each time a transport with `webTransport`
+ * chooses what its wisp connection rides.
  */
 export class StompController extends EventTarget {
 	config: Config;
@@ -948,6 +954,14 @@ export class StompController extends EventTarget {
 	 * the one and an instance for the other.
 	 */
 	transportHost: 'worker' | 'page';
+	/**
+	 * What the transport's wisp connection rides, WebTransport or its
+	 * WebSocket, once a transport with `webTransport` chose (a `carrier`
+	 * event each time it does, a revived transport too); null before, and
+	 * for a transport without the option. The host's alone: no proxied page
+	 * is told.
+	 */
+	carrier: CarrierInfo | null = null;
 	frames: Frame[] = [];
 	/**
 	 * The host's browser window as its frames' documents see it
@@ -1112,6 +1126,10 @@ export class StompController extends EventTarget {
 			this.transportHost = 'page';
 			this.transport = given;
 		}
+		// a transport in this page announces its carrier here
+		watchCarrier((info) => {
+			if (this.transportHost === 'page') this.#carrierChosen(info);
+		});
 		this.#sandbox = init.sandbox === undefined ? DEFAULT_SANDBOX : init.sandbox;
 		const rewriteWorkers = Math.min(
 			16,
@@ -1733,6 +1751,7 @@ export class StompController extends EventTarget {
 				this.#handshakeHeaders,
 				this.#keepAlive,
 				this.#admitSession,
+				this.#carrierChosen,
 			);
 			await worker.init(resolvedModule(descriptor));
 			this.#worker = worker;
@@ -2617,6 +2636,11 @@ export class StompController extends EventTarget {
 			})
 			.catch(() => false);
 		return !blocked;
+	};
+	/** the transport chose its carrier (in the worker, or in this page) */
+	#carrierChosen = (info: CarrierInfo) => {
+		this.carrier = info;
+		this.dispatchEvent(new CustomEvent('carrier', { detail: info }));
 	};
 	/** resolves once the service worker has created a server for this controller */
 	async wait(): Promise<void> {

@@ -19,6 +19,7 @@ import {
 } from './messages';
 import { RpcHelper } from './rpc';
 import serveTransport, { warmTransport } from './serveTransport';
+import { watchCarrier } from './wispWebTransport';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -102,6 +103,9 @@ function transportWorker() {
 	);
 
 	self.addEventListener('message', (event) => rpc.receive(event.data));
+
+	// the controller shows what the wisp connection rides
+	watchCarrier((info) => rpc.call('carrier', info).catch(() => {}));
 
 	// the controller's clock for keeping the service worker running: a timer
 	// here is not held back when the tab is hidden, the page's own is

@@ -16,8 +16,10 @@
 //   fits, on the stream otherwise; a datagram from the client is one whole
 //   packet.
 //
-// `stats` counts the documents fetched, sessions, WebSockets, and the UDP
-// DATA packets each way by how they went. `document` (a function of the
+// `documentDelay` (ms) holds each document's answer back (a session that
+// comes late). `stats` counts the documents fetched, sessions (and those the client
+// closed), WebSockets (and those that ended), and the UDP DATA packets each
+// way by how they went. `document` (a function of the
 // fetch's count, returning the JSON body or null for a 404) replaces the
 // answer; `rotate()` restarts the WebTransport listener with a new
 // certificate on the same port, the old hash listed as the previous;
@@ -46,7 +48,9 @@ export async function startWispWebTransport(upstream) {
 	const stats = {
 		documents: 0,
 		sessions: 0,
+		sessionsClosed: 0,
 		ws: 0,
+		wsClosed: 0,
 		datagramsIn: 0,
 		datagramsOut: 0,
 		udpOnStreamIn: 0,
@@ -67,6 +71,7 @@ export async function startWispWebTransport(upstream) {
 		url: `https://127.0.0.1:${port}/bridge`,
 		stats,
 		document: null,
+		documentDelay: 0,
 		udpBlocked: false,
 		/** the leaf's SPKI hash, for --ignore-certificate-errors-spki-list (a dial without hashes) */
 		get spki() {
@@ -120,12 +125,14 @@ export async function startWispWebTransport(upstream) {
 		},
 	};
 
-	http.on('request', (req, res) => {
+	http.on('request', async (req, res) => {
 		if (req.url.split('?')[0] !== '/webtransport.json') {
 			res.writeHead(404).end();
 			return;
 		}
 		const count = ++stats.documents;
+		if (relay.documentDelay)
+			await new Promise((resolve) => setTimeout(resolve, relay.documentDelay));
 		const body = relay.document ? relay.document(count) : relay.answer();
 		if (!body) {
 			res.writeHead(404, { 'access-control-allow-origin': '*' }).end();
@@ -160,7 +167,10 @@ export async function startWispWebTransport(upstream) {
 			up.readyState === WebSocket.OPEN ? up.send(m) : queued.push(m),
 		);
 		up.on('message', (m) => client.readyState === 1 && client.send(m));
+		let ended = false;
 		const end = () => {
+			if (!ended) stats.wsClosed++;
+			ended = true;
 			client.terminate();
 			up.terminate();
 			sockets.delete(client);
@@ -260,6 +270,7 @@ export async function startWispWebTransport(upstream) {
 				toServer(session, Buffer.from(value), true);
 		} else if (kind === 'closed') {
 			const session = sessions.get(id);
+			if (session) stats.sessionsClosed++;
 			sessions.delete(id);
 			session?.ws.close();
 		}

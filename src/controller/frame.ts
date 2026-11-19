@@ -14,6 +14,7 @@ import type {
 	RequestInfo,
 } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
+import type { CarrierInfo } from '../transport/wispWebTransport';
 import { shareGeometry } from './geometry';
 import {
 	answerRun,
@@ -307,11 +308,16 @@ if (window === window.parent || !origins.length) {
 					controller.addEventListener('rebind', () => {
 						rpc.call('stale', null);
 					});
+					// and `carrier`, with its event
+					controller.addEventListener('carrier', (event) => {
+						rpc.call('carrier', (event as CustomEvent<CarrierInfo>).detail);
+					});
 					await controller.wait();
 					return [
 						{
 							config: controller.config,
 							stale: controller.stale,
+							carrier: controller.carrier,
 							sites: controller.siteOrigins,
 						},
 						[],

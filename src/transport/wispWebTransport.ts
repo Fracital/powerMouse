@@ -8,30 +8,48 @@
 // Where the session is:
 // - `url`: dialed as it is, its certificate checked as any site's (a relay
 //   with a public name and a WebPKI certificate, as the edges serve it);
-// - `discovery`, or with neither `/webtransport.json` on the wisp URL's
-//   origin: a document `{ url, hashes: [{ algorithm, value }] }` (value in
-//   base64; the current certificate and the previous one, which a relay with
-//   no public name makes itself every 6 days). Every hash goes in one
+// - `discovery`: a document `{ url, hashes: [{ algorithm, value }] }` (value
+//   in base64; the current certificate and the previous one, which a relay
+//   with no public name makes itself every 6 days). Every hash goes in one
 //   handshake, as Chrome takes a certificate whose hash is any of them; one
 //   that fails is tried once more after the document is fetched again (it
 //   may have rotated between the two). A document that lists no `url` names
 //   its own origin;
-// - with neither set and no document at the wisp URL's origin, a wss: wisp
-//   URL is dialed as https: (its path kept: a keyed relay needs it).
+// - with neither: a wss: wisp URL dialed as https:, its path kept (a keyed
+//   relay needs it), the relay's own host and path, so everything stays on
+//   one name; only when that session cannot be had is `/webtransport.json`
+//   on the wisp URL's origin asked (on an app's host that path is the app's:
+//   a 404 or a page that is not JSON is no document). A ws: wisp URL has no
+//   name to take a certificate from, so it asks the document only.
+// A document, or its absence, is kept for DOCUMENT_FOR_MS per URL (`memory`).
 //
-// The WebSocket is never kept waiting on UDP, which is often blocked: the
-// carrier is chosen when the transport starts (CarrierTransport.init) from
-// what this relay did before (`memory`, kept in IndexedDB across reloads):
-// - nothing known: the WebSocket at once, and a session tried beside it whose
-//   outcome is remembered, so the next transport (a revive, a reload) knows;
+// The carrier is chosen when the transport starts (CarrierTransport.init),
+// from what this relay did before (`memory`, kept in IndexedDB across
+// reloads):
+// - nothing known: the session and the WebSocket are opened together, and
+//   the session is taken when its Wisp stream is up within graceFor() of
+//   the WebSocket's (half the WebSocket's own time, between GRACE_MIN_MS and
+//   GRACE_MAX_MS: a session's Wisp stream is about one round trip behind a
+//   WebSocket, which takes three) and its handshake was done within
+//   readyGraceFor() of it (a tenth, 50 to 100 ms: the handshake is done as
+//   the WebSocket is, and a network that drops UDP costs only this), else
+//   the WebSocket; the one not taken is closed, and the outcome is
+//   remembered;
 // - the session worked: the session, within `timeoutMs`, else the WebSocket;
-// - it failed (no session, a timeout, a session that died under its
-//   requests): the WebSocket, without trying, for FAILED_FOR_MS, or until
-//   the network changes (`online`, a connection change).
-// A transport keeps its carrier: when the session ends, its packets'
-// readable ends as a closed WebSocket's does, and the next wisp connection
-// epoxy asks for fails as a dead one does (CARRIER_LOST), so
-// RevivingTransport builds a new transport that chooses again.
+// - it failed: the WebSocket alone for FAILED_QUIET_MS, then the WebSocket at
+//   once with a session tried beside it whose outcome is remembered, so a
+//   relay whose UDP came back is had on the next start. A network change
+//   (`online`, a connection change) and a session lost under its requests
+//   end the quiet at once.
+// A transport keeps its carrier: when it ends, its packets' readable ends as
+// a closed WebSocket's does, and the next wisp connection epoxy asks for
+// fails as a dead one does (CARRIER_LOST), so RevivingTransport builds a new
+// transport that chooses again.
+//
+// Epoxy is handed the carrier as its function transport (`wisp` a function),
+// the WebSocket as well, so that the one not taken can be closed and every
+// choice timed; the transport as given (epoxy's own WebSocket, by URL) is
+// what is left when neither could be opened.
 import type {
 	ProxyTransport,
 	RawHeaders,
@@ -47,23 +65,69 @@ export interface WispWebTransportOptions {
 	url?: string;
 	/**
 	 * the relay's discovery document, resolved against the wisp URL (an
-	 * absolute one may name another host's); `/webtransport.json` on the
-	 * wisp URL's origin (ws: as http:, wss: as https:) when neither this nor
-	 * `url` is set
+	 * absolute one may name another host's); with neither this nor `url`, a
+	 * wss: wisp URL is dialed as https: and `/webtransport.json` on its
+	 * origin is asked only when that fails
 	 */
 	discovery?: string;
 	/** how long the document and then the session's handshake may take (ms) */
 	timeoutMs?: number;
 }
 
+export type Carrier = 'webtransport' | 'websocket';
+
+/**
+ * What a transport's wisp connection rides, as the controller and the host
+ * page see it (StompController.carrier, its `carrier` event)
+ */
+export interface CarrierInfo {
+	carrier: Carrier;
+	/** the session's https: URL, or the WebSocket's wss: (ws:) one */
+	url: string;
+	/** from the transport's start to its wisp connection's first packet (ms) */
+	ms: number;
+	/** on the WebSocket: why not WebTransport */
+	why?: string;
+	/** what the last transport to this relay in this realm rode, when it was the other carrier */
+	previous?: Carrier;
+}
+
 /** the text RevivingTransport takes for a wisp connection that is gone (its DEAD) */
 export const CARRIER_LOST = 'WebTransportCarrierLost';
 
 const DEFAULT_TIMEOUT_MS = 2000;
-/** how long a relay whose session could not be had is left to the WebSocket */
-const FAILED_FOR_MS = 5 * 60 * 1000;
+/**
+ * How long a relay whose session could not be had is left to the WebSocket
+ * alone; after it each start tries a session beside the WebSocket
+ */
+const FAILED_QUIET_MS = 30 * 1000;
+/** how long a failure is remembered at all (the WebSocket first, a session beside it) */
+const FAILED_FOR_MS = 7 * 24 * 60 * 60 * 1000;
 /** how long a session that worked is gone to again without the WebSocket first */
 const WORKED_FOR_MS = 7 * 24 * 60 * 60 * 1000;
+/** how long a discovery document, or a URL that has none, is kept */
+const DOCUMENT_FOR_MS = 60 * 60 * 1000;
+/**
+ * How long after the WebSocket's first packet a session's may come and be
+ * taken, as a part of the WebSocket's time, and its bounds (ms): GRACE_*
+ * when the session's handshake is done by then (its Wisp stream's first
+ * packet is a round trip after it), READY_* for the handshake to be done
+ * when it is not, which is all a network that drops UDP costs. Measured to
+ * wss://holywisp.fracit.al/ from headless Chrome 157 (45 cold starts,
+ * docs/webtransport.md): the handshake was done within 10 ms of the
+ * WebSocket's first packet in 44 (one 311 ms after), and the Wisp stream's
+ * first packet came 29 % (p50), 42 % (p90), 45 % (max) of the WebSocket's
+ * time after the WebSocket's. GRACE_MIN_MS is for a relay a few ms away,
+ * where scheduling is the round trip: on a loaded machine's loopback a
+ * session whose handshake was done came more than 50 ms after the
+ * WebSocket (demo-carrier). It costs a network that drops UDP nothing.
+ */
+const GRACE_PART = 0.5;
+const GRACE_MIN_MS = 150;
+const GRACE_MAX_MS = 400;
+const READY_PART = 0.1;
+const READY_MIN_MS = 50;
+const READY_MAX_MS = 100;
 /** the protocol offered for Wisp v2 (holyWisp takes any; its own client offers this) */
 const V2_PROTOCOL = 'wisp-v2';
 
@@ -72,11 +136,22 @@ const CONNECT = 0x01;
 const CLOSE = 0x04;
 const UDP = 0x02;
 
+const part = (ms: number, of: number, min: number, max: number) =>
+	Math.round(Math.min(max, Math.max(min, ms * of)));
+/** the wait for a session after the WebSocket was up `wsMs` after the start */
+export const graceFor = (wsMs: number) =>
+	part(wsMs, GRACE_PART, GRACE_MIN_MS, GRACE_MAX_MS);
+/** the wait for its handshake, of that, when it was not done yet */
+export const readyGraceFor = (wsMs: number) =>
+	part(wsMs, READY_PART, READY_MIN_MS, READY_MAX_MS);
+
 /** where a relay's session is looked for, and what it is remembered by */
 export interface RelayPlan {
 	key: string;
 	discovery?: string;
 	direct?: string;
+	/** `direct` first, the document only when it fails (no option named either) */
+	derived?: boolean;
 }
 
 /** the plan for a wisp URL and its options */
@@ -99,7 +174,7 @@ export function relayPlan(
 	return {
 		key: `wisp ${wisp}`,
 		discovery,
-		...(secure && { direct: url.href }),
+		...(secure && { direct: url.href, derived: true }),
 	};
 }
 
@@ -107,16 +182,35 @@ type Verdict = 'worked' | 'failed';
 interface Remembered {
 	verdict: Verdict;
 	until: number;
+	/** a failure: until when nothing is tried beside the WebSocket */
+	quiet?: number;
+	/** a failure: what went wrong, for the console and the host */
+	reason?: string;
+	/** a session that worked: whether by the derived URL or by the document */
+	via?: Via;
+}
+/** how a derived plan's session was had */
+type Via = 'direct' | 'document';
+/** what memory.get answers: `quiet` the WebSocket alone, `retry` a session beside it */
+export type Known = 'worked' | 'quiet' | 'retry';
+
+/** a discovery document as fetched (null: none at that URL), kept by URL */
+interface KeptDocument {
+	document: { url?: unknown; hashes?: unknown } | null;
+	until: number;
 }
 
 /**
- * What each relay's session did, by RelayPlan.key: in this realm, and in
- * IndexedDB for the next page or worker of this origin. Storage that cannot
- * be had (a private window's, a sandbox's) only loses the second.
+ * What each relay's session did, by RelayPlan.key, and the discovery
+ * documents fetched, by URL: in this realm, and in IndexedDB for the next
+ * page or worker of this origin. Storage that cannot be had (a private
+ * window's, a sandbox's) only loses the second.
  */
 export const memory = (() => {
 	const known = new Map<string, Remembered>();
+	const documents = new Map<string, KeptDocument>();
 	const STORE = 'relays';
+	const DOCUMENT = 'document ';
 	let opened: Promise<IDBDatabase | null> | null = null;
 	const db = () =>
 		(opened ??= new Promise<IDBDatabase | null>((resolve) => {
@@ -148,34 +242,65 @@ export const memory = (() => {
 			}
 		});
 	};
-	const live = (entry: Remembered | undefined) =>
-		entry && entry.until > Date.now() ? entry.verdict : undefined;
+	const live = (entry: Remembered | undefined): Known | undefined => {
+		const now = Date.now();
+		if (!entry || entry.until <= now) return undefined;
+		if (entry.verdict === 'worked') return 'worked';
+		return (entry.quiet ?? entry.until) > now ? 'quiet' : 'retry';
+	};
+	const put = (key: string, entry: Remembered) => {
+		known.set(key, entry);
+		void run('readwrite', (store) => store.put(entry, key));
+	};
 	const api = {
-		async get(key: string): Promise<Verdict | undefined> {
+		async get(key: string): Promise<Known | undefined> {
 			if (known.has(key)) return live(known.get(key));
 			const stored = (await run('readonly', (store) => store.get(key))) as
 				Remembered | undefined;
 			if (stored && !known.has(key)) known.set(key, stored);
 			return live(known.get(key));
 		},
-		set(key: string, verdict: Verdict) {
-			const entry = {
-				verdict,
-				until:
-					Date.now() + (verdict === 'worked' ? WORKED_FOR_MS : FAILED_FOR_MS),
-			};
-			known.set(key, entry);
-			void run('readwrite', (store) => store.put(entry, key));
+		/** why the relay's session failed last, when it did */
+		reason(key: string): string | undefined {
+			const entry = known.get(key);
+			return entry?.verdict === 'failed' ? entry.reason : undefined;
 		},
-		/** nothing known any more: the next start tries beside the WebSocket */
-		forget(key: string) {
-			known.delete(key);
-			void run('readwrite', (store) => store.delete(key));
+		/** how the session that worked was had */
+		via(key: string): Via | undefined {
+			const entry = known.get(key);
+			return entry?.verdict === 'worked' ? entry.via : undefined;
 		},
-		/** the network changed: what failed on the old one is tried again */
+		worked(key: string, via: Via) {
+			put(key, { verdict: 'worked', until: Date.now() + WORKED_FOR_MS, via });
+		},
+		/** the session could not be had: the WebSocket alone for a while */
+		failed(key: string, reason: string) {
+			const now = Date.now();
+			put(key, {
+				verdict: 'failed',
+				until: now + FAILED_FOR_MS,
+				quiet: now + FAILED_QUIET_MS,
+				reason,
+			});
+		},
+		/**
+		 * a session ended under its requests without a close (UDP lost
+		 * under it, a relay gone): the next start rides the WebSocket at once
+		 * and tries a session beside it, which tells the two apart
+		 */
+		lost(key: string) {
+			const now = Date.now();
+			put(key, {
+				verdict: 'failed',
+				until: now + FAILED_FOR_MS,
+				quiet: now,
+				reason: 'the last session ended without a close',
+			});
+		},
+		/** the network changed: what failed on the old one is tried beside the WebSocket */
 		forgetFailures() {
 			for (const [key, entry] of known)
-				if (entry.verdict === 'failed') known.delete(key);
+				if (entry.verdict === 'failed') known.set(key, { ...entry, quiet: 0 });
 			void db().then((database) => {
 				try {
 					const cursor = database
@@ -186,13 +311,29 @@ export const memory = (() => {
 						cursor.onsuccess = () => {
 							const at = cursor.result;
 							if (!at) return;
-							if ((at.value as Remembered).verdict === 'failed') at.delete();
+							const entry = at.value as Remembered;
+							if (entry.verdict === 'failed') at.update({ ...entry, quiet: 0 });
 							at.continue();
 						};
 				} catch {
 					// storage gone
 				}
 			});
+		},
+		/** the document kept for `url`: undefined when none is, null when it has none */
+		async document(url: string): Promise<KeptDocument['document'] | undefined> {
+			let kept = documents.get(url);
+			if (!kept) {
+				kept = (await run('readonly', (store) => store.get(DOCUMENT + url))) as
+					KeptDocument | undefined;
+				if (kept && !documents.has(url)) documents.set(url, kept);
+			}
+			return kept && kept.until > Date.now() ? kept.document : undefined;
+		},
+		keepDocument(url: string, document: KeptDocument['document']) {
+			const kept = { document, until: Date.now() + DOCUMENT_FOR_MS };
+			documents.set(url, kept);
+			void run('readwrite', (store) => store.put(kept, DOCUMENT + url));
 		},
 	};
 	try {
@@ -206,6 +347,55 @@ export const memory = (() => {
 	return api;
 })();
 
+/** who hears each choice in this realm (the controller, the transport worker) */
+const watchers = new Set<(info: CarrierInfo) => void>();
+
+/** `listener` hears every choice a transport of this realm makes; returns the unwatch */
+export function watchCarrier(listener: (info: CarrierInfo) => void) {
+	watchers.add(listener);
+	return () => void watchers.delete(listener);
+}
+
+/** what the last transport to each relay rode in this realm, by RelayPlan.key */
+const lastCarrier = new Map<string, Carrier>();
+
+const LOG_LABEL =
+	'padding: 1px 4px; border-radius: 3px 0 0 3px; color: #fff; background: #606060;';
+const LOG_VALUE = (carrier: Carrier) =>
+	`padding: 1px 4px; border-radius: 0 3px 3px 0; color: #fff; background: ${carrier === 'webtransport' ? '#2e9e4f' : '#1475b2'};`;
+
+/** the console line of a choice: at a glance, which carrier, where and how fast */
+export function describeCarrier(info: CarrierInfo): string {
+	const what =
+		info.carrier === 'webtransport'
+			? 'Wisp over WebTransport (UDP/QUIC)'
+			: 'Wisp over WebSocket (TCP)';
+	return `${what} to ${info.url}, ${info.ms} ms${info.why ? `; WebTransport: ${info.why}` : ''}`;
+}
+
+function announce(key: string, info: CarrierInfo) {
+	const previous = lastCarrier.get(key);
+	lastCarrier.set(key, info.carrier);
+	if (previous && previous !== info.carrier) info.previous = previous;
+	console.info(
+		`%c STomp transport %c ${describeCarrier(info)} `,
+		LOG_LABEL,
+		LOG_VALUE(info.carrier),
+	);
+	if (info.previous)
+		console.info(
+			`%c STomp transport %c switched from ${info.previous === 'webtransport' ? 'WebTransport' : 'WebSocket'} to ${info.carrier === 'webtransport' ? 'WebTransport' : 'WebSocket'} `,
+			LOG_LABEL,
+			LOG_VALUE(info.carrier),
+		);
+	for (const watcher of watchers)
+		try {
+			watcher(info);
+		} catch {
+			// a watcher's own error
+		}
+}
+
 interface Discovery {
 	url: string;
 	hashes: { algorithm: string; value: BufferSource }[];
@@ -217,6 +407,17 @@ interface Discovery {
 interface WispPipe {
 	read: ReadableStream<ArrayBuffer>;
 	write: WritableStream<Uint8Array>;
+}
+
+/** a carrier that is open, its first Wisp packet read (buffered for epoxy) */
+interface OpenCarrier {
+	carrier: Carrier;
+	url: string;
+	pipe: WispPipe;
+	/** closes it, as the one not taken */
+	close(): void;
+	/** settles when it ends; rejects when it ended without a close of the relay's */
+	ended: Promise<void>;
 }
 
 /** the discovery document's URL for a wisp URL (relayPlan's, when it has one) */
@@ -244,34 +445,43 @@ function fromBase64(value: string): Uint8Array<ArrayBuffer> {
 	return out;
 }
 
-/** a discovery document that could not be had at all (no document to read) */
-class NoDocument extends Error {}
+const short = (error: unknown) =>
+	String((error as Error)?.message ?? error).slice(0, 160);
 
-async function discover(document: string, ms: number): Promise<Discovery> {
+/** the document at `url` as fetched, null when there is none (an error, not ok, not JSON) */
+async function fetchDocument(
+	url: string,
+	ms: number,
+): Promise<KeptDocument['document']> {
 	const controller = new AbortController();
-	const response = await timeout(
-		fetch(document, {
-			cache: 'no-store',
-			credentials: 'omit',
-			signal: controller.signal,
-		}),
-		ms,
-		'the WebTransport discovery document',
-	).catch((error) => {
+	try {
+		const response = await timeout(
+			fetch(url, {
+				cache: 'no-store',
+				credentials: 'omit',
+				signal: controller.signal,
+			}),
+			ms,
+			'the WebTransport discovery document',
+		);
+		if (!response.ok) return null;
+		// an app's page at that path (a 200 with HTML) is no document
+		const body = (await timeout(response.json(), ms, 'its body')) as unknown;
+		return body && typeof body === 'object'
+			? (body as { url?: unknown; hashes?: unknown })
+			: null;
+	} catch {
 		controller.abort();
-		throw new NoDocument(String(error));
-	});
-	if (!response.ok)
-		throw new NoDocument(`the discovery document answered ${response.status}`);
-	const body = (await timeout(response.json(), ms, 'its body').catch(
-		(error) => {
-			throw new NoDocument(String(error));
-		},
-	)) as {
-		url?: unknown;
-		hashes?: unknown;
-	};
-	const listed = Array.isArray(body?.hashes) ? body.hashes : [];
+		return null;
+	}
+}
+
+/** a document fetched: what the session is */
+function readDocument(
+	url: string,
+	body: NonNullable<KeptDocument['document']>,
+): Discovery {
+	const listed = Array.isArray(body.hashes) ? body.hashes : [];
 	const hashes = listed
 		.filter(
 			(hash): hash is { algorithm: string; value: string } =>
@@ -286,15 +496,35 @@ async function discover(document: string, ms: number): Promise<Discovery> {
 	// a document without `url` names its own origin, never the page's or
 	// the wisp URL's: a relay behind Cloudflare takes UDP only on a host of
 	// its own, which `discovery` points at
-	const origin = new URL(document);
+	const origin = new URL(url);
 	origin.protocol = 'https:';
-	const url =
-		typeof body?.url === 'string' && body.url
-			? new URL(body.url, document).href
+	const session =
+		typeof body.url === 'string' && body.url
+			? new URL(body.url, url).href
 			: `${origin.origin}/`;
-	if (new URL(url).protocol !== 'https:')
-		throw new Error(`the discovery document names ${url}, not an https: URL`);
-	return { url, hashes, key: JSON.stringify(listed) };
+	if (new URL(session).protocol !== 'https:')
+		throw new Error(
+			`the discovery document names ${session}, not an https: URL`,
+		);
+	return { url: session, hashes, key: JSON.stringify(listed) };
+}
+
+/**
+ * The document at `url`, the kept one when there is one (`fresh`: fetched
+ * now, and kept); null when there is none
+ */
+async function discover(
+	url: string,
+	ms: number,
+	fresh = false,
+): Promise<{ found: Discovery | null; kept: boolean }> {
+	let body = fresh ? undefined : await memory.document(url);
+	const kept = body !== undefined;
+	if (body === undefined) {
+		body = await fetchDocument(url, ms);
+		memory.keepDocument(url, body);
+	}
+	return { found: body ? readDocument(url, body) : null, kept };
 }
 
 /** one session's handshake, within `ms` */
@@ -322,35 +552,58 @@ async function handshake(
 	return session;
 }
 
+interface Opened {
+	session: WebTransport;
+	url: string;
+	via: Via;
+}
+
 /**
- * A session to the relay `plan` names; throws when it cannot be had. A
- * handshake that fails after a document fetches the document again and
- * tries once more when it changed; a missing document falls back to the
- * plan's direct URL, when it has one.
+ * A session to the relay `plan` names, and its URL; throws when it cannot be
+ * had. A derived plan dials the wisp URL's own host and path first and asks
+ * the document only when that fails (or first, when a session had by the
+ * document is remembered: `prefer`); a handshake that fails after a
+ * document fetches the document again and tries once more when it changed.
  */
 async function openSession(
 	plan: RelayPlan,
 	v2: boolean,
 	ms: number,
-): Promise<WebTransport> {
-	const direct = () =>
-		plan.direct
-			? handshake({ url: plan.direct, hashes: [], key: '' }, v2, ms)
-			: Promise.reject(new Error('the relay names no WebTransport session'));
-	if (!plan.discovery) return direct();
-	let found: Discovery;
-	try {
-		found = await discover(plan.discovery, ms);
-	} catch (error) {
-		if (error instanceof NoDocument && plan.direct) return direct();
-		throw error;
+	prefer?: Via,
+): Promise<Opened> {
+	const direct = async (url: string): Promise<Opened> => ({
+		session: await handshake({ url, hashes: [], key: '' }, v2, ms),
+		url,
+		via: 'direct',
+	});
+	let first: unknown = null;
+	if (plan.direct) {
+		if (!plan.discovery) return direct(plan.direct);
+		if (plan.derived && prefer !== 'document')
+			try {
+				return await direct(plan.direct);
+			} catch (error) {
+				first = error;
+			}
 	}
+	const { found } = await discover(plan.discovery!, ms);
+	if (!found)
+		throw first ?? new Error('the relay names no WebTransport session');
+	// the document names the session that failed already
+	if (first && found.url === plan.direct && !found.hashes.length) throw first;
+	const by = async (found: Discovery): Promise<Opened> => ({
+		session: await handshake(found, v2, ms),
+		url: found.url,
+		via: 'document',
+	});
 	try {
-		return await handshake(found, v2, ms);
+		return await by(found);
 	} catch (error) {
-		const again = await discover(plan.discovery, ms);
-		if (again.key === found.key && again.url === found.url) throw error;
-		return handshake(again, v2, ms);
+		// it may have rotated since it was fetched (or kept)
+		const again = (await discover(plan.discovery!, ms, true)).found;
+		if (!again || (again.key === found.key && again.url === found.url))
+			throw error;
+		return by(again);
 	}
 }
 
@@ -358,9 +611,22 @@ async function openSession(
 const streamOf = (packet: Uint8Array) =>
 	packet[1] | (packet[2] << 8) | (packet[3] << 16) | (packet[4] * 2 ** 24);
 
+/** a promise that settles when its `settle` is called, and when the first packet was read */
+function firstPacket() {
+	let got!: () => void;
+	let failed!: (error: unknown) => void;
+	const first = new Promise<void>((resolve, reject) => {
+		got = resolve;
+		failed = reject;
+	});
+	first.catch(() => {});
+	return { first, got, failed };
+}
+
 /**
  * The Wisp packets of a session as epoxy reads and writes them: each read
- * is one packet (an ArrayBuffer), each write one packet.
+ * is one packet (an ArrayBuffer), each write one packet. `first` settles
+ * with the first packet the relay sends (read and kept for epoxy).
  */
 function pipeOf(
 	session: WebTransport,
@@ -370,9 +636,11 @@ function pipeOf(
 	const udp = new Set<number>();
 	let reading: ReadableStreamDefaultController<ArrayBuffer>;
 	let ended = false;
+	const { first, got, failed } = firstPacket();
 	const end = () => {
 		if (ended) return;
 		ended = true;
+		failed(new Error('the WebTransport session ended before the relay spoke'));
 		// as a closed WebSocket ends epoxy's read: the multiplexor sees the
 		// transport close
 		try {
@@ -395,6 +663,7 @@ function pipeOf(
 				packet.byteOffset + packet.byteLength,
 			) as ArrayBuffer,
 		);
+		got();
 	};
 	const read = new ReadableStream<ArrayBuffer>({
 		start(controller) {
@@ -489,30 +758,142 @@ function pipeOf(
 			end();
 		},
 	});
-	return { read, write };
+	return { pipe: { read, write }, first };
 }
 
-/** a session's Wisp stream, or null when it cannot be opened */
-async function wispPipe(session: WebTransport): Promise<WispPipe | null> {
-	try {
-		return pipeOf(session, await session.createBidirectionalStream());
-	} catch {
+/**
+ * A session's Wisp stream, open once the relay sent its first packet
+ * (within `ms`); throws when it cannot be had, the session closed
+ */
+async function sessionCarrier(
+	plan: RelayPlan,
+	v2: boolean,
+	ms: number,
+	/** called when the handshake is done, before the Wisp stream is up */
+	handshaken?: () => void,
+): Promise<OpenCarrier & { via: Via }> {
+	const { session, url, via } = await openSession(
+		plan,
+		v2,
+		ms,
+		memory.via(plan.key),
+	);
+	handshaken?.();
+	const close = () => {
 		try {
 			session.close();
 		} catch {
 			// closed already
 		}
-		return null;
+	};
+	try {
+		const { pipe, first } = pipeOf(
+			session,
+			await session.createBidirectionalStream(),
+		);
+		await timeout(first, ms, 'the Wisp stream');
+		const ended = session.closed.then(() => {});
+		ended.catch(() => {});
+		return { carrier: 'webtransport', url, via, pipe, close, ended };
+	} catch (error) {
+		close();
+		throw error;
 	}
+}
+
+/**
+ * The wisp WebSocket as epoxy's own would open it (its protocols, one more
+ * asking for v2), open once the relay sent its first packet (within `ms`).
+ * Its messages are packets as they come, kept for epoxy; a write is a send,
+ * which never waits, as epoxy's own.
+ */
+function socketCarrier(
+	url: string,
+	protocols: string[],
+	ms: number,
+): Promise<OpenCarrier> {
+	return new Promise((resolve, reject) => {
+		let socket: WebSocket;
+		try {
+			socket = protocols.length
+				? new WebSocket(url, protocols)
+				: new WebSocket(url);
+		} catch (error) {
+			reject(error);
+			return;
+		}
+		socket.binaryType = 'arraybuffer';
+		let reading: ReadableStreamDefaultController<ArrayBuffer>;
+		let spoke = false;
+		let ended = false;
+		let endedBy: () => void;
+		const done = new Promise<void>((resolve) => (endedBy = resolve));
+		const close = () => {
+			try {
+				socket.close(1000);
+			} catch {
+				// closed already
+			}
+		};
+		const timer = setTimeout(() => {
+			close();
+			reject(new Error(`the wisp WebSocket took longer than ${ms} ms`));
+		}, ms);
+		const end = () => {
+			if (ended) return;
+			ended = true;
+			clearTimeout(timer);
+			if (!spoke)
+				reject(new Error('the wisp WebSocket closed before the relay spoke'));
+			try {
+				reading.close();
+			} catch {
+				// cancelled already
+			}
+			endedBy();
+		};
+		const read = new ReadableStream<ArrayBuffer>({
+			start(controller) {
+				reading = controller;
+			},
+			cancel() {
+				close();
+			},
+		});
+		socket.onmessage = (event) => {
+			if (ended || !(event.data instanceof ArrayBuffer)) return;
+			reading.enqueue(event.data);
+			if (spoke) return;
+			spoke = true;
+			clearTimeout(timer);
+			resolve({
+				carrier: 'websocket',
+				url,
+				pipe: {
+					read,
+					write: new WritableStream<Uint8Array>({
+						write(packet) {
+							if (socket.readyState === WebSocket.OPEN) socket.send(packet);
+						},
+						close,
+						abort: close,
+					}),
+				},
+				close,
+				ended: done,
+			});
+		};
+		socket.onclose = end;
+		socket.onerror = end;
+	});
 }
 
 type TransportClass = new (...args: unknown[]) => ProxyTransport;
 
 /**
- * Epoxy over a WebTransport session when the relay offers one and it can be
- * had now without keeping the WebSocket waiting, else epoxy as given (its
- * WebSocket). Until init() chose, and when it chose the WebSocket, `base` is
- * the transport as given.
+ * Epoxy over the relay's WebTransport session or its WebSocket, whichever
+ * init() chose (see the top of the file). Until init() chose, and when
+ * neither could be opened, `base` is the transport as given.
  */
 export class CarrierTransport implements ProxyTransport {
 	#Transport: TransportClass;
@@ -522,7 +903,9 @@ export class CarrierTransport implements ProxyTransport {
 	#base: ProxyTransport;
 	#starting: Promise<void> | null = null;
 	/** which carrier the wisp connection rides: null before init() chose */
-	carrier: 'webtransport' | 'websocket' | null = null;
+	carrier: Carrier | null = null;
+	/** the choice, as the console and the host have it */
+	info: CarrierInfo | null = null;
 	/** the session tried beside the WebSocket, settled (for tests and the demo) */
 	probed: Promise<boolean> = Promise.resolve(false);
 
@@ -566,96 +949,229 @@ export class CarrierTransport implements ProxyTransport {
 		return this.#starting;
 	}
 
+	get #v2(): boolean {
+		return Boolean((this.#options[0] as { wisp_v2?: boolean }).wisp_v2);
+	}
+
+	get #timeoutMs(): number {
+		return this.#webTransport.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+	}
+
 	async #start() {
 		if (this.carrier === null) {
-			const session = await this.#choose();
-			if (session) {
+			const plan = relayPlan(this.#wisp, this.#webTransport);
+			const started = performance.now();
+			const { open, why } = await this.#choose(plan);
+			const ms = Math.round(performance.now() - started);
+			if (open) {
 				const [first, ...rest] = this.#options;
 				this.#base = new this.#Transport(
-					{ ...(first as object), wisp: this.#pipes(session) },
+					{ ...(first as object), wisp: this.#pipes(open, plan.key) },
 					...rest,
 				);
-				this.carrier = 'webtransport';
-				console.info(
-					`Stomp: wisp over WebTransport to ${relayPlan(this.#wisp, this.#webTransport).key}`,
-				);
-			} else {
-				this.carrier = 'websocket';
-				console.info(`Stomp: wisp over its WebSocket (${this.#why})`);
 			}
+			this.carrier = open?.carrier ?? 'websocket';
+			this.info = {
+				carrier: this.carrier,
+				url: open?.url ?? this.#wisp,
+				ms,
+				...(this.carrier === 'websocket' && { why }),
+			};
+			announce(plan.key, this.info);
 		}
 		await this.#base.init();
 	}
 
-	/** the session to ride, or null for the WebSocket (see the top of the file) */
-	/** why the WebSocket was chosen, for the console */
-	#why = '';
+	/** the WebSocket, opened as epoxy's own would be */
+	#socket(): Promise<OpenCarrier> {
+		const first = this.#options[0] as { wisp_ws_protocols?: string[] };
+		const protocols = [...(first.wisp_ws_protocols ?? [])];
+		// epoxy asks for v2 with a protocol of its own; holyWisp takes any
+		if (this.#v2) protocols.push(crypto.randomUUID());
+		return socketCarrier(
+			this.#wisp,
+			protocols,
+			Math.max(10000, this.#timeoutMs),
+		);
+	}
 
-	async #choose(): Promise<WebTransport | null> {
-		this.#why = 'no WebTransport in this realm';
-		if (typeof WebTransport !== 'function') return null;
-		const plan = relayPlan(this.#wisp, this.#webTransport);
-		const before = await memory.get(plan.key);
-		this.#why = `no WebTransport session to ${plan.key} lately`;
-		if (before === 'failed') return null;
-		const v2 = Boolean((this.#options[0] as { wisp_v2?: boolean }).wisp_v2);
-		const attempt = openSession(
-			plan,
-			v2,
-			this.#webTransport.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-		).then(
-			(session) => {
-				memory.set(plan.key, 'worked');
-				return session;
+	/** a session, remembered as working or failing */
+	#session(plan: RelayPlan, handshaken?: () => void): Promise<OpenCarrier> {
+		return sessionCarrier(plan, this.#v2, this.#timeoutMs, handshaken).then(
+			(open) => {
+				memory.worked(plan.key, open.via);
+				return open;
 			},
 			(error) => {
-				memory.set(plan.key, 'failed');
+				memory.failed(plan.key, short(error));
 				console.warn(
-					`Stomp: no WebTransport session to the wisp relay (${plan.key}); its WebSocket for ${FAILED_FOR_MS / 60000} min:`,
+					`Stomp: no WebTransport session to the wisp relay (${plan.key}); its WebSocket for ${FAILED_QUIET_MS / 1000} s, then a session tried beside it:`,
 					error,
 				);
+				throw error;
+			},
+		);
+	}
+
+	/**
+	 * The carrier to ride (null: neither could be opened, the transport as
+	 * given), and why it is not the session when it is not
+	 */
+	async #choose(
+		plan: RelayPlan,
+	): Promise<{ open: OpenCarrier | null; why: string }> {
+		const socket = () =>
+			this.#socket().catch((error) => {
+				console.warn('Stomp: the wisp WebSocket could not be opened:', error);
+				return null;
+			});
+		if (typeof WebTransport !== 'function')
+			return { open: await socket(), why: 'none in this realm' };
+		const before = await memory.get(plan.key);
+		if (before === 'quiet')
+			return {
+				open: await socket(),
+				why: `it failed lately (${memory.reason(plan.key) ?? 'no session'}); tried again within ${FAILED_QUIET_MS / 1000} s`,
+			};
+		if (before === 'worked') {
+			try {
+				return { open: await this.#session(plan), why: '' };
+			} catch (error) {
+				return {
+					open: await socket(),
+					why: `the session that worked before failed: ${short(error)}`,
+				};
+			}
+		}
+		if (before === 'retry') {
+			// the WebSocket now; the session's outcome for the next transport
+			const reason = memory.reason(plan.key) ?? 'no session';
+			this.probed = this.#session(plan).then(
+				(open) => (open.close(), true),
+				() => false,
+			);
+			return {
+				open: await socket(),
+				why: `it failed before (${reason}); a session is tried beside the WebSocket`,
+			};
+		}
+		return this.#race(plan, socket);
+	}
+
+	/**
+	 * Nothing known: the session and the WebSocket together, the session
+	 * taken when its Wisp stream is up within graceFor() of the
+	 * WebSocket's, and its handshake done within readyGraceFor(); the other
+	 * is closed
+	 */
+	async #race(
+		plan: RelayPlan,
+		openSocket: () => Promise<OpenCarrier | null>,
+	): Promise<{ open: OpenCarrier | null; why: string }> {
+		const started = performance.now();
+		let handshaken!: () => void;
+		const handshake = new Promise<'handshaken'>(
+			(resolve) => (handshaken = () => resolve('handshaken')),
+		);
+		let isHandshaken = false;
+		void handshake.then(() => (isHandshaken = true));
+		const session = this.#session(plan, handshaken);
+		session.catch(() => {});
+		const socket = openSocket();
+		let sessionError: unknown = null;
+		type Won = { open: OpenCarrier | null; from: 'session' | 'socket' };
+		const bySession: Promise<Won | null> = session.then(
+			(open) => ({ open, from: 'session' }),
+			(error) => {
+				sessionError = error;
 				return null;
 			},
 		);
-		if (before === 'worked') {
-			this.#why = `the session to ${plan.key} that worked before failed`;
-			return attempt;
+		const bySocket: Promise<Won> = socket.then((open) => ({
+			open,
+			from: 'socket',
+		}));
+		const first = await Promise.race([
+			bySession.then((won) => won ?? bySocket),
+			bySocket,
+		]);
+		// the one not taken is closed when it opens
+		const loser = (other: Promise<OpenCarrier | null>) =>
+			void other.then(
+				(open) => open?.close(),
+				() => {},
+			);
+		this.probed = session.then(
+			() => true,
+			() => false,
+		);
+		if (first.from === 'session') {
+			loser(socket);
+			return { open: first.open, why: '' };
 		}
-		this.#why = `nothing known of ${plan.key} yet: a session is tried beside it`;
-		// nothing known: the WebSocket now, the outcome for the next transport
-		this.probed = attempt.then((session) => {
-			try {
-				session?.close();
-			} catch {
-				// closed already
-			}
-			return !!session;
-		});
-		return null;
+		if (!first.open) {
+			// no WebSocket: the session when it comes
+			const open = await session.catch(() => null);
+			return {
+				open,
+				why: `no session either: ${short(sessionError)}`,
+			};
+		}
+		const wsMs = performance.now() - started;
+		const grace = graceFor(wsMs);
+		const readyGrace = readyGraceFor(wsMs);
+		const after = (ms: number) =>
+			new Promise<'late'>((resolve) => setTimeout(() => resolve('late'), ms));
+		const deadline = performance.now() + grace;
+		// its handshake first, when it is not done: a network that drops UDP
+		// costs this much
+		const handshakeLate =
+			!isHandshaken &&
+			(await Promise.race([handshake, bySession, after(readyGrace)])) ===
+				'late';
+		const late = handshakeLate
+			? 'late'
+			: await Promise.race([
+					bySession,
+					after(Math.max(0, deadline - performance.now())),
+				]);
+		if (late && late !== 'late') {
+			loser(socket);
+			return { open: late.open, why: '' };
+		}
+		loser(session);
+		return {
+			open: first.open,
+			why:
+				late === 'late'
+					? handshakeLate
+						? `no handshake within ${readyGrace} ms of the WebSocket (remembered for the next start)`
+						: `not up within ${grace} ms of the WebSocket (remembered for the next start)`
+					: short(sessionError),
+		};
 	}
 
 	/**
 	 * Epoxy's function transport: the first wisp connection it asks for is
-	 * the session init() opened. Another one means that connection ended,
+	 * the carrier init() opened. Another one means that connection ended,
 	 * and the transport that rode it is done (RevivingTransport makes the
 	 * next, which chooses its carrier again). A session that ended without a
 	 * close of the relay's (UDP lost under it, or a relay that went away)
-	 * leaves nothing known: the next start rides the WebSocket at once and
+	 * is remembered as lost: the next start rides the WebSocket at once and
 	 * tries a session beside it, which tells the two apart.
 	 */
-	#pipes(session: WebTransport): (v2: boolean) => Promise<WispPipe> {
-		let opened: WebTransport | null = session;
-		const key = relayPlan(this.#wisp, this.#webTransport).key;
-		session.closed.catch(() => memory.forget(key));
+	#pipes(open: OpenCarrier, key: string): (v2: boolean) => Promise<WispPipe> {
+		let unused: OpenCarrier | null = open;
+		if (open.carrier === 'webtransport')
+			open.ended.catch(() => memory.lost(key));
 		return async () => {
-			const mine = opened;
-			opened = null;
-			const pipe = mine ? await wispPipe(mine) : null;
-			if (!pipe)
+			const mine = unused;
+			unused = null;
+			if (!mine)
 				throw new Error(
-					`${CARRIER_LOST}: the WebTransport session to the wisp relay ended`,
+					`${CARRIER_LOST}: the ${open.carrier === 'webtransport' ? 'WebTransport session' : 'WebSocket'} to the wisp relay ended`,
 				);
-			return pipe;
+			return mine.pipe;
 		};
 	}
 
