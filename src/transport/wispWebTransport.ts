@@ -61,6 +61,7 @@ import type {
 	RawHeaders,
 	TransferrableResponse,
 } from '@mercuryworkshop/proxy-transports';
+import { promptSink } from './promptSink';
 import { wispNote } from './transportLog';
 
 /** TransportDescriptor.webTransport */
@@ -1425,7 +1426,7 @@ export class CarrierTransport implements ProxyTransport {
 				throw new Error(
 					`${CARRIER_LOST}: the ${open.carrier === 'webtransport' ? 'WebTransport session' : 'WebSocket'} to the wisp relay ended`,
 				);
-			return mine.pipe;
+			return { read: mine.pipe.read, write: promptSink(mine.pipe.write) };
 		};
 	}
 
