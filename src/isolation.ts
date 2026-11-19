@@ -12,12 +12,79 @@
 // served with `Permissions-Policy: cross-origin-isolated=()`, under which
 // Chrome gives them what a page without isolation has.
 //
-// WebKit has neither COEP `credentialless` (a page that sends it is not
-// isolated there, and is a frame that sent no embedder policy) nor the
-// `cross-origin-isolated` permission (every frame of an isolated page is
-// isolated): what the proxy serves says `require-corp`, the value every
-// browser with an embedder policy honours, and the inject of a document
-// the shell says is not isolated (`n`) answers as one that is not.
+// Engines differ (IsolationEngine): WebKit has no COEP `credentialless`
+// (a page that sends it is not isolated there, and is a frame or worker
+// that sent no embedder policy), and neither WebKit nor Firefox has the
+// `cross-origin-isolated` permission (every frame and worker of an isolated
+// page is isolated) or Document-Isolation-Policy. What the proxy serves says
+// `require-corp`, the value every browser with an embedder policy honours;
+// the service worker decides each document by the rules of the browser it
+// runs in, and the inject of a document the shell says is not isolated
+// (`n`), and of a worker it starts, answers as one that is not.
+
+/**
+ * What the browser makes of cross-origin isolation where engines differ
+ * (measured natively in Chrome 157, Firefox 157 and WebKitGTK 2.52):
+ * - `credentialless`: COEP `credentialless` is an embedder policy (Chrome,
+ *   Firefox). WebKit reads it as none: a page that sends it is not
+ *   isolated, and a frame or worker that sends it does not load under one
+ *   that is.
+ * - `permission`: the `cross-origin-isolated` permission decides whether a
+ *   frame of an isolated page is isolated (Chrome). Firefox and WebKit
+ *   isolate every frame of an isolated page, whatever its `allow` and
+ *   Permissions-Policy say and whatever its origin.
+ * - `dip`: a Document-Isolation-Policy isolates the document that sends it
+ *   (Chrome).
+ * The service worker asks the controller's document, which asks the browser
+ * (src/controller/isolationProbe.ts), only when the answer would change what
+ * it decides (byEngine).
+ */
+export interface IsolationEngine {
+	credentialless: boolean;
+	permission: boolean;
+	dip: boolean;
+}
+
+/** Chrome's rules, by which the service worker decides when the browser could not be asked */
+export const CHROMIUM: IsolationEngine = {
+	credentialless: true,
+	permission: true,
+	dip: true,
+};
+
+/** every engine IsolationEngine can describe */
+const ENGINES: IsolationEngine[] = [0, 1, 2, 3, 4, 5, 6, 7].map((bits) => ({
+	credentialless: !!(bits & 1),
+	permission: !!(bits & 2),
+	dip: !!(bits & 4),
+}));
+
+/**
+ * What `decide` makes of a response by the rules of the browser this runs
+ * in: by Chrome's when every engine would decide the same (the browser is
+ * not asked), else by what `engine` says the browser is
+ */
+export async function byEngine<T>(
+	engine: () => Promise<IsolationEngine>,
+	decide: (engine: IsolationEngine) => T,
+): Promise<T> {
+	const chromium = decide(CHROMIUM);
+	const same = JSON.stringify(chromium);
+	return ENGINES.every((other) => JSON.stringify(decide(other)) === same)
+		? chromium
+		: decide(await engine());
+}
+
+/**
+ * The route the controller's probe loads (src/controller/isolationProbe.ts):
+ * `<directory>coi~probe/<kind>`, answered by the service worker itself: `c`
+ * a worker's script with COEP credentialless that posts its
+ * `crossOriginIsolated`; `p` and `d` a document with require-corp (and for
+ * `d` a Document-Isolation-Policy) whose title is this name and whose
+ * script posts the name and its `crossOriginIsolated` to its parent
+ * (`coi~probetrue`)
+ */
+export const ISOLATION_PROBE = 'coi~probe';
 
 /**
  * The embedder policy the host's page and every document and worker the
@@ -49,9 +116,13 @@ function tokenItem(header: string | null): string | null {
 }
 
 /** a response's Cross-Origin-Embedder-Policy (`header`: the header's value, or null) */
-export function embedderPolicy(header: string | null): EmbedderPolicy {
+export function embedderPolicy(
+	header: string | null,
+	engine = CHROMIUM,
+): EmbedderPolicy {
 	const token = tokenItem(header);
-	return token === 'require-corp' || token === 'credentialless'
+	return token === 'require-corp' ||
+		(token === 'credentialless' && engine.credentialless)
 		? token
 		: 'unsafe-none';
 }
@@ -62,11 +133,15 @@ export function openerSameOrigin(header: string | null): boolean {
 }
 
 /** whether a Document-Isolation-Policy isolates the document by itself */
-export function documentIsolates(header: string | null): boolean {
+export function documentIsolates(
+	header: string | null,
+	engine = CHROMIUM,
+): boolean {
 	const token = tokenItem(header);
 	return (
-		token === 'isolate-and-require-corp' ||
-		token === 'isolate-and-credentialless'
+		engine.dip &&
+		(token === 'isolate-and-require-corp' ||
+			token === 'isolate-and-credentialless')
 	);
 }
 
@@ -189,8 +264,9 @@ export interface DocumentIsolation {
 export function topLevelIsolation(
 	headers: IsolationHeaders,
 	origin: string,
+	engine = CHROMIUM,
 ): DocumentIsolation {
-	const coep = embedderPolicy(headers.coep);
+	const coep = embedderPolicy(headers.coep, engine);
 	const group = openerSameOrigin(headers.coop) && coep !== 'unsafe-none';
 	const policy = policyAllowsSelf(
 		headers.permissionsPolicy,
@@ -203,7 +279,9 @@ export function topLevelIsolation(
 		policy,
 		// a Document-Isolation-Policy isolates the document whatever the rest
 		// says (measured)
-		isolated: (group && policy) || documentIsolates(headers.dip),
+		isolated:
+			(group && (policy || !engine.permission)) ||
+			documentIsolates(headers.dip, engine),
 	};
 }
 
@@ -217,6 +295,7 @@ export function nestedIsolation(
 	headers: IsolationHeaders,
 	origin: string,
 	embedder: Embedder,
+	engine = CHROMIUM,
 ): DocumentIsolation {
 	const policy =
 		delegatedTo(embedder, origin) &&
@@ -224,14 +303,18 @@ export function nestedIsolation(
 	// a credentialless frame's document has that policy whatever it sent
 	const coep = embedder.credentialless
 		? 'credentialless'
-		: embedderPolicy(headers.coep);
+		: embedderPolicy(headers.coep, engine);
 	return {
 		group: embedder.group,
 		coep,
 		policy,
+		// (where the browser has no such permission every frame of the
+		// group is isolated)
 		isolated:
-			(embedder.group && policy && coep !== 'unsafe-none') ||
-			documentIsolates(headers.dip),
+			(embedder.group &&
+				(policy || !engine.permission) &&
+				coep !== 'unsafe-none') ||
+			documentIsolates(headers.dip, engine),
 	};
 }
 
@@ -308,11 +391,12 @@ export function embedderRefuses(
 	embedder: Embedder,
 	sameSite: boolean,
 	redirect = false,
+	engine = CHROMIUM,
 ): boolean {
 	if (!embedder.coep || embedder.credentialless) return false;
 	if (
 		!redirect &&
-		embedderPolicy(headers.get('cross-origin-embedder-policy')) ===
+		embedderPolicy(headers.get('cross-origin-embedder-policy'), engine) ===
 			'unsafe-none'
 	)
 		return true;

@@ -33,6 +33,7 @@ import {
 	type HookErrorInfo,
 	type InitHooks,
 } from '../hooks';
+import type { IsolationEngine } from '../isolation';
 import { askHost } from '../passkeys/host';
 import type {
 	PasskeyAnswer,
@@ -138,6 +139,7 @@ import {
 	keptControllerId,
 	keptHelperNames,
 } from './id';
+import { probeIsolation } from './isolationProbe';
 import { mediaVerdict } from './mediaVerdict';
 import type { StaleInfo, TransportDescriptor } from './messages';
 import { DEFAULT_SANDBOX } from './remote';
@@ -1972,6 +1974,21 @@ export class StompController extends EventTarget {
 	}
 	#libraryText: string | null = null;
 	/**
+	 * What the browser makes of cross-origin isolation (./isolationProbe.ts),
+	 * asked once the worker first needs it and kept; asked again after it
+	 * could not tell
+	 */
+	#isolationEngine(): Promise<IsolationEngine | null> {
+		this.#isolationProbe ??= probeIsolation(this.config.directory).then(
+			(engine) => {
+				if (!engine) this.#isolationProbe = undefined;
+				return engine;
+			},
+		);
+		return this.#isolationProbe;
+	}
+	#isolationProbe?: Promise<IsolationEngine | null>;
+	/**
 	 * The wasm artifacts, loaded once and compiled once, here. The rewrite
 	 * workers share this page's agent cluster and get the compiled modules,
 	 * which they only instantiate. The service worker does not (a message
@@ -2226,6 +2243,7 @@ export class StompController extends EventTarget {
 					superseded = true;
 					rpc.abort('Controller replaced');
 				},
+				isolationEngine: async () => [await this.#isolationEngine(), []],
 				mediaVerdict: async (constraints) => [
 					await mediaVerdict(constraints),
 					[],

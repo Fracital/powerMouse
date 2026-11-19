@@ -101,18 +101,28 @@ export function partitionSite(partition: string): string | null {
  * site as the codec writes a URL): the worker reads it from its own
  * location before any of the page's script runs, and the service worker
  * from the client's route (its Partitioned cookies). A first-party worker's
- * route is as it always was.
+ * route is as it always was. A dedicated worker of a context that is not
+ * cross-origin isolated natively, in a host's page that is, says so first
+ * (`js:worker:n`, src/isolation.ts): the browser may isolate it all the
+ * same (WebKit and Firefox isolate every worker of an isolated page), and
+ * its client then answers as a worker that is not.
  */
-const WORKER_TOP = /^js:(?:worker|workerModule):top:([^/]*)$/;
+const WORKER_TOP = /^js:(?:worker|workerModule)(?::n)?:top:([^/]*)$/;
 
-/** the route kind of a worker of `type` in `partition` */
+/** the route kind of a worker of `type` in `partition` (`unisolated`: its creator is not isolated natively) */
 export function workerKind(
 	type: string,
 	partition: string,
 	codec: GenericCodec,
+	unisolated = false,
 ): string {
 	const site = partitionSite(partition);
-	return site === null ? `js:${type}` : `js:${type}:top:${codec.encode(site)}`;
+	return `js:${type}${unisolated ? ':n' : ''}${site === null ? '' : `:top:${codec.encode(site)}`}`;
+}
+
+/** whether a worker's route kind says its creator is not cross-origin isolated (workerKind) */
+export function workerKindUnisolated(kind: string): boolean {
+	return /^js:(?:worker|workerModule):n(?::top:|$)/.test(kind);
 }
 
 /** the partition a worker's route kind names, '' for none */

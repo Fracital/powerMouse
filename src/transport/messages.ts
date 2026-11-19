@@ -5,6 +5,7 @@ import type {
 } from '@mercuryworkshop/proxy-transports';
 import type { AdblockInit, SiteShields } from '../blocker/types';
 import type { Config } from '../config';
+import type { IsolationEngine } from '../isolation';
 import type {
 	PasskeyCommand,
 	PasskeyInfo,
@@ -1464,6 +1465,13 @@ export type Controllerbound = {
 	 * and permission checks (src/controller/mediaVerdict.ts); null: none
 	 */
 	mediaVerdict: [unknown, MediaVerdict | null];
+	/**
+	 * what the browser makes of cross-origin isolation where engines differ
+	 * (src/isolation.ts IsolationEngine), asked of it by frames of the
+	 * controller's document (src/controller/isolationProbe.ts); null: it
+	 * could not tell
+	 */
+	isolationEngine: [undefined, IsolationEngine | null];
 	/**
 	 * a proxied site's WebAuthn ceremony, checked by the worker, for the
 	 * host to ask the user about: its answer (PasskeyAnswer) or null. The

@@ -17,9 +17,3 @@
 - The demo's pages send `Cross-Origin-Embedder-Policy: require-corp`
   instead of `credentialless`, and README.md asks the same of a host that
   wants proxied pages isolated.
-
-### Known limitations
-
-- In WebKit a page with COOP and COEP credentialless is isolated through
-  the proxy (Chrome's rules) and not natively, and a worker of a page that
-  is not isolated reads `crossOriginIsolated` true.

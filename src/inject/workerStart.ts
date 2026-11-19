@@ -57,6 +57,7 @@ export function workerURL(
 	start: WorkerStart,
 	source: string,
 	isModule: boolean,
+	shared = false,
 ): { url: string; own?: string } {
 	const { client: moduleClient, global, NativeBlob } = start;
 	let lastPrivate: string | undefined;
@@ -65,6 +66,22 @@ export function workerURL(
 		moduleClient.baseURL.toString(),
 	);
 	const type = isModule ? 'workerModule' : 'worker';
+	// a dedicated worker is as isolated as the context that starts it: one
+	// of a context that is not (its shell said `n`, or it is such a worker)
+	// says so in its route, or in what its bootstrap runs first, and its
+	// client answers as a worker that is not isolated (WebKit and Firefox
+	// isolate every worker of an isolated page: src/isolation.ts)
+	const unisolated =
+		!shared &&
+		moduleClient.hostIsolated &&
+		(
+			(moduleClient as { isolationFacts?: string }).isolationFacts ??
+			moduleClient.isolation ??
+			''
+		).includes('n');
+	const preamble = unisolated
+		? `${moduleClient.names.client}.notIsolated();`
+		: '';
 	if (url.protocol === 'blob:') {
 		// resolved now, as the browser resolves it at construction: the
 		// bootstrap imports a private URL of the page's Blob, which the
@@ -140,7 +157,13 @@ export function workerURL(
 						new NativeBlob(
 							[
 								base +
-									modifyJS('', moduleClient.url, moduleClient.config, type) +
+									modifyJS(
+										'',
+										moduleClient.url,
+										moduleClient.config,
+										type,
+										preamble,
+									) +
 									'\n',
 								blob!,
 							],
@@ -166,7 +189,7 @@ export function workerURL(
 					// module's body, which is what loads the client: imported
 					// once the client is in place instead, with the messages
 					// that come meanwhile held for the handlers it sets
-					modifyJS('', moduleClient.url, moduleClient.config, type) +
+					modifyJS('', moduleClient.url, moduleClient.config, type, preamble) +
 					`\nawait ${moduleClient.names.client}.holdEvents(import(${JSON.stringify(
 						routed('js:genericModule'),
 					)}));` +
@@ -176,7 +199,7 @@ export function workerURL(
 					// its document's policy let start (worker-src), not a
 					// script the worker imports (script-src)
 					`const ${own} = self.importScripts;` +
-					modifyJS('', moduleClient.url, moduleClient.config, type) +
+					modifyJS('', moduleClient.url, moduleClient.config, type, preamble) +
 					`\n${own}.call(self, ${JSON.stringify(routed('js:worker'))});` +
 					loaded);
 		// the bootstrap's own blob: URL goes to the browser, so in the
@@ -207,9 +230,11 @@ export function workerURL(
 			moduleClient.config,
 			type,
 			moduleClient.partition,
-			connect
-				? `${moduleClient.names.client}.judgeConnections(${JSON.stringify({ ...connect, named: 'data' })});`
-				: '',
+			preamble +
+				(connect
+					? `${moduleClient.names.client}.judgeConnections(${JSON.stringify({ ...connect, named: 'data' })});`
+					: ''),
+			unisolated,
 		),
 	};
 }

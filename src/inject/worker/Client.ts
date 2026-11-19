@@ -8,7 +8,7 @@ import {
 	type WorkerPolicies,
 } from '../../csp';
 import { hostsApply } from '../../cspJudge';
-import { workerKindPartition } from '../../partition';
+import { workerKindPartition, workerKindUnisolated } from '../../partition';
 import type { EmulateInfo } from '../../serviceWorkerTypes';
 import { CSP_WORKER, WORKER_PARTITION } from '../../transport/messages';
 import { privateChannel, replayOf } from '../../transport/ports';
@@ -106,6 +106,17 @@ export default class WorkerClient extends Client {
 		// without a parser (src/rewriterLight.ts)
 		// read before the worker's own script can change what it reads from
 		void this.partition;
+		// and whether its creator is isolated (src/partition.ts workerKind)
+		try {
+			const { pathname } = global.location;
+			this.#routedUnisolated =
+				pathname.startsWith(this.directory) &&
+				workerKindUnisolated(
+					pathname.slice(this.directory.length).split('/')[0],
+				);
+		} catch (error) {
+			// no location to read
+		}
 		// a blob: worker's bootstrap names the policies it inherits
 		const inherited = Reflect.getOwnPropertyDescriptor(global, CSP_WORKER);
 		Reflect.deleteProperty(global, CSP_WORKER);
@@ -257,6 +268,57 @@ export default class WorkerClient extends Client {
 	override apply(deferPost = false) {
 		super.apply(deferPost);
 		this.#trustViolations();
+		if (this.#routedUnisolated) this.notIsolated();
+	}
+	/** this worker's route says its creator is not cross-origin isolated */
+	#routedUnisolated = false;
+	#unisolated = false;
+	/**
+	 * The context that started this dedicated worker is not cross-origin
+	 * isolated natively, though the host's page is (its route says so, or
+	 * a blob: or data: worker's bootstrap calls this before the worker's own
+	 * script): natively it is not either. Chrome already makes it so (its
+	 * creator's served Permissions-Policy reaches it); WebKit and Firefox
+	 * isolate every worker of an isolated page, so here its
+	 * `crossOriginIsolated` reads false and its SharedArrayBuffer global is
+	 * gone, and a worker it starts is told the same (src/inject/workerStart.ts)
+	 */
+	notIsolated() {
+		this.isolation = 'n';
+	}
+	override hideSharedArrayBuffer() {
+		if (
+			!this.hostIsolated ||
+			!this.isolation?.includes('n') ||
+			this.#unisolated
+		)
+			return;
+		this.#unisolated = true;
+		Reflect.deleteProperty(this.global, 'SharedArrayBuffer');
+		const proxyModule = this.getModule(ProxyModule)!;
+		for (
+			let owner: object | null = this.global;
+			owner;
+			owner = Reflect.getPrototypeOf(owner)
+		) {
+			const descriptor = Reflect.getOwnPropertyDescriptor(
+				owner,
+				'crossOriginIsolated',
+			);
+			if (!descriptor) continue;
+			if (descriptor.get)
+				Reflect.defineProperty(owner, 'crossOriginIsolated', {
+					...descriptor,
+					get: proxyModule.wrapFunction(
+						descriptor.get,
+						(target, that, args) => {
+							Reflect.apply(target, that, args);
+							return false;
+						},
+					),
+				});
+			break;
+		}
 	}
 	/** its listeners read its own violations as trusted, once there is a policy to report them (violationViews) */
 	#trustViolations() {

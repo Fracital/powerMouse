@@ -1487,16 +1487,29 @@ What isolation costs a host, measured:
   need a CORP (require-corp), and a window it opens on another origin, or on
   a page without the headers, has no opener.
 
-### WebKit
+### WebKit and Firefox
 
-Measured in WebKitGTK 2.52.4 (MiniBrowser over WebKitWebDriver, the
-coi-engines suite; Safari and every browser on iOS are WebKit), natively:
-COOP `same-origin` with COEP `require-corp` isolates a page and its
-workers; with COEP `credentialless` nothing is isolated (WebKit has no such
-value, so the page has no embedder policy at all); every frame of an
-isolated page is isolated, whatever its `allow` or a
-`Permissions-Policy: cross-origin-isolated=()` say (WebKit has no such
-permission).
+Measured natively in WebKitGTK 2.52.4 (MiniBrowser over WebKitWebDriver;
+Safari and every browser on iOS are WebKit) and Firefox 157 (headless,
+WebDriver BiDi), beside Chrome 157, in the coi-engines suite and in pages
+of their own (a page with COOP `same-origin` and COEP `require-corp`, its
+frames and workers):
+
+| What                                                               | Chrome       | Firefox      | WebKit       |
+| ------------------------------------------------------------------ | ------------ | ------------ | ------------ |
+| A page with COOP and COEP `credentialless`                         | isolated     | isolated     | not          |
+| Its frame or dedicated worker with COEP `credentialless`           | loads        | loads        | no load      |
+| Its frame that gives up the permission (`allow`, its own header)   | not isolated | isolated     | isolated     |
+| Its frame of another origin (COEP, CORP, no `allow`)               | not isolated | isolated     | isolated     |
+| A page with a Document-Isolation-Policy alone                      | isolated     | not          | not          |
+| A frame with a Document-Isolation-Policy                           | apart        | as any frame | as any frame |
+| A `credentialless` frame without an embedder policy                | loads        | no load      | no load      |
+| A dedicated worker (or a blob: one) of a page that is not isolated | not isolated | not isolated | not isolated |
+
+Firefox and WebKit have no `cross-origin-isolated` permission: every frame
+and worker of an isolated page is isolated. WebKit has no `credentialless`,
+so a page that sends it has no embedder policy at all. Neither has
+Document-Isolation-Policy or credentialless frames.
 
 A host that sent `credentialless` (the demo did until 2026-11-19) was
 therefore never isolated in WebKit, nor was any proxied page: a game that
@@ -1505,19 +1518,44 @@ needs SharedArrayBuffer (blockshooter.club/play-staging, COOP and
 through the demo. The demo's page and every document and worker the service
 worker serves now say `require-corp` (`SERVED_EMBEDDER_POLICY`, which
 refuses nothing a proxied page loads: every one of its loads is the proxy's
-own, of its origin). In Chrome and Firefox that changes nothing a page can
-see (cross-origin-isolation, credentialless and site-pool-coep pass
-unchanged). In WebKit a page isolated natively by `require-corp` is now
-isolated through the proxy, page and workers, in both modes.
+own, of its origin).
 
-What the service worker cannot tell WebKit, the inject says: the shell
-marks a document that is not isolated natively (`n` among its facts), and
-its `crossOriginIsolated` reads false and its SharedArrayBuffer global is
-gone, as in Chrome. Two differences are left, on the suite's known list: a
-page with COOP and COEP `credentialless` is judged by Chrome's rules
-(isolated) where WebKit isolates nothing, and a worker of a page that is
-not isolated reads `crossOriginIsolated` true and has SharedArrayBuffer,
-since a worker knows nothing of its owner's isolation.
+The service worker decides each document, frame and worker script by the
+rules of the browser it runs in (`IsolationEngine` in src/isolation.ts:
+`credentialless`, `permission`, `dip`). It does not guess the browser from
+its name: where the rules of some engine would decide otherwise than
+Chrome's (`byEngine`, which tries every combination), it asks the
+controller's page once, and that page asks the browser
+(src/controller/isolationProbe.ts). A dedicated worker and two hidden
+frames of its own load what the service worker answers itself
+(`coi~probe/c`, `p`, `d`). The worker's script sends COEP
+`credentialless`, and the worker is isolated only where the browser has
+that policy. A frame cannot ask that: WebKit checks no embedder policy of
+a frame's document that a service worker answered (measured, WebKitGTK
+2.52.4: a frame with `credentialless`, or with none, loads isolated under
+an isolated page), though it refuses the same document from the network.
+The frames have `allow="cross-origin-isolated 'none'"`: one with
+`require-corp` is isolated only where the browser has no such permission;
+one with a Document-Isolation-Policy is out of the page's reach, and says
+it is isolated in a message, only where the browser has that policy. In a
+page that is not isolated only the last is asked (the rest is moot there).
+An answer that does not come in time leaves Chrome's rules.
+
+What the browser still isolates and the page should not be, the inject
+answers for: the shell marks a document that is not isolated natively
+(`n` among its facts), and its `crossOriginIsolated` reads false and its
+SharedArrayBuffer global is gone. A dedicated worker it starts is told the
+same: its route kind says so (`js:worker:n`, src/partition.ts workerKind),
+or for a blob: or data: worker what its bootstrap runs first
+(`notIsolated()`), and the worker's client answers alike and passes it on
+to its own workers. A `credentialless` attribute makes a credentialless
+frame only where the browser's frames have that property (Chrome).
+
+One difference is left, on the suite's known list, and it is not about
+isolation: in the isolated mode (frames of another site's page) a blob:
+worker fails to start in Firefox and WebKit, because its bootstrap imports
+the page's Blob through the service worker, whose fetch() of that blob:
+URL Firefox refuses there (NetworkError, measured).
 
 ## Left
 

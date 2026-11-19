@@ -14,6 +14,7 @@ import {
 	parseConfig,
 	validConfigCodecKey,
 } from '../config';
+import type { IsolationEngine } from '../isolation';
 import { workerKindPartition } from '../partition';
 import { usePasskeysRemote } from '../passkeys/authenticator';
 import { isDocumentKind, parseRoutedURL, proxyOrigins } from '../routeURL';
@@ -382,6 +383,8 @@ export default async function createServer(
 	jar?: JarPort,
 	/** a slot of the site pool: the hub's worker's blocker, instead of an engine of this worker's */
 	remoteBlocker?: BlockerLike,
+	/** asks the controller's document what the browser makes of cross-origin isolation (src/isolation.ts IsolationEngine) */
+	askIsolationEngine?: () => Promise<IsolationEngine | null>,
 ): Promise<StompServer> {
 	// the jar opens beside the codec's transaction (sharedStores takes it)
 	if (!jar) openJarDB().catch(() => {});
@@ -588,6 +591,7 @@ export default async function createServer(
 		!adblock?.byDefault,
 		shields,
 		stores.storage,
+		askIsolationEngine,
 	);
 	if (blocker) registerBlocker(router, blocker);
 	registerStorage(router, stores.storage, init.codec);

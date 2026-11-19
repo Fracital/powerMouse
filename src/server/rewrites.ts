@@ -31,11 +31,14 @@ import { helperNames } from '../helperNames';
 import { modifyHTML, modifyHTMLStreamed } from '../htmlShell';
 import { completeLength } from '../inject/dom/writeTokenizer';
 import {
+	byEngine,
+	CHROMIUM,
 	delegatedTo,
 	documentIsolates,
 	embedderPolicy,
 	embedderPolicyBlocks,
 	embedderRefuses,
+	ISOLATION_PROBE,
 	isolationFacts,
 	isolationHeaders,
 	isolationResponseHeaders,
@@ -43,6 +46,7 @@ import {
 	SERVED_EMBEDDER_POLICY,
 	topLevelIsolation,
 	type DocumentIsolation,
+	type IsolationEngine,
 } from '../isolation';
 import { MARK_DIRECTIVES, MARKED_KINDS, OPAQUE_MARK } from '../memoryMark';
 import {
@@ -62,6 +66,7 @@ import {
 	partitionSite,
 	siteOf,
 	workerKindPartition,
+	workerKindUnisolated,
 } from '../partition';
 import {
 	hasBase,
@@ -1112,7 +1117,16 @@ interface Rewriter {
 	hostReload?: { mode: HostReload; until: number; loads: Map<string, number> };
 	/** the host's page is cross-origin isolated (config.isolated) */
 	isolated: boolean;
+	/**
+	 * what the browser makes of cross-origin isolation where engines differ
+	 * (src/isolation.ts byEngine), asked of the controller's document once
+	 * and kept; Chrome's rules when it cannot say
+	 */
+	isolationEngine: () => Promise<IsolationEngine>;
 }
+
+/** how long a decision waits for the controller to say what the browser makes of isolation (then Chrome's rules) */
+const ISOLATION_ENGINE_WAIT_MS = 3000;
 
 /** how long after a reloaded host's word a top-level navigation is one it restores */
 const RESTORE_WINDOW_MS = 10_000;
@@ -3723,6 +3737,22 @@ function genericForward(
 		// policy that lets the page have it, and a dedicated worker's script
 		// (not a redirect on the way to it) a policy of its own (a shared
 		// worker starts without one: measured)
+		// (a worker's script's policy as the browser reads it: WebKit has no
+		// credentialless, src/isolation.ts IsolationEngine)
+		const workerScript =
+			rewriter.isolated &&
+			fromNetwork &&
+			(serverRequest.destination === 'worker' ||
+				serverRequest.destination === 'sharedworker') &&
+			!REDIRECT_STATUSES.includes(response.status);
+		const workerPolicy = workerScript
+			? await byEngine(rewriter.isolationEngine, (engine) =>
+					embedderPolicy(
+						response.headers.get('cross-origin-embedder-policy'),
+						engine,
+					),
+				)
+			: 'unsafe-none';
 		if (
 			fromNetwork &&
 			ownerPolicy &&
@@ -3736,25 +3766,16 @@ function genericForward(
 						siteBetween(initiator, url.url) !== 'cross-site',
 				)) ||
 				(serverRequest.destination === 'worker' &&
-					!REDIRECT_STATUSES.includes(response.status) &&
-					embedderPolicy(
-						response.headers.get('cross-origin-embedder-policy'),
-					) === 'unsafe-none'))
+					workerScript &&
+					workerPolicy === 'unsafe-none' &&
+					!ownerPolicy.frame))
 		) {
 			await response.body?.cancel().catch(() => {});
 			return refuse('blocked by Cross-Origin-Embedder-Policy');
 		}
 		// a worker's own policy is its script's, for the loads it makes
-		if (
-			rewriter.isolated &&
-			fromNetwork &&
-			(serverRequest.destination === 'worker' ||
-				serverRequest.destination === 'sharedworker') &&
-			!REDIRECT_STATUSES.includes(response.status)
-		) {
-			const policy = embedderPolicy(
-				response.headers.get('cross-origin-embedder-policy'),
-			);
+		if (workerScript) {
+			const policy = workerPolicy;
 			rememberEmbedderPolicy(
 				serverRequest.url,
 				undefined,
@@ -3817,19 +3838,27 @@ function genericForward(
 		// and that sent none, or that another origin's embedder may not have,
 		// does not load, as natively.
 		let isolation: (DocumentIsolation & { topLevel: boolean }) | null = null;
+		// the document is a credentialless frame's that sent no embedder policy
+		// of its own: Chrome starts its worker whose script has none either
+		// (measured, Chrome 157: isolated, as the frame is)
+		let frameCredentialless = false;
 		// a redirect on the way to a frame needs no embedder policy, but one
 		// of another origin than the embedder's still needs the resource
 		// policy (measured)
 		const navigationRedirect =
 			REDIRECT_STATUSES.includes(response.status) &&
 			response.headers.has('location');
+		// (each by the rules of the browser this runs in where engines differ:
+		// src/isolation.ts IsolationEngine)
 		if (rewriter.isolated && navigation) {
 			const real = isolationHeaders(response.headers);
 			const origin = url.url.origin;
 			if (topLevel) {
 				if (!navigationRedirect)
 					isolation = {
-						...topLevelIsolation(real, origin),
+						...(await byEngine(rewriter.isolationEngine, (engine) =>
+							topLevelIsolation(real, origin, engine),
+						)),
 						topLevel: destination === 'document',
 					};
 			} else {
@@ -3855,23 +3884,26 @@ function genericForward(
 				} catch (error) {
 					// an embedder without an origin: another site
 				}
-				if (
-					embedderRefuses(
+				const decided = await byEngine(rewriter.isolationEngine, (engine) => ({
+					refused: embedderRefuses(
 						response.headers,
 						origin,
 						embedder,
 						sameSite,
 						navigationRedirect,
-					)
-				) {
+						engine,
+					),
+					isolation: nestedIsolation(real, origin, embedder, engine),
+				}));
+				if (decided.refused) {
 					await response.body?.cancel().catch(() => {});
 					return refuse('blocked by Cross-Origin-Embedder-Policy');
 				}
 				if (!navigationRedirect)
-					isolation = {
-						...nestedIsolation(real, origin, embedder),
-						topLevel: false,
-					};
+					isolation = { ...decided.isolation, topLevel: false };
+				frameCredentialless =
+					embedder.credentialless &&
+					embedderPolicy(real.coep) === 'unsafe-none';
 			}
 		}
 
@@ -3887,7 +3919,12 @@ function genericForward(
 			rememberEmbedderPolicy(
 				serverRequest.url,
 				context?.clientId,
-				isolation.coep === 'unsafe-none' ? null : { policy: isolation.coep },
+				isolation.coep === 'unsafe-none'
+					? null
+					: {
+							policy: isolation.coep,
+							...(frameCredentialless ? { frame: true as const } : {}),
+						},
 			);
 		}
 		// what its Origin-Agent-Cluster asks for, a structured boolean (the
@@ -5501,7 +5538,10 @@ export function registerRewrites(
 	blockerAsked = true,
 	shields?: ShieldsStore,
 	storage?: StorageHosts,
+	/** asks the controller's document what the browser makes of cross-origin isolation (null: it cannot say) */
+	askIsolationEngine?: () => Promise<IsolationEngine | null>,
 ) {
+	let isolationEngine: Promise<IsolationEngine> | undefined;
 	const rewriter: Rewriter = {
 		get config() {
 			return {
@@ -5553,6 +5593,23 @@ export function registerRewrites(
 		shields,
 		storage,
 		isolated: !!init.isolated,
+		// kept once the controller said; asked again after a failure, by
+		// Chrome's rules meanwhile
+		isolationEngine() {
+			isolationEngine ??= Promise.race([
+				askIsolationEngine?.() ?? Promise.resolve(null),
+				new Promise<null>((resolve) =>
+					setTimeout(() => resolve(null), ISOLATION_ENGINE_WAIT_MS),
+				),
+			])
+				.catch(() => null)
+				.then((engine) => {
+					if (engine) return engine;
+					isolationEngine = undefined;
+					return CHROMIUM;
+				});
+			return isolationEngine;
+		},
 		codec: init.codec,
 		directory: init.directory,
 		errorPage: init.errorPage,
@@ -5897,7 +5954,8 @@ export function registerRewrites(
 				note.rewriteCache = 'miss';
 				return output;
 			},
-			// a worker redirected stays in the partition it was started in
+			// a worker redirected stays in the partition it was started in,
+			// and as isolated as its creator
 			(resource, url, kind) =>
 				routeJS(
 					resource,
@@ -5905,6 +5963,8 @@ export function registerRewrites(
 					rewriter.config,
 					type,
 					kind ? workerKindPartition(kind, rewriter.codec) : '',
+					'',
+					!!kind && workerKindUnisolated(kind),
 				),
 			undefined,
 			(headers, filteredHeaders) => {
@@ -5930,6 +5990,40 @@ export function registerRewrites(
 		new RegExp(`^/${REFUSED_SOURCE_ROUTE}/`),
 		() => new Response(null, { status: 204 }),
 	);
+	// the controller's probe of the browser's isolation rules
+	// (src/controller/isolationProbe.ts): a worker (`c`, with COEP
+	// credentialless) or a frame (`p`, `d`) of the controller's own document,
+	// answered here with the embedder policy (and the
+	// Document-Isolation-Policy) its kind names. Only to a worker or a
+	// navigation: no page learns of the browser's answer by loading it
+	router.routes.set(
+		new RegExp(`^/${ISOLATION_PROBE}/[cpd]$`),
+		(request, path) => {
+			const kind = path.slice(-1);
+			if (kind === 'c')
+				return request.destination === 'worker'
+					? new Response('postMessage(crossOriginIsolated)', {
+							headers: {
+								'content-type': 'text/javascript',
+								'cache-control': 'no-store',
+								'cross-origin-embedder-policy': 'credentialless',
+							},
+						})
+					: Response.error();
+			if (request.mode !== 'navigate') return Response.error();
+			const headers = new Headers({
+				'content-type': 'text/html; charset=utf-8',
+				'cache-control': 'no-store',
+				'cross-origin-embedder-policy': 'require-corp',
+			});
+			if (kind === 'd')
+				headers.set('document-isolation-policy', 'isolate-and-require-corp');
+			return new Response(
+				`<!doctype html><title>${ISOLATION_PROBE}</title><script>parent.postMessage(${JSON.stringify(ISOLATION_PROBE)} + crossOriginIsolated, '*')</script>`,
+				{ headers },
+			);
+		},
+	);
 
 	router.routes.set(/^\/js:generic\//, scriptTypeFactory('generic'));
 	router.routes.set(
@@ -5940,9 +6034,12 @@ export function registerRewrites(
 		/^\/js:workletModule\//,
 		scriptTypeFactory('workletModule'),
 	);
-	router.routes.set(/^\/js:worker(:top:[^/]*)?\//, scriptTypeFactory('worker'));
 	router.routes.set(
-		/^\/js:workerModule(:top:[^/]*)?\//,
+		/^\/js:worker(:n)?(:top:[^/]*)?\//,
+		scriptTypeFactory('worker'),
+	);
+	router.routes.set(
+		/^\/js:workerModule(:n)?(:top:[^/]*)?\//,
 		scriptTypeFactory('workerModule'),
 	);
 
@@ -6448,9 +6545,13 @@ export function registerRewrites(
 				// isolates: they do not reach each other (Context.ts
 				// reachableClients). Chrome ignores the policy where the origin
 				// is not potentially trustworthy
+				const dip = response.headers.get('document-isolation-policy');
 				if (
-					documentIsolates(response.headers.get('document-isolation-policy')) &&
-					trustworthy(url.url.origin)
+					documentIsolates(dip) &&
+					trustworthy(url.url.origin) &&
+					(await byEngine(rewriter.isolationEngine, (engine) =>
+						documentIsolates(dip, engine),
+					))
 				)
 					facts.dip = true;
 				// a slot of the site pool: a frame's parent may be of another

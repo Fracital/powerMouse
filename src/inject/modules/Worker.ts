@@ -209,6 +209,7 @@ export default class WorkerModule extends Module<Client> {
 						start,
 						source,
 						isModuleOptions(args[1]),
+						true,
 					);
 					args[0] = trustedScriptURL(url);
 					// a shared worker has no postMessage to say it took its

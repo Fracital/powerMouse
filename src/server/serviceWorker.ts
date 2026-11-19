@@ -384,6 +384,8 @@ function registerController(
 				}
 			: undefined,
 		remoteBlocker,
+		// (the rpc is made below; nothing asks before a request arrives)
+		() => rpc.call('isolationEngine', undefined),
 	);
 
 	const rpc = new RpcHelper<SWbound, Controllerbound>(

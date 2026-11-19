@@ -14,6 +14,11 @@ import type { EmbedderPolicy } from '../isolation';
  */
 export interface KeptEmbedderPolicy {
 	policy: Exclude<EmbedderPolicy, 'unsafe-none'>;
+	/**
+	 * the policy is a credentialless frame's, whose document sent none of
+	 * its own: its dedicated worker starts without one (measured, Chrome 157)
+	 */
+	frame?: true;
 }
 
 const kept = new Map<string, KeptEmbedderPolicy | null>();

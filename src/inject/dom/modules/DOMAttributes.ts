@@ -1339,8 +1339,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 										: element.getAttribute('allow')
 									: null,
 								moduleClient.hostIsolated ? resource.url.origin : null,
-								element.hasAttributeOG('credentialless') ||
-									element.hasAttribute('credentialless'),
+								// (only where the browser has credentialless frames:
+								// elsewhere the attribute is nothing to it)
+								'credentialless' in realm.HTMLIFrameElement.prototype &&
+									(element.hasAttributeOG('credentialless') ||
+										element.hasAttribute('credentialless')),
 								moduleClient.sites
 									? siteWindows().frameSandbox(moduleClient, element)
 									: null,

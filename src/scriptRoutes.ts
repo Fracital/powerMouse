@@ -89,6 +89,8 @@ export function routeJS(
 	partition = '',
 	/** code a data: script runs first, after a worker's bootstrap (modifyJS's) */
 	preamble = '',
+	/** a dedicated worker whose creator is not cross-origin isolated natively (src/partition.ts workerKind) */
+	unisolated = false,
 ) {
 	if (resource.url.protocol === 'data:') {
 		const { mime, data, attributes } = parseDataURI(
@@ -105,7 +107,7 @@ export function routeJS(
 
 	return routeURL(
 		type === 'worker' || type === 'workerModule'
-			? workerKind(type, partition, resource.codec)
+			? workerKind(type, partition, resource.codec, unisolated)
 			: `js:${type}`,
 		resource,
 	);
