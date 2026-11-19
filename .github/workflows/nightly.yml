@@ -4,10 +4,12 @@
 # Same posture as ci.yml: pinned actions and no pull_request trigger. npm
 # trusted publishing authenticates this workflow (OIDC, `id-token: write`; the
 # trust is set on npmjs.com for Fracital/powerMouse and nightly.yml), and the
-# package carries provenance. One secret, optional: STOMP_DISPATCH_TOKEN (a
-# token of Fracital's limited to Fracital/SystemYA and Fracital/Fracital,
-# Contents read and write) tells those repos of a new nightly right away;
-# without it they pick it up on their own schedule.
+# package carries provenance. Those repos hear of a new nightly right away
+# by a push to their stomp-signal branch whose commit message is the
+# version, made with a deploy key of each (secrets SYSTEMYA_SIGNAL_KEY and
+# FRACITAL_SIGNAL_KEY; their schedules never fire). STOMP_DISPATCH_TOKEN (a
+# token limited to the two repos, Contents read and write) sends a
+# repository_dispatch as well when it is set. Every secret is optional.
 
 name: Nightly
 
@@ -111,10 +113,40 @@ jobs:
           VERSION: ${{ steps.publish.outputs.version }}
         run: |
           if [[ -z $GH_TOKEN ]]; then
-            echo "::warning::STOMP_DISPATCH_TOKEN is not set; downstream repos pick the nightly up on their schedule"
+            echo "::warning::STOMP_DISPATCH_TOKEN is not set; the stomp-signal push tells the downstream repos"
             exit 0
           fi
           for repo in Fracital/SystemYA Fracital/Fracital; do
             gh api "repos/$repo/dispatches" -f event_type=stomp-nightly -f "client_payload[version]=$VERSION" \
               || echo "::warning::could not dispatch to $repo"
           done
+
+      - name: Signal SystemYA and Fracital
+        if: steps.fresh.outputs.publish == 'true'
+        continue-on-error: true
+        env:
+          VERSION: ${{ steps.publish.outputs.version }}
+          SYSTEMYA_KEY: ${{ secrets.SYSTEMYA_SIGNAL_KEY }}
+          FRACITAL_KEY: ${{ secrets.FRACITAL_SIGNAL_KEY }}
+        run: |
+          set -u
+          # an empty commit on the repo's stomp-signal branch, its message the
+          # version (the updaters check it against a semver pattern); a push
+          # by a deploy key starts that repo's workflows
+          signal() { # repo key
+            local dir key
+            dir=$(mktemp -d)
+            key="$dir/key"
+            printf '%s\n' "$2" >"$key"
+            chmod 600 "$key"
+            export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+            git clone -q --depth 1 --branch main "git@github.com:$1.git" "$dir/r" &&
+              git -C "$dir/r" -c user.name="powerMouse nightly" -c user.email="nightly@users.noreply.github.com" \
+                commit -q --allow-empty -m "$VERSION" &&
+              git -C "$dir/r" push -q -f origin HEAD:refs/heads/stomp-signal ||
+              echo "::warning::could not signal $1"
+            rm -rf "$dir"
+          }
+          if [[ -n ${SYSTEMYA_KEY:-} ]]; then signal Fracital/SystemYA "$SYSTEMYA_KEY"; fi
+          if [[ -n ${FRACITAL_KEY:-} ]]; then signal Fracital/Fracital "$FRACITAL_KEY"; fi
+          exit 0
