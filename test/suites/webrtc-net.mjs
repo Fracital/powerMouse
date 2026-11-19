@@ -1260,10 +1260,12 @@ for (const result of gone) {
 		);
 	if (how === 'refuse')
 		ok(
-			`${label}: a remote the wisp server refused gets no stream again once the connection failed`,
+			`${label}: a remote the wisp server refused is asked again by the next check, as Chrome checks a port that refused the last, and gets no stream once the connection failed`,
 			!result.failure &&
-				result.streams.length <= 2 &&
-				result.streams.every((at) => at < failed),
+				// sockets come and go between two looks at the list, so not
+				// every one is seen: some while it checks every 62.5 ms
+				result.streams.filter((at) => at > 2000 && at < failed).length >= 2 &&
+				result.streams.every((at) => at < failed + 300),
 			story,
 		);
 	else

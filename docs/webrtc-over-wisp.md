@@ -924,9 +924,9 @@ TURN server.
   answers is given up 15 s after its first check, as in Chrome (measured
   with the same three silent candidates), and the wisp server's
   socket for it closes then rather than with the connection. One the wisp
-  server refuses or closes is not asked for again for 10 s, and once the
-  connection failed (below) nothing is sent to it, so no stream is opened
-  to it again.
+  server refuses or closes is asked for again by the next check (below),
+  and once the connection failed nothing is sent to it, so no stream is
+  opened to it again.
 - **States.** The agent has no "failed": a connection that is disconnected
   before it ever connected reads `failed`.
 - **Consent freshness** (RFC 7675) is the worker's, as Chrome keeps it, not
@@ -957,6 +957,12 @@ TURN server.
   no other pair, every 62.5 ms. str0m's agent gave each pair a timer that
   backed off from 250 ms to 3 s. What is not STUN that comes in counts as
   hearing from the remote (`IceAgent::note_received`).
+- **A refused remote** (the wisp server refused or closed its stream) is
+  asked again by the agent's next check of it, as Chrome's next check goes
+  out to a port that refused the last (157: a closed port is checked as a
+  silent one); what is not a check waits for that. A TCP one is not asked
+  again while the agent pairs with it, as Chrome gives up a TCP connection
+  that fails. The worker used to leave one alone for 10 s.
 - **SCTP timers** back off to 3 s at most, as Chrome's dcSCTP (157,
   measured: its retransmissions 3.0 s apart through an outage), not
   sctp-proto's 60 s (a line of the str0m patch): what a page sent during an

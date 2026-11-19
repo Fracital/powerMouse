@@ -481,9 +481,6 @@ const START_BITRATE = 300000;
 /** what a sound being sent is taken to need of the estimate */
 const AUDIO_SHARE = 40000;
 
-/** how long a remote whose stream was refused or lost is left alone */
-const REFUSED_MS = 10000;
-
 export class Connection {
 	#stack: Stack;
 	#id: number;
@@ -551,8 +548,16 @@ export class Connection {
 	#lateErrors: (() => void)[] = [];
 	/** the TURN allocations, by the relayed address the stack sends from */
 	#relays = new Map<string, TurnAllocation>();
-	/** remotes a stream was refused to, and until when */
-	#refused = new Map<string, number>();
+	/**
+	 * Remotes whose stream was refused or lost. One over UDP is asked
+	 * again by the agent's next check of it, as Chrome's next check goes
+	 * out to a port that refused the last (157, measured: a closed port
+	 * is checked as a silent one, 25 times in 15 s beside a working pair,
+	 * every 62.5 ms alone, and then given up); what is not a check waits
+	 * for that. One over TCP is not, as Chrome gives up a TCP connection
+	 * that fails, while the agent pairs with it.
+	 */
+	#refused = new Set<string>();
 	#iceState: RTCIceConnectionState = 'new';
 	#connectionState: RTCPeerConnectionState = 'new';
 	#connected = false;
@@ -1387,11 +1392,12 @@ export class Connection {
 		}
 		let stream = this.#streams.get(key);
 		if (!stream) {
-			const until = this.#refused.get(key);
-			if (until !== undefined) {
-				if (until > Date.now()) return;
-				this.#refused.delete(key);
-			}
+			if (
+				this.#refused.has(key) &&
+				(transmit.proto === 'tcp' || transmit.payload[0] > 3)
+			)
+				return;
+			this.#refused.delete(key);
 			stream = this.#open(transmit.proto, transmit.destination);
 			this.#streams.set(key, stream);
 		}
@@ -1416,6 +1422,8 @@ export class Connection {
 		this.#live = new Set(list ? list.split(',') : []);
 		for (const key of [...this.#streams.keys()])
 			if (!this.#live.has(key) && key !== this.#sendPath) this.#drop(key);
+		for (const key of this.#refused)
+			if (!this.#live.has(key)) this.#refused.delete(key);
 	}
 
 	/** a stream to `remote` (`host:port`), a wisp one or the bridge to another document */
@@ -1438,11 +1446,11 @@ export class Connection {
 			};
 		}
 		// a stream the server refused or closed: the stack's checks to this
-		// remote time out as to an unreachable one, and it is not asked
-		// again for every retransmission
+		// remote time out as to an unreachable one (#refused says when it
+		// is asked again)
 		const lost = () => {
 			this.#streams.delete(`${proto}/${remote}`);
-			this.#refused.set(`${proto}/${remote}`, Date.now() + REFUSED_MS);
+			this.#refused.add(`${proto}/${remote}`);
 		};
 		if (proto === 'udp')
 			return new WispStream(
