@@ -250,8 +250,22 @@ export function contextThis(that: unknown, global: typeof globalThis): unknown {
 // popup's document.write, a frame's fetch) through its own toString sees
 // the native source too. A wrapper of a native function keeps the native
 // itself, whose source is read when asked: a frame makes some 600 wrappers,
-// and each kept string cost it about 50 bytes it almost never shows
-const functionStrings = new WeakMap<Function, string | Function>();
+// and each kept string cost it about 50 bytes it almost never shows.
+// The table is asked through WeakMap's own get and set, bound to it as the
+// bundle loads: a page that replaced WeakMap.prototype.get was called with
+// the table at its first read of a hooked function's source, and read every
+// native out of it. (Bound, not an OwnWeakMap, which asks the natives
+// through methods of its own: with one, a frame of frame-cost was about
+// 4 KB larger.)
+const stringsTable = new WeakMap<Function, string | Function>();
+const functionStrings = {
+	get: Reflect.apply(Function.prototype.bind, WeakMap.prototype.get, [
+		stringsTable,
+	]) as (key: unknown) => string | Function | undefined,
+	set: Reflect.apply(Function.prototype.bind, WeakMap.prototype.set, [
+		stringsTable,
+	]) as (key: Function, value: string | Function) => unknown,
+};
 // the realm's own, taken before any hook
 const nativeToString = Function.prototype.toString;
 
