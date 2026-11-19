@@ -17,6 +17,7 @@
 // a client not heard from has its riders let go.
 import { bodiesTaken } from './bodyPort';
 import { RpcHelper } from './rpc';
+import type { Held, PoolFields, PoolLine, SocketPass } from './socketPool';
 import { relayNote, type TransportNote } from './transportLog';
 import type {
 	Carrier,
@@ -57,6 +58,8 @@ const PACED_AHEAD = 16 * 1024 * 1024;
 /** readers that took nothing for this long are not reading: nothing waits for them */
 const PACED_QUIET_MS = 250;
 const DATA = 0x02;
+/** a page's message on the control port as it unloads: what it held of the host's pool goes */
+export const LEFT = 'left';
 
 /** what a transport asks the host for: a relay's wisp connection */
 export interface CarrierAsk {
@@ -87,11 +90,62 @@ export interface CarrierGiven {
 	credit?: boolean;
 }
 
-export type HostBound = { open: [CarrierAsk, CarrierGiven] };
-export type ClientBound = { note: [TransportNote] };
+/** a request the host's pool gave a connection: its name, and whether it counts */
+export interface PoolTicket {
+	ticket: number;
+	counted: boolean;
+}
+
+/** a response came over `version`: what the host's pool learns of it */
+export interface PoolLearn {
+	ticket: number;
+	version?: string;
+	/** the realm's verbose log is on: the host answers the connection's line, if any */
+	line: boolean;
+	/** the realm holds its connection until its body ends (else the host lets it go now) */
+	holds: boolean;
+}
+
+export type HostBound = {
+	open: [CarrierAsk, CarrierGiven];
+	/** the host's pool (socketPool.ts SocketPool.hold) */
+	hold: [PoolFields, PoolTicket];
+	learn: [PoolLearn, PoolLine | null];
+	release: [number];
+	/** a cancel (urgency null) or a raise of the request the worker named `id` */
+	requeue: [{ id: string; urgency: number | null }];
+	/** the host's WebSocket gate: the pass's name, or null for one too many */
+	admit: [string, number | null];
+	connected: [number];
+	closed: [number];
+};
+export type ClientBound = {
+	note: [TransportNote];
+	/** the request the worker named so has to wait for a connection */
+	waiting: [string];
+};
+
+/** what the host's pool reads as HTTP/2 or HTTP/3 (socketPool.ts) */
+const MULTIPLEXED = new Set(['2', '3']);
+
+/**
+ * The carrier host's socket pool and WebSocket gate, as a realm asks them
+ * (socketPool.ts HostedPool): one per profile in Chrome, so one for every
+ * realm of the origin here
+ */
+export interface PoolHost {
+	/** a connection for the request `fields` names; it throws when the host cannot answer */
+	hold(fields: PoolFields, waits?: (id: string) => void): Promise<Held>;
+	requeue(id: string, urgency: number | null): void;
+	/** a WebSocket's pass to the host and port `key`; undefined: the host cannot answer */
+	admit(key: string): Promise<SocketPass | null | undefined>;
+}
 
 interface HostLink {
 	rpc: RpcHelper<ClientBound, HostBound>;
+	/** while a request waits for the host's pool, who hears it waits (by its id) */
+	waits: Map<string, (id: string) => void>;
+	pool: PoolHost;
 	/** settles true once the host was heard from */
 	ready: Promise<boolean>;
 	heard: number;
@@ -114,10 +168,12 @@ export function useCarrierHost(port: MessagePort) {
 		port.close();
 		return;
 	}
+	const waits = new Map<string, (id: string) => void>();
 	const rpc = new RpcHelper<ClientBound, HostBound>(
 		{
 			// the host's console notes, printed where this realm's are
 			note: async (note) => relayNote(note),
+			waiting: async (id) => waits.get(id)?.(id),
 		},
 		CARRIER_HOST_RPC,
 		(data, transfer) => port.postMessage(data, transfer),
@@ -125,6 +181,8 @@ export function useCarrierHost(port: MessagePort) {
 	let heard!: (ok: boolean) => void;
 	const link: HostLink = {
 		rpc,
+		waits,
+		pool: hostedPool(rpc, waits),
 		ready: new Promise((resolve) => (heard = resolve)),
 		heard: 0,
 		slow: false,
@@ -159,13 +217,84 @@ export function useCarrierHost(port: MessagePort) {
 		rpc.abort('the carrier host is gone');
 		for (const end of [...link.riders]) end(true);
 	}, ALIVE_MS);
-	// a page that unloads lets its riders go at once
+	// a page that unloads lets its riders go at once, and what it holds of
+	// the host's pool
 	if (page)
 		addEventListener('pagehide', (event) => {
-			if (!(event as PageTransitionEvent).persisted)
-				for (const end of [...link.riders]) end(false);
+			if ((event as PageTransitionEvent).persisted) return;
+			for (const end of [...link.riders]) end(false);
+			try {
+				port.postMessage(LEFT);
+			} catch {
+				// the port is gone
+			}
 		});
 	host = link;
+}
+
+/** the host's pool and gate, as this realm asks them over `rpc` */
+function hostedPool(
+	rpc: RpcHelper<ClientBound, HostBound>,
+	waits: Map<string, (id: string) => void>,
+): PoolHost {
+	return {
+		async hold(fields, waiting) {
+			if (fields.id && waiting) waits.set(fields.id, waiting);
+			let taken: PoolTicket;
+			try {
+				taken = await rpc.call('hold', fields);
+			} finally {
+				if (fields.id) waits.delete(fields.id);
+			}
+			const { ticket, counted } = taken;
+			let released = false;
+			const release = () => {
+				if (released) return;
+				released = true;
+				rpc.call('release', ticket).catch(() => {});
+			};
+			return {
+				counted,
+				learn(version, line) {
+					// as the host's group will read it: a counted request is to a
+					// group not known to multiplex
+					const holds =
+						counted && !released && !(version && MULTIPLEXED.has(version));
+					rpc
+						.call('learn', { ticket, version, line: !!line, holds })
+						.then((told) => told && line?.(told))
+						.catch(() => {});
+					if (!holds) released = true;
+					return holds;
+				},
+				release,
+			};
+		},
+		requeue(id, urgency) {
+			rpc.call('requeue', { id, urgency }).catch(() => {});
+		},
+		async admit(key) {
+			let pass: number | null;
+			try {
+				pass = await rpc.call('admit', key);
+			} catch {
+				return undefined;
+			}
+			if (pass === null) return null;
+			return {
+				connected: () => void rpc.call('connected', pass).catch(() => {}),
+				closed: () => void rpc.call('closed', pass).catch(() => {}),
+			};
+		},
+	};
+}
+
+/**
+ * The carrier host's pool, while this realm has a host that answers
+ * (socketPool.ts); null without one, where the realm's own pool is asked
+ */
+export function poolHost(): PoolHost | null {
+	return host?.heard ? host.pool : null;
 }
 
 /**

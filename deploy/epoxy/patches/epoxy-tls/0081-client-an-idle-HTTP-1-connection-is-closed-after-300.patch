@@ -1,0 +1,42 @@
+From 85a8e9536540b0c7800a2df27b311487b03f6217 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Thu, 19 Nov 2026 05:05:45 -0500
+Subject: [PATCH] client: an idle HTTP/1 connection is closed after 300 s and
+ an idle HTTP/2 one kept, as Chrome keeps them, with six idle to a host at
+ most
+
+hyper-util's pool closed an idle connection of either protocol after its
+default 90 s. Chrome 157 closes a used HTTP/1 socket idle 300 s (at its
+pool's next request after that) and has no idle timer for an HTTP/2
+session, which stays until its server closes it (measured against servers
+that never close: the HTTP/1 socket went at the first request past 300 s,
+the HTTP/2 session was still open after 640 s), and a group never has more
+than six sockets. Needs hyper-util-wasm 0053 (pool_idle_timeout_http2).
+---
+ client/src/lib.rs | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/client/src/lib.rs b/client/src/lib.rs
+index 85e9779..30a2324 100644
+--- a/client/src/lib.rs
++++ b/client/src/lib.rs
+@@ -498,6 +498,16 @@ fn http_client(
+ 		.http2_initial_connection_window_size(15 * 1024 * 1024)
+ 		.http2_adaptive_window(false)
+ 		.http2_max_frame_size(None);
++	// An idle connection is closed after Chrome's time for its protocol,
++	// and a group keeps no more idle than Chrome's six. Chrome 157 closes a
++	// used HTTP/1 socket idle 300 s (at its pool's next request after that),
++	// and has no idle timer for an HTTP/2 session (kept until its server
++	// closes it, or the network changes); hyper-util's pool closed either
++	// after 90 s.
++	builder
++		.pool_idle_timeout(std::time::Duration::from_secs(300))
++		.pool_idle_timeout_http2(false)
++		.pool_max_idle_per_host(6);
+ 	builder.build(service)
+ }
+ 
+-- 
+2.56.1
+

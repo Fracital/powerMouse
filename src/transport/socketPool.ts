@@ -3,6 +3,7 @@ import type {
 	RawHeaders,
 	TransferrableResponse,
 } from '@mercuryworkshop/proxy-transports';
+import { poolHost } from './carrierClient';
 import { NETWORK_PARTITION } from './networkPartition';
 import { REQUEST_QUEUE } from './requestQueue';
 import { connectionLine, logTransport, transportLog } from './transportLog';
@@ -21,6 +22,18 @@ import { connectionLine, logTransport, transportLog } from './transportLog';
 // WebSockets have limits of their own: one handshake at a time to a host
 // and port (RFC 6455 4.1, Chrome's endpoint lock), and 255 sockets open or
 // opening at once, past which a new one fails.
+//
+// Chrome keeps one pool per profile: two tabs of a site share a group's six,
+// every tab the 256, and a WebSocket endpoint's lock (the 255 WebSockets
+// are a renderer process's: two tabs open 130 each). A realm that rides the carrier host
+// (carrierClient.ts) asks the host's pool, the one every transport of the
+// origin asks (HostedPool), and its own pool only while there is no host to
+// ask: each tab's transport had its own limits, so nine tabs could have
+// 2304 requests on the host's one wisp connection where Chrome has 256
+// (and holyWisp refuses a session's streams past 2048). Each realm's epoxy
+// still learns for itself whether a server multiplexes: it is its own
+// HTTP/2 connection that takes the requests at once, and a realm that has
+// not opened one yet goes six at a time until a response says so.
 
 /** requests in flight to an HTTP/1 group */
 export const PER_GROUP = 6;
@@ -32,10 +45,12 @@ export const WEBSOCKETS = 255;
 const GROUPS_KEPT = 1024;
 
 interface Group {
-	/** HTTP/2 or HTTP/3, as its last response said */
+	/** HTTP/2 or HTTP/3, as its last response said (to this realm's epoxy) */
 	multiplexed: boolean;
-	/** requests in flight that count against its limit */
+	/** this realm's requests in flight that count against the group's limit */
 	active: number;
+	/** the group's count across realms (the host's pool), or this realm's alone */
+	limit: { active: number };
 	/**
 	 * The verbose log (transportLog.ts): the group's origin, partition and
 	 * credentials, the version its connection was logged with, the HTTP/1
@@ -52,10 +67,12 @@ interface Group {
 }
 
 /**
- * How long epoxy's pool keeps an idle connection (hyper-util's default):
- * a group idle that long opens a new one, which the verbose log tells
+ * How long epoxy's pool keeps an idle HTTP/1 connection (Chrome 157's time
+ * for a used HTTP/1 socket, epoxy-tls 0081): a group idle that long opens a
+ * new one, which the verbose log tells. An idle HTTP/2 connection is kept
+ * until its server closes it, as Chrome keeps one.
  */
-const IDLE_MS = 90 * 1000;
+const IDLE_MS = 300 * 1000;
 
 /** ms since the epoch, comparable across the worker's realm and this one */
 const now = () => performance.timeOrigin + performance.now();
@@ -77,11 +94,76 @@ interface Waiting {
 	cancel: () => void;
 }
 
+const CANCELLED = 'Stomp: request cancelled while it waited for a connection';
+
 /** a request the page gave up on while it waited for a connection: it never goes out */
 export class QueuedCancel extends Error {
 	constructor() {
-		super('Stomp: request cancelled while it waited for a connection');
+		super(CANCELLED);
 	}
+}
+
+/** what the pool takes of a request: its group and its place in line (REQUEST_QUEUE) */
+export interface PoolFields {
+	/** scheme, host and port */
+	origin: string;
+	partition: string;
+	credentials: string;
+	urgency: number;
+	/** the worker's name for it, for a raise or a cancel ('' for none) */
+	id: string;
+	/** when the browser asked for it (ms since the epoch) */
+	asked: number;
+	image: boolean;
+}
+
+/** the verbose log's connection line, but for the transport it names */
+export type PoolLine = [
+	version: string | undefined,
+	origin: string,
+	partition: string,
+	credentials: string,
+	nth: number,
+];
+
+/** what the pool gave a request, as the realm that asked holds it */
+export interface Held {
+	/** it counts against the limits (an HTTP/1 request, or one to a server not known yet) */
+	counted: boolean;
+	/**
+	 * The response came over `version`: the group learns whether it
+	 * multiplexes, and `line` hears the verbose log's line when there is
+	 * one to tell. True: it holds its connection until its body ends.
+	 */
+	learn(version: string | undefined, line?: (line: PoolLine) => void): boolean;
+	/** it lets its connection go (its body ended, or it failed) */
+	release(): void;
+}
+
+/** the pool's fields of a request to `url` with `headers` (see SocketPool.take) */
+export function fieldsOf(url: URL, headers: RawHeaders): PoolFields {
+	const fields: PoolFields = {
+		origin: `${url.protocol}//${url.host}`,
+		partition: '',
+		credentials: 'credentialed',
+		urgency: 1,
+		id: '',
+		asked: now(),
+		image: false,
+	};
+	if (Array.isArray(headers))
+		for (const [name, value] of headers) {
+			const lower = name.toLowerCase();
+			if (lower === REQUEST_QUEUE) {
+				const [u, c, named, at, kind] = value.split(' ');
+				fields.urgency = Number(u) || 0;
+				fields.credentials = c ?? fields.credentials;
+				fields.id = named ?? '';
+				fields.asked = Number(at) || fields.asked;
+				fields.image = kind === 'image';
+			} else if (lower === NETWORK_PARTITION) fields.partition = value;
+		}
+	return fields;
 }
 
 /** cancels and raises that came before their request, kept for it (they cross apart) */
@@ -108,7 +190,7 @@ export const reportsVersion = (transport: ProxyTransport) =>
 const MULTIPLEXED = new Set(['2', '3']);
 
 /** `body`, calling `done` once when it ends, fails or is cancelled */
-function untilDone(
+export function untilDone(
 	body: ReadableStream<Uint8Array>,
 	done: () => void,
 ): ReadableStream<Uint8Array> {
@@ -138,11 +220,14 @@ function untilDone(
 	);
 }
 
-/** the HTTP connections of one transport, as Chrome's socket pool keeps them */
+/** the HTTP connections of one transport, or of every realm the host serves, as Chrome's socket pool keeps them */
 export class SocketPool {
 	/** the transport whose pool it is, for the verbose log's lines */
 	#transport: ProxyTransport | null;
+	/** by realm, then group */
 	#groups = new Map<string, Group>();
+	/** each group's count across realms */
+	#limits = new Map<string, { active: number }>();
 	/** by urgency, then the order they came in */
 	#waiting: Waiting[] = [];
 	#active = 0;
@@ -167,41 +252,48 @@ export class SocketPool {
 		headers: RawHeaders,
 		waits?: (id: string) => void,
 	): Promise<Ticket> {
-		let urgency = 1;
-		let credentials = 'credentialed';
-		let partition = '';
-		let id = '';
-		let asked = now();
-		let image = false;
-		if (Array.isArray(headers))
-			for (const [name, value] of headers) {
-				const lower = name.toLowerCase();
-				if (lower === REQUEST_QUEUE) {
-					const [u, c, named, at, kind] = value.split(' ');
-					urgency = Number(u) || 0;
-					credentials = c ?? credentials;
-					id = named ?? '';
-					asked = Number(at) || asked;
-					image = kind === 'image';
-				} else if (lower === NETWORK_PARTITION) partition = value;
-			}
+		return this.ticketOf(await this.hold(fieldsOf(url, headers), waits));
+	}
+
+	/** a Ticket of what `held` holds, for a response of this pool's transport */
+	ticketOf(held: Held): Ticket {
+		return heldTicket(held, lineOf(this.#transport));
+	}
+
+	/**
+	 * Wait for a connection for the request `fields` names, of `realm` (the
+	 * host's name for the realm that asked; '' for this one): each realm's
+	 * groups learn for themselves whether they multiplex, and count against
+	 * the same limits
+	 */
+	async hold(
+		fields: PoolFields,
+		waits?: (id: string) => void,
+		realm = '',
+	): Promise<Held> {
+		let { urgency } = fields;
+		const { id, asked, image, origin, partition, credentials } = fields;
 		if (id && this.#early.delete(id)) throw new QueuedCancel();
 		const raised = id ? this.#raised.get(id) : undefined;
 		if (raised !== undefined) {
 			this.#raised.delete(id);
 			urgency = Math.min(urgency, raised);
 		}
-		const key = `${partition}\n${url.protocol}//${url.host}\n${credentials}`;
+		const shared = `${partition}\n${origin}\n${credentials}`;
+		const key = `${realm}\n${shared}`;
 		let group = this.#groups.get(key);
 		if (!group) {
-			if (this.#groups.size >= GROUPS_KEPT)
-				for (const [other, kept] of this.#groups)
-					if (!kept.active && !this.#waiting.some((w) => w.group === kept))
-						this.#groups.delete(other);
+			if (this.#groups.size >= GROUPS_KEPT) this.#forget();
+			let limit = this.#limits.get(shared);
+			if (!limit) {
+				limit = { active: 0 };
+				this.#limits.set(shared, limit);
+			}
 			group = {
 				multiplexed: false,
 				active: 0,
-				origin: `${url.protocol}//${url.host}`,
+				limit,
+				origin,
 				partition,
 				credentials,
 				opened: 0,
@@ -209,9 +301,9 @@ export class SocketPool {
 			};
 			this.#groups.set(key, group);
 		}
-		if (group.multiplexed) return this.#ticket(group, false, 0);
+		if (group.multiplexed) return this.#held(group, false, 0);
 		if (this.#startable(group))
-			return this.#ticket(group, true, this.#count(group), id);
+			return this.#held(group, true, this.#count(group), id);
 		// it waits its turn; whoever starts it counts it (or not, when its
 		// group turned out to multiplex while it waited)
 		if (image && id) waits?.(id);
@@ -226,13 +318,23 @@ export class SocketPool {
 					cancel: () => reject(new QueuedCancel()),
 				}),
 		);
-		const ticket = this.#ticket(group, counted, nth, id);
+		const held = this.#held(group, counted, nth, id);
 		// given up between its start and here
 		if (id && this.#early.delete(id)) {
 			this.#flying.get(id)?.();
 			throw new QueuedCancel();
 		}
-		return ticket;
+		return held;
+	}
+
+	/** the groups nothing is in flight or waiting for, forgotten */
+	#forget() {
+		const busy = new Set(this.#waiting.map((waiting) => waiting.group.limit));
+		for (const [key, group] of this.#groups)
+			if (!group.limit.active && !busy.has(group.limit)) {
+				this.#groups.delete(key);
+				this.#limits.delete(key.slice(key.indexOf('\n') + 1));
+			}
 	}
 
 	/** in line behind every request as urgent or more */
@@ -289,12 +391,12 @@ export class SocketPool {
 	}
 
 	#startable(group: Group) {
-		return group.active < PER_GROUP && this.#active < TOTAL;
+		return group.limit.active < PER_GROUP && this.#active < TOTAL;
 	}
 
 	/**
-	 * Counts a request in; when it takes a connection more than the group
-	 * had open, that connection's number (the verbose log's), else 0
+	 * Counts a request in; when it takes a connection more than the realm's
+	 * group had open, that connection's number (the verbose log's), else 0
 	 */
 	#count(group: Group): number {
 		if (!group.active && now() - group.idleSince >= IDLE_MS) {
@@ -302,6 +404,7 @@ export class SocketPool {
 			group.logged = undefined;
 		}
 		group.active++;
+		group.limit.active++;
 		this.#active++;
 		if (group.active <= group.opened) return 0;
 		group.opened = group.active;
@@ -309,51 +412,46 @@ export class SocketPool {
 	}
 
 	/** the verbose log's line for a connection of `group` that `version` answered on */
-	#log(group: Group, version: string | undefined, nth: number) {
+	#line(
+		group: Group,
+		version: string | undefined,
+		nth: number,
+		line: (line: PoolLine) => void,
+	) {
 		// an HTTP/3 connection is Http3Transport's to tell, at its handshake
-		if (!this.#transport || version === '3') return;
+		if (version === '3') return;
 		const multiplexed = !!version && MULTIPLEXED.has(version);
-		if (multiplexed) {
-			// its requests are not counted: idle is since its last answer
-			if (now() - group.idleSince >= IDLE_MS) group.logged = undefined;
-			group.idleSince = now();
-		}
+		// (its requests are not counted, and its connection is kept idle)
+		if (multiplexed) group.idleSince = now();
 		if (multiplexed ? group.logged === version : !nth) return;
 		group.logged = version;
-		logTransport(
-			connectionLine(
-				this.#transport,
-				version,
-				group.origin,
-				group.partition,
-				group.credentials,
-				multiplexed ? 1 : nth,
-			),
-		);
+		line([
+			version,
+			group.origin,
+			group.partition,
+			group.credentials,
+			multiplexed ? 1 : nth,
+		]);
 	}
 
-	#ticket(group: Group, counted: boolean, nth: number, id = ''): Ticket {
+	#held(group: Group, counted: boolean, nth: number, id = ''): Held {
 		let held = counted;
 		const release = () => {
 			if (!held) return;
 			held = false;
 			if (id) this.#flying.delete(id);
 			group.active--;
+			group.limit.active--;
 			this.#active--;
 			if (!group.active) group.idleSince = now();
 			this.#pump();
 		};
 		if (held && id) this.#flying.set(id, release);
 		return {
-			answered: (response) => {
-				const version = (response as { httpVersion?: unknown }).httpVersion;
-				if (transportLog.on)
-					this.#log(
-						group,
-						typeof version === 'string' && version ? version : undefined,
-						nth,
-					);
-				if (typeof version === 'string' && version) {
+			counted,
+			learn: (version, line) => {
+				if (line) this.#line(group, version, nth, line);
+				if (version) {
 					const multiplexed = MULTIPLEXED.has(version);
 					if (multiplexed !== group.multiplexed) {
 						group.multiplexed = multiplexed;
@@ -361,23 +459,9 @@ export class SocketPool {
 						if (multiplexed) this.#pump();
 					}
 				}
-				if (!held) return response;
-				if (group.multiplexed) {
-					release();
-					return response;
-				}
-				if (response.body instanceof ReadableStream)
-					return {
-						...response,
-						body: untilDone(
-							response.body as ReadableStream<Uint8Array>,
-							release,
-						),
-					};
-				release();
-				return response;
+				return held && !group.multiplexed;
 			},
-			failed: release,
+			release,
 		};
 	}
 
@@ -396,6 +480,45 @@ export class SocketPool {
 	}
 }
 
+/** the verbose log's line of a connection of `transport` */
+const lineOf = (transport: ProxyTransport | null) =>
+	transport
+		? (line: PoolLine) => logTransport(connectionLine(transport, ...line))
+		: undefined;
+
+/** the version a response says it came over, if it says */
+function versionOf(response: TransferrableResponse) {
+	const version = (response as { httpVersion?: unknown }).httpVersion;
+	return typeof version === 'string' && version ? version : undefined;
+}
+
+/**
+ * A Ticket of `held`: the response's version learnt (`line` telling the
+ * verbose log's line while the log is on), and its connection let go at
+ * once or at its body's end
+ */
+function heldTicket(held: Held, line?: (line: PoolLine) => void): Ticket {
+	return {
+		answered: (response) => {
+			const holds = held.learn(
+				versionOf(response),
+				transportLog.on ? line : undefined,
+			);
+			if (holds && response.body instanceof ReadableStream)
+				return {
+					...response,
+					body: untilDone(
+						response.body as ReadableStream<Uint8Array>,
+						held.release,
+					),
+				};
+			held.release();
+			return response;
+		},
+		failed: held.release,
+	};
+}
+
 /** what a WebSocket holds from the gate */
 export interface SocketPass {
 	/** the handshake ended (open or failed): the next one to its host and port may start */
@@ -404,17 +527,28 @@ export interface SocketPass {
 	closed(): void;
 }
 
-/** the WebSockets of one transport, as Chrome limits them */
+/** the host and port of a WebSocket to `url`, whose handshakes go one at a time */
+export const endpointOf = (url: URL) =>
+	`${url.hostname}:${url.port || (url.protocol === 'wss:' ? 443 : 80)}`;
+
+/** the WebSockets of one transport, or of every realm the host serves, as Chrome limits them */
 export class WebSocketGate {
 	#open = 0;
 	/** by host and port, the handshake the next one waits for */
 	#locks = new Map<string, Promise<void>>();
 
+	/** `limit`: the sockets open or opening at once, past which a new one fails */
+	constructor(readonly limit = WEBSOCKETS) {}
+
 	/** wait for a handshake to `url` to be allowed; null: too many sockets (it fails) */
-	async admit(url: URL): Promise<SocketPass | null> {
-		if (this.#open >= WEBSOCKETS) return null;
+	admit(url: URL): Promise<SocketPass | null> {
+		return this.admitTo(endpointOf(url));
+	}
+
+	/** wait for a handshake to the host and port `key` to be allowed; null: too many sockets */
+	async admitTo(key: string): Promise<SocketPass | null> {
+		if (this.#open >= this.limit) return null;
 		this.#open++;
-		const key = `${url.hostname}:${url.port || (url.protocol === 'wss:' ? 443 : 80)}`;
 		const before = this.#locks.get(key);
 		let unlock!: () => void;
 		const mine = new Promise<void>((resolve) => (unlock = resolve));
@@ -438,13 +572,95 @@ export class WebSocketGate {
 	}
 }
 
-const pools = new WeakMap<object, { http: SocketPool; ws: WebSocketGate }>();
+/**
+ * A transport's requests while its realm can ask the carrier host's pool
+ * (carrierClient.ts PoolHost), and its own pool's when it cannot (no host,
+ * or the host went while it asked)
+ */
+class HostedPool {
+	constructor(
+		readonly local: SocketPool,
+		readonly transport: ProxyTransport,
+	) {}
 
-/** the pool and WebSocket gate of `transport` (one each, whichever port serves it) */
-export function poolOf(transport: ProxyTransport) {
+	async take(
+		url: URL,
+		headers: RawHeaders,
+		waits?: (id: string) => void,
+	): Promise<Ticket> {
+		const host = poolHost();
+		if (!host) return this.local.take(url, headers, waits);
+		let held: Held | null;
+		try {
+			held = await host.hold(fieldsOf(url, headers), waits);
+		} catch (error) {
+			if ((error as Error)?.message === CANCELLED) throw new QueuedCancel();
+			held = null;
+		}
+		if (!held) return this.local.take(url, headers, waits);
+		return heldTicket(held, lineOf(this.transport));
+	}
+
+	/** (a request is in one of the two, the other keeps the word for a while and drops it) */
+	cancel(id: string) {
+		poolHost()?.requeue(id, null);
+		this.local.cancel(id);
+	}
+
+	raise(id: string, urgency: number) {
+		poolHost()?.requeue(id, urgency);
+		this.local.raise(id, urgency);
+	}
+}
+
+/** the same for WebSockets */
+class HostedGate {
+	constructor(readonly local: WebSocketGate) {}
+
+	/**
+	 * The 255 are the realm's (Chrome counts a renderer process's: two
+	 * tabs open 130 each), and the endpoint lock is the profile's, so the
+	 * host's: two tabs' handshakes to a host go one at a time
+	 */
+	async admit(url: URL): Promise<SocketPass | null> {
+		const key = endpointOf(url);
+		const mine = await this.local.admitTo(key);
+		if (!mine) return null;
+		const shared = await poolHost()?.admit(key);
+		if (!shared) return mine;
+		return {
+			connected: () => {
+				mine.connected();
+				shared.connected();
+			},
+			closed: () => {
+				mine.closed();
+				shared.closed();
+			},
+		};
+	}
+}
+
+/** the pool and gate a transport's requests and WebSockets ask */
+export interface TransportPool {
+	http: Pick<SocketPool, 'take' | 'cancel' | 'raise'>;
+	ws: Pick<WebSocketGate, 'admit'>;
+}
+
+const pools = new WeakMap<object, TransportPool>();
+
+/**
+ * The pool and WebSocket gate of `transport` (one each, whichever port
+ * serves it): the carrier host's, every realm of the origin's, while this
+ * realm has a host to ask
+ */
+export function poolOf(transport: ProxyTransport): TransportPool {
 	let pool = pools.get(transport);
 	if (!pool) {
-		pool = { http: new SocketPool(transport), ws: new WebSocketGate() };
+		pool = {
+			http: new HostedPool(new SocketPool(transport), transport),
+			ws: new HostedGate(new WebSocketGate()),
+		};
 		pools.set(transport, pool);
 	}
 	return pool;

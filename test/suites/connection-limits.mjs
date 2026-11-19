@@ -16,7 +16,10 @@
 // script's urgency before it lays any out (the worker does: Priority u=2, i
 // over HTTP/2, and their place in the line), and drops a request the page
 // aborts while it waits (it never reaches the server; the worker cancels it
-// in the transport's queue).
+// in the transport's queue). Two tabs share the limits, as Chrome keeps one
+// pool per profile: through the proxy each tab's transport kept its own
+// (twelve requests at once to the server, where Chrome has six), until the
+// tabs asked the carrier host's pool.
 //
 // The suite's servers on 127.0.0.1 count what reaches them: an HTTP/1
 // server (also reached as localhost, another host to Chrome), and an HTTP/2
@@ -75,6 +78,7 @@ const runOf = (tag) => {
 			pending: 0,
 			maxPending: 0,
 			report: null,
+			reports: [],
 		});
 	return runs.get(tag);
 };
@@ -209,6 +213,7 @@ function handler(req, res) {
 		return html(socketsPage(tag, +q.get('k'), +q.get('d')));
 	if (url.pathname === '/report') {
 		run.report = Object.fromEntries(q);
+		run.reports.push(run.report);
 		res.writeHead(200, head);
 		return res.end('ok');
 	}
@@ -396,6 +401,36 @@ const STEPS = [
 	],
 ];
 
+/**
+ * Steps of two tabs of the site at once, each loading the page: Chrome
+ * keeps one pool per profile, so they share its limits. (Each tab's epoxy
+ * opens connections of its own, so how many reached the server is not
+ * compared.)
+ */
+const SHARED_STEPS = [
+	[
+		'60 fetches at once in each of two tabs to an HTTP/1 server',
+		(tag) => `${H1}/burst.html?run=${tag}&n=60`,
+		(run) => ({ 'most in flight': run.maxInFlight }),
+	],
+	[
+		'8 WebSockets at once to one host in each of two tabs',
+		(tag) => `${H1}/sockets.html?run=${tag}&k=8&d=${DELAY_MS}`,
+		(run) => ({
+			'handshakes waiting at the server at once': run.maxPending,
+			opened: run.reports.reduce((n, r) => n + Number(r.opened), 0),
+		}),
+	],
+	[
+		'130 WebSockets at once in each of two tabs',
+		(tag) => `${H1}/sockets.html?run=${tag}&k=130&d=0`,
+		(run) => ({
+			opened: run.reports.reduce((n, r) => n + Number(r.opened), 0),
+			failed: run.reports.reduce((n, r) => n + Number(r.failed), 0),
+		}),
+	],
+];
+
 // Checks known to differ from Chrome, by why. A check on the list that now
 // reads as natively fails too: take it off.
 const KNOWN_BY_REASON = {
@@ -442,9 +477,29 @@ async function measure(mode, go) {
 	return out;
 }
 
+/** run every shared step in two tabs at once, `go` loading each */
+async function measureShared(mode, go) {
+	const out = {};
+	for (const [name, page, compare] of SHARED_STEPS) {
+		const tag = `${mode}-shared-${SHARED_STEPS.findIndex(([n]) => n === name)}`;
+		const run = runOf(tag);
+		await Promise.all([go(0, page(tag)), go(1, page(tag))]);
+		for (let i = 0; i < 300 && run.reports.length < 2; i++) await sleep(100);
+		await sleep(400);
+		out[name] =
+			run.reports.length === 2 ? compare(run) : { error: 'no report' };
+	}
+	return out;
+}
+
 const nativeContext = await browser.newContext({ ignoreHTTPSErrors: true });
 const nativePage = await nativeContext.newPage();
 const native = await measure('native', (url) => nativePage.goto(url));
+const nativeTabs = [nativePage, await nativeContext.newPage()];
+Object.assign(
+	native,
+	await measureShared('native', (i, url) => nativeTabs[i].goto(url)),
+);
 await nativeContext.close();
 console.log('native', JSON.stringify(native));
 
@@ -463,38 +518,49 @@ ok(
 );
 
 const context = await browser.newContext({ ignoreHTTPSErrors: true });
-const page = await context.newPage();
 const errors = [];
-page.on('pageerror', (error) => errors.push(error.message));
-await page.goto(`${PROXY}stomp/controllerFrame.html`);
-await page.evaluate(async (ca) => {
-	const { StompController } = await import('/stomp/controller.mjs');
-	const registration = await StompController.register('/stomp/');
-	const wisp = `${location.origin.replace(/^http/, 'ws')}/wisp/`;
-	const controller = new StompController({
-		serviceworker: registration,
-		transport: {
-			module: '/epoxy/index.mjs',
-			options: [{ wisp, pem_files: [ca] }],
-		},
-		directory: '/stomp/',
-		codec: 'xor',
-	});
-	await controller.wait();
-	window.controller = controller;
-}, CA);
-const proxied = await measure('proxied', (url) =>
+/** a controller page of `context`, its transport epoxy at the demo's relay */
+async function controllerPage() {
+	const page = await context.newPage();
+	page.on('pageerror', (error) => errors.push(error.message));
+	await page.goto(`${PROXY}stomp/controllerFrame.html`);
+	await page.evaluate(async (ca) => {
+		const { StompController } = await import('/stomp/controller.mjs');
+		const registration = await StompController.register('/stomp/');
+		const wisp = `${location.origin.replace(/^http/, 'ws')}/wisp/`;
+		const controller = new StompController({
+			serviceworker: registration,
+			transport: {
+				module: '/epoxy/index.mjs',
+				options: [{ wisp, pem_files: [ca] }],
+			},
+			directory: '/stomp/',
+			codec: 'xor',
+		});
+		await controller.wait();
+		window.controller = controller;
+	}, CA);
+	return page;
+}
+/** `url` in a new proxied frame of `page` */
+const goProxied = (page, url) =>
 	page.evaluate((url) => {
 		document.querySelector('iframe')?.remove();
 		const element = document.createElement('iframe');
 		element.style.cssText = 'width:800px;height:600px';
 		document.body.append(element);
 		window.controller.createFrame(element).go(url);
-	}, url),
+	}, url);
+const page = await controllerPage();
+const proxied = await measure('proxied', (url) => goProxied(page, url));
+const tabs = [page, await controllerPage()];
+Object.assign(
+	proxied,
+	await measureShared('proxied', (i, url) => goProxied(tabs[i], url)),
 );
 console.log('proxied', JSON.stringify(proxied));
 
-for (const [name] of STEPS)
+for (const [name] of [...STEPS, ...SHARED_STEPS])
 	for (const [field, value] of Object.entries(native[name])) {
 		const check = `${name}: ${field}`;
 		const same =

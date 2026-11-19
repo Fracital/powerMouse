@@ -17,7 +17,11 @@
 //  - the host ending under the pages (a crash): their transports find it
 //    gone, end its riders and answer over carriers of their own, and a new
 //    tab starts a new host;
+//  - past the relay's stream limit (holyWisp's max-streams-per-conn: a
+//    CONNECT past it closed with 0x49), three tabs' WebSockets wait at the
+//    host for streams to close, and all open on the one session;
 //  - with WebTransport off, the tabs share the one WebSocket.
+import { WebSocketServer } from 'ws';
 import { done, FIXTURE, launch, ok, PORT, PROXY, sleep } from '../lib.mjs';
 import { startWispWebTransport } from '../wisp-wt.mjs';
 
@@ -28,6 +32,14 @@ const CARRIER_MS = 1500;
 const GONE_MS = 8000;
 
 const relay = await startWispWebTransport(`ws://127.0.0.1:${PORT}/wisp/`);
+/** a WebSocket server that says hello and holds each socket HOLD_MS before it closes */
+const HOLD_MS = 300;
+const held = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+await new Promise((resolve) => held.once('listening', resolve));
+held.on('connection', (socket) => {
+	socket.send('hello');
+	setTimeout(() => socket.close(), HOLD_MS);
+});
 const browser = await launch();
 const errors = [];
 
@@ -118,6 +130,42 @@ function load(page, n) {
 		{ url, title: `WALK ${n}`, timeoutMs: TIMEOUT_MS },
 	);
 }
+/** the tabs and the WebSockets each opens at once past the relay's limit */
+const CLIENTS = 3;
+const SOCKETS = 3;
+const CAP = 3;
+/** SOCKETS WebSockets at once on the controller's transport, each "ok@ms" (its hello heard) or why not */
+function sockets(page) {
+	return page.evaluate(
+		async ({ url, n, timeoutMs }) => {
+			const t0 = performance.now();
+			const one = () =>
+				new Promise((resolve) => {
+					const timer = setTimeout(() => resolve('HUNG'), timeoutMs);
+					const end = (result) => {
+						clearTimeout(timer);
+						resolve(result);
+					};
+					window.controller.transport.connect(
+						new URL(url),
+						[],
+						[],
+						() => {},
+						() => end(`ok@${Math.round(performance.now() - t0)}`),
+						(code) => end(`closed ${code}`),
+						(error) => end(`error ${String(error).slice(0, 120)}`),
+					);
+				});
+			return Promise.all(Array.from({ length: n }, one));
+		},
+		{
+			url: `ws://127.0.0.1:${held.address().port}/`,
+			n: SOCKETS,
+			timeoutMs: TIMEOUT_MS,
+		},
+	);
+}
+
 const allOk = (...results) =>
 	results.every((result) =>
 		Object.values(result).every((r) => r.startsWith('ok@')),
@@ -270,6 +318,39 @@ for (const host of ['worker', 'page']) {
 		await context.close();
 	}
 
+	// the relay's stream limit (holyWisp's max-streams-per-conn, here 3):
+	// three tabs' WebSockets at once, nine streams, wait at the host for the
+	// streams before them to close, and each opens, on the one session
+	{
+		const context = await browser.newContext();
+		const pages = [];
+		for (let i = 0; i < CLIENTS; i++) pages.push(await open(context, host));
+		const before = snapshot();
+		const { refused } = relay.stats;
+		relay.stats.mostOpen = 0;
+		relay.maxStreams = CAP;
+		const results = await Promise.all(pages.map((page) => sockets(page)));
+		relay.maxStreams = 0;
+		const d = delta(before);
+		const got = results.flat();
+		ok(
+			`${host}: past the relay's stream limit, ${CLIENTS} tabs' WebSockets wait for streams to close and each opens, no session of their own`,
+			got.length === CLIENTS * SOCKETS &&
+				got.every((r) => r.startsWith('ok@')) &&
+				relay.stats.refused > refused &&
+				relay.stats.mostOpen === CAP &&
+				d.sessions === 0 &&
+				d.ws === 0,
+			JSON.stringify({
+				results,
+				d,
+				refused: relay.stats.refused - refused,
+				mostOpen: relay.stats.mostOpen,
+			}),
+		);
+		await context.close();
+	}
+
 	// WebTransport off: the WebSocket is shared
 	{
 		const context = await browser.newContext();
@@ -292,4 +373,5 @@ for (const host of ['worker', 'page']) {
 	}
 }
 
+held.close();
 await done(browser, errors);
