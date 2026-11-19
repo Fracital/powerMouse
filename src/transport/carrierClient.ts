@@ -473,6 +473,7 @@ function riderCarrier(
 	const write = new WritableStream<Uint8Array>({
 		write(packet) {
 			if (ended) return;
+			pace?.sent(packet);
 			const own = ownBuffer(packet);
 			if (batches) batch.push(own);
 			else port.postMessage(own, [own]);

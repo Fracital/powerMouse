@@ -28,13 +28,21 @@ const TOOK_STEP = 1024 * 1024;
 const PACED_AHEAD = 8 * 1024 * 1024;
 /** readers that took nothing for this long are not reading: nothing waits for them */
 const PACED_QUIET_MS = 250;
+const CONNECT = 0x01;
 const DATA = 0x02;
+const CLOSE = 0x04;
+/** a CONNECT's stream type: UDP */
+const UDP = 0x02;
+const streamOf = (bytes: Uint8Array) =>
+	(bytes[1] | (bytes[2] << 8) | (bytes[3] << 16) | (bytes[4] << 24)) >>> 0;
 
 export interface RiderPace {
 	/** the host's packets: handed to epoxy as the readers take them */
 	take(packets: ArrayBuffer[]): void;
 	/** the rider ended; `hand`: what waits goes to epoxy first (the host's end comes after its packets) */
 	end(hand: boolean): void;
+	/** a packet epoxy sends on the rider: a UDP stream's CONNECT makes its datagrams go past what waits */
+	sent(packet: Uint8Array): void;
 }
 
 /** the packets of the rider on `port`, handed on to `enqueue` at the readers' pace */
@@ -43,6 +51,12 @@ export function paceRider(
 	enqueue: (packet: ArrayBuffer) => void,
 ): RiderPace {
 	const held: ArrayBuffer[] = [];
+	/**
+	 * the UDP streams epoxy opened: a datagram never waits for body readers
+	 * (a native UDP socket is no one else's), and its stream holds nothing
+	 * back, so it goes past what waits
+	 */
+	const udp = new Set<number>();
 	let over = false;
 	let delivered = 0;
 	let start = 0;
@@ -81,8 +95,21 @@ export function paceRider(
 	return {
 		take(packets) {
 			if (over) return;
-			held.push(...packets);
+			for (const packet of packets) {
+				const bytes = new Uint8Array(packet, 0, Math.min(5, packet.byteLength));
+				const id = bytes.length === 5 ? streamOf(bytes) : 0;
+				if (id && udp.has(id)) {
+					if (bytes[0] === CLOSE) udp.delete(id);
+					hand(packet);
+				} else held.push(packet);
+			}
 			pass();
+		},
+		sent(packet) {
+			if (packet.length < 6) return;
+			const id = streamOf(packet);
+			if (packet[0] === CONNECT && packet[5] === UDP) udp.add(id);
+			else if (packet[0] === CONNECT || packet[0] === CLOSE) udp.delete(id);
 		},
 		end(handing) {
 			if (over) return;

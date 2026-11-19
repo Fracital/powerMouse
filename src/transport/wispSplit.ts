@@ -488,6 +488,7 @@ export function lanePipe(
 	const write = new WritableStream<Uint8Array>({
 		write(packet) {
 			if (done) throw new Error('the Wisp connection ended');
+			pace?.sent(packet);
 			// a view of a larger buffer (epoxy's memory) is copied; a packet
 			// that owns its buffer is transferred
 			batch.push(ownBuffer(packet));

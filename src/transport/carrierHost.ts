@@ -91,6 +91,32 @@ const RETRY_FIRST_MS = 250;
 const RETRY_MAX_MS = 8000;
 /** a stream held this long, while no stream closed on the relay in that time, hears the refusal */
 const HOLD_MS = 30 * 1000;
+/** a CONNECT's stream type: UDP */
+const UDP = 0x02;
+/** a CLOSE's reason: the stream failed (Wisp's 0x03, a network error) */
+const NETWORK_ERROR = 0x03;
+
+/*
+ * A rider whose client takes its packets slower than the relay sends them
+ * (`credit`: its readers are slow) holds the relay back, as a reader holds
+ * its socket back natively. But the relay connection is every stream of the
+ * profile's, and a native socket holds back only itself: the host stops
+ * reading the relay for a rider behind for PAUSE_MAX_MS at most, and not at
+ * all while a UDP stream is open (a datagram never waits) or another rider
+ * was given packets in the last KEEPING_UP_MS and is not behind (its readers
+ * keep up). Past a pause the rider is let fall behind until it takes
+ * something, its packets queued here. A queue past RIDER_QUEUE_MAX holds
+ * the relay back again while its readers still take some (they read
+ * slower than the relay sends: a decrypting shard on a busy machine), and
+ * once they took nothing for STALLED_MS the stream that holds the most of
+ * it is reset, as a socket is reset under memory pressure. (Per-stream
+ * credit, Wisp's 0xE2 extension, is the fix of record: the relay would
+ * hold back that stream alone.)
+ */
+const PAUSE_MAX_MS = 50;
+const KEEPING_UP_MS = 100;
+const RIDER_QUEUE_MAX = 64 * 1024 * 1024;
+const STALLED_MS = 2000;
 
 /**
  * A stream the relay has not answered yet: its CONNECT and what its rider
@@ -196,6 +222,12 @@ class Rider {
 	#drained: (() => void) | null = null;
 	/** its client takes a task's packets in one message */
 	#batch: PacketBatch | null;
+	/** when the relay last sent it a packet */
+	fedAt = 0;
+	/** a pause for it ran out: the relay is not held back for it again until it takes something */
+	stalled = false;
+	/** when it last said it took some */
+	tookAt = performance.now();
 	constructor(
 		readonly relay: Relay,
 		readonly port: MessagePort,
@@ -233,12 +265,18 @@ class Rider {
 	get behind(): boolean {
 		return this.#heldBytes > RIDER_WINDOW;
 	}
+	/** more than RIDER_QUEUE_MAX waits for it */
+	get over(): boolean {
+		return this.#heldBytes > RIDER_QUEUE_MAX;
+	}
 	/** settles once no more than RIDER_WINDOW waits for it, or it ended */
 	caughtUp(): Promise<void> {
 		if (!this.behind || this.ended) return Promise.resolve();
 		return new Promise((resolve) => (this.#drained = resolve));
 	}
 	#took(bytes: number) {
+		this.stalled = false;
+		this.tookAt = performance.now();
 		this.#out = Math.max(0, this.#out - bytes);
 		while (
 			this.#held.length &&
@@ -270,6 +308,35 @@ class Rider {
 			return;
 		}
 		this.#post(buffer);
+	}
+	/** the stream (its id) whose packets are most of what waits for it */
+	largestQueued(): number | null {
+		const bytes = new Map<number, number>();
+		for (const buffer of this.#held) {
+			const id = u32(new Uint8Array(buffer, 0, 5), 1);
+			if (id) bytes.set(id, (bytes.get(id) ?? 0) + buffer.byteLength);
+		}
+		let largest: number | null = null;
+		for (const [id, n] of bytes)
+			if (largest === null || n > bytes.get(largest)!) largest = id;
+		return largest;
+	}
+	/** what waits for it of stream `id`, dropped, and the stream's CLOSE posted with `reason` */
+	reset(id: number, reason: number) {
+		const kept: ArrayBuffer[] = [];
+		this.#heldBytes = 0;
+		for (const buffer of this.#held)
+			if (u32(new Uint8Array(buffer, 0, 5), 1) !== id) {
+				kept.push(buffer);
+				this.#heldBytes += buffer.byteLength;
+			}
+		this.#held = kept;
+		const close = new Uint8Array(6);
+		close[0] = CLOSE;
+		setU32(close, 1, id);
+		close[5] = reason;
+		this.#post(close.buffer);
+		if (!this.behind) this.#wake();
 	}
 	#post(buffer: ArrayBuffer) {
 		this.#out += buffer.byteLength;
@@ -327,6 +394,8 @@ class Relay {
 	#riders = new Set<Rider>();
 	/** the relay connection's stream ids, to the rider and its own id */
 	#routes = new Map<number, [Rider, number]>();
+	/** the relay connection's stream ids of UDP streams */
+	#udp = new Set<number>();
 	#next = 1;
 	#idle: ReturnType<typeof setTimeout> | undefined;
 	/**
@@ -455,9 +524,8 @@ class Relay {
 				const { value, done } = await reader.read();
 				if (done) break;
 				this.#fromRelay(value);
-				// a rider far behind holds the relay back (riderCarrier's pace)
-				for (const rider of this.#riders)
-					if (rider.behind) await rider.caughtUp();
+				// a rider far behind holds the relay back (riderCarrier's pace), for a while
+				await this.#pace();
 			}
 		} catch {
 			// the carrier failed
@@ -465,6 +533,65 @@ class Relay {
 		let lost = false;
 		await open.ended.catch(() => (lost = true));
 		this.#gone(lost);
+	}
+
+	/** a rider far behind holds the relay back, PAUSE_MAX_MS at most, while no other stream would wait for it */
+	async #pace() {
+		// a queue past its cap: the relay waits while its readers take some
+		for (const rider of this.#riders)
+			while (rider.over && !rider.ended) {
+				if (performance.now() - rider.tookAt > STALLED_MS) {
+					this.shed(rider);
+					continue;
+				}
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				await Promise.race([
+					rider.caughtUp(),
+					new Promise((resolve) => {
+						timer = setTimeout(resolve, PAUSE_MAX_MS);
+					}),
+				]);
+				clearTimeout(timer);
+			}
+		let behind: Rider[] | null = null;
+		for (const rider of this.#riders)
+			if (rider.behind && !rider.stalled && !rider.ended)
+				(behind ??= []).push(rider);
+		if (!behind || this.#udp.size) return;
+		const now = performance.now();
+		for (const rider of this.#riders)
+			if (!rider.behind && now - rider.fedAt < KEEPING_UP_MS) return;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const late = await Promise.race([
+			Promise.all(behind.map((rider) => rider.caughtUp())).then(() => false),
+			new Promise<boolean>((resolve) => {
+				timer = setTimeout(() => resolve(true), PAUSE_MAX_MS);
+			}),
+		]);
+		clearTimeout(timer);
+		if (late)
+			for (const rider of behind) if (rider.behind) rider.stalled = true;
+	}
+
+	/** a rider's queue past RIDER_QUEUE_MAX: the stream that holds most of it is reset, on the relay and to the rider */
+	shed(rider: Rider) {
+		const mine = rider.largestQueued();
+		if (mine === null) return;
+		const relayId = rider.ids.get(mine);
+		rider.ids.delete(mine);
+		rider.reset(mine, NETWORK_ERROR);
+		if (relayId === undefined) return;
+		wispNote(
+			'warn',
+			`a stream's reader fell ${RIDER_QUEUE_MAX >> 20} MB behind: the stream is reset`,
+		);
+		this.#forgetStream(relayId);
+		const close = new Uint8Array(6);
+		close[0] = CLOSE;
+		setU32(close, 1, relayId);
+		close[5] = NETWORK_ERROR;
+		this.#send(close);
+		this.#closed();
 	}
 
 	#fromRelay(buffer: ArrayBuffer) {
@@ -513,11 +640,13 @@ class Relay {
 		const [rider, mine] = route;
 		if (type === CLOSE) {
 			this.#routes.delete(id);
+			this.#udp.delete(id);
 			rider.ids.delete(mine);
 			// (a refusal passed on freed nothing on the relay)
 			if (!refused) this.#closed();
 		}
 		setU32(bytes, 1, mine);
+		rider.fedAt = performance.now();
 		rider.send(buffer);
 	}
 
@@ -549,6 +678,7 @@ class Relay {
 			const relayId = this.#allocate();
 			rider.ids.set(id, relayId);
 			this.#routes.set(relayId, [rider, id]);
+			if (bytes[5] === UDP) this.#udp.add(relayId);
 			this.#opening.set(relayId, {
 				rider,
 				mine: id,
@@ -598,6 +728,7 @@ class Relay {
 	/** the relay's stream `relayId` is no one's now (closed, or its id taken again) */
 	#forgetStream(relayId: number) {
 		this.#routes.delete(relayId);
+		this.#udp.delete(relayId);
 		const opening = this.#opening.get(relayId);
 		if (!opening) return;
 		this.#opening.delete(relayId);
@@ -714,6 +845,7 @@ class Relay {
 		}
 		this.#riders.clear();
 		this.#routes.clear();
+		this.#udp.clear();
 	}
 }
 
