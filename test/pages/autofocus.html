@@ -1,0 +1,13 @@
+<!doctype html>
+<title>autofocus</title>
+<p>Autofocus probe (focus suite): the first candidate that takes the focus.</p>
+<input id="before" />
+<input id="hidden" hidden autofocus />
+<input id="q" autofocus />
+<input id="after" autofocus />
+<script>
+	window.__autofocus = { loaded: false };
+	addEventListener('load', () =>
+		setTimeout(() => (window.__autofocus.loaded = true), 500),
+	);
+</script>

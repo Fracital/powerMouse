@@ -12,6 +12,7 @@ import {
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { activationState, markActivation, noteInput } from '../activation';
+import { autofocusFlush } from '../autofocus';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { Pool } from '../pool';
 import { siteWindows } from '../siteWindows';
@@ -355,7 +356,16 @@ export default class NavigateModule extends Module<DocumentClient> {
 		// many mutations land at once (a whole page), one message per turn
 		const schedule = watchHistory(post);
 
-		const observer = new global.MutationObserver(schedule);
+		// and the page's autofocus where the browser refuses it (../autofocus)
+		const autofocus = autofocusFlush(moduleClient);
+		const observer = new global.MutationObserver(
+			autofocus
+				? () => {
+						schedule();
+						autofocus();
+					}
+				: schedule,
+		);
 		const observe = () =>
 			observer.observe(global.document, {
 				subtree: true,
