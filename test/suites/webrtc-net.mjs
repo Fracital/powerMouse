@@ -1198,23 +1198,36 @@ for (const result of gone) {
 	const failed = when(result.gone ?? [], 'connection:failed');
 	const far = how === 'refuse' ? 'refused' : 'gone';
 	// disconnected 5 s after the first check that went unanswered (the
-	// last was answered up to a few seconds before), failed 10 s later
+	// last was answered up to a few seconds before), failed 10 s later.
+	// Chrome tells iceconnectionstatechange first, but once on CI's loaded
+	// 4-vCPU runner its connectionstatechange came first, in the same
+	// millisecond: natively either order, through the proxy Chrome's usual
+	const told = named(result.gone?.slice(0, 3) ?? []);
 	const states =
 		!result.failure &&
-		named(result.gone.slice(0, 3)) ===
-			'ice:disconnected,connection:disconnected,connection:failed' &&
+		(told === 'ice:disconnected,connection:disconnected,connection:failed' ||
+			(!base &&
+				told === 'connection:disconnected,ice:disconnected,connection:failed' &&
+				result.gone[1].at - result.gone[0].at <= 50)) &&
 		disconnected >= 4000 &&
 		disconnected <= 10000 &&
 		failed - disconnected >= 9000 &&
 		failed - disconnected <= 11000;
 	const quiet =
 		result.trafficAfterDisconnected === 0 && result.anyAfterFailed === 0;
-	// the relay sees the checks of the pair sent on unless its port closed
+	// the relay sees the checks of the pair sent on unless its port closed.
+	// Chrome checks it 2656.25 ms apart (2500 ms or more on its 265.625 ms
+	// turns), but a loaded host holds a check: on CI's runner one came 98
+	// ms late, 2573 and 2641 ms from the next ones. Natively a check may be
+	// held 200 ms; through the proxy the gaps are Chrome's unloaded ones
+	const slack = base ? 0 : 200;
 	const cadence =
 		how === 'refuse' ||
 		(!result.failure &&
 			result.steady.length === 2 &&
-			result.steady.every((gap) => gap >= 2600 && gap <= 2720) &&
+			result.steady.every(
+				(gap) => gap >= 2600 - slack && gap <= 2720 + slack,
+			) &&
 			result.fastFrom >= 2100 &&
 			result.fastFrom <= 3000 &&
 			result.fastChecks >= 150 &&
