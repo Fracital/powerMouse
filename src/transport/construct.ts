@@ -8,6 +8,11 @@ import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import { withEchCache } from './echCache';
 import Http3Transport, { type Http3Options } from './http3/Http3Transport';
 import RevivingTransport from './RevivingTransport';
+import {
+	shardCount,
+	shardedTransport,
+	type ShardsOption,
+} from './ShardedTransport';
 import { useWebTransportModule } from './webTransportHost';
 import {
 	CarrierTransport,
@@ -23,6 +28,8 @@ export interface ConstructibleTransport {
 	options?: unknown[];
 	http3?: boolean | Http3DescriptorOptions;
 	webTransport?: boolean | WispWebTransportOptions;
+	/** TransportDescriptor.shards */
+	shards?: ShardsOption;
 }
 
 /** the descriptor with `http3.module` resolved against `base` too */
@@ -68,12 +75,41 @@ export function transportName(module: string): string {
 }
 
 /**
+ * Whether the transport `Transport` constructed with `args` can run in
+ * shards (ShardedTransport.ts): our epoxy build (it says which HTTP version
+ * each response came over, which the transport worker's socket pool needs
+ * from each shard as from one transport), options that can cross into a
+ * worker (the wisp URL and the ECH store aside: each shard is given its
+ * own), and workers to start in this realm
+ */
+function shardable(
+	Transport: new (...args: unknown[]) => ProxyTransport,
+	args: unknown[],
+): boolean {
+	if (typeof Worker !== 'function') return false;
+	try {
+		const [first, ...rest] = args as [Record<string, unknown>];
+		const given = { ...first };
+		delete given.wisp;
+		delete given.ech_cache;
+		structuredClone([given, ...rest]);
+		const probe = new Transport(...args) as {
+			fieldSupport?: { httpVersion?: unknown };
+		};
+		return probe.fieldSupport?.httpVersion === true;
+	} catch {
+		return false;
+	}
+}
+
+/**
  * `h3Worker`: the transport worker's script, which stomp-h3 runs in a
  * worker of its own from (http3/h3Thread.ts); without it stomp-h3 runs in
- * this realm.
+ * this realm. The same script runs the transport's shards
+ * (ShardedTransport.ts): without it the transport runs alone.
  */
 export async function constructTransport(
-	{ module, options, http3, webTransport }: ConstructibleTransport,
+	{ module, options, http3, webTransport, shards }: ConstructibleTransport,
 	h3Worker?: string,
 ): Promise<ProxyTransport> {
 	const importing = (
@@ -100,20 +136,35 @@ export async function constructTransport(
 		: webTransport === true
 			? {}
 			: webTransport;
+	// its TLS on several threads, over the one wisp connection
+	const { max, start } = shardCount(shards);
+	const carriedClass = carried
+		? importing.then((Transport) =>
+				h3Worker && max > 1 && shardable(Transport, args)
+					? shardedTransport(Transport, {
+							module,
+							count: max,
+							start,
+							script: h3Worker,
+						})
+					: Transport,
+			)
+		: importing;
 	// with `webTransport`, the first transport's carrier is chosen while the
 	// module loads: the session's handshake does not wait for its fetch
 	let early =
 		carried && carrierOptions
-			? new CarrierTransport(importing, args, carrierOptions, label)
+			? new CarrierTransport(carriedClass, args, carrierOptions, label)
 			: null;
 	const Transport = await importing;
+	const Carried = await carriedClass;
 	await early?.loaded;
 	const transport = new RevivingTransport(() => {
 		const first = early;
 		early = null;
 		if (first) return first;
 		return carried
-			? new CarrierTransport(Transport, args, carrierOptions, label)
+			? new CarrierTransport(Carried, args, carrierOptions, label)
 			: new Transport(...args);
 	});
 	// stomp-h3 ships in epoxy-transport's dist/h3/ (deploy/epoxy/h3); a

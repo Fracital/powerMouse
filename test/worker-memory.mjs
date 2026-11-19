@@ -10,9 +10,13 @@ import { PROXY } from './lib.mjs';
  * Run in a worker, for `keptChunks`: the `enqueue` of a stream's controller
  * (a default stream's, as epoxy's response bodies and every stream the
  * worker passes them through are, or a transform's) notes the buffer of
- * each chunk enqueued, and holds it: what the worker did with it is still
- * there to see whenever the collector ran. Installed once; run again, it
- * notes afresh.
+ * each body chunk enqueued, and holds it: what the worker did with it is
+ * still there to see whenever the collector ran. A body's chunks are views
+ * (Uint8Array); the bare ArrayBuffers a stream is given are a Wisp
+ * connection's packets on their way into epoxy (a transport shard's lane,
+ * src/transport/wispSplit.ts, or a carrier's pipe), which epoxy reads into
+ * its own memory as it does the WebSocket's messages, and are not noted.
+ * Installed once; run again, it notes afresh.
  */
 const WATCH_CHUNKS = `(() => {
 	const key = Symbol.for('stomp.test.chunks');
@@ -26,7 +30,7 @@ const WATCH_CHUNKS = `(() => {
 		const enqueue = prototype?.enqueue;
 		if (!enqueue) continue;
 		prototype.enqueue = function (chunk) {
-			const buffer = ArrayBuffer.isView(chunk) ? chunk.buffer : chunk;
+			const buffer = ArrayBuffer.isView(chunk) ? chunk.buffer : null;
 			if (watch.noted && buffer instanceof ArrayBuffer && !watch.noted.has(buffer))
 				watch.noted.set(buffer, buffer.byteLength);
 			return Reflect.apply(enqueue, this, arguments);

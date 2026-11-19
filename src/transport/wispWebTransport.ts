@@ -140,6 +140,8 @@ export const CARRIER_LOST = 'WebTransportCarrierLost';
  * start up to about 300 ms away.
  */
 const DEFAULT_TIMEOUT_MS = 2000;
+/** how long a wisp WebSocket may take to open and hear the relay (ms) */
+const DEFAULT_SOCKET_MS = 10000;
 const FIRST_START_PART = 1.5;
 /** how long a start that knows nothing of the relay waits for the session */
 export const firstStartMs = (timeoutMs: number) =>
@@ -1010,6 +1012,17 @@ function socketCarrier(
 	});
 }
 
+/**
+ * The packets of a wisp WebSocket to `url`, open once the relay spoke, as
+ * epoxy would open its own (ShardedTransport, given a wisp URL)
+ */
+export async function wispSocketPipe(
+	url: string,
+	protocols: string[],
+): Promise<WispPipe> {
+	return (await socketCarrier(url, protocols, DEFAULT_SOCKET_MS)).pipe;
+}
+
 type TransportClass = new (...args: unknown[]) => ProxyTransport;
 
 /** a carrier chosen for a relay: null when neither could be opened */
@@ -1073,7 +1086,7 @@ export class Chooser {
 		return socketCarrier(
 			this.#wisp,
 			protocols,
-			Math.max(10000, this.#timeoutMs),
+			Math.max(DEFAULT_SOCKET_MS, this.#timeoutMs),
 		);
 	}
 
