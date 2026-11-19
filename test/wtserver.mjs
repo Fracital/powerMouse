@@ -23,7 +23,9 @@
 //             to its end and answered with the byte count
 //   /refuse   403; any other path 404
 //   /bridge   the session's bidi streams and datagrams are the host's
-//             (`bridge()` below; test/wisp-wt.mjs relays Wisp on them)
+//             (`bridge()` below; test/wisp-wt.mjs relays Wisp on them),
+//             which may open bidi streams of the server's on it and names
+//             the wt-protocol among those offered (the first by default)
 //
 // On any session route, ?wtp= answers with that wt-protocol value as it is
 // (empty for none) and each ?resp=name:value adds a field to the 200;
@@ -289,10 +291,12 @@ export async function startWebTransportServer({
 		bridge(handler) {
 			server.set_bridge((kind, id, value) => {
 				try {
-					handler(
+					return handler(
 						kind,
 						id,
-						kind === 'session' || kind === 'closed' ? JSON.parse(value) : value,
+						kind === 'session' || kind === 'closed' || kind === 'protocol'
+							? JSON.parse(value)
+							: value,
 					);
 				} catch (error) {
 					console.error('wtserver bridge handler:', error);
@@ -304,6 +308,8 @@ export async function startWebTransportServer({
 				reset: (stream, code = 0) => server.bridge_reset(stream, code),
 				datagram: (session, bytes) => server.bridge_datagram(session, bytes),
 				maxDatagram: (session) => server.bridge_max_datagram(session),
+				/** a server bidirectional stream on the session: its handle (-1: gone) */
+				openBidi: (session) => server.bridge_open_bidi(session),
 				close: (session, code = 0, reason = '') =>
 					server.bridge_close(session, code, reason),
 			};

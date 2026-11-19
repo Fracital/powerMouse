@@ -2,12 +2,13 @@
 // connection to the relay lives in a SharedWorker that outlives the page,
 // and every transport of the origin rides it, its own stream ids mapped
 // onto the relay connection's. Through test/wisp-wt.mjs (holyWisp's
-// design: one Wisp stream per session) in front of the demo's holyWisp,
-// with the transport in its worker and in the page:
+// design, its lanes and the Wisp stream it opens on) in front of the demo's
+// holyWisp, with the transport in its worker and in the page:
 //  - a reload and a second tab ride the session the first start opened:
 //    no session, no WebSocket and no document of their own, the
 //    controller's `carrier` saying how long it had been up; a navigation,
-//    a page's fetch and the host's own request answer in both tabs at once;
+//    a page's fetch and the host's own request answer in both tabs at once,
+//    the tabs' streams spread over the session's lanes;
 //  - with Wisp v2, the second tab is played the relay's INFO and its
 //    CONTINUE as the first heard them, and answers over the same session;
 //  - the tab that closes is let go (its streams closed on the relay) and
@@ -205,6 +206,7 @@ for (const host of ['worker', 'page']) {
 	// a reload and a second tab
 	{
 		const context = await browser.newContext();
+		const from = relay.stats.connects.length;
 		let before = snapshot();
 		const first = await open(context, host);
 		const one = await load(first, 1);
@@ -254,6 +256,19 @@ for (const host of ['worker', 'page']) {
 			`${host}: both tabs answer at once over the one session`,
 			allOk(a, b) && delta(before).sessions === 0,
 			JSON.stringify({ a, b }),
+		);
+		// the host's streams take lanes as a transport's own would: each
+		// CONNECT the quietest, so the second tab's go beside the first's
+		const lanes = new Set(
+			relay.stats.connects.slice(from).map(({ lane }) => lane),
+		);
+		ok(
+			`${host}: the tabs' streams ride the session's lanes, the relay having opened its Wisp stream`,
+			lanes.size >= 2 &&
+				[info, tabInfo].every(
+					(i) => i?.lanes === relay.lanes && i.serverStream === true,
+				),
+			JSON.stringify({ lanes: [...lanes], info, tabInfo }),
 		);
 
 		await second.close();
@@ -312,7 +327,7 @@ for (const host of ['worker', 'page']) {
 			allOk(one, a, b) &&
 				rode(info, 'webtransport') &&
 				delta(before).sessions === 0 &&
-				relay.stats.protocols.includes('wisp-v2'),
+				relay.stats.protocols.some((p) => p?.startsWith('wisp-v2')),
 			JSON.stringify({ one, a, b, info, protocols: relay.stats.protocols }),
 		);
 		await context.close();

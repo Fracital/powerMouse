@@ -49,6 +49,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createSocket } from 'node:dgram';
 import { existsSync, readFileSync } from 'node:fs';
+import { createServer as createHttp } from 'node:http';
 import { createServer as createHttps } from 'node:https';
 import { createServer } from 'node:net';
 import { homedir } from 'node:os';
@@ -346,6 +347,8 @@ const udpRoundTrip = (page, port, sizes) =>
 const snapshot = () => ({
 	...relay.stats,
 	protocols: [...relay.stats.protocols],
+	offered: [...relay.stats.offered],
+	connects: [...relay.stats.connects],
 });
 const delta = (before) => {
 	const now = relay.stats;
@@ -406,7 +409,7 @@ for (const host of ['worker', 'page']) {
 		ok(
 			`${host} first start: the console says it at a glance`,
 			fresh.page.logs.includes(
-				`[wisp] WebTransport session established in ${info?.ms} ms: wisp transport WebTransport (UDP/QUIC) to ${relay.url} (epoxy, HTTP/3 off)`,
+				`[wisp] WebTransport session established in ${info?.ms} ms: wisp transport WebTransport (UDP/QUIC) to ${relay.url} (epoxy, HTTP/3 off; 8 lanes, the relay opened the Wisp stream)`,
 			),
 			JSON.stringify(fresh.page.logs.filter((l) => l.startsWith('[wisp]'))),
 		);
@@ -721,10 +724,13 @@ for (const host of ['worker', 'page']) {
 		);
 		ok(`${host} v2: everything answers`, allOk(result), JSON.stringify(result));
 		const protocols = relay.stats.protocols.slice(before.protocols.length);
+		const offered = relay.stats.offered.slice(before.offered.length);
 		ok(
-			`${host} v2: the session offered wisp-v2`,
-			protocols.length >= 1 && protocols.every((p) => p === 'wisp-v2'),
-			JSON.stringify(protocols),
+			`${host} v2: the session offered wisp-v2 first, and was answered with the server-opened stream`,
+			protocols.length >= 1 &&
+				protocols.every((p) => p === 'wisp-v2-server-stream') &&
+				offered.every((o) => o[0] === 'wisp-v2'),
+			JSON.stringify({ protocols, offered }),
 		);
 		await context.close();
 	}
@@ -991,6 +997,255 @@ for (const host of ['worker', 'page']) {
 		);
 		await context.close();
 	}
+}
+
+// Lanes and the server-opened Wisp stream (~/.claude/stomp-work/wisp-lanes/
+// SPEC.md), against the relay with each switched on and off:
+// - with both (the relay's default): lane 0 is the relay's, the session has
+//   the lanes its INFO offers, and everything answers;
+// - two downloads on lanes of their own: while the relay holds back one's
+//   lane, the other is read to its end, and the held one then is too, byte
+//   for byte; on a session of one lane the same hold stops both;
+// - against a relay with neither, for epoxy in v1 and in v2: the client
+//   opens lane 0 and nothing else, both protocols offered and Wisp v2
+//   answered, and everything answers.
+{
+	// bodies of `n` bytes, `chunk` at a time every `every` ms (0: at once)
+	const pattern = (at) => (at * 7 + (at >> 8)) & 0xff;
+	const bodies = (req, res) => {
+		const url = new URL(req.url, 'http://x');
+		const n = Number(url.searchParams.get('n'));
+		const chunk = Number(url.searchParams.get('chunk') || 65536);
+		const every = Number(url.searchParams.get('every') || 0);
+		res.writeHead(200, {
+			'content-type': 'application/octet-stream',
+			'content-length': n,
+		});
+		let sent = 0;
+		const next = () => {
+			while (sent < n) {
+				const size = Math.min(chunk, n - sent);
+				const out = Buffer.alloc(size);
+				for (let i = 0; i < size; i++) out[i] = pattern(sent + i);
+				sent += size;
+				const more = res.write(out);
+				if (every) return setTimeout(next, every);
+				if (!more) return res.once('drain', next);
+			}
+			res.end();
+		};
+		next();
+	};
+	const listen = () =>
+		new Promise((resolve) => {
+			const server = createHttp(bodies);
+			server.listen(0, '127.0.0.1', () => resolve(server));
+		});
+	const slowServer = await listen();
+	const fastServer = await listen();
+	const slowPort = slowServer.address().port;
+	const fastPort = fastServer.address().port;
+
+	/** starts a raw download in the page: `window.__dl[name]` counts and checks it */
+	const download = (page, name, url) =>
+		page.evaluate(
+			({ name, url }) => {
+				window.__dl ??= {};
+				const state = { bytes: 0, bad: 0, done: false, error: null };
+				window.__dl[name] = state;
+				const pattern = (at) => (at * 7 + (at >> 8)) & 0xff;
+				window.controller.transport
+					.request(new URL(url), 'GET', null, [], undefined)
+					.then(async (response) => {
+						const reader = response.body.getReader();
+						for (;;) {
+							const { value, done } = await reader.read();
+							if (done) break;
+							for (let i = 0; i < value.length; i++)
+								if (value[i] !== pattern(state.bytes + i)) state.bad++;
+							state.bytes += value.length;
+						}
+						state.done = true;
+					})
+					.catch((error) => {
+						state.error = String(error).slice(0, 200);
+					});
+			},
+			{ name, url },
+		);
+	const progress = (page, name) =>
+		page.evaluate((name) => window.__dl[name], name);
+	const until = async (page, name, test, ms) => {
+		const end = Date.now() + ms;
+		let state = await progress(page, name);
+		while (!test(state) && Date.now() < end) {
+			await sleep(50);
+			state = await progress(page, name);
+		}
+		return state;
+	};
+	const laneOf = (port, from) =>
+		relay.stats.connects.slice(from).find((c) => c.port === port)?.lane;
+
+	// both on: lane 0 the relay's, the lanes its INFO offers
+	{
+		reset();
+		relay.serverStream = true;
+		relay.lanes = 8;
+		const before = snapshot();
+		const { context, page } = await controllerPage('worker', relay.wisp);
+		const result = await load(page, `${FIXTURE}pages/walk-1.html`, 'WALK 1');
+		const info = await carrierInfo(page);
+		const d = delta(before);
+		ok('lanes: everything answers', allOk(result), JSON.stringify(result));
+		ok(
+			'lanes: the relay opened the Wisp stream, and the session has the 8 lanes its INFO offers',
+			info?.carrier === 'webtransport' &&
+				info.serverStream === true &&
+				info.lanes === 8 &&
+				d.serverStreams === 1 &&
+				d.lanes === 7 &&
+				d.laneRefused === 0 &&
+				d.unwanted === 0 &&
+				d.incompatible === 0,
+			JSON.stringify({ info, d }),
+		);
+		ok(
+			'lanes: the console says so',
+			page.logs.includes(
+				`[wisp] WebTransport session established in ${info?.ms} ms: wisp transport WebTransport (UDP/QUIC) to ${relay.url} (epoxy, HTTP/3 off; 8 lanes, the relay opened the Wisp stream)`,
+			),
+			JSON.stringify(page.logs.filter((l) => l.startsWith('[wisp]'))),
+		);
+		await context.close();
+	}
+
+	// a held lane holds up only its own streams; on one lane, everything
+	for (const lanes of [8, 0]) {
+		reset();
+		relay.lanes = lanes;
+		const label = lanes ? 'lanes' : 'one lane';
+		const { context, page } = await controllerPage('worker', relay.wisp);
+		const from = relay.stats.connects.length;
+		// 4 MiB, 64 KiB each 10 ms: about 640 ms when nothing holds it
+		const slowBytes = 4 * 1024 * 1024;
+		await download(
+			page,
+			'slow',
+			`http://127.0.0.1:${slowPort}/?n=${slowBytes}&every=10`,
+		);
+		const started = await until(page, 'slow', (s) => s.bytes > 0, TIMEOUT_MS);
+		const slowLane = laneOf(slowPort, from);
+		relay.stall(slowLane);
+		const fastBytes = 2 * 1024 * 1024;
+		await download(
+			page,
+			'fast',
+			`http://127.0.0.1:${fastPort}/?n=${fastBytes}`,
+		);
+		const fast = await until(page, 'fast', (s) => s.done || s.error, 3000);
+		const heldAt = (await progress(page, 'slow')).bytes;
+		const fastLane = laneOf(fastPort, from);
+		relay.unstall();
+		const slow = await until(
+			page,
+			'slow',
+			(s) => s.done || s.error,
+			TIMEOUT_MS,
+		);
+		const fastAfter = await until(
+			page,
+			'fast',
+			(s) => s.done || s.error,
+			TIMEOUT_MS,
+		);
+		if (lanes) {
+			ok(
+				`${label}: the two downloads went on lanes of their own`,
+				started.bytes > 0 &&
+					Number.isInteger(slowLane) &&
+					Number.isInteger(fastLane) &&
+					slowLane !== fastLane,
+				JSON.stringify({ slowLane, fastLane, started }),
+			);
+			ok(
+				`${label}: while one's lane is held, the other is read to its end`,
+				fast.done &&
+					fast.bytes === fastBytes &&
+					fast.bad === 0 &&
+					heldAt < slowBytes,
+				JSON.stringify({ fast, heldAt }),
+			);
+		} else {
+			ok(
+				`${label}: both on lane 0, and holding it stops the other download too`,
+				slowLane === 0 && fastLane === 0 && !fast.done,
+				JSON.stringify({ slowLane, fastLane, fast }),
+			);
+		}
+		ok(
+			`${label}: once the lane goes again, both are read to their ends byte for byte`,
+			slow.done &&
+				slow.bytes === slowBytes &&
+				slow.bad === 0 &&
+				fastAfter.done &&
+				fastAfter.bytes === fastBytes &&
+				fastAfter.bad === 0,
+			JSON.stringify({ slow, fastAfter }),
+		);
+		await context.close();
+	}
+
+	// a relay with neither: the client's own lane 0 and nothing else, in v1
+	// (the carrier says the INFO) and in v2 (epoxy does)
+	for (const v2 of [false, true]) {
+		reset();
+		relay.serverStream = false;
+		relay.lanes = 0;
+		const label = `neither, epoxy ${v2 ? 'v2' : 'v1'}`;
+		const before = snapshot();
+		const { context, page } = await controllerPage(
+			'page',
+			relay.wisp,
+			v2 ? { options: { wisp_v2: true } } : {},
+		);
+		const result = await load(page, `${FIXTURE}pages/walk-2.html`, 'WALK 2');
+		const echoed = await udpRoundTrip(page, udpPort, [20, 400]).catch((error) =>
+			String(error),
+		);
+		const info = await carrierInfo(page);
+		const d = delta(before);
+		const offered = relay.stats.offered.slice(before.offered.length);
+		const chosen = relay.stats.protocols.slice(before.protocols.length);
+		ok(`${label}: everything answers`, allOk(result), JSON.stringify(result));
+		ok(
+			`${label}: the client opened lane 0 and no lane, the relay opened nothing`,
+			info?.carrier === 'webtransport' &&
+				info.serverStream === false &&
+				info.lanes === 1 &&
+				d.sessions === 1 &&
+				d.serverStreams === 0 &&
+				d.lanes === 0 &&
+				d.unwanted === 0 &&
+				relay.stats.connects
+					.slice(before.connects.length)
+					.every((c) => c.lane === 0),
+			JSON.stringify({ info, d }),
+		);
+		ok(
+			`${label}: both protocols offered, Wisp v2 answered`,
+			offered.length === 1 &&
+				JSON.stringify(offered[0]) === '["wisp-v2","wisp-v2-server-stream"]' &&
+				chosen[0] === 'wisp-v2',
+			JSON.stringify({ offered, chosen }),
+		);
+		ok(`${label}: a UDP stream still echoes`, echoed === '20,400', echoed);
+		await context.close();
+	}
+	relay.serverStream = true;
+	relay.lanes = 8;
+	slowServer.close();
+	fastServer.close();
 }
 
 // HTTP/3 through the session: QUIC inside the relay's QUIC. An h3 origin

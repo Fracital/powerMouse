@@ -178,13 +178,6 @@ function passStringToWasm0(arg, malloc, realloc) {
 	return ptr;
 }
 
-function passArray8ToWasm0(arg, malloc) {
-	const ptr = malloc(arg.length * 1, 1) >>> 0;
-	getUint8ArrayMemory0().set(arg, ptr / 1);
-	WASM_VECTOR_LEN = arg.length;
-	return ptr;
-}
-
 let cachedDataViewMemory0 = null;
 
 function getDataViewMemory0() {
@@ -198,11 +191,18 @@ function getDataViewMemory0() {
 	}
 	return cachedDataViewMemory0;
 }
-function __wbg_adapter_26(arg0, arg1) {
+
+function passArray8ToWasm0(arg, malloc) {
+	const ptr = malloc(arg.length * 1, 1) >>> 0;
+	getUint8ArrayMemory0().set(arg, ptr / 1);
+	WASM_VECTOR_LEN = arg.length;
+	return ptr;
+}
+function __wbg_adapter_28(arg0, arg1) {
 	wasm.__wbindgen_export_4(arg0, arg1);
 }
 
-function __wbg_adapter_29(arg0, arg1, arg2) {
+function __wbg_adapter_31(arg0, arg1, arg2) {
 	wasm.__wbindgen_export_5(arg0, arg1, addHeapObject(arg2));
 }
 
@@ -287,6 +287,16 @@ export class Server {
 			len0,
 		);
 		return ret !== 0;
+	}
+	/**
+	 * opens a server bidirectional stream on a /bridge session: its
+	 * handle, -1 when the session is gone
+	 * @param {number} session
+	 * @returns {number}
+	 */
+	bridge_open_bidi(session) {
+		const ret = wasm.server_bridge_open_bidi(this.__wbg_ptr, session);
+		return ret;
 	}
 	/**
 	 * what a datagram of a /bridge session can carry, -1 for none
@@ -557,12 +567,12 @@ function __wbg_get_imports() {
 		const ret = false;
 		return ret;
 	};
-	imports.wbg.__wbindgen_closure_wrapper270 = function (arg0, arg1, arg2) {
-		const ret = makeMutClosure(arg0, arg1, 9, __wbg_adapter_26);
+	imports.wbg.__wbindgen_closure_wrapper274 = function (arg0, arg1, arg2) {
+		const ret = makeMutClosure(arg0, arg1, 9, __wbg_adapter_28);
 		return addHeapObject(ret);
 	};
-	imports.wbg.__wbindgen_closure_wrapper3098 = function (arg0, arg1, arg2) {
-		const ret = makeMutClosure(arg0, arg1, 132, __wbg_adapter_29);
+	imports.wbg.__wbindgen_closure_wrapper3114 = function (arg0, arg1, arg2) {
+		const ret = makeMutClosure(arg0, arg1, 132, __wbg_adapter_31);
 		return addHeapObject(ret);
 	};
 	imports.wbg.__wbindgen_error_new = function (arg0, arg1) {
@@ -600,6 +610,20 @@ function __wbg_get_imports() {
 	};
 	imports.wbg.__wbindgen_object_drop_ref = function (arg0) {
 		takeObject(arg0);
+	};
+	imports.wbg.__wbindgen_string_get = function (arg0, arg1) {
+		const obj = getObject(arg1);
+		const ret = typeof obj === 'string' ? obj : undefined;
+		var ptr1 = isLikeNone(ret)
+			? 0
+			: passStringToWasm0(
+					ret,
+					wasm.__wbindgen_export_2,
+					wasm.__wbindgen_export_3,
+				);
+		var len1 = WASM_VECTOR_LEN;
+		getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
+		getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
 	};
 	imports.wbg.__wbindgen_string_new = function (arg0, arg1) {
 		const ret = getStringFromWasm0(arg0, arg1);

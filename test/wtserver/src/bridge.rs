@@ -3,10 +3,14 @@
 //! JavaScript (test/wisp-wt.mjs speaks Wisp on it as holyWisp's WebTransport
 //! listener does). The host's function `bridge(kind, id, value)` hears:
 //!
+//!   protocol  id: 0; value: JSON (the protocols offered, in order), asked
+//!             before the 200: the host answers the one to choose (a
+//!             string among them), or anything else for the first
 //!   session   id: the session's handle; value: JSON (path, fields,
 //!             offered protocols, the protocol chosen, maxDatagram)
 //!   bidi      id: the stream's handle; value: its session's handle
 //!   data      id: a stream; value: the bytes (Uint8Array)
+//!   written   id: a stream; value: the bytes of one write QUIC took
 //!   fin       id: a stream, its peer finished it
 //!   reset     id: a stream; value: why it failed (text)
 //!   datagram  id: a session; value: the bytes after the quarter stream id
@@ -41,6 +45,8 @@ pub struct BridgeSession {
 	/// the session's quarter stream id, every datagram's prefix
 	pub prefix: Vec<u8>,
 	pub close: Box<dyn Fn(u32, String)>,
+	/// opens a server bidirectional stream on the session: its handle
+	pub open: Box<dyn Fn() -> u32>,
 }
 
 thread_local! {
@@ -71,16 +77,41 @@ pub fn tell(kind: &str, id: u32, value: JsValue) {
 	}
 }
 
+/// asks the host, which answers from inside the call
+pub fn ask(kind: &str, id: u32, value: JsValue) -> JsValue {
+	let f = BRIDGE.with(|b| b.borrow().clone());
+	match f {
+		Some(f) => f
+			.call3(&JsValue::NULL, &JsValue::from_str(kind), &JsValue::from(id), &value)
+			.unwrap_or(JsValue::UNDEFINED),
+		None => JsValue::UNDEFINED,
+	}
+}
+
 pub fn bytes(b: &[u8]) -> JsValue {
 	Uint8Array::from(b).into()
 }
 
-pub fn add_session(conn: Connection, session_id: u64, close: Box<dyn Fn(u32, String)>) -> u32 {
+pub fn add_session(
+	conn: Connection,
+	session_id: u64,
+	close: Box<dyn Fn(u32, String)>,
+	open: Box<dyn Fn() -> u32>,
+) -> u32 {
 	let mut prefix = Vec::new();
 	put_varint(&mut prefix, session_id / 4);
 	let handle = next();
-	SESSIONS.with(|s| s.borrow_mut().insert(handle, Rc::new(BridgeSession { conn, prefix, close })));
+	SESSIONS.with(|s| s.borrow_mut().insert(handle, Rc::new(BridgeSession { conn, prefix, close, open })));
 	handle
+}
+
+/// a server bidirectional stream opened on the session: its handle (what
+/// is written on it waits until it is open), -1 when the session is gone
+pub fn open_bidi(handle: u32) -> i64 {
+	match session(handle) {
+		Some(s) => (s.open)() as i64,
+		None => -1,
+	}
 }
 
 pub fn remove_session(handle: u32) {

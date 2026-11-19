@@ -469,12 +469,52 @@ docs/webtransport.md, "Wisp on the session" and "Certificates"):
   again (it may have rotated between the two), and a document that changed
   gets one more handshake. A document with no hashes leaves the
   certificate to the Web PKI.
-- **The Wisp stream.** One bidirectional stream carries the Wisp packets,
-  each after its length as a u32 LE (epoxy-server's LengthDelimitedLe),
-  read as they arrive whatever QUIC cut them into. epoxy takes the session
-  as its function transport (`EpoxyClient`'s `wisp` may be a function
-  returning `{ read, write }`, one packet per chunk), so the Wisp in it is
-  epoxy's own, v1 and v2.
+- **The Wisp stream.** A bidirectional stream, lane 0, carries the Wisp
+  packets, each after its length as a u32 LE (epoxy-server's
+  LengthDelimitedLe), read as they arrive whatever QUIC cut them into.
+  epoxy takes the session as its function transport (`EpoxyClient`'s
+  `wisp` may be a function returning `{ read, write }`, one packet per
+  chunk), so the Wisp in it is epoxy's own, v1 and v2. On the wire the
+  session is always Wisp v2: with epoxy in v1 (its default) the carrier says
+  the INFO itself (Wisp 2.0 with UDP) and hands epoxy the relay's CONTINUE
+  for stream 0, the v1 opening it waits for; on a lane 0 of its own it says
+  it at once, before the relay's INFO (holyWisp sends its INFO when the
+  stream opens, before it reads the client's), so the opening takes the one
+  round trip v1's did. The wire protocol of the two extensions below is
+  ~/.claude/stomp-work/wisp-lanes/SPEC.md, holyWisp's to build.
+- **The server-opened stream.** Every session offers the protocols
+  `wisp-v2` and `wisp-v2-server-stream`, in that order (only `wisp-v2` in
+  a browser whose session has no `protocol` to read the answer from). A
+  relay that answers `wisp-v2-server-stream` opens lane 0 itself, with its
+  INFO and the CONTINUE for stream 0 in the flight of its 200, so the
+  first Wisp packet is there when the session is `ready`: the client takes
+  it from `incomingBidirectionalStreams` and never opens one of its own,
+  and its first packet on it is its INFO. A relay that echoes `wisp-v2` (as
+  holyWisp before it does, echoing the first) gets the client's stream as
+  before. Any other incoming stream is reset (code 2). Through the test
+  relay at 100 ms RTT (Chrome 157) the first answer came one round trip
+  sooner with epoxy in v1 (531 to 428 ms) and two with v2 (632 to 430).
+- **Lanes.** A relay whose INFO carries extension 0xE1 (u8: the most lanes,
+  lane 0 counted; holyWisp's `webtransport-lanes`, 8 by default) takes that
+  many bidirectional streams per session. After the CONTINUE for stream 0
+  the client opens the others (at most `webTransport.lanes`, and 16), each
+  starting with a LANE packet (type 0xE1, stream 0, the lane's index). A
+  Wisp stream rides the lane its CONNECT went out on, both ways, for its
+  whole life: each CONNECT goes on the lane with the least traffic in the
+  last second (bytes both ways, halved each second; lanes within 64 KiB
+  of the quietest count as equally quiet), then the fewest open streams, then
+  the lowest index. Chrome gives each stream of a session a 6 MiB window
+  it never grows, so one stream held the session to 6 MiB a round trip
+  (about 365 Mbit/s at 138 ms); a lane has its own, and a lost packet
+  holds up only its lane's streams. One Wisp stream (one TCP connection,
+  one h2 origin through epoxy) is still one lane. A lane that ends ends
+  the carrier, as the session's end does. The INFO epoxy reads in v2 has
+  0xE1 taken out, as a relay without lanes would send it. Through the test
+  relay four downloads at once ran 1.7x faster on lanes at 300 ms and 1 s
+  of RTT (61 to 104 and 21 to 37 Mbit/s, the relay's own QUIC binding
+  before Chrome's window there) and finished together, one download ran
+  the same, and under 0.5 % loss the total was the same while the
+  downloads no longer finished one behind another.
 - **Datagrams.** The transport watches the CONNECTs and CLOSEs it sends and
   hears: a DATA packet of a UDP stream that fits `maxDatagramSize` goes as
   one datagram, whole, with no prefix, and one that does not on the
@@ -508,9 +548,10 @@ docs/webtransport.md, "Wisp on the session" and "Certificates"):
   delay and its broken mark now end that, and stomp-h3's keep-alive PING
   finds a request whose answer alone was lost at Chrome's 21.4 s
   (docs/http3.md, rules 3 and 6; `webtransport-wisp`, `http3-fallback`).
-- **Wisp v2** (`wisp_v2` in epoxy's options) is offered as the protocol
-  `wisp-v2`; holyWisp answers it with `wt-protocol` and opens v2 with INFO,
-  as it does for a WebSocket with a subprotocol.
+- **Wisp v2** (`wisp_v2` in epoxy's options) is epoxy's own INFO
+  exchange on lane 0, the relay's INFO passed on without 0xE1; holyWisp
+  opens v2 with INFO for any protocol offered, as it does for a WebSocket
+  with a subprotocol.
 - **Choosing: UDP first, the WebSocket the fallback.** UDP is often
   blocked, and a network that drops it looks like a handshake that never
   ends (Chrome gives up after 4 s). What each relay did is remembered by
@@ -640,8 +681,12 @@ transport WebSocket (TCP), WebTransport off; epoxy, HTTP/3 on)`, and the
   connection of its own over a MessagePort, its stream ids from 1, played
   the relay's INFO and its CONTINUE for stream 0 as the relay sent them,
   each stream given an id of the relay's connection on the way out and its
-  own back on the way in (holyWisp takes one Wisp stream per session and
-  allows 2048 streams in it). A rider whose v2 INFO differs from the first
+  own back on the way in (holyWisp allows 2048 streams in a session's one
+  wisp connection). The session's lanes are the host's: each CONNECT it
+  sends takes the quietest lane as a transport's own would, so the
+  streams of a reload and of a second tab go beside the first one's, and
+  the controller's `carrier` has the session's `lanes` and `serverStream`
+  whichever transport opened it. A rider whose v2 INFO differs from the first
   one's (the one the relay heard) is let go, and its transport opens a
   carrier of its own. A start rides the host's carrier when it would have
   ended on it anyway: a session; the WebSocket with WebTransport off; the
@@ -650,7 +695,8 @@ transport WebSocket (TCP), WebTransport off; epoxy, HTTP/3 on)`, and the
   again, and the riders on the old carrier stay until they let go. The
   controller's `carrier` then has `shared`, how long the carrier had been
   up (ms), and the console says `riding the WebTransport session to <url>
-that is up already (<n> s, <n> transports on it)`; the host's own lines
+that is up already (<n> s, <n> transports on it)` (with its lanes and
+  whether the relay opened the Wisp stream, as the established line); the host's own lines
   (`trying ...`, `WebTransport session established ...`) are printed by
   every page's controller. Each side tells the other it is alive every 2
   s (a MessagePort fires no `close` when the realm at its other end is
@@ -729,11 +775,12 @@ hung. No STomp path handed epoxy a function transport before the carrier.
   or worker's own throttle), so a client cannot probe a relay over and
   over: one try per transport start, none for 30 s after a failure.
 - A page that has never met a relay cannot know whether UDP reaches it
-  without waiting for a handshake, and a session's Wisp stream answers a
-  round trip after the session is up (Chrome opens a stream only on a
-  session that is up, and the relay speaks first on it): the first start
-  waits for the session, and a network that drops UDP waits out the
-  handshake's `timeoutMs`, once per relay.
+  without waiting for a handshake, and against a relay without the
+  server-opened stream the Wisp stream answers a round trip after the
+  session is up (Chrome opens a stream only on a session that is up, and
+  the relay speaks first on it): the first start waits for the session,
+  and a network that drops UDP waits out the handshake's `timeoutMs`, once
+  per relay.
 - `WebTransport` exists only in secure contexts: a host page on plain
   `http:` (not localhost) has none, and gets the WebSocket.
 - Chrome drops a datagram larger than the connection takes without a word,

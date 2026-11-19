@@ -10,8 +10,10 @@
 // (wispWebTransport.ts Chooser, its memory included), and a reload finds
 // it up; Chrome keeps it through the back/forward cache as well.
 //
-// holyWisp takes one Wisp stream per session, so the transports share it as
-// riders of one wisp connection: each rider is a wisp connection of its own
+// A session is one wisp connection, however many lanes it rides (each
+// CONNECT the host sends takes the quietest lane, as a transport's own
+// would: wispWebTransport.ts pipeOf), so the transports share it as
+// riders of that connection: each rider is a wisp connection of its own
 // to its epoxy (its stream ids from 1, the relay's INFO and its CONTINUE for
 // stream 0 played to it as the relay sent them), and the host gives each of
 // its streams an id of the relay's connection and puts each packet's id back
@@ -378,6 +380,10 @@ class Relay {
 			upMs: opened ? 0 : Math.round(performance.now() - this.#upAt),
 			riders: this.#riders.size,
 			credit,
+			...(open.stats && {
+				lanes: open.stats.lanes,
+				serverStream: open.stats.server,
+			}),
 		};
 	}
 
