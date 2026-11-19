@@ -92,18 +92,19 @@ export class RewriteCache {
 			return null;
 		}
 	}
-	/** keep `output` under `key`; the caller need not wait (a match does) */
-	put(key: string, output: string): Promise<void> {
+	/** keep `output` (its text, or a Blob of its bytes) under `key`; the caller need not wait (a match does) */
+	put(key: string, output: string | Blob): Promise<void> {
+		const size = typeof output === 'string' ? output.length : output.size;
 		return this.#track(key, () =>
 			this.#put(
 				this.#request(key),
 				new Response(output, {
 					headers: {
 						'content-type': 'text/plain',
-						[SIZE]: String(output.length),
+						[SIZE]: String(size),
 					},
 				}),
-				output.length,
+				size,
 			),
 		);
 	}

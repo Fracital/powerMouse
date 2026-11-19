@@ -1681,6 +1681,29 @@ Phase 1, measured (2026-11-10, Node 24, load about 20; medians of three):
 | artifact                                         |            | 469,012 bytes, 164,914 brotli (the check in the walk, patterns scanned)  |
 | `dist/injectDocument.js`, master and this branch | 814,491    | 816,570                                                                  |
 
+The path a script's rewrite takes (2026-11-19). On the site corpus
+(`test/corpus/fetch.mjs`, 4,018 scripts, 333 MB) a fresh instance ends the
+rewrite of a large script holding 16 to 24 times its length (Discord's
+12.7 MB bundle 200 MB, YouTube's 9.8 MB `kevlar_base` 178 MB), and the
+output is about twice the input (28.2 and 20.8 MB). A script that came as
+UTF-8 was decoded by the service worker, posted to a rewrite worker as a
+string, encoded for the module there, its output decoded, posted back and
+encoded again for the response: measured in Chrome 157 with a rewrite
+worker and its port as the service worker uses them, the twelve largest
+scripts (3 to 12.7 MB) took 3,248 ms end to end, 810 ms of it on the
+calling thread. Rewritten from the bytes to the bytes of the output
+(`src/wasm/rewriteBytes.ts`), the same output byte for byte, they take
+1,994 ms, 105 ms on the calling thread (Discord's 548 to 379 ms, YouTube's
+`kevlar_base` 378 to 242). In node, with the worker's code in the same
+thread (no copy between threads), the transcodes are 5 to 10% of a
+rewrite: most of the difference is the strings' copies between threads.
+
+Measured the same day and not taken: `+simd128` (no snip, both builds) is
+9.5% slower over the whole corpus; and keeping an instance that grew past
+`SERVING_MEMORY_LIMIT`, over the whole corpus in the order the sites serve
+their scripts, gains nothing measurable (section 6's table prices it at 4
+to 12% for one site's load at a time).
+
 ## 12. Risks
 
 | Risk                                                                                             | Handling                                                                                            |

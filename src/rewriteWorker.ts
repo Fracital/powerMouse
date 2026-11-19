@@ -15,12 +15,14 @@ import {
 	REWRITE_RPC,
 	RewriteAnswer,
 	RewriteBound,
+	RewriteBytesRequest,
 	RewriteRequest,
 } from './rewriteMessages';
 import { addRouteScopes } from './routeURL';
 import StompURL from './StompURL';
 import { REWRITE_MODULES, REWRITE_PORT } from './transport/messages';
 import { RpcHelper } from './transport/rpc';
+import { rewriteBytesInWasm } from './wasm/rewriteBytes';
 import {
 	adoptModules,
 	heldModules,
@@ -30,11 +32,17 @@ import {
 
 declare const self: DedicatedWorkerGlobalScope;
 
-function rewrite(request: RewriteRequest): string | RewriteAnswer {
+/** the script's URL as the service worker's rewrite would have it */
+function scriptURL(request: RewriteRequest | RewriteBytesRequest): StompURL {
 	addRouteScopes(request.scopes);
 	const { codec } = parseConfig(request.config, request.codecKey);
 	const url = new StompURL(new URL(request.url), codec, request.directory);
 	if (typeof request.mark === 'string') url.mark = request.mark;
+	return url;
+}
+
+function rewrite(request: RewriteRequest): string | RewriteAnswer {
+	const url = scriptURL(request);
 	const told: RewrittenBy = {};
 	const output = modifyJS(
 		request.script,
@@ -48,10 +56,41 @@ function rewrite(request: RewriteRequest): string | RewriteAnswer {
 	return told.by ? { output, by: told.by } : output;
 }
 
+/**
+ * A script from its UTF-8 bytes: the output's bytes, handed over (the
+ * buffer is this call's), or what modifyJS makes of the text they decode
+ * to where the module did not answer for them
+ */
+function rewriteBytes(
+	request: RewriteBytesRequest,
+): [ArrayBuffer | string, Transferable[]] {
+	const url = scriptURL(request);
+	const bytes = new Uint8Array(request.bytes);
+	const output = rewriteBytesInWasm(
+		bytes,
+		url,
+		request.config,
+		request.type,
+		request.preamble,
+	);
+	if (output) return [output.buffer, [output.buffer]];
+	return [
+		modifyJS(
+			new TextDecoder().decode(bytes),
+			url,
+			request.config,
+			request.type,
+			request.preamble ?? '',
+		),
+		[],
+	];
+}
+
 function serve(port: MessagePort) {
 	const rpc = new RpcHelper<RewriteBound, Record<string, never>>(
 		{
 			rewrite: async (request) => [rewrite(request), []],
+			rewriteBytes: async (request) => rewriteBytes(request),
 			// the blocker's engine, compiled here for the service worker
 			// (src/blocker/build.ts); the module and the build's memory go
 			// with the call
