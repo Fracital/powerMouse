@@ -39,7 +39,7 @@ env:
 jobs:
   check:
     name: lint, types, format, build
-    runs-on: ubuntu-latest
+    runs-on: [divide, ci]
     timeout-minutes: 15
     steps:
       - name: Still master's head?
@@ -111,7 +111,7 @@ jobs:
   # the browser suites.
   rust:
     name: rust tests (rtc)
-    runs-on: ubuntu-latest
+    runs-on: [divide, ci]
     timeout-minutes: 15
     steps:
       - name: Still master's head?
@@ -153,7 +153,7 @@ jobs:
   # its sha), so a new pin is a change of known.txt.
   test262:
     name: test262 differential
-    runs-on: ubuntu-latest
+    runs-on: [divide, ci]
     timeout-minutes: 15
     steps:
       - name: Still master's head?
@@ -232,7 +232,7 @@ jobs:
   # checks that read pointer timing); no secrets, read only.
   browser:
     name: browser suites (${{ matrix.group.name }})
-    runs-on: ubuntu-latest
+    runs-on: [divide, ci]
     # the adversarial corpus (about 5 minutes here) runs as a job of its own,
     # and the rest as six shards beside it (alone they took 64 to 69 of the
     # 70 minutes; four shards took about 20 each, and the web-platform-tests
@@ -330,7 +330,7 @@ jobs:
   commits:
     name: commit messages
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: [divide, ci]
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
