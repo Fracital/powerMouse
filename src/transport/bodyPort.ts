@@ -169,16 +169,21 @@ export function sendBody(
 	return { $stompBodyPort: port2 };
 }
 
-/** the receiving end: the body as a stream */
-export function receiveBody({
-	$stompBodyPort: port,
-}: PortBody): ReadableStream<Uint8Array> {
+/**
+ * the receiving end: the body as a stream. `settled` runs once, when the
+ * body ended, failed or was cancelled.
+ */
+export function receiveBody(
+	{ $stompBodyPort: port }: PortBody,
+	settled?: () => void,
+): ReadableStream<Uint8Array> {
 	let open = true;
 	let received = 0;
 	let granted = 0;
 	const close = () => {
 		open = false;
 		closePort(port);
+		settled?.();
 	};
 	return new ReadableStream<Uint8Array>(
 		{

@@ -14,6 +14,7 @@ import type {
 } from '../passkeys/types';
 import type { PortBody } from './bodyPort';
 import type { Http3DescriptorOptions } from './construct';
+import type { ShardsOption } from './ShardedTransport';
 import type { TransportNote } from './transportLog';
 import type { CarrierInfo, WispWebTransportOptions } from './wispWebTransport';
 
@@ -1671,6 +1672,8 @@ export interface TransportModule {
 	http3?: boolean | Http3DescriptorOptions;
 	/** TransportDescriptor.webTransport */
 	webTransport?: boolean | WispWebTransportOptions;
+	/** TransportDescriptor.shards */
+	shards?: ShardsOption;
 }
 
 /** implemented by the transport worker (src/transport/worker.ts), called by the controller */
