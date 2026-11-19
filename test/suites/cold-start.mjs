@@ -1,12 +1,15 @@
 // The rewriter is the wasm core module, with no JavaScript parser shipped.
-// The controller compiles the module and a page is handed it once it has, but
-// a page's first task often rewrites something (eval, new Function, a script
-// element's inline text, an inline style) before that compiled module has
-// arrived over the message round trip. This suite proves that cold-start
-// window is handled: a page whose LITERAL FIRST script does those rewrites
-// gets them rewritten, byte-for-byte as the native page sees them, because the
-// page's library compiles the module's bytes synchronously the first time a
-// rewrite needs it (src/inject/rewriter.ts provideModule, src/wasm/thread.ts).
+// The controller compiles the module, and a page's first task often
+// rewrites something (eval, new Function, a script element's inline text,
+// an inline style) before a message from it could arrive. This suite proves
+// that cold-start window is handled: a page whose LITERAL FIRST script does
+// those rewrites gets them rewritten, byte-for-byte as the native page sees
+// them. A top (and the frames under it) take the compiled module from the
+// window the controller left it on, which they reach synchronously, and
+// make no request for it (rewriteCounts coreReached, coreRequests); a
+// window opened with noopener reaches none, and its library compiles the
+// module's bytes from a synchronous request the first time a rewrite needs
+// it (src/inject/rewriter.ts provideModule, src/wasm/thread.ts).
 //
 // location.href is the tell: rewritten code reads the page's own URL, code
 // that ran raw would read the proxy's routed URL. If the cold-start rewrite
@@ -71,16 +74,70 @@ for (const [mode, base] of [
 		`${JSON.stringify(proxied.inlineStyle)}, natively ${JSON.stringify(native.inlineStyle)}`,
 	);
 
-	// the cold-start path actually fired: a rewrite was asked before this
-	// realm held the module (early), the module was then handed in (loads) and
-	// answered the rewrite (answered). The isolated mode's top is in another
-	// process, but its rewriteCounts are still this realm's to read.
+	// the module answered the first script's rewrites, and the top held it
+	// before the first of them: it came from the window the controller left
+	// it on, which the top reaches synchronously (the host's page in
+	// same-origin mode, the controller's frame beside the top in isolated
+	// mode), with no synchronous request for core.wasm and no compile on the
+	// page's main thread. The isolated mode's top is in another process, but
+	// its rewriteCounts are still this realm's to read.
 	const topCounts = await counts(top, name);
 	ok(
-		`${mode}: a rewrite was asked before the module arrived, then the module answered it`,
-		topCounts.early >= 1 && topCounts.answered >= 1 && topCounts.loads >= 1,
+		`${mode}: the module answered the first script's rewrites`,
+		topCounts.answered >= 1 && topCounts.loads >= 1,
 		JSON.stringify(topCounts),
 	);
+	ok(
+		`${mode}: the top took the controller's compiled module, with no synchronous request for core.wasm`,
+		topCounts.coreReached >= 1 &&
+			topCounts.coreRequests === 0 &&
+			topCounts.early === 0,
+		JSON.stringify(topCounts),
+	);
+	// a frame under the top rewrites in the top's library, which holds it
+	const framed = await top.evaluate(async () => {
+		const frame = document.createElement('iframe');
+		frame.src = 'cold-start.html?framed';
+		document.body.append(frame);
+		for (let i = 0; i < 200 && !frame.contentWindow?.__cold?.ready; i++)
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		return frame.contentWindow?.__cold ?? null;
+	});
+	ok(
+		`${mode}: a frame's first script is rewritten too`,
+		JS_KEYS.every((k) => framed?.[k] === `${target}?framed`),
+		JSON.stringify(framed),
+	);
+	// a window opened with noopener (here by the host, as a host without
+	// onOpen lets a proxied page's popups open) is a browsing context group
+	// of its own, which reaches no window of the controller's: its first
+	// rewrite asks for the bytes with a synchronous request and compiles
+	// them before it answers (the cold path), as correctly
+	const [bare] = await Promise.all([
+		page.context().waitForEvent('page', { timeout: 30000 }),
+		page.evaluate(
+			(url) => void window.open(url, '_blank', 'noopener'),
+			top.url(),
+		),
+	]);
+	await bare.waitForFunction(() => window.__cold?.ready === true, null, {
+		timeout: 30000,
+	});
+	const bareCold = await read(bare.mainFrame());
+	ok(
+		`${mode}: a window opened with noopener rewrites its first script`,
+		JS_KEYS.every((k) => bareCold[k] === target),
+		JSON.stringify(bareCold),
+	);
+	const bareCounts = await counts(bare.mainFrame(), name);
+	ok(
+		`${mode}: that window compiled the module from a synchronous request`,
+		bareCounts.coreReached === 0 &&
+			bareCounts.coreRequests === 1 &&
+			bareCounts.early >= 1,
+		JSON.stringify(bareCounts),
+	);
+	await bare.close();
 	ok(
 		`${mode}: nothing threw loading the page`,
 		page.errors.length === 0,

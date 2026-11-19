@@ -51,6 +51,16 @@ export const CORE: string =
 	(process.env.STOMP_CORE as string | undefined) || BUILD;
 
 /**
+ * Where the controller leaves the core module it compiled, on its own
+ * window, for the proxied documents of its agent cluster to read
+ * synchronously (src/controller/index.ts publishCore): under a name of the
+ * client's, which no page is told, and of this build's module, so a
+ * document of another build never takes it.
+ */
+export const coreModuleKey = (client: string): string =>
+	`${client}$core$${CORE}`;
+
+/**
  * What the document bundles are asked for by, after a `?`: the hash of each
  * file as built (build.js builds them first, then the bundles that name
  * them: the service worker's shells, the controller's warm fetch), so a

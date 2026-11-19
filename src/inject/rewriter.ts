@@ -72,6 +72,8 @@ const realm = {
 	ownIterable,
 };
 const nativeConsole = globalThis.console;
+/** WebAssembly.Module.exports as it was: throws for anything but a module */
+const moduleExports = globalThis.WebAssembly?.Module?.exports;
 
 // what the rewriter library is loaded with, taken when the bundle loads:
 // the inject wraps these methods later, and a page may replace them
@@ -318,6 +320,13 @@ export interface RewriterSharing {
 	 */
 	factory?: (text: string, name?: string) => Function | null;
 	/**
+	 * The core module the controller compiled, where this realm reaches the
+	 * window it left it on (StompController publishCore): taken in place of
+	 * a synchronous request for the bytes and a compile of them here
+	 * (provideModule). Anything, or nothing: the caller checks it is a module
+	 */
+	module?: () => unknown;
+	/**
 	 * Whether this realm may make code from a string: where its policy
 	 * refuses it (src/csp.ts), the factory makes the library at once, since
 	 * the browser reports every refused attempt to the page
@@ -373,26 +382,58 @@ const LOAD_ATTEMPTS = 3;
 /**
  * Give `lib` the rewriter's wasm core module, for a rewrite needed before the
  * controller's compiled module has arrived in this realm (a page's first task
- * often rewrites something: eval, new Function, an inline script or style).
- * The bytes are fetched with one synchronous request (the controller fetched
- * the same URL when it started, so the answer is in the HTTP cache) and
- * compiled here with the native WebAssembly taken before the page wrapped it;
- * `lib` reads no property of the module and only instantiates it. The
- * controller's module, posted compiled, replaces this one when it arrives.
- * Throws when the module cannot be had or compiled (a page whose policy
- * refuses WebAssembly, where the codec module could not compile either).
+ * often rewrites something: eval, new Function, an inline script or style, a
+ * `javascript:` URL in its markup). The controller left the module on its
+ * window, which a document of its agent cluster reaches (a top in its frame,
+ * a frame under one, a window one opened): it is taken from there. Anywhere
+ * else (a tab opened with noopener) the bytes are fetched with one
+ * synchronous request (the controller fetched the same URL when it started,
+ * so the answer is in the HTTP cache) and compiled here with the native
+ * WebAssembly taken before the page wrapped it. `lib` reads no property of
+ * the module and only instantiates it. The controller's module, posted
+ * compiled, replaces this one when it arrives. Throws when the module cannot
+ * be had or compiled (a page whose policy refuses WebAssembly, where the
+ * codec module could not compile either).
  */
 export function provideModule(lib: RewriterLib): void {
 	if (lib.holds('core')) return;
+	const reached = controllerModule();
+	if (reached && lib.adopt('core', reached)) return;
 	if (failedLoads >= LOAD_ATTEMPTS)
 		throw new Error('Stomp: the rewriter module did not load');
 	failedLoads++;
+	const started = now();
 	const bytes = fetchCoreBytes();
 	const Module = realm.WebAssembly.Module;
 	if (!Module) throw new Error('Stomp: no WebAssembly to compile the module');
 	const module = Reflect.construct(Module, [bytes]) as WebAssembly.Module;
 	lib.adopt('core', module);
+	coreLoads.requests++;
+	coreLoads.ms += now() - started;
 	failedLoads = 0;
+}
+
+/** how this realm had the core module: taken from the controller's window (controllerModule), or asked for with a request and compiled (provideModule) */
+const coreLoads = { reached: 0, requests: 0, ms: 0 };
+
+/**
+ * The module the controller left on its window, when this realm reaches it
+ * and it is one: a value that is no WebAssembly.Module (the check reads its
+ * internal slot, whatever realm made it) is not taken. A top takes it when
+ * its client is made (DocumentClient), and a rewrite that finds its library
+ * without one when it needs it (provideModule).
+ */
+export function controllerModule(): WebAssembly.Module | null {
+	let found: unknown;
+	try {
+		found = sharing.module?.();
+		if (!found || !moduleExports) return null;
+		Reflect.apply(moduleExports, null, [found]);
+	} catch (error) {
+		return null;
+	}
+	coreLoads.reached++;
+	return found as WebAssembly.Module;
 }
 
 /**
@@ -509,7 +550,10 @@ function ask<T>(work: (lib: RewriterLib) => T): [RewriterLib, T] {
  * module, `declined` by it, `early` for it, `library` calls the rewriter
  * library answered, `loads` of that library for a call that needed it,
  * the `requests` among them (a synchronous request the call waited for)
- * and the `ms` they waited. @internal (tests, the demo)
+ * and the `ms` they waited; and of this realm's own: the core modules it
+ * took from the controller's window (`coreReached`), the ones it asked for
+ * with a synchronous request and compiled (`coreRequests`) and the `coreMs`
+ * those took (provideModule). @internal (tests, the demo)
  */
 export function rewriteCounts(): {
 	answered: number;
@@ -519,6 +563,9 @@ export function rewriteCounts(): {
 	loads: number;
 	requests: number;
 	ms: number;
+	coreReached: number;
+	coreRequests: number;
+	coreMs: number;
 } {
 	const lib = library();
 	const count = (which: number) => Number(lib.count(which)) || 0;
@@ -530,6 +577,9 @@ export function rewriteCounts(): {
 		loads: count(4),
 		requests: count(6),
 		ms: count(5),
+		coreReached: coreLoads.reached,
+		coreRequests: coreLoads.requests,
+		coreMs: coreLoads.ms,
 	};
 }
 

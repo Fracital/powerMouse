@@ -99,7 +99,7 @@ import RemoteTransport from '../transport/RemoteTransport';
 import { RpcHelper } from '../transport/rpc';
 import serveTransport from '../transport/serveTransport';
 import TransportWorker from '../transport/TransportWorker';
-import { BUILD } from '../version';
+import { BUILD, coreModuleKey } from '../version';
 import { compileModule } from '../wasm/module';
 import { ClientFrames } from './clientFrames';
 import { GeometryWatch, shareGeometry } from './geometry';
@@ -795,6 +795,34 @@ export type {
 	RequestRuleAction,
 	RequestRuleMatch,
 } from '../transport/messages';
+
+/**
+ * Leave the compiled core module on this window (coreModuleKey), where a
+ * proxied top of this agent cluster takes it synchronously when its client
+ * is made (src/inject/dom/Client.ts #controllerModule): a top's first task
+ * often rewrites (an inline script's eval, a `javascript:` link its markup
+ * has) before the module it asked for (PAGE_MODULES) can arrive, and such
+ * a top fetched the bytes with a synchronous request and compiled them on
+ * its main thread, 10 to 12 ms on real sites. Left once, before the first
+ * handshake, so no proxied page exists yet that could have put another
+ * there, and for good: nothing replaces it.
+ */
+function publishCore(
+	client: string | undefined,
+	module: WebAssembly.Module,
+): void {
+	if (!client) return;
+	try {
+		Reflect.defineProperty(globalThis, coreModuleKey(client), {
+			value: module,
+			enumerable: false,
+			configurable: false,
+			writable: false,
+		});
+	} catch (error) {
+		// a window that keeps nothing: its documents compile their own
+	}
+}
 
 function defaultDirectory(): URL {
 	const script =
@@ -1891,8 +1919,11 @@ export class StompController extends EventTarget {
 					);
 					if (!response.ok) throw new Error(`HTTP ${response.status}`);
 					const bytes = await response.arrayBuffer();
-					if (compile && name !== 'blocker')
+					if (compile && name !== 'blocker') {
 						compiled[name] = await compileModule(bytes);
+						if (name === 'core')
+							publishCore(this.config.names?.client, compiled[name]);
+					}
 					loaded[name] = bytes;
 				} catch (error) {
 					// a blocker nobody asked for (it is on by default) is not a
@@ -1928,6 +1959,8 @@ export class StompController extends EventTarget {
 				if (!bytes) continue;
 				try {
 					compiled[name] = await compileModule(bytes);
+					if (name === 'core')
+						publishCore(this.config.names?.client, compiled[name]);
 				} catch (error) {
 					console.warn(`Stomp: the ${name} module did not compile`, error);
 				}

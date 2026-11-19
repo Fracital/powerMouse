@@ -462,11 +462,12 @@ bundle and its DOM globals are captured while it is still attached
   instantiation is synchronous and cheap (`new WebAssembly.Instance`), while
   a synchronous compile of a 600 KB module on the main thread is what Chrome
   limits, and a compile in the page's realm would also answer to the page's
-  own Content-Security-Policy. The top asks for it: when it has made its
-  library realm it posts a port to the service worker (`INIT_PAGE_MODULES`),
-  the worker passes the port to the document's controller (`pageModules`),
-  and the controller answers on it with the modules it compiled
-  (`PAGE_MODULES`). The worker only forwards the port: the module travels
+  own Content-Security-Policy. The top reads it from the controller's
+  window when it can ("A page's workers", below); otherwise it asks for it:
+  when its client is made it posts a port to the service worker
+  (`INIT_PAGE_MODULES`), the worker passes the port to the document's
+  controller (`pageModules`), and the controller answers on it with the
+  modules it compiled (`PAGE_MODULES`). The worker only forwards the port: the module travels
   between the controller and the page, which are one agent cluster (a
   `WebAssembly.Module` clones within it, and the controller and the proxied
   frames share the proxy origin in both modes). The library takes it through
@@ -568,7 +569,20 @@ Both windows close only with the module held synchronously: by the page
 when its client is made (read from the controller's window, which is of its
 origin, in place of the message), and for a classic worker's top level by
 fetching and compiling the bytes in the worker (0.5 ms and 1.2 MB a
-worker, above). Neither is built.
+worker, above). The first is built (2026-11-18): the controller leaves the
+compiled core on its window (`publishCore`, under `coreModuleKey`), and a
+top that reaches it (up its parents and opener, or among the host's frames
+in isolated mode, where the controller's frame is the top's sibling) holds
+it from its first task and hands it to every worker it starts at once. The
+message stays for a document that reaches no such window (a window opened
+with `noopener`), which compiles the bytes from a synchronous request when
+a rewrite comes before it. Measured on twelve real sites in two runs
+(Chrome 157, two loads each): 11 to 12 of 24 top loads in same-origin mode
+and 10 to 11 of 24 in isolated mode rewrote before the message arrived (a
+median 280 to 440 ms after the navigation started), and their first
+rewrite took a median 10 to 12 ms (the request 6 to 8, the unpacking 4 to
+5, the compile 1 to 2); with the module read from the controller's window
+none asks, and a first rewrite takes 0.5 to 0.7 ms.
 
 ### Config and cache
 

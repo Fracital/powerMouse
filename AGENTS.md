@@ -113,10 +113,19 @@ on every save (use a `git worktree`).
   a proxied top (`rewriter: 'wasm'`, `adopt` in `src/rewriterLib.ts`): the
   library reads no property of it and only passes it to its own realm's
   `WebAssembly.Instance`, which answers from the module's internal slots
-  whatever realm made it. The page's side of that hand-off
-  (`requestModules` in `src/inject/Client.ts`) reads the message with
-  getters taken before any page script ran: a module the page could swap in
-  would be the rewriter of everything its top and frames evaluate.
+  whatever realm made it. The controller leaves it on its own window
+  (`publishCore` in `src/controller/index.ts`, a non-configurable property
+  under `coreModuleKey`, before the first handshake), and a top takes it
+  from there when its client is made (`#controllerModule` in
+  `src/inject/dom/Client.ts`: up its parents and opener, or among the
+  frames of the host above them), read as a data property and checked to
+  be a module with `WebAssembly.Module.exports` taken at load: a page's
+  first task rewrites before any message can arrive. Only a document that
+  reaches no such window (a window opened with noopener) asks for it with
+  `requestModules` (`src/inject/Client.ts`), which reads the message with
+  getters taken before any page script ran, and compiles the bytes from a
+  synchronous request if a rewrite comes first: a module the page could
+  swap in would be the rewriter of everything its top and frames evaluate.
 - **The document bundle's deferred parts are in no bundle.** The files
   build.js lists in `DEFERRED_FILES` (the service worker container's objects,
   the Cookie Store methods, the Fingerprint module, the WebTransport stand-in

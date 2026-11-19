@@ -58,12 +58,13 @@ import { IMPORT_MAP_ROUTE } from '../../sri';
 import StompURL from '../../StompURL';
 import { HOOK_ERROR, OPEN_TAB, SHELL_END } from '../../transport/messages';
 import { queryOf } from '../../urlShape';
-import { BUILD } from '../../version';
+import { BUILD, coreModuleKey } from '../../version';
 import { contextText, linkRoute, opaqueContext } from '../../visited';
 import { ownCodec, shareCodec, type CodecBackend } from '../../wasm/codec';
 import Client from '../Client';
 import { LazyMap, LazySet, LazyWeakMap, LazyWeakSet } from '../ownCollections';
 import {
+	controllerModule,
 	deferredText,
 	getPublicSuffix,
 	lightFactory,
@@ -593,27 +594,39 @@ export default class DocumentClient extends Client {
 						: libraryFactoryFromScript(this.global.document, text, nonce, name);
 				},
 				evaluates: () => this.scriptFacts.evaluates,
+				module: () => this.#controllerModule(),
 			}) &&
 			!this.sandboxedOpaque &&
 			this.#topClient() === this
 		) {
 			// the library a top shares rewrites in the wasm module the
-			// controller compiled, once it has arrived: the realm only
-			// instantiates it, and until then a rewrite compiles the bytes
-			// synchronously (rewriter.ts provideModule). One instance per top;
-			// a frame under it holds none, and the agent's library is given the
-			// module once, by the first frame that has it. A module that
-			// arrives before the top made its library waits for it
+			// controller compiled: the realm only instantiates it. One
+			// instance per top; a frame under it holds none, and the agent's
+			// library is given the module once, by the first frame that has
+			// it. A module that arrives before the top made its library waits
+			// for it
 			this.#rewriter = null;
 			this.#rewriterModules = [];
-			this.requestModules((name, module) => {
-				const library = this.#rewriter;
-				if (!library) {
-					this.#rewriterModules?.push([name, module]);
-					return;
-				}
-				this.#adoptModule(library, name, module);
-			});
+			// the controller left it on its window, which this top reaches
+			// now (rewriter.ts controllerModule): its library and the workers
+			// it starts have it from the first task on. The message's round
+			// trip through the service worker took a median 280 to 440 ms
+			// from the navigation's start on real sites, and about half the
+			// tops rewrote before it came, compiling the bytes from a
+			// synchronous request (10 to 12 ms)
+			const reached = controllerModule();
+			if (reached) {
+				this.#rewriterModules.push(['core', reached]);
+				this.holdModules({ core: reached });
+			} else
+				this.requestModules((name, module) => {
+					const library = this.#rewriter;
+					if (!library) {
+						this.#rewriterModules?.push([name, module]);
+						return;
+					}
+					this.#adoptModule(library, name, module);
+				});
 		}
 	}
 	/**
@@ -830,6 +843,58 @@ export default class DocumentClient extends Client {
 			// a window that keeps nothing: this document's own
 		}
 		return this.heldCanvasTaints();
+	}
+	/**
+	 * The core module the controller left on its window (StompController
+	 * publishCore), which a top takes when its client is made and a rewrite
+	 * whose library holds none takes when it needs it (rewriter.ts
+	 * controllerModule): on the window of the proxy's real origin this one
+	 * reaches up its parents and through its opener (the host in same-origin
+	 * mode), or on one of the frames of the first window above them of
+	 * another origin (the controller's frame, beside the top in the host's
+	 * page). Read as a data property, with the browser's own accessors and
+	 * no collection a page could have changed; undefined where none is
+	 * reached (a window opened with noopener).
+	 */
+	#controllerModule(): unknown {
+		const key = coreModuleKey(this.names.client);
+		const own = (window: object): unknown =>
+			Reflect.getOwnPropertyDescriptor(window, key)?.value;
+		let holder: object = this.global;
+		// a top's parent is itself, and an opener is fixed when its window
+		// is made: the walk ends, and the bound is for a chain of popups
+		for (let hops = 0; hops < 64; hops++) {
+			const found = own(holder);
+			if (found) return found;
+			const parent: unknown = Reflect.apply(nativeParentGet, holder, []);
+			const next =
+				parent && parent !== holder
+					? parent
+					: Reflect.apply(nativeOpenerGet, holder, []);
+			if (next === null || typeof next !== 'object' || next === holder)
+				return undefined;
+			try {
+				// a window of another real origin refuses the read
+				own(next);
+			} catch (error) {
+				if (next !== parent) return undefined;
+				const frames = next as Window;
+				for (let index = 0; index < 64; index++)
+					try {
+						const frame = frames[index] as object | undefined;
+						if (!frame) break;
+						if (frame !== holder) {
+							const found = own(frame);
+							if (found) return found;
+						}
+					} catch (error) {
+						// a frame of another origin
+					}
+				return undefined;
+			}
+			holder = next;
+		}
+		return undefined;
 	}
 	/**
 	 * Throws the browser's DataCloneError when a message holds or transfers
