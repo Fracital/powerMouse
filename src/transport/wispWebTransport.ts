@@ -1,9 +1,15 @@
 // Wisp over WebTransport (holyWisp's WebTransport listener, its
 // docs/webtransport.md, "Wisp on the session"): the same Wisp packets a
-// WebSocket would carry, on one bidirectional stream of a WebTransport
+// WebSocket would carry, on a bidirectional stream of a WebTransport
 // session, each after its length as a u32 LE; and a UDP stream's DATA, when
 // it fits, as one QUIC datagram (no prefix), so a lost datagram of a QUIC or
 // WebRTC flow inside is lost rather than holding up every other stream.
+// Two extensions (~/.claude/stomp-work/wisp-lanes/SPEC.md; docs/
+// webtransport.md, "Wisp over WebTransport"), each only with a relay that
+// has it: the relay opens that stream itself in the flight of its answer
+// (`wisp-v2-server-stream`), and a relay whose INFO offers lanes (0xE1)
+// takes more streams, each Wisp stream riding the lane its CONNECT went on
+// (pipeOf).
 //
 // Where the session is:
 // - `url`: dialed as it is, its certificate checked as any site's (a relay
@@ -85,6 +91,13 @@ export interface WispWebTransportOptions {
 	 * may take half as long again in all before the WebSocket is ridden
 	 */
 	timeoutMs?: number;
+	/**
+	 * the most QUIC streams ("lanes", lane 0 counted) the session's Wisp
+	 * rides when the relay offers them: each has Chrome's 6 MiB window, and
+	 * a lost packet holds up only its own. The relay's number when unset;
+	 * 1 for one stream
+	 */
+	lanes?: number;
 }
 
 export type Carrier = 'webtransport' | 'websocket';
@@ -115,6 +128,10 @@ export interface CarrierInfo {
 	 * took it, in ms (0: it was opened for this one)
 	 */
 	shared?: number;
+	/** the session's lanes, lane 0 counted (1: one stream, as a relay without them) */
+	lanes?: number;
+	/** the relay opened the session's Wisp stream (in the flight of its answer) */
+	serverStream?: boolean;
 }
 
 /** what CarrierTransport tells of the transport it carries, beside the carrier */
@@ -157,13 +174,36 @@ const FAILED_FOR_MS = 7 * 24 * 60 * 60 * 1000;
 const WORKED_FOR_MS = 7 * 24 * 60 * 60 * 1000;
 /** how long a discovery document, or a URL that has none, is kept */
 const DOCUMENT_FOR_MS = 60 * 60 * 1000;
-/** the protocol offered for Wisp v2 (holyWisp takes any; its own client offers this) */
+/**
+ * The protocols a session offers, in this order (~/.claude/stomp-work/
+ * wisp-lanes/SPEC.md, section 1): Wisp v2, which holyWisp takes with any
+ * protocol offered and echoes the first of; and the server-opened Wisp
+ * stream, which a relay that has it answers instead, opening lane 0 itself
+ * with its INFO and CONTINUE in the flight of its 200
+ */
 const V2_PROTOCOL = 'wisp-v2';
+const SERVER_STREAM_PROTOCOL = 'wisp-v2-server-stream';
 
-const DATA = 0x02;
 const CONNECT = 0x01;
+const DATA = 0x02;
+const CONTINUE = 0x03;
 const CLOSE = 0x04;
+const INFO = 0x05;
 const UDP = 0x02;
+/** the lanes extension in a relay's INFO (u8: the most lanes, lane 0 counted) and the packet that opens a lane */
+const LANES_EXTENSION = 0xe1;
+const LANE = 0xe1;
+/** the reset of a stream the client did not ask for */
+const STREAM_UNWANTED = 2;
+/**
+ * The lanes a session has at most, lane 0 counted: what the relay offers
+ * (holyWisp's webtransport-lanes, 8 by default), within the descriptor's
+ * `lanes` and this, so a relay set to 255 does not make it open 254
+ */
+const MAX_LANES = 16;
+/** a lane's recent traffic halves each second; lanes within LANE_QUIET_BYTES of the quietest are as quiet */
+const LANE_HALF_LIFE_MS = 1000;
+const LANE_QUIET_BYTES = 64 * 1024;
 
 /** where a relay's session is looked for, and what it is remembered by */
 export interface RelayPlan {
@@ -467,6 +507,19 @@ export interface OpenCarrier {
 }
 
 /**
+ * what the notes say of a session's shape: `8 lanes, the relay opened the
+ * Wisp stream` (empty for one lane the client opened)
+ */
+function shapeOf(lanes: number | undefined, server: boolean | undefined) {
+	return [
+		lanes && lanes > 1 && `${lanes} lanes`,
+		server && 'the relay opened the Wisp stream',
+	]
+		.filter(Boolean)
+		.join(', ');
+}
+
+/**
  * The notes of a carrier that ends, and a session lost without a close of
  * the relay's remembered as lost: the next start rides the WebSocket at
  * once and tries a session beside it, which tells the two apart
@@ -499,6 +552,10 @@ interface PipeStats {
 	received: number;
 	datagramsSent: number;
 	datagramsReceived: number;
+	/** the lanes, lane 0 counted */
+	lanes: number;
+	/** the relay opened lane 0 */
+	server: boolean;
 }
 
 /** the discovery document's URL for a wisp URL (relayPlan's, when it has one) */
@@ -609,14 +666,16 @@ async function discover(
 }
 
 /** one session's handshake, within `ms` */
-async function handshake(
-	found: Discovery,
-	v2: boolean,
-	ms: number,
-): Promise<WebTransport> {
+async function handshake(found: Discovery, ms: number): Promise<WebTransport> {
 	const options: WebTransportOptions & { protocols?: string[] } = {};
 	if (found.hashes.length) options.serverCertificateHashes = found.hashes;
-	if (v2) options.protocols = [V2_PROTOCOL];
+	// on the wire the session is Wisp v2 whatever epoxy runs (pipeOf); a
+	// browser that cannot say which protocol was answered is not offered the
+	// server-opened stream
+	options.protocols =
+		'protocol' in WebTransport.prototype
+			? [V2_PROTOCOL, SERVER_STREAM_PROTOCOL]
+			: [V2_PROTOCOL];
 	const session = new WebTransport(found.url, options);
 	// the rejection is the caller's (ready's), not an unhandled one
 	session.closed.catch(() => {});
@@ -648,12 +707,11 @@ interface Opened {
  */
 async function openSession(
 	plan: RelayPlan,
-	v2: boolean,
 	ms: number,
 	prefer?: Via,
 ): Promise<Opened> {
 	const direct = async (url: string): Promise<Opened> => ({
-		session: await handshake({ url, hashes: [], key: '' }, v2, ms),
+		session: await handshake({ url, hashes: [], key: '' }, ms),
 		url,
 		via: 'direct',
 	});
@@ -672,7 +730,7 @@ async function openSession(
 	// the document names the session that failed already
 	if (first && found.url === plan.direct && !found.hashes.length) throw first;
 	const by = async (found: Discovery): Promise<Opened> => ({
-		session: await handshake(found, v2, ms),
+		session: await handshake(found, ms),
 		url: found.url,
 		via: 'document',
 	});
@@ -696,6 +754,48 @@ const u32 = (bytes: Uint8Array, at: number) =>
 /** a packet's stream id (u32 LE after its type) */
 const streamOf = (packet: Uint8Array) => u32(packet, 1);
 
+/** `packet` after its u32 LE length, in a buffer of its own */
+function framed(packet: Uint8Array): Uint8Array<ArrayBuffer> {
+	const out = new Uint8Array(4 + packet.length);
+	const n = packet.length;
+	out[0] = n & 0xff;
+	out[1] = (n >>> 8) & 0xff;
+	out[2] = (n >>> 16) & 0xff;
+	out[3] = (n >>> 24) & 0xff;
+	out.set(packet, 4);
+	return out;
+}
+
+/**
+ * The lanes a server's INFO offers (extension 0xE1, lane 0 counted; 1 when
+ * it offers none), and the INFO without that extension, as a relay that
+ * knows no lanes would have sent it
+ */
+function readInfo(packet: Uint8Array<ArrayBuffer>): {
+	lanes: number;
+	info: Uint8Array<ArrayBuffer>;
+} {
+	let lanes = 1;
+	const kept: Uint8Array[] = [packet.subarray(0, 7)];
+	let at = 7;
+	while (at + 5 <= packet.length) {
+		const length = u32(packet, at + 1);
+		const end = Math.min(packet.length, at + 5 + length);
+		if (packet[at] === LANES_EXTENSION) {
+			if (length >= 1 && at + 5 < packet.length) lanes = packet[at + 5];
+		} else kept.push(packet.subarray(at, end));
+		at = end;
+	}
+	if (lanes === 1) return { lanes, info: packet };
+	const info = new Uint8Array(kept.reduce((n, part) => n + part.length, 0));
+	let to = 0;
+	for (const part of kept) {
+		info.set(part, to);
+		to += part.length;
+	}
+	return { lanes: Math.max(1, lanes), info };
+}
+
 /** a promise that settles when its `settle` is called, and when the first packet was read */
 function firstPacket() {
 	let got!: () => void;
@@ -709,16 +809,169 @@ function firstPacket() {
 }
 
 /**
+ * Each packet on `readable`, after its u32 LE length, cut wherever QUIC cut.
+ * Each byte is copied once, into its packet's own buffer, however many
+ * chunks the packet spans: a relay's DATA packet is up to 128 KiB and a
+ * reader that keeps up gets a chunk of a few QUIC packets, so gathering the
+ * chunks into one buffer that grew with each copied the packet over again
+ * for every chunk of it. Settles when the stream ends or fails.
+ */
+async function readPackets(
+	readable: ReadableStream<Uint8Array>,
+	take: (packet: Uint8Array<ArrayBuffer>) => void,
+) {
+	const reader = readable.getReader();
+	/** a prefix cut between chunks */
+	const prefix = new Uint8Array(4);
+	let prefixed = 0;
+	/** the packet being filled, when it spans chunks */
+	let packet: Uint8Array<ArrayBuffer> | null = null;
+	let filled = 0;
+	try {
+		for (;;) {
+			const { value, done } = await reader.read();
+			if (done) break;
+			let at = 0;
+			while (at < value.length) {
+				if (!packet) {
+					let length: number;
+					if (!prefixed && value.length - at >= 4) {
+						length = u32(value, at);
+						at += 4;
+					} else {
+						const n = Math.min(4 - prefixed, value.length - at);
+						prefix.set(value.subarray(at, at + n), prefixed);
+						prefixed += n;
+						at += n;
+						if (prefixed < 4) break;
+						prefixed = 0;
+						length = u32(prefix, 0);
+					}
+					if (value.length - at >= length) {
+						take(value.slice(at, at + length));
+						at += length;
+						continue;
+					}
+					packet = new Uint8Array(length);
+					filled = 0;
+				}
+				const n = Math.min(packet.length - filled, value.length - at);
+				packet.set(value.subarray(at, at + n), filled);
+				filled += n;
+				at += n;
+				if (filled === packet.length) {
+					take(packet);
+					packet = null;
+				}
+			}
+		}
+	} catch {
+		// the session or the stream failed
+	}
+}
+
+/** a stream the client did not ask for, reset both ways (SPEC.md: STREAM_UNWANTED) */
+function refuse(stream: WebTransportBidirectionalStream) {
+	let error: unknown;
+	try {
+		error = new WebTransportError('unwanted', {
+			streamErrorCode: STREAM_UNWANTED,
+		} as WebTransportErrorOptions);
+	} catch {
+		error = undefined;
+	}
+	stream.readable.cancel(error).catch(() => {});
+	stream.writable.abort(error).catch(() => {});
+}
+
+/** every incoming bidirectional stream from here on, refused */
+function refuseIncoming(
+	reader: ReadableStreamDefaultReader<WebTransportBidirectionalStream>,
+) {
+	void (async () => {
+		try {
+			for (;;) {
+				const { value, done } = await reader.read();
+				if (done) return;
+				refuse(value);
+			}
+		} catch {
+			// the session ended
+		}
+	})();
+}
+
+/**
+ * The session's lane 0, the Wisp stream: the one the relay opened when it
+ * answered SERVER_STREAM_PROTOCOL (taken within `ms`), else one of the
+ * client's. Every other incoming bidirectional stream is refused.
+ */
+async function laneZero(
+	session: WebTransport,
+	ms: number,
+): Promise<{ stream: WebTransportBidirectionalStream; server: boolean }> {
+	const incoming = session.incomingBidirectionalStreams.getReader();
+	if ((session as { protocol?: string }).protocol === SERVER_STREAM_PROTOCOL) {
+		const { value } = await timeout(
+			incoming.read(),
+			ms,
+			"the relay's Wisp stream",
+		);
+		if (!value)
+			throw new Error(
+				'the session ended before the relay opened its Wisp stream',
+			);
+		refuseIncoming(incoming);
+		return { stream: value, server: true };
+	}
+	refuseIncoming(incoming);
+	return { stream: await session.createBidirectionalStream(), server: false };
+}
+
+/** one QUIC stream of the session that carries Wisp packets (SPEC.md, lanes) */
+interface Lane {
+	index: number;
+	writer: WritableStreamDefaultWriter<Uint8Array>;
+	/** the Wisp streams open on it */
+	open: number;
+	/** the bytes it carried, both ways, decayed by LANE_HALF_LIFE_MS */
+	recent: number;
+	at: number;
+}
+
+/** how the carrier opens the Wisp connection on lane 0 */
+interface Opening {
+	/** epoxy runs Wisp v2 itself: the INFO exchange is epoxy's */
+	v2: boolean;
+	/** the relay opened lane 0 (its INFO and CONTINUE are on it already) */
+	server: boolean;
+	/** the most lanes to open, lane 0 counted */
+	lanes: number;
+}
+
+/**
  * The Wisp packets of a session as epoxy reads and writes them: each read
  * is one packet (an ArrayBuffer), each write one packet. `first` settles
- * with the first packet the relay sends (read and kept for epoxy).
+ * with the first packet the relay sends epoxy (read and kept for it).
+ *
+ * On the wire the session is always Wisp v2 (V2_PROTOCOL is offered): with
+ * epoxy in v1 the carrier says the INFO itself (on a lane 0 of the client's
+ * at once, before the relay's, which holyWisp takes; on the relay's after
+ * its INFO, as the first packet the client writes) and hands epoxy the
+ * CONTINUE for stream 0, the opening it waits for. The relay's INFO goes to
+ * a v2 epoxy without the lanes extension. Once the CONTINUE is in, the
+ * lanes the INFO offers are opened, and each CONNECT goes on the quietest
+ * lane, the Wisp stream's packets with it (SPEC.md 3.3, 4.2).
  */
 function pipeOf(
 	session: WebTransport,
 	stream: WebTransportBidirectionalStream,
+	opening: Opening,
 ) {
 	/** the UDP streams open, whose DATA may go as datagrams */
 	const udp = new Set<number>();
+	/** each UDP stream's CONNECT, written: its datagrams go after it */
+	const udpOpened = new Map<number, Promise<unknown>>();
 	let reading: ReadableStreamDefaultController<ArrayBuffer>;
 	let ended = false;
 	const { first, got, failed } = firstPacket();
@@ -727,6 +980,8 @@ function pipeOf(
 		received: 0,
 		datagramsSent: 0,
 		datagramsReceived: 0,
+		lanes: 1,
+		server: opening.server,
 	};
 	const end = () => {
 		if (ended) return;
@@ -745,14 +1000,6 @@ function pipeOf(
 			// closed already
 		}
 	};
-	/** a packet, in a buffer of its own (handed to epoxy as it is) */
-	const take = (packet: Uint8Array<ArrayBuffer>) => {
-		if (ended) return;
-		if (packet[0] === CLOSE && packet.length >= 5) udp.delete(streamOf(packet));
-		stats.received++;
-		reading.enqueue(packet.buffer);
-		got();
-	};
 	const read = new ReadableStream<ArrayBuffer>({
 		start(controller) {
 			reading = controller;
@@ -763,63 +1010,125 @@ function pipeOf(
 	});
 	session.closed.then(end, end);
 
-	// the stream: packets after their u32 LE lengths, cut wherever QUIC cut.
-	// Each byte is copied once, into its packet's own buffer, however many
-	// chunks the packet spans: a relay's DATA packet is up to 128 KiB and a
-	// reader that keeps up gets a chunk of a few QUIC packets, so gathering
-	// the chunks into one buffer that grew with each copied the packet over
-	// again for every chunk of it.
-	void (async () => {
-		const reader = stream.readable.getReader();
-		/** a prefix cut between chunks */
-		const prefix = new Uint8Array(4);
-		let prefixed = 0;
-		/** the packet being filled, when it spans chunks */
-		let packet: Uint8Array<ArrayBuffer> | null = null;
-		let filled = 0;
-		try {
-			for (;;) {
-				const { value, done } = await reader.read();
-				if (done) break;
-				let at = 0;
-				while (at < value.length) {
-					if (!packet) {
-						let length: number;
-						if (!prefixed && value.length - at >= 4) {
-							length = u32(value, at);
-							at += 4;
-						} else {
-							const n = Math.min(4 - prefixed, value.length - at);
-							prefix.set(value.subarray(at, at + n), prefixed);
-							prefixed += n;
-							at += n;
-							if (prefixed < 4) break;
-							prefixed = 0;
-							length = u32(prefix, 0);
-						}
-						if (value.length - at >= length) {
-							take(value.slice(at, at + length));
-							at += length;
-							continue;
-						}
-						packet = new Uint8Array(length);
-						filled = 0;
-					}
-					const n = Math.min(packet.length - filled, value.length - at);
-					packet.set(value.subarray(at, at + n), filled);
-					filled += n;
-					at += n;
-					if (filled === packet.length) {
-						take(packet);
-						packet = null;
-					}
-				}
+	const lanes: Lane[] = [];
+	/** each Wisp stream's lane, kept after it closes: a reused id stays on it */
+	const laneOf = new Map<number, Lane>();
+	const open = new Set<number>();
+	const account = (lane: Lane, bytes: number) => {
+		const now = performance.now();
+		lane.recent =
+			lane.recent * 2 ** ((lane.at - now) / LANE_HALF_LIFE_MS) + bytes;
+		lane.at = now;
+	};
+	/** the quietest lane, then the one with the fewest streams, then the first */
+	const pick = (): Lane => {
+		if (lanes.length === 1) return lanes[0];
+		for (const lane of lanes) account(lane, 0);
+		const quietest = Math.min(...lanes.map((lane) => lane.recent));
+		let best = lanes[0];
+		let fewest = Infinity;
+		for (const lane of lanes)
+			if (lane.recent <= quietest + LANE_QUIET_BYTES && lane.open < fewest) {
+				best = lane;
+				fewest = lane.open;
 			}
-		} catch {
-			// the session or the stream failed
+		return best;
+	};
+	const closed = (id: number) => {
+		if (open.delete(id)) laneOf.get(id)!.open--;
+	};
+	const send = (lane: Lane, packet: Uint8Array) => {
+		account(lane, packet.length);
+		// not awaited: a lane that waits for the relay's credit holds up
+		// only its own writes (Wisp's CONTINUE bounds what each stream has
+		// outstanding)
+		const written = lane.writer.write(framed(packet));
+		written.catch(end);
+		return written;
+	};
+	const addLane = (
+		index: number,
+		readable: ReadableStream<Uint8Array>,
+		writer: WritableStreamDefaultWriter<Uint8Array>,
+	) => {
+		const lane: Lane = { index, writer, open: 0, recent: 0, at: 0 };
+		lanes.push(lane);
+		lanes.sort((a, b) => a.index - b.index);
+		// a lane that ends ends the Wisp connection (SPEC.md 3.5)
+		void readPackets(readable, (packet) => take(packet, lane)).then(end);
+		return lane;
+	};
+
+	/** where the opening is: the relay's INFO, then its CONTINUE for stream 0 */
+	let state: 'info' | 'continue' | 'open' = 'info';
+	let offered = 1;
+	let infoSaid = false;
+	/** the carrier's own INFO, for an epoxy in v1: Wisp 2.0 with UDP */
+	const sayInfo = () => {
+		if (infoSaid || opening.v2) return;
+		infoSaid = true;
+		void send(
+			lanes[0],
+			new Uint8Array([INFO, 0, 0, 0, 0, 2, 0, 0x01, 0, 0, 0, 0]),
+		);
+	};
+	const openLanes = () => {
+		const count = stats.lanes;
+		for (let index = 1; index < count; index++)
+			session.createBidirectionalStream().then(
+				(stream) => {
+					if (ended) return;
+					const writer = stream.writable.getWriter();
+					// the LANE packet first: type, stream 0, the lane's index
+					writer
+						.write(framed(new Uint8Array([LANE, 0, 0, 0, 0, index])))
+						.catch(end);
+					addLane(index, stream.readable, writer);
+				},
+				() => {
+					// a lane that cannot be had is no lane
+				},
+			);
+	};
+	/** a packet of the opening: what epoxy gets of it (null: nothing) */
+	const opened = (packet: Uint8Array<ArrayBuffer>) => {
+		const type = packet[0];
+		if (state === 'info' && type === INFO && streamOf(packet) === 0) {
+			const { lanes, info } = readInfo(packet);
+			offered = lanes;
+			stats.lanes = Math.max(1, Math.min(offered, opening.lanes, MAX_LANES));
+			state = 'continue';
+			sayInfo();
+			return opening.v2 ? info : null;
 		}
-		end();
-	})();
+		if (type === CONTINUE && streamOf(packet) === 0 && offered > 1) openLanes();
+		state = 'open';
+		return packet;
+	};
+
+	/** a packet from the relay, in a buffer of its own (handed to epoxy as it is) */
+	const take = (packet: Uint8Array<ArrayBuffer>, lane: Lane | null) => {
+		if (ended) return;
+		if (lane) account(lane, packet.length);
+		if (state !== 'open' && lane?.index === 0) {
+			const passed = opened(packet);
+			if (!passed) return;
+			packet = passed;
+		}
+		if (packet[0] === CLOSE && packet.length >= 5) {
+			const id = streamOf(packet);
+			udp.delete(id);
+			closed(id);
+		}
+		stats.received++;
+		reading.enqueue(packet.buffer);
+		got();
+	};
+
+	addLane(0, stream.readable, stream.writable.getWriter());
+	// before the relay's INFO, on a lane 0 of the client's (holyWisp opens
+	// the stream with its INFO before it reads the client's)
+	if (!opening.server) sayInfo();
 
 	// datagrams: one whole packet each (UDP DATA), each a chunk of its own
 	void (async () => {
@@ -834,6 +1143,7 @@ function pipeOf(
 					value.byteOffset === 0 && value.byteLength === value.buffer.byteLength
 						? (value as Uint8Array<ArrayBuffer>)
 						: value.slice(),
+					null,
 				);
 			}
 		} catch {
@@ -841,36 +1151,52 @@ function pipeOf(
 		}
 	})();
 
-	const streamWriter = stream.writable.getWriter();
 	const datagramWriter = session.datagrams.writable.getWriter();
 	const write = new WritableStream<Uint8Array>({
 		async write(packet) {
 			stats.sent++;
 			const type = packet[0];
+			let lane = lanes[0];
 			if (packet.length >= 5) {
 				const id = streamOf(packet);
-				if (type === CONNECT && packet[5] === UDP) udp.add(id);
-				else if (type === CLOSE) udp.delete(id);
-				else if (
+				if (type === CONNECT && id !== 0) {
+					lane = laneOf.get(id) ?? pick();
+					laneOf.set(id, lane);
+					if (!open.has(id)) {
+						open.add(id);
+						lane.open++;
+					}
+					const written = send(lane, packet);
+					if (packet[5] === UDP) {
+						udp.add(id);
+						udpOpened.set(id, written);
+					}
+					return;
+				}
+				if (id !== 0) lane = laneOf.get(id) ?? lanes[0];
+				if (type === CLOSE) {
+					udp.delete(id);
+					udpOpened.delete(id);
+					closed(id);
+				} else if (
 					type === DATA &&
 					udp.has(id) &&
 					packet.length <= session.datagrams.maxDatagramSize
 				) {
-					// a datagram the connection drops is lost, as UDP's is
+					// after its CONNECT is the stream's; a datagram the
+					// connection drops is lost, as UDP's is
+					const after = udpOpened.get(id);
+					if (after) {
+						udpOpened.delete(id);
+						await after.catch(() => {});
+					}
 					await datagramWriter.ready;
 					stats.datagramsSent++;
 					datagramWriter.write(packet).catch(() => {});
 					return;
 				}
 			}
-			const framed = new Uint8Array(4 + packet.length);
-			const n = packet.length;
-			framed[0] = n & 0xff;
-			framed[1] = (n >>> 8) & 0xff;
-			framed[2] = (n >>> 16) & 0xff;
-			framed[3] = (n >>> 24) & 0xff;
-			framed.set(packet, 4);
-			await streamWriter.write(framed);
+			void send(lane, packet);
 		},
 		close() {
 			end();
@@ -890,10 +1216,10 @@ async function sessionCarrier(
 	plan: RelayPlan,
 	v2: boolean,
 	ms: number,
+	lanes: number,
 ): Promise<OpenCarrier & { via: Via }> {
 	const { session, url, via } = await openSession(
 		plan,
-		v2,
 		ms,
 		memory.via(plan.key),
 	);
@@ -905,10 +1231,12 @@ async function sessionCarrier(
 		}
 	};
 	try {
-		const { pipe, first, stats } = pipeOf(
-			session,
-			await session.createBidirectionalStream(),
-		);
+		const zero = await laneZero(session, ms);
+		const { pipe, first, stats } = pipeOf(session, zero.stream, {
+			v2,
+			server: zero.server,
+			lanes,
+		});
 		await timeout(first, ms, 'the Wisp stream');
 		const ended = session.closed.then(() => {});
 		ended.catch(() => {});
@@ -1092,7 +1420,12 @@ export class Chooser {
 
 	/** a session, remembered as working or failing */
 	#session(plan: RelayPlan): Promise<OpenCarrier> {
-		return sessionCarrier(plan, this.#v2, this.#timeoutMs).then(
+		return sessionCarrier(
+			plan,
+			this.#v2,
+			this.#timeoutMs,
+			Math.max(1, Math.floor(this.#webTransport?.lanes ?? MAX_LANES)),
+		).then(
 			(open) => {
 				memory.worked(plan.key, open.via);
 				return open;
@@ -1568,12 +1901,14 @@ export class CarrierTransport implements ProxyTransport {
 
 	/** the note of a carrier the host shares: what it rides, and since when */
 	#riding(given: CarrierGiven) {
-		const what = this.#what;
+		const tell = [this.#what, shapeOf(given.lanes, given.serverStream)]
+			.filter(Boolean)
+			.join('; ');
 		const name =
 			given.carrier === 'webtransport' ? 'WebTransport session' : 'WebSocket';
 		wispNote(
 			'info',
-			`riding the ${name} to ${given.url} that is up already (${Math.round(given.upMs / 1000)} s, ${given.riders} transport${given.riders === 1 ? '' : 's'} on it): wisp transport ${LABEL[given.carrier ?? 'websocket']}${what ? ` (${what})` : ''}`,
+			`riding the ${name} to ${given.url} that is up already (${Math.round(given.upMs / 1000)} s, ${given.riders} transport${given.riders === 1 ? '' : 's'} on it): wisp transport ${LABEL[given.carrier ?? 'websocket']}${tell ? ` (${tell})` : ''}`,
 		);
 	}
 
@@ -1619,12 +1954,18 @@ export class CarrierTransport implements ProxyTransport {
 				this.#base = piped.transport;
 			}
 			this.carrier = open?.carrier ?? 'websocket';
+			// the session's shape: its own, or what the carrier host says of its
+			const lanes = open?.stats?.lanes ?? shared?.lanes;
+			const server = open?.stats?.server ?? shared?.serverStream;
+			const session = this.carrier === 'webtransport' && lanes !== undefined;
 			if (open && shared?.upMs) this.#riding(shared);
 			else if (this.carrier === 'webtransport') {
-				const what = this.#what;
+				const tell = [this.#what, shapeOf(lanes, server)]
+					.filter(Boolean)
+					.join('; ');
 				wispNote(
 					'info',
-					`WebTransport session established in ${ms} ms: wisp transport ${LABEL.webtransport} to ${open!.url}${what ? ` (${what})` : ''}`,
+					`WebTransport session established in ${ms} ms: wisp transport ${LABEL.webtransport} to ${open!.url}${tell ? ` (${tell})` : ''}`,
 				);
 			} else this.#connecting();
 			this.#announce(plan.key, {
@@ -1633,6 +1974,7 @@ export class CarrierTransport implements ProxyTransport {
 				ms,
 				...(this.carrier === 'websocket' && { why }),
 				...(open && shared && { shared: shared.upMs }),
+				...(session && { lanes, serverStream: Boolean(server) }),
 			});
 		}
 		await this.#base!.init();

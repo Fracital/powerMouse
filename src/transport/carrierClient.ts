@@ -74,6 +74,10 @@ export interface CarrierGiven {
 	upMs: number;
 	/** the riders on it, this one included */
 	riders: number;
+	/** a session's lanes, lane 0 counted (wispWebTransport.ts pipeOf) */
+	lanes?: number;
+	/** the relay opened the session's Wisp stream */
+	serverStream?: boolean;
 }
 
 /** a request the host's pool gave a connection: its name, and whether it counts */

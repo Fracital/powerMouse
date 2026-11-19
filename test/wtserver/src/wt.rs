@@ -657,11 +657,25 @@ async fn request(c: Rc<Conn>, id: u64, mut send: SendStream, mut rd: Rd) {
 		.collect::<Vec<_>>()
 		.join(", ");
 	let offered_list = sf_strings(&offered).unwrap_or_default();
-	// /bridge takes the first protocol offered, as holyWisp's listener does
-	let selected = offered_list
-		.iter()
-		.find(|p| route == Route::Bridge || PROTOCOLS.contains(&p.as_str()))
-		.cloned();
+	// /bridge takes the protocol its host names among those offered, else
+	// the first offered, as holyWisp's listener does
+	let chosen = if route == Route::Bridge && !offered_list.is_empty() {
+		bridge::ask(
+			"protocol",
+			0,
+			JsValue::from_str(&json::array(offered_list.iter().map(|p| json::string(p)))),
+		)
+		.as_string()
+		.filter(|p| offered_list.contains(p))
+	} else {
+		None
+	};
+	let selected = chosen.or_else(|| {
+		offered_list
+			.iter()
+			.find(|p| route == Route::Bridge || PROTOCOLS.contains(&p.as_str()))
+			.cloned()
+	});
 
 	let (gone_tx, gone_rx) = oneshot::channel();
 	let session = Rc::new(Session {
@@ -713,6 +727,7 @@ async fn request(c: Rc<Conn>, id: u64, mut send: SendStream, mut rd: Rd) {
 
 	if route == Route::Bridge {
 		let weak = Rc::downgrade(&session);
+		let opener = Rc::downgrade(&session);
 		let handle = bridge::add_session(
 			c.conn.clone(),
 			id,
@@ -720,6 +735,13 @@ async fn request(c: Rc<Conn>, id: u64, mut send: SendStream, mut rd: Rd) {
 				if let Some(s) = weak.upgrade() {
 					s.close_local(code, reason, false);
 				}
+			}),
+			Box::new(move || {
+				let (handle, rx) = bridge::add_stream();
+				if let Some(s) = opener.upgrade() {
+					spawn_local(s.bridge_open(handle, rx));
+				}
+				handle
 			}),
 		);
 		session.bridge.set(handle);
@@ -1113,9 +1135,40 @@ impl Session {
 	/// /bridge: the stream is the host's (bridge.rs). What arrives is told
 	/// to it as it arrives; what it writes goes out in order, until it
 	/// finishes or resets the stream or the session ends.
-	async fn bridge_bidi(self: Rc<Self>, mut send: SendStream, mut rd: Rd) {
-		let (handle, mut rx) = bridge::add_stream();
+	async fn bridge_bidi(self: Rc<Self>, send: SendStream, rd: Rd) {
+		let (handle, rx) = bridge::add_stream();
 		bridge::tell("bidi", handle, JsValue::from(self.bridge.get()));
+		self.bridge_run(handle, rx, send, rd).await;
+	}
+
+	/// /bridge: a bidirectional stream the host opened (bridge_open_bidi),
+	/// its header first, then the host's as a stream the client opened
+	async fn bridge_open(
+		self: Rc<Self>,
+		handle: u32,
+		rx: futures_channel::mpsc::UnboundedReceiver<bridge::Cmd>,
+	) {
+		let Some(Ok((mut send, recv))) = self.until_gone(self.conn.open_bi()).await else {
+			bridge::remove_stream(handle);
+			bridge::tell("reset", handle, JsValue::from_str("the session ended"));
+			return;
+		};
+		let header = self.header(STREAM_BIDI);
+		if self.until_gone(send.write_all(&header)).await.is_none() {
+			let _ = send.reset(vi(SESSION_GONE));
+			bridge::remove_stream(handle);
+			return;
+		}
+		self.bridge_run(handle, rx, send, Rd::new(recv)).await;
+	}
+
+	async fn bridge_run(
+		self: Rc<Self>,
+		handle: u32,
+		mut rx: futures_channel::mpsc::UnboundedReceiver<bridge::Cmd>,
+		mut send: SendStream,
+		mut rd: Rd,
+	) {
 		let gone = self.gone();
 		spawn_local(async move {
 			loop {
@@ -1124,6 +1177,8 @@ impl Session {
 						if send.write_all(&b).await.is_err() {
 							break;
 						}
+						// the bytes are QUIC's now (sent or in its send buffer)
+						bridge::tell("written", handle, JsValue::from(b.len() as u32));
 					}
 					Either::Left((Some(bridge::Cmd::Finish), _)) => {
 						let _ = send.finish();
