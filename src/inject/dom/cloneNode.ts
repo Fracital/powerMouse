@@ -577,6 +577,9 @@ export default function cloneRawNode(
 	// a document being loaded (loadXML): its scripts are made fresh so they
 	// run when the tree lands, instead of adopted "already started"
 	runScripts = false,
+	// the nodes alone, without their children (an element's start tag the
+	// page's markup goes on inside, ./pageStream.ts): not spent
+	shallow = false,
 ): DocumentFragment {
 	const tempTarget = document.createDocumentFragment();
 
@@ -734,7 +737,7 @@ export default function cloneRawNode(
 					const childDocument = isTemplate
 						? templateContentDocument(target)
 						: document;
-					const max = children.length;
+					const max = shallow ? 0 : children.length;
 					for (let i = 0; i < max; i++) {
 						// append in reverse order
 						const child = children[max - i - 1];
@@ -754,6 +757,7 @@ export default function cloneRawNode(
 	}
 
 	// the parsed markup has served: what the page gets is the copy
+	if (shallow) return tempTarget;
 	if (Array.isArray(fragment)) for (const node of fragment) releaseMarkup(node);
 	else releaseMarkup(fragment as Node);
 

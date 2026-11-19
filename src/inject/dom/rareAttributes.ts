@@ -90,8 +90,14 @@ export function reportBase(
 		Reflect.apply(setTimeout, global, [report, 0]);
 		return;
 	}
-	// (the markup is written after a document.open, which drops the
-	// document's listeners)
+	// (the markup is copied as it is written, after the document.open that
+	// drops the document's listeners)
+	if (client.pieces) {
+		global.document.addEventListener('DOMContentLoaded', report, {
+			once: true,
+		});
+		return;
+	}
 	let pending = true;
 	addDocumentOpenListener(global, () => {
 		if (!pending) return;

@@ -76,13 +76,17 @@ export function createRewriterRealm(
 	 */
 	hidden = false,
 ): RewriterLib | null {
-	let root: Element | null = null;
+	let root: Node | null = null;
 	// what goes in the document: the frame, or the element whose shadow root holds it
 	let placed: Element | null = null;
 	try {
 		const factory = given();
-		root = Reflect.apply(documentElementGet, document, []) as Element | null;
-		if (!root) return null;
+		// (a document just opened has no root yet while the page is written
+		// as its markup comes, and its first rewrite is the top's first need
+		// of the library: what goes in is its root for as long as this runs)
+		root =
+			(Reflect.apply(documentElementGet, document, []) as Element | null) ??
+			document;
 		const frame = Reflect.apply(createElement, document, [
 			'iframe',
 		]) as HTMLIFrameElement;
@@ -148,11 +152,14 @@ export function libraryFactoryFromScript(
 	/** the realm `document` is of, where the name is made (this one's by default) */
 	global: typeof globalThis = globalThis,
 ): Function | null {
-	let root: Element | null = null;
+	let root: Node | null = null;
 	let script: Element | null = null;
 	try {
-		root = Reflect.apply(documentElementGet, document, []) as Element | null;
-		if (!root) return null;
+		// (a document just opened has no root yet, while the page is written
+		// as its markup comes: the script is its root for as long as it runs)
+		root =
+			(Reflect.apply(documentElementGet, document, []) as Element | null) ??
+			document;
 		script = Reflect.apply(createElement, document, ['script']) as Element;
 		Reflect.apply(setAttribute, script, ['nonce', nonce]);
 		try {
