@@ -397,7 +397,9 @@ on every save (use a `git worktree`).
   connection (src/transport/transportLog.ts): made where the transport
   runs, printed by the host's controller only. It rests on epoxy-tls 0075: a
   function transport's sink that waited held wisp-mux's lock across a TLS
-  handshake's flush and hung the whole connection.
+  handshake's flush and hung the whole connection. Without `webTransport`
+  epoxy still gets the WebSocket as a function transport, so an idle drop
+  ends its wisp connection (`wisp-idle-drop`).
   docs/webtransport.md, "Wisp over WebTransport".
 
 When a site hangs or a socket goes quiet, suspect the transport before the

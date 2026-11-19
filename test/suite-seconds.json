@@ -297,6 +297,7 @@
 	"window-geometry": 3,
 	"window-identity": 4,
 	"window-references": 7,
+	"wisp-idle-drop": 13,
 	"wisp-message-size": 12,
 	"wisp-reconnect": 8,
 	"woff2-font": 2,

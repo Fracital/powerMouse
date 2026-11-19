@@ -999,9 +999,16 @@ async function startController(name) {
 		});
 	} else {
 		setStatus('Registering service worker…');
-		// registers serviceWorker.js from the directory with that scope and
-		// resolves once the worker is activated (30 s at the most)
-		const registration = await StompController.register(DIRECTORY);
+		// registers serviceWorker.js from the directory with that scope; the
+		// controller waits for the worker to activate before its first
+		// handshake, so it is made at once (not after
+		// StompController.register(), which resolves once the worker is
+		// activated): its transport, the transport worker, epoxy's module and
+		// the wisp carrier, comes up while a first visit's worker installs
+		const registration = await navigator.serviceWorker.register(
+			`${DIRECTORY}serviceWorker.js`,
+			{ scope: DIRECTORY, updateViaCache: 'none' },
+		);
 		setStatus(`Loading ${name} transport…`);
 		controller = new StompController({
 			serviceworker: registration,
