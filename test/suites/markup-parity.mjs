@@ -43,6 +43,8 @@ const PAGES = [
 	'template.html',
 	'url-defaults.html',
 	'mutation-records.html',
+	// attribute names only the parser makes, through every markup sink
+	'parser-names.html.bin',
 ];
 
 /** whether the page has finished what it does on load */

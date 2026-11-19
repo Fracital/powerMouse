@@ -111,6 +111,55 @@ function attributesOf(element: Element): [string | null, string, string][] {
 	return out;
 }
 
+const nativeGetAttributeNodeNS = Element.prototype.getAttributeNodeNS;
+const nativeSetAttributeNode = Element.prototype.setAttributeNode;
+const nativeCloneNode = Node.prototype.cloneNode;
+
+/** whether the browser's own setAttribute refuses `name` (on an element of `document` no one sees) */
+function refusedName(document: Document, name: string): boolean {
+	try {
+		Reflect.apply(nativeSetAttribute, createHTMLElement(document, 'div'), [
+			name,
+			'',
+		]);
+		return false;
+	} catch {
+		return true;
+	}
+}
+
+/**
+ * Set a parsed element's attribute on its copy through the hooks. The HTML
+ * parser makes names setAttribute refuses: an `=` where a name starts
+ * begins it (`<div =""data-av="19">` has the attribute `=""data-av`, the
+ * shape of an ad server's markup), and a name with an `=` is no valid one.
+ * Natively the element lands with it; the copy takes the parser's Attr node
+ * instead, by the browser's own members (no name STomp routes is one the
+ * browser refuses).
+ */
+function copyAttribute(
+	target: Element,
+	source: Element,
+	namespace: string | null,
+	name: string,
+	value: string,
+) {
+	try {
+		if (namespace) target.setAttributeNS(namespace, name, value);
+		else target.setAttribute(name, value);
+	} catch (error) {
+		const document = Reflect.apply(nativeOwnerDocument, target, []) as Document;
+		const attribute =
+			!namespace &&
+			refusedName(document, name) &&
+			(Reflect.apply(nativeGetAttributeNodeNS, source, [null, name]) as Attr);
+		if (!attribute) throw error;
+		Reflect.apply(nativeSetAttributeNode, target, [
+			Reflect.apply(nativeCloneNode, attribute, []),
+		]);
+	}
+}
+
 const nativeOwnerDocument = Reflect.getOwnPropertyDescriptor(
 	Node.prototype,
 	'ownerDocument',
@@ -602,7 +651,16 @@ export default function cloneRawNode(
 						// namespace the parser gave it
 						asParsed(script, () => {
 							for (const attribute of script.getAttributeNames())
-								script.setAttribute(attribute, script.getAttribute(attribute)!);
+								try {
+									script.setAttribute(
+										attribute,
+										script.getAttribute(attribute)!,
+									);
+								} catch (error) {
+									// a name only the parser makes (copyAttribute) stays as
+									// the parser set it
+									if (!refusedName(document, attribute)) throw error;
+								}
 						});
 						for (const child of children) script.appendChild(child);
 						stack.push([STACK_FINALIZE, d[1], script]);
@@ -642,8 +700,7 @@ export default function cloneRawNode(
 						))
 							// a namespaced attribute (xlink:href) keeps its namespace; the
 							// hooks see both ways of setting it
-							if (namespace) target.setAttributeNS(namespace, name, value);
-							else target.setAttribute(name, value);
+							copyAttribute(target, d[0] as Element, namespace, name, value);
 					});
 					// (the copy may live on in the page: it keeps nothing of the markup)
 					if (base) parsedBases.delete(target);
