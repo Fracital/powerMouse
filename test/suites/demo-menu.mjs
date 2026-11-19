@@ -486,6 +486,25 @@ ok(
 		dialog.rows.server?.text.startsWith(`Node ${status.node}`),
 	JSON.stringify(dialog.rows),
 );
+{
+	// the Server line's uptime moves every second while About is open
+	const read = () =>
+		page.evaluate(
+			() =>
+				document.querySelector('#shieldsPage .aboutRow[data-fact="server"] dd')
+					?.textContent ?? null,
+		);
+	const before = await read();
+	await new Promise((resolve) => setTimeout(resolve, 2100));
+	const after = await read();
+	ok(
+		"About's server uptime ticks while it is open",
+		/, up \d+ hours, \d+ minutes, \d+ seconds$/.test(before ?? '') &&
+			/, up /.test(after ?? '') &&
+			after !== before,
+		JSON.stringify({ before, after }),
+	);
+}
 ok(
 	'About keeps the focus: everything behind it is inert',
 	dialog.inert.every(Boolean) && dialog.navInert,

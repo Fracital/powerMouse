@@ -2394,8 +2394,20 @@ function uptimeText() {
 	const s = Math.floor(uptime % 60);
 	return `${h} hours, ${m} minutes, ${s} seconds`;
 }
+/** the About page's server line, from the last answer, ticking as uptimeText does */
+function serverFact() {
+	const node = serverStatus?.node;
+	if (!node) return null;
+	const up = uptimeText();
+	return `Node ${node}${up ? `, up ${up}` : ''}`;
+}
 function renderUptime() {
 	if (uptimeAt) $('uptime').textContent = uptimeText();
+	// an open About page's Server line moves every second too
+	const server = shieldsPageOpen()
+		? shieldsPage.querySelector('#aboutSession [data-fact="server"] dd')
+		: null;
+	if (server) server.textContent = serverFact();
 }
 async function pollStatus() {
 	try {
@@ -5341,6 +5353,7 @@ function buildAboutPage() {
 async function refreshAbout() {
 	try {
 		serverStatus = await (await fetch('/api/status')).json();
+		uptimeAt = [serverStatus.uptime, Date.now()];
 	} catch {
 		if (!serverStatus) serverStatus = { unavailable: true };
 	}
@@ -5411,12 +5424,7 @@ function fillAbout() {
 				? 'On: a [net] line on the console for each connection'
 				: "Off; ?transportdebug, or localStorage['stomp:debug-transport'] = '1' and a reload, puts a [net] line for each connection on the console",
 		],
-		[
-			'server',
-			'Server',
-			status?.node &&
-				`Node ${status.node}${uptimeText() ? `, up ${uptimeText()}` : ''}`,
-		],
+		['server', 'Server', serverFact()],
 	]);
 }
 
