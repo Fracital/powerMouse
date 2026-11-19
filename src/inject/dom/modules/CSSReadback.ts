@@ -5,6 +5,7 @@ import DocumentClient from '../Client';
 import { RULE_STYLE_INTERFACES } from '../cssRules';
 import { isStylesheetPI, stylesheetPIs } from '../stylesheetPIs';
 import DOMAttributesModule from './DOMAttributes';
+import { keptPiece } from './DOMContentHooks';
 import DOMHooksModule from './DOMHooks';
 
 /**
@@ -98,7 +99,8 @@ export default class CSSReadbackModule extends Module<DocumentClient> {
 					const value = Reflect.apply(get, that, args);
 					if (typeof value !== 'string') return value;
 					if (isStylesheetPI(that)) return stylesheetPIs(client).pageOf(that);
-					return inStyle(that) ? css(value) : value;
+					// (a piece of a style the hooks hold elsewhere, wherever it is now)
+					return keptPiece(that, value) ?? (inStyle(that) ? css(value) : value);
 				}),
 			});
 		}

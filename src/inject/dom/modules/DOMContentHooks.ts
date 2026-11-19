@@ -11,7 +11,7 @@ import ProxyModule, {
 } from '../../modules/Proxy';
 import { unrouteCSS } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
-import { LazyWeakMap } from '../../ownCollections';
+import { LazyWeakMap, LazyWeakSet } from '../../ownCollections';
 import { modifyCSS, modifyJS } from '../../rewriter';
 import { markOwnInjector, ownScripts, trustedScript } from '../../trusted';
 import DocumentClient, {
@@ -103,6 +103,16 @@ const dataOf = (text: CharacterData): string =>
 	Reflect.apply(nativeDataDescriptor.get!, text, []);
 const setData = (text: CharacterData, data: string): void =>
 	Reflect.apply(nativeDataDescriptor.set!, text, [data]);
+/**
+ * A style's Text node (or the style) whose text natively is not the page's
+ * (DOMContentHooks settle): its native text, and the page's, which is read
+ * back while the native one is unchanged (CSSReadback)
+ */
+const stylePieces = new LazyWeakMap<Node, [string, string]>();
+export const keptPiece = (node: unknown, data: string) => {
+	const kept = stylePieces.get(node as Node);
+	return kept?.[0] === data ? kept[1] : undefined;
+};
 /** a node of any realm (`instanceof` knows only one), else null */
 function nodeTypeOf(value: unknown): number | null {
 	// a string or null is no node: answered without the getter's TypeError
@@ -206,18 +216,58 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// was dropped (the launcher's icons went blank). Such a piece lands as
 		// the page wrote it, and its style's rules are routed by the CSSOM
 		// pass (rewriteStyle) before anything paints, not its text. Not an
-		// @import's: the browser fetches that as it parses, before the pass.
-		const opensURL = (text: string) =>
-			/(?<!@import\s*)url\([^)]*$/i.test(text.slice(-4096));
+		// @import's: the browser fetches that as it parses (settle).
+		const opensURL = (text: string) => /url\([^)]*$/i.test(text.slice(-4096));
 		const routePiece = (text: string) =>
 			opensURL(text) ? text : client.prepareStyleText(text);
 		const splitsURL = (style: StyleElement) =>
 			[...style.childNodes].some(
 				(node) => node.nodeType === 3 && opensURL((node as Text).data),
 			);
+		// styles whose @import is split across their Text nodes (settle)
+		const held = new LazyWeakSet<StyleElement>();
+		const pageOf = (text: CharacterData) => {
+			const data = dataOf(text);
+			return keptPiece(text, data) ?? unrouteCSS(client, data);
+		};
+		// (every write parses the style again, and Chrome fetches its
+		// imports again each time: none that changes nothing)
+		const land = (node: Node, page: string, data: string) => {
+			if (dataOf(node as CharacterData) !== data)
+				setData(node as CharacterData, data);
+			stylePieces.set(node, [data, page]);
+		};
+		// An @import split across a style's Text nodes (`@import url('`, the
+		// address, `')`): the browser fetches an import as it parses, so the
+		// page's pieces could not land as written (the address would load
+		// past the proxy), and each routed on its own closed the import where
+		// it ended, which loaded nothing. Such a style's whole text is routed
+		// and held by its first Text node, the others empty, and every node
+		// reads back the page's own piece (stylePieces). One whose pieces no
+		// longer split an import is routed piece by piece again.
+		const settle = (style: StyleElement) =>
+			hiddenMutation(() => {
+				const texts = textChildren(style);
+				const pages = texts.map(pageOf);
+				const page = pages.join('');
+				const routed = /@import[^;{}]*\0/i.test(`${pages.join('\0')}\0`)
+					? client.prepareStyleText(page)
+					: null;
+				if (routed === null) held.delete(style);
+				else {
+					held.add(style);
+					stylePieces.set(style, [routed, page]);
+				}
+				for (let i = texts.length; i--;)
+					land(
+						texts[i],
+						pages[i],
+						routed === null ? routePiece(pages[i]) : i ? '' : routed,
+					);
+			});
 		const rewriteStyleText = (style: StyleElement) => {
 			const text = style.textContent;
-			if (!text || splitsURL(style)) return;
+			if (!text || held.has(style) || splitsURL(style)) return;
 			// the page's own style-src refuses this inline style of the markup:
 			// it applies nothing (no text) and the inject reports it (src/csp.ts)
 			if (client.refuseInlineStyle(style, text, true)) {
@@ -236,13 +286,18 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// is routed before it lands (see prepareStyleText): chess.com filled
 		// its board's style with innerHTML and every piece loaded straight
 		// from the site. Each piece of text is routed on its own, unless it
-		// leaves a url() open (routePiece).
-		const routeTextNode = (node: Node) =>
-			usePrototype(node, nativeCharacterData, (text) => {
-				const data = text.data;
-				const routed = routePiece(data);
-				if (routed !== data) text.data = routed;
-			});
+		// leaves a url() open (routePiece) or may be an @import's (holding:
+		// from it on, the pieces of the insertion land empty)
+		let holding = false;
+		const routeTextNode = (node: Node) => {
+			const data = dataOf(node as CharacterData);
+			const page = keptPiece(node, data) ?? data;
+			if ((holding ||= /@import/i.test(page))) land(node, page, '');
+			else {
+				const routed = routePiece(page);
+				if (routed !== data) setData(node as CharacterData, routed);
+			}
+		};
 		// a node argument about to go into a style: a Text, or a fragment's
 		// Text children (an element in a style is not part of its text)
 		const routeInsertedText = (node: Node) =>
@@ -261,29 +316,33 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// browser's own method decides the result and any IndexSizeError;
 		// the result is routed and set at once
 		const editStyleText = <T>(
+			style: StyleElement,
 			node: CharacterData,
 			edit: (scratch: CharacterData) => T,
 		): T => {
-			const page = unrouteCSS(
-				client,
-				usePrototype(node, nativeCharacterData, (text) => text.data),
-			);
 			const scratch = Reflect.apply(nativeCreateTextNode, realm.document, [
-				page,
+				pageOf(node),
 			]) as Text;
 			const result = edit(scratch);
-			const edited = usePrototype(
-				scratch,
-				nativeCharacterData,
-				(text) => text.data,
-			);
-			usePrototype(node, nativeCharacterData, (text) => {
-				text.data = routePiece(edited);
-			});
+			setPiece(style, node, dataOf(scratch));
 			return result;
 		};
+		// the page's text set as a Text node's of a style (its data, or an
+		// edit); one that may be an @import's is emptied, so the write parses
+		// no import, and the style is settled (prewrote: rewriteStyle)
+		const setPiece = (
+			style: StyleElement,
+			node: CharacterData,
+			page: string,
+		) =>
+			held.has(style) || /@import/i.test(page)
+				? (land(node, page, ''), held.add(style))
+				: setData(node, routePiece(page));
 
 		const rewriteStyle = (style: StyleElement) => {
+			// (settled before the parse state is asked: no style of the markup
+			// is one)
+			if (held.has(style)) settle(style);
 			if (getGlobalParsingState(realm) === 'parsingBeforeWrite') {
 				// once everything is finalized and off the alternative parse stack
 
@@ -584,7 +643,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						);
 					const style = client.styleOfText(that);
 					if (!style) return Reflect.apply(target, that, args);
-					const result = editStyleText(that, (scratch) =>
+					const result = editStyleText(style, that, (scratch) =>
 						Reflect.apply(target, scratch, args),
 					);
 					prewrote(style);
@@ -615,7 +674,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					if (!style) return Reflect.apply(target, that, args);
 					// null sets the empty string, as natively
 					const text = args[0] === null ? '' : String(args[0]);
-					Reflect.apply(target, that, [routePiece(text)]);
+					setPiece(style, that, text);
 					prewrote(style);
 				}),
 			});
@@ -1092,12 +1151,22 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		): T => {
 			const style = client.styleElement(parent);
 			if (style) {
+				holding = held.has(style);
 				for (let i = 0; i < count; i++) {
-					if (nodeTypeOf(args[i]) !== null) routeInsertedText(args[i] as Node);
-					else if (strings)
+					if (nodeTypeOf(args[i]) === null && strings)
 						args[i] = Reflect.apply(nativeCreateTextNode, realm.document, [
-							routePiece(String(args[i])),
+							String(args[i]),
 						]);
+					if (nodeTypeOf(args[i]) !== null) routeInsertedText(args[i] as Node);
+				}
+				// what the style holds is emptied too (no observer hears of it):
+				// the insertion's parse fetches no import of the text before it
+				if (holding) {
+					hiddenMutation(() => {
+						for (const text of textChildren(style))
+							land(text, pageOf(text), '');
+					});
+					held.add(style);
 				}
 				prewritten.add(style);
 			}

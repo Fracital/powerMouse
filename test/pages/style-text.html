@@ -142,6 +142,66 @@
 				`@import '${imp('import-string-single')}' screen;`,
 			);
 		};
+		// an @import split across Text nodes, as the launcher writes a url():
+		// the browser fetches it as it parses, so the pieces could neither
+		// land as written nor be routed one by one. What the rule reads after
+		// each piece is kept too (steps).
+		const steps = {};
+		const splitImport = (name, pieces) => {
+			const style = sheet(name);
+			steps[name] = pieces.map((piece) => {
+				style.appendChild(document.createTextNode(piece));
+				return style.sheet?.cssRules[0]?.cssText ?? null;
+			});
+		};
+		ways['import-split-url'] = () =>
+			splitImport('import-split-url', [
+				`@import url('`,
+				imp('import-split-url'),
+				`');`,
+			]);
+		ways['import-split-string'] = () =>
+			splitImport('import-split-string', [
+				'@import "',
+				imp('import-split-string'),
+				'";',
+			]);
+		ways['import-split-conditions'] = () =>
+			splitImport('import-split-conditions', [
+				`@import url('`,
+				imp('import-split-conditions'),
+				`') layer(base) supports(display: grid) screen;`,
+			]);
+		ways['import-split-in-conditions'] = () =>
+			splitImport('import-split-in-conditions', [
+				`@import url('${imp('import-split-in-conditions')}') layer(`,
+				'base) supports(',
+				'display: grid) screen;',
+			]);
+		// the address in a piece of its own after `@import ` loaded past the
+		// proxy
+		ways['import-split-keyword'] = () =>
+			splitImport('import-split-keyword', [
+				'@import ',
+				`url('`,
+				imp('import-split-keyword'),
+				`') print;`,
+			]);
+		ways['import-split-append'] = () => {
+			sheet('import-split-append').append(
+				'@import ',
+				`"${imp('import-split-append')}" layer;`,
+			);
+		};
+		ways['import-split-data'] = () => {
+			const style = sheet('import-split-data');
+			const pieces = [`@import url('`, imp('import-split-data'), `');`];
+			const texts = pieces.map((piece) =>
+				style.appendChild(document.createTextNode(piece)),
+			);
+			pieces[1] += '&again';
+			texts.forEach((text, i) => (text.data = pieces[i]));
+		};
 		for (const [name, run] of Object.entries(ways)) {
 			try {
 				run();
@@ -166,6 +226,7 @@
 					texts: [...style.childNodes].map((node) => node.data),
 					// an import's sheet, loaded (one of another origin throws)
 					imported: imported(style),
+					steps: steps[name],
 				};
 			}
 			window.__styleText = { done: true, errors, read };

@@ -12,8 +12,13 @@
 // `')`): each piece was routed on its own, the first closed where it ended,
 // and the rule lost its background (the launcher's icons went blank a
 // second after the tray opened). The import-string ways write an @import
-// with a string, whose route the text and the rule showed, and every
-// import's sheet must load. Both demo modes.
+// with a string, whose route the text and the rule showed. The
+// import-split-* ways split an @import the same way (its url(), its
+// string, its layer() and supports(), the address after `@import `), which
+// the browser fetches as it parses: each piece routed on its own closed the
+// import and nothing loaded, and an address in a piece of its own loaded
+// past the proxy. Each also keeps what its rule read after each piece, and
+// every import's sheet must load. Both demo modes.
 import {
 	done,
 	FIXTURE,
