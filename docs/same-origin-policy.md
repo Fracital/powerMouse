@@ -1329,7 +1329,9 @@ natively (`src/isolation.ts`, `src/server/rewrites.ts`):
   origin, a redirect included, without a CORP that lets it be had is a
   network error; under
   `credentialless` such a request goes out without cookies. Only under an
-  isolated host: under any other a page's COEP does nothing, as before.
+  isolated host, or for a page the proxy isolates with its own
+  Document-Isolation-Policy (below): under any other a page's COEP does
+  nothing, as before.
 - `document.featurePolicy` answers for `cross-origin-isolated` with the
   page's permission and origin (`allowsFeature`, `getAllowlistForFeature`,
   `allowedFeatures` in the native order); the real policy would show the
@@ -1428,22 +1430,22 @@ run a demo server whose pages send the headers.
 
 What a page sees, by its own headers:
 
-| The page                                                                                                   | Chrome     | STomp, isolated host | STomp, host not isolated |
-| ---------------------------------------------------------------------------------------------------------- | ---------- | -------------------- | ------------------------ |
-| COOP `same-origin` and COEP (either value, parameters or not)                                              | isolated   | isolated             | not                      |
-| The same and `Permissions-Policy: cross-origin-isolated=()`                                                | not        | not                  | not                      |
-| No headers, one of the two, another COOP value, a Report-Only form, a malformed value                      | not        | not                  | not                      |
-| A Document-Isolation-Policy                                                                                | isolated   | isolated             | not                      |
-| Its dedicated workers (script with COEP, `blob:`, nested)                                                  | as it is   | as it is             | not                      |
-| Its dedicated worker whose script has no COEP, when it has one                                             | `error`    | `error`              | runs, not isolated       |
-| Its shared workers                                                                                         | not        | not                  | not                      |
-| Its frame without COEP (or, from another origin, CORP), when it has COEP                                   | no load    | no load              | loads, not isolated      |
-| Its same-origin frame with COEP; another origin's with COEP, CORP and `allow`; about:blank, `srcdoc`       | as it is   | as it is             | not                      |
-| Its frame the permission does not reach (another origin without `allow`, `allow` `'none'`, its own header) | not        | not                  | not                      |
-| Its credentialless frame                                                                                   | as above   | as above             | not                      |
-| A frame with a Document-Isolation-Policy in a page that is not isolated                                    | isolated   | not                  | not                      |
-| `require-corp`: its no-cors load of another origin without CORP                                            | fails      | fails                | loads                    |
-| `credentialless`: the same load                                                                            | no cookies | no cookies           | with cookies             |
+| The page                                                                                                   | Chrome     | STomp, isolated host | STomp, host not isolated   |
+| ---------------------------------------------------------------------------------------------------------- | ---------- | -------------------- | -------------------------- |
+| COOP `same-origin` and COEP (either value, parameters or not)                                              | isolated   | isolated             | isolated (Chrome 137+)     |
+| The same and `Permissions-Policy: cross-origin-isolated=()`                                                | not        | not                  | not                        |
+| No headers, one of the two, another COOP value, a Report-Only form, a malformed value                      | not        | not                  | not                        |
+| A Document-Isolation-Policy                                                                                | isolated   | isolated             | isolated (Chrome 137+)     |
+| Its dedicated workers (script with COEP, `blob:`, nested)                                                  | as it is   | as it is             | as it is (Chrome 137+)     |
+| Its dedicated worker whose script has no COEP, when it has one                                             | `error`    | `error`              | `error` (Chrome 137+)      |
+| Its shared workers                                                                                         | not        | not                  | not                        |
+| Its frame without COEP (or, from another origin, CORP), when it has COEP                                   | no load    | no load              | no load (Chrome 137+)      |
+| Its same-origin frame with COEP; another origin's with COEP, CORP and `allow`; about:blank, `srcdoc`       | as it is   | as it is             | as it is (Chrome 137+)     |
+| Its frame the permission does not reach (another origin without `allow`, `allow` `'none'`, its own header) | not        | not                  | not, but the clock (below) |
+| Its credentialless frame                                                                                   | as above   | as above             | as above (Chrome 137+)     |
+| A frame with a Document-Isolation-Policy in a page that is not isolated                                    | isolated   | not                  | not                        |
+| `require-corp`: its no-cors load of another origin without CORP                                            | fails      | fails                | fails (Chrome 137+)        |
+| `credentialless`: the same load                                                                            | no cookies | no cookies           | no cookies (Chrome 137+)   |
 
 ### What a host does
 
@@ -1486,6 +1488,84 @@ What isolation costs a host, measured:
   no-cors loads of other origins go without cookies (credentialless) or
   need a CORP (require-corp), and a window it opens on another origin, or on
   a page without the headers, has no opener.
+
+### A host that is not isolated (Chrome 137 and later)
+
+A host whose page cannot be isolated (its ads, its sign-in popups) still
+gets the proxied pages that are isolated natively isolated. Measured
+natively in Chrome 157: a frame of a page without the headers that sends
+`Document-Isolation-Policy` is isolated by it alone (`crossOriginIsolated`,
+SharedArrayBuffer for it and its dedicated workers, the 5 microsecond
+clock), in an agent cluster of its own on a thread of its own (the host's
+timers ran on while such a frame was busy for 1.5 s). Documents of one
+origin that the policy isolates reach each other whatever their values
+(siblings in the host's page included); a document of that origin that it
+does not isolate (the host's own page) reaches them only as one of another
+origin: `postMessage`, `location`, `frames` and indexed access, `length`,
+nothing else. Neither a Permissions-Policy header that denies
+`cross-origin-isolated` nor an element's
+`allow="cross-origin-isolated 'none'"` takes the isolation from such a
+document.
+
+So, where the controller's probe says the browser has the policy
+(`IsolationEngine.dip`), the service worker serves a top-level page that
+is isolated natively (the table's first rows) with a
+`Document-Isolation-Policy` (`src/isolation.ts servedIsolationPolicy`: the
+page's own when it sent one, else the value its COEP names), and judges
+it as under an isolated host: its embedder policy refuses the frames,
+workers and loads it refuses natively. Every document in its frames is
+served with the policy too (their route's nested mark says so, `d`), and
+so are the inline documents its documents make (about:blank and
+`javascript:` copies, `data:` and `blob:` documents: their creator's
+client is remembered), since a frame of the proxy's origin outside the
+cluster would be out of its parent's reach. A page that is not isolated
+natively is served as before. Where the probe says the browser has no
+such policy (Firefox, WebKit, older Chromes), and under the site pool,
+nothing changes, and the navigate event says `isolation: 'wanted'` for a
+page that is isolated natively, which a host may offer a window of its
+own.
+
+What the policy took from the controller, which reached its frames'
+documents synchronously, and how each is had now:
+
+- **The frame's address, title, history and buttons** (`Frame.url`,
+  `canGoBack`, `canGoForward`; RemoteController's `frameInfo`), **Back,
+  Forward and Reload**, **the user activations** the history marks and
+  **the host's input** (`src/controller/hostActivation.ts`): a hidden
+  document of the proxy's origin in the cluster, the agent
+  (`src/controller/apart.ts`), answers them over a MessagePort. The
+  controller starts it the first time a frame shows a document out of its
+  reach, at a route of the service worker's that answers only a token the
+  controller gave it over its own channel, once; it runs the controller
+  frame's script (`dist/controllerFrame.js`), served with the policy, and
+  finds the frames through the windows of the host's page. A frame shows
+  such a document when its window throws on `document`.
+- **The host's geometry** (`HOST_GEOMETRY`) and **the compiled core
+  module**, which a proxied top reads synchronously from the controller's
+  window: the agent keeps both on its own window (the module compiled
+  there from the bytes the controller hands it: a Module does not cross
+  agent clusters), which the documents of the cluster reach.
+- **The service worker's kick** (`SW_KICK`), which a document on the
+  host's thread needs when the host's page is busy: not needed, the
+  cluster runs on its own thread.
+- Unchanged, since they are messages or storage: the navigate, client and
+  frame-moved reports, BroadcastChannel, the service worker's channels and
+  the synchronous requests to it, storage (one storage key), cookies (the
+  worker's jar).
+
+Left:
+
+- A frame of such a page that is not isolated natively (the permission
+  does not reach it, or it gives it up) is in the cluster all the same,
+  or its parent could not reach it: its inject hides `crossOriginIsolated`
+  and SharedArrayBuffer (the `n` of its facts), but the clock stays 5
+  microseconds and its dedicated workers are isolated (twelve rows of
+  cross-origin-isolation are on its known list for it).
+- A frame with a Document-Isolation-Policy in a page that is not isolated
+  is not isolated, as under an isolated host.
+- The first top of the cluster may compile the core module itself (the
+  agent is handed the module when it starts, which may be after the top
+  asked).
 
 ### WebKit and Firefox
 

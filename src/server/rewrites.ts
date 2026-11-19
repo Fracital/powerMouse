@@ -44,11 +44,15 @@ import {
 	isolationFacts,
 	isolationHeaders,
 	isolationResponseHeaders,
+	loadsPolicy,
 	nestedIsolation,
 	SERVED_EMBEDDER_POLICY,
+	servedIsolationPolicy,
 	topLevelIsolation,
 	type DocumentIsolation,
+	type EmbedderPolicy,
 	type IsolationEngine,
+	type IsolationPolicy,
 } from '../isolation';
 import { MARK_DIRECTIVES, MARKED_KINDS, OPAQUE_MARK } from '../memoryMark';
 import {
@@ -182,6 +186,12 @@ import { contextText, isLinkRoute, LINK_SEGMENT, linkRoute } from '../visited';
 import { rewriteBytesInWasm } from '../wasm/rewriteBytes';
 import { scanMarkup, scannerSettled } from '../wasm/scanner';
 import { modifyXML, xmlShellEncoding } from '../xmlShell';
+import {
+	anyApartClient,
+	APART_AGENT_PATH,
+	apartAgentResponse,
+	rememberApartClient,
+} from './apartAgent';
 import { badPort } from './badPorts';
 import {
 	knownMinterOf,
@@ -1063,8 +1073,10 @@ type BodyTransform = (
 interface Note {
 	/** the emulated registration that controls the document (docs/service-workers.md) */
 	serviceWorker?: ControlInfo;
-	/** the document's isolation, when the host's page is isolated (src/isolation.ts isolationFacts) */
+	/** the document's isolation, when the host's page is isolated or `apart` (src/isolation.ts isolationFacts) */
 	isolation?: string;
+	/** the Document-Isolation-Policy of the proxy's own the document is served with, under a host that is not isolated */
+	apart?: IsolationPolicy;
 	/** what the document's Origin-Agent-Cluster asked for: ?0 a cluster keyed by site, ?1 one keyed by origin */
 	agentCluster?: 'site' | 'origin';
 	rewriteCache?: RewriteCacheOutcome;
@@ -1129,6 +1141,14 @@ interface Rewriter {
 	 * and kept; Chrome's rules when it cannot say
 	 */
 	isolationEngine: () => Promise<IsolationEngine>;
+	/**
+	 * a top-level page that is isolated natively is shown to the client
+	 * `client` without isolation (a host that is not isolated, in a browser
+	 * without Document-Isolation-Policy): the controller says so in its
+	 * navigate event (NavigateInfo.isolation), so the host may offer it a
+	 * window of its own
+	 */
+	isolationWanted?: (client: string) => void;
 }
 
 /** how long a decision waits for the controller to say what the browser makes of isolation (then Chrome's rules) */
@@ -2199,12 +2219,14 @@ function genericForward(
 		// looks same-origin to the browser, so this is decided here; an
 		// unknown initiator is given the benefit), `include` always
 		// The embedder policy of the document or worker that makes the request
-		// (src/isolation.ts), when the host's page is isolated: the browser
-		// has the proxy's for every document there, so the page's own is
-		// applied here. A `credentialless` one sends its no-cors requests to
-		// another origin without credentials, and keeps none from the answer.
+		// (src/isolation.ts), when the host's page is isolated, or the
+		// document is one the proxy isolates with its own
+		// Document-Isolation-Policy (./apartAgent.ts): the browser has the
+		// proxy's for every such document, so the page's own is applied
+		// here. A `credentialless` one sends its no-cors requests to another
+		// origin without credentials, and keeps none from the answer.
 		const ownerPolicy =
-			rewriter.isolated && !navigation
+			(rewriter.isolated || anyApartClient()) && !navigation
 				? embedderPolicyOf(context?.clientId, clientRoute, referrer)
 				: null;
 		const credentialless =
@@ -3746,7 +3768,7 @@ function genericForward(
 		// (a worker's script's policy as the browser reads it: WebKit has no
 		// credentialless, src/isolation.ts IsolationEngine)
 		const workerScript =
-			rewriter.isolated &&
+			(rewriter.isolated || !!ownerPolicy) &&
 			fromNetwork &&
 			(serverRequest.destination === 'worker' ||
 				serverRequest.destination === 'sharedworker') &&
@@ -3844,6 +3866,17 @@ function genericForward(
 		// and that sent none, or that another origin's embedder may not have,
 		// does not load, as natively.
 		let isolation: (DocumentIsolation & { topLevel: boolean }) | null = null;
+		// the Document-Isolation-Policy of the proxy's own the document is
+		// served with, when the host's page is not isolated (src/isolation.ts
+		// servedIsolationPolicy): a top-level document isolated natively, and
+		// every document nested in one, are put in an agent cluster of their
+		// own, isolated by it, and judged as under an isolated host. A nested
+		// one's route says its embedder is such a document (its group: only a
+		// document with the host's isolation, or this policy, names one)
+		let apart: IsolationPolicy | null = null;
+		// the embedder policy the document's own loads are judged by (its
+		// Document-Isolation-Policy's, when it sent no embedder policy)
+		let loads: EmbedderPolicy = 'unsafe-none';
 		// the document is a credentialless frame's that sent no embedder policy
 		// of its own: Chrome starts its worker whose script has none either
 		// (measured, Chrome 157: isolated, as the frame is)
@@ -3856,25 +3889,63 @@ function genericForward(
 			response.headers.has('location');
 		// (each by the rules of the browser this runs in where engines differ:
 		// src/isolation.ts IsolationEngine)
-		if (rewriter.isolated && navigation) {
+		const nestedEmbedder = () => {
+			const mark = nestedMarkOf(
+				oURL.pathname,
+				rewriter.directory,
+				rewriter.codec,
+			);
+			return (mark !== null ? parseNestedMark(mark) : null)?.embedder ?? null;
+		};
+		if (
+			navigation &&
+			(rewriter.isolated ||
+				// (a policy Chrome ignores where the origin is not potentially
+				// trustworthy, as it ignores the headers that isolate natively)
+				(trustworthy(url.url.origin) &&
+					(topLevel || !!nestedEmbedder()?.apart)))
+		) {
 			const real = isolationHeaders(response.headers);
 			const origin = url.url.origin;
 			if (topLevel) {
-				if (!navigationRedirect)
-					isolation = {
-						...(await byEngine(rewriter.isolationEngine, (engine) =>
-							topLevelIsolation(real, origin, engine),
-						)),
-						topLevel: destination === 'document',
-					};
+				if (!navigationRedirect) {
+					const decided = await byEngine(rewriter.isolationEngine, (engine) => {
+						const isolation = topLevelIsolation(real, origin, engine);
+						return {
+							isolation,
+							loads: loadsPolicy(isolation, real, engine),
+							// (not with the site pool, whose agents would not reach
+							// such a document: src/controller/site.ts)
+							apart:
+								!rewriter.isolated &&
+								!rewriter.config.sites &&
+								engine.dip &&
+								isolation.isolated
+									? servedIsolationPolicy(real, engine)
+									: null,
+						};
+					});
+					// a host that is not isolated: a page that is not isolated
+					// natively is served as before (one that is, where the
+					// browser has no such policy, as before too: the host is told)
+					if (
+						!rewriter.isolated &&
+						!decided.apart &&
+						decided.isolation.isolated &&
+						context?.clientId
+					)
+						rewriter.isolationWanted?.(context.clientId);
+					if (rewriter.isolated || decided.apart) {
+						isolation = {
+							...decided.isolation,
+							topLevel: destination === 'document',
+						};
+						loads = decided.loads;
+						apart = decided.apart;
+					}
+				}
 			} else {
-				const mark = nestedMarkOf(
-					oURL.pathname,
-					rewriter.directory,
-					rewriter.codec,
-				);
-				const embedder = (mark !== null ? parseNestedMark(mark) : null)
-					?.embedder ?? {
+				const embedder = nestedEmbedder() ?? {
 					origin: '',
 					coep: false,
 					group: false,
@@ -3882,6 +3953,7 @@ function genericForward(
 					origins: [],
 					credentialless: false,
 					later: false,
+					apart: false,
 				};
 				let sameSite = false;
 				try {
@@ -3890,23 +3962,36 @@ function genericForward(
 				} catch (error) {
 					// an embedder without an origin: another site
 				}
-				const decided = await byEngine(rewriter.isolationEngine, (engine) => ({
-					refused: embedderRefuses(
-						response.headers,
-						origin,
-						embedder,
-						sameSite,
-						navigationRedirect,
-						engine,
-					),
-					isolation: nestedIsolation(real, origin, embedder, engine),
-				}));
+				const decided = await byEngine(rewriter.isolationEngine, (engine) => {
+					const isolation = nestedIsolation(real, origin, embedder, engine);
+					return {
+						refused: embedderRefuses(
+							response.headers,
+							origin,
+							embedder,
+							sameSite,
+							navigationRedirect,
+							engine,
+						),
+						isolation,
+						loads: loadsPolicy(isolation, real, engine),
+						// (one that is not isolated natively is in the cluster all
+						// the same, where its embedder reaches it: its inject
+						// answers as a document that is not, `n`)
+						apart: rewriter.isolated
+							? null
+							: servedIsolationPolicy(real, engine),
+					};
+				});
 				if (decided.refused) {
 					await response.body?.cancel().catch(() => {});
 					return refuse('blocked by Cross-Origin-Embedder-Policy');
 				}
-				if (!navigationRedirect)
+				if (!navigationRedirect) {
 					isolation = { ...decided.isolation, topLevel: false };
+					loads = decided.loads;
+					apart = decided.apart;
+				}
 				frameCredentialless =
 					embedder.credentialless &&
 					embedderPolicy(real.coep) === 'unsafe-none';
@@ -3921,15 +4006,23 @@ function genericForward(
 		// what the document's shell tells its client of its isolation, and
 		// its own embedder policy for the loads it makes
 		if (isolation) {
-			note.isolation = isolationFacts(isolation);
+			note.isolation = isolationFacts(isolation, !!apart);
+			if (apart) {
+				note.apart = apart;
+				rememberApartClient(context?.clientId);
+			}
 			rememberEmbedderPolicy(
 				serverRequest.url,
 				context?.clientId,
-				isolation.coep === 'unsafe-none'
+				loads === 'unsafe-none'
 					? null
 					: {
-							policy: isolation.coep,
-							...(frameCredentialless ? { frame: true as const } : {}),
+							policy: loads,
+							// (a Document-Isolation-Policy asks nothing of the
+							// document's workers)
+							...(frameCredentialless || isolation.coep === 'unsafe-none'
+								? { frame: true as const }
+								: {}),
 						},
 			);
 		}
@@ -4014,7 +4107,8 @@ function genericForward(
 				const value = response.headers.get(name);
 				if (value !== null) responseHeaders.set(name, value);
 			}
-		if (isolation)
+		if (apart) responseHeaders.set('document-isolation-policy', apart);
+		else if (isolation)
 			isolationResponseHeaders(responseHeaders, {
 				...isolation,
 				// a popup's document that natively leaves its opener's browsing
@@ -4454,6 +4548,10 @@ function genericForward(
 				isolated: false,
 				topLevel: false,
 			});
+			// (in the cluster of a document the proxy isolates, whose frame
+			// element it reaches)
+			if (!rewriter.isolated && nestedEmbedder()?.apart)
+				headers.set('document-isolation-policy', 'isolate-and-credentialless');
 			return new Response(freshFrameDocument(to), { headers });
 		}
 
@@ -5788,6 +5886,7 @@ export function registerRewrites(
 	askIsolationEngine?: () => Promise<IsolationEngine | null>,
 	/** asks the controller's document for a blob: URL it minted (learnBlobsReadable) */
 	askBlobProbe?: () => Promise<string | null>,
+	tellIsolationWanted?: (client: string) => void,
 ) {
 	// (the newest controller's: an older one may be gone)
 	if (askBlobProbe) askBlobURL = askBlobProbe;
@@ -5843,6 +5942,7 @@ export function registerRewrites(
 		shields,
 		storage,
 		isolated: !!init.isolated,
+		isolationWanted: tellIsolationWanted,
 		// kept once the controller said; asked again after a failure, by
 		// Chrome's rules meanwhile
 		isolationEngine() {
@@ -6300,6 +6400,18 @@ export function registerRewrites(
 	// answered here with the embedder policy (and the
 	// Document-Isolation-Policy) its kind names. Only to a worker or a
 	// navigation: no page learns of the browser's answer by loading it
+	// the agent of the documents the proxy isolates with a
+	// Document-Isolation-Policy (./apartAgent.ts): once, for the controller
+	router.routes.set(APART_AGENT_PATH, async (request, path) => {
+		const token = APART_AGENT_PATH.exec(path)?.[1];
+		return (
+			(request.mode === 'navigate' &&
+				request.destination === 'iframe' &&
+				token &&
+				apartAgentResponse(token)) ||
+			Response.error()
+		);
+	});
 	router.routes.set(
 		new RegExp(`^/${ISOLATION_PROBE}/[cpd]$`),
 		(request, path) => {
@@ -6646,8 +6758,15 @@ export function registerRewrites(
 			if (request.referrerPolicy)
 				headers['referrer-policy'] = request.referrerPolicy;
 			// and a blob: document its creator's embedder policy: isolated as
-			// its creator is (an inline document of markup never is)
-			if (entry.blob && entry.isolated) {
+			// its creator is (an inline document of markup never is). Under a
+			// host that is not isolated, a document a creator in the cluster of
+			// the proxy's Document-Isolation-Policy registered is served with it
+			// too, as natively such a document inherits its creator's
+			// (src/server/apartAgent.ts)
+			const apartEntry = !rewriter.isolated && !!entry.apart;
+			if (apartEntry)
+				headers['document-isolation-policy'] = 'isolate-and-credentialless';
+			else if (entry.blob && entry.isolated) {
 				const isolation = new Headers();
 				isolationResponseHeaders(isolation, {
 					isolated: true,
@@ -6699,7 +6818,9 @@ export function registerRewrites(
 						modifyXML(
 							decodeDocument(bytes, blob.type),
 							url,
-							rewriter.config,
+							apartEntry
+								? { ...rewriter.config, isolated: true }
+								: rewriter.config,
 							mime,
 							undefined,
 							shellSites(url),
@@ -6726,7 +6847,7 @@ export function registerRewrites(
 				modifyHTML(
 					markup,
 					url,
-					rewriter.config,
+					apartEntry ? { ...rewriter.config, isolated: true } : rewriter.config,
 					true,
 					undefined,
 					undefined,
@@ -7133,13 +7254,20 @@ export function registerRewrites(
 						: undefined;
 				// under a list's policy the document's realm compiles no codec
 				// module: the policy may refuse it, and would tell the page
+				// (a document the proxy isolates under a host that is not is
+				// told it as under one that is: its inject says whom its frames
+				// are embedded by, and answers as what it is natively)
 				const shellConfig: Config =
-					listCsp || fingerprintOn || fingerprintSeed !== undefined
+					listCsp ||
+					fingerprintOn ||
+					fingerprintSeed !== undefined ||
+					note.apart
 						? {
 								...rewriter.config,
 								...(listCsp ? { codecModule: false } : {}),
 								...(fingerprintOn ? { fingerprintOn } : {}),
 								...(fingerprintSeed !== undefined ? { fingerprintSeed } : {}),
+								...(note.apart ? { isolated: true } : {}),
 							}
 						: rewriter.config;
 				const partition =

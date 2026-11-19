@@ -16,6 +16,7 @@ import type {
 import { RpcHelper } from '../transport/rpc';
 import type { TransportNote } from '../transport/transportLog';
 import type { CarrierInfo } from '../transport/wispWebTransport';
+import { isApartAgent, outOfReach, runApartAgent } from './apart';
 import { shareGeometry } from './geometry';
 import {
 	answerRun,
@@ -54,7 +55,10 @@ function allowedOrigins(): string[] {
 
 const origins = allowedOrigins();
 
-if (window === window.parent || !origins.length) {
+// the agent of the documents a Document-Isolation-Policy isolates, which
+// runs this script too (./apart.ts)
+if (isApartAgent()) runApartAgent();
+else if (window === window.parent || !origins.length) {
 	document.body.textContent =
 		'This page is the Stomp controller frame; it only works embedded by a host application.';
 } else {
@@ -147,6 +151,21 @@ if (window === window.parent || !origins.length) {
 			}
 		}
 
+		/**
+		 * whether the host's frame at `index` may show a document of this
+		 * origin out of this realm's reach (./apart.ts): a frame of the host
+		 * the host asks about (one of its proxied frames) that refuses this
+		 * realm
+		 */
+		function apartFrame(index: number): boolean {
+			if (!controller || !Number.isInteger(index) || index < 0) return false;
+			try {
+				const win = window.parent[index] as Window | undefined;
+				return !!win && win !== window && outOfReach(win);
+			} catch (error) {
+				return false;
+			}
+		}
 		/** a frame the host addresses: its index, and the slot of the site pool its document reported from */
 		function framed(asked: number | { index: number; origin?: string }) {
 			return typeof asked === 'number'
@@ -215,6 +234,11 @@ if (window === window.parent || !origins.length) {
 						...(init.sitePool
 							? { sitePool: init.sitePool, siteHost: hostOrigin }
 							: { sitePool: false as const }),
+						// (whose frames, this frame's siblings, the agent of the
+						// documents out of its reach finds: ./apart.ts)
+						framesUp: 1,
+						onIsolationWanted: (client) =>
+							void rpc.call('isolationWanted', client).catch(() => {}),
 						openTab: !!init.openTab,
 						// (the host page's, which it found out: nothing to ask here)
 						hostReload: init.hostReload ?? null,
@@ -377,11 +401,15 @@ if (window === window.parent || !origins.length) {
 					const { index, origin } = framed(asked);
 					const win = historyWindow(index);
 					if (!win) {
-						// the site pool: a document of a slot, which its agent reads
+						// the site pool: a document of a slot, which its agent reads;
+						// a document of this origin out of this realm's reach, the
+						// agent of its cluster (./apart.ts)
 						const info =
 							origin && controller?.siteOriginKnown(origin)
 								? await controller.siteFrameInfo(origin, index)
-								: null;
+								: apartFrame(index)
+									? await controller!.apartInfo([index])
+									: null;
 						return [
 							info ?? {
 								url: null,
@@ -450,6 +478,8 @@ if (window === window.parent || !origins.length) {
 							String(token),
 							nested === true,
 						);
+					else if (!win && apartFrame(index))
+						controller!.apartActivated([index], String(token), nested === true);
 					else noteActivation(win, String(token), nested === true);
 					return [null, []];
 				},
@@ -486,6 +516,19 @@ if (window === window.parent || !origins.length) {
 				frameCommand: async ({ index, command, origin, routed }) => {
 					const win = historyWindow(index);
 					if (!win) {
+						// a document of this origin out of this realm's reach: the
+						// agent of its cluster steps it (./apart.ts)
+						if (
+							apartFrame(index) &&
+							!(origin && controller?.siteOriginKnown(origin))
+						) {
+							if (command === 'typed' && routed)
+								await controller?.typed(routed).catch(() => {});
+							return [
+								(await controller!.apartCommand([index], command)) === true,
+								[],
+							];
+						}
 						// the site pool: a document of a slot, stepped by its agent
 						if (!origin || !controller?.siteOriginKnown(origin))
 							return [false, []];

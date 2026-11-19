@@ -88,6 +88,7 @@ import {
 	SERVING_MEMORY_LIMIT,
 	setMemoryLimit,
 } from '../wasm/thread';
+import { allowApartAgent, apartClient } from './apartAgent';
 import { knownOriginOf, knownTopSiteOf, recordBlobOrigin } from './blobOrigins';
 import { Blocker, heardBlockerBytes } from './blocker';
 import { memoryCache } from './cache';
@@ -387,6 +388,7 @@ function registerController(
 		// (the rpc is made below; nothing asks before a request arrives)
 		() => rpc.call('isolationEngine', undefined),
 		() => rpc.call('blobProbe', undefined),
+		(client) => void rpc.call('isolationWanted', client).catch(() => {}),
 	);
 
 	const rpc = new RpcHelper<SWbound, Controllerbound>(
@@ -407,6 +409,9 @@ function registerController(
 			},
 			rules: async (rules) => {
 				(await server).setRules(rules);
+			},
+			apartAgent: async ({ token, script }) => {
+				allowApartAgent(token, script);
 			},
 			clearCache: async () => {
 				await (await server).clearCache();
@@ -1016,6 +1021,9 @@ function handleMessage(event: ExtendableMessageEvent) {
 				? { blob: message.blob, client: (event.source as Client).id }
 				: {}),
 			...(message.blob && message.isolated === true ? { isolated: true } : {}),
+			// (its creator is in the cluster the proxy's Document-Isolation-Policy
+			// isolates: so is it)
+			...(apartClient((event.source as Client).id) ? { apart: true } : {}),
 			...(partition ? { partition } : {}),
 		});
 	} else if (LOAD_CHANNEL in data) {

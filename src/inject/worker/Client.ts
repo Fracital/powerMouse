@@ -275,24 +275,22 @@ export default class WorkerClient extends Client {
 	#unisolated = false;
 	/**
 	 * The context that started this dedicated worker is not cross-origin
-	 * isolated natively, though the host's page is (its route says so, or
-	 * a blob: or data: worker's bootstrap calls this before the worker's own
-	 * script): natively it is not either. Chrome already makes it so (its
-	 * creator's served Permissions-Policy reaches it); WebKit and Firefox
-	 * isolate every worker of an isolated page, so here its
-	 * `crossOriginIsolated` reads false and its SharedArrayBuffer global is
-	 * gone, and a worker it starts is told the same (src/inject/workerStart.ts)
+	 * isolated natively, though the host's page is, or the proxy isolates
+	 * the context's cluster with a Document-Isolation-Policy (its route says
+	 * so, or a blob: or data: worker's bootstrap calls this before the
+	 * worker's own script): natively it is not either. Chrome already makes
+	 * it so under an isolated host (its creator's served Permissions-Policy
+	 * reaches it); WebKit and Firefox isolate every worker of an isolated
+	 * page, and a Document-Isolation-Policy every worker of its documents, so
+	 * here its `crossOriginIsolated` reads false and its SharedArrayBuffer
+	 * global is gone, and a worker it starts is told the same
+	 * (src/inject/workerStart.ts). Only a context the proxy isolates says it.
 	 */
 	notIsolated() {
 		this.isolation = 'n';
 	}
 	override hideSharedArrayBuffer() {
-		if (
-			!this.hostIsolated ||
-			!this.isolation?.includes('n') ||
-			this.#unisolated
-		)
-			return;
+		if (!this.isolation?.includes('n') || this.#unisolated) return;
 		this.#unisolated = true;
 		Reflect.deleteProperty(this.global, 'SharedArrayBuffer');
 		const proxyModule = this.getModule(ProxyModule)!;
