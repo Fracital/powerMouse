@@ -279,4 +279,10 @@ export class PrewrittenTable {
 	style(source: string): string | undefined {
 		return this.#styles.get(source);
 	}
+	/** the style text whose rewrite is `output`, if the table has one */
+	styleSource(output: string): string | undefined {
+		for (const [source, rewrite] of this.#styles)
+			if (rewrite === output) return source;
+		return undefined;
+	}
 }

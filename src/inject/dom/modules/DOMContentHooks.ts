@@ -304,6 +304,12 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					compositeElement(style, () => {
 						const script = realm.document.createElement('script');
 
+						// the page's own text, where the worker rewrote it: the
+						// style's markup holds the routed text read back, in a form
+						// the worker's table does not name, and the stand-in's write
+						// routed CNN's 3 MB style a second time (50 ms)
+						const source = client.prewrittenStyleSource(style.textContent!);
+						if (source !== undefined) style.textContent = source;
 						usePrototype(script, nativeHTMLScriptElement, (script) => {
 							if (nonce) script.setAttribute('nonce', nonce);
 							const markup = style.outerHTML;
