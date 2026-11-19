@@ -124,14 +124,22 @@ export const NO_AUDIO = {
  * NO_AUDIO).
  * `popupBlocker`: block popups as a user's Chrome does; Playwright turns the
  * blocker off (`--disable-popup-blocking`), and every popup opens there.
+ * `backForwardCache`: keep pages left in the back/forward cache as a user's
+ * Chrome does; Playwright turns it off (`--disable-back-forward-cache`).
  */
 export async function launch(
 	args = [],
-	{ scrollbars = false, env = null, popupBlocker = false } = {},
+	{
+		scrollbars = false,
+		env = null,
+		popupBlocker = false,
+		backForwardCache = false,
+	} = {},
 ) {
 	const ignored = [
 		...(scrollbars ? ['--hide-scrollbars'] : []),
 		...(popupBlocker ? ['--disable-popup-blocking'] : []),
+		...(backForwardCache ? ['--disable-back-forward-cache'] : []),
 	];
 	return chromium.launch({
 		executablePath: CHROME,

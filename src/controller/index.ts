@@ -97,6 +97,7 @@ import {
 	WORKER_MODULES,
 } from '../transport/messages';
 import RemoteTransport from '../transport/RemoteTransport';
+import { connectionLost } from '../transport/RevivingTransport';
 import { RpcHelper } from '../transport/rpc';
 import serveTransport from '../transport/serveTransport';
 import {
@@ -1591,6 +1592,16 @@ export class StompController extends EventTarget {
 					? active
 					: (this.#registration?.active ?? source);
 			this.#handshake();
+		});
+
+		// back from the back/forward cache: Chrome closed the page's
+		// WebSockets on the way in, the transport's wisp connection with them
+		// (RevivingTransport)
+		window.addEventListener('pageshow', (event) => {
+			if (!event.persisted) return;
+			if (this.#worker instanceof TransportWorker)
+				this.#worker.connectionLost();
+			else connectionLost(this.transport);
 		});
 
 		// the tab is going away for good (not into the back/forward cache):

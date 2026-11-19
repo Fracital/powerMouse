@@ -17,6 +17,7 @@ import {
 	WorkerBound,
 	WorkerToController,
 } from './messages';
+import { connectionLost } from './RevivingTransport';
 import { RpcHelper } from './rpc';
 import serveTransport, { warmTransport } from './serveTransport';
 import { transportLog, watchTransportNotes } from './transportLog';
@@ -101,6 +102,7 @@ function transportWorker() {
 			},
 			serveJar: async (port) => serveJar(port),
 			jarChanged: async (domain) => jarChanged(domain),
+			connectionLost: async () => connectionLost(transport),
 		},
 		TRANSPORT_WORKER_RPC,
 		(data, transfer) => self.postMessage(data, transfer),

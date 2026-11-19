@@ -138,6 +138,10 @@ export default class TransportWorker {
 	jarChanged(domain: string) {
 		this.#rpc.call('jarChanged', domain).catch(() => {});
 	}
+	/** the page is back from the back/forward cache: the worker's wisp WebSocket is gone */
+	connectionLost() {
+		this.#rpc.call('connectionLost', undefined).catch(() => {});
+	}
 	/** a new port the worker serves, for a RemoteTransport on this side */
 	serve(): MessagePort {
 		const channel = new MessageChannel();

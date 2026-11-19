@@ -1678,6 +1678,8 @@ export type WorkerBound = {
 	serveJar: [MessagePort];
 	/** the site pool: the host changed the jar for a domain ('' for all); every slot's worker hears */
 	jarChanged: [string];
+	/** the controller's page is back from the back/forward cache: Chrome closed the wisp WebSocket (RevivingTransport) */
+	connectionLost: [];
 };
 
 /**

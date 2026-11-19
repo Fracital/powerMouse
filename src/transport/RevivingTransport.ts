@@ -29,6 +29,17 @@
 // for a stream (#wispAlive): one it no longer opens means the tunnel went,
 // which a native connection never sees, and the GET goes again over a new
 // one (wisp-reconnect suite).
+//
+// Chrome closes a page's WebSockets as it goes into the back/forward cache
+// (the page reads a close, 1006, once it is back), the transport worker's
+// wisp WebSocket with them, and epoxy's own WebSocket (by URL, not a
+// carrier: wispWebTransport.ts) never ends its multiplexor on that close.
+// The first request after the host came back went to the site's pooled
+// connection over it and was never answered: a link in the frame to the
+// same site did nothing for good (bfcache-transport suite). So the
+// controller says when its page is back (`lost`), and the next request or
+// socket waits for a new transport first. It is built at once when the
+// connection had carried something, else on the next request.
 import type {
 	ProxyTransport,
 	RawHeaders,
@@ -102,11 +113,29 @@ export default class RevivingTransport implements ProxyTransport {
 	#generation = 0;
 	#reviving: Promise<boolean> | null = null;
 	#waiting = new Set<Waiting>();
+	/** the generation whose connection is known gone, until a new transport replaced it */
+	#lost = -1;
+	/** whether the current generation carried a request or a socket */
+	#served = false;
 
 	/** `make` builds the transport, and builds it again when its connection is lost */
 	constructor(make: () => ProxyTransport) {
 		this.#make = make;
 		this.#base = make();
+	}
+
+	/** the wisp connection is gone (the page is back from the back/forward cache) */
+	lost() {
+		this.#lost = this.#generation;
+		if (this.#served) void this.revive(this.#generation);
+	}
+
+	/** a new transport first when the current one's connection is gone */
+	async #live(): Promise<number> {
+		const generation = this.#generation;
+		if (this.#lost === generation) await this.revive(generation);
+		this.#served = true;
+		return this.#generation;
 	}
 
 	/** the transport in use */
@@ -139,23 +168,44 @@ export default class RevivingTransport implements ProxyTransport {
 		await (this.base as { meta?: () => Promise<void> }).meta?.();
 	}
 
-	connect(...args: Parameters<ProxyTransport['connect']>) {
+	connect(
+		...args: Parameters<ProxyTransport['connect']>
+	): ReturnType<ProxyTransport['connect']> {
 		const [url, protocols, headers, onopen, onmessage, onclose, onerror] = args;
-		const generation = this.#generation;
-		// the socket is the page's to open again; the next one should find a
-		// live connection
-		return this.base.connect(
-			url,
-			protocols,
-			headers,
-			onopen,
-			onmessage,
-			onclose,
-			(error) => {
-				if (wispGone(error)) void this.revive(generation);
-				onerror(error);
-			},
-		);
+		const open = (generation: number) =>
+			// the socket is the page's to open again; the next one should find a
+			// live connection
+			this.base.connect(
+				url,
+				protocols,
+				headers,
+				onopen,
+				onmessage,
+				onclose,
+				(error) => {
+					if (wispGone(error)) void this.revive(generation);
+					onerror(error);
+				},
+			);
+		if (this.#lost !== this.#generation) {
+			this.#served = true;
+			return open(this.#generation);
+		}
+		// over the new transport once it is up; the page cannot send before
+		// its socket opens, so only a close can come first
+		type Calls = ReturnType<ProxyTransport['connect']>;
+		let calls: Calls | null = null;
+		let closed: [number, string] | null = null;
+		void this.#live().then((generation) => {
+			calls = open(generation);
+			if (closed) calls[1](...closed);
+		});
+		const send: Calls[0] = (data) => calls?.[0](data);
+		const close: Calls[1] = (code, reason) => {
+			if (calls) calls[1](code, reason);
+			else closed = [code, reason];
+		};
+		return [send, close];
 	}
 
 	async request(
@@ -171,7 +221,7 @@ export default class RevivingTransport implements ProxyTransport {
 			REPLAYABLE.has(method.toUpperCase()) &&
 			(body === null || body === undefined);
 		for (let attempt = 1; ; attempt++) {
-			const generation = this.#generation;
+			const generation = await this.#live();
 			const pending = this.base.request(remote, method, body, headers, signal);
 			let waiting: Waiting | null = null;
 			const superseded = replayable
@@ -272,6 +322,7 @@ export default class RevivingTransport implements ProxyTransport {
 				const next = this.#make();
 				await next.init();
 				this.#base = next;
+				this.#served = false;
 			} catch (error) {
 				wispNote(
 					'warn',
@@ -288,6 +339,12 @@ export default class RevivingTransport implements ProxyTransport {
 		});
 		return this.#reviving;
 	}
+}
+
+/** `transport` or the RevivingTransport it wraps (Http3Transport) lost its connection */
+export function connectionLost(transport: ProxyTransport | undefined) {
+	for (let at = transport; at; at = (at as { base?: ProxyTransport }).base)
+		if (at instanceof RevivingTransport) return at.lost();
 }
 
 /** close a probe's stream at once, both ways */
