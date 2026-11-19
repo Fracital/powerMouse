@@ -183,6 +183,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		);
 		return nativeElement.getAttribute.call(this.#scratch, 'style') ?? '';
 	}
+	// (The long loops of this apply run in closures of their own. apply is
+	// one call of some 12 KB of bytecode, and a loop in it that ran long
+	// enough had V8 compile all of it to baseline code, some 70 KB in each
+	// compile of the bundle; with DOMHooks.apply's, the same, a frame of
+	// the frame-cost suite paid about 23 KB for it. A loop in a closure has
+	// the closure alone compiled.)
 	apply() {
 		const moduleClient = this.client;
 		const realm = moduleClient.global;
@@ -533,7 +539,12 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// the prototypes that carry them; one hook watches them all
 		const handlerNames = new Set<string>();
 		const g = realm;
-		for (const owner of [
+		const eachOwner = (owners: object[]) => {
+			for (const owner of owners)
+				for (const name of Object.getOwnPropertyNames(owner))
+					if (/^on[a-z]+$/.test(name)) handlerNames.add(name);
+		};
+		eachOwner([
 			g,
 			g.Document.prototype,
 			g.HTMLElement.prototype,
@@ -541,9 +552,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			g.Element.prototype,
 			g.HTMLMediaElement.prototype,
 			g.HTMLBodyElement.prototype,
-		])
-			for (const name of Object.getOwnPropertyNames(owner))
-				if (/^on[a-z]+$/.test(name)) handlerNames.add(name);
+		]);
 		// An interface may carry handlers of its own (an SVG animation's
 		// onbegin, onend and onrepeat, a video's picture-in-picture ones, the
 		// permission elements'), and a name the hooks did not know ran its

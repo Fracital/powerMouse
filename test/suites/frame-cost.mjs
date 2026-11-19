@@ -149,6 +149,19 @@
 // to 1,105.3 after a click, 1,122.5 to 1,123.3 and 1,092.7 to 1,094.9
 // with a first XMLHttpRequest. Every ceiling came down by as much (the
 // parent-reading frames' with the pool too), keeping its margin.
+//
+// On 2026-11-19 a frame's heap came down by about 23 to 25 KB in every case
+// once the DOM hooks' installs ran their long loops in closures of their
+// own (DOMHooks and DOMAttributes apply: a loop in one of them that ran
+// long enough had V8 compile all of the install to baseline code, some 70
+// KB in each compile of the bundle). 20 frames on Chrome 157, three
+// alternated runs each, without it and with it: 1,099.1 to 1,100.2 KB and
+// 1,075.7 to 1,076.2 same site, 1,100.3 to 1,100.5 and 1,076.6 to 1,077.2
+// another site, 1,101.6 to 1,104.2 and 1,080.5 to 1,080.9 reading the
+// parent, 1,111.0 to 1,111.3 and 1,087.3 to 1,087.8 after a click, 1,101.4
+// to 1,102.8 and 1,075.7 to 1,078.6 with a first XMLHttpRequest. The
+// ceilings stay where they were: the XMLHttpRequest case had come to
+// within a KB of its own, and the margin is for the fixes that come next.
 import { statSync } from 'node:fs';
 import { measureFrames } from '../frame-memory.mjs';
 import { done, FIXTURE, ok, SLOT_PORTS } from '../lib.mjs';
