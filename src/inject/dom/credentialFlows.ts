@@ -16,7 +16,12 @@ import {
 	type IdentityChooserAccount,
 	type PermissionOp,
 } from '../../transport/messages';
-import { closePort, onPort, privateChannel } from '../../transport/ports';
+import {
+	closePort,
+	listenOn,
+	onPort,
+	privateChannel,
+} from '../../transport/ports';
 import { requiredArgumentsMessage } from '../modules/Proxy';
 import { scopePrefix } from '../modules/Unroute';
 import { later, now, random } from '../modules/WebTransport';
@@ -32,6 +37,9 @@ const PROVIDERS_READ_PREFIX = `${IDENTITY_READ_PREFIX}Failed to read the 'provid
 
 /** Chrome's generic FedCM failure, given for a dismissed chooser and most faults */
 const GENERIC_TOKEN_ERROR = 'Error retrieving a token.';
+/** Chrome's refusal of a request while another of the tab's is open */
+const ONE_AT_A_TIME =
+	'Only one navigator.credentials.get request may be outstanding at one time.';
 
 /** an account of a provider's list, as the flow keeps it (no prototype) */
 interface Account {
@@ -43,6 +51,13 @@ interface Account {
 	/** where Chrome lists it: by its latest sign-in, then as the provider listed it */
 	rank: number;
 }
+
+/**
+ * The member of a proxied top's client that holds the request of its tab
+ * the browser still has open (one at a time in a tab, a frame's too; no
+ * other code names it)
+ */
+const OPEN = 'identityOpen';
 
 /** what the browser keeps of the site's sign-ins with a provider (IdentityState, no prototype) */
 interface State {
@@ -758,9 +773,39 @@ export function identityFlow({
 		return null;
 	};
 
+	// --- one open request in a tab ---
+
+	/**
+	 * Where the tab's open request is kept: the client of the proxied top
+	 * this document is under (as Client.ts topClientOf finds it: up through
+	 * parents that are STomp documents of the same real origin), so a
+	 * frame's request meets its top's, as natively
+	 */
+	const top = ((): Record<string, unknown> => {
+		let at = client;
+		for (let depth = 0; depth < 64; depth++) {
+			let next: unknown;
+			try {
+				const parent = at.parent;
+				if (parent === at.global) break;
+				next = (parent as unknown as Record<string, unknown>)[at.names.client];
+			} catch (error) {
+				break;
+			}
+			if (typeof next !== 'object' || next === null) break;
+			at = next as DocumentClient;
+		}
+		return at as unknown as Record<string, unknown>;
+	})();
+
 	// the FedCM flow, returning a page-realm promise. Validation rejects with
 	// Chrome's own messages (measured); then the protocol runs provider by
 	// provider, resolving the first credential or rejecting the generic error.
+	//
+	// Measured in Chrome 157: while a request of the tab is open (in flight,
+	// its chooser shown, its failure or token held) another, of the document
+	// or of a frame, is refused with NotAllowedError in a task of its own,
+	// and the first goes on.
 	const runIdentity = (
 		identity: unknown,
 		signal: unknown,
@@ -779,24 +824,55 @@ export function identityFlow({
 						'NotSupportedError',
 					),
 				);
+			if (top[OPEN]) {
+				later(
+					() => rejectPage(domException(ONE_AT_A_TIME, 'NotAllowedError')),
+					0,
+				);
+				return;
+			}
+			const ours = { __proto__: null };
+			top[OPEN] = ours;
+			let ended = false;
+			const settle = (how: (value: any) => void, value: unknown) => {
+				if (ended) return;
+				ended = true;
+				if (top[OPEN] === ours) top[OPEN] = undefined;
+				how(value);
+			};
+			// a frame that goes away (removed, navigated) takes its request
+			// with it
+			if (top !== (client as unknown))
+				listenOn(
+					client.global as unknown as EventTarget,
+					'pagehide',
+					(event) => {
+						if (event.isTrusted && top[OPEN] === ours) top[OPEN] = undefined;
+					},
+				);
 			const providers = (identity as { providers: any[] }).providers;
 			void (async () => {
 				for (const provider of providers) {
 					const credential = await attempt(provider, mediation);
 					if (credential === DISMISSED)
-						return rejectPage(
+						return settle(
+							rejectPage,
 							domException(GENERIC_TOKEN_ERROR, 'NetworkError'),
 						);
-					if (credential) return resolvePage(credential);
+					if (credential) return settle(resolvePage, credential);
 				}
 				// a failure before the chooser showed is held a while, so the
 				// page cannot tell one with no account from one the user turned
 				// down (measured, below)
 				later(
-					() => rejectPage(domException(GENERIC_TOKEN_ERROR, 'NetworkError')),
+					() =>
+						settle(
+							rejectPage,
+							domException(GENERIC_TOKEN_ERROR, 'NetworkError'),
+						),
 					testing ? 0 : rejectionDelay(),
 				);
-			})().catch((error) => rejectPage(error));
+			})().catch((error) => settle(rejectPage, error));
 		});
 
 	// preventSilentAccess(): the site's next request asks the user, until a

@@ -622,6 +622,22 @@ async function reference() {
 	await setWellKnown(null);
 	// a page that replaced Math and the timers sees none of them called
 	const watched = await watchedRuns(page.mainFrame(), null);
+	// a second request while the chooser shows
+	await page.evaluate(() => window.addChild());
+	const open = {};
+	{
+		const shown = new Promise((resolve) => (held = resolve));
+		await page.evaluate((a) => window.startScenario('flow', a), {
+			configURL: configOf(sameOrigin, `second-native-${Date.now()}`),
+			mediation: 'required',
+		});
+		const id = await Promise.race([shown, sleep(15000)]);
+		held = null;
+		open.second = await secondRequests(page.mainFrame());
+		if (id)
+			await cdp.send('FedCm.selectAccount', { dialogId: id, accountIndex: 0 });
+		open.first = await settled(page.mainFrame());
+	}
 	await browser.close();
 	const mediation = await mediationReference();
 	return {
@@ -632,12 +648,19 @@ async function reference() {
 		spied,
 		seen,
 		watched,
+		open,
 		mediation,
 		errors,
 	};
 }
 
-/** the settled result of what `frame` started (startWatched), or a timeout */
+/** a settled request, short: its token or its error */
+const brief = (result) =>
+	result?.kind === 'token'
+		? `token ${result.token}`
+		: (result?.error ?? result?.result ?? 'none');
+
+/** the settled result of what `frame` started (startWatched, startScenario), or a timeout */
 const settled = (frame, ms = 15000) =>
 	frame.evaluate((ms) => window.readPendingWithin(ms), ms);
 
@@ -661,6 +684,25 @@ async function watchedRuns(frame, host, ms = 15000) {
 	});
 	const failed = await settled(frame, ms);
 	return { picked, failed };
+}
+
+/** a second request in `frame`'s document and in a frame of it while the first is open (secondGet) */
+async function secondRequests(frame) {
+	const params = {
+		configURL: configOf(sameOrigin, `second-${Date.now()}`),
+		mediation: 'required',
+	};
+	return {
+		document: await frame.evaluate(
+			(a) => window.secondGet(a, 'document'),
+			params,
+		),
+		child: await frame.evaluate((a) => window.secondGet(a, 'child'), params),
+		silent: await frame.evaluate((a) => window.secondGet(a, 'document'), {
+			...params,
+			mediation: 'silent',
+		}),
+	};
 }
 
 /**
@@ -811,6 +853,21 @@ ok(
 		JSON.stringify(ref.watched.failed.calls) === '{}',
 	JSON.stringify(ref.watched),
 );
+{
+	const refused = {
+		result:
+			'NotAllowedError: Only one navigator.credentials.get request may be outstanding at one time.',
+		afterTimer: true,
+	};
+	ok(
+		'natively a second request while one is open is refused in a task of its own (of the document, of a frame, silent), and the first goes on',
+		JSON.stringify(ref.open.second.document) === JSON.stringify(refused) &&
+			ref.open.second.child.result === refused.result &&
+			ref.open.second.silent.result === refused.result &&
+			brief(ref.open.first) === 'token idtok.acct-1.false.n0',
+		JSON.stringify(ref.open),
+	);
+}
 const browser = await launch();
 for (const [mode, base] of [
 	['same-origin', PROXY],
@@ -1053,6 +1110,36 @@ for (const [mode, base] of [
 			`${mode}: a FedCM request calls none of the page's Math members, setTimeout, setInterval or Date.now, as natively`,
 			JSON.stringify(watched) === JSON.stringify(ref.watched),
 			JSON.stringify({ proxied: watched, native: ref.watched }),
+		);
+	}
+
+	// 5c. a second request while one is open (its chooser shown), of the
+	//     document, of a frame of it, a silent one: refused in a task of
+	//     its own, and the first goes on, as natively
+	{
+		await frame.evaluate(() => window.addChild());
+		await frame.evaluate((a) => window.startScenario('flow', a), {
+			configURL: configOf(sameOrigin, `second-${mode}-${Date.now()}`),
+			mediation: 'required',
+		});
+		const shown = await chooserButton(page, /Ada Proxy/);
+		await shown?.session.detach().catch(() => {});
+		const second = shown ? await secondRequests(frame) : 'no chooser';
+		const first =
+			shown && (await pressChooser(page, /Ada Proxy/))
+				? brief(await settled(frame))
+				: 'no chooser';
+		ok(
+			`${mode}: a second request while one is open is refused as natively (of the document, of a frame, silent), and the first goes on`,
+			JSON.stringify({ second, first }) ===
+				JSON.stringify({
+					second: ref.open.second,
+					first: brief(ref.open.first),
+				}),
+			JSON.stringify({
+				proxied: { second, first },
+				native: { second: ref.open.second, first: brief(ref.open.first) },
+			}),
 		);
 	}
 

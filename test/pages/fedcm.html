@@ -419,6 +419,36 @@
 		return true;
 	};
 
+	// a request made while the one startScenario started is open, in this
+	// document or (`child`) in a frame of the same page: how it ended (or
+	// that it had not in 10 s), and whether a timer the page set just before
+	// it ran first (natively it does: the browser's refusal is a task)
+	let child = null;
+	window.addChild = () =>
+		new Promise((resolve) => {
+			const frame = document.createElement('iframe');
+			frame.src = location.href;
+			frame.addEventListener('load', () => {
+				child = frame.contentWindow;
+				resolve(child.__fedcm?.ready === true);
+			});
+			document.body.append(frame);
+		});
+	window.secondGet = async (params, where) => {
+		let timer = false;
+		setTimeout(() => (timer = true), 0);
+		const result = await Promise.race([
+			(where === 'child' ? child : window).runScenario('flow', params),
+			new Promise((resolve) =>
+				setTimeout(() => resolve({ kind: 'still open' }), 10000),
+			),
+		]);
+		return {
+			result: result.kind === 'error' ? result.error : result.kind,
+			afterTimer: timer,
+		};
+	};
+
 	// the settled result of what was started, or `still open` after `ms`
 	// (with the page's setTimeout as the page loaded: startWatched counts
 	// the calls of the one it put in its place)
