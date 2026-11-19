@@ -92,6 +92,7 @@ mixedContentParts.noticeText = () => deferred('noticeText');
 accessFailureParts.failures = () => deferred('accessFailures');
 // and the un-routing of ReportingObserver's reports, with the first
 reportParts.seen = () => deferred('reportsSeen');
+reportParts.made = () => deferred('madeReport');
 // and the codec module's bytes, which a top compiles at its first seal from
 // the parts its shell loaded (a document without them seals in JavaScript,
 // with no request: ../../wasm/codec.ts)

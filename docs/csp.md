@@ -42,7 +42,8 @@ report-uri and report-to are left out (the browser would post the proxy's
 URLs). A report-only policy goes to the browser as one. A meta's content is
 replaced by the browser policy for it (the inject's attribute hook; the page
 reads its own content back), and it applies when the meta is inserted, as
-natively.
+natively. A meta outside the head is ignored, as natively: the browser gets
+no content for it, and the console says so with the page's policy.
 
 A document of the site pool (docs/site-pool.md) is on a slot's origin, and a
 frame or a form of a site another slot shows reaches it by a 307 to that
@@ -102,7 +103,38 @@ with the nonce it has then, as Chrome judges it as it prepares it: one whose
 src the page set before it connected, and that a nonce could still let
 through, is held refused (no src) and judged again by the insertion that
 connects it (`DocumentClient.holdScript`); any other way it reaches the
-document, it stays refused. A script-src-attr handler and a style-src-attr style attribute run
+document, it stays refused.
+
+A script of the page's markup (the response's, or one document.write
+writes) is judged as the parser prepares it, as Chrome judges it, by the
+policies the document has then: a meta in the head applies to the scripts
+after it, whether it came in the first chunk of the markup, a later one, or
+from a script that inserted it, and not to the scripts before it. The copy
+of the markup marks each script (`<prefix>parsed`), and a MutationObserver
+the inject keeps on the written document judges each marked script the
+parser inserts (the parser runs a microtask checkpoint before it runs a
+script it inserted, also where the markup waited behind a script that was
+loading; `DocumentClient` `#watchParsed`). A script the inject writes in
+the markup's place (the stand-in that writes each inline style,
+`DOMContentHooks` `rewriteStyle`, kept in `ownScripts`) is not marked: the
+browser never sees it, so the page's policy never judges it, and a style
+under a policy of nonces stays and applies with no violation. An external
+script the policies
+in force already refuse as it is copied is refused there (more policies
+refuse no less), and one after a meta of the head that is not in the page
+yet is written with no src for the browser until it is judged, so that the
+browser's preload scanner fetches nothing the page's policy refuses, as
+natively (`#holdParsed`). A refused inline script keeps no text; a refused
+external one keeps `src=""` for the browser, which fires its error event,
+as for the refused script natively, and the page reads its own src back. The console says what Chrome's says of each refusal (the page's
+directive, its notes on 'unsafe-inline' and on the fallback directive), and
+the page's ReportingObservers are handed a csp-violation report of it as the
+browser hands its own: takeRecords has it at once, the callback in a task
+before the event, a buffered observer the reports before as it first
+observes, and the report and its body read as the browser's
+(`src/inject/reportsSeen.ts` `madeReport`; csp-meta-scripts compares them).
+
+A script-src-attr handler and a style-src-attr style attribute run
 only by 'unsafe-inline' (or 'unsafe-hashes' with the value's hash); the
 inject clears the live attribute where they do not. A CSSOM write (an
 element's `style` property, `setProperty`) is the browser's to allow, so the
@@ -364,9 +396,9 @@ refuses fires a violation, natively either.
 
 ## Not yet as natively
 
-- Trusted Types: a report-only policy's violation of a sink the inject
-  writes reaches no `ReportingObserver`, and the
-  browser reports a report-only refusal of a script whose text landed as
+- Trusted Types: a violation of a sink the inject writes reaches the
+  page's `ReportingObserver` as its script violations do, which no suite
+  compares with Chrome's report yet, and the browser reports a report-only refusal of a script whose text landed as
   a Text node, or of a javascript: URL, with the rewrite as the sample.
   A javascript: URL of a link (its href is rewritten when it is set) is
   judged by the browser with the rewrite's code: the default policy is
@@ -375,6 +407,15 @@ refuses fires a violation, natively either.
   module worker of a `blob:` URL does not start. An SVG script's
   rewritten text is let through only by a default policy, as the page's
   own would be. A violation's sourceFile is not the page's script.
+- An external script after a meta a script inserts is not fetched; Chrome's
+  preload scanner, which does not know the meta, fetches it (and does not
+  run it). A script the policies in force refuse as the markup is copied is
+  reported then, before the violations of scripts ahead of it in the same
+  piece of markup.
+- A report of a violation the inject makes (csp-violation, to a
+  ReportingObserver) names no place: its sourceFile is null and its line
+  and column 0, as the event's. A report-only refusal of a load the inject
+  reports (`reportRefusal`) has an event and no report.
 - 'unsafe-hashes' with the hash of an event handler, a style attribute or a
   `javascript:` URL: the rewrite changes the text, and the browser refuses
   it.

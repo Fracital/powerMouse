@@ -145,7 +145,7 @@ import {
 	notificationParts,
 	permissionElements,
 } from '../permissionGates';
-import { reportsSeen } from '../reportsSeen';
+import { madeReport, reportsSeen } from '../reportsSeen';
 import { bucketMethods } from '../storageBucketMethods';
 import { storageUsage } from '../storageUsage';
 import { carry as carryWebTransport } from '../webTransport';
@@ -266,6 +266,9 @@ export const parts = {
 	// the un-routing of ReportingObserver's reports, at the first
 	// (../reportsSeen.ts; ../modules/Unroute.ts)
 	reportsSeen,
+	// the reports of the violations the inject makes itself, at the first
+	// (../reportsSeen.ts; ./policyChecks.ts)
+	madeReport,
 	// what a worker's construction does past its checks, at a document's
 	// first (../workerStart.ts; ../modules/Worker.ts)
 	workerStart,
