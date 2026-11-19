@@ -14,6 +14,11 @@
 // it must be refused as natively: by index, and as the page keeps the
 // frame's window in its own objects, arrays and arguments and reads it
 // back by a computed key (the helpers' short ways for those receivers).
+// It then reads the source of two hooked functions (fetch, append), which
+// natively calls no WeakMap method: the inject's table of what each of its
+// wrappers shows was asked through `WeakMap.prototype.get`, so the page's
+// replacement was handed that table and could read every native out of it,
+// and its answer made a wrapper show its own source.
 //
 // test/pages/access-tamper-iterators.html replaces the natives of the
 // iteration protocol, as a polyfill does (`Array.prototype[Symbol.iterator]`,

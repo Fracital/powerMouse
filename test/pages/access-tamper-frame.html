@@ -21,14 +21,31 @@
 							WeakSet.prototype.has = function () {
 								return true;
 							};
+						// (the calls a read below made of the page's replacement:
+						// the page made no WeakMap, so each was the inject's own,
+						// with its map; once one handed the page the map of every
+						// hooked function's native, fetch's among them)
+						var reading = false;
+						var calls = 0;
 						if (which === 'weakMapGet') {
 							var get = WeakMap.prototype.get;
 							// what the map holds for a key is the key
 							WeakMap.prototype.get = function (key) {
+								if (reading) calls++;
 								return get.call(this, key) === undefined ? undefined : key;
 							};
 						}
 						var report = { case: which, done: false };
+						var read = function (name, what) {
+							note(name, function () {
+								reading = true;
+								try {
+									return what();
+								} finally {
+									reading = false;
+								}
+							});
+						};
 						var note = function (name, read) {
 							try {
 								report[name] = String(read());
@@ -116,6 +133,15 @@
 							var name = 'stomp' + which.length;
 							raw[name] = 1;
 							return 'wrote';
+						});
+						read('fetchSource', function () {
+							return Function.prototype.toString.call(fetch);
+						});
+						read('appendSource', function () {
+							return String(Element.prototype.append);
+						});
+						note('readCalls', function () {
+							return calls;
 						});
 						report.done = true;
 						window.__tamper = report;
