@@ -191,6 +191,10 @@ const WEB_TRANSPORT = new URLSearchParams(location.search).has('wt')
 	: CFG.webTransport;
 // the transports and the built-in wisp live on the proxy origin
 const proxyBase = () => (ISOLATED ? PROXY_ORIGIN : '');
+// each transport's directory: the server names it by the hash of its files
+// (`/epoxy/<hash>/`), which the browser keeps for good, so a reload does not
+// revalidate the module and its wasm before the transport can start
+const transportPath = (name) => CFG.transports?.[name] || `/${name}/`;
 // STOMP_WISP_URL points the transports at an external wisp server (in
 // production, the edge relay); otherwise the demo server's own /wisp/
 const wispURL = () =>
@@ -207,7 +211,7 @@ const transports = {
 		// (demo/public/test/mixed-transport.mjs)
 		module: CFG.testTransport
 			? `${proxyBase()}/test/mixed-transport.mjs`
-			: `${proxyBase()}/epoxy/index.mjs`,
+			: `${proxyBase()}${transportPath('epoxy')}index.mjs`,
 		options: [{ wisp: wispURL(), ...(ECH_DNS && { ech_dns: ECH_DNS }) }],
 		// stomp-h3 is looked for next to the transport module, and the test
 		// transport is not next to epoxy's
@@ -219,7 +223,7 @@ const transports = {
 		...(WEB_TRANSPORT && { webTransport: WEB_TRANSPORT }),
 	}),
 	libcurl: () => ({
-		module: `${proxyBase()}/libcurl/index.mjs`,
+		module: `${proxyBase()}${transportPath('libcurl')}index.mjs`,
 		// libcurl.js 0.7's default pool (50 total, 6 per host) deadlocks once a
 		// page fans out more requests than that; see CHANGELOG known limitations
 		options: [{ wisp: wispURL(), connections: [500, 400, 200] }],

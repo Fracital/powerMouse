@@ -13,6 +13,7 @@ import {
 	type SiteShields,
 } from '../blocker/types';
 import {
+	assetFile,
 	assetName,
 	Assets,
 	Config,
@@ -1289,7 +1290,7 @@ export class StompController extends EventTarget {
 		if (init.agent) this.#rewriteWorkers = init.agent.pool;
 		else if (rewriteWorkers > 0)
 			this.#rewriteWorkers = new RewriteWorkers(
-				new URL(assetName(this.config.assets, 'rewriteWorker'), this.directory),
+				new URL(assetFile(this.config.assets, 'rewriteWorker'), this.directory),
 				rewriteWorkers,
 			);
 		// the rewriter is the wasm core, always: the controller compiles it
@@ -1400,8 +1401,9 @@ export class StompController extends EventTarget {
 					top: init.siteHost ?? location.origin,
 					framesUp: init.siteHost ? 2 : 1,
 					directory: this.directory,
-					frameFile: assetName(this.config.assets, 'controllerFrame'),
-					scriptFile: assetName(this.config.assets, 'siteFrameScript'),
+					// by the hash of their bytes, as the workers (assetFile)
+					frameFile: assetFile(this.config.assets, 'controllerFrame'),
+					scriptFile: assetFile(this.config.assets, 'siteFrameScript'),
 					codecKey: () => this.#call('codecKey', undefined),
 					agentOptions: async () => {
 						await this.#ready;
@@ -1799,7 +1801,7 @@ export class StompController extends EventTarget {
 	 */
 	async #startWorker(descriptor: TransportDescriptor): Promise<void> {
 		const url = new URL(
-			assetName(this.config.assets, 'transportWorker'),
+			assetFile(this.config.assets, 'transportWorker'),
 			this.directory,
 		);
 		let worker: TransportWorker | undefined;
@@ -1846,7 +1848,7 @@ export class StompController extends EventTarget {
 		try {
 			const clock = new TransportWorker(
 				new URL(
-					assetName(this.config.assets, 'transportWorker'),
+					assetFile(this.config.assets, 'transportWorker'),
 					this.directory,
 				),
 				this.#handshakeHeaders,
@@ -1870,7 +1872,7 @@ export class StompController extends EventTarget {
 		const first = descriptor.options?.[0] as { wisp?: unknown } | undefined;
 		if (!this.#sharesCarrier || typeof first?.wisp !== 'string') return null;
 		return startCarrierHost(
-			new URL(assetName(this.config.assets, 'transportWorker'), this.directory),
+			new URL(assetFile(this.config.assets, 'transportWorker'), this.directory),
 		);
 	}
 	/** import a descriptor's module in this page (`host: 'page'`, or the worker fallback) */
@@ -2041,7 +2043,9 @@ export class StompController extends EventTarget {
 						new URL(
 							name === 'core'
 								? coreFile(this.config.assets)
-								: assetName(this.config.assets, name),
+								: name === 'blocker'
+									? assetFile(this.config.assets, name)
+									: assetName(this.config.assets, name),
 							this.directory,
 						),
 					);

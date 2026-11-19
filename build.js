@@ -327,6 +327,14 @@ const common = {
 		// (src/version.ts DOCUMENT, DOCUMENT_FULL: see `bundles` below)
 		'process.env.STOMP_DOCUMENT': '""',
 		'process.env.STOMP_DOCUMENT_FULL': '""',
+		// (src/version.ts TRANSPORT_WORKER, REWRITE_WORKER, BLOCKER and the
+		// frames': see `bundles` below)
+		'process.env.STOMP_TRANSPORT_WORKER': '""',
+		'process.env.STOMP_REWRITE_WORKER': '""',
+		'process.env.STOMP_BLOCKER': '""',
+		'process.env.STOMP_CONTROLLER_FRAME': '""',
+		'process.env.STOMP_CONTROLLER_FRAME_SCRIPT': '""',
+		'process.env.STOMP_SITE_FRAME_SCRIPT': '""',
 		// the rewriter's generation (src/version.ts REWRITE_GENERATION): a
 		// digest of the bytes a rewrite's output depends on, known once the
 		// wasm artifacts are copied and the library is built (see `bundles`
@@ -1428,6 +1436,18 @@ const swPartsHolder = {
 
 /** the document bundles, built before the others (`bundles`) */
 const DOCUMENT_BUNDLES = ['injectDocument', 'injectDocumentFull'];
+/**
+ * the workers the controller starts by the hash of their bytes, built after
+ * the document bundles and before the bundles that name them
+ */
+const NAMED_WORKERS = ['transportWorker', 'rewriteWorker'];
+/**
+ * the scripts of isolation mode's frame and the site pool's, asked for by
+ * the hash of their bytes too: built after the workers (whose hashes they
+ * carry) and before the controllers that name them
+ */
+// (the site pool's first: isolation mode's controller host names it)
+const NAMED_FRAMES = ['siteFrame', 'controllerFrame'];
 
 // (a document bundle's codec module is a deferred part, src/wasm/codecBytes.ts)
 const documentDefine = { 'process.env.STOMP_CODEC_WASM': 'undefined' };
@@ -1534,8 +1554,17 @@ const builds = [
  * build's file is another URL and a host can let browsers keep it for
  * good. The watch build has no bytes to hash before it starts: its files
  * are asked for by the time it started, and the dev server caches nothing.
+ * `documents` and `files` are the hashes of the document bundles and of
+ * the files the controller starts (NAMED_WORKERS, the blocker's module), by
+ * name: empty until those are built, and in the watch build.
  */
-const bundles = (library, generation = '', core = library, documents = {}) =>
+const bundles = (
+	library,
+	generation = '',
+	core = library,
+	documents = {},
+	files = {},
+) =>
 	builds.map((options) => ({
 		...common,
 		...options,
@@ -1548,6 +1577,22 @@ const bundles = (library, generation = '', core = library, documents = {}) =>
 			),
 			'process.env.STOMP_DOCUMENT_FULL': JSON.stringify(
 				documents.injectDocumentFull ?? '',
+			),
+			'process.env.STOMP_TRANSPORT_WORKER': JSON.stringify(
+				files.transportWorker ?? '',
+			),
+			'process.env.STOMP_REWRITE_WORKER': JSON.stringify(
+				files.rewriteWorker ?? '',
+			),
+			'process.env.STOMP_BLOCKER': JSON.stringify(files.blocker ?? ''),
+			'process.env.STOMP_CONTROLLER_FRAME': JSON.stringify(
+				files.controllerFrameHtml ?? '',
+			),
+			'process.env.STOMP_CONTROLLER_FRAME_SCRIPT': JSON.stringify(
+				files.controllerFrame ?? '',
+			),
+			'process.env.STOMP_SITE_FRAME_SCRIPT': JSON.stringify(
+				files.siteFrame ?? '',
 			),
 			'process.env.STOMP_REWRITE_GENERATION': JSON.stringify(generation),
 			...(options.inject?.includes(snapshot) ? reflectDefines : {}),
@@ -1744,15 +1789,51 @@ if (dev) {
 	await Promise.all(
 		bundles(library, generation, core).filter(isDocument).map(run),
 	);
-	const documents = {};
-	for (const name of DOCUMENT_BUNDLES)
-		documents[name] = createHash('sha256')
-			.update(await readFile(`dist/${name}.js`))
+	const hashOf = async (path) =>
+		createHash('sha256')
+			.update(await readFile(path))
 			.digest('hex')
 			.slice(0, 16);
+	const documents = {};
+	for (const name of DOCUMENT_BUNDLES)
+		documents[name] = await hashOf(`dist/${name}.js`);
+	// then the workers the controller starts, which it asks for by the hash
+	// of each file as built (src/version.ts TRANSPORT_WORKER, REWRITE_WORKER),
+	// and the blocker's module by its bytes' (BLOCKER): a reload of the host
+	// finds them in the HTTP cache instead of revalidating each one before
+	// the transport can start
+	const isNamedWorker = (options) =>
+		NAMED_WORKERS.includes(Object.keys(options.entryPoints)[0]);
 	await Promise.all(
 		bundles(library, generation, core, documents)
-			.filter((options) => !isDocument(options))
+			.filter(isNamedWorker)
+			.map(run),
+	);
+	const files = { blocker: await hashOf('dist/blocker.wasm') };
+	for (const name of NAMED_WORKERS)
+		files[name] = await hashOf(`dist/${name}.js`);
+	// then the site pool's frame script and isolation mode's, whose
+	// controller host names the site pool's, and the frame document as
+	// copied, named so by the controllers
+	const isNamedFrame = (options) =>
+		NAMED_FRAMES.includes(Object.keys(options.entryPoints)[0]);
+	for (const name of NAMED_FRAMES) {
+		await Promise.all(
+			bundles(library, generation, core, documents, files)
+				.filter((options) => Object.keys(options.entryPoints)[0] === name)
+				.map(run),
+		);
+		files[name] = await hashOf(`dist/${name}.js`);
+	}
+	files.controllerFrameHtml = await hashOf('dist/controllerFrame.html');
+	await Promise.all(
+		bundles(library, generation, core, documents, files)
+			.filter(
+				(options) =>
+					!isDocument(options) &&
+					!isNamedWorker(options) &&
+					!isNamedFrame(options),
+			)
 			.map(run),
 	);
 	checkInputs();
