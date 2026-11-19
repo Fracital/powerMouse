@@ -573,12 +573,14 @@ async function reference() {
 			},
 		);
 	// the browser's own chooser picks its first account (CDP), and its error
-	// dialog is closed
+	// dialog is closed (an automatic sign-in's is left alone: see
+	// mediationReference)
 	const cdp = await page.context().newCDPSession(page);
 	await cdp.send('FedCm.enable', { disableRejectionDelay: true });
 	// (`held`: the next chooser stays open until the suite picks)
 	let held = null;
 	cdp.on('FedCm.dialogShown', ({ dialogId, dialogType }) => {
+		if (dialogType === 'AutoReauthn') return;
 		if (held && dialogType === 'AccountChooser') return held(dialogId);
 		(dialogType === 'AccountChooser'
 			? cdp.send('FedCm.selectAccount', { dialogId, accountIndex: 0 })
@@ -757,6 +759,11 @@ async function mediationReference() {
 		await cdp.send('FedCm.enable', { disableRejectionDelay: true });
 		const native = { step: null, dialogs: [] };
 		cdp.on('FedCm.dialogShown', ({ dialogId, dialogType, accounts }) => {
+			// an automatic sign-in shows Chrome's "Signing you in" notice while
+			// its token POST is out, which the user does nothing to: closing it
+			// cancels the sign-in ("Error retrieving a token.") whenever the
+			// close lands before the token answer, as on a busy runner
+			if (dialogType === 'AutoReauthn') return;
 			if (dialogType !== 'AccountChooser')
 				return cdp.send('FedCm.dismissDialog', { dialogId }).catch(() => {});
 			native.dialogs.push(
