@@ -22,6 +22,10 @@
 			(error) => error.name,
 		);
 		popup?.close();
-		return { own, inPopup, orientation };
+		// what a top may use: fullscreen, autoplay, encrypted media, the
+		// motion sensors... (the host's frame names each for the proxy)
+		const policy = document.featurePolicy.allowedFeatures().sort();
+		const fullscreen = document.fullscreenEnabled;
+		return { own, inPopup, orientation, policy, fullscreen };
 	};
 </script>

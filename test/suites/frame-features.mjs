@@ -42,10 +42,16 @@ for (const [mode, base] of [
 	const proxied = frame
 		? await frame.evaluate(() => window.__features()).catch((e) => String(e))
 		: null;
+	const policy = proxied?.policy ?? [];
 	ok(
 		`${mode}: the page may use what it may use natively`,
 		JSON.stringify(proxied) === JSON.stringify(native),
-		JSON.stringify({ native, proxied }),
+		JSON.stringify({
+			...{ native: { ...native, policy: undefined } },
+			proxied: proxied && { ...proxied, policy: undefined },
+			missing: native.policy.filter((f) => !policy.includes(f)),
+			extra: policy.filter((f) => !native.policy.includes(f)),
+		}),
 	);
 	await page.close();
 }
