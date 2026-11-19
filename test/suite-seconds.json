@@ -80,6 +80,7 @@
 	"dup-content-type": 3,
 	"dynamic-scripts": 4,
 	"early-errors": 26,
+	"ech-cache": 10,
 	"ech-fallback": 4,
 	"epoxy-concurrency": 45,
 	"epoxy-ipv6": 2,
