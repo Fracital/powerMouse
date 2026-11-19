@@ -74,7 +74,9 @@ The host's own frame decides what the proxy origin may ask the browser for
 at all. In same-origin mode the proxied frame is same-origin with the host
 and may ask for everything. In isolation mode it is a frame of another
 origin, which gets nothing without an `allow` attribute: the demo sets one
-on its frames (`FRAME_ALLOW` in demo/public/pm/main.js). Chrome never shows
+on its frames that names every feature the demo page may use itself
+(`FRAME_ALLOW` in demo/public/pm/main.js), as a top has them, fullscreen,
+autoplay and encrypted media included (frame-features suite). Chrome never shows
 a frame of another origin the notification prompt, so in isolation mode a
 site's `Notification.requestPermission()` is dismissed (`default`).
 

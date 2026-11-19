@@ -1399,13 +1399,11 @@ for (const [mode, base] of [
 		register: await run(top, 'register', { server: { user: 'off' } }),
 		login: await run(top, 'login', {}),
 	};
-	// the browser's own answers for the proxy origin: an address is no
-	// relying party (same-origin mode), a frame of another origin has no
-	// policy for WebAuthn (isolated mode)
+	// the browser's own answer for the proxy origin: an address is no
+	// relying party. An isolated frame has the page's WebAuthn policy, as a
+	// top page has, so it gets the same answer
 	const expected =
-		mode === 'same-origin'
-			? 'DOMException/DOMException/SecurityError: This is an invalid domain.'
-			: "DOMException/DOMException/NotAllowedError: The 'publickey-credentials-create' feature is not enabled in this document. Permissions Policy may be used to delegate Web Authentication capabilities to cross-origin child frames.";
+		'DOMException/DOMException/SecurityError: This is an invalid domain.';
 	ok(
 		`${mode}: without the option a page's requests end in the browser's own refusal, and no prompt shows`,
 		flow.register.rejected === expected &&

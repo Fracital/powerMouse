@@ -269,10 +269,14 @@ function rememberTransport(name) {
 }
 
 // the page's callbacks, the same for both controllers
-// what a proxied page may ask the browser for: the proxy origin is another
-// origin than this page in isolation mode, and its frame gets none of these
-// without being named (STomp keeps each site's answer, docs/permissions.md)
-const FRAME_ALLOW = [
+// what a proxied page may use: the proxy origin is another origin than this
+// page in isolation mode, and its frame gets no feature without its name,
+// where a top has every one its browser lets this page have (fullscreen,
+// autoplay, encrypted media, the motion sensors, payment, passkeys...).
+// STomp keeps each site's answer to the powerful ones (docs/permissions.md).
+// In a cross-origin isolated page, cross-origin-isolated is the
+// controller's to name, for each slot
+const FRAME_FEATURES = [
 	'geolocation',
 	'camera',
 	'microphone',
@@ -292,7 +296,21 @@ const FRAME_ALLOW = [
 	'hid',
 	'serial',
 	'bluetooth',
-].join('; ');
+];
+const FRAME_ALLOW = (() => {
+	let features = FRAME_FEATURES;
+	try {
+		features = document.featurePolicy.allowedFeatures();
+	} catch {
+		// no featurePolicy (not Chrome): the powerful ones
+	}
+	return features
+		.filter(
+			(feature) =>
+				feature !== 'cross-origin-isolated' || !globalThis.crossOriginIsolated,
+		)
+		.join('; ');
+})();
 
 const PERMISSION_WORDS = {
 	geolocation: 'know your location',
