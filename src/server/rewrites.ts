@@ -177,6 +177,7 @@ import {
 import { fragmentOf, queryOf, withQuery } from '../urlShape';
 import { BUILD, REWRITE_GENERATION } from '../version';
 import { contextText, isLinkRoute, LINK_SEGMENT, linkRoute } from '../visited';
+import { rewriteBytesInWasm } from '../wasm/rewriteBytes';
 import { scanMarkup, scannerSettled } from '../wasm/scanner';
 import { modifyXML, xmlShellEncoding } from '../xmlShell';
 import { badPort } from './badPorts';
@@ -4457,8 +4458,8 @@ function genericForward(
 		browserBytes(responseHeaders, url.url, navigation);
 
 		let body: BodyInit | undefined;
-		/** the transform's output when it is text: a rewrite made just now */
-		let rewritten: string | null = null;
+		/** the transform's output when it is a rewrite made just now */
+		let rewritten: string | Blob | null = null;
 
 		if (identityRead && !redirect) {
 			// (a hop that redirects is followed by the browser, with the token)
@@ -4629,7 +4630,12 @@ function genericForward(
 			// each copied the encoded bytes again and the bytes themselves
 			// were an ArrayBuffer of the worker's, kept 30 s and then left to
 			// its collector, in the renderer the frames share
-			if (typeof output === 'string') rewritten = output;
+			// (a script's output made just now of its bytes is a Blob of them)
+			if (
+				typeof output === 'string' ||
+				(output instanceof Blob && note.rewriteCache === 'miss')
+			)
+				rewritten = output;
 			const encoded = typeof output === 'string' ? new Blob([output]) : null;
 			const transformed = encoded ?? output;
 
@@ -5781,6 +5787,47 @@ export function registerRewrites(
 		note.rewriteBy = told.by ?? 'wasm';
 		return output;
 	};
+	// a script that came as UTF-8 goes to the rewriter as its bytes, and its
+	// output comes back as bytes (src/wasm/rewriteBytes.ts), from a rewrite
+	// worker or this thread: the same output rewriteScript makes of the text
+	// they decode to, never decoded or encoded here. Its text where it was
+	// made of the decoded text (a script the module does not answer for)
+	const rewriteScriptBytes = async (
+		bytes: Uint8Array,
+		url: StompURL,
+		type: ScriptType,
+		note: Note,
+		preamble = '',
+	): Promise<Blob | string> => {
+		const pooled = rewriter.pool?.live
+			? await rewriter.pool.rewriteBytes(
+					bytes,
+					url,
+					rewriter.config,
+					type,
+					preamble,
+				)
+			: null;
+		note.rewriteIn = pooled === null ? 'service-worker' : 'pool';
+		note.rewriteBy = 'wasm';
+		if (pooled !== null)
+			return typeof pooled === 'string' ? pooled : new Blob([pooled]);
+		const output = rewriteBytesInWasm(
+			bytes,
+			url,
+			rewriter.config,
+			type,
+			preamble,
+		);
+		if (output !== null) return new Blob([output]);
+		return modifyJS(
+			new TextDecoder().decode(bytes),
+			url,
+			rewriter.config,
+			type,
+			preamble,
+		);
+	};
 	// the config a script's rewrite depends on, for its cache key: all of it
 	// but the client's name and the site pool's message token, which a
 	// controller mints anew (a host that keeps its id across a reload would
@@ -5974,6 +6021,11 @@ export function registerRewrites(
 					note.rewriteCache = 'skip';
 					const read = new Uint8Array(await response.arrayBuffer());
 					note.bytes = read.byteLength;
+					if (
+						scriptEncoding(read, contentType, isModuleType, environment) ===
+						'utf-8'
+					)
+						return rewriteScriptBytes(read, url, type, note, preamble);
 					return rewriteScript(
 						decodeScript(read, contentType, isModuleType, environment),
 						url,
@@ -6040,9 +6092,18 @@ export function registerRewrites(
 					note.rewriteCache = 'hit';
 					return kept;
 				}
-				// as the browser decodes it (a BOM goes, bad bytes are U+FFFD)
-				const text = new TextDecoder(encoding).decode(bytes);
-				const output = await rewriteScript(text, url, type, note, preamble);
+				// as the browser decodes it (a BOM goes, bad bytes are U+FFFD):
+				// UTF-8 by the rewriter itself
+				const output =
+					encoding === 'utf-8'
+						? await rewriteScriptBytes(bytes, url, type, note, preamble)
+						: await rewriteScript(
+								new TextDecoder(encoding).decode(bytes),
+								url,
+								type,
+								note,
+								preamble,
+							);
 				note.rewriteCache = 'miss';
 				return output;
 			},

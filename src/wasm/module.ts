@@ -359,6 +359,20 @@ export class BufferInstance {
 		};
 	}
 	/**
+	 * `call` for a text that is UTF-8 bytes already (a script as the network
+	 * sent it): copied in as they are, and the answer copied out as bytes,
+	 * so neither is decoded or encoded here. The module answers status 3 for
+	 * bytes that are no UTF-8.
+	 */
+	callBytes(
+		input: Uint8Array,
+		flags: number,
+	): { bytes: Uint8Array<ArrayBuffer> } | { status: number } {
+		const status = this.#exports.r(...this.#give(input), flags);
+		if (status !== 0) return { status };
+		return { bytes: this.#view(this.#exports.p(), this.#exports.n()).slice() };
+	}
+	/**
 	 * `call` for a module with a kept input buffer (`i`, `x`): the text is
 	 * encoded where the module reads it (no array and no allocation per
 	 * call), and it comes back unit for unit: a byte order mark that leads

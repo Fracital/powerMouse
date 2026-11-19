@@ -26,9 +26,9 @@ import { hasModule, withInstance } from './thread';
 export const REWRITER = 'rewriter';
 
 // rust/rwjs/src/abi.rs
-const FLAG_MODULE = 2;
-const FLAG_HOLDER = 4;
-const FLAG_PARAMS = 8;
+export const FLAG_MODULE = 2;
+export const FLAG_HOLDER = 4;
+export const FLAG_PARAMS = 8;
 const FLAG_META = 16;
 const FLAG_REVISION = 32;
 const FLAG_PARSES = 64;
@@ -88,7 +88,7 @@ export const REVISION = '18';
 /** whether an instance answered REVISION, asked once of each */
 const speaks = new WeakMap<BufferInstance, boolean>();
 
-function sameRevision(instance: BufferInstance): boolean {
+export function sameRevision(instance: BufferInstance): boolean {
 	let same = speaks.get(instance);
 	if (same === undefined) {
 		const answered = instance.call('', FLAG_REVISION);

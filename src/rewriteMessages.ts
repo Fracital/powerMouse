@@ -39,6 +39,14 @@ export interface RewriteAnswer extends Required<RewrittenBy> {
 	output: string;
 }
 
+/** a script that came as UTF-8: its bytes, a copy, in place of its text (src/wasm/rewriteBytes.ts) */
+export interface RewriteBytesRequest extends Omit<
+	RewriteRequest,
+	'script' | 'source'
+> {
+	bytes: ArrayBuffer;
+}
+
 /** a content blocker engine to compile (src/blocker/build.ts): the blocker module's bytes and the lists */
 export interface EngineBuild {
 	module: ArrayBuffer;
@@ -48,6 +56,8 @@ export interface EngineBuild {
 /** implemented by a rewrite worker (src/rewriteWorker.ts), called by the service worker */
 export type RewriteBound = {
 	rewrite: [RewriteRequest, string | RewriteAnswer];
+	/** the output's UTF-8 bytes, or its text where it was made of the text the bytes decode to */
+	rewriteBytes: [RewriteBytesRequest, ArrayBuffer | string];
 	/** the serialized engine, null when the module refused the lists */
 	buildEngine: [EngineBuild, ArrayBuffer | null];
 };

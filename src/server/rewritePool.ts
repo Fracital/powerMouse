@@ -103,6 +103,7 @@ export class RewritePool {
 		request: RewriteBound[K][0],
 		size: number,
 		wait?: number,
+		transfer?: Transferable[],
 	): Promise<RewriteBound[K][1] | null> {
 		const member = this.#pick();
 		if (!member) return null;
@@ -111,7 +112,7 @@ export class RewritePool {
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
 			return await Promise.race([
-				member.rpc.call(method, request),
+				member.rpc.call(method, request, transfer),
 				new Promise<never>((_, reject) => {
 					timer = setTimeout(() => {
 						if (wait === undefined)
@@ -157,6 +158,40 @@ export class RewritePool {
 		if (answer === null || typeof answer === 'string') return answer;
 		if (told) told.by = answer.by;
 		return answer.output;
+	}
+	/**
+	 * The script whose UTF-8 bytes are `bytes`, rewritten by a worker from
+	 * its bytes (src/wasm/rewriteBytes.ts): its output's bytes, or the
+	 * output as text where the worker made it of the decoded text; null
+	 * when the caller must rewrite it itself. A copy of the bytes is handed
+	 * over: the caller rewrites them when no worker answers.
+	 */
+	rewriteBytes(
+		bytes: Uint8Array,
+		url: StompURL,
+		config: Config,
+		type: ScriptType,
+		/** code to run first, after the worker's bootstrap (modifyJS's) */
+		preamble?: string,
+	): Promise<ArrayBuffer | string | null> {
+		const copy = bytes.slice().buffer;
+		return this.#call(
+			'rewriteBytes',
+			{
+				bytes: copy,
+				url: url.toString(),
+				directory: url.directory,
+				codecKey: url.codec.key,
+				config,
+				type,
+				scopes: routeScopeList(),
+				...(url.mark === undefined ? {} : { mark: url.mark }),
+				...(preamble ? { preamble } : {}),
+			},
+			bytes.length,
+			undefined,
+			[copy],
+		);
 	}
 	/**
 	 * The content blocker's engine compiled by the worker with the least in
