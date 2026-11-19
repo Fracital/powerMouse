@@ -1,4 +1,5 @@
 import {
+	IDENTITY_READ,
 	IMAGES_WAITING,
 	LOAD_CHANNEL,
 	LOAD_HEADER,
@@ -42,7 +43,15 @@ export interface LoadSource {
 	client: Client;
 	/** the token to send as LOAD_HEADER with a request for `url` as `load` */
 	announce(url: string, load: string): string | null;
+	/**
+	 * Hear the body the worker posts for the `webidentity no-cors` load of
+	 * `token` (IDENTITY_READ), once; null stops listening
+	 */
+	expect(token: string, listener: IdentityHeard | null): void;
 }
+
+/** a FedCM endpoint's answer, as the worker read it (IDENTITY_READ) */
+export type IdentityHeard = (status: number, body: string | null) => void;
 
 type Post = (message: unknown, transfer: Transferable[]) => void;
 
@@ -92,6 +101,8 @@ let source: LoadSource | null | undefined;
 let first: Client | null = null;
 /** whether this realm watches its images (IMAGES_WAITING) */
 let watching = false;
+/** who waits for which token's IDENTITY_READ (no prototype: no key is the page's) */
+const heard: Record<string, IdentityHeard> = Object.create(null);
 
 const ALPHABET =
 	'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
@@ -129,13 +140,29 @@ function open(directory: string, answer?: string): boolean {
 			'message',
 			(event: MessageEvent) => {
 				if (port === mine) {
+					const data = Reflect.apply(taken.dataOf, event, []) as unknown;
+					// a FedCM endpoint's body, for the flow that waits for it
+					// (own values only: the message's prototypes are the page's)
+					const read =
+						typeof data === 'object' && data !== null
+							? (taken.own(data, IDENTITY_READ)?.value as unknown)
+							: undefined;
+					if (typeof read === 'object' && read !== null) {
+						const token = taken.own(read, 'token')?.value as unknown;
+						const status = taken.own(read, 'status')?.value as unknown;
+						const body = taken.own(read, 'body')?.value as unknown;
+						const listener = typeof token === 'string' ? heard[token] : null;
+						if (!listener) return;
+						delete heard[token as string];
+						listener(
+							typeof status === 'number' ? status : 0,
+							typeof body === 'string' ? body : null,
+						);
+						return;
+					}
 					// the worker's word that an image of this document waits for
 					// a connection: the document watches its images from now on
-					if (
-						!watching &&
-						first &&
-						Reflect.apply(taken.dataOf, event, []) === IMAGES_WAITING
-					) {
+					if (!watching && first && data === IMAGES_WAITING) {
 						watching = true;
 						try {
 							const client = first as DocumentClient;
@@ -203,7 +230,14 @@ export function initLoads(client: Client) {
 		// a realm with no location: no channel
 	}
 	if (!routed || !taken || !open(client.directory)) return;
-	source = { client, announce };
+	source = {
+		client,
+		announce,
+		expect: (token, listener) => {
+			if (listener) heard[token] = listener;
+			else delete heard[token];
+		},
+	};
 	try {
 		Reflect.apply(taken.listen, taken.container, [
 			'message',

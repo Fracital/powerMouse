@@ -44,11 +44,14 @@ interface CredentialData {
  * and the protocol runs in the inject: every network step goes through the
  * routed fetch the page's own loads go through (loadGrants.loadFetch), with the
  * `webidentity` destination so the server synthesises Sec-Fetch-Dest:
- * webidentity (src/server/rewrites.ts). The account chooser the browser draws
- * as trusted chrome is, here, an in-page DOM overlay - the one compromise,
- * documented in FINDINGS: a hostile page can observe our overlay where it never
- * could the browser's. It is drawn in a shadow root, and the account list stays
- * in this module's scope, so the page reaches it only by scraping the overlay.
+ * webidentity (src/server/rewrites.ts). The steps the browser reads in its own
+ * process with no CORS check (the well-known file, config, accounts) are read
+ * by the service worker, which posts their bodies on the document's load
+ * channel (../credentialFlows.ts idpRead). The account chooser the browser
+ * draws as trusted chrome is, here, an in-page DOM overlay: a closed shadow
+ * root made with the browser's own functions, its names and addresses shown
+ * as generated content, so no page code reads the account list from it. The
+ * page can still tell that an overlay was added.
  *
  * IdentityCredentialError is left as the browser's own: it is constructible,
  * reads no network and so cannot leak, and reads natively already.
@@ -234,6 +237,11 @@ export default class CredentialsModule extends Module<DocumentClient> {
 		};
 
 		let flows: ReturnType<DeferredParts['identityFlow']> | null = null;
+		// what the flow reads its endpoints' bodies with, taken before any of
+		// the page's script ran: an account list must reach no function of
+		// the page's
+		const parse = global.JSON.parse;
+		const isArray = global.Array.isArray;
 		const identityFlow = () =>
 			(flows ??= deferred('identityFlow')({
 				client,
@@ -243,6 +251,8 @@ export default class CredentialsModule extends Module<DocumentClient> {
 				abortReason,
 				makeCredential,
 				IdentityCredentialError: NativeIdentityCredentialError,
+				parse,
+				isArray,
 			}));
 		// both answer with a promise: a part that cannot be had (one of
 		// another build, a failed load) is a rejection, never a throw
