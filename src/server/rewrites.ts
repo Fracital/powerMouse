@@ -24,6 +24,8 @@ import {
 	scriptFacts,
 	WORKER_DIRECTIVES,
 	type HopPolicy,
+	type Policy,
+	type ScriptFacts,
 } from '../csp';
 import { freshFrameDocument } from '../freshFrame';
 import { rewriteLinkHeader } from '../headers';
@@ -5277,6 +5279,8 @@ interface HeadRead {
 	/** the rest's first read, made already */
 	next: Promise<ReadableStreamReadResult<Uint8Array>> | null;
 	decoder: TextDecoder;
+	/** whether the head has ended (or the body): not when readHead's deadline came first */
+	head: boolean;
 }
 
 /** the bytes the encoding is decided by: a byte order mark and the prescan's (src/server/charset.ts) */
@@ -5288,11 +5292,15 @@ const BODY_START = /<body[\s>]/i;
  * Read an HTML document's body until its encoding is decided (its first
  * 1024 bytes) and its head has ended (`<body`, which the meta readers stop
  * at), or to its end. The decode is the whole body's (a decoder fed as the
- * bytes come gives the same text).
+ * bytes come gives the same text). A head that pauses for `headGap` ms
+ * after the first 1024 bytes, or has not ended `headCap` ms after them, is
+ * left where it got to (`head` says so).
  */
 async function readHead(
 	response: Response,
 	contentType: string | null,
+	headGap = Infinity,
+	headCap = Infinity,
 ): Promise<HeadRead | null> {
 	if (!response.body) return null;
 	const reader = response.body.getReader();
@@ -5323,9 +5331,24 @@ async function readHead(
 	// head of megabytes (0.4 s for CNN's 3.5 MB head)
 	let piece = text;
 	let carry = '';
+	const deadline = Date.now() + headCap;
 	while (!done && !BODY_START.test(carry + piece)) {
 		carry = (carry + piece).slice(-5);
-		const chunk = await reader.read();
+		const pending = reader.read();
+		const chunk =
+			headGap === Infinity
+				? await pending
+				: await valueWithin(pending, Math.min(headGap, deadline - Date.now()));
+		if (chunk === null)
+			return {
+				encoding,
+				text,
+				bytes,
+				rest: reader,
+				next: pending,
+				decoder,
+				head: false,
+			};
 		if (chunk.done) {
 			done = true;
 			text += decoder.decode();
@@ -5355,12 +5378,47 @@ async function readHead(
 		bytes += chunk.value.byteLength;
 		text += decoder.decode(chunk.value, { stream: true });
 	}
-	return { encoding, text, bytes, rest: done ? null : reader, next, decoder };
+	return {
+		encoding,
+		text,
+		bytes,
+		rest: done ? null : reader,
+		next,
+		decoder,
+		head: true,
+	};
 }
+/** `promise`'s value, or null if it has none within `ms` */
+function valueWithin<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+	let timer: ReturnType<typeof setTimeout>;
+	return Promise.race([
+		promise,
+		new Promise<null>((resolve) => (timer = setTimeout(resolve, ms, null))),
+	]).finally(() => clearTimeout(timer));
+}
+/**
+ * How long a document's head may pause, and how long it may take, after its
+ * first 1024 bytes before its shell goes out without it: the browser
+ * commits a document on its first bytes, and YouTube's head (790 KB of it
+ * at once, then a pause before its last 17 KB) held the commit 450 ms. A
+ * head that keeps coming (CNN's 3.2 MB) is read on, and goes in one piece
+ */
+const HEAD_GAP_MS = 20;
+const HEAD_CAP_MS = 100;
 /** a document of at most this much that arrives at once is not streamed (readHead) */
 const WHOLE_BYTES = 256 * 1024;
 /** what "at once" is: the next chunk within this */
 const QUICK_MS = 20;
+
+/**
+ * What a meta of a later piece of a head said (streamMarkup's `told`), for
+ * the client to apply before it writes the piece: the page's script facts
+ * as its policies now make them, and that its requests are upgraded
+ */
+interface HeadTold {
+	facts: Pick<ScriptFacts, 'code' | 'ttActive' | 'rtt'>;
+	upgrade?: true;
+}
 
 /** a document's markup streams the worker holds for their clients, by token (MARKUP_ROUTE) */
 const markupStreams = new Map<
@@ -5369,6 +5427,9 @@ const markupStreams = new Map<
 >();
 /** how long a markup stream waits for its client before it goes */
 const MARKUP_WAIT_MS = 60_000;
+/** a raw text element's start tag at the start of a piece (pageStream's RAW_TEXT) */
+const RAW_START =
+	/^<(script|style|title|textarea|xmp|iframe|noembed|noframes)(?=[\s/>])[^>]*>/i;
 /** a piece of markup is cut once this much is in hand, or after SEGMENT_MS */
 const SEGMENT_CHARS = 32 * 1024;
 const SEGMENT_MS = 30;
@@ -5395,6 +5456,12 @@ function streamMarkup(
 	meta: ((segment: string) => void) | null,
 	sizes: (read: number) => [number, number],
 	client: string | undefined,
+	/**
+	 * a head still coming when the shell went out: shown each later piece
+	 * until the body starts, and what it answers goes with the piece
+	 * (HeadTold)
+	 */
+	told: ((segment: string) => HeadTold | null) | null = null,
 ): string {
 	const random = new Uint8Array(22);
 	crypto.getRandomValues(random);
@@ -5410,8 +5477,16 @@ function streamMarkup(
 			// a <base>: the worker's outputs would be for another URL
 			let based = false;
 			let later = false;
+			let head = told !== null && !BODY_START.test(first);
 			const send = (segment: string, end: boolean) => {
-				if (later) meta?.(segment);
+				let said: HeadTold | null = null;
+				if (later) {
+					meta?.(segment);
+					if (head) {
+						said = told!(segment);
+						if (BODY_START.test(segment)) head = false;
+					}
+				}
 				later = true;
 				if (!based && hasBase(segment)) based = true;
 				const job = based ? null : prewrite(segment);
@@ -5427,6 +5502,7 @@ function streamMarkup(
 						segment,
 						table,
 						end ? sizes(total) : null,
+						...(said ? [said] : []),
 					]);
 					try {
 						controller.enqueue(encoder.encode(`${record.length}\n${record}`));
@@ -5440,6 +5516,12 @@ function streamMarkup(
 			// a cut is tried once this much is in hand (twice what a cut that
 			// found no whole token had: a script's text may be megabytes)
 			let tryAt = 0;
+			// or, where the cut found a raw text element's text unfinished
+			// (YouTube's 780 KB inline script, with its head still coming),
+			// once its end tag is in what came since: doubling alone could
+			// pass the document's end, and its rest waited for the last byte
+			let rawEnd: RegExp | null = null;
+			let searched = 0;
 			let last = Date.now();
 			// what came since the last cut, when the origin pauses: cut then
 			let timer: ReturnType<typeof setTimeout> | null = null;
@@ -5451,12 +5533,21 @@ function streamMarkup(
 				const unit = pending.charCodeAt(end - 1);
 				if (unit >= 0xd800 && unit < 0xdc00) end--;
 				if (end === 0) {
-					tryAt = pending.length * 2;
+					const raw = RAW_START.exec(pending);
+					if (raw) {
+						if (rawEnd === null) searched = raw[0].length;
+						rawEnd = new RegExp(`</${raw[1]}`, 'gi');
+						tryAt = Infinity;
+					} else {
+						rawEnd = null;
+						tryAt = pending.length * 2;
+					}
 					return;
 				}
 				send(pending.slice(0, end), false);
 				pending = pending.slice(end);
 				tryAt = 0;
+				rawEnd = null;
 				last = Date.now();
 			};
 			// after the shell is on its way, and after the page asked for its
@@ -5476,6 +5567,17 @@ function streamMarkup(
 						if (chunk.done) break;
 						total += chunk.value.byteLength;
 						pending += decoder.decode(chunk.value, { stream: true });
+						if (rawEnd !== null) {
+							rawEnd.lastIndex = searched;
+							const found = rawEnd.exec(pending);
+							if (!found) {
+								// (an end tag may be split between the pieces)
+								searched = Math.max(searched, pending.length - 16);
+								continue;
+							}
+							searched = found.index + 1;
+							tryAt = 0;
+						}
 						if (pending.length < tryAt) continue;
 						if (
 							pending.length >= SEGMENT_CHARS ||
@@ -6687,8 +6789,19 @@ export function registerRewrites(
 				// policies, its client hints) once the body starts. The shell goes
 				// out then, and the rest of the markup follows it as it arrives
 				// (streamMarkup), where the page waited for the last byte.
+				//
+				// A head that pauses HEAD_GAP_MS, or is still coming HEAD_CAP_MS,
+				// after the first 1024 bytes (YouTube's 800 KB) does not hold the
+				// commit: the shell goes out then, made of the head so far, as
+				// the browser commits a document on its first bytes, and the
+				// bundles load while the head comes. The rest of the head follows
+				// in the markup stream as it arrives, with what its metas say
+				// (streamMarkup's `told`), and the page writes it as it comes.
 				const xml = isXMLDocumentMime(mime);
-				const read = xml ? null : await readHead(response, contentType);
+				const read = xml
+					? null
+					: await readHead(response, contentType, HEAD_GAP_MS, HEAD_CAP_MS);
+				const early = read !== null && read.head !== true;
 				let bytes: Uint8Array | null = null;
 				if (!read) {
 					bytes = new Uint8Array(await response.arrayBuffer());
@@ -6746,22 +6859,28 @@ export function registerRewrites(
 					policies.texts.push(['', "script-src 'none'", 'enforce']);
 				// whether code made from a string runs, under the headers' policies
 				// and the metas' of the head (src/csp.ts ScriptFacts)
-				const texts = [
-					...policies.texts.map(([browser]) => browser).filter(Boolean),
-					...metaPolicies(decoded)
-						.map((policy) => browserContentPolicy(policy))
-						.filter((text) => text !== null),
-				];
-				// the page's own policies (headers' and the head's metas'), which
-				// the inject enforces against the page's code (the browser never
-				// gets their script/style/Trusted-Types directives, src/csp.ts)
-				const ownPolicies = [
-					...policies.texts.flatMap(([, page, disposition]) =>
-						parsePolicies(page, disposition, 'header'),
-					),
-					...metaPolicies(decoded),
-				];
-				const facts = scriptFacts(texts, nonce, ownPolicies);
+				const factsOf = (metas: Policy[]) => {
+					const texts = [
+						...policies.texts.map(([browser]) => browser).filter(Boolean),
+						...metas
+							.map((policy) => browserContentPolicy(policy))
+							.filter((text) => text !== null),
+					];
+					// the page's own policies (headers' and the head's metas'), which
+					// the inject enforces against the page's code (the browser never
+					// gets their script/style/Trusted-Types directives, src/csp.ts)
+					const ownPolicies = [
+						...policies.texts.flatMap(([, page, disposition]) =>
+							parsePolicies(page, disposition, 'header'),
+						),
+						...metas,
+					];
+					return scriptFacts(texts, nonce, ownPolicies);
+				};
+				// (a head still coming: its metas so far, and the client is told
+				// what later ones say as their piece of the markup reaches it)
+				const metas = metaPolicies(decoded);
+				const facts = factsOf(metas);
 				// a top-level document's opener policy, which the browser never
 				// gets as the page sent it: a popup's window leaves its browsing
 				// context group when Chrome's rule says it does, by a policy of
@@ -6866,27 +6985,60 @@ export function registerRewrites(
 				if (upgradeInsecure && request.navigation)
 					rememberUpgradeInsecure(request.routed, request.clientId);
 				// what of its policies names hosts is the worker's to apply to
-				// its requests (src/server/contentPolicies.ts)
-				if (request.navigation)
-					rememberPolicies(
-						request.routed,
-						request.clientId,
-						url.url,
-						[
-							...parsePolicies(
-								pageHeaders.get('content-security-policy'),
-								'enforce',
-								'header',
-							),
-							...parsePolicies(
-								pageHeaders.get('content-security-policy-report-only'),
-								'report',
-								'header',
-							),
-							...metaPolicies(markup),
-						],
-						integrityPolicyDestinations(pageHeaders.get('integrity-policy')),
-					);
+				// its requests (src/server/contentPolicies.ts), its metas' with
+				// its headers'
+				const judged = (metas: Policy[]) => {
+					if (request.navigation)
+						rememberPolicies(
+							request.routed,
+							request.clientId,
+							url.url,
+							[
+								...parsePolicies(
+									pageHeaders.get('content-security-policy'),
+									'enforce',
+									'header',
+								),
+								...parsePolicies(
+									pageHeaders.get('content-security-policy-report-only'),
+									'report',
+									'header',
+								),
+								...metas,
+							],
+							integrityPolicyDestinations(pageHeaders.get('integrity-policy')),
+						);
+				};
+				judged(metaPolicies(markup));
+				// A head still coming when the shell went out (readHead's
+				// deadline): a meta in a later piece of it is applied as the
+				// piece is handed to the client, before the client writes it,
+				// as the browser applies a meta when it parses it. Its policies
+				// are this worker's from then on, and the client is told what
+				// they make of the page's script facts and whether its requests
+				// are upgraded (DocumentClient.loadHTMLStream)
+				let headMetas = metas;
+				let upgraded = upgradeInsecure;
+				const told = early
+					? (segment: string): HeadTold | null => {
+							const more = metaPolicies(segment);
+							const upgrade =
+								!upgraded && metaUpgradesInsecureRequests(segment);
+							if (!more.length && !upgrade) return null;
+							headMetas = [...headMetas, ...more];
+							judged(headMetas);
+							if (upgrade) {
+								upgraded = true;
+								if (request.navigation)
+									rememberUpgradeInsecure(request.routed, request.clientId);
+							}
+							const now = factsOf(headMetas);
+							return {
+								facts: { code: now.code, ttActive: now.ttActive, rtt: now.rtt },
+								...(upgrade ? { upgrade: true } : {}),
+							};
+						}
+					: null;
 				// the blocker's side of the document (docs/adblock.md): the
 				// lists' `$csp=` policies the proxy can enforce, beside its own,
 				// and the cosmetic rules and scriptlets its inject applies. Shields
@@ -6963,6 +7115,7 @@ export function registerRewrites(
 							: null,
 						(read) => documentSizes(response.headers, read),
 						request.clientId,
+						told,
 					);
 					const shell = modifyHTMLStreamed(
 						'',

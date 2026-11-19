@@ -178,6 +178,14 @@ export default class PageStream {
 	get done(): boolean {
 		return this.#ended && this.#started && !this.#open.length;
 	}
+	/** what is written is the head (all of it so far) and not yet the body */
+	get beforeBody(): boolean {
+		const open = this.#open;
+		return (
+			!this.#ended &&
+			(open.length === 1 || (open.length === 2 && isNamed(open[1]!, 'head')))
+		);
+	}
 	/**
 	 * The markup that can be written now, about until `deadline` (the
 	 * clock's), or '' while the parse has nothing more that is done
@@ -255,7 +263,17 @@ export default class PageStream {
 				if (above) Reflect.apply(removeChild, above, [parent]);
 				continue;
 			}
-			if (!this.#opens(child, parent)) break;
+			// (a head still coming is written as it comes, as the parser runs
+			// a head's scripts and loads its links before it ends)
+			if (
+				!this.#opens(child, parent) &&
+				!(
+					open.length === 1 &&
+					Reflect.apply(nodeType, child, []) === 1 &&
+					isNamed(child, 'head')
+				)
+			)
+				break;
 			out += this.#start(child as Element);
 			open.push(child as Element);
 			if (now() > deadline) break;
@@ -337,8 +355,9 @@ export default class PageStream {
 	#closed(index: number): boolean {
 		if (this.#ended) return true;
 		const open = this.#open;
-		// (the root and the body until the end: a later tag adds to them)
-		for (let i = 2; i <= index; i++)
+		// (the root and the body until the end: a later tag adds to them; an
+		// open head ends where the body starts)
+		for (let i = index && isNamed(open[1]!, 'head') ? 1 : 2; i <= index; i++)
 			if (Reflect.apply(nextSibling, open[i], []) !== null) return true;
 		return false;
 	}
@@ -472,9 +491,11 @@ const slice = String.prototype.slice;
 /**
  * Read the rest of a document's markup from the worker (its MARKUP_ROUTE,
  * at `url`), handing each piece to `feed` as it comes: its markup, its
- * table of prewritten scripts and styles (or null), and with the last one
- * the sizes the document's body had ([encoded, decoded]). A read that
- * fails ends the markup where it got to, as a body the network cut short.
+ * table of prewritten scripts and styles (or null), with the last one the
+ * sizes the document's body had ([encoded, decoded]), and with a piece of
+ * a head that was still coming when the shell went out what its metas
+ * said (the worker's HeadTold). A read that fails ends the markup where it
+ * got to, as a body the network cut short.
  */
 export async function readMarkup(
 	url: string,
@@ -483,6 +504,7 @@ export async function readMarkup(
 		table: unknown,
 		sizes: [number, number] | null,
 		end: boolean,
+		told: unknown,
 	) => void,
 ): Promise<void> {
 	// the streams' methods are taken when the read begins, in the shell's
@@ -534,19 +556,19 @@ export async function readMarkup(
 				// (by index: a page's Array.prototype iterator is not asked)
 				const record = parseJSON(
 					Reflect.apply(slice, text, [line + 1, line + 1 + length]) as string,
-				) as [string, unknown, [number, number] | null];
+				) as [string, unknown, [number, number] | null, unknown?];
 				const markup = record[0];
 				const table = record[1];
 				const sizes = record[2];
 				text = Reflect.apply(slice, text, [line + 1 + length]) as string;
 				line = -1;
 				ended = sizes !== null;
-				feed(markup, table, sizes, ended);
+				feed(markup, table, sizes, ended, record.length > 3 ? record[3] : null);
 				if (ended) return;
 			}
 		}
 	} catch (error) {
 		console.warn('Stomp: the markup stream failed:', error);
 	}
-	if (!ended) feed('', null, null, true);
+	if (!ended) feed('', null, null, true, null);
 }

@@ -14,7 +14,14 @@ import type DocumentClient from '../Client';
 export default class TrustedParseModule extends Module<DocumentClient> {
 	apply() {
 		const client = this.client;
-		if (!client.scriptFacts.ttActive) return;
+		if (!client.scriptFacts.ttActive) {
+			const before = client.untrusted;
+			client.untrusted = () => {
+				before?.();
+				this.apply();
+			};
+			return;
+		}
 		const global = client.global as typeof globalThis;
 		const proxyModule = client.getModule(ProxyModule)!;
 		const hook = (

@@ -19,6 +19,11 @@
 //              is 3.7 MB, a 3.1 MB style), and scripts that read it
 //     hidden   a frame of the paint case that is not displayed (it draws no
 //              frames)
+//     slowhead the start of the head at once, then the rest of it: a meta
+//              CSP that requires Trusted Types, scripts that test it
+//     trickle  a head whose inline script of 768 KB comes 64 KB at a time,
+//              20 ms apart (YouTube's is 780 KB), then the start of the
+//              body, and the rest after `wait`
 
 /** the head's padding: the worker reads the encoding from the first 1024 bytes */
 const PAD = `<!-- ${'pad '.repeat(300)} -->`;
@@ -51,6 +56,11 @@ const CASES = {
 	bighead: [
 		`<!doctype html><html><head><meta charset="utf-8"><title>stream bighead</title>${PAD}<script>window.__order = ['head'];</script><style id="big">#early{color:rgb(1, 2, 3)}\n${BIG}</style><script>__order.push('after style', String(document.getElementById('big').textContent.length));</script></head><body><h1 id="early">early</h1><script>__order.push('a');</script>`,
 		`<p id="late">late</p><script>__order.push('end'); window.__done = true;</script></body></html>`,
+	],
+	// (no <body> in the first part: it is the start of the head)
+	slowhead: [
+		`<!doctype html><html><head><meta charset="utf-8"><title>stream slowhead</title>${PAD}<script>window.__order = ['head'];</script>`,
+		`<meta http-equiv="Content-Security-Policy" content="script-src 'nonce-n1' 'self'; require-trusted-types-for 'script'"><script nonce="n1">__order.push('nonced'); try { eval('1'); __order.push('eval ran'); } catch (error) { __order.push(error.name); } try { document.createElement('div').innerHTML = '<b></b>'; __order.push('html set'); } catch (error) { __order.push(error.name); }</script></head><body><h1 id="early">early</h1><script nonce="n1">__order.push('end'); window.__done = true;</script></body></html>`,
 	],
 	hidden: [
 		`<!doctype html><html><head><meta charset="utf-8"><title>stream hidden</title>${PAD}</head><body><iframe id="inner" style="display:none" src="/stream/paint?wait=__WAIT__"></iframe>`,
@@ -102,14 +112,39 @@ export function stream(req, res) {
 		});
 		return true;
 	}
+	if (name === 'trickle') {
+		res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+		res.write(
+			`<!doctype html><html><head><meta charset="utf-8"><title>stream trickle</title>${PAD}<script>window.__order = ['head'];</script><script>window.__big = '`,
+		);
+		const piece = 'x'.repeat(64 * 1024);
+		let sent = 0;
+		const next = () => {
+			if (sent++ < 12) {
+				res.write(piece);
+				later(20, next);
+				return;
+			}
+			res.write(
+				`'; __order.push('big', String(window.__big.length));</script></head><body><h1 id="early">early</h1><script>__order.push('a');</script>`,
+			);
+			later(wait, () =>
+				res.end(
+					`<p id="late">late</p><script>__order.push('end'); window.__done = true;</script></body></html>`,
+				),
+			);
+		};
+		later(20, next);
+		return true;
+	}
 	const parts = CASES[name];
 	if (!parts) return false;
 	res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
 	// the head first, then the start of the body on its own
 	const first = parts[0].replace('__WAIT__', String(wait));
 	const body = first.indexOf('<body>') + '<body>'.length;
-	res.write(first.slice(0, body));
-	later(100, () => res.write(first.slice(body)));
+	res.write(first.slice(0, body || first.length));
+	if (body) later(100, () => res.write(first.slice(body)));
 	later(wait, () => res.end(parts[1]));
 	return true;
 }

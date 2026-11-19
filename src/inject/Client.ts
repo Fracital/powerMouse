@@ -691,8 +691,19 @@ export default class Client {
 		// the page's require-trusted-types-for is enforced against the page's own
 		// attribute sinks (trustedSink), without STomp's own policy
 		usePageSinks(facts.rtt !== undefined);
+		if (facts.ttActive && this.untrusted) {
+			const install = this.untrusted;
+			this.untrusted = undefined;
+			install();
+		}
 	}
 	#scriptFacts!: ScriptFacts;
+	/**
+	 * What installs once the page's policy has a Trusted Types directive,
+	 * set by the modules that found none: a meta of a head still coming
+	 * when the shell went out turns it on later (DocumentClient.loadHTMLStream)
+	 */
+	untrusted?: () => void;
 	/** set by the TrustedTypes module: the page's value at a sink, as Chrome judges it (trustedValue) */
 	trustedCheck?: (
 		value: unknown,

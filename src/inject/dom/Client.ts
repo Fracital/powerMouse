@@ -15,6 +15,7 @@ import {
 	type HopPolicy,
 	type Policy,
 	type PolicyText,
+	type ScriptFacts,
 	type WorkerPolicies,
 } from '../../csp';
 import { rewriteCSSValueURLs } from '../../cssURLs';
@@ -3574,10 +3575,25 @@ export default class DocumentClient extends Client {
 	 */
 	loadHTMLStream(url: string) {
 		const feed = this.#startPage();
-		void readMarkup(url, (markup, table, sizes, end) => {
+		void readMarkup(url, (markup, table, sizes, end, told) => {
 			// the sizes the body had, for the document's navigation timing
 			// (ResourceTiming): the shell's are the browser's count
 			if (sizes) this.documentSizes = sizes;
+			// a meta of a head that was still coming when the shell went out:
+			// in force from its piece on, as the parser applies it
+			if (told) {
+				const { facts, upgrade } = told as {
+					facts: ScriptFacts;
+					upgrade?: boolean;
+				};
+				if (upgrade === true) this.upgradeInsecureRequests = true;
+				this.scriptFacts = {
+					...this.scriptFacts,
+					code: facts.code,
+					ttActive: facts.ttActive,
+					rtt: facts.rtt,
+				};
+			}
 			feed(markup, (table ?? undefined) as Prewritten | undefined, end);
 		});
 	}
@@ -3794,7 +3810,9 @@ export default class DocumentClient extends Client {
 				return;
 			}
 			lastWrite = time;
-			if (job.copied) writes++;
+			// (a head still coming is written as it comes: the first two
+			// writes are counted from the first that holds the body)
+			if (job.copied && !page.beforeBody) writes++;
 			const batch = job.copied;
 			total += batch.length;
 			job.copied = '';

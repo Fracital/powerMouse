@@ -22,7 +22,16 @@
 //   the rest is on its way, its scripts read the style's text as natively,
 //   and the style applies;
 // - a frame of the first case that is not displayed (it draws no frames:
-//   the page's first writes wait for one, or for a timer) loads whole.
+//   the page's first writes wait for one, or for a timer) loads whole;
+// - a head that is still coming (YouTube's is 800 KB, one inline script)
+//   is in the page as it comes: the document is committed and the head's
+//   first script ran before the rest of the head arrives (the worker held
+//   the page until the body began), and a meta CSP with Trusted Types later
+//   in the head refuses what it refuses natively;
+// - a head whose inline script trickles in (YouTube's 780 KB) is in, and
+//   the body's first heading after it, while the rest is on its way (the
+//   worker cut the markup only once twice as much had come as when it
+//   last found the script unfinished, which passed the document's end).
 import {
 	done,
 	evaluateIsolated,
@@ -163,6 +172,47 @@ async function hiddenCase(proxied) {
 	}
 }
 
+async function slowheadCase(proxied) {
+	const { page, find } = await open(
+		`${FIXTURE}stream/slowhead?wait=${WAIT}`,
+		proxied,
+	);
+	try {
+		const mid = await poll(
+			find,
+			() =>
+				window.__order
+					? {
+							order: window.__order.join(),
+							readyState: document.readyState,
+							body: !!document.body,
+						}
+					: null,
+			undefined,
+			400,
+			25,
+		);
+		const end = await poll(find, whole, undefined, 400, 50);
+		return { mid, end };
+	} finally {
+		await page.close();
+	}
+}
+
+async function trickleCase(proxied) {
+	const { page, find } = await open(
+		`${FIXTURE}stream/trickle?wait=${WAIT}`,
+		proxied,
+	);
+	try {
+		const mid = await poll(find, midway, undefined, 400, 25);
+		const end = await poll(find, whole, undefined, 400, 50);
+		return { mid, end };
+	} finally {
+		await page.close();
+	}
+}
+
 async function wipeCase(proxied) {
 	const { page, find } = await open(
 		`${FIXTURE}stream/wipe?wait=${WAIT}`,
@@ -283,6 +333,8 @@ const native = {
 	frame: await frameCase(false),
 	bighead: await bigheadCase(false),
 	hidden: await hiddenCase(false),
+	slowhead: await slowheadCase(false),
+	trickle: await trickleCase(false),
 };
 ok(
 	'natively: the heading is in while the rest is on its way, and the page loads whole',
@@ -305,6 +357,8 @@ const proxied = {
 	frame: await frameCase(true),
 	bighead: await bigheadCase(true),
 	hidden: await hiddenCase(true),
+	slowhead: await slowheadCase(true),
+	trickle: await trickleCase(true),
 };
 ok(
 	'proxied: while the rest is on its way, the page holds its first part (its heading, its write) and not the rest, and is loading',
@@ -368,6 +422,33 @@ ok(
 		JSON.stringify(proxied.hidden.end) === JSON.stringify(native.hidden.end) &&
 		proxied.hidden.elements === native.hidden.elements,
 	`${JSON.stringify(proxied.hidden.end)} natively ${JSON.stringify(native.hidden.end)}`,
+);
+
+ok(
+	"proxied: while the rest of the head is on its way, the document is committed and the head's first script ran, as natively",
+	native.slowhead.mid?.body === false &&
+		JSON.stringify(proxied.slowhead.mid) ===
+			JSON.stringify(native.slowhead.mid),
+	`${JSON.stringify(proxied.slowhead.mid)} natively ${JSON.stringify(native.slowhead.mid)}`,
+);
+ok(
+	"proxied: the rest of the head's meta CSP and Trusted Types refuse what they refuse natively",
+	!!native.slowhead.end &&
+		JSON.stringify(proxied.slowhead.end) ===
+			JSON.stringify(native.slowhead.end),
+	`${JSON.stringify(proxied.slowhead.end)} natively ${JSON.stringify(native.slowhead.end)}`,
+);
+ok(
+	'proxied: while the rest of a page whose head script trickled in is on its way, the script ran and the first heading is in, as natively',
+	native.trickle.mid?.late === false &&
+		JSON.stringify(proxied.trickle.mid) === JSON.stringify(native.trickle.mid),
+	`${JSON.stringify(proxied.trickle.mid)} natively ${JSON.stringify(native.trickle.mid)}`,
+);
+ok(
+	'proxied: the page whose head script trickled in loads whole, as natively',
+	!!native.trickle.end &&
+		JSON.stringify(proxied.trickle.end) === JSON.stringify(native.trickle.end),
+	`${JSON.stringify(proxied.trickle.end)} natively ${JSON.stringify(native.trickle.end)}`,
 );
 
 await done(browser);

@@ -26,7 +26,14 @@ const nativeSetTimeout = globalThis.setTimeout;
 export default class TrustedTypesModule extends Module<Client> {
 	apply() {
 		const client = this.client;
-		if (!client.scriptFacts.ttActive) return;
+		if (!client.scriptFacts.ttActive) {
+			const before = client.untrusted;
+			client.untrusted = () => {
+				before?.();
+				this.apply();
+			};
+			return;
+		}
 		const global = client.global as typeof globalThis;
 		const factory = (global as { trustedTypes?: object }).trustedTypes;
 		const prototype = factory && Reflect.getPrototypeOf(factory);
