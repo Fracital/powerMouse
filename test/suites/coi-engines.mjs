@@ -16,8 +16,9 @@
 // Each kind of page (test/pages/coi-engines.js) reports what it, its
 // worker, a blob: worker of it (classic and module) and (one kind) its
 // frames read of `crossOriginIsolated` and SharedArrayBuffer, and whether a
-// blob: script of it ran, natively and through the demo in both modes, and
-// every part must read as natively:
+// blob: script of it ran, a blob: module's static import of another blob:
+// module and a frame of a blob: document, natively and through the demo in
+// both modes, and every part must read as natively:
 // - in Chrome, always, with the embedder policy the host's page and a
 //   proxied document were served with;
 // - in WebKit (WebKitGTK's MiniBrowser driven by WebKitWebDriver, in a
@@ -80,6 +81,8 @@ const parts = (report) => {
 			'blobWorker',
 			'blobModuleWorker',
 			'blobScript',
+			'blobImport',
+			'blobDocument',
 		])
 			named.set(`${prefix}${part}`, of?.[part]);
 	};

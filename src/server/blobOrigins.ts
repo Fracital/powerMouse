@@ -134,6 +134,11 @@ async function entryOf(url: string): Promise<Entry | undefined> {
 	return entry;
 }
 
+/** the client that minted a blob: URL, when it is known */
+export async function knownMinterOf(url: string): Promise<string | null> {
+	return (await entryOf(url))?.minter || null;
+}
+
 /** the top-level site of a client URL's partition, null for a first-party or unknown one */
 export async function knownTopSiteOf(url: string): Promise<string | null> {
 	return (await entryOf(url))?.top ?? null;

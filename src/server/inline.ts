@@ -25,6 +25,8 @@ export interface InlineDocument {
 	markup: string;
 	/** a Blob to read in place of the markup, or the browser's blob: URL of one (InlineDocumentMessage) */
 	blob?: Blob | string;
+	/** the client that registered it, which holds its Blob (its bytes are asked of it) */
+	client?: string;
 	/** its creator is cross-origin isolated (InlineDocumentMessage) */
 	isolated?: boolean;
 	/** the document's URL as its readbacks show it (the shell's base) */

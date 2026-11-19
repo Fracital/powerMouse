@@ -686,6 +686,12 @@ export const INLINE_DOCUMENT = '$stomp$inlineDocument';
  * SameSite) rather than as the target's own
  */
 export const BLOB_MINTED = '$stomp$blobMinted';
+/**
+ * The service worker to a realm that may hold the Blob behind a blob: URL
+ * (the browser's form) it cannot read itself: hand its bytes over
+ * (src/inject/modules/ObjectURL.ts, blob~bytes)
+ */
+export const BLOB_ASK = '$stomp$blobAsk';
 export interface BlobMintedMessage {
 	directory: string;
 	url: string;

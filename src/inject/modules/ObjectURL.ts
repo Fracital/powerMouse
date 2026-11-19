@@ -5,7 +5,7 @@ import {
 	setBlobOrigins,
 	setBlobRoute,
 } from '../../routeURL';
-import { BLOB_MINTED } from '../../transport/messages';
+import { BLOB_ASK, BLOB_MINTED } from '../../transport/messages';
 import Client from '../Client';
 import Module from '../Module';
 import { LazyMap } from '../ownCollections';
@@ -46,14 +46,28 @@ export default class ObjectURLModule extends Module<Client> {
 	 * it, and read the body of this realm's request. Sent once per private
 	 * URL, and no more once the worker says it reads them itself (204)
 	 */
-	#handBytes(proxy: string, uuid: string, blob: Blob) {
-		const client = this.client;
-		if (!handsBytes || (client.isDOM && !client.controlled)) return;
+	#handBytes(proxy: string, uuid: string, blob: Blob | null, asked = false) {
+		const own = this.client;
+		// sent by the routed document of its origin, as #register's message:
+		// the worker reads the sender's origin from its URL (an about:blank
+		// child's names none)
+		const routed = own.isDOM ? own.routedClient() : null;
+		const client =
+			routed && routed.url.url.origin === own.url.url.origin ? routed : own;
+		if ((!handsBytes && !asked) || (client.isDOM && !client.controlled)) return;
 		client
 			.nativeFetch(
 				// (the directory is absolute: a blob: worker's base resolves no path)
 				new URL(`${client.url.directory}blob~bytes/${uuid}`, `${proxy}/`).href,
-				{ method: 'POST', body: blob },
+				{
+					method: 'POST',
+					body: blob ?? '',
+					// (an answer to the worker's ask: the bytes, or that this
+					// bundle holds no such Blob)
+					...(asked
+						? { headers: { 'stomp-blob-answer': blob ? 'bytes' : 'none' } }
+						: {}),
+				},
 			)
 			.then(
 				(response) => {
@@ -69,8 +83,59 @@ export default class ObjectURLModule extends Module<Client> {
 	 * when that document has this realm's real origin (an about:blank or
 	 * srcdoc child, not an opaque one)
 	 */
+	/**
+	 * The inline document of a blob: document (Client.inlineDocument), whose
+	 * Blob's bytes go with it (#handBytes, by the inline token): WebKit's
+	 * service worker cannot read a Blob posted to it in a frame of another
+	 * site's page (NotFoundError, measured)
+	 */
+	#inline(proxy: string, blob: Blob | string, isolated: boolean) {
+		const client = this.client;
+		const routed = client.inlineDocument(
+			'',
+			client.url.toString(),
+			client.url.toString(),
+			blob,
+			isolated,
+		);
+		const token = routed && /\/inline:([\w-]{22})\//.exec(routed)?.[1];
+		if (token && typeof blob !== 'string') this.#handBytes(proxy, token, blob);
+		return routed;
+	}
+	#answering = false;
+	/**
+	 * Answer the service worker's asks for the bytes of a Blob this bundle
+	 * holds (BLOB_ASK): one a load names by its blob: URL alone, which that
+	 * worker cannot read (a static import it routed). Listened for from a
+	 * realm's first blob: URL on, by this realm and by the routed document
+	 * that tells the worker of the URLs it mints (#register)
+	 */
+	#answerAsks() {
+		if (this.#answering) return;
+		this.#answering = true;
+		const client = this.client;
+		client.onServiceWorkerMessage((data) => {
+			const url =
+				typeof data === 'object' && data
+					? (data as Record<string, unknown>)[BLOB_ASK]
+					: undefined;
+			if (typeof url === 'string')
+				this.#handBytes(
+					realmOrigin(client),
+					url.slice(url.lastIndexOf('/') + 1),
+					blobOf(url) ?? null,
+					true,
+				);
+		});
+	}
 	#register(url: string) {
+		this.#answerAsks();
 		const routed = this.client.routedClient();
+		const routedModule =
+			routed && routed !== this.client
+				? routed.getModule(ObjectURLModule)
+				: undefined;
+		if (routedModule) routedModule.#answerAsks();
 		if (!routed || routed.url.url.origin !== this.client.url.url.origin) return;
 		routed.postToWorker({
 			[BLOB_MINTED]: { directory: routed.directory, url },
@@ -136,10 +201,8 @@ export default class ObjectURLModule extends Module<Client> {
 						blob.type,
 					)
 					? null
-					: client.inlineDocument(
-							'',
-							client.url.toString(),
-							client.url.toString(),
+					: this.#inline(
+							proxy,
 							blob ?? href,
 							// (a blob: document inherits its creator's embedder policy)
 							!!isolated && Reflect.apply(isolated, client.global, []) === true,

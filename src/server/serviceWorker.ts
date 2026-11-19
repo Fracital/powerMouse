@@ -1011,7 +1011,9 @@ function handleMessage(event: ExtendableMessageEvent) {
 			directory: message.directory,
 			markup: message.markup,
 			url: message.url,
-			...(message.blob ? { blob: message.blob } : {}),
+			...(message.blob
+				? { blob: message.blob, client: (event.source as Client).id }
+				: {}),
 			...(message.blob && message.isolated === true ? { isolated: true } : {}),
 			...(partition ? { partition } : {}),
 		});

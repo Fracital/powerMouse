@@ -135,6 +135,7 @@ import type {
 import {
 	ABORT_HEADER,
 	AWAY_MARKER,
+	BLOB_ASK,
 	CACHED_MARKER,
 	CORS_MARKER,
 	CREDENTIALS_HEADER,
@@ -180,6 +181,7 @@ import { scanMarkup, scannerSettled } from '../wasm/scanner';
 import { modifyXML, xmlShellEncoding } from '../xmlShell';
 import { badPort } from './badPorts';
 import {
+	knownMinterOf,
 	knownOriginOf,
 	knownTopSiteOf,
 	recordInlineOrigin,
@@ -5524,8 +5526,12 @@ export function bundleRequested(client: string) {
 }
 /** a page's blob: script or stylesheet (src/inject/modules/ObjectURL.ts): its kind, and the private URL's uuid */
 const BLOB_ROUTE = /^\/blob~(js|wjs|module|css)(?:~([\da-f-]{36}))?\//;
-/** the bytes of the Blob behind a private URL, which its realm hands over (src/inject/modules/ObjectURL.ts) */
-const BLOB_BYTES_ROUTE = /^\/blob~bytes\/([\da-f-]{36})$/;
+/**
+ * the bytes of the Blob behind a blob: URL (its uuid) or an inline
+ * document's (its token), which a realm that holds it hands over
+ * (src/inject/modules/ObjectURL.ts)
+ */
+const BLOB_BYTES_ROUTE = /^\/blob~bytes\/([\da-f-]{36}|[A-Za-z0-9_-]{22})$/;
 
 /**
  * The bytes of the Blobs behind private URLs (BLOB_ROUTE), as the realms
@@ -5545,6 +5551,8 @@ const HANDED_BYTES = 64 * 1024 * 1024;
 let handedSize = 0;
 /** the loads waiting for bytes not handed over yet */
 const handedWaits = new Map<string, (() => void)[]>();
+/** the header of a realm's answer to BLOB_ASK: `bytes`, or `none` (with no body) */
+const BLOB_ANSWER_HEADER = 'stomp-blob-answer';
 /** how long a load whose blob: URL this worker cannot read waits for them */
 const HANDED_WAIT_MS = 3000;
 /**
@@ -5570,6 +5578,31 @@ function handBlob(
 	}
 	for (const wake of handedWaits.get(uuid) ?? []) wake();
 	handedWaits.delete(uuid);
+}
+
+/**
+ * The bytes of the Blob behind `url` (the browser's form), asked of the
+ * first live client of `asked` that may hold it (its minter, else the realm
+ * that loads it: BLOB_ASK) when no realm handed them over, and waited for a
+ * while. A window and a worker both answer, in Firefox and WebKit
+ * (measured); one that holds no such Blob (the page revoked it) says so,
+ * and the load fails at once, as natively. Not asked where this worker
+ * reads its clients' blob: URLs: there the URL is gone
+ */
+async function askedBlob(url: string, ...asked: (string | null | undefined)[]) {
+	const uuid = url.slice(url.lastIndexOf('/') + 1);
+	if (blobsReadable) return undefined;
+	if (handedBlobs.has(uuid) || typeof clients === 'undefined')
+		return handedBlobs.get(uuid);
+	for (const id of asked) {
+		const client = id
+			? await clients.get(id).catch(() => undefined)
+			: undefined;
+		if (!client) continue;
+		client.postMessage({ [BLOB_ASK]: url });
+		return handedBlob(uuid);
+	}
+	return undefined;
 }
 
 /** the bytes handed over for `uuid`, waited for a while when they have not come yet */
@@ -6215,7 +6248,17 @@ export function registerRewrites(
 	router.routes.set(BLOB_BYTES_ROUTE, async (request, path, context) => {
 		if (request.method !== 'POST') return Response.error();
 		const uuid = BLOB_BYTES_ROUTE.exec(path)![1];
-		if (blobsReadable === undefined)
+		// an asked realm's answer (askedBlob): the bytes, or that it holds
+		// no such Blob, which ends the wait for them
+		const answer = request.headers.get(BLOB_ANSWER_HEADER);
+		if (answer === 'none') {
+			for (const wake of handedWaits.get(uuid) ?? []) wake();
+			handedWaits.delete(uuid);
+			return new Response(null, { status: 202 });
+		}
+		// (learned of a blob: URL's bytes a realm offers; an inline
+		// document's are kept until it is served, which reads them or the Blob)
+		if (blobsReadable === undefined && !answer && uuid.length === 36)
 			try {
 				await (await fetch(`blob:${location.origin}/${uuid}`)).body?.cancel();
 				blobsReadable = true;
@@ -6248,7 +6291,7 @@ export function registerRewrites(
 		return new Response(null, { status: 202 });
 	});
 
-	router.routes.set(BLOB_ROUTE, async (request, path) => {
+	router.routes.set(BLOB_ROUTE, async (request, path, context) => {
 		const [, kind, at] = BLOB_ROUTE.exec(path)!;
 		let page: StompURL;
 		try {
@@ -6287,7 +6330,15 @@ export function registerRewrites(
 				bytes = new Uint8Array(await response.arrayBuffer());
 				blobsReadable = true;
 			} catch (error) {
-				const kept = at ? await handedBlob(at) : undefined;
+				// a URL alone (a static import the worker routed) is asked of
+				// the realms that may hold its Blob
+				const kept = at
+					? await handedBlob(at)
+					: await askedBlob(
+							blobURL,
+							await knownMinterOf(blobURL),
+							context?.clientId,
+						);
 				if (kept?.origin !== page.url.origin) return Response.error();
 				type = kept.type;
 				bytes = new Uint8Array(kept.bytes);
@@ -6397,18 +6448,38 @@ export function registerRewrites(
 				// one is rewritten as the markup would be, an XML one gets the XML
 				// shell, and anything else goes as it is, under its own type and
 				// unsniffed (it runs nothing natively). A revoked URL is the
-				// network error the browser's navigation to it would be
-				let blob: Blob;
+				// network error the browser's navigation to it would be. Where
+				// this worker cannot read the page's blob: URL or the Blob it
+				// posted (Firefox and WebKit in a frame of another site's page;
+				// WebKit cannot read a posted Blob: handedBlobs), the bytes
+				// its creator handed over, or that the realms holding it give
+				// when asked
+				let blob: { type: string; bytes: ArrayBuffer } | undefined;
 				try {
-					blob =
+					const read =
 						typeof entry.blob === 'string'
 							? await (await fetch(entry.blob)).blob()
 							: entry.blob;
+					blob = { type: read.type, bytes: await read.arrayBuffer() };
 				} catch (error) {
-					return Response.error();
+					const kept =
+						typeof entry.blob === 'string'
+							? await askedBlob(
+									entry.blob,
+									await knownMinterOf(entry.blob),
+									entry.client,
+								)
+							: await handedBlob(token);
+					if (kept?.origin === url.url.origin) blob = kept;
 				}
+				const handed = handedBlobs.get(token);
+				if (handed) {
+					handedBlobs.delete(token);
+					handedSize -= handed.bytes.byteLength;
+				}
+				if (!blob) return Response.error();
 				const mime = getMime(blob.type).trim().toLowerCase();
-				const bytes = new Uint8Array(await blob.arrayBuffer());
+				const bytes = new Uint8Array(blob.bytes);
 				if (isXMLDocumentMime(mime)) {
 					headers['content-type'] = `${mime}; charset=utf-8`;
 					return new Response(

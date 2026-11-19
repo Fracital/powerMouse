@@ -1565,8 +1565,21 @@ realm's real origin's (handedBlobs in src/server/rewrites.ts, 64 MiB, the
 oldest first) and reads when its own fetch() fails. Its first such request
 tells it whether it reads its clients' blob: URLs itself (Chrome, and a
 first-party page anywhere); then it answers 204 and the realm hands no
-more. The coi-engines suite starts a classic and a module blob: worker and
-runs a blob: script in every engine and mode.
+more. A blob: document goes the same way: the Blob posted with its inline
+document (src/server/inline.ts) is one WebKit's worker cannot read, so its
+bytes go with it, under the inline token. A load named by its blob: URL
+alone (a static import of a blob: module, which the worker routes as it
+rewrites the importer) has no private copy: the worker asks the realms that
+may hold its Blob (its minter, as BLOB_MINTED recorded it, else the realm
+that loads it) for the bytes in a message (BLOB_ASK): it hands them over as
+above, or says it holds none (the page revoked the URL), and the load fails
+at once, as natively. A window and a dedicated worker both
+hear such a message in Firefox and WebKit (measured; a worker once it
+started its container's messages). Nothing is handed over until the
+worker could not read a URL, so Chrome pays only a listener. The
+coi-engines suite starts a classic and a module blob: worker, runs a blob:
+script, a blob: module's static import of another blob: module and a frame
+of a blob: document in every engine and mode.
 
 ## Left
 
