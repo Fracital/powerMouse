@@ -89,6 +89,13 @@ on every save (use a `git worktree`).
   `Reflect.<method>` there is defined as the snapshot's method under a name
   of its own (`reflectApply`, build.js `reflectDefines`): a new method of
   the snapshot's `Reflect` goes in both lists.
+- **The clients' and modules' members listed in `scripts/memberNames.mjs`
+  are short names in every bundle** (esbuild `mangleProps`, one short name
+  per member in every bundle of a build). A string never names one: code
+  that reads a listed member by a computed name, or writes its name into
+  generated script text (`${names.client}.takeNamedBase()`), reads nothing
+  in a bundle, and the production build fails on any listed name left in
+  one. Take such a name off the list. A test reads no listed member either.
 - **The inject's rewriter is a library of its own, often in a detached
   realm.** meriyah, escodegen, css-tree and tldts reach the inject only
   through `src/inject/rewriter.ts` (light code reaches modifyJS/modifyCSS

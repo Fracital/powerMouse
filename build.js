@@ -20,6 +20,12 @@ import { pathToFileURL } from 'node:url';
 import { context, build as esbuildBuild, formatMessages } from 'esbuild';
 import { rimraf } from 'rimraf';
 import ts from 'typescript';
+import {
+	memberCache,
+	memberPattern,
+	namesLeft,
+	shortNamesTaken,
+} from './scripts/memberNames.mjs';
 import { ownIterationPlugin } from './scripts/ownIteration.mjs';
 import { ownMethodsFrom, ownMethodsSource } from './scripts/ownMethods.mjs';
 
@@ -45,6 +51,7 @@ const BUILD_INPUTS = [
 	'tsconfig.json',
 	'src',
 	'assets',
+	'scripts/memberNames.mjs',
 	'scripts/ownIteration.mjs',
 	'scripts/ownMethods.mjs',
 ];
@@ -143,6 +150,29 @@ function checkInputs() {
 	if (outside.length)
 		throw new Error(
 			`build: ${outside.join(', ')} ${outside.length === 1 ? 'is' : 'are'} built from but not among the build id's inputs (build.js BUILD_INPUTS)`,
+		);
+}
+
+/**
+ * Throw if a built file still names a member scripts/memberNames.mjs lists
+ * (something reads it by its name: it comes off the list), or a file the
+ * builds read has a property of one of the list's short names
+ */
+async function checkMemberNames() {
+	const problems = [];
+	for (const name of readdirSync('dist')) {
+		if (!/\.m?js$/.test(name)) continue;
+		const left = namesLeft(await readFile(`dist/${name}`, 'utf8'));
+		if (left.length) problems.push(`${name} names ${left.join(', ')}`);
+	}
+	for (const input of readInputs) {
+		if (/^[\w-]+:/.test(input) || !existsSync(resolve(input))) continue;
+		const taken = shortNamesTaken(await readFile(resolve(input), 'utf8'));
+		if (taken.length) problems.push(`${input} has ${taken.join(', ')}`);
+	}
+	if (problems.length)
+		throw new Error(
+			`build: ${problems.join('; ')} (scripts/memberNames.mjs: a listed name a bundle keeps is read by its name)`,
 		);
 }
 
@@ -276,6 +306,9 @@ const common = {
 	bundle: true,
 	sourcemap: true,
 	minify: !dev,
+	// (the inject's own members by short names: scripts/memberNames.mjs)
+	mangleProps: memberPattern,
+	mangleCache: memberCache(),
 	legalComments: 'none',
 	logLevel: 'info',
 	outdir: 'dist',
@@ -1723,4 +1756,5 @@ if (dev) {
 			.map(run),
 	);
 	checkInputs();
+	await checkMemberNames();
 }

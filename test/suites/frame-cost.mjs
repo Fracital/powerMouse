@@ -50,9 +50,12 @@
 //   document's load, the WebSocket stand-ins, the page's own CSP checks,
 //   the HTML shell, window.open(), links and forms aimed at another
 //   window, among others) took it to 448.8 KB, and the budget to 465 KB,
-//   about the margin it had. Raise the budget in the same change as code
-//   that has to grow the bundle, and say why; first see whether it can be
-//   deferred.
+//   about the margin it had. The clients' and modules' own members by
+//   short names (scripts/memberNames.mjs) took it from 465.0 to 451.3 KB,
+//   and the budget stayed: the bundle had come to 8 bytes over it, and the
+//   margin is for the fixes that come next. Raise the budget in the
+//   same change as code that has to grow the bundle, and say why; first
+//   see whether it can be deferred.
 // - the JS heap one proxied frame adds (test/frame-memory.mjs, FRAMES frames
 //   of a small ad-like page, same site), against a ceiling above what this
 //   build measures: 1,094 to 1,100 KB with 20 frames on Chrome 152 and 156
