@@ -98,6 +98,8 @@ export const now = (): number => Reflect.apply(clockNow, clock, []);
 export const FIRST_PASS_MS = 4;
 /** how long any later pass may */
 export const PASS_MS = 20;
+/** how long the pass after the page's first write waits for the frame that draws it */
+export const FRAME_WAIT_MS = 50;
 /**
  * what is copied is written once there is this much of it (a quarter of
  * what is written already, from WRITE_CHARS up to WRITE_MAX), or once the

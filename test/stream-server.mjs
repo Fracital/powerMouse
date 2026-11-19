@@ -17,6 +17,8 @@
 //              nothing allowed
 //     bighead  a head of 1.5 MB, most of it one <style> with url()s (CNN's
 //              is 3.7 MB, a 3.1 MB style), and scripts that read it
+//     hidden   a frame of the paint case that is not displayed (it draws no
+//              frames)
 
 /** the head's padding: the worker reads the encoding from the first 1024 bytes */
 const PAD = `<!-- ${'pad '.repeat(300)} -->`;
@@ -49,6 +51,10 @@ const CASES = {
 	bighead: [
 		`<!doctype html><html><head><meta charset="utf-8"><title>stream bighead</title>${PAD}<script>window.__order = ['head'];</script><style id="big">#early{color:rgb(1, 2, 3)}\n${BIG}</style><script>__order.push('after style', String(document.getElementById('big').textContent.length));</script></head><body><h1 id="early">early</h1><script>__order.push('a');</script>`,
 		`<p id="late">late</p><script>__order.push('end'); window.__done = true;</script></body></html>`,
+	],
+	hidden: [
+		`<!doctype html><html><head><meta charset="utf-8"><title>stream hidden</title>${PAD}</head><body><iframe id="inner" style="display:none" src="/stream/paint?wait=__WAIT__"></iframe>`,
+		`<script>window.__done = true;</script></body></html>`,
 	],
 	frame: [
 		`<!doctype html><html><head><meta charset="utf-8"><title>stream frame</title>${PAD}</head><body><iframe id="inner" sandbox="allow-scripts" src="/stream/paint?wait=__WAIT__"></iframe><iframe id="bare" sandbox="" src="/stream/paint?wait=__WAIT__"></iframe>`,
