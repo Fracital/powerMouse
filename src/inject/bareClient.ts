@@ -21,9 +21,11 @@ import type MixedContentModule from './modules/MixedContent';
 import { failsToParse, withStack } from './nativeErrors';
 
 export function bareClient(
-	port: MessagePort | Promise<MessagePort>,
+	port: MessagePort | Promise<MessagePort> | RemoteTransport,
 ): BareCompatibleClient {
-	return new BareCompatibleClient(new RemoteTransport(port));
+	return new BareCompatibleClient(
+		port instanceof RemoteTransport ? port : new RemoteTransport(port),
+	);
 }
 
 // WebSocket's readyState values
@@ -138,6 +140,16 @@ function open(
 
 	instances.add(target);
 
+	// the socket's events and the data they carry are of its own realm,
+	// natively: a frame whose window its parent's bundle hooked (it touched
+	// the frame before it loaded) has a client of another realm than its
+	// own, whose objects the page would tell apart
+	const realm =
+		client.global === (globalThis as unknown)
+			? null
+			: (client.global as typeof globalThis);
+	const OwnEvent = realm?.Event ?? Event;
+
 	const state = {
 		closed: false,
 		binaryType: 'blob',
@@ -191,7 +203,7 @@ function open(
 	});
 
 	socket.addEventListener('open', () => {
-		target.dispatchEvent(new Event('open'));
+		target.dispatchEvent(new OwnEvent('open'));
 	});
 
 	socket.addEventListener('message', async (event) => {
@@ -203,17 +215,23 @@ function open(
 		// transports deliver binary frames as ArrayBuffer or Blob;
 		// present them according to binaryType
 		if (typeof data !== 'string') {
-			if (state.binaryType === 'blob' && !(data instanceof Blob)) {
-				data = new Blob([data]);
-			} else if (state.binaryType === 'arraybuffer' && data instanceof Blob) {
-				data = await data.arrayBuffer();
+			if (state.binaryType === 'blob' && (realm || !(data instanceof Blob))) {
+				data = new (realm?.Blob ?? Blob)([data]);
+			} else if (state.binaryType === 'arraybuffer') {
+				if (data instanceof Blob) data = await data.arrayBuffer();
+				if (realm) {
+					const bytes = new Uint8Array(data as ArrayBuffer);
+					const own = new realm.ArrayBuffer(bytes.byteLength);
+					new realm.Uint8Array(own).set(bytes);
+					data = own;
+				}
 			}
 		}
 
 		if (state.closeRequest || state.closed) return;
 		// the origin of the socket's URL, as natively (not the URL)
 		target.dispatchEvent(
-			new MessageEvent('message', {
+			new (realm?.MessageEvent ?? MessageEvent)('message', {
 				data,
 				origin: new URL(state.url).origin,
 			}),
@@ -227,7 +245,11 @@ function open(
 		closed = true;
 		state.closed = true;
 		target.dispatchEvent(
-			new CloseEvent('close', { code, reason, wasClean: code !== 1006 }),
+			new (realm?.CloseEvent ?? CloseEvent)('close', {
+				code,
+				reason,
+				wasClean: code !== 1006,
+			}),
 		);
 	};
 	state.closeNow = dispatchClose;
@@ -237,7 +259,7 @@ function open(
 	// 1006 natively, one after the other in the same task and both
 	// reading CLOSED; the transport reports the error only
 	socket.addEventListener('error', () => {
-		target.dispatchEvent(new Event('error'));
+		target.dispatchEvent(new OwnEvent('error'));
 		// a socket the policy refused fires no close (measured)
 		if (refused === null && !workerRefused) dispatchClose(1006, '');
 		else state.closed = true;

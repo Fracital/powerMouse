@@ -383,16 +383,6 @@ for (const [mode, base] of [
 			browser === 0,
 			`${senders} reached the server`,
 		);
-		if (reaches[index][0].realm === 'nestedWorker') {
-			// a worker's worker has no transport (as for a WebSocket's;
-			// docs/webtransport.md): its session never starts
-			ok(
-				`${mode}: known difference: a nested worker's session never reaches the server`,
-				heard === 0,
-				senders,
-			);
-			return;
-		}
 		ok(
 			`${mode}: and reaches the server through the wisp server`,
 			heard > 0 && senders === `${heard} server`,

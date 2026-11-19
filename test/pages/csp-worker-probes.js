@@ -307,8 +307,9 @@
 			).then((a) => reached(k, a, policy));
 		};
 		// a worker's own worker: of a URL under `policy`, and of a blob:
-		// (which has `policy` too). A worker of a worker has no transport
-		// through the proxy: its socket is opened only where one is refused
+		// (which has `policy` too). A worker of a worker opens its socket
+		// only where one is refused (written when it had no transport
+		// through the proxy)
 		PROBES[`n-dedicated-${policy}`] = () => {
 			const { k, message } = requests(`n-dedicated-${policy}`);
 			const inner = (refused) => ({

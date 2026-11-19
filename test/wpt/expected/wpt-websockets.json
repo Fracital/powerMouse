@@ -344,10 +344,6 @@
 	"/websockets/interfaces/WebSocket/send/012.html?default": {
 		"WebSockets: sending null": "FAIL: assert_unreached: Reached unreachable code"
 	},
-	"/websockets/multi-globals/message-received.html": {
-		"ArrayBuffer should be created in the relevant realm of the WebSocket": "FAIL: Stomp: no service worker controller available to obtain a transport",
-		"Blob should be created in the relevant realm of the WebSocket": "FAIL: Stomp: no service worker controller available to obtain a transport"
-	},
 	"/websockets/opening-handshake/005.html?default": {
 		"WebSockets: response header and close frame in same packet": "FAIL: assert_equals: expected 1001 but got 1005"
 	},

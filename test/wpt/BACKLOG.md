@@ -800,12 +800,6 @@ still fail are the last group below.
   `websockets/eventhandlers.any.worker.html?default`,
   `websockets/interfaces/WebSocket/events/010.html?default`,
   `websockets/interfaces/WebSocket/events/014.html?default` (4 each).
-- `websockets/multi-globals/message-received.html` (2):
-  `Stomp: no service worker controller available to obtain a transport`. The
-  WebSocket
-  of an about:blank frame asks `src/inject/Client.ts` for a transport and
-  finds none; the beacon relay's family (walk to the nearest controlled
-  ancestor).
 - `websockets/Create-on-worker-shutdown.any.html`,
   `websockets/Create-on-worker-shutdown.any.worker.html` (1 each: "WebSocket
   created after a worker self.close()"): the stand-in does not know the

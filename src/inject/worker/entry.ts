@@ -67,7 +67,7 @@ socketParts.standIns = () => socketStandIns;
 // and the HTML shell of a data: document it routes (a worker routes no XML
 // one: it goes as it is)
 setDocumentShells((name) => (name === 'modifyHTML' ? modifyHTML : undefined));
-/** set once the bootstrap came without a transport (a worker of a worker): nothing carries its sessions */
+/** set once the bootstrap came without a transport (its creator found none to hand it): nothing carries its sessions */
 let transportless = false;
 webTransportParts.carry = () =>
 	transportless
@@ -159,9 +159,9 @@ setWorkerTransportPort(
 					takeBootstrap = undefined;
 					removeEventListener('message', handler);
 					const ports = portsOf(event);
-					// (a worker of a worker has no transport to be handed: its
-					// port never comes, as before, and its WebTransport
-					// sessions fail as the stand-in alone fails them)
+					// (a worker whose creator found no transport to hand it:
+					// its port never comes, and its WebTransport sessions fail
+					// as the stand-in alone fails them)
 					if (transport) resolve(ports[0]);
 					else transportless = true;
 					// the modules follow on the message's last port

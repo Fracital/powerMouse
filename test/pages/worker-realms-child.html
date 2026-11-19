@@ -1,0 +1,7 @@
+<!doctype html>
+<title>WORKER REALMS CHILD</title>
+<script>
+	// a frame whose parent read its contentWindow before it loaded: its
+	// worker and its WebSocket, reported to the parent
+	parent.__workerRealms.run('touched', window);
+</script>

@@ -1121,6 +1121,21 @@ export default class Client {
 		}
 		return null;
 	}
+	/**
+	 * The nearest client that can ask a service worker for a transport: the
+	 * nearest controlled one up this realm's frames (controlledClient), else
+	 * up the frames of the window that opened their top (an about:blank
+	 * popup, a frame of one). Null when there is none.
+	 */
+	transportClient(depth = 0): Client | null {
+		const found = this.controlledClient();
+		if (found || depth >= 8) return found;
+		return this.openerClient()?.transportClient(depth + 1) ?? null;
+	}
+	/** the client of the window that opened this realm's top, of this bundle's kind (DocumentClient); a worker has none */
+	protected openerClient(): Client | null {
+		return null;
+	}
 	/** the nearest client whose document is a routed page of its controller: this one or an ancestor */
 	routedClient(): Client | null {
 		const routed = (client: Client) => {
@@ -1398,10 +1413,16 @@ export default class Client {
 	requestTransportPort(worker?: string): MessagePort {
 		const controller = this.#container()?.controller;
 
-		if (!controller || !this.#serviceWorkerPostMessage)
+		if (!controller || !this.#serviceWorkerPostMessage) {
+			// a document no service worker controls (an about:blank frame or
+			// popup, a document written into one): the nearest one a worker
+			// controls asks for it, as its beacons and fetches go
+			const via = this.transportClient();
+			if (via && via !== this) return via.requestTransportPort(worker);
 			throw new Error(
 				'Stomp: no service worker controller available to obtain a transport',
 			);
+		}
 
 		// made with the browser's own MessageChannel and getters: a page that
 		// redefined them would be handed this context's transport

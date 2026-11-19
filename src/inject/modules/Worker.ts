@@ -95,8 +95,27 @@ export default class WorkerModule extends Module<Client> {
 			messageOf,
 			filenameOf,
 		};
+		/**
+		 * A blob: worker is controlled by its creator's service worker, and a
+		 * document none controls (an about:blank frame or popup, a document
+		 * written into one) has none to give it: the bootstrap's import of the
+		 * page's script, and every routed request the worker made, reached the
+		 * proxy origin's own server. Such a worker is started by the Worker of
+		 * the nearest document a worker controls (Client.transportClient),
+		 * with this realm's prototype, and ended when this document goes, as
+		 * its own would be. Null where this document is controlled.
+		 */
+		const controlledWorker = (): typeof Worker | null => {
+			if (moduleClient.controlled) return null;
+			const via = moduleClient.transportClient();
+			if (!via || via === moduleClient) return null;
+			return via.getModule(WorkerModule)?.nativeWorker ?? null;
+		};
+		const listen = global.EventTarget?.prototype.addEventListener;
+
 		// a shared worker scope has no Worker constructor
 		if (typeof global.Worker === 'function') {
+			const terminate = global.Worker.prototype.terminate;
 			global.Worker.prototype.terminate = proxyModule.wrapFunction(
 				global.Worker.prototype.terminate,
 				(target, that, args) => {
@@ -142,7 +161,18 @@ export default class WorkerModule extends Module<Client> {
 						isModuleOptions(args[1]),
 					);
 					args[0] = trustedScriptURL(url);
-					const worker: Worker = Reflect.construct(target, args, newTarget);
+					const via = blobScript(url) ? controlledWorker() : null;
+					const worker: Worker = Reflect.construct(
+						via ?? target,
+						args,
+						newTarget,
+					);
+					if (via && listen)
+						Reflect.apply(listen, global, [
+							'pagehide',
+							() => Reflect.apply(terminate, worker, []),
+							{ once: true },
+						]);
 					parts.watchErrors(
 						start,
 						worker,

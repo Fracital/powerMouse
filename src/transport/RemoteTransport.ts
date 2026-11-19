@@ -75,6 +75,10 @@ export default class RemoteTransport implements ProxyTransport {
 		await this.readyPromise;
 		this.ready = true;
 	}
+	/** have the transport served on `port` as well, as on this one (TransportToHost serve) */
+	serve(port: MessagePort) {
+		this.rpc.call('serve', port, [port]).catch(() => {});
+	}
 	/** cancel or raise the request named `id` while it waits for a connection (socketPool.ts) */
 	requeue(id: string, op: 'cancel' | 'raise') {
 		this.rpc.call('requeue', { id, op }).catch(() => {});

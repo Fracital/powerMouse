@@ -339,6 +339,10 @@ export default function serveTransport(
 
 	const rpc = new RpcHelper<TransportToHost, HostToTransport>(
 		{
+			serve: async (served) => {
+				serveTransport(served, getTransport, decorate, admit);
+				return [undefined, []];
+			},
 			requeue: async ({ id, op }) => {
 				const pool = poolOf(getTransport()).http;
 				if (op === 'cancel') pool.cancel(id);

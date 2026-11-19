@@ -11,7 +11,8 @@ import { hostsApply } from '../../cspJudge';
 import { workerKindPartition } from '../../partition';
 import type { EmulateInfo } from '../../serviceWorkerTypes';
 import { CSP_WORKER, WORKER_PARTITION } from '../../transport/messages';
-import { replayOf } from '../../transport/ports';
+import { privateChannel, replayOf } from '../../transport/ports';
+import RemoteTransport from '../../transport/RemoteTransport';
 import { bareClient } from '../bareClient';
 import Client, { type HandedModules } from '../Client';
 import ProxyModule from '../modules/Proxy';
@@ -21,6 +22,8 @@ import { trustTaggedViolations } from '../violationViews';
 import ServiceWorkerGlobalModule from './modules/ServiceWorkerGlobal';
 
 let transportPort: Promise<MessagePort> | undefined;
+/** what this worker's transport port speaks to, made once: its sockets go over it, and the ports it hands its own workers are served by it */
+let remote: RemoteTransport | undefined;
 
 /** Called by the worker entry once it has started listening for TRANSPORT_INIT. */
 export function setWorkerTransportPort(port: Promise<MessagePort>) {
@@ -365,7 +368,16 @@ export default class WorkerClient extends Client {
 		this.getModule(ServiceWorkerGlobalModule)!.evaluated();
 	}
 	protected override makeBare(port: MessagePort | Promise<MessagePort>) {
-		return bareClient(port);
+		return bareClient((remote ??= new RemoteTransport(port)));
+	}
+	/**
+	 * A port for a worker this worker starts: its own transport serves
+	 * another (a worker has no service worker container to ask, Chrome 157)
+	 */
+	override requestTransportPort(): MessagePort {
+		const [mine, theirs] = privateChannel();
+		(remote ??= new RemoteTransport(this.ownTransportPort())).serve(theirs);
+		return mine;
 	}
 	protected override ownTransportPort(): MessagePort | Promise<MessagePort> {
 		if (!transportPort)

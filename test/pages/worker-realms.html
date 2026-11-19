@@ -1,0 +1,176 @@
+<!doctype html>
+<title>WORKER REALMS</title>
+<script>
+	// Every kind of document starts a worker (fetch, importScripts and
+	// WebSocket inside it) and opens a WebSocket of its own: the page itself,
+	// an about:blank frame (from the parent and from a script of its own, a
+	// blob: worker, and that one once the frame is removed, a worker's
+	// worker, one level and two down), a srcdoc
+	// frame, a frame the parent wrote, a blob: document, a frame whose
+	// contentWindow the parent read before it loaded, and an about:blank
+	// popup. Each reports in window.__wr[name], and the page logs them all
+	// once every case is in.
+	const results = (window.__wr = {});
+	const base = new URL('.', location.href).href;
+	const script = new URL('worker-realms.js', base).href;
+	const socketURL = () => {
+		const url = new URL('/ws-echo', base);
+		url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+		return url.href;
+	};
+	let source = '';
+	const pending = new Map();
+	const workers = {};
+	window.__workerRealms = {
+		// in `realm` (a window of this origin): its worker, started from
+		// `kind` of URL, and its own socket. Once more when the worker did
+		// not start or a socket failed: Chrome under automation on a busy
+		// machine has failed one now and then natively (ERR_ABORTED), and
+		// what is compared is what the proxy does every time
+		run(name, realm, kind = 'script', again = true) {
+			const worker = new Promise((resolve) => {
+				try {
+					const url =
+						kind === 'blob'
+							? realm.URL.createObjectURL(
+									new realm.Blob(
+										[`self.BASE = ${JSON.stringify(base)};\n${source}`],
+										{ type: 'text/javascript' },
+									),
+								)
+							: kind === 'nested'
+								? `${script}?nested`
+								: script;
+					const started = new realm.Worker(url);
+					workers[name] = started;
+					started.onmessage = (event) => resolve(event.data);
+					started.onerror = (event) => resolve(`error ${event.message}`);
+					setTimeout(() => resolve('timeout'), 25000);
+				} catch (error) {
+					resolve(String(error));
+				}
+			});
+			const socket = new Promise((resolve) => {
+				try {
+					const ws = new realm.WebSocket(socketURL());
+					ws.onmessage = () => resolve('message');
+					ws.onerror = () => resolve('error');
+					setTimeout(() => resolve('timeout'), 10000);
+				} catch (error) {
+					resolve(String(error));
+				}
+			});
+			Promise.all([worker, socket]).then(([w, s]) => {
+				const failed =
+					w === 'error undefined' || s === 'error' || w?.socket === 'error';
+				if (failed && again) {
+					workers[name]?.terminate();
+					return __workerRealms.run(name, realm, kind, false);
+				}
+				results[name] = { worker: w, socket: s };
+				pending.get(name)?.();
+			});
+		},
+	};
+	const reported = (name) =>
+		new Promise((resolve) => {
+			if (results[name]) return resolve();
+			pending.set(name, resolve);
+			setTimeout(() => {
+				results[name] ??= 'no report';
+				resolve();
+			}, 40000);
+		});
+	// a frame's own script runs the case, in its realm
+	const own = (name) =>
+		`<script>parent.__workerRealms.run(${JSON.stringify(name)}, window)<\/script>`;
+	const frame = (setup) => {
+		const iframe = document.createElement('iframe');
+		setup?.(iframe);
+		document.body.append(iframe);
+		return iframe;
+	};
+	const cases = {
+		top: () => __workerRealms.run('top', window),
+		'top nested': () => __workerRealms.run('top nested', window, 'nested'),
+		blank: () => __workerRealms.run('blank', frame().contentWindow),
+		'blank blob': () =>
+			__workerRealms.run('blank blob', frame().contentWindow, 'blob'),
+		'blank nested': () =>
+			__workerRealms.run('blank nested', frame().contentWindow, 'nested'),
+		'blank script': () => {
+			const doc = frame().contentDocument;
+			const element = doc.createElement('script');
+			element.textContent = 'parent.__workerRealms.run("blank script", window)';
+			doc.body.append(element);
+		},
+		'blank in blank': () => {
+			const outer = frame().contentDocument;
+			const inner = outer.createElement('iframe');
+			outer.body.append(inner);
+			__workerRealms.run('blank in blank', inner.contentWindow);
+		},
+		// the worker ends with its document, as natively
+		'blank blob removed': async () => {
+			const iframe = frame();
+			const name = 'blank blob removed';
+			__workerRealms.run(name, iframe.contentWindow, 'blob');
+			await reported(name);
+			const worker = workers[name];
+			iframe.remove();
+			const after = await new Promise((resolve) => {
+				try {
+					worker.onmessage = (event) =>
+						event.data === 'pong' && resolve('running');
+					worker.postMessage('ping');
+				} catch (error) {
+					resolve('ended');
+				}
+				setTimeout(() => resolve('ended'), 3000);
+			});
+			if (typeof results[name] === 'object') results[name].removed = after;
+		},
+		srcdoc: () => frame((iframe) => (iframe.srcdoc = own('srcdoc'))),
+		written: () => {
+			const doc = frame().contentDocument;
+			doc.open();
+			doc.write(own('written'));
+			doc.close();
+		},
+		'blob document': () =>
+			frame(
+				(iframe) =>
+					(iframe.src = URL.createObjectURL(
+						new Blob([own('blob document')], { type: 'text/html' }),
+					)),
+			),
+		touched: () => {
+			const iframe = frame(
+				(iframe) => (iframe.src = 'worker-realms-child.html'),
+			);
+			// read before the frame loads, as reCAPTCHA's anchor frame is
+			void iframe.contentWindow.document;
+		},
+		popup: () => {
+			const popup = open('', 'worker-realms-popup', 'popup');
+			if (!popup) return void (results.popup = 'no popup');
+			__workerRealms.run('popup', popup);
+			reported('popup').then(() => popup.close());
+		},
+	};
+	addEventListener('load', async () => {
+		source = await (await fetch(script)).text();
+		for (const [name, start] of Object.entries(cases)) {
+			try {
+				await start();
+			} catch (error) {
+				results[name] = `threw ${error}`;
+			}
+			await reported(name);
+		}
+		results.done = true;
+		// (reported as a console message: a suite's evaluate is a user
+		// activation, which a popup would take)
+		console.log(`worker-realms ${JSON.stringify(results)}`);
+	});
+</script>

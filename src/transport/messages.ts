@@ -1510,6 +1510,12 @@ export type TransportToHost = {
 	 * in its viewport)
 	 */
 	requeue: [{ id: string; op: 'cancel' | 'raise' }, void];
+	/**
+	 * serve the transport on `port` too, as this port is served: a worker
+	 * hands its own workers one this way (no worker can ask a service
+	 * worker for one, Chrome 157 gives it no container)
+	 */
+	serve: [MessagePort, void];
 	request: [
 		{
 			remote: string;

@@ -2872,6 +2872,33 @@ export default class DocumentClient extends Client {
 		return new StompURL(location, this.codec, prefix);
 	}
 	/**
+	 * The client of the window that opened this document's top, the last
+	 * window up its parents that is a document of ours (an about:blank
+	 * popup, or a frame of one); null for a frame under the host or another
+	 * origin's window, and for a window nothing opened
+	 */
+	protected override openerClient(): DocumentClient | null {
+		const name = this.names.client;
+		const clientOf = (window: unknown) =>
+			(window as Record<string, DocumentClient | undefined>)[name];
+		try {
+			let top: unknown = this.global;
+			for (let depth = 0; depth < 16; depth++) {
+				const parent: unknown = Reflect.apply(nativeParentGet, top, []);
+				if (parent === top) break;
+				if (!clientOf(parent)?.isDOM) return null;
+				top = parent;
+			}
+			const opener: unknown = Reflect.apply(nativeOpenerGet, top, []);
+			if (!opener || opener === top) return null;
+			const client = clientOf(opener);
+			return client?.isDOM && client !== clientOf(top) ? client : null;
+		} catch (error) {
+			// a window of another real origin
+			return null;
+		}
+	}
+	/**
 	 * The client of the document an about:blank or about:srcdoc document is
 	 * of: its parent's, else its opener's. Read with the browser's own
 	 * accessors: the page-facing `parent` hands out a stand-in for a window

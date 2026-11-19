@@ -291,8 +291,6 @@ anything is opened (below).
   a QUIC Initial goes out two datagrams at a time, so there the stream closes
   on a later retransmit (0.3 s, 0.9 s, 2.1 s) or never, and the session fails
   when the handshake gives up after 4 s.
-- A worker's own worker has no transport (as for a WebSocket's), so its
-  sessions fail as the stand-in alone fails them, and nothing is sent.
 - Chrome keeps up to 6 MiB of a stream the page does not read; the
   transport reads 256 KiB ahead of the page's reader, and the rest waits in
   stomp-h3's QUIC window.
