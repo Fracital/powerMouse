@@ -2299,14 +2299,18 @@ export default class DocumentClient extends Client {
 	 * frame's initial about:blank for a first navigation within one origin
 	 * (every proxied document is of the proxy's), and with it the globals
 	 * that document had under an isolated embedder (measured: natively such
-	 * a frame is of another origin and gets a window of its own). Called
-	 * when the client is applied and when a shell says what its document is.
+	 * a frame is of another origin and gets a window of its own). WebKit
+	 * isolates every frame of an isolated page: there a document the shell
+	 * says is not isolated (`n`) loses it too, and its `crossOriginIsolated`
+	 * reads false (DOMHooks). Called when the client is applied and when a
+	 * shell says what its document is.
 	 */
 	override hideSharedArrayBuffer() {
 		if (!this.hostIsolated) return;
 		try {
 			if (
-				Reflect.get(this.global, 'crossOriginIsolated') === false &&
+				(Reflect.get(this.global, 'crossOriginIsolated') === false ||
+					this.isolationFacts.includes('n')) &&
 				Reflect.has(this.global, 'SharedArrayBuffer')
 			)
 				Reflect.deleteProperty(this.global, 'SharedArrayBuffer');

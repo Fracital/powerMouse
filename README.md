@@ -202,10 +202,12 @@ proxied pages be isolated, serve the page that holds the controller with
 
 ```
 Cross-Origin-Opener-Policy: same-origin
-Cross-Origin-Embedder-Policy: credentialless
+Cross-Origin-Embedder-Policy: require-corp
 ```
 
-and the files of `dist/` and the transport with the same embedder policy:
+(`require-corp`, not `credentialless`: WebKit, Safari and every browser on
+iOS, has no `credentialless`, and a page that sends it is not isolated
+there) and the files of `dist/` and the transport with the same embedder policy:
 the controller starts its transport and rewrite workers from there, and a
 worker of an isolated page starts only when its script has one (without it
 the proxy still runs, without those workers). With a `RemoteController`
@@ -217,7 +219,7 @@ gives every other page what a page without isolation has. Without the
 headers nothing changes and no proxied page is isolated.
 
 What it costs: your page is isolated too (its no-cors loads of other
-origins go without cookies), and with a `RemoteController` Chrome hands the
+origins must send a `Cross-Origin-Resource-Policy`), and with a `RemoteController` Chrome hands the
 proxied frames no window for the popups they open (`window.open` returns
 null, the popup has no opener), so take popups with `onOpen`.
 docs/same-origin-policy.md, "Cross-origin isolation", has the measurements.

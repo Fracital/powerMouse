@@ -207,11 +207,13 @@ const app = express();
 // what these two headers on the host's page do. STomp reads that at run time
 // and serves every proxied document so that it loads in such a page, isolated
 // only when its own headers isolate it natively (docs/same-origin-policy.md).
-// The embedder policy is `credentialless`: under either value a frame's
-// document needs a policy of its own (the service worker's), and under this
-// one what the page loads from another origin (the commit list's avatars)
-// loads whether or not it sends a Cross-Origin-Resource-Policy, without
-// cookies. The proxy origin's own files say the same and let another origin
+// The embedder policy is `require-corp`, the value every browser with one
+// honours: WebKit (Safari, every browser on iOS) has no `credentialless`,
+// and a page that sends it is not isolated there, nor is any proxied page
+// in it. What the page loads from another origin (the commit list's
+// avatars) sends a Cross-Origin-Resource-Policy, and the service worker
+// serves the proxied documents with the same value (src/isolation.ts
+// SERVED_EMBEDDER_POLICY). The proxy origin's own files say the same and let another origin
 // have them: in origin-isolation mode the host's page embeds the
 // controller's frame and the proxied frames from there, and a frame of an
 // isolated page loads only with an embedder policy and, from another origin,
@@ -268,7 +270,7 @@ if (process.env.STOMP_ISOLATION !== 'off')
 	app.use((req, res, next) => {
 		res.set({
 			'Cross-Origin-Opener-Policy': 'same-origin',
-			'Cross-Origin-Embedder-Policy': 'credentialless',
+			'Cross-Origin-Embedder-Policy': 'require-corp',
 			'Cross-Origin-Resource-Policy': 'cross-origin',
 		});
 		next();

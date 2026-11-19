@@ -40,6 +40,7 @@ import {
 	isolationHeaders,
 	isolationResponseHeaders,
 	nestedIsolation,
+	SERVED_EMBEDDER_POLICY,
 	topLevelIsolation,
 	type DocumentIsolation,
 } from '../isolation';
@@ -4013,7 +4014,10 @@ function genericForward(
 			(serverRequest.destination === 'worker' ||
 				serverRequest.destination === 'sharedworker')
 		)
-			responseHeaders.set('cross-origin-embedder-policy', 'credentialless');
+			responseHeaders.set(
+				'cross-origin-embedder-policy',
+				SERVED_EMBEDDER_POLICY,
+			);
 		// the type an emulated service worker's answer has is the worker's to
 		// say (serviceWorkers.dispatch); a site never says it
 		if (fromNetwork) responseHeaders.delete(RESPONSE_TYPE_HEADER);

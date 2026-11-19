@@ -100,6 +100,8 @@ const SUITE_ENV = {
 	'site-pool-kept-sites': { STOMP_TEST_TRANSPORT: '1', STOMP_SITE_POOL: '5' },
 	// the host's pages cross-origin isolated (the demo server's default)
 	'cross-origin-isolation': { STOMP_ISOLATION: 'on' },
+	// the same headers in Chrome and in WebKit, where WebKit is installed
+	'coi-engines': { STOMP_ISOLATION: 'on' },
 	// a page that isolates itself is isolated only in an isolated host
 	'performance-clocks': { STOMP_ISOLATION: 'on' },
 	// performance.measureUserAgentSpecificMemory() is a cross-origin

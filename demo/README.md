@@ -435,7 +435,7 @@ origin (docs/site-pool.md, Fallbacks).
 
 Every response of the server carries
 `Cross-Origin-Opener-Policy: same-origin`,
-`Cross-Origin-Embedder-Policy: credentialless` and
+`Cross-Origin-Embedder-Policy: require-corp` and
 `Cross-Origin-Resource-Policy: cross-origin`. The first two make the page
 cross-origin isolated, and STomp, which reads that at run time, then lets a
 proxied page be isolated when its own headers isolate it natively
@@ -447,11 +447,15 @@ isolated mode, where the page embeds the controller's frame from the proxy
 origin: a frame of an isolated page loads only with an embedder policy and,
 from another origin, with that resource policy.
 
-`credentialless` rather than `require-corp`: both isolate, and under either
-the proxied frames need a policy of their own (the service worker's). Under
-`require-corp` everything the page itself loads from another origin would
-have to send a Cross-Origin-Resource-Policy, which GitHub's avatars in the
-commit list do not; under `credentialless` they load, without cookies.
+`require-corp` rather than `credentialless`: in Chrome and Firefox both
+isolate, but WebKit (Safari, and every browser on iOS) has no
+`credentialless`, and a page that sends it is not isolated there, so no
+proxied page was: a game that needs SharedArrayBuffer (blockshooter.club)
+ran natively and stopped at its isolation check through the demo. Under
+`require-corp` everything the page itself loads from another origin sends a
+Cross-Origin-Resource-Policy: GitHub's avatars in the commit list send
+`cross-origin`. The service worker serves the proxied documents and workers
+with `require-corp` too (src/isolation.ts `SERVED_EMBEDDER_POLICY`).
 
 `STOMP_ISOLATION=off` leaves the three headers out. Nothing is isolated
 then, and everything else is the same. The suites run that way

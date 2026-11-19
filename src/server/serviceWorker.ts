@@ -4,7 +4,7 @@ import type GenericCodec from '../Codecs';
 import { assetName, Config, ConfigCodec, type Assets } from '../config';
 import { switchesGroup, type OpenerFacts } from '../coop';
 import type { HopPolicy } from '../csp';
-import { isolationResponseHeaders } from '../isolation';
+import { isolationResponseHeaders, SERVED_EMBEDDER_POLICY } from '../isolation';
 import {
 	kindPartition,
 	partitionSite,
@@ -1698,7 +1698,7 @@ async function isolatedHost(
 			isolated: false,
 			topLevel: request.destination === 'document',
 		});
-	else headers.set('cross-origin-embedder-policy', 'credentialless');
+	else headers.set('cross-origin-embedder-policy', SERVED_EMBEDDER_POLICY);
 	return new Response(redirect ? null : response.body, {
 		status: response.status,
 		statusText: response.statusText,

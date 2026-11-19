@@ -1119,24 +1119,26 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 		// window.originAgentCluster: whether this document's agent cluster is
 		// keyed by origin (DocumentClient.siteKeyed), not the proxy origin's;
-		// window.credentialless, in a credentialless frame's documents only
+		// window.credentialless, in a credentialless frame's documents only;
+		// crossOriginIsolated, false in a document the shell says is not
+		// isolated (WebKit isolates every frame of an isolated page)
 		for (const [name, answer] of [
 			['originAgentCluster', () => !moduleClient.siteKeyed],
+			[
+				'crossOriginIsolated',
+				(real) => real && !moduleClient.isolationFacts.includes('n'),
+			],
 			...(moduleClient.credentiallessNonce === null
 				? []
 				: [['credentialless', () => true]]),
-		] as [string, () => boolean][])
+		] as [string, (real: boolean) => boolean][])
 			for (const owner of [realm, realm.Window.prototype] as object[]) {
 				const descriptor = Reflect.getOwnPropertyDescriptor(owner, name);
 				if (!descriptor?.get) continue;
 				Reflect.defineProperty(owner, name, {
 					...descriptor,
-					get: proxyModule.wrapFunction(
-						descriptor.get,
-						(target, that, args) => {
-							Reflect.apply(target, that, args);
-							return answer();
-						},
+					get: proxyModule.wrapFunction(descriptor.get, (target, that, args) =>
+						answer(Reflect.apply(target, that, args) as boolean),
 					),
 				});
 				break;

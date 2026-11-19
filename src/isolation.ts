@@ -11,6 +11,23 @@
 // there, and the documents whose own headers do not isolate natively are
 // served with `Permissions-Policy: cross-origin-isolated=()`, under which
 // Chrome gives them what a page without isolation has.
+//
+// WebKit has neither COEP `credentialless` (a page that sends it is not
+// isolated there, and is a frame that sent no embedder policy) nor the
+// `cross-origin-isolated` permission (every frame of an isolated page is
+// isolated): what the proxy serves says `require-corp`, the value every
+// browser with an embedder policy honours, and the inject of a document
+// the shell says is not isolated (`n`) answers as one that is not.
+
+/**
+ * The embedder policy the host's page and every document and worker the
+ * service worker serves to it are sent with. Each of them loads only what
+ * is the proxy's own (the worker answers every request a proxied page
+ * makes, of the proxy's origin), so it refuses nothing `credentialless`
+ * would let in, and WebKit, which has no `credentialless`, isolates a page
+ * under it and loads a frame that has it.
+ */
+export const SERVED_EMBEDDER_POLICY = 'require-corp';
 
 export type EmbedderPolicy = 'unsafe-none' | 'require-corp' | 'credentialless';
 
@@ -220,14 +237,16 @@ export function nestedIsolation(
 
 /**
  * What the shell tells a document's client of it (src/rewriteHTML.ts): `g`
- * the group, `c` an embedder policy, `p` the permission. The client says it
- * on in the routes of the frames the document makes.
+ * the group, `c` an embedder policy, `p` the permission, `n` it is not
+ * cross-origin isolated natively. The client says it on in the routes of the
+ * frames the document makes.
  */
 export function isolationFacts(isolation: DocumentIsolation): string {
 	return (
 		(isolation.group ? 'g' : '') +
 		(isolation.coep !== 'unsafe-none' ? 'c' : '') +
-		(isolation.policy ? 'p' : '')
+		(isolation.policy ? 'p' : '') +
+		(isolation.isolated ? '' : 'n')
 	);
 }
 
@@ -319,10 +338,8 @@ export function isolationResponseHeaders(
 		severed = false,
 	}: { isolated: boolean; topLevel: boolean; severed?: boolean },
 ) {
-	// without an embedder policy no frame loads in the host's page; with
-	// credentialless a load that is not the proxy's own is not refused for
-	// its missing Cross-Origin-Resource-Policy
-	headers.set('cross-origin-embedder-policy', 'credentialless');
+	// without an embedder policy no frame loads in the host's page
+	headers.set('cross-origin-embedder-policy', SERVED_EMBEDDER_POLICY);
 	// the host's page may be of another origin than the proxy's
 	headers.set('cross-origin-resource-policy', 'cross-origin');
 	// a window the page opens stays in the host's browsing context group

@@ -1265,7 +1265,7 @@ natively (the suite's last part runs a demo server without the headers).
 so that it loads there and is isolated exactly when Chrome would isolate it
 natively (`src/isolation.ts`, `src/server/rewrites.ts`):
 
-- Every document and worker script gets COEP `credentialless` and CORP
+- Every document and worker script gets COEP `require-corp` and CORP
   `cross-origin` (a frame of an isolated page loads only with the first
   and, from another origin than the host's, the second), and a top-level
   one (a popup) COOP `same-origin`, so that it stays in the host's browsing
@@ -1451,11 +1451,12 @@ Its own page (the one that holds the controller) sends
 
 ```
 Cross-Origin-Opener-Policy: same-origin
-Cross-Origin-Embedder-Policy: credentialless
+Cross-Origin-Embedder-Policy: require-corp
 ```
 
-(`require-corp` isolates as well; under it everything the host's own page
-loads from another origin must send a CORP). The files of `dist/` and the
+(under it everything the host's own page loads from another origin must
+send a CORP; `credentialless` isolates as well in Chrome and Firefox, but
+not in WebKit, below). The files of `dist/` and the
 transport send the same embedder policy: the controller starts its
 transport and rewrite workers from there, and a dedicated worker of an
 isolated page starts only when its script has one (the table above;
@@ -1485,6 +1486,38 @@ What isolation costs a host, measured:
   no-cors loads of other origins go without cookies (credentialless) or
   need a CORP (require-corp), and a window it opens on another origin, or on
   a page without the headers, has no opener.
+
+### WebKit
+
+Measured in WebKitGTK 2.52.4 (MiniBrowser over WebKitWebDriver, the
+coi-engines suite; Safari and every browser on iOS are WebKit), natively:
+COOP `same-origin` with COEP `require-corp` isolates a page and its
+workers; with COEP `credentialless` nothing is isolated (WebKit has no such
+value, so the page has no embedder policy at all); every frame of an
+isolated page is isolated, whatever its `allow` or a
+`Permissions-Policy: cross-origin-isolated=()` say (WebKit has no such
+permission).
+
+A host that sent `credentialless` (the demo did until 2026-11-19) was
+therefore never isolated in WebKit, nor was any proxied page: a game that
+needs SharedArrayBuffer (blockshooter.club/play-staging, COOP and
+`require-corp`) ran natively in Safari and stopped at its isolation check
+through the demo. The demo's page and every document and worker the service
+worker serves now say `require-corp` (`SERVED_EMBEDDER_POLICY`, which
+refuses nothing a proxied page loads: every one of its loads is the proxy's
+own, of its origin). In Chrome and Firefox that changes nothing a page can
+see (cross-origin-isolation, credentialless and site-pool-coep pass
+unchanged). In WebKit a page isolated natively by `require-corp` is now
+isolated through the proxy, page and workers, in both modes.
+
+What the service worker cannot tell WebKit, the inject says: the shell
+marks a document that is not isolated natively (`n` among its facts), and
+its `crossOriginIsolated` reads false and its SharedArrayBuffer global is
+gone, as in Chrome. Two differences are left, on the suite's known list: a
+page with COOP and COEP `credentialless` is judged by Chrome's rules
+(isolated) where WebKit isolates nothing, and a worker of a page that is
+not isolated reads `crossOriginIsolated` true and has SharedArrayBuffer,
+since a worker knows nothing of its owner's isolation.
 
 ## Left
 
