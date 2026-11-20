@@ -1063,12 +1063,15 @@ export class DnrEngine {
 	 * A main frame that committed in no known tab is `tabId`'s (its document
 	 * said so): the matches held for it go to the tab, as at a commit
 	 */
-	onMainFramePlaced(tabId: number) {
-		this.tracker.onMainFrameCommitted(
-			tabId,
-			[...this.extensions.keys()],
-			TAB_ID_NONE,
-		);
+	onMainFramePlaced(tabId: number, held: string) {
+		this.tracker.onMainFrameCommitted(tabId, [...this.extensions.keys()], {
+			held,
+		});
+	}
+
+	/** a main frame held for its tab that was never placed: its matches go */
+	onHeldDropped(held: string) {
+		this.tracker.dropHeld(held);
 	}
 
 	/** a frame committed a navigation (OnDidFinishNavigation) */

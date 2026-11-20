@@ -64,9 +64,14 @@ export interface TrackerHooks {
 
 const key = (extensionId: string, tabId: number) => `${extensionId}\n${tabId}`;
 
+/** how many main frames of no known tab are held at most (each its matches) */
+const HELD = 256;
+
 export class ActionTracker {
 	private tracked = new Map<string, Tracked>();
 	private pending = new Map<string, Tracked>();
+	/** main frames' matches held for a tab not yet known, by extension and the navigation's key */
+	private held = new Map<string, Tracked>();
 
 	constructor(private hooks: TrackerHooks) {}
 
@@ -112,12 +117,20 @@ export class ActionTracker {
 			if (counted) info.actionCount++;
 		};
 		if (request.type === 'main_frame') {
-			// held for the navigation's commit (one of no known tab is counted
-			// too: its tab may be told before it commits, onMainFramePlaced)
-			const pendingKey = key(action.extensionId, tabId);
-			let info = this.pending.get(pendingKey);
-			if (!info)
-				this.pending.set(pendingKey, (info = { rules: [], actionCount: 0 }));
+			// held for the navigation's commit; one of no known tab for the tab
+			// its document is placed in (counted too, onMainFramePlaced)
+			const heldKey =
+				tabId === TAB_ID_NONE && request.held
+					? `${action.extensionId}\n${request.held}`
+					: null;
+			const map = heldKey ? this.held : this.pending;
+			const pendingKey = heldKey ?? key(action.extensionId, tabId);
+			let info = map.get(pendingKey);
+			if (!info) {
+				map.set(pendingKey, (info = { rules: [], actionCount: 0 }));
+				if (this.held.size > HELD)
+					this.held.delete(this.held.keys().next().value!);
+			}
 			add(info, action.type !== 'allow' && action.type !== 'allowAllRequests');
 			return;
 		}
@@ -131,28 +144,37 @@ export class ActionTracker {
 	}
 
 	/**
-	 * ResetTrackedInfoForTab: a main frame commits in the tab. `heldIn`: the
-	 * tab its matches were held under (none, for a navigation whose tab was
-	 * told only once it committed)
+	 * ResetTrackedInfoForTab: a main frame commits in the tab. `from.held`:
+	 * the key its matches were held under (a navigation whose tab was told
+	 * only once it committed)
 	 */
 	onMainFrameCommitted(
 		tabId: number,
 		extensionIds: Iterable<string>,
-		heldIn = tabId,
+		from: { held?: string } = {},
 	) {
 		this.transferToUnknown(tabId);
 		for (const extensionId of extensionIds) {
-			const pendingKey = key(extensionId, heldIn);
-			const info = this.pending.get(pendingKey) ?? {
+			const map = from.held ? this.held : this.pending;
+			const pendingKey = from.held
+				? `${extensionId}\n${from.held}`
+				: key(extensionId, tabId);
+			const info = map.get(pendingKey) ?? {
 				rules: [],
 				actionCount: 0,
 			};
-			this.pending.delete(pendingKey);
-			if (heldIn !== tabId) for (const rule of info.rules) rule.tabId = tabId;
+			map.delete(pendingKey);
+			if (from.held) for (const rule of info.rules) rule.tabId = tabId;
 			this.tracked.set(key(extensionId, tabId), info);
 			if (this.hooks.useBadge?.(extensionId))
 				this.hooks.badge?.(extensionId, tabId, info.actionCount);
 		}
+	}
+
+	/** a main frame held for a tab that is never told */
+	dropHeld(held: string) {
+		for (const heldKey of [...this.held.keys()])
+			if (heldKey.endsWith(`\n${held}`)) this.held.delete(heldKey);
 	}
 
 	/** a navigation that never commits */
@@ -184,7 +206,7 @@ export class ActionTracker {
 	}
 
 	clearExtension(extensionId: string) {
-		for (const map of [this.tracked, this.pending])
+		for (const map of [this.tracked, this.pending, this.held])
 			for (const trackedKey of [...map.keys()])
 				if (trackedKey.startsWith(`${extensionId}\n`)) map.delete(trackedKey);
 	}

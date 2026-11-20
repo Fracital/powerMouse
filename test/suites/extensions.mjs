@@ -165,6 +165,22 @@ const probe = {
 				resourceTypes: ['sub_frame', 'xmlhttprequest', 'websocket'],
 			},
 		},
+		// request headers the MV2 blocker's onBeforeSendHeaders sees before
+		// this rule's changes
+		{
+			id: 5,
+			action: {
+				type: 'modifyHeaders',
+				requestHeaders: [
+					{ header: 'x-order', operation: 'set', value: 'dnr' },
+					{ header: 'x-dnr-added', operation: 'set', value: 'yes' },
+				],
+			},
+			condition: {
+				urlFilter: 'echo-headers?send-order',
+				resourceTypes: ['xmlhttprequest'],
+			},
+		},
 	]),
 	'cs/main.js': `window.__mainRan = typeof chrome === 'object' && chrome && chrome.storage ? 'leaked' : 'page-chrome';`,
 	'cs/start.js': `document.documentElement.dataset.start = JSON.stringify({
@@ -234,6 +250,60 @@ const probe = {
 			document.body.append(frame);
 		});
 		await frame.contentWindow.fetch('/pages/ext-plain.txt?ext-tab-probe=nested').catch(() => {});
+		// the parent sets the frame's src: the frame keeps its id
+		await new Promise((resolve) => {
+			const timer = setTimeout(resolve, 5000);
+			frame.addEventListener('load', () => { clearTimeout(timer); resolve(); }, { once: true });
+			frame.src = '/pages/ext-other.html?ext-tab-probe=resrc';
+		});
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		await frame.contentWindow.fetch('/pages/ext-plain.txt?ext-tab-probe=again').catch(() => {});
+		// the frame goes to an image (its document announces that), then the
+		// parent sets its src: the image document says nothing, and the next
+		// document takes the frame's id back when it reports
+		await new Promise((resolve) => {
+			const timer = setTimeout(resolve, 5000);
+			frame.addEventListener('load', () => { clearTimeout(timer); resolve(); }, { once: true });
+			frame.contentWindow.location.href = '/pages/object-events.png?ext-tab-probe=img';
+		});
+		await new Promise((resolve) => {
+			const timer = setTimeout(resolve, 5000);
+			const heard = (event) => {
+				if (event.data !== 'fetched:iagain') return;
+				clearTimeout(timer);
+				removeEventListener('message', heard);
+				resolve();
+			};
+			addEventListener('message', heard);
+			frame.src = '/pages/ext-frame-fetch.html?ext-tab-probe=iresrc&fetch=iagain';
+		});
+		// and a frame of another origin whose parent sets its src
+		const cross = document.createElement('iframe');
+		const otherOrigin = location.origin.replace('127.0.0.1', 'localhost');
+		await new Promise((resolve) => {
+			const timer = setTimeout(resolve, 5000);
+			cross.addEventListener('load', () => { clearTimeout(timer); resolve(); }, { once: true });
+			cross.src = otherOrigin + '/pages/ext-other.html?ext-tab-probe=xframe';
+			document.body.append(cross);
+		});
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		await new Promise((resolve) => {
+			const timer = setTimeout(resolve, 5000);
+			const heard = (event) => {
+				if (event.data !== 'fetched:xagain') return;
+				clearTimeout(timer);
+				removeEventListener('message', heard);
+				resolve();
+			};
+			addEventListener('message', heard);
+			cross.src = otherOrigin + '/pages/ext-frame-fetch.html?ext-tab-probe=xresrc&fetch=xagain';
+		});
+		// a dedicated worker's request and WebSocket
+		await new Promise((resolve) => {
+			const worker = new Worker('/pages/ext-worker-socket.js');
+			const timer = setTimeout(resolve, 5000);
+			worker.onmessage = () => { clearTimeout(timer); worker.terminate(); resolve(); };
+		});
 		await text('/pages/ext-plain.txt?ext-tab-probe=xhr');
 		await new Promise((resolve) => {
 			const socket = new WebSocket(new URL('/open/ws-echo?ext-tab-probe=socket', location.href.replace(/^http/, 'ws')).href);
@@ -242,6 +312,7 @@ const probe = {
 		});
 		out.matched = await chrome.runtime.sendMessage({ type: 'matched' });
 		frame.remove();
+		cross.remove();
 		const since = /[?&]tab-rules=(\\d+)/.exec(location.search);
 		if (since) out.tabRules = await chrome.runtime.sendMessage({ type: 'tab-rules', since: Number(since[1]) });
 		delete out.step;
@@ -259,7 +330,7 @@ const probe = {
 	const matched = [];
 	chrome.declarativeNetRequest.onRuleMatchedDebug.addListener(({ rule, request }) => {
 		const probe = /ext-tab-probe=(\\w+)/.exec(request.url);
-		if (rule.ruleId >= 3 && matched.length < 40)
+		if ((rule.ruleId === 3 || rule.ruleId === 4) && matched.length < 40)
 			matched.push({ name: probe ? probe[1] : 'main', type: request.type, url: request.url, tabId: request.tabId, frameId: request.frameId, parentFrameId: request.parentFrameId });
 	});
 	chrome.runtime.onInstalled.addListener(() => {
@@ -306,7 +377,7 @@ const probe = {
 			const until = Date.now() + 4000;
 			const answer = () => {
 				const names = new Set(matched.map((entry) => entry.name));
-				if (!['frame', 'nested', 'xhr', 'socket'].every((name) => names.has(name)) && Date.now() < until)
+				if (!['frame', 'nested', 'resrc', 'again', 'img', 'iresrc', 'iagain', 'xframe', 'xresrc', 'xagain', 'wfetch', 'wsocket', 'xhr', 'socket'].every((name) => names.has(name)) && Date.now() < until)
 					return setTimeout(answer, 50);
 				const taken = Object.fromEntries(matched.splice(0).map((entry) => [entry.name, entry]));
 				chrome.scripting.executeScript({ target: { tabId: sender.tab.id, allFrames: true }, func: () => location.href })
@@ -488,12 +559,29 @@ const blocker = zip({
 	chrome.webRequest.onErrorOccurred.addListener((details) => {
 		if (details.url.includes('dnr-static&mv2')) self.errors.push(details.error);
 	}, { urls: ['*://*/pages/ext-plain.txt*'] });
+	// what onBeforeSendHeaders sees of a request the probe's rule changes
+	// the headers of (the page's, before the rule's), and what it asks for:
+	// x-order is a field the rule set, so its change is dropped whole
+	self.order = [];
+	const field = (headers, name) => headers.find((header) => header.name.toLowerCase() === name)?.value ?? null;
+	chrome.webRequest.onBeforeSendHeaders.addListener((details) => {
+		const free = details.url.includes('&free');
+		self.order.push(['before', free, field(details.requestHeaders, 'x-order'), field(details.requestHeaders, 'x-dnr-added')]);
+		const requestHeaders = details.requestHeaders.filter((header) => free || header.name.toLowerCase() !== 'x-order');
+		if (!free) requestHeaders.push({ name: 'x-order', value: 'listener' });
+		requestHeaders.push({ name: 'x-listener', value: 'yes' });
+		return { requestHeaders };
+	}, { urls: ['*://*/echo-headers?send-order*'] }, ['blocking', 'requestHeaders']);
+	chrome.webRequest.onSendHeaders.addListener((details) => {
+		self.order.push(['sent', details.url.includes('&free'), field(details.requestHeaders, 'x-order'), field(details.requestHeaders, 'x-listener')]);
+	}, { urls: ['*://*/echo-headers?send-order*'] }, ['requestHeaders']);
 	chrome.browserAction.setBadgeText({ text: 'B' });
 	chrome.runtime.onMessage.addListener((message, sender, respond) => {
 		if (message === 'completed') respond({
 			count: self.completed.length,
 			seen: self.seen,
 			errors: self.errors,
+			order: self.order,
 			extra: chrome.webRequest.OnBeforeSendHeadersOptions.EXTRA_HEADERS,
 		});
 	});`,
@@ -503,6 +591,9 @@ const blocker = zip({
 		out.redirect = (await (await fetch('/pages/ext-redirect.txt')).text()).trim();
 		out.added = (await fetch('/pages/ext-plain.txt?h')).headers.get('x-ext-added');
 		try { await fetch('/pages/ext-plain.txt?dnr-static&mv2'); out.dnrBlocked = 'loaded'; } catch (error) { out.dnrBlocked = 'failed'; }
+		const echo = (query) => fetch('/echo-headers?send-order' + query, { headers: { 'x-order': 'page' } })
+			.then((response) => response.json()).then((headers) => [headers['x-order'] ?? null, headers['x-dnr-added'] ?? null, headers['x-listener'] ?? null], (error) => String(error));
+		out.order = { conflict: await echo(''), free: await echo('&free') };
 		await new Promise((resolve) => setTimeout(resolve, 500));
 		chrome.storage.local.get('x', (items) => {
 			out.callback = typeof items;
@@ -822,7 +913,9 @@ for (const [mode, base] of [
 	);
 	const nestedId = taken.frame?.frameId;
 	const seen = Array.isArray(idle?.matched?.frames)
-		? idle.matched.frames.find(([, url]) => String(url).includes('ext-other'))
+		? idle.matched.frames.find(([, url]) =>
+				String(url).includes('ext-tab-probe=iresrc'),
+			)
 		: null;
 	ok(
 		`${mode}: their frame ids: the top document 0, the frame its own (the one executeScript reports), the parent of the frame's request 0`,
@@ -837,6 +930,51 @@ for (const [mode, base] of [
 			taken.xhr.parentFrameId === -1 &&
 			taken.socket?.frameId === 0,
 		JSON.stringify({ taken, frames: idle?.matched?.frames }),
+	);
+	ok(
+		`${mode}: a frame whose parent sets its src keeps its id: its navigation's request and its next document's`,
+		nestedId > 0 &&
+			taken.resrc?.type === 'sub_frame' &&
+			taken.resrc.frameId === nestedId &&
+			taken.resrc.parentFrameId === 0 &&
+			taken.again?.frameId === nestedId &&
+			taken.again.parentFrameId === 0,
+		JSON.stringify({ nestedId, resrc: taken.resrc, again: taken.again }),
+	);
+	ok(
+		`${mode}: a frame whose document announces nothing (an image) and whose parent sets its src: the next document keeps the frame's id once it reports`,
+		nestedId > 0 &&
+			taken.img?.frameId === nestedId &&
+			taken.iagain?.frameId === nestedId &&
+			taken.iagain.parentFrameId === 0,
+		JSON.stringify({
+			nestedId,
+			img: taken.img,
+			iresrc: taken.iresrc,
+			iagain: taken.iagain,
+		}),
+	);
+	ok(
+		`${mode}: a frame of another origin whose parent sets its src keeps its id`,
+		taken.xframe?.frameId > 0 &&
+			taken.xframe.frameId !== nestedId &&
+			taken.xresrc?.frameId === taken.xframe.frameId &&
+			taken.xagain?.frameId === taken.xframe.frameId &&
+			taken.xagain.parentFrameId === 0,
+		JSON.stringify({
+			xframe: taken.xframe,
+			xresrc: taken.xresrc,
+			xagain: taken.xagain,
+		}),
+	);
+	ok(
+		`${mode}: a dedicated worker's request and WebSocket are in its page's tab and frame`,
+		typeof tab === 'number' &&
+			['wfetch', 'wsocket'].every(
+				(name) => taken[name]?.tabId === tab && taken[name].frameId === 0,
+			) &&
+			taken.wsocket.type === 'websocket',
+		JSON.stringify({ wfetch: taken.wfetch, wsocket: taken.wsocket }),
 	);
 	ok(
 		`${mode}: messaging round trips stay under 5 ms (median)`,
@@ -876,6 +1014,24 @@ for (const [mode, base] of [
 			mv2.completed?.seen?.join() === 'xmlhttprequest' &&
 			mv2.completed.errors?.join() === 'net::ERR_BLOCKED_BY_CLIENT',
 		JSON.stringify({ blocked: mv2?.dnrBlocked, completed: mv2?.completed }),
+	);
+	// as MergeOnBeforeSendHeadersResponses: the listener sees the page's
+	// fields, DNR's changes go first, and a listener's change that sets a
+	// field DNR set to another value is dropped whole
+	const order = mv2?.completed?.order ?? [];
+	const step = (name, free) =>
+		JSON.stringify(
+			order.find(([at, isFree]) => at === name && isFree === free)?.slice(2),
+		);
+	ok(
+		`${mode}: onBeforeSendHeaders sees the headers before DNR's changes, and DNR's win a conflict as in Chrome`,
+		step('before', false) === '["page",null]' &&
+			step('before', true) === '["page",null]' &&
+			JSON.stringify(mv2?.order?.conflict) === '["dnr","yes",null]' &&
+			JSON.stringify(mv2?.order?.free) === '["dnr","yes","yes"]' &&
+			step('sent', false) === '["dnr",null]' &&
+			step('sent', true) === '["dnr","yes"]',
+		JSON.stringify({ order, sent: mv2?.order }),
 	);
 	ok(
 		`${mode}: MV2 callbacks with runtime.lastError`,

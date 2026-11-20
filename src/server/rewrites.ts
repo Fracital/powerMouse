@@ -3156,8 +3156,21 @@ function genericForward(
 		}
 
 		// the extensions' request header changes, on the headers as they go
-		// out (onBeforeSendHeaders: the jar's Cookie among them)
-		if (dnrFlow) rewriter.dnr!.sendHeaders(dnrFlow, requestHeaders);
+		// out (onBeforeSendHeaders: the jar's Cookie among them). What each
+		// changed name read before is kept: webRequest's listeners see that
+		// (pipeline.send)
+		let dnrSent: Map<string, string | null> | undefined;
+		if (dnrFlow) {
+			const before = extensionRequest ? new Map(requestHeaders) : null;
+			if (rewriter.dnr!.sendHeaders(dnrFlow, requestHeaders) && before) {
+				dnrSent = new Map();
+				const after = new Map(requestHeaders);
+				for (const [name, value] of before)
+					if (after.get(name) !== value) dnrSent.set(name, value);
+				for (const name of after.keys())
+					if (!before.has(name)) dnrSent.set(name, null);
+			}
+		}
 		// the origin the CORS protocol speaks for: the initiator's, unless a
 		// host's rule sent the site another Origin (the host's own, for a site
 		// that only answers it): the site's answer names that one, and the
@@ -3276,6 +3289,7 @@ function genericForward(
 						ordered,
 						// (the proxy's own fields come after, never seen)
 						(name) => name.startsWith('$stomp$'),
+						dnrSent,
 					);
 					if (!sent) throw extensionRefusal();
 					ordered = sent;

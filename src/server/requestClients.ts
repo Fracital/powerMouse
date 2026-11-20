@@ -28,6 +28,8 @@ const blobWorkers = new Map<string, string>();
 const pending = new Map<string, Promise<void>>();
 /** a blob: worker -> the client that made it (its policies are its creator's, src/server/contentPolicies.ts) */
 const blobCreators = new Map<string, string>();
+/** the shared workers seen: their requests are no document's (no tab's) */
+const sharedWorkers = new Map<string, true>();
 
 function remember<V>(map: Map<string, V>, key: string, value: V) {
 	map.delete(key);
@@ -47,6 +49,8 @@ export function noteRequestClients(
 	if (!resultingClientId) return;
 	const worker = destination === 'worker' || destination === 'sharedworker';
 	remember(owners, resultingClientId, worker && clientId ? clientId : null);
+	if (destination === 'sharedworker')
+		remember(sharedWorkers, resultingClientId, true);
 }
 
 /** `creator` asked for the transport of a worker it starts from the blob: URL `url` */
@@ -100,6 +104,7 @@ export async function goneClients(asked: string[]): Promise<string[]> {
 	for (const id of gone) {
 		owners.delete(id);
 		blobCreators.delete(id);
+		sharedWorkers.delete(id);
 	}
 	return gone;
 }
@@ -114,6 +119,28 @@ export const creatorOf = (client: string): string | undefined =>
  */
 export const blobCreatorOf = (client: string): string | undefined =>
 	blobCreators.get(client);
+
+/**
+ * The document a dedicated worker's requests are of (its tab's), at once
+ * for a client seen before; a new one is looked up for its next request.
+ * Undefined for a document, or a worker a shared worker made
+ */
+export function dedicatedOwnerOf(client: string): string | undefined {
+	const owner = requestOwner(client);
+	if (typeof owner !== 'string') {
+		if (owner) owner.catch(() => {});
+		return undefined;
+	}
+	for (
+		let at: string | null | undefined = client, depth = 0;
+		at && depth < 8;
+		depth++
+	) {
+		if (sharedWorkers.has(at)) return undefined;
+		at = owners.get(at);
+	}
+	return owner;
+}
 
 /**
  * The owner to report with a request of `client`: at once for a client seen

@@ -383,6 +383,13 @@ export class ExtensionRegistry {
 		return id;
 	}
 
+	/** a frame's next document (its window said so) keeps the frame id of its last */
+	linkFrame(next: string, previous: string) {
+		if (this.#clientTabs.has(previous) || this.#clientTabs.has(next)) return;
+		this.#keepFrameId(next, this.frameIdOf(previous));
+		for (const host of this.#dnrHosts) host.linked(next, previous);
+	}
+
 	#keepFrameId(client: string, id: number) {
 		this.#frameIds.set(client, id);
 		if (this.#frameIds.size > 4096)

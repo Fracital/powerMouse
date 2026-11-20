@@ -1788,6 +1788,9 @@ export class StompController extends EventTarget {
 				const moved = frameMovedReport(event.data);
 				const id = client ?? moved?.client;
 				if (id) this.#clients.attribute(id, frame);
+				// (the frame's window says which frame it is: the extensions' frame ids)
+				if (client && event.source)
+					this.#tabFeed?.sameWindow(event.source, client);
 				// a frame in the page that navigated is a step of the frame's
 				// history (a tab's Back steps it first): the buttons follow
 				// (the site pool: once the agent of the frame's slot heard)
@@ -3465,6 +3468,14 @@ export class StompController extends EventTarget {
 			frameOf: (client) => this.#clients.frame(client),
 			isTop: (frame, client) => frame.lastNavigate?.client === client,
 			frameIdOf: (client) => this.#call('extensions', { op: 'frame', client }),
+			sameFrame: (next, previous) => {
+				if (this.#extensionHub.any)
+					this.#call('extensions', {
+						op: 'sameFrame',
+						client: next,
+						previous,
+					}).catch(() => {});
+			},
 			open: this.#init.onOpen,
 			request: (url) => {
 				const change: ExtensionsChange = { type: 'tab', url };

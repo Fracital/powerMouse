@@ -53,6 +53,7 @@ import { RemoteJar, type JarPort } from './jarDB';
 import { registerKeptLoads } from './keptLoads';
 import { registerMediaLoads } from './mediaLoads';
 import { registerPermissionRoute, usePermissionsRemote } from './permissions';
+import { dedicatedOwnerOf } from './requestClients';
 import { RewriteCache } from './rewriteCache';
 import type { RewritePool } from './rewritePool';
 import { registerRewrites } from './rewrites';
@@ -607,6 +608,8 @@ export default async function createServer(
 	// are installed into this server's DnrHost
 	extensionRegistry.cookies = cookies;
 	const dnr = new DnrHost();
+	// a dedicated worker's requests are its document's tab's
+	dnr.ownerOf = dedicatedOwnerOf;
 	extensionRegistry.attachDnr(dnr);
 	const { route, setRules, hostReloaded, historyStepped } = registerRewrites(
 		router,

@@ -240,18 +240,24 @@ engine matches while they answer, as Chrome's
 redirects is still told to the listeners (onBeforeRequest, then
 onErrorOccurred with `net::ERR_BLOCKED_BY_CLIENT`), and their blocking
 answers are dropped. As the response's headers arrive, onHeadersReceived
-also goes first. As the headers go out, the engine's changes come first
-and onBeforeSendHeaders sees them, where Chrome tells the listeners the
-headers before its rules change them. A WebSocket or WebTransport handshake, which
+also goes first. As the headers go out, onBeforeSendHeaders sees them as
+they were before the engine's changes, and its answer is merged as
+Chrome's `MergeOnBeforeSendHeadersResponses` merges it: the rules' changes
+stand, and a listener's change is dropped whole when it sets a header a
+rule removed or set to another value, or removes one a rule set.
+onSendHeaders sees what goes out. A WebSocket or WebTransport handshake, which
 never passes the worker, is asked about by the controller while any
 extension is enabled. Tab ids come from the hubs: each top document's
 client is placed in its tab as it reports its navigation, a frame's
 requests are in its parent's tab, and a main frame's own request is in
 the tab `frame.go()` sent it to (the hub tells the worker first) or in the
 tab of the document that started it, and its redirects stay in that tab. A
-socket's handshake is in its document's tab and frame. Frame ids are the
-worker's: the hub asks it for a nested document's id, so a context's
-`sender.frameId`, executeScript's results and the rules' matches agree.
+socket's handshake is in its document's tab and frame, and a dedicated
+worker's requests and sockets in its page's. Frame ids are the worker's:
+the hub asks it for a nested document's id, so a context's
+`sender.frameId`, executeScript's results and the rules' matches agree. A
+frame keeps its id across its documents, whether it navigated itself or
+its parent set its src.
 The action count badge goes to the extension's action for that tab. A click on
 an extension's button grants it activeTab for the tab until the tab's top
 document changes, which getMatchedRules reads.
@@ -287,8 +293,15 @@ document changes, which getMatchedRules reads.
   announced (one that leaves an image document, or an about:blank one the
   page wrote) is matched with tab id -1, so a `tabIds` condition misses it
   and onRuleMatchedDebug reports -1. Its matched rules and its action
-  count go to the tab once its document reports. With several controllers
+  count are held for its document, and go to the tab once that document
+  reports, however many such navigations overlap. With several controllers
   in one scope, a rule's action count goes to the same tab id under each.
+- A frame whose document announces nothing (an image) and whose parent
+  sets its src before the parent's word reaches the worker: the
+  navigation's own request, and the new document's requests before it
+  reports, have a new frame id and the referring origin's latest document
+  as parent. Once the document reports from the frame's window, it has
+  the frame's id and parent.
 - `scripting.executeScript({ files })` runs the files but answers no
   result (a `func` answers its return value, as in Chrome).
 - A module a content script loads with `import()` runs as page code,
