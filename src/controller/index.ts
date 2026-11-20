@@ -111,7 +111,7 @@ import {
 } from '../transport/transportLog';
 import TransportWorker from '../transport/TransportWorker';
 import { watchCarrier, type CarrierInfo } from '../transport/wispWebTransport';
-import { BUILD } from '../version';
+import { ADBLOCK_SNAPSHOT, BUILD } from '../version';
 import { compileModule } from '../wasm/module';
 import { drawAccountChooser } from './accountChooser';
 import {
@@ -1468,10 +1468,16 @@ export class StompController extends EventTarget {
 		// had leaves the blocker off (and the config says so to every document)
 		// the default resources are the directory's own file
 		// (init.assets.adblockResources), which the service worker reads from
-		// this origin rather than through the transport
+		// this origin rather than through the transport, and so is the engine
+		// snapshot a worker with no engine stored serves while it fetches the
+		// default lists (init.assets.adblockSnapshot, asked for by its hash)
 		this.#adblock = resolveAdblockOptions(
 			init.adblock,
 			new URL(assetName(init.assets, 'adblockResources'), this.directory).href,
+			new URL(
+				`${assetName(init.assets, 'adblockSnapshot')}?${ADBLOCK_SNAPSHOT}`,
+				this.directory,
+			).href,
 		);
 		// the default lists are kept for adblockDefaults(); the lists in force
 		// start as the host's seed (the demo's kept editor state) or the defaults

@@ -376,6 +376,15 @@ export interface Assets {
 	 */
 	adblockResources?: string;
 	/**
+	 * the built-in blocker's engine snapshot of the default lists, gzipped
+	 * (docs/adblock.md, "The snapshot"), which a service worker with no
+	 * engine stored decompresses and serves while it fetches the lists.
+	 * Serve it as it is (`application/octet-stream`, no `Content-Encoding`).
+	 * It is asked for as `<name>?<hash of its bytes>`, so it can be cached
+	 * for good.
+	 */
+	adblockSnapshot?: string;
+	/**
 	 * The light rewriter library (the wasm glue, src/rewriterLightDocument.ts):
 	 * no document bundle carries it. A proxied top's shell loads this file,
 	 * and a sandboxed frame fetches it the first time it rewrites. It is asked
@@ -411,6 +420,7 @@ const BUNDLE_ASSETS: Required<Pick<Assets, BundleAsset>> = {
 	core: 'core.wasm',
 	blocker: 'blocker.wasm',
 	adblockResources: 'adblock-resources.json',
+	adblockSnapshot: 'adblock-snapshot.dat.gz',
 	rewriterLib: 'rewriterLib.js',
 };
 

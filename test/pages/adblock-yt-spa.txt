@@ -1,0 +1,9 @@
+! Title: a YouTube watch page's in-app navigation (adblock suite)
+! The rules of uBlock Origin's quick-fixes.min.txt (2026-11-19) for the next
+! video's player data, with www.youtube.com replaced by the fixture's
+! 127.0.0.1: the player takes fetch and Request from a frame it appends,
+! trusted-prevent-dom-bypass hands it the page's own, and trusted-rpfr edits
+! what they answer. The fixture answers /pages/deep/youtubei/v1/get_watch.
+127.0.0.1##+js(trusted-prevent-dom-bypass, Node.prototype.appendChild, fetch)
+127.0.0.1##+js(trusted-prevent-dom-bypass, Node.prototype.appendChild, Request)
+127.0.0.1##+js(trusted-rpfr, '"adSlots"', '"no_ads"', /get_watch?)

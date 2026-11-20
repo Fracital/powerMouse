@@ -299,6 +299,35 @@ const libraryIteration = ownIterationPlugin(
 	true,
 );
 
+/**
+ * The built-in blocker's engine snapshot (scripts/adblock-snapshot.mjs,
+ * docs/adblock.md): what a worker with no engine stored serves on a first
+ * visit, gzipped. Its serialization is blocker.wasm's, so a snapshot made by
+ * another module, or a file its UPSTREAM does not describe, is refused here
+ * rather than failing to load in every browser. Its age is not a build's
+ * concern (an old checkout builds as it did); the nightly workflow checks
+ * it (`--check`). It is asked for by the hash of its bytes (src/version.ts
+ * ADBLOCK_SNAPSHOT), so a host may let browsers keep it for good.
+ */
+function adblockSnapshot() {
+	const upstream = readFileSync('assets/adblock-snapshot.UPSTREAM', 'utf8');
+	const digest = (path) =>
+		createHash('sha256').update(readFileSync(path)).digest('hex');
+	const file = digest('assets/adblock-snapshot.dat.gz');
+	if (
+		/^blocker\.wasm sha256 ([0-9a-f]{64})$/m.exec(upstream)?.[1] !==
+		digest('assets/blocker.wasm')
+	)
+		throw new Error(
+			'build: assets/adblock-snapshot.dat.gz was made by another blocker.wasm; run node scripts/adblock-snapshot.mjs',
+		);
+	if (/^sha256 ([0-9a-f]{64})$/m.exec(upstream)?.[1] !== file)
+		throw new Error(
+			'build: assets/adblock-snapshot.dat.gz is not the file assets/adblock-snapshot.UPSTREAM describes; run node scripts/adblock-snapshot.mjs',
+		);
+	return file.slice(0, 16);
+}
+
 /** @type {import('esbuild').BuildOptions} */
 const common = {
 	platform: 'browser',
@@ -324,6 +353,9 @@ const common = {
 		// what the rewriter's wasm core module is asked for by: the hash of
 		// assets/core.wasm (see `bundles` below)
 		'process.env.STOMP_CORE': '""',
+		// what the blocker's engine snapshot is asked for by (src/version.ts
+		// ADBLOCK_SNAPSHOT): the hash of its bytes
+		'process.env.STOMP_ADBLOCK_SNAPSHOT': JSON.stringify(adblockSnapshot()),
 		// (src/version.ts DOCUMENT, DOCUMENT_FULL: see `bundles` below)
 		'process.env.STOMP_DOCUMENT': '""',
 		'process.env.STOMP_DOCUMENT_FULL': '""',
@@ -1651,14 +1683,15 @@ const FRAME_HTML = 'src/controller/controllerFrame.html';
 await copyFile(FRAME_HTML, 'dist/controllerFrame.html');
 // the wasm artifacts are built elsewhere (deploy/rust/build.sh, in a
 // container) and committed under assets/, as are the blocker's resources
-// (scripts/adblock-resources.mjs, from a uBlock Origin release): the build
+// (scripts/adblock-resources.mjs, from a uBlock Origin release) and its
+// engine snapshot (scripts/adblock-snapshot.mjs): the build
 // copies them, so a checkout with no Rust toolchain (CI, the deploy) ships
 // the same bytes
 const ASSETS = 'assets';
 async function copyAssets() {
 	const copied = [];
 	for (const name of await readdir(ASSETS))
-		if (/\.(wasm|js|json)$/.test(name)) {
+		if (/\.(wasm|js|json|gz)$/.test(name)) {
 			await copyFile(`${ASSETS}/${name}`, `dist/${name}`);
 			copied.push(`dist/${name}`);
 		}
