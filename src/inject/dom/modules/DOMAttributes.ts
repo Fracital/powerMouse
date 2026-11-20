@@ -44,6 +44,7 @@ import {
 	inertDocumentOf,
 	nativeNodeType,
 	nativeQuerySelectorAll,
+	startedScripts,
 } from '../cloneNode';
 import { ELEMENT_STYLE_INTERFACES } from '../cssRules';
 import { deferred } from '../deferred';
@@ -1037,7 +1038,6 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				// at its insertion: a connected one keeps the load it has
 				if (attribute === 'integrity' && element.isConnected) return;
 				releaseIntegrity(element);
-				element.restoreAttributesOG('src');
 				// a held script (holdScript) keeps its page's src through a change
 				// of its type or integrity (its route, integrity and all, is made
 				// as it connects); a src set or removed again replaces it
@@ -1045,6 +1045,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					if (attribute === 'type' || attribute === 'integrity') return;
 					moduleClient.releaseScript(element);
 				}
+				element.restoreAttributesOG('src');
 
 				if (
 					element.hasAttribute('src') &&
@@ -1060,9 +1061,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// does not load, the browser fires 'error', and the inject
 					// reports it (src/csp.ts). A script the page inserts through the
 					// DOM, not the parser (DOMAttributes runs for inserted elements).
-					// One not connected yet that a nonce could still let through is
-					// held refused, and judged again as it connects, as Chrome
-					// judges it (with the nonce it has then: DOMContentHooks). One of
+					// One not connected yet that a policy refuses is held, and judged
+					// as it connects, as Chrome judges it (with the nonce it has
+					// then, naming the inserting call: DOMContentHooks). One of
 					// markup the parser runs (a copy made of it) is the parser's:
 					// a document.write's is judged now; the page's markup gets no
 					// src here where the policies in force refuse it (more
@@ -1072,14 +1073,20 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					const parser =
 						isParsed(element) &&
 						getGlobalParsingState(realm) === 'parsingBeforeWrite';
+					// (one a markup string made that is inserted as it is never
+					// runs: Chrome never prepares it, so never judges it,
+					// cloneNode startedScripts; a document.write's copy is the
+					// parser's, written again)
+					const started = !parser && startedScripts.has(element);
 					if (
+						!started &&
 						!parser &&
 						!element.isConnected &&
-						moduleClient.scriptAwaitsNonce(element, url)
+						moduleClient.scriptAwaits(element, url)
 					) {
+						// (the page reads its own src back meanwhile)
 						const src = element.getAttribute('src')!;
 						element.removeAttribute('src');
-						element.removeAttributeOG('src');
 						moduleClient.holdScript(element, url, src);
 						return;
 					}
@@ -1087,7 +1094,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						moduleClient.quietRefusal = true;
 					let refused: boolean;
 					try {
-						refused = moduleClient.refuseExternalScript(element, url, parser);
+						refused =
+							!started &&
+							moduleClient.refuseExternalScript(element, url, parser);
 					} finally {
 						moduleClient.quietRefusal = false;
 					}
