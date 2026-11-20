@@ -48,6 +48,7 @@ import type {
 	PasskeysInit as PasskeysInitOf,
 } from '../passkeys/types';
 import { coreFile, injectDocumentFile, libraryFile } from '../routeURL';
+import type { DnrCommand } from '../server/dnr';
 import { isUrlLike, urlLike } from '../StompURL';
 import { startCarrierHost, useCarrierHost } from '../transport/carrierClient';
 import { constructTransport, resolveHttp3 } from '../transport/construct';
@@ -3023,14 +3024,15 @@ export class StompController extends EventTarget {
 		// service worker, where the engine is, so the worker is asked here,
 		// beside the question for the cookies (one more message each way,
 		// no wait of its own). A yes refuses the socket; no answer does not
-		const blocked = this.#adblock
-			? this.#rpc
-					.call('socket', {
-						url: url.href,
-						source: origin && origin[1] !== 'null' ? origin[1] : '',
-					})
-					.catch(() => false)
-			: false;
+		const blocked =
+			this.#adblock || this.#dnrExtensions.size
+				? this.#rpc
+						.call('socket', {
+							url: url.href,
+							source: origin && origin[1] !== 'null' ? origin[1] : '',
+						})
+						.catch(() => false)
+				: false;
 		// no jar answer: a handshake without cookies
 		const cookie = this.#rpc
 			.call('cookies', {
@@ -3054,7 +3056,12 @@ export class StompController extends EventTarget {
 	 * it go
 	 */
 	#admitSession = async (url: URL, origin: string): Promise<boolean> => {
-		if (!this.#adblock || !this.isReady || !this.#rpc) return true;
+		if (
+			(!this.#adblock && !this.#dnrExtensions.size) ||
+			!this.isReady ||
+			!this.#rpc
+		)
+			return true;
 		const blocked = await this.#rpc
 			.call('socket', {
 				url: url.href,
@@ -3160,6 +3167,25 @@ export class StompController extends EventTarget {
 			}
 		}
 	}
+	/**
+	 * The extensions' declarativeNetRequest rules in the service worker
+	 * (docs/extensions-dnr.md): `{ op: 'install', extension }` compiles an
+	 * extension's rulesets and answers Chrome's install warnings, `{ op:
+	 * 'call', id, method, args }` makes one of its chrome.declarativeNetRequest
+	 * calls, `{ op: 'uninstall', id }` drops it and `{ op: 'stats' }` reads
+	 * what matching costs per request. The extensions layer drives it; the
+	 * rules live in this worker only (they are installed again with the
+	 * extension after it restarts)
+	 */
+	async dnr(command: DnrCommand): Promise<unknown> {
+		const result = await this.#call('dnr', command);
+		// (sockets never pass the worker: they are asked about while any extension has rules)
+		if (command.op === 'install') this.#dnrExtensions.add(command.extension.id);
+		if (command.op === 'uninstall') this.#dnrExtensions.delete(command.id);
+		return result;
+	}
+	/** the extensions with declarativeNetRequest rules in the worker */
+	#dnrExtensions = new Set<string>();
 	/** replace the request rules the service worker applies (see ControllerInit.rules) */
 	async setRules(rules: RequestRule[]): Promise<void> {
 		this.#rules = rules;

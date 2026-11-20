@@ -44,6 +44,7 @@ import {
 } from './cacheMarks';
 import { warmClientHints } from './clientHints';
 import Cookies, { openCookies, openJarDB, registerCookies } from './Cookies';
+import { DnrHost } from './dnr';
 import { hostErrorPage } from './errorPage';
 import { registerIntegrityLoads } from './integrityLoads';
 import { RemoteJar, type JarPort } from './jarDB';
@@ -113,6 +114,8 @@ export interface StompServer {
 	reloadBlocker(init: AdblockInit, force?: boolean): Promise<void>;
 	/** the per-site shields the controller set (src/server/shields.ts) */
 	shields: ShieldsStore;
+	/** the extensions' declarativeNetRequest rules (src/server/dnr.ts, the controller's `dnr` RPC) */
+	dnr: DnrHost;
 	/** replace the per-site shields allowlist (the controller's `shields` RPC) */
 	setShields(list: SiteShields[], seed?: number): void;
 	/** the context and real URL of a link route (src/visited.ts), or null */
@@ -587,6 +590,7 @@ export default async function createServer(
 				pool,
 			));
 	const shields = new ShieldsStore();
+	const dnr = new DnrHost();
 	const { route, setRules, hostReloaded, historyStepped } = registerRewrites(
 		router,
 		init,
@@ -604,6 +608,7 @@ export default async function createServer(
 		askBlobProbe,
 		tellIsolationWanted,
 		tellApartServed,
+		dnr,
 	);
 	if (blocker) registerBlocker(router, blocker);
 	registerStorage(router, stores.storage, init.codec);
@@ -630,6 +635,7 @@ export default async function createServer(
 		route,
 		blocker,
 		shields,
+		dnr,
 		setShields: (list, seed) => shields.set(list, seed),
 		reloadBlocker: (next, force = false) =>
 			blocker instanceof Blocker

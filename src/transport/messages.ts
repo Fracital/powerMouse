@@ -12,6 +12,7 @@ import type {
 	PasskeyOp,
 	PasskeyPrompt,
 } from '../passkeys/types';
+import type { DnrCommand } from '../server/dnr';
 import type { PortBody } from './bodyPort';
 import type { Http3DescriptorOptions } from './construct';
 import type { ShardsOption } from './ShardedTransport';
@@ -1392,6 +1393,14 @@ export type SWbound = {
 	 * accepted too (a caller that sends no seed).
 	 */
 	shields: [{ list: SiteShields[]; seed?: number } | SiteShields[]];
+	/**
+	 * the extensions' declarativeNetRequest rules in this worker
+	 * (src/server/dnr.ts, docs/extensions-dnr.md): install an extension's
+	 * rulesets, uninstall it, make one of its chrome.declarativeNetRequest
+	 * calls, or read what matching costs. Answers the call's result; a call
+	 * Chrome rejects rejects with Chrome's message
+	 */
+	dnr: [DnrCommand, unknown];
 	/**
 	 * change the built-in blocker's lists at runtime (the demo's Filter Lists
 	 * editor, docs/adblock.md): the controller re-resolves the `AdblockInit` and

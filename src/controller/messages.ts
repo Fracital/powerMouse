@@ -13,6 +13,7 @@ import type {
 	PasskeyPrompt,
 	PasskeysConfig,
 } from '../passkeys/types';
+import type { DnrCommand } from '../server/dnr';
 import type { Http3DescriptorOptions } from '../transport/construct';
 import type {
 	CookieCommand,
@@ -238,6 +239,8 @@ export type FrameBound = {
 	passkeys: [PasskeyCommand, PasskeyInfo[] | boolean | null];
 	/** replace the request rules */
 	rules: [RequestRule[]];
+	/** the extensions' declarativeNetRequest rules (StompController.dnr) */
+	dnr: [DnrCommand, unknown];
 	/** replace the per-site shields (forwarded to the inner controller) */
 	shields: [SiteShields[]];
 	/** replace the blocker's filter lists at runtime (StompController.setAdblockLists) */
