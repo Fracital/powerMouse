@@ -81,6 +81,8 @@ export interface TabFrames<F extends TabFrame> {
 	isTop(frame: F, client: string): boolean;
 	/** a nested document's frame id, as the worker keeps it (its requests' frame ids are the same) */
 	frameIdOf?: (client: string) => Promise<unknown>;
+	/** a frame's next document keeps the frame id of its last: the worker is told */
+	sameFrame?: (next: string, previous: string) => void;
 	/** the host's onOpen: a new tab opened from `opener` */
 	open?: (url: string, opener: F) => void;
 	/** a new tab with no tab to open it from: the host is told (a `tab` change) */
@@ -125,6 +127,12 @@ export interface FramesAsTabs<F extends TabFrame> extends HubTabs {
 	changed(): void;
 	/** a frame's top document reported (navigateReport) */
 	navigated(frame: F, report: TabReport): void;
+	/**
+	 * a nested document reported its client from `source`, its frame's
+	 * WindowProxy (the same object across the frame's documents): it keeps
+	 * the frame id of the last document reported from there
+	 */
+	sameWindow(source: object, client: string): void;
 }
 
 /**
@@ -169,6 +177,8 @@ export function framesAsTabs<F extends TabFrame>(
 	};
 	// (the worker's, kept here once asked; a counter of this hub's without it)
 	const frameIds = new Map<string, number>();
+	// the client each nested frame's window last reported
+	const windows = new WeakMap<object, string>();
 	// what the feed last told of each tab
 	type Seen = {
 		tabId: number;
@@ -239,6 +249,14 @@ export function framesAsTabs<F extends TabFrame>(
 	};
 	return {
 		changed,
+		sameWindow: (source, client) => {
+			const previous = windows.get(source);
+			windows.set(source, client);
+			if (!previous || previous === client) return;
+			const id = frameIds.get(previous);
+			if (id !== undefined) frameIds.set(client, id);
+			host.sameFrame?.(client, previous);
+		},
 		navigated: (frame, report) => {
 			if (!host.events) return;
 			changed();

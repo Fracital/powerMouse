@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>frame fetch</title>
+	</head>
+	<body>
+		<p>a frame that makes one request (extensions suite)</p>
+		<script>
+			// (once loaded: a frame's next document is known as the frame's
+			// once it reports, which it does as it starts)
+			const name = new URLSearchParams(location.search).get('fetch');
+			if (name)
+				addEventListener('load', () =>
+					setTimeout(
+						() =>
+							fetch(`/pages/ext-plain.txt?ext-tab-probe=${name}`)
+								.catch(() => {})
+								.then(() => parent.postMessage(`fetched:${name}`, '*')),
+						200,
+					),
+				);
+		</script>
+	</body>
+</html>

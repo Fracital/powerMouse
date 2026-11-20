@@ -439,4 +439,6 @@ export type ExtensionCommand =
 	/** a click on the extension's button granted it activeTab for the tab */
 	| { op: 'grant'; id: string; tabId: number }
 	/** a nested document's frame id, which the worker keeps (its requests carry it too) */
-	| { op: 'frame'; client: string };
+	| { op: 'frame'; client: string }
+	/** a frame's next document (its window reported it) keeps the frame id of its last */
+	| { op: 'sameFrame'; client: string; previous: string };

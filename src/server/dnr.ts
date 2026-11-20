@@ -313,6 +313,8 @@ export class DnrHost {
 	frameIdOf: (clientId: string) => number = () => -1;
 	/** a frame's next document (`next`) keeps the frame id of its last (`previous`) */
 	sameFrame: (next: string, previous: string) => void = () => {};
+	/** the document a dedicated worker belongs to (its requests are in that document's tab) */
+	ownerOf: (clientId: string) => string | undefined = () => undefined;
 	/** the tab of each top-level navigation in flight, by the client it makes: its redirects' requests are the same navigation's */
 	private navigationTabs = new Map<string, number>();
 	/** main frames that committed in no known tab, until the extensions layer places them */
@@ -603,7 +605,23 @@ export class DnrHost {
 		if (tabId < 0 || !this.unplaced.delete(clientId)) return;
 		const frame = this.frames.get(clientId);
 		if (frame) frame.tab = tabId;
-		this.engine.onMainFramePlaced(tabId);
+		this.engine.onMainFramePlaced(tabId, clientId);
+	}
+
+	/**
+	 * A frame's next document (its window reported it) after `previous`:
+	 * the frame's parent, top and tab stay the frame's, whatever its
+	 * navigation was matched under (a src set with no word from the parent
+	 * in time falls back to the latest document of the referring origin)
+	 */
+	linked(next: string, previous: string) {
+		const frame = this.frames.get(next);
+		const before = this.frames.get(previous);
+		if (!frame || !before || frame.main || before.main || !before.parent)
+			return;
+		frame.parent = before.parent;
+		frame.top = before.top;
+		if (before.tab >= 0) frame.tab = before.tab;
 	}
 
 	/** a client the controller says is gone */
@@ -627,6 +645,12 @@ export class DnrHost {
 		let parent: string | null = null;
 		let topUrl: string | null = null;
 		let tabId = -1;
+		// (a dedicated worker's requests are its document's, as Chrome
+		// matches them in the frame that owns the worker)
+		const requester =
+			info.navigation || !info.clientId || this.frames.has(info.clientId)
+				? info.clientId
+				: (this.ownerOf(info.clientId) ?? info.clientId);
 		if (info.navigation) {
 			// a navigation is matched in its parent's frame (a main frame's in none)
 			if (!info.topLevel) {
@@ -661,20 +685,27 @@ export class DnrHost {
 						);
 				}
 			}
-		} else if (info.clientId && this.frames.has(info.clientId)) {
-			frame = info.clientId;
+		} else if (requester && this.frames.has(requester)) {
+			frame = requester;
 			topUrl = this.frames.get(frame)!.top;
 		}
 		if (!info.navigation) tabId = this.tabFor(info.clientId);
 		// frame ids: a tab's top document is 0 (a nested one's id is the
 		// extensions layer's, which the worker does not keep)
-		const { frameId, parentFrameId } = this.frameIdsOf(info, parent);
+		const { frameId, parentFrameId } = this.frameIdsOf(info, parent, requester);
 		const request: DnrRequest = {
 			url: info.url,
 			initiator: sourceOrigin,
 			type: resourceTypeOf(info),
 			method: info.method,
 			tabId,
+			// a main frame of no known tab: its matches are held for its document
+			...(info.navigation &&
+			info.topLevel &&
+			tabId < 0 &&
+			info.resultingClientId
+				? { held: info.resultingClientId }
+				: {}),
 			topUrl:
 				info.navigation && info.topLevel
 					? info.url
@@ -699,7 +730,8 @@ export class DnrHost {
 			if (tab >= 0) return tab;
 			const frame = this.frames.get(at);
 			if (frame && frame.tab >= 0) return frame.tab;
-			at = frame?.parent;
+			// (a client of no frame: a dedicated worker is its document's)
+			at = frame ? frame.parent : this.ownerOf(at);
 		}
 		return -1;
 	}
@@ -708,6 +740,7 @@ export class DnrHost {
 	private frameIdsOf(
 		info: DnrRequestInfo,
 		parent: string | null,
+		requester: string | undefined,
 	): { frameId: number; parentFrameId: number } {
 		if (info.navigation && info.topLevel)
 			return { frameId: 0, parentFrameId: -1 };
@@ -722,9 +755,9 @@ export class DnrHost {
 				parentFrameId: this.idOf(parent),
 			};
 		}
-		const frame = info.clientId ? this.frames.get(info.clientId) : undefined;
+		const frame = requester ? this.frames.get(requester) : undefined;
 		return {
-			frameId: this.idOf(info.clientId),
+			frameId: this.idOf(requester),
 			parentFrameId: frame && !frame.main ? this.idOf(frame.parent) : -1,
 		};
 	}
@@ -809,8 +842,11 @@ export class DnrHost {
 			// its tab comes with the document's report (placed)
 			if (flow.tabId < 0) {
 				this.unplaced.add(key);
-				if (this.unplaced.size > 64)
-					this.unplaced.delete(this.unplaced.keys().next().value!);
+				if (this.unplaced.size > 64) {
+					const dropped = this.unplaced.keys().next().value!;
+					this.unplaced.delete(dropped);
+					this.engine.onHeldDropped(dropped);
+				}
 			}
 		}
 		this.remember(key, {

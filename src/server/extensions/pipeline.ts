@@ -36,6 +36,82 @@ export type BeforeVerdict =
 const toList = (headers: RawHeaders) =>
 	headers.map(([name, value]) => ({ name, value }));
 
+/**
+ * The fields as they were before DNR changed them (`dnr`: each changed
+ * name's value then, null for one a rule added): what onBeforeSendHeaders
+ * shows, as Chrome dispatches it before it applies DNR's header actions
+ * (MergeOnBeforeSendHeadersResponses)
+ */
+function beforeDnr(
+	visible: RawHeaders,
+	dnr: ReadonlyMap<string, string | null>,
+): RawHeaders {
+	const shown: RawHeaders = [];
+	const done = new Set<string>();
+	for (const [name, value] of visible) {
+		const key = name.toLowerCase();
+		if (!dnr.has(key)) shown.push([name, value]);
+		else if (!done.has(key)) {
+			done.add(key);
+			const original = dnr.get(key);
+			if (original !== null && original !== undefined)
+				shown.push([name, original]);
+		}
+	}
+	for (const [key, original] of dnr)
+		if (original !== null && !done.has(key)) shown.push([key, original]);
+	return shown;
+}
+
+/**
+ * A listener's fields, merged as Chrome merges them with DNR's: the
+ * listener's change against what it was shown is dropped whole when it sets
+ * a field a rule removed or set to another value, or removes one a rule set
+ */
+function mergedWithDnr(
+	visible: RawHeaders,
+	shown: RawHeaders,
+	answered: RawHeaders,
+	dnr: ReadonlyMap<string, string | null>,
+): RawHeaders {
+	const valuesOf = (headers: RawHeaders) => {
+		const values = new Map<string, [string, string]>();
+		for (const [name, value] of headers) {
+			const key = name.toLowerCase();
+			if (!values.has(key)) values.set(key, [name, value]);
+		}
+		return values;
+	};
+	const before = valuesOf(shown);
+	const after = valuesOf(answered);
+	const now = valuesOf(visible);
+	const set = [...after].filter(
+		([key, [, value]]) => before.get(key)?.[1] !== value,
+	);
+	const removed = [...before.keys()].filter((key) => !after.has(key));
+	if (
+		set.some(
+			([key, [, value]]) => dnr.has(key) && now.get(key)?.[1] !== value,
+		) ||
+		removed.some((key) => dnr.has(key) && now.has(key))
+	)
+		return visible;
+	const gone = new Set(removed);
+	const merged: RawHeaders = [];
+	const placed = new Set<string>();
+	const values = new Map(set);
+	for (const [name, value] of visible) {
+		const key = name.toLowerCase();
+		if (gone.has(key) || placed.has(key)) continue;
+		const changed = values.get(key);
+		if (changed) placed.add(key);
+		merged.push(changed ? [name, changed[1]] : [name, value]);
+	}
+	for (const [key, [name, value]] of set)
+		if (!placed.has(key)) merged.push([name, value]);
+	return merged;
+}
+
 const fromList = (list: { name: string; value?: string }[]): RawHeaders =>
 	list
 		.filter((header) => typeof header?.name === 'string')
@@ -134,24 +210,31 @@ export class ExtensionPipeline {
 	}
 
 	/**
-	 * The headers as they go out (DnrHost changed them already):
-	 * onBeforeSendHeaders (which may cancel: null), then onSendHeaders is told. `internal`
+	 * The headers as they go out (DnrHost changed them already; `dnr` holds
+	 * the value before of each name it changed, null for one it added):
+	 * onBeforeSendHeaders sees them as they were before DNR's changes and
+	 * may cancel (null), then onSendHeaders is told what goes out. `internal`
 	 * fields of the proxy's own stay as they were, unseen.
 	 */
 	async send(
 		request: ExtensionRequest,
 		headers: RawHeaders,
 		internal: (name: string) => boolean,
+		dnr?: ReadonlyMap<string, string | null>,
 	): Promise<RawHeaders | null> {
 		const own = headers.filter(([name]) => internal(name));
 		let visible = headers.filter(([name]) => !internal(name));
 		if (webRequests.any) {
+			const shown = dnr?.size ? beforeDnr(visible, dnr) : visible;
 			const answer = await this.#dispatch(
 				'onBeforeSendHeaders',
-				this.#details(request, { requestHeaders: toList(visible) }),
+				this.#details(request, { requestHeaders: toList(shown) }),
 			);
 			if (answer?.cancel) return null;
-			if (answer?.requestHeaders) visible = fromList(answer.requestHeaders);
+			if (answer?.requestHeaders)
+				visible = dnr?.size
+					? mergedWithDnr(visible, shown, fromList(answer.requestHeaders), dnr)
+					: fromList(answer.requestHeaders);
 			this.#dispatch(
 				'onSendHeaders',
 				this.#details(request, { requestHeaders: toList(visible) }),

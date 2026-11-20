@@ -69,6 +69,9 @@ export async function extensionCommand(
 				return undefined;
 			case 'frame':
 				return registry.frameIdOf(String(command.client));
+			case 'sameFrame':
+				registry.linkFrame(String(command.client), String(command.previous));
+				return undefined;
 			case 'grant':
 				registry.grantActiveTab(String(command.id), Number(command.tabId));
 				return undefined;

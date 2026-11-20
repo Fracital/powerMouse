@@ -37,7 +37,9 @@ dnr.parentOf = (clientId) => parent; // the client that frames a nested document
 dnr.hostNavigationTab = (url) => tabId; // the tab the host sent to url (a frame's go()), -1 for none
 dnr.frameIdOf = (clientId) => frameId;  // a nested document's frame id, assigned on first ask
 dnr.sameFrame = (next, previous) => {};  // a frame's next document keeps its frame id
+dnr.ownerOf = (clientId) => documentClient;  // a dedicated worker's document
 dnr.placed(clientId, tabId);            // a main frame that committed in no known tab is that tab's
+dnr.linked(next, previous);             // a frame's next document (its window said so) keeps the frame's parent and tab
 dnr.onPersist = (id, state) => {...}; // store it with the extension
 dnr.hooks = { debug, badge, withheld, validTab, activeTabGranted };
 ```
@@ -90,7 +92,9 @@ src/server/rewrites.ts, in the order Chrome's network stack asks:
    - A request the worker makes itself (an emulated service worker's
      script) is not matched. DNR never sees a browser-internal request.
 2. **onBeforeSendHeaders.** The request header changes apply to the
-   headers as they go out, including the jar's Cookie.
+   headers as they go out, including the jar's Cookie. webRequest's
+   listeners are shown the headers before these changes, and a listener
+   change that conflicts with them is dropped, as in Chrome.
 3. **onHeadersReceived.**
    - Rules with response header conditions run on the response's header
      lines, Set-Cookie included. A block or redirect at this point ends
@@ -283,16 +287,23 @@ of test/dnr/cases.mjs):
   tab (it makes the same client). A socket's handshake is the document's
   that opens it: the worker names the page's client to the controller with
   the page's transport port, and the controller names it back when it asks
-  about the handshake. A main frame's request that nothing announced is
-  matched in no tab; once its document reports, `placed` gives the tab its
-  held matches, so getMatchedRules and the badge count it, while a
+  about the handshake. A dedicated worker's requests and sockets are its
+  page's (`ownerOf`, from the client that made the worker; a shared
+  worker's are no tab's). A main frame's request that nothing announced is
+  matched in no tab, its matches held under the client it makes; once its
+  document reports, `placed` gives the tab those matches, so
+  getMatchedRules and the badge count it, while a
   `tabIds` condition and onRuleMatchedDebug saw -1. Without the extensions
   layer every request is tab -1, as Chrome treats a request no tab owns.
 - **Frame ids.** A tab's top document is frame 0. A nested document's id
   is assigned in the worker (`frameIdOf`), which the hubs ask too, so
   `sender.frameId` and executeScript's `frameId` are the ones the rules'
-  matches report. A frame that navigated itself keeps its id; one whose
-  src its parent set gets a new one, where Chrome keeps the frame's.
+  matches report. A frame that navigated itself keeps its id (its
+  document says so as it leaves). A frame whose src its parent set keeps
+  it too: its old document says so, or, when that is a document that
+  says nothing (an image), its new document does when it reports from
+  the frame's window (`linked`), which also gives it the frame's parent.
+  The requests before that report have a new id.
 - **Collapse is a block.** Collapsing the element would mean inject code
   in every page. The request is blocked as Chrome blocks it, and the empty
   element stays.

@@ -452,6 +452,71 @@ for (const row of matchCases) {
 console.log(
 	`not native (request path, not checks): ${informational.agree}/${informational.checked} agree`,
 );
+
+// two main frames of no known tab at once (navigations no hooked document
+// announced): each one's matches are held for its own document, and go to
+// the tab that document is placed in, whichever is placed first
+{
+	const { engine } = await engineFor([
+		{
+			id: 'held',
+			rulesets: [
+				{
+					id: 'r',
+					rules: [
+						{
+							id: 1,
+							action: { type: 'allow' },
+							condition: {
+								urlFilter: '||one.example^',
+								resourceTypes: ['main_frame'],
+							},
+						},
+						{
+							id: 2,
+							action: { type: 'block' },
+							condition: {
+								urlFilter: '||two.example^',
+								resourceTypes: ['main_frame'],
+							},
+						},
+					],
+				},
+			],
+		},
+	]);
+	const navigate = (url, held) =>
+		engine.beforeRequest({
+			url,
+			initiator: null,
+			type: 'main_frame',
+			method: 'get',
+			tabId: -1,
+			held,
+			topUrl: url,
+			frame: null,
+		});
+	navigate('https://one.example/', 'c1');
+	navigate('https://two.example/', 'c2');
+	engine.onMainFramePlaced(8, 'c2');
+	engine.onMainFramePlaced(7, 'c1');
+	const rules = async (tabId) =>
+		(
+			await engine.getMatchedRules('held', { tabId }, true)
+		).rulesMatchedInfo.map((info) => `${info.rule.ruleId}@${info.tabId}`);
+	const placed = {
+		7: await rules(7),
+		8: await rules(8),
+		none: await rules(-1),
+	};
+	ok(
+		"overlapping main frames of no known tab: each one's matches go to the tab its document is placed in",
+		placed[7].join() === '1@7' &&
+			placed[8].join() === '2@8' &&
+			!placed.none.length,
+		JSON.stringify(placed),
+	);
+}
 if (VERBOSE)
 	for (const [name, problems] of informational.differ)
 		console.log(`INFO ${name} - ${problems.join('; ')}`);

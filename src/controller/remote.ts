@@ -389,6 +389,16 @@ export class RemoteController extends EventTarget {
 						args: [{ op: 'frame', client }],
 					}),
 				),
+			sameFrame: (next, previous) => {
+				this.#ready
+					.then(() =>
+						this.#rpc.call('extensions', {
+							call: 'command',
+							args: [{ op: 'sameFrame', client: next, previous }],
+						}),
+					)
+					.catch(() => {});
+			},
 			open: init.onOpen,
 			request: (url) => {
 				const change: ExtensionsChange = { type: 'tab', url };
@@ -596,7 +606,8 @@ export class RemoteController extends EventTarget {
 						((...values: unknown[]) => Promise<unknown>) | undefined
 					>;
 					// (the feed's own calls are this page's to make)
-					const feed = op === 'changed' || op === 'navigated';
+					const feed =
+						op === 'changed' || op === 'navigated' || op === 'sameWindow';
 					const run = !feed && Object.hasOwn(tabs, op) ? tabs[op] : undefined;
 					if (typeof run !== 'function')
 						throw new Error(`${op} is not a tabs call`);
@@ -681,6 +692,9 @@ export class RemoteController extends EventTarget {
 				const moved = frameMovedReport(event.data);
 				const id = client ?? moved?.client;
 				if (id) this.#clients.attribute(id, frame);
+				// (the frame's window says which frame it is: the extensions' frame ids)
+				if (client && event.source)
+					this.#extensionTabs?.sameWindow(event.source, client);
 				// a frame in the page that navigated is a step of the frame's
 				// history (a tab's Back steps it first): the buttons follow
 				if (moved)

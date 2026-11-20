@@ -148,6 +148,11 @@ export interface DnrRequest {
 	 * the frame's parent; nothing for a main_frame one
 	 */
 	frame?: string | null;
+	/**
+	 * a main frame's request in no known tab: the key its matches are held
+	 * under until its document is placed in a tab (the client it makes)
+	 */
+	held?: string;
 	/** reported in onRuleMatchedDebug's request details */
 	requestId?: string;
 	frameId?: number;
