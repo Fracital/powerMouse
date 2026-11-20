@@ -1399,6 +1399,7 @@ function showLanding() {
 	// coming back from the browser view, or out of the switcher (where the
 	// landing was only visibility-hidden under the stage)
 	if (wasHidden || dockRects) zoomLanding(!dockRects);
+	askCommits();
 	document.body.classList.remove('browsing');
 	hideRecents();
 	if (dockRects) slideFrom(homeTiles, dockRects);
@@ -2004,19 +2005,28 @@ function proxyLink(event) {
 document.addEventListener('click', proxyLink);
 document.addEventListener('auxclick', proxyLink);
 
+/** a page was asked for before the controller was up (navigate) */
+let pressedEarly = false;
+
 async function navigate(input, { newTab = false } = {}) {
 	const url = normalizeUrl(SEARCH.query(input.trim()));
 	if (!controller) {
 		// still booting (service worker, transport module): a press must switch
 		// to the browser view at once, not get dropped. Show the view now and
 		// open the tab once the controller is up; the frame loads in view.
+		pressedEarly = true; // it wins over a page the fragment names
 		showBrowser();
+		syncToolbar(); // no tab yet: nothing to go back to
 		omni.url.value = url;
 		setStatus('Loading…');
 		await booted.catch(() => {});
 		if (!controller) return; // boot failed; the status line says why
 		if (browser.classList.contains('hidden')) return; // the user went home
 	}
+	// a site opened from the tab manager (a dock link, a page's popup) shows
+	// on the next frame: the manager goes at once, no card animating up to
+	// full screen while the bar is still hidden
+	if (document.body.classList.contains('recents')) teardownRecents();
 	if (newTab || !activeTab) activateTab(createTab());
 	else showBrowser();
 	const tab = activeTab;
@@ -2638,7 +2648,15 @@ async function showCommits() {
 		note.textContent = `GitHub did not answer (${error.message}). The repository is linked above.`;
 	}
 }
-showCommits();
+// asked once; a page opened from the fragment asks after its tab (or when
+// home shows first), so they never come before it
+let commitsAsked = false;
+function askCommits() {
+	if (commitsAsked) return;
+	commitsAsked = true;
+	showCommits();
+}
+if (!document.documentElement.classList.contains('opening')) askCommits();
 // as many commits as the room holds, whole rows only: the rest are hidden
 // (and shown again when the window grows), so the list never scrolls
 function fitCommits() {
@@ -3383,7 +3401,7 @@ function bookmarkRow(entry) {
 	// a click opens it in the current tab; Ctrl, Cmd or the middle button in
 	// a new one, as a browser's links do
 	const go = (newTab) => {
-		closeBookmarks(false);
+		closeBookmarks(false, { instant: true });
 		navigate(entry.url, { newTab });
 	};
 	open.addEventListener('click', (event) => {
@@ -3609,8 +3627,10 @@ let bookmarksOpener = bookmarksTab;
 function openBookmarks(opener = bookmarksTab) {
 	if (bookmarksOpen()) return;
 	bookmarksOpener = opener;
+	bookmarksPanel.classList.remove('shut');
 	bookmarksPanel.classList.add('open');
 	bookmarksPanel.setAttribute('aria-hidden', 'false');
+	$('bookmarksScrim').classList.remove('shut');
 	$('bookmarksScrim').classList.add('open');
 	opener.setAttribute('aria-expanded', 'true');
 	// the keyboard stays in the sidebar
@@ -3620,10 +3640,13 @@ function openBookmarks(opener = bookmarksTab) {
 	(bookmarksList.querySelector('.bookmarkOpen') || $('bookmarksClose')).focus();
 }
 
-function closeBookmarks(restoreFocus = true) {
+/** `instant`: a bookmark is opening, nothing slides or fades over its page */
+function closeBookmarks(restoreFocus = true, { instant = false } = {}) {
 	if (!bookmarksOpen()) return;
+	bookmarksPanel.classList.toggle('shut', instant);
 	bookmarksPanel.classList.remove('open');
 	bookmarksPanel.setAttribute('aria-hidden', 'true');
+	$('bookmarksScrim').classList.toggle('shut', instant);
 	$('bookmarksScrim').classList.remove('open');
 	bookmarksOpener.setAttribute('aria-expanded', 'false');
 	landing.inert = false;
@@ -5568,19 +5591,43 @@ function fillAbout() {
 	]);
 }
 
+// A page named in the fragment (a reload, a restored session, a link to a
+// tab) is in the browser view from the first paint (index.html's .opening),
+// never after a frame of the home screen: the view's classes take that over
+// here, and the tab comes as soon as the controller can read the fragment,
+// in the view a press before Ready shows (navigate)
+const opening = document.documentElement.classList.contains('opening');
+if (opening) {
+	showBrowser();
+	syncToolbar(); // no tab yet: nothing to go back to
+}
+document.documentElement.classList.remove('opening');
+
 const booted = boot();
 booted
 	.then(async () => {
 		// a kept, non-default filter-list config is applied once the controller
 		// is up (a fresh visit loads the defaults with no extra engine build)
 		applyAdblockConfigOnBoot();
-		// restore a proxied URL from the fragment after a refresh
+		// restore a proxied URL from the fragment after a refresh (unless a
+		// page was asked for while the controller came up, or the user went
+		// home, which leaves no fragment)
 		const restore = await readHash();
-		if (restore) navigate(restore, { newTab: true });
-		else mainForm.url.focus();
+		if (restore && !activeTab && !pressedEarly)
+			navigate(restore, { newTab: true });
+		else if (
+			opening &&
+			!restore &&
+			!pressedEarly &&
+			!browser.classList.contains('hidden')
+		)
+			showLanding(); // the fragment named no page it can open
+		else if (browser.classList.contains('hidden')) mainForm.url.focus();
+		askCommits();
 	})
 	.catch((error) => {
 		badge('Error', error.message, 'red');
 		console.error(error);
 		setStatus(`Error: ${error.message}`, true);
+		askCommits();
 	});
