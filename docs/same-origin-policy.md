@@ -577,14 +577,17 @@ Filled in commit by commit; see the CHANGELOG for each.
   browser asks it again for each document and never revalidates another
   site's copy, and answers from a memory cache of its own
   (`src/server/cache.ts` MemoryCache): per site of the asking document and
-  credentials mode, fresh 200s only, 96 MB, least recently used first. A
-  miss goes to the HTTP cache (network partition) and the network; with the
-  `cache` option on a same-site document's resource never goes to the
-  network again while fresh, and with it off the memory cache still
-  answers. Cost, measured on YouTube, CNN, Discord and Google (4 runs of
-  each build, alternated, medians of the time to the page's main content,
-  cold, warm and revisit): within a few hundred ms either way, the noise
-  of the runs (see the CHANGELOG).
+  credentials mode, fresh 200s only, 96 MB, least recently used first, and
+  an entry no document asked for in 5 minutes goes (Chrome's renderer keeps
+  a resource only while something holds it: an image out of the DOM, or
+  what a document that navigated away loaded, is gone at the next
+  collection). A miss goes to the HTTP cache (network partition) and the
+  network; with the `cache` option on a same-site document's resource
+  never goes to the network again while fresh, and with it off the memory
+  cache still answers. Cost, measured on YouTube, CNN, Discord and Google
+  (4 runs of each build, alternated, medians of the time to the page's
+  main content, cold, warm and revisit): within a few hundred ms either
+  way, the noise of the runs (see the CHANGELOG).
   What the worker hands on as the origin sent it (an image, a font, a text
   track, a poster: the `binary` routes) is the renderer's to keep again,
   per site (memory-cache-share: a site's second document takes the first

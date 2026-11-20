@@ -900,6 +900,21 @@ export const MEMORY_DESTINATIONS = new Set([
 /** what the memory cache keeps in all, and of one response */
 const MEMORY_BUDGET = 96 * 1024 * 1024;
 const MEMORY_ENTRY_LIMIT = 24 * 1024 * 1024;
+/**
+ * how long an entry stays that no document asked for. Chrome's renderer
+ * keeps a resource in memory only while something holds it: an image taken
+ * out of the DOM is gone at the next collection, and so is what a document
+ * that navigated away loaded (Chrome 157: 100 images of 200 KB, 20 MB of
+ * the renderer's image cache while shown, none once removed or after a
+ * same-site navigation, the next document taking them from the HTTP
+ * cache). The worker cannot see what a document holds, only what it asks
+ * for, so an entry goes once no document asked for it in this long. Kept
+ * until the budget pushed it out, a page open for long kept everything it
+ * ever showed: a live Twitch channel kept the directory's thumbnails and
+ * scripts and every chat emote, 20 to 28 MB of the browser's blob storage
+ * for the whole session, where Chrome keeps none
+ */
+export const MEMORY_IDLE = 5 * 60 * 1000;
 
 interface MemoryEntry {
 	status: number;
@@ -914,6 +929,8 @@ interface MemoryEntry {
 	 */
 	body: Blob;
 	storedAt: number;
+	/** when it was last kept or handed out (MEMORY_IDLE) */
+	usedAt: number;
 	/** seconds it stays fresh */
 	lifetime: number;
 	/** the request headers its Vary names, as HttpCache.varyKey has them */
@@ -928,14 +945,16 @@ interface MemoryEntry {
  * renderer, so the browser is handed these responses as `no-cache` (and
  * without validators) and comes back to the worker for each document, which
  * answers from here: per site of the document that asks, in memory, fresh
- * entries only, the least recently used going first past the budget. A miss
- * goes on to the HTTP cache (keyed by the network partition) and the
- * network.
+ * entries only, the least recently used going first past the budget, and
+ * one no document asked for in MEMORY_IDLE going then. A miss goes on to
+ * the HTTP cache (keyed by the network partition) and the network.
  */
 export class MemoryCache {
+	/** by last use, the least recent first */
 	#entries = new Map<string, MemoryEntry>();
 	#bytes = 0;
 	#budget = MEMORY_BUDGET;
+	#sweeper: ReturnType<typeof setTimeout> | undefined;
 	/**
 	 * Keep a `parts`th of the budget: a slot of the site pool, whose
 	 * workers share one process with the others' (each worker has a cache
@@ -954,6 +973,22 @@ export class MemoryCache {
 			this.#drop(oldest, entry);
 		}
 	}
+	/** what no document asked for in MEMORY_IDLE goes */
+	#sweep(now = Date.now()) {
+		for (const [oldest, entry] of this.#entries) {
+			if (now - entry.usedAt < MEMORY_IDLE) break;
+			this.#drop(oldest, entry);
+		}
+	}
+	/** sweep while anything is kept, though no request comes */
+	#arm() {
+		if (this.#sweeper !== undefined || !this.#entries.size) return;
+		this.#sweeper = setTimeout(() => {
+			this.#sweeper = undefined;
+			this.#sweep();
+			this.#arm();
+		}, MEMORY_IDLE);
+	}
 	/**
 	 * the key of `url` for documents of `site`, loaded with credentials or
 	 * not (the renderer does not hand one to a load of the other mode)
@@ -963,9 +998,11 @@ export class MemoryCache {
 	}
 	/** a fresh entry for `key` that the request's headers match, as a response */
 	match(key: string, requestHeaders: Headers): Response | null {
+		const now = Date.now();
+		this.#sweep(now);
 		const entry = this.#entries.get(key);
 		if (!entry) return null;
-		const age = (Date.now() - entry.storedAt) / 1000;
+		const age = (now - entry.storedAt) / 1000;
 		if (age >= entry.lifetime) {
 			this.#drop(key, entry);
 			return null;
@@ -977,6 +1014,7 @@ export class MemoryCache {
 		)
 			return null;
 		// the most recently used last
+		entry.usedAt = now;
 		this.#entries.delete(key);
 		this.#entries.set(key, entry);
 		headers.set('age', String(Math.max(0, Math.round(age))));
@@ -1033,12 +1071,15 @@ export class MemoryCache {
 		headers.delete('set-cookie');
 		const old = this.#entries.get(key);
 		if (old) this.#drop(key, old);
+		const now = Date.now();
+		this.#sweep(now);
 		this.#entries.set(key, {
 			status: response.status,
 			statusText: response.statusText,
 			headers: [...headers],
 			body: bytes,
-			storedAt: Date.now(),
+			storedAt: now,
+			usedAt: now,
 			// what is left of it: an HTTP cache hit has aged already
 			lifetime:
 				(freshnessLifetime(headers) ?? 0) - (Number(headers.get('age')) || 0),
@@ -1048,6 +1089,7 @@ export class MemoryCache {
 		});
 		this.#bytes += size;
 		this.#fit();
+		this.#arm();
 	}
 	#drop(key: string, entry: MemoryEntry) {
 		this.#entries.delete(key);
@@ -1056,6 +1098,8 @@ export class MemoryCache {
 	clear() {
 		this.#entries.clear();
 		this.#bytes = 0;
+		clearTimeout(this.#sweeper);
+		this.#sweeper = undefined;
 	}
 	/** the origin of the URL a key() is for, null when it is not one */
 	static origin(key: string): string | null {
