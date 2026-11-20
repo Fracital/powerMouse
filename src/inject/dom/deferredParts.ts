@@ -76,6 +76,9 @@
 // (and what performance.measureUserAgentSpecificMemory() answers, with the
 // page's own URLs, ./measuredMemory.ts, at a page's first call of it)
 //
+// (and the loads of an <object>'s data and an <embed>'s src,
+// ./objectLoads.ts, at a document's first object or embed with a URL)
+//
 // (and the font faces of a sheet copied for a document no service worker
 // controls, ./lazyFonts.ts, at the first such face)
 //
@@ -192,6 +195,7 @@ import {
 import { emulateServiceWorker } from './modules/serviceWorkerEmulation';
 import { mayNavigate, navigateOther, navigationRefused } from './navigateOther';
 import { navigationRefusal, precommitRedirect } from './navigationRefusal';
+import { objectLoads } from './objectLoads';
 import { openerFacts, opensWithoutOpener } from './openerFacts';
 import { pictureWindows } from './pictureWindows';
 import { policyChecks } from './policyChecks';
@@ -349,6 +353,10 @@ export const parts = {
 	// (DocumentClient.mayNavigate; modules/Sandbox.ts)
 	mayNavigate,
 	navigationRefused,
+	// an <object>'s data and an <embed>'s src, copied through the proxy, at
+	// a document's first object or embed with a URL (./objectLoads.ts;
+	// ./modules/DOMAttributes.ts)
+	objectLoads,
 	// the copies a document no service worker controls makes of its loads,
 	// at its first (./uncontrolledCopies.ts; ./modules/DOMAttributes.ts)
 	uncontrolledCopies,
