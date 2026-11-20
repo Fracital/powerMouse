@@ -133,6 +133,7 @@ import {
 	framePath,
 	noteActivation,
 	noteBrowserNavigation,
+	tellSteps,
 	traverse,
 	type Direction,
 	type ReportedEntry,
@@ -1293,6 +1294,9 @@ export class StompController extends EventTarget {
 		validateHooks(init.hooks);
 		if (!('serviceWorker' in navigator))
 			throw new Error('Your browser does not support service workers.');
+		// a step of a frame's history taken with location.replace is a
+		// history step all the same (history.ts)
+		tellSteps((url) => this.#call('historyStep', url));
 
 		if (init.serviceworker instanceof ServiceWorkerRegistration) {
 			this.#registration = init.serviceworker;

@@ -1318,6 +1318,12 @@ export type SWbound = {
 	/** the host page was reloaded: the pages it restores are (HostReload) */
 	hostReload: [HostReload];
 	/**
+	 * the next navigation to this routed URL is a step of a frame's history
+	 * the controller takes with location.replace (src/controller/history.ts):
+	 * it takes the kept document, as a traversal does
+	 */
+	historyStep: [string];
+	/**
 	 * the controller shook hands again over another channel: this one
 	 * answers what is in flight on it, then the worker closes it
 	 */

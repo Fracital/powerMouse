@@ -1170,6 +1170,13 @@ interface Rewriter {
 	 * each stops loading past the caches)
 	 */
 	hostReload?: { mode: HostReload; until: number; loads: Map<string, number> };
+	/**
+	 * the routed URLs (no fragment) of history steps the controller takes
+	 * with location.replace (src/controller/history.ts), with until when
+	 * each counts: the next navigation to one is the step, and takes the
+	 * kept document as a traversal does
+	 */
+	historySteps?: Map<string, number>;
 	/** the host's page is cross-origin isolated (config.isolated) */
 	isolated: boolean;
 	/**
@@ -1199,6 +1206,8 @@ const ISOLATION_ENGINE_WAIT_MS = 3000;
 
 /** how long after a reloaded host's word a top-level navigation is one it restores */
 const RESTORE_WINDOW_MS = 10_000;
+/** how long after the controller's word a navigation to its URL is the history step it told of */
+const HISTORY_STEP_MS = 10_000;
 /**
  * how long what a hard-reloaded document loads goes past the caches
  * (natively until its load event, which the worker does not hear of)
@@ -3222,6 +3231,18 @@ function genericForward(
 			)
 				cacheMode = 'reload';
 			else if (asked.get('max-age') === '0') cacheMode = 'no-cache';
+		}
+		// A step of a frame's history the controller takes with
+		// location.replace (another frame's entries came after this one's,
+		// src/controller/history.ts) is a history step all the same: it
+		// takes the kept document, as the browser's traversal does
+		if (navigation && cacheMode === 'default' && rewriter.historySteps) {
+			const stepped = serverRequest.url.split('#')[0];
+			const until = rewriter.historySteps.get(stepped);
+			if (until !== undefined) {
+				rewriter.historySteps.delete(stepped);
+				if (until > Date.now()) cacheMode = 'force-cache';
+			}
 		}
 		// A host page that was reloaded shows its page again with a new
 		// navigation, which takes the reload's mode: `no-cache` for the
@@ -8170,6 +8191,12 @@ export function registerRewrites(
 				until: Date.now() + RESTORE_WINDOW_MS,
 				loads: new Map(),
 			};
+		},
+		historyStepped(url: string) {
+			const steps = (rewriter.historySteps ??= new Map());
+			const now = Date.now();
+			for (const [kept, until] of steps) if (until <= now) steps.delete(kept);
+			steps.set(url.split('#')[0], now + HISTORY_STEP_MS);
 		},
 	};
 }

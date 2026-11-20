@@ -533,6 +533,9 @@ function registerController(
 			hostReload: async (mode) => {
 				(await server).hostReloaded(mode);
 			},
+			historyStep: async (url) => {
+				if (typeof url === 'string') (await server).historyStepped(url);
+			},
 			// the controller shook hands again (with this worker or another):
 			// this channel answers what is in flight on it, then closes
 			retire: async () => {
