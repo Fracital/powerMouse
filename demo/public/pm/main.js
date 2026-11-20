@@ -4010,10 +4010,38 @@ function playShieldsNav(dir) {
 	shieldsPanel.classList.add(dir === 'back' ? 'shAnimBack' : 'shAnimFwd');
 }
 
+// The site's icon in the Shields panel, fetched through its tab's page as a
+// bookmark's is (fetchIcon) and shown as the PNG that comes back. The icon
+// URL the page declared is never loaded by this page itself: that request
+// would leave from the host, outside the proxy, with the host's address.
+const shieldsIcons = new Map(); // icon URL -> PNG data URL, null for none
+function shieldsFavicon() {
+	const tab = activeTab;
+	const url = tab?.icon;
+	if (!url) return GLOBE_ICON;
+	if (url.startsWith('data:image/')) return url;
+	if (shieldsIcons.has(url)) return shieldsIcons.get(url) || GLOBE_ICON;
+	if (tab.iconPort) {
+		shieldsIcons.set(url, null);
+		fetchIcon(tab, url).then(
+			(icon) => {
+				// unanswered: asked again the next time the panel opens
+				if (icon === undefined) return shieldsIcons.delete(url);
+				shieldsIcons.set(url, icon);
+				const shown = shieldsPanel.querySelector('.shieldsFavicon');
+				if (icon && shown && activeTab?.icon === url)
+					shown.style.backgroundImage = `url('${icon}')`;
+			},
+			() => shieldsIcons.delete(url),
+		);
+	}
+	return GLOBE_ICON;
+}
+
 function buildShieldsPanel(host) {
 	const state = shownShields(host);
 	const count = shieldsCountNow();
-	const favicon = (activeTab && activeTab.icon) || '/pm/icons/globe.png';
+	const favicon = shieldsFavicon();
 	shieldsPanel.classList.toggle('down', !state.enabled);
 
 	const head = `
