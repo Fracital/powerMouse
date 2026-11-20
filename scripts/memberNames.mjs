@@ -193,6 +193,9 @@ export const MEMBERS = [
 	'emulate',
 	'pendingForeign',
 	'bundleOrigin',
+	'navigateAs',
+	'postAs',
+	'stillCurrent',
 ];
 
 const CHARACTERS =

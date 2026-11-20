@@ -243,6 +243,20 @@ Filled in commit by commit; see the CHANGELOG for each.
   inject keys each origin by its first document in the tab, the tab's top
   keeping the record. Measured natively alone: a popup of the site behaves
   as a frame (the demo opens a popup as a tab of its own).
+- **One stand-in per window for every document of an origin** (frame-walks:
+  a safe frame's about:blank and srcdoc children, both modes). Natively
+  every realm of an agent holds one WindowProxy of a window, so a frame's
+  `top` is its parent's `parent` from any document of its origin, as `===`,
+  `Object.is` and a WeakMap key. The stand-in for a window of another origin
+  is kept by that window's client, one per origin (or domain set) of the
+  documents that read it, whatever their sandbox: a sandboxed document made
+  its own, so in the about:blank child of Google's sandboxed safe frame
+  `parent.parent` was not `top`, and DoubleVerify's climb to `top` never
+  ended (nytimes' tab hung at 100% CPU). An opaque document still has its
+  own. The stand-in navigates and posts as the document that reached it
+  last (its sandbox, its user activation, its place in the tree), not as
+  the one that made it, and a window it hands out answers as that document
+  too.
 - **A document's identity is its own URL, never its base URL.** The inject
   resolved a URL the page writes and decided whose a document was from one
   URL, which followed the document's `<base href>`: a page of one site that

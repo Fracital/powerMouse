@@ -1,0 +1,24 @@
+<!doctype html>
+<title>FRAME WALKS BLANK</title>
+<body></body>
+<script>
+	// The outermost page of a safe-frame ad stack, as nytimes': a sandboxed
+	// frame of another origin (the fixture's other host name, as Google's
+	// safe frame) that writes an about:blank child and makes a srcdoc child,
+	// both of its origin, where a measurement tag climbs to `top`
+	// (frame-walks-safeframe.html, frame-walks-climb.js); and a frame of
+	// that origin with no sandbox, loaded first, whose own reads the
+	// children compare theirs with (frame-walks-peer.html). ?opaque: the
+	// safe frame's sandbox has no allow-same-origin, so it and its children
+	// share an opaque origin of their own.
+	const other = location.origin.replace('127.0.0.1', 'localhost');
+	const ad = document.createElement('iframe');
+	ad.sandbox = location.search.includes('opaque')
+		? 'allow-scripts allow-popups allow-forms'
+		: 'allow-scripts allow-same-origin allow-popups allow-forms';
+	ad.src = `${other}/pages/frame-walks-safeframe.html`;
+	const peer = document.createElement('iframe');
+	peer.src = `${other}/pages/frame-walks-peer.html`;
+	peer.onload = () => document.body.append(ad);
+	document.body.append(peer);
+</script>

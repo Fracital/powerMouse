@@ -4,6 +4,7 @@
 import type { parseNestedMark } from '../../partition';
 import type { SlotShare } from '../../slotShare';
 import type { AcrossNavigation } from './Client';
+import type { StandInEntry } from './modules/Context';
 
 /**
  * Where a document's client keeps what the site pool (and the frames it
@@ -58,8 +59,5 @@ export type PoolState = [
 	animationRequest: typeof requestAnimationFrame | null,
 	timeOrigin: number,
 	acceptAcross: ((request: AcrossNavigation) => void) | null,
-	acrossStandIns: Map<
-		string,
-		WeakMap<object, WeakRef<typeof globalThis>>
-	> | null,
+	acrossStandIns: Map<string, WeakMap<object, StandInEntry>> | null,
 ];
