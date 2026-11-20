@@ -191,6 +191,7 @@ export const MEMBERS = [
 	'connectVerdict',
 	'releaseHeld',
 	'emulate',
+	'pendingForeign',
 ];
 
 const CHARACTERS =

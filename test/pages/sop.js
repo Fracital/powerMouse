@@ -2271,6 +2271,49 @@
 			}
 		},
 	);
+	// A frame of the other site whose initial about:blank this page read
+	// and marked before the site's document loaded (the way an embed's
+	// script reaches the player it makes): natively that document gets a
+	// window of its own, where through the proxy the browser keeps the
+	// about:blank's (one real origin) and, with it, whatever this page and
+	// its client put there (test/pages/sop-kept-b.html)
+	add(
+		"frame/another site's document in a window this page read first",
+		() =>
+			new Promise((resolve) => {
+				const frame = document.createElement('iframe');
+				frame.src = `${B}/pages/sop-kept-b.html`;
+				let timer = 0;
+				const finish = (result) => {
+					clearTimeout(timer);
+					window.removeEventListener('message', listen);
+					delete Object.prototype.sopKeptParent;
+					frame.remove();
+					resolve(result);
+				};
+				const listen = (event) => {
+					if (event.data?.sopKept) finish(event.data.sopKept);
+				};
+				window.addEventListener('message', listen);
+				Object.defineProperty(Object.prototype, 'sopKeptParent', {
+					value: 'the parent realm',
+					configurable: true,
+				});
+				document.body.append(frame);
+				const held = frame.contentWindow;
+				for (const write of [
+					() => (held.sopKeptExpando = 'parent'),
+					() => (held.Array.prototype.sopKeptMark = 'parent'),
+					() => (held.sopKeptObject = {}),
+				])
+					try {
+						write();
+					} catch (error) {
+						// a window of another origin
+					}
+				timer = setTimeout(() => finish('no answer'), 8000);
+			}),
+	);
 	add('frame/another site reports in', async () => {
 		other = await frameOfB();
 		return {

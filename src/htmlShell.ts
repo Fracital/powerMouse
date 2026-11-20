@@ -48,6 +48,25 @@ export function gapView(url: URL, referrer: string): string {
 	return `(()=>{const d=document,u=${text(href)},r=${text(referrer)},h=${text(url.hostname)},g=(v)=>({get:v,configurable:true}),f=()=>{const l=location.href,i=l.indexOf("#");return i<0?u:u+l.slice(i)},n=Object.getOwnPropertyDescriptor(Document.prototype,"domain");Object.defineProperties(d,{URL:g(f),documentURI:g(f),baseURI:g(f),referrer:g(()=>r),domain:{get:()=>h,set:(v)=>n.set.call(d,v),configurable:true}})})()`;
 }
 
+/**
+ * The shell's branch for a window the browser kept from an initial
+ * about:blank that a client of another origin than the document's was
+ * made for (DocumentClient keptFor): the document leaves it, before any of
+ * it runs, for a window of its own (leaveKept), as natively it never shows
+ * in that one. Comes before the branch that takes a kept client. (A client
+ * that cannot leave throws here, and the document stays empty.) Between
+ * real origins only: under an opaque one (a sandbox) every navigation is
+ * to another origin, which its maker never injects (ContextModule
+ * pendingForeign).
+ */
+export function leftKept(client: string, url: StompURL): string {
+	const { origin } = url.url;
+	if (origin === 'null') return '';
+	return `} else if (${JSON.stringify(client)} in globalThis && typeof ${client}.keptFor === 'string' && ${client}.keptFor !== ${JSON.stringify(origin)}) {
+	${client}.leaveKept();
+`;
+}
+
 /** the shell's statement that hands the client its document's referrer (none without one) */
 export function referred(
 	client: string,
@@ -323,7 +342,7 @@ function shell(
 		prewritten?: Prewritten | null,
 	) => `if (!(${JSON.stringify(names.client)} in globalThis) && typeof globalThis.createClient !== 'function') {
 	document.write("Stomp bundle did not load. See devtools output for more information.");
-} else {
+${leftKept(names.client, url)}} else {
 	${controlled}if (!(${JSON.stringify(names.client)} in globalThis))
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
 	else {
