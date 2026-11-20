@@ -1293,6 +1293,13 @@ export const PAGE_MODULES = '$stomp$pageModules';
 export const CONTROLLER_RPC = 'stomp';
 /** rpc id shared by every transport port */
 export const TRANSPORT_RPC = 'transport';
+/**
+ * serving side -> RemoteTransport, the last message on a transport port:
+ * nothing serves it from now on (its tab or worker is going, the host let
+ * go of it, or no controller has its address). Chrome 157 fires no
+ * MessagePort close event, so the RemoteTransport hears it from this
+ */
+export const TRANSPORT_GONE = '$stomp$transportGone';
 
 /** implemented by the SW, called by the controller */
 /**
@@ -1836,6 +1843,8 @@ export type WorkerBound = {
 	connectionLost: [];
 	/** the carrier host's port (carrierClient.ts), sent before `init`: the transport's wisp connections ride its carriers */
 	carrierHost: [MessagePort];
+	/** the controller's page is going for good: every port the worker serves hears TRANSPORT_GONE */
+	goodbye: [];
 };
 
 /**

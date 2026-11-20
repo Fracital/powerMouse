@@ -1902,8 +1902,12 @@ export class StompController extends EventTarget {
 		// the worker forgets this controller now, so a link copied from it goes
 		// to a live controller at once rather than to a dead port
 		window.addEventListener('pagehide', (event) => {
+			if (event.persisted) return;
+			// what the transport worker serves ends with this page (a page
+			// that hosts the transport itself says so in serveTransport)
+			if (this.#worker instanceof TransportWorker) this.#worker.goodbye();
 			// without an address yet the worker never heard of this controller
-			if (event.persisted || !this.id) return;
+			if (!this.id) return;
 			try {
 				this.serviceworker.postMessage({
 					[CONTROLLER_CLOSE]: { directory: this.config.directory },

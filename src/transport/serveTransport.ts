@@ -12,11 +12,13 @@ import {
 	SOCKET_PARTITION,
 	StreamMessage,
 	transferablesOf,
+	TRANSPORT_GONE,
 	TRANSPORT_RPC,
 	TransportToHost,
 	WebSocketMessage,
 } from './messages';
 import { NETWORK_PARTITION } from './networkPartition';
+import { listenOn } from './ports';
 import { REQUEST_QUEUE, SEEN_URGENCY } from './requestQueue';
 import {
 	changedResponse,
@@ -362,6 +364,50 @@ async function warmResolver(transport: ProxyTransport, resolver: string) {
 }
 
 /**
+ * What each port this realm serves does as it stops serving (`goodbye`),
+ * found by the port, which is held weakly: a port the browser let go of
+ * (its other end went) is not kept for it. Chrome 157 fires no MessagePort
+ * close event, so the RemoteTransport on the other end would never hear
+ * this side go: a request there waited for good, a socket stayed open.
+ */
+const goodbyes = new WeakMap<MessagePort, () => void>();
+const served = new Set<WeakRef<MessagePort>>();
+let servedSincePrune = 0;
+let hearsHide = false;
+
+function keepServed(port: MessagePort, goodbye: () => void) {
+	goodbyes.set(port, goodbye);
+	served.add(new WeakRef(port));
+	if (++servedSincePrune >= 64) {
+		servedSincePrune = 0;
+		for (const ref of served) if (!ref.deref()) served.delete(ref);
+	}
+	// a page that serves (the controller's, hosting its transport): its
+	// ports go with it when it goes for good. A page in the back/forward
+	// cache may come back and serve them again
+	if (hearsHide || typeof document === 'undefined') return;
+	hearsHide = true;
+	listenOn(globalThis, 'pagehide', (event) => {
+		if (event.isTrusted && !(event as PageTransitionEvent).persisted)
+			goodbyeAll();
+	});
+}
+
+/**
+ * Every port this realm serves stops: its sockets close (1001, as the
+ * browser closes a document's when its tab goes) and the RemoteTransport on
+ * the other end hears TRANSPORT_GONE. The transport worker's controller
+ * calls it as its page goes for good; a page that serves calls it itself.
+ */
+export function goodbyeAll() {
+	for (const ref of served) {
+		const port = ref.deref();
+		if (port) goodbyes.get(port)?.();
+	}
+	served.clear();
+}
+
+/**
  * Serve a ProxyTransport to a `RemoteTransport` on the other end of `port`.
  * `getTransport` is a getter so the host can hot-swap transports. `decorate`
  * may add headers to a WebSocket handshake (the controller adds the cookie
@@ -370,7 +416,8 @@ async function warmResolver(transport: ProxyTransport, resolver: string) {
  * stalls leaves the handshake as it was. A hook that refuses the socket
  * (HANDSHAKE_REFUSED: the built-in blocker's lists block it) fails the
  * connection here, before the transport hears of it.
- * Returns a function that closes the port.
+ * Returns a function that stops serving: the other end hears TRANSPORT_GONE
+ * and the port closes.
  */
 export default function serveTransport(
 	port: MessagePort,
@@ -381,6 +428,17 @@ export default function serveTransport(
 ): () => void {
 	const post = (data: unknown, transfer: Transferable[] = []) =>
 		postToPort(port, data, transfer);
+	/** what closes each socket open on this port, for goodbye */
+	const sockets = new Set<() => void>();
+	let gone = false;
+	const goodbye = () => {
+		if (gone) return;
+		gone = true;
+		for (const end of [...sockets]) end();
+		post({ [TRANSPORT_GONE]: true });
+		port.close();
+	};
+	keepServed(port, goodbye);
 
 	const readyTransport = async () => {
 		const transport = getTransport();
@@ -503,6 +561,7 @@ export default function serveTransport(
 					(res) => (resolve = res),
 				);
 
+				let over = false;
 				const [send, close] = transport.connect(
 					new URL(url),
 					protocols,
@@ -522,6 +581,8 @@ export default function serveTransport(
 							transferablesOf(data),
 						),
 					(code, reason) => {
+						over = true;
+						sockets.delete(end);
 						pass.connected();
 						pass.closed();
 						postToPort(socket, {
@@ -536,15 +597,28 @@ export default function serveTransport(
 						socket.close();
 					},
 					(error) => {
+						over = true;
+						sockets.delete(end);
 						pass.connected();
 						pass.closed();
 						resolve({ result: 'failure', error });
 					},
 				);
 
+				// (the port stops serving: the socket closes as a document's does
+				// when its tab goes)
+				function end() {
+					sockets.delete(end);
+					pass!.closed();
+					close(1001, '');
+					socket.onmessage = null;
+					socket.close();
+				}
+				if (!over) sockets.add(end);
 				socket.onmessage = ({ data }: MessageEvent<WebSocketMessage>) => {
 					if (data.type === 'data') send(data.data);
 					else if (data.type === 'close') {
+						sockets.delete(end);
 						pass.closed();
 						close(data.code, data.reason);
 					}
@@ -599,5 +673,5 @@ export default function serveTransport(
 
 	rpc.call('ready', undefined);
 
-	return () => port.close();
+	return goodbye;
 }

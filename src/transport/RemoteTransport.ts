@@ -9,6 +9,7 @@ import {
 	HostToTransport,
 	postToPort,
 	transferablesOf,
+	TRANSPORT_GONE,
 	TRANSPORT_RPC,
 	TransportToHost,
 	WebSocketMessage,
@@ -50,6 +51,8 @@ export default class RemoteTransport implements ProxyTransport {
 	private readyResolve!: () => void;
 	protected rpc: RpcHelper<HostToTransport, TransportToHost>;
 	private port: Promise<MessagePort>;
+	/** what ends each socket open over this transport, once its serving side is gone */
+	private sockets = new Set<() => void>();
 	constructor(port: MessagePort | Promise<MessagePort>) {
 		this.readyPromise = new Promise((resolve) => (this.readyResolve = resolve));
 
@@ -72,18 +75,30 @@ export default class RemoteTransport implements ProxyTransport {
 			// listened to with the browser's own methods, trusted messages
 			// only: in a page's realm, the page may have replaced them by now
 			// (src/transport/ports.ts)
-			onPort(port, 'message', (data) => this.rpc.receive(data));
+			onPort(port, 'message', (data) => {
+				if (typeof data === 'object' && data !== null && TRANSPORT_GONE in data)
+					this.gone(port);
+				else this.rpc.receive(data);
+			});
 			onPort(port, 'messageerror', () =>
 				console.error('RemoteTransport port messageerror'),
 			);
-			// the serving side is gone (its tab closed, its worker died): a
-			// request on this port would never be answered, so every pending
-			// and later one fails at once instead of waiting out the timeout
-			onPort(port, 'close', () =>
-				this.rpc.abort('Stomp: the transport port closed'),
-			);
+			// (a Chrome with MessagePortCloseEvent on says it too)
+			onPort(port, 'close', () => this.gone(port));
 			return port;
 		});
+	}
+	/**
+	 * The serving side is gone (its tab closed or navigated, its worker
+	 * went, it let go of this port; it says so with TRANSPORT_GONE, as
+	 * Chrome 157 fires no close event): a request on this port would never
+	 * be answered, so every pending and later one fails at once, and each
+	 * socket ends as one whose connection dropped (1006)
+	 */
+	private gone(port: MessagePort) {
+		this.rpc.abort('Stomp: the transport port closed');
+		for (const end of [...this.sockets]) end();
+		closePort(port);
 	}
 	/** fail every pending and later call with `reason` and close the port (the host side replaced it) */
 	close(reason: string) {
@@ -144,17 +159,35 @@ export default class RemoteTransport implements ProxyTransport {
 		};
 		const goes = () => closeSocket(1001, '');
 		closedOnHide(goes);
-
 		// frames travel on their own port and can overtake the connect
 		// response on the rpc port; hold them until onopen has run
 		let opened = false;
+		let over = false;
+		/** the socket is done with: true the first time only */
+		const finish = () => {
+			if (over) return false;
+			over = true;
+			openSockets.delete(goes);
+			this.sockets.delete(dropped);
+			return true;
+		};
+		/** the socket's last word to the page: the serving side's close, or that it went */
+		const ended = (code: number, reason: string) => {
+			if (!finish()) return;
+			closePort(port);
+			onclose(code, reason);
+		};
+		const failed = (error: string) => {
+			if (finish()) onerror(error);
+		};
+		const dropped = () =>
+			opened ? ended(1006, '') : failed('Stomp: the transport port closed');
+		this.sockets.add(dropped);
 		const pending: WebSocketMessage[] = [];
 		const deliver = (data: WebSocketMessage) => {
+			if (over) return;
 			if (data.type === 'data') onmessage(data.data);
-			else if (data.type === 'close') {
-				openSockets.delete(goes);
-				onclose(data.code, data.reason);
-			}
+			else if (data.type === 'close') ended(data.code, data.reason);
 		};
 
 		this.rpc
@@ -164,19 +197,14 @@ export default class RemoteTransport implements ProxyTransport {
 				[theirs],
 			)
 			.then((response) => {
+				if (over) return;
 				if (response.result === 'success') {
 					onopen(response.protocol, response.extensions);
 					opened = true;
 					for (const data of pending.splice(0)) deliver(data);
-				} else {
-					openSockets.delete(goes);
-					onerror(response.error);
-				}
+				} else failed(response.error);
 			})
-			.catch((error) => {
-				openSockets.delete(goes);
-				onerror(String(error));
-			});
+			.catch((error) => failed(String(error)));
 
 		onPort(port, 'message', (data) => {
 			if (opened) deliver(data as WebSocketMessage);

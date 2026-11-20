@@ -61,6 +61,8 @@ const VALIDATION = [
 	'relativeConfig',
 	'aborted',
 ];
+/** how a frame's document goes while its chooser shows (fedcm.html childGoes) */
+const GONE = ['remove', 'navigate'];
 const STATICS = [
 	'getUserInfo',
 	'close',
@@ -666,6 +668,29 @@ async function reference() {
 		configURL: configOf(sameOrigin, `after-abort-native-${Date.now()}`),
 		mediation: 'required',
 	}).then(brief);
+	// a frame's document that goes while its chooser shows (the frame is
+	// removed, it navigates away): the chooser closes, and the page's next
+	// request shows it again
+	open.gone = [];
+	for (const how of GONE) {
+		await page.evaluate(() => window.addChild());
+		const shown = new Promise((resolve) => (held = resolve));
+		await page.evaluate((a) => window.startInChild(a), {
+			configURL: configOf(sameOrigin, `gone-${how}-native-${Date.now()}`),
+			mediation: 'required',
+		});
+		const id = await Promise.race([shown, sleep(15000)]);
+		held = null;
+		const before = closed.length;
+		await page.evaluate((h) => window.childGoes(h), how);
+		for (const end = Date.now() + 3000; Date.now() < end; await sleep(150))
+			if (closed.length > before) break;
+		open.gone.push({ how, shown: !!id, closed: closed.length > before });
+	}
+	open.afterGone = await runScenario(page.mainFrame(), 'flow', {
+		configURL: configOf(sameOrigin, `after-gone-native-${Date.now()}`),
+		mediation: 'required',
+	}).then(brief);
 	await browser.close();
 	const mediation = await mediationReference();
 	return {
@@ -914,6 +939,14 @@ ok(
 			{ result: 'the string why', isReason: true, shown: true, closed: true },
 		]) && ref.open.after === 'token idtok.acct-1.false.n0',
 	JSON.stringify(ref.open),
+);
+
+ok(
+	'natively a frame whose document goes while its chooser shows (removed, navigated away) closes the chooser, and the next request shows it again',
+	JSON.stringify(ref.open.gone) ===
+		JSON.stringify(GONE.map((how) => ({ how, shown: true, closed: true }))) &&
+		ref.open.afterGone === 'token idtok.acct-1.false.n0',
+	JSON.stringify({ gone: ref.open.gone, after: ref.open.afterGone }),
 );
 
 const browser = await launch();
@@ -1230,6 +1263,52 @@ for (const [mode, base] of [
 			JSON.stringify({
 				proxied: { aborts, after },
 				native: { aborts: ref.open.aborts, after: ref.open.after },
+			}),
+		);
+	}
+
+	// 5e. a frame whose document goes while its chooser shows (the frame
+	//     removed, or navigated away): the host's chooser closes, and the
+	//     page's next request shows it again, as natively (Chrome 157 fires
+	//     no MessagePort close event: the document says it goes)
+	{
+		const gone = [];
+		for (const how of GONE) {
+			await frame.evaluate(() => window.addChild());
+			await frame.evaluate((a) => window.startInChild(a), {
+				configURL: configOf(sameOrigin, `gone-${how}-${mode}-${Date.now()}`),
+				mediation: 'required',
+			});
+			const shown = await chooserButton(page, /Ada Proxy/);
+			await shown?.session.detach().catch(() => {});
+			await frame.evaluate((h) => window.childGoes(h), how);
+			let closed = false;
+			for (const end = Date.now() + 3000; Date.now() < end; await sleep(150)) {
+				const chooser = await hostChooser(page);
+				if (!chooser) {
+					closed = true;
+					break;
+				}
+				await chooser.session.detach().catch(() => {});
+			}
+			// (one left open is closed, so the next case starts with none)
+			if (!closed) await pressChooser(page, /Close/);
+			gone.push({ how, shown: !!shown, closed });
+		}
+		await frame.evaluate((a) => window.startScenario('flow', a), {
+			configURL: configOf(sameOrigin, `after-gone-${mode}-${Date.now()}`),
+			mediation: 'required',
+		});
+		const after = (await pressChooser(page, /Ada Proxy/))
+			? brief(await settled(frame))
+			: 'no chooser';
+		ok(
+			`${mode}: a frame whose document goes while its chooser shows (removed, navigated away) closes the chooser, and the next request shows it again, as natively`,
+			JSON.stringify({ gone, after }) ===
+				JSON.stringify({ gone: ref.open.gone, after: ref.open.afterGone }),
+			JSON.stringify({
+				proxied: { gone, after },
+				native: { gone: ref.open.gone, after: ref.open.afterGone },
 			}),
 		);
 	}

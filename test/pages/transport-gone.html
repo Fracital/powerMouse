@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>TRANSPORT GONE</title>
+	</head>
+	<body>
+		<script>
+			// A page the transport-host-gone suite loads in a tab of its own,
+			// whose transport the host's tab serves. openSocket(tag) opens a
+			// WebSocket to the suite's server (?port) and records its events
+			// in window.__tg.sockets: [type, close code, ms after the open call].
+			const params = new URLSearchParams(location.search);
+			const base = 'ws://127.0.0.1:' + params.get('port');
+			const out = (window.__tg = { sockets: {} });
+			window.openSocket = (tag) => {
+				const events = (out.sockets[tag] = []);
+				const at = performance.now();
+				const ws = new WebSocket(base + '/hold?tag=' + tag);
+				for (const type of ['open', 'error', 'close'])
+					ws.addEventListener(type, (event) =>
+						events.push([
+							type,
+							type === 'close' ? event.code : null,
+							Math.round(performance.now() - at),
+						]),
+					);
+				return true;
+			};
+			out.ready = true;
+		</script>
+	</body>
+</html>

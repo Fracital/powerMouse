@@ -835,6 +835,25 @@ export function identityFlow({
 		return at as unknown as Record<string, unknown>;
 	})();
 
+	/**
+	 * What this document's open request does as the document goes (its
+	 * frame removed, it navigated, its tab closed): the tab may ask again,
+	 * and the host's chooser closes, as Chrome closes its own. The worker
+	 * hears it from the message `asked.close` posts: Chrome 157 fires no
+	 * MessagePort close event, so a port closed with its document says
+	 * nothing to the worker or the host's page.
+	 */
+	let going: (() => void) | undefined;
+	let hearsHide = false;
+	const goesWithDocument = (leave: () => void) => {
+		going = leave;
+		if (hearsHide) return;
+		hearsHide = true;
+		listenOn(client.global as unknown as EventTarget, 'pagehide', (event) => {
+			if (event.isTrusted) going?.();
+		});
+	};
+
 	// the FedCM flow, returning a page-realm promise. Validation rejects with
 	// Chrome's own messages (measured); then the protocol runs provider by
 	// provider, resolving the first credential or rejecting the generic error.
@@ -883,6 +902,7 @@ export function identityFlow({
 				if (asked.ended) return;
 				asked.ended = true;
 				if (top[OPEN] === ours) top[OPEN] = undefined;
+				if (going === leave) going = undefined;
 				how(value);
 			};
 			const ours = {
@@ -906,16 +926,12 @@ export function identityFlow({
 			} catch (error) {
 				// no AbortSignal: nothing ends it
 			}
-			// a frame that goes away (removed, navigated) takes its request
-			// with it
-			if (top !== (client as unknown))
-				listenOn(
-					client.global as unknown as EventTarget,
-					'pagehide',
-					(event) => {
-						if (event.isTrusted && top[OPEN] === ours) top[OPEN] = undefined;
-					},
-				);
+			// a document that goes takes its request with it
+			const leave = () => {
+				if (top[OPEN] === ours) top[OPEN] = undefined;
+				asked.close?.();
+			};
+			goesWithDocument(leave);
 			const providers = (identity as { providers: any[] }).providers;
 			void (async () => {
 				for (const provider of providers) {
