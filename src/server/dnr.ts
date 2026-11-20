@@ -18,8 +18,14 @@
 // frame of a site per tab and approximate past it. Tab ids come from the
 // extensions layer (`tabOf`, a tab's top document), a frame being in its
 // parent's tab; a main frame's own request is in the tab the host sent it to
-// (`hostNavigationTab`) or the tab of the document that started it. A
-// request no tab owns is -1, as in Chrome.
+// (`hostNavigationTab`) or the tab of the document that started it, and its
+// redirects' requests in the same one (they make the same client). A main
+// frame that committed in no known tab is placed in its tab when its
+// document reports (`placed`), and its matched rules go there. A socket's
+// handshake is its document's (the controller names the client). A request
+// no tab owns is -1, as in Chrome. Frame ids are the extensions layer's
+// (`frameIdOf`), the ones its contexts know: 0 for a tab's top document,
+// and a frame that navigated itself keeps its id.
 
 import {
 	compileStatic,
@@ -300,6 +306,17 @@ export class DnrHost {
 	 * frame's go(), the address bar), by the navigation's URL; -1 for none
 	 */
 	hostNavigationTab: (url: string) => number = () => -1;
+	/**
+	 * a nested document's frame id (the extensions layer keeps them, so its
+	 * contexts and these requests agree), assigned on first ask; -1 without one
+	 */
+	frameIdOf: (clientId: string) => number = () => -1;
+	/** a frame's next document (`next`) keeps the frame id of its last (`previous`) */
+	sameFrame: (next: string, previous: string) => void = () => {};
+	/** the tab of each top-level navigation in flight, by the client it makes: its redirects' requests are the same navigation's */
+	private navigationTabs = new Map<string, number>();
+	/** main frames that committed in no known tab, until the extensions layer places them */
+	private unplaced = new Set<string>();
 	/** the state the engine keeps for an extension changed: the extensions layer stores it */
 	onPersist: ((extensionId: string, state: ExtensionState) => void) | null =
 		null;
@@ -577,6 +594,18 @@ export class DnrHost {
 		}
 	}
 
+	/**
+	 * The extensions layer placed a client in a tab. A main frame that
+	 * committed in no known tab (a navigation no hooked document announced)
+	 * is that tab's now: its matched rules and the badge count go to it
+	 */
+	placed(clientId: string, tabId: number) {
+		if (tabId < 0 || !this.unplaced.delete(clientId)) return;
+		const frame = this.frames.get(clientId);
+		if (frame) frame.tab = tabId;
+		this.engine.onMainFramePlaced(tabId);
+	}
+
 	/** a client the controller says is gone */
 	forgetClient(clientId: string) {
 		const frame = this.frames.get(clientId);
@@ -620,6 +649,17 @@ export class DnrHost {
 				// it to, else the tab of the document that started it
 				tabId = this.hostNavigationTab(info.url);
 				if (tabId < 0) tabId = this.tabFor(info.startedBy?.client);
+				// a redirect's next request makes the same client
+				const reserved = info.resultingClientId;
+				if (reserved && tabId < 0)
+					tabId = this.navigationTabs.get(reserved) ?? -1;
+				else if (reserved) {
+					this.navigationTabs.set(reserved, tabId);
+					if (this.navigationTabs.size > 256)
+						this.navigationTabs.delete(
+							this.navigationTabs.keys().next().value!,
+						);
+				}
 			}
 		} else if (info.clientId && this.frames.has(info.clientId)) {
 			frame = info.clientId;
@@ -664,20 +704,37 @@ export class DnrHost {
 		return -1;
 	}
 
-	/** a request's frameId and parentFrameId, as far as the worker knows them */
+	/** a request's frameId and parentFrameId */
 	private frameIdsOf(
 		info: DnrRequestInfo,
 		parent: string | null,
-	): { frameId?: number; parentFrameId?: number } {
-		if (info.navigation)
-			return info.topLevel
-				? { frameId: 0, parentFrameId: -1 }
-				: parent && this.frames.get(parent)?.main
-					? { parentFrameId: 0 }
-					: {};
-		return info.clientId && this.frames.get(info.clientId)?.main
-			? { frameId: 0, parentFrameId: -1 }
-			: {};
+	): { frameId: number; parentFrameId: number } {
+		if (info.navigation && info.topLevel)
+			return { frameId: 0, parentFrameId: -1 };
+		if (info.navigation) {
+			// the frame's document to be: a frame that navigated itself keeps its id
+			const next = info.resultingClientId;
+			const starter = info.startedBy;
+			if (next && starter && !starter.frameSrc)
+				this.sameFrame(next, starter.client);
+			return {
+				frameId: next ? this.frameIdOf(next) : -1,
+				parentFrameId: this.idOf(parent),
+			};
+		}
+		const frame = info.clientId ? this.frames.get(info.clientId) : undefined;
+		return {
+			frameId: this.idOf(info.clientId),
+			parentFrameId: frame && !frame.main ? this.idOf(frame.parent) : -1,
+		};
+	}
+
+	/** a document's frame id: 0 for a tab's top document, -1 for one the worker never saw */
+	private idOf(client: string | null | undefined): number {
+		if (!client) return -1;
+		const frame = this.frames.get(client);
+		if (frame?.main || (!frame && this.tabOf(client) >= 0)) return 0;
+		return frame ? this.frameIdOf(client) : -1;
 	}
 
 	/**
@@ -696,12 +753,14 @@ export class DnrHost {
 	/**
 	 * A WebSocket's or WebTransport session's handshake (the controller
 	 * asks: a socket never passes the worker): whether the rules block it. A
-	 * redirect of a socket is no action in Chrome (CreateRedirectAction)
+	 * redirect of a socket is no action in Chrome (CreateRedirectAction).
+	 * `clientId`: the document that opens it, whose frame and tab it is in
 	 */
 	socketBlocked(
 		url: string,
 		source: string,
 		type?: 'webtransport',
+		clientId?: string,
 	): DnrOutcome | null {
 		const step = this.beforeRequest({
 			url,
@@ -710,6 +769,7 @@ export class DnrHost {
 			navigation: false,
 			topLevel: false,
 			source,
+			...(clientId ? { clientId } : {}),
 		});
 		if (!step) return null;
 		const { type: kind } = step.outcome;
@@ -744,6 +804,15 @@ export class DnrHost {
 			? info.url
 			: (parentFrame?.top ?? info.source ?? info.url);
 		const parent = info.topLevel ? null : flow.parent;
+		if (info.topLevel) {
+			this.navigationTabs.delete(key);
+			// its tab comes with the document's report (placed)
+			if (flow.tabId < 0) {
+				this.unplaced.add(key);
+				if (this.unplaced.size > 64)
+					this.unplaced.delete(this.unplaced.keys().next().value!);
+			}
+		}
 		this.remember(key, {
 			url: info.url,
 			origin,

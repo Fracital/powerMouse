@@ -2899,6 +2899,31 @@ function genericForward(
 		// headers as they go out and come in. A request of the worker's own
 		// (an emulated service worker's script) is the browser's, which DNR
 		// never sees
+		// webRequest's onBeforeRequest goes to the listeners first, and the
+		// rules are matched while they answer, as Chrome's
+		// WebRequestEventRouter::OnBeforeRequest does: a request a rule blocks
+		// or redirects is still told to them, and their answers are dropped
+		// (ClearPendingCallbacks). A request the worker makes for itself is
+		// nobody's to see
+		const extensionRequest: ExtensionRequest | null =
+			rewriter.pipeline?.active && !context?.internal
+				? rewriter.pipeline.request({
+						url: url.url.href,
+						method: serverRequest.method,
+						destination:
+							navigation && topLevel
+								? 'document'
+								: serverRequest.destination || 'empty',
+						navigation,
+						top: topLevel,
+						initiator: policyOrigin,
+						site,
+						client: context?.clientId,
+					})
+				: null;
+		const extensionBefore = extensionRequest
+			? rewriter.pipeline!.before(extensionRequest).catch(() => null)
+			: null;
 		const dnrStep =
 			context?.internal || !rewriter.dnr?.active
 				? null
@@ -3073,26 +3098,10 @@ function genericForward(
 				);
 			applyHeaderRule(requestHeaders, rule.action.requestHeaders);
 		}
-		// the extensions' rules and their webRequest listeners
-		// (docs/extensions.md): after the host's, which win, and before the
-		// caches, as the blocker's decision is. A request the worker makes
-		// for itself is nobody's to see
-		const extensionRequest: ExtensionRequest | null =
-			rewriter.pipeline?.active && !context?.internal
-				? rewriter.pipeline.request({
-						url: url.url.href,
-						method: serverRequest.method,
-						destination: navigation && topLevel ? 'document' : realDestination,
-						navigation,
-						top: topLevel,
-						initiator: policyOrigin,
-						site,
-						client: context?.clientId,
-					})
-				: null;
-		const extensionVerdict = extensionRequest
-			? await rewriter.pipeline!.before(extensionRequest)
-			: null;
+		// the webRequest listeners' answer (docs/extensions.md): after the
+		// host's rules, which win, and before the caches, as the blocker's
+		// decision is
+		const extensionVerdict = extensionBefore ? await extensionBefore : null;
 		if (extensionVerdict && 'cancel' in extensionVerdict) {
 			const page =
 				navigation && topLevel

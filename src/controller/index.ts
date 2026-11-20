@@ -175,6 +175,7 @@ import RewriteWorkers, {
 import { createShields, type Shields } from './shields';
 import { poolOrigins, slotAllow, type SitePoolInit } from './sitePool';
 import {
+	answerDecorate,
 	decorateOver,
 	SiteHub,
 	type BrokeredPool,
@@ -2905,17 +2906,38 @@ export class StompController extends EventTarget {
 						// the page is gone
 					}
 				},
-				initRemoteTransport: async (port) => {
+				initRemoteTransport: async (given) => {
 					// a page's own transport port (its WebSockets): served from the
-					// worker when there is one, so the page's sockets run off-thread too
-					if (this.#worker) this.#worker.servePort(port);
-					else
-						serveTransport(
-							port,
-							() => this.transport,
-							this.#handshakeHeaders,
-							this.#admitSession,
-						);
+					// worker when there is one, so the page's sockets run off-thread
+					// too. The worker names the page's client (transportClients):
+					// its handshakes are asked about as that document's
+					const { port, client } =
+						given instanceof MessagePort
+							? { port: given, client: undefined }
+							: given;
+					if (!client) {
+						if (this.#worker) this.#worker.servePort(port);
+						else
+							serveTransport(
+								port,
+								() => this.transport,
+								this.#handshakeHeaders,
+								this.#admitSession,
+							);
+						return;
+					}
+					const decorate = (url: URL, headers: RawHeaders) =>
+						this.#handshakeHeaders(url, headers, client);
+					const admit = (url: URL, origin: string) =>
+						this.#admitSession(url, origin, client);
+					const worker = this.#worker;
+					if (!worker)
+						serveTransport(port, () => this.transport, decorate, admit);
+					else if ('serveDecorated' in worker) {
+						const asked = new MessageChannel();
+						answerDecorate(asked.port2, decorate, admit);
+						worker.serveDecorated(port, asked.port1);
+					} else worker.servePort(port, decorate, admit);
 				},
 				request: async (info) => this.#reportRequest(info),
 			},
@@ -2981,6 +3003,7 @@ export class StompController extends EventTarget {
 					}
 				: {}),
 			...(modules ? { modulesOnPort: true } : {}),
+			transportClients: true,
 			...(this.#adblock ? { adblock: this.#adblock } : {}),
 			...(this.#init.agent
 				? {
@@ -3167,6 +3190,8 @@ export class StompController extends EventTarget {
 	#handshakeHeaders = async (
 		url: URL,
 		given: RawHeaders,
+		/** the service worker client of the document whose socket it is, when known */
+		client?: string,
 	): Promise<RawHeaders> => {
 		// what Chrome's handshake carries besides: the user's languages, and a
 		// request that no cache may answer. The transport's own client says
@@ -3198,6 +3223,7 @@ export class StompController extends EventTarget {
 						.call('socket', {
 							url: url.href,
 							source: origin && origin[1] !== 'null' ? origin[1] : '',
+							...(client ? { client } : {}),
 						})
 						.catch(() => false)
 				: false;
@@ -3223,7 +3249,11 @@ export class StompController extends EventTarget {
 	 * blocker is asked as for a WebSocket (docs/adblock.md). No answer lets
 	 * it go
 	 */
-	#admitSession = async (url: URL, origin: string): Promise<boolean> => {
+	#admitSession = async (
+		url: URL,
+		origin: string,
+		client?: string,
+	): Promise<boolean> => {
 		if (extensionOfHost(url.hostname)) return false;
 		if (
 			(!this.#adblock &&
@@ -3238,6 +3268,7 @@ export class StompController extends EventTarget {
 				url: url.href,
 				source: origin === 'null' ? '' : origin,
 				type: 'webtransport',
+				...(client ? { client } : {}),
 			})
 			.catch(() => false);
 		return !blocked;
@@ -3433,6 +3464,7 @@ export class StompController extends EventTarget {
 			tabIdOf: (frame) => this.tabIdOf(frame),
 			frameOf: (client) => this.#clients.frame(client),
 			isTop: (frame, client) => frame.lastNavigate?.client === client,
+			frameIdOf: (client) => this.#call('extensions', { op: 'frame', client }),
 			open: this.#init.onOpen,
 			request: (url) => {
 				const change: ExtensionsChange = { type: 'tab', url };

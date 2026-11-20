@@ -35,6 +35,9 @@ dnr.call(id, 'updateDynamicRules', [options]); // any chrome.declarativeNetReque
 dnr.tabOf = (clientId) => tabId;     // -1 without tabs
 dnr.parentOf = (clientId) => parent; // the client that frames a nested document, when known
 dnr.hostNavigationTab = (url) => tabId; // the tab the host sent to url (a frame's go()), -1 for none
+dnr.frameIdOf = (clientId) => frameId;  // a nested document's frame id, assigned on first ask
+dnr.sameFrame = (next, previous) => {};  // a frame's next document keeps its frame id
+dnr.placed(clientId, tabId);            // a main frame that committed in no known tab is that tab's
 dnr.onPersist = (id, state) => {...}; // store it with the extension
 dnr.hooks = { debug, badge, withheld, validTab, activeTabGranted };
 ```
@@ -276,12 +279,20 @@ of test/dnr/cases.mjs):
   extensions layer's tabs (`tabOf`). A frame is in its parent's tab, a
   main frame's own request in the tab the host sent it to
   (`hostNavigationTab`, from a frame's `go()`) or in the tab of the
-  document that started it. Without the extensions layer every request is
-  tab -1, as Chrome treats a request no tab owns.
-- **Frame ids.** A tab's top document is frame 0 for its own requests and
-  as the parent of its frames. A nested document's own frame id is the
-  extensions layer's, which the worker does not keep, so its requests and
-  its frames' report -1.
+  document that started it, and a redirect's request in its navigation's
+  tab (it makes the same client). A socket's handshake is the document's
+  that opens it: the worker names the page's client to the controller with
+  the page's transport port, and the controller names it back when it asks
+  about the handshake. A main frame's request that nothing announced is
+  matched in no tab; once its document reports, `placed` gives the tab its
+  held matches, so getMatchedRules and the badge count it, while a
+  `tabIds` condition and onRuleMatchedDebug saw -1. Without the extensions
+  layer every request is tab -1, as Chrome treats a request no tab owns.
+- **Frame ids.** A tab's top document is frame 0. A nested document's id
+  is assigned in the worker (`frameIdOf`), which the hubs ask too, so
+  `sender.frameId` and executeScript's `frameId` are the ones the rules'
+  matches report. A frame that navigated itself keeps its id; one whose
+  src its parent set gets a new one, where Chrome keeps the frame's.
 - **Collapse is a block.** Collapsing the element would mean inject code
   in every page. The request is blocked as Chrome blocks it, and the empty
   element stays.

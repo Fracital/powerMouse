@@ -121,7 +121,7 @@ export class ExtensionPipeline {
 		return webRequests.dispatch(this.#channel, event, details, this.#enabled);
 	}
 
-	/** onBeforeRequest (blocking where permitted); the worker's DnrHost asked before */
+	/** onBeforeRequest (blocking where permitted), told before the worker's DnrHost matches the request */
 	async before(request: ExtensionRequest): Promise<BeforeVerdict> {
 		const answer = await this.#dispatch(
 			'onBeforeRequest',

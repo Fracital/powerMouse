@@ -102,22 +102,23 @@ export class ActionTracker {
 			tabId !== TAB_ID_NONE &&
 			action.type !== 'allow' &&
 			action.type !== 'allowAllRequests';
-		const add = (info: Tracked) => {
+		const add = (info: Tracked, counted = count) => {
 			if (record)
 				info.rules.push({
 					rule: { ruleId: action.ruleId, rulesetId: action.rulesetId },
 					timeStamp: this.now(),
 					tabId,
 				});
-			if (count) info.actionCount++;
+			if (counted) info.actionCount++;
 		};
 		if (request.type === 'main_frame') {
-			// held for the navigation's commit
+			// held for the navigation's commit (one of no known tab is counted
+			// too: its tab may be told before it commits, onMainFramePlaced)
 			const pendingKey = key(action.extensionId, tabId);
 			let info = this.pending.get(pendingKey);
 			if (!info)
 				this.pending.set(pendingKey, (info = { rules: [], actionCount: 0 }));
-			add(info);
+			add(info, action.type !== 'allow' && action.type !== 'allowAllRequests');
 			return;
 		}
 		const trackedKey = key(action.extensionId, tabId);
@@ -129,16 +130,25 @@ export class ActionTracker {
 			this.hooks.badge?.(action.extensionId, tabId, info.actionCount);
 	}
 
-	/** ResetTrackedInfoForTab: a main frame commits in the tab */
-	onMainFrameCommitted(tabId: number, extensionIds: Iterable<string>) {
+	/**
+	 * ResetTrackedInfoForTab: a main frame commits in the tab. `heldIn`: the
+	 * tab its matches were held under (none, for a navigation whose tab was
+	 * told only once it committed)
+	 */
+	onMainFrameCommitted(
+		tabId: number,
+		extensionIds: Iterable<string>,
+		heldIn = tabId,
+	) {
 		this.transferToUnknown(tabId);
 		for (const extensionId of extensionIds) {
-			const pendingKey = key(extensionId, tabId);
+			const pendingKey = key(extensionId, heldIn);
 			const info = this.pending.get(pendingKey) ?? {
 				rules: [],
 				actionCount: 0,
 			};
 			this.pending.delete(pendingKey);
+			if (heldIn !== tabId) for (const rule of info.rules) rule.tabId = tabId;
 			this.tracked.set(key(extensionId, tabId), info);
 			if (this.hooks.useBadge?.(extensionId))
 				this.hooks.badge?.(extensionId, tabId, info.actionCount);

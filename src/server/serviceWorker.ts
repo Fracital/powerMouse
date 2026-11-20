@@ -208,6 +208,8 @@ interface ControllerRef {
 	slot?: boolean;
 	/** lets go of the wait for the modules its handshake's port brings (portModules) */
 	dropModules?: () => void;
+	/** initRemoteTransport may name the page's client (ControllerInitMessage.transportClients) */
+	transportClients?: boolean;
 }
 
 /**
@@ -307,6 +309,7 @@ function registerController(
 		rewritePool,
 		modules,
 		modulesOnPort,
+		transportClients,
 		adblock,
 		standby,
 		codecKey,
@@ -508,7 +511,7 @@ function registerController(
 				await heldModules();
 				return [suffixListPin(), []];
 			},
-			socket: async ({ url, source, type }) => {
+			socket: async ({ url, source, type, client }) => {
 				// a WebSocket never passes this worker: the controller asks from
 				// its handshake hook and refuses the socket on a yes
 				// a WebSocket the site's shields let through (shields down, or the
@@ -523,7 +526,12 @@ function registerController(
 				}
 				// the extensions' rules (src/server/dnr.ts) first: the site's
 				// shields are the built-in blocker's, not theirs
-				const ruled = srv.dnr.socketBlocked(url, source, type);
+				const ruled = srv.dnr.socketBlocked(
+					url,
+					source,
+					type,
+					typeof client === 'string' ? client : undefined,
+				);
 				const blocked =
 					!!ruled ||
 					(srv.shields.blocks(socketHost) &&
@@ -659,6 +667,7 @@ function registerController(
 		...(token !== undefined ? { token } : {}),
 		serial: ++serials,
 		...(dropModules ? { dropModules } : {}),
+		...(transportClients === true ? { transportClients: true } : {}),
 		// a slot's worker, or the hub's (whose documents of a site with a
 		// slot leave for it too)
 		...(slot || pooled ? { slots: new Map<string, string>() } : {}),
@@ -1735,7 +1744,11 @@ function handleMessage(event: ExtendableMessageEvent) {
 			return;
 		}
 
-		ref.rpc.call('initRemoteTransport', port, [port]);
+		ref.rpc.call(
+			'initRemoteTransport',
+			ref.transportClients && sender ? { port, client: sender } : port,
+			[port],
+		);
 	} else if (INIT_PAGE_MODULES in data) {
 		// a proxied top's library realm (src/inject/rewriter.ts): its
 		// controller answers on the port, this worker only passes it on (a

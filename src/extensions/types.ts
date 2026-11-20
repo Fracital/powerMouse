@@ -437,4 +437,6 @@ export type ExtensionCommand =
 	/** the host sends a tab to a URL: the main frame's request is that tab's */
 	| { op: 'expect'; url: string; tabId: number }
 	/** a click on the extension's button granted it activeTab for the tab */
-	| { op: 'grant'; id: string; tabId: number };
+	| { op: 'grant'; id: string; tabId: number }
+	/** a nested document's frame id, which the worker keeps (its requests carry it too) */
+	| { op: 'frame'; client: string };

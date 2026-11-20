@@ -162,7 +162,7 @@ const probe = {
 			action: { type: 'allow' },
 			condition: {
 				urlFilter: '?ext-tab-probe=',
-				resourceTypes: ['sub_frame', 'xmlhttprequest'],
+				resourceTypes: ['sub_frame', 'xmlhttprequest', 'websocket'],
 			},
 		},
 	]),
@@ -224,16 +224,26 @@ const probe = {
 			none: await text('/pages/ext-plain.txt?dnr-none'),
 		};
 		out.step = 'tab ids';
-		// (a frame of the page's, then a request of its document)
+		// a frame of the page's and a request of its document, a request of
+		// the page's document and a WebSocket it opens
+		const frame = document.createElement('iframe');
 		await new Promise((resolve) => {
-			const frame = document.createElement('iframe');
 			const timer = setTimeout(resolve, 5000);
-			frame.addEventListener('load', () => { clearTimeout(timer); frame.remove(); resolve(); });
+			frame.addEventListener('load', () => { clearTimeout(timer); resolve(); }, { once: true });
 			frame.src = '/pages/ext-other.html?ext-tab-probe=frame';
 			document.body.append(frame);
 		});
+		await frame.contentWindow.fetch('/pages/ext-plain.txt?ext-tab-probe=nested').catch(() => {});
 		await text('/pages/ext-plain.txt?ext-tab-probe=xhr');
+		await new Promise((resolve) => {
+			const socket = new WebSocket(new URL('/open/ws-echo?ext-tab-probe=socket', location.href.replace(/^http/, 'ws')).href);
+			socket.onopen = socket.onerror = () => { socket.close(); resolve(); };
+			setTimeout(resolve, 5000);
+		});
 		out.matched = await chrome.runtime.sendMessage({ type: 'matched' });
+		frame.remove();
+		const since = /[?&]tab-rules=(\\d+)/.exec(location.search);
+		if (since) out.tabRules = await chrome.runtime.sendMessage({ type: 'tab-rules', since: Number(since[1]) });
 		delete out.step;
 		document.documentElement.dataset.idle = JSON.stringify(out);
 	})().catch((error) => {
@@ -248,8 +258,9 @@ const probe = {
 	const fetched = fetch('../war.txt').then((response) => response.text());
 	const matched = [];
 	chrome.declarativeNetRequest.onRuleMatchedDebug.addListener(({ rule, request }) => {
-		if (rule.ruleId >= 3 && matched.length < 20)
-			matched.push({ rule: rule.ruleId, type: request.type, tabId: request.tabId, frameId: request.frameId, parentFrameId: request.parentFrameId });
+		const probe = /ext-tab-probe=(\\w+)/.exec(request.url);
+		if (rule.ruleId >= 3 && matched.length < 40)
+			matched.push({ name: probe ? probe[1] : 'main', type: request.type, url: request.url, tabId: request.tabId, frameId: request.frameId, parentFrameId: request.parentFrameId });
 	});
 	chrome.runtime.onInstalled.addListener(() => {
 		chrome.action.setBadgeText({ text: '7' });
@@ -290,14 +301,24 @@ const probe = {
 			return true;
 		}
 		if (message.type === 'matched') {
-			// (the matches come on their own channel: wait for all three kinds)
-			const until = Date.now() + 3000;
+			// (the matches come on their own channel: wait for the requests'
+			// four, then take them with the frames' ids as executeScript sees them)
+			const until = Date.now() + 4000;
 			const answer = () => {
-				const kinds = new Set(matched.map((entry) => entry.type));
-				if (kinds.size >= 3 || Date.now() > until) respond({ tab: sender.tab.id, matched });
-				else setTimeout(answer, 50);
+				const names = new Set(matched.map((entry) => entry.name));
+				if (!['frame', 'nested', 'xhr', 'socket'].every((name) => names.has(name)) && Date.now() < until)
+					return setTimeout(answer, 50);
+				const taken = Object.fromEntries(matched.splice(0).map((entry) => [entry.name, entry]));
+				chrome.scripting.executeScript({ target: { tabId: sender.tab.id, allFrames: true }, func: () => location.href })
+					.then((frames) => frames.map((frame) => [frame.frameId, frame.result]), (error) => error.message)
+					.then((frames) => respond({ tab: sender.tab.id, matched: taken, frames }));
 			};
 			answer();
+			return true;
+		}
+		if (message.type === 'tab-rules') {
+			chrome.declarativeNetRequest.getMatchedRules({ tabId: sender.tab.id, minTimeStamp: message.since })
+				.then((found) => respond(found.rulesMatchedInfo.map((info) => info.rule.ruleId)), (error) => respond(error.message));
 			return true;
 		}
 		if (message.type === 'fetched') {
@@ -458,10 +479,21 @@ const blocker = zip({
 		['blocking', chrome.webRequest.OnHeadersReceivedOptions.RESPONSE_HEADERS]);
 	chrome.webRequest.onCompleted.addListener((details) => self.completed.push(details.url),
 		{ urls: ['*://*/pages/ext-plain.txt*'] });
+	// a request the probe's rules block: told to onBeforeRequest first, then onErrorOccurred
+	self.seen = [];
+	self.errors = [];
+	chrome.webRequest.onBeforeRequest.addListener((details) => {
+		if (details.url.includes('dnr-static&mv2')) self.seen.push(details.type);
+	}, { urls: ['*://*/pages/ext-plain.txt*'] });
+	chrome.webRequest.onErrorOccurred.addListener((details) => {
+		if (details.url.includes('dnr-static&mv2')) self.errors.push(details.error);
+	}, { urls: ['*://*/pages/ext-plain.txt*'] });
 	chrome.browserAction.setBadgeText({ text: 'B' });
 	chrome.runtime.onMessage.addListener((message, sender, respond) => {
 		if (message === 'completed') respond({
 			count: self.completed.length,
+			seen: self.seen,
+			errors: self.errors,
 			extra: chrome.webRequest.OnBeforeSendHeadersOptions.EXTRA_HEADERS,
 		});
 	});`,
@@ -470,6 +502,7 @@ const blocker = zip({
 		try { await fetch('/pages/ext-blocked.txt'); out.blocked = 'loaded'; } catch (error) { out.blocked = 'failed'; }
 		out.redirect = (await (await fetch('/pages/ext-redirect.txt')).text()).trim();
 		out.added = (await fetch('/pages/ext-plain.txt?h')).headers.get('x-ext-added');
+		try { await fetch('/pages/ext-plain.txt?dnr-static&mv2'); out.dnrBlocked = 'loaded'; } catch (error) { out.dnrBlocked = 'failed'; }
 		await new Promise((resolve) => setTimeout(resolve, 500));
 		chrome.storage.local.get('x', (items) => {
 			out.callback = typeof items;
@@ -776,26 +809,34 @@ for (const [mode, base] of [
 			idle.dnr.none === 'plain',
 		JSON.stringify(idle?.dnr),
 	);
-	const kinds = Object.fromEntries(
-		(idle?.matched?.matched ?? []).map((entry) => [entry.type, entry]),
-	);
+	const taken = idle?.matched?.matched ?? {};
+	const tab = idle?.matched?.tab;
 	ok(
-		`${mode}: declarativeNetRequest's matches carry the tab's id: the main frame the host sent, a frame in it, a request of its document`,
-		typeof idle?.matched?.tab === 'number' &&
-			idle.matched.tab >= 0 &&
-			['main_frame', 'sub_frame', 'xmlhttprequest'].every(
-				(type) => kinds[type]?.tabId === idle.matched.tab,
+		`${mode}: declarativeNetRequest's matches carry the tab's id: the main frame the host sent, a frame in it and its request, a request and a WebSocket of the top document`,
+		typeof tab === 'number' &&
+			tab >= 0 &&
+			['main', 'frame', 'nested', 'xhr', 'socket'].every(
+				(name) => taken[name]?.tabId === tab,
 			),
 		JSON.stringify(idle?.matched),
 	);
+	const nestedId = taken.frame?.frameId;
+	const seen = Array.isArray(idle?.matched?.frames)
+		? idle.matched.frames.find(([, url]) => String(url).includes('ext-other'))
+		: null;
 	ok(
-		`${mode}: their frame ids: the main frame 0, the frame's parent 0, the top document's request 0`,
-		kinds.main_frame?.frameId === 0 &&
-			kinds.main_frame.parentFrameId === -1 &&
-			kinds.sub_frame?.parentFrameId === 0 &&
-			kinds.xmlhttprequest?.frameId === 0 &&
-			kinds.xmlhttprequest.parentFrameId === -1,
-		JSON.stringify(kinds),
+		`${mode}: their frame ids: the top document 0, the frame its own (the one executeScript reports), the parent of the frame's request 0`,
+		taken.main?.frameId === 0 &&
+			taken.main.parentFrameId === -1 &&
+			nestedId > 0 &&
+			taken.frame.parentFrameId === 0 &&
+			taken.nested?.frameId === nestedId &&
+			taken.nested.parentFrameId === 0 &&
+			seen?.[0] === nestedId &&
+			taken.xhr?.frameId === 0 &&
+			taken.xhr.parentFrameId === -1 &&
+			taken.socket?.frameId === 0,
+		JSON.stringify({ taken, frames: idle?.matched?.frames }),
 	);
 	ok(
 		`${mode}: messaging round trips stay under 5 ms (median)`,
@@ -828,6 +869,13 @@ for (const [mode, base] of [
 		`${mode}: webRequest.onCompleted and the webRequest enums reach an MV2 background`,
 		mv2?.completed?.count >= 1 && mv2.completed.extra === 'extraHeaders',
 		JSON.stringify(mv2?.completed),
+	);
+	ok(
+		`${mode}: a request another extension's rule blocks reaches webRequest.onBeforeRequest, then onErrorOccurred`,
+		mv2?.dnrBlocked === 'failed' &&
+			mv2.completed?.seen?.join() === 'xmlhttprequest' &&
+			mv2.completed.errors?.join() === 'net::ERR_BLOCKED_BY_CLIENT',
+		JSON.stringify({ blocked: mv2?.dnrBlocked, completed: mv2?.completed }),
 	);
 	ok(
 		`${mode}: MV2 callbacks with runtime.lastError`,
@@ -1185,6 +1233,58 @@ for (const [mode, base] of [
 	await page.evaluate(
 		(id) => window.__controller.extensions.remove(id),
 		compatId,
+	);
+
+	// a main frame's redirect is the navigation's tab
+	await page.evaluate(
+		(url) => window.__frame.go(url),
+		`${FIXTURE}redirect?to=${encodeURIComponent(target)}`,
+	);
+	const redirected = JSON.parse(
+		(await poll(page, TARGET, datasetOf('idle'), 30000)) ?? 'null',
+	);
+	ok(
+		`${mode}: a main frame's redirected request is in the tab the navigation is in`,
+		typeof redirected?.matched?.tab === 'number' &&
+			redirected.matched.matched?.main?.tabId === redirected.matched.tab &&
+			redirected.matched.matched.main.url === target,
+		JSON.stringify(redirected?.matched?.matched?.main),
+	);
+	// a navigation no hooked document announces: from an image document (no
+	// inject), the host sets the frame's src itself. Its main frame's request
+	// is in no known tab; its matched rules go to the tab its document reports
+	await page.evaluate((url) => {
+		// (an image document never reports: no wait for it)
+		void window.__frame.go(url);
+	}, `${FIXTURE}pages/object-events.png`);
+	await sleep(2000);
+	const since = Date.now() - 1;
+	await page.evaluate(
+		async ({ url, proxyOrigin }) => {
+			const routed = await window.__controller.route(url);
+			window.__frame.element.src = new URL(routed, proxyOrigin).href;
+		},
+		{ url: `${target}?tab-rules=${since}`, proxyOrigin: new URL(PROXY).origin },
+	);
+	const unannounced = JSON.parse(
+		(await poll(
+			page,
+			TARGET,
+			// (the new document's: the last one's has no tabRules)
+			() => {
+				const idle = document.documentElement.dataset.idle;
+				return idle?.includes('"tabRules"') ? idle : null;
+			},
+			30000,
+		)) ?? 'null',
+	);
+	ok(
+		`${mode}: an unannounced navigation's main frame match is its tab's once its document reports (getMatchedRules)`,
+		Array.isArray(unannounced?.tabRules) && unannounced.tabRules.includes(3),
+		JSON.stringify({
+			tabRules: unannounced?.tabRules,
+			main: unannounced?.matched?.matched?.main,
+		}),
 	);
 
 	// disable, enable, remove

@@ -382,6 +382,13 @@ export class RemoteController extends EventTarget {
 			tabIdOf: (frame) => this.tabIdOf(frame),
 			frameOf: (client) => this.#clients.frame(client),
 			isTop: (frame, client) => this.#topClients.get(frame) === client,
+			frameIdOf: (client) =>
+				this.#ready.then(() =>
+					this.#rpc.call('extensions', {
+						call: 'command',
+						args: [{ op: 'frame', client }],
+					}),
+				),
 			open: init.onOpen,
 			request: (url) => {
 				const change: ExtensionsChange = { type: 'tab', url };
