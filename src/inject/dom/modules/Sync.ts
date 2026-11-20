@@ -9,7 +9,7 @@ import Module from '../../Module';
 import ResourceTimingModule from '../../modules/ResourceTiming';
 import { withStack } from '../../nativeErrors';
 import DocumentClient from '../Client';
-import { heldPart } from '../deferred';
+import { deferred, heldPart } from '../deferred';
 
 const statusEmpty: number[] = [101, 204, 205, 304];
 
@@ -89,7 +89,7 @@ interface SyncResponse extends Response {
 	rawArrayBuffer: ArrayBuffer;
 }
 
-interface SyncResponseInit extends SyncBody {
+export interface SyncResponseInit extends SyncBody {
 	error: { message: string };
 	init: ResponseInit;
 	url: string;
@@ -338,6 +338,14 @@ export default class SyncModule extends Module<DocumentClient> {
 					? sync.fetch(url, init, loopback, limit)
 					: sync.fetch(url, init, loopback, limit, budget);
 		}
+		// where a waiting page stops the worker (WebKit), no answer can come:
+		// a caller with another way takes it at once, the page's own request
+		// goes to the host (../syncRelay.ts)
+		const frozen = client.syncFrozen;
+		if (frozen && (loopback || limit !== undefined || budget !== undefined)) {
+			if (budget !== undefined) return null;
+			throw new RangeError(`The synchronous bridge cannot answer ${url}`);
+		}
 		const processInit: SerializableRequestInit = {};
 
 		processInit.cache = init.cache;
@@ -392,6 +400,11 @@ export default class SyncModule extends Module<DocumentClient> {
 		) {
 			data.bodyBase64 = encodeBase64(new Uint8Array(body as ArrayBuffer));
 		}
+
+		if (frozen)
+			return createResponse(
+				deferred('syncRelay')(client, data) as SyncResponseInit,
+			);
 
 		const id = 'sync-request-' + Math.random().toString(16).slice(2);
 

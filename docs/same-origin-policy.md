@@ -1788,6 +1788,8 @@ in Firefox 160, Chrome 157 and WebKitGTK 2.52.4):
 | A cookie the worker sets reaches document.cookie  | yes    | not before the end | no (the worker's `cookieStore.set` waits) |
 | The worker's `clients.get` of the page            | yes    | not before the end | not before the end                        |
 | The page's synchronous request reaches its worker | no     | yes                | no                                        |
+| The worker's fetch, Cache Storage and IndexedDB   | run    | run                | not before the end                        |
+| A dedicated worker's IndexedDB call               | runs   | runs               | not before the end                        |
 
 In Firefox a document therefore also asks for each answer with a
 synchronous request of its own (src/inject/dom/syncAnswer.ts), which the
@@ -1797,8 +1799,32 @@ about:srcdoc frame under a sandboxed frame has no service worker in
 Firefox, even with `allow-same-origin`, nor does one whose `srcdoc` was set
 after the frame was in the document, so a proxied srcdoc document there
 (the host's frame is sandboxed) is one no worker controls, as natively, and
-its scripts go through the bridge. In WebKit no answer reaches a waiting
-page yet (sync-engines: on the known list).
+its scripts go through the bridge.
+
+In WebKit a page that waits stops every call of its process that needs its
+thread: the service worker's, and its own dedicated and shared workers'
+fetches, IndexedDB, WebSockets and ports, while their timers run. So no
+answer can come at all: a request took 30 s and came back with status 0,
+localStorage and document.cookie threw a RangeError after 10 s, and the
+scripts written into an about:blank frame never ran. The controller's
+document learns it once (src/controller/syncFreezes.ts: an IndexedDB call
+of a dedicated worker lands only once a short spin ends), and the service
+worker keeps it (`config.syncFrozen`, src/server/syncFrozen.ts). There
+each document is served what it reads synchronously with its shell
+(`config.syncSeed`: its cookies, the HttpOnly ones kept from its script,
+and every key of its stores), writes asynchronously in order, and reads
+again asynchronously after any change. Its own synchronous request goes
+to the host as one of its own, which WebKit sends to the network while it
+waits (`POST <scope>sync-relay`, demo/syncRelay.js): the host makes it
+through the Wisp relay with the page's headers and the cookies the
+document knows, and the cookies the response sets go to the jar
+afterwards. A script written into a frame the worker does not control
+loads from the host (`<scope>sync-relay/held/<token>`), which holds the
+load until the copy the worker made asynchronously comes: the frame's
+parser waits on the network, not the page's thread. A host without those
+routes gives such a request a network error at once. A frame's own reads
+of the bridge still reach their limit in Firefox (sync-engines: on the
+known list).
 
 ## Left
 

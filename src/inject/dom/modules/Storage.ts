@@ -181,13 +181,56 @@ export default class StorageModule extends Module<DocumentClient> {
 				return null;
 			}
 			if (version !== cache.version) {
-				cache.values.clear();
-				cache.keys = null;
-				cache.usage = null;
-				cache.whole = false;
 				cache.version = version;
+				if (frozen) refresh(directory, cache);
+				else {
+					cache.values.clear();
+					cache.keys = null;
+					cache.usage = null;
+					cache.whole = false;
+				}
 			}
 			return cache;
+		};
+		// Where no answer of the bridge can come (Config syncFrozen), a copy
+		// is never emptied: it starts as the shell's (Config syncSeed) and is
+		// read again asynchronously after a change, as a whole
+		const frozen = client.syncFrozen;
+		const fillWhole = (
+			cache: ReadCache,
+			entries: [string, string][],
+			version: string,
+		) => {
+			cache.keys = entries.map(([key]) => key);
+			cache.values = new Map(entries);
+			cache.usage = entries.reduce(
+				(sum, [key, value]) => sum + sizeOf(key, value),
+				0,
+			);
+			cache.whole = true;
+			cache.version = version;
+		};
+		const refresh = (directory: string, cache: ReadCache) => {
+			const asked = storeChanges;
+			const version = cache.version;
+			new Promise<Response>((resolve) =>
+				resolve(
+					fetch(new URL('getAll', routeOf(directory)), {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify([keyOf(directory)]),
+					}),
+				),
+			)
+				.then((response) => response.json())
+				.then(
+					// a write or change since may be missing: asked again
+					(entries) =>
+						asked === storeChanges
+							? fillWhole(cache, entries, version)
+							: refresh(directory, cache),
+					() => {},
+				);
 		};
 		/**
 		 * The store changed: every document reads it fresh. The version stays
@@ -247,6 +290,7 @@ export default class StorageModule extends Module<DocumentClient> {
 			storeChanges++;
 			const cache = caches.get(directory);
 			if (!cache) return;
+			if (frozen) return refresh(directory, cache);
 			cache.values.clear();
 			cache.keys = null;
 			cache.whole = false;
@@ -327,6 +371,12 @@ export default class StorageModule extends Module<DocumentClient> {
 				return null;
 			}
 		};
+		// where neither resolves (a srcdoc document's location is
+		// about:srcdoc, an <object>'s a blob: URL), against the origin, which
+		// is the proxy's
+		const routeOf = (directory: string) =>
+			orderedURL(directory) ??
+			new URL(`${dirOf(directory)}ordered`, location.origin);
 		// Which operation it is goes in the URL, its arguments in the body:
 		// the worker hears of the write when the request arrives, so the next
 		// document's reads wait for it however long a large body takes to be
@@ -336,10 +386,7 @@ export default class StorageModule extends Module<DocumentClient> {
 			operation: Record<string, string>,
 			args: unknown[],
 		) => {
-			// (where neither resolves, as before: against the page's)
-			const url =
-				orderedURL(directory) ??
-				new URL(`${dirOf(directory)}ordered`, pageGlobal.location.href);
+			const url = routeOf(directory);
 			for (const [name, value] of Object.entries(operation))
 				url.searchParams.set(name, value);
 			return fetch(url, {
@@ -410,10 +457,7 @@ export default class StorageModule extends Module<DocumentClient> {
 			// It has no answer the page reads: the worker tells the bundle's
 			// document when it landed (STORAGE_LANDED). One too long for a URL,
 			// or one the browser refuses, is a fetch with a body, as before.
-			// (where neither resolves, as before: against the page's)
-			const url =
-				orderedURL(directory) ??
-				new URL(`${dirOf(directory)}ordered`, pageGlobal.location.href);
+			const url = routeOf(directory);
 			for (const [name, value] of Object.entries(operation))
 				url.searchParams.set(name, value);
 			url.searchParams.set('args', client.codec.encode(JSON.stringify(args)));
@@ -793,6 +837,22 @@ export default class StorageModule extends Module<DocumentClient> {
 					}),
 				);
 			caches.set(directory, cache);
+			if (frozen && !cache.whole) {
+				const seed = client.syncSeed;
+				let version = '';
+				try {
+					version =
+						Reflect.apply(nativeGetItem!, stamps, [stampOf(cache)]) ?? '';
+				} catch (error) {
+					// no stamps: none changes
+				}
+				const entries =
+					seed?.key === keyOf(directory)
+						? seed[store === 'localStorage' ? 'local' : 'session']
+						: undefined;
+				fillWhole(cache, entries ?? [], version);
+				if (!entries) refresh(directory, cache);
+			}
 			const storage = new StorageProxy(directory);
 			const proxy = new Proxy(storage, {
 				get: (target, prop, receiver) => {

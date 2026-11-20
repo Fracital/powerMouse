@@ -2,6 +2,17 @@
 //   /            demo page (demo/public)
 //   /api/status  uptime, version and build (dist/build.json) for the page
 //   /stomp/      STomp dist (service worker, inject bundles, controller)
+//   /stomp/sync-relay POST: one HTTP request a proxied page makes
+//                synchronously, performed here and answered whole as JSON
+//                (demo/syncRelay.js). It serves only where the browser lets
+//                nothing else answer during the wait (WebKit, where a
+//                synchronous request skips the service worker and freezes
+//                every worker of the page's process). The host does TLS for
+//                these requests itself and sees them in the clear; they
+//                still leave through the Wisp relay below
+//   /stomp/sync-relay/held/<token> such a page's script written into a
+//                frame the worker does not control: the load waits here
+//                until the page posts the copy the worker made
 //   /examples/   embedding examples (examples/minimal-host.html)
 //   /epoxy/      epoxy transport module
 //   /libcurl/    libcurl transport module
@@ -89,6 +100,14 @@
 //                       them cross-origin isolated (COOP same-origin and an
 //                       embedder policy, below): no proxied page is isolated
 //                       then, whatever it sends
+//   STOMP_SYNC_RELAY    `0` turns off /stomp/sync-relay (it then answers 404),
+//                       which is on by default. With it on, the host does
+//                       TLS for a WebKit page's synchronous requests and sees
+//                       them in the clear: in WebKit nothing in the browser
+//                       can answer such a request while the page waits, so
+//                       the page sends it here (over the same Wisp relay as
+//                       everything else, the built-in holyWisp or
+//                       STOMP_WISP_URL)
 //   STOMP_DEV           development mode (`npm run dev` sets it): /__dev is a
 //                       WebSocket that announces rebuilt bundles and edited
 //                       files to the page, which reloads what changed; see
@@ -109,6 +128,7 @@ import { holyWisp } from 'holywisp';
 // running an old, unpatched Node get a SyntaxError here instead of a running
 // proxy. Upgrade Node. Don't replace this with createRequire/readFileSync.
 import pkg from '../package.json' with { type: 'json' };
+import { heldLoads, syncRelay } from './syncRelay.js';
 
 const require = createRequire(import.meta.url);
 const { stompPath } = require('../lib/index.cjs');
@@ -642,6 +662,18 @@ const stompFiles = {
 		);
 	},
 };
+// The sync relay (demo/syncRelay.js): a WebKit page's synchronous request,
+// which nothing in the page's browser can answer while the page waits, done
+// here over the same Wisp relay the transports use
+if (process.env.STOMP_SYNC_RELAY !== '0') {
+	app.post(
+		'/stomp/sync-relay',
+		...syncRelay(() => externalWisp || `ws://127.0.0.1:${wisp.port}/wisp/`),
+	);
+	// and the loads of the scripts such a page writes into a frame the
+	// worker does not control, held until their copies come
+	app.all('/stomp/sync-relay/held/:token', ...heldLoads());
+}
 app.use('/stomp/', express.static(stompPath, stompFiles));
 // A routed script request that reaches this host instead of the service
 // worker comes from a document the worker does not control: an about:blank

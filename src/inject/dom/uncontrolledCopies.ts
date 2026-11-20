@@ -13,6 +13,7 @@ import {
 	LOAD_HEADER,
 	OPAQUE_COPY_HEADER,
 	SEALER_ROUTE,
+	SYNC_RELAY_ROUTE,
 } from '../../transport/messages';
 import { opaqueCopy, opaqueMarked } from '../modules/Fetch';
 import { usePrototype } from '../modules/Proxy';
@@ -614,6 +615,34 @@ export function uncontrolledCopies(ctx: CopyContext) {
 		load: string | null = null,
 		credentials: RequestCredentials = 'include',
 	): string | null => {
+		// where a waiting page stops the worker (WebKit), the bridge cannot
+		// answer: the script loads from the host, which holds the load until
+		// the copy the worker made asynchronously comes (the parser waits on
+		// the network, not this thread; demo/syncRelay.js)
+		if (moduleClient.syncFrozen) {
+			const scope = scopePrefix(moduleClient);
+			const token = () => Math.random().toString(36).slice(2);
+			const held = `${scope}${SYNC_RELAY_ROUTE}/held/${token()}${token()}`;
+			const hand = (init: RequestInit) =>
+				fetch(held, { method: 'POST', ...init }).catch(() => {});
+			loadFetch(moduleClient, new URL(routed, scope).href, load ?? 'copy', {
+				credentials,
+			})
+				.then(async (response) => {
+					if (!response.ok && response.status !== 0)
+						throw new Error(String(response.status));
+					await hand({
+						headers: {
+							'content-type':
+								response.headers.get('content-type') ?? 'text/javascript',
+						},
+						body: await response.arrayBuffer(),
+					});
+				})
+				.catch(() => hand({}));
+			blobLoads.set(held, page);
+			return held;
+		}
 		if (!moduleClient.workerTransport) return null;
 		// the bridge of the client the grant is announced through (it may
 		// be of another bundle): its beacon is the request the worker sees

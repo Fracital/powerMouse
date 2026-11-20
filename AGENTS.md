@@ -220,6 +220,18 @@ on every save (use a `git worktree`).
   and WebKit send that request to the network: the first document that
   finds so tells the worker (`?n`), which keeps it and serves
   `config.syncAnswers: false` to the documents after it.
+  WebKit stops the service worker and the page's own workers while the
+  page waits, so no answer comes there at all: the controller's document
+  learns that once (`src/controller/syncFreezes.ts`), the worker keeps it
+  (`config.syncFrozen`, `src/server/syncFrozen.ts`) and serves each
+  document its cookies and stores with its shell (`config.syncSeed`). There
+  the bridge answers a caller with a fallback at once (null, or a throw for
+  loopback callers), storage and cookies write asynchronously and read
+  again asynchronously after a change, and a page's own synchronous
+  request goes to the host (`src/inject/dom/syncRelay.ts`,
+  `demo/syncRelay.js`), as does the load of a script written into a frame
+  the worker does not control (`held/<token>`, filled with the worker's
+  asynchronous copy).
   A worker the browser stopped starts again knowing no controller, and the
   controller on the spinning thread cannot hear it ask: after
   `SYNC_KICK_MS` the bridge dispatches `SW_KICK` + the address on the

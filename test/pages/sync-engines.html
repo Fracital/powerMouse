@@ -5,8 +5,11 @@
 		// What the page asks of the browser synchronously (test/suites/sync-engines.mjs):
 		// a synchronous XMLHttpRequest, localStorage and document.cookie, and
 		// classic external scripts in an about:blank frame the page writes and
-		// in an about:srcdoc frame. Each case says what it read and whether it
-		// came within BOUND ms (natively, a few ms each).
+		// in an about:srcdoc frame. Then the cookies a synchronous request's
+		// response sets (the page reads one, the next request carries both,
+		// the HttpOnly one too), and what a frame loaded after the page wrote
+		// a store and a cookie reads of them. Each case says what it read and
+		// whether it came within BOUND ms (natively, a few ms each).
 		const BOUND = 2500;
 		const report = {};
 		const timed = (name, run) => {
@@ -70,6 +73,41 @@
 				frame.srcdoc = `<!doctype html><body>${scripts('srcdoc')}`;
 				document.body.append(frame);
 			});
+			const get = (url) => {
+				const request = new XMLHttpRequest();
+				request.open('GET', url, false);
+				request.send();
+				return request.responseText;
+			};
+			timed('responseCookie', () => {
+				get('/pages/sync-engines-cookie.json');
+				const shown = document.cookie;
+				const sent = JSON.parse(get('/echo-headers')).cookie ?? '';
+				get('/pages/sync-engines-uncookie.json');
+				const after = JSON.parse(get('/echo-headers')).cookie ?? '';
+				return [
+					/(?:^|; )seSync=2(?:;|$)/.test(shown),
+					/seHidden/.test(shown),
+					/(?:^|; )seSync=2(?:;|$)/.test(sent),
+					/(?:^|; )seHidden=3(?:;|$)/.test(sent),
+					/seSync|seHidden/.test(after),
+				];
+			});
+			localStorage.setItem('seFrame', 'parent');
+			document.cookie = 'seFrame=1; path=/';
+			const start = performance.now();
+			const framed = await Promise.race([
+				new Promise((resolve) => {
+					window.__seFrame = resolve;
+					const frame = document.createElement('iframe');
+					frame.src = '/pages/sync-engines-frame.html';
+					document.body.append(frame);
+				}),
+				new Promise((r) => setTimeout(() => r(null), 15e3)),
+			]);
+			report.frame = [framed, performance.now() - start < 2 * BOUND];
+			localStorage.removeItem('seFrame');
+			document.cookie = 'seFrame=; max-age=0; path=/';
 			window.__seReport = report;
 		})();
 	</script>

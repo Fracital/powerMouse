@@ -12,6 +12,7 @@ import {
 	parseConfig,
 	ParsedConfig,
 	type SitesConfig,
+	type SyncSeed,
 } from '../config';
 import type { ScriptFacts } from '../csp';
 import { HelperNames, helperNames } from '../helperNames';
@@ -269,6 +270,12 @@ export default class Client {
 	 * by the FingerprintModule.
 	 */
 	fingerprintSeed: number;
+	/** whether the browser lets the worker answer a page's synchronous request (config.syncAnswers) */
+	syncAnswers?: boolean;
+	/** a waiting page stops the worker (config.syncFrozen) */
+	syncFrozen: boolean;
+	/** what this document reads synchronously, where syncFrozen is (config.syncSeed): never handed on */
+	syncSeed?: SyncSeed;
 	applied: boolean;
 	/**
 	 * @internal called after a response reached this context (fetch, XHR),
@@ -946,6 +953,9 @@ export default class Client {
 		this.hostIsolated = !!init.isolated;
 		this.fingerprintOn = init.fingerprintOn ?? [...FP_DEFAULT_ON_SURFACES];
 		this.fingerprintSeed = init.fingerprintSeed ?? 0;
+		this.syncAnswers = init.syncAnswers;
+		this.syncFrozen = !!init.syncFrozen;
+		this.syncSeed = init.syncSeed;
 		// a stale cached bundle next to a new service worker: say so once,
 		// the page still gets its best effort
 		if (init.build && init.build !== BUILD)
@@ -1055,6 +1065,7 @@ export default class Client {
 			...(this.#customNames ? { names: this.names } : {}),
 			...(this.hooks ? { hooks: this.hooks } : {}),
 			...(this.sites ? { sites: this.sites } : {}),
+			...(this.syncFrozen ? { syncFrozen: true } : {}),
 		};
 	}
 	/**

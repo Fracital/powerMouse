@@ -486,6 +486,21 @@ export default class Storage {
 				small.push([item, value]);
 		return [entries.map(({ item }) => item), small];
 	}
+	/**
+	 * Every key of `origin`'s store with its value, in getKeys' order: what a
+	 * document reads where the synchronous bridge cannot answer it
+	 * (./syncFrozen.ts), once with its shell and again after a change
+	 */
+	async getAll(origin: string): Promise<[string, string][]> {
+		await this.settled(origin);
+		return (
+			await this.db.getAllFromIndex(
+				this.store,
+				'origin',
+				IDBKeyRange.only(origin),
+			)
+		).map(({ item, value }: ItemEntry) => [item, value]);
+	}
 	async getKeys(origin: string): Promise<string[]> {
 		return (
 			await this.db.getAllFromIndex(
@@ -694,6 +709,7 @@ export function registerStorage(
 			'removeItem',
 			'getKeys',
 			'getSmall',
+			'getAll',
 			'clear',
 			'ordered',
 		]) {

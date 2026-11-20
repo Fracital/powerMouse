@@ -228,6 +228,7 @@ import {
 import { sourcePolicy } from './sourcePolicy';
 import { storageAccessHandle } from './storageAccess';
 import { syncAnswer } from './syncAnswer';
+import { syncRelay } from './syncRelay';
 import {
 	exportRefusal,
 	textureRefusal,
@@ -375,6 +376,9 @@ export const parts = {
 	// where the browser lets the worker answer it, at a document's first wait
 	// on the bridge (./syncAnswer.ts; modules/Sync.ts)
 	syncAnswer,
+	// a page's own synchronous request where no answer of the bridge can
+	// come, sent to the host, at its first (./syncRelay.ts; modules/Sync.ts)
+	syncRelay,
 	// the violations and errors of the page's own policy the inject makes
 	// itself, the first time it refuses something (./violations.ts; Client.ts)
 	dispatchViolation,

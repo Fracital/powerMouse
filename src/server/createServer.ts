@@ -65,6 +65,7 @@ import {
 	StorageHosts,
 } from './Storage';
 import { registerXhr } from './Sync';
+import { knowSyncFrozen } from './syncFrozen';
 import { addWindowRoutes } from './windowURLs';
 
 export interface StompServer {
@@ -397,6 +398,8 @@ export default async function createServer(
 	tellIsolationWanted?: (client: string) => void,
 	/** tells the controller a document was served with the proxy's Document-Isolation-Policy (Rewriter.apartServed) */
 	tellApartServed?: () => void,
+	/** asks the controller's document whether a waiting page stops this worker (./syncFrozen.ts) */
+	askSyncFreezes?: () => Promise<boolean | null>,
 ): Promise<StompServer> {
 	// the jar opens beside the codec's transaction (sharedStores takes it)
 	if (!jar) openJarDB().catch(() => {});
@@ -629,6 +632,21 @@ export default async function createServer(
 			.then((store) => store.put('consts', value, 'syncAnswers'))
 			.catch(() => {}),
 	);
+	// and whether a waiting page stops this worker, as an earlier one heard
+	if (askSyncFreezes) {
+		let frozenKnown: boolean | undefined;
+		try {
+			const known: unknown = await db.get('consts', 'syncFrozen');
+			if (typeof known === 'boolean') frozenKnown = known;
+		} catch (error) {
+			// not known yet
+		}
+		knowSyncFrozen(frozenKnown, askSyncFreezes, (value) =>
+			openConfigDB()
+				.then((store) => store.put('consts', value, 'syncFrozen'))
+				.catch(() => {}),
+		);
+	}
 
 	return {
 		router,

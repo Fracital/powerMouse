@@ -1,0 +1,6 @@
+{
+	"set-cookie": [
+		"seSync=; Path=/; Max-Age=0",
+		"seHidden=; Path=/; HttpOnly; Max-Age=0"
+	]
+}

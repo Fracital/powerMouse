@@ -3,6 +3,7 @@ import GenericCodec, { AESCodec, Base64Codec, XORCodec } from './Codecs';
 import type { HelperNames } from './helperNames';
 import type { ResolvedHooks } from './hooks';
 import type { PasskeysConfig } from './passkeys/types';
+import type { JarCookie } from './server/Cookies';
 import {
 	BLOCKER,
 	CONTROLLER_FRAME,
@@ -13,6 +14,20 @@ import {
 } from './version';
 
 export declare type ConfigCodec = 'generic' | 'xor' | 'aes' | 'base64';
+
+/** what a document reads synchronously, served with it (Config syncSeed) */
+export interface SyncSeed {
+	/** the storage key the stores are of (an origin and its partition) */
+	key: string;
+	/**
+	 * the cookies a request to its URL carries: document.cookie shows those
+	 * that are not HttpOnly, and its synchronous requests carry them all
+	 */
+	cookies: JarCookie[];
+	/** every key and value of its localStorage and sessionStorage, in order */
+	local?: [string, string][];
+	session?: [string, string][];
+}
 
 export interface Config {
 	codec: ConfigCodec;
@@ -56,6 +71,20 @@ export interface Config {
 	 * Unset until a page has asked.
 	 */
 	syncAnswers?: boolean;
+	/**
+	 * Set by the service worker where a page that waits synchronously stops
+	 * it, and every other worker of its process, until the wait ends (WebKit;
+	 * src/server/syncFrozen.ts): no answer of the synchronous bridge can
+	 * come, so a document reads what its shell was served (syncSeed), writes
+	 * asynchronously, and sends a synchronous request of its own to the
+	 * host's server (src/inject/dom/syncRelay.ts)
+	 */
+	syncFrozen?: boolean;
+	/**
+	 * Where syncFrozen is: the cookies of a document's URL and its stores, as the worker had them when it served the document, for the
+	 * storage key `key` (a document whose own key differs has none)
+	 */
+	syncSeed?: SyncSeed;
 	/**
 	 * HTTP cache in the service worker, on unless `false`: GET responses are
 	 * kept in a Cache API store and served or revalidated with ETag /
