@@ -33,6 +33,10 @@
 			"types": "./dist/types/controller/index.d.ts",
 			"default": "./dist/controller.mjs"
 		},
+		"./omnibox": {
+			"types": "./dist/types/omnibox/index.d.ts",
+			"default": "./dist/omnibox.mjs"
+		},
 		"./path": {
 			"types": "./lib/index.d.cts",
 			"default": "./lib/index.cjs"

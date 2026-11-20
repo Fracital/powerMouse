@@ -8,6 +8,7 @@ const DIRECTORY = '/stomp/';
 // service worker registered below is named from it too, so no file name of
 // the bundle is written here
 const ASSETS = globalThis.STOMP_ASSETS ?? {};
+const assetName = (key) => ASSETS[key] || StompController.DEFAULT_ASSETS[key];
 const SEARCH = new SearchBuilder('https://search.brave.com/search?q=%s');
 const QUICK_LINKS = [
 	['Reddit', 'https://www.reddit.com/', 'orange'],
@@ -1065,7 +1066,7 @@ async function startController(name) {
 		// activated): its transport, the transport worker, epoxy's module and
 		// the wisp carrier, comes up while a first visit's worker installs
 		const registration = await navigator.serviceWorker.register(
-			`${DIRECTORY}${ASSETS.serviceWorker ?? StompController.DEFAULT_ASSETS.serviceWorker}`,
+			`${DIRECTORY}${assetName('serviceWorker')}`,
 			{ scope: DIRECTORY, updateViaCache: 'none' },
 		);
 		setStatus(`Loading ${name} transport…`);
@@ -1209,6 +1210,8 @@ function recordUrl(tab) {
 	// normalisation ("https://a.com" vs "https://a.com/"); that is not a new entry
 	const url = normalizeUrl(tab.frame.url);
 	if (!url) return;
+	// the address bars' history (attachOmniboxes)
+	visitHistory?.record(tab, { url, title: visitTitle(tab, url) });
 	if (tab.traversal) {
 		// the frame still reports the page it is leaving until the step commits
 		const from = tab.history[tab.index + (tab.traversal === 'back' ? 1 : -1)];
@@ -2182,72 +2185,125 @@ function syncTokenButton() {
 // pages report navigation through onNavigate; this is only a safety net
 setInterval(() => syncOmnibox(), 5000);
 
-// TLD autocomplete under the address bars, as in Powermouse: every keystroke
-// asks /suggestions for suffixes close to what was typed after the last dot,
-// and clicking one swaps the typed suffix for it.
-function attachSuggestions(input) {
-	const container = input.parentElement;
-	const box = document.createElement('div');
-	box.className = 'suggestions';
-	container.append(box);
-	const TLD = /\.[^./?#\s]{1,16}(?:\.[^./?#\s]{1,16})?(?=$|\/)/i;
-	let request = 0;
+// The address bars' suggestions (dist's omnibox module, src/omnibox/, loaded
+// by the name the host serves it under): the open tabs to switch to, the
+// pages the tabs visited (kept in this browser alone, under omnibox:visits,
+// with the pages of the open tabs' own histories), the bookmarks and the
+// search engine's completions, which the controller asks through the
+// transport as a request of this page's (controller.suggest), so no server
+// of the host's sees what was typed. Local rows show at once, the engine's
+// after a pause; the arrows, Tab, Enter and Escape work as in Chrome's
+// address bar, and Shift+Delete forgets a page of the history.
+let visitHistory = null;
 
-	const clear = () => {
-		box.textContent = '';
-	};
-
-	const apply = (value, tld) => {
-		const base = value.replace(/\.+$/, ''); // "google." -> "google"
-		return TLD.test(base) && !value.endsWith('.')
-			? base.replace(TLD, `.${tld}`)
-			: `${base}.${tld}`;
-	};
-
-	input.addEventListener('keyup', async (event) => {
-		if (
-			['Enter', 'Escape', 'ArrowUp', 'ArrowDown', 'Tab'].includes(event.key)
-		) {
-			if (event.key === 'Escape') clear();
-			return;
-		}
-		const value = input.value.trim();
-		if (!value || /\s/.test(value) || value.includes('://')) return clear();
-		const id = ++request;
-		let list;
-		try {
-			list = await (
-				await fetch('/suggestions', {
-					method: 'POST',
-					headers: { 'content-type': 'text/plain' },
-					body: value,
-				})
-			).json();
-		} catch {
-			return;
-		}
-		if (id !== request || document.activeElement !== input) return;
-		clear();
-		for (const tld of list) {
-			const suggestion = document.createElement('div');
-			suggestion.className = 'auto-fill ns';
-			suggestion.textContent = apply(value, tld);
-			// mousedown, so it runs before the input loses focus
-			suggestion.addEventListener('mousedown', (e) => {
-				e.preventDefault();
-				input.value = apply(value, tld);
-				input.focus();
-				clear();
-			});
-			box.append(suggestion);
-		}
-	});
-	input.addEventListener('blur', () => setTimeout(clear, 100));
-	input.form.addEventListener('submit', clear);
+/** the title a visit keeps: none while the tab shows its address or "New tab" in its place */
+function visitTitle(tab, url) {
+	const title = tabTitle(tab);
+	return title === url || title === tab.url || title === 'New tab' ? '' : title;
 }
 
-attachSuggestions(mainForm.url);
-attachSuggestions(omni.url);
+function loadOmnibox() {
+	return new Promise((resolve, reject) => {
+		const script = document.createElement('script');
+		script.src = `${DIRECTORY}${assetName('omnibox')}`;
+		script.addEventListener('load', () => resolve(globalThis.Omnibox));
+		script.addEventListener('error', () =>
+			reject(new Error(`${script.src} did not load`)),
+		);
+		document.head.append(script);
+	});
+}
+
+function attachOmniboxes(Omnibox) {
+	visitHistory = Omnibox.visitHistory();
+	const tabIds = new WeakMap();
+	let lastTabId = 0;
+	const tabId = (tab) => {
+		if (!tabIds.has(tab)) tabIds.set(tab, ++lastTabId);
+		return tabIds.get(tab);
+	};
+	// the history, with the open tabs' pages it does not have (a tab's own
+	// history from before it was kept, or storage that keeps nothing)
+	const visits = () => {
+		const kept = visitHistory.visits();
+		const known = new Set(kept.map((visit) => Omnibox.canonicalUrl(visit.url)));
+		const extra = [];
+		const now = Date.now();
+		for (const tab of tabs)
+			tab.history.forEach((url, i) => {
+				const page = Omnibox.canonicalUrl(url);
+				if (known.has(page)) return;
+				known.add(page);
+				extra.push({
+					url,
+					title: url === shownUrl(tab) ? visitTitle(tab, url) : '',
+					at: now - (tab.history.length - i),
+				});
+			});
+		return extra.length ? [...extra, ...kept] : kept;
+	};
+	const engine = SEARCH.template;
+	for (const input of [mainForm.url, omni.url]) {
+		const addressBar = input === omni.url;
+		// the landing opens a new tab, so every tab is another; the address
+		// bar's tab is the one on show
+		const otherTabs = () =>
+			tabs
+				.filter((tab) => !(addressBar && tab === activeTab))
+				.map((tab) => ({
+					id: tabId(tab),
+					url: shownUrl(tab),
+					title: visitTitle(tab, shownUrl(tab)),
+					activate: () => activateTab(tab),
+				}));
+		const list = document.createElement('div');
+		list.className = 'suggestions';
+		input.parentElement.append(list);
+		const box = Omnibox.attachOmnibox({
+			input,
+			list,
+			search: engine,
+			toUrl: (text) => SEARCH.query(text.trim()),
+			typedOnly: addressBar,
+			local: (text) => [
+				...Omnibox.tabRows(text, otherTabs()),
+				...Omnibox.historyRows(text, visits(), (url) =>
+					visitHistory.forget(url),
+				),
+				...Omnibox.bookmarkRows(text, bookmarks),
+			],
+			complete: (text, signal) =>
+				controller
+					? controller.suggest(text, { engine, signal })
+					: Promise.resolve([]),
+			picks: () => ({
+				// a page open in a tab, the one on show too, shows as its tab
+				...Omnibox.historyPicks(visits(), tabs.map(shownUrl)),
+				openTabs: Omnibox.tabRows('', otherTabs()),
+			}),
+			// the form's own submit opens it, as typing it and Enter does
+			navigate: (row) => {
+				input.value = row.url;
+				input.form.requestSubmit();
+			},
+			rowClass: 'auto-fill ns',
+			// the list hangs from the box, as wide as it: on a narrow phone the
+			// box's padding for the status and the star makes it wider than its
+			// form
+			toggled: (open) => {
+				input.form.classList.toggle('suggesting', open);
+				if (open) list.style.minWidth = `${input.offsetWidth}px`;
+			},
+		});
+		input.form.addEventListener('submit', () => box.close());
+	}
+}
+
+loadOmnibox()
+	.then(attachOmniboxes)
+	.catch((error) =>
+		console.warn('The address bars have no suggestions:', error),
+	);
 
 mainForm.addEventListener('submit', (event) => {
 	event.preventDefault();

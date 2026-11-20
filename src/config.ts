@@ -383,9 +383,18 @@ export interface Assets {
 	 * the host likes. The rewriter itself is the wasm `core` module.
 	 */
 	rewriterLib?: string;
+	/**
+	 * the host's omnibox (src/omnibox/), a classic script whose global is
+	 * `Omnibox`: no proxied page and no bundle of the controller's loads it,
+	 * a host page that wants it loads it by this name
+	 */
+	omnibox?: string;
 }
 
-export const DEFAULT_ASSETS: Required<Assets> = {
+/** the files the bundles ask for themselves (assetName) */
+export type BundleAsset = Exclude<keyof Assets, 'omnibox'>;
+
+const BUNDLE_ASSETS: Required<Pick<Assets, BundleAsset>> = {
 	serviceWorker: 'serviceWorker.js',
 	injectDocument: 'injectDocument.js',
 	injectWorker: 'injectWorker.js',
@@ -406,6 +415,15 @@ export const DEFAULT_ASSETS: Required<Assets> = {
 };
 
 /**
+ * Every file's name. The ones only a host page loads are not among the
+ * bundles' (BUNDLE_ASSETS), so no inject bundle carries them.
+ */
+export const DEFAULT_ASSETS: Required<Assets> = /* @__PURE__ */ Object.assign(
+	{ omnibox: 'omnibox.js' },
+	BUNDLE_ASSETS,
+);
+
+/**
  * The wasm artifacts, by Assets key: what a controller running
  * `rewriter: 'wasm'` loads and hands to the service worker and its rewrite
  * workers (src/wasm/thread.ts)
@@ -415,9 +433,9 @@ export const WASM_ASSETS = ['core'] as const satisfies (keyof Assets)[];
 /** a served file's name: the host's, else the default */
 export function assetName(
 	assets: Assets | undefined,
-	key: keyof Assets,
+	key: BundleAsset,
 ): string {
-	return assets?.[key] || DEFAULT_ASSETS[key];
+	return assets?.[key] || BUNDLE_ASSETS[key];
 }
 
 /**

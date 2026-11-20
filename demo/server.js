@@ -1,6 +1,5 @@
 // Minimal host for the STomp demo:
 //   /            demo page (demo/public)
-//   /suggestions TLD autocomplete for the address bar
 //   /api/status  uptime, version and build (dist/build.json) for the page
 //   /stomp/      STomp dist (service worker, inject bundles, controller)
 //   /examples/   embedding examples (examples/minimal-host.html)
@@ -275,113 +274,6 @@ if (process.env.STOMP_ISOLATION !== 'off')
 		});
 		next();
 	});
-
-// TLD autocomplete for the address bar, as Powermouse did it: the public
-// suffix list is fetched once at startup, and /suggestions ranks suffixes by
-// character similarity to whatever the user typed after the last dot.
-const FALLBACK_TLDS = [
-	'com',
-	'net',
-	'org',
-	'io',
-	'dev',
-	'co',
-	'me',
-	'us',
-	'uk',
-	'ca',
-	'de',
-	'fr',
-	'au',
-	'jp',
-	'ru',
-	'in',
-	'br',
-	'it',
-	'nl',
-	'es',
-	'edu',
-	'gov',
-	'info',
-	'biz',
-	'tv',
-	'cc',
-	'xyz',
-	'app',
-	'gg',
-	'to',
-	'ly',
-	'fm',
-	'ai',
-	'sh',
-	'cloud',
-	'co.uk',
-	'org.uk',
-	'com.au',
-	'co.jp',
-	'com.br',
-];
-let tldList = FALLBACK_TLDS;
-
-async function loadTlds() {
-	try {
-		const body = await (
-			await fetch('https://publicsuffix.org/list/effective_tld_names.dat', {
-				signal: AbortSignal.timeout(8000),
-			})
-		).text();
-		const list = body
-			.split('\n')
-			.map((line) => line.trim())
-			.filter((line) => line && !line.startsWith('//') && !/[*!]/.test(line));
-		if (list.length) {
-			tldList = list;
-			console.log(`Loaded ${list.length} public suffixes`);
-		}
-	} catch (error) {
-		console.warn(
-			'Public suffix list unavailable, using the built-in TLDs:',
-			error.message,
-		);
-	}
-}
-loadTlds();
-
-const similar = (a, b) => {
-	const minLength = Math.min(a.length, b.length);
-	const maxLength = Math.max(a.length, b.length);
-	let equivalency = 0;
-	for (let i = 0; i < minLength; i++) if (a[i] === b[i]) equivalency++;
-	return equivalency / maxLength;
-};
-
-// suffixes that start with what was typed come first, most common first;
-// everything else is ranked by character similarity like Powermouse did
-const popularity = new Map(FALLBACK_TLDS.map((tld, i) => [tld, i]));
-const rank = (tld) => popularity.get(tld) ?? FALLBACK_TLDS.length;
-
-// what was typed comes in the body: a URL with it would name the site in
-// the host's own traffic before the proxy sealed anything
-app.post('/suggestions', express.text(), (req, res) => {
-	const input = String(typeof req.body === 'string' ? req.body : '').slice(
-		0,
-		256,
-	);
-	if (!input) return res.status(400).json({ error: 'Invalid domain input' });
-	if (input.endsWith('.')) return res.json(['com', 'net', 'org', 'io', 'dev']);
-	const matched = input.match(/\.[^./?#\s]{1,16}(?:\.[^./?#\s]{1,16})?$/i);
-	if (!matched) return res.json(['com', 'net', 'org', 'io', 'dev']);
-	const typed = matched[0].slice(1).toLowerCase();
-	const prefixed = tldList
-		.filter((tld) => tld.startsWith(typed))
-		.sort((a, b) => rank(a) - rank(b) || a.length - b.length);
-	const fuzzy = tldList
-		.filter((tld) => !tld.startsWith(typed))
-		.map((tld) => [similar(typed, tld), tld])
-		.sort((a, b) => b[0] - a[0] || rank(a[1]) - rank(b[1]))
-		.map(([, tld]) => tld);
-	res.json([...prefixed, ...fuzzy].slice(0, 6));
-});
 
 // what the page needs to know about this deployment; keys are only present
 // when set so the page can keep its local-development defaults otherwise

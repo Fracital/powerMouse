@@ -71,6 +71,7 @@ import {
 import { createShields, type Shields } from './shields';
 import type { SitePoolInit } from './sitePool';
 import { SiteRuns } from './siteRuns';
+import { untilAborted, type SuggestOptions } from './suggest';
 import { debugTransportStored, printNote } from './transportConsole';
 
 export interface RemoteControllerInit {
@@ -684,6 +685,16 @@ export class RemoteController extends EventTarget {
 	async unroute(url: string): Promise<string | null> {
 		await this.#ready;
 		return this.#rpc.call('unroute', url);
+	}
+	/** a search engine's completions, asked through the controller frame's transport (see StompController.suggest) */
+	async suggest(text: string, options: SuggestOptions = {}): Promise<string[]> {
+		const { signal, ...asked } = options;
+		return untilAborted(
+			this.#ready.then(() =>
+				this.#rpc.call('suggest', { text: String(text), ...asked }),
+			),
+			signal,
+		);
 	}
 	/** replace the request rules (see StompController.setRules) */
 	async setRules(rules: RequestRule[]): Promise<void> {
