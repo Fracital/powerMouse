@@ -32,7 +32,7 @@ export function syncAnswer(
 	id: string,
 	deadline: number,
 ): string {
-	reaches ??= client.config.syncAnswers;
+	reaches ??= client.syncAnswers;
 	if (reaches === false) return '';
 	// the snapshot's class, whose prototype no page reaches (the
 	// XMLHttpRequest module stands another class in for the page)

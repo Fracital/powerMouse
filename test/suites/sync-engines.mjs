@@ -12,7 +12,12 @@
 // natively, in time, in both modes. The first proxied document of a tab
 // there often had a Request with no body getter (as a fresh profile's first
 // page has natively), which the bundle read as it loaded: such a document
-// never ran (changes/request-body-absent.md).
+// never ran (changes/request-body-absent.md). WebKit stops a page's
+// worker while the page waits (src/server/syncFrozen.ts), so no answer of
+// the bridge came at all: a request there came back with status 0 after
+// 30 s, localStorage and document.cookie threw a RangeError after 10 s,
+// and the scripts of the about:blank frame never ran
+// (changes/webkit-sync-bridge.md).
 import { proxiedGo, withFirefox, withWebKit } from '../engines.mjs';
 import {
 	done,
@@ -33,18 +38,14 @@ const MODES = [
 ];
 const REPORT = 'window.__seReport';
 
-// Differences known and left, by engine, mode and case, with why. One that
-// now reads as natively fails too: take it off.
-const WEBKIT_BRIDGE =
-	"WebKit sends a page's synchronous request past its worker, to the network, and a cookie the worker sets with cookieStore.set lands only once the page's spin ends (both measured natively in WebKitGTK 2.52.4), so no answer of the bridge reaches a page that waits on it (open: a way for WebKit's answers)";
-const KNOWN = Object.fromEntries(
-	['same-origin', 'isolated'].flatMap((mode) =>
-		['syncXhr', 'localStorage', 'cookie', 'written'].map((name) => [
-			`WebKit ${mode}: ${name}`,
-			WEBKIT_BRIDGE,
-		]),
-	),
-);
+// Differences known and left, by engine, mode and case, with why. One
+// that now reads as natively fails too: take it off.
+const FIREFOX_FRAME =
+	"in Firefox 160 a frame's own reads of the bridge (localStorage, document.cookie) reach their 10 s limit and throw a RangeError, as at 09c3fd26 (open: the answer to a frame's request)";
+const KNOWN = {
+	'Firefox same-origin: frame': FIREFOX_FRAME,
+	'Firefox isolated: frame': FIREFOX_FRAME,
+};
 
 function compare(engine, mode, want, got) {
 	for (const name of new Set([

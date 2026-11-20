@@ -69,6 +69,7 @@ import {
 	SW_API,
 	SW_REVIVE,
 	SWbound,
+	SYNC_RELAY_ROUTE,
 	type SrcdocMessage,
 } from '../transport/messages';
 import RemoteTransport from '../transport/RemoteTransport';
@@ -438,6 +439,7 @@ function registerController(
 		() => rpc.call('blobProbe', undefined),
 		(client) => void rpc.call('isolationWanted', client).catch(() => {}),
 		() => void rpc.call('apartServed', undefined).catch(() => {}),
+		() => rpc.call('syncFreezes', undefined),
 	);
 
 	const rpc = new RpcHelper<SWbound, Controllerbound>(
@@ -2728,6 +2730,13 @@ function srcdocClaim(event: FetchEvent, pathname: string): boolean {
 
 self.addEventListener('fetch', (event: FetchEvent) => {
 	const { pathname, search } = new URL(event.request.url);
+	// the host's own (SYNC_RELAY_ROUTE), which no controller's address is
+	if (
+		pathname.startsWith(
+			`${new URL(self.registration.scope).pathname}${SYNC_RELAY_ROUTE}/`,
+		)
+	)
+		return;
 	if (documentBundle(event, pathname, search)) return;
 	if (srcdocClaim(event, pathname)) return;
 	noteRequest(event.request, event.clientId);

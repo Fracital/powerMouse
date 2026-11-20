@@ -1,0 +1,12 @@
+<!doctype html>
+<title>sync-engines frame</title>
+<body>
+	<script>
+		// a frame of test/pages/sync-engines.html, loaded after the page wrote
+		// a store's value and a cookie: what it reads of them as it loads
+		parent.__seFrame([
+			localStorage.getItem('seFrame'),
+			/(?:^|; )seFrame=1(?:;|$)/.test(document.cookie),
+		]);
+	</script>
+</body>

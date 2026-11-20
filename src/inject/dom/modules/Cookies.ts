@@ -98,18 +98,47 @@ export class CookiesModule extends Module<DocumentClient> {
 	get #view(): View {
 		const key = `${this.client.url}\n${this.#partitionKey}`;
 		let view = views.get(key);
-		if (!view)
+		if (!view) {
+			// where the bridge cannot answer (Config syncFrozen), the cookies
+			// the shell carried, read again as soon as they are read
+			const seed = this.client.syncSeed;
 			views.set(
 				key,
 				(view = {
-					known: null,
+					known:
+						seed?.key === this.client.storageKey
+							? seed.cookies.filter((cookie) => !cookie.httpOnly)
+							: null,
 					fresh: false,
 					version: '',
 					turn: '',
 					receipt: undefined,
 				}),
 			);
+		}
 		return view;
+	}
+	/** what this document knows of the jar (../syncRelay.ts), applied to in place */
+	get known(): JarCookie[] | null {
+		return this.#view.known;
+	}
+	#refreshing = false;
+	/** where the bridge cannot answer: the jar, read asynchronously */
+	#refresh() {
+		if (this.#refreshing) return;
+		this.#refreshing = true;
+		const view = this.#view;
+		const version = this.#version();
+		const turn = this.#turn();
+		const seq = this.#seq;
+		this.jarCookies()
+			.then((known) => {
+				// a write since may be missing: the next read asks again
+				if (seq === this.#seq)
+					Object.assign(view, { known, fresh: true, version, turn });
+			})
+			.catch(() => {})
+			.finally(() => (this.#refreshing = false));
 	}
 	// The writes the synchronous bridge could not carry: its beacon was
 	// refused, because the page's own beacons (weather.com's analytics) hold
@@ -472,7 +501,9 @@ export class CookiesModule extends Module<DocumentClient> {
 		// The bridge cannot ask now (the page's own beacons hold the quota),
 		// and a read never throws natively: what this document knew, with its
 		// own writes since, which is all the jar has unless another document
-		// or a response changed it in the meantime
+		// or a response changed it in the meantime (read again where the
+		// bridge cannot answer at all)
+		if (client.syncFrozen) this.#refresh();
 		return this.#show(view.known ?? this.#withUnsettled([]));
 	}
 	/** `list` with the writes the jar may not have yet, in the order made */

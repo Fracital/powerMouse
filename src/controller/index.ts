@@ -173,6 +173,7 @@ import {
 	type SiteHistoryCommand,
 } from './sites';
 import { suggestThrough, type SuggestOptions } from './suggest';
+import { syncFreezes } from './syncFreezes';
 import { debugTransportStored, printNote } from './transportConsole';
 
 export { default as SearchBuilder } from '../bootstrapper/SearchBuilder';
@@ -2601,6 +2602,7 @@ export class StompController extends EventTarget {
 					setTimeout(() => URL.revokeObjectURL(url), 10000);
 					return [url, []];
 				},
+				syncFreezes: async () => [await syncFreezes(), []],
 				mediaVerdict: async (constraints) => [
 					await mediaVerdict(constraints),
 					[],

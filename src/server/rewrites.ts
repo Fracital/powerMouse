@@ -381,6 +381,7 @@ import {
 import { boundClient } from './srcdocVouches';
 import type { StorageHosts } from './Storage';
 import { syncAnswers } from './Sync';
+import { learnSyncFrozen, syncFrozen, syncSeed } from './syncFrozen';
 import { rememberVisitedHop, takeVisitedHop } from './visitedHops';
 
 // What the rewrite cache keys its entries under for this build's rewriter: the
@@ -6460,6 +6461,9 @@ export function registerRewrites(
 				// whether a page's synchronous request reaches the worker
 				// (./Sync.ts reached)
 				...(syncAnswers() !== undefined ? { syncAnswers: syncAnswers() } : {}),
+				// a page that waits synchronously stops this worker
+				// (./syncFrozen.ts)
+				...(syncFrozen() ? { syncFrozen: true } : {}),
 				...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 				// every document's inject builds the window membrane from this
 				...(init.membrane === false ? { membrane: false } : {}),
@@ -7979,6 +7983,23 @@ export function registerRewrites(
 					)
 						? rewriter.shields.seed
 						: undefined;
+				// where a page that waits synchronously stops this worker
+				// (WebKit), what the document reads synchronously comes with it
+				// (./syncFrozen.ts): asked of the controller once
+				await learnSyncFrozen();
+				const seedMark = nestedMarkOf(
+					new URL(request.routed).pathname,
+					rewriter.directory,
+					rewriter.codec,
+				);
+				const seedNested = seedMark === null ? null : parseNestedMark(seedMark);
+				const seed = await syncSeed(
+					url.url,
+					seedNested?.top ?? url.url.origin,
+					seedNested?.crossAncestor ?? false,
+					cookies,
+					rewriter.storage,
+				).catch(() => undefined);
 				// under a list's policy the document's realm compiles no codec
 				// module: the policy may refuse it, and would tell the page
 				// (a document the proxy isolates under a host that is not is
@@ -7988,13 +8009,15 @@ export function registerRewrites(
 					listCsp ||
 					fingerprintOn ||
 					fingerprintSeed !== undefined ||
-					note.apart
+					note.apart ||
+					seed
 						? {
 								...rewriter.config,
 								...(listCsp ? { codecModule: false } : {}),
 								...(fingerprintOn ? { fingerprintOn } : {}),
 								...(fingerprintSeed !== undefined ? { fingerprintSeed } : {}),
 								...(note.apart ? { isolated: true } : {}),
+								...(seed ? { syncSeed: seed } : {}),
 							}
 						: rewriter.config;
 				const partition =

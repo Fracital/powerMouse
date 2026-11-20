@@ -453,6 +453,13 @@ export const CREDENTIALS_HEADER = 'x-stomp-credentials';
  */
 export const PREFLIGHT_HEADER = 'x-stomp-preflight';
 /**
+ * the host's routes under the scope for a page whose wait stops the worker
+ * (WebKit; src/inject/dom/syncRelay.ts, demo/syncRelay.js): its synchronous
+ * requests, and the loads of the scripts it writes into a frame the worker
+ * does not control (`held/<token>`). The worker leaves them to the network.
+ */
+export const SYNC_RELAY_ROUTE = 'sync-relay';
+/**
  * set by the inject on an asynchronous XMLHttpRequest with a timeout: the
  * timeout in ms, which the worker keeps on its own clock from when the
  * request reached it (dropped by the worker). Chrome keeps the timeout in
@@ -1577,6 +1584,12 @@ export type Controllerbound = {
 	 * learnBlobsReadable); revoked a while later
 	 */
 	blobProbe: [undefined, string | null];
+	/**
+	 * whether a page that waits synchronously stops the other workers of
+	 * its process, measured by the controller's document
+	 * (src/controller/syncFreezes.ts); null: it could not tell
+	 */
+	syncFreezes: [undefined, boolean | null];
 	/**
 	 * a proxied site's WebAuthn ceremony, checked by the worker, for the
 	 * host to ask the user about: its answer (PasskeyAnswer) or null. The
