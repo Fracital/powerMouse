@@ -21,7 +21,8 @@
 // by the host's page): a frame's go(), a link from another slot's document
 // (the 307 its worker answers), the hub's Back and a site whose slot is
 // kept for it all show from the host's origin, and the kept assignment is
-// still the slot's.
+// still the slot's. A go() to a site of a slot whose agent went while the
+// hub asked it nothing ends too, from the host's origin.
 // And a route of a site on the hub's own origin (a page that holds a proxy
 // URL, a fallback's navigation) leaves for the site's slot, and stays on the
 // hub's origin only when that slot does not answer.
@@ -587,6 +588,42 @@ if (TIMING)
 		keptShown.ms < bound(),
 		`${keptShown.ms} ms (single origin ${single.ms} ms)`,
 	);
+
+// --- a slot whose agent goes while the hub asks it nothing: the go() that
+// comes next asks it first, and is the only one to find it gone ---
+const quiet = await front();
+await page.evaluate(
+	(list) => window.make('quiet', { sitePool: { origins: list } }),
+	[quiet.origin],
+);
+const calm = await show('quiet', `${A}${PAGE}?q1`, routed(quiet.origin));
+ok(
+	'a pool of one slot shows its site from that slot',
+	routed(quiet.origin)(calm.frame.url()),
+	calm.frame.url(),
+);
+// every call the shown frame made of the agent answered long ago
+await sleep(2000);
+await page.evaluate((origin) => {
+	for (const element of document.querySelectorAll('iframe'))
+		if (element.src.startsWith(origin)) element.src = 'about:blank';
+}, quiet.origin);
+quiet.stop();
+await sleep(300);
+started = Date.now();
+const lone = await Promise.race([
+	show('quiet', `${A}${PAGE}?q-go`, routed(HOST)),
+	sleep(20000).then(() => null),
+]);
+ok(
+	"the hub's go() to a site of a slot whose agent went while nothing asked it shows it from the host's origin",
+	lone !== null &&
+		originOf(lone.frame.url()) === HOST &&
+		(await asPage(lone.frame, 'return location.href')) === `${A}${PAGE}?q-go`,
+	lone
+		? `${lone.frame.url()} in ${Date.now() - started} ms`
+		: `go() had not ended after ${Date.now() - started} ms`,
+);
 
 // --- a page whose slots are not secure contexts: a LAN name over http:,
 // the host's own origin let through as secure by Chrome's flag (a page that

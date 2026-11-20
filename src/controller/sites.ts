@@ -417,10 +417,14 @@ const WARM_AFTER_MS = 1000;
 const SLOT_PROBE_MIN_MS = 1000;
 /**
  * how long an agent that started may take to answer the hub (a navigation
- * on its way, a step of a frame's history): one whose document went away
- * (its renderer crashed, the host's page removed or navigated its frame)
- * answers nothing, and its slot is left out from then on. The agent shares
- * a process with its slot's pages, so a page's long task holds it up too.
+ * on its way, a step of a frame's history, the viewport or geometry a
+ * frame's go() tells it first, what the host changed for every worker): one
+ * whose document went away (its renderer crashed, the host's page removed
+ * or navigated its frame) answers nothing, and its slot is left out from
+ * then on. Every call the hub waits on is bounded so: a go() to a site of
+ * such a slot waited for good on its viewport when nothing else had asked
+ * the agent since. The agent shares a process with its slot's pages, so a
+ * page's long task holds it up too.
  */
 const AGENT_CALL_MS = 4000;
 
@@ -776,7 +780,7 @@ export class SiteHub {
 		if (!agent || index < 0) return null;
 		try {
 			await agent.ready;
-			return await agent.rpc.call('frameInfo', index);
+			return await this.#ask(agent, 'frameInfo', index);
 		} catch (error) {
 			return null;
 		}
@@ -792,7 +796,7 @@ export class SiteHub {
 		if (!agent || index < 0) return false;
 		try {
 			await agent.ready;
-			return await agent.rpc.call('activated', { index, token, nested });
+			return await this.#ask(agent, 'activated', { index, token, nested });
 		} catch (error) {
 			return false;
 		}
@@ -808,8 +812,9 @@ export class SiteHub {
 		if (!geometry) return;
 		const heard: Promise<unknown>[] = [];
 		for (const agent of this.#agents.values()) {
-			const call = agent.rpc.call('geometry', geometry).catch(() => {});
-			if (this.#running.has(agent)) heard.push(call);
+			if (this.#running.has(agent))
+				heard.push(this.#ask(agent, 'geometry', geometry).catch(() => {}));
+			else agent.rpc.call('geometry', geometry).catch(() => {});
 		}
 		await Promise.all(heard);
 	}
@@ -818,7 +823,7 @@ export class SiteHub {
 		await Promise.all(
 			[...this.#agents.values()].map((agent) =>
 				agent.ready
-					.then(() => agent.rpc.call('apply', { method, args }))
+					.then(() => this.#ask(agent, 'apply', { method, args }))
 					.catch(() => {}),
 			),
 		);
@@ -829,7 +834,7 @@ export class SiteHub {
 		if (!agent) return;
 		try {
 			await agent.ready;
-			await agent.rpc.call('apply', { method, args });
+			await this.#ask(agent, 'apply', { method, args });
 		} catch (error) {
 			// the agent is gone: its slot shows nothing now
 		}
@@ -850,7 +855,7 @@ export class SiteHub {
 				continue; // a slot that never started has no documents
 			}
 			try {
-				const left = new Set(await agent.rpc.call('goneClients', gone));
+				const left = new Set(await this.#ask(agent, 'goneClients', gone));
 				gone = gone.filter((client) => left.has(client));
 			} catch (error) {
 				return [];
