@@ -623,9 +623,8 @@ export default class IFrameModule extends Module<DocumentClient> {
 						? frameDestination(moduleClient, element)
 						: undefined;
 					const away =
-						blank &&
 						!(moduleClient.names.client in context) &&
-						windowModule.pendingForeign(context, destination);
+						windowModule.pendingForeign(context, destination, !blank);
 					if (away) return away;
 					injectContext(context);
 

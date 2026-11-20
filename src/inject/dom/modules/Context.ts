@@ -7,7 +7,7 @@ import ProxyModule, {
 	catchRequiredArguments,
 	usePrototype,
 } from '../../modules/Proxy';
-import { routedPrefix } from '../../modules/Unroute';
+import { routedPrefix, unrouteURL } from '../../modules/Unroute';
 import { failsToParse, withStack } from '../../nativeErrors';
 import { nativeFunction } from '../../nativeUtil';
 import {
@@ -1052,10 +1052,23 @@ export default class ContextModule extends Module<DocumentClient> {
 	 * document is of another, and natively none is kept. The stand-in of
 	 * another origin's window the page gets for it then (as pending gives,
 	 * which an uninjected window would not get from newRestricted), else
-	 * null.
+	 * null. If the navigation has committed but the shell has not run,
+	 * decide by the route that committed, not the requested URL.
 	 */
-	pendingForeign(context: Context, url: unknown): RestrictedContext | null {
-		if (this.#holds().has(context) || !this.#foreignNext(url, true))
+	pendingForeign(
+		context: Context,
+		url: unknown,
+		committed = false,
+	): RestrictedContext | null {
+		// Between commit and the shell, the current route decides, even if
+		// the frame was redirected. Installing the parent's client here would
+		// make the foreign document leave its window. A page polling the
+		// frame could do that on every load.
+		if (committed) {
+			const current = unrouteURL(this.client, context.location.href);
+			// No page URL for the proxy's own document: never install there.
+			if (current !== null && !this.#foreignNext(current, true)) return null;
+		} else if (this.#holds().has(context) || !this.#foreignNext(url, true))
 			return null;
 		const restricted = this.restrictOpaque(context);
 		return this.#handle(context) ?? restricted;
@@ -1519,15 +1532,15 @@ export default class ContextModule extends Module<DocumentClient> {
 					// (one whose src names another origin: left as the browser
 					// made it, the page gets its stand-in, pendingForeign. Its
 					// parent is this realm or a window of its origin it holds)
-					const element = initialBlank(value as Context)
+					const blank = initialBlank(value as Context);
+					const element = blank
 						? (Reflect.get(value, 'frameElement') as object | null)
 						: null;
-					const away =
-						element &&
-						this.pendingForeign(
-							value as Context,
-							frameDestination(moduleClient, element),
-						);
+					const away = this.pendingForeign(
+						value as Context,
+						element ? frameDestination(moduleClient, element) : undefined,
+						!blank,
+					);
 					if (away) return away;
 					owner.injectChild?.(value as Context);
 					if (!(moduleClient.names.client in value)) return value;
