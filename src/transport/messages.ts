@@ -1841,3 +1841,13 @@ export function transferablesOf(value: unknown): Transferable[] {
 		return [value];
 	return [];
 }
+
+/**
+ * A worker's inject (which has no load channel) sends this as LOAD_HEADER
+ * with a report of a violation of its own policy to that policy's
+ * report-uri: the service worker sends it as a `report no-cors` load only
+ * where the requesting worker's policy names that endpoint and the body
+ * reads as a report of that policy (src/server/contentPolicies.ts
+ * workerReportAllowed)
+ */
+export const WORKER_REPORT_LOAD = 'worker-report';

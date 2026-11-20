@@ -181,6 +181,7 @@ import {
 	TIMING_DENIED_MARKER,
 	TIMING_ONLY_MARKER,
 	UNREPORTED_MARKER,
+	WORKER_REPORT_LOAD,
 	WORKER_SCRIPT_MARKER,
 	XHR_MARKER,
 } from '../transport/messages';
@@ -281,6 +282,7 @@ import {
 	rememberWorkerPolicies,
 	responsePolicies,
 	workerPolicies,
+	workerReportAllowed,
 } from './contentPolicies';
 import Cookies, { changesTold, type JarCookie } from './Cookies';
 import {
@@ -615,6 +617,36 @@ function loadOf(
 	)
 		return null;
 	return { destination, mode };
+}
+
+/**
+ * A worker's report to its own policy's report-uri, which its inject sends
+ * in the browser's place (src/inject/worker/Client.ts deliverReport; a
+ * worker has no load channel): the `report no-cors` load where the
+ * requesting worker's policy names the endpoint (`endpoint`, the
+ * request's real URL) and the body is a report of that policy
+ * (contentPolicies.ts workerReportAllowed), else null
+ */
+async function workerReportLoad(
+	request: Request,
+	header: string | null,
+	context: RouteContext | undefined,
+	endpoint: URL,
+): Promise<string | null> {
+	const client = context?.clientId;
+	if (header !== WORKER_REPORT_LOAD || request.method !== 'POST' || !client)
+		return null;
+	// (a blob: worker is known by its creator once one of its requests was
+	// looked up)
+	if (!knowsPoliciesOf(client)) await requestOwner(client);
+	return workerReportAllowed(
+		client,
+		endpoint,
+		await request.clone().text(),
+		blobCreatorOf,
+	)
+		? 'report no-cors'
+		: null;
 }
 
 /**
@@ -1636,7 +1668,10 @@ function genericForward(
 		// site has with another site above it, LoadGrantMessage; the load
 		// after it, if any, is what the grant names)
 		const crossGranted = grant?.[0] === '^';
-		const granted = crossGranted ? grant!.slice(1) || null : grant;
+		const granted = crossGranted
+			? grant!.slice(1) || null
+			: (grant ??
+				(await workerReportLoad(serverRequest, loadToken, context, url.url)));
 		let internal = granted !== null || (!!context?.internal && !context.cors);
 		const load = loadOf(granted);
 		// a report for the page's report-to endpoint (the request's URL), which

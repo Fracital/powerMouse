@@ -17,6 +17,8 @@
 			documentURI: event.documentURI,
 			referrer: event.referrer,
 			sourceFile: event.sourceFile,
+			lineNumber: event.lineNumber,
+			columnNumber: event.columnNumber,
 			statusCode: event.statusCode,
 			sample: event.sample,
 			target: event.target === self ? 'global' : String(event.target),

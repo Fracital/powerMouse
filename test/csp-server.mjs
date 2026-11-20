@@ -111,7 +111,11 @@ export function csp(req, res) {
 	if (url.pathname.startsWith('/csp/sbx')) return sandboxed(url, res);
 	const query = url.searchParams;
 	const key = query.get('k');
-	if (key !== null && url.pathname !== '/csp/log') {
+	if (
+		key !== null &&
+		url.pathname !== '/csp/log' &&
+		url.pathname !== '/csp/reports'
+	) {
 		if (!logs.has(key)) logs.set(key, []);
 		// (a layout's script by its name)
 		logs
