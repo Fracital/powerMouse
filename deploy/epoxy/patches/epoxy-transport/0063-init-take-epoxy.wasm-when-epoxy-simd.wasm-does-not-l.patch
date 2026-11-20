@@ -1,0 +1,73 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Fri, 20 Nov 2026 04:00:00 -0500
+Subject: [PATCH] init: take epoxy.wasm when epoxy-simd.wasm does not load
+
+0062 loads epoxy-simd.wasm wherever the engine validates SIMD128 and bulk
+memory, and nothing else: a host that ships epoxy.wasm but not the SIMD
+file (SystemYA vendors the package under stamped names and left it out),
+answers it with a 404 or an HTML fallback page, or refuses it by policy
+failed every init(), and the transport never opened. The SIMD build is
+only faster, so the ESM bundle now fetches it, checks the answer is ok,
+and on any failure to fetch or instantiate it warns once and loads
+epoxy.wasm, as an engine without SIMD128 does. A failed wasm-bindgen
+init leaves the glue unloaded, so the second init starts clean. An
+engine without SIMD128 (a CPU without SSE4.1, where V8 refuses SIMD) is
+unchanged: the probe fails and epoxy.wasm is the only request.
+---
+ src/main.ts | 28 +++++++++++++++++++++++++---
+ 1 file changed, 25 insertions(+), 3 deletions(-)
+
+diff --git a/src/main.ts b/src/main.ts
+index a8a32c9..069f52f 100644
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -72,7 +72,7 @@ const BULK_MEMORY_PROBE = new Uint8Array([
+ 	0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 96, 0, 0, 3, 2, 1, 0, 5, 3, 1, 0, 1, 10,
+ 	14, 1, 12, 0, 65, 0, 65, 0, 65, 0, 252, 10, 0, 0, 11,
+ ]);
+-function simdModule(): { module_or_path: URL } | undefined {
++function simdModule(): URL | undefined {
+ 	// @ts-ignore: import.meta (the ESM bundle has it, the CJS one does not)
+ 	const base: string | undefined = import.meta.url;
+ 	if (typeof base !== "string") return undefined;
+@@ -82,7 +82,29 @@ function simdModule(): { module_or_path: URL } | undefined {
+ 	} catch {
+ 		return undefined;
+ 	}
+-	return { module_or_path: new URL("epoxy-simd.wasm", base) };
++	return new URL("epoxy-simd.wasm", base);
++}
++
++// Hosts vendor the package's files under names of their own, and one that
++// ships epoxy.wasm may leave epoxy-simd.wasm out, answer it with a 404 or
++// its HTML fallback page, or refuse it by policy. The SIMD build is only
++// faster, so its failing to load is no reason for the transport to stay
++// closed: epoxy.wasm is taken then, as on an engine without SIMD128. A
++// failed init leaves the glue unloaded, so the second init starts clean.
++async function instantiateEpoxy(): Promise<void> {
++	const simd = simdModule();
++	if (simd) {
++		try {
++			const response = await fetch(simd);
++			if (!response.ok)
++				throw new Error(`${response.status} ${response.statusText}`.trim());
++			await initEpoxy({ module_or_path: response });
++			return;
++		} catch (error) {
++			console.warn(`${simd.href} did not load, taking epoxy.wasm:`, error);
++		}
++	}
++	await initEpoxy();
+ }
+ 
+ // wasm-bindgen's init skips instantiating only once the module has loaded,
+@@ -93,7 +115,7 @@ function simdModule(): { module_or_path: URL } | undefined {
+ // its request never answers. Load the module once per realm.
+ let epoxyLoaded: Promise<void> | null = null;
+ function loadEpoxy(): Promise<void> {
+-	epoxyLoaded ??= initEpoxy(simdModule()).then(
++	epoxyLoaded ??= instantiateEpoxy().then(
+ 		() => {},
+ 		(error) => {
+ 			// a failed load (network, CSP) may be retried by a later init()
