@@ -1018,8 +1018,11 @@ export type PasskeyMessage = { directory: string } & PasskeyOp;
  */
 export const SRCDOC_VOUCH = '$stomp$srcdocVouch';
 /**
- * an about:srcdoc client presents the token its ancestor vouched for; an
- * empty token says none vouches for it (an opaque document)
+ * an about:srcdoc client presents the token its ancestor vouched for, with
+ * a request for `<directory>$stomp$srcdocClaim/<token>` (a message would
+ * not do: WebKit reports a srcdoc document's message to its controller as
+ * its parent's client's); an empty token says none vouches for it (an
+ * opaque document)
  */
 export const SRCDOC_CLAIM = '$stomp$srcdocClaim';
 

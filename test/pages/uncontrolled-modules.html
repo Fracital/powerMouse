@@ -12,7 +12,9 @@
 		// missing import) and dynamic ones, and keeps what each reported, or
 		// how it failed, in `window.__umReport`: { written, navigated, popup,
 		// markup }, the last an about:blank frame whose markup the page writes
-		// with document.write, module scripts and an import map in it.
+		// with document.write, module scripts and an import map in it; and
+		// srcdoc, about:srcdoc frames under this page and under an
+		// about:blank frame.
 		const query = new URLSearchParams(location.search);
 		const other = query.get('other');
 		const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -140,6 +142,34 @@
 			await sleep(4000);
 			return results;
 		};
+		// about:srcdoc frames, under this page and under an about:blank frame:
+		// a module with a static import, a fetch, a dynamic import (WebKit
+		// reports a srcdoc document's message to its worker as its parent's)
+		const srcdoc = async () => {
+			const results = {};
+			const report = (name, value) => {
+				results[name] = value;
+			};
+			const end = '</' + 'script>';
+			const markupOf = (name) =>
+				[
+					`<!doctype html><script type="module">import { b } from '/pages/um-b.js'; parent.__umSrcdoc('${name}Module', b);${end}`,
+					`<script>fetch('/pages/um-data.json').then((response) => response.json()).then((json) => parent.__umSrcdoc('${name}Fetch', json.value), (error) => parent.__umSrcdoc('${name}Fetch', error.name));`,
+					`import('./um-a.js').then((module) => parent.__umSrcdoc('${name}Dynamic', module.a), (error) => parent.__umSrcdoc('${name}Dynamic', error.name));${end}`,
+				].join('');
+			const add = (win, name) => {
+				win.__umSrcdoc = report;
+				const frame = win.document.createElement('iframe');
+				frame.srcdoc = markupOf(name);
+				win.document.body.append(frame);
+			};
+			add(window, 'top');
+			const blank = document.createElement('iframe');
+			document.body.append(blank);
+			add(blank.contentWindow, 'underBlank');
+			await sleep(4000);
+			return results;
+		};
 		const popup = async () => {
 			const win = open('', 'um-popup');
 			if (!win) return 'blocked';
@@ -155,6 +185,7 @@
 			report.navigated = await navigated();
 			report.popup = await popup();
 			report.markup = await markup();
+			report.srcdoc = await srcdoc();
 			window.__umReport = report;
 		})();
 	</script>

@@ -707,8 +707,9 @@ Filled in commit by commit; see the CHANGELOG for each.
   `no-referrer` no Referer does either. When its client starts, the
   nearest routed ancestor's bundle tells the worker a token (SRCDOC_VOUCH,
   from a routed client the worker itself knows the origin of) and the
-  srcdoc client claims it (SRCDOC_CLAIM); the worker binds the claiming
-  client id to the voucher's origin and partition (`srcdocVouches.ts`, kept
+  srcdoc client claims it with a request of its own (SRCDOC_CLAIM: WebKit
+  reports a srcdoc document's message to its worker as its parent's
+  client's); the worker binds the claiming client id to the voucher's origin and partition (`srcdocVouches.ts`, kept
   with the blob: origins, so a restarted worker still knows). Either
   message may arrive first; a request of a srcdoc client that is not bound
   yet waits for the pair once (1.5 s at most). A sandboxed srcdoc frame

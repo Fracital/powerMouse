@@ -1182,22 +1182,6 @@ function handleMessage(event: ExtendableMessageEvent) {
 				}
 			})(),
 		);
-	} else if (SRCDOC_CLAIM in data) {
-		// from the about:srcdoc client itself (Chrome reports its URL as
-		// empty until the document is parsed)
-		const message = data[SRCDOC_CLAIM] as SrcdocMessage;
-		const source = event.source instanceof Client ? event.source : null;
-		if (
-			!message ||
-			typeof message.token !== 'string' ||
-			(message.token !== '' && !INLINE_TOKEN.test(message.token)) ||
-			!source ||
-			source.type !== 'window' ||
-			source.frameType !== 'nested' ||
-			(source.url !== '' && !source.url.startsWith('about:srcdoc'))
-		)
-			return;
-		claim(message.token, source.id);
 	} else if (BLOB_MINTED in data) {
 		// from a routed document of that controller, for a blob: URL of this
 		// origin; the origin recorded is the document's own real one, never
@@ -2697,9 +2681,40 @@ async function sweepBundles() {
 	}
 }
 
+/**
+ * An about:srcdoc client's claim (SRCDOC_CLAIM): a request of its own, so
+ * its client is the document's (Chrome reports its URL as empty until the
+ * document is parsed)
+ */
+function srcdocClaim(event: FetchEvent, pathname: string): boolean {
+	const ref = controllerFor(pathname);
+	const prefix = `${ref?.directory}${SRCDOC_CLAIM}/`;
+	const token = pathname.slice(prefix.length);
+	if (
+		!ref ||
+		!pathname.startsWith(prefix) ||
+		(token !== '' && !INLINE_TOKEN.test(token))
+	)
+		return false;
+	event.respondWith(
+		(async () => {
+			const source = await clients.get(event.clientId);
+			if (
+				source?.type === 'window' &&
+				(source as WindowClient).frameType === 'nested' &&
+				(source.url === '' || source.url.startsWith('about:srcdoc'))
+			)
+				claim(token, source.id);
+			return new Response(null, { status: 204 });
+		})(),
+	);
+	return true;
+}
+
 self.addEventListener('fetch', (event: FetchEvent) => {
 	const { pathname, search } = new URL(event.request.url);
 	if (documentBundle(event, pathname, search)) return;
+	if (srcdocClaim(event, pathname)) return;
 	noteRequest(event.request, event.clientId);
 	const unmarked = unmarkHomed(event.request);
 	if (unmarked) {
