@@ -569,6 +569,9 @@ const LOAD_DESTINATIONS = [
 	// place; the destination makes Sec-Fetch-Dest: webidentity go to the IdP
 	// (src/inject/dom/modules/Credentials.ts)
 	'webidentity',
+	// a violation's report to the page's policy's report-uri, which the
+	// inject sends in the browser's place (src/inject/dom/violationDelivery.ts)
+	'report',
 ];
 // (`same-origin`: an SVG <use>'s external document, which Chrome loads as
 // an image of the document's own origin only)

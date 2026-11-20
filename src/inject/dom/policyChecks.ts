@@ -186,6 +186,12 @@ function makeReport(
 		disposition: policy.disposition,
 		statusCode: statusCode ?? 200,
 	};
+	if (policy.directives.has('report-uri'))
+		try {
+			deferred('deliverReport')(client, policy, body);
+		} catch (error) {
+			// the part cannot be had
+		}
 	if (site || once !== undefined) {
 		let bodies = madeBodies.get(client);
 		if (!bodies) madeBodies.set(client, (bodies = new LazySet()));

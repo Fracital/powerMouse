@@ -377,13 +377,48 @@ export function violationShows(
 	event: Event,
 ): boolean {
 	const shown = shows(client, natives, event);
-	if (shown)
+	if (shown) {
 		try {
 			placeNoted(client, natives, event);
 		} catch (error) {
 			// as the browser names it
 		}
+		try {
+			deliverShown(client, natives, event);
+		} catch (error) {
+			// the part cannot be had
+		}
+	}
 	return shown;
+}
+
+/**
+ * A violation of the browser's the page sees goes to its policy's
+ * report-uri as the page reads it (the browser has none of the page's,
+ * src/csp.ts): its members' getters are hooked (./modules/ContentSecurity.ts)
+ */
+function deliverShown(
+	client: DocumentClient,
+	natives: ViolationNatives,
+	event: Event,
+) {
+	const text = Reflect.apply(natives.policy, event, []) as string;
+	const entry = client.pagePolicies().find(({ browser }) => browser === text);
+	if (!entry?.policy.directives.has('report-uri')) return;
+	const read = event as SecurityPolicyViolationEvent;
+	deferred('deliverReport')(client, entry.policy, {
+		sourceFile: read.sourceFile,
+		lineNumber: read.lineNumber,
+		columnNumber: read.columnNumber,
+		documentURL: read.documentURI,
+		referrer: read.referrer,
+		blockedURL: read.blockedURI,
+		effectiveDirective: read.effectiveDirective,
+		originalPolicy: read.originalPolicy,
+		sample: read.sample,
+		disposition: read.disposition,
+		statusCode: read.statusCode,
+	});
 }
 
 /**
@@ -470,6 +505,10 @@ export function violationURL(
 	value: string,
 	key: string,
 ): string {
+	// the document's referrer as the page reads it (the browser's is the
+	// proxy's: the host's page, or a route)
+	if (key === 'referrer')
+		return client.referrerOf(client.global.document as Document) ?? '';
 	if (key === 'blockedURI') {
 		const refused = client.refusedURI(value);
 		if (refused !== null) return refused.blocked;

@@ -38,7 +38,11 @@
 //                        `&rk=<key>` adds a report-uri of /csp/report
 //                        under that key to each (`&rt` a report-to of it)
 //   /csp/wrun.js         a script or module that counts self.__ran up
-//   /csp/report?k=<key>  takes a report (the log of its key has it)
+//   /csp/report?k=<key>  takes a report (the log of its key has it, and
+//                        /csp/reports its request)
+//   /csp/reports?k=<key> the requests that reached /csp/report under that
+//                        key: method, the headers a report is told by and
+//                        the body, sorted; `&clear` forgets them
 //   /csp/cw-text.js      a script that leaves that worker's text on the
 //                        global as `__cspWorkerText`
 //   /csp/frame.html      a document that posts "frame" to its parent
@@ -95,6 +99,8 @@ export function silentWav(samples = 800) {
 }
 
 const logs = new Map();
+/** each key's requests of /csp/report, as /csp/reports answers them */
+const reports = new Map();
 const attribute = (value) =>
 	value.replace(/[&"<]/g, (c) => `&#${c.charCodeAt(0)};`);
 
@@ -221,11 +227,41 @@ export function csp(req, res) {
 			);
 			return true;
 		}
-		case '/csp/report':
-			// (what reached it is in the log of its key)
-			req.resume();
-			res.statusCode = 204;
-			res.end();
+		case '/csp/report': {
+			// (what reached it is in the log of its key, and in its reports)
+			const chunks = [];
+			req.on('data', (chunk) => chunks.push(chunk));
+			req.on('end', () => {
+				if (key !== null) {
+					if (!reports.has(key)) reports.set(key, []);
+					const h = req.headers;
+					reports.get(key).push({
+						method: req.method,
+						type: h['content-type'] ?? null,
+						fetch: [
+							h['sec-fetch-site'],
+							h['sec-fetch-mode'],
+							h['sec-fetch-dest'],
+						].join(' '),
+						origin: h.origin ?? null,
+						referer: h.referer ?? null,
+						cookie: h.cookie ?? null,
+						body: Buffer.concat(chunks).toString(),
+					});
+				}
+				res.statusCode = 204;
+				res.end();
+			});
+			return true;
+		}
+		case '/csp/reports':
+			send(
+				'application/json',
+				JSON.stringify(
+					(reports.get(key) ?? []).map((entry) => JSON.stringify(entry)).sort(),
+				),
+			);
+			if (query.has('clear')) reports.delete(key);
 			return true;
 		case '/csp/cw-text.js':
 			send(

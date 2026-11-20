@@ -225,6 +225,7 @@ import {
 	videoFrameRefusal,
 } from './taintRefusals';
 import { uncontrolledCopies } from './uncontrolledCopies';
+import { deliverReport } from './violationDelivery';
 import {
 	dispatchViolation,
 	evalError,
@@ -287,6 +288,10 @@ export const parts = {
 	// the reports of the violations the inject makes itself, at the first
 	// (../reportsSeen.ts; ./policyChecks.ts)
 	madeReport,
+	// and the delivery of a violation's report to the page's policy's
+	// report-uri, at a document's first (./violationDelivery.ts;
+	// ./policyChecks.ts, ./violations.ts)
+	deliverReport,
 	// what a worker's construction does past its checks, at a document's
 	// first (../workerStart.ts; ../modules/Worker.ts)
 	workerStart,
