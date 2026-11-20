@@ -82,6 +82,33 @@ export function reachableClients(
 	return mine === theirs;
 }
 
+/**
+ * What the stand-ins a document is handed for a window of another origin
+ * are shared by: every document that reaches the others as itself (its
+ * origin, or the domain it set), whatever its sandbox, gets the one
+ * stand-in, as natively every realm of an agent holds the one WindowProxy
+ * of a window. A sandboxed document made its own, so in the about:blank
+ * child of a sandboxed frame `top` was not `parent.parent`, and a climb
+ * from it to `top` never ended (DoubleVerify's in Google's safe frames
+ * hung nytimes' tab). Null for an opaque origin, which reaches nothing.
+ */
+export function standInKey(client: DocumentClient): string | null {
+	const domain = client.documentDomain;
+	return client.originKey !== null && domain !== null
+		? `${client.url.url.protocol}domain:${domain}`
+		: client.originKey;
+}
+
+/**
+ * The stand-in every document of an origin shares for a window (kept by
+ * that window's client, `standIns`), and the module of the document that
+ * last reached it, which it answers as (see restrictContext)
+ */
+export interface StandInEntry {
+	standIn?: WeakRef<typeof globalThis>;
+	via?: WeakRef<ContextModule>;
+}
+
 // taken before the page runs: a page may replace the global
 const NativeWeakRef = WeakRef;
 // a window's opener as the browser has it: a window's own accessor answers
@@ -694,10 +721,18 @@ export default class ContextModule extends Module<DocumentClient> {
 	}
 	/**
 	 * Navigate `context` (a window behind a restricted stand-in) to the
-	 * page's `value`: as #navigateOther
+	 * page's `value`, as this document: as #navigateOther
 	 */
-	#navigate(context: Context, value: urlLike, member: 'replace' | 'href') {
+	navigateAs(context: Context, value: urlLike, member: 'replace' | 'href') {
 		this.#navigateOther(context, value, member);
+	}
+	/** post to `context` (a window behind a restricted stand-in), as this document */
+	postAs(context: Context, args: unknown[]) {
+		// the browser serializes the message before it looks at the target
+		// origin
+		this.#cloneCheck(args);
+		if (this.targetAllows(args, context))
+			return this.#postFromHere(context, args);
 	}
 	/**
 	 * A message that holds or transfers a tainted ImageBitmap is not sent
@@ -739,10 +774,23 @@ export default class ContextModule extends Module<DocumentClient> {
 			this.postMessage(<any>args, receiver),
 		);
 	}
-	restrictContext(context: Context): RestrictedContext {
+	restrictContext(context: Context, entry?: StandInEntry): RestrictedContext {
 		const moduleClient = this.client;
 		const global = moduleClient.global;
 		const proxyModule = moduleClient.getModule(ProxyModule)!;
+		// The stand-in is every document's of this origin (`entry`), and its
+		// windows are this module's, the one for each, but it navigates and
+		// posts as the document that reached it last (whose code uses it
+		// next: natively the incumbent), with that document's sandbox, user
+		// activation and place in the tree, and a window it hands out is
+		// that document's reach of it too
+		// (only while that document is its window's: one taken out, or
+		// navigated away, acts for nothing, as its maker did not)
+		const as = (): ContextModule => {
+			const via = entry?.via?.deref();
+			return via?.stillCurrent() ? via : this;
+		};
+		const reached = (window: Context) => this.newRestricted(window, entry?.via);
 		// a child that runs no STomp yet (an iframe still on its initial
 		// about:blank) is still that child, of the frame's origin: never the
 		// top, which a walk down the tree would visit again forever
@@ -753,7 +801,7 @@ export default class ContextModule extends Module<DocumentClient> {
 			if (!isStomp(child, moduleClient.names.client))
 				moduleClient.navigatorOf(child)?.injectNavigated?.(child);
 			return isStomp(child, moduleClient.names.client)
-				? this.newRestricted(child)
+				? reached(child)
 				: this.restrictOpaque(child);
 		};
 
@@ -770,13 +818,13 @@ export default class ContextModule extends Module<DocumentClient> {
 							'replace',
 							global,
 						);
-						this.#navigate(context, String(args[0]), 'replace');
+						as().navigateAs(context, String(args[0]), 'replace');
 					},
 				),
 			},
 			href: {
 				set: (value: urlLike) => {
-					this.#navigate(context, value, 'href');
+					as().navigateAs(context, value, 'href');
 				},
 			},
 		});
@@ -789,7 +837,7 @@ export default class ContextModule extends Module<DocumentClient> {
 				// climb by `parent` compares what it reaches with this page's `top`
 				top: {
 					get: () =>
-						this.newRestricted(
+						reached(
 							findTop(
 								context,
 								moduleClient.names.client,
@@ -814,11 +862,11 @@ export default class ContextModule extends Module<DocumentClient> {
 								// no STomp in it
 							}
 						if (parent === undefined)
-							return this.newRestricted(<Context>(<unknown>context.parent!));
+							return reached(<Context>(<unknown>context.parent!));
 						// a window whose frame was removed has none
 						if (parent === null) return null;
 						if (isStomp(parent, moduleClient.names.client))
-							return this.newRestricted(parent);
+							return reached(parent);
 						// the site pool: a parent of another slot is another site's
 						// window, and gets its stand-in (never the window itself:
 						// its own parent may be of this document's slot, which the
@@ -827,9 +875,9 @@ export default class ContextModule extends Module<DocumentClient> {
 						// look for a frame up the tree that way) spinning for good
 						const sites = moduleClient.sites;
 						if (sites && !siteWindows().isHub(global, parent, sites.hub))
-							return this.newRestricted(parent);
+							return reached(parent);
 						// the top of the proxied world is its own parent
-						return this.newRestricted(context);
+						return reached(context);
 					},
 				},
 				// the window that opened it, when a proxied page did; a window
@@ -847,7 +895,7 @@ export default class ContextModule extends Module<DocumentClient> {
 							// a window being torn down
 						}
 						return opener && isStomp(opener, moduleClient.names.client)
-							? this.newRestricted(opener)
+							? reached(opener)
 							: null;
 					},
 				},
@@ -878,7 +926,7 @@ export default class ContextModule extends Module<DocumentClient> {
 				location: {
 					get: () => restrictedLocation,
 					set: (value: urlLike) => {
-						this.#navigate(context, value, 'href');
+						as().navigateAs(context, value, 'href');
 					},
 				},
 				postMessage: {
@@ -892,11 +940,7 @@ export default class ContextModule extends Module<DocumentClient> {
 								'postMessage',
 								global,
 							);
-							// the browser serializes the message before it looks at the
-							// target origin
-							this.#cloneCheck(args);
-							if (!this.targetAllows(args, context)) return;
-							return this.#postFromHere(context, args);
+							return as().postAs(context, args);
 						},
 					),
 				},
@@ -935,12 +979,23 @@ export default class ContextModule extends Module<DocumentClient> {
 			!siteWindows().isHub(this.client.global, context, this.client.sites.hub)
 		)
 			return siteWindows().restrictAcross(this.client, this, context);
-		if (!this.restricted.has(context)) {
-			const restricted = this.restrictContext(context);
-			this.restricted.set(context, restricted);
-			this.restrictedContexts.set(restricted, context);
-		}
+		if (!this.restricted.has(context)) this.adopt(context);
 		return this.restricted.get(context)!;
+	}
+	/**
+	 * This module's stand-in for `context`: `entry`'s, the one every document
+	 * of this origin shares (made now when it has none), or one of its own
+	 */
+	adopt(context: Context, entry?: StandInEntry): RestrictedContext {
+		let restricted = entry?.standIn?.deref();
+		if (!restricted) {
+			restricted = this.restrictContext(context, entry);
+			if (entry) entry.standIn = new NativeWeakRef(restricted);
+		}
+		this.restricted.set(context, restricted);
+		this.restrictedContexts.set(restricted, context);
+		if (entry) this.#entries.set(context, entry);
+		return restricted;
 	}
 	/**
 	 * A window whose next document is of another site (the window
@@ -1013,7 +1068,15 @@ export default class ContextModule extends Module<DocumentClient> {
 		// never restricts the window)
 		return this.restrictOpaque(context);
 	}
-	newRestricted(context: Context): RestrictedContext {
+	/**
+	 * `context` as this document may hold it: itself, or its stand-in.
+	 * `via`: the document the stand-in it is read off answers as, which a
+	 * stand-in this hands out answers as too (restrictContext)
+	 */
+	newRestricted(
+		context: Context,
+		via?: WeakRef<ContextModule>,
+	): RestrictedContext {
 		// no window: the `parent` and `top` of a window whose frame was taken
 		// out, an `opener` of none. The browser answers null, and so does the
 		// page's: it read as the proxied top (the edge of the proxied world)
@@ -1021,10 +1084,34 @@ export default class ContextModule extends Module<DocumentClient> {
 		// stand-in kept for null)
 		if (context === null || context === undefined) return context;
 		const restricted = this.#restrict(context);
-		return restricted === context
-			? restricted
-			: (this.#handle(context) ?? restricted);
+		if (restricted === context) return restricted;
+		this.#hand(context, via);
+		return this.#handle(context) ?? restricted;
 	}
+	/** whether this document is still its window's (not taken out, not navigated away) */
+	stillCurrent(): boolean {
+		const client = this.client;
+		try {
+			return (
+				!client.global.closed &&
+				(client.global as Record<string, any>)[client.names.client] === client
+			);
+		} catch (error) {
+			// a window of another real origin now
+			return false;
+		}
+	}
+	/**
+	 * The stand-in every document of this origin shares for `context`
+	 * answers as this one (or `via`), which reached it now
+	 */
+	#hand(context: Context, via?: WeakRef<ContextModule>) {
+		const entry = this.#entries.get(context);
+		if (entry) entry.via = via ?? (this.#self ??= new NativeWeakRef(this));
+	}
+	/** the shared entry of each stand-in this module holds (StandInEntry) */
+	#entries = new LazyWeakMap<Context, StandInEntry>();
+	#self?: WeakRef<ContextModule>;
 	#restrict(context: Context): RestrictedContext {
 		const moduleClient = this.client;
 		const global = moduleClient.global;
@@ -1121,25 +1208,10 @@ export default class ContextModule extends Module<DocumentClient> {
 				(context as Record<string, any>)[moduleClient.names.client] as
 					DocumentClient | undefined
 			)?.standIns;
-			// (never a sandboxed document's: its stand-ins hold its sandbox's
-			// limits, which another document of the site does not share)
-			// (by what this document reaches others as: its origin, or the
-			// domain it set)
-			const domain = moduleClient.documentDomain;
-			const key =
-				moduleClient.sandboxFlags === null
-					? domain !== null
-						? `${moduleClient.url.url.protocol}domain:${domain}`
-						: moduleClient.originKey
-					: null;
-			let restricted = key === null ? undefined : standIns?.get(key)?.deref();
-			if (!restricted) {
-				restricted = this.restrictContext(context);
-				if (key !== null) standIns?.set(key, new NativeWeakRef(restricted));
-			}
-
-			this.restricted.set(context, restricted);
-			this.restrictedContexts.set(restricted, context);
+			const key = standInKey(moduleClient);
+			let entry = key === null ? undefined : standIns?.get(key);
+			if (!entry && key !== null) standIns?.set(key, (entry = {}));
+			this.adopt(context, entry);
 		}
 
 		return this.restricted.get(context)!;
@@ -1324,7 +1396,10 @@ export default class ContextModule extends Module<DocumentClient> {
 			if (!this.#holds().has(target as Context)) return undefined;
 			const frame = frameOfHeld(moduleClient, target);
 			if (!frame?.now || (frame.now as unknown) === target) return undefined;
-			return this.#restrict(frame.now as unknown as Context);
+			const now = frame.now as unknown as Context;
+			const restricted = this.#restrict(now);
+			if (restricted !== now) this.#hand(now);
+			return restricted;
 		};
 
 		// another proxied window's location, set or called by this document

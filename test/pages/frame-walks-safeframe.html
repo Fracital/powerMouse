@@ -1,0 +1,41 @@
+<!doctype html>
+<title>FRAME WALKS SAFEFRAME</title>
+<body></body>
+<script>
+	// a sandboxed frame of another origin than the top (as Google's safe
+	// frame), with two children: an about:blank one it writes and a srcdoc
+	// one. Each runs the climb (frame-walks-climb.js). Its own `top` and
+	// `parent`, and its children's `top`, are kept for the suite. In an
+	// opaque sandbox each child has an opaque origin of its own, so the
+	// about:blank one cannot be written.
+	window.__top = top;
+	window.__parent = parent;
+	const climb =
+		'<script>window.__who = "WHO";<\/script><script src="/pages/frame-walks-climb.js"><\/script>';
+	const blank = document.createElement('iframe');
+	document.body.append(blank);
+	try {
+		blank.contentDocument.write(climb.replace('WHO', 'blank'));
+		blank.contentDocument.close();
+	} catch (error) {
+		// a child of another origin (an opaque sandbox)
+	}
+	const srcdoc = document.createElement('iframe');
+	srcdoc.srcdoc = climb.replace('WHO', 'srcdoc');
+	document.body.append(srcdoc);
+	const read = (fn) => {
+		try {
+			return fn();
+		} catch (error) {
+			return `threw ${error.name}`;
+		}
+	};
+	window.__fws = {
+		parentIsTop: parent === top,
+		blankTopIsTop: read(() => blank.contentWindow.top === top),
+		blankParentParentIsTop: read(
+			() => blank.contentWindow.parent.parent === top,
+		),
+		srcdocTopIsTop: read(() => srcdoc.contentWindow.top === top),
+	};
+</script>

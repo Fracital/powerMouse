@@ -95,7 +95,7 @@ import cloneRawNode, {
 import { activationPart, deferred } from './deferred';
 import type { LegacyEncoder } from './legacyEncoding';
 import { initLoads, loadSource, type LoadSource } from './loadGrants';
-import { nativeConsoleError } from './modules/Context';
+import { nativeConsoleError, type StandInEntry } from './modules/Context';
 import DOMAttributesModule, {
 	scriptKind,
 	shouldRewriteScript,
@@ -3075,10 +3075,10 @@ export default class DocumentClient extends Client {
 		this.postToHost({ [HOOK_ERROR]: info });
 	}
 	/**
-	 * @internal the stand-in every document of an origin (`originKey` in the
+	 * @internal the stand-in every document of an origin (`standInKey` in the
 	 * Context module) gets for this window when it is of another origin
 	 */
-	readonly standIns = new LazyMap<string, WeakRef<typeof globalThis>>();
+	readonly standIns = new LazyMap<string, StandInEntry>();
 	/** @internal frame elements showing an opaque (data:) document: never injected from this page (DOMAttributes, IFrame) */
 	readonly opaqueFrames = new LazyWeakSet<Element>();
 	/**

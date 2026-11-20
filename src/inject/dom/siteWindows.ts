@@ -17,12 +17,11 @@ import { OwnWeakMap } from '../ownCollections';
 import type DocumentClient from './Client';
 import { deferred } from './deferred';
 import type ContextModule from './modules/Context';
-import { invalidTargetOrigin, isWindow } from './modules/Context';
+import { invalidTargetOrigin, isWindow, standInKey } from './modules/Context';
 import { markerPrefix } from './modules/MutationObserver';
 import { Pool } from './pool';
 import { pageSandbox, sandboxTokens } from './sandbox';
 
-const NativeWeakRef = WeakRef;
 export const nativeParent = Reflect.getOwnPropertyDescriptor(
 	globalThis,
 	'parent',
@@ -659,12 +658,7 @@ function makeSiteWindows() {
 	): typeof globalThis {
 		if (module.restricted.has(context)) return module.restricted.get(context)!;
 		const domain = client.documentDomain;
-		const key =
-			client.sandboxFlags === null
-				? domain !== null
-					? `${client.url.url.protocol}domain:${domain}`
-					: client.originKey
-				: null;
+		const key = standInKey(client);
 		// the outermost document of this origin above this one
 		let keeper: DocumentClient = client;
 		for (let depth = 0; key !== null && depth < 64; depth++) {
@@ -676,7 +670,6 @@ function makeSiteWindows() {
 				if (
 					!above ||
 					!('pool' in above) ||
-					above.sandboxFlags !== null ||
 					above.originKey !== client.originKey ||
 					above.documentDomain !== domain
 				)
@@ -693,14 +686,9 @@ function makeSiteWindows() {
 			kept = new WeakMap();
 			(pool[Pool.AcrossStandIns] ??= new Map()).set(key, kept);
 		}
-		let restricted = kept?.get(context)?.deref();
-		if (!restricted) {
-			restricted = module.restrictContext(context);
-			kept?.set(context, new NativeWeakRef(restricted));
-		}
-		module.restricted.set(context, restricted);
-		module.restrictedContexts.set(restricted, context);
-		return restricted;
+		let entry = kept?.get(context);
+		if (kept && !entry) kept.set(context, (entry = {}));
+		return module.adopt(context, entry);
 	}
 
 	return {
