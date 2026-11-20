@@ -329,9 +329,11 @@ reconnect, as natively. A socket fires error and no close; a session's
 global gets one event for each policy that refuses it, report-only ones
 too, a task later (twice for a fetch or an importScripts only a
 report-only policy refuses, as Chrome): Chrome's fields (the worker's URL
-as its documentURI and, without its query, as its sourceFile, none for
-an EventSource, `blob` or `data` for those, a local scheme's URL as its
-scheme, status 0, no referrer). The event is the inject's; its listeners
+as its documentURI, the place of the page's code that made the request
+as its sourceFile (its script's URL without the query, `blob` or `data`
+for those), lineNumber and columnNumber, none for an EventSource, a local
+scheme's URL as its scheme, status 0, no referrer). The policy's
+report-uri gets its report (Reports). The event is the inject's; its listeners
 read it as trusted, as the browser's is (`trustTaggedViolations`, as for
 Trusted Types). The document hears nothing of it, natively either
 (csp-workers, csp-worker-requests).
@@ -466,6 +468,23 @@ worker sends as a `report` load (Sec-Fetch-Dest: report, no-cors), with
 the cookies of an endpoint of the document's origin only and the Referer
 the document's policy gives it. csp-scripts compares what the fixture's
 endpoint receives, of its origin and of another.
+
+A worker's policy's report-uri gets what Chrome sends it too (measured,
+Chrome 157): the same POST of `application/csp-report` as the violation
+is made (Sec-Fetch-Dest: report, no-cors), the worker's URL as its
+Referer and its document-uri, the place of the page's code in the
+worker's script, once per report that reads the same (a fetch only a
+report-only policy refuses fires two events and sends one report). The
+worker's inject sends it (`WorkerClient.requestVerdict`), with no load
+channel to announce it on: it names `WORKER_REPORT_LOAD` in the load
+header, and the service worker sends it as a `report no-cors` load only
+where the requesting worker's own policy (a `blob:` worker's creator's)
+is the report's original-policy and names that endpoint in its
+report-uri, and the body is a `csp-report` of Chrome's members
+(`contentPolicies.ts` workerReportAllowed): a worker's script can make
+no request that way that a violation of its policy does not send
+natively. csp-worker-requests compares what the fixture's endpoint
+receives from a dedicated and a shared worker.
 
 A policy's report-to sends to the endpoint its first token names in the
 document's Reporting-Endpoints (an https document's only, an endpoint of
@@ -614,11 +633,10 @@ refuses fires a violation, natively either.
   what a module it imports connects to at its top level is refused by the
   service worker without a violation. A worker's script list that takes
   nonces, hashes or 'strict-dynamic' judges none of its imports. A
-  worker's violation's lineNumber and columnNumber are 0, and its
-  sourceFile is the worker's script even for a script it imported.
-- No report goes to a worker's policy's report-uri (the site never sees
-  one; the page sees every violation, as natively; csp-worker-requests
-  lists it as an expected difference). A document's report-uri and
-  report-to get their reports (Reports).
+  `data:` worker's violation names no place (lineNumber and columnNumber
+  0: its realm tells none of its frames from the inject's), and a `blob:`
+  worker's import() violation names the column the rewrite of the call
+  maps to, natively its specifier's (csp-workers and csp-worker-requests
+  list them).
 - An `<object>` of a page-made `blob:` URL does not load through the proxy,
   with or without a policy.

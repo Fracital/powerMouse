@@ -97,6 +97,76 @@ export function rememberWorkerPolicies(
 	remember(`client ${clientId}`, { url, policies, worker: true });
 }
 
+/** the members of a report of a worker's (src/inject/worker/Client.ts deliverReport) */
+const WORKER_REPORT_MEMBERS = [
+	'document-uri',
+	'referrer',
+	'violated-directive',
+	'effective-directive',
+	'original-policy',
+	'disposition',
+	'blocked-uri',
+	'line-number',
+	'column-number',
+	'source-file',
+	'status-code',
+	'script-sample',
+];
+
+/**
+ * Whether `text` is a report the worker `clientId` could send to `endpoint`
+ * (src/inject/worker/Client.ts deliverReport, WORKER_REPORT_LOAD): a
+ * `{"csp-report": {...}}` of Chrome's members, of strings and numbers, whose
+ * original-policy is one of the worker's own policies (a blob: worker's are
+ * its creator's) that names that endpoint in its report-uri. Such a request
+ * goes as a report load; a page's script in the worker could make one only
+ * of what a violation of its policy sends there natively.
+ */
+export function workerReportAllowed(
+	clientId: string,
+	endpoint: URL,
+	text: string,
+	creatorOf?: (client: string) => string | undefined,
+): boolean {
+	const known = policiesOf(clientId, null, creatorOf);
+	if (!known?.worker) return false;
+	let report: unknown;
+	try {
+		report = JSON.parse(text);
+	} catch (error) {
+		return false;
+	}
+	if (typeof report !== 'object' || report === null) return false;
+	const keys = Object.keys(report);
+	const members = (report as Record<string, unknown>)['csp-report'];
+	if (
+		keys.length !== 1 ||
+		typeof members !== 'object' ||
+		members === null ||
+		Array.isArray(members)
+	)
+		return false;
+	for (const [key, value] of Object.entries(members))
+		if (
+			!WORKER_REPORT_MEMBERS.includes(key) ||
+			(typeof value !== 'string' && typeof value !== 'number')
+		)
+			return false;
+	const target = withoutHash(endpoint.href);
+	const policyText = (members as Record<string, unknown>)['original-policy'];
+	return known.policies.some(
+		(policy) =>
+			policy.text === policyText &&
+			(policy.directives.get('report-uri') ?? []).some((uri) => {
+				try {
+					return withoutHash(new URL(uri, known.url).href) === target;
+				} catch (error) {
+					return false;
+				}
+			}),
+	);
+}
+
 /**
  * The policies of the client, or of the document at `referrer` (an
  * about:blank or srcdoc document's creator). A blob: worker has its

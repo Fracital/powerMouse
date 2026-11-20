@@ -272,7 +272,15 @@
 			(response) => response.json(),
 			() => ['log unread'],
 		);
-		return `${answer}; reached ${[...paths].sort().join(' ')}`;
+		// and what the report-uri received (csp-server.mjs /csp/reports)
+		const reports =
+			policy && 'rk' in POLICIES[policy]
+				? `; reports ${await fetch(`/csp/reports?k=${k}&clear`).then(
+						(response) => response.text(),
+						() => 'unread',
+					)}`
+				: '';
+		return `${answer}; reached ${[...paths].sort().join(' ')}${reports}`;
 	};
 	for (const policy of Object.keys(POLICIES)) {
 		for (const kind of ['r', 'h'])
